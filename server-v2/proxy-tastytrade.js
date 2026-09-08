@@ -1056,18 +1056,56 @@ async function contractStats(groups) {
 
 const INDEX_ROOTS = new Set(['SPX', 'NDX', 'RUT', 'VIX', 'XSP', 'DJX']);
 
-/** Best-effort underlying spot via REST market-data. Returns 0 on failure. */
+// ---------------------------------------------------------------------------
+// LAST-GOOD UNDERLYING SPOT, per root.
+//
+// fetchUnderlyingSpot() swallows every failure and answers 0, and fetchChainFull
+// puts that 0 straight into the chain's `underlyingPrice` with no fallback of
+// its own — unlike the live path, which has `_effectiveSpot() || this.spot`.
+//
+// One throttled or 500'd /market-data/by-type is therefore enough to ship a
+// COMPLETE chain — every strike, every greek, every OI and volume — with a spot
+// of 0. Downstream, GEX is `γ · contracts · spot² · …`, so the whole Multi Greek
+// ladder computes to zero and renders as dashes: the 2026-09-08 "all the numbers
+// in the multi-Greeks tables have disappeared" report. Nothing in the response
+// says anything went wrong, and /api/chains caches it for 30s on top.
+//
+// A spot from a few minutes ago is a far better answer than no spot: the
+// function already falls back to `prev-close`, which is older than anything this
+// cache can hold. The TTL is what keeps it honest — past it, 0 is returned
+// again, so a genuinely dead feed still reads as dead instead of freezing the
+// board on a price from this morning.
+// ---------------------------------------------------------------------------
+const LAST_GOOD_SPOT = new Map(); // root -> { px, at }
+const LAST_GOOD_SPOT_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Best-effort underlying spot via REST market-data, falling back to the most
+ * recent good value for this root. Returns 0 only when there is genuinely
+ * nothing — a live failure with no recent price behind it.
+ */
 async function fetchUnderlyingSpot(ticker) {
   const n = firstFiniteNumber;
+  const root = chainTicker(ticker);
   try {
-    const root = chainTicker(ticker);
     const param = INDEX_ROOTS.has(root) ? `index=${encodeURIComponent(root)}` : `equity=${encodeURIComponent(root)}`;
     const uj = await ttGet(`/market-data/by-type?${param}`);
     const u = uj?.data?.items?.[0];
-    return n(u?.mark) || n(u?.last) || n(u?.['prev-close']) || 0;
+    const px = n(u?.mark) || n(u?.last) || n(u?.['prev-close']) || 0;
+    if (px > 0) {
+      LAST_GOOD_SPOT.set(root, { px, at: Date.now() });
+      return px;
+    }
   } catch {
-    return 0;
+    /* fall through to the cache */
   }
+  const cached = LAST_GOOD_SPOT.get(root);
+  if (cached && Date.now() - cached.at < LAST_GOOD_SPOT_TTL_MS) {
+    console.warn(`[spot] ${root}: by-type gave nothing, using last good ${cached.px} (${Math.round((Date.now() - cached.at) / 1000)}s old)`);
+    return cached.px;
+  }
+  console.warn(`[spot] ${root}: no spot and no recent cache — chains for this root will carry underlyingPrice 0`);
+  return 0;
 }
 
 /**

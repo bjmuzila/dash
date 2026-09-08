@@ -287,11 +287,27 @@ function TickerPanel({
     return out
   }, [byExp, display, ex0Source, spot, basis])
 
+  /**
+   * The chain arrived, carrying strikes and greeks, and `underlyingPrice` came
+   * back 0 or missing.
+   *
+   * GEX is `γ · contracts · spot² · …`, so with no spot `strikeGex()` returns 0
+   * for every row and `fmtGex(0)` is `'--'`. That renders a FULL, correctly
+   * shaped ladder with every number replaced by a dash and no error anywhere on
+   * the card — which is exactly what "all the numbers in the multi-Greeks tables
+   * have disappeared" looks like from the other side. A missing input has to
+   * read as a missing input, not as a ladder of flat strikes.
+   */
+  const noSpot = !q.loading && !q.error && chain.expiries.length > 0 && !(spot > 0)
+
   const rows = useMemo(() => {
+    // Drop the ladder rather than draw a wall of dashes: the empty state below
+    // says WHY, and a column of '--' says nothing at all.
+    if (!(spot > 0)) return []
     const all = new Set<number>()
     for (const m of valuesByCol.values()) for (const s of m.keys()) all.add(s)
     return [...all].sort((a, b) => b - a)
-  }, [valuesByCol])
+  }, [valuesByCol, spot])
 
   const stats = useMemo(() => {
     const out = new Map<string, ReturnType<typeof columnStats>>()
@@ -592,7 +608,13 @@ function TickerPanel({
       >
         {rows.length === 0 && (
           <div className="px-1 py-3 text-xs text-muted opacity-50">
-            {q.error ? 'Chain unavailable' : q.loading ? 'Waiting for the chain…' : 'No strikes'}
+            {q.error
+              ? 'Chain unavailable'
+              : q.loading
+                ? 'Waiting for the chain…'
+                : noSpot
+                  ? `No ${ticker} price — GEX needs the spot`
+                  : 'No strikes'}
           </div>
         )}
         {rows.map((strike) => {

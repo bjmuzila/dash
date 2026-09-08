@@ -9,6 +9,12 @@ import {
 import { lookupShortLink } from "@/lib/shortLinkRegistry";
 import { PROMO_SLUG_LIST } from "@/lib/promoLinks";
 import { v3TargetForAppPath } from "@/lib/v3Routes";
+import {
+  FIRST_TOUCH_COOKIE,
+  captureFirstTouch,
+  encodeFirstTouch,
+  firstTouchCookieOptions,
+} from "@/lib/firstTouch";
 
 /**
  * The one-segment short links (`/x`, `/youtube`, …), built from the SAME list
@@ -205,6 +211,38 @@ export async function middleware(req: NextRequest) {
   // Owner = the users.is_owner column OR, as a fallback, the env id match.
   const ownerById = OWNER_USER_ID ? (userId || "").trim() === OWNER_USER_ID : false;
   const isOwner = ownerFlag || ownerById;
+
+  // ── First-touch attribution ────────────────────────────────────────────────
+  //
+  // Stamp "where this visitor came from" on the VISITOR, before an account
+  // exists, so /api/auth/signup can copy it onto the new user. Without this the
+  // Sales page can never say which link a subscriber arrived on: page_visits
+  // records the campaign on an anonymous row and the user_id on rows that
+  // carry no campaign. The long version is in lib/firstTouch.ts.
+  //
+  // Why HERE, above every early return: the arrivals that matter (`/`,
+  // `/pricing`, the destination a short link 302s to) are PUBLIC routes, and
+  // the public branch returns three lines below.
+  //
+  // Four conditions, all cheap, and all of them keep this quiet:
+  //   · non-/api — the beacon and data calls carry no referrer worth having;
+  //   · nobody signed in — a signed-in visitor clicking a link is not an
+  //     acquisition, and stashing it could mis-attribute a LATER sign-up made
+  //     in the same browser;
+  //   · no cookie yet — FIRST touch wins, permanently. Never overwritten;
+  //   · captureFirstTouch returned something — it returns null for bots and for
+  //     plain direct hits, which is what stops a Set-Cookie landing on the
+  //     cacheable landing page for the bulk of traffic.
+  if (!path.startsWith("/api/") && !userId && !req.cookies.get(FIRST_TOUCH_COOKIE)) {
+    const touch = captureFirstTouch(req);
+    if (touch) {
+      res.cookies.set(FIRST_TOUCH_COOKIE, encodeFirstTouch(touch), firstTouchCookieOptions());
+      // A response that carries a Set-Cookie must not be handed to the next
+      // visitor by a shared cache. Public pages return before the bfcache
+      // header block at the bottom of this function, so it is set here.
+      res.headers.set("Cache-Control", "private, no-store");
+    }
+  }
 
   // ── Maintenance gate ───────────────────────────────────────────────────────
   const exemptFromMaint =

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerUserId } from "@/lib/supabase/server";
-import { getSubscriptionCancellations } from "@/lib/db";
+import { getSubscriptionCancellations, getAttributionByEmails } from "@/lib/db";
 // Type-only: erased at build time, so the runtime stripe import below stays lazy.
 import type { Stripe as StripeNS } from "stripe";
 
@@ -239,6 +239,61 @@ function trialOf(sub: StripeNS.Subscription, paid: PaidRollup | undefined) {
     trial_converted_at: converted ? paid?.firstPaidAt ?? null : null,
     trial_paid_total: paid?.amount ?? 0,
   };
+}
+
+// ── Acquisition source ───────────────────────────────────────────────────────
+//
+// A shaped subscription row, plus the answer to "which link did this person
+// come from". Flat `attr_*` fields rather than a nested object so a response
+// cached from before this shipped stays readable: every one is optional, and
+// the Sales page falls back to "unknown" when they are absent.
+
+type ShapedRow = { customer_email: string } & Record<string, unknown>;
+
+/**
+ * Fill in `attr_*` on every row of every list, in ONE database round trip.
+ *
+ * Mutates in place because the three lists overlap: a trialling subscription
+ * appears in both `subscriptions` and `trialSubscriptions`, and building a
+ * second copy would let the two drift.
+ *
+ * Never throws. The Sales page is the revenue page first — an attribution
+ * lookup that fails must degrade to blank source cells, not to a 500 over the
+ * MRR number.
+ */
+async function attachAttribution(lists: ShapedRow[][]): Promise<void> {
+  try {
+    const emails: string[] = [];
+    for (const list of lists) {
+      for (const row of list) {
+        const e = String(row.customer_email || "").trim().toLowerCase();
+        if (e && e !== "—") emails.push(e);
+      }
+    }
+    if (!emails.length) return;
+
+    const byEmail = await getAttributionByEmails(emails);
+
+    for (const list of lists) {
+      for (const row of list) {
+        const a = byEmail.get(String(row.customer_email || "").trim().toLowerCase());
+        // 'first_touch' | 'visit' | null — null means we have no record at all,
+        // which the UI must NOT render as "direct". Every account that predates
+        // this feature is in that bucket.
+        row.attr_source = a?.source ?? null;
+        row.attr_channel = a?.channel ?? null;
+        row.attr_utm_source = a?.utm_source ?? null;
+        row.attr_utm_medium = a?.utm_medium ?? null;
+        row.attr_utm_campaign = a?.utm_campaign ?? null;
+        row.attr_referrer = a?.referrer ?? null;
+        row.attr_referrer_host = a?.referrer_host ?? null;
+        row.attr_landing_path = a?.landing_path ?? null;
+        row.attr_first_seen_at = a?.first_seen_at ?? null;
+      }
+    }
+  } catch (e) {
+    console.warn("[stripe-summary] attribution lookup failed:", e);
+  }
 }
 
 // ── Response cache ───────────────────────────────────────────────────────────
@@ -526,6 +581,22 @@ async function buildSummary(stripe: StripeClient): Promise<SummaryPayload> {
     const cancellations = [...deadSubs]
       .sort((a, b) => (b.ended_at ?? b.canceled_at ?? 0) - (a.ended_at ?? a.canceled_at ?? 0))
       .map(shape);
+    const trialSubscriptions = trialSubs.map(shape);
+
+    // ── Where each customer came from ──────────────────────────────────────
+    //
+    // Stripe has no idea. It knows an email and a card; the link that produced
+    // the visit is ours, captured on arrival into `cbe_attr` and copied onto
+    // the account at sign-up (lib/firstTouch.ts). One batched lookup on every
+    // email in the payload joins the two worlds — the Sales page then shows the
+    // source per subscriber, per trial, and grouped into the revenue rollup.
+    //
+    // Enrichment ONLY. Every field is optional on the client and a throw here
+    // is swallowed: "where did this customer come from" must never be able to
+    // take down "how much money is there".
+    await attachAttribution(
+      [subscriptions, cancellations, trialSubscriptions] as unknown as ShapedRow[][]
+    );
 
     return {
       configured: true,
@@ -552,7 +623,7 @@ async function buildSummary(stripe: StripeClient): Promise<SummaryPayload> {
         conversionRate: trialsSettled > 0 ? trialsConverted / trialsSettled : null,
         revenue: trialRevenue, // cents collected from people who came in on a trial
       },
-      trialSubscriptions: trialSubs.map(shape),
+      trialSubscriptions,
       revenueByMonth, // "YYYY-MM" → { revenue, invoices } — actual cash collected
       subscriptions,
       cancellations,

@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { PageShell, Card } from "../components/PageCard";
 import { OWNER_THEME, rgba, homeInputStyle } from "../lib/theme";
 import ThemedSelect from "../components/ThemedSelect";
@@ -36,17 +36,52 @@ type AssetClass = "notes" | "options" | "futures" | "equity";
 type TradeAction = "buy" | "sell" | "trim" | "average-down";
 type OptionRight = "call" | "put";
 
-const ACTIONS: { id: TradeAction; label: string; accent: string }[] = [
-  { id: "buy", label: "Buy", accent: GREEN },
-  { id: "sell", label: "Sell", accent: OWNER_THEME.red },
-  { id: "trim", label: "Trim", accent: OWNER_THEME.gold },
-  { id: "average-down", label: "Average Down", accent: CYAN },
+const ACTIONS: { id: TradeAction; label: string; accent: string; bar: string }[] = [
+  { id: "buy", label: "Buy", accent: GREEN, bar: "#3BA55D" },
+  { id: "sell", label: "Sell", accent: OWNER_THEME.red, bar: "#ED4245" },
+  { id: "trim", label: "Trim", accent: OWNER_THEME.gold, bar: "#FAA61A" },
+  { id: "average-down", label: "Average Down", accent: CYAN, bar: "#219EBC" },
 ];
+
+/** The bar Discord will actually draw, given the action and the manual override. */
+function resolveBar(action: TradeAction, assetClass: AssetClass, override: string): string {
+  if (override !== BAR_AUTO) return BAR_COLORS.find((c) => c.id === override)?.hex ?? "#5865F2";
+  if (assetClass === "notes") return "#5865F2"; // a Note is not a trade — blurple, not green
+  return ACTIONS.find((a) => a.id === action)?.bar ?? "#219EBC";
+}
 
 const RIGHTS: { value: string; label: string }[] = [
   { value: "call", label: "Call" },
   { value: "put", label: "Put" },
 ];
+
+/**
+ * BAR COLOURS — the vertical stripe down the left of a Discord embed is the
+ * embed's `color` field, a plain 24-bit int. It is PAYLOAD, not UI chrome, so
+ * these hex values are data being sent to Discord and deliberately do not come
+ * from lib/theme: they have to read correctly inside Discord's own dark surface,
+ * not inside this app.
+ *
+ * "Auto" is the default and the one to leave alone — it derives the bar from the
+ * trade action, so green/red/amber mean the same thing in every post and the
+ * room learns to read the stripe before the text. The manual swatches exist for
+ * the cases Auto cannot know about: flagging a re-post, colour-coding a series,
+ * or a Note that wants to look nothing like a trade.
+ */
+const BAR_AUTO = "auto";
+const BAR_COLORS: { id: string; label: string; hex: string }[] = [
+  { id: "green", label: "Green", hex: "#3BA55D" },
+  { id: "red", label: "Red", hex: "#ED4245" },
+  { id: "amber", label: "Amber", hex: "#FAA61A" },
+  { id: "cyan", label: "Cyan", hex: "#219EBC" },
+  { id: "blurple", label: "Blurple", hex: "#5865F2" },
+  { id: "white", label: "White", hex: "#FFFFFF" },
+];
+
+/** Discord wants the bar as an integer, not "#RRGGBB". */
+export function barColorInt(hex: string): number {
+  return parseInt(hex.replace("#", ""), 16);
+}
 
 /** Which fields each asset class shows. Notes is a plain broadcast — no trade. */
 const SHOWS = {
@@ -85,6 +120,10 @@ type BroadcastAlert = {
   right: OptionRight;
   price: string;
   notes: string;
+  /** Pasted/dropped chart as a data URL. One image, the way the Discord post has one. */
+  image: string | null;
+  /** Resolved embed bar, "#RRGGBB". Send it as barColorInt(bar). */
+  bar: string;
 };
 
 function todayIso(): string {
@@ -121,7 +160,6 @@ const sectionLabel: CSSProperties = {
   letterSpacing: "0.12em",
   textTransform: "uppercase",
   color: OWNER_THEME.text,
-  opacity: 0.55,
   marginBottom: 10,
 };
 
@@ -153,7 +191,6 @@ function Pill({
           : "rgba(255,255,255,0.03)",
         color: active ? accent : OWNER_THEME.text,
         boxShadow: active ? `0 0 14px ${rgba(accent, 0.2)}` : "none",
-        opacity: active ? 1 : 0.7,
       }}
     >
       {children}
@@ -175,17 +212,53 @@ export default function Bot() {
   const [right, setRight] = useState<OptionRight>("call");
   const [price, setPrice] = useState("");
   const [notes, setNotes] = useState("");
+  const [image, setImage] = useState<string | null>(null);
+  const [barChoice, setBarChoice] = useState<string>(BAR_AUTO);
+  const [dragOver, setDragOver] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const shows = SHOWS[assetClass];
+  const bar = resolveBar(action, assetClass, barChoice);
+
+  /**
+   * Ctrl+V anywhere on the compose tab attaches the clipboard image. This is
+   * the whole point of the attach box: the chart is already on the clipboard
+   * from TradingView, and making it a file-picker round trip is the difference
+   * between posting the chart and not bothering. The listener is on `window`
+   * rather than the textarea so a paste lands whether or not a field has focus
+   * — and it only takes over when the clipboard actually carries an image, so
+   * pasting TEXT into the thesis box still behaves normally.
+   */
+  useEffect(() => {
+    if (tab !== "compose") return;
+    const onPaste = (e: ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith("image/"));
+      if (!item) return;
+      const file = item.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      readImage(file);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [tab]);
+
+  function readImage(file: File) {
+    if (!file.type.startsWith("image/")) return;
+    const fr = new FileReader();
+    fr.onload = () => setImage(typeof fr.result === "string" ? fr.result : null);
+    fr.readAsDataURL(file);
+  }
 
   const toggleBot = (id: BotId) =>
     setBots((prev) => (prev.includes(id) ? prev.filter((b) => b !== id) : [...prev, id]));
 
   const canSend = useMemo(() => {
     if (bots.length === 0) return false;
-    if (assetClass === "notes") return notes.trim().length > 0;
+    // A chart on its own is a legitimate Note — the picture IS the post.
+    if (assetClass === "notes") return notes.trim().length > 0 || image != null;
     return ticker.trim().length > 0;
-  }, [bots, assetClass, notes, ticker]);
+  }, [bots, assetClass, notes, ticker, image]);
 
   /**
    * The ONE place the transport gets wired. Today it only appends locally —
@@ -206,12 +279,15 @@ export default function Bot() {
       right,
       price: price.trim(),
       notes: notes.trim(),
+      image,
+      bar,
     };
     setFeed((prev) => [draft, ...prev]);
     setTicker("");
     setStrike("");
     setPrice("");
     setNotes("");
+    setImage(null);
     setTab("feed");
   }
 
@@ -252,7 +328,6 @@ export default function Bot() {
                   border: `1px solid ${active ? rgba(CYAN, 0.3) : "transparent"}`,
                   background: active ? `linear-gradient(180deg, ${rgba(CYAN, 0.16)}, ${rgba(CYAN, 0.04)})` : "transparent",
                   color: active ? CYAN : OWNER_THEME.text,
-                  opacity: active ? 1 : 0.6,
                 }}
               >
                 {t.label}
@@ -282,7 +357,7 @@ export default function Bot() {
           {/* ── Card header ────────────────────────────────────────────── */}
           <div style={{ padding: "20px 24px", borderBottom: `1px solid ${OWNER_THEME.border}` }}>
             <div style={{ fontSize: 17, fontWeight: 800, color: OWNER_THEME.text }}>Compose New Alert</div>
-            <div style={{ fontSize: 12, color: OWNER_THEME.text, opacity: 0.5, marginTop: 3 }}>
+            <div style={{ fontSize: 12, color: OWNER_THEME.text, marginTop: 3 }}>
               Select the bot, asset class, and trade parameters.
             </div>
           </div>
@@ -377,9 +452,9 @@ export default function Bot() {
                           background: active ? rgba(CYAN, 0.14) : "rgba(255,255,255,0.04)",
                         }}
                       >
-                        <Glyph kind={a.id} color={active ? CYAN : "rgba(255,255,255,0.55)"} />
+                        <Glyph kind={a.id} color={active ? CYAN : OWNER_THEME.text} />
                       </span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: active ? CYAN : OWNER_THEME.text, opacity: active ? 1 : 0.75 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: active ? CYAN : OWNER_THEME.text }}>
                         {a.label}
                       </span>
                     </button>
@@ -462,6 +537,157 @@ export default function Bot() {
               />
             </div>
 
+            {/* ── Chart ────────────────────────────────────────────────── */}
+            <div>
+              <div style={sectionLabel}>Chart</div>
+              {image ? (
+                <div
+                  style={{
+                    position: "relative",
+                    borderRadius: 14,
+                    overflow: "hidden",
+                    border: `1px solid ${OWNER_THEME.border}`,
+                    background: OWNER_THEME.panelInset,
+                  }}
+                >
+                  <img src={image} alt="Attached chart" style={{ display: "block", width: "100%", maxHeight: 340, objectFit: "contain" }} />
+                  <button
+                    type="button"
+                    onClick={() => setImage(null)}
+                    title="Remove chart"
+                    style={{
+                      position: "absolute",
+                      top: 10,
+                      right: 10,
+                      width: 28,
+                      height: 28,
+                      borderRadius: 999,
+                      cursor: "pointer",
+                      fontSize: 14,
+                      fontWeight: 800,
+                      lineHeight: 1,
+                      border: `1px solid ${rgba(OWNER_THEME.red, 0.45)}`,
+                      background: rgba(OWNER_THEME.red, 0.18),
+                      color: OWNER_THEME.text,
+                      backdropFilter: "blur(8px)",
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <div
+                  onClick={() => fileRef.current?.click()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOver(false);
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) readImage(f);
+                  }}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                    padding: "28px 16px",
+                    borderRadius: 14,
+                    cursor: "pointer",
+                    transition: "all 0.15s",
+                    border: `1px dashed ${dragOver ? rgba(CYAN, 0.6) : OWNER_THEME.borderStrong}`,
+                    background: dragOver ? rgba(CYAN, 0.08) : "rgba(255,255,255,0.02)",
+                  }}
+                >
+                  <span style={{ fontSize: 20 }}>🖼︎</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: dragOver ? CYAN : OWNER_THEME.text }}>
+                    Paste a screenshot (Ctrl+V)
+                  </span>
+                  <span style={{ fontSize: 11, color: OWNER_THEME.text }}>or drop a file here · or click to browse</span>
+                </div>
+              )}
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) readImage(f);
+                  e.target.value = "";
+                }}
+              />
+            </div>
+
+            {/* ── Embed bar ────────────────────────────────────────────── */}
+            <div>
+              <div style={sectionLabel}>Embed Bar Colour</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => setBarChoice(BAR_AUTO)}
+                  title="Derive the bar from the trade action"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "7px 14px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    transition: "all 0.15s",
+                    border: `1px solid ${barChoice === BAR_AUTO ? rgba(CYAN, 0.55) : OWNER_THEME.border}`,
+                    background:
+                      barChoice === BAR_AUTO
+                        ? `linear-gradient(180deg, ${rgba(CYAN, 0.22)}, ${rgba(CYAN, 0.06)})`
+                        : "rgba(255,255,255,0.03)",
+                    color: barChoice === BAR_AUTO ? CYAN : OWNER_THEME.text,
+                  }}
+                >
+                  <span style={{ width: 4, height: 14, borderRadius: 2, background: bar }} />
+                  Auto
+                </button>
+
+                {BAR_COLORS.map((c) => {
+                  const on = barChoice === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setBarChoice(c.id)}
+                      title={c.label}
+                      aria-label={c.label}
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        padding: 0,
+                        transition: "all 0.15s",
+                        border: `2px solid ${on ? c.hex : OWNER_THEME.border}`,
+                        background: on ? rgba(CYAN, 0.06) : "rgba(255,255,255,0.02)",
+                        boxShadow: on ? `0 0 12px ${c.hex}55` : "none",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <span style={{ width: 5, height: 16, borderRadius: 2, background: c.hex }} />
+                    </button>
+                  );
+                })}
+
+                <span style={{ fontSize: 11, color: OWNER_THEME.text, fontVariantNumeric: "tabular-nums" }}>
+                  {bar} · {barColorInt(bar)}
+                </span>
+              </div>
+            </div>
+
             {/* ── Send ─────────────────────────────────────────────────── */}
             <div
               style={{
@@ -473,7 +699,7 @@ export default function Bot() {
                 borderTop: `1px solid ${OWNER_THEME.border}`,
               }}
             >
-              <div style={{ fontSize: 12, color: OWNER_THEME.text, opacity: 0.5, fontVariantNumeric: "tabular-nums" }}>
+              <div style={{ fontSize: 12, color: OWNER_THEME.text, fontVariantNumeric: "tabular-nums" }}>
                 {bots.length === 0
                   ? "No bot selected"
                   : `→ ${BOTS.filter((b) => bots.includes(b.id)).map((b) => b.label).join(" + ")}`}
@@ -496,7 +722,7 @@ export default function Bot() {
                   background: canSend
                     ? `linear-gradient(180deg, ${rgba(CYAN, 0.3)}, ${rgba(CYAN, 0.08)})`
                     : "rgba(255,255,255,0.03)",
-                  color: canSend ? CYAN : "rgba(255,255,255,0.35)",
+                  color: canSend ? CYAN : OWNER_THEME.text,
                   boxShadow: canSend ? `0 0 20px ${rgba(CYAN, 0.22)}` : "none",
                   transition: "all 0.15s",
                 }}
@@ -511,20 +737,21 @@ export default function Bot() {
         <Card variant="classic" padding={0}>
           <div style={{ padding: "20px 24px", borderBottom: `1px solid ${OWNER_THEME.border}` }}>
             <div style={{ fontSize: 17, fontWeight: 800, color: OWNER_THEME.text }}>Activity Feed</div>
-            <div style={{ fontSize: 12, color: OWNER_THEME.text, opacity: 0.5, marginTop: 3 }}>
+            <div style={{ fontSize: 12, color: OWNER_THEME.text, marginTop: 3 }}>
               Alerts composed this session. Not persisted — the transport is not wired yet.
             </div>
           </div>
 
           {feed.length === 0 ? (
-            <div style={{ padding: "56px 24px", textAlign: "center", fontSize: 13, color: OWNER_THEME.text, opacity: 0.45 }}>
+            <div style={{ padding: "56px 24px", textAlign: "center", fontSize: 13, color: OWNER_THEME.text }}>
               Nothing broadcast yet.
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column" }}>
               {feed.map((a) => {
-                const act = ACTIONS.find((x) => x.id === a.action);
-                const accent = a.assetClass === "notes" ? OWNER_THEME.lightBlue : act?.accent ?? CYAN;
+                // The feed row wears the SAME bar the Discord embed will get, so
+                // what you see here is what the room sees.
+                const accent = a.bar;
                 return (
                   <div
                     key={a.id}
@@ -532,6 +759,7 @@ export default function Bot() {
                       display: "flex",
                       gap: 14,
                       padding: "16px 24px",
+                      borderLeft: `4px solid ${accent}`,
                       borderBottom: `1px solid ${OWNER_THEME.border}`,
                     }}
                   >
@@ -572,12 +800,26 @@ export default function Bot() {
                             {b.label}
                           </span>
                         ))}
-                        <span style={{ marginLeft: "auto", fontSize: 11, color: OWNER_THEME.text, opacity: 0.4 }}>{ago(a.at)}</span>
+                        <span style={{ marginLeft: "auto", fontSize: 11, color: OWNER_THEME.text }}>{ago(a.at)}</span>
                       </div>
                       {a.notes && (
-                        <div style={{ fontSize: 13, color: OWNER_THEME.text, opacity: 0.65, marginTop: 6, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                        <div style={{ fontSize: 13, color: OWNER_THEME.text, marginTop: 6, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
                           {a.notes}
                         </div>
+                      )}
+                      {a.image && (
+                        <img
+                          src={a.image}
+                          alt="Chart"
+                          style={{
+                            display: "block",
+                            marginTop: 10,
+                            maxWidth: "100%",
+                            maxHeight: 260,
+                            borderRadius: 12,
+                            border: `1px solid ${OWNER_THEME.border}`,
+                          }}
+                        />
                       )}
                     </div>
                   </div>

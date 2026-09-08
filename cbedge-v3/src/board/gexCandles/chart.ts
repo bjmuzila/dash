@@ -68,6 +68,64 @@ const VOL_CANDLE_BOTTOM = 0.24
 const VOL_ALPHA = 0.34
 const CANDLE_TOP = 0.08
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE LAST MILE. Nothing reaches the pane without passing this.
+//
+// candles.ts's `sanitize` already refuses a bar with a zero in it, and every
+// producer of a live price already refuses a non-positive one — and the pane
+// STILL autoscaled 0–8000 with one wick running from price to the floor, on a
+// symbol switch, repeatedly. So the guard is in the wrong PLACE: it is at the
+// parse boundary, and the failure is downstream of it.
+//
+// There are three ways into the series — `setData` for the history, and two
+// `series.update` calls for the forming bar — and each one used to hand its
+// object straight to lightweight-charts. One bad datum out of any of them puts
+// zero in the autoscale, which flattens the entire session into a line: the
+// pane is ~600px, the range becomes 0–8000, and a 60-point day is seven pixels
+// of that. The cost of one bad bar is the whole chart.
+//
+// So both doors take the same check, and the check states the SAME rule
+// candles.ts states — a price is positive, and a bar whose range exceeds a
+// quarter of its close is a data fault rather than a print. Anything that fails
+// is DROPPED, not clamped: a bar we cannot vouch for is one the next poll will
+// publish correctly a few seconds later, and drawing a repaired guess is how a
+// fault becomes invisible instead of fixed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A bar wider than this fraction of its own close is a fault, not a print. */
+const SANE_RANGE = 0.25
+
+interface Ohlc {
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+function saneBar(b: Ohlc): boolean {
+  const { open, high, low, close } = b
+  if (!(close > 0) || !(open > 0) || !(high > 0) || !(low > 0)) return false
+  if (!Number.isFinite(open + high + low + close)) return false
+  if (high < Math.max(open, close) || low > Math.min(open, close)) return false
+  return high - low <= close * SANE_RANGE
+}
+
+/**
+ * Say it ONCE per chart, with the bar that did it.
+ *
+ * A rejection is silent to the user by design — the pane keeps the last good
+ * picture and the poll repairs it — but silent to the DEVELOPER is how this
+ * survived three fixes at the parse boundary. The first drop names the fields,
+ * so whichever path is producing it can be identified from the console instead
+ * of from a screenshot of a flattened chart. Once only: if a feed is emitting
+ * junk it emits it every tick, and a warning per tick is its own outage.
+ */
+function warnOnce(state: { warned: boolean }, where: string, bar: unknown): void {
+  if (state.warned) return
+  state.warned = true
+  console.warn(`[gex-candles] dropped an implausible bar from ${where}`, bar)
+}
+
 function hexToRgb(hex: string, fallback: [number, number, number]): [number, number, number] {
   const digits = /^#?([0-9a-f]{6})$/i.exec(hex.trim())?.[1]
   if (!digits) return fallback
@@ -461,6 +519,32 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       else hi = mid - 1
     }
     return barTimes[lo]!
+  }
+
+  /**
+   * One warning per chart per door — see warnOnce. Separate states so a bad
+   * history bar does not silence the live path, which is the one more likely to
+   * be the culprit and the harder one to catch from a screenshot.
+   */
+  const barWarn = { warned: false }
+  const liveWarn = { warned: false }
+
+  /**
+   * The ONLY way the forming bar reaches the series.
+   *
+   * Both `series.update` call sites go through here, so a forming bar that
+   * fails the check is dropped instead of drawn — and dropping it is safe by
+   * construction: the candle poll republishes the whole series every 30s, so
+   * the worst case is a forming candle that does not appear for a few seconds,
+   * against the alternative of a pane autoscaled to zero for as long as the bar
+   * is on it. See the block on saneBar.
+   */
+  function pushLive(bar: FormingBar, where: string): void {
+    if (!saneBar(bar)) {
+      warnOnce(liveWarn, where, bar)
+      return
+    }
+    series.update({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close })
   }
 
   /** Keep `barTimes` covering the forming bar `live` is currently drawing. */
@@ -1112,15 +1196,28 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // that is the whole reason it is held separately from `live`.
       if (reframe) synth = null
 
+      // ── The history, checked ───────────────────────────────────────────────
+      // ONE filtered list, and everything below is built from it — the series,
+      // the volume strip, `barTimes`, `barCount` and `live`. Filtering into a
+      // local rather than at each use is the point: the bubble layer places
+      // every bucket by index against `barTimes`, so a list that disagreed with
+      // the series by even one bar would put every mark after it on the wrong
+      // candle. See the block on saneBar.
+      const drawn = bars.filter((b) => {
+        const ok = saneBar({ open: b.o, high: b.h, low: b.l, close: b.c })
+        if (!ok) warnOnce(barWarn, 'the candle history', b)
+        return ok
+      })
+
       const prevCount = barCount
-      barCount = bars.length
+      barCount = drawn.length
       // The bubble layer positions every bucket against this. It must be the
       // SAME list the series gets, and it must be replaced here rather than
       // merged, so a bar the poll dropped stops being a place a bucket can land.
-      barTimes = bars.map((b) => b.t)
+      barTimes = drawn.map((b) => b.t)
       version++
       series.setData(
-        bars.map((b) => ({
+        drawn.map((b) => ({
           time: Math.floor(b.t / 1000) as UTCTimestamp,
           open: b.o,
           high: b.h,
@@ -1138,13 +1235,13 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // the strip simply has no bar there until the poll publishes one. A made
       // up size would be worse than a gap.
       volume.setData(
-        bars.map((b) => ({
+        drawn.map((b) => ({
           time: Math.floor(b.t / 1000) as UTCTimestamp,
           value: b.v,
           color: b.c >= b.o ? volUp : volDown,
         })),
       )
-      const last = bars[bars.length - 1]
+      const last = drawn[drawn.length - 1]
       live = last
         ? { time: Math.floor(last.t / 1000) as UTCTimestamp, openMs: last.t, open: last.o, high: last.h, low: last.l, close: last.c }
         : null
@@ -1163,7 +1260,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       if (synth && Date.now() < synth.openMs + intervalMs && live && synth.openMs === live.openMs + intervalMs) {
         live = synth
         barCount++
-        series.update({ time: synth.time, open: synth.open, high: synth.high, low: synth.low, close: synth.close })
+        pushLive(synth, 'the re-added forming bar')
       } else if (synth) {
         synth = null
       }
@@ -1185,6 +1282,29 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     },
     setLivePrice(price) {
       if (!live || !Number.isFinite(price) || price <= 0) return
+      // ── IS THIS PRICE EVEN ABOUT THIS BAR? ─────────────────────────────────
+      // `price > 0` was the whole test, and "positive" is a much weaker claim
+      // than "belongs here". Every caller already refuses a zero, so the prints
+      // that actually get through are the ones that are positive and WRONG: a
+      // quote for the symbol that was on screen a moment ago, a stale frame
+      // arriving after a switch, a feed emitting a fraction of a price. Any of
+      // them widens the forming bar to reach it — that is exactly what this
+      // method is for — and one such tick puts a wick from price to near zero
+      // and autoscales the pane 0–8000 for as long as the bar lives.
+      //
+      // A live print is an extension of the bar it lands on, so it has to be in
+      // the same neighbourhood as that bar's close. SANE_RANGE is the same
+      // quarter used everywhere else here, which is enormous for one interval
+      // and still refuses every case above by a wide margin.
+      //
+      // DROPPED, never clamped: this is not a bar we are repairing, it is a
+      // print we do not believe, and a clamped tick would move the candle to a
+      // price nothing ever traded at. The next `setBars` reframes and the
+      // question goes away.
+      if (Math.abs(price - live.close) > live.close * SANE_RANGE) {
+        warnOnce(liveWarn, `a live price ${price} against a bar closing ${live.close}`, live)
+        return
+      }
       // ── Has the bar this is extending already closed? ──────────────────────
       // It usually HAS. The candle feed hands over CLOSED bars only, so `live`
       // is the last FINISHED bar and `openMs + intervalMs` is already in the
@@ -1238,7 +1358,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         // A bump HERE only — once an interval, not once a tick. A new bar moves
         // the time axis, and the bubble band is positioned against it.
         version++
-        series.update({ time: live.time, open: live.open, high: live.high, low: live.low, close: live.close })
+        pushLive(live, 'the rolled-forward forming bar')
         checkOffscreen()
         return
       }
@@ -1252,7 +1372,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // (a new high autoscales the pane), viewSignature() sees that on its own
       // and the frame draws anyway. Bumping here instead forced a full-band
       // redraw on every quote, several times a second, forever.
-      series.update({ time: live.time, open: live.open, high: live.high, low: live.low, close: live.close })
+      pushLive(live, 'the extended forming bar')
     },
     setIntervalMs(ms) {
       if (ms > 0) intervalMs = ms

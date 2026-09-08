@@ -86,6 +86,17 @@ export const NAV: NavItem[] = [
   },
   { to: '/premarket', label: 'Premarket', icon: '🌅', prefetch: ['/api/scanner/market-quality'] },
   { to: '/options-chain', label: 'Options Chain', icon: '⛓️', prefetch: ['/api/expirations?ticker=SPX'] },
+  // Next to the matrix on purpose — same feed, opposite question. /options-chain
+  // is the GEX heat grid; this is the BOOK (bid/ask/mark, volume, OI, IV and the
+  // greeks, calls and puts either side of the strike). Both prefetches are the
+  // page's ACTUAL entry pair, and the seed carries a stale window so the warmed
+  // entry is read back rather than stepped over (see chain/chainBook.ts).
+  {
+    to: '/chain',
+    label: 'Chain',
+    icon: '🧾',
+    prefetch: ['/api/chains?ticker=SPX&range=all', '/api/expirations?ticker=SPX'],
+  },
   // Prefetches the default chip's levels row on hover — the page's own lookup
   // reads it back out of the api.ts cache, so the click lands on data that is
   // already home. See src/pages/em/emData.ts (LEVELS_STALE_MS).

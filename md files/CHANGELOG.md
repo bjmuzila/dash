@@ -1,38 +1,98 @@
 # Changelog
 
-## 2026-09-08 (c) - Options Chain v3: PREM tab - net premium traded, as a whole-grid lens (`components/pages/OptionsChain.tsx`, `lib/calculations/optionChain.ts`)
+## 2026-09-08 (d) - v3: `/v3/chain`, the real option chain (`cbedge-v3/src/pages/Chain.tsx` NEW, `cbedge-v3/src/pages/chain/*` NEW, `cbedge-v3/src/App.tsx`, `cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/src/pages/TradersDashboard.tsx`, `app/v3/chain/route.ts` NEW)
 
-The chain's hover card has always printed **Net Prem (C-P)** for the cell under
-the pointer. That figure is now its own tab in the **Greek** selector, so the
-same number can be read across every strike and expiry at once instead of one
-cell at a time.
+**A new page, not a mode of the old one.** `/v3/options-chain` is a GEX MATRIX —
+one column per expiration, every cell a derived exposure painted by a heat skin.
+It answers "where is the gamma". `/v3/chain` is the BOOK, the thing thinkorswim
+and tastytrade mean by an option chain: calls on the left, puts on the right,
+strikes down the middle, and the quotes themselves in the cells. They share the
+feed (`/api/chains`) and nothing else.
 
-**Selector.** `GREEK_MODES` gains `prem`, rendered as a seventh tile (`PREM`)
-next to OI / VOL. The pane already had `wrap` on that SegGroup - added when VOL
-made it six - so the new tile lands on the second line instead of under the
-panel's clipped right edge.
+**The layout.** Columns are MIRRORED around the strike, so bid sits against bid
+and a strike reads across in one movement (the call wing renders the selected
+list reversed). ITM is a 5%-white wash rather than a colour, so it does not
+fight the tone colours the columns already use, and it is translucent so the
+row hover still reads through. The spot line is its own row, drawn BETWEEN the
+two strikes that bracket the underlying — the nearest strike is separately
+marked ATM. Every expiration is a `<tbody>` in ONE table, which is what keeps
+the columns aligned across groups.
 
-**What the cell shows.** `callPrem - putPrem` in dollars, formatted by the same
-`fmtMoney()` the greeks use (+$1.24M / -$430.5K). It renders as a greek, not as
-a count tab: one signed figure per cell, the same blue/red ramp (call-premium
-heavy = blue, put-premium heavy = red), the same rank floors, and the same
-per-column heat scale. The SUM Total column adds it up like any other dollar
-series.
+**Sixteen columns, four presets.** Bid · Ask · Mark · Sprd · Sprd% · IV · Δ · Γ ·
+Θ · ν · Vol · OI · V/OI · Extr · ITM% · B/E. Presets: Standard (the default
+read), Greeks, Liquidity, Analysis. Any subset can be picked from the column
+popover; the layout persists in `localStorage`, because a chain layout is a
+habit, not a preference you re-set daily. The last column cannot be removed —
+there would be no control left on screen to get back from it.
 
-**Untraded strikes read as absent.** `valueAt()` returns `null` for a strike
-with zero premium on both sides, so those cells print `.` rather than a wall of
-`+$0`, and they stay out of the column heat scale and the SUM totals - the same
-honesty the VOL tab's `.` already carries.
+**Expirations are the accordion, not a dropdown.** Several can be open at once,
+each loads WHEN IT IS OPENED, and each header carries its own DTE, a monthly
+(third-Friday) badge, ATM straddle IV, call/put OI, the P/C ratio and the day's
+volume. An open expiry stays offered even when the ladder is collapsed to 6/12/30.
 
-**Basis-independent.** Premium is mark x TODAY'S volume, so the OI+Vol /
-Vol Only toggle cannot change it or blank it out (unlike the greeks, whose
-contract counts Vol Only zeroes). No new fetch - `parseExpiration()` was already
-computing `callPrem` / `putPrem` for the hover card; the new `prem` field on
-`GreekCell` is just their difference.
+**Entry is TWO parallel requests, not a waterfall** (v3 non-negotiable #3).
+`/api/chains` with NO `expiration` returns the nearest three expiries in one
+payload, so the front expiry is painted off the first response; the expirations
+list only decides what the accordion OFFERS. The rail prefetches both URLs on
+hover, and the seed read carries a 15s stale window so the warmed cache entry is
+actually read back instead of being stepped over by a `staleMs: 0` refetch.
 
-**Not available in replay.** The strike_growth recorder stores GEX only, so PREM
-joins DEX/CHEX/VEX/OI/VOL in the set the replay pin greys out; replay frames
-build cells with `prem: 0` and the tab tooltip now names PREM.
+**The strike window is bounded by default** — 40 around ATM, with 20/80/All.
+SPX lists hundreds of strikes per expiry; "All" is one click and is an explicit
+choice. That window is what stands in for virtualisation. The page centres
+itself on the spot row once per symbol, measured rather than via `offsetTop`
+(the scroll container is not a positioned ancestor).
+
+**No Last and no Net Change column, deliberately.** The feed
+(`server-v2/proxy-tastytrade.js → fetchChainFull`) carries symbol, OI, volume,
+delta, gamma, theta, vega, IV, bid, ask and mark — there is no `last` and no
+previous close on the wire. An invented column would have to be `mark` under a
+different heading.
+
+REST + a 20s poll (SPX on the ~24/5 feed, everything else RTH-only, hidden tabs
+skipped), no socket, no canvas. Zero theme-baseline entries: no colour literal,
+no Tailwind palette class, every size off the type scale. Follows the board
+symbol like every other v3 page — no ticker box.
+
+Registered in all four places AGENTS.md requires: the page, the `lazy()` route in
+`App.tsx`, the `NAV` entry in `Shell.tsx` (next to Options Chain), and
+`app/v3/chain/route.ts` calling `serveSpaShell("v3")` so a hard refresh on
+`/v3/chain` does not 404. Also added to `ALL_PAGES` / `LIVE_ROUTES` in
+`TradersDashboard.tsx`, the third list AGENTS.md says moves with the other two.
+No phone tab — `src/mobile/mobileNav.ts` already records why a chain at 390px is
+a picture of a page rather than the page.
+
+## 2026-09-08 (c) - BOT: paste a chart straight into the alert, and four Discord layouts to pick from (`owner-vite/src/pages/Bot.tsx`, `generated/2026-09-08-bot-discord-embed-ideas.html`)
+
+**Chart attachment.** New "Chart" box in the composer, above the send row. Three
+ways in and they all end at the same `readImage()`: Ctrl+V, drag-and-drop, or
+click to browse. The paste listener is on `window`, not on the textarea, because
+the chart is already on the clipboard from TradingView and requiring a focused
+drop target is exactly the friction that ends with the chart not getting posted.
+It only claims the event when the clipboard actually carries an image, so
+pasting TEXT into the thesis box still behaves normally. One image per alert -
+the Discord post has one. Attached, it renders as a removable preview; sent, it
+rides along in the Activity Feed row.
+
+Side effect worth knowing: a Note with a chart and no text is now sendable. For
+a Note the picture IS the post, so `canSend` accepts either.
+
+**Four Discord layouts, mocked.** `generated/2026-09-08-bot-discord-embed-ideas.html`
+renders the same alert (Buy SPX 6400C 09/08 @ 2.15) four ways in real Discord
+chrome, so the choice is made by looking rather than by describing:
+
+  - **A - Trade Ticket.** Action colours the accent bar; entry/strike/expiry as
+    three inline fields above the thesis. Scannable on a phone.
+  - **B - Terminal Block.** The trade line as an ANSI code block, column-aligned.
+    Nothing reflows on mobile and it copy-pastes into a journal.
+  - **C - Data Grid.** Six inline fields, thesis demoted to a labelled field.
+    Best at volume, worst when the reasoning is the point.
+  - **D - Headline.** Today's post plus an accent bar and a tag strip. No fields,
+    so a Note posts identically to a trade and long write-ups keep full width.
+
+Every one is plain embed vocabulary (author / title / description / fields /
+image / footer), so whichever wins maps 1:1 onto the webhook payload with no
+rework.
 
 ## 2026-09-08 (b) - owner.cbedge.net gets BOT, a trade-alert composer for the two Discord bots (`owner-vite/src/pages/Bot.tsx` NEW, `owner-vite/src/lib/nav.ts`, `owner-vite/src/pages/registry.ts`)
 

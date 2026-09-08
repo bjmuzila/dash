@@ -1611,6 +1611,46 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
 
+    -- ── First-touch acquisition, one row per account ──────────────────────────
+    --
+    -- "Which link did this subscriber come from?" page_visits cannot answer it:
+    -- the row that carries the UTM is written before anyone signs in (user_id
+    -- NULL), and every row that carries a user_id posts null attribution BY
+    -- DESIGN — see the page_visits comment and lib/pageStatus.ts. So the
+    -- campaign and the customer never appear on the same row there.
+    --
+    -- This table is the join that was missing. middleware.ts stamps the arrival
+    -- into the cbe_attr cookie while the visitor is still anonymous, and
+    -- /api/auth/signup copies it here the moment the account exists.
+    --
+    -- INSERT ... ON CONFLICT DO NOTHING everywhere it is written: FIRST touch,
+    -- and it is never revised. The link that first brought someone to the site
+    -- is the one that earned the sale; a direct visit on the day they finally
+    -- paid is not a second acquisition.
+    --
+    -- email is denormalized on purpose. Stripe knows customers by email and
+    -- nothing else, so the Sales page joins on it; keeping a copy here means
+    -- that join does not depend on the users row surviving.
+    CREATE TABLE IF NOT EXISTS user_attribution (
+      user_id       TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      email         TEXT,
+      channel       TEXT,
+      utm_source    TEXT,
+      utm_medium    TEXT,
+      utm_campaign  TEXT,
+      utm_term      TEXT,
+      utm_content   TEXT,
+      referrer      TEXT,
+      referrer_host TEXT,
+      landing_path  TEXT,
+      -- When they ARRIVED, which is not when they signed up. The gap between
+      -- the two is how long the decision took.
+      first_seen_at TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_attribution_email ON user_attribution (lower(email));
+    CREATE INDEX IF NOT EXISTS idx_user_attribution_campaign ON user_attribution (utm_campaign);
+
     -- BACKFILL — every account that has already been through Stripe Checkout has
     -- had its one trial. Without this, the new gate would read an empty table on
     -- first deploy and hand a brand-new free trial to every existing customer the
@@ -3599,6 +3639,169 @@ export async function createUser(r: {
     [r.id, r.email.trim().toLowerCase(), r.password_hash ?? null, r.google_sub ?? null, !!r.is_owner]
   );
   return rows[0];
+}
+
+// ── First-touch acquisition ──────────────────────────────────────────────────
+//
+// Written once, at sign-up, from the `cbe_attr` cookie middleware stamped while
+// the visitor was still anonymous. Read by the Sales page so a subscriber or a
+// trial can name the link it came from. Schema + reasoning: the
+// user_attribution block in the schema above, and lib/firstTouch.ts.
+
+export interface UserAttributionRow {
+  user_id: string;
+  email: string | null;
+  channel: string | null;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  utm_term: string | null;
+  utm_content: string | null;
+  referrer: string | null;
+  referrer_host: string | null;
+  landing_path: string | null;
+  first_seen_at: string | null;
+  created_at?: string | null;
+}
+
+/** Attribution for one account, as the Sales page reads it. `source` says where
+ *  the answer came from, so a blank row can be read as "we have no record"
+ *  rather than "they came direct":
+ *    'first_touch' — the cookie, captured on arrival. Trustworthy.
+ *    'visit'       — salvaged from a page_visits entry row that happened to
+ *                    carry a user_id. Rare, and only ever a fallback.
+ *    null          — nothing on file (every account created before this
+ *                    shipped, and anyone who arrived with no referrer). */
+export interface AccountAttribution {
+  email: string;
+  source: "first_touch" | "visit" | null;
+  channel: string | null;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  referrer: string | null;
+  referrer_host: string | null;
+  landing_path: string | null;
+  first_seen_at: string | null;
+}
+
+/** Records how an account arrived. First write wins — later calls are no-ops,
+ *  which is what makes this safe to call from anywhere in the sign-up path. */
+export async function saveUserAttribution(r: {
+  user_id: string;
+  email?: string | null;
+  channel?: string | null;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_term?: string | null;
+  utm_content?: string | null;
+  referrer?: string | null;
+  referrer_host?: string | null;
+  landing_path?: string | null;
+  first_seen_at?: string | null;
+}): Promise<void> {
+  await getDb();
+  await queryAll(
+    `INSERT INTO user_attribution
+       (user_id, email, channel, utm_source, utm_medium, utm_campaign,
+        utm_term, utm_content, referrer, referrer_host, landing_path, first_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [
+      r.user_id,
+      r.email ? r.email.trim().toLowerCase() : null,
+      r.channel ?? null,
+      r.utm_source ?? null,
+      r.utm_medium ?? null,
+      r.utm_campaign ?? null,
+      r.utm_term ?? null,
+      r.utm_content ?? null,
+      r.referrer ?? null,
+      r.referrer_host ?? null,
+      r.landing_path ?? null,
+      r.first_seen_at ?? null,
+    ]
+  );
+}
+
+/**
+ * Attribution for a batch of emails, keyed by lowercased email.
+ *
+ * Stripe is the caller's world and Stripe knows people by email only, so this
+ * takes emails rather than user ids.
+ *
+ * The LATERAL is the salvage pass for accounts that predate first-touch
+ * capture: the OLDEST page_visits entry row for that user that actually carries
+ * a source. It is usually empty for exactly the reason first-touch exists — the
+ * campaign row was anonymous — but where it does hit, it is real data and worth
+ * more than a blank cell. COALESCE keeps the cookie's answer on top whenever
+ * both exist, and `source` tells the UI which one it got.
+ */
+export async function getAttributionByEmails(
+  emails: string[]
+): Promise<Map<string, AccountAttribution>> {
+  const out = new Map<string, AccountAttribution>();
+  const keys = [...new Set(emails.map((e) => (e || "").trim().toLowerCase()).filter(Boolean))];
+  if (!keys.length) return out;
+
+  await getDb();
+  const rows = await queryAll<{
+    email_key: string;
+    has_first_touch: boolean;
+    has_visit: boolean;
+    channel: string | null;
+    utm_source: string | null;
+    utm_medium: string | null;
+    utm_campaign: string | null;
+    referrer: string | null;
+    referrer_host: string | null;
+    landing_path: string | null;
+    first_seen_at: string | null;
+  }>(
+    `SELECT lower(u.email)                                   AS email_key,
+            (a.user_id IS NOT NULL)                          AS has_first_touch,
+            (v.created_at IS NOT NULL)                       AS has_visit,
+            COALESCE(a.channel,       v.channel)             AS channel,
+            COALESCE(a.utm_source,    v.utm_source)          AS utm_source,
+            COALESCE(a.utm_medium,    v.utm_medium)          AS utm_medium,
+            COALESCE(a.utm_campaign,  v.utm_campaign)        AS utm_campaign,
+            a.referrer                                       AS referrer,
+            COALESCE(a.referrer_host, v.referrer_host)       AS referrer_host,
+            COALESCE(a.landing_path,  v.path)                AS landing_path,
+            COALESCE(a.first_seen_at, v.created_at)          AS first_seen_at
+       FROM users u
+       LEFT JOIN user_attribution a ON a.user_id = u.id
+       LEFT JOIN LATERAL (
+              SELECT pv.channel, pv.utm_source, pv.utm_medium, pv.utm_campaign,
+                     pv.referrer_host, pv.path, pv.created_at
+                FROM page_visits pv
+               WHERE pv.user_id = u.id
+                 AND pv.is_entry
+                 AND COALESCE(pv.is_bot, FALSE) = FALSE
+                 AND (pv.utm_source IS NOT NULL OR pv.referrer_host IS NOT NULL)
+               ORDER BY pv.created_at ASC
+               LIMIT 1
+            ) v ON TRUE
+      WHERE lower(u.email) = ANY(?::text[])`,
+    [keys]
+  );
+
+  for (const r of rows) {
+    out.set(r.email_key, {
+      email: r.email_key,
+      source: r.has_first_touch ? "first_touch" : r.has_visit ? "visit" : null,
+      channel: r.channel ?? null,
+      utm_source: r.utm_source ?? null,
+      utm_medium: r.utm_medium ?? null,
+      utm_campaign: r.utm_campaign ?? null,
+      referrer: r.referrer ?? null,
+      referrer_host: r.referrer_host ?? null,
+      landing_path: r.landing_path ?? null,
+      first_seen_at: r.first_seen_at ?? null,
+    });
+  }
+  return out;
 }
 
 /** Transparent bcrypt->scrypt upgrade after a successful legacy-hash login. */

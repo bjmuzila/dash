@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { getUserByEmail, createUser } from "@/lib/db";
+import { getUserByEmail, createUser, saveUserAttribution } from "@/lib/db";
+import { FIRST_TOUCH_COOKIE, decodeFirstTouch } from "@/lib/firstTouch";
 import { hashPassword } from "@/lib/auth/password";
 import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC, sessionCookieOptions } from "@/lib/auth/session";
 import { verifyTurnstile } from "@/lib/turnstile";
@@ -80,6 +81,39 @@ export async function POST(req: NextRequest) {
   const passwordHash = await hashPassword(password);
   const user = await createUser({ id: randomUUID(), email, password_hash: passwordHash });
 
+  // ── First touch → the account ──────────────────────────────────────────────
+  //
+  // The one moment the two halves can be joined. middleware.ts stamped
+  // `cbe_attr` when this visitor first arrived — possibly weeks ago, on a link
+  // whose query string is long gone — and this is where it becomes a permanent
+  // property of the account, so the Sales page can say which link a subscriber
+  // came from. See lib/firstTouch.ts for why page_visits can't answer that.
+  //
+  // Strictly best-effort. Attribution is a reporting nicety; a failure here
+  // must never cost someone their sign-up, so it is caught and logged and the
+  // session is issued regardless.
+  const firstTouch = decodeFirstTouch(req.cookies.get(FIRST_TOUCH_COOKIE)?.value);
+  if (firstTouch) {
+    try {
+      await saveUserAttribution({
+        user_id: user.id,
+        email: user.email,
+        channel: firstTouch.channel,
+        utm_source: firstTouch.utmSource,
+        utm_medium: firstTouch.utmMedium,
+        utm_campaign: firstTouch.utmCampaign,
+        utm_term: firstTouch.utmTerm,
+        utm_content: firstTouch.utmContent,
+        referrer: firstTouch.referrer,
+        referrer_host: firstTouch.referrerHost,
+        landing_path: firstTouch.landingPath,
+        first_seen_at: firstTouch.firstSeenAt,
+      });
+    } catch (err) {
+      console.warn("[signup] attribution save failed:", err);
+    }
+  }
+
   const { token } = await createSession(user.id, {
     userAgent: req.headers.get("user-agent"),
     ip,
@@ -87,5 +121,9 @@ export async function POST(req: NextRequest) {
 
   const res = NextResponse.json({ ok: true, session: true });
   res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(SESSION_COOKIE_MAX_AGE_SEC));
+  // Spent. Clearing it means a SECOND account created in this browser gets its
+  // own first touch instead of inheriting this one — which matters most on the
+  // shared machines and repeat trials the ban panel exists to catch.
+  if (firstTouch) res.cookies.set(FIRST_TOUCH_COOKIE, "", { path: "/", maxAge: 0 });
   return res;
 }

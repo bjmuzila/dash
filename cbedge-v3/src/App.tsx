@@ -27,6 +27,13 @@ const PerfOverlay = import.meta.env.DEV ? lazy(() => import('@/dev/PerfOverlay')
 const TradersDashboard = lazy(() => import('@/pages/TradersDashboard'))
 const Premarket = lazy(() => import('@/pages/Premarket'))
 const OptionsChain = lazy(() => import('@/pages/OptionsChain'))
+// /chain — THE OPTION CHAIN, in the thinkorswim / tastytrade sense: calls and
+// puts either side of a strike column, expirations as collapsible groups, and
+// the QUOTES in the cells. Deliberately a separate route from /options-chain,
+// which is the GEX matrix and answers a different question — see the header of
+// src/pages/Chain.tsx. REST + a 20s poll; the entry load is two parallel
+// requests, so opening it costs one round trip, not a waterfall.
+const Chain = lazy(() => import('@/pages/Chain'))
 const Analysis = lazy(() => import('@/pages/Analysis'))
 const Flow = lazy(() => import('@/pages/Flow'))
 // /em — Estimated Moves. A 1:1 port of v2's /app/em against the checklist in
@@ -134,6 +141,7 @@ export default function App() {
             <Route path="/traders-dashboard" element={<TradersDashboard />} />
             <Route path="/premarket" element={<Premarket />} />
             <Route path="/options-chain" element={<OptionsChain />} />
+            <Route path="/chain" element={<Chain />} />
             <Route path="/analytics" element={<Analysis />} />
             <Route path="/flow" element={<Flow />} />
             <Route path="/em" element={<Em />} />

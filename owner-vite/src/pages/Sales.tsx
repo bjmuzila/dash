@@ -57,6 +57,31 @@ interface StripeSubscription {
   trial_converted_at?: number | null;
   /** Cents collected from this subscription since the trial. */
   trial_paid_total?: number;
+  // ── Acquisition. Where this customer came from, added 2026-09.
+  //
+  // Stripe does not know and cannot know: it has an email and a card. These
+  // come from OUR first-touch capture — middleware stamps the arrival into the
+  // `cbe_attr` cookie while the visitor is still anonymous, and sign-up copies
+  // it onto the account (lib/firstTouch.ts). /api/admin/stripe-summary joins
+  // the two by email.
+  //
+  // All optional: a response cached from before this shipped omits them, so
+  // every reader goes through attrLabel() and gets "unknown" rather than
+  // rendering an undefined.
+  /** 'first_touch' = captured on arrival, trustworthy. 'visit' = salvaged from
+   *  a page_visits entry row. null/absent = NO RECORD — which is NOT the same
+   *  as "direct", and is why the cell reads "unknown". */
+  attr_source?: "first_touch" | "visit" | null;
+  attr_channel?: string | null;
+  attr_utm_source?: string | null;
+  attr_utm_medium?: string | null;
+  attr_utm_campaign?: string | null;
+  attr_referrer?: string | null;
+  attr_referrer_host?: string | null;
+  attr_landing_path?: string | null;
+  /** When they first ARRIVED — not when they subscribed. The gap between the
+   *  two is how long the decision took. */
+  attr_first_seen_at?: string | null;
 }
 
 /** Trial → paid funnel, computed server-side from Stripe. */
@@ -167,6 +192,100 @@ const STATUS_COLORS: Record<string, string> = {
   incomplete_expired: T.muted,
   unpaid: T.red,
 };
+
+// ─── Acquisition source ────────────────────────────────────────────────────────
+//
+// "Which link did this subscriber come from?" — the question the page could not
+// answer, because the two halves of it lived on different rows.
+//
+// page_visits records referrer/UTM on the FIRST beacon of a browser session,
+// and at that moment nobody is signed in: user_id is NULL. Every later beacon
+// carries the user_id but posts null attribution deliberately (sending
+// document.referrer on each SPA navigation would report one Google visit as
+// twenty). So the row that knew the campaign had no customer, and the rows that
+// knew the customer had no campaign — and joining them answered "direct" for
+// almost everyone.
+//
+// First-touch capture (lib/firstTouch.ts) fixes it upstream: the arrival is
+// stamped into a cookie while the visitor is still anonymous and copied onto
+// the account at sign-up. These helpers just render what comes back.
+//
+// THREE STATES, and keeping them apart is the whole point of the column:
+//   · a real source     — a campaign, a referring host, a channel;
+//   · "direct"          — we have a record and it says they typed the URL;
+//   · "unknown"         — we have NO record. Every account created before this
+//                         shipped is here. Painting those as "direct" would
+//                         invent a number, so they are shown as the gap they are.
+
+const UNKNOWN_SOURCE = "unknown";
+
+/** The one-line label for a customer's source. Read by the table cells AND by
+ *  the revenue rollup, so a row and its bucket can never disagree. */
+function attrLabel(s: StripeSubscription): string {
+  if (!s.attr_source) return UNKNOWN_SOURCE;
+  if (s.attr_utm_source) {
+    return s.attr_utm_campaign ? `${s.attr_utm_source} · ${s.attr_utm_campaign}` : s.attr_utm_source;
+  }
+  if (s.attr_referrer_host) return s.attr_referrer_host;
+  if (s.attr_channel) return s.attr_channel;
+  return "direct";
+}
+
+/** Muted for the two non-answers, gold for a tagged campaign (the links you
+ *  actually spent effort on), cyan for everything else we can name. */
+function attrColor(s: StripeSubscription): string {
+  if (!s.attr_source) return T.muted;
+  if (s.attr_utm_campaign || s.attr_utm_source) return T.gold;
+  if (s.attr_referrer_host) return T.cyan;
+  return T.textSecondary;
+}
+
+/** Everything known about the arrival, for the row's hover title. */
+function attrTitle(s: StripeSubscription): string {
+  if (!s.attr_source) {
+    return "No arrival on file. Either the account predates first-touch capture, or they arrived with no referrer and no campaign tag. Not the same as 'direct'.";
+  }
+  const bits: string[] = [];
+  if (s.attr_utm_source) bits.push(`source ${s.attr_utm_source}`);
+  if (s.attr_utm_medium) bits.push(`medium ${s.attr_utm_medium}`);
+  if (s.attr_utm_campaign) bits.push(`campaign ${s.attr_utm_campaign}`);
+  if (s.attr_referrer_host) bits.push(`referred by ${s.attr_referrer_host}`);
+  if (s.attr_channel) bits.push(`channel ${s.attr_channel}`);
+  if (s.attr_landing_path) bits.push(`landed on ${s.attr_landing_path}`);
+  if (s.attr_first_seen_at) bits.push(`first seen ${new Date(s.attr_first_seen_at).toLocaleString()}`);
+  bits.push(
+    s.attr_source === "first_touch"
+      ? "captured on arrival"
+      : "recovered from a page-visit row — weaker than a first-touch capture"
+  );
+  return bits.join(" · ");
+}
+
+/** The Source cell, shared by the subscriptions table and the trials table. */
+function SourceCell({ s }: { s: StripeSubscription }) {
+  const label = attrLabel(s);
+  const color = attrColor(s);
+  return (
+    <span
+      title={attrTitle(s)}
+      style={{
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        color,
+        fontSize: 14,
+        fontStyle: label === UNKNOWN_SOURCE ? "italic" : "normal",
+        // A source recovered from a page-visit row is a weaker claim than one
+        // captured on arrival. Dimmed rather than hidden — it is still the best
+        // answer available for that customer.
+        opacity: s.attr_source === "visit" ? 0.75 : 1,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
 
 // ─── Signed up, never bought ───────────────────────────────────────────────────
 //
@@ -780,8 +899,10 @@ function MonthlyProfitChart({ revenueByMonth, subs, expensesMonthly }: {
 // pill. Amount is wider now, every cell is `minWidth: 0` + clipped so nothing
 // can bleed into its neighbour again, and Status is wide enough for
 // "cancelling" plus its date sub-line.
-const SUB_TABLE_COLS = "minmax(0,1fr) 90px 132px 116px 86px 78px 92px 96px";
-const TRIAL_TABLE_COLS = "1.7fr 1fr 1fr 110px 90px";
+// Source sits directly after Customer in both tables — it is a property of the
+// person, so it belongs beside their email rather than out past the money.
+const SUB_TABLE_COLS = "minmax(0,1fr) 124px 88px 128px 112px 84px 76px 90px 92px";
+const TRIAL_TABLE_COLS = "1.6fr 1.1fr 1fr 1fr 110px 90px";
 
 /** Grid children default to min-content width, which is what let the amount
  *  cell push over the status column. Every cell spreads this. */
@@ -914,6 +1035,7 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
       </div>
       <div style={{ display: "grid", gridTemplateColumns: SUB_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span style={CELL}>Customer</span>
+        <span style={CELL} title="The link this customer first arrived on. Campaign tags are gold, plain referrers cyan; 'unknown' means no arrival was ever recorded for them — not that they came direct.">Source</span>
         <span style={CELL}>Discord</span>
         <span style={CELL}>Amount</span>
         <span style={CELL}>Status</span>
@@ -960,6 +1082,7 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
                 </div>
               )}
             </div>
+            <SourceCell s={s} />
             <span style={{ ...CELL, color: discordName ? T.cyan : T.muted, fontFamily: "var(--font-mono)", fontSize: 14, textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {discordName ?? "—"}
             </span>
@@ -1168,6 +1291,7 @@ function TrialConversionPanel({ trials, subs }: { trials: TrialSummary | null | 
         <div style={{ maxHeight: 340, overflowY: "auto" }}>
           <div style={{ display: "grid", gridTemplateColumns: TRIAL_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, position: "sticky", top: 0, background: T.panel, zIndex: 1 }}>
             <span>Customer</span>
+            <span title="The link this trial first arrived on. Read alongside Outcome: a campaign whose trials all lapse is a targeting problem, not a product one.">Source</span>
             <span>Trial started</span>
             <span>Trial ended</span>
             <span>Outcome</span>
@@ -1190,6 +1314,7 @@ function TrialConversionPanel({ trials, subs }: { trials: TrialSummary | null | 
                 <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: T.text, fontWeight: 600 }}>
                   {s.customer_email}
                 </span>
+                <SourceCell s={s} />
                 <span style={{ color: T.textSecondary }}>{s.trial_start ? fmtDateShort(s.trial_start) : "—"}</span>
                 <span style={{ color: T.textSecondary }}>{s.trial_end ? fmtDateShort(s.trial_end) : "—"}</span>
                 <span>
@@ -1202,6 +1327,202 @@ function TrialConversionPanel({ trials, subs }: { trials: TrialSummary | null | 
                 </span>
                 <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: (s.trial_paid_total ?? 0) > 0 ? T.green : T.muted }}>
                   {fmtMoney(s.trial_paid_total ?? 0)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Revenue by source ─────────────────────────────────────────────────────────
+//
+// The rollup the per-row Source column implies: which links actually produce
+// customers, and what those customers are worth.
+//
+// Grouped on attrLabel(), the SAME string the table cells print, so a row and
+// its bucket can never disagree — and every number here is derived from the
+// rows already on the page rather than a second server aggregate that could
+// drift from them.
+//
+// MRR is the honest weight (a $1,000/yr customer is not ten times a $99/mo
+// one), Collected is lifetime cash and is DEDUPED BY EMAIL: total_spent is a
+// per-customer lifetime figure repeated on each of that customer's
+// subscriptions, so summing it row-wise would double-count anyone holding two.
+//
+// The "unknown" bucket is shown, never hidden and never folded into direct. Its
+// size is the honest measure of how much of the history this can't explain, and
+// it should shrink from here as new sign-ups carry a first touch.
+
+const SOURCE_TABLE_COLS = "minmax(0,1.3fr) 96px 104px minmax(70px,0.9fr) 108px 92px 80px";
+
+interface SourceBucket {
+  label: string;
+  color: string;
+  subs: number;
+  mrr: number;
+  collected: number;
+  trials: number;
+  converted: number;
+  churned: number;
+  unknown: boolean;
+}
+
+function buildSourceBuckets(
+  live: StripeSubscription[],
+  cancelled: StripeSubscription[],
+  trials: StripeSubscription[]
+): SourceBucket[] {
+  const map = new Map<string, SourceBucket & { emails: Set<string> }>();
+
+  const bucket = (s: StripeSubscription) => {
+    const label = attrLabel(s);
+    let b = map.get(label);
+    if (!b) {
+      b = {
+        label,
+        color: attrColor(s),
+        subs: 0, mrr: 0, collected: 0, trials: 0, converted: 0, churned: 0,
+        unknown: label === UNKNOWN_SOURCE,
+        emails: new Set<string>(),
+      };
+      map.set(label, b);
+    }
+    return b;
+  };
+
+  for (const s of live) {
+    const b = bucket(s);
+    b.subs += 1;
+    b.mrr += netMonthlyOf(s);
+    const email = s.customer_email.toLowerCase();
+    if (!b.emails.has(email)) { b.emails.add(email); b.collected += s.total_spent; }
+  }
+  for (const s of cancelled) {
+    const b = bucket(s);
+    b.churned += 1;
+    const email = s.customer_email.toLowerCase();
+    if (!b.emails.has(email)) { b.emails.add(email); b.collected += s.total_spent; }
+  }
+  for (const s of trials) {
+    const b = bucket(s);
+    b.trials += 1;
+    if (s.trial_converted) b.converted += 1;
+  }
+
+  return [...map.values()]
+    // Drop the dedupe set — it is bookkeeping, not part of the bucket.
+    .map((b): SourceBucket => ({
+      label: b.label, color: b.color, subs: b.subs, mrr: b.mrr,
+      collected: b.collected, trials: b.trials, converted: b.converted,
+      churned: b.churned, unknown: b.unknown,
+    }))
+    // Money first, then headcount, and the "we don't know" bucket always last
+    // however big it is — it is context, not a result.
+    .sort((a, b) =>
+      a.unknown !== b.unknown ? (a.unknown ? 1 : -1)
+      : b.mrr !== a.mrr ? b.mrr - a.mrr
+      : b.subs !== a.subs ? b.subs - a.subs
+      : b.collected - a.collected
+    );
+}
+
+function RevenueBySourceCard({ live, cancelled, trials }: {
+  live: StripeSubscription[];
+  cancelled: StripeSubscription[];
+  trials: StripeSubscription[];
+}) {
+  const buckets = useMemo(
+    () => buildSourceBuckets(live, cancelled, trials),
+    [live, cancelled, trials]
+  );
+
+  const totalMrr = buckets.reduce((a, b) => a + b.mrr, 0);
+  const known = buckets.filter(b => !b.unknown);
+  const attributed = known.reduce((a, b) => a + b.subs, 0);
+  const unattributed = buckets.find(b => b.unknown)?.subs ?? 0;
+  const coverage = attributed + unattributed > 0
+    ? Math.round((attributed / (attributed + unattributed)) * 100)
+    : 0;
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: T.gold }}>Revenue by source</span>
+        <span
+          title="Which links actually produce paying customers. Grouped on the same Source string the tables below print, and weighted by MRR rather than headcount — a yearly customer and a monthly one are not the same sale."
+          style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}
+        >
+          {known.length} source{known.length !== 1 ? "s" : ""}
+        </span>
+        <span style={{ flex: 1 }} />
+        <span
+          title={
+            `${attributed} of ${attributed + unattributed} live subscriptions have an arrival on file. ` +
+            `The rest are 'unknown' — almost all of them accounts created before first-touch capture shipped, which cannot be backfilled: the campaign row that would have named their link was written anonymously. This number should climb on its own from here.`
+          }
+          style={{
+            fontSize: 14, padding: "2px 8px", borderRadius: 4,
+            background: coverage >= 50 ? `${T.green}15` : `${T.gold}15`,
+            border: `1px solid ${coverage >= 50 ? T.green : T.gold}44`,
+            color: coverage >= 50 ? T.green : T.gold,
+          }}
+        >
+          {coverage}% attributed
+        </span>
+      </div>
+
+      {buckets.length === 0 ? (
+        <div style={{ padding: "28px 16px", textAlign: "center", color: T.muted, fontSize: 14 }}>
+          No subscriptions to group yet.
+        </div>
+      ) : (
+        <div style={{ maxHeight: 340, overflowY: "auto" }}>
+          <div style={{ display: "grid", gridTemplateColumns: SOURCE_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, position: "sticky", top: 0, background: T.panel, zIndex: 1 }}>
+            <span style={CELL}>Source</span>
+            <span style={{ ...CELL, textAlign: "right" }}>Subs</span>
+            <span style={{ ...CELL, textAlign: "right" }}>MRR</span>
+            <span style={CELL}>Share</span>
+            <span style={{ ...CELL, textAlign: "right" }}>Collected</span>
+            <span style={{ ...CELL, textAlign: "right" }} title="Trials converted / trials started from this source">Trials</span>
+            <span style={{ ...CELL, textAlign: "right" }}>Churned</span>
+          </div>
+
+          {buckets.map((b) => {
+            const share = totalMrr > 0 ? b.mrr / totalMrr : 0;
+            return (
+              <div
+                key={b.label}
+                title={
+                  `${b.label} · ${b.subs} live subscription${b.subs !== 1 ? "s" : ""} worth ${fmtMoney(b.mrr)}/mo` +
+                  ` · ${fmtMoney(b.collected)} collected from ${b.subs + b.churned} account${b.subs + b.churned !== 1 ? "s" : ""}` +
+                  (b.trials > 0 ? ` · ${b.converted} of ${b.trials} trials paid` : "") +
+                  (b.churned > 0 ? ` · ${b.churned} churned` : "") +
+                  (b.unknown ? " — no arrival on file for these; not the same as direct." : "")
+                }
+                style={{ display: "grid", gridTemplateColumns: SOURCE_TABLE_COLS, gap: 8, padding: "9px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14, alignItems: "center", opacity: b.unknown ? 0.7 : 1 }}
+              >
+                <span style={{ ...CELL, color: b.color, whiteSpace: "nowrap", textOverflow: "ellipsis", fontStyle: b.unknown ? "italic" : "normal", fontWeight: 600 }}>
+                  {b.label}
+                </span>
+                <span style={{ ...CELL, textAlign: "right", color: T.text, fontFamily: "var(--font-mono)" }}>{b.subs}</span>
+                <span style={{ ...CELL, textAlign: "right", color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>{fmtMoney(b.mrr)}</span>
+                <span style={{ ...CELL, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ flex: 1, height: 6, borderRadius: 3, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+                    <span style={{ display: "block", height: "100%", width: `${Math.round(share * 100)}%`, background: b.color, opacity: 0.75 }} />
+                  </span>
+                  <span style={{ fontSize: 13, color: T.muted, fontFamily: "var(--font-mono)", minWidth: 30, textAlign: "right" }}>
+                    {Math.round(share * 100)}%
+                  </span>
+                </span>
+                <span style={{ ...CELL, textAlign: "right", color: T.green, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>{fmtMoney(b.collected)}</span>
+                <span style={{ ...CELL, textAlign: "right", color: b.trials > 0 ? T.textSecondary : T.muted, fontFamily: "var(--font-mono)" }}>
+                  {b.trials > 0 ? `${b.converted}/${b.trials}` : "—"}
+                </span>
+                <span style={{ ...CELL, textAlign: "right", color: b.churned > 0 ? T.red : T.muted, fontFamily: "var(--font-mono)" }}>
+                  {b.churned || "—"}
                 </span>
               </div>
             );
@@ -2153,6 +2474,16 @@ export default function Sales() {
                 the list that says who it was. Self-fetching on its own range —
                 folding it into the page load would make the whole dashboard
                 wait on a second endpoint. */}
+            {/* Which links produced the money above. Directly under the profit
+                chart and ABOVE the signup list on purpose: the chart says what
+                happened, this says which channel did it, and the lists below
+                are the names behind both. */}
+            <RevenueBySourceCard
+              live={data.subscriptions}
+              cancelled={data.cancellations ?? []}
+              trials={data.trialSubscriptions ?? []}
+            />
+
             <SignupsPanel />
 
             {/* Trial → paid funnel. Sits directly under the profit chart and

@@ -128,6 +128,24 @@ function rescaleStored(key: string, scale: number): void {
   localStorage.setItem(key, JSON.stringify(out))
 }
 
+/**
+ * The widest edge in a stored blob, in whatever units it is written in. 0 when
+ * there is nothing to measure.
+ */
+function storedRightEdge(key: string): number {
+  const raw = localStorage.getItem(key)
+  if (!raw) return 0
+  const arr = JSON.parse(raw) as unknown
+  if (!Array.isArray(arr)) return 0
+  return arr.reduce(
+    (m, i) =>
+      i && typeof i === 'object' && typeof (i as BoardItem).x === 'number'
+        ? Math.max(m, (i as BoardItem).x + (i as BoardItem).w)
+        : m,
+    0,
+  )
+}
+
 if (SCALE !== 1) {
   try {
     rescaleStored(LAYOUT_KEY, SCALE)
@@ -141,10 +159,69 @@ if (SCALE !== 1) {
     // migrated local board wins and the header honestly says "Unsaved layout"
     // until the account copy is brought up to date.
     localStorage.removeItem(SYNCED_KEY)
-    localStorage.setItem(GRID_KEY, String(BOARD_COLS))
   } catch {
     /* best-effort — the read-time scale below still rescues this session */
   }
+}
+
+// ── THE STAMP IS UNCONDITIONAL ───────────────────────────────────────────────
+//
+// It used to be written INSIDE the `SCALE !== 1` block above, on the reasonable-
+// sounding grounds that there is nothing to record when nothing was rescaled.
+// That was the 2026-09-08 "my board came back enormous" bug, and it fired for
+// every NEW browser:
+//
+//   load 1  no stamp, no layout  -> storedGrid() = BOARD_COLS, SCALE = 1
+//                                -> the block is skipped, so NOTHING IS STAMPED
+//           ...the user arranges a board; the autosave writes cb-v3-board-layout
+//   load 2  no stamp, but a layout EXISTS -> storedGrid() reads that as "a
+//           browser from the 12-column era" -> SCALE = 4 -> every card, and the
+//           account copy arriving through serverToCurrentGrid, multiplied by 4.
+//   load 3  stamped 48 now, so SCALE = 1 and the quadrupled board is permanent.
+//
+// A card 96 columns wide on a 48-column grid is twice the width of the board, so
+// the symptom is one card filling the screen and nothing else visible — and
+// "the tables won't sit side by side", because at that width no two can.
+//
+// The stamp records the grid THIS BUILD writes in. That is true whether or not a
+// rescale happened, so it is written on every load: the "no stamp" state has to
+// mean "a browser from before the stamp existed" and nothing else.
+try {
+  localStorage.setItem(GRID_KEY, String(BOARD_COLS))
+} catch {
+  /* best-effort */
+}
+
+// ── A BOARD WIDER THAN THE BOARD ─────────────────────────────────────────────
+//
+// Unlike every heuristic below, this one needs no guessing: `w` is clamped to
+// the grid on every gesture, so a card whose right edge is past BOARD_COLS
+// cannot have been put there by a user. It is a scale that has been applied to a
+// board that did not need it — the bug above, or any future repeat of it.
+//
+// Halving until it fits is the exact inverse, because every scale in this file
+// is a power of two. Safe to run on EVERY load rather than behind a one-shot
+// key: a correct board never trips it, so there is no "runs again and again"
+// failure mode of the kind that made the half-size heuristic below dangerous.
+// It is the backstop that would have contained the bug above on its own.
+function repairOverscaledBoard(): void {
+  let right = storedRightEdge(LAYOUT_KEY)
+  if (!(right > BOARD_COLS)) return
+  let factor = 1
+  while (right > BOARD_COLS) {
+    factor /= 2
+    right /= 2
+  }
+  rescaleStored(LAYOUT_KEY, factor)
+  // Same reasoning as the migration: the account's copy is untouched by this, so
+  // the synced marker has to go or the next load adopts it over the repair.
+  localStorage.removeItem(SYNCED_KEY)
+}
+
+try {
+  repairOverscaledBoard()
+} catch {
+  /* best-effort — a board that cannot be repaired can still be dragged back */
 }
 
 // ── ONE-TIME REPAIR FOR BOARDS THE OLD MIGRATION ALREADY BROKE ───────────────
@@ -163,9 +240,27 @@ if (SCALE !== 1) {
 // The heuristic that was rejected earlier — "it fits in the left half, so it
 // must be old" — is exactly this one. What made it unsafe was running it on
 // every load, where a genuine left-half board would be doubled again and again.
-// Behind a one-shot key it runs once in a browser's life, and its worst case is
-// a deliberately left-half board becoming a full-width one, which still fits and
-// is still a board. That is a far better failure than the certain one it fixes.
+// Behind a one-shot key it runs once in a browser's life.
+//
+// ── ITS WORST CASE IS WORSE THAN IT WAS WRITTEN DOWN AS (2026-09-08) ─────────
+// The note here used to say the worst case was "a deliberately left-half board
+// becoming a full-width one, which still fits and is still a board." That is
+// only true of the horizontal half. It doubles `h` as well — which is CORRECT
+// for a genuinely old board, because the row unit halved at the same time the
+// column unit did (32px -> 16 -> 8) — so a false positive does not get a wider
+// board, it gets a board twice as tall, with every card at double height. A
+// 19-row card becomes 38 rows: 304px of chart becomes 608px, and one card fills
+// the viewport. That is the same symptom as the bug above, and it is not "still
+// a board".
+//
+// So the trigger now needs the board to look old in the way an old board
+// actually is: an old board FILLS the grid it was authored on — that premise is
+// the whole basis for reading a short right edge as evidence — so a board that
+// does not even reach the middle of that old grid is not evidence of anything,
+// it is just a small board. Requiring `right` to land in the upper half of the
+// OLD grid (BOARD_COLS/4 .. BOARD_COLS/2) keeps every board the old migration
+// actually broke and drops the small, deliberately-narrow ones, which are
+// exactly the false positives where doubling the height hurts most.
 const REPAIR_KEY = 'cb-v3-board-grid-repair'
 
 function repairHalfSizeBoard(): void {
@@ -179,6 +274,10 @@ function repairHalfSizeBoard(): void {
   if (!items.length) return
   const right = items.reduce((m, i) => Math.max(m, i.x + i.w), 0)
   if (right > BOARD_COLS / 2) return // already in current units — leave it alone
+  // ...and a board that does not fill even the OLD grid is a small board, not an
+  // old one. See the note above: the cost of getting this wrong is a board at
+  // double height, not merely double width.
+  if (right <= BOARD_COLS / 4) return
   rescaleStored(LAYOUT_KEY, 2)
   // Same reasoning as the migration: the account's copy is still in old units,
   // so the synced marker has to go or the next load adopts it over the repair.

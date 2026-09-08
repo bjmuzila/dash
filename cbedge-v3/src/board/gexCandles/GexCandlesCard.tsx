@@ -991,7 +991,13 @@ export function GexCandlesCard({
     if (!livePrice) return
     return watchFrame<SpotFrame>('spot', (f) => {
       const px = f?.data.spot
-      if (typeof px === 'number') apply((h) => h.setLivePrice(px))
+      // `> 0`, not `typeof === 'number'`: 0 and NaN are both numbers, and this
+      // was the one of the three live-price call sites that let them through.
+      // The chart refuses them at the door either way, but a call site that
+      // hands over a value it knows is not a price is a call site that will
+      // eventually meet a door that does not check. The other two here already
+      // read `px > 0`; this one now matches them.
+      if (typeof px === 'number' && px > 0) apply((h) => h.setLivePrice(px))
     })
   }, [livePrice, apply])
   useEffect(() => {
