@@ -4786,7 +4786,31 @@ class TastytradeProxy {
       if (!q && !gk && !s && !rest) return miss(`leg ${c.streamerSymbol} has no live data (of ${active.length} in-window)`);
 
       const oi = (rest?.oi ?? 0) || (s?.oi ?? 0);
-      const volume = liveVol != null ? liveVol : (rest?.volume || 0);
+      // Current-session day-volume — SAME rule _recompute() uses (see the
+      // `Math.max(liveVol, rest.volume)` there). Two cumulative-for-session
+      // sources: dxLink Trade(dayVolume) cached in this.volumes, and the TT REST
+      // volume that rides along on the OI backfill in this.restOI.
+      //
+      // This was `liveVol != null ? liveVol : rest.volume`, which pinned the
+      // whole live-served chain to volume 0. _scheduleSessionRoll() writes an
+      // EXPLICIT 0 into this.volumes for every active contract at the ~6PM ET
+      // roll, so `liveVol != null` is true and the REST fallback was never
+      // consulted; the zero only cleared once a Trade event landed on that exact
+      // leg, and the REST volume poller that used to repair it went with
+      // ThetaData. (The prewarm seed at _prewarmStrikeGrowthLegs is gated on
+      // `!this.volumes.has(sym)`, so it couldn't repair it either.) After a
+      // holiday session the roll fired into an empty tape and essentially every
+      // 0DTE strike stayed on the injected 0 — which is why Multi Greek's
+      // Vol-only column read "---" while its OI modes (fed from restOI) were
+      // fine. max() means a stale/rollover 0 can never shadow a good REST value.
+      //
+      // Pre-open gate: TT REST `volume` still carries the PRIOR session's
+      // cumulative total until their backend resets at the 9:30 ET cash open, so
+      // before then the REST leg is excluded rather than shown as today's tape —
+      // matching fetchChainFull() and _statsFromTT(). The live dxLink dayVolume
+      // is already session-correct, so it is still honoured pre-open.
+      const restVol = isPreOpenEt() ? 0 : (Number(rest?.volume) || 0);
+      const volume = Math.max(Number(liveVol) || 0, restVol);
       const bid = q?.bid || 0;
       const ask = q?.ask || 0;
       const mark = q?.mid > 0 ? q.mid : (rest?.mark || 0);
