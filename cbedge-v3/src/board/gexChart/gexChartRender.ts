@@ -1,7 +1,8 @@
 import type { GexRow } from '@/contract/frames'
-import type { GexBasis, GexSplit } from './settings'
+import type { GexBasis, GexSplit, VolumeSplit } from './settings'
 import {
   BASIS_LABEL,
+  LEVEL_BASIS_LABEL,
   callGexOf,
   coreStrike,
   dexOf,
@@ -88,6 +89,9 @@ export interface GexChartModel {
   basis: GexBasis
   split: GexSplit
   showDex: boolean
+  /** Today's traded contracts, as a histogram along the bottom. */
+  showVolume: boolean
+  volumeSplit: VolumeSplit
 }
 
 export const EMPTY_MODEL: GexChartModel = {
@@ -98,6 +102,8 @@ export const EMPTY_MODEL: GexChartModel = {
   basis: 'oi-vol',
   split: 'net',
   showDex: false,
+  showVolume: false,
+  volumeSplit: 'total',
 }
 
 export { fmtGexShort }
@@ -115,6 +121,24 @@ export function netOf(r: GexRow): number {
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v))
+}
+
+// ── The volume histogram's geometry ──────────────────────────────────────────
+//
+// A fixed SHARE of the plot rather than a scale shared with the bars: see the
+// block at the draw site. 22% is the most it can take before the lower half of
+// the gamma ladder — where the put wall lives — starts reading through a wash,
+// and enough that a normal day's distribution has shape in it.
+const VOL_SHARE = 0.22
+/** Faint enough to sit BEHIND the bars without being invisible on its own. */
+const VOL_ALPHA = 0.3
+
+/** Contract counts: 12.4K, 1.2M. The histogram's one label. */
+function fmtCount(v: number): string {
+  const a = Math.abs(v)
+  if (a >= 1e6) return `${(a / 1e6).toFixed(1)}M`
+  if (a >= 1e3) return `${(a / 1e3).toFixed(1)}K`
+  return String(Math.round(a))
 }
 
 /** v2's getNiceStep: 1/2/5/10 × a power of ten, at least range/5. */
@@ -464,6 +488,89 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     ctx.rect(PAD_L, PAD_T, cW, cH)
     ctx.clip()
 
+    // ── VOLUME — today's traded contracts, along the bottom ──────────────────
+    //
+    // A SECOND SERIES, not an overlay on the gamma axis. Contracts and dollars
+    // of gamma are different units several orders of magnitude apart; drawn on
+    // the bars' scale, volume is a flat smear on the zero line. So it gets its
+    // own scale (its own column max), its own baseline (the FLOOR of the plot,
+    // not the zero line) and a fixed share of the height.
+    //
+    // WHY THE FLOOR RATHER THAN ZERO. Volume is unsigned — every column points
+    // the same way — and a series with no negative half hanging off a
+    // zero-centred axis reads as "positive gamma" to anyone scanning the chart.
+    // Growing it off the bottom edge instead says "different axis" without a
+    // word of explanation, which is the same trick a price chart's volume pane
+    // plays, and for the same reason.
+    //
+    // DRAWN FIRST, so the gamma bars sit in front of it. The histogram is
+    // context for the ladder, never the subject: at VOL_ALPHA it reads as a
+    // shaded floor under the bars rather than as a competing series.
+    //
+    // WHAT IT ANSWERS that the VOL basis does not: the basis switch asks how
+    // much GAMMA today's contracts built, and this asks where the contracts
+    // went. They come apart constantly — a far-dated strike can trade heavily
+    // and carry almost no gamma, and on the bars alone that strike is a gap.
+    if (model.showVolume) {
+      const callVolOf = (r: GexRow) => Math.max(0, Number(r.callVolume) || 0)
+      const putVolOf = (r: GexRow) => Math.max(0, Number(r.putVolume) || 0)
+      const splitVol = model.volumeSplit === 'call-put'
+
+      let maxVol = 0
+      for (const r of data) {
+        maxVol = splitVol
+          ? Math.max(maxVol, callVolOf(r), putVolOf(r))
+          : Math.max(maxVol, callVolOf(r) + putVolOf(r))
+      }
+
+      // Nothing on the tape yet (premarket, a dead ticker) is a real state, and
+      // scaling an all-zero series to its own max would draw a full-height band
+      // of nothing. Skip it; the toggle stays on and the histogram appears when
+      // contracts do.
+      if (maxVol > 0) {
+        const volFloor = PAD_T + cH
+        const volTop = volFloor - cH * VOL_SHARE
+        const hOf = (v: number) => (v / maxVol) * (volFloor - volTop)
+
+        // A baseline under the histogram: without it the shortest columns fade
+        // into the panel and the series has no visible extent at all.
+        ctx.fillStyle = withAlpha(p.line, 0.9)
+        ctx.fillRect(PAD_L, volFloor - 0.5, cW, 0.5)
+
+        data.forEach((r, i) => {
+          const x = xAt(i)
+          if (splitVol) {
+            // Call left, put right — the same geometry the FLOW split uses for
+            // the gamma legs, so one column reads the same way in both.
+            const hw = Math.max(1, barW / 2)
+            const legs: Array<[number, number, [number, number, number]]> = [
+              [x - hw / 2, callVolOf(r), p.pos],
+              [x + hw / 2, putVolOf(r), p.neg],
+            ]
+            for (const [lx, v, col] of legs) {
+              const h = hOf(v)
+              if (h < 0.5) continue
+              ctx.fillStyle = withAlpha(col, VOL_ALPHA)
+              ctx.fillRect(lx - hw / 2, volFloor - h, hw, h)
+            }
+          } else {
+            const h = hOf(callVolOf(r) + putVolOf(r))
+            if (h < 0.5) return
+            ctx.fillStyle = withAlpha(p.fg, VOL_ALPHA)
+            ctx.fillRect(x - barW / 2, volFloor - h, barW, h)
+          }
+        })
+
+        // The peak column, labelled. One number is the whole scale — without it
+        // the histogram says "here is more than there" and nothing about how
+        // much, and it is the question anyone looking at volume is asking.
+        ctx.fillStyle = withAlpha(p.fg, 0.5)
+        ctx.font = 'bold 9px ui-monospace, monospace'
+        ctx.textAlign = 'left'
+        ctx.fillText(`VOL ${fmtCount(maxVol)}`, PAD_L + 2, volTop - 2)
+      }
+    }
+
     // ── Bars ──
     // v2's gradient, value for value: the lit end of the bar lightens toward
     // white by up to 28% of the bar's share of the column max, so the big
@@ -598,11 +705,17 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // the WHOLE ladder — not just the visible window, so panning away from it
     // hides the badge instead of quietly relabelling whatever is on screen.
     //
-    // Always the day's VOLUME alone — the core no longer follows the basis, so
-    // the badge stays on the strike today's traded gamma built while the bars
-    // underneath it change. The "·Vol" tag says which claim it is making; the
-    // CB tile above the chart reads the same definition.
-    const core = coreStrike(model.rows)
+    // FOLLOWS THE BASIS SWITCH, restricted to the two BOOK bases: OI+VOL on
+    // the OI+VOL tab, today's volume alone on VOL, and OI+VOL again while the
+    // bars are drawing FLOW — a core found on the dealer's signed tape
+    // inventory is not the thing "CB" names. See levelBasisOf in values.ts.
+    //
+    // The tag spells out which one, because that is the whole content of the
+    // badge's claim, and on the OI+VOL tab it is also the promise that this
+    // strike is the one the Key Levels card is marking. It used to read
+    // "CB·Vol" always, while Key Levels derived its core on OI+VOL — same
+    // label, same board, two different strikes.
+    const core = coreStrike(model.rows, model.basis)
     const coreIdx = core == null ? -1 : data.findIndex((r) => r.strike === core)
     const coreRow = coreIdx >= 0 ? data[coreIdx] : undefined
     if (coreRow) {
@@ -611,7 +724,7 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       const col = cv >= 0 ? p.pos : p.neg
       ctx.save()
       ctx.font = 'bold 10px ui-monospace, monospace'
-      const tag = 'CB·Vol'
+      const tag = `CB·${LEVEL_BASIS_LABEL[model.basis]}`
       const lbl = `${tag} ${coreRow.strike.toLocaleString('en-US')}`
       const bw = ctx.measureText(lbl).width + 10
       const bh = 15

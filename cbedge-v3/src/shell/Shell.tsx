@@ -15,6 +15,7 @@ import { BzilaLogo } from '@/shell/BzilaAlerts'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
 import { NotesPanelProvider, useNotesPanel } from '@/shell/NotesPanelContext'
 import { OfferPill } from '@/shell/OfferPill'
+import { RefreshButton } from '@/shell/RefreshButton'
 import { ToolbarSlotHost, ToolbarSlotProvider } from '@/shell/ToolbarSlot'
 import { UserMenu } from '@/shell/UserMenu'
 import { UpdateToast } from '@/shell/UpdateToast'
@@ -476,6 +477,13 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
           bounced or got filtered. See shell/OfferPill.tsx. */}
       <OfferPill />
       <EtClock />
+      {/* ── ↻ ──────────────────────────────────────────────────────────────────
+          Refetch every mounted panel and reopen the live socket. Drawn on the
+          phone build too: a stale panel is MORE likely there, where the tab has
+          been backgrounded and hidden-tab polling is suppressed. Data only —
+          layout, expanded cards and chart zoom all survive it. See
+          shell/RefreshButton.tsx. */}
+      <RefreshButton />
       {/* ── 📸 ─────────────────────────────────────────────────────────────────
           The one camera in the app. Draws nothing for anyone but the owner, and
           nothing at all until some surface on the current page has published

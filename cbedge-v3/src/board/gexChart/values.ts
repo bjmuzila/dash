@@ -1,4 +1,5 @@
 import type { GexRow } from '@/contract/frames'
+import { deriveLevels, findCore, oiVolNet, volNet, type DerivedLevels, type LevelValue } from '@/data/levels'
 import type { GexBasis } from './settings'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,21 +145,59 @@ export function dexSupported(rows: GexRow[], basis: GexBasis): boolean {
 
 // ── Derived levels ───────────────────────────────────────────────────────────
 //
-// Most of these follow the ACTIVE basis. The CORE and the WALLS deliberately do
-// not: they are pinned to VOLUME ONLY (`netVolGEX`) whatever the chart is
-// drawing, because the level that matters intraday is the one today's traded
-// contracts built, not the standing book behind it. See `volNetOf`.
+// THE CORE, THE WALLS AND THE FLIP ARE NOT COMPUTED HERE. They come out of
+// data/levels.ts, which is the one place in v3 a wall, a core and a flip are
+// defined — the same call Key Levels, the premarket rail and the chain path all
+// make. This file only decides WHICH BASIS to hand it.
+//
+// That is a change of behaviour, and the reason for it: these three used to be
+// pinned to VOLUME ONLY here, with their own finders, while Key Levels derived
+// the same three on OI+VOL through data/levels.ts. Two definitions, two sets of
+// finders, both drawn on the same board under the same labels — so the GEX
+// Chart could report CALL WALL 7,720 beside a Key Levels axis marking 7,690 and
+// neither number was wrong, they were answers to different questions. The stat
+// row now asks the question Key Levels asks, on the basis the chart is drawing.
+//
+// Two consequences worth knowing:
+//
+//   · ON THE OI+VOL TAB the three tiles are IDENTICAL to Key Levels by
+//     construction — same finders, same rows, same spot, same core-exclusion
+//     rule. On the VOL tab they are the same finders read on `netVolGEX`, which
+//     is what that tab is for.
+//   · THE FLIP HAS A FALLBACK CHAIN NOW. `flipOf`'s first-crossing walk
+//     returned null on any positive-gamma board — the running total never dips
+//     below zero, so there is no crossing to find — which is why the tile spent
+//     most of a long-gamma day showing "—". deriveLevels falls through to the
+//     crossing nearest spot instead. One rung is still out of reach here: Key
+//     Levels on SPX prefers the Black-Scholes spot-sweep zero, which needs the
+//     chain's IVs and a 60-level re-price that this card has no reason to run a
+//     second time. When that rung answers, the two can differ by a point or so.
 
 /**
- * A row's net gamma on the DAY'S VOLUME ALONE — `netVolGEX`, never the book,
- * never flow. The one accessor the core and the walls read.
+ * Which of the two BOOK bases a LEVEL is read on.
  *
- * Consequence worth knowing: before there is any volume on the tape (premarket,
- * a dead ticker) every row is 0, so the core and both walls come back `null`
- * and their tiles show "—" rather than a stale open-interest level.
+ * FLOW maps to OI+VOL and never appears. A wall is a place the standing or
+ * traded book has put gamma; the dealer's signed tape inventory is a different
+ * quantity that happens to share a unit, and a "CALL WALL" derived from it is
+ * not the level anyone means by those words. So the bars can draw flow while
+ * the core, the walls and the flip stay on a book basis — the badge and the
+ * tiles say which one, and it is never "flow".
  */
-export function volNetOf(r: GexRow): number {
-  return netGexOf(r, 'vol-only', false)
+export function levelBasisOf(basis: GexBasis): Exclude<GexBasis, 'flow'> {
+  return basis === 'vol-only' ? 'vol-only' : 'oi-vol'
+}
+
+/** The row accessor `data/levels.ts` should read, for the chart's basis. */
+export function levelValueOf(basis: GexBasis): LevelValue {
+  return levelBasisOf(basis) === 'vol-only' ? volNet : oiVolNet
+}
+
+/**
+ * The core, both walls and the flip — one call, one definition, on the basis
+ * the chart is drawing. The stat row and the chart's CB badge both read this.
+ */
+export function levelsOf(rows: GexRow[], spot: number, basis: GexBasis): DerivedLevels {
+  return deriveLevels(rows, spot, { value: levelValueOf(basis) })
 }
 
 /** Sum of the net bars — the number in the card header. */
@@ -170,78 +209,17 @@ export function totalNet(rows: GexRow[], basis: GexBasis, flowActive: boolean): 
 
 /**
  * The CORE (v2 calls it CB, Core Bullseye): the strike carrying the biggest
- * |net| on the WHOLE ladder — on VOLUME ONLY.
+ * |net| on the WHOLE ladder, on the level basis for `basis`.
  *
- * Whole-board, not the near-spot window Key Levels uses for its magnet. This is
- * the level the chart badge and the CB tile both mark, and the two surfaces
- * matching matters more here than the two definitions being reconciled.
+ * Whole-board, not the near-spot window Premarket uses for its magnet — the
+ * definition in data/levels.ts, which is also the one Key Levels draws.
  *
- * ⚠ Takes no basis. The core is volume-only by design, so it does NOT move when
- * the chart is switched to OI+VOL or FLOW — the bars change under it and the
- * badge stays where the day's traded gamma is. That is intended, not a
- * regression of the "cards can never disagree with the chart" rule: the badge
- * and the tile still read this one definition.
+ * Takes the chart's basis and maps it through `levelBasisOf`, so on the OI+VOL
+ * tab this IS Key Levels' core, on the VOL tab it is today's traded gamma, and
+ * on FLOW it stays on OI+VOL rather than marking a strike off the tape.
  */
-export function coreStrike(rows: GexRow[]): number | null {
-  let best: number | null = null
-  let bestAbs = 0
-  for (const r of rows) {
-    const a = Math.abs(volNetOf(r))
-    if (a > bestAbs) {
-      bestAbs = a
-      best = r.strike
-    }
-  }
-  return best
-}
-
-/**
- * Largest positive net strictly above spot / most negative strictly below —
- * on VOLUME ONLY, for the same reason the core is. Takes no basis.
- */
-export function wallsOf(rows: GexRow[], spot: number): { call: number | null; put: number | null } {
-  let call: number | null = null
-  let put: number | null = null
-  let callV = 0
-  let putV = 0
-  if (!(spot > 0)) return { call, put }
-  for (const r of rows) {
-    const v = volNetOf(r)
-    if (r.strike > spot && v > callV) {
-      callV = v
-      call = r.strike
-    }
-    if (r.strike < spot && v < putV) {
-      putV = v
-      put = r.strike
-    }
-  }
-  return { call, put }
-}
-
-/**
- * The gamma flip: walking strikes ascending and accumulating, the FIRST place
- * the running total crosses from negative to positive, interpolated between the
- * bracketing strikes.
- *
- * The same rule as chainGex.findGexFlip — "first crossing wins", the server's
- * own — but on the ACTIVE basis rather than always OI+VOL, so the flip tile
- * moves with the basis switch. Unlike the core and the walls, which do not.
- */
-export function flipOf(rows: GexRow[], basis: GexBasis, flowActive: boolean): number | null {
-  const sorted = [...rows].sort((a, b) => a.strike - b.strike)
-  let cum = 0
-  let prevStrike: number | null = null
-  for (const r of sorted) {
-    const prevCum = cum
-    cum += netGexOf(r, basis, flowActive)
-    if (prevStrike !== null && prevCum < 0 && cum >= 0) {
-      const range = cum - prevCum
-      return Math.abs(range) > 0 ? prevStrike + (r.strike - prevStrike) * (-prevCum / range) : r.strike
-    }
-    prevStrike = r.strike
-  }
-  return null
+export function coreStrike(rows: GexRow[], basis: GexBasis): number | null {
+  return findCore(rows, levelValueOf(basis))?.strike ?? null
 }
 
 /**
@@ -275,4 +253,16 @@ export const BASIS_LABEL: Record<GexBasis, string> = {
   'oi-vol': 'OI+VOL',
   'vol-only': 'VOL',
   flow: 'FLOW',
+}
+
+/**
+ * What a LEVEL is labelled with. Never "FLOW" — see `levelBasisOf`. The chart's
+ * CB badge reads this, so the badge states the basis the core was actually
+ * found on rather than the basis the bars are drawn on, and the two are
+ * deliberately allowed to differ (only on the FLOW tab, where they must).
+ */
+export const LEVEL_BASIS_LABEL: Record<GexBasis, string> = {
+  'oi-vol': 'OI+VOL',
+  'vol-only': 'VOL',
+  flow: 'OI+VOL',
 }

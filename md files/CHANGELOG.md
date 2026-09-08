@@ -1,5 +1,76 @@
 # Changelog
 
+## 2026-09-08 - v3 Level Log: CORE migration button gone, ticker on the toolbar
+
+`cbedge-v3/src/pages/LevelLog.tsx`. The earlier removal only hit v2's
+`components/pages/LevelLog.tsx`; the button on screen was the v3 page's, so it
+survived. Now removed there too - the `openCoreMigration` handler, its toolbar
+button, the `LEVEL_COLORS`/`alpha` import it was the only user of, and the
+header note about it. `public/core-migration.html` still exists, just nothing
+links to it from either app.
+
+WHICH TICKER. The app toolbar owns the symbol and the rail above the card is a
+selector, so nothing between them and the plot said what the levels were of -
+worst when the card is expanded and the rail is off screen. The card toolbar now
+opens with a `{symbol}` chip, styled like the date input beside it.
+
+## 2026-09-08 - GEX Chart: levels match Key Levels, volume histogram, toolbar refresh
+
+`cbedge-v3/src/data/levels.ts`, `.../data/api.ts`, `.../data/socket.ts`,
+`.../design/tokens.css`, `.../shell/RefreshButton.tsx` (new), `.../shell/Shell.tsx`,
+`.../board/gexChart/{values,settings,gexChartRender,StatCards,GexChartCard}.tsx|ts`.
+
+Four things, all on the v3 GEX Chart card except the last.
+
+1. THE STAT TILES DISAGREED WITH KEY LEVELS, and both were "right".
+   The card derived CALL WALL / PUT WALL / CB with its own finders on
+   `netVolGEX` (volume only, pinned, whatever tab you were on). Key Levels
+   derives the same three through `data/levels.ts` on OI+VOL. One board, one
+   feed, two numbers under one label.
+
+   `data/levels.ts` finders now take an optional value accessor (default
+   `oiVolNet` - every existing caller is byte-identical), and the chart's tiles
+   call `deriveLevels()` through it. On the OI+VOL tab the four tiles ARE Key
+   Levels' four marks, to the strike, by construction. On the VOL tab they are
+   the same finders read on `netVolGEX`. The card's own finders are gone.
+
+   FLIP also stopped printing "-" all day: `flipOf`'s first-crossing walk
+   returns null on any positive-gamma board (the running total never dips below
+   zero), and deriveLevels falls through to the crossing nearest spot. One rung
+   is still out of reach here - Key Levels on SPX prefers the Black-Scholes
+   spot-sweep zero, which needs a 60-level re-price this card has no reason to
+   run twice - so the two can differ by ~a point when that rung answers.
+
+2. NO CB ON FLOW. Flow is not a level basis: a wall is where the BOOK put
+   gamma, and the dealer's signed tape inventory is a different quantity in the
+   same unit. `levelBasisOf()` maps FLOW -> OI+VOL, so the bars can draw flow
+   while the core, walls and flip stay on a book basis. The chart badge reads
+   `CB-OI+VOL` / `CB-VOL` instead of a hardcoded `CB-Vol`, so it states which
+   claim it is making.
+
+3. NOT UPDATING. The tiles only re-synced on a `gex` frame, on the stated
+   assumption that a wall cannot move without a new ladder. It can: both walls
+   are defined strictly above/below SPOT, so price crossing a strike relocates
+   one with no new ladder at all - and server-v2 dedupes `gex`, so a quiet chain
+   broadcasts nothing for minutes. A spot tick now syncs the tiles at most once
+   a second (`TILE_SPOT_MS`); the chart still repaints every tick.
+
+4. VOLUME HISTOGRAM + a cog to turn it on. Today's traded contracts per strike,
+   drawn from the FLOOR of the plot on its own scale (contracts, not dollars),
+   22% of the height, behind the bars. TOTAL or call/put split. Off by default,
+   desktop only, remembered per browser. It answers where the volume went; the
+   VOL basis answers how much gamma that volume built, and those come apart
+   constantly.
+
+5. UNIVERSAL TOOLBAR: a refresh button. `refreshAll()` empties the REST cache
+   and refetches everything MOUNTED - a broadcast, because `staleMs` is a TTL
+   and not an interval, so a card with no `pollMs` sits on its first response
+   forever and clearing the cache alone changes nothing on screen.
+   `reconnectSocket()` drops /ws/gex and reopens at the same topic scope with
+   the backoff reset. Data only: layout, expanded cards and chart zoom all
+   survive it, and nothing blanks - the revalidators never set a loading state
+   and a failed refetch keeps the last good value.
+
 ## 2026-09-08 - ETF candles tick live (2s) instead of stepping once a minute
 
 `server-v2/etf-live-candles.js` (new), `server-v2/api-router.js`,

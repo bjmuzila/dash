@@ -579,6 +579,24 @@ input[type='date']::-webkit-datetime-edit-year-field:focus {
   height: 100dvh;
 }
 
+/* One bounded turn, for the toolbar's ↻ refresh (shell/RefreshButton.tsx).
+   Not Tailwind's `animate-spin`, which is 1s per turn and infinite: the button
+   spins ONCE as acknowledgement and stops, because a refresh that comes back
+   with identical numbers — the common case — is otherwise indistinguishable
+   from a dead button. The duration is set at the call site, next to the
+   timeout that clears it, so the two cannot drift apart.
+
+   Here rather than in the component for the same reason as the two above:
+   @keyframes cannot be scoped to a component without a CSS module. */
+@keyframes cb-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Respect the user's motion preference globally rather than per-component. */
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
-import { Chip, SegGroup } from '@/design/primitives/Controls'
+import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
 import { watchFrame } from '@/data/hooks'
 import { SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
@@ -9,7 +9,13 @@ import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
 import { chainGexUrl, chainToGex, EMPTY_CHAIN_GEX } from '../chainGex'
 import { EMPTY_MODEL, mountGexChart, type GexChartHandle, type GexChartModel } from './gexChartRender'
 import { BASIS_LABEL, flowSupported, fmtGexShort, totalNet } from './values'
-import { loadSettings, saveSettings, type GexBasis, type GexChartSettings } from './settings'
+import {
+  loadSettings,
+  saveSettings,
+  type GexBasis,
+  type GexChartSettings,
+  type VolumeSplit,
+} from './settings'
 import { StatCards } from './StatCards'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -25,16 +31,24 @@ import { StatCards } from './StatCards'
 // line, the core badge — is gexChartRender.ts, which owns its canvas and its
 // listeners. A pan is sixty pointer events a second; none of them reach React.
 //
-// ── The four controls ────────────────────────────────────────────────────────
+// ── The controls ─────────────────────────────────────────────────────────────
 //   BASIS   OI+VOL · VOL · FLOW — which contracts the bars are priced on
 //   SPLIT   NET · C/P          — one net bar, or the call and put legs
 //   DEX     the net-delta overlay line, on its own normalised scale
 //   CARDS   the stat row above the chart — all ten, or none
+//   ⚙       the VOLUME histogram and which legs it counts — see VolumeCog
 //
-// All four sit in the toolbar because each is one click. CARDS used to be a
-// cog holding ten individual switches; the row shares its width evenly, so
-// hiding one tile only made the other nine wider, and a stored subset meant no
-// two boards showed the same row. It is one chip now.
+// The first four are chips because each is one click and each changes what the
+// BARS are. CARDS used to be a cog holding ten individual switches; the row
+// shares its width evenly, so hiding one tile only made the other nine wider,
+// and a stored subset meant no two boards showed the same row. It is one chip
+// now. The cog holds the one control that is not about the bars at all.
+//
+// ── The four LEVEL tiles now match Key Levels ────────────────────────────────
+// Call Wall / Put Wall / Flip / CB come out of data/levels.ts — the same
+// derivation the Key Levels card draws — read on the basis this card is on.
+// They used to be derived here on volume alone while Key Levels used OI+VOL, so
+// one board printed two different CALL WALLs under one name. See values.ts.
 //
 // ── Two sources, one shape ───────────────────────────────────────────────────
 // SPX comes off the socket. Any other page symbol comes from /api/chains
@@ -64,6 +78,17 @@ const CARD_ID = 'gex-chart'
  */
 const EMPTY_ROWS: GexRow[] = []
 
+/**
+ * How often a SPOT tick is allowed to refresh the stat tiles.
+ *
+ * The tiles are React and the chart is a canvas, so a spot frame always
+ * repaints the chart and only sometimes re-renders the row. One second: fast
+ * enough that a wall which price has just traded through moves while you are
+ * looking at it, slow enough that a 10Hz topic costs one render a second rather
+ * than ten. See the block on `view` below.
+ */
+const TILE_SPOT_MS = 1000
+
 export interface GexChartCardProps {
   /**
    * The stripped-down card: SPX only, OI+VOL / VOL only, one net bar, no DEX
@@ -86,6 +111,102 @@ export interface GexChartCardProps {
   simple?: boolean
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚙ THE VOLUME COG
+//
+// A cog rather than a fifth chip, and the distinction is real rather than a
+// space saving: everything else in this toolbar changes WHAT THE BARS ARE — the
+// basis they are priced on, whether they are split, whether the DEX line is
+// laid over them, whether the tiles above them are drawn. Volume is a SECOND
+// SERIES on its own scale, with a setting of its own underneath it (which legs
+// it counts), and a switch that owns a sub-setting is a menu, not a toggle.
+//
+// The card's own header warns that CARDS used to be a cog and was promoted to a
+// chip; that is not an argument against this one. What failed there was ten
+// switches over tiles that share a row evenly — hiding one only made the other
+// nine wider, so the menu offered ten ways to change nothing. This cog holds a
+// series that is off by default and a choice that only exists while it is on.
+//
+// The cog LIGHTS UP while the histogram is drawn, so a board carrying a second
+// series never looks identical to one that is not — the whole failure mode of
+// putting a visible feature behind a menu.
+// ─────────────────────────────────────────────────────────────────────────────
+function VolumeCog({
+  showVolume,
+  volumeSplit,
+  onPatch,
+}: {
+  showVolume: boolean
+  volumeSplit: VolumeSplit
+  onPatch: (p: Partial<GexChartSettings>) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label="Volume settings"
+        title="Today's traded contracts, as a histogram along the bottom of the plot — a second series on its own scale, in contracts rather than dollars of gamma"
+        className={[
+          'flex items-center rounded-sm border px-1.5 py-0.5 leading-none transition-colors',
+          showVolume ? 'border-accent bg-raised text-fg' : 'border-line text-muted opacity-60 hover:opacity-100',
+        ].join(' ')}
+      >
+        <svg
+          aria-hidden
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+        </svg>
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)}>
+        <div className="flex w-52 flex-col gap-2">
+          <PanelSection title="Volume">
+            <Chip
+              label="SHOW VOLUME"
+              on={showVolume}
+              onClick={() => onPatch({ showVolume: !showVolume })}
+              title="Today's traded contracts per strike, drawn from the floor of the plot on their own scale. Off by default — it costs plot height, and the gamma ladder is this card's first job"
+            />
+            {/* Only while the series is drawn. A control for something that is
+                not on screen is a control that does nothing, and the toggle
+                above is one click away. */}
+            {showVolume && (
+              <SegGroup
+                title="Which contracts the histogram counts"
+                options={[
+                  { label: 'TOTAL', value: 'total', title: 'Calls and puts at the strike, in one column' },
+                  {
+                    label: 'C/P',
+                    value: 'call-put',
+                    title: 'The two legs side by side — call left, put right — so you can see WHICH side today’s contracts went to',
+                  },
+                ]}
+                value={volumeSplit}
+                onChange={(v) => onPatch({ volumeSplit: v })}
+              />
+            )}
+            <span className="text-3xs leading-snug text-faint opacity-70">
+              Contracts, not dollars — its own scale, peak labelled on the chart. The VOL basis asks
+              how much gamma today’s volume built; this asks where the volume went.
+            </span>
+          </PanelSection>
+        </div>
+      </Popover>
+    </div>
+  )
+}
+
 export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
   const { symbol: pageSymbol } = usePageSymbol()
   // Pinned, not defaulted: SPX is the only symbol the socket streams, and the
@@ -104,6 +225,11 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
         basis: stored.basis === 'flow' ? 'oi-vol' : stored.basis,
         split: 'net',
         showDex: false,
+        // The histogram takes 22% of a plot ~380px tall to answer a
+        // second-order question. Same call as DEX and the split: it is a
+        // desktop read. The stored value is untouched, so a desktop board
+        // keeps it.
+        showVolume: false,
         cardsOn: false,
       }
     : stored
@@ -127,9 +253,20 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
    * spot tick. `spot` is a 10Hz topic; if a tick refreshed the tiles, ten
    * strike-comparisons × ten tiles would run sixty times for every one time the
    * numbers actually changed. So the spot watcher repaints the CHART (which is
-   * imperative and cheap) and leaves this state alone; the tiles pick the new
-   * spot up on the next gex frame, seconds later, which is also the only
-   * cadence at which a wall can actually move.
+   * imperative and cheap) and mostly leaves this state alone.
+   *
+   * MOSTLY, not entirely — and that word is a fix, not a hedge. The claim this
+   * block used to make was that a gex frame is "the only cadence at which a
+   * wall can actually move", and it is not: BOTH walls are defined strictly
+   * above and strictly below SPOT, so price crossing a strike relocates one of
+   * them with no new ladder involved at all. server-v2 dedupes the `gex` frame
+   * — an unchanged chain broadcasts nothing — so on a quiet ladder the tiles
+   * could sit for minutes with a call wall that price had already traded
+   * through, which is the "not updating" this card was reported for.
+   *
+   * So a spot tick DOES sync the tiles, at most once every TILE_SPOT_MS. That
+   * is one re-render a second against sixty, and it is bounded by wall clock
+   * rather than by how chatty the feed happens to be.
    */
   const [view, setView] = useState<{ rows: GexRow[]; spot: number; expiry: string }>({
     rows: EMPTY_ROWS,
@@ -164,8 +301,14 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
   // The settings the renderer needs, in one object so `push` takes a stable
   // dependency rather than three.
   const drawOpts = useMemo(
-    () => ({ basis: settings.basis, split: settings.split, showDex: settings.showDex }),
-    [settings.basis, settings.split, settings.showDex],
+    () => ({
+      basis: settings.basis,
+      split: settings.split,
+      showDex: settings.showDex,
+      showVolume: settings.showVolume,
+      volumeSplit: settings.volumeSplit,
+    }),
+    [settings.basis, settings.split, settings.showDex, settings.showVolume, settings.volumeSplit],
   )
   const drawOptsRef = useRef(drawOpts)
   drawOptsRef.current = drawOpts
@@ -241,6 +384,9 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
     })
   }, [onSocket, push, symbol])
 
+  // Last wall-clock time a spot tick was allowed through to the tiles. A ref,
+  // not state — reading it must not itself be a render.
+  const tileSyncRef = useRef(0)
   useEffect(() => {
     if (!onSocket) return
     return watchFrame<SpotFrame>('spot', (frame) => {
@@ -248,7 +394,12 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
       if (typeof px !== 'number' || !(px > 0)) return
       spotRef.current = px
       const s = socketRef.current
-      if (s.rows.length) push(s.rows, px, symbol, s.expiry, false)
+      if (!s.rows.length) return
+      // Chart every tick, tiles at most once a second. See TILE_SPOT_MS.
+      const now = Date.now()
+      const syncTiles = now - tileSyncRef.current >= TILE_SPOT_MS
+      if (syncTiles) tileSyncRef.current = now
+      push(s.rows, px, symbol, s.expiry, syncTiles)
     })
   }, [onSocket, push, symbol])
 
@@ -386,6 +537,15 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
             on={settings.cardsOn}
             onClick={() => patch({ cardsOn: !settings.cardsOn })}
             title="The stat row above the chart — all ten tiles, or none"
+          />
+        )}
+
+        {/* ⚙ — the SECOND SERIES and how it is drawn. See VolumeCog. */}
+        {!simple && (
+          <VolumeCog
+            showVolume={settings.showVolume}
+            volumeSplit={settings.volumeSplit}
+            onPatch={patch}
           />
         )}
 

@@ -31,10 +31,33 @@ import { computeGEXProfile, findGEXFlip, type ChainRow } from './calculations'
 // the level and the price it is measured from are the same instant.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** The OI+VOL net at a strike. The one basis every level here is read on. */
+/** The OI+VOL net at a strike. The DEFAULT basis every level here is read on. */
 export function oiVolNet(r: GexRow): number {
   return (Number(r.netGEX) || 0) + (Number(r.netVolGEX) || 0)
 }
+
+/** The day's VOLUME alone at a strike — the standing book left out. */
+export function volNet(r: GexRow): number {
+  return Number(r.netVolGEX) || 0
+}
+
+/**
+ * How a level reads a strike.
+ *
+ * Every finder below takes one, defaulting to `oiVolNet`, so the OI+VOL answer
+ * — the one Key Levels, the premarket rail and the chain path all draw — is
+ * still what you get by writing nothing. The parameter exists for exactly one
+ * caller: the GEX Chart's stat row, whose tiles follow the card's own basis
+ * switch and therefore need the SAME finders read on `volNet` when that switch
+ * says VOL.
+ *
+ * ⚠ Only the two BOOK bases are ever passed. FLOW is not a level basis: a wall
+ * is a place the standing or traded book puts gamma, and the dealer's signed
+ * tape inventory is a different quantity that happens to share a unit. The
+ * chart maps FLOW to OI+VOL before it gets here — see `levelValueOf` in
+ * board/gexChart/values.ts.
+ */
+export type LevelValue = (r: GexRow) => number
 
 export interface CoreNode {
   strike: number
@@ -64,17 +87,17 @@ export const EMPTY_LEVELS: DerivedLevels = { callWall: null, putWall: null, core
  * twenty points while nothing happened. The whole-board answer is the one that
  * matches the server and the one both surfaces documented themselves as using.
  */
-export function findCore(rows: GexRow[]): CoreNode | null {
+export function findCore(rows: GexRow[], value: LevelValue = oiVolNet): CoreNode | null {
   let best: GexRow | null = null
   let bestAbs = 0
   for (const r of rows) {
-    const a = Math.abs(oiVolNet(r))
+    const a = Math.abs(value(r))
     if (a > bestAbs) {
       bestAbs = a
       best = r
     }
   }
-  return best ? { strike: best.strike, value: oiVolNet(best) } : null
+  return best ? { strike: best.strike, value: value(best) } : null
 }
 
 /**
@@ -87,27 +110,37 @@ export function findCore(rows: GexRow[]): CoreNode | null {
  * to get through after the core. Passing the CORE in is a no-op in the usual
  * case, because a strike that is not the wall was not going to win anyway.
  */
-export function findCallWall(rows: GexRow[], spot: number, exclude: number | null = null): number | null {
+export function findCallWall(
+  rows: GexRow[],
+  spot: number,
+  exclude: number | null = null,
+  value: LevelValue = oiVolNet,
+): number | null {
   let best: GexRow | null = null
   for (const r of rows) {
     if (!(r.strike > spot)) continue
     if (exclude != null && r.strike === exclude) continue
-    const v = oiVolNet(r)
+    const v = value(r)
     if (v <= 0) continue
-    if (!best || v > oiVolNet(best)) best = r
+    if (!best || v > value(best)) best = r
   }
   return best?.strike ?? null
 }
 
 /** Most NEGATIVE OI+VOL strictly below spot. `exclude` as above. */
-export function findPutWall(rows: GexRow[], spot: number, exclude: number | null = null): number | null {
+export function findPutWall(
+  rows: GexRow[],
+  spot: number,
+  exclude: number | null = null,
+  value: LevelValue = oiVolNet,
+): number | null {
   let best: GexRow | null = null
   for (const r of rows) {
     if (!(r.strike < spot)) continue
     if (exclude != null && r.strike === exclude) continue
-    const v = oiVolNet(r)
+    const v = value(r)
     if (v >= 0) continue
-    if (!best || v < oiVolNet(best)) best = r
+    if (!best || v < value(best)) best = r
   }
   return best?.strike ?? null
 }
@@ -129,7 +162,7 @@ export function findPutWall(rows: GexRow[], spot: number, exclude: number | null
  * a real state, not a failure — but it is also why this cannot be the only
  * answer. Home's card had exactly this chain and simply drew no FLIP at all.
  */
-export function findCumulativeFlip(rows: GexRow[], spot: number): number | null {
+export function findCumulativeFlip(rows: GexRow[], spot: number, value: LevelValue = oiVolNet): number | null {
   if (!(spot > 0)) return null
   const sorted = [...rows].sort((a, b) => a.strike - b.strike)
   let cum = 0
@@ -138,7 +171,7 @@ export function findCumulativeFlip(rows: GexRow[], spot: number): number | null 
   let best: number | null = null
   for (const r of sorted) {
     prevCum = cum
-    cum += oiVolNet(r)
+    cum += value(r)
     if (prevStrike !== null && prevCum < 0 && cum >= 0) {
       const range = cum - prevCum
       const x = Math.abs(range) > 0 ? prevStrike + (r.strike - prevStrike) * (-prevCum / range) : r.strike
@@ -157,14 +190,14 @@ export function findCumulativeFlip(rows: GexRow[], spot: number): number | null 
  * deriveLevels — see the preference order there for why the first crossing is
  * the wrong scoring at the bottom of a ladder.
  */
-export function findGexFlip(rows: GexRow[]): number | null {
+export function findGexFlip(rows: GexRow[], value: LevelValue = oiVolNet): number | null {
   const sorted = [...rows].sort((a, b) => a.strike - b.strike)
   let cum = 0
   let prevCum = 0
   let prevStrike: number | null = null
   for (const r of sorted) {
     prevCum = cum
-    cum += oiVolNet(r)
+    cum += value(r)
     if (prevStrike !== null && prevCum < 0 && cum >= 0) {
       const range = cum - prevCum
       return Math.abs(range) > 0 ? prevStrike + (r.strike - prevStrike) * (-prevCum / range) : r.strike
@@ -201,20 +234,37 @@ export function findGexFlip(rows: GexRow[]): number | null {
 export function deriveLevels(
   rows: GexRow[],
   spot: number,
-  opts: { profileFlip?: number | null; serverFlip?: number | null } = {},
+  opts: {
+    profileFlip?: number | null
+    serverFlip?: number | null
+    /**
+     * Read every level on something other than OI+VOL. Omit — as every caller
+     * but the GEX Chart's stat row does — and nothing about this function
+     * changes. See `LevelValue`.
+     *
+     * The FLIP takes a different route when this is set: rung 2 below
+     * (`findGEXFlip` out of calculations.ts) prices a ChainRow's own gamma and
+     * has no notion of a basis at all, so on a non-default value it would hand
+     * back the OI+VOL answer under a VOL label. The local first-crossing walk
+     * stands in for it, on the value actually asked for.
+     */
+    value?: LevelValue
+  } = {},
 ): DerivedLevels {
   if (!rows.length || !(spot > 0)) return { ...EMPTY_LEVELS, flip: opts.serverFlip ?? null }
-  const core = findCore(rows)
+  const value = opts.value ?? oiVolNet
+  const basisDefault = value === oiVolNet
+  const core = findCore(rows, value)
   const ex = core?.strike ?? null
   const flip =
     opts.profileFlip ??
-    findGEXFlip(rows as unknown as ChainRow[], spot) ??
-    findCumulativeFlip(rows, spot) ??
+    (basisDefault ? findGEXFlip(rows as unknown as ChainRow[], spot) : findGexFlip(rows, value)) ??
+    findCumulativeFlip(rows, spot, value) ??
     opts.serverFlip ??
     null
   return {
-    callWall: findCallWall(rows, spot, ex),
-    putWall: findPutWall(rows, spot, ex),
+    callWall: findCallWall(rows, spot, ex, value),
+    putWall: findPutWall(rows, spot, ex, value),
     core,
     flip: flip != null && Number.isFinite(flip) && flip > 0 ? flip : null,
   }

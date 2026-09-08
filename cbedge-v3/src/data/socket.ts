@@ -413,6 +413,38 @@ export function socketState(): { ready: number; topics: string[] | null; attempt
   }
 }
 
+/**
+ * Tear the live connection down and open a new one AT THE SAME SCOPE, now.
+ *
+ * The toolbar's refresh button (shell/RefreshButton.tsx), and nothing else.
+ * Everything about the socket is already self-healing — `handleClose` schedules
+ * a backed-off retry and every (re)connect replays the server's snapshot — so
+ * this is not a repair, it is a way to SKIP THE WAIT when someone is looking at
+ * a panel they believe is stale. The backoff resets with it: a user asking for
+ * a reconnect is new information, and making them sit through the ten-second
+ * step of an old backoff is the opposite of what the button is for.
+ *
+ * `ws` is cleared BEFORE discarding it. `discard` detaches the handlers, so
+ * `handleClose` cannot fire anyway, and the ordering makes that independent of
+ * discard's implementation rather than a fact you have to go and check.
+ */
+export function reconnectSocket(): void {
+  if (disposed || !started) return
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  if (stableTimer) {
+    clearTimeout(stableTimer)
+    stableTimer = null
+  }
+  reconnectAttempt = 0
+  const live = ws
+  ws = null
+  if (live) discard(live)
+  connect(currentTopics)
+}
+
 export function stopSocket(): void {
   disposed = true
   epoch++ // every handler still out there is now stale by definition

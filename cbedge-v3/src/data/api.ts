@@ -177,9 +177,63 @@ export function useQuery<T>(url: string | null, opts: QueryOpts = {}): QueryResu
     }
   }, [url, pollMs, background])
 
+  // ── Answer the toolbar's refresh ───────────────────────────────────────────
+  // Deliberately NOT `run`: run() re-reads the cache first, and refreshAll()
+  // has just emptied it, so every card on the board would flash its loading
+  // state on the way to the same numbers. This refetches underneath what is
+  // already drawn and swaps the value in when it lands.
+  useEffect(() => {
+    if (!url) return
+    const fn = () => {
+      query<T>(url, { staleMs: 0 })
+        .then((data) => {
+          stateRef.current = { data, error: null, loading: false }
+          forceRender((n) => n + 1)
+        })
+        .catch(() => {
+          /* keep the last good value — same rule as a failed poll */
+        })
+    }
+    revalidators.add(fn)
+    return () => {
+      revalidators.delete(fn)
+    }
+  }, [url])
+
   return { ...stateRef.current, refetch: run }
 }
 
 export function clearQueryCache(): void {
   cache.clear()
+}
+
+// ── Manual revalidation ──────────────────────────────────────────────────────
+//
+// Every MOUNTED useQuery registers a refetch here. `refreshAll()` empties the
+// cache and calls all of them — the "I think something is stuck" button in the
+// toolbar (shell/RefreshButton.tsx), and nothing else.
+//
+// Why a broadcast rather than clearing the cache and letting the polls catch
+// up: most of what is on a board has no poll at all (`staleMs` is a TTL, not an
+// interval — see the block at the top of this file), so clearing the cache
+// alone changes NOTHING on screen until something happens to remount. A card
+// that mounted once and froze is exactly the case the button exists for.
+//
+// The existing DATA STAYS ON SCREEN while the refetch is in flight: these
+// callbacks never set `loading`, and a failure keeps the last good value. A
+// refresh must not be able to blank a working board.
+
+const revalidators = new Set<() => void>()
+
+/**
+ * Drop every cached response and refetch everything currently mounted.
+ *
+ * Does NOT touch the WebSocket — see `reconnectSocket` in data/socket.ts. The
+ * toolbar button calls both.
+ */
+export function refreshAll(): void {
+  cache.clear()
+  // Copied first: a subscriber that unmounts as a result of its own refetch
+  // must not mutate the set mid-iteration.
+  for (const fn of Array.from(revalidators)) fn()
 }

@@ -44,11 +44,35 @@ export type StatKey =
   | 'posGexPct'
   | 'bullBear'
 
+/**
+ * WHICH contracts the volume histogram counts.
+ *
+ *   total     calls + puts at the strike, one column.
+ *   call-put  the two legs side by side, call left and put right — where the
+ *             day's contracts actually went, which "total" cannot show.
+ */
+export type VolumeSplit = 'total' | 'call-put'
+
 export interface GexChartSettings {
   basis: GexBasis
   split: GexSplit
   /** The net-DEX overlay line. Independent of the bars — see gexChartRender. */
   showDex: boolean
+  /**
+   * TODAY'S TRADED CONTRACTS, as a histogram along the bottom of the plot.
+   *
+   * Not a basis and not an overlay on the gamma axis — a second, independent
+   * series on its own scale, in contracts rather than dollars. The VOL basis
+   * answers "how much GAMMA did today's volume build"; this answers "where did
+   * the volume go", which is a different question and one the gamma bars
+   * genuinely cannot show: a strike can trade heavily and carry almost no
+   * gamma, and on the chart that strike is a gap.
+   *
+   * Off by default. It costs plot height, and the card's first job is the
+   * gamma ladder.
+   */
+  showVolume: boolean
+  volumeSplit: VolumeSplit
   /**
    * The stat card row: all ten, or none.
    *
@@ -64,6 +88,8 @@ export const DEFAULT_SETTINGS: GexChartSettings = {
   basis: 'oi-vol',
   split: 'net',
   showDex: false,
+  showVolume: false,
+  volumeSplit: 'total',
   cardsOn: true,
 }
 
@@ -73,6 +99,7 @@ const SETTINGS_V = 1
 
 const isBasis = (v: unknown): v is GexBasis => v === 'oi-vol' || v === 'vol-only' || v === 'flow'
 const isSplit = (v: unknown): v is GexSplit => v === 'net' || v === 'call-put'
+const isVolSplit = (v: unknown): v is VolumeSplit => v === 'total' || v === 'call-put'
 
 function coerce(raw: unknown): GexChartSettings {
   const p = (raw ?? {}) as Partial<GexChartSettings> & { v?: number }
@@ -80,6 +107,11 @@ function coerce(raw: unknown): GexChartSettings {
     basis: isBasis(p.basis) ? p.basis : DEFAULT_SETTINGS.basis,
     split: isSplit(p.split) ? p.split : DEFAULT_SETTINGS.split,
     showDex: p.showDex === true,
+    // `=== true`, unlike cardsOn below: a blob written before the histogram
+    // existed should come back with it OFF, which is what that browser was
+    // showing. Defaulting a NEW series on would change a board nobody touched.
+    showVolume: p.showVolume === true,
+    volumeSplit: isVolSplit(p.volumeSplit) ? p.volumeSplit : DEFAULT_SETTINGS.volumeSplit,
     // `!== false`, not `=== true`: a blob written before the row had a switch
     // at all should come back with the row ON, which is what it was showing.
     // A stale `cards` map alongside it is simply dropped — an unknown key in

@@ -4,7 +4,7 @@ import { isSocketSymbol } from '@/data/symbol'
 import type { GexRow } from '@/contract/frames'
 import { computeMaxPain, fmtPx, strikeDp } from '../keyLevels/levelsMath'
 import type { GexBasis, StatKey } from './settings'
-import { coreStrike, flipOf, fmtGexShort, posGexPct, totalNet, wallsOf } from './values'
+import { LEVEL_BASIS_LABEL, fmtGexShort, levelsOf, posGexPct, totalNet } from './values'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The ten cards, ported from v2's home GEX toolbar.
@@ -19,16 +19,22 @@ import { coreStrike, flipOf, fmtGexShort, posGexPct, totalNet, wallsOf } from '.
 // never disagree with the chart beneath them" — and the only way to keep that
 // true is to have one definition of each level, not two.
 //
-// Net GEX, Flip and +GEX % follow the ACTIVE basis, so switching the chart to
-// VOL moves them with it. A tile that did NOT move would be the bug.
+// Net GEX and +GEX % follow the ACTIVE basis, so switching the chart to VOL
+// moves them with it. A tile that did NOT move would be the bug.
 //
-// ── The three pinned to VOLUME ONLY ──────────────────────────────────────────
-//   Call Wall · Put Wall · CB   always `netVolGEX`, whatever basis the chart is
-//   on. The level worth marking intraday is the one today's traded contracts
-//   built, not the standing book behind it, so these deliberately do NOT move
-//   with the basis switch — the chart's own CB badge reads the same definition
-//   and is labelled "CB·Vol" for it. See coreStrike / wallsOf in values.ts.
-//   With no volume on the tape yet they read "—" rather than an OI level.
+// ── The four LEVELS: Call Wall · Put Wall · Flip · CB ────────────────────────
+// One call to `levelsOf`, which is data/levels.ts — the same derivation the Key
+// Levels card draws, read on the basis the chart is on. Two things follow:
+//
+//   · ON THE OI+VOL TAB these four tiles ARE Key Levels' four marks, to the
+//     strike. They were not before: this row derived its own walls and core on
+//     `netVolGEX` alone while Key Levels derived them on OI+VOL, so the board
+//     printed two different CALL WALLs under one name. Same finders now.
+//   · FLOW IS NOT A LEVEL BASIS. On the FLOW tab the bars draw the dealer's
+//     signed tape inventory and these four stay on OI+VOL. A wall is a place
+//     the book has put gamma; the tape is a different quantity in the same
+//     unit, and "CALL WALL" derived from it answers nothing anyone asked.
+//     See levelBasisOf in values.ts — the tile titles say which basis is live.
 //
 // ── The two that come from somewhere else ────────────────────────────────────
 //   ±1σ (EM)   this week's estimated-move band, /api/em-tracker — the same
@@ -123,11 +129,20 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
 
   const tiles = useMemo<Tile[]>(() => {
     const total = rows.length ? totalNet(rows, basis, flowActive) : null
-    const walls = wallsOf(rows, spot)
-    const core = coreStrike(rows)
-    const flip = flipOf(rows, basis, flowActive)
+    // The four levels, in one derivation, matching Key Levels — see the block
+    // at the top of this file.
+    const levels = levelsOf(rows, spot, basis)
     const maxPain = computeMaxPain(rows)
     const pct = rows.length ? posGexPct(rows, basis, flowActive) : null
+
+    // Which basis the four LEVEL tiles were actually read on. Equal to the
+    // chart's basis except on FLOW, where it is OI+VOL, which is exactly the
+    // case worth spelling out in a tooltip.
+    const lvlLabel = LEVEL_BASIS_LABEL[basis]
+    const lvlNote =
+      basis === 'flow'
+        ? ' Read on OI+VOL: the chart is drawing flow, and a wall found on the dealer’s tape inventory is a different quantity.'
+        : ` Read on ${lvlLabel}, following the basis switch.`
 
     const px = (v: number | null) => (v == null ? '—' : fmtPx(v, kDp))
 
@@ -142,30 +157,30 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
       {
         key: 'callWall',
         label: 'Call Wall',
-        value: px(walls.call),
+        value: px(levels.callWall),
         colour: '--color-level-cw',
-        title: 'Largest positive net gamma strictly above spot. Volume only — it does not move with the basis switch',
+        title: `Largest positive net gamma strictly above spot.${lvlNote} Same derivation the Key Levels card draws`,
       },
       {
         key: 'putWall',
         label: 'Put Wall',
-        value: px(walls.put),
+        value: px(levels.putWall),
         colour: '--color-level-pw',
-        title: 'Most negative net gamma strictly below spot. Volume only — it does not move with the basis switch',
+        title: `Most negative net gamma strictly below spot.${lvlNote} Same derivation the Key Levels card draws`,
       },
       {
         key: 'flip',
         label: 'Flip',
-        value: px(flip),
+        value: px(levels.flip),
         colour: '--color-warn',
-        title: 'Where the running total first crosses from negative to positive, walking strikes upward',
+        title: `Where cumulative net gamma crosses zero, taking the crossing nearest spot.${lvlNote}`,
       },
       {
         key: 'cb',
         label: 'CB',
-        value: px(core),
+        value: px(levels.core?.strike ?? null),
         colour: '--color-level-cb',
-        title: 'Core Bullseye — the strike carrying the biggest absolute net gamma on the whole ladder, on the day’s volume alone. The badge on the chart marks the same strike',
+        title: `Core Bullseye — the strike carrying the biggest absolute net gamma on the whole ladder.${lvlNote} The badge on the chart marks the same strike`,
       },
       {
         key: 'maxPain',
