@@ -81,6 +81,9 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       // the old bookmark 404s deliberately rather than opening a different page.
       { label: "Media Dump", href: "/owner/media-dump", glyph: "🖼︎", key: "MediaDump" },
       { label: "Bzila Alerts", href: "/owner/dev/bzila-alerts", glyph: "🔔", key: "BzilaAlerts" },
+      // Trade-alert composer for the two Discord bots. Content rather than
+      // System: you open it to SEND something, same job as Bzila Alerts.
+      { label: "BOT", href: "/owner/bot", glyph: "◉", key: "Bot" },
     ],
   },
   {

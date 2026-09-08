@@ -4,6 +4,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Tuesday 9/8/2026
 
+* **GEX Candles (v3):** candles now tick live on every ticker instead of stepping once a minute, plus volume bars and a spot price line, both toggling in the cogwheel — https://cbedge.net/v3
+
+* **Multi Greek:** SPX, SPY and QQQ are now locked into the first three panels. The fourth panel is yours to type any symbol into — https://cbedge.net/app/mult-greek
+
 * **Economic Calendar (v3):** now has its own icon in the left sidebar, so you can open it from any page instead of typing the address — https://cbedge.net/v3/economic-calendar
 
 

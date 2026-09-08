@@ -1,5 +1,17 @@
 # Changelog
 
+## Tuesday 9/8/2026 — GEX Candles (v3): live candles off a new dxLink hub, plus volume and a spot line
+
+New `server-v2/etf-live-candles.js` holds ONE persistent dxLink 1m candle subscription for the symbols actually on screen and serves it through two routes added to `server-v2/api-router.js` — a 2s probe (`/api/snapshots/etf-candles/live`) and an SSE stream (`/live/stream`) — which `cbedge-v3/src/board/gexCandles/candles.ts` + `GexCandlesCard.tsx` consume through the chart's imperative `setLivePrice`, taking QQQ/SPY off a 60s step without touching `/ws/gex`, the recorder, or `proxy-tastytrade.js` (the v2 `hooks/useEtfCandles.ts` got the same overlay before v3 turned out to be the live app). `cbedge-v3/src/board/gexCandles/chart.ts` + `settings.ts` add a volume histogram as a bottom-pinned overlay series and re-enable lightweight-charts' dashed last-price line, both as chips in the cogwheel's Layer section, with the wash colours going through `tokenHexAlpha()` after `rgba()` literals failed `check-theme.mjs`.
+
+
+## Tuesday 9/8/2026 — Multi Greek: SPX/SPY/QQQ pinned, one written-in 4th slot (`app/mult-greek/MultGreekClient.tsx`)
+
+Slots 0-2 are now hard-pinned to SPX · SPY · QQQ (`PINNED_TICKERS`) and render as plain labels — `editableTicker` is `ti === CUSTOM_SLOT` (3), and `commitSlot` no-ops for any other index. Hydration from `mg_tickers` reads ONLY index 3; anything an older four-editable line-up stored for the first three is discarded, and the `TICKERS` memo re-imposes the pinned three as a second guard.
+
+The 4th slot can't hold one of the pinned three (two panels on one symbol share a React key and a `strikes[ticker]` entry). Typing SPX/SPY/QQQ no longer bounces back to the previous value — `watchlistFallbackTicker()` resolves it to the first watchlist symbol ALPHABETICALLY that isn't already on the board. Same rule on load for a stored 4th that collides. Watchlist is the live scanner roster via `useScannerTickers()` (`/proxy/scanner-tickers`, roster_overrides), degrading to static `SCANNER_TICKERS`; NDX is the last resort. The fallback is mirrored into a ref so `commitSlot` doesn't re-create itself (and re-render all four panels) when the live roster lands, and hydration runs once off whatever roster is in hand rather than stomping a symbol typed in the meantime. Static/delayed mode untouched.
+
+
 ## Tuesday 9/8/2026 — Economic Calendar added to the universal left rail (`cbedge-v3/src/shell/Shell.tsx`)
 
 `/v3/economic-calendar` had a route, a page, a Next handler and an `ALL_PAGES`/`LIVE_ROUTES` entry — everything except a way to reach it from the rail. Added `{ to: '/economic-calendar', label: 'Econ Cal', icon: '📅' }` to `NAV` directly after Est. Moves (both are pre-open prep; the glyph matches the phone tab in `cbedge-v3/src/mobile/mobileNav.ts`).

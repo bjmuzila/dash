@@ -474,7 +474,19 @@ const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
 // traded contract count, straight off the chain, with no recorder and no
 // day-over-day diff. OI is the settled book's overnight move; VOL is what has
 // actually traded so far today.
-const GREEK_MODES = ["gex", "dex", "chex", "vex", "oi", "vol"] as const;
+//
+// "prem" is the third non-greek lens: NET PREMIUM TRADED at the strike
+// (call premium − put premium, in dollars), the same figure the hover card has
+// always printed on its "Net Prem (C−P)" line — now available as a whole-grid
+// view instead of one cell at a time. It renders like the greeks, not like the
+// count tabs: one signed dollar figure per cell, on the same blue/red ramp
+// (call-premium-heavy blue, put-premium-heavy red), summed by the ⅀ Total
+// column exactly the same way.
+//
+// It is derived from mark × TODAY'S VOLUME, so unlike the greeks it is
+// independent of the OI+Vol / Vol Only basis, and a strike that hasn't traded
+// has no premium to report — those cells print "·" rather than a wall of "+$0".
+const GREEK_MODES = ["gex", "dex", "chex", "vex", "oi", "vol", "prem"] as const;
 type GreekMode = typeof GREEK_MODES[number];
 
 const DATA_MODES = ["oi-vol", "vol-only", "flow"] as const;
@@ -508,7 +520,7 @@ const CHANGE_MODE_LABEL: Record<ChangeMode, string> = {
 //   • strike_growth records only the top STRIKE_GROWTH_TOP_N strikes per side
 //     per expiry per sweep (15 on prod). It is a record of the WALLS, not of
 //     the whole chain — a strike that was never a wall has no history to play.
-//   • Only GEX is recorded. DEX/CHEX/VEX/OI are live-only, so replay pins the
+//   • Only GEX is recorded. DEX/CHEX/VEX/OI/VOL/PREM are live-only, so replay pins the
 //     greek tab to GEX rather than showing zeros in a tab that looks normal.
 //   • Cadence is the recorder's sweep (2 min hot lane / 5 min full roster), not
 //     per-tick, and retention is ~5 trading days.
@@ -2448,6 +2460,9 @@ export default function OptionsChainPage({
           // The greek tabs are pinned to GEX while replay is on regardless.
           dex: 0, chex: 0, vex: 0, oi: 0,
           callOI: 0, putOI: 0, callVol: 0, putVol: 0, callPrem: 0, putPrem: 0,
+          // Premium isn't recorded by the replay sweeps either — and PREM, like
+          // the other non-GEX tabs, is pinned off while replay is on.
+          prem: 0,
         });
       });
       return {
@@ -2647,6 +2662,11 @@ export default function OptionsChainPage({
       // column all read the same number the cell draws from. Unlike OI this
       // needs no recorder: it is live off the chain cell.
       if (greekMode === "vol") return volSideValue(cell, strike, nearestStrike);
+      // PREM tab: net premium traded (calls − puts) in dollars. A strike with
+      // no premium on either side hasn't traded, so it reads as absent ("·")
+      // rather than as a real $0 — same honesty the VOL tab's "·" carries, and
+      // it keeps the untraded wings out of the heat scale and the ⅀ totals.
+      if (greekMode === "prem") return cell.prem || null;
       return cell[greekMode];
     },
     [greekMode, nearestStrike, oiSnapshot],
@@ -3261,10 +3281,10 @@ export default function OptionsChainPage({
                   <DockField label="Greek">
                     <div
                       style={{ opacity: replayOn ? 0.4 : 1, pointerEvents: replayOn ? "none" : undefined }}
-                      title={replayOn ? "GEX only in replay — DEX/CHEX/VEX/OI/VOL are not recorded" : undefined}
+                      title={replayOn ? "GEX only in replay — DEX/CHEX/VEX/OI/VOL/PREM are not recorded" : undefined}
                     >
-                      {/* SIX tiles in a ~316px pane: without `wrap` the last
-                          one (VOL) ran under the panel's right edge, which is
+                      {/* SEVEN tiles in a ~316px pane: without `wrap` the last
+                          one (PREM) ran under the panel's right edge, which is
                           `overflowX: hidden`, so the mode was unclickable. */}
                       <SegGroup
                         wrap

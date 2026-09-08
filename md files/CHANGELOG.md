@@ -1,5 +1,70 @@
 # Changelog
 
+## 2026-09-08 (c) - Options Chain v3: PREM tab - net premium traded, as a whole-grid lens (`components/pages/OptionsChain.tsx`, `lib/calculations/optionChain.ts`)
+
+The chain's hover card has always printed **Net Prem (C-P)** for the cell under
+the pointer. That figure is now its own tab in the **Greek** selector, so the
+same number can be read across every strike and expiry at once instead of one
+cell at a time.
+
+**Selector.** `GREEK_MODES` gains `prem`, rendered as a seventh tile (`PREM`)
+next to OI / VOL. The pane already had `wrap` on that SegGroup - added when VOL
+made it six - so the new tile lands on the second line instead of under the
+panel's clipped right edge.
+
+**What the cell shows.** `callPrem - putPrem` in dollars, formatted by the same
+`fmtMoney()` the greeks use (+$1.24M / -$430.5K). It renders as a greek, not as
+a count tab: one signed figure per cell, the same blue/red ramp (call-premium
+heavy = blue, put-premium heavy = red), the same rank floors, and the same
+per-column heat scale. The SUM Total column adds it up like any other dollar
+series.
+
+**Untraded strikes read as absent.** `valueAt()` returns `null` for a strike
+with zero premium on both sides, so those cells print `.` rather than a wall of
+`+$0`, and they stay out of the column heat scale and the SUM totals - the same
+honesty the VOL tab's `.` already carries.
+
+**Basis-independent.** Premium is mark x TODAY'S volume, so the OI+Vol /
+Vol Only toggle cannot change it or blank it out (unlike the greeks, whose
+contract counts Vol Only zeroes). No new fetch - `parseExpiration()` was already
+computing `callPrem` / `putPrem` for the hover card; the new `prem` field on
+`GreekCell` is just their difference.
+
+**Not available in replay.** The strike_growth recorder stores GEX only, so PREM
+joins DEX/CHEX/VEX/OI/VOL in the set the replay pin greys out; replay frames
+build cells with `prem: 0` and the tab tooltip now names PREM.
+
+## 2026-09-08 (b) - owner.cbedge.net gets BOT, a trade-alert composer for the two Discord bots (`owner-vite/src/pages/Bot.tsx` NEW, `owner-vite/src/lib/nav.ts`, `owner-vite/src/pages/registry.ts`)
+
+New owner page at `/owner/bot`, listed in the sidebar under **Content** next to
+Bzila Alerts - it is a broadcast, which is the same job, not a System page
+because it happens to talk to Discord.
+
+**UI SHELL ONLY.** Nothing posts to Discord yet. `broadcast()` at the bottom of
+`Bot.tsx` appends the composed alert to local state and flips to the Activity
+Feed tab; that function is deliberately the single place the transport gets
+wired, so the fetch does not get scattered through the form the way five call
+sites once hand-rolled the Discord upload dance before `lib/discord.ts`.
+
+**Two bots, one composer.** A "Broadcast To" pill row sits above Asset Class:
+`Bot 1` / `Bot 2` / `Both`, multi-select, each with its own accent (cyan /
+orange) so a feed row shows at a glance which bots it went to. The names in
+`BOTS` are PLACEHOLDERS - rename them, and pick the `id` values deliberately at
+the same time, because `id` is what the server route will key on.
+
+**Form.** Asset class tiles (Notes / Options / Futures / Equity) drive a `SHOWS`
+table that decides which fields render, so Notes is a plain broadcast with just
+the reasoning box and Futures/Equity drop the strike and expiry rather than
+showing dead inputs. Options gets ticker + expiry + strike + Call/Put + price.
+Trade Action pills (Buy / Sell / Trim / Average Down) are hidden for Notes.
+Send is disabled until a bot is selected AND the class-appropriate minimum is
+filled (a ticker, or body text for Notes).
+
+**Theme.** `PageShell` + `Card` from `components/PageCard`, and every colour
+comes from `lib/theme` (`OWNER_THEME`, `rgba()`, `homeInputStyle`). The two
+native controls that would otherwise render an off-theme OS menu use the shared
+`ThemedSelect` (Call/Put) and `ThemedDatePicker` (expiry). No hardcoded hex.
+
 ## 2026-09-08 - ETF candles go from a 2s poll to SSE push
 
 `server-v2/etf-live-candles.js`, `server-v2/api-router.js`,
