@@ -1346,6 +1346,12 @@ async function fetchOptionMarketData(occSymbols, optionParam = 'equity-option') 
         bid,
         ask,
         mark: n(it.mark) || (bid > 0 && ask > 0 ? (bid + ask) / 2 : 0),
+        // LAST TRADED PRICE (2026-09-08, Brandon). Additive: nothing above was
+        // renamed or removed, so every existing consumer of this map is
+        // untouched. It is the one field /v3/chain's Last column needs, and it
+        // is deliberately NOT defaulted to the mark — a contract with no print
+        // today must read as "no trade", not as a price it never traded at.
+        last: n(it.last),
       });
     }
   }
@@ -1413,6 +1419,10 @@ async function fetchChainFull(ticker, expiration = '') {
       bid: md.bid || 0,
       ask: md.ask || 0,
       mark: md.mark || 0,
+      // The last PRINT, not a quote. 0 means the contract has not traded today,
+      // which on a wing strike is the normal case; /v3/chain renders that as a
+      // placeholder rather than a price. See fetchOptionMarketData above.
+      last: md.last || 0,
     };
   }
 

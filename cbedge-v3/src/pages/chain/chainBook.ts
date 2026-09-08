@@ -17,12 +17,13 @@
 //
 // and each side carries exactly:
 //   symbol · streamer-symbol · open-interest / openInterest · volume ·
-//   delta · gamma · theta · vega · implied-volatility · bid · ask · mark
+//   delta · gamma · theta · vega · implied-volatility · bid · ask · mark · last
 //
-// There is NO `last` and no previous close on the wire, which is why this page
-// has no Last and no Net Change column: an invented one would have to be `mark`
-// under a different heading, and two columns showing the same number under
-// different names is worse than one honest column.
+// `last` landed 2026-09-08 (Brandon), the one field this page needed that the
+// proxy was not already mapping. There is still no previous close on the wire,
+// so there is NO Net Change column: it would have to be measured against `mark`
+// under a different heading, and two columns showing the same number under two
+// names is worse than one honest column.
 //
 // ── One request for the front of the board ───────────────────────────────────
 // /api/chains WITHOUT an `expiration` returns the nearest THREE expirations in
@@ -44,6 +45,17 @@ export interface OptionQuote {
   ask: number
   /** Feed mark, falling back to the bid/ask mid. 0 when neither is quoted. */
   mark: number
+  /**
+   * LAST TRADED PRICE — the last print, not a quote.
+   *
+   * Added to the proxy on 2026-09-08 (server-v2/proxy-tastytrade.js →
+   * fetchOptionMarketData maps TastyTrade's `last`, and fetchChainFull writes it
+   * onto each call/put). It is 0 for a contract that has not printed today,
+   * which on a deep wing is most of them — the Last column renders that as the
+   * placeholder rather than as a price, because "no trade" and "traded at zero"
+   * are different facts.
+   */
+  last: number
   volume: number
   oi: number
   /** Decimal, not percent: 0.124 is 12.4%. */
@@ -65,6 +77,12 @@ export interface ChainRow {
 export interface ChainBook {
   expiration: string
   underlying: number
+  /**
+   * When THIS book was pulled off the feed, ms epoch. Per expiry, not per page:
+   * with several expiries open and only the visible ones polling, one clock in
+   * the toolbar would be claiming a freshness the collapsed rows do not have.
+   */
+  fetchedAt: number
   rows: ChainRow[]
   /** Straddle IV at the strike nearest spot, as a decimal. 0 when unquoted. */
   atmIv: number
@@ -90,6 +108,7 @@ const EMPTY_QUOTE: OptionQuote = {
   bid: 0,
   ask: 0,
   mark: 0,
+  last: 0,
   volume: 0,
   oi: 0,
   iv: 0,
@@ -120,6 +139,7 @@ function toQuote(raw: unknown): OptionQuote {
     bid,
     ask,
     mark,
+    last: fin(o['last']) || fin(o['last-price']),
     volume: Math.round(fin(o['volume'])),
     oi: Math.round(fin(o['open-interest'] ?? o['openInterest'])),
     iv: fin(o['implied-volatility']),
@@ -149,6 +169,10 @@ export function parseChainPayload(json: ChainPayload | null): {
 } {
   const underlying = fin(json?.data?.underlyingPrice)
   const items = json?.data?.items ?? []
+  // One stamp for every book in this payload — they came off one response, and
+  // stamping each book as it is built would spread them by a millisecond or two
+  // for no reason.
+  const fetchedAt = Date.now()
   const books: ChainBook[] = []
 
   for (const group of items) {
@@ -178,6 +202,7 @@ export function parseChainPayload(json: ChainPayload | null): {
     books.push({
       expiration,
       underlying,
+      fetchedAt,
       rows,
       atmIv: atmIvOf(rows, underlying),
       callOi,

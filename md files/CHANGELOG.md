@@ -1,5 +1,106 @@
 # Changelog
 
+## 2026-09-08 (g) - v3: `/v3/chain`, the real option chain — editable columns, net greeks, Black-Scholes, last print (`cbedge-v3/src/pages/Chain.tsx` NEW, `cbedge-v3/src/pages/chain/*` NEW, `cbedge-v3/src/App.tsx`, `cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/src/pages/TradersDashboard.tsx`, `app/v3/chain/route.ts` NEW, `server-v2/proxy-tastytrade.js`)
+
+**A new page, not a mode of the old one.** `/v3/options-chain` is a GEX MATRIX —
+one column per expiration, every cell a derived exposure painted by a heat skin.
+It answers "where is the gamma". `/v3/chain` is the BOOK, the thing thinkorswim
+and tastytrade mean by an option chain: calls on the left, puts on the right,
+strikes down the middle, and the quotes themselves in the cells. They share the
+feed (`/api/chains`) and nothing else — and where both compute a net exposure,
+this page uses the matrix's formulas VERBATIM, so one strike cannot read two
+different numbers on two pages.
+
+**The layout.** Wing columns are MIRRORED around the strike, so bid sits against
+bid and a strike reads across in one movement (the call wing renders the
+selected list reversed). The middle is a SPINE: the strike on its own lighter
+plate with a rule down each edge, plus whichever centre columns are on — so the
+eye finds the middle of a fifteen-column table without counting. Zebra row
+shading is on by default; ITM is a translucent wash on each wing (translucent so
+zebra and row-hover still read through it); optional grid lines put a rule
+between every column. All three are toggles in the column popover and persist.
+The spot line is its own row, drawn BETWEEN the two strikes that bracket the
+underlying — the nearest strike is separately marked ATM. Every expiration is a
+`<tbody>` in ONE table, which is what keeps the columns aligned across groups.
+
+**The layout is yours — membership AND order.** 18 wing columns (Bid · Ask ·
+Mark · **Last** · Sprd · Sprd% · IV · Δ · Γ · Θ · ν · Vol · OI · V/OI · Prem ·
+Extr · ITM% · B/E) and 8 centre columns (Net GEX · Net DEX · Net CHEX · Net VEX ·
+Net OI · Net Vol · **Net Prem** · Tot Prem). The popover has an ordered list with
+▲/▼/✕ per column — top of the list is nearest the strike — and a chip row to add
+the rest. Order is a list with arrows and membership is a chip row on purpose: a
+drag-and-drop widget would do both and would be the one control on this page
+that does not work from a keyboard. Five presets seed it (Standard, Greeks,
+Liquidity, **Exposure**, Analysis); everything persists in `localStorage`. The
+last WING column cannot be removed — there would be no cell left to click back
+from. Centre columns have no such floor; empty is their default.
+
+**Net greeks, down the middle.** Net GEX/DEX/CHEX/VEX use the matrix's contract
+basis (OI + volume per side) and its exact formulas, so `/v3/chain` and
+`/v3/options-chain` agree strike for strike. Net premium is
+`(call mark × call vol − put mark × put vol) × 100` — positive means more money
+went into calls at that strike today — with Tot Prem beside it for the gross.
+
+**Black-Scholes as a second greek source.** A labelled Feed | B-S toggle in the
+toolbar, never a silent substitution. On B-S every greek on screen is recomputed
+against the LIVE spot from one model (European, cash-settled, continuous
+dividend yield; `r 4.0%` / `q 1.2%`, named constants at the top of
+`chain/blackScholes.ts` and changed there), and the net exposures follow, because
+a column using the feed's gamma next to a net GEX using the model's would be the
+worst of both. Where the feed sent no IV — a strike the market-data batch missed,
+which also has zeroes for every greek — IV is SOLVED off the mark by bisection
+over [0.1%, 500%]: Newton is faster and diverges exactly on the low-vega wings
+where this is needed, and 60 halvings land inside 1e-16 for about sixty `exp()`
+calls on the handful of strikes that need it. Time to expiry is measured to
+16:00 ET through `Intl`, not by assuming a UTC offset — an hour of error on a
+0DTE contract is a theta wrong by a fifth.
+
+**Last traded price** — the one field the feed was not carrying.
+`server-v2/proxy-tastytrade.js` now maps TastyTrade's `last` in
+`fetchOptionMarketData()` and writes it onto each call/put in `fetchChainFull()`.
+Purely additive: nothing renamed or removed, every existing consumer of
+`/api/chains` untouched. It is deliberately NOT defaulted to the mark — a
+contract with no print today renders as the placeholder, because "no trade" and
+"traded at zero" are different facts. (`close` / `prev-close` were offered and
+declined, so there is still no Net Change column rather than a fake one.)
+
+**Every number says when it was collected.** One clock in the toolbar — ET wall
+time plus a live "Ns ago" that stops ticking when the tab is hidden — and one on
+EACH open expiry row, because only expanded expiries poll and a single page stamp
+would claim a freshness the collapsed rows do not have.
+
+**Expirations are the accordion, not a dropdown.** Several open at once, each
+loads WHEN IT IS OPENED, and each header carries its DTE, a monthly
+(third-Friday) badge, ATM straddle IV, call/put OI, the P/C ratio, the day's
+volume and its own collection time. An open expiry stays offered even when the
+ladder is collapsed to 6/12/30.
+
+**Entry is TWO parallel requests, not a waterfall** (v3 non-negotiable #3).
+`/api/chains` with NO `expiration` returns the nearest three expiries in one
+payload, so the front expiry is painted off the first response; the expirations
+list only decides what the accordion OFFERS. The rail prefetches both URLs on
+hover, and the seed read carries a 15s stale window so the warmed cache entry is
+actually read back instead of being stepped over by a `staleMs: 0` refetch.
+
+**The strike window is bounded by default** — 40 around ATM, with 20/80/All. SPX
+lists hundreds of strikes per expiry; "All" is one click and is an explicit
+choice. That window is what stands in for virtualisation. The page centres itself
+on the spot row once per symbol, measured rather than via `offsetTop` (the scroll
+container is not a positioned ancestor).
+
+REST + a 20s poll (SPX on the ~24/5 feed, everything else RTH-only, hidden tabs
+skipped), no socket, no canvas. Zero theme-baseline entries: no colour literal,
+no Tailwind palette class, every size off the type scale. Follows the board
+symbol like every other v3 page — no ticker box.
+
+Registered in all four places AGENTS.md requires: the page, the `lazy()` route in
+`App.tsx`, the `NAV` entry in `Shell.tsx` (next to Options Chain), and
+`app/v3/chain/route.ts` calling `serveSpaShell("v3")` so a hard refresh on
+`/v3/chain` does not 404. Also added to `ALL_PAGES` / `LIVE_ROUTES` in
+`TradersDashboard.tsx`, the third list AGENTS.md says moves with the other two.
+No phone tab — `src/mobile/mobileNav.ts` already records why a chain at 390px is
+a picture of a page rather than the page.
+
 ## 2026-09-08 (f) - BOT: Discords and their channels are managed from the page, not from env (`server-v2/bot-targets-store.js` NEW, `server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx` NEW, `owner-vite/src/pages/Bot.tsx`)
 
 The numbered-env scheme shipped in (e) models "one Discord, one channel" and

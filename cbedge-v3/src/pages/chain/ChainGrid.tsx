@@ -1,15 +1,19 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// THE GRID — calls | strike | puts, one accordion row per expiration.
+// THE GRID — calls | strike · net | puts, one accordion row per expiration.
 //
 // The shape is the one every desk platform draws, and each part of it is load
 // bearing:
 //
-//  · MIRRORED. The selected columns run outward from the strike on BOTH wings,
-//    so bid sits against bid and the eye reads a strike across in one movement.
-//    The call side renders the list reversed (see chainColumns.ts).
-//  · ITM IS SHADED, not coloured. Calls below spot and puts above it carry a
-//    5%-white wash — translucent, so the row's hover still reads through it. A
-//    saturated fill here would fight the tone colours the columns already use.
+//  · MIRRORED. The selected wing columns run outward from the strike on BOTH
+//    sides, so bid sits against bid and the eye reads a strike across in one
+//    movement. The call side renders the list reversed (see chainColumns.ts).
+//  · THE CENTRE BLOCK IS THE SPINE. Strike, plus whichever NET columns are on
+//    (net GEX, net OI, net premium…). It carries its own plate and a rule down
+//    each edge, so the eye can find the middle of a fifteen-column table
+//    without counting. A net has no side, which is why it cannot live in a wing.
+//  · ITM IS SHADED, not coloured, and the shade is TRANSLUCENT so the zebra and
+//    the row hover still read through it. A saturated fill would fight the tone
+//    colours the columns already use.
 //  · THE SPOT LINE IS A ROW. It is drawn BETWEEN the two strikes that bracket
 //    the underlying rather than on the nearest one, because that is where the
 //    price actually is; the nearest strike is separately marked ATM.
@@ -22,12 +26,27 @@
 // stands in for virtualisation, and it is why "All" is an explicit choice.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { memo, useMemo, type ReactNode } from 'react'
+import { memo, useMemo, type CSSProperties, type ReactNode } from 'react'
 import { CHAIN, T, alpha } from '@/design/theme'
-import type { ChainBook, ChainRow, ExpiryMeta } from './chainBook'
-import type { CellCtx, ChainColumn, ChainSide } from './chainColumns'
+import { bsGreeks, impliedVol, yearsToExpiry } from './blackScholes'
+import type { ChainBook, ChainRow, ExpiryMeta, OptionQuote } from './chainBook'
+import type { CellCtx, CenterColumn, ChainColumn, ChainSide } from './chainColumns'
 
 const STRIKE_W = 84
+
+/** Which greeks the grid draws — and, through the centre block, which greeks
+ *  every net exposure is computed from. */
+export type GreekSource = 'feed' | 'bs'
+
+export interface ChainDisplay {
+  /** Alternate row wash. On by default: it is what makes a fifteen-column row
+   *  trackable across the full width. */
+  zebra: boolean
+  /** The in-the-money wash on each wing. */
+  itm: boolean
+  /** Vertical rules between every column, not just around the centre block. */
+  lines: boolean
+}
 
 export interface ChainGridProps {
   expiries: ExpiryMeta[]
@@ -35,11 +54,26 @@ export interface ChainGridProps {
   open: string[]
   pending: string[]
   columns: ChainColumn[]
+  center: CenterColumn[]
   spot: number
   /** Rows drawn per expiry, centred on spot. 0 = every listed strike. */
   strikeWindow: number
+  greekSource: GreekSource
+  display: ChainDisplay
   onToggle: (expiration: string) => void
 }
+
+// ── Plates ───────────────────────────────────────────────────────────────────
+// The centre block is a lighter grey than the rows and the net columns a
+// lighter grey again, so the spine reads as one object with the strike at its
+// head. All translucent, so zebra and hover survive underneath.
+const STRIKE_BG = alpha(T.text, 0.075)
+const CENTER_BG = alpha(T.text, 0.038)
+const ZEBRA_BG = alpha(T.text, 0.028)
+const ITM_BG = alpha(T.text, 0.05)
+const ROW_LINE = alpha(T.border, 0.6)
+const COL_LINE = alpha(T.border, 0.45)
+const SPINE = `1px solid ${T.border}`
 
 export function ChainGrid({
   expiries,
@@ -47,13 +81,19 @@ export function ChainGrid({
   open,
   pending,
   columns,
+  center,
   spot,
   strikeWindow,
+  greekSource,
+  display,
   onToggle,
 }: ChainGridProps) {
   const wingCols = columns.length
-  const totalCols = wingCols * 2 + 1
-  const totalWidth = columns.reduce((sum, c) => sum + c.width, 0) * 2 + STRIKE_W
+  const totalCols = wingCols * 2 + 1 + center.length
+  const totalWidth =
+    columns.reduce((sum, c) => sum + c.width, 0) * 2 +
+    STRIKE_W +
+    center.reduce((sum, c) => sum + c.width, 0)
   // The call wing reads outward from the strike, so its columns are the same
   // list, backwards. Computed once rather than per group.
   const callColumns = useMemo(() => [...columns].reverse(), [columns])
@@ -68,6 +108,9 @@ export function ChainGrid({
           <col key={`c-${c.key}`} style={{ width: c.width }} />
         ))}
         <col style={{ width: STRIKE_W }} />
+        {center.map((c) => (
+          <col key={`n-${c.key}`} style={{ width: c.width }} />
+        ))}
         {columns.map((c) => (
           <col key={`p-${c.key}`} style={{ width: c.width }} />
         ))}
@@ -83,11 +126,11 @@ export function ChainGrid({
             Calls
           </th>
           <th
-            colSpan={1}
+            colSpan={1 + center.length}
             className="sticky top-0 z-20 border-b border-line bg-surface2 text-3xs font-bold uppercase tracking-[0.18em]"
-            style={{ height: 22, color: T.cyan }}
+            style={{ height: 22, color: T.cyan, borderLeft: SPINE, borderRight: SPINE }}
           >
-            Strike
+            {center.length ? 'Strike · Net' : 'Strike'}
           </th>
           <th
             colSpan={wingCols}
@@ -98,17 +141,39 @@ export function ChainGrid({
           </th>
         </tr>
         <tr>
-          {callColumns.map((c) => (
-            <HeadCell key={`ch-${c.key}`} col={c} />
+          {callColumns.map((c, i) => (
+            <HeadCell key={`ch-${c.key}`} col={c} rule={display.lines && i > 0} />
           ))}
           <th
-            className="sticky z-20 border-b border-line bg-surface px-1 text-center text-2xs font-semibold text-fg"
-            style={{ top: 22, height: 24 }}
+            className="sticky z-20 border-b border-line px-1 text-center text-2xs font-semibold text-fg"
+            style={{
+              top: 22,
+              height: 24,
+              background: T.panel,
+              borderLeft: SPINE,
+              borderRight: center.length ? undefined : SPINE,
+            }}
           >
             &nbsp;
           </th>
-          {columns.map((c) => (
-            <HeadCell key={`ph-${c.key}`} col={c} />
+          {center.map((c, i) => (
+            <th
+              key={`nh-${c.key}`}
+              title={c.title}
+              className="sticky z-20 border-b border-line px-2 text-right text-2xs font-semibold text-muted"
+              style={{
+                top: 22,
+                height: 24,
+                background: T.panel,
+                borderLeft: display.lines && i > 0 ? `1px solid ${COL_LINE}` : undefined,
+                borderRight: i === center.length - 1 ? SPINE : undefined,
+              }}
+            >
+              {c.label}
+            </th>
+          ))}
+          {columns.map((c, i) => (
+            <HeadCell key={`ph-${c.key}`} col={c} rule={display.lines && i > 0} />
           ))}
         </tr>
       </thead>
@@ -132,7 +197,10 @@ export function ChainGrid({
                 spot={spot > 0 ? spot : book.underlying}
                 columns={columns}
                 callColumns={callColumns}
+                center={center}
                 strikeWindow={strikeWindow}
+                greekSource={greekSource}
+                display={display}
                 colSpan={totalCols}
               />
             ) : null}
@@ -150,12 +218,12 @@ export function ChainGrid({
   )
 }
 
-function HeadCell({ col }: { col: ChainColumn }) {
+function HeadCell({ col, rule }: { col: ChainColumn; rule: boolean }) {
   return (
     <th
       title={col.title}
       className="sticky z-20 border-b border-line bg-surface px-2 text-right text-2xs font-semibold text-muted"
-      style={{ top: 22, height: 24 }}
+      style={{ top: 22, height: 24, borderLeft: rule ? `1px solid ${COL_LINE}` : undefined }}
     >
       {col.label}
     </th>
@@ -226,6 +294,16 @@ const ExpiryHeaderRow = memo(function ExpiryHeaderRow({
                 <span title="Put/call open-interest ratio for this expiry">P/C {pcr.toFixed(2)}</span>
               )}
               <span>Vol {compact(book.callVol + book.putVol)}</span>
+              {/* THIS expiry's own collection time. Per-expiry rather than one
+                  page clock: only the expanded rows poll, so a single stamp
+                  would claim a freshness the others do not have. */}
+              <span
+                className="tabular"
+                title={`This expiry's data was collected at ${etClock(book.fetchedAt)} ET`}
+                style={{ opacity: 0.8 }}
+              >
+                ⟳ {etClock(book.fetchedAt)}
+              </span>
             </span>
           )}
         </button>
@@ -241,6 +319,40 @@ function compact(v: number): string {
   return String(Math.round(v))
 }
 
+/** Wall clock in ET — the session's own timezone, not the reader's. */
+export function etClock(ms: number): string {
+  if (!ms) return '—'
+  try {
+    return new Date(ms).toLocaleTimeString('en-US', {
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+  } catch {
+    return '—'
+  }
+}
+
+// ── Black-Scholes substitution ───────────────────────────────────────────────
+// Applied at the ROW, once, so the wing cells and the centre block's net
+// exposures are computed from the same greeks. A column that quietly used the
+// feed's gamma while the net GEX beside it used the model's would be the worst
+// of both.
+
+function modelQuote(q: OptionQuote, side: ChainSide, S: number, K: number, T: number): OptionQuote {
+  if (!q.live) return q
+  // No feed IV — solve it off the mark. This is the case the toggle exists for:
+  // a strike the market-data batch missed has zeroes for every greek AND for
+  // IV, and without this it would stay blank under Black-Scholes too.
+  const iv = q.iv > 0 ? q.iv : impliedVol(side, S, K, T, q.mark)
+  if (!(iv > 0)) return q
+  const g = bsGreeks(side, S, K, T, iv)
+  if (!g.gamma && !g.delta) return q
+  return { ...q, iv, delta: g.delta, gamma: g.gamma, theta: g.theta, vega: g.vega }
+}
+
 // ── The strikes ──────────────────────────────────────────────────────────────
 
 interface StrikeRowsProps {
@@ -248,16 +360,35 @@ interface StrikeRowsProps {
   spot: number
   columns: ChainColumn[]
   callColumns: ChainColumn[]
+  center: CenterColumn[]
   strikeWindow: number
+  greekSource: GreekSource
+  display: ChainDisplay
   colSpan: number
 }
 
-function StrikeRows({ book, spot, columns, callColumns, strikeWindow, colSpan }: StrikeRowsProps) {
+function StrikeRows({
+  book,
+  spot,
+  columns,
+  callColumns,
+  center,
+  strikeWindow,
+  greekSource,
+  display,
+  colSpan,
+}: StrikeRowsProps) {
   const rows = useMemo(() => windowRows(book.rows, spot, strikeWindow), [book.rows, spot, strikeWindow])
   // The strike the ATM marker lands on, and the index the spot line is drawn
-  // above. Both are derived from the WINDOWED rows so a scrolled-away spot does
-  // not leave a marker pointing at nothing.
+  // above. Both derived from the WINDOWED rows so a scrolled-away spot does not
+  // leave a marker pointing at nothing.
   const { atmStrike, spotIndex } = useMemo(() => locateSpot(rows, spot), [rows, spot])
+  // Re-measured whenever the book reloads, so theta on a 0DTE contract keeps
+  // shortening through the session instead of freezing at the value it opened on.
+  const tYears = useMemo(
+    () => (greekSource === 'bs' ? yearsToExpiry(book.expiration) : 0),
+    [book.expiration, book.fetchedAt, greekSource],
+  )
 
   if (!rows.length) {
     return (
@@ -279,9 +410,14 @@ function StrikeRows({ book, spot, columns, callColumns, strikeWindow, colSpan }:
         key={`${book.expiration}-${row.strike}`}
         row={row}
         spot={spot}
+        tYears={tYears}
         atm={row.strike === atmStrike}
+        zebra={display.zebra && i % 2 === 1}
+        display={display}
+        greekSource={greekSource}
         columns={columns}
         callColumns={callColumns}
+        center={center}
       />,
     )
   })
@@ -351,65 +487,130 @@ function SpotRow({ spot, colSpan }: { spot: number; colSpan: number }) {
 interface StrikeRowProps {
   row: ChainRow
   spot: number
+  tYears: number
   atm: boolean
+  zebra: boolean
+  display: ChainDisplay
+  greekSource: GreekSource
   columns: ChainColumn[]
   callColumns: ChainColumn[]
+  center: CenterColumn[]
 }
 
-const StrikeRow = memo(function StrikeRow({ row, spot, atm, columns, callColumns }: StrikeRowProps) {
-  const callItm = spot > 0 && row.strike < spot
-  const putItm = spot > 0 && row.strike > spot
+const StrikeRow = memo(function StrikeRow({
+  row,
+  spot,
+  tYears,
+  atm,
+  zebra,
+  display,
+  greekSource,
+  columns,
+  callColumns,
+  center,
+}: StrikeRowProps) {
+  // ONE substitution per row, shared by both wings and the centre block.
+  const eff = useMemo<ChainRow>(() => {
+    if (greekSource !== 'bs' || !(spot > 0) || !(tYears > 0)) return row
+    return {
+      strike: row.strike,
+      call: modelQuote(row.call, 'call', spot, row.strike, tYears),
+      put: modelQuote(row.put, 'put', spot, row.strike, tYears),
+    }
+  }, [row, greekSource, spot, tYears])
+
+  const callItm = display.itm && spot > 0 && row.strike < spot
+  const putItm = display.itm && spot > 0 && row.strike > spot
+  const lines = display.lines
+
   return (
-    <tr className="hover:bg-raised">
-      {callColumns.map((c) => (
-        <Cell key={`c-${c.key}`} col={c} row={row} side="call" spot={spot} itm={callItm} />
+    <tr className="hover:bg-raised" style={zebra ? { background: ZEBRA_BG } : undefined}>
+      {callColumns.map((c, i) => (
+        <Cell
+          key={`c-${c.key}`}
+          col={c}
+          q={eff.call}
+          strike={row.strike}
+          side="call"
+          spot={spot}
+          itm={callItm}
+          rule={lines && i > 0}
+        />
       ))}
       <td
-        className="border-b px-1 text-center text-xs font-bold"
+        className="px-1 text-center text-xs font-bold"
         style={{
-          borderBottomColor: alpha(T.border, 0.6),
+          borderBottom: `1px solid ${ROW_LINE}`,
+          borderLeft: SPINE,
+          borderRight: center.length ? (lines ? `1px solid ${COL_LINE}` : undefined) : SPINE,
           color: atm ? T.cyan : CHAIN.strike,
-          background: atm ? alpha(T.cyan, 0.1) : undefined,
+          background: atm ? alpha(T.cyan, 0.14) : STRIKE_BG,
         }}
       >
         {Number.isInteger(row.strike) ? row.strike.toFixed(0) : row.strike.toFixed(2)}
       </td>
-      {columns.map((c) => (
-        <Cell key={`p-${c.key}`} col={c} row={row} side="put" spot={spot} itm={putItm} />
+      {center.map((c, i) => {
+        const v = c.read(eff, spot)
+        const empty = v === null || !Number.isFinite(v)
+        return (
+          <td
+            key={`n-${c.key}`}
+            className="px-2 text-right"
+            style={{
+              borderBottom: `1px solid ${ROW_LINE}`,
+              borderRight: i === center.length - 1 ? SPINE : lines ? `1px solid ${COL_LINE}` : undefined,
+              background: CENTER_BG,
+              color: empty ? CHAIN.none : (c.tone?.(v as number) ?? CHAIN.ink),
+            }}
+          >
+            {empty ? '·' : c.fmt(v as number)}
+          </td>
+        )
+      })}
+      {columns.map((c, i) => (
+        <Cell
+          key={`p-${c.key}`}
+          col={c}
+          q={eff.put}
+          strike={row.strike}
+          side="put"
+          spot={spot}
+          itm={putItm}
+          rule={lines && i > 0}
+        />
       ))}
     </tr>
   )
 })
 
-/** ITM wash. Translucent so the row's hover still reads through it. */
-const ITM_BG = alpha(T.text, 0.05)
-
 function Cell({
   col,
-  row,
+  q,
+  strike,
   side,
   spot,
   itm,
+  rule,
 }: {
   col: ChainColumn
-  row: ChainRow
+  q: OptionQuote
+  strike: number
   side: ChainSide
   spot: number
   itm: boolean
+  rule: boolean
 }) {
-  const ctx: CellCtx = { strike: row.strike, spot, side }
-  const q = side === 'call' ? row.call : row.put
+  const ctx: CellCtx = { strike, spot, side }
   const v = col.read(q, ctx)
   const empty = v === null || !Number.isFinite(v)
+  const style: CSSProperties = {
+    borderBottom: `1px solid ${ROW_LINE}`,
+    color: empty ? CHAIN.none : (col.tone?.(v as number, ctx) ?? CHAIN.ink),
+  }
+  if (itm) style.background = ITM_BG
+  if (rule) style.borderLeft = `1px solid ${COL_LINE}`
   return (
-    <td
-      className="border-b px-2 text-right"
-      style={{
-        borderBottomColor: alpha(T.border, 0.6),
-        background: itm ? ITM_BG : undefined,
-        color: empty ? CHAIN.none : (col.tone?.(v as number, ctx) ?? CHAIN.ink),
-      }}
-    >
+    <td className="px-2 text-right" style={style}>
       {empty ? '·' : col.fmt(v as number, ctx)}
     </td>
   )
