@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-09-08 - Multi Greek: SPX / SPY / QQQ pinned, one written-in 4th slot
+
+`app/mult-greek/MultGreekClient.tsx`.
+
+The board went to four freely-editable slots a while back. That let the left
+three columns wander, and the page is read ACROSS - a board whose frame of
+reference changes session to session is no longer the same board. Reverted to a
+fixed frame with one free slot, and the collision rule now resolves off the
+watchlist instead of refusing the edit.
+
+WHAT CHANGED.
+
+  - `PINNED_TICKERS = ["SPX","SPY","QQQ"]` and `CUSTOM_SLOT = 3` added.
+    `DEFAULT_TICKERS` is now those three plus NDX in the free slot.
+  - Slots 0-2 render as plain labels: `editableTicker` is `ti === CUSTOM_SLOT`.
+    Only the 4th panel header carries a ticker box.
+  - `commitSlot(i)` is a no-op for `i !== CUSTOM_SLOT`.
+  - Hydration from `mg_tickers` reads ONLY index 3. Whatever an older line-up
+    stored for slots 0-2 is discarded and the pinned three are re-imposed, so
+    an existing board comes back with SPX / SPY / QQQ on the left. The legacy
+    `mg_custom_ticker` carry-over still lands in slot 3, unchanged.
+  - The `TICKERS` memo re-imposes the pinned three as well - belt and braces,
+    so no path into `slotTickers` can move the left columns.
+
+THE COLLISION RULE. The 4th slot can't hold one of the pinned three: two panels
+on one symbol share a React key AND a `strikes[ticker]` entry - one board, two
+cards, one set of data. Typing SPX / SPY / QQQ into the box no longer bounces
+back to the previous value; it falls through to the FIRST symbol in the
+watchlist ALPHABETICALLY that isn't already on the board
+(`watchlistFallbackTicker()`). Same rule applied on load to a stored 4th that
+collides.
+
+The watchlist is the live scanner roster via `useScannerTickers()` (server
+`roster_overrides` behind `/proxy/scanner-tickers`), degrading to the static
+`SCANNER_TICKERS` list, so the fallback follows the roster the owner actually
+maintains rather than a hardcoded pick. NDX is the last resort if the roster
+somehow comes back empty. The fallback is mirrored into a ref so `commitSlot`
+doesn't re-create itself - and therefore re-render all four panels - when the
+live roster lands. Hydration deliberately runs once off whatever roster is in
+hand at mount; re-running it on the live roster would stomp a symbol typed in
+the meantime.
+
+Static/delayed mode is untouched - it was already fixed to `STATIC_TICKERS`.
+
+
 ## 2026-09-08 - v3 GEX Candles: the live price, for symbols the socket doesn't carry
 
 `cbedge-v3/src/board/gexCandles/candles.ts`,

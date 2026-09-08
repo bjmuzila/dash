@@ -14,6 +14,7 @@ import { HEAT_SKINS, isHeatSkin, skinMetricBg, skinRankBg, levelFillBg, type Hea
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, ToggleTile, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockField } from "@/components/shared/DockToolbar";
 import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
+import { useScannerTickers } from "@/lib/useScannerTickers";
 
 // The toolbar 🔍 opens the /analytics Ticker Lookup card — the SAME component
 // that page mounts. One page-level button (the card has its own symbol picker,
@@ -26,14 +27,47 @@ const TickerLookupCard = lazy(() =>
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-// Four SLOTS, every one of them user-configurable — each panel header carries
-// its own ticker box. These are only what an untouched board loads with.
-const DEFAULT_TICKERS = ["SPX", "SPY", "QQQ", "NDX"] as const;
+// Four SLOTS. The first THREE are PINNED — SPX · SPY · QQQ, in that order, no
+// matter what. They are the board's fixed frame of reference: the whole page is
+// read ACROSS, and a board whose left three columns move is no longer the same
+// board session to session. Only the 4th slot is user-configurable, and only it
+// carries a ticker box in its panel header.
+const PINNED_TICKERS = ["SPX", "SPY", "QQQ"] as const;
+// The one editable slot. Index into the line-up, and the only `i` commitSlot
+// will act on.
+const CUSTOM_SLOT = PINNED_TICKERS.length; // 3
+// What an untouched board loads with: the three pinned + NDX in the free slot.
+const DEFAULT_TICKERS = [...PINNED_TICKERS, "NDX"] as const;
 // The delayed/static snapshot recorder only carries these three, so static mode
 // ignores the slots entirely and is not editable.
 const STATIC_TICKERS = ["SPX", "SPY", "QQQ"] as const;
 type Ticker = string;
-// The whole line-up, as a JSON array of 4 symbols.
+
+const PINNED_SET = new Set<string>(PINNED_TICKERS);
+
+/**
+ * The 4th slot can never be one of the pinned three — two panels on one symbol
+ * would share a React key AND a `strikes[ticker]` entry (one board, two cards,
+ * one set of data). When a stored or typed value collides, the slot falls back
+ * to the FIRST symbol in the watchlist ALPHABETICALLY that isn't already on the
+ * board, rather than to a hardcoded pick, so the fallback follows the roster the
+ * owner actually maintains.
+ *
+ * `watchlist` is the live scanner universe (server roster), which degrades to
+ * the static build-time list — it is never empty in practice, but NDX is kept as
+ * the last resort so this can't return "".
+ */
+function watchlistFallbackTicker(watchlist: readonly string[]): string {
+  const pick = [...watchlist]
+    .map((t) => String(t ?? "").trim().toUpperCase())
+    .filter(Boolean)
+    .filter((t) => !PINNED_SET.has(t))
+    .sort((a, b) => a.localeCompare(b))[0];
+  return pick || "NDX";
+}
+// The whole line-up, as a JSON array of 4 symbols. Still written and read as an
+// array (older browsers hold one), but only index 3 is honoured — the first
+// three are re-imposed from PINNED_TICKERS on every load.
 const TICKERS_KEY = "mg_tickers";
 // Superseded by TICKERS_KEY: it held the ONE editable slot (the 4th) from when
 // the first three were fixed. Read once, to carry an existing user's choice
@@ -1960,13 +1994,21 @@ export function MultGreekClient({
   }, []);
 
   // ── The four ticker slots ──────────────────────────────────────────────────
-  // Every panel is editable now, not just the 4th: each header carries its own
-  // ticker box. The line-up is persisted per browser as one array, so the board
-  // comes back the way it was left; DEFAULT_TICKERS is only the cold start.
+  // Slots 0-2 are PINNED to SPX · SPY · QQQ and are neither editable nor
+  // restorable from storage — only slot 3 is written in. Its choice is persisted
+  // per browser (still as the whole array, so an older stored line-up keeps
+  // working; the pinned three are simply re-imposed on top of it).
   const [slotTickers, setSlotTickers] = useState<string[]>(() => [...DEFAULT_TICKERS]);
   // What is TYPED in each box — uncommitted until Enter or blur, which is why
   // it is separate state from the line-up the page actually loads.
   const [slotInputs, setSlotInputs] = useState<string[]>(() => [...DEFAULT_TICKERS]);
+  // The watchlist (live server roster, static list until it lands) that the 4th
+  // slot falls back through alphabetically when a collision has to be resolved.
+  const { tickers: watchlist } = useScannerTickers();
+  const watchlistFallback = useMemo(() => watchlistFallbackTicker(watchlist), [watchlist]);
+  // Read by commitSlot, which must not re-create itself when the roster arrives.
+  const watchlistFallbackRef = useRef<string>(watchlistFallback);
+  useEffect(() => { watchlistFallbackRef.current = watchlistFallback; }, [watchlistFallback]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -1974,35 +2016,30 @@ export function MultGreekClient({
       const raw = window.localStorage.getItem(TICKERS_KEY);
       const parsed = raw ? JSON.parse(raw) : null;
       if (Array.isArray(parsed)) {
-        // Per slot, not wholesale: a stored array that is short, long or has a
-        // junk entry still contributes the slots it got right, and the rest
-        // fall back to the default rather than the board coming up empty.
-        parsed.slice(0, DEFAULT_TICKERS.length).forEach((v, i) => {
-          const t = String(v ?? "").trim().toUpperCase();
-          if (t) next[i] = t;
-        });
+        // ONLY the custom slot is restored. Anything stored for slots 0-2 —
+        // including line-ups saved before they were pinned — is discarded, so
+        // SPX · SPY · QQQ always come back in that order.
+        const t = String(parsed[CUSTOM_SLOT] ?? "").trim().toUpperCase();
+        if (t) next[CUSTOM_SLOT] = t;
       } else {
         // First run on the new key — carry the old single-slot choice into the
         // 4th slot, which is where it used to live.
         const legacy = window.localStorage.getItem(LEGACY_CUSTOM_TICKER_KEY);
         const t = String(legacy ?? "").trim().toUpperCase();
-        if (t) next[DEFAULT_TICKERS.length - 1] = t;
+        if (t) next[CUSTOM_SLOT] = t;
       }
-      // Two panels on one symbol would share a React key AND a `strikes[ticker]`
-      // entry — one board, two cards, one set of data. Drop a duplicate back to
-      // whatever that slot's default is, and if THAT collides too, leave the
-      // stored value: a visibly wrong slot the user can retype beats a silent
-      // swap of a symbol they chose.
-      const seen = new Set<string>();
-      for (let i = 0; i < next.length; i++) {
-        if (!seen.has(next[i])) { seen.add(next[i]); continue; }
-        const fallback = DEFAULT_TICKERS[i];
-        if (!seen.has(fallback)) { next[i] = fallback; seen.add(fallback); }
-        else seen.add(next[i]);
-      }
+      // A stored 4th that IS one of the pinned three (from an older board where
+      // any slot could hold anything) would put two panels on one symbol — they
+      // would share a React key AND a `strikes[ticker]` entry. Fall through to
+      // the watchlist, alphabetically.
+      if (PINNED_SET.has(next[CUSTOM_SLOT])) next[CUSTOM_SLOT] = watchlistFallbackTicker(watchlist);
       setSlotTickers(next);
       setSlotInputs([...next]);
     } catch { /* ignore */ }
+    // Hydration runs ONCE, off whatever roster is in hand at mount (the static
+    // list, if the proxy hasn't answered yet) — re-running it when the live
+    // roster lands would stomp a symbol the user typed in the meantime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // Normalised once so the memo below can key off a string rather than the
   // caller's array identity.
@@ -2019,7 +2056,12 @@ export function MultGreekClient({
     if (tickerOverrideKey) return tickerOverrideKey.split(",");
     // Static/delayed mode has only the three recorded tickers to show.
     if (isStatic) return [...STATIC_TICKERS] as string[];
-    return slotKey.split(",");
+    // Belt and braces: the pinned three are re-imposed here as well, so the
+    // board's left three columns are SPX · SPY · QQQ no matter what path put a
+    // value into `slotTickers`.
+    const out = slotKey.split(",");
+    PINNED_TICKERS.forEach((t, i) => { out[i] = t; });
+    return out;
   }, [slotKey, isStatic, tickerOverrideKey]);
   // Both halves are mirrored into refs so `commitSlot` can read the CURRENT
   // line-up and the CURRENT box text without either being a dependency — it is
@@ -2032,18 +2074,21 @@ export function MultGreekClient({
   const setSlotInput = useCallback((i: number, v: string) => {
     setSlotInputs(prev => prev.map((x, j) => (j === i ? v : x)));
   }, []);
-  /** Enter / blur on a slot's box. */
+  /** Enter / blur on a slot's box. Only the 4th slot has one. */
   const commitSlot = useCallback((i: number) => {
+    // Slots 0-2 are pinned — nothing to commit, and nothing to snap back.
+    if (i !== CUSTOM_SLOT) return;
     const cur = slotTickersRef.current;
     const typed = (slotInputsRef.current[i] ?? "").trim().toUpperCase();
     // Empty box = "put it back", not "remove the panel". The board is four
     // cards wide and stays that way.
     const want = typed || DEFAULT_TICKERS[i];
-    // Refuse a symbol another slot already holds: two panels on one ticker
-    // would share a React key AND a `strikes[ticker]` entry — one board, two
-    // cards, one set of data.
-    const taken = cur.some((t, j) => j !== i && t === want);
-    const resolved = taken ? cur[i] : want;
+    // SPX / SPY / QQQ are already on the board in the pinned slots. Typing one
+    // here would put two panels on one symbol — they'd share a React key AND a
+    // `strikes[ticker]` entry (one board, two cards, one set of data). Instead
+    // of refusing the edit, fall through to the watchlist ALPHABETICALLY: the
+    // first roster symbol that isn't one of the pinned three.
+    const resolved = PINNED_SET.has(want) ? watchlistFallbackRef.current : want;
     // Snap the box to what the panel will actually SHOW, so a refused or
     // defaulted commit can't leave text disagreeing with the card under it.
     setSlotInputs(prev => (prev[i] === resolved ? prev : prev.map((x, j) => (j === i ? resolved : x))));
@@ -3201,10 +3246,11 @@ export function MultGreekClient({
           <TickerPanel
             key={ticker}
             ticker={ticker}
-            // EVERY slot is user-configurable — as long as the caller hasn't
-            // pinned the line-up (`tickers`) and we're on live data (the
-            // delayed recorder only carries STATIC_TICKERS).
-            editableTicker={!isStatic && !tickerOverrideKey}
+            // ONLY the 4th slot is user-configurable — SPX · SPY · QQQ are
+            // pinned and render as plain labels. And only when the caller hasn't
+            // pinned the line-up (`tickers`) and we're on live data (the delayed
+            // recorder only carries STATIC_TICKERS).
+            editableTicker={ti === CUSTOM_SLOT && !isStatic && !tickerOverrideKey}
             tickerInput={slotInputs[ti] ?? ticker}
             onTickerInputChange={(v) => setSlotInput(ti, v)}
             onCommitTicker={() => commitSlot(ti)}
