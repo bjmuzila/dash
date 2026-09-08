@@ -367,3 +367,24 @@ services:
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8086:8086"
+
+  # demo.cbedge.net — the partner demo of the owner console.
+  #
+  # Static and inert on purpose: one pre-built index.html served by nginx, no
+  # backend, no database, no env, no compose network dependency. Every customer,
+  # revenue and visitor record inside it is synthetic, so there is nothing here
+  # that a leak of the page could expose. It cannot be pointed at production —
+  # there is no fetch layer in it to repoint.
+  #
+  # Access control is Cloudflare Access in FRONT of this container (one-time-PIN
+  # policy on an email allowlist), not code inside it. Revoke by removing the
+  # email from the policy; nothing here needs rebuilding.
+  demo-web:
+    build:
+      context: ./demo-owner
+    image: demo-web:latest
+    container_name: demo-web
+    restart: unless-stopped
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8087:8087"

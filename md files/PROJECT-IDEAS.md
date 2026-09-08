@@ -16,7 +16,7 @@ _(none yet)_
 
 ## Trading Logic
 
-_(none yet)_
+1. Finish historical Estimated Moves — get all numbers set up and calculated, with the formulas documented for how each is calculated
 
 ## Admin / Analytics
 

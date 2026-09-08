@@ -44,7 +44,7 @@ Run it after editing.
 **b. Add the service** to the VPS `docker-compose.yml` (see `compose.snippet.yml`):
 
 ```yaml
-  demo-owner:
+  demo-web:
     build: ./demo-owner
     container_name: demo-web
     restart: unless-stopped
@@ -63,7 +63,7 @@ Run it after editing.
 Then:
 
 ```bash
-cd /opt/dashboard && git pull && docker compose build demo-owner && docker compose up -d demo-owner
+cd /opt/dashboard && git pull && docker compose build demo-web && docker compose up -d demo-web
 sudo systemctl restart cloudflared
 ```
 
@@ -118,7 +118,7 @@ Free plan covers up to 50 Access users, so this costs nothing.
 ## 5. Taking it down
 
 ```bash
-cd /opt/dashboard && docker compose stop demo-owner && docker compose rm -f demo-owner
+cd /opt/dashboard && docker compose stop demo-web && docker compose rm -f demo-web
 ```
 
 Then delete the Access application and the tunnel ingress rule.
