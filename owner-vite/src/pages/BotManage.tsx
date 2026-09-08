@@ -52,6 +52,21 @@ type Draft = {
   clear: Partial<Record<RouteKey, boolean>>;
 };
 
+/**
+ * Discord resolves mentions by ID, never by name — "@Bzila Analysis" typed here
+ * posts inert text and pings nobody. The server rejects an unusable ping on
+ * save; this mirrors the same rule so the field says so while it is being
+ * typed, which is where the mistake actually happens.
+ */
+function pingProblem(v: string): string | null {
+  const t = v.trim();
+  if (!t) return null;
+  if (/^<@&\d{15,25}>$/.test(t) || /^<@!?\d{15,25}>$/.test(t)) return null;
+  if (/^@(everyone|here)$/.test(t)) return null;
+  if (/^\d{15,25}$/.test(t)) return null; // bare id — server wraps it as a role
+  return "Discord needs the role ID, not the name — right-click the role → Copy Role ID, then use <@&ID>";
+}
+
 const labelStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 800,
@@ -160,15 +175,16 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
     post({ action: "delete", id: d.id }, `del:${d.id}`);
   }
 
-  async function test(d: DiscordRow, cls: string) {
+  async function test(d: DiscordRow, cls: string, withPing = false) {
     const tag = `${d.id}:${cls}`;
+    if (withPing && !window.confirm("This posts a test message that actually tags the role. Everyone in it gets a notification. Continue?")) return;
     setBusy(`test:${tag}`);
     setTestMsg((p) => ({ ...p, [tag]: "" }));
     try {
       const r = await fetch("/api/bot-alert/test", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: d.id, assetClass: cls === "default" ? "notes" : cls }),
+        body: JSON.stringify({ id: d.id, assetClass: cls === "default" ? "notes" : cls, withPing }),
       });
       const j = await r.json();
       setTestMsg((p) => ({ ...p, [tag]: j?.ok ? "✓ posted" : `✕ ${j?.result?.error || j?.error || "failed"}` }));
@@ -319,6 +335,8 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                     const cur = d.routes[row.key];
                     const tag = `${d.id}:${row.key}`;
                     const cleared = !!dr.clear[row.key];
+                    const pingVal = dr.pings[row.key] ?? cur?.ping ?? "";
+                    const pingErr = pingProblem(pingVal);
                     return (
                       <div
                         key={row.key}
@@ -350,11 +368,17 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                         />
 
                         <input
-                          value={dr.pings[row.key] ?? cur?.ping ?? ""}
+                          value={pingVal}
                           onChange={(e) => patch(d, { pings: { ...dr.pings, [row.key]: e.target.value } })}
                           placeholder="Ping — <@&roleid>"
                           spellCheck={false}
-                          style={{ ...homeInputStyle, flex: "1 1 150px", minWidth: 130, fontSize: 12 }}
+                          style={{
+                            ...homeInputStyle,
+                            flex: "1 1 150px",
+                            minWidth: 130,
+                            fontSize: 12,
+                            border: `1px solid ${pingErr ? rgba(OWNER_THEME.red, 0.6) : OWNER_THEME.border}`,
+                          }}
                         />
 
                         <button
@@ -367,6 +391,16 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                           {busy === `test:${tag}` ? "…" : "Test"}
                         </button>
 
+                        <button
+                          type="button"
+                          onClick={() => test(d, row.key, true)}
+                          disabled={busy != null || !cur || !cur.ping}
+                          title={cur?.ping ? "Test message that actually tags the role — it will notify people" : "No ping saved on this route"}
+                          style={btn(OWNER_THEME.gold, busy != null || !cur || !cur.ping)}
+                        >
+                          🔔
+                        </button>
+
                         {cur && (
                           <button
                             type="button"
@@ -376,6 +410,10 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                           >
                             {cleared ? "Undo" : "✕"}
                           </button>
+                        )}
+
+                        {pingErr && (
+                          <span style={{ fontSize: 11, color: OWNER_THEME.red, flex: "1 1 100%" }}>{pingErr}</span>
                         )}
 
                         {testMsg[tag] && (
@@ -393,7 +431,8 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                     );
                   })}
                   <div style={{ fontSize: 11, color: OWNER_THEME.text, marginTop: 10 }}>
-                    Default {ROUTE_ROWS[0].hint}. A class with its own row wins over it.
+                    Default {ROUTE_ROWS[0].hint}. A class with its own row wins over it. <strong>Test</strong> posts
+                    silently; <strong>🔔</strong> posts a test that really tags the role.
                   </div>
                 </div>
               </div>

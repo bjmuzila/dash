@@ -2022,13 +2022,28 @@ register('/api/discord-share', {
 
     const payload = { embeds: [embed] };
     if (target.ping) {
-      payload.content = target.ping;
-      // Only the mention TYPES actually present are permitted, so a stray "@"
-      // in a thesis can never turn into an @everyone.
+      // allowed_mentions is a WHITELIST, and an empty `parse` forbids
+      // everything. So the types actually present in the ping have to be
+      // listed or Discord posts the mention as inert text — which is exactly
+      // what "the tag doesn't ping" looks like from the outside. User mentions
+      // were missing from this list; `<@123>` was being suppressed.
+      //
+      // Deriving the list from the content rather than allowing everything is
+      // still the point: a stray "@everyone" typed into a thesis can never
+      // escalate into a real everyone-ping, because the thesis is in the embed
+      // description and embeds never ping at all.
       const parse = [];
       if (/<@&\d+>/.test(target.ping)) parse.push('roles');
+      if (/<@!?\d+>/.test(target.ping)) parse.push('users');
       if (/@everyone|@here/.test(target.ping)) parse.push('everyone');
-      payload.allowed_mentions = { parse };
+      if (parse.length) {
+        payload.content = target.ping;
+        payload.allowed_mentions = { parse };
+      }
+      // No recognisable mention token → post the embed with no content line
+      // rather than a literal "@Some Role" that reads as a broken ping. The
+      // store rejects these on save, so this is belt-and-braces for rows
+      // written before that validation existed.
     }
 
     const form = new FormData();
@@ -2148,6 +2163,11 @@ register('/api/discord-share', {
   // "did I paste the right URL into the right row" from a guess into a fact —
   // and it posts a visibly non-trade embed so a test can never be mistaken for
   // a signal by whoever is in that channel.
+  //
+  // `withPing` is opt-in and off by default: a route check should not tag a
+  // whole role every time it is run. But verifying the TAG needs one real ping,
+  // and there is no other way to prove a role id resolves, so the caller can
+  // ask for it explicitly.
   register('/api/bot-alert/test', {
     auth: 'user', methods: ['POST'],
     async handler(req, res, ctx, verdict) {
@@ -2161,13 +2181,20 @@ register('/api/discord-share', {
         const [target] = await botStore.resolve([id], cls);
         if (!target) { send(res, 404, { ok: false, error: 'Unknown destination' }); return; }
 
+        const withPing = body?.withPing === true;
         const result = await postTo(
-          { ...target, ping: '' }, // never ping a role for a test
+          { ...target, ping: withPing ? target.ping : '' },
           {
             color: 0x4f545c,
             author: { name: 'CB EDGE · CONNECTION TEST' },
             title: '🔧 Test message — not a trade',
-            description: `Route check for **${target.label}** → \`${cls}\`. If you can read this, the webhook works.`,
+            description:
+              `Route check for **${target.label}** → \`${cls}\`. If you can read this, the webhook works.` +
+              (withPing
+                ? target.ping
+                  ? '\nTagging test — the mention above should be highlighted and should have notified that role.'
+                  : '\nNo ping is configured for this route.'
+                : ''),
             footer: { text: FOOTER_TEXT },
             timestamp: new Date().toISOString(),
           },

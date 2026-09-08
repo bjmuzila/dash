@@ -133,6 +133,39 @@ function maskUrl(url) {
   return `${id} · …${token.slice(-4)}`;
 }
 
+/**
+ * PINGS — Discord resolves mentions by ID, never by name.
+ *
+ * This is the one thing about webhook pings that bites everybody: typing
+ * "@Bzila Analysis" into the ping box posts the literal characters
+ * "@Bzila Analysis" and pings nobody. The client shows a name; the wire format
+ * is `<@&ROLE_ID>`. There is no lookup that turns one into the other from
+ * outside the server, so a name in this field can never work.
+ *
+ * Accepted, and normalised to what Discord actually wants:
+ *   <@&123…>  role mention          -> kept
+ *   <@123…>   user mention          -> kept
+ *   123…      a bare 17-20 digit id -> assumed a ROLE, wrapped as <@&123…>
+ *   @everyone / @here               -> kept
+ *   ''                              -> no ping (perfectly valid)
+ *
+ * Anything else throws, ON SAVE, naming the row. That is deliberate: storing an
+ * unusable ping means every future alert quietly fails to notify anyone, and
+ * the failure looks like "tagging is broken" rather than "that field wanted an
+ * ID". Better to refuse it at the moment it is typed.
+ */
+function normalizePing(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  if (/^<@&\d{15,25}>$/.test(v)) return v;         // role
+  if (/^<@!?\d{15,25}>$/.test(v)) return v;        // user
+  if (/^@(everyone|here)$/.test(v)) return v;
+  if (/^\d{15,25}$/.test(v)) return `<@&${v}>`;    // bare id -> role
+  throw new Error(
+    `"${v.slice(0, 40)}" is not a mention Discord can resolve. Use the role ID — right-click the role → Copy Role ID — as <@&ID>, or @everyone / @here.`,
+  );
+}
+
 /** Reject anything that is not a real Discord webhook before it is stored. */
 function validUrl(url) {
   return /^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/(v\d+\/)?webhooks\/\d+\/[\w-]+$/.test(String(url || '').trim());
@@ -274,10 +307,19 @@ async function saveDiscord(input) {
   const sortIdx = Number.isFinite(Number(input?.sortIdx)) ? Number(input.sortIdx) : 0;
 
   const routes = input?.routes && typeof input.routes === 'object' ? input.routes : {};
+  // Validate EVERY row before opening the transaction, so a typo in the fourth
+  // route cannot leave the first three written and the form half-saved.
+  const cleanPing = {};
   for (const [k, v] of Object.entries(routes)) {
     if (!isClassKey(k)) throw new Error(`Unknown route key: ${k}`);
+    if (v === null) continue;
     if (v && typeof v.url === 'string' && v.url.trim() && !validUrl(v.url)) {
       throw new Error(`${k}: that does not look like a Discord webhook URL`);
+    }
+    try {
+      cleanPing[k] = normalizePing(v?.ping);
+    } catch (e) {
+      throw new Error(`${k} ping — ${e.message}`);
     }
   }
 
@@ -295,7 +337,7 @@ async function saveDiscord(input) {
         continue;
       }
       const url = typeof v?.url === 'string' ? v.url.trim() : '';
-      const ping = typeof v?.ping === 'string' ? v.ping.trim() : '';
+      const ping = cleanPing[cls] ?? '';
       if (url) {
         await client.query(
           `INSERT INTO bot_routes (discord_id, asset_class, webhook_url, ping, updated_at)
@@ -305,11 +347,16 @@ async function saveDiscord(input) {
           [id, cls, url, ping],
         );
       } else {
-        // Ping-only edit: touch nothing if the route does not exist yet.
-        await client.query(
+        // Ping-only edit. An UPDATE that matches nothing is the silent failure
+        // this whole block exists to avoid: a ping typed on a row with no
+        // webhook would vanish with no error and look like "tagging is broken".
+        const r = await client.query(
           'UPDATE bot_routes SET ping=$3, updated_at=NOW() WHERE discord_id=$1 AND asset_class=$2',
           [id, cls, ping],
         );
+        if (r.rowCount === 0 && ping) {
+          throw new Error(`${cls}: add a webhook URL for this row before giving it a ping`);
+        }
       }
     }
     await client.query('COMMIT');
@@ -352,6 +399,7 @@ async function importFromEnv() {
 
 module.exports = {
   ASSET_CLASSES,
+  normalizePing,
   ROUTE_KEYS,
   maskUrl,
   validUrl,

@@ -1,201 +1,179 @@
 # Changelog
 
-## 2026-09-08 (g) - An over-scaled board is a DEAD END, not an annoyance — the card that is too big is the card you cannot shrink (`cbedge-v3/src/board/layoutStore.ts`)
+## 2026-09-08 (g) - BOT: fix tagging - two bugs, one of them silent (`server-v2/bot-targets-store.js`, `server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`)
 
-Follow-on to (e), from two screenshots: one card filling the whole viewport and
-running off the right edge, "the cards are super big and they can't be adjusted."
+Role pings did not fire. Two independent causes.
 
-The second half of that sentence is the important half, and (e) did not address
-it. The board's scroll port is `overflow-y-auto` — VERTICAL ONLY. A card wider
-than the grid extends past the right edge with nowhere to scroll, and its resize
-handle is the bottom-RIGHT corner. So the card cannot be made smaller, cannot be
-moved, cannot be removed by any gesture aimed at it. **The state deletes the very
-controls that would undo it.** That is what makes it a dead end rather than an
-ugly board, and it is why "drag it back" was never an answer.
+**1. `allowed_mentions` is a WHITELIST, and the list was incomplete.** `postTo()`
+built `parse` from the mention types it found in the ping string, but only
+checked for roles and @everyone. A user mention `<@123>` produced `parse: []`,
+which forbids EVERYTHING - Discord accepts the post and renders the mention as
+inert text. `users` added. Deriving the list from the content is still right (a
+stray `@everyone` in a thesis can never escalate - the thesis is in the embed
+description, and embeds never ping at all), it just has to be complete.
 
-### The floor: no card may be unreachable
+**2. The likely real cause: a role NAME was in the ping box.** Discord resolves
+mentions by ID only. Typing `@Bzila Analysis` posts those literal characters and
+notifies nobody, and there is no lookup that turns a name into an ID from
+outside the server - so a name in that field can never work, no matter what the
+server does with it. Now:
 
-New `fitToGrid()`, applied inside `sanitizeLayout` to every item from every
-source — localStorage, the synced copy, the account's copy off the wire — after
-`regrid`, since it is the geometry that will actually be RENDERED that has to be
-reachable:
+  - `normalizePing()` accepts `<@&ID>`, `<@ID>`, `@everyone`, `@here`, and a
+    bare 17-20 digit id (wrapped as a role), and REJECTS anything else on save
+    with the fix in the message. Storing an unusable ping means every future
+    alert quietly fails to notify, and that reads as "tagging is broken" rather
+    than "that field wanted an ID".
+  - The Manage field mirrors the same rule live, so the mistake is caught while
+    it is being typed rather than on save.
+  - `postTo()` now drops the content line entirely when no mention token is
+    recognised, rather than posting a literal `@Some Role` that looks broken.
 
-```
-w -> [BOARD_MIN_W .. BOARD_COLS]      x -> [0 .. BOARD_COLS - w]
-h -> [BOARD_MIN_H .. 300]             y -> >= 0
-```
+**Also fixed while in there:** a ping typed on a row with no webhook URL ran an
+UPDATE that matched zero rows and vanished without error. It now says to add the
+webhook first. And validation moved ahead of the transaction, so a typo in the
+fourth route cannot leave the first three written and the form half-saved.
 
-It reasons about nothing. A correct board passes through untouched (these are
-no-ops on legal values) and no stored blob, however corrupt and whatever produced
-it, can put a card somewhere the user cannot reach. Every repair in this file
-gets to be approximate because this one is not.
+**New 🔔 button** next to Test on each route. Test still posts silently - a route
+check should not tag a whole role every time it runs - but verifying the TAG
+needs one real ping, and there is no other way to prove a role ID resolves. It
+confirms first, and says in the post that it is a tagging test.
 
-Height is capped too, generously — 300 rows is 2400px. A tall card is at least
-scrollable-to so it is not the same emergency, but a card several screens deep
-has its resize handle several screens down, which is unreachable in every sense
-that matters.
+## 2026-09-08 (f) - BOT: Discords and their channels are managed from the page, not from env (`server-v2/bot-targets-store.js` NEW, `server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx` NEW, `owner-vite/src/pages/Bot.tsx`)
 
-### And the repair now lands on the right number
+The numbered-env scheme shipped in (e) models "one Discord, one channel" and
+nothing else. That is not the real shape: some servers take everything in a
+single room, and Bzila's own has FOUR channels with a webhook each, one per
+asset class. Env vars cannot express that, and even if they could, changing them
+means editing the VPS environment and restarting - which is not something to do
+mid-session because a channel moved.
 
-`repairOverscaledBoard()` from (e) halved until the board fit, and that
-UNDER-CORRECTS. A board quadrupled from cards spanning half the grid comes back
-at right = 96; one halving puts it at 48 and the loop stops, leaving every card
-twice the size it should be — on the grid, adjustable, still wrong.
+**Two levels now, and the second one is the point.** A DISCORD is a destination
+the composer offers. A ROUTE is where one asset class lands inside it:
+`(discord, asset_class) -> webhook URL + optional ping`. Resolution is exactly
+one fallback deep - `routes[class] ?? routes.default` - which makes each real
+case obvious to encode:
 
-The catalog knows better. Every card has a `defaultSize`, and a card the user has
-never resized still holds exactly that size times whatever scale was wrongly
-applied. So if EVERY card is the same clean power-of-two multiple (>= 2x) of its
-own default, that multiple IS the scale, and dividing by it restores the board
-exactly. Every card, not most: one resized card makes the ratios noise, and a
-wrong guess here is the bug rather than the fix. When the evidence is not
-unanimous it falls back to halving until it fits, which is at least always
-reachable.
+  - one channel for everything ....... set `Default` only
+  - a channel per class (Bzila's) .... set all four, no `Default`
+  - mostly one, options split out .... set `Default` + `Options`
 
-### Verified
+Two tables in Postgres (`bot_discords`, `bot_routes`), same defensive pool /
+ensureSchema / fail-soft shape as `roster-store.js`. No `DATABASE_URL`, dead
+pool, or empty table falls back to the `DISCORD_WEBHOOK_<n>_*` vars as
+single-`default` discords, so a fresh box still works - and the payload carries
+`live:false` so the Manage tab can SAY it is reading env and an edit would not
+stick, with a one-click import of those vars into the table.
 
-```
-customer's board, quadrupled       48x192 | 48x80 | 48x96  (all pinned to x=0)
-  after this build                 32x48 | 48x20 | 12x24@32   restored EXACTLY
-  reload                           unchanged
-quadrupled after a user resize     catalog not unanimous -> halved to fit, on grid
-a correct board                    untouched
-w=73 @ x=40, h=900                 no repair understands it; the clamp still
-                                   leaves it on the grid and adjustable
-```
+**Secrets are one-way.** Every browser-reachable read goes through `maskUrl()`:
+the client sees a webhook id and the last four token characters, never enough to
+post. A blank URL on save means "keep what is stored", which is what lets a
+label or a ping be edited without the page ever holding the credential. Writes
+are validated against the real webhook URL shape before they are stored.
 
-Between this and Clear all, an over-scaled board now has three independent ways
-out: it repairs itself on load, anything the repair cannot explain is still
-clamped onto the grid where it can be dragged, and the toolbar can empty the
-board outright.
+**New routes**, all behind the same owner gate as `/api/discord-share`:
 
-## 2026-09-08 (f) - v3 Options Chain: PREM tab - net premium traded, as a whole-grid lens (`cbedge-v3/src/pages/optionsChain/chainMath.ts`, `cbedge-v3/src/pages/optionsChain/useChainData.ts`, `cbedge-v3/src/pages/OptionsChain.tsx`, + the v2 originals)
+  - `GET  /api/bot-alert/config` - masked routing table
+  - `POST /api/bot-alert/config` - save / delete / import-env (one route, three
+    actions: it is one form's worth of work, and a verb per operation would mean
+    three near-identical gates)
+  - `POST /api/bot-alert/test` - post a visibly non-trade test embed to one
+    route, never pinging a role. This is what turns "did I paste the right URL
+    into the right row" from a guess into a fact.
 
-The chain's hover card has always printed **Net Prem (C-P)** for the cell under
-the pointer. That figure is now its own tab in the cog menu's **Greek** selector,
-so the same number can be read across every strike and expiry at once instead of
-one cell at a time.
+`POST /api/bot-alert` now resolves per asset class instead of per destination.
 
-**Selector.** `GREEK_MODES` gains `prem`, rendered as a seventh tile (`PREM`)
-after OI / VOL. This is the `/v3/options-chain` GEX matrix - not `/v3/chain`,
-which is the book and has no greek tab.
+**The composer refuses what it cannot send.** `/targets` returns `accepts` per
+class, so a Discord with no channel for the class being composed renders
+disabled and labelled "no channel" rather than selectable. Switching asset class
+prunes the selection to what can still receive it - a selection that silently
+became unsendable is how an alert goes missing. `All` selects only eligible
+destinations.
 
-**What the cell shows.** `callPrem - putPrem` in dollars, through the same
-`fmtMoney()` the greeks use (+$1.24M / -$430.5K). It renders as a greek, not as
-a count tab: one signed figure per cell, the same ramp (call-premium heavy
-positive, put-premium heavy negative), the same rank floors and per-column heat
-scale, and the SUM Total column adds it up like any other dollar series.
+Manage is a separate file (`BotManage.tsx`): Bot.tsx is already the composer and
+the feed, and a third mode inline would bury both.
 
-**Untraded strikes read as absent.** `valueAt()` returns `null` for a strike
-with zero premium on both sides, so those cells print `.` rather than a wall of
-`+$0`, and they stay out of the column heat scale and the SUM totals - the same
-honesty the VOL tab's `.` already carries.
+**Housekeeping:** the four Bzila webhook URLs were pasted into a chat transcript
+while this was being built. They are live credentials - anyone holding one can
+post as that webhook. Regenerate all four in Discord and paste the replacements
+into Manage.
 
-**Basis-independent.** Premium is mark x TODAY'S volume, so the OI+Vol /
-Vol Only toggle cannot change it or blank it out (unlike the greeks, whose
-contract counts Vol Only zeroes). No new fetch and no new field on the wire -
-`parseExpiration()` was already computing `callPrem` / `putPrem` for the hover
-card; the new `prem` field on `GreekCell` is their difference.
+## 2026-09-08 (e) - BOT posts for real: webhook fan-out to N Discords (`server-v2/api-router.js`, `owner-vite/src/pages/Bot.tsx`)
 
-**Not available in replay.** strike_growth records GEX only, so PREM joins
-DEX/CHEX/VEX/OI/VOL in the set the replay pin greys out; replay frames build
-cells with `prem: 0` and the tab tooltip now names PREM.
+Webhooks, not a bot. Everything BOT does is "post an embed with an image into a
+fixed channel", which a webhook does with no token, no gateway, and no
+long-lived process to keep alive. The single thing webhooks cannot do is READ
+the message afterwards - reaction tallies - and that was explicitly declared
+pointless. Editing later is still possible (`PATCH /webhooks/{id}/{token}/messages/{id}`),
+which is why the message id is captured on every send.
 
-The same change was made in the v2 originals (`components/pages/OptionsChain.tsx`,
-`lib/calculations/optionChain.ts`) so the legacy SPA's chain does not drift.
+**NEW ROUTES, nothing existing touched.** `server-with-proxy.js`, `/proxy/*`, the
+WebSocket and `/api/discord-share` are all unmodified. Two routes added, both
+behind the same owner gate `/api/discord-share` uses (including its "any
+signed-in user when `OWNER_USER_ID` is unset" dev fallback):
 
-## 2026-09-08 (e) - v3: Multi Greek panels stop disappearing, and open on SPX / SPY / QQQ (`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`)
+  - `GET /api/bot-alert/targets` - `{ id, label }` only. Webhook URLs and ping
+    strings never leave the server; the client sends ids back.
+  - `POST /api/bot-alert` - builds the embed and fans it out.
 
-**The bug.** Panel one of the Multi Greek card IS the board's symbol, and an
-effect deleted any ADDED panel whose ticker matched it — writing the shrunken
-list straight to `cb-v3-mg-extra-tickers`. So moving the board onto SPY (toolbar
-search, another card, anything) erased the SPY panel from storage permanently;
-moving the board back left a hole the customer had to re-add, with nothing on
-screen to say what happened. That is what "Multi Greek isn't saving" was.
+**Destinations are env, numbered 1-8**, so a fourth Discord is a restart and not
+a deploy. Gaps in the numbering are fine:
 
-The duplicate is now HIDDEN rather than deleted. `panels` derives the drawn list
-from `pageSymbol` + `extras`, filtering the collision at render time and carrying
-each panel's index in `extras` alongside it — remove and rename address that
-index, so it has to survive a hidden panel. Storage is never touched by a board
-move again.
+    DISCORD_WEBHOOK_1_URL    = https://discord.com/api/webhooks/...   (required)
+    DISCORD_WEBHOOK_1_LABEL  = Bzila Trades                          (optional)
+    DISCORD_WEBHOOK_1_PING   = <@&123456789012345678>                (optional)
 
-**Defaults.** `DEFAULT_EXTRAS = ['SPY','QQQ']`, seeded on READ by `loadExtras()`
-when neither `cb-v3-mg-extra-tickers` nor the legacy `cb-v3-mg-tickers` has ever
-been written. A fresh browser opens on SPX · SPY · QQQ with the fourth seat free
-for the customer's own pick. Seeded, not written: a card that has only ever shown
-the defaults still counts as "nothing chosen", so changing this list later moves
-every untouched board. The moment a panel is added or removed the list is theirs
-and is stored.
+**The embed is built server-side.** The layout (A - Trade Ticket) lives in ONE
+function, so a stale SPA bundle cannot post a malformed embed and changing the
+format does not need a frontend deploy. Empty fields are omitted rather than
+rendered blank - a field with no value reads as a bug to whoever sees the alert.
+`allowed_mentions` is derived from what the ping string actually contains, so a
+stray `@` in a thesis can never become an `@everyone`.
 
-Also: the `＋ n/4` counter now reads `extras.length + 1` (what is STORED) instead
-of the drawn count, so it agrees with the button's own disabled state when a
-panel is hidden.
+**Partial success is the normal case with four destinations**, so the route never
+collapses to a bare ok/500: every destination returns its own row with its own
+error string, 200 when at least one landed and 502 when none did. It does NOT
+retry the fan-out - that would double-post to the destinations that succeeded.
 
-Note for later: these are per-browser localStorage keys and are NOT part of
-"Save layout", which posts only `{id,x,y,w,h}` to `/api/dashboard-layout`. The
-card arrangement follows the account; the ticker choices do not.
+Client side, three consequences:
 
+  - The feed append is NOT optimistic. A row written before the send would claim
+    delivery when two of four rejected it, so the row is written from the
+    server's answer and carries the per-destination result. A destination that
+    failed shows struck through in red with Discord's own message on hover.
+  - The composer only clears when at least one destination took the alert. On a
+    total failure the draft stays exactly as typed - the fix is usually "try
+    again in ten seconds", not "retype the thesis".
+  - 12MB `readJson` cap on this route (a base64 data URL is ~4/3 its image), and
+    an 8MB image ceiling that fails here with a readable message rather than as
+    an opaque 413 from Discord.
 
-## 2026-09-08 (d) - v3: `/v3/chain`, the real option chain (`cbedge-v3/src/pages/Chain.tsx` NEW, `cbedge-v3/src/pages/chain/*` NEW, `cbedge-v3/src/App.tsx`, `cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/src/pages/TradersDashboard.tsx`, `app/v3/chain/route.ts` NEW)
+## 2026-09-08 (d) - BOT: layout A picked, and the embed bar is a per-alert choice (`owner-vite/src/pages/Bot.tsx`)
 
-**A new page, not a mode of the old one.** `/v3/options-chain` is a GEX MATRIX —
-one column per expiration, every cell a derived exposure painted by a heat skin.
-It answers "where is the gamma". `/v3/chain` is the BOOK, the thing thinkorswim
-and tastytrade mean by an option chain: calls on the left, puts on the right,
-strikes down the middle, and the quotes themselves in the cells. They share the
-feed (`/api/chains`) and nothing else.
+**Layout A (Trade Ticket) is the format.** Accent bar coloured by the trade,
+entry/strike/expiry as three inline fields above the thesis, chart below,
+disclaimer in the footer.
 
-**The layout.** Columns are MIRRORED around the strike, so bid sits against bid
-and a strike reads across in one movement (the call wing renders the selected
-list reversed). ITM is a 5%-white wash rather than a colour, so it does not
-fight the tone colours the columns already use, and it is translucent so the
-row hover still reads through. The spot line is its own row, drawn BETWEEN the
-two strikes that bracket the underlying — the nearest strike is separately
-marked ATM. Every expiration is a `<tbody>` in ONE table, which is what keeps
-the columns aligned across groups.
+**The bar is now data, not a constant.** That stripe down the left of a Discord
+embed is the embed's `color` field - a plain 24-bit int - so it is chosen per
+alert. New "Embed Bar Colour" row in the composer: `Auto` plus six swatches
+(green / red / amber / cyan / blurple / white), with the resolved hex AND the
+integer Discord actually wants printed next to them, so the payload value is
+visible while composing rather than guessed later.
 
-**Sixteen columns, four presets.** Bid · Ask · Mark · Sprd · Sprd% · IV · Δ · Γ ·
-Θ · ν · Vol · OI · V/OI · Extr · ITM% · B/E. Presets: Standard (the default
-read), Greeks, Liquidity, Analysis. Any subset can be picked from the column
-popover; the layout persists in `localStorage`, because a chain layout is a
-habit, not a preference you re-set daily. The last column cannot be removed —
-there would be no control left on screen to get back from it.
+`Auto` is the default and the one to leave alone - it derives the bar from the
+trade action (buy green, sell red, trim amber, average-down cyan) and a Note
+gets blurple rather than green, because a Note is not a trade. Colour then means
+the same thing in every post and the room learns to read the stripe before the
+text. The manual swatches are for what Auto cannot know: flagging a re-post,
+colour-coding a series, a Note that should look nothing like a trade.
 
-**Expirations are the accordion, not a dropdown.** Several can be open at once,
-each loads WHEN IT IS OPENED, and each header carries its own DTE, a monthly
-(third-Friday) badge, ATM straddle IV, call/put OI, the P/C ratio and the day's
-volume. An open expiry stays offered even when the ladder is collapsed to 6/12/30.
+Two deliberate details:
 
-**Entry is TWO parallel requests, not a waterfall** (v3 non-negotiable #3).
-`/api/chains` with NO `expiration` returns the nearest three expiries in one
-payload, so the front expiry is painted off the first response; the expirations
-list only decides what the accordion OFFERS. The rail prefetches both URLs on
-hover, and the seed read carries a 15s stale window so the warmed cache entry is
-actually read back instead of being stepped over by a `staleMs: 0` refetch.
-
-**The strike window is bounded by default** — 40 around ATM, with 20/80/All.
-SPX lists hundreds of strikes per expiry; "All" is one click and is an explicit
-choice. That window is what stands in for virtualisation. The page centres
-itself on the spot row once per symbol, measured rather than via `offsetTop`
-(the scroll container is not a positioned ancestor).
-
-**No Last and no Net Change column, deliberately.** The feed
-(`server-v2/proxy-tastytrade.js → fetchChainFull`) carries symbol, OI, volume,
-delta, gamma, theta, vega, IV, bid, ask and mark — there is no `last` and no
-previous close on the wire. An invented column would have to be `mark` under a
-different heading.
-
-REST + a 20s poll (SPX on the ~24/5 feed, everything else RTH-only, hidden tabs
-skipped), no socket, no canvas. Zero theme-baseline entries: no colour literal,
-no Tailwind palette class, every size off the type scale. Follows the board
-symbol like every other v3 page — no ticker box.
-
-Registered in all four places AGENTS.md requires: the page, the `lazy()` route in
-`App.tsx`, the `NAV` entry in `Shell.tsx` (next to Options Chain), and
-`app/v3/chain/route.ts` calling `serveSpaShell("v3")` so a hard refresh on
-`/v3/chain` does not 404. Also added to `ALL_PAGES` / `LIVE_ROUTES` in
-`TradersDashboard.tsx`, the third list AGENTS.md says moves with the other two.
-No phone tab — `src/mobile/mobileNav.ts` already records why a chain at 390px is
-a picture of a page rather than the page.
+  - `BAR_COLORS` hex values do NOT come from `lib/theme`, and that is not a
+    theme violation. They are payload being sent to Discord, and they have to
+    read correctly against Discord's dark surface, not this app's.
+  - The Activity Feed row now wears the same bar as a 4px left border, so the
+    composer shows what the room will see instead of a second colour scheme.
 
 ## 2026-09-08 (c) - BOT: paste a chart straight into the alert, and four Discord layouts to pick from (`owner-vite/src/pages/Bot.tsx`, `generated/2026-09-08-bot-discord-embed-ideas.html`)
 

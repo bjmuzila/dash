@@ -27,7 +27,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { memo, useMemo, type CSSProperties, type ReactNode } from 'react'
-import { CHAIN, T, alpha } from '@/design/theme'
+import { T, alpha } from '@/design/theme'
 import { bsGreeks, impliedVol, yearsToExpiry } from './blackScholes'
 import type { ChainBook, ChainRow, ExpiryMeta, OptionQuote } from './chainBook'
 import type { CellCtx, CenterColumn, ChainColumn, ChainSide } from './chainColumns'
@@ -74,6 +74,19 @@ const ITM_BG = alpha(T.text, 0.05)
 const ROW_LINE = alpha(T.border, 0.6)
 const COL_LINE = alpha(T.border, 0.45)
 const SPINE = `1px solid ${T.border}`
+
+// ── INK ────────────────────────────────────────────────────────────────────
+// Every glyph on this grid is FULL WHITE (Brandon, 2026-09-08). No opacity
+// step-down, and no `--color-flat` grey on the empty-cell placeholder either:
+// on the dark-slate plate a dimmed label reads as smudged rather than as
+// secondary, and a value you have to lean in for is not a faster read.
+//
+// Hierarchy comes from SIZE and WEIGHT instead — 9/10/11px off the type scale,
+// and semibold on a head — which is the separation that survives at 11px.
+// design/theme.ts's CHAIN.* ramp is deliberately NOT imported here: it is the
+// GEX matrix's ink ladder, tuned for text sitting on a saturated heat fill,
+// and these cells have no heat fill under them.
+const INK = T.text
 
 export function ChainGrid({
   expiries,
@@ -206,7 +219,7 @@ export function ChainGrid({
             ) : null}
             {isOpen && !book ? (
               <tr>
-                <td colSpan={totalCols} className="px-3 py-3 text-center text-2xs" style={{ color: CHAIN.empty }}>
+                <td colSpan={totalCols} className="px-3 py-3 text-center text-2xs" style={{ color: INK }}>
                   {pending.includes(exp.value) ? 'Loading chain…' : 'No chain returned for this expiry.'}
                 </td>
               </tr>
@@ -266,7 +279,7 @@ const ExpiryHeaderRow = memo(function ExpiryHeaderRow({
             {open ? '▾' : '▸'}
           </span>
           <span className="text-xs font-semibold text-fg">{exp.label}</span>
-          <span className="text-2xs" style={{ color: T.muted, opacity: 0.7 }}>
+          <span className="text-2xs" style={{ color: INK }}>
             {exp.dte === 0 ? '0DTE' : `${exp.dte}d`}
           </span>
           {exp.monthly && (
@@ -279,13 +292,13 @@ const ExpiryHeaderRow = memo(function ExpiryHeaderRow({
             </span>
           )}
           {loading && (
-            <span className="text-3xs" style={{ color: T.cyan, opacity: 0.8 }}>
+            <span className="text-3xs" style={{ color: T.cyan }}>
               loading…
             </span>
           )}
 
           {book && (
-            <span className="ml-auto flex items-center gap-3 text-2xs" style={{ color: T.muted, opacity: 0.75 }}>
+            <span className="ml-auto flex items-center gap-3 text-2xs" style={{ color: INK }}>
               {book.atmIv > 0 && <span>IV {(book.atmIv * 100).toFixed(1)}%</span>}
               <span>
                 OI {compact(book.callOi)}c / {compact(book.putOi)}p
@@ -300,7 +313,6 @@ const ExpiryHeaderRow = memo(function ExpiryHeaderRow({
               <span
                 className="tabular"
                 title={`This expiry's data was collected at ${etClock(book.fetchedAt)} ET`}
-                style={{ opacity: 0.8 }}
               >
                 ⟳ {etClock(book.fetchedAt)}
               </span>
@@ -393,7 +405,7 @@ function StrikeRows({
   if (!rows.length) {
     return (
       <tr>
-        <td colSpan={colSpan} className="px-3 py-3 text-center text-2xs" style={{ color: CHAIN.empty }}>
+        <td colSpan={colSpan} className="px-3 py-3 text-center text-2xs" style={{ color: INK }}>
           No strikes in the current window.
         </td>
       </tr>
@@ -543,7 +555,7 @@ const StrikeRow = memo(function StrikeRow({
           borderBottom: `1px solid ${ROW_LINE}`,
           borderLeft: SPINE,
           borderRight: center.length ? (lines ? `1px solid ${COL_LINE}` : undefined) : SPINE,
-          color: atm ? T.cyan : CHAIN.strike,
+          color: atm ? T.cyan : INK,
           background: atm ? alpha(T.cyan, 0.14) : STRIKE_BG,
         }}
       >
@@ -560,7 +572,7 @@ const StrikeRow = memo(function StrikeRow({
               borderBottom: `1px solid ${ROW_LINE}`,
               borderRight: i === center.length - 1 ? SPINE : lines ? `1px solid ${COL_LINE}` : undefined,
               background: CENTER_BG,
-              color: empty ? CHAIN.none : (c.tone?.(v as number) ?? CHAIN.ink),
+              color: empty ? INK : (c.tone?.(v as number) ?? INK),
             }}
           >
             {empty ? '·' : c.fmt(v as number)}
@@ -605,7 +617,7 @@ function Cell({
   const empty = v === null || !Number.isFinite(v)
   const style: CSSProperties = {
     borderBottom: `1px solid ${ROW_LINE}`,
-    color: empty ? CHAIN.none : (col.tone?.(v as number, ctx) ?? CHAIN.ink),
+    color: empty ? INK : (col.tone?.(v as number, ctx) ?? INK),
   }
   if (itm) style.background = ITM_BG
   if (rule) style.borderLeft = `1px solid ${COL_LINE}`

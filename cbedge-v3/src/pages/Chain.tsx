@@ -107,6 +107,12 @@ const GREEK_SOURCES: SegOption[] = [
 
 const DEFAULT_DISPLAY: ChainDisplay = { zebra: true, itm: true, lines: false }
 
+// Every glyph on this page is FULL WHITE (Brandon, 2026-09-08) — no opacity
+// step-down on a label, a clock or a list index. Hierarchy is carried by size
+// and weight off the type scale instead. Same rule as the grid's INK; see the
+// note in chain/ChainGrid.tsx.
+const INK = T.text
+
 function readStored(key: string, fallback: string): string {
   try {
     return window.localStorage.getItem(key) ?? fallback
@@ -337,23 +343,21 @@ export default function Chain() {
         <span className="tabular text-sm font-semibold" style={{ color: T.cyan }}>
           {spot > 0 ? spot.toFixed(2) : '—'}
         </span>
-        <span className="text-3xs uppercase tracking-[0.16em]" style={{ color: T.muted, opacity: 0.5 }}>
-          Option chain
-        </span>
+        <span className="text-3xs uppercase tracking-[0.16em] text-fg">Option chain</span>
 
         <span className="mx-1 h-4 w-px" style={{ background: T.border }} />
 
-        <span className="text-3xs uppercase tracking-wide" style={{ color: T.muted, opacity: 0.6 }}>
+        <span className="text-3xs uppercase tracking-wide text-fg">
           Strikes
         </span>
         <SegGroup options={WINDOWS} value={strikeWindow} onChange={changeWindow} />
 
-        <span className="text-3xs uppercase tracking-wide" style={{ color: T.muted, opacity: 0.6 }}>
+        <span className="text-3xs uppercase tracking-wide text-fg">
           Expiries
         </span>
         <SegGroup options={EXPIRY_COUNTS} value={expiryCount} onChange={setExpiryCount} />
 
-        <span className="text-3xs uppercase tracking-wide" style={{ color: T.muted, opacity: 0.6 }}>
+        <span className="text-3xs uppercase tracking-wide text-fg">
           Greeks
         </span>
         <SegGroup options={GREEK_SOURCES} value={greekSource} onChange={changeGreeks} />
@@ -366,7 +370,7 @@ export default function Chain() {
             className="flex items-center gap-1 rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg"
           >
             {activePreset ? activePreset.label : `${columns.length + center.length} cols`}
-            <span className="text-3xs opacity-50">▾</span>
+            <span className="text-3xs">▾</span>
           </button>
           <Popover open={colsOpen} onClose={() => setColsOpen(false)} align="left">
             <div className="flex w-64 flex-col gap-2">
@@ -451,7 +455,7 @@ export default function Chain() {
             <span
               className="tabular text-3xs"
               title={`Collected at ${etClock(c.updatedAt)} ET · polls every 20s while the session is live`}
-              style={{ color: T.muted, opacity: 0.6 }}
+              style={{ color: INK }}
             >
               ⟳ {etClock(c.updatedAt)} ET · {ago(c.updatedAt, now)}
             </span>
@@ -479,11 +483,11 @@ export default function Chain() {
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
         {c.booting ? (
-          <div className="p-6 text-center text-sm" style={{ color: T.muted, opacity: 0.6 }}>
+          <div className="p-6 text-center text-sm text-fg">
             Loading {symbol} chain…
           </div>
         ) : expiries.length === 0 ? (
-          <div className="p-6 text-center text-sm" style={{ color: T.muted, opacity: 0.6 }}>
+          <div className="p-6 text-center text-sm text-fg">
             No listed expirations for {symbol}.
           </div>
         ) : (
@@ -526,7 +530,7 @@ interface OrderListProps {
 function OrderList({ keys, labelOf, titleOf, onMove, onRemove, removable, empty }: OrderListProps) {
   if (!keys.length) {
     return (
-      <span className="text-3xs" style={{ color: T.muted, opacity: 0.5 }}>
+      <span className="text-3xs" style={{ color: INK }}>
         {empty ?? 'None.'}
       </span>
     )
@@ -539,7 +543,7 @@ function OrderList({ keys, labelOf, titleOf, onMove, onRemove, removable, empty 
           className="flex items-center gap-1 rounded-sm border border-line px-1 py-0.5"
           style={{ background: alpha(T.text, 0.03) }}
         >
-          <span className="tabular text-3xs" style={{ color: T.muted, opacity: 0.4, width: 14 }}>
+          <span className="tabular text-3xs" style={{ color: INK, width: 14 }}>
             {i + 1}
           </span>
           <span className="flex-1 truncate text-2xs font-semibold text-fg" title={titleOf(k)}>
