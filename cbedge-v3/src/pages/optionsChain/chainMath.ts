@@ -48,6 +48,18 @@ export interface GreekCell {
   /** Net premium traded per side = mark × volume × 100. */
   callPrem: number
   putPrem: number
+  /**
+   * Net premium traded = callPrem − putPrem, in dollars. Signed like every
+   * other net figure on the chain: positive = call premium dominates,
+   * negative = put premium dominates, so the PREM tab paints on the identical
+   * ramp as GEX/DEX/VEX/CHEX and the hover card's "Net Prem (C−P)" line is the
+   * same number the cell prints.
+   *
+   * Basis-independent on purpose: premium is mark × TODAY'S VOLUME, so the
+   * "Vol Only" toggle — which only zeroes open interest out of the greek
+   * contract counts — can neither change it nor blank it out.
+   */
+  prem: number
 }
 
 /** One expiration's column: its date + a strike→greek map. */
@@ -164,6 +176,7 @@ export function parseExpiration(
         putVol: pVol,
         callPrem: callPremValue,
         putPrem: putPremValue,
+        prem: callPremValue - putPremValue,
       })
     })
   })

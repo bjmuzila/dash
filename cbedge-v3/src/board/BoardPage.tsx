@@ -316,6 +316,60 @@ export default function BoardPage() {
     setLayoutState((prev) => arrange(prev.filter((i) => i.id !== id)))
   }
 
+  // ── CLEAR ALL ──────────────────────────────────────────────────────────────
+  //
+  // Removing cards one ✕ at a time is the only way to start over today, and it
+  // is the wrong shape of work for "I don't want any of this" — the board a
+  // user most wants to abandon is the one with the most cards on it. It is also
+  // the escape hatch when a board has ended up in a state they cannot drag
+  // their way out of, which is exactly what the grid-scale bug produced.
+  //
+  // It empties the board; it does NOT reset to the starter three. "Clear" that
+  // silently leaves three cards behind is not clear, and + Add card is right
+  // there. readKey now keeps an empty board across reloads (see layoutStore) so
+  // this survives, rather than the starter set reappearing on the next load.
+  //
+  // Deliberately LOCAL only. The account copy is untouched until the user
+  // presses Save layout — the header will say "Unsaved layout" the moment the
+  // board is cleared, so clearing is undoable by reloading the page, and
+  // permanent only when they say so. A one-click control that reached across
+  // every device the user owns would need a real confirmation dialog; this one
+  // needs the arming click below and nothing more.
+  //
+  // ARMED, not dialogged. First click arms the button and it says "Clear all?";
+  // a second click within ARM_MS does it. A modal for a reversible local action
+  // is more ceremony than the action deserves, and a bare one-click wipe of a
+  // board someone spent time on is not defensible.
+  const ARM_MS = 4000
+  const [clearArmed, setClearArmed] = useState(false)
+  const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const disarmClear = useCallback(() => {
+    if (clearTimerRef.current) clearTimeout(clearTimerRef.current)
+    clearTimerRef.current = null
+    setClearArmed(false)
+  }, [])
+
+  // Anything that takes the board out of the state the user was looking at when
+  // they armed it disarms: leaving edit mode, and unmounting.
+  useEffect(() => {
+    if (locked) disarmClear()
+  }, [locked, disarmClear])
+  useEffect(() => disarmClear, [disarmClear])
+
+  const clearAll = () => {
+    if (!clearArmed) {
+      setClearArmed(true)
+      clearTimerRef.current = setTimeout(() => setClearArmed(false), ARM_MS)
+      return
+    }
+    disarmClear()
+    // Not through `arrange`: there is nothing to arrange, and running the empty
+    // array through compactBoard/settleBoard would only be ceremony.
+    setLayoutState([])
+    setMenuOpen(false)
+  }
+
   // One status line, in priority order: what the network is doing, then what is
   // outstanding, then the local-autosave flash. Never two at once — a header
   // that says "Saved" and "Unsaved layout" side by side is worse than silent.
@@ -390,6 +444,29 @@ export default function BoardPage() {
               Save layout
             </button>
           )}
+          {/* Edit mode only, and only when there is something to clear — a
+              "Clear all" on an empty board is a button that cannot do anything.
+              Armed, it goes red: the colour is the warning, so the label does
+              not have to carry one. */}
+          {!locked && layout.length > 0 && (
+            <button
+              onClick={clearAll}
+              onBlur={disarmClear}
+              title={
+                clearArmed
+                  ? `Click again to remove all ${layout.length} cards`
+                  : 'Remove every card and start from an empty board. Your saved account layout is untouched until you press Save layout.'
+              }
+              className={[
+                'rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
+                clearArmed
+                  ? 'border-down bg-raised text-down'
+                  : 'border-line bg-surface text-muted hover:bg-raised hover:text-fg',
+              ].join(' ')}
+            >
+              {clearArmed ? 'Clear all?' : 'Clear all'}
+            </button>
+          )}
           <button
             onClick={() => setLocked((v) => !v)}
             className={[
@@ -435,6 +512,17 @@ export default function BoardPage() {
         </div>
       </ToolbarSlot>
       <div ref={boardRef} className="min-h-0 flex-1 overflow-y-auto">
+        {/* An empty board is otherwise an empty page, which reads as broken
+            rather than as cleared — and the way back is a button in a toolbar
+            the eye is not on at that moment. One line, pointing at it. It sits
+            OUTSIDE <Board> so it cannot be mistaken for a tile or become a drop
+            target. */}
+        {layout.length === 0 && (
+          <div className="px-4 py-10 text-center text-sm text-faint">
+            Empty board — add a card from <span className="text-muted">+ Add card</span> to start
+            building.
+          </div>
+        )}
         <Board
           layout={layout}
           onLayoutChange={setLayoutState}

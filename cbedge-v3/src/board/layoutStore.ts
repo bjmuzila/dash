@@ -1,4 +1,11 @@
-import { BOARD_COLS, compactBoard, resolveBoard, type BoardItem } from '@/design/primitives/Board'
+import {
+  BOARD_COLS,
+  BOARD_MIN_H,
+  BOARD_MIN_W,
+  compactBoard,
+  resolveBoard,
+  type BoardItem,
+} from '@/design/primitives/Board'
 import { CARD_BY_ID, cardTypeOf, migrateCardId } from './catalog'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,24 +135,6 @@ function rescaleStored(key: string, scale: number): void {
   localStorage.setItem(key, JSON.stringify(out))
 }
 
-/**
- * The widest edge in a stored blob, in whatever units it is written in. 0 when
- * there is nothing to measure.
- */
-function storedRightEdge(key: string): number {
-  const raw = localStorage.getItem(key)
-  if (!raw) return 0
-  const arr = JSON.parse(raw) as unknown
-  if (!Array.isArray(arr)) return 0
-  return arr.reduce(
-    (m, i) =>
-      i && typeof i === 'object' && typeof (i as BoardItem).x === 'number'
-        ? Math.max(m, (i as BoardItem).x + (i as BoardItem).w)
-        : m,
-    0,
-  )
-}
-
 if (SCALE !== 1) {
   try {
     rescaleStored(LAYOUT_KEY, SCALE)
@@ -199,18 +188,60 @@ try {
 // cannot have been put there by a user. It is a scale that has been applied to a
 // board that did not need it — the bug above, or any future repeat of it.
 //
-// Halving until it fits is the exact inverse, because every scale in this file
-// is a power of two. Safe to run on EVERY load rather than behind a one-shot
-// key: a correct board never trips it, so there is no "runs again and again"
-// failure mode of the kind that made the half-size heuristic below dangerous.
-// It is the backstop that would have contained the bug above on its own.
+// Safe to run on EVERY load rather than behind a one-shot key: a correct board
+// never trips it, so there is no "runs again and again" failure mode of the kind
+// that made the half-size heuristic below dangerous.
+//
+// ── HOW FAR DOWN, THOUGH ─────────────────────────────────────────────────────
+// "Halve until it fits" is the obvious inverse and it UNDER-CORRECTS. A board
+// quadrupled from cards spanning only half the grid comes back at right = 96;
+// one halving puts it at 48 and the loop stops, leaving every card twice the
+// size it should be — on the grid, adjustable, and still wrong.
+//
+// The catalog knows better. Each card has a `defaultSize`, and a card the user
+// has never resized still holds exactly that size times whatever scale was
+// wrongly applied. So if EVERY card on the board is the same clean power-of-two
+// multiple (>= 2x) of its own catalog default, that multiple IS the scale, and
+// dividing by it restores the board exactly rather than approximately.
+//
+// Every card, not most: one resized card makes the ratios noise, and a wrong
+// guess here is the bug rather than the fix. When the evidence is not unanimous
+// this falls back to halving until it fits, which is at least always reachable.
+function catalogOverscale(items: BoardItem[]): number {
+  let smallest = Infinity
+  let seen = 0
+  for (const i of items) {
+    const def = CARD_BY_ID.get(cardTypeOf(migrateCardId(i.id)))
+    if (!def) continue // a card this build does not have says nothing either way
+    const r = i.w / def.defaultSize.w
+    // A clean power of two, 2x or more. Anything else — a resized card, a card
+    // at its default — and the board is not uniformly over-scaled.
+    if (!Number.isInteger(r) || r < 2 || (r & (r - 1)) !== 0) return 1
+    smallest = Math.min(smallest, r)
+    seen++
+  }
+  return seen > 0 && Number.isFinite(smallest) ? smallest : 1
+}
+
 function repairOverscaledBoard(): void {
-  let right = storedRightEdge(LAYOUT_KEY)
+  const raw = localStorage.getItem(LAYOUT_KEY)
+  if (!raw) return
+  const arr = JSON.parse(raw) as unknown
+  if (!Array.isArray(arr)) return
+  const items = arr.filter(
+    (i): i is BoardItem => !!i && typeof i === 'object' && typeof (i as BoardItem).x === 'number',
+  )
+  if (!items.length) return
+  const right = items.reduce((m, i) => Math.max(m, i.x + i.w), 0)
   if (!(right > BOARD_COLS)) return
-  let factor = 1
-  while (right > BOARD_COLS) {
+
+  let factor = 1 / catalogOverscale(items)
+  // Whatever the catalog said (including "no idea", which is 1), the board has
+  // to end up on the grid. Keep halving until it does.
+  let fitted = right * factor
+  while (fitted > BOARD_COLS) {
     factor /= 2
-    right /= 2
+    fitted /= 2
   }
   rescaleStored(LAYOUT_KEY, factor)
   // Same reasoning as the migration: the account's copy is untouched by this, so
@@ -304,6 +335,44 @@ function serverToCurrentGrid(i: BoardItem): BoardItem {
   return { id: i.id, x: i.x * SCALE, y: i.y * SCALE, w: i.w * SCALE, h: i.h * SCALE }
 }
 
+// ── NO CARD MAY BE UNREACHABLE ───────────────────────────────────────────────
+//
+// Every repair above reasons about what a board PROBABLY was. This one does not
+// reason at all — it is the floor under all of them.
+//
+// The board's scroll port is `overflow-y-auto`: vertical only. So a card wider
+// than the grid extends past the right edge with no way to scroll to it, and its
+// resize handle — bottom-RIGHT corner — is off-screen. The card cannot be made
+// smaller, cannot be moved, cannot be removed by any gesture aimed at it. That
+// is the "the cards are super big and they can't be adjusted" report, and it is
+// what makes an over-scaled board a dead end rather than an annoyance: the state
+// removes the very controls that would undo it.
+//
+// So geometry is clamped into the grid on the way IN, on every read, from every
+// source — localStorage, the synced copy, the account's copy off the wire. A
+// correct board passes through untouched (these are no-ops on legal values), and
+// no stored blob, however corrupt and whatever produced it, can put a card
+// somewhere the user cannot reach. Repairs get to be approximate because this is
+// not.
+//
+// HEIGHT is capped too, generously. A tall card is at least scrollable-to, so
+// this is not the same emergency; but a card several screens deep has its resize
+// handle several screens down, which is unreachable in every sense that matters.
+// 300 rows is 2400px — taller than any card anyone laid out on purpose.
+const BOARD_MAX_H = 300
+
+function fitToGrid(i: BoardItem): BoardItem {
+  const w = Math.max(BOARD_MIN_W, Math.min(Math.round(i.w), BOARD_COLS))
+  const h = Math.max(BOARD_MIN_H, Math.min(Math.round(i.h), BOARD_MAX_H))
+  return {
+    id: i.id,
+    x: Math.max(0, Math.min(Math.round(i.x), BOARD_COLS - w)),
+    y: Math.max(0, Math.round(i.y)),
+    w,
+    h,
+  }
+}
+
 /** Route key in `dashboard_layouts`. Must match /^[a-z0-9][a-z0-9_-]{0,39}$/. */
 export const BOARD_PAGE = 'v3-home'
 /** v3's home board keeps ONE named template; the route allows up to 12. */
@@ -358,14 +427,19 @@ export function sanitizeLayout(
     const id = migrateCardId(item.id)
     if (!CARD_BY_ID.has(cardTypeOf(id)) || seen.has(id)) continue
     seen.add(id)
+    // fitToGrid LAST: regrid may scale the server's copy up into current units,
+    // and it is the result of that — what will actually be rendered — that has
+    // to be reachable.
     kept.push(
-      regrid({
-        id,
-        x: item.x as number,
-        y: item.y as number,
-        w: item.w as number,
-        h: item.h as number,
-      }),
+      fitToGrid(
+        regrid({
+          id,
+          x: item.x as number,
+          y: item.y as number,
+          w: item.w as number,
+          h: item.h as number,
+        }),
+      ),
     )
   }
   if (!kept.length) return null
@@ -375,10 +449,28 @@ export function sanitizeLayout(
   return compact ? compactBoard(kept) : resolveBoard(kept)
 }
 
+/**
+ * AN EMPTY BOARD IS A BOARD.
+ *
+ * sanitizeLayout answers null for an empty array so the caller "can tell 'no
+ * saved layout' from 'an empty one'" — and this function then threw that
+ * distinction away, because null is also what a missing key returns. It did not
+ * matter until "Clear all" existed: BoardPage falls back to `defaultLayout()`
+ * on null, so a board the user had deliberately emptied came back as the three
+ * starter cards on the next load, which reads as the clear not having worked.
+ *
+ * So the two cases are separated HERE, where the difference is actually known:
+ * no key at all -> null (never opened this board, give them the starter set);
+ * a key holding `[]` -> `[]` (they cleared it on purpose, and it stays cleared).
+ * Anything else goes through sanitizeLayout unchanged.
+ */
 function readKey(key: string): BoardItem[] | null {
   try {
     const raw = localStorage.getItem(key)
-    return raw ? sanitizeLayout(JSON.parse(raw)) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    if (Array.isArray(parsed) && parsed.length === 0) return []
+    return sanitizeLayout(parsed)
   } catch {
     return null
   }
@@ -435,7 +527,14 @@ export async function fetchServerLayout(signal?: AbortSignal): Promise<ServerLay
   const rows = templates.filter((t): t is Record<string, unknown> => !!t && typeof t === 'object')
   const pick = rows.find((t) => t.isDefault === true) ?? rows[0]
   if (!pick) return null
-  const layout = sanitizeLayout(pick.layout, undefined, serverToCurrentGrid)
+  // Same distinction readKey makes, for the same reason: a user who cleared
+  // their board and pressed Save layout has an account copy that is legitimately
+  // `[]`, and folding that into null would hand every OTHER machine they sign in
+  // on the starter three instead of the empty board they saved.
+  const layout =
+    Array.isArray(pick.layout) && pick.layout.length === 0
+      ? []
+      : sanitizeLayout(pick.layout, undefined, serverToCurrentGrid)
   if (!layout) return null
   return {
     name: typeof pick.name === 'string' ? pick.name : BOARD_TEMPLATE,

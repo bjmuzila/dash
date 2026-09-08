@@ -403,7 +403,7 @@ export default function OptionsChain({
                       style={{ opacity: replayPinned ? 0.4 : 1, pointerEvents: replayPinned ? 'none' : undefined, width: '100%' }}
                       title={
                         replayPinned
-                          ? 'GEX only in replay — DEX/CHEX/VEX/OI/VOL are not recorded'
+                          ? 'GEX only in replay — DEX/CHEX/VEX/OI/VOL/PREM are not recorded'
                           : undefined
                       }
                     >

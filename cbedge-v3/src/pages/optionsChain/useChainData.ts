@@ -52,7 +52,14 @@ import { etDateKey, etToday, isSessionLive, isSpxFeedLive, isTradingDay } from '
 
 // ── Modes ────────────────────────────────────────────────────────────────────
 
-export const GREEK_MODES = ['gex', 'dex', 'chex', 'vex', 'oi', 'vol'] as const
+// "prem" is the third non-greek lens: NET PREMIUM TRADED at the strike (call
+// premium − put premium, in dollars) — the figure the hover card has always
+// printed on its "Net Prem (C−P)" line, now readable across the whole grid.
+// It renders like a greek, not like the count tabs: one signed dollar figure
+// per cell, same ramp, same rank floors, summed by the ⅀ Total column. Derived
+// from mark × TODAY'S volume, so it is independent of the OI+Vol / Vol Only
+// basis, and a strike that has not traded reads as "·" rather than "+$0".
+export const GREEK_MODES = ['gex', 'dex', 'chex', 'vex', 'oi', 'vol', 'prem'] as const
 export type GreekMode = (typeof GREEK_MODES)[number]
 
 export const DATA_MODES = ['oi-vol', 'vol-only', 'flow'] as const
@@ -634,6 +641,9 @@ export function useChainData(opts: UseChainDataOpts) {
           putVol: 0,
           callPrem: 0,
           putPrem: 0,
+          // Premium is not recorded either, and PREM — like every non-GEX tab —
+          // is pinned off while replay is on.
+          prem: 0,
         })
       })
       return { expiration: exp, label: exp, cells, underlying: replayFrame.spot }
@@ -757,6 +767,11 @@ export function useChainData(opts: UseChainDataOpts) {
       const cell = col.cells.get(strike)
       if (!cell) return null
       if (greekMode === 'vol') return volSideValue(cell, strike, nearestStrike)
+      // PREM: net premium traded (calls − puts), in dollars. A strike with zero
+      // premium on both sides has not traded, so it reads as ABSENT ("·") the
+      // way an untraded VOL cell does — which also keeps the dead wings out of
+      // the column heat scale and the ⅀ totals.
+      if (greekMode === 'prem') return cell.prem || null
       return cell[greekMode]
     },
     [greekMode, nearestStrike, oiSnapshot],
