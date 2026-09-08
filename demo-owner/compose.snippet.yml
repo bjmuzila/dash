@@ -1,7 +1,7 @@
-# ── paste into the VPS docker-compose.yml, alongside the existing services ──
+# ── paste into /opt/dashboard/docker-compose.yml, alongside the other *-web services ──
   demo-owner:
     build: ./demo-owner
-    container_name: demo-owner
+    container_name: demo-web
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8084:80"      # localhost only — Cloudflare Tunnel reaches it
+      - "127.0.0.1:8087:8087"    # localhost only — Cloudflare Tunnel reaches it

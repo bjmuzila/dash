@@ -46,10 +46,10 @@ Run it after editing.
 ```yaml
   demo-owner:
     build: ./demo-owner
-    container_name: demo-owner
+    container_name: demo-web
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8084:80"
+      - "127.0.0.1:8087:8087"
 ```
 
 **c. Add the tunnel route** in `/etc/cloudflared/config.yml`, **above** the catch-all
@@ -57,7 +57,7 @@ Run it after editing.
 
 ```yaml
   - hostname: demo.cbedge.net
-    service: http://127.0.0.1:8084
+    service: http://127.0.0.1:8087
 ```
 
 Then:
