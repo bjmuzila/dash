@@ -1909,6 +1909,212 @@ register('/api/discord-share', {
   },
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// /api/bot-alert — the owner BOT page's fan-out to the trading Discords.
+//
+// WEBHOOKS, NOT A BOT. Everything this does is "post an embed with an image
+// into a fixed channel", which a webhook does with no token, no gateway, and no
+// long-lived process. The one thing webhooks cannot do is READ the message
+// afterwards (reaction tallies) — deliberately out of scope. Note that editing
+// IS still possible later via PATCH /webhooks/{id}/{token}/messages/{id}, which
+// is why messageId is captured below.
+//
+// DESTINATIONS COME FROM ENV, numbered from 1, so adding a fourth Discord is a
+// restart and not a deploy:
+//
+//   DISCORD_WEBHOOK_1_URL    = https://discord.com/api/webhooks/...   (required)
+//   DISCORD_WEBHOOK_1_LABEL  = Bzila Trades                          (optional)
+//   DISCORD_WEBHOOK_1_PING   = <@&123456789012345678>                (optional)
+//
+// ...through _8. A gap in the numbering is fine — the scan checks all 8 and
+// keeps the ones that have a URL. The URLs never leave the server: the client
+// only ever sees { id, label } from the /targets route below and sends ids back.
+//
+// The EMBED IS BUILT HERE, not in the client, so the layout lives in one place
+// and a stale SPA bundle cannot post a malformed embed. Layout A ("Trade
+// Ticket"): action-coloured bar, entry/strike/expiry as three inline fields,
+// thesis as the description, chart attached, disclaimer in the footer.
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const WEBHOOK_SLOTS = 8;
+  const FOOTER_TEXT = 'Bzila Trades | For Informational Purposes Only, Not Financial Advice';
+  // Discord's own cap is 25MB, but the practical cap for a chart screenshot is
+  // far lower and a runaway paste should fail HERE with a readable message
+  // rather than as an opaque 413 from Discord.
+  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+  const ACTION_LABEL = { buy: 'BUY', sell: 'SELL', trim: 'TRIM', 'average-down': 'AVERAGE DOWN' };
+  const ACTION_EMOJI = { buy: '🟢', sell: '🔴', trim: '🟠', 'average-down': '🔵' };
+
+  /** Env → destination list. Called per request so a restart is the only step. */
+  function botTargets() {
+    const out = [];
+    for (let i = 1; i <= WEBHOOK_SLOTS; i++) {
+      const url = (process.env[`DISCORD_WEBHOOK_${i}_URL`] || '').trim();
+      if (!url) continue;
+      out.push({
+        id: String(i),
+        label: (process.env[`DISCORD_WEBHOOK_${i}_LABEL`] || `Discord ${i}`).trim(),
+        url,
+        ping: (process.env[`DISCORD_WEBHOOK_${i}_PING`] || '').trim(),
+      });
+    }
+    return out;
+  }
+
+  /** Same owner gate as /api/discord-share, including its dev-mode fallback. */
+  function ownerOk(ctx, verdict) {
+    const id = (verdict?.userId || '').trim();
+    return id !== '' && (ctx.ownerUserId ? id === ctx.ownerUserId : true);
+  }
+
+  const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+
+  /** "09/08" from "2026-09-08" — what the room reads, not ISO. */
+  function shortExpiry(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    return m ? `${m[2]}/${m[3]}` : '';
+  }
+
+  /** data URL / bare base64 → Buffer. Returns null when there is no image. */
+  function decodeImage(dataUrl) {
+    if (typeof dataUrl !== 'string' || !dataUrl) return null;
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const buf = Buffer.from(base64, 'base64');
+    if (!buf.length) return null;
+    if (buf.length > MAX_IMAGE_BYTES) {
+      throw new Error(`Chart is ${(buf.length / 1048576).toFixed(1)}MB — the limit is ${MAX_IMAGE_BYTES / 1048576}MB`);
+    }
+    return buf;
+  }
+
+  /**
+   * Draft → Discord embed. Layout A. Every field is optional-safe: an empty
+   * strike or price is OMITTED rather than rendered as a blank row, because a
+   * field with no value reads as a bug to whoever is looking at the alert.
+   */
+  function buildEmbed(d, hasImage) {
+    const cls = ['notes', 'options', 'futures', 'equity'].includes(d.assetClass) ? d.assetClass : 'notes';
+    const action = ACTION_LABEL[d.action] ? d.action : 'buy';
+    const ticker = str(d.ticker, 12).toUpperCase();
+    const strike = str(d.strike, 12);
+    const price = str(d.price, 16);
+    const right = d.right === 'put' ? 'P' : 'C';
+    const expiry = shortExpiry(str(d.expiry, 10));
+    const notes = str(d.notes, 4000);
+
+    let color = Number.isInteger(d.color) ? d.color : NaN;
+    if (!Number.isFinite(color) || color < 0 || color > 0xffffff) color = 0x5865f2;
+
+    const embed = { color, footer: { text: FOOTER_TEXT }, timestamp: new Date().toISOString() };
+
+    if (cls === 'notes') {
+      embed.author = { name: 'NOTE' };
+      embed.title = '📝 Analysis';
+    } else {
+      embed.author = { name: `${cls.toUpperCase()} ALERT` };
+      const head = [ACTION_EMOJI[action], ACTION_LABEL[action], '·', ticker];
+      if (cls === 'options' && strike) head.push(`${strike}${right}`);
+      embed.title = head.join(' ');
+
+      const fields = [];
+      if (price) fields.push({ name: 'Entry', value: `$${price}`, inline: true });
+      if (cls === 'options' && strike) {
+        fields.push({ name: 'Strike', value: `${strike} ${right === 'C' ? 'Call' : 'Put'}`, inline: true });
+      }
+      if (cls === 'options' && expiry) fields.push({ name: 'Expiry', value: expiry, inline: true });
+      if (fields.length) embed.fields = fields;
+    }
+
+    if (notes) embed.description = notes;
+    if (hasImage) embed.image = { url: 'attachment://chart.png' };
+    return embed;
+  }
+
+  /** One webhook, one post. Resolves to a result row rather than throwing. */
+  async function postTo(target, embed, imageBuf) {
+    const payload = { embeds: [embed] };
+    if (target.ping) {
+      payload.content = target.ping;
+      // Only the mention TYPES actually present are permitted, so a stray "@"
+      // in a thesis can never turn into an @everyone.
+      const parse = [];
+      if (/<@&\d+>/.test(target.ping)) parse.push('roles');
+      if (/@everyone|@here/.test(target.ping)) parse.push('everyone');
+      payload.allowed_mentions = { parse };
+    }
+
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify(payload));
+    if (imageBuf) form.append('files[0]', new Blob([imageBuf], { type: 'image/png' }), 'chart.png');
+
+    // ?wait=true makes Discord return the created message, which is the only
+    // way to learn its id — and the id is what a later edit needs.
+    const url = target.url + (target.url.includes('?') ? '&' : '?') + 'wait=true';
+    try {
+      const r = await fetch(url, { method: 'POST', body: form, signal: AbortSignal.timeout(20000) });
+      if (!r.ok) {
+        const detail = await r.text().then((t) => t.slice(0, 400)).catch(() => '');
+        return { id: target.id, label: target.label, ok: false, error: `Discord ${r.status}${detail ? `: ${detail}` : ''}` };
+      }
+      const msg = await r.json().catch(() => null);
+      return { id: target.id, label: target.label, ok: true, messageId: msg?.id ?? null, channelId: msg?.channel_id ?? null };
+    } catch (err) {
+      return { id: target.id, label: target.label, ok: false, error: String(err?.message || err) };
+    }
+  }
+
+  // GET /api/bot-alert/targets — id + label ONLY. The webhook URLs and the ping
+  // strings stay server-side; the client sends ids back and never sees a URL.
+  register('/api/bot-alert/targets', {
+    auth: 'user', methods: ['GET'],
+    async handler(req, res, ctx, verdict) {
+      if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
+      send(res, 200, { ok: true, targets: botTargets().map((t) => ({ id: t.id, label: t.label })) });
+    },
+  });
+
+  // POST /api/bot-alert — fan the composed alert out to the selected Discords.
+  //
+  // PARTIAL SUCCESS IS THE NORMAL CASE with several destinations, so this never
+  // collapses to a bare ok/500: every destination gets its own row with its own
+  // error string, and the status is 200 when at least one landed, 502 when none
+  // did. Re-sending after a partial failure is the owner's call — retrying the
+  // whole fan-out here would double-post to the destinations that succeeded.
+  register('/api/bot-alert', {
+    auth: 'user', methods: ['POST'],
+    async handler(req, res, ctx, verdict) {
+      try {
+        if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
+
+        // 12MB cap: a base64 data URL is ~4/3 the size of the image it carries,
+        // so this is the readJson headroom for an 8MB chart.
+        const draft = await readJson(req, 12_000_000).catch((e) => { throw new Error(`Bad body: ${e.message}`); });
+
+        const all = botTargets();
+        if (!all.length) { send(res, 500, { ok: false, error: 'No DISCORD_WEBHOOK_<n>_URL configured' }); return; }
+
+        const wanted = Array.isArray(draft?.targets) ? draft.targets.map(String) : [];
+        const picked = all.filter((t) => wanted.includes(t.id));
+        if (!picked.length) { send(res, 400, { ok: false, error: 'No known destination selected' }); return; }
+
+        const imageBuf = decodeImage(draft?.image);
+        const hasText = str(draft?.notes, 4000) !== '' || str(draft?.ticker, 12) !== '';
+        if (!hasText && !imageBuf) { send(res, 400, { ok: false, error: 'Nothing to post' }); return; }
+
+        const embed = buildEmbed(draft || {}, !!imageBuf);
+        const results = await Promise.all(picked.map((t) => postTo(t, embed, imageBuf)));
+        const okCount = results.filter((r) => r.ok).length;
+
+        send(res, okCount ? 200 : 502, { ok: okCount > 0, sent: okCount, of: results.length, results });
+      } catch (err) {
+        console.error('[bot-alert] failed:', err);
+        send(res, 500, { ok: false, error: String(err?.message || err) });
+      }
+    },
+  });
+}
+
 // /api/tastytrade — TT OAuth → dxfeed streamer creds (module-cached session).
 // GET health / POST returns tokens. Subscriber. Ported verbatim from
 // app/api/tastytrade/route.ts.

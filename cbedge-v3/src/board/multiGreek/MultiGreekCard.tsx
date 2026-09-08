@@ -142,6 +142,18 @@ function readList(key: string): string[] {
 }
 
 /**
+ * What a browser that has never chosen panels opens on. Panel one is the board's
+ * symbol — SPX unless the board has been moved — so the card starts as
+ * SPX · SPY · QQQ with the fourth seat left for the customer.
+ *
+ * Seeded on READ, never written: a card that has only ever shown the defaults
+ * still counts as "nothing chosen", so a later build can change this list and
+ * every untouched board picks the new one up. The moment the customer adds or
+ * removes a panel the list becomes theirs and is stored.
+ */
+const DEFAULT_EXTRAS = ['SPY', 'QQQ']
+
+/**
  * The ADDED panels — never the board's own ticker, which is panel one and is
  * held by the page, not by this card.
  *
@@ -149,11 +161,21 @@ function readList(key: string): string[] {
  * dropped: slots 2-4 of that blob were the user's own choices and are exactly
  * what the extras list means now. Slot 1 is discarded — that seat belongs to the
  * page symbol from here on.
+ *
+ * The page symbol is NOT filtered out here, and that is the fix for panels that
+ * would not stay put. This list is the STORED one; a stored ticker that happens
+ * to equal the board's current symbol is hidden at render time instead (see
+ * `panels`). Dropping it here meant moving the board onto SPY deleted the SPY
+ * panel from storage for good, and moving the board back left a hole the
+ * customer had to re-add — which is what "Multi Greek isn't saving" looked like.
  */
-function loadExtras(pageSymbol: string): string[] {
-  const migrated = readStored(EXTRA_TICKERS_KEY, '') !== ''
-  const raw = migrated ? readList(EXTRA_TICKERS_KEY) : readList(LEGACY_TICKERS_KEY).slice(1)
-  const seen = new Set<string>([pageSymbol.toUpperCase()])
+function loadExtras(): string[] {
+  const storedRaw = readStored(EXTRA_TICKERS_KEY, '')
+  const legacyRaw = readStored(LEGACY_TICKERS_KEY, '')
+  // Nothing has ever been chosen in this browser — open on the standard board.
+  if (storedRaw === '' && legacyRaw === '') return [...DEFAULT_EXTRAS]
+  const raw = storedRaw !== '' ? readList(EXTRA_TICKERS_KEY) : readList(LEGACY_TICKERS_KEY).slice(1)
+  const seen = new Set<string>()
   const out: string[] = []
   for (const t of raw) {
     if (seen.has(t)) continue
@@ -804,7 +826,7 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
   // so. Everything below that used to read the page symbol reads THIS, so the
   // dedupe, the ＋ refusal and the panel list all agree about what panel one is.
   const pageSymbol = pinnedFirst ? pinnedFirst.toUpperCase() : boardSymbol
-  const [extras, setExtras] = useState<string[]>(() => loadExtras(pageSymbol))
+  const [extras, setExtras] = useState<string[]>(() => loadExtras())
   const [addOpen, setAddOpen] = useState(false)
   const [addDraft, setAddDraft] = useState('')
   // A blob written before the split stored 4 here; it clamps to 3, which is the
@@ -853,21 +875,28 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
     write(BASIS_STORE_KEY, b)
   }
 
-  // The board's ticker can be moved from anywhere — the toolbar search, another
-  // card — onto a symbol this card already has as an added panel. Drop the
-  // duplicate rather than draw the same ladder twice.
-  useEffect(() => {
-    const s = pageSymbol.toUpperCase()
-    setExtras((prev) => {
-      if (!prev.includes(s)) return prev
-      const out = prev.filter((t) => t !== s)
-      write(EXTRA_TICKERS_KEY, JSON.stringify(out))
-      return out
-    })
-  }, [pageSymbol])
+  /**
+   * Panel one, then the added ones — each carrying the index it holds in
+   * `extras`, because that index is what remove and rename address and it has to
+   * survive a hidden panel.
+   *
+   * The board's ticker can be moved from anywhere — the toolbar search, another
+   * card — onto a symbol this card already has as an added panel. The duplicate
+   * is HIDDEN for as long as the board sits on it, not deleted. Deleting it was
+   * the bug: moving the board to SPY and back cost the customer their SPY panel
+   * permanently, with nothing on screen to say why. Hiding it lets the board
+   * wander onto a panel's symbol and off again and the card comes back whole.
+   */
+  const panels = useMemo(() => {
+    const head = pageSymbol.toUpperCase()
+    return [
+      { ticker: head, slot: -1 },
+      ...extras.map((t, i) => ({ ticker: t, slot: i })).filter((p) => p.ticker !== head),
+    ]
+  }, [pageSymbol, extras])
 
-  /** Panel one, then the added ones. */
-  const tickers = useMemo(() => [pageSymbol.toUpperCase(), ...extras], [pageSymbol, extras])
+  /** Just the symbols on screen, for the CopyShot caption. */
+  const tickers = useMemo(() => panels.map((p) => p.ticker), [panels])
 
   const writeExtras = useCallback((next: string[]) => {
     write(EXTRA_TICKERS_KEY, JSON.stringify(next))
@@ -965,8 +994,11 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
             {/* Short label on purpose. Spelled out, this button plus the cog
                 wrapped the card header onto a second row at three columns wide,
                 which cost the ladder a whole strike to say "Ticker". */}＋
+            {/* Counts what is STORED, not what is drawn, so it agrees with the
+                disabled state: a panel hidden because the board sits on its
+                symbol still holds its seat. */}
             <span className="ml-0.5 opacity-60">
-              {tickers.length}/{MAX_EXTRA_PANELS + 1}
+              {extras.length + 1}/{MAX_EXTRA_PANELS + 1}
             </span>
           </button>
           <Popover open={addOpen && !full} onClose={() => setAddOpen(false)} align="left">
@@ -1070,20 +1102,22 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
       </CardToolbar>
 
       <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto">
-        {tickers.map((t, i) => (
+        {panels.map(({ ticker: t, slot }, i) => (
           <TickerPanel
             key={i === 0 ? '__page__' : t}
             ticker={t}
             isPageSymbol={i === 0}
             editable={!(i === 0 && pinnedFirst)}
-            onRemove={i === 0 ? undefined : () => removeTicker(i - 1)}
+            onRemove={i === 0 ? undefined : () => removeTicker(slot)}
             anchor={anchor}
             colCount={colCount}
             showEx0={showEx0}
             basis={basis}
             intensity={intensity}
             showLevels={showLevels}
-            onCommitTicker={(next) => commitTicker(i, next)}
+            /* Slot 0 is the page symbol; an added panel is its extras index + 1,
+               which is exactly `slot + 1` — the head carries slot -1. */
+            onCommitTicker={(next) => commitTicker(slot + 1, next)}
             onOpenCell={(cell) =>
               // Clicking the cell that is already open closes it, so the same
               // gesture is both "look" and "put it away".

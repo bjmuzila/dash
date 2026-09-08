@@ -5,7 +5,7 @@ import ThemedSelect from "../components/ThemedSelect";
 import ThemedDatePicker from "../components/ThemedDatePicker";
 
 /* ────────────────────────────────────────────────────────────────────────────
- * BOT — trade-alert composer for the two Discord bots.
+ * BOT — trade-alert composer. One post, fanned out to several Discord servers.
  *
  * UI SHELL ONLY. Nothing here talks to Discord yet: "Broadcast Alert" pushes
  * the composed alert onto local state and it renders in the Activity Feed tab.
@@ -13,9 +13,12 @@ import ThemedDatePicker from "../components/ThemedDatePicker";
  * the bottom of this file — post `AlertDraft` to the server route and keep the
  * optimistic append. Do NOT scatter fetch calls through the form.
  *
- * The bot names below are placeholders — rename `BOTS` once the two Discord
- * bots are named. `id` is what the server will key on, so pick those
- * deliberately at the same time.
+ * DESTINATIONS ARE SERVER-OWNED. The list comes from GET /api/bot-alert/targets
+ * and each entry's `id` is the key the server maps to a webhook URL — the URLs
+ * themselves never reach the client. Adding a fourth Discord is therefore an env
+ * var and a restart, NOT an edit here and a rebuild. `FALLBACK_TARGETS` below is
+ * only what renders before that route answers (or when it 404s, pre-wiring), so
+ * the page is usable while the transport is still being built.
  *
  * Theme: everything sources from lib/theme (OWNER_THEME / homeInputStyle) and
  * the shared PageShell + Card. No hardcoded hex in this file.
@@ -24,12 +27,18 @@ import ThemedDatePicker from "../components/ThemedDatePicker";
 const CYAN = OWNER_THEME.cyan;
 const GREEN = OWNER_THEME.green;
 
-// ── The two bots ─────────────────────────────────────────────────────────────
-type BotId = "bot-a" | "bot-b";
-const BOTS: { id: BotId; label: string; accent: string }[] = [
-  { id: "bot-a", label: "Bot 1", accent: CYAN },
-  { id: "bot-b", label: "Bot 2", accent: OWNER_THEME.orange },
-];
+// ── Destinations ─────────────────────────────────────────────────────────────
+type Target = { id: string; label: string; accent: string };
+
+/** Accents cycle so each destination keeps one colour across the whole page. */
+const TARGET_ACCENTS = [CYAN, OWNER_THEME.orange, OWNER_THEME.gold, OWNER_THEME.lightBlue, GREEN];
+
+/** Shown until /api/bot-alert/targets answers. Placeholder names on purpose. */
+const FALLBACK_TARGETS: Target[] = ["Discord 1", "Discord 2", "Discord 3", "Discord 4"].map((label, i) => ({
+  id: `discord-${i + 1}`,
+  label,
+  accent: TARGET_ACCENTS[i % TARGET_ACCENTS.length],
+}));
 
 // ── Form vocabulary ──────────────────────────────────────────────────────────
 type AssetClass = "notes" | "options" | "futures" | "equity";
@@ -111,7 +120,8 @@ const ASSETS: { id: AssetClass; label: string }[] = [
 type BroadcastAlert = {
   id: string;
   at: number;
-  bots: BotId[];
+  /** Destination ids, as the server keys them. */
+  bots: string[];
   assetClass: AssetClass;
   action: TradeAction;
   ticker: string;
@@ -124,7 +134,11 @@ type BroadcastAlert = {
   image: string | null;
   /** Resolved embed bar, "#RRGGBB". Send it as barColorInt(bar). */
   bar: string;
+  /** Per-destination outcome from the server. Empty until the POST answers. */
+  results: SendResult[];
 };
+
+type SendResult = { id: string; label?: string; ok: boolean; error?: string; messageId?: string | null };
 
 function todayIso(): string {
   const d = new Date();
@@ -203,7 +217,8 @@ export default function Bot() {
   const [tab, setTab] = useState<"compose" | "feed">("compose");
   const [feed, setFeed] = useState<BroadcastAlert[]>([]);
 
-  const [bots, setBots] = useState<BotId[]>(["bot-a"]);
+  const [targets, setTargets] = useState<Target[]>(FALLBACK_TARGETS);
+  const [bots, setBots] = useState<string[]>([]);
   const [assetClass, setAssetClass] = useState<AssetClass>("options");
   const [action, setAction] = useState<TradeAction>("buy");
   const [ticker, setTicker] = useState("");
@@ -215,6 +230,8 @@ export default function Bot() {
   const [image, setImage] = useState<string | null>(null);
   const [barChoice, setBarChoice] = useState<string>(BAR_AUTO);
   const [dragOver, setDragOver] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendErr, setSendErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const shows = SHOWS[assetClass];
@@ -250,7 +267,38 @@ export default function Bot() {
     fr.readAsDataURL(file);
   }
 
-  const toggleBot = (id: BotId) =>
+  /**
+   * Destination list, server-owned. A 404 here is the EXPECTED state until the
+   * route exists — fall back rather than blanking the composer, because a page
+   * that cannot be used at all is a worse failure than placeholder names.
+   */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/bot-alert/targets", { cache: "no-store" });
+        if (!r.ok) return;
+        const j = await r.json();
+        const rows: Target[] = Array.isArray(j?.targets)
+          ? j.targets
+              .filter((t: unknown): t is { id: string; label?: string } => !!t && typeof (t as { id?: unknown }).id === "string")
+              .map((t: { id: string; label?: string }, i: number) => ({
+                id: t.id,
+                label: t.label || t.id,
+                accent: TARGET_ACCENTS[i % TARGET_ACCENTS.length],
+              }))
+          : [];
+        if (alive && rows.length) setTargets(rows);
+      } catch {
+        /* offline / not wired — FALLBACK_TARGETS stands */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const toggleBot = (id: string) =>
     setBots((prev) => (prev.includes(id) ? prev.filter((b) => b !== id) : [...prev, id]));
 
   const canSend = useMemo(() => {
@@ -265,30 +313,93 @@ export default function Bot() {
    * when the Discord routes exist, POST the draft here and keep this optimistic
    * append so the feed still updates instantly.
    */
-  function broadcast() {
-    if (!canSend) return;
-    const draft: BroadcastAlert = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      at: Date.now(),
-      bots: [...bots],
-      assetClass,
-      action,
-      ticker: ticker.trim(),
-      expiry,
-      strike: strike.trim(),
-      right,
-      price: price.trim(),
-      notes: notes.trim(),
-      image,
-      bar,
-    };
-    setFeed((prev) => [draft, ...prev]);
-    setTicker("");
-    setStrike("");
-    setPrice("");
-    setNotes("");
-    setImage(null);
-    setTab("feed");
+  /**
+   * The ONE transport call. POSTs the draft to /api/bot-alert, which owns the
+   * webhook URLs and builds the embed — this sends fields, never HTML and never
+   * a webhook URL.
+   *
+   * The append is NOT optimistic. With several destinations a partial failure
+   * is the normal case, and a feed row that appeared before the send would be
+   * claiming the alert went out when two of four rejected it. So the row is
+   * written once the server has answered, carrying the per-destination results.
+   *
+   * The composer is only CLEARED when at least one destination took the alert.
+   * On a total failure the draft stays exactly as typed, because the fix is
+   * usually "try again in ten seconds", not "retype the thesis".
+   */
+  async function broadcast() {
+    if (!canSend || sending) return;
+    setSending(true);
+    setSendErr(null);
+    try {
+      const res = await fetch("/api/bot-alert", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          targets: bots,
+          assetClass,
+          action,
+          ticker: ticker.trim(),
+          expiry,
+          strike: strike.trim(),
+          right,
+          price: price.trim(),
+          notes: notes.trim(),
+          image,
+          color: barColorInt(bar),
+        }),
+      });
+
+      // The route answers JSON on every path, including its failures — read the
+      // body for the reason rather than reducing it to a status code.
+      const json = await res.json().catch(() => null);
+      const results: SendResult[] = Array.isArray(json?.results) ? json.results : [];
+
+      if (!json?.ok) {
+        const why =
+          json?.error ||
+          results.find((r) => !r.ok)?.error ||
+          `Broadcast failed (${res.status})`;
+        setSendErr(why);
+        return;
+      }
+
+      setFeed((prev) => [
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          at: Date.now(),
+          bots: [...bots],
+          assetClass,
+          action,
+          ticker: ticker.trim(),
+          expiry,
+          strike: strike.trim(),
+          right,
+          price: price.trim(),
+          notes: notes.trim(),
+          image,
+          bar,
+          results,
+        },
+        ...prev,
+      ]);
+
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length) {
+        setSendErr(`Sent to ${json.sent}/${json.of} — failed: ${failed.map((f) => f.label || f.id).join(", ")}`);
+      }
+
+      setTicker("");
+      setStrike("");
+      setPrice("");
+      setNotes("");
+      setImage(null);
+      setTab("feed");
+    } catch (err) {
+      setSendErr(String((err as Error)?.message || err));
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -367,7 +478,7 @@ export default function Bot() {
             <div>
               <div style={sectionLabel}>Broadcast To</div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {BOTS.map((b) => (
+                {targets.map((b) => (
                   <Pill key={b.id} active={bots.includes(b.id)} accent={b.accent} onClick={() => toggleBot(b.id)}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                       <span
@@ -384,16 +495,16 @@ export default function Bot() {
                   </Pill>
                 ))}
                 <Pill
-                  active={bots.length === BOTS.length}
+                  active={bots.length === targets.length && targets.length > 0}
                   accent={OWNER_THEME.lightBlue}
-                  onClick={() => setBots(bots.length === BOTS.length ? [] : BOTS.map((b) => b.id))}
+                  onClick={() => setBots(bots.length === targets.length ? [] : targets.map((b) => b.id))}
                 >
-                  Both
+                  All
                 </Pill>
               </div>
               {bots.length === 0 && (
                 <div style={{ fontSize: 11, color: OWNER_THEME.red, marginTop: 8 }}>
-                  Pick at least one bot to broadcast to.
+                  Pick at least one Discord to broadcast to.
                 </div>
               )}
             </div>
@@ -701,13 +812,13 @@ export default function Bot() {
             >
               <div style={{ fontSize: 12, color: OWNER_THEME.text, fontVariantNumeric: "tabular-nums" }}>
                 {bots.length === 0
-                  ? "No bot selected"
-                  : `→ ${BOTS.filter((b) => bots.includes(b.id)).map((b) => b.label).join(" + ")}`}
+                  ? "No destination selected"
+                  : `→ ${targets.filter((b) => bots.includes(b.id)).map((b) => b.label).join(" + ")}`}
               </div>
               <button
                 type="button"
                 onClick={broadcast}
-                disabled={!canSend}
+                disabled={!canSend || sending}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -717,7 +828,8 @@ export default function Bot() {
                   fontSize: 14,
                   fontWeight: 800,
                   letterSpacing: "0.02em",
-                  cursor: canSend ? "pointer" : "not-allowed",
+                  cursor: canSend && !sending ? "pointer" : "not-allowed",
+                  opacity: sending ? 0.7 : 1,
                   border: `1px solid ${rgba(CYAN, canSend ? 0.5 : 0.15)}`,
                   background: canSend
                     ? `linear-gradient(180deg, ${rgba(CYAN, 0.3)}, ${rgba(CYAN, 0.08)})`
@@ -727,9 +839,25 @@ export default function Bot() {
                   transition: "all 0.15s",
                 }}
               >
-                <span style={{ fontSize: 15 }}>🔔</span> Broadcast Alert
+                <span style={{ fontSize: 15 }}>{sending ? "⏳" : "🔔"}</span>
+                {sending ? "Broadcasting…" : "Broadcast Alert"}
               </button>
             </div>
+
+            {sendErr && (
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  fontSize: 12,
+                  border: `1px solid ${rgba(OWNER_THEME.red, 0.4)}`,
+                  background: rgba(OWNER_THEME.red, 0.1),
+                  color: OWNER_THEME.text,
+                }}
+              >
+                {sendErr}
+              </div>
+            )}
           </div>
         </Card>
       ) : (
@@ -782,9 +910,16 @@ export default function Bot() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 14, fontWeight: 800, color: accent }}>{headline(a)}</span>
-                        {BOTS.filter((b) => a.bots.includes(b.id)).map((b) => (
+                        {targets.filter((b) => a.bots.includes(b.id)).map((b) => {
+                          // A tag says whether THAT destination took it — a row
+                          // that only listed the intended targets would read as
+                          // "delivered" even where Discord rejected the post.
+                          const r = a.results.find((x) => x.id === b.id);
+                          const bad = r != null && !r.ok;
+                          return (
                           <span
                             key={b.id}
+                            title={bad ? r?.error : undefined}
                             style={{
                               fontSize: 10,
                               fontWeight: 800,
@@ -792,14 +927,17 @@ export default function Bot() {
                               textTransform: "uppercase",
                               padding: "2px 8px",
                               borderRadius: 999,
-                              border: `1px solid ${rgba(b.accent, 0.3)}`,
-                              background: rgba(b.accent, 0.1),
-                              color: b.accent,
+                              border: `1px solid ${rgba(bad ? OWNER_THEME.red : b.accent, 0.3)}`,
+                              background: rgba(bad ? OWNER_THEME.red : b.accent, 0.1),
+                              color: bad ? OWNER_THEME.red : b.accent,
+                              textDecoration: bad ? "line-through" : "none",
                             }}
                           >
+                            {bad ? "✕ " : ""}
                             {b.label}
                           </span>
-                        ))}
+                          );
+                        })}
                         <span style={{ marginLeft: "auto", fontSize: 11, color: OWNER_THEME.text }}>{ago(a.at)}</span>
                       </div>
                       {a.notes && (

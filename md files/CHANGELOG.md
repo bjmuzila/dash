@@ -1,66 +1,82 @@
 # Changelog
 
-## 2026-09-08 (d) - v3: `/v3/chain`, the real option chain (`cbedge-v3/src/pages/Chain.tsx` NEW, `cbedge-v3/src/pages/chain/*` NEW, `cbedge-v3/src/App.tsx`, `cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/src/pages/TradersDashboard.tsx`, `app/v3/chain/route.ts` NEW)
+## 2026-09-08 (e) - BOT posts for real: webhook fan-out to N Discords (`server-v2/api-router.js`, `owner-vite/src/pages/Bot.tsx`)
 
-**A new page, not a mode of the old one.** `/v3/options-chain` is a GEX MATRIX —
-one column per expiration, every cell a derived exposure painted by a heat skin.
-It answers "where is the gamma". `/v3/chain` is the BOOK, the thing thinkorswim
-and tastytrade mean by an option chain: calls on the left, puts on the right,
-strikes down the middle, and the quotes themselves in the cells. They share the
-feed (`/api/chains`) and nothing else.
+Webhooks, not a bot. Everything BOT does is "post an embed with an image into a
+fixed channel", which a webhook does with no token, no gateway, and no
+long-lived process to keep alive. The single thing webhooks cannot do is READ
+the message afterwards - reaction tallies - and that was explicitly declared
+pointless. Editing later is still possible (`PATCH /webhooks/{id}/{token}/messages/{id}`),
+which is why the message id is captured on every send.
 
-**The layout.** Columns are MIRRORED around the strike, so bid sits against bid
-and a strike reads across in one movement (the call wing renders the selected
-list reversed). ITM is a 5%-white wash rather than a colour, so it does not
-fight the tone colours the columns already use, and it is translucent so the
-row hover still reads through. The spot line is its own row, drawn BETWEEN the
-two strikes that bracket the underlying — the nearest strike is separately
-marked ATM. Every expiration is a `<tbody>` in ONE table, which is what keeps
-the columns aligned across groups.
+**NEW ROUTES, nothing existing touched.** `server-with-proxy.js`, `/proxy/*`, the
+WebSocket and `/api/discord-share` are all unmodified. Two routes added, both
+behind the same owner gate `/api/discord-share` uses (including its "any
+signed-in user when `OWNER_USER_ID` is unset" dev fallback):
 
-**Sixteen columns, four presets.** Bid · Ask · Mark · Sprd · Sprd% · IV · Δ · Γ ·
-Θ · ν · Vol · OI · V/OI · Extr · ITM% · B/E. Presets: Standard (the default
-read), Greeks, Liquidity, Analysis. Any subset can be picked from the column
-popover; the layout persists in `localStorage`, because a chain layout is a
-habit, not a preference you re-set daily. The last column cannot be removed —
-there would be no control left on screen to get back from it.
+  - `GET /api/bot-alert/targets` - `{ id, label }` only. Webhook URLs and ping
+    strings never leave the server; the client sends ids back.
+  - `POST /api/bot-alert` - builds the embed and fans it out.
 
-**Expirations are the accordion, not a dropdown.** Several can be open at once,
-each loads WHEN IT IS OPENED, and each header carries its own DTE, a monthly
-(third-Friday) badge, ATM straddle IV, call/put OI, the P/C ratio and the day's
-volume. An open expiry stays offered even when the ladder is collapsed to 6/12/30.
+**Destinations are env, numbered 1-8**, so a fourth Discord is a restart and not
+a deploy. Gaps in the numbering are fine:
 
-**Entry is TWO parallel requests, not a waterfall** (v3 non-negotiable #3).
-`/api/chains` with NO `expiration` returns the nearest three expiries in one
-payload, so the front expiry is painted off the first response; the expirations
-list only decides what the accordion OFFERS. The rail prefetches both URLs on
-hover, and the seed read carries a 15s stale window so the warmed cache entry is
-actually read back instead of being stepped over by a `staleMs: 0` refetch.
+    DISCORD_WEBHOOK_1_URL    = https://discord.com/api/webhooks/...   (required)
+    DISCORD_WEBHOOK_1_LABEL  = Bzila Trades                          (optional)
+    DISCORD_WEBHOOK_1_PING   = <@&123456789012345678>                (optional)
 
-**The strike window is bounded by default** — 40 around ATM, with 20/80/All.
-SPX lists hundreds of strikes per expiry; "All" is one click and is an explicit
-choice. That window is what stands in for virtualisation. The page centres
-itself on the spot row once per symbol, measured rather than via `offsetTop`
-(the scroll container is not a positioned ancestor).
+**The embed is built server-side.** The layout (A - Trade Ticket) lives in ONE
+function, so a stale SPA bundle cannot post a malformed embed and changing the
+format does not need a frontend deploy. Empty fields are omitted rather than
+rendered blank - a field with no value reads as a bug to whoever sees the alert.
+`allowed_mentions` is derived from what the ping string actually contains, so a
+stray `@` in a thesis can never become an `@everyone`.
 
-**No Last and no Net Change column, deliberately.** The feed
-(`server-v2/proxy-tastytrade.js → fetchChainFull`) carries symbol, OI, volume,
-delta, gamma, theta, vega, IV, bid, ask and mark — there is no `last` and no
-previous close on the wire. An invented column would have to be `mark` under a
-different heading.
+**Partial success is the normal case with four destinations**, so the route never
+collapses to a bare ok/500: every destination returns its own row with its own
+error string, 200 when at least one landed and 502 when none did. It does NOT
+retry the fan-out - that would double-post to the destinations that succeeded.
 
-REST + a 20s poll (SPX on the ~24/5 feed, everything else RTH-only, hidden tabs
-skipped), no socket, no canvas. Zero theme-baseline entries: no colour literal,
-no Tailwind palette class, every size off the type scale. Follows the board
-symbol like every other v3 page — no ticker box.
+Client side, three consequences:
 
-Registered in all four places AGENTS.md requires: the page, the `lazy()` route in
-`App.tsx`, the `NAV` entry in `Shell.tsx` (next to Options Chain), and
-`app/v3/chain/route.ts` calling `serveSpaShell("v3")` so a hard refresh on
-`/v3/chain` does not 404. Also added to `ALL_PAGES` / `LIVE_ROUTES` in
-`TradersDashboard.tsx`, the third list AGENTS.md says moves with the other two.
-No phone tab — `src/mobile/mobileNav.ts` already records why a chain at 390px is
-a picture of a page rather than the page.
+  - The feed append is NOT optimistic. A row written before the send would claim
+    delivery when two of four rejected it, so the row is written from the
+    server's answer and carries the per-destination result. A destination that
+    failed shows struck through in red with Discord's own message on hover.
+  - The composer only clears when at least one destination took the alert. On a
+    total failure the draft stays exactly as typed - the fix is usually "try
+    again in ten seconds", not "retype the thesis".
+  - 12MB `readJson` cap on this route (a base64 data URL is ~4/3 its image), and
+    an 8MB image ceiling that fails here with a readable message rather than as
+    an opaque 413 from Discord.
+
+## 2026-09-08 (d) - BOT: layout A picked, and the embed bar is a per-alert choice (`owner-vite/src/pages/Bot.tsx`)
+
+**Layout A (Trade Ticket) is the format.** Accent bar coloured by the trade,
+entry/strike/expiry as three inline fields above the thesis, chart below,
+disclaimer in the footer.
+
+**The bar is now data, not a constant.** That stripe down the left of a Discord
+embed is the embed's `color` field - a plain 24-bit int - so it is chosen per
+alert. New "Embed Bar Colour" row in the composer: `Auto` plus six swatches
+(green / red / amber / cyan / blurple / white), with the resolved hex AND the
+integer Discord actually wants printed next to them, so the payload value is
+visible while composing rather than guessed later.
+
+`Auto` is the default and the one to leave alone - it derives the bar from the
+trade action (buy green, sell red, trim amber, average-down cyan) and a Note
+gets blurple rather than green, because a Note is not a trade. Colour then means
+the same thing in every post and the room learns to read the stripe before the
+text. The manual swatches are for what Auto cannot know: flagging a re-post,
+colour-coding a series, a Note that should look nothing like a trade.
+
+Two deliberate details:
+
+  - `BAR_COLORS` hex values do NOT come from `lib/theme`, and that is not a
+    theme violation. They are payload being sent to Discord, and they have to
+    read correctly against Discord's dark surface, not this app's.
+  - The Activity Feed row now wears the same bar as a 4px left border, so the
+    composer shows what the room will see instead of a second colour scheme.
 
 ## 2026-09-08 (c) - BOT: paste a chart straight into the alert, and four Discord layouts to pick from (`owner-vite/src/pages/Bot.tsx`, `generated/2026-09-08-bot-discord-embed-ideas.html`)
 
