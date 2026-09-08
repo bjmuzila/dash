@@ -1,5 +1,100 @@
 # Changelog
 
+## 2026-09-08 (l) - The embed palette moves to the server, because v3's theme check was right (`server-v2/api-router.js`, `cbedge-v3/src/shell/BotAlertPanel.tsx`)
+
+`check-theme` failed the v3 panel on twelve colour literals and refusing it was
+correct - but the fix is not a token. Those hexes are Discord PAYLOAD: they are
+chosen to read against Discord's own surface, they never touch a CB Edge
+pixel, and adding them to `tokens.css` would put six foreign colours in the
+design system purely to get past a lint.
+
+So the server owns them instead:
+
+  - `BARS` lives in the `/api/bot-alert` block, with `ACTION_BAR` (buy green,
+    sell red, trim amber, average-down cyan) and `NOTE_BAR` (blurple).
+  - `GET /api/bot-alert/targets` now ships `bars` alongside the destinations, so
+    a client can draw the swatch row from server data.
+  - The composer sends a bar BY NAME - `'auto' | 'green' | ...` - and
+    `resolveBarInt()` turns it into the integer Discord wants. A legacy caller
+    sending a resolved `color` integer (the owner page, the v2 panel) still
+    works; the named form wins when both are present.
+
+Net effect: zero colour literals in the v3 file, passing for the right reason
+rather than by suppression, and the palette has ONE home instead of three
+copies that could drift.
+
+## 2026-09-08 (k) - BOT moves into both toolbars, owner-gated (`components/shared/BotAlert.tsx` NEW, `components/shared/BotAlertPanel.tsx` NEW, `cbedge-v3/src/shell/BotAlert.tsx` NEW, `cbedge-v3/src/shell/BotAlertPanel.tsx` NEW, `components/shared/GlobalToolbar.tsx`, `cbedge-v3/src/shell/Shell.tsx`)
+
+The composer is now a toolbar dropdown, so an alert gets written while looking
+at the chart that justified it. A trip to another origin is long enough that it
+gets written later, from memory, or not at all.
+
+**Two implementations, deliberately.** The shells share no styling system - v3
+is class-based on its design tokens, v2 is inline-styled on `HOME_THEME` - and
+v3's `@` alias points at its own `src`, so there is no import path between them.
+The FIELDS and the single POST are identical on purpose: a second, subtly
+different composer is how one surface starts posting alerts that do not look
+like the other's. **Change one, change both.**
+
+**Owner-gated twice.** Neither component renders anything for a non-owner - no
+button, no DOM, and v3 never fetches the panel chunk. That is chrome. The gate
+is `/api/bot-alert`, which checks the owner id server-side and 403s everyone
+else, so a rendered composer would still fail at every button. v2 uses
+`useIsOwner` from `@/components/auth/useIsOwner` (documented canonical, FAILS
+CLOSED); v3 uses `isOwner` from `@/data/auth`. Same pairing as BzilaAlerts.
+
+**v3's panel is `lazy()`** because `Shell.tsx` is the entry chunk, capped at
+37.1KB brotli by budgets.json. The trigger is toolbar chrome and has to be in
+it; the composer is several KB that exactly one account can ever open. v2's is
+`dynamic(..., { ssr: false })` for the same reason - every visitor downloads
+GlobalToolbar.
+
+**v2's panel is portaled, `position: fixed`, anchored off a DOMRect** - not
+`position: absolute`. The toolbar pill sets `backdrop-filter`, which creates a
+stacking context that traps absolutely-positioned children (the load-bearing
+comment in GlobalToolbar.tsx). Same recipe as NavMenu and BzilaAlerts.
+
+**What is NOT in the dropdown: Manage.** Adding a Discord or pasting a webhook
+URL is setup, done once, and it stays on owner.cbedge.net where all four routes
+are visible at once.
+
+Two behaviours worth knowing: the panel does NOT close on send (with several
+destinations a partial failure is normal, and closing would hide "2 of 4
+landed" at the moment it matters), and sending clears only the per-alert fields
+- destinations and asset class survive, because the next alert usually goes to
+the same rooms about the same kind of thing and re-picking them every time is
+how one gets forgotten.
+
+## 2026-09-08 (j) - BOT: the save that silently did nothing, and the missing "&" (`owner-vite/src/pages/BotManage.tsx`, `server-v2/api-router.js`)
+
+**Why a corrected ping would not stick.** A Discord saves as ONE unit, so a
+single invalid ping row rejects the whole card - including the rows that were
+fine. Options / Futures / Equity were still holding role NAMES, so every Save
+was refused and the corrected Notes ping never reached the database. The rule is
+right (never store an unusable ping) but the refusal was reported in a banner at
+the TOP of the page, which is off-screen when you are looking at the fourth
+route row. So it read as "I saved it and nothing changed".
+
+The refusal now renders INSIDE the card, the card border turns red, and the
+message says explicitly that nothing was saved and names every offending row.
+Server-side rejections land in the same place.
+
+**The other half: `<@ID>` is not `<@&ID>`.** They differ by one character and
+look identical at a glance, but the first tags one PERSON and the second tags a
+ROLE - and a role id pasted without the `&` becomes a user that does not exist.
+Two additions:
+
+  - The field now says which it is while you type, and for a user mention offers
+    the exact role form of the same id to paste.
+  - `postTo()` extends the `mention_roles` check to `mentions`, so a user
+    mention that did not resolve is reported the same way a role is, with the
+    `&` fix in the message.
+
+**A row still showing a stale warning is correct, not a bug:** Test posts what is
+STORED, so if a save was refused the test proves what the room would actually
+get. That is the behaviour that surfaced this - the warning naming an old role
+id was the evidence the save had never landed.
+
 ## 2026-09-08 (i) - BOT: catch @unknown-role, the ping failure Discord reports as success (`server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`, `owner-vite/src/pages/Bot.tsx`)
 
 A role ID that does not exist IN THAT SERVER is not an error to Discord. It

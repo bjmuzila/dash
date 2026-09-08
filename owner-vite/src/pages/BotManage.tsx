@@ -63,6 +63,15 @@ type Draft = {
  * save; this mirrors the same rule so the field says so while it is being
  * typed, which is where the mistake actually happens.
  */
+function pingKind(v: string): "role" | "user" | "everyone" | null {
+  const t = v.trim();
+  if (/^<@&\d{15,25}>$/.test(t)) return "role";
+  if (/^<@!?\d{15,25}>$/.test(t)) return "user";
+  if (/^@(everyone|here)$/.test(t)) return "everyone";
+  if (/^\d{15,25}$/.test(t)) return "role"; // bare id — the server wraps it as a role
+  return null;
+}
+
 function pingProblem(v: string): string | null {
   const t = v.trim();
   if (!t) return null;
@@ -103,6 +112,9 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [testMsg, setTestMsg] = useState<Record<string, string>>({});
+  /** Save failures shown IN the card — a top-of-page banner is off-screen when
+   *  you are looking at the fourth route row, which is where they get missed. */
+  const [cardErr, setCardErr] = useState<Record<string, string>>({});
 
   function applyPayload(j: { discords?: DiscordRow[]; live?: boolean }) {
     setRows(Array.isArray(j?.discords) ? j.discords : []);
@@ -144,7 +156,7 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
   const patch = (d: DiscordRow, p: Partial<Draft>) =>
     setDrafts((prev) => ({ ...prev, [d.id]: { ...draftFor(d), ...p } }));
 
-  async function post(body: unknown, tag: string) {
+  async function post(body: unknown, tag: string, cardId?: string) {
     setBusy(tag);
     setErr(null);
     try {
@@ -157,7 +169,10 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
       if (!j?.ok) throw new Error(j?.error || `Failed (${r.status})`);
       applyPayload(j);
     } catch (e) {
-      setErr(String((e as Error)?.message || e));
+      const msg = String((e as Error)?.message || e);
+      // Server-side rejections land next to the fields too, for the same reason.
+      if (cardId) setCardErr((prev) => ({ ...prev, [cardId]: msg }));
+      else setErr(msg);
     } finally {
       setBusy(null);
     }
@@ -165,15 +180,26 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
 
   function save(d: DiscordRow) {
     const dr = draftFor(d);
-    // The server rejects a bad ping too, but catching it here names every bad
-    // row at once instead of one per round trip.
+    // A Discord saves as ONE unit, so a single bad ping row rejects the whole
+    // card — including the three rows that were fine. That is how a corrected
+    // Notes ping could sit in the box, look saved, and never reach the database
+    // while Options still held a role NAME two rows up. The rule itself is
+    // right (never store an unusable ping); what was wrong is that the refusal
+    // was reported in a banner at the top of the page, nowhere near the field.
+    // It now renders inside this card and names every offending row.
     const bad = ROUTE_ROWS
       .map((r) => ({ r, p: pingProblem(dr.pings[r.key] ?? d.routes[r.key]?.ping ?? "") }))
       .filter((x) => x.p);
     if (bad.length) {
-      setErr(`Fix the ping on ${bad.map((x) => x.r.label).join(", ")} first — ${bad[0].p}`);
+      setCardErr((prev) => ({
+        ...prev,
+        [d.id]: `Nothing was saved — this Discord saves as one unit and ${bad
+          .map((x) => x.r.label)
+          .join(", ")} ${bad.length > 1 ? "hold role NAMES" : "holds a role NAME"}. Discord needs the ID.`,
+      }));
       return;
     }
+    setCardErr((prev) => ({ ...prev, [d.id]: "" }));
     // url: "" means KEEP (the client never had the secret); null means DELETE.
     const routes: Record<string, { url?: string | null; ping?: string } | null> = {};
     for (const row of ROUTE_ROWS) {
@@ -197,6 +223,7 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
         },
       },
       `save:${d.id}`,
+      d.id,
     );
   }
 
@@ -330,7 +357,7 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                 key={d.id}
                 style={{
                   borderRadius: 14,
-                  border: `1px solid ${dirty ? rgba(CYAN, 0.4) : OWNER_THEME.border}`,
+                  border: `1px solid ${cardErr[d.id] ? rgba(OWNER_THEME.red, 0.55) : dirty ? rgba(CYAN, 0.4) : OWNER_THEME.border}`,
                   background: OWNER_THEME.panelInset,
                   overflow: "hidden",
                 }}
@@ -371,6 +398,21 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                     Delete
                   </button>
                 </div>
+
+                {cardErr[d.id] && (
+                  <div
+                    style={{
+                      padding: "10px 14px",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      borderBottom: `1px solid ${OWNER_THEME.border}`,
+                      background: rgba(OWNER_THEME.red, 0.12),
+                      color: OWNER_THEME.text,
+                    }}
+                  >
+                    {cardErr[d.id]}
+                  </div>
+                )}
 
                 {/* ── Identity ──────────────────────────────────────────── */}
                 {/* Blank is a real setting: it means "post under the webhook's
@@ -440,6 +482,11 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                     const cleared = !!dr.clear[row.key];
                     const pingVal = dr.pings[row.key] ?? cur?.ping ?? "";
                     const pingErr = pingProblem(pingVal);
+                    // <@&ID> and <@ID> differ by one character and look identical
+                    // at a glance, but one tags a role and the other tags a
+                    // single person. Say which, rather than letting a missing "&"
+                    // pass silently.
+                    const kind = pingErr ? null : pingKind(pingVal);
                     return (
                       <div
                         key={row.key}
@@ -517,6 +564,18 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
 
                         {pingErr && (
                           <span style={{ fontSize: 11, color: OWNER_THEME.red, flex: "1 1 100%" }}>{pingErr}</span>
+                        )}
+
+                        {kind === "user" && (
+                          <span style={{ fontSize: 11, color: OWNER_THEME.gold, flex: "1 1 100%" }}>
+                            That is a USER mention — it tags one person. For a role it needs the <code>&amp;</code>:{" "}
+                            <code>&lt;@&amp;{pingVal.replace(/\D/g, "")}&gt;</code>
+                          </span>
+                        )}
+                        {kind === "role" && cur?.ping !== pingVal && (
+                          <span style={{ fontSize: 11, color: CYAN, flex: "1 1 100%" }}>
+                            Will tag a role — not saved yet, press Save.
+                          </span>
                         )}
 
                         {testMsg[tag] && (

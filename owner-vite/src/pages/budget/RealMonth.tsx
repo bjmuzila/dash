@@ -186,6 +186,53 @@ type Subscription = {
 type MonthStat = { month: string; n: number };
 
 /**
+ * A filing rule — "descriptor contains X, file it under Y".
+ *
+ * The editable half of the auto-categorizer's memory. History is implicit and
+ * can only repeat what was already done by hand; a rule is where a decision
+ * history cannot express gets written down. `direction` narrows it to money in
+ * or money out and is not a nicety: Amazon going OUT is shopping, Amazon coming
+ * IN is Flex pay.
+ */
+type Rule = {
+  id: number; pattern: string; direction: "in" | "out" | null;
+  categoryId: number | null; categoryName: string | null; note: string | null; priority: number;
+};
+
+/**
+ * One suggested filing from the auto pass. `source` is which pass produced it,
+ * in descending order of certainty, and is shown next to every row — a
+ * suggestion you cannot see the reasoning for is a suggestion you cannot audit.
+ */
+type ProposalSource = "rule" | "amazon" | "history" | "model";
+type Proposal = {
+  id: number; categoryId: number; categoryName: string;
+  merchant: string; description: string; date: string; amount: number;
+  direction: "in" | "out"; source: ProposalSource; why: string;
+};
+/** How the Amazon-tab pay total was covered by this month's deposits. */
+type AutoSplit = {
+  target: number; flex: number; zelleToAmazon: number; zelleToBzila: number;
+  filled: number; shortfall: number;
+  amazonCategory: string | null; bzilaCategory: string | null;
+  applied: boolean; note: string | null;
+};
+type AutoResult = {
+  month: string; scanned: number; uncategorized: number; unresolved: number;
+  proposals: Proposal[];
+  counts: Record<ProposalSource, number>;
+  split: AutoSplit;
+  model: { used: boolean; name: string | null; asked: number; matched: number; warning: string | null };
+};
+
+const SOURCE_UI: Record<ProposalSource, { label: string; color: string; blurb: string }> = {
+  rule: { label: "Rule", color: HOME_THEME.cyan, blurb: "One of your own patterns matched." },
+  amazon: { label: "Amazon split", color: RETA_PALETTE.peach, blurb: "Allocated against the Amazon tab's pay for the month." },
+  history: { label: "History", color: RETA_PALETTE.green, blurb: "This exact merchant was filed this way in an earlier month." },
+  model: { label: "Claude", color: HOME_THEME.gold, blurb: "No rule and no history — a read of the merchant against your categories." },
+};
+
+/**
  * The fuel correction, as the server applied it.
  *
  * Every Sheetz swipe is filed to one fuel category, Flex fill-ups included —
@@ -360,6 +407,16 @@ export default function RealMonth({
       loaded. */
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [fuel, setFuel] = useState<FuelSplit | null>(null);
+  const [rules, setRules] = useState<Rule[]>([]);
+  /**
+   * The last auto-categorize pass, kept so its reasoning stays on screen while
+   * the proposals are reviewed. The proposals themselves live in `pending` —
+   * the same place a hand edit goes — so Save is one path, not two, and
+   * discarding works identically whether a change came from a dropdown or from
+   * the model.
+   */
+  const [auto, setAuto] = useState<AutoResult | null>(null);
+  const [autoBusy, setAutoBusy] = useState(false);
   const [staged, setStaged] = useState<StagedRow[]>([]);
   const [view, setView] = useState<View>("merchants");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -427,6 +484,7 @@ export default function RealMonth({
         }))
       );
       setFuel(data.fuel ?? null);
+      setRules(data.rules || []);
     } catch {
       setError("Could not load this month's statement data.");
     } finally {
@@ -437,6 +495,10 @@ export default function RealMonth({
   useEffect(() => {
     void load(month);
     setStaged([]);
+    // A pass's reasoning is about ONE month. Carrying it across the month
+    // switch would leave a card explaining July's Zelle split sitting above
+    // August's ledger.
+    setAuto(null);
     setExpanded(new Set());
     setShowAllIn(new Set());
     setQ("");
@@ -617,12 +679,75 @@ export default function RealMonth({
             : " Every other month already agreed."
           : " This month only.")
       );
+      // The proposals just became stored filings, so the card explaining them
+      // has served its purpose. Anything still open stays open.
+      setAuto((prev) => (prev && changes.length >= prev.proposals.length ? null : prev));
       await load(month);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Categories did not save.");
     } finally {
       setSaving(false);
     }
+  };
+
+  // ── auto-categorize ──────────────────────────────────────────────────────
+  /**
+   * Ask the server to file this month's UNCATEGORIZED rows, then stage what it
+   * comes back with as ordinary unsaved edits.
+   *
+   * Nothing is written by the pass itself, and nothing that already has a
+   * category is touched. That is the whole design: a filing you made by hand is
+   * the ground truth the thing learns from, and a categorizer that overwrites
+   * it silently is one you stop trusting the first time it is wrong. Every
+   * suggestion lands in the same unsaved bar a dropdown edit lands in, so
+   * review, discard and Save all work exactly as they already did.
+   */
+  const runAuto = async () => {
+    setAutoBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const out: AutoResult | null = await post({ action: "autoCategorize", month });
+      if (!out) return;
+      setAuto(out);
+      const list = out.proposals || [];
+      if (!list.length) {
+        setNotice(
+          out.uncategorized === 0
+            ? `Nothing to do — every transaction in ${monthLabel(month)} already has a category.`
+            : `Nothing could be filed automatically. ${out.uncategorized} row${out.uncategorized === 1 ? "" : "s"} still need${out.uncategorized === 1 ? "s" : ""} a category.`
+        );
+        return;
+      }
+      setPending((prev) => {
+        const n = new Map(prev);
+        for (const p of list) {
+          const original = tx.find((r) => r.id === p.id)?.category_id ?? null;
+          if (original === p.categoryId) n.delete(p.id);
+          else n.set(p.id, p.categoryId);
+        }
+        return n;
+      });
+      setNotice(`Filed ${list.length} transaction${list.length === 1 ? "" : "s"}. Nothing is stored yet — check them below, then save.`);
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  /** Drop one suggestion: out of the unsaved edits AND off the review list. */
+  const rejectProposal = (id: number) => {
+    setPending((prev) => { const n = new Map(prev); n.delete(id); return n; });
+    setAuto((prev) => (prev ? { ...prev, proposals: prev.proposals.filter((p) => p.id !== id) } : prev));
+  };
+
+  const saveRule = async (r: { id?: number; pattern: string; direction: "in" | "out" | null; categoryId: number | null; note?: string | null }) => {
+    const out = await post({ action: "saveRule", ...r });
+    if (out?.ok) await load(month);
+    return Boolean(out?.ok);
+  };
+  const deleteRule = async (id: number) => {
+    const out = await post({ action: "deleteRule", id });
+    if (out?.ok) await load(month);
   };
 
   const deleteTx = async (id: number) => {
@@ -1108,6 +1233,16 @@ export default function RealMonth({
         </div>
       )}
 
+      {/* ── What the auto pass did, and why ──────────────────────────────── */}
+      {auto && (
+        <AutoReview
+          result={auto}
+          currency={currency}
+          onReject={rejectProposal}
+          onDismiss={() => setAuto(null)}
+        />
+      )}
+
       {/* ── View switch ──────────────────────────────────────────────────── */}
       {hasData && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -1115,6 +1250,17 @@ export default function RealMonth({
             <button key={k} onClick={() => setView(k)} style={pill(view === k)}>{l}</button>
           ))}
           <div style={{ flex: 1 }} />
+          {/* Fills the blanks and nothing else. Rows that already have a
+              category are never touched, and nothing is written until the
+              suggestions are reviewed and saved. */}
+          <button
+            onClick={() => void runAuto()}
+            disabled={autoBusy || saving || loading}
+            title="File this month's uncategorized rows from your rules, your earlier months, and — for anything genuinely new — Claude. Nothing is saved until you review it."
+            style={{ ...primary(), opacity: autoBusy || saving ? 0.55 : 1 }}
+          >
+            {autoBusy ? "Filing…" : "Auto-categorize"}
+          </button>
           {/* Only rendered for a month that actually has one — a dead link to a
               review nobody wrote is worse than no link. */}
           {MONTH_REPORTS[month] && (
@@ -1823,10 +1969,330 @@ export default function RealMonth({
         </Card>
       )}
 
+      {/* The editable half of the auto pass's memory. */}
+      <FilingRules
+        rules={rules}
+        categories={categories}
+        onSave={saveRule}
+        onDelete={deleteRule}
+      />
+
       {/* An earlier build of this tab committed parsed rows into Payments,
           which double-counts against the plan. This undoes such a write. */}
       <UndoRegisterImport currency={currency} />
     </div>
+  );
+}
+
+/**
+ * What the auto pass proposed, and where each answer came from.
+ *
+ * The pass is only worth having if its reasoning is legible: a filing you
+ * cannot see the basis for is one you either accept blindly or redo by hand,
+ * and both of those are worse than filing it yourself. So every row carries the
+ * pass that produced it and a sentence of why, sorted with the least certain
+ * (the model) first — those are the ones actually worth reading.
+ *
+ * Nothing here is stored. The proposals are already sitting in the unsaved bar
+ * above; this card is the explanation, and dropping a row removes it from both.
+ */
+function AutoReview({
+  result, currency, onReject, onDismiss,
+}: {
+  result: AutoResult;
+  currency: string;
+  onReject: (id: number) => void;
+  onDismiss: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const order: ProposalSource[] = ["model", "amazon", "history", "rule"];
+  const sorted = useMemo(
+    () => [...result.proposals].sort((a, b) => order.indexOf(a.source) - order.indexOf(b.source) || a.date.localeCompare(b.date)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [result.proposals]
+  );
+  const s = result.split;
+
+  return (
+    <Card variant="classic" padding={0} style={{ overflow: "hidden", borderColor: rgba(ACCENT, 0.45) }}>
+      <div style={{ padding: "14px 16px 10px", display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", color: ACCENT }}>
+          Auto-categorize · {monthLabel(result.month)}
+        </div>
+        <div style={{ fontSize: TYPE.body, fontWeight: 700 }}>
+          {result.proposals.length} filed · {result.unresolved} left
+        </div>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setOpen((v) => !v)} style={ghost()}>{open ? "Hide rows" : "Show rows"}</button>
+        <button onClick={onDismiss} style={ghost()}>Dismiss</button>
+      </div>
+
+      <div style={{ padding: "0 16px 12px", fontSize: TYPE.label, ...MUTED, lineHeight: 1.6, maxWidth: "82ch" }}>
+        Only rows that had <b style={{ color: HOME_THEME.text }}>no category</b> were touched — {result.uncategorized} of{" "}
+        {result.scanned}. Anything you filed by hand is what this learns from, so it is never overwritten. Nothing is
+        stored until you save the unsaved edits above.
+      </div>
+
+      {/* Where the answers came from. The counts are the honest summary: a pass
+          that is mostly "Claude" is a month you should read carefully, one that
+          is mostly "History" is the thing working as intended. */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "0 16px 12px" }}>
+        {order.map((k) => {
+          const n = result.counts?.[k] ?? 0;
+          const ui = SOURCE_UI[k];
+          return (
+            <div
+              key={k}
+              title={ui.blurb}
+              style={{
+                padding: "8px 12px", borderRadius: 12, minWidth: 120,
+                border: `1px solid ${rgba(ui.color, n ? 0.5 : 0.18)}`,
+                background: rgba(ui.color, n ? 0.1 : 0.03),
+                opacity: n ? 1 : 0.5,
+              }}
+            >
+              <div style={{ fontSize: TYPE.micro, fontWeight: 900, letterSpacing: "0.12em", textTransform: "uppercase", color: ui.color }}>{ui.label}</div>
+              <div style={{ fontSize: 20, fontWeight: 900, fontVariantNumeric: "tabular-nums" }}>{n}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* The Amazon / Zelle allocation, spelled out. This one is arithmetic
+          rather than a guess, so showing the numbers is showing the answer. */}
+      <div style={{ margin: "0 16px 12px", padding: "11px 14px", borderRadius: 12, border: `1px solid ${HOME_THEME.border}`, background: rgba("#ffffff", 0.02) }}>
+        <div style={{ fontSize: TYPE.micro, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", color: RETA_PALETTE.peach }}>
+          Amazon pay · Zelle split
+        </div>
+        {s.applied ? (
+          <div style={{ fontSize: TYPE.label, marginTop: 6, lineHeight: 1.7 }}>
+            The Amazon tab says <b style={{ color: HOME_THEME.text }}>{fmtMoney(s.target, currency)}</b> was earned in{" "}
+            {monthLabel(result.month)}. Flex deposits covered {fmtMoney(s.flex, currency)}
+            {s.zelleToAmazon > 0 ? <> and {fmtMoney(s.zelleToAmazon, currency)} of Zelle filled the rest</> : null}, filed to{" "}
+            <b style={{ color: ACCENT }}>{s.amazonCategory}</b>.{" "}
+            {s.zelleToBzila > 0
+              ? <>The {fmtMoney(s.zelleToBzila, currency)} of Zelle left over went to <b style={{ color: ACCENT }}>{s.bzilaCategory}</b>.</>
+              : <>No Zelle was left over.</>}
+            {s.shortfall > 0 && (
+              <>
+                {" "}
+                <b style={{ color: WARN }}>{fmtMoney(s.shortfall, currency)} short</b> — the deposits in this month do not
+                add up to what the Amazon tab claims. Either a deposit has not cleared yet or a delivery day is logged in
+                the wrong month.
+              </>
+            )}
+            {s.note && <> {s.note}</>}
+          </div>
+        ) : (
+          <div style={{ fontSize: TYPE.label, marginTop: 6, ...MUTED }}>
+            {s.note || "Not applied this month."}
+          </div>
+        )}
+      </div>
+
+      {result.model?.warning && (
+        <div style={{ margin: "0 16px 12px", padding: "9px 12px", borderRadius: 10, fontSize: TYPE.label, color: WARN, border: `1px solid ${rgba(WARN, 0.4)}`, background: rgba(WARN, 0.09) }}>
+          {result.model.warning}
+        </div>
+      )}
+
+      {open && sorted.length > 0 && (
+        <div style={{ ...scrollX, borderTop: `1px solid ${HOME_THEME.border}` }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+            <thead>
+              <tr>
+                <th style={th("left")}>Date</th>
+                <th style={th("left")}>Merchant</th>
+                <th style={th("right")}>Amount</th>
+                <th style={th("left")}>Filed as</th>
+                <th style={th("left")}>Why</th>
+                <th style={th("center")} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((p) => {
+                const ui = SOURCE_UI[p.source];
+                return (
+                  <tr key={p.id}>
+                    <td style={{ ...td("left"), ...MUTED, whiteSpace: "nowrap" }}>{p.date}</td>
+                    <td style={td("left")}>
+                      <div style={{ fontWeight: 700 }}>{p.merchant}</div>
+                      <div style={{ fontSize: TYPE.micro, ...MUTED }}>{p.description}</div>
+                    </td>
+                    <td style={{ ...td("right"), fontVariantNumeric: "tabular-nums", color: p.direction === "in" ? MONEY_IN : MONEY_OUT, whiteSpace: "nowrap" }}>
+                      {p.direction === "in" ? "+" : "−"}{fmtMoney(p.amount, currency)}
+                    </td>
+                    <td style={td("left")}>
+                      <span style={{ fontWeight: 800 }}>{p.categoryName}</span>
+                    </td>
+                    <td style={td("left")}>
+                      <span style={{ ...chip(true, ui.color), marginRight: 8 }}>{ui.label}</span>
+                      <span style={{ fontSize: TYPE.label, ...MUTED }}>{p.why}</span>
+                    </td>
+                    <td style={td("center")}>
+                      <button
+                        onClick={() => onReject(p.id)}
+                        title="Drop this one — it goes back to uncategorized"
+                        style={{ ...ghost(), padding: "4px 10px", color: HOME_THEME.red, borderColor: rgba(HOME_THEME.red, 0.35) }}
+                      >
+                        Drop
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Filing rules — the part of the auto pass's memory you can write yourself.
+ *
+ * History teaches it what you have already done; a rule teaches it something
+ * you have not. That matters most for the cases where the obvious reading is
+ * the wrong one: a payroll deposit whose descriptor looks like a transfer, a
+ * vendor whose name collides with a different category. Rules beat both the
+ * learned history and the model, so writing one down ends the argument.
+ *
+ * Deliberately a substring, not a regex. A regex in a text box is a support
+ * burden, and "contains" is the shape of every rule anyone actually wants.
+ */
+function FilingRules({
+  rules, categories, onSave, onDelete,
+}: {
+  rules: Rule[];
+  categories: Category[];
+  onSave: (r: { id?: number; pattern: string; direction: "in" | "out" | null; categoryId: number | null; note?: string | null }) => Promise<boolean>;
+  onDelete: (id: number) => void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pattern, setPattern] = useState("");
+  const [direction, setDirection] = useState<"" | "in" | "out">("");
+  const [categoryId, setCategoryId] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [armed, setArmed] = useState<number | null>(null);
+
+  const catOptions = useMemo(
+    () => [
+      { value: "", label: "Pick a category…" },
+      ...[...categories]
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+        .map((c) => ({ value: String(c.id), label: c.name })),
+    ],
+    [categories]
+  );
+
+  const add = async () => {
+    if (!pattern.trim() || !categoryId) return;
+    setBusy(true);
+    const ok = await onSave({
+      pattern: pattern.trim(),
+      direction: direction === "" ? null : direction,
+      categoryId: Number(categoryId),
+    });
+    setBusy(false);
+    if (ok) { setPattern(""); setDirection(""); setCategoryId(""); }
+  };
+
+  return (
+    <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
+      <div style={{ padding: "14px 16px", display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", color: ACCENT }}>
+          Filing rules
+        </div>
+        <div style={{ fontSize: TYPE.label, ...MUTED }}>
+          {rules.length ? `${rules.length} rule${rules.length === 1 ? "" : "s"}` : "none yet"} · beat both your history and the model
+        </div>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setOpen((v) => !v)} style={ghost()}>{open ? "Hide" : "Edit rules"}</button>
+      </div>
+
+      {open && (
+        <div style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
+          <div style={{ padding: "12px 16px", fontSize: TYPE.label, ...MUTED, lineHeight: 1.65, maxWidth: "82ch" }}>
+            A rule fires when the merchant or the raw bank descriptor <b style={{ color: HOME_THEME.text }}>contains</b> the
+            text, ignoring case. Direction matters more than it looks: <i>Amazon</i> going out is shopping, <i>Amazon</i>{" "}
+            coming in is Flex pay. Leave it on “Either” only when the vendor can genuinely be both.
+          </div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", padding: "0 16px 14px" }}>
+            <div style={{ flex: "2 1 220px" }}>
+              <div style={labelCap()}>Descriptor contains</div>
+              <input
+                value={pattern}
+                onChange={(e) => setPattern(e.target.value)}
+                placeholder="wakemed"
+                style={field()}
+              />
+            </div>
+            <div style={{ flex: "1 1 140px" }}>
+              <div style={labelCap()}>Direction</div>
+              <ThemedSelect
+                value={direction}
+                onChange={(v) => setDirection(v as "" | "in" | "out")}
+                options={[
+                  { value: "", label: "Either" },
+                  { value: "in", label: "Money in" },
+                  { value: "out", label: "Money out" },
+                ]}
+              />
+            </div>
+            <div style={{ flex: "2 1 200px" }}>
+              <div style={labelCap()}>File as</div>
+              <ThemedSelect value={categoryId} onChange={setCategoryId} options={catOptions} />
+            </div>
+            <button
+              onClick={() => void add()}
+              disabled={busy || !pattern.trim() || !categoryId}
+              style={{ ...primary(), opacity: busy || !pattern.trim() || !categoryId ? 0.5 : 1 }}
+            >
+              {busy ? "Adding…" : "Add rule"}
+            </button>
+          </div>
+
+          {rules.length > 0 && (
+            <div style={{ ...scrollX, borderTop: `1px solid ${HOME_THEME.border}` }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
+                <thead>
+                  <tr>
+                    <th style={th("left")}>Contains</th>
+                    <th style={th("left")}>Direction</th>
+                    <th style={th("left")}>Files as</th>
+                    <th style={th("center")} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rules.map((r) => (
+                    <tr key={r.id}>
+                      <td style={{ ...td("left"), fontWeight: 700 }}>{r.pattern}</td>
+                      <td style={{ ...td("left"), ...MUTED }}>
+                        {r.direction === "in" ? "Money in" : r.direction === "out" ? "Money out" : "Either"}
+                      </td>
+                      <td style={td("left")}>{r.categoryName ?? <span style={MUTED}>(category deleted)</span>}</td>
+                      <td style={td("center")}>
+                        {/* Two-step, because a rule is the one piece of this
+                            memory that cannot be re-derived from the data. */}
+                        <button
+                          onClick={() => { if (armed === r.id) { void onDelete(r.id); setArmed(null); } else setArmed(r.id); }}
+                          onBlur={() => setArmed((a) => (a === r.id ? null : a))}
+                          style={{ ...ghost(), padding: "4px 10px", color: HOME_THEME.red, borderColor: rgba(HOME_THEME.red, armed === r.id ? 0.7 : 0.3) }}
+                        >
+                          {armed === r.id ? "Sure?" : "Delete"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }
 

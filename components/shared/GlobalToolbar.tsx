@@ -12,6 +12,7 @@ import { useMobileNav } from "./MobileNavContext";
 import ToolbarTicker from "./ToolbarTicker";
 import NavMenu from "./NavMenu";
 import BzilaAlerts from "./BzilaAlerts";
+import BotAlert from "./BotAlert";
 import SectionSubStrip from "./SectionSubStrip";
 import GlobalRefreshButton from "./GlobalRefreshButton";
 import OfferPill from "./OfferPill";
@@ -873,6 +874,12 @@ export default function GlobalToolbar() {
           <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>
             <EtClock compact={isMobile} />
           </div>
+
+          {/* ── BOT — broadcast a trade alert to the Discords. Owner only, and
+              the component renders nothing at all for anyone else; the real
+              gate is /api/bot-alert server-side. Sits before Notes because it
+              is the thing you reach for mid-trade. ── */}
+          {!isMobile && <BotAlert />}
 
           {/* ── Notes — round icon button with count badge (desktop only; the
               right-side dock is disabled on mobile) ── */}

@@ -1948,6 +1948,39 @@ register('/api/discord-share', {
   const ACTION_LABEL = { buy: 'BUY', sell: 'SELL', trim: 'TRIM', 'average-down': 'AVERAGE DOWN' };
   const ACTION_EMOJI = { buy: '🟢', sell: '🔴', trim: '🟠', 'average-down': '🔵' };
 
+  // ── The embed bar palette, and why it lives HERE ──────────────────────────
+  // The stripe down the left of a Discord embed is the embed's `color` field.
+  // These hex values are PAYLOAD: they are chosen to read against Discord's own
+  // dark surface, they are not this app's theme, and cbedge-v3's theme check
+  // rightly refuses colour literals in its source. So the server owns them, the
+  // clients ask for a bar BY NAME ('auto' | 'green' | ...), and /targets ships
+  // the palette so a swatch can be drawn without any client hardcoding a hex.
+  // One list, three surfaces, no drift.
+  const BARS = [
+    { id: 'green', label: 'Green', hex: '#3BA55D' },
+    { id: 'red', label: 'Red', hex: '#ED4245' },
+    { id: 'amber', label: 'Amber', hex: '#FAA61A' },
+    { id: 'cyan', label: 'Cyan', hex: '#219EBC' },
+    { id: 'blurple', label: 'Blurple', hex: '#5865F2' },
+    { id: 'white', label: 'White', hex: '#FFFFFF' },
+  ];
+  /** 'auto' means: the trade action decides, and a Note is not a trade. */
+  const ACTION_BAR = { buy: 'green', sell: 'red', trim: 'amber', 'average-down': 'cyan' };
+  const NOTE_BAR = 'blurple';
+
+  const barHex = (id) => BARS.find((b) => b.id === id)?.hex ?? '#5865F2';
+
+  function resolveBarInt(d) {
+    // A named bar wins. Legacy callers (the owner page, the v2 panel) may still
+    // send a resolved integer instead; honour it rather than breaking them.
+    const named = str(d?.bar, 12);
+    if (named && named !== 'auto') return parseInt(barHex(named).slice(1), 16);
+    if (!named && Number.isInteger(d?.color) && d.color >= 0 && d.color <= 0xffffff) return d.color;
+    const cls = botStore.ASSET_CLASSES.includes(d?.assetClass) ? d.assetClass : 'notes';
+    const id = cls === 'notes' ? NOTE_BAR : (ACTION_BAR[d?.action] ?? 'cyan');
+    return parseInt(barHex(id).slice(1), 16);
+  }
+
   /** Same owner gate as /api/discord-share, including its dev-mode fallback. */
   function ownerOk(ctx, verdict) {
     const id = (verdict?.userId || '').trim();
@@ -1988,8 +2021,7 @@ register('/api/discord-share', {
     const expiry = shortExpiry(str(d.expiry, 10));
     const notes = str(d.notes, 4000);
 
-    let color = Number.isInteger(d.color) ? d.color : NaN;
-    if (!Number.isFinite(color) || color < 0 || color > 0xffffff) color = 0x5865f2;
+    const color = resolveBarInt(d);
 
     const embed = { color, footer: { text: FOOTER_TEXT }, timestamp: new Date().toISOString() };
 
@@ -2077,14 +2109,27 @@ register('/api/discord-share', {
       // so it is worth doing on every send rather than leaving the owner to
       // notice a grey @unknown-role in the channel.
       let warning = null;
-      const wantRoles = [...String(target.ping || '').matchAll(/<@&(\d+)>/g)].map((m) => m[1]);
-      if (wantRoles.length && msg) {
-        const got = new Set((Array.isArray(msg.mention_roles) ? msg.mention_roles : []).map(String));
-        const missing = wantRoles.filter((idv) => !got.has(idv));
-        if (missing.length) {
+      const ping = String(target.ping || '');
+      if (msg) {
+        const wantRoles = [...ping.matchAll(/<@&(\d+)>/g)].map((m) => m[1]);
+        const gotRoles = new Set((Array.isArray(msg.mention_roles) ? msg.mention_roles : []).map(String));
+        const missingRoles = wantRoles.filter((idv) => !gotRoles.has(idv));
+
+        // Same check for a user mention: `<@ID>` and `<@&ID>` differ by one
+        // character, so a role id pasted without the "&" reaches here as a user
+        // that does not exist and renders as @unknown-user.
+        const wantUsers = [...ping.matchAll(/<@!?(\d+)>/g)].map((m) => m[1]);
+        const gotUsers = new Set((Array.isArray(msg.mentions) ? msg.mentions : []).map((u) => String(u?.id)));
+        const missingUsers = wantUsers.filter((idv) => !gotUsers.has(idv));
+
+        if (missingRoles.length) {
           warning =
-            `Posted, but role ${missing.join(', ')} does not exist in that server — Discord showed it as @unknown-role. ` +
+            `Posted, but role ${missingRoles.join(', ')} does not exist in that server — Discord showed it as @unknown-role. ` +
             'Role IDs are per-server: copy it from the same Discord this webhook posts into.';
+        } else if (missingUsers.length) {
+          warning =
+            `Posted, but <@${missingUsers[0]}> did not resolve. Note that is a USER mention — a ROLE needs the "&": ` +
+            `<@&${missingUsers[0]}>.`;
         }
       }
 
@@ -2107,7 +2152,9 @@ register('/api/discord-share', {
     async handler(req, res, ctx, verdict) {
       if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
       try {
-        send(res, 200, { ok: true, ...(await botStore.loadTargets()) });
+        // `bars` rides along with the destinations so a client can draw the
+        // swatch row from server data and never hardcode a Discord colour.
+        send(res, 200, { ok: true, bars: BARS, ...(await botStore.loadTargets()) });
       } catch (err) {
         console.error('[bot-alert/targets]', err);
         send(res, 500, { ok: false, error: String(err?.message || err) });

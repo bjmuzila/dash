@@ -12,6 +12,7 @@ import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { useIsPhone } from '@/design/useIsPhone'
 import { CbMark } from '@/shell/Brand'
 import { BzilaLogo } from '@/shell/BzilaAlerts'
+import { BotAlertButton } from '@/shell/BotAlert'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
 import { NotesPanelProvider, useNotesPanel } from '@/shell/NotesPanelContext'
 import { OfferPill } from '@/shell/OfferPill'
@@ -434,6 +435,11 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
           Empty on every route that puts nothing in it. The home board fills it
           with Edit layout / Save layout / + Add card, which is why that page no
           longer draws a header row of its own. See shell/ToolbarSlot.tsx. */}
+      {/* ── BOT — broadcast a trade alert to the Discords without leaving the
+          board. Renders NOTHING for anyone but the owner, and its panel is a
+          lazy chunk so the entry bundle does not carry a composer exactly one
+          account can open. Real gate is /api/bot-alert. See shell/BotAlert.tsx. */}
+      {!mobile && <BotAlertButton />}
       <ToolbarSlotHost />
       {/* ── Back to SPX in one click ───────────────────────────────────────────
           SPX is not just the most-used ticker, it is the only one the socket

@@ -192,6 +192,11 @@ __export(db_exports, {
   setStatementCategoriesByMerchantBulk: () => setStatementCategoriesByMerchantBulk,
   setStatementCategoryByMerchant: () => setStatementCategoryByMerchant,
   listMerchantCategoryMemory: () => listMerchantCategoryMemory,
+  listMerchantCategoryHistory: () => listMerchantCategoryHistory,
+  listCategoryRules: () => listCategoryRules,
+  upsertCategoryRule: () => upsertCategoryRule,
+  deleteCategoryRule: () => deleteCategoryRule,
+  listAmazonMonthTotals: () => listAmazonMonthTotals,
   setStatementTxCategory: () => setStatementTxCategory,
   updateStatementTx: () => updateStatementTx,
   upsertSubscription: () => upsertSubscription,
@@ -761,6 +766,38 @@ async function ensureAllTables(pool) {
       UNIQUE(profile_id, dedupe_key)
     );
     CREATE INDEX IF NOT EXISTS idx_budget_statement_tx_month ON budget_statement_tx(profile_id, month);
+
+    -- Filing rules for the Real Month auto-categorizer.
+    --
+    -- An explicit, editable "descriptor contains X -> file it under Y", and the
+    -- highest authority in the pass: it beats the learned history and it beats
+    -- the model. This is where a decision that history cannot express gets
+    -- written down -- a payroll deposit that must never read as a transfer, a
+    -- vendor whose name collides with another category.
+    --
+    -- pattern is a case-insensitive SUBSTRING, deliberately not a regex: a
+    -- regex in a text box is a support burden and a way to hang the server on
+    -- a bad backtrack.
+    --
+    -- direction narrows a rule to money in or money out; NULL means both. That
+    -- column is load-bearing rather than a nicety -- "amazon" going OUT is
+    -- shopping and "amazon" coming IN is Flex pay, and one undirected rule
+    -- would file both the same way.
+    --
+    -- priority breaks ties between two patterns that both match; higher wins,
+    -- then the longer (more specific) pattern, then the older rule.
+    CREATE TABLE IF NOT EXISTS budget_category_rules (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      pattern TEXT NOT NULL,
+      direction TEXT,
+      category_id INTEGER REFERENCES budget_categories(id) ON DELETE CASCADE,
+      note TEXT,
+      priority INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_category_rules_profile ON budget_category_rules(profile_id);
 
     -- One verdict per merchant, kept across imports: keep / cancel / watch.
     -- 'cancel' rows roll up into the "if you killed these" savings number.
@@ -4983,6 +5020,97 @@ async function listMerchantCategoryMemory(profileId) {
     [profileId]
   );
 }
+
+// The same history, unflattened — every category a merchant has ever been filed
+// under, with how often and how recently, split by direction.
+//
+// listMerchantCategoryMemory above answers "what IS this merchant" with one
+// winning row, which is the right shape for an import that just needs a default.
+// The auto-categorizer needs the evidence instead: it has to be able to say
+// "WakeMed: 6x H Pay, last in 2026-07" rather than silently applying an answer,
+// and it has to be able to hand a merchant it has never seen to the model along
+// with how the neighbouring merchants were filed.
+//
+// direction is part of the grouping on purpose. Amazon out is shopping and
+// Amazon in is Flex pay; collapsing the two would teach the pass to file a
+// deposit as a grocery run.
+//
+// Scoped to months STRICTLY BEFORE the one being filed, so re-running the pass
+// on July never quotes July's own half-finished filing back at itself.
+async function listMerchantCategoryHistory(profileId, beforeMonth) {
+  return queryAll(
+    `SELECT ${MERCHANT_KEY_SQL} AS merchant_key,
+            MAX(merchant)       AS merchant,
+            direction,
+            category_id,
+            COUNT(*)::int       AS n,
+            MAX(month)          AS last_month
+       FROM budget_statement_tx
+      WHERE profile_id = ?
+        AND category_id IS NOT NULL
+        AND month < ?
+      GROUP BY ${MERCHANT_KEY_SQL}, direction, category_id
+      ORDER BY COUNT(*) DESC, MAX(month) DESC`,
+    [profileId, beforeMonth]
+  );
+}
+
+// ── Filing rules ────────────────────────────────────────────────────────────
+// See the budget_category_rules comment in ensureAllTables for what these are
+// and why pattern is a substring rather than a regex.
+async function listCategoryRules(profileId) {
+  return queryAll(
+    `SELECT r.*, c.name AS category_name
+       FROM budget_category_rules r
+       LEFT JOIN budget_categories c ON c.id = r.category_id
+      WHERE r.profile_id = ?
+      ORDER BY r.priority DESC, LENGTH(r.pattern) DESC, r.id ASC`,
+    [profileId]
+  );
+}
+// Insert or update in one call. Without an id, an existing rule with the same
+// pattern AND the same direction is updated rather than duplicated — otherwise
+// re-saving the same rule twice quietly builds a pile of identical rows that
+// all fire on the same descriptor.
+async function upsertCategoryRule(input) {
+  const pool = await getDb();
+  const pattern = String(input.pattern ?? "").trim().slice(0, 120);
+  if (!pattern) return null;
+  const direction = input.direction === "in" || input.direction === "out" ? input.direction : null;
+  const id = Number(input.id) || null;
+  const existing = id
+    ? await queryOne("SELECT * FROM budget_category_rules WHERE id = ? AND profile_id = ?", [id, input.profile_id])
+    : await queryOne(
+      `SELECT * FROM budget_category_rules
+        WHERE profile_id = ? AND lower(pattern) = lower(?) AND COALESCE(direction, '') = ?`,
+      [input.profile_id, pattern, direction ?? ""]
+    );
+  const categoryId = input.category_id == null ? null : Number(input.category_id);
+  const note = input.note == null ? null : String(input.note).slice(0, 200);
+  const priority = Number.isFinite(Number(input.priority)) ? Number(input.priority) : 0;
+  if (existing) {
+    const r = await pool.query(
+      `UPDATE budget_category_rules
+          SET pattern = $3, direction = $4, category_id = $5, note = $6, priority = $7,
+              updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND profile_id = $2
+        RETURNING *`,
+      [existing.id, input.profile_id, pattern, direction, categoryId, note, priority]
+    );
+    return r.rows[0] ?? null;
+  }
+  const r = await pool.query(
+    `INSERT INTO budget_category_rules (profile_id, pattern, direction, category_id, note, priority)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     RETURNING *`,
+    [input.profile_id, pattern, direction, categoryId, note, priority]
+  );
+  return r.rows[0] ?? null;
+}
+async function deleteCategoryRule(profileId, id) {
+  const pool = await getDb();
+  await pool.query("DELETE FROM budget_category_rules WHERE id = $1 AND profile_id = $2", [id, profileId]);
+}
 // Separate from updateStatementTx because COALESCE cannot express "set to NULL".
 async function setStatementTxCategory(profileId, id, categoryId) {
   const pool = await getDb();
@@ -5217,6 +5345,28 @@ async function replaceOwnerTodo(items, titles) {
 async function listAmazonGasByMonth(profileId, sinceMonth, untilMonth) {
   return queryAll(
     `SELECT SUBSTR(work_date, 1, 7) AS month, SUM(gas) AS gas
+       FROM budget_amazon
+      WHERE profile_id = ?
+        AND SUBSTR(work_date, 1, 7) >= ?
+        AND SUBSTR(work_date, 1, 7) <= ?
+      GROUP BY SUBSTR(work_date, 1, 7)
+      ORDER BY 1 ASC`,
+    [profileId, sinceMonth, untilMonth || '9999-12']
+  );
+}
+// Amazon Flex pay AND gas per calendar month.
+//
+// listAmazonGasByMonth answers only the fuel half, which is all the fuel
+// correction needs. The auto-categorizer needs the pay side: it is the number
+// the month's Flex and Zelle deposits are allocated against, so that what the
+// Amazon tab says was earned is what lands in the Amazon pay category and the
+// Zelle left over falls to Bzila.
+async function listAmazonMonthTotals(profileId, sinceMonth, untilMonth) {
+  return queryAll(
+    `SELECT SUBSTR(work_date, 1, 7) AS month,
+            SUM(pay)      AS pay,
+            SUM(gas)      AS gas,
+            COUNT(*)::int AS n
        FROM budget_amazon
       WHERE profile_id = ?
         AND SUBSTR(work_date, 1, 7) >= ?
