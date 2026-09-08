@@ -5835,47 +5835,110 @@ if (libDb) {
     },
   });
 
-  // /api/snapshots/etf-candles/live — the FORMING bar, live off dxLink.
+  // /api/snapshots/etf-candles/live/stream — the same forming bar, PUSHED.
   //
-  // The sibling route above answers out of the etf_candles table, which
-  // etf-candle-recorder.js writes once a minute; useEtfCandles polls it once a
-  // minute. Minute-granular at both ends, so a candle on screen could be ~2
-  // minutes behind the tape. This route is the overlay that fixes that: a
-  // persistent dxLink candle subscription (server-v2/etf-live-candles.js) keeps
-  // the newest bars in memory, and this returns the last bucket or two of them
-  // in the SAME row shape, which the client merges over its history by slotKey.
+  // Server-Sent Events. The 2s probe above is a good answer and it has a floor
+  // it cannot go under: staleness is the poll interval plus the round trip, and
+  // halving the interval doubles the requests to buy back half of one term. A
+  // stream removes the interval from the sum entirely — the hub calls us the
+  // moment a candle event lands and we write it, so what reaches the browser is
+  // late by the network and nothing else.
   //
-  // Built to be polled every couple of seconds, so:
+  // WHY SSE AND NOT THE WEBSOCKET. /ws/gex is topic-scoped, and every consumer
+  // of it shares one connection whose scope is the union of what is mounted
+  // (see AGENTS.md). Adding a frame type there means touching that scoping and
+  // re-testing every panel that rides it. This is one route, one connection per
+  // card, and nothing else in the app can notice it.
   //
-  //   • It is a memory read. No database, no dxLink round trip, no cache to go
-  //     stale — the hub's connection is what is doing the waiting.
-  //   • The response is deliberately TINY (?bars=2 → two rows). Never widen the
-  //     default; history is the other route's job and it ships the full window.
-  //   • ASKING IS SUBSCRIBING. getLiveCandleRows registers interest as a side
-  //     effect and the hub drops a symbol ~20s after the last request, so a
-  //     chart that stops polling stops costing a subscription.
+  // The handler RETURNS while the response stays open — api-router's dispatcher
+  // awaits the handler and then does nothing else to `res`, which is what makes
+  // that legal. Everything after this point runs from the hub's callback or a
+  // timer, so nothing is holding a request slot.
   //
-  // An empty `rows` is a normal answer — first call after a subscribe, outside
-  // 04:00-20:00 ET, or a feed that is down. The client keeps whatever the
-  // recorded path gave it; nothing here is allowed to blank a chart.
-  register('/api/snapshots/etf-candles/live', {
+  // Three things this needs that a JSON route does not:
+  //
+  //   • `X-Accel-Buffering: no` and `no-transform`. An SSE stream that a proxy
+  //     decides to buffer is a stream that delivers nothing until it closes,
+  //     which is indistinguishable from a hung connection. sendJson()'s gzip is
+  //     avoided for the same reason — these writes bypass it entirely.
+  //   • A heartbeat. A comment line every 20s, because an idle connection is
+  //     what proxies and load balancers reap, and a quiet symbol is idle by
+  //     definition.
+  //   • An unsubscribe on close. A stream's hold on a symbol does NOT expire —
+  //     that is what separates it from the poll — so the close handler is the
+  //     only thing that ever releases it.
+  register('/api/snapshots/etf-candles/live/stream', {
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
-      try {
-        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-        const raw = String(sp.get('symbols') ?? sp.get('symbol') ?? '');
-        const symbols = raw.split(',').map((s) => s.trim()).filter(Boolean);
-        if (!symbols.length) { send(res, 200, { rows: {} }); return; }
-        const interval = Number(sp.get('interval') ?? 1) === 5 ? 5 : 1;
-        const bars = Math.max(1, Math.min(6, Number(sp.get('bars') ?? 2)));
-        const { getLiveCandleRows } = require('./etf-live-candles');
-        const rows = getLiveCandleRows(symbols, interval, bars);
-        // no-store: a 2s poll behind a cache is a 2s poll of the same answer.
-        send(res, 200, { interval, rows }, { 'Cache-Control': 'no-store' });
-      } catch (err) {
-        // Never 500 a chart overlay. The recorded series is still on screen.
-        send(res, 200, { rows: {}, error: String(err) });
-      }
+      const live = require('./etf-live-candles');
+      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      const symbol = String(sp.get('symbol') ?? '').trim().toUpperCase();
+      const interval = Number(sp.get('interval') ?? 1) === 5 ? 5 : 1;
+      const bars = Math.max(1, Math.min(6, Number(sp.get('bars') ?? 1)));
+      if (!symbol) { send(res, 400, { error: 'symbol is required' }); return; }
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        // no-transform is the load-bearing half: it tells intermediaries not to
+        // compress or buffer, which is what silently breaks SSE.
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      // `retry` is the browser's reconnect delay after a dropped stream.
+      // EventSource reconnects on its own; this only sets how fast.
+      res.write('retry: 3000\n\n');
+
+      let closed = false;
+      let pending = null;
+      // Coalesce. A fresh subscribe replays ~20 minutes of 1m bars in a few
+      // hundred ms, and the client only ever reads the newest one — so a tick
+      // schedules a write rather than performing one, and a burst collapses
+      // into a single frame. 120ms is well under the feed's own ~1s cadence, so
+      // in steady state this costs nothing and only earns its keep on connect.
+      const COALESCE_MS = 120;
+
+      const write = () => {
+        pending = null;
+        if (closed) return;
+        try {
+          const rows = live.liveRowsFor(symbol, interval, bars);
+          if (!rows[symbol]) return; // nothing yet — the heartbeat holds the line
+          res.write(`data: ${JSON.stringify({ interval, rows })}\n\n`);
+        } catch {
+          /* a failed write means the socket is going away; close() cleans up */
+        }
+      };
+
+      const onTick = () => {
+        if (closed || pending) return;
+        pending = setTimeout(write, COALESCE_MS);
+      };
+
+      const release = live.subscribeLive(symbol, onTick);
+      // First frame immediately: the hub may already hold this symbol (another
+      // card, or the poll route), in which case the client should not wait for
+      // the next event to draw. If it does not, this is a no-op and the first
+      // real tick is the first frame.
+      write();
+
+      const beat = setInterval(() => {
+        if (closed) return;
+        try { res.write(': ping\n\n'); } catch { /* closing */ }
+      }, 20_000);
+      if (beat.unref) beat.unref();
+
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        if (pending) clearTimeout(pending);
+        clearInterval(beat);
+        release();
+        try { res.end(); } catch { /* already gone */ }
+      };
+      req.on('close', close);
+      req.on('error', close);
+      res.on('error', close);
     },
   });
 

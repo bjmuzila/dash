@@ -91,6 +91,24 @@ export interface ChartSettings {
   gexMetric: GexMetric
   /** The forming-bar countdown in the top-right corner. */
   countdown: boolean
+  /**
+   * The volume histogram in a strip along the bottom of the price pane.
+   *
+   * An overlay on its own price scale, so it costs the candles a quarter of the
+   * pane's height and nothing else — no second pane, no second coordinate
+   * system for the bubble layer to be placed against. See chart.ts setVolume.
+   */
+  volume: boolean
+  /**
+   * A light dashed line at the last price, across the plot.
+   *
+   * lightweight-charts draws this itself; the card only decides whether it is
+   * on. It was hardcoded OFF when this chart was built, for a reason that has
+   * not changed — it is a full-width rule over the bubble layer — so it is a
+   * toggle rather than a fixture, and the axis label still carries the price
+   * for anyone who turns it off.
+   */
+  spotLine: boolean
   /** The strike ladder down the right-hand side, pinned to the price axis. */
   railOn: boolean
   /**
@@ -156,6 +174,11 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   bubblesOn: true,
   gexMetric: 'voloi',
   countdown: true,
+  // On by default: it was asked for, and a candle chart without volume under it
+  // is missing the second half of every bar's story. Cheap to turn off, and the
+  // toggle sits next to the others in the cogwheel's Layer section.
+  volume: true,
+  spotLine: true,
   // On by default: the rail is the numbers behind the bubbles, and a bubble
   // layer with no way to read the figure it is drawn from is half a feature.
   railOn: true,
@@ -589,6 +612,8 @@ function coerce(raw: unknown): ChartSettings {
     bubblesOn: p.bubblesOn !== false,
     gexMetric: p.gexMetric === 'vol' ? 'vol' : 'voloi',
     countdown: p.countdown !== false,
+    volume: p.volume !== false,
+    spotLine: p.spotLine !== false,
     railOn: p.railOn !== false,
     levelLabels: p.levelLabels !== false,
     expiry: typeof p.expiry === 'string' ? p.expiry : '',

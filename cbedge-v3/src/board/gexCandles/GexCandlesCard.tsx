@@ -37,7 +37,9 @@ import {
   filterSession,
   fmtCountdown,
   liveCandleUrl,
-  LIVE_PRICE_MS,
+  LIVE_FALLBACK_MS,
+  LIVE_QUIET_MS,
+  liveStreamUrl,
   parseCandles,
   parseLiveClose,
   parseEsCandles,
@@ -952,6 +954,14 @@ export function GexCandlesCard({
     [settings.levelLabels, railModel, apply],
   )
 
+  // Volume strip and the dashed last-price line. Both are pure chart state —
+  // no data of their own, nothing derived — so they are one-line effects rather
+  // than anything the render path has to know about. The volume figures ride
+  // the bars the card already has; the price line tracks the newest bar's
+  // close, which `setLivePrice` keeps current between polls.
+  useEffect(() => apply((h) => h.setVolume(settings.volume)), [settings.volume, apply])
+  useEffect(() => apply((h) => h.setSpotLine(settings.spotLine)), [settings.spotLine, apply])
+
   // ── The live price ─────────────────────────────────────────────────────────
   // The candle feed only ever hands over CLOSED bars, so between polls the last
   // candle would sit still. The socket's `spot` frame is the live print, and
@@ -1003,41 +1013,89 @@ export function GexCandlesCard({
   // The poll is 30s and the recorder behind it writes once a minute, so what
   // you saw was a candle that stepped once a minute and sat still in between.
   //
-  // Same shape as the socket path, different transport: a 2s probe of
-  // /api/snapshots/etf-candles/live (see liveCandleUrl) pushed straight into
-  // the chart through the SAME imperative `setLivePrice`. No React state, no
+  // Same destination as the socket path, different transport: an EventSource on
+  // /api/snapshots/etf-candles/live/stream, whose frames go straight into the
+  // chart through the SAME imperative `setLivePrice`. No React state, no
   // re-render on a tick, no rebuilt bar array — AGENTS.md rule 4. The chart
   // extends the forming bar's high/low around the price and rolls it forward
   // when the interval elapses, so a close is all this has to carry.
+  //
+  // TWO TRANSPORTS, ONE OF THEM ASLEEP. The stream is the real path; the 3s
+  // probe underneath it only fires after LIVE_QUIET_MS of silence — see the
+  // note in candles.ts. Nothing here detects whether SSE "works": if frames
+  // arrive the poll never runs, and if they stop it resumes by itself.
   //
   // `!esCapable` is the gate, not `!useEs`: on SPX the socket already does
   // this, better, and running both would paint two sources onto one bar.
   const httpLive = !esCapable && !replayOn
   useEffect(() => {
     if (!httpLive) return
-    const url = liveCandleUrl(def)
     let stopped = false
-    const tick = async () => {
-      if (stopped) return
-      // A hidden tab has nothing to animate, and skipping the request is also
-      // what lets the server drop the subscription. The owner is the exception
-      // for the same reason their polls are (see `background: isOwner`).
-      if (typeof document !== 'undefined' && document.hidden && !isOwner) return
+    let es: EventSource | null = null
+    let pollId: ReturnType<typeof setInterval> | null = null
+    /** When a STREAM frame last moved the price. Poll ticks defer to it. */
+    let lastStreamAt = 0
+
+    // 0 = off-hours, or the first read after a fresh subscribe. Never push it:
+    // setLivePrice would drag the forming bar to zero and autoscale the whole
+    // pane with it.
+    const push = (px: number) => {
+      if (px > 0 && !stopped) apply((h) => h.setLivePrice(px))
+    }
+
+    const pollUrl = liveCandleUrl(def)
+    const poll = async () => {
+      if (stopped || Date.now() - lastStreamAt < LIVE_QUIET_MS) return
       try {
-        const res = await fetch(url, { cache: 'no-store', credentials: 'same-origin' })
+        const res = await fetch(pollUrl, { cache: 'no-store', credentials: 'same-origin' })
         if (!res.ok || stopped) return
-        const px = parseLiveClose(await res.json(), def.key)
-        // 0 = off-hours, or the first call after a fresh subscribe. Never push
-        // it: setLivePrice would drag the forming bar to zero and autoscale the
-        // whole pane with it.
-        if (px > 0 && !stopped) apply((h) => h.setLivePrice(px))
+        push(parseLiveClose(await res.json(), def.key))
       } catch {
-        /* a dropped probe is not an error — the next one is 2s away */
+        /* a dropped probe is not an error — the next tick is seconds away */
       }
     }
-    void tick()
-    const id = setInterval(() => { void tick() }, LIVE_PRICE_MS)
-    return () => { stopped = true; clearInterval(id) }
+
+    const start = () => {
+      if (stopped || es) return
+      es = new EventSource(liveStreamUrl(def))
+      es.onmessage = (ev) => {
+        try {
+          lastStreamAt = Date.now()
+          push(parseLiveClose(JSON.parse(ev.data), def.key))
+        } catch {
+          /* a malformed frame is not a reason to tear down a working stream */
+        }
+      }
+      // Deliberately NO onerror that closes the stream. EventSource reconnects
+      // on its own (the route sets `retry: 3000`), and closing it here would
+      // turn one dropped connection into a permanent downgrade to polling.
+      // The poll already covers the gap while it reconnects.
+      void poll()
+      pollId = setInterval(() => { void poll() }, LIVE_FALLBACK_MS)
+    }
+
+    const halt = () => {
+      es?.close()
+      es = null
+      if (pollId) { clearInterval(pollId); pollId = null }
+    }
+
+    // A hidden tab has nothing to animate, and dropping the connection is also
+    // what lets the server release the symbol — a stream's hold does not expire
+    // on its own. The owner is the exception, for the same reason their polls
+    // are (see `background: isOwner`).
+    const onVis = () => {
+      if (typeof document !== 'undefined' && document.hidden && !isOwner) halt()
+      else start()
+    }
+
+    onVis()
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      stopped = true
+      halt()
+      document.removeEventListener('visibilitychange', onVis)
+    }
   }, [httpLive, def, isOwner, apply])
 
   useEffect(
@@ -1340,6 +1398,20 @@ export function GexCandlesCard({
                     on={settings.levelLabels}
                     onClick={() => patch({ levelLabels: !settings.levelLabels })}
                     title="CORE, CW and PW drawn on the chart itself — a tag at the left edge of each, name and price, no line. Same three levels the rail tags: CORE is the biggest gamma strike on the ladder, CW the call wall above spot, PW the put wall below"
+                  />
+                  <Chip
+                    size={ctlSize}
+                    label="Volume"
+                    on={settings.volume}
+                    onClick={() => patch({ volume: !settings.volume })}
+                    title="Volume histogram in a strip along the bottom of the chart, coloured by each bar's own direction. Takes a quarter of the pane's height from the candles while it is on"
+                  />
+                  <Chip
+                    size={ctlSize}
+                    label="Spot line"
+                    on={settings.spotLine}
+                    onClick={() => patch({ spotLine: !settings.spotLine })}
+                    title="A light dashed line across the chart at the last price. It follows the live print, not just the last poll"
                   />
                   <Chip
                     size={ctlSize}

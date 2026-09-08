@@ -14,6 +14,15 @@
  * minute, and `useEtfCandles` polled once a minute. Worst case a candle on
  * screen was ~2 minutes behind the tape.
  *
+ * ── Two ways to read it ────────────────────────────────────────────────────
+ * `getLiveCandleRows()` is a pull — the 2s probe route reads the map and
+ * answers. `subscribeLive()` is a push — the SSE route registers a callback
+ * and the hub calls it the moment a candle event lands, which takes the
+ * client's staleness from "poll interval + latency" down to just latency.
+ *
+ * Both hold the SAME subscription and read the SAME bars. The difference is
+ * only who starts the conversation.
+ *
  * ── What it does ───────────────────────────────────────────────────────────
  * ONE persistent dxLink connection, subscribed to `SYMBOL{=1m}` for the symbols
  * a browser is ACTUALLY LOOKING AT, holding the last few bars per symbol in
@@ -88,6 +97,24 @@ const interest = new Map();   // SYMBOL → epoch ms the interest expires
 const subscribed = new Set(); // SYMBOL — sent on the CURRENT connection
 const canonToSym = new Map(); // canonical dxFeed candle symbol → SYMBOL
 const bars = new Map();       // SYMBOL → Map(barStartMs → bar)
+// ── Streams hold a symbol open; polls only rent it ──────────────────────────
+// A poll's interest EXPIRES — that is what lets a closed tab release a
+// subscription without any teardown code. An SSE connection is the opposite:
+// it is explicitly open, it will be explicitly closed, and its symbol must not
+// lapse underneath it just because 20 seconds went by without a new request.
+// So streams are counted, not timed, and `hasWatchers()` is the union.
+const streams = new Map();    // SYMBOL → open SSE connection count
+const listeners = new Map();  // SYMBOL → Set<fn> called on every candle event
+
+/** Every symbol something is currently reading, by either route. */
+function watchedSymbols() {
+  return new Set([...interest.keys(), ...streams.keys()]);
+}
+
+/** Is anything at all reading this hub right now? */
+function hasWatchers() {
+  return interest.size > 0 || streams.size > 0;
+}
 
 // ── ET helpers ──────────────────────────────────────────────────────────────
 // Row shape must match etf-candle-recorder / /api/snapshots/etf-candles exactly,
@@ -164,6 +191,20 @@ function onCandleEvent(ev) {
     const ordered = [...m.keys()].sort((a, b) => a - b);
     for (let i = 0; i < ordered.length - KEEP_BARS; i++) m.delete(ordered[i]);
   }
+
+  // Push. Listeners are told a symbol moved, not what it moved to — the
+  // subscriber reads the map itself, so a burst of events (the snapshot replay
+  // on a fresh subscribe is ~20 bars in a few hundred ms) coalesces naturally
+  // into however many reads the subscriber chooses to do.
+  //
+  // Wrapped: a throwing listener is a broken client connection, and it must not
+  // take down the feed handler for every other symbol on the socket.
+  const subs = listeners.get(sym);
+  if (subs) {
+    for (const fn of subs) {
+      try { fn(sym); } catch { /* one dead listener is not the feed's problem */ }
+    }
+  }
 }
 
 function closeConnection(reason) {
@@ -179,21 +220,21 @@ function closeConnection(reason) {
 }
 
 function scheduleReconnect() {
-  if (reconnectTimer || !interest.size) return;
+  if (reconnectTimer || !hasWatchers()) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    if (interest.size) ensureConnection();
+    if (hasWatchers()) ensureConnection();
   }, RECONNECT_MS);
   if (reconnectTimer.unref) reconnectTimer.unref();
 }
 
 function ensureConnection() {
   if (client || connecting) return;
-  if (!interest.size || !isLiveWindowET()) return;
+  if (!hasWatchers() || !isLiveWindowET()) return;
   connecting = true;
   getQuoteToken().then(({ token, url }) => {
-    // Interest can lapse during the token round trip.
-    if (!interest.size) { connecting = false; return; }
+    // Every watcher can go away during the token round trip.
+    if (!hasWatchers()) { connecting = false; return; }
     const c = new DxLinkClient({
       url,
       token,
@@ -203,8 +244,9 @@ function ensureConnection() {
         if (s.dxlinkConnected) {
           if (authed) return; // status repeats; subscribe exactly once per connection
           authed = true;
-          for (const sym of interest.keys()) subscribeSymbol(sym);
-          console.log(`[etf-live] streaming 1m candles for ${[...interest.keys()].join(',') || '(none)'}`);
+          const want = watchedSymbols();
+          for (const sym of want) subscribeSymbol(sym);
+          console.log(`[etf-live] streaming 1m candles for ${[...want].join(',') || '(none)'}`);
         } else if (c === client) {
           // Close or error on the CURRENT connection. A late status from a
           // connection we already replaced must not tear down the new one.
@@ -235,18 +277,26 @@ function ensureConnection() {
 function sweep() {
   const now = Date.now();
   for (const [sym, until] of interest) {
-    if (until <= now) { interest.delete(sym); bars.delete(sym); }
+    // A symbol with an open stream keeps its bars even when the poll interest
+    // that first created them lapses — dropping the map would restart that
+    // symbol's history from the next event, and the stream would go quiet for
+    // as long as the snapshot took to replay.
+    if (until <= now) {
+      interest.delete(sym);
+      if (!streams.has(sym)) bars.delete(sym);
+    }
   }
-  if (!interest.size) {
+  if (!hasWatchers()) {
     if (client && now - lastInterestAt > IDLE_CLOSE_MS) closeConnection('idle');
     return;
   }
   if (!isLiveWindowET()) { closeConnection('outside 04:00-20:00 ET'); return; }
-  if (client && subscribed.size > MAX_SUBS && subscribed.size > interest.size * 2) {
+  const wanted = watchedSymbols().size;
+  if (client && subscribed.size > MAX_SUBS && subscribed.size > wanted * 2) {
     // No candle unsubscribe exists on DxLinkClient, so a symbol stays on the
     // wire for the life of the connection. Rebuilding is the cheap way to shed
     // them without touching the proxy.
-    closeConnection(`${subscribed.size} subscriptions for ${interest.size} watched symbols — rebuilding`);
+    closeConnection(`${subscribed.size} subscriptions for ${wanted} watched symbols — rebuilding`);
   }
   ensureConnection();
 }
@@ -293,19 +343,14 @@ function shapeRow(symbol, b, intervalMinutes) {
  * @returns {Record<string, Array<object>>} symbol → rows, oldest-first
  */
 function getLiveCandleRows(symbols, interval = 1, maxBuckets = 2) {
-  const iv = Number(interval) === 5 ? 5 : 1;
-  const want = Math.max(1, Math.min(6, Number(maxBuckets) || 2));
-  const list = [...new Set((symbols || [])
-    .map((s) => String(s || '').trim().toUpperCase())
-    .filter(Boolean))].slice(0, 8);
-  const out = {};
-  if (!list.length) return out;
+  const { list, iv, want } = normalizeRead(symbols, interval, maxBuckets);
+  if (!list.length) return {};
 
   const now = Date.now();
   if (isLiveWindowET()) {
     lastInterestAt = now;
     for (const sym of list) {
-      const fresh = !interest.has(sym);
+      const fresh = !interest.has(sym) && !streams.has(sym);
       interest.set(sym, now + INTEREST_MS);
       // A symbol that arrives while the connection is already up subscribes
       // immediately rather than waiting for the next sweep.
@@ -315,6 +360,30 @@ function getLiveCandleRows(symbols, interval = 1, maxBuckets = 2) {
     ensureConnection();
   }
 
+  return readRows(list, iv, want);
+}
+
+/** Shared argument grinding for both read paths. */
+function normalizeRead(symbols, interval, maxBuckets) {
+  return {
+    iv: Number(interval) === 5 ? 5 : 1,
+    want: Math.max(1, Math.min(6, Number(maxBuckets) || 2)),
+    list: [...new Set((symbols || [])
+      .map((s) => String(s || '').trim().toUpperCase())
+      .filter(Boolean))].slice(0, 8),
+  };
+}
+
+/**
+ * The read itself — no interest, no connection, no side effects at all.
+ *
+ * Split out of getLiveCandleRows so the SSE route can answer from the same map
+ * without re-registering interest on every event: a stream already holds its
+ * symbol open through `streams`, and renewing a poll timer from a push handler
+ * would be two lifetimes fighting over one symbol.
+ */
+function readRows(list, iv, want) {
+  const out = {};
   const bucketMs = iv * 60_000;
   for (const sym of list) {
     const m = bars.get(sym);
@@ -348,13 +417,75 @@ function getLiveCandleRows(symbols, interval = 1, maxBuckets = 2) {
   return out;
 }
 
+/**
+ * PUSH. Register `onTick` for `symbol` and hold that symbol subscribed for as
+ * long as the returned function has not been called.
+ *
+ * `onTick(symbol)` fires on every candle event the feed delivers — which, with
+ * the dxLink channel's `acceptAggregationPeriod: 1`, is about once a second per
+ * symbol while it is trading. It carries no payload on purpose: the caller
+ * reads `liveRowsFor()` when it is ready to write, so a burst of events becomes
+ * one read rather than a queue of stale ones.
+ *
+ * Unsubscribing is NOT optional — a stream's hold never expires (that is the
+ * point of it), so a caller that forgets pins a dxLink subscription for the
+ * life of the process. Call it from the connection's close handler, and call it
+ * exactly once; a second call is a no-op.
+ *
+ * @param {string} symbol
+ * @param {(symbol: string) => void} onTick
+ * @returns {() => void} unsubscribe
+ */
+function subscribeLive(symbol, onTick) {
+  const sym = String(symbol || '').trim().toUpperCase();
+  if (!sym || typeof onTick !== 'function') return () => {};
+
+  let set = listeners.get(sym);
+  if (!set) { set = new Set(); listeners.set(sym, set); }
+  set.add(onTick);
+  streams.set(sym, (streams.get(sym) || 0) + 1);
+  lastInterestAt = Date.now();
+
+  startSweep();
+  if (authed) subscribeSymbol(sym);
+  ensureConnection();
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const s = listeners.get(sym);
+    if (s) { s.delete(onTick); if (!s.size) listeners.delete(sym); }
+    const n = (streams.get(sym) || 1) - 1;
+    if (n > 0) streams.set(sym, n);
+    else {
+      streams.delete(sym);
+      // Hand the symbol back to the POLL lifetime rather than dropping it dead.
+      // A card that loses its stream falls back to the 2s probe, and the few
+      // seconds of grace mean that fallback finds bars already there instead of
+      // waiting out a fresh snapshot replay.
+      if (!interest.has(sym)) interest.set(sym, Date.now() + INTEREST_MS);
+    }
+    // No connection teardown here — sweep() owns that, and it is the only place
+    // the idle rule lives.
+  };
+}
+
+/** Current rows for ONE symbol, in the same shape the poll route returns. */
+function liveRowsFor(symbol, interval = 1, maxBuckets = 1) {
+  const { list, iv, want } = normalizeRead([symbol], interval, maxBuckets);
+  return list.length ? readRows(list, iv, want) : {};
+}
+
 /** Diagnostics for a health route / owner page. */
 function liveCandleStatus() {
   return {
     connected: !!client && authed,
     connecting,
     window: isLiveWindowET(),
-    watching: [...interest.keys()],
+    watching: [...watchedSymbols()],
+    polled: [...interest.keys()],
+    streamed: Object.fromEntries(streams),
     subscribed: [...subscribed],
     barCounts: Object.fromEntries([...bars].map(([s, m]) => [s, m.size])),
   };
@@ -364,8 +495,12 @@ function liveCandleStatus() {
 function stopEtfLiveCandles() {
   if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }
   interest.clear();
+  streams.clear();
+  listeners.clear();
   bars.clear();
   closeConnection('stopped');
 }
 
-module.exports = { getLiveCandleRows, liveCandleStatus, stopEtfLiveCandles };
+module.exports = {
+  getLiveCandleRows, subscribeLive, liveRowsFor, liveCandleStatus, stopEtfLiveCandles,
+};

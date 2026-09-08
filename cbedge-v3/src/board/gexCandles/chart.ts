@@ -23,6 +23,10 @@ import type { Coordinate, IChartApi, ISeriesApi, UTCTimestamp } from 'lightweigh
 import { etDateKey, etMinutesOfDay, RTH_OPEN_MIN, type Bar } from './candles'
 import { drawBubbles, type BubbleSnapshot, type BubblePalette } from './bubbles'
 import { BUBBLES } from './settings'
+// tokenHexAlpha, not a hand-written functional colour notation: that notation
+// is banned from src/ by scripts/check-theme.mjs (non-negotiable #1), and the
+// 8-digit hex this returns is accepted by every canvas fill and chart option.
+import { tokenHexAlpha } from '@/design/theme'
 
 /**
  * Read one design token off the mounted element.
@@ -50,6 +54,20 @@ function cssVar(el: HTMLElement, name: string): string {
 }
 
 /** '#rrggbb' → [r,g,b]. Canvas needs a per-mark alpha, which a token cannot carry. */
+/**
+ * The volume overlay's own price scale. Any id that is not 'right' or 'left'
+ * makes lightweight-charts treat the series as an overlay with an independent
+ * scale — which is the whole trick: the candles keep their axis untouched.
+ */
+const VOL_SCALE = 'vol'
+/** Fraction of the pane the volume strip leaves to the candles above it. */
+const VOL_TOP = 0.8
+/** Bottom margin the CANDLE scale takes while the strip is showing. */
+const VOL_CANDLE_BOTTOM = 0.24
+/** Volume bars sit UNDER the price action, so they are washed well back. */
+const VOL_ALPHA = 0.34
+const CANDLE_TOP = 0.08
+
 function hexToRgb(hex: string, fallback: [number, number, number]): [number, number, number] {
   const digits = /^#?([0-9a-f]{6})$/i.exec(hex.trim())?.[1]
   if (!digits) return fallback
@@ -156,6 +174,25 @@ export interface EsChartHandle {
    * to know where the walls are.
    */
   setLevels: (levels: ChartLevels | null) => void
+  /**
+   * The volume histogram along the bottom of the price pane.
+   *
+   * Turning it ON also moves the CANDLE scale's bottom margin up, so the bars
+   * sit in a strip under the price action instead of being drawn through it.
+   * That margin is part of the price scale the bubble layer measures against,
+   * and it re-reads the scale every frame, so the marks follow on their own.
+   */
+  setVolume: (on: boolean) => void
+  /**
+   * A light dashed line at the last price, full width of the plot.
+   *
+   * lightweight-charts' own price line, switched back on. It tracks the newest
+   * bar's CLOSE, and `setLivePrice` is what keeps that close current between
+   * polls — so the line is the live print without any data plumbing of its own.
+   * On an ES tape that print is the future, which is the price the chart is
+   * drawn in; the strikes are the things shifted by the basis, not the tape.
+   */
+  setSpotLine: (on: boolean) => void
   /** Register (or clear, with null) the per-frame price mapping for the rail. */
   setRailSink: (sink: RailSink | null) => void
   /** Re-frame on the newest bar, keeping the user's zoom. */
@@ -186,7 +223,8 @@ export interface MountOpts {
 }
 
 export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts): Promise<EsChartHandle> {
-  const { createChart, CandlestickSeries, ColorType, CrosshairMode } = await import('lightweight-charts')
+  const { createChart, CandlestickSeries, HistogramSeries, ColorType, CrosshairMode, LineStyle } =
+    await import('lightweight-charts')
 
   const line = cssVar(container, '--color-line')
   const muted = cssVar(container, '--color-muted')
@@ -288,11 +326,39 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     borderDownColor: down,
     wickUpColor: up,
     wickDownColor: down,
-    // The dashed last-price line runs the full width of the plot and would be
-    // the one remaining rule across the bubbles. The price is still on the
-    // axis label, which is where it is read anyway.
+    // OFF at mount, and a setting from there — see setSpotLine. The reason it
+    // was hardcoded off still stands (it is a full-width rule across the one
+    // layer this card exists to draw), which is why it is opt-in rather than
+    // simply enabled; the price is on the axis label either way.
     priceLineVisible: false,
     baseLineVisible: false,
+  })
+
+  // ── VOLUME ───────────────────────────────────────────────────────────────
+  // An OVERLAY histogram on its own price scale, NOT a second pane. A pane
+  // would take height from the candles and — the real problem — put the bubble
+  // overlay's single canvas across two panes with two coordinate systems, so
+  // every mark would be placed against whichever one `yOfPrice` happened to
+  // read. One pane, one scale, one set of coordinates.
+  //
+  // Its scale is invisible and pinned to the bottom fifth. `visible: false` at
+  // mount: the card calls setVolume() with the stored setting on the same tick
+  // it calls setBars, so starting hidden avoids a frame of full-height bars
+  // before the margin below is applied.
+  // The SAME tokens the candle bodies take, washed back — a volume bar can
+  // never disagree with the candle drawn above it.
+  const volUp = tokenHexAlpha('--color-candle-up', VOL_ALPHA)
+  const volDown = tokenHexAlpha('--color-candle-down', VOL_ALPHA)
+  const volume: ISeriesApi<'Histogram'> = chart.addSeries(HistogramSeries, {
+    priceFormat: { type: 'volume' },
+    priceScaleId: VOL_SCALE,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    visible: false,
+  })
+  chart.priceScale(VOL_SCALE).applyOptions({
+    scaleMargins: { top: VOL_TOP, bottom: 0 },
+    visible: false,
   })
 
   // A transparent canvas over the chart's own canvas for the bubbles.
@@ -1062,6 +1128,22 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
           close: b.c,
         })),
       )
+      // Volume rides the SAME list, so a bar the poll dropped leaves no orphan
+      // histogram bar behind it. Colour by the bar's own direction, not by the
+      // previous close — this is the candle's volume, and it should agree with
+      // the candle drawn above it.
+      //
+      // Deliberately NOT updated by setLivePrice: the live probe carries a
+      // price, not a size, so an invented forming bar has no volume to draw and
+      // the strip simply has no bar there until the poll publishes one. A made
+      // up size would be worse than a gap.
+      volume.setData(
+        bars.map((b) => ({
+          time: Math.floor(b.t / 1000) as UTCTimestamp,
+          value: b.v,
+          color: b.c >= b.o ? volUp : volDown,
+        })),
+      )
       const last = bars[bars.length - 1]
       live = last
         ? { time: Math.floor(last.t / 1000) as UTCTimestamp, openMs: last.t, open: last.o, high: last.h, low: last.l, close: last.c }
@@ -1191,6 +1273,27 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       version++
       // `bucketMin` is the manual override of the same value.
       reportBucket()
+    },
+    setVolume(on) {
+      volume.applyOptions({ visible: on })
+      // The candles give up a quarter of the pane while the strip is showing.
+      // No `version++`: both series are lightweight-charts' own, and the bubble
+      // canvas re-reads the price scale every frame, so it follows the new
+      // margin without being told.
+      try {
+        series.priceScale().applyOptions({
+          scaleMargins: { top: CANDLE_TOP, bottom: on ? VOL_CANDLE_BOTTOM : CANDLE_TOP },
+        })
+      } catch {
+        /* the scale is gone; the next mount applies it */
+      }
+    },
+    setSpotLine(on) {
+      series.applyOptions({
+        priceLineVisible: on,
+        priceLineColor: muted,
+        priceLineStyle: LineStyle.Dashed,
+      })
     },
     setRailSink(sink) {
       railSink = sink

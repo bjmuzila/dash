@@ -1,5 +1,114 @@
 # Changelog
 
+## 2026-09-08 - ETF candles go from a 2s poll to SSE push
+
+`server-v2/etf-live-candles.js`, `server-v2/api-router.js`,
+`cbedge-v3/src/board/gexCandles/candles.ts`,
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
+
+The 2s probe from earlier today worked, and 2s was a conservative guess rather
+than a measured floor. Two facts settled it:
+
+  - `ws-auth.js` caches session validation for 8s in memory, so a 2s probe
+    touches the database at most once every four requests. Auth was never the
+    constraint.
+  - `DxLinkClient` opens its channel with `acceptAggregationPeriod: 1`, so the
+    FEED conflates to ~1 update/sec. Polling faster than that re-reads the same
+    numbers - the real floor is the feed, not the poll.
+
+So polling was buying latency it did not have to pay for: what reaches the chart
+is late by the interval PLUS the round trip, and halving the interval doubles the
+requests to buy back half of one term. A stream removes the interval term.
+
+SERVER. `etf-live-candles.js` gains a PUSH side alongside the pull one:
+
+  - `subscribeLive(symbol, onTick)` registers a callback and holds the symbol
+    open, returning an unsubscribe. Streams are COUNTED, not timed - a poll's
+    interest expires (that is what lets a closed tab release a subscription with
+    no teardown code), an SSE connection is explicitly opened and closed, and its
+    symbol must not lapse underneath it. `hasWatchers()` is the union, and sweep
+    keeps a streamed symbol's bars even when its poll interest expires.
+  - `onTick(symbol)` carries no payload on purpose. The subscriber reads
+    `liveRowsFor()` when it is ready to write, so the ~20-bar snapshot replay on
+    a fresh subscribe collapses into one read instead of a queue of stale ones.
+  - `readRows()` split out of `getLiveCandleRows()` - the same map, with no
+    interest registered, so a push handler is not renewing a poll timer.
+  - Releasing a stream hands the symbol back to the POLL lifetime for ~20s
+    rather than dropping it dead, so a card that loses its stream finds bars
+    already there instead of waiting out a fresh replay.
+
+ROUTE. `/api/snapshots/etf-candles/live/stream?symbol=` - `text/event-stream`,
+one `data:` frame per candle event. The handler returns while the response stays
+open; api-router's dispatcher awaits the handler and then does nothing else to
+`res`, which is what makes that legal. Three things it needs that a JSON route
+does not: `X-Accel-Buffering: no` + `no-transform` (a buffered SSE stream
+delivers nothing until it closes and looks exactly like a hang), a 20s comment
+heartbeat (an idle connection is what proxies reap, and a quiet symbol is idle),
+and an unsubscribe on `close` (a stream's hold never expires - that is the whole
+point of it). Writes bypass `sendJson()` entirely, so its gzip never applies.
+
+NOT the websocket: `/ws/gex` is topic-scoped and every consumer shares one
+connection whose scope is the union of what is mounted, so a new frame type
+there means touching that scoping and re-testing every panel on it. This is one
+route and nothing else in the app can notice it.
+
+CLIENT. The card now opens an `EventSource` and keeps the probe underneath it at
+3s, firing only after 8s of stream silence (`LIVE_QUIET_MS`). Nothing detects
+whether SSE "works" - if frames arrive the poll never runs, and if they stop it
+resumes on its own. That covers a proxy that buffers or refuses
+`text/event-stream`, a browser out of connections, and the seconds while
+EventSource is reconnecting. Deliberately NO `onerror` that closes the stream:
+EventSource reconnects itself (the route sends `retry: 3000`) and closing it
+there would turn one dropped connection into a permanent downgrade to polling.
+Hidden tabs drop the connection (owner excepted) - which is also what releases
+the symbol server-side.
+
+Verified offline against a stubbed DxLinkClient: symbol canonicalization
+(`QQQ{=1m}` subscribed, `QQQ{=m}` received), foreign symbols ignored, forming-bar
+reduction (last close wins, range widens, volume is the max), stream hold and
+release, and double-release as a no-op.
+
+## 2026-09-08 - v3 GEX Candles: volume strip + spot line, both on the cogwheel
+
+`cbedge-v3/src/board/gexCandles/chart.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts`,
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
+
+VOLUME. A histogram along the bottom of the price pane, coloured by each bar's
+own direction. It is an OVERLAY on its own price scale (`priceScaleId: 'vol'`,
+axis hidden, pinned to the bottom fifth) - deliberately not a second pane. A
+pane would take height from the candles and, worse, put the bubble overlay's
+single canvas across two coordinate systems, so every mark would be placed
+against whichever one `yOfPrice` happened to read. Turning it on moves the
+CANDLE scale's bottom margin to 0.24; the bubble layer re-reads the price scale
+every frame, so the marks follow without being told.
+
+Volume is not updated by `setLivePrice` - the live probe carries a price, not a
+size - so an invented forming bar has no bar in the strip until the poll
+publishes one. A made-up size would be worse than a gap.
+
+SPOT LINE. lightweight-charts' own price line, switched back on as a setting.
+It was hardcoded `priceLineVisible: false` when this chart was built, for a
+reason that has not changed - it is a full-width rule across the one layer the
+card exists to draw - so it is opt-in rather than simply enabled. It tracks the
+newest bar's CLOSE, and `setLivePrice` is what keeps that close current between
+polls, so the line follows the live print with no data plumbing of its own. On
+an ES tape that print is the future, which is the price the chart is drawn in.
+
+Both default ON and both sit in the cogwheel's Layer section next to Bubbles /
+GEX rail / Levels / Countdown. Two new keys in `ChartSettings` (`volume`,
+`spotLine`), both `p.x !== false` in `coerce`, so an existing saved card picks
+them up without a version bump.
+
+THEME CHECK. The first cut wrote the wash colours as `rgba(...)` and
+`scripts/check-theme.mjs` rejected the commit - functional colour notation is
+banned from `src/` (non-negotiable #1). Fixed properly rather than by raising
+the baseline: `tokenHexAlpha('--color-candle-up', 0.34)` from
+`src/design/theme.ts`, which returns the 8-digit hex every canvas and chart
+option accepts and keeps the bars tracking the same tokens the candle bodies
+take. The pre-existing `fontSize: 11` on line 257 is the file's baseline of 1
+and was left alone.
+
 ## 2026-09-08 - Multi Greek: SPX / SPY / QQQ pinned, one written-in 4th slot
 
 `app/mult-greek/MultGreekClient.tsx`.

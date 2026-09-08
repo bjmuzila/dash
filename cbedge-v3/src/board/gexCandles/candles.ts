@@ -175,11 +175,43 @@ export function parseCandles(json: unknown): Bar[] {
 // effect and the hub drops it ~20s after the last request, so a card that
 // unmounts stops costing a subscription upstream. Nothing needs to unsubscribe.
 
-/** How often the live probe runs. See the note above on why 2s is affordable. */
-export const LIVE_PRICE_MS = 2_000
+// ── PUSH, with the poll demoted to a safety net ──────────────────────────────
+// The probe route below is polled, and polling has a floor it cannot go under:
+// what reaches the chart is late by the interval PLUS the round trip, and
+// halving the interval doubles the requests to buy back half of one term.
+//
+//   /api/snapshots/etf-candles/live/stream?symbol=
+//     → text/event-stream, one `data:` frame per candle event
+//
+// The stream removes the interval from that sum — the server writes the moment
+// the feed delivers, so the lag is the network and nothing else. In practice
+// that is ~1 update a second, which is the dxLink channel's own aggregation
+// period (`acceptAggregationPeriod: 1` in DxLinkClient), not a limit of this.
+//
+// The poll stays wired up underneath it, at a slower cadence, and only fires
+// when the stream has been quiet for LIVE_QUIET_MS. That covers the cases a
+// stream cannot cover itself: a proxy that buffers or refuses text/event-stream,
+// a browser that has run out of connections, the seconds while EventSource is
+// reconnecting after a drop. Nothing has to detect any of that — if frames are
+// arriving the poll never runs, and if they stop it resumes on its own.
+
+/** Fallback poll cadence. Only reached while the stream is silent. */
+export const LIVE_FALLBACK_MS = 3_000
+/**
+ * How long the stream may be quiet before the poll takes over.
+ *
+ * Comfortably longer than the feed's ~1s cadence and than EventSource's own
+ * reconnect delay (the route sends `retry: 3000`), so a healthy stream never
+ * triggers a redundant request.
+ */
+export const LIVE_QUIET_MS = 8_000
 
 export function liveCandleUrl(def: SymbolDef): string {
   return `/api/snapshots/etf-candles/live?symbol=${encodeURIComponent(def.key)}&interval=1&bars=1`
+}
+
+export function liveStreamUrl(def: SymbolDef): string {
+  return `/api/snapshots/etf-candles/live/stream?symbol=${encodeURIComponent(def.key)}&interval=1&bars=1`
 }
 
 /**
