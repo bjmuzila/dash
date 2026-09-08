@@ -1,0 +1,7 @@
+# ── paste into the VPS docker-compose.yml, alongside the existing services ──
+  demo-owner:
+    build: ./demo-owner
+    container_name: demo-owner
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8084:80"      # localhost only — Cloudflare Tunnel reaches it

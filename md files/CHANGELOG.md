@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-09-08 - demo-owner: email-gated partner demo of the owner console
+
+New top-level folder `demo-owner/`. A standalone, backend-free replica of
+owner.cbedge.net for showing a prospective partner the layout and contents of
+each screen without handing over a login or any real data.
+
+- All 28 routes render, grouped exactly like `owner-vite/src/lib/nav.ts`
+  (Hub + Info 4 / Content 8 / Market 10 / System 2 / Personal 3).
+- Every customer, revenue, affiliate and visitor record is synthetic; emails use
+  the reserved `.test` TLD. Ticker and market values are static illustrative
+  numbers. Personal group renders a "not included" card only.
+- Zero network calls. One self-contained ~90 KB `dist/index.html`; no API, no DB,
+  no socket, nothing to repoint at production.
+- Colors and spacing mirror `owner-vite/src/lib/theme.ts` (OWNER_THEME).
+- `src/` (data / ui / pages / shell / styles) + `build.mjs` inline into one file;
+  `check.mjs` walks all 28 routes headless and fails on JS errors or empty pages.
+- Ships with `Dockerfile`, `nginx.conf` (noindex, no-store), `compose.snippet.yml`
+  (127.0.0.1:8084) and `cloudflared.snippet.yml` for `demo.cbedge.net`.
+- Access control is Cloudflare Access in front of the container - one-time-PIN
+  policy scoped to an email allowlist - so the demo itself carries no auth code.
+  Revoke by removing the email from the policy.
+
+Nothing in the live app was touched.
+
 ## 2026-09-08 - Level Log: CORE migration button removed
 
 `components/pages/LevelLog.tsx`. Dropped the "CORE migration" pop-out button

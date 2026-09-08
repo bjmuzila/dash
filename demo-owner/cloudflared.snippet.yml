@@ -1,0 +1,8 @@
+# ── add to /etc/cloudflared/config.yml, ABOVE the catch-all 404 rule ──
+  - hostname: demo.cbedge.net
+    service: http://127.0.0.1:8084
+
+# existing rules stay as they are, e.g.
+#  - hostname: budget.cbedge.net
+#    service: http://127.0.0.1:8083
+#  - service: http_status:404      <- this must remain LAST

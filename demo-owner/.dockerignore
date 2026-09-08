@@ -1,0 +1,9 @@
+node_modules
+src
+build.mjs
+check.mjs
+shot.mjs
+template.html
+package*.json
+README.md
+*.snippet.yml

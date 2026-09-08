@@ -1,0 +1,1385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>CB Edge — Owner Console (Demo)</title>
+<style>/* ─────────────────────────────────────────────────────────────
+   CB Edge Owner Console — DEMO build
+   Colors/spacing mirror owner-vite/src/lib/theme.ts (OWNER_THEME).
+   ───────────────────────────────────────────────────────────── */
+:root{
+  --bg:#05060A; --panel:rgba(13,17,25,0.45); --panelSolid:#0D1119; --panelHover:#16181f;
+  --inset:rgba(0,0,0,0.30);
+  --line:rgba(255,255,255,0.10); --lineStrong:rgba(255,255,255,0.18);
+  --tx:#FFFFFF;
+  --cy:#219EBC; --purple:#126783; --orange:#FB8501; --gold:#FFB703;
+  --green:#8ECAE6; --lblue:#7dd3fc; --red:#EF4444; --softred:#f4948e;
+  --ok:#4ade80;
+  --rail:280px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--tx);
+  background-image:
+    radial-gradient(circle at 15% 50%, rgba(33,158,188,0.04) 0%, transparent 50%),
+    radial-gradient(circle at 85% 30%, rgba(18,103,131,0.05) 0%, transparent 50%);
+  font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased; overflow:hidden;
+}
+a{color:inherit}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:9px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ── demo banner ── */
+#demobar{
+  position:fixed; inset:0 0 auto 0; height:30px; z-index:80;
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  background:linear-gradient(90deg, rgba(251,133,1,.16), rgba(255,183,3,.16));
+  border-bottom:1px solid rgba(255,183,3,.32);
+  font-size:11px; letter-spacing:.06em; color:#FFD98A;
+}
+#demobar b{color:#FFB703; font-weight:800; letter-spacing:.14em; text-transform:uppercase; font-size:10px}
+#demobar span{opacity:.85}
+
+/* ── shell ── */
+#shell{position:fixed; inset:30px 0 0 0; display:flex; min-height:0}
+
+/* rail */
+#rail{
+  width:var(--rail); flex:0 0 var(--rail); height:100%; overflow-y:auto;
+  background:#040507; border-right:1px solid var(--line); padding:16px 12px 32px;
+}
+.brand{display:flex; align-items:center; gap:10px; padding:6px 8px 16px; border-bottom:1px solid var(--line); margin-bottom:12px}
+.brand .mark{width:28px;height:28px;border-radius:8px;flex:0 0 28px;
+  background:linear-gradient(135deg,var(--cy),var(--purple));
+  display:grid;place-items:center;font-weight:900;font-size:13px;color:#04212a}
+.brand .nm{font-weight:800;font-size:15px;letter-spacing:-.01em;line-height:1.1}
+.brand .sb{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;opacity:.4;font-weight:700}
+
+.railsearch{position:relative; margin:0 4px 14px}
+.railsearch input{
+  width:100%; background:var(--inset); border:1px solid var(--line); border-radius:9px;
+  color:var(--tx); font:inherit; font-size:12.5px; padding:8px 10px 8px 30px; outline:none;
+}
+.railsearch input:focus{border-color:rgba(33,158,188,.55)}
+.railsearch .ic{position:absolute; left:10px; top:8px; opacity:.35; font-size:12px}
+
+.rgroup{margin:14px 4px 0}
+.rgroup .lab{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:800;
+  opacity:.45;padding:0 8px 6px;display:flex;justify-content:space-between;align-items:center}
+.rlink{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:9px;cursor:pointer;
+  border:1px solid transparent;font-size:13px;line-height:1.25}
+.rlink .gl{width:16px;text-align:center;opacity:.55;font-size:12.5px;flex:0 0 16px}
+.rlink:hover{background:var(--panelHover)}
+.rlink.on{background:var(--panelSolid);border-color:var(--lineStrong)}
+.rlink.on .gl{opacity:1}
+.rlink .lk{font-size:9px;opacity:.35;margin-left:auto;letter-spacing:.1em}
+
+/* main */
+#main{flex:1;min-width:0;height:100%;display:flex;flex-direction:column}
+#toolbar{
+  display:flex;align-items:center;gap:12px;padding:12px 20px;flex-shrink:0;
+  background:var(--panel);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);
+}
+#toolbar .ttl{font-size:15px;font-weight:800;letter-spacing:-.01em}
+#toolbar .crumb{font-size:11px;opacity:.35;letter-spacing:.06em}
+#toolbar .sp{flex:1}
+.tbtn{border:1px solid var(--line);background:var(--inset);color:var(--tx);border-radius:8px;
+  padding:6px 11px;font:inherit;font-size:11.5px;cursor:pointer;opacity:.85}
+.tbtn:hover{border-color:var(--lineStrong);opacity:1}
+.tbtn.on{border-color:rgba(33,158,188,.6);color:#8fdcef}
+.livedot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 0 3px rgba(74,222,128,.15);margin-right:6px;vertical-align:1px}
+#clock{font-size:11.5px;opacity:.5;font-variant-numeric:tabular-nums}
+
+#view{flex:1;min-height:0;overflow-y:auto;padding:22px 24px 64px}
+.page{max-width:1240px;margin:0 auto}
+
+/* ── page header ── */
+.phead{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+.phead h1{margin:0;font-size:22px;font-weight:800;letter-spacing:-.02em}
+.phead .sub{font-size:12.5px;opacity:.45;margin:0}
+.phead .sp{flex:1}
+
+/* ── cards ── */
+.card{background:var(--panel);backdrop-filter:blur(16px);border:1px solid var(--line);
+  border-radius:18px;box-shadow:0 18px 40px rgba(0,0,0,.22);padding:16px 18px;margin-bottom:16px}
+.card > .ch{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.card > .ch .t{font-size:15px;font-weight:700;letter-spacing:-.005em}
+.card > .ch .s{font-size:11.5px;opacity:.4}
+.card > .ch .sp{flex:1}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid2 > .card,.grid3 > .card{margin-bottom:0}
+@media(max-width:1100px){.grid2,.grid3{grid-template-columns:1fr}}
+
+/* ── tiles ── */
+.tiles{display:grid;gap:10px;margin-bottom:16px}
+.tile{background:var(--panelSolid);border:1px solid var(--line);border-radius:14px;padding:13px 15px;position:relative;overflow:hidden}
+.tile .l{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;opacity:.42;font-weight:700}
+.tile .n{font-size:24px;font-weight:800;letter-spacing:-.02em;margin-top:5px;font-variant-numeric:tabular-nums}
+.tile .d{font-size:11px;margin-top:3px;opacity:.5}
+.tile .d.up{color:var(--ok);opacity:.9} .tile .d.dn{color:var(--softred);opacity:.9}
+.tile svg.sp{position:absolute;right:0;bottom:0;opacity:.5}
+
+/* ── tables ── */
+.tw{overflow-x:auto;margin:0 -4px}
+table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:520px}
+th{text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;opacity:.4;
+  font-weight:800;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.045);vertical-align:middle;white-space:nowrap}
+tbody tr:hover td{background:rgba(255,255,255,.02)}
+tbody tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.mut{opacity:.45} .pos{color:var(--ok)} .neg{color:var(--softred)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+
+/* ── pills / chips ── */
+.pill{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.04em;padding:2.5px 8px;
+  border-radius:20px;border:1px solid;white-space:nowrap}
+.p-cy{color:var(--cy);border-color:rgba(33,158,188,.45);background:rgba(33,158,188,.1)}
+.p-gd{color:var(--gold);border-color:rgba(255,183,3,.4);background:rgba(255,183,3,.09)}
+.p-og{color:var(--orange);border-color:rgba(251,133,1,.4);background:rgba(251,133,1,.09)}
+.p-gn{color:var(--ok);border-color:rgba(74,222,128,.4);background:rgba(74,222,128,.08)}
+.p-rd{color:var(--softred);border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.08)}
+.p-mt{opacity:.5;border-color:var(--line);background:var(--inset)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+
+/* ── misc bits ── */
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--inset)}
+.seg button{border:0;background:transparent;color:var(--tx);font:inherit;font-size:11.5px;
+  padding:6px 12px;cursor:pointer;opacity:.5}
+.seg button.on{background:rgba(33,158,188,.16);color:#8fdcef;opacity:1}
+.bar{height:5px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:5px}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.045);font-size:12.5px}
+.kv:last-child{border-bottom:0}
+.kv .k{opacity:.45}
+.note{border-left:2px solid var(--cy);padding:4px 0 4px 12px;font-size:12px;opacity:.6;margin:12px 0 0}
+.empty{padding:34px;text-align:center;opacity:.35;font-size:12.5px}
+.synth{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;color:#FFD98A;
+  border:1px solid rgba(255,183,3,.3);background:rgba(255,183,3,.07);border-radius:7px;
+  padding:5px 10px;margin-bottom:14px}
+.locked{display:grid;place-items:center;min-height:340px;text-align:center;gap:8px}
+.locked .lk{font-size:30px;opacity:.25}
+.locked .t{font-size:16px;font-weight:700}
+.locked .s{font-size:12.5px;opacity:.45;max-width:420px}
+
+/* ladder (ΔGEX) */
+.ladder{display:flex;flex-direction:column;gap:2px;font-size:11px}
+.ladder{position:relative}
+.ladder::before{content:"";position:absolute;left:calc(56px + 8px + ((100% - 56px - 96px - 24px)/2));
+  top:0;bottom:0;width:1px;background:rgba(255,255,255,.10)}
+.rung{display:grid;grid-template-columns:56px 1fr 1fr 96px;align-items:center;gap:8px;height:19px}
+.rung .k{opacity:.5;font-variant-numeric:tabular-nums;text-align:right}
+.rung .lft,.rung .rgt{height:11px;position:relative}
+.rung .lft i{position:absolute;right:0;top:0;height:100%;border-radius:2px 0 0 2px;background:var(--softred);opacity:.75}
+.rung .rgt i{position:absolute;left:0;top:0;height:100%;border-radius:0 2px 2px 0;background:var(--green);opacity:.75}
+.rung.hi{background:rgba(255,183,3,.07);border-radius:4px}
+.rung .tagx{font-size:9px;opacity:.55;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* gauges */
+.gauges{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media(max-width:900px){.gauges{grid-template-columns:repeat(2,1fr)}}
+.gauge{background:var(--panelSolid);border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center}
+.gauge .gl{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;opacity:.42;font-weight:700}
+.gauge .gv{font-size:17px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums}
+
+/* map */
+.mapwrap{position:relative;background:var(--inset);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+
+/* rail scroll on small screens */
+@media(max-width:940px){
+  :root{--rail:0px}
+  #rail{position:fixed;left:0;top:30px;bottom:0;width:270px;flex-basis:270px;z-index:60;transform:translateX(-100%);transition:transform .18s}
+  body.railopen #rail{transform:none}
+  #shell{display:block}
+  #main{height:100%}
+}
+.mtoggle{display:none}
+@media(max-width:940px){.mtoggle{display:inline-block}}
+</style>
+</head>
+<body>
+
+<div id="demobar">
+  <b>Demo build</b>
+  <span>All customer, revenue and visitor records are synthetic · nothing here is connected to production</span>
+</div>
+
+<div id="shell">
+  <nav id="rail"></nav>
+  <div id="main">
+    <div id="toolbar">
+      <button class="tbtn mtoggle" id="menu">☰</button>
+      <span class="crumb" id="crumb">Info</span>
+      <span class="ttl" id="ttl">Hub</span>
+      <span class="sp"></span>
+      <span class="tbtn"><span class="livedot"></span>feed</span>
+      <span id="clock">—</span>
+      <button class="tbtn">↻</button>
+    </div>
+    <div id="view"></div>
+  </div>
+</div>
+
+<script>
+/* ─────────────────────────────────────────────────────────────
+   DEMO DATA — every customer record below is synthetic.
+   Names, emails, amounts and locations are invented for this build.
+   Market/ticker figures are static illustrative values.
+   ───────────────────────────────────────────────────────────── */
+const D = {};
+
+/* ── synthetic customers (5) ───────────────────────────────── */
+D.customers = [
+  { email:"m.calloway@sample-mail.test", disc:"mcallo#4417", city:"Austin, TX",      country:"US",
+    joined:"2026-02-11", last:"2026-09-07 09:41", mins:1840, loads:612, pages:14, top:"/app/es-candles",
+    plan:"Annual",  amt:400, spent:400,  status:"active",   renew:"2027-02-11" },
+  { email:"j.ferreira@sample-mail.test", disc:"jferr",       city:"Lisbon, PT",      country:"PT",
+    joined:"2026-04-02", last:"2026-09-07 08:12", mins:920,  loads:341, pages:11, top:"/app/traders-dashboard",
+    plan:"Monthly", amt:99,  spent:495,  status:"active",   renew:"2026-10-02" },
+  { email:"d.okafor@sample-mail.test",   disc:"—",           city:"London, UK",      country:"GB",
+    joined:"2026-05-19", last:"2026-09-06 15:58", mins:1310, loads:498, pages:16, top:"/app/flow",
+    plan:"Annual",  amt:400, spent:400,  status:"active",   renew:"2027-05-19" },
+  { email:"r.whitfield@sample-mail.test",disc:"rwhit#0092",  city:"Toronto, CA",     country:"CA",
+    joined:"2026-06-27", last:"2026-09-07 07:03", mins:405,  loads:157, pages:9,  top:"/app/em",
+    plan:"Monthly", amt:99,  spent:297,  status:"trialing", renew:"2026-09-11" },
+  { email:"s.nakamura@sample-mail.test", disc:"—",           city:"Singapore, SG",   country:"SG",
+    joined:"2026-01-08", last:"2026-08-22 11:26", mins:2210, loads:803, pages:18, top:"/app/mult-greek",
+    plan:"Monthly", amt:99,  spent:693,  status:"canceled", renew:"—" },
+];
+
+D.cancels = [
+  { email:"s.nakamura@sample-mail.test", when:"2026-08-24", months:7, reason:"Too expensive right now" },
+  { email:"p.arden@sample-mail.test",    when:"2026-08-11", months:2, reason:"Not using it enough" },
+  { email:"l.gruber@sample-mail.test",   when:"2026-07-29", months:4, reason:"Switched to a broker tool" },
+];
+
+D.signups = [
+  { email:"k.tanaka@sample-mail.test",  when:"2026-09-06", src:"X / organic",  looked:"/pricing",  far:"Saw pricing",     seen:"2026-09-06", loc:"Osaka, JP" },
+  { email:"a.brennan@sample-mail.test", when:"2026-09-05", src:"Discord",      looked:"/app/gex",  far:"Reached checkout",seen:"2026-09-07", loc:"Dublin, IE" },
+  { email:"t.osei@sample-mail.test",    when:"2026-09-03", src:"Affiliate ES", looked:"/whats-new",far:"Never saw pricing",seen:"2026-09-03",loc:"Accra, GH" },
+  { email:"n.vasquez@sample-mail.test", when:"2026-09-01", src:"Direct",       looked:"/pricing",  far:"Payment failed",  seen:"2026-09-02", loc:"Bogotá, CO" },
+  { email:"h.lindqvist@sample-mail.test",when:"2026-08-30",src:"X / paid",     looked:"/docs",     far:"Saw pricing",     seen:"2026-09-04", loc:"Malmö, SE" },
+];
+
+D.feedback = [
+  { id:1042, cat:"Bug",  email:"j.ferreira@sample-mail.test", page:"/app/options-chain",
+    msg:"Chain stops updating if I leave the tab for ~10 min and come back.", open:true, replies:2, when:"2h ago" },
+  { id:1041, cat:"Idea", email:"m.calloway@sample-mail.test", page:"/app/em",
+    msg:"Any chance of alerting when price tags the no-long zone?", open:true, replies:1, when:"6h ago" },
+  { id:1039, cat:"Note", email:"d.okafor@sample-mail.test",   page:"/app/traders-dashboard",
+    msg:"Mobile layout is genuinely good. Rare.", open:false, replies:1, when:"2d ago" },
+  { id:1037, cat:"Bug",  email:"r.whitfield@sample-mail.test",page:"/sign-in",
+    msg:"Discord login bounced me back to sign-in the first time.", open:false, replies:3, when:"4d ago" },
+];
+
+D.comped = [
+  { email:"press@sample-mail.test",   note:"Podcast — 90 day review access", exp:"2026-11-30", state:"active" },
+  { email:"a.mentor@sample-mail.test",note:"Advisor",                        exp:"—",          state:"active" },
+  { email:"beta7@sample-mail.test",   note:"Beta cohort",                    exp:"2026-09-30", state:"no password yet" },
+];
+
+D.unsubs = [
+  { email:"l.gruber@sample-mail.test", when:"2026-07-29", why:"Unsubscribed" },
+  { email:"old.list.412@sample-mail.test", when:"2026-06-02", why:"Hard bounce" },
+];
+
+/* ── affiliates ────────────────────────────────────────────── */
+D.affiliates = [
+  { name:"ES Desk Notes", code:"ESDESK", rate:25, clicks:1840, members:22, gross:4380, owed:1095, method:"Stripe", status:"active" },
+  { name:"Chart Fiend",   code:"FIEND",  rate:25, clicks:960,  members:9,  gross:1791, owed:448,  method:"PayPal", status:"active" },
+  { name:"0DTE Weekly",   code:"ZDTE",   rate:30, clicks:2410, members:14, gross:2786, owed:836,  method:"Zelle",  status:"active" },
+  { name:"Vol Curve",     code:"VCURVE", rate:25, clicks:310,  members:1,  gross:99,   owed:25,   method:"Stripe", status:"paused" },
+];
+D.affPending = [
+  { name:"Gamma Diary", email:"gd@sample-mail.test", want:"GDIARY", audience:"11.2k on X", when:"2026-09-05" },
+  { name:"Prop Room",   email:"pr@sample-mail.test", want:"PROP",   audience:"3.4k Discord", when:"2026-09-02" },
+];
+D.payouts = [
+  { name:"ES Desk Notes", code:"ESDESK", sales:11, gross:2180, refunds:99, rate:25, pay:520, method:"Stripe", status:"approved" },
+  { name:"0DTE Weekly",   code:"ZDTE",   sales:7,  gross:1386, refunds:0,  rate:30, pay:416, method:"Zelle",  status:"awaiting" },
+  { name:"Chart Fiend",   code:"FIEND",  sales:4,  gross:792,  refunds:0,  rate:25, pay:198, method:"PayPal", status:"held" },
+];
+
+/* ── email broadcast ───────────────────────────────────────── */
+D.audiences = [
+  { k:"All users",     n:1284, ic:"👥" }, { k:"Subscribers", n:141, ic:"💳" },
+  { k:"Not paying",    n:1143, ic:"🚫" }, { k:"Waitlist",    n:206, ic:"📋" },
+  { k:"Old emails",    n:412,  ic:"📇" }, { k:"Custom",      n:0,   ic:"✏️" },
+];
+D.sends = [
+  { subj:"September levels are live", when:"2026-09-02 09:00", aud:"Subscribers", sent:141, fail:0 },
+  { subj:"Birthday month — annual at $400", when:"2026-09-01 08:30", aud:"All users", sent:1279, fail:5 },
+  { subj:"What shipped in August", when:"2026-08-28 17:15", aud:"All users", sent:1266, fail:3 },
+];
+
+/* ── alerts ────────────────────────────────────────────────── */
+D.alerts = [
+  { t:"SPX flipped positive gamma at 6,412 — walls should absorb from here.", up:38, dn:2, age:"3h" },
+  { t:"NQ put wall pulled ~18% overnight. Thinner floor into the open.",       up:29, dn:5, age:"1d" },
+  { t:"Est. move for the week posted. SPX ±1.31%.",                            up:44, dn:1, age:"3d" },
+];
+D.reactors = [
+  { who:"m.calloway@sample-mail.test", up:31, dn:1, alerts:34, first:"2026-02-14", last:"3h ago" },
+  { who:"d.okafor@sample-mail.test",   up:26, dn:4, alerts:31, first:"2026-05-20", last:"3h ago" },
+  { who:"j.ferreira@sample-mail.test", up:19, dn:2, alerts:24, first:"2026-04-05", last:"1d ago" },
+];
+
+/* ── market / tickers (static illustrative) ────────────────── */
+D.spot = { SPX:6412.4, ES:6438.25, NDX:23180.6, NQ:23241.5, SPY:639.1, QQQ:563.8, IWM:241.7, VIX:14.8 };
+
+D.gexBoard = [
+  { sym:"SPX",  net:"+4.12B", chg:"+18.4%", flip:6388, call:6450, put:6350, regime:"+GEX" },
+  { sym:"NVDA", net:"-812M",  chg:"-24.1%", flip:184,  call:195,  put:172,  regime:"−GEX" },
+  { sym:"SPY",  net:"+1.94B", chg:"+9.2%",  flip:637,  call:645,  put:628,  regime:"+GEX" },
+  { sym:"QQQ",  net:"+640M",  chg:"-3.1%",  flip:562,  call:572,  put:551,  regime:"+GEX" },
+  { sym:"TSLA", net:"-410M",  chg:"+41.6%", flip:318,  call:340,  put:300,  regime:"−GEX" },
+  { sym:"AAPL", net:"+288M",  chg:"+2.4%",  flip:243,  call:250,  put:235,  regime:"+GEX" },
+  { sym:"META", net:"-190M",  chg:"-11.8%", flip:702,  call:730,  put:680,  regime:"−GEX" },
+  { sym:"AMZN", net:"+151M",  chg:"+6.0%",  flip:229,  call:238,  put:220,  regime:"+GEX" },
+];
+/* strike ladder: [strike, priorGex, todayGex] in $mm */
+D.ladder = [
+  [6480, 210, 240],[6470, 150, 168],[6460, 320, 402],[6450, 610, 705],[6440, 280, 250],
+  [6430, 190, 236],[6420, 120, 96],[6410, -80, -64],[6400, 340, 388],[6390, -150, -210],
+  [6380, -260, -318],[6370, -190, -160],[6360, -110, -140],[6350, -480, -545],[6340, -220, -190],
+  [6330, -140, -175],[6320, -90, -70],[6310, -60, -84],[6300, -310, -352],
+];
+
+D.grades = [
+  { sym:"SPX",  reg:"+GEX", call:"Fade the cap", grade:"A", score:92, setup:"Wall hold", pts:3, cap:6450, floor:6350, flip:6388, out:"tagged · held" },
+  { sym:"NVDA", reg:"−GEX", call:"Break runs",   grade:"B", score:78, setup:"Flip break", pts:2, cap:195,  floor:172,  flip:184,  out:"broke · ran" },
+  { sym:"SPY",  reg:"+GEX", call:"Fade the cap", grade:"A", score:88, setup:"Wall hold", pts:3, cap:645,  floor:628,  flip:637,  out:"absorbed" },
+  { sym:"QQQ",  reg:"+GEX", call:"Stand down",   grade:"C", score:61, setup:"Chop",      pts:1, cap:572,  floor:551,  flip:562,  out:"pinned" },
+  { sym:"TSLA", reg:"−GEX", call:"Break runs",   grade:"D", score:42, setup:"Flip break", pts:0, cap:340,  floor:300,  flip:318,  out:"regime failed" },
+  { sym:"META", reg:"−GEX", call:"Break runs",   grade:"B", score:75, setup:"Sweep",     pts:2, cap:730,  floor:680,  flip:702,  out:"gapped through" },
+];
+D.gradeDays = [
+  { date:"2026-09-05", grade:"A-", score:86, graded:169, held:0.71, calls:0.64 },
+  { date:"2026-09-04", grade:"B+", score:81, graded:169, held:0.68, calls:0.59 },
+  { date:"2026-09-03", grade:"B",  score:76, graded:168, held:0.63, calls:0.57 },
+  { date:"2026-09-02", grade:"A",  score:90, graded:169, held:0.74, calls:0.68 },
+  { date:"2026-08-29", grade:"C+", score:66, graded:167, held:0.55, calls:0.48 },
+];
+
+D.setups = [
+  { name:"Fair Value Gap",  w:41, l:22, c:9,  r:0.62, mfe:1.41 },
+  { name:"Order Block",     w:33, l:19, c:7,  r:0.54, mfe:1.22 },
+  { name:"Liquidity Sweep", w:52, l:24, c:11, r:0.71, mfe:1.63 },
+  { name:"Judas Swing",     w:18, l:16, c:5,  r:0.11, mfe:0.94 },
+  { name:"Turtle Soup",     w:27, l:14, c:6,  r:0.58, mfe:1.30 },
+];
+D.trades = [
+  { d:"2026-09-05", t:"10:14", c:"SPXW 6410C 0DTE", e:0.85, p:4.20, pl:335 },
+  { d:"2026-09-05", t:"13:02", c:"SPXW 6390P 0DTE", e:0.95, p:1.10, pl:15 },
+  { d:"2026-09-04", t:"09:52", c:"SPXW 6380C 0DTE", e:0.70, p:6.10, pl:540 },
+  { d:"2026-09-04", t:"14:31", c:"SPXW 6360P 0DTE", e:1.00, p:0.40, pl:-60, skip:false },
+  { d:"2026-09-03", t:"11:08", c:"SPXW 6355C 0DTE", e:0.90, p:2.65, pl:175 },
+  { d:"2026-09-03", t:"09:41", c:"SPXW 6340P 0DTE", e:1.35, p:0,    pl:0,  skip:true },
+];
+D.walls = [
+  { sym:"SPX",  spot:6412, put:6350, core:6400, call:6450, near:6450, reach:0.6, chg:"+2.1%", last:"reject", react:"rejected" },
+  { sym:"NVDA", spot:184,  put:172,  core:180,  call:195,  near:180,  reach:0.2, chg:"-4.0%", last:"break",  react:"broke" },
+  { sym:"SPY",  spot:639,  put:628,  core:637,  call:645,  near:637,  reach:0.1, chg:"+0.4%", last:"pin",    react:"pinned" },
+  { sym:"TSLA", spot:318,  put:300,  core:320,  call:340,  near:320,  reach:0.3, chg:"+6.2%", last:"new",    react:"new wall" },
+];
+
+D.em = [
+  { sym:"ESU6", close:6438, exp:"09/12", em:1.31, up:6522, dn:6354, conf:78 },
+  { sym:"SPX",  close:6412, exp:"09/12", em:1.28, up:6494, dn:6330, conf:81 },
+  { sym:"NQU6", close:23241,exp:"09/12", em:1.84, up:23669,dn:22813,conf:72 },
+  { sym:"SPY",  close:639.1,exp:"09/12", em:1.30, up:647.4,dn:630.8,conf:80 },
+  { sym:"QQQ",  close:563.8,exp:"09/12", em:1.79, up:573.9,dn:553.7,conf:74 },
+  { sym:"IWM",  close:241.7,exp:"09/12", em:2.05, up:246.7,dn:236.7,conf:66 },
+  { sym:"NVDA", close:184.2,exp:"09/12", em:4.10, up:191.7,dn:176.7,conf:59 },
+  { sym:"TSLA", close:318.4,exp:"09/12", em:5.62, up:336.3,dn:300.5,conf:54 },
+];
+D.zones = [
+  { sym:"ESU6", close:6438, pivot:6421, range:84, nolong:6505, noshort:6337 },
+  { sym:"SPX",  close:6412, pivot:6396, range:82, nolong:6478, noshort:6314 },
+  { sym:"NQU6", close:23241,pivot:23180,range:428,nolong:23608,noshort:22752 },
+  { sym:"SPY",  close:639.1,pivot:637.4,range:8.3,nolong:645.7,noshort:629.1 },
+];
+D.emRecord = [
+  { wk:"2026-09-01", hits:6, miss:2, rate:0.75 },
+  { wk:"2026-08-25", hits:7, miss:1, rate:0.88 },
+  { wk:"2026-08-18", hits:5, miss:3, rate:0.63 },
+  { wk:"2026-08-11", hits:6, miss:2, rate:0.75 },
+];
+
+D.probe = [
+  { c:"SPXW 6410C", exp:"09/08", side:"C", fill:0.85, now:2.10, pct:147 },
+  { c:"NVDA 190C",  exp:"09/19", side:"C", fill:3.40, now:2.86, pct:-16 },
+  { c:"TSLA 300P",  exp:"09/12", side:"P", fill:5.10, now:6.95, pct:36 },
+];
+
+D.greeks = { GEX:{v:"+4.12B", pct:0.72}, DEX:{v:"-1.86B", pct:-0.34}, CHEX:{v:"+312M", pct:0.18}, VEX:{v:"-94M", pct:-0.11} };
+D.flips = [
+  { t:"13:48", w:"GEX", d:"− → +", note:"crossed positive" },
+  { t:"11:02", w:"DEX", d:"+ → −", note:"crossed negative" },
+  { t:"09:47", w:"GEX", d:"+ → −", note:"crossed negative" },
+];
+
+D.rosters = {
+  scanner:{ HOT:["SPX","SPY","QQQ","ES","NQ","NVDA","TSLA"],
+            Core:["AAPL","MSFT","META","AMZN","GOOGL","AMD","AVGO","NFLX","IWM","SMH","COIN","MSTR"],
+            Wide:["JPM","XOM","LLY","UNH","CRM","ORCL","INTC","MU","BA","GS","PLTR","SOFI","RIOT","F","T"] },
+  em:{ Weekly:["ESU6","NQU6","SPX","NDX","SPY","QQQ","IWM","SMH","NVDA","TSLA","AAPL","MSFT","META","AMZN","GOOGL","AMD","COIN","MSTR","AVGO","NFLX"] },
+  farcb:{ Watch:["SPX","SPY","QQQ","NVDA","TSLA","AMD","META","MSTR"] },
+};
+
+D.tables = [
+  ["eod_strike_gex", 4820114, 31402], ["greeks_ts", 18240991, 44120], ["page_visits", 412885, 1841],
+  ["es_candles", 2104338, 1560], ["premium_flow", 9938201, 22840], ["mvc_snapshots", 84120, 312],
+  ["eod_gex", 41208, 3], ["daily_grade_days", 1204, 169], ["watch_snapshots", 288401, 990],
+  ["flow_calls", 1204880, 6120], ["playbook_feed", 42011, 190], ["bzila_snapshots", 18402, 88],
+  ["users", 1284, 4], ["subscriptions", 341, 1], ["feedback", 1042, 2], ["comp_access", 12, 0],
+  ["snapshots", 640, 0], ["ticker_levels", 28401, 169], ["es_stats", 3120, 8], ["roster_overrides", 41, 0],
+];
+D.eodStatus = [
+  { sym:"$SPX", gex:"+$4.12B", spot:6412.4, at:"16:02:14 ET" },
+  { sym:"SPY",  gex:"+$1.94B", spot:639.1,  at:"16:02:19 ET" },
+  { sym:"QQQ",  gex:"+$640M",  spot:563.8,  at:"16:02:23 ET" },
+];
+
+/* ── ops / infra ───────────────────────────────────────────── */
+D.infra = { uptime:"41d 06h", lastFeed:"2s ago", dxlink:"connected", ttAuth:"valid · 41m",
+  version:"2026.09.07-v2", cpu:18, mem:"612 MB", egress:"84 GB", cf:"1.2 TB" };
+D.kpis = [
+  { l:"Visits · 12d", n:"9,412", d:"+12.4%", up:true,  s:[42,48,45,61,58,72,69,80,76,88,84,94] },
+  { l:"Total users",  n:"1,284", d:"+38 · 30d", up:true, s:[60,62,64,66,69,71,74,76,79,81,84,88] },
+  { l:"Subscribers",  n:"141",   d:"+9 · 30d",  up:true, s:[40,42,44,43,47,49,52,54,57,59,62,66] },
+  { l:"On today",     n:"87",    d:"peak 112",  up:true, s:[20,44,66,88,74,52,38,60,82,70,48,30] },
+  { l:"Logged in·30d",n:"643",   d:"50% of base",up:true, s:[30,34,38,41,45,48,52,55,58,60,63,66] },
+  { l:"Waitlist",     n:"206",   d:"+14 · 30d",  up:true, s:[10,12,14,18,20,24,28,31,36,40,44,48] },
+];
+D.topPages = [
+  ["/app/traders-dashboard", 2841, 61], ["/app/es-candles", 1904, 54], ["/app/flow", 1622, 48],
+  ["/app/gex", 1410, 44], ["/app/em", 1188, 39], ["/pricing", 940, 12], ["/app/options-chain", 822, 33],
+  ["/app/mult-greek", 704, 29], ["/whats-new", 512, 9], ["/app/scanner", 448, 21],
+];
+D.acq = [
+  ["X / organic", 3120, 41], ["Direct", 2410, 62], ["Discord", 1840, 55],
+  ["Affiliate", 1204, 71], ["X / paid", 611, 22], ["Search", 227, 18],
+];
+D.tickerClicks = [["SPX",1841],["NVDA",1204],["TSLA",980],["SPY",842],["QQQ",711],["NDX",520],["AMD",412],["META",388]];
+
+/* traffic series: 12 buckets */
+D.traffic  = [420,468,512,489,560,612,588,641,690,712,760,812];
+D.signups12= [18,22,19,26,24,31,28,34,30,38,41,44];
+D.cumUsers = [980,1002,1021,1047,1071,1102,1130,1164,1194,1232,1273,1284];
+D.revMonths= [
+  { m:"Apr", cash:6100, exp:1180 }, { m:"May", cash:7400, exp:1180 },
+  { m:"Jun", cash:8850, exp:1240 }, { m:"Jul", cash:9620, exp:1240 },
+  { m:"Aug", cash:11480, exp:1310 }, { m:"Sep", cash:4120, exp:1310 },
+];
+D.expenses = [
+  ["VPS · Hetzner", 68, "monthly"], ["ThetaData PRO", 480, "monthly"], ["Historical vault", 350, "monthly"],
+  ["Cloudflare", 25, "monthly"], ["Resend", 20, "monthly"], ["Supabase", 25, "monthly"],
+  ["Stripe fees (est.)", 342, "monthly"], ["Domain renewals", 84, "one-off"],
+];
+D.trials = { started:64, converted:23, active:7, lapsed:34, rate:0.36, rev:4210 };
+D.bans = [
+  { email:"burner+12@sample-mail.test", why:"4th trial on same card fingerprint", hits:4, state:"banned" },
+  { email:"ip-cluster 84.19.x.x",       why:"6 accounts, one IP",                 hits:6, state:"watching" },
+];
+
+/* visitor dots — [x%, y%, kind] kind: 2 paid, 1 signed-in, 0 anon */
+D.dots = (()=>{
+  const seedPts=[[24,38],[26,41],[22,35],[28,44],[30,40],[19,46],[47,30],[49,33],[51,29],[48,36],
+    [45,34],[52,32],[54,38],[57,30],[62,36],[66,41],[70,34],[72,38],[74,44],[78,40],[80,48],
+    [30,58],[32,62],[28,66],[34,55],[50,52],[53,58],[56,64],[46,60],[84,62],[86,58],[20,52],
+    [23,49],[43,28],[41,31],[38,42],[36,48],[60,44],[64,48],[68,52],[76,36],[82,44],[25,60],
+    [27,55],[44,50],[58,42],[63,32],[71,46],[79,52],[33,44]];
+  return seedPts.map((p,i)=>[p[0],p[1], i%9===0?2 : i%3===0?1 : 0]);
+})();
+D.visitorStats = { loads:"9,412", countries:41, plotted:"1,204", locations:"612", subs:141, signed:"643" };
+
+D.changelog = `## 2026.09.07-v2
+- ΔGEX Board: flow (signed) basis added, with the honesty caveat rendered inline
+- Daily Grades: per-ticker history modal now reaches back to the first sealed session
+- Sales: trial-abuse clustering by card fingerprint, not just IP
+
+## 2026.09.04-v1
+- Mobile: Economic Calendar tab added to /m/*, shares lib/econCalendar with desktop
+- Socket: topic scoping now covers scalar frames (spot, aux, status)
+
+## 2026.09.01-v3
+- Affiliates: payout hold released automatically once the refund window closes
+- Emails: campaign UTM preview wired into the Overview acquisition panel
+
+## 2026.08.28-v1
+- Owner rail regrouped by job (Info / Content / Market / System / Personal)
+- Backtests: strike-GEX watch cutoff moved to a calibrated lift lower bound`;
+
+D.dbTables = D.tables;
+
+
+/* ── tiny render helpers ─────────────────────────────────── */
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const money = n => (n<0?"-":"") + "$" + Math.abs(n).toLocaleString();
+const pct = n => (n>0?"+":"") + (n*100).toFixed(0) + "%";
+
+function card(title, body, opts={}){
+  const s = opts.sub ? `<span class="s">${esc(opts.sub)}</span>` : "";
+  const r = opts.right || "";
+  const head = title ? `<div class="ch"><span class="t">${esc(title)}</span>${s}<span class="sp"></span>${r}</div>` : "";
+  return `<div class="card">${head}${body}</div>`;
+}
+
+function tiles(list, cols){
+  const c = cols || Math.min(list.length, 6);
+  const items = list.map(t=>{
+    const d = t.d ? `<div class="d ${t.up===true?"up":t.up===false?"dn":""}">${esc(t.d)}</div>` : "";
+    const sp = t.s ? spark(t.s, t.up===false?"var(--softred)":"var(--cy)") : "";
+    return `<div class="tile"><div class="l">${esc(t.l)}</div><div class="n">${esc(t.n)}</div>${d}${sp}</div>`;
+  }).join("");
+  return `<div class="tiles" style="grid-template-columns:repeat(${c},minmax(0,1fr))">${items}</div>`;
+}
+
+function spark(vals, color){
+  const w=110,h=30, mn=Math.min(...vals), mx=Math.max(...vals), rg=(mx-mn)||1;
+  const pts = vals.map((v,i)=>`${(i/(vals.length-1)*w).toFixed(1)},${(h-2-((v-mn)/rg)*(h-6)).toFixed(1)}`).join(" ");
+  return `<svg class="sp" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" opacity=".8"/></svg>`;
+}
+
+function lineChart(series, opts={}){
+  const w=opts.w||760, h=opts.h||190, pad=26;
+  const all = series.flatMap(s=>s.v);
+  const mn = opts.zero ? 0 : Math.min(...all), mx = Math.max(...all), rg=(mx-mn)||1;
+  const n = series[0].v.length;
+  const X = i => pad + (i/(n-1))*(w-pad*2);
+  const Y = v => h-pad - ((v-mn)/rg)*(h-pad*2);
+  const grid = [0,.25,.5,.75,1].map(f=>{
+    const y = h-pad - f*(h-pad*2);
+    return `<line x1="${pad}" x2="${w-pad}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,.06)"/>
+      <text x="4" y="${(y+3).toFixed(1)}" font-size="9" fill="rgba(255,255,255,.3)">${Math.round(mn+f*rg).toLocaleString()}</text>`;
+  }).join("");
+  const paths = series.map(s=>{
+    const d = s.v.map((v,i)=>`${i?"L":"M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+    const area = `${d} L${X(n-1).toFixed(1)},${h-pad} L${X(0).toFixed(1)},${h-pad} Z`;
+    return `${s.fill?`<path d="${area}" fill="${s.c}" opacity=".10"/>`:""}
+      <path d="${d}" fill="none" stroke="${s.c}" stroke-width="2" stroke-linejoin="round"/>`;
+  }).join("");
+  const labs = (opts.x||[]).map((t,i)=>`<text x="${X(i).toFixed(1)}" y="${h-8}" font-size="9"
+    fill="rgba(255,255,255,.3)" text-anchor="middle">${esc(t)}</text>`).join("");
+  const leg = series.length>1 ? `<div class="chips" style="margin-top:8px">`+series.map(s=>
+    `<span class="pill p-mt" style="color:${s.c};border-color:${s.c}55">${esc(s.n)}</span>`).join("")+`</div>` : "";
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">${grid}${paths}${labs}</svg>${leg}`;
+}
+
+function barChart(rows, opts={}){
+  const w=opts.w||760, h=opts.h||200, pad=30, n=rows.length;
+  const mx = Math.max(...rows.flatMap(r=>[r.a||0, r.b||0]))||1;
+  const bw = (w-pad*2)/n;
+  const bars = rows.map((r,i)=>{
+    const x = pad + i*bw;
+    const ha = ((r.a||0)/mx)*(h-pad*2), hb=((r.b||0)/mx)*(h-pad*2);
+    return `<rect x="${(x+bw*0.16).toFixed(1)}" y="${(h-pad-ha).toFixed(1)}" width="${(bw*0.36).toFixed(1)}"
+        height="${ha.toFixed(1)}" fill="${opts.ca||"var(--cy)"}" opacity=".85" rx="2"/>
+      <rect x="${(x+bw*0.52).toFixed(1)}" y="${(h-pad-hb).toFixed(1)}" width="${(bw*0.30).toFixed(1)}"
+        height="${hb.toFixed(1)}" fill="${opts.cb||"var(--orange)"}" opacity=".7" rx="2"/>
+      <text x="${(x+bw/2).toFixed(1)}" y="${h-9}" font-size="9" fill="rgba(255,255,255,.32)" text-anchor="middle">${esc(r.m)}</text>`;
+  }).join("");
+  const base = `<line x1="${pad}" x2="${w-pad}" y1="${h-pad}" y2="${h-pad}" stroke="rgba(255,255,255,.1)"/>`;
+  const leg = `<div class="chips" style="margin-top:8px">
+    <span class="pill p-cy">${esc(opts.la||"A")}</span><span class="pill p-og">${esc(opts.lb||"B")}</span></div>`;
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block">${base}${bars}</svg>${leg}`;
+}
+
+function table(cols, rows, opts={}){
+  const th = cols.map(c=>`<th class="${c.n?"num":""}">${esc(c.t||c)}</th>`).join("");
+  const tb = rows.map(r=>`<tr>${r.map((cell,i)=>{
+    const c = cols[i]||{};
+    return `<td class="${c.n?"num":""} ${c.cls||""}">${cell}</td>`;
+  }).join("")}</tr>`).join("");
+  return `<div class="tw"><table>${opts.nohead?"":`<thead><tr>${th}</tr></thead>`}<tbody>${tb}</tbody></table></div>`;
+}
+
+function pill(t, k){ return `<span class="pill p-${k||"mt"}">${esc(t)}</span>`; }
+function bar(f, color){ return `<div class="bar"><i style="width:${Math.max(2,Math.min(100,f*100)).toFixed(0)}%;background:${color||"var(--cy)"}"></i></div>`; }
+function seg(items, active){
+  return `<div class="seg">${items.map(i=>`<button class="${i===active?"on":""}">${esc(i)}</button>`).join("")}</div>`;
+}
+function synth(txt){ return `<div class="synth">◆ ${esc(txt||"All customer records on this screen are synthetic demo data.")}</div>`; }
+
+function gauge(label, value, frac, color){
+  const r=34, cx=48, cy=48, C=Math.PI*r;
+  const f = Math.max(-1, Math.min(1, frac));
+  const len = Math.abs(f)*C*0.5;
+  const dir = f>=0 ? 1 : 0;
+  return `<div class="gauge">
+    <svg viewBox="0 0 96 62" style="width:100%;height:auto">
+      <path d="M14,48 A${r},${r} 0 0 1 82,48" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="7" stroke-linecap="round"/>
+      <path d="M48,14 A${r},${r} 0 0 ${dir} ${(cx + (dir? 1:-1)*r*Math.sin(Math.abs(f)*Math.PI/2)).toFixed(1)},${(cy - r*Math.cos(Math.abs(f)*Math.PI/2)).toFixed(1)}"
+        fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round"/>
+      <line x1="48" y1="48" x2="48" y2="20" stroke="rgba(255,255,255,.25)" stroke-width="1"/>
+    </svg>
+    <div class="gl">${esc(label)}</div><div class="gv" style="color:${color}">${esc(value)}</div></div>`;
+}
+
+function ladder(rows, spot){
+  const mx = Math.max(...rows.flatMap(r=>[Math.abs(r[1]),Math.abs(r[2])]))||1;
+  return `<div class="ladder">${rows.map(r=>{
+    const [k,prior,now] = r;
+    const hi = Math.abs(now)===Math.max(...rows.map(x=>Math.abs(x[2])));
+    const neg = now<0;
+    const wPrior = Math.abs(prior)/mx*100, wNow = Math.abs(now)/mx*100;
+    const delta = now-prior;
+    const tag = Math.abs(delta) < 12 ? "" : (now>0
+      ? (delta>0 ? "built"   : "eroded")     // positive gamma: added / taken off
+      : (delta<0 ? "deepened" : "lifted"));  // negative gamma: more / less negative
+    return `<div class="rung ${hi?"hi":""}">
+      <div class="k">${k}</div>
+      <div class="lft">${neg?`<i style="width:${wNow.toFixed(0)}%"></i><i style="width:${wPrior.toFixed(0)}%;background:transparent;border:1px solid rgba(244,148,142,.5)"></i>`:""}</div>
+      <div class="rgt">${!neg?`<i style="width:${wNow.toFixed(0)}%"></i><i style="width:${wPrior.toFixed(0)}%;background:transparent;border:1px solid rgba(142,202,230,.5)"></i>`:""}</div>
+      <div class="tagx">${tag?esc(tag):""}${k===spot?" ← spot":""}</div>
+    </div>`;
+  }).join("")}</div>`;
+}
+
+function worldMap(dots){
+  const land = [
+    "M60,58 L96,44 L150,40 L182,54 L196,80 L176,104 L150,112 L128,150 L112,168 L96,150 L84,116 L64,92 Z",
+    "M150,178 L176,166 L196,182 L200,222 L182,262 L162,272 L150,240 L142,206 Z",
+    "M300,52 L360,40 L400,48 L412,66 L396,84 L360,92 L326,86 L302,70 Z",
+    "M318,96 L360,92 L392,104 L404,140 L388,182 L360,214 L336,206 L322,168 L312,130 Z",
+    "M414,44 L520,32 L600,46 L648,70 L640,104 L596,126 L540,120 L488,100 L440,80 Z",
+    "M600,130 L648,120 L676,140 L668,168 L634,176 L606,158 Z",
+    "M652,196 L690,186 L714,206 L708,242 L678,254 L656,232 Z"
+  ];
+  const paths = land.map(d=>`<path d="${d}" fill="rgba(255,255,255,.045)" stroke="rgba(255,255,255,.07)"/>`).join("");
+  const pts = dots.map(([x,y,k])=>{
+    if(k===2) return `<circle cx="${x*7.6}" cy="${y*3.1}" r="3.2" fill="var(--gold)" opacity=".95"/>`;
+    if(k===1) return `<circle cx="${x*7.6}" cy="${y*3.1}" r="3" fill="none" stroke="var(--gold)" stroke-width="1.3" opacity=".8"/>`;
+    return `<circle cx="${x*7.6}" cy="${y*3.1}" r="2.2" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1"/>`;
+  }).join("");
+  return `<div class="mapwrap"><svg viewBox="0 0 760 310" style="width:100%;height:auto;display:block">${paths}${pts}</svg></div>`;
+}
+
+function heat(rows){ /* rows: [[label, [v...]]] */
+  const mx = Math.max(...rows.flatMap(r=>r[1]))||1;
+  return `<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:11px">
+    ${rows.map(r=>`<div class="mut">${esc(r[0])}</div>
+      <div style="display:grid;grid-template-columns:repeat(${r[1].length},1fr);gap:2px">
+        ${r[1].map(v=>`<div style="height:14px;border-radius:2px;background:rgba(33,158,188,${(0.08+0.85*v/mx).toFixed(2)})"></div>`).join("")}
+      </div>`).join("")}
+  </div>`;
+}
+
+
+/* ── page renderers ──────────────────────────────────────── */
+const P = {};
+const head = (h1, sub, right) =>
+  `<div class="phead"><div><h1>${esc(h1)}</h1><p class="sub">${esc(sub||"")}</p></div><span class="sp"></span>${right||""}</div>`;
+
+/* ══════════════ INFO ══════════════ */
+
+P.Sales = () => {
+  const mrr = D.customers.filter(c=>c.status==="active").reduce((a,c)=>a+(c.plan==="Annual"?c.amt/12:c.amt),0);
+  const t = tiles([
+    { l:"Monthly recurring", n:"$11,742", d:"+8.4% vs Aug", up:true,  s:[62,64,67,69,72,75,79,82,86,90,94,98] },
+    { l:"Active subs",       n:"141",     d:"+9 this month", up:true, s:[40,42,44,43,47,49,52,54,57,59,62,66] },
+    { l:"Total customers",   n:"1,284",   d:"+38 · 30d",     up:true, s:[60,63,66,68,71,74,77,80,83,86,89,92] },
+    { l:"Collected · life",  n:"$182,400",d:"since Jan 2026", up:true,s:[8,14,22,31,41,52,64,78,92,108,126,148] },
+    { l:"Trial conversion",  n:"36%",     d:"23 of 64",      up:true, s:[22,25,24,28,30,29,33,31,34,35,36,36] },
+  ],5);
+
+  const profit = barChart(D.revMonths.map(r=>({m:r.m, a:r.cash, b:r.exp})),
+    { la:"Cash collected", lb:"Expense run-rate", ca:"var(--gold)", cb:"var(--orange)" });
+
+  const subs = table(
+    [{t:"Customer"},{t:"Discord"},{t:"Plan"},{t:"Amount",n:1},{t:"Status"},{t:"Renews"},{t:"Total spent",n:1}],
+    D.customers.map(c=>[
+      `<span class="mono">${esc(c.email)}</span>`, `<span class="mut">${esc(c.disc)}</span>`, esc(c.plan),
+      money(c.amt), c.status==="active"?pill("active","gn"):c.status==="trialing"?pill("trialing","cy"):pill("canceled","rd"),
+      `<span class="mut">${esc(c.renew)}</span>`, money(c.spent)
+    ]));
+
+  const cancels = table([{t:"Customer"},{t:"Ended"},{t:"Months",n:1},{t:"Reason"}],
+    D.cancels.map(c=>[`<span class="mono">${esc(c.email)}</span>`, `<span class="mut">${esc(c.when)}</span>`, c.months, `<span class="mut">${esc(c.reason)}</span>`]));
+
+  const nb = table([{t:"Signed up"},{t:"When"},{t:"Came from"},{t:"Looked at"},{t:"Got as far as"},{t:"Last seen"},{t:"Location"}],
+    D.signups.map(s=>[`<span class="mono">${esc(s.email)}</span>`, `<span class="mut">${esc(s.when)}</span>`, esc(s.src),
+      `<span class="mono mut">${esc(s.looked)}</span>`,
+      s.far==="Reached checkout"?pill(s.far,"gd"):s.far==="Payment failed"?pill(s.far,"rd"):pill(s.far,"mt"),
+      `<span class="mut">${esc(s.seen)}</span>`, `<span class="mut">${esc(s.loc)}</span>`]));
+
+  const tr = D.trials;
+  const trialCard = `<div class="grid2" style="gap:14px">
+    <div>${["started","converted","active","lapsed"].map(k=>`<div class="kv"><span class="k">${k==="active"?"in trial":k}</span><b>${tr[k]}</b></div>`).join("")}
+      <div class="kv"><span class="k">conversion</span><b style="color:var(--ok)">${(tr.rate*100).toFixed(0)}%</b></div>
+      <div class="kv"><span class="k">revenue from trials</span><b>${money(tr.rev)}</b></div></div>
+    <div>${bar(tr.rate,"var(--ok)")}<p class="note">Converted trials are counted at first successful charge, not at signup.</p></div></div>`;
+
+  const bans = table([{t:"Subject"},{t:"Why"},{t:"Hits",n:1},{t:"State"}],
+    D.bans.map(b=>[`<span class="mono">${esc(b.email)}</span>`, `<span class="mut">${esc(b.why)}</span>`, b.hits,
+      b.state==="banned"?pill("banned","rd"):pill("watching","gd")]));
+
+  const exp = table([{t:"Item"},{t:"Amount",n:1},{t:"Cadence"}],
+    D.expenses.map(e=>[esc(e[0]), money(e[1]), `<span class="mut">${esc(e[2])}</span>`]));
+
+  return head("Sales · Stripe","Revenue, subscriptions, trials and run-rate", seg(["Daily","Weekly","Monthly","Yearly"],"Monthly"))
+    + synth("Revenue figures and customer records on this page are synthetic.")
+    + t
+    + card("Profit per month", profit, {sub:"cash collected vs expense run-rate"})
+    + `<div class="grid2">${card("Active subscriptions", subs)}${card("Cancellations", cancels, {sub:"why each one ended"})}</div>`
+    + card("Signed up · never bought", nb, {sub:"how far each one got", right:seg(["7d","30d","90d"],"30d")})
+    + `<div class="grid2">${card("Trial conversion", trialCard)}${card("Trial abuse & bans", bans)}</div>`
+    + card("Expenses", exp, {sub:"feeds the run-rate on the profit chart"});
+};
+
+P.Admin = () => {
+  const checks = table([{t:"Check"},{t:"Result"}],[
+    ["Stripe ↔ database drift", pill("0 rows","gn")],
+    ["Accounts with access but no subscription", pill("3 · all comped","cy")],
+    ["Subscriptions with no account", pill("0 rows","gn")],
+    ["Orphaned comp grants past expiry", pill("1 row","gd")],
+  ]);
+  const fb = table([{t:"#"},{t:"Cat"},{t:"From"},{t:"Message"},{t:"Status"}],
+    D.feedback.map(f=>[`<span class="mut">${f.id}</span>`, pill(f.cat, f.cat==="Bug"?"rd":f.cat==="Idea"?"gd":"mt"),
+      `<span class="mono">${esc(f.email)}</span>`, `<span class="mut">${esc(f.msg)}</span>`,
+      f.open?pill("open","cy"):pill("complete","mt")]));
+  const comp = table([{t:"Email"},{t:"Note"},{t:"Expires"},{t:"State"}],
+    D.comped.map(c=>[`<span class="mono">${esc(c.email)}</span>`, `<span class="mut">${esc(c.note)}</span>`,
+      `<span class="mut">${esc(c.exp)}</span>`, c.state==="active"?pill("active","gn"):pill(c.state,"gd")]));
+  const act = table([{t:"Customer"},{t:"Last login"},{t:"Time on site",n:1},{t:"Loads",n:1},{t:"Pages",n:1},{t:"Most viewed"}],
+    D.customers.map(c=>[`<span class="mono">${esc(c.email)}</span>`, `<span class="mut">${esc(c.last)}</span>`,
+      (c.mins/60).toFixed(1)+"h", c.loads, c.pages, `<span class="mono mut">${esc(c.top)}</span>`]));
+  const np = table([{t:"Email"},{t:"Signed up"},{t:"Source"}],
+    D.signups.slice(0,5).map(s=>[`<span class="mono">${esc(s.email)}</span>`,`<span class="mut">${esc(s.when)}</span>`,esc(s.src)]));
+  const uns = table([{t:"Email"},{t:"When"},{t:"Why"}],
+    D.unsubs.map(u=>[`<span class="mono">${esc(u.email)}</span>`,`<span class="mut">${esc(u.when)}</span>`,pill(u.why,"mt")]));
+
+  return head("Admin","Customer operations — access, support, suppression")
+    + synth()
+    + tiles([{l:"Open tickets",n:"2"},{l:"Comped",n:"3"},{l:"Not paying",n:"1,143"},{l:"Suppressed",n:"2"}],4)
+    + `<div class="grid2">${card("System checks", checks, {sub:"read-only diagnostics"})}${card("Comped access", comp)}</div>`
+    + card("Feedback", fb, {right:seg(["Open","All"],"Open")})
+    + card("Customer activity", act)
+    + `<div class="grid2">${card("Signed up · not paying", np, {sub:"one click to the broadcast composer"})}${card("Unsubscribes · do not email", uns)}</div>`;
+};
+
+P.ControlPanel = () => {
+  const i = D.infra;
+  const sysStrip = `<div class="tiles" style="grid-template-columns:repeat(5,minmax(0,1fr))">
+    ${[["Server uptime",i.uptime],["Last feed",i.lastFeed],["dxLink feed",i.dxlink],["TT auth",i.ttAuth],["Version",i.version]]
+      .map(([l,v])=>`<div class="tile"><div class="l">${esc(l)}</div><div class="n" style="font-size:15px">${esc(v)}</div></div>`).join("")}</div>`;
+  const host = `<div class="tiles" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    ${[["CPU",i.cpu+"%"],["App RSS",i.mem],["Host egress",i.egress],["CDN bandwidth",i.cf]]
+      .map(([l,v])=>`<div class="tile"><div class="l">${esc(l)}</div><div class="n" style="font-size:18px">${esc(v)}</div></div>`).join("")}</div>`;
+  const x = ["","","","","","","","","","","",""];
+  const traffic = lineChart([{n:"Visits", v:D.traffic, c:"var(--cy)", fill:1}], {x, zero:1});
+  const signups = lineChart([{n:"Signups", v:D.signups12, c:"var(--gold)", fill:1}], {x, zero:1});
+  const cum     = lineChart([{n:"Cumulative users", v:D.cumUsers, c:"var(--green)", fill:1}], {x});
+  const tp = table([{t:"Path"},{t:"Loads",n:1},{t:"Members %",n:1}],
+    D.topPages.map(r=>[`<span class="mono">${esc(r[0])}</span>`, r[1].toLocaleString(), r[2]+"%"]));
+  const rows = table([{t:"Table"},{t:"Rows today",n:1}], D.tables.slice(0,10).map(t=>[`<span class="mono">${esc(t[0])}</span>`, t[2].toLocaleString()]));
+  const acq = table([{t:"Channel"},{t:"Visits",n:1},{t:"Signups",n:1}], D.acq.map(a=>[esc(a[0]), a[1].toLocaleString(), a[2]]));
+  const tk = table([{t:"Ticker"},{t:"Clicks",n:1}], D.tickerClicks.map(t=>[`<b>${esc(t[0])}</b>`, t[1].toLocaleString()]));
+  return head("Overview","Live operations — infrastructure, traffic, usage", seg(["Live","Daily","Weekly","Yearly"],"Daily"))
+    + sysStrip
+    + card("Hosting · Hetzner + Cloudflare", host, {right:seg(["Live","7d","30d"],"7d")})
+    + tiles(D.kpis, 6)
+    + `<div class="grid3">${card("Traffic · 12d", traffic)}${card("Signups · 12d", signups)}${card("Cumulative users", cum)}</div>`
+    + `<div class="grid2">${card("Pages being visited", tp, {right:seg(["24h","7d","30d"],"7d")})}${card("Rows written today", rows)}</div>`
+    + `<div class="grid2">${card("Acquisition", acq)}${card("Ticker clicks · 7d", tk)}</div>`
+    + card("Controls", `<div class="chips">
+        <span class="pill p-mt">Idle mode · off</span><span class="pill p-mt">CB auto · on</span>
+        <span class="pill p-mt">Maintenance · off</span><span class="pill p-cy">↻ Reconnect feed</span></div>
+        <p class="note">Disabled in the demo build. On the live console these flip production behaviour.</p>`);
+};
+
+P.Visitors = () => {
+  const s = D.visitorStats;
+  return head("Visitors · World Map","Every page load, plotted", `<span class="mut" style="font-size:11.5px">last visit 2m ago</span>`)
+    + synth("Plotted points are synthetic. No real visitor or location data is present.")
+    + tiles([{l:"Loads",n:s.loads},{l:"Countries",n:s.countries},{l:"Plotted",n:s.plotted},
+             {l:"Locations",n:s.locations},{l:"Subscribers",n:s.subs},{l:"Signed in",n:s.signed}],6)
+    + card("", worldMap(D.dots), {right:seg(["Today","7d","30d","90d","All"],"30d")})
+    + `<div class="chips" style="margin:-4px 0 16px">
+        <span class="pill p-gd">● paying subscriber</span>
+        <span class="pill p-gd">○ signed in, not paying</span>
+        <span class="pill p-mt">○ anonymous</span></div>`
+    + `<div class="grid2">
+      ${card("Selected visitor", `
+        <div class="kv"><span class="k">account</span><span class="mono">m.calloway@sample-mail.test</span></div>
+        <div class="kv"><span class="k">discord</span><span class="mono">mcallo#4417</span></div>
+        <div class="kv"><span class="k">member since</span><span>2026-02-11</span></div>
+        <div class="kv"><span class="k">subscription</span>${pill("active · annual","gn")}</div>
+        <div class="kv"><span class="k">last login</span><span>2026-09-07 09:41</span></div>
+        <div class="kv"><span class="k">top page</span><span class="mono">/app/es-candles</span></div>
+        <div class="kv"><span class="k">recent visits</span><span>612 loads · 14 pages</span></div>`)}
+      ${card("Top countries", table([{t:"Country"},{t:"Loads",n:1},{t:"Subs",n:1}],
+        [["United States",5210,88],["United Kingdom",942,14],["Canada",711,11],["Germany",486,7],
+         ["Singapore",341,5],["Portugal",228,3]].map(r=>[esc(r[0]), r[1].toLocaleString(), r[2]])))}
+    </div>`;
+};
+
+/* ══════════════ CONTENT ══════════════ */
+
+P.SocialMedia = () => {
+  const levels = `<div class="kv"><span class="k">regime</span>${pill("POSITIVE GAMMA","gn")}</div>
+    ${[["Spot",6412.4],["Prior close",6398.2],["Gamma flip",6388],["Net GEX","+4.12B"],["Call wall",6450],["Put wall",6350],["Expected move","±1.28%"],["ES overnight","6428 / 6444"]]
+      .map(r=>`<div class="kv"><span class="k">${esc(r[0])}</span><b>${esc(r[1])}</b></div>`).join("")}`;
+  const cardPreview = `<div style="background:#0a0d13;border:1px solid var(--lineStrong);border-radius:14px;padding:18px">
+    <div style="font-size:10px;letter-spacing:.16em;color:var(--cy);font-weight:800">CB EDGE · SPX DAILY LEVELS</div>
+    <div style="font-size:26px;font-weight:800;margin:8px 0 2px">6,412<span style="font-size:14px;opacity:.5"> spot</span></div>
+    <div class="chips" style="margin:10px 0 14px">${pill("+GEX · walls absorb","gn")}${pill("EM ±1.28%","cy")}</div>
+    ${[["Call wall","6450"],["Gamma flip","6388"],["Put wall","6350"]].map(r=>
+      `<div class="kv"><span class="k">${r[0]}</span><b>${r[1]}</b></div>`).join("")}
+    <div style="margin-top:14px;font-size:10px;opacity:.35;letter-spacing:.1em">@bzilatrades · cbedge.net</div></div>
+    <div class="chips" style="margin-top:12px">${pill("Copy card","mt")}${pill("Copy & open X","cy")}${pill("Share to Discord","og")}</div>`;
+  return head("Social Media","Live market data → finished posts", seg(["Probe","Day Posts","Daily Levels","Explainer"],"Daily Levels"))
+    + `<div class="grid2">${card("Daily input · from dashboard state", levels)}${card("Share card", cardPreview)}</div>`
+    + card("Day posts", `<div class="chips" style="margin-bottom:12px">
+        ${["Premarket Analysis","Midday Update","EOD Summary","Custom"].map((s,i)=>pill(s, i===0?"cy":"mt")).join("")}</div>
+      <div class="chips">${["GEX Chart","Option Flow","Option Chain","Multi Greeks","ES Candles"].map(s=>pill(s,"mt")).join("")}</div>
+      <p class="note">Visuals are captured from the live customer dashboard, not redrawn — the post shows the real product.</p>`);
+};
+
+P.Affiliates = () => {
+  const t = tiles([
+    {l:"Awaiting review",n:"2"},{l:"Code requests",n:"1"},{l:"Active affiliates",n:"3",d:"45 referred"},
+    {l:"Commission owed",n:"$2,404"},{l:"Paid to date",n:"$6,880"},{l:"Commission rate",n:"25%"}],6);
+  const pend = table([{t:"Applicant"},{t:"Email"},{t:"Wants code"},{t:"Audience"},{t:"Applied"},{t:""}],
+    D.affPending.map(a=>[`<b>${esc(a.name)}</b>`, `<span class="mono">${esc(a.email)}</span>`,
+      `<span class="mono">${esc(a.want)}</span>`, `<span class="mut">${esc(a.audience)}</span>`,
+      `<span class="mut">${esc(a.when)}</span>`, `${pill("Approve","gn")} ${pill("Decline","rd")}`]));
+  const roster = table([{t:"Affiliate"},{t:"Code"},{t:"Rate",n:1},{t:"Clicks",n:1},{t:"Members",n:1},{t:"Gross MTD",n:1},{t:"Owed",n:1},{t:"Method"},{t:"Status"}],
+    D.affiliates.map(a=>[`<b>${esc(a.name)}</b>`, `<span class="mono">${esc(a.code)}</span>`, a.rate+"%",
+      a.clicks.toLocaleString(), a.members, money(a.gross), money(a.owed), `<span class="mut">${esc(a.method)}</span>`,
+      a.status==="active"?pill("active","gn"):pill("paused","mt")]));
+  const pay = table([{t:"Affiliate"},{t:"Sales",n:1},{t:"Gross",n:1},{t:"Refunds",n:1},{t:"Rate",n:1},{t:"Payout",n:1},{t:"Method"},{t:"Status"}],
+    D.payouts.map(p=>[`<b>${esc(p.name)}</b>`, p.sales, money(p.gross), money(p.refunds), p.rate+"%", `<b>${money(p.pay)}</b>`,
+      `<span class="mut">${esc(p.method)}</span>`,
+      p.status==="approved"?pill("approved","gn"):p.status==="awaiting"?pill("awaiting","gd"):pill("held","mt")]));
+  return head("Affiliates · affiliate.cbedge.net","Onboarding, roster, payouts", seg(["Onboarding","Active","Payouts"],"Active"))
+    + synth("Affiliate identities and payout amounts are synthetic.")
+    + t
+    + card("Pending applications", pend)
+    + card("Active affiliates", roster)
+    + card("Payouts · Sept 2026", pay, {sub:"held until the refund window closes"});
+};
+
+P.Emails = () => {
+  const aud = `<div class="chips" style="margin-bottom:14px">${D.audiences.map((a,i)=>
+    `<span class="pill ${i===1?"p-cy":"p-mt"}">${a.ic} ${esc(a.k)} · ${a.n.toLocaleString()}</span>`).join("")}</div>
+    <div class="kv"><span class="k">recipients</span><b>141</b></div>
+    <div class="kv"><span class="k">duplicates merged</span><b>0</b></div>
+    <div class="kv"><span class="k">from</span><span class="mono">brandon@cbedge.net</span></div>`;
+  const comp = `<div class="kv"><span class="k">subject</span><b>September levels are live</b></div>
+    <div class="kv"><span class="k">campaign</span><span>Newsletter · sept-levels</span></div>
+    <div class="kv"><span class="k">tracking</span><span class="mono mut">?utm_source=email&utm_campaign=sept-levels</span></div>
+    <div style="margin-top:12px;background:var(--inset);border:1px solid var(--line);border-radius:10px;padding:14px;font-size:12.5px;opacity:.7">
+      Hey — the September level set is published. Weekly estimated moves updated Saturday, and the
+      no-long / no-short zones are live on the Estimated Moves page…</div>
+    <div class="chips" style="margin-top:12px">${pill("Show rendered preview","mt")}${pill("Send to 141","cy")}</div>`;
+  const hist = table([{t:"Subject"},{t:"Sent at"},{t:"Audience"},{t:"Delivered",n:1},{t:"Failed",n:1}],
+    D.sends.map(s=>[`<b>${esc(s.subj)}</b>`, `<span class="mut">${esc(s.when)}</span>`, esc(s.aud),
+      s.sent.toLocaleString(), s.fail?`<span class="neg">${s.fail}</span>`:"0"]));
+  return head("Email Broadcast","Recipients hidden via BCC")
+    + synth("Audience counts and addresses are synthetic. Nothing on this screen can send.")
+    + `<div class="grid2">${card("Audience", aud)}${card("Compose", comp)}</div>`
+    + card("Sent history", hist);
+};
+
+P.Feedback = () => {
+  const list = D.feedback.map((f,i)=>`
+    <div style="padding:11px 12px;border-radius:11px;border:1px solid ${i===0?"var(--lineStrong)":"transparent"};
+      background:${i===0?"var(--panelSolid)":"transparent"};margin-bottom:6px">
+      <div class="chips" style="margin-bottom:5px">${pill(f.cat, f.cat==="Bug"?"rd":f.cat==="Idea"?"gd":"mt")}
+        ${f.open?pill("open","cy"):pill("complete","mt")}<span class="mut" style="font-size:10.5px;margin-left:auto">${esc(f.when)}</span></div>
+      <div class="mono" style="font-size:11.5px;opacity:.6">${esc(f.email)}</div>
+      <div style="font-size:12.5px;margin-top:3px;opacity:.85">${esc(f.msg)}</div>
+      <div class="mut" style="font-size:10.5px;margin-top:4px">#${f.id} · ${f.replies} replies · ${esc(f.page)}</div>
+    </div>`).join("");
+  const thread = `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="align-self:flex-start;max-width:80%;background:var(--inset);border:1px solid var(--line);border-radius:12px 12px 12px 4px;padding:10px 13px;font-size:12.5px">
+        Chain stops updating if I leave the tab for ~10 min and come back.
+        <div class="mut" style="font-size:10px;margin-top:5px">j.ferreira · 2h ago</div></div>
+      <div style="align-self:flex-end;max-width:80%;background:rgba(33,158,188,.14);border:1px solid rgba(33,158,188,.3);border-radius:12px 12px 4px 12px;padding:10px 13px;font-size:12.5px">
+        That's the idle auto-shutoff on the market feed. Fix is in the next deploy — it'll reconnect on focus.
+        <div class="mut" style="font-size:10px;margin-top:5px">CB Edge · 1h ago</div></div>
+    </div>
+    <div style="margin-top:14px;background:var(--inset);border:1px solid var(--line);border-radius:10px;padding:10px 13px;font-size:12.5px;opacity:.4">
+      Reply to this customer…</div>
+    <div class="chips" style="margin-top:10px">${pill("Mark complete","gn")}${pill("Send","cy")}</div>`;
+  return head("Customer feedback","2 open · the other end of the in-app feedback button")
+    + synth()
+    + `<div class="grid2">${card("Tickets", list, {right:seg(["Open","Complete","All"],"Open")})}${card("Thread #1042", thread)}</div>`;
+};
+
+P.BzilaAlerts = () => {
+  const alerts = D.alerts.map(a=>`
+    <div style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <div style="font-size:13px">${esc(a.t)}</div>
+      <div class="chips" style="margin-top:7px">${pill("👍 "+a.up,"gn")}${pill("👎 "+a.dn,"mt")}
+        <span class="mut" style="font-size:10.5px;margin-left:auto">${esc(a.age)}</span></div></div>`).join("");
+  const react = table([{t:"Subscriber"},{t:"👍",n:1},{t:"👎",n:1},{t:"Alerts",n:1},{t:"First"},{t:"Last"}],
+    D.reactors.map(r=>[`<span class="mono">${esc(r.who)}</span>`, r.up, r.dn, r.alerts,
+      `<span class="mut">${esc(r.first)}</span>`, `<span class="mut">${esc(r.last)}</span>`]));
+  return head("Bzila Alerts","Broadcasts to paid subscribers · reaction tally")
+    + synth()
+    + tiles([{l:"Alerts sent",n:"112"},{l:"👍 total",n:"2,841"},{l:"👎 total",n:"188"}],3)
+    + `<div class="grid2">${card("All alerts", alerts)}${card("New alert",
+      `<div style="background:var(--inset);border:1px solid var(--line);border-radius:10px;padding:11px 13px;font-size:12.5px;opacity:.4">Title (optional)</div>
+       <div style="background:var(--inset);border:1px solid var(--line);border-radius:10px;padding:11px 13px;font-size:12.5px;opacity:.4;margin-top:8px;min-height:88px">Type an alert…</div>
+       <div class="chips" style="margin-top:10px">${pill("Send alert","cy")}</div>`)}</div>`
+    + card("Reactions by user", react, {sub:"all-time, survives alert deletion"});
+};
+
+P.MediaDump = () => {
+  const items = [
+    ["ΔGEX board on the day SPX pinned 6400","gex, screenshot"],
+    ["Stripe MRR curve — August close","revenue"],
+    ["Mobile GEX heatmap, iPhone 15","mobile, design"],
+    ["Partner deck v1 cover","deck"],
+  ];
+  const grid = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">${items.map((it,i)=>`
+    <div style="border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panelSolid)">
+      <div style="height:88px;background:linear-gradient(135deg,rgba(33,158,188,.${2+i}),rgba(18,103,131,.1))"></div>
+      <div style="padding:9px 11px"><div style="font-size:12px">${esc(it[0])}</div>
+        <div class="chips" style="margin-top:6px">${it[1].split(", ").map(t=>pill(t,"mt")).join("")}</div></div></div>`).join("")}</div>`;
+  return head("Media Dump","Paste anything · caption it · find it later")
+    + tiles([{l:"In the dump",n:"148"},{l:"Showing",n:"4"},{l:"Pinned",n:"6"},{l:"Stored",n:"412 MB"}],4)
+    + card("Sept 2026", grid);
+};
+
+P.PostStudio = () => head("Post Studio","Standalone graphic composer")
+  + card("Studio", `<div style="background:#0a0d13;border:1px solid var(--line);border-radius:14px;min-height:300px;display:grid;place-items:center;text-align:center;gap:8px">
+      <div style="font-size:30px;opacity:.2">✎</div>
+      <div style="font-size:13px;opacity:.5">Canvas composer · PNG export</div>
+      <div class="chips">${pill("Download","cy")}</div></div>`);
+
+P.Changelog = () => head("Changelog","Read live off the running server", seg(["CHANGELOG.md","md files/"],"CHANGELOG.md"))
+  + card("Source file", `<div class="kv"><span class="k">last written</span><b>2026-09-07 18:04 ET</b></div>
+      <div class="kv"><span class="k">size</span><b>412 KB</b></div>`)
+  + card("", `<pre class="mono" style="white-space:pre-wrap;margin:0;font-size:11.5px;opacity:.75;line-height:1.7">${esc(D.changelog)}</pre>`);
+
+/* ══════════════ MARKET ══════════════ */
+
+P.GexGrowth = () => {
+  const rail = D.gexBoard.map((b,i)=>`
+    <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:10px;
+      border:1px solid ${i===0?"var(--lineStrong)":"transparent"};background:${i===0?"var(--panelSolid)":"transparent"};margin-bottom:4px">
+      <b style="width:52px;font-size:13px">${esc(b.sym)}</b>
+      <span class="mut" style="font-size:11.5px;width:62px;text-align:right">${esc(b.net)}</span>
+      <span style="font-size:11.5px;width:56px;text-align:right" class="${b.chg.startsWith("+")?"pos":"neg"}">${esc(b.chg)}</span>
+      <span class="sp" style="flex:1"></span>${pill(b.regime, b.regime==="+GEX"?"gn":"rd")}</div>`).join("");
+  const read = `${[["regime","+GEX · walls absorb"],["call wall","6450"],["gamma flip","6388"],["put wall","6350"],
+      ["structural range","6350 – 6450"],["call vs put lean","58% call"],["0DTE share","41%"]]
+      .map(r=>`<div class="kv"><span class="k">${esc(r[0])}</span><b>${esc(r[1])}</b></div>`).join("")}`;
+  const openCard = `${[["Call wall","6450"],["Gamma flip","6388"],["Put wall","6350"],["Cushion","6400"],["Regime","+GEX"]]
+      .map(r=>`<div class="kv"><span class="k">${esc(r[0])}</span><b>${esc(r[1])}</b></div>`).join("")}
+    <div class="chips" style="margin-top:10px">${pill("SPX → ES +26","mt")}${pill("Copy as text","cy")}</div>`;
+  return head("ΔGEX Board","Whole board ex-0DTE · recorded 16:05 ET · OI re-stamped 09:25 · ~400 sessions on file",
+      seg(["Net GEX","Δ 1 day","Prior → now"],"Prior → now"))
+    + `<div class="chips" style="margin-bottom:14px">
+        ${pill("OI + Vol","cy")}${pill("OI only","mt")}${pill("Volume only","mt")}${pill("Flow (signed)","mt")}
+        <span style="width:14px"></span>${pill("net","cy")}${pill("call","mt")}${pill("put","mt")}${pill("split","mt")}
+        <span style="width:14px"></span>${pill("All","mt")}${pill("±5%","cy")}${pill("±3%","mt")}
+        <span style="width:14px"></span><span class="mut" style="font-size:11px">session 2026-09-05</span></div>`
+    + `<div style="display:grid;grid-template-columns:340px 1fr;gap:16px">
+        ${card("Board · biggest move", rail)}
+        ${card("SPX · strike ladder", ladder(D.ladder, 6410), {sub:"outline = prior session, fill = today"})}</div>`
+    + `<div class="grid2">${card("Read", read)}${card("Open card", openCard, {sub:"the five levels to write down before the bell"})}</div>`;
+};
+
+P.DailyGrades = () => {
+  const t = tiles([{l:"On watchlist",n:"169"},{l:"Graded",n:"169"},{l:"Above flip",n:"104"},
+    {l:"Below flip",n:"65"},{l:"Within 0.5%",n:"41"},{l:"Session grade",n:"A-",d:"score 86",up:true}],6);
+  const regime = `<div class="chips">${["+gex · walls absorb","−gex · breaks run","on the flip · chop","fade calls","break calls","stand down","wall chasing price"]
+    .map((s,i)=>pill(s, i===0?"gn":i===1?"rd":"mt")).join("")}</div>`;
+  const rows = table(
+    [{t:"Ticker"},{t:"Regime"},{t:"The call"},{t:"Grade"},{t:"Score",n:1},{t:"Setup"},{t:"Pts",n:1},{t:"Cap",n:1},{t:"Floor",n:1},{t:"Flip",n:1},{t:"Outcome"}],
+    D.grades.map(g=>[`<b>${esc(g.sym)}</b>`, pill(g.reg, g.reg==="+GEX"?"gn":"rd"), `<span class="mut">${esc(g.call)}</span>`,
+      pill(g.grade, g.grade[0]==="A"?"gn":g.grade[0]==="B"?"cy":g.grade[0]==="C"?"gd":"rd"), g.score,
+      `<span class="mut">${esc(g.setup)}</span>`, g.pts, g.cap, g.floor, g.flip,
+      pill(g.out, /held|absorbed/.test(g.out)?"gn":/failed/.test(g.out)?"rd":"mt")]));
+  const days = table([{t:"Date"},{t:"Grade"},{t:"Score",n:1},{t:"Graded",n:1},{t:"Regime held",n:1},{t:"Calls hit",n:1}],
+    D.gradeDays.map(d=>[`<span class="mono">${esc(d.date)}</span>`,
+      pill(d.grade, d.grade[0]==="A"?"gn":d.grade[0]==="B"?"cy":"gd"), d.score, d.graded,
+      (d.held*100).toFixed(0)+"%", (d.calls*100).toFixed(0)+"%"]));
+  return head("Daily Grades","Sealed 09:26 ET · graded 16:20 ET · 2026-09-05",
+      seg(["Levels","Grades","Sessions"],"Grades"))
+    + t
+    + card("Regime read", regime)
+    + card("Grades · 2026-09-05", rows)
+    + card("Sessions", days, {sub:"the board is sealed before the open, so the record can't be revised"});
+};
+
+P.Results = () => {
+  const cards = `<div class="grid3">${D.setups.map(s=>{
+    const tot = s.w+s.l+s.c, wr = s.w/(s.w+s.l);
+    return `<div class="card" style="margin:0">
+      <div class="ch"><span class="t" style="font-size:13.5px">${esc(s.name)}</span><span class="sp"></span>${pill(tot+" samples","mt")}</div>
+      <div style="font-size:26px;font-weight:800">${(wr*100).toFixed(0)}%<span style="font-size:12px;opacity:.4"> win rate</span></div>
+      ${bar(wr, wr>0.6?"var(--ok)":wr>0.5?"var(--gold)":"var(--softred)")}
+      <div class="kv" style="margin-top:8px"><span class="k">avg R</span><b>${s.r.toFixed(2)}</b></div>
+      <div class="kv"><span class="k">avg MFE</span><b>${s.mfe.toFixed(2)}</b></div>
+      <div class="kv"><span class="k">W / L / chop</span><b>${s.w} / ${s.l} / ${s.c}</b></div></div>`;
+  }).join("")}</div>`;
+  const trades = table([{t:"Date"},{t:"Time"},{t:"Contract"},{t:"Entry",n:1},{t:"Peak",n:1},{t:"P/L",n:1},{t:""}],
+    D.trades.map(t=>[`<span class="mono mut">${esc(t.d)}</span>`, `<span class="mut">${esc(t.t)}</span>`,
+      `<span class="mono">${esc(t.c)}</span>`, "$"+t.e.toFixed(2), t.p?"$"+t.p.toFixed(2):"—",
+      t.skip?`<span class="mut">—</span>`:`<span class="${t.pl>=0?"pos":"neg"}">${money(t.pl)}</span>`,
+      t.skip?pill("skipped","mt"):""]));
+  const walls = table([{t:"Ticker"},{t:"Spot",n:1},{t:"Put wall",n:1},{t:"Core",n:1},{t:"Call wall",n:1},{t:"Reach (ATR)",n:1},{t:"Reaction"}],
+    D.walls.map(w=>[`<b>${esc(w.sym)}</b>`, w.spot, w.put, w.core, w.call, w.reach.toFixed(1),
+      pill(w.react, w.react==="rejected"?"gn":w.react==="broke"?"rd":"mt")]));
+  return head("Results","Setup scoreboard, trade log and level reactions",
+      seg(["ICT Results","Fail Rate","Confidence","Contracts","Walls"],"ICT Results"))
+    + `<div class="chips" style="margin-bottom:14px">${pill("Today","mt")}${pill("Last 7d","mt")}${pill("All-time","cy")}</div>`
+    + cards
+    + `<div style="height:16px"></div>`
+    + card("Contracts · trade log", trades, {sub:"disqualified candidates stay visible so the record isn't cherry-picked"})
+    + card("Walls · level reactions", walls);
+};
+
+P.Backtests = () => {
+  const study = (t, q, params, body) => card(t, `
+    <p class="note" style="margin-top:0">${esc(q)}</p>
+    <div class="chips" style="margin:12px 0">${params.map(p=>pill(p,"mt")).join("")}${pill("Run","cy")}</div>${body||""}`);
+  const cbsize = table([{t:"Size bucket"},{t:"Samples",n:1},{t:"Touched",n:1},{t:"Held",n:1}],
+    [["top decile",412,"0.81","0.62"],["upper half",1840,"0.66","0.51"],["lower half",1902,"0.48","0.39"],["bottom decile",388,"0.31","0.22"]]
+      .map(r=>[esc(r[0]), r[1].toLocaleString(), r[2], r[3]]));
+  const calib = table([{t:"Predicted"},{t:"n",n:1},{t:"Actual reach",n:1},{t:"Actual hold",n:1}],
+    [["reach · high",620,"0.78","0.61"],["reach · med",1204,"0.59","0.47"],["reach · low",840,"0.34","0.28"]]
+      .map(r=>[esc(r[0]), r[1].toLocaleString(), r[2], r[3]]));
+  const watch = table([{t:"Symbol"},{t:"Strike",n:1},{t:"× normal",n:1},{t:"Lift LB",n:1},{t:"Flags"}],
+    [["NVDA",190,"4.2×","2.1×","FLIP"],["TSLA",340,"3.8×","1.9×","UNTESTED"],["SPX",6450,"2.9×","1.6×","—"],
+     ["META",730,"2.6×","1.4×","OPEX"],["AMD",178,"2.4×","1.3×","—"]]
+      .map(r=>[`<b>${esc(r[0])}</b>`, r[1], r[2], r[3], r[4]==="—"?`<span class="mut">—</span>`:pill(r[4],"gd")]));
+  return head("Backtests","Re-runnable edge studies over the live historical database · owner-only")
+    + study("CB size → reach","Does a bigger level get touched, and held, more often?",["strike tol 2.5pt"], cbsize)
+    + study("Confidence calibration","Predicted reach / hold / break vs what actually happened.",["all sessions"], calib)
+    + study("GEX Watch","Strikes growing faster than that ticker normally grows, at a statistically earned cutoff.",
+        ["×normal 2.0","history 90d","big move 1.5σ","run checks"], watch)
+    + `<div class="grid2">${study("Normalized GEX per strike","Live chain, per ticker and expiration.",["SPX","09/12"])}
+        ${study("GEX change · by ticker","One row per ticker from the very-strong change board.",["2026-09-05"])}</div>`;
+};
+
+P.EstimatedMove = () => {
+  const em = table([{t:"Ticker"},{t:"Close",n:1},{t:"Exp"},{t:"EM %",n:1},{t:"Up",n:1},{t:"Down",n:1},{t:"CB conf"}],
+    D.em.map(e=>[`<b>${esc(e.sym)}</b>`, e.close.toLocaleString(), `<span class="mut">${esc(e.exp)}</span>`,
+      "±"+e.em.toFixed(2)+"%", e.up.toLocaleString(), e.dn.toLocaleString(),
+      pill(e.conf+"%", e.conf>=75?"gn":e.conf>=65?"gd":"rd")]));
+  const zn = table([{t:"Ticker"},{t:"Close",n:1},{t:"Pivot",n:1},{t:"Range",n:1},{t:"No long above",n:1},{t:"No short below",n:1}],
+    D.zones.map(z=>[`<b>${esc(z.sym)}</b>`, z.close.toLocaleString(), z.pivot.toLocaleString(), z.range,
+      `<span class="neg">${z.nolong.toLocaleString()}</span>`, `<span class="pos">${z.noshort.toLocaleString()}</span>`]));
+  const rec = table([{t:"Week of"},{t:"Hits",n:1},{t:"Misses",n:1},{t:"Rate",n:1}],
+    D.emRecord.map(r=>[`<span class="mono">${esc(r.wk)}</span>`, r.hits, r.miss,
+      `<span class="${r.rate>=0.7?"pos":""}">${(r.rate*100).toFixed(0)}%</span>`]));
+  return head("Estimated Moves · back end","Weekly publish — 2026-09-06 09:00 ET",
+      seg(["Estimated Moves","No Short / No Long","EM Tracker","Iron Condors"],"Estimated Moves"))
+    + `<div class="chips" style="margin-bottom:14px">${pill("Source: weekly publish · 2026-09-06","gn")}
+        ${pill("Recompute live (inspection only)","mt")}${pill("Save snapshot","mt")}${pill("Export CSV","mt")}</div>`
+    + card("Weekly estimated move · week of 09/08", em, {sub:"writes the values customers see"})
+    + `<div class="grid2">${card("No short / no long zones", zn)}${card("EM Tracker · win / loss", rec)}</div>`;
+};
+
+P.Greeks = () => {
+  const g = D.greeks;
+  const gs = `<div class="gauges">
+    ${gauge("GEX", g.GEX.v, g.GEX.pct, "var(--ok)")}
+    ${gauge("DEX", g.DEX.v, g.DEX.pct, "var(--softred)")}
+    ${gauge("CHEX", g.CHEX.v, g.CHEX.pct, "var(--ok)")}
+    ${gauge("VEX", g.VEX.v, g.VEX.pct, "var(--softred)")}</div>`;
+  const vol = `${[["30D VIX","14.8"],["1-day VIX proxy","11.2"],["10-day realized","9.4"],["IV rank","28%"],["IV percentile","34%"]]
+    .map(r=>`<div class="kv"><span class="k">${esc(r[0])}</span><b>${esc(r[1])}</b></div>`).join("")}`;
+  const matrix = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:11px">
+    ${["+GEX / +DEX","+GEX / −DEX","flip / chop","−GEX / +DEX","−GEX / −DEX","pin risk","opex drift","vanna pull","charm decay"]
+      .map((s,i)=>`<div style="padding:10px;border-radius:10px;text-align:center;border:1px solid ${i===1?"rgba(33,158,188,.5)":"var(--line)"};
+        background:${i===1?"rgba(33,158,188,.12)":"var(--inset)"};opacity:${i===1?1:i===0||i===2?.6:.28}">${esc(s)}</div>`).join("")}</div>`;
+  const flips = table([{t:"Time"},{t:"Series"},{t:"Direction"},{t:"Note"}],
+    D.flips.map(f=>[`<span class="mono">${esc(f.t)}</span>`, `<b>${esc(f.w)}</b>`,
+      pill(f.d, f.d.includes("→ +")?"gn":"rd"), `<span class="mut">${esc(f.note)}</span>`]));
+  return head("Greeks","SPX dealer exposure · updated 15:41 ET",
+      `<span class="chips">${pill("OI + Vol","cy")}${pill("Vol only","mt")}${pill("● DATA ON","gn")}</span>`)
+    + gs + `<div style="height:16px"></div>`
+    + `<div class="grid2">${card("Regime matrix", matrix)}${card("Volatility", vol)}</div>`
+    + card("Zero-line crossings", flips, {sub:"GEX / DEX sign flips · 3 today"});
+};
+
+P.Probe = () => {
+  const cards = `<div class="grid3">${D.probe.map(p=>`
+    <div class="card" style="margin:0">
+      <div class="ch"><span class="t" style="font-size:13.5px">${esc(p.c)}</span><span class="sp"></span>
+        ${pill(p.side==="C"?"CALL":"PUT", p.side==="C"?"gn":"rd")}</div>
+      <div style="font-size:28px;font-weight:800" class="${p.pct>=0?"pos":"neg"}">${p.pct>0?"+":""}${p.pct}%</div>
+      <div class="kv" style="margin-top:6px"><span class="k">in → now</span><b>${p.fill.toFixed(2)} → ${p.now.toFixed(2)}</b></div>
+      <div class="kv"><span class="k">per contract</span><b class="${p.pct>=0?"pos":"neg"}">${money(Math.round((p.now-p.fill)*100))}</b></div>
+      <div class="kv"><span class="k">expiry</span><b>${esc(p.exp)}</b></div>
+      ${spark([p.fill*100, p.fill*112, p.fill*104, p.fill*130, p.now*88, p.now*96, p.now*100].map(Math.round), p.pct>=0?"var(--ok)":"var(--softred)")}
+    </div>`).join("")}</div>`;
+  return head("Probe","Records your entry, then tracks the result live")
+    + card("Probe a contract", `<div class="chips">
+        <span class="pill p-mt" style="padding:8px 14px">TSLA 420c 7/17 →</span>
+        ${pill("Ticker","mt")}${pill("Expiration","mt")}${pill("Strike","mt")}${pill("Call","cy")}${pill("Fill price","mt")}</div>
+      <p class="note">Tracking continues server-side while the browser is closed.</p>`)
+    + cards;
+};
+
+P.Watchlists = () => {
+  const bucket = (name, syms, hot) => `
+    <div style="margin-bottom:16px">
+      <div class="chips" style="margin-bottom:8px"><b style="font-size:12.5px">${esc(name)}</b>
+        ${hot?pill("HOT · 2-min sweeps","og"):""}<span class="mut" style="font-size:11px">${syms.length} symbols</span></div>
+      <div class="chips">${syms.map(s=>pill(s,"mt")).join("")}</div></div>`;
+  const r = D.rosters;
+  return head("Watchlists","Edit here — every downstream job picks it up on its next sweep",
+      seg(["scanner","em","far-cb"],"scanner"))
+    + `<div class="chips" style="margin-bottom:14px">${pill("● LIVE","gn")}${pill("Source: roster-store + overrides","mt")}${pill("Reset to file","mt")}</div>`
+    + card("scanner", bucket("HOT", r.scanner.HOT, true)+bucket("Core", r.scanner.Core)+bucket("Wide", r.scanner.Wide),
+        {sub:"34 of 169 shown"})
+    + `<div class="grid2">${card("em", bucket("Weekly", r.em.Weekly))}${card("far-cb", bucket("Watch", r.farcb.Watch))}</div>`;
+};
+
+P.LseData = () => {
+  const cat = table([{t:"Symbol"},{t:"Dataset"},{t:"From"},{t:"To"},{t:"Rows",n:1}],
+    [["ES","futures candles","2008-01-02","2026-09-05","24,180,411"],
+     ["SPX","index candles","2004-01-02","2026-09-05","18,204,880"],
+     ["SPXW","option chain","2019-06-03","2026-09-05","1,204,880,102"],
+     ["NQ","futures candles","2008-01-02","2026-09-05","23,914,006"],
+     ["SPY","option flow","2021-01-04","2026-09-05","880,412,660"]]
+      .map(r=>[`<b>${esc(r[0])}</b>`, `<span class="mut">${esc(r[1])}</span>`, `<span class="mono mut">${esc(r[2])}</span>`,
+        `<span class="mono mut">${esc(r[3])}</span>`, r[4]]));
+  return head("LSE Data","Licensed historical vault — preview here, download the full pull as CSV",
+      seg(["Catalog","Candles","Options Chain","Options Flow","Contract Candles"],"Catalog"))
+    + `<div class="chips" style="margin-bottom:14px">${pill("All datasets","cy")}${pill("Search","mt")}${pill("Timeframe 1m","mt")}${pill("Max history","mt")}${pill("Download CSV","gd")}</div>`
+    + card("Catalog", cat, {sub:"preview capped at 300 rows — use Download CSV for everything"});
+};
+
+P.ChartsUI = () => {
+  const fig = (t, svg, n) => `<div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panelSolid)">
+    <div style="font-size:11.5px;font-weight:700;margin-bottom:8px">${esc(t)}</div>${svg}
+    <div class="mut" style="font-size:10.5px;margin-top:7px">${esc(n)}</div></div>`;
+  const l1 = lineChart([{n:"a",v:[20,34,28,46,40,58,52,66],c:"var(--cy)",fill:1}],{w:240,h:80});
+  const l2 = lineChart([{n:"a",v:[60,52,58,44,50,38,44,30],c:"var(--gold)"},{n:"b",v:[20,28,24,34,30,40,36,48],c:"var(--green)"}],{w:240,h:80});
+  const b1 = barChart([{m:"M",a:40,b:22},{m:"T",a:62,b:31},{m:"W",a:48,b:26},{m:"T",a:71,b:38},{m:"F",a:55,b:29}],{w:240,h:90,la:"a",lb:"b"});
+  const hm = heat([["Mon",[2,4,7,9,6,3]],["Tue",[3,6,9,8,5,2]],["Wed",[1,3,5,8,9,6]],["Thu",[4,7,8,6,4,2]],["Fri",[2,5,9,9,7,4]]]);
+  return head("Chart types","Reference · 17 styles in the product palette", seg(["Wide","Grid"],"Grid"))
+    + card("Time series", `<div class="grid3">${fig("Line",l1,"Trend over time")}${fig("Multi-series",l2,"Two measures, one axis")}${fig("Bar",b1,"Compare two per bucket")}</div>`)
+    + card("Categorical", `<div class="grid2">${fig("Heatmap",hm,"Activity by day and hour, GEX by strike and expiry")}
+        ${fig("Progress", bar(0.68,"var(--gold)")+bar(0.41,"var(--cy)")+bar(0.22,"var(--softred)"), "Share of a whole")}</div>`)
+    + `<p class="note">Static sample numbers — no live feed, no charting library.</p>`;
+};
+
+/* ══════════════ SYSTEM ══════════════ */
+
+P.Database = () => {
+  const eod = `<div class="grid3">${D.eodStatus.map(e=>`
+    <div class="tile"><div class="l">${esc(e.sym)}</div><div class="n" style="font-size:19px">${esc(e.gex)}</div>
+      <div class="d">spot ${e.spot.toLocaleString()} · saved ${esc(e.at)}</div></div>`).join("")}</div>`;
+  const picker = `<div class="chips">${D.tables.map((t,i)=>
+    `<span class="pill ${i===0?"p-cy":"p-mt"}">${esc(t[0])} <span style="opacity:.5">${t[1].toLocaleString()}</span>${t[2]?` <span style="color:var(--softred)">+${t[2].toLocaleString()}</span>`:""}</span>`).join("")}</div>`;
+  const grid = table([{t:"session"},{t:"symbol"},{t:"strike",n:1},{t:"call_gex",n:1},{t:"put_gex",n:1},{t:"net_gex",n:1},{t:"oi",n:1},{t:"basis"}],
+    [["2026-09-05","SPX",6450,"+712,004,110","-7,102,880","+704,901,230","124,880","oi+vol"],
+     ["2026-09-05","SPX",6440,"+318,220,004","-68,004,120","+250,215,884","98,204","oi+vol"],
+     ["2026-09-05","SPX",6430,"+286,110,220","-50,220,884","+235,889,336","81,442","oi+vol"],
+     ["2026-09-05","SPX",6400,"+402,880,110","-14,880,220","+387,999,890","142,006","oi+vol"],
+     ["2026-09-05","SPX",6390,"+61,220,004","-271,880,410","-210,660,406","110,884","oi+vol"],
+     ["2026-09-05","SPX",6350,"+22,110,880","-567,220,004","-545,109,124","188,402","oi+vol"]]
+      .map(r=>[`<span class="mono mut">${esc(r[0])}</span>`,`<b>${esc(r[1])}</b>`,r[2],
+        `<span class="pos">${r[3]}</span>`,`<span class="neg">${r[4]}</span>`,
+        `<span class="${r[5].startsWith("+")?"pos":"neg"}">${r[5]}</span>`,r[6],`<span class="mut">${esc(r[7])}</span>`]));
+  return head("Database","Read-only browser over the production schema",
+      `<span class="chips">${pill("Date: 2026-09-05","mt")}${pill("Limit 100","mt")}</span>`)
+    + synth("Rows shown are illustrative. The live console reads the production schema directly.")
+    + card("EOD GEX · today", eod)
+    + card("Tables · 84", picker)
+    + card("eod_strike_gex", grid, {sub:"6 of 100 rows"});
+};
+
+P.Dev = () => {
+  const feed = (t, rows) => `<div style="border:1px solid var(--line);border-radius:11px;padding:11px;background:var(--panelSolid)">
+    <div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;opacity:.4;font-weight:800;margin-bottom:7px">${esc(t)}</div>
+    ${rows.map(r=>`<div class="kv"><span class="k">${esc(r[0])}</span><b class="mono">${esc(r[1])}</b></div>`).join("")}</div>`;
+  const oi = table([{t:"Leg"},{t:"ThetaData OI",n:1},{t:"TT REST OI",n:1},{t:"Diff",n:1},{t:"Δ%",n:1},{t:""}],
+    [["Call","124,880","124,902","22","0.02%","gn"],["Put","110,884","112,004","1,120","1.01%","gn"]]
+      .map(r=>[`<b>${esc(r[0])}</b>`,r[1],r[2],r[3],r[4],pill("within tolerance","gn")]));
+  const calc = table([{t:"Leg"},{t:"γ",n:1},{t:"Buy",n:1},{t:"Sell",n:1},{t:"× Net",n:1},{t:"× S²",n:1},{t:"= Flow GEX",n:1}],
+    [["Call","0.00412","8,204","6,110","2,094","41,118,544","+354,880,110"],
+     ["Put","0.00388","5,880","9,204","-3,324","41,118,544","-530,220,884"]]
+      .map(r=>[`<b>${esc(r[0])}</b>`,r[1],r[2],r[3],r[4],r[5],`<span class="${r[6].startsWith("+")?"pos":"neg"}">${r[6]}</span>`]));
+  return head("Dev · symbol probe","Chain → strike resolve → market data",
+      `<span class="chips">${pill("REST","cy")}${pill("SPXW","mt")}${pill("6410","mt")}${pill("09/08","mt")}${pill("Render","cy")}</span>`)
+    + `<div class="grid2">
+        ${card("Resolved", `<div class="kv"><span class="k">ticker</span><b>SPXW</b></div>
+          <div class="kv"><span class="k">strike</span><b>6410</b></div>
+          <div class="kv"><span class="k">symbol</span><b class="mono">SPXW 260908C06410000</b></div>
+          <div class="kv"><span class="k">elapsed</span><b>412 ms</b></div>`)}
+        ${card("Net greeks · call + put", `
+          ${[["GEX","+4.12B"],["DEX","-1.86B"],["VEX","-94M"],["Theta exp","-212M"],["Vanna","+41M"],["Charm","-18M"]]
+            .map(r=>`<div class="kv"><span class="k">${esc(r[0])}</span><b>${esc(r[1])}</b></div>`).join("")}
+          <div class="chips" style="margin-top:10px">${pill("⧉ Copy img","mt")}${pill("↗ Discord","og")}</div>`)}</div>`
+    + `<div class="grid2">${card("Calls", feed("Quote",[["bid","4.10"],["ask","4.30"],["mark","4.20"]])+
+        `<div style="height:8px"></div>`+feed("Greeks",[["delta","0.482"],["gamma","0.00412"],["iv","11.4%"]]))}
+      ${card("Puts", feed("Quote",[["bid","3.80"],["ask","4.00"],["mark","3.90"]])+
+        `<div style="height:8px"></div>`+feed("Greeks",[["delta","-0.518"],["gamma","0.00388"],["iv","12.1%"]]))}</div>`
+    + card("OI check · ThetaData vs TT REST", oi, {sub:"the safeguard against publishing a number one vendor got wrong"})
+    + card("Flow GEX · raw calc", calc);
+};
+
+/* ══════════════ HUB ══════════════ */
+
+P.Hub = () => {
+  const groups = NAV.groups.map(g=>`
+    <div style="margin-bottom:18px">
+      <div style="font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:800;color:${g.accent};margin-bottom:8px">
+        ${esc(g.label)} <span style="opacity:.4">· ${g.links.length}</span></div>
+      <div class="chips">${g.links.map(l=>`<span class="pill p-mt" data-go="${esc(l.key)}" style="cursor:pointer">${esc(l.glyph)} ${esc(l.label)}</span>`).join("")}</div>
+    </div>`).join("");
+  return head("Owner Hub","Jump to any route")
+    + card("", `<div style="background:var(--inset);border:1px solid var(--line);border-radius:11px;padding:11px 14px;
+        font-size:13px;opacity:.4;display:flex;align-items:center;gap:10px">Jump to a route…
+        <span class="sp" style="flex:1"></span>${pill("⌘K","mt")}</div>
+      <div class="chips" style="margin-top:12px"><span class="mut" style="font-size:10.5px">Pinned:</span>
+        ${pill("★ Sales","gd")}${pill("★ ΔGEX Board","gd")}${pill("★ Daily Grades","gd")}</div>`)
+    + card("All routes", groups);
+};
+
+/* ══════════════ PERSONAL / lite ══════════════ */
+
+const locked = (t, s) => `<div class="card locked"><div class="lk">⌁</div><div class="t">${esc(t)}</div><div class="s">${esc(s)}</div></div>`;
+const personal = t => () => head(t,"") + locked("Not included in this demo",
+  "Personal household administration. No CB Edge business, customer or company data. Excluded from this build.");
+P.Budget = personal("Budget"); P.Reta = personal("Reta"); P.Todo = personal("To-Do");
+
+
+/* ── nav (mirrors owner-vite/src/lib/nav.ts) ─────────────── */
+const NAV = {
+  pinned: [{ label:"Hub", glyph:"⌂", key:"Hub" }],
+  groups: [
+    { label:"Info", accent:"var(--cy)", links:[
+      { label:"Admin",      glyph:"⚿", key:"Admin" },
+      { label:"Visitors",   glyph:"◍", key:"Visitors" },
+      { label:"Overview",   glyph:"⊞", key:"ControlPanel" },
+      { label:"Sales",      glyph:"$", key:"Sales" },
+    ]},
+    { label:"Content", accent:"var(--orange)", links:[
+      { label:"Feedback",     glyph:"⚑", key:"Feedback" },
+      { label:"Social Media", glyph:"🗨", key:"SocialMedia" },
+      { label:"Post Studio",  glyph:"✎", key:"PostStudio" },
+      { label:"Changelog",    glyph:"↻", key:"Changelog" },
+      { label:"Affiliates",   glyph:"⇉", key:"Affiliates" },
+      { label:"Emails",       glyph:"✉", key:"Emails" },
+      { label:"Media Dump",   glyph:"🖼", key:"MediaDump" },
+      { label:"Bzila Alerts", glyph:"🔔", key:"BzilaAlerts" },
+    ]},
+    { label:"Market", accent:"var(--gold)", links:[
+      { label:"Results",       glyph:"▤", key:"Results" },
+      { label:"Backtests",     glyph:"∿", key:"Backtests" },
+      { label:"Probe",         glyph:"🔍", key:"Probe" },
+      { label:"Greeks",        glyph:"∇", key:"Greeks" },
+      { label:"ΔGEX Board",    glyph:"Δ", key:"GexGrowth" },
+      { label:"Daily Grades",  glyph:"◆", key:"DailyGrades" },
+      { label:"Est. Moves BE", glyph:"⇄", key:"EstimatedMove" },
+      { label:"Watchlists",    glyph:"☰", key:"Watchlists" },
+      { label:"Chart Types",   glyph:"▦", key:"ChartsUI" },
+      { label:"LSE Data",      glyph:"⇩", key:"LseData" },
+    ]},
+    { label:"System", accent:"var(--lblue)", links:[
+      { label:"Dev",      glyph:"⚙", key:"Dev" },
+      { label:"Database", glyph:"⛁", key:"Database" },
+    ]},
+    { label:"Personal", accent:"var(--green)", links:[
+      { label:"Budget", glyph:"⚖", key:"Budget" },
+      { label:"Reta",   glyph:"⌀", key:"Reta" },
+      { label:"To-Do",  glyph:"☑", key:"Todo" },
+    ]},
+  ],
+};
+const ALL = [...NAV.pinned, ...NAV.groups.flatMap(g=>g.links)];
+
+/* ── rail ────────────────────────────────────────────────── */
+function renderRail(active, q){
+  const f = (q||"").trim().toLowerCase();
+  const match = l => !f || l.label.toLowerCase().includes(f) || l.key.toLowerCase().includes(f);
+  const link = l => `<div class="rlink ${l.key===active?"on":""}" data-go="${l.key}">
+      <span class="gl">${l.glyph}</span><span>${l.label}</span></div>`;
+  const pin = NAV.pinned.filter(match).map(link).join("");
+  const groups = NAV.groups.map(g=>{
+    const links = g.links.filter(match);
+    if(!links.length) return "";
+    return `<div class="rgroup"><div class="lab" style="color:${g.accent}">
+      <span>${g.label}</span><span style="opacity:.6">${links.length}</span></div>${links.map(link).join("")}</div>`;
+  }).join("");
+  return `<div class="brand"><div class="mark">CB</div>
+      <div><div class="nm">Owner</div><div class="sb">cbedge.net</div></div></div>
+    <div class="railsearch"><span class="ic">⌕</span><input id="q" placeholder="Filter routes…" value="${esc(q||"")}"></div>
+    ${pin}${groups}`;
+}
+
+/* ── router ──────────────────────────────────────────────── */
+let ACTIVE = "Hub", QUERY = "";
+
+function go(key){
+  if(!P[key]) key = "Hub";
+  ACTIVE = key;
+  const meta = ALL.find(l=>l.key===key) || {label:key, glyph:"⌂"};
+  const grp = NAV.groups.find(g=>g.links.some(l=>l.key===key));
+  document.getElementById("rail").innerHTML = renderRail(ACTIVE, QUERY);
+  document.getElementById("crumb").textContent = grp ? grp.label : "Pinned";
+  document.getElementById("ttl").textContent = meta.label;
+  const v = document.getElementById("view");
+  v.innerHTML = `<div class="page">${P[key]()}</div>`;
+  v.scrollTop = 0;
+  document.body.classList.remove("railopen");
+  try{ location.hash = "#" + key; }catch(e){}
+  wire();
+}
+
+function wire(){
+  document.querySelectorAll("[data-go]").forEach(el=>{
+    el.onclick = () => go(el.getAttribute("data-go"));
+  });
+  const q = document.getElementById("q");
+  if(q){
+    q.oninput = e => {
+      QUERY = e.target.value;
+      document.getElementById("rail").innerHTML = renderRail(ACTIVE, QUERY);
+      const nq = document.getElementById("q");
+      nq.focus(); nq.setSelectionRange(QUERY.length, QUERY.length);
+      wire();
+    };
+  }
+}
+
+function clock(){
+  const d = new Date();
+  const et = d.toLocaleTimeString("en-US",{timeZone:"America/New_York",hour12:false});
+  const el = document.getElementById("clock");
+  if(el) el.textContent = et + " ET";
+}
+
+window.addEventListener("hashchange", () => {
+  const k = location.hash.replace("#","");
+  if(k && k !== ACTIVE) go(k);
+});
+
+document.addEventListener("keydown", e=>{
+  if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==="k"){
+    e.preventDefault(); const q=document.getElementById("q"); if(q) q.focus();
+  }
+});
+
+(function init(){
+  document.getElementById("menu").onclick = () => document.body.classList.toggle("railopen");
+  clock(); setInterval(clock, 1000);
+  const k = location.hash.replace("#","");
+  go(k && P[k] ? k : "Hub");
+})();
+
+</script>
+</body>
+</html>
