@@ -36,7 +36,10 @@ import {
   etMinutesOfDay,
   filterSession,
   fmtCountdown,
+  liveCandleUrl,
+  LIVE_PRICE_MS,
   parseCandles,
+  parseLiveClose,
   parseEsCandles,
   rollup,
   RTH_CLOSE_MIN,
@@ -992,6 +995,50 @@ export function GexCandlesCard({
       }
     })
   }, [useEs, replayOn, settings.interval, apply])
+
+  // ── The live price, for every symbol the SOCKET does not carry ─────────────
+  // The two effects above ride /ws/gex, and that feed carries ONE underlying.
+  // On QQQ, SPY, NVDA — every other ticker the picker offers — there was no
+  // frame to watch, so the forming bar only moved when the candle poll landed.
+  // The poll is 30s and the recorder behind it writes once a minute, so what
+  // you saw was a candle that stepped once a minute and sat still in between.
+  //
+  // Same shape as the socket path, different transport: a 2s probe of
+  // /api/snapshots/etf-candles/live (see liveCandleUrl) pushed straight into
+  // the chart through the SAME imperative `setLivePrice`. No React state, no
+  // re-render on a tick, no rebuilt bar array — AGENTS.md rule 4. The chart
+  // extends the forming bar's high/low around the price and rolls it forward
+  // when the interval elapses, so a close is all this has to carry.
+  //
+  // `!esCapable` is the gate, not `!useEs`: on SPX the socket already does
+  // this, better, and running both would paint two sources onto one bar.
+  const httpLive = !esCapable && !replayOn
+  useEffect(() => {
+    if (!httpLive) return
+    const url = liveCandleUrl(def)
+    let stopped = false
+    const tick = async () => {
+      if (stopped) return
+      // A hidden tab has nothing to animate, and skipping the request is also
+      // what lets the server drop the subscription. The owner is the exception
+      // for the same reason their polls are (see `background: isOwner`).
+      if (typeof document !== 'undefined' && document.hidden && !isOwner) return
+      try {
+        const res = await fetch(url, { cache: 'no-store', credentials: 'same-origin' })
+        if (!res.ok || stopped) return
+        const px = parseLiveClose(await res.json(), def.key)
+        // 0 = off-hours, or the first call after a fresh subscribe. Never push
+        // it: setLivePrice would drag the forming bar to zero and autoscale the
+        // whole pane with it.
+        if (px > 0 && !stopped) apply((h) => h.setLivePrice(px))
+      } catch {
+        /* a dropped probe is not an error — the next one is 2s away */
+      }
+    }
+    void tick()
+    const id = setInterval(() => { void tick() }, LIVE_PRICE_MS)
+    return () => { stopped = true; clearInterval(id) }
+  }, [httpLive, def, isOwner, apply])
 
   useEffect(
     () =>

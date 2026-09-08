@@ -154,6 +154,54 @@ export function parseCandles(json: unknown): Bar[] {
   return out
 }
 
+// ── The live price ───────────────────────────────────────────────────────────
+// The history route above is backed by a recorder that writes once a minute, so
+// polling it faster than that learns nothing — which is why the forming candle
+// used to sit still for a minute at a time on every symbol without a socket
+// frame behind it.
+//
+//   /api/snapshots/etf-candles/live?symbol=&interval=1&bars=1
+//     → { interval, rows: { QQQ: [ { …, close } ] } }
+//
+// That route is a MEMORY read against a persistent dxLink candle subscription
+// (server-v2/etf-live-candles.js), not a database read and not a dxLink round
+// trip, so it is built to be polled every couple of seconds. The response is
+// one bar. Only its close is used here: the chart's own `setLivePrice` extends
+// the forming bar's high/low around it and rolls the bar forward when the
+// interval elapses, so asking for anything wider would be data the chart
+// throws away.
+//
+// ASKING IS SUBSCRIBING. The route registers interest in the symbol as a side
+// effect and the hub drops it ~20s after the last request, so a card that
+// unmounts stops costing a subscription upstream. Nothing needs to unsubscribe.
+
+/** How often the live probe runs. See the note above on why 2s is affordable. */
+export const LIVE_PRICE_MS = 2_000
+
+export function liveCandleUrl(def: SymbolDef): string {
+  return `/api/snapshots/etf-candles/live?symbol=${encodeURIComponent(def.key)}&interval=1&bars=1`
+}
+
+/**
+ * Newest live close for `symbol`, or 0.
+ *
+ * ZERO IS A NORMAL ANSWER, not an error: outside 04:00-20:00 ET the hub never
+ * connects, and the first request after a fresh subscribe lands before any bar
+ * has streamed. Callers must treat 0 as "nothing to push" — feeding it to the
+ * chart would autoscale the pane to zero, which is the failure `sanitize`
+ * above exists to prevent.
+ */
+export function parseLiveClose(json: unknown, symbol: string): number {
+  if (!json || typeof json !== 'object') return 0
+  const rows = (json as { rows?: Record<string, unknown> }).rows
+  if (!rows || typeof rows !== 'object') return 0
+  const list = rows[symbol]
+  if (!Array.isArray(list) || !list.length) return 0
+  const last = list[list.length - 1] as Record<string, unknown> | undefined
+  const px = num(last?.close)
+  return px > 0 ? px : 0
+}
+
 /** The ES futures history, lite-encoded. Same Bar shape out as the ETF route. */
 export function esCandlesUrl(interval: Interval, days = HISTORY_DAYS): string {
   // 1m × ~23h × days, with room: the route caps `limit` at 50000.

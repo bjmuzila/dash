@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-09-08 - v3 GEX Candles: the live price, for symbols the socket doesn't carry
+
+`cbedge-v3/src/board/gexCandles/candles.ts`,
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
+
+Follow-on to the entry below. The backend and the v2 hook were done and working
+- `/api/snapshots/etf-candles/live` answers correctly on prod - but the live
+site is v3, and v3's GEX Candles card does not use `hooks/useEtfCandles.ts`. It
+has its own fetch layer, so the change reached nothing anyone was looking at.
+
+THE BUG, restated for v3. GexCandlesCard already pushes a live price into the
+forming bar imperatively (`apply(h => h.setLivePrice(px))`), off the socket:
+`spot` on SPX, `esCandles`/`es1mCandles` on ES. The socket carries ONE
+underlying, so on QQQ, SPY, NVDA - every other ticker the picker offers - there
+was no frame to watch and the forming bar only moved when the candle poll
+landed. That poll is 30s over a recorder that writes once a minute, which is
+exactly the "steps once a minute, sits still in between" that was reported.
+
+WHAT CHANGED.
+
+  - `candles.ts` gains `liveCandleUrl()`, `parseLiveClose()` and
+    `LIVE_PRICE_MS` (2s) - the URL/parse pair for the live route, alongside the
+    two that were already there.
+  - `GexCandlesCard.tsx` gains ONE effect, gated `!esCapable && !replayOn`, that
+    polls that route every 2s and pushes the close through the SAME
+    `setLivePrice` the socket path uses. No React state, no re-render per tick,
+    no rebuilt bar array (AGENTS.md rule 4). The chart extends the forming bar's
+    high/low around the price and rolls it forward at the interval, so a close
+    is all the probe has to carry.
+  - Skips while the tab is hidden (owner excepted, matching `background:
+    isOwner` on the card's other polls) - which is also what lets the server
+    drop the subscription.
+  - A 0 close is never pushed. That is the normal answer off-hours and on the
+    first call after a fresh subscribe, and feeding it to `setLivePrice` would
+    drag the bar to zero and autoscale the pane with it.
+
+NOT CHANGED: the 30s history poll still owns closed bars, the bubbles, the
+basis, and everything on SPX/ES.
+
+NOTE FOR AGENTS.md: its "the live site" section still says the customer
+dashboard is `app/<name>/page.tsx` served by the `app-vite` SPA. cbedge.net now
+serves `cbedge-v3` - `/app/es-candles` redirects to `/v3`. Two of the three
+files in the entry below were the v2 path and are dead weight until that section
+is updated.
+
 ## 2026-09-08 - v3 Level Log: CORE migration button gone, ticker on the toolbar
 
 `cbedge-v3/src/pages/LevelLog.tsx`. The earlier removal only hit v2's
