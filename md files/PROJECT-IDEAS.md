@@ -32,7 +32,7 @@ _(none yet)_
 
 ## Infrastructure / Deploy
 
-_(none yet)_
+1. Strategy for cron job updates and zero-interruption deploys of new updates
 
 ## Uncategorized
 
