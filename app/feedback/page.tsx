@@ -13,6 +13,10 @@
  * and a thread when one is picked). The thread itself is
  * components/shared/FeedbackThread so the owner inbox renders it identically.
  *
+ * Screenshots ride along on both: the form below and the thread's composer each
+ * mount a ShotTray, so "here's what it looks like" is a paste away — which for
+ * a bug report is usually worth more than the paragraph describing it.
+ *
  * This page is Next-rendered (linked from UserMenu), not an SPA route — it is
  * support chrome, not a dashboard.
  */
@@ -24,6 +28,8 @@ import { PageShell, Card } from "@/components/shared/PageCard";
 import { SegGroup, DockButton, type SegOption } from "@/components/shared/DockToolbar";
 import {
   FeedbackThread,
+  ShotTray,
+  useShotDrop,
   CATEGORY_OPTIONS,
   CATEGORY_LABEL,
   StatusChip,
@@ -32,6 +38,8 @@ import {
   num,
   type FeedbackTicket,
   type FeedbackMessage,
+  type FeedbackShot,
+  type PendingShot,
 } from "@/components/shared/FeedbackThread";
 
 type Category = "bug" | "idea" | "note" | "other";
@@ -46,6 +54,7 @@ export default function FeedbackPage() {
   // ── new-ticket form ────────────────────────────────────────────────────────
   const [category, setCategory] = useState<Category>("note");
   const [message, setMessage] = useState("");
+  const [shots, setShots] = useState<PendingShot[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,13 +64,24 @@ export default function FeedbackPage() {
   const [listLoaded, setListLoaded] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
   const [thread, setThread] = useState<
-    { ticket: FeedbackTicket; messages: FeedbackMessage[]; isOwner: boolean; isAuthor: boolean } | null
+    {
+      ticket: FeedbackTicket;
+      messages: FeedbackMessage[];
+      shots: FeedbackShot[];
+      isOwner: boolean;
+      isAuthor: boolean;
+    } | null
   >(null);
   const [sending, setSending] = useState(false);
 
   // Guards a poll response landing after the user moved to another ticket.
   const openIdRef = useRef<number | null>(null);
   openIdRef.current = openId;
+
+  // Paste/drag onto the NEW-ticket form. The thread's composer has its own copy
+  // of this inside FeedbackThread — they are different drafts, so they cannot
+  // share one queue.
+  const { over: dragOver, handlers: dropHandlers } = useShotDrop(shots, setShots, setError);
 
   const loadList = useCallback(async () => {
     try {
@@ -88,6 +108,7 @@ export default function FeedbackPage() {
       setThread({
         ticket: j.ticket,
         messages: Array.isArray(j.messages) ? j.messages : [],
+        shots: Array.isArray(j.shots) ? j.shots : [],
         isOwner: Boolean(j.isOwner),
         isAuthor: Boolean(j.isAuthor),
       });
@@ -126,14 +147,21 @@ export default function FeedbackPage() {
 
   async function submit() {
     const msg = message.trim();
-    if (!msg) { setError("Please write a message first."); return; }
+    // A screenshot on its own is a perfectly good ticket — the server takes it
+    // and titles the row for us, so only require words when nothing is attached.
+    if (!msg && shots.length === 0) { setError("Write a message or attach a screenshot first."); return; }
     setSubmitting(true);
     setError(null);
     try {
       const res = await fetch("/api/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, message: msg, page: "/feedback" }),
+        body: JSON.stringify({
+          category,
+          message: msg,
+          page: "/feedback",
+          shots: shots.map((s) => ({ dataUrl: s.dataUrl, name: s.name })),
+        }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -141,6 +169,7 @@ export default function FeedbackPage() {
       }
       const j = await res.json().catch(() => ({}));
       setMessage("");
+      setShots([]);
       await loadList();
       // Drop straight into the ticket that was just opened — that IS the
       // confirmation, and it shows the customer where the reply will arrive.
@@ -154,7 +183,7 @@ export default function FeedbackPage() {
     }
   }
 
-  async function reply(text: string) {
+  async function reply(text: string, replyShots: string[]) {
     if (openId == null) return;
     setSending(true);
     setError(null);
@@ -162,7 +191,7 @@ export default function FeedbackPage() {
       const res = await fetch(`/api/feedback/${openId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, shots: replyShots }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -249,7 +278,7 @@ export default function FeedbackPage() {
               </div>
             </div>
 
-            <div>
+            <div {...dropHandlers}>
               <div style={labelStyle}>Message</div>
               <textarea
                 value={message}
@@ -257,11 +286,25 @@ export default function FeedbackPage() {
                 placeholder="What's on your mind?"
                 rows={7}
                 maxLength={5000}
-                style={{ ...homeInputStyle, width: "100%", resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }}
+                style={{
+                  ...homeInputStyle,
+                  width: "100%",
+                  resize: "vertical",
+                  lineHeight: 1.5,
+                  fontFamily: "inherit",
+                  // The drop target is the whole block, so say so on the part
+                  // the cursor is actually over.
+                  outline: dragOver ? `1px dashed ${HOME_THEME.cyan}` : undefined,
+                }}
               />
               <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.5, textAlign: "right", marginTop: 4 }}>
                 {message.length}/5000
               </div>
+            </div>
+
+            <div>
+              <div style={labelStyle}>Screenshots</div>
+              <ShotTray pending={shots} setPending={setShots} disabled={submitting} onError={setError} />
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -300,6 +343,9 @@ export default function FeedbackPage() {
                   <span style={rowTextStyle}>{t.message}</span>
                 </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  {num(t.shot_count) > 0 && (
+                    <span style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.55 }}>📎 {num(t.shot_count)}</span>
+                  )}
                   {num(t.reply_count) > 0 && (
                     <span style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.55 }}>💬 {num(t.reply_count)}</span>
                   )}
@@ -319,6 +365,7 @@ export default function FeedbackPage() {
           <FeedbackThread
             ticket={thread.ticket}
             messages={thread.messages}
+            shots={thread.shots}
             isOwner={thread.isOwner}
             isAuthor={thread.isAuthor}
             sending={sending}

@@ -13,7 +13,14 @@
  *   GET    /api/feedback?status=      every ticket (owner) — newest activity first
  *   GET    /api/feedback/:id          one ticket + its thread; also marks it read
  *   PATCH  /api/feedback/:id          {status:'open'|'resolved'}
- *   POST   /api/feedback/:id/messages {message}
+ *   POST   /api/feedback/:id/messages {message, shots}
+ *   GET    /api/feedback/shot/:sid    one attachment's bytes
+ *
+ * SCREENSHOTS: either side can attach images. They ride the SAME JSON body as
+ * `shots: [{dataUrl,name}]` (no multipart parser in server-v2), downscaled in
+ * the browser first by ../lib/feedbackShots — which is a byte-for-byte copy of
+ * components/shared/feedbackShots.ts for the same reason the thread is inlined
+ * here. Paste, drag, or the 📎 button; a screenshot with no words is a reply.
  *
  * MIRROR: components/shared/FeedbackThread.tsx + app/owner/feedback/page.tsx in
  * the Next app render the same thing on cbedge.net. owner-vite has its own copy
@@ -23,11 +30,26 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type {
+  CSSProperties,
+  ReactNode,
+  ClipboardEvent as ReactClipboardEvent,
+  DragEvent as ReactDragEvent,
+} from "react";
 import { OWNER_THEME, OWNER_LIGHT_BLUE, homeInputStyle } from "../lib/theme";
 import { PageShell, Card } from "../components/PageCard";
 import { SegGroup, DockButton } from "../components/DockToolbar";
 import type { SegOption } from "../components/DockToolbar";
+import {
+  MAX_SHOTS,
+  SHOT_ACCEPT,
+  imageFilesFrom,
+  prepareShots,
+  shotKb,
+  shotUrl,
+  type FeedbackShot,
+  type PendingShot,
+} from "../lib/feedbackShots";
 
 /* ------------------------------------------------------------------ types */
 
@@ -52,6 +74,8 @@ type Ticket = {
   last_activity_at: string;
   unread_user: number | string;
   unread_owner: number | string;
+  /** Attachments across the whole ticket — drives the 📎 hint on a list row. */
+  shot_count?: number | string;
 };
 
 type Message = { id: number; author: "user" | "owner"; body: string; created_at: string };
@@ -155,29 +179,195 @@ function UnreadDot({ count }: { count: number }) {
   );
 }
 
-function Bubble({ mine, who, body, when }: { mine: boolean; who: string; body: string; when: string }) {
+/* ------------------------------------------------------------ screenshots */
+
+const thumbStyle: CSSProperties = {
+  width: 128,
+  height: 84,
+  objectFit: "cover",
+  borderRadius: 8,
+  border: `1px solid ${OWNER_THEME.border}`,
+  background: "rgba(255,255,255,0.04)",
+  display: "block",
+};
+
+/**
+ * Full-size view of one attachment. A bug-report screenshot is unreadable at
+ * thumbnail size — the point is usually the small number in the corner.
+ */
+function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 4 }}>
-      <div
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 4000, background: "rgba(0,0,0,0.86)",
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 24, cursor: "zoom-out",
+      }}
+    >
+      <img
+        src={src}
+        alt={alt}
+        onClick={(e) => e.stopPropagation()}
         style={{
-          maxWidth: "min(88%, 560px)",
-          padding: "10px 13px",
-          borderRadius: 14,
-          borderTopRightRadius: mine ? 4 : 14,
-          borderTopLeftRadius: mine ? 14 : 4,
-          fontSize: 13,
-          lineHeight: 1.55,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          color: OWNER_THEME.text,
-          border: `1px solid ${mine ? `${OWNER_THEME.cyan}59` : OWNER_THEME.border}`,
-          background: mine
-            ? `linear-gradient(180deg, ${OWNER_THEME.cyan}2e, ${OWNER_THEME.cyan}0d)`
-            : "rgba(255,255,255,0.045)",
+          maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 8,
+          border: `1px solid ${OWNER_THEME.border}`, cursor: "default",
+        }}
+      />
+      <div style={{ position: "absolute", top: 14, right: 18, fontSize: 12, color: OWNER_THEME.muted }}>
+        Esc to close
+      </div>
+    </div>
+  );
+}
+
+/** Attachments on one message, as a row of thumbnails. */
+function ShotGallery({ shots, align }: { shots: FeedbackShot[]; align: "flex-start" | "flex-end" }) {
+  const [open, setOpen] = useState<FeedbackShot | null>(null);
+  if (!shots.length) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: align, maxWidth: "min(88%, 560px)" }}>
+      {shots.map((sh) => (
+        <button
+          key={sh.id}
+          onClick={() => setOpen(sh)}
+          title={`${sh.name || "screenshot"} · ${shotKb(sh.byte_len)}`}
+          style={{ padding: 0, border: "none", background: "none", lineHeight: 0, cursor: "zoom-in" }}
+        >
+          <img src={shotUrl(sh)} alt={sh.name || "screenshot"} style={{ ...thumbStyle, cursor: "zoom-in" }} />
+        </button>
+      ))}
+      {open && <Lightbox src={shotUrl(open)} alt={open.name || "screenshot"} onClose={() => setOpen(null)} />}
+    </div>
+  );
+}
+
+/**
+ * The composer's attachment row. State lives in the page, because the page is
+ * what clears the queue once a reply is away.
+ */
+function ShotTray({
+  pending,
+  setPending,
+  disabled,
+  onError,
+}: {
+  pending: PendingShot[];
+  setPending: (next: PendingShot[]) => void;
+  disabled?: boolean;
+  onError: (msg: string | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const add = useCallback(async (files: File[]) => {
+    if (!files.length || disabled) return;
+    setBusy(true);
+    onError(null);
+    try {
+      const next = await prepareShots(files, pending.length);
+      if (next.length) setPending([...pending, ...next]);
+      if (files.length > next.length) onError(`Only ${MAX_SHOTS} images per message — the rest were skipped.`);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Could not attach that image.");
+    } finally {
+      setBusy(false);
+    }
+  }, [disabled, onError, pending, setPending]);
+
+  const full = pending.length >= MAX_SHOTS;
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={SHOT_ACCEPT}
+        multiple
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          e.target.value = ""; // so the same file can be picked twice
+          void add(files);
+        }}
+      />
+      <DockButton
+        onClick={() => inputRef.current?.click()}
+        title="Attach a screenshot — you can also paste or drag one in"
+        style={{
+          height: 30,
+          padding: "0 12px",
+          fontSize: 11,
+          opacity: disabled || busy || full ? 0.5 : 1,
+          cursor: disabled || busy || full ? "default" : "pointer",
         }}
       >
-        {body}
-      </div>
+        {busy ? "Adding…" : "📎 Screenshot"}
+      </DockButton>
+
+      {pending.map((ps) => (
+        <span key={ps.key} style={{ position: "relative", lineHeight: 0 }}>
+          <img
+            src={ps.dataUrl}
+            alt={ps.name}
+            title={`${ps.name} · ${shotKb(ps.bytes)}`}
+            style={{ ...thumbStyle, width: 96, height: 64 }}
+          />
+          <button
+            onClick={() => setPending(pending.filter((x) => x.key !== ps.key))}
+            title="Remove"
+            style={{
+              position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: 999,
+              border: `1px solid ${OWNER_THEME.border}`, background: OWNER_THEME.bg, color: OWNER_THEME.text,
+              fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0,
+            }}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+
+      {pending.length === 0 && (
+        <span style={{ fontSize: 10, color: OWNER_THEME.muted, opacity: 0.4 }}>
+          or paste / drag an image in
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Bubble({ mine, who, body, when, shots }: { mine: boolean; who: string; body: string; when: string; shots: FeedbackShot[] }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 6 }}>
+      {/* A screenshot-only message gets no bubble — an empty one reads as a bug,
+          and the image IS the message. */}
+      {body ? (
+        <div
+          style={{
+            maxWidth: "min(88%, 560px)",
+            padding: "10px 13px",
+            borderRadius: 14,
+            borderTopRightRadius: mine ? 4 : 14,
+            borderTopLeftRadius: mine ? 14 : 4,
+            fontSize: 13,
+            lineHeight: 1.55,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            color: OWNER_THEME.text,
+            border: `1px solid ${mine ? `${OWNER_THEME.cyan}59` : OWNER_THEME.border}`,
+            background: mine
+              ? `linear-gradient(180deg, ${OWNER_THEME.cyan}2e, ${OWNER_THEME.cyan}0d)`
+              : "rgba(255,255,255,0.045)",
+          }}
+        >
+          {body}
+        </div>
+      ) : null}
+      <ShotGallery shots={shots} align={mine ? "flex-end" : "flex-start"} />
       <div style={{ fontSize: 10, color: OWNER_THEME.muted, opacity: 0.45 }}>
         {who} · {when}
       </div>
@@ -194,8 +384,10 @@ export default function Feedback() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
-  const [thread, setThread] = useState<{ ticket: Ticket; messages: Message[]; isAuthor: boolean } | null>(null);
+  const [thread, setThread] = useState<{ ticket: Ticket; messages: Message[]; shots: FeedbackShot[]; isAuthor: boolean } | null>(null);
   const [draft, setDraft] = useState("");
+  const [pending, setPending] = useState<PendingShot[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -232,6 +424,7 @@ export default function Feedback() {
       setThread({
         ticket: j.ticket,
         messages: Array.isArray(j.messages) ? j.messages : [],
+        shots: Array.isArray(j.shots) ? j.shots : [],
         isAuthor: Boolean(j.isAuthor),
       });
     } catch (e) {
@@ -248,6 +441,8 @@ export default function Feedback() {
   useEffect(() => {
     if (openId == null) { setThread(null); return; }
     setDraft("");
+    // A different ticket is a different draft — never carry an attachment over.
+    setPending([]);
     void loadThread(openId);
     const t = window.setInterval(() => { void loadThread(openId); }, THREAD_POLL_MS);
     return () => window.clearInterval(t);
@@ -255,19 +450,52 @@ export default function Feedback() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
-  }, [thread?.ticket.id, thread?.messages.length]);
+  }, [thread?.ticket.id, thread?.messages.length, thread?.shots.length]);
+
+  /** Paste or drag an image anywhere over the thread pane. */
+  const takeFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    try {
+      const next = await prepareShots(files, pending.length);
+      if (next.length) setPending([...pending, ...next]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not attach that image.");
+    }
+  }, [pending]);
+
+  const dropHandlers = {
+    onPaste: (e: ReactClipboardEvent) => {
+      const files = imageFilesFrom(e.clipboardData);
+      if (!files.length) return;
+      e.preventDefault(); // otherwise the filename lands in the textarea
+      void takeFiles(files);
+    },
+    onDragOver: (e: ReactDragEvent) => { e.preventDefault(); setDragOver(true); },
+    onDragLeave: () => setDragOver(false),
+    onDrop: (e: ReactDragEvent) => {
+      const files = imageFilesFrom(e.dataTransfer);
+      setDragOver(false);
+      if (!files.length) return;
+      e.preventDefault();
+      void takeFiles(files);
+    },
+  };
 
   async function sendReply() {
     const text = draft.trim();
-    if (!text || sending || openId == null) return;
+    // A screenshot on its own is a reply — only require words when nothing is
+    // attached.
+    if ((!text && pending.length === 0) || sending || openId == null) return;
+    const shots = pending.map((ps) => ({ dataUrl: ps.dataUrl, name: ps.name }));
     setSending(true);
     setDraft("");
+    setPending([]);
     try {
       const res = await fetch(`/api/feedback/${openId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, shots }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -315,11 +543,15 @@ export default function Feedback() {
   };
 
   const closed = thread?.ticket.status === "resolved";
+  const canSend = Boolean(draft.trim()) || pending.length > 0;
+  // message_id NULL belongs to the opening message (a ticket row, not a message).
+  const shotsFor = (messageId: number | null) =>
+    (thread?.shots ?? []).filter((sh) => (messageId == null ? sh.message_id == null : sh.message_id === messageId));
 
   let threadPane: ReactNode = <div style={emptyStyle}>Pick a ticket to read and reply.</div>;
   if (thread) {
     threadPane = (
-      <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }} {...dropHandlers}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", paddingBottom: 10, borderBottom: `1px solid ${OWNER_THEME.border}` }}>
           <span style={{ fontSize: 13, fontWeight: 800 }}>
             #{thread.ticket.id} · {CATEGORY_LABEL[thread.ticket.category] ?? thread.ticket.category}
@@ -334,7 +566,13 @@ export default function Feedback() {
           </span>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 14, height: 420, overflowY: "auto", padding: "4px 2px" }}>
+        <div
+          style={{
+            display: "flex", flexDirection: "column", gap: 14, height: 420,
+            overflowY: "auto", padding: "4px 2px", borderRadius: 10,
+            outline: dragOver ? `1px dashed ${OWNER_THEME.cyan}` : "none",
+          }}
+        >
           {/* The opening message is the ticket row itself, not a thread row —
               but it is always a CUSTOMER message, so it takes the same seat. */}
           <Bubble
@@ -342,6 +580,7 @@ export default function Feedback() {
             who={whoSaid("user")}
             body={thread.ticket.message}
             when={fmtStamp(thread.ticket.created_at)}
+            shots={shotsFor(null)}
           />
           {thread.messages.map((m) => (
             <Bubble
@@ -350,6 +589,7 @@ export default function Feedback() {
               who={whoSaid(m.author)}
               body={m.body}
               when={fmtStamp(m.created_at)}
+              shots={shotsFor(m.id)}
             />
           ))}
           <div ref={endRef} />
@@ -368,6 +608,7 @@ export default function Feedback() {
             maxLength={5000}
             style={{ ...homeInputStyle, width: "100%", resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }}
           />
+          <ShotTray pending={pending} setPending={setPending} disabled={sending} onError={setError} />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <DockButton
               onClick={() => void setStatus(closed ? "open" : "resolved")}
@@ -392,8 +633,8 @@ export default function Feedback() {
                 color: OWNER_THEME.cyan,
                 border: `1px solid ${OWNER_THEME.cyan}59`,
                 background: "linear-gradient(180deg,rgba(33,158,188,.18),rgba(33,158,188,.05))",
-                opacity: sending || !draft.trim() ? 0.55 : 1,
-                cursor: sending || !draft.trim() ? "default" : "pointer",
+                opacity: sending || !canSend ? 0.55 : 1,
+                cursor: sending || !canSend ? "default" : "pointer",
               }}
             >
               {sending ? "Sending…" : "Send"}
@@ -463,7 +704,8 @@ export default function Feedback() {
                   </span>
                   <span style={rowTextStyle}>{t.message}</span>
                   <span style={{ fontSize: 10, color: OWNER_THEME.muted, opacity: 0.45 }}>
-                    #{t.id} · {num(t.reply_count)} {num(t.reply_count) === 1 ? "reply" : "replies"} · {fmtWhen(t.last_activity_at)}
+                    #{t.id} · {num(t.reply_count)} {num(t.reply_count) === 1 ? "reply" : "replies"}
+                    {num(t.shot_count) > 0 ? ` · 📎 ${num(t.shot_count)}` : ""} · {fmtWhen(t.last_activity_at)}
                   </span>
                 </button>
               );

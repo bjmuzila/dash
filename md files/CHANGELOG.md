@@ -1,5 +1,80 @@
 # Changelog
 
+## 2026-09-08 (i) - FEEDBACK: screenshots on support tickets, both sides (`server-v2/api-router.js`, `components/shared/feedbackShots.ts`, `components/shared/FeedbackThread.tsx`, `app/feedback/page.tsx`, `app/owner/feedback/page.tsx`, `owner-vite/src/lib/feedbackShots.ts`, `owner-vite/src/pages/Feedback.tsx`)
+
+A customer can attach images to a ticket or any reply, and the inbox on
+owner.cbedge.net can attach them back. Paste, drag, or the new 📎 button;
+thumbnails render inside the bubble they were sent with and open full-size on a
+click (Esc closes). A screenshot with NO words is a valid ticket and a valid
+reply - "here's what it looks like" is the report - so the message is only
+required when nothing is attached; the ticket row is titled `(screenshot)` so
+the inbox list still has something to show.
+
+**Data URLs in the ordinary JSON body, not multipart.** server-v2 has no
+multipart parser and does not need one: `shots: [{dataUrl,name}]` rides the
+existing `readJson()` (raised to a 26MB cap on the two POSTs that accept them).
+Same trade the recipe photo path makes.
+
+**The browser downscales before it POSTs.** `feedbackShots.ts` resizes to
+1600px on the long edge and re-encodes to JPEG at q0.9 - high, deliberately,
+because this is a picture of TEXT and ringing around small glyphs is exactly
+what makes a bug report unreadable. A small PNG (<400KB, already under 1600px)
+ships untouched; an animated GIF passes through whole, since a canvas would
+flatten it to one frame. A 4K screenshot lands at a couple of hundred KB
+instead of 8MB, which is the difference between a reply that sends on a phone
+and one that times out.
+
+**Bytes live in their own table.** `customer_feedback_shots`, created lazily by
+the same `ensureFeedback(pool)` pattern as the messages table - so no migration
+step, and `SELECT ... FROM customer_feedback` on every list load can never drag
+image bytes with it. `message_id NULL` means the attachment belongs to the
+ticket's opening message (which is a `customer_feedback` row, not a message
+row). Ticket rows now carry `shot_count`, which is the 📎 badge on a list row.
+
+**Serving them: `GET /api/feedback/shot/:sid`.** Visibility is checked by
+joining back to the ticket - the owner sees any attachment, a customer only the
+ones on their own tickets - never by trusting the id in the URL. ETag + 304, and
+`immutable` caching only when the client passes `?v=<etag>`, which it always
+does; attachments are insert-only so an id can never point at different bytes.
+
+**An image that fails to store never loses the words.** `saveShots()` runs after
+the message row is already written and its failure is swallowed: a reply that
+sent is a reply that sent. Decode errors before that point are the ones that
+reject, with a sentence meant to be read by the person typing.
+
+Caps: 6 images per message, 5MB each decoded (server), enforced again in the
+composer so the message says so before an upload starts. owner-vite carries its
+own copy of `feedbackShots.ts` and its own inlined thread, for the same reason
+Budget and Reta exist twice - no `@/components` alias, separate build. Both
+copies are marked MIRROR.
+
+## 2026-09-08 (h) - BOT: each Discord posts under its own name and picture (`server-v2/bot-targets-store.js`, `server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`)
+
+`username` / `avatar_url` on the webhook payload override the webhook's own
+identity PER MESSAGE, so one destination can post as "Bzila Trades" while
+another posts as something else - without touching either server's webhook
+settings. Stored per Discord (`bot_discords.username`, `.avatar_url`), added
+with `ADD COLUMN IF NOT EXISTS` so an existing install needs no manual
+migration. `DISCORD_WEBHOOK_<n>_USERNAME` / `_AVATAR` cover the env fallback.
+
+**Blank is a real setting, not a missing value.** Leave both empty and Discord
+uses the webhook's own name and avatar, which is the sane default - so nothing
+here fills them in automatically.
+
+**The avatar is a URL Discord FETCHES, not an upload.** This is the whole
+failure mode: a local path or a login-protected URL is accepted by the API and
+then silently renders as the webhook's default picture, which looks like the
+setting did not save. So `normalizeAvatar()` requires `https://` and says why,
+and the Manage row shows a live preview - if that circle stays empty, Discord
+could not fetch it either.
+
+`normalizeUsername()` also catches the two names Discord refuses - anything
+containing "discord", and everyone/here - so the failure names the field instead
+of arriving as an opaque 400 from the webhook.
+
+The Test and 🔔 buttons carry the identity too: the point of running a test is to
+see exactly what the room will see, and that includes the name and the avatar.
+
 ## 2026-09-08 (g) - BOT: fix tagging - two bugs, one of them silent (`server-v2/bot-targets-store.js`, `server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`)
 
 Role pings did not fire. Two independent causes.

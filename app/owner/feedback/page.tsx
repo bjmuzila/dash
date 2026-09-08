@@ -8,6 +8,9 @@
  * the customer is looking at (components/shared/FeedbackThread) so a reply
  * cannot read differently on the two ends.
  *
+ * Screenshots attach on this side too — paste one straight into the reply box
+ * to answer "does it look like this?" without a paragraph of description.
+ *
  * Only this side can change a ticket's status — "Mark complete" flips it to
  * 'resolved', "Reopen" puts it back. The server enforces that; the buttons here
  * are just the affordance. A customer replying to a completed ticket reopens it
@@ -30,6 +33,7 @@ import {
   num,
   type FeedbackTicket,
   type FeedbackMessage,
+  type FeedbackShot,
   type FeedbackStatus,
 } from "@/components/shared/FeedbackThread";
 
@@ -53,7 +57,7 @@ export default function OwnerFeedbackPage() {
   const [loaded, setLoaded] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
   const [thread, setThread] = useState<
-    { ticket: FeedbackTicket; messages: FeedbackMessage[]; isAuthor: boolean } | null
+    { ticket: FeedbackTicket; messages: FeedbackMessage[]; shots: FeedbackShot[]; isAuthor: boolean } | null
   >(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +95,7 @@ export default function OwnerFeedbackPage() {
       setThread({
         ticket: j.ticket,
         messages: Array.isArray(j.messages) ? j.messages : [],
+        shots: Array.isArray(j.shots) ? j.shots : [],
         isAuthor: Boolean(j.isAuthor),
       });
     } catch (e) {
@@ -111,14 +116,14 @@ export default function OwnerFeedbackPage() {
     return () => window.clearInterval(t);
   }, [openId, loadThread]);
 
-  async function reply(text: string) {
+  async function reply(text: string, shots: string[]) {
     if (openId == null) return;
     setSending(true);
     try {
       const res = await fetch(`/api/feedback/${openId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, shots }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -218,7 +223,8 @@ export default function OwnerFeedbackPage() {
                   </span>
                   <span style={rowTextStyle}>{t.message}</span>
                   <span style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.45 }}>
-                    #{t.id} · {num(t.reply_count)} {num(t.reply_count) === 1 ? "reply" : "replies"} · {fmtWhen(t.last_activity_at)}
+                    #{t.id} · {num(t.reply_count)} {num(t.reply_count) === 1 ? "reply" : "replies"}
+                    {num(t.shot_count) > 0 ? ` · 📎 ${num(t.shot_count)}` : ""} · {fmtWhen(t.last_activity_at)}
                   </span>
                 </button>
               );
@@ -231,6 +237,7 @@ export default function OwnerFeedbackPage() {
               <FeedbackThread
                 ticket={thread.ticket}
                 messages={thread.messages}
+                shots={thread.shots}
                 isOwner
                 isAuthor={thread.isAuthor}
                 sending={sending}

@@ -104,6 +104,11 @@ async function ensureSchema() {
         PRIMARY KEY (discord_id, asset_class)
       );
       CREATE INDEX IF NOT EXISTS idx_bot_routes_discord ON bot_routes(discord_id);
+      -- Per-message identity override (see IDENTITY below). Added after the
+      -- table shipped, so ADD COLUMN IF NOT EXISTS rather than a new CREATE —
+      -- an existing install must not need a manual migration.
+      ALTER TABLE bot_discords ADD COLUMN IF NOT EXISTS username   TEXT NOT NULL DEFAULT '';
+      ALTER TABLE bot_discords ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT '';
     `);
     ensured = true;
     return true;
@@ -166,6 +171,41 @@ function normalizePing(raw) {
   );
 }
 
+/**
+ * IDENTITY — the name and picture each post appears under.
+ *
+ * A webhook has a default name and avatar, set in Discord when you create it.
+ * `username` / `avatar_url` on the payload override those PER MESSAGE, which is
+ * what makes one webhook able to post as "Bzila Trades" in one server and
+ * something else in another without touching Discord's settings. Leave both
+ * blank and the webhook's own identity is used — that is the sane default.
+ *
+ * The avatar is a URL Discord FETCHES, not a file you can upload through the
+ * webhook. It must be publicly reachable over HTTPS (cbedge.net/public serves
+ * fine) — a localhost or authenticated URL silently renders as the default
+ * avatar, which is the usual reason "the picture didn't work".
+ *
+ * Discord rejects a username containing "discord", and "everyone"/"here";
+ * caught here so the failure names the field instead of arriving as an opaque
+ * 400 from the webhook.
+ */
+function normalizeUsername(raw) {
+  const v = String(raw || '').trim().slice(0, 80);
+  if (!v) return '';
+  if (/discord/i.test(v)) throw new Error('Discord does not allow "discord" in a webhook username');
+  if (/^(everyone|here)$/i.test(v)) throw new Error('That username is reserved by Discord');
+  return v;
+}
+
+function normalizeAvatar(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  if (!/^https:\/\/\S+$/i.test(v)) {
+    throw new Error('The avatar must be a public https:// image URL — Discord fetches it, it is not an upload');
+  }
+  return v.slice(0, 500);
+}
+
 /** Reject anything that is not a real Discord webhook before it is stored. */
 function validUrl(url) {
   return /^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/(v\d+\/)?webhooks\/\d+\/[\w-]+$/.test(String(url || '').trim());
@@ -188,6 +228,8 @@ function envDiscords() {
       label: (process.env[`DISCORD_WEBHOOK_${i}_LABEL`] || `Discord ${i}`).trim(),
       enabled: true,
       sortIdx: i,
+      username: (process.env[`DISCORD_WEBHOOK_${i}_USERNAME`] || '').trim(),
+      avatarUrl: (process.env[`DISCORD_WEBHOOK_${i}_AVATAR`] || '').trim(),
       routes: { default: { url, ping: (process.env[`DISCORD_WEBHOOK_${i}_PING`] || '').trim() } },
     });
   }
@@ -205,12 +247,13 @@ async function loadRaw({ fresh = false } = {}) {
   if (p && (await ensureSchema())) {
     try {
       const [d, r] = await Promise.all([
-        p.query('SELECT id, label, enabled, sort_idx FROM bot_discords ORDER BY sort_idx, label'),
+        p.query('SELECT id, label, enabled, sort_idx, username, avatar_url FROM bot_discords ORDER BY sort_idx, label'),
         p.query('SELECT discord_id, asset_class, webhook_url, ping FROM bot_routes'),
       ]);
       if (d.rows.length) {
         const byId = new Map(d.rows.map((row) => [row.id, {
-          id: row.id, label: row.label, enabled: !!row.enabled, sortIdx: row.sort_idx, routes: {},
+          id: row.id, label: row.label, enabled: !!row.enabled, sortIdx: row.sort_idx,
+          username: row.username || '', avatarUrl: row.avatar_url || '', routes: {},
         }]));
         for (const row of r.rows) {
           const disc = byId.get(row.discord_id);
@@ -242,6 +285,9 @@ async function loadMasked(opts) {
       label: d.label,
       enabled: d.enabled,
       sortIdx: d.sortIdx,
+      // Identity is not a secret — it is what everyone in the channel sees.
+      username: d.username || '',
+      avatarUrl: d.avatarUrl || '',
       routes: Object.fromEntries(
         Object.entries(d.routes).map(([k, v]) => [k, { masked: maskUrl(v.url), ping: v.ping || '' }]),
       ),
@@ -280,9 +326,10 @@ async function resolve(ids, assetClass) {
     .filter((d) => want.has(d.id) && d.enabled)
     .map((d) => {
       const route = d.routes[cls] || d.routes.default || null;
+      const identity = { username: d.username || '', avatarUrl: d.avatarUrl || '' };
       return route
-        ? { id: d.id, label: d.label, url: route.url, ping: route.ping || '' }
-        : { id: d.id, label: d.label, url: null, error: `No ${cls} channel mapped for ${d.label}` };
+        ? { id: d.id, label: d.label, url: route.url, ping: route.ping || '', ...identity }
+        : { id: d.id, label: d.label, url: null, error: `No ${cls} channel mapped for ${d.label}`, ...identity };
     });
 }
 
@@ -304,6 +351,8 @@ async function saveDiscord(input) {
   if (!label) throw new Error('Label is required');
   const id = String(input?.id || '').trim() || slug(label);
   const enabled = input?.enabled !== false;
+  const username = normalizeUsername(input?.username);
+  const avatarUrl = normalizeAvatar(input?.avatarUrl);
   const sortIdx = Number.isFinite(Number(input?.sortIdx)) ? Number(input.sortIdx) : 0;
 
   const routes = input?.routes && typeof input.routes === 'object' ? input.routes : {};
@@ -327,9 +376,10 @@ async function saveDiscord(input) {
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO bot_discords (id, label, enabled, sort_idx) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (id) DO UPDATE SET label=EXCLUDED.label, enabled=EXCLUDED.enabled, sort_idx=EXCLUDED.sort_idx`,
-      [id, label, enabled, sortIdx],
+      `INSERT INTO bot_discords (id, label, enabled, sort_idx, username, avatar_url) VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (id) DO UPDATE SET label=EXCLUDED.label, enabled=EXCLUDED.enabled,
+         sort_idx=EXCLUDED.sort_idx, username=EXCLUDED.username, avatar_url=EXCLUDED.avatar_url`,
+      [id, label, enabled, sortIdx, username, avatarUrl],
     );
     for (const [cls, v] of Object.entries(routes)) {
       if (v === null || v?.url === null) {
@@ -391,7 +441,10 @@ async function importFromEnv() {
   if (existing.rows[0]?.n > 0) return { imported: 0, skipped: 'config already exists' };
   const rows = envDiscords();
   for (const d of rows) {
-    await saveDiscord({ id: slug(d.label), label: d.label, enabled: true, sortIdx: d.sortIdx, routes: d.routes });
+    await saveDiscord({
+      id: slug(d.label), label: d.label, enabled: true, sortIdx: d.sortIdx,
+      username: d.username, avatarUrl: d.avatarUrl, routes: d.routes,
+    });
   }
   cache = null;
   return { imported: rows.length };
@@ -400,6 +453,8 @@ async function importFromEnv() {
 module.exports = {
   ASSET_CLASSES,
   normalizePing,
+  normalizeUsername,
+  normalizeAvatar,
   ROUTE_KEYS,
   maskUrl,
   validUrl,

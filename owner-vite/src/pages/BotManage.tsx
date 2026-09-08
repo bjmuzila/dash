@@ -40,6 +40,9 @@ type DiscordRow = {
   label: string;
   enabled: boolean;
   sortIdx: number;
+  /** Per-message identity override. Blank = use the webhook's own name/avatar. */
+  username: string;
+  avatarUrl: string;
   routes: Partial<Record<RouteKey, RouteView>>;
 };
 
@@ -47,6 +50,8 @@ type DiscordRow = {
 type Draft = {
   label: string;
   enabled: boolean;
+  username: string;
+  avatarUrl: string;
   urls: Partial<Record<RouteKey, string>>;
   pings: Partial<Record<RouteKey, string>>;
   clear: Partial<Record<RouteKey, boolean>>;
@@ -126,7 +131,15 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
   }, []);
 
   const draftFor = (d: DiscordRow): Draft =>
-    drafts[d.id] ?? { label: d.label, enabled: d.enabled, urls: {}, pings: {}, clear: {} };
+    drafts[d.id] ?? {
+      label: d.label,
+      enabled: d.enabled,
+      username: d.username ?? "",
+      avatarUrl: d.avatarUrl ?? "",
+      urls: {},
+      pings: {},
+      clear: {},
+    };
 
   const patch = (d: DiscordRow, p: Partial<Draft>) =>
     setDrafts((prev) => ({ ...prev, [d.id]: { ...draftFor(d), ...p } }));
@@ -161,7 +174,21 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
       if (dr.clear[k]) { routes[k] = null; continue; }
       if (url.trim() || ping != null) routes[k] = { url: url.trim(), ping: ping ?? d.routes[k]?.ping ?? "" };
     }
-    post({ action: "save", discord: { id: d.id, label: dr.label, enabled: dr.enabled, sortIdx: d.sortIdx, routes } }, `save:${d.id}`);
+    post(
+      {
+        action: "save",
+        discord: {
+          id: d.id,
+          label: dr.label,
+          enabled: dr.enabled,
+          sortIdx: d.sortIdx,
+          username: dr.username,
+          avatarUrl: dr.avatarUrl,
+          routes,
+        },
+      },
+      `save:${d.id}`,
+    );
   }
 
   function addDiscord() {
@@ -327,6 +354,66 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                   <button type="button" onClick={() => remove(d)} disabled={busy != null} style={btn(OWNER_THEME.red, busy != null)}>
                     Delete
                   </button>
+                </div>
+
+                {/* ── Identity ──────────────────────────────────────────── */}
+                {/* Blank is a real setting: it means "post under the webhook's
+                    own name and picture", which is what Discord does when these
+                    fields are absent. The preview is the honest check — if the
+                    circle stays empty, Discord could not fetch the URL either. */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "12px 14px",
+                    borderBottom: `1px solid ${OWNER_THEME.border}`,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 999,
+                      flex: "none",
+                      overflow: "hidden",
+                      border: `1px solid ${OWNER_THEME.border}`,
+                      background: "rgba(255,255,255,0.04)",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 14,
+                    }}
+                  >
+                    {dr.avatarUrl ? (
+                      <img
+                        src={dr.avatarUrl}
+                        alt=""
+                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
+                      />
+                    ) : (
+                      "🖼︎"
+                    )}
+                  </span>
+                  <input
+                    value={dr.username}
+                    onChange={(e) => patch(d, { username: e.target.value })}
+                    placeholder="Post as… (blank = the webhook's own name)"
+                    style={{ ...homeInputStyle, flex: "1 1 200px", fontSize: 12 }}
+                  />
+                  <input
+                    value={dr.avatarUrl}
+                    onChange={(e) => patch(d, { avatarUrl: e.target.value })}
+                    placeholder="Avatar — public https:// image URL"
+                    spellCheck={false}
+                    style={{ ...homeInputStyle, flex: "2 1 260px", fontSize: 12 }}
+                  />
+                  <span style={{ fontSize: 11, color: OWNER_THEME.text, flex: "1 1 100%" }}>
+                    Discord <em>fetches</em> the avatar, so it has to be publicly reachable — a local path or a
+                    login-protected URL silently falls back to the webhook's picture.
+                  </span>
                 </div>
 
                 {/* ── Routes ────────────────────────────────────────────── */}
