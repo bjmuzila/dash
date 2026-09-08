@@ -42,7 +42,7 @@ const AFFILIATE_BANNER_URL = `${SITE_URL}/affiliate-program-banner.jpg`;
  * FILENAME on purpose — a new one ships each issue, so a generic name would
  * overwrite the art in every previously sent letter still sitting in inboxes.
  */
-const WALL_CHART_URL = `${SITE_URL}/wall-migration-2026-08-28.png`;
+const WALL_CHART_URL = `${SITE_URL}/core-migration-2026-09-04.png`;
 /**
  * Tradeify partner link. Third-party host, so `lib/emails/utm.ts` leaves it
  * alone by design (rule 4: never tag someone else's site) — the `?ref=Bzila`
@@ -172,9 +172,11 @@ export interface WeeklyEdgeOpts {
   resultsNote?: string;
   /** Second paragraph under the results table — the Estimated Move read. */
   estMoveNote?: string;
-  /** Scanner-proof card. Defaults FALSE — opt in once there's a catch to show. */
+  /** Scanner-proof card. */
   showScannerProof?: boolean;
   scannerProof?: Partial<ScannerProof>;
+  /** Caption under the scanner card. "" hides it. */
+  scannerProofNote?: string;
   /** GEX-scanner table. Empty array renders the dashed placeholder instead. */
   gexScannerRows?: GexScannerRow[];
   gexScannerLabel?: string;
@@ -286,26 +288,28 @@ const DEFAULT_CONF_ROWS: ConfRow[] = [
  */
 const DEFAULT_SCANNER_PROOF: ScannerProof = {
   rank: "2",
-  ticker: "MRNA",
-  premium: "0.6M",
-  headline: "68",
-  expiry: "2026-08-21",
-  spot: "63.52",
-  captured: "Aug 14 · 2:00 PM ET",
-  otm: "7.1%",
-  vsOpen: "+11142%",
-  score: "44",
+  ticker: "DELL",
+  premium: "4.9M",
+  headline: "485",
+  expiry: "2026-09-04",
+  spot: "441.78",
+  captured: "Sep 2 · 11:00 AM ET",
+  otm: "9.8%",
+  vsOpen: "+623%",
+  score: "15",
   strength: "Very strong",
-  resultFrom: "$0.75",
-  resultTo: "$95.00",
-  resultPct: "+12,567%",
+  // In -> the 3:44 PM high. `resultTo` is a HIGH, not an exit; the note under
+  // the card says so and also gives where it last marked ($15.65, +832%).
+  resultFrom: "$1.68",
+  resultTo: "$18.80",
+  resultPct: "+1,019%",
 };
 
 function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "issueLabel" | "recapHeadline" | "recapBody" | "indexMoves" | "aheadHeadline" | "calendarEvents" |
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
-  "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" |
+  "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" | "scannerProofNote" |
   "gexScannerRows" | "gexScannerLabel" | "gexScannerNote" |
   "showWallChart" | "wallChartUrl" | "wallChartLabel" | "wallChartHeadline" | "wallChartNote" |
   "showAutoBuy" | "autoBuyRows" | "autoBuyLabel" | "autoBuyNote" | "ctaUrl" | "priceMonthly" | "priceAnnual" |
@@ -350,8 +354,14 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
       "A ✓ means the Core read landed within 5 points of where SPX actually printed. Across Aug 31 – Sep 4 that was 10 of 15 — 4 of 5 at 12:00, 3 of 5 at both 9:45 and 10:30. The shape matters more than the total: <strong style=\"color:#ffffff;\">Tuesday, Wednesday and Thursday went 9 for 9</strong> across all three windows, and every single miss landed on the two days that had something behind them — the month-end open on Monday and the jobs report on Friday. Widen the tolerance to 15 points and the week is 13 of 15.",
     estMoveNote: opts.estMoveNote ||
       "Estimated Move: <strong style=\"color:#ffffff;\">167 wins against 66 losses</strong> on 233 scored names, 71.7%. That is three very different weeks in a row — 41.0%, then 82.4%, now 71.7% — from a model that has not changed. A win is price staying inside the band, so the number is really a read on the range: when the tape covers more ground than implied vol says it should, breaches come earlier and the score falls. Printed here every week either way.",
-    showScannerProof: opts.showScannerProof === true,
+    showScannerProof: opts.showScannerProof !== false,
     scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
+    // Names the flag time, the high AND where it last marked. The high is the
+    // headline number on the dashboard card, so it is the one a reader will
+    // check — but a high is not an exit, and $15.65 is the honest second half
+    // of that sentence. Do not print the 1,019% without the $15.65.
+    scannerProofNote: opts.scannerProofNote ??
+      "Flagged <strong style=\"color:#ffffff;\">Sep 2 at 11:00 AM</strong> with DELL at 441.78 — a 485 call 9.8% out of the money on the Sep 4 expiry, graded A+, 4.9M in premium. $1.68 at the flag; it printed $18.80 at 3:44 PM (+$1,712 per contract) and last marked $15.65, +832%. The high is a high, not an exit. One contract is not a track record, and options can and do go to zero.",
     gexScannerRows: opts.gexScannerRows || DEFAULT_GEX_SCANNER_ROWS,
     // The label says "winners" out loud. That is the denominator disclosure for
     // a filtered list — do not soften it to "flags" or "catches", which would
@@ -363,12 +373,12 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     // leave it "" rather than filling space.
     gexScannerNote: opts.gexScannerNote ?? "",
     showWallChart: opts.showWallChart !== false,
-    // "" renders the dashed placeholder. Set it to the new dated PNG in public/
-    // once this week's chart exists — WALL_CHART_URL points at LAST week's file
-    // and must not be reused, or the letter shows the wrong five sessions.
-    wallChartUrl: opts.wallChartUrl ?? "",
-    wallChartLabel: opts.wallChartLabel || "Wall migration — Aug 31 – Sep 4",
-    wallChartHeadline: opts.wallChartHeadline || "[ADD WALL-CHART HEADLINE]",
+    // Dated file, one per issue. Next week: save the new PNG to public/ under a
+    // new date and repoint WALL_CHART_URL — never reuse a filename, or every
+    // already-delivered letter silently starts showing the newer chart.
+    wallChartUrl: opts.wallChartUrl ?? WALL_CHART_URL,
+    wallChartLabel: opts.wallChartLabel || "Core migration — Aug 31 – Sep 4",
+    wallChartHeadline: opts.wallChartHeadline || "Five sessions, put wall to call wall, with CORE drawn through the middle",
     // Empty by design — the chart carries its own legend and axis labels, so a
     // paragraph under it only repeats what the reader can already see. Pass a
     // string to bring the caption back for an issue that needs one.
@@ -472,6 +482,21 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
       ...(o.autoBuyNote ? [strip(o.autoBuyNote)] : []),
       "",
     ] : []),
+    ...(o.showScannerProof ? (() => {
+      const q = o.scannerProof;
+      return [
+        "WHAT THE FLOW SCANNER CAUGHT",
+        `${q.ticker} — ${q.resultFrom} -> ${q.resultTo} = ${q.resultPct} (high, not an exit)`,
+        `  #${q.rank} ${q.ticker}   ${q.headline}`,
+        `  ${q.premium}`,
+        `  ${q.expiry} · spot ${q.spot}`,
+        `  captured ${q.captured}`,
+        `  OTM ${q.otm} · ${q.vsOpen} vs open · score ${q.score}`,
+        `  * ${q.strength}`,
+        ...(o.scannerProofNote ? [strip(o.scannerProofNote)] : []),
+        "",
+      ];
+    })() : []),
     ...(!o.showScannerProof && o.gexScannerRows.length ? [
       strip(o.gexScannerLabel).toUpperCase(),
       "  (peak = intraday high after the flag, not an exit)",
@@ -481,22 +506,6 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
       ...(o.gexScannerNote ? [strip(o.gexScannerNote)] : []),
       "",
     ] : []),
-    ...(o.showScannerProof ? (() => {
-      const p = o.scannerProof;
-      return [
-        "WHAT THE FLOW SCANNER CAUGHT",
-        `${p.ticker} — ${p.resultFrom} -> ${p.resultTo} = ${p.resultPct}`,
-        `  #${p.rank} ${p.ticker}   ${p.headline}`,
-        `  ${p.premium}`,
-        `  ${p.expiry} · spot ${p.spot}`,
-        `  captured ${p.captured}`,
-        `  OTM ${p.otm} · ${p.vsOpen} vs open · score ${p.score}`,
-        `  * ${p.strength}`,
-        "Off the scanner in real time, not a backtest. One contract is not a track",
-        "record, and options can and do go to zero.",
-        "",
-      ];
-    })() : []),
     `${o.priceMonthly}/month or ${o.priceAnnual}/year — no code needed: ${o.ctaUrl}`,
     "",
     ...(o.showAffiliate ? [
@@ -721,7 +730,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               ${o.showWallChart ? (o.wallChartUrl ? `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">${escapeHtml(o.wallChartLabel)}</div>
               <div style="font:800 15px/1.35 ${SANS};color:#ffffff;margin-bottom:10px;">${o.wallChartHeadline}</div>
-              <img src="${wallChart}" alt="SPX wall migration, five sessions to 2026-08-28 — call wall, put wall and spot" width="584" style="display:block;width:100%;max-width:584px;height:auto;border:1px solid rgba(255,255,255,0.10);border-radius:10px;">
+              <img src="${wallChart}" alt="SPX core migration, five sessions to 2026-09-04 — put wall, call wall, CORE and spot" width="584" style="display:block;width:100%;max-width:584px;height:auto;border:1px solid rgba(255,255,255,0.10);border-radius:10px;">
               ${o.wallChartNote ? `<div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.wallChartNote}</div>` : ""}` : `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">${escapeHtml(o.wallChartLabel)}</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed rgba(255,255,255,0.18);border-radius:10px;">
@@ -794,9 +803,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                   </td>
                 </tr>
               </table>
-              <div style="font:400 12px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;margin-top:10px;">
-                Flagged on the ${sp.expiry} expiry with ${sp.ticker} at ${sp.spot} — off the scanner in real time, not a backtest. One contract is not a track record, and options can and do go to zero.
-              </div>` : o.gexScannerRows.length ? `
+              ${o.scannerProofNote ? `<div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.scannerProofNote}</div>` : ""}` : o.gexScannerRows.length ? `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">${escapeHtml(o.gexScannerLabel)}</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:12px;background:#080B11;border-collapse:separate;">
                 <tr>

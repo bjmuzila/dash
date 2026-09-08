@@ -483,45 +483,6 @@ function buildLogText(
 // ── buttons ──────────────────────────────────────────────────────────────────
 
 /**
- * CORE MIGRATION pop-out. Opens public/core-migration.html — the standalone
- * long-range chart (the selected ticker's CORE across the last 63 recorded
- * sessions, core only by default, walls on a toggle) — in its own tab, primed
- * with WHATEVER THE PAGE IS ON: the selected ticker, the date as the range's
- * end, and both variant switches. The page itself reads the data (one call to
- * /api/walls-range, falling back to /proxy/walls a session at a time), so
- * nothing is copied across and a tab left open can simply be reloaded.
- *
- * A plain static file on purpose: it is the same HTML that lives in
- * generated/ for hand-editing, and a static file needs no route, no lazy()
- * import and no check-routes entry. `noopener` so the tab cannot reach back.
- */
-function CoreMigrationButton({ symbol, endDate, scope, basis }: {
-  symbol: string | null; endDate: string; scope: ExpScope; basis: GexBasis;
-}) {
-  const open = () => {
-    if (!symbol) return;
-    const q = new URLSearchParams({ symbol, end: endDate, scope, basis });
-    window.open(`/core-migration.html?${q.toString()}`, "_blank", "noopener");
-  };
-  return (
-    <button
-      onClick={open}
-      disabled={!symbol}
-      title={symbol ? `Open ${symbol}'s CORE migration — the last 63 recorded sessions — in a new tab` : "Pick a ticker first"}
-      style={{
-        padding: "6px 12px", borderRadius: 8, cursor: symbol ? "pointer" : "default", fontFamily: "inherit",
-        border: `1px solid ${symbol ? CORE_GOLD : C.border}`,
-        background: symbol ? rgba(CORE_GOLD, 0.12) : "rgba(255,255,255,0.03)",
-        color: symbol ? CORE_GOLD : C.label, fontSize: 13, fontWeight: 800,
-        letterSpacing: "0.08em", textTransform: "uppercase", opacity: symbol ? 1 : 0.5,
-      }}
-    >
-      ⤢ CORE migration
-    </button>
-  );
-}
-
-/**
  * Screenshot the LIVE card.
  *
  * The owner version deliberately rendered `buildLogText()` into a throwaway
@@ -992,7 +953,6 @@ export default function LevelLog() {
             </span>
             {/* data-capture-hide: live-page chrome, dropped from the screenshot. */}
             <div data-capture-hide style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-              <CoreMigrationButton symbol={sel} endDate={date} scope={scope} basis={basis} />
               <CopyLogButton disabled={empty} text={logText} />
               <SnapLogButton disabled={empty} targetRef={logCardRef} filename={snapFile} title={snapTitle} />
             </div>

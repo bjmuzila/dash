@@ -2,6 +2,11 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Tuesday 9/8/2026
+
+* **Economic Calendar (v3):** now has its own icon in the left sidebar, so you can open it from any page instead of typing the address — https://cbedge.net/v3/economic-calendar
+
+
 ## Sunday 9/6/2026
 
 * **Level Log (v3):** new ticker cards with mini charts above the log — click one to load it. The chart now fills the page, and its price line works for every ticker, not just SPX.

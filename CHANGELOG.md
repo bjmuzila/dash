@@ -1,5 +1,12 @@
 # Changelog
 
+## Tuesday 9/8/2026 — Economic Calendar added to the universal left rail (`cbedge-v3/src/shell/Shell.tsx`)
+
+`/v3/economic-calendar` had a route, a page, a Next handler and an `ALL_PAGES`/`LIVE_ROUTES` entry — everything except a way to reach it from the rail. Added `{ to: '/economic-calendar', label: 'Econ Cal', icon: '📅' }` to `NAV` directly after Est. Moves (both are pre-open prep; the glyph matches the phone tab in `cbedge-v3/src/mobile/mobileNav.ts`).
+
+Deliberately no `prefetch`: `data/econCalendar.ts` fetches `/api/calendar`, `/api/calendar-quote` and `/proxy/earnings-week` with raw `fetch(…, { cache: 'no-store' })` rather than through `api.ts`, so a warmed cache would never be read back — the hover request would be pure waste. Existing users keep their arranged rail; `loadOrder()` appends any `NAV` entry missing from the saved `cb-v3-rail-order`. A matching entry was also written to `md files/CHANGELOG.md`.
+
+
 ## Sunday 9/6/2026 — Level Log (v3): ticker card rail, full-height log card, and a price line that actually arrives
 
 Built the `/v3/level-log` ticker card rail (`cbedge-v3/src/pages/levelLog/railStore.ts` +

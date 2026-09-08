@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-09-08 - Level Log: CORE migration button removed
+
+`components/pages/LevelLog.tsx`. Dropped the "CORE migration" pop-out button
+that opened `/core-migration.html` in a new tab from the wall migration page's
+header row. Removed both the `CoreMigrationButton` component and its single
+call site; the header now holds only Copy log and Snap. `public/core-migration.html`
+is left in place, just no longer linked from the app.
+
+## 2026-09-08 - Weekly Edge: core-migration chart + DELL scanner catch (issue complete)
+
+`lib/emails/weekly-edge.ts`. Last two placeholders filled.
+
+CORE MIGRATION CHART - `public/core-migration-2026-09-04.png` (1400x529, ~80KB),
+served from `https://cbedge.net/core-migration-2026-09-04.png`.
+- Label "Core migration - Aug 31 - Sep 4"; headline "Five sessions, put wall to
+  call wall, with CORE drawn through the middle".
+- This chart adds the CORE line (yellow) to the put/call walls, so it is NOT the
+  same artifact as last week's `wall-migration-*.png`. New filename accordingly.
+- `WALL_CHART_URL` repointed and `wallChartUrl` now defaults to it. Same rule as
+  before: DATED FILENAME, never reused. Reusing a name retro-changes the picture
+  inside every already-delivered letter.
+- No caption - the chart carries its own legend (Put Wall 7,710 / CORE 7,720 /
+  Call Wall 7,725 / spot 7,717.87).
+
+SCANNER CATCH - DELL, back as the single-card format (not the 3-row table):
+  #2 DELL 485C - 4.9M premium - Sep 4 expiry, spot 441.78
+  captured Sep 2, 11:00 AM ET - OTM 9.8% - +623% vs open - score 15 - A+
+  $1.68 at the flag -> $18.80 high at 3:44 PM = +1,019% (+$1,712/ct)
+- `showScannerProof` default flipped back to `!== false` (it was `=== true` while
+  the section was empty).
+- New `scannerProofNote` opt; the caption was previously hardcoded in the markup
+  with the ticker interpolated, which made it impossible to say anything
+  catch-specific.
+
+THE NUMBER THAT MATTERS IN THAT CAPTION: the card's headline figure is the PEAK
+(1,019%), because that is what the dashboard leads with and what a reader will
+check. But the contract LAST MARKED $15.65, +832% - and the caption says so, in
+the same sentence. Do not print the 1,019% without the $15.65. It is the same
+rule the auto-buy table follows one section above, and the two sections sitting
+next to each other is exactly why they have to agree.
+
+Preview: `generated/2026-09-06-weekly-edge-preview.html` / `.jpg`.
+NO PLACEHOLDERS REMAIN.
+
+NOTE ON TIMING: the calendar's first row reads "MON 9/7 - Labor Day, US markets
+closed". That was written for a Monday send. Sending Tue 9/8 or later, drop that
+row from `DEFAULT_CALENDAR` - a week-ahead that opens on a day already gone
+reads as stale on arrival.
+
 ## 2026-09-07 (c) - v3 board: a resized card keeps the size you gave it, and a card header is always one row (`cbedge-v3/src/design/primitives/Board.tsx`, `design/primitives/Card.tsx`, `design/tokens.css`)
 
 Two unrelated reports, two unrelated causes.
