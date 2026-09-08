@@ -149,7 +149,7 @@ type BroadcastAlert = {
   results: SendResult[];
 };
 
-type SendResult = { id: string; label?: string; ok: boolean; error?: string; messageId?: string | null };
+type SendResult = { id: string; label?: string; ok: boolean; error?: string; warning?: string | null; messageId?: string | null };
 
 function todayIso(): string {
   const d = new Date();
@@ -418,8 +418,13 @@ export default function Bot() {
       ]);
 
       const failed = results.filter((r) => !r.ok);
+      const warned = results.filter((r) => r.ok && r.warning);
       if (failed.length) {
         setSendErr(`Sent to ${json.sent}/${json.of} — failed: ${failed.map((f) => f.label || f.id).join(", ")}`);
+      } else if (warned.length) {
+        // Posted fine, tag did not resolve. Surfacing this is the difference
+        // between "the room was notified" and "you think the room was".
+        setSendErr(`${warned[0].label || warned[0].id}: ${warned[0].warning}`);
       }
 
       setTicker("");

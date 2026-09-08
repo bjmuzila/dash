@@ -1,52 +1,27 @@
 # Changelog
 
-## 2026-09-08 (i) - FEEDBACK: screenshots on support tickets, both sides (`server-v2/api-router.js`, `components/shared/feedbackShots.ts`, `components/shared/FeedbackThread.tsx`, `app/feedback/page.tsx`, `app/owner/feedback/page.tsx`, `owner-vite/src/lib/feedbackShots.ts`, `owner-vite/src/pages/Feedback.tsx`)
+## 2026-09-08 (i) - BOT: catch @unknown-role, the ping failure Discord reports as success (`server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`, `owner-vite/src/pages/Bot.tsx`)
 
-A customer can attach images to a ticket or any reply, and the inbox on
-owner.cbedge.net can attach them back. Paste, drag, or the new 📎 button;
-thumbnails render inside the bubble they were sent with and open full-size on a
-click (Esc closes). A screenshot with NO words is a valid ticket and a valid
-reply - "here's what it looks like" is the report - so the message is only
-required when nothing is attached; the ticket row is titled `(screenshot)` so
-the inbox list still has something to show.
+A role ID that does not exist IN THAT SERVER is not an error to Discord. It
+answers 200, the post lands, and the mention renders as a grey `@unknown-role`
+that notifies nobody. Roles are per-server, so an ID copied from a different
+Discord always ends up here - and from the API side it is indistinguishable from
+a clean send.
 
-**Data URLs in the ordinary JSON body, not multipart.** server-v2 has no
-multipart parser and does not need one: `shots: [{dataUrl,name}]` rides the
-existing `readJson()` (raised to a 26MB cap on the two POSTs that accept them).
-Same trade the recipe photo path makes.
+`mention_roles` on the created message is the only tell: it lists the roles that
+actually RESOLVED. So `postTo()` now diffs the role IDs in the ping against that
+array and returns a `warning` when any are missing, naming the ID and saying
+role IDs are per-server. Free - the response is already being read for the
+message id.
 
-**The browser downscales before it POSTs.** `feedbackShots.ts` resizes to
-1600px on the long edge and re-encodes to JPEG at q0.9 - high, deliberately,
-because this is a picture of TEXT and ringing around small glyphs is exactly
-what makes a bug report unreadable. A small PNG (<400KB, already under 1600px)
-ships untouched; an animated GIF passes through whole, since a canvas would
-flatten it to one frame. A 4K screenshot lands at a couple of hundred KB
-instead of 8MB, which is the difference between a reply that sends on a phone
-and one that times out.
+Surfaced in both places it matters: the 🔔 test shows it in amber instead of
+"✓ posted", and a broadcast that posted-but-did-not-tag says so rather than
+looking clean. That is the difference between "the room was notified" and "you
+think the room was".
 
-**Bytes live in their own table.** `customer_feedback_shots`, created lazily by
-the same `ensureFeedback(pool)` pattern as the messages table - so no migration
-step, and `SELECT ... FROM customer_feedback` on every list load can never drag
-image bytes with it. `message_id NULL` means the attachment belongs to the
-ticket's opening message (which is a `customer_feedback` row, not a message
-row). Ticket rows now carry `shot_count`, which is the 📎 badge on a list row.
-
-**Serving them: `GET /api/feedback/shot/:sid`.** Visibility is checked by
-joining back to the ticket - the owner sees any attachment, a customer only the
-ones on their own tickets - never by trusting the id in the URL. ETag + 304, and
-`immutable` caching only when the client passes `?v=<etag>`, which it always
-does; attachments are insert-only so an id can never point at different bytes.
-
-**An image that fails to store never loses the words.** `saveShots()` runs after
-the message row is already written and its failure is swallowed: a reply that
-sent is a reply that sent. Decode errors before that point are the ones that
-reject, with a sentence meant to be read by the person typing.
-
-Caps: 6 images per message, 5MB each decoded (server), enforced again in the
-composer so the message says so before an upload starts. owner-vite carries its
-own copy of `feedbackShots.ts` and its own inlined thread, for the same reason
-Budget and Reta exist twice - no `@/components` alias, separate build. Both
-copies are marked MIRROR.
+**Also:** Save now refuses when any ping row is invalid, naming every bad row at
+once. Previously the client flagged them in red but still POSTed, so the server
+rejected on the first bad row and the rest needed another round trip to find.
 
 ## 2026-09-08 (h) - BOT: each Discord posts under its own name and picture (`server-v2/bot-targets-store.js`, `server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`)
 

@@ -165,6 +165,15 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
 
   function save(d: DiscordRow) {
     const dr = draftFor(d);
+    // The server rejects a bad ping too, but catching it here names every bad
+    // row at once instead of one per round trip.
+    const bad = ROUTE_ROWS
+      .map((r) => ({ r, p: pingProblem(dr.pings[r.key] ?? d.routes[r.key]?.ping ?? "") }))
+      .filter((x) => x.p);
+    if (bad.length) {
+      setErr(`Fix the ping on ${bad.map((x) => x.r.label).join(", ")} first — ${bad[0].p}`);
+      return;
+    }
     // url: "" means KEEP (the client never had the secret); null means DELETE.
     const routes: Record<string, { url?: string | null; ping?: string } | null> = {};
     for (const row of ROUTE_ROWS) {
@@ -214,7 +223,14 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
         body: JSON.stringify({ id: d.id, assetClass: cls === "default" ? "notes" : cls, withPing }),
       });
       const j = await r.json();
-      setTestMsg((p) => ({ ...p, [tag]: j?.ok ? "✓ posted" : `✕ ${j?.result?.error || j?.error || "failed"}` }));
+      // A 200 with a warning is the @unknown-role case: the post landed, the
+      // tag did not. Reporting that as a plain "✓ posted" is what made this
+      // take a deploy to notice in the first place.
+      const warn = j?.warning || j?.result?.warning;
+      setTestMsg((p) => ({
+        ...p,
+        [tag]: j?.ok ? (warn ? `⚠ ${warn}` : "✓ posted") : `✕ ${j?.result?.error || j?.error || "failed"}`,
+      }));
     } catch (e) {
       setTestMsg((p) => ({ ...p, [tag]: `✕ ${String((e as Error)?.message || e)}` }));
     } finally {
@@ -507,7 +523,11 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                           <span
                             style={{
                               fontSize: 11,
-                              color: testMsg[tag].startsWith("✓") ? GREEN : OWNER_THEME.red,
+                              color: testMsg[tag].startsWith("✓")
+                                ? GREEN
+                                : testMsg[tag].startsWith("⚠")
+                                  ? OWNER_THEME.gold
+                                  : OWNER_THEME.red,
                               flex: "1 1 100%",
                             }}
                           >
