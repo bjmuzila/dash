@@ -3,11 +3,31 @@ const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&
 const money = n => (n<0?"-":"") + "$" + Math.abs(n).toLocaleString();
 const pct = n => (n>0?"+":"") + (n*100).toFixed(0) + "%";
 
+/* Card — PageCard.tsx: title 14/800/.12em uppercase, subtitle 12px green, mb 16, pad 24 */
 function card(title, body, opts={}){
-  const s = opts.sub ? `<span class="s">${esc(opts.sub)}</span>` : "";
-  const r = opts.right || "";
-  const head = title ? `<div class="ch"><span class="t">${esc(title)}</span>${s}<span class="sp"></span>${r}</div>` : "";
-  return `<div class="card">${head}${body}</div>`;
+  opts = opts || {};
+  let head = "";
+  if(title != null || opts.sub != null || opts.right){
+    const t = title != null ? `<div class="ct">${esc(title)}</div>` : "";
+    const s = opts.sub != null ? `<div class="cs">${esc(opts.sub)}</div>` : "";
+    head = opts.right
+      ? `<div class="chead"><div class="crow"><div>${t}${s}</div><span class="sp"></span>${opts.right}</div></div>`
+      : `<div class="chead">${t}${s}</div>`;
+  }
+  return `<div class="card${opts.tight?" tight":""}"${opts.style?` style="${opts.style}"`:""}>${head}${body}</div>`;
+}
+
+/* page header row — pages own their own header above the cards */
+function phead(h1, sub, right){
+  return `<div class="phead"><div><h1>${esc(h1)}</h1>${sub?`<div class="psub">${esc(sub)}</div>`:""}</div>
+    <span class="sp"></span>${right||""}</div>`;
+}
+
+/* tab strip that actually switches — page key + list of labels */
+function tabs(page, list, active){
+  return `<div class="seg">${list.map(t=>
+    `<button class="${t===active?"on":""}" data-tab="${esc(t)}" data-tabpage="${esc(page)}">${esc(t)}</button>`
+  ).join("")}</div>`;
 }
 
 function tiles(list, cols){
@@ -77,7 +97,7 @@ function table(cols, rows, opts={}){
     const c = cols[i]||{};
     return `<td class="${c.n?"num":""} ${c.cls||""}">${cell}</td>`;
   }).join("")}</tr>`).join("");
-  return `<div class="tw"><table>${opts.nohead?"":`<thead><tr>${th}</tr></thead>`}<tbody>${tb}</tbody></table></div>`;
+  return `<div class="tw${opts.plain?" plain":""}"><table>${opts.nohead?"":`<thead><tr>${th}</tr></thead>`}<tbody>${tb}</tbody></table></div>`;
 }
 
 function pill(t, k){ return `<span class="pill p-${k||"mt"}">${esc(t)}</span>`; }

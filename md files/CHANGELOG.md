@@ -1,50 +1,52 @@
 # Changelog
 
-## 2026-09-08 - Multi Greek: SPX 0DTE Vol-only GEX pinned to zero (live chain path)
+## 2026-09-08 - ETF candles tick live (2s) instead of stepping once a minute
 
-`server-v2/proxy-tastytrade.js` - `TastytradeProxy.serveChainFromLive()`.
+`server-v2/etf-live-candles.js` (new), `server-v2/api-router.js`,
+`hooks/useEtfCandles.ts`.
 
-SYMPTOM. Multi Greek's SPX 0DTE column rendered "---" for every strike in
-Vol-only contract mode (and contributed nothing in OI+Vol, where volume normally
-dominates on 0DTE). OI-only mode was correct. The non-0DTE columns were fine.
-Worst right after the Labor Day holiday.
+QQQ/SPY candles on ES-Candles were minute-granular at BOTH ends -
+`etf-candle-recorder.js` writes a 1m bar once a minute, and `useEtfCandles`
+polled that table once a minute - so a bar on screen could be ~2 minutes behind
+the tape. ES never had this problem because /ws/gex streams its candles; the
+ETFs have no such feed.
 
-CAUSE. `/api/chains` for SPX is served from the live subscriber, not REST,
-whenever the request is for the active gated expiry - i.e. exactly the 0DTE
-column. That builder read volume as:
+WHAT CHANGED.
 
-    const volume = liveVol != null ? liveVol : (rest?.volume || 0);
+  - NEW `server-v2/etf-live-candles.js` - one persistent dxLink connection
+    subscribed to `SYMBOL{=1m}` for the symbols a browser is actually looking
+    at, holding the last 16 bars per symbol in memory. dxFeed streams the
+    forming bar as it changes, so the map is current to the tick.
+  - Interest, not a roster. A symbol goes live because a request asked for it
+    and lapses ~20s after the last ask; with nobody watching, the connection
+    closes (120s idle). Nothing is always-on and there is no symbol list in the
+    file - it follows the typed-ticker picker for free.
+  - NEW route `/api/snapshots/etf-candles/live?symbol=QQQ&interval=5&bars=2` -
+    a pure memory read returning the last bucket or two in the SAME row shape
+    the recorded route returns, so the client merges by slotKey and nothing
+    downstream knows there are two sources. ~200 bytes per response.
+  - `useEtfCandles` now runs TWO cadences: history every 60s (unchanged, still
+    the system of record), live overlay every 2s. The merge is value-guarded -
+    a tick that didn't move the bar returns the same array and repaints
+    nothing - and the overlay stops while the tab is hidden.
 
-`_scheduleSessionRoll()` clears `this.volumes` at the ~6PM ET roll and then
-writes an EXPLICIT `0` for every active contract. `0 != null`, so that injected
-zero was treated as authoritative and the REST fallback was never consulted. It
-only cleared once a dxLink `Trade(dayVolume)` event landed on that exact leg -
-and the REST volume poller that used to repair it (`_refreshVolume`) went with
-ThetaData on 2026-08-18. The REST prewarm in `_prewarmStrikeGrowthLegs` is gated
-on `!this.volumes.has(sym)`, which is now true, so that path couldn't repair it
-either. After a holiday the roll fired into a session with no tape, so nearly
-every 0DTE strike was still sitting on the injected 0.
+WHAT IT DOES NOT DO.
 
-`_recompute()` (the GEX chart path) already had this fixed - same bug, same
-comment - which is why the chart was right while the chain payload was wrong.
+  - No writes to Postgres, no change to the recorder. The 60s recorded poll is
+    still authoritative and overwrites the overlay when it lands.
+  - No websocket changes. /ws/gex, its topic scoping and every consumer of it
+    are untouched - this rides HTTP.
+  - `proxy-tastytrade.js` is UNCHANGED. The new file imports `DxLinkClient` and
+    `getQuoteToken` and modifies neither. It does add one dxLink connection
+    while a chart is open, alongside the main feed's.
+  - Off-hours (outside 04:00-20:00 ET weekdays) the hub never connects and the
+    route answers empty - the chart just behaves exactly as it did before.
 
-FIX. Match `_recompute()`: take the max of the live Trade-stream dayVolume and
-the current-session TT REST volume that rides along on the OI backfill in
-`this.restOI`. Both are cumulative-for-session, so max() can never regress and a
-stale/rollover 0 can no longer shadow a good REST value.
-
-    const restVol = isPreOpenEt() ? 0 : (Number(rest?.volume) || 0);
-    const volume  = Math.max(Number(liveVol) || 0, restVol);
-
-Pre-open gate added on the REST leg only: TT REST `volume` carries the PRIOR
-session's cumulative total until their backend resets at the 9:30 ET cash open,
-so before then it is excluded rather than shown as today's tape - same rule
-`fetchChainFull()` and `_statsFromTT()` already apply. Live dxLink dayVolume is
-already session-correct and is still honoured pre-open.
-
-SCOPE. One expression. No client change - `MultGreekClient.tsx`,
-`lib/calculations/optionChain.ts` and the Options Chain page all already read
-`volume` off the same payload. OI is untouched.
+KNOBS: `ETF_LIVE_INTEREST_MS` (20s), `ETF_LIVE_IDLE_MS` (120s),
+`ETF_LIVE_WARMUP_MS` (20m of replay on subscribe, so the first 5m aggregate is
+a complete bucket), `ETF_LIVE_MAX_SUBS` (24, past which the connection is
+rebuilt to shed dead subscriptions - DxLinkClient has no candle unsubscribe),
+`ETF_LIVE_IGNORE_HOURS=1` to test outside the window.
 
 ## 2026-09-08 - demo-owner: email-gated partner demo of the owner console
 

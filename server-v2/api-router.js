@@ -5835,6 +5835,50 @@ if (libDb) {
     },
   });
 
+  // /api/snapshots/etf-candles/live — the FORMING bar, live off dxLink.
+  //
+  // The sibling route above answers out of the etf_candles table, which
+  // etf-candle-recorder.js writes once a minute; useEtfCandles polls it once a
+  // minute. Minute-granular at both ends, so a candle on screen could be ~2
+  // minutes behind the tape. This route is the overlay that fixes that: a
+  // persistent dxLink candle subscription (server-v2/etf-live-candles.js) keeps
+  // the newest bars in memory, and this returns the last bucket or two of them
+  // in the SAME row shape, which the client merges over its history by slotKey.
+  //
+  // Built to be polled every couple of seconds, so:
+  //
+  //   • It is a memory read. No database, no dxLink round trip, no cache to go
+  //     stale — the hub's connection is what is doing the waiting.
+  //   • The response is deliberately TINY (?bars=2 → two rows). Never widen the
+  //     default; history is the other route's job and it ships the full window.
+  //   • ASKING IS SUBSCRIBING. getLiveCandleRows registers interest as a side
+  //     effect and the hub drops a symbol ~20s after the last request, so a
+  //     chart that stops polling stops costing a subscription.
+  //
+  // An empty `rows` is a normal answer — first call after a subscribe, outside
+  // 04:00-20:00 ET, or a feed that is down. The client keeps whatever the
+  // recorded path gave it; nothing here is allowed to blank a chart.
+  register('/api/snapshots/etf-candles/live', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const raw = String(sp.get('symbols') ?? sp.get('symbol') ?? '');
+        const symbols = raw.split(',').map((s) => s.trim()).filter(Boolean);
+        if (!symbols.length) { send(res, 200, { rows: {} }); return; }
+        const interval = Number(sp.get('interval') ?? 1) === 5 ? 5 : 1;
+        const bars = Math.max(1, Math.min(6, Number(sp.get('bars') ?? 2)));
+        const { getLiveCandleRows } = require('./etf-live-candles');
+        const rows = getLiveCandleRows(symbols, interval, bars);
+        // no-store: a 2s poll behind a cache is a 2s poll of the same answer.
+        send(res, 200, { interval, rows }, { 'Cache-Control': 'no-store' });
+      } catch (err) {
+        // Never 500 a chart overlay. The recorded series is still on screen.
+        send(res, 200, { rows: {}, error: String(err) });
+      }
+    },
+  });
+
   // /api/snapshots/playbook
   register('/api/snapshots/playbook', {
     auth: 'subscriber', methods: ['GET', 'POST'],

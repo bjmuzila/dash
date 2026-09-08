@@ -1,7 +1,6 @@
 /* ── page renderers ──────────────────────────────────────── */
 const P = {};
-const head = (h1, sub, right) =>
-  `<div class="phead"><div><h1>${esc(h1)}</h1><p class="sub">${esc(sub||"")}</p></div><span class="sp"></span>${right||""}</div>`;
+const head = (h1, sub, right) => phead(h1, sub, right);
 
 /* ══════════════ INFO ══════════════ */
 

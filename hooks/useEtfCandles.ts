@@ -13,8 +13,20 @@
  * onto a socket hook would mean two lifecycles fighting inside one effect, so
  * the transports stay separate and only the OUTPUT shape is shared.
  *
- * Refresh cadence is a plain interval because the underlying rows are written
- * once a minute — polling faster only re-fetches the same bars.
+ * ── TWO CADENCES ────────────────────────────────────────────────────────────
+ * HISTORY, once a minute: the whole window out of `etf_candles`, which the
+ * recorder writes once a minute. This is the system of record and the only
+ * thing that can fill a gap, correct a late print, or reach back days.
+ *
+ * LIVE, every two seconds: just the newest bucket or two, off
+ * /api/snapshots/etf-candles/live — a memory read against a persistent dxLink
+ * candle subscription (server-v2/etf-live-candles.js). This is what makes the
+ * forming candle actually move; without it the chart stepped once a minute and
+ * a bar could be ~2 minutes stale (recorder minute + poll minute).
+ *
+ * The live rows are the SAME row shape and merge by slotKey, so nothing
+ * downstream knows there are two sources. The minute poll is authoritative:
+ * when it lands it overwrites whatever the live overlay had put there.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -33,6 +45,52 @@ import { useRefreshSource } from "@/lib/refreshBus";
  */
 const REFRESH_MS = 60_000;
 
+/**
+ * 2s for the live overlay.
+ *
+ * This one is safe to run fast for the reason the history poll is not: the
+ * response is two rows (~200 bytes), the server answers it out of memory, and
+ * the merge below is value-guarded — a tick that didn't move the bar returns
+ * the SAME array and re-renders nothing. The chart only repaints when the price
+ * actually changed, which is the whole point.
+ *
+ * It also stops while the tab is hidden. A background tab has nothing to
+ * animate, and the interest the request registers server-side would keep a
+ * dxLink subscription alive for a chart nobody is looking at.
+ */
+const LIVE_MS = 2_000;
+
+/** Buckets requested per live poll. Two: the forming one, and the one it just left. */
+const LIVE_BARS = 2;
+
+/**
+ * Overlay `live` onto `prev`, by slotKey, WITHOUT changing identity when nothing
+ * moved.
+ *
+ * Identity is load-bearing here — on /es-candles the rows array drives the big
+ * overlay effect, so a new array every 2s would mean a full chart redraw every
+ * 2s whether or not a single price changed. Returning `prev` unchanged is what
+ * keeps an idle symbol (or a closed market) free.
+ */
+function mergeLive(prev: EsCandleRecord[], live: EsCandleRecord[]): EsCandleRecord[] {
+  if (!live.length) return prev;
+  const byKey = new Map(prev.map((r) => [r.slotKey, r] as const));
+  let changed = false;
+  for (const b of live) {
+    const old = byKey.get(b.slotKey);
+    if (!old) { byKey.set(b.slotKey, b); changed = true; continue; }
+    if (old.open !== b.open || old.high !== b.high || old.low !== b.low
+      || old.close !== b.close || old.volume !== b.volume) {
+      // Spread `old` first so any field the recorded row carries and the live
+      // row doesn't (id, avgVolume) survives the overlay.
+      byKey.set(b.slotKey, { ...old, ...b });
+      changed = true;
+    }
+  }
+  if (!changed) return prev;
+  return [...byKey.values()].sort((a, b) => a.timestamp - b.timestamp);
+}
+
 export interface UseEtfCandlesResult {
   /** Bars oldest-first, same field names as the ES candle records. */
   rows: EsCandleRecord[];
@@ -40,6 +98,8 @@ export interface UseEtfCandlesResult {
   loaded: boolean;
   /** Mirrors useEsCandles' `connected` so the page's status badge is generic. */
   connected: boolean;
+  /** True while the 2s dxLink overlay is actually returning bars. */
+  live: boolean;
   refresh: () => Promise<void>;
 }
 
@@ -58,6 +118,7 @@ export function useEtfCandles(
   const [rows, setRows] = useState<EsCandleRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [ok, setOk] = useState(false);
+  const [live, setLive] = useState(false);
   const unmountedRef = useRef(false);
   // Monotonic token: a slow SPY request must not land after the user has
   // already switched to QQQ and overwrite its bars with the wrong instrument.
@@ -105,6 +166,37 @@ export function useEtfCandles(
     }
   }, [sym, days, interval]);
 
+  /**
+   * The live overlay. Deliberately NOT part of `load`:
+   *
+   *   • It must not touch `loaded`/`connected`. Those describe the recorded
+   *     series, and a live miss (off-hours, first call after a subscribe) is
+   *     normal — flipping the card's status badge on it would be a lie.
+   *   • It shares `seqRef` so a response for the symbol the user just switched
+   *     away from is dropped exactly like a slow history response is.
+   *   • It never clears. An empty answer leaves the recorded bars alone; the
+   *     overlay can only ever add or sharpen, never blank the chart.
+   */
+  const loadLive = useCallback(async () => {
+    if (!sym) return;
+    const seq = seqRef.current;
+    try {
+      const res = await fetch(
+        `/api/snapshots/etf-candles/live?symbol=${encodeURIComponent(sym)}&interval=${interval}&bars=${LIVE_BARS}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+      const json = await res.json();
+      if (unmountedRef.current || seq !== seqRef.current) return;
+      const next = (json?.rows?.[sym] ?? []) as EsCandleRecord[];
+      if (!Array.isArray(next) || !next.length) { setLive(false); return; }
+      setRows((prev) => mergeLive(prev, next));
+      setLive(true);
+    } catch {
+      /* a dropped overlay poll is not an error — the next one is 2s away */
+    }
+  }, [sym, interval]);
+
   // Switching symbol must CLEAR first. Otherwise the chart shows QQQ's title
   // over SPY's bars for one refresh cycle, and (worse) the price scale keeps
   // the old instrument's range while the new bars stream in.
@@ -112,6 +204,7 @@ export function useEtfCandles(
     setRows([]);
     setLoaded(false);
     setOk(false);
+    setLive(false);
   }, [sym, interval]);
 
   useEffect(() => {
@@ -125,6 +218,28 @@ export function useEtfCandles(
     };
   }, [sym, load]);
 
+  // Live overlay loop. Runs only while the tab is visible — see LIVE_MS.
+  useEffect(() => {
+    if (!sym) return;
+    let id: ReturnType<typeof setInterval> | null = null;
+    const stop = () => { if (id) { clearInterval(id); id = null; } };
+    const start = () => {
+      if (id) return;
+      void loadLive();
+      id = setInterval(() => { void loadLive(); }, LIVE_MS);
+    };
+    const onVis = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") stop();
+      else start();
+    };
+    onVis();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [sym, loadLive]);
+
   // The toolbar's refresh button re-pulls this while the hook is mounted.
   // `load` already carries a monotonic seq token, so a manual press racing the
   // 60s poll cannot land the loser's bars.
@@ -135,5 +250,5 @@ export function useEtfCandles(
     [rows],
   );
 
-  return { rows: sorted, loaded, connected: ok, refresh: load };
+  return { rows: sorted, loaded, connected: ok, live, refresh: load };
 }

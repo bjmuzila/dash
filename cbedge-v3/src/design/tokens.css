@@ -550,6 +550,29 @@ input[type='date']::-webkit-datetime-edit-year-field:focus {
   animation: cb-glow 2.4s ease-in-out infinite;
 }
 
+/* The CB Edge wordmark in the toolbar, LIT. It doubles as the Bzila alerts
+   button (shell/BzilaAlerts.tsx), and when an alert has landed that this
+   browser has not acknowledged the logo breathes instead of sitting under a
+   static badge: the toolbar is a row of quiet chrome, and a slow ring is what
+   peripheral vision picks up while you are reading a chart. It rides on top of
+   the dot the component draws, not instead of it — the reduced-motion rule
+   below kills the animation, and the dot is what still says "new" then.
+
+   Same shape and same reason as .mg-cb-glow above, including why it lives in
+   this file: @keyframes cannot be scoped to a component without a CSS module. */
+@keyframes bzila-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-warn) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--color-warn) 0%, transparent);
+  }
+}
+.bzila-lit {
+  animation: bzila-pulse 1.8s ease-out infinite;
+}
+
 /* 100dvh where supported; see the note in index.html. */
 .cb-viewport {
   height: 100vh;

@@ -10,7 +10,8 @@ import { ExpandStageHost } from '@/design/primitives/Expand'
 import { ReplayDockHost } from '@/design/primitives/ReplayDock'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { useIsPhone } from '@/design/useIsPhone'
-import { CbMark, CbWordmark } from '@/shell/Brand'
+import { CbMark } from '@/shell/Brand'
+import { BzilaLogo } from '@/shell/BzilaAlerts'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
 import { NotesPanelProvider, useNotesPanel } from '@/shell/NotesPanelContext'
 import { OfferPill } from '@/shell/OfferPill'
@@ -407,8 +408,15 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
       {/* The wordmark, not the words. "CB Edge" set in the UI font was a
           stand-in; the horizontal lockup is the brand in a wide slot, and the
-          toolbar is the wide slot it was drawn for. See shell/Brand.tsx. */}
-      <CbWordmark className="h-6 w-auto shrink-0" />
+          toolbar is the wide slot it was drawn for. See shell/Brand.tsx.
+
+          It is also the BZILA ALERTS button: for a paying account (and the
+          owner) the logo lights up when Brandon broadcasts, and clicking it
+          opens the alert list — with 👍/👎 that are recorded permanently, and,
+          for the owner only, the compose box that sends one. A free or
+          signed-out account gets the same wordmark, drawn flat and inert.
+          See shell/BzilaAlerts.tsx. */}
+      <BzilaLogo />
       <div className="flex-1" />
       {/* ── THE PAGE'S OWN CONTROLS ────────────────────────────────────────────
           Empty on every route that puts nothing in it. The home board fills it

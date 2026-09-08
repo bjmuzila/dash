@@ -15,19 +15,24 @@
 </div>
 
 <div id="shell">
-  <nav id="rail"></nav>
-  <div id="main">
-    <div id="toolbar">
-      <button class="tbtn mtoggle" id="menu">☰</button>
-      <span class="crumb" id="crumb">Info</span>
-      <span class="ttl" id="ttl">Hub</span>
-      <span class="sp"></span>
-      <span class="tbtn"><span class="livedot"></span>feed</span>
-      <span id="clock">—</span>
-      <button class="tbtn">↻</button>
-    </div>
+
+  <header id="toolbar">
+    <button class="tpill tmenu" id="tmenu">☰</button>
+    <span class="tbrand" data-go="Hub">
+      <span class="logo"><i>CB</i>EDGE</span>
+      <span class="own">Owner</span>
+    </span>
+    <span class="sp"></span>
+    <span id="tclock" title="Eastern Time">--:--:-- ET</span>
+    <span class="tpill">Dashboard ↗</span>
+    <span class="tpill danger">Sign out</span>
+  </header>
+
+  <div id="body">
+    <nav id="rail"></nav>
     <div id="view"></div>
   </div>
+
 </div>
 
 <script>
