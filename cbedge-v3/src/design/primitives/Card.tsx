@@ -39,7 +39,7 @@ const ToolbarSlotContext = createContext<ToolbarSlot | null>(null)
 
 export function CardToolbar({ children }: { children: ReactNode }) {
   const slot = useContext(ToolbarSlotContext)
-  if (!slot) return <div className="flex shrink-0 flex-wrap items-center gap-1.5">{children}</div>
+  if (!slot) return <div className="cb-bar flex shrink-0 items-center gap-1.5">{children}</div>
   return slot.host ? createPortal(children, slot.host) : null
 }
 
@@ -165,12 +165,32 @@ export function Card({
         .filter(Boolean)
         .join(' ')}
     >
+      {/* ── THE HEADER IS EXACTLY ONE ROW, ALWAYS ────────────────────────────
+          It used to be `flex-wrap`, which meant a card narrower than its own
+          controls grew a SECOND header row. The chart below lost 30px, the
+          card's proportions changed with its width, and two cards of the same
+          size could hold different amounts of chart depending on how many
+          buttons their body happened to register. A control bar that changes the
+          geometry of the thing it sits on is worse than one you have to scroll.
+
+          So: `nowrap`, plus a fixed `h-8` so the row is the same height whatever
+          is in it, and the toolbar scrolls sideways when it does not fit
+          (`cb-bar` in tokens.css — overflow-x with the scrollbar hidden, because
+          a visible bar would eat a quarter of a 32px header). Nothing becomes
+          unreachable; the row just stays a row.
+
+          `min-w-0 shrink truncate` on the title lets the NAME give way first: it
+          is repeated in the copy-shot menu and in the card body, and the
+          controls are repeated nowhere. ── */}
       {header && (
-        <header className="flex shrink-0 items-center gap-3 border-b border-line px-3 py-1.5">
-          <h2 className="shrink-0 text-sm font-medium text-muted">{title}</h2>
+        <header className="flex h-8 shrink-0 items-center gap-3 border-b border-line px-3">
+          <h2 className="min-w-0 shrink truncate text-sm font-medium text-muted">{title}</h2>
           {/* The body's toolbar. Empty when the card has no controls, in which
               case it is just the spacer that keeps `actions` on the right. */}
-          <div ref={setHost} className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5" />
+          <div
+            ref={setHost}
+            className="cb-bar flex min-w-0 flex-1 items-center justify-end gap-1.5"
+          />
           {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
           {canExpand && (
             <button

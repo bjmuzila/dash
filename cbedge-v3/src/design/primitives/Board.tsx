@@ -309,11 +309,23 @@ export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols 
 // exactly what this does. The board gives room and takes it back symmetrically,
 // with no memory of who was originally how wide.
 //
-// `pinnedId` is the card that was just dropped. It may GROW — filling the space
-// it was placed into is the point — but it is the one card that may not be
-// MOVED, so the left-edge pull skips it. Everything else about the release is
-// built on the card staying exactly where the hand let go, and a tidy-up that
-// slid it two columns sideways afterwards would undo that at the last moment.
+// ── THE PINNED CARD IS FROZEN ────────────────────────────────────────────────
+//
+// `pinnedId` is the card the gesture just finished with, and the tidy-up does
+// not touch it AT ALL — not its position, not its size.
+//
+// Position was always exempt. SIZE was not, and that was a bug you could not
+// work around: "the gauge card I want to make smaller but not able to". Drag its
+// bottom edge up, and the shrink opens a gap between it and the card below —
+// which is a gap adjacent to the card, which is precisely what this function
+// closes, so it grew straight back to the size it started at. The board silently
+// undid the only thing the gesture was for. Same in the other axis: narrow a
+// card and it widens itself back into the space it just freed.
+//
+// A resize is the user stating a size. Nothing here gets to overrule it. So the
+// pinned card neither grows nor moves, and its NEIGHBOURS absorb whatever space
+// it gave up — which is still "limit the empty space", just paid for by the
+// cards that were not being adjusted.
 function fillGaps(items: BoardItem[], cols: number, maxGap: number, pinnedId?: string | null): BoardItem[] {
   // ── RUN IT TO A FIXED POINT ────────────────────────────────────────────────
   // Widening a card changes which cards are in its COLUMN band, and heightening
@@ -370,7 +382,7 @@ function fillGapsOnce(items: BoardItem[], cols: number, maxGap: number, pinnedId
     if (!rights.length) {
       // Right edge of the board.
       const gap = cols - (it.x + it.w)
-      if (gap > 0 && gap <= maxGap) it.w += gap
+      if (gap > 0 && gap <= maxGap && it.id !== pinnedId) it.w += gap
       continue
     }
     const n = rights.reduce((a, b) => (b.x < a.x ? b : a))
@@ -379,8 +391,13 @@ function fillGapsOnce(items: BoardItem[], cols: number, maxGap: number, pinnedId
     const nWall = rowBand(n)
       .filter((o) => o.x + o.w <= n.x)
       .reduce((m, o) => Math.max(m, o.x + o.w), 0)
-    const share = n.id === pinnedId ? 0 : Math.min(Math.floor(gap / 2), n.x - nWall)
-    it.w += gap - share
+    const room = n.x - nWall
+    // Normally the two flanking cards split the gap. When one of them is the
+    // card the user just finished, it takes NO share and the other closes the
+    // whole thing — see the frozen-pin note above.
+    const share =
+      n.id === pinnedId ? 0 : it.id === pinnedId ? Math.min(gap, room) : Math.min(Math.floor(gap / 2), room)
+    if (it.id !== pinnedId) it.w += gap - share
     n.x -= share
     n.w += share
   }
@@ -388,6 +405,7 @@ function fillGapsOnce(items: BoardItem[], cols: number, maxGap: number, pinnedId
   for (const it of out) {
     // Down: only toward a card that is actually there. The board has no bottom,
     // so "the space below" is otherwise infinite and filling it is meaningless.
+    if (it.id === pinnedId) continue
     const below = colBand(it).filter((o) => o.y >= it.y + it.h)
     if (!below.length) continue
     const gap = below.reduce((m, o) => Math.min(m, o.y), Number.POSITIVE_INFINITY) - (it.y + it.h)

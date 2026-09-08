@@ -565,3 +565,29 @@ input[type='date']::-webkit-datetime-edit-year-field:focus {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── A CONTROL BAR THAT STAYS ONE ROW ────────────────────────────────────────
+   Card headers (design/primitives/Card.tsx) and any other strip of controls
+   that must not reflow. The row never wraps; if the controls are wider than the
+   card, it scrolls sideways instead of growing a second line.
+
+   The scrollbar is hidden rather than styled. The global rule above gives every
+   scrollable a thin one, which is right for a panel and wrong here: the header
+   is 32px tall, so even a thin bar takes a visible slice out of a row whose
+   whole job is to be a fixed, predictable height. Scrolling still works by
+   wheel, trackpad and drag — only the indicator is gone.
+
+   `overscroll-behavior-x: contain` keeps a sideways flick inside the bar rather
+   than letting it turn into a browser back-navigation. */
+.cb-bar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.cb-bar::-webkit-scrollbar {
+  height: 0;
+  width: 0;
+  display: none;
+}

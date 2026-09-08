@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-09-07 (c) - v3 board: a resized card keeps the size you gave it, and a card header is always one row (`cbedge-v3/src/design/primitives/Board.tsx`, `design/primitives/Card.tsx`, `design/tokens.css`)
+
+Two unrelated reports, two unrelated causes.
+
+### 1. "The gauge card I want to make smaller but not able to"
+
+Not a minimum-size clamp — `BOARD_MIN_H` is 6 rows (88px) and the card was ~200.
+**The tidy-up was undoing the gesture.**
+
+Drag the Gauge Rail's bottom edge up. The shrink opens a gap between it and the
+card below. A gap adjacent to a card is exactly what `fillGaps` closes — so it
+grew the card straight back to the height it started at. Same in the other axis:
+narrow a card and it widens itself back into the space it just freed. The board
+silently reverted the only thing the gesture was for, every time, which reads as
+"the card will not resize."
+
+The pinned card was already exempt from being MOVED by the tidy-up. It was not
+exempt from being RESIZED, and that was the whole bug. **A resize is the user
+stating a size — nothing here gets to overrule it.** So the pinned card is now
+frozen in both axes: not moved, not grown. Its NEIGHBOURS absorb whatever space
+it gave up, which is still "limit the empty space", just paid for by the cards
+that were not being adjusted.
+
+Three places had to learn it: the board's right-edge fill, the interior-gap
+split (when the pinned card is on the *left* of a gap it now takes no share and
+its neighbour closes the whole thing by sliding left), and the vertical fill.
+
+### 2. "I don't want the toolbar of the GEX candles to create 2 rows"
+
+`Card`'s header slot was `flex-wrap`. A card narrower than its own controls grew
+a second header row — which is worse than it looks: the chart below lost ~30px,
+the card's proportions changed with its width, and two cards of the same size
+could hold different amounts of chart depending on how many buttons their body
+happened to register. **A control bar that changes the geometry of the thing it
+sits on is worse than one you have to scroll.**
+
+Now `nowrap`, with a fixed `h-8` so the row is the same height whatever is in it,
+and the toolbar scrolls sideways when it does not fit. New `.cb-bar` utility in
+tokens.css: `overflow-x` with the scrollbar hidden — the global rule gives every
+scrollable a thin bar, which is right for a panel and wrong for a 32px header
+where even a thin bar takes a visible slice out of a row whose whole job is to be
+a predictable height. Wheel, trackpad and drag still scroll it; only the
+indicator is gone. `overscroll-behavior-x: contain` stops a sideways flick
+turning into browser back-navigation.
+
+The title now carries `min-w-0 shrink truncate` so the NAME gives way first — it
+is repeated in the copy-shot menu and the card body, and the controls are
+repeated nowhere.
+
+### Verified
+
+```
+shrink Gauge Rail 26 rows -> 14      stays at 14 (previously sprang back to 26)
+narrow a chart 16 cols -> 8          stays at 8; neighbour absorbs 14 -> 22
+fuzz 6000 gestures                   pinned card altered in ANY way: 0 · overlaps: 0
+```
+
 ## 2026-09-07 (b) - v3 board: the half-size render was the grid migration, not the measurement. Fixed, plus a one-time repair (`cbedge-v3/src/board/layoutStore.ts`)
 
 The measurement hardening in the previous entry did not fix it, and that is what
