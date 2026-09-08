@@ -1910,57 +1910,43 @@ register('/api/discord-share', {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /api/bot-alert — the owner BOT page's fan-out to the trading Discords.
+// /api/bot-alert/* — the owner BOT page: compose once, fan out to the trading
+// Discords, and manage which channel in each one receives what.
 //
-// WEBHOOKS, NOT A BOT. Everything this does is "post an embed with an image
-// into a fixed channel", which a webhook does with no token, no gateway, and no
-// long-lived process. The one thing webhooks cannot do is READ the message
-// afterwards (reaction tallies) — deliberately out of scope. Note that editing
-// IS still possible later via PATCH /webhooks/{id}/{token}/messages/{id}, which
-// is why messageId is captured below.
+// WEBHOOKS, NOT A BOT. Everything this does is "post an embed with an image into
+// a channel", which a webhook does with no token, no gateway, and no long-lived
+// process. The one thing webhooks cannot do is READ the message afterwards
+// (reaction tallies) — deliberately out of scope. Editing later is still
+// possible via PATCH /webhooks/{id}/{token}/messages/{id}, which is why the
+// message id is captured on every send.
 //
-// DESTINATIONS COME FROM ENV, numbered from 1, so adding a fourth Discord is a
-// restart and not a deploy:
+// ROUTING LIVES IN bot-targets-store.js, not in env. A destination is a Discord;
+// inside it, each asset class maps to its own webhook, falling back to a
+// 'default' route. That is what lets one server take everything in one channel
+// while another splits options / futures / notes / equity four ways. The store
+// still reads the old DISCORD_WEBHOOK_<n>_* vars when the table is empty, so a
+// fresh box works before anything is configured.
 //
-//   DISCORD_WEBHOOK_1_URL    = https://discord.com/api/webhooks/...   (required)
-//   DISCORD_WEBHOOK_1_LABEL  = Bzila Trades                          (optional)
-//   DISCORD_WEBHOOK_1_PING   = <@&123456789012345678>                (optional)
+// SECRETS NEVER LEAVE. Every response here goes through the store's masked view:
+// the client sees a webhook id and the last four token characters and sends ids
+// back. A blank url on a write means "keep what is stored", so the owner page
+// can edit a label or a ping without ever holding the credential.
 //
-// ...through _8. A gap in the numbering is fine — the scan checks all 8 and
-// keeps the ones that have a URL. The URLs never leave the server: the client
-// only ever sees { id, label } from the /targets route below and sends ids back.
-//
-// The EMBED IS BUILT HERE, not in the client, so the layout lives in one place
-// and a stale SPA bundle cannot post a malformed embed. Layout A ("Trade
-// Ticket"): action-coloured bar, entry/strike/expiry as three inline fields,
-// thesis as the description, chart attached, disclaimer in the footer.
+// The EMBED IS BUILT HERE so the layout lives in one place and a stale SPA
+// bundle cannot post a malformed embed. Layout A ("Trade Ticket"):
+// action-coloured bar, entry/strike/expiry as inline fields, thesis as the
+// description, chart attached, disclaimer in the footer.
 // ─────────────────────────────────────────────────────────────────────────────
 {
-  const WEBHOOK_SLOTS = 8;
+  const botStore = require('./bot-targets-store');
+
   const FOOTER_TEXT = 'Bzila Trades | For Informational Purposes Only, Not Financial Advice';
-  // Discord's own cap is 25MB, but the practical cap for a chart screenshot is
-  // far lower and a runaway paste should fail HERE with a readable message
-  // rather than as an opaque 413 from Discord.
+  // Discord's own cap is higher, but a runaway paste should fail HERE with a
+  // readable message rather than as an opaque 413 from Discord.
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
   const ACTION_LABEL = { buy: 'BUY', sell: 'SELL', trim: 'TRIM', 'average-down': 'AVERAGE DOWN' };
   const ACTION_EMOJI = { buy: '🟢', sell: '🔴', trim: '🟠', 'average-down': '🔵' };
-
-  /** Env → destination list. Called per request so a restart is the only step. */
-  function botTargets() {
-    const out = [];
-    for (let i = 1; i <= WEBHOOK_SLOTS; i++) {
-      const url = (process.env[`DISCORD_WEBHOOK_${i}_URL`] || '').trim();
-      if (!url) continue;
-      out.push({
-        id: String(i),
-        label: (process.env[`DISCORD_WEBHOOK_${i}_LABEL`] || `Discord ${i}`).trim(),
-        url,
-        ping: (process.env[`DISCORD_WEBHOOK_${i}_PING`] || '').trim(),
-      });
-    }
-    return out;
-  }
 
   /** Same owner gate as /api/discord-share, including its dev-mode fallback. */
   function ownerOk(ctx, verdict) {
@@ -1976,11 +1962,10 @@ register('/api/discord-share', {
     return m ? `${m[2]}/${m[3]}` : '';
   }
 
-  /** data URL / bare base64 → Buffer. Returns null when there is no image. */
+  /** data URL / bare base64 -> Buffer. Returns null when there is no image. */
   function decodeImage(dataUrl) {
     if (typeof dataUrl !== 'string' || !dataUrl) return null;
-    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-    const buf = Buffer.from(base64, 'base64');
+    const buf = Buffer.from(dataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     if (!buf.length) return null;
     if (buf.length > MAX_IMAGE_BYTES) {
       throw new Error(`Chart is ${(buf.length / 1048576).toFixed(1)}MB — the limit is ${MAX_IMAGE_BYTES / 1048576}MB`);
@@ -1989,12 +1974,12 @@ register('/api/discord-share', {
   }
 
   /**
-   * Draft → Discord embed. Layout A. Every field is optional-safe: an empty
+   * Draft -> Discord embed. Layout A. Every field is optional-safe: an empty
    * strike or price is OMITTED rather than rendered as a blank row, because a
    * field with no value reads as a bug to whoever is looking at the alert.
    */
   function buildEmbed(d, hasImage) {
-    const cls = ['notes', 'options', 'futures', 'equity'].includes(d.assetClass) ? d.assetClass : 'notes';
+    const cls = botStore.ASSET_CLASSES.includes(d.assetClass) ? d.assetClass : 'notes';
     const action = ACTION_LABEL[d.action] ? d.action : 'buy';
     const ticker = str(d.ticker, 12).toUpperCase();
     const strike = str(d.strike, 12);
@@ -2033,6 +2018,8 @@ register('/api/discord-share', {
 
   /** One webhook, one post. Resolves to a result row rather than throwing. */
   async function postTo(target, embed, imageBuf) {
+    if (!target.url) return { id: target.id, label: target.label, ok: false, error: target.error || 'No webhook' };
+
     const payload = { embeds: [embed] };
     if (target.ping) {
       payload.content = target.ping;
@@ -2048,8 +2035,8 @@ register('/api/discord-share', {
     form.append('payload_json', JSON.stringify(payload));
     if (imageBuf) form.append('files[0]', new Blob([imageBuf], { type: 'image/png' }), 'chart.png');
 
-    // ?wait=true makes Discord return the created message, which is the only
-    // way to learn its id — and the id is what a later edit needs.
+    // ?wait=true makes Discord return the created message, which is the only way
+    // to learn its id — and the id is what a later edit needs.
     const url = target.url + (target.url.includes('?') ? '&' : '?') + 'wait=true';
     try {
       const r = await fetch(url, { method: 'POST', body: form, signal: AbortSignal.timeout(20000) });
@@ -2064,23 +2051,66 @@ register('/api/discord-share', {
     }
   }
 
-  // GET /api/bot-alert/targets — id + label ONLY. The webhook URLs and the ping
-  // strings stay server-side; the client sends ids back and never sees a URL.
+  // ── GET /api/bot-alert/targets ──────────────────────────────────────────────
+  // What the COMPOSER needs: enabled destinations plus, per asset class, whether
+  // that destination can actually take one. The page greys out a Discord with no
+  // channel mapped for the selected class instead of letting you send into
+  // nothing and find out from an error row afterwards.
   register('/api/bot-alert/targets', {
     auth: 'user', methods: ['GET'],
     async handler(req, res, ctx, verdict) {
       if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
-      send(res, 200, { ok: true, targets: botTargets().map((t) => ({ id: t.id, label: t.label })) });
+      try {
+        send(res, 200, { ok: true, ...(await botStore.loadTargets()) });
+      } catch (err) {
+        console.error('[bot-alert/targets]', err);
+        send(res, 500, { ok: false, error: String(err?.message || err) });
+      }
     },
   });
 
-  // POST /api/bot-alert — fan the composed alert out to the selected Discords.
+  // ── GET /api/bot-alert/config ───────────────────────────────────────────────
+  // The manage view. Masked URLs only — see the store's maskUrl().
+  register('/api/bot-alert/config', {
+    auth: 'user', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, verdict) {
+      if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
+      try {
+        if ((req.method || 'GET').toUpperCase() === 'GET') {
+          send(res, 200, { ok: true, ...(await botStore.loadMasked({ fresh: true })) });
+          return;
+        }
+        // POST — one route, three actions, because they are one form's worth of
+        // work and a verb per operation would mean three near-identical gates.
+        const body = await readJson(req, 200_000);
+        const action = str(body?.action, 20) || 'save';
+
+        if (action === 'delete') {
+          const id = str(body?.id, 40);
+          if (!id) { send(res, 400, { ok: false, error: 'id is required' }); return; }
+          await botStore.deleteDiscord(id);
+        } else if (action === 'import-env') {
+          const r = await botStore.importFromEnv();
+          send(res, 200, { ok: true, ...r, ...(await botStore.loadMasked({ fresh: true })) });
+          return;
+        } else {
+          await botStore.saveDiscord(body?.discord || body);
+        }
+        send(res, 200, { ok: true, ...(await botStore.loadMasked({ fresh: true })) });
+      } catch (err) {
+        console.error('[bot-alert/config]', err);
+        send(res, 400, { ok: false, error: String(err?.message || err) });
+      }
+    },
+  });
+
+  // ── POST /api/bot-alert ─────────────────────────────────────────────────────
   //
   // PARTIAL SUCCESS IS THE NORMAL CASE with several destinations, so this never
   // collapses to a bare ok/500: every destination gets its own row with its own
   // error string, and the status is 200 when at least one landed, 502 when none
-  // did. Re-sending after a partial failure is the owner's call — retrying the
-  // whole fan-out here would double-post to the destinations that succeeded.
+  // did. It does NOT retry the fan-out — that would double-post to the
+  // destinations that already succeeded. Re-sending is the owner's call.
   register('/api/bot-alert', {
     auth: 'user', methods: ['POST'],
     async handler(req, res, ctx, verdict) {
@@ -2091,11 +2121,10 @@ register('/api/discord-share', {
         // so this is the readJson headroom for an 8MB chart.
         const draft = await readJson(req, 12_000_000).catch((e) => { throw new Error(`Bad body: ${e.message}`); });
 
-        const all = botTargets();
-        if (!all.length) { send(res, 500, { ok: false, error: 'No DISCORD_WEBHOOK_<n>_URL configured' }); return; }
-
         const wanted = Array.isArray(draft?.targets) ? draft.targets.map(String) : [];
-        const picked = all.filter((t) => wanted.includes(t.id));
+        if (!wanted.length) { send(res, 400, { ok: false, error: 'No destination selected' }); return; }
+
+        const picked = await botStore.resolve(wanted, draft?.assetClass);
         if (!picked.length) { send(res, 400, { ok: false, error: 'No known destination selected' }); return; }
 
         const imageBuf = decodeImage(draft?.image);
@@ -2109,6 +2138,44 @@ register('/api/discord-share', {
         send(res, okCount ? 200 : 502, { ok: okCount > 0, sent: okCount, of: results.length, results });
       } catch (err) {
         console.error('[bot-alert] failed:', err);
+        send(res, 500, { ok: false, error: String(err?.message || err) });
+      }
+    },
+  });
+
+  // ── POST /api/bot-alert/test ────────────────────────────────────────────────
+  // Prove one route works without composing a real alert. This is what turns
+  // "did I paste the right URL into the right row" from a guess into a fact —
+  // and it posts a visibly non-trade embed so a test can never be mistaken for
+  // a signal by whoever is in that channel.
+  register('/api/bot-alert/test', {
+    auth: 'user', methods: ['POST'],
+    async handler(req, res, ctx, verdict) {
+      try {
+        if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
+        const body = await readJson(req, 10_000);
+        const id = str(body?.id, 40);
+        const cls = botStore.ASSET_CLASSES.includes(body?.assetClass) ? body.assetClass : 'notes';
+        if (!id) { send(res, 400, { ok: false, error: 'id is required' }); return; }
+
+        const [target] = await botStore.resolve([id], cls);
+        if (!target) { send(res, 404, { ok: false, error: 'Unknown destination' }); return; }
+
+        const result = await postTo(
+          { ...target, ping: '' }, // never ping a role for a test
+          {
+            color: 0x4f545c,
+            author: { name: 'CB EDGE · CONNECTION TEST' },
+            title: '🔧 Test message — not a trade',
+            description: `Route check for **${target.label}** → \`${cls}\`. If you can read this, the webhook works.`,
+            footer: { text: FOOTER_TEXT },
+            timestamp: new Date().toISOString(),
+          },
+          null,
+        );
+        send(res, result.ok ? 200 : 502, { ok: result.ok, result });
+      } catch (err) {
+        console.error('[bot-alert/test]', err);
         send(res, 500, { ok: false, error: String(err?.message || err) });
       }
     },

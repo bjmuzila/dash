@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026-09-08 (f) - BOT: Discords and their channels are managed from the page, not from env (`server-v2/bot-targets-store.js` NEW, `server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx` NEW, `owner-vite/src/pages/Bot.tsx`)
+
+The numbered-env scheme shipped in (e) models "one Discord, one channel" and
+nothing else. That is not the real shape: some servers take everything in a
+single room, and Bzila's own has FOUR channels with a webhook each, one per
+asset class. Env vars cannot express that, and even if they could, changing them
+means editing the VPS environment and restarting - which is not something to do
+mid-session because a channel moved.
+
+**Two levels now, and the second one is the point.** A DISCORD is a destination
+the composer offers. A ROUTE is where one asset class lands inside it:
+`(discord, asset_class) -> webhook URL + optional ping`. Resolution is exactly
+one fallback deep - `routes[class] ?? routes.default` - which makes each real
+case obvious to encode:
+
+  - one channel for everything ....... set `Default` only
+  - a channel per class (Bzila's) .... set all four, no `Default`
+  - mostly one, options split out .... set `Default` + `Options`
+
+Two tables in Postgres (`bot_discords`, `bot_routes`), same defensive pool /
+ensureSchema / fail-soft shape as `roster-store.js`. No `DATABASE_URL`, dead
+pool, or empty table falls back to the `DISCORD_WEBHOOK_<n>_*` vars as
+single-`default` discords, so a fresh box still works - and the payload carries
+`live:false` so the Manage tab can SAY it is reading env and an edit would not
+stick, with a one-click import of those vars into the table.
+
+**Secrets are one-way.** Every browser-reachable read goes through `maskUrl()`:
+the client sees a webhook id and the last four token characters, never enough to
+post. A blank URL on save means "keep what is stored", which is what lets a
+label or a ping be edited without the page ever holding the credential. Writes
+are validated against the real webhook URL shape before they are stored.
+
+**New routes**, all behind the same owner gate as `/api/discord-share`:
+
+  - `GET  /api/bot-alert/config` - masked routing table
+  - `POST /api/bot-alert/config` - save / delete / import-env (one route, three
+    actions: it is one form's worth of work, and a verb per operation would mean
+    three near-identical gates)
+  - `POST /api/bot-alert/test` - post a visibly non-trade test embed to one
+    route, never pinging a role. This is what turns "did I paste the right URL
+    into the right row" from a guess into a fact.
+
+`POST /api/bot-alert` now resolves per asset class instead of per destination.
+
+**The composer refuses what it cannot send.** `/targets` returns `accepts` per
+class, so a Discord with no channel for the class being composed renders
+disabled and labelled "no channel" rather than selectable. Switching asset class
+prunes the selection to what can still receive it - a selection that silently
+became unsendable is how an alert goes missing. `All` selects only eligible
+destinations.
+
+Manage is a separate file (`BotManage.tsx`): Bot.tsx is already the composer and
+the feed, and a third mode inline would bury both.
+
+**Housekeeping:** the four Bzila webhook URLs were pasted into a chat transcript
+while this was being built. They are live credentials - anyone holding one can
+post as that webhook. Regenerate all four in Discord and paste the replacements
+into Manage.
+
 ## 2026-09-08 (e) - BOT posts for real: webhook fan-out to N Discords (`server-v2/api-router.js`, `owner-vite/src/pages/Bot.tsx`)
 
 Webhooks, not a bot. Everything BOT does is "post an embed with an image into a

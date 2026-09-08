@@ -3,22 +3,21 @@ import { PageShell, Card } from "../components/PageCard";
 import { OWNER_THEME, rgba, homeInputStyle } from "../lib/theme";
 import ThemedSelect from "../components/ThemedSelect";
 import ThemedDatePicker from "../components/ThemedDatePicker";
+import BotManage from "./BotManage";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * BOT — trade-alert composer. One post, fanned out to several Discord servers.
  *
- * UI SHELL ONLY. Nothing here talks to Discord yet: "Broadcast Alert" pushes
- * the composed alert onto local state and it renders in the Activity Feed tab.
- * When the transport is wired, the single place to change is `broadcast()` at
- * the bottom of this file — post `AlertDraft` to the server route and keep the
- * optimistic append. Do NOT scatter fetch calls through the form.
+ * ONE TRANSPORT CALL, in `broadcast()`. Everything else here is form state. Do
+ * NOT scatter fetch calls through the fields.
  *
- * DESTINATIONS ARE SERVER-OWNED. The list comes from GET /api/bot-alert/targets
- * and each entry's `id` is the key the server maps to a webhook URL — the URLs
- * themselves never reach the client. Adding a fourth Discord is therefore an env
- * var and a restart, NOT an edit here and a rebuild. `FALLBACK_TARGETS` below is
- * only what renders before that route answers (or when it 404s, pre-wiring), so
- * the page is usable while the transport is still being built.
+ * DESTINATIONS ARE SERVER-OWNED. GET /api/bot-alert/targets returns the enabled
+ * Discords and, per asset class, whether each one has a channel mapped for it —
+ * `accepts`. A destination that cannot take the class you are composing is
+ * DISABLED here rather than left selectable, because the alternative is finding
+ * out from a red row in the feed after the other three already posted. Webhook
+ * URLs never reach this file; the Manage tab edits them by id through masked
+ * values. `FALLBACK_TARGETS` is only what renders before that route answers.
  *
  * Theme: everything sources from lib/theme (OWNER_THEME / homeInputStyle) and
  * the shared PageShell + Card. No hardcoded hex in this file.
@@ -28,7 +27,13 @@ const CYAN = OWNER_THEME.cyan;
 const GREEN = OWNER_THEME.green;
 
 // ── Destinations ─────────────────────────────────────────────────────────────
-type Target = { id: string; label: string; accent: string };
+type Target = {
+  id: string;
+  label: string;
+  accent: string;
+  /** Per-class routability from the server. null = unknown (pre-fetch fallback). */
+  accepts: Record<string, boolean> | null;
+};
 
 /** Accents cycle so each destination keeps one colour across the whole page. */
 const TARGET_ACCENTS = [CYAN, OWNER_THEME.orange, OWNER_THEME.gold, OWNER_THEME.lightBlue, GREEN];
@@ -38,7 +43,13 @@ const FALLBACK_TARGETS: Target[] = ["Discord 1", "Discord 2", "Discord 3", "Disc
   id: `discord-${i + 1}`,
   label,
   accent: TARGET_ACCENTS[i % TARGET_ACCENTS.length],
+  accepts: null,
 }));
+
+/** A destination with no channel for this class cannot be sent to. */
+function accepts(t: Target, cls: AssetClass): boolean {
+  return t.accepts ? !!t.accepts[cls] : true;
+}
 
 // ── Form vocabulary ──────────────────────────────────────────────────────────
 type AssetClass = "notes" | "options" | "futures" | "equity";
@@ -182,22 +193,29 @@ function Pill({
   accent,
   onClick,
   children,
+  disabled = false,
+  title,
 }: {
   active: boolean;
   accent: string;
   onClick: () => void;
   children: ReactNode;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
+      title={title}
       style={{
         padding: "8px 16px",
         borderRadius: 999,
         fontSize: 13,
         fontWeight: 700,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.45 : 1,
         transition: "all 0.15s",
         border: `1px solid ${active ? rgba(accent, 0.55) : OWNER_THEME.border}`,
         background: active
@@ -214,7 +232,7 @@ function Pill({
 
 // ═════════════════════════════════════════════════════════════════════════════
 export default function Bot() {
-  const [tab, setTab] = useState<"compose" | "feed">("compose");
+  const [tab, setTab] = useState<"compose" | "feed" | "manage">("compose");
   const [feed, setFeed] = useState<BroadcastAlert[]>([]);
 
   const [targets, setTargets] = useState<Target[]>(FALLBACK_TARGETS);
@@ -272,6 +290,7 @@ export default function Bot() {
    * route exists — fall back rather than blanking the composer, because a page
    * that cannot be used at all is a worse failure than placeholder names.
    */
+  const [targetsNonce, setTargetsNonce] = useState(0);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -279,16 +298,18 @@ export default function Bot() {
         const r = await fetch("/api/bot-alert/targets", { cache: "no-store" });
         if (!r.ok) return;
         const j = await r.json();
+        type Row = { id: string; label?: string; accepts?: Record<string, boolean> };
         const rows: Target[] = Array.isArray(j?.targets)
           ? j.targets
-              .filter((t: unknown): t is { id: string; label?: string } => !!t && typeof (t as { id?: unknown }).id === "string")
-              .map((t: { id: string; label?: string }, i: number) => ({
+              .filter((t: unknown): t is Row => !!t && typeof (t as { id?: unknown }).id === "string")
+              .map((t: Row, i: number) => ({
                 id: t.id,
                 label: t.label || t.id,
                 accent: TARGET_ACCENTS[i % TARGET_ACCENTS.length],
+                accepts: t.accepts ?? null,
               }))
           : [];
-        if (alive && rows.length) setTargets(rows);
+        if (alive) setTargets(rows.length ? rows : FALLBACK_TARGETS);
       } catch {
         /* offline / not wired — FALLBACK_TARGETS stands */
       }
@@ -296,7 +317,19 @@ export default function Bot() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [targetsNonce]);
+
+  /**
+   * Switching asset class can strip a destination of its channel, and a
+   * selection that silently became unsendable is how an alert goes missing. So
+   * changing class prunes the selection to what can still receive it.
+   */
+  useEffect(() => {
+    setBots((prev) => prev.filter((id) => {
+      const t = targets.find((x) => x.id === id);
+      return t ? accepts(t, assetClass) : false;
+    }));
+  }, [assetClass, targets]);
 
   const toggleBot = (id: string) =>
     setBots((prev) => (prev.includes(id) ? prev.filter((b) => b !== id) : [...prev, id]));
@@ -419,6 +452,7 @@ export default function Bot() {
           {([
             { id: "compose" as const, label: "＋  New Alert", count: 0 },
             { id: "feed" as const, label: "⌁  Activity Feed", count: feed.length },
+            { id: "manage" as const, label: "⚙  Manage", count: 0 },
           ]).map((t) => {
             const active = tab === t.id;
             return (
@@ -478,26 +512,40 @@ export default function Bot() {
             <div>
               <div style={sectionLabel}>Broadcast To</div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {targets.map((b) => (
-                  <Pill key={b.id} active={bots.includes(b.id)} accent={b.accent} onClick={() => toggleBot(b.id)}>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                      <span
-                        style={{
-                          width: 7,
-                          height: 7,
-                          borderRadius: 999,
-                          background: bots.includes(b.id) ? b.accent : "rgba(255,255,255,0.25)",
-                          boxShadow: bots.includes(b.id) ? `0 0 8px ${rgba(b.accent, 0.7)}` : "none",
-                        }}
-                      />
-                      {b.label}
-                    </span>
-                  </Pill>
-                ))}
+                {targets.map((b) => {
+                  const ok = accepts(b, assetClass);
+                  return (
+                    <Pill
+                      key={b.id}
+                      active={bots.includes(b.id)}
+                      accent={b.accent}
+                      disabled={!ok}
+                      title={ok ? undefined : `${b.label} has no ${assetClass} channel — map one in Manage`}
+                      onClick={() => ok && toggleBot(b.id)}
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <span
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: 999,
+                            background: bots.includes(b.id) ? b.accent : "rgba(255,255,255,0.25)",
+                            boxShadow: bots.includes(b.id) ? `0 0 8px ${rgba(b.accent, 0.7)}` : "none",
+                          }}
+                        />
+                        {b.label}
+                        {!ok && " ·  no channel"}
+                      </span>
+                    </Pill>
+                  );
+                })}
                 <Pill
-                  active={bots.length === targets.length && targets.length > 0}
+                  active={bots.length > 0 && bots.length === targets.filter((t) => accepts(t, assetClass)).length}
                   accent={OWNER_THEME.lightBlue}
-                  onClick={() => setBots(bots.length === targets.length ? [] : targets.map((b) => b.id))}
+                  onClick={() => {
+                    const eligible = targets.filter((t) => accepts(t, assetClass)).map((t) => t.id);
+                    setBots(bots.length === eligible.length ? [] : eligible);
+                  }}
                 >
                   All
                 </Pill>
@@ -860,6 +908,11 @@ export default function Bot() {
             )}
           </div>
         </Card>
+      ) : tab === "manage" ? (
+        /* Routing lives in its own file — this page is already the composer and
+           the feed, and a third mode inline would bury both. Saving there can
+           change what the composer may send to, so it bumps the targets fetch. */
+        <BotManage onChanged={() => setTargetsNonce((n) => n + 1)} />
       ) : (
         /* ── Activity feed ──────────────────────────────────────────────── */
         <Card variant="classic" padding={0}>
