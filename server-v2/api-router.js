@@ -13384,7 +13384,9 @@ try {
 
     // ── top flow (the v3 board's Top Flow card) ───────────────────────────────
     //
-    // ONE cached whole-market sweep, served to every subscriber.
+    // ONE cached whole-market sweep, served to every subscriber, PLUS the two
+    // things the vault does not give us: a side for each print, and live volume
+    // and open interest for its contract.
     //
     // This is the first /api/lse/* route a CUSTOMER can reach — every other one
     // above is auth:'owner' and hand-driven from /owner/lse-data. A per-request
@@ -13406,10 +13408,27 @@ try {
     //     the top TF_KEEP_TOP by premium and the newest TF_KEEP_RECENT, which
     //     are exactly the two orderings the card can ask for.
     //
-    // SESSION ROLLOVER is keyed on the newest print's own ET date, never on wall
-    // clock: pre-open there are no prints for today yet, and resetting at
-    // midnight would blank the card for nine hours instead of holding the last
-    // session until the new one starts printing.
+    // ── SIDE IS CAPTURED, NOT LOOKED UP ──────────────────────────────────────
+    //
+    // The vault row carries NO aggressor and NO bid/ask (probed against the live
+    // feed 2026-09-08 — see TF_SIDE_KEYS below), and /options/chain is a LIVE
+    // snapshot, so the quote as of a print's own timestamp cannot be fetched
+    // back at any price. A side therefore has to be worked out WHILE THE PRINT
+    // IS STILL FRESH and then kept.
+    //
+    // That is what tfEnrich() does: every cycle it takes the prints it has never
+    // classified, pulls the current bid/ask for their contracts, decides
+    // above-ask / ask / mid / bid / below-bid, and FREEZES that verdict on the
+    // row. A print classified at 10:04 still carries its 10:04 verdict when it
+    // is sitting at the top of the Biggest-today board at 15:30 — which is the
+    // whole reason this is a capture and not a join.
+    //
+    // Its honest limit, which the response reports rather than hides: the quote
+    // is up to TF_REFRESH_MS old when it is taken, so a fast-moving contract can
+    // be misread. `quoteAgeMs` on every classified row is how far after the
+    // print the quote was pulled; anything past TF_CLASSIFY_MAX_AGE_MS is never
+    // classified at all and reports side null with reason 'stale' rather than
+    // being judged against a quote from minutes later.
     //
     // FRESHNESS IS REPORTED, NOT ASSUMED. The vault is documented as the
     // trailing WEEK of prints (md files/LSE-DATA-LIMITS.md); how far behind its
@@ -13431,17 +13450,64 @@ try {
     /** Hard cap on rows returned, whatever `limit` asks for. */
     const TF_MAX_ROWS = 200;
 
+    /**
+     * A print older than this is never classified.
+     *
+     * Judging a 10-minute-old fill against a quote pulled now is not a slightly
+     * worse answer, it is a made-up one — the contract has re-priced since. Past
+     * this age the row reports side null / reason 'stale', which the card draws
+     * as an em dash. Generous enough to survive a server restart mid-session
+     * catching up on the last sweep, tight enough that the verdict means
+     * something.
+     */
+    const TF_CLASSIFY_MAX_AGE_MS = 180_000;
+    /**
+     * Chain groups (root + expiry) enriched per cycle.
+     *
+     * Each one is a cached TT chain snapshot plus a batched market-data pull —
+     * cheap when it is a repeat (contractStats holds its own 20s cache per
+     * group) and not cheap on a first touch. A whole-market top 50 can span 40+
+     * distinct pairs, so this is the cost ceiling: groups are RANKED (prints
+     * awaiting a side first, then by premium) and the tail waits for the next
+     * cycle rather than being dropped.
+     */
+    const TF_STATS_MAX_GROUPS = 24;
+    /** contractStats() slices its own input at CONTRACT_STATS_MAX_GROUPS (16),
+     *  so anything longer has to arrive as chunks or it is silently truncated. */
+    const TF_STATS_CHUNK = 16;
+    /** How long a group's vol/OI/quote map is joined onto rows after its pull.
+     *  Longer than the refresh so a group that loses its turn in the ranking
+     *  keeps rendering its last-known numbers instead of flashing to dashes. */
+    const TF_STATS_TTL_MS = 5 * 60 * 1000;
+    /** Price-vs-quote tolerance. Contracts tick in cents; half a cent is inside
+     *  the noise and outside any real tick. */
+    const TF_QUOTE_EPS = 0.005;
+
+    // Live per-contract volume / OI / bid / ask. Required rather than optional:
+    // without it the card's Side, Buy/Sell, Volume and OI columns are all em
+    // dashes, which is a broken card rather than a degraded one — so a failure
+    // to load is logged loudly and the columns report why.
+    let tfProxy = null;
+    try { tfProxy = require('./proxy-tastytrade'); }
+    catch (e) { console.warn('[api-router] proxy-tastytrade not loaded — top-flow ships without side/vol/OI:', e.message); }
+
     const tfState = {
       /** ET date the store covers, from the newest print seen. */
       day: null,
       /** id → normalised row. */
       rows: new Map(),
+      /** "ROOT|EXPIRY" → { byKey, at } — vol/OI/bid/ask per strike|type. */
+      stats: new Map(),
       /** When the last sweep SETTLED (success or failure) — a failed sweep must
        *  still push the next attempt out, or a down vault gets hammered. */
       at: 0,
       inflight: null,
+      /** tfEnrich() runs DETACHED from the request; this is its single-flight. */
+      enriching: null,
       error: null,
+      statsError: null,
       sweptRows: 0,
+      classified: 0,
     };
 
     // The vault's flow rows are not a fixed shape (see the flow row-shape note
@@ -13452,8 +13518,17 @@ try {
     const TF_EXPIRY_KEYS = ['expiry', 'expiration', 'expiration_date', 'exp_date', 'exp'];
     const TF_TYPE_KEYS = ['contract_type', 'type', 'option_type', 'right', 'put_call', 'cp'];
     const TF_SIZE_KEYS = ['size', 'volume', 'quantity', 'qty', 'contracts', 'trade_size'];
-    const TF_PRICE_KEYS = ['price', 'trade_price', 'fill_price', 'close', 'premium_per_contract'];
+    // 'last_price' FIRST — verified against the live vault 2026-09-08, that is
+    // the column it actually sends. The rest are kept as fallbacks only.
+    const TF_PRICE_KEYS = ['last_price', 'price', 'trade_price', 'fill_price', 'close', 'premium_per_contract'];
     const TF_SPOT_KEYS = ['underlying_price', 'spot', 'stock_price', 'underlying_close'];
+    // THE VAULT DOES NOT SEND A SIDE. Probed against the live feed 2026-09-08:
+    // the flow row is id, ts, underlying, ticker, strike, expiry, contract_type,
+    // last_price, volume, premium, underlying_price, dte and the greeks — no
+    // aggressor, no bid/ask. That is why tfEnrich() exists. The list stays as a
+    // cheap catch if the vault ever adds one: a real aggressor from the source
+    // beats anything we infer from a quote 20 seconds late, so it WINS when
+    // present (see tfClassify).
     const TF_SIDE_KEYS = ['side', 'aggressor', 'trade_side', 'sentiment', 'aggressor_side'];
 
     const tfStr = (row, keys) => {
@@ -13490,6 +13565,13 @@ try {
     });
     const tfEtDate = (d) => tfEtDateFmt.format(d);
 
+    /** The root the CHAIN is keyed on. contractStats folds the weekly roots onto
+     *  their index (SPXW → SPX) before answering, so a lookup that used the
+     *  print's own root would miss every index row. */
+    const TF_ROOT_FOLD = { SPXW: 'SPX', NDXP: 'NDX', RUTW: 'RUT', XSPW: 'XSP' };
+    const tfRoot = (u) => (u ? (TF_ROOT_FOLD[u] || u) : null);
+    const tfGroupKey = (row) => (row.underlying && row.expiry ? `${tfRoot(row.underlying)}|${row.expiry}` : null);
+
     /** One vault row → the fixed shape the card renders. null = unusable. */
     function tfNormalize(row) {
       const ts = Date.parse(String(row && row.timestamp !== undefined ? row.timestamp : ''));
@@ -13517,10 +13599,13 @@ try {
       const size = tfNum(row, TF_SIZE_KEYS);
       const price = tfNum(row, TF_PRICE_KEYS);
       const strike = lse.flowStrike(row);
+      // The vault stamps every print with its own `id` (an integer). Prefer it:
+      // it is stable across sweeps, which is exactly what the merge needs, and
+      // it cannot collide the way a composite of rounded floats can. The
+      // composite stays as the fallback for a row that arrives without one.
+      const vaultId = row && row.id !== undefined && row.id !== null && row.id !== '' ? String(row.id) : null;
       return {
-        // Identity for the merge. The vault has no print id, so this is the
-        // same shape flow_prints uses: time + contract + what filled.
-        id: `${ts}|${osi || `${underlying}${expiry}${type}${strike}`}|${size === null ? '' : size}|${price === null ? '' : price}|${premium}`,
+        id: vaultId || `${ts}|${osi || `${underlying}${expiry}${type}${strike}`}|${size === null ? '' : size}|${price === null ? '' : price}|${premium}`,
         ts,
         osi: osi || null,
         underlying,
@@ -13532,7 +13617,18 @@ try {
         price,
         premium,
         spot: tfNum(row, TF_SPOT_KEYS),
-        side: tfStr(row, TF_SIDE_KEYS),
+        /** Whatever the SOURCE called the side, if it ever sends one. */
+        vaultSide: tfStr(row, TF_SIDE_KEYS),
+        // ── Filled in by tfEnrich(), once, and then frozen. `side === undefined`
+        // means "not looked at yet"; null means "looked at, no answer", and the
+        // reason says which kind of no.
+        side: undefined,
+        action: undefined,
+        sideReason: null,
+        bid: null,
+        ask: null,
+        /** ms between the print and the quote it was judged against. */
+        quoteAgeMs: null,
       };
     }
 
@@ -13556,6 +13652,13 @@ try {
       }
       for (const n of incoming) {
         if (tfEtDate(new Date(n.ts)) !== day) continue;
+        // A row we have ALREADY CLASSIFIED must not be replaced by its unjudged
+        // self on the next sweep — the verdict was taken while the print was
+        // fresh and cannot be recomputed later. The vault re-sends the same
+        // print for as long as it is inside the newest 5000, so without this the
+        // side column would reset to blank every 20 seconds.
+        const prev = tfState.rows.get(n.id);
+        if (prev && prev.side !== undefined) continue;
         tfState.rows.set(n.id, n);
       }
 
@@ -13567,6 +13670,162 @@ try {
       const next = new Map();
       for (const r of all) if (keep.has(r.id)) next.set(r.id, r);
       tfState.rows = next;
+    }
+
+    // ── Side ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Where a fill sat against the quote, and what that implies.
+     *
+     *   above ask / at ask  → BUY   (someone paid up to get filled)
+     *   at bid  / below bid → SELL  (someone hit the bid to get out)
+     *   between             → MID   — no read, and reported as one rather than
+     *                                guessed. A mid print is genuinely
+     *                                ambiguous; calling it a buy because it is
+     *                                a cent above the midpoint is noise dressed
+     *                                as signal.
+     *
+     * A locked or crossed quote (ask <= bid) is refused rather than resolved:
+     * every price is then simultaneously at-bid and at-ask.
+     */
+    function tfClassify(price, bid, ask) {
+      if (!Number.isFinite(price) || price <= 0) return { side: null, action: null, reason: 'no-price' };
+      if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask <= 0) {
+        return { side: null, action: null, reason: 'no-quote' };
+      }
+      if (ask <= bid) return { side: null, action: null, reason: 'locked' };
+      if (price >= ask + TF_QUOTE_EPS) return { side: 'above_ask', action: 'BUY', reason: null };
+      if (Math.abs(price - ask) <= TF_QUOTE_EPS) return { side: 'ask', action: 'BUY', reason: null };
+      if (price <= bid - TF_QUOTE_EPS) return { side: 'below_bid', action: 'SELL', reason: null };
+      if (Math.abs(price - bid) <= TF_QUOTE_EPS) return { side: 'bid', action: 'SELL', reason: null };
+      return { side: 'mid', action: null, reason: null };
+    }
+
+    /** A group's stats map, if we hold one that is still worth joining. */
+    function tfStatsFor(groupKey) {
+      const hit = tfState.stats.get(groupKey);
+      if (!hit) return null;
+      if (Date.now() - hit.at > TF_STATS_TTL_MS) {
+        tfState.stats.delete(groupKey);
+        return null;
+      }
+      return hit.byKey;
+    }
+
+    /**
+     * Classify what is new, refresh vol/OI for what is on screen.
+     *
+     * DETACHED from the request on purpose. contractStats() can take seconds on
+     * a group it has not cached, and making every request that lands on a
+     * refresh boundary wait for that would trade a fast card for a marginally
+     * fresher one. The sweep answers the request; this lands behind it and the
+     * next poll — 20 seconds later — picks it up. Prints are still classified
+     * inside the same cycle they arrive in, which is what "captured at arrival"
+     * has to mean.
+     */
+    function tfEnrich() {
+      if (tfState.enriching) return tfState.enriching;
+      if (!tfProxy || typeof tfProxy.contractStats !== 'function') return Promise.resolve();
+
+      const now = Date.now();
+      const all = [...tfState.rows.values()];
+
+      // 1. Prints awaiting a verdict. Anything too old to judge is closed out
+      //    here rather than left pending forever — a row retried every cycle for
+      //    the rest of the session is a leak with a side column attached.
+      const pending = [];
+      for (const r of all) {
+        if (r.side !== undefined) continue;
+        if (r.vaultSide) {
+          // The source told us. Nothing to infer, and nothing to pay for.
+          const up = r.vaultSide.toUpperCase();
+          r.side = up.includes('ASK') || up.startsWith('B') ? 'ask' : up.includes('BID') || up.startsWith('S') ? 'bid' : 'mid';
+          r.action = r.side === 'ask' ? 'BUY' : r.side === 'bid' ? 'SELL' : null;
+          r.sideReason = 'source';
+          continue;
+        }
+        if (now - r.ts > TF_CLASSIFY_MAX_AGE_MS) {
+          r.side = null; r.action = null; r.sideReason = 'stale';
+          continue;
+        }
+        if (tfGroupKey(r)) pending.push(r);
+      }
+
+      // 2. Rank the groups. Prints awaiting a side come first and by premium —
+      //    if the budget only covers half the groups, it should cover the half
+      //    with the biggest unjudged prints in it. Then the groups the served
+      //    rows need for vol/OI, again biggest first.
+      const rank = new Map();
+      const want = (r, boost) => {
+        const k = tfGroupKey(r);
+        if (!k) return;
+        const prev = rank.get(k) || 0;
+        const score = boost + r.premium;
+        if (score > prev) rank.set(k, score);
+      };
+      const BOOST = 1e12; // any pending group outranks any display-only group
+      for (const r of pending) want(r, BOOST);
+      const byPrem = [...all].sort((a, b) => b.premium - a.premium).slice(0, TF_MAX_ROWS);
+      const byTime = [...all].sort((a, b) => b.ts - a.ts).slice(0, TF_MAX_ROWS);
+      for (const r of byPrem) want(r, 0);
+      for (const r of byTime) want(r, 0);
+
+      const groups = [...rank.entries()]
+        .sort((a, b) => b[1] - a[1])
+        // A group whose numbers are still inside their TTL and that has nothing
+        // pending is skipped — that is what makes a steady session cheap.
+        .filter(([k]) => pending.some((r) => tfGroupKey(r) === k) || !tfStatsFor(k))
+        .slice(0, TF_STATS_MAX_GROUPS)
+        .map(([k]) => {
+          const [ticker, expiry] = k.split('|');
+          return { ticker, expiry };
+        });
+
+      if (!groups.length) return Promise.resolve();
+
+      tfState.enriching = (async () => {
+        try {
+          // Chunked: contractStats() slices its own input at 16 and would
+          // otherwise drop the tail without saying so.
+          for (let i = 0; i < groups.length; i += TF_STATS_CHUNK) {
+            const chunk = groups.slice(i, i + TF_STATS_CHUNK);
+            const out = await tfProxy.contractStats(chunk);
+            const at = Date.now();
+            for (const [k, byKey] of Object.entries(out && out.stats ? out.stats : {})) {
+              if (byKey && Object.keys(byKey).length) tfState.stats.set(k, { byKey, at });
+            }
+          }
+          tfState.statsError = null;
+
+          // 3. Freeze a verdict on every pending print we now have a quote for.
+          //    Rows we still cannot quote are left pending — the next cycle
+          //    tries again, until they age past TF_CLASSIFY_MAX_AGE_MS.
+          const quotedAt = Date.now();
+          for (const r of pending) {
+            const byKey = tfStatsFor(tfGroupKey(r));
+            if (!byKey) continue;
+            const stat = byKey[`${Number(r.strike)}|${r.type}`];
+            if (!stat) continue;
+            const verdict = tfClassify(r.price, stat.bid, stat.ask);
+            // 'no-quote' means the contract had no two-sided market at all this
+            // cycle; leave it pending rather than burning the row's one chance.
+            if (verdict.reason === 'no-quote') continue;
+            r.side = verdict.side;
+            r.action = verdict.action;
+            r.sideReason = verdict.reason;
+            r.bid = Number.isFinite(stat.bid) ? stat.bid : null;
+            r.ask = Number.isFinite(stat.ask) ? stat.ask : null;
+            r.quoteAgeMs = Math.max(0, quotedAt - r.ts);
+            tfState.classified += 1;
+          }
+        } catch (e) {
+          tfState.statsError = e && e.message ? String(e.message) : String(e);
+          console.warn('[api-router] /api/lse/top-flow enrich failed:', tfState.statsError);
+        } finally {
+          tfState.enriching = null;
+        }
+      })();
+      return tfState.enriching;
     }
 
     /** At most one vault sweep per TF_REFRESH_MS, shared by every caller. */
@@ -13590,6 +13849,9 @@ try {
         .then(() => {
           tfState.at = Date.now();
           tfState.inflight = null;
+          // Detached — see tfEnrich's note. Deliberately not awaited and
+          // deliberately not allowed to reject into the response path.
+          try { void tfEnrich(); } catch { /* enrichment is best-effort */ }
         });
       return tfState.inflight;
     }
@@ -13626,12 +13888,45 @@ try {
           ? (a, b) => b.ts - a.ts
           : (a, b) => b.premium - a.premium || b.ts - a.ts);
 
+        // Volume and OI are joined at SERVE time, not frozen like the side:
+        // they are "what is this contract doing now", so the newest pull is the
+        // right answer and a stale one is not worth keeping.
+        const out = rows.slice(0, limit).map((r) => {
+          const byKey = tfStatsFor(tfGroupKey(r));
+          const stat = byKey ? byKey[`${Number(r.strike)}|${r.type}`] : null;
+          return {
+            id: r.id,
+            ts: r.ts,
+            osi: r.osi,
+            underlying: r.underlying,
+            type: r.type,
+            strike: r.strike,
+            expiry: r.expiry,
+            dte: r.dte,
+            size: r.size,
+            price: r.price,
+            premium: r.premium,
+            spot: r.spot,
+            // undefined (never looked at) is flattened to null for the wire —
+            // JSON has no undefined, and a missing key reads as a bug at the
+            // other end. `sideReason` carries which kind of nothing it is.
+            side: r.side === undefined ? null : r.side,
+            action: r.action === undefined ? null : r.action,
+            sideReason: r.side === undefined ? 'pending' : r.sideReason,
+            bid: r.bid,
+            ask: r.ask,
+            quoteAgeMs: r.quoteAgeMs,
+            vol: stat && Number.isFinite(stat.vol) ? stat.vol : null,
+            oi: stat && Number.isFinite(stat.oi) ? stat.oi : null,
+          };
+        });
+
         let newestTs = 0;
         for (const r of tfState.rows.values()) if (r.ts > newestTs) newestTs = r.ts;
 
         return send(res, 200, {
-          rows: rows.slice(0, limit),
-          count: Math.min(rows.length, limit),
+          rows: out,
+          count: out.length,
           /** How many the filters matched before the cap — "50 of 312". */
           matched: rows.length,
           sessionDate: tfState.day,
@@ -13639,7 +13934,11 @@ try {
           newestTs: newestTs || null,
           baseMinPremium: TF_BASE_MIN_PREMIUM,
           refreshMs: TF_REFRESH_MS,
+          /** So the card can say WHY a column is empty rather than just be empty. */
+          sideAvailable: Boolean(tfProxy && typeof tfProxy.contractStats === 'function'),
+          classifyMaxAgeMs: TF_CLASSIFY_MAX_AGE_MS,
           error: tfState.error,
+          statsError: tfState.statsError,
         }, { 'Cache-Control': NO_STORE });
       },
     });

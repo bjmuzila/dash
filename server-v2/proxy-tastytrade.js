@@ -977,6 +977,18 @@ async function _statsFromTT(root, expiry) {
       // TT delivers IV as a decimal, same unit as the Theta path.
       iv: Number.isFinite(m.iv) && m.iv > 0 ? m.iv : null,
       mark: Number.isFinite(m.mark) && m.mark > 0 ? m.mark : null,
+      // ── bid / ask ──────────────────────────────────────────────────────
+      // Added 2026-09-09 for the v3 Top Flow card, which classifies a print
+      // against the quote (above ask / ask / mid / bid / below bid) while the
+      // print is still fresh — the LSE vault sends no aggressor and no quote,
+      // so there is nothing to look this up from later.
+      //
+      // PURELY ADDITIVE: fetchOptionMarketData already parses both, every
+      // existing field above is untouched, and every existing consumer reads
+      // by key. A one-sided or absent quote stays null rather than becoming 0,
+      // because 0 is a real price and 'no market' is not.
+      bid: Number.isFinite(m.bid) && m.bid > 0 ? m.bid : null,
+      ask: Number.isFinite(m.ask) && m.ask > 0 ? m.ask : null,
     };
     // fetchChain() now drops the AM-settled duplicate on monthly Fridays, so
     // this key collision should no longer happen. Kept as a safety net: if two
@@ -1015,7 +1027,7 @@ async function _statsForGroup(root, expiry) {
 /**
  * Batched contract stats.
  * @param {Array<{ticker:string, expiry:string}>} groups
- * @returns {Promise<Object>} { "ROOT|EXPIRY": { "strike|type": {vol,oi,iv,mark} } }
+ * @returns {Promise<Object>} { "ROOT|EXPIRY": { "strike|type": {vol,oi,iv,mark,bid,ask} } }
  */
 async function contractStats(groups) {
   // Normalize + dedupe: the tape sends one group per visible row, and most rows

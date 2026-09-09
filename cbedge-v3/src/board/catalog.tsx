@@ -263,7 +263,9 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'top-flow',
     icon: '🐋',
     label: 'Top Flow',
-    defaultSize: { w: 24, h: 48 },
+    // Full board width: twelve columns (through Vol and OI) do not fit in
+    // half of one, and a card that ships needing a resize ships broken.
+    defaultSize: { w: 48, h: 48 },
     render: (instanceId) => (
       <Deferred>
         <TopFlowCard instanceId={instanceId} />
