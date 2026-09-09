@@ -38,6 +38,46 @@ const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = requir
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, contractStats, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchUnderlyingDayOhlc, fetchDailyHistory } = require('./proxy-tastytrade');
 const { etEpochMs } = require('./computation/utils');
+
+/**
+ * Overlay the live tape's day-volume onto a REST chain payload, IN PLACE.
+ *
+ * Pairs with TastytradeProxy#liveVolumeMap() — that method explains why the
+ * overlay exists at all (short version: fetchChainFull()'s `volume` is zeroed
+ * before 9:30 ET and lags the tape after it, and `?live=0` callers get exactly
+ * that payload). Used by /proxy/api/tt/chains/:ticker on the REST branch only.
+ *
+ * Two rules, both deliberate:
+ *   - Only the ONE expiry the feed streams is touched. Every other expiry in the
+ *     payload is REST's answer and stays REST's answer.
+ *   - Only UPWARD: `volume = max(restVolume, liveVolume)`. The same rule
+ *     serveChainFromLive() uses, so the two paths cannot disagree on the same
+ *     leg. Nothing else on the leg — OI, greeks, bid/ask, mark, last — is read
+ *     or written.
+ *
+ * @param {{items?:Array}} data payload from fetchChainFull()
+ * @param {{expiry:string, byLeg:Map<string,number>}} overlay from liveVolumeMap()
+ */
+function mergeLiveVolume(data, overlay) {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  for (const item of items) {
+    if (String(item?.['expiration-date'] || '') !== overlay.expiry) continue;
+    const strikes = Array.isArray(item?.strikes) ? item.strikes : [];
+    for (const s of strikes) {
+      // fetchChainFull() keys strikes by String(strike); parse back to a number
+      // so `"7675"` and `7675` land on the same key liveVolumeMap() built.
+      const strike = parseFloat(s?.['strike-price']);
+      if (!Number.isFinite(strike)) continue;
+      for (const [side, code] of [['call', 'C'], ['put', 'P']]) {
+        const leg = s?.[side];
+        if (!leg) continue;
+        const liveVol = overlay.byLeg.get(`${strike}|${code}`) || 0;
+        if (liveVol > (Number(leg.volume) || 0)) leg.volume = liveVol;
+      }
+    }
+  }
+}
+
 // Optional feature modules — loaded defensively so a missing or broken file can
 // NEVER take down the whole origin on boot. A hard `require` that throws here
 // crash-loops the container → Cloudflare 502 for the entire site. (This bit us
@@ -4372,6 +4412,20 @@ async function main() {
             // Returns null when not fully covered → fall back to REST unchanged.
             const live = forceRest ? null : (proxy?.serveChainFromLive?.(ticker, expiration) || null);
             const data = live || await fetchChainFull(ticker, expiration);
+            // A REST payload for the SUBSCRIBED underlying gets the live tape's
+            // day-volume merged over it. See liveVolumeMap() in
+            // proxy-tastytrade.js for the full reasoning: fetchChainFull()'s
+            // `volume` is hard-zeroed before 9:30 ET and lags the tape after it,
+            // so `live=0` callers — Multi Greek, which needs REST because it
+            // reads ACROSS expiries — showed "---" on the VOL / OI+VOL basis for
+            // a symbol whose volume this feed was holding the whole time.
+            //
+            // `max()`, never a replace, and only on the one expiry the feed
+            // streams. Live-served payloads already do this inside
+            // serveChainFromLive() and are left alone; every other ticker gets
+            // null back and its payload is untouched.
+            const volOverlay = live ? null : (proxy?.liveVolumeMap?.(ticker) || null);
+            if (volOverlay) mergeLiveVolume(data, volOverlay);
             sendJson(res, 200, { data, context: live ? 'live' : 'rest' });
           } catch (e) {
             sendJson(res, 502, { error: String(e?.message || e), ticker });

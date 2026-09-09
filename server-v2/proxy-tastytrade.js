@@ -4902,6 +4902,66 @@ class TastytradeProxy {
   }
 
   /**
+   * Per-leg LIVE day-volume for the streamed expiry, keyed `strike|C` /
+   * `strike|P`. Read-only — nothing here mutates feed state.
+   *
+   * ── Why this exists ────────────────────────────────────────────────────────
+   * `?live=0` opts a caller OUT of serveChainFromLive() so it gets REST's
+   * nearest-three expiries instead of the socket's single streamed one. That is
+   * the right trade for a ladder read ACROSS expiries (cbedge-v3's Multi Greek
+   * card) — but it hands that caller fetchChainFull()'s `volume`, which is the
+   * wrong number twice over:
+   *
+   *   - Before 9:30 ET it is HARD-ZEROED. TT REST `volume` still carries the
+   *     PRIOR session's cumulative total until their backend resets at the cash
+   *     open, so fetchChainFull() zeroes it rather than pass yesterday's tape
+   *     off as today's.
+   *   - After the open it lags by a poll, and only ever sees what REST reports.
+   *
+   * The dxLink Trade(dayVolume) this feed caches in `this.volumes` is
+   * session-correct in BOTH windows. The Options Chain page has always had it —
+   * it does not pass live=0, so SPX's front expiry lands on serveChainFromLive()
+   * — which is exactly why volume showed there and read "---" on the Multi Greek
+   * ladder's VOL / OI+VOL basis for the same symbol at the same moment.
+   *
+   * So: do not change what live=0 SERVES. Merge this map over the REST payload
+   * in the route, `volume = max(restVolume, liveVolume)` — the SAME rule
+   * serveChainFromLive() applies, for the same two reasons. A rollover 0 (the
+   * ~6PM ET session roll writes an explicit 0 into this.volumes for every active
+   * contract) must never shadow a good REST value, and a stale REST value must
+   * never shadow the live tape.
+   *
+   * Every contract on the expiry is walked, not just _activeContracts(): the
+   * REST payload carries the FULL strike range while that window is a ±band
+   * around spot, and keying by strike means the extra entries simply never match
+   * a leg REST did not return. Legs with no live volume are omitted entirely
+   * rather than emitted as 0, so a missing entry can only ever leave REST's own
+   * number in place.
+   *
+   * Returns null when this proxy cannot speak for the request — a different
+   * underlying, no active expiry, or a feed holding no volume yet — which leaves
+   * the REST payload untouched.
+   *
+   * @param {string} ticker
+   * @returns {{expiry:string, byLeg:Map<string,number>}|null}
+   */
+  liveVolumeMap(ticker) {
+    // The feed streams ONE underlying. Anything else is not ours to speak for.
+    if (chainTicker(ticker) !== SYMBOL) return null;
+    const exp = this.expiry;
+    if (!exp) return null;
+    const byLeg = new Map();
+    for (const c of this.contracts.values()) {
+      if (c.expiration !== exp) continue;
+      const v = Number(this.volumes.get(c.streamerSymbol)) || 0;
+      if (!(v > 0)) continue;
+      const key = `${c.strike}|${c.type === 'C' ? 'C' : 'P'}`;
+      if (v > (byLeg.get(key) || 0)) byLeg.set(key, v);
+    }
+    return byLeg.size ? { expiry: exp, byLeg } : null;
+  }
+
+  /**
    * Serve option marks for a list of OCC symbols from the LIVE maps. Returns the
    * same { items:[{symbol, iv, bid, ask, mark, last}] } shape as fetchOptionMarks
    * — but ONLY if EVERY requested symbol is present live; otherwise null (→ REST).

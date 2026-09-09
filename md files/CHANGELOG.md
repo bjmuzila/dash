@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-09-09 (f) - V3 MULTI GREEK: SPX had no VOLUME because `live=0` gets REST, and REST's volume is zeroed pre-open (`server-v2/proxy-tastytrade.js`, `server-v2/server-with-proxy.js`)
+
+The Multi Greek card showed SPX GEX but nothing on the VOL / OI+VOL basis, while
+the Options Chain page showed volume for the same symbol at the same moment.
+
+**Why.** The card fetches `/api/chains?ticker=SPX&range=all&live=0`. That flag
+is load-bearing and correct - `serveChainFromLive()` streams exactly ONE expiry,
+and the ladder is read ACROSS expiries, so SPX has to come from REST to get the
+nearest three. But `live=0` also hands the card `fetchChainFull()`'s `volume`,
+which is wrong twice over: it is HARD-ZEROED before 9:30 ET (TT REST `volume`
+still carries the prior session's cumulative total until their backend resets at
+the cash open), and after the open it only ever sees what REST last reported.
+The Options Chain page does not pass `live=0`, so SPX's front expiry lands on
+`serveChainFromLive()` - which already uses `max(dxLink dayVolume, REST volume)`.
+Hence one surface with volume and one without.
+
+**Fix - overlay, not a routing change.** `live=0` still serves exactly what it
+served; the route now merges the live tape over the REST payload.
+
+- `proxy-tastytrade.js`: new `TastytradeProxy#liveVolumeMap(ticker)`. Read-only.
+  Returns `strike|C` / `strike|P` -> live `dayVolume` for the streamed expiry, or
+  null when the proxy cannot speak for the request (different underlying, no
+  active expiry, no volume held). Legs with no live volume are OMITTED rather
+  than emitted as 0, so a gap can only ever leave REST's number in place. Walks
+  every contract on the expiry, not `_activeContracts()` - the REST payload
+  carries the full strike range while that window is a band around spot.
+- `server-with-proxy.js`: new module-scope `mergeLiveVolume(data, overlay)`,
+  applied in `/proxy/api/tt/chains/:ticker` on the REST branch only. Touches the
+  one streamed expiry, and only upward: `volume = max(restVolume, liveVolume)` -
+  the same rule `serveChainFromLive()` applies, so the two paths cannot disagree
+  on a leg. A rollover 0 (the ~6PM ET session roll writes an explicit 0 into
+  `this.volumes`) cannot shadow REST, and stale REST cannot shadow the tape.
+
+Nothing else on a leg is read or written - OI, greeks, bid/ask, mark and last
+are REST's answers untouched. Non-SPX tickers get null back and are untouched.
+Live-served payloads skip the overlay entirely (they already did this inside
+`serveChainFromLive()`).
+
+**Verified** against the shipped source with a 15-case harness: expiry scoping,
+`max()` in both directions, fractional strikes (492.5) round-tripping through
+`String()`/`parseFloat()`, null sides, and malformed payloads.
+
 ## 2026-09-09 (e) - V3 GEX CANDLES: the replay jitter was the AXIS LOCK, not the bubbles - fixed at the source, and (d)'s bucket guess reverted (`cbedge-v3/src/board/gexCandles/chart.ts`, `cbedge-v3/src/board/gexCandles/bubbles.ts`)
 
 (d) made it worse, and "especially 5 minutes" is the sentence that identifies
