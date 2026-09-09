@@ -19,6 +19,14 @@ import { usePageLoadStatus } from "@/lib/pageStatus";
 // Routes that render full-bleed without the dashboard chrome.
 const BARE_ROUTES = ["/", "/sign-in", "/sign-up", "/explore", "/pricing", "/terms", "/risk-disclosure", "/privacy", "/disclaimer"];
 
+// Next routes that wear V3LegacyToolbar instead of GlobalToolbar.
+//
+// These are support//chrome pages a customer reaches FROM the dashboard, and the
+// dashboard's bar is v3's now — landing on the old v2 toolbar reads as having
+// been dropped into a different product. The page itself is unchanged; only the
+// bar above it is. Prefix-matched, so /feedback/anything follows.
+const V3_CHROME_ROUTES = ["/feedback"];
+
 // Turn a pathname into a stable key + readable label for Page Activity, so every
 // route auto-reports without each page wiring the hook itself.
 //   "/dev/owner"        → { key: "dev/owner", label: "Dev / Owner" }
@@ -50,15 +58,17 @@ function VisitTracker() {
  *
  *   "app"        GlobalToolbar — the full v2 toolbar. Every Next route that
  *                renders through app/layout.tsx: the owner hub, /guide, /docs,
- *                /whats-new, /feedback. Unchanged, and the default.
+ *                /whats-new. Unchanged, and the default.
  *
  *   "v2-legacy"  V3LegacyToolbar — v3's palette, v3's nav, a Legacy menu and a
- *                ← Back to v3 button. Passed by app-vite/src/App.tsx and by
- *                nothing else: the Vite SPA at /app/* is the legacy wing now
- *                (v3 is the dashboard — see lib/v3Routes.ts), and GlobalToolbar
+ *                ← Back to v3 button. Two ways in: app-vite/src/App.tsx passes
+ *                it explicitly (the Vite SPA at /app/* is the legacy wing now —
+ *                v3 is the dashboard, see lib/v3Routes.ts — and GlobalToolbar
  *                there would be a strip of nav items that redirect out from
- *                under the click. The docks and providers below stay mounted
- *                either way; only the bar changes.
+ *                under the click), and V3_CHROME_ROUTES above selects it by
+ *                pathname for Next pages that hang off the v3 dashboard
+ *                (/feedback). The docks and providers below stay mounted either
+ *                way; only the bar changes.
  */
 export type ShellChrome = "app" | "v2-legacy";
 
@@ -148,6 +158,11 @@ export default function LayoutShell({
   const isBare =
     isEmbed || isPublicChrome || BARE_ROUTES.some((r) => pathname === r || pathname.startsWith(r + "/"));
 
+  // A route in V3_CHROME_ROUTES overrides whatever the caller asked for — the
+  // only caller that passes `chrome` is the SPA, which never renders these.
+  const effectiveChrome: ShellChrome =
+    V3_CHROME_ROUTES.some((r) => pathname === r || pathname.startsWith(r + "/")) ? "v2-legacy" : chrome;
+
   if (isBare) {
     return (
       <div
@@ -175,7 +190,7 @@ export default function LayoutShell({
     <MobileNavProvider>
       <NotesPanelProvider>
         <GexPanelProvider>
-          <ShellInner chrome={chrome}>{children}</ShellInner>
+          <ShellInner chrome={effectiveChrome}>{children}</ShellInner>
         </GexPanelProvider>
       </NotesPanelProvider>
     </MobileNavProvider>

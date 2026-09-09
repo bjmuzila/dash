@@ -1948,39 +1948,6 @@ register('/api/discord-share', {
   const ACTION_LABEL = { buy: 'BUY', sell: 'SELL', trim: 'TRIM', 'average-down': 'AVERAGE DOWN' };
   const ACTION_EMOJI = { buy: '🟢', sell: '🔴', trim: '🟠', 'average-down': '🔵' };
 
-  // ── The embed bar palette, and why it lives HERE ──────────────────────────
-  // The stripe down the left of a Discord embed is the embed's `color` field.
-  // These hex values are PAYLOAD: they are chosen to read against Discord's own
-  // dark surface, they are not this app's theme, and cbedge-v3's theme check
-  // rightly refuses colour literals in its source. So the server owns them, the
-  // clients ask for a bar BY NAME ('auto' | 'green' | ...), and /targets ships
-  // the palette so a swatch can be drawn without any client hardcoding a hex.
-  // One list, three surfaces, no drift.
-  const BARS = [
-    { id: 'green', label: 'Green', hex: '#3BA55D' },
-    { id: 'red', label: 'Red', hex: '#ED4245' },
-    { id: 'amber', label: 'Amber', hex: '#FAA61A' },
-    { id: 'cyan', label: 'Cyan', hex: '#219EBC' },
-    { id: 'blurple', label: 'Blurple', hex: '#5865F2' },
-    { id: 'white', label: 'White', hex: '#FFFFFF' },
-  ];
-  /** 'auto' means: the trade action decides, and a Note is not a trade. */
-  const ACTION_BAR = { buy: 'green', sell: 'red', trim: 'amber', 'average-down': 'cyan' };
-  const NOTE_BAR = 'blurple';
-
-  const barHex = (id) => BARS.find((b) => b.id === id)?.hex ?? '#5865F2';
-
-  function resolveBarInt(d) {
-    // A named bar wins. Legacy callers (the owner page, the v2 panel) may still
-    // send a resolved integer instead; honour it rather than breaking them.
-    const named = str(d?.bar, 12);
-    if (named && named !== 'auto') return parseInt(barHex(named).slice(1), 16);
-    if (!named && Number.isInteger(d?.color) && d.color >= 0 && d.color <= 0xffffff) return d.color;
-    const cls = botStore.ASSET_CLASSES.includes(d?.assetClass) ? d.assetClass : 'notes';
-    const id = cls === 'notes' ? NOTE_BAR : (ACTION_BAR[d?.action] ?? 'cyan');
-    return parseInt(barHex(id).slice(1), 16);
-  }
-
   /** Same owner gate as /api/discord-share, including its dev-mode fallback. */
   function ownerOk(ctx, verdict) {
     const id = (verdict?.userId || '').trim();
@@ -2021,7 +1988,8 @@ register('/api/discord-share', {
     const expiry = shortExpiry(str(d.expiry, 10));
     const notes = str(d.notes, 4000);
 
-    const color = resolveBarInt(d);
+    let color = Number.isInteger(d.color) ? d.color : NaN;
+    if (!Number.isFinite(color) || color < 0 || color > 0xffffff) color = 0x5865f2;
 
     const embed = { color, footer: { text: FOOTER_TEXT }, timestamp: new Date().toISOString() };
 
@@ -2099,44 +2067,7 @@ register('/api/discord-share', {
         return { id: target.id, label: target.label, ok: false, error: `Discord ${r.status}${detail ? `: ${detail}` : ''}` };
       }
       const msg = await r.json().catch(() => null);
-
-      // A role id that does not exist IN THAT SERVER is not an error to Discord:
-      // it answers 200 and renders the mention as "@unknown-role". Roles are
-      // per-server, so an id copied from a different Discord always lands here —
-      // and from the API side it is indistinguishable from success unless you
-      // look at `mention_roles`, which lists only the roles that actually
-      // resolved. That comparison is the ONLY way to catch this from a webhook,
-      // so it is worth doing on every send rather than leaving the owner to
-      // notice a grey @unknown-role in the channel.
-      let warning = null;
-      const ping = String(target.ping || '');
-      if (msg) {
-        const wantRoles = [...ping.matchAll(/<@&(\d+)>/g)].map((m) => m[1]);
-        const gotRoles = new Set((Array.isArray(msg.mention_roles) ? msg.mention_roles : []).map(String));
-        const missingRoles = wantRoles.filter((idv) => !gotRoles.has(idv));
-
-        // Same check for a user mention: `<@ID>` and `<@&ID>` differ by one
-        // character, so a role id pasted without the "&" reaches here as a user
-        // that does not exist and renders as @unknown-user.
-        const wantUsers = [...ping.matchAll(/<@!?(\d+)>/g)].map((m) => m[1]);
-        const gotUsers = new Set((Array.isArray(msg.mentions) ? msg.mentions : []).map((u) => String(u?.id)));
-        const missingUsers = wantUsers.filter((idv) => !gotUsers.has(idv));
-
-        if (missingRoles.length) {
-          warning =
-            `Posted, but role ${missingRoles.join(', ')} does not exist in that server — Discord showed it as @unknown-role. ` +
-            'Role IDs are per-server: copy it from the same Discord this webhook posts into.';
-        } else if (missingUsers.length) {
-          warning =
-            `Posted, but <@${missingUsers[0]}> did not resolve. Note that is a USER mention — a ROLE needs the "&": ` +
-            `<@&${missingUsers[0]}>.`;
-        }
-      }
-
-      return {
-        id: target.id, label: target.label, ok: true, warning,
-        messageId: msg?.id ?? null, channelId: msg?.channel_id ?? null,
-      };
+      return { id: target.id, label: target.label, ok: true, messageId: msg?.id ?? null, channelId: msg?.channel_id ?? null };
     } catch (err) {
       return { id: target.id, label: target.label, ok: false, error: String(err?.message || err) };
     }
@@ -2152,9 +2083,7 @@ register('/api/discord-share', {
     async handler(req, res, ctx, verdict) {
       if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
       try {
-        // `bars` rides along with the destinations so a client can draw the
-        // swatch row from server data and never hardcode a Discord colour.
-        send(res, 200, { ok: true, bars: BARS, ...(await botStore.loadTargets()) });
+        send(res, 200, { ok: true, ...(await botStore.loadTargets()) });
       } catch (err) {
         console.error('[bot-alert/targets]', err);
         send(res, 500, { ok: false, error: String(err?.message || err) });
@@ -2280,7 +2209,7 @@ register('/api/discord-share', {
           },
           null,
         );
-        send(res, result.ok ? 200 : 502, { ok: result.ok, warning: result.warning || null, result });
+        send(res, result.ok ? 200 : 502, { ok: result.ok, result });
       } catch (err) {
         console.error('[bot-alert/test]', err);
         send(res, 500, { ok: false, error: String(err?.message || err) });
@@ -6400,6 +6329,15 @@ if (libDb) {
   //   GET    /api/feedback/:id          ticket + thread (also marks it read)
   //   PATCH  /api/feedback/:id          {status} owner-only | {read:true}
   //   POST   /api/feedback/:id/messages {message} — reply from either side
+  //
+  // SCREENSHOTS. Either side can attach images to the opening message or to
+  // any reply. They ride the SAME JSON body as `shots: [<data URL>, …]` —
+  // there is no multipart parser in this process and a data URL rides the
+  // existing readJson() (same trade the recipe photo path makes). Bytes land
+  // in their own table so no ticket/thread query can ever drag megabytes into
+  // a list response, and they are served back one at a time by
+  //
+  //   GET    /api/feedback/shot/:sid  the image bytes (ETag + 304)
   {
     let fbEnsured = false;
     const ensureFeedback = async (pool) => {
@@ -6420,8 +6358,93 @@ if (libDb) {
       // replies, the owner about CUSTOMER ones.
       await pool.query(`ALTER TABLE customer_feedback ADD COLUMN IF NOT EXISTS user_read_at  TIMESTAMPTZ`);
       await pool.query(`ALTER TABLE customer_feedback ADD COLUMN IF NOT EXISTS owner_read_at TIMESTAMPTZ`);
+      // Screenshots. A SEPARATE table, deliberately: `SELECT * FROM
+      // customer_feedback` runs on every list load and must never be able to
+      // pull image bytes with it. message_id NULL = attached to the ticket's
+      // opening message (which is a customer_feedback row, not a message row).
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS customer_feedback_shots (
+          id            SERIAL PRIMARY KEY,
+          feedback_id   INTEGER NOT NULL REFERENCES customer_feedback(id) ON DELETE CASCADE,
+          message_id    INTEGER REFERENCES customer_feedback_messages(id) ON DELETE CASCADE,
+          author        TEXT NOT NULL DEFAULT 'user',
+          clerk_user_id TEXT,
+          mime          TEXT NOT NULL,
+          bytes         BYTEA NOT NULL,
+          byte_len      INTEGER NOT NULL,
+          etag          TEXT NOT NULL,
+          name          TEXT,
+          created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_feedback_shots ON customer_feedback_shots(feedback_id, id)`);
       fbEnsured = true;
     };
+
+    // ── screenshots ───────────────────────────────────────────────────────
+    //
+    // Caps are deliberately generous on the server and tight in the browser:
+    // both pages downscale to ~1600px and re-encode before they ever POST, so
+    // a real attachment is a couple of hundred KB. These are the outer guard
+    // against a hand-rolled request, not the working limit.
+    const SHOT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+    const MAX_SHOT_BYTES = 5 * 1024 * 1024;   // per image, decoded
+    const MAX_SHOTS = 6;                      // per message
+    // A data URL is ~4/3 its bytes, so six 5MB images cannot fit in this — which
+    // is the point: the body cap refuses the batch before anything is decoded.
+    const SHOT_BODY_BYTES = 26 * 1024 * 1024;
+
+    /** "data:image/png;base64,…" -> { mime, buf }. Throws with a customer-readable
+     *  message, because these surface directly in the composer. */
+    const decodeShot = (dataUrl) => {
+      const m = /^data:([a-z]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/i.exec(String(dataUrl || ''));
+      if (!m) throw new Error("That doesn't look like an image.");
+      const mime = m[1].toLowerCase();
+      if (!SHOT_TYPES.has(mime)) throw new Error('Use a PNG, JPEG, WebP or GIF.');
+      const buf = Buffer.from(m[2].replace(/\s+/g, ''), 'base64');
+      if (!buf.length) throw new Error('That image is empty.');
+      if (buf.length > MAX_SHOT_BYTES) throw new Error('That image is too big.');
+      return { mime, buf };
+    };
+
+    const shotEtag = (buf) => nodeCrypto.createHash('sha1').update(buf).digest('hex').slice(0, 16);
+
+    /**
+     * Store a batch against a ticket (messageId null) or one reply.
+     *
+     * Decoded FIRST, inserted second, so a bad image in the batch rejects the
+     * whole attachment set before half of it is on disk. The message itself is
+     * already written by then — a screenshot that will not decode must not lose
+     * the customer the words they typed, so callers report the count they got
+     * back rather than failing the send.
+     */
+    const saveShots = async (pool, { feedbackId, messageId, author, userId, list }) => {
+      if (!Array.isArray(list) || list.length === 0) return [];
+      if (list.length > MAX_SHOTS) throw new Error(`Up to ${MAX_SHOTS} images per message.`);
+      const decoded = list.map((d) => decodeShot(typeof d === 'string' ? d : d?.dataUrl));
+      const names = list.map((d) => (typeof d === 'string' ? null : (d?.name ? String(d.name).slice(0, 200) : null)));
+      const out = [];
+      for (let i = 0; i < decoded.length; i += 1) {
+        const { mime, buf } = decoded[i];
+        const row = (await pool.query(
+          `INSERT INTO customer_feedback_shots
+             (feedback_id, message_id, author, clerk_user_id, mime, bytes, byte_len, etag, name)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           RETURNING id, message_id, author, mime, byte_len, etag, name, created_at`,
+          [feedbackId, messageId, author, userId, mime, buf, buf.length, shotEtag(buf), names[i]],
+        )).rows[0];
+        out.push(row);
+      }
+      return out;
+    };
+
+    /** Every attachment on a ticket, WITHOUT the bytes. The thread renders from
+     *  this and pulls each image separately from /api/feedback/shot/:id. */
+    const loadShots = async (pool, feedbackId) => (await pool.query(
+      `SELECT id, message_id, author, mime, byte_len, etag, name, created_at
+         FROM customer_feedback_shots WHERE feedback_id = $1 ORDER BY id ASC`,
+      [feedbackId],
+    )).rows;
 
     // One ticket row plus its thread rollup. reply_count / last_activity_at
     // drive the list ordering; the unread counts are computed per side against
@@ -6434,7 +6457,8 @@ if (libDb) {
              COALESCE(t.msg_count, 0) AS reply_count,
              COALESCE(t.last_at, f.created_at) AS last_activity_at,
              COALESCE(t.owner_unread, 0) + (CASE WHEN f.owner_read_at IS NULL THEN 1 ELSE 0 END) AS unread_owner,
-             COALESCE(t.user_unread, 0) AS unread_user
+             COALESCE(t.user_unread, 0) AS unread_user,
+             (SELECT COUNT(*) FROM customer_feedback_shots s WHERE s.feedback_id = f.id) AS shot_count
         FROM customer_feedback f
         LEFT JOIN LATERAL (
           SELECT COUNT(*) AS msg_count,
@@ -6466,22 +6490,38 @@ if (libDb) {
         if (req.method === 'POST') {
           try {
             if (!userId) return send(res, 401, { error: 'Sign in to send feedback' });
-            const body = await readJson(req);
+            // Bigger body cap than the default 1MB — a ticket can carry images.
+            const body = await readJson(req, SHOT_BODY_BYTES);
             const message = String(body?.message ?? '').trim();
-            if (!message) return send(res, 400, { error: 'Message is required' });
+            const shots = Array.isArray(body?.shots) ? body.shots : [];
+            // A screenshot IS a report. "here's what it looks like" with no words
+            // opens a perfectly good ticket, so the message is only required when
+            // nothing is attached; the row still gets text so the inbox list has
+            // something to render.
+            if (!message && shots.length === 0) return send(res, 400, { error: 'Message is required' });
             if (message.length > 5000) return send(res, 400, { error: 'Message too long' });
+            let decodedShots;
+            try { decodedShots = shots.map((d) => decodeShot(typeof d === 'string' ? d : d?.dataUrl)); }
+            catch (e) { return send(res, 400, { error: String(e?.message || e) }); }
+            if (decodedShots.length > MAX_SHOTS) return send(res, 400, { error: `Up to ${MAX_SHOTS} images per message.` });
             let email = null;
             try { const u = await libDb.getUserById(userId); email = u?.email ?? null; } catch { /* email optional */ }
             const row = await libDb.addFeedback({
               clerk_user_id: userId, email,
               category: body?.category ? String(body.category) : 'note',
-              message, page: body?.page ? String(body.page) : null,
+              message: message || (shots.length === 1 ? '(screenshot)' : `(${shots.length} screenshots)`),
+              page: body?.page ? String(body.page) : null,
             });
+            // Attachments hang off the ticket row (message_id NULL) because the
+            // opening message is the ticket, not a thread row.
+            let saved = [];
+            try { saved = await saveShots(pool, { feedbackId: row.id, messageId: null, author: 'user', userId, list: shots }); }
+            catch { /* the ticket is already open — never lose it over an image */ }
             // Opening a ticket marks it read for its author — the customer's
             // unread dot is for owner replies, not for their own words.
             try { await pool.query(`UPDATE customer_feedback SET user_read_at = CURRENT_TIMESTAMP WHERE id = $1`, [row.id]); }
             catch { /* read mark is cosmetic */ }
-            return send(res, 200, { ok: true, feedback: row, id: row.id });
+            return send(res, 200, { ok: true, feedback: row, id: row.id, shots: saved });
           } catch (err) { return send(res, 500, { error: 'Feedback save failed', detail: String(err) }); }
         }
 
@@ -6552,6 +6592,56 @@ if (libDb) {
       },
     });
 
+    // /api/feedback/shot/:sid — one attachment's BYTES.
+    //
+    // Registered before /api/feedback/:id purely for readability (the patterns
+    // have different segment counts, so neither can shadow the other).
+    //
+    // Same visibility rule as the thread it hangs off: the owner sees any of
+    // them, a customer only the ones on their own tickets — checked by joining
+    // back to the ticket rather than trusting the id in the URL.
+    //
+    // Cached immutably ONLY when the client passes ?v=<etag>: the id never
+    // points at different bytes (attachments are insert-only), so a hit is
+    // always correct, and the ETag makes even a cold request cheap.
+    registerDynamic('/api/feedback/shot/:sid', {
+      auth: 'user', methods: ['GET'],
+      async handler(req, res, ctx, access) {
+        const userId = access.userId;
+        const owner = isFeedbackOwner(ctx, userId);
+        const sid = Number(ctx.params?.sid ?? 0);
+        if (!Number.isFinite(sid) || sid <= 0) return send(res, 400, { error: 'Bad image id' });
+        try {
+          const pool = await libDb.getDb();
+          await ensureFeedback(pool);
+          const row = (await pool.query(
+            `SELECT s.mime, s.bytes, s.etag, f.clerk_user_id
+               FROM customer_feedback_shots s
+               JOIN customer_feedback f ON f.id = s.feedback_id
+              WHERE s.id = $1`,
+            [sid],
+          )).rows[0];
+          if (!row) return send(res, 404, { error: 'Not found' });
+          if (!owner && row.clerk_user_id !== userId) return send(res, 403, { error: 'Forbidden' });
+
+          const tag = `"${row.etag}"`;
+          if ((req.headers['if-none-match'] || '') === tag) {
+            res.writeHead(304, { ETag: tag });
+            res.end();
+            return;
+          }
+          const versioned = new URL(req.url || '/', 'http://localhost').searchParams.get('v');
+          res.writeHead(200, {
+            'Content-Type': row.mime,
+            'Content-Length': row.bytes.length,
+            'Cache-Control': versioned ? 'private, max-age=31536000, immutable' : 'private, max-age=60',
+            ETag: tag,
+          });
+          res.end(row.bytes);
+        } catch (err) { send(res, 500, { error: 'Image load failed', detail: String(err) }); }
+      },
+    });
+
     // /api/feedback/:id — the thread. GET also stamps the viewer's read mark,
     // because "I opened it" is the only read signal either surface has.
     registerDynamic('/api/feedback/:id', {
@@ -6589,13 +6679,14 @@ if (libDb) {
               WHERE feedback_id = $1 ORDER BY created_at ASC, id ASC`,
             [id],
           )).rows;
+          const shots = await loadShots(pool, id);
           await pool.query(`UPDATE customer_feedback SET ${readCol(owner)} = CURRENT_TIMESTAMP WHERE id = $1`, [id]);
           // isAuthor is what decides whose words read as "You" in the thread.
           // It is NOT the same question as isOwner: the owner reading someone
           // else's ticket is not its author, and the owner reading their own is
           // both. Only the server knows which, so it says so rather than letting
           // each page guess from the surface it happens to be rendering on.
-          send(res, 200, { ticket, messages, isOwner: owner, isAuthor: ticket.clerk_user_id === userId });
+          send(res, 200, { ticket, messages, shots, isOwner: owner, isAuthor: ticket.clerk_user_id === userId });
         } catch (err) { send(res, 500, { error: 'Feedback load failed', detail: String(err) }); }
       },
     });
@@ -6609,10 +6700,15 @@ if (libDb) {
         const id = Number(ctx.params?.id ?? 0);
         if (!Number.isFinite(id) || id <= 0) return send(res, 400, { error: 'Bad ticket id' });
         try {
-          const body = await readJson(req);
+          const body = await readJson(req, SHOT_BODY_BYTES);
           const text = String(body?.message ?? '').trim();
-          if (!text) return send(res, 400, { error: 'Message is required' });
+          const shots = Array.isArray(body?.shots) ? body.shots : [];
+          // Same rule as opening a ticket: a screenshot on its own is a reply.
+          if (!text && shots.length === 0) return send(res, 400, { error: 'Message is required' });
           if (text.length > 5000) return send(res, 400, { error: 'Message too long' });
+          try { shots.forEach((d) => decodeShot(typeof d === 'string' ? d : d?.dataUrl)); }
+          catch (e) { return send(res, 400, { error: String(e?.message || e) }); }
+          if (shots.length > MAX_SHOTS) return send(res, 400, { error: `Up to ${MAX_SHOTS} images per message.` });
           const pool = await libDb.getDb();
           await ensureFeedback(pool);
           const row = (await pool.query('SELECT id, clerk_user_id, status FROM customer_feedback WHERE id = $1', [id])).rows[0];
@@ -6626,6 +6722,10 @@ if (libDb) {
             [id, author, userId, text],
           )).rows[0];
 
+          let savedShots = [];
+          try { savedShots = await saveShots(pool, { feedbackId: id, messageId: message.id, author, userId, list: shots }); }
+          catch { /* the reply is already sent — never lose it over an image */ }
+
           // A customer replying to a closed ticket reopens it — otherwise the
           // reply lands in a thread nobody is looking at any more.
           const reopen = author === 'user' && row.status === 'resolved';
@@ -6637,7 +6737,7 @@ if (libDb) {
               WHERE id = $1`,
             [id],
           );
-          send(res, 200, { ok: true, message, ticket: await loadTicket(pool, id) });
+          send(res, 200, { ok: true, message, shots: savedShots, ticket: await loadTicket(pool, id) });
         } catch (err) { send(res, 500, { error: 'Reply failed', detail: String(err) }); }
       },
     });

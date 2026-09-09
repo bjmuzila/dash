@@ -1,122 +1,52 @@
 # Changelog
 
-## 2026-09-08 (l) - The embed palette moves to the server, because v3's theme check was right (`server-v2/api-router.js`, `cbedge-v3/src/shell/BotAlertPanel.tsx`)
+## 2026-09-08 (i) - FEEDBACK: screenshots on support tickets, both sides (`server-v2/api-router.js`, `components/shared/feedbackShots.ts`, `components/shared/FeedbackThread.tsx`, `app/feedback/page.tsx`, `app/owner/feedback/page.tsx`, `owner-vite/src/lib/feedbackShots.ts`, `owner-vite/src/pages/Feedback.tsx`)
 
-`check-theme` failed the v3 panel on twelve colour literals and refusing it was
-correct - but the fix is not a token. Those hexes are Discord PAYLOAD: they are
-chosen to read against Discord's own surface, they never touch a CB Edge
-pixel, and adding them to `tokens.css` would put six foreign colours in the
-design system purely to get past a lint.
+A customer can attach images to a ticket or any reply, and the inbox on
+owner.cbedge.net can attach them back. Paste, drag, or the new 📎 button;
+thumbnails render inside the bubble they were sent with and open full-size on a
+click (Esc closes). A screenshot with NO words is a valid ticket and a valid
+reply - "here's what it looks like" is the report - so the message is only
+required when nothing is attached; the ticket row is titled `(screenshot)` so
+the inbox list still has something to show.
 
-So the server owns them instead:
+**Data URLs in the ordinary JSON body, not multipart.** server-v2 has no
+multipart parser and does not need one: `shots: [{dataUrl,name}]` rides the
+existing `readJson()` (raised to a 26MB cap on the two POSTs that accept them).
+Same trade the recipe photo path makes.
 
-  - `BARS` lives in the `/api/bot-alert` block, with `ACTION_BAR` (buy green,
-    sell red, trim amber, average-down cyan) and `NOTE_BAR` (blurple).
-  - `GET /api/bot-alert/targets` now ships `bars` alongside the destinations, so
-    a client can draw the swatch row from server data.
-  - The composer sends a bar BY NAME - `'auto' | 'green' | ...` - and
-    `resolveBarInt()` turns it into the integer Discord wants. A legacy caller
-    sending a resolved `color` integer (the owner page, the v2 panel) still
-    works; the named form wins when both are present.
+**The browser downscales before it POSTs.** `feedbackShots.ts` resizes to
+1600px on the long edge and re-encodes to JPEG at q0.9 - high, deliberately,
+because this is a picture of TEXT and ringing around small glyphs is exactly
+what makes a bug report unreadable. A small PNG (<400KB, already under 1600px)
+ships untouched; an animated GIF passes through whole, since a canvas would
+flatten it to one frame. A 4K screenshot lands at a couple of hundred KB
+instead of 8MB, which is the difference between a reply that sends on a phone
+and one that times out.
 
-Net effect: zero colour literals in the v3 file, passing for the right reason
-rather than by suppression, and the palette has ONE home instead of three
-copies that could drift.
+**Bytes live in their own table.** `customer_feedback_shots`, created lazily by
+the same `ensureFeedback(pool)` pattern as the messages table - so no migration
+step, and `SELECT ... FROM customer_feedback` on every list load can never drag
+image bytes with it. `message_id NULL` means the attachment belongs to the
+ticket's opening message (which is a `customer_feedback` row, not a message
+row). Ticket rows now carry `shot_count`, which is the 📎 badge on a list row.
 
-## 2026-09-08 (k) - BOT moves into both toolbars, owner-gated (`components/shared/BotAlert.tsx` NEW, `components/shared/BotAlertPanel.tsx` NEW, `cbedge-v3/src/shell/BotAlert.tsx` NEW, `cbedge-v3/src/shell/BotAlertPanel.tsx` NEW, `components/shared/GlobalToolbar.tsx`, `cbedge-v3/src/shell/Shell.tsx`)
+**Serving them: `GET /api/feedback/shot/:sid`.** Visibility is checked by
+joining back to the ticket - the owner sees any attachment, a customer only the
+ones on their own tickets - never by trusting the id in the URL. ETag + 304, and
+`immutable` caching only when the client passes `?v=<etag>`, which it always
+does; attachments are insert-only so an id can never point at different bytes.
 
-The composer is now a toolbar dropdown, so an alert gets written while looking
-at the chart that justified it. A trip to another origin is long enough that it
-gets written later, from memory, or not at all.
+**An image that fails to store never loses the words.** `saveShots()` runs after
+the message row is already written and its failure is swallowed: a reply that
+sent is a reply that sent. Decode errors before that point are the ones that
+reject, with a sentence meant to be read by the person typing.
 
-**Two implementations, deliberately.** The shells share no styling system - v3
-is class-based on its design tokens, v2 is inline-styled on `HOME_THEME` - and
-v3's `@` alias points at its own `src`, so there is no import path between them.
-The FIELDS and the single POST are identical on purpose: a second, subtly
-different composer is how one surface starts posting alerts that do not look
-like the other's. **Change one, change both.**
-
-**Owner-gated twice.** Neither component renders anything for a non-owner - no
-button, no DOM, and v3 never fetches the panel chunk. That is chrome. The gate
-is `/api/bot-alert`, which checks the owner id server-side and 403s everyone
-else, so a rendered composer would still fail at every button. v2 uses
-`useIsOwner` from `@/components/auth/useIsOwner` (documented canonical, FAILS
-CLOSED); v3 uses `isOwner` from `@/data/auth`. Same pairing as BzilaAlerts.
-
-**v3's panel is `lazy()`** because `Shell.tsx` is the entry chunk, capped at
-37.1KB brotli by budgets.json. The trigger is toolbar chrome and has to be in
-it; the composer is several KB that exactly one account can ever open. v2's is
-`dynamic(..., { ssr: false })` for the same reason - every visitor downloads
-GlobalToolbar.
-
-**v2's panel is portaled, `position: fixed`, anchored off a DOMRect** - not
-`position: absolute`. The toolbar pill sets `backdrop-filter`, which creates a
-stacking context that traps absolutely-positioned children (the load-bearing
-comment in GlobalToolbar.tsx). Same recipe as NavMenu and BzilaAlerts.
-
-**What is NOT in the dropdown: Manage.** Adding a Discord or pasting a webhook
-URL is setup, done once, and it stays on owner.cbedge.net where all four routes
-are visible at once.
-
-Two behaviours worth knowing: the panel does NOT close on send (with several
-destinations a partial failure is normal, and closing would hide "2 of 4
-landed" at the moment it matters), and sending clears only the per-alert fields
-- destinations and asset class survive, because the next alert usually goes to
-the same rooms about the same kind of thing and re-picking them every time is
-how one gets forgotten.
-
-## 2026-09-08 (j) - BOT: the save that silently did nothing, and the missing "&" (`owner-vite/src/pages/BotManage.tsx`, `server-v2/api-router.js`)
-
-**Why a corrected ping would not stick.** A Discord saves as ONE unit, so a
-single invalid ping row rejects the whole card - including the rows that were
-fine. Options / Futures / Equity were still holding role NAMES, so every Save
-was refused and the corrected Notes ping never reached the database. The rule is
-right (never store an unusable ping) but the refusal was reported in a banner at
-the TOP of the page, which is off-screen when you are looking at the fourth
-route row. So it read as "I saved it and nothing changed".
-
-The refusal now renders INSIDE the card, the card border turns red, and the
-message says explicitly that nothing was saved and names every offending row.
-Server-side rejections land in the same place.
-
-**The other half: `<@ID>` is not `<@&ID>`.** They differ by one character and
-look identical at a glance, but the first tags one PERSON and the second tags a
-ROLE - and a role id pasted without the `&` becomes a user that does not exist.
-Two additions:
-
-  - The field now says which it is while you type, and for a user mention offers
-    the exact role form of the same id to paste.
-  - `postTo()` extends the `mention_roles` check to `mentions`, so a user
-    mention that did not resolve is reported the same way a role is, with the
-    `&` fix in the message.
-
-**A row still showing a stale warning is correct, not a bug:** Test posts what is
-STORED, so if a save was refused the test proves what the room would actually
-get. That is the behaviour that surfaced this - the warning naming an old role
-id was the evidence the save had never landed.
-
-## 2026-09-08 (i) - BOT: catch @unknown-role, the ping failure Discord reports as success (`server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`, `owner-vite/src/pages/Bot.tsx`)
-
-A role ID that does not exist IN THAT SERVER is not an error to Discord. It
-answers 200, the post lands, and the mention renders as a grey `@unknown-role`
-that notifies nobody. Roles are per-server, so an ID copied from a different
-Discord always ends up here - and from the API side it is indistinguishable from
-a clean send.
-
-`mention_roles` on the created message is the only tell: it lists the roles that
-actually RESOLVED. So `postTo()` now diffs the role IDs in the ping against that
-array and returns a `warning` when any are missing, naming the ID and saying
-role IDs are per-server. Free - the response is already being read for the
-message id.
-
-Surfaced in both places it matters: the 🔔 test shows it in amber instead of
-"✓ posted", and a broadcast that posted-but-did-not-tag says so rather than
-looking clean. That is the difference between "the room was notified" and "you
-think the room was".
-
-**Also:** Save now refuses when any ping row is invalid, naming every bad row at
-once. Previously the client flagged them in red but still POSTed, so the server
-rejected on the first bad row and the rest needed another round trip to find.
+Caps: 6 images per message, 5MB each decoded (server), enforced again in the
+composer so the message says so before an upload starts. owner-vite carries its
+own copy of `feedbackShots.ts` and its own inlined thread, for the same reason
+Budget and Reta exist twice - no `@/components` alias, separate build. Both
+copies are marked MIRROR.
 
 ## 2026-09-08 (h) - BOT: each Discord posts under its own name and picture (`server-v2/bot-targets-store.js`, `server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`)
 
