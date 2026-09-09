@@ -1,5 +1,80 @@
 # Changelog
 
+## 2026-09-09 (h) - FEEDBACK: the unread badge the owner could not clear (`server-v2/api-router.js`)
+
+Brandon's avatar sat on a "1" that nothing would take off. Opening the ticket
+did not clear it, reading the reply did not clear it, and there was no action
+anywhere that could.
+
+**The read mark was keyed on the wrong question.** `readCol(owner)` chose which
+column to stamp from isOwner alone — so every ticket the OWNER opened stamped
+`owner_read_at`, including tickets the owner had opened as a customer from
+/feedback. Their own `user_read_at` never moved, and the customer-side count
+(`unread_user`: owner messages newer than `user_read_at`) therefore never went
+back to zero. The owner is also a customer, and the code had no way to say so.
+
+`readSet(owner, isAuthor)` replaces it and keys on WHICH SIDE OF THIS TICKET the
+viewer is:
+
+    author, not staff  → user_read_at
+    staff, not author  → owner_read_at
+    BOTH               → both
+
+That last line is the fix. Someone who is both sides of a ticket has seen
+everything on it the moment they open it, and leaving either mark behind is a
+badge nothing can clear. `isAuthor` was already computed and already sent to the
+client (it is what decides whose words read as "You") — it just was not being
+used for this. Applied on all three paths that stamp a mark: the thread GET, the
+`{read:true}` PATCH, and sending a reply.
+
+No migration: the next open of an affected ticket stamps the mark and the badge
+drops. Behaviour otherwise unchanged — the badge still lights only when CB Edge
+has sent a message the customer has not read, which is exactly what it was
+always supposed to mean.
+
+Also re-recorded, because its entry was lost to a concurrent whole-file
+overwrite of this changelog: **/feedback was ported into v3 on 2026-09-09** —
+`cbedge-v3/src/pages/Feedback.tsx`, `pages/feedback/Thread.tsx`,
+`pages/feedback/shots.ts`, a route in `cbedge-v3/src/App.tsx`,
+`app/v3/feedback/route.ts`, and the two account-menu rows in
+`cbedge-v3/src/shell/UserMenu.tsx` now `navigate()` instead of leaving the SPA.
+No rail icon, deliberately (the rail is trading surfaces; support is an
+account-menu destination) — the reason is written at the lazy() import. The Next
+page at `app/feedback/page.tsx` stays as the v2 wing's copy.
+
+## 2026-09-09 (g) - V3 NET PREMIUM CARD: RTH / ETH span toggle (`cbedge-v3/src/board/netPremium/NetPremiumCard.tsx`)
+
+The card was RTH-only with no switch, on the reasoning that the /flow page's
+span control is a lookback tool. Wrong for the same reason the page grew one:
+SPX prints nearly around the clock, and on the fixed 9:30-4:00 grid an overnight
+session draws as a flat zero line - the prints are not summarised, they are
+DISCARDED, and nothing on the card says so. A pre-open glance was blank whether
+the tape was empty or busy.
+
+**Added.** The page's own `SegGroup`, relabelled `RTH | ETH` in the card toolbar.
+ETH is the page's `24h` span - the grid widened to the extent of the bins the
+server returned, clamped to the ET calendar day and snapped to the bin grid (see
+`buildNetSeries`). RTH stays the default and stays the classic 9:30-4:00 grid.
+"ETH" not "24H" because that is what the candles card's identical switch says,
+and one board should not carry two names for one window.
+
+- Persisted per browser under `cb-v3-np-span`, read lazily so the first paint is
+  already on the stored span rather than redrawing the grid one frame in. Both
+  the read and the write are wrapped - storage throws outright in a locked-down
+  browser.
+- On ETH the card prints the resolved window (`18:00-09:28 ET`) under the
+  legend, the same line the /flow page shows. RTH gets no caption: its grid is
+  always the same two times.
+- `data-capture-meta` now carries the span, so a shared CopyShot PNG says which
+  window it is. RTH and ETH of the same minute are different pictures.
+- Toolbar label trimmed `OTM · closest expiry` -> `OTM`. The expiry is already
+  spelled out in the next span, so the second half was saying it twice.
+
+**No fetch change.** `/proxy/flow-netprem` is not span-scoped - the toggle is a
+re-render of bins already in hand, not a reload. The spot overlay follows for
+free: `buildSpotSeries` is already keyed off `series.openSec/closeSec`, so the
+lines and the overlay cannot cover different parts of the axis.
+
 ## 2026-09-09 (f) - V3 MULTI GREEK: SPX had no VOLUME because `live=0` gets REST, and REST's volume is zeroed pre-open (`server-v2/proxy-tastytrade.js`, `server-v2/server-with-proxy.js`)
 
 The Multi Greek card showed SPX GEX but nothing on the VOL / OI+VOL basis, while

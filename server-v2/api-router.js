@@ -6628,8 +6628,34 @@ if (libDb) {
     const isFeedbackOwner = (ctx, userId) => Boolean(ctx.ownerUserId) && userId === ctx.ownerUserId;
     const loadTicket = async (pool, id) =>
       (await pool.query(`${TICKET_SELECT} WHERE f.id = $1`, [id])).rows[0] ?? null;
-    // Which read mark a viewer stamps. Derived from a boolean, never from input.
-    const readCol = (owner) => (owner ? 'owner_read_at' : 'user_read_at');
+    /**
+     * Which read mark(s) a viewer stamps, as a SQL SET fragment.
+     *
+     * Keyed on which SIDE OF THIS TICKET the viewer is, which is not the same
+     * question as "are they staff". The owner is also a customer — they open
+     * tickets from /feedback like anyone else — and keying this on isOwner alone
+     * was a bug with a very visible symptom: the owner opening their OWN ticket
+     * stamped owner_read_at, their user_read_at never moved, and the unread
+     * badge on their avatar sat at 1 forever with no way to clear it. (Reported
+     * 2026-09-09: "how does the 1 come off".)
+     *
+     *   author, not staff   → user_read_at   (they read the owner's replies)
+     *   staff, not author   → owner_read_at  (they read the customer's)
+     *   BOTH                → both. Someone who is both sides of a ticket has
+     *                         seen everything on it by opening it; leaving
+     *                         either mark behind means a badge nothing can clear.
+     */
+    const readSet = (owner, isAuthor) => {
+      const cols = [];
+      if (isAuthor) cols.push('user_read_at');
+      if (owner && !isAuthor) cols.push('owner_read_at');
+      // Owner reading their own ticket is both sides at once.
+      if (owner && isAuthor) cols.push('owner_read_at');
+      // Neither is impossible — a non-owner non-author is already 403'd above —
+      // but an empty SET would be a syntax error, so it stays a real fallback.
+      if (!cols.length) cols.push('user_read_at');
+      return cols.map((c) => `${c} = CURRENT_TIMESTAMP`).join(', ');
+    };
 
     register('/api/feedback', {
       auth: 'user', methods: ['GET', 'POST', 'PATCH'],
@@ -6812,6 +6838,7 @@ if (libDb) {
           const ticket = await loadTicket(pool, id);
           if (!ticket) return send(res, 404, { error: 'Not found' });
           if (!owner && ticket.clerk_user_id !== userId) return send(res, 403, { error: 'Forbidden' });
+          const isAuthor = ticket.clerk_user_id === userId;
 
           if (req.method === 'PATCH') {
             const body = await readJson(req);
@@ -6824,7 +6851,7 @@ if (libDb) {
               );
             }
             if (body?.read) {
-              await pool.query(`UPDATE customer_feedback SET ${readCol(owner)} = CURRENT_TIMESTAMP WHERE id = $1`, [id]);
+              await pool.query(`UPDATE customer_feedback SET ${readSet(owner, isAuthor)} WHERE id = $1`, [id]);
             }
             return send(res, 200, { ok: true, ticket: await loadTicket(pool, id) });
           }
@@ -6835,13 +6862,13 @@ if (libDb) {
             [id],
           )).rows;
           const shots = await loadShots(pool, id);
-          await pool.query(`UPDATE customer_feedback SET ${readCol(owner)} = CURRENT_TIMESTAMP WHERE id = $1`, [id]);
+          await pool.query(`UPDATE customer_feedback SET ${readSet(owner, isAuthor)} WHERE id = $1`, [id]);
           // isAuthor is what decides whose words read as "You" in the thread.
           // It is NOT the same question as isOwner: the owner reading someone
           // else's ticket is not its author, and the owner reading their own is
           // both. Only the server knows which, so it says so rather than letting
           // each page guess from the surface it happens to be rendering on.
-          send(res, 200, { ticket, messages, shots, isOwner: owner, isAuthor: ticket.clerk_user_id === userId });
+          send(res, 200, { ticket, messages, shots, isOwner: owner, isAuthor });
         } catch (err) { send(res, 500, { error: 'Feedback load failed', detail: String(err) }); }
       },
     });
@@ -6871,6 +6898,7 @@ if (libDb) {
           if (!owner && row.clerk_user_id !== userId) return send(res, 403, { error: 'Forbidden' });
 
           const author = owner ? 'owner' : 'user';
+          const isAuthor = row.clerk_user_id === userId;
           const message = (await pool.query(
             `INSERT INTO customer_feedback_messages (feedback_id, author, clerk_user_id, body)
              VALUES ($1, $2, $3, $4) RETURNING id, author, body, created_at`,
@@ -6888,7 +6916,7 @@ if (libDb) {
             `UPDATE customer_feedback
                 SET updated_at = CURRENT_TIMESTAMP,
                     status = ${reopen ? `'open'` : 'status'},
-                    ${readCol(owner)} = CURRENT_TIMESTAMP
+                    ${readSet(owner, isAuthor)}
               WHERE id = $1`,
             [id],
           );

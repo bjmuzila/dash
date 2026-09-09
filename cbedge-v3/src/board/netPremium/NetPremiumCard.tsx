@@ -1,5 +1,6 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
+import { SegGroup } from '@/design/primitives/Controls'
 import { useFrame } from '@/data/hooks'
 import { usePageSymbol } from '@/data/symbol'
 import type { FlowFrame, FlowTapePrint } from '@/contract/frames'
@@ -17,6 +18,7 @@ import {
   mergeTape,
   normTicker,
   todayYmdET,
+  type ChartSpan,
   type FlowFilters,
 } from '@/data/flowMath'
 import { NET_DRIFT_CALL, NET_DRIFT_PUT } from '@/design/theme'
@@ -33,7 +35,7 @@ import { fmtContractDate } from '../cardTitle'
 // (/proxy/flow-netprem), so the card and the page can never disagree about what
 // a minute's net premium was.
 //
-// Three deliberate narrowings versus the page:
+// Two deliberate narrowings versus the page:
 //
 //   1. THE CLOSEST EXPIRATION ONLY. The page lets you pick an expiry or a DTE
 //      window; the card is always the front one. A board card is a glance, and
@@ -42,7 +44,27 @@ import { fmtContractDate } from '../cardTitle'
 //   2. OTM ONLY. Both sides. In-the-money premium is mostly intrinsic value
 //      changing hands, which drifts with spot rather than with positioning and
 //      swamps the line it is drawn next to.
-//   3. RTH span, no toggle. The page's 24H switch is a lookback tool.
+//
+// ── RTH / ETH ────────────────────────────────────────────────────────────────
+// This card used to be RTH with no toggle, on the reasoning that the page's
+// span switch is a lookback tool. That was wrong for the same reason the page
+// grew the switch: SPX prints nearly around the clock now, and on the fixed
+// 9:30–4:00 grid an overnight session draws as a flat zero line — the prints
+// are not summarised, they are DISCARDED, and the card gives no sign it did it.
+// A pre-open glance at this card was therefore blank whether the tape was
+// empty or busy.
+//
+// So it is the page's own control, relabelled: ETH is the page's `24h` span —
+// the grid widened to the extent of the bins the server returned, clamped to
+// the ET calendar day (see buildNetSeries). RTH stays the default and stays
+// the classic 9:30–4:00 grid. "ETH" rather than "24H" because that is what the
+// candles card's identical switch says, and one board should not have two names
+// for one window.
+//
+// The choice is PER BROWSER, not per board: it is a reading habit, and a trader
+// who works the overnight session should not re-pick it every session. The
+// fetch is untouched — `/proxy/flow-netprem` is not span-scoped, so this is a
+// re-render of bins already in hand, not a reload.
 //
 // ── Why this fetches the tape before it fetches the chart ────────────────────
 // Non-negotiable 3 says a route fires everything in parallel at entry, and this
@@ -60,10 +82,32 @@ import { fmtContractDate } from '../cardTitle'
 // "not available" rather than an empty grid that looks like a quiet day.
 // ─────────────────────────────────────────────────────────────────────────────
 
+const SPAN_KEY = 'cb-v3-np-span'
+
+/** Stored span, or RTH. Wrapped: storage throws outright in a locked-down browser. */
+function readStoredSpan(): ChartSpan {
+  try {
+    return localStorage.getItem(SPAN_KEY) === '24h' ? '24h' : 'rth'
+  } catch {
+    return 'rth'
+  }
+}
+
 export function NetPremiumCard() {
   const { symbol } = usePageSymbol()
   const active = normTicker(symbol)
   const date = todayYmdET()
+
+  // Read lazily so the first paint is already on the stored span — seeding
+  // 'rth' and correcting in an effect would redraw the whole grid one frame in.
+  const [chartSpan, setChartSpan] = useState<ChartSpan>(readStoredSpan)
+  useEffect(() => {
+    try {
+      localStorage.setItem(SPAN_KEY, chartSpan)
+    } catch {
+      /* storage unavailable — the session still works, it just won't persist */
+    }
+  }, [chartSpan])
 
   // The tape. Floored at the chart's own noise floor, not the page's slider —
   // this card has no slider and the drift line is meant to carry everything.
@@ -113,8 +157,8 @@ export function NetPremiumCard() {
   )
 
   const series = useMemo(
-    () => buildNetSeries(bins, { isToday: true, date, chartSpan: 'rth' }),
-    [bins, date],
+    () => buildNetSeries(bins, { isToday: true, date, chartSpan }),
+    [bins, date, chartSpan],
   )
 
   // Spot overlay off the SAME bins the drift lines are built from, so the two
@@ -178,12 +222,30 @@ export function NetPremiumCard() {
       // The ticker and the contract date are what make a shared PNG of this card
       // still mean something a week later, and this card is the only thing that
       // knows them. See shell/snapshot.ts (META_ATTR).
-      data-capture-meta={`${active}${expiry ? ` · ${fmtContractDate(expiry)}` : ''} · OTM`}
+      // The span rides along: RTH and ETH of the same minute are different
+      // pictures, and a shared PNG that does not say which one it is invites
+      // exactly the misread the toggle exists to prevent.
+      data-capture-meta={`${active}${expiry ? ` · ${fmtContractDate(expiry)}` : ''} · OTM · ${
+        chartSpan === '24h' ? 'ETH' : 'RTH'
+      }`}
     >
       <CardToolbar>
-        <span className="text-2xs font-bold uppercase tracking-[0.08em] text-muted">
-          OTM · closest expiry
-        </span>
+        <SegGroup<ChartSpan>
+          value={chartSpan}
+          onChange={setChartSpan}
+          options={[
+            { label: 'RTH', value: 'rth', title: 'Regular trading hours only (9:30–4:00 ET)' },
+            {
+              label: 'ETH',
+              value: '24h',
+              title: 'Extended hours — pre-open, RTH and the overnight global session',
+            },
+          ]}
+        />
+        {/* Was "OTM · closest expiry". The expiry is spelled out in the next
+            span, so the second half was saying it twice — and the toggle needs
+            the room more than the repetition does. */}
+        <span className="text-2xs font-bold uppercase tracking-[0.08em] text-muted">OTM</span>
         <span className="tabular text-2xs font-semibold text-accent">
           {active}
           {expiry ? ` · ${fmtContractDate(expiry)}` : ''}
@@ -213,6 +275,16 @@ export function NetPremiumCard() {
               </span>
             )}
           </div>
+          {/* On ETH the axis is whatever the bins reached, so the window has to
+              be stated — otherwise there is no way to tell an overnight session
+              that started at 18:00 from one that started at 03:00. RTH needs no
+              caption: its grid is always 9:30–4:00. Same line the /flow page
+              prints under its own span switch. */}
+          {chartSpan === '24h' && series.hasData && (
+            <p className="pb-1 text-center text-2xs tabular text-muted">
+              {fmtEtHm(series.openSec)}–{fmtEtHm(series.closeSec)} ET
+            </p>
+          )}
           {/* MUST be a flex column: NetDriftChart's root is `flex-1 min-h-0`,
               and so is the ChartFrame element lightweight-charts autoSizes to.
               In a plain block wrapper both resolve to auto height, the canvas
