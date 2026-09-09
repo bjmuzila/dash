@@ -295,6 +295,7 @@ var C={
   panel:'#0D1119',   // OWNER_THEME.panel
   panelUp:'#16181F', // OWNER_THEME.panelHover — nested/raised tiles
   line:'#23272F',    // border rgba(255,255,255,0.10) over panel
+  lineHard:'#23272F',// --lineHard: the default hairline on an image card
   body:'#C2C7D0',    // white @ ~80%
   mut:'#8E9196',     // white @ ~55% — labels
   dim:'#6A6E75',     // white @ ~38% — footers, strikethroughs
@@ -746,6 +747,30 @@ function styleBox(d){
   d.style.background=d.dataset.fill==='0' ? 'transparent' : d.dataset.bgc;
   d.style.border=w ? (w+'px solid '+d.dataset.bd) : '0 solid transparent';
 }
+
+/* The frame around an IMAGE card.
+ *
+ * The stylesheet gives every image layer a 1px --lineHard hairline, and
+ * data-bare="1" drops it. That was the whole vocabulary: hairline, or nothing.
+ * A screenshot dropped on a light background needs an actual border — a
+ * visible rule in a chosen color, at a chosen thickness — the same three
+ * controls a box layer already has.
+ *
+ * Held in data attributes, not read back off the computed style, so the frame
+ * survives serialize()/restore() (which round-trips stage.innerHTML) and so
+ * "no border" is distinguishable from "never set one".
+ *
+ * Bare wins: when it is on, the inline border is CLEARED rather than set to 0,
+ * because an inline style would out-specify the [data-bare] rule that also
+ * drops the backing color. */
+function styleImg(d){
+  if(d.dataset.bare==='1'){ d.style.border=''; d.style.borderColor=''; }
+  else if(d.dataset.bw!=null){
+    var w=+d.dataset.bw||0;
+    d.style.border = w ? (w+'px solid '+(d.dataset.bd||C.lineHard)) : '0 solid transparent';
+  }
+  if(d.dataset.rad!=null) d.style.borderRadius=px(d.dataset.rad);
+}
 function styleList(d){
   d.querySelectorAll('.dot').forEach(function(x){x.style.background=accent()});
   d.querySelectorAll('.ed').forEach(function(x){
@@ -972,9 +997,50 @@ function select(d,add){
 }
 stage.addEventListener('mousedown',function(e){ if(e.target===stage||e.target.classList.contains('grid')) select(null); });
 
+/* ── Layer order ─────────────────────────────────────────────────────────────
+ *
+ * Layers have no z-index; DOM order is paint order, so reordering is moving
+ * nodes. The only control used to be "Bring front" (a bare appendChild), which
+ * meant there was no way to put something BEHIND an image — a white plate
+ * behind a screenshot had to be drawn first and never touched again.
+ *
+ * All four moves go through one list rebuild rather than sibling-swapping in
+ * place: #stage also holds the fx plate, the frame overlay and the guide layer,
+ * so "the previous sibling" is not reliably another layer. Everything is
+ * re-inserted before #guides, which keeps the guides the last child the way
+ * chrome() left them.
+ *
+ * A multi-selection moves as a block: a step never lets one selected layer hop
+ * over another, or a group would shred itself on the second click. */
+function lyList(){ return Array.prototype.slice.call(stage.querySelectorAll('.ly')); }
+function relayer(list){
+  var anchor=guides&&guides.parentNode===stage?guides:null;
+  list.forEach(function(x){ if(anchor) stage.insertBefore(x,anchor); else stage.appendChild(x); });
+}
+function orderSel(dir){
+  if(!selSet.length) return;
+  var list=lyList(), chosen=selSet.slice();
+  var isSel=function(x){ return chosen.indexOf(x)>=0 };
+  if(dir==='front'){
+    list=list.filter(function(x){return !isSel(x)}).concat(list.filter(isSel));
+  } else if(dir==='back'){
+    list=list.filter(isSel).concat(list.filter(function(x){return !isSel(x)}));
+  } else if(dir>0){
+    // From the top down, so a swap can't be undone by a later one.
+    for(var i=list.length-2;i>=0;i--){
+      if(isSel(list[i]) && !isSel(list[i+1])){ var t=list[i]; list[i]=list[i+1]; list[i+1]=t; }
+    }
+  } else {
+    for(var j=1;j<list.length;j++){
+      if(isSel(list[j]) && !isSel(list[j-1])){ var u=list[j]; list[j]=list[j-1]; list[j-1]=u; }
+    }
+  }
+  relayer(list);
+}
+
 function inspector(){
   var p=document.getElementById('insp');
-  if(!sel){ p.innerHTML='<p class="empty">Click a layer on the canvas to edit it.<br><br>Drag = move · corner = resize · <b>drag a side = move that border</b> · <b>alt+drag a side of an image = crop it</b> · double-click text = edit it · ctrl+click = add to selection (then Group) · scroll on an image = zoom · shift+drag an image = pan crop · arrows = nudge · Delete = remove</p>'; return; }
+  if(!sel){ p.innerHTML='<p class="empty">Click a layer on the canvas to edit it.<br><br>Drag = move · corner = resize · <b>drag a side = move that border</b> · <b>alt+drag a side of an image = crop it</b> · double-click text = edit it · ctrl+click = add to selection (then Group) · scroll on an image = zoom · shift+drag an image = pan crop · arrows = nudge · <b>[ / ] = send back / bring forward</b> · Delete = remove</p>'; return; }
   // With more than one layer selected only the group/lock controls make sense —
   // per-layer styling would be ambiguous.
   var multi=selSet.length>1;
@@ -1011,6 +1077,15 @@ function inspector(){
       h+='<div class="row" style="margin-top:8px"><button id="i_snap" class="pri" style="flex:1">Fit box to image</button></div>';
       h+='<div class="row"><button id="i_full">Fill canvas</button><button id="i_reset">Reset image</button></div>';
       h+='<div class="row"><button id="i_bare" class="'+(sel.dataset.bare==='1'?'on':'')+'" style="flex:1">No frame — drop the border &amp; backing</button></div>';
+      // Border controls, mirroring a box layer's. Defaults match the stylesheet
+      // (1px --lineHard, 16px radius) so the sliders open where the card is.
+      var bw0=sel.dataset.bw!=null?(+sel.dataset.bw||0):1;
+      var rad0=sel.dataset.rad!=null?(+sel.dataset.rad||0):(parseInt(sel.style.borderRadius)||16);
+      h+='<label style="margin-top:10px">Border</label>';
+      h+='<div class="f2"><div><label>Color</label><input type="color" id="im_bd" value="'+(sel.dataset.bd||C.lineHard)+'"></div>'
+        +'<div><label>&nbsp;</label><button id="im_acc" style="width:100%">Accent</button></div></div>';
+      h+='<label>Thickness</label><input type="range" id="im_bw" min="0" max="24" value="'+bw0+'">';
+      h+='<label>Corner radius</label><input type="range" id="im_rad" min="0" max="80" value="'+rad0+'">';
     }
   }
   if(t==='box'){
@@ -1029,7 +1104,13 @@ function inspector(){
   h+='<button id="i_ungrp"'+(anyG?'':' disabled style="opacity:.45"')+'>Ungroup</button>';
   h+='<button id="i_lock" class="'+(allLock?'on':'')+'">'+(allLock?'Unlock':'Lock')+'</button>';
   h+='</div>';
-  h+='<div class="row" style="margin-top:8px"><button id="i_front">Bring front</button><button id="i_dup">Duplicate</button><button id="i_del">Delete</button></div>';
+  h+='<label style="margin-top:14px">Layer order</label><div class="row">';
+  h+='<button id="i_back" title="Send behind everything">To back</button>';
+  h+='<button id="i_bwd" title="One step back — [">Back</button>';
+  h+='<button id="i_fwd" title="One step forward — ]">Forward</button>';
+  h+='<button id="i_front" title="Bring in front of everything">To front</button>';
+  h+='</div>';
+  h+='<div class="row" style="margin-top:8px"><button id="i_dup">Duplicate</button><button id="i_del">Delete</button></div>';
   p.innerHTML=h;
 
   var g=function(i){return document.getElementById(i)};
@@ -1095,7 +1176,12 @@ function inspector(){
         sel.style.height=px(Math.round(w*m.naturalHeight/m.naturalWidth));
         inspector();
       };
-      g('i_full').onclick=function(){sel.style.left='0px';sel.style.top='0px';sel.style.width=px(W);sel.style.height=px(H);sel.style.borderRadius='0';sel.style.border='0'};
+      g('i_full').onclick=function(){
+        sel.style.left='0px';sel.style.top='0px';sel.style.width=px(W);sel.style.height=px(H);
+        // Edge-to-edge means no frame, and the data attrs have to say so or the
+        // next inspector open would redraw the border it just removed.
+        sel.dataset.bw='0'; sel.dataset.rad='0'; styleImg(sel); inspector();
+      };
       g('i_reset').onclick=function(){
         var m=im(); if(!m) return;
         m.dataset.z=1; m.style.width='100%'; m.style.height='100%';
@@ -1108,7 +1194,29 @@ function inspector(){
       g('i_bare').onclick=function(){
         var on=ix.dataset.bare!=='1'; ix.dataset.bare=on?'1':'0';
         this.classList.toggle('on',on);
+        // Turning the frame back on has to re-apply the border, since going
+        // bare cleared the inline one.
+        styleImg(ix);
       };
+      g('im_bd').oninput=function(){
+        ix.dataset.bd=this.value;
+        // Picking a color with no border showing means you want one.
+        if(ix.dataset.bw==null||+ix.dataset.bw===0){ ix.dataset.bw='2'; g('im_bw').value=2; }
+        if(ix.dataset.bare==='1'){ ix.dataset.bare='0'; g('i_bare').classList.remove('on'); }
+        styleImg(ix);
+      };
+      g('im_acc').onclick=function(){
+        ix.dataset.bd=accent(); g('im_bd').value=accent();
+        if(ix.dataset.bw==null||+ix.dataset.bw===0){ ix.dataset.bw='2'; g('im_bw').value=2; }
+        if(ix.dataset.bare==='1'){ ix.dataset.bare='0'; g('i_bare').classList.remove('on'); }
+        styleImg(ix);
+      };
+      g('im_bw').oninput=function(){
+        ix.dataset.bw=this.value;
+        if(+this.value>0 && ix.dataset.bare==='1'){ ix.dataset.bare='0'; g('i_bare').classList.remove('on'); }
+        styleImg(ix);
+      };
+      g('im_rad').oninput=function(){ ix.dataset.rad=this.value; styleImg(ix); };
     }
   }
   if(t==='box'){
@@ -1146,7 +1254,10 @@ function inspector(){
     selSet.forEach(function(x){ if(lock) x.dataset.lock='1'; else delete x.dataset.lock; });
     inspector();
   };
-  g('i_front').onclick=function(){ selSet.forEach(function(x){stage.appendChild(x)}); };
+  g('i_front').onclick=function(){ orderSel('front') };
+  g('i_back').onclick=function(){ orderSel('back') };
+  g('i_fwd').onclick=function(){ orderSel(1) };
+  g('i_bwd').onclick=function(){ orderSel(-1) };
   g('i_dup').onclick=function(){
     // Duplicating a group keeps them grouped, under a fresh id.
     var id=selSet.length>1?'g'+Date.now().toString(36):null;
@@ -1179,6 +1290,8 @@ document.addEventListener('keydown',function(e){
   }
   if(!sel || document.activeElement.isContentEditable) return;
   if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();selSet.forEach(function(x){x.remove()});select(null);return}
+  // ] forward, [ back — with shift, all the way.
+  if(e.key===']'||e.key==='['){ e.preventDefault(); orderSel(e.shiftKey?(e.key===']'?'front':'back'):(e.key===']'?1:-1)); return; }
   var k={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];
   if(!k)return; e.preventDefault();
   var s=e.shiftKey?10:1;
@@ -1878,6 +1991,7 @@ function restore(s){
     // which would make those layers undraggable again.
     d.querySelectorAll('.ed').forEach(function(n){n.contentEditable='false'});
     wire(d);
+    if(d.dataset.t==='image') styleImg(d);
     if(d.dataset.t==='logo') logoFallback(d);
     if(d.dataset.t==='image'||d.dataset.t==='logo') d.addEventListener('dblclick',function(){pick(d)});
   });

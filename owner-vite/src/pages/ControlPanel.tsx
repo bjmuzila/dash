@@ -1388,6 +1388,35 @@ function navLabelFor(key: string): string | null {
 }
 
 /**
+ * The public slug for a visit, or null if the row is a real app page.
+ *
+ * WHY THIS EXISTS: two different beacons fire on every marketing page.
+ * MarketingPageTracker sends `public:pricing`; LayoutShell's VisitTracker sends
+ * the bare trimmed path — `pricing`, and `home` for "/". describePage() used to
+ * treat "has a key, no public: prefix" as "app page", so the SECOND beacon for
+ * "/", "/pricing", "/sign-in" and every other marketing route landed as a GATED
+ * page with no account attached — which is impossible by construction, so the
+ * leak check lit up with ~20 false positives that were really just the other
+ * beacon for a page anyone is allowed to see.
+ *
+ * The path is the authority here, not the key: "/" is the landing page even
+ * though its bare key is "home", which is also the key of the gated /home
+ * dashboard route. Falling back to the key only covers rows that beaconed no
+ * path at all.
+ */
+function publicSlugFor(path: string, key: string): string | null {
+  const p = path.trim();
+  if (p) {
+    if (p === "/") return "landing";
+    const slug = p.split("/")[1] ?? "";
+    return slug in PUBLIC_PAGE_LABELS ? slug : null;
+  }
+  const k = key.replace(/^\//, "").split("/")[0] ?? "";
+  if (!k || k === "home") return null; // ambiguous without a path — leave it alone
+  return k in PUBLIC_PAGE_LABELS ? k : null;
+}
+
+/**
  * One visit row → { id, name, route, isPublic }. `id` is the grouping key, so a
  * page that was beaconed under a key AND (on older rows) under a bare path still
  * collapses to one line wherever we can tell they're the same thing.
@@ -1425,6 +1454,18 @@ function describePageUncached(v: PageVisit): PageDesc {
     };
   }
   if (key) {
+    // A bare key that names a public route is the LayoutShell beacon for a
+    // marketing page. Fold it onto the same id the prefixed beacon uses so the
+    // page reads as one public line instead of a phantom gated one.
+    const pub = publicSlugFor(path, key);
+    if (pub) {
+      return {
+        id: `public:${pub}`,
+        name: PUBLIC_PAGE_LABELS[pub] ?? pub.replace(/-/g, " "),
+        route: path || (pub === "landing" ? "/" : `/${pub}`),
+        isPublic: true,
+      };
+    }
     const bare = key.replace(/^\//, "");
     return {
       id: `app:${bare.toLowerCase()}`,
@@ -1647,24 +1688,6 @@ function TopPagesCard({
         {view.ownerLoads > 0 && <span>{num(view.ownerLoads)} owner loads excluded</span>}
       </div>
 
-      {/* Impossible-by-design check. A gated page cannot be served to someone
-          without a session, so a non-member load on one means the split (or
-          middleware) is wrong — surface it instead of printing it as fact. */}
-      {audience !== "members" && view.leaks.length > 0 && (
-        <div style={{
-          fontSize: 12, lineHeight: 1.55, marginBottom: 12, padding: "8px 10px", borderRadius: 8,
-          color: HOME_THEME.text, background: `${HOME_THEME.orange}14`, border: `1px solid ${HOME_THEME.orange}44`,
-        }}>
-          <b style={{ color: HOME_THEME.orange }}>Check this:</b>{" "}
-          {view.leaks.length} gated page{view.leaks.length > 1 ? "s" : ""} logged loads with no account attached
-          {" — "}
-          <span style={mono}>{view.leaks.slice(0, 3).map((r) => r.route).join(", ")}</span>
-          {view.leaks.length > 3 ? ` +${view.leaks.length - 3} more` : ""}.
-          {" "}A logged-out visitor can't reach those, so it's usually a beacon firing before the session
-          cookie resolves — not real anonymous traffic.
-        </div>
-      )}
-
       {view.rows.length === 0 ? (
         <div style={{ fontSize: 14, ...dim, lineHeight: 1.6 }}>
           {!view.hasRowsInWindow
@@ -1763,6 +1786,24 @@ function TopPagesCard({
             <div style={{ fontSize: 11, ...dim, marginTop: 8 }}>Showing the top 40 of {view.rows.length}.</div>
           )}
         </>
+      )}
+
+      {/* Impossible-by-design check. A gated page cannot be served to someone
+          without a session, so a non-member load on one means the split (or
+          middleware) is wrong — surface it instead of printing it as fact. */}
+      {audience !== "members" && view.leaks.length > 0 && (
+        <div style={{
+          fontSize: 12, lineHeight: 1.55, marginTop: 14, padding: "8px 10px", borderRadius: 8,
+          color: HOME_THEME.text, background: `${HOME_THEME.orange}14`, border: `1px solid ${HOME_THEME.orange}44`,
+        }}>
+          <b style={{ color: HOME_THEME.orange }}>Check this:</b>{" "}
+          {view.leaks.length} gated page{view.leaks.length > 1 ? "s" : ""} logged loads with no account attached
+          {" — "}
+          <span style={mono}>{view.leaks.slice(0, 3).map((r) => r.route).join(", ")}</span>
+          {view.leaks.length > 3 ? ` +${view.leaks.length - 3} more` : ""}.
+          {" "}A logged-out visitor can't reach those, so it's usually a beacon firing before the session
+          cookie resolves — not real anonymous traffic.
+        </div>
       )}
     </div>
   );

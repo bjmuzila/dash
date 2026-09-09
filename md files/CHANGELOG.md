@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-09-09 (l) - OWNER: false "gated page" alert, Completed pill color, Post Studio image borders + layer order
+
+Three unrelated owner-side fixes.
+
+**1. The "Check this: 21 gated pages logged loads with no account attached"
+banner on Overview was wrong, and it now sits at the bottom of the card.**
+
+Root cause: two beacons fire on every marketing page. `MarketingPageTracker`
+sends `page_key = "public:pricing"`; `LayoutShell`'s `VisitTracker` sends the
+bare trimmed path, `"pricing"` (and `"home"` for `/`). `describePage()` in
+`owner-vite/src/pages/ControlPanel.tsx` treated "has a key, no `public:`
+prefix" as "app page", so the SECOND beacon for `/`, `/pricing`, `/sign-in`,
+`/docs`, `/terms` etc. landed as a GATED page with no account attached - which
+is impossible by construction, which is exactly why the leak check fired. All
+21 were public pages logged twice, not a middleware hole.
+
+- New `publicSlugFor(path, key)`: the PATH is the authority, not the key,
+  because `/` beacons as `home` and so does the gated `/home` dashboard route.
+  A bare key whose path names a public route folds onto the same `public:<slug>`
+  id the prefixed beacon uses, so the page reads as ONE public line instead of a
+  public line plus a phantom gated one.
+- The alert moved from above the table to below it (`marginBottom` ->
+  `marginTop`). It is a footnote about the data, not a header.
+- NOT fixed here: marketing pages are still double-counted in `page_visits`
+  (two rows per load, two keys). They now collapse into one row in this card,
+  so the row's load count is ~2x. Deduping at the beacon is a separate change.
+
+**2. `owner-vite/src/pages/Todo.tsx` - Completed is no longer light blue.**
+
+`STATUS_COLORS.Completed` was `HOME_THEME.green`, which on that page is
+overridden to `#8ECAE6` - a light blue one shade off the Starting accent
+(`#7dd3fc`), so a finished item and an untouched one read as the same pill.
+Completed now has its own constant, `COMPLETED_GREEN = "#3FD68C"` (emerald):
+neither the blue accent nor the orange/gold In Progress. `PALETTE` still uses
+`HOME_THEME.green` for list header colors, so card colors are unchanged.
+
+**3. `owner-vite/src/pages/studioHtml.ts` (Post Studio) - image borders and
+layer ordering.**
+
+- BORDER ON AN IMAGE CARD. The stylesheet gave image layers a fixed 1px
+  `--lineHard` hairline and `data-bare="1"` dropped it; that was the entire
+  vocabulary. New `styleImg(d)` plus Color / Accent / Thickness (0-24px) /
+  Corner radius controls in the inspector, held in `data-bd` / `data-bw` /
+  `data-rad` so they survive `serialize()`/`restore()`. Bare still wins: it
+  CLEARS the inline border rather than zeroing it, or the inline style would
+  out-specify the `[data-bare]` rule that also drops the backing. Setting a
+  color or thickness turns bare back off. "Fill canvas" now writes `bw=0`/
+  `rad=0` instead of only stamping inline styles.
+- LAYER ORDER. The only control was "Bring front" (a bare `appendChild`), so
+  there was no way to put anything BEHIND an image - a white plate behind a
+  screenshot had to be drawn first and never touched. New To back / Back /
+  Forward / To front, plus `[` and `]` (shift for all the way). Layers carry no
+  z-index, so this moves DOM nodes; all four go through one list rebuild
+  (`orderSel` -> `relayer`) that re-inserts before `#guides`, because `#stage`
+  also holds the fx plate and frame overlay and "the previous sibling" is not
+  reliably another layer. A multi-selection moves as a block.
+
 ## 2026-09-09 (k) - BILLING: the 2-day free trial is retired
 
 New sign-ups no longer get a free trial. Every Stripe Checkout session created

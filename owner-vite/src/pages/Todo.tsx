@@ -98,10 +98,18 @@ const PALETTE = [
 const listColor = (idx: number) => PALETTE[idx % PALETTE.length];
 
 const STATUSES: Status[] = ["Starting", "In Progress", "Completed"];
+
+/** Completed gets its OWN color, not one borrowed from the page theme.
+ *  It used to be HOME_THEME.green — which on this page is "#8ECAE6", a light
+ *  blue a shade off the Starting accent — so a finished item and an untouched
+ *  one read as the same pill at a glance. Emerald is the one hue on the card
+ *  that is neither the blue accent nor the orange/gold in progress state. */
+const COMPLETED_GREEN = "#3FD68C";
+
 const STATUS_COLORS: Record<Status, string> = {
   Starting: HOME_THEME.cyan,
   "In Progress": HOME_THEME.orange,
-  Completed: HOME_THEME.green,
+  Completed: COMPLETED_GREEN,
 };
 /** Pre-pill statuses that no longer exist. */
 const STATUS_ALIASES: Record<string, Status> = {
