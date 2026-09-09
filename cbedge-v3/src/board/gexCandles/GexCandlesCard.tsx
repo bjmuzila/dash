@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, TvAttribution, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
-import { ReplayDock } from '@/design/primitives/ReplayDock'
+import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
+import { ReplayBrand, ReplayStamp } from '@/design/primitives/ReplayStamp'
 import { T } from '@/design/theme'
 import { useIsPhone } from '@/design/useIsPhone'
 import { useQuery } from '@/data/api'
@@ -206,6 +207,20 @@ const ET_DAY_LABEL = new Intl.DateTimeFormat('en-US', {
 function dayLabel(day: string): string {
   const ts = Date.parse(`${day}T12:00:00Z`)
   return Number.isFinite(ts) ? ET_DAY_LABEL.format(new Date(ts)) : day
+}
+
+/** `Sep 9` — the expiry chip on the replay stamp. Short, because it sits in a
+ *  6px-padded pill over the candles and the year is never in question. */
+const ET_EXP_LABEL = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'UTC',
+  month: 'short',
+  day: 'numeric',
+})
+
+/** A `YYYY-MM-DD` expiry as `Sep 9`. Noon UTC, for the reason `dayLabel` is. */
+function expiryLabel(day: string): string {
+  const ts = Date.parse(`${day}T12:00:00Z`)
+  return Number.isFinite(ts) ? ET_EXP_LABEL.format(new Date(ts)) : day
 }
 
 /** `HH:MM` in New York — what the transport's clock reads. */
@@ -494,6 +509,17 @@ export function GexCandlesCard({
    * exists to avoid creating.
    */
   const [replayDay, setReplayDay] = useState('')
+  /**
+   * 🔒 Axis — hold the price window and the visible bar range still while the
+   * cursor moves. See ReplayLock in design/primitives/ReplayDock.tsx for why
+   * every replay surface carries this, and `axisLocked` in chart.ts for what it
+   * takes to hold a lightweight-charts pane in place across a `setData`.
+   *
+   * Reset with the transport (below), not held across it: a frozen price window
+   * from Tuesday's session is not a view anyone wants to come back to on
+   * Thursday's.
+   */
+  const [axisLock, setAxisLock] = useState(false)
 
   const patch = useCallback(
     (p: Partial<ChartSettings>) => {
@@ -936,6 +962,16 @@ export function GexCandlesCard({
   // order, so this ordering is the mechanism, not a comment about one.
   useEffect(() => apply((h) => h.setIntervalMs(settings.interval * 60_000)), [settings.interval, apply])
 
+  // BEFORE the setBars effect: the lock has to be in force on the chart by the
+  // time the clipped bars arrive, or the first scrub after pressing it still
+  // rescales once. Effects flush in source order, so this ordering is the
+  // mechanism and not a comment about one — the same reason setIntervalMs sits
+  // above setBars.
+  //
+  // `replayOn &&`: the lock is a replay control. Leaving replay must hand the
+  // live chart its autoscale back even if the button was left pressed.
+  useEffect(() => apply((h) => h.setAxisLock(replayOn && axisLock)), [replayOn, axisLock, apply])
+
   useEffect(() => {
     const reframe = viewKey !== framedRef.current
     apply((h) => h.setBars(bars, reframe))
@@ -1321,6 +1357,7 @@ export function GexCandlesCard({
               setReplayPlaying(false)
               setReplayDay('')
               setReplayMs(0)
+              setAxisLock(false)
               setReplayOn((v) => !v)
             }}
             title="Scrub a recorded session — the candles, the GEX bubbles and the rail all clip to one cursor, and the bar picks which day. Off = live."
@@ -1515,6 +1552,9 @@ export function GexCandlesCard({
               onChange={(e) => {
                 setReplayPlaying(false)
                 setReplayMs(0)
+                // A price window frozen on one session means nothing on the
+                // next — different range, possibly a different gap.
+                setAxisLock(false)
                 setReplayDay(e.target.value)
               }}
               disabled={sessionDays.length === 0}
@@ -1621,6 +1661,19 @@ export function GexCandlesCard({
               ))}
             </span>
 
+            {/* Stepping back and forth over the same ten minutes is the whole
+                use of ◀ / ▶, and autoscale re-deriving the price window on every
+                step is what made a level that had not moved appear to slide. */}
+            <ReplayLock
+              on={axisLock}
+              onClick={() => setAxisLock((v) => !v)}
+              title={
+                axisLock
+                  ? 'Axis locked — the price window and the visible bars stay put while you scrub. Click to let the chart autoscale again.'
+                  : 'Lock the axis — freeze the price window and the visible bars so only the candles change as you rewind and fast-forward.'
+              }
+            />
+
             <button
               type="button"
               onClick={() => {
@@ -1629,6 +1682,7 @@ export function GexCandlesCard({
                 setReplayPlaying(false)
                 setReplayDay('')
                 setReplayMs(0)
+                setAxisLock(false)
                 setReplayOn(false)
               }}
               title="Leave replay and return to the live chart"
@@ -1665,6 +1719,34 @@ export function GexCandlesCard({
         <div className="relative min-h-0 flex-1">
           <ChartFrame onMount={onMount} className="absolute inset-0" />
 
+          {/* ── The replay stamp ──
+              Ticker, expiry, the SESSION being replayed and the cursor's own
+              wall clock, drawn INTO the pane — plus the CB Edge wordmark in the
+              opposite corner. These surfaces get screen-recorded, and a
+              recording is a crop: a caption in the page chrome above the chart
+              is one crop away from being gone, and a clip of a rewound chart
+              that does not say so is a clip of a lie. See
+              design/primitives/ReplayStamp.tsx. */}
+          {replayOn && (
+            <>
+              <ReplayStamp
+                symbol={tapeLabel}
+                expiryLabel={expiry ? expiryLabel(expiry) : null}
+                zeroDte={!!expiry && !!activeDay && expiry === activeDay}
+                dateLabel={activeDay ? dayLabel(activeDay) : null}
+                clockLabel={cursor ? `${ET_CLOCK.format(new Date(cursor))} ET` : null}
+                // Clear of the countdown badge, which owns the top-right.
+                left={8}
+                top={4}
+              />
+              {/* Inset past the price axis and the rail gutter — on a phone
+                  there is no rail, so the axis alone is what has to be cleared.
+                  Sitting the mark ON the axis labels is worse than not drawing
+                  it: the price is the one thing a recording must stay readable. */}
+              <ReplayBrand right={phone ? 44 : 68} bottom={phone ? 26 : 30} />
+            </>
+          )}
+
           {/* `right-16` is the gutter the price axis and the rail leave behind.
               With the rail off on a phone there is no such gutter, and the
               countdown sat out over the axis labels. */}
@@ -1678,8 +1760,15 @@ export function GexCandlesCard({
 
           {/* An empty bubble layer that HAS data is indistinguishable from a
               broken one, and that ambiguity cost real debugging time. Say it. */}
+          {/* Under the replay stamp when there is one — both live at the pane's
+              top-left, and stacked is legible where overlapped is not. */}
           {bubblesOutOfRange && settings.bubblesOn && (
-            <span className="pointer-events-none absolute left-2 top-1.5 z-10 text-2xs text-muted opacity-55">
+            <span
+              className={[
+                'pointer-events-none absolute left-2 z-10 text-2xs text-muted opacity-55',
+                replayOn ? 'top-14' : 'top-1.5',
+              ].join(' ')}
+            >
               no GEX history in view
             </span>
           )}

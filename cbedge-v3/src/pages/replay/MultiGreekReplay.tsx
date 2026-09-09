@@ -33,7 +33,8 @@ import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { alpha, T } from '@/design/theme'
 import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
 import { Slider } from '@/board/gexCandles/controls'
-import { ReplayDock } from '@/design/primitives/ReplayDock'
+import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
+import { ReplayBrand, ReplayStamp } from '@/design/primitives/ReplayStamp'
 import {
   BASIS_LABEL,
   EX0_KEY,
@@ -49,6 +50,7 @@ import {
   MG_REPLAY_BASE_MS,
   MG_REPLAY_SPEEDS,
   fmtMgReplayClock,
+  fmtMgStampDate,
   mgEx0Sources,
   mgReplayColumns,
   mgReplayValues,
@@ -170,6 +172,17 @@ interface PanelProps {
   intensity: number
   showLevels: boolean
   loading: boolean
+  /**
+   * 🔒 Axis — see ReplayLock in design/primitives/ReplayDock.tsx.
+   *
+   * The strike axis here is already the session's union and holds still; what
+   * moves is the SCROLL. The panel re-centres on the ATM strike whenever spot
+   * crosses a rung, and across four panels on one clock that is four ladders
+   * jumping at four different moments while you step. Locked, none of them move
+   * and the numbers change underneath a fixed set of strikes — which is the
+   * comparison this page exists to make.
+   */
+  axisLock: boolean
   onCommitTicker: (next: string) => boolean
 }
 
@@ -185,6 +198,7 @@ function ReplayPanel({
   intensity,
   showLevels,
   loading,
+  axisLock,
   onCommitTicker,
 }: PanelProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null)
@@ -254,6 +268,7 @@ function ReplayPanel({
   }, [anchorKey])
 
   useEffect(() => {
+    if (axisLock) return
     const el = bodyRef.current
     if (!el || atm == null || userScrolledRef.current) return
     const row = el.querySelector<HTMLElement>(`[data-strike="${atm}"]`)
@@ -573,6 +588,8 @@ export function MultiGreekReplay() {
   const [intensity, setIntensity] = useState(1.75)
   const [showLevels, setShowLevels] = useState(true)
   const [cogOpen, setCogOpen] = useState(false)
+  /** 🔒 Axis — one switch for all four panels, because they share one clock. */
+  const [axisLock, setAxisLock] = useState(false)
 
   // ── SLOT 1 FOLLOWS THE TOOLBAR ─────────────────────────────────────────────
   // The Replay hub's other three tabs follow the board symbol outright; this one
@@ -874,6 +891,16 @@ export function MultiGreekReplay() {
           </button>
         ))}
 
+        <ReplayLock
+          on={axisLock}
+          onClick={() => setAxisLock((v) => !v)}
+          title={
+            axisLock
+              ? 'Axis locked — all four ladders stay where you left them while you scrub. Click to let them re-centre on the money again.'
+              : 'Lock the axis — stop the four ladders re-centring themselves as you rewind and fast-forward.'
+          }
+        />
+
         <span style={{ color: T.border }}>|</span>
 
         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 900, color: T.text }}>
@@ -958,7 +985,11 @@ export function MultiGreekReplay() {
         </div>
       </ReplayDock>
 
-      <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto">
+      {/* `relative` so the stamp and the brand mark pin to the PANEL ROW. Both
+          are drawn into the surface rather than into the page chrome for the
+          reason design/primitives/ReplayStamp.tsx opens with: this board gets
+          screen-recorded, and a recording is a crop. */}
+      <div className="relative flex min-h-0 flex-1 gap-2 overflow-x-auto">
         {tickers.map((t, i) => (
           <ReplayPanel
             key={i}
@@ -973,9 +1004,24 @@ export function MultiGreekReplay() {
             intensity={intensity}
             showLevels={showLevels}
             loading={loading}
+            axisLock={axisLock}
             onCommitTicker={(next) => commitTicker(i, next)}
           />
         ))}
+
+        {/* Four tickers, one clock — so the stamp names the CLOCK and the
+            session, and each panel's own header names its ticker. */}
+        {date && (
+          <ReplayStamp
+            symbol={tickers.filter(Boolean).join(' ') || '—'}
+            dateLabel={fmtMgStampDate(date)}
+            clockLabel={clock != null ? `${fmtMgReplayClock(clock)} ET` : null}
+            note="recorded walls only"
+            left={8}
+            top={-2}
+          />
+        )}
+        <ReplayBrand />
       </div>
     </div>
   )

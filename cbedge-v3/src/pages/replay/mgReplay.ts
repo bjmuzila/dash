@@ -145,6 +145,24 @@ export function parseMgSession(json: unknown): MgSession | null {
 }
 
 /**
+ * `2026-09-08` → `Tue, Sep 8` — the session named on the replay stamp.
+ *
+ * Parsed at NOON UTC, never midnight: `new Date('2026-09-08')` is midnight UTC,
+ * which is the 7th in New York, and the stamp would name every session as the
+ * day before itself. Formatted in UTC for the same reason.
+ */
+export function fmtMgStampDate(ymd: string): string {
+  const ts = Date.parse(`${ymd}T12:00:00Z`)
+  if (!Number.isFinite(ts)) return ymd
+  return new Date(ts).toLocaleDateString('en-US', {
+    timeZone: 'UTC',
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+/**
  * THE SHARED CLOCK: every distinct minute that carried a sweep, on ANY of the
  * loaded sessions, ascending.
  *

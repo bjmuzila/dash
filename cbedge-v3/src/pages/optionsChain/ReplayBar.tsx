@@ -22,6 +22,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { T } from '@/design/theme'
+import { ReplayLock } from '@/design/primitives/ReplayDock'
 import { fmtReplayClock } from './format'
 import { ChainDropdown } from './pickers'
 import { REPLAY_SCOPES, REPLAY_SCOPE_LABEL, REPLAY_SPEEDS, type ReplayScope } from './useChainData'
@@ -48,6 +49,19 @@ export interface ReplayBarProps {
   zeroDteExp: string
   zeroDteIsExact: boolean
   onOpenLadder: () => void
+  /**
+   * 🔒 Axis — see ReplayLock in design/primitives/ReplayDock.tsx.
+   *
+   * On the grid the axis is FIXED already (the session's strike union), so the
+   * thing that moves is the SCROLL: the ATM row walks down a stationary ladder
+   * as the session runs, and the page pulls it back to the middle whenever it
+   * leaves the central 60%. That rescue is right when you are watching a session
+   * play through and wrong when you are stepping over the same ten minutes, so
+   * the lock switches it off. Owned by OptionsChain.tsx, which is where the
+   * scroller lives.
+   */
+  axisLock: boolean
+  setAxisLock: (updater: (v: boolean) => boolean) => void
   segStyle: (on: boolean) => React.CSSProperties
 }
 
@@ -170,6 +184,16 @@ export function ReplayBar(p: ReplayBarProps) {
           {sp}×
         </button>
       ))}
+
+      <ReplayLock
+        on={p.axisLock}
+        onClick={() => p.setAxisLock((v) => !v)}
+        title={
+          p.axisLock
+            ? 'Axis locked — the grid stays where you left it while you scrub. Click to let it follow the money again.'
+            : 'Lock the axis — stop the grid scrolling itself back to the ATM row as you rewind and fast-forward.'
+        }
+      />
 
       <span style={{ color: T.border }}>|</span>
 

@@ -1,5 +1,94 @@
 # Changelog
 
+## 2026-09-09 (b) - V3 REPLAY: 🔒 Axis on every transport, and the stamp + CB Edge mark drawn INTO every replayed surface (`cbedge-v3/src/design/primitives/ReplayStamp.tsx` NEW, `cbedge-v3/src/design/primitives/ReplayDock.tsx`, `cbedge-v3/src/board/gexCandles/chart.ts`, `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`, `cbedge-v3/src/pages/OptionsChain.tsx`, `cbedge-v3/src/pages/optionsChain/ReplayBar.tsx`, `cbedge-v3/src/pages/optionsChain/LadderModal.tsx`, `cbedge-v3/src/pages/replay/MultiGreekReplay.tsx`, `cbedge-v3/src/pages/replay/mgReplay.ts`, `cbedge-v3/src/pages/analysis/lookup/TickerLookup.tsx`, `cbedge-v3/src/pages/analysis/lookup/Ladder.tsx`)
+
+Two things, both across all five tabs of `/v3/replay`.
+
+**1. 🔒 Axis - "do not move while I scrub."** Every replay surface re-derives
+its view from the frame the cursor sits on, and every one of them has a rule
+that re-frames when the data moves. All five rules are right while a session
+plays through and all five are wrong while you step back and forth over the
+same ten minutes: the thing you are comparing against slides out from under
+you, and on a screen recording that reads as the market jumping rather than the
+frame. One button, one meaning, one place on every transport (`ReplayLock`, new
+export in `ReplayDock.tsx`) - what it FREEZES differs per surface, because what
+moves differs per surface:
+
+| Tab | What was moving | Locked |
+|---|---|---|
+| GEX candles | price-axis autoscale re-derived from the clipped bars; a `setData` with a new bar count leaving the logical range elsewhere | `autoScale:false` + the visible logical range read before the write and put back after |
+| Options chain | the ATM-row rescue scrolling the grid back to the middle during playback | rescue off |
+| Multi Greek | four panels re-centring on ATM at four different moments as spot crosses a rung | no re-centre |
+| Chain ladder | `scale: frame` re-normalising every snapshot to its own peak | session-wide peak, and the Scale picker dims and reads `day` |
+| GEX levels | `useTlAnchor` re-windowing once spot walks ANCHOR_SLACK rungs, plus per-render bar scale | anchor fed a null spot so it holds; `scaleMax` (new `TlLadder` prop) pins the peak from the moment the lock went on |
+
+A REFRAME still wins on the candles - a symbol, interval or session change means
+the view the lock was holding is meaningless - so `axisLocked` only gates the
+non-reframe path in `chart.ts`. The lock also releases itself on anything that
+changes the subject (leaving replay, another session, another ticker): a price
+window frozen on Tuesday means nothing on Thursday.
+
+**2. The replay stamp, in the pane.** `design/primitives/ReplayStamp.tsx` is new
+and is what `LadderModal` had inline, generalised: ticker, the expiry chip
+(0DTE orange, `EXP Sep 9` blue), `+N` for summed expiries, the SESSION date and
+the FRAME's own wall clock - plus the CB Edge wordmark in the opposite corner.
+Mounted on the candles, the chain grid, the Multi Greek panel row and the
+Ticker Lookup split; the chain ladder keeps its own stamp and gains the mark.
+
+Deliberately NOT in the toolbar. These surfaces get screen-recorded, and a
+recording is a crop - a caption living in the page chrome above the pane is one
+crop away from being gone, and a clip of a rewound ladder that does not say so
+is indistinguishable from a clip of a live one. On the chain grid the stamp
+pins to a new `relative` wrapper AROUND the scroller rather than to the
+scrolling content, or it would scroll away with the rows. `pointerEvents:none`
+throughout - it sits over a scrubbable surface and must never eat a click.
+
+## 2026-09-09 (a) - V3: right-click "Copy image" + highlight-to-Notes, ported from v2 (`cbedge-v3/src/shell/NoteClipMenu.tsx` NEW, `cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/design/primitives/Card.tsx`)
+
+v2's `components/shared/NoteClipMenu.tsx` had no v3 counterpart - the dock, the
+note store and the panel context were all ported weeks ago and nothing could
+put anything IN them but the "Add a note..." box. Rebuilt on v3 (react-router
+instead of next/navigation, token utilities instead of `HOME_THEME` literals,
+v3's own auth read and capture engine), and mounted once by `Shell` inside
+`NotesPanelProvider` so every route gets it without opting in.
+
+**Two gestures.** Drag over any text and a "+ Notes" chip appears at the end of
+the highlight - one click files it, with the card and page it came from as the
+note's source line. Right-click gives the fuller menu: add the selection, copy
+the image, add a snapshot as a clip note, open the panel.
+
+**"Copy image" is the actual fix for right-click copy.** Chrome's native
+context menu offers Copy image for an `<img>` and for nothing else, so on a
+`<canvas>` chart - which is every chart in this app - there has never been one
+and there never will be. The menu item photographs the card through
+`shell/snapshot.ts` (the same engine the toolbar camera uses, caption band and
+mark included) and writes a PNG to the clipboard, falling back to a download
+when the clipboard refuses it.
+
+**`captureThumb()` - new export in `snapshot.ts`.** The sharing path
+(`captureAndCopy`) is full fidelity; a clip filed in the dock is a thumbnail in
+a 320px drawer stored as base64 in localStorage, so this one skips the caption
+and the logo, downscales to 720px and encodes JPEG at q0.72. Flattened onto
+`--color-bg` first, because JPEG has no alpha and every transparent corner
+would otherwise come back black.
+
+**`data-card` on every Card.** `resolveClipTarget` walks up
+`[data-note-clip]` -> `[data-card]` -> a bare chart's container.
+`data-card-instance` could not be that marker: it only exists on a card that
+was given an `expandId`.
+
+**The native menu is never taken silently.** `preventDefault()` only when there
+is something to offer; shift+right-click always yields the browser's menu;
+inputs, links, `[data-no-note-clip]` and the notes dock itself are left alone,
+and an event a page already handled is left alone too.
+
+**Loaded on idle, not in the entry chunk.** The menu has to be listening before
+the first gesture, so it cannot wait for a click the way `NotesDock` does - but
+it pulls `shell/notes.tsx` in behind it, and `Shell.tsx` is the entry chunk
+(37KB brotli cap). `NoteClipSlot` mounts it on the first `requestIdleCallback`,
+which is seconds before a human could reach for it. Desktop + signed-in only,
+same test the dock uses.
+
 ## 2026-09-08 (i) - FEEDBACK: screenshots on support tickets, both sides (`server-v2/api-router.js`, `components/shared/feedbackShots.ts`, `components/shared/FeedbackThread.tsx`, `app/feedback/page.tsx`, `app/owner/feedback/page.tsx`, `owner-vite/src/lib/feedbackShots.ts`, `owner-vite/src/pages/Feedback.tsx`)
 
 A customer can attach images to a ticket or any reply, and the inbox on

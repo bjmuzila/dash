@@ -143,3 +143,70 @@ export function ReplayDock({ children }: { children: ReactNode }) {
   if (!ctx.target) return null
   return createPortal(row, ctx.target)
 }
+
+/**
+ * ── AXIS LOCK ────────────────────────────────────────────────────────────────
+ *
+ * "Do not move while I scrub."
+ *
+ * Every replay surface here re-derives its view from the frame it is parked on,
+ * and each of them has a rule that re-frames when the data moves: the candles
+ * autoscale their price axis, the chain scrolls the ATM row back to the middle,
+ * the Multi Greek panels re-centre when spot crosses a strike, the ladders
+ * rescale their bars to the current snapshot's own peak. Every one of those is
+ * right while you are watching live, and every one of them is WRONG while you
+ * are stepping back and forth over the same ten minutes trying to see what
+ * changed — the thing you are comparing against moves out from under you, and
+ * on a screen recording it reads as the market jumping rather than the frame.
+ *
+ * So: one button, one meaning, on every transport. ON freezes the view — no
+ * re-centring, no rescaling, no re-anchoring — and only the DATA changes as the
+ * cursor moves. OFF is the old behaviour.
+ *
+ * What "the view" is differs per surface, and that is the point of a shared
+ * control rather than a shared implementation: on the candles it is the price
+ * axis and the visible bar range, on the chain and Multi Greek it is the scroll
+ * position, on the ladders it is the bar scale and the window anchor. Each
+ * surface applies it to whatever would otherwise have moved.
+ */
+export function ReplayLock({
+  on,
+  onClick,
+  title,
+}: {
+  on: boolean
+  onClick: () => void
+  title?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      title={
+        title ??
+        (on
+          ? 'Axis locked — the view stays put while you rewind and fast-forward. Click to let it follow the data again.'
+          : 'Lock the axis — stop the view re-centring and rescaling as you rewind and fast-forward.')
+      }
+      style={{
+        flexShrink: 0,
+        height: 22,
+        padding: '0 8px',
+        borderRadius: 6,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        lineHeight: 1,
+        fontFamily: 'inherit',
+        fontSize: 'var(--text-2xs)',
+        fontWeight: 800,
+        letterSpacing: '0.04em',
+        color: on ? T.orange : T.muted,
+        background: on ? alpha(T.orange, 0.16) : alpha(T.text, 0.05),
+        border: `1px solid ${on ? alpha(T.orange, 0.55) : T.border}`,
+      }}
+    >
+      {on ? '🔒 Axis' : '🔓 Axis'}
+    </button>
+  )
+}

@@ -52,7 +52,8 @@ import {
   useLiveData,
   useRefreshButton,
 } from '../kit'
-import { ReplayDock } from '@/design/primitives/ReplayDock'
+import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
+import { ReplayBrand } from '@/design/primitives/ReplayStamp'
 import { cleanSymbol } from '../TickerPicker'
 import { accumulateChainGreeks } from '../greeks'
 import { TlLadder } from './Ladder'
@@ -355,6 +356,20 @@ export function TickerLookupCard({
   const [replaySpeed, setReplaySpeed] = useState<number>(1)
   const [replayLoading, setReplayLoading] = useState(false)
   const [replayErr, setReplayErr] = useState('')
+  /**
+   * 🔒 Axis — see ReplayLock in design/primitives/ReplayDock.tsx.
+   *
+   * Two things move on this surface as the cursor does, and the lock stops both:
+   *
+   *   • the WINDOW. `useTlAnchor` re-centres the ±10-rung pane once spot has
+   *     walked ANCHOR_SLACK rungs from where it was anchored — right live, and
+   *     exactly the jump you do not want while stepping back and forth.
+   *   • the BAR SCALE. Each ladder is normalised to its own biggest strike, so a
+   *     rung whose gamma held still still grows and shrinks as the peak beside
+   *     it moves. Locked, both ladders keep the peak they had when the lock went
+   *     on (`lockedMax` below).
+   */
+  const [axisLock, setAxisLock] = useState(false)
 
   // Leaving replay, or switching ticker, drops the loaded session so the next
   // entry cannot paint one symbol's frames under another's label.
@@ -363,6 +378,9 @@ export function TickerLookupCard({
     setReplayIdx(0)
     setReplayPlaying(false)
     setReplayErr('')
+    // A window and a scale frozen on one symbol's session mean nothing on the
+    // next one's — different strikes, different magnitudes.
+    setAxisLock(false)
   }, [replayOn, sym])
 
   // Which sessions are replay-able. Retention is ~5 trading days, so the list is
@@ -731,20 +749,39 @@ export function TickerLookupCard({
   const atm = replayOn ? { move: null, iv: null } : tlAtm(atmGroup, spot ?? 0)
   const positiveGamma = rightLevels.net >= 0
 
+  // Locked, the anchor is fed a null spot: useTlAnchor answers with whatever it
+  // is already holding and never re-anchors. Doing it at the CALL rather than
+  // inside the hook keeps the hook one rule — "hold until spot has walked far
+  // enough" — instead of two.
+  const anchorSpot = axisLock ? null : viewSpot
   const leftAnchor = useTlAnchor(
     viewLeftRows,
-    viewSpot,
+    anchorSpot,
     `${sym}|L|${leftAxisKey}|${replayOn ? 'r' : 'l'}`,
   )
   const rightAnchor = useTlAnchor(
     viewRightRows,
-    viewSpot,
+    anchorSpot,
     `${sym}|R|${boardAxisKey}|${replayOn ? 'r' : 'l'}`,
   )
 
   const leftLadder = tlWindow(viewLeftRows, leftAnchor ?? viewSpot)
   const rightLadder = tlWindow(viewRightRows, rightAnchor ?? viewSpot)
   const hasAny = leftLadder.length > 0 || rightLadder.length > 0
+
+  // The peak each ladder was measured against when 🔒 Axis went on, held for as
+  // long as it stays on. A ref rather than state: it is written during render
+  // from values this render already has, and setting state here would be a
+  // render loop. Reading it back on the same pass is what makes the FIRST locked
+  // frame use the scale you were looking at when you pressed the button.
+  const lockedMaxRef = useRef<{ left: number; right: number } | null>(null)
+  if (!axisLock) {
+    lockedMaxRef.current = null
+  } else if (!lockedMaxRef.current) {
+    const peak = (rows: TlRow[]) => rows.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0)
+    lockedMaxRef.current = { left: peak(leftLadder), right: peak(rightLadder) }
+  }
+  const lockedMax = lockedMaxRef.current
 
   // Rewound, the live chain's loading/error state is irrelevant — the replay bar
   // reports its own, and blocking on a live fetch would hide a session that
@@ -884,6 +921,7 @@ export function TickerLookupCard({
             value={replayDate}
             onChange={(e) => {
               setReplayPlaying(false)
+              setAxisLock(false)
               setReplayDate(e.target.value)
             }}
             disabled={!replayDates.length}
@@ -983,6 +1021,16 @@ export function TickerLookupCard({
               {sp}×
             </button>
           ))}
+
+          <ReplayLock
+            on={axisLock}
+            onClick={() => setAxisLock((v) => !v)}
+            title={
+              axisLock
+                ? 'Axis locked — the ladders keep their window and their bar scale while you scrub. Click to let them re-centre and rescale again.'
+                : 'Lock the axis — hold both ladders on the same rungs and the same bar scale as you rewind and fast-forward.'
+            }
+          />
 
           <span style={{ color: V2W.border }}>|</span>
 
@@ -1123,6 +1171,12 @@ export function TickerLookupCard({
           <div
             className="tl-split"
             style={{
+              // `relative` for the brand mark below. The identity line directly
+              // above already carries ticker, expiry, session and replay clock —
+              // it is the caption a crop has to contain, and it is deliberately
+              // in the pane rather than the card header for that reason — so the
+              // only thing missing from a recording was whose it is.
+              position: 'relative',
               display: 'grid',
               gridTemplateColumns: '1fr 1fr',
               gridTemplateRows: 'minmax(0, 1fr)',
@@ -1131,6 +1185,7 @@ export function TickerLookupCard({
               height: `clamp(${SPLIT_MIN_H}px, 86vh, 1500px)`,
             }}
           >
+            {replayOn && <ReplayBrand />}
             {/* LEFT — one expiration */}
             <div
               style={{
@@ -1203,6 +1258,7 @@ export function TickerLookupCard({
                     anchor={leftAnchor}
                     levels={leftLevels}
                     missing={replayLeft?.missing ?? null}
+                    scaleMax={lockedMax?.left ?? null}
                   />
                 )}
               </div>
@@ -1324,6 +1380,7 @@ export function TickerLookupCard({
                     levels={rightLevels}
                     changes={replayOn ? null : rightChanges}
                     missing={replayRight?.missing ?? null}
+                    scaleMax={lockedMax?.right ?? null}
                   />
                 )}
               </div>

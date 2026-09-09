@@ -977,3 +977,36 @@ export async function captureAndCopy(el: HTMLElement, opts: ShotOptions = {}): P
   const out = opts.bare ? canvas : frame(canvas, scale, opts.title ?? 'CB Edge', meta, logo)
   return deliver(out, opts.filename ?? 'snapshot.png')
 }
+
+/**
+ * A SMALL JPEG of `el`, as a data URL — the note-clip path.
+ *
+ * `captureAndCopy` above is the sharing path: full fidelity, caption band, the
+ * mark, straight onto the clipboard. A clip filed in the Notes dock is a
+ * different job — it is a thumbnail in a 320px drawer, it lives in
+ * localStorage next to the note text, and the whole notes key has to stay
+ * inside the ~5MB origin quota (shell/notes.tsx sheds images when it doesn't).
+ * So: no caption, no logo, downscaled to `maxWidth`, JPEG rather than PNG.
+ *
+ * JPEG has no alpha, so the canvas is flattened onto `--color-bg` first —
+ * without that, every transparent corner comes back black.
+ */
+export async function captureThumb(
+  el: HTMLElement,
+  maxWidth = 720,
+  quality = 0.72,
+): Promise<string> {
+  const { canvas } = await rasterise(el)
+  const ratio = Math.min(1, maxWidth / Math.max(1, canvas.width))
+  const src = ratio === 1 ? canvas : shrink(canvas, ratio)
+
+  const out = document.createElement('canvas')
+  out.width = src.width
+  out.height = src.height
+  const ctx = out.getContext('2d')
+  if (!ctx) return src.toDataURL('image/jpeg', quality)
+  ctx.fillStyle = tokenHex('--color-bg')
+  ctx.fillRect(0, 0, out.width, out.height)
+  ctx.drawImage(src, 0, 0)
+  return out.toDataURL('image/jpeg', quality)
+}

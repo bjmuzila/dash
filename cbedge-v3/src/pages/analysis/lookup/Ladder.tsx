@@ -55,6 +55,7 @@ export function TlLadder({
   changes = null,
   missing = null,
   anchor = null,
+  scaleMax = null,
 }: {
   rows: TlRow[]
   spot: number | null
@@ -70,8 +71,19 @@ export function TlLadder({
   missing?: Set<number> | null
   /** The strike the pane scrolls to, held steady by useTlAnchor. */
   anchor?: number | null
+  /**
+   * Bar scale to measure against, instead of this ladder's own peak.
+   *
+   * Replay's 🔒 Axis passes the peak as it stood when the lock went on, and
+   * holds it. Without it every frame is normalised to its OWN biggest strike, so
+   * a rung whose gamma did not change still grows and shrinks as you step —
+   * purely because the bar beside it did. Null = the old per-render behaviour,
+   * which is right live.
+   */
+  scaleMax?: number | null
 }) {
-  const maxAbs = rows.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1
+  const ownMax = rows.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1
+  const maxAbs = scaleMax && scaleMax > 0 ? scaleMax : ownMax
   const spotRow =
     spot == null
       ? null

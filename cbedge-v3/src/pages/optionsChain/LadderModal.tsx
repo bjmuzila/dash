@@ -29,7 +29,8 @@ import { alpha, LIGHT_BLUE, MOVE_UP, SHADOW, T } from '@/design/theme'
 import { query } from '@/data/api'
 import { fmtClockHm, fmtExpiryShort, fmtGex, fmtReplayClock, fmtStampDate } from './format'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
-import { ReplayDock } from '@/design/primitives/ReplayDock'
+import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
+import { ReplayBrand } from '@/design/primitives/ReplayStamp'
 
 interface Strike {
   strike: number
@@ -102,6 +103,18 @@ export function LadderModal({
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
   const [scaleMode, setScaleMode] = useState<'frame' | 'day'>('frame')
+  /**
+   * 🔒 Axis — see ReplayLock in design/primitives/ReplayDock.tsx.
+   *
+   * On this surface the thing that MOVES is the bar scale. The strike axis is
+   * already the session's union (`allStrikes`), so the rungs hold still — but
+   * the default `frame` scaling re-normalises every snapshot to its own peak, so
+   * a strike whose gamma did not change still grows and shrinks as you step,
+   * purely because the biggest bar beside it did. Locked, the ladder is measured
+   * against the session-wide peak for every frame, which is exactly what
+   * `scaleMode: 'day'` means — so the lock forces it and says so on the picker.
+   */
+  const [axisLock, setAxisLock] = useState(false)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
 
@@ -271,7 +284,8 @@ export function LadderModal({
     return m
   }, [frame])
 
-  const denom = (scaleMode === 'day' ? maxAbs : frameMax) || 1
+  // Locked, the session-wide peak whatever the picker says — see `axisLock`.
+  const denom = (axisLock || scaleMode === 'day' ? maxAbs : frameMax) || 1
   const spot = animSpot.current
 
   const frameExpiry = frame?.expiry || expiries[0] || ''
@@ -480,29 +494,48 @@ export function LadderModal({
         </div>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
           <span style={{ fontSize: 'var(--text-xs)', color: SUB }}>Scale</span>
-          {(['frame', 'day'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setScaleMode(m)}
-              title={
-                m === 'frame'
-                  ? 'Rescale each snapshot to its own peak — bars always readable'
-                  : 'Fixed session-wide scale — magnitudes comparable across time'
-              }
-              style={{
-                ...inputStyle,
-                padding: '4px 8px',
-                cursor: 'pointer',
-                fontSize: 'var(--text-xs)',
-                textTransform: 'capitalize',
-                borderColor: scaleMode === m ? LIGHT_BLUE : T.border,
-                color: scaleMode === m ? LIGHT_BLUE : SUB,
-              }}
-            >
-              {m}
-            </button>
-          ))}
+          {(['frame', 'day'] as const).map((m) => {
+            // While locked the picker is inert — `denom` is the session peak
+            // either way — so it shows 'day' as the live answer and dims,
+            // rather than lying about a setting that is not in force.
+            const on = axisLock ? m === 'day' : scaleMode === m
+            return (
+              <button
+                key={m}
+                onClick={() => setScaleMode(m)}
+                disabled={axisLock}
+                title={
+                  axisLock
+                    ? 'Axis locked — the ladder is on the fixed session-wide scale. Unlock to choose.'
+                    : m === 'frame'
+                      ? 'Rescale each snapshot to its own peak — bars always readable'
+                      : 'Fixed session-wide scale — magnitudes comparable across time'
+                }
+                style={{
+                  ...inputStyle,
+                  padding: '4px 8px',
+                  cursor: axisLock ? 'default' : 'pointer',
+                  opacity: axisLock ? 0.55 : 1,
+                  fontSize: 'var(--text-xs)',
+                  textTransform: 'capitalize',
+                  borderColor: on ? LIGHT_BLUE : T.border,
+                  color: on ? LIGHT_BLUE : SUB,
+                }}
+              >
+                {m}
+              </button>
+            )
+          })}
         </div>
+        <ReplayLock
+          on={axisLock}
+          onClick={() => setAxisLock((v) => !v)}
+          title={
+            axisLock
+              ? 'Axis locked — every frame is measured against the session peak, so a bar only moves when its own gamma does. Click to rescale per snapshot again.'
+              : 'Lock the axis — measure every frame against the session peak so bars stop resizing as you rewind and fast-forward.'
+          }
+        />
       </div>
 
       {/* Scrubber */}
@@ -651,6 +684,12 @@ export function LadderModal({
               </span>
             </div>
           )}
+          {/* The brand mark, in the opposite corner from the stamp. Same reason
+              the stamp is here at all: this ladder is screen-recorded, and a
+              clip is a crop — attribution that lives in the page chrome does not
+              survive one. See design/primitives/ReplayStamp.tsx. */}
+          <ReplayBrand />
+
           <div ref={rowsColRef} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             {ladder}
           </div>

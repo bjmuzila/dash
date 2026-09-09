@@ -255,6 +255,13 @@ export interface EsChartHandle {
   setRailSink: (sink: RailSink | null) => void
   /** Re-frame on the newest bar, keeping the user's zoom. */
   scrollToNow: () => void
+  /**
+   * Freeze (or release) the price axis and the visible bar range.
+   *
+   * The replay transport's 🔒 Axis button. See `axisLocked` in the mount body
+   * for what each half of that actually costs to hold still.
+   */
+  setAxisLock: (on: boolean) => void
   destroy: () => void
 }
 
@@ -476,6 +483,31 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
    */
   let synth: FormingBar | null = null
   let intervalMs = 5 * 60_000
+
+  /**
+   * ── AXIS LOCK ──────────────────────────────────────────────────────────────
+   *
+   * Set by the replay transport's 🔒 Axis button. While it is on, the pane must
+   * hold EXACTLY where it is as the cursor moves, and there are two independent
+   * ways it would otherwise drift:
+   *
+   *   • the PRICE axis. Replay hands `setBars` a list clipped to the cursor, so
+   *     every step adds or removes bars — and autoscale re-derives the price
+   *     window from whatever is now visible. Stepping across one big candle
+   *     therefore rescales the whole pane, and a level that has not moved
+   *     appears to slide. `autoScale: false` freezes the window lightweight-
+   *     charts last computed, which is the one showing when the lock went on.
+   *
+   *   • the TIME axis. A `setData` with a different bar count can leave the
+   *     visible logical range somewhere else (that is what `reanchorIfStranded`
+   *     exists for). Locked, the range is read before the write and put back
+   *     after it, so the same bars stay under the same pixels.
+   *
+   * A REFRAME still wins — a symbol, interval or session change means the view
+   * the lock was holding is about to be meaningless — so the lock only gates
+   * the non-reframe path.
+   */
+  let axisLocked = false
 
   /**
    * Every bar's open, in ms, ascending — the SAME list the series was given,
@@ -1209,6 +1241,20 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         return ok
       })
 
+      // Read BEFORE the setData below — afterwards the range may already have
+      // been moved by the write we are trying to survive. Only while locked and
+      // only off the non-reframe path; a reframe is entitled to move the view.
+      const heldRange =
+        axisLocked && !reframe
+          ? (() => {
+              try {
+                return ts.getVisibleLogicalRange()
+              } catch {
+                return null
+              }
+            })()
+          : null
+
       const prevCount = barCount
       barCount = drawn.length
       // The bubble layer positions every bucket against this. It must be the
@@ -1275,6 +1321,18 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         }
         frameRecent()
         ensureLatestVisible()
+      } else if (axisLocked) {
+        // Put the range back exactly as it was. Deliberately NOT falling through
+        // to reanchorIfStranded: "the series shrank and the pane went empty" is
+        // the NORMAL state of a rewound chart scrubbed back toward the open, and
+        // re-anchoring on it is the jump the lock exists to stop.
+        if (heldRange) {
+          try {
+            ts.setVisibleLogicalRange(heldRange)
+          } catch {
+            /* the scale is gone; nothing to restore onto */
+          }
+        }
       } else {
         reanchorIfStranded(prevCount)
       }
@@ -1436,6 +1494,20 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         } catch {
           /* the chart is gone; nothing to re-frame */
         }
+      }
+    },
+    setAxisLock(on) {
+      if (axisLocked === on) return
+      axisLocked = on
+      // Turning autoscale OFF freezes the price window at whatever it is right
+      // now — which is the window the user was looking at when they pressed the
+      // button, and the whole point. Turning it back ON re-derives immediately,
+      // so releasing the lock snaps to the current cursor's own range rather
+      // than waiting for the next poll.
+      try {
+        series.priceScale().applyOptions({ autoScale: !on })
+      } catch {
+        /* the scale is gone; the flag still gates the time axis below */
       }
     },
     destroy() {

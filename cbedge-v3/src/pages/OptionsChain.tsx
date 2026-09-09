@@ -46,8 +46,10 @@ import { Popover, PanelSection, SegGroup } from '@/design/primitives/Controls'
 import { ChainMatrix } from './optionsChain/ChainMatrix'
 import { LadderModal } from './optionsChain/LadderModal'
 import { ChainDropdown } from './optionsChain/pickers'
+import { fmtExpiryShort, fmtReplayClock, fmtStampDate } from './optionsChain/format'
 import { ReplayBar } from './optionsChain/ReplayBar'
 import { ReplayDock } from '@/design/primitives/ReplayDock'
+import { ReplayStampLayer } from '@/design/primitives/ReplayStamp'
 import { StrikeHoverCard } from './optionsChain/StrikeHoverCard'
 import { HEAT_SKINS, type HeatSkin } from './optionsChain/heatSkins'
 import { INTENSITY_MIN } from './optionsChain/chainMath'
@@ -112,6 +114,14 @@ export default function OptionsChain({
 
   const [cogOpen, setCogOpen] = useState(false)
   const [ladderOpen, setLadderOpen] = useState(false)
+  /**
+   * 🔒 Axis — see ReplayLock in design/primitives/ReplayDock.tsx.
+   *
+   * The grid's strike axis is already the session's union and does not move; the
+   * SCROLL does, via the ATM rescue below. Held here rather than in
+   * `useChainData` because the scroller it governs is this component's.
+   */
+  const [axisLock, setAxisLock] = useState(false)
   const [hoverCell, setHoverCell] = useState<{ strike: number; colIdx: number; x: number; y: number } | null>(null)
   const onCellClick = useCallback(
     (v: { strike: number; colIdx: number; x: number; y: number }) => setHoverCell(v),
@@ -151,7 +161,13 @@ export default function OptionsChain({
   // middle 60% of the viewport, so it is a rescue every few minutes of playback,
   // not a nudge every frame. Gated on `playing` because while paused or
   // scrubbing the user is driving.
+  //
+  // …and OFF ENTIRELY while the axis is locked. Stepping back and forth over the
+  // same few minutes is exactly when a scroll you did not ask for reads as the
+  // grid jumping, and it is exactly when the rescue is least needed — a scrub
+  // cannot walk the ATM row off screen the way an hour of playback can.
   useEffect(() => {
+    if (axisLock) return
     if (!c.replay.frame || !c.replay.playing) return
     const el = atmRowRef.current
     const container = chainScrollRef.current
@@ -162,7 +178,7 @@ export default function OptionsChain({
     const band = viewH * 0.2 // dead zone: the middle 60%
     if (rowTop >= band && rowTop <= viewH - band) return
     container.scrollTop = Math.max(0, el.offsetTop - viewH / 2 + el.clientHeight / 2)
-  }, [c.replay.frame, c.replay.playing])
+  }, [c.replay.frame, c.replay.playing, axisLock])
 
   // ── Shared button styling ──────────────────────────────────────────────────
   const segStyle = useCallback(
@@ -514,6 +530,8 @@ export default function OptionsChain({
             zeroDteExp={c.replay.zeroDteExp}
             zeroDteIsExact={c.replay.zeroDteIsExact}
             onOpenLadder={() => setLadderOpen(true)}
+            axisLock={axisLock}
+            setAxisLock={setAxisLock}
             segStyle={segStyle}
           />
           </ReplayDock>
@@ -537,6 +555,11 @@ export default function OptionsChain({
           body={c.chainError ?? 'Then click ↻ Now to load the chain'}
         />
       ) : (
+        // A `relative` wrapper around the scroller, so the replay stamp pins to
+        // the PANE and not to the scrolling content — a mark that scrolls away
+        // with the rows is a mark that is not in the recording thirty seconds
+        // later.
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <div
           ref={chainScrollRef}
           style={{
@@ -579,6 +602,32 @@ export default function OptionsChain({
             onToggleStrike={c.toggleStrikeSel}
             onCellClick={onCellClick}
           />
+        </div>
+
+        {/* ── The replay stamp ──
+            What this grid is and WHEN it is, drawn into the pane. A rewound
+            chain looks exactly like a live one, so a recording of one that does
+            not say so is the single worst way this page can be misread. See
+            design/primitives/ReplayStamp.tsx. */}
+        {c.replay.on && c.replay.frame && (
+          <ReplayStampLayer
+            symbol={c.activeTicker}
+            expiryLabel={
+              c.replay.scope === '0dte' && c.replay.zeroDteExp
+                ? fmtExpiryShort(c.replay.zeroDteExp)
+                : null
+            }
+            zeroDte={c.replay.scope === '0dte' && c.replay.zeroDteIsExact}
+            extraExpiries={
+              c.replay.scope === '0dte' ? Math.max(0, c.replay.allExpiries.length - 1) : 0
+            }
+            dateLabel={c.replay.date ? fmtStampDate(c.replay.date) : null}
+            clockLabel={`${fmtReplayClock(c.replay.frame.ts)} ET`}
+            note="recorded walls only"
+            left={12}
+            top={8}
+          />
+        )}
         </div>
       )}
 

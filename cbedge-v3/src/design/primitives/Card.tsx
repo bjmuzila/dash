@@ -142,6 +142,11 @@ export function Card({
 
   const section = (
     <section
+      // Every Card is a photographable surface. `data-card-instance` exists
+      // only for a card that was given an expandId, so it cannot be the marker
+      // the right-click clip menu walks up to — this one always is.
+      // See shell/NoteClipMenu.tsx (resolveClipTarget).
+      data-card=""
       data-card-instance={expandId}
       data-card-expanded={expanded ? '' : undefined}
       style={

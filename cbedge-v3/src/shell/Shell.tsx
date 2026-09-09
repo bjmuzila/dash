@@ -31,6 +31,17 @@ import { UpdateToast } from '@/shell/UpdateToast'
  */
 const NotesDock = lazy(() => import('@/shell/NotesDock'))
 
+/**
+ * The right-click / highlight "Add to Notes" menu — same reasoning, one step
+ * further. It has to be LISTENING before the first gesture rather than after a
+ * click, so it cannot wait for a button the way the dock does; but it pulls the
+ * note store in behind it, so it must not be in the entry chunk either. The
+ * compromise is `NoteClipSlot` below: mounted on the first idle callback, which
+ * is long before anyone has finished reading a card, let alone right-clicked
+ * one.
+ */
+const NoteClipMenu = lazy(() => import('@/shell/NoteClipMenu'))
+
 // The persistent frame: mounts once and never unmounts, so the socket, the
 // store and any dock state survive navigation. Routes render inside it.
 //
@@ -393,6 +404,39 @@ function NotesDockSlot() {
   )
 }
 
+/**
+ * Arms the clip menu once the app has stopped being busy.
+ *
+ * The chunk carries the menu AND the note store (shell/notes.tsx), so it is not
+ * something to fetch during boot alongside the socket and the first frame — and
+ * it is not something to fetch on demand either, because the gesture that needs
+ * it (a right-click, a highlight) is the same event that has to be handled.
+ * Idle is the right moment: nothing is waiting for it, and it is ready seconds
+ * before a human could reach for it. `requestIdleCallback` where it exists, a
+ * timer where it does not (Safari).
+ */
+function NoteClipSlot() {
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const w = window as typeof window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    if (w.requestIdleCallback) {
+      const id = w.requestIdleCallback(() => setReady(true), { timeout: 4000 })
+      return () => w.cancelIdleCallback?.(id)
+    }
+    const t = setTimeout(() => setReady(true), 2000)
+    return () => clearTimeout(t)
+  }, [])
+  if (!ready) return null
+  return (
+    <Suspense fallback={null}>
+      <NoteClipMenu />
+    </Suspense>
+  )
+}
+
 function Toolbar({ mobile = false }: { mobile?: boolean }) {
   // THE ticker control for the whole board. Every card that can follow a symbol
   // follows this one, which is why no card carries its own dropdown — see
@@ -558,6 +602,11 @@ export function Shell({ children }: { children: ReactNode }) {
               layout rather than part of it, and mounted once for both branches.
               See data/appVersion.ts for why an open phone tab needs telling. */}
           <UpdateToast />
+          {/* Highlight anything for a "＋ Notes" chip; right-click a card for
+              Copy image / Add snapshot to Notes. Portalled to <body>, renders
+              nothing for a signed-out visitor or on a phone, and mounted here
+              so BOTH branches below get it. See shell/NoteClipMenu.tsx. */}
+          <NoteClipSlot />
           {mobile ? (
             <div className="cb-viewport flex flex-col overflow-hidden bg-bg text-fg">
               <Toolbar mobile />
