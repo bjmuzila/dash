@@ -51,7 +51,7 @@ import {
 } from './candles'
 import { etDay, gexHistoryUrl, latestSession, parseGexHistory } from './gexHistory'
 import { BASIS_URL, isPlausibleBasis, NO_BASIS, parseBasis, shiftColumns } from './basis'
-import { buildBubbleModel } from './bubbles'
+import { bubbleWindowMax, buildBubbleModel } from './bubbles'
 import { buildRail, GexRail } from './GexRail'
 import { mountEsChart, type EsChartHandle } from './chart'
 
@@ -888,7 +888,15 @@ export function GexCandlesCard({
   // The replay clip lands HERE, upstream of both consumers, for the same
   // reason: the bubbles and the rail read one array, so a rewound chart cannot
   // show 10:04 gamma under a 10:04 tape beside a 16:00 rail.
-  const columns = useMemo(() => {
+  //
+  // SPLIT IN TWO, and the split is what stops the bubbles resizing under
+  // themselves while rewound. `sessionColumns` is the session the card is
+  // showing, WHOLE; `columns` is that clipped to the cursor. Everything that
+  // draws reads the clipped one — a rewound chart must never leak the future —
+  // and the one thing that must NOT be clipped is the bubble layer's
+  // denominator, which is a property of the day rather than of the cursor. See
+  // `bubbleDenominator` below.
+  const sessionColumns = useMemo(() => {
     // `activeDay` FIRST: rewound, the picked session outranks both the weekend
     // pin and "newest", which are the two rules for choosing a session when
     // nobody has chosen one. Live it is '' and neither rule moves.
@@ -897,9 +905,13 @@ export function GexCandlesCard({
       : weekendExpiry
         ? allColumns.filter((c) => etDay(c.slotTs) === weekendExpiry)
         : latestSession(allColumns)
-    const shifted = useEs ? shiftColumns(picked, basis) : picked
-    return cursor ? shifted.filter((c) => c.slotTs <= cursor) : shifted
-  }, [allColumns, activeDay, weekendExpiry, useEs, basis, cursor])
+    return useEs ? shiftColumns(picked, basis) : picked
+  }, [allColumns, activeDay, weekendExpiry, useEs, basis])
+
+  const columns = useMemo(
+    () => (cursor ? sessionColumns.filter((c) => c.slotTs <= cursor) : sessionColumns),
+    [sessionColumns, cursor],
+  )
 
   /**
    * THE SESSIONS THE PICKER MAY OFFER, newest first.
@@ -933,10 +945,37 @@ export function GexCandlesCard({
   // history. `bucketMs` is how the interval gets in — the chart maps interval ->
   // rung and reports it — so a timeframe change rebuilds the model exactly once,
   // through the one value that actually changed.
+  /**
+   * The bubble layer's size denominator, taken over the WHOLE replayed session.
+   *
+   * `ratio` — |netGex| over this — is what sets every mark's radius, and the
+   * model's own default takes it from the columns it is given. Rewound, those
+   * are clipped to the cursor, so the denominator is "the biggest wall revealed
+   * so far": step onto a bucket carrying a bigger one and every dot already on
+   * the pane shrinks in that frame. At 8x, with a frame every ~90ms, that is
+   * the fidget — and it appears at particular moments (wherever the session's
+   * running maximum steps up) rather than evenly, which is exactly how it was
+   * described.
+   *
+   * Null live: there the columns ARE the window and the model's own pass over
+   * them is the right answer, so nothing changes off the replay path.
+   */
+  const bubbleDenominator = useMemo(
+    () =>
+      replayOn && sessionColumns.length
+        ? bubbleWindowMax(sessionColumns, { metric: settings.gexMetric, bucketMs })
+        : null,
+    [replayOn, sessionColumns, settings.gexMetric, bucketMs],
+  )
+
   const snapshots = useMemo(
     () =>
-      buildBubbleModel(columns, { metric: settings.gexMetric, bucketMs }),
-    [columns, settings.gexMetric, bucketMs],
+      buildBubbleModel(columns, {
+        metric: settings.gexMetric,
+        bucketMs,
+        windowMax: bubbleDenominator,
+      }),
+    [columns, settings.gexMetric, bucketMs, bubbleDenominator],
   )
 
   // Same history, second view: the bubbles say how the ladder got here across

@@ -60,6 +60,69 @@ export interface BuildOpts {
    * a line again, and 5m over thirty minutes is six.
    */
   bucketMs: number
+  /**
+   * The denominator for every mark's `ratio`, supplied instead of taken from
+   * `columns`.
+   *
+   * ── WHY A CALLER WOULD OVERRIDE IT ────────────────────────────────────────
+   * `ratio` sets the RADIUS (see placeBucket), and the default denominator is
+   * the biggest |netGex| in the columns handed over. Live that is right: the
+   * columns ARE the window.
+   *
+   * Under REPLAY they are not. The card clips its columns to the cursor, so the
+   * denominator is the biggest wall revealed SO FAR — and the moment the cursor
+   * steps onto a bucket carrying a bigger one, every dot already on the pane
+   * shrinks. At 1x that reads as the trail breathing; at 8x, with a frame every
+   * ~90ms, it is the jitter that was reported, and it lands exactly where the
+   * session's running maximum steps up rather than evenly across the day.
+   *
+   * So the replay path passes the max over the WHOLE session being replayed and
+   * the marks stop resizing under their own history: a dot's size means "this
+   * bucket's share of the day", which is the reading it was always supposed to
+   * have and the one it only actually had at the close.
+   *
+   * Null / 0 / absent = derive it from `columns`, which is the live path.
+   */
+  windowMax?: number | null
+}
+
+/**
+ * The buckets `buildBubbleModel` will draw — one column per bucket, last print
+ * wins.
+ *
+ * Not a mean. The bucket is a SAMPLE of the board — "this is what it read at
+ * 10:35" — and averaging five minutes of a wall being built smears exactly the
+ * move the dot exists to show.
+ *
+ * Split out so `bubbleWindowMax` can measure the same set the model will draw.
+ * A denominator taken over the raw columns instead would count a print the
+ * dedup is about to discard, and the two would disagree by a hair on exactly
+ * the busiest minute.
+ */
+function bucketColumns(columns: GexColumn[], bucketMs: number): Array<[number, GexColumn]> {
+  const byBucket = new Map<number, GexColumn>()
+  for (const col of [...columns].sort((a, b) => a.slotTs - b.slotTs)) {
+    byBucket.set(Math.floor(col.slotTs / bucketMs) * bucketMs, col)
+  }
+  return [...byBucket.entries()].sort((a, b) => a[0] - b[0])
+}
+
+/**
+ * The biggest |metric| across `columns`, bucketed the way the model buckets.
+ *
+ * This is `BuildOpts.windowMax` — see the note there for why the replay path
+ * computes it over the unclipped session and hands it in.
+ */
+export function bubbleWindowMax(columns: GexColumn[], opts: BuildOpts): number {
+  const bucketMs = Math.max(60_000, opts.bucketMs)
+  let max = 0
+  for (const [, col] of bucketColumns(columns, bucketMs)) {
+    for (const c of col.cells) {
+      const a = Math.abs(valueOf(c, opts.metric))
+      if (a > max) max = a
+    }
+  }
+  return max
 }
 
 /**
@@ -71,28 +134,18 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
   const { levels, minPerSide, strikeMode } = BUBBLES
   const bucketMs = Math.max(60_000, opts.bucketMs)
 
-  // ── ONE BUBBLE PER BUCKET, LAST PRINT WINS ────────────────────────────────
-  // Not a mean. The bucket is a SAMPLE of the board — "this is what it read at
-  // 10:35" — and averaging five minutes of a wall being built smears exactly the
-  // move the dot exists to show.
-  const byBucket = new Map<number, GexColumn>()
-  for (const col of [...columns].sort((a, b) => a.slotTs - b.slotTs)) {
-    byBucket.set(Math.floor(col.slotTs / bucketMs) * bucketMs, col)
-  }
-  const buckets = [...byBucket.entries()].sort((a, b) => a[0] - b[0])
+  const buckets = bucketColumns(columns, bucketMs)
   if (!buckets.length) return []
 
   // ── windowMax ─────────────────────────────────────────────────────────────
-  // ONE denominator for every mark on screen, taken over the whole window. Per
-  // bucket it would renormalise every quiet minute back up to full size, which
-  // is what made the trail bulge and pinch instead of tapering.
-  let windowMax = 0
-  for (const [, col] of buckets) {
-    for (const c of col.cells) {
-      const a = Math.abs(valueOf(c, metric))
-      if (a > windowMax) windowMax = a
-    }
-  }
+  // ONE denominator for every mark on screen. Per bucket it would renormalise
+  // every quiet minute back up to full size, which is what made the trail bulge
+  // and pinch instead of tapering.
+  //
+  // Supplied by the caller under replay so the window is the whole session and
+  // not the part of it revealed so far — see BuildOpts.windowMax.
+  const windowMax =
+    opts.windowMax && opts.windowMax > 0 ? opts.windowMax : bubbleWindowMax(columns, opts)
   if (windowMax <= 0) return []
 
   const spotOf = (col: GexColumn): number => {
@@ -627,6 +680,22 @@ export function drawBubbles(
    * legibility question and its answer is BUBBLES.bucketPxPerDot.
    */
   pinned = false,
+  /**
+   * The model's own bucket width, in ms.
+   *
+   * Without it this is estimated from the median gap between the snapshots on
+   * screen, which is robust but not stable: under replay the snapshot list grows
+   * a bucket at a time, so a session with recorder gaps can have its median step
+   * as the list fills. That estimate feeds `pxPerDot`, which feeds the STRIDE —
+   * and the stride is a `ceil`, so a hair of movement near a boundary flips it
+   * from N to N+1 and the ENTIRE trail re-samples onto different buckets in one
+   * frame. That is the most violent fidget available here, and it costs nothing
+   * to remove: the caller already decided the bucket (chart.ts reportBucket),
+   * so the estimate is only ever trying to recover a number we have.
+   *
+   * Absent / 0 = estimate it, which is what a caller with no model handy does.
+   */
+  modelBucketMs = 0,
 ): boolean {
   const { width: w, height: h } = geo
   if (!snaps.length || w <= 0 || h <= 0) return false
@@ -640,15 +709,19 @@ export function drawBubbles(
   const span = Math.max(1, last.ts - first.ts)
   const minOpacity = 1 - BUBBLES.fade
 
-  // The bucket and the pixels it owns, measured off the snapshots themselves —
-  // the model already decided both and the draw should not be told twice.
-  // Median rather than mean: a gap in the recording (a feed outage, a weekend)
-  // is one huge diff that would otherwise claim there is far more room than
-  // there is.
-  const diffs: number[] = []
-  for (let i = 1; i < snaps.length; i++) diffs.push(snaps[i]!.ts - snaps[i - 1]!.ts)
-  diffs.sort((a, b) => a - b)
-  const bucketMs = diffs.length ? diffs[diffs.length >> 1]! : 60_000
+  // The bucket, and the pixels it owns at the current zoom.
+  //
+  // Told, not estimated, when the caller knows it — see `modelBucketMs`. The
+  // fallback is the MEDIAN gap between snapshots rather than the mean, because
+  // a gap in the recording (a feed outage, a weekend) is one huge diff that
+  // would otherwise claim there is far more room than there is.
+  const measuredBucketMs = (() => {
+    const diffs: number[] = []
+    for (let i = 1; i < snaps.length; i++) diffs.push(snaps[i]!.ts - snaps[i - 1]!.ts)
+    diffs.sort((a, b) => a - b)
+    return diffs.length ? diffs[diffs.length >> 1]! : 60_000
+  })()
+  const bucketMs = modelBucketMs > 0 ? modelBucketMs : measuredBucketMs
   // Pixels a bucket owns AT THE CURRENT ZOOM, measured locally rather than from
   // the data's whole span. The span version was wrong in a way that only showed
   // up zoomed in: it reported the plot's own width for a whole day of snapshots

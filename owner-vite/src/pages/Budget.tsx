@@ -5,7 +5,7 @@ import { HOME_THEME } from "../lib/theme";
 import { ThemedSelect } from "../components/ThemedSelect";
 import { ThemedMonthPicker } from "../components/ThemedMonthPicker";
 import RealMonth from "./budget/RealMonth";
-import { CategoryBudgetSection } from "./budget/CategoryBudget";
+import { CategoryBudgetSection, ColorDot } from "./budget/CategoryBudget";
 import { useIsMobile, gridCols, scrollX } from "../hooks/useIsMobile";
 
 type Bank = "coastal" | "truist" | "secu";
@@ -2952,85 +2952,6 @@ function CategorySpendCard({
   );
 }
 
-// The colour dot on a category tile, doubling as its editor. Closed it is just
-// the dot; open it drops a small popover with the six house swatches plus a
-// native picker for anything else. Kept local to this file because nothing else
-// needs it — the dot IS the button, so the tile gains no extra chrome.
-function ColorEditor({
-  value,
-  open,
-  onClose,
-  onPick,
-}: {
-  value: string;
-  open: boolean;
-  onClose: () => void;
-  onPick: (color: string) => void;
-}) {
-  // Native <input type="color"> only speaks 6-digit hex; anything else (an
-  // rgba() from the theme, a short hex) would make it fall back to black, so
-  // seed it with a safe default instead of a value it can't parse.
-  const hex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#7dd3fc";
-
-  return (
-    <span style={{ position: "relative", display: "inline-flex" }}>
-      <span
-        role="button"
-        title="Change colour"
-        aria-label="Change category colour"
-        style={{
-          width: 12, height: 12, borderRadius: 3, background: value, flex: "none", cursor: "pointer",
-          boxShadow: open ? `0 0 0 2px ${HOME_THEME.text}` : `0 0 0 1px rgba(255,255,255,0.18)`,
-        }}
-      />
-      {open && (
-        <>
-          {/* Click-away catcher. Sits under the popover, over everything else. */}
-          <span
-            onClick={(e) => { e.stopPropagation(); onClose(); }}
-            style={{ position: "fixed", inset: 0, zIndex: 40 }}
-          />
-          <span
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: "absolute", top: 20, left: -6, zIndex: 41,
-              display: "flex", alignItems: "center", gap: 6, padding: 8,
-              borderRadius: 10, background: HOME_THEME.panel,
-              border: `1px solid ${HOME_THEME.border}`,
-              boxShadow: "0 12px 30px -8px rgba(0,0,0,0.8)",
-            }}
-          >
-            {CATEGORY_COLORS.map((cc) => (
-              <button
-                key={cc}
-                onClick={(e) => { e.stopPropagation(); onPick(cc); }}
-                aria-label={`Use ${cc}`}
-                style={{
-                  width: 20, height: 20, borderRadius: 6, background: cc, cursor: "pointer",
-                  border: value.toLowerCase() === cc.toLowerCase() ? `2px solid ${HOME_THEME.text}` : `1px solid ${HOME_THEME.border}`,
-                }}
-              />
-            ))}
-            {/* Anything outside the six. Commits on change, same as a swatch. */}
-            <input
-              type="color"
-              value={hex}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => onPick(e.target.value)}
-              aria-label="Custom colour"
-              title="Custom colour"
-              style={{
-                width: 24, height: 22, padding: 0, cursor: "pointer",
-                background: "transparent", border: `1px solid ${HOME_THEME.border}`, borderRadius: 6,
-              }}
-            />
-          </span>
-        </>
-      )}
-    </span>
-  );
-}
-
 // Categories tab: brain-dump/unsorted assignment, per-category budget tiles, and
 // an add-category composer. Budgets live in budget_categories; spend is summed
 // from this month's assigned register rows.
@@ -3064,8 +2985,6 @@ function CategoriesPanel({
   const [budget, setBudget] = useState("");
   const [color, setColor] = useState(CATEGORY_COLORS[0]);
   const [openCat, setOpenCat] = useState<Category | null>(null);
-  // Which category's colour popover is open (null = none). Only one at a time.
-  const [editColorId, setEditColorId] = useState<number | null>(null);
 
   const add = () => {
     if (!name.trim()) return;
@@ -3121,18 +3040,19 @@ function CategoriesPanel({
           return (
             <div key={c.id} onClick={() => setOpenCat(c)} title="View transactions in this category" style={{ ...card(), padding: 12, cursor: "pointer", position: "relative", overflow: "visible" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 800, minWidth: 0 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 14, fontWeight: 800, minWidth: 0 }}>
                   {/* The dot is the edit affordance: click it to recolour the
-                      category. stopPropagation so it doesn't also open the
-                      transactions modal that the card click owns. */}
-                  <span onClick={(e) => { e.stopPropagation(); setEditColorId(editColorId === c.id ? null : c.id); }} style={{ display: "inline-flex", flex: "none" }}>
-                    <ColorEditor
-                      value={dot}
-                      open={editColorId === c.id}
-                      onClose={() => setEditColorId(null)}
-                      onPick={(next) => { onColor(c, next); setEditColorId(null); }}
-                    />
-                  </span>
+                      category. A bare 12px swatch is a coin toss to hit and
+                      every miss opens the transactions modal instead, which
+                      reads as "the colour can't be changed" — so ColorDot
+                      wraps it in a 24px button with a hover ring and swallows
+                      the click before the card sees it. */}
+                  <ColorDot
+                    value={dot}
+                    size={11}
+                    title={`Change the colour of ${c.name}`}
+                    onPick={(next) => onColor(c, next)}
+                  />
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
                   {count > 0 && <span style={{ fontSize: 14, color: HOME_THEME.muted, flex: "none" }}>· {count}</span>}
                 </span>
@@ -3174,8 +3094,18 @@ function CategoriesPanel({
         >
           <div onClick={(e) => e.stopPropagation()} style={{ ...card(), width: 660, maxWidth: "100%", maxHeight: "80vh", overflow: "auto", padding: 0, background: HOME_THEME.panel }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel, zIndex: 1 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                <span style={{ width: 12, height: 12, borderRadius: 3, background: openCat.color || HOME_THEME.cyan, flex: "none" }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+                {/* Editable here too. This modal is where you end up when you
+                    click a category card, so it is where "change this one's
+                    colour" is most often wanted — a dead swatch here is what
+                    makes the whole thing feel unchangeable. `openCat` is a
+                    snapshot, so it is updated locally as well as saved. */}
+                <ColorDot
+                  value={openCat.color || HOME_THEME.cyan}
+                  size={12}
+                  title={`Change the colour of ${openCat.name}`}
+                  onPick={(next) => { onColor(openCat, next); setOpenCat({ ...openCat, color: next }); }}
+                />
                 <span style={{ fontSize: 17, fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{openCat.name}</span>
                 <span style={{ fontSize: 14, color: HOME_THEME.muted, flex: "none" }}>{fmtMoney(spent[openCat.id] || 0, currency)} spent</span>
               </div>

@@ -48,6 +48,102 @@ export const UNCATEGORIZED = "Uncategorized";
 const MUTED: React.CSSProperties = { color: HOME_THEME.muted, opacity: 0.62 };
 
 /**
+ * The six presets a category can be, plus a full picker for anything else.
+ * Kept in step with the same list on the Payments Categories tab so a category
+ * recoloured in one place does not look out of family in the other.
+ */
+export const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", HOME_THEME.red];
+
+/**
+ * The colour dot, made editable.
+ *
+ * Clicking a 9px dot is a coin toss, and on the category cards a miss lands on
+ * the card itself and opens the transactions modal — which is why changing a
+ * colour reads as impossible and "I'll have to make a whole new category". So
+ * the hit area is a padded 24px button with a visible hover ring, while the
+ * dot inside it stays the size the layout wants.
+ */
+export function ColorDot({
+  value, onPick, size = 10, title = "Change colour",
+}: {
+  value: string;
+  onPick: (color: string) => void;
+  size?: number;
+  title?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [hover, setHover] = useState(false);
+  // Native <input type="color"> only speaks 6-digit hex; an rgba() or a short
+  // hex would make it silently fall back to black, so seed it with something
+  // it can parse rather than a value it cannot.
+  const hex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#7dd3fc";
+
+  return (
+    <span style={{ position: "relative", display: "inline-flex", flex: "none" }}>
+      <button
+        type="button"
+        title={title}
+        aria-label={title}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{
+          width: 24, height: 24, padding: 0, borderRadius: 7, cursor: "pointer",
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          background: open || hover ? rgba("#ffffff", 0.08) : "transparent",
+          border: `1px solid ${open ? HOME_THEME.text : hover ? HOME_THEME.border : "transparent"}`,
+          flex: "none",
+        }}
+      >
+        <span style={{ width: size, height: size, borderRadius: 3, background: value, boxShadow: `0 0 0 1px ${rgba("#ffffff", 0.18)}` }} />
+      </button>
+      {open && (
+        <>
+          {/* Click-away catcher. Under the popover, over everything else. */}
+          <span onClick={(e) => { e.stopPropagation(); setOpen(false); }} style={{ position: "fixed", inset: 0, zIndex: 60 }} />
+          <span
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: 28, left: -4, zIndex: 61,
+              display: "flex", alignItems: "center", gap: 6, padding: 8,
+              borderRadius: 10, background: HOME_THEME.panel,
+              border: `1px solid ${HOME_THEME.border}`,
+              boxShadow: `0 12px 30px -8px ${rgba("#000000", 0.8)}`,
+            }}
+          >
+            {CATEGORY_COLORS.map((cc) => (
+              <button
+                key={cc}
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onPick(cc); setOpen(false); }}
+                aria-label={`Use ${cc}`}
+                style={{
+                  width: 20, height: 20, borderRadius: 6, background: cc, cursor: "pointer",
+                  border: value.toLowerCase() === cc.toLowerCase() ? `2px solid ${HOME_THEME.text}` : `1px solid ${HOME_THEME.border}`,
+                }}
+              />
+            ))}
+            {/* Anything outside the six. Commits on change, same as a swatch. */}
+            <input
+              type="color"
+              value={hex}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => onPick(e.target.value)}
+              aria-label="Custom colour"
+              title="Custom colour"
+              style={{
+                width: 24, height: 22, padding: 0, cursor: "pointer",
+                background: "transparent", border: `1px solid ${HOME_THEME.border}`, borderRadius: 6,
+              }}
+            />
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+/**
  * Lift a category colour off the near-black page.
  *
  * Category colours are picked by hand in the editor, and a dark one — the deep
@@ -173,12 +269,13 @@ function gridMoney(v: number, currency: string): string {
  * everywhere, not a copy living in this browser.
  */
 function BudgetGrid({
-  grid, imported, currency, onSave, onOpenCategories,
+  grid, imported, currency, onSave, onColor, onOpenCategories,
 }: {
   grid: { axis: string[]; rows: BudgetRow[]; good: number; watch: number; over: number };
   imported: Set<string>;
   currency: string;
   onSave: (row: { name: string; budget: number; color: string; period: string }, amount: number) => Promise<void>;
+  onColor: (row: BudgetRow, color: string) => Promise<void>;
   onOpenCategories?: () => void;
 }) {
   /** Keystrokes live here; nothing is written until blur or Enter. */
@@ -263,8 +360,24 @@ function BudgetGrid({
                 return (
                   <tr key={r.name} style={{ background: tint }}>
                     <td style={{ ...td("left"), position: "sticky", left: 0, background: tint === "transparent" ? HOME_THEME.panel : "transparent", zIndex: 1, fontWeight: 700 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                        <span style={{ width: 9, height: 9, borderRadius: 3, background: r.color, flex: "none" }} />
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        {/* Editable. A category's colour is how it is read on
+                            every chart on this page, so it belongs next to the
+                            name, not only in a separate editor. Rows with no
+                            id are synthetic (Uncategorized) and have nothing
+                            to recolour. */}
+                        {r.id == null ? (
+                          <span style={{ width: 24, height: 24, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
+                            <span style={{ width: 9, height: 9, borderRadius: 3, background: r.color, flex: "none" }} />
+                          </span>
+                        ) : (
+                          <ColorDot
+                            value={r.color}
+                            size={9}
+                            title={`Change the colour of ${r.name}`}
+                            onPick={(next) => { void onColor(r, next); }}
+                          />
+                        )}
                         {r.name}
                       </div>
                     </td>
@@ -802,6 +915,18 @@ export function CategoryBudgetSection({
     await onCategoriesChanged?.();
   }, [onCategoriesChanged]);
 
+  /** Recolour one category. Same upsert-on-name write as the budget edit
+      above, with the amount passed straight back through so it isn't wiped. */
+  const recolour = useCallback(async (row: { name: string; budget: number; period: string }, color: string) => {
+    const res = await fetch("/api/budget", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "category", name: row.name, amount: row.budget || 0, period: row.period || "monthly", color }),
+    });
+    if (!res.ok) throw new Error("recolour failed");
+    await onCategoriesChanged?.();
+  }, [onCategoriesChanged]);
+
   if (loading && !trend.length) {
     return (
       <Card variant="classic" padding="18px 16px">
@@ -818,6 +943,7 @@ export function CategoryBudgetSection({
         imported={importedMonths}
         currency={currency}
         onSave={save}
+        onColor={recolour}
         onOpenCategories={onOpenCategories}
       />
       {catTrend.series.length > 0 && (

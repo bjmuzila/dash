@@ -1,92 +1,79 @@
 # Changelog
 
-## 2026-09-09 (e) - OWNER / LSE DATA: Contract Candles gets a date window, newest-first order and a Today button; day windows are trimmed exactly (`owner-vite/src/pages/LseData.tsx`, `server-v2/api-router.js`)
+## 2026-09-09 (d) - V3 GEX CANDLES: the bubbles no longer fidget while a replay is scrubbing (`cbedge-v3/src/board/gexCandles/bubbles.ts`, `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`, `cbedge-v3/src/board/gexCandles/chart.ts`)
 
-A contract's 1m bars run from the day it listed and were pulled oldest-first, so
-today's session sat two thousand rows below the fold and the tab drew the first
-300 of them - all from May. Three additions:
+Reported as "on 8x the bubbles at certain spots fidget". Two inputs to the
+bubble layer were being taken from the part of the session REVEALED SO FAR
+rather than from the session, so both moved every time the cursor did. At 1x
+(700ms a frame) that reads as the trail breathing; at 8x (~90ms) it is a jitter.
+"At certain spots" is the tell for the first one - it is not evenly spread, it
+lands wherever the day's running maximum steps up.
 
-**Order defaults to newest first**, so the current session is on top. The picker
-still offers oldest-first for a walk-forward read.
+**1. `windowMax` - the size denominator.** Every mark's `ratio` is |netGex| over
+the biggest |netGex| in the window, and `ratio` sets the RADIUS (`placeBucket`
+-> `byGex` -> `t` -> `rx`/`ry`). The card clips its columns to the replay cursor,
+so the model's own denominator was "the biggest wall revealed so far" - and the
+frame the cursor stepped onto a bigger one, EVERY dot already on the pane shrank
+at once.
 
-**From / To, plus a Today button** that sets both to today's date.
+`BuildOpts.windowMax` is new, along with an exported `bubbleWindowMax()` and a
+`bucketColumns()` helper the two now share (a denominator measured over raw
+columns would count a print the bucket dedup is about to discard). The card
+computes it over the unclipped session and passes it in; live it passes null and
+the model's own pass is unchanged. A dot's size now means "this bucket's share
+of the day", which is the reading it was always supposed to have and previously
+only had at the close.
 
-**"Showing the first 300" is ours and now says so.** `PREVIEW_ROWS` is the tab's
-draw cap, not a vault limit - the pull was complete at 2,019 rows. The meta line
-reads "this tab draws the first 300 of them - the pull itself is complete, and
-Download CSV has every row."
+**2. The stride's bucket estimate.** `drawBubbles` estimated the bucket width
+from the MEDIAN gap between the snapshots on screen. That estimate feeds
+`pxPerDot`, which feeds the stride - and the stride is a `ceil`, so a hair of
+movement near a boundary flips it from N to N+1 and the entire trail re-samples
+onto different buckets in a single frame. Under replay the snapshot list grows
+one bucket at a time, so a session with recorder gaps can have its median step
+as the list fills. New optional `modelBucketMs` argument: `chart.ts` hands over
+`lastBucket`, the number `reportBucket` already sends the card, so the draw uses
+the bucket the model was actually built with instead of trying to recover it.
+The median stays as the fallback for a caller with no model handy.
 
-**Day windows are sent wide and trimmed exact.** The vault's accepted format for
-start/end is undocumented and a datetime it cannot parse is a 400, so a one-day
-window now goes out as `start=<day>` / `end=<the day after>` - plain dates, right
-whether `end` is read as exclusive, as a whole day, or as that day's midnight -
-with the real window named in `day_from` / `day_to`. `dayTrimmer()` in the router
-applies that to Options Flow and Contract Candles, JSON preview and streamed CSV
-alike, dating rows off `minute` or `timestamp` and dropping undated ones. The tab
-trims too, so the preview is exact even before the server is redeployed. This
-also replaces the `"YYYY-MM-DD hh:mm:ss"` strings the Flow trade-date filter was
-sending in (c), which were a 400 waiting to happen.
+**Also: `columns` is now split.** `sessionColumns` is the whole session,
+`columns` is that clipped to the cursor. Everything that DRAWS still reads the
+clipped one - a rewound chart must never leak the future - and only the
+denominator reads the whole session, because it is a property of the day rather
+than of the cursor. Same split, same reasoning, as the price range the axis lock
+takes from `dayBars` in (c).
 
-Note for anyone reading these timestamps: they are UTC. The vault emits
-`"YYYY-MM-DD hh:mm:ss"` and `isoify()` stamps a `Z` on it; the tab strips the `Z`
-when formatting the cell, so the column is unlabelled UTC.
+## 2026-09-09 (c) - V3 REPLAY: 🔒 Axis defaults ON for GEX candles, and the price half is now a session RANGE rather than a freeze (`cbedge-v3/src/board/gexCandles/chart.ts`, `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`)
 
-## 2026-09-09 (d) - OWNER / LSE DATA: the Top-N flow ranking is applied in the tab as well as on the server (`owner-vite/src/pages/LseData.tsx`)
+Follows (b). Two changes, and the second is what makes the first usable.
 
-`Top 100 by premium` came back in tape order - 350 rows, newest first. The
-ranking exists only in the server build, and a running build that predates it
-does not reject `top=100`, it IGNORES it and answers normally. That is the worst
-shape this control can fail in: the list looks ranked and is actually just the
-most recent prints.
+**`autoScale:false` was the wrong mechanism.** It pins whatever price window
+happened to be showing when the button went on — and a candle replay OPENS
+rewound to 09:30, where the series holds one bar. Locking there froze the pane
+to a few points of range and the rest of the session ran straight off it.
 
-So the tab now ranks too. `preview()` sorts the returned rows by premium
-(read through a candidate list of column names, because the tape's rows are not
-a fixed shape and a missing column would score every print 0 and leave tape
-order intact) and slices to N. It is a no-op when the server did the ranking -
-the rows already arrive in that order - and it rescues the list when the server
-did not. `scanned`, which only the ranking path sends, tells the two apart, and
-the meta line says which one you are looking at: an unranked server gets
-"ranked by premium in this tab, from the N prints this call returned - redeploy
-for a ranking across the whole tape (and for a ranked CSV)". A Top-N request
-also now asks for `limit=5000`, the widest single call the vault allows, so the
-in-tab pool is as large as it can be on an old build.
+So the price half is no longer a freeze. `chart.ts` installs an
+`autoscaleInfoProvider` on the candle series once at mount; while locked it
+returns a fixed `priceRange` and autoscale stays ON (the provider is only
+consulted while it is). `setAxisLock(on, range)` takes that range, because the
+chart genuinely cannot derive it: the series only ever holds bars up to the
+cursor, so anything computed from it is the range of the part of the day that
+has been revealed. `GexCandlesCard` computes it from `dayBars` — the UNCLIPPED
+tape for the active session — as the day's low to its high, and re-asserts
+`autoScale:true` on every lock change so a chart the user had previously
+dragged (which turns autoscale off for good) still honours the button.
 
-The CSV download cannot be rescued this way - it streams from the server - so a
-ranked CSV still needs the server deployed.
+The TIME half is unchanged: the visible logical range is read before the
+`setData` and put back after it, and `reanchorIfStranded` stays skipped while
+locked.
 
-## 2026-09-09 (c) - OWNER / LSE DATA: Options Flow gains a trade-date, expiry and strike filter, plus a Top-N-by-premium ranking (`owner-vite/src/pages/LseData.tsx`, `server-v2/api-router.js`, `server-v2/_lib-lse.cjs`)
-
-The Options Flow tab could only be pointed at an underlying, a type, a minimum
-premium and a DTE window. Three things were missing and all three are now on the
-filter bar.
-
-**Trade date vs Expiry - two different dates, labelled as two different dates.**
-`Trade date` picks one session of the tape and is a shorthand for the start/end
-pair: it sends `start=<day> 00:00:00` / `end=<day> 23:59:59` (the vault's own
-time format - a bare date would pin both ends of the window to midnight and
-return nothing) and WINS over Start/End, whose hints say so while it is set.
-`Expiry` is the contract's expiration and rides upstream as `/options/flow`'s own
-`expiry` parameter.
-
-**Strike is filtered on THIS side of the wire.** `/options/flow` takes
-underlying, type, min_premium, expiry, max_dte, start, end, order and limit -
-there is no strike parameter, so sending one is ignored at best and a 400 at
-worst. `filterFlowByStrike()` in `_lib-lse.cjs` applies `strike` / `strike_min` /
-`strike_max` to every page before anything is counted, ranked or written, and it
-reads the strike through a candidate list of column names with a fallback to the
-last eight digits of the row's OSI ticker - the flow rows are not a fixed shape,
-and guessing one column name is how a strike filter silently drops every print.
-The streamed CSV takes its header from the first page that SURVIVES the filter,
-not the first page fetched.
-
-**Top 50 (or 100, or 250) by premium.** `top=N` on the route. It is deliberately
-NOT "one page, sorted": the tape is served newest-first, so a single 5,000-row
-call is the most RECENT prints and ranking those answers a different question
-every minute. `top` walks the window (capped at 100k prints scanned, `scan_rows`
-to raise it to 500k), filters, ranks on premium and slices N - and the meta line
-says how many matched and how many were scanned, so a scan-cap hit is visible
-rather than quietly reported as "the biggest prints". The Rank picker supersedes
-"Walk it all" (the ranking already walks it), and Download CSV honours all of it.
+**Default ON, on this surface only.** The other four tabs still open unlocked —
+on a ladder the unlocked behaviour is merely busy. On the candles it is the
+thing everyone hits first, so `axisLock` seeds `true` and is RE-ARMED (not
+cleared) when the subject changes: entering replay, leaving it, or picking
+another session all put it back on, since the locked range is derived from
+whichever day is on screen and follows the picker by itself. Leaving replay
+still hands the live chart its own autoscale back — `replayOn && axisLock` — so
+the board card is untouched by any of this.
 
 ## 2026-09-09 (b) - V3 REPLAY: 🔒 Axis on every transport, and the stamp + CB Edge mark drawn INTO every replayed surface (`cbedge-v3/src/design/primitives/ReplayStamp.tsx` NEW, `cbedge-v3/src/design/primitives/ReplayDock.tsx`, `cbedge-v3/src/board/gexCandles/chart.ts`, `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`, `cbedge-v3/src/pages/OptionsChain.tsx`, `cbedge-v3/src/pages/optionsChain/ReplayBar.tsx`, `cbedge-v3/src/pages/optionsChain/LadderModal.tsx`, `cbedge-v3/src/pages/replay/MultiGreekReplay.tsx`, `cbedge-v3/src/pages/replay/mgReplay.ts`, `cbedge-v3/src/pages/analysis/lookup/TickerLookup.tsx`, `cbedge-v3/src/pages/analysis/lookup/Ladder.tsx`)
 
@@ -20892,39 +20879,3 @@ All proxy fetch calls removed or replaced with no-ops across:
 - **Wed Jun 17:** Retail Sales, Mfg & Trade Inventories, Pending Home Sales, U.S. Interest Rate Decision
 - **Thu Jun 18:** Weekly Jobless Claims, Philly Fed Business Outlook, Leading Indicators
 - **Fri Jun 19:** No events scheduled
-
-## 2026-09-09 — Top Flow card on the v3 home board
-
-**New card: Top Flow (`top-flow`, 🐋).** The whole options market's biggest
-prints, ranked by dollar premium, on the v3 home board. Not a second Flow Tape:
-Flow Tape is our own recorder, one ticker, on the socket; this is every
-underlying the LSE vault sees.
-
-- `cbedge-v3/src/board/topFlow/TopFlowCard.tsx` — new. Cogwheel holds Sort
-  (Biggest / Newest), Min Premium ($50K…$1M), Max DTE (0 / ≤7 / ≤30 / ≤90 /
-  Any) and Rows (25 / 50 / 100), persisted per card COPY so two Top Flows can
-  hold different questions. Header states when the server last swept and how
-  old the newest print is — no LIVE badge, because how far behind the vault's
-  edge runs is not documented. Staleness only colours warn while the vault's
-  session date is today's, so an evening board is not permanently orange.
-- `cbedge-v3/src/board/catalog.tsx` — one catalog entry, lazy() like the other
-  heavy cards; `instanceId` threaded through for per-copy settings.
-- `server-v2/api-router.js` — new `GET /api/lse/top-flow`, **auth `subscriber`**
-  (the first /api/lse/* route a customer can reach; every other one stays
-  owner-only). ONE cached whole-market vault sweep for the entire site, taken
-  at a $50K floor with no DTE cap, refreshed lazily and single-flight at most
-  once per 20s — so every cogwheel combination is a filter over the same cached
-  session and costs zero vault calls. Sweeps are ACCUMULATED, not replaced: the
-  vault answers newest-first at a 5000-row cap, which on a busy session is a
-  window of minutes, so a "biggest of the session" list built from one response
-  would silently mean "biggest of the last few minutes". The store keeps the top
-  2000 by premium and the newest 2000 — the two orderings the card can ask for.
-  Session rollover is keyed on the newest print's own ET date, not wall clock,
-  so pre-open holds the last session instead of blanking for nine hours.
-  Vault rows are normalised server-side (their shape is not fixed — see the
-  row-shape note in `_lib-lse.cjs`), with the OSI ticker as the fallback for
-  root, expiry, right and strike.
-
-Not verified from here: how fresh the vault's flow tape actually is intraday.
-It is documented as the trailing week of prints (`md files/LSE-DATA-LIMITS.md`);
-the card reports its own freshness rather than asserting live.

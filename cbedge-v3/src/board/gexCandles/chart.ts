@@ -1210,7 +1210,19 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     // whole size signal gone. The interval still moves the bubbles either way,
     // because the BUCKET is what changed; the stride only decides how many of
     // them are legible, and 11px is the answer to that.
-    const drew = drawBubbles(ctx, snaps, geo, palette, drawOpts.bubbleScale, drawOpts.bucketMin != null)
+    // `lastBucket` is the bucket the MODEL was built with — reportBucket sends
+    // the same number to the card. Handing it over keeps the stride off a value
+    // measured from however many snapshots happen to be on screen, which under
+    // replay changes every frame. See drawBubbles' `modelBucketMs`.
+    const drew = drawBubbles(
+      ctx,
+      snaps,
+      geo,
+      palette,
+      drawOpts.bubbleScale,
+      drawOpts.bucketMin != null,
+      lastBucket,
+    )
     reportOutOfRange(!drew)
   }
   raf = requestAnimationFrame(draw)

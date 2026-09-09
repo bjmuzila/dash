@@ -8801,6 +8801,10 @@ if (libDb) {
     const merchantKey = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 60);
     // Two imports covering the same week must not produce two copies of a row.
     const dedupeKey = (r) => `${r.tx_date}|${Number(r.amount).toFixed(2)}|${r.direction}|${String(r.description || '').trim().toLowerCase().slice(0, 60)}`;
+    // Money as it appears inside an auto-categorize explanation ("topping up to
+    // $1,240.00"). Server-side only, so the locale is pinned rather than the
+    // container's, which is C.
+    const fmtUsd = (n) => `$${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
     register('/api/budget/real', {
       auth: 'owner', methods: ['GET', 'POST'],
@@ -8823,7 +8827,7 @@ if (libDb) {
               const d = new Date(Date.UTC(y, m - 1 - 11, 1));
               return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
             })();
-            const [tx, subscriptions, categories, months, adviceRow, trend, daily, flexGasRows] = await Promise.all([
+            const [tx, subscriptions, categories, months, adviceRow, trend, daily, flexGasRows, rules] = await Promise.all([
               D.listStatementTx(profile.id, month),
               D.listSubscriptions(profile.id),
               D.listBudgetCategories(profile.id),
@@ -8832,6 +8836,10 @@ if (libDb) {
               D.listStatementCategoryTrend(profile.id, trendSince, month),
               D.listStatementDailyTrend(profile.id, trendSince, month),
               D.listAmazonGasByMonth(profile.id, trendSince, month),
+              // Filing rules ride along with the month so the Rules card can
+              // render without a second round-trip. Wrapped because a profile
+              // that predates the table must still load its month.
+              D.listCategoryRules(profile.id).catch(() => []),
             ]);
 
             // ── Flex gas comes back out of the fuel category ───────────────
@@ -8893,6 +8901,15 @@ if (libDb) {
               : null;
             send(res, 200, {
               profile, month, tx, subscriptions, categories, months, advice,
+              rules: (rules || []).map((r) => ({
+                id: Number(r.id),
+                pattern: String(r.pattern || ''),
+                direction: r.direction === 'in' || r.direction === 'out' ? r.direction : null,
+                categoryId: r.category_id == null ? null : Number(r.category_id),
+                categoryName: r.category_name ?? null,
+                note: r.note ?? null,
+                priority: Number(r.priority) || 0,
+              })),
               trend: (trend || []).map((r) => ({
                 month: r.month,
                 categoryId: r.category_id == null ? null : Number(r.category_id),
@@ -9047,6 +9064,358 @@ if (libDb) {
           send(res, 200, { ok: true, updated, spread, merchants: byMerchant.size, submitted: ids.length }); return;
         }
 
+        // ── Filing rules ────────────────────────────────────────────────────
+        // The editable half of "learn from previous months". History is
+        // implicit and can only ever repeat what was already done; a rule is
+        // the place to write down a decision history cannot express — a
+        // payroll deposit that must never read as a transfer, a vendor whose
+        // name collides with another category.
+        if (action === 'saveRule') {
+          const rule = await D.upsertCategoryRule({
+            profile_id: profile.id,
+            id: body?.id == null ? null : Number(body.id),
+            pattern: String(body?.pattern ?? ''),
+            direction: body?.direction === 'in' || body?.direction === 'out' ? body.direction : null,
+            category_id: body?.categoryId == null || body.categoryId === '' ? null : Number(body.categoryId),
+            note: body?.note == null ? null : String(body.note),
+            priority: Number(body?.priority) || 0,
+          });
+          if (!rule) { send(res, 400, { error: 'A rule needs a pattern.' }); return; }
+          send(res, 200, { ok: true, rule }); return;
+        }
+
+        if (action === 'deleteRule') {
+          await D.deleteCategoryRule(profile.id, Number(body?.id ?? 0));
+          send(res, 200, { ok: true }); return;
+        }
+
+        // ── Auto-categorize ─────────────────────────────────────────────────
+        // File this month's UNCATEGORIZED rows, best effort, in four passes of
+        // decreasing certainty. Nothing is written: the response is a list of
+        // proposals the client stages into its normal unsaved-edits bar, so
+        // every one of them is reviewed and then saved through the same
+        // setCategoriesBulk path a hand edit uses. That is deliberate — a
+        // categorizer that writes silently is a categorizer you stop trusting
+        // the first time it is wrong.
+        //
+        // Rows that already HAVE a category are never touched, including by
+        // the model. A filing you made by hand is the ground truth this thing
+        // learns from; overwriting it would erase the training data.
+        //
+        //   1. rules    — your explicit patterns. Highest authority.
+        //   2. amazon   — the Flex/Zelle allocation, see below.
+        //   3. history  — how you filed this exact merchant in EARLIER months.
+        //   4. model    — Claude, for merchants with no rule and no history,
+        //                 shown your categories and your filing history as
+        //                 worked examples so its guesses match your habits.
+        //
+        // Each pass only sees what the ones above it left, so a rule always
+        // beats history and history always beats the model.
+        if (action === 'autoCategorize') {
+          const loadedMonth = String(body?.month ?? currentMonth()).slice(0, 7);
+          const everyMonth = body?.allMonths === true;
+          const useModel = body?.useModel !== false;
+          const MODEL = 'claude-sonnet-4-6';
+          const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+
+          const [categories, rules, storedMonths, allHistory] = await Promise.all([
+            D.listBudgetCategories(profile.id),
+            D.listCategoryRules(profile.id).catch(() => []),
+            D.listStatementMonths(profile.id).catch(() => []),
+            // Every filing ever made, for the model's worked examples. The
+            // per-month pass below uses a month-scoped copy instead; this one
+            // is only ever shown as "here is how they file things".
+            D.listMerchantCategoryHistory(profile.id, '9999-12').catch(() => []),
+          ]);
+
+          // Nothing needs re-uploading to run this over history: the rows are
+          // already in budget_statement_tx, so a sweep is just the same pass
+          // repeated per stored month, oldest first.
+          const targets = everyMonth
+            ? [...new Set((storedMonths || []).map((m) => String(m.month)))].sort()
+            : [loadedMonth];
+
+          const validIds = new Set((categories || []).map((c) => Number(c.id)));
+          const nameOf = new Map((categories || []).map((c) => [Number(c.id), String(c.name)]));
+
+          const proposals = new Map();
+          const counts = { rule: 0, amazon: 0, history: 0, model: 0 };
+          const claim = (row, categoryId, source, why) => {
+            const id = Number(categoryId);
+            if (!Number.isFinite(id) || !validIds.has(id)) return false;
+            if (proposals.has(Number(row.id))) return false;
+            proposals.set(Number(row.id), {
+              id: Number(row.id),
+              month: String(row.month || '').slice(0, 7),
+              categoryId: id,
+              categoryName: nameOf.get(id) ?? '',
+              merchant: row.merchant || row.description,
+              description: row.description,
+              date: row.tx_date,
+              amount: Number(row.amount) || 0,
+              direction: row.direction === 'in' ? 'in' : 'out',
+              source,
+              why,
+            });
+            counts[source] = (counts[source] || 0) + 1;
+            return true;
+          };
+          // Rules and the Amazon detector read the merchant AND the raw
+          // descriptor: the merchant is normalized ("Amazon"), the descriptor
+          // is where "ZELLE FROM ..." actually lives.
+          const hay = (r) => `${r.merchant || ''} ${r.description || ''}`.toLowerCase();
+          const dirOf = (r) => (r.direction === 'in' ? 'in' : 'out');
+
+          // listCategoryRules already returns them in precedence order
+          // (priority, then longest pattern, then oldest), so the first hit wins.
+          const ruleList = (rules || [])
+            .map((r) => ({ ...r, needle: String(r.pattern || '').trim().toLowerCase() }))
+            .filter((r) => r.needle && r.category_id != null);
+
+          const FUELISH = /gas|fuel/i;
+          const amazonCat = (categories || []).find((c) => /amazon|flex/i.test(c.name) && !FUELISH.test(c.name)) || null;
+          const bzilaCat = (categories || []).find((c) => /bzila/i.test(c.name) && !FUELISH.test(c.name)) || null;
+
+          const splits = [];
+          const leftovers = [];
+          let scanned = 0;
+          let uncategorized = 0;
+
+          for (const m of targets) {
+            const [rows, history, amazonMonths] = await Promise.all([
+              D.listStatementTx(profile.id, m),
+              D.listMerchantCategoryHistory(profile.id, m).catch(() => []),
+              D.listAmazonMonthTotals(profile.id, m, m).catch(() => []),
+            ]);
+            scanned += (rows || []).length;
+            const open = (rows || []).filter((r) => r.category_id == null);
+            uncategorized += open.length;
+
+            // ── 1. rules ───────────────────────────────────────────────────
+            for (const row of open) {
+              const h = hay(row);
+              const d = dirOf(row);
+              const hit = ruleList.find((r) => (!r.direction || r.direction === d) && h.includes(r.needle));
+              if (hit) claim(row, hit.category_id, 'rule', `rule "${hit.pattern}"${hit.direction ? ` · ${hit.direction} only` : ''}`);
+            }
+
+            // ── 2. the Amazon / Zelle allocation ───────────────────────────
+            // Amazon pay for a month arrives on TWO rails: Flex direct
+            // deposits and Zelle transfers. The Amazon tab is the authority on
+            // what was actually earned, so that figure is the target and the
+            // month's deposits are allocated against it:
+            //
+            //   Flex deposits count first — they are Amazon by construction.
+            //   Zelle then fills whatever is still missing, oldest first.
+            //   Every Zelle after the target is met is Bzila pay.
+            //
+            // The deposit that straddles the line is taken only if it is more
+            // needed than not (remaining >= half of it), so a $20 shortfall can
+            // never swallow a $900 Zelle. Allocation stops at that row either
+            // way, which is what keeps it oldest-first and predictable rather
+            // than a best-fit search over the month.
+            //
+            // Any direction-'in' row mentioning Amazon is read as Flex pay. An
+            // Amazon REFUND would also match — it is rare, and it is one click
+            // to drop from the review list before saving, which is cheaper than
+            // a descriptor test that misses the real deposits.
+            const amazonTarget = Number((amazonMonths || [])[0]?.pay) || 0;
+            const split = {
+              month: m,
+              target: amazonTarget,
+              flex: 0, zelleToAmazon: 0, zelleToBzila: 0,
+              filled: 0, shortfall: 0,
+              amazonCategory: amazonCat ? amazonCat.name : null,
+              bzilaCategory: bzilaCat ? bzilaCat.name : null,
+              applied: false,
+              note: null,
+            };
+            if (!amazonCat) {
+              split.note = 'No Amazon pay category exists, so deposits were left to the other passes.';
+            } else if (!(amazonTarget > 0)) {
+              split.note = `The Amazon tab has no pay logged for ${m}, so there was nothing to allocate against.`;
+            } else {
+              const openIn = open
+                .filter((r) => dirOf(r) === 'in' && !proposals.has(Number(r.id)))
+                .sort((a, b) => String(a.tx_date).localeCompare(String(b.tx_date)) || Number(a.id) - Number(b.id));
+              const isZelle = (r) => /zelle/i.test(hay(r));
+              const isFlex = (r) => !isZelle(r) && /\b(amazon|amzn)\b/i.test(hay(r));
+              for (const r of openIn) {
+                if (!isFlex(r)) continue;
+                if (claim(r, amazonCat.id, 'amazon', 'Amazon Flex deposit')) {
+                  split.flex += Number(r.amount) || 0;
+                  split.filled += Number(r.amount) || 0;
+                }
+              }
+              let done = split.filled >= amazonTarget;
+              for (const r of openIn) {
+                if (!isZelle(r) || proposals.has(Number(r.id))) continue;
+                const amt = Number(r.amount) || 0;
+                const need = amazonTarget - split.filled;
+                if (!done && need > 0 && need >= amt / 2) {
+                  if (claim(r, amazonCat.id, 'amazon', `Zelle topping Amazon pay up to the ${fmtUsd(amazonTarget)} on the Amazon tab`)) {
+                    split.filled += amt;
+                    split.zelleToAmazon += amt;
+                  }
+                  if (split.filled >= amazonTarget) done = true;
+                } else {
+                  done = true;
+                  if (bzilaCat && claim(r, bzilaCat.id, 'amazon', 'Zelle left over once Amazon pay was covered')) {
+                    split.zelleToBzila += amt;
+                  }
+                }
+              }
+              split.shortfall = Math.max(0, amazonTarget - split.filled);
+              split.applied = true;
+              if (!bzilaCat) split.note = 'No Bzila category exists, so the leftover Zelle was left for the other passes.';
+            }
+            splits.push(split);
+
+            // ── 3. history ─────────────────────────────────────────────────
+            // Scoped to months STRICTLY BEFORE this one, so a sweep files each
+            // month from what came before it rather than from itself.
+            const learned = new Map();
+            for (const h of history || []) {
+              const k = `${h.direction}|${h.merchant_key}`;
+              if (!learned.has(k)) learned.set(k, h);
+            }
+            for (const row of open) {
+              if (proposals.has(Number(row.id))) continue;
+              const h = learned.get(`${dirOf(row)}|${merchantKey(row.merchant || row.description)}`);
+              if (h && h.category_id != null) claim(row, h.category_id, 'history', `filed this way ${h.n}× before, last in ${h.last_month}`);
+            }
+
+            for (const row of open) if (!proposals.has(Number(row.id))) leftovers.push(row);
+          }
+
+          // ── 4. the model ───────────────────────────────────────────────────
+          // Run ONCE over what every month left, not once per month: the same
+          // unknown vendor turns up in March and in July, and asking twice is
+          // two answers that can disagree.
+          const model = { used: false, name: null, asked: 0, matched: 0, warning: null };
+          if (useModel && leftovers.length && categories.length) {
+            if (!process.env.ANTHROPIC_API_KEY) {
+              model.warning = 'Ran on rules and history only — ANTHROPIC_API_KEY is not configured on the server.';
+            } else {
+              // One entry per (direction, merchant), not per row: a month with
+              // 14 Sheetz swipes is one question, not fourteen.
+              const groups = new Map();
+              for (const r of leftovers) {
+                const k = `${dirOf(r)}|${merchantKey(r.merchant || r.description)}`;
+                const g = groups.get(k);
+                if (g) { g.n++; g.total += Number(r.amount) || 0; g.rows.push(r); }
+                else groups.set(k, { key: k, direction: dirOf(r), merchant: r.merchant || r.description, sample: r.description, n: 1, total: Number(r.amount) || 0, rows: [r] });
+              }
+              // The worked examples. This is what makes the pass match YOUR
+              // habits instead of a generic idea of what a category is —
+              // "WakeMed deposits are H Pay" is not something a model can know,
+              // it is what your own history says.
+              const examples = [];
+              for (const h of allHistory || []) {
+                if (examples.length >= 160) break;
+                const name = nameOf.get(Number(h.category_id));
+                if (!name) continue;
+                examples.push(`${h.merchant} (${h.direction === 'in' ? 'money in' : 'money out'}) -> ${name}  [${h.n}x, last ${h.last_month}]`);
+              }
+              const ruleLines = ruleList
+                .map((r) => `"${r.pattern}"${r.direction ? ` (${r.direction} only)` : ''} -> ${nameOf.get(Number(r.category_id)) ?? '?'}`)
+                .slice(0, 60);
+              const catLines = (categories || []).map((c) => `- ${c.name} (id ${c.id})`).join('\n');
+
+              const SYSTEM = `You file bank transactions into a person's own budget categories.
+Return ONLY a JSON array. No prose, no code fences, no explanation.
+
+Each element: {"key":string,"categoryId":number|null,"confidence":"high"|"medium"|"low","why":string}
+
+- key: echo the input key back EXACTLY. It is the join key; alter it and the row is dropped.
+- categoryId: the numeric id of the single best category from the list below, or null if genuinely nothing fits. Never invent an id.
+- confidence: how sure you are. Say "low" freely — a low-confidence guess is reviewed, not written.
+- why: at most 8 words, plain, e.g. "payroll deposit, matches other employer pay".
+
+How this person files things:
+- MONEY IN is income unless it is genuinely a move between their OWN accounts. A deposit from an employer, a client, a platform or a person paying them is PAY and belongs in a pay/income category — never in a transfers category. Only file something as a transfer when the descriptor really is the same person moving their own money (e.g. an internal transfer between their own bank accounts, a credit-card payment).
+- MONEY OUT is spending. Match the vendor to what they actually sell.
+- The examples below are this person's OWN past filings and outrank your general instincts. If a merchant resembles one of them, follow the example.
+- If two categories are close, prefer the one their history uses.
+
+Their categories:
+${catLines}
+${ruleLines.length ? `\nTheir explicit filing rules (already applied, shown so your answers stay consistent with them):\n${ruleLines.join('\n')}\n` : ''}
+${examples.length ? `\nHow they have filed merchants before:\n${examples.join('\n')}\n` : ''}
+Return exactly one element per input key, in the same order. Never merge, split, reorder or invent keys.`;
+
+              const items = [...groups.values()];
+              model.asked = items.length;
+              const BATCH = 80;
+              const batches = [];
+              for (let i = 0; i < items.length; i += BATCH) batches.push(items.slice(i, i + BATCH));
+              const runBatch = async (chunk) => {
+                const lines = chunk.map((g) => `${g.key}\t${g.direction === 'in' ? 'MONEY IN' : 'MONEY OUT'}\t${g.merchant}\t${g.n} tx, ${fmtUsd(g.total)}\t${String(g.sample).slice(0, 90)}`);
+                try {
+                  const rr = await fetch(ANTHROPIC_URL, {
+                    method: 'POST',
+                    headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                      model: MODEL, max_tokens: 8000, system: SYSTEM,
+                      messages: [{ role: 'user', content: `Tab-separated: key, direction, merchant, volume, raw descriptor.\n\n${lines.join('\n')}\n\nReturn only the JSON array.` }],
+                    }),
+                  });
+                  if (!rr.ok) return [];
+                  const p = await rr.json();
+                  const t = p?.content?.map((c) => (c?.type === 'text' ? c.text : '')).join('') ?? '';
+                  const s = t.indexOf('['); const e = t.lastIndexOf(']');
+                  if (s === -1 || e <= s) return [];
+                  const arr = JSON.parse(t.slice(s, e + 1));
+                  return Array.isArray(arr) ? arr : [];
+                } catch { return []; }
+              };
+              // Three in flight, same as the statement importer: quick without
+              // rate-limiting a big sweep into a 429.
+              const answers = new Map();
+              for (let i = 0; i < batches.length; i += 3) {
+                const settled = await Promise.all(batches.slice(i, i + 3).map(runBatch));
+                for (const arr of settled) {
+                  for (const x of arr) {
+                    const k = String(x?.key ?? '');
+                    if (k) answers.set(k, x);
+                  }
+                }
+              }
+              model.used = answers.size > 0;
+              model.name = model.used ? MODEL : null;
+              for (const g of items) {
+                const a = answers.get(g.key);
+                const cat = Number(a?.categoryId);
+                if (!Number.isFinite(cat) || !validIds.has(cat)) continue;
+                const conf = a?.confidence === 'high' || a?.confidence === 'medium' ? a.confidence : 'low';
+                const why = String(a?.why ?? '').slice(0, 80);
+                for (const r of g.rows) {
+                  if (claim(r, cat, 'model', `${why || 'best match for this merchant'} · ${conf} confidence`)) model.matched++;
+                }
+              }
+              if (!answers.size) model.warning = 'The model pass returned nothing — rules and history still applied.';
+            }
+          }
+
+          const list = [...proposals.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.id - b.id);
+          send(res, 200, {
+            ok: true,
+            month: loadedMonth,
+            allMonths: everyMonth,
+            months: targets,
+            scanned,
+            uncategorized,
+            proposals: list,
+            unresolved: uncategorized - list.length,
+            counts,
+            // The loaded month's allocation stays where the card expects it;
+            // `splits` carries every month a sweep touched.
+            split: splits.find((s) => s.month === loadedMonth) ?? splits[0] ?? null,
+            splits,
+            model,
+          });
+          return;
+        }
         if (action === 'deleteTx') {
             await D.deleteStatementTx(profile.id, Number(body?.id ?? 0));
             send(res, 200, { ok: true }); return;

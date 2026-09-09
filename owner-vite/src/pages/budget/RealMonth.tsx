@@ -206,12 +206,13 @@ type Rule = {
  */
 type ProposalSource = "rule" | "amazon" | "history" | "model";
 type Proposal = {
-  id: number; categoryId: number; categoryName: string;
+  id: number; month: string; categoryId: number; categoryName: string;
   merchant: string; description: string; date: string; amount: number;
   direction: "in" | "out"; source: ProposalSource; why: string;
 };
 /** How the Amazon-tab pay total was covered by this month's deposits. */
 type AutoSplit = {
+  month: string;
   target: number; flex: number; zelleToAmazon: number; zelleToBzila: number;
   filled: number; shortfall: number;
   amazonCategory: string | null; bzilaCategory: string | null;
@@ -219,9 +220,14 @@ type AutoSplit = {
 };
 type AutoResult = {
   month: string; scanned: number; uncategorized: number; unresolved: number;
+  /** True when the pass swept every stored month rather than the loaded one. */
+  allMonths: boolean;
+  months: string[];
   proposals: Proposal[];
   counts: Record<ProposalSource, number>;
-  split: AutoSplit;
+  /** The loaded month's allocation; `splits` has one per month swept. */
+  split: AutoSplit | null;
+  splits: AutoSplit[];
   model: { used: boolean; name: string | null; asked: number; matched: number; warning: string | null };
 };
 
@@ -417,6 +423,25 @@ export default function RealMonth({
    */
   const [auto, setAuto] = useState<AutoResult | null>(null);
   const [autoBusy, setAutoBusy] = useState(false);
+  /**
+   * Sweep every stored month instead of just the loaded one.
+   *
+   * Nothing needs re-uploading for this: the transactions are already in the
+   * database, so running over history is the same pass repeated per month. It
+   * is off by default because a sweep can propose hundreds of changes at once,
+   * and the point of this thing is that every one of them gets looked at.
+   */
+  const [autoAllMonths, setAutoAllMonths] = useState(false);
+  /**
+   * Merchant names for proposed rows, by transaction id.
+   *
+   * A sweep proposes changes in months that are not loaded, so `tx` — which
+   * only ever holds the loaded month — cannot supply the merchant that Save
+   * needs to carry a decision across months. Without this, a swept row saves
+   * with an empty merchant and the "apply to every month" spread silently
+   * matches nothing.
+   */
+  const [proposalMerchants, setProposalMerchants] = useState<Map<number, string>>(new Map());
   const [staged, setStaged] = useState<StagedRow[]>([]);
   const [view, setView] = useState<View>("merchants");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -495,10 +520,12 @@ export default function RealMonth({
   useEffect(() => {
     void load(month);
     setStaged([]);
-    // A pass's reasoning is about ONE month. Carrying it across the month
-    // switch would leave a card explaining July's Zelle split sitting above
-    // August's ledger.
-    setAuto(null);
+    // A single-month pass's reasoning is about ONE month — carrying it across
+    // the switch would leave a card explaining July's Zelle split above
+    // August's ledger. A SWEEP is deliberately kept: flipping months to check
+    // what it proposed is the whole review, and dropping the card mid-review
+    // would take the reasoning away exactly when it is being used.
+    setAuto((prev) => (prev?.allMonths ? prev : null));
     setExpanded(new Set());
     setShowAllIn(new Set());
     setQ("");
@@ -617,12 +644,32 @@ export default function RealMonth({
     }
   };
 
+  /**
+   * Every write on this tab goes through here.
+   *
+   * The failure message quotes the SERVER. It used to say "That change didn't
+   * save." and nothing else, which is the same sentence whether the table is
+   * missing, the category was deleted or the request never left the building —
+   * three different problems with three different fixes, all reported as one
+   * dead end.
+   */
   const post = async (payload: Record<string, unknown>) => {
-    const res = await fetch("/api/budget/real", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-    });
-    if (!res.ok) { setError("That change didn't save."); return null; }
-    return res.json().catch(() => null);
+    let res: Response;
+    try {
+      res = await fetch("/api/budget/real", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+    } catch {
+      setError("That change didn't save — the request never reached the server.");
+      return null;
+    }
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const detail = [json?.error, json?.detail].filter(Boolean).join(" — ");
+      setError(detail ? `That change didn't save: ${detail}` : `That change didn't save (${res.status}).`);
+      return null;
+    }
+    return json;
   };
 
   /** Stage one row's category. Nothing hits the database until Save. */
@@ -664,7 +711,10 @@ export default function RealMonth({
     // one merchant is what gets re-filed.
     const changes = [...pending.entries()].map(([id, categoryId]) => {
       const row = tx.find((r) => r.id === id);
-      return { id, categoryId, merchant: row ? row.merchant || row.description : "" };
+      // A sweep's rows live in months that are not loaded, so `tx` cannot name
+      // them — fall back to the merchant the pass reported for that row.
+      const merchant = row ? row.merchant || row.description : proposalMerchants.get(id) ?? "";
+      return { id, categoryId, merchant };
     });
     try {
       const out = await post({ action: "setCategoriesBulk", changes, allMonths });
@@ -707,28 +757,36 @@ export default function RealMonth({
     setError(null);
     setNotice(null);
     try {
-      const out: AutoResult | null = await post({ action: "autoCategorize", month });
+      const out: AutoResult | null = await post({ action: "autoCategorize", month, allMonths: autoAllMonths });
       if (!out) return;
       setAuto(out);
       const list = out.proposals || [];
+      const scope = out.allMonths ? `${out.months?.length ?? 0} stored month${(out.months?.length ?? 0) === 1 ? "" : "s"}` : monthLabel(month);
       if (!list.length) {
         setNotice(
           out.uncategorized === 0
-            ? `Nothing to do — every transaction in ${monthLabel(month)} already has a category.`
-            : `Nothing could be filed automatically. ${out.uncategorized} row${out.uncategorized === 1 ? "" : "s"} still need${out.uncategorized === 1 ? "s" : ""} a category.`
+            ? `Nothing to do — every transaction in ${scope} already has a category.`
+            : `Nothing could be filed automatically. ${out.uncategorized} row${out.uncategorized === 1 ? "" : "s"} in ${scope} still need${out.uncategorized === 1 ? "s" : ""} a category.`
         );
         return;
       }
+      setProposalMerchants((prev) => {
+        const n = new Map(prev);
+        for (const p of list) n.set(p.id, p.merchant || p.description);
+        return n;
+      });
       setPending((prev) => {
         const n = new Map(prev);
         for (const p of list) {
           const original = tx.find((r) => r.id === p.id)?.category_id ?? null;
-          if (original === p.categoryId) n.delete(p.id);
+          // Rows outside the loaded month are not in `tx`, so there is nothing
+          // to compare against — they are edits by definition.
+          if (p.month === month && original === p.categoryId) n.delete(p.id);
           else n.set(p.id, p.categoryId);
         }
         return n;
       });
-      setNotice(`Filed ${list.length} transaction${list.length === 1 ? "" : "s"}. Nothing is stored yet — check them below, then save.`);
+      setNotice(`Filed ${list.length} transaction${list.length === 1 ? "" : "s"} across ${scope}. Nothing is stored yet — check them below, then save.`);
     } finally {
       setAutoBusy(false);
     }
@@ -1252,14 +1310,31 @@ export default function RealMonth({
           <div style={{ flex: 1 }} />
           {/* Fills the blanks and nothing else. Rows that already have a
               category are never touched, and nothing is written until the
-              suggestions are reviewed and saved. */}
+              suggestions are reviewed and saved.
+
+              The scope toggle is next to the button rather than buried,
+              because "all months" is the answer to "do I have to re-import
+              everything to fix an old month" — no: the rows are already
+              stored, so a sweep just runs the same pass over each of them. */}
+          <label
+            title="Run over every stored month, not just this one. Nothing needs re-uploading — the transactions are already in the database."
+            style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: TYPE.label, fontWeight: 800, letterSpacing: "0.06em", color: autoAllMonths ? ACCENT : HOME_THEME.muted }}
+          >
+            <input
+              type="checkbox"
+              checked={autoAllMonths}
+              onChange={(e) => setAutoAllMonths(e.target.checked)}
+              style={{ accentColor: HOME_THEME.cyan, cursor: "pointer" }}
+            />
+            All stored months
+          </label>
           <button
             onClick={() => void runAuto()}
             disabled={autoBusy || saving || loading}
-            title="File this month's uncategorized rows from your rules, your earlier months, and — for anything genuinely new — Claude. Nothing is saved until you review it."
+            title="File uncategorized rows from your rules, your earlier months, and — for anything genuinely new — Claude. Nothing is saved until you review it."
             style={{ ...primary(), opacity: autoBusy || saving ? 0.55 : 1 }}
           >
-            {autoBusy ? "Filing…" : "Auto-categorize"}
+            {autoBusy ? "Filing…" : autoAllMonths ? "Auto-categorize all" : "Auto-categorize"}
           </button>
           {/* Only rendered for a month that actually has one — a dead link to a
               review nobody wrote is worse than no link. */}
@@ -2012,12 +2087,17 @@ function AutoReview({
     [result.proposals]
   );
   const s = result.split;
+  /** Months where money was actually allocated. Everything else is noise. */
+  const shown = (result.splits || []).filter((x) => x.applied);
 
   return (
     <Card variant="classic" padding={0} style={{ overflow: "hidden", borderColor: rgba(ACCENT, 0.45) }}>
       <div style={{ padding: "14px 16px 10px", display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", color: ACCENT }}>
-          Auto-categorize · {monthLabel(result.month)}
+          Auto-categorize ·{" "}
+          {result.allMonths
+            ? `${result.months.length} month${result.months.length === 1 ? "" : "s"}`
+            : monthLabel(result.month)}
         </div>
         <div style={{ fontSize: TYPE.body, fontWeight: 700 }}>
           {result.proposals.length} filed · {result.unresolved} left
@@ -2031,6 +2111,12 @@ function AutoReview({
         Only rows that had <b style={{ color: HOME_THEME.text }}>no category</b> were touched — {result.uncategorized} of{" "}
         {result.scanned}. Anything you filed by hand is what this learns from, so it is never overwritten. Nothing is
         stored until you save the unsaved edits above.
+        {result.allMonths && (
+          <>
+            {" "}This swept <b style={{ color: HOME_THEME.text }}>{result.months.join(", ")}</b> straight from the
+            database — none of it was re-imported.
+          </>
+        )}
       </div>
 
       {/* Where the answers came from. The counts are the honest summary: a pass
@@ -2059,34 +2145,39 @@ function AutoReview({
       </div>
 
       {/* The Amazon / Zelle allocation, spelled out. This one is arithmetic
-          rather than a guess, so showing the numbers is showing the answer. */}
+          rather than a guess, so showing the numbers is showing the answer.
+          A sweep gets one line per month it actually allocated in — the months
+          with nothing to allocate are noise, not information. */}
       <div style={{ margin: "0 16px 12px", padding: "11px 14px", borderRadius: 12, border: `1px solid ${HOME_THEME.border}`, background: rgba("#ffffff", 0.02) }}>
         <div style={{ fontSize: TYPE.micro, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", color: RETA_PALETTE.peach }}>
           Amazon pay · Zelle split
         </div>
-        {s.applied ? (
-          <div style={{ fontSize: TYPE.label, marginTop: 6, lineHeight: 1.7 }}>
-            The Amazon tab says <b style={{ color: HOME_THEME.text }}>{fmtMoney(s.target, currency)}</b> was earned in{" "}
-            {monthLabel(result.month)}. Flex deposits covered {fmtMoney(s.flex, currency)}
-            {s.zelleToAmazon > 0 ? <> and {fmtMoney(s.zelleToAmazon, currency)} of Zelle filled the rest</> : null}, filed to{" "}
-            <b style={{ color: ACCENT }}>{s.amazonCategory}</b>.{" "}
-            {s.zelleToBzila > 0
-              ? <>The {fmtMoney(s.zelleToBzila, currency)} of Zelle left over went to <b style={{ color: ACCENT }}>{s.bzilaCategory}</b>.</>
-              : <>No Zelle was left over.</>}
-            {s.shortfall > 0 && (
-              <>
-                {" "}
-                <b style={{ color: WARN }}>{fmtMoney(s.shortfall, currency)} short</b> — the deposits in this month do not
-                add up to what the Amazon tab claims. Either a deposit has not cleared yet or a delivery day is logged in
-                the wrong month.
-              </>
-            )}
-            {s.note && <> {s.note}</>}
+        {shown.length === 0 ? (
+          <div style={{ fontSize: TYPE.label, marginTop: 6, ...MUTED }}>
+            {s?.note || "Nothing to allocate — the Amazon tab has no pay logged for these months."}
           </div>
         ) : (
-          <div style={{ fontSize: TYPE.label, marginTop: 6, ...MUTED }}>
-            {s.note || "Not applied this month."}
-          </div>
+          shown.map((x) => (
+            <div key={x.month} style={{ fontSize: TYPE.label, marginTop: 8, lineHeight: 1.7 }}>
+              <b style={{ color: HOME_THEME.text }}>{monthLabel(x.month)}</b> — the Amazon tab says{" "}
+              <b style={{ color: HOME_THEME.text }}>{fmtMoney(x.target, currency)}</b> was earned. Flex deposits covered{" "}
+              {fmtMoney(x.flex, currency)}
+              {x.zelleToAmazon > 0 ? <> and {fmtMoney(x.zelleToAmazon, currency)} of Zelle filled the rest</> : null}, filed to{" "}
+              <b style={{ color: ACCENT }}>{x.amazonCategory}</b>.{" "}
+              {x.zelleToBzila > 0
+                ? <>The {fmtMoney(x.zelleToBzila, currency)} of Zelle left over went to <b style={{ color: ACCENT }}>{x.bzilaCategory}</b>.</>
+                : <>No Zelle was left over.</>}
+              {x.shortfall > 0 && (
+                <>
+                  {" "}
+                  <b style={{ color: WARN }}>{fmtMoney(x.shortfall, currency)} short</b> — the deposits do not add up to
+                  what the Amazon tab claims. Either a deposit has not cleared yet or a delivery day is logged in the
+                  wrong month.
+                </>
+              )}
+              {x.note && <> {x.note}</>}
+            </div>
+          ))
         )}
       </div>
 

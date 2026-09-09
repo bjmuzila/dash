@@ -24,6 +24,7 @@ import { midnight300Email, midnight300Text, MIDNIGHT_300_SUBJECT } from "@/lib/e
 import { edge3AnnualEmail, edge3AnnualText, EDGE3_ANNUAL_SUBJECT } from "@/lib/emails/edge3-annual";
 import { seasonalityFreeEmail, seasonalityFreeText, SEASONALITY_FREE_SUBJECT } from "@/lib/emails/seasonality-free";
 import { v3ComingSoonEmail, v3ComingSoonText, V3_COMING_SOON_SUBJECT } from "@/lib/emails/v3-coming-soon";
+import { wholeBoardEmail, wholeBoardText, WHOLE_BOARD_SUBJECT } from "@/lib/emails/whole-board";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -211,6 +212,13 @@ function buildTemplates(): Template[] {
       subject: V3_COMING_SOON_SUBJECT,
       html: v3ComingSoonEmail,
       text: v3ComingSoonText,
+    },
+    {
+      id: "whole-board",
+      label: "🧩 The Whole Board — every panel on one screen (/app/board)",
+      subject: WHOLE_BOARD_SUBJECT,
+      html: wholeBoardEmail,
+      text: wholeBoardText,
     },
   ];
 }
