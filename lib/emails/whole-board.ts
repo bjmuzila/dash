@@ -14,10 +14,15 @@ import { brandLogoUrl } from "@/lib/brand";
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 const LOGO_URL = brandLogoUrl(SITE_URL);
 const PREVIEW_IMG = `${SITE_URL}/whole-board-preview.png`;
-const SITE_CTA = `${SITE_URL}/app/board`;
+const SITE_CTA = `${SITE_URL}/pricing`;
+
+// Straight list price — no coupon, no "was $X" theatre. If these change, change
+// them in Stripe and here together; the email is the price the page charges.
+const PRICE_MONTHLY = "$50";
+const PRICE_ANNUAL = "$500";
 
 export interface WholeBoardOpts {
-  /** Override the CTA (defaults to the Board page). */
+  /** Override the CTA (defaults to the pricing page). */
   ctaUrl?: string;
   /** Override the hero screenshot. */
   imageUrl?: string;
@@ -80,6 +85,13 @@ export function wholeBoardText(opts: WholeBoardOpts = {}): string {
     "Drag any card, resize it, drop the ones you don't use. The layout",
     "saves to your account.",
     "",
+    `${PRICE_MONTHLY} a month.`,
+    `${PRICE_ANNUAL} a year.`,
+    "No code needed.",
+    "",
+    "We give you the real price. Not some inflated price we then discount.",
+    "",
+    "JOIN CB EDGE:",
     cta,
     "",
     "— Bzila, founder of CB Edge",
@@ -126,7 +138,7 @@ export function wholeBoardEmail(opts: WholeBoardOpts = {}): string {
 </head>
 <body style="margin:0;padding:0;background:#05060A;">
   <!-- preheader (hidden) -->
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Levels, gauges, candles, ladders, premium, gamma, econ and flow — all on one page you can rearrange.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Levels, gauges, candles, ladders, premium, gamma, econ and flow on one page. ${PRICE_MONTHLY} a month, ${PRICE_ANNUAL} a year, no code needed.</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#05060A;">
     <tr>
       <td align="center" style="padding:32px 16px;">
@@ -205,13 +217,48 @@ export function wholeBoardEmail(opts: WholeBoardOpts = {}): string {
             </td>
           </tr>
 
+          <!-- PRICING -->
+          <tr>
+            <td style="padding:26px 28px 0 28px;">
+              <div style="font:700 11px/1 ${sans};letter-spacing:0.14em;text-transform:uppercase;color:#8ECAE6;padding-bottom:14px;">What it costs</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td width="50%" valign="top" style="padding-right:6px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:12px;background:rgba(255,255,255,0.03);">
+                      <tr>
+                        <td align="center" style="padding:18px 12px;">
+                          <div style="font:900 30px/1 ${sans};color:#ffffff;">${PRICE_MONTHLY}</div>
+                          <div style="font:700 11px/1 ${sans};letter-spacing:0.14em;text-transform:uppercase;color:#9fb3c8;padding-top:8px;">a month</div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td width="50%" valign="top" style="padding-left:6px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(33,158,188,0.45);border-radius:12px;background:rgba(33,158,188,0.10);">
+                      <tr>
+                        <td align="center" style="padding:18px 12px;">
+                          <div style="font:900 30px/1 ${sans};color:#8ECAE6;">${PRICE_ANNUAL}</div>
+                          <div style="font:700 11px/1 ${sans};letter-spacing:0.14em;text-transform:uppercase;color:#8ECAE6;padding-top:8px;">a year</div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+              <div style="font:800 13px/1.6 ${sans};color:#ffffff;text-align:center;padding-top:14px;">No code needed.</div>
+              <div style="font:400 13px/1.7 ${sans};color:#9fb3c8;text-align:center;padding-top:6px;">
+                We give you the <strong style="color:#ffffff;">real price</strong> &mdash; not some inflated price we then discount.
+              </div>
+            </td>
+          </tr>
+
           <!-- CTA -->
           <tr>
-            <td align="center" style="padding:26px 28px 0 28px;">
+            <td align="center" style="padding:22px 28px 0 28px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
                   <td align="center" style="border-radius:12px;background:#219EBC;">
-                    <a href="${cta}" style="display:block;padding:17px 24px;font:900 16px/1 ${sans};letter-spacing:0.04em;text-transform:uppercase;color:#05060A;text-decoration:none;border-radius:12px;">Open the board 👉</a>
+                    <a href="${cta}" style="display:block;padding:17px 24px;font:900 16px/1 ${sans};letter-spacing:0.04em;text-transform:uppercase;color:#05060A;text-decoration:none;border-radius:12px;">Join CB Edge 👉</a>
                   </td>
                 </tr>
               </table>
@@ -223,7 +270,7 @@ export function wholeBoardEmail(opts: WholeBoardOpts = {}): string {
           <tr>
             <td style="padding:22px 32px 28px 32px;">
               <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:16px;text-align:center;font:400 13px/1.7 ${sans};color:#9fb3c8;">
-                Already in your account &mdash; nothing to install, nothing to set up.<br>
+Sign up and the board is there &mdash; nothing to install, nothing to set up.<br>
                 <span style="color:#8ECAE6;font-weight:600;">&mdash; Bzila, founder of CB Edge</span>
               </div>
             </td>

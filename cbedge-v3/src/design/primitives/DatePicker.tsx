@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DatePicker — the themed replacement for <input type="date">.
@@ -12,6 +13,14 @@ import { useEffect, useRef, useState } from 'react'
 //
 // Value and onChange use the "YYYY-MM-DD" string a native date input emits, so
 // it is a drop-in swap.
+//
+// THE GRID IS PORTALED, position:fixed, anchored off the trigger's DOMRect —
+// not `position:absolute` inside this component. An absolutely-positioned popup
+// is clipped by any scrolling ancestor, and the place this control is used most
+// (the BOT composer dropdown) is exactly that: a panel with `overflow-y-auto`.
+// The first cut of this rendered the calendar INSIDE that scroll box, where it
+// was cut off at the panel's edge and slid under the Broadcast button. Portaling
+// to the body escapes both the clip and the stacking context in one move.
 //
 // No colour literals: every surface here is a token class (see
 // cbedge-v3/AGENTS.md non-negotiable #1).
@@ -43,6 +52,9 @@ export function DatePicker({
 }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const popRef = useRef<HTMLDivElement | null>(null)
+  const [rect, setRect] = useState<DOMRect | null>(null)
 
   const parsed = parse(value)
   const today = new Date()
@@ -54,17 +66,28 @@ export function DatePicker({
 
   useEffect(() => {
     if (!open) return
+    // The grid lives outside this subtree now, so "outside" has to mean outside
+    // BOTH the trigger and the portaled panel.
     const onDown = (e: PointerEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (wrapRef.current?.contains(t) || popRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
     }
+    // A fixed popup does not follow its anchor, and the anchor lives in a
+    // scrolling panel — so close rather than let it drift off the trigger.
+    const onScroll = () => setOpen(false)
     window.addEventListener('pointerdown', onDown)
     window.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
     return () => {
       window.removeEventListener('pointerdown', onDown)
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
     }
   }, [open])
 
@@ -81,9 +104,11 @@ export function DatePicker({
   return (
     <div ref={wrapRef} className={['relative', className].join(' ')}>
       <button
+        ref={btnRef}
         type="button"
         onClick={() => {
           if (!open && parsed) setView({ y: parsed.y, m: parsed.m })
+          if (!open && btnRef.current) setRect(btnRef.current.getBoundingClientRect())
           setOpen((v) => !v)
         }}
         title={title}
@@ -97,11 +122,19 @@ export function DatePicker({
         {label}
       </button>
 
-      {open && (
-        <div
-          role="dialog"
-          className="absolute left-0 top-full z-[60] mt-1 w-56 rounded-md border border-line bg-surface p-2 shadow-lg"
-        >
+      {open &&
+        createPortal(
+          <div
+            ref={popRef}
+            role="dialog"
+            style={{
+              position: 'fixed',
+              top: rect ? Math.min(rect.bottom + 6, window.innerHeight - 300) : 80,
+              left: rect ? Math.max(8, Math.min(rect.left, window.innerWidth - 232)) : 12,
+              zIndex: 100000,
+            }}
+            className="w-56 rounded-md border border-line bg-surface p-2 shadow-lg"
+          >
           <div className="mb-1.5 flex items-center justify-between">
             <button
               type="button"
@@ -171,8 +204,9 @@ export function DatePicker({
           >
             Today · 0DTE
           </button>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

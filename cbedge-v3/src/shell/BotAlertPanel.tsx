@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { SegGroup } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -306,14 +307,19 @@ export function BotAlertPanel({ close }: { close: () => void }) {
                 placeholder="Strike"
                 className={[FIELD, 'flex-[1_1_5rem]'].join(' ')}
               />
-              <button
-                type="button"
-                onClick={() => setRight((r) => (r === 'call' ? 'put' : 'call'))}
+              {/* The board's own segmented control, not a hand-rolled toggle —
+                  and Call/Put is the case `activeColor` was written for: two
+                  options that are opposites rather than peers, so the selected
+                  one carries the up or down ink. Tokens, never hexes. */}
+              <SegGroup
+                value={right}
+                onChange={setRight}
                 title="Call / Put"
-                className={[PILL, right === 'call' ? 'border-up text-up' : 'border-down text-down'].join(' ')}
-              >
-                {right === 'call' ? 'Call' : 'Put'}
-              </button>
+                options={[
+                  { label: 'Call', value: 'call', activeColor: 'var(--color-up)' },
+                  { label: 'Put', value: 'put', activeColor: 'var(--color-down)' },
+                ]}
+              />
               {/* Not <input type="date">: that renders the OS calendar, which
                   is white on Windows and cannot be themed. */}
               <DatePicker value={expiry} onChange={setExpiry} className="flex-[1_1_8rem]" title="Expiry" />
