@@ -338,6 +338,22 @@ const CSS = `
   --blueFill3:${hexA(LIGHT_BLUE, 0.85)};
   --amberWash:${hexA(HT.orange, 0.07)}; --amberEdge:${hexA(HT.orange, 0.4)};
   --amberSoft:${hexA(HT.orange, 0.5)};
+  /* OWNER-PROBE PAIR. The CB contracts probe card is a deliberate port of the
+     owner Probe card (owner-vite/src/pages/Probe.tsx), and that card does NOT
+     use the page's candle green/red for its verdict colours — it uses the app's
+     own accent pair, HT.green (a pale sky, #8ECAE6) over HT.red. Same numbers,
+     a different dialect: the candle pair says "an up bar", this pair says "this
+     position is up", and putting the ladder's green on a P/L readout is what
+     made the premarket card read as a different product from the owner one.
+     Scoped to the tokens, not to a class, so the port is a token swap and not a
+     second palette living inside CB_CONTRACTS_CSS. */
+  --sky:${HT.green}; --skyEdge:${hexA(HT.green, 0.4)}; --skyWash:${hexA(HT.green, 0.12)};
+  --rose:${HT.red};
+  /* The owner card's typeface. Courier New, not the page's ui-monospace stack:
+     the port is to the LOOK of that card and its letterforms are half of it —
+     wider, lighter, unmistakably a terminal. Only the probe card takes it; the
+     rest of the page keeps '.mono'. */
+  --mono2:"Courier New",monospace;
   /* Two radii for the whole page — the week board's card (12) and its inner
      tile (9). Every rounded surface picks one; nothing types its own. */
   --r:12px; --r2:9px;
@@ -1712,7 +1728,7 @@ export default function Premarket() {
    * the 0DTE MAGNET is looked for. A magnet picked off the whole ladder would be
    * stolen by a single monster strike 200 points out.
    *
-   * The ±60 RENDER window went into GexProfile with the ladder itself — it is a
+   * The ±20 RENDER window went into GexProfile with the ladder itself — it is a
    * property of how the chart draws, not of what the page knows, and both
    * ladders in the row have to agree about it.
    */

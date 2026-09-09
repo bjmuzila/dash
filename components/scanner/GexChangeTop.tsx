@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { HOME_THEME, homeButtonStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
+import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { captureAndCopy, captureToBlob, copyOrDownload, downloadBlob } from "@/lib/snapshot";
 
 type Row = {
@@ -960,14 +961,18 @@ export default function GexChangeTop() {
       }
     >
       <div data-noshot="1" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-        <input
-          type="date"
+        {/* Dock-themed calendar (ThemedDatePicker) rather than <input type="date">:
+            the native control drops an OS-chrome picker that ignores the
+            dashboard palette entirely. Same "YYYY-MM-DD" value contract. */}
+        <ThemedDatePicker
           value={date}
-          onChange={(e) => {
-            setDate(e.target.value); setFlipped({}); setOpened({});
-            load(e.target.value || undefined); loadResults(e.target.value || undefined);
+          dense
+          width={168}
+          placeholder="Today"
+          onChange={(v) => {
+            setDate(v); setFlipped({}); setOpened({});
+            load(v || undefined); loadResults(v || undefined);
           }}
-          style={{ ...homeButtonStyle, padding: "6px 10px", fontSize: 13, colorScheme: "dark" as CSSProperties["colorScheme"] }}
         />
         <button
           onClick={() => { load(date || undefined); loadResults(date || undefined); }}

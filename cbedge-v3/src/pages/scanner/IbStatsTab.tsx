@@ -733,11 +733,19 @@ function IbRead({
 const SHOW_STAGES = true
 const SHOW_LIVE = true
 
+/**
+ * Cap on a ring's drawn diameter. The svg is `w-full`, so without this it grows
+ * to whatever width the 3-column grid hands it — on a wide card that was a
+ * ~600px donut per gauge and the trio ate the page. The svg still scales down
+ * below this on narrow cards.
+ */
+const RING_MAX_PX = 92
+
 /** G152–G154 — one ring. `pct` is already an integer; 0 greys the number out. */
 function Ring({ pct, color, label }: { pct: number; color: string; label: string }) {
   return (
     <div className="flex flex-col items-center gap-1">
-      <div className="relative w-full">
+      <div className="relative mx-auto w-full" style={{ maxWidth: RING_MAX_PX }}>
         <svg
           viewBox={RING.viewBox}
           className="w-full"
@@ -769,7 +777,7 @@ function Ring({ pct, color, label }: { pct: number; color: string; label: string
           />
         </svg>
         <div
-          className="tabular absolute inset-0 flex items-center justify-center text-lg font-semibold"
+          className="tabular absolute inset-0 flex items-center justify-center text-sm font-semibold"
           style={{ color: ringNumberColor(pct, color) }}
         >
           {`${pct}%`}

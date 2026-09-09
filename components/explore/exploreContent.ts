@@ -5,9 +5,9 @@
 // ── 2026-09-05: ICT AND TPO REMOVED, THREE PAGES ADDED (Brandon) ─────────────
 //
 // `ict` and `tpo` are gone from this map, which is what deletes the pages: the
-// route calls notFound() for a slug this object does not carry, and the "Your
-// trial unlocks all of these" chip row is derived from EXPLORE_SLUGS, so there
-// is nothing left pointing at either one.
+// route calls notFound() for a slug this object does not carry, and the
+// "Membership unlocks all of these" chip row is derived from EXPLORE_SLUGS, so
+// there is nothing left pointing at either one.
 //
 // TPO in particular had to go: cbedge-v3/src/pages/scanner/scannerNav.ts dropped
 // the TPO Structures tab on 2026-09-03 and tombstoned its modules, so this page

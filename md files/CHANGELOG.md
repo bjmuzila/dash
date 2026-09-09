@@ -1,5 +1,175 @@
 # Changelog
 
+## 2026-09-09 (k) - BILLING: the 2-day free trial is retired
+
+New sign-ups no longer get a free trial. Every Stripe Checkout session created
+by the app is now a straight purchase on both plans, and no public copy offers
+a trial any more.
+
+- `app/api/stripe/checkout/route.ts`: `subscription_data.trial_period_days` is
+  never sent. The `decideTrialEligibility()` call, the owner-ban bookkeeping +
+  ban notice, the trial-checkout IP recording and the `clientIp()` helper they
+  fed are all gone from this route. `trial_decision` stays in the subscription
+  metadata as the fixed string `trials-retired`, so a post-retirement purchase
+  is still distinguishable in the Stripe dashboard from one of the old trials.
+- DELIBERATELY LEFT IN PLACE: `lib/trialGuard.ts` (still called from the Stripe
+  webhook - a trialing subscription can still arrive from the Stripe dashboard
+  or the API), `lib/trialEligibility.ts`, `lib/trialBanNotice.ts`, and the
+  `trial_bans` / `trial_history` / trial-card tables. Nothing consults them from
+  checkout any more, but the record survives and the trial can be switched back
+  on in one place.
+- EXISTING TRIALS ARE UNAFFECTED. `PAID_STATUSES` still contains `trialing`, so
+  anyone who was mid-trial when this shipped keeps access until it ends and
+  converts normally.
+- The trial WIN-BACK offer (`lib/winback.ts`, `lib/emails/trial-winback.ts`) is
+  untouched and still pre-applies at checkout - it is addressed to people who
+  already trialed and lapsed.
+
+Copy, everywhere the trial was sold:
+
+- `components/landing/LandingClient.tsx` - both CTAs are now "Get full access /
+  $50/mo - Cancel anytime"; the hero note and the closing paragraph no longer
+  promise two days. Header comment rewritten so the rule is explicit: no page
+  copy may promise a trial, "no charge up front", or a free period. The free
+  LIVE LEVEL PANEL is unchanged and is now the only "try before you buy".
+- `components/landing/PublicNav.tsx` - "START FREE TRIAL" -> "GET FULL ACCESS".
+- `app/explore/[slug]/page.tsx` - top CTA, the close block kicker/heading/body,
+  the join button and the "unlocks all of these" chip row.
+- `app/explore/seasonality/page.tsx` - both CTAs. Its offer line also said
+  "2 days free, then $45/month", which was stale against the $50 on the pricing
+  page; it now reads $50/month.
+- `?trial=1` dropped from every /pricing link.
+- Comment-only fixes in `app/pricing/page.tsx` and
+  `components/explore/exploreContent.ts` so they stop describing a trial CTA.
+
+## 2026-09-09 (j) - DOCS: full formula reference added (`md files/FORMULAS.md`)
+
+New reference document cataloging every quantitative formula, constant and
+threshold used by the live app, extracted directly from source. 22 sections:
+
+- Black-Scholes core (d1/d2, greeks, vanna/charm, Abramowitz-Stegun erf, IV
+  solver), time-to-expiry conventions (262 trading days, 1/78 bar floor).
+- GEX: both scalings (`G*P*S^2` and `G*P*100*S^2*0.01`), per-strike call/put/net,
+  directional volume GEX, DEX, flow GEX, VEX/CHEX, all four flip algorithms
+  (server, client, dealer-gamma, profile bisection), wall selection bases.
+- Dealer inventory, position reconciliation modes, DTE buckets, gross churn.
+- Flow: Lee-Ready aggressor inference, coalescing, tape floors, obook imbalance.
+- Estimated moves (0.84 straddle constant), iron condor geometry/economics/
+  settlement, ES-SPX basis, ES gap fill.
+- Market profile: TPO construction, 70% value area expansion, structures,
+  k-NN forecast features and weights.
+- Initial Balance: width classification, break/fail/extension math, the 14-rule
+  scoreboard, Bayesian evidence blending (PRIOR_K/BACKOFF_K/lambda).
+- Balance-imbalance state machine, AMT, VSA thresholds.
+- ICT: FVG/IFVG, displacement, order blocks, structure, liquidity pools, OTE
+  ratios, killzone + turtle raid windows, play R math.
+- Confidence scoring (all four component equations + weights), day
+  classification, checkpoints, GEX Pulse's 8 weighted components.
+- Fail levels, dislocation velocity, momentum bias index, daily grades
+  scorecard, pick grade, vol-pin detection.
+- Display math (threshold coloring, heat tint, bubble sizing), session times
+  and holiday rules, statistical primitives, source file index.
+
+Documentation only - no code changed.
+
+
+## 2026-09-09 (i) - GEX CHART: the volume histogram and its cog are removed (`cbedge-v3/src/board/gexChart/GexChartCard.tsx`, `gexChartRender.ts`, `settings.ts`)
+
+The second series along the bottom of the plot - today's traded contracts, drawn
+from the floor on its own contracts scale - is gone, and with it the cog that
+carried it. The card's toolbar is now the four chips it was before: BASIS,
+SPLIT, DEX, CARDS.
+
+What went, file by file:
+
+- `settings.ts` - the `showVolume` / `volumeSplit` fields, the `VolumeSplit`
+  type and its coercion guard. Stored blobs that still carry the two keys are
+  simply ignored on read, so nothing needs a version bump or a migration.
+- `gexChartRender.ts` - the histogram draw block, `VOL_SHARE`, `VOL_ALPHA`, the
+  `fmtCount` label helper and the two model fields. The clip / bars path below
+  it is untouched, so the plot now uses its full height again.
+- `GexChartCard.tsx` - the `VolumeCog` component, its entry in the toolbar, the
+  two `drawOpts` fields, the phone-build override that forced it off, and the
+  now-unused `Popover` / `PanelSection` imports.
+
+The VOL **basis** is a different thing and stays exactly where it was: the
+OI+VOL / VOL / FLOW segmented control still prices the gamma bars on today's
+volume when you pick it.
+
+## 2026-09-09 (h) - PREMARKET: the GEX profile ladders window to 41 strikes instead of 121 (`components/pages/premarket/GexProfile.tsx`, `components/pages/Premarket.tsx`)
+
+`VIEW_HALF` drops from 60 to 20, so both ladders on /premarket - the front
+expiry and the ex-0DTE board - render spot plus twenty strikes on each side
+rather than sixty. 41 rows, not 40: a row count with spot genuinely in the
+middle has to be odd, because spot's own row needs an equal number of rows
+above and below it. An even count leaves spot half a row off centre forever.
+
+The bar scale follows for free. `maxP` / `maxN` are taken over exactly the rows
+that render, so narrowing the window also narrows what the axis is normalised
+over - the near-money bars stop being flattened by a wall two hundred points
+out, and the longest bar you can scroll to is still exactly the number printed
+on the axis.
+
+Nothing else moves. The viewport stays 440px with half a viewport of padding at
+each end, so the centring write is still never clamped and spot still opens dead
+centre; the scroll, the re-pin gesture logic and the spot / flip rules are
+untouched. `NEAR_HALF` (the +/-12 window the 0DTE magnet is picked from) is a
+separate thing on the page and is unchanged.
+
+## 2026-09-09 (g) - V2 LEGACY WING: the section sub-strip comes back, so Test Lab has tabs again (`components/shared/V3LegacyToolbar.tsx`)
+
+Opening **Test Lab** from v3's `/v3/legacy` page landed on the Squeeze board with
+no tabs and no links - the other ten bench views were unreachable.
+
+Cause: Test Lab and Scanner have **no on-page tab bar**. Their strips were
+promoted into the toolbar in the 2026-08-16 reshuffle (`components/shared/sectionNav.ts`
+-> `SectionSubStrip`), and `components/pages/TestLab.tsx` now just holds a `tab`
+state that starts at `defaultTab` ("squeeze") and waits for `TESTLAB_TAB_EVENT`.
+When the SPA swapped `GlobalToolbar` for `V3LegacyToolbar`, the sub-strip went
+with it - deliberately, as "a working surface" - which left the page with the
+only control that could change its tab removed. Same for Scanner, and for the
+`/strike-history` and `/levels` pills, which are strip-only entry points.
+
+Fix: `V3LegacyToolbar` now renders `<SectionSubStrip open />` under the 44px bar.
+
+- `open` is hardcoded. `GlobalToolbar` toggles the strip from the section's
+  circle in its nav row; this bar has no such circle (its nav goes to v3), so
+  nothing here could reopen a closed strip.
+- Outside a section `SectionSubStrip` returns `null`, so every other legacy route
+  and both phone pages that mount this bar are visually unchanged.
+- The bar and the strip are wrapped in one `flexShrink: 0` column, and the
+  header's `z-index: 40` moved onto that wrapper. The header keeps its own 40
+  *inside* the new context, so it still paints over the strip's 0 - which is what
+  keeps the account and "v2 pages" dropdowns above the pills.
+
+No change to `sectionNav.ts`, `SectionSubStrip.tsx`, or either page.
+
+## 2026-09-09 (f) - SCANNER: every date dropdown moves to the dock-themed pickers (`components/scanner/GexChangeTop.tsx`, `GexScannerTab.tsx`, `DodMoversTab.tsx`, `components/shared/ThemedDatePicker.tsx`)
+
+The scanner's date controls were still native `<input type="date">` / `<select>`.
+The field itself could be painted, but the thing that opens on click is OS
+chrome - a white calendar, a gray option list - and no amount of inline style
+reaches it. The app already ships `ThemedDatePicker` / `ThemedSelect` (frosted
+panel, 2px cyan top accent, cyan active tile, DOCK_THEME throughout), so this is
+a swap, not a new widget. Value contracts are unchanged: both still speak the
+same `"YYYY-MM-DD"` string, and `""` still means "latest / today".
+
+**GEX Change - Hourly Top 5** (the one that mattered most): the date field was
+wearing `homeButtonStyle`, so it read as an uppercase cyan *button* with letter
+spacing, and clicking it dropped the native calendar. Now `ThemedDatePicker`,
+placeholder "Today".
+
+**GEX Change Scanner**: min expiry / max expiry, same swap. The existing Clear
+button still empties both.
+
+**DoD Movers**: the session picker (`Latest (live)` + every recorded date) moves
+to `ThemedSelect`.
+
+**`ThemedDatePicker` gains an optional `dense` prop** - 6x10 padding, 13px, 8px
+radius, 14px icons, `nowrap` - so the trigger sits at the height of the seg
+buttons and `homeButtonStyle` controls beside it in a filter row. Omitted, the
+component renders exactly as before, so nothing already using it moves.
+
 ## 2026-09-09 (e) - OWNER / LSE DATA: Contract Candles gets a date window, newest-first order and a Today button; day windows are trimmed exactly (`owner-vite/src/pages/LseData.tsx`, `server-v2/api-router.js`)
 
 A contract's 1m bars run from the day it listed and were pulled oldest-first, so
@@ -20976,3 +21146,67 @@ rows now carry `bid` and `ask` alongside `vol / oi / iv / mark`.
 Purely additive — no existing field changed, no call site changed, nothing else
 in the proxy touched. A one-sided or absent quote stays `null` rather than
 becoming `0`, because 0 is a real price and "no market" is not.
+
+## 2026-09-09 — Top Flow: drag-to-reorder columns (re-applied), mids hidden
+
+> The drag-to-reorder change below was written to disk earlier today and was
+> then overwritten on the laptop by an older copy of `TopFlowCard.tsx` (and this
+> file), most likely a stale editor buffer saving over it. Re-applied here
+> together with the directional filter.
+
+**Drag-to-reorder columns.** Grab any column heading and drag it sideways. The
+order is saved per card COPY, so two Top Flows on one board can be arranged
+differently. Cogwheel gains a Columns section with a RESET ORDER button, which
+only appears once the order has actually been changed.
+
+- The table renders from ONE `COLS` array — header, body and reorder all read
+  it. A column's `id` is persisted in the saved order, so it must not be
+  renamed; `label` is free to change.
+- `repairOrder()` heals a saved order against the current column list: an id
+  that no longer exists is dropped, and an id that is MISSING is appended.
+  Without the second half, a column added later would never appear for anyone
+  with a saved layout.
+- HTML5 `draggable`, not pointer events: the card sits on a board whose tiles
+  are dragged with pointer events, so a pointer-based reorder would race the
+  board for the same gesture. `pointerdown`/`mousedown` are stopped on the
+  heading so grabbing a column never picks up the whole card.
+- The drop indicator is an inset box-shadow on the edge the column will land
+  against — a border would change the cell width mid-drag and shuffle every
+  heading sideways under the pointer.
+- Column order does not rebuild the query URL.
+
+**Unreadable prints are now hidden by default.** A print whose side cannot be
+read is not a weaker row on this card, it is one you cannot trade off — so it is
+dropped rather than shown as a dash.
+
+- New `sides` param on `/api/lse/top-flow`: `directional` (default) keeps only
+  BUY and SELL; `all` restores everything. Cogwheel toggle: SHOW UNREADABLE.
+- Filtered on the SERVER, **before** the row limit. Filtering after the slice
+  would quietly turn "give me 50" into "50 minus however many were mid".
+- All three unreadable kinds go together, because the reason to hide them is the
+  same: `mid` (filled between bid and ask), `pending` (not classified yet —
+  reappears within a refresh), `stale` (arrived too late to judge).
+- The response returns `excluded` counts by reason, and the header says
+  "N unreadable hidden" rather than silently showing fewer prints. The empty
+  state distinguishes "nothing matched" from "everything was filtered out",
+  including the case where the quote feed is down and nothing CAN be classified.
+
+## 2026-09-09 — Top Flow: OTM / ALL filter
+
+An OTM | ALL toggle in the card toolbar — not in the cog, because this is the
+one filter that gets flipped mid-session while you are reading the tape, and a
+control you reach for that often should not be two clicks deep. Saved per card
+copy like the rest; defaults to ALL.
+
+- Judged against the underlying price the print CARRIED (`underlying_price` on
+  the vault row), not against spot now. Moneyness is a property of the trade — a
+  call bought 40 points OTM at 10am was an OTM buy, and it does not retroactively
+  become something else because the index rallied through it by 3pm. The Flow
+  Tape's %OTM column is deliberately the opposite question: there you are asking
+  where the strike sits *now*.
+- New `moneyness` param on `/api/lse/top-flow` (`all` default, `otm`). Filtered
+  server-side before the row limit, same as the directional filter.
+- A row with no strike, no right or no spot is dropped by the filter rather than
+  let through — same rule as the DTE filter. Those land in `excluded.itm`.
+- The header's hidden-count now covers both filters ("N hidden") and its tooltip
+  breaks down which filter took what.

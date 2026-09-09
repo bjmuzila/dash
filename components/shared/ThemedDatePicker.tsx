@@ -25,12 +25,15 @@ export function ThemedDatePicker({
   onChange,
   width = 170,
   placeholder = "Select date",
+  dense = false,
   onOpenChange,
 }: {
   value: string;            // "YYYY-MM-DD"
   onChange: (v: string) => void;
   width?: number | string;
   placeholder?: string;
+  /** Tighter trigger for dense filter rows (scanner toolbars) — panel is unchanged. */
+  dense?: boolean;
   /** Notified when the panel opens/closes so a parent can raise its stacking context. */
   onOpenChange?: (open: boolean) => void;
 }) {
@@ -112,8 +115,9 @@ export function ThemedDatePicker({
         onClick={() => setOpen((v) => !v)}
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%",
-          padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit",
-          fontSize: 14, fontWeight: 700, color: HOME_THEME.text, background: "rgba(0,0,0,0.30)",
+          padding: dense ? "6px 10px" : "10px 12px", borderRadius: dense ? 8 : 10, cursor: "pointer", fontFamily: "inherit",
+          fontSize: dense ? 13 : 14, fontWeight: 700, color: HOME_THEME.text, background: "rgba(0,0,0,0.30)",
+          whiteSpace: "nowrap",
           border: open ? `1px solid ${DOCK_THEME.activeBorder}` : `1px solid ${HOME_THEME.border}`,
           boxShadow: open ? DOCK_THEME.activeGlow : "none",
           transition: "border-color .14s, box-shadow .14s",
@@ -121,14 +125,14 @@ export function ThemedDatePicker({
       >
         <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ color: HOME_THEME.cyan, display: "flex" }}>
-            <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+            <svg width={dense ? 14 : 15} height={dense ? 14 : 15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
               <path d="M8 2v3M16 2v3M3 9h18M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />
             </svg>
           </span>
           {label}
         </span>
         <span style={{ display: "flex", color: HOME_THEME.muted, transition: "transform .18s", transform: open ? "rotate(180deg)" : "none" }}>
-          <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+          <svg width={dense ? 14 : 16} height={dense ? 14 : 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
             <path d="M6 9l6 6 6-6" />
           </svg>
         </span>

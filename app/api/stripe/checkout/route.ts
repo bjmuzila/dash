@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerUser } from "@/lib/supabase/server";
 import { getStripe, getPriceIdForPlan, type Plan } from "@/lib/stripe";
 import { getSubscription, linkStripeCustomer } from "@/lib/db";
-import { decideTrialEligibility } from "@/lib/trialEligibility";
-import { markTrialBanHit, recordTrialCheckoutIp, findActiveTrialWinback } from "@/lib/db";
-import { sendTrialBanNoticeOnce } from "@/lib/trialBanNotice";
+import { findActiveTrialWinback } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -19,29 +17,6 @@ function publicOrigin(req: NextRequest): string {
   const proto = req.headers.get("x-forwarded-proto") || "https";
   if (host) return `${proto}://${host}`;
   return new URL(req.url).origin;
-}
-
-/**
- * The client's real IP.
- *
- * Cloudflare fronts the whole site, so CF-Connecting-IP is the address that is
- * actually trustworthy here; x-forwarded-for is a list a client can prepend to,
- * so only its LEFTMOST entry is meaningful and only as a fallback. Returns null
- * rather than a placeholder — "unknown" written into a ban table would be an
- * address that eventually matches somebody.
- *
- * Used for two things and nothing else: matching an owner-issued IP ban, and
- * recording which addresses trial checkouts come from so the Sales panel can
- * show the owner an address worth banning.
- */
-function clientIp(req: NextRequest): string | null {
-  const cf = req.headers.get("cf-connecting-ip");
-  if (cf?.trim()) return cf.trim();
-  const real = req.headers.get("x-real-ip");
-  if (real?.trim()) return real.trim();
-  const fwd = req.headers.get("x-forwarded-for");
-  const first = fwd?.split(",")[0]?.trim();
-  return first || null;
 }
 
 /**
@@ -99,56 +74,26 @@ export async function POST(req: NextRequest) {
 
     const affCode = affiliateCode(req);
 
-    // ── One free trial per email, and only for an email that has never had one
-    // ─────────────────────────────────────────────────────────────────────────
-    // Decided here, not after the fact: a returning customer must never be shown
-    // "2 days free", hand over a card, and be billed on the spot. See
-    // lib/trialEligibility.ts for the three checks and why this fails open.
-    // The webhook's card guard (lib/trialGuard.ts) still sits behind it.
-    const ip = clientIp(req);
-    const trial = await decideTrialEligibility({
-      stripe,
-      plan,
-      userId,
-      email: user?.email ?? null,
-      customerId,
-      ip,
-    });
-    if (!trial.eligible && trial.reason !== "not-monthly") {
-      console.log(
-        `[stripe/checkout] no trial for user ${userId} (${trial.reason}` +
-        `${trial.firstTrialAt ? `, first trial ${trial.firstTrialAt}` : ""})`
-      );
-    }
-
-    // ── Owner-issued ban: count the attempt, and tell them once ──────────────
-    // Both calls are awaited but neither can fail the checkout — the ban is
-    // already enforced by `trial.eligible` above, and a Postgres blip or a
-    // Resend outage must not turn a blocked TRIAL into a blocked PURCHASE. This
-    // person is still allowed to buy, and the session is created below either
-    // way.
-    if (trial.ban) {
-      try {
-        await markTrialBanHit(trial.ban.id, user?.email ?? null);
-        if (user?.email) {
-          await sendTrialBanNoticeOnce({ to: user.email, ban: trial.ban });
-        }
-      } catch (err) {
-        console.error("[stripe/checkout] trial-ban bookkeeping failed:", err);
-      }
-    }
-
-    // Record WHERE this trial-eligible checkout came from, so the Sales page can
-    // show the owner which addresses are behind a cluster of emails. Monthly
-    // only (the yearly plan has no trial, so its IPs are noise) and strictly
-    // best-effort — nothing downstream reads it during a checkout.
-    if (ip && plan === "monthly" && user?.email) {
-      try {
-        await recordTrialCheckoutIp({ ip, email: user.email });
-      } catch (err) {
-        console.warn("[stripe/checkout] trial IP record failed:", String(err));
-      }
-    }
+    // ── NO FREE TRIAL ────────────────────────────────────────────────────────
+    // 2026-09-09: the 2-day free trial is retired. Every checkout created here
+    // is a straight purchase — `subscription_data.trial_period_days` is never
+    // sent, on either plan, for anybody.
+    //
+    // What is deliberately still in the tree and must NOT be assumed dead:
+    //   • lib/trialGuard.ts, called from the Stripe webhook. A trialing
+    //     subscription can still appear from the Stripe dashboard or the API,
+    //     and existing trials that were live when this shipped still run out
+    //     normally — the guard keeps covering both.
+    //   • lib/trialEligibility.ts / lib/trialBanNotice.ts / the trial_bans,
+    //     trial_history and trial_card tables. No longer consulted from this
+    //     route (there is nothing left to decide) but kept intact so the record
+    //     of who trialed survives and the trial can be turned back on.
+    //   • lib/winback.ts — the "first month at $30" offer mailed to people who
+    //     trialed and didn't convert. Still redeemed below.
+    // If the trial ever comes back, it goes back HERE: Checkout ignores the
+    // product-level Trial Offer objects configured in the Stripe dashboard
+    // (Subscriptions-API only) and the price-level trial field is unset on both
+    // prices, so subscription_data is the only place it can be set.
 
     // ── NO PUBLIC COUPONS ────────────────────────────────────────────────────
     // Pricing is flat and transparent: $50/mo, $500/yr, and the number on the
@@ -193,27 +138,18 @@ export async function POST(req: NextRequest) {
       // clerk_user_id on the session is the webhook's fallback mapping if the
       // customer lookup ever misses.
       metadata: { clerk_user_id: userId, ...(affCode ? { affiliate_code: affCode } : {}) },
-      // 2-day free trial — MONTHLY ONLY, and FIRST TIME ONLY (see the trial
-      // decision above; `trial.eligible` is already false for yearly). The
-      // landing CTA promises "2-day free trial · no charge up front", which is a
-      // promise to new customers; a repeat checkout is a straight purchase.
+      // NO trial_period_days — see the "NO FREE TRIAL" note above. The card is
+      // charged at checkout, on both plans.
       //
-      // It has to be set HERE: Checkout ignores the product-level Trial Offer
-      // objects configured in the Stripe dashboard (those are Subscriptions-API
-      // only), and the legacy price-level trial field is unset on both prices.
-      // payment_method_collection stays "always" so the card is still captured
-      // up front and the sub converts automatically when the trial ends.
-      //
-      // trial_decision rides along in the subscription metadata so the webhook —
-      // and anyone reading a subscription in the Stripe dashboard six months
-      // from now — can see WHY this one did or did not start on a trial.
+      // trial_decision stays in the subscription metadata as a fixed string so
+      // anyone reading a subscription in the Stripe dashboard six months from
+      // now can tell a post-retirement purchase from one of the old trials.
       subscription_data: {
         metadata: {
           clerk_user_id: userId,
-          trial_decision: trial.reason,
+          trial_decision: "trials-retired",
           ...(affCode ? { affiliate_code: affCode } : {}),
         },
-        ...(trial.eligible ? { trial_period_days: 2 } : {}),
       },
       payment_method_collection: "always",
       // No `allow_promotion_codes`: the price is flat, so Checkout shows no

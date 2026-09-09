@@ -301,16 +301,24 @@ export default function CbContracts() {
 // stat strip under it, then the poll curve from cb_trade_ticks so the x-axis
 // spans exactly the minutes the position was live.
 
-const CB_METRICS = [
-  { key: "mark", label: "Price", dec: 2, prefix: "$" },
-  { key: "spot", label: "SPX", dec: 2, prefix: "" },
-  { key: "dist", label: "Dist", dec: 1, prefix: "" },
-] as const;
-type CbMetricKey = typeof CB_METRICS[number]["key"];
+/**
+ * The card charts the OPTION MARK and nothing else.
+ *
+ * It used to carry a Price / SPX / Dist toggle. The other two were never a
+ * second reading of the position — SPX spot and distance-to-CB are the same
+ * underlying curve twice, they are already on every other panel of this page,
+ * and neither answers the question the card exists to answer ("what was there
+ * to take on this contract"). Two of the three views were furniture, and a
+ * three-button strip over a one-view chart advertises choices that do not pay.
+ *
+ * `spot` and `dist` are still recorded on every tick and still come down the
+ * wire — this is a view decision, not a data one, so bringing a view back is a
+ * component change and needs no recorder or API work.
+ */
+const CB_PRICE = { dec: 2, prefix: "$" } as const;
 
 function CbProbeCard({ trade, mult, onClose }: { trade: CbTrade; mult: number; onClose: () => void }) {
   const [ticks, setTicks] = useState<CbTick[] | null>(null);
-  const [metric, setMetric] = useState<CbMetricKey>("mark");
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -395,16 +403,6 @@ function CbProbeCard({ trade, mult, onClose }: { trade: CbTrade; mult: number; o
           {stat("P/L", pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}` : "—", cls(pnl))}
         </div>
 
-        {trade.status !== "skipped" && (
-          <div className="cbctgls">
-            {CB_METRICS.map((m) => (
-              <button key={m.key} className={`cbctgl${metric === m.key ? " on" : ""}`} onClick={() => setMetric(m.key)}>
-                {m.label}
-              </button>
-            ))}
-          </div>
-        )}
-
         {trade.last_error && (
           <div className="cbcwarn">Last poll unpriced — <b>{trade.last_error}</b></div>
         )}
@@ -427,16 +425,14 @@ function CbProbeCard({ trade, mult, onClose }: { trade: CbTrade; mult: number; o
         ) : (
           <CbProbeChart
             ticks={ticks}
-            metric={metric}
             entry={entry}
             peak={trade.best_price != null && trade.best_ts != null
               ? { v: Number(trade.best_price), ts: n(trade.best_ts) as number } : null}
           />
         )}
 
-        <div className="cbchint mono">
-          {metric === "mark" ? "Option price (mark)" : metric === "spot" ? "SPX spot" : "SPX distance to CB"}
-          {" · RTH only"}
+        <div className="cbchint">
+          {"Option price (mark) · RTH only"}
           {entry != null ? ` · entry @ $${entry.toFixed(2)}` : ""}
           {exitV != null ? ` · sold @ $${exitV.toFixed(2)}` : ""}
         </div>
@@ -445,14 +441,14 @@ function CbProbeCard({ trade, mult, onClose }: { trade: CbTrade; mult: number; o
   );
 }
 
-function CbProbeChart({ ticks, metric, entry, peak }: {
-  ticks: CbTick[]; metric: CbMetricKey;
+function CbProbeChart({ ticks, entry, peak }: {
+  ticks: CbTick[];
   entry: number | null;
   peak: { v: number; ts: number } | null;   // the day's high-water mark, not an exit
 }) {
   const W = 960, H = 340, PADL = 62, PADR = 16, PADT = 16, PADB = 28;
   const pts = ticks
-    .map((t) => ({ ts: n(t.ts), v: n(t[metric]) }))
+    .map((t) => ({ ts: n(t.ts), v: n(t.mark) }))
     .filter((p): p is { ts: number; v: number } => p.ts != null && p.v != null);
 
   if (pts.length < 2) {
@@ -465,13 +461,13 @@ function CbProbeChart({ ticks, metric, entry, peak }: {
     );
   }
 
-  const spec = CB_METRICS.find((m) => m.key === metric)!;
+  const spec = CB_PRICE;
   const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.v);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   // The entry line is part of the picture, not an annotation on top of it — a
   // domain that excludes it draws it off-canvas.
   const domain = [...ys];
-  if (metric === "mark" && entry != null) domain.push(entry);
+  if (entry != null) domain.push(entry);
   let minY = Math.min(...domain), maxY = Math.max(...domain);
   if (minY === maxY) { minY -= 1; maxY += 1; }
   const gpad = (maxY - minY) * 0.08; minY -= gpad; maxY += gpad;
@@ -492,14 +488,20 @@ function CbProbeChart({ ticks, metric, entry, peak }: {
 
   // Tokens go through `style`, not presentation attributes: a var() in
   // stroke="" does not resolve, and the chart would fall back to black.
-  const label = { fill: "var(--dim2)", fontFamily: "ui-monospace,Menlo,Consolas,monospace" } as const;
+  // Courier, like every other glyph on this card — see --mono2 in Premarket.tsx.
+  const label = { fill: "var(--dim2)", fontFamily: "var(--mono2)" } as const;
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="cbcsvg">
       <defs>
+        {/* FLAT wash, not a gradient. The owner card fills its area with one
+            rgba(33,158,188,0.10) and that is what gives the curve its weight:
+            a top-heavy gradient makes a curve that spends most of the session
+            near its low look like it is fading out, which is a mood the data
+            did not ask for. */}
         <linearGradient id="cbcwg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" style={{ stopColor: "var(--cyan)" }} stopOpacity={0.28} />
-          <stop offset="100%" style={{ stopColor: "var(--cyan)" }} stopOpacity={0} />
+          <stop offset="0%" style={{ stopColor: "var(--cyan)" }} stopOpacity={0.1} />
+          <stop offset="100%" style={{ stopColor: "var(--cyan)" }} stopOpacity={0.1} />
         </linearGradient>
       </defs>
 
@@ -512,7 +514,7 @@ function CbProbeChart({ ticks, metric, entry, peak }: {
 
       {/* Entry line on the price view. Without it a rising curve reads as a
           winner even when it never got back to what was paid. */}
-      {metric === "mark" && entry != null && (
+      {entry != null && (
         <>
           <line x1={PADL} y1={sy(entry)} x2={W - PADR} y2={sy(entry)}
             style={{ stroke: "var(--dim2)" }} strokeWidth={1} strokeDasharray="4 4" />
@@ -526,8 +528,8 @@ function CbProbeChart({ ticks, metric, entry, peak }: {
       {peakIdx >= 0 && (
         <>
           <line x1={sx(peakIdx)} y1={PADT} x2={sx(peakIdx)} y2={H - PADB}
-            style={{ stroke: "var(--posEdgeUp)" }} strokeWidth={1} strokeDasharray="3 3" />
-          <circle cx={sx(peakIdx)} cy={sy(pts[peakIdx].v)} r={4} style={{ fill: "var(--pos)", stroke: "var(--plate)" }} strokeWidth={1} />
+            style={{ stroke: "var(--skyEdge)" }} strokeWidth={1} strokeDasharray="3 3" />
+          <circle cx={sx(peakIdx)} cy={sy(pts[peakIdx].v)} r={4} style={{ fill: "var(--sky)", stroke: "var(--plate)" }} strokeWidth={1} />
         </>
       )}
       <circle cx={sx(cnt - 1)} cy={sy(pts[cnt - 1].v)} r={3.5} style={{ fill: "var(--cyan)" }} />
@@ -591,52 +593,83 @@ export const CB_CONTRACTS_CSS = `
   font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
 .pmk .cbcfoot .cbclegend{margin-left:auto}
 
-/* ── Probe card ─────────────────────────────────────────────────────────── */
+/* ── Probe card ───────────────────────────────────────────────────────────
+   A PORT of the owner Probe card (owner-vite/src/pages/Probe.tsx, its op-*
+   block), not an approximation of it. The two cards read the same position off
+   the same recorder and are compared against each other all day, so the moment
+   they disagree about a typeface or a verdict colour the comparison is between
+   the two CARDS instead of between the numbers.
+
+   The port is possible as a straight token swap because the owner app's palette
+   IS homeTheme: its --cyan/--amber/--sm-red/--sm-green/--sm-border are literally
+   HT.cyan / HT.orange / HT.red / HT.green / HT.border. Only two things had to be
+   added to the .pmk block for it — --sky/--rose (HT.green over HT.red, the
+   owner's verdict pair) and --mono2 (Courier New, the owner's face). Nothing
+   below is a hex.
+
+   Three things that are the port and not taste, because they are the three that
+   drifted:
+     · EVERYTHING on the card is --mono2. On the owner card there is no
+       proportional type at all — the header, the stat keys, the buttons and the
+       hint are all Courier. Half of "looks like the owner card" is that.
+     · Verdict green is --sky (#8ECAE6), NOT --pos. --pos is the ES candle green
+       and belongs to the gamma bars; using it here is what made the headline on
+       this card a different green from the identical headline on the owner one.
+     · The close control is a bare glyph. It had grown a bordered pill, which
+       reads as a fourth button in a row of buttons. */
 .pmk .cbcmask{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.72);backdrop-filter:blur(3px);
   display:flex;align-items:center;justify-content:center;padding:24px}
-.pmk .cbcmodal{width:min(1040px,100%);max-height:90vh;overflow-y:auto;padding:18px 20px;
-  background:var(--plate);border:1px solid var(--card);border-radius:var(--r);
-  display:flex;flex-direction:column;gap:14px}
-.pmk .cbcmhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
-.pmk .cbcmhead .sym{font-size:15px;font-weight:700;color:var(--cyan)}
-.pmk .cbcmhead .sub{font-size:11px;color:var(--dim2)}
-.pmk .cbcmhead .x{margin-left:auto;font:inherit;font-size:15px;font-weight:700;line-height:1;cursor:pointer;
-  background:transparent;border:1px solid var(--line2);color:var(--dim);border-radius:7px;padding:4px 11px}
-.pmk .cbcmhead .x:hover{background:var(--active)}
+.pmk .cbcmodal{width:min(1040px,100%);max-height:90vh;overflow-y:auto;padding:16px 18px 14px;
+  background:var(--plate);border:1px solid var(--card);border-radius:10px;
+  display:flex;flex-direction:column;gap:14px;font-family:var(--mono2)}
+.pmk .cbcmodal .mono{font-family:var(--mono2)}
 
+.pmk .cbcmhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.pmk .cbcmhead .sym{font-size:17px;font-weight:800;color:var(--cyan);letter-spacing:.01em}
+.pmk .cbcmhead .sub{font-size:12px;font-weight:700;color:var(--dim2);opacity:.82}
+.pmk .cbcmhead .x{margin-left:auto;font-family:var(--mono2);font-size:17px;line-height:1;cursor:pointer;
+  background:none;border:none;color:var(--dim2);padding:0 2px}
+.pmk .cbcmhead .x:hover{color:var(--rose)}
+
+.pmk .cbcbig{margin:2px 0 0}
 .pmk .cbcbig .hl{font-size:24px;font-weight:800;line-height:1;color:var(--txt)}
-.pmk .cbcbig .line{font-size:12px;color:var(--dim);margin-top:6px}
-.pmk .cbcbig .line .t{color:var(--dim2);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;margin-right:3px}
+.pmk .cbcbig .line{font-size:14px;color:var(--txt);margin-top:6px}
+.pmk .cbcbig .line .t{color:var(--dim2);font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-right:3px}
 .pmk .cbcbig .line .ar{color:var(--dim2);margin:0 6px}
 
-.pmk .cbcstats{display:flex;gap:24px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--line)}
-.pmk .cbcstats .s{display:flex;flex-direction:column;gap:3px}
-.pmk .cbcstats .k{font-size:9.5px;font-weight:600;color:var(--dim2);letter-spacing:.08em;text-transform:uppercase}
-.pmk .cbcstats .v{font-size:12px;font-weight:700;color:var(--txt)}
+.pmk .cbcstats{display:flex;gap:26px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.pmk .cbcstats .s{display:flex;flex-direction:column;gap:4px}
+.pmk .cbcstats .k{font-size:10px;font-weight:700;color:var(--dim2);letter-spacing:.08em;text-transform:uppercase}
+.pmk .cbcstats .v{font-size:13px;font-weight:700;color:var(--txt)}
 
+/* The table's verdict colours — the page's candle pair. */
 .pmk .cbc .up{color:var(--pos)}
 .pmk .cbc .down{color:var(--neg)}
 .pmk .cbc .flat{color:var(--dim2)}
 .pmk .cbc .cy{color:var(--cyan)}
 .pmk .cbc .am{color:var(--amber)}
+/* The CARD's verdict colours — the owner's pair, and only inside the card.
+   ORDER IS LOAD-BEARING: the modal is a child of .cbc, so these two rule sets
+   have identical specificity (0,3,0) and both match every value in the card.
+   The later one wins, which is why the card's pair is written SECOND. Move this
+   block above the .cbc one and the headline silently goes back to candle green
+   with nothing in the markup to explain it. */
+.pmk .cbcmodal .up{color:var(--sky)}
+.pmk .cbcmodal .down{color:var(--rose)}
+.pmk .cbcmodal .flat{color:var(--dim2);opacity:.7}
+.pmk .cbcmodal .cy{color:var(--cyan)}
+.pmk .cbcmodal .am{color:var(--amber)}
 
-.pmk .cbctgls{display:flex;gap:8px;flex-wrap:wrap}
-.pmk .cbctgl{font:inherit;font-size:11px;font-weight:600;padding:5px 12px;border-radius:7px;cursor:pointer;
-  letter-spacing:.06em;text-transform:uppercase;background:transparent;border:1px solid var(--line2);color:var(--dim)}
-.pmk .cbctgl:hover{background:var(--active)}
-.pmk .cbctgl.on{border-color:var(--cyanEdge);background:var(--cyanWash);color:var(--cyan)}
-
-.pmk .cbcwarn{font-size:11.5px;color:var(--amber);border:1px solid var(--amberEdge);background:var(--amberWash);
-  border-radius:var(--r2);padding:8px 11px;line-height:1.6;
-  font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+.pmk .cbcwarn{font-size:12px;color:var(--amber);border:1px solid var(--amberEdge);background:var(--amberWash);
+  border-radius:var(--r2);padding:8px 11px;line-height:1.6;font-family:var(--mono2)}
 
 .pmk .cbcskip{padding:24px 20px;text-align:center;border:1px dashed var(--line2);border-radius:var(--r2);line-height:1.7;
-  font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:11.5px;color:var(--dim)}
-.pmk .cbcskip .t{font-size:12px;font-weight:700;color:var(--amber);margin-bottom:5px;font-family:inherit}
+  font-family:var(--mono2);font-size:12px;color:var(--dim)}
+.pmk .cbcskip .t{font-size:13px;font-weight:800;color:var(--amber);margin-bottom:5px}
 .pmk .cbcskip .sub{margin-top:7px;color:var(--dim2)}
 
 .pmk .cbcsvg{width:100%;height:auto;display:block}
-.pmk .cbchint{font-size:10.5px;color:var(--dim2);letter-spacing:.04em}
+.pmk .cbchint{font-family:var(--mono2);font-size:12px;color:var(--dim2);letter-spacing:.04em;opacity:.82}
 
 @media (max-width:900px){
   .pmk .cbcwrap{overflow-x:auto}

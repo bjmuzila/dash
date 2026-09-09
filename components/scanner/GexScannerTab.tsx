@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { HOME_THEME, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
+import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { ScoreInfo } from "@/components/shared/InfoTip";
 import ProbeButton from "@/components/scanner/ProbeButton";
 import { fmtB, seg, td, th, zColor } from "@/components/scanner/scannerStyles";
@@ -222,13 +223,11 @@ function GexScanner() {
         <span style={{ color: HOME_THEME.border }}>|</span>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.cyan }}>
           min expiry
-          <input type="date" value={minExpiry} onChange={(e) => setMinExpiry(e.target.value)}
-            style={{ fontSize: 14, padding: "5px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }} />
+          <ThemedDatePicker value={minExpiry} onChange={setMinExpiry} dense width={158} placeholder="any" />
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.cyan }}>
           max expiry
-          <input type="date" value={maxExpiry} onChange={(e) => setMaxExpiry(e.target.value)}
-            style={{ fontSize: 14, padding: "5px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }} />
+          <ThemedDatePicker value={maxExpiry} onChange={setMaxExpiry} dense width={158} placeholder="any" />
         </label>
         {(minExpiry || maxExpiry) && (
           <button onClick={() => { setMinExpiry(""); setMaxExpiry(""); }} style={seg(false)}>Clear</button>

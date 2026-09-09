@@ -64,7 +64,7 @@ export default async function PricingPage({
       }}
     >
       {/* Same public toolbar as the landing + explore pages. Signed-in users get
-          their UserMenu instead of a "start free trial" CTA on the buy page. */}
+          their UserMenu instead of the access CTA on the buy page. */}
       <PublicNav
         active="Pricing"
         right={

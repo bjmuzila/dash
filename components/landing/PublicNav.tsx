@@ -38,7 +38,7 @@ export const PUBLIC_NAV_HEIGHT = 64;
 export default function PublicNav({
   /** Which link reads as current. */
   active,
-  /** Replaces the default trial + login buttons (e.g. /pricing passes UserMenu). */
+  /** Replaces the default access + login buttons (e.g. /pricing passes UserMenu). */
   right,
 }: {
   active?: string;
@@ -80,7 +80,7 @@ export default function PublicNav({
           {/* Center nav — absolutely centered on the BAND, not on the leftover
               space between the logo and the right cluster. Otherwise the links
               slide whenever the right cluster changes width (e.g. /pricing
-              swaps the trial CTA for a UserMenu). */}
+              swaps the access CTA for a UserMenu). */}
           <nav className="pnav-links" style={navRow}>
             {PUBLIC_NAV.map((n) => {
               const on = active === n.label;
@@ -115,8 +115,8 @@ export default function PublicNav({
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
             {right ?? (
               <>
-                <Link href="/pricing?from=nav&trial=1" className="pnav-cta" style={ctaBtn}>
-                  START FREE TRIAL <span aria-hidden>›</span>
+                <Link href="/pricing?from=nav" className="pnav-cta" style={ctaBtn}>
+                  GET FULL ACCESS <span aria-hidden>›</span>
                 </Link>
                 <Link href="/sign-in" className="pnav-ghost" style={ghostBtn}>
                   LOGIN

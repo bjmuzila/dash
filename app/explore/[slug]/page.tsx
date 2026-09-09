@@ -99,15 +99,16 @@ export default async function ExplorePage({
           {entry.tagline}
         </p>
 
-        {/* No demo mode — the 2-day free trial IS the demo. Send them straight in. */}
+        {/* No demo mode and (since 2026-09-09) no free trial — the free live
+            level panel on the landing page is the demo. Send them straight in. */}
         <div style={demoBlock}>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <Link href={`/pricing?from=${entry.slug}&trial=1`} style={demoBtn}>
-              START MY 2-DAY FREE TRIAL ›
+            <Link href={`/pricing?from=${entry.slug}`} style={demoBtn}>
+              GET FULL ACCESS ›
             </Link>
           </div>
           <p style={{ margin: "12px 0 0", fontSize: V3_TEXT.body, color: V3.fg }}>
-            Two days of the full live dashboard — every ticker, every tool. Cancel anytime.
+            The full live dashboard — every ticker, every tool. $50/month, cancel anytime.
           </p>
         </div>
 
@@ -174,27 +175,27 @@ export default async function ExplorePage({
         {/* Join Now CTA → single pricing hub. Call to arms: stakes, one action,
             risk reversal — no second competing button. */}
         <div style={ctaBlock}>
-          <div style={ctaKicker}>2-DAY FREE TRIAL · NO CHARGE UP FRONT</div>
+          <div style={ctaKicker}>$50/MONTH · ONE TIER · CANCEL ANYTIME</div>
           <h2 style={{ fontSize: "clamp(22px,4vw,32px)", fontWeight: 800, margin: "0 0 10px", lineHeight: 1.15, letterSpacing: "-0.03em" }}>
-            Stop trading blind. See it live for two days.
+            Stop trading blind. See it live.
           </h2>
           <p style={{ color: V3.fg, fontSize: V3_TEXT.body, margin: "0 0 22px", maxWidth: 560, lineHeight: 1.65 }}>
-            The preview above is real — just delayed. Your trial unlocks the live, tick-by-tick {entry.title.toLowerCase()}
+            The preview above is real — just delayed. Membership unlocks the live, tick-by-tick {entry.title.toLowerCase()}
             {" "}<strong style={{ color: V3.fg }}>plus the entire dashboard</strong>: GEX, flow, premarket prep, estimated moves,
             IB stats and both scanners. Full access, nothing held back.
           </p>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <Link href={`/pricing?from=${entry.slug}&trial=1`} style={joinBtn}>
-              Start my 2-day free trial ›
+            <Link href={`/pricing?from=${entry.slug}`} style={joinBtn}>
+              Get full access ›
             </Link>
-            <span style={{ color: V3.fg, fontSize: V3_TEXT.base }}>Cancel anytime · no charge up front</span>
+            <span style={{ color: V3.fg, fontSize: V3_TEXT.base }}>One tier · cancel anytime</span>
           </div>
         </div>
 
-        {/* Other features — framed as "all of this is in your trial", not a passive menu */}
+        {/* Other features — framed as "all of this is included", not a passive menu */}
         <div style={{ marginTop: 48, borderTop: `1px solid ${V3.line}`, paddingTop: 26 }}>
           <div style={{ fontSize: V3_TEXT.body, color: V3.fg, marginBottom: 14, fontWeight: 700, letterSpacing: "0.04em" }}>
-            Your trial unlocks all of these — live
+            Membership unlocks all of these — live
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {EXPLORE_SLUGS.filter((s) => s !== entry.slug).map((s) => (

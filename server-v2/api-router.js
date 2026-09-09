@@ -13875,6 +13875,11 @@ try {
         const maxDte = num('max_dte');
         const wantType = String(params.get('type') || '').trim().toUpperCase().slice(0, 1);
         const sort = params.get('sort') === 'time' ? 'time' : 'premium';
+        // 'directional' (the default) drops every print whose side could not be
+        // read. 'all' is the escape hatch for looking at what was dropped.
+        const sides = params.get('sides') === 'all' ? 'all' : 'directional';
+        // 'otm' keeps only strikes that were out of the money AT PRINT TIME.
+        const moneyness = params.get('moneyness') === 'otm' ? 'otm' : 'all';
         const limit = Math.min(Math.max(num('limit') ?? 50, 1), TF_MAX_ROWS);
 
         await tfRefresh();
@@ -13884,6 +13889,54 @@ try {
         // through — an unfiltered row inside a filtered list is the worse bug.
         if (maxDte !== null) rows = rows.filter((r) => r.dte !== null && r.dte <= maxDte);
         if (wantType === 'C' || wantType === 'P') rows = rows.filter((r) => r.type === wantType);
+
+        // ── Directional only, by default ────────────────────────────────────
+        // A print whose side cannot be read is not a weaker row on this card, it
+        // is an unreadable one — so it is dropped BEFORE the limit rather than
+        // rendered as a dash inside it. Filtering after the slice would quietly
+        // turn 'give me 50' into 'give me 50 minus however many were mid'.
+        //
+        // All three unreadable kinds go together, because the reason to hide them
+        // is the same one — you cannot tell which side it was:
+        //   mid      filled between the bid and the ask; genuinely ambiguous
+        //   pending  not classified yet; it reappears within a refresh
+        //   stale    arrived too late to judge and never will be
+        // The counts are returned so the card can say what it is not showing
+        // instead of just showing less.
+        const excluded = { mid: 0, pending: 0, stale: 0, other: 0, itm: 0 };
+        if (sides !== 'all') {
+          rows = rows.filter((r) => {
+            if (r.action === 'BUY' || r.action === 'SELL') return true;
+            if (r.side === 'mid') excluded.mid += 1;
+            else if (r.side === undefined) excluded.pending += 1;
+            else if (r.sideReason === 'stale') excluded.stale += 1;
+            else excluded.other += 1;
+            return false;
+          });
+        }
+
+        // ── OTM only ────────────────────────────────────────────────────────
+        // Judged against the underlying price the print CARRIED, not against
+        // spot now. Moneyness is a property of the trade — a call bought 40
+        // points OTM at 10am was an OTM buy, and it does not retroactively
+        // become something else because the index rallied through it by 3pm.
+        // (The Flow Tape's %OTM column is the opposite question on purpose:
+        // there you are asking where the strike sits NOW.)
+        //
+        // A row with no strike, no right or no spot is DROPPED by this filter
+        // rather than let through — an unclassifiable row inside a filtered
+        // list is the worse failure, same rule as the DTE filter above.
+        if (moneyness === 'otm') {
+          rows = rows.filter((r) => {
+            const otm = r.strike !== null && r.type && r.spot > 0
+              ? (r.type === 'C' ? r.strike > r.spot : r.strike < r.spot)
+              : null;
+            if (otm === true) return true;
+            excluded.itm += 1;
+            return false;
+          });
+        }
+
         rows.sort(sort === 'time'
           ? (a, b) => b.ts - a.ts
           : (a, b) => b.premium - a.premium || b.ts - a.ts);
@@ -13936,6 +13989,10 @@ try {
           refreshMs: TF_REFRESH_MS,
           /** So the card can say WHY a column is empty rather than just be empty. */
           sideAvailable: Boolean(tfProxy && typeof tfProxy.contractStats === 'function'),
+          sides,
+          moneyness,
+          /** What the directional filter removed, by reason. Zeroes when sides=all. */
+          excluded,
           classifyMaxAgeMs: TF_CLASSIFY_MAX_AGE_MS,
           error: tfState.error,
           statsError: tfState.statsError,

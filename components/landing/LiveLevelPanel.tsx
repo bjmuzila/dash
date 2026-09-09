@@ -242,7 +242,7 @@ export default function LiveLevelPanel() {
           <span aria-hidden style={{ color: V3.cyan, fontSize: V3_TEXT.base, lineHeight: 1 }}>🔒</span>
           <span style={lockedText}>
             <b style={{ color: V3.fg, fontWeight: 700 }}>Rate of change, strike history, flow and alerts</b>
-            {" — inside the trial. This panel stays free either way."}
+            {" — inside the membership. This panel stays free either way."}
           </span>
         </div>
       </div>

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { HOME_THEME, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DoD Movers — biggest day-over-day change in OI+Vol net GEX per ticker, at the
@@ -399,15 +400,18 @@ export default function DodMoversTab() {
             : asOf ? `Biggest OI+Vol net-GEX change vs prior session · ${asOf} · ${rows.length} tickers${historical ? " · historical (live cols N/A)" : ""}`
             : "No day-over-day rows yet (needs 2 sessions of history)"}
         </div>
-        <select
+        {/* Dock-themed menu (ThemedSelect) rather than a native <select>: the OS
+            popup renders off-theme. Same value contract — "" = latest (live). */}
+        <ThemedSelect
           value={pickDate}
-          onChange={(e) => setPickDate(e.target.value)}
-          title="View a past session"
-          style={{ ...homeInputStyle, minWidth: 150, cursor: "pointer" }}
-        >
-          <option value="">Latest (live)</option>
-          {dates.map((d) => <option key={d.date} value={d.date}>{d.date} ({d.n})</option>)}
-        </select>
+          onChange={setPickDate}
+          ariaLabel="View a past session"
+          width={170}
+          options={[
+            { value: "", label: "Latest (live)" },
+            ...dates.map((d) => ({ value: d.date, label: `${d.date} (${d.n})` })),
+          ]}
+        />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}

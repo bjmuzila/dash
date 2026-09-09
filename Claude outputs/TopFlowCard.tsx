@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
 import { PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
@@ -76,32 +76,8 @@ interface Settings {
   maxDte: number | null
   sort: SortKey
   rows: number
-}
-
-const DEFAULTS: Settings = { minPremium: 250_000, maxDte: null, sort: 'premium', rows: 50 }
-
-/** Per COPY of the card, not per card type — two Top Flows side by side are
- *  almost always two different questions (0DTE whales vs the month's biggest). */
-const settingsKey = (instanceId: string) => `cb-v3-board-topflow:${instanceId}`
-
-function loadSettings(instanceId: string): Settings {
-  try {
-    const raw = localStorage.getItem(settingsKey(instanceId))
-    if (!raw) return DEFAULTS
-    const j = JSON.parse(raw) as Partial<Settings>
-    return {
-      // Each field validated on its own: a stored value from an older stop list
-      // must fall back to the default, not poison the whole object.
-      minPremium: PREMIUM_STOPS.some((s) => s.value === j.minPremium)
-        ? (j.minPremium as number) : DEFAULTS.minPremium,
-      maxDte: DTE_STOPS.some((s) => s.value === (j.maxDte ?? null))
-        ? (j.maxDte ?? null) : DEFAULTS.maxDte,
-      sort: j.sort === 'time' || j.sort === 'premium' ? j.sort : DEFAULTS.sort,
-      rows: ROW_STOPS.includes(j.rows as (typeof ROW_STOPS)[number]) ? (j.rows as number) : DEFAULTS.rows,
-    }
-  } catch {
-    return DEFAULTS
-  }
+  /** Column ids, left to right. See the COLUMN ORDER note below. */
+  order: string[]
 }
 
 /** Where the fill sat against the quote at the time it printed. */
@@ -154,8 +130,7 @@ const POLL_MS = 20_000
 
 const fmtNum = (n: number | null) => (n === null ? '—' : n.toLocaleString())
 const fmtPrice = (n: number | null) => (n === null ? '—' : n.toFixed(2))
-const fmtStrike = (n: number | null) =>
-  n === null ? '—' : Number.isInteger(n) ? String(n) : String(n)
+const fmtStrike = (n: number | null) => (n === null ? '—' : String(n))
 /** "Sep 19" — the year is noise on a tape where everything is inside a year. */
 const fmtExpiry = (iso: string | null) => {
   if (!iso) return '—'
@@ -212,7 +187,180 @@ function SideCell({ r }: { r: TopFlowRow }) {
   )
 }
 
-function Cog({ s, onPatch }: { s: Settings; onPatch: (p: Partial<Settings>) => void }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// COLUMNS
+//
+// One array, and the header, the body and the drag-to-reorder all read it. A
+// column added here appears in all three with no other edit — which is the
+// point: three hand-kept lists of twelve columns is three chances to put the
+// Premium value under the Vol heading.
+//
+// `id` is PERSISTED in the saved order, so renaming one silently resets that
+// user's layout to default. Change `label` freely; leave `id` alone.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface Col {
+  id: string
+  label: string
+  /** Header tooltip — where a two-letter column earns its explanation. */
+  title?: string
+  align: 'left' | 'right'
+  cell: (r: TopFlowRow) => ReactNode
+  /** Row-dependent cell classes (the up/down inks). */
+  cellClass?: (r: TopFlowRow) => string
+  cellTitle?: (r: TopFlowRow) => string | undefined
+  /** Values that must not break across two lines. */
+  nowrap?: boolean
+}
+
+const COLS: Col[] = [
+  {
+    id: 'time', label: 'Time', align: 'left', nowrap: true,
+    cell: (r) => fmtTime(r.ts),
+    cellClass: () => 'tabular text-faint',
+  },
+  {
+    id: 'ticker', label: 'Ticker', align: 'left',
+    cell: (r) => r.underlying ?? '—',
+    cellClass: () => 'font-semibold text-fg',
+  },
+  {
+    id: 'contract', label: 'Contract', align: 'left', nowrap: true,
+    cell: (r) => (
+      <>
+        <span className="text-fg">{fmtStrike(r.strike)}</span>
+        <span className="text-faint"> {fmtExpiry(r.expiry)}</span>
+      </>
+    ),
+    cellClass: () => 'tabular text-muted',
+  },
+  {
+    id: 'cp', label: 'C/P', align: 'left',
+    cell: (r) => r.type ?? '?',
+    cellClass: (r) => `font-semibold ${r.type === 'P' ? 'text-down' : 'text-up'}`,
+  },
+  {
+    id: 'side', label: 'Side', align: 'left', nowrap: true,
+    title: 'Where the fill sat against the bid/ask at print time',
+    cell: (r) => <SideCell r={r} />,
+    cellClass: () => 'tabular font-semibold',
+  },
+  {
+    id: 'bs', label: 'B/S', align: 'left',
+    title: 'Above ask or at ask = bought. At bid or below bid = sold. Mid is not a read',
+    cell: (r) => r.action ?? (r.side === 'mid' ? 'n/a' : '—'),
+    cellClass: (r) =>
+      `font-semibold ${r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-faint opacity-70'}`,
+    cellTitle: (r) =>
+      r.action
+        ? undefined
+        : r.side === 'mid'
+          ? 'Filled between the bid and the ask — genuinely ambiguous, so no call is made'
+          : REASON_TITLE[r.sideReason ?? 'pending'],
+  },
+  {
+    id: 'dte', label: 'DTE', align: 'right',
+    cell: (r) => (r.dte === null ? '—' : r.dte),
+    cellClass: () => 'tabular text-muted',
+  },
+  {
+    id: 'size', label: 'Size', align: 'right',
+    cell: (r) => fmtNum(r.size),
+    cellClass: () => 'tabular text-muted',
+  },
+  {
+    id: 'price', label: 'Price', align: 'right',
+    cell: (r) => fmtPrice(r.price),
+    cellClass: () => 'tabular text-muted',
+  },
+  {
+    id: 'premium', label: 'Premium', align: 'right',
+    cell: (r) => fmtPremium(r.premium),
+    cellClass: (r) => `tabular font-semibold ${r.type === 'P' ? 'text-down' : 'text-up'}`,
+  },
+  {
+    id: 'vol', label: 'Vol', align: 'right',
+    title: "The contract's own volume so far today",
+    cell: (r) => fmtNum(r.vol),
+    cellClass: () => 'tabular text-muted',
+  },
+  {
+    id: 'oi', label: 'OI', align: 'right',
+    title: "The contract's open interest",
+    cell: (r) => fmtNum(r.oi),
+    cellClass: () => 'tabular text-muted',
+  },
+]
+
+const COL_BY_ID = new Map(COLS.map((c) => [c.id, c]))
+const DEFAULT_ORDER = COLS.map((c) => c.id)
+
+/**
+ * A saved order, repaired against the CURRENT column list.
+ *
+ * Two failure modes, both of which have to heal silently rather than throw the
+ * layout away:
+ *
+ *   • an id that no longer exists (a column was removed) is DROPPED, not left
+ *     to render undefined;
+ *   • an id that is missing (a column was ADDED since this order was saved) is
+ *     APPENDED. Without this, every existing user's card would simply never
+ *     show a new column, which is a bug report nobody can diagnose from the UI.
+ */
+function repairOrder(saved: unknown): string[] {
+  const list = Array.isArray(saved) ? saved.filter((x): x is string => typeof x === 'string') : []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const id of list) {
+    if (COL_BY_ID.has(id) && !seen.has(id)) { seen.add(id); out.push(id) }
+  }
+  for (const id of DEFAULT_ORDER) if (!seen.has(id)) out.push(id)
+  return out
+}
+
+const DEFAULTS: Settings = {
+  minPremium: 250_000,
+  maxDte: null,
+  sort: 'premium',
+  rows: 50,
+  order: DEFAULT_ORDER,
+}
+
+/** Per COPY of the card, not per card type — two Top Flows side by side are
+ *  almost always two different questions (0DTE whales vs the month's biggest),
+ *  and two different column orders to go with them. */
+const settingsKey = (instanceId: string) => `cb-v3-board-topflow:${instanceId}`
+
+function loadSettings(instanceId: string): Settings {
+  try {
+    const raw = localStorage.getItem(settingsKey(instanceId))
+    if (!raw) return DEFAULTS
+    const j = JSON.parse(raw) as Partial<Settings>
+    return {
+      // Each field validated on its own: a stored value from an older stop list
+      // must fall back to the default, not poison the whole object.
+      minPremium: PREMIUM_STOPS.some((s) => s.value === j.minPremium)
+        ? (j.minPremium as number) : DEFAULTS.minPremium,
+      maxDte: DTE_STOPS.some((s) => s.value === (j.maxDte ?? null))
+        ? (j.maxDte ?? null) : DEFAULTS.maxDte,
+      sort: j.sort === 'time' || j.sort === 'premium' ? j.sort : DEFAULTS.sort,
+      rows: ROW_STOPS.includes(j.rows as (typeof ROW_STOPS)[number]) ? (j.rows as number) : DEFAULTS.rows,
+      order: repairOrder(j.order),
+    }
+  } catch {
+    return DEFAULTS
+  }
+}
+
+function Cog({
+  s,
+  onPatch,
+  orderChanged,
+}: {
+  s: Settings
+  onPatch: (p: Partial<Settings>) => void
+  orderChanged: boolean
+}) {
   const [open, setOpen] = useState(false)
   return (
     <div className="relative shrink-0">
@@ -221,7 +369,7 @@ function Cog({ s, onPatch }: { s: Settings; onPatch: (p: Partial<Settings>) => v
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label="Top Flow settings"
-        title="Sort, minimum premium, expiry window and row count"
+        title="Sort, minimum premium, expiry window, row count and column order"
         className={[
           'flex items-center rounded-sm border px-1.5 py-0.5 leading-none transition-colors',
           open ? 'border-accent bg-raised text-fg' : 'border-line text-muted opacity-60 hover:opacity-100',
@@ -287,6 +435,22 @@ function Cog({ s, onPatch }: { s: Settings; onPatch: (p: Partial<Settings>) => v
               onChange={(v) => onPatch({ rows: Number(v) })}
             />
           </PanelSection>
+          <PanelSection title="Columns">
+            <span className="text-3xs leading-snug text-faint opacity-70">
+              Drag a column heading sideways to move it. The order is saved for this card.
+            </span>
+            {/* Only once there is something to undo — a Reset that resets to
+                what you are already looking at is a dead control. */}
+            {orderChanged && (
+              <button
+                type="button"
+                onClick={() => onPatch({ order: DEFAULT_ORDER })}
+                className="self-start rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold text-muted opacity-60 transition-colors hover:opacity-100"
+              >
+                RESET ORDER
+              </button>
+            )}
+          </PanelSection>
         </div>
       </Popover>
     </div>
@@ -305,6 +469,40 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
     }
   }, [instanceId, s])
 
+  // ── Column drag ────────────────────────────────────────────────────────────
+  //
+  // HTML5 drag-and-drop rather than pointer events, for one specific reason:
+  // this card lives on a board whose tiles are themselves dragged with pointer
+  // events. A pointer-based reorder here would be racing the board's own drag
+  // for the same gesture. `draggable` runs on a different event channel
+  // entirely, and the pointerdown guard below stops the board ever seeing the
+  // press that starts a column drag.
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+
+  const cols = useMemo(
+    () => s.order.map((id) => COL_BY_ID.get(id)).filter((c): c is Col => Boolean(c)),
+    [s.order],
+  )
+  const orderChanged = useMemo(
+    () => s.order.join(',') !== DEFAULT_ORDER.join(','),
+    [s.order],
+  )
+
+  const moveColumn = (from: string, to: string) => {
+    if (from === to) return
+    const next = s.order.filter((id) => id !== from)
+    const at = next.indexOf(to)
+    if (at === -1) return
+    // Dropping on a column to the RIGHT of where you started lands AFTER it;
+    // to the left, before it. That is what the drop indicator is drawing, and
+    // it is the behaviour every spreadsheet has trained the hand for.
+    const fromIdx = s.order.indexOf(from)
+    const toIdx = s.order.indexOf(to)
+    next.splice(fromIdx < toIdx ? at + 1 : at, 0, from)
+    patch({ order: next })
+  }
+
   const url = useMemo(() => {
     const sp = new URLSearchParams({
       min_premium: String(s.minPremium),
@@ -313,7 +511,9 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
     })
     if (s.maxDte !== null) sp.set('max_dte', String(s.maxDte))
     return `/api/lse/top-flow?${sp.toString()}`
-  }, [s])
+    // Column order is presentation only — it must NOT rebuild the URL and
+    // refetch the session every time a heading is dragged.
+  }, [s.minPremium, s.maxDte, s.sort, s.rows])
 
   const q = useQuery<TopFlowResponse>(url, { staleMs: 10_000, pollMs: POLL_MS })
   const rows = q.data?.rows ?? []
@@ -392,7 +592,7 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
             no quotes
           </span>
         ) : null}
-        <Cog s={s} onPatch={patch} />
+        <Cog s={s} onPatch={patch} orderChanged={orderChanged} />
       </CardToolbar>
 
       <div className="flex flex-wrap items-baseline gap-4 px-1 text-xs text-muted">
@@ -435,73 +635,82 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
         <table className="w-full border-collapse text-2xs">
           <thead className="sticky top-0 z-[1] bg-bg">
             <tr className="text-3xs uppercase tracking-[0.08em] text-faint">
-              <th className="px-1.5 py-1 text-left font-bold">Time</th>
-              <th className="px-1.5 py-1 text-left font-bold">Ticker</th>
-              <th className="px-1.5 py-1 text-left font-bold">Contract</th>
-              <th className="px-1.5 py-1 text-left font-bold">C/P</th>
-              <th className="px-1.5 py-1 text-left font-bold" title="Where the fill sat against the bid/ask at print time">
-                Side
-              </th>
-              <th className="px-1.5 py-1 text-left font-bold" title="Above ask or at ask = bought. At bid or below bid = sold. Mid is not a read">
-                B/S
-              </th>
-              <th className="px-1.5 py-1 text-right font-bold">DTE</th>
-              <th className="px-1.5 py-1 text-right font-bold">Size</th>
-              <th className="px-1.5 py-1 text-right font-bold">Price</th>
-              <th className="px-1.5 py-1 text-right font-bold">Premium</th>
-              <th className="px-1.5 py-1 text-right font-bold" title="The contract's own volume so far today">
-                Vol
-              </th>
-              <th className="px-1.5 py-1 text-right font-bold" title="The contract's open interest">
-                OI
-              </th>
+              {cols.map((c) => {
+                const isDragging = dragId === c.id
+                const isOver = overId === c.id && dragId !== null && dragId !== c.id
+                // Which edge the drop indicator sits on has to match where the
+                // column will actually land, or the line lies about the result.
+                const fromIdx = dragId ? s.order.indexOf(dragId) : -1
+                const toIdx = s.order.indexOf(c.id)
+                const insertAfter = fromIdx !== -1 && fromIdx < toIdx
+                return (
+                  <th
+                    key={c.id}
+                    scope="col"
+                    draggable
+                    // The board tile underneath drags on pointerdown. Without
+                    // this, grabbing a heading picks up the whole card.
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onDragStart={(e) => {
+                      setDragId(c.id)
+                      e.dataTransfer.effectAllowed = 'move'
+                      // Firefox refuses to start a drag with no payload set.
+                      try { e.dataTransfer.setData('text/plain', c.id) } catch { /* older browsers */ }
+                    }}
+                    onDragOver={(e) => {
+                      if (!dragId) return
+                      // preventDefault is what makes this a valid drop target.
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                      if (overId !== c.id) setOverId(c.id)
+                    }}
+                    onDragLeave={() => setOverId((id) => (id === c.id ? null : id))}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      if (dragId) moveColumn(dragId, c.id)
+                      setDragId(null)
+                      setOverId(null)
+                    }}
+                    onDragEnd={() => { setDragId(null); setOverId(null) }}
+                    title={c.title ? `${c.title} — drag to reorder` : 'Drag to reorder'}
+                    className={[
+                      'cursor-grab select-none px-1.5 py-1 font-bold transition-colors active:cursor-grabbing',
+                      c.align === 'right' ? 'text-right' : 'text-left',
+                      isDragging ? 'opacity-40' : '',
+                      // A 2px inset shadow rather than a border: a border would
+                      // change the cell's width mid-drag and shuffle every
+                      // heading sideways under the pointer.
+                      isOver
+                        ? insertAfter
+                          ? 'shadow-[inset_-2px_0_0_0_var(--color-accent)]'
+                          : 'shadow-[inset_2px_0_0_0_var(--color-accent)]'
+                        : '',
+                    ].join(' ')}
+                  >
+                    {c.label}
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id} className="border-t border-line hover:bg-raised">
-                <td className="tabular whitespace-nowrap px-1.5 py-1 text-faint">{fmtTime(r.ts)}</td>
-                <td className="px-1.5 py-1 font-semibold text-fg">{r.underlying ?? '—'}</td>
-                <td className="tabular whitespace-nowrap px-1.5 py-1 text-muted">
-                  <span className="text-fg">{fmtStrike(r.strike)}</span>
-                  <span className="text-faint"> {fmtExpiry(r.expiry)}</span>
-                </td>
-                <td className={['px-1.5 py-1 font-semibold', r.type === 'P' ? 'text-down' : 'text-up'].join(' ')}>
-                  {r.type ?? '?'}
-                </td>
-                <td className="tabular whitespace-nowrap px-1.5 py-1 font-semibold">
-                  <SideCell r={r} />
-                </td>
-                <td
-                  className={[
-                    'px-1.5 py-1 font-semibold',
-                    r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-faint opacity-70',
-                  ].join(' ')}
-                  title={
-                    r.action
-                      ? undefined
-                      : r.side === 'mid'
-                        ? 'Filled between the bid and the ask — genuinely ambiguous, so no call is made'
-                        : REASON_TITLE[r.sideReason ?? 'pending'] ?? undefined
-                  }
-                >
-                  {r.action ?? (r.side === 'mid' ? 'n/a' : '—')}
-                </td>
-                <td className="tabular px-1.5 py-1 text-right text-muted">
-                  {r.dte === null ? '—' : r.dte}
-                </td>
-                <td className="tabular px-1.5 py-1 text-right text-muted">{fmtNum(r.size)}</td>
-                <td className="tabular px-1.5 py-1 text-right text-muted">{fmtPrice(r.price)}</td>
-                <td
-                  className={[
-                    'tabular px-1.5 py-1 text-right font-semibold',
-                    r.type === 'P' ? 'text-down' : 'text-up',
-                  ].join(' ')}
-                >
-                  {fmtPremium(r.premium)}
-                </td>
-                <td className="tabular px-1.5 py-1 text-right text-muted">{fmtNum(r.vol)}</td>
-                <td className="tabular px-1.5 py-1 text-right text-muted">{fmtNum(r.oi)}</td>
+                {cols.map((c) => (
+                  <td
+                    key={c.id}
+                    title={c.cellTitle ? c.cellTitle(r) : undefined}
+                    className={[
+                      'px-1.5 py-1',
+                      c.align === 'right' ? 'text-right' : 'text-left',
+                      c.nowrap ? 'whitespace-nowrap' : '',
+                      c.cellClass ? c.cellClass(r) : '',
+                    ].join(' ')}
+                  >
+                    {c.cell(r)}
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>

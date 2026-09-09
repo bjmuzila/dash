@@ -40,8 +40,8 @@ const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 //     lives in PublicNav where a logo belongs; the fold sells the trade.
 //   • The one CTA routed to /pricing. That asks for a purchase decision from
 //     someone who has seen a still image. It still routes there (that is where
-//     the trial starts) but it is now the FOURTH thing on the page instead of
-//     the first, and by then they have used the product for free.
+//     the purchase happens) but it is now the FOURTH thing on the page instead
+//     of the first, and by then they have used the product for free.
 //   • The Tradeify partner card sat in the visual centre in contrasting orange
 //     — the second-loudest thing on the page, monetising someone else's
 //     product, competing with our own offer. It is now a quiet strip at the
@@ -51,10 +51,17 @@ const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 //     whole pitch, given a footnote's weight. It is now section 2 with the
 //     row-level ledger under it.
 //
-// The 2-day trial length is deliberate and unchanged. It works BECAUSE the free
-// live panel exists: the visitor evaluates the tool before signing up, so the
-// two days get spent using it rather than deciding about it. Every CTA says
-// "No charge up front · Cancel anytime" so the shortness never reads alone.
+// ── 2026-09-09: NO FREE TRIAL ───────────────────────────────────────────────
+// The 2-day free trial is retired. Every CTA on this page now sells the
+// membership directly, and no copy anywhere may promise a trial, "no charge up
+// front", or a free period of any length — the checkout route
+// (app/api/stripe/checkout/route.ts) charges at sign-up, so that copy would be
+// a promise the product does not keep.
+//
+// What still carries the "try before you buy" weight is the FREE LIVE LEVEL
+// PANEL, which is unchanged and free forever: the visitor evaluates the tool on
+// the page before paying. Every CTA says "Cancel anytime" so the price never
+// reads alone.
 //
 // ── 2026-09-05: THE v3 THEME ────────────────────────────────────────────────
 // This page now draws on `components/landing/v3Theme.ts` — a transcription of
@@ -175,16 +182,16 @@ export default function LandingClient() {
               </p>
 
               <div style={ctaRow}>
-                <Link href="/pricing?from=landing&trial=1" style={ctaBtn} className="landing-cta">
-                  <span>Start your 2-day free trial</span>
-                  <span style={ctaSub}>No charge up front · Cancel anytime</span>
+                <Link href="/pricing?from=landing" style={ctaBtn} className="landing-cta">
+                  <span>Get full access</span>
+                  <span style={ctaSub}>$50/mo · Cancel anytime</span>
                 </Link>
                 <a href="#record" style={v3GhostButton} className="landing-ghost">See the record ↓</a>
               </div>
 
               <p style={ctaNote}>
                 The live level panel is <b style={{ color: V3.refresh, fontWeight: 700 }}>free forever</b>. No card, no email.
-                The trial unlocks history, rate of change, flow, alerts and every other page.
+                Membership unlocks history, rate of change, flow, alerts and every other page.
               </p>
             </div>
 
@@ -291,17 +298,17 @@ export default function LandingClient() {
           <div style={{ ...pad, textAlign: "center" }}>
             <h2 style={{ ...h2, maxWidth: "24ch" }}>Tomorrow&apos;s levels print at 9:30 ET.</h2>
             <p style={{ ...sectionLede, marginBottom: 22 }}>
-              You&apos;ve seen today&apos;s flip and the graded record, without an account. Two days is
-              all it takes to see whether the rest of it belongs on your screen.
+              You&apos;ve seen today&apos;s flip and the graded record, without an account. The rest of
+              it — history, rate of change, flow and alerts — is one click away.
             </p>
-            <Link href="/pricing?from=landing&trial=1" style={ctaBtn} className="landing-cta">
-              <span>Start your 2-day free trial</span>
-              <span style={ctaSub}>No charge up front · Cancel anytime</span>
+            <Link href="/pricing?from=landing" style={ctaBtn} className="landing-cta">
+              <span>Get full access</span>
+              <span style={ctaSub}>$50/mo · Cancel anytime</span>
             </Link>
-            <div style={trialLine}>
-              <span>✓ <b style={trialB}>Full access</b>, every page</span>
-              <span>✓ Cancel in <b style={trialB}>one click</b></span>
-              <span>✓ Free live level <b style={trialB}>stays free</b> either way</span>
+            <div style={benefitLine}>
+              <span>✓ <b style={benefitB}>Full access</b>, every page</span>
+              <span>✓ Cancel in <b style={benefitB}>one click</b></span>
+              <span>✓ Free live level <b style={benefitB}>stays free</b> either way</span>
             </div>
             <Link href="/sign-in" style={signInLink}>Already a member? Sign in</Link>
           </div>
@@ -500,7 +507,7 @@ const freeTool: React.CSSProperties = {
   marginTop: 0,
 };
 
-const trialLine: React.CSSProperties = {
+const benefitLine: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 18,
@@ -511,7 +518,7 @@ const trialLine: React.CSSProperties = {
   color: V3.fg,
 };
 
-const trialB: React.CSSProperties = { color: V3.refresh, fontWeight: 700 };
+const benefitB: React.CSSProperties = { color: V3.refresh, fontWeight: 700 };
 
 const signInLink: React.CSSProperties = {
   display: "block",

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { BRAND_LOGO_SRC } from "@/lib/brand";
 import UserMenu from "./UserMenu";
+import SectionSubStrip from "./SectionSubStrip";
 import { LEGACY_NAV, V3_NAV, v3Href } from "@/lib/v3Routes";
 import { V3_CHROME as C, V3_DIM, V3_RADIUS, V3_TEXT } from "./v3Chrome";
 
@@ -24,10 +25,23 @@ import { V3_CHROME as C, V3_DIM, V3_RADIUS, V3_TEXT } from "./v3Chrome";
 //
 // WHAT IT DELIBERATELY DROPS from GlobalToolbar: the hamburger NavMenu, the
 // live ToolbarTicker + quotes dropdown, the Bzila alert bell, the GEX and Notes
-// dock handles, the section sub-strips. Every one of those is a WORKING
-// surface, and working happens in v3 now — v3's own toolbar has its ticker
-// picker, its notes dock and its camera. Reproducing them here would be a
-// second copy of each to keep alive for a wing that is shrinking on purpose.
+// dock handles. Every one of those is a WORKING surface, and working happens in
+// v3 now — v3's own toolbar has its ticker picker, its notes dock and its
+// camera. Reproducing them here would be a second copy of each to keep alive
+// for a wing that is shrinking on purpose.
+//
+// WHAT IT KEEPS FROM GlobalToolbar, and had to get back (2026-09-09): the
+// SECTION SUB-STRIP. It was dropped with the rest of the working chrome, and
+// that broke the two pages the legacy wing exists FOR. Test Lab and Scanner
+// have no on-page tab bar — their tab strips were promoted into the toolbar
+// (components/shared/sectionNav.ts), so the page renders only `defaultTab` and
+// has no way to reach the other ten. Landing on /app/test from v3's Legacy page
+// gave the Squeeze board and nothing else: no tabs, no links, no Strike History
+// or Levels. A bench page whose bench is unreachable is not a legacy page, it is
+// a broken one. So the strip is mounted here, always expanded — there is no
+// section circle on this bar to toggle it from, and a strip you cannot open is
+// the bug again. It renders null on every route outside a section, so the bar is
+// unchanged everywhere else.
 //
 // WHAT IT KEEPS: the brand, the ET clock and the account menu (UserMenu, the
 // real one — sign out, billing, Discord, owner hub). Those are not v2 features,
@@ -295,7 +309,9 @@ function BackToV3() {
   );
 }
 
-export default function V3LegacyToolbar() {
+/** The 44px bar itself. Wrapped by the default export below, which adds the
+ *  section sub-strip underneath it. */
+function Bar() {
   return (
     <header
       style={{
@@ -390,5 +406,26 @@ export default function V3LegacyToolbar() {
       </span>
       <UserMenu />
     </header>
+  );
+}
+
+export default function V3LegacyToolbar() {
+  return (
+    // Two rows of chrome, one flex child: ShellInner lays its children out in a
+    // column and gives the page `flex:1`, so the bar and the strip have to
+    // arrive as a single non-shrinking block or the strip would eat page height.
+    //
+    // z-index 40 moves out here from the header (which keeps its own 40 INSIDE
+    // this context, so it still paints over the strip's 0 — that ordering is
+    // what SectionSubStrip's own note relies on, and what keeps the account and
+    // Legacy dropdowns above the pills).
+    <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, position: "relative", zIndex: 40 }}>
+      <Bar />
+      {/* `open` is hardcoded, not state: GlobalToolbar toggles the strip from the
+          section's circle in its nav row, and this bar has no such circle — its
+          nav goes to v3. Nothing here could reopen it, so it never closes. On any
+          route outside a section this renders null. */}
+      <SectionSubStrip open />
+    </div>
   );
 }

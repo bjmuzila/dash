@@ -16,8 +16,11 @@
  * supplies the numbers and what to label.
  *
  * ── THE WINDOW, AND WHAT THE BAR SCALE IS NORMALISED OVER ───────────────────
- * `VIEW_HALF` (±60) is what renders; the panel scrolls, so the extra rows cost
- * nothing until you go looking for a wall, which is exactly when you want them.
+ * `VIEW_HALF` (±20) is what renders — 41 rows, spot dead centre with twenty
+ * strikes of book on each side. The panel still scrolls, so the window is a
+ * viewport and not a crop, but it is deliberately tight: a ladder that only
+ * ever shows the strikes that can actually trade today reads at a glance,
+ * where ±60 buried the near-money picture in a hundred rows of tail.
  *
  * The bar scale is normalised over THAT SAME WINDOW — every row you can scroll
  * to — so exactly one positive bar and one negative bar reach the full half
@@ -45,7 +48,7 @@
  * below 0 or above `scrollHeight - clientHeight`. Without room past the ends of
  * the ladder, a spot within ~11 rows of either END has NO scroll position that
  * centres it, so the write is clamped and spot renders high or low in the card.
- * That is not an edge case: the window is spot ±60 STRIKES of whatever the
+ * That is not an edge case: the window is spot ±20 STRIKES of whatever the
  * chain lists, clamped to the ends of that chain, so a board that thins out a
  * few strikes above the money opens with spot near the top and nothing to
  * scroll. Sizing the box to its content did the same from the other side — a
@@ -74,8 +77,16 @@ export const PROFILE_VIEW_H = 440;
 /** Half a viewport of room above the first strike and below the last. */
 export const PROFILE_PAD = (PROFILE_VIEW_H - PROFILE_ROW_H) / 2;
 
-/** ±60 strikes: the window that renders, and the window the scale is taken over. */
-const VIEW_HALF = 60;
+/**
+ * ±20 strikes — 41 rows, spot in the middle. This is both the window that
+ * renders AND the window the bar scale is taken over, so the longest bar you
+ * can scroll to is exactly the number printed on the axis.
+ *
+ * 40 rows was the ask; 41 is what gets drawn, because a row-count with spot
+ * genuinely centred has to be odd — spot's own row plus an equal number above
+ * and below it. An even count puts spot half a row off centre forever.
+ */
+const VIEW_HALF = 20;
 
 /** Nearest listed strike to a price, or null when there is nothing to pick. */
 function nearestStrike(strikes: number[], px: number): number | null {
@@ -168,11 +179,11 @@ export default function GexProfile({
    * was. It used to try to tell them apart by remembering the scrollTop it had
    * written, and that broke on the case that matters most:
    *
-   *   switch symbol → the old ladder's 121 rows are replaced by an empty one
+   *   switch symbol → the old ladder's rows are replaced by an empty one
    *   → the browser CLAMPS scrollTop from 1,140 to 0 and fires a scroll event
    *   → that event matches neither guard, so the panel un-pinned itself
    *   → the new symbol's board then loaded and was never centred, opening
-   *     sixty strikes above the money with "back to spot" already showing.
+   *     at the top of the window with "back to spot" already showing.
    *
    * Which is exactly what AMD did. Content collapsing, a resize, a zoom and our
    * own centring write all produce that same "unexplained" scroll event.

@@ -63,7 +63,7 @@ export default function SeasonalityPublicPage() {
         fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
       }}
     >
-      {/* Shared public toolbar — carries its own trial CTA and Sign in. */}
+      {/* Shared public toolbar — carries its own access CTA and Sign in. */}
       <PublicNav active="Features" />
 
       <main
@@ -116,12 +116,12 @@ export default function SeasonalityPublicPage() {
             <div style={{ fontSize: 13.5, lineHeight: 1.5, marginBottom: 10 }}>
               <b style={{ fontSize: 14.5 }}>This page is history. The dashboard is today.</b>
               <br />
-              Live SPX gamma, flip levels and option flow. <b style={{ color: T.cyan }}>2 days free</b>, then
-              $45/month, one tier, cancel anytime.
+              Live SPX gamma, flip levels and option flow. <b style={{ color: T.cyan }}>$50/month</b>, one tier,
+              cancel anytime.
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <Link href="/pricing?from=seasonality&trial=1" style={ctaPrimary}>
-                Start my 2-day free trial →
+              <Link href="/pricing?from=seasonality" style={ctaPrimary}>
+                Get full access →
               </Link>
               <Link href="/sign-in?from=seasonality" style={ctaQuiet}>
                 Sign in
@@ -146,8 +146,8 @@ export default function SeasonalityPublicPage() {
               </p>
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Link href="/pricing?from=seasonality-footer&trial=1" style={ctaPrimary}>
-                Start my 2-day free trial →
+              <Link href="/pricing?from=seasonality-footer" style={ctaPrimary}>
+                Get full access →
               </Link>
               <Link href="/" style={ctaGhost}>
                 What is CB Edge?
