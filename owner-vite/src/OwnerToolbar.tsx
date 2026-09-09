@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { OWNER_THEME, rgba } from "./lib/theme";
+import BotAlertButton from "./components/BotAlertButton";
 
 /**
  * OwnerToolbar — the universal top bar for the owner app. Mounted once in
@@ -90,6 +91,12 @@ export default function OwnerToolbar() {
       >
         {clock} ET
       </span>
+
+      {/* BOT — broadcast a trade alert without leaving the page you are on.
+          The BOT page is one click away in the sidebar, so this is not about
+          reach; it is about not losing your place in a report to fire one.
+          No owner check: AuthGate already blocks this whole app. */}
+      <BotAlertButton />
 
       {/* Dashboard → V3 (2026-09-04). This was /home, the v2 SPA's landing
           board. v2 and v3 run side by side with no cutover day, so nothing

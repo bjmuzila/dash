@@ -510,16 +510,25 @@ export function GexCandlesCard({
    */
   const [replayDay, setReplayDay] = useState('')
   /**
-   * 🔒 Axis — hold the price window and the visible bar range still while the
-   * cursor moves. See ReplayLock in design/primitives/ReplayDock.tsx for why
-   * every replay surface carries this, and `axisLocked` in chart.ts for what it
-   * takes to hold a lightweight-charts pane in place across a `setData`.
+   * 🔒 Axis — hold the pane still while the cursor moves. See ReplayLock in
+   * design/primitives/ReplayDock.tsx for why every replay surface carries this,
+   * and `axisLocked` in chart.ts for how the price half is done.
    *
-   * Reset with the transport (below), not held across it: a frozen price window
-   * from Tuesday's session is not a view anyone wants to come back to on
-   * Thursday's.
+   * ── ON BY DEFAULT, on this surface only ────────────────────────────────────
+   * The other four replay tabs open unlocked, because on a ladder the unlocked
+   * behaviour is merely busy. Here it is the thing everyone hits first: a
+   * candle chart that opens rewound to 09:30 has one bar of price range, and
+   * every step of the scrubber re-derives the axis from however much of the day
+   * has been revealed. The chart visibly grows and re-scales all the way to the
+   * close, which is unusable for the one job replay has — watching a level hold
+   * or break. Locked, the pane is the whole session from the first bar and only
+   * the candles change. The button is right there to turn it off.
+   *
+   * Re-armed rather than cleared when the subject changes (below): the default
+   * is the default every time you enter replay or pick another session, not
+   * only on the first one.
    */
-  const [axisLock, setAxisLock] = useState(false)
+  const [axisLock, setAxisLock] = useState(true)
 
   const patch = useCallback(
     (p: Partial<ChartSettings>) => {
@@ -970,7 +979,41 @@ export function GexCandlesCard({
   //
   // `replayOn &&`: the lock is a replay control. Leaving replay must hand the
   // live chart its autoscale back even if the button was left pressed.
-  useEffect(() => apply((h) => h.setAxisLock(replayOn && axisLock)), [replayOn, axisLock, apply])
+  /**
+   * The price span of the WHOLE session being replayed — the day's low to its
+   * high, off `dayBars`, which is the UNCLIPPED tape for `activeDay`.
+   *
+   * This is the number the chart cannot work out for itself: the series only
+   * ever holds the bars up to the cursor, so anything derived from it would be
+   * the range of the part of the day that has been revealed. Null live, and null
+   * on a day with no bars, which the handle reads as "keep what you have".
+   */
+  const replayPriceRange = useMemo(() => {
+    if (!replayOn || !dayBars.length) return null
+    let min = Infinity
+    let max = -Infinity
+    for (const b of dayBars) {
+      if (b.l < min) min = b.l
+      if (b.h > max) max = b.h
+    }
+    // A session with one flat bar would hand over a zero-width range, and a
+    // zero-width price range is a pane the library cannot lay out.
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null
+    return { min, max }
+  }, [replayOn, dayBars])
+
+  // BEFORE the setBars effect: the lock has to be in force on the chart by the
+  // time the clipped bars arrive, or the first frame of a replay still scales
+  // itself to the opening bar. Effects flush in source order, so this ordering
+  // is the mechanism and not a comment about one — the same reason
+  // setIntervalMs sits above setBars.
+  //
+  // `replayOn &&`: the lock is a replay control. Leaving replay must hand the
+  // live chart its own autoscale back even though the button defaults pressed.
+  useEffect(
+    () => apply((h) => h.setAxisLock(replayOn && axisLock, replayPriceRange)),
+    [replayOn, axisLock, replayPriceRange, apply],
+  )
 
   useEffect(() => {
     const reframe = viewKey !== framedRef.current
@@ -1357,7 +1400,7 @@ export function GexCandlesCard({
               setReplayPlaying(false)
               setReplayDay('')
               setReplayMs(0)
-              setAxisLock(false)
+              setAxisLock(true)
               setReplayOn((v) => !v)
             }}
             title="Scrub a recorded session — the candles, the GEX bubbles and the rail all clip to one cursor, and the bar picks which day. Off = live."
@@ -1552,9 +1595,10 @@ export function GexCandlesCard({
               onChange={(e) => {
                 setReplayPlaying(false)
                 setReplayMs(0)
-                // A price window frozen on one session means nothing on the
-                // next — different range, possibly a different gap.
-                setAxisLock(false)
+                // Back to the default for the new session. A re-arm, not a
+                // clear: the locked range is derived from whichever day is on
+                // screen, so it follows the picker on its own.
+                setAxisLock(true)
                 setReplayDay(e.target.value)
               }}
               disabled={sessionDays.length === 0}
@@ -1661,16 +1705,17 @@ export function GexCandlesCard({
               ))}
             </span>
 
-            {/* Stepping back and forth over the same ten minutes is the whole
-                use of ◀ / ▶, and autoscale re-deriving the price window on every
-                step is what made a level that had not moved appear to slide. */}
+            {/* PRESSED BY DEFAULT here, unlike the other four replay tabs — see
+                the note on `axisLock`. Rendered anyway rather than hidden: the
+                default is a default, and the one thing worse than a chart that
+                rescales is a chart that will not. */}
             <ReplayLock
               on={axisLock}
               onClick={() => setAxisLock((v) => !v)}
               title={
                 axisLock
-                  ? 'Axis locked — the price window and the visible bars stay put while you scrub. Click to let the chart autoscale again.'
-                  : 'Lock the axis — freeze the price window and the visible bars so only the candles change as you rewind and fast-forward.'
+                  ? "Axis locked (the default here) — the pane is the whole session's range, so only the candles change as you scrub. Click to let the chart autoscale to the revealed bars instead."
+                  : "Lock the axis — hold the pane on the whole session’s range so it stops re-scaling as you rewind and fast-forward."
               }
             />
 
@@ -1682,7 +1727,7 @@ export function GexCandlesCard({
                 setReplayPlaying(false)
                 setReplayDay('')
                 setReplayMs(0)
-                setAxisLock(false)
+                setAxisLock(true)
                 setReplayOn(false)
               }}
               title="Leave replay and return to the live chart"

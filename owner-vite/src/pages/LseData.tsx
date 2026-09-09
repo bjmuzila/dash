@@ -597,6 +597,29 @@ function parseOsi(osi: string): { root: string; expiry: string; strike: string; 
   };
 }
 
+/**
+ * The dollar premium of a flow print.
+ *
+ * Read through candidate column names rather than trusting one: the tape's rows
+ * are not a fixed shape, and a missing column would score every print 0, leave
+ * the sort in tape order, and present that as a ranking — a wrong answer that
+ * looks exactly like a right one.
+ */
+const PREMIUM_KEYS = [
+  "premium", "total_premium", "premium_usd", "trade_premium",
+  "notional", "dollar_volume", "value",
+];
+
+function rowPremium(r: Row): number {
+  for (const k of PREMIUM_KEYS) {
+    const v = r[k];
+    if (v === undefined || v === null || v === "") continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+}
+
 /** Cells: numbers get thousands separators, ISO stamps get trimmed, rest clipped. */
 function fmt(v: unknown): string {
   if (v === null || v === undefined) return "—";
@@ -832,7 +855,13 @@ export default function LseData() {
           if (flStart.trim()) p.set("start", flStart.trim());
           if (flEnd.trim()) p.set("end", flEnd.trim());
         }
-        if (flTop) p.set("top", flTop);
+        if (flTop) {
+          p.set("top", flTop);
+          // The widest single call the vault allows, so that on a server build
+          // that does not know `top` yet the tab still has the largest possible
+          // pool to rank instead of one default-sized page of it.
+          p.set("limit", "5000");
+        }
         // `top` already walks the tape to rank it; sending all=1 as well would
         // only ask the server to do the same walk under a second name.
         else if (flAll) p.set("all", "1");
@@ -887,7 +916,25 @@ export default function LseData() {
       const r = await fetch(`${path}?${params}`, { credentials: "include" });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      const got: Row[] = Array.isArray(j.rows) ? j.rows : [];
+      let got: Row[] = Array.isArray(j.rows) ? j.rows : [];
+
+      // RANK HERE TOO, not only on the server.
+      //
+      // The server's `top` walks the whole window and is the real answer — but
+      // a build that predates it simply ignores the parameter and replies in
+      // tape order (newest first). That arrives looking like a ranking, and a
+      // ranking that is silently just "the most recent prints" is the one
+      // failure this control cannot have. Sorting here is a no-op when the
+      // server did rank (the rows already arrive in this order) and rescues the
+      // list when it did not. `scanned` is only ever sent by the ranking path,
+      // so it is what tells the two apart for the meta line.
+      const rankN = tab === "flow" ? Number(flTop) || 0 : 0;
+      const serverRanked = typeof j.scanned === "number";
+      const returned = got.length;
+      if (rankN > 0) {
+        got = [...got].sort((a, b) => rowPremium(b) - rowPremium(a)).slice(0, rankN);
+      }
+
       setRows(got);
       const bits = [`${got.length.toLocaleString("en-US")} rows`];
       if (typeof j.total === "number" && j.total !== got.length) {
@@ -896,13 +943,19 @@ export default function LseData() {
       if (j.start) bits.push(`from ${String(j.start).slice(0, 10)}`);
       if (j.truncated) bits.push("preview capped — use Download CSV for everything");
       if (j.note) bits.push(String(j.note));
+      if (rankN > 0 && !serverRanked) {
+        bits.push(
+          `ranked by premium in this tab, from the ${returned.toLocaleString("en-US")} prints this call returned` +
+          " — the server build has no top-N yet, so redeploy for a ranking across the whole tape (and for a ranked CSV)",
+        );
+      }
       setMeta(bits.join(" · "));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [request, tab]);
+  }, [request, tab, flTop]);
 
   /**
    * Same URL plus format=csv, handed to the browser. A plain navigation keeps

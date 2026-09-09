@@ -256,12 +256,14 @@ export interface EsChartHandle {
   /** Re-frame on the newest bar, keeping the user's zoom. */
   scrollToNow: () => void
   /**
-   * Freeze (or release) the price axis and the visible bar range.
+   * Hold the pane still while the replay cursor moves.
    *
-   * The replay transport's 🔒 Axis button. See `axisLocked` in the mount body
-   * for what each half of that actually costs to hold still.
+   * `range` is the price span the pane should show for the WHOLE session being
+   * replayed — the card has the unclipped day and the chart does not. Passing
+   * null keeps whatever range was last handed over. See `axisLocked` in the
+   * mount body for why it is a range rather than a freeze.
    */
-  setAxisLock: (on: boolean) => void
+  setAxisLock: (on: boolean, range?: { min: number; max: number } | null) => void
   destroy: () => void
 }
 
@@ -383,7 +385,52 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     autoSize: true,
   })
 
+  /**
+   * ── AXIS LOCK ──────────────────────────────────────────────────────────────
+   *
+   * The replay transport's 🔒 Axis button. Two independent things drift while a
+   * rewound chart is scrubbed, and this stops both:
+   *
+   *   • the PRICE axis. Replay hands `setBars` a list CLIPPED to the cursor, so
+   *     autoscale re-derives the window from however much of the day has been
+   *     revealed — at 09:35 that is one candle's worth of range, by 15:00 it is
+   *     the whole day, and every step in between rescales the pane. A level that
+   *     has not moved appears to slide, which on a screen recording reads as the
+   *     market moving rather than the frame.
+   *
+   *   • the TIME axis. A `setData` with a different bar count can leave the
+   *     visible logical range somewhere else — that is what `reanchorIfStranded`
+   *     exists for. Locked, the range is read before the write and put back
+   *     after it, so the same bars stay under the same pixels.
+   *
+   * ── The price half is a RANGE, not a freeze ────────────────────────────────
+   * The obvious implementation is `autoScale: false`, and it is wrong: it pins
+   * whatever window happened to be showing when the button went on, which for a
+   * replay that opens rewound to 09:30 is the first bar's few points. The rest
+   * of the session then runs straight off the pane.
+   *
+   * So the card hands over the range of the WHOLE session being replayed and
+   * `autoscaleInfoProvider` returns it for every frame. Autoscale stays ON — the
+   * provider is only consulted while it is — and the day fits the pane from the
+   * first bar to the last, unmoving. The provider is installed once, here, and
+   * reads the two mutable values below, so nothing has to re-apply options as
+   * the lock goes on and off.
+   *
+   * scaleMargins still apply on top of what the provider returns, so the day's
+   * high and low get the same breathing room autoscale would have given them.
+   */
+  let axisLocked = false
+  let lockedPriceRange: { min: number; max: number } | null = null
+
   const series: ISeriesApi<'Candlestick'> = chart.addSeries(CandlestickSeries, {
+    // See the AXIS LOCK block above. Unlocked — which is every live chart and
+    // every board card — this is `original()` and costs one call per autoscale.
+    // `original` is contextually typed by the series options — deliberately not
+    // annotated here, so this keeps compiling against the library's own shape.
+    autoscaleInfoProvider: (original) =>
+      axisLocked && lockedPriceRange
+        ? { priceRange: { minValue: lockedPriceRange.min, maxValue: lockedPriceRange.max } }
+        : original(),
     upColor: up,
     downColor: down,
     borderVisible: true,
@@ -484,30 +531,6 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   let synth: FormingBar | null = null
   let intervalMs = 5 * 60_000
 
-  /**
-   * ── AXIS LOCK ──────────────────────────────────────────────────────────────
-   *
-   * Set by the replay transport's 🔒 Axis button. While it is on, the pane must
-   * hold EXACTLY where it is as the cursor moves, and there are two independent
-   * ways it would otherwise drift:
-   *
-   *   • the PRICE axis. Replay hands `setBars` a list clipped to the cursor, so
-   *     every step adds or removes bars — and autoscale re-derives the price
-   *     window from whatever is now visible. Stepping across one big candle
-   *     therefore rescales the whole pane, and a level that has not moved
-   *     appears to slide. `autoScale: false` freezes the window lightweight-
-   *     charts last computed, which is the one showing when the lock went on.
-   *
-   *   • the TIME axis. A `setData` with a different bar count can leave the
-   *     visible logical range somewhere else (that is what `reanchorIfStranded`
-   *     exists for). Locked, the range is read before the write and put back
-   *     after it, so the same bars stay under the same pixels.
-   *
-   * A REFRAME still wins — a symbol, interval or session change means the view
-   * the lock was holding is about to be meaningless — so the lock only gates
-   * the non-reframe path.
-   */
-  let axisLocked = false
 
   /**
    * Every bar's open, in ms, ascending — the SAME list the series was given,
@@ -1496,18 +1519,25 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         }
       }
     },
-    setAxisLock(on) {
-      if (axisLocked === on) return
+    setAxisLock(on, range) {
+      const nextRange = on ? (range ?? lockedPriceRange) : null
+      const same =
+        axisLocked === on &&
+        nextRange?.min === lockedPriceRange?.min &&
+        nextRange?.max === lockedPriceRange?.max
+      if (same) return
       axisLocked = on
-      // Turning autoscale OFF freezes the price window at whatever it is right
-      // now — which is the window the user was looking at when they pressed the
-      // button, and the whole point. Turning it back ON re-derives immediately,
-      // so releasing the lock snaps to the current cursor's own range rather
-      // than waiting for the next poll.
+      lockedPriceRange = nextRange
+      // Autoscale must be ON for the provider to be asked at all — and a manual
+      // drag of the price axis turns it off permanently, so a chart the user had
+      // dragged before pressing the button would ignore the lock entirely.
+      // Re-asserting it here also re-derives immediately on RELEASE, so letting
+      // go snaps to the current cursor's own range instead of waiting for the
+      // next poll.
       try {
-        series.priceScale().applyOptions({ autoScale: !on })
+        series.priceScale().applyOptions({ autoScale: true })
       } catch {
-        /* the scale is gone; the flag still gates the time axis below */
+        /* the scale is gone; the flag still gates the time axis */
       }
     },
     destroy() {

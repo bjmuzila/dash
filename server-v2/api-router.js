@@ -2024,6 +2024,52 @@ register('/api/discord-share', {
     return buf;
   }
 
+  // ── The analysis block ─────────────────────────────────────────────────
+  // The thesis sits BELOW the trade details, which is not free: an embed's
+  // `description` always renders ABOVE its fields and there is no ordering
+  // control, so the analysis has to stop being the description and become a
+  // full-width field of its own.
+  //
+  // That swap costs something worth knowing: a description holds 4096
+  // characters, a field VALUE holds 1024. Silently truncating a thesis at 1024
+  // is not acceptable — the cut-off half is usually the reasoning — so a long
+  // one is split across consecutive fields, breaking on a paragraph or line
+  // boundary where it can. Only the first carries the heading, so it reads as
+  // one continuous block.
+  //
+  // The separator is SPACE, not a drawn line. A rule inside an embed can only
+  // be characters, and characters cannot know the card's width — so it wraps or
+  // falls short depending on the reader's window, which is a line that is
+  // sometimes wrong rather than a line. A zero-width field name gives an empty
+  // row instead: real vertical space, correct at every width, on every client.
+  const GAP = '\u200b';
+  const FIELD_MAX = 1024;
+  const ANALYSIS_HEAD = '**📝 Analysis**\n';
+
+  function analysisFields(text) {
+    if (!text) return [];
+    const out = [];
+    let rest = text;
+    let first = true;
+    while (rest.length) {
+      // Room for the heading on the first chunk only.
+      const room = FIELD_MAX - (first ? ANALYSIS_HEAD.length : 0) - 8;
+      if (rest.length <= room) {
+        out.push({ name: GAP, value: (first ? ANALYSIS_HEAD : '') + rest, inline: false });
+        break;
+      }
+      // Prefer a paragraph break, then a line break, then a space — cutting a
+      // thesis mid-word is the tell that a machine did it.
+      const window = rest.slice(0, room);
+      const at = Math.max(window.lastIndexOf('\n\n'), window.lastIndexOf('\n'), window.lastIndexOf(' '));
+      const cut = at > room * 0.5 ? at : room;
+      out.push({ name: GAP, value: (first ? ANALYSIS_HEAD : '') + rest.slice(0, cut), inline: false });
+      rest = rest.slice(cut).replace(/^\s+/, '');
+      first = false;
+    }
+    return out;
+  }
+
   /**
    * Draft -> Discord embed. Layout A. Every field is optional-safe: an empty
    * strike or price is OMITTED rather than rendered as a blank row, because a
@@ -2048,9 +2094,12 @@ register('/api/discord-share', {
     if (color != null) embed.color = color;
 
     if (cls === 'notes') {
-      // No author row. The title alone says what this is, and "NOTE" above
-      // "📝 Analysis" was the same word twice in two type sizes.
+      // No author row, and the thesis stays the DESCRIPTION here: a Note has no
+      // trade details to sit under, so there is nothing to separate it from —
+      // and the description's 4096 characters beat a field's 1024 for the one
+      // post type that is only words.
       embed.title = '📝 Analysis';
+      if (notes) embed.description = notes;
     } else {
       embed.author = { name: `${cls.toUpperCase()} ALERT` };
       const head = [ACTION_EMOJI[action], ACTION_LABEL[action], '·', ticker];
@@ -2066,10 +2115,10 @@ register('/api/discord-share', {
         fields.push({ name: 'Strike', value: `${strike} ${right === 'C' ? 'Call' : 'Put'}`, inline: true });
       }
       if (cls === 'options' && expiry) fields.push({ name: 'Expiry', value: expiry, inline: true });
+      // Gap, heading, thesis — last, so it reads under the numbers.
+      fields.push(...analysisFields(notes));
       if (fields.length) embed.fields = fields;
     }
-
-    if (notes) embed.description = notes;
     if (hasImage) embed.image = { url: 'attachment://chart.png' };
     return embed;
   }
