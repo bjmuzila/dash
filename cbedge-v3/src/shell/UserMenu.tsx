@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/data/auth'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -10,17 +11,23 @@ import { useAuth } from '@/data/auth'
 // non-negotiable 1 (no colour literal outside tokens.css) applies here like
 // everywhere else. Nothing below names a colour.
 //
-// ── Every link is a NATIVE <a>, on purpose ───────────────────────────────────
+// ── Almost every link is a NATIVE <a>, on purpose ────────────────────────────
 // v3's router runs with basename="/v3". A <NavLink to="/docs"> would resolve to
 // /v3/docs — which is not a v3 route and, by App.tsx's no-catch-all rule, would
-// render NotFound rather than the real Next page. These destinations are all
-// top-level Next routes OUTSIDE the SPA, so they need a real navigation. This
-// is the exact bug v2's UserMenu carries three separate comments about; it is
-// cheaper to state the rule once here: nothing in this file uses the router.
+// render NotFound rather than the real Next page. Those destinations are
+// top-level Next routes OUTSIDE the SPA, so they need a real navigation. This is
+// the exact bug v2's UserMenu carries three separate comments about.
+//
+// THE TWO EXCEPTIONS ARE FEEDBACK. /feedback was ported into v3 on 2026-09-09
+// (src/pages/Feedback.tsx), so it is now an in-app route and the rule inverts
+// for it: a native <a href="/v3/feedback"> would be a full document load that
+// reboots the whole SPA to reach a page that is already in the bundle. Those two
+// rows navigate. Everything else in this file still leaves.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Feedback is NOT in here any more — it is a v3 route now and gets its own row
+// below, which navigates instead of leaving.
 const INFO_LINKS: { href: string; label: string }[] = [
-  { href: '/feedback', label: 'Feedback & Support' },
   { href: '/docs', label: 'Help & Docs' },
   { href: '/disclaimer', label: 'Disclaimer' },
   { href: '/risk-disclosure', label: 'Risk Disclosure' },
@@ -31,8 +38,10 @@ const INFO_LINKS: { href: string; label: string }[] = [
 const STRIPE_PORTAL = 'https://billing.stripe.com/p/login/dR6cNfd9J3zE84U4gg'
 const OWNER_HUB = 'https://owner.cbedge.net'
 
+/** In-SPA paths (no /v3 prefix — the router's basename supplies it). */
+const FEEDBACK_PATH = '/feedback'
 /** Deep-links straight to the ticket list rather than the new-ticket form. */
-const TICKETS_HREF = '/feedback?tab=mine'
+const TICKETS_PATH = '/feedback?tab=mine'
 const TICKET_POLL_MS = 60_000
 
 interface DiscordStatus {
@@ -51,12 +60,20 @@ function Divider() {
 export function UserMenu() {
   const { user, displayName, isPaid, isOwner, signOut } = useAuth()
   const canUseDiscord = isPaid || isOwner
+  const navigate = useNavigate()
 
   const [open, setOpen] = useState(false)
   const [resetSent, setResetSent] = useState(false)
   const [discord, setDiscord] = useState<DiscordStatus>({ connected: false })
   const [unread, setUnread] = useState(0)
   const ref = useRef<HTMLDivElement | null>(null)
+
+  // The two feedback rows. Both close the menu first — a route change under an
+  // open dropdown leaves it hanging over the page it just navigated to.
+  const goFeedback = (to: string) => {
+    setOpen(false)
+    navigate(to)
+  }
 
   useEffect(() => {
     if (!user) return
@@ -238,8 +255,9 @@ export function UserMenu() {
 
           <Divider />
 
-          <a
-            href={TICKETS_HREF}
+          <button
+            type="button"
+            onClick={() => goFeedback(TICKETS_PATH)}
             className={[
               ROW,
               'flex items-center justify-between gap-2',
@@ -252,7 +270,11 @@ export function UserMenu() {
                 {unread > 99 ? '99+' : unread}
               </span>
             )}
-          </a>
+          </button>
+
+          <button type="button" onClick={() => goFeedback(FEEDBACK_PATH)} className={ROW}>
+            {'Feedback & Support'}
+          </button>
 
           {INFO_LINKS.map((it) => (
             <a key={it.href} href={it.href} className={ROW}>

@@ -78,6 +78,18 @@ const LevelLog = lazy(() => import('@/pages/LevelLog'))
 // fetch, no socket. Delete an entry there the day its v3 route lands.
 const Legacy = lazy(() => import('@/pages/Legacy'))
 
+// /feedback — support tickets, ported from the Next page at /feedback on
+// 2026-09-09. NOT IN THE RAIL, and that is the one deliberate departure from the
+// four-step rule below: the rail is trading surfaces, and support is reached the
+// way it always was, from the account menu (shell/UserMenu.tsx, which now points
+// at /v3/feedback rather than out to the Next page). An icon for it would push a
+// working destination out of the rail to save a customer one click a quarter.
+//
+// The Next page stays where it is — it is what the v2 wing's account menu links
+// to — so this is a second front end on the same /api/feedback routes, exactly
+// like the owner inbox is a third.
+const Feedback = lazy(() => import('@/pages/Feedback'))
+
 // /seasonality — THE ALMANAC. Ported from v2's /explore/seasonality 2026-09-07:
 // 98 years of SPX daily closes, plus the event studies built on the same record
 // (FOMC, Jackson Hole, opex, earnings, every Apple keynote since 2007). The
@@ -151,6 +163,10 @@ export default function App() {
             <Route path="/level-log" element={<LevelLog />} />
             <Route path="/seasonality" element={<Seasonality />} />
             <Route path="/legacy" element={<Legacy />} />
+            {/* Support. The tab and the open ticket live in the query string, so
+                /v3/feedback?tab=mine&ticket=12 is a real link — which is what
+                the account menu's unread badge points at. */}
+            <Route path="/feedback" element={<Feedback />} />
 
             {/* ── The phone build ────────────────────────────────────────────
                 Adding a tab is TWO edits: MOBILE_TABS in

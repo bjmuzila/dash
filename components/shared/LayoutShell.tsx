@@ -21,10 +21,18 @@ const BARE_ROUTES = ["/", "/sign-in", "/sign-up", "/explore", "/pricing", "/term
 
 // Next routes that wear V3LegacyToolbar instead of GlobalToolbar.
 //
-// These are support//chrome pages a customer reaches FROM the dashboard, and the
-// dashboard's bar is v3's now — landing on the old v2 toolbar reads as having
-// been dropped into a different product. The page itself is unchanged; only the
-// bar above it is. Prefix-matched, so /feedback/anything follows.
+// /feedback is support chrome reached FROM a dashboard page, and every dashboard
+// page wears v3's bar now — landing on the old v2 toolbar mid-conversation reads
+// as having been dropped into a different product.
+//
+// SINCE 2026-09-09 THIS IS THE FALLBACK, not the main path: /feedback was ported
+// into v3 (cbedge-v3/src/pages/Feedback.tsx, served at /v3/feedback) and v3's
+// account menu links there, so a customer inside v3 never arrives here. What
+// still does is the v2 wing — its account menu points at this page, and those
+// pages wear V3LegacyToolbar, which is exactly what this line gives it.
+//
+// The page itself is unchanged; only the bar above it is. Prefix-matched, so
+// /feedback/anything follows.
 const V3_CHROME_ROUTES = ["/feedback"];
 
 // Turn a pathname into a stable key + readable label for Page Activity, so every
