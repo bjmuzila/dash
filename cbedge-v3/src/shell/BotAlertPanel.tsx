@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { DatePicker } from '@/design/primitives/DatePicker'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE BOT DROPDOWN — the full composer, in the toolbar.
@@ -38,6 +39,15 @@ const ACTIONS: { id: TradeAction; label: string }[] = [
   { id: 'trim', label: 'Trim' },
   { id: 'average-down', label: 'Avg Down' },
 ]
+
+/** What the price box IS on this action — the server labels the embed field to
+ *  match. "Entry" on a sell reads as an instruction to buy at that price. */
+const PRICE_LABEL: Record<TradeAction, string> = {
+  buy: 'Buy price',
+  sell: 'Sell price',
+  trim: 'Trim price',
+  'average-down': 'Added at',
+}
 
 // ── NO COLOUR LITERALS IN THIS FILE, AND NOT BY ACCIDENT ────────────────────
 // The embed bar is Discord PAYLOAD, not this app's theme: those hexes are
@@ -79,6 +89,7 @@ export function BotAlertPanel({ close }: { close: () => void }) {
   const [right, setRight] = useState<'call' | 'put'>('call')
   const [expiry, setExpiry] = useState(todayIso())
   const [price, setPrice] = useState('')
+  const [avgPrice, setAvgPrice] = useState('')
   const [notes, setNotes] = useState('')
   const [image, setImage] = useState<string | null>(null)
   const [bars, setBars] = useState<Bar[]>([])
@@ -163,6 +174,7 @@ export function BotAlertPanel({ close }: { close: () => void }) {
           strike: strike.trim(),
           right,
           price: price.trim(),
+          avgPrice: avgPrice.trim(),
           notes: notes.trim(),
           image,
           bar: barChoice,
@@ -194,6 +206,7 @@ export function BotAlertPanel({ close }: { close: () => void }) {
       setTicker('')
       setStrike('')
       setPrice('')
+      setAvgPrice('')
       setNotes('')
       setImage(null)
     } catch (e) {
@@ -301,21 +314,27 @@ export function BotAlertPanel({ close }: { close: () => void }) {
               >
                 {right === 'call' ? 'Call' : 'Put'}
               </button>
-              <input
-                type="date"
-                value={expiry}
-                onChange={(e) => setExpiry(e.target.value)}
-                className={[FIELD, 'flex-[1_1_9rem]'].join(' ')}
-              />
+              {/* Not <input type="date">: that renders the OS calendar, which
+                  is white on Windows and cannot be themed. */}
+              <DatePicker value={expiry} onChange={setExpiry} className="flex-[1_1_8rem]" title="Expiry" />
             </>
           )}
           <input
             value={price}
             onChange={(e) => setPrice(e.target.value)}
             inputMode="decimal"
-            placeholder="Entry / exit price"
-            className={[FIELD, 'flex-[2_1_9rem]'].join(' ')}
+            placeholder={PRICE_LABEL[action]}
+            className={[FIELD, action === 'average-down' ? 'flex-[1_1_8rem]' : 'flex-[2_1_9rem]'].join(' ')}
           />
+          {action === 'average-down' && (
+            <input
+              value={avgPrice}
+              onChange={(e) => setAvgPrice(e.target.value)}
+              inputMode="decimal"
+              placeholder="New average"
+              className={[FIELD, 'flex-[1_1_8rem]'].join(' ')}
+            />
+          )}
         </div>
       )}
 

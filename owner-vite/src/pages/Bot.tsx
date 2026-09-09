@@ -63,10 +63,21 @@ const ACTIONS: { id: TradeAction; label: string; accent: string; bar: string }[]
   { id: "average-down", label: "Average Down", accent: CYAN, bar: "#219EBC" },
 ];
 
+/** What the price box IS on this action — the server labels the embed field to
+ *  match. "Entry" on a sell reads as an instruction to buy at that price. */
+const PRICE_LABEL: Record<TradeAction, string> = {
+  buy: "Buy price",
+  sell: "Sell price",
+  trim: "Trim price",
+  "average-down": "Added at",
+};
+
 /** The bar Discord will actually draw, given the action and the manual override. */
 function resolveBar(action: TradeAction, assetClass: AssetClass, override: string): string {
   if (override !== BAR_AUTO) return BAR_COLORS.find((c) => c.id === override)?.hex ?? "#5865F2";
-  if (assetClass === "notes") return "#5865F2"; // a Note is not a trade — blurple, not green
+  // A Note on Auto gets NO bar — the server omits `color` entirely. The stripe
+  // is how a trade reads as a trade at a glance; analysis having one dilutes it.
+  if (assetClass === "notes") return "";
   return ACTIONS.find((a) => a.id === action)?.bar ?? "#219EBC";
 }
 
@@ -244,6 +255,7 @@ export default function Bot() {
   const [strike, setStrike] = useState("");
   const [right, setRight] = useState<OptionRight>("call");
   const [price, setPrice] = useState("");
+  const [avgPrice, setAvgPrice] = useState("");
   const [notes, setNotes] = useState("");
   const [image, setImage] = useState<string | null>(null);
   const [barChoice, setBarChoice] = useState<string>(BAR_AUTO);
@@ -377,9 +389,12 @@ export default function Bot() {
           strike: strike.trim(),
           right,
           price: price.trim(),
+          avgPrice: avgPrice.trim(),
           notes: notes.trim(),
           image,
-          color: barColorInt(bar),
+          // BY NAME, not a resolved integer: 'auto' on a Note means NO bar,
+          // which the server decides and a hex cannot express.
+          bar: barChoice,
         }),
       });
 
@@ -409,6 +424,7 @@ export default function Bot() {
           strike: strike.trim(),
           right,
           price: price.trim(),
+          avgPrice: avgPrice.trim(),
           notes: notes.trim(),
           image,
           bar,
@@ -430,6 +446,7 @@ export default function Bot() {
       setTicker("");
       setStrike("");
       setPrice("");
+      setAvgPrice("");
       setNotes("");
       setImage(null);
       setTab("feed");
@@ -678,13 +695,27 @@ export default function Bot() {
                   )}
                 </div>
                 {shows.price && (
-                  <input
-                    value={price}
-                    onChange={(e) => setPrice(e.target.value)}
-                    inputMode="decimal"
-                    placeholder="$  Entry / Exit Price"
-                    style={{ ...homeInputStyle, width: "100%", marginTop: 12 }}
-                  />
+                  <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
+                    <input
+                      value={price}
+                      onChange={(e) => setPrice(e.target.value)}
+                      inputMode="decimal"
+                      placeholder={`$  ${PRICE_LABEL[action]}`}
+                      style={{ ...homeInputStyle, flex: 1 }}
+                    />
+                    {/* Averaging down is the one action that carries TWO
+                        numbers, and the second is the one people actually want:
+                        where the add left your average. */}
+                    {action === "average-down" && (
+                      <input
+                        value={avgPrice}
+                        onChange={(e) => setAvgPrice(e.target.value)}
+                        inputMode="decimal"
+                        placeholder="$  New average"
+                        style={{ ...homeInputStyle, flex: 1 }}
+                      />
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -813,7 +844,7 @@ export default function Bot() {
                     color: barChoice === BAR_AUTO ? CYAN : OWNER_THEME.text,
                   }}
                 >
-                  <span style={{ width: 4, height: 14, borderRadius: 2, background: bar }} />
+                  <span style={{ width: 4, height: 14, borderRadius: 2, background: bar || "transparent" }} />
                   Auto
                 </button>
 
@@ -847,7 +878,7 @@ export default function Bot() {
                 })}
 
                 <span style={{ fontSize: 11, color: OWNER_THEME.text, fontVariantNumeric: "tabular-nums" }}>
-                  {bar} · {barColorInt(bar)}
+                  {bar ? `${bar} · ${barColorInt(bar)}` : "no bar"}
                 </span>
               </div>
             </div>
@@ -937,7 +968,7 @@ export default function Bot() {
               {feed.map((a) => {
                 // The feed row wears the SAME bar the Discord embed will get, so
                 // what you see here is what the room sees.
-                const accent = a.bar;
+                const accent = a.bar || OWNER_THEME.border;
                 return (
                   <div
                     key={a.id}

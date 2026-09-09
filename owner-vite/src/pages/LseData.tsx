@@ -45,7 +45,11 @@ const TABS: { id: TabId; label: string; hint: string }[] = [
   { id: "catalog", label: "Catalog", hint: "every symbol the vault holds, with its history span" },
   { id: "candles", label: "Candles", hint: "OHLCV for futures, stocks, FX, crypto, indices" },
   { id: "chain", label: "Options Chain", hint: "current chain with IV, greeks and today's volume" },
-  { id: "flow", label: "Options Flow", hint: "the print tape — trailing week" },
+  {
+    id: "flow",
+    label: "Options Flow",
+    hint: "the print tape — trailing week; filter to one trade date, expiry or strike, or rank the biggest prints",
+  },
   { id: "contract", label: "Contract Candles", hint: "1m premium bars for one option contract" },
 ];
 
@@ -724,6 +728,13 @@ export default function LseData() {
   const [flStart, setFlStart] = useState("");
   const [flEnd, setFlEnd] = useState("");
   const [flAll, setFlAll] = useState(false);
+  // The two dates on this tab are DIFFERENT dates and the labels have to say
+  // so: Trade date is when the print crossed the tape, Expiry is the contract
+  // it was on. Conflating them is the "why is this empty" bug on this panel.
+  const [flDay, setFlDay] = useState("");        // one session of the tape
+  const [flExpiry, setFlExpiry] = useState("");  // the contract's expiration
+  const [flStrike, setFlStrike] = useState("");
+  const [flTop, setFlTop] = useState("");        // "" = the whole tape, else top N
 
   // Contract candles. The four PARTS are the source of truth; the paste box is
   // transient — an OSI dropped into it is split into the parts and cleared.
@@ -801,15 +812,32 @@ export default function LseData() {
         if (chMinDte.trim()) p.set("min_dte", chMinDte.trim());
         if (chMaxDte.trim()) p.set("max_dte", chMaxDte.trim());
         return { path: "/api/lse/options-chain", params: p };
-      case "flow":
+      case "flow": {
         if (flUnderlying.trim()) p.set("underlying", flUnderlying.trim());
         if (flType) p.set("type", flType);
         if (flMinPremium.trim()) p.set("min_premium", flMinPremium.trim());
         if (flMaxDte.trim()) p.set("max_dte", flMaxDte.trim());
-        if (flStart.trim()) p.set("start", flStart.trim());
-        if (flEnd.trim()) p.set("end", flEnd.trim());
-        if (flAll) p.set("all", "1");
+        if (flExpiry.trim()) p.set("expiry", flExpiry.trim());
+        if (flStrike.trim()) p.set("strike", flStrike.trim());
+        // Trade date is a shorthand for a start/end pair, and it WINS over the
+        // two of them — a day plus a contradicting range is a window nobody
+        // meant to ask for. The vault's own time format is "YYYY-MM-DD hh:mm:ss",
+        // so the session is expressed in that rather than a bare date, which
+        // would pin both ends of the window to midnight.
+        const day = flDay.trim();
+        if (day) {
+          p.set("start", `${day} 00:00:00`);
+          p.set("end", `${day} 23:59:59`);
+        } else {
+          if (flStart.trim()) p.set("start", flStart.trim());
+          if (flEnd.trim()) p.set("end", flEnd.trim());
+        }
+        if (flTop) p.set("top", flTop);
+        // `top` already walks the tape to rank it; sending all=1 as well would
+        // only ask the server to do the same walk under a second name.
+        else if (flAll) p.set("all", "1");
         return { path: "/api/lse/options-flow", params: p };
+      }
       case "contract":
       default:
         // Send the parts, not the OSI we render: the server resolves a company
@@ -827,6 +855,7 @@ export default function LseData() {
     cSymbol, cTimeframe, cStart, cEnd, cDataset, cAll,
     chUnderlying, chType, chExpiry, chMinDte, chMaxDte,
     flUnderlying, flType, flMinPremium, flMaxDte, flStart, flEnd, flAll,
+    flDay, flExpiry, flStrike, flTop,
     ctUnderlying, ctStrike, ctExpiry, ctType,
   ]);
 
@@ -1067,17 +1096,40 @@ export default function LseData() {
               <Field label="Max DTE" width={110}>
                 <input style={inputStyle} value={flMaxDte} onChange={(e) => setFlMaxDte(e.target.value)} placeholder="" />
               </Field>
-              <Field label="Start" width={165} hint="optional">
+              <Field label="Trade date" width={165} hint="one session of the tape">
+                <DateField value={flDay} onChange={setFlDay} placeholder="any day" />
+              </Field>
+              <Field label="Expiry" width={165} hint="the contract's expiration">
+                <DateField value={flExpiry} onChange={setFlExpiry} placeholder="any expiry" />
+              </Field>
+              <Field label="Strike" width={120} hint="exact, e.g. 6400">
+                <input
+                  style={inputStyle}
+                  inputMode="decimal"
+                  value={flStrike}
+                  onChange={(e) => setFlStrike(e.target.value)}
+                  placeholder="any"
+                />
+              </Field>
+              <Field label="Rank" width={175} hint="biggest prints by premium">
+                <select style={selectStyle} value={flTop} onChange={(e) => setFlTop(e.target.value)}>
+                  <option style={optionStyle} value="">Newest first (all)</option>
+                  <option style={optionStyle} value="50">Top 50 by premium</option>
+                  <option style={optionStyle} value="100">Top 100 by premium</option>
+                  <option style={optionStyle} value="250">Top 250 by premium</option>
+                </select>
+              </Field>
+              <Field label="Start" width={165} hint={flDay.trim() ? "ignored — trade date is set" : "optional"}>
                 <DateField value={flStart} onChange={setFlStart} placeholder="earliest" />
               </Field>
-              <Field label="End" width={165} hint="optional">
+              <Field label="End" width={165} hint={flDay.trim() ? "ignored — trade date is set" : "optional"}>
                 <DateField value={flEnd} onChange={setFlEnd} placeholder="now" />
               </Field>
               <CheckField
                 label="Range"
-                hint="one call caps at 5,000 prints"
+                hint={flTop ? "the ranking already walks it" : "one call caps at 5,000 prints"}
                 text="Walk it all"
-                checked={flAll}
+                checked={flAll && !flTop}
                 onChange={setFlAll}
                 width={150}
               />
@@ -1207,7 +1259,9 @@ export default function LseData() {
           {meta
             ? (tab === "candles" || tab === "contract"
                 ? "No rows came back. The vault matches the symbol literally — open the Catalog tab, filter to the right dataset, and use the exact string it lists."
-                : "No rows came back for those filters. Widen the DTE window or drop the minimum premium.")
+                : tab === "flow"
+                  ? "No prints matched. Strike is matched exactly, and the tape only holds the trailing week — drop the strike, widen the DTE window, or lower the minimum premium."
+                  : "No rows came back for those filters. Widen the DTE window or drop the minimum premium.")
             : "Set the filters above, then Preview to see the rows or Download CSV to pull the file. Large pulls stream straight to disk — they never load into this tab."}
         </div>
       ) : null}

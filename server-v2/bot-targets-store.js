@@ -109,6 +109,11 @@ async function ensureSchema() {
       -- an existing install must not need a manual migration.
       ALTER TABLE bot_discords ADD COLUMN IF NOT EXISTS username   TEXT NOT NULL DEFAULT '';
       ALTER TABLE bot_discords ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT '';
+      -- The embed's own logo (top-right thumbnail). Separate from avatar_url on
+      -- purpose: the avatar is the round icon beside the poster's name, the
+      -- thumbnail is the wide brand lockup inside the card. Same image only if
+      -- you want it to be.
+      ALTER TABLE bot_discords ADD COLUMN IF NOT EXISTS thumbnail_url TEXT NOT NULL DEFAULT '';
     `);
     ensured = true;
     return true;
@@ -197,11 +202,11 @@ function normalizeUsername(raw) {
   return v;
 }
 
-function normalizeAvatar(raw) {
+function normalizeAvatar(raw, what = 'avatar') {
   const v = String(raw || '').trim();
   if (!v) return '';
   if (!/^https:\/\/\S+$/i.test(v)) {
-    throw new Error('The avatar must be a public https:// image URL — Discord fetches it, it is not an upload');
+    throw new Error(`The ${what} must be a public https:// image URL — Discord fetches it, it is not an upload`);
   }
   return v.slice(0, 500);
 }
@@ -230,6 +235,7 @@ function envDiscords() {
       sortIdx: i,
       username: (process.env[`DISCORD_WEBHOOK_${i}_USERNAME`] || '').trim(),
       avatarUrl: (process.env[`DISCORD_WEBHOOK_${i}_AVATAR`] || '').trim(),
+      thumbnailUrl: (process.env[`DISCORD_WEBHOOK_${i}_LOGO`] || '').trim(),
       routes: { default: { url, ping: (process.env[`DISCORD_WEBHOOK_${i}_PING`] || '').trim() } },
     });
   }
@@ -247,13 +253,14 @@ async function loadRaw({ fresh = false } = {}) {
   if (p && (await ensureSchema())) {
     try {
       const [d, r] = await Promise.all([
-        p.query('SELECT id, label, enabled, sort_idx, username, avatar_url FROM bot_discords ORDER BY sort_idx, label'),
+        p.query('SELECT id, label, enabled, sort_idx, username, avatar_url, thumbnail_url FROM bot_discords ORDER BY sort_idx, label'),
         p.query('SELECT discord_id, asset_class, webhook_url, ping FROM bot_routes'),
       ]);
       if (d.rows.length) {
         const byId = new Map(d.rows.map((row) => [row.id, {
           id: row.id, label: row.label, enabled: !!row.enabled, sortIdx: row.sort_idx,
-          username: row.username || '', avatarUrl: row.avatar_url || '', routes: {},
+          username: row.username || '', avatarUrl: row.avatar_url || '',
+          thumbnailUrl: row.thumbnail_url || '', routes: {},
         }]));
         for (const row of r.rows) {
           const disc = byId.get(row.discord_id);
@@ -288,6 +295,7 @@ async function loadMasked(opts) {
       // Identity is not a secret — it is what everyone in the channel sees.
       username: d.username || '',
       avatarUrl: d.avatarUrl || '',
+      thumbnailUrl: d.thumbnailUrl || '',
       routes: Object.fromEntries(
         Object.entries(d.routes).map(([k, v]) => [k, { masked: maskUrl(v.url), ping: v.ping || '' }]),
       ),
@@ -326,7 +334,13 @@ async function resolve(ids, assetClass) {
     .filter((d) => want.has(d.id) && d.enabled)
     .map((d) => {
       const route = d.routes[cls] || d.routes.default || null;
-      const identity = { username: d.username || '', avatarUrl: d.avatarUrl || '' };
+      // The embed logo falls back to the avatar: most of the time one image is
+      // the brand and setting it twice is busywork. Set it only to differ.
+      const identity = {
+        username: d.username || '',
+        avatarUrl: d.avatarUrl || '',
+        thumbnailUrl: d.thumbnailUrl || d.avatarUrl || '',
+      };
       return route
         ? { id: d.id, label: d.label, url: route.url, ping: route.ping || '', ...identity }
         : { id: d.id, label: d.label, url: null, error: `No ${cls} channel mapped for ${d.label}`, ...identity };
@@ -353,6 +367,7 @@ async function saveDiscord(input) {
   const enabled = input?.enabled !== false;
   const username = normalizeUsername(input?.username);
   const avatarUrl = normalizeAvatar(input?.avatarUrl);
+  const thumbnailUrl = normalizeAvatar(input?.thumbnailUrl, 'embed logo');
   const sortIdx = Number.isFinite(Number(input?.sortIdx)) ? Number(input.sortIdx) : 0;
 
   const routes = input?.routes && typeof input.routes === 'object' ? input.routes : {};
@@ -376,10 +391,12 @@ async function saveDiscord(input) {
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO bot_discords (id, label, enabled, sort_idx, username, avatar_url) VALUES ($1,$2,$3,$4,$5,$6)
+      `INSERT INTO bot_discords (id, label, enabled, sort_idx, username, avatar_url, thumbnail_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (id) DO UPDATE SET label=EXCLUDED.label, enabled=EXCLUDED.enabled,
-         sort_idx=EXCLUDED.sort_idx, username=EXCLUDED.username, avatar_url=EXCLUDED.avatar_url`,
-      [id, label, enabled, sortIdx, username, avatarUrl],
+         sort_idx=EXCLUDED.sort_idx, username=EXCLUDED.username, avatar_url=EXCLUDED.avatar_url,
+         thumbnail_url=EXCLUDED.thumbnail_url`,
+      [id, label, enabled, sortIdx, username, avatarUrl, thumbnailUrl],
     );
     for (const [cls, v] of Object.entries(routes)) {
       if (v === null || v?.url === null) {
@@ -443,7 +460,7 @@ async function importFromEnv() {
   for (const d of rows) {
     await saveDiscord({
       id: slug(d.label), label: d.label, enabled: true, sortIdx: d.sortIdx,
-      username: d.username, avatarUrl: d.avatarUrl, routes: d.routes,
+      username: d.username, avatarUrl: d.avatarUrl, thumbnailUrl: d.thumbnailUrl, routes: d.routes,
     });
   }
   cache = null;

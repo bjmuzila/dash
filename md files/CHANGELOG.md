@@ -1,141 +1,193 @@
 # Changelog
 
-## 2026-09-09 (b) - V3 REPLAY: 🔒 Axis on every transport, and the stamp + CB Edge mark drawn INTO every replayed surface (`cbedge-v3/src/design/primitives/ReplayStamp.tsx` NEW, `cbedge-v3/src/design/primitives/ReplayDock.tsx`, `cbedge-v3/src/board/gexCandles/chart.ts`, `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`, `cbedge-v3/src/pages/OptionsChain.tsx`, `cbedge-v3/src/pages/optionsChain/ReplayBar.tsx`, `cbedge-v3/src/pages/optionsChain/LadderModal.tsx`, `cbedge-v3/src/pages/replay/MultiGreekReplay.tsx`, `cbedge-v3/src/pages/replay/mgReplay.ts`, `cbedge-v3/src/pages/analysis/lookup/TickerLookup.tsx`, `cbedge-v3/src/pages/analysis/lookup/Ladder.tsx`)
+## 2026-09-09 (c) - "Entry $3.40" on a SELL, and a slate bar by default (`server-v2/api-router.js`, all three composers)
 
-Two things, both across all five tabs of `/v3/replay`.
+**The price label was a lie on three of the four actions.** The embed field was
+hardcoded to `Entry`, so a sell at 3.40 posted as "Entry $3.40" - which reads as
+an instruction to BUY at 3.40. That is the most expensive kind of wrong an alert
+can be. The field name now follows the action:
 
-**1. 🔒 Axis - "do not move while I scrub."** Every replay surface re-derives
-its view from the frame the cursor sits on, and every one of them has a rule
-that re-frames when the data moves. All five rules are right while a session
-plays through and all five are wrong while you step back and forth over the
-same ten minutes: the thing you are comparing against slides out from under
-you, and on a screen recording that reads as the market jumping rather than the
-frame. One button, one meaning, one place on every transport (`ReplayLock`, new
-export in `ReplayDock.tsx`) - what it FREEZES differs per surface, because what
-moves differs per surface:
+    buy           -> Buy Price
+    sell          -> Sell Price
+    trim          -> Trim Price
+    average-down  -> Added At  +  New Avg
 
-| Tab | What was moving | Locked |
-|---|---|---|
-| GEX candles | price-axis autoscale re-derived from the clipped bars; a `setData` with a new bar count leaving the logical range elsewhere | `autoScale:false` + the visible logical range read before the write and put back after |
-| Options chain | the ATM-row rescue scrolling the grid back to the middle during playback | rescue off |
-| Multi Greek | four panels re-centring on ATM at four different moments as spot crosses a rung | no re-centre |
-| Chain ladder | `scale: frame` re-normalising every snapshot to its own peak | session-wide peak, and the Scale picker dims and reads `day` |
-| GEX levels | `useTlAnchor` re-windowing once spot walks ANCHOR_SLACK rungs, plus per-render bar scale | anchor fed a null spot so it holds; `scaleMax` (new `TlLadder` prop) pins the peak from the moment the lock went on |
+Average-down is the one action carrying TWO numbers, and the second is the one
+people actually want - where the add left your average. All three composers grow
+a second box for it, shown only on that action, and the placeholders track the
+same labels so the form says what the post will say.
 
-A REFRAME still wins on the candles - a symbol, interval or session change means
-the view the lock was holding is meaningless - so `axisLocked` only gates the
-non-reframe path in `chart.ts`. The lock also releases itself on anything that
-changes the subject (leaving replay, another session, another ticker): a price
-window frozen on Tuesday means nothing on Thursday.
+**'auto' is now slate (`#323339`) for every alert.** Near Discord's own embed
+background, so the stripe reads as a quiet edge rather than a colour-coded flag.
+The action emoji already says buy or sell; a second and louder signal for the
+same fact was shouting. Explicit swatches still override per alert, and slate
+joins the palette as a pickable colour. This replaces (a)'s "a Note gets no
+bar" - a slate bar and no bar look the same, and one rule beats two.
 
-**2. The replay stamp, in the pane.** `design/primitives/ReplayStamp.tsx` is new
-and is what `LadderModal` had inline, generalised: ticker, the expiry chip
-(0DTE orange, `EXP Sep 9` blue), `+N` for summed expiries, the SESSION date and
-the FRAME's own wall clock - plus the CB Edge wordmark in the opposite corner.
-Mounted on the candles, the chain grid, the Multi Greek panel row and the
-Ticker Lookup split; the chain ladder keeps its own stamp and gains the mark.
+## 2026-09-09 (b) - The expiry picker is the app's, not the operating system's (`cbedge-v3/src/design/primitives/DatePicker.tsx` NEW, both BotAlertPanels, `owner-vite/src/pages/Bot.tsx`)
 
-Deliberately NOT in the toolbar. These surfaces get screen-recorded, and a
-recording is a crop - a caption living in the page chrome above the pane is one
-crop away from being gone, and a clip of a rewound ladder that does not say so
-is indistinguishable from a clip of a live one. On the chain grid the stamp
-pins to a new `relative` wrapper AROUND the scroller rather than to the
-scrolling content, or it would scroll away with the rows. `pointerEvents:none`
-throughout - it sits over a scrubbable surface and must never eat a click.
+`<input type="date">` renders the OPERATING SYSTEM's calendar - Chrome's white
+popup on Windows, something else on macOS, a wheel on iOS. Inside a dark toolbar
+dropdown that reads as a bug, and no amount of `color-scheme` fixes it: the
+widget is not ours to style.
 
-## 2026-09-09 (a) - V3: right-click "Copy image" + highlight-to-Notes, ported from v2 (`cbedge-v3/src/shell/NoteClipMenu.tsx` NEW, `cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/design/primitives/Card.tsx`)
+  - v2 already had `components/shared/ThemedDatePicker` and now uses it.
+  - v3 had no equivalent, so `design/primitives/DatePicker.tsx` is new: trigger
+    + month grid, every surface a token class (no colour literals), same
+    "YYYY-MM-DD" contract as the native input so it is a drop-in. It carries a
+    "Today · 0DTE" button, because that is the expiry most of these alerts want
+    and it should not cost a grid scan.
 
-v2's `components/shared/NoteClipMenu.tsx` had no v3 counterpart - the dock, the
-note store and the panel context were all ported weeks ago and nothing could
-put anything IN them but the "Add a note..." box. Rebuilt on v3 (react-router
-instead of next/navigation, token utilities instead of `HOME_THEME` literals,
-v3's own auth read and capture engine), and mounted once by `Shell` inside
-`NotesPanelProvider` so every route gets it without opting in.
+**Both composers now send the bar BY NAME**, matching what v3 already did, and
+so does the owner page. Computing a hex client-side silently defeated the new
+rule from (a): 'auto' on a Note means NO bar, which the server expresses by
+omitting `color` and which no hex can represent - the owner page would have kept
+giving Notes a blurple stripe while the toolbar gave them none. The swatch rows
+render from the server's `bars`, so the palette still has exactly one home.
 
-**Two gestures.** Drag over any text and a "+ Notes" chip appears at the end of
-the highlight - one click files it, with the card and page it came from as the
-note's source line. Right-click gives the fuller menu: add the selection, copy
-the image, add a snapshot as a clip note, open the panel.
+## 2026-09-09 - BOT embeds: no bar on a Note, brand logo top-right, and the title says it once (`server-v2/api-router.js`, `server-v2/bot-targets-store.js`, `owner-vite/src/pages/BotManage.tsx`)
 
-**"Copy image" is the actual fix for right-click copy.** Chrome's native
-context menu offers Copy image for an `<img>` and for nothing else, so on a
-`<canvas>` chart - which is every chart in this app - there has never been one
-and there never will be. The menu item photographs the card through
-`shell/snapshot.ts` (the same engine the toolbar camera uses, caption band and
-mark included) and writes a PNG to the clipboard, falling back to a download
-when the clipboard refuses it.
+**A Note gets no coloured stripe.** `resolveBarInt()` returns null for notes on
+'auto' and `color` is OMITTED from the payload - not set to 0, which is black
+and which Discord draws as a visible black bar. The stripe is how a trade reads
+as a trade at a glance; giving analysis one dilutes the signal. An explicit
+swatch still overrides.
 
-**`captureThumb()` - new export in `snapshot.ts`.** The sharing path
-(`captureAndCopy`) is full fidelity; a clip filed in the dock is a thumbnail in
-a 320px drawer stored as base64 in localStorage, so this one skips the caption
-and the logo, downscales to 720px and encodes JPEG at q0.72. Flattened onto
-`--color-bg` first, because JPEG has no alpha and every transparent corner
-would otherwise come back black.
+**The brand lockup, top-right inside the card.** New per-Discord `thumbnail_url`
+(`ADD COLUMN IF NOT EXISTS`, no manual migration), falling back to the avatar
+when blank - most of the time one image is the brand and setting it twice is
+busywork. It is SEPARATE from the avatar because they are different pictures in
+different places: the avatar is the round icon beside the poster's name, the
+thumbnail is the wide lockup inside the embed.
 
-**`data-card` on every Card.** `resolveClipTarget` walks up
-`[data-note-clip]` -> `[data-card]` -> a bare chart's container.
-`data-card-instance` could not be that marker: it only exists on a card that
-was given an `expandId`.
+Layered on in `postTo()` by COPY, not in `buildEmbed()`: the embed is built once
+and shared across every destination, so mutating it would leak one Discord's
+logo into the next one's post. It is also applied BEFORE the payload is
+assembled, so the payload cannot capture the pre-thumbnail object - which it did
+in the first cut of this change.
 
-**The native menu is never taken silently.** `preventDefault()` only when there
-is something to offer; shift+right-click always yields the browser's menu;
-inputs, links, `[data-no-note-clip]` and the notes dock itself are left alone,
-and an event a page already handled is left alone too.
+**The Note title says it once.** The `NOTE` author row is gone; `📝 Analysis` is
+the whole heading. It was the same word twice in two type sizes.
 
-**Loaded on idle, not in the entry chunk.** The menu has to be listening before
-the first gesture, so it cannot wait for a click the way `NotesDock` does - but
-it pulls `shell/notes.tsx` in behind it, and `Shell.tsx` is the entry chunk
-(37KB brotli cap). `NoteClipSlot` mounts it on the first `requestIdleCallback`,
-which is seconds before a human could reach for it. Desktop + signed-in only,
-same test the dock uses.
+Env fallback gains `DISCORD_WEBHOOK_<n>_LOGO`.
 
-## 2026-09-08 (i) - FEEDBACK: screenshots on support tickets, both sides (`server-v2/api-router.js`, `components/shared/feedbackShots.ts`, `components/shared/FeedbackThread.tsx`, `app/feedback/page.tsx`, `app/owner/feedback/page.tsx`, `owner-vite/src/lib/feedbackShots.ts`, `owner-vite/src/pages/Feedback.tsx`)
+## 2026-09-08 (l) - The embed palette moves to the server, because v3's theme check was right (`server-v2/api-router.js`, `cbedge-v3/src/shell/BotAlertPanel.tsx`)
 
-A customer can attach images to a ticket or any reply, and the inbox on
-owner.cbedge.net can attach them back. Paste, drag, or the new 📎 button;
-thumbnails render inside the bubble they were sent with and open full-size on a
-click (Esc closes). A screenshot with NO words is a valid ticket and a valid
-reply - "here's what it looks like" is the report - so the message is only
-required when nothing is attached; the ticket row is titled `(screenshot)` so
-the inbox list still has something to show.
+`check-theme` failed the v3 panel on twelve colour literals and refusing it was
+correct - but the fix is not a token. Those hexes are Discord PAYLOAD: they are
+chosen to read against Discord's own surface, they never touch a CB Edge
+pixel, and adding them to `tokens.css` would put six foreign colours in the
+design system purely to get past a lint.
 
-**Data URLs in the ordinary JSON body, not multipart.** server-v2 has no
-multipart parser and does not need one: `shots: [{dataUrl,name}]` rides the
-existing `readJson()` (raised to a 26MB cap on the two POSTs that accept them).
-Same trade the recipe photo path makes.
+So the server owns them instead:
 
-**The browser downscales before it POSTs.** `feedbackShots.ts` resizes to
-1600px on the long edge and re-encodes to JPEG at q0.9 - high, deliberately,
-because this is a picture of TEXT and ringing around small glyphs is exactly
-what makes a bug report unreadable. A small PNG (<400KB, already under 1600px)
-ships untouched; an animated GIF passes through whole, since a canvas would
-flatten it to one frame. A 4K screenshot lands at a couple of hundred KB
-instead of 8MB, which is the difference between a reply that sends on a phone
-and one that times out.
+  - `BARS` lives in the `/api/bot-alert` block, with `ACTION_BAR` (buy green,
+    sell red, trim amber, average-down cyan) and `NOTE_BAR` (blurple).
+  - `GET /api/bot-alert/targets` now ships `bars` alongside the destinations, so
+    a client can draw the swatch row from server data.
+  - The composer sends a bar BY NAME - `'auto' | 'green' | ...` - and
+    `resolveBarInt()` turns it into the integer Discord wants. A legacy caller
+    sending a resolved `color` integer (the owner page, the v2 panel) still
+    works; the named form wins when both are present.
 
-**Bytes live in their own table.** `customer_feedback_shots`, created lazily by
-the same `ensureFeedback(pool)` pattern as the messages table - so no migration
-step, and `SELECT ... FROM customer_feedback` on every list load can never drag
-image bytes with it. `message_id NULL` means the attachment belongs to the
-ticket's opening message (which is a `customer_feedback` row, not a message
-row). Ticket rows now carry `shot_count`, which is the 📎 badge on a list row.
+Net effect: zero colour literals in the v3 file, passing for the right reason
+rather than by suppression, and the palette has ONE home instead of three
+copies that could drift.
 
-**Serving them: `GET /api/feedback/shot/:sid`.** Visibility is checked by
-joining back to the ticket - the owner sees any attachment, a customer only the
-ones on their own tickets - never by trusting the id in the URL. ETag + 304, and
-`immutable` caching only when the client passes `?v=<etag>`, which it always
-does; attachments are insert-only so an id can never point at different bytes.
+## 2026-09-08 (k) - BOT moves into both toolbars, owner-gated (`components/shared/BotAlert.tsx` NEW, `components/shared/BotAlertPanel.tsx` NEW, `cbedge-v3/src/shell/BotAlert.tsx` NEW, `cbedge-v3/src/shell/BotAlertPanel.tsx` NEW, `components/shared/GlobalToolbar.tsx`, `cbedge-v3/src/shell/Shell.tsx`)
 
-**An image that fails to store never loses the words.** `saveShots()` runs after
-the message row is already written and its failure is swallowed: a reply that
-sent is a reply that sent. Decode errors before that point are the ones that
-reject, with a sentence meant to be read by the person typing.
+The composer is now a toolbar dropdown, so an alert gets written while looking
+at the chart that justified it. A trip to another origin is long enough that it
+gets written later, from memory, or not at all.
 
-Caps: 6 images per message, 5MB each decoded (server), enforced again in the
-composer so the message says so before an upload starts. owner-vite carries its
-own copy of `feedbackShots.ts` and its own inlined thread, for the same reason
-Budget and Reta exist twice - no `@/components` alias, separate build. Both
-copies are marked MIRROR.
+**Two implementations, deliberately.** The shells share no styling system - v3
+is class-based on its design tokens, v2 is inline-styled on `HOME_THEME` - and
+v3's `@` alias points at its own `src`, so there is no import path between them.
+The FIELDS and the single POST are identical on purpose: a second, subtly
+different composer is how one surface starts posting alerts that do not look
+like the other's. **Change one, change both.**
+
+**Owner-gated twice.** Neither component renders anything for a non-owner - no
+button, no DOM, and v3 never fetches the panel chunk. That is chrome. The gate
+is `/api/bot-alert`, which checks the owner id server-side and 403s everyone
+else, so a rendered composer would still fail at every button. v2 uses
+`useIsOwner` from `@/components/auth/useIsOwner` (documented canonical, FAILS
+CLOSED); v3 uses `isOwner` from `@/data/auth`. Same pairing as BzilaAlerts.
+
+**v3's panel is `lazy()`** because `Shell.tsx` is the entry chunk, capped at
+37.1KB brotli by budgets.json. The trigger is toolbar chrome and has to be in
+it; the composer is several KB that exactly one account can ever open. v2's is
+`dynamic(..., { ssr: false })` for the same reason - every visitor downloads
+GlobalToolbar.
+
+**v2's panel is portaled, `position: fixed`, anchored off a DOMRect** - not
+`position: absolute`. The toolbar pill sets `backdrop-filter`, which creates a
+stacking context that traps absolutely-positioned children (the load-bearing
+comment in GlobalToolbar.tsx). Same recipe as NavMenu and BzilaAlerts.
+
+**What is NOT in the dropdown: Manage.** Adding a Discord or pasting a webhook
+URL is setup, done once, and it stays on owner.cbedge.net where all four routes
+are visible at once.
+
+Two behaviours worth knowing: the panel does NOT close on send (with several
+destinations a partial failure is normal, and closing would hide "2 of 4
+landed" at the moment it matters), and sending clears only the per-alert fields
+- destinations and asset class survive, because the next alert usually goes to
+the same rooms about the same kind of thing and re-picking them every time is
+how one gets forgotten.
+
+## 2026-09-08 (j) - BOT: the save that silently did nothing, and the missing "&" (`owner-vite/src/pages/BotManage.tsx`, `server-v2/api-router.js`)
+
+**Why a corrected ping would not stick.** A Discord saves as ONE unit, so a
+single invalid ping row rejects the whole card - including the rows that were
+fine. Options / Futures / Equity were still holding role NAMES, so every Save
+was refused and the corrected Notes ping never reached the database. The rule is
+right (never store an unusable ping) but the refusal was reported in a banner at
+the TOP of the page, which is off-screen when you are looking at the fourth
+route row. So it read as "I saved it and nothing changed".
+
+The refusal now renders INSIDE the card, the card border turns red, and the
+message says explicitly that nothing was saved and names every offending row.
+Server-side rejections land in the same place.
+
+**The other half: `<@ID>` is not `<@&ID>`.** They differ by one character and
+look identical at a glance, but the first tags one PERSON and the second tags a
+ROLE - and a role id pasted without the `&` becomes a user that does not exist.
+Two additions:
+
+  - The field now says which it is while you type, and for a user mention offers
+    the exact role form of the same id to paste.
+  - `postTo()` extends the `mention_roles` check to `mentions`, so a user
+    mention that did not resolve is reported the same way a role is, with the
+    `&` fix in the message.
+
+**A row still showing a stale warning is correct, not a bug:** Test posts what is
+STORED, so if a save was refused the test proves what the room would actually
+get. That is the behaviour that surfaced this - the warning naming an old role
+id was the evidence the save had never landed.
+
+## 2026-09-08 (i) - BOT: catch @unknown-role, the ping failure Discord reports as success (`server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`, `owner-vite/src/pages/Bot.tsx`)
+
+A role ID that does not exist IN THAT SERVER is not an error to Discord. It
+answers 200, the post lands, and the mention renders as a grey `@unknown-role`
+that notifies nobody. Roles are per-server, so an ID copied from a different
+Discord always ends up here - and from the API side it is indistinguishable from
+a clean send.
+
+`mention_roles` on the created message is the only tell: it lists the roles that
+actually RESOLVED. So `postTo()` now diffs the role IDs in the ping against that
+array and returns a `warning` when any are missing, naming the ID and saying
+role IDs are per-server. Free - the response is already being read for the
+message id.
+
+Surfaced in both places it matters: the 🔔 test shows it in amber instead of
+"✓ posted", and a broadcast that posted-but-did-not-tag says so rather than
+looking clean. That is the difference between "the room was notified" and "you
+think the room was".
+
+**Also:** Save now refuses when any ping row is invalid, naming every bad row at
+once. Previously the client flagged them in red but still POSTed, so the server
+rejected on the first bad row and the rest needed another round trip to find.
 
 ## 2026-09-08 (h) - BOT: each Discord posts under its own name and picture (`server-v2/bot-targets-store.js`, `server-v2/api-router.js`, `owner-vite/src/pages/BotManage.tsx`)
 

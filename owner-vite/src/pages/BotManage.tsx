@@ -43,6 +43,8 @@ type DiscordRow = {
   /** Per-message identity override. Blank = use the webhook's own name/avatar. */
   username: string;
   avatarUrl: string;
+  /** The logo drawn top-right INSIDE the embed. Blank = falls back to avatar. */
+  thumbnailUrl: string;
   routes: Partial<Record<RouteKey, RouteView>>;
 };
 
@@ -52,6 +54,7 @@ type Draft = {
   enabled: boolean;
   username: string;
   avatarUrl: string;
+  thumbnailUrl: string;
   urls: Partial<Record<RouteKey, string>>;
   pings: Partial<Record<RouteKey, string>>;
   clear: Partial<Record<RouteKey, boolean>>;
@@ -148,6 +151,7 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
       enabled: d.enabled,
       username: d.username ?? "",
       avatarUrl: d.avatarUrl ?? "",
+      thumbnailUrl: d.thumbnailUrl ?? "",
       urls: {},
       pings: {},
       clear: {},
@@ -219,6 +223,7 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
           sortIdx: d.sortIdx,
           username: dr.username,
           avatarUrl: dr.avatarUrl,
+          thumbnailUrl: dr.thumbnailUrl,
           routes,
         },
       },
@@ -468,9 +473,18 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                     spellCheck={false}
                     style={{ ...homeInputStyle, flex: "2 1 260px", fontSize: 12 }}
                   />
+                  <input
+                    value={dr.thumbnailUrl}
+                    onChange={(e) => patch(d, { thumbnailUrl: e.target.value })}
+                    placeholder="Embed logo — top-right inside the card (blank = use the avatar)"
+                    spellCheck={false}
+                    style={{ ...homeInputStyle, flex: "1 1 100%", fontSize: 12 }}
+                  />
                   <span style={{ fontSize: 11, color: OWNER_THEME.text, flex: "1 1 100%" }}>
-                    Discord <em>fetches</em> the avatar, so it has to be publicly reachable — a local path or a
-                    login-protected URL silently falls back to the webhook's picture.
+                    Discord <em>fetches</em> both, so they have to be publicly reachable — a local path or a
+                    login-protected URL silently falls back. The <strong>avatar</strong> is the round icon beside the
+                    name; the <strong>embed logo</strong> is the wide lockup inside the card. Set the logo only when it
+                    should differ from the avatar.
                   </span>
                 </div>
 

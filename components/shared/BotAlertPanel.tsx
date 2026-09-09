@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { DOCK_THEME, HOME_THEME } from "./homeTheme";
+import ThemedDatePicker from "./ThemedDatePicker";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE BOT DROPDOWN — the full composer, in the toolbar.
@@ -41,16 +42,27 @@ const ASSETS: { id: AssetClass; label: string }[] = [
   { id: "notes", label: "Notes" },
 ];
 
-/** Bar colours are PAYLOAD — the embed's `color`, drawn inside Discord's own
- *  dark surface, so they deliberately do not come from homeTheme. */
-const ACTIONS: { id: TradeAction; label: string; bar: string }[] = [
-  { id: "buy", label: "Buy", bar: "#3BA55D" },
-  { id: "sell", label: "Sell", bar: "#ED4245" },
-  { id: "trim", label: "Trim", bar: "#FAA61A" },
-  { id: "average-down", label: "Avg Down", bar: "#219EBC" },
+const ACTIONS: { id: TradeAction; label: string }[] = [
+  { id: "buy", label: "Buy" },
+  { id: "sell", label: "Sell" },
+  { id: "trim", label: "Trim" },
+  { id: "average-down", label: "Avg Down" },
 ];
 
-const BAR_COLORS = ["#3BA55D", "#ED4245", "#FAA61A", "#219EBC", "#5865F2", "#FFFFFF"];
+/** What the price box IS on this action — the server labels the embed field to
+ *  match. "Entry" on a sell reads as an instruction to buy at that price. */
+const PRICE_LABEL: Record<TradeAction, string> = {
+  buy: "Buy price",
+  sell: "Sell price",
+  trim: "Trim price",
+  "average-down": "Added at",
+};
+
+// The bar palette comes from the SERVER (/api/bot-alert/targets → `bars`) and
+// the composer sends a bar by NAME. Computing the colour here would silently
+// defeat the server's rules — 'auto' on a Note means NO bar at all, which a
+// client-side hex cannot express.
+type Bar = { id: string; label: string; hex: string };
 
 /** Which fields each class shows. Notes is a plain broadcast — no trade. */
 const SHOWS = {
@@ -113,9 +125,11 @@ export default function BotAlertPanel({ anchor, close }: { anchor: DOMRect | nul
   const [right, setRight] = useState<"call" | "put">("call");
   const [expiry, setExpiry] = useState(todayIso());
   const [price, setPrice] = useState("");
+  const [avgPrice, setAvgPrice] = useState("");
   const [notes, setNotes] = useState("");
   const [image, setImage] = useState<string | null>(null);
-  const [barOverride, setBarOverride] = useState<string | null>(null);
+  const [bars, setBars] = useState<Bar[]>([]);
+  const [barChoice, setBarChoice] = useState("auto");
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "warn" | "err"; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -142,7 +156,9 @@ export default function BotAlertPanel({ anchor, close }: { anchor: DOMRect | nul
     fetch("/api/bot-alert/targets", { cache: "no-store", credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (alive && Array.isArray(j?.targets)) setTargets(j.targets);
+        if (!alive) return;
+        if (Array.isArray(j?.targets)) setTargets(j.targets);
+        if (Array.isArray(j?.bars)) setBars(j.bars);
       })
       .catch(() => {});
     return () => {
@@ -181,9 +197,6 @@ export default function BotAlertPanel({ anchor, close }: { anchor: DOMRect | nul
     fr.readAsDataURL(file);
   }
 
-  const bar =
-    barOverride ?? (assetClass === "notes" ? "#5865F2" : (ACTIONS.find((a) => a.id === action)?.bar ?? CYAN));
-
   const canSend = useMemo(() => {
     if (!picked.length || sending) return false;
     return assetClass === "notes" ? notes.trim().length > 0 || image != null : ticker.trim().length > 0;
@@ -207,9 +220,10 @@ export default function BotAlertPanel({ anchor, close }: { anchor: DOMRect | nul
           strike: strike.trim(),
           right,
           price: price.trim(),
+          avgPrice: avgPrice.trim(),
           notes: notes.trim(),
           image,
-          color: parseInt(bar.replace("#", ""), 16),
+          bar: barChoice,
         }),
       });
       const j = await r.json().catch(() => null);
@@ -238,6 +252,7 @@ export default function BotAlertPanel({ anchor, close }: { anchor: DOMRect | nul
       setTicker("");
       setStrike("");
       setPrice("");
+      setAvgPrice("");
       setNotes("");
       setImage(null);
     } catch (e) {
@@ -361,21 +376,30 @@ export default function BotAlertPanel({ anchor, close }: { anchor: DOMRect | nul
               >
                 {right === "call" ? "Call" : "Put"}
               </button>
-              <input
-                type="date"
-                value={expiry}
-                onChange={(e) => setExpiry(e.target.value)}
-                style={{ ...field, flex: "1 1 140px", colorScheme: "dark" }}
-              />
+              {/* Not <input type="date">: that renders the OS calendar, which is
+                  white on Windows and cannot be themed. ThemedDatePicker is the
+                  app's own month grid and takes the same "YYYY-MM-DD" string. */}
+              <div style={{ flex: "1 1 150px", minWidth: 130 }}>
+                <ThemedDatePicker value={expiry} onChange={setExpiry} width="100%" />
+              </div>
             </>
           )}
           <input
             value={price}
             onChange={(e) => setPrice(e.target.value)}
             inputMode="decimal"
-            placeholder="Entry / exit price"
-            style={{ ...field, flex: "2 1 140px" }}
+            placeholder={PRICE_LABEL[action]}
+            style={{ ...field, flex: action === "average-down" ? "1 1 120px" : "2 1 140px" }}
           />
+          {action === "average-down" && (
+            <input
+              value={avgPrice}
+              onChange={(e) => setAvgPrice(e.target.value)}
+              inputMode="decimal"
+              placeholder="New average"
+              style={{ ...field, flex: "1 1 120px" }}
+            />
+          )}
         </div>
       )}
 
@@ -444,31 +468,33 @@ export default function BotAlertPanel({ anchor, close }: { anchor: DOMRect | nul
         }}
       />
 
-      {/* ── Embed bar ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={label}>Bar</span>
-        <button type="button" onClick={() => setBarOverride(null)} style={pill(barOverride == null)}>
-          Auto
-        </button>
-        {BAR_COLORS.map((hex) => (
-          <button
-            key={hex}
-            type="button"
-            title={hex}
-            onClick={() => setBarOverride(hex)}
-            style={{
-              width: 22,
-              height: 22,
-              borderRadius: 6,
-              cursor: "pointer",
-              padding: 0,
-              background: hex,
-              border: `2px solid ${barOverride === hex ? HOME_THEME.text : HOME_THEME.border}`,
-            }}
-          />
-        ))}
-        <span style={{ marginLeft: "auto", width: 6, height: 18, borderRadius: 3, background: bar }} aria-hidden />
-      </div>
+      {/* ── Embed bar ── Auto derives it from the action server-side, and gives
+          a Note no bar at all. */}
+      {bars.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={label}>Bar</span>
+          <button type="button" onClick={() => setBarChoice("auto")} style={pill(barChoice === "auto")}>
+            Auto
+          </button>
+          {bars.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              title={c.label}
+              onClick={() => setBarChoice(c.id)}
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                cursor: "pointer",
+                padding: 0,
+                background: c.hex,
+                border: `2px solid ${barChoice === c.id ? HOME_THEME.text : HOME_THEME.border}`,
+              }}
+            />
+          ))}
+        </div>
+      )}
 
       {msg && (
         <div

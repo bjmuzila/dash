@@ -420,6 +420,86 @@ async function optionsFlow({ underlying, type, minPremium, expiry, maxDte, start
   return withTimestamp(isoify(await vaultGet('/options/flow', params, { timeoutMs: 90000 })));
 }
 
+// ── flow row shape helpers ──────────────────────────────────────────────────
+//
+// The vault's /options/flow rows are NOT a fixed shape, and the two fields you
+// most want to filter and rank a tape on — the strike and the dollar premium —
+// have each come back under more than one column name. Guessing one name and
+// reading undefined is how a strike filter silently drops every row and a
+// "top 50 by premium" returns 50 arbitrary prints, neither of them an error.
+//
+// So: read through a candidate list, and for the strike fall back to the OSI
+// ticker, which every print carries under some name and which encodes the
+// strike in its last eight digits. A row we genuinely cannot read a strike from
+// returns null, and a strike FILTER drops it rather than letting it through —
+// an unfiltered row inside a filtered list is the worse failure.
+
+const STRIKE_KEYS = ['strike', 'strike_price', 'strikePrice', 'strike_dollars'];
+const PREMIUM_KEYS = [
+  'premium', 'total_premium', 'premium_usd', 'trade_premium',
+  'notional', 'dollar_volume', 'value',
+];
+const OSI_KEYS = ['ticker', 'contract', 'option_symbol', 'osi', 'symbol', 'option_ticker'];
+const OSI_STRIKE_RE = /^[A-Z][A-Z0-9.]{0,5}\d{6}[CP](\d{8})$/;
+
+function pickNum(row, keys) {
+  for (const k of keys) {
+    const v = row ? row[k] : undefined;
+    if (v === undefined || v === null || v === '') continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/** The strike a flow print is on, from its own column or from its OSI ticker. */
+function flowStrike(row) {
+  const direct = pickNum(row, STRIKE_KEYS);
+  if (direct !== null) return direct;
+  for (const k of OSI_KEYS) {
+    const v = row ? row[k] : undefined;
+    if (typeof v !== 'string') continue;
+    const m = OSI_STRIKE_RE.exec(v.trim().toUpperCase());
+    if (m) return Number(m[1]) / 1000;
+  }
+  return null;
+}
+
+/** The dollar premium of a print. 0 when unreadable, so a sort stays total. */
+function flowPremium(row) {
+  const n = pickNum(row, PREMIUM_KEYS);
+  return n === null ? 0 : n;
+}
+
+/**
+ * Strike filtering for flow, applied HERE rather than upstream: /options/flow
+ * takes underlying, type, min_premium, expiry, max_dte, start, end, order and
+ * limit — there is no strike parameter (see the endpoint map at the top of this
+ * file), so sending one is ignored at best and a 400 at worst.
+ *
+ * Exact `strike` is matched with a tolerance because strikes arrive as floats.
+ */
+function filterFlowByStrike(rows, { strike, strikeMin, strikeMax } = {}) {
+  const num = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const eq = num(strike);
+  const lo = num(strikeMin);
+  const hi = num(strikeMax);
+  if (eq === null && lo === null && hi === null) return rows;
+  const EPS = 1e-6;
+  return rows.filter((r) => {
+    const k = flowStrike(r);
+    if (k === null) return false;
+    if (eq !== null && Math.abs(k - eq) > EPS) return false;
+    if (lo !== null && k < lo - EPS) return false;
+    if (hi !== null && k > hi + EPS) return false;
+    return true;
+  });
+}
+
 /** Page the tape backwards on print time — flow is served newest-first. */
 async function* pageOptionsFlow(opts = {}) {
   const maxRows = opts.maxRows ?? 500_000;
@@ -522,6 +602,9 @@ module.exports = {
   optionsChain,
   optionsFlow,
   pageOptionsFlow,
+  flowStrike,
+  flowPremium,
+  filterFlowByStrike,
   optionCandles,
   resolveUnderlying,
   toOsi,
