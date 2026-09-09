@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-09-09 (e) - OWNER / LSE DATA: Contract Candles gets a date window, newest-first order and a Today button; day windows are trimmed exactly (`owner-vite/src/pages/LseData.tsx`, `server-v2/api-router.js`)
+
+A contract's 1m bars run from the day it listed and were pulled oldest-first, so
+today's session sat two thousand rows below the fold and the tab drew the first
+300 of them - all from May. Three additions:
+
+**Order defaults to newest first**, so the current session is on top. The picker
+still offers oldest-first for a walk-forward read.
+
+**From / To, plus a Today button** that sets both to today's date.
+
+**"Showing the first 300" is ours and now says so.** `PREVIEW_ROWS` is the tab's
+draw cap, not a vault limit - the pull was complete at 2,019 rows. The meta line
+reads "this tab draws the first 300 of them - the pull itself is complete, and
+Download CSV has every row."
+
+**Day windows are sent wide and trimmed exact.** The vault's accepted format for
+start/end is undocumented and a datetime it cannot parse is a 400, so a one-day
+window now goes out as `start=<day>` / `end=<the day after>` - plain dates, right
+whether `end` is read as exclusive, as a whole day, or as that day's midnight -
+with the real window named in `day_from` / `day_to`. `dayTrimmer()` in the router
+applies that to Options Flow and Contract Candles, JSON preview and streamed CSV
+alike, dating rows off `minute` or `timestamp` and dropping undated ones. The tab
+trims too, so the preview is exact even before the server is redeployed. This
+also replaces the `"YYYY-MM-DD hh:mm:ss"` strings the Flow trade-date filter was
+sending in (c), which were a 400 waiting to happen.
+
+Note for anyone reading these timestamps: they are UTC. The vault emits
+`"YYYY-MM-DD hh:mm:ss"` and `isoify()` stamps a `Z` on it; the tab strips the `Z`
+when formatting the cell, so the column is unlabelled UTC.
+
+## 2026-09-09 (d) - OWNER / LSE DATA: the Top-N flow ranking is applied in the tab as well as on the server (`owner-vite/src/pages/LseData.tsx`)
+
+`Top 100 by premium` came back in tape order - 350 rows, newest first. The
+ranking exists only in the server build, and a running build that predates it
+does not reject `top=100`, it IGNORES it and answers normally. That is the worst
+shape this control can fail in: the list looks ranked and is actually just the
+most recent prints.
+
+So the tab now ranks too. `preview()` sorts the returned rows by premium
+(read through a candidate list of column names, because the tape's rows are not
+a fixed shape and a missing column would score every print 0 and leave tape
+order intact) and slices to N. It is a no-op when the server did the ranking -
+the rows already arrive in that order - and it rescues the list when the server
+did not. `scanned`, which only the ranking path sends, tells the two apart, and
+the meta line says which one you are looking at: an unranked server gets
+"ranked by premium in this tab, from the N prints this call returned - redeploy
+for a ranking across the whole tape (and for a ranked CSV)". A Top-N request
+also now asks for `limit=5000`, the widest single call the vault allows, so the
+in-tab pool is as large as it can be on an old build.
+
+The CSV download cannot be rescued this way - it streams from the server - so a
+ranked CSV still needs the server deployed.
+
 ## 2026-09-09 (c) - OWNER / LSE DATA: Options Flow gains a trade-date, expiry and strike filter, plus a Top-N-by-premium ranking (`owner-vite/src/pages/LseData.tsx`, `server-v2/api-router.js`, `server-v2/_lib-lse.cjs`)
 
 The Options Flow tab could only be pointed at an underlying, a type, a minimum
@@ -20838,3 +20892,39 @@ All proxy fetch calls removed or replaced with no-ops across:
 - **Wed Jun 17:** Retail Sales, Mfg & Trade Inventories, Pending Home Sales, U.S. Interest Rate Decision
 - **Thu Jun 18:** Weekly Jobless Claims, Philly Fed Business Outlook, Leading Indicators
 - **Fri Jun 19:** No events scheduled
+
+## 2026-09-09 — Top Flow card on the v3 home board
+
+**New card: Top Flow (`top-flow`, 🐋).** The whole options market's biggest
+prints, ranked by dollar premium, on the v3 home board. Not a second Flow Tape:
+Flow Tape is our own recorder, one ticker, on the socket; this is every
+underlying the LSE vault sees.
+
+- `cbedge-v3/src/board/topFlow/TopFlowCard.tsx` — new. Cogwheel holds Sort
+  (Biggest / Newest), Min Premium ($50K…$1M), Max DTE (0 / ≤7 / ≤30 / ≤90 /
+  Any) and Rows (25 / 50 / 100), persisted per card COPY so two Top Flows can
+  hold different questions. Header states when the server last swept and how
+  old the newest print is — no LIVE badge, because how far behind the vault's
+  edge runs is not documented. Staleness only colours warn while the vault's
+  session date is today's, so an evening board is not permanently orange.
+- `cbedge-v3/src/board/catalog.tsx` — one catalog entry, lazy() like the other
+  heavy cards; `instanceId` threaded through for per-copy settings.
+- `server-v2/api-router.js` — new `GET /api/lse/top-flow`, **auth `subscriber`**
+  (the first /api/lse/* route a customer can reach; every other one stays
+  owner-only). ONE cached whole-market vault sweep for the entire site, taken
+  at a $50K floor with no DTE cap, refreshed lazily and single-flight at most
+  once per 20s — so every cogwheel combination is a filter over the same cached
+  session and costs zero vault calls. Sweeps are ACCUMULATED, not replaced: the
+  vault answers newest-first at a 5000-row cap, which on a busy session is a
+  window of minutes, so a "biggest of the session" list built from one response
+  would silently mean "biggest of the last few minutes". The store keeps the top
+  2000 by premium and the newest 2000 — the two orderings the card can ask for.
+  Session rollover is keyed on the newest print's own ET date, not wall clock,
+  so pre-open holds the last session instead of blanking for nine hours.
+  Vault rows are normalised server-side (their shape is not fixed — see the
+  row-shape note in `_lib-lse.cjs`), with the OSI ticker as the fallback for
+  root, expiry, right and strike.
+
+Not verified from here: how fresh the vault's flow tape actually is intraday.
+It is documented as the trailing week of prints (`md files/LSE-DATA-LIMITS.md`);
+the card reports its own freshness rather than asserting live.

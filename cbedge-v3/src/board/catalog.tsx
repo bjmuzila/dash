@@ -31,6 +31,7 @@ const EconCalendarCard = lazy(() =>
 const GexChartCard = lazy(() => import('./gexChart/GexChartCard').then((m) => ({ default: m.GexChartCard })))
 const NetPremiumCard = lazy(() => import('./netPremium/NetPremiumCard').then((m) => ({ default: m.NetPremiumCard })))
 const FlowTapeCard = lazy(() => import('./flowTape/FlowTapeCard').then((m) => ({ default: m.FlowTapeCard })))
+const TopFlowCard = lazy(() => import('./topFlow/TopFlowCard').then((m) => ({ default: m.TopFlowCard })))
 const GaugeRailCard = lazy(() => import('./gaugeRail/GaugeRailCard').then((m) => ({ default: m.GaugeRailCard })))
 
 function Deferred({ children }: { children: ReactNode }) {
@@ -248,6 +249,24 @@ export const CARD_CATALOG: CardDef[] = [
     render: () => (
       <Deferred>
         <FlowTapeCard />
+      </Deferred>
+    ),
+  },
+  {
+    // The whole options market's biggest prints, from the LSE vault — NOT a
+    // second Flow Tape. Flow Tape is our own recorder, one ticker, on the
+    // socket; this is every underlying the vault sees, ranked by premium.
+    //
+    // instanceId is threaded through so two copies can hold different cogwheel
+    // settings — 0DTE whales beside the month's biggest is the normal reason to
+    // add a second one, and two identical lists is not.
+    id: 'top-flow',
+    icon: '🐋',
+    label: 'Top Flow',
+    defaultSize: { w: 24, h: 48 },
+    render: (instanceId) => (
+      <Deferred>
+        <TopFlowCard instanceId={instanceId} />
       </Deferred>
     ),
   },

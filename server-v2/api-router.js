@@ -12814,6 +12814,268 @@ try {
       },
     });
 
+    // ── top flow (the v3 board's Top Flow card) ───────────────────────────────
+    //
+    // ONE cached whole-market sweep, served to every subscriber.
+    //
+    // This is the first /api/lse/* route a CUSTOMER can reach — every other one
+    // above is auth:'owner' and hand-driven from /owner/lse-data. A per-request
+    // pull would put one vault call behind every open board, at the vault's row
+    // cap, on whatever cogwheel settings each user happens to have. So:
+    //
+    //   • ONE sweep at the LOOSEST filter the card offers (the $50K floor, no
+    //     DTE cap, both rights). Every cogwheel combination is a filter over
+    //     that one sweep, so moving Min Premium or Max DTE costs zero vault
+    //     calls — which is the whole reason the cogwheel can be per-user.
+    //   • LAZY and SINGLE-FLIGHT. At most one sweep per TF_REFRESH_MS, fired
+    //     only when a request actually arrives (nothing polls the vault at 3am),
+    //     and concurrent requests share the in-flight one rather than stacking.
+    //   • ACCUMULATED, not replaced. The vault answers newest-first at a 5000
+    //     row cap, which on a busy session is a window of MINUTES, not a day —
+    //     so "biggest prints of the session" built from a single response would
+    //     silently mean "biggest of the last few minutes", with nothing on
+    //     screen saying so. Each sweep is merged into a session store that keeps
+    //     the top TF_KEEP_TOP by premium and the newest TF_KEEP_RECENT, which
+    //     are exactly the two orderings the card can ask for.
+    //
+    // SESSION ROLLOVER is keyed on the newest print's own ET date, never on wall
+    // clock: pre-open there are no prints for today yet, and resetting at
+    // midnight would blank the card for nine hours instead of holding the last
+    // session until the new one starts printing.
+    //
+    // FRESHNESS IS REPORTED, NOT ASSUMED. The vault is documented as the
+    // trailing WEEK of prints (md files/LSE-DATA-LIMITS.md); how far behind its
+    // live edge runs is not something this server can know. So every response
+    // carries `asOf` (when the sweep landed) and `newestTs` (the newest print in
+    // it) and the card renders its own staleness off those. Do not add a "LIVE"
+    // badge anywhere that is not derived from them.
+
+    /** The floor the shared sweep is taken at — and therefore the lowest the
+     *  card's Min Premium control may offer. A request asking for less is
+     *  clamped up rather than served rows the sweep never contained. */
+    const TF_BASE_MIN_PREMIUM = 50_000;
+    /** At most one vault call per this, however many boards are open. */
+    const TF_REFRESH_MS = 20_000;
+    /** The vault's own per-call cap. Asking for more is truncated upstream. */
+    const TF_SWEEP_LIMIT = 5000;
+    const TF_KEEP_TOP = 2000;
+    const TF_KEEP_RECENT = 2000;
+    /** Hard cap on rows returned, whatever `limit` asks for. */
+    const TF_MAX_ROWS = 200;
+
+    const tfState = {
+      /** ET date the store covers, from the newest print seen. */
+      day: null,
+      /** id → normalised row. */
+      rows: new Map(),
+      /** When the last sweep SETTLED (success or failure) — a failed sweep must
+       *  still push the next attempt out, or a down vault gets hammered. */
+      at: 0,
+      inflight: null,
+      error: null,
+      sweptRows: 0,
+    };
+
+    // The vault's flow rows are not a fixed shape (see the flow row-shape note
+    // in _lib-lse.cjs). Read every field through a candidate list, and fall back
+    // to the OSI ticker, which encodes root, expiry, right and strike.
+    const TF_UNDERLYING_KEYS = ['underlying', 'underlying_symbol', 'root', 'stock', 'ticker_root'];
+    const TF_OSI_KEYS = ['ticker', 'contract', 'option_symbol', 'osi', 'option_ticker'];
+    const TF_EXPIRY_KEYS = ['expiry', 'expiration', 'expiration_date', 'exp_date', 'exp'];
+    const TF_TYPE_KEYS = ['contract_type', 'type', 'option_type', 'right', 'put_call', 'cp'];
+    const TF_SIZE_KEYS = ['size', 'volume', 'quantity', 'qty', 'contracts', 'trade_size'];
+    const TF_PRICE_KEYS = ['price', 'trade_price', 'fill_price', 'close', 'premium_per_contract'];
+    const TF_SPOT_KEYS = ['underlying_price', 'spot', 'stock_price', 'underlying_close'];
+    const TF_SIDE_KEYS = ['side', 'aggressor', 'trade_side', 'sentiment', 'aggressor_side'];
+
+    const tfStr = (row, keys) => {
+      for (const k of keys) {
+        const v = row ? row[k] : undefined;
+        if (v === undefined || v === null || v === '') continue;
+        const s = String(v).trim();
+        if (s) return s;
+      }
+      return null;
+    };
+    const tfNum = (row, keys) => {
+      for (const k of keys) {
+        const v = row ? row[k] : undefined;
+        if (v === undefined || v === null || v === '') continue;
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+      return null;
+    };
+
+    const TF_OSI_RE = /^([A-Z][A-Z0-9.]{0,5})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;
+    function tfParseOsi(osi) {
+      if (!osi) return null;
+      const m = TF_OSI_RE.exec(String(osi).trim().toUpperCase());
+      if (!m) return null;
+      return { root: m[1], expiry: `20${m[2]}-${m[3]}-${m[4]}`, type: m[5], strike: Number(m[6]) / 1000 };
+    }
+
+    /** YYYY-MM-DD in New York. en-CA is ISO-shaped by definition, so no manual
+     *  part assembly and no month/day transposition to get wrong. */
+    const tfEtDateFmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+    const tfEtDate = (d) => tfEtDateFmt.format(d);
+
+    /** One vault row → the fixed shape the card renders. null = unusable. */
+    function tfNormalize(row) {
+      const ts = Date.parse(String(row && row.timestamp !== undefined ? row.timestamp : ''));
+      // A print with no readable time cannot be ordered, aged or session-keyed.
+      // Dropping it is the only honest option — it would otherwise sort to the
+      // top of a "newest" list at epoch 0.
+      if (!Number.isFinite(ts)) return null;
+      const osi = tfStr(row, TF_OSI_KEYS);
+      const parsed = tfParseOsi(osi);
+      const underlying =
+        (tfStr(row, TF_UNDERLYING_KEYS) || (parsed && parsed.root) || '').toUpperCase() || null;
+      const rawType = (tfStr(row, TF_TYPE_KEYS) || '').toUpperCase();
+      const type = rawType.startsWith('C') ? 'C'
+        : rawType.startsWith('P') ? 'P'
+          : (parsed ? parsed.type : null);
+      const expiry = (tfStr(row, TF_EXPIRY_KEYS) || (parsed && parsed.expiry) || '').slice(0, 10) || null;
+      const premium = lse.flowPremium(row);
+      let dte = tfNum(row, ['dte']);
+      if (dte === null && expiry) {
+        // Measured from the print's OWN session, not from today, so yesterday's
+        // 0DTE does not read as -1 after midnight.
+        const days = (Date.parse(`${expiry}T00:00:00Z`) - Date.parse(`${tfEtDate(new Date(ts))}T00:00:00Z`)) / 86_400_000;
+        dte = Number.isFinite(days) ? Math.max(0, Math.round(days)) : null;
+      }
+      const size = tfNum(row, TF_SIZE_KEYS);
+      const price = tfNum(row, TF_PRICE_KEYS);
+      const strike = lse.flowStrike(row);
+      return {
+        // Identity for the merge. The vault has no print id, so this is the
+        // same shape flow_prints uses: time + contract + what filled.
+        id: `${ts}|${osi || `${underlying}${expiry}${type}${strike}`}|${size === null ? '' : size}|${price === null ? '' : price}|${premium}`,
+        ts,
+        osi: osi || null,
+        underlying,
+        type,
+        strike,
+        expiry,
+        dte,
+        size,
+        price,
+        premium,
+        spot: tfNum(row, TF_SPOT_KEYS),
+        side: tfStr(row, TF_SIDE_KEYS),
+      };
+    }
+
+    /** Merge a sweep into the session store, then prune to the two orderings. */
+    function tfMerge(rows) {
+      const incoming = [];
+      for (const r of rows) {
+        const n = tfNormalize(r);
+        // premium 0 means "unreadable" (flowPremium's contract), and a zero
+        // sitting in a premium-ranked list is noise at the bottom forever.
+        if (n && n.premium > 0) incoming.push(n);
+      }
+      if (!incoming.length) return;
+
+      let newest = incoming[0];
+      for (const n of incoming) if (n.ts > newest.ts) newest = n;
+      const day = tfEtDate(new Date(newest.ts));
+      if (day !== tfState.day) {
+        tfState.day = day;
+        tfState.rows = new Map();
+      }
+      for (const n of incoming) {
+        if (tfEtDate(new Date(n.ts)) !== day) continue;
+        tfState.rows.set(n.id, n);
+      }
+
+      if (tfState.rows.size <= TF_KEEP_TOP + TF_KEEP_RECENT) return;
+      const all = [...tfState.rows.values()];
+      const keep = new Set();
+      [...all].sort((a, b) => b.premium - a.premium).slice(0, TF_KEEP_TOP).forEach((r) => keep.add(r.id));
+      [...all].sort((a, b) => b.ts - a.ts).slice(0, TF_KEEP_RECENT).forEach((r) => keep.add(r.id));
+      const next = new Map();
+      for (const r of all) if (keep.has(r.id)) next.set(r.id, r);
+      tfState.rows = next;
+    }
+
+    /** At most one vault sweep per TF_REFRESH_MS, shared by every caller. */
+    function tfRefresh() {
+      if (tfState.inflight) return tfState.inflight;
+      if (tfState.at && Date.now() - tfState.at < TF_REFRESH_MS) return Promise.resolve();
+      tfState.inflight = lse.optionsFlow({
+        minPremium: TF_BASE_MIN_PREMIUM, order: 'desc', limit: TF_SWEEP_LIMIT,
+      })
+        .then((rows) => {
+          tfMerge(rows);
+          tfState.sweptRows = rows.length;
+          tfState.error = null;
+        })
+        .catch((e) => {
+          // Kept, not thrown: a failed sweep must leave the last good session on
+          // screen with an error beside it, not blank the card.
+          tfState.error = e && e.message ? String(e.message) : String(e);
+          console.warn('[api-router] /api/lse/top-flow sweep failed:', tfState.error);
+        })
+        .then(() => {
+          tfState.at = Date.now();
+          tfState.inflight = null;
+        });
+      return tfState.inflight;
+    }
+
+    register('/api/lse/top-flow', {
+      // 'subscriber' — any active/trialing member, plus the owner. The vault key
+      // never leaves this process; what a customer gets is this normalised,
+      // rate-limited view of it and nothing else.
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+        const num = (k) => {
+          const raw = params.get(k);
+          if (raw === null || raw === '') return null;
+          const v = Number(raw);
+          return Number.isFinite(v) ? v : null;
+        };
+        // Clamped UP: the shared sweep was taken at the base floor, so a lower
+        // ask would return a list that silently misses everything between.
+        const minPremium = Math.max(num('min_premium') ?? TF_BASE_MIN_PREMIUM, TF_BASE_MIN_PREMIUM);
+        const maxDte = num('max_dte');
+        const wantType = String(params.get('type') || '').trim().toUpperCase().slice(0, 1);
+        const sort = params.get('sort') === 'time' ? 'time' : 'premium';
+        const limit = Math.min(Math.max(num('limit') ?? 50, 1), TF_MAX_ROWS);
+
+        await tfRefresh();
+
+        let rows = [...tfState.rows.values()].filter((r) => r.premium >= minPremium);
+        // A row with no readable DTE is DROPPED by a DTE filter rather than let
+        // through — an unfiltered row inside a filtered list is the worse bug.
+        if (maxDte !== null) rows = rows.filter((r) => r.dte !== null && r.dte <= maxDte);
+        if (wantType === 'C' || wantType === 'P') rows = rows.filter((r) => r.type === wantType);
+        rows.sort(sort === 'time'
+          ? (a, b) => b.ts - a.ts
+          : (a, b) => b.premium - a.premium || b.ts - a.ts);
+
+        let newestTs = 0;
+        for (const r of tfState.rows.values()) if (r.ts > newestTs) newestTs = r.ts;
+
+        return send(res, 200, {
+          rows: rows.slice(0, limit),
+          count: Math.min(rows.length, limit),
+          /** How many the filters matched before the cap — "50 of 312". */
+          matched: rows.length,
+          sessionDate: tfState.day,
+          asOf: tfState.at ? new Date(tfState.at).toISOString() : null,
+          newestTs: newestTs || null,
+          baseMinPremium: TF_BASE_MIN_PREMIUM,
+          refreshMs: TF_REFRESH_MS,
+          error: tfState.error,
+        }, { 'Cache-Control': NO_STORE });
+      },
+    });
+
     // ── option contract candles ──────────────────────────────────────────────
     // ?ticker=AAPL260612C00205000            (OSI directly)
     // ?underlying=AAPL&strike=205&expiry=2026-06-12&type=call   (by parts)

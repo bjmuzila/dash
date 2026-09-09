@@ -50,7 +50,11 @@ const TABS: { id: TabId; label: string; hint: string }[] = [
     label: "Options Flow",
     hint: "the print tape — trailing week; filter to one trade date, expiry or strike, or rank the biggest prints",
   },
-  { id: "contract", label: "Contract Candles", hint: "1m premium bars for one option contract" },
+  {
+    id: "contract",
+    label: "Contract Candles",
+    hint: "1m premium bars for one option contract — newest first, narrowable to a single session",
+  },
 ];
 
 const PREVIEW_ROWS = 300;
@@ -374,6 +378,43 @@ function SymbolPicker({
  *  hands back yesterday for anyone west of Greenwich after 7pm. */
 function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * The day after a YYYY-MM-DD, as YYYY-MM-DD.
+ *
+ * WHY A DAY WINDOW IS SENT WIDE. The vault's accepted format for start/end is
+ * not documented, and a datetime string it cannot parse is a 400 — while a
+ * plain date is what every one of these endpoints already takes. So a one-day
+ * window goes out as start=<day>, end=<the day after>, which is right whether
+ * the vault reads `end` as exclusive, as a whole day, or as that day's
+ * midnight. The window is then made exact again by trimming on the row's own
+ * date — server-side via day_from/day_to, and here for the preview.
+ */
+function nextYmd(v: string): string {
+  const d = parseYmd(v);
+  if (!d) return v;
+  d.setDate(d.getDate() + 1);
+  return ymd(d);
+}
+
+/** The YYYY-MM-DD a row belongs to, whichever column the endpoint timed it on. */
+function rowDay(r: Row): string {
+  const v = r.minute ?? r.timestamp ?? r.ts ?? r.datetime;
+  return typeof v === "string" ? v.slice(0, 10) : "";
+}
+
+function trimToDays(rows: Row[], from: string, to: string): Row[] {
+  const lo = from.trim();
+  const hi = to.trim();
+  if (!lo && !hi) return rows;
+  return rows.filter((r) => {
+    const d = rowDay(r);
+    if (!d) return false;
+    if (lo && d < lo) return false;
+    if (hi && d > hi) return false;
+    return true;
+  });
 }
 
 function parseYmd(v: string): Date | null {
@@ -766,6 +807,13 @@ export default function LseData() {
   const [ctStrike, setCtStrike] = useState("");
   const [ctExpiry, setCtExpiry] = useState("");
   const [ctType, setCtType] = useState("call");
+  // A contract's 1m bars run from the day it listed, and asking for them
+  // oldest-first put the session you actually care about — today's — two
+  // thousand rows below the fold. Newest-first is the default, and the window
+  // is narrowable to one session.
+  const [ctStart, setCtStart] = useState("");
+  const [ctEnd, setCtEnd] = useState("");
+  const [ctOrder, setCtOrder] = useState("desc");
 
   useEffect(() => {
     let live = true;
@@ -844,13 +892,15 @@ export default function LseData() {
         if (flStrike.trim()) p.set("strike", flStrike.trim());
         // Trade date is a shorthand for a start/end pair, and it WINS over the
         // two of them — a day plus a contradicting range is a window nobody
-        // meant to ask for. The vault's own time format is "YYYY-MM-DD hh:mm:ss",
-        // so the session is expressed in that rather than a bare date, which
-        // would pin both ends of the window to midnight.
+        // meant to ask for. It goes out wide (see nextYmd) and exact
+        // (day_from/day_to), so no assumption about the vault's date parsing
+        // can turn it into an empty result or a stray extra session.
         const day = flDay.trim();
         if (day) {
-          p.set("start", `${day} 00:00:00`);
-          p.set("end", `${day} 23:59:59`);
+          p.set("start", day);
+          p.set("end", nextYmd(day));
+          p.set("day_from", day);
+          p.set("day_to", day);
         } else {
           if (flStart.trim()) p.set("start", flStart.trim());
           if (flEnd.trim()) p.set("end", flEnd.trim());
@@ -877,6 +927,9 @@ export default function LseData() {
         p.set("strike", ctStrike.trim());
         p.set("expiry", ctExpiry.trim());
         p.set("type", ctType);
+        if (ctStart.trim()) { p.set("start", ctStart.trim()); p.set("day_from", ctStart.trim()); }
+        if (ctEnd.trim()) { p.set("end", nextYmd(ctEnd.trim())); p.set("day_to", ctEnd.trim()); }
+        p.set("order", ctOrder);
         return { path: "/api/lse/option-candles", params: p };
     }
   }, [
@@ -885,7 +938,7 @@ export default function LseData() {
     chUnderlying, chType, chExpiry, chMinDte, chMaxDte,
     flUnderlying, flType, flMinPremium, flMaxDte, flStart, flEnd, flAll,
     flDay, flExpiry, flStrike, flTop,
-    ctUnderlying, ctStrike, ctExpiry, ctType,
+    ctUnderlying, ctStrike, ctExpiry, ctType, ctStart, ctEnd, ctOrder,
   ]);
 
   /** The OSI the four parts spell out, live. null until they are complete. */
@@ -917,6 +970,14 @@ export default function LseData() {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       let got: Row[] = Array.isArray(j.rows) ? j.rows : [];
+
+      // The day window was sent wide on purpose (see nextYmd) and the server
+      // trims it back with day_from/day_to. Trim here as well, so the preview
+      // is exact even against a server build that does not know those yet.
+      if (tab === "flow" && flDay.trim()) got = trimToDays(got, flDay.trim(), flDay.trim());
+      if (tab === "contract" && (ctStart.trim() || ctEnd.trim())) {
+        got = trimToDays(got, ctStart.trim(), ctEnd.trim());
+      }
 
       // RANK HERE TOO, not only on the server.
       //
@@ -955,7 +1016,7 @@ export default function LseData() {
     } finally {
       setBusy(false);
     }
-  }, [request, tab, flTop]);
+  }, [request, tab, flTop, flDay, ctStart, ctEnd]);
 
   /**
    * Same URL plus format=csv, handed to the browser. A plain navigation keeps
@@ -1216,6 +1277,27 @@ export default function LseData() {
                   spellCheck={false}
                 />
               </Field>
+              <Field label="From" width={165} hint="blank = the contract's whole archive">
+                <DateField value={ctStart} onChange={setCtStart} placeholder="first bar" />
+              </Field>
+              <Field label="To" width={165} hint="inclusive">
+                <DateField value={ctEnd} onChange={setCtEnd} placeholder="latest bar" />
+              </Field>
+              <Field label="Session" width={130} hint="today's bars only">
+                <button
+                  type="button"
+                  style={{ ...homeSecondaryButtonStyle, width: "100%", height: CONTROL_H, padding: "0 12px" }}
+                  onClick={() => { const t = ymd(new Date()); setCtStart(t); setCtEnd(t); }}
+                >
+                  Today
+                </button>
+              </Field>
+              <Field label="Order" width={150} hint="newest first puts today on top">
+                <select style={selectStyle} value={ctOrder} onChange={(e) => setCtOrder(e.target.value)}>
+                  <option style={optionStyle} value="desc">Newest first</option>
+                  <option style={optionStyle} value="asc">Oldest first</option>
+                </select>
+              </Field>
             </>
           ) : null}
 
@@ -1300,7 +1382,8 @@ export default function LseData() {
           <div style={{ fontSize: 12.5, color: OWNER_THEME.text, marginBottom: 12 }}>
             {meta}
             {rows.length > PREVIEW_ROWS
-              ? ` · showing the first ${PREVIEW_ROWS.toLocaleString("en-US")}`
+              ? ` · this tab draws the first ${PREVIEW_ROWS.toLocaleString("en-US")} of them —` +
+                " the pull itself is complete, and Download CSV has every row"
               : ""}
           </div>
           <DataTable rows={rows} />
