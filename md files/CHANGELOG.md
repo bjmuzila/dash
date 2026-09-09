@@ -21210,3 +21210,43 @@ copy like the rest; defaults to ALL.
   let through — same rule as the DTE filter. Those land in `excluded.itm`.
 - The header's hidden-count now covers both filters ("N hidden") and its tooltip
   breaks down which filter took what.
+
+## 2026-09-09 — Top Flow: session poller + DB persistence
+
+Top Flow now holds the whole session from the open, and survives a deploy.
+
+Two holes the lazy design left, which were the same hole seen twice:
+
+1. **Nobody watching.** `tfRefresh()` only fired on a request, so a board first
+   opened at 11:00 started collecting at 11:00. Catching up was not an option —
+   the vault answers the newest 5000 prints (minutes, on a busy morning), and
+   anything reached back to would arrive older than `TF_CLASSIFY_MAX_AGE_MS`, so
+   it could never be given a side and would be filtered straight back out.
+2. **A restart.** The store is a Map in-process. A deploy at noon threw the
+   morning away.
+
+**RTH poller.** A 20s timer runs 09:25–16:15 ET on weekdays whether or not
+anyone has the card open — which is also the only way a print gets classified
+while it is fresh. Nothing outside those hours, nothing at weekends; roughly
+1,200 vault calls a day. Market holidays are deliberately NOT special-cased: an
+empty response every 20s on Thanksgiving is cheaper than a holiday calendar to
+keep right. The timer is `unref()`d so it can never hold the process open, and
+fires once 2s after boot so a mid-session restart is back in step immediately.
+
+**Persistence: `lse_top_flow_prints`.** New table (id PK, session_date, ts,
+premium, payload JSONB), created on demand like `level_log_ticker_prefs`.
+
+- Only DIRTY rows are written, every 60s, batched 500 at a time — a row is
+  marked when it enters the store and again when its verdict is frozen. Never
+  the whole store.
+- Restore loads BOTH orderings explicitly (top 2000 by premium, newest 2000).
+  Loading "the newest 4000" would quietly turn the Biggest board into a
+  recent-prints board after every deploy.
+- A row stored while still pending comes back pending — JSON has no `undefined`,
+  so the `side` key is simply absent — and `tfEnrich()` ages it out to `stale`
+  rather than pretending it was judged.
+- A failed persist leaves rows dirty and retries; persistence failing is not a
+  reason to drop what is already correct in memory.
+- 7-day retention, swept once on boot off the restore path.
+- The request handler awaits the restore, so a request landing during boot
+  cannot answer from an empty store and report it as an empty session.

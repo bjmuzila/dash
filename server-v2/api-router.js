@@ -13508,6 +13508,8 @@ try {
       statsError: null,
       sweptRows: 0,
       classified: 0,
+      /** Ids changed since the last DB mirror. See tfPersist(). */
+      dirty: new Set(),
     };
 
     // The vault's flow rows are not a fixed shape (see the flow row-shape note
@@ -13660,6 +13662,7 @@ try {
         const prev = tfState.rows.get(n.id);
         if (prev && prev.side !== undefined) continue;
         tfState.rows.set(n.id, n);
+        tfState.dirty.add(n.id);
       }
 
       if (tfState.rows.size <= TF_KEEP_TOP + TF_KEEP_RECENT) return;
@@ -13742,10 +13745,12 @@ try {
           r.side = up.includes('ASK') || up.startsWith('B') ? 'ask' : up.includes('BID') || up.startsWith('S') ? 'bid' : 'mid';
           r.action = r.side === 'ask' ? 'BUY' : r.side === 'bid' ? 'SELL' : null;
           r.sideReason = 'source';
+          tfState.dirty.add(r.id);
           continue;
         }
         if (now - r.ts > TF_CLASSIFY_MAX_AGE_MS) {
           r.side = null; r.action = null; r.sideReason = 'stale';
+          tfState.dirty.add(r.id);
           continue;
         }
         if (tfGroupKey(r)) pending.push(r);
@@ -13817,6 +13822,7 @@ try {
             r.ask = Number.isFinite(stat.ask) ? stat.ask : null;
             r.quoteAgeMs = Math.max(0, quotedAt - r.ts);
             tfState.classified += 1;
+            tfState.dirty.add(r.id);
           }
         } catch (e) {
           tfState.statsError = e && e.message ? String(e.message) : String(e);
@@ -13852,8 +13858,213 @@ try {
           // Detached — see tfEnrich's note. Deliberately not awaited and
           // deliberately not allowed to reject into the response path.
           try { void tfEnrich(); } catch { /* enrichment is best-effort */ }
+          // Mirrored on its own slower clock, and never awaited here.
+          try { void tfPersist(); } catch { /* persistence is best-effort */ }
         });
       return tfState.inflight;
+    }
+
+    // ── The session survives nobody looking, and survives a deploy ────────────
+    //
+    // Two holes the lazy design left, and they are the same hole seen twice:
+    //
+    //   1. NOBODY WATCHING. tfRefresh() only fires when a request arrives, so a
+    //      board first opened at 11:00 started collecting at 11:00. The catch-up
+    //      does not help — the vault answers the newest 5000 prints, which on a
+    //      busy morning is a window of minutes — and anything it did reach back
+    //      to would arrive older than TF_CLASSIFY_MAX_AGE_MS, so it could never
+    //      be given a side and would be filtered straight back out.
+    //   2. A RESTART. The store is a Map in this process. A deploy at noon threw
+    //      the morning away.
+    //
+    // So: a timer polls through the session whether or not anyone has the card
+    // open — which is also the only way a print gets classified while it is
+    // fresh — and the store is mirrored to Postgres so a restart reloads the day
+    // instead of starting it again.
+    //
+    // The cost is deliberate and bounded: one vault call every TF_REFRESH_MS
+    // during RTH only (~1,200 a day), nothing outside it, nothing at weekends.
+
+    /** Minutes past ET midnight, and the weekday, for the RTH gate. */
+    const tfEtClockFmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short',
+    });
+
+    /**
+     * Is the US session running (plus a little either side)?
+     *
+     * 09:25 so the store is already warm at the bell rather than filling in over
+     * the first cycle, and 16:15 to catch the late prints that settle after the
+     * close. Weekends are out; market holidays are NOT special-cased — polling a
+     * quiet vault on Thanksgiving costs one empty response every 20 seconds and
+     * a holiday calendar is one more thing to keep right.
+     */
+    function tfIsRthEt(now = new Date()) {
+      const parts = tfEtClockFmt.formatToParts(now);
+      const get = (t) => (parts.find((p) => p.type === t) || {}).value || '';
+      const wd = get('weekday');
+      if (wd === 'Sat' || wd === 'Sun') return false;
+      // 24-hour hour '24' happens at midnight in some ICU versions.
+      const hh = Number(get('hour')) % 24;
+      const mm = Number(get('minute'));
+      const mins = hh * 60 + mm;
+      return mins >= 9 * 60 + 25 && mins <= 16 * 60 + 15;
+    }
+
+    /** How often the store is mirrored to the DB. Only DIRTY rows are written. */
+    const TF_PERSIST_MS = 60_000;
+    /** Upserted per persist pass. The rest go on the next one. */
+    const TF_PERSIST_BATCH = 500;
+    /** Sessions kept in the table. */
+    const TF_RETAIN_DAYS = 7;
+
+    let tfSchema = null;
+    function tfEnsureSchema() {
+      if (!libDb) return Promise.reject(new Error('no db'));
+      if (!tfSchema) {
+        // Memoised on the PROMISE so two concurrent first writes do not both
+        // issue the CREATE; cleared on failure so a transient DB error does not
+        // poison every later write with a resolved-but-wrong cache.
+        tfSchema = libDb.queryAll(
+          `CREATE TABLE IF NOT EXISTS lse_top_flow_prints (
+             id           TEXT PRIMARY KEY,
+             session_date DATE NOT NULL,
+             ts           BIGINT NOT NULL,
+             premium      DOUBLE PRECISION NOT NULL DEFAULT 0,
+             payload      JSONB NOT NULL,
+             updated_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+           )`,
+          [],
+        )
+          .then(() => libDb.queryAll(
+            `CREATE INDEX IF NOT EXISTS lse_top_flow_prints_session_idx
+               ON lse_top_flow_prints (session_date, ts DESC)`,
+            [],
+          ))
+          .catch((e) => { tfSchema = null; throw e; });
+      }
+      return tfSchema;
+    }
+
+    let tfRestorePromise = null;
+    /**
+     * Reload the most recent stored session into the store, once per process.
+     *
+     * The two orderings are loaded explicitly rather than "the newest 4000",
+     * because the store's whole contract is that it holds the biggest AND the
+     * newest — restoring only one of them would quietly turn the Biggest board
+     * into a recent-prints board after every deploy.
+     */
+    function tfRestore() {
+      if (tfRestorePromise) return tfRestorePromise;
+      if (!libDb) return (tfRestorePromise = Promise.resolve());
+      tfRestorePromise = (async () => {
+        try {
+          await tfEnsureSchema();
+          const latest = await libDb.queryAll(
+            `SELECT to_char(MAX(session_date), 'YYYY-MM-DD') AS d FROM lse_top_flow_prints`, [],
+          );
+          const day = latest && latest[0] && latest[0].d ? String(latest[0].d) : null;
+          if (!day) return;
+          const rows = await libDb.queryAll(
+            `(SELECT payload FROM lse_top_flow_prints WHERE session_date = ?
+                ORDER BY premium DESC LIMIT ?)
+             UNION
+             (SELECT payload FROM lse_top_flow_prints WHERE session_date = ?
+                ORDER BY ts DESC LIMIT ?)`,
+            [day, TF_KEEP_TOP, day, TF_KEEP_RECENT],
+          );
+          let n = 0;
+          for (const r of rows || []) {
+            const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+            if (!p || !p.id) continue;
+            // `side` absent means the row was still pending when it was stored —
+            // JSON has no undefined, so the key is simply missing, which reads
+            // back as pending. That is right: tfEnrich will age it out to
+            // 'stale' on the next pass rather than pretend it was judged.
+            tfState.rows.set(String(p.id), p);
+            n += 1;
+          }
+          tfState.day = day;
+          console.log(`[api-router] top-flow restored ${n} prints from ${day}`);
+          // Housekeeping, once, off the restore path so it never delays a boot.
+          libDb.queryAll(
+            `DELETE FROM lse_top_flow_prints WHERE session_date < (CURRENT_DATE - ?::int)`,
+            [TF_RETAIN_DAYS],
+          ).catch(() => { /* retention is best-effort */ });
+        } catch (e) {
+          console.warn('[api-router] top-flow restore failed:', e && e.message ? e.message : e);
+        }
+      })();
+      return tfRestorePromise;
+    }
+
+    let tfPersistAt = 0;
+    let tfPersisting = null;
+    /** Upsert the rows that changed since the last pass. */
+    function tfPersist(force = false) {
+      if (!libDb || tfPersisting) return Promise.resolve();
+      if (!tfState.dirty.size) return Promise.resolve();
+      if (!force && Date.now() - tfPersistAt < TF_PERSIST_MS) return Promise.resolve();
+      tfPersisting = (async () => {
+        try {
+          await tfEnsureSchema();
+          const ids = [...tfState.dirty].slice(0, TF_PERSIST_BATCH);
+          const vals = [];
+          const params = [];
+          for (const id of ids) {
+            const r = tfState.rows.get(id);
+            // Evicted between being marked and being written — nothing to store,
+            // and it must still leave the dirty set or it is retried forever.
+            if (!r) { tfState.dirty.delete(id); continue; }
+            vals.push('(?, ?, ?, ?, ?::jsonb, CURRENT_TIMESTAMP)');
+            params.push(r.id, tfEtDate(new Date(r.ts)), r.ts, r.premium, JSON.stringify(r));
+          }
+          if (!vals.length) return;
+          await libDb.queryAll(
+            `INSERT INTO lse_top_flow_prints (id, session_date, ts, premium, payload, updated_at)
+             VALUES ${vals.join(', ')}
+             ON CONFLICT (id) DO UPDATE SET
+               payload = EXCLUDED.payload,
+               ts = EXCLUDED.ts,
+               premium = EXCLUDED.premium,
+               session_date = EXCLUDED.session_date,
+               updated_at = CURRENT_TIMESTAMP`,
+            params,
+          );
+          for (const id of ids) tfState.dirty.delete(id);
+        } catch (e) {
+          // Left dirty on purpose: the next pass retries. Persistence failing is
+          // not a reason to drop what is already correct in memory.
+          console.warn('[api-router] top-flow persist failed:', e && e.message ? e.message : e);
+        } finally {
+          tfPersistAt = Date.now();
+          tfPersisting = null;
+        }
+      })();
+      return tfPersisting;
+    }
+
+    /**
+     * The session poller.
+     *
+     * unref()'d so it can never hold the process open on its own — a shutdown
+     * should not wait 20 seconds for a market-data timer.
+     */
+    if (lse.hasKey()) {
+      const tick = () => {
+        if (!tfIsRthEt()) return;
+        void tfRestore().then(() => tfRefresh());
+      };
+      const tfTimer = setInterval(tick, TF_REFRESH_MS);
+      if (typeof tfTimer.unref === 'function') tfTimer.unref();
+      // One immediately, so a restart DURING the session is back in step at once
+      // rather than after a cycle. Delayed a beat so it never races the rest of
+      // the router's boot.
+      setTimeout(tick, 2_000).unref?.();
+    } else {
+      console.warn('[api-router] LSE_API_KEY not set — top-flow session poller stays off');
     }
 
     register('/api/lse/top-flow', {
@@ -13882,6 +14093,9 @@ try {
         const moneyness = params.get('moneyness') === 'otm' ? 'otm' : 'all';
         const limit = Math.min(Math.max(num('limit') ?? 50, 1), TF_MAX_ROWS);
 
+        // A request that lands before the restore finishes must not answer
+        // from an empty store and report it as an empty session.
+        await tfRestore();
         await tfRefresh();
 
         let rows = [...tfState.rows.values()].filter((r) => r.premium >= minPremium);
