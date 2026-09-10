@@ -639,18 +639,27 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
       data-capture-meta={`whole market · ${s.sort === 'premium' ? 'biggest' : 'newest'} · ≥${fmtPremium(s.minPremium)}${s.maxDte === null ? '' : ` · ≤${s.maxDte} DTE`}`}
     >
       <CardToolbar>
+        {/* The header no longer carries a freshness line, so the badge does.
+            It still has to be POSSIBLE to tell a quiet market from a dead feed —
+            that is the one thing a live panel must never hide — but it does not
+            need a permanent line of its own to do it. Warn-coloured once the
+            newest print goes stale, with the detail on hover. */}
         <span
           title={
             failed
               ? `The last sweep failed — showing the last data that arrived. ${q.data?.error ?? q.error?.message ?? ''}`
-              : 'When the server last swept the vault'
+              : q.data?.newestTs
+                ? liveSession
+                  ? `Newest print ${fmtTime(q.data.newestTs)} — ${fmtAgo(ageSec)} ago. This is the feed's live edge, not this card's refresh.`
+                  : `Session ${q.data.sessionDate}, closed. Newest print ${fmtTime(q.data.newestTs)}.`
+                : 'When the server last swept the vault'
           }
           className={[
             'tabular w-[54px] rounded-sm bg-raised px-2 py-0.5 text-center text-3xs',
-            failed ? 'text-warn' : q.data ? 'text-accent' : 'text-down',
+            failed ? 'text-warn' : stale ? 'text-warn' : q.data ? 'text-accent' : 'text-down',
           ].join(' ')}
         >
-          {failed ? 'ERROR' : q.data ? 'VAULT' : 'WAITING'}
+          {failed ? 'ERROR' : stale ? 'STALE' : q.data ? 'VAULT' : 'WAITING'}
         </span>
         {/* Only when the quote feed is the thing that is down. The rest of the
             card is fine in that state, so this must not read as a card error. */}
@@ -678,9 +687,6 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
       </CardToolbar>
 
       <div className="flex flex-wrap items-baseline gap-4 px-1 text-xs text-muted">
-        <span className="font-bold uppercase tracking-[0.08em] text-fg">
-          {s.sort === 'premium' ? 'Biggest' : 'Newest'}
-        </span>
         <span>
           <strong className="tabular text-fg">{rows.length.toLocaleString()}</strong>
           {q.data && q.data.matched > rows.length ? (
@@ -701,31 +707,6 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
           {s.maxDte === null ? '' : ` · ≤${s.maxDte} DTE`}
           {s.moneyness === 'otm' ? ' · OTM' : ''}
         </span>
-        {/* A filter that removes rows has to say so. Silently showing fewer
-            prints than the market printed is how a card gets mistrusted. */}
-        {hiddenCount > 0 && (
-          <span
-            className="text-faint opacity-70"
-            title={[
-              `Unreadable side: ${q.data?.excluded.mid ?? 0} mid, ${q.data?.excluded.pending ?? 0} awaiting a quote, ${q.data?.excluded.stale ?? 0} too old to judge.`,
-              (q.data?.excluded.itm ?? 0) > 0 ? `In the money at print time: ${q.data?.excluded.itm ?? 0}.` : '',
-              'SHOW UNREADABLE is in the cog; OTM/ALL is in the toolbar.',
-            ].filter(Boolean).join(' ')}
-          >
-            {hiddenCount.toLocaleString()} hidden
-          </span>
-        )}
-        {/* Two facts, no verdict — see the header note. */}
-        {q.data?.newestTs ? (
-          <span
-            className={['tabular ml-auto', stale ? 'text-warn' : 'text-faint'].join(' ')}
-            title="The newest print in the vault's session, and how long ago it was. This is the feed's live edge, not this card's refresh"
-          >
-            {liveSession
-              ? `newest ${fmtTime(q.data.newestTs)} · ${fmtAgo(ageSec)} ago`
-              : `session ${q.data.sessionDate} · closed`}
-          </span>
-        ) : null}
       </div>
 
       <div ref={wrapRef} className="flex min-h-0 flex-1">

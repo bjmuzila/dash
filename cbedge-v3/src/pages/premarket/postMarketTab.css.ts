@@ -162,6 +162,19 @@ export const POSTMARKET_CSS = `
 .pmk .evlegend{display:flex;gap:14px;flex-wrap:wrap;font-size:9.5px;letter-spacing:.05em;
   text-transform:uppercase;color:var(--dim2)}
 .pmk .evlegend i{display:inline-block;width:9px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+/* ── THE LEGEND IS THE FILTER ───────────────────────────────────────────────
+   Section 3's build buckets are toggled by clicking their legend entry, so the
+   chips are real <button>s rather than decorative spans. A switched-off chip
+   keeps its place and its label — it dims and its swatch greys — because a
+   filter that removes its own control is a filter you cannot undo. */
+.pmk .evlegend .chip{display:inline-flex;align-items:center;background:none;border:0;
+  padding:2px 5px;margin:-2px -5px;font:inherit;letter-spacing:inherit;text-transform:inherit;
+  color:inherit;cursor:pointer;border-radius:4px;transition:opacity .12s ease,background .12s ease}
+.pmk .evlegend .chip:hover{background:var(--sunken);color:var(--txt)}
+.pmk .evlegend .chip.off{opacity:.4}
+.pmk .evlegend .reset{background:none;border:1px solid var(--line2);color:var(--dim);cursor:pointer;
+  font:inherit;letter-spacing:inherit;text-transform:inherit;border-radius:4px;padding:1px 7px}
+.pmk .evlegend .reset:hover{color:var(--txt);border-color:var(--line3)}
 /* ── THE LADDER FILLS ITS COLUMN ────────────────────────────────────────────
    .chart caps every ladder on the page at 440px, which is right for the short
    ones on the Premarket tab and wrong for this one: section 3's other column

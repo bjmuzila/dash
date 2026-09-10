@@ -21254,3 +21254,68 @@ owner-only and untouched.
 - Below 720px of card width the probe **takes over** the card rather than
   squeezing the list into a gutter; the table is hidden, not unmounted, so its
   scroll position survives closing the panel.
+
+## 2026-09-10 — contract-candles: closed windows are bought once, ever
+
+Widened the cache, in the only way that actually means anything for immutable
+data: a closed window is now never re-bought.
+
+- **In-process TTL for a closed window is `Infinity`.** Not a bigger number — a
+  window whose last bar is from a session that has already closed cannot change,
+  so an expiry on it is a promise to go and buy the identical answer again
+  later. The only reason to drop one is memory, which is what the 400-entry LRU
+  is for. Live windows keep their 60s.
+- **New durable tier: `lse_contract_bars`** (cache_key PK, newest_ts, bar_count,
+  payload JSONB). In-process caching still buys the same closed window once per
+  RESTART, and a deploy is a normal event. Stored, a window is never bought from
+  the vault again by anyone. Read is checked INSIDE the single-flight, so a
+  burst of clicks on one print makes one DB read rather than one each.
+- **No retention sweep, deliberately.** The vault drops a contract ~120 days
+  after expiry, so a row written today is the ONLY copy of that contract's tape
+  once the window passes — the same reason the GEX recorders exist. Deleting one
+  would be destroying history the source can no longer re-serve. A window is a
+  few KB and the table only grows with contracts people actually opened.
+- **Live windows are never written.** A row whose last bar is from today would
+  be a permanent record of half a session.
+- **Empty answers are cached in memory but never stored.** Final for this
+  process, but persisting one would pin a vault hiccup into the archive as "this
+  contract has no tape".
+- `INSERT … ON CONFLICT DO NOTHING`: first writer wins, and two racing writes of
+  identical immutable data need no arbitration.
+
+Reads and writes are best-effort throughout — a DB that is down costs one vault
+call, not a broken panel.
+
+## 2026-09-10 — Post-Market §3 legend is a filter (ported to the LIVE v3 app)
+
+**What was wrong:** the build-window legend toggles were written into
+`components/pages/premarket/PostMarketTab.tsx` — the app-vite copy. The live site
+serves the SPA from `cbedge-v3/` at `/v3/*`, which has its own
+`cbedge-v3/src/pages/premarket/PostMarketTab.tsx`. The deployed
+`PostMarketTab-*.js` chunk had no `aria-pressed`/`toggleBucket`, so the chips on
+cbedge.net were still inert spans. Editing the non-live copy is why "no edits
+seem to be happening."
+
+**Changed (in cbedge-v3, the live app):**
+- `src/pages/premarket/PostMarketTab.tsx`
+  - `hiddenBuckets` / `pmHidden` state + `toggleBucket`, `shownBuckets`,
+    `evUnfiltered`.
+  - `evRows`: segments built over every active bucket (`allSegs`), then filtered
+    by `hiddenBuckets`; denominator stays the whole recorded move, so hiding a
+    window SHORTENS the bar instead of re-inflating what is left. `dominant`
+    follows what is lit. `hiddenBuckets` added to the memo deps.
+  - Legend: `<span>` → `<button className="chip">` with `aria-pressed`,
+    per-chip tooltips, greyed swatch when off. The `15:00→close · board share`
+    column gets its own chip. A `show all` reset appears when anything is off.
+  - Bars: segment widths laid against `full` (pre-filter length), bar ends early
+    where a hidden window sat. Solid fallback bar only while the legend is whole.
+    Power-hour column unpainted when its chip is off.
+- `src/pages/premarket/postMarketTab.css.ts` — `.evlegend .chip`,
+  `.chip:hover`, `.chip.off`, `.reset`, `.reset:hover`.
+
+**Note:** `components/pages/premarket/PostMarketTab.tsx` (app-vite) already had
+this from the earlier session and is left as-is. AGENTS.md still describes
+app-vite `/app/*` as the live UI; the live UI is now `cbedge-v3` at `/v3/*`.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`) to appear
+on cbedge.net.

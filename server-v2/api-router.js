@@ -13994,9 +13994,15 @@ try {
           tfState.day = day;
           console.log(`[api-router] top-flow restored ${n} prints from ${day}`);
           // Housekeeping, once, off the restore path so it never delays a boot.
+          // ── WHALES ARE NEVER SWEPT ──────────────────────────────────────
+          // The $1M+ archive at /v3/whales is not a second table; it is this
+          // one with the retention delete skipping over it. That makes this
+          // predicate the ONLY thing standing between the archive and a
+          // seven-day window — do not "tidy" it into the general case.
           libDb.queryAll(
-            `DELETE FROM lse_top_flow_prints WHERE session_date < (CURRENT_DATE - ?::int)`,
-            [TF_RETAIN_DAYS],
+            `DELETE FROM lse_top_flow_prints
+              WHERE session_date < (CURRENT_DATE - ?::int) AND premium < ?`,
+            [TF_RETAIN_DAYS, TF_WHALE_FLOOR],
           ).catch(() => { /* retention is best-effort */ });
         } catch (e) {
           console.warn('[api-router] top-flow restore failed:', e && e.message ? e.message : e);
@@ -14219,6 +14225,165 @@ try {
       },
     });
 
+    // ── /api/lse/whales — the archive behind /v3/whales ───────────────────────
+    //
+    // Reads lse_top_flow_prints, the table the session poller already fills.
+    // There is no second "whales" table and no dual write: a whale is a row in
+    // that table with a big enough premium, and the ONLY thing that makes it
+    // permanent is the retention sweep skipping it (see tfRestore()).
+    //
+    // WHY NOT A SEPARATE TABLE, which the mockup proposed: a second copy of the
+    // same print is a second thing to keep in step, and the two would disagree
+    // the first time a classification landed on one and not the other. One row,
+    // one verdict, one place.
+    //
+    // EVERYTHING IS AGGREGATED IN SQL. The page wants five roll-ups over a range
+    // that can be months; shipping the rows to the browser and summing them
+    // there would mean shipping every row, which is the whole range. The table
+    // cap is on ROWS RENDERED, not on what the totals are computed from — the
+    // same split /proxy/flow-premsplit already makes for the flow page, and for
+    // the same reason: a total that only counts what fitted on screen is a
+    // number that lies quietly.
+    const TF_WHALE_FLOOR = 1_000_000;
+    /** Rows the table can ask for. The roll-ups are never capped. */
+    const TF_WHALE_MAX_ROWS = 500;
+
+    register('/api/lse/whales', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        if (!libDb) return send(res, 503, { error: 'archive unavailable' });
+        const params = qp(req);
+        const num = (k) => {
+          const raw = params.get(k);
+          if (raw === null || raw === '') return null;
+          const v = Number(raw);
+          return Number.isFinite(v) ? v : null;
+        };
+        const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+
+        const to = ymd(params.get('to')) || tfEtDate(new Date());
+        const from = ymd(params.get('from'))
+          || tfEtDate(new Date(Date.parse(`${to}T00:00:00Z`) - 30 * 86_400_000));
+        // Clamped UP to the whale floor: this page is the $1M+ archive, and the
+        // rows below it are the ones retention is allowed to delete. Serving
+        // them here would mean a range that quietly gets shorter as it ages.
+        const minPremium = Math.max(num('min_premium') ?? TF_WHALE_FLOOR, TF_WHALE_FLOOR);
+        const ticker = String(params.get('ticker') || '').trim().toUpperCase();
+        const wantType = String(params.get('type') || '').trim().toUpperCase().slice(0, 1);
+        const action = String(params.get('action') || '').trim().toUpperCase();
+        const otmOnly = params.get('moneyness') === 'otm';
+        const sort = params.get('sort') === 'premium' ? 'premium' : 'time';
+        const limit = Math.min(Math.max(num('limit') ?? 200, 1), TF_WHALE_MAX_ROWS);
+
+        // One WHERE, built once and reused by every query below — the roll-ups
+        // and the rows must be able to disagree about ORDER and never about
+        // MEMBERSHIP.
+        const where = ['session_date BETWEEN ?::date AND ?::date', 'premium >= ?'];
+        const args = [from, to, minPremium];
+        if (ticker) { where.push("payload->>'underlying' = ?"); args.push(ticker); }
+        if (wantType === 'C' || wantType === 'P') { where.push("payload->>'type' = ?"); args.push(wantType); }
+        if (action === 'BUY' || action === 'SELL') { where.push("payload->>'action' = ?"); args.push(action); }
+        if (otmOnly) {
+          // Moneyness AT PRINT TIME, against the spot the print carried — the
+          // same rule the Top Flow card's OTM filter uses, and for the same
+          // reason: a call bought 40 points OTM at 10am was an OTM buy whatever
+          // the index did afterwards. A row missing any of the three is dropped
+          // rather than let through.
+          where.push(`(
+            (payload->>'strike') IS NOT NULL AND (payload->>'spot') IS NOT NULL AND
+            ((payload->>'type' = 'C' AND (payload->>'strike')::float8 > (payload->>'spot')::float8)
+             OR (payload->>'type' = 'P' AND (payload->>'strike')::float8 < (payload->>'spot')::float8))
+          )`);
+        }
+        const W = where.join(' AND ');
+
+        // Buy and sell premium, everywhere they appear. Mid and unclassified
+        // prints are in NEITHER bucket by design — they are in the total, and
+        // the page says the split is "of readable premium" because of this.
+        const BUY = `COALESCE(SUM(premium) FILTER (WHERE payload->>'action' = 'BUY'), 0)`;
+        const SELL = `COALESCE(SUM(premium) FILTER (WHERE payload->>'action' = 'SELL'), 0)`;
+
+        try {
+          await tfEnsureSchema();
+          const [summary, sessions, tickers, buckets, repeats, rows] = await Promise.all([
+            libDb.queryAll(
+              `SELECT COUNT(*)::int AS n,
+                      COALESCE(SUM(premium),0) AS total,
+                      ${BUY} AS bought, ${SELL} AS sold,
+                      COALESCE(SUM(premium) FILTER (WHERE payload->>'type' = 'C'),0) AS calls,
+                      COALESCE(SUM(premium) FILTER (WHERE payload->>'type' = 'P'),0) AS puts,
+                      COUNT(DISTINCT session_date)::int AS sessions
+                 FROM lse_top_flow_prints WHERE ${W}`, args),
+            libDb.queryAll(
+              `SELECT to_char(session_date,'YYYY-MM-DD') AS d, COUNT(*)::int AS n,
+                      COALESCE(SUM(premium),0) AS total, ${BUY} AS bought, ${SELL} AS sold
+                 FROM lse_top_flow_prints WHERE ${W}
+                GROUP BY session_date ORDER BY session_date ASC`, args),
+            libDb.queryAll(
+              `SELECT payload->>'underlying' AS ticker, COUNT(*)::int AS n,
+                      COALESCE(SUM(premium),0) AS total, ${BUY} AS bought, ${SELL} AS sold
+                 FROM lse_top_flow_prints WHERE ${W} AND payload->>'underlying' IS NOT NULL
+                GROUP BY 1 ORDER BY total DESC LIMIT 12`, args),
+            libDb.queryAll(
+              `SELECT CASE
+                        WHEN (payload->>'dte')::int = 0 THEN '0DTE'
+                        WHEN (payload->>'dte')::int <= 7 THEN '1-7'
+                        WHEN (payload->>'dte')::int <= 30 THEN '8-30'
+                        WHEN (payload->>'dte')::int <= 90 THEN '31-90'
+                        ELSE '90+' END AS bucket,
+                      COUNT(*)::int AS n, COALESCE(SUM(premium),0) AS total
+                 FROM lse_top_flow_prints WHERE ${W} AND payload->>'dte' IS NOT NULL
+                GROUP BY 1`, args),
+            // The same contract hit more than twice in the range. This is the
+            // one roll-up that is not a sum — it is the page's only answer to
+            // "is somebody building a position", and a single print never is.
+            libDb.queryAll(
+              `SELECT payload->>'osi' AS osi,
+                      MAX(payload->>'underlying') AS ticker,
+                      MAX(payload->>'strike') AS strike,
+                      MAX(payload->>'type') AS type,
+                      MAX(payload->>'expiry') AS expiry,
+                      COUNT(*)::int AS n, COALESCE(SUM(premium),0) AS total,
+                      ${BUY} AS bought, ${SELL} AS sold
+                 FROM lse_top_flow_prints WHERE ${W} AND payload->>'osi' IS NOT NULL
+                GROUP BY 1 HAVING COUNT(*) >= 3 ORDER BY total DESC LIMIT 10`, args),
+            libDb.queryAll(
+              `SELECT to_char(session_date,'YYYY-MM-DD') AS d, payload
+                 FROM lse_top_flow_prints WHERE ${W}
+                ORDER BY ${sort === 'premium' ? 'premium DESC, ts DESC' : 'ts DESC'}
+                LIMIT ?`, [...args, limit]),
+          ]);
+
+          const biggest = await libDb.queryAll(
+            `SELECT to_char(session_date,'YYYY-MM-DD') AS d, payload
+               FROM lse_top_flow_prints WHERE ${W} ORDER BY premium DESC LIMIT 1`, args);
+
+          const asRow = (r) => {
+            const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+            return { ...p, sessionDate: r.d };
+          };
+
+          return send(res, 200, {
+            range: { from, to },
+            filters: { minPremium, ticker: ticker || null, type: wantType || null, action: action || null, moneyness: otmOnly ? 'otm' : 'all', sort },
+            summary: summary && summary[0] ? summary[0] : null,
+            biggest: biggest && biggest[0] ? asRow(biggest[0]) : null,
+            sessions: sessions || [],
+            tickers: tickers || [],
+            buckets: buckets || [],
+            repeats: repeats || [],
+            rows: (rows || []).map(asRow),
+            /** Rows RENDERED is capped; every total above is over the whole range. */
+            rowCap: limit,
+            whaleFloor: TF_WHALE_FLOOR,
+          }, { 'Cache-Control': NO_STORE });
+        } catch (e) {
+          console.error('[api-router] /api/lse/whales failed:', e && e.message ? e.message : e);
+          return send(res, 500, { error: e && e.message ? String(e.message) : String(e) });
+        }
+      },
+    });
+
     // ── contract candles, for the Top Flow probe drawer ───────────────────────
     //
     // The row-click popup needs ONE bar shape whichever feed it came from, so
@@ -14264,11 +14429,89 @@ try {
     // someone clicks it is the worst version of this route.
     /** Still-printing contract — short, because the last bar keeps moving. */
     const TF_CANDLE_TTL_LIVE_MS = 60_000;
-    /** Closed session — the bars are final. Long enough that a page of history
-     *  costs the vault one call per contract per process, not one per click. */
-    const TF_CANDLE_TTL_DONE_MS = 6 * 60 * 60 * 1000;
+    /**
+     * Closed session — NEVER expires.
+     *
+     * Not a long number: a window whose last bar is from a session that has
+     * already closed cannot change, so an expiry on it is a promise to go and
+     * buy the identical answer again later. The only reason to drop one is
+     * memory, which is what the LRU bound below is for.
+     */
+    const TF_CANDLE_TTL_DONE_MS = Infinity;
     const tfCandleCache = new Map();   // key → { at, ttl, payload }
     const tfCandleFlight = new Map();  // key → Promise<payload>
+
+    // ── The durable tier ─────────────────────────────────────────────────────
+    //
+    // In-process caching still buys the same closed window once per RESTART, and
+    // a deploy is a normal event. Closed bars are immutable, so they are
+    // write-once: stored here, they are never bought from the vault again by
+    // anyone, ever.
+    //
+    // THIS OUTLIVES THE SOURCE. The vault drops a contract about 120 days after
+    // expiry (md files/LSE-DATA-LIMITS.md), so a row written today is the ONLY
+    // copy of that contract's tape once the window passes — which is the same
+    // reason the GEX recorders exist. That is also why there is no retention
+    // sweep: deleting a row here is destroying history the vault can no longer
+    // re-serve. A window's bars are a few KB; the table grows with contracts
+    // people actually looked at, which is a rounding error next to gex_strike.
+    //
+    // LIVE windows are never written. A row whose last bar is from today would
+    // be a permanent record of half a session.
+    let tfBarsSchema = null;
+    function tfEnsureBarsSchema() {
+      if (!libDb) return Promise.reject(new Error('no db'));
+      if (!tfBarsSchema) {
+        tfBarsSchema = libDb.queryAll(
+          `CREATE TABLE IF NOT EXISTS lse_contract_bars (
+             cache_key  TEXT PRIMARY KEY,
+             newest_ts  BIGINT NOT NULL,
+             bar_count  INTEGER NOT NULL,
+             payload    JSONB NOT NULL,
+             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+           )`,
+          [],
+        ).catch((e) => { tfBarsSchema = null; throw e; });
+      }
+      return tfBarsSchema;
+    }
+
+    /** The stored copy of a closed window, or null. Never throws — a DB that is
+     *  down means one vault call, not a broken panel. */
+    async function tfBarsFromDb(key) {
+      if (!libDb) return null;
+      try {
+        await tfEnsureBarsSchema();
+        const rows = await libDb.queryAll(
+          'SELECT payload FROM lse_contract_bars WHERE cache_key = ?', [key],
+        );
+        const p = rows && rows[0] ? rows[0].payload : null;
+        if (!p) return null;
+        return typeof p === 'string' ? JSON.parse(p) : p;
+      } catch (e) {
+        console.warn('[api-router] contract-bars read failed:', e && e.message ? e.message : e);
+        return null;
+      }
+    }
+
+    /** Store a CLOSED window. Detached and best-effort: the response has already
+     *  gone out, and a failed write costs one refetch, not correctness. */
+    function tfBarsToDb(key, payload, newest) {
+      if (!libDb) return;
+      void (async () => {
+        try {
+          await tfEnsureBarsSchema();
+          await libDb.queryAll(
+            `INSERT INTO lse_contract_bars (cache_key, newest_ts, bar_count, payload)
+             VALUES (?, ?, ?, ?::jsonb)
+             ON CONFLICT (cache_key) DO NOTHING`,
+            [key, newest, payload.bars.length, JSON.stringify(payload)],
+          );
+        } catch (e) {
+          console.warn('[api-router] contract-bars write failed:', e && e.message ? e.message : e);
+        }
+      })();
+    }
 
     register('/api/lse/contract-candles', {
       auth: 'subscriber', methods: ['GET'],
@@ -14294,6 +14537,13 @@ try {
         }
         try {
           const work = (async () => {
+          // The durable tier, checked INSIDE the single-flight so a burst of
+          // clicks on the same print makes one DB read rather than one each.
+          const stored = await tfBarsFromDb(key);
+          if (stored) {
+            tfCandleCache.set(key, { at: Date.now(), ttl: TF_CANDLE_TTL_DONE_MS, payload: stored });
+            return stored;
+          }
           const rows = await lse.optionCandles({
             contract: ticker || underlying,
             strike: ticker ? undefined : params.get('strike'),
@@ -14341,6 +14591,10 @@ try {
           const live = newest > 0 && tfEtDate(new Date(newest)) === tfEtDate(new Date());
           const ttl = live ? TF_CANDLE_TTL_LIVE_MS : TF_CANDLE_TTL_DONE_MS;
           tfCandleCache.set(key, { at: Date.now(), ttl, payload });
+          // Only a closed window, and only one that actually has bars: an empty
+          // answer is final for THIS process, but storing it permanently would
+          // pin a vault hiccup into the archive as 'this contract has no tape'.
+          if (!live && bars.length) tfBarsToDb(key, payload, newest);
           // Bounded, and evicting the OLDEST first — Map keeps insertion order,
           // so this drops what was fetched longest ago rather than an arbitrary
           // slice. An unbounded Map behind a customer route is a leak with a UI

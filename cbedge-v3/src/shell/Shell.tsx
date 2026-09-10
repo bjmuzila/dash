@@ -97,6 +97,9 @@ export const NAV: NavItem[] = [
     prefetch: ['/api/traders-dashboard/overview'],
   },
   { to: '/premarket', label: 'Premarket', icon: '🌅', prefetch: ['/api/scanner/market-quality'] },
+  // The $1M+ archive. No prefetch: its one request carries the range and the
+  // filters, so a hover would warm a URL the click is unlikely to ask for.
+  { to: '/whales', label: 'Whales', icon: '🐋' },
   { to: '/options-chain', label: 'Options Chain', icon: '⛓️', prefetch: ['/api/expirations?ticker=SPX'] },
   // Next to the matrix on purpose — same feed, opposite question. /options-chain
   // is the GEX heat grid; this is the BOOK (bid/ask/mark, volume, OI, IV and the

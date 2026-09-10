@@ -103,6 +103,9 @@ const Feedback = lazy(() => import('@/pages/Feedback'))
 // half stays in the ordinary route chunk and is still measured against the
 // route budget — one table does not get to raise the ceiling for every page.
 const Seasonality = lazy(() => import('@/pages/Seasonality'))
+// /whales — the $1M+ print archive. Its own chunk: the page pulls the Top Flow
+// probe drawer with it, and nobody on any other route should pay for that.
+const Whales = lazy(() => import('@/pages/Whales'))
 
 // ── THE PHONE BUILD — /v3/m/* ────────────────────────────────────────────────
 // Six screens, registered in src/mobile/mobileNav.ts, each one a HOME-BOARD CARD
@@ -162,6 +165,7 @@ export default function App() {
             <Route path="/economic-calendar" element={<EconomicCalendar />} />
             <Route path="/level-log" element={<LevelLog />} />
             <Route path="/seasonality" element={<Seasonality />} />
+            <Route path="/whales" element={<Whales />} />
             <Route path="/legacy" element={<Legacy />} />
             {/* Support. The tab and the open ticket live in the query string, so
                 /v3/feedback?tab=mine&ticket=12 is a real link — which is what
