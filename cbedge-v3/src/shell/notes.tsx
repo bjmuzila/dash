@@ -434,8 +434,6 @@ export function NotesBody({ notes, addNote, editNote, deleteNote }: NotesApi) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
   const [hoveredId, setHoveredId] = useState<string | null>(null)
-  // Clip whose image is grown to its full height in the list (capped otherwise).
-  const [zoomId, setZoomId] = useState<string | null>(null)
   // Clip popped out over the page — see ClipLightbox.
   const [lightboxId, setLightboxId] = useState<string | null>(null)
   const lightboxNote = lightboxId ? notes.find((n) => n.id === lightboxId && n.img) : undefined
@@ -483,7 +481,6 @@ export function NotesBody({ notes, addNote, editNote, deleteNote }: NotesApi) {
         )}
         {notes.map((n) => {
           const editing = editingId === n.id
-          const zoomed = zoomId === n.id
           const hot = hoveredId === n.id
           return (
             <div
@@ -533,23 +530,22 @@ export function NotesBody({ notes, addNote, editNote, deleteNote }: NotesApi) {
                     </div>
                   )}
 
-                  {/* Clip image. Click grows it to full height in the list; the
-                      corner button pops it out over the page (ClipLightbox).
-                      The capped preview is 260px, not the 120px it was: at 120
-                      a GEX chart clip was a smear you could not tell from the
-                      one above it, which defeats the point of keeping it. */}
+                  {/* Clip image. CLICKING THE PICTURE POPS IT OUT — that is the
+                      thing the zoom-in cursor promises, and the only thing it
+                      can honestly promise: the previous behaviour grew the
+                      thumbnail in place, which inside a 320px dock is a change
+                      you can barely see and reads as a dead click. The corner
+                      button does the same thing, for anyone who looks for a
+                      control rather than clicking the image. */}
                   {n.img && (
                     <div className="relative mt-2">
                       <img
                         src={n.img}
                         alt={n.text || 'Clip'}
-                        onClick={() => setZoomId((z) => (z === n.id ? null : n.id))}
-                        title={zoomed ? 'Shrink' : 'Grow'}
-                        style={{ maxHeight: zoomed ? 'none' : 260 }}
-                        className={[
-                          'block w-full rounded-sm border border-line object-top',
-                          zoomed ? 'cursor-zoom-out object-contain' : 'cursor-zoom-in object-cover',
-                        ].join(' ')}
+                        onClick={() => setLightboxId(n.id)}
+                        title="Expand"
+                        style={{ maxHeight: 260 }}
+                        className="block w-full cursor-zoom-in rounded-sm border border-line object-cover object-top"
                       />
                       <button
                         type="button"

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, roundStrike } from '@/data/flowMath'
 import type { TopFlowRow } from './TopFlowCard'
@@ -140,27 +141,60 @@ export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () =
   const dir = pct == null ? 0 : pct > 0 ? 1 : pct < 0 ? -1 : 0
   const ink = dir > 0 ? 'text-up' : dir < 0 ? 'text-down' : 'text-muted'
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 py-2">
+  // The probe lives in a ~330px column inside the card, which is where a chart
+  // carrying an entry line, a high, a low, a price rail and a volume histogram
+  // stops being readable. The ⤢ pops the SAME panel out over the page — see the
+  // portal at the bottom of this return.
+  const [expanded, setExpanded] = useState(false)
+  useEffect(() => {
+    if (!expanded) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setExpanded(false) }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [expanded])
+
+  const body = (big: boolean) => (
+    <>
       <div className="flex items-baseline gap-2">
-        <span className="text-sm font-bold tracking-[0.02em] text-fg">{row.underlying ?? '—'}</span>
-        <span className="tabular rounded-sm border border-warn/50 bg-warn/10 px-1.5 py-px text-2xs font-bold text-warn">
+        <span className={[big ? 'text-lg' : 'text-sm', 'font-bold tracking-[0.02em] text-fg'].join(' ')}>
+          {row.underlying ?? '—'}
+        </span>
+        <span className={[
+          'tabular rounded-sm border border-warn/50 bg-warn/10 px-1.5 py-px font-bold text-warn',
+          big ? 'text-xs' : 'text-2xs',
+        ].join(' ')}>
           {fmtStrike(row.strike)}{row.type ?? ''}
         </span>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="ml-auto text-sm leading-none text-muted hover:text-fg"
-        >
-          ✕
-        </button>
+        <span className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-label={big ? 'Collapse' : 'Expand'}
+            title={big ? 'Collapse (Esc)' : 'Expand'}
+            className="flex h-6 w-6 items-center justify-center rounded-sm border border-line text-muted hover:text-fg"
+          >
+            <ProbeExpandIcon size={12} collapse={big} />
+          </button>
+          <button
+            type="button"
+            onClick={() => (big ? setExpanded(false) : onClose())}
+            aria-label="Close"
+            className="text-sm leading-none text-muted hover:text-fg"
+          >
+            ✕
+          </button>
+        </span>
       </div>
       <div className="tabular -mt-1 text-2xs text-muted">{fmtDate(row.expiry)}</div>
 
       <div className="flex items-center gap-2">
-        <span className={['text-base leading-none', ink].join(' ')}>{dir < 0 ? '▼' : '▲'}</span>
-        <span className={['tabular text-2xl font-bold leading-none', ink].join(' ')}>
+        <span className={[big ? 'text-xl' : 'text-base', 'leading-none', ink].join(' ')}>{dir < 0 ? '▼' : '▲'}</span>
+        <span className={['tabular font-bold leading-none', big ? 'text-4xl' : 'text-2xl', ink].join(' ')}>
           {pct == null ? '—' : `${Math.abs(pct).toFixed(1)}%`}
         </span>
       </div>
@@ -216,7 +250,7 @@ export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () =
       </div>
 
       {bars.length >= 2 ? (
-        <ProbeChart bars={bars} entry={entry} size={row.size} />
+        <ProbeChart bars={bars} entry={entry} size={row.size} wide={big} />
       ) : (
         <div className="px-1 py-6 text-2xs leading-relaxed text-faint">
           {q.loading
@@ -233,8 +267,87 @@ export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () =
 
       <div className="tabular text-3xs text-faint">
         Option price (mark) · contract volume · entry @ {entry?.toFixed(2) ?? '—'} · printed {etTime(row.ts)}
+        {big ? ' · click outside or press Esc to close' : ''}
       </div>
-    </div>
+    </>
+  )
+
+  return (
+    <>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 py-2">{body(false)}</div>
+
+      {/* Popped out over the page. Portalled onto <body> because every ancestor —
+          the probe column, the card, the board tile — clips or stacks, and an
+          overlay drawn inside any of them is trimmed to that box. The four
+          properties that decide whether it is visible at all are inline rather
+          than utilities, for the same reason the notes clip lightbox does it:
+          this node lives outside the app root, where a purged or shadowed class
+          would leave it a 0×0 transparent box and the button would read dead. */}
+      {expanded && typeof document !== 'undefined' && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Contract probe"
+          onClick={() => setExpanded(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            background: 'color-mix(in srgb, var(--color-bg) 90%, transparent)',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex flex-col gap-3 rounded-md border border-line bg-surface2 p-5"
+            style={{
+              width: 'min(1100px, 94vw)',
+              maxHeight: '92vh',
+              minHeight: 0,
+              overflowY: 'auto',
+            }}
+          >
+            {body(true)}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+/** Four corner arrows out (expand) or in (collapse). */
+function ProbeExpandIcon({ size = 12, collapse = false }: { size?: number; collapse?: boolean }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {collapse ? (
+        <>
+          <polyline points="20 10 14 10 14 4" />
+          <polyline points="4 14 10 14 10 20" />
+          <line x1="14" y1="10" x2="21" y2="3" />
+          <line x1="10" y1="14" x2="3" y2="21" />
+        </>
+      ) : (
+        <>
+          <polyline points="15 3 21 3 21 9" />
+          <polyline points="9 21 3 21 3 15" />
+          <line x1="21" y1="3" x2="14" y2="10" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </>
+      )}
+    </svg>
   )
 }
 
@@ -249,10 +362,21 @@ export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () =
 
 const MONO = 'ui-monospace,Menlo,Consolas,monospace'
 
-function ProbeChart({ bars, entry, size }: { bars: Bar[]; entry: number | null; size: number | null }) {
+function ProbeChart({ bars, entry, size, wide = false }: {
+  bars: Bar[]
+  entry: number | null
+  size: number | null
+  /** Popped out over the page — a bigger canvas, and type scaled to match it. */
+  wide?: boolean
+}) {
   const [hover, setHover] = useState<number | null>(null)
-  const W = 320, H = 250
-  const PADL = 8, PADR = 46, PADT = 16, PADB = 24, GAP = 9
+  const W = wide ? 1000 : 320
+  const H = wide ? 460 : 250
+  const PADL = wide ? 14 : 8
+  const PADR = wide ? 62 : 46
+  const PADT = wide ? 22 : 16
+  const PADB = wide ? 30 : 24
+  const GAP = wide ? 14 : 9
   const volH = Math.round((H - PADT - PADB - GAP) * 0.24)
   const priceH = H - PADT - PADB - GAP - volH
 
@@ -291,6 +415,10 @@ function ProbeChart({ bars, entry, size }: { bars: Bar[]; entry: number | null; 
 
   const label = { fill: 'var(--color-fg)', fontFamily: MONO } as const
   const fmt = (v: number) => v.toFixed(2)
+  // Type and glyph sizes are in USER units and both viewBoxes display at roughly
+  // 1:1, so without this the popped-out chart would draw the same 9px labels on
+  // a canvas three times the width.
+  const S = wide ? 1.75 : 1
 
   const onMove = (e: ReactMouseEvent<SVGSVGElement>) => {
     const box = e.currentTarget.getBoundingClientRect()
@@ -320,7 +448,7 @@ function ProbeChart({ bars, entry, size }: { bars: Bar[]; entry: number | null; 
       {[hi, entry != null && entry > 0 ? entry : (hi + lo) / 2, lo].map((v, i) => (
         <g key={i}>
           <line x1={PADL} y1={y(v)} x2={W - PADR} y2={y(v)} style={{ stroke: 'var(--color-line)' }} strokeWidth={1} />
-          <text x={W - PADR + 7} y={y(v) + 3.4} fontSize={9.5} fontWeight={700} style={label}>{fmt(v)}</text>
+          <text x={W - PADR + 7 * S} y={y(v) + 3.4 * S} fontSize={9.5 * S} fontWeight={700} style={label}>{fmt(v)}</text>
         </g>
       ))}
 
@@ -330,27 +458,27 @@ function ProbeChart({ bars, entry, size }: { bars: Bar[]; entry: number | null; 
         <>
           <line x1={PADL} y1={y(entry)} x2={W - PADR} y2={y(entry)}
             style={{ stroke: 'var(--color-fg)' }} strokeWidth={1} strokeDasharray="1 3" opacity={0.55} />
-          <text x={PADL + 2} y={y(entry) - 5} fontSize={9} fontWeight={700} letterSpacing="0.6" style={label}>
+          <text x={PADL + 2} y={y(entry) - 5 * S} fontSize={9 * S} fontWeight={700} letterSpacing="0.6" style={label}>
             ENTRY {fmt(entry)}
           </text>
         </>
       )}
 
-      <path d={line} fill="none" style={{ stroke: 'var(--color-accent)' }} strokeWidth={1.4}
+      <path d={line} fill="none" style={{ stroke: 'var(--color-accent)' }} strokeWidth={1.4 * S}
         strokeLinejoin="round" strokeLinecap="round" />
 
-      <circle cx={x(hiI)} cy={y(hi)} r={2.6} fill="none" style={{ stroke: 'var(--color-up)' }} strokeWidth={1.4} />
-      <text x={x(hiI)} y={y(hi) - 8} textAnchor="middle" fontSize={9} fontWeight={700}
+      <circle cx={x(hiI)} cy={y(hi)} r={2.6 * S} fill="none" style={{ stroke: 'var(--color-up)' }} strokeWidth={1.4 * S} />
+      <text x={x(hiI)} y={y(hi) - 8 * S} textAnchor="middle" fontSize={9 * S} fontWeight={700}
         style={{ fill: 'var(--color-up)', fontFamily: MONO }}>H {fmt(hi)}</text>
-      <circle cx={x(loI)} cy={y(lo)} r={2.6} fill="none" style={{ stroke: 'var(--color-down)' }} strokeWidth={1.4} />
-      <text x={x(loI)} y={y(lo) + 13} textAnchor="middle" fontSize={9} fontWeight={700}
+      <circle cx={x(loI)} cy={y(lo)} r={2.6 * S} fill="none" style={{ stroke: 'var(--color-down)' }} strokeWidth={1.4 * S} />
+      <text x={x(loI)} y={y(lo) + 13 * S} textAnchor="middle" fontSize={9 * S} fontWeight={700}
         style={{ fill: 'var(--color-down)', fontFamily: MONO }}>L {fmt(lo)}</text>
 
       {/* Last mark, in the rail, tinted by where it sits against the entry. Pill
           type is the page ground, not white — it is on a solid green or red. */}
-      <circle cx={x(n - 1)} cy={y(last)} r={2.8} style={{ fill: pillVar }} />
-      <rect x={W - PADR + 2} y={y(last) - 7.5} width={38} height={15} rx={7.5} style={{ fill: pillVar }} />
-      <text x={W - PADR + 21} y={y(last) + 3.2} textAnchor="middle" fontSize={9.5} fontWeight={700}
+      <circle cx={x(n - 1)} cy={y(last)} r={2.8 * S} style={{ fill: pillVar }} />
+      <rect x={W - PADR + 2} y={y(last) - 7.5 * S} width={38 * S} height={15 * S} rx={7.5 * S} style={{ fill: pillVar }} />
+      <text x={W - PADR + 2 + 19 * S} y={y(last) + 3.2 * S} textAnchor="middle" fontSize={9.5 * S} fontWeight={700}
         style={{ fill: 'var(--color-bg)', fontFamily: MONO }}>{fmt(last)}</text>
 
       {/* ── volume ─────────────────────────────────────────────────────────── */}
@@ -369,15 +497,15 @@ function ProbeChart({ bars, entry, size }: { bars: Bar[]; entry: number | null; 
       ))}
       <line x1={PADL} y1={vy(vAvg)} x2={W - PADR} y2={vy(vAvg)}
         style={{ stroke: 'var(--color-fg)' }} strokeWidth={1} strokeDasharray="1 3" opacity={0.3} />
-      <text x={W - PADR + 7} y={vTop + 8} fontSize={9} fontWeight={700} style={label}>
+      <text x={W - PADR + 7 * S} y={vTop + 8 * S} fontSize={9 * S} fontWeight={700} style={label}>
         {vMax >= 1000 ? `${(vMax / 1000).toFixed(1)}k` : vMax}
       </text>
-      <text x={PADL + 2} y={vTop + 8} fontSize={8} fontWeight={700} letterSpacing="0.9" style={label} opacity={0.8}>
+      <text x={PADL + 2} y={vTop + 8 * S} fontSize={8 * S} fontWeight={700} letterSpacing="0.9" style={label} opacity={0.8}>
         VOLUME{size ? ` · PRINT ${size.toLocaleString()}` : ''}
       </text>
 
-      <text x={PADL} y={H - 6} fontSize={9} fontWeight={700} style={label}>{etTime(bars[0]!.time)}</text>
-      <text x={W - PADR} y={H - 6} textAnchor="end" fontSize={9} fontWeight={700} style={label}>
+      <text x={PADL} y={H - 6 * S} fontSize={9 * S} fontWeight={700} style={label}>{etTime(bars[0]!.time)}</text>
+      <text x={W - PADR} y={H - 6 * S} textAnchor="end" fontSize={9 * S} fontWeight={700} style={label}>
         {etTime(bars[n - 1]!.time)}
       </text>
 
@@ -385,15 +513,15 @@ function ProbeChart({ bars, entry, size }: { bars: Bar[]; entry: number | null; 
         <g>
           <line x1={x(hover as number)} y1={PADT} x2={x(hover as number)} y2={PADT + priceH}
             style={{ stroke: 'var(--color-fg)' }} strokeWidth={1} strokeDasharray="2 3" opacity={0.4} />
-          <circle cx={x(hover as number)} cy={y(hp.close)} r={3}
-            style={{ fill: 'var(--color-bg)', stroke: 'var(--color-accent)' }} strokeWidth={1.6} />
-          <g transform={`translate(${Math.min(W - PADR - 96, Math.max(PADL, x(hover as number) + 8))},${PADT + 2})`}>
-            <rect width={94} height={34} rx={5}
+          <circle cx={x(hover as number)} cy={y(hp.close)} r={3 * S}
+            style={{ fill: 'var(--color-bg)', stroke: 'var(--color-accent)' }} strokeWidth={1.6 * S} />
+          <g transform={`translate(${Math.min(W - PADR - 96 * S, Math.max(PADL, x(hover as number) + 8))},${PADT + 2})`}>
+            <rect width={94 * S} height={34 * S} rx={5 * S}
               style={{ fill: 'var(--color-surface2)', stroke: 'var(--color-line)' }} strokeWidth={1} />
-            <text x={7} y={13} fontSize={8.5} fontWeight={700} style={label}>{etTime(hp.time)}</text>
-            <text x={7} y={27} fontSize={11} fontWeight={700} style={label}>{fmt(hp.close)}</text>
+            <text x={7 * S} y={13 * S} fontSize={8.5 * S} fontWeight={700} style={label}>{etTime(hp.time)}</text>
+            <text x={7 * S} y={27 * S} fontSize={11 * S} fontWeight={700} style={label}>{fmt(hp.close)}</text>
             {hpl != null && (
-              <text x={54} y={27} fontSize={9.5} fontWeight={700}
+              <text x={54 * S} y={27 * S} fontSize={9.5 * S} fontWeight={700}
                 style={{ fill: hpl >= 0 ? 'var(--color-up)' : 'var(--color-down)', fontFamily: MONO }}>
                 {hpl >= 0 ? '+' : '−'}${Math.abs(hpl).toFixed(0)}
               </text>

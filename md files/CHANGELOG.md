@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-09-10 (z) - The clip and the probe actually pop out
+
+The ContractProbe half of (v) was written and then lost — the file on disk had
+reverted to its pre-edit state, and (v)'s probe section described code that was
+no longer there. It is re-applied here on top of the current file (the one with
+the Vol/OI omission for archived prints).
+
+### 1. Clicking the clip opens the pop-out - `cbedge-v3/src/shell/notes.tsx`
+
+The thumbnail carried a `zoom-in` cursor and, on click, grew in place from a
+260px cap to its full height. Inside a 320px dock that is a change you can
+barely see, so the magnifier promised something the click did not deliver. The
+image now opens the ClipLightbox - the same thing the corner button does. The
+in-place grow (`zoomId`) is gone entirely: one gesture, one result.
+
+### 2. Contract Probe expand - `cbedge-v3/src/board/topFlow/ContractProbe.tsx`
+
+Re-applied, and hardened the way the clip lightbox was. The overlay's
+`position`, `inset`, `z-index` and ground are inline styles rather than utility
+classes: it portals onto `<body>`, outside the app root, where a purged or
+shadowed class leaves a 0x0 transparent box and the control reads as dead.
+
+The expand glyph sits beside the close in the probe header and pops the panel
+out at `min(1100px, 94vw)`; backdrop or Esc closes it. `ProbeChart` takes a
+`wide` prop and draws into a 1000x460 viewBox with every fixed-pixel detail -
+label sizes, the H/L markers, the last-mark pill, the hover tooltip - scaled by
+one `S` factor, because both boxes display at roughly 1:1 and a bigger canvas
+alone would just have drawn the same 9px labels three times smaller in
+proportion. Both copies render from one `body(big)` builder off one component
+instance, so the range tabs, the source fallback and the fetched bars stay in
+lockstep.
+
+This reaches `/v3/whales` as well as the Top Flow board card - `pages/Whales.tsx`
+imports the same component.
+
 ## 2026-09-10 (y) - /v3/whales: VOL and OI columns dropped
 
 They meant "what is this contract doing NOW" and were joined at serve time on the
