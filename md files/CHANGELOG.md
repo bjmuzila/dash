@@ -1,137 +1,5 @@
 # Changelog
 
-## 2026-09-10 (c) - V3: the analytics page gets the v3 wordmark
-
-The Ticker Lookup card at the top of `/v3/analytics` was still drawing
-`/cb-edge-logo.png` - the pre-v3 bitmap it was ported with - in its top-right
-control row, next to Refresh and Replay. Every other surface in v3 draws the
-brand through `shell/Brand.tsx`, which is the one file allowed to.
-
-`cbedge-v3/src/pages/analysis/lookup/TickerLookup.tsx`:
-
-- The raw `<img src="/cb-edge-logo.png">` is replaced by `<CbWordmark />`. The
-  horizontal lockup is the form for a wide slot, which is what that row is.
-- Same visual weight as before: `h-7` (28px, the height the old tag hardcoded),
-  `w-auto`, `opacity-95`, the same 2px left margin.
-- `crossOrigin="anonymous"` is gone with it. The wordmark is a bundled Vite
-  asset served same-origin, so html2canvas snapshots of this card bake it in
-  without tainting the canvas; the attribute was only there because the old
-  bitmap was fetched from `/public`.
-
-No other page referenced `cb-edge-logo.png` - this was the last one in v3.
-
-## 2026-09-10 (b) - V3: every expiration and session picker stops dropping the OS menu
-
-Audit of every live v3 page for date and expiration controls. Twenty of them
-were native `<select>` or `<input type="date">`, riding on the `color-scheme:
-dark` rule in `design/tokens.css`. That rule darkens the platform popup and
-stops there - the SHAPE stays the operating system's: `mm/dd/yyyy` in the
-platform font, a Windows calendar over a dark toolbar, a wheel on iOS. Flow was
-the one Brandon spotted; it was not alone.
-
-Two primitives, then thirteen call sites.
-
-`cbedge-v3/src/design/primitives/Controls.tsx`:
-
-- NEW `Select` - the themed replacement for a native `<select>`. A trigger
-  showing the current option, a list under it drawn from the same tokens as
-  everything else, portalled through `Popover` so it inherits the clipping,
-  stacking and flip-when-there-is-no-room-below behaviour that control already
-  has. `value` / `onChange` take and give the option's string, so it is a
-  drop-in for an `e.target.value` handler. Options carry an optional `sub` for
-  a second column (a label and its date), and `disabled` for an option that is
-  real but unavailable.
-- It carries `POPOVER_SAFE_ATTR` unconditionally, so a `Select` opened from
-  inside another `Popover` (the Notes drawer, a card's cog panel) does not
-  close its host on the pointerdown that was meant to pick a row. Covered by a
-  test below.
-- `Popover` gains an optional `z`. `POP_Z` (250) clears every board tile but
-  not a portalled MODAL - the ladder modal sits at 9999 - so a menu opened
-  inside one would have rendered behind its own scrim. `Select` forwards it as
-  `menuZ`; only `LadderModal` passes it.
-
-`cbedge-v3/src/design/primitives/DatePicker.tsx` (existing control, additive):
-
-- `size="sm"` - the toolbar density, so a session picker sits level with the
-  SegGroups beside it instead of towering over them. `md` stays the default and
-  the BOT composer renders unchanged.
-- `min` / `max`, same "YYYY-MM-DD" strings a native input's min/max take.
-  Out-of-range days render inert rather than disappearing: a greyed 11th says
-  "not that one", a missing 11th says the calendar is broken. `Today - 0DTE`
-  greys out with them.
-- `label` (override the trigger text), `placeholder`, `disabled`.
-
-Call sites - dates and expirations only:
-
-- `pages/Flow.tsx` - the session `<input type="date">` and the Expiry
-  `<select>`. This is the pair that started the audit.
-- `pages/LevelLog.tsx` - session date, keeps its today cap.
-- `pages/scanner/GexChangeTopTab.tsx` - capture date (C47). v2's blank
-  `mm/dd/yyyy` on first paint was the OS field's placeholder; it now reads
-  "Date" until the feed echoes one back.
-- `pages/scanner/StrikeQueryTab.tsx` - the Expiry filter (E53). Same options,
-  same order, same raw strings. Its three row-mates (ticker, limit, min OTM)
-  are NOT dates and stay native for now.
-- `shell/QuickProbe.tsx` - both arms of the expiration field, the roster
-  `<select>` and the `<input type="date">` fallback. This card is docked inside
-  a scrolling drawer, which is where a platform popup looks worst.
-- `board/volGexFlow/VolGexFlowCard.tsx` - the live expiry filter (B288).
-- `board/gexCandles/GexCandlesCard.tsx`, `pages/replay/MultiGreekReplay.tsx`,
-  `pages/analysis/lookup/TickerLookup.tsx`,
-  `pages/optionsChain/LadderModal.tsx` - the four replay-session pickers. Their
-  bars are inline-styled from the theme object rather than the token utilities,
-  so each keeps its own trigger paint via the new `triggerStyle`; what changed
-  is the LIST.
-- `pages/Premarket.tsx` - the session date. Its `.dsel` shell already themed
-  the closed box and redrew the caret, but the list it dropped was still the
-  OS's, and that list carries the marks saying what each day can do. The new
-  `.dsel3` rule SHARES the existing `.dsel select` selectors rather than
-  restating them (no second copy of the same values, and no new off-scale
-  font-size for `check-theme` to count); what is left in it is layout only.
-
-DELIBERATELY NOT CHANGED:
-
-- `pages/scanner/GexLevelsTab.tsx` - the permanently-disabled Expiry Filter. It
-  is inert by design (spec "Do not port" 22) and converting a spec'd control
-  buys nothing.
-- The non-date selects: `StrikeQueryTab` ticker / limit / min OTM,
-  `Premarket`'s symbol picker, `TradersDashboard`'s quick-links editor.
-
-Verified: `tsc --noEmit` adds zero errors against the pre-change baseline,
-`check-theme` reports no new violations, `vite build` is clean, and a Playwright
-harness drives the two primitives - open, anchor under the trigger, pick, Escape
-and click-outside close, empty list disables the trigger, `max` blocks a day,
-and a `Select` inside a `Popover` leaves that popover open.
-
-## 2026-09-10 (a) - V3 GEX CHART: the delta stat row stops truncating, and nothing on it is grey
-
-Two things wrong with the row the delta series added yesterday, both visible in
-one screenshot.
-
-`cbedge-v3/src/board/gexChart/StatCards.tsx`:
-
-- The SCOPE tile took the toolbar's scope note verbatim - "55 expirations, 0DTE
-  excluded" - into a box one seventh of the card wide, where it truncated
-  mid-word every single time. `DeltaStatCards` now takes `scope` as a
-  `{ label, value, title }` triple instead of one sentence: `EXPIRIES / 55`, or
-  `EXPIRY / 9/10` on the 0DTE ladder. The sentence moves to the tooltip, and it
-  is still spelled out in full on the toolbar chip, in the series menu and on
-  the canvas's own series line.
-- `MUTED` is `--color-fg`, not `--color-flat`. On a row whose other five values
-  are a saturated blue or amber, the two grey ones (Strikes, Scope) read as
-  DISABLED rather than as neutral - the tiles looked switched off next to the
-  numbers beside them. Applies to the gamma row too, where Net GEX, +GEX % and
-  Bull/Bear fall back to it before their data lands.
-- Tile LABELS are `text-fg` with no `opacity-70`. The label is already saying
-  it is a label by being 9px, uppercase and tracked; dimming the ink as well
-  just made it hard to read on a dark card.
-
-`cbedge-v3/src/board/gexChart/GexChartCard.tsx`:
-
-- Builds `scopeTile` beside the existing `scopeNote` - same fact, one sized for
-  a tile and one for a line.
-- The scope chip in the toolbar is `text-fg`.
-
 ## 2026-09-09 (k) - BILLING: the 2-day free trial is retired
 
 New sign-ups no longer get a free trial. Every Stripe Checkout session created
@@ -21343,35 +21211,46 @@ copy like the rest; defaults to ALL.
 - The header's hidden-count now covers both filters ("N hidden") and its tooltip
   breaks down which filter took what.
 
-## 2026-09-10 — Premarket Core Contracts: the owner-probe chart, and no grey type
+## 2026-09-10 — Top Flow: click a row for the contract probe
 
-`CbProbeChart` re-cut to match `owner-vite/src/pages/Probe.tsx`'s `ProbeChart` —
-the version of this picture that actually gets read.
+Clicking a print opens a drawer beside the list with the contract's chart —
+the owner-probe treatment (ice line over a wash, dashed break-even at the fill,
+H green / L red, right-hand rail with the last mark in a P/L-tinted pill, hover
+crosshair) plus the contract's own volume sharing the x axis underneath.
 
-- **The price rail moved to the RIGHT.** PADL 62→12, PADR 16→78. A left rail
-  puts the numbers at the end you have already read past; the prices that
-  matter — the high, the entry, the last — are all events at the right edge.
-  The line gets the width the labels used to hold.
-- **H and L are marked and priced**, hollow rings so they read as annotations
-  rather than more data points. The old chart flagged the recorded high-water
-  mark and nothing else, so a curve that went nowhere and a curve that halved
-  looked the same at a glance. The recorded peak keeps its vertical dashed line
-  — that is where the P/L is measured to.
-- **The last mark sits in a pill in the rail**, tinted by where it is against
-  the entry. Pill type is `--plate`, not white: it is on a solid green or red
-  and has to read against that, not against the page. Neutral on the SPX and
-  DIST views, where there is no entry to be up or down against.
-- **Hover crosshair** with time, price and dollar P/L per contract, flipping to
-  the left of the cursor near the rail so it never draws under the pill.
-- Grid cut from five rungs to three (high, mid, low). Five lines over a wash is
-  fence, not scale.
+`cbedge-v3/src/board/topFlow/ContractProbe.tsx` — new.
 
-**All grey type is now white.** Every `color:var(--dim)` / `var(--dim2)` in the
-panel points at `--txt`, and the two rules that genuinely dimmed text are gone:
-`tr.skip` no longer sits at 55% opacity (a skipped row says "Not taken" in
-words — it does not need to be hard to read to say so) and an unrealized P/L no
-longer sits at 75% (the star already marks it). Backgrounds may dim; type may
-not. Chart labels use `--txt` rather than a white alpha for the same reason —
-an alpha that reads fine on a flat card turns to mud over the gradient wash.
+- **Two sources, and the CLIENT picks.** A print from today draws from
+  `/proxy/option-history` (dxLink, the feed the /flow drawer already rides);
+  anything older from `/api/lse/contract-candles`, because option-history is
+  anchored to the print's own session and will not reach back. The component
+  knows the print's timestamp; the server would have to be told it anyway.
+- **It falls back either way on an empty answer.** Not belt-and-braces: a
+  contract that expired inside the vault's ~120-day window is gone from dxLink
+  long before the vault forgets it, and a 0DTE that printed an hour ago is in
+  dxLink before the vault has it.
+- **Two empty states that are permanent facts, not failures**: older than the
+  archive floor (2026-01-02), or expired more than ~120 days ago. Both say which
+  edge they hit rather than showing a frame that reads as a bug.
+- **Volume**: the biggest bar in the window is drawn in the accent and the rest
+  at 28%, with a dashed average-bar reference so "busy" has a scale.
 
-Nothing here is a hex; the tokens are still tokens.
+`server-v2/api-router.js` — new `GET /api/lse/contract-candles`, **auth
+`subscriber`**. Normalises the vault's option candles onto the same
+`{ time, open, high, low, close, volume }` `/proxy/option-history` emits, so the
+drawer draws one chart and never asks which feed replied. 60s cache keyed on the
+querystring, bounded at 200 entries — an unbounded Map behind a customer route
+is a leak with a UI on it. The existing `/api/lse/option-candles` stays
+owner-only and untouched.
+
+`TopFlowCard.tsx`:
+
+- Holds the selected **id**, not the row. The list re-polls every 20s; a held
+  object would freeze the drawer's Vol/OI while the row behind it kept moving.
+  If the print filters out from under the panel, the panel closes.
+- The panel is **keyed on the print id**, so switching rows remounts it —
+  otherwise the range tabs and the fallback-source state carry over from the
+  last contract.
+- Below 720px of card width the probe **takes over** the card rather than
+  squeezing the list into a gutter; the table is hidden, not unmounted, so its
+  scroll position survives closing the panel.

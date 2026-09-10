@@ -14219,6 +14219,147 @@ try {
       },
     });
 
+    // ── contract candles, for the Top Flow probe drawer ───────────────────────
+    //
+    // The row-click popup needs ONE bar shape whichever feed it came from, so
+    // this normalises the vault's option candles onto the same
+    // `{ time, open, high, low, close, volume }` that /proxy/option-history
+    // already emits (see candle-history.js). The drawer then draws one chart and
+    // does not care which source answered.
+    //
+    // WHY A SECOND ROUTE AND NOT JUST /api/lse/option-candles: that one is
+    // auth:'owner' and returns the vault's raw rows, keyed on `minute` with the
+    // greeks attached. This is the customer-facing cut — subscriber auth, a
+    // fixed shape, a cache, and nothing about the vault's schema leaking into
+    // the client.
+    //
+    // WHICH SOURCE THE DRAWER PICKS, and why it is the CLIENT's choice:
+    //   today's print  → /proxy/option-history (dxLink, the same feed the /flow
+    //                    drawer uses — fresher, and it is already there)
+    //   older          → here
+    // The client knows the print's timestamp and can decide without a round
+    // trip; the server would have to be told the same thing anyway. The drawer
+    // also falls back from either to the other on an empty answer, which is what
+    // makes a contract that expired inside the vault's ~120-day window still
+    // draw after dxLink has forgotten it.
+    // ── Cache policy: immutability, not a bigger number ──────────────────────
+    //
+    // A longer TTL only helps someone clicking the SAME contract twice. What
+    // actually costs quota is DISTINCT contracts — twenty users on twenty
+    // different prints is twenty vault calls at any TTL. Two things fix that,
+    // and neither is a bigger timeout:
+    //
+    //   1. A PAST SESSION'S BARS NEVER CHANGE. Once the window a request asked
+    //      for has closed, its answer is final — re-fetching it tomorrow buys
+    //      nothing. So the TTL is decided by the DATA, not by the clock: if the
+    //      newest bar is from a session before today, it is held for hours.
+    //      Only a contract still printing today gets the short window.
+    //   2. SINGLE-FLIGHT. Two people opening the same whale print in the same
+    //      second used to be two vault calls. Now the second one waits on the
+    //      first. On a shared board — everyone looking at the same $94M print —
+    //      that is the difference that matters.
+    //
+    // Empty answers are cached too, deliberately: a contract that has aged out
+    // of the archive is a permanent fact, and re-asking the vault every time
+    // someone clicks it is the worst version of this route.
+    /** Still-printing contract — short, because the last bar keeps moving. */
+    const TF_CANDLE_TTL_LIVE_MS = 60_000;
+    /** Closed session — the bars are final. Long enough that a page of history
+     *  costs the vault one call per contract per process, not one per click. */
+    const TF_CANDLE_TTL_DONE_MS = 6 * 60 * 60 * 1000;
+    const tfCandleCache = new Map();   // key → { at, ttl, payload }
+    const tfCandleFlight = new Map();  // key → Promise<payload>
+
+    register('/api/lse/contract-candles', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+        const ticker = (params.get('ticker') || '').trim();
+        const underlying = (params.get('underlying') || '').trim();
+        if (!ticker && !underlying) {
+          return send(res, 400, { error: 'pass ticker=<OSI>, or underlying + strike + expiry + type' });
+        }
+        const key = params.toString();
+        const hit = tfCandleCache.get(key);
+        if (hit && Date.now() - hit.at < hit.ttl) {
+          return send(res, 200, hit.payload, { 'Cache-Control': NO_STORE });
+        }
+        // Someone else is already asking the vault for exactly this. Wait on
+        // their answer instead of buying a second copy of it.
+        const flight = tfCandleFlight.get(key);
+        if (flight) {
+          try {
+            return send(res, 200, await flight, { 'Cache-Control': NO_STORE });
+          } catch (e) { return fail(res, e); }
+        }
+        try {
+          const work = (async () => {
+          const rows = await lse.optionCandles({
+            contract: ticker || underlying,
+            strike: ticker ? undefined : params.get('strike'),
+            expiry: ticker ? undefined : params.get('expiry'),
+            type: ticker ? undefined : params.get('type'),
+            start: params.get('start') || undefined,
+            end: params.get('end') || undefined,
+            order: 'asc',
+            limit: params.get('limit') || 5000,
+          });
+          const num = (v) => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+          };
+          const bars = [];
+          for (const r of rows || []) {
+            const time = Date.parse(String(r.timestamp ?? r.minute ?? ''));
+            const close = num(r.close);
+            // A bar with no time cannot be placed and a bar with no close is not
+            // a bar — the vault emits neither, but a silent NaN on the x axis is
+            // the kind of thing that only shows up as a chart drawn to the left
+            // of the panel.
+            if (!Number.isFinite(time) || close <= 0) continue;
+            bars.push({
+              time,
+              open: num(r.open) || close,
+              high: num(r.high) || close,
+              low: num(r.low) || close,
+              close,
+              volume: num(r.volume),
+            });
+          }
+          const payload = {
+            bars,
+            count: bars.length,
+            source: 'lse',
+            /** The vault's own floor. Older than this and there is nothing to ask for. */
+            archiveFrom: '2026-01-02',
+          };
+          // THE TTL IS DECIDED BY THE DATA. A window whose newest bar is from a
+          // session before today's is closed and final; anything else is still
+          // being written. An EMPTY answer is treated as final too — an aged-out
+          // contract does not become un-aged-out in a minute.
+          const newest = bars.length ? bars[bars.length - 1].time : 0;
+          const live = newest > 0 && tfEtDate(new Date(newest)) === tfEtDate(new Date());
+          const ttl = live ? TF_CANDLE_TTL_LIVE_MS : TF_CANDLE_TTL_DONE_MS;
+          tfCandleCache.set(key, { at: Date.now(), ttl, payload });
+          // Bounded, and evicting the OLDEST first — Map keeps insertion order,
+          // so this drops what was fetched longest ago rather than an arbitrary
+          // slice. An unbounded Map behind a customer route is a leak with a UI
+          // on it.
+          if (tfCandleCache.size > 400) {
+            for (const k of [...tfCandleCache.keys()].slice(0, 200)) tfCandleCache.delete(k);
+          }
+          return payload;
+          })();
+          tfCandleFlight.set(key, work);
+          try {
+            return send(res, 200, await work, { 'Cache-Control': NO_STORE });
+          } finally {
+            tfCandleFlight.delete(key);
+          }
+        } catch (e) { return fail(res, e); }
+      },
+    });
+
     // ── option contract candles ──────────────────────────────────────────────
     // ?ticker=AAPL260612C00205000            (OSI directly)
     // ?underlying=AAPL&strike=205&expiry=2026-06-12&type=call   (by parts)

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
 import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
 import { STALE_AFTER_SEC, fmtAgo, fmtPremium, fmtTime } from '@/data/flowMath'
 import { useTick } from '@/data/flowData'
+import { ContractProbe } from './ContractProbe'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOP FLOW — the whole options market's biggest prints, from the LSE vault.
@@ -510,6 +511,30 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
   const [dragId, setDragId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
 
+  // ── Row click → the contract probe ─────────────────────────────────────────
+  //
+  // The SELECTED ID is held, not the row object: the list re-polls every 20s and
+  // a held object would freeze the drawer's Vol/OI at whatever they were when it
+  // opened, while the row behind it kept updating. Looking the id up each render
+  // means the panel tracks the same print the table is showing, and closes
+  // itself when that print filters out from under it.
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  // The drawer costs ~330px. On a full-width board card that is a third of the
+  // table; on a half-width one it is the whole thing, so below the threshold the
+  // probe TAKES OVER the card instead of squeezing the list into a gutter.
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const [narrow, setNarrow] = useState(false)
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([e]) => {
+      if (e) setNarrow(e.contentRect.width < 720)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const cols = useMemo(
     () => s.order.map((id) => COL_BY_ID.get(id)).filter((c): c is Col => Boolean(c)),
     [s.order],
@@ -593,6 +618,16 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
     }
     return { buy, sell }
   }, [rows])
+
+  const selected = useMemo(
+    () => (selectedId ? rows.find((r) => r.id === selectedId) ?? null : null),
+    [rows, selectedId],
+  )
+  // The print scrolled out of the filters (or the session rolled). Nothing to
+  // show, so stop showing it rather than pinning a stale panel open.
+  useEffect(() => {
+    if (selectedId && q.data && !rows.some((r) => r.id === selectedId)) setSelectedId(null)
+  }, [selectedId, rows, q.data])
 
   const ex = q.data?.excluded
   const hiddenCount = ex ? ex.mid + ex.pending + ex.stale + ex.other + ex.itm : 0
@@ -693,7 +728,13 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div ref={wrapRef} className="flex min-h-0 flex-1">
+        {/* Hidden, not unmounted, when the probe takes over a narrow card: the
+            table's scroll position survives closing the panel. */}
+        <div
+          className="min-h-0 flex-1 overflow-auto"
+          style={narrow && selected ? { display: 'none' } : undefined}
+        >
         <table className="w-full border-collapse text-2xs">
           <thead className="sticky top-0 z-[1] bg-bg">
             <tr className="text-3xs uppercase tracking-[0.08em] text-faint">
@@ -758,7 +799,15 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-t border-line hover:bg-raised">
+              <tr
+                key={r.id}
+                onClick={() => setSelectedId((id) => (id === r.id ? null : r.id))}
+                title="Open the contract's chart"
+                className={[
+                  'cursor-pointer border-t border-line hover:bg-raised',
+                  r.id === selectedId ? 'bg-raised' : '',
+                ].join(' ')}
+              >
                 {cols.map((c) => (
                   <td
                     key={c.id}
@@ -787,6 +836,21 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
                 : hiddenCount > 0
                   ? `Nothing left after filtering — ${hiddenCount.toLocaleString()} prints hidden${q.data?.statsError ? ' (the quote feed is down, so nothing can be classified)' : ''}. Try ALL in the toolbar, or SHOW UNREADABLE in the cog.`
                   : 'No prints match these filters yet.'}
+          </div>
+        )}
+        </div>
+
+        {selected && (
+          <div
+            className={[
+              'flex min-h-0 shrink-0 flex-col',
+              narrow ? 'w-full' : 'w-[330px] border-l border-line',
+            ].join(' ')}
+          >
+            {/* Keyed on the print id so switching rows remounts the panel —
+                otherwise the range tabs and the fallback-source state carry over
+                from the last contract. */}
+            <ContractProbe key={selected.id} row={selected} onClose={() => setSelectedId(null)} />
           </div>
         )}
       </div>
