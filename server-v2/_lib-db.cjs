@@ -739,6 +739,12 @@ async function ensureAllTables(pool) {
     CREATE INDEX IF NOT EXISTS idx_budget_prop_profile ON budget_prop(profile_id);
     -- Added after the table shipped: existing rows are all prop purchases.
     ALTER TABLE budget_prop ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'prop';
+    -- recurring = 1 means "this repeats every month from entry_date onward".
+    -- ONE row is stored, not twelve: the Bzila tab projects the later months
+    -- client-side (same shape as budget_recurring -> the Payments register), so
+    -- a subscription entered once shows up in every month without twelve rows
+    -- to edit when the price changes. Existing rows are all one-offs.
+    ALTER TABLE budget_prop ADD COLUMN IF NOT EXISTS recurring INTEGER NOT NULL DEFAULT 0;
 
     -- Real Month: transactions read off an ACTUAL bank/card statement.
     -- Deliberately separate from budget_register. The register is the PLAN
@@ -5388,8 +5394,8 @@ function normSource(v) {
 async function insertPropRow(input) {
   const pool = await getDb();
   const result = await pool.query(
-    `INSERT INTO budget_prop (profile_id, entry_date, source, firm, accounts, cost, payout, note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    `INSERT INTO budget_prop (profile_id, entry_date, source, firm, accounts, cost, payout, note, recurring)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      RETURNING *`,
     [
       input.profile_id,
@@ -5399,7 +5405,8 @@ async function insertPropRow(input) {
       Math.round(input.accounts ?? 0),
       input.cost ?? 0,
       input.payout ?? 0,
-      input.note ?? null
+      input.note ?? null,
+      input.recurring ? 1 : 0
     ]
   );
   return result.rows[0];
@@ -5419,6 +5426,7 @@ async function updatePropRow(profileId, id, patch) {
   if (patch.cost !== void 0) add("cost", patch.cost);
   if (patch.payout !== void 0) add("payout", patch.payout);
   if (patch.note !== void 0) add("note", patch.note);
+  if (patch.recurring !== void 0) add("recurring", patch.recurring ? 1 : 0);
   if (!sets.length) return;
   sets.push(`updated_at = CURRENT_TIMESTAMP`);
   const pool = await getDb();
@@ -5435,6 +5443,20 @@ async function listPropRows(profileId, fromDate, toDate) {
   return queryAll(
     "SELECT * FROM budget_prop WHERE profile_id = ? AND entry_date >= ? AND entry_date <= ? ORDER BY entry_date DESC, id DESC",
     [profileId, fromDate, toDate]
+  );
+}
+/* Every recurring Bzila row, ignoring the date window.
+ *
+ * listPropRows() is scoped to one calendar year, which is right for one-off
+ * entries and wrong for recurring ones: a subscription started in November
+ * would vanish from the ledger on Jan 1 because its single stored row sits in
+ * the previous year. There are only ever a handful of these, so they are
+ * fetched whole and merged client-side (by id, so a row inside the year window
+ * is not counted twice). */
+async function listPropRecurring(profileId) {
+  return queryAll(
+    "SELECT * FROM budget_prop WHERE profile_id = ? AND recurring = 1 ORDER BY entry_date ASC, id ASC",
+    [profileId]
   );
 }
 async function listRetaSetups() {
@@ -5822,6 +5844,7 @@ async function getLatestMultGreekStaticSnapshot() {
   listFeedback,
   listPromoCodes,
   listPropRows,
+  listPropRecurring,
   listRecentUsers,
   listRecurring,
   listRegister,

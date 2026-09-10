@@ -38,10 +38,14 @@ const PROP_SOURCE_UI: Record<PropSource, {
   cbedge:    { label: "CB Edge",   defaultFirm: "CB EDGE",  firmPlaceholder: "Source / vendor", costLabel: "− Spend",    payoutLabel: "+ Earnings" },
   contracts: { label: "Contracts", defaultFirm: "CONTRACT", firmPlaceholder: "Client",          costLabel: "− Expense",  payoutLabel: "+ Invoice" },
 };
-type PropRow = { id: number; entry_date: string; source: PropSource; firm: string; accounts: number; cost: number; payout: number; note?: string | null };
+type PropRow = { id: number; entry_date: string; source: PropSource; firm: string; accounts: number; cost: number; payout: number; note?: string | null; recurring?: number };
 // A Bzila ledger line, normalized across all three streams (prop + cbedge come
 // from budget_prop; contracts are read out of the Payments register).
-type BzilaEntry = { key: string; id: number | null; date: string; stream: "prop" | "cbedge" | "contracts"; label: string; accounts: number; inAmt: number; outAmt: number };
+// `recurring` marks the ONE stored row of a repeating expense; `projected`
+// marks the copies this page derives for the later months. A projection has no
+// id — there is no database row to delete, and deleting the origin is what ends
+// the series.
+type BzilaEntry = { key: string; id: number | null; date: string; stream: "prop" | "cbedge" | "contracts"; label: string; accounts: number; inAmt: number; outAmt: number; recurring?: boolean; projected?: boolean };
 const STREAM_LABEL: Record<BzilaEntry["stream"], string> = { prop: "Prop", cbedge: "CB Edge", contracts: "Contracts" };
 type BzilaStreamTotal = { inAmt: number; outAmt: number; net: number };
 type BzilaStreams = { cbedge: BzilaStreamTotal; contracts: BzilaStreamTotal; prop: BzilaStreamTotal };
@@ -193,6 +197,9 @@ export default function Budget() {
    */
   const [settledFlows, setSettledFlows] = useState<Set<string>>(new Set());
   const [propRows, setPropRows] = useState<PropRow[]>([]);
+  // Recurring Bzila rows, fetched unscoped by the API: the stored row can sit in
+  // an earlier year than the one on screen, and it still has to project forward.
+  const [propRecurring, setPropRecurring] = useState<PropRow[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [dailyBalance, setDailyBalance] = useState<DailyBalance | null>(null);
   const [prevDailyBalance, setPrevDailyBalance] = useState<DailyBalance | null>(null);
@@ -253,6 +260,9 @@ export default function Budget() {
   const [ppAccounts, setPpAccounts] = useState("1");
   const [ppCost, setPpCost] = useState("");
   const [ppKind, setPpKind] = useState<"cost" | "payout">("cost");
+  // Checked = this is a monthly bill, not a one-off. One row is stored; the
+  // ledger below projects it into every later month (see bzilaComputed).
+  const [ppRecur, setPpRecur] = useState(false);
 
   const currency = profile?.currency || "USD";
 
@@ -266,6 +276,7 @@ export default function Budget() {
     setAmazonRows(data.amazonRows || []);
     setSettledFlows(new Set<string>((data.settledFlows || []).map((k: string) => String(k))));
     setPropRows(data.propRows || []);
+    setPropRecurring(data.propRecurring || []);
     setCategories(data.categories || []);
     setDailyBalance(data.dailyBalance || null);
     setPrevDailyBalance(data.prevDailyBalance || null);
@@ -480,17 +491,64 @@ export default function Budget() {
     const contractCatIds = new Set(categories.filter((c) => /contract/i.test(c.name)).map((c) => c.id));
     const entries: BzilaEntry[] = [];
 
-    for (const r of propRows) {
+    // propRows is the viewed YEAR; propRecurring is every repeating row whatever
+    // its year. Merge by id so a recurring row inside the window isn't doubled.
+    const seenPropIds = new Set(propRows.map((r) => r.id));
+    const sourceRows: PropRow[] = [...propRows, ...propRecurring.filter((r) => !seenPropIds.has(r.id))];
+
+    // Recurring rows are projected forward, one synthetic entry per month, from
+    // the month AFTER the stored one through December of the year on screen.
+    // Deliberately NOT written to the database: one stored row means a price
+    // change is one edit, and it can never drift from the months already filed.
+    // The horizon is the viewed year because that is the window the ledger and
+    // its year total cover — a committed monthly cost belongs in both.
+    const horizonYear = Number(month.slice(0, 4)) || new Date().getFullYear();
+    const streamOf = (src: PropSource): BzilaEntry["stream"] =>
+      src === "cbedge" ? "cbedge" : src === "contracts" ? "contracts" : "prop";
+
+    for (const r of sourceRows) {
+      const stream = streamOf(r.source);
+      const isRecur = Number(r.recurring) === 1;
       entries.push({
         key: `p${r.id}`,
         id: r.id,
         date: r.entry_date,
-        stream: r.source === "cbedge" ? "cbedge" : r.source === "contracts" ? "contracts" : "prop",
+        stream,
         label: r.firm,
         accounts: r.accounts || 0,
         inAmt: r.payout || 0,
         outAmt: r.cost || 0,
+        recurring: isRecur,
       });
+      if (!isRecur) continue;
+
+      const startY = Number(r.entry_date.slice(0, 4));
+      const startM = Number(r.entry_date.slice(5, 7));
+      const day = Number(r.entry_date.slice(8, 10)) || 1;
+      if (!startY || !startM) continue;
+      // Walk month by month from the stored one to the end of the viewed year.
+      // A row that starts after this year simply produces nothing.
+      for (let idx = startY * 12 + (startM - 1) + 1; idx <= horizonYear * 12 + 11; idx++) {
+        const y = Math.floor(idx / 12);
+        const mo = (idx % 12) + 1;
+        if (y < horizonYear) continue;         // only the year on screen is rendered
+        // Clamp to the target month's length so a 31st lands on the 28th/30th.
+        const dim = new Date(y, mo, 0).getDate();
+        const dd = stream === "cbedge" ? 1 : Math.min(day, dim);
+        const ymd = `${y}-${String(mo).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+        entries.push({
+          key: `p${r.id}@${ymd}`,
+          id: null,                            // nothing to delete — see BzilaEntry
+          date: ymd,
+          stream,
+          label: r.firm,
+          accounts: r.accounts || 0,
+          inAmt: r.payout || 0,
+          outAmt: r.cost || 0,
+          recurring: true,
+          projected: true,
+        });
+      }
     }
     for (const r of yearRows) {
       if (r.is_beginning) continue;
@@ -547,7 +605,7 @@ export default function Budget() {
       streams: streamsOf(entries),
       monthStreams,
     };
-  }, [propRows, yearRows, categories]);
+  }, [propRows, propRecurring, yearRows, categories, month]);
 
   // Spend per category (this month's expense rows) + the "unsorted" bucket +
   // the actual rows grouped by category (for the per-category detail popup).
@@ -1209,6 +1267,7 @@ export default function Budget() {
       accounts: ppSource === "prop" && ppKind === "cost" ? Number(ppAccounts || 0) : 0,
       cost: ppKind === "cost" ? amt : 0,
       payout: ppKind === "payout" ? amt : 0,
+      recurring: ppRecur ? 1 : 0,
     });
     setPpCost("");
   };
@@ -1450,7 +1509,7 @@ export default function Budget() {
           />
         )}
         {tab === "bzila" && (
-          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: gridCols(isMobile, "140px 120px 120px 1fr 100px 120px 100px"), gap: 10, alignItems: "center" }}>
+          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: gridCols(isMobile, "140px 120px 120px 1fr 100px 120px 150px 100px"), gap: 10, alignItems: "center" }}>
             {ppSource === "cbedge" ? (
               <input type="month" value={ppDate.slice(0, 7)} onChange={(e) => setPpDate(e.target.value ? `${e.target.value}-01` : "")} title="CB Edge is tracked by month" style={field()} />
             ) : (
@@ -1472,6 +1531,27 @@ export default function Budget() {
             <input value={ppFirm} onChange={(e) => setPpFirm(e.target.value)} placeholder={PROP_SOURCE_UI[ppSource].firmPlaceholder} style={field()} />
             <input value={ppAccounts} onChange={(e) => setPpAccounts(e.target.value)} placeholder="Accts" type="number" disabled={ppSource !== "prop" || ppKind === "payout"} style={{ ...field(), opacity: ppSource !== "prop" || ppKind === "payout" ? 0.4 : 1 }} />
             <input value={ppCost} onChange={(e) => setPpCost(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addProp()} placeholder={ppKind === "payout" ? "Amount in $" : "Amount out $"} type="number" style={field()} />
+            {/* Recurring vs one-off. Checked stores ONE row and the ledger
+                projects it into every later month of the year, so a monthly
+                bill is entered once instead of twelve times. */}
+            <label
+              title="Repeats every month from this date. One row is stored — change the amount here and every projected month follows."
+              style={{
+                display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none",
+                padding: "8px 10px", borderRadius: 12, fontSize: 13, fontWeight: 800, whiteSpace: "nowrap",
+                color: ppRecur ? HOME_THEME.cyan : HOME_THEME.muted,
+                background: ppRecur ? bRgba(HOME_THEME.cyan, 0.12) : "rgba(255,255,255,0.03)",
+                border: `1px solid ${ppRecur ? bRgba(HOME_THEME.cyan, 0.4) : HOME_THEME.border}`,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={ppRecur}
+                onChange={(e) => setPpRecur(e.target.checked)}
+                style={{ width: 15, height: 15, accentColor: HOME_THEME.cyan, cursor: "pointer" }}
+              />
+              {ppRecur ? "🔁 Monthly" : "One-time"}
+            </label>
             <button onClick={addProp} style={primary()}>Add</button>
           </div>
         )}
@@ -3469,7 +3549,7 @@ function BzilaPanel({
       <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 7, padding: isMobile ? "11px 10px" : "12px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
           <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.12em", textTransform: "uppercase" }}>Monthly All</span>
-          <span style={{ marginLeft: "auto", fontSize: 11, color: HOME_THEME.muted }}>{year} · all streams</span>
+          <span style={{ marginLeft: "auto", fontSize: 11, color: HOME_THEME.muted }}>{year} · all streams · 🔁 = repeats monthly</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: isMobile ? "10px 10px" : "11px 16px", background: HOME_THEME.panel, fontSize: isMobile ? 10 : 12, fontWeight: 900, letterSpacing: isMobile ? "0.04em" : "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
           <span>Month</span>
@@ -3514,11 +3594,28 @@ function BzilaPanel({
                             {STREAM_LABEL[r.stream]}
                           </span>
                         </span>
-                        <span style={{ color: HOME_THEME.muted, letterSpacing: "0.04em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                        <span style={{ color: HOME_THEME.muted, letterSpacing: "0.04em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {r.recurring && (
+                            <span
+                              title={r.projected ? "Repeats monthly — projected from an earlier entry" : "Repeats monthly — delete this row to end the series"}
+                              style={{ marginRight: 6, fontSize: 11, opacity: r.projected ? 0.55 : 0.95 }}
+                            >
+                              🔁
+                            </span>
+                          )}
+                          {r.label}
+                        </span>
                         <span style={{ textAlign: "center", color: HOME_THEME.muted }}>{r.accounts || "—"}</span>
                         <span style={{ textAlign: "right", fontWeight: 800, color: isIn ? HOME_THEME.green : SOFT_RED }}>{isIn ? "+" : "−"}{fmtMoney(isIn ? r.inAmt : r.outAmt, currency)}</span>
                         <span style={{ textAlign: "right" }}>
-                          {r.id != null ? <DeleteButton onClick={() => onDelete(r.id!)} /> : <span title="Edit on the Payments tab" style={{ color: HOME_THEME.muted, opacity: 0.4, fontSize: 12 }}>↗</span>}
+                          {r.id != null
+                            ? <DeleteButton onClick={() => onDelete(r.id!)} />
+                            : <span
+                                title={r.projected ? "Projected from the first month of this recurring entry — delete that row to stop it" : "Edit on the Payments tab"}
+                                style={{ color: HOME_THEME.muted, opacity: 0.4, fontSize: 12 }}
+                              >
+                                {r.projected ? "🔁" : "↗"}
+                              </span>}
                         </span>
                       </div>
                     );

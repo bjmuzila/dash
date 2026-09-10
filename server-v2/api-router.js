@@ -8751,19 +8751,22 @@ if (libDb) {
               d.setMonth(d.getMonth() - 1, 1);
               return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
             })();
-            const [categories, entries, register2, recurring, amazonRows, propRows, dailyBalance, settledFlows] = await Promise.all([
+            const [categories, entries, register2, recurring, amazonRows, propRows, propRecurring, dailyBalance, settledFlows] = await Promise.all([
               D.listBudgetCategories(profile.id),
               D.listBudgetEntries(profile.id, 500),
               D.listRegister(profile.id, from, to),
               D.listRecurring(profile.id),
               D.listAmazonRows(profile.id, from, to),
               D.listPropRows(profile.id, `${year}-01-01`, `${year}-12-31`),
+              // Recurring Bzila rows are fetched unscoped: the stored row can be
+              // in an earlier year than the one being viewed.
+              D.listPropRecurring(profile.id),
               D.getLatestDailyBalance(profile.id),
               D.listSettledFlows(profile.id, settledSince),
             ]);
             const prevDailyBalance = dailyBalance ? await D.getDailyBalanceBefore(profile.id, dailyBalance.day) : null;
             send(res, 200, {
-              profile, categories, entries, month, register: register2, recurring, amazonRows, propRows,
+              profile, categories, entries, month, register: register2, recurring, amazonRows, propRows, propRecurring,
               dailyBalance, prevDailyBalance,
               // Flows the Rent card has been told are already in the bank (or
               // are not coming). Keys only — the card matches them by key.
@@ -8890,6 +8893,7 @@ if (libDb) {
               profile_id: profile.id, entry_date: String(body?.date ?? '').trim(), source: body?.source ? String(body.source) : 'prop',
               firm: body?.firm ? String(body.firm) : 'TPT', accounts: Number(body?.accounts ?? 0), cost: Number(body?.cost ?? 0),
               payout: Number(body?.payout ?? 0), note: body?.note ? String(body.note) : null,
+              recurring: body?.recurring ? 1 : 0,
             });
             send(res, 200, { ok: true, prop: row }); return;
           }
@@ -8902,6 +8906,7 @@ if (libDb) {
               cost: body?.cost != null ? Number(body.cost) : undefined,
               payout: body?.payout != null ? Number(body.payout) : undefined,
               note: body?.note !== undefined ? (body.note ? String(body.note) : null) : undefined,
+              recurring: body?.recurring != null ? (body.recurring ? 1 : 0) : undefined,
             });
             send(res, 200, { ok: true }); return;
           }

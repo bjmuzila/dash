@@ -1,5 +1,192 @@
 # Changelog
 
+## 2026-09-10 (c) - V3 HOME BOARD: Net Vol GEX Flow is a card, and it is the SAME component the scanner mounts
+
+The home board (`/v3`) gained a "Net Vol GEX Flow (Today)" card - the GEX Levels
+tab's card 12, unchanged: same picker, same RTH/ETH switch, same $/% toggle,
+same 30s buckets off `/proxy/gex-vol-flow`, same six tiles, same scrim.
+
+It is not a second implementation. The panel MOVED out of the scanner tab into
+`cbedge-v3/src/board/volGexFlow/VolGexFlowCard.tsx`, and both surfaces now mount
+one `<VolGexFlowPanel />`, so the board and the tab cannot drift the way v2's
+desktop and phone pages did.
+
+`cbedge-v3/src/board/volGexFlow/VolGexFlowCard.tsx` (new):
+
+- `VolFlowTiles`, `VolFlowChart` and `VolGexFlowPanel` verbatim from
+  `pages/scanner/GexLevelsTab.tsx` sec. 10 (spec B263-B266, B275-B334). The two
+  transcribed v2 bugs came with it and are still deliberate: the panel header
+  says "30s buckets" under a subtitle that says "5m buckets", and the % view's
+  delta tile prints "-0.0pt" in the positive colour at exactly zero.
+- Local copies of `usePoll` and `PanelRefresh` rather than an import from the
+  scanner tab - importing that module would pull the whole gexlevels route
+  (eleven other charts, its layout store, its history table) into the board
+  chunk for one panel. The maths, copy and loader still come from
+  `pages/scanner/gexLevels(.Data)`, which are side-effect-free and tree-shake.
+- Exports `VOL_FLOW_ERR` (the panel's two error sentences), which the scanner
+  tab's entry loader imports back the other way.
+- Still SPX-only and takes no props: `/proxy/gex-vol-flow` is written by the
+  strike-GEX recorder and that recorder runs on the index, so a ticker control
+  here would change nothing.
+
+`cbedge-v3/src/board/catalog.tsx`:
+
+- New `vol-gex-flow` entry behind `lazy()` (it pulls lightweight-charts), icon
+  the spiral, default 24 x 56 - half the board width, which is what the header
+  row needs before it wraps, and the panel's own ~460px height.
+
+`cbedge-v3/src/pages/scanner/GexLevelsTab.tsx`:
+
+- Card 12's ~345 lines removed and replaced with a pointer comment; the registry
+  entry now renders the imported `<VolGexFlowPanel />` inside the same fixed
+  460px wrapper.
+- Local `VOL_FLOW_ERR` deleted (imported from the new module) and 46 imports that
+  only card 12 used dropped, including the file's entire `lightweight-charts`
+  and `ChartFrame` imports - the tab's remaining eleven cards are all inline SVG.
+
+Not changed: the card is not in the board's default layout - add it from
+"+ Add card". No data, endpoint or server change of any kind.
+
+## 2026-09-10 (b) - SCANNER: Watch This cards carry a sweep time, and a re-flagged contract shows up in Tracked results
+
+Two complaints, one root cause. Cards sitting at the top of Watch This were not
+appearing in Tracked results "as added and flagged", and there was no way to
+tell how old a card was.
+
+The tracking gap was never a failed insert. `far_cb_outcomes` is keyed
+`(symbol, strike, expiry)` with NO date, and the sweep inserted
+`ON CONFLICT ... DO NOTHING` - so the FIRST sighting of a contract wrote a row
+stamped with that day's `first_flagged`, and every sweep after that wrote
+nothing at all. `groupOutcomesByDay` buckets by `first_flagged`, so a contract
+that had been on the board for a week only ever counted as "opened" on the day
+it first appeared, and today's date row listed only contracts that were new to
+the table. The cards were tracked; they were just filed under an older date with
+nothing on screen connecting the two.
+
+`server-v2/far-cb-recorder.js`:
+
+- ADDED `far_cb_outcomes.last_flagged DATE` (ALTER + backfill to `first_flagged`,
+  so no row is ever null). `first_flagged` still never moves - it is what
+  "opened" means, and the flag is a thesis with a date on it.
+- The outcomes insert is now `ON CONFLICT ... DO UPDATE SET last_flagged =
+  GREATEST(far_cb_outcomes.last_flagged, EXCLUDED.last_flagged)`. GREATEST
+  because Postgres ignores NULL operands there, and because a manual force-run
+  or a backfill must never walk the date backwards. Everything else describing
+  the flag (spot, OTM %, GEX, side) stays frozen at the first sighting.
+
+`server-v2/server-with-proxy.js` (proxy endpoints, confirmed before editing):
+
+- `/proxy/far-cb-watch` - added `ts` to the SELECT. The column already existed
+  and already held the sweep write time; it simply was not being returned.
+- `/proxy/far-cb-outcomes` - added `last_flagged` to the SELECT and ran it
+  through `farCbToYmd` alongside the other dates.
+- No behavior change to either handler beyond the extra columns.
+
+`components/pages/Scanner.tsx` (Watch This tab):
+
+- Each card now stamps the sweep that produced it (`Sep 9, 3:30 PM ET`), falling
+  back to the session date. The recorder sweeps every 30m in RTH and the row is
+  left standing after the close, so "now" was a bad proxy for "when this was
+  true" - a card seen in the morning could be the previous session's.
+- Each card now says `Tracked since <first_flagged>` (plus status when it is not
+  open), or `New - logs on the next sweep` when the contract is not in the log
+  yet. Built as a client-side join over `outcomes` / `resultRows`, both already
+  fetched - no extra request.
+- Tracked results gained a FLAGGED section and count per date: contracts last
+  seen on the board that date, having opened earlier. It buckets on
+  `last_flagged` ONLY - the row records the first and last sighting, not every
+  sweep between, and filling in the gap would invent flags the recorder never
+  observed (a contract can drop off for a week and come back).
+- `Last flagged` is a new sortable column on the flat table and a column in the
+  per-date table, tinted when it differs from the open date. `colSpan` bumped on
+  every affected row (12 -> 13 flat, 5 -> 6 date, 8 -> 9 per-date detail).
+
+Not changed: the recorder still DELETEs a `far_cb_watch` row when a symbol stops
+qualifying, which is why a contract can be in Tracked results without a card.
+
+## 2026-09-10 (a) - OWNER: the trial UI is gone from Sales, and the stale trial copy with it
+
+The 2-day free trial was retired on 2026-09-09 (see entry (k)). The owner site
+was still reporting on it. Everything that RENDERED trial data is removed; the
+APIs and the tables behind them are untouched.
+
+`owner-vite/src/pages/Sales.tsx`:
+
+- DELETED the whole "Trial conversion" section - the `trialOutcome()` helper,
+  `TrialConversionPanel`, `TRIAL_TABLE_COLS`, and the panel's render site. Its
+  empty state still advertised "the 2-day trial went live on the monthly plan",
+  which was the clearest sign it had outlived itself.
+- DELETED the "Trial Conversion" KPI tile and the `trialKpi` memo behind it. The
+  KPI row is `auto-fill / minmax(272px, 1fr)`, so four cards reflow on their own.
+- DELETED the whole "Trial abuse & bans" section - `TrialAbusePanel`, the
+  `TrialBanRow` / `TrialReuseRow` / `TrialIpClusterRow` types, `BAN_TABLE_COLS`
+  / `REUSE_TABLE_COLS` / `IPCLUSTER_TABLE_COLS` and `banInputStyle`. It was the
+  manual override on a gate that no longer exists: with no trial to grant, there
+  is nothing to ban someone from. `/api/admin/trial-bans` and the `trial_bans`
+  table are LEFT IN PLACE, like `lib/trialGuard.ts` and friends in entry (k) -
+  the record survives and the panel can come back in one file if the trial does.
+- Revenue by Source lost its `Trials` column (converted/started). That is three
+  edits, not one: `SOURCE_TABLE_COLS` drops to six tracks, `SourceBucket` loses
+  `trials`/`converted`, and `buildSourceBuckets()` loses its third argument and
+  the loop that filled them. The row tooltip's "N of M trials paid" clause is
+  gone too.
+- KEPT: `STATUS_COLORS.trialing` and the "active, trialing or past_due" wording
+  on the Active Subscriptions tile. Grandfathered trials still exist in Stripe
+  and still have access, so a `trialing` sub must still render correctly. The
+  `TrialSummary` interface and the `trial_*` fields on `StripeSubscription` also
+  stay, marked RETIRED - the API still sends them, nothing reads them.
+
+`owner-vite/src/pages/ControlPanel.tsx` (Overview) had no trial cards at all -
+only a tooltip on the "member loads" figure calling the member/paying gap "your
+trial / free funnel". It now reads "signed-up accounts that have not bought".
+
+`owner-vite/src/pages/studioHtml.ts` (Post Studio): three social templates still
+had the offer baked into their footer text - "Free 2-day trial · cbedge.net",
+"cbedge.net · free 2-day trial" and its &middot; twin. All three now say
+"$50/mo, cancel anytime", matching the landing/pricing copy from entry (k).
+
+NOT TOUCHED: `demo-owner/` is a static clone with hard-coded trial numbers
+(`src/data.js`, `src/pages-info.js`, `src/pages.js`, and the built
+`dist/index.html`). It still shows a trial funnel. Separate call - it is a demo,
+not the live owner site.
+
+## 2026-09-09 (m) - BUDGET / BZILA: recurring vs one-time on the add line
+
+The Bzila composer now has a checkbox: leave it alone for a one-off, tick
+"Monthly" for anything that repeats. A monthly bill is entered ONCE and shows
+up in every later month of the year on its own.
+
+How it works - ONE row is stored, never twelve:
+
+- `budget_prop` gains `recurring INTEGER NOT NULL DEFAULT 0` (idempotent ALTER,
+  mirrored in `server-v2/_lib-db.cjs` and `lib/db.ts`). Existing rows are all
+  one-offs, which is what the default says.
+- `owner-vite/src/pages/Budget.tsx` -> `bzilaComputed` projects a recurring row
+  forward client-side, one synthetic entry per month from the month AFTER the
+  stored one through December of the year on screen. Same shape as
+  `budget_recurring` -> the Payments register, and for the same reason: a price
+  change is then ONE edit and the filed months can never drift from it.
+- Projections carry `id: null`, so there is no delete button on them - there is
+  no row to delete. Deleting the stored origin row ends the series. Both the
+  origin and its projections are marked with a dimmed/solid 🔁 in the ledger,
+  and the "Monthly All" header says what the glyph means.
+- The horizon is the VIEWED year, so the year total at the bottom of the ledger
+  and the Bzila tile on Overview both include committed monthly costs for months
+  that have not happened yet. That is deliberate - it is what "so I do not have
+  to enter it every month" has to mean for a budget.
+
+New `listPropRecurring(profileId)` in both db layers, wired into the budget GET
+as `propRecurring` (`server-v2/api-router.js` + the `app/api/budget/route.ts`
+fallback). `listPropRows()` is scoped to one calendar year, which is right for
+one-offs and wrong for recurring rows: a subscription started in November would
+vanish on Jan 1 because its single stored row sits in the previous year. The
+unscoped list is merged client-side by id so a row inside the year window is
+never counted twice.
+
+`propAdd` / `propUpdate` accept `recurring` on both the live router and the Next
+fallback. No proxy behavior was touched - `server-with-proxy.js` and
+`proxy-tastytrade.js` are unchanged.
+
 ## 2026-09-09 (l) - OWNER: false "gated page" alert, Completed pill color, Post Studio image borders + layer order
 
 Three unrelated owner-side fixes.

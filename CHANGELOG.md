@@ -1,5 +1,15 @@
 # Changelog
 
+## Thursday 9/10/2026 — Billing: the 2-day free trial is retired (`app/api/stripe/checkout/route.ts`, `components/landing/LandingClient.tsx`, `components/landing/PublicNav.tsx`, `components/landing/LiveLevelPanel.tsx`, `app/explore/[slug]/page.tsx`, `app/explore/seasonality/page.tsx`)
+
+`subscription_data.trial_period_days` is never sent any more — the `decideTrialEligibility()` call, the owner-ban bookkeeping/notice, the trial-IP recording and the `clientIp()` helper are all out of the checkout route, and `trial_decision` is now the fixed string `trials-retired`; every landing, nav and /explore CTA sells the $50/mo membership instead of a trial (`?trial=1` dropped from all /pricing links, and seasonality's stale $45 corrected to $50). `lib/trialGuard.ts` (still called from the Stripe webhook), `lib/trialEligibility.ts`, `lib/trialBanNotice.ts`, the trial tables and the win-back path are all deliberately left in place, and `trialing` stays in `PAID_STATUSES` so anyone mid-trial keeps access until it converts. **NOT build-verified** — run `npx tsc --noEmit` + `npm run build` before push. Not deployed.
+
+
+## Thursday 9/10/2026 — IB Stats (v3): probability-engine rings capped so the trio stops eating the page (`cbedge-v3/src/pages/scanner/IbStatsTab.tsx`)
+
+`Ring` drew its `<svg className="w-full">` at whatever width the 3-column `RingTrio` grid handed it, so on a wide card each Bullish/Bearish/Rotation donut ballooned to ~600px and the two trios filled the viewport. The svg wrapper is now `mx-auto` with `maxWidth: RING_MAX_PX` (92), and the centred percent readout drops `text-lg` -> `text-sm`; the svg still scales down below the cap on narrow cards, and `RING` geometry, `ringDashOffset` and the colours are untouched. **NOT build-verified** — run `npx tsc --noEmit` + `npm run build` before push. Not deployed.
+
+
 ## Tuesday 9/8/2026 — GEX Candles (v3): live candles off a new dxLink hub, plus volume and a spot line
 
 New `server-v2/etf-live-candles.js` holds ONE persistent dxLink 1m candle subscription for the symbols actually on screen and serves it through two routes added to `server-v2/api-router.js` — a 2s probe (`/api/snapshots/etf-candles/live`) and an SSE stream (`/live/stream`) — which `cbedge-v3/src/board/gexCandles/candles.ts` + `GexCandlesCard.tsx` consume through the chart's imperative `setLivePrice`, taking QQQ/SPY off a 60s step without touching `/ws/gex`, the recorder, or `proxy-tastytrade.js` (the v2 `hooks/useEtfCandles.ts` got the same overlay before v3 turned out to be the live app). `cbedge-v3/src/board/gexCandles/chart.ts` + `settings.ts` add a volume histogram as a bottom-pinned overlay series and re-enable lightweight-charts' dashed last-price line, both as chips in the cogwheel's Layer section, with the wash colours going through `tokenHexAlpha()` after `rgba()` literals failed `check-theme.mjs`.

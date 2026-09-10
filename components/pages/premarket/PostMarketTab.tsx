@@ -286,6 +286,19 @@ export const POSTMARKET_CSS = `
 .pmk .evlegend{display:flex;gap:14px;flex-wrap:wrap;font-size:9.5px;letter-spacing:.05em;
   text-transform:uppercase;color:var(--dim2)}
 .pmk .evlegend i{display:inline-block;width:9px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+/* ── THE LEGEND IS THE FILTER ───────────────────────────────────────────────
+   Section 3's build buckets are toggled by clicking their legend entry, so the
+   chips are real <button>s rather than decorative spans. A switched-off chip
+   keeps its place and its label — it dims and its swatch greys — because a
+   filter that removes its own control is a filter you cannot undo. */
+.pmk .evlegend .chip{display:inline-flex;align-items:center;background:none;border:0;
+  padding:2px 5px;margin:-2px -5px;font:inherit;letter-spacing:inherit;text-transform:inherit;
+  color:inherit;cursor:pointer;border-radius:4px;transition:opacity .12s ease,background .12s ease}
+.pmk .evlegend .chip:hover{background:var(--sunken);color:var(--txt)}
+.pmk .evlegend .chip.off{opacity:.4}
+.pmk .evlegend .reset{background:none;border:1px solid var(--line2);color:var(--dim);cursor:pointer;
+  font:inherit;letter-spacing:inherit;text-transform:inherit;border-radius:4px;padding:1px 7px}
+.pmk .evlegend .reset:hover{color:var(--txt);border-color:var(--line3)}
 /* ── THE LADDER FILLS ITS COLUMN ────────────────────────────────────────────
    .chart caps every ladder on the page at 440px, which is right for the short
    ones on the Premarket tab and wrong for this one: section 3's other column
@@ -791,6 +804,40 @@ export default function PostMarketTab(p: PostMarketProps) {
   );
 
   /**
+   * THE LEGEND IS THE FILTER.
+   *
+   * Clicking a bucket in section 3's legend drops that window out of the bars.
+   * Two decisions worth knowing about, because they are what make a filtered
+   * ladder still comparable to an unfiltered one:
+   *
+   *   · A hidden bucket is not renormalised away. Each segment keeps its share
+   *     of the strike's WHOLE recorded move and the bar simply gets shorter by
+   *     the hidden part, so "AM only" reads as "this much of the build happened
+   *     in the morning" rather than turning every row into a flat 100% AM.
+   *   · The composition label therefore also stays on the full-day denominator.
+   *     A row saying "62% AM" says the same thing whichever chips are lit.
+   *
+   * Hidden-ness is keyed by LABEL, not by object identity: activeBuckets is
+   * rebuilt whenever the recording's coverage changes, and a Set of stale object
+   * references would silently un-hide everything on the next scrub.
+   */
+  const [hiddenBuckets, setHiddenBuckets] = useState<string[]>([]);
+  /** The power-hour column has its own chip — it is a different measurement. */
+  const [pmHidden, setPmHidden] = useState(false);
+
+  const toggleBucket = useCallback((label: string) => {
+    setHiddenBuckets((prev) =>
+      prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]);
+  }, []);
+
+  const shownBuckets = useMemo(
+    () => activeBuckets.filter((b) => !hiddenBuckets.includes(b.label)),
+    [activeBuckets, hiddenBuckets],
+  );
+  /** True when nothing is filtered — the ladder is showing the whole session. */
+  const evUnfiltered = shownBuckets.length === activeBuckets.length && !pmHidden;
+
+  /**
    * THE POWER-HOUR ANCHOR — the column at 15:00, or null.
    *
    * `idxAtMin` snaps to the NEAREST column, so on a recording that only starts
@@ -847,9 +894,13 @@ export default function PostMarketTab(p: PostMarketProps) {
       cuts[cuts.length - 1] = last;                       // the final bucket always ends at the close
       const moves = activeBuckets.map((_, i) => Math.abs(shareAt(cuts[i + 1]) - shareAt(cuts[i])));
       const total = moves.reduce((a, c) => a + c, 0);
-      const segs = total > 0
+      // Built over EVERY active bucket, then filtered — see the hiddenBuckets
+      // header. The denominator stays the whole recorded move, so hiding a
+      // window shortens the bar instead of re-inflating what is left.
+      const allSegs = total > 0
         ? moves.map((mv, i) => ({ share: mv / total, color: activeBuckets[i].color, label: activeBuckets[i].label }))
         : [];
+      const segs = allSegs.filter((s) => !hiddenBuckets.includes(s.label));
       const dominant = segs.length ? segs.reduce((bb, x) => (x.share > bb.share ? x : bb), segs[0]) : null;
 
       const closeShare = shareAt(last);
@@ -858,7 +909,7 @@ export default function PostMarketTab(p: PostMarketProps) {
 
       return { ...base, segs, dominant, pmShare, pmBase, closeShare };
     });
-  }, [evBars, series, idxAtMin, activeBuckets, evCover, pmAnchor, colAbsTotal]);
+  }, [evBars, series, idxAtMin, activeBuckets, hiddenBuckets, evCover, pmAnchor, colAbsTotal]);
 
   /**
    * WALL MIGRATION — where the levels sat, minute by minute, against spot.
@@ -1664,16 +1715,35 @@ export default function PostMarketTab(p: PostMarketProps) {
               legend entry for a window that was never recorded is a promise the
               bars cannot keep — that is how "there is no blue" reads as a
               missing colour instead of a missing morning. */}
+          {/* Every chip is a switch. Clicking one drops that window out of the
+              bars; the chip stays put and dims, so the way back is the control
+              you just used. */}
           <div className="evlegend">
-            {activeBuckets.map((b) => (
-              <span key={b.label}>
-                <i style={{ background: b.color }} />
-                {`${etMinOfDay(b.from)}–${b.until >= RTH_CLOSE_MIN ? "close" : etMinOfDay(b.until)}`}
-              </span>
-            ))}
+            {activeBuckets.map((b) => {
+              const off = hiddenBuckets.includes(b.label);
+              return (
+                <button
+                  type="button"
+                  key={b.label}
+                  className={`chip${off ? " off" : ""}`}
+                  aria-pressed={!off}
+                  onClick={() => toggleBucket(b.label)}
+                  title={off
+                    ? `${b.label} is hidden — click to put it back in the bars`
+                    : `${b.label} — click to hide this window. Hidden windows leave the rest of each bar where it was, so the lengths stay comparable.`}
+                >
+                  <i style={{ background: off ? "var(--line3)" : b.color }} />
+                  {`${etMinOfDay(b.from)}–${b.until >= RTH_CLOSE_MIN ? "close" : etMinOfDay(b.until)}`}
+                </button>
+              );
+            })}
             {hasPm && (
-              <span
-                style={{ color: "var(--txt)", cursor: "help" }}
+              <button
+                type="button"
+                className={`chip${pmHidden ? " off" : ""}`}
+                aria-pressed={!pmHidden}
+                onClick={() => setPmHidden((v) => !v)}
+                style={{ color: pmHidden ? undefined : "var(--txt)" }}
                 title={[
                   "15:00→close change in the strike's SHARE of the board's total gamma, in percentage points.",
                   "Right/amber = it took share into the bell. Left/red = it lost share.",
@@ -1683,11 +1753,27 @@ export default function PostMarketTab(p: PostMarketProps) {
                   "The 1/√T term is in the numerator and the denominator of a share, so it divides out and",
                   "what is left is positioning. This column is on its own scale — its length is not",
                   "comparable to the bar beside it.",
+                  "",
+                  pmHidden ? "Click to show this column." : "Click to hide this column.",
                 ].join("\n")}
               >
-                <i style={{ background: "linear-gradient(90deg,var(--neg) 0 50%,var(--amber) 50% 100%)" }} />
+                <i style={{
+                  background: pmHidden
+                    ? "var(--line3)"
+                    : "linear-gradient(90deg,var(--neg) 0 50%,var(--amber) 50% 100%)",
+                }} />
                 15:00→close · board share · own scale
-              </span>
+              </button>
+            )}
+            {!evUnfiltered && (
+              <button
+                type="button"
+                className="reset"
+                onClick={() => { setHiddenBuckets([]); setPmHidden(false); }}
+                title="Show every window again"
+              >
+                show all
+              </button>
             )}
           </div>
         </div>
@@ -1733,17 +1819,28 @@ export default function PostMarketTab(p: PostMarketProps) {
                 // were reading, and made the two halves impossible to compare.
                 // Sign is now carried where it belongs: the signed dollar value
                 // in its own column, plus the +/− chip and the bar's tint.
-                const w = Math.min(100, (Math.abs(r.net) / maxAbsBar) * 100);
+                //
+                // With the legend filtered, the bar carries only the share of
+                // the strike's build that happened in the windows still lit —
+                // the hidden part is taken OFF the end rather than divided out
+                // of what remains, so a row's length keeps meaning the same
+                // thing across rows and across filter states.
+                const shownShare = r.segs.reduce((a, s) => a + s.share, 0);
+                const full = Math.min(100, (Math.abs(r.net) / maxAbsBar) * 100);
+                const w = r.segs.length ? full * shownShare : full;
 
                 // Segments run left→right in time order, so a bar reads the way
                 // the day ran.
+                // Widths are laid against `full`, not `w`: every segment keeps
+                // the length it had before the filter, and the bar ends early
+                // where a hidden window used to sit.
                 let acc = 0;
                 const segs = r.segs.map((sg, i) => {
                   const startPct = acc;
-                  acc += sg.share * w;
+                  acc += sg.share * full;
                   return (
                     <div className="seg" key={i}
-                      style={{ left: `${startPct}%`, width: `${sg.share * w}%`, background: sg.color, opacity: pos ? .95 : .82 }} />
+                      style={{ left: `${startPct}%`, width: `${sg.share * full}%`, background: sg.color, opacity: pos ? .95 : .82 }} />
                   );
                 });
 
@@ -1756,18 +1853,21 @@ export default function PostMarketTab(p: PostMarketProps) {
                 // Under a fiftieth of a point the strike did nothing in the last
                 // hour, and a 1px stub on a flat row is a mark that reads as a
                 // measurement. Those draw the zero line only.
-                const pmFlat = r.pmShare != null && Math.abs(r.pmShare) < 0.02;
-                const pmW = r.pmShare == null || pmFlat
+                // …and nothing at all when its legend chip is switched off.
+                const pmVal = pmHidden ? null : r.pmShare;
+                const pmOn = pmVal != null;
+                const pmFlat = pmVal != null && Math.abs(pmVal) < 0.02;
+                const pmW = pmVal == null || pmFlat
                   ? null
-                  : Math.min(50, (Math.abs(r.pmShare) / maxPmAbs) * 50);
+                  : Math.min(50, (Math.abs(pmVal) / maxPmAbs) * 50);
                 const pmGrew = (r.pmShare ?? 0) >= 0;
                 // Points of board share, printed to one decimal: the moves that
                 // matter here are whole points and the ones that do not should
                 // read as ~0.0 rather than being rounded away to nothing.
-                const pmTxt = r.pmShare == null || !meaningful
+                const pmTxt = pmVal == null || !meaningful
                   ? null
                   : pmFlat ? "flat pm"
-                    : `${pmGrew ? "+" : "−"}${Math.abs(r.pmShare).toFixed(1)}pp`;
+                    : `${pmGrew ? "+" : "−"}${Math.abs(pmVal).toFixed(1)}pp`;
                 return (
                   <div
                     className={`evrow${tag ? " key" : ""}`}
@@ -1788,14 +1888,23 @@ export default function PostMarketTab(p: PostMarketProps) {
                       {fmtUsd(r.net, false)}
                     </div>
                     <div className={`track${pos ? "" : " neg"}`}>
-                      {segs.length ? segs : <div className={`bar ${pos ? "p" : "n"}`} style={{ width: `${w}%` }} />}
+                      {/* A strike with no composition at all still gets its
+                          solid bar — but only while the legend is whole. Under
+                          a filter that bar would be the one row claiming to
+                          cover windows the reader just switched off. */}
+                      {segs.length
+                        ? segs
+                        : shownBuckets.length === activeBuckets.length
+                          ? <div className={`bar ${pos ? "p" : "n"}`} style={{ width: `${w}%` }} />
+                          : null}
                     </div>
                     {/* 15:00 → close, on its own scale. Unpainted entirely when
                         the recording never reached 15:00 — a MISSING power hour
                         must not look like a flat one, which is why the zero line
-                        is drawn only when there is a reading behind it. */}
-                    <div className={`pmtrack${r.pmShare == null ? " off" : ""}`}>
-                      {r.pmShare != null && <div className="zero" />}
+                        is drawn only when there is a reading behind it. The same
+                        goes for the column switched off from the legend. */}
+                    <div className={`pmtrack${pmOn ? "" : " off"}`}>
+                      {pmOn && <div className="zero" />}
                       {pmW != null && (
                         <i className={pmGrew ? "up" : "dn"} style={{ width: `${Math.max(1, pmW)}%` }} />
                       )}

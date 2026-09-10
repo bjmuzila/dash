@@ -1679,7 +1679,7 @@ function TopPagesCard({
         )}
         <span><b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{view.rows.length}</b> pages</span>
         {audience !== "nonmembers" && view.memberLoadsTotal > 0 && (
-          <span title="Registered accounts. Paying is the subset in parentheses — the gap is your trial / free funnel.">
+          <span title="Registered accounts. Paying is the subset in parentheses — the gap is signed-up accounts that have not bought.">
             <b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{num(view.memberLoadsTotal)}</b> member loads
             {" "}({num(view.paidLoadsTotal)} paying)
           </span>

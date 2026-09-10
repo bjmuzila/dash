@@ -22,6 +22,8 @@
  *     sweep; only rows that ever crossed the OTM threshold are kept (a symbol
  *     that stops qualifying is deleted on its next sweep). Old dates pruned.
  *   far_cb_outcomes (symbol, strike, expiry) — the tracked flag itself.
+ *     first_flagged is frozen at the first sighting; last_flagged advances on
+ *     every sweep that re-flags the same contract.
  *   far_cb_contract_daily (symbol, strike, expiry, opt_type, date) — the daily
  *     PREMIUM for each tracked contract, from two writers:
  *       runContractProbe()    — NBBO mid on a FAR_CB_PROBE_MINS cadence during
@@ -227,6 +229,19 @@ async function ensureSchema() {
   // skip contracts it has already covered — an expired one for good, a live one
   // until the next session adds a bar.
   await p.query(`ALTER TABLE far_cb_outcomes ADD COLUMN IF NOT EXISTS premium_backfilled_at TIMESTAMPTZ;`);
+  // The most recent sweep date that re-flagged this same contract.
+  //
+  // first_flagged deliberately never moves — it is what "opened" means, and the
+  // Tracked-results day view buckets by it. But with ONLY that column, a
+  // contract flagged every day for two weeks left no trace after day one: the
+  // card sat on the board while the results table said nothing about it, which
+  // reads as "the cards were never added". last_flagged is the other half of
+  // that story — first seen, and last seen.
+  //
+  // Backfilled to first_flagged so pre-existing rows are never null; a row is
+  // therefore always "flagged" on at least one date.
+  await p.query(`ALTER TABLE far_cb_outcomes ADD COLUMN IF NOT EXISTS last_flagged DATE;`);
+  await p.query(`UPDATE far_cb_outcomes SET last_flagged = first_flagged WHERE last_flagged IS NULL;`);
 
   // Daily premium probe for each tracked contract. This is OUR OWN recording of
   // the contract's price — not a vendor EOD series — so the row popup has a
@@ -435,14 +450,23 @@ async function upsertOrClear(p, date, symbol, result) {
       [date, symbol, result.strike, result.expiry, result.gexValue, result.gexValueVol ?? null, result.spot, result.otmPct, result.dteDays]
     );
     // Log this (symbol, strike, expiry) once — first time it's ever flagged.
-    // Later sweeps that re-flag the same triple are no-ops here (ON CONFLICT
-    // DO NOTHING); the daily grader is what evolves the row after that.
+    // Everything describing the flag itself (spot, OTM %, GEX, side) is frozen
+    // at that first sighting on purpose: the flag is a thesis with a date on it,
+    // and the daily grader is what evolves the row after that.
+    //
+    // The ONE thing a later sweep does update is last_flagged, so a contract
+    // that is still on the board today is visible as flagged TODAY in Tracked
+    // results instead of vanishing after the day it opened. GREATEST rather
+    // than a bare assignment because Postgres ignores NULL operands there, and
+    // because an out-of-order sweep (a manual force-run, a backfill) must never
+    // walk the date backwards.
     const side = result.strike > result.spot ? 'above' : 'below';
     await p.query(
       `INSERT INTO far_cb_outcomes
-         (symbol, strike, expiry, first_flagged, spot_at_flag, otm_pct_at_flag, gex_value_at_flag, side, last_checked, last_spot, closest_pct)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$4,$5,$6)
-       ON CONFLICT (symbol, strike, expiry) DO NOTHING`,
+         (symbol, strike, expiry, first_flagged, spot_at_flag, otm_pct_at_flag, gex_value_at_flag, side, last_checked, last_spot, closest_pct, last_flagged)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$4,$5,$6,$4)
+       ON CONFLICT (symbol, strike, expiry) DO UPDATE SET
+         last_flagged = GREATEST(far_cb_outcomes.last_flagged, EXCLUDED.last_flagged)`,
       [symbol, result.strike, result.expiry, date, result.spot, result.otmPct, result.gexValue, side]
     );
   } else {

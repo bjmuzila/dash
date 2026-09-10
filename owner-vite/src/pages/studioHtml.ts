@@ -1482,7 +1482,7 @@ var TPL={
     {t:'text',x:80,y:790,w:900,html:'Full changelog at cbedge.net/whats-new',fs:22,fw:700,col:C.dim},
     {t:'image',x:1020,y:56,w:500,h:696,label:'Screenshot of the new feature'},
     {t:'box',x:1020,y:788,w:500,h:56,bgc:C.panelUp},
-    {t:'text',x:1052,y:802,w:440,html:'Free 2-day trial · cbedge.net',fs:22,fw:700,col:C.pale}
+    {t:'text',x:1052,y:802,w:440,html:'Full access · $50/mo · cbedge.net',fs:22,fw:700,col:C.pale}
   ]},
 
   /* Big screenshot + numbered callouts — the "here's how to read it" post. */
@@ -1593,7 +1593,7 @@ var TPL={
     {t:'image',x:860,y:292,w:660,h:406,label:'Option price chart screenshot',k:'shot-chart'},
     {t:'box',x:860,y:732,w:660,h:112,bgc:C.panelUp},
     {t:'text',x:892,y:756,w:600,html:'Every alert tracked to the tick.',fs:26,fw:800,col:C.pale},
-    {t:'text',x:892,y:794,w:600,html:'cbedge.net · free 2-day trial',fs:22,fw:700,col:C.dim}
+    {t:'text',x:892,y:794,w:600,html:'cbedge.net · $50/mo, cancel anytime',fs:22,fw:700,col:C.dim}
   ]},
 
   /* AUTO BUY · CORE LEVEL — the daily "the core got tagged and the bot took it"
@@ -1631,7 +1631,7 @@ var TPL={
     {t:'box',x:860,y:700,w:660,h:144,bgc:C.panelUp},
     {t:'text',x:892,y:722,w:600,html:'The level does the work.',fs:26,fw:800,col:C.pale},
     {t:'text',x:892,y:762,w:600,html:'Posted before the open. Bought the second it tags.',fs:20,fw:700,col:C.body},
-    {t:'text',x:892,y:798,w:600,html:'cbedge.net &middot; free 2-day trial',fs:20,fw:700,col:C.dim}
+    {t:'text',x:892,y:798,w:600,html:'cbedge.net &middot; $50/mo, cancel anytime',fs:20,fw:700,col:C.dim}
   ]},
 
   /* Weekend estimated-moves scoreboard — the Saturday "here is how the week

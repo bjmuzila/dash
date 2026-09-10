@@ -3820,8 +3820,12 @@ async function main() {
             const p = farCbGetPool();
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const limit = Math.min(200, Math.max(1, Number(u.searchParams.get('limit') || 50)));
+            // `ts` is when the sweep wrote this card, which is NOT the same as
+            // when you are looking at it — the sweep runs every 30m in RTH and
+            // the row survives after hours, so a card can be several hours old.
+            // The card stamps it so that gap is visible instead of implied.
             const { rows } = await p.query(
-              `SELECT symbol, strike, expiry, gex_value, gex_value_vol, spot, otm_pct, dte_days, date
+              `SELECT symbol, strike, expiry, gex_value, gex_value_vol, spot, otm_pct, dte_days, date, ts
                FROM far_cb_watch
                WHERE date = (SELECT MAX(date) FROM far_cb_watch)
                ORDER BY otm_pct DESC
@@ -3857,7 +3861,7 @@ async function main() {
             if (['open', 'touched', 'expired'].includes(status)) { params.push(status); where.push(`status = $${params.length}`); }
             params.push(limit);
             const sql = `
-              SELECT symbol, strike, expiry, first_flagged, spot_at_flag, otm_pct_at_flag,
+              SELECT symbol, strike, expiry, first_flagged, last_flagged, spot_at_flag, otm_pct_at_flag,
                      gex_value_at_flag, side, last_checked, last_spot, closest_pct,
                      touched, touched_date, status
               FROM far_cb_outcomes
@@ -3868,6 +3872,10 @@ async function main() {
             const fmtRows = rows.map((r) => ({
               ...r,
               first_flagged: farCbToYmd(r.first_flagged),
+              // The last sweep that re-flagged this contract. The Results view
+              // buckets by it so a contract still on the board shows up under
+              // today rather than only under the day it first opened.
+              last_flagged: farCbToYmd(r.last_flagged),
               touched_date: farCbToYmd(r.touched_date),
               last_checked: farCbToYmd(r.last_checked),
             }));

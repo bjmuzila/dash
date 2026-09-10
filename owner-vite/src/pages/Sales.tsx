@@ -84,7 +84,10 @@ interface StripeSubscription {
   attr_first_seen_at?: string | null;
 }
 
-/** Trial → paid funnel, computed server-side from Stripe. */
+/** Trial → paid funnel, computed server-side from Stripe.
+ *  RETIRED with the free trial (2026-09-09). The API still sends this and the
+ *  fields below on grandfathered subscriptions; nothing on this page reads them
+ *  any more. Kept as the shape of what arrives, not as something rendered. */
 interface TrialSummary {
   /** Subscriptions that ever had a trial. */
   started: number;
@@ -261,7 +264,7 @@ function attrTitle(s: StripeSubscription): string {
   return bits.join(" · ");
 }
 
-/** The Source cell, shared by the subscriptions table and the trials table. */
+/** The Source cell, used by the subscriptions table. */
 function SourceCell({ s }: { s: StripeSubscription }) {
   const label = attrLabel(s);
   const color = attrColor(s);
@@ -902,7 +905,6 @@ function MonthlyProfitChart({ revenueByMonth, subs, expensesMonthly }: {
 // Source sits directly after Customer in both tables — it is a property of the
 // person, so it belongs beside their email rather than out past the money.
 const SUB_TABLE_COLS = "minmax(0,1fr) 124px 88px 128px 112px 84px 76px 90px 92px";
-const TRIAL_TABLE_COLS = "1.6fr 1.1fr 1fr 1fr 110px 90px";
 
 /** Grid children default to min-content width, which is what let the amount
  *  cell push over the status column. Every cell spreads this. */
@@ -1212,131 +1214,6 @@ function CancellationsPanel({ cancellations, leaving }: { cancellations: StripeS
   );
 }
 
-// ─── Trial conversion ──────────────────────────────────────────────────────────
-// "Trial members that go on to pay." Derived entirely from Stripe in
-// /api/admin/stripe-summary — Stripe keeps trial_start/trial_end on the
-// subscription forever, so no local table has to remember who trialled.
-//
-// A trial is CONVERTED when real money has landed (a paid invoice > $0), not
-// when its status flips to active. Someone whose card fails the moment the
-// trial ends never converted, however briefly Stripe called them active.
-// Still-trialing subs are excluded from the rate — they haven't been asked to
-// pay yet, and counting them as failures would drag the number down every time
-// a new trial starts.
-
-/** How one trial row should read. */
-function trialOutcome(s: StripeSubscription): { key: "converted" | "trialing" | "lapsed"; label: string; color: string } {
-  if (s.trial_converted) return { key: "converted", label: "converted", color: T.green };
-  if (s.status === "trialing") return { key: "trialing", label: "in trial", color: T.cyan };
-  return { key: "lapsed", label: "lapsed", color: T.red };
-}
-
-function TrialConversionPanel({ trials, subs }: { trials: TrialSummary | null | undefined; subs: StripeSubscription[] }) {
-  const started = trials?.started ?? subs.length;
-  const rate = trials?.conversionRate ?? null;
-  const ratePct = rate === null ? "—" : `${Math.round(rate * 100)}%`;
-  // Green once more than half of the settled trials paid, gold below that, and
-  // neutral while there is nothing to judge.
-  const rateColor = rate === null ? T.muted : rate >= 0.5 ? T.green : rate > 0 ? T.gold : T.red;
-
-  return (
-    // flexShrink: 0 — the page body is a scrolling flex COLUMN, so every direct
-    // child is a flex item that will shrink. `overflow: hidden` zeroes this
-    // panel's automatic minimum size, so without this it squashes to a 1px line
-    // whenever the page overflows (and only reappears when you zoom out).
-    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
-      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 17, fontWeight: 700, color: T.lightBlue }}>Trial conversion</span>
-
-        <span
-          title="Converted ÷ settled trials. Still-trialing subs are excluded — they haven't had the chance to pay yet."
-          style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-mono)", color: rateColor, marginLeft: 2 }}
-        >
-          {ratePct}
-        </span>
-
-        <span style={{ flex: 1 }} />
-
-        <span title="Subscriptions that ever started a free trial" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: "rgba(255,255,255,0.05)", border: `1px solid ${T.border}`, color: T.textSecondary }}>
-          {started} started
-        </span>
-        <span title="Trials where a real payment (> $0) has since cleared" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.green}15`, border: `1px solid ${T.green}44`, color: T.green }}>
-          {trials?.converted ?? 0} paid
-        </span>
-        {(trials?.stillTrialing ?? 0) > 0 && (
-          <span title="Inside the trial window — no verdict yet, and excluded from the rate" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}44`, color: T.cyan }}>
-            {trials?.stillTrialing} in trial
-          </span>
-        )}
-        {(trials?.lapsed ?? 0) > 0 && (
-          <span title="Trial ended and nothing was ever collected" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.red}15`, border: `1px solid ${T.red}44`, color: T.red }}>
-            {trials?.lapsed} lapsed
-          </span>
-        )}
-        {(trials?.revenue ?? 0) > 0 && (
-          <span title="Every dollar collected from customers who arrived through a trial" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.gold}15`, border: `1px solid ${T.gold}44`, color: T.gold }}>
-            {fmtMoney(trials?.revenue ?? 0)} from trials
-          </span>
-        )}
-      </div>
-
-      {subs.length === 0 ? (
-        <div style={{ padding: "28px 16px", textAlign: "center", color: T.muted, fontSize: 14, lineHeight: 1.6 }}>
-          No trials yet.<br />
-          <span style={{ fontSize: 13 }}>
-            Trials start counting from the first checkout after the 2-day trial went live on the monthly plan.
-          </span>
-        </div>
-      ) : (
-        <div style={{ maxHeight: 340, overflowY: "auto" }}>
-          <div style={{ display: "grid", gridTemplateColumns: TRIAL_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, position: "sticky", top: 0, background: T.panel, zIndex: 1 }}>
-            <span>Customer</span>
-            <span title="The link this trial first arrived on. Read alongside Outcome: a campaign whose trials all lapse is a targeting problem, not a product one.">Source</span>
-            <span>Trial started</span>
-            <span>Trial ended</span>
-            <span>Outcome</span>
-            <span style={{ textAlign: "right" }}>Paid</span>
-          </div>
-
-          {subs.map((s) => {
-            const outcome = trialOutcome(s);
-            return (
-              <div
-                key={s.id}
-                title={
-                  `${s.customer_email} · trial ${s.trial_start ? fmtDate(s.trial_start) : "—"} → ${s.trial_end ? fmtDate(s.trial_end) : "—"} · ` +
-                  (s.trial_converted
-                    ? `converted ${s.trial_converted_at ? fmtDate(s.trial_converted_at) : ""} · paid ${fmtMoney(s.trial_paid_total ?? 0)}`
-                    : s.status === "trialing" ? "still inside the trial" : "trial ended without a payment")
-                }
-                style={{ display: "grid", gridTemplateColumns: TRIAL_TABLE_COLS, gap: 8, padding: "9px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14, alignItems: "center" }}
-              >
-                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: T.text, fontWeight: 600 }}>
-                  {s.customer_email}
-                </span>
-                <SourceCell s={s} />
-                <span style={{ color: T.textSecondary }}>{s.trial_start ? fmtDateShort(s.trial_start) : "—"}</span>
-                <span style={{ color: T.textSecondary }}>{s.trial_end ? fmtDateShort(s.trial_end) : "—"}</span>
-                <span>
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap",
-                    background: `${outcome.color}18`, border: `1px solid ${outcome.color}44`, color: outcome.color,
-                  }}>
-                    {outcome.label}
-                  </span>
-                </span>
-                <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: (s.trial_paid_total ?? 0) > 0 ? T.green : T.muted }}>
-                  {fmtMoney(s.trial_paid_total ?? 0)}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Revenue by source ─────────────────────────────────────────────────────────
 //
 // The rollup the per-row Source column implies: which links actually produce
@@ -1356,7 +1233,7 @@ function TrialConversionPanel({ trials, subs }: { trials: TrialSummary | null | 
 // size is the honest measure of how much of the history this can't explain, and
 // it should shrink from here as new sign-ups carry a first touch.
 
-const SOURCE_TABLE_COLS = "minmax(0,1.3fr) 96px 104px minmax(70px,0.9fr) 108px 92px 80px";
+const SOURCE_TABLE_COLS = "minmax(0,1.3fr) 96px 104px minmax(70px,0.9fr) 108px 80px";
 
 interface SourceBucket {
   label: string;
@@ -1364,16 +1241,13 @@ interface SourceBucket {
   subs: number;
   mrr: number;
   collected: number;
-  trials: number;
-  converted: number;
   churned: number;
   unknown: boolean;
 }
 
 function buildSourceBuckets(
   live: StripeSubscription[],
-  cancelled: StripeSubscription[],
-  trials: StripeSubscription[]
+  cancelled: StripeSubscription[]
 ): SourceBucket[] {
   const map = new Map<string, SourceBucket & { emails: Set<string> }>();
 
@@ -1384,7 +1258,7 @@ function buildSourceBuckets(
       b = {
         label,
         color: attrColor(s),
-        subs: 0, mrr: 0, collected: 0, trials: 0, converted: 0, churned: 0,
+        subs: 0, mrr: 0, collected: 0, churned: 0,
         unknown: label === UNKNOWN_SOURCE,
         emails: new Set<string>(),
       };
@@ -1406,18 +1280,11 @@ function buildSourceBuckets(
     const email = s.customer_email.toLowerCase();
     if (!b.emails.has(email)) { b.emails.add(email); b.collected += s.total_spent; }
   }
-  for (const s of trials) {
-    const b = bucket(s);
-    b.trials += 1;
-    if (s.trial_converted) b.converted += 1;
-  }
-
   return [...map.values()]
     // Drop the dedupe set — it is bookkeeping, not part of the bucket.
     .map((b): SourceBucket => ({
       label: b.label, color: b.color, subs: b.subs, mrr: b.mrr,
-      collected: b.collected, trials: b.trials, converted: b.converted,
-      churned: b.churned, unknown: b.unknown,
+      collected: b.collected, churned: b.churned, unknown: b.unknown,
     }))
     // Money first, then headcount, and the "we don't know" bucket always last
     // however big it is — it is context, not a result.
@@ -1429,14 +1296,13 @@ function buildSourceBuckets(
     );
 }
 
-function RevenueBySourceCard({ live, cancelled, trials }: {
+function RevenueBySourceCard({ live, cancelled }: {
   live: StripeSubscription[];
   cancelled: StripeSubscription[];
-  trials: StripeSubscription[];
 }) {
   const buckets = useMemo(
-    () => buildSourceBuckets(live, cancelled, trials),
-    [live, cancelled, trials]
+    () => buildSourceBuckets(live, cancelled),
+    [live, cancelled]
   );
 
   const totalMrr = buckets.reduce((a, b) => a + b.mrr, 0);
@@ -1486,7 +1352,6 @@ function RevenueBySourceCard({ live, cancelled, trials }: {
             <span style={{ ...CELL, textAlign: "right" }}>MRR</span>
             <span style={CELL}>Share</span>
             <span style={{ ...CELL, textAlign: "right" }}>Collected</span>
-            <span style={{ ...CELL, textAlign: "right" }} title="Trials converted / trials started from this source">Trials</span>
             <span style={{ ...CELL, textAlign: "right" }}>Churned</span>
           </div>
 
@@ -1498,7 +1363,6 @@ function RevenueBySourceCard({ live, cancelled, trials }: {
                 title={
                   `${b.label} · ${b.subs} live subscription${b.subs !== 1 ? "s" : ""} worth ${fmtMoney(b.mrr)}/mo` +
                   ` · ${fmtMoney(b.collected)} collected from ${b.subs + b.churned} account${b.subs + b.churned !== 1 ? "s" : ""}` +
-                  (b.trials > 0 ? ` · ${b.converted} of ${b.trials} trials paid` : "") +
                   (b.churned > 0 ? ` · ${b.churned} churned` : "") +
                   (b.unknown ? " — no arrival on file for these; not the same as direct." : "")
                 }
@@ -1518,9 +1382,6 @@ function RevenueBySourceCard({ live, cancelled, trials }: {
                   </span>
                 </span>
                 <span style={{ ...CELL, textAlign: "right", color: T.green, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>{fmtMoney(b.collected)}</span>
-                <span style={{ ...CELL, textAlign: "right", color: b.trials > 0 ? T.textSecondary : T.muted, fontFamily: "var(--font-mono)" }}>
-                  {b.trials > 0 ? `${b.converted}/${b.trials}` : "—"}
-                </span>
                 <span style={{ ...CELL, textAlign: "right", color: b.churned > 0 ? T.red : T.muted, fontFamily: "var(--font-mono)" }}>
                   {b.churned || "—"}
                 </span>
@@ -1563,7 +1424,7 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
   };
 
   return (
-    // flexShrink: 0 — see TrialConversionPanel. This panel is the one that bit
+    // flexShrink: 0 — the page body is a scrolling flex COLUMN. This panel is the one that bit
     // us: it sits near the bottom of a long scrolling flex column and collapsed
     // to a hairline until the page was zoomed out far enough to stop overflowing.
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
@@ -1645,481 +1506,6 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
           ))
         )}
       </div>
-    </div>
-  );
-}
-
-// ─── Trial abuse & bans ────────────────────────────────────────────────────────
-// The manual override on top of the two automatic gates. lib/trialEligibility
-// already gives every email exactly one trial and lib/trialGuard gives every
-// CARD one — fair, and blind. This panel is where the owner says "this
-// particular address is done", for the person who is on their seventh Gmail.
-//
-// A ban gates the TRIAL ONLY. Banned people can still sign in and still
-// subscribe; checkout just starts billing immediately. Nothing here locks
-// anyone out of paying.
-//
-// Three lists, in the order you actually use them:
-//   1. Repeat attempts — emails that came back for a second trial and were
-//      refused. This is the evidence; each row bans in one click.
-//   2. Shared IPs — addresses that more than one email has opened a trial
-//      checkout from. This is what catches the same person on new addresses.
-//   3. Live bans — what is currently in force, with the notice state and a
-//      lift button. Lifted bans stay visible (collapsed) as history.
-
-interface TrialBanRow {
-  id: number;
-  kind: "email" | "ip";
-  value: string;
-  value_key: string;
-  reason: string | null;
-  created_by: string | null;
-  created_at: string;
-  lifted_at: string | null;
-  lifted_by: string | null;
-  hit_count: number;
-  last_hit_at: string | null;
-  last_hit_email: string | null;
-  notified_at: string | null;
-  notify_count: number;
-  last_notified_email: string | null;
-}
-
-interface TrialReuseRow {
-  email_key: string;
-  email: string | null;
-  clerk_user_id: string | null;
-  blocked_attempts: number;
-  last_attempt_at: string | null;
-  first_trial_at: string | null;
-}
-
-interface TrialIpClusterRow {
-  ip: string;
-  emails: number;
-  attempts: number;
-  last_seen_at: string;
-  sample_emails: string[];
-  banned: boolean;
-}
-
-const BAN_TABLE_COLS = "1.6fr 70px 1.4fr 70px 110px 150px";
-const REUSE_TABLE_COLS = "1.8fr 110px 90px 130px 80px";
-const IPCLUSTER_TABLE_COLS = "1.1fr 80px 80px 2fr 80px";
-
-const banInputStyle: CSSProperties = {
-  padding: "6px 10px",
-  fontSize: 14,
-  background: "rgba(0,0,0,0.35)",
-  border: `1px solid ${T.border}`,
-  borderRadius: 6,
-  color: T.text,
-  outline: "none",
-};
-
-function TrialAbusePanel() {
-  const [bans, setBans] = useState<TrialBanRow[] | null>(null);
-  const [reuses, setReuses] = useState<TrialReuseRow[]>([]);
-  const [ipClusters, setIpClusters] = useState<TrialIpClusterRow[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [showLifted, setShowLifted] = useState(false);
-
-  const [kind, setKind] = useState<"email" | "ip">("email");
-  const [value, setValue] = useState("");
-  const [reason, setReason] = useState("");
-  // Default ON for an email ban: the whole point of the feature Brandon asked
-  // for is that they are TOLD. Flipping to an IP ban turns it off, because an
-  // IP has no inbox and the checkbox would silently do nothing.
-  const [notify, setNotify] = useState(true);
-  const [includeReason, setIncludeReason] = useState(false);
-
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await fetch("/api/admin/trial-bans", { cache: "no-store" });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
-      setBans((j.bans as TrialBanRow[]) ?? []);
-      setReuses((j.reuses as TrialReuseRow[]) ?? []);
-      setIpClusters((j.ipClusters as TrialIpClusterRow[]) ?? []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load");
-      setBans([]);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const ban = useCallback(async (
-    k: "email" | "ip",
-    v: string,
-    why: string | null,
-    sendNotice: boolean,
-    withReason: boolean,
-  ) => {
-    if (!v.trim()) return;
-    setBusy(true);
-    setError(null);
-    setNote(null);
-    try {
-      const res = await fetch("/api/admin/trial-bans", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kind: k,
-          value: v.trim(),
-          reason: why?.trim() || null,
-          notify: sendNotice,
-          includeReason: withReason,
-        }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
-      setNote(
-        j?.noticeSent
-          ? `Banned ${v.trim()} and emailed them.`
-          : j?.noticeError
-            ? `Banned ${v.trim()} — notice not sent (${j.noticeError}).`
-            : `Banned ${v.trim()}.`
-      );
-      setValue("");
-      setReason("");
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ban failed");
-    } finally {
-      setBusy(false);
-    }
-  }, [load]);
-
-  const lift = async (id: number) => {
-    setBusy(true);
-    setError(null);
-    setNote(null);
-    try {
-      const res = await fetch(`/api/admin/trial-bans?id=${id}`, { method: "DELETE" });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
-      setNote("Ban lifted — the trial is available to them again.");
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Lift failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const sendNotice = async (row: TrialBanRow) => {
-    // An IP ban has no inbox of its own. Fall back to the last address that hit
-    // it, and ask outright if there isn't one — better a prompt than a 400.
-    let to = row.kind === "email" ? row.value : (row.last_hit_email ?? "");
-    if (!to) {
-      const typed = window.prompt(`Email the "trial no longer available" notice to which address?`);
-      if (!typed) return;
-      to = typed.trim();
-    }
-    setBusy(true);
-    setError(null);
-    setNote(null);
-    try {
-      const res = await fetch("/api/admin/trial-bans", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: row.id, email: to }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
-      setNote(`Notice sent to ${to}.`);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Notice failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const live = (bans ?? []).filter(b => !b.lifted_at);
-  const lifted = (bans ?? []).filter(b => b.lifted_at);
-  const bannedEmailKeys = new Set(live.filter(b => b.kind === "email").map(b => b.value_key));
-  const openReuses = reuses.filter(r => !bannedEmailKeys.has(r.email_key));
-  const totalHits = live.reduce((a, b) => a + (b.hit_count ?? 0), 0);
-
-  return (
-    // flexShrink: 0 — see ExpensesPanel. Same long scrolling flex column, same
-    // collapse-to-a-hairline failure without it.
-    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
-      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 17, fontWeight: 700, color: T.orange }}>Trial abuse &amp; bans</span>
-        <span
-          title="Emails and IPs the free trial is switched off for. They can still sign in and still subscribe — checkout just bills them from day one."
-          style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.red}15`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}
-        >
-          {live.length} banned
-        </span>
-        {totalHits > 0 && (
-          <span title="Trial checkouts refused by a ban since it was issued" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.gold}15`, border: `1px solid ${T.gold}44`, color: T.gold }}>
-            {totalHits} blocked {totalHits === 1 ? "attempt" : "attempts"}
-          </span>
-        )}
-        {openReuses.length > 0 && (
-          <span title="Emails that came back for a second trial and were refused by the automatic one-per-email rule. Not banned — these are the candidates." style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}44`, color: T.cyan }}>
-            {openReuses.length} repeat {openReuses.length === 1 ? "attempt" : "attempts"}
-          </span>
-        )}
-        <span style={{ marginLeft: "auto", fontSize: 13, color: T.textSecondary }}>
-          a ban blocks the trial only — never the purchase
-        </span>
-      </div>
-
-      {/* Add a ban */}
-      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <select
-          value={kind}
-          onChange={(e) => {
-            const k = e.target.value as "email" | "ip";
-            setKind(k);
-            // An IP has no inbox — see the notify state above.
-            if (k === "ip") setNotify(false);
-          }}
-          style={{ ...banInputStyle, padding: "6px 8px" }}
-        >
-          <option value="email">Email</option>
-          <option value="ip">IP</option>
-        </select>
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") ban(kind, value, reason, notify, includeReason); }}
-          placeholder={kind === "email" ? "someone@example.com" : "203.0.113.9"}
-          style={{ ...banInputStyle, flex: "1 1 220px", fontFamily: kind === "ip" ? "var(--font-mono)" : undefined }}
-        />
-        <input
-          type="text"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") ban(kind, value, reason, notify, includeReason); }}
-          placeholder="reason (internal)…"
-          style={{ ...banInputStyle, flex: "1 1 200px" }}
-        />
-        <label
-          title={kind === "ip"
-            ? "An IP has no inbox. Ban it, then use “Send notice” on the row to mail a specific person."
-            : "Sends the “the free trial is no longer available on this account” email as soon as the ban is saved."}
-          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: kind === "ip" ? T.muted : T.textSecondary, opacity: kind === "ip" ? 0.5 : 1, whiteSpace: "nowrap" }}
-        >
-          <input type="checkbox" checked={notify} disabled={kind === "ip"} onChange={(e) => setNotify(e.target.checked)} />
-          email them
-        </label>
-        <label
-          title="Include the reason above in the email they receive. Off by default — an internal note is not something to forward to the person it's about."
-          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: T.textSecondary, opacity: notify && reason.trim() ? 1 : 0.5, whiteSpace: "nowrap" }}
-        >
-          <input type="checkbox" checked={includeReason} disabled={!notify || !reason.trim()} onChange={(e) => setIncludeReason(e.target.checked)} />
-          quote reason
-        </label>
-        <button
-          onClick={() => ban(kind, value, reason, notify, includeReason)}
-          disabled={busy || !value.trim()}
-          style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 14, opacity: busy || !value.trim() ? 0.5 : 1 }}
-        >
-          Ban trial
-        </button>
-      </div>
-
-      {(error || note) && (
-        <div style={{ padding: "8px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, color: error ? T.red : T.green }}>
-          {error ?? note}
-        </div>
-      )}
-
-      {/* 1 — repeat attempts, the candidates */}
-      {openReuses.length > 0 && (
-        <>
-          <div style={{ padding: "8px 16px 4px 16px", fontSize: 14, fontWeight: 700, color: T.cyan }}>
-            Repeat trial attempts
-            <span style={{ fontWeight: 400, color: T.textSecondary, marginLeft: 8 }}>
-              already refused automatically — ban to make it permanent and tell them
-            </span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: REUSE_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted }}>
-            <span>Email</span>
-            <span>First trial</span>
-            <span>Attempts</span>
-            <span>Last try</span>
-            <span style={{ textAlign: "right" }}>Action</span>
-          </div>
-          <div style={{ maxHeight: 220, overflowY: "auto" }}>
-            {openReuses.map((r) => (
-              <div
-                key={r.email_key}
-                style={{ display: "grid", gridTemplateColumns: REUSE_TABLE_COLS, gap: 8, padding: "9px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: 14, alignItems: "center" }}
-              >
-                <span title={r.email ?? r.email_key} style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {r.email ?? r.email_key}
-                </span>
-                <span style={{ color: T.textSecondary }}>{r.first_trial_at ? new Date(r.first_trial_at).toLocaleDateString() : "—"}</span>
-                <span style={{ color: r.blocked_attempts >= 3 ? T.red : T.gold, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                  {r.blocked_attempts}
-                </span>
-                <span style={{ color: T.textSecondary }}>{r.last_attempt_at ? new Date(r.last_attempt_at).toLocaleDateString() : "—"}</span>
-                <span style={{ display: "flex", justifyContent: "flex-end" }}>
-                  <button
-                    onClick={() => ban("email", r.email ?? r.email_key, `${r.blocked_attempts} repeat trial attempts`, true, false)}
-                    disabled={busy}
-                    title={`Ban ${r.email ?? r.email_key} from the free trial and email them to say so. They can still subscribe.`}
-                    style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 13, whiteSpace: "nowrap", color: T.red, border: `1px solid ${T.red}66`, opacity: busy ? 0.5 : 1 }}
-                  >
-                    Ban + notify
-                  </button>
-                </span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* 2 — one address, many emails */}
-      {ipClusters.length > 0 && (
-        <>
-          <div style={{ padding: "10px 16px 4px 16px", fontSize: 14, fontWeight: 700, color: T.gold, borderTop: `1px solid ${T.border}` }}>
-            Shared checkout IPs
-            <span style={{ fontWeight: 400, color: T.textSecondary, marginLeft: 8 }}>
-              one address, more than one email — this is what catches the same person on a new address
-            </span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: IPCLUSTER_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted }}>
-            <span>IP</span>
-            <span>Emails</span>
-            <span>Checkouts</span>
-            <span>Addresses</span>
-            <span style={{ textAlign: "right" }}>Action</span>
-          </div>
-          <div style={{ maxHeight: 220, overflowY: "auto" }}>
-            {ipClusters.map((c) => (
-              <div
-                key={c.ip}
-                style={{ display: "grid", gridTemplateColumns: IPCLUSTER_TABLE_COLS, gap: 8, padding: "9px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: 14, alignItems: "center" }}
-              >
-                <span style={{ color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.ip}</span>
-                <span style={{ color: c.emails >= 3 ? T.red : T.gold, fontWeight: 700, fontFamily: "var(--font-mono)" }}>{c.emails}</span>
-                <span style={{ color: T.textSecondary, fontFamily: "var(--font-mono)" }}>{c.attempts}</span>
-                <span title={c.sample_emails.join(", ")} style={{ color: T.textSecondary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {c.sample_emails.join(", ")}
-                </span>
-                <span style={{ display: "flex", justifyContent: "flex-end" }}>
-                  {c.banned ? (
-                    <span style={{ fontSize: 13, color: T.red }}>banned</span>
-                  ) : (
-                    <button
-                      onClick={() => ban("ip", c.ip, `${c.emails} emails trialled from this IP`, false, false)}
-                      disabled={busy}
-                      title={`Block the free trial for checkouts from ${c.ip}. Purchases are unaffected — use this when the same person keeps arriving on new addresses.`}
-                      style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 13, whiteSpace: "nowrap", color: T.gold, border: `1px solid ${T.gold}66`, opacity: busy ? 0.5 : 1 }}
-                    >
-                      Ban IP
-                    </button>
-                  )}
-                </span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* 3 — what is actually in force */}
-      <div style={{ padding: "10px 16px 4px 16px", fontSize: 14, fontWeight: 700, color: T.red, borderTop: `1px solid ${T.border}` }}>
-        Active bans
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: BAN_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted }}>
-        <span>Value</span>
-        <span>Kind</span>
-        <span>Reason</span>
-        <span>Blocked</span>
-        <span>Notified</span>
-        <span style={{ textAlign: "right" }}>Actions</span>
-      </div>
-      <div style={{ maxHeight: 260, overflowY: "auto" }}>
-        {bans === null ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>Loading…</div>
-        ) : live.length === 0 ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>
-            Nobody is banned. The automatic one-trial-per-email and one-trial-per-card rules are still doing their job on their own.
-          </div>
-        ) : (
-          live.map((b) => (
-            <div
-              key={b.id}
-              style={{ display: "grid", gridTemplateColumns: BAN_TABLE_COLS, gap: 8, padding: "9px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: 14, alignItems: "center" }}
-            >
-              <span title={`${b.value} · banned ${new Date(b.created_at).toLocaleString()}${b.created_by ? ` by ${b.created_by}` : ""}`} style={{ color: T.text, fontFamily: b.kind === "ip" ? "var(--font-mono)" : undefined, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {b.value}
-              </span>
-              <span style={{ color: b.kind === "ip" ? T.gold : T.cyan, fontSize: 13 }}>{b.kind}</span>
-              <span title={b.reason ?? ""} style={{ color: T.textSecondary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {b.reason ?? "—"}
-              </span>
-              <span
-                title={b.last_hit_at ? `Last refused ${new Date(b.last_hit_at).toLocaleString()}${b.last_hit_email ? ` (${b.last_hit_email})` : ""}` : "No refused attempts yet"}
-                style={{ color: b.hit_count > 0 ? T.gold : T.textSecondary, fontFamily: "var(--font-mono)", fontWeight: b.hit_count > 0 ? 700 : 400 }}
-              >
-                {b.hit_count}
-              </span>
-              <span
-                title={b.notified_at ? `Notice sent ${new Date(b.notified_at).toLocaleString()}${b.last_notified_email ? ` to ${b.last_notified_email}` : ""}${b.notify_count > 1 ? ` · ${b.notify_count} times` : ""}` : "They have not been told yet"}
-                style={{ color: b.notified_at ? T.green : T.muted, fontSize: 13 }}
-              >
-                {b.notified_at ? `✓ ${new Date(b.notified_at).toLocaleDateString()}` : "not sent"}
-              </span>
-              <span style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-                <button
-                  onClick={() => sendNotice(b)}
-                  disabled={busy}
-                  title="Email the “the free trial is no longer available on this account” notice. Safe to click again — this is the deliberate re-send."
-                  style={{ ...homeSecondaryButtonStyle, padding: "3px 8px", fontSize: 13, whiteSpace: "nowrap", opacity: busy ? 0.5 : 1 }}
-                >
-                  {b.notified_at ? "Resend" : "Send notice"}
-                </button>
-                <button
-                  onClick={() => lift(b.id)}
-                  disabled={busy}
-                  title="Lift the ban — the free trial becomes available to them again (subject to the ordinary one-per-email rule)."
-                  style={{ ...homeSecondaryButtonStyle, padding: "3px 8px", fontSize: 13, whiteSpace: "nowrap", color: T.green, border: `1px solid ${T.green}66`, opacity: busy ? 0.5 : 1 }}
-                >
-                  Lift
-                </button>
-              </span>
-            </div>
-          ))
-        )}
-      </div>
-
-      {lifted.length > 0 && (
-        <div style={{ borderTop: `1px solid ${T.border}` }}>
-          <button
-            onClick={() => setShowLifted(v => !v)}
-            style={{ ...homeSecondaryButtonStyle, margin: "8px 16px", padding: "3px 10px", fontSize: 13 }}
-          >
-            {showLifted ? "Hide" : "Show"} {lifted.length} lifted {lifted.length === 1 ? "ban" : "bans"}
-          </button>
-          {showLifted && (
-            <div style={{ maxHeight: 180, overflowY: "auto", paddingBottom: 8 }}>
-              {lifted.map((b) => (
-                <div key={b.id} style={{ display: "flex", gap: 10, padding: "6px 16px", fontSize: 13, color: T.textSecondary, alignItems: "center" }}>
-                  <span style={{ color: T.muted, fontFamily: b.kind === "ip" ? "var(--font-mono)" : undefined }}>{b.value}</span>
-                  <span style={{ opacity: 0.7 }}>{b.kind}</span>
-                  <span style={{ opacity: 0.7 }}>{b.reason ?? "—"}</span>
-                  <span style={{ marginLeft: "auto", opacity: 0.7 }}>
-                    lifted {new Date(b.lifted_at as string).toLocaleDateString()}{b.lifted_by ? ` by ${b.lifted_by}` : ""}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -2234,31 +1620,6 @@ export default function Sales() {
   const lifetimeRevenue =
     data?.summary?.lifetimeRevenue ??
     Object.values(data?.revenueByMonth ?? {}).reduce((a, m) => a + m.revenue, 0);
-
-  // Trial → paid, formatted for the KPI card. Falls back to counting the trial
-  // rows directly if `trials` is missing (response cached from before trial
-  // tracking shipped), so the card degrades to "0 trials yet" instead of NaN.
-  const trialKpi = useMemo(() => {
-    const t = data?.trials ?? null;
-    const rows = data?.trialSubscriptions ?? [];
-    const started = t?.started ?? rows.length;
-    const converted = t?.converted ?? rows.filter(r => r.trial_converted).length;
-    const inTrial = t?.stillTrialing ?? rows.filter(r => r.status === "trialing").length;
-    const settled = t?.settled ?? started - inTrial;
-    const rate = t?.conversionRate ?? (settled > 0 ? converted / settled : null);
-
-    if (started === 0) {
-      return { value: "—", sub: "no trials yet", accent: T.muted };
-    }
-    return {
-      value: rate === null ? "—" : `${Math.round(rate * 100)}%`,
-      sub:
-        `${converted} of ${settled} paid` +
-        (inTrial > 0 ? ` · ${inTrial} still in trial` : ""),
-      // Matches the panel below so the two never disagree at a glance.
-      accent: rate === null ? T.muted : rate >= 0.5 ? T.green : rate > 0 ? T.gold : T.red,
-    };
-  }, [data?.trials, data?.trialSubscriptions]);
 
   // Every KPI card's curve is bucketed at the granularity picked in the header,
   // using the same buildPeriods() windows the revenue bar charts use — so the
@@ -2443,20 +1804,6 @@ export default function Sales() {
                 formatValue={fmtMoneyTick}
                 tooltip={`Every dollar Stripe has actually collected (sum of paid invoices), including annual plans in full. Not a rate — the granularity tabs don't rescale it. Expense run-rate is ${fmtMoney(expensesMonthly)}/mo; the chart below nets the two per month.`}
               />
-
-              {/* Trial → paid, up here with the other headline numbers. The
-                  detail table lower down is the audit trail; this is the number
-                  you actually check. No sparkline: a conversion RATE over a
-                  handful of trials is noise as a curve, and a fake-looking
-                  wiggle next to the real revenue curves reads as data. */}
-              <LiveKpiCard
-                label="Trial Conversion"
-                value={trialKpi.value}
-                sub={trialKpi.sub}
-                accent={trialKpi.accent}
-                delta={null}
-                tooltip="Trial members who went on to actually pay — a trial counts as converted once a real invoice (> $0) clears, not when Stripe flips it to active. Subscriptions still inside their trial are excluded from the percentage: they haven't been asked to pay yet, so counting them would drag the number down every time a new trial starts. Monthly plan only — yearly has no trial."
-              />
             </div>
 
             {/* Profit per month — real cash collected, less the expense run-rate.
@@ -2481,28 +1828,9 @@ export default function Sales() {
             <RevenueBySourceCard
               live={data.subscriptions}
               cancelled={data.cancellations ?? []}
-              trials={data.trialSubscriptions ?? []}
             />
 
             <SignupsPanel />
-
-            {/* Trial → paid funnel. Sits directly under the profit chart and
-                ABOVE the subscription tables: those two lists are long and a
-                panel below them was off the bottom of the page — you had to
-                know it was there to find it. Full width rather than sharing
-                the `2fr 1fr` row, because the rows are short but the emails
-                are long and a 1fr column clipped them. */}
-            <TrialConversionPanel
-              trials={data.trials}
-              subs={data.trialSubscriptions ?? []}
-            />
-
-            {/* Trial bans — directly under the conversion funnel, because that
-                panel is where a run of "lapsed" rows on the same person shows
-                up and this is what you do about it. Self-fetching on its own
-                endpoint: the ban list has nothing to do with Stripe and folding
-                it into stripe-summary would make the whole page wait on it. */}
-            <TrialAbusePanel />
 
             {/* Active Subscriptions + Cancellations — above Expenses.
                 `alignItems: stretch` (grid's default, stated here so it doesn't

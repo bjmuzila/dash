@@ -917,6 +917,8 @@ type WatchRow = {
   otm_pct: number;
   dte_days: number;
   date: string;
+  /** When the sweep wrote this card (ISO). Not when you loaded the page. */
+  ts?: string | null;
 };
 
 type OutcomeRow = {
@@ -924,6 +926,13 @@ type OutcomeRow = {
   strike: number;
   expiry: string;
   first_flagged: string;
+  /**
+   * The most recent sweep that re-flagged this same contract. first_flagged is
+   * frozen at the first sighting, so without this a contract that has been on
+   * the board for a week only ever appears under the day it opened — which is
+   * exactly why cards showing at the top looked absent from Tracked results.
+   */
+  last_flagged?: string | null;
   spot_at_flag: number;
   otm_pct_at_flag: number;
   side: "above" | "below";
@@ -959,7 +968,7 @@ type OutcomeView = "all" | "open" | "touched" | "expired" | "results";
 // limit is applied there, so this re-orders the fetched page, it does not go
 // back for more rows.
 type OutcomeSortKey =
-  | "symbol" | "strike" | "expiry" | "first_flagged" | "opt_entry" | "opt_high" | "opt_pct_high"
+  | "symbol" | "strike" | "expiry" | "first_flagged" | "last_flagged" | "opt_entry" | "opt_high" | "opt_pct_high"
   | "spot_at_flag" | "otm_pct_at_flag" | "closest_pct" | "touched_date" | "status";
 
 type OutcomeSort = { key: OutcomeSortKey; dir: "asc" | "desc" };
@@ -972,6 +981,7 @@ const OUTCOME_SORT_VALUE: Record<OutcomeSortKey, (r: OutcomeRow) => string | num
   strike:          (r) => Number(r.strike),
   expiry:          (r) => ymd(r.expiry) ?? r.expiry ?? null,
   first_flagged:   (r) => ymd(r.first_flagged) ?? null,
+  last_flagged:    (r) => ymd(r.last_flagged) ?? null,
   opt_entry:       (r) => r.opt_entry ?? null,
   opt_high:        (r) => r.opt_high ?? null,
   opt_pct_high:    (r) => r.opt_pct_high ?? null,
@@ -1049,6 +1059,8 @@ function OutcomeTh({
 type DayBucket = {
   date: string;
   opened: OutcomeRow[];
+  /** Still on the board that date, having opened earlier. */
+  flagged: OutcomeRow[];
   touched: OutcomeRow[];
   expired: OutcomeRow[];
 };
@@ -1061,20 +1073,31 @@ const ymd = (v: string | null | undefined): string | null => {
 };
 
 /**
- * One flag can land in up to three different days: the day it was flagged
- * (opened), the day spot reached the strike (touched), and the day it expired
- * untouched. Newest day first.
+ * One flag can land in up to four different days: the day it was first flagged
+ * (opened), the last day a sweep re-flagged it (flagged — only when that is a
+ * later date than the open), the day spot reached the strike (touched), and the
+ * day it expired untouched. Newest day first.
+ *
+ * "flagged" uses last_flagged and nothing else. The row records the FIRST and
+ * the LAST sighting, not every sweep in between, so filling in the intervening
+ * days would be inventing flags the recorder never observed — a contract can
+ * drop off the board for a week and come back. One honest day beats a made-up
+ * streak.
  */
 function groupOutcomesByDay(rows: OutcomeRow[]): DayBucket[] {
   const map = new Map<string, DayBucket>();
   const bucket = (d: string): DayBucket => {
     let b = map.get(d);
-    if (!b) { b = { date: d, opened: [], touched: [], expired: [] }; map.set(d, b); }
+    if (!b) { b = { date: d, opened: [], flagged: [], touched: [], expired: [] }; map.set(d, b); }
     return b;
   };
   for (const r of rows) {
     const flagged = ymd(r.first_flagged);
     if (flagged) bucket(flagged).opened.push(r);
+    // Only when it is a LATER date — a contract flagged once would otherwise be
+    // listed twice on the same day, as both opened and flagged.
+    const last = ymd(r.last_flagged);
+    if (last && flagged && last > flagged) bucket(last).flagged.push(r);
     const touched = ymd(r.touched_date);
     if (touched) bucket(touched).touched.push(r);
     if (r.status === "expired") {
@@ -1112,6 +1135,33 @@ type OutcomeDetail = {
 
 /** Stable identity for one tracked contract, used to key the expanded row. */
 const outcomeKey = (o: OutcomeRow) => `${o.symbol}|${o.expiry}|${o.strike}`;
+
+/**
+ * Same identity, but built from either side of the join — a watch card and a
+ * tracked outcome row for the same contract must hash alike. Expiry is put
+ * through ymd() because the outcomes table stores it as free text that can
+ * carry a time, and the strike through Number() because one side sends 21 and
+ * the other "21.0".
+ */
+const contractKey = (
+  symbol: string, expiry: string | null | undefined, strike: number | string,
+) => `${String(symbol).toUpperCase()}|${ymd(expiry) ?? String(expiry ?? "")}|${Number(strike)}`;
+
+/**
+ * When the sweep wrote this card, in ET. The recorder sweeps every 30m during
+ * RTH and the row is left standing after the close, so "now" is a bad proxy for
+ * "when this was true" — after hours, or on a morning before the first sweep,
+ * the card on screen can be the previous session's.
+ */
+function fmtSweepTs(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  })} ET`;
+}
 
 // ── probe card ───────────────────────────────────────────────────────────────
 // The owner site's /owner/probe card, ported here so a tracked flag reads
@@ -1790,6 +1840,21 @@ function WatchThisScanner() {
 
   const dayBuckets = useMemo(() => groupOutcomesByDay(resultRows), [resultRows]);
 
+  /**
+   * Contract -> its tracked row, so a card can say whether it is being tracked
+   * and since when. Both fetched sets feed it: `outcomes` is loaded on mount
+   * for the flat views, `resultRows` only once the Results tab is opened, and
+   * whichever is present wins (they describe the same rows). This is a join
+   * over data already on the client — no extra request.
+   */
+  const trackedByContract = useMemo(() => {
+    const m = new Map<string, OutcomeRow>();
+    for (const o of [...outcomes, ...resultRows]) {
+      m.set(contractKey(o.symbol, o.expiry, o.strike), o);
+    }
+    return m;
+  }, [outcomes, resultRows]);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(() => load(), 120_000); return () => clearInterval(t); }, [load]);
   useEffect(() => { loadOutcomes(); }, [loadOutcomes]);
@@ -1859,6 +1924,8 @@ function WatchThisScanner() {
         {rows.map((r) => {
           const up = r.gex_value >= 0;
           const chainHref = `/options-chain?symbol=${encodeURIComponent(r.symbol)}&expiry=${encodeURIComponent(r.expiry)}&strike=${r.strike}`;
+          const swept = fmtSweepTs(r.ts);
+          const tracked = trackedByContract.get(contractKey(r.symbol, r.expiry, r.strike));
           return (
             <div key={`${r.symbol}-${r.expiry}-${r.strike}`} style={{
               borderRadius: 12,
@@ -1871,7 +1938,16 @@ function WatchThisScanner() {
                   <span style={{ fontWeight: 800, fontSize: 14, color: up ? HOME_THEME.green : HOME_THEME.red }}>{r.symbol}</span>
                   <span style={{ fontSize: 14, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red, opacity: 0.85 }}>${r.spot.toFixed(2)}</span>
                 </span>
-                <span style={{ fontSize: 14, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
+                <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
+                  {/* The sweep that produced this card, not the page load. */}
+                  <span
+                    style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.55, whiteSpace: "nowrap" }}
+                    title={swept ? `Recorder sweep that produced this card${r.date ? ` · session ${r.date}` : ""}` : undefined}
+                  >
+                    {swept ?? r.date ?? "—"}
+                  </span>
+                </span>
               </div>
               <div style={{ fontSize: 14, color: LIGHT_BLUE, fontWeight: 700, marginBottom: 4 }}>
                 ${r.strike} <span style={{ color: HOME_THEME.text, fontWeight: 400 }}>· {r.expiry} · {r.dte_days}d</span>
@@ -1879,6 +1955,26 @@ function WatchThisScanner() {
               <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5, marginBottom: 8 }}>
                 Highest GEX level for {r.symbol} is the ${r.strike} strike ({r.expiry}), {r.otm_pct.toFixed(0)}% away from spot (${r.spot.toFixed(2)}) —
                 farther out than the usual near-the-money CB. {up ? "Call-side" : "Put-side"} dominant.
+              </div>
+              {/*
+                Whether this exact contract is in the tracked-results log, and
+                since when. A card that has been on the board for days opened
+                ONCE, on its first sighting — it is logged under that date, not
+                today's — and without this line that reads as "the card was
+                never added".
+              */}
+              <div style={{ fontSize: 14, marginBottom: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {tracked ? (
+                  <span style={{ color: HOME_THEME.text, opacity: 0.75 }}>
+                    Tracked since{" "}
+                    <span style={{ color: LIGHT_BLUE, fontWeight: 700 }}>{ymd(tracked.first_flagged) ?? tracked.first_flagged}</span>
+                    {tracked.status !== "open" ? ` · ${tracked.status}` : ""}
+                  </span>
+                ) : (
+                  <span style={{ color: HOME_THEME.green, fontWeight: 700 }}>
+                    New — logs on the next sweep
+                  </span>
+                )}
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ display: "flex", gap: 12, alignItems: "baseline" }}>
@@ -1948,6 +2044,7 @@ function WatchThisScanner() {
                 <OutcomeTh label="Strike"       sortKey="strike"          sort={sort} onSort={onSort} />
                 <OutcomeTh label="Expiry"       sortKey="expiry"          sort={sort} onSort={onSort} align="left" />
                 <OutcomeTh label="Flagged"      sortKey="first_flagged"   sort={sort} onSort={onSort} align="left" />
+                <OutcomeTh label="Last flagged" sortKey="last_flagged"    sort={sort} onSort={onSort} align="left" />
                 <OutcomeTh label="Entry"        sortKey="opt_entry"       sort={sort} onSort={onSort} />
                 <OutcomeTh label="High"         sortKey="opt_high"        sort={sort} onSort={onSort} />
                 <OutcomeTh label="Max %"        sortKey="opt_pct_high"    sort={sort} onSort={onSort} />
@@ -1976,6 +2073,14 @@ function WatchThisScanner() {
                   <td style={{ ...td, fontWeight: 700, color: o.side === "above" ? HOME_THEME.green : HOME_THEME.red }}>${o.strike}</td>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 14 }}>{o.expiry}</td>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 14 }}>{o.first_flagged}</td>
+                  {/* Last sweep that re-flagged it. Same date as Flagged means
+                      it was seen once and has not been back on the board. */}
+                  <td style={{
+                    ...td, textAlign: "left", fontSize: 14, whiteSpace: "nowrap",
+                    color: ymd(o.last_flagged) && ymd(o.last_flagged) !== ymd(o.first_flagged) ? LIGHT_BLUE : HOME_THEME.text,
+                  }}>
+                    {ymd(o.last_flagged) ?? "—"}
+                  </td>
                   {/* Entry carries the C/P letter — it is the first cell that
                       names the contract, and repeating it on High would say the
                       same thing twice on one row. */}
@@ -2022,7 +2127,7 @@ function WatchThisScanner() {
                 </tr>
                 {isOpen && (
                   <tr>
-                    <td colSpan={12} style={{ padding: "0 0 0 10px", background: "rgba(0,0,0,0.20)" }}>
+                    <td colSpan={13} style={{ padding: "0 0 0 10px", background: "rgba(0,0,0,0.20)" }}>
                       {detailPanel}
                     </td>
                   </tr>
@@ -2031,7 +2136,7 @@ function WatchThisScanner() {
                 );
               })}
               {!outcomes.length && (
-                <tr><td colSpan={12} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
+                <tr><td colSpan={13} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
                   No tracked flags yet.
                 </td></tr>
               )}
@@ -2050,6 +2155,8 @@ function WatchThisScanner() {
 const RESULT_SECTIONS = [
   { key: "opened"  as const, label: "Opened",  color: HOME_THEME.green,
     note: "flagged for the first time on this date" },
+  { key: "flagged" as const, label: "Flagged", color: LIGHT_BLUE,
+    note: "last seen on the board on this date — opened earlier, re-flagged since" },
   { key: "touched" as const, label: "Touched", color: LIGHT_BLUE,
     note: "spot reached the flagged strike on this date" },
   { key: "expired" as const, label: "Expired", color: HOME_THEME.orange,
@@ -2091,6 +2198,7 @@ function ResultsByDay({
           <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
             <th style={{ ...th, textAlign: "left" }}>Date</th>
             <th style={th}>Opened</th>
+            <th style={th}>Flagged</th>
             <th style={th}>Touched</th>
             <th style={th}>Expired</th>
             <th style={{ ...th, width: 30 }} />
@@ -2114,6 +2222,7 @@ function ResultsByDay({
                     {d.date}
                   </td>
                   <td style={td}>{count(d.opened.length, HOME_THEME.green)}</td>
+                  <td style={td}>{count(d.flagged.length, LIGHT_BLUE)}</td>
                   <td style={td}>{count(d.touched.length, LIGHT_BLUE)}</td>
                   <td style={td}>{count(d.expired.length, HOME_THEME.orange)}</td>
                   <td style={{ ...td, color: "rgba(255,255,255,0.45)" }}>{isOpen ? "▾" : "▸"}</td>
@@ -2121,7 +2230,7 @@ function ResultsByDay({
 
                 {isOpen && (
                   <tr style={{ background: "rgba(0,0,0,0.20)" }}>
-                    <td colSpan={5} style={{ padding: "12px 10px 18px" }}>
+                    <td colSpan={6} style={{ padding: "12px 10px 18px" }}>
                       <div style={{ display: "grid", gap: 16 }}>
                         {RESULT_SECTIONS.map((sec) => {
                           const rows = d[sec.key];
@@ -2146,6 +2255,7 @@ function ResultsByDay({
                                       <th style={th}>Strike</th>
                                       <th style={{ ...th, textAlign: "left" }}>Expiry</th>
                                       <th style={{ ...th, textAlign: "left" }}>Flagged</th>
+                                      <th style={{ ...th, textAlign: "left" }}>Last flagged</th>
                                       <th style={th}>Flagged Spot</th>
                                       <th style={th}>OTM at flag</th>
                                       <th style={th}>Closest</th>
@@ -2177,6 +2287,12 @@ function ResultsByDay({
                                         </td>
                                         <td style={{ ...td, textAlign: "left" }}>{o.expiry}</td>
                                         <td style={{ ...td, textAlign: "left" }}>{o.first_flagged}</td>
+                                        <td style={{
+                                          ...td, textAlign: "left", whiteSpace: "nowrap",
+                                          color: ymd(o.last_flagged) && ymd(o.last_flagged) !== ymd(o.first_flagged) ? LIGHT_BLUE : HOME_THEME.text,
+                                        }}>
+                                          {ymd(o.last_flagged) ?? "—"}
+                                        </td>
                                         <td style={td}>${o.spot_at_flag.toFixed(2)}</td>
                                         <td style={td}>{o.otm_pct_at_flag.toFixed(0)}%</td>
                                         <td style={{ ...td, color: o.closest_pct != null && o.closest_pct < 1 ? LIGHT_BLUE : HOME_THEME.text }}>
@@ -2193,7 +2309,7 @@ function ResultsByDay({
                                       </tr>
                                       {isOpen && (
                                         <tr>
-                                          <td colSpan={8} style={{ padding: "0 0 0 10px", background: "rgba(0,0,0,0.25)" }}>
+                                          <td colSpan={9} style={{ padding: "0 0 0 10px", background: "rgba(0,0,0,0.25)" }}>
                                             {detailPanel}
                                           </td>
                                         </tr>

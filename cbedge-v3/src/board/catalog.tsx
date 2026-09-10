@@ -8,10 +8,10 @@ import type { BoardItem } from '@/design/primitives/Board'
 // BoardPage and Board never need to change.
 //
 // THE BIG ONES ARE lazy(). GEX Candles, Multi Greek, Key Levels, the Economic
-// Calendar, the GEX Chart, Net Premium, the Flow Tape and the Gauge Rail are
-// each a real feature with its own module tree — GEX Candles and Net Premium
-// each pull lightweight-charts, the Flow Tape pulls the whole print table and
-// its contract drawer. Static imports would put all of them in the board's route
+// Calendar, the GEX Chart, Net Premium, Net Vol GEX Flow, the Flow Tape and the
+// Gauge Rail are each a real feature with its own module tree — GEX Candles,
+// Net Premium and Net Vol GEX Flow each pull lightweight-charts, the Flow Tape
+// pulls the whole print table and its contract drawer. Static imports would put all of them in the board's route
 // chunk and every user would pay for the cards they do not have on their board.
 // lazy() means a card's code arrives when the card does. The Suspense fallback
 // is a blank fill, not a spinner: the card frame is already drawn around it,
@@ -30,6 +30,7 @@ const EconCalendarCard = lazy(() =>
 )
 const GexChartCard = lazy(() => import('./gexChart/GexChartCard').then((m) => ({ default: m.GexChartCard })))
 const NetPremiumCard = lazy(() => import('./netPremium/NetPremiumCard').then((m) => ({ default: m.NetPremiumCard })))
+const VolGexFlowCard = lazy(() => import('./volGexFlow/VolGexFlowCard').then((m) => ({ default: m.VolGexFlowCard })))
 const FlowTapeCard = lazy(() => import('./flowTape/FlowTapeCard').then((m) => ({ default: m.FlowTapeCard })))
 const TopFlowCard = lazy(() => import('./topFlow/TopFlowCard').then((m) => ({ default: m.TopFlowCard })))
 const GaugeRailCard = lazy(() => import('./gaugeRail/GaugeRailCard').then((m) => ({ default: m.GaugeRailCard })))
@@ -227,6 +228,29 @@ export const CARD_CATALOG: CardDef[] = [
     render: () => (
       <Deferred>
         <MultiGreekCard />
+      </Deferred>
+    ),
+  },
+  {
+    // The scanner's GEX Levels card 12, unchanged — SAME component, not a
+    // second one: `board/volGexFlow/VolGexFlowCard.tsx` is what
+    // /v3/scanner?tab=gexlevels mounts too, so the board and the tab cannot
+    // disagree about the day's volume leg.
+    //
+    // No ticker of its own and none coming. /proxy/gex-vol-flow is what the
+    // strike-GEX recorder writes and that recorder runs on the index, so this
+    // card is SPX whatever the board symbol says.
+    //
+    // 24 x 56 is the panel's own shape: the scanner gives it a fixed 460px box
+    // and half the board width is what the header row (picker, two segmented
+    // switches, the bucket note, the stamp and refresh) needs before it wraps.
+    id: 'vol-gex-flow',
+    icon: '🌀',
+    label: 'Net Vol GEX Flow (Today)',
+    defaultSize: { w: 24, h: 56 },
+    render: () => (
+      <Deferred>
+        <VolGexFlowCard />
       </Deferred>
     ),
   },

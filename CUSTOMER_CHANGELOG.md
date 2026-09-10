@@ -2,6 +2,13 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Thursday 9/10/2026
+
+* **Pricing:** the free trial has been retired — joining now starts your $50/month membership right away, cancel anytime. The free live level panel stays free — https://cbedge.net/pricing
+
+* **IB Stats (v3):** the Bullish / Bearish / Rotation dials are now a sensible size instead of filling the whole page — https://cbedge.net/v3/scanner
+
+
 ## Tuesday 9/8/2026
 
 * **GEX Candles (v3):** candles now tick live on every ticker instead of stepping once a minute, plus volume bars and a spot price line, both toggling in the cogwheel — https://cbedge.net/v3

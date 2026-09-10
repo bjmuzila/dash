@@ -28,6 +28,7 @@ import {
   updatePropRow,
   deletePropRow,
   listPropRows,
+  listPropRecurring,
   type RegisterBank,
   type RecurringFrequency,
 } from "@/lib/db";
@@ -87,20 +88,23 @@ export async function GET(req: NextRequest) {
     const year = month.slice(0, 4);
     await adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
     const profile = await getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
-    const [categories, entries, register, recurring, amazonRows, propRows, dailyBalance] = await Promise.all([
+    const [categories, entries, register, recurring, amazonRows, propRows, propRecurring, dailyBalance] = await Promise.all([
       listBudgetCategories(profile.id),
       listBudgetEntries(profile.id, 500),
       listRegister(profile.id, from, to),
       listRecurring(profile.id),
       listAmazonRows(profile.id, from, to),
       listPropRows(profile.id, `${year}-01-01`, `${year}-12-31`),
+      // Recurring Bzila rows are fetched unscoped: the stored row can be in an
+      // earlier year than the one being viewed.
+      listPropRecurring(profile.id),
       getLatestDailyBalance(profile.id),
     ]);
     const prevDailyBalance = dailyBalance ? await getDailyBalanceBefore(profile.id, dailyBalance.day) : null;
     // Weekly reconciliation anchor: most recent balance at least ~7 days before
     // the latest entry (day <= latest − 7). Falls back to prev if none exists.
     const weekAgoBalance = dailyBalance ? await getDailyBalanceBefore(profile.id, shiftDay(dailyBalance.day, -6)) : null;
-    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows, propRows, dailyBalance, prevDailyBalance, weekAgoBalance });
+    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows, propRows, propRecurring, dailyBalance, prevDailyBalance, weekAgoBalance });
   } catch (err) {
     return NextResponse.json({ error: "Budget load failed", detail: String(err) }, { status: 500 });
   }
@@ -299,6 +303,7 @@ export async function POST(req: NextRequest) {
         cost: Number(body?.cost ?? 0),
         payout: Number(body?.payout ?? 0),
         note: body?.note ? String(body.note) : null,
+        recurring: body?.recurring ? 1 : 0,
       });
       return NextResponse.json({ ok: true, prop: row });
     }
@@ -312,6 +317,7 @@ export async function POST(req: NextRequest) {
         cost: body?.cost != null ? Number(body.cost) : undefined,
         payout: body?.payout != null ? Number(body.payout) : undefined,
         note: body?.note !== undefined ? (body.note ? String(body.note) : null) : undefined,
+        recurring: body?.recurring != null ? (body.recurring ? 1 : 0) : undefined,
       });
       return NextResponse.json({ ok: true });
     }
