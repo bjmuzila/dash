@@ -453,14 +453,33 @@ function pickNum(row, keys) {
 }
 
 /** The strike a flow print is on, from its own column or from its OSI ticker. */
+/**
+ * Strikes arrive from the vault as FLOATS, and floats do not hold a strike
+ * exactly: a 505 call comes back as 504.99999999999994, which then rendered as
+ * `504.99999999999994 Sep 11` on the tape and — worse — was pasted straight
+ * into `?strike=` on the option-candles lookup, where it matches nothing.
+ *
+ * Every real strike is an exact multiple of 1/1000 (that is how OSI encodes
+ * one), so rounding to thousandths is lossless for anything legitimate and
+ * removes the artifact for everything else. Done HERE, at the one place a
+ * strike enters the system, rather than at each of the places that show it.
+ *
+ * Note this cannot repair prints already written to lse_top_flow_prints — the
+ * payload holds whatever the float was, and whales are never swept. The UI
+ * rounds on display too, for those.
+ */
+function roundStrike(n) {
+  return n === null || !Number.isFinite(n) ? null : Math.round(n * 1000) / 1000;
+}
+
 function flowStrike(row) {
   const direct = pickNum(row, STRIKE_KEYS);
-  if (direct !== null) return direct;
+  if (direct !== null) return roundStrike(direct);
   for (const k of OSI_KEYS) {
     const v = row ? row[k] : undefined;
     if (typeof v !== 'string') continue;
     const m = OSI_STRIKE_RE.exec(v.trim().toUpperCase());
-    if (m) return Number(m[1]) / 1000;
+    if (m) return roundStrike(Number(m[1]) / 1000);
   }
   return null;
 }

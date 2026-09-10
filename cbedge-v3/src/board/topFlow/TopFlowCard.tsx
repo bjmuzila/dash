@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
 import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
-import { STALE_AFTER_SEC, fmtAgo, fmtPremium, fmtTime } from '@/data/flowMath'
+import { STALE_AFTER_SEC, fmtAgo, fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { useTick } from '@/data/flowData'
 import { ContractProbe } from './ContractProbe'
 
@@ -145,7 +145,6 @@ const POLL_MS = 20_000
 
 const fmtNum = (n: number | null) => (n === null ? '—' : n.toLocaleString())
 const fmtPrice = (n: number | null) => (n === null ? '—' : n.toFixed(2))
-const fmtStrike = (n: number | null) => (n === null ? '—' : String(n))
 /** "Sep 19" — the year is noise on a tape where everything is inside a year. */
 const fmtExpiry = (iso: string | null) => {
   if (!iso) return '—'

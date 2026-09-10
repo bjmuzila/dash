@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useQuery } from '@/data/api'
-import { fmtPremium } from '@/data/flowMath'
+import { fmtPremium, fmtStrike, roundStrike } from '@/data/flowMath'
 import type { TopFlowRow } from './TopFlowCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,7 +90,9 @@ export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () =
   const startMs = row.ts - span.days * 86_400_000
 
   const urls = useMemo(() => {
-    const strike = row.strike ?? 0
+    // Rounded, not raw: this value goes into `?strike=` below, and the vault
+    // matches on the exact string — `504.99999999999994` finds nothing.
+    const strike = roundStrike(row.strike) ?? 0
     const proxy = row.underlying && row.expiry && strike > 0 && row.type
       ? `/proxy/option-history?${new URLSearchParams({
           ticker: row.underlying, expiry: row.expiry, strike: String(strike), type: row.type,
@@ -143,7 +145,7 @@ export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () =
       <div className="flex items-baseline gap-2">
         <span className="text-sm font-bold tracking-[0.02em] text-fg">{row.underlying ?? '—'}</span>
         <span className="tabular rounded-sm border border-warn/50 bg-warn/10 px-1.5 py-px text-2xs font-bold text-warn">
-          {row.strike ?? '—'}{row.type ?? ''}
+          {fmtStrike(row.strike)}{row.type ?? ''}
         </span>
         <button
           type="button"

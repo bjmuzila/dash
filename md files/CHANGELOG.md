@@ -1,5 +1,276 @@
 # Changelog
 
+## 2026-09-10 (u) - Contract Probe 501 fixed; /v3/whales gets a DTE filter and a reordered left column
+
+### 1. `/api/lse/contract-candles` - the route the probe has always called
+
+`ContractProbe.tsx` has been requesting `/api/lse/contract-candles` since it
+shipped. It was never registered, so every probe fell through to the
+`app/api/[...proxy]` catch-all and came back 501 — which the panel rendered
+verbatim as `Could not load bars — 501`. Third instance of this exact failure
+(`/api/lse/whales`, `/api/eod-strike-gex-board`): the page shipped, the adapter
+did not.
+
+`/api/lse/option-candles` already existed and is NOT a substitute, for two
+reasons — which is why this is a separate route and not an alias:
+
+- **Shape.** `option-candles` is the raw/CSV endpoint; it returns the vault's own
+  rows under the vault's own column names. The probe — and the
+  `/proxy/option-history` it falls back to — speak
+  `{ bars: [{ time, open, high, low, close, volume }] }` with `time` in epoch ms.
+  The probe swaps sources mid-session, so they must be the same shape or the
+  fallback draws nothing.
+- **Auth.** `option-candles` is `owner`. The probe opens from the Top Flow card,
+  which every subscriber has. New route is **`auth: 'subscriber'`**.
+
+Implementation notes:
+
+- OHLCV field names are picked from **candidate lists**, not assumed — the vault
+  is inconsistent about them (same reason `_lib-lse.cjs` carries `TIME_KEYS` /
+  `STRIKE_KEYS` / `OSI_KEYS`). This matters more than it looks: the probe filters
+  `close > 0`, so a wrong key name renders as an empty chart with **no error** —
+  the exact silent failure this route is replacing.
+- A candle missing O/H/L is drawn flat at its close, not at 0.
+- Bars are re-sorted ascending. The vault is asked for `order: 'asc'`, but the
+  probe draws straight from the array and one out-of-order bar is a line across
+  the chart.
+- An empty result is **200 with `bars: []`**, not an error: the probe reads an
+  empty answer as "the other source's turn" and falls back to
+  `/proxy/option-history`. A 4xx would kill that fallback.
+
+`/proxy/option-history` itself is untouched.
+
+### 2. `/v3/whales` - DTE filter
+
+`ANY | 0DTE | ≤7 | ≤30 | ≤90` in the filter row, mirroring the live Top Flow
+card's stops so the same filter offers the same choices on both surfaces.
+
+- **DTE at PRINT TIME**, not days from now. The archive is historical: "0DTE"
+  means it was a same-day expiry when it printed, which is the fact about the
+  trade. Days-from-now would relabel every old print as it aged.
+- Prints with **no readable DTE are dropped** by the filter rather than let
+  through — an unfiltered row inside a filtered list is the worse bug. Same rule
+  the live card and the existing moneyness filter apply.
+- `max_dte` on the server, folded into the shared WHERE so it narrows the
+  tiles, the session bars, the leaderboards and the table together — not just
+  the rows on screen.
+- `0` is a real value (same-day only), so both sides test `!== null` explicitly
+  rather than leaning on falsiness. That is the bug this note exists to prevent.
+- Active cap is stated on the header line (`· 0DTE only`, `· ≤30 DTE`).
+
+Placeholder-parity harness extended to cover `max_dte` and re-run: mark count ==
+param count across all filter combinations. Typechecked; `node --check` clean.
+
+### 3. `/v3/whales` - Prints above the session chart
+
+The left column was `Whale premium by session` then `Prints`. Swapped: the table
+is what you came for and it was starting ~140px down the page. The chart is a
+navigation aid for it (click a bar → filter the table to that day), so it now
+sits under the thing it filters. Pure reorder — no markup or handler changed.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`).
+
+## 2026-09-10 (t) - Strikes: 504.99999999999994 -> 505, at the source and on display
+
+`MU 504.99999999999994 Sep 11` on the Top Flow tape. Strikes arrive from the
+vault as floats and a float does not hold a strike exactly, so a 505 call comes
+back with fifteen digits of noise.
+
+Cosmetic on the tape — **not** cosmetic in `ContractProbe`, which pasted
+`String(row.strike)` straight into `?strike=` on the option-candles lookup. The
+vault matches that on the value it was given, so a probe opened on one of these
+rows was querying a strike that does not exist and getting nothing back. That is
+the real bug here; the ugly number was the symptom that showed.
+
+Every legitimate strike is an exact multiple of 1/1000 — that is how OSI encodes
+one — so `Math.round(n * 1000) / 1000` is lossless for anything real and removes
+the artifact for everything else.
+
+**Fixed in two places, and both are needed.**
+
+### `server-v2/_lib-lse.cjs` — the source
+
+`flowStrike()` now rounds, on both paths (the direct field and the OSI parse).
+This is the one place a strike enters the system, so everything downstream —
+tape, probe, archive, CSV — gets a clean number from here on.
+
+It cannot repair what is already written: `lse_top_flow_prints` payloads hold
+whatever the float was, and whales are never swept, so those rows keep the noise
+forever. Hence the second half.
+
+### `cbedge-v3/src/data/flowMath.ts` — display and lookups
+
+New `roundStrike()` (the number) and `fmtStrike()` (the string, trailing zeros
+dropped: 505 → `"505"`, 502.5 → `"502.5"`, null → `"—"`).
+
+Use `roundStrike` for **anything sent back to an API as a strike** — a query
+built from the raw float matches nothing.
+
+Call sites:
+
+- `board/topFlow/ContractProbe.tsx` — `roundStrike` on the value feeding the
+  option-candles / proxy queries, `fmtStrike` on the header badge.
+- `board/topFlow/TopFlowCard.tsx` — local `fmtStrike` deleted in favour of the
+  shared one (it was `String(n)`, which is exactly how the digits got out).
+- `pages/Whales.tsx` — Contract cell, Biggest-print tile, CSV export, and the
+  Repeat Strikes list. That last one arrives from SQL as **text**
+  (`MAX(payload->>'strike')`), so it carries the float's digits verbatim and has
+  to go back through `Number()` first.
+
+Verified: `504.99999999999994 → 505`, `6900.000000000001 → 6900`, while
+`502.5`, `0.125`, `1234.567` and `0.001` are untouched.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`).
+
+## 2026-09-10 (s) - /v3/whales: SHOW UNREADABLE toggle in the filter row, and a font step up
+
+Follow-on to (r). Two things the page was missing.
+
+**Unreadable prints had no filter at all.** The live Top Flow card hides them by
+default and offers a cog toggle; the whale archive showed every print including
+the ones that never got a readable side, with no way to drop them — so the table
+carried rows that are in `total` and in neither directional bucket, silently.
+
+### `server-v2/api-router.js` — `/api/lse/whales`
+
+- New `sides` param. `directional` (the **new default**) drops prints with no
+  readable action; `sides=all` keeps them. Same default and same reasoning as
+  the live card.
+- The CTE is now **two stages**: `w` = every filter except the sides split,
+  `s` = `w` minus unreadable prints. All roll-ups read `s`; the summary also
+  counts what `w` holds and `s` does not. Collapsing them into one WHERE would
+  make that count unavailable — you cannot count what you filtered out before
+  you started counting.
+- New in the response: `sides`, and `unreadable: { n, premium }` — what the
+  filter is holding back.
+- `sidesSql` is interpolated with **no placeholders** (`TRUE` /
+  `act IS NOT NULL`), so it cannot disturb the `?` → `$n` ordering the filter
+  fragment depends on. Parity harness re-run.
+
+Note this changes the default: an existing `/v3/whales` bookmark now shows
+*fewer* prints than before, because the unreadable ones are dropped. That is the
+point, and the header says how many.
+
+### `cbedge-v3/src/pages/Whales.tsx`
+
+- **`SHOW UNREADABLE` chip in the filter row**, not behind a cog. It is the one
+  control that changes what the tiles MEAN, and a switch that changes the
+  meaning of the numbers above it does not belong two clicks deep. Uses the
+  shared `Chip` from `design/primitives/Controls` — same control as everywhere
+  else on the board, no local styling.
+- Header line says what is hidden when anything is:
+  `· 412 unreadable hidden ($1.02B)`, with the why on hover. Only when the
+  filter is actually removing something — a permanent parenthetical about a
+  filter that removes nothing is noise.
+- **Type one step up across the page**: table `text-2xs → text-xs`, headers and
+  tile labels `text-3xs → text-2xs`, leaderboards `text-2xs → text-xs`, empty
+  and error states `text-xs → text-sm`. Row padding `py-1 → py-1.5` and header
+  `py-1.5 → py-2` so the larger type is not cramped.
+- `unreadable` is typed **optional** so a cached SPA talking to an older server
+  degrades to "no note" instead of throwing on a missing key.
+
+Typechecked under the project's `strict` / `noUnusedLocals` /
+`noUncheckedIndexedAccess`; `node --check` clean on api-router.js.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`).
+
+## 2026-09-10 (r) - /v3/whales: built the endpoint it was calling, and stopped the archive being deleted every 7 days
+
+`/v3/whales` had shipped as a page with no server behind it. `/api/lse/whales`
+was never registered in `api-router.js`, so every load fell through to the
+`app/api/[...proxy]` catch-all and came back `501 {"error":"not implemented"}` —
+verified live before this change. Because 501 lands in `useQuery`'s error branch,
+`d` stayed undefined and the page rendered its own empty state instead of an
+error: $0 tiles, "No sessions in range", forever, at any refresh rate. Same
+failure mode as `/api/eod-strike-gex-board` (see the note at the ΔGEX
+forwarders) — recorder shipped, adapter never did.
+
+### `server-v2/api-router.js`
+
+**`TF_WHALE_FLOOR`** (new, `LSE_WHALE_FLOOR` env, default $1M, floored at $100K).
+
+**Retention — the change to look at.** `tfRestore()`'s housekeeping delete was:
+
+```sql
+DELETE FROM lse_top_flow_prints WHERE session_date < (CURRENT_DATE - ?::int)
+```
+
+with `TF_RETAIN_DAYS = 7`. The page's own header comment claimed whales were
+never swept; nothing implemented that, so the "permanent archive" was capped at
+a week and always would have been, endpoint or no endpoint. Now:
+
+```sql
+DELETE FROM lse_top_flow_prints
+ WHERE session_date < (CURRENT_DATE - ?::int)
+   AND premium < ?          -- TF_WHALE_FLOOR
+```
+
+so the table is two things at once: a rolling 7-day mirror of the live store,
+and a permanent record of the $1M+ prints. Same carve-out shape as
+retention-cleanup's `flow_prints_big_premium`. **Nothing is recovered by this** —
+prints already deleted are gone; the archive starts accumulating from this
+deploy.
+
+`/api/owner/db-map`'s `lse_top_flow_prints` policy now states the carve-out
+rather than a flat 7 days.
+
+**New index** `lse_top_flow_prints_premium_idx (session_date, premium DESC)`.
+The existing index is `(session_date, ts DESC)` and cannot serve the
+leaderboards; once whales are kept forever this table stops being small.
+
+**`/api/lse/whales`** — `auth: 'subscriber'`, same paywall as the live card.
+Params: `from`, `to`, `min_premium`, `ticker`, `type`, `action`, `moneyness`,
+`sort`, `limit`. Returns `summary`, `biggest`, `sessions[]`, `tickers[]`,
+`buckets[]`, `repeats[]`, `rows[]`, `rowCap`, `whaleFloor`, `error`.
+
+- **Every roll-up is a GROUP BY over the whole filtered range**, not a reduce
+  over the returned rows. Tiles computed from the row list would silently mean
+  "of the 300 that fitted". Tiles can legitimately say $8.42B while the table
+  shows 300 rows.
+- **`bull` / `bear` as well as `bought` / `sold`.** Directional buckets by
+  `BUY+CALL | SELL+PUT → bull`, `SELL+CALL | BUY+PUT → bear`; the raw pair is
+  kept because the page's BUY/SELL filter has to agree with what it filtered on.
+  Unreadable prints are in `total` and in neither directional bucket.
+- **`min_premium` is clamped UP to the whale floor.** Below it the table holds
+  only the last 7 days, so a lower ask returns a week dressed as the archive.
+- **Dates validated against `YMD` before they reach `::date`**, `from`/`to`
+  swapped if inverted. This is the public-facing hop; an unvalidated string cast
+  to `::date` is how a typo becomes a 500.
+- **`to_char(session_date,'YYYY-MM-DD')`, never a JS `Date`.** node-postgres
+  parses a DATE column to local midnight; re-formatting that in ET on a UTC box
+  returns the PREVIOUS day and files every row under the wrong date header.
+- **`vol` / `oi` come back null.** They are joined at serve time on the live card
+  because they mean "what is this contract doing now", and there is no now for a
+  print from March. The column header says so.
+- **Failures return 200 with `error` set**, not a 5xx — a 5xx is exactly what
+  left this page blank and mute for months.
+- SQL note: `libDb.queryAll` rewrites `?` → `$n` by counting left to right
+  across the whole statement, so every query is `WITH w AS (… WHERE <filter>)
+  SELECT …` with the filter's params spread first. That also rules out the JSONB
+  key-exists operators (`?`, `?|`, `?&`) — everything goes through `->>`.
+  A parity harness confirmed placeholder count == param count for all filter
+  combinations.
+
+### `cbedge-v3/src/pages/Whales.tsx` — same directional fix as entry (o)
+
+- `B/S` column → **Bias**: `▲ BULLISH` / `▼ BEARISH` with the raw verb faint
+  beside it, tooltip from the shared `biasTitle`. Side keeps its own ink (where
+  the fill sat) — two questions, two colour rules.
+- Tiles `Bought`/`Sold` → **`Bullish`/`Bearish`**; session bars, ticker split
+  bars, repeat-strike ink and the CSV all bucket by bias.
+- The page now renders `q.error` too. A failure has to look like a failure.
+
+### `cbedge-v3/src/board/topFlow/TopFlowCard.tsx`
+
+`biasOf` and `biasTitle` exported so Whales shares them rather than keeping a
+second copy of the mapping to drift.
+
+Typechecked under the project's `strict` / `noUnusedLocals` /
+`noUncheckedIndexedAccess` settings; `node --check` clean on api-router.js.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`) to appear
+on cbedge.net. First load after deploy creates the new index.
+
 ## 2026-09-10 (q) - Landing page: cards lifted off the canvas, buy button given weight
 
 Brandon: "just want to make the cards a bit more dominant, some of them just

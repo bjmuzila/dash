@@ -115,6 +115,30 @@ export function fmtContractCost(price: number): string {
   return `$${cost.toFixed(2)}`
 }
 
+/**
+ * A strike, cleaned of float noise.
+ *
+ * Strikes reach us as floats and a float does not hold one exactly — a 505 call
+ * arrives as 504.99999999999994. Every real strike is a multiple of 1/1000, so
+ * rounding to thousandths is lossless and kills the artifact.
+ *
+ * `roundStrike` is the NUMBER (use it for anything sent back to an API as a
+ * strike — a query built from the raw float matches nothing); `fmtStrike` is the
+ * string, with trailing zeros dropped so 505 is "505" and 502.5 is "502.5".
+ *
+ * The vault client rounds at the source too (server-v2/_lib-lse.cjs), but prints
+ * already archived hold the original float and are never swept, so display and
+ * lookups both have to round as well.
+ */
+export function roundStrike(n: number | null | undefined): number | null {
+  return n == null || !Number.isFinite(n) ? null : Math.round(n * 1000) / 1000
+}
+
+export function fmtStrike(n: number | null | undefined): string {
+  const r = roundStrike(n)
+  return r === null ? '—' : String(r)
+}
+
 /** Print-time underlying spot. 0 and undefined both read as unknown. */
 export function fmtSpot(spot: number | undefined): string {
   if (!spot) return '—'

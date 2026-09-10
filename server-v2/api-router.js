@@ -14553,6 +14553,15 @@ try {
       if (o.ticker) { sql.push(`payload->>'underlying' = ?`); params.push(o.ticker); }
       if (o.type) { sql.push(`payload->>'type' = ?`); params.push(o.type); }
       if (o.action) { sql.push(`payload->>'action' = ?`); params.push(o.action); }
+      // A row with no readable DTE is DROPPED by a DTE filter rather than let
+      // through — an unfiltered row inside a filtered list is the worse bug.
+      // Same rule the live card applies. `->>` yields NULL for a missing key and
+      // NULL <= n is NULL, i.e. not true, so the cast alone already excludes it;
+      // the IS NOT NULL is written out because relying on that is a footgun.
+      if (o.maxDte !== null) {
+        sql.push(`(payload->>'dte') IS NOT NULL AND (payload->>'dte')::int <= ?`);
+        params.push(o.maxDte);
+      }
       // Moneyness AT PRINT TIME — judged against the underlying price the print
       // CARRIED, not against spot now. A call bought 40 points OTM at 10am was
       // an OTM buy and does not become something else because the index rallied
@@ -14572,9 +14581,22 @@ try {
       return { sql: sql.join('\n           AND '), params };
     }
 
-    /** `WITH w AS (…)` — the filtered set, with the derived columns every
-     *  roll-up groups on computed once. */
-    const whCte = (filterSql) => `
+    /**
+     * Two stages, not one.
+     *
+     *   w  everything the filters matched EXCEPT the readable/unreadable split
+     *   s  w, minus unreadable prints when `sides` is 'directional'
+     *
+     * The roll-ups all read `s`; the summary also counts what `w` holds and `s`
+     * does not, so the page can say "412 unreadable prints hidden" instead of
+     * quietly showing a smaller number. Collapsing these into one WHERE would
+     * make that count unavailable — you cannot count what you filtered out
+     * before you started counting.
+     *
+     * `sidesSql` carries no placeholders, so it cannot disturb the `?` → `$n`
+     * ordering the filter fragment depends on.
+     */
+    const whCte = (filterSql, sidesSql) => `
       WITH w AS (
         SELECT session_date,
                ts,
@@ -14588,7 +14610,8 @@ try {
                ${WH_BIAS_SQL}         AS bias
           FROM lse_top_flow_prints
          WHERE ${filterSql}
-      )`;
+      ),
+      s AS (SELECT * FROM w WHERE ${sidesSql})`;
 
     /** Postgres hands SUM(double precision) back as a JS number, but COUNT and
      *  the ::numeric paths can arrive as strings. Normalise once, here. */
@@ -14665,7 +14688,18 @@ try {
         const type = rawType === 'C' || rawType === 'P' ? rawType : null;
         const rawAction = String(params.get('action') || '').trim().toUpperCase();
         const action = rawAction === 'BUY' || rawAction === 'SELL' ? rawAction : null;
+        // null = no cap. 0 is a REAL value (same-day expiries only), so this
+        // cannot be written as `Number(x) || null`.
+        const rawDte = params.get('max_dte');
+        const dteNum = rawDte === null || rawDte === '' ? NaN : Number(rawDte);
+        const maxDte = Number.isFinite(dteNum) && dteNum >= 0 ? Math.floor(dteNum) : null;
         const moneyness = params.get('moneyness') === 'otm' ? 'otm' : 'all';
+        // 'directional' (the default) drops every print whose side could not be
+        // read — mid fills and the ones that were never classified. Same default
+        // and same reasoning as the live Top Flow card: a row you cannot
+        // attribute to a buyer or a seller is not a weaker row on a whale
+        // board, it is an unreadable one. 'all' is the escape hatch.
+        const sides = params.get('sides') === 'all' ? 'all' : 'directional';
         const sort = params.get('sort') === 'premium' ? 'premium' : 'time';
         const askedLimit = Number(params.get('limit'));
         const limit = Math.min(Math.max(Number.isFinite(askedLimit) ? askedLimit : 200, 1), WH_MAX_ROWS);
@@ -14681,6 +14715,9 @@ try {
           rows: [],
           rowCap: limit,
           whaleFloor: TF_WHALE_FLOOR,
+          sides,
+          maxDte,
+          unreadable: { n: 0, premium: 0 },
         };
 
         if (!libDb) {
@@ -14694,8 +14731,9 @@ try {
 
         try {
           await tfEnsureSchema();
-          const f = whFilter({ from, to, minPremium, ticker, type, action, moneyness });
-          const cte = whCte(f.sql);
+          const f = whFilter({ from, to, minPremium, ticker, type, action, moneyness, maxDte });
+          // No placeholders in here — see the note on whCte.
+          const cte = whCte(f.sql, sides === 'all' ? 'TRUE' : 'act IS NOT NULL');
 
           const order = sort === 'premium' ? 'premium DESC, ts DESC' : 'ts DESC, premium DESC';
 
@@ -14710,8 +14748,11 @@ try {
                        COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold,
                        COALESCE(SUM(premium) FILTER (WHERE opt_type = 'C'), 0)      AS calls,
                        COALESCE(SUM(premium) FILTER (WHERE opt_type = 'P'), 0)      AS puts,
-                       COUNT(DISTINCT session_date)::int                            AS sessions
-                  FROM w`, [...f.params]),
+                       COUNT(DISTINCT session_date)::int                            AS sessions,
+                       -- From w, not s: what the readable filter is holding back.
+                       (SELECT COUNT(*) FROM w WHERE act IS NULL)::int               AS hidden_n,
+                       (SELECT COALESCE(SUM(premium), 0) FROM w WHERE act IS NULL)   AS hidden_premium
+                  FROM s`, [...f.params]),
 
               // Ascending: this is a time axis, and the page draws it left to
               // right into the bar chart without re-sorting.
@@ -14723,7 +14764,7 @@ try {
                        COALESCE(SUM(premium) FILTER (WHERE bias = 'bear'), 0)       AS bear,
                        COALESCE(SUM(premium) FILTER (WHERE act = 'BUY'), 0)         AS bought,
                        COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold
-                  FROM w
+                  FROM s
                  GROUP BY session_date
                  ORDER BY session_date ASC`, [...f.params]),
 
@@ -14735,7 +14776,7 @@ try {
                        COALESCE(SUM(premium) FILTER (WHERE bias = 'bear'), 0)       AS bear,
                        COALESCE(SUM(premium) FILTER (WHERE act = 'BUY'), 0)         AS bought,
                        COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold
-                  FROM w
+                  FROM s
                  WHERE ticker IS NOT NULL
                  GROUP BY ticker
                  ORDER BY total DESC
@@ -14751,7 +14792,7 @@ try {
                             ELSE '90+' END                                          AS bucket,
                        COUNT(*)::int                                                AS n,
                        COALESCE(SUM(premium), 0)                                    AS total
-                  FROM w
+                  FROM s
                  WHERE dte IS NOT NULL
                  GROUP BY 1`, [...f.params]),
 
@@ -14769,7 +14810,7 @@ try {
                        COALESCE(SUM(premium) FILTER (WHERE bias = 'bear'), 0)       AS bear,
                        COALESCE(SUM(premium) FILTER (WHERE act = 'BUY'), 0)         AS bought,
                        COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold
-                  FROM w
+                  FROM s
                  WHERE osi IS NOT NULL
                  GROUP BY osi
                 HAVING COUNT(*) >= ?
@@ -14778,13 +14819,13 @@ try {
 
               libDb.queryAll(`${cte}
                 SELECT to_char(session_date, 'YYYY-MM-DD') AS session_day, payload
-                  FROM w
+                  FROM s
                  ORDER BY ${order}
                  LIMIT ?`, [...f.params, limit]),
 
               libDb.queryAll(`${cte}
                 SELECT to_char(session_date, 'YYYY-MM-DD') AS session_day, payload
-                  FROM w
+                  FROM s
                  ORDER BY premium DESC
                  LIMIT 1`, [...f.params]),
             ]);
@@ -14833,6 +14874,13 @@ try {
             rows: (listRows || []).map(whRow),
             rowCap: limit,
             whaleFloor: TF_WHALE_FLOOR,
+            sides,
+            maxDte,
+            /** What the readable filter is holding back. Zero when sides='all'. */
+            unreadable: {
+              n: sides === 'all' ? 0 : whNum(sm && sm.hidden_n),
+              premium: sides === 'all' ? 0 : whNum(sm && sm.hidden_premium),
+            },
             /** So the page can say WHY vol/OI are dashes instead of just being blank. */
             liveStats: false,
             error: null,
@@ -14844,6 +14892,134 @@ try {
           return send(res, 200, { ...empty, error: `Whale archive query failed: ${e && e.message ? e.message : String(e)}` },
             { 'Cache-Control': NO_STORE });
         }
+      },
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // /api/lse/contract-candles — the CONTRACT PROBE's bars.
+    //
+    // Same vault call as /api/lse/option-candles below, and deliberately not the
+    // same route. Two differences, and each is the whole reason this exists:
+    //
+    //   SHAPE  option-candles is the raw/CSV endpoint — it hands back the
+    //          vault's own rows under whatever it called its columns. The probe
+    //          (and the /proxy/option-history it falls back to) speak
+    //          { bars: [{ time, open, high, low, close, volume }] }, time in
+    //          EPOCH MS. The probe swaps between the two sources mid-session, so
+    //          they have to be the same shape or the fallback renders nothing.
+    //   AUTH   option-candles is owner-only. The probe opens from the Top Flow
+    //          card, which every subscriber has.
+    //
+    // ContractProbe.tsx has been calling this path since it shipped; it was
+    // never registered, so every probe on a print older than today fell through
+    // to the app/api/[...proxy] catch-all and came back 501 — which the panel
+    // rendered as "Could not load bars — 501". Same failure as
+    // /api/lse/whales and /api/eod-strike-gex-board before it: the page shipped,
+    // the adapter did not.
+    //
+    // Field names are picked from candidate lists rather than assumed. The vault
+    // is not consistent about them (see the TIME_KEYS / STRIKE_KEYS / OSI_KEYS
+    // lists in _lib-lse.cjs, which exist for the same reason), and a bar that
+    // silently reads 0 for `close` is worse than one that is missing — the probe
+    // filters `close > 0`, so a wrong key name shows up as an empty chart with
+    // no error, which is exactly the failure this route is replacing.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const CC_OPEN_KEYS   = ['open', 'o', 'open_price', 'first'];
+    const CC_HIGH_KEYS   = ['high', 'h', 'high_price', 'max'];
+    const CC_LOW_KEYS    = ['low', 'l', 'low_price', 'min'];
+    const CC_CLOSE_KEYS  = ['close', 'c', 'close_price', 'last', 'mark', 'price'];
+    const CC_VOLUME_KEYS = ['volume', 'v', 'vol', 'size', 'trade_volume'];
+
+    const ccPick = (row, keys) => {
+      for (const k of keys) {
+        const v = row ? row[k] : undefined;
+        if (v === undefined || v === null || v === '') continue;
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+      return null;
+    };
+
+    /** Vault candle row → one bar, or null when it carries no usable time/close. */
+    const ccBar = (r) => {
+      // `timestamp` is guaranteed by withTimestamp()/isoify() in _lib-lse.cjs —
+      // it normalises whatever the options endpoints called their time column
+      // and rewrites "YYYY-MM-DD hh:mm:ss" into something Date.parse agrees with.
+      const raw = r && r.timestamp !== undefined && r.timestamp !== null ? r.timestamp : null;
+      if (raw === null) return null;
+      // A number is already epoch — seconds or ms, and a 10-digit value is
+      // seconds by any reading (ms would put it in 1970).
+      let time;
+      if (typeof raw === 'number') {
+        time = raw < 1e12 ? Math.round(raw * 1000) : Math.round(raw);
+      } else {
+        time = Date.parse(String(raw));
+      }
+      if (!Number.isFinite(time)) return null;
+
+      const close = ccPick(r, CC_CLOSE_KEYS);
+      if (close === null) return null;
+      const open = ccPick(r, CC_OPEN_KEYS);
+      const high = ccPick(r, CC_HIGH_KEYS);
+      const low = ccPick(r, CC_LOW_KEYS);
+      return {
+        time,
+        // A candle missing an O/H/L is drawn flat at its close rather than at 0,
+        // which is what a null would become on the chart's scale.
+        open: open === null ? close : open,
+        high: high === null ? close : high,
+        low: low === null ? close : low,
+        close,
+        volume: ccPick(r, CC_VOLUME_KEYS) ?? 0,
+      };
+    };
+
+    register('/api/lse/contract-candles', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+        const ticker = params.get('ticker');
+        const underlying = params.get('underlying');
+        if (!ticker && !underlying) {
+          return send(res, 400, { error: 'pass ticker=<OSI>, or underlying + strike + expiry + type' });
+        }
+        try {
+          const rows = ticker
+            ? await lse.optionCandles({
+                contract: ticker,
+                start: params.get('start') || undefined,
+                end: params.get('end') || undefined,
+                order: 'asc',
+                limit: params.get('limit'),
+              })
+            : await lse.optionCandles({
+                contract: underlying,
+                strike: params.get('strike'),
+                expiry: params.get('expiry'),
+                type: params.get('type'),
+                start: params.get('start') || undefined,
+                end: params.get('end') || undefined,
+                order: 'asc',
+                limit: params.get('limit'),
+              });
+
+          const bars = (Array.isArray(rows) ? rows : [])
+            .map(ccBar)
+            .filter((b) => b !== null)
+            // The vault is asked for ascending, but the probe draws straight
+            // from this array — one out-of-order bar is a line across the chart.
+            .sort((a, b) => a.time - b.time);
+
+          // 200 with an empty list, NOT an error: the probe reads an empty
+          // answer as "the other source's turn" and falls back to
+          // /proxy/option-history. A 4xx here would stop that.
+          return send(res, 200, {
+            bars,
+            count: bars.length,
+            source: 'lse-vault',
+          }, { 'Cache-Control': NO_STORE });
+        } catch (e) { return fail(res, e); }
       },
     });
 

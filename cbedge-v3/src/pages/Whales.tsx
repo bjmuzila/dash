@@ -1,8 +1,8 @@
 import { Fragment, useMemo, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
-import { SegGroup } from '@/design/primitives/Controls'
+import { Chip, SegGroup } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
-import { fmtPremium, fmtTime } from '@/data/flowMath'
+import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { ContractProbe } from '@/board/topFlow/ContractProbe'
 import { biasOf, biasTitle } from '@/board/topFlow/TopFlowCard'
 import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
@@ -59,6 +59,12 @@ interface WhalesResponse {
   rows: WhaleRow[]
   rowCap: number
   whaleFloor: number
+  sides?: 'directional' | 'all'
+  maxDte?: number | null
+  /** What the readable filter is holding back. Zero when sides === 'all'.
+   *  Optional so a cached SPA talking to a server that predates it degrades to
+   *  "no note" rather than throwing on a missing key. */
+  unreadable?: { n: number; premium: number }
   /** Vol/OI are live-only and are not archived — null on every row here. */
   liveStats?: boolean
   error?: string | null
@@ -72,6 +78,16 @@ const PRESETS = [
   { key: 'all', label: 'ALL', days: 3650 },
 ] as const
 type PresetKey = (typeof PRESETS)[number]['key']
+
+/** null = no cap. 0 = same-day expiries only. Mirrors the live Top Flow card's
+ *  stops on purpose — the same filter should offer the same choices on both. */
+const DTE_STOPS: Array<{ label: string; value: number | null; title: string }> = [
+  { label: 'ANY', value: null, title: 'No expiry limit' },
+  { label: '0DTE', value: 0, title: 'Same-day expiries only' },
+  { label: '≤7', value: 7, title: 'Expiring this week' },
+  { label: '≤30', value: 30, title: 'Expiring within a month' },
+  { label: '≤90', value: 90, title: 'Expiring within a quarter' },
+]
 
 const FLOORS = [
   { label: '≥$1M', value: 1_000_000 },
@@ -101,9 +117,9 @@ const fmtDayHeader = (iso: string) => {
 function Tile({ k, v, sub, ink }: { k: string; v: string; sub?: string; ink?: string }) {
   return (
     <div className="rounded-md border border-line bg-surface px-3 py-2.5">
-      <div className="text-3xs font-bold uppercase tracking-[0.11em] text-faint">{k}</div>
+      <div className="text-2xs font-bold uppercase tracking-[0.11em] text-faint">{k}</div>
       <div className={['tabular mt-1.5 text-xl font-semibold', ink ?? 'text-fg'].join(' ')}>{v}</div>
-      {sub && <div className="mt-0.5 text-3xs text-faint">{sub}</div>}
+      {sub && <div className="mt-0.5 text-2xs text-faint">{sub}</div>}
     </div>
   )
 }
@@ -112,8 +128,8 @@ function Card({ title, note, children }: { title: string; note?: string; childre
   return (
     <div className="flex min-h-0 flex-col rounded-md border border-line bg-surface">
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <h2 className="text-3xs font-bold uppercase tracking-[0.11em] text-faint">{title}</h2>
-        {note && <span className="ml-auto text-3xs text-faint">{note}</span>}
+        <h2 className="text-2xs font-bold uppercase tracking-[0.11em] text-faint">{title}</h2>
+        {note && <span className="ml-auto text-2xs text-faint">{note}</span>}
       </div>
       {children}
     </div>
@@ -139,6 +155,11 @@ export default function Whales() {
   const [type, setType] = useState<'' | 'C' | 'P'>('')
   const [action, setAction] = useState<'' | 'BUY' | 'SELL'>('')
   const [moneyness, setMoneyness] = useState<'all' | 'otm'>('all')
+  const [maxDte, setMaxDte] = useState<number | null>(null)
+  // Unreadable prints — mid fills and the ones that were never classified — are
+  // OFF by default, matching the live Top Flow card. Filtered on the SERVER,
+  // before the row limit, so 300 rows means 300 readable prints.
+  const [showUnreadable, setShowUnreadable] = useState(false)
   const [sort, setSort] = useState<'time' | 'premium'>('time')
   // Clicking a bar in the session chart narrows the table to that day WITHOUT
   // touching the range — the tiles and the leaderboards stay on the range you
@@ -156,8 +177,11 @@ export default function Whales() {
     if (type) sp.set('type', type)
     if (action) sp.set('action', action)
     if (moneyness === 'otm') sp.set('moneyness', 'otm')
+    if (showUnreadable) sp.set('sides', 'all')
+    // 0 is a real value here (same-day only), so this is an explicit null test.
+    if (maxDte !== null) sp.set('max_dte', String(maxDte))
     return `/api/lse/whales?${sp.toString()}`
-  }, [from, to, floor, sort, ticker, type, action, moneyness])
+  }, [from, to, floor, sort, ticker, type, action, moneyness, showUnreadable, maxDte])
 
   const q = useQuery<WhalesResponse>(url, { staleMs: 30_000, pollMs: 60_000 })
   const d = q.data
@@ -202,7 +226,7 @@ export default function Whales() {
     const lines = [head.join(',')]
     for (const r of rows) {
       lines.push([
-        r.sessionDate, fmtTime(r.ts), r.underlying ?? '', r.strike ?? '', r.type ?? '', r.expiry ?? '',
+        r.sessionDate, fmtTime(r.ts), r.underlying ?? '', fmtStrike(r.strike), r.type ?? '', r.expiry ?? '',
         r.dte ?? '', r.side ?? '', r.action ?? '', biasOf(r) ?? '', r.size ?? '', r.price ?? '', r.premium,
       ].join(','))
     }
@@ -222,15 +246,29 @@ export default function Whales() {
           type="button"
           onClick={exportCsv}
           disabled={!rows.length}
-          className="rounded-sm border border-line px-2.5 py-1 text-2xs font-semibold text-muted transition-colors hover:text-fg disabled:opacity-40"
+          className="rounded-sm border border-line px-2.5 py-1 text-xs font-semibold text-muted transition-colors hover:text-fg disabled:opacity-40"
         >
           EXPORT CSV
         </button>
       }
     >
-      <div className="-mt-1 text-xs text-faint">
+      <div className="-mt-1 text-sm text-faint">
         Every option print of {money(d?.whaleFloor ?? 1_000_000)}+ premium, kept permanently. Whole market.
         {s ? ` · ${num(s.n)} prints across ${num(s.sessions)} sessions · ${money(s.total)} total premium` : ''}
+        {maxDte !== null ? (
+          <span className="text-faint">{maxDte === 0 ? ' · 0DTE only' : ` · ≤${maxDte} DTE`}</span>
+        ) : null}
+        {/* An archive that is quietly showing you less than it holds has to say
+            so. Only when something is actually hidden — a permanent parenthetical
+            about a filter that is removing nothing is noise. */}
+        {d && !showUnreadable && (d.unreadable?.n ?? 0) > 0 ? (
+          <span
+            className="text-faint"
+            title="These prints never got a readable side and never will — a side cannot be recovered after the fact. They are excluded from every total on this page. Turn on SHOW UNREADABLE to include them."
+          >
+            {' '}· {num(d.unreadable?.n)} unreadable hidden ({money(d.unreadable?.premium)})
+          </span>
+        ) : null}
       </div>
 
       {/* ── filters ───────────────────────────────────────────────────────── */}
@@ -245,7 +283,7 @@ export default function Whales() {
           value={ticker}
           onChange={(e) => setTicker(e.target.value)}
           placeholder="ticker"
-          className="tabular w-24 rounded-sm border border-line bg-bg px-2 py-1 text-2xs uppercase text-fg outline-none placeholder:text-faint focus:border-accent"
+          className="tabular w-24 rounded-sm border border-line bg-bg px-2 py-0.5 text-xs uppercase text-fg outline-none placeholder:text-faint focus:border-accent"
         />
         <SegGroup<string>
           title="Minimum premium"
@@ -258,6 +296,18 @@ export default function Whales() {
           options={[{ label: 'ALL', value: 'all' }, { label: 'OTM', value: 'otm' }]}
           value={moneyness}
           onChange={setMoneyness}
+        />
+        {/* DTE AT PRINT TIME, not days from now — the archive is historical, so
+            "0DTE" means it was a same-day expiry when it printed, which is the
+            thing about the trade. Prints with no readable DTE are dropped by
+            this filter rather than let through; a row that cannot answer the
+            question does not belong in a filtered list. Values go over the wire
+            as strings because SegGroup is keyed on strings. */}
+        <SegGroup<string>
+          title="Days to expiry AT PRINT TIME"
+          options={DTE_STOPS.map((d) => ({ label: d.label, value: String(d.value), title: d.title }))}
+          value={String(maxDte)}
+          onChange={(v) => setMaxDte(v === 'null' ? null : Number(v))}
         />
         <SegGroup<string>
           title="Calls, puts or both"
@@ -277,17 +327,26 @@ export default function Whales() {
           value={sort}
           onChange={setSort}
         />
+        {/* In the filter row rather than behind a cog: this is the one control
+            that changes what the tiles MEAN, and a switch that changes the
+            meaning of the numbers above it does not belong two clicks deep. */}
+        <Chip
+          label="SHOW UNREADABLE"
+          on={showUnreadable}
+          onClick={() => setShowUnreadable((v) => !v)}
+          title="Include prints whose side could not be read — mid fills, and ones that were never classified against a quote. Off by default: a print you cannot attribute to a buyer or a seller has no direction, so it cannot be in the bullish or bearish totals"
+        />
         {day && (
           <button
             type="button"
             onClick={() => setDay(null)}
-            className="rounded-sm border border-accent bg-accent/10 px-2 py-0.5 text-2xs font-semibold text-accent"
+            className="rounded-sm border border-accent bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent"
             title="Showing one session — click to go back to the whole range"
           >
             {day} ✕
           </button>
         )}
-        <span className="ml-auto text-3xs text-faint">
+        <span className="ml-auto text-2xs text-faint">
           {q.loading && !d ? 'loading…' : d ? `${d.range.from} → ${d.range.to}` : ''}
         </span>
       </div>
@@ -296,7 +355,7 @@ export default function Whales() {
           did not exist, the fetch failed, and the archive rendered as an empty
           archive with nothing to say. A failure has to look like a failure. */}
       {(d?.error || q.error) && (
-        <div className="rounded-md border border-warn/40 bg-warn/5 px-3 py-2 text-xs text-warn">
+        <div className="rounded-md border border-warn/40 bg-warn/5 px-3 py-2 text-sm text-warn">
           {d?.error ?? `Could not load the whale archive — ${q.error?.message ?? 'the request failed'}.`}
         </div>
       )}
@@ -310,7 +369,7 @@ export default function Whales() {
           k="Biggest print"
           v={money(d?.biggest?.premium)}
           ink="text-warn"
-          sub={d?.biggest ? `${d.biggest.underlying} ${d.biggest.strike}${d.biggest.type} · ${d.biggest.sessionDate}` : undefined}
+          sub={d?.biggest ? `${d.biggest.underlying} ${fmtStrike(d.biggest.strike)}${d.biggest.type} · ${d.biggest.sessionDate}` : undefined}
         />
         <Tile
           k="Call / put split"
@@ -322,43 +381,6 @@ export default function Whales() {
       <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-w-0 flex-col gap-2">
 
-          {/* ── premium by session ────────────────────────────────────────── */}
-          <Card title="Whale premium by session" note="click a bar to filter the table to that day">
-            <div className="px-3 pb-2 pt-3">
-              <div className="flex h-[104px] items-end gap-[5px]">
-                {(d?.sessions ?? []).map((x) => {
-                  const h = (v: number) => Math.max(1, (Number(v) / sessionMax) * 100)
-                  return (
-                    <button
-                      key={x.d}
-                      type="button"
-                      onClick={() => setDay((cur) => (cur === x.d ? null : x.d))}
-                      title={`${x.d} · ${num(x.n)} prints · ${money(x.total)}`}
-                      className={[
-                        'flex flex-1 flex-col justify-end gap-px rounded-sm',
-                        day === x.d ? 'outline outline-1 outline-offset-2 outline-accent' : '',
-                      ].join(' ')}
-                    >
-                      <div className="rounded-t-sm bg-up" style={{ height: `${h(x.bull)}%` }} />
-                      <div className="rounded-b-sm bg-down opacity-85" style={{ height: `${h(x.bear)}%` }} />
-                    </button>
-                  )
-                })}
-                {!d?.sessions.length && <div className="w-full text-xs text-faint">No sessions in range.</div>}
-              </div>
-              <div className="mt-1.5 flex gap-[5px]">
-                {(d?.sessions ?? []).map((x) => (
-                  <div key={x.d} className="flex-1 text-center text-3xs text-faint">{x.d.slice(5)}</div>
-                ))}
-              </div>
-              <div className="flex gap-3 pt-2 text-3xs text-faint">
-                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-up align-[-1px]" />Bullish</span>
-                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-down align-[-1px]" />Bearish</span>
-                <span className="ml-auto">Mid and unclassified prints are in the total and in neither bucket</span>
-              </div>
-            </div>
-          </Card>
-
           {/* ── prints ───────────────────────────────────────────────────── */}
           <Card
             title="Prints"
@@ -366,27 +388,27 @@ export default function Whales() {
           >
             <div className="flex min-h-0">
               <div className="max-h-[480px] min-w-0 flex-1 overflow-auto">
-                <table className="w-full border-collapse text-2xs">
+                <table className="w-full border-collapse text-xs">
                   <thead className="sticky top-0 z-[1] bg-surface">
-                    <tr className="text-3xs uppercase tracking-[0.09em] text-faint">
-                      <th className="px-2 py-1.5 text-left font-bold">Time</th>
-                      <th className="px-2 py-1.5 text-left font-bold">Ticker</th>
-                      <th className="px-2 py-1.5 text-left font-bold">Contract</th>
-                      <th className="px-2 py-1.5 text-left font-bold">C/P</th>
-                      <th className="px-2 py-1.5 text-left font-bold">Side</th>
+                    <tr className="text-2xs uppercase tracking-[0.09em] text-faint">
+                      <th className="px-2 py-2 text-left font-bold">Time</th>
+                      <th className="px-2 py-2 text-left font-bold">Ticker</th>
+                      <th className="px-2 py-2 text-left font-bold">Contract</th>
+                      <th className="px-2 py-2 text-left font-bold">C/P</th>
+                      <th className="px-2 py-2 text-left font-bold">Side</th>
                       <th
-                        className="px-2 py-1.5 text-left font-bold"
+                        className="px-2 py-2 text-left font-bold"
                         title="What the print says about the UNDERLYING, not the contract. Buying calls or selling puts is bullish; selling calls or buying puts is bearish"
                       >Bias</th>
-                      <th className="px-2 py-1.5 text-right font-bold">DTE</th>
-                      <th className="px-2 py-1.5 text-right font-bold">Size</th>
-                      <th className="px-2 py-1.5 text-right font-bold">Price</th>
-                      <th className="px-2 py-1.5 text-right font-bold">Premium</th>
+                      <th className="px-2 py-2 text-right font-bold">DTE</th>
+                      <th className="px-2 py-2 text-right font-bold">Size</th>
+                      <th className="px-2 py-2 text-right font-bold">Price</th>
+                      <th className="px-2 py-2 text-right font-bold">Premium</th>
                       <th
-                        className="px-2 py-1.5 text-right font-bold"
+                        className="px-2 py-2 text-right font-bold"
                         title="Volume and OI mean 'what is this contract doing now'. There is no now for an archived print, so they are not stored — see the live Top Flow card for a print from today"
                       >Vol</th>
-                      <th className="px-2 py-1.5 text-right font-bold">OI</th>
+                      <th className="px-2 py-2 text-right font-bold">OI</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -410,7 +432,7 @@ export default function Whales() {
                         <Fragment key={r.id}>
                           {newDay && (
                             <tr>
-                              <td colSpan={12} className="border-t border-line bg-surface2 px-2 py-1 text-3xs font-bold uppercase tracking-[0.1em] text-muted">
+                              <td colSpan={12} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
                                 {fmtDayHeader(r.sessionDate)}
                                 {agg ? ` · ${num(agg.n)} prints · ${money(agg.total)}` : ''}
                               </td>
@@ -424,18 +446,18 @@ export default function Whales() {
                               r.id === selectedId ? 'bg-raised' : '',
                             ].join(' ')}
                           >
-                            <td className="tabular whitespace-nowrap px-2 py-1 text-faint">{fmtTime(r.ts)}</td>
-                            <td className="px-2 py-1 font-semibold text-fg">{r.underlying ?? '—'}</td>
-                            <td className="tabular whitespace-nowrap px-2 py-1 text-muted">
-                              <span className="text-fg">{r.strike ?? '—'}</span>{' '}
+                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-faint">{fmtTime(r.ts)}</td>
+                            <td className="px-2 py-1.5 font-semibold text-fg">{r.underlying ?? '—'}</td>
+                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-muted">
+                              <span className="text-fg">{fmtStrike(r.strike)}</span>{' '}
                               <span className="text-faint">{fmtExpiry(r.expiry)}</span>
                             </td>
-                            <td className={['px-2 py-1 font-semibold', r.type === 'P' ? 'text-down' : 'text-up'].join(' ')}>{r.type ?? '?'}</td>
-                            <td className={['tabular whitespace-nowrap px-2 py-1 font-semibold', ink].join(' ')}>
+                            <td className={['px-2 py-1.5 font-semibold', r.type === 'P' ? 'text-down' : 'text-up'].join(' ')}>{r.type ?? '?'}</td>
+                            <td className={['tabular whitespace-nowrap px-2 py-1.5 font-semibold', ink].join(' ')}>
                               {r.side === 'above_ask' ? '> ASK' : r.side === 'below_bid' ? '< BID' : r.side ? r.side.toUpperCase() : '—'}
                             </td>
                             <td
-                              className={['whitespace-nowrap px-2 py-1 font-semibold', biasInk].join(' ')}
+                              className={['whitespace-nowrap px-2 py-1.5 font-semibold', biasInk].join(' ')}
                               title={
                                 bias
                                   ? biasTitle(r, bias)
@@ -457,14 +479,14 @@ export default function Whales() {
                                 </>
                               ) : r.side === 'mid' ? 'n/a' : '—'}
                             </td>
-                            <td className="tabular px-2 py-1 text-right text-muted">{r.dte ?? '—'}</td>
-                            <td className="tabular px-2 py-1 text-right text-muted">{num(r.size)}</td>
-                            <td className="tabular px-2 py-1 text-right text-muted">{r.price?.toFixed(2) ?? '—'}</td>
-                            <td className={['tabular px-2 py-1 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
+                            <td className="tabular px-2 py-1.5 text-right text-muted">{r.dte ?? '—'}</td>
+                            <td className="tabular px-2 py-1.5 text-right text-muted">{num(r.size)}</td>
+                            <td className="tabular px-2 py-1.5 text-right text-muted">{r.price?.toFixed(2) ?? '—'}</td>
+                            <td className={['tabular px-2 py-1.5 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
                               {money(r.premium)}
                             </td>
-                            <td className="tabular px-2 py-1 text-right text-muted">{num(r.vol)}</td>
-                            <td className="tabular px-2 py-1 text-right text-muted">{num(r.oi)}</td>
+                            <td className="tabular px-2 py-1.5 text-right text-muted">{num(r.vol)}</td>
+                            <td className="tabular px-2 py-1.5 text-right text-muted">{num(r.oi)}</td>
                           </tr>
                         </Fragment>
                       )
@@ -472,7 +494,7 @@ export default function Whales() {
                   </tbody>
                 </table>
                 {!rows.length && (
-                  <div className="px-2 py-4 text-xs text-faint">
+                  <div className="px-2 py-4 text-sm text-faint">
                     {q.loading ? 'Loading…' : 'No whale prints match these filters in this range.'}
                   </div>
                 )}
@@ -483,6 +505,43 @@ export default function Whales() {
                   <ContractProbe key={selected.id} row={selected} onClose={() => setSelectedId(null)} />
                 </div>
               )}
+            </div>
+          </Card>
+
+          {/* ── premium by session ────────────────────────────────────────── */}
+          <Card title="Whale premium by session" note="click a bar to filter the table to that day">
+            <div className="px-3 pb-2 pt-3">
+              <div className="flex h-[104px] items-end gap-[5px]">
+                {(d?.sessions ?? []).map((x) => {
+                  const h = (v: number) => Math.max(1, (Number(v) / sessionMax) * 100)
+                  return (
+                    <button
+                      key={x.d}
+                      type="button"
+                      onClick={() => setDay((cur) => (cur === x.d ? null : x.d))}
+                      title={`${x.d} · ${num(x.n)} prints · ${money(x.total)}`}
+                      className={[
+                        'flex flex-1 flex-col justify-end gap-px rounded-sm',
+                        day === x.d ? 'outline outline-1 outline-offset-2 outline-accent' : '',
+                      ].join(' ')}
+                    >
+                      <div className="rounded-t-sm bg-up" style={{ height: `${h(x.bull)}%` }} />
+                      <div className="rounded-b-sm bg-down opacity-85" style={{ height: `${h(x.bear)}%` }} />
+                    </button>
+                  )
+                })}
+                {!d?.sessions.length && <div className="w-full text-sm text-faint">No sessions in range.</div>}
+              </div>
+              <div className="mt-1.5 flex gap-[5px]">
+                {(d?.sessions ?? []).map((x) => (
+                  <div key={x.d} className="flex-1 text-center text-2xs text-faint">{x.d.slice(5)}</div>
+                ))}
+              </div>
+              <div className="flex gap-3 pt-2 text-2xs text-faint">
+                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-up align-[-1px]" />Bullish</span>
+                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-down align-[-1px]" />Bearish</span>
+                <span className="ml-auto">Mid and unclassified prints are in the total and in neither bucket</span>
+              </div>
             </div>
           </Card>
         </div>
@@ -499,12 +558,12 @@ export default function Whales() {
                   className="grid w-full grid-cols-[56px_1fr_74px] items-center gap-2 px-3 py-1.5 text-left hover:bg-raised"
                   title={`${num(t.n)} prints · ${money(t.total)}`}
                 >
-                  <span className="text-xs font-semibold text-fg">{t.ticker}</span>
+                  <span className="text-sm font-semibold text-fg">{t.ticker}</span>
                   <SplitBar bull={Number(t.bull)} bear={Number(t.bear)} max={tickerMax} />
-                  <span className="tabular text-right text-2xs text-muted">{money(t.total)}</span>
+                  <span className="tabular text-right text-xs text-muted">{money(t.total)}</span>
                 </button>
               ))}
-              {!d?.tickers.length && <div className="px-3 py-2 text-xs text-faint">Nothing in range.</div>}
+              {!d?.tickers.length && <div className="px-3 py-2 text-sm text-faint">Nothing in range.</div>}
             </div>
           </Card>
 
@@ -512,11 +571,11 @@ export default function Whales() {
             <div className="py-1">
               {buckets.map((b) => (
                 <div key={b.bucket} className="grid grid-cols-[56px_1fr_74px] items-center gap-2 px-3 py-1.5">
-                  <span className="text-2xs text-muted">{b.bucket}</span>
+                  <span className="text-xs text-muted">{b.bucket}</span>
                   <div className="h-[7px] overflow-hidden rounded-sm bg-fg/10">
                     <i className="block h-full bg-accent" style={{ width: `${(Number(b.total) / bucketMax) * 100}%` }} />
                   </div>
-                  <span className="tabular text-right text-2xs text-muted">{money(b.total)}</span>
+                  <span className="tabular text-right text-xs text-muted">{money(b.total)}</span>
                 </div>
               ))}
             </div>
@@ -526,20 +585,23 @@ export default function Whales() {
             <div className="py-1">
               {(d?.repeats ?? []).map((r) => (
                 <div key={r.osi} className="grid grid-cols-[1fr_38px_74px] items-center gap-2 px-3 py-1.5">
-                  <span className="truncate text-2xs text-fg">
-                    {r.ticker} {r.strike}{r.type} <span className="text-faint">{fmtExpiry(r.expiry)}</span>
+                  <span className="truncate text-xs text-fg">
+                    {/* SQL hands this back as text (MAX(payload->>'strike')), so it
+                        carries the raw float's digits — back through Number() to
+                        round it like every other strike on the page. */}
+                    {r.ticker} {fmtStrike(Number(r.strike))}{r.type} <span className="text-faint">{fmtExpiry(r.expiry)}</span>
                   </span>
-                  <span className="text-2xs text-faint">×{r.n}</span>
+                  <span className="text-xs text-faint">×{r.n}</span>
                   <span
                     title={`${num(r.n)} whale prints · ${money(r.bull)} bullish vs ${money(r.bear)} bearish`}
-                    className={['tabular text-right text-2xs font-semibold', Number(r.bull) >= Number(r.bear) ? 'text-up' : 'text-down'].join(' ')}
+                    className={['tabular text-right text-xs font-semibold', Number(r.bull) >= Number(r.bear) ? 'text-up' : 'text-down'].join(' ')}
                   >
                     {money(r.total)}
                   </span>
                 </div>
               ))}
               {!d?.repeats.length && (
-                <div className="px-3 py-2 text-xs text-faint">
+                <div className="px-3 py-2 text-sm text-faint">
                   No contract was hit three times in this range.
                 </div>
               )}
