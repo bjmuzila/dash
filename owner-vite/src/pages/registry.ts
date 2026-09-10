@@ -23,6 +23,7 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   BzilaAlerts: lazy(() => import("./BzilaAlerts")),
   Bot: lazy(() => import("./Bot")),
   Database: lazy(() => import("./Database")),
+  DbMap: lazy(() => import("./DbMap")),
   EstimatedMove: lazy(() => import("./EstimatedMove")),
   Changelog: lazy(() => import("./Changelog")),
   SocialMedia: lazy(() => import("./SocialMedia")),

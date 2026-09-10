@@ -1,5 +1,106 @@
 # Changelog
 
+## 2026-09-10 (e) - REMOVED: ICT Results / Fail Rate / Walls from owner Results
+
+The owner Results board (`owner-vite/src/pages/Results.tsx`, owner.cbedge.net
+-> `/owner/dev/results`) is down to two tabs: **Confidence** and **Contracts**.
+Default tab is now Confidence.
+
+Gone from the page:
+
+- **ICT Results** - the whole default view: `ShareCard` / `ShareStat` (the
+  shareable Today / 7d / All-Time PNG card and its html2canvas capture),
+  `StatCard`, `WinRateBar`, `SetupLogModal`, `aggregateOverall`, `ictColor`,
+  `Metric`, `KIND_LABEL`/`kindLabel`, `RANGES`, the `SummaryRow`/`SetupRow`
+  types, and both `/api/ict-setups` polls (the 60s summary poll and the
+  three-window overall poll).
+- **Fail Rate** - `FailsView`, which had been a stub since the port (it needed
+  `useEsCandles` + `failLevels/computeStats`, never brought into owner-vite).
+- **Walls** - the entire second half of the file: `WallsView`, `WallAlertFeed`,
+  `WallWatchCard`, `ReachLadder`, `RankedLevels`, `WallCaptureRail`,
+  `WallTimeline`, `SnapLogButton`/`CopyLogButton`/`buildLogText`, `WallTile`,
+  `WallDelta`, every `Wall*` type and the reaction/bucket lookup tables.
+
+Also dropped as a result: the `useRef` import, `homeInputStyle`,
+`useRefreshButton`, `todayETStr` and `etDate`. `wrColor`, `etClock`, `rgba`,
+`CARD` and the theme consts stay - Confidence and Contracts use them.
+2793 -> 1016 lines. `tsc --noEmit --strict --noUnusedLocals` clean.
+
+`lib/nav.ts` and `pages/registry.ts` needed nothing - neither ever linked a tab.
+
+### Recorders stopped
+
+Confirmed with Brandon before touching the proxy file. In
+`server-v2/server-with-proxy.js`, four startup calls are commented out (the
+`require`s at 157/160-161 and every route handler stay, so the read APIs keep
+serving what is already in the tables - they just stop growing):
+
+| Call | Was | Now |
+|------|-----|-----|
+| `startWallsRecorder()` | 09:29 + every 15m to 16:00, change-only rows into `walls_log` + classified touches into `wall_events` | off |
+| `startWallsReach()` | nightly 16:45 ET replay into `wall_reach`, re-snapshot `wall_calibration` | off |
+| `startWallsWatch()` | 5m RTH proximity pass into `wall_alerts` | off |
+| `startIctSetupTracker(PORT)` | 5m RTH detect + grade into `ict_setups` | off |
+
+`/proxy/walls`, `/proxy/walls-reach`, `/proxy/walls-run`, `/proxy/walls-reach-run`
+and `/api/ict-setups` all still respond - historical only.
+
+**Side effect to know about:** `ict-setup-tracker` also fed the customer `/ict`
+page recap. That recap is now frozen at today's rows; re-enable the one line if
+that page is supposed to keep recording.
+
+Fail Rate had no recorder to stop. `ref-levels-recorder.js` is PDH/PDL for the
+Analytics Levels card, unrelated, left running.
+
+## 2026-09-10 (d) - GUARD: /owner/db-map, and a check for "built on the wrong owner site"
+
+New owner page: **Postgres** (System group) at `/owner/db-map` on
+owner.cbedge.net - size, row counts, declared retention vs. what each table
+actually holds, largest indexes with their scan counts.
+
+- `owner-vite/src/pages/DbMap.tsx` (new) - built on OWNER_THEME + the TYPE
+  scale + `ownerRgba` + `statTileStyle`, chrome from `../components/PageCard`.
+  Zero raw colour literals.
+- `owner-vite/src/pages/registry.ts` - `DbMap` lazy entry.
+- `owner-vite/src/lib/nav.ts` - "Postgres" in the System group, under Database.
+- `server-v2/api-router.js` - `GET /api/owner/db-map`, `auth: 'owner'`. Four
+  catalog reads; nothing scans a table, safe on every page load. nginx already
+  proxies /api to dashboard:3002, so it serves both owner surfaces.
+- `server-v2/state/retention-cleanup.js` - exports `RETENTION`, and writes a
+  `db_map_snapshot` row per table nightly after the prune (min(date) on a text
+  date column is a seq scan - 43s on option_strike_gex_history alone - so it
+  cannot run in a request).
+
+I FIRST BUILT THIS ON THE WRONG SURFACE. It went to `app/owner/db-map/page.tsx`
+with a link in `components/shared/OwnerSidebar.tsx` - the NEXT owner surface,
+which serves cbedge.net/owner/*. owner.cbedge.net is the `owner-vite` SPA, a
+different app with a different theme and a different nav. The page would have
+worked at a URL nobody visits while owner.cbedge.net 404'd. Both wrong-surface
+edits are reverted; the Next copy must be deleted (`app/owner/db-map/`).
+
+Brandon: "this isn't the first time it's happened." So:
+
+- `owner-vite/scripts/check-owner-pages.mjs` (new), wired as owner-vite's
+  `prebuild`, so `docker compose build owners` fails on it. Four checks:
+    1. `app/owner/<slug>/page.tsx` for a slug outside the allowlist
+       -> WRONG OWNER SURFACE, with the three-file fix spelled out.
+       Allowlist is exactly `budget` (the one legitimate legacy duplicate).
+    2. a nav `key` with no `registry.ts` entry -> the route renders NotFound.
+    3. a registry key in no nav entry -> unreachable chunk shipped.
+    4. a registry import pointing at a file that does not exist.
+  All four verified against a fixture tree, including reproducing the exact
+  mistake above and watching the guard reject it.
+- `--where <url>` resolver, for use BEFORE writing a page:
+      node owner-vite/scripts/check-owner-pages.mjs --where /owner/db-map
+  prints the file that serves that URL on each surface.
+- `AGENTS.md` - new "TWO OWNER SURFACES" section with the mapping table, the
+  three-edit procedure, and the theme note (OWNER_THEME.text/.textSecondary/
+  .textMuted/.muted are ALL #FFFFFF - there is no grey; secondary text is
+  OWNER_THEME.green, and faking grey with opacity is off-theme).
+
+NOT RUN: no typecheck or build for any of this. `.\push.ps1 -LocalBuild` gates
+on `npm run build` before committing, which is the check these files need.
+
 ## 2026-09-10 (c) - FIX: budget page loaded empty - stale _lib-db.cjs bundle
 
 `owner.cbedge.net/owner/budget` rendered with every figure at zero. NOT data

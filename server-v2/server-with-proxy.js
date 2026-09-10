@@ -4715,18 +4715,23 @@ async function main() {
     // no extra Theta load — and writes change-only rows into walls_log plus
     // classified touch events into wall_events. Feeds /proxy/walls + the owner
     // Results → Walls tab.
-    startWallsRecorder();
+    // DISABLED 2026-09-10 — Walls tab removed from the owner Results page.
+    // walls_log / wall_events stop growing; /proxy/walls still serves history.
+    // startWallsRecorder();
     // Reach Rank: the distance model layered on top of Walls. Nightly at 16:45
     // ET it replays the session into wall_reach (how far each level sat in ATR
     // units, and whether price got there) and re-snapshots wall_calibration
     // as_of TOMORROW — so tomorrow's live ranking scores every level against a
     // curve fitted only on sessions it has never seen. Feeds /proxy/walls-reach
     // and decorates /proxy/walls.
-    startWallsReach();
+    // DISABLED 2026-09-10 — see startWallsRecorder above. Nightly reach replay +
+    // calibration off; /proxy/walls-reach still serves what's already in wall_reach.
+    // startWallsReach();
     // Proximity alerts: every 5m during RTH, anything that just came inside
     // 0.25x ATR of a level WHILE CLOSING is written to wall_alerts and shows up
     // in the Walls tab's alert feed. No email, no push — on-page only.
-    startWallsWatch();
+    // DISABLED 2026-09-10 — see startWallsRecorder above. No new wall_alerts rows.
+    // startWallsWatch();
     // Forward walls: the next unexpired contract, swept pre-open and post-close
     // into its own table so the 0DTE stack's one-expiry-per-session invariant
     // is never violated.
@@ -4768,7 +4773,10 @@ async function main() {
     // In-process ICT setup recorder: every 5m during RTH detects every live ICT
     // setup (same analyzeICT the /ict page renders), records new ones, and grades
     // pending ones by follow-through → /api/ict-setups.
-    require('./ict-setup-tracker').startIctSetupTracker(PORT);
+    // DISABLED 2026-09-10 — ICT Results tab removed from the owner Results page.
+    // No new ict_setups rows and no grading pass; /api/ict-setups still serves
+    // history. NOTE: this also freezes the /ict page recap.
+    // require('./ict-setup-tracker').startIctSetupTracker(PORT);
     // EOD IB results: daily at 16:30 ET, computes the finished session's Initial
     // Balance + 14-rule scoreboard (ES+NQ) from the persisted 5m candles →
     // ib_daily_results, read by the IB Stats tab's Daily Results table.

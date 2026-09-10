@@ -21,7 +21,14 @@
  */
 
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
-import { captureToDataUrl } from "@/lib/snapshot";
+
+// NOTE: lib/snapshot (html2canvas) is imported DYNAMICALLY inside
+// renderAndCapture(), not at module scope. Everything above the "Off-screen
+// render + capture" divider — buildSnapshotHTML() and its helpers — is pure
+// string building with no DOM, and is now imported on the SERVER too by
+// app/api/econ-snapshot-html/route.ts so the scheduled Discord post renders the
+// exact same template as the button. A static html2canvas import would drag a
+// browser-only module into that Node route. Keep this import lazy.
 
 // Single source of truth for the snapshot palette — dashboard theme, no ad-hoc hex.
 const HT = {
@@ -731,6 +738,7 @@ async function renderAndCapture(html: string): Promise<string> {
     // viewport SHOULD match it. The background used to be a hardcoded #08111f
     // that didn't match the document's own --bg (HOME_THEME.bg), which tinted
     // every transparent gap in the render.
+    const { captureToDataUrl } = await import("@/lib/snapshot");
     return await captureToDataUrl(root, {
       scale: 1.5,
       windowWidth: 1280,

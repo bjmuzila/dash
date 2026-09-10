@@ -71,6 +71,57 @@ curl -s 'http://127.0.0.1:3002/api/budget?month=2026-09' | head -c 300
 
 A restore over intact data is how this actually gets lost.
 
+## TWO OWNER SURFACES — `owner.cbedge.net` is `owner-vite/`, NOT `app/owner/`
+
+**This is the #2 recurring mistake here, after the v2/v3 one above.** Both
+surfaces are live, both are owner-gated, and both answer `/owner/*`. A page
+written for the wrong one is perfectly correct in the file and simply never
+appears where you're looking.
+
+| | serves | pages live in | routed by |
+|---|---|---|---|
+| **owner.cbedge.net** ← **the owner site** | the `owners` container (`owner-vite/Dockerfile` → nginx, `/api` proxied to `dashboard:3002`) | `owner-vite/src/pages/*.tsx` | `owner-vite/src/lib/nav.ts` (label/href/glyph/**key**) **＋** `owner-vite/src/pages/registry.ts` (**key** → `lazy()`) |
+| cbedge.net/owner/* | the `dashboard` container (Next) | `app/owner/<slug>/page.tsx` | file-system routing, gated by `app/owner/layout.tsx` + `middleware.ts` |
+
+**`app/owner/` has exactly ONE page: `budget`** — a legacy duplicate of
+owner-vite's `Budget.tsx`. That is the whole allowlist. Any other
+`app/owner/<slug>/page.tsx` is the wrong-surface mistake by definition.
+
+### Before writing an owner page, ask the tool
+
+```bash
+node owner-vite/scripts/check-owner-pages.mjs --where /owner/db-map
+```
+
+It prints the file that serves that URL on each surface. Cheaper than finding
+out after a deploy.
+
+### Adding an owner page — THREE edits, all in `owner-vite/`
+
+1. `owner-vite/src/pages/<Name>.tsx` — import theme from `../lib/theme`
+   (`OWNER_THEME`, `TYPE`, `ownerRgba`, `statTileStyle`) and chrome from
+   `../components/PageCard` (`PageShell`, `Card`). **Not**
+   `@/components/shared/homeTheme` — that is the Next app's theme and does not
+   resolve here.
+2. `owner-vite/src/pages/registry.ts` — `<Key>: lazy(() => import("./<Name>")),`
+3. `owner-vite/src/lib/nav.ts` — `{ label, href, glyph, key: "<Key>" }` in the
+   right group.
+
+Miss #2 and the route renders `NotFound`. Miss #3 and the chunk ships with
+nothing linking to it. `owner-vite/scripts/check-owner-pages.mjs` runs as
+owner-vite's `prebuild` and fails the build on any of the four failure modes
+(wrong surface, nav-without-page, page-without-nav, registry pointing at a
+missing file), the same way `app-vite/scripts/check-routes.mjs` guards the
+customer dashboard.
+
+### Colour, on this surface
+
+`OWNER_THEME.text`, `.textSecondary`, `.textMuted` and `.muted` are **all
+`#FFFFFF`** — there is no grey in this theme. Secondary text is
+`OWNER_THEME.green` (`#8ECAE6`), which is what `Card`'s own subtitle uses; the
+recessive step below that is `OWNER_THEME.cyan`. Do **not** fake grey by fading
+white with `opacity` — the token name `muted` invites exactly that mistake.
+
 ## DEFAULT TARGET: v3 (`cbedge-v3/`)
 
 **Assume every dashboard request means v3 unless it says otherwise.** The v3 SPA
