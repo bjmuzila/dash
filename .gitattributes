@@ -1,0 +1,62 @@
+# Line endings.
+#
+# WHAT THIS FIXES
+#   push.ps1 was printing one of these per touched file, every push:
+#
+#     warning: in the working copy of 'server-v2/econ-calendar-discord.js',
+#     LF will be replaced by CRLF the next time Git touches it
+#
+#   That is `core.autocrlf=true` on the Windows laptop. Git stores LF in the
+#   repo, then rewrites it to CRLF on checkout, and warns every time it is about
+#   to. Nothing was wrong — it is pure noise, and it has nothing to do with
+#   owner-vite, v3, or any build.
+#
+# WHY .gitattributes RATHER THAN A CONFIG FLIP
+#   .gitattributes OVERRIDES core.autocrlf and travels with the repo, so the
+#   laptop, the VPS and every Docker build agree without anyone running a
+#   `git config` on a new machine. Everything here is built in Linux containers,
+#   so LF in the working copy is also what the images actually get — a file can
+#   no longer round-trip through a CRLF checkout and come back as a whole-file
+#   diff with zero real changes.
+#
+# ONE-TIME, after this lands (safe — most files are already LF in the index):
+#   git add --renormalize .
+#   git commit -m "chore: normalize line endings to LF"
+
+* text=auto eol=lf
+
+# Windows-native scripts — these want CRLF in the working copy.
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Binary — never converted, never diffed.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.webp          binary
+*.avif          binary
+*.mp4           binary
+*.mov           binary
+*.pdf           binary
+*.jar           binary
+*.zip           binary
+*.gz            binary
+*.tgz           binary
+*.tar           binary
+*.7z            binary
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+*.otf           binary
+*.eot           binary
+*.db            binary
+*.sqlite        binary
+*.sqlite3       binary
+*.bundle        binary
+*.traineddata   binary
+
+# Generated — keep them out of diffs and out of merge conflicts.
+package-lock.json   linguist-generated -diff
