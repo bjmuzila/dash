@@ -621,6 +621,70 @@ async function prevBoards(p, session) {
   return { date: etDateStr(new Date(rows[0].date)), boards: rows[0].boards || {} };
 }
 
+/**
+ * REACH RANK, sealed alongside the call.
+ *
+ * The scorecard answers "is this level worth anything" and the distance term
+ * inside it answers "is it close enough to matter" — but neither answers HOW
+ * OFTEN a level that far away actually gets touched. That number already
+ * exists: walls-reach.js calibrates reach rate per (symbol, ATR bucket),
+ * walk-forward, with a same-bucket control arm. It just never reached this
+ * board, because attachRank() decorates the getWalls() payload and the grades
+ * seal is a different shape.
+ *
+ * So the seal reads the same calibration directly. A fade call on a level that
+ * gets touched 30% of the time is a different proposition from the same call
+ * on a level touched 70% of the time, and until now the board published both
+ * as "fade the first test" with nothing to separate them.
+ *
+ * Best-effort by construction: no calibration snapshot, no ATR, or a
+ * walls-reach that fails to load all return null and the seal proceeds. This
+ * is a decoration on the call, never a precondition for making one.
+ */
+async function reachContext(p, session, symbols) {
+  try {
+    const WR = require('./walls-reach');
+    if (!(await WR.ensureSchema())) return null;
+    const [cal, atr] = await Promise.all([
+      WR.loadCalibration(p, session),
+      WR.loadAtrAsOf(p, session, symbols),
+    ]);
+    // Calibration is snapshotted `as_of` TOMORROW by the 16:45 job, so a 09:26
+    // seal always finds one — unless the job has never run.
+    if (!cal) return null;
+    return { WR, cal, atr, as_of: cal.as_of };
+  } catch (e) {
+    console.warn('[daily-grades] reach rank unavailable:', e.message);
+    return null;
+  }
+}
+
+/**
+ * One level's reach read: how far it sits in ATR units, which bucket that puts
+ * it in, and that bucket's out-of-sample touch rate for this symbol.
+ *
+ * `scope` says whether the rate is the symbol's own or the global fallback, and
+ * `thin` says the sample is too small to lean on — both are surfaced rather
+ * than hidden, because a global rate wearing a symbol's name is exactly the
+ * kind of number that gets trusted more than it deserves.
+ */
+function reachFor(ctx, sym, spot, level) {
+  if (!ctx || level == null || !(spot > 0)) return null;
+  const atr = ctx.atr.get(sym)?.atr ?? null;
+  if (!(atr > 0)) return null;
+  const distAtr = Math.abs(level - spot) / atr;
+  const bucket = ctx.WR.bucketFor(distAtr);
+  const sc = ctx.WR.scoreFor(ctx.cal, sym, bucket);
+  return {
+    dist_atr: Number(distAtr.toFixed(4)),
+    bucket,
+    rate: sc ? Number((sc.rate * 100).toFixed(1)) : null,
+    scope: sc?.scope ?? null,
+    n_days: sc?.n_days ?? 0,
+    thin: sc?.thin ?? true,
+  };
+}
+
 /** Live spots for the roster, best-effort. Falls back to the scanner spot. */
 async function liveSpots(symbols) {
   try {
@@ -669,10 +733,12 @@ async function buildSeal(date, { force = false } = {}) {
 
   const symbols = [...new Set([...ladders.keys(), ...levels.keys()])].sort();
   const spots = await liveSpots(symbols);
+  const reachCtx = await reachContext(p, session, symbols);
 
   const boards = {};
   let withLevels = 0;
   let withScorecard = 0;
+  let withReach = 0;
   const regimeCount = { positive: 0, negative: 0, transition: 0, unknown: 0 };
   for (const sym of symbols) {
     const lad = ladders.get(sym);
@@ -715,6 +781,29 @@ async function buildSeal(date, { force = false } = {}) {
       console.warn(`[daily-grades] scorecard ${sym}:`, e.message);
     }
 
+    // ── reach rank ───────────────────────────────────────────────────────────
+    // Frozen with everything else: the calibration snapshot is `as_of` today
+    // and built only from sessions strictly before it, so the rate sealed here
+    // is the one that was knowable at 09:26 and stays answerable afterwards.
+    // `call` is the read for the wall the published call is actually about —
+    // the single number that says whether that call had a plausible trade in it.
+    let reach = null;
+    if (reachCtx) {
+      const capReach = reachFor(reachCtx, sym, spot, cap);
+      const floorReach = reachFor(reachCtx, sym, spot, floor);
+      const side = scorecard?.call_side ?? null;
+      const a = reachCtx.atr.get(sym) ?? null;
+      reach = {
+        as_of: reachCtx.as_of,
+        atr: a?.atr ?? null,
+        atr_date: a?.atr_date ?? null,
+        cap: capReach,
+        floor: floorReach,
+        call: side === 'cap' ? capReach : side === 'floor' ? floorReach : null,
+      };
+      if (reach.call?.rate != null) withReach++;
+    }
+
     boards[sym] = {
       // The five the board renders.
       floor,
@@ -746,6 +835,7 @@ async function buildSeal(date, { force = false } = {}) {
       cb_gex: lv.cbGex ?? null,
       prev_session: prev.date,
       scorecard,
+      reach,
     };
   }
 
@@ -767,9 +857,13 @@ async function buildSeal(date, { force = false } = {}) {
     `[daily-grades] sealed ${session} — ${symbols.length} tickers, `
     + `${withLevels} with floor/cap from the ${ladderDate} ladder, ${withScorecard} scored `
     + `(+GEX ${regimeCount.positive} · −GEX ${regimeCount.negative} · flip ${regimeCount.transition})`
+    + (reachCtx ? `, ${withReach} with a reach rate (calibration ${reachCtx.as_of})` : ', no reach calibration')
     + (r.locked ? ' (LOCKED: session already open, levels untouched)' : ''),
   );
-  return { ...r, ladderDate, tickers: symbols.length, withLevels, withScorecard, regimes: regimeCount };
+  return {
+    ...r, ladderDate, tickers: symbols.length, withLevels, withScorecard,
+    withReach, reachAsOf: reachCtx?.as_of ?? null, regimes: regimeCount,
+  };
 }
 
 // ── the rubric (PURE — no I/O, no clock) ─────────────────────────────────────

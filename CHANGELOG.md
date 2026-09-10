@@ -1,5 +1,15 @@
 # Changelog
 
+## Thursday 9/10/2026 — Home board (v3): one green everywhere (`cbedge-v3/src/design/tokens.css`, `cbedge-v3/src/design/theme.ts`)
+
+`--color-up` moved from the mint `#35c28e` to `#22c55e`, the Net Premium call-line green, so Top Flow's BUY/ASK/call cells and "Bought" total, Flow Tape's "Calls", the GEX Chart's NET GEX / +GEX % / BULL-BEAR tiles, Multi Greek's + cells and the Gauge Rail all match the one chart that was already carrying v2's BUY_GREEN — one token, no component touched. `--color-netdrift-call` and `--color-series-2` are deliberately left alone (a pinned v2 line colour and a categorical ramp slot, not directions), `--color-down` is untouched, and theme.ts's V2-mapping comment was corrected to the new value. **NOT build-verified** — run `npx tsc --noEmit` + `npm run build` before push. Not deployed.
+
+
+## Thursday 9/10/2026 — Home board (v3): Net Vol GEX Flow card, sharing the scanner's component (`cbedge-v3/src/board/volGexFlow/VolGexFlowCard.tsx`, `cbedge-v3/src/board/catalog.tsx`, `cbedge-v3/src/pages/scanner/GexLevelsTab.tsx`)
+
+The GEX Levels tab's card 12 MOVED out of `GexLevelsTab.tsx` (~345 lines, spec B263–B266/B275–B334) into the new `board/volGexFlow/VolGexFlowCard.tsx`, and `/v3` plus `/v3/scanner?tab=gexlevels` now mount one `<VolGexFlowPanel />` — same picker, RTH/ETH switch, $/% toggle, six tiles, 30s buckets off `/proxy/gex-vol-flow` and both transcribed v2 bugs, so the two surfaces cannot drift. The new module keeps local copies of `usePoll`/`PanelRefresh` (importing the scanner tab would drag its eleven other charts and layout store into the board chunk) and exports `VOL_FLOW_ERR` back to the tab; catalog gains a `lazy()` `vol-gex-flow` entry at 24×56, and the tab lost its now-unused `lightweight-charts` and `ChartFrame` imports plus 44 others. Not on the default board — add from "+ Add card". **NOT build-verified** — run `npx tsc --noEmit` + `npm run build` before push. Not deployed.
+
+
 ## Thursday 9/10/2026 — Billing: the 2-day free trial is retired (`app/api/stripe/checkout/route.ts`, `components/landing/LandingClient.tsx`, `components/landing/PublicNav.tsx`, `components/landing/LiveLevelPanel.tsx`, `app/explore/[slug]/page.tsx`, `app/explore/seasonality/page.tsx`)
 
 `subscription_data.trial_period_days` is never sent any more — the `decideTrialEligibility()` call, the owner-ban bookkeeping/notice, the trial-IP recording and the `clientIp()` helper are all out of the checkout route, and `trial_decision` is now the fixed string `trials-retired`; every landing, nav and /explore CTA sells the $50/mo membership instead of a trial (`?trial=1` dropped from all /pricing links, and seasonality's stale $45 corrected to $50). `lib/trialGuard.ts` (still called from the Stripe webhook), `lib/trialEligibility.ts`, `lib/trialBanNotice.ts`, the trial tables and the win-back path are all deliberately left in place, and `trialing` stays in `PAID_STATUSES` so anyone mid-trial keeps access until it converts. **NOT build-verified** — run `npx tsc --noEmit` + `npm run build` before push. Not deployed.

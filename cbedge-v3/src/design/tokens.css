@@ -69,9 +69,27 @@
   --color-faint: #ffffff;
 
   /* ── Semantic ─────────────────────────────────────────────────────────
-     Directional colour for a trading UI. Deliberately not red/green yet —
-     pick a pair that survives a colourblind check before you commit.       */
-  --color-up: #35c28e;
+     Directional colour for a trading UI.
+
+     THE POSITIVE IS SETTLED (Brandon, 2026-09-10): #22c55e, the same green the
+     Net Premium card's call line is drawn in. The board used to carry two
+     greens — this token's mint #35c28e on every BUY, every "Calls", the GEX
+     Chart's stat tiles and the gauge rail, and --color-netdrift-call's #22c55e
+     on the one chart carried over from v2 — and side by side on one board they
+     read as two different meanings of "up" rather than one. They are now the
+     same value.
+
+     They stay SEPARATE TOKENS. --color-netdrift-call is pinned to v2's line
+     colour and must not follow this one if the UI's positive ever moves again;
+     the same reasoning keeps --color-candle-up its own token. Matching values
+     is agreement today, not a merge.
+
+     --color-series-2 keeps the old mint: it is a slot in a categorical ramp,
+     not a direction, and a series that happened to be green is not "up".
+
+     The pair still separates on hue AND lightness, so it survives a
+     colourblind check. Move the red with it or not at all.                  */
+  --color-up: #22c55e;
   --color-down: #e0645f;
   /* The directional pair the traders dashboard and the sector wheel read.
      Separate names from --color-up/--color-down on purpose: those are the UI's

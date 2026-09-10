@@ -145,7 +145,7 @@ export const CAL = {
  *   T.cyan   → #5b8cff  where v2 is #219EBC (a teal)
  *   T.orange → #e0a44a  where v2 is #FB8501
  *   T.red    → #e0645f  where v2 is #EF4444
- *   T.green  → #35c28e  where v2 is #8ECAE6 — a LIGHT BLUE, not a green
+ *   T.green  → #22c55e  where v2 is #8ECAE6 — a LIGHT BLUE, not a green
  *
  * …and `T.border` / `T.panelBg` are opaque slate where v2 is a white wash and a
  * 45%-translucent plate. Use `V2.*` and the `alpha()` recipes below instead.

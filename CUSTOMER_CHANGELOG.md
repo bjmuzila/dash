@@ -4,6 +4,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Thursday 9/10/2026
 
+* **Home board (v3):** new **Net Vol GEX Flow (Today)** card — the same intraday volume-gamma chart from the scanner, addable from "+ Add card" — https://cbedge.net/v3
+
+* **Home board (v3):** every green now matches — buys, calls and positive GEX read the same shade across all cards — https://cbedge.net/v3
+
 * **Pricing:** the free trial has been retired — joining now starts your $50/month membership right away, cancel anytime. The free live level panel stays free — https://cbedge.net/pricing
 
 * **IB Stats (v3):** the Bullish / Bearish / Rotation dials are now a sensible size instead of filling the whole page — https://cbedge.net/v3/scanner

@@ -31,9 +31,16 @@ const BARE_ROUTES = ["/", "/sign-in", "/sign-up", "/explore", "/pricing", "/term
 // still does is the v2 wing — its account menu points at this page, and those
 // pages wear V3LegacyToolbar, which is exactly what this line gives it.
 //
+// /whats-new is the same story: the customer changelog is reached from the
+// account menu on both wings, and for a SIGNED-IN customer every dashboard page
+// around it now wears v3's bar. Landing on the old v2 toolbar to read the
+// changelog reads as a different product. (Signed-OUT visitors never get here —
+// the isPublicWhatsNew branch below sends them down the bare/PublicNav path,
+// which is still the right chrome for a guest.)
+//
 // The page itself is unchanged; only the bar above it is. Prefix-matched, so
 // /feedback/anything follows.
-const V3_CHROME_ROUTES = ["/feedback"];
+const V3_CHROME_ROUTES = ["/feedback", "/whats-new"];
 
 // Turn a pathname into a stable key + readable label for Page Activity, so every
 // route auto-reports without each page wiring the hook itself.
@@ -65,8 +72,8 @@ function VisitTracker() {
  * Which top bar this shell wears.
  *
  *   "app"        GlobalToolbar — the full v2 toolbar. Every Next route that
- *                renders through app/layout.tsx: the owner hub, /guide, /docs,
- *                /whats-new. Unchanged, and the default.
+ *                renders through app/layout.tsx: the owner hub, /guide, /docs.
+ *                Unchanged, and the default.
  *
  *   "v2-legacy"  V3LegacyToolbar — v3's palette, v3's nav, a Legacy menu and a
  *                ← Back to v3 button. Two ways in: app-vite/src/App.tsx passes
@@ -75,8 +82,8 @@ function VisitTracker() {
  *                there would be a strip of nav items that redirect out from
  *                under the click), and V3_CHROME_ROUTES above selects it by
  *                pathname for Next pages that hang off the v3 dashboard
- *                (/feedback). The docks and providers below stay mounted either
- *                way; only the bar changes.
+ *                (/feedback, /whats-new). The docks and providers below stay
+ *                mounted either way; only the bar changes.
  */
 export type ShellChrome = "app" | "v2-legacy";
 

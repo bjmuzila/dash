@@ -1,5 +1,97 @@
 # Changelog
 
+## 2026-09-10 (e) - DAILY GRADES: the sealed call now carries a reach rate
+
+A `fade_first_test` call is an if-touched order, not a trade. The board had no
+way to say how likely the touch was, so a cap at 94 quality and a cap price
+reaches one day in three published identically. NDX on 09-09 is the case: both
+walls in the sweet distance band, cap quality 94 HELD, and the day's entire
+range finished inside them - the level was never tested, and the grader scored
+it `call_untested` (12/25) exactly as it should.
+
+That number already existed. `walls-reach.js` calibrates reach rate per
+(symbol, ATR bucket), walk-forward with a same-bucket control arm, and it only
+ever reached `/proxy/walls` via `attachRank()`. The grades seal is a different
+shape, so it never saw it. This joins them.
+
+`server-v2/walls-reach.js`:
+
+- New `loadAtrAsOf(p, date, symbols)`. `loadAtr` pins `date = $1`, which is
+  right for the 16:45 job that writes that row and EMPTY for a 09:26 caller -
+  today's ATR row does not exist yet at the seal, so a strict lookup would have
+  ranked every board blank. Falls back to the newest row at or before the date
+  and returns `atr_date` so the consumer can see which session it got. No
+  lookahead either way: the ATR window is built from strictly prior sessions.
+- `loadCalibration`, `scoreFor`, `loadAtrAsOf` added to `module.exports`. Export
+  list only; no logic touched.
+
+`server-v2/daily-grades-recorder.js`:
+
+- New `reachContext()` / `reachFor()`. At seal time the recorder reads the same
+  calibration snapshot the Walls tab ranks on and attaches `reach` per board:
+  `{ as_of, atr, atr_date, cap, floor, call }`, each level carrying `dist_atr`,
+  `bucket`, `rate`, `scope`, `n_days`, `thin`. `call` is the read for the wall
+  the published call is actually about.
+- Best-effort by construction: no calibration, no ATR, or a failed require all
+  yield `reach: null` and the seal proceeds. Calibration is snapshotted `as_of`
+  TOMORROW by the nightly job, so a 09:26 seal always finds one.
+- Seal log gains `N with a reach rate (calibration YYYY-MM-DD)`; the return adds
+  `withReach` / `reachAsOf`.
+
+PROXY BEHAVIOR: `GET /proxy/daily-grades` boards gain one nullable `reach`
+object. Purely additive - no existing field changes shape or value, and a
+consumer that ignores it is unaffected. No proxy file edited.
+
+`owner-vite/src/lib/dailyGrades.ts`: `DgReachBucket`, `DG_REACH_LABELS`,
+`DgReachLevel`, `DgReach`; `reach` on `DgBoard` (so `DgRow` inherits it);
+`summarize()` gains `withReach`, `reachable` (called rows inside 0.60 ATR) and
+`reachRate`. Header block records the contract.
+
+`owner-vite/src/pages/DailyGrades.tsx`: `ReachCell` and a Reach column right of
+Call, deliberately NOT styled like `QualityCell` - quality is a judgement about
+the level, reach is a base rate about the distance, and twin bars would read as
+two versions of one number. Sort key `reach` (on the called wall's rate), a
+"Reachable calls" filter, two tiles (`reachable calls`, `mean touch rate`), and
+two legend entries. `scope: "global"` renders dimmed + `univ`, `thin` renders
+`thin` - an honest weak number beats a blank and beats a confident one.
+
+CAVEAT: until `RETENTION_SCANNER_SNAPSHOTS_DAYS` is raised past its default 10,
+`wall_reach` has too little history for per-symbol rates and nearly every row
+will read `univ`/`thin` - global bucket rates wearing a symbol's name. The
+column is honest about that; it is not yet per-symbol meaningful.
+
+## 2026-09-10 (d) - V3 THEME: one green. `--color-up` is now the Net Premium green
+
+The home board was carrying two greens and they sat next to each other. Net
+Premium's call line is `--color-netdrift-call` #22c55e (v2's BUY_GREEN, carried
+over verbatim). Everything else positive on the board - Top Flow's BUY / ASK /
+call cells and its "Bought" total, Flow Tape's "Calls", the GEX Chart's NET GEX,
++GEX % and BULL/BEAR tiles, Multi Greek's + cells, the Gauge Rail - reads
+`--color-up`, which was the mint #35c28e. Two greens on one screen read as two
+different meanings of "up".
+
+`cbedge-v3/src/design/tokens.css`:
+
+- `--color-up: #35c28e` -> `#22c55e`. One token, so every `text-up`, `T.green`
+  and `'--color-up'` call site follows with no component edited. The comment
+  above it (which still said the pair was provisional, "not red/green yet") now
+  records the decision.
+- `--color-netdrift-call` is UNCHANGED and stays a separate token. It is pinned
+  to v2's line colour and must not follow `--color-up` if the UI's positive ever
+  moves again - same reasoning that keeps `--color-candle-up` its own token.
+  Equal values today is agreement, not a merge.
+- `--color-series-2` keeps the old mint #35c28e. It is a slot in a categorical
+  chart ramp, not a direction; a series that happens to be green is not "up".
+- `--color-down` #e0645f is untouched - only the green was asked for. The pair
+  still separates on hue and lightness.
+
+`cbedge-v3/src/design/theme.ts`:
+
+- The V2-mapping warning block's `T.green -> #35c28e` line updated to #22c55e.
+  Comment only; `T.green` is still `var(--color-up)`.
+
+No component, page or card file changed.
+
 ## 2026-09-10 (c) - V3 HOME BOARD: Net Vol GEX Flow is a card, and it is the SAME component the scanner mounts
 
 The home board (`/v3`) gained a "Net Vol GEX Flow (Today)" card - the GEX Levels

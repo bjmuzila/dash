@@ -102,6 +102,8 @@ import {
   type DgGammaRegime,
   type DgCall,
   type DgWallScore,
+  type DgReachLevel,
+  DG_REACH_LABELS,
 } from "../lib/dailyGrades";
 
 const MONO = "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace";
@@ -120,10 +122,17 @@ const INSET: React.CSSProperties = {
 
 type FilterId =
   | "all" | "above" | "below" | "near" | "breach" | "ungraded"
-  | "pos" | "neg" | "chop" | "fade" | "break" | "chasing";
+  | "pos" | "neg" | "chop" | "fade" | "break" | "chasing" | "reachable";
 type SortKey =
   | "ticker" | "spot" | "floor" | "dFloor" | "apex" | "cap" | "dCap" | "flip" | "dFlip"
-  | "setup" | "capQ" | "floorQ";
+  | "setup" | "capQ" | "floorQ" | "reach";
+
+/**
+ * Top of walls-reach.js's "short walk" bucket. Past 0.60 ATR a level needs most
+ * of a session's range in ONE direction to get tested, which is the difference
+ * between a call you can work and a call you can only watch expire untouched.
+ */
+const REACHABLE_ATR = 0.6;
 
 /**
  * Two rows of filters, and the split is the point. The first row is where price
@@ -143,6 +152,11 @@ const FILTERS: { id: FilterId; label: string; group: "price" | "read" }[] = [
   { id: "fade", label: "Fade calls", group: "read" },
   { id: "break", label: "Break calls", group: "read" },
   { id: "chasing", label: "Wall chasing", group: "read" },
+  // The one filter that answers "what can I actually trade today": a published
+  // call whose wall is inside the reachable buckets. Everything else on the
+  // read row tells you what the map SAYS; this one tells you whether the tape
+  // is likely to go and ask.
+  { id: "reachable", label: "Reachable calls", group: "read" },
 ];
 
 const FLAG_ACCENT: Record<DgFlagKind, string> = {
@@ -299,6 +313,8 @@ const LEVELS_LEGEND: [string, string][] = [
   ["Flip", "Gamma flip. Spot above it is the calmer regime; below it, the chop."],
   ["Δ columns", `How far spot has to travel to reach that level. Positive = the level is above spot; bold = inside ${NEAR_PCT}%.`],
   ["Floor → Cap", "Where spot sits between the two, in price. White tick = spot, gold line = flip. Blank when floor sits above cap — nothing to draw."],
+  ["Reach", "How often a level this far away actually got touched before the close, on past sessions. Distance is in ATR units (the \"0.42a\") so it means the same thing on NDX and on a $9 name. This is NOT wall quality — a 94-quality cap that price reaches one day in three is a good level and a bad trade, and the two columns are side by side so you can see when they disagree. \"univ\" = the symbol lacks its own history and the rate is the universe-wide bucket; \"thin\" = small sample. Calibration is walk-forward: it only ever saw sessions before the one it is describing."],
+  ["Reachable calls", "A published call whose wall is inside 0.60 ATR — the buckets that actually get tested. The count to read before \"fade calls\", which counts calls whether or not the tape was ever likely to go ask."],
 ];
 
 // ── small pieces ─────────────────────────────────────────────────────────────
@@ -439,6 +455,63 @@ function QualityCell({ w, label }: { w: DgWallScore | null | undefined; label: s
           }}
         >
           {st.label}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * REACH — how often a level this far away actually gets touched.
+ *
+ * Deliberately NOT styled like QualityCell. Quality is a judgement about the
+ * level; this is a base rate about the distance, and showing them as twin bars
+ * would invite reading them as two versions of the same number. A wall can be
+ * 94-quality and reached one day in three, and that pair is the whole point of
+ * putting this column next to the call.
+ *
+ * `scope: "global"` means this symbol had too little history of its own, so the
+ * number is the universe-wide bucket rate. It is dimmed and marked rather than
+ * hidden — an honest weak number beats a blank, and beats a confident one.
+ */
+function ReachCell({ r, label }: { r: DgReachLevel | null | undefined; label: string }) {
+  if (!r || r.dist_atr == null) {
+    return <span style={{ color: T.text, fontFamily: MONO, fontSize: 13, opacity: 0.6 }}>—</span>;
+  }
+  const global = r.scope === "global";
+  const accent = r.rate == null ? T.text
+    : r.rate >= 60 ? T.green
+      : r.rate >= 40 ? T.cyan
+        : r.rate >= 25 ? T.gold : T.orange;
+  const bucket = r.bucket ? DG_REACH_LABELS[r.bucket] : "—";
+  const tip = [
+    `${label}: ${r.dist_atr.toFixed(2)} ATR away — "${bucket}"`,
+    r.rate == null
+      ? "No calibrated touch rate for this bucket yet."
+      : `Touched before the close on ${r.rate.toFixed(0)}% of past sessions at this distance.`,
+    r.scope === "symbol"
+      ? `From this symbol's own history (${r.n_days} sessions).`
+      : global ? "From the universe-wide bucket rate — this symbol has too little history of its own." : "",
+    r.thin ? "\nTHIN: small sample. Treat as a hint, not a probability." : "",
+    "\nWalk-forward: built only from sessions before this one, so it never saw the day it is describing.",
+  ].filter(Boolean).join("\n");
+
+  return (
+    <span title={tip} style={{ display: "inline-flex", alignItems: "baseline", gap: 7, whiteSpace: "nowrap" }}>
+      <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 800, color: accent, opacity: global ? 0.62 : 1 }}>
+        {r.rate == null ? "—" : `${r.rate.toFixed(0)}%`}
+      </span>
+      <span style={{ fontFamily: MONO, fontSize: 11, color: T.text, opacity: 0.55 }}>
+        {r.dist_atr.toFixed(2)}a
+      </span>
+      {(global || r.thin) && (
+        <span
+          style={{
+            fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.05em",
+            textTransform: "uppercase", color: T.purple, opacity: 0.8,
+          }}
+        >
+          {global ? "univ" : "thin"}
         </span>
       )}
     </span>
@@ -978,6 +1051,14 @@ export default function DailyGrades() {
       if (filter === "chasing"
         && sc?.walls?.cap?.stability !== "chasing"
         && sc?.walls?.floor?.stability !== "chasing") return false;
+      // A call, on a wall the tape can plausibly get to. Both halves matter:
+      // a close level nobody called is not a play, and a called level 2 ATR
+      // away is a call that expires untouched.
+      if (filter === "reachable") {
+        const called = sc?.call === "fade_first_test" || sc?.call === "expect_break";
+        const d = r.reach?.call?.dist_atr;
+        if (!called || d == null || !(d < REACHABLE_ATR)) return false;
+      }
       return true;
     });
     // The three scorecard sort keys are not columns on the row, so they are read
@@ -986,6 +1067,9 @@ export default function DailyGrades() {
       if (sortKey === "setup") return r.scorecard?.setup ?? null;
       if (sortKey === "capQ") return r.scorecard?.walls?.cap?.quality ?? null;
       if (sortKey === "floorQ") return r.scorecard?.walls?.floor?.quality ?? null;
+      // Sorts on the CALLED wall's touch rate — the ranking that answers "where
+      // is today's best shot", which Setup never did.
+      if (sortKey === "reach") return r.reach?.call?.rate ?? null;
       return (r as unknown as Record<string, number | null>)[sortKey] ?? null;
     };
     const dir = sortAsc ? 1 : -1;
@@ -1038,7 +1122,7 @@ export default function DailyGrades() {
     if (k === sortKey) setSortAsc((v) => !v);
     // Quality and setup are "best first" questions, so they open descending;
     // ticker opens A→Z; everything else keeps its old ascending default.
-    else { setSortKey(k); setSortAsc(k === "ticker" ? true : !["setup", "capQ", "floorQ"].includes(k)); }
+    else { setSortKey(k); setSortAsc(k === "ticker" ? true : !["setup", "capQ", "floorQ", "reach"].includes(k)); }
   };
 
   const sourceAccent = source === "live" ? T.green : source === "import" ? T.cyan : T.gold;
@@ -1229,6 +1313,19 @@ export default function DailyGrades() {
             <Tile value={stats.breaks} label="break calls" accent={T.orange} />
             <Tile value={stats.standDowns} label="stand down" accent={T.gold} />
             <Tile value={stats.chasing} label="wall chasing price" accent={T.purple} />
+            {/* The honest headline. "Fade calls: 4" reads like four plays; this
+                says how many of them sit on a wall the tape is likely to test.
+                It is usually the smaller number, and it is the useful one. */}
+            <Tile
+              value={stats.withReach ? stats.reachable : "—"}
+              label="reachable calls"
+              accent={stats.reachable > 0 ? T.green : T.text}
+            />
+            <Tile
+              value={stats.reachRate == null ? "—" : `${stats.reachRate.toFixed(0)}%`}
+              label="mean touch rate"
+              accent={T.lightBlue}
+            />
           </div>
         )}
 
@@ -1297,7 +1394,7 @@ export default function DailyGrades() {
             its height; the PAGE scrolls past it.
           */}
           <div className="wall-scroll" style={{ height: "clamp(420px, 64vh, 900px)", overflow: "auto" }}>
-            <table style={{ width: "100%", minWidth: scored > 0 ? 1560 : 1060, borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", minWidth: scored > 0 ? 1680 : 1060, borderCollapse: "collapse" }}>
               <thead>
                 <tr>
                   <th style={th("ticker", "left")} onClick={() => toggleSort("ticker")}>Ticker{caret("ticker")}</th>
@@ -1306,6 +1403,13 @@ export default function DailyGrades() {
                   {scored > 0 && <th style={th(undefined, "left")}>Regime</th>}
                   {scored > 0 && <th style={th("setup")} onClick={() => toggleSort("setup")}>Setup{caret("setup")}</th>}
                   {scored > 0 && <th style={{ ...th(undefined, "left"), minWidth: 130 }}>Call</th>}
+                  {/* Immediately right of the call, because it qualifies the
+                      call: the rate is for the wall the call is about. */}
+                  {scored > 0 && (
+                    <th style={{ ...th("reach", "left"), minWidth: 110 }} onClick={() => toggleSort("reach")}>
+                      Reach{caret("reach")}
+                    </th>
+                  )}
                   <th style={th("spot")} onClick={() => toggleSort("spot")}>Spot{caret("spot")}</th>
                   <th style={th("floor")} onClick={() => toggleSort("floor")}>Floor{caret("floor")}</th>
                   <th style={th("dFloor")} onClick={() => toggleSort("dFloor")}>Δ{caret("dFloor")}</th>
@@ -1376,6 +1480,14 @@ export default function DailyGrades() {
                         <CallPill call={r.scorecard?.call} note={r.scorecard?.note} />
                       </td>
                     )}
+                    {scored > 0 && (
+                      <td style={{ padding: "8px 10px", minWidth: 110 }}>
+                        <ReachCell
+                          r={r.reach?.call}
+                          label={r.scorecard?.call_side === "cap" ? "Cap" : r.scorecard?.call_side === "floor" ? "Floor" : "Called wall"}
+                        />
+                      </td>
+                    )}
                     {priceCell(r.spot, true)}
                     {priceCell(r.floor)}
                     {deltaCell(r.dFloor)}
@@ -1432,7 +1544,7 @@ export default function DailyGrades() {
                 ))}
                 {!visible.length && (
                   <tr>
-                    <td colSpan={scored > 0 ? 18 : 11} style={{ ...td, textAlign: "center", padding: 34 }}>
+                    <td colSpan={scored > 0 ? 19 : 11} style={{ ...td, textAlign: "center", padding: 34 }}>
                       {loading || rosterLoading ? "Loading board…" : "Nothing matches that filter."}
                     </td>
                   </tr>

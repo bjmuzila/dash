@@ -804,6 +804,32 @@ async function loadAtr(p, date, symbols) {
 }
 
 /**
+ * The newest ATR at or before `date` — the value a PREMARKET caller can
+ * actually get.
+ *
+ * `loadAtr` above pins `date = $1`. That is right for the nightly job, which
+ * writes that row itself at 16:45, and empty for anything reading before the
+ * open: at 09:26 today's row does not exist yet, so a strict lookup returns
+ * nothing and every caller silently ranks blank. Falling back to the last row
+ * on file costs nothing real — the ATR window is built from strictly prior
+ * sessions either way, so yesterday's row is the same 20-day average one bar
+ * behind and carries no lookahead. `atr_date` is returned so a consumer can
+ * see which session's value it got rather than assume.
+ */
+async function loadAtrAsOf(p, date, symbols) {
+  const { rows } = await p.query(
+    `SELECT DISTINCT ON (symbol) symbol, atr, atr_n, date::text AS atr_date
+       FROM wall_atr
+      WHERE date <= $1 AND symbol = ANY($2)
+      ORDER BY symbol, date DESC`,
+    [date, symbols],
+  );
+  return new Map(rows.map((r) => [r.symbol, {
+    atr: num(r.atr), n: r.atr_n, atr_date: r.atr_date,
+  }]));
+}
+
+/**
  * Decorate a getWalls() day payload with the live ranking.
  *
  * Adds, per ticker: `atr`, and a `levels[]` carrying distance / bucket / score
@@ -1229,6 +1255,10 @@ module.exports = {
   startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
   getWatch, runWatchAlerts, getAlerts, startWallsWatch, IN_PLAY_ATR, ALERT_ATR,
   ensureSchema, getPool,
+  // The read side, unbundled from attachRank(). daily-grades-recorder.js seals
+  // the reach read into the 09:26 board, which needs these three without the
+  // getWalls()-shaped payload attachRank() expects.
+  loadCalibration, scoreFor, loadAtrAsOf,
   // exported for tests / manual poking
   BUCKETS, BUCKET_KEYS, bucketFor, buildSessionRows, rebuildAtr, insertBatch,
   etMinutesFactory, PRIOR_DAYS, THIN_DAYS, ATR_WINDOW, SLOT_COUNT, slotLabel,

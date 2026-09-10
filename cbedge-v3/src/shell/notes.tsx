@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QUICK-JOT NOTES — the store, and the body the dock renders.
@@ -105,6 +106,27 @@ function CloseIcon({ size = 12 }: { size?: number }) {
     >
       <line x1="18" y1="6" x2="6" y2="18" />
       <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  )
+}
+
+/** Four corner arrows — "pop this clip out over the page". */
+function ExpandIcon({ size = 13 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polyline points="15 3 21 3 21 9" />
+      <polyline points="9 21 3 21 3 15" />
+      <line x1="21" y1="3" x2="14" y2="10" />
+      <line x1="3" y1="21" x2="10" y2="14" />
     </svg>
   )
 }
@@ -280,6 +302,103 @@ export function formatNoteTime(ts: number): string {
   }
 }
 
+// ─── clip pop-out ────────────────────────────────────────────────────────────
+
+/**
+ * Full-viewport viewer for a clip image.
+ *
+ * NOT the Card `ExpandStageHost` (design/primitives/Expand.tsx): that stage is
+ * an `absolute inset-0` layer inside the PAGE COLUMN, and the notes dock is not
+ * in the page column — a clip expanded onto it would be clipped by the dock's
+ * own 320px `overflow-hidden` box, which is the whole problem. A clip is also a
+ * read-and-dismiss thing, not a card you keep working in, so covering the rail
+ * and toolbar for the few seconds it is up costs nothing.
+ *
+ * Portalled to `document.body` for the same reason LadderModal is: every
+ * ancestor here (the dock, the note card) clips or stacks.
+ *
+ * Escape or a click on the backdrop closes. Clicking the image toggles fit ↔
+ * actual size — a dense chart clip captured on a wide monitor is unreadable
+ * shrunk to fit a laptop screen, so 1:1 with scroll is the second gear.
+ */
+function ClipLightbox({ note, onClose }: { note: Note; onClose: () => void }) {
+  const [actual, setActual] = useState(false)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    // The page behind must not scroll under the overlay.
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose])
+
+  if (typeof document === 'undefined') return null
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={note.text || note.src || 'Clip'}
+      onClick={onClose}
+      // z above the expand stage (z-40) and the dock; matches LadderModal.
+      className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-bg/90 px-8 pb-8 pt-14"
+    >
+      {/* caption — source, text, time */}
+      {(note.src || note.text) && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute left-6 right-16 top-4 flex min-w-0 items-baseline gap-2.5"
+        >
+          {note.src && (
+            <span className="shrink-0 text-3xs font-bold uppercase tracking-[0.06em] text-accent">
+              {note.src}
+            </span>
+          )}
+          {note.text && <span className="truncate text-xs text-muted">{note.text}</span>}
+          <span className="tabular ml-auto shrink-0 whitespace-nowrap text-2xs text-faint opacity-60">
+            {formatNoteTime(note.ts)}
+          </span>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close clip"
+        className="absolute right-4 top-3 flex h-8 w-8 items-center justify-center rounded-md border border-line bg-surface2 text-fg"
+      >
+        <CloseIcon size={15} />
+      </button>
+
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={[
+          'flex max-h-full max-w-full items-center justify-center',
+          actual ? 'overflow-auto' : 'overflow-hidden',
+        ].join(' ')}
+      >
+        <img
+          src={note.img}
+          alt={note.text || 'Clip'}
+          onClick={() => setActual((a) => !a)}
+          title={actual ? 'Fit to screen' : 'Actual size'}
+          className={[
+            'block rounded-md border border-line object-contain',
+            actual ? 'max-h-none max-w-none cursor-zoom-out' : 'max-h-full max-w-full cursor-zoom-in',
+          ].join(' ')}
+        />
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 // ─── notes body (add box + list) ─────────────────────────────────────────────
 
 const INPUT =
@@ -290,8 +409,15 @@ export function NotesBody({ notes, addNote, editNote, deleteNote }: NotesApi) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
   const [hoveredId, setHoveredId] = useState<string | null>(null)
-  // Clip whose image is expanded to full panel width (thumbnails otherwise).
+  // Clip whose image is grown to its full height in the list (capped otherwise).
   const [zoomId, setZoomId] = useState<string | null>(null)
+  // Clip popped out over the page — see ClipLightbox.
+  const [lightboxId, setLightboxId] = useState<string | null>(null)
+  const lightboxNote = lightboxId ? notes.find((n) => n.id === lightboxId && n.img) : undefined
+  // Deleting the clip that is popped out must not leave a dangling overlay.
+  useEffect(() => {
+    if (lightboxId && !lightboxNote) setLightboxId(null)
+  }, [lightboxId, lightboxNote])
 
   const submitDraft = () => {
     addNote(draft)
@@ -382,19 +508,41 @@ export function NotesBody({ notes, addNote, editNote, deleteNote }: NotesApi) {
                     </div>
                   )}
 
-                  {/* clip image — thumbnail, click to expand in place */}
+                  {/* Clip image. Click grows it to full height in the list; the
+                      corner button pops it out over the page (ClipLightbox).
+                      The capped preview is 260px, not the 120px it was: at 120
+                      a GEX chart clip was a smear you could not tell from the
+                      one above it, which defeats the point of keeping it. */}
                   {n.img && (
-                    <img
-                      src={n.img}
-                      alt={n.text || 'Clip'}
-                      onClick={() => setZoomId((z) => (z === n.id ? null : n.id))}
-                      title={zoomed ? 'Shrink' : 'Expand'}
-                      style={{ maxHeight: zoomed ? 'none' : 120 }}
-                      className={[
-                        'mt-2 block w-full rounded-sm border border-line object-top',
-                        zoomed ? 'cursor-zoom-out object-contain' : 'cursor-zoom-in object-cover',
-                      ].join(' ')}
-                    />
+                    <div className="relative mt-2">
+                      <img
+                        src={n.img}
+                        alt={n.text || 'Clip'}
+                        onClick={() => setZoomId((z) => (z === n.id ? null : n.id))}
+                        title={zoomed ? 'Shrink' : 'Grow'}
+                        style={{ maxHeight: zoomed ? 'none' : 260 }}
+                        className={[
+                          'block w-full rounded-sm border border-line object-top',
+                          zoomed ? 'cursor-zoom-out object-contain' : 'cursor-zoom-in object-cover',
+                        ].join(' ')}
+                      />
+                      <button
+                        type="button"
+                        aria-label="Expand clip"
+                        title="Expand"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setLightboxId(n.id)
+                        }}
+                        className={[
+                          'absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center',
+                          'rounded-sm border border-line bg-bg/80 text-fg transition-opacity',
+                          hot ? 'opacity-100' : 'opacity-50',
+                        ].join(' ')}
+                      >
+                        <ExpandIcon size={13} />
+                      </button>
+                    </div>
                   )}
 
                   {/* edit/delete reveal on hover */}
@@ -427,6 +575,8 @@ export function NotesBody({ notes, addNote, editNote, deleteNote }: NotesApi) {
           )
         })}
       </div>
+
+      {lightboxNote && <ClipLightbox note={lightboxNote} onClose={() => setLightboxId(null)} />}
     </div>
   )
 }

@@ -30,6 +30,16 @@
 // here treats that as "not scored" rather than as zeros. The math is server-side
 // in server-v2/daily-grades-scorecard.js and that file's header is the rubric.
 //
+// AND SINCE THE REACH JOIN: every board also carries `reach` — how far the cap,
+// the floor and the CALLED wall sit in ATR units, which distance bucket that is,
+// and that bucket's out-of-sample touch rate for the symbol. It comes from
+// server-v2/walls-reach.js, the same calibration the Walls tab ranks on, read
+// at seal time so it freezes with everything else. It exists because wall
+// QUALITY and probability of being TESTED are different questions: a 94-quality
+// cap that price reaches on one day in three is not a trade, and until this
+// column the board had no way to say so. Null on any seal made before the
+// join, or when the calibration/ATR tables had nothing to offer.
+//
 // THE ROSTER IS THE WATCHLIST, NOT THE PAYLOAD. The page grades the scanner
 // watchlist — the same universe the ΔGEX Board runs over, served by
 // GET /proxy/scanner-tickers and read through lib/tickers.ts. A payload is
@@ -121,6 +131,57 @@ export type DgScorecard = {
   setup_grade: string | null;
 };
 
+/** Distance buckets, in ATR units. Mirrors BUCKETS in server-v2/walls-reach.js. */
+export type DgReachBucket =
+  | "on_price" | "short_walk" | "solid_move" | "across_map" | "off_distance";
+
+export const DG_REACH_LABELS: Record<DgReachBucket, string> = {
+  on_price: "On price",
+  short_walk: "Short walk",
+  solid_move: "Solid move",
+  across_map: "Across the map",
+  off_distance: "Off in the distance",
+};
+
+/**
+ * One level's REACH READ, sealed at 09:26 next to the call.
+ *
+ * `rate` is the out-of-sample share of sessions on which a level this far away
+ * — measured in this symbol's own ATR, not percent — actually got touched
+ * before the close. It answers the question wall quality does not: a fade call
+ * on a level touched 30% of the time and one on a level touched 70% of the time
+ * are not the same trade, and the board used to publish both identically.
+ *
+ * Read `scope` and `thin` before leaning on `rate`. "global" means this symbol
+ * had too little history of its own and the number is the universe-wide bucket
+ * rate wearing the symbol's name; `thin` says the sample is small either way.
+ */
+export type DgReachLevel = {
+  /** Distance from sealed spot in ATR units. */
+  dist_atr: number | null;
+  bucket: DgReachBucket | null;
+  /** Touch rate, 0–100. Null when no calibration covers this bucket. */
+  rate: number | null;
+  scope: "symbol" | "global" | null;
+  n_days: number;
+  thin: boolean;
+};
+
+/** The whole reach read for one board. Null on any seal made before this existed,
+ *  or on a session where the calibration/ATR tables had nothing to say. */
+export type DgReach = {
+  /** Which calibration snapshot was used — always ≤ the session date. */
+  as_of: string | null;
+  atr: number | null;
+  /** Which session's ATR row was read. Usually the prior session: at 09:26 the
+   *  current date's row has not been written yet. */
+  atr_date: string | null;
+  cap: DgReachLevel | null;
+  floor: DgReachLevel | null;
+  /** The read for the wall the published call is about — the one that matters. */
+  call: DgReachLevel | null;
+};
+
 export type DgBoard = {
   apex: number | null;
   cap: number | null;
@@ -140,6 +201,8 @@ export type DgBoard = {
   /** The seal the overnight-stability read compared against. */
   prev_session?: string | null;
   scorecard?: DgScorecard | null;
+  /** Reach rank, sealed with the call. See DgReach. */
+  reach?: DgReach | null;
 };
 
 export type DgPayload = {
@@ -212,6 +275,15 @@ export type DgSummary = {
   chasing: number;
   /** Mean seal-time setup score across the scored names. */
   setup: number | null;
+  // ── reach ─────────────────────────────────────────────────────────────────
+  /** Rows whose published call carries a reach rate at all. */
+  withReach: number;
+  /** Called rows whose wall is inside 0.60 ATR — the buckets that actually get
+   *  tested. This is the count that answers "how many plays are there today",
+   *  which the setup score never did. */
+  reachable: number;
+  /** Mean reach rate over the called rows that have one. */
+  reachRate: number | null;
 };
 
 // ── the graded half ──────────────────────────────────────────────────────────
@@ -469,6 +541,29 @@ export function summarize(rows: DgRow[]): DgSummary {
     setup: setups.length
       ? Number((setups.reduce((a, b) => a + b, 0) / setups.length).toFixed(1))
       : null,
+    withReach: rows.filter((r) => r.reach?.call?.rate != null).length,
+    // 0.60 ATR is the top of walls-reach's "short walk" bucket — beyond it a
+    // level needs most of a day's range in one direction to get tested. Counted
+    // only over rows the board actually called, since an uncalled level being
+    // close is not a play.
+    reachable: rows.filter((r) => {
+      const call = sc(r)?.call;
+      if (call !== "fade_first_test" && call !== "expect_break") return false;
+      const d = r.reach?.call?.dist_atr;
+      return typeof d === "number" && isFinite(d) && d < 0.6;
+    }).length,
+    reachRate: (() => {
+      const rates = rows
+        .filter((r) => {
+          const call = sc(r)?.call;
+          return call === "fade_first_test" || call === "expect_break";
+        })
+        .map((r) => r.reach?.call?.rate)
+        .filter((v): v is number => typeof v === "number" && isFinite(v));
+      return rates.length
+        ? Number((rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(1))
+        : null;
+    })(),
   };
 }
 
