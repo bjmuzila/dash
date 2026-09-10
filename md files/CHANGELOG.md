@@ -1,105 +1,117 @@
 # Changelog
 
-## 2026-09-10 (e) - REMOVED: ICT Results / Fail Rate / Walls from owner Results
+## 2026-09-10 (e) - Scheduled posts are edited on the owner BOT page, not in env
 
-The owner Results board (`owner-vite/src/pages/Results.tsx`, owner.cbedge.net
--> `/owner/dev/results`) is down to two tabs: **Confidence** and **Contracts**.
-Default tab is now Confidence.
+The Economic Calendar post (added in (d) below) no longer reads its schedule
+from environment variables. On/off, the time, the days, the webhook, the name
+and avatar, and the message line all live in a table and are edited at
+owner -> BOT -> Scheduled. Changes take effect within a minute, no restart.
 
-Gone from the page:
+NEW: `server-v2/scheduled-posts-store.js` - table `scheduled_posts`, one row per
+JOB. A job is something the SERVER knows how to post; the list comes from
+`JOB_DEFS` in that file, so a job can never be invented in the browser. Rows are
+seeded from defaults on first load, so a fresh box shows the full list instead of
+an empty table.
 
-- **ICT Results** - the whole default view: `ShareCard` / `ShareStat` (the
-  shareable Today / 7d / All-Time PNG card and its html2canvas capture),
-  `StatCard`, `WinRateBar`, `SetupLogModal`, `aggregateOverall`, `ictColor`,
-  `Metric`, `KIND_LABEL`/`kindLabel`, `RANGES`, the `SummaryRow`/`SetupRow`
-  types, and both `/api/ict-setups` polls (the 60s summary poll and the
-  three-window overall poll).
-- **Fail Rate** - `FailsView`, which had been a stub since the port (it needed
-  `useEsCandles` + `failLevels/computeStats`, never brought into owner-vite).
-- **Walls** - the entire second half of the file: `WallsView`, `WallAlertFeed`,
-  `WallWatchCard`, `ReachLadder`, `RankedLevels`, `WallCaptureRail`,
-  `WallTimeline`, `SnapLogButton`/`CopyLogButton`/`buildLogText`, `WallTile`,
-  `WallDelta`, every `Wall*` type and the reaction/bucket lookup tables.
+  SECRECY, same contract as bot-targets-store.js: `webhook_url` lives there and
+  ONLY there, every browser-facing read goes through `maskUrl()`, a BLANK url on
+  save means "keep what is stored", and a single "-" clears it back to env.
 
-Also dropped as a result: the `useRef` import, `homeInputStyle`,
-`useRefreshButton`, `todayETStr` and `etDate`. `wrColor`, `etClock`, `rgba`,
-`CARD` and the theme consts stay - Confidence and Contracts use them.
-2793 -> 1016 lines. `tsc --noEmit --strict --noUnusedLocals` clean.
+  FAIL-SOFT: no DATABASE_URL / dead pool / bad query -> `getJob()` returns the
+  job's defaults plus its historical env vars and reports `live:false`, so the
+  page can say an edit would not stick and the post keeps working regardless.
 
-`lib/nav.ts` and `pages/registry.ts` needed nothing - neither ever linked a tab.
+NEW: `/api/scheduled-posts` (GET/POST) and `/api/scheduled-posts/run` (POST) in
+`server-v2/api-router.js`, owner-gated. `run` is the page's "Post now" - it fires
+the REAL job at the REAL webhook, and answers with the job's own error string so
+a failure reads as a cause instead of a 500.
 
-### Recorders stopped
+NEW: `owner-vite/src/pages/BotScheduled.tsx`, mounted as a 4th tab (`Scheduled`)
+on `owner-vite/src/pages/Bot.tsx`. Manage answers "where does an alert I compose
+go"; this answers "what goes out without me". Per card: ON/OFF, time picker, day
+toggles, webhook box (masked placeholder), message with `{date}` / `{time}`,
+posts-as name + avatar, post-on-an-empty-day, last-run line, Save, Post now.
 
-Confirmed with Brandon before touching the proxy file. In
-`server-v2/server-with-proxy.js`, four startup calls are commented out (the
-`require`s at 157/160-161 and every route handler stay, so the read APIs keep
-serving what is already in the tables - they just stop growing):
+CHANGED: `server-v2/econ-calendar-discord.js` now re-reads its config from the
+store on EVERY tick. Env vars apply ONLY when the table is unreachable - a stale
+`ECON_CAL_POST_ET` on the VPS must never outrank what the page shows.
+`ECON_CAL_DISABLED=1` still hard-disables. Two other changes came with it:
 
-| Call | Was | Now |
-|------|-----|-----|
-| `startWallsRecorder()` | 09:29 + every 15m to 16:00, change-only rows into `walls_log` + classified touches into `wall_events` | off |
-| `startWallsReach()` | nightly 16:45 ET replay into `wall_reach`, re-snapshot `wall_calibration` | off |
-| `startWallsWatch()` | 5m RTH proximity pass into `wall_alerts` | off |
-| `startIctSetupTracker(PORT)` | 5m RTH detect + grade into `ict_setups` | off |
+  - Double-post guard is now `last_run_at` in the table (survives a restart) plus
+    the in-memory date (covers the table being down). The old boot heuristic -
+    "if the process starts after the slot, skip today" - is gone.
+  - GRACE WINDOW (`ECON_CAL_GRACE_MIN`, default 90) bounds how late a missed post
+    may still go out. A restart at 08:01 posts; a redeploy at 14:00 does not push
+    a "morning" calendar into the channel. Strictly better than the boot rule,
+    which dropped the 08:01 case too.
 
-`/proxy/walls`, `/proxy/walls-reach`, `/proxy/walls-run`, `/proxy/walls-reach-run`
-and `/api/ict-setups` all still respond - historical only.
+Every attempt writes `last_status` / `last_error` back to the row, so the page
+says what happened without a log dive.
 
-**Side effect to know about:** `ict-setup-tracker` also fed the customer `/ict`
-page recap. That recap is now frozen at today's rows; re-enable the one line if
-that page is supposed to keep recording.
+Adding another scheduled post is now: a `JOB_DEFS` entry + a `RUNNERS` entry in
+api-router. `mg-ladder-discord.js` has NOT been migrated - it still reads
+MG_LADDER_* env vars and is untouched.
 
-Fail Rate had no recorder to stop. `ref-levels-recorder.js` is PDH/PDL for the
-Analytics Levels card, unrelated, left running.
+## 2026-09-10 (d) - Economic Calendar snapshot auto-posts to Discord each weekday morning
 
-## 2026-09-10 (d) - GUARD: /owner/db-map, and a check for "built on the wrong owner site"
+The Economic Calendar snapshot now goes out on its own at 08:00 ET, Mon-Fri,
+into the same channel the toolbar's Discord button posts to. Same picture - the
+template was NOT copied.
 
-New owner page: **Postgres** (System group) at `/owner/db-map` on
-owner.cbedge.net - size, row counts, declared retention vs. what each table
-actually holds, largest indexes with their scan counts.
+NEW: `app/api/econ-snapshot-html/route.ts` (internal only, `x-internal-token`
+must match `INTERNAL_API_TOKEN`, otherwise 404). Server-side it fetches
+`/api/calendar`, `/api/calendar-quote`, `/proxy/earnings-week` and each ticker
+logo, inlines every image as a data URL, and calls the SAME
+`buildSnapshotHTML()` the button calls - `lib/discord/econSnapshot.ts`, one and
+only copy. Returns the finished 1280x720 document, plus `x-econ-events` /
+`x-econ-pres` / `x-econ-earn` headers carrying today's row counts.
 
-- `owner-vite/src/pages/DbMap.tsx` (new) - built on OWNER_THEME + the TYPE
-  scale + `ownerRgba` + `statTileStyle`, chrome from `../components/PageCard`.
-  Zero raw colour literals.
-- `owner-vite/src/pages/registry.ts` - `DbMap` lazy entry.
-- `owner-vite/src/lib/nav.ts` - "Postgres" in the System group, under Database.
-- `server-v2/api-router.js` - `GET /api/owner/db-map`, `auth: 'owner'`. Four
-  catalog reads; nothing scans a table, safe on every page load. nginx already
-  proxies /api to dashboard:3002, so it serves both owner surfaces.
-- `server-v2/state/retention-cleanup.js` - exports `RETENTION`, and writes a
-  `db_map_snapshot` row per table nightly after the prune (min(date) on a text
-  date column is a seq scan - 43s on option_strike_gex_history alone - so it
-  cannot run in a request).
+NEW: `server-v2/econ-calendar-discord.js`. Polls the ET wall clock every 60s;
+on a weekday at or after `ECON_CAL_POST_ET` (default 08:00), once per day, it
+pulls that HTML and rasterises it in headless Chromium.
 
-I FIRST BUILT THIS ON THE WRONG SURFACE. It went to `app/owner/db-map/page.tsx`
-with a link in `components/shared/OwnerSidebar.tsx` - the NEXT owner surface,
-which serves cbedge.net/owner/*. owner.cbedge.net is the `owner-vite` SPA, a
-different app with a different theme and a different nav. The page would have
-worked at a URL nobody visits while owner.cbedge.net 404'd. Both wrong-surface
-edits are reverted; the Next copy must be deleted (`app/owner/db-map/`).
+  IT USES html2canvas INSIDE THE BROWSER, NOT page.screenshot().
 
-Brandon: "this isn't the first time it's happened." So:
+  That is deliberate. The template is tuned to html2canvas's bugs - PILL_NUDGE_EM
+  shifts every pill's padding ~0.42em to re-centre text html2canvas draws low,
+  titles are truncated in JS because ellipsis/line-clamp aren't implemented.
+  Real Chrome has none of those bugs, so a plain screenshot applies corrections
+  to a renderer that never needed them and every pill's text rides high. Same
+  rasteriser = the picture Brandon posts by hand. Options mirror the one
+  html2canvas call in lib/snapshot.ts: scale 1.5, the document's own --bg,
+  windowWidth/Height 1280x720.
 
-- `owner-vite/scripts/check-owner-pages.mjs` (new), wired as owner-vite's
-  `prebuild`, so `docker compose build owners` fails on it. Four checks:
-    1. `app/owner/<slug>/page.tsx` for a slug outside the allowlist
-       -> WRONG OWNER SURFACE, with the three-file fix spelled out.
-       Allowlist is exactly `budget` (the one legitimate legacy duplicate).
-    2. a nav `key` with no `registry.ts` entry -> the route renders NotFound.
-    3. a registry key in no nav entry -> unreachable chunk shipped.
-    4. a registry import pointing at a file that does not exist.
-  All four verified against a fixture tree, including reproducing the exact
-  mistake above and watching the guard reject it.
-- `--where <url>` resolver, for use BEFORE writing a page:
-      node owner-vite/scripts/check-owner-pages.mjs --where /owner/db-map
-  prints the file that serves that URL on each surface.
-- `AGENTS.md` - new "TWO OWNER SURFACES" section with the mapping table, the
-  three-edit procedure, and the theme note (OWNER_THEME.text/.textSecondary/
-  .textMuted/.muted are ALL #FFFFFF - there is no grey; secondary text is
-  OWNER_THEME.green, and faking grey with opacity is off-theme).
+  `scripts/audit-ui.mjs --strict` is unaffected: it scans app / components / lib
+  / app-vite/src / hooks, not server-v2.
 
-NOT RUN: no typecheck or build for any of this. `.\push.ps1 -LocalBuild` gates
-on `npm run build` before committing, which is the check these files need.
+CHANGED: `lib/discord/econSnapshot.ts` - `captureToDataUrl` is now imported
+DYNAMICALLY inside `renderAndCapture()` instead of at module scope. Nothing else
+moved. Without this, importing `buildSnapshotHTML()` from the Node route would
+drag html2canvas (browser-only) into a server bundle. Everything above the
+"Off-screen render + capture" divider is pure string building and is now used by
+both surfaces.
+
+WIRED: `server-v2/server-with-proxy.js`, next to the mg-ladder start, after
+`server.listen()` - the only change to that file:
+
+    try { require('./econ-calendar-discord').startEconCalendarDiscord(PORT); }
+    catch (e) { console.warn('[econ-cal] start failed:', e.message); }
+
+Env:
+  ECON_CAL_DISCORD_WEBHOOK   override; default is DISCORD_WEBHOOK_URL, i.e. the
+                             button's own channel (note: the OPPOSITE default to
+                             mg-ladder-discord.js, which wants Signals)
+  ECON_CAL_POST_ET           "HH:MM" ET, default "08:00"
+  ECON_CAL_POST_EMPTY=1      post even on a day with no events (default: skip)
+  ECON_CAL_DISABLED=1        off
+  INTERNAL_API_TOKEN         required - the route 404s without it
+
+Scheduling notes: the 60s poll + "already posted today" guard is DST-proof with
+no date math, and a redeploy at 07:59 or 08:03 still posts exactly once. A
+process that BOOTS after the slot has passed marks the day done rather than
+firing a "morning" calendar at lunchtime. The day is claimed before the upload
+awaits, so a slow render can't double-post and a failure waits for tomorrow
+instead of retrying into the channel every minute.
 
 ## 2026-09-10 (c) - FIX: budget page loaded empty - stale _lib-db.cjs bundle
 

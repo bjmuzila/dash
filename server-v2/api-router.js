@@ -2373,6 +2373,78 @@ register('/api/discord-share', {
   });
 }
 
+// /api/scheduled-posts/* — the owner BOT page's "Scheduled" tab: the settings
+// behind every post this server sends on a timer (see
+// server-v2/scheduled-posts-store.js). Owner-only, and webhook URLs are MASKED
+// on every read — the page can edit a time or a message without ever holding a
+// credential, and a blank url on save means "keep what is stored".
+{
+  const schedStore = require('./scheduled-posts-store');
+
+  /** Same owner gate as the bot-alert block above. */
+  function ownerOk(ctx, verdict) {
+    const id = (verdict?.userId || '').trim();
+    return id !== '' && (ctx.ownerUserId ? id === ctx.ownerUserId : true);
+  }
+
+  /**
+   * id -> "fire this job right now". A job is only runnable from the page if it
+   * appears here; adding one is this entry plus a JOB_DEFS entry in the store.
+   * `force` skips a job's own "nothing to post today" guard, because the point
+   * of the button is to see the thing, not to be told it was skipped.
+   */
+  const RUNNERS = {
+    'econ-calendar': (port) =>
+      require('./econ-calendar-discord').collectOnce(`http://127.0.0.1:${port}`, { force: true }),
+  };
+
+  register('/api/scheduled-posts', {
+    auth: 'user', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, verdict) {
+      if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
+      try {
+        if ((req.method || 'GET').toUpperCase() === 'GET') {
+          send(res, 200, { ok: true, ...(await schedStore.loadMasked({ fresh: true })) });
+          return;
+        }
+        const body = await readJson(req, 100_000);
+        send(res, 200, { ok: true, ...(await schedStore.save(body?.job || body)) });
+      } catch (err) {
+        console.error('[scheduled-posts]', err);
+        send(res, 400, { ok: false, error: String(err?.message || err) });
+      }
+    },
+  });
+
+  // ── POST /api/scheduled-posts/run ─────────────────────────────────────────
+  // "Post now". Runs the real job against the real webhook — this is not a
+  // dry run, and the message lands in whatever channel the row points at.
+  // Answers with the job's own result so the page can show the failure text
+  // instead of a bare 500.
+  register('/api/scheduled-posts/run', {
+    auth: 'user', methods: ['POST'],
+    async handler(req, res, ctx, verdict) {
+      if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
+      try {
+        const body = await readJson(req, 10_000);
+        const id = typeof body?.id === 'string' ? body.id.trim().slice(0, 40) : '';
+        const run = RUNNERS[id];
+        if (!run) { send(res, 404, { ok: false, error: `No runnable job "${id}"` }); return; }
+
+        const result = await run(ctx.port);
+        send(res, result?.ok ? 200 : 502, {
+          ok: !!result?.ok,
+          result: result || null,
+          ...(await schedStore.loadMasked({ fresh: true })),
+        });
+      } catch (err) {
+        console.error('[scheduled-posts/run]', err);
+        send(res, 500, { ok: false, error: String(err?.message || err) });
+      }
+    },
+  });
+}
+
 // /api/tastytrade — TT OAuth → dxfeed streamer creds (module-cached session).
 // GET health / POST returns tokens. Subscriber. Ported verbatim from
 // app/api/tastytrade/route.ts.

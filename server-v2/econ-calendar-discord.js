@@ -3,7 +3,7 @@
  * server-v2/econ-calendar-discord.js
  *
  * Posts the Economic Calendar snapshot — today's US prints, the presidential
- * schedule and the earnings lane — to Discord once every weekday morning.
+ * schedule and the earnings lane — to Discord on a schedule.
  *
  * This is the scheduled twin of the 📅 Discord button in the Economic Calendar
  * toolbar (components/shared/EconCalendarDiscordBtn.tsx), and unlike
@@ -13,52 +13,55 @@
  * screenshot that HTML in headless Chromium and upload the PNG. Edit the layout
  * there; nothing in this file needs to know what the snapshot looks like.
  *
+ * SETTINGS LIVE IN THE OWNER PAGE, NOT IN ENV.
+ * On/off, the time, the days, the webhook, the identity and the message line
+ * all come from server-v2/scheduled-posts-store.js (job id `econ-calendar`),
+ * edited on owner → BOT → Scheduled. They are re-read on EVERY tick, so a
+ * change takes effect within a minute with no restart. The old env vars are the
+ * fallback for a box whose settings table is unreachable, and only then — see
+ * readConfig() — because otherwise an env var left over on the VPS would
+ * silently outrank what the page shows.
+ *
  * Why Chromium at all: the markup has to be rasterised somewhere, and it is
  * rasterised with html2canvas inside that browser — the same rasteriser the
  * button uses, deliberately, NOT page.screenshot(). renderPng() below explains
  * why that distinction is load-bearing. Chromium is already in the image
  * (/usr/bin/chromium, shipped for budget-email.js), so no new dependency.
  *
- * Env:
- *   ECON_CAL_DISCORD_WEBHOOK   explicit override
- *   DISCORD_WEBHOOK_URL        default target — the SAME channel the in-app
- *                              button posts to (via /api/discord-share), which
- *                              is the point: the morning post should land where
- *                              the manual ones always have. Note this is the
- *                              opposite default to mg-ladder-discord.js, which
- *                              wants the Signals channel.
- *   ECON_CAL_POST_ET           local ET time to post, "HH:MM", default "08:00"
- *   ECON_CAL_POST_EMPTY=1      post even when the day has no events at all
- *   ECON_CAL_DISABLED=1        hard-disable
+ * Env (fallback / operational only):
+ *   ECON_CAL_DISABLED=1        hard-disable, whatever the page says
+ *   ECON_CAL_DISCORD_WEBHOOK   webhook fallback, then DISCORD_WEBHOOK_URL —
+ *                              the button's own channel (note: the OPPOSITE
+ *                              default to mg-ladder-discord.js, which wants the
+ *                              Signals channel)
+ *   ECON_CAL_POST_ET           "HH:MM" — only honoured when the table is down
+ *   ECON_CAL_POST_EMPTY=1      likewise
+ *   ECON_CAL_GRACE_MIN         how late a post may still go out, default 90
  *   PUPPETEER_EXECUTABLE_PATH  /usr/bin/chromium in Docker
  *   INTERNAL_API_TOKEN         required — /api/econ-snapshot-html 404s without it
  *
  * Start from server-with-proxy.js after server.listen():
  *   require('./econ-calendar-discord').startEconCalendarDiscord(PORT);
  *
- * Scheduling is a 60s poll against the ET wall clock plus a "already posted
- * today" guard, NOT a setTimeout to the next 08:00. That is deliberate: it is
- * DST-proof without any date math, and a redeploy at 07:59 or 08:03 still
- * posts exactly once. The guard is in-memory, so a process restart after a
- * successful post would repost — hence it also records the date BEFORE the
- * upload, and a failed attempt is not retried until the next morning.
+ * Scheduling is a 60s poll against the ET wall clock, NOT a setTimeout to the
+ * next 08:00: that is DST-proof without any date math, it re-reads the settings
+ * every minute for free, and a redeploy at 07:59 or 08:03 still posts exactly
+ * once. Two guards keep it to once:
+ *   · last_run_at in the settings table — survives a restart, so a process that
+ *     comes back up at 08:04 does not repost what 08:00 already sent;
+ *   · an in-memory date, for the case where the table is unreachable.
+ * And a GRACE WINDOW (default 90 min) bounds how late a missed post may still
+ * go out: a restart at 08:01 still posts, a redeploy at 14:00 does not push a
+ * "morning" calendar into the channel.
  *
  * Never throws out of a tick.
  */
 
-const WEBHOOK = [
-  process.env.ECON_CAL_DISCORD_WEBHOOK,
-  process.env.DISCORD_WEBHOOK_URL,
-].map((v) => (v || '').trim()).find(Boolean) || '';
+const store = require('./scheduled-posts-store');
 
+const JOB_ID = 'econ-calendar';
 const CHROME_PATH = (process.env.PUPPETEER_EXECUTABLE_PATH || '').trim();
-const POST_EMPTY = process.env.ECON_CAL_POST_EMPTY === '1';
-
-// Shared identity with discord-relay.js / mg-ladder-discord.js so everything the
-// app posts renders as ONE bot in the channel.
-const SITE_URL = (process.env.SIGNALS_SITE_URL || 'https://cbedge.net').replace(/\/+$/, '');
-const DISCORD_USERNAME = 'CB Edge Signals';
-const DISCORD_AVATAR = `${SITE_URL}/cb-edge-square.png`;
+const GRACE_MIN = Math.max(1, Number(process.env.ECON_CAL_GRACE_MIN || 90));
 
 // The snapshot template is authored against a locked 1280x720 canvas, and the
 // button captures it at scale 1.5. Match both or the scheduled image is a
@@ -67,24 +70,33 @@ const CANVAS_W = 1280;
 const CANVAS_H = 720;
 const CAPTURE_SCALE = 1.5;
 
-function parseHHMM(raw, fallbackH, fallbackM) {
-  const m = String(raw || '').trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return { h: fallbackH, m: fallbackM };
-  const h = Number(m[1]);
-  const mm = Number(m[2]);
-  if (!Number.isFinite(h) || h < 0 || h > 23 || !Number.isFinite(mm) || mm < 0 || mm > 59) {
-    return { h: fallbackH, m: fallbackM };
-  }
-  return { h, m: mm };
-}
+const DEFAULT_AVATAR = `${(process.env.SIGNALS_SITE_URL || 'https://cbedge.net').replace(/\/+$/, '')}/cb-edge-square.png`;
 
-const POST_AT = parseHHMM(process.env.ECON_CAL_POST_ET, 8, 0);
+// ── Config ──────────────────────────────────────────────────────────────────
+
+/**
+ * The owner page is the source of truth. The env vars below are read ONLY when
+ * the settings table could not be reached (`live:false`) — if they applied on
+ * top of a live row, a stale VPS env var would quietly override a time the page
+ * says is set, which is the exact confusion this table was added to end.
+ */
+async function readConfig() {
+  const job = await store.getJob(JOB_ID);
+  if (!job) throw new Error(`scheduled-posts has no job "${JOB_ID}"`);
+  if (job.live) return job;
+
+  return {
+    ...job,
+    postAt: store.normalizeTime(process.env.ECON_CAL_POST_ET, job.postAt),
+    postEmpty: process.env.ECON_CAL_POST_EMPTY === '1' ? true : job.postEmpty,
+  };
+}
 
 // ── ET clock ────────────────────────────────────────────────────────────────
 
 function etParts(d = new Date()) {
-  // en-CA gives YYYY-MM-DD, and weekday/hour/minute come from the same format
-  // call so they can never straddle a minute boundary.
+  // Date, weekday, hour and minute all come from ONE format call so they can
+  // never straddle a minute boundary.
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
     year: 'numeric', month: '2-digit', day: '2-digit',
@@ -96,12 +108,15 @@ function etParts(d = new Date()) {
     date: `${parts.year}-${parts.month}-${parts.day}`,
     hour: Number(parts.hour) % 24,
     minute: Number(parts.minute),
-    weekday: parts.weekday, // Mon, Tue, ...
+    day: String(parts.weekday || '').slice(0, 3).toLowerCase(), // mon, tue, ...
   };
 }
 
-function isWeekday(wd) {
-  return wd === 'Mon' || wd === 'Tue' || wd === 'Wed' || wd === 'Thu' || wd === 'Fri';
+function etDateOf(iso) {
+  if (!iso) return '';
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(t);
 }
 
 function etClock() {
@@ -138,12 +153,7 @@ async function fetchSnapshotHtml(base) {
   if (!html || html.length < 500) throw new Error(`snapshot html too short (${html.length} bytes)`);
 
   const n = (h) => Number(res.headers.get(h) || 0) || 0;
-  return {
-    html,
-    econ: n('x-econ-events'),
-    pres: n('x-econ-pres'),
-    earn: n('x-econ-earn'),
-  };
+  return { html, econ: n('x-econ-events'), pres: n('x-econ-pres'), earn: n('x-econ-earn') };
 }
 
 // ── Render ──────────────────────────────────────────────────────────────────
@@ -237,37 +247,55 @@ async function renderPng(html) {
 
 // ── Discord ─────────────────────────────────────────────────────────────────
 
-async function postToDiscord(png, content) {
+/** {date} / {time} are the only tokens — the message is a caption, not a report. */
+function renderMessage(template) {
+  return String(template || '📅 **Economic Calendar** — {date} · {time} ET')
+    .replace(/\{date\}/g, etLongDate())
+    .replace(/\{time\}/g, etClock());
+}
+
+async function postToDiscord(cfg, png, content) {
   const form = new FormData();
   form.append('payload_json', JSON.stringify({
-    username: DISCORD_USERNAME, avatar_url: DISCORD_AVATAR, content,
+    username: cfg.username || 'CB Edge Signals',
+    avatar_url: cfg.avatarUrl || DEFAULT_AVATAR,
+    content,
   }));
   form.append('files[0]', new Blob([png], { type: 'image/png' }), 'econ-calendar.png');
 
-  const res = await fetch(WEBHOOK, { method: 'POST', body: form, signal: AbortSignal.timeout(20000) });
+  const res = await fetch(cfg.webhookUrl, { method: 'POST', body: form, signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`webhook ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
 }
 
-// ── Tick ────────────────────────────────────────────────────────────────────
+// ── Run ─────────────────────────────────────────────────────────────────────
 
+/**
+ * One attempt. `force` (the page's "Post now" button) skips the empty-day skip
+ * but NOT the missing-webhook check — there is nowhere to post without one.
+ * Always records the outcome on the job row, so the page can show what happened.
+ */
 async function collectOnce(base, opts = {}) {
-  if (!WEBHOOK) return { ok: false, error: 'no webhook' };
-
+  let cfg = null;
   try {
+    cfg = opts.config || (await readConfig());
+    if (!cfg.webhookUrl) throw new Error('no webhook configured');
+
     const { html, econ, pres, earn } = await fetchSnapshotHtml(base);
 
-    if (!econ && !pres && !earn && !POST_EMPTY && !opts.force) {
+    if (!econ && !pres && !earn && !cfg.postEmpty && !opts.force) {
       console.log('[econ-cal] nothing on the calendar today — skip');
+      await store.markRun(JOB_ID, { status: 'skipped', error: 'empty day' });
       return { ok: false, error: 'empty day' };
     }
 
     const png = await renderPng(html);
-    // Same message shape the button posts, so the channel reads as one series.
-    await postToDiscord(png, `📅 **Economic Calendar** — ${etLongDate()} · ${etClock()} ET`);
+    await postToDiscord(cfg, png, renderMessage(cfg.message));
     console.log(`[econ-cal] posted — ${econ} econ / ${pres} pres / ${earn} earnings (${Math.round(png.length / 1024)}KB)`);
+    await store.markRun(JOB_ID, { status: 'ok' });
     return { ok: true, econ, pres, earn };
   } catch (e) {
     console.log(`[econ-cal] post failed — ${e.message}`);
+    await store.markRun(JOB_ID, { status: 'error', error: e.message });
     return { ok: false, error: e.message };
   }
 }
@@ -277,50 +305,47 @@ function startEconCalendarDiscord(port) {
     console.log('[econ-cal] disabled via ECON_CAL_DISABLED=1');
     return () => {};
   }
-  if (!WEBHOOK) {
-    console.log('[econ-cal] off — no webhook (ECON_CAL_DISCORD_WEBHOOK / DISCORD_WEBHOOK_URL both unset)');
-    return () => {};
-  }
-  if (!(process.env.INTERNAL_API_TOKEN || '').trim()) {
-    console.log('[econ-cal] off — INTERNAL_API_TOKEN unset (the snapshot route would 404)');
-    return () => {};
-  }
 
   const base = `http://127.0.0.1:${port}`;
-  const hhmm = `${String(POST_AT.h).padStart(2, '0')}:${String(POST_AT.m).padStart(2, '0')}`;
-
-  // Boot-day guard: if the process starts AFTER today's slot, don't fire the
-  // moment the poll wakes up — a lunchtime redeploy should not push a "morning"
-  // calendar into the channel. Tomorrow is the next post.
-  const boot = etParts();
-  let lastPosted =
-    boot.hour > POST_AT.h || (boot.hour === POST_AT.h && boot.minute >= POST_AT.m)
-      ? boot.date
-      : '';
-
-  if (lastPosted) {
-    console.log(`[econ-cal] enabled — daily at ${hhmm} ET (weekdays) · today's slot already passed, next post tomorrow`);
-  } else {
-    console.log(`[econ-cal] enabled — daily at ${hhmm} ET (weekdays) · next post today`);
-  }
+  console.log(`[econ-cal] watcher up — settings from owner → BOT → Scheduled (job "${JOB_ID}"), checked every 60s`);
 
   let stopped = false;
-  const timer = setInterval(() => {
-    if (stopped) return;
-    const now = etParts();
-    if (now.date === lastPosted) return;
-    if (!isWeekday(now.weekday)) return;
-    if (now.hour < POST_AT.h || (now.hour === POST_AT.h && now.minute < POST_AT.m)) return;
+  let busy = false;
+  let lastPostedMem = '';
 
-    // Claim the day BEFORE awaiting, so a slow render can't let the next tick
-    // fire a second post. A failure therefore waits for tomorrow rather than
-    // retrying every minute into a channel Brandon has to read.
-    lastPosted = now.date;
-    void collectOnce(base);
+  const timer = setInterval(() => {
+    if (stopped || busy) return;
+    busy = true;
+    void (async () => {
+      try {
+        const cfg = await readConfig();
+        if (!cfg.enabled || !cfg.webhookUrl) return;
+
+        const now = etParts();
+        if (now.date === lastPostedMem) return;
+        // Survives a restart — the in-memory date above does not.
+        if (cfg.live && etDateOf(cfg.lastRunAt) === now.date && cfg.lastStatus === 'ok') return;
+        if (!cfg.days.split(',').includes(now.day)) return;
+
+        const [h, m] = cfg.postAt.split(':').map(Number);
+        const minsLate = (now.hour * 60 + now.minute) - (h * 60 + m);
+        // Not yet, or so late that this is a redeploy rather than the morning.
+        if (minsLate < 0 || minsLate > GRACE_MIN) return;
+
+        // Claim the day BEFORE awaiting the post, so a slow render cannot let
+        // the next tick fire a second one.
+        lastPostedMem = now.date;
+        await collectOnce(base, { config: cfg });
+      } catch (e) {
+        console.log(`[econ-cal] tick failed — ${e.message}`);
+      } finally {
+        busy = false;
+      }
+    })();
   }, 60000);
   if (typeof timer.unref === 'function') timer.unref();
 
   return () => { stopped = true; clearInterval(timer); };
 }
 
-module.exports = { startEconCalendarDiscord, collectOnce, fetchSnapshotHtml, renderPng };
+module.exports = { startEconCalendarDiscord, collectOnce, fetchSnapshotHtml, renderPng, readConfig, JOB_ID };

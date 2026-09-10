@@ -4,6 +4,7 @@ import { OWNER_THEME, rgba, homeInputStyle } from "../lib/theme";
 import ThemedSelect from "../components/ThemedSelect";
 import ThemedDatePicker from "../components/ThemedDatePicker";
 import BotManage from "./BotManage";
+import BotScheduled from "./BotScheduled";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * BOT — trade-alert composer. One post, fanned out to several Discord servers.
@@ -243,7 +244,7 @@ function Pill({
 
 // ═════════════════════════════════════════════════════════════════════════════
 export default function Bot() {
-  const [tab, setTab] = useState<"compose" | "feed" | "manage">("compose");
+  const [tab, setTab] = useState<"compose" | "feed" | "manage" | "scheduled">("compose");
   const [feed, setFeed] = useState<BroadcastAlert[]>([]);
 
   const [targets, setTargets] = useState<Target[]>(FALLBACK_TARGETS);
@@ -475,6 +476,7 @@ export default function Bot() {
             { id: "compose" as const, label: "＋  New Alert", count: 0 },
             { id: "feed" as const, label: "⌁  Activity Feed", count: feed.length },
             { id: "manage" as const, label: "⚙  Manage", count: 0 },
+            { id: "scheduled" as const, label: "⏱  Scheduled", count: 0 },
           ]).map((t) => {
             const active = tab === t.id;
             return (
@@ -949,6 +951,10 @@ export default function Bot() {
            the feed, and a third mode inline would bury both. Saving there can
            change what the composer may send to, so it bumps the targets fetch. */
         <BotManage onChanged={() => setTargetsNonce((n) => n + 1)} />
+      ) : tab === "scheduled" ? (
+        /* What the SERVER posts on a timer — separate from Manage, which is
+           where a composed alert goes. Its own file for the same reason. */
+        <BotScheduled />
       ) : (
         /* ── Activity feed ──────────────────────────────────────────────── */
         <Card variant="classic" padding={0}>

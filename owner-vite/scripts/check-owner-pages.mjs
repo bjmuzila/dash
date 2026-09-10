@@ -43,19 +43,37 @@
  *   The --where resolver is the one to reach for BEFORE writing a page: it
  *   prints the file that actually serves a URL on each surface.
  *
- * WIRE IT UP  (owner-vite/package.json)
- *   "prebuild": "node scripts/check-owner-pages.mjs"
- * so `docker compose build owners` fails on the wrong-surface mistake instead
- * of shipping a page nobody can reach. Mirrors app-vite/scripts/check-routes.mjs.
+ * WIRE IT UP
+ *   owner-vite/package.json  "prebuild": "node scripts/check-owner-pages.mjs"
+ *     → checks 2-4 (nav/registry integrity) on every `docker compose build owners`.
+ *   root package.json        "prebuild": "node owner-vite/scripts/check-owner-pages.mjs"
+ *     → adds check 1, because only the root build can see app/owner/.
+ *   Mirrors app-vite/scripts/check-routes.mjs.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// scripts/ lives in owner-vite/, so the repo root is two up.
-const ROOT = process.env.CHECK_ROOT ? path.resolve(process.env.CHECK_ROOT) : path.resolve(HERE, '..', '..');
-const OV = path.join(ROOT, 'owner-vite', 'src');
+
+// TWO CONTEXTS, and this script runs in both:
+//
+//   • repo root — `npm run build` at the top level, push.ps1 -LocalBuild, or a
+//     bare run. The whole tree is present, including app/owner/.
+//   • owner-vite ONLY — `docker compose build owners` uses
+//     `context: ./owner-vite`, so the image contains owner-vite's contents and
+//     nothing above it. app/owner/ does not exist there.
+//
+// So owner-vite's own files resolve relative to THIS FILE (scripts/ is inside
+// owner-vite/), never via a guessed repo root — resolving two levels up landed
+// above /app in the Docker build and failed the whole deploy on 2026-09-10.
+// The Next tree is then OPTIONAL: absent means "not in this build context",
+// which is a skip, not a failure.
+const OV_ROOT = process.env.CHECK_OWNER_VITE
+  ? path.resolve(process.env.CHECK_OWNER_VITE)
+  : path.resolve(HERE, '..');
+const OV = path.join(OV_ROOT, 'src');
+const ROOT = process.env.CHECK_ROOT ? path.resolve(process.env.CHECK_ROOT) : path.resolve(OV_ROOT, '..');
 
 const DRY = process.argv.includes('--dry');
 const whereIdx = process.argv.indexOf('--where');
@@ -77,10 +95,21 @@ const errors = [];
 const notes = [];
 const read = (p) => fs.readFileSync(p, 'utf8');
 
-// ── 1. wrong-surface pages ──────────────────────────────────────────────────
+// ── 1. wrong-surface pages (root context only) ──────────────────────────────────────────────────
 const nextOwnerDir = path.join(ROOT, 'app', 'owner');
 const nextOwnerSlugs = [];
-if (fs.existsSync(nextOwnerDir)) {
+// `app/` absent = the owner-vite-only Docker context. Skip, don't fail: this
+// check belongs to whoever can see the Next tree (the root build), and failing
+// here would block every owner deploy for a check it cannot perform.
+// Marker files that only exist at the repo root. NOT `app/` — the owners image
+// uses WORKDIR /app, so ROOT/app would exist there by pure coincidence and the
+// skip would never trigger.
+const nextTreePresent = fs.existsSync(path.join(ROOT, 'middleware.ts'))
+  || fs.existsSync(path.join(ROOT, 'app-vite'));
+if (!nextTreePresent) {
+  notes.push('app/ not in this build context — wrong-surface check skipped (runs in the root build)');
+}
+if (nextTreePresent && fs.existsSync(nextOwnerDir)) {
   const walk = (dir, prefix = '') => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
