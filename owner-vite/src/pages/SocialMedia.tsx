@@ -3,11 +3,10 @@ import { shareToDiscord } from "../lib/discord";
 import { SegGroup } from "../components/DockToolbar";
 import { useTickerUniverse, normalizeTicker, LIVE_FEED_TICKER } from "../lib/tickers";
 import GexChart from "../gex/GexChart";
-import Heatmap from "../gex/Heatmap";
 import { type ChainRow } from "../gex/calc";
 
 /* NOTE: the former LiveChartPlaceholder stub has been removed — live GEX now
- * renders via the ported ../gex/GexChart + ../gex/Heatmap components. */
+ * renders via the ported ../gex/GexChart component. */
 
 
 /* ────────────────────────────────────────────────────────────────────────────

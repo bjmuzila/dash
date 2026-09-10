@@ -258,9 +258,13 @@ export default function Budget() {
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   // The overview reads as a single month.
-  const range: RangeMode = "monthly";
+  // `as RangeMode` on purpose: a `const` annotated with a union but initialised
+  // from a literal is NARROWED to that literal by control flow, which turned every
+  // other branch below into a TS2367 "no overlap" error and typed spendWindow[range]
+  // as never. The assertion keeps the declared union so the switches stay live.
+  const range = "monthly" as RangeMode;
   // Cash Flow is always day-by-day across the month in the picker.
-  const cfMode: RangeMode = "daily";
+  const cfMode = "daily" as RangeMode; // see the note on `range` above
   // Spend Pace is pinned to the SELECTED MONTH, day by day. It used to follow
   // the range tab, which on this page means "monthly" — so the card drew
   // Jan–Dec against a 12× budget: a year-shaped answer to a month-shaped

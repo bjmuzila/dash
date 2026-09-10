@@ -733,7 +733,7 @@ export default function Greeks() {
             r.spot,
             r.ts,
           ))
-          .filter((p): p is GreekPoint => !!p);
+          .filter((p: GreekPoint | null): p is GreekPoint => !!p);
         if (seeded.length) setHistory(prev => prev.length ? prev : seeded);
       })
       .catch(() => {});

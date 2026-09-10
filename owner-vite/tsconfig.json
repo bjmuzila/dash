@@ -29,5 +29,24 @@
   },
   "include": [
     "src"
+  ],
+  // DEAD TREE — not in the bundle, not in the type program.
+  //
+  // `src/components/charts` is the Bklit chart library's landing spot and its
+  // index.ts is still `export {}` ("empty until npm run charts:add vendors the
+  // components"). `src/pages/charts-ui/demos/**` are that library's 21 demo files
+  // and they import 40+ names from it, plus `@visx/curve` and `world-atlas`,
+  // none of which are dependencies. Nothing imports demos/, so vite never sees
+  // them — but tsc did, and they were 116 of this project's 130 errors.
+  //
+  // The /owner/charts-ui PAGE is unaffected: it renders charts-ui/examples.tsx,
+  // which is hand-drawn inline SVG with no library at all.
+  //
+  // Safe to delete outright: src/components/charts/, src/pages/charts-ui/demos/,
+  // charts-ui/{catalog.ts,Frame.tsx,demo-data.ts,ErrorBoundary.tsx,charts-ui.css},
+  // and scripts/{add-charts,gen-charts-index,registry-items}.mjs.
+  "exclude": [
+    "src/components/charts",
+    "src/pages/charts-ui/demos"
   ]
 }

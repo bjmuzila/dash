@@ -150,7 +150,7 @@ export default function BzilaAlerts() {
     return () => clearInterval(id);
   }, [load, loadHistory]);
 
-  const refresh = useRefreshButton(() => Promise.all([load(), loadHistory()]));
+  const refresh = useRefreshButton(async () => { await Promise.all([load(), loadHistory()]); });
 
   const send = async () => {
     const body = draftBody.trim();

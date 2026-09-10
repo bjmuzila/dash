@@ -1,5 +1,152 @@
 # Changelog
 
+## 2026-09-10 (l) - .gitattributes: the CRLF warnings on every push are gone
+
+Every `push.ps1` run printed one of these per touched file:
+
+```
+warning: in the working copy of 'server-v2/econ-calendar-discord.js',
+LF will be replaced by CRLF the next time Git touches it
+```
+
+That is `core.autocrlf=true` on the laptop — Git stores LF, rewrites it to CRLF
+on checkout, and announces it each time. Nothing was broken and it had nothing
+to do with owner-vite, v3, or any build; it was noise sitting on top of the real
+output.
+
+New root **`.gitattributes`** pins `* text=auto eol=lf`, with `eol=crlf` kept for
+`*.ps1` / `*.bat` / `*.cmd` and an explicit `binary` list (images, fonts, the
+Theta jar, sqlite files, `eng.traineddata`, archives). `package-lock.json` is
+marked `linguist-generated -diff`.
+
+Chose an attributes file over a `git config` flip because it overrides
+`core.autocrlf`, travels with the repo, and needs no setup on the VPS or any new
+machine. It also matches reality: everything here builds in Linux containers, so
+LF in the working copy is what the images already get, and a file can no longer
+round-trip through a CRLF checkout and come back as a whole-file diff with zero
+real changes.
+
+One-time, after this lands (low churn — most files are already LF in the index):
+
+```
+git add --renormalize .
+git commit -m "chore: normalize line endings to LF"
+```
+
+## 2026-09-10 (k) - owner-vite typechecks: 130 tsc errors -> 0, and the build now enforces it
+
+Reproduced the owner site's build in a clean sandbox (npm ci + build + tsc,
+node 20-alpine equivalent). Finding that matters: **`npm run build` was already
+warning-free.** 243 modules, no chunk-size warning, `check-owner-pages` passing.
+The noise on every edit was **`tsc`, which owner-vite's build never ran** —
+there was no `typecheck` script at all, so 130 errors had accumulated unseen.
+
+### 116 of the 130 were one dead tree
+
+`src/components/charts/index.ts` is the Bklit chart library's landing spot and
+still reads `export {}` - "empty until `npm run charts:add` vendors the
+components", which never happened. `src/pages/charts-ui/demos/**` are that
+library's 21 demo files; they import 40+ names from it plus `@visx/curve` and
+`world-atlas`, none of them dependencies. **Nothing imports `demos/`** - vite
+never saw them, so the bundle was always fine and only tsc was screaming.
+
+Quarantined via `tsconfig.json` `"exclude"` rather than deleted (deletion needs
+the local shell, which was down this session). Still on disk and safe to remove:
+
+- `src/components/charts/`
+- `src/pages/charts-ui/demos/`
+- `src/pages/charts-ui/{catalog.ts,Frame.tsx,demo-data.ts,ErrorBoundary.tsx,charts-ui.css,README.md}`
+- `scripts/{add-charts,gen-charts-index,registry-items}.mjs`
+
+**The `/owner/charts-ui` page is untouched and still works** - it renders
+`charts-ui/examples.tsx`, seventeen chart forms hand-drawn as inline SVG with no
+library at all. Only the Bklit half is dead.
+
+### The 14 real ones
+
+| File | Was | Fix |
+|------|-----|-----|
+| `pages/Budget.tsx` x6 | `const range: RangeMode = "monthly"` and `const cfMode: RangeMode = "daily"` - a `const` annotated with a union but initialised from a literal is NARROWED to that literal, so every other branch was TS2367 "no overlap" and `spendWindow[range]` typed `never` | `= "monthly" as RangeMode` / `= "daily" as RangeMode`, keeping the declared union so the switches stay live |
+| `components/BotAlertPanel.tsx` | `accent = CYAN` narrowed the parameter to the single hex `"#219EBC"`, so passing the call/put green or red was a type error | `accent: string = CYAN` |
+| `pages/BzilaAlerts.tsx` | `useRefreshButton(() => Promise.all([...]))` - the hook wants `Promise<void>`, `Promise.all` gives `[void, void]` | `async () => { await Promise.all([...]) }` |
+| `pages/Greeks.tsx` | `j` is `any`, so `j.data.map()` came back `any` and the `.filter()` predicate's `p` was implicit any | annotated `(p: GreekPoint \| null): p is GreekPoint` |
+| `pages/SocialMedia.tsx` | `Heatmap` imported, never rendered | import dropped, stale comment above it corrected |
+| `lib/utils.ts` x2 | imported `clsx` + `tailwind-merge`, neither in package.json - they came with the Bklit components. Nothing in the app imports this file | rewritten dependency-free (same `cn()` contract), kept rather than deleted |
+
+### It can't regress
+
+```
+"typecheck": "tsc --noEmit",
+"prebuild":  "node scripts/check-owner-pages.mjs && tsc --noEmit"
+```
+
+`docker compose build owners` runs `npm run build`, and owner-vite's Dockerfile
+does a plain `npm ci` (dev deps included, `typescript` is there), so a type error
+now fails the deploy the same way a bad nav/registry pair does. Verified: build
+green with the check wired in.
+
+### On folding owner-vite into cbedge-v3
+
+Measured before starting. owner-vite is 79 files / 2.77 MB of React 18 with
+inline `OWNER_THEME` styles; against cbedge-v3's `check-theme` rules that is
+**3,770 violations across 78 files** - colour literals plus numeric font sizes
+(Budget 304, SocialMedia 296, Results 234, EstimatedMove 140, Probe 125...).
+Either grandfathered wholesale into `theme-baseline.json` or rewritten by hand.
+Not started. This changelog entry is the prerequisite either way - you don't
+migrate code that doesn't typecheck.
+
+## 2026-09-10 (j) - REMOVED: ICT Results / Fail Rate / Walls from owner Results
+
+The owner Results board (`owner-vite/src/pages/Results.tsx`, owner.cbedge.net
+-> `/owner/dev/results`) is down to two tabs: **Confidence** and **Contracts**.
+Default tab is now Confidence.
+
+Gone from the page:
+
+- **ICT Results** - the whole default view: `ShareCard` / `ShareStat` (the
+  shareable Today / 7d / All-Time PNG card and its html2canvas capture),
+  `StatCard`, `WinRateBar`, `SetupLogModal`, `aggregateOverall`, `ictColor`,
+  `Metric`, `KIND_LABEL`/`kindLabel`, `RANGES`, the `SummaryRow`/`SetupRow`
+  types, and both `/api/ict-setups` polls (the 60s summary poll and the
+  three-window overall poll).
+- **Fail Rate** - `FailsView`, which had been a stub since the port (it needed
+  `useEsCandles` + `failLevels/computeStats`, never brought into owner-vite).
+- **Walls** - the entire second half of the file: `WallsView`, `WallAlertFeed`,
+  `WallWatchCard`, `ReachLadder`, `RankedLevels`, `WallCaptureRail`,
+  `WallTimeline`, `SnapLogButton`/`CopyLogButton`/`buildLogText`, `WallTile`,
+  `WallDelta`, every `Wall*` type and the reaction/bucket lookup tables.
+
+Also dropped as a result: the `useRef` import, `homeInputStyle`,
+`useRefreshButton`, `todayETStr` and `etDate`. `wrColor`, `etClock`, `rgba`,
+`CARD` and the theme consts stay - Confidence and Contracts use them.
+2793 -> 1016 lines. `tsc --noEmit --strict --noUnusedLocals` clean.
+
+`lib/nav.ts` and `pages/registry.ts` needed nothing - neither ever linked a tab.
+
+### Recorders stopped
+
+Confirmed with Brandon before touching the proxy file. In
+`server-v2/server-with-proxy.js`, four startup calls are commented out (the
+`require`s at 157/160-161 and every route handler stay, so the read APIs keep
+serving what is already in the tables - they just stop growing):
+
+| Call | Was | Now |
+|------|-----|-----|
+| `startWallsRecorder()` | 09:29 + every 15m to 16:00, change-only rows into `walls_log` + classified touches into `wall_events` | off |
+| `startWallsReach()` | nightly 16:45 ET replay into `wall_reach`, re-snapshot `wall_calibration` | off |
+| `startWallsWatch()` | 5m RTH proximity pass into `wall_alerts` | off |
+| `startIctSetupTracker(PORT)` | 5m RTH detect + grade into `ict_setups` | off |
+
+`/proxy/walls`, `/proxy/walls-reach`, `/proxy/walls-run`, `/proxy/walls-reach-run`
+and `/api/ict-setups` all still respond - historical only.
+
+**Side effect to know about:** `ict-setup-tracker` also fed the customer `/ict`
+page recap. That recap is now frozen at today's rows; re-enable the one line if
+that page is supposed to keep recording.
+
+Fail Rate had no recorder to stop. `ref-levels-recorder.js` is PDH/PDL for the
+Analytics Levels card, unrelated, left running.
+
 ## 2026-09-10 (i) - Site audit fixes: landing page, funnel to v3, SEO plumbing
 
 Source: `md files/SITE-AUDIT-2026-09-10.md`. Everything below is from that

@@ -93,7 +93,7 @@ const label: CSSProperties = {
   color: HOME_THEME.text,
 };
 
-function pill(on: boolean, accent = CYAN, disabled = false): CSSProperties {
+function pill(on: boolean, accent: string = CYAN, disabled = false): CSSProperties {
   return {
     padding: "6px 11px",
     borderRadius: 999,
