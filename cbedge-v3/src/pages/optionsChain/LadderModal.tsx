@@ -28,6 +28,7 @@ import { createPortal } from 'react-dom'
 import { alpha, LIGHT_BLUE, MOVE_UP, SHADOW, T } from '@/design/theme'
 import { query } from '@/data/api'
 import { fmtClockHm, fmtExpiryShort, fmtGex, fmtReplayClock, fmtStampDate } from './format'
+import { Select } from '@/design/primitives/Controls'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
 import { ReplayBrand } from '@/design/primitives/ReplayStamp'
@@ -436,14 +437,34 @@ export function LadderModal({
           onSelect={setSymbol}
           triggerLabel="Tickers"
         />
-        <select value={date} style={{ ...inputStyle, padding: '6px 10px', cursor: 'pointer' }} onChange={(e) => setDate(e.target.value)}>
-          {dates.length === 0 && <option value="">—</option>}
-          {dates.map((d) => (
-            <option key={d} value={d}>
-              {d}
-            </option>
-          ))}
-        </select>
+        {/* Sits next to TickerPicker, which is already a portalled themed menu
+            — this was the one control in the row that still dropped the OS's
+            list. Same paint on the trigger, our own list under it.
+            NOTE: this modal is itself portalled at a high z; the menu portals
+            to <body> too and carries POPOVER_SAFE_ATTR, so opening it from
+            inside a Popover-bearing surface does not close that surface. */}
+        <Select
+          value={date}
+          onChange={setDate}
+          disabled={dates.length === 0}
+          ariaLabel="Recorded session"
+          menuWidth="w-32"
+          // This modal portals at z 9999; POP_Z (250) would put the list behind
+          // its own scrim.
+          menuZ={10000}
+          triggerClassName=""
+          triggerStyle={{
+            ...inputStyle,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 10px',
+            cursor: dates.length ? 'pointer' : 'not-allowed',
+            opacity: dates.length ? 1 : 0.4,
+            flexShrink: 0,
+          }}
+          options={dates.map((d) => ({ value: d, label: d }))}
+        />
         {/* HOW MANY SESSIONS ARE ACTUALLY THERE — the recorder's retention, not
             this modal, decides that list's length. Every replay transport in v3
             says it in the same place, for the same reason: a three-entry

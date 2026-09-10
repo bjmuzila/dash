@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
-import { SegGroup, Chip } from '@/design/primitives/Controls'
+import { SegGroup, Chip, Select } from '@/design/primitives/Controls'
+import { DatePicker } from '@/design/primitives/DatePicker'
 import { useFrame } from '@/data/hooks'
 import type { FlowFrame, FlowTapePrint } from '@/contract/frames'
 import {
@@ -400,15 +401,17 @@ export default function Flow() {
           title="Combined · 0–7 DTE · ≥$500K premium · OTM only"
         />
         <div className="flex items-center gap-2">
-          <label htmlFor="flow-session" className="text-2xs font-bold uppercase tracking-[0.08em] text-muted">
-            Session
-          </label>
-          <input
-            id="flow-session"
-            type="date"
+          <span className="text-2xs font-bold uppercase tracking-[0.08em] text-muted">Session</span>
+          {/* Not <input type="date">: that field is the OS's, mm/dd/yyyy and a
+              platform calendar, and it was the one control on this page that
+              did not look like the app. Same value contract ("YYYY-MM-DD"), so
+              the handler below is unchanged apart from losing the event. */}
+          <DatePicker
             value={date}
-            onChange={(e) => setDate(e.target.value || todayYmdET())}
-            className="tabular rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg"
+            onChange={(v) => setDate(v || todayYmdET())}
+            max={todayYmdET()}
+            title="Session date, ET"
+            label={(v) => v}
           />
           {!isToday && (
             <>
@@ -588,16 +591,21 @@ export default function Flow() {
               </>
             }
           >
-            <select
+            <Select
               value={expiry}
-              onChange={(e) => setExpiry(e.target.value)}
-              className="tabular w-full rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg"
-            >
-              <option value="all">All</option>
-              {(view === 'combined' ? combinedExpiryOptions : expiryOptions).map((x) => (
-                <option key={x} value={x}>{x}</option>
-              ))}
-            </select>
+              onChange={setExpiry}
+              ariaLabel="Expiry"
+              size="touch"
+              className="w-full"
+              triggerClassName="tabular flex min-h-[34px] w-full items-center justify-between gap-1 rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg hover:border-accent"
+              options={[
+                { value: 'all', label: 'All' },
+                ...(view === 'combined' ? combinedExpiryOptions : expiryOptions).map((x) => ({
+                  value: x,
+                  label: x,
+                })),
+              ]}
+            />
           </Field>
 
           <Field label="Min DTE">

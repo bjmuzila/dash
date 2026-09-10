@@ -11,6 +11,7 @@ import { useAuth } from '@/data/auth'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
 import { SegGroup, SegMenu, Chip, Popover, PanelSection, Slider } from './controls'
+import { Select } from '@/design/primitives/Controls'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { chainTicker, normalizeSymbol, symbolDef } from './symbols'
 
@@ -1629,28 +1630,24 @@ export function GexCandlesCard({
                 cursor so the seed effect parks it at that session's open;
                 carrying a timestamp across a day boundary would land it at
                 whichever end of the new tape it happened to fall past. */}
-            <select
+            <Select
               value={activeDay}
-              onChange={(e) => {
+              onChange={(v) => {
                 setReplayPlaying(false)
                 setReplayMs(0)
                 // Back to the default for the new session. A re-arm, not a
                 // clear: the locked range is derived from whichever day is on
                 // screen, so it follows the picker on its own.
                 setAxisLock(true)
-                setReplayDay(e.target.value)
+                setReplayDay(v)
               }}
               disabled={sessionDays.length === 0}
               title="Which recorded session to scrub"
-              className="tabular shrink-0 cursor-pointer rounded-sm border border-line bg-raised px-1.5 py-0.5 font-mono text-2xs font-extrabold text-fg outline-none"
-            >
-              {sessionDays.length === 0 && <option value="">—</option>}
-              {sessionDays.map((d) => (
-                <option key={d} value={d}>
-                  {dayLabel(d)}
-                </option>
-              ))}
-            </select>
+              ariaLabel="Replay session"
+              menuWidth="w-32"
+              triggerClassName="tabular flex shrink-0 cursor-pointer items-center gap-1 rounded-sm border border-line bg-raised px-1.5 py-0.5 font-mono text-2xs font-extrabold text-fg outline-none hover:border-accent disabled:cursor-not-allowed disabled:opacity-40"
+              options={sessionDays.map((d) => ({ value: d, label: dayLabel(d), sub: d }))}
+            />
             {/* HOW MANY, said out loud. Three sessions is the server's retention
                 (see REPLAY_HISTORY_MINUTES), and a dropdown with three entries
                 and no explanation reads as a bug rather than a limit. */}

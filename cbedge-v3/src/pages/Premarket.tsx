@@ -235,6 +235,7 @@ import { GexChurnHistory, useGexChurnHistory } from "@/pages/premarket/GexHeatBa
 // The replay transport is /es-candles' transport, part for part — see the
 // comment on the docked bar at the bottom of this file.
 import { DockButton, DockSlider, SegGroup } from "@/design/primitives/Dock";
+import { Select } from "@/design/primitives/Controls";
 import GammaBellCurve, { GAMMA_BELL_CSS } from "@/pages/premarket/GammaBellCurve";
 import GexProfile, { PROFILE_ROW_H } from "@/pages/premarket/GexProfile";
 import { fmtPct, fmtPts, fmtPx, fmtUsd, nf } from "@/pages/premarket/format";
@@ -399,17 +400,31 @@ const CSS = `
 .pmk .dsel::after{content:"";position:absolute;right:11px;top:50%;width:5px;height:5px;
   border-right:1.5px solid var(--dim);border-bottom:1.5px solid var(--dim);
   transform:translateY(-70%) rotate(45deg);pointer-events:none}
-.pmk .dsel select{appearance:none;-webkit-appearance:none;-moz-appearance:none;
+.pmk .dsel select,.pmk .dsel3{appearance:none;-webkit-appearance:none;-moz-appearance:none;
   background:transparent;color:var(--txt);border:1px solid var(--line2);border-radius:9px;
   font:inherit;font-size:11.5px;letter-spacing:.04em;padding:5px 27px 5px 12px;cursor:pointer;
   font-variant-numeric:tabular-nums}
-.pmk .dsel select:hover{background:var(--active)}
-.pmk .dsel select:focus{outline:none;border-color:var(--cyanEdge)}
+.pmk .dsel select:hover,.pmk .dsel3:hover{background:var(--active)}
+.pmk .dsel select:focus,.pmk .dsel3:focus{outline:none;border-color:var(--cyanEdge)}
 /* The popup list is drawn by the OS and inherits nothing — these two are the
-   only properties it honours, and without them a dark page opens a white menu. */
+   only properties it honours, and without them a dark page opens a white menu.
+   This applies to the SYMBOL picker only. The SESSION picker no longer drops an
+   OS list at all: it is the Select primitive, see .dsel3 below. */
 .pmk .dsel option{background:var(--plate);color:var(--txt)}
-.pmk .dsel.past select{border-color:var(--amberEdge);color:var(--amber)}
+.pmk .dsel.past select,.pmk .dsel3.past{border-color:var(--amberEdge);color:var(--amber)}
 .pmk .dsel.past::after{border-color:var(--amber)}
+/* SESSION PICKER — the .dsel shell can theme the closed box and redraw the
+   caret, but the list it drops is the operating system's. Tolerable for five
+   ticker symbols, not for a DATE: the session list carries marks saying what
+   each day can do, and a white platform menu is where that reading falls
+   apart. So this one is the Select primitive from design/primitives/Controls,
+   and it borrows every paint rule above by sharing their selectors — a second
+   copy of the same values is how two controls in one row start to drift.
+   What is left here is layout only: the primitive draws its own caret, so the
+   27px the platform glyph was reserved on the right goes back. */
+.pmk .dsel3{display:inline-flex;align-items:center;gap:7px;flex-shrink:0;
+  padding-right:12px}
+
 
 /* FROZEN banner. Violet, not amber: amber on this page means "caution, check
    this" (the warnbars, the stale-calendar chip) and a frozen session is not a
@@ -2355,26 +2370,30 @@ export default function Premarket() {
                   ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · ${feedLabel} · ${openLabel}`
                   : `${sym} · CHAIN POLL · ${openLabel}`}
           </span>
-          <span className={`dsel${isHistorical ? " past" : ""}`} style={{ marginLeft: "auto" }}>
-            <select
+          <span style={{ marginLeft: "auto", display: "inline-flex" }}>
+            {/* A leading mark says what the date can do before you click it:
+                ▸ replayable (frames recorded through the session), • captured
+                (the two-a-day freeze, so the tabs open for real), blank =
+                recorded-stores recap only. Still TEXT rather than icons — the
+                marks are load-bearing and a glyph font is one more thing to go
+                missing — but the menu drawing them is ours now, so they land on
+                the page's own plate instead of the platform's. */}
+            <Select
               value={sessionDate}
-              onChange={(e) => pickDate(e.target.value)}
+              onChange={pickDate}
               title="Which session to show. Today is live; • marks a captured session that drives the full tabs, ▸ one that can also be replayed minute by minute."
-              aria-label="Session date"
-            >
-              {sessions.map((d) => (
-                <option key={d} value={d}>
-                  {/* A leading mark says what the date can do before you click
-                      it: ▸ replayable (frames recorded through the session), •
-                      captured (the two-a-day freeze, so the tabs open for real),
-                      blank = recorded-stores recap only. Text, not icons: the OS
-                      draws this menu and nothing else survives the trip. */}
-                  {d === etDate
+              ariaLabel="Session date"
+              align="right"
+              menuWidth="w-48"
+              triggerClassName={`dsel3${isHistorical ? " past" : ""}`}
+              options={sessions.map((d) => ({
+                value: d,
+                label:
+                  d === etDate
                     ? `Today · ${sessionLabel(d)}`
-                    : `${replayByDate.has(d) ? "▸ " : freezeByDate.has(d) ? "• " : "  "}${sessionLabel(d)}`}
-                </option>
-              ))}
-            </select>
+                    : `${replayByDate.has(d) ? "▸ " : freezeByDate.has(d) ? "• " : "  "}${sessionLabel(d)}`,
+              }))}
+            />
           </span>
           {/* REPLAY toggle. Sits with the session picker rather than in the tab
               group because it selects a WAY OF READING the chosen session, not

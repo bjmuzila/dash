@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { query } from '@/data/api'
 import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { alpha, T } from '@/design/theme'
-import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
+import { Chip, PanelSection, Popover, SegGroup, Select } from '@/design/primitives/Controls'
 import { Slider } from '@/board/gexCandles/controls'
 import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
 import { ReplayBrand, ReplayStamp } from '@/design/primitives/ReplayStamp'
@@ -791,15 +791,26 @@ export function MultiGreekReplay() {
           Replay
         </span>
 
-        <select
+        {/* The trigger keeps the transport's own paint (this bar is inline-
+            styled from the theme object, not the token utilities, so a class-
+            based control would read as a stray). What changes is the LIST: a
+            native <select> handed it to the OS, which draws it in the
+            platform's chrome — a light menu over a dark dock. */}
+        <Select
           value={date}
           disabled={!dates.length}
-          onChange={(e) => {
+          onChange={(v) => {
             setPlaying(false)
-            setDate(e.target.value)
+            setDate(v)
           }}
           title="Recorded session. The recorder keeps roughly five trading days."
-          style={{
+          ariaLabel="Recorded session"
+          menuWidth="w-32"
+          triggerClassName=""
+          triggerStyle={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
             padding: '3px 6px',
             fontSize: 'var(--text-xs)',
             fontWeight: 800,
@@ -809,19 +820,12 @@ export function MultiGreekReplay() {
             border: `1px solid ${T.border}`,
             borderRadius: 6,
             outline: 'none',
-            cursor: 'pointer',
+            cursor: dates.length ? 'pointer' : 'not-allowed',
+            opacity: dates.length ? 1 : 0.4,
+            flexShrink: 0,
           }}
-        >
-          {dates.length ? (
-            dates.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))
-          ) : (
-            <option value="">—</option>
-          )}
-        </select>
+          options={dates.map((d) => ({ value: d, label: d }))}
+        />
 
         {/* HOW MANY SESSIONS ARE ACTUALLY THERE. This list is the UNION across
             the four slots (see the dates wave), and its length is the

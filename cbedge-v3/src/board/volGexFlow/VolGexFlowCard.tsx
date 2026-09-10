@@ -3,7 +3,7 @@ import type { CrosshairMode, IChartApi, ISeriesApi, UTCTimestamp } from 'lightwe
 import { BaselineSeries, ColorType, createChart } from 'lightweight-charts'
 import type { ChartHandle } from '@/design/primitives/ChartFrame'
 import { ChartFrame } from '@/design/primitives/ChartFrame'
-import { SegGroup } from '@/design/primitives/Controls'
+import { SegGroup, Select } from '@/design/primitives/Controls'
 import { V2, alpha } from '@/design/theme'
 import type { ExpiryInfo, VolFlowPoint, VolFlowSession, VolFlowTile } from '@/pages/scanner/gexLevels'
 import {
@@ -394,18 +394,14 @@ export function VolGexFlowPanel() {
           {pctView ? VOL_FLOW_COPY.titlePct : VOL_FLOW_COPY.titleDollar}
         </span>
         {/* B288 — LIVE, unlike the tab's own permanently-disabled Expiry Filter. */}
-        <select
-          aria-label={VOL_FLOW_COPY.expiryAriaLabel}
+        <Select
+          ariaLabel={VOL_FLOW_COPY.expiryAriaLabel}
           value={pick}
-          onChange={(e) => setPick(e.target.value)}
-          className="rounded-sm border border-line bg-bg px-2 py-0.5 text-2xs text-fg"
-        >
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+          onChange={setPick}
+          menuWidth="w-36"
+          triggerClassName="tabular flex items-center gap-1 rounded-sm border border-line bg-bg px-2 py-0.5 text-2xs text-fg hover:border-accent"
+          options={options.map((o) => ({ value: o.value, label: o.label }))}
+        />
         <SegGroup<VolFlowSession>
           value={session}
           onChange={setSession}

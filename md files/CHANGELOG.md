@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-09-10 (a) - V3 GEX CHART: the delta stat row stops truncating, and nothing on it is grey
+
+Two things wrong with the row the delta series added yesterday, both visible in
+one screenshot.
+
+`cbedge-v3/src/board/gexChart/StatCards.tsx`:
+
+- The SCOPE tile took the toolbar's scope note verbatim - "55 expirations, 0DTE
+  excluded" - into a box one seventh of the card wide, where it truncated
+  mid-word every single time. `DeltaStatCards` now takes `scope` as a
+  `{ label, value, title }` triple instead of one sentence: `EXPIRIES / 55`, or
+  `EXPIRY / 9/10` on the 0DTE ladder. The sentence moves to the tooltip, and it
+  is still spelled out in full on the toolbar chip, in the series menu and on
+  the canvas's own series line.
+- `MUTED` is `--color-fg`, not `--color-flat`. On a row whose other five values
+  are a saturated blue or amber, the two grey ones (Strikes, Scope) read as
+  DISABLED rather than as neutral - the tiles looked switched off next to the
+  numbers beside them. Applies to the gamma row too, where Net GEX, +GEX % and
+  Bull/Bear fall back to it before their data lands.
+- Tile LABELS are `text-fg` with no `opacity-70`. The label is already saying
+  it is a label by being 9px, uppercase and tracked; dimming the ink as well
+  just made it hard to read on a dark card.
+
+`cbedge-v3/src/board/gexChart/GexChartCard.tsx`:
+
+- Builds `scopeTile` beside the existing `scopeNote` - same fact, one sized for
+  a tile and one for a line.
+- The scope chip in the toolbar is `text-fg`.
+
 ## 2026-09-09 (k) - BILLING: the 2-day free trial is retired
 
 New sign-ups no longer get a free trial. Every Stripe Checkout session created

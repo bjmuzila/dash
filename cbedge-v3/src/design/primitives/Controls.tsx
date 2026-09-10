@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
@@ -289,11 +289,21 @@ export function Popover({
   children,
   align = 'right',
   sheet = false,
+  z = POP_Z,
 }: {
   open: boolean
   onClose: () => void
   children: ReactNode
   align?: 'left' | 'right'
+  /**
+   * Stacking override for a host that outranks POP_Z.
+   *
+   * POP_Z (250) clears every board tile, which is what almost every caller
+   * needs. It does NOT clear a portalled MODAL — the ladder modal sits at 9999
+   * — so a menu opened from inside one would render behind its own scrim.
+   * Those callers pass the host's z, plus one.
+   */
+  z?: number
   /**
    * Bottom sheet instead of an anchored panel.
    *
@@ -400,14 +410,14 @@ export function Popover({
                   // Clear of the home indicator / gesture bar, which sits over
                   // the bottom ~20px and swallows a tap meant for the last row.
                   bottom: `calc(${POP_EDGE}px + env(safe-area-inset-bottom, 0px))`,
-                  zIndex: POP_Z,
+                  zIndex: z,
                   maxHeight: '68vh',
                 }
               : {
                   position: 'fixed',
                   left: pos?.left ?? 0,
                   top: pos?.top ?? 0,
-                  zIndex: POP_Z,
+                  zIndex: z,
                   maxHeight: pos?.maxH,
                   // Hidden for the one frame between mounting (needed to measure
                   // the panel) and having somewhere to put it.
@@ -424,6 +434,152 @@ export function Popover({
         document.body,
       )}
     </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Select — the themed replacement for a native <select>.
+//
+// Same reason DatePicker exists next door: the CLOSED control can be styled all
+// day, but the open menu is drawn by the operating system and is not ours. On
+// Windows Chrome that is a light-grey list with a blue highlight, on macOS a
+// translucent sheet, on iOS a wheel — three different widgets, none of them the
+// app. `color-scheme: dark` in tokens.css darkens the popup and stops there; the
+// SHAPE is still the platform's.
+//
+// So this is the whole control: a trigger that shows the current option, and a
+// list drawn from the same tokens as everything else, portalled through Popover
+// (which handles clipping, stacking and the flip-when-there-is-no-room-below).
+//
+// `value` / `onChange` take and give the option's string value, so it is a
+// drop-in swap for a native select's `e.target.value` handler.
+//
+// It carries POPOVER_SAFE_ATTR unconditionally: a Select opened from INSIDE
+// another Popover (the BOT composer, a card's cog panel) lives in a different
+// portal, so without the marker the parent's click-outside would fire on the
+// pointerdown meant to pick a row and the panel would unmount before the click
+// landed. See that constant's note.
+//
+// `triggerClassName` / `triggerStyle` exist for the replay transports, whose
+// surrounding chrome is inline-styled from the theme object rather than the
+// token utilities. They override the DEFAULT trigger paint only — pass tokens,
+// never literals (cbedge-v3/AGENTS.md non-negotiable #1).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SELECT_TRIGGER_SIZE: Record<ControlSize, string> = {
+  sm: 'px-1.5 py-0.5 text-2xs',
+  touch: 'min-h-[34px] px-3 py-1.5 text-sm',
+}
+
+export interface SelectOption<T extends string> {
+  value: T
+  label: string
+  /** Secondary text on the right of the row — a date behind a label, a count. */
+  sub?: string
+  title?: string
+  disabled?: boolean
+}
+
+export function Select<T extends string>({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  title,
+  disabled = false,
+  empty = '—',
+  align = 'left',
+  size = 'sm',
+  menuWidth = 'w-40',
+  className = '',
+  triggerClassName,
+  triggerStyle,
+  menuZ,
+}: {
+  value: T
+  options: Array<SelectOption<T>>
+  onChange: (v: T) => void
+  ariaLabel?: string
+  title?: string
+  disabled?: boolean
+  /** Shown when nothing matches `value` — an empty option list, or a cleared value. */
+  empty?: string
+  align?: 'left' | 'right'
+  size?: ControlSize
+  /** Tailwind width for the menu. The trigger is the width of its own label. */
+  menuWidth?: string
+  className?: string
+  triggerClassName?: string
+  triggerStyle?: CSSProperties
+  /** Only when the host outranks POP_Z — a portalled modal. See Popover's `z`. */
+  menuZ?: number
+}) {
+  const [open, setOpen] = useState(false)
+  const current = options.find((o) => o.value === value)
+  const dead = disabled || options.length === 0
+
+  return (
+    <div className={['relative shrink-0', className].join(' ')}>
+      <button
+        type="button"
+        onClick={() => {
+          if (!dead) setOpen((v) => !v)
+        }}
+        disabled={dead}
+        title={title}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={triggerStyle}
+        className={
+          triggerClassName ??
+          [
+            SELECT_TRIGGER_SIZE[size],
+            'flex items-center gap-1 rounded-sm border font-semibold tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+            open ? 'border-accent bg-raised text-fg' : 'border-line text-muted hover:bg-raised hover:text-fg',
+          ].join(' ')
+        }
+      >
+        <span className="truncate">{current?.label ?? empty}</span>
+        <span className="text-3xs opacity-50">▾</span>
+      </button>
+
+      <Popover open={open} onClose={() => setOpen(false)} align={align} z={menuZ}>
+        <div
+          {...{ [POPOVER_SAFE_ATTR]: '' }}
+          role="listbox"
+          className={['flex max-h-64 flex-col overflow-y-auto', menuWidth].join(' ')}
+        >
+          {options.length === 0 && <div className="px-1.5 py-2 text-xs text-faint opacity-60">{empty}</div>}
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="option"
+              aria-selected={o.value === value}
+              disabled={o.disabled}
+              title={o.title}
+              onClick={() => {
+                if (o.disabled) return
+                onChange(o.value)
+                setOpen(false)
+              }}
+              className={[
+                'flex items-baseline justify-between gap-2 rounded-sm px-1.5 py-1 text-left transition-colors',
+                o.disabled
+                  ? 'cursor-not-allowed text-muted opacity-30'
+                  : o.value === value
+                    ? 'bg-raised font-bold text-accent'
+                    : 'text-muted hover:bg-raised hover:text-fg',
+              ].join(' ')}
+            >
+              <span className="tabular truncate text-xs font-semibold">{o.label}</span>
+              {o.sub && <span className="tabular shrink-0 font-mono text-3xs opacity-60">{o.sub}</span>}
+            </button>
+          ))}
+        </div>
+      </Popover>
+    </div>
   )
 }
 

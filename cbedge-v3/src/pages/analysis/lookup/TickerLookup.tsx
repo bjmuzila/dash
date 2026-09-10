@@ -52,6 +52,7 @@ import {
   useLiveData,
   useRefreshButton,
 } from '../kit'
+import { Select } from '@/design/primitives/Controls'
 import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
 import { ReplayBrand } from '@/design/primitives/ReplayStamp'
 import { cleanSymbol } from '../TickerPicker'
@@ -917,15 +918,25 @@ export function TickerLookupCard({
             Replay
           </span>
 
-          <select
+          {/* Trigger keeps the transport's inline paint; the LIST is no longer
+              the OS's. Every replay transport in v3 makes the same swap for the
+              same reason — a platform menu over a dark dock is the one bit of
+              this bar the app does not draw. */}
+          <Select
             value={replayDate}
-            onChange={(e) => {
+            onChange={(v) => {
               setReplayPlaying(false)
               setAxisLock(false)
-              setReplayDate(e.target.value)
+              setReplayDate(v)
             }}
             disabled={!replayDates.length}
-            style={{
+            ariaLabel="Recorded session"
+            menuWidth="w-32"
+            triggerClassName=""
+            triggerStyle={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
               padding: '3px 6px',
               fontSize: FS.small,
               fontWeight: 800,
@@ -935,16 +946,12 @@ export function TickerLookupCard({
               border: `1px solid ${V2W.border}`,
               borderRadius: 6,
               outline: 'none',
-              cursor: 'pointer',
+              cursor: replayDates.length ? 'pointer' : 'not-allowed',
+              opacity: replayDates.length ? 1 : 0.4,
+              flexShrink: 0,
             }}
-          >
-            {replayDates.length === 0 && <option value="">—</option>}
-            {replayDates.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
+            options={replayDates.map((d) => ({ value: d, label: d }))}
+          />
 
           {/* HOW MANY SESSIONS ARE ACTUALLY THERE. The recorder's retention —
               not this card — decides the length of that list, and a dropdown

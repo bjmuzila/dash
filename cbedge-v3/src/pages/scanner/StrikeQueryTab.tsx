@@ -41,7 +41,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '@/design/primitives/Card'
-import { SegGroup } from '@/design/primitives/Controls'
+import { SegGroup, Select } from '@/design/primitives/Controls'
 import { T, V2, V2W, alpha } from '@/design/theme'
 import { fmtB } from '@/pages/scanner/format'
 import {
@@ -275,25 +275,27 @@ export default function StrikeQueryTab() {
           </select>
         </label>
 
-        <label className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1">
           <span className={LABEL_CLASS} style={{ color: V2.green }}>
             {SQ_TEXT.labelExpiry}
           </span>
           {/* E53 — expiry strings render RAW; only the ALL option's label differs
-              from its value. Pure client filter, no refetch. */}
-          <select
-            aria-label={SQ_TEXT.labelExpiry}
-            className={SELECT_CLASS}
+              from its value. Pure client filter, no refetch.
+              The CONTROL is no longer native: v2's <select> handed the option
+              list to the OS, which draws it in the platform's own chrome. Same
+              options, same order, same raw strings — drawn from our tokens.
+              The three siblings in this row are still native and stay that way
+              until the sweep reaches them (they are ticker / limit / min OTM,
+              not dates). */}
+          <Select
+            ariaLabel={SQ_TEXT.labelExpiry}
+            triggerClassName={`${SELECT_CLASS} flex items-center justify-between gap-1`}
+            menuWidth="w-36"
             value={expiry}
-            onChange={(e) => setExpiry(e.target.value)}
-          >
-            {sqExpiryOptions(expiries).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={setExpiry}
+            options={sqExpiryOptions(expiries).map((o) => ({ value: o.value, label: o.label }))}
+          />
+        </div>
 
         <label className="flex flex-col gap-1">
           <span className={LABEL_CLASS} style={{ color: V2.green }}>

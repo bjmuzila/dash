@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsOwner } from '@/data/auth'
+import { Select } from '@/design/primitives/Controls'
+import { DatePicker } from '@/design/primitives/DatePicker'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QUICK PROBE — owner-only "add a contract to the probe list", docked in Notes.
@@ -229,35 +231,37 @@ export default function QuickProbe() {
             />
           </div>
 
-          {/* expiration */}
+          {/* expiration
+              Both arms used to be native — a <select> whose menu the OS drew,
+              and an <input type="date"> whose calendar the OS drew. This card
+              is docked inside the Notes drawer, a scrolling panel, which is
+              exactly where a platform popup looks most out of place. Same two
+              arms, same handlers, ours to paint. */}
           <div>
-            <label className={LABEL} htmlFor="qp-exp">
-              Expiration
-            </label>
+            <span className={LABEL}>Expiration</span>
             {expiries.length > 0 ? (
-              <select
-                id="qp-exp"
+              <Select
                 value={expiration}
-                onChange={(e) => {
-                  setExpiration(e.target.value)
+                onChange={(v) => {
+                  setExpiration(v)
                   setAdded(null)
                 }}
-                className={`${FIELD} cursor-pointer`}
-              >
-                {expiries.map((d) => (
-                  <option key={d} value={d}>{`${expiryLabel(d)} · ${d}`}</option>
-                ))}
-              </select>
+                ariaLabel="Expiration"
+                className="w-full"
+                menuWidth="w-48"
+                triggerClassName={`${FIELD} flex cursor-pointer items-center justify-between gap-1 text-left`}
+                options={expiries.map((d) => ({ value: d, label: `${expiryLabel(d)} · ${d}` }))}
+              />
             ) : (
-              <input
-                id="qp-exp"
-                type="date"
+              <DatePicker
                 value={expiration}
-                onChange={(e) => {
-                  setExpiration(e.target.value)
+                onChange={(v) => {
+                  setExpiration(v)
                   setAdded(null)
                 }}
-                className={FIELD}
+                title="Expiration"
+                label={(v) => `${expiryLabel(v)} · ${v}`}
+                placeholder="Expiration"
               />
             )}
           </div>

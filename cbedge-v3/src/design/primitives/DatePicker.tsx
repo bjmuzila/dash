@@ -39,16 +39,46 @@ function parse(v: string): { y: number; m: number; d: number } | null {
   return x ? { y: +x[1], m: +x[2] - 1, d: +x[3] } : null
 }
 
+/** Trigger density. `md` is the composer's full-width field; `sm` is a toolbar chip. */
+const TRIGGER_SIZE = {
+  md: 'w-full px-2 py-1.5 text-left text-sm',
+  sm: 'px-1.5 py-0.5 text-2xs font-semibold tracking-wide',
+} as const
+
 export function DatePicker({
   value,
   onChange,
   className = '',
   title,
+  size = 'md',
+  min,
+  max,
+  label: labelOf,
+  placeholder = 'Date',
+  disabled = false,
 }: {
   value: string
   onChange: (v: string) => void
   className?: string
   title?: string
+  /**
+   * `md` (default) is the original full-width field — the BOT composer's. `sm`
+   * is the toolbar density every card row uses, so a session picker sits level
+   * with the SegGroups beside it instead of towering over them.
+   */
+  size?: 'md' | 'sm'
+  /**
+   * Bounds, as the same "YYYY-MM-DD" strings a native input's min/max take.
+   * Out-of-range days render inert rather than disappearing: a greyed 11th says
+   * "not that one", a missing 11th says the calendar is broken.
+   */
+  min?: string
+  max?: string
+  /** Override the trigger text. Default is "Sep 9". */
+  label?: (v: string) => string
+  /** Trigger text when `value` is empty or unparseable. */
+  placeholder?: string
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
@@ -96,10 +126,12 @@ export function DatePicker({
     setView({ y: view.y + Math.floor(m / 12), m: ((m % 12) + 12) % 12 })
   }
 
-  const label = parsed ? `${MONTHS[parsed.m]} ${parsed.d}` : 'Date'
+  const label = parsed ? (labelOf ? labelOf(value) : `${MONTHS[parsed.m]} ${parsed.d}`) : placeholder
   const lead = new Date(view.y, view.m, 1).getDay()
   const count = daysInMonth(view.y, view.m)
   const todayStr = toStr(today.getFullYear(), today.getMonth(), today.getDate())
+  // String compare is correct for zero-padded ISO dates and needs no Date objects.
+  const outOfRange = (s: string) => (min ? s < min : false) || (max ? s > max : false)
 
   return (
     <div ref={wrapRef} className={['relative', className].join(' ')}>
@@ -107,15 +139,18 @@ export function DatePicker({
         ref={btnRef}
         type="button"
         onClick={() => {
+          if (disabled) return
           if (!open && parsed) setView({ y: parsed.y, m: parsed.m })
           if (!open && btnRef.current) setRect(btnRef.current.getBoundingClientRect())
           setOpen((v) => !v)
         }}
+        disabled={disabled}
         title={title}
         aria-haspopup="dialog"
         aria-expanded={open}
         className={[
-          'w-full rounded-sm border px-2 py-1.5 text-left text-sm transition-colors',
+          'tabular rounded-sm border transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+          TRIGGER_SIZE[size],
           open ? 'border-accent bg-raised text-fg' : 'border-line bg-bg text-fg hover:border-accent',
         ].join(' ')}
       >
@@ -171,21 +206,26 @@ export function DatePicker({
               const s = toStr(view.y, view.m, d)
               const selected = s === value
               const isToday = s === todayStr
+              const blocked = outOfRange(s)
               return (
                 <button
                   key={d}
                   type="button"
+                  disabled={blocked}
                   onClick={() => {
+                    if (blocked) return
                     onChange(s)
                     setOpen(false)
                   }}
                   className={[
                     'rounded-sm py-1 text-center text-xs tabular transition-colors',
-                    selected
-                      ? 'bg-raised font-bold text-accent ring-1 ring-inset ring-accent'
-                      : isToday
-                        ? 'text-accent hover:bg-raised'
-                        : 'text-fg hover:bg-raised',
+                    blocked
+                      ? 'cursor-not-allowed text-faint opacity-25'
+                      : selected
+                        ? 'bg-raised font-bold text-accent ring-1 ring-inset ring-accent'
+                        : isToday
+                          ? 'text-accent hover:bg-raised'
+                          : 'text-fg hover:bg-raised',
                   ].join(' ')}
                 >
                   {d}
@@ -196,11 +236,13 @@ export function DatePicker({
 
           <button
             type="button"
+            disabled={outOfRange(todayStr)}
             onClick={() => {
+              if (outOfRange(todayStr)) return
               onChange(todayStr)
               setOpen(false)
             }}
-            className="mt-1.5 w-full rounded-sm border border-line py-1 text-2xs font-bold uppercase tracking-wide text-faint hover:text-fg"
+            className="mt-1.5 w-full rounded-sm border border-line py-1 text-2xs font-bold uppercase tracking-wide text-faint hover:text-fg disabled:cursor-not-allowed disabled:opacity-30"
           >
             Today · 0DTE
           </button>

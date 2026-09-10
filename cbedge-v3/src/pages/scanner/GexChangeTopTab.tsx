@@ -73,6 +73,7 @@ import { Card } from '@/design/primitives/Card'
 import type { ChartHandle } from '@/design/primitives/ChartFrame'
 import { ChartFrame } from '@/design/primitives/ChartFrame'
 import { Chip, SegGroup } from '@/design/primitives/Controls'
+import { DatePicker } from '@/design/primitives/DatePicker'
 import type { Column } from '@/design/primitives/Table'
 import { Table } from '@/design/primitives/Table'
 import { T, V2, V2W, alpha } from '@/design/theme'
@@ -670,15 +671,18 @@ function ToolbarRow({
 }) {
   return (
     <>
-      {/* C47 — blank `mm/dd/yyyy` for a beat on first paint, until the feed
-          echoes a date back. */}
-      <input
-        type="date"
+      {/* C47 — reads "Date" for a beat on first paint, until the feed echoes a
+          date back. v2's blank `mm/dd/yyyy` was the OS field's placeholder, and
+          that field is gone: the platform calendar it opened was the one
+          control in this toolbar that was not ours to paint. Same value
+          contract, so `onDateChange` is untouched. */}
+      <DatePicker
+        size="sm"
         value={date}
-        aria-label="Capture date"
-        onChange={(e) => onDateChange(e.target.value)}
-        className="shrink-0 rounded-sm border px-1.5 py-0.5 text-xs"
-        style={{ color: T.text, borderColor: V2W.border, colorScheme: 'dark' }}
+        onChange={onDateChange}
+        title="Capture date"
+        label={(v) => v}
+        className="shrink-0"
       />
       {/* C48 — never disabled, even mid-load. */}
       <ToolButton label={REFRESH_LABEL} onClick={onRefresh} />

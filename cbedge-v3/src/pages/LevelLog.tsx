@@ -60,6 +60,7 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Card, CardToolbar } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
+import { DatePicker } from '@/design/primitives/DatePicker'
 import { Page } from '@/design/primitives/Page'
 import { usePageSymbol } from '@/data/symbol'
 import { TickerRail } from '@/pages/levelLog/TickerRail'
@@ -242,13 +243,18 @@ export default function LevelLog() {
             >
               {symbol}
             </span>
-            <input
-              type="date"
+            {/* The OS date field is the wrong control in a row of SegGroups —
+                mm/dd/yyyy in the platform's own font, opening the platform's
+                own calendar. Same "YYYY-MM-DD" value, same today cap, drawn
+                from our tokens. */}
+            <DatePicker
+              size="sm"
               value={date}
               max={todayETStr()}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={setDate}
               title="Session date, ET"
-              className="tabular rounded-sm border border-line bg-surface2 px-1.5 py-0.5 font-mono text-2xs text-fg"
+              label={(v) => v}
+              className="shrink-0"
             />
             <SegGroup options={VIEW_OPTIONS} value={view} onChange={setView} title="Which levels" />
             <SegGroup
