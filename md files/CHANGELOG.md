@@ -1,5 +1,152 @@
 # Changelog
 
+## 2026-09-10 (i) - Site audit fixes: landing page, funnel to v3, SEO plumbing
+
+Source: `md files/SITE-AUDIT-2026-09-10.md`. Everything below is from that
+list; the things it names that are NOT done are at the bottom.
+
+THE PRODUCT CAPTURE WAS v2. `components/landing/HeroVideo.tsx` played
+`public/hero-loop.mp4` (a 7/14 capture: old wordmark, ICT / Owner / Test Lab
+tabs) over `public/landing-bg.png` (6/22, still says "MVC"), under a badge
+that read "LIVE DASHBOARD". The landing now passes `src=""` and
+`poster="/whole-board-preview.png"` (the Sept 8 v3 board) at the image's own
+aspect, the badge says "Product capture · v3 board", and the component is on
+v3Theme (8px plate, hairline, no glow/blur). Drop a v3 loop at
+`/hero-loop-v3.mp4` and pass it as `src` to get video back. The two old
+files are left in `public/` — nothing references them now; delete when ready.
+
+THE LINK PREVIEW SOLD TPO AND ICT. `app/opengraph-image.tsx` chips are now
+GEX / Option & Premium Flow / Graded Levels & Scanners / Premarket Prep + IB,
+on flat v3 tones. Keep in step with FEATURES in LandingClient.tsx.
+
+ROBOTS + SITEMAP. Neither existed and both URLs 307'd to the landing page
+(middleware sends every signed-out non-public path to "/", and the matcher
+did not exclude txt/xml). `txt|xml` added to the matcher exclusion,
+`public/robots.txt` added (disallows /v3, /app, /api, /proxy, /owner, /auth,
+/checkout, /unsubscribe), `app/sitemap.ts` added (landing, pricing, every
+EXPLORE slug + seasonality, docs, whats-new, legal). Host comes from
+NEXT_PUBLIC_SITE_URL like metadataBase. Unknown paths still redirect to "/"
+for signed-out visitors — that behaviour is unchanged.
+
+METADATA. `app/page.tsx` exports its own title/description/canonical/OG
+(nested metadata objects replace the root's, so openGraph is spelled out in
+full). `/pricing` likewise. `maximumScale: 1` removed from the root viewport
+(it disabled pinch-zoom site-wide).
+
+CTA CONTRAST. White on #219ebc is 3.1:1. `v3PrimaryButton` and PublicNav's
+CTA now use `V3.bg` as ink (~6:1). Every primary control on the public pages
+inherits it.
+
+DOUBLE BEACON. LayoutShell's bare-route `VisitTracker` removed; every public
+page load was writing two page_visits rows (key "home" AND "public:landing").
+`MarketingPageTracker` in app/layout.tsx is the one that stays. Expect
+public page counts in the owner Overview to roughly halve from today — that
+is the correction, not a traffic drop.
+
+PUBLIC NAV. "Overview" pointed at `/#overview`, which did not exist; the hero
+section now carries `id="overview"` and the link is "/". Phone menu added: a
+`<details>` hamburger under 960px (Docs was unreachable on a phone).
+
+LEDGER. `/api/public-ledger` MAX_ROWS 8 → 16 (eight rows at an ~89% hit rate
+come up all-HIT ~38% of the time and read as curated). `GradedLedger` now
+shows the grader's `outcome` word (pivot/chop/…) — the route always sent it,
+the table ignored it, and it is the one column that varies. Row key gets an
+index tie-breaker. `LiveLevelPanel` drops the `focus` listener (duplicate
+pull on every click back into the window). Landing value strip: bottom
+hairlines when stacked under 620px; "no polling delay" reworded.
+
+/pricing → /home BOUNCE. The "check out the dashboard with delayed data"
+link for unpaid signed-in users went to /home, which has forwarded unpaid
+users straight back to /pricing since the delayed mode was retired. Link
+removed; the stale comments describing delayed mode in `middleware.ts`
+(PAID_EXEMPT) and `app/home/layout.tsx` rewritten. `PricingActions` "Go to
+dashboard" → /v3 (was /home, one hop). `app/not-found.tsx` labels matched to
+their targets (they were swapped).
+
+v3 THEME on the rest of the signed-out funnel: `app/pricing/page.tsx`
+(rewritten on v3Theme — opaque cards, hairlines, mono price, no text
+opacity, no glow), `components/pricing/BetaGate.tsx`, `PricingActions.tsx`,
+`components/auth/AuthForm.tsx` (card, inputs, submit, links),
+`/sign-in` + `/sign-up` shells (V3.bg canvas; sign-in was the last page on
+the retired `/cb-edge-logo.png` — now BRAND_LOGO_SRC), and
+`app/explore/seasonality/page.tsx` chrome (the almanac view keeps its SEA
+data-viz tokens). `v3Theme.ts` gains `v3InputStyle` and `v3LinkStyle`.
+
+DOCS: "CB — Core Bullseye" → "Core (CB)" throughout `app/docs/page.tsx`.
+
+NOT DONE (on purpose, needs a hand or a decision):
+- Re-recording a v3 hero loop (a poster stands in).
+- `components/landing/{SplashScreen,LaserEtchIntro,DashboardMock,
+  BetaComingSoonBanner}.tsx` look dead (pre-launch) — move to Vanilla/ after
+  a grep confirms no importer. Same for public/beta-coming-soon.html,
+  public/hero.png.
+- /docs still documents the v2 page set and has no page for Flow, Premarket,
+  the scanners or Initial Balance; it stays on its own C palette.
+- ErrorShell (404/500) stays on HOME_THEME — it carries the Bzila chase scene.
+- confidence_log has no graded rows for 09-05 or 09-08; check the grader.
+- Repo root: the stray `-tree -r 0de5e07 ...` file and the 1 MB isolate log.
+
+## 2026-09-10 (h) - The 8am budget email is now a morning briefing
+
+`server-v2/budget-email.js` sent one thing: money. Verdict, tables, rent
+projection, screenshot. Everything else you check at 8am - what's on the
+calendar, what's starred, which routines are still open, what's for dinner and
+what still has to be bought for it - lived in the budget app you then had to go
+open. This folds those in ABOVE the money, so the email is the whole morning
+rather than one quarter of it.
+
+NEW SECTIONS, in order: TODAY (calendar, Google + subscribed ICS feeds merged
+the same way the Today screen merges them), FOCUS (the starred three, then
+anything overdue or due today, with an open/overdue/due tally), ROUTINES (the
+morning block in full - it's the one you can still act on at 8am - afternoon and
+evening as a count), KITCHEN (tonight's meal, and the open grocery items BY NAME
+- "6 things to buy" just makes you open the app).
+
+WHERE THE HOUSEHOLD DATA COMES FROM, because this is the part that will look
+wrong later: NOT `/api/hh/*`. Those routes are in a separate process
+(household-server, HH_PORT) behind an hh_session cookie this process cannot mint
+- it has no household login and, deliberately, no code path into one. Both
+processes talk to the SAME Postgres and the libs are plain modules in the same
+folder, so budget-email requires `_lib-household*.cjs`, `_lib-google-calendar`
+and `_lib-ics-feeds` DIRECTLY and calls the same functions the Today screen
+calls. No second credential, no cross-container HTTP.
+
+`BRIEF_HH_EMAIL` (new, optional) picks whose hh_users row is read; unset it
+falls back to the first BUDGET_EMAIL_TO address, then the first active user.
+Rows are shared between both members anyway, so the choice really only decides
+whose Google calendar and which timezone the schedule renders in.
+
+FAILURE IS PER-SECTION. Every household block is wrapped on its own: a missing
+lib, a Google outage, a DB hiccup drops THAT block and the rest still sends. The
+money half is what this email exists for and the briefing around it must never
+be able to stop it. The screenshot is no longer fatal either - chromium is the
+flakiest dependency here and the written briefing is worth more than the
+picture, so a capture failure now logs and sends the email without the image
+section (not with a broken-image icon).
+
+REDESIGN, same dark palette:
+- Colours are named tokens (`C`, `TONE`) at the top instead of ~60 hand-typed
+  hex literals scattered through the markup, which had already drifted.
+- Panels are `<table>`, not `<div>`. Outlook drops border-radius and padding off
+  a div often enough that the longer email would come apart in exactly the
+  client least likely to forgive it. Same reason the at-a-glance strip is a
+  fixed-layout table rather than flex.
+- The verdict banner moved to the TOP, above the schedule - it's the one line
+  that has to survive being read on a lock screen. The money tables it
+  summarises moved to the bottom under a MONEY rule.
+- New at-a-glance strip under the verdict: left-after-bills, events today, tasks
+  due, routines done. Tiles with nothing to say are omitted rather than showing
+  a zero for a section the household doesn't use.
+- Every DB/calendar string now goes through `esc()`. Task titles and meal names
+  are user input; a meal called "Mac & Cheese <3" was breaking the layout.
+- Subject is now "Morning briefing - <weekday, date>". Still deliberately
+  generic: the numbers and the verdict stay inside the email.
+
+Money math is UNCHANGED - `computeRent`, `occurrencesInMonth`, the settled-flow
+exclusion and the safe-buffer verdict are the same code, only restyled. The
+08:00 ET scheduler, the disk-persisted once-per-day guard, the catch-up window
+and `POST /proxy/budget-email-run` are all untouched.
+
 ## 2026-09-10 (g) - Scheduled posts can go out as the BOT, not just a webhook
 
 A webhook is bound to ONE channel, permanently, so "post this in every channel"

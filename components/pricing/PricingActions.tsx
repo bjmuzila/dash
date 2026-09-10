@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { V3, V3_TEXT, v3GhostButton, v3PrimaryButton } from "@/components/landing/v3Theme";
 
 // Client buttons for the pricing page. Subscribe → POST /api/stripe/checkout with
 // the chosen { plan } and redirect to the returned Stripe Checkout URL.
@@ -67,41 +67,19 @@ export default function PricingActions({
     }
   }
 
-  const btn: React.CSSProperties = {
-    width: "100%",
-    padding: "12px 16px",
-    borderRadius: 10,
-    fontSize: 17,
-    fontWeight: 700,
-    cursor: "pointer",
-  };
-  // Same dark-glass cyan treatment used app-wide (AuthForm submit, landing CTAs)
-  // instead of a one-off solid green — keeps the pricing page on-theme.
-  const primary: React.CSSProperties = {
-    ...btn,
-    border: "1px solid rgba(33,158,188,0.5)",
-    background: "rgba(33,158,188,0.25)",
-    color: T.text,
-  };
-  const secondary: React.CSSProperties = {
-    ...btn,
-    background: "transparent",
-    color: T.cyan,
-    border: `1px solid ${T.cyan}`,
-  };
-  const muted: React.CSSProperties = {
-    ...btn,
-    background: "transparent",
-    color: "rgba(255,255,255,0.55)",
-    border: `1px solid ${T.border}`,
-    fontWeight: 600,
-  };
+  // v3 controls (2026-09-10): solid accent primary, ghost secondary. The
+  // "dark-glass cyan" these used to share with the old landing is gone with it.
+  const full: React.CSSProperties = { width: "100%", boxSizing: "border-box", cursor: "pointer", fontSize: V3_TEXT.body };
+  const primary: React.CSSProperties = { ...v3PrimaryButton, ...full };
+  const secondary: React.CSSProperties = { ...v3GhostButton, ...full, borderColor: V3.cyan, color: V3.cyan };
+  const muted: React.CSSProperties = { ...v3GhostButton, ...full, fontWeight: 600 };
   const busy = loading !== null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {hasAccess ? (
-        <button style={primary} onClick={() => router.push("/home")}>
+        // /v3 directly — /home is one redirect hop to the same place.
+        <button style={primary} onClick={() => router.push("/v3")}>
           Go to dashboard
         </button>
       ) : (
@@ -133,7 +111,7 @@ export default function PricingActions({
         </button>
       )}
 
-      {error && <p style={{ color: T.red, fontSize: 14, margin: 0 }}>{error}</p>}
+      {error && <p style={{ color: V3.down, fontSize: V3_TEXT.base, margin: 0 }}>{error}</p>}
     </div>
   );
 }

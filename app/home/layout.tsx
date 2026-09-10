@@ -1,16 +1,13 @@
 import { redirect } from "next/navigation";
 import { getAccess } from "@/lib/subscription";
 
-// Server gate for the paid product. Middleware already guarantees a signed-in
-// user reaches here. Signed-out visitors are bounced to "/".
-//
-// Unpaid-but-signed-in users are NOT redirected to /pricing anymore — /home
-// itself renders a delayed/static snapshot for them (see app/home/page.tsx,
-// getAccess().ok branch). Redirecting here used to send unpaid users to
-// /pricing, but /pricing's own "check out the dashboard" link points at
-// /home — that created a /pricing <-> /home redirect loop unpaid signed-in
-// users couldn't escape. Middleware's PAID_EXEMPT already allows /home for
-// unpaid users; this layout must not re-add the gate it deliberately removed.
+// Server gate for /home. Signed-out visitors are bounced to "/". Signed-in
+// users fall through to app/home/page.tsx, which forwards paid users to /v3
+// and unpaid users to /pricing. This layout must NOT redirect unpaid users to
+// /pricing itself: middleware sends unpaid users TO /home, so a gate here would
+// be a second copy of the paywall to keep in sync (and it once created a
+// /pricing <-> /home loop). The "delayed snapshot" mode this comment used to
+// describe was retired in 2026-09.
 export const dynamic = "force-dynamic";
 
 export default async function HomeLayout({ children }: { children: React.ReactNode }) {

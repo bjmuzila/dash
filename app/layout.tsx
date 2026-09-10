@@ -23,10 +23,11 @@ export const metadata: Metadata = {
   },
 };
 
+// No maximumScale: it disabled pinch-zoom for everyone (an a11y fail on every
+// audit). The phone build owns its own gestures via touch-action, not this.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
 };
 
 export default function RootLayout({

@@ -1,10 +1,9 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { V3, V3_RADIUS, V3_SANS, V3_TEXT, v3Chip, v3GhostButton, v3PrimaryButton } from "@/components/landing/v3Theme";
 import PublicNav from "@/components/landing/PublicNav";
 import SeasonalityView from "@/components/seasonality/SeasonalityView";
 import { ALMANAC } from "@/components/seasonality/seasonalityData";
-import { SEA } from "@/components/seasonality/seaTheme";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /explore/seasonality — the FREE S&P 500 seasonality almanac.
@@ -23,6 +22,11 @@ import { SEA } from "@/components/seasonality/seaTheme";
 // PUBLIC: covered by the existing /^\/explore(\/.*)?$/ entry in
 // middleware.ts PUBLIC_PATTERNS. No middleware change was needed and none should
 // be added — narrowing that pattern later would silently gate this page.
+//
+// THEME (2026-09-10): the page chrome — masthead, CTAs, close card — draws on
+// components/landing/v3Theme.ts like every other public page. The almanac
+// itself (SeasonalityView) keeps its own SEA tokens for chart surfaces; those
+// are data-viz colours, not UI chrome.
 //
 // STATIC: every number on it is compiled into seasonalityData.ts at build time.
 // No DATABASE_URL, no proxy, no socket — so unlike the sibling explore pages
@@ -58,9 +62,9 @@ export default function SeasonalityPublicPage() {
         flex: 1,
         minHeight: 0,
         overflowY: "auto",
-        background: SEA.app,
-        color: T.text,
-        fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
+        background: V3.bg,
+        color: V3.fg,
+        fontFamily: V3_SANS,
       }}
     >
       {/* Shared public toolbar — carries its own access CTA and Sign in. */}
@@ -94,7 +98,7 @@ export default function SeasonalityPublicPage() {
             one row: identity left, the offer right, tool immediately under. */}
         <header style={heroBand}>
           <div style={{ minWidth: 0 }}>
-            <div style={badge}>Free · no account needed</div>
+            <span style={v3Chip(V3.cyan)}>Free · no account needed</span>
             <h1
               style={{
                 fontSize: "clamp(22px,3vw,32px)",
@@ -107,16 +111,16 @@ export default function SeasonalityPublicPage() {
             >
               S&amp;P 500 Seasonality Almanac
             </h1>
-            <p style={{ color: T.cyan, fontSize: 14, fontWeight: 600, margin: 0 }}>
+            <p style={{ color: V3.cyan, fontSize: V3_TEXT.base, fontWeight: 600, margin: 0 }}>
               {START_YEAR}–{END_YEAR} · {SESSIONS} sessions of SPX, recomputed from the raw daily closes
             </p>
           </div>
 
           <div style={heroCta}>
-            <div style={{ fontSize: 13.5, lineHeight: 1.5, marginBottom: 10 }}>
-              <b style={{ fontSize: 14.5 }}>This page is history. The dashboard is today.</b>
+            <div style={{ fontSize: V3_TEXT.base, lineHeight: 1.5, marginBottom: 10 }}>
+              <b style={{ fontSize: V3_TEXT.body }}>This page is history. The dashboard is today.</b>
               <br />
-              Live SPX gamma, flip levels and option flow. <b style={{ color: T.cyan }}>$50/month</b>, one tier,
+              Live SPX gamma, flip levels and option flow. <b style={{ color: V3.cyan }}>$50/month</b>, one tier,
               cancel anytime.
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -140,7 +144,7 @@ export default function SeasonalityPublicPage() {
               <h2 style={{ fontSize: "clamp(17px,2vw,22px)", fontWeight: 800, margin: "0 0 6px", letterSpacing: "-0.01em" }}>
                 Seasonality tells you the weather. It doesn&apos;t tell you the day.
               </h2>
-              <p style={{ color: T.text, fontSize: 14, lineHeight: 1.55, margin: 0 }}>
+              <p style={{ color: V3.fg, fontSize: V3_TEXT.base, lineHeight: 1.55, margin: 0 }}>
                 A ninety-eight-year average is a weak prior about a distribution. Where price actually goes tomorrow
                 needs the order flow.
               </p>
@@ -160,99 +164,43 @@ export default function SeasonalityPublicPage() {
   );
 }
 
-const badge: React.CSSProperties = {
-  display: "inline-block",
-  padding: "5px 12px",
-  borderRadius: 999,
-  border: `1px solid ${T.cyan}55`,
-  background: `${T.cyan}14`,
-  color: T.cyan,
-  fontSize: 11,
-  fontWeight: 800,
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
-};
-
 const heroBand: React.CSSProperties = {
   display: "grid",
   gap: "clamp(14px,2vw,28px)",
   gridTemplateColumns: "repeat(auto-fit,minmax(min(340px,100%),1fr))",
   alignItems: "center",
   padding: "clamp(14px,1.8vw,20px)",
-  borderRadius: 16,
-  border: `1px solid ${SEA.line}`,
-  background: SEA.card,
+  borderRadius: V3_RADIUS.md,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface,
 };
 
 const heroCta: React.CSSProperties = {
   padding: "clamp(12px,1.6vw,16px)",
-  borderRadius: 12,
-  border: `1px solid ${T.cyan}44`,
-  background: `linear-gradient(180deg, ${T.cyan}14, ${SEA.card2})`,
+  borderRadius: V3_RADIUS.md,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface2,
 };
 
-const ctaBand: React.CSSProperties = {
-  marginTop: 4,
-  padding: "clamp(16px,2.5vw,22px)",
-  borderRadius: 16,
-  border: `1px solid ${T.cyan}33`,
-  background: `linear-gradient(180deg, ${T.cyan}14, rgba(255,255,255,0.02))`,
-};
-
-const ctaPrimary: React.CSSProperties = {
-  display: "inline-block",
-  textAlign: "center",
-  padding: "11px 20px",
-  borderRadius: 10,
-  background: T.orange,
-  color: "#0A0A0A",
-  fontSize: 14,
-  fontWeight: 800,
-  letterSpacing: "0.05em",
-  textDecoration: "none",
-  whiteSpace: "nowrap",
-};
-
-const ctaList: React.CSSProperties = {
-  listStyle: "none",
-  padding: 0,
-  margin: "14px 0 0",
-  display: "grid",
-  gap: 7,
-  fontSize: 14,
-  lineHeight: 1.5,
-  color: T.text,
-};
+const ctaPrimary: React.CSSProperties = { ...v3PrimaryButton, padding: "11px 20px" };
 
 const ctaQuiet: React.CSSProperties = {
   display: "inline-block",
   padding: "6px 4px",
-  color: T.text,
-  fontSize: 13,
+  color: V3.fg,
+  fontSize: V3_TEXT.base,
   fontWeight: 600,
   textDecoration: "underline",
   textUnderlineOffset: 3,
   textAlign: "center",
 };
 
-const ctaGhost: React.CSSProperties = {
-  display: "inline-block",
-  textAlign: "center",
-  padding: "11px 18px",
-  borderRadius: 10,
-  border: `1px solid ${T.border}`,
-  background: "rgba(255,255,255,0.04)",
-  color: T.text,
-  fontSize: 14,
-  fontWeight: 700,
-  textDecoration: "none",
-  whiteSpace: "nowrap",
-};
+const ctaGhost: React.CSSProperties = { ...v3GhostButton, padding: "11px 18px" };
 
 const closeCard: React.CSSProperties = {
   marginTop: 4,
   padding: "clamp(16px,2vw,22px)",
-  borderRadius: 16,
-  border: `1px solid ${SEA.line}`,
-  background: SEA.card,
+  borderRadius: V3_RADIUS.md,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface,
 };

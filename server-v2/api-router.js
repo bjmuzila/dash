@@ -7943,7 +7943,11 @@ if (libDb) {
   {
     const PL_TTL_MS = 3_600_000; // 1h — the grader writes once a day
     let ledgerCache = null; // { at, payload }
-    const MAX_ROWS = 8;
+    // 16, not 8 (2026-09-10). At the published ~89% hit rate, eight rows come
+    // up all-HIT ~38% of the time, and a receipts table with no miss on it
+    // reads as curated even when it is not. Sixteen makes a miss the expected
+    // case (~85% of windows) without turning the section into a scroll.
+    const MAX_ROWS = 16;
 
     // ── 2026-09-06: THE LEDGER NOW SHIPS ITS OWN AGE ─────────────────────────
     //

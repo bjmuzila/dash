@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
+import { V3, V3_RADIUS, V3_SANS, V3_TEXT, v3CardStyle, v3GhostButton, v3InputStyle, v3LinkStyle, v3PrimaryButton } from "@/components/landing/v3Theme";
 
 /**
  * Themed email/password auth form.
@@ -21,6 +21,10 @@ import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTh
  * Turnstile is only rendered when NEXT_PUBLIC_TURNSTILE_SITE_KEY is set, so
  * local/dev builds without the key keep working (the server also skips captcha
  * verification when TURNSTILE_SECRET_KEY is unset).
+ *
+ * 2026-09-10: v3 surfaces (components/landing/v3Theme.ts) — an opaque card,
+ * one hairline, white text, solid-accent submit. The glass panel, the 60px
+ * drop shadow and the faded-white secondary copy were v2.
  */
 
 const TURNSTILE_SITE_KEY = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "").trim();
@@ -247,32 +251,24 @@ export default function AuthForm({
     }
   }
 
-  const inputStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "16px 18px",
-    borderRadius: 10,
-    border: `1px solid ${T.border}`,
-    background: "rgba(255,255,255,0.04)",
-    color: T.text,
-    fontSize: 17,
-    outline: "none",
-  };
+  const inputStyle: React.CSSProperties = v3InputStyle;
 
   return (
     <div
-      className="card-hover"
       style={{
         width: "100%",
-        maxWidth: 800,
-        ...homeGlossPanelStyle(T.cyan),
-        boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
-        padding: 28,
+        maxWidth: 440,
+        boxSizing: "border-box",
+        ...v3CardStyle,
+        padding: 24,
+        fontFamily: V3_SANS,
+        color: V3.fg,
       }}
     >
-      <h1 style={{ fontSize: 20, fontWeight: 800, color: T.text, margin: "0 0 4px" }}>
+      <h1 style={{ fontSize: V3_TEXT.lg, fontWeight: 700, color: V3.fg, margin: "0 0 4px" }}>
         {isSignup ? "Create your account" : "Sign in"}
       </h1>
-      <p style={{ fontSize: 14, color: "rgba(255,255,255,0.55)", margin: "0 0 22px" }}>
+      <p style={{ fontSize: V3_TEXT.base, color: V3.fg, margin: "0 0 18px" }}>
         {isSignup ? "Join CB Edge" : "Welcome back to CB Edge"}
       </p>
 
@@ -319,11 +315,11 @@ export default function AuthForm({
                 // green "match" tick: a matching pair is the expected case and
                 // does not need celebrating, and the red border has to stay the
                 // one thing that draws the eye.
-                borderColor: confirmMismatch ? T.red : T.border,
+                borderColor: confirmMismatch ? V3.down : V3.line,
               }}
             />
             {confirmMismatch && (
-              <div id="confirm-mismatch" style={{ fontSize: 12, color: T.red, marginTop: -4 }}>
+              <div id="confirm-mismatch" style={{ fontSize: V3_TEXT.sm, color: V3.down, marginTop: -4 }}>
                 Those passwords don&apos;t match.
               </div>
             )}
@@ -340,11 +336,11 @@ export default function AuthForm({
               justifyContent: "space-between",
               gap: 10,
               padding: "10px 12px",
-              borderRadius: 8,
-              border: `1px solid ${T.red}`,
-              background: "rgba(255,0,0,0.06)",
-              fontSize: 12,
-              color: T.text,
+              borderRadius: V3_RADIUS.md,
+              border: `1px solid ${V3.down}`,
+              background: V3.surface2,
+              fontSize: V3_TEXT.sm,
+              color: V3.fg,
             }}
           >
             <span>Captcha failed to load. Cloudflare may be down.</span>
@@ -352,13 +348,10 @@ export default function AuthForm({
               type="button"
               onClick={retryCaptcha}
               style={{
-                background: "transparent",
-                border: `1px solid ${T.border}`,
-                borderRadius: 6,
-                color: T.cyan,
-                fontSize: 12,
-                fontWeight: 700,
+                ...v3GhostButton,
                 padding: "4px 10px",
+                fontSize: V3_TEXT.sm,
+                color: V3.cyan,
                 cursor: "pointer",
                 flexShrink: 0,
               }}
@@ -372,24 +365,24 @@ export default function AuthForm({
           type="submit"
           disabled={busy || confirmBlocked || (captchaRequired && !captchaToken)}
           style={{
+            ...v3PrimaryButton,
             width: "100%",
-            padding: "11px",
-            borderRadius: 8,
-            border: `1px solid rgba(33,158,188,0.5)`,
-            background: busy ? "rgba(33,158,188,0.12)" : "rgba(33,158,188,0.25)",
-            color: T.text,
-            fontSize: 14,
-            fontWeight: 700,
+            boxSizing: "border-box",
+            fontSize: V3_TEXT.body,
             cursor: busy || confirmBlocked ? "default" : "pointer",
-            opacity: confirmBlocked || (captchaRequired && !captchaToken) ? 0.6 : 1,
+            // Disabled = ghosted control, not faded text: the plate steps down
+            // to the hairline ladder so the button reads inert at full contrast.
+            ...(busy || confirmBlocked || (captchaRequired && !captchaToken)
+              ? { background: V3.surface2, borderColor: V3.line, color: V3.fg }
+              : null),
           }}
         >
           {busy ? "…" : isSignup ? "Create account" : "Sign in"}
         </button>
       </form>
 
-      {error && <div style={{ color: T.red, fontSize: 12, marginTop: 12 }}>{error}</div>}
-      {notice && <div style={{ color: T.green, fontSize: 12, marginTop: 12 }}>{notice}</div>}
+      {error && <div style={{ color: V3.down, fontSize: V3_TEXT.base, marginTop: 12 }}>{error}</div>}
+      {notice && <div style={{ color: V3.refresh, fontSize: V3_TEXT.base, marginTop: 12 }}>{notice}</div>}
 
       {isSignup ? (
         <>
@@ -401,14 +394,14 @@ export default function AuthForm({
               the form itself. Every one of those emails carries a one-click
               unsubscribe; this line and that footer are the two halves of the
               same promise. */}
-          <div style={{ fontSize: 11, lineHeight: 1.6, color: "rgba(255,255,255,0.42)", marginTop: 18, textAlign: "center" }}>
+          <div style={{ fontSize: V3_TEXT.xs, lineHeight: 1.6, color: V3.fg, marginTop: 18, textAlign: "center" }}>
             Creating an account adds your email to the CB Edge list — occasional product
             updates and offers. Unsubscribe in one click from any of them. See our{" "}
-            <Link href="/privacy" style={{ color: "rgba(255,255,255,0.62)" }}>Privacy Policy</Link>.
+            <Link href="/privacy" style={v3LinkStyle}>Privacy Policy</Link>.
           </div>
 
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 16, textAlign: "center" }}>
-            Already have an account? <Link href={`/sign-in?next=${encodeURIComponent(next)}`} style={{ color: T.cyan }}>Sign in</Link>
+          <div style={{ fontSize: V3_TEXT.base, color: V3.fg, marginTop: 16, textAlign: "center" }}>
+            Already have an account? <Link href={`/sign-in?next=${encodeURIComponent(next)}`} style={v3LinkStyle}>Sign in</Link>
           </div>
         </>
       ) : (
@@ -427,38 +420,25 @@ export default function AuthForm({
               background: "transparent",
               border: "none",
               padding: 0,
-              color: T.cyan,
-              fontSize: 12,
+              color: V3.cyan,
+              fontFamily: V3_SANS,
+              fontSize: V3_TEXT.base,
               fontWeight: 600,
               cursor: resetBusy ? "default" : "pointer",
-              opacity: resetBusy ? 0.6 : 1,
             }}
           >
             {resetBusy ? "Sending…" : "Forgot password?"}
           </button>
 
           <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0 14px" }}>
-            <div style={{ flex: 1, height: 1, background: T.border }} />
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>new here?</span>
-            <div style={{ flex: 1, height: 1, background: T.border }} />
+            <div style={{ flex: 1, height: 1, background: V3.line }} />
+            <span style={{ fontSize: V3_TEXT.sm, color: V3.fg }}>new here?</span>
+            <div style={{ flex: 1, height: 1, background: V3.line }} />
           </div>
 
           <Link
             href={`/sign-up?next=${encodeURIComponent(next)}`}
-            style={{
-              display: "block",
-              width: "100%",
-              padding: "11px",
-              borderRadius: 8,
-              border: `1px solid ${T.border}`,
-              background: "rgba(255,255,255,0.04)",
-              color: T.text,
-              fontSize: 14,
-              fontWeight: 700,
-              textAlign: "center",
-              textDecoration: "none",
-              boxSizing: "border-box",
-            }}
+            style={{ ...v3GhostButton, width: "100%", boxSizing: "border-box", fontSize: V3_TEXT.body }}
           >
             Create an account
           </Link>

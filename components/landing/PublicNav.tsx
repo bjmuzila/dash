@@ -21,7 +21,7 @@ import { BRAND_LOGO_SRC } from "@/lib/brand";
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
 export const PUBLIC_NAV = [
-  { label: "Overview", href: "/#overview" },
+  { label: "Overview", href: "/" },
   { label: "Pricing", href: "/pricing?from=nav" },
   { label: "Docs", href: "/docs" },
 ];
@@ -55,7 +55,16 @@ export default function PublicNav({
         .pnav-cta:hover { background: ${v3a(V3.cyan, 0.85)}; }
         .pnav-ghost { transition: background .14s, border-color .14s; }
         .pnav-ghost:hover { background: ${V3.raised}; border-color: ${V3.cyan}; }
-        @media (max-width: 960px) { .pnav-links { display: none !important; } }
+        @media (max-width: 960px) { .pnav-links { display: none !important; } .pnav-menu { display: block !important; } }
+        /* Phone menu — a <details> so it needs no state and closes on
+           navigation. Same plates as the desktop links, stacked. */
+        .pnav-menu { display: none; position: relative; }
+        .pnav-menu summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: ${V3_RADIUS.md}px; border: 1px solid ${V3.line}; background: ${V3.surface}; color: ${V3.fg}; font-size: ${V3_TEXT.lg}px; line-height: 1; }
+        .pnav-menu summary::-webkit-details-marker { display: none; }
+        .pnav-menu[open] summary { border-color: ${V3.cyan}; background: ${V3.raised}; }
+        .pnav-menu-list { position: absolute; right: 0; top: 40px; min-width: 160px; display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: ${V3_RADIUS.md}px; border: 1px solid ${V3.line}; background: ${V3.surface}; z-index: 60; }
+        .pnav-menu-list a { display: block; padding: 9px 12px; border-radius: ${V3_RADIUS.sm}px; color: ${V3.fg}; text-decoration: none; font-size: ${V3_TEXT.base}px; font-weight: 600; }
+        .pnav-menu-list a:hover, .pnav-menu-list a[aria-current="page"] { background: ${V3.surface2}; }
         /* Phones: the right cluster plus a full-size logo is wider than the
            viewport. Shrink both so the bar fits ~360px. */
         @media (max-width: 520px) {
@@ -113,6 +122,17 @@ export default function PublicNav({
 
           {/* Right cluster — pinned to the right edge of the band. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
+            {/* Phone menu. Hidden above 960px where the centre links show. */}
+            <details className="pnav-menu">
+              <summary aria-label="Menu">≡</summary>
+              <nav className="pnav-menu-list">
+                {PUBLIC_NAV.map((n) => (
+                  <Link key={n.label} href={n.href} aria-current={active === n.label ? "page" : undefined}>
+                    {n.label}
+                  </Link>
+                ))}
+              </nav>
+            </details>
             {right ?? (
               <>
                 <Link href="/pricing?from=nav" className="pnav-cta" style={ctaBtn}>
@@ -175,7 +195,8 @@ const ctaBtn: React.CSSProperties = {
   fontSize: V3_TEXT.sm,
   fontWeight: 700,
   letterSpacing: "0.07em",
-  color: V3.fg,
+  // Dark ink on cyan — see v3PrimaryButton in v3Theme.ts (contrast).
+  color: V3.bg,
   textDecoration: "none",
   whiteSpace: "nowrap",
   background: V3.cyan,

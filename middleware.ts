@@ -329,12 +329,11 @@ export async function middleware(req: NextRequest) {
 
   // ── Paid-subscription gate (covers EVERY protected route) ────────────────────
   // Owners always pass. Routes needed to actually buy/see pricing stay
-  // reachable, plus /home and /mult-greek for unpaid-but-signed-in users. /home and
-  // /mult-greek both render in "delayed" mode for them (see their page.tsx —
-  // reads a frozen *_static_snapshots row instead of the live feed, no live
-  // WS/chain loop), so on-the-fence signups land on the real dashboard with
-  // real (delayed) data instead of a hard paywall. Everything else still
-  // redirects to /home.
+  // reachable. /home stays exempt as the LOOP GUARD: unpaid users are sent
+  // there, and app/home/page.tsx forwards them on to /pricing (the "delayed
+  // data" mode it used to render for them was retired 2026-09). /mult-greek and
+  // the two *-snapshot APIs are still listed for the same historical reason and
+  // are harmless. Everything else redirects to /home.
   const PAID_EXEMPT = /^\/(pricing|home|mult-greek|api\/stripe|api\/home-snapshot|api\/mult-greek-snapshot)(\/.*)?$/;
   if (!isOwner && !isPaid && !PAID_EXEMPT.test(path)) {
     const url = req.nextUrl.clone();
@@ -423,7 +422,11 @@ export const config = {
     // because app/api/discord-share/route.ts does its own getServerUserId() +
     // OWNER_USER_ID gate. Do NOT copy this exclusion to a route that relies on
     // middleware for auth.
-    "/((?!_next|proxy|ws|api/discord-share|.*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|mp4|webm|mov|m4v|ogg|mp3)).*)",
+    // txt|xml added 2026-09-10: /robots.txt and /sitemap.xml were not public
+    // patterns, so a signed-out crawler was 307'd to "/" and read the landing
+    // page's HTML as the robots file. Static files under public/ and Next's
+    // own metadata routes (app/sitemap.ts) both need to bypass the gate.
+    "/((?!_next|proxy|ws|api/discord-share|.*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|mp4|webm|mov|m4v|ogg|mp3|txt|xml)).*)",
     "/api/((?!discord-share(?:/|$)).*)",
   ],
 };

@@ -1,9 +1,26 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { getServerUserId } from "@/lib/supabase/server";
 import LandingClient from "@/components/landing/LandingClient";
 
 export const dynamic = "force-dynamic";
+
+// The landing page's own description + canonical. Without these it inherited
+// the root layout's tagline, and Google had no canonical for "/".
+const TITLE = "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels";
+const DESC =
+  "Live SPX gamma flip, Core, call and put walls computed off the options chain every 15 seconds — " +
+  "shown free, no account. Every level auto-graded in public, hits and misses. $50/mo, cancel anytime.";
+// Nested metadata objects REPLACE the root layout's, they do not merge — so
+// openGraph is spelled out in full here (siteName included).
+export const metadata: Metadata = {
+  title: TITLE,
+  description: DESC,
+  alternates: { canonical: "/" },
+  openGraph: { siteName: "CB Edge", title: TITLE, description: DESC, url: "/", type: "website" },
+  twitter: { card: "summary_large_image", title: TITLE, description: DESC },
+};
 
 /**
  * Is this a PHONE, as far as the server can tell?

@@ -81,9 +81,7 @@ export default function OpengraphImage() {
           display: "flex",
           flexDirection: "column",
           padding: 56,
-          backgroundColor: "#05060A",
-          backgroundImage:
-            "radial-gradient(circle at 76% 40%, rgba(41,182,246,0.08), transparent 55%)",
+          backgroundColor: "#07080b",
           fontFamily: "sans-serif",
         }}
       >
@@ -91,8 +89,8 @@ export default function OpengraphImage() {
           style={{
             display: "flex",
             flex: 1,
-            border: "1px solid rgba(255,255,255,0.07)",
-            borderRadius: 24,
+            border: "1px solid #23272e",
+            borderRadius: 8,
             padding: 40,
           }}
         >
@@ -116,7 +114,7 @@ export default function OpengraphImage() {
               }}
             >
               <span>REAL-TIME SPX GEX</span>
-              <span>&amp; ORDERFLOW</span>
+              <span>&amp; OPTIONS FLOW</span>
             </div>
 
             <div
@@ -128,8 +126,8 @@ export default function OpengraphImage() {
                 lineHeight: 1.35,
               }}
             >
-              <span>Everything you need to trade the tape&nbsp;</span>
-              <span style={{ color: "#c7ccd1", fontWeight: 700 }}>live.</span>
+              <span>Every level graded in public.&nbsp;</span>
+              <span style={{ color: "#ffffff", fontWeight: 700 }}>$50/mo, cancel anytime.</span>
             </div>
 
             {/* feature chips — what CB Edge offers */}
@@ -143,10 +141,14 @@ export default function OpengraphImage() {
               }}
             >
               {[
-                { t: "Real-Time SPX GEX", c: "#4FC3F7" },
-                { t: "Options Orderflow", c: "#22e3a0" },
-                { t: "TPO · Squeeze Scanner", c: "#E0A82E" },
-                { t: "ICT Alerts", c: "#c084fc" },
+                // What the site sells TODAY. TPO and ICT came off the product
+                // and the explore pages on 2026-09-05; the preview image kept
+                // advertising both until 2026-09-10. Keep this list in step
+                // with FEATURES in components/landing/LandingClient.tsx.
+                { t: "Real-Time SPX GEX", c: "#219ebc" },
+                { t: "Option & Premium Flow", c: "#1fd98a" },
+                { t: "Graded Levels & Scanners", c: "#ffd600" },
+                { t: "Premarket Prep · ES & NQ IB", c: "#a78bfa" },
               ].map((f) => (
                 <div
                   key={f.t}
@@ -155,9 +157,9 @@ export default function OpengraphImage() {
                     alignItems: "center",
                     width: 218,
                     padding: "9px 14px",
-                    borderRadius: 10,
-                    background: "rgba(41,182,246,0.10)",
-                    border: "1px solid rgba(41,182,246,0.28)",
+                    borderRadius: 8,
+                    background: "#14171d",
+                    border: "1px solid #23272e",
                   }}
                 >
                   <div
@@ -185,15 +187,15 @@ export default function OpengraphImage() {
                 alignSelf: "flex-start",
                 marginTop: 22,
                 padding: "14px 28px",
-                borderRadius: 12,
-                background: "#219EBC",
-                color: "#04121A",
+                borderRadius: 8,
+                background: "#219ebc",
+                color: "#07080b",
                 fontSize: 22,
                 fontWeight: 800,
                 letterSpacing: 0.5,
               }}
             >
-              SIGN UP NOW →
+              GET FULL ACCESS →
             </div>
           </div>
 
@@ -214,11 +216,9 @@ export default function OpengraphImage() {
                 flexDirection: "column",
                 width: 452,
                 padding: 16,
-                borderRadius: 18,
-                border: "1px solid rgba(255,255,255,0.10)",
-                background:
-                  "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.72)",
-                boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+                borderRadius: 8,
+                border: "1px solid #23272e",
+                background: "#0f1117",
               }}
             >
               {/* card header — dashboard title + LIVE badge */}

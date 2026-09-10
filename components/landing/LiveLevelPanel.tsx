@@ -144,14 +144,14 @@ export default function LiveLevelPanel() {
     const wake = () => {
       if (document.visibilityState === "visible") void pull();
     };
+    // visibilitychange alone: `focus` fired a second, identical pull on every
+    // click back into the window.
     document.addEventListener("visibilitychange", wake);
-    window.addEventListener("focus", wake);
 
     return () => {
       live.current = false;
       clearInterval(t);
       document.removeEventListener("visibilitychange", wake);
-      window.removeEventListener("focus", wake);
     };
   }, [pull]);
 

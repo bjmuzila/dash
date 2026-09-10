@@ -1073,14 +1073,14 @@ const ARTICLES: Article[] = [
   },
   {
     id: "mvc",
-    title: "CB — Core Bullseye",
+    title: "Core (CB)",
     group: "Concepts",
     blurb: "The single biggest gamma strike, and how it's used across the app.",
     status: "complete",
     body: () => (
       <>
         <Lead>
-          The <Term>CB — Core Bullseye</Term> is the strike carrying the largest absolute net GEX: the single
+          The <Term>Core</Term> (CB on the rails and badges) is the strike carrying the largest absolute net GEX: the single
           heaviest concentration of dealer gamma on the board. It&rsquo;s the headline level for the day, tagged right on the
           chart and threaded through the top bar, snapshots, and the Confidence score.
         </Lead>
@@ -1119,14 +1119,14 @@ const ARTICLES: Article[] = [
           <DefRow term="Confidence">The Confidence score grades the MVC live as Hit / Pivot / Chop (see below).</DefRow>
         </Card>
 
-        <H2>CB - Core Bullseye and the Confidence score</H2>
+        <H2>Core and the Confidence score</H2>
         <P>
           The Confidence page scores how the MVC is behaving in real time and classifies the session&rsquo;s likely outcome
           relative to that level:
         </P>
         <Card accent={C.green}>
           <LegendRow color={C.posBar} name="Hit">
-            Price reaches and respects the CB - Core Bullseye — the magnet read played out. Most common when the CB - Core Bullseye is a strong positive
+            Price reaches and respects Core — the magnet read played out. Most common when Core is a strong positive
             wall and price is in positive gamma.
           </LegendRow>
           <LegendRow color={C.cyan} name="Pivot">
@@ -1139,7 +1139,7 @@ const ARTICLES: Article[] = [
 
         <H2>When the MVC shifts mid-session</H2>
         <P>
-          The CB - Core Bullseye isn&rsquo;t fixed — as volume builds and positioning changes, a different strike can overtake it. A{" "}
+          Core isn&rsquo;t fixed — as volume builds and positioning changes, a different strike can overtake it. A{" "}
           <Term>migrating CB</Term> is information: if it climbs toward higher strikes through the morning, the dominant wall
           (and likely magnet) is moving up; if it jumps to a brand-new strike on heavy volume, fresh positioning is being laid
           down right where you should expect price to react.
@@ -1341,7 +1341,7 @@ const ARTICLES: Article[] = [
           <DefRow term="OI">Open interest — contracts currently outstanding.</DefRow>
           <DefRow term="Vol Only">Uses just today&rsquo;s traded volume, ignoring standing OI.</DefRow>
           <DefRow term="ATM">At-the-money — the strike nearest current price.</DefRow>
-          <DefRow term="CB">Core Bullseye — the strike with the largest absolute net GEX.</DefRow>
+          <DefRow term="CB / Core">Core — the strike with the largest absolute net GEX. CB is the short tag the rails and badges use.</DefRow>
           <DefRow term="Gamma Flip">Price where total dealer gamma crosses from negative to positive.</DefRow>
           <DefRow term="Long gamma">Dealers dampen moves (chop / pin). Positive GEX.</DefRow>
           <DefRow term="Short gamma">Dealers amplify moves (trend / vol). Negative GEX.</DefRow>

@@ -159,12 +159,15 @@ export default function GradedLedger() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={`${r.date}-${r.level}`}>
+            {rows.map((r, i) => (
+              <tr key={`${r.date}-${r.level}-${i}`}>
                 <td style={{ ...td, ...mono, whiteSpace: "nowrap" }}>{fmtDate(r.date)}</td>
                 <td style={{ ...td, ...mono }}>{r.level.toLocaleString("en-US")}</td>
                 <td style={td}>{r.type}</td>
-                <td style={td}>{r.what}</td>
+                <td style={td}>
+                  {r.what}
+                  {r.outcome && <span style={outcomeTag}>{r.outcome}</span>}
+                </td>
                 <td style={{ ...td, textAlign: "right" }}>
                   <span style={r.hit ? chipHit : chipMiss}>{r.hit ? "HIT" : "MISS"}</span>
                 </td>
@@ -237,6 +240,25 @@ const td: React.CSSProperties = {
 };
 
 const mono: React.CSSProperties = { fontFamily: V3_MONO };
+
+// The grader's own outcome word (pivot / chop / …). Shown since 2026-09-10 —
+// the route always returned it and the table ignored it, so eight rows that
+// were all "reached and held" read as one sentence repeated. This is the
+// column that actually varies.
+const outcomeTag: React.CSSProperties = {
+  display: "inline-block",
+  marginLeft: 8,
+  padding: "1px 7px",
+  borderRadius: V3_RADIUS.sm,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface2,
+  fontFamily: V3_MONO,
+  fontSize: V3_TEXT.xs,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  color: V3.fg,
+  verticalAlign: "middle",
+};
 
 const chipBase: React.CSSProperties = {
   display: "inline-block",

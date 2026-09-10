@@ -174,7 +174,11 @@ export function v3Chip(tone: string): CSSProperties {
   };
 }
 
-/** The primary action. Solid accent, square-ish — a v3 control, not a pill. */
+/** The primary action. Solid accent, square-ish — a v3 control, not a pill.
+ *
+ *  INK IS V3.bg, NOT V3.fg (2026-09-10). White on #219ebc measures 3.1:1,
+ *  under WCAG AA for the 15px CTA and the 11px nav button. The page canvas
+ *  tone on cyan is ~6:1 and is already what /pricing's join button did. */
 export const v3PrimaryButton: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -184,7 +188,7 @@ export const v3PrimaryButton: CSSProperties = {
   borderRadius: V3_RADIUS.md,
   border: `1px solid ${V3.cyan}`,
   background: V3.cyan,
-  color: V3.fg,
+  color: V3.bg,
   fontSize: V3_TEXT.base,
   fontWeight: 700,
   letterSpacing: "0.03em",
@@ -207,4 +211,25 @@ export const v3GhostButton: CSSProperties = {
   fontWeight: 600,
   textDecoration: "none",
   whiteSpace: "nowrap",
+};
+
+/** A text input on a public page — inset plate, hairline, no glow. */
+export const v3InputStyle: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "12px 14px",
+  borderRadius: V3_RADIUS.md,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface2,
+  color: V3.fg,
+  fontSize: V3_TEXT.body,
+  fontFamily: V3_SANS,
+  outline: "none",
+};
+
+/** An inline text link. Accent, no underline until hover (pages add that). */
+export const v3LinkStyle: CSSProperties = {
+  color: V3.cyan,
+  textDecoration: "none",
+  fontWeight: 600,
 };

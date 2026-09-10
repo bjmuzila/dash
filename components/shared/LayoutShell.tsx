@@ -57,16 +57,13 @@ function pageMetaFromPath(pathname: string): { key: string; label: string } {
   return { key: trimmed, label };
 }
 
-// Fires the page_visits beacon for a route. Used on BARE public routes (landing,
-// sign-up, pricing, …) which skip ShellInner and were therefore untracked — i.e.
-// ALL logged-out funnel traffic was invisible in analytics. Chrome routes keep
-// tracking via ShellInner, so the two paths never double-report (mutually exclusive).
-function VisitTracker() {
-  const pathname = usePathname();
-  const { key, label } = pageMetaFromPath(pathname);
-  usePageLoadStatus({ pageKey: key, pageLabel: label, path: pathname });
-  return null;
-}
+// The bare public routes used to mount a VisitTracker here (page_key "home",
+// "pricing", …). REMOVED 2026-09-10: app/layout.tsx mounts
+// components/analytics/MarketingPageTracker for the same routes with the
+// stable "public:<key>" keys, so every public page load was writing TWO
+// page_visits rows under two different keys. Sessions were not doubled (the
+// entry claim is once per tab) but page counts were. One tracker, the one
+// whose keys the owner Overview already reads.
 
 /**
  * Which top bar this shell wears.
@@ -192,7 +189,6 @@ export default function LayoutShell({
           background: HOME_THEME.bg,
         }}
       >
-        {!isEmbed && <VisitTracker />}
         {/* Sticky — reserves its own height, no spacer needed. /whats-new is not
             one of PUBLIC_NAV's pills, so no pill is marked current there. */}
         {isPublicChrome && <PublicNav active={isPublicDocs ? "Docs" : undefined} />}

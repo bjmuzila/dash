@@ -1,34 +1,49 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { V3, V3_MONO, V3_RADIUS, V3_TEXT, v3CardStyle, v3a } from "@/components/landing/v3Theme";
 
-// Hero product loop for the landing page.
-//
-// The landing sold a real-time visual dashboard while showing zero pixels of
-// it. This is the fix: a short, silent, looping capture of the live product,
-// framed like a screen.
+// Product capture for the landing page's PRODUCT section.
 //
 // Degrades on purpose, in this order:
 //   1. video plays          → best case
 //   2. no file / decode err → poster still, no broken-media icon, no layout jump
 //   3. reduced-motion       → poster still, video never fetched (saves the MBs too)
 //
-// So this ships and looks right BEFORE the capture exists — drop the file at
-// `src` later and it upgrades itself with no code change.
+// ── 2026-09-10: v3, and no video until there is a v3 video ──────────────────
+// `public/hero-loop.mp4` is a 7/14 capture of the v2 board (old wordmark, an
+// ICT tab, the Owner and Test Lab tabs) and `public/landing-bg.png` is a 6/22
+// one that still says "MVC". Under a badge that read "LIVE DASHBOARD". On a
+// page whose whole argument is "we publish what is actually true", that was
+// the one thing on it that was not. So:
+//
+//   • The landing passes `src=""` and `poster="/whole-board-preview.png"`
+//     (the Sept 8 v3 board). No video is fetched. Drop a v3 loop at
+//     /hero-loop-v3.mp4 and pass it as `src` — nothing else changes.
+//   • The badge says what it is: a capture, dated by the file, not "LIVE".
+//   • v3 surfaces: 8px radius, an opaque hairline, no glow, no glass. The
+//     14px radius / drop-shadow / backdrop-blur frame was v2.
+//   • `aspect` is the media's own ratio. The old 16:9 box would have cropped
+//     the near-square board to its middle third.
 
 interface HeroVideoProps {
-  /** Public path to the loop, e.g. "/hero-loop.mp4". */
+  /** Public path to the loop, e.g. "/hero-loop-v3.mp4". Empty = poster only. */
   src?: string;
-  /** Still shown before play, on failure, and under reduced-motion. */
+  /** Still shown before play, on failure, under reduced-motion, or alone. */
   poster?: string;
   alt?: string;
+  /** width / height of the media. Reserves the box so nothing reflows. */
+  aspect?: number;
+  /** Badge text. */
+  label?: string;
 }
 
 export default function HeroVideo({
-  src = "/hero-loop.mp4",
-  poster = "/landing-bg.png",
-  alt = "CB Edge dashboard — live gamma exposure and options flow",
+  src = "",
+  poster = "/whole-board-preview.png",
+  alt = "CB Edge v3 board — key levels, gauge rail, GEX candles, Multi Greek, net premium, GEX chart and flow tape",
+  aspect = 16 / 9,
+  label = "Product capture · v3 board",
 }: HeroVideoProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [failed, setFailed] = useState(false);
@@ -45,20 +60,20 @@ export default function HeroVideo({
   // Some mobile browsers reject autoplay even when muted+playsInline. Failing
   // that promise is fine — the poster is already underneath.
   useEffect(() => {
-    if (reduced || failed) return;
+    if (reduced || failed || !src) return;
     const v = videoRef.current;
     if (!v) return;
     v.play().catch(() => { /* poster stands in */ });
-  }, [reduced, failed]);
+  }, [reduced, failed, src]);
 
   const showVideo = !reduced && !failed && !!src;
 
   return (
     <div style={frame} className="hero-frame">
-      {/* 16:9 box reserved up front so the card never reflows when media lands. */}
-      <div style={{ position: "relative", width: "100%", paddingTop: "56.25%" }}>
+      {/* Box reserved up front at the media's own ratio so the card never reflows. */}
+      <div style={{ position: "relative", width: "100%", paddingTop: `${(100 / aspect).toFixed(3)}%` }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={poster} alt={alt} style={media} />
+        <img src={poster} alt={alt} style={media} loading="lazy" />
 
         {showVideo && (
           <video
@@ -75,29 +90,23 @@ export default function HeroVideo({
             style={media}
           />
         )}
-
-        {/* Screen-glass: vignette + top sheen so a raw capture reads as product. */}
-        <div style={glass} aria-hidden />
       </div>
 
-      <div style={liveBadge}>
-        <span style={liveDot} /> LIVE DASHBOARD
-      </div>
+      <div style={badge}>{label}</div>
     </div>
   );
 }
 
 /* ── styles ───────────────────────────────────────────────────────────── */
+/* v3 surfaces only. No blur, no glow, no gradient sheen. */
 
 const frame: React.CSSProperties = {
+  ...v3CardStyle,
   position: "relative",
   width: "100%",
   marginBottom: 20,
-  borderRadius: 14,
   overflow: "hidden",
-  border: "1px solid rgba(33,158,188,0.28)",
-  boxShadow: "0 18px 50px rgba(0,0,0,0.55), 0 0 0 1px rgba(33,158,188,0.06)",
-  background: "rgba(5,6,10,0.9)",
+  background: V3.app,
 };
 
 const media: React.CSSProperties = {
@@ -109,15 +118,7 @@ const media: React.CSSProperties = {
   display: "block",
 };
 
-const glass: React.CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  pointerEvents: "none",
-  background:
-    "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, transparent 22%), radial-gradient(circle at 50% 50%, transparent 55%, rgba(5,6,10,0.45) 100%)",
-};
-
-const liveBadge: React.CSSProperties = {
+const badge: React.CSSProperties = {
   position: "absolute",
   top: 10,
   left: 10,
@@ -125,21 +126,13 @@ const liveBadge: React.CSSProperties = {
   alignItems: "center",
   gap: 6,
   padding: "4px 9px",
-  borderRadius: 999,
-  fontSize: 10,
-  fontWeight: 800,
+  borderRadius: V3_RADIUS.sm,
+  fontSize: V3_TEXT.xs,
+  fontWeight: 700,
   letterSpacing: "0.12em",
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  color: T.text,
-  background: "rgba(5,6,10,0.72)",
-  border: "1px solid rgba(33,158,188,0.4)",
-  backdropFilter: "blur(6px)",
-};
-
-const liveDot: React.CSSProperties = {
-  width: 5,
-  height: 5,
-  borderRadius: 999,
-  background: T.green,
-  boxShadow: `0 0 8px ${T.green}`,
+  textTransform: "uppercase",
+  fontFamily: V3_MONO,
+  color: V3.fg,
+  background: v3a(V3.bg, 0.85),
+  border: `1px solid ${V3.line}`,
 };

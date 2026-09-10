@@ -1,8 +1,10 @@
 import AuthForm from "@/components/auth/AuthForm";
+import { BRAND_LOGO_SRC, BRAND_LOGO_ALT } from "@/lib/brand";
+import { V3 } from "@/components/landing/v3Theme";
 
 export const dynamic = "force-dynamic";
 
-// Defaults to /home after sign-in; callers that know the user should return to
+// Defaults to /home after sign-in (it routes paid → /v3, unpaid → /pricing); callers that know the user should return to
 // a specific step (e.g. pricing's "Join now" / "I already have an account")
 // pass ?next=/pricing so they land back there instead of the dashboard.
 export default async function SignInPage({
@@ -19,12 +21,16 @@ export default async function SignInPage({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "#05060A",
+        // v3 canvas (2026-09-10). Was a hardcoded #05060A.
+        background: V3.bg,
         padding: 20,
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-        <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 128, width: "auto" }} />
+        {/* The 3.0 lockup from lib/brand.ts — this page was the last one still
+            pointing at the retired /cb-edge-logo.png. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={BRAND_LOGO_SRC} alt={BRAND_LOGO_ALT} style={{ width: 300, maxWidth: "80%", height: "auto" }} />
         <AuthForm mode="signin" next={next} />
       </div>
     </div>

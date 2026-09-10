@@ -113,7 +113,7 @@ const FEATURES = [
 // each one is checkable and none of them is a performance claim (those live in
 // the receipts section where they are graded).
 const STRIP = [
-  { n: "15s", l: "Chain-to-screen latency", s: "Direct feed, no polling delay" },
+  { n: "15s", l: "Chain-to-screen latency", s: "Every level, every 15 seconds" },
   { n: "ES + NQ", l: "Futures structure, graded", s: "Initial Balance on both roots" },
   { n: "Daily", l: "Auto-graded scoreboard", s: "Hits and misses, published" },
   { n: "$50", l: "Per month, everything", s: "No tiers, no codes, no upsell" },
@@ -153,6 +153,9 @@ export default function LandingClient() {
         }
         @media (max-width: 620px) {
           .landing-strip { grid-template-columns: 1fr !important; }
+          /* Stacked: the divider is a bottom hairline, not a stray right edge. */
+          .landing-strip > div { border-right: none !important; border-bottom: 1px solid ${V3.line}; }
+          .landing-strip > div:last-child { border-bottom: none; }
           .landing-receipts .receipts-grid { grid-template-columns: 1fr !important; }
           .landing-cta { width: 100%; }
         }
@@ -166,7 +169,7 @@ export default function LandingClient() {
       <div style={shell}>
 
         {/* ═══ 1 · HERO — "is this real?" ═══════════════════════════════ */}
-        <section style={card}>
+        <section id="overview" style={card}>
           <div style={{ ...pad, ...heroGrid }} className="landing-hero">
             <div>
               <span style={v3Chip(V3.refresh)}>● Live · SPX 0DTE</span>
@@ -274,7 +277,7 @@ export default function LandingClient() {
         {/* ═══ 3 · PRODUCT — "what is it?" ══════════════════════════════ */}
         <section style={card}>
           <div style={pad}>
-            <HeroVideo />
+            <HeroVideo src="" poster="/whole-board-preview.png" aspect={864 / 868} />
             <div style={featureGrid}>
               {FEATURES.map((f) => (
                 <Link

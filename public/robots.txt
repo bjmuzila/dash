@@ -1,0 +1,13 @@
+# cbedge.net — crawl the public site, not the app.
+User-agent: *
+Allow: /
+Disallow: /v3/
+Disallow: /app/
+Disallow: /api/
+Disallow: /proxy/
+Disallow: /owner/
+Disallow: /auth/
+Disallow: /checkout/
+Disallow: /unsubscribe
+
+Sitemap: https://cbedge.net/sitemap.xml

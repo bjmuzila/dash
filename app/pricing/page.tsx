@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { getServerUserId } from "@/lib/supabase/server";
 import { getAccess } from "@/lib/subscription";
@@ -6,27 +7,62 @@ import PricingActions from "@/components/pricing/PricingActions";
 import BetaGate from "@/components/pricing/BetaGate";
 import UserMenu from "@/components/shared/UserMenu";
 import PublicNav from "@/components/landing/PublicNav";
-import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
+import {
+  V3,
+  V3_MONO,
+  V3_RADIUS,
+  V3_SANS,
+  V3_TEXT,
+  v3CardStyle,
+  v3Chip,
+  v3GhostButton,
+  v3LinkStyle,
+} from "@/components/landing/v3Theme";
 import { EXPLORE } from "@/components/explore/exploreContent";
 
 export const dynamic = "force-dynamic";
 
-// Pricing / conversion hub. All "Join now" CTAs (landing + explore pages) point
-// here with ?from=<slug>. Signed-out visitors see the platform recap + plan and a
-// Clerk sign-up CTA. Signed-in users without a subscription see Stripe checkout;
-// subscribed users get a "go to dashboard" button.
+const TITLE = "Pricing — CB Edge · $50/mo, cancel anytime";
+const DESC =
+  "One membership, every page: live SPX GEX, graded levels, options flow, premarket prep, " +
+  "ES & NQ Initial Balance and the scanners. $50/mo or $500/yr. No tiers, no codes.";
+export const metadata: Metadata = {
+  title: TITLE,
+  description: DESC,
+  alternates: { canonical: "/pricing" },
+  openGraph: { siteName: "CB Edge", title: TITLE, description: DESC, url: "/pricing", type: "website" },
+  twitter: { card: "summary_large_image", title: TITLE, description: DESC },
+};
+
+// Pricing / conversion hub. All "Get full access" CTAs (landing + explore
+// pages) point here with ?from=<slug>. Signed-out visitors see the platform
+// recap + plan and a sign-up CTA. Signed-in users without a subscription see
+// Stripe checkout; subscribed users get a "go to dashboard" button.
 //
 // PRICING IS FLAT AND TRANSPARENT: $50/mo, $500/yr. No coupon box, no promo
 // pre-fill, and no inflated "original" price struck through to manufacture a
 // sale — the number shown is the number charged. Don't reintroduce a list price.
+//
+// ── 2026-09-10: v3 ──────────────────────────────────────────────────────────
+// This page was the last v2-glass surface between the landing page and the
+// checkout — shellGlow, homeGlossPanelStyle, pill radii, a text-shadow on the
+// price and DIM'd white body copy — so a visitor went flat → glass → Stripe.
+// It now draws on components/landing/v3Theme.ts like the landing, PublicNav
+// and /explore/*: opaque plates, one hairline, white text, one accent. Same
+// rules as LandingClient.tsx's header: no text opacity, no hex, no glow.
+//
+// The "check out the dashboard with delayed data" link for unpaid signed-in
+// users is GONE. app/home/page.tsx has forwarded unpaid users back to /pricing
+// since the delayed-snapshot mode was retired, so the link was a round trip to
+// this page.
 const PLATFORM_RECAP = [
-  "Real-time SPX gamma exposure (GEX), gamma flip & call/put walls",
-  "Confidence Score — every key level graded 0–100 for Hit / Pivot / Chop",
+  "Real-time SPX gamma exposure (GEX), gamma flip, Core & call/put walls",
+  "Confidence Score — every key level graded 0–100 for Hit / Pivot / Chop, then auto-scored in public",
   "Intraday Greeks: DEX, VEX and charm for the full dealer-positioning picture",
   "Weekly estimated-move levels with high-confidence zones across 500+ stocks, backed by 2+ years of data",
-  "Live options flow, net premium and signal feed",
+  "Live options flow, net premium drift and the flow tape",
   "Live ES candles with a GEX heatmap overlay and call/put/flip levels",
-  "Net premium & options-flow tape with a full-session sparkline",
+  "Premarket Prep, ES & NQ Initial Balance stats, and the Top Change and Watch scanners",
 ];
 
 // Features not yet live — shown with an "expected" tag so members know what's coming.
@@ -48,21 +84,12 @@ export default async function PricingPage({
   const fromEntry = from && from in EXPLORE ? EXPLORE[from] : null;
 
   return (
-    <div
-      className="explore-root"
-      style={{
-        // The bare LayoutShell wrapper is a flex column with overflow:hidden, so
-        // this root must own its own scroll — otherwise the fixed toolbar's
-        // reserved top padding pushes content out of a clipped box.
-        flex: 1,
-        minHeight: 0,
-        overflowY: "auto",
-        background: T.bg,
-        backgroundImage: T.shellGlow,
-        color: T.text,
-        fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
-      }}
-    >
+    <div className="explore-root" style={root}>
+      <style>{`
+        .pricing-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+        @media (max-width: 860px) { .pricing-grid { grid-template-columns: 1fr !important; } }
+      `}</style>
+
       {/* Same public toolbar as the landing + explore pages. Signed-in users get
           their UserMenu instead of the access CTA on the buy page. */}
       <PublicNav
@@ -71,189 +98,110 @@ export default async function PricingPage({
           userId ? (
             <UserMenu />
           ) : (
-            <Link href="/sign-in" style={{ ...topBtn, display: "inline-block", textDecoration: "none" }}>
+            <Link href="/sign-in?next=/pricing" style={v3GhostButton} className="landing-ghost">
               Sign in
             </Link>
           )
         }
       />
 
-      <main
-        style={{
-          maxWidth: 980,
-          margin: "0 auto",
-          // PublicNav is sticky and reserves its own height — no compensation here.
-          paddingTop: "clamp(28px,5vw,56px)",
-          paddingLeft: "clamp(16px,4vw,40px)",
-          paddingRight: "clamp(16px,4vw,40px)",
-          paddingBottom: 80,
-        }}
-      >
-        {fromEntry && (
-          <div style={badge}>Continuing from · {fromEntry.title}</div>
-        )}
+      <main style={main}>
+        {fromEntry && <span style={v3Chip(V3.cyan)}>Continuing from · {fromEntry.title}</span>}
 
-        <h1 style={{ fontSize: "clamp(29px,5vw,43px)", fontWeight: 800, margin: "14px 0 10px", lineHeight: 1.1 }}>
+        <h1 style={h1}>
           {access.ok ? (
             "You're subscribed"
           ) : (
-            <>Get full access to <span style={{ color: T.cyan }}>CB Edge</span></>
+            <>Get full access to <span style={{ color: V3.cyan }}>CB Edge</span></>
           )}
         </h1>
-        <p style={{ color: DIM, fontSize: 17, margin: "0 0 12px", maxWidth: 620, lineHeight: 1.5 }}>
+        <p style={lede}>
           {access.ok
             ? "Your subscription is active — you have full access to the dashboard."
-            : "One subscription unlocks the entire platform. Live dealer positioning, scored levels, and estimated moves — the moment they move. One price, no tiers, no add-ons."}
+            : "One subscription unlocks the entire platform. Live dealer positioning, graded levels, flow and estimated moves — the moment they move. One price, no tiers, no add-ons."}
         </p>
 
-        {userId && !access.ok && (
-          <p style={{ margin: "0 0 36px" }}>
-            <Link href="/home" style={{ color: T.cyan, fontSize: 14, fontWeight: 700, textDecoration: "none" }}>
-              Not ready yet? Check out the dashboard with delayed data →
-            </Link>
-          </p>
-        )}
-
-        <div
-          className="pricing-grid"
-          style={{
-            display: "grid",
-            gap: "clamp(20px,3vw,32px)",
-            gridTemplateColumns: "minmax(0,1fr) minmax(0,360px)",
-            alignItems: "start",
-          }}
-        >
+        <div className="pricing-grid" style={grid}>
           {/* Platform recap */}
-          <section style={{ ...homeGlossPanelStyle(T.cyan), padding: "clamp(20px,3vw,28px)" }} className="card-hover">
-            <div style={{ ...sectionLabel, color: T.cyan }}>{"What's included"}</div>
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
-              {PLATFORM_RECAP.map((item) => (
-                <li key={item} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 17, color: "rgba(255,255,255,0.86)" }}>
-                  <span style={{ color: T.cyan, fontWeight: 800, lineHeight: 1.5 }}>✓</span>
-                  <span>{item}</span>
-                </li>
-              ))}
-              {PLATFORM_UPCOMING.map((item) => (
-                <li key={item.text} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 17, color: "rgba(255,255,255,0.6)" }}>
-                  <span style={{ color: T.orange, fontWeight: 800, lineHeight: 1.5 }}>◷</span>
-                  <span>
-                    {item.text}{" "}
-                    <span
-                      style={{
-                        display: "inline-block",
-                        fontSize: 12,
-                        fontWeight: 800,
-                        letterSpacing: "0.06em",
-                        textTransform: "uppercase",
-                        color: T.orange,
-                        border: `1px solid ${T.orange}55`,
-                        borderRadius: 999,
-                        padding: "1px 8px",
-                        marginLeft: 2,
-                        verticalAlign: "middle",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {item.eta}
+          <section style={card}>
+            <div style={cardHead}>What&apos;s included</div>
+            <div style={cardBody}>
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 10 }}>
+                {PLATFORM_RECAP.map((item) => (
+                  <li key={item} style={li}>
+                    <span style={{ color: V3.refresh, fontWeight: 700, lineHeight: 1.5 }}>✓</span>
+                    <span>{item}</span>
+                  </li>
+                ))}
+                {PLATFORM_UPCOMING.map((item) => (
+                  <li key={item.text} style={li}>
+                    <span style={{ color: V3.warn, fontWeight: 700, lineHeight: 1.5 }}>◷</span>
+                    <span>
+                      {item.text}{" "}
+                      <span style={{ ...v3Chip(V3.warn), marginLeft: 2, verticalAlign: "middle" }}>{item.eta}</span>
                     </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </section>
 
           {/* Plan / action card */}
-          <section style={{ ...homeGlossPanelStyle(T.cyan), padding: "clamp(20px,3vw,28px)" }} className="card-hover">
-            <div style={{ ...sectionLabel, color: T.cyan }}>Membership</div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 12, margin: "4px 0 14px" }}>
-              <PlanPrice label="Monthly" price={50} period="/mo" />
-
-              {/* Yearly is the plan we want people on — it gets the loud treatment:
-                  accent border, "best value" ribbon, bigger figure and the savings
-                  math spelled out against 12x the monthly price. The comparison is
-                  against our OWN monthly price ($600/yr), which is a real number a
-                  buyer can check — not a struck-through list price nobody pays. */}
-              <div
-                style={{
-                  position: "relative",
-                  padding: "16px 16px 14px",
-                  borderRadius: 12,
-                  border: `2px solid ${T.cyan}`,
-                  background:
-                    "linear-gradient(180deg, rgba(33,158,188,0.20) 0%, rgba(33,158,188,0.07) 100%)",
-                  boxShadow: "0 0 0 4px rgba(33,158,188,0.10), 0 10px 28px rgba(33,158,188,0.22)",
-                }}
-              >
-                <div
-                  style={{
-                    position: "absolute",
-                    top: -11,
-                    left: 14,
-                    fontSize: 11,
-                    fontWeight: 900,
-                    letterSpacing: "0.12em",
-                    textTransform: "uppercase",
-                    color: "#04121a",
-                    background: T.cyan,
-                    borderRadius: 999,
-                    padding: "3px 10px",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  Best value · 2 months free
+          <section style={card}>
+            <div style={cardHead}>Membership</div>
+            <div style={cardBody}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, margin: "0 0 14px" }}>
+                <div style={planRow}>
+                  <PlanPrice label="Monthly" price={50} period="/mo" />
                 </div>
 
-                <PlanPrice label="Yearly" price={500} period="/yr" highlight />
-
-                <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: T.cyan, lineHeight: 1.45 }}>
-                  Works out to $41.67/mo — $100 less than paying monthly for a year.
+                {/* Yearly is the plan we want people on — it gets the accent
+                    hairline and the savings maths spelled out against 12x the
+                    monthly price. The comparison is against our OWN monthly
+                    price ($600/yr), which a buyer can check — not a struck-through
+                    list price nobody pays. */}
+                <div style={{ ...planRow, borderColor: V3.cyan, background: V3.surface2 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+                    <span style={v3Chip(V3.cyan)}>Best value · 2 months free</span>
+                  </div>
+                  <PlanPrice label="Yearly" price={500} period="/yr" highlight />
+                  <div style={{ marginTop: 8, fontSize: V3_TEXT.base, fontWeight: 600, color: V3.cyan, lineHeight: 1.45 }}>
+                    Works out to $41.67/mo — $100 less than paying monthly for a year.
+                  </div>
                 </div>
               </div>
+
+              {/* No coupon box. The price on the card is the price at checkout —
+                  nothing to type, nothing to hunt for. */}
+              <div style={noCodes}>
+                <b style={{ color: V3.fg, fontWeight: 700 }}>No codes, no sales.</b>{" "}
+                The price you see is the price you pay.
+              </div>
+
+              <p style={{ fontSize: V3_TEXT.base, color: V3.fg, margin: "0 0 18px", lineHeight: 1.5 }}>
+                Everything on the platform. Cancel anytime from your billing portal.
+              </p>
+
+              {userId ? (
+                <PricingActions
+                  hasAccess={access.ok}
+                  hasBilling={hasBilling}
+                  monthlyLabel="Subscribe monthly — $50/mo"
+                  yearlyLabel="Subscribe yearly — $500/yr · best value"
+                />
+              ) : (
+                <BetaGate />
+              )}
             </div>
-
-            {/* No coupon box. The price on the card is the price at checkout —
-                nothing to type, nothing to hunt for. */}
-            <div
-              style={{
-                marginBottom: 18,
-                padding: "10px 14px",
-                borderRadius: 10,
-                background: "rgba(33,158,188,0.08)",
-                border: "1px solid rgba(33,158,188,0.25)",
-                textAlign: "center",
-                fontSize: 14,
-                color: DIM,
-                lineHeight: 1.5,
-              }}
-            >
-              <b style={{ color: T.cyan, fontWeight: 800 }}>No codes, no sales.</b>{" "}
-              The price you see is the price you pay.
-            </div>
-
-            <p style={{ color: DIM, fontSize: 14, margin: "0 0 22px", lineHeight: 1.5 }}>
-              Everything on the platform. Cancel anytime from your billing portal.
-            </p>
-
-            {userId ? (
-              <PricingActions
-                hasAccess={access.ok}
-                hasBilling={hasBilling}
-                monthlyLabel="Subscribe monthly — $50/mo"
-                yearlyLabel="Subscribe yearly — $500/yr · best value"
-              />
-            ) : (
-              <BetaGate />
-            )}
           </section>
         </div>
 
-        <div style={{ marginTop: 40, fontSize: 14, color: DIM, lineHeight: 1.6 }}>
+        <div style={{ marginTop: 32, fontSize: V3_TEXT.base, color: V3.fg, lineHeight: 1.6 }}>
           By joining you agree to our{" "}
-          <Link href="/terms" style={inlineLink}>Terms</Link>,{" "}
-          <Link href="/risk-disclosure" style={inlineLink}>Risk Disclosure</Link> and{" "}
-          <Link href="/privacy" style={inlineLink}>Privacy Policy</Link>. CB Edge is a market-analytics
-          tool and not financial advice.
+          <Link href="/terms" style={v3LinkStyle} className="pricing-link">Terms</Link>,{" "}
+          <Link href="/risk-disclosure" style={v3LinkStyle} className="pricing-link">Risk Disclosure</Link> and{" "}
+          <Link href="/privacy" style={v3LinkStyle} className="pricing-link">Privacy Policy</Link>. CB Edge is a
+          market-analytics tool and not financial advice.
         </div>
 
         {/* Email-list disclosure. Same sentence as the sign-up form
@@ -261,8 +209,8 @@ export default async function PricingPage({
             over have to say it, because the lifecycle emails it drives
             (app/api/internal/lifecycle-emails) send themselves. Deliberately
             the smallest, last thing on the page: it is a disclosure, not a
-            pitch, and it should not compete with the plan cards. */}
-        <div style={{ marginTop: 14, fontSize: 12, color: "rgba(255,255,255,0.42)", lineHeight: 1.6 }}>
+            pitch. Small by SIZE, not by fading — no text opacity on v3. */}
+        <div style={{ marginTop: 12, fontSize: V3_TEXT.xs, color: V3.fg, lineHeight: 1.6 }}>
           Signing up adds your email to the CB Edge list — occasional product updates and
           offers. Unsubscribe in one click from any of them.
         </div>
@@ -271,12 +219,9 @@ export default async function PricingPage({
   );
 }
 
-// `highlight` is the promoted plan: white bold label, larger figure and a solid
-// accent so the yearly row reads as the obvious pick next to monthly.
-//
-// There is deliberately NO `original` / struck-through price. We don't inflate a
-// list price to make the real one look like a discount — one number, and it's
-// the one Stripe charges.
+// `highlight` is the promoted plan: larger figure. There is deliberately NO
+// `original` / struck-through price. We don't inflate a list price to make the
+// real one look like a discount — one number, and it's the one Stripe charges.
 function PlanPrice({
   label,
   price,
@@ -290,74 +235,111 @@ function PlanPrice({
 }) {
   return (
     <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-      <span
-        style={{
-          fontSize: highlight ? 15 : 14,
-          fontWeight: highlight ? 900 : 700,
-          color: highlight ? T.text : DIM,
-          letterSpacing: highlight ? "0.04em" : undefined,
-          minWidth: 58,
-        }}
-      >
+      <span style={{ fontSize: V3_TEXT.base, fontWeight: 700, color: V3.fg, letterSpacing: "0.04em", minWidth: 58 }}>
         {label}
       </span>
       <span
         style={{
-          fontSize: highlight ? 38 : 24,
-          fontWeight: 900,
-          color: T.cyan,
+          fontFamily: V3_MONO,
+          fontSize: highlight ? V3_TEXT.xxl : V3_TEXT.xl,
+          fontWeight: 700,
+          color: V3.cyan,
           lineHeight: 1,
-          textShadow: highlight ? "0 0 22px rgba(33,158,188,0.55)" : undefined,
+          letterSpacing: "-0.02em",
         }}
       >
         ${price}
-        <span style={{ fontSize: 14, fontWeight: 700, color: highlight ? T.text : DIM }}>{period}</span>
+        <span style={{ fontSize: V3_TEXT.base, fontWeight: 600, color: V3.fg, marginLeft: 2 }}>{period}</span>
       </span>
     </div>
   );
 }
 
 /* ── styles ───────────────────────────────────────────────────────────── */
+/* Every colour is a V3 token. No hex, no rgba literal, no text opacity. */
 
-// Theme defines muted === text === pure white, which flattens all hierarchy.
-// DIM gives real secondary/body copy a dimmed white so headings + accents pop.
-const DIM = "rgba(255,255,255,0.62)";
+const root: React.CSSProperties = {
+  // The bare LayoutShell wrapper is a flex column with overflow:hidden, so
+  // this root must own its own scroll.
+  flex: 1,
+  minHeight: 0,
+  overflowY: "auto",
+  background: V3.bg,
+  color: V3.fg,
+  fontFamily: V3_SANS,
+};
 
-const sectionLabel: React.CSSProperties = {
-  fontSize: 14,
+const main: React.CSSProperties = {
+  maxWidth: 980,
+  margin: "0 auto",
+  // PublicNav is sticky and reserves its own height — no compensation here.
+  padding: "clamp(24px, 4vw, 44px) clamp(14px, 3vw, 28px) 80px",
+};
+
+const h1: React.CSSProperties = {
+  fontSize: "clamp(28px, 3.4vw, 42px)",
+  fontWeight: 800,
+  letterSpacing: "-0.035em",
+  lineHeight: 1.05,
+  margin: "14px 0 10px",
+  color: V3.fg,
+};
+
+const lede: React.CSSProperties = {
+  fontSize: V3_TEXT.body,
+  color: V3.fg,
+  margin: "0 0 26px",
+  maxWidth: "62ch",
+  lineHeight: 1.6,
+};
+
+const grid: React.CSSProperties = {
+  display: "grid",
+  gap: 16,
+  gridTemplateColumns: "minmax(0,1fr) minmax(0,380px)",
+  alignItems: "start",
+};
+
+const card: React.CSSProperties = { ...v3CardStyle, overflow: "hidden" };
+
+const cardHead: React.CSSProperties = {
+  padding: "10px 16px",
+  borderBottom: `1px solid ${V3.line}`,
+  background: V3.surface2,
+  fontFamily: V3_MONO,
+  fontSize: V3_TEXT.xs,
   fontWeight: 700,
-  letterSpacing: "0.1em",
+  letterSpacing: "0.14em",
   textTransform: "uppercase",
-  color: DIM,
-  marginBottom: 16,
+  color: V3.cyan,
 };
 
-const badge: React.CSSProperties = {
-  display: "inline-block",
-  fontSize: 12,
-  fontWeight: 700,
-  letterSpacing: "0.1em",
-  textTransform: "uppercase",
-  color: T.cyan,
-  border: "1px solid rgba(33,158,188,0.3)",
-  background: "rgba(33,158,188,0.08)",
-  padding: "5px 12px",
-  borderRadius: 999,
+const cardBody: React.CSSProperties = { padding: "clamp(16px, 2.2vw, 22px)" };
+
+const li: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  alignItems: "flex-start",
+  fontSize: V3_TEXT.body,
+  color: V3.fg,
+  lineHeight: 1.5,
 };
 
-const topBtn: React.CSSProperties = {
-  padding: "9px 18px",
-  borderRadius: 10,
-  border: `1px solid ${T.border}`,
-  background: "rgba(13,17,25,0.7)",
-  color: T.text,
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: "pointer",
+const planRow: React.CSSProperties = {
+  padding: "14px 14px 12px",
+  borderRadius: V3_RADIUS.md,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface,
 };
 
-const inlineLink: React.CSSProperties = {
-  color: T.cyan,
-  textDecoration: "none",
-  fontWeight: 600,
+const noCodes: React.CSSProperties = {
+  marginBottom: 14,
+  padding: "10px 14px",
+  borderRadius: V3_RADIUS.sm,
+  background: V3.surface2,
+  border: `1px solid ${V3.line}`,
+  textAlign: "center",
+  fontSize: V3_TEXT.base,
+  color: V3.fg,
+  lineHeight: 1.5,
 };

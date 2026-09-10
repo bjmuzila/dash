@@ -1,49 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { V3, V3_TEXT, v3GhostButton, v3PrimaryButton } from "@/components/landing/v3Theme";
 
 // Signed-out CTA for the pricing page. Beta/prelaunch gating removed now that
 // the full launch has shipped — signups are open, so this is just the
 // join-vs-sign-in choice (plan is picked right after account creation).
+//
+// 2026-09-10: v3 controls (v3Theme) instead of the v2 gradient pill. The name
+// is historical; it is the signed-out join block.
 export default function BetaGate() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Link href="/sign-up?next=/pricing" style={{ textDecoration: "none" }}>
-        <button style={joinBtn}>Join now — create account</button>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <Link href="/sign-up?next=/pricing" style={{ ...v3PrimaryButton, width: "100%", boxSizing: "border-box", fontSize: V3_TEXT.body }}>
+        Join now — create account
       </Link>
-      <Link href="/sign-in?next=/pricing" style={{ textDecoration: "none" }}>
-        <button style={secondaryBtn}>I already have an account</button>
+      <Link href="/sign-in?next=/pricing" style={{ ...v3GhostButton, width: "100%", boxSizing: "border-box" }}>
+        I already have an account
       </Link>
-      <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, margin: "4px 0 0", lineHeight: 1.4, textAlign: "center" }}>
-        You'll choose your plan right after creating your account.
+      <p style={{ color: V3.fg, fontSize: V3_TEXT.xs, margin: "4px 0 0", lineHeight: 1.45, textAlign: "center" }}>
+        You&apos;ll choose your plan right after creating your account.
       </p>
     </div>
   );
 }
-
-/* ── styles ───────────────────────────────────────────────────────────── */
-
-const joinBtn: React.CSSProperties = {
-  width: "100%",
-  padding: "14px 16px",
-  borderRadius: 10,
-  border: "none",
-  background: `linear-gradient(180deg, ${T.cyan}, #00b8c4)`,
-  color: "#04121a",
-  fontSize: 14,
-  fontWeight: 800,
-  cursor: "pointer",
-};
-
-const secondaryBtn: React.CSSProperties = {
-  width: "100%",
-  padding: "12px 16px",
-  borderRadius: 10,
-  border: `1px solid ${T.border}`,
-  background: "rgba(255,255,255,0.03)",
-  color: T.text,
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: "pointer",
-};
