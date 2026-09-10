@@ -1,5 +1,131 @@
 # Changelog
 
+## 2026-09-10 (bb) - Jackson Hole and Apple events moved to the column chart
+
+Brandon: "can we make the jackson hole and aapl events the same bar graph
+style". Both were still on `HBars` - the two-panel, two-scale row chart the
+Sept 11 section was just moved off.
+
+`YearColumns` (added in (aa)) is now **`EventColumns`** and is the house form
+for every dated study on the page:
+
+- Rows are `{ key, label, value, note?, sub? }` instead of `{ year, ... }`, so
+  it takes dates as readily as years. Callers pass rows **oldest first** - it
+  is a time axis, not a ranking, and every LIST on this page is newest-first,
+  so all three call sites `.reverse()`.
+- New `minLabelPx`: labels thin to every Nth column until they fit. A two-digit
+  year needs ~20px, a keynote date ~54px. At 50 Apple events the axis prints
+  every third date instead of overprinting fifty.
+- Hover readout carries `sub` - the symposium span for Jackson Hole, the event
+  name and headline for Apple.
+
+### One measure, one axis - the week-after series left both charts
+
+The old panels drew the event day and the week after side by side on
+**independent scales**, which is how a +1.4% day came to draw longer than a
+-4.8% week. Both windows are still in the table under each chart, where the
+numbers are read rather than compared by length. The chart now answers the one
+question the section is named for: what the stock/index did on the day.
+
+Jackson Hole: 37 columns, 1990-2026, mean keynote session about +0.2%. Apple:
+the newest 20 or 50 keynotes (existing pill), mean on the pill's selection so
+the rule matches what is drawn.
+
+### Files
+
+- `components/seasonality/SeasonalityAlmanac.tsx` - `YearColumns` renamed and
+  generalised to `EventColumns`; `jh:` and `aapl:` sections swapped off
+  `HBars`; `sep11:` updated for the new row shape. `HBars` is untouched and
+  still drives the VIX, FOMC and earnings studies, which are genuinely lists.
+
+Preview of both: `generated/2026-09-10-jh-aapl-columns.png`.
+
+
+## 2026-09-10 (aa) - Seasonality: Sept 11 anniversary study, drawn as columns
+
+Brandon: "seasonality page - can we add the historical on 9/11 since 2001".
+
+New section in the almanac rail: **Sept 11 anniversary**, hash `#sept-11`, in
+the dated-events group next to Jackson Hole. Same machinery as that study - an
+anchor date and calendar-week windows off the forward-filled 365-day axis in
+`YEAR_CURVES` - so it adds no fetch, no API route and no data regeneration.
+
+Windows, anchored on 11 September (axis index 253): week into = T-8 -> T-1,
+the day = T-1 -> T, week after = T -> T+7, month after = T -> T+30.
+
+### The thing that makes it honest: the anchor is not always a session
+
+The seasonal axis is forward-filled across weekends and holidays, so a
+close-to-close return spanning a non-session computes as exactly **0.00%** -
+not a missing value, a real-looking flat print sitting in the middle of the
+table.
+
+- **2001** - the exchanges never opened on the 11th and stayed shut until Mon
+  Sep 17, the longest closure since 1933. Hardcoded, because `isMarketHoliday`
+  does not model ad-hoc closures (by design - see its header).
+- **Seven weekend years** (2004, 2005, 2010, 2011, 2016, 2021, 2022) - detected
+  at render time via `isMarketHoliday`, never listed, so 2027+ stays correct
+  with no edit.
+
+Those rows print "market closed" / "no session" instead of a number and drop
+out of every mean and hit rate. The surrounding windows still compute for them,
+because calendar-week offsets land on the same weekday - and for 2001 the
+week-after window is the number that actually means something: last pre-attack
+close (Sep 10) through the week of the reopening, about -5.5%.
+
+Day-of sample: **17 traded anniversaries**, mean about +0.54%, 15 of 17
+positive. Small sample, spread several times the mean - the section note says
+so rather than dressing it up as an edge. The month-after column is carried by
+2008 (Lehman filed the Monday after) and 2022 (the CPI print two days later).
+
+The live year uses `live.pct` like the Jackson Hole and FOMC rows, so today's
+row shows "Ahead" and fills itself in tomorrow with no deploy.
+
+### The chart: `YearColumns`, not `HBars`
+
+First cut used `HBars` and Brandon's verdict was "this looks bad". It was:
+26 rows, two panels, **two independent scales** - so a +1.4% day drew LONGER
+than a -4.8% week - and nine of the rows had nothing to draw in the left panel.
+The years are also a SERIES, not a ranking: one observation per year on a fixed
+date wants a time axis.
+
+New small component in `SeasonalityAlmanac.tsx`, beside `HBars`. One column per
+year, time left to right, 300px tall instead of 560:
+
+- **Nulls are not zeros.** A year with no session draws a 2px neutral tick on
+  the baseline plus its reason (`shut`, `wknd`, `ahead`) - never a zero-length
+  bar, which reads as "flat".
+- Rounded on the data end only (`barPath`), so a positive bar stays welded to
+  the zero line.
+- Hit target is the full column width, not the ~10px bar - a 0.05% year is a
+  hairline nobody can hover.
+- Mean as a rule with its label in the right margin; `fmtMean` lets the summary
+  carry 2dp while the axis stays at 1dp.
+- Width starts at 0 on both sides and is filled in by the ResizeObserver after
+  mount - the page's hydration rule.
+
+**The week-after series was dropped from the chart** and left in the table. On
+one axis it dwarfs the day; on two it lies.
+
+### Files
+
+- `components/seasonality/sections.ts` - `"sep11"` added to `SectionKey` and to
+  the group, renamed **"Scheduled events" -> "Dated events"** since an
+  anniversary is not scheduled by anyone.
+- `components/seasonality/eventDates.ts` - `SEPT11_START_YEAR`, `SEPT11_NOTES`
+  (2001 closure, 2008 Lehman) and the sourcing header. No date list - the
+  anchor is the same calendar date every year.
+- `components/seasonality/SeasonalityAlmanac.tsx` - `sep11Rows` / `sep11Sessions`
+  memos, the `sep11:` section, and `YearColumns`. `HBars` untouched and still
+  used by the other six studies.
+
+Mockups considered: `generated/2026-09-10-sep11-chart-options.html` (four forms)
+and `generated/2026-09-10-sep11-bar-treatments.html` (four bar treatments).
+
+NOTE: an earlier version of this entry, added at 19:26, was overwritten by a
+concurrent session's full-file write of CHANGELOG.md.
+
+
 ## 2026-09-10 (z) - The clip and the probe actually pop out
 
 The ContractProbe half of (v) was written and then lost — the file on disk had

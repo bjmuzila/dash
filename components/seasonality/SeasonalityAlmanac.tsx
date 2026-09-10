@@ -762,6 +762,174 @@ function HBars({
   );
 }
 
+/**
+ * One column per event, time running left to right. The house form for every
+ * dated study on this page: Sept 11, Jackson Hole, Apple keynotes.
+ *
+ * WHY THIS RATHER THAN HBars. HBars gives every observation a ROW, which is
+ * right when they are a list to be ranked and wrong when they are a SERIES. A
+ * study anchored on a date has one observation per event in a fixed order, and
+ * the reader wants them in that order. Columns also fit in a third of the
+ * height, and a missing observation becomes a visible gap on the timeline
+ * instead of a blank row that has to be explained.
+ *
+ * ONE MEASURE, ONE AXIS. HBars drew two windows in two panels on two scales,
+ * which is how a +1.4% day came to draw LONGER than a −4.8% week. Every one of
+ * these studies now charts the EVENT SESSION alone and leaves the surrounding
+ * windows to the table, where numbers are read rather than compared by length.
+ *
+ * A NULL IS NOT A ZERO, and this chart is built around that: a row with no
+ * value draws a short neutral tick on the baseline plus its reason, never a
+ * bar of length zero, which would read as "flat" rather than "no session".
+ *
+ * Same hydration rule as every other chart here — width starts at 0 on both
+ * sides and is filled in by the ResizeObserver after mount.
+ */
+function EventColumns({
+  rows,
+  mean: meanValue,
+  fmt,
+  fmtMean,
+  height = 300,
+  minLabelPx = 40,
+}: {
+  /** OLDEST FIRST — this is a time axis. `sub` is hover-only detail. */
+  rows: { key: string; label: string; value: number | null; note?: string; sub?: string }[];
+  /** Drawn as a horizontal rule with a label in the right margin. Omit to skip. */
+  mean?: number | null;
+  fmt: (v: number) => string;
+  /** The mean label only. It is a summary figure, not an axis tick, so it is
+   *  worth a decimal the axis does not need. Defaults to `fmt`. */
+  fmtMean?: (v: number) => string;
+  height?: number;
+  /** Room one axis label needs. Labels are thinned to every Nth until they fit
+   *  — a two-digit year needs ~20px, a date ~52px. */
+  minLabelPx?: number;
+}) {
+  const [ref, width] = useMeasuredWidth();
+  const [hover, setHover] = useState<number | null>(null);
+
+  const L = 46;
+  // Right margin carries the mean label, so it is only paid for when there is one.
+  const R = meanValue == null ? 12 : 96;
+  const T = 16;
+  const B = 34;
+  const PW = Math.max(40, width - L - R);
+  const PH = height - T - B;
+
+  const vals = rows.map((r) => r.value).filter((v): v is number => v != null);
+  const lo = Math.min(0, ...vals);
+  const hi = Math.max(0, ...vals);
+  const pad = (hi - lo) * 0.12 || 0.001;
+  const dlo = lo - (lo < 0 ? pad : 0);
+  const dhi = hi + (hi > 0 ? pad : 0);
+
+  const colW = PW / Math.max(1, rows.length);
+  const barW = Math.min(24, colW * 0.54);
+  /** Label every Nth column, so a dense axis thins instead of overprinting. */
+  const stride = Math.max(1, Math.ceil(minLabelPx / Math.max(1, colW)));
+  const cx = (i: number) => L + i * colW + colW / 2;
+  const y = (v: number) => T + PH - ((v - dlo) / (dhi - dlo || 1)) * PH;
+  const ticks = niceTicks(dlo, dhi, 4);
+
+  return (
+    <div ref={ref} style={{ width: "100%" }}>
+      {width > 0 && rows.length ? (
+        <>
+          <svg
+            width={width}
+            height={height}
+            role="img"
+            aria-label={`Return per event, ${rows[0].label} to ${rows[rows.length - 1].label}`}
+            style={{ display: "block", touchAction: "none" }}
+            onPointerLeave={() => setHover(null)}
+          >
+            {ticks.map((t) => (
+              <g key={t}>
+                <line
+                  x1={L}
+                  x2={L + PW}
+                  y1={y(t)}
+                  y2={y(t)}
+                  stroke={Math.abs(t) < 1e-12 ? "rgba(255,255,255,0.26)" : "rgba(255,255,255,0.07)"}
+                />
+                <text x={L - 8} y={y(t) + 3.5} fontSize={10} fill={INK} opacity={0.45} textAnchor="end" style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {Math.abs(t) < 1e-12 ? "0" : fmt(t)}
+                </text>
+              </g>
+            ))}
+
+            {rows.map((r, i) => {
+              const on = hover == null || hover === i;
+              const x0 = cx(i) - barW / 2;
+              return (
+                <g key={r.key} onPointerEnter={() => setHover(i)}>
+                  {/* Full-height hit target: the columns are ~10px wide and a
+                      1-in-20 year is a hairline, so the bar itself is not a
+                      target anybody can land on. */}
+                  <rect
+                    x={L + i * colW}
+                    y={T}
+                    width={colW}
+                    height={PH}
+                    fill={hover === i ? "rgba(255,255,255,0.05)" : "transparent"}
+                  />
+                  {r.value == null ? (
+                    <>
+                      <rect x={x0} y={y(0) - 1} width={barW} height={2} fill="rgba(255,255,255,0.18)" />
+                      {r.note ? (
+                        <text x={cx(i)} y={y(0) - 8} fontSize={8.5} fill={INK} opacity={on ? 0.4 : 0.2} textAnchor="middle">
+                          {r.note}
+                        </text>
+                      ) : null}
+                    </>
+                  ) : (
+                    <path
+                      d={barPath(x0, barW, Math.min(y(0), y(r.value)), Math.abs(y(r.value) - y(0)), r.value >= 0)}
+                      fill={r.value >= 0 ? UP : DOWN}
+                      opacity={on ? 0.92 : 0.4}
+                    />
+                  )}
+                  {i % stride === 0 || hover === i ? (
+                    <text
+                      x={cx(i)}
+                      y={height - 12}
+                      fontSize={9.5}
+                      fill={INK}
+                      opacity={hover === i ? 0.9 : 0.42}
+                      textAnchor="middle"
+                      style={{ fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {r.label}
+                    </text>
+                  ) : null}
+                </g>
+              );
+            })}
+
+            {meanValue != null ? (
+              <>
+                <line x1={L} x2={L + PW} y1={y(meanValue)} y2={y(meanValue)} stroke={A1} strokeWidth={1.25} />
+                <text x={L + PW + 8} y={y(meanValue) + 3.5} fontSize={10} fontWeight={700} fill={A1} style={{ fontVariantNumeric: "tabular-nums" }}>
+                  mean {(fmtMean ?? fmt)(meanValue)}
+                </text>
+              </>
+            ) : null}
+          </svg>
+
+          <div style={{ minHeight: 20, marginTop: 4, fontSize: 12, color: INK, fontVariantNumeric: "tabular-nums" }}>
+            {hover != null && rows[hover]
+              ? `${rows[hover].label} · ${rows[hover].value == null ? rows[hover].note || "no value" : fmt(rows[hover].value as number)}${rows[hover].sub ? ` · ${rows[hover].sub}` : ""}`
+              : "Hover a column for the detail."}
+          </div>
+        </>
+      ) : (
+        <div style={{ height: height + 24 }} />
+      )}
+    </div>
+  );
+}
+
 // ── event studies ───────────────────────────────────────────────────────────
 
 /**
@@ -2005,20 +2173,30 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
         </div>
 
-        <div style={{ marginTop: 18 }}>
-          <HBars
-            rows={jhRows.map((r) => ({
-              key: String(r.year),
-              label: `${r.year}`,
-              sub: fmtSpan(r.start, r.end),
-              a: r.day,
-              b: r.after,
-            }))}
-            aTitle="Keynote session"
-            bTitle="Week after the keynote"
-            fmtA={(v) => pct(v, 1)}
-            fmtB={(v) => pct(v, 1)}
-            maxHeight={520}
+        {/* The keynote session alone. The week after is in the table: on one
+            axis it swamps a one-day move, and on two axes — which is what this
+            chart used to do — the day appears to be the larger of the two. */}
+        <div style={{ marginTop: 20 }}>
+          <div style={{ ...capLabel, fontSize: 9.5, marginBottom: 10, opacity: 0.75 }}>
+            SPX on the keynote session · {JACKSON_HOLE[JACKSON_HOLE.length - 1].year}–{JACKSON_HOLE[0].year}
+          </div>
+          <EventColumns
+            // Oldest first — a time axis, not a ranking. jhRows is newest-first
+            // because every LIST on this page is.
+            rows={jhRows
+              .slice()
+              .reverse()
+              .map((r) => ({
+                key: String(r.year),
+                label: String(r.year).slice(2),
+                value: r.day,
+                sub: `${fmtSpan(r.start, r.end)}${r.note ? ` · ${r.note}` : ""}`,
+              }))}
+            mean={mean(jhRows.map((r) => r.day))}
+            fmt={(v) => pct(v, 1)}
+            fmtMean={(v) => pct(v, 2)}
+            height={300}
+            minLabelPx={20}
           />
         </div>
 
@@ -2108,20 +2286,35 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           ) : null}
         </div>
 
-        <div style={{ marginTop: 18 }}>
-          <HBars
-            rows={sep11Rows.map((r) => ({
-              key: String(r.year),
-              label: String(r.year),
-              sub: r.why ? `${r.dow} · ${r.why}` : r.dow,
-              a: r.day,
-              b: r.after,
-            }))}
-            aTitle="Sept 11 session"
-            bTitle="Week after"
-            fmtA={(v) => pct(v, 1)}
-            fmtB={(v) => pct(v, 1)}
-            maxHeight={520}
+        {/* The day itself, one column per year, oldest on the left. The week
+            after is NOT drawn beside it: on a shared axis a 1% day is a stub
+            next to a 5% week, and on two axes — which is what the first cut of
+            this section did — the day appears to be the larger move. It lives
+            in the table below, where the two numbers are read rather than
+            compared by length. */}
+        <div style={{ marginTop: 20 }}>
+          <div style={{ ...capLabel, fontSize: 9.5, marginBottom: 10, opacity: 0.75 }}>
+            SPX on 11 September · {SEPT11_START_YEAR}–{liveYearNum}
+          </div>
+          <EventColumns
+            rows={sep11Rows
+              // Chronological: this is a time series, not a ranking.
+              .slice()
+              .reverse()
+              .map((r) => ({
+                key: String(r.year),
+                // Two digits: 26 four-digit labels collide below ~1100px, and
+                // the axis span is named in the caption above.
+                label: String(r.year).slice(2),
+                value: r.day,
+                note: r.day == null ? (r.session ? "ahead" : r.year === 2001 ? "shut" : "wknd") : undefined,
+                sub: r.dow,
+              }))}
+            mean={mean(sep11Sessions.map((r) => r.day))}
+            fmt={(v) => pct(v, 1)}
+            fmtMean={(v) => pct(v, 2)}
+            height={300}
+            minLabelPx={20}
           />
         </div>
 
@@ -2334,20 +2527,29 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
               />
             </div>
 
-            <div style={{ marginTop: 18 }}>
-              <HBars
-                rows={appleFiltered.slice(0, appleCount).map((r) => ({
-                  key: r.date,
-                  label: fmtUS(r.date),
-                  sub: `${r.name} · ${r.headline}`,
-                  a: r.day,
-                  b: r.week,
-                }))}
-                aTitle="Day of the keynote"
-                bTitle="Week after"
-                fmtA={(v) => pct(v, 1)}
-                fmtB={(v) => pct(v, 1)}
-                maxHeight={520}
+            {/* The keynote session alone — the week after is in the table.
+                `appleFiltered` is newest-first, so take the newest N and THEN
+                reverse: the chart is a timeline and must run forwards. */}
+            <div style={{ marginTop: 20 }}>
+              <div style={{ ...capLabel, fontSize: 9.5, marginBottom: 10, opacity: 0.75 }}>
+                AAPL on the keynote session · last {Math.min(appleCount, appleFiltered.length)} events
+              </div>
+              <EventColumns
+                rows={appleFiltered
+                  .slice(0, appleCount)
+                  .reverse()
+                  .map((r) => ({
+                    key: r.date,
+                    label: fmtUS(r.date).replace(/\/(\d{2})(\d{2})$/, "/$2"),
+                    value: r.day,
+                    note: r.session ? undefined : "no price",
+                    sub: `${r.name} · ${r.headline}`,
+                  }))}
+                mean={mean(appleFiltered.slice(0, appleCount).map((r) => r.day))}
+                fmt={(v) => pct(v, 1)}
+                fmtMean={(v) => pct(v, 2)}
+                height={300}
+                minLabelPx={54}
               />
             </div>
 
