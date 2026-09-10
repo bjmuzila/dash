@@ -1,5 +1,205 @@
 # Changelog
 
+## 2026-09-10 (c) - FIX: budget page loaded empty - stale _lib-db.cjs bundle
+
+`owner.cbedge.net/owner/budget` rendered with every figure at zero. NOT data
+loss: all 927 `budget_statement_tx` rows, 59 `budget_register` rows and the rest
+were present the whole time, correctly scoped to `profile_id = 1`.
+
+`GET /api/budget?month=2026-09` was returning 500:
+
+    {"error":"Budget load failed",
+     "detail":"TypeError: D.listPropRecurring is not a function"}
+
+`/api/budget/real` and `/api/budget/year` both returned 200, so the page loaded
+its chrome and two of three payloads, then silently showed nothing for the third
+- which is the whole month view.
+
+CAUSE: `api-router.js:8763` calls `D.listPropRecurring(profile.id)`.
+`lib/db.ts:7181` exports it. `server-v2/_lib-db.cjs` - the esbuild bundle
+api-router actually requires - did not contain it. Of the 204 libDb functions
+api-router calls, it was the only one missing.
+
+FIX: added `listPropRecurring` to `server-v2/_lib-db.cjs` by hand (function body
+copied from `lib/db.ts`, plus its entry in the export map). 273 -> 274 exports,
+all 204 called functions now resolve, module loads and the function is callable.
+
+*** DO NOT REGENERATE _lib-db.cjs WITH THE DOCUMENTED ESBUILD COMMAND. ***
+
+The header comment in `api-router.js` says to rebuild the bundle with:
+
+    esbuild lib/db.ts --bundle --platform=node --format=cjs --external:pg \
+      --outfile=server-v2/_lib-db.cjs
+
+That instruction is now WRONG and running it breaks production. `lib/db.ts` and
+the committed bundle have diverged in BOTH directions - verified by rebuilding
+into a scratch file and diffing the export maps:
+
+  - In the BUNDLE but NOT in lib/db.ts (32) - a rebuild DELETES these:
+    clearStatementMonth, deleteCategoryRule, deleteRegisterRowsInWindow,
+    deleteStatementTx, getBudgetAdvice, getGexHistoryExpiriesForDate,
+    getPagePresets, insertStatementTx, listAmazonGasByMonth,
+    listAmazonMonthTotals, listCategoryRules, listMerchantCategoryHistory,
+    listMerchantCategoryMemory, listOwnerTodo, listRegisterInsertBatches,
+    listRegisterRowsInWindow, listSettledFlows, listStatementCategoryTrend,
+    listStatementDailyTrend, listStatementMonths, listStatementTx,
+    listSubscriptions, normGexSymbol, replaceOwnerTodo, setSettledFlow,
+    setStatementCategoriesBulk, setStatementCategoriesByMerchantBulk,
+    setStatementCategoryByMerchant, setStatementTxCategory, updateStatementTx,
+    upsertBudgetAdvice, upsertCategoryRule
+  - In lib/db.ts but NOT in the bundle (41): the trial-ban / comp-access /
+    short-link / attribution set, plus listPropRecurring.
+
+A naive regenerate takes api-router from 1 unresolved function to 32 - it would
+break the statement importer, the owner to-do board, category rules, budget
+advice and `normGexSymbol` (which the GEX history writer depends on).
+
+Until `lib/db.ts` is reconciled with the bundle, treat `_lib-db.cjs` as a source
+file that is edited directly, and add each new function to BOTH. Reconciling
+them properly is its own task and should be done deliberately, with the export
+map diffed before and after.
+
+## 2026-09-10 (b) - OWNER: /owner/db-map — Postgres size + retention map
+
+New owner page that answers "what is the database holding, and is each table's
+declared cutoff the cutoff it actually enforces". Built after the 2026-09 disk
+incident, where two retention statements had been failing silently for six weeks
+and the only symptom was Render's disk gauge at 94%.
+
+- `app/owner/db-map/page.tsx` (new) - PageShell + Card, zero raw color literals
+  (everything from `homeTheme`). Owner-gated by `app/owner/layout.tsx` like every
+  other `/owner/*` route: no per-page guard, and NO `app-vite/src/App.tsx` entry,
+  because owner pages are Next-served rather than SPA routes.
+- `components/shared/OwnerSidebar.tsx` - "Postgres" added to the Backend group.
+- `server-v2/api-router.js` - `GET /api/owner/db-map`, `auth: 'owner'`. Four
+  catalog reads (`pg_database_size`, `pg_class` sizes, `pg_stat_user_indexes`,
+  `pg_stat_user_tables`) plus a lookup in `db_map_snapshot`. Nothing scans a
+  table, so it is safe on every page load.
+- `server-v2/state/retention-cleanup.js` - now exports `RETENTION`, and writes a
+  `db_map_snapshot` row per table nightly after the prune.
+
+THE POINT OF THE PAGE is the KEEPS vs HOLDS pair. Keeps is read out of the code
+(`RETENTION` plus each recorder's `RETAIN_DAYS`, same env vars and defaults) so
+the page can never drift from what runs. Holds is measured from the rows. A
+table holding more days than it keeps is a prune that has stopped working, and
+it now shows as "Not enforced" the day it starts instead of at 94% disk.
+
+WHY THE AGE COLUMN IS A NIGHTLY SNAPSHOT, not a live query: `min(date)` on a
+text date column is a sequential scan - measured at 43s on
+`option_strike_gex_history` alone, 11s across five smaller tables. That cannot
+run in a request. `writeDbMapSnapshot()` computes it once a night, right after
+the prune that determines it, with its own 30s per-probe timeout, resolving each
+table's date column out of `information_schema` (so a new table is covered
+without being listed anywhere) and handling epoch-ms bigints, epoch-second
+bigints, text dates and real date/timestamp columns. Top 40 tables by size,
+180-day rolling window on the snapshot table itself.
+
+The page also lists the largest indexes with their `idx_scan` counts, because
+neither kind of index problem is a retention problem: an index far larger than
+its table's data is bloat, one with zero scans is dead weight, and only REINDEX
+or a drop fixes either. Retention running correctly is not sufficient - nothing
+in the codebase reindexes, which is how `flow_prints` reached 3.87GB of index on
+a 209MB heap while pruning perfectly every night.
+
+Plan size is `PG_DISK_LIMIT_BYTES` (default 30GB) - Render does not expose it
+over SQL, and the page needs it only for the denominator. Note the page's figure
+is `pg_database_size`, which reads BELOW Render's gauge by 1-2GB: the gauge
+counts WAL and catalog on the same volume. The page says so rather than leaving
+two numbers unexplained.
+
+NOT RUN: no typecheck or build was executed for this change - run
+`npm run build` before deploying (it also runs
+`app-vite/scripts/check-routes.mjs`, which is unaffected here since no SPA route
+was added).
+
+## 2026-09-10 (a) - DB: retention-cleanup could not finish; Postgres was at 94% of 30GB
+
+Render Postgres hit 93.95% of its 30GB disk. Root cause was not growth - it was
+`server-v2/state/retention-cleanup.js` failing silently on two tables since the
+day it was deployed, plus six weeks of index bloat nothing ever reclaimed.
+
+WHAT WAS ACTUALLY WRONG
+
+- The DB role carries `statement_timeout=120s` (`ALTER ROLE dash_n572_user`; see
+  `pg_db_role_setting`). The retention pool sets no timeout of its own, so it
+  inherited it. Role settings are applied at LOGIN and override the startup
+  packet, so `PGOPTIONS` / the `options` connection field cannot beat them -
+  only a session-level `SET` can.
+- The `option_strike_gex_history` DELETE aggregated `MIN(expiry) GROUP BY date,
+  symbol` over the WHOLE table and joined it back against every row, with two
+  `to_timestamp(...) AT TIME ZONE` conversions evaluated per row. Measured at
+  37.6M rows: the aggregate subquery ALONE took 101s. The statement could never
+  finish inside 120s, so it was cancelled nightly, caught by `runDeletes()`'s
+  per-table try/catch, and logged as a warning nobody read. Oldest row was
+  2026-07-24 - the module's own deploy date. It had never once succeeded.
+  Table reached 37.6M rows / 17.6GB = 67% of the entire database.
+- `watch_snapshots` deletes on `created_at`. That column does not exist on the
+  table (it stamps `ts`, epoch MILLISECONDS). Threw
+  `column "created_at" does not exist` on every run since it was written.
+- 11 of 13 tables pruned correctly the whole time - proven by oldest-row dates
+  matching their cutoffs exactly (`strike_growth` 2026-09-04 vs a 5d cutoff,
+  `etf_candles` 2026-08-10 vs 30d, `ticker_wall_snapshots` 2026-08-30 vs 10d,
+  `flow_prints` 2026-09-04 vs 5d). The nightly job runs; two statements failed.
+- Nothing in the codebase ever REINDEXes. The module runs plain
+  `VACUUM (ANALYZE)` and deliberately never `VACUUM FULL` (correct - see its
+  header). Plain VACUUM marks space reusable without shrinking, so tables under
+  heavy nightly mass-DELETE accumulated extreme index bloat: `flow_prints` was
+  carrying 3.87GB of index on a 209MB heap, its 1.2M-row PK alone at 977MB
+  (~814 bytes/row for entries that should be ~45).
+
+CODE CHANGES (`server-v2/state/retention-cleanup.js`)
+
+- `pruneGexHistoryByDate()` replaces the single monster DELETE. Two passes, both
+  driven off `SELECT DISTINCT date` (43 rows, not 37.6M): whole dates past the
+  window via `DELETE ... WHERE date = $1` (uses `idx_osgh_date`), then the
+  front-expiry + 5-minute-grid rules applied one date at a time. Identical
+  semantics; the `MIN(expiry)` group is ~44 rows per statement instead of 1,893
+  over the whole table. Each statement is its own transaction, so one bad date
+  cannot block the rest and WAL recycles between them.
+- Session-level `SET statement_timeout` on this pool via `pool.on('connect')`,
+  default 600s (`RETENTION_STATEMENT_TIMEOUT_MS`). A backstop, not a budget -
+  per-date statements take seconds. The 120s role default stays for the app's
+  web pool, where it belongs.
+- `watch_snapshots` now cuts on `ts < (EXTRACT(EPOCH FROM NOW() - INTERVAL
+  'Nd') * 1000)::bigint`.
+- `runCleanup()` re-reports any table that did not prune as a `console.error`
+  naming it. A swallowed warning is what hid this for six weeks.
+- Startup log line, matching the other recorders, so an empty
+  `docker compose logs | grep retention` no longer reads the same as
+  "never started".
+- `MAX_DATES_PER_RUN` (400) guards the pass-1 loop.
+
+MANUAL CLEANUP RUN (2026-09-09/10, off-hours)
+
+- Dropped 5 near-zero-scan indexes: `option_strike_gex_history_pkey` (813MB, 5
+  scans in the table's life), `darkpool_prints_pkey` (60MB, 0 scans),
+  `idx_oi_daily_lookup` (253MB, 76), `idx_etf_candles_symbol_date_ts` (123MB,
+  885), `idx_strike_growth_expiry_latest` (76MB, 53). ~1.3GB, instant.
+- `REINDEX INDEX CONCURRENTLY` on `flow_prints` (3.87GB -> 240MB; covering idx
+  1663MB -> 72MB, pkey 977MB -> 51MB), `strike_growth` and `oi_daily`. ~4.9GB.
+- Cleared the `option_strike_gex_history` backlog: 34 dates past the 10d window
+  (10.4M rows), then the thinning rules per date. 37.6M -> 10.45M rows.
+- Result: 26.03GB -> 22.02GB, 93.95% -> ~79%.
+
+STILL OPEN
+
+- ~9GB is recoverable by reindexing the 7 remaining `option_strike_gex_history`
+  indexes (12.6GB of index describing 10.45M rows). `REINDEX CONCURRENTLY`,
+  ONE AT A TIME - two concurrent rebuilds on one table deadlocked `flow_prints`
+  during this work.
+- `scanner_snapshots` has never pruned either and we do not know why. Its
+  statement is the same shape as `ticker_wall_snapshots`'s (which works), it
+  deletes 363,711 rows in 3.8s standalone, and there are no FKs, triggers, NULL
+  dates or unparseable dates. Needs the error from a forced run
+  (`POST /proxy/retention-cleanup-run`).
+- DO NOT run `VACUUM FULL` on `option_strike_gex_history` casually. It writes a
+  complete second copy (heap + all indexes) before swapping; three stacked
+  attempts during this work took the disk from 77% to 89% and blocked every
+  read on the table behind an ACCESS EXCLUSIVE lock. Check `pg_stat_activity`
+  before re-issuing anything on that table.
+- Consider a REINDEX cadence for the mass-DELETE tables. Retention working
+  correctly is not sufficient; without reindexing, bloat grows anyway.
+
 ## 2026-09-09 (k) - BILLING: the 2-day free trial is retired
 
 New sign-ups no longer get a free trial. Every Stripe Checkout session created
