@@ -1,5 +1,108 @@
 # Changelog
 
+## 2026-09-10 (c) - V3: the analytics page gets the v3 wordmark
+
+The Ticker Lookup card at the top of `/v3/analytics` was still drawing
+`/cb-edge-logo.png` - the pre-v3 bitmap it was ported with - in its top-right
+control row, next to Refresh and Replay. Every other surface in v3 draws the
+brand through `shell/Brand.tsx`, which is the one file allowed to.
+
+`cbedge-v3/src/pages/analysis/lookup/TickerLookup.tsx`:
+
+- The raw `<img src="/cb-edge-logo.png">` is replaced by `<CbWordmark />`. The
+  horizontal lockup is the form for a wide slot, which is what that row is.
+- Same visual weight as before: `h-7` (28px, the height the old tag hardcoded),
+  `w-auto`, `opacity-95`, the same 2px left margin.
+- `crossOrigin="anonymous"` is gone with it. The wordmark is a bundled Vite
+  asset served same-origin, so html2canvas snapshots of this card bake it in
+  without tainting the canvas; the attribute was only there because the old
+  bitmap was fetched from `/public`.
+
+No other page referenced `cb-edge-logo.png` - this was the last one in v3.
+
+## 2026-09-10 (b) - V3: every expiration and session picker stops dropping the OS menu
+
+Audit of every live v3 page for date and expiration controls. Twenty of them
+were native `<select>` or `<input type="date">`, riding on the `color-scheme:
+dark` rule in `design/tokens.css`. That rule darkens the platform popup and
+stops there - the SHAPE stays the operating system's: `mm/dd/yyyy` in the
+platform font, a Windows calendar over a dark toolbar, a wheel on iOS. Flow was
+the one Brandon spotted; it was not alone.
+
+Two primitives, then thirteen call sites.
+
+`cbedge-v3/src/design/primitives/Controls.tsx`:
+
+- NEW `Select` - the themed replacement for a native `<select>`. A trigger
+  showing the current option, a list under it drawn from the same tokens as
+  everything else, portalled through `Popover` so it inherits the clipping,
+  stacking and flip-when-there-is-no-room-below behaviour that control already
+  has. `value` / `onChange` take and give the option's string, so it is a
+  drop-in for an `e.target.value` handler. Options carry an optional `sub` for
+  a second column (a label and its date), and `disabled` for an option that is
+  real but unavailable.
+- It carries `POPOVER_SAFE_ATTR` unconditionally, so a `Select` opened from
+  inside another `Popover` (the Notes drawer, a card's cog panel) does not
+  close its host on the pointerdown that was meant to pick a row. Covered by a
+  test below.
+- `Popover` gains an optional `z`. `POP_Z` (250) clears every board tile but
+  not a portalled MODAL - the ladder modal sits at 9999 - so a menu opened
+  inside one would have rendered behind its own scrim. `Select` forwards it as
+  `menuZ`; only `LadderModal` passes it.
+
+`cbedge-v3/src/design/primitives/DatePicker.tsx` (existing control, additive):
+
+- `size="sm"` - the toolbar density, so a session picker sits level with the
+  SegGroups beside it instead of towering over them. `md` stays the default and
+  the BOT composer renders unchanged.
+- `min` / `max`, same "YYYY-MM-DD" strings a native input's min/max take.
+  Out-of-range days render inert rather than disappearing: a greyed 11th says
+  "not that one", a missing 11th says the calendar is broken. `Today - 0DTE`
+  greys out with them.
+- `label` (override the trigger text), `placeholder`, `disabled`.
+
+Call sites - dates and expirations only:
+
+- `pages/Flow.tsx` - the session `<input type="date">` and the Expiry
+  `<select>`. This is the pair that started the audit.
+- `pages/LevelLog.tsx` - session date, keeps its today cap.
+- `pages/scanner/GexChangeTopTab.tsx` - capture date (C47). v2's blank
+  `mm/dd/yyyy` on first paint was the OS field's placeholder; it now reads
+  "Date" until the feed echoes one back.
+- `pages/scanner/StrikeQueryTab.tsx` - the Expiry filter (E53). Same options,
+  same order, same raw strings. Its three row-mates (ticker, limit, min OTM)
+  are NOT dates and stay native for now.
+- `shell/QuickProbe.tsx` - both arms of the expiration field, the roster
+  `<select>` and the `<input type="date">` fallback. This card is docked inside
+  a scrolling drawer, which is where a platform popup looks worst.
+- `board/volGexFlow/VolGexFlowCard.tsx` - the live expiry filter (B288).
+- `board/gexCandles/GexCandlesCard.tsx`, `pages/replay/MultiGreekReplay.tsx`,
+  `pages/analysis/lookup/TickerLookup.tsx`,
+  `pages/optionsChain/LadderModal.tsx` - the four replay-session pickers. Their
+  bars are inline-styled from the theme object rather than the token utilities,
+  so each keeps its own trigger paint via the new `triggerStyle`; what changed
+  is the LIST.
+- `pages/Premarket.tsx` - the session date. Its `.dsel` shell already themed
+  the closed box and redrew the caret, but the list it dropped was still the
+  OS's, and that list carries the marks saying what each day can do. The new
+  `.dsel3` rule SHARES the existing `.dsel select` selectors rather than
+  restating them (no second copy of the same values, and no new off-scale
+  font-size for `check-theme` to count); what is left in it is layout only.
+
+DELIBERATELY NOT CHANGED:
+
+- `pages/scanner/GexLevelsTab.tsx` - the permanently-disabled Expiry Filter. It
+  is inert by design (spec "Do not port" 22) and converting a spec'd control
+  buys nothing.
+- The non-date selects: `StrikeQueryTab` ticker / limit / min OTM,
+  `Premarket`'s symbol picker, `TradersDashboard`'s quick-links editor.
+
+Verified: `tsc --noEmit` adds zero errors against the pre-change baseline,
+`check-theme` reports no new violations, `vite build` is clean, and a Playwright
+harness drives the two primitives - open, anchor under the trigger, pick, Escape
+and click-outside close, empty list disables the trigger, `max` blocks a day,
+and a `Select` inside a `Popover` leaves that popover open.
+
 ## 2026-09-10 (a) - V3 GEX CHART: the delta stat row stops truncating, and nothing on it is grey
 
 Two things wrong with the row the delta series added yesterday, both visible in

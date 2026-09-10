@@ -19,7 +19,7 @@
 // were dropped.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Coordinate, IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts'
+import type { AutoscaleInfo, Coordinate, IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts'
 import { etDateKey, etMinutesOfDay, RTH_OPEN_MIN, type Bar } from './candles'
 import { drawBubbles, type BubbleSnapshot, type BubblePalette } from './bubbles'
 import { BUBBLES } from './settings'
@@ -425,9 +425,10 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   const series: ISeriesApi<'Candlestick'> = chart.addSeries(CandlestickSeries, {
     // See the AXIS LOCK block above. Unlocked — which is every live chart and
     // every board card — this is `original()` and costs one call per autoscale.
-    // `original` is contextually typed by the series options — deliberately not
-    // annotated here, so this keeps compiling against the library's own shape.
-    autoscaleInfoProvider: (original) =>
+    // `original` is the library's own provider. Annotated because the object
+    // literal is widened by the surrounding `addSeries` generic before the
+    // parameter gets its contextual type, which leaves it implicitly `any`.
+    autoscaleInfoProvider: (original: () => AutoscaleInfo | null) =>
       axisLocked && lockedPriceRange
         ? { priceRange: { minValue: lockedPriceRange.min, maxValue: lockedPriceRange.max } }
         : original(),

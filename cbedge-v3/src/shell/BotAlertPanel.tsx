@@ -193,9 +193,11 @@ export function BotAlertPanel({ close }: { close: () => void }) {
       const warned = results.filter((x) => x.ok && x.warning)
       if (failed.length) {
         setMsg({ kind: 'err', text: `Sent to ${j.sent}/${j.of} — failed: ${failed.map((f) => f.label || f.id).join(', ')}` })
-      } else if (warned.length) {
+      } else if (warned[0]) {
         // Posted, tag did not resolve. The difference between "the room was
         // notified" and "you think the room was".
+        // Branching on the ELEMENT rather than on `.length` is what narrows it:
+        // a non-zero length does not tell the compiler that `[0]` is there.
         setMsg({ kind: 'warn', text: warned[0].warning as string })
       } else {
         setMsg({ kind: 'ok', text: `Sent to ${j.sent}/${j.of}` })

@@ -60,7 +60,6 @@ import {
   JACKSON_HOLE,
   fomcDecisions,
   type AppleEventKind,
-  type FomcDecision,
 } from "./eventDates";
 import {
   calIndex,
@@ -112,7 +111,7 @@ const pctp = (v: number | null | undefined, d = 1) => (v == null ? "—" : `${(v
 const bp = (v: number | null | undefined, d = 1) =>
   v == null ? "—" : `${v >= 0 ? "+" : "−"}${(Math.abs(v) * 10000).toFixed(d)} bp`;
 const signColor = (v: number | null | undefined) => (v == null ? INK : v >= 0 ? UP : DOWN);
-const n0 = (v: number) => v.toLocaleString("en-US");
+const n0 = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("en-US"));
 /** M/D/YYYY, parsed as UTC so a YYYY-MM-DD string never slips a day westward. */
 const fmtUS = (iso: string) => {
   const [y, m, d] = iso.split("-").map(Number);
@@ -137,7 +136,10 @@ function useMeasuredWidth() {
     ro.current?.disconnect();
     ro.current = null;
     if (!node) return;
-    const obs = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    const obs = new ResizeObserver((entries) => {
+      const e = entries[0];
+      if (e) setW(e.contentRect.width);
+    });
     obs.observe(node);
     ro.current = obs;
     setW(node.clientWidth);
@@ -488,7 +490,12 @@ function PairBars({
             {labels.map((lab, i) => (
               <g key={lab} onPointerEnter={() => setHover(i)}>
                 <rect x={PAD.left + i * gw} y={PAD.top} width={gw} height={innerH} fill="transparent" />
-                {[a[i], b[i]].map((v, k) => {
+                {[a[i], b[i]].map((raw, k) => {
+                  // Both series are indexed by the same `i` the labels are, so
+                  // a missing entry means the three arrays disagree in length —
+                  // draw nothing for it rather than a bar of height NaN.
+                  if (raw === undefined) return null;
+                  const v = raw;
                   const x = PAD.left + i * gw + (gw - inner) / 2 + k * (bw + 2);
                   const up = v >= 0;
                   return <path key={k} d={barPath(x, bw, up ? y(v) : y(0), Math.abs(y(v) - y(0)), up)} style={{ fill: colors[k] }} opacity={hover == null || hover === i ? 1 : 0.5} />;
@@ -794,8 +801,11 @@ function HBars({
 function curveWindow(curve: number[] | null, from: number, to: number): number | null {
   if (!curve) return null;
   if (from < 0 || to < 0 || from >= curve.length || to >= curve.length) return null;
-  const a = 100 + curve[from];
-  const b = 100 + curve[to];
+  // The range check above already proved both indexes are inside the array;
+  // `?? NaN` is what says so to the compiler, and NaN fails the `> 0` guard
+  // below exactly as an out-of-range read would have.
+  const a = 100 + (curve[from] ?? NaN);
+  const b = 100 + (curve[to] ?? NaN);
   if (!(a > 0) || !(b > 0)) return null;
   return b / a - 1;
 }
@@ -1132,7 +1142,7 @@ function HeatTable({
               <th style={{ textAlign: "right", paddingRight: 8, fontSize: "var(--text-2xs)", fontWeight: 700, color: INK, whiteSpace: "nowrap" }}>
                 {rowLabel(r)}
               </th>
-              {data[i].map((v, j) => (
+              {(data[i] ?? []).map((v, j) => (
                 <td
                   key={j}
                   title={v == null ? "" : `${cols[j]} ${rowLabel(r)} · ${pct(v)}`}
@@ -1201,8 +1211,14 @@ type FomcSample = "wed" | "scheduled" | "all";
 export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
   const A = ALMANAC;
   const M = A.months;
-  const [era, setEra] = useState<string>(ERA_KEYS[0]);
-  const [dowEra, setDowEra] = useState<string>(ERA_KEYS[0]);
+  // ── ASSERTED READS OFF CONSTANT DATA ────────────────────────────────────
+  // ERA_KEYS, EARNINGS_TICKERS, ALMANAC's tables and EXTRAS.vix are module-level
+  // literals with entries — `[0]` exists. Under `noUncheckedIndexedAccess` an
+  // index still says `T | undefined`, so the assertion is made ONCE here, at the
+  // declaration, rather than at each of the sixty places these are read. If one
+  // of those constants is ever emptied, this line is where it will break.
+  const [era, setEra] = useState<string>(ERA_KEYS[0]!);
+  const [dowEra, setDowEra] = useState<string>(ERA_KEYS[0]!);
 
   // The live year. Used here for ONE thing — the current year's Jackson Hole
   // row, which sits days past the static data's cutoff every August — and for
@@ -1235,26 +1251,26 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
   // URL or storage, for the hydration reason documented in the file header.
   const [vixCount, setVixCount] = useState<number>(20);
   const [vixMeasure, setVixMeasure] = useState<"oc" | "lnh">("oc");
-  const [earnTicker, setEarnTicker] = useState<string>(EARNINGS_TICKERS[0]);
+  const [earnTicker, setEarnTicker] = useState<string>(EARNINGS_TICKERS[0]!);
   const [fomcSample, setFomcSample] = useState<FomcSample>("wed");
   const [fomcCount, setFomcCount] = useState<number>(20);
   const [appleKind, setAppleKind] = useState<AppleEventKind | "all">("all");
   const [appleCount, setAppleCount] = useState<number>(20);
 
   const eraOptions = ERA_KEYS.map((k) => ({ k, label: k }));
-  const mt = A.monthTables[era] ?? A.monthTables[ERA_KEYS[0]];
-  const dw = A.dow[dowEra] ?? A.dow[ERA_KEYS[0]];
+  const mt = A.monthTables[era] ?? A.monthTables[ERA_KEYS[0]!]!;
+  const dw = A.dow[dowEra] ?? A.dow[ERA_KEYS[0]!]!;
 
   const now = A.now;
-  const royAll = now.rest_of_year[0];
-  const royMod = now.rest_of_year[1];
-  const win = now.window[0];
+  const royAll = now.rest_of_year[0]!;
+  const royMod = now.rest_of_year[1]!;
+  const win = now.window[0]!;
 
   const sm = A.sixMonth;
   const smOrder = [sm.index.indexOf("Nov-Apr"), sm.index.indexOf("May-Oct")].filter((i) => i >= 0);
 
   const vix = EXTRAS.vix;
-  const v20 = vix.buckets.find((b) => b.threshold === 0.2) ?? vix.buckets[0];
+  const v20 = vix.buckets.find((b) => b.threshold === 0.2) ?? vix.buckets[0]!;
   const eom = EXTRAS.eom;
   const opex = EXTRAS.opex;
 
@@ -1428,7 +1444,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
       let ans = -1;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        if (dates[mid] <= iso) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
+        if ((dates[mid] ?? "") <= iso) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
       }
       if (ans < 0) return -1;
       // Exact hit = the keynote fell on a session, which is the normal case
@@ -1436,8 +1452,15 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
       // the NEXT session, not the previous one.
       return dates[ans] === iso ? ans : ans + 1;
     };
-    const ret = (a: number, b: number): number | null =>
-      a < 0 || b < 0 || a >= px.length || b >= px.length ? null : px[b] / px[a] - 1;
+    const ret = (a: number, b: number): number | null => {
+      if (a < 0 || b < 0 || a >= px.length || b >= px.length) return null;
+      // The bounds check above is the proof both indexes are live; `?? NaN`
+      // states it without a second assertion, and a NaN ratio is caught by the
+      // caller's own `Number.isFinite` guard exactly as an out-of-range read was.
+      const pa = px[a] ?? NaN;
+      const pb = px[b] ?? NaN;
+      return pb / pa - 1;
+    };
 
     return APPLE_EVENTS.map((ev) => {
       const i = sessionFor(ev.date);
@@ -1522,7 +1545,9 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             head={["Window", "Years", "Mean", "Median", "Positive"]}
             rows={now.sep_halves.index.map((lab, i) => [
               lab,
-              now.sep_halves.n[i],
+              // `?? 0` on the parallel arrays: they are written together with
+              // `index` and are the same length, and a Cell may not be undefined.
+              now.sep_halves.n[i] ?? 0,
               { t: pct(now.sep_halves.avg[i]), c: signColor(now.sep_halves.avg[i]) },
               { t: pct(now.sep_halves.median[i]), c: signColor(now.sep_halves.median[i]) },
               pctp(now.sep_halves.pos_pct[i], 0),
@@ -1627,10 +1652,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             high&rdquo; is a rally measured from the worst tick of the panic to the best tick of the following session —
             it is flattering by construction, and the baseline is already {pct(vix.baseline.low_to_next_high.avg)}. The
             number that is actually tradeable is the next session&apos;s open-to-close, and there the ladder does what a
-            real effect does: it gets stronger the bigger the pop, from {pct(vix.buckets[0].next_open_close.avg)} at
-            ≥+{(vix.buckets[0].threshold * 100).toFixed(0)}% to {pct(v20.next_open_close.avg)} at ≥+20%, against{" "}
+            real effect does: it gets stronger the bigger the pop, from {pct(vix.buckets[0]!.next_open_close.avg)} at
+            ≥+{(vix.buckets[0]!.threshold * 100).toFixed(0)}% to {pct(v20.next_open_close.avg)} at ≥+20%, against{" "}
             {pct(vix.baseline.next_open_close.avg)} unconditionally. Note the sample thins fast: n={v20.n} at +20% and
-            only {vix.buckets[vix.buckets.length - 1].n} at the far end.
+            only {vix.buckets[vix.buckets.length - 1]!.n} at the far end.
             </>
           }
         >
@@ -1691,7 +1716,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     fomc: (
       <SeaCard
         title="FOMC Decisions"
-        subtitle={`${n0(fomcRows.length)} announced decisions since ${fomcRows[fomcRows.length - 1].date.slice(0, 4)} · SPX around the statement`}
+        subtitle={`${n0(fomcRows.length)} announced decisions since ${fomcRows[fomcRows.length - 1]?.date.slice(0, 4) ?? "—"} · SPX around the statement`}
         padding={20}
       >
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
@@ -1738,8 +1763,8 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
           <Tile
             label="Target now"
-            value={`${fomcLast.level.toFixed(2)}%`}
-            sub={`upper bound · set ${fmtUS(fomcLast.date)}`}
+            value={fomcLast ? `${fomcLast.level.toFixed(2)}%` : "—"}
+            sub={fomcLast ? `upper bound · set ${fmtUS(fomcLast.date)}` : "no decisions in this sample"}
           />
         </div>
 
@@ -1763,7 +1788,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             fmt={(v) => bp(v, 0)}
             height={230}
             readout={(i) => {
-              const key = (["into", "day", "after"] as const)[i];
+              // `i` is the bar index MultiBars hands back, 0-2 against the three
+              // series above it. Defaulted rather than asserted so a fourth bar
+              // would read the first window instead of throwing on a live page.
+              const key = (["into", "day", "after"] as const)[i] ?? "into";
               const label = [L_INTO, L_DAY, L_AFTER][i];
               const vals = fomcFiltered.map((r) => r[key]);
               return `${label} · mean ${pct(mean(vals))} · ${pctp(hitRate(vals), 1)} positive · best ${pct(extremeOf(vals, "max"), 1)} · worst ${pct(extremeOf(vals, "min"), 1)} · n=${countOf(vals)}`;
@@ -1792,6 +1820,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             height={280}
             readout={(i) => {
               const a = fomcByAction[i];
+              if (!a) return "";
               return `${a.label} · n=${a.n} · ${L_INTO} ${pct(a.into)} · ${L_DAY} ${pct(a.day)} (${pctp(a.hitDay, 0)} positive) · ${L_AFTER} ${pct(a.after)} (${pctp(a.hitAfter, 0)})`;
             }}
           />
@@ -1939,7 +1968,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     jh: (
       <SeaCard
         title="Jackson Hole"
-        subtitle={`Kansas City Fed symposium · ${JACKSON_HOLE[JACKSON_HOLE.length - 1].year}–${JACKSON_HOLE[0].year} · SPX around the Friday keynote`}
+        subtitle={`Kansas City Fed symposium · ${JACKSON_HOLE[JACKSON_HOLE.length - 1]!.year}–${JACKSON_HOLE[0]!.year} · SPX around the Friday keynote`}
         padding={20}
       >
         <div style={TILES}>
@@ -1963,8 +1992,8 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
           <Tile
             label="Next symposium"
-            value={fmtSpan(JACKSON_HOLE[0].start, JACKSON_HOLE[0].end)}
-            sub={`${JACKSON_HOLE[0].year} · keynote ${fmtLongDate(JACKSON_HOLE[0].keynote)}`}
+            value={fmtSpan(JACKSON_HOLE[0]!.start, JACKSON_HOLE[0]!.end)}
+            sub={`${JACKSON_HOLE[0]!.year} · keynote ${fmtLongDate(JACKSON_HOLE[0]!.keynote)}`}
           />
         </div>
 
@@ -2138,7 +2167,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     aapl: (
       <SeaCard
         title="Apple Product Events"
-        subtitle={`${APPLE_EVENTS.length} keynotes, ${APPLE_EVENTS[APPLE_EVENTS.length - 1].date.slice(0, 4)}–${APPLE_EVENTS[0].date.slice(0, 4)} · AAPL, split-adjusted`}
+        subtitle={`${APPLE_EVENTS.length} keynotes, ${APPLE_EVENTS[APPLE_EVENTS.length - 1]!.date.slice(0, 4)}–${APPLE_EVENTS[0]!.date.slice(0, 4)} · AAPL, split-adjusted`}
         padding={20}
       >
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
@@ -2348,6 +2377,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             height={260}
             readout={(i) => {
               const m = eom.by_month[i];
+              if (!m) return "";
               return `${m.label} month-end · mean ${pct(m.avg)} · median ${pct(m.median)} · ${pctp(m.pos_pct, 1)} positive · best ${pct(m.best, 1)} · worst ${pct(m.worst, 1)} · n=${m.n}`;
             }}
           />
@@ -2392,6 +2422,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           height={260}
           readout={(i) => {
             const m = opex.by_month[i];
+            if (!m) return "";
             return `${m.label} · opex week ${pct(m.week.avg)} (${pctp(m.week.pos_pct, 1)} positive, n=${m.week.n}) · week after ${pct(m.after.avg)} (${pctp(m.after.pos_pct, 1)} positive)`;
           }}
         />
@@ -2483,7 +2514,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             head={["Month", "Years", "Mean", "Median", "Positive", "Std dev", "Best", "Worst"]}
             rows={M.map((m, i) => [
               m,
-              mt.n[i],
+              mt.n[i] ?? 0,
               { t: pct(mt.avg[i]), c: signColor(mt.avg[i]) },
               { t: pct(mt.median[i]), c: signColor(mt.median[i]) },
               pctp(mt.pos_pct[i], 1),
@@ -2501,7 +2532,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           {smOrder.map((i) => (
             <Tile
               key={sm.index[i]}
-              label={sm.index[i]}
+              label={sm.index[i] ?? ""}
               value={pct(sm.avg[i])}
               sub={`median ${pct(sm.median[i])} · ${pctp(sm.pos_pct[i], 0)} positive`}
               color={signColor(sm.avg[i])}
@@ -2591,7 +2622,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
               fmt={(v) => pct(v, 0)}
               height={220}
               readout={(i) =>
-                `${A.presidential.index[i].replace(/^\d\s/, "")} · mean ${pct(A.presidential.avg[i])} · median ${pct(A.presidential.median[i])} · ${pctp(A.presidential.pos_pct[i], 0)} positive · n=${A.presidential.n[i]}`
+                `${(A.presidential.index[i] ?? "").replace(/^\d\s/, "")} · mean ${pct(A.presidential.avg[i])} · median ${pct(A.presidential.median[i])} · ${pctp(A.presidential.pos_pct[i], 0)} positive · n=${A.presidential.n[i]}`
               }
             />
           </div>

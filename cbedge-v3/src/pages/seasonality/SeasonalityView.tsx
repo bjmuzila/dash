@@ -205,9 +205,12 @@ function cycleCurve(mod: number): { curve: number[]; years: number[] } {
   const out = new Array<number>(N).fill(0);
   for (const yr of years) {
     const c = yearCurve(yr)!;
-    for (let i = 0; i < N; i++) out[i] += c[i];
+    // `out` is pre-filled to length N and `c` is a full-year curve, so both
+    // indexes are in range — the `?? 0` is what says so to the compiler without
+    // changing a single arithmetic result.
+    for (let i = 0; i < N; i++) out[i] = (out[i] ?? 0) + (c[i] ?? 0);
   }
-  for (let i = 0; i < N; i++) out[i] = years.length ? out[i] / years.length : 0;
+  for (let i = 0; i < N; i++) out[i] = years.length ? (out[i] ?? 0) / years.length : 0;
   const val = { curve: out, years };
   cycleCache.set(mod, val);
   return val;
@@ -247,12 +250,22 @@ const RIGHT_GUTTER_WIDE = 132;
 const YEAR_LABEL_DX = 56;
 const CHART_H = 430;
 
-const fmtPct = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
-const fmtPx = (v: number) =>
-  v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/**
+ * Both formatters take `number | undefined` because every caller reads the
+ * value out of a series BY INDEX, and under `noUncheckedIndexedAccess` that is
+ * what an index hands back. A missing (or non-finite) sample prints an em dash
+ * rather than "NaN%", which is the readout saying "no reading" instead of
+ * saying a number that is not one.
+ */
+const fmtPct = (v: number | undefined) =>
+  v === undefined || !Number.isFinite(v) ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+const fmtPx = (v: number | undefined) =>
+  v === undefined || !Number.isFinite(v)
+    ? "—"
+    : v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** The two units of the one axis. Right = base × (1 + left/100), and back. */
-const pctToPx = (p: number) => YTD_BASE_PX * (1 + p / 100);
+const pctToPx = (p: number | undefined) => (p === undefined ? undefined : YTD_BASE_PX * (1 + p / 100));
 const pxToPct = (v: number) => (v / YTD_BASE_PX - 1) * 100;
 
 function dayLabel(idx: number) {
@@ -409,7 +422,10 @@ export default function SeasonalityView() {
     roRef.current?.disconnect();
     roRef.current = null;
     if (!node) return;
-    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    const ro = new ResizeObserver((entries) => {
+      const e = entries[0];
+      if (e) setWidth(e.contentRect.width);
+    });
     ro.observe(node);
     roRef.current = ro;
     setWidth(node.clientWidth);
@@ -438,7 +454,10 @@ export default function SeasonalityView() {
   };
 
   const baseline = useMemo(
-    () => SEASONAL_BASELINES.find((b) => b.key === baselineKey) ?? SEASONAL_BASELINES[0],
+    // `[0]` is asserted: SEASONAL_BASELINES is a module-level literal with
+    // entries, so the fallback exists — but an index says `T | undefined`, and
+    // every one of `baseline`'s dozen reads would otherwise carry the doubt.
+    () => SEASONAL_BASELINES.find((b) => b.key === baselineKey) ?? SEASONAL_BASELINES[0]!,
     [baselineKey],
   );
   const SEASONAL_AVG = baseline.curve;
@@ -498,7 +517,17 @@ export default function SeasonalityView() {
   }, [seasonSeries, yearSeries, overlaySeries, mode]);
 
   const x = (i: number) => PAD.left + (innerW * i) / (N - 1);
-  const y = (v: number) => PAD.top + innerH - (innerH * (v - yMin)) / (yMax - yMin);
+  /**
+   * `v` is `number | undefined` because every caller reads it out of a series by
+   * index, and under `noUncheckedIndexedAccess` that is what an index gives you.
+   *
+   * A missing sample maps to NaN, and an SVG element with a NaN coordinate is
+   * simply not drawn — which is the honest picture of "there is no point here".
+   * The alternative was a non-null assertion at each of the fifteen call sites,
+   * which is the same claim made fifteen times and unchecked every time.
+   */
+  const y = (v: number | undefined) =>
+    v === undefined ? NaN : PAD.top + innerH - (innerH * (v - yMin)) / (yMax - yMin);
 
   const path = (arr: number[]) =>
     arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(2)},${y(v).toFixed(2)}`).join(" ");
@@ -518,10 +547,14 @@ export default function SeasonalityView() {
 
   // Headline numbers, all measured at the last session we have.
   const last = LIVE - 1;
-  const ytdPct = live.pct[last];
-  const seasonToDate = SEASONAL_AVG[last];
+  // `?? NaN` on each read rather than an assertion: `last` and `N - 1` are in
+  // range on a full year, but the live series is EXTENDED as sessions arrive
+  // (see useLiveYear) and is the one array here whose length is not a constant.
+  // NaN flows into the formatters above, which print an em dash for it.
+  const ytdPct = live.pct[last] ?? NaN;
+  const seasonToDate = SEASONAL_AVG[last] ?? NaN;
   const spread = ytdPct - seasonToDate;
-  const seasonFull = SEASONAL_AVG[N - 1];
+  const seasonFull = SEASONAL_AVG[N - 1] ?? NaN;
   const seasonRemaining = seasonFull - seasonToDate;
 
   const onMove = (e: ReactPointerEvent<SVGSVGElement>) => {
@@ -763,7 +796,7 @@ export default function SeasonalityView() {
                 const on = overlays.includes(c.id);
                 const slot = on ? OVERLAY_SLOTS[overlays.indexOf(c.id) % OVERLAY_SLOTS.length] : null;
                 const n = ALMANAC.presidential.n[c.row];
-                const avg = ALMANAC.presidential.avg[c.row] * 100;
+                const avg = (ALMANAC.presidential.avg[c.row] ?? NaN) * 100;
                 return (
                   <button
                     key={c.id}
@@ -796,13 +829,16 @@ export default function SeasonalityView() {
                 {years.map((y) => {
                   const on = overlays.includes(String(y));
                   const slot = on ? OVERLAY_SLOTS[overlays.indexOf(String(y)) % OVERLAY_SLOTS.length] : null;
+                  // A record lookup is `T | undefined`; a year chip whose meta
+                  // is missing simply loses its tooltip rather than throwing.
                   const meta = YEAR_META[String(y)];
+                  const metaTitle = meta ? `${y} finished ${meta.ret >= 0 ? "+" : ""}${meta.ret.toFixed(2)}%` : String(y);
                   return (
                     <button
                       key={y}
                       type="button"
                       aria-pressed={on}
-                      title={`${y} finished ${meta.ret >= 0 ? "+" : ""}${meta.ret.toFixed(2)}%`}
+                      title={metaTitle}
                       onClick={() => toggleYear(y)}
                       style={{
                         padding: "3px 8px",
@@ -879,7 +915,7 @@ export default function SeasonalityView() {
                     style={{ fill: YEAR_COLOR, fontVariantNumeric: "tabular-nums" }}
                   >
                     {mode === "pct"
-                      ? Math.round(pctToPx(t)).toLocaleString("en-US")
+                      ? Math.round(pctToPx(t) ?? NaN).toLocaleString("en-US")
                       : `${pxToPct(t).toFixed(1)}%`}
                   </text>
                 </g>
@@ -1018,12 +1054,20 @@ export default function SeasonalityView() {
                 ) : null,
               )}
               {hover < LIVE ? (
-                <span>
-                  Spread {fmtPct(live.pct[hover] - SEASONAL_AVG[hover])} ·{" "}
-                  {`${live.pct[hover] - SEASONAL_AVG[hover] >= 0 ? "+" : ""}${Math.round(
-                    ((live.pct[hover] - SEASONAL_AVG[hover]) / 100) * YTD_BASE_PX,
-                  )} pts`}
-                </span>
+                (() => {
+                  // Read the two samples ONCE. Written inline three times, each
+                  // read was separately `number | undefined` and the subtraction
+                  // could not be typed at all.
+                  const hoverSpread = (live.pct[hover] ?? NaN) - (SEASONAL_AVG[hover] ?? NaN);
+                  return (
+                    <span>
+                      Spread {fmtPct(hoverSpread)} ·{" "}
+                      {Number.isFinite(hoverSpread)
+                        ? `${hoverSpread >= 0 ? "+" : ""}${Math.round((hoverSpread / 100) * YTD_BASE_PX)} pts`
+                        : "—"}
+                    </span>
+                  );
+                })()
               ) : null}
             </>
           ) : (

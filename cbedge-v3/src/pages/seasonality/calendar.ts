@@ -31,8 +31,12 @@ export const MONTH_ABBR = [
 
 /** Split "YYYY-MM-DD" into numbers. No Date object — see the header. */
 export const parseISO = (iso: string): [number, number, number] => {
-  const [y, m, d] = iso.split("-").map(Number);
-  return [y, m, d];
+  const parts = iso.split("-").map(Number);
+  // Destructuring a split() gives `number | undefined` per element under
+  // noUncheckedIndexedAccess, and the signature promises three numbers. A
+  // malformed string lands on NaN — which is what `[y, m, d]` produced before
+  // as well, since Number(undefined) is NaN. Same behaviour, stated.
+  return [parts[0] ?? NaN, parts[1] ?? NaN, parts[2] ?? NaN];
 };
 
 /**
@@ -44,7 +48,10 @@ export const parseISO = (iso: string): [number, number, number] => {
  */
 export function calIndex(iso: string): number {
   const [, m, d] = parseISO(iso);
-  return MONTH_START[m - 1] + (d - 1);
+  // MONTH_START is a fixed twelve, and `m` is a calendar month — but the
+  // compiler cannot know that, and an out-of-range month would silently produce
+  // NaN rather than throwing. `?? NaN` keeps the old arithmetic exactly.
+  return (MONTH_START[m - 1] ?? NaN) + (d - 1);
 }
 
 /** "M/D/YYYY" from an ISO date, parsed as plain numbers so no timezone applies. */
@@ -100,7 +107,10 @@ const DOW_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  */
 export const dowOf = (iso: string): string => {
   const [y, m, d] = parseISO(iso);
-  return DOW_ABBR[dayOfWeek(y, m, d)];
+  // dayOfWeek returns 0-6 and DOW_ABBR has seven entries, which the compiler
+  // cannot see. Empty string on an impossible index rather than `undefined`
+  // reaching a caller that has typed this as a string.
+  return DOW_ABBR[dayOfWeek(y, m, d)] ?? "";
 };
 
 const daysInMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();

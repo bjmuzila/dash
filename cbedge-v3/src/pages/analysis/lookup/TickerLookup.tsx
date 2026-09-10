@@ -55,6 +55,7 @@ import {
 import { Select } from '@/design/primitives/Controls'
 import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
 import { ReplayBrand } from '@/design/primitives/ReplayStamp'
+import { CbWordmark } from '@/shell/Brand'
 import { cleanSymbol } from '../TickerPicker'
 import { accumulateChainGreeks } from '../greeks'
 import { TlLadder } from './Ladder'
@@ -857,14 +858,12 @@ export function TickerLookupCard({
           >
             ⏱ Replay
           </button>
-          {/* crossOrigin so html2canvas exports bake the logo in rather than
-              tainting the canvas — the same handling the footer uses. */}
-          <img
-            src="/cb-edge-logo.png"
-            alt="CB Edge"
-            crossOrigin="anonymous"
-            style={{ height: 28, width: 'auto', display: 'block', flexShrink: 0, opacity: 0.95, marginLeft: 2 }}
-          />
+          {/* The v3 wordmark, not the old /cb-edge-logo.png bitmap this card was
+              ported with. shell/Brand.tsx is the ONE place the logo is drawn, and
+              the horizontal lockup is the form for a wide slot like this one. It
+              is a bundled, same-origin asset, so html2canvas exports bake it in
+              without tainting the canvas and no crossOrigin is needed. */}
+          <CbWordmark className="ml-0.5 block h-7 w-auto shrink-0 opacity-95" />
         </span>
       </Row>
 

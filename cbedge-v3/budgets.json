@@ -1,6 +1,6 @@
 {
   "$comment": "Hard limits, in BROTLI-compressed bytes, enforced by scripts/check-budgets.mjs on every build. These are set close to current reality on purpose — a budget with 4x headroom enforces nothing. Raising a number is a deliberate decision that shows up in a diff, which is the whole point: 'no exceptions' only survives if a machine enforces it. LOWERING one matters just as much and is far easier to forget, which is what `ratchet` is for: `npm run budgets:ratchet` pulls every number back down to what the bundle actually weighs today. `data` covers any `data-*` manualChunk — a STATIC TABLE rather than a page (today: data-seasonality, the almanac's encoded year curves and event date tables). It is separate from `route` on purpose: folding a 300KB table into the page budget would mean raising `route` to ~130kb, and a route budget with that much headroom stops enforcing anything for the twelve pages that carry no table at all. Its 78000 is a FIRST number, taken from the brotli weight of the SOURCES before the chunk had ever been built — ratchet it after the first real build.",
-  "entry": 37100,
+  "entry": 38900,
   "react": 55000,
   "route": 59100,
   "data": 78000,

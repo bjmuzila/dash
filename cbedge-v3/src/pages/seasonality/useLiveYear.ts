@@ -105,8 +105,16 @@ function extend(rows: [string, number][]): LiveYear | null {
     while (px.length <= idx) {
       // Fill the intervening weekend/holiday slots with the PREVIOUS close,
       // then overwrite the last one with this session.
-      px.push(px[px.length - 1]);
-      pct.push(pct[pct.length - 1]);
+      //
+      // Both arrays are seeded from the static year and are never empty here —
+      // the `idx < px.length - 1` guard above has already returned for anything
+      // that could reach an empty one — but the compiler cannot see that, so
+      // the last element is read once and reused rather than asserted twice.
+      const lastPx = px[px.length - 1];
+      const lastPct = pct[pct.length - 1];
+      if (lastPx === undefined || lastPct === undefined) break;
+      px.push(lastPx);
+      pct.push(lastPct);
     }
     px[idx] = close;
     pct[idx] = value;

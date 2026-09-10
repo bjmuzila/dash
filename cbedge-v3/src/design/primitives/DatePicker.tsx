@@ -36,7 +36,13 @@ const daysInMonth = (y: number, m: number) => new Date(y, m + 1, 0).getDate()
 /** "2026-09-09" -> "Sep 9". Invalid/empty -> null. */
 function parse(v: string): { y: number; m: number; d: number } | null {
   const x = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v || '')
-  return x ? { y: +x[1], m: +x[2] - 1, d: +x[3] } : null
+  if (!x) return null
+  // Three capture groups that MATCHED are three strings — but an index into a
+  // match array is `string | undefined` under noUncheckedIndexedAccess, so they
+  // are read out first and the whole parse fails together if any is missing.
+  const [, y, m, d] = x
+  if (y === undefined || m === undefined || d === undefined) return null
+  return { y: +y, m: +m - 1, d: +d }
 }
 
 /** Trigger density. `md` is the composer's full-width field; `sm` is a toolbar chip. */
