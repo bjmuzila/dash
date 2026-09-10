@@ -58,6 +58,8 @@ import {
   EARNINGS_TICKERS,
   FOMC_UPCOMING,
   JACKSON_HOLE,
+  SEPT11_NOTES,
+  SEPT11_START_YEAR,
   fomcDecisions,
   type AppleEventKind,
   type FomcDecision,
@@ -68,6 +70,7 @@ import {
   fmtLongDate,
   fmtSpan,
   isLastTradingDayOfMonth,
+  isMarketHoliday,
   nyTodayISO,
 } from "./calendar";
 import { useLiveYear, type LiveVixEvent } from "./useLiveYear";
@@ -1298,6 +1301,65 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     [live.pct, liveYearNum],
   );
 
+  // ── Sept 11 anniversary ──────────────────────────────────────────────────
+  //
+  // Same machinery as Jackson Hole, with one difference that decides whether
+  // the table is honest: THE ANCHOR IS NOT ALWAYS A SESSION.
+  //
+  // The 365-day axis is forward-filled across weekends and holidays, so a
+  // close-to-close return spanning a non-session is exactly 0.00% — not a
+  // missing value, a real-looking flat print. Sep 11 lands on a weekend in
+  // roughly two years in seven, and in 2001 the exchanges were shut for four
+  // days. Those rows carry `session: false`; the day-of cell renders as the
+  // reason rather than a number and drops out of every mean and hit rate.
+  //
+  // Weekend and holiday years are DETECTED, never listed — isMarketHoliday
+  // already models the NYSE calendar, so this stays right for 2027 and beyond
+  // with no edit. 2001's ad-hoc closure is the one case that calendar does not
+  // model (see its header), so it is the one year named here.
+  //
+  //   into  = T−8 → T−1   the calendar week ending the session before
+  //   day   = T−1 → T     the anniversary session itself
+  //   after = T   → T+7   the calendar week from it
+  //   month = T   → T+30  ~a month on
+  //
+  // The windows are calendar-week offsets, so T−8 and T+7 are the same weekday
+  // as T and land on real closes even in the years T itself does not.
+  const SEP11_T = calIndex("2001-09-11");
+  const sep11Rows = useMemo(
+    () =>
+      Array.from({ length: liveYearNum - SEPT11_START_YEAR + 1 }, (_, i) => SEPT11_START_YEAR + i)
+        .map((y) => {
+          const iso = `${y}-09-11`;
+          const curve = y === liveYearNum ? live.pct : yearCurve(y);
+          // 2001: the four-day exchange closure, which the market calendar
+          // does not model. Everything else: the ordinary weekend test.
+          const closed = y === 2001;
+          const session = !closed && !isMarketHoliday(y, 9, 11);
+          return {
+            year: y,
+            iso,
+            dow: dowOf(iso),
+            session,
+            /** Why there is no day-of number, when there isn't one. */
+            why: closed ? "market closed" : session ? "" : "no session",
+            into: curveWindow(curve, SEP11_T - 8, SEP11_T - 1),
+            day: session ? curveWindow(curve, SEP11_T - 1, SEP11_T) : null,
+            after: curveWindow(curve, SEP11_T, SEP11_T + 7),
+            month: curveWindow(curve, SEP11_T, SEP11_T + 30),
+            note: SEPT11_NOTES[String(y)] ?? "",
+          };
+        })
+        // Newest first, to match every other event list on this page.
+        .reverse(),
+    [live.pct, liveYearNum, SEP11_T],
+  );
+
+  /** Only the years the anniversary was actually a session. Every mean uses this. */
+  const sep11Sessions = useMemo(() => sep11Rows.filter((r) => r.session), [sep11Rows]);
+  /** This year's row, for the tile — it is the reason anyone opens this section in September. */
+  const sep11This = sep11Rows[0];
+
   // ── FOMC ─────────────────────────────────────────────────────────────────
   //
   // Same machinery as Jackson Hole — an anchor date and three calendar windows
@@ -1996,6 +2058,121 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
           <div style={{ ...NOTE, fontSize: 11.5 }}>
             * {jhRows.filter((r) => r.note).map((r) => `${r.year}: ${r.note}`).join(" · ")}
+            {live.live ? ` · ${liveYearNum} windows use sessions through ${live.lastDate}.` : ""}
+          </div>
+        </Collapse>
+      </SeaCard>
+    ),
+
+    // ── Sept 11 anniversary ────────────────────────────────────────────────
+    sep11: (
+      <SeaCard
+        title="Sept 11"
+        subtitle={`SPX around the anniversary · ${SEPT11_START_YEAR}–${liveYearNum} · ${sep11Sessions.length} of ${sep11Rows.length} anniversaries were trading sessions`}
+        padding={20}
+      >
+        <div style={TILES}>
+          <Tile
+            label="The day itself"
+            value={pct(mean(sep11Sessions.map((r) => r.day)))}
+            sub={`${countOf(sep11Sessions.map((r) => r.day))} sessions · ${pctp(hitRate(sep11Sessions.map((r) => r.day)), 0)} positive`}
+            color={signColor(mean(sep11Sessions.map((r) => r.day)))}
+          />
+          <Tile
+            label="Week after"
+            value={pct(mean(sep11Rows.map((r) => r.after)))}
+            sub={`${countOf(sep11Rows.map((r) => r.after))} years · ${pctp(hitRate(sep11Rows.map((r) => r.after)), 0)} positive`}
+            color={signColor(mean(sep11Rows.map((r) => r.after)))}
+          />
+          <Tile
+            label="Month after"
+            value={pct(mean(sep11Rows.map((r) => r.month)))}
+            sub={`${countOf(sep11Rows.map((r) => r.month))} years · ${pctp(hitRate(sep11Rows.map((r) => r.month)), 0)} positive`}
+            color={signColor(mean(sep11Rows.map((r) => r.month)))}
+          />
+          {sep11This ? (
+            <Tile
+              label={`Sept 11, ${sep11This.year}`}
+              value={
+                sep11This.day != null ? pct(sep11This.day) : sep11This.session ? "Ahead" : "No session"
+              }
+              sub={
+                sep11This.day != null
+                  ? `${sep11This.dow} · close-to-close`
+                  : sep11This.session
+                    ? `${sep11This.dow} · data through ${live.lastDate}`
+                    : `${sep11This.dow} · market shut`
+              }
+              color={sep11This.day != null ? signColor(sep11This.day) : undefined}
+            />
+          ) : null}
+        </div>
+
+        <div style={{ marginTop: 18 }}>
+          <HBars
+            rows={sep11Rows.map((r) => ({
+              key: String(r.year),
+              label: String(r.year),
+              sub: r.why ? `${r.dow} · ${r.why}` : r.dow,
+              a: r.day,
+              b: r.after,
+            }))}
+            aTitle="Sept 11 session"
+            bTitle="Week after"
+            fmtA={(v) => pct(v, 1)}
+            fmtB={(v) => pct(v, 1)}
+            maxHeight={520}
+          />
+        </div>
+
+        <Collapse
+          open
+          label="Every anniversary since 2001"
+          hint="newest first · SPX, price only"
+          note={
+            <>
+              <strong>2001 is not a flat day, and neither are the weekends.</strong> The exchanges
+            did not open on 11 September 2001 and stayed shut until Monday the 17th, and the
+            anniversary falls on a Saturday or Sunday in{" "}
+              {sep11Rows.filter((r) => r.why === "no session").length} of these years. A
+            close-to-close return across a day the market never traded computes as exactly 0.00% —
+            a real-looking number for a session that did not happen — so those rows print the
+            reason instead and are excluded from the averages above. Only the{" "}
+              {countOf(sep11Sessions.map((r) => r.day))} anniversaries that were traded sessions
+            feed the day-of figure.
+              <br />
+              <br />
+              The surrounding windows still work in those years, because they are calendar-week
+            offsets and land on the same weekday: <em>week into</em> is the week ending the session
+            before, <em>week after</em> runs to the following week&apos;s close, <em>month after</em>{" "}
+            about thirty days on. For 2001 the week-after window measures from the last pre-attack
+            close through the reopening — the number that actually describes what happened, rather
+            than the zero the axis would otherwise hand you.
+              <br />
+              <br />
+              <strong>What it says: nothing tradeable.</strong>{" "}
+              {countOf(sep11Sessions.map((r) => r.day))} sessions is a small sample for a one-day
+            study, and the spread of those returns is several times their mean. The month-after
+            column is dominated by two years that had nothing to do with the date — 2008, where
+            Lehman filed the Monday after, and 2022, where the CPI print two days later took the
+            index down 4% in a session. This is a piece of market history worth having on the page,
+            not an edge.
+            </>
+          }
+        >
+          <DataTable
+            head={["Year", "Date", "Week into", "Sept 11", "Week after", "Month after"]}
+            rows={sep11Rows.map((r) => [
+              { t: String(r.year) + (r.note ? " *" : ""), c: INK },
+              `${r.dow} ${fmtLongDate(r.iso)}`,
+              { t: pct(r.into), c: signColor(r.into) },
+              r.session ? { t: pct(r.day), c: signColor(r.day) } : { t: r.why, c: INK },
+              { t: pct(r.after), c: signColor(r.after) },
+              { t: pct(r.month), c: signColor(r.month) },
+            ])}
+          />
+          <div style={{ ...NOTE, fontSize: 11.5 }}>
+            {sep11Rows.filter((r) => r.note).map((r) => `* ${r.year}: ${r.note}`).join(" · ")}
             {live.live ? ` · ${liveYearNum} windows use sessions through ${live.lastDate}.` : ""}
           </div>
         </Collapse>

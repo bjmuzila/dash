@@ -4,9 +4,9 @@
  *
  * Every morning at 08:00 America/New_York, emails the owner a MORNING BRIEFING:
  * today's schedule, what's on the task list, this morning's routines, what's
- * planned for dinner and still on the grocery list — and then the money: the
+ * planned for dinner and still on the grocery list — and the money: the
  * spend/don't-spend verdict, the pay landing against the bills still due, the
- * rent projection, and a screenshot of /owner/budget.
+ * rent projection, and a link through to the live board.
  *
  * ── WHERE THE DATA COMES FROM ──────────────────────────────────────────────
  *
@@ -37,16 +37,29 @@
  * (the visibility rule in household-routes.cjs), so the choice mostly decides
  * whose Google calendar and whose timezone the schedule is rendered in.
  *
- * Auth for the money half: /owner/budget is owner-gated. We mint an owner
+ * Auth for the money half: /api/budget is owner-gated, so we mint an owner
  * session via the internal endpoint (POST /api/auth/internal-session,
- * x-internal-token), set it as the cbe_session cookie in a headless Chromium,
- * then screenshot the page exactly as the owner sees it. The same cookie is
- * reused to read /api/budget for the written numbers. Email goes out through
- * Resend (same provider as the app).
+ * x-internal-token) and send it as the cbe_session cookie. Email goes out
+ * through Resend (same provider as the app).
+ *
+ * NO HEADLESS BROWSER any more (2026-09-10). This used to launch puppeteer and
+ * screenshot /owner/budget into the email; boardLink() explains why that is now
+ * a link.
+ *
+ * DO NOT strip chromium from the root Dockerfile on the strength of that. This
+ * file no longer needs it, but three other things in the image still do and all
+ * of them piggyback on the same /usr/bin/chromium:
+ *   - server-v2/mg-ladder-discord.js      (started on boot by server-with-proxy)
+ *   - server-v2/econ-calendar-discord.js  (renderPng, via api-router)
+ *   - discord-bot.js                      (the `npm run bot` entrypoint)
+ * So `chromium`, the fonts, the X/graphics libs, PUPPETEER_SKIP_DOWNLOAD and
+ * PUPPETEER_EXECUTABLE_PATH all stay, and `puppeteer` stays in package.json.
+ * Removing them here would take the Discord posters down silently on the next
+ * deploy — the apt-install's comment naming only budget-email.js is what makes
+ * that look safe, and it isn't.
  *
  * Requires (in .env.local): INTERNAL_API_TOKEN, OWNER_USER_ID, RESEND_API_KEY,
- * EMAIL_FROM, BUDGET_EMAIL_TO, DATABASE_URL, and (in Docker)
- * PUPPETEER_EXECUTABLE_PATH → /usr/bin/chromium. Never throws out of the tick —
+ * EMAIL_FROM, BUDGET_EMAIL_TO, DATABASE_URL. Never throws out of the tick —
  * a bad morning just logs.
  */
 
@@ -56,7 +69,9 @@ const FROM_EMAIL = (process.env.EMAIL_FROM || 'CB Edge <hello@cbedge.net>').trim
 const TO_EMAILS = (process.env.BUDGET_EMAIL_TO || 'bjmuzila@gmail.com')
   .split(',').map((s) => s.trim()).filter(Boolean);
 const INTERNAL_API_TOKEN = (process.env.INTERNAL_API_TOKEN || '').trim();
-const CHROME_PATH = (process.env.PUPPETEER_EXECUTABLE_PATH || '').trim();
+// Where "Open the budget" points. The household SPA, not /owner/budget: it is
+// the surface that works on a phone, which is where this email is read.
+const BUDGET_URL = (process.env.BUDGET_APP_URL || 'https://budget.cbedge.net').trim();
 // Whose household rows to read. See the header.
 const BRIEF_HH_EMAIL = (process.env.BRIEF_HH_EMAIL || '').trim().toLowerCase();
 
@@ -143,11 +158,41 @@ function panel(innerRows, { pad = '0' } = {}) {
     `${innerRows}</table>`;
 }
 
-function sectionLabel(text, right = '') {
+/**
+ * A section's heading, and the gap above it.
+ *
+ * The gap is a spacer ROW inside this table, not a margin: margins on block
+ * elements are the first thing Outlook's renderer throws away, and this email
+ * is nine sections long — collapse the gaps and it reads as one undifferentiated
+ * wall. `tight` halves it, for a label that follows its own group's panel
+ * rather than starting a new one.
+ */
+function sectionLabel(text, right = '', { tight = false } = {}) {
+  const gap = tight ? 14 : 30;
   return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;border-collapse:collapse">` +
-    `<tr><td style="padding:20px 2px 7px;font:700 11px ${F};color:${C.mute};letter-spacing:.11em;text-transform:uppercase">${esc(text)}</td>` +
-    `<td style="padding:20px 2px 7px;text-align:right;font:700 11px ${F};color:${C.mute};letter-spacing:.04em">${right}</td></tr>` +
+    `<tr><td colspan="2" style="height:${gap}px;line-height:${gap}px;font-size:0">&nbsp;</td></tr>` +
+    `<tr><td style="padding:0 2px 9px;font:700 11px ${F};color:${C.mute};letter-spacing:.12em;text-transform:uppercase">${esc(text)}</td>` +
+    `<td style="padding:0 2px 9px;text-align:right;font:700 11px ${F};color:${C.mute};letter-spacing:.04em">${right}</td></tr>` +
     `</table>`;
+}
+
+/** Vertical air, as a table row — see the note on sectionLabel. */
+function spacer(px) {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;border-collapse:collapse">` +
+    `<tr><td style="height:${px}px;line-height:${px}px;font-size:0">&nbsp;</td></tr></table>`;
+}
+
+/**
+ * The one hard break in the email: money above, the day below. A rule with real
+ * air on both sides, so the two halves read as two halves rather than as the
+ * ninth and tenth sections in a row.
+ */
+function divider(label) {
+  return spacer(30) +
+    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;border-collapse:collapse">` +
+    `<tr><td style="border-top:1px solid ${C.line};height:0;line-height:0;font-size:0">&nbsp;</td></tr></table>` +
+    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;border-collapse:collapse">` +
+    `<tr><td style="padding:20px 2px 0;font:700 11px ${F};color:${C.mute};letter-spacing:.12em;text-transform:uppercase">${esc(label)}</td></tr></table>`;
 }
 
 function banner(tone, headline, subline, extra = '') {
@@ -520,8 +565,10 @@ function glanceStrip(tiles) {
     `<div style="font:800 19px ${F};color:${color || C.ink};line-height:1.1">${v}</div>` +
     `<div style="font:700 10px ${F};color:${C.mute};letter-spacing:.08em;margin-top:4px">${esc(k)}</div></td>`
   ).join('');
-  return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" ` +
-    `style="width:100%;border-collapse:collapse;background:${C.card};border-radius:12px;margin-top:12px">` +
+  // The gap above is a spacer table, not a margin — see sectionLabel.
+  return spacer(14) +
+    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" ` +
+    `style="width:100%;border-collapse:collapse;background:${C.card};border-radius:12px">` +
     `<tr>${cells}</tr></table>`;
 }
 
@@ -629,7 +676,7 @@ function rentSection(rent) {
       `<tr><td style="border-top:1px solid ${C.line};padding:10px 16px;font:700 13px ${F};color:${C.mute}">Projected on the 5th</td>` +
       `<td style="border-top:1px solid ${C.line};padding:10px 16px;text-align:right;font:800 16px ${F};color:${C.blue}">${fmt(projected)}</td></tr>`
     ) +
-    `<div style="height:8px"></div>` +
+    spacer(10) +
     banner(tone, headline, subline);
 }
 
@@ -777,7 +824,25 @@ async function buildMoney(base, cookie, month) {
 // The email
 // ═══════════════════════════════════════════════════════════════════════════
 
-function compose({ dateLine, dayLabel, money, briefing, hasShot }) {
+/**
+ * The one call to action. Replaces the headless-Chromium screenshot of
+ * /owner/budget that used to sit here: the picture cost a puppeteer launch and
+ * ~10s of render wait every morning, was the single flakiest step in the run,
+ * arrived as a 1600px-wide PNG that phones downscaled into illegibility, and is
+ * blocked by default in most clients anyway. A link is one line, never fails,
+ * and lands you on the live board instead of a stale one.
+ */
+function boardLink() {
+  return sectionLabel('The board') +
+    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" ` +
+    `style="width:100%;border-collapse:separate;background:${C.card};border:1px solid ${C.line};border-radius:12px">` +
+    `<tr><td style="padding:16px 18px">` +
+      `<a href="${BUDGET_URL}" style="font:800 15px ${F};color:${C.blue};text-decoration:none">Open the budget →</a>` +
+      `<div style="font:500 12px ${F};color:${C.mute};margin-top:4px">${esc(BUDGET_URL.replace(/^https?:\/\//, ''))}</div>` +
+    `</td></tr></table>`;
+}
+
+function compose({ dateLine, dayLabel, money, briefing }) {
   const g = briefing.glance || {};
   // Four at most, and only the ones that have something to say. A tile reading
   // "0" for a section the household doesn't use is worse than no tile.
@@ -795,109 +860,31 @@ function compose({ dateLine, dayLabel, money, briefing, hasShot }) {
     `<div style="max-width:600px;margin:0 auto">` +
       `<div style="font:800 22px ${F};color:${C.ink};letter-spacing:-.01em">Good morning.</div>` +
       `<div style="font:600 13px ${F};color:${C.mute};margin-top:4px">${esc(dateLine)} · 8:00 AM ET</div>` +
-      `<div style="height:16px"></div>` +
-      // MONEY FIRST, in full — verdict, the month's tables, rent, the board.
+      spacer(18) +
+      // MONEY FIRST, in full — verdict, the month's tables, rent, the link out.
       // This email is opened to answer "can I spend today"; the schedule and the
       // lists are what you read once that's settled, so they sit underneath.
       // Do not "balance" the layout by moving the budget back down.
       money.bannerHtml +
       glanceStrip(tiles) +
       money.detailHtml +
-      // The board is a nicety. When chromium fails the section goes away rather
-      // than emailing a broken-image icon.
-      (hasShot
-        ? sectionLabel('Budget board') +
-          `<img src="cid:overview" alt="Budget board" style="width:100%;border-radius:12px;border:1px solid ${C.line}" />`
-        : '') +
-      // Then the rest of the morning, under a rule so the switch from money to
-      // day is obvious at a glance rather than one more section heading.
-      (briefing.html
-        ? `<div style="height:22px"></div>` +
-          `<div style="border-top:1px solid ${C.line}"></div>` +
-          `<div style="font:700 11px ${F};color:${C.mute};letter-spacing:.11em;padding:18px 2px 0">YOUR DAY · ${esc(dayLabel.toUpperCase())}</div>` +
-          briefing.html
-        : '') +
-      `<div style="font:500 11px ${F};color:${C.faint};margin-top:18px;text-align:center">CB Edge · budget.cbedge.net</div>` +
+      boardLink() +
+      // Then the rest of the morning, behind the one hard divider.
+      (briefing.html ? divider(`Your day · ${dayLabel}`) + briefing.html : '') +
+      spacer(28) +
+      `<div style="font:500 11px ${F};color:${C.faint};text-align:center">CB Edge · ${esc(BUDGET_URL.replace(/^https?:\/\//, ''))}</div>` +
     `</div></div>`
   );
 }
 
-// ── screenshot via headless chromium ────────────────────────────────────────
-// Captures ONLY the budget Overview content: the app chrome (GlobalToolbar +
-// OwnerSidebar) are siblings of <main>, so we hide every sibling of <main> and
-// of each of its ancestors, then unlock the page's internal scroll container
-// (the budget root is overflowY:auto inside a height-capped <main>) so a
-// fullPage shot captures the whole thing rather than one viewport.
-async function captureShot(base, cookie) {
-  const puppeteer = require('puppeteer');
-  const browser = await puppeteer.launch({
-    headless: true,
-    executablePath: CHROME_PATH || undefined,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-  });
-  try {
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1600, height: 1200, deviceScaleFactor: 1 });
-    const host = new URL(base).host.split(':')[0];
-    await page.setCookie({ name: cookie.name, value: cookie.value, domain: host, path: '/', httpOnly: true });
-
-    // The budget page holds long-lived connections (toolbar WS / polling), so
-    // 'networkidle2' never settles and the nav timed out (the 8am failure). Wait
-    // for the DOM only, then the fixed delay below lets client data + charts render.
-    await page.goto(`${base}/owner/budget`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-    // Let the client-side data + charts settle.
-    await new Promise((r) => setTimeout(r, 9000));
-
-    await page.evaluate(() => {
-      const main = document.querySelector('main');
-      if (!main) return;
-      // Hide toolbar / sidebar / docks: anything that isn't on main's ancestry.
-      let node = main;
-      while (node.parentElement && node !== document.body) {
-        const parent = node.parentElement;
-        for (const sib of Array.from(parent.children)) {
-          if (sib !== node) sib.style.display = 'none';
-        }
-        parent.style.overflow = 'visible';
-        parent.style.height = 'auto';
-        parent.style.maxHeight = 'none';
-        node = parent;
-      }
-      // Let every internal scroll container grow to its full content height.
-      const unlock = (el) => {
-        el.style.overflow = 'visible';
-        el.style.height = 'auto';
-        el.style.maxHeight = 'none';
-      };
-      unlock(main);
-      for (const el of main.querySelectorAll('*')) {
-        const s = getComputedStyle(el);
-        if (s.overflowY === 'auto' || s.overflowY === 'scroll') unlock(el);
-      }
-      for (const el of [document.documentElement, document.body]) unlock(el);
-    });
-    await new Promise((r) => setTimeout(r, 800));
-
-    // Shoot ONLY <main>'s box. The toolbar and OwnerSidebar live outside it, so
-    // they're excluded by the capture region itself — not by the hiding above,
-    // which a React re-render could undo.
-    const el = await page.$('main');
-    if (el) return await el.screenshot({ type: 'png' });
-    return await page.screenshot({ type: 'png', fullPage: true });
-  } finally {
-    await browser.close().catch(() => {});
-  }
-}
-
-// ── send via Resend (inline cid attachments) ────────────────────────────────
-async function send(html, subject, shot) {
-  const attachments = shot
-    ? [{ filename: 'budget.png', content: Buffer.from(shot).toString('base64'), content_id: 'overview' }]
-    : [];
+// ── send via Resend ─────────────────────────────────────────────────────────
+// No attachments any more: the /owner/budget screenshot is gone, replaced by a
+// link. See boardLink() for why.
+async function send(html, subject) {
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: FROM_EMAIL, to: TO_EMAILS, subject, html, attachments }),
+    body: JSON.stringify({ from: FROM_EMAIL, to: TO_EMAILS, subject, html }),
   });
   if (!r.ok) throw new Error(`resend ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
 }
@@ -918,22 +905,16 @@ async function runOnce(base) {
     }),
   ]);
 
-  // A screenshot failure is no longer fatal either: chromium is the flakiest
-  // dependency here and the written briefing is worth more than the picture.
-  let shot = null;
-  try { shot = await captureShot(base, cookie); }
-  catch (e) { console.warn('[budget-email] screenshot failed, sending without it:', e?.message || e); }
-
   const dateLine = new Date().toLocaleDateString('en-US', {
     timeZone: 'America/New_York', weekday: 'long', month: 'long', day: 'numeric',
   });
   const dayLabel = dateLine.split(',')[0];
 
-  const html = compose({ dateLine, dayLabel, money, briefing, hasShot: !!shot });
+  const html = compose({ dateLine, dayLabel, money, briefing });
 
   // Subject stays generic on purpose — the numbers and the verdict live inside
   // the email, not on a lock screen anyone can read over your shoulder.
-  await send(html, `Morning briefing — ${dateLine}`, shot);
+  await send(html, `Morning briefing — ${dateLine}`);
   console.log(`[budget-email] sent ${dateLine} (${money.verdict}) → ${TO_EMAILS.join(', ')}`);
 }
 

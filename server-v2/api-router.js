@@ -9083,7 +9083,8 @@ if (libDb) {
             eod_strike_gex:      { days: Math.max(3, n(process.env.EOD_STRIKE_GEX_RETAIN_DAYS, 400)),     owner: 'eod-strike-gex-recorder' },
             gex_watch_alerts:    { days: Math.max(30, n(process.env.GEX_WATCH_RETAIN_DAYS, 1095)),        owner: 'gex-watch-recorder' },
             gex_gross_daily:     { days: Math.max(30, n(process.env.GEX_GROSS_RETAIN_DAYS, 1095)),        owner: 'gex-gross-recorder' },
-            lse_top_flow_prints: { days: 7,  owner: 'api-router' },
+            lse_top_flow_prints: { days: 7,  owner: 'api-router',
+                                   note: `prints >= $${Math.round((Number(process.env.LSE_WHALE_FLOOR) || 1_000_000) / 1000)}K premium are NEVER swept — they are the /whales archive; everything smaller purges after 7d` },
             mult_greek_gex_open: { days: 3,  owner: 'mult-greek-gex-recorder' },
           };
 
@@ -14147,6 +14148,23 @@ try {
     const TF_PERSIST_BATCH = 500;
     /** Sessions kept in the table. */
     const TF_RETAIN_DAYS = 7;
+    /**
+     * WHALES ARE NEVER SWEPT.
+     *
+     * The retention delete below spares any print at or above this premium, so
+     * the table is two things at once: a rolling 7-day mirror of the live store,
+     * and a PERMANENT archive of the biggest prints. /api/lse/whales reads the
+     * second one, and it is only true because of the `premium < ?` in that
+     * DELETE — take it out and the archive silently caps at a week.
+     *
+     * Same shape as retention-cleanup's flow_prints_big_premium carve-out, and
+     * for the same reason: the small prints are the volume, the big ones are the
+     * record worth keeping.
+     */
+    const TF_WHALE_FLOOR = Math.max(
+      100_000,
+      Number(process.env.LSE_WHALE_FLOOR) || 1_000_000,
+    );
 
     let tfSchema = null;
     function tfEnsureSchema() {
@@ -14169,6 +14187,15 @@ try {
           .then(() => libDb.queryAll(
             `CREATE INDEX IF NOT EXISTS lse_top_flow_prints_session_idx
                ON lse_top_flow_prints (session_date, ts DESC)`,
+            [],
+          ))
+          // The archive's index. Every /api/lse/whales query is "a date range,
+          // premium above a floor" — ordered by premium for the leaderboards,
+          // by ts for the tape. The session_idx above cannot serve the first,
+          // and once whales are kept forever this table stops being small.
+          .then(() => libDb.queryAll(
+            `CREATE INDEX IF NOT EXISTS lse_top_flow_prints_premium_idx
+               ON lse_top_flow_prints (session_date, premium DESC)`,
             [],
           ))
           .catch((e) => { tfSchema = null; throw e; });
@@ -14218,9 +14245,14 @@ try {
           tfState.day = day;
           console.log(`[api-router] top-flow restored ${n} prints from ${day}`);
           // Housekeeping, once, off the restore path so it never delays a boot.
+          // `premium < ?` is the whale carve-out — see TF_WHALE_FLOOR. Without
+          // it /api/lse/whales can never show more than the last seven days,
+          // however far back the page's range picker reaches.
           libDb.queryAll(
-            `DELETE FROM lse_top_flow_prints WHERE session_date < (CURRENT_DATE - ?::int)`,
-            [TF_RETAIN_DAYS],
+            `DELETE FROM lse_top_flow_prints
+               WHERE session_date < (CURRENT_DATE - ?::int)
+                 AND premium < ?`,
+            [TF_RETAIN_DAYS, TF_WHALE_FLOOR],
           ).catch(() => { /* retention is best-effort */ });
         } catch (e) {
           console.warn('[api-router] top-flow restore failed:', e && e.message ? e.message : e);
@@ -14440,6 +14472,378 @@ try {
           error: tfState.error,
           statsError: tfState.statsError,
         }, { 'Cache-Control': NO_STORE });
+      },
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // /api/lse/whales — THE $1M+ ARCHIVE. Backs /v3/whales.
+    //
+    // Same table as /api/lse/top-flow and deliberately not a second copy of it.
+    // A whale is a row in lse_top_flow_prints big enough that the retention
+    // delete in tfRestore() skips it (see TF_WHALE_FLOOR); nothing re-records
+    // anything. Two tables holding the same print would disagree the first time
+    // a side landed on one and not the other.
+    //
+    // ── WHY EVERY ROLL-UP IS SQL, NOT A REDUCE OVER `rows` ───────────────────
+    // The page shows totals for the WHOLE filtered range and a table of at most
+    // WH_MAX_ROWS of it. Computing the tiles from the returned rows would make
+    // them silently mean "of the 300 rows that fitted", which is the kind of
+    // number that is wrong without ever looking wrong. So the aggregates are
+    // GROUP BYs over the full range and the row list is a separate LIMIT — the
+    // tiles can legitimately say $8.42B while the table shows 300 rows.
+    //
+    // ── BULLISH/BEARISH, NOT BOUGHT/SOLD ─────────────────────────────────────
+    // `bull`/`bear` bucket premium by what the trade says about the UNDERLYING:
+    // buying calls or selling puts is bullish, selling calls or buying puts is
+    // bearish. Summing BUY against SELL instead puts every sold put on the
+    // bearish side of the ledger, which is backwards. `bought`/`sold` are
+    // returned alongside because they are still the right answer to a different
+    // question (was premium being paid out or taken in), and because the page's
+    // BUY / SELL filter needs them to agree with what it filtered on.
+    //
+    // Prints with no readable side are in `total` and in NEITHER directional
+    // bucket — a side cannot be recovered after the fact (see the capture note
+    // on /api/lse/top-flow), so the three numbers do not add up and the page
+    // says so rather than letting them look like they should.
+    //
+    // ── vol / OI ARE NOT IN THE ARCHIVE ──────────────────────────────────────
+    // They are joined at SERVE time on the live card because they mean "what is
+    // this contract doing NOW". There is no now for a print from March, so they
+    // come back null here rather than frozen at whatever they were.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** The table's hard cap for one response. The page asks for 300. */
+    const WH_MAX_ROWS = 500;
+    /** Leaderboard depth. Longer lists are scroll, not signal. */
+    const WH_TOP_N = 12;
+    /** A contract has to be hit this many times to count as "repeat". */
+    const WH_REPEAT_MIN = 3;
+
+    /**
+     * BUY/SELL × CALL/PUT → direction. NULL when the print carries no action,
+     * which is what keeps mid / pending / stale prints out of both buckets
+     * instead of defaulting them into one.
+     */
+    const WH_BIAS_SQL = `
+      CASE
+        WHEN payload->>'action' = 'BUY'  AND payload->>'type' = 'C' THEN 'bull'
+        WHEN payload->>'action' = 'SELL' AND payload->>'type' = 'P' THEN 'bull'
+        WHEN payload->>'action' = 'SELL' AND payload->>'type' = 'C' THEN 'bear'
+        WHEN payload->>'action' = 'BUY'  AND payload->>'type' = 'P' THEN 'bear'
+        ELSE NULL
+      END`;
+
+    /**
+     * The shared WHERE, built once per request.
+     *
+     * IMPORTANT: libDb.queryAll rewrites `?` to `$1, $2, …` by counting them
+     * left to right across the WHOLE statement. So this fragment must always be
+     * spliced in at the same position in every query, and its params must be
+     * spread FIRST in that query's param array. Every statement below is
+     * `WITH w AS (… WHERE <filter>) SELECT …`, which puts the filter's
+     * placeholders ahead of anything a tail LIMIT adds.
+     *
+     * There must be no literal `?` anywhere else in these statements — that
+     * rules out the JSONB key-exists operators (`?`, `?|`, `?&`), which is why
+     * everything here goes through `->>`.
+     */
+    function whFilter(o) {
+      const sql = ['session_date >= ?::date', 'session_date <= ?::date', 'premium >= ?'];
+      const params = [o.from, o.to, o.minPremium];
+      if (o.ticker) { sql.push(`payload->>'underlying' = ?`); params.push(o.ticker); }
+      if (o.type) { sql.push(`payload->>'type' = ?`); params.push(o.type); }
+      if (o.action) { sql.push(`payload->>'action' = ?`); params.push(o.action); }
+      // Moneyness AT PRINT TIME — judged against the underlying price the print
+      // CARRIED, not against spot now. A call bought 40 points OTM at 10am was
+      // an OTM buy and does not become something else because the index rallied
+      // through it. Same rule the live card applies; a row with no strike, right
+      // or spot is DROPPED rather than let through a filter it cannot answer.
+      if (o.moneyness === 'otm') {
+        sql.push(`(
+          payload->>'type' IS NOT NULL
+          AND payload->>'strike' IS NOT NULL
+          AND COALESCE((payload->>'spot')::float8, 0) > 0
+          AND CASE WHEN payload->>'type' = 'C'
+                   THEN (payload->>'strike')::float8 > (payload->>'spot')::float8
+                   ELSE (payload->>'strike')::float8 < (payload->>'spot')::float8
+              END
+        )`);
+      }
+      return { sql: sql.join('\n           AND '), params };
+    }
+
+    /** `WITH w AS (…)` — the filtered set, with the derived columns every
+     *  roll-up groups on computed once. */
+    const whCte = (filterSql) => `
+      WITH w AS (
+        SELECT session_date,
+               ts,
+               premium,
+               payload,
+               payload->>'underlying' AS ticker,
+               payload->>'osi'        AS osi,
+               payload->>'type'       AS opt_type,
+               payload->>'action'     AS act,
+               (payload->>'dte')::int AS dte,
+               ${WH_BIAS_SQL}         AS bias
+          FROM lse_top_flow_prints
+         WHERE ${filterSql}
+      )`;
+
+    /** Postgres hands SUM(double precision) back as a JS number, but COUNT and
+     *  the ::numeric paths can arrive as strings. Normalise once, here. */
+    const whNum = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    /** A stored payload → the wire row the page's TopFlowRow expects. */
+    const whRow = (r) => {
+      const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+      return {
+        id: String(p.id),
+        ts: Number(p.ts),
+        osi: p.osi ?? null,
+        underlying: p.underlying ?? null,
+        type: p.type ?? null,
+        strike: p.strike ?? null,
+        expiry: p.expiry ?? null,
+        dte: p.dte ?? null,
+        size: p.size ?? null,
+        price: p.price ?? null,
+        premium: Number(p.premium) || 0,
+        spot: p.spot ?? null,
+        // A payload stored while the print was still pending has no `side` key
+        // at all — JSON has no undefined. That reads back as pending, and it is
+        // now permanent: nothing will ever classify it. `sideReason` says which
+        // kind of nothing it is rather than letting the cell be blank.
+        side: p.side === undefined ? null : p.side,
+        action: p.action === undefined ? null : p.action,
+        sideReason: p.side === undefined ? (p.sideReason ?? 'stale') : (p.sideReason ?? null),
+        bid: p.bid ?? null,
+        ask: p.ask ?? null,
+        quoteAgeMs: p.quoteAgeMs ?? null,
+        // Live-only. See the header note.
+        vol: null,
+        oi: null,
+        // Formatted by to_char in SQL, never from a JS Date: node-postgres
+        // parses a DATE column into local midnight, and re-formatting that in
+        // ET on a UTC box hands back the PREVIOUS day. Every row would sit
+        // under the wrong date header, which is a silent wrong answer rather
+        // than a visible one.
+        sessionDate: String(r.session_day || '').slice(0, 10),
+      };
+    };
+
+    register('/api/lse/whales', {
+      // Same paywall as the live card — this is the same vault data, older.
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+
+        const today = tfEtDate(new Date());
+        const rawFrom = String(params.get('from') || '').trim();
+        const rawTo = String(params.get('to') || '').trim();
+        // A malformed date is dropped rather than forwarded — this is the
+        // public-facing hop and an unvalidated string cast to ::date is how a
+        // typo becomes a 500.
+        let from = YMD.test(rawFrom) ? rawFrom : today;
+        let to = YMD.test(rawTo) ? rawTo : today;
+        if (from > to) { const t = from; from = to; to = t; }
+
+        const askedFloor = Number(params.get('min_premium'));
+        // Clamped UP to the whale floor: below it the table holds only the last
+        // seven days, so a lower ask would return a list that looks like the
+        // archive and is really a week of it.
+        const minPremium = Math.max(
+          Number.isFinite(askedFloor) ? askedFloor : TF_WHALE_FLOOR,
+          TF_WHALE_FLOOR,
+        );
+
+        const ticker = String(params.get('ticker') || '').trim().toUpperCase().slice(0, 12) || null;
+        const rawType = String(params.get('type') || '').trim().toUpperCase().slice(0, 1);
+        const type = rawType === 'C' || rawType === 'P' ? rawType : null;
+        const rawAction = String(params.get('action') || '').trim().toUpperCase();
+        const action = rawAction === 'BUY' || rawAction === 'SELL' ? rawAction : null;
+        const moneyness = params.get('moneyness') === 'otm' ? 'otm' : 'all';
+        const sort = params.get('sort') === 'premium' ? 'premium' : 'time';
+        const askedLimit = Number(params.get('limit'));
+        const limit = Math.min(Math.max(Number.isFinite(askedLimit) ? askedLimit : 200, 1), WH_MAX_ROWS);
+
+        const empty = {
+          range: { from, to },
+          summary: null,
+          biggest: null,
+          sessions: [],
+          tickers: [],
+          buckets: [],
+          repeats: [],
+          rows: [],
+          rowCap: limit,
+          whaleFloor: TF_WHALE_FLOOR,
+        };
+
+        if (!libDb) {
+          // 200 with an error the page can RENDER, not a 5xx. A 503 here lands
+          // in the client's error branch, which leaves the page blank with no
+          // explanation — exactly the failure this endpoint existing is meant
+          // to end.
+          return send(res, 200, { ...empty, error: 'No database configured — the whale archive is unavailable.' },
+            { 'Cache-Control': NO_STORE });
+        }
+
+        try {
+          await tfEnsureSchema();
+          const f = whFilter({ from, to, minPremium, ticker, type, action, moneyness });
+          const cte = whCte(f.sql);
+
+          const order = sort === 'premium' ? 'premium DESC, ts DESC' : 'ts DESC, premium DESC';
+
+          const [summaryRows, sessionRows, tickerRows, bucketRows, repeatRows, listRows, biggestRows] =
+            await Promise.all([
+              libDb.queryAll(`${cte}
+                SELECT COUNT(*)::int                                                AS n,
+                       COALESCE(SUM(premium), 0)                                    AS total,
+                       COALESCE(SUM(premium) FILTER (WHERE bias = 'bull'), 0)       AS bull,
+                       COALESCE(SUM(premium) FILTER (WHERE bias = 'bear'), 0)       AS bear,
+                       COALESCE(SUM(premium) FILTER (WHERE act = 'BUY'), 0)         AS bought,
+                       COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold,
+                       COALESCE(SUM(premium) FILTER (WHERE opt_type = 'C'), 0)      AS calls,
+                       COALESCE(SUM(premium) FILTER (WHERE opt_type = 'P'), 0)      AS puts,
+                       COUNT(DISTINCT session_date)::int                            AS sessions
+                  FROM w`, [...f.params]),
+
+              // Ascending: this is a time axis, and the page draws it left to
+              // right into the bar chart without re-sorting.
+              libDb.queryAll(`${cte}
+                SELECT to_char(session_date, 'YYYY-MM-DD')                          AS d,
+                       COUNT(*)::int                                                AS n,
+                       COALESCE(SUM(premium), 0)                                    AS total,
+                       COALESCE(SUM(premium) FILTER (WHERE bias = 'bull'), 0)       AS bull,
+                       COALESCE(SUM(premium) FILTER (WHERE bias = 'bear'), 0)       AS bear,
+                       COALESCE(SUM(premium) FILTER (WHERE act = 'BUY'), 0)         AS bought,
+                       COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold
+                  FROM w
+                 GROUP BY session_date
+                 ORDER BY session_date ASC`, [...f.params]),
+
+              libDb.queryAll(`${cte}
+                SELECT ticker,
+                       COUNT(*)::int                                                AS n,
+                       COALESCE(SUM(premium), 0)                                    AS total,
+                       COALESCE(SUM(premium) FILTER (WHERE bias = 'bull'), 0)       AS bull,
+                       COALESCE(SUM(premium) FILTER (WHERE bias = 'bear'), 0)       AS bear,
+                       COALESCE(SUM(premium) FILTER (WHERE act = 'BUY'), 0)         AS bought,
+                       COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold
+                  FROM w
+                 WHERE ticker IS NOT NULL
+                 GROUP BY ticker
+                 ORDER BY total DESC
+                 LIMIT ?`, [...f.params, WH_TOP_N]),
+
+              // Prints with no readable DTE are excluded rather than swept into
+              // 90+, which would put a missing number inside a real bucket.
+              libDb.queryAll(`${cte}
+                SELECT CASE WHEN dte <= 0  THEN '0DTE'
+                            WHEN dte <= 7  THEN '1-7'
+                            WHEN dte <= 30 THEN '8-30'
+                            WHEN dte <= 90 THEN '31-90'
+                            ELSE '90+' END                                          AS bucket,
+                       COUNT(*)::int                                                AS n,
+                       COALESCE(SUM(premium), 0)                                    AS total
+                  FROM w
+                 WHERE dte IS NOT NULL
+                 GROUP BY 1`, [...f.params]),
+
+              // The one question only an archive can answer: has anyone been
+              // building this exact contract, across sessions.
+              libDb.queryAll(`${cte}
+                SELECT osi,
+                       MAX(ticker)                                                  AS ticker,
+                       MAX(payload->>'strike')                                      AS strike,
+                       MAX(opt_type)                                                AS type,
+                       MAX(payload->>'expiry')                                      AS expiry,
+                       COUNT(*)::int                                                AS n,
+                       COALESCE(SUM(premium), 0)                                    AS total,
+                       COALESCE(SUM(premium) FILTER (WHERE bias = 'bull'), 0)       AS bull,
+                       COALESCE(SUM(premium) FILTER (WHERE bias = 'bear'), 0)       AS bear,
+                       COALESCE(SUM(premium) FILTER (WHERE act = 'BUY'), 0)         AS bought,
+                       COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold
+                  FROM w
+                 WHERE osi IS NOT NULL
+                 GROUP BY osi
+                HAVING COUNT(*) >= ?
+                 ORDER BY total DESC
+                 LIMIT ?`, [...f.params, WH_REPEAT_MIN, WH_TOP_N]),
+
+              libDb.queryAll(`${cte}
+                SELECT to_char(session_date, 'YYYY-MM-DD') AS session_day, payload
+                  FROM w
+                 ORDER BY ${order}
+                 LIMIT ?`, [...f.params, limit]),
+
+              libDb.queryAll(`${cte}
+                SELECT to_char(session_date, 'YYYY-MM-DD') AS session_day, payload
+                  FROM w
+                 ORDER BY premium DESC
+                 LIMIT 1`, [...f.params]),
+            ]);
+
+          const sm = (summaryRows && summaryRows[0]) || null;
+          const summary = sm && whNum(sm.n) > 0
+            ? {
+                n: whNum(sm.n),
+                total: whNum(sm.total),
+                bull: whNum(sm.bull),
+                bear: whNum(sm.bear),
+                bought: whNum(sm.bought),
+                sold: whNum(sm.sold),
+                calls: whNum(sm.calls),
+                puts: whNum(sm.puts),
+                sessions: whNum(sm.sessions),
+              }
+            : null;
+
+          const agg = (r, extra) => ({
+            n: whNum(r.n),
+            total: whNum(r.total),
+            bull: whNum(r.bull),
+            bear: whNum(r.bear),
+            bought: whNum(r.bought),
+            sold: whNum(r.sold),
+            ...extra,
+          });
+
+          return send(res, 200, {
+            range: { from, to },
+            summary,
+            biggest: biggestRows && biggestRows[0] ? whRow(biggestRows[0]) : null,
+            sessions: (sessionRows || []).map((r) => agg(r, { d: String(r.d) })),
+            tickers: (tickerRows || []).map((r) => agg(r, { ticker: String(r.ticker) })),
+            buckets: (bucketRows || []).map((r) => ({
+              bucket: String(r.bucket), n: whNum(r.n), total: whNum(r.total),
+            })),
+            repeats: (repeatRows || []).map((r) => agg(r, {
+              osi: String(r.osi),
+              ticker: r.ticker ? String(r.ticker) : '',
+              strike: r.strike === null || r.strike === undefined ? '' : String(r.strike),
+              type: r.type ? String(r.type) : '',
+              expiry: r.expiry ? String(r.expiry) : '',
+            })),
+            rows: (listRows || []).map(whRow),
+            rowCap: limit,
+            whaleFloor: TF_WHALE_FLOOR,
+            /** So the page can say WHY vol/OI are dashes instead of just being blank. */
+            liveStats: false,
+            error: null,
+          }, { 'Cache-Control': NO_STORE });
+        } catch (e) {
+          console.error('[api-router] /api/lse/whales failed:', e && e.message ? e.message : e);
+          // Again 200-with-error rather than a 5xx, so the page renders the
+          // reason instead of an empty archive.
+          return send(res, 200, { ...empty, error: `Whale archive query failed: ${e && e.message ? e.message : String(e)}` },
+            { 'Cache-Control': NO_STORE });
+        }
       },
     });
 

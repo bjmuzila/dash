@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { V3, V3_MONO, V3_RADIUS, V3_TEXT, v3CardStyle, v3Chip } from "@/components/landing/v3Theme";
+import { V3, V3_MONO, V3_NUM, V3_RADIUS, V3_TEXT, v3CardStyle, v3Chip } from "@/components/landing/v3Theme";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The free live level tile.
@@ -185,7 +185,7 @@ export default function LiveLevelPanel() {
             <div style={bigNoSub}>
               {d!.spot != null ? (
                 <>
-                  Spot <b style={{ fontFamily: V3_MONO, color: V3.fg, fontWeight: 700 }}>{fmt(d!.spot)}</b>
+                  Spot <b style={{ ...V3_NUM, color: V3.fg, fontWeight: 700 }}>{fmt(d!.spot)}</b>
                   {spotVsCore != null && (
                     <>
                       {" · "}
@@ -219,7 +219,9 @@ export default function LiveLevelPanel() {
             <div style={stampRow}>
               <span>Front expiry · open interest + volume</span>
               {/* DATE and time. The whole point of note (a). */}
-              <span style={{ fontFamily: V3_MONO, color: fresh ? V3.fg : V3.warn }}>
+              {/* V3_NUM: the stamp is "Thu, Sep 10, 09:50 ET" — two commas and
+                  a colon, all of which mono blows out into full-width boxes. */}
+              <span style={{ ...V3_NUM, color: fresh ? V3.fg : V3.warn }}>
                 {stamp ? `${stamp} ET` : "—"}
               </span>
             </div>
@@ -317,11 +319,15 @@ const dot: React.CSSProperties = {
   display: "inline-block",
 };
 
+// V3_NUM, not V3_MONO. At 48px the mono comma sits alone in a full-width box
+// and "7,590" — the biggest number on the landing page, the one the whole hero
+// argues about — reads as "7 , 590". tabular-nums keeps it from jittering as
+// the level ticks, which is the only thing mono was buying. See v3Theme.ts.
 const bigNo: React.CSSProperties = {
-  fontFamily: V3_MONO,
+  ...V3_NUM,
   fontSize: "clamp(32px, 4.6vw, 48px)",
   fontWeight: 700,
-  letterSpacing: "-0.03em",
+  letterSpacing: "-0.02em",
   lineHeight: 1,
   // The headline takes CORE's own colour (--color-level-cb), the same yellow
   // the rails and the Multi Greek badges tag that strike with.
@@ -359,7 +365,7 @@ const swatch: React.CSSProperties = {
   flexShrink: 0,
 };
 
-const levelVal: React.CSSProperties = { fontFamily: V3_MONO, fontWeight: 700, fontSize: V3_TEXT.body };
+const levelVal: React.CSSProperties = { ...V3_NUM, fontWeight: 700, fontSize: V3_TEXT.body };
 
 const stampRow: React.CSSProperties = {
   marginTop: 12,

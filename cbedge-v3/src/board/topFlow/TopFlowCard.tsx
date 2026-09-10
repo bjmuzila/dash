@@ -169,6 +169,61 @@ const SIDE_INK: Record<FlowSide, string> = {
   bid: 'text-down',
   below_bid: 'text-down',
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// DIRECTIONAL BIAS
+//
+// BUY and SELL are what happened to the CONTRACT; they are not what the trade
+// says about the UNDERLYING, and reading the raw verb as direction gets two of
+// the four cases backwards. A sold put is bullish. A sold call is bearish.
+//
+//   BUY  CALL → BULLISH    long upside optionality
+//   SELL CALL → BEARISH    short upside; wants flat or lower
+//   BUY  PUT  → BEARISH    long downside
+//   SELL PUT  → BULLISH    short downside; wants flat or higher
+//
+// The price the print filled at (ask-side vs bid-side) does NOT flip the bias —
+// it only says how aggressive the participant was, which is what the per-row
+// tooltip below spells out. That is why the Side column stays inked by where
+// the fill sat while this column is inked by what it MEANS.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type Bias = 'bullish' | 'bearish'
+
+/** null when the print could not be attributed to a buyer or a seller. */
+export function biasOf(r: TopFlowRow): Bias | null {
+  if (!r.action || !r.type) return null
+  if (r.type === 'C') return r.action === 'BUY' ? 'bullish' : 'bearish'
+  return r.action === 'BUY' ? 'bearish' : 'bullish'
+}
+
+/** Ask-side = lifted the offer, bid-side = hit the bid. Mid never reaches here. */
+const isAggressiveFill = (side: FlowSide | null) => side === 'ask' || side === 'above_ask'
+
+/** The eight rows of the bias table, as a sentence per row. */
+export function biasTitle(r: TopFlowRow, b: Bias): string {
+  const up = isAggressiveFill(r.side)
+  const where = up ? 'at or above the ask' : 'at or below the bid'
+  const head = `${r.action === 'BUY' ? 'Bought' : 'Sold'} ${r.type === 'C' ? 'calls' : 'puts'} ${where} — ${b.toUpperCase()}.`
+  if (r.type === 'C' && r.action === 'BUY') {
+    return `${head} ${up
+      ? 'Paying up for upside optionality; profits when the underlying rallies sharply.'
+      : 'Buying that upside at a discount; still profits from a significant move up.'}`
+  }
+  if (r.type === 'C' && r.action === 'SELL') {
+    return `${head} ${up
+      ? 'Collecting premium by shorting upside strikes; profits if the underlying stays flat or drops.'
+      : 'Aggressively capturing premium on upside strikes; profits from a flat or lower tape.'}`
+  }
+  if (r.type === 'P' && r.action === 'BUY') {
+    return `${head} ${up
+      ? 'Paying up for downside protection; profits when the underlying declines.'
+      : 'Acquiring downside insurance cheaper; still profits from a drop.'}`
+  }
+  return `${head} ${up
+    ? 'Collecting high premium for taking on assignment risk; profits if the underlying holds steady or rises.'
+    : 'Writing puts more conservatively; profits from stability or upward price action.'}`
+}
+
 const REASON_TITLE: Record<string, string> = {
   pending: 'Just printed — the quote it will be judged against has not landed yet. It fills in on the next refresh.',
   stale: 'This print arrived while the server was not watching, and is now too old to judge. A side is never guessed against a quote taken minutes later.',
@@ -261,17 +316,36 @@ const COLS: Col[] = [
     cellClass: () => 'tabular font-semibold',
   },
   {
-    id: 'bs', label: 'B/S', align: 'left',
-    title: 'Above ask or at ask = bought. At bid or below bid = sold. Mid is not a read',
-    cell: (r) => r.action ?? (r.side === 'mid' ? 'n/a' : '—'),
-    cellClass: (r) =>
-      `font-semibold ${r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-faint opacity-70'}`,
-    cellTitle: (r) =>
-      r.action
-        ? undefined
-        : r.side === 'mid'
-          ? 'Filled between the bid and the ask — genuinely ambiguous, so no call is made'
-          : REASON_TITLE[r.sideReason ?? 'pending'],
+    // id stays 'bs' — it is persisted in every saved column order.
+    id: 'bs', label: 'Bias', align: 'left', nowrap: true,
+    title:
+      'What the print says about the UNDERLYING, not the contract. Buying calls or selling puts is bullish; selling calls or buying puts is bearish. Mid is not a read',
+    cell: (r) => {
+      const b = biasOf(r)
+      if (!b) return r.side === 'mid' ? 'n/a' : '—'
+      return (
+        <>
+          <span aria-hidden>{b === 'bullish' ? '▲' : '▼'}</span>{' '}
+          {b === 'bullish' ? 'BULLISH' : 'BEARISH'}
+          {/* The raw verb is kept, faint: the bias is the read, but you still
+              need to see WHICH of the four trades produced it. */}
+          <span className="font-normal text-faint opacity-70">
+            {' '}{r.action === 'BUY' ? 'B' : 'S'}{r.type}
+          </span>
+        </>
+      )
+    },
+    cellClass: (r) => {
+      const b = biasOf(r)
+      return `font-semibold ${b === 'bullish' ? 'text-up' : b === 'bearish' ? 'text-down' : 'text-faint opacity-70'}`
+    },
+    cellTitle: (r) => {
+      const b = biasOf(r)
+      if (b) return biasTitle(r, b)
+      return r.side === 'mid'
+        ? 'Filled between the bid and the ask — genuinely ambiguous, so no direction is called'
+        : REASON_TITLE[r.sideReason ?? 'pending']
+    },
   },
   {
     id: 'dte', label: 'DTE', align: 'right',
@@ -607,16 +681,20 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
   const failed = Boolean(q.error) || Boolean(q.data?.error)
 
   const totalPrem = useMemo(() => rows.reduce((sum, r) => sum + r.premium, 0), [rows])
-  // Buy/sell balance across what is ON SCREEN — the one number that turns a
-  // list of prints into a read. Mid prints are in neither bucket by design.
+  // Directional balance across what is ON SCREEN — the one number that turns a
+  // list of prints into a read. Bucketed by BIAS, not by the raw verb: summing
+  // BUY against SELL puts every sold put on the bearish side of the ledger and
+  // every sold call on the bullish one, which is the opposite of what they mean.
+  // Mid and unreadable prints are in neither bucket, by design.
   const flowSkew = useMemo(() => {
-    let buy = 0
-    let sell = 0
+    let bull = 0
+    let bear = 0
     for (const r of rows) {
-      if (r.action === 'BUY') buy += r.premium
-      else if (r.action === 'SELL') sell += r.premium
+      const b = biasOf(r)
+      if (b === 'bullish') bull += r.premium
+      else if (b === 'bearish') bear += r.premium
     }
-    return { buy, sell }
+    return { bull, bear }
   }, [rows])
 
   const selected = useMemo(
@@ -697,10 +775,10 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
         <span>
           Total <strong className="tabular text-fg">{fmtPremium(totalPrem)}</strong>
         </span>
-        <span title="Premium that lifted the offer vs premium that hit the bid, across the rows on screen. Mid prints are in neither.">
-          Bought <strong className="tabular text-up">{fmtPremium(flowSkew.buy)}</strong>
+        <span title="Premium positioned for a move UP (calls bought, puts sold) vs positioned for a move DOWN (calls sold, puts bought), across the rows on screen. Mid and unreadable prints are in neither.">
+          Bullish <strong className="tabular text-up">{fmtPremium(flowSkew.bull)}</strong>
           {' · '}
-          Sold <strong className="tabular text-down">{fmtPremium(flowSkew.sell)}</strong>
+          Bearish <strong className="tabular text-down">{fmtPremium(flowSkew.bear)}</strong>
         </span>
         <span className="text-faint">
           ≥{fmtPremium(s.minPremium)}

@@ -23,6 +23,7 @@ export type SectionKey =
   | "dow"
   | "vix"
   | "jh"
+  | "sep11"
   | "fomc"
   | "earn"
   | "aapl"
@@ -76,10 +77,18 @@ export const SECTION_GROUPS: SectionGroup[] = [
     // date, a window before, a window after — so they share a group and a
     // vocabulary, and they are kept out of "Event triggers" because that group
     // is about market-generated conditions rather than scheduled dates.
-    label: "Scheduled events",
+    //
+    // Sept 11 is the one ANNIVERSARY in here rather than a scheduled event:
+    // the anchor is a fixed calendar date, not something anybody puts on a
+    // calendar each year. It belongs to this group because the study has the
+    // same shape — one anchor, a window before, a window after — and grouping
+    // it with the month-by-month calendar shapes would imply a seasonal
+    // pattern the sample does not support.
+    label: "Dated events",
     items: [
       { key: "fomc", label: "FOMC decisions", hash: "fomc" },
       { key: "jh", label: "Jackson Hole", hash: "jackson-hole" },
+      { key: "sep11", label: "Sept 11 anniversary", hash: "sept-11" },
       { key: "earn", label: "Earnings reactions", hash: "earnings" },
       { key: "aapl", label: "Apple events", hash: "apple-events" },
     ],

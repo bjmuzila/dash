@@ -1,5 +1,235 @@
 # Changelog
 
+## 2026-09-10 (q) - Landing page: cards lifted off the canvas, buy button given weight
+
+Brandon: "just want to make the cards a bit more dominant, some of them just
+seem to blend in" and "make that font bigger and the button more wanting to
+push."
+
+### Cards
+
+`v3CardStyle` is #0f1117 on #07080b behind a #23272e hairline - a ~3% luminance
+step. Inside the app that is right: a dashboard is dense, the cards touch, and
+every hairline is a divider doing work. A marketing page is the opposite shape,
+five big plates floating in empty canvas, and at that scale the step is a smudge
+rather than an edge.
+
+New **`v3CardStrongStyle`** in `v3Theme.ts`, used by `LandingClient`'s section
+plates. Three changes, all inside the existing token set:
+
+1. **The ground drops, not the plate.** Page canvas `V3.bg` (#07080b) ->
+   `V3.app` (#020304) - the token v3 already uses for the layer behind
+   everything. The card stays exactly #0f1117, so the step roughly triples with
+   no surface value touched and no colour invented.
+2. Hairline to a 9% white (via `v3a(V3.fg, .09)`), which reads as an edge where
+   #23272e read as a seam.
+3. A cast shadow plus a 1px inset top highlight. This is the one place the "v3
+   does not bloom" rule bends, and it bends legally: a shadow is an object
+   sitting ON something, which is what a card is. No accent in it, nothing
+   outside the box lighting up, the black is `--color-shadow`.
+
+Nested cards (feature tiles, receipts stats, the live level panel) deliberately
+stay on `v3CardStyle`/`v3InsetStyle` - a second shadow inside the first is the
+glassy v2 look v3 removed. The Tradeify strip DOES take the lift, because it
+sits directly on the canvas and would otherwise be the one flat thing left.
+
+### The buy button
+
+It was a 15px label over an 11px sub in a 13px-padded box: correctly styled and
+completely unassertive, the same visual weight as the ghost button next to it.
+The page spends four sections earning this click.
+
+- Label 15px -> **18px** (`V3_TEXT.lg`), sub 11px -> **13px**.
+- Padding 13px -> **16/32**, minWidth 280 -> 300. The affordance is largely the
+  BOX, not the text.
+- Trailing **->** on the label - cheapest push cue there is, and it says this
+  leaves the page for checkout rather than toggling something here.
+- `v3PrimaryButton` gains a tight downward cast shadow in the accent's own hue.
+- `.landing-cta` hover raises 1px and deepens the shadow; **`:active` drops it
+  flat with the shadow collapsed**, so the click has a bottom to it. That
+  down-on-press is the whole "wanting to push" feeling - a hover colour change
+  alone reads as a link. Wrapped in `prefers-reduced-motion`.
+
+Weight stays **700, not 800**: see 2026-09-10 (p) - the system faces have no 800
+and the browser synthesises a blurry one.
+
+**Files:** `components/landing/v3Theme.ts`, `components/landing/LandingClient.tsx`.
+
+### Still open: the graded ledger is a week stale
+
+Brandon: "the core levels last day was last week. it should update once a day."
+Confirmed - the ledger's newest row is Sep 4 and today is Sep 10.
+
+Not a UI bug. `server-v2/confidence-grader.js` already carries
+`startConfidenceGrader()` (16:45 ET weekdays) and its own header says **"NOT YET
+WIRED UP"**; nothing in `server-with-proxy.js` references it, so `confidence_log`
+is still graded only when someone loads `/api/confidence/calibration?refresh=1`
+or runs the CLI by hand. Sep 4 is the last day that happened.
+
+The fix is one line beside the other `startXxx()` calls (~L4783, next to
+`startIbResultsRecorder`). `server-with-proxy.js` is the proxy server, so it is
+being held for Brandon's sign-off per the standing rule on proxy changes.
+
+**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build`) to appear
+on cbedge.net.
+
+## 2026-09-10 (p) - Landing page: display type retuned, orphaned grid cells, mono numbers
+
+Brandon: "the styling and font... some of it looks really off." Audited the live
+page in a browser at desktop width. Six things, in three groups.
+
+### 1. The display type was set for a font that is not loaded
+
+`v3Theme.ts`'s `V3_SANS` starts with `var(--font-inter)`, but Inter was removed
+(globals.css: "Native system font stacks - no web-font download, instant paint")
+and `--font-inter` now aliases `--font-sans`. So the headings render in Segoe UI
+on Windows / SF on macOS while still carrying **Inter's** numbers - `font-weight:
+800`, `letter-spacing: -0.035em`. Both are wrong for those faces:
+
+- Segoe UI has no 800. The browser SYNTHESISES it by smearing the 700 outward -
+  that was the fuzzy, over-fat hero headline.
+- -0.035em is -1.5px per letter at 44px. Inter is drawn loose and wants pulling
+  in; Segoe UI and SF are already tight, so the counters closed up.
+
+Decision (Brandon, 2026-09-10): **keep the system stack, retune for it.** Not
+reinstating Inter - that would put a font download back in the critical path and
+make the Docker build on the VPS depend on reaching fonts.googleapis.com.
+
+- `components/landing/LandingClient.tsx` - `h1` and `h2`: 800 -> **700**,
+  -0.035em/-0.03em -> **-0.02em**, line-height 1.05/1.1 -> 1.08/1.15.
+- `app/globals.css` - `-webkit-font-smoothing: antialiased` +
+  `-moz-osx-font-smoothing: grayscale` on html/body.
+- `v3Theme.ts` - header note so the next person does not set a value against
+  Inter's metrics again.
+
+### 2. `* { font-family }` was killing all font inheritance
+
+`app/globals.css` had `* { font-family: var(--font-sans) }`. A universal
+selector matches every element, so it **beats inheritance**: a `fontFamily` set
+on a container reached that box and nothing inside it, and every nested
+`<b>`/`<span>`/`<em>` snapped back to the system sans.
+
+Now `html { font-family: var(--font-sans) }` + `* { font-family: inherit }`.
+`inherit` keeps the one job the universal rule was doing (overriding the UA's
+mono default on code/pre/kbd/samp and the UA font on form controls) while
+letting a container's font reach its children. **App-wide file** - the change is
+behaviour-preserving everywhere except inside a container that sets its own
+font, which is the bug being fixed.
+
+### 3. Monospace at display sizes, and two orphaned grids
+
+**Mono numbers.** `V3_MONO` gives `.` and `,` a full-width box. Invisible at the
+10-13px label sizes; at 24-48px "66.8%" rendered as `66 . 8%`, "7,590" as
+`7 , 590`. New **`V3_NUM`** in `v3Theme.ts` - the sans face plus
+`tabular-nums lining-nums`, which is the only thing mono was buying (digits of
+equal width, so a ticking level does not jitter and a column still aligns).
+Swapped in at the display-number sites only:
+
+- `LiveLevelPanel.tsx` - `bigNo` (the 48px Core), `levelVal`, the spot figure,
+  the timestamp.
+- `ReceiptsStrip.tsx` - `pctVal`.
+- `GradedLedger.tsx` - `mono` (the SESSION and LEVEL CALLED columns).
+- `LandingClient.tsx` - `stripN`.
+
+Mono STAYS on every uppercase letter-spaced label and chip (HIT, PIVOT,
+SPX · CORE, column heads, the BZILA code).
+
+**Orphaned grid cells.** Two grids had a hard-coded column count that no longer
+matched the item count:
+
+- Receipts: forced to `repeat(4, 1fr)` (2 under 900px) while `/api/public-stats`
+  publishes **three** stats - a permanently dead cell in the one section whose
+  whole job is looking credible. `ReceiptsStrip.tsx`'s own grid had the same
+  bug and a comment admitting it. Both are now a wrapping, centred flex row
+  (`flex: 1 1 230px; max-width: 380px`), which fills at whatever count the API
+  returns.
+- Features: `repeat(auto-fill, minmax(260px, 1fr))` with **seven** cards - seven
+  never divides into 2, 3 or 4, so the last row was one card hanging left with
+  dead space beside it. (`auto-fit` does not help: it only collapses tracks
+  empty in every row.) Now a centred flex row - the remainder sits in the middle
+  and reads deliberate. `freeTool` overrides the new flex props, since it is
+  alone in its own section.
+
+**Strip dividers.** `stripCell` put `border-right` on every cell including the
+one ending each row, where it landed on the card's own border as a 2px seam.
+Killed per row by column count, and the 2-up breakpoint now gets the horizontal
+divider it never had (the two rows ran together at 620-900px).
+
+**Line breaking.** `h2`'s `maxWidth: 21ch` was a hard break dressed as a
+measure, forcing "Every level we call is / graded. In public." and "Tomorrow's
+levels print at / 9:30 ET.". Loosened to 34ch with `textWrap: balance` doing the
+work; `textWrap: pretty` on the ledes. The `24ch` override on the close heading
+is gone.
+
+**Files:** `app/globals.css`, `components/landing/v3Theme.ts`,
+`components/landing/LandingClient.tsx`, `components/landing/ReceiptsStrip.tsx`,
+`components/landing/GradedLedger.tsx`, `components/landing/LiveLevelPanel.tsx`.
+
+**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build`) to appear
+on cbedge.net.
+
+## 2026-09-10 (o) - Top Flow (v3): B/S column is now a DIRECTIONAL BIAS column
+
+The card's `B/S` column printed the raw verb — `BUY` green, `SELL` red — and the
+summary line bucketed premium the same way. That is right for two of the four
+trades and backwards for the other two:
+
+| Trade     | Verb reads as | Actually means |
+|-----------|---------------|----------------|
+| BUY CALL  | bullish       | **bullish**    |
+| SELL CALL | bearish       | **bearish**    |
+| BUY PUT   | bullish ✗     | **bearish**    |
+| SELL PUT  | bearish ✗     | **bullish**    |
+
+A whale writing $4M of puts was being inked red and added to the "Sold" total,
+i.e. shown as pressure down while it is positioning up.
+
+**`cbedge-v3/src/board/topFlow/TopFlowCard.tsx`** (only file touched)
+
+- New `biasOf(row)` → `'bullish' | 'bearish' | null`. Calls: BUY = bullish,
+  SELL = bearish. Puts: inverted. `null` when the print carries no action, so
+  mid / pending / stale rows are unchanged and still show `n/a` / `—`.
+- Column `bs` relabelled **Bias**. Renders `▲ BULLISH` / `▼ BEARISH` inked by
+  the bias, with the raw verb kept beside it faint (`BC`, `SP`, …) so you can
+  still see which of the four trades produced the read. **`id` left as `bs`** —
+  it is persisted in every saved column order and renaming it would silently
+  reset users' layouts.
+- Per-row tooltip is the full eight-row table (buy/sell × call/put × ask-side/
+  bid-side). The fill price does NOT flip the bias, only how aggressive the
+  participant was; the tooltip says which. The Side column stays inked by where
+  the fill sat — that column is answering a different question on purpose.
+- Header summary `Bought · Sold` → **`Bullish · Bearish`**, bucketed by
+  `biasOf` instead of by `r.action`. Mid and unreadable prints are still in
+  neither bucket.
+
+No server change, no request change — bias is derived client-side from
+`action` + `type`, both of which the row already carried.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`) to appear
+on cbedge.net.
+
+## 2026-09-10 (n) - Correction: chromium is NOT dead weight, do not strip it
+
+Entry (m) said "nothing else in the repo requires puppeteer, so the Dockerfile's
+chromium install is now dead weight." That was WRONG, and acting on it would
+have broken two live jobs on the next deploy. Three things still launch the same
+/usr/bin/chromium:
+
+  - server-v2/mg-ladder-discord.js      - started on boot by server-with-proxy.js
+  - server-v2/econ-calendar-discord.js  - renderPng(), reached via api-router.js
+  - discord-bot.js                      - the `npm run bot` entrypoint
+
+Both server-v2 ones say in their own headers that they take
+PUPPETEER_EXECUTABLE_PATH from the image the Dockerfile builds. The trap is the
+apt-install's COMMENT, which names only budget-email.js as the reason chromium is
+there - so removing budget-email's use of it makes the install look orphaned when
+it isn't. Nothing was stripped: Dockerfile, package.json and package-lock.json
+are untouched, and `puppeteer` stays a dependency.
+
+budget-email.js's header now carries the list above, next to the note that this
+file no longer needs a browser, so the next person to read "no headless browser
+any more" doesn't draw the same conclusion.
+
 ## 2026-09-10 (l) - .gitattributes: the CRLF warnings on every push are gone
 
 Every `push.ps1` run printed one of these per touched file:

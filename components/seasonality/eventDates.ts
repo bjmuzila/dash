@@ -578,3 +578,45 @@ export const EARNINGS_TICKERS: string[] = [
   "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD",
   "AVGO", "NFLX", "MU", "PLTR", "COIN", "SMCI", "HOOD", "MSTR",
 ];
+
+// ── Sept 11 anniversary ─────────────────────────────────────────────────────
+//
+// The one ANNIVERSARY study on the page. The anchor needs no calendar — it is
+// 11 September of every year — so unlike Jackson Hole and the FOMC there are no
+// dates to type in and nothing to append each August. What DOES need writing
+// down is the handful of years where "what did SPX do on 9/11" has an answer
+// other than a close-to-close return, and that is all this block is.
+//
+// 2001 IS NOT A ZERO. The exchanges did not open on 11 September 2001 and did
+// not reopen until Monday 17 September — the longest closure since 1933. On the
+// forward-filled 365-day axis every slot from the 11th to the 16th carries the
+// 10 September close, so a naive day-of return for 2001 computes as exactly
+// 0.00%: a fabricated number that would sit in the middle of the table looking
+// like an unremarkable flat session. The UI prints it as "market closed" and
+// leaves it out of every average. The week-after window still works and is the
+// number that means something — it runs from the last pre-attack close to the
+// following week's, and it is the −5% the reopening actually delivered.
+//
+// SEVEN OF THESE FALL ON A WEEKEND (2004, 2005, 2010, 2011, 2016, 2021, 2022),
+// and the same fake zero applies for the same reason. Those years are detected
+// at render time from the market calendar rather than listed here, so the test
+// stays correct for every future year without an edit.
+//
+// Sources: NYSE and Nasdaq closure announcements of September 2001 and the
+// SEC's contemporaneous record of the reopening; the surrounding returns come
+// from the same ^GSPC history as everything else on this page.
+
+/** First anniversary the study covers — the attacks themselves. */
+export const SEPT11_START_YEAR = 2001;
+
+/**
+ * Years whose row carries context the return alone does not give.
+ *
+ * Kept SHORT and strictly factual. This is a footnote list, not a history of
+ * the market: a note earns its place only when it changes how the row's number
+ * should be read.
+ */
+export const SEPT11_NOTES: Record<string, string> = {
+  "2001": "Exchanges closed Sep 11–14; reopened Mon Sep 17. The week-after window runs from the Sep 10 close.",
+  "2008": "Lehman Brothers filed the following Monday, Sep 15 — the month-after window is the crash, not the anniversary.",
+};

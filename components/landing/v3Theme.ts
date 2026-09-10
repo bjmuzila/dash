@@ -95,9 +95,45 @@ export const V3_TEXT = {
    rounder than `lg`; the 18–20px pills the old landing used are not v3. */
 export const V3_RADIUS = { sm: 4, md: 8, lg: 12 } as const;
 
+/* NOTE ON `--font-inter` (2026-09-10). Inter is NOT loaded any more: the web
+   font was dropped for instant paint, and globals.css now aliases
+   `--font-inter: var(--font-sans)`, the native system stack. The name is kept
+   here so the two files stay legibly connected, but assume Segoe UI on Windows
+   and San Francisco on macOS when you set a size or a tracking value — Inter's
+   metrics are NOT what ships. Anything on this page that needs tight tracking
+   is tuned for the system faces; see the display-type note in LandingClient. */
 export const V3_SANS =
   "var(--font-inter), 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 export const V3_MONO = "ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace";
+
+/**
+ * V3_NUM — the face for A NUMBER THE VISITOR READS. Not a font stack: a style
+ * fragment, spread in (`...V3_NUM`) where `fontFamily: V3_MONO` used to sit.
+ *
+ * WHY, because it reads like a downgrade and is not. V3_MONO is a real
+ * monospace, so every glyph gets one fixed advance — including `.` and `,`,
+ * which are narrow glyphs sitting in a wide box. At the 10-13px label sizes
+ * that is invisible and the alignment is worth it. At the 24-48px display
+ * sizes on this page it is not: "66.8%" renders as "66 . 8%" and "7,590" as
+ * "7 , 590", a hole either side of the punctuation. It was the loudest thing
+ * on the page that read as broken typography (Brandon, 2026-09-10).
+ *
+ * `tabular-nums` takes the ONE property those big numbers actually wanted from
+ * mono — every digit the same width, so a ticking level does not jitter and a
+ * column of them still lines up — out of the sans face, where the comma and
+ * the period keep their own narrow width. `lining-nums` is belt-and-braces: a
+ * face whose default figures are old-style would drop the 7 and the 9 below
+ * the baseline in a 48px headline.
+ *
+ * MONO STAYS on: uppercase letter-spaced labels and chips (HIT, PIVOT,
+ * SPX · CORE, the column heads) and the ledger's own table cells — the fixed
+ * advance is doing real work there and nothing is over ~13px.
+ */
+export const V3_NUM: CSSProperties = {
+  fontFamily: V3_SANS,
+  fontVariantNumeric: "tabular-nums lining-nums",
+  fontFeatureSettings: '"tnum" 1, "lnum" 1',
+};
 
 /**
  * alpha() — v3's own helper, same job: a token plus an alpha channel, for the
@@ -126,6 +162,45 @@ export const v3CardStyle: CSSProperties = {
   background: V3.surface,
   border: `1px solid ${V3.line}`,
   borderRadius: V3_RADIUS.md,
+};
+
+/**
+ * THE SAME CARD, GIVEN ITS EDGES BACK (2026-09-10, Brandon: "some of them just
+ * seem to blend in").
+ *
+ * v3CardStyle is #0f1117 on #07080b behind a #23272e hairline. Inside the app
+ * that is right — a dashboard is dense, the cards touch, and every one of those
+ * hairlines is a divider doing work. A marketing page is the opposite shape:
+ * five big plates floating in a lot of empty canvas, where a 3% luminance step
+ * is not a card, it is a smudge. On a bright monitor the sections simply did
+ * not read as separate objects.
+ *
+ * Three changes, all of them inside the existing token set — this is NOT a new
+ * card style, it is the same card with more room around it:
+ *
+ *   1. THE GROUND DROPS, not the plate. The page canvas moves from --color-bg
+ *      (#07080b) to --color-app (#020304), the token v3 already uses for the
+ *      layer BEHIND everything. The card stays exactly #0f1117, so the step is
+ *      roughly tripled without touching a single surface value or inventing a
+ *      colour. Cheapest possible fix and the one that does most of the work.
+ *   2. The hairline goes to a 9% white, which reads as an EDGE at this scale
+ *      where #23272e read as a seam. Derived from --color-fg through v3a, so
+ *      there is still no literal in the tree.
+ *   3. A cast shadow, plus a 1px inset highlight along the top. This is the
+ *      only place the "v3 does not bloom" rule bends, and it bends in the legal
+ *      direction: a shadow is an object sitting ON something, which is what a
+ *      card is. It is NOT a glow — no accent in it, nothing outside the box
+ *      lighting up, the same black --color-shadow already names.
+ *
+ * Use it for a full-width SECTION plate. Cards nested inside one (feature
+ * tiles, the receipts stats) stay on v3CardStyle / v3InsetStyle: stacking a
+ * second shadow inside the first is exactly the glassy v2 look v3 removed.
+ */
+export const v3CardStrongStyle: CSSProperties = {
+  background: V3.surface,
+  border: `1px solid ${v3a(V3.fg, 0.09)}`,
+  borderRadius: V3_RADIUS.md,
+  boxShadow: `inset 0 1px 0 ${v3a(V3.fg, 0.045)}, 0 16px 36px -14px ${v3a(V3.shadow, 0.95)}`,
 };
 
 /** A nested block INSIDE a card — one step up the ladder, never a tint. */
@@ -194,6 +269,11 @@ export const v3PrimaryButton: CSSProperties = {
   letterSpacing: "0.03em",
   textDecoration: "none",
   whiteSpace: "nowrap",
+  // Lifts the button off the plate the way v3CardStrongStyle lifts the plate
+  // off the canvas — a cast shadow in the accent's own hue, not a glow ring.
+  // It is what makes the control read as pressable rather than as a coloured
+  // rectangle. Kept tight and downward; nothing bleeds sideways.
+  boxShadow: `0 6px 16px -6px ${v3a(V3.cyan, 0.55)}`,
 };
 
 /** The secondary action. Raised plate, hairline edge. */

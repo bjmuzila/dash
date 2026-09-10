@@ -4,6 +4,7 @@ import { SegGroup } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
 import { fmtPremium, fmtTime } from '@/data/flowMath'
 import { ContractProbe } from '@/board/topFlow/ContractProbe'
+import { biasOf, biasTitle } from '@/board/topFlow/TopFlowCard'
 import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,15 +39,18 @@ import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
 
 interface WhaleRow extends TopFlowRow { sessionDate: string }
 interface Bucketed { bucket: string; n: number; total: number }
-interface TickerAgg { ticker: string; n: number; total: number; bought: number; sold: number }
-interface SessionAgg { d: string; n: number; total: number; bought: number; sold: number }
-interface RepeatAgg {
+/** `bull`/`bear` are premium bucketed by DIRECTION; `bought`/`sold` by the raw
+ *  fill. They are different questions and the server returns both — see the
+ *  BULLISH/BEARISH note on /api/lse/whales. */
+interface Agg { n: number; total: number; bull: number; bear: number; bought: number; sold: number }
+interface TickerAgg extends Agg { ticker: string }
+interface SessionAgg extends Agg { d: string }
+interface RepeatAgg extends Agg {
   osi: string; ticker: string; strike: string; type: string; expiry: string
-  n: number; total: number; bought: number; sold: number
 }
 interface WhalesResponse {
   range: { from: string; to: string }
-  summary: { n: number; total: number; bought: number; sold: number; calls: number; puts: number; sessions: number } | null
+  summary: (Agg & { calls: number; puts: number; sessions: number }) | null
   biggest: WhaleRow | null
   sessions: SessionAgg[]
   tickers: TickerAgg[]
@@ -55,7 +59,9 @@ interface WhalesResponse {
   rows: WhaleRow[]
   rowCap: number
   whaleFloor: number
-  error?: string
+  /** Vol/OI are live-only and are not archived — null on every row here. */
+  liveStats?: boolean
+  error?: string | null
 }
 
 const PRESETS = [
@@ -114,14 +120,14 @@ function Card({ title, note, children }: { title: string; note?: string; childre
   )
 }
 
-/** A bought/sold split bar. Both halves are drawn from the same total so two
- *  rows are comparable to each other, not just internally. */
-function SplitBar({ bought, sold, max }: { bought: number; sold: number; max: number }) {
+/** A bullish/bearish split bar. Both halves are drawn from the same total so
+ *  two rows are comparable to each other, not just internally. */
+function SplitBar({ bull, bear, max }: { bull: number; bear: number; max: number }) {
   const w = (v: number) => `${max > 0 ? Math.max(0, (v / max) * 100) : 0}%`
   return (
     <div className="flex h-[7px] overflow-hidden rounded-sm bg-fg/10">
-      <i className="block h-full bg-up" style={{ width: w(bought) }} />
-      <i className="block h-full bg-down" style={{ width: w(sold) }} />
+      <i className="block h-full bg-up" style={{ width: w(bull) }} />
+      <i className="block h-full bg-down" style={{ width: w(bear) }} />
     </div>
   )
 }
@@ -166,7 +172,9 @@ export default function Whales() {
   )
 
   const s = d?.summary
-  const readable = (s?.bought ?? 0) + (s?.sold ?? 0)
+  // Only prints that carry a side land in a directional bucket, so the
+  // denominator is those two and not `total` — see the tile note below.
+  const readable = (s?.bull ?? 0) + (s?.bear ?? 0)
   const pctOf = (v: number) => (readable > 0 ? `${Math.round((v / readable) * 100)}% of readable premium` : '—')
   const sessionMax = useMemo(
     () => Math.max(1, ...(d?.sessions ?? []).map((x) => Number(x.total))),
@@ -190,12 +198,12 @@ export default function Whales() {
    *  whole range would be a different (and much larger) file than the one the
    *  button appears to be offering. */
   const exportCsv = () => {
-    const head = ['date', 'time', 'ticker', 'strike', 'type', 'expiry', 'dte', 'side', 'action', 'size', 'price', 'premium', 'vol', 'oi']
+    const head = ['date', 'time', 'ticker', 'strike', 'type', 'expiry', 'dte', 'side', 'action', 'bias', 'size', 'price', 'premium']
     const lines = [head.join(',')]
     for (const r of rows) {
       lines.push([
         r.sessionDate, fmtTime(r.ts), r.underlying ?? '', r.strike ?? '', r.type ?? '', r.expiry ?? '',
-        r.dte ?? '', r.side ?? '', r.action ?? '', r.size ?? '', r.price ?? '', r.premium, r.vol ?? '', r.oi ?? '',
+        r.dte ?? '', r.side ?? '', r.action ?? '', biasOf(r) ?? '', r.size ?? '', r.price ?? '', r.premium,
       ].join(','))
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
@@ -258,7 +266,7 @@ export default function Whales() {
           onChange={(v) => setType(v as '' | 'C' | 'P')}
         />
         <SegGroup<string>
-          title="Which side of the quote it filled on"
+          title="Which side of the quote it filled on. This is the raw fill, not the direction — a SELL on a put is a bullish trade"
           options={[{ label: 'BUY+SELL', value: '' }, { label: 'BUY', value: 'BUY' }, { label: 'SELL', value: 'SELL' }]}
           value={action}
           onChange={(v) => setAction(v as '' | 'BUY' | 'SELL')}
@@ -284,17 +292,20 @@ export default function Whales() {
         </span>
       </div>
 
-      {d?.error && (
+      {/* q.error covers the case this page shipped with for months: the route
+          did not exist, the fetch failed, and the archive rendered as an empty
+          archive with nothing to say. A failure has to look like a failure. */}
+      {(d?.error || q.error) && (
         <div className="rounded-md border border-warn/40 bg-warn/5 px-3 py-2 text-xs text-warn">
-          {d.error}
+          {d?.error ?? `Could not load the whale archive — ${q.error?.message ?? 'the request failed'}.`}
         </div>
       )}
 
       {/* ── tiles ─────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
         <Tile k="Whale premium" v={money(s?.total)} sub={s ? `${num(s.sessions)} sessions · ${num(s.n)} prints` : undefined} />
-        <Tile k="Bought" v={money(s?.bought)} ink="text-up" sub={s ? pctOf(s.bought) : undefined} />
-        <Tile k="Sold" v={money(s?.sold)} ink="text-down" sub={s ? pctOf(s.sold) : undefined} />
+        <Tile k="Bullish" v={money(s?.bull)} ink="text-up" sub={s ? pctOf(s.bull) : undefined} />
+        <Tile k="Bearish" v={money(s?.bear)} ink="text-down" sub={s ? pctOf(s.bear) : undefined} />
         <Tile
           k="Biggest print"
           v={money(d?.biggest?.premium)}
@@ -328,8 +339,8 @@ export default function Whales() {
                         day === x.d ? 'outline outline-1 outline-offset-2 outline-accent' : '',
                       ].join(' ')}
                     >
-                      <div className="rounded-t-sm bg-up" style={{ height: `${h(x.bought)}%` }} />
-                      <div className="rounded-b-sm bg-down opacity-85" style={{ height: `${h(x.sold)}%` }} />
+                      <div className="rounded-t-sm bg-up" style={{ height: `${h(x.bull)}%` }} />
+                      <div className="rounded-b-sm bg-down opacity-85" style={{ height: `${h(x.bear)}%` }} />
                     </button>
                   )
                 })}
@@ -341,9 +352,9 @@ export default function Whales() {
                 ))}
               </div>
               <div className="flex gap-3 pt-2 text-3xs text-faint">
-                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-up align-[-1px]" />Bought</span>
-                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-down align-[-1px]" />Sold</span>
-                <span className="ml-auto">Mid and unclassified prints are excluded from the split</span>
+                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-up align-[-1px]" />Bullish</span>
+                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-down align-[-1px]" />Bearish</span>
+                <span className="ml-auto">Mid and unclassified prints are in the total and in neither bucket</span>
               </div>
             </div>
           </Card>
@@ -363,12 +374,18 @@ export default function Whales() {
                       <th className="px-2 py-1.5 text-left font-bold">Contract</th>
                       <th className="px-2 py-1.5 text-left font-bold">C/P</th>
                       <th className="px-2 py-1.5 text-left font-bold">Side</th>
-                      <th className="px-2 py-1.5 text-left font-bold">B/S</th>
+                      <th
+                        className="px-2 py-1.5 text-left font-bold"
+                        title="What the print says about the UNDERLYING, not the contract. Buying calls or selling puts is bullish; selling calls or buying puts is bearish"
+                      >Bias</th>
                       <th className="px-2 py-1.5 text-right font-bold">DTE</th>
                       <th className="px-2 py-1.5 text-right font-bold">Size</th>
                       <th className="px-2 py-1.5 text-right font-bold">Price</th>
                       <th className="px-2 py-1.5 text-right font-bold">Premium</th>
-                      <th className="px-2 py-1.5 text-right font-bold">Vol</th>
+                      <th
+                        className="px-2 py-1.5 text-right font-bold"
+                        title="Volume and OI mean 'what is this contract doing now'. There is no now for an archived print, so they are not stored — see the live Top Flow card for a print from today"
+                      >Vol</th>
                       <th className="px-2 py-1.5 text-right font-bold">OI</th>
                     </tr>
                   </thead>
@@ -378,7 +395,14 @@ export default function Whales() {
                       // multi-day range reads as days rather than one wall.
                       const newDay = i === 0 || rows[i - 1]!.sessionDate !== r.sessionDate
                       const agg = newDay ? d?.sessions.find((x) => x.d === r.sessionDate) : null
+                      // Side stays inked by where the FILL sat; the Bias cell
+                      // is inked by what the trade means. Two questions, two
+                      // colour rules — a sold put is a bid-side fill (red Side)
+                      // and a bullish position (green Bias), and collapsing
+                      // that into one ink is what made this table misread.
                       const ink = r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-faint'
+                      const bias = biasOf(r)
+                      const biasInk = bias === 'bullish' ? 'text-up' : bias === 'bearish' ? 'text-down' : 'text-faint'
                       return (
                         // Keyed on the PRINT, not the index: a fragment in an
                         // array needs its own key, and the row inside it is the
@@ -410,13 +434,33 @@ export default function Whales() {
                             <td className={['tabular whitespace-nowrap px-2 py-1 font-semibold', ink].join(' ')}>
                               {r.side === 'above_ask' ? '> ASK' : r.side === 'below_bid' ? '< BID' : r.side ? r.side.toUpperCase() : '—'}
                             </td>
-                            <td className={['px-2 py-1 font-semibold', ink].join(' ')}>
-                              {r.action === 'BUY' ? 'BUY ↑' : r.action === 'SELL' ? 'SELL ↓' : r.side === 'mid' ? 'n/a' : '—'}
+                            <td
+                              className={['whitespace-nowrap px-2 py-1 font-semibold', biasInk].join(' ')}
+                              title={
+                                bias
+                                  ? biasTitle(r, bias)
+                                  : r.side === 'mid'
+                                    ? 'Filled between the bid and the ask — genuinely ambiguous, so no direction is called'
+                                    : 'This print was never classified against a quote, and cannot be after the fact'
+                              }
+                            >
+                              {bias ? (
+                                <>
+                                  <span aria-hidden>{bias === 'bullish' ? '▲' : '▼'}</span>{' '}
+                                  {bias === 'bullish' ? 'BULLISH' : 'BEARISH'}
+                                  {/* The raw verb kept faint beside it: the bias is the
+                                      read, but you still need to see which of the four
+                                      trades produced it. */}
+                                  <span className="font-normal text-faint opacity-70">
+                                    {' '}{r.action === 'BUY' ? 'B' : 'S'}{r.type}
+                                  </span>
+                                </>
+                              ) : r.side === 'mid' ? 'n/a' : '—'}
                             </td>
                             <td className="tabular px-2 py-1 text-right text-muted">{r.dte ?? '—'}</td>
                             <td className="tabular px-2 py-1 text-right text-muted">{num(r.size)}</td>
                             <td className="tabular px-2 py-1 text-right text-muted">{r.price?.toFixed(2) ?? '—'}</td>
-                            <td className={['tabular px-2 py-1 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : ink].join(' ')}>
+                            <td className={['tabular px-2 py-1 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
                               {money(r.premium)}
                             </td>
                             <td className="tabular px-2 py-1 text-right text-muted">{num(r.vol)}</td>
@@ -456,7 +500,7 @@ export default function Whales() {
                   title={`${num(t.n)} prints · ${money(t.total)}`}
                 >
                   <span className="text-xs font-semibold text-fg">{t.ticker}</span>
-                  <SplitBar bought={Number(t.bought)} sold={Number(t.sold)} max={tickerMax} />
+                  <SplitBar bull={Number(t.bull)} bear={Number(t.bear)} max={tickerMax} />
                   <span className="tabular text-right text-2xs text-muted">{money(t.total)}</span>
                 </button>
               ))}
@@ -486,7 +530,10 @@ export default function Whales() {
                     {r.ticker} {r.strike}{r.type} <span className="text-faint">{fmtExpiry(r.expiry)}</span>
                   </span>
                   <span className="text-2xs text-faint">×{r.n}</span>
-                  <span className={['tabular text-right text-2xs font-semibold', Number(r.bought) >= Number(r.sold) ? 'text-up' : 'text-down'].join(' ')}>
+                  <span
+                    title={`${num(r.n)} whale prints · ${money(r.bull)} bullish vs ${money(r.bear)} bearish`}
+                    className={['tabular text-right text-2xs font-semibold', Number(r.bull) >= Number(r.bear) ? 'text-up' : 'text-down'].join(' ')}
+                  >
                     {money(r.total)}
                   </span>
                 </div>

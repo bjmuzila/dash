@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { V3, V3_MONO, V3_RADIUS, V3_TEXT, v3a } from "@/components/landing/v3Theme";
+import { V3, V3_MONO, V3_NUM, V3_RADIUS, V3_TEXT, v3a } from "@/components/landing/v3Theme";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The graded ledger — the ROWS behind the percentages in ReceiptsStrip.
@@ -239,7 +239,13 @@ const td: React.CSSProperties = {
   verticalAlign: "top",
 };
 
-const mono: React.CSSProperties = { fontFamily: V3_MONO };
+/* The SESSION and LEVEL CALLED columns. V3_NUM, not V3_MONO: the level is
+   thousands-separated, and mono set "7,720" as "7 , 720" all the way down the
+   column. tabular-nums keeps the digits aligned — the only reason these were
+   mono in the first place — without the hole either side of the comma. The
+   column heads, the outcome tags and the HIT/MISS chips stay mono; they are
+   letter-spaced uppercase labels and that is what mono is for here. */
+const mono: React.CSSProperties = { ...V3_NUM };
 
 // The grader's own outcome word (pivot / chop / …). Shown since 2026-09-10 —
 // the route always returned it and the table ignored it, so eight rows that

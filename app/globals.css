@@ -31,13 +31,31 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* Font family is set ONCE, on the root, and INHERITED from there.
+   This used to be `* { font-family: var(--font-sans) }`. A universal selector
+   matches every element, so it BEATS inheritance: a fontFamily set on a
+   container (the mono stack on a stat block, a page root's theme stack) reached
+   that box and nothing inside it, and every nested <b>/<span>/<em> silently
+   snapped back to the system sans. `inherit` keeps the one job the universal
+   rule was doing — overriding the UA's mono default on code/pre/kbd/samp and
+   the UA font on form controls — while letting a container's font reach its
+   own children again. The `html` rule (specificity 0,0,1) outranks `*` at the
+   root, so the chain still starts at --font-sans. */
+html {
+  font-family: var(--font-sans);
+}
+
 * {
   box-sizing: border-box;
-  font-family: var(--font-sans);
+  font-family: inherit;
 }
 
 html,
 body {
+  /* The marketing display type is set tight and heavy (700 at -0.02em, 32-48px).
+     Unsmoothed it renders a shade too fat and the tracking reads wrong. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   background-color: var(--bg);
   background-image:
     radial-gradient(circle at 15% 50%, rgba(0, 240, 255, 0.02) 0%, transparent 50%),

@@ -4,11 +4,12 @@ import Link from "next/link";
 import {
   V3,
   V3_MONO,
+  V3_NUM,
   V3_RADIUS,
   V3_SANS,
   V3_TEXT,
   v3a,
-  v3CardStyle,
+  v3CardStrongStyle,
   v3Chip,
   v3GhostButton,
   v3PrimaryButton,
@@ -124,21 +125,42 @@ export default function LandingClient() {
     <div className="explore-root" style={root}>
       <style>{`
         /* ── Receipts strip, re-laid-out for this page ───────────────────
-           ReceiptsStrip ships a 2x2 grid because it was built for a narrow
-           column. Here it spans the card, so it goes 4-up and loses its own
-           border — the section it now sits in provides the frame. The
-           component is untouched so it still works at its natural size
-           wherever else it is used. */
+           ReceiptsStrip is built to sit in a narrow column. Here it spans the
+           card, so it loses its own border and its heading — the section it
+           now sits in provides both. The component itself is untouched and
+           still works at its natural size wherever else it is used. */
         .landing-receipts .receipts { margin-top: 0 !important; border: none !important; background: transparent !important; padding: 0 !important; }
-        .landing-receipts .receipts-grid { grid-template-columns: repeat(4, 1fr) !important; }
         .landing-receipts .receipts > div:first-child { display: none !important; }
+
+        /* FLEX, NOT A FIXED COLUMN COUNT (2026-09-10). This was
+           \`grid-template-columns: repeat(4, 1fr)\`, and repeat(2, 1fr) under
+           900px. ReceiptsStrip renders THREE stats, so both counts left a dead
+           cell hanging off the end of the row — a hole where a fourth card
+           would be, on the one section of the page whose whole job is looking
+           credible. A wrapping, centred flex row fills at whatever count the
+           strip actually returns: three now, four if one is ever added, and a
+           centred remainder instead of a left-hanging orphan at any width in
+           between. The component now defaults to the same layout; this block
+           only widens the basis cap for the full-width card. */
+        .landing-receipts .receipts-grid { display: flex !important; flex-wrap: wrap; justify-content: center; }
+        .landing-receipts .receipts-grid > * { flex: 1 1 230px; max-width: 380px; }
 
         /* v3 hover: the surface steps UP the ladder (surface → raised) and the
            hairline takes the accent. No glow, no lift — v3 does not bloom. */
         .landing-feature { transition: background .14s, border-color .14s; }
         .landing-feature:hover { background: ${V3.raised} !important; border-color: ${V3.cyan} !important; }
-        .landing-cta { transition: background .14s, border-color .14s; }
-        .landing-cta:hover { background: ${v3a(V3.cyan, 0.85)}; }
+        /* THE BUY BUTTON'S PUSH. Hover raises it 1px and deepens the cast
+           shadow; :active drops it flat with the shadow collapsed, so the
+           click has a bottom to it. A hover colour change alone reads as a
+           link — the travel is what makes it read as a button. transform is
+           GPU-cheap and does not reflow the CTA row. Anyone who has asked the
+           OS to stop animating gets the colour and none of the movement. */
+        .landing-cta { transition: background .14s, box-shadow .14s, transform .14s; }
+        .landing-cta:hover { background: ${v3a(V3.cyan, 0.88)}; transform: translateY(-1px); box-shadow: 0 10px 24px -8px ${v3a(V3.cyan, 0.7)}; }
+        .landing-cta:active { transform: translateY(0); box-shadow: 0 2px 8px -4px ${v3a(V3.cyan, 0.5)}; }
+        @media (prefers-reduced-motion: reduce) {
+          .landing-cta, .landing-cta:hover, .landing-cta:active { transition: background .14s; transform: none; }
+        }
         .landing-ghost { transition: background .14s, border-color .14s; }
         .landing-ghost:hover { background: ${V3.surface2}; border-color: ${V3.cyan}; }
         /* Orange, not cyan — this is the one link on the page that leaves the
@@ -146,17 +168,27 @@ export default function LandingClient() {
         .tradeify-card { transition: border-color .14s, background .14s; }
         .tradeify-card:hover { border-color: ${v3a(V3.orange, 0.6)} !important; background: ${V3.raised} !important; }
 
+        /* THE STRIP'S DIVIDERS. Every cell carries a right border (stripCell),
+           which is right for the three cells that have a neighbour and wrong
+           for the one that ends the row: there it lands on top of the card's
+           own border and reads as a 2px seam down the right edge. Kill it per
+           row, by column count. */
+        .landing-strip > div:nth-child(4n) { border-right: none; }
+
         @media (max-width: 900px) {
           .landing-hero { grid-template-columns: 1fr !important; }
           .landing-strip { grid-template-columns: 1fr 1fr !important; }
-          .landing-receipts .receipts-grid { grid-template-columns: 1fr 1fr !important; }
+          /* 2-up: cells 2 and 4 end their row, and the two ROWS need a divider
+             of their own — the cells only ever carried a vertical one, so at
+             this width the top and bottom halves ran together. */
+          .landing-strip > div:nth-child(2n) { border-right: none; }
+          .landing-strip > div:nth-child(-n+2) { border-bottom: 1px solid ${V3.line}; }
         }
         @media (max-width: 620px) {
           .landing-strip { grid-template-columns: 1fr !important; }
           /* Stacked: the divider is a bottom hairline, not a stray right edge. */
           .landing-strip > div { border-right: none !important; border-bottom: 1px solid ${V3.line}; }
           .landing-strip > div:last-child { border-bottom: none; }
-          .landing-receipts .receipts-grid { grid-template-columns: 1fr !important; }
           .landing-cta { width: 100%; }
         }
       `}</style>
@@ -186,7 +218,7 @@ export default function LandingClient() {
 
               <div style={ctaRow}>
                 <Link href="/pricing?from=landing" style={ctaBtn} className="landing-cta">
-                  <span>Get full access</span>
+                  <span>Get full access →</span>
                   <span style={ctaSub}>$50/mo · Cancel anytime</span>
                 </Link>
                 <a href="#record" style={v3GhostButton} className="landing-ghost">See the record ↓</a>
@@ -299,13 +331,13 @@ export default function LandingClient() {
         {/* ═══ 4 · CLOSE — "what do I do?" ══════════════════════════════ */}
         <section style={card}>
           <div style={{ ...pad, textAlign: "center" }}>
-            <h2 style={{ ...h2, maxWidth: "24ch" }}>Tomorrow&apos;s levels print at 9:30 ET.</h2>
+            <h2 style={h2}>Tomorrow&apos;s levels print at 9:30 ET.</h2>
             <p style={{ ...sectionLede, marginBottom: 22 }}>
               You&apos;ve seen today&apos;s flip and the graded record, without an account. The rest of
               it — history, rate of change, flow and alerts — is one click away.
             </p>
             <Link href="/pricing?from=landing" style={ctaBtn} className="landing-cta">
-              <span>Get full access</span>
+              <span>Get full access →</span>
               <span style={ctaSub}>$50/mo · Cancel anytime</span>
             </Link>
             <div style={benefitLine}>
@@ -367,7 +399,12 @@ const root: React.CSSProperties = {
   minHeight: 0,
   overflowY: "auto",
   fontFamily: V3_SANS,
-  background: V3.bg,
+  // V3.app (#020304), not V3.bg (#07080b) — 2026-09-10, "some of them just
+  // seem to blend in". The cards did not change; the GROUND under them did.
+  // #0f1117 on #07080b is a ~3% luminance step, which is a smudge at this
+  // scale; on #020304 the same plate reads as an object. See the note on
+  // v3CardStrongStyle in v3Theme.ts.
+  background: V3.app,
   color: V3.fg,
 };
 
@@ -382,7 +419,7 @@ const shell: React.CSSProperties = {
 };
 
 const card: React.CSSProperties = {
-  ...v3CardStyle,
+  ...v3CardStrongStyle,
   position: "relative",
   width: "min(1140px, 100%)",
   overflow: "hidden",
@@ -397,13 +434,37 @@ const heroGrid: React.CSSProperties = {
   alignItems: "center",
 };
 
+/* ── DISPLAY TYPE, RETUNED FOR THE FACE THAT ACTUALLY SHIPS (2026-09-10) ─────
+   These headings were set 800 / -0.035em, which are Inter's numbers. Inter is
+   not loaded any more (see the note in v3Theme.ts): --font-inter aliases the
+   native system stack, so this renders in Segoe UI on Windows and San
+   Francisco on macOS. Two things go wrong with Inter's values on those faces:
+
+     • WEIGHT 800. Segoe UI ships 400/600/700 and no 800, so the browser
+       SYNTHESISES one by smearing the 700 outward. That is the fake-bold blur
+       on the hero headline — a real 700 is both heavier-looking and cleaner.
+     • -0.035em. Inter is drawn loose and wants pulling in. Segoe UI and SF are
+       already tight, and at 44px that tracking is -1.5px per letter: the
+       counters close up and "market" runs into itself.
+
+   700 / -0.02em is the same intent — tight, confident display type — measured
+   against the fonts that actually render. If Inter ever comes back, these go
+   back with it; do not split the difference.
+
+   `textWrap: balance` is the other half. These headings are short and hard
+   max-width'd, so the browser's greedy line breaker was dumping one or two
+   words onto a stranded second line ("Tomorrow's levels print at / 9:30 ET.").
+   Balance evens the lines out instead, which is what the max-width was
+   reaching for in the first place — so the max-widths below are loosened at
+   the same time and let balance do the work. */
 const h1: React.CSSProperties = {
   fontSize: "clamp(28px, 3.4vw, 44px)",
-  lineHeight: 1.05,
-  letterSpacing: "-0.035em",
-  fontWeight: 800,
+  lineHeight: 1.08,
+  letterSpacing: "-0.02em",
+  fontWeight: 700,
   margin: "14px 0 16px",
   color: V3.fg,
+  textWrap: "balance",
 };
 
 const h1Em: React.CSSProperties = { fontStyle: "normal", color: V3.cyan };
@@ -414,24 +475,51 @@ const heroSub: React.CSSProperties = {
   lineHeight: 1.6,
   margin: "0 0 22px",
   maxWidth: "46ch",
+  textWrap: "pretty",
 };
 
 const ctaRow: React.CSSProperties = {
   display: "flex", gap: 12, alignItems: "stretch", flexWrap: "wrap",
 };
 
+/* THE BUY BUTTON (2026-09-10, Brandon: "make that font bigger and the button
+   more wanting to push").
+
+   It was a 15px label over an 11px sub in a 13px-padded box — correctly styled
+   and completely unassertive, the same visual weight as the ghost button
+   beside it. The page spends four sections earning this click; the control has
+   to look like the thing the page is FOR.
+
+   What changed and why each one:
+     • The label goes to 18px (V3_TEXT.lg, the card-title step) and the sub to
+       13px. Both were a step too small for a control this important.
+     • Padding 13→16/32 and minWidth 280→300. The affordance is largely the
+       BOX, not the text: a button reads as pressable in proportion to the
+       space around its label.
+     • A trailing → on the label. It is the cheapest push cue there is, and it
+       tells the visitor this leaves the page for checkout rather than toggling
+       something here.
+     • The lift and the press live in the .landing-cta rules in the <style>
+       block above — hover raises it 1px and deepens the shadow, :active drops
+       it back to 0 with the shadow collapsed. That down-on-press is the whole
+       "wanting to push" feeling; without it a hover colour change is just a
+       colour change.
+
+   Weight stays 700, NOT 800 — see the display-type note above: the system
+   faces have no 800 and synthesise a blurry one. */
 const ctaBtn: React.CSSProperties = {
   ...v3PrimaryButton,
   flexDirection: "column",
-  gap: 3,
+  gap: 4,
   textAlign: "center",
-  minWidth: 280,
-  padding: "13px 22px",
-  fontSize: V3_TEXT.body,
+  minWidth: 300,
+  padding: "16px 32px",
+  fontSize: V3_TEXT.lg,
+  letterSpacing: "0.01em",
 };
 
 const ctaSub: React.CSSProperties = {
-  fontSize: V3_TEXT.sm, fontWeight: 600, letterSpacing: "0.04em",
+  fontSize: V3_TEXT.base, fontWeight: 600, letterSpacing: "0.04em",
 };
 
 const ctaNote: React.CSSProperties = {
@@ -450,7 +538,7 @@ const stripCell: React.CSSProperties = {
 };
 
 const stripN: React.CSSProperties = {
-  fontFamily: V3_MONO, fontSize: V3_TEXT.xl, fontWeight: 700, color: V3.cyan, lineHeight: 1,
+  ...V3_NUM, fontSize: V3_TEXT.xl, fontWeight: 700, color: V3.cyan, lineHeight: 1,
 };
 
 const stripL: React.CSSProperties = { fontSize: V3_TEXT.base, fontWeight: 600, margin: "7px 0 3px", color: V3.fg };
@@ -459,36 +547,55 @@ const stripS: React.CSSProperties = { fontSize: V3_TEXT.xs, color: V3.fg, lineHe
 
 const h2: React.CSSProperties = {
   fontSize: "clamp(22px, 2.8vw, 32px)",
-  fontWeight: 800,
-  letterSpacing: "-0.03em",
-  lineHeight: 1.1,
+  fontWeight: 700,
+  letterSpacing: "-0.02em",
+  lineHeight: 1.15,
   margin: "14px auto 12px",
-  maxWidth: "21ch",
+  // 21ch was a hard break dressed up as a measure: at 32px it forced
+  // "Every level we call is / graded. In public." and "Tomorrow's levels
+  // print at / 9:30 ET.". textWrap:balance handles the line count now, so this
+  // is back to being what a max-width is for — an upper bound on the measure.
+  maxWidth: "34ch",
   color: V3.fg,
+  textWrap: "balance",
 };
 
 const h2Em: React.CSSProperties = { fontStyle: "normal", color: V3.refresh };
 
 const sectionLede: React.CSSProperties = {
   fontSize: V3_TEXT.body, color: V3.fg, maxWidth: "66ch", margin: "0 auto", lineHeight: 1.6,
+  textWrap: "pretty",
 };
 
 const pullQuote: React.CSSProperties = {
   fontSize: V3_TEXT.lg, maxWidth: "58ch", margin: "0 auto", lineHeight: 1.55, fontWeight: 500, color: V3.fg,
+  textWrap: "balance",
 };
 
-/* auto-fill, not `repeat(3, 1fr)`: the grid is seven cards now that Premarket
-   and the two scanner pages replaced ICT and TPO, and a hard three-column rule
-   left one card alone on a third row at every width. */
+/* FLEX, NOT GRID (2026-09-10). This was `repeat(auto-fill, minmax(260px, 1fr))`,
+   which fixed the old hard-coded three-column rule but not the actual problem:
+   FEATURES is SEVEN cards, and seven never divides evenly into the 2, 3 or 4
+   columns this lands on, so the last row was always one card hanging on the
+   left with a card-and-a-half of dead space beside it. auto-FIT does not help
+   either — it only collapses tracks that are empty in EVERY row, and the first
+   row always fills.
+
+   A wrapping flex row with `justify-content: center` puts the remainder in the
+   middle instead, which reads as a deliberate last line rather than a gap. The
+   basis and the max-width together keep the cards on a sane measure: they grow
+   to share the row, but a lone one stops at 360px instead of stretching to the
+   full 1140. Add an eighth feature and nothing here needs touching. */
 const featureGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 260px), 1fr))",
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "center",
   gap: 10,
   marginTop: 18,
 };
 
 const featureCell: React.CSSProperties = {
-  display: "block",
+  flex: "1 1 260px",
+  maxWidth: 360,
   textDecoration: "none",
   color: V3.fg,
   background: V3.surface2,
@@ -508,6 +615,13 @@ const featureGo: React.CSSProperties = {
 const freeTool: React.CSSProperties = {
   ...featureCell,
   marginTop: 0,
+  // featureCell became a flex ITEM (see above) and this one is not in a flex
+  // row — it is alone in its own section. Without these it would inherit the
+  // 360px cap and sit as a narrow card in a full-width plate.
+  display: "block",
+  flex: "none",
+  maxWidth: "none",
+  width: "100%",
 };
 
 const benefitLine: React.CSSProperties = {
@@ -545,6 +659,10 @@ const tradeifyCard: React.CSSProperties = {
   borderRadius: V3_RADIUS.md,
   border: `1px solid ${v3a(V3.orange, 0.3)}`,
   background: V3.surface,
+  // This strip sits directly on the canvas, not inside a section, so it takes
+  // the same lift the section plates take — otherwise it is the one flat thing
+  // left on the page and reads as an artefact rather than a footer.
+  boxShadow: `inset 0 1px 0 ${v3a(V3.fg, 0.045)}, 0 16px 36px -14px ${v3a(V3.shadow, 0.95)}`,
 };
 
 const tradeifyLabel: React.CSSProperties = {

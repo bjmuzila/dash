@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { V3, V3_MONO, V3_RADIUS, V3_TEXT } from "@/components/landing/v3Theme";
+import { V3, V3_MONO, V3_NUM, V3_RADIUS, V3_TEXT } from "@/components/landing/v3Theme";
 
 // Graded-performance strip — the "receipts".
 //
@@ -120,17 +120,28 @@ const heading: React.CSSProperties = {
   textAlign: "center",
 };
 
-// Fixed 2-up, not auto-fit. With four stats this is an even 2x2 block; auto-fit
-// at the left column's width was landing 3-and-1 and leaving a dead cell. If a
-// stat ever gets suppressed and only three publish, the hole comes back — that
-// is the accepted cost of not shrinking type to force a fit.
+// WRAPPING, CENTRED FLEX — not a fixed column count (2026-09-10).
+//
+// This was `repeat(2, 1fr)`, chosen when four stats published and made an even
+// 2x2. The comment there admitted the failure mode: "if a stat ever gets
+// suppressed and only three publish, the hole comes back". Three publish now,
+// so the hole was live on the landing page — a dead quarter of the grid in the
+// one section whose entire job is looking credible.
+//
+// Centred flex has no fixed count to be wrong about. Three fill a wide row and
+// go 2-and-1-centred in a narrow one; four still make the 2x2 in a column and
+// a single row across a card. The basis is the real minimum for the type, and
+// the cap stops one lonely stat stretching the width of a 1140px card.
 const grid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(2, 1fr)",
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "center",
   gap: 10,
 };
 
 const cell: React.CSSProperties = {
+  flex: "1 1 230px",
+  maxWidth: 380,
   padding: "10px 12px",
   borderRadius: V3_RADIUS.sm,
   background: V3.surface,
@@ -145,11 +156,13 @@ const pctRow: React.CSSProperties = {
   marginBottom: 3,
 };
 
+// V3_NUM, not V3_MONO: at 24px the mono comma and period sit in a full-width
+// box and "66.8%" reads as "66 . 8%". See the V3_NUM note in v3Theme.ts.
 const pctVal: React.CSSProperties = {
   fontSize: V3_TEXT.xl,
   fontWeight: 700,
   color: V3.refresh,
-  fontFamily: V3_MONO,
+  ...V3_NUM,
   lineHeight: 1,
 };
 
