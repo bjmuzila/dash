@@ -50,6 +50,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     links: [
       { label: "Dev", href: "/owner/dev", glyph: "⚙" },
       { label: "Database", href: "/database", glyph: "⛁" },
+      { label: "Postgres", href: "/owner/db-map", glyph: "⛃" },
       { label: "Est. Moves BE", href: "/estimated-move", glyph: "⇄" },
       { label: "Changelog", href: "/changelog", glyph: "↻" },
       { label: "Social Media", href: "/social-media", glyph: "🗨︎" },

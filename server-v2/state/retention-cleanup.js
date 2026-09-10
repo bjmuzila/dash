@@ -26,6 +26,14 @@
  * Manual:  POST /proxy/retention-cleanup-run  (force = run immediately)
  */
 
+// Per-statement ceiling for THIS pool only (see the SET in getPool). Generous
+// on purpose: a per-date DELETE here takes seconds, so anything approaching
+// this is a bug worth surfacing rather than a budget to spend.
+const STATEMENT_TIMEOUT_MS = Number(process.env.RETENTION_STATEMENT_TIMEOUT_MS || 600_000);
+
+// Safety stop for the per-date loops, so a bad cutoff can never spin forever.
+const MAX_DATES_PER_RUN = Number(process.env.RETENTION_MAX_DATES_PER_RUN || 400);
+
 const CHECK_INTERVAL_MS = Number(process.env.RETENTION_CHECK_INTERVAL_MS || 10 * 60_000); // every 10 min
 const WINDOW_START_MINS = Number(process.env.RETENTION_WINDOW_START_MINS || 5);   // 00:05 ET
 const WINDOW_END_MINS   = Number(process.env.RETENTION_WINDOW_END_MINS || 40);    // 00:40 ET
@@ -101,6 +109,26 @@ function getPool() {
       max: 2,
       keepAlive: true,
     });
+    // STATEMENT TIMEOUT — set per session, deliberately.
+    //
+    // The DB role carries `statement_timeout=120s` (ALTER ROLE; see
+    // pg_db_role_setting). That is the right default for the app's web pool —
+    // it is what stops one slow query from pinning a slot in the max:5 pool —
+    // but role settings are applied at LOGIN, so they override anything passed
+    // in the startup packet (PGOPTIONS / the `options` connection field). The
+    // only thing that beats them is a session-level SET, which is this.
+    //
+    // Why it matters: every statement here is a bulk DELETE over a tape table,
+    // which legitimately runs longer than any web request. Inheriting 120s is
+    // how the option_strike_gex_history prune silently failed every night from
+    // 2026-07-24 to 2026-09-09 — the table reached 37.6M rows / 17.6GB while
+    // this module reported success on everything else. The per-date loop below
+    // keeps individual statements to seconds, so this ceiling is a backstop
+    // against a pathological statement, not a working budget.
+    pool.on('connect', (client) => {
+      client.query(`SET statement_timeout = '${STATEMENT_TIMEOUT_MS}'`)
+        .catch((e) => console.warn('[retention-cleanup] could not set statement_timeout:', e.message));
+    });
     pool.on('error', (e) => {
       console.warn('[retention-cleanup] pool error (will reconnect):', e.message);
       try { pool?.end().catch(() => {}); } catch {}
@@ -130,6 +158,107 @@ function nowEtParts() {
   const jsDow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 = Sun
   const isoDow = jsDow === 0 ? 7 : jsDow;
   return { ymd, minsSinceMidnight, isoDow, isWeekend: isoDow >= 6 };
+}
+
+// ET-local expressions on the bigint epoch-ms `timestamp` column. Kept as
+// constants so the date-cutoff pass and the thinning pass cannot drift apart.
+const ET = 'America/New_York';
+const ET_TS = `to_timestamp(t.timestamp / 1000) AT TIME ZONE '${ET}'`;
+const OFF_RTH = `to_char(${ET_TS}, 'HH24:MI') NOT BETWEEN '09:30' AND '16:00'`;
+const NOT_ON_5MIN = `(EXTRACT(MINUTE FROM ${ET_TS})::int % 5) <> 0`;
+
+/**
+ * option_strike_gex_history retention, one session date per statement.
+ *
+ * Two passes, both driven off `SELECT DISTINCT date` (43 rows, not 37.6M):
+ *
+ *   1. Whole dates past RETENTION.option_strike_gex_history — a plain
+ *      `DELETE ... WHERE date = $1`, which uses idx_osgh_date.
+ *   2. Surviving dates get the front-expiry and 5-minute-grid rules. Rows
+ *      whose expiry is not that (date, symbol)'s front expiry go; off-RTH rows
+ *      not on the 5-minute grid go; and once a date is older than
+ *      RETENTION.gex_history_fullres_days, every row off the grid goes.
+ *
+ * Identical semantics to the single monster statement this replaced, with the
+ * per-date scoping that makes each one finish. Errors are recorded per date
+ * and do not stop the loop.
+ *
+ * Returns a summary object rather than a bare count so a partial failure is
+ * visible in the run log instead of looking like a clean 0.
+ */
+async function pruneGexHistoryByDate(p) {
+  const keepDays = RETENTION.option_strike_gex_history;
+  const fullresDays = RETENTION.gex_history_fullres_days;
+  const out = { aged_out_dates: 0, aged_out_rows: 0, thinned_dates: 0, thinned_rows: 0, errors: [] };
+
+  // Pass 1 — drop whole dates past the window, oldest first.
+  for (let i = 0; i < MAX_DATES_PER_RUN; i++) {
+    let d;
+    try {
+      const r = await p.query(
+        `SELECT MIN(date) AS d FROM option_strike_gex_history
+          WHERE date::date < CURRENT_DATE - ($1::int)`, [keepDays]);
+      d = r.rows[0] && r.rows[0].d;
+    } catch (e) {
+      out.errors.push(`cutoff lookup: ${e.message}`);
+      console.warn('[retention-cleanup] gex cutoff lookup failed:', e.message);
+      break;
+    }
+    if (!d) break;
+    try {
+      const x = await p.query(`DELETE FROM option_strike_gex_history WHERE date = $1`, [d]);
+      out.aged_out_dates += 1;
+      out.aged_out_rows += x.rowCount;
+    } catch (e) {
+      // Record and STOP pass 1: the loop re-selects MIN(date) each iteration,
+      // so a date that cannot be deleted would otherwise be retried forever.
+      out.errors.push(`${d}: ${e.message}`);
+      console.warn(`[retention-cleanup] gex date delete failed for ${d}:`, e.message);
+      break;
+    }
+  }
+
+  // Pass 2 — thin what remains.
+  let dates = [];
+  try {
+    dates = (await p.query(`SELECT DISTINCT date AS d FROM option_strike_gex_history ORDER BY 1`))
+      .rows.map((r) => r.d);
+  } catch (e) {
+    out.errors.push(`date list: ${e.message}`);
+    console.warn('[retention-cleanup] gex date list failed:', e.message);
+    return out;
+  }
+
+  for (const d of dates) {
+    // Newest `fullresDays` sessions keep full 1-minute resolution — that is
+    // every window the ES-Candles page can actually request (1D/2D heatmap,
+    // single-session bubbles, the replay day picker).
+    const gridClause = `($2::date < CURRENT_DATE - (${Number(fullresDays)}::int) AND ${NOT_ON_5MIN})`;
+    const sql = `
+      DELETE FROM option_strike_gex_history t
+      USING (
+        SELECT symbol, MIN(expiry) AS front_expiry
+          FROM option_strike_gex_history
+         WHERE date = $1
+         GROUP BY symbol
+      ) f
+      WHERE t.date = $1
+        AND t.symbol IS NOT DISTINCT FROM f.symbol
+        AND (
+          t.expiry <> f.front_expiry
+          OR (${OFF_RTH} AND ${NOT_ON_5MIN})
+          OR ${gridClause}
+        )`;
+    try {
+      const x = await p.query(sql, [d, d]);
+      if (x.rowCount > 0) { out.thinned_dates += 1; out.thinned_rows += x.rowCount; }
+    } catch (e) {
+      out.errors.push(`thin ${d}: ${e.message}`);
+      console.warn(`[retention-cleanup] gex thin failed for ${d}:`, e.message);
+    }
+  }
+
+  return out;
 }
 
 /** Runs every DELETE, logging (and swallowing) per-table errors so one bad
@@ -186,29 +315,30 @@ async function runDeletes(p) {
   //
   // Raise RETENTION_GEX_FULLRES_DAYS if a reader ever wants minute resolution
   // further back; it is the only number that has to move.
-  await run('option_strike_gex_history', `
-    DELETE FROM option_strike_gex_history t
-    USING (
-      SELECT date, symbol, MIN(expiry) AS front_expiry
-      FROM option_strike_gex_history
-      GROUP BY date, symbol
-    ) f
-    WHERE t.date = f.date
-      AND t.symbol IS NOT DISTINCT FROM f.symbol
-      AND (
-        t.date::date < CURRENT_DATE - INTERVAL '${RETENTION.option_strike_gex_history} days'
-        OR t.expiry <> f.front_expiry
-        OR (
-          to_char(to_timestamp(t.timestamp / 1000) AT TIME ZONE 'America/New_York', 'HH24:MI')
-            NOT BETWEEN '09:30' AND '16:00'
-          AND (EXTRACT(MINUTE FROM to_timestamp(t.timestamp / 1000) AT TIME ZONE 'America/New_York')::int % 5) <> 0
-        )
-        OR (
-          t.date::date < CURRENT_DATE - INTERVAL '${RETENTION.gex_history_fullres_days} days'
-          AND (EXTRACT(MINUTE FROM to_timestamp(t.timestamp / 1000) AT TIME ZONE 'America/New_York')::int % 5) <> 0
-        )
-      )
-  `);
+  // ── ONE STATEMENT PER SESSION DATE, not one for the whole table ──────────
+  //
+  // The version this replaced was a single DELETE whose USING clause did
+  // `SELECT date, symbol, MIN(expiry) GROUP BY date, symbol` over the ENTIRE
+  // table and joined it back against every row, then evaluated two
+  // `to_timestamp(...) AT TIME ZONE` conversions per row. Non-sargable, so
+  // none of the table's indexes helped: a full scan plus per-row timezone
+  // math plus a hash aggregate that spilled to temp, every night.
+  //
+  // Measured 2026-09-09 at 37.6M rows: the aggregate SUBQUERY ALONE took
+  // 101 seconds. The full statement could not possibly finish inside the
+  // role's 120s statement_timeout, so it was cancelled on every run and
+  // caught by run()'s try/catch, which logged a warning and moved on. Six
+  // weeks of that took the table to 17.6GB — 67% of the whole database — on
+  // a 30GB disk, while every other table in this module pruned correctly.
+  //
+  // Scoped to one date the same work is trivial: the MIN(expiry) group is
+  // ~44 rows instead of 1,893 over 37.6M, the date predicate uses
+  // idx_osgh_date, and each statement finishes in seconds. 43 small
+  // statements instead of one impossible one — and because each is its own
+  // transaction, a single bad date can no longer block the other 42, and a
+  // tight disk sees WAL recycled between them instead of one enormous
+  // transaction's worth accumulating.
+  results.option_strike_gex_history = await pruneGexHistoryByDate(p);
 
   // flow_prints: big prints (premium >= flow_prints_big_premium) are kept the
   // full flow_prints-day window by session date so the /flow Combined preset
@@ -234,8 +364,16 @@ async function runDeletes(p) {
   await run('scanner_snapshots',
     `DELETE FROM scanner_snapshots WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.scanner_snapshots} days'`);
 
+  // watch_snapshots has NO created_at column — it stamps `ts` as epoch
+  // MILLISECONDS (verified 2026-09-09: min 1787668205044, max 1788974038960).
+  // This statement read `created_at` from the day it was written, so it threw
+  // `column "created_at" does not exist` on every single run and the table has
+  // never once been pruned. It only escaped notice because run() swallows
+  // per-table errors and the table is young enough that a 60-day cutoff would
+  // not have removed anything yet.
   await run('watch_snapshots',
-    `DELETE FROM watch_snapshots WHERE created_at < NOW() - INTERVAL '${RETENTION.watch_snapshots_days} days'`);
+    `DELETE FROM watch_snapshots
+      WHERE ts < (EXTRACT(EPOCH FROM NOW() - INTERVAL '${RETENTION.watch_snapshots_days} days') * 1000)::bigint`);
 
   await run('preview_snapshots',
     `DELETE FROM preview_snapshots WHERE created_at < NOW() - INTERVAL '${RETENTION.preview_snapshots_days} days'`);
@@ -287,6 +425,140 @@ async function runVacuum(p) {
   }
 }
 
+// ─── db_map_snapshot ────────────────────────────────────────────────────────
+//
+// Feeds /api/owner/db-map (the Postgres page under /owner/db-map). Sizes and
+// row estimates are catalog reads and cheap enough to serve live; HOW FAR BACK
+// a table actually reaches is not — `min(date)` on a text date column is a
+// sequential scan, measured at 43s on option_strike_gex_history alone. So it
+// is computed here, once a night, right after the prune that determines it.
+//
+// The point of storing it rather than just displaying it: a table whose held
+// days climb past its own cutoff is a retention policy that has stopped
+// working. That is exactly what went unnoticed from 2026-07-24 to 2026-09-09,
+// and with a row per night it is visible the day it starts.
+const DB_MAP_SNAPSHOT_TABLES = Number(process.env.DB_MAP_SNAPSHOT_TABLES || 40);
+const DB_MAP_PROBE_TIMEOUT_MS = Number(process.env.DB_MAP_PROBE_TIMEOUT_MS || 30_000);
+
+// Preference order for "which column dates this row". First exact match wins,
+// then first substring match, so `snap_ts` beats `updated_at` on a table with
+// both.
+const DATE_COL_PREF = [
+  'date', 'session_date', 'trade_date', 'ts', 'snap_ts', 'snapshot_at', 'as_of', 'asof',
+  'recorded_at', 'captured_at', 'created_at', 'inserted_at', 'event_time', 'timestamp', 'day',
+];
+
+async function writeDbMapSnapshot(p) {
+  try {
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS db_map_snapshot (
+        captured_at  timestamptz NOT NULL DEFAULT now(),
+        table_name   text        NOT NULL,
+        date_column  text,
+        oldest       text,
+        newest       text,
+        span_days    int,
+        PRIMARY KEY (captured_at, table_name)
+      )`);
+  } catch (e) {
+    console.warn('[retention-cleanup] db_map_snapshot ensure failed:', e.message);
+    return { error: e.message };
+  }
+
+  let targets = [];
+  try {
+    targets = (await p.query(`
+      SELECT c.relname AS t
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE c.relkind = 'r' AND n.nspname = 'public'
+       ORDER BY pg_total_relation_size(c.oid) DESC
+       LIMIT $1`, [DB_MAP_SNAPSHOT_TABLES])).rows.map((r) => r.t);
+  } catch (e) {
+    console.warn('[retention-cleanup] db_map target list failed:', e.message);
+    return { error: e.message };
+  }
+
+  // Column types up front, one catalog read for all of them.
+  const cols = new Map();
+  try {
+    for (const r of (await p.query(`
+      SELECT table_name AS t, column_name AS c, data_type AS d
+        FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = ANY($1)`, [targets])).rows) {
+      if (!cols.has(r.t)) cols.set(r.t, []);
+      cols.get(r.t).push({ c: r.c, d: r.d });
+    }
+  } catch (e) {
+    console.warn('[retention-cleanup] db_map column read failed:', e.message);
+    return { error: e.message };
+  }
+
+  const pick = (t) => {
+    const list = cols.get(t) || [];
+    for (const want of DATE_COL_PREF) {
+      const hit = list.find((x) => x.c.toLowerCase() === want);
+      if (hit) return hit;
+    }
+    for (const want of DATE_COL_PREF) {
+      const hit = list.find((x) => x.c.toLowerCase().includes(want));
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  const stamped = new Date().toISOString();
+  let written = 0, skipped = 0, failed = 0;
+
+  for (const t of targets) {
+    const col = pick(t);
+    if (!col) { skipped += 1; continue; }
+
+    // Epoch-ms bigints, epoch-second bigints, text dates and real date/timestamp
+    // columns all have to come back as a comparable ISO day.
+    const isNum = /int|numeric|double|real/.test(col.d);
+    const isTxt = /char|text/.test(col.d);
+    const q = isNum
+      ? `SELECT to_char(to_timestamp(MIN("${col.c}")::double precision / (CASE WHEN MAX("${col.c}") > 1e12 THEN 1000 ELSE 1 END)), 'YYYY-MM-DD') lo,
+                to_char(to_timestamp(MAX("${col.c}")::double precision / (CASE WHEN MAX("${col.c}") > 1e12 THEN 1000 ELSE 1 END)), 'YYYY-MM-DD') hi
+           FROM "${t}"`
+      : isTxt
+        ? `SELECT substr(MIN("${col.c}")::text,1,10) lo, substr(MAX("${col.c}")::text,1,10) hi FROM "${t}"`
+        : `SELECT to_char(MIN("${col.c}"),'YYYY-MM-DD') lo, to_char(MAX("${col.c}"),'YYYY-MM-DD') hi FROM "${t}"`;
+
+    try {
+      // Own timeout: an unindexed min() on a huge table is a scan, and a slow
+      // probe must not eat the whole window.
+      await p.query(`SET statement_timeout = ${DB_MAP_PROBE_TIMEOUT_MS}`);
+      const r = (await p.query(q)).rows[0] || {};
+      const span = (r.lo && r.hi)
+        ? Math.max(0, Math.round((Date.parse(r.hi) - Date.parse(r.lo)) / 86_400_000))
+        : null;
+      await p.query(
+        `INSERT INTO db_map_snapshot (captured_at, table_name, date_column, oldest, newest, span_days)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (captured_at, table_name) DO NOTHING`,
+        [stamped, t, col.c, r.lo || null, r.hi || null, span]);
+      written += 1;
+    } catch (e) {
+      failed += 1;
+      console.warn(`[retention-cleanup] db_map probe failed for ${t}:`, e.message);
+    } finally {
+      try { await p.query(`SET statement_timeout = '${STATEMENT_TIMEOUT_MS}'`); } catch {}
+    }
+  }
+
+  // Keep a rolling window — one row per table per night is small, but not
+  // forever. This table must never become the next thing on this list.
+  try {
+    await p.query(`DELETE FROM db_map_snapshot WHERE captured_at < NOW() - INTERVAL '180 days'`);
+  } catch (e) {
+    console.warn('[retention-cleanup] db_map_snapshot prune failed:', e.message);
+  }
+
+  return { written, skipped, failed };
+}
+
 async function runCleanup({ force = false } = {}) {
   const p = getPool();
   if (!p) return { ok: false, reason: 'no DB pool' };
@@ -296,9 +568,29 @@ async function runCleanup({ force = false } = {}) {
   console.log(`[retention-cleanup] starting prune for ${ymd}...`);
   const deleted = await runDeletes(p);
   await runVacuum(p);
+  // AFTER the vacuum, so the row-age figures the owner page shows describe the
+  // table as the prune left it, not as it was before.
+  deleted._db_map_snapshot = await writeDbMapSnapshot(p);
   lastRunYmd = ymd;
   console.log('[retention-cleanup] done:', deleted);
-  return { ok: true, ymd, deleted };
+
+  // MAKE FAILURES LOUD.
+  //
+  // runDeletes() records `error: <msg>` per table and carries on, which is the
+  // right resilience — one bad table must not block twelve good ones. But the
+  // only trace was a console.warn buried in a log nobody greps, so
+  // option_strike_gex_history failed nightly for six weeks and
+  // watch_snapshots since inception, entirely unnoticed, while the summary
+  // line above looked healthy. This restates the failures at the end, as an
+  // error, naming every table that did not prune.
+  const failed = Object.entries(deleted)
+    .filter(([, v]) => (typeof v === 'string' && v.startsWith('error'))
+                    || (v && Array.isArray(v.errors) && v.errors.length))
+    .map(([t, v]) => `${t} (${typeof v === 'string' ? v : v.errors.join('; ')})`);
+  if (failed.length) {
+    console.error(`[retention-cleanup] ${failed.length} TABLE(S) DID NOT PRUNE: ${failed.join(', ')}`);
+  }
+  return { ok: true, ymd, deleted, failed };
 }
 
 function startRetentionCleanup() {
@@ -325,10 +617,26 @@ function startRetentionCleanup() {
       console.warn('[retention-cleanup] tick error:', e.message);
     }
   };
+  // Startup line, matching every other recorder ([oi-daily], [eod-strike-gex],
+  // [atm-prem-intraday] all announce themselves). This module was silent until
+  // it actually fired, so an empty `docker compose logs | grep retention` was
+  // indistinguishable between "wired and waiting for the window" and "never
+  // started" — which cost real time diagnosing the 2026-09 disk incident.
+  console.log('[retention-cleanup] started — weekdays '
+    + `${String(Math.floor(WINDOW_START_MINS / 60)).padStart(2, '0')}:${String(WINDOW_START_MINS % 60).padStart(2, '0')}`
+    + `-${String(Math.floor(WINDOW_END_MINS / 60)).padStart(2, '0')}:${String(WINDOW_END_MINS % 60).padStart(2, '0')} ET, `
+    + `checked every ${CHECK_INTERVAL_MS / 60_000}min; gex ${RETENTION.option_strike_gex_history}d `
+    + `(${RETENTION.gex_history_fullres_days}d full-res), strike_growth ${RETENTION.strike_growth}d, `
+    + `flow_prints ${RETENTION.flow_prints}d, etf_candles ${RETENTION.etf_candles_days}d; `
+    + `statement_timeout ${STATEMENT_TIMEOUT_MS / 1000}s`);
+
   setInterval(tick, CHECK_INTERVAL_MS);
   // Also check shortly after boot, in case the process restarts inside the
   // window and would otherwise wait a full day for the next one.
   setTimeout(tick, 30_000);
 }
 
-module.exports = { startRetentionCleanup, runCleanup };
+// RETENTION is exported so /api/owner/db-map reports the cutoffs this module
+// actually applies. The owner page must never carry its own copy of these
+// numbers — a page that says "10 d" while the code says 5 is worse than no page.
+module.exports = { startRetentionCleanup, runCleanup, RETENTION, writeDbMapSnapshot };
