@@ -1,5 +1,160 @@
 # Changelog
 
+## 2026-09-10 (y) - /v3/whales: VOL and OI columns dropped
+
+They meant "what is this contract doing NOW" and were joined at serve time on the
+live Top Flow card. An archived print has no now, so on this page they were two
+columns of permanent em dashes — the only two that could never answer for the row
+they sat on. Same argument as the CSV in (x).
+
+- **`cbedge-v3/src/pages/Whales.tsx`** — both `<th>` and both `<td>` removed;
+  the session day-header's `colSpan` dropped 12 → 10 to match, or it would have
+  run two cells past the table.
+- **`cbedge-v3/src/board/topFlow/ContractProbe.tsx`** — the probe is SHARED with
+  Top Flow, where these are real numbers, so it now shows the `VOL · OI` pair
+  only when at least one is present. A dash means "this should have a value and
+  does not"; on the archive they never will, which is a different statement.
+  Either both render (Top Flow) or neither does (the archive).
+- **`server-v2/api-router.js`** — `/api/lse/whales` still returns
+  `vol: null, oi: null`. The keys stay because `TopFlowRow` requires them and a
+  row from this route has to be the same shape as one from the live card — the
+  probe takes either. Comment updated so the next reader does not "fix" the
+  nulls by wiring up a stats pull nobody asked for.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`).
+
+## 2026-09-10 (x) - /v3/whales: EXPORT CSV removed
+
+Dropped at Brandon's request — nobody was using it, and it was quietly the one
+thing on the page with a second definition of what a whale row IS: its own
+column list, its own formatting, and it silently omitted `vol`/`oi` (which are
+null in the archive) while the table still showed them as columns. One fewer
+place to keep in step with the table.
+
+Removed the `exportCsv` builder and the `<Page actions>` slot; `Page`'s `actions`
+prop is optional, so the header row now renders with the title alone. Nothing
+else referenced it — `fmtStrike`, `fmtTime` and `biasOf` all still have callers,
+confirmed by `noUnusedLocals` staying clean.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`).
+
+## 2026-09-10 (w) - /v3/whales: toolbar folds to labelled pills, and the filters are remembered
+
+Study 03 from the toolbar mockups, plus per-browser persistence.
+
+The filter row was **nine segmented groups, twenty-four buttons, none labelled** —
+two different buttons read `ALL` four pixels apart (one a range, one a moneyness),
+and finding out what was narrowing the list meant reading all nine.
+
+### `cbedge-v3/src/design/primitives/Controls.tsx` — `SegMenu` gains two props
+
+Both optional; with both omitted the trigger resolves to the same utilities it
+has always carried, so existing callers are unmoved.
+
+- **`label`** — a standing name shown dimmed before the value: `DTE ≤90 ▾`.
+  Folding solves width but costs identity: a lone `≤90` does not say what it
+  caps, and `ALL` appears in three groups meaning three things.
+- **`defaultValue`** — the value that means "not filtering". A pill on anything
+  else wears the accent. This is the actual reason to fold: unfolded, "what is
+  narrowing this list" is a nine-group read; folded with this, it is a colour
+  scan.
+
+  Checked with `!== undefined`, not truthiness — `''` is a legitimate
+  "no filter" value (Calls/Puts, Fill side both use it).
+
+  Omit it for groups whose options are peers (RTH/ETH, 5m/15m): none of those is
+  a default and colouring one would be a lie.
+
+### `cbedge-v3/src/pages/Whales.tsx` — the row
+
+`FLOOR · STRIKE · DTE · C/P · FILL` fold to labelled pills. **Range and sort stay
+unfolded** — their options are peers, so there is nothing to colour and folding
+would cost a click to buy nothing. `SHOW UNREADABLE` stays a visible switch: it
+changes what the tiles MEAN, not just which rows are listed. Hairline dividers
+separate *how far back* from *what counts* from *how it's shown*.
+
+Twenty-four buttons → nine controls, and every one shows its answer.
+
+### Saved filters — `localStorage`, key `cb-v3-whales:filters`
+
+Range, floor, ticker, calls/puts, fill, moneyness, sort, DTE and the unreadable
+toggle. Read in a **lazy `useState` initialiser**, not a `useEffect` that
+overwrites afterwards — so the first fetch already carries the saved filters
+instead of firing once at the defaults and again a tick later.
+
+Deliberately **not** saved:
+
+- `day` — the session drill-down from clicking a bar. It is scoped to a range
+  you may not be on next time, so restoring it opens the page filtered to a date
+  the current range does not contain: an empty table with no visible cause.
+- `selectedId` — the open contract probe. That print may not be in the filtered
+  set next visit.
+
+Every field is validated **on its own** against the current option lists; a
+stored value from an older list falls back to that field's default rather than
+poisoning the object — retiring one premium stop must not wipe the other five
+settings. `ticker` is re-trimmed, uppercased and capped at 12 chars on read, so
+a hand-edited entry cannot put a 400-character ticker in the query. `maxDte`
+compares with an explicit `?? null` because both `null` (no cap) and `0`
+(same-day only) are real stored values. A throw — private mode, blocked site
+data, corrupt JSON — falls back to defaults, which is a working page.
+
+Typechecked under the project's `strict` / `noUnusedLocals` /
+`noUncheckedIndexedAccess` settings, against the real `Controls.tsx`.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`).
+
+## 2026-09-10 (v) - Clips and the Contract Probe pop OUT now, instead of expanding into a box that cannot hold them
+
+### 1. Notes clip expand — v2 `components/shared/notes.tsx`
+
+The clip thumbnail's "Expand" was an in-place toggle: click it and the image
+dropped its `maxHeight` and switched to `object-contain`. In a 320px dock with
+`overflow: hidden` that is a no-op you can see — the image is already the width
+of the panel, so "expanded" and "not expanded" look the same. That is why the
+button read as broken.
+
+It now opens a real pop-out: a `createPortal` overlay on `document.body`, fixed
+to the viewport above the toolbar and the dock, with the source label, the
+timestamp, a Download link and the clip at up to `100vh - 150px`. Click anywhere
+or press Esc to close; the page behind is scroll-locked while it is up. The
+thumbnail keeps a dedicated ⤢ button in its top-right corner so the affordance
+is a control, not a guess, and the note card's own click still opens the same
+view.
+
+Deleting a note (or having its image shed by the quota-writer) while the overlay
+is open now closes it instead of leaving a dangling picture of a note that no
+longer exists.
+
+### 2. Notes clip lightbox hardening — v3 `cbedge-v3/src/shell/notes.tsx`
+
+The v3 lightbox already existed. Its four load-bearing properties — `position`,
+`inset`, `z-index`, and an opaque ground — are now inline styles rather than
+utility classes. The overlay portals onto `<body>`, outside the app root, so if
+any one of those classes were ever purged or shadowed it would open as a 0×0
+transparent box and read as a dead button. The image wrapper also gained
+`min-height: 0`, without which `max-height: 100%` on the image means nothing in
+a flex column and the clip renders at natural size with its bottom off-screen.
+
+### 3. Contract Probe can be expanded — `cbedge-v3/src/board/topFlow/ContractProbe.tsx`
+
+The probe lives in a 330px column inside the Top Flow card, which is where a
+chart carrying an entry line, a high, a low, a price rail and a volume histogram
+stops being readable. A ⤢ button beside the ✕ now pops the SAME panel out over
+the page: a portal on `document.body` (the probe column, the card and the board
+tile all clip or stack), `min(1100px, 94vw)` wide, backdrop or Esc to close.
+
+The chart is not merely scaled up. `ProbeChart` takes a `wide` prop and draws
+into a 1000×460 viewBox instead of 320×250, with every fixed-pixel detail —
+label sizes, the H/L markers, the last-mark pill, the hover tooltip — multiplied
+by a single `S` factor. Both boxes display at roughly 1:1, so without that the
+popped-out chart would have drawn the same 9px labels on a canvas three times
+the width.
+
+Both copies render from one `body(big)` builder off one component instance, so
+the range tabs, the source fallback and the fetched bars stay in lockstep — the
+overlay is the same panel, not a second one.
+
 ## 2026-09-10 (u) - Contract Probe 501 fixed; /v3/whales gets a DTE filter and a reordered left column
 
 ### 1. `/api/lse/contract-candles` - the route the probe has always called

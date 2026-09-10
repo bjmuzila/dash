@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { HOME_THEME } from "./homeTheme";
 
 // Notes are stored per Clerk user: `${NOTES_STORAGE_PREFIX}${userId}`.
@@ -47,6 +48,132 @@ const PencilIcon = ({ size = 12 }: IconProps) => (
 const CloseIcon = ({ size = 12 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
 );
+/** Four corner arrows — the "pop out" affordance on a clip thumbnail. */
+const ExpandIcon = ({ size = 13 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" />
+    <line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
+  </svg>
+);
+
+// ─── clip lightbox ────────────────────────────────────────────────────────────
+/**
+ * Full-screen viewer for a clip image.
+ *
+ * The dock is a 320px flex column with `overflow: hidden`, so the old
+ * "expand in place" (drop the thumbnail's maxHeight) had nowhere to grow into —
+ * the image stayed dock-width and nothing visibly happened. The expand control
+ * now pops the clip OUT of the dock: a portal on `document.body`, above the
+ * toolbar and the dock, sized to the viewport, click-anywhere / Esc to close.
+ */
+function ClipLightbox({ note, onClose }: { note: Note; onClose: () => void }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  // Esc closes; the page behind must not scroll while the overlay is up.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    window.addEventListener("keydown", onKey, true);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  if (!mounted || !note.img) return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={note.src || note.text || "Clip"}
+      onClick={onClose}
+      onContextMenu={(e) => e.stopPropagation()}
+      style={{
+        position: "fixed",
+        inset: 0,
+        // Above GlobalToolbar / dock / the clip menu's 9999.
+        zIndex: 100000,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 12,
+        padding: "40px 40px 32px",
+        background: "rgba(4,6,10,0.86)",
+        backdropFilter: "blur(6px)",
+        WebkitBackdropFilter: "blur(6px)",
+        cursor: "zoom-out",
+        animation: "cbNoteClipIn 0.14s ease-out",
+      }}
+    >
+      <style>{"@keyframes cbNoteClipIn{from{opacity:0}to{opacity:1}}"}</style>
+
+      {/* header strip: source label + close */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ display: "flex", alignItems: "center", gap: 12, maxWidth: "100%", cursor: "default" }}
+      >
+        <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+          {note.src && (
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.cyan, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {note.src}
+            </span>
+          )}
+          <span style={{ fontSize: 12, color: HOME_THEME.muted, fontWeight: 600 }}>{formatNoteTime(note.ts)}</span>
+        </div>
+        <a
+          href={note.img}
+          download={`clip-${note.id}.jpg`}
+          onClick={(e) => e.stopPropagation()}
+          style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: HOME_THEME.text, textDecoration: "none", padding: "6px 11px", borderRadius: 9, border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.06)" }}
+        >
+          Download
+        </a>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close clip"
+          style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, borderRadius: 9, background: "rgba(255,255,255,0.06)", border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.text, cursor: "pointer", padding: 0 }}
+        >
+          <CloseIcon size={14} />
+        </button>
+      </div>
+
+      {/* the clip itself — fits the viewport, never upscaled past its own pixels */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={note.img}
+        alt={note.text || note.src || "Clip"}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          maxWidth: "100%",
+          maxHeight: "calc(100vh - 150px)",
+          objectFit: "contain",
+          borderRadius: 12,
+          border: "1px solid rgba(255,255,255,0.12)",
+          boxShadow: "0 30px 80px -20px rgba(0,0,0,0.9)",
+          background: HOME_THEME.bg,
+          cursor: "default",
+        }}
+      />
+
+      {note.text && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{ maxWidth: 760, textAlign: "center", fontSize: 13, lineHeight: 1.5, color: HOME_THEME.text, whiteSpace: "pre-wrap", wordBreak: "break-word", cursor: "default" }}
+        >
+          {note.text}
+        </div>
+      )}
+
+      <span style={{ fontSize: 11, color: HOME_THEME.muted, letterSpacing: "0.06em" }}>Click anywhere or press Esc to close</span>
+    </div>,
+    document.body,
+  );
+}
 
 /**
  * Write the list to localStorage, shedding weight until it fits.
@@ -199,8 +326,13 @@ export function NotesBody({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  // Clip whose image is expanded to full panel width (thumbnails otherwise).
+  // Clip currently popped out into the full-screen lightbox (null = none).
   const [zoomId, setZoomId] = useState<string | null>(null);
+  const zoomedNote = zoomId ? notes.find((n) => n.id === zoomId && n.img) ?? null : null;
+
+  // A note deleted (or its image shed on a quota write) while open must not
+  // leave a dead overlay up.
+  useEffect(() => { if (zoomId && !zoomedNote) setZoomId(null); }, [zoomId, zoomedNote]);
 
   const submitDraft = () => { addNote(draft); setDraft(""); };
   const startEdit = (n: Note) => { setEditingId(n.id); setEditText(n.text); };
@@ -245,7 +377,6 @@ export function NotesBody({
         )}
         {notes.map((n) => {
           const editing = editingId === n.id;
-          const zoomed = zoomId === n.id;
           return (
             <div
               key={n.id}
@@ -294,26 +425,56 @@ export function NotesBody({
                     </div>
                   )}
 
-                  {/* clip image — thumbnail, click to expand in place */}
+                  {/* clip image — thumbnail; the image or the ⤢ button pops it
+                      out full-screen (the dock is too narrow to expand into) */}
                   {n.img && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={n.img}
-                      alt={n.text || "Clip"}
-                      onClick={() => setZoomId((z) => (z === n.id ? null : n.id))}
-                      title={zoomed ? "Shrink" : "Expand"}
-                      style={{
-                        display: "block",
-                        marginTop: 8,
-                        width: "100%",
-                        maxHeight: zoomed ? "none" : 120,
-                        objectFit: zoomed ? "contain" : "cover",
-                        objectPosition: "top left",
-                        borderRadius: 10,
-                        border: "1px solid rgba(255,255,255,0.08)",
-                        cursor: zoomed ? "zoom-out" : "zoom-in",
-                      }}
-                    />
+                    <div style={{ position: "relative", marginTop: 8 }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={n.img}
+                        alt={n.text || "Clip"}
+                        onClick={() => setZoomId(n.id)}
+                        title="Expand"
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          maxHeight: 120,
+                          objectFit: "cover",
+                          objectPosition: "top left",
+                          borderRadius: 10,
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          cursor: "zoom-in",
+                        }}
+                      />
+                      <button
+                        type="button"
+                        aria-label="Expand clip"
+                        title="Expand"
+                        onClick={(e) => { e.stopPropagation(); setZoomId(n.id); }}
+                        style={{
+                          position: "absolute",
+                          top: 6,
+                          right: 6,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: 24,
+                          height: 24,
+                          padding: 0,
+                          borderRadius: 8,
+                          border: "1px solid rgba(255,255,255,0.14)",
+                          background: "rgba(10,13,20,0.72)",
+                          backdropFilter: "blur(8px)",
+                          WebkitBackdropFilter: "blur(8px)",
+                          color: HOME_THEME.text,
+                          cursor: "pointer",
+                          opacity: hoveredId === n.id ? 0.95 : 0.5,
+                          transition: "opacity 0.15s",
+                        }}
+                      >
+                        <ExpandIcon size={13} />
+                      </button>
+                    </div>
                   )}
 
                   {/* edit/delete reveal on hover */}
@@ -339,6 +500,10 @@ export function NotesBody({
           );
         })}
       </div>
+
+      {/* popped-out clip — portaled to <body>, so the dock's fixed width and
+          `overflow: hidden` don't clip it */}
+      {zoomedNote && <ClipLightbox note={zoomedNote} onClose={() => setZoomId(null)} />}
     </div>
   );
 }

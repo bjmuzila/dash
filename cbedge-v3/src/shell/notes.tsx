@@ -346,8 +346,23 @@ function ClipLightbox({ note, onClose }: { note: Note; onClose: () => void }) {
       aria-modal="true"
       aria-label={note.text || note.src || 'Clip'}
       onClick={onClose}
-      // z above the expand stage (z-40) and the dock; matches LadderModal.
-      className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-bg/90 px-8 pb-8 pt-14"
+      // The four properties that decide whether this is visible AT ALL — fixed,
+      // full-viewport, above everything, opaque ground — are inline rather than
+      // utilities. The overlay is portalled onto <body>, outside the app root and
+      // therefore outside anything the page's own stacking contexts can help
+      // with: if one of these classes were ever purged or shadowed, the clip
+      // would open into a 0×0 transparent box and read as a dead button.
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 9999,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '56px 32px 32px',
+        background: 'color-mix(in srgb, var(--color-bg) 90%, transparent)',
+      }}
     >
       {/* caption — source, text, time */}
       {(note.src || note.text) && (
@@ -378,20 +393,30 @@ function ClipLightbox({ note, onClose }: { note: Note; onClose: () => void }) {
 
       <div
         onClick={(e) => e.stopPropagation()}
-        className={[
-          'flex max-h-full max-w-full items-center justify-center',
-          actual ? 'overflow-auto' : 'overflow-hidden',
-        ].join(' ')}
+        // min-height:0 is what lets `max-height:100%` on the image mean anything:
+        // without it this flex child refuses to shrink and the image renders at
+        // its natural size, half of it under the edge of the screen.
+        style={{
+          display: 'flex',
+          minHeight: 0,
+          maxWidth: '100%',
+          maxHeight: '100%',
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: actual ? 'auto' : 'hidden',
+        }}
       >
         <img
           src={note.img}
           alt={note.text || 'Clip'}
           onClick={() => setActual((a) => !a)}
           title={actual ? 'Fit to screen' : 'Actual size'}
-          className={[
-            'block rounded-md border border-line object-contain',
-            actual ? 'max-h-none max-w-none cursor-zoom-out' : 'max-h-full max-w-full cursor-zoom-in',
-          ].join(' ')}
+          className="block rounded-md border border-line"
+          style={
+            actual
+              ? { maxWidth: 'none', maxHeight: 'none', cursor: 'zoom-out' }
+              : { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', cursor: 'zoom-in' }
+          }
         />
       </div>
     </div>,

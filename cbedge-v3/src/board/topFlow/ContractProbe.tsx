@@ -180,10 +180,20 @@ export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () =
         <span className="text-3xs text-faint">SIZE</span> <span className="text-fg">{row.size?.toLocaleString() ?? '—'}</span>
         {' · '}
         <span className="text-3xs text-faint">PREM</span> <span className="text-fg">{fmtPremium(row.premium)}</span>
-        {' · '}
-        <span className="text-3xs text-faint">VOL</span> <span className="text-fg">{row.vol?.toLocaleString() ?? '—'}</span>
-        {' · '}
-        <span className="text-3xs text-faint">OI</span> <span className="text-fg">{row.oi?.toLocaleString() ?? '—'}</span>
+        {/* Vol/OI are LIVE numbers, joined at serve time on the Top Flow card.
+            An archived whale print carries neither — there is no "now" for it —
+            so the pair is omitted rather than printed as two permanent dashes.
+            A dash means "this should have a value and does not"; on that surface
+            they never will, which is a different statement. Either both are
+            present (Top Flow) or neither is (the archive). */}
+        {row.vol !== null || row.oi !== null ? (
+          <>
+            {' · '}
+            <span className="text-3xs text-faint">VOL</span> <span className="text-fg">{row.vol?.toLocaleString() ?? '—'}</span>
+            {' · '}
+            <span className="text-3xs text-faint">OI</span> <span className="text-fg">{row.oi?.toLocaleString() ?? '—'}</span>
+          </>
+        ) : null}
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5 border-t border-line pt-2">

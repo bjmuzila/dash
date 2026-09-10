@@ -1,6 +1,6 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
-import { Chip, SegGroup } from '@/design/primitives/Controls'
+import { Chip, SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { ContractProbe } from '@/board/topFlow/ContractProbe'
@@ -95,6 +95,81 @@ const FLOORS = [
   { label: '≥$5M', value: 5_000_000 },
 ]
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SAVED FILTERS
+//
+// Per browser, in localStorage. The archive is a surface you come back to with
+// the same question ("index whales, 0DTE, biggest first"), and re-picking six
+// controls every morning is the tax this removes.
+//
+// Two things are deliberately NOT saved:
+//
+//   day         the session drill-down from clicking a bar. It is scoped to a
+//               range you may not be on next time, so restoring it would open
+//               the page filtered to a date the current range does not contain
+//               — an empty table with no visible cause.
+//   selectedId  the open contract probe. The print may not even be in the
+//               filtered set on the next visit.
+//
+// Every field is validated ON ITS OWN against the current option lists. A stored
+// value from an older list falls back to that field's default rather than
+// poisoning the whole object — one retired premium stop must not wipe the other
+// five settings.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SETTINGS_KEY = 'cb-v3-whales:filters'
+
+interface Saved {
+  preset: PresetKey
+  floor: number
+  ticker: string
+  type: '' | 'C' | 'P'
+  action: '' | 'BUY' | 'SELL'
+  moneyness: 'all' | 'otm'
+  sort: 'time' | 'premium'
+  maxDte: number | null
+  showUnreadable: boolean
+}
+
+const DEFAULTS: Saved = {
+  preset: '5d',
+  floor: 1_000_000,
+  ticker: '',
+  type: '',
+  action: '',
+  moneyness: 'all',
+  sort: 'time',
+  maxDte: null,
+  showUnreadable: false,
+}
+
+function loadSettings(): Saved {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    if (!raw) return DEFAULTS
+    const j = JSON.parse(raw) as Partial<Saved>
+    return {
+      preset: PRESETS.some((p) => p.key === j.preset) ? (j.preset as PresetKey) : DEFAULTS.preset,
+      floor: FLOORS.some((f) => f.value === j.floor) ? (j.floor as number) : DEFAULTS.floor,
+      // Capped, uppercased and stripped the same way the input does, so a hand-
+      // edited localStorage cannot put a 400-character ticker in the query.
+      ticker: typeof j.ticker === 'string' ? j.ticker.trim().toUpperCase().slice(0, 12) : DEFAULTS.ticker,
+      type: j.type === 'C' || j.type === 'P' ? j.type : DEFAULTS.type,
+      action: j.action === 'BUY' || j.action === 'SELL' ? j.action : DEFAULTS.action,
+      moneyness: j.moneyness === 'otm' ? 'otm' : DEFAULTS.moneyness,
+      sort: j.sort === 'premium' ? 'premium' : DEFAULTS.sort,
+      // `null` is a real stored value (no cap) and 0 is a real stored value
+      // (same-day only), so this cannot be a truthiness test.
+      maxDte: DTE_STOPS.some((x) => x.value === (j.maxDte ?? null)) ? (j.maxDte ?? null) : DEFAULTS.maxDte,
+      showUnreadable: j.showUnreadable === true,
+    }
+  } catch {
+    // Private mode, blocked site data, or a corrupt entry. Defaults are a
+    // working page; a throw here would be a blank one.
+    return DEFAULTS
+  }
+}
+
 const etYmd = (d: Date) =>
   new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -149,23 +224,39 @@ function SplitBar({ bull, bear, max }: { bull: number; bear: number; max: number
 }
 
 export default function Whales() {
-  const [preset, setPreset] = useState<PresetKey>('5d')
-  const [floor, setFloor] = useState(1_000_000)
-  const [ticker, setTicker] = useState('')
-  const [type, setType] = useState<'' | 'C' | 'P'>('')
-  const [action, setAction] = useState<'' | 'BUY' | 'SELL'>('')
-  const [moneyness, setMoneyness] = useState<'all' | 'otm'>('all')
-  const [maxDte, setMaxDte] = useState<number | null>(null)
+  // Lazy initialiser, not a useEffect that overwrites afterwards: reading
+  // storage on first render means the first fetch already goes out with the
+  // saved filters, instead of one request at the defaults and a second one a
+  // tick later.
+  const [saved] = useState<Saved>(loadSettings)
+  const [preset, setPreset] = useState<PresetKey>(saved.preset)
+  const [floor, setFloor] = useState(saved.floor)
+  const [ticker, setTicker] = useState(saved.ticker)
+  const [type, setType] = useState<'' | 'C' | 'P'>(saved.type)
+  const [action, setAction] = useState<'' | 'BUY' | 'SELL'>(saved.action)
+  const [moneyness, setMoneyness] = useState<'all' | 'otm'>(saved.moneyness)
+  const [maxDte, setMaxDte] = useState<number | null>(saved.maxDte)
   // Unreadable prints — mid fills and the ones that were never classified — are
   // OFF by default, matching the live Top Flow card. Filtered on the SERVER,
   // before the row limit, so 300 rows means 300 readable prints.
-  const [showUnreadable, setShowUnreadable] = useState(false)
-  const [sort, setSort] = useState<'time' | 'premium'>('time')
+  const [showUnreadable, setShowUnreadable] = useState(saved.showUnreadable)
+  const [sort, setSort] = useState<'time' | 'premium'>(saved.sort)
   // Clicking a bar in the session chart narrows the table to that day WITHOUT
   // touching the range — the tiles and the leaderboards stay on the range you
   // chose, which is what makes the day readable AS PART of it.
   const [day, setDay] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({ preset, floor, ticker, type, action, moneyness, sort, maxDte, showUnreadable }),
+      )
+    } catch {
+      /* best-effort — the in-memory choice still drives this session */
+    }
+  }, [preset, floor, ticker, type, action, moneyness, sort, maxDte, showUnreadable])
 
   const span = PRESETS.find((p) => p.key === preset) ?? PRESETS[1]!
   const to = etYmd(new Date())
@@ -218,40 +309,8 @@ export default function Whales() {
     [d],
   )
 
-  /** Rows as they are on screen, in the order they are on screen. Exporting the
-   *  whole range would be a different (and much larger) file than the one the
-   *  button appears to be offering. */
-  const exportCsv = () => {
-    const head = ['date', 'time', 'ticker', 'strike', 'type', 'expiry', 'dte', 'side', 'action', 'bias', 'size', 'price', 'premium']
-    const lines = [head.join(',')]
-    for (const r of rows) {
-      lines.push([
-        r.sessionDate, fmtTime(r.ts), r.underlying ?? '', fmtStrike(r.strike), r.type ?? '', r.expiry ?? '',
-        r.dte ?? '', r.side ?? '', r.action ?? '', biasOf(r) ?? '', r.size ?? '', r.price ?? '', r.premium,
-      ].join(','))
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = `whales_${from}_${to}.csv`
-    a.click()
-    URL.revokeObjectURL(a.href)
-  }
-
   return (
-    <Page
-      title="Whale Archive"
-      actions={
-        <button
-          type="button"
-          onClick={exportCsv}
-          disabled={!rows.length}
-          className="rounded-sm border border-line px-2.5 py-1 text-xs font-semibold text-muted transition-colors hover:text-fg disabled:opacity-40"
-        >
-          EXPORT CSV
-        </button>
-      }
-    >
+    <Page title="Whale Archive">
       <div className="-mt-1 text-sm text-faint">
         Every option print of {money(d?.whaleFloor ?? 1_000_000)}+ premium, kept permanently. Whole market.
         {s ? ` · ${num(s.n)} prints across ${num(s.sessions)} sessions · ${money(s.total)} total premium` : ''}
@@ -271,10 +330,22 @@ export default function Whales() {
         ) : null}
       </div>
 
-      {/* ── filters ───────────────────────────────────────────────────────── */}
+      {/* ── filters ───────────────────────────────────────────────────────────
+          FOLDED, not spelled out. Unfolded this row was nine segmented groups
+          and twenty-four buttons, none of them labelled — two different buttons
+          read `ALL` (one a range, one a moneyness) four pixels apart. Each group
+          that has a real default now folds to a labelled pill showing its
+          current value, and a pill only wears the accent when it is OFF that
+          default. So "what is narrowing this list" is a colour scan instead of
+          a nine-group read.
+
+          Range and sort stay UNFOLDED: their options are peers, not a default
+          and four deviations, so there is nothing to colour and folding them
+          would cost a click to buy nothing.
+      ─────────────────────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2">
         <SegGroup<PresetKey>
-          title="Range"
+          title="How far back the archive is read"
           options={PRESETS.map((p) => ({ label: p.label, value: p.key }))}
           value={preset}
           onChange={(v) => { setPreset(v); setDay(null) }}
@@ -282,54 +353,82 @@ export default function Whales() {
         <input
           value={ticker}
           onChange={(e) => setTicker(e.target.value)}
-          placeholder="ticker"
-          className="tabular w-24 rounded-sm border border-line bg-bg px-2 py-0.5 text-xs uppercase text-fg outline-none placeholder:text-faint focus:border-accent"
+          placeholder="TICKER"
+          aria-label="Filter to one underlying"
+          className="tabular w-24 rounded-sm border border-line bg-bg px-2 py-0.5 text-xs uppercase text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
         />
-        <SegGroup<string>
-          title="Minimum premium"
+
+        <span aria-hidden className="h-4 w-px shrink-0 bg-line" />
+
+        <SegMenu<string>
+          label="FLOOR"
+          title="Hide prints below this dollar premium. $1M is the archive's own floor — nothing smaller is kept"
           options={FLOORS.map((f) => ({ label: f.label, value: String(f.value) }))}
           value={String(floor)}
+          defaultValue={String(DEFAULTS.floor)}
           onChange={(v) => setFloor(Number(v))}
         />
-        <SegGroup<'all' | 'otm'>
-          title="Moneyness at print time"
-          options={[{ label: 'ALL', value: 'all' }, { label: 'OTM', value: 'otm' }]}
+        <SegMenu<string>
+          label="STRIKE"
+          title="Moneyness AT PRINT TIME — a call bought 40 points OTM at 10am was an OTM buy, whatever the index did by 3pm"
+          options={[
+            { label: 'ALL', value: 'all', title: 'Every strike, in and out of the money' },
+            { label: 'OTM', value: 'otm', title: 'Only strikes that were out of the money when they printed' },
+          ]}
           value={moneyness}
-          onChange={setMoneyness}
+          defaultValue={DEFAULTS.moneyness}
+          onChange={(v) => setMoneyness(v as 'all' | 'otm')}
         />
         {/* DTE AT PRINT TIME, not days from now — the archive is historical, so
             "0DTE" means it was a same-day expiry when it printed, which is the
             thing about the trade. Prints with no readable DTE are dropped by
             this filter rather than let through; a row that cannot answer the
-            question does not belong in a filtered list. Values go over the wire
-            as strings because SegGroup is keyed on strings. */}
-        <SegGroup<string>
+            question does not belong in a filtered list. Values cross as strings
+            because the control is keyed on strings, and 'null' is the no-cap
+            option — which is why the read back is an explicit string test. */}
+        <SegMenu<string>
+          label="DTE"
           title="Days to expiry AT PRINT TIME"
-          options={DTE_STOPS.map((d) => ({ label: d.label, value: String(d.value), title: d.title }))}
+          options={DTE_STOPS.map((x) => ({ label: x.label, value: String(x.value), title: x.title }))}
           value={String(maxDte)}
+          defaultValue={String(DEFAULTS.maxDte)}
           onChange={(v) => setMaxDte(v === 'null' ? null : Number(v))}
         />
-        <SegGroup<string>
+        <SegMenu<string>
+          label="C/P"
           title="Calls, puts or both"
-          options={[{ label: 'BOTH', value: '' }, { label: 'CALLS', value: 'C' }, { label: 'PUTS', value: 'P' }]}
+          options={[
+            { label: 'BOTH', value: '' },
+            { label: 'CALLS', value: 'C' },
+            { label: 'PUTS', value: 'P' },
+          ]}
           value={type}
+          defaultValue={DEFAULTS.type}
           onChange={(v) => setType(v as '' | 'C' | 'P')}
         />
-        <SegGroup<string>
-          title="Which side of the quote it filled on. This is the raw fill, not the direction — a SELL on a put is a bullish trade"
-          options={[{ label: 'BUY+SELL', value: '' }, { label: 'BUY', value: 'BUY' }, { label: 'SELL', value: 'SELL' }]}
+        <SegMenu<string>
+          label="FILL"
+          title="Which side of the quote it filled on. This is the raw fill, NOT the direction — a SELL on a put is a bullish trade"
+          options={[
+            { label: 'EITHER', value: '' },
+            { label: 'BUY', value: 'BUY' },
+            { label: 'SELL', value: 'SELL' },
+          ]}
           value={action}
+          defaultValue={DEFAULTS.action}
           onChange={(v) => setAction(v as '' | 'BUY' | 'SELL')}
         />
+
+        <span aria-hidden className="h-4 w-px shrink-0 bg-line" />
+
         <SegGroup<'time' | 'premium'>
           title="Row order"
           options={[{ label: 'NEWEST', value: 'time' }, { label: 'BIGGEST', value: 'premium' }]}
           value={sort}
           onChange={setSort}
         />
-        {/* In the filter row rather than behind a cog: this is the one control
-            that changes what the tiles MEAN, and a switch that changes the
-            meaning of the numbers above it does not belong two clicks deep. */}
+        {/* Stays a visible switch rather than a sixth pill: it changes what the
+            tiles MEAN, not just which rows are listed. */}
         <Chip
           label="SHOW UNREADABLE"
           on={showUnreadable}
@@ -404,11 +503,7 @@ export default function Whales() {
                       <th className="px-2 py-2 text-right font-bold">Size</th>
                       <th className="px-2 py-2 text-right font-bold">Price</th>
                       <th className="px-2 py-2 text-right font-bold">Premium</th>
-                      <th
-                        className="px-2 py-2 text-right font-bold"
-                        title="Volume and OI mean 'what is this contract doing now'. There is no now for an archived print, so they are not stored — see the live Top Flow card for a print from today"
-                      >Vol</th>
-                      <th className="px-2 py-2 text-right font-bold">OI</th>
+
                     </tr>
                   </thead>
                   <tbody>
@@ -432,7 +527,7 @@ export default function Whales() {
                         <Fragment key={r.id}>
                           {newDay && (
                             <tr>
-                              <td colSpan={12} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
+                              <td colSpan={10} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
                                 {fmtDayHeader(r.sessionDate)}
                                 {agg ? ` · ${num(agg.n)} prints · ${money(agg.total)}` : ''}
                               </td>
@@ -485,8 +580,7 @@ export default function Whales() {
                             <td className={['tabular px-2 py-1.5 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
                               {money(r.premium)}
                             </td>
-                            <td className="tabular px-2 py-1.5 text-right text-muted">{num(r.vol)}</td>
-                            <td className="tabular px-2 py-1.5 text-right text-muted">{num(r.oi)}</td>
+
                           </tr>
                         </Fragment>
                       )

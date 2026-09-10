@@ -158,6 +158,8 @@ export function SegMenu<T extends string>({
   title,
   size = 'sm',
   align = 'right',
+  label,
+  defaultValue,
 }: {
   size?: ControlSize
   options: Array<{ label: string; value: T; title?: string; disabled?: boolean; activeColor?: string }>
@@ -165,21 +167,49 @@ export function SegMenu<T extends string>({
   onChange: (v: T) => void
   title?: string
   align?: 'left' | 'right'
+  /**
+   * A standing name for the group, shown dimmed before the value: `DTE ≤90 ▾`.
+   *
+   * Folding a group to its value solves width but costs identity — a lone `≤90`
+   * in a row of eight folded pills does not say what it caps, and `ALL` appears
+   * in three different groups meaning three different things. With the label the
+   * pill reads as a sentence and the row can be scanned instead of decoded.
+   */
+  label?: string
+  /**
+   * The value that means "not filtering". When given, a pill whose value is
+   * anything else wears the accent.
+   *
+   * This is the real reason to fold: unfolded, "what is narrowing this list"
+   * means reading every group; folded WITH this, it is a colour scan. Omit it
+   * for a group whose options are peers (RTH/ETH, 5m/15m) — none of those is a
+   * default and colouring one would be a lie.
+   */
+  defaultValue?: T
 }) {
   const [open, setOpen] = useState(false)
   const current = options.find((o) => o.value === value)
+  // `undefined` means the caller did not opt in — NOT that the default is
+  // undefined, which is why this is an explicit check and not a truthiness test
+  // (an empty string is a legitimate "no filter" value).
+  const off = defaultValue !== undefined && value !== defaultValue
   return (
     <div className="relative shrink-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         title={title}
+        aria-expanded={open}
         className={[
           CHIP_SIZE[size],
-          'flex items-center gap-1 rounded-sm border border-line font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg',
+          'flex items-center gap-1 rounded-sm border font-semibold tracking-wide hover:bg-raised hover:text-fg',
+          // With both new props omitted this resolves to the same utilities the
+          // trigger has always carried, so every existing caller is unmoved.
+          off ? 'border-accent bg-raised text-fg' : 'border-line text-muted',
         ].join(' ')}
       >
-        {current?.label ?? '—'}
+        {label ? <span className="text-3xs tracking-[0.1em] opacity-60">{label}</span> : null}
+        <span className={off ? 'text-accent' : undefined}>{current?.label ?? '—'}</span>
         <span className="text-3xs opacity-50">▾</span>
       </button>
       <Popover open={open} onClose={() => setOpen(false)} align={align}>

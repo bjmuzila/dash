@@ -14509,7 +14509,9 @@ try {
     // ── vol / OI ARE NOT IN THE ARCHIVE ──────────────────────────────────────
     // They are joined at SERVE time on the live card because they mean "what is
     // this contract doing NOW". There is no now for a print from March, so they
-    // come back null here rather than frozen at whatever they were.
+    // come back null here rather than frozen at whatever they were, and the
+    // page does not show them: two columns that can never answer for the row
+    // they sit on are worse than two columns that are not there.
     // ─────────────────────────────────────────────────────────────────────────
 
     /** The table's hard cap for one response. The page asks for 300. */
@@ -14646,7 +14648,12 @@ try {
         bid: p.bid ?? null,
         ask: p.ask ?? null,
         quoteAgeMs: p.quoteAgeMs ?? null,
-        // Live-only. See the header note.
+        // Live-only, and always null here. They mean "what is this contract
+        // doing NOW", and there is no now for an archived print. The whales
+        // table no longer carries the columns at all and ContractProbe hides
+        // the pair when both are null, so nothing renders a permanent dash —
+        // but the keys stay, because TopFlowRow requires them and a row from
+        // this route has to be the same shape as one from the live card.
         vol: null,
         oi: null,
         // Formatted by to_char in SQL, never from a JS Date: node-postgres
