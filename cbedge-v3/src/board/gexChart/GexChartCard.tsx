@@ -1,16 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
-import { Chip, SegGroup } from '@/design/primitives/Controls'
+import { Chip, SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
 import { watchFrame } from '@/data/hooks'
 import { SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
 import { chainGexUrl, chainToGex, EMPTY_CHAIN_GEX } from '../chainGex'
 import { EMPTY_MODEL, mountGexChart, type GexChartHandle, type GexChartModel } from './gexChartRender'
-import { BASIS_LABEL, flowSupported, fmtGexShort, totalNet } from './values'
-import { loadSettings, saveSettings, type GexBasis, type GexChartSettings } from './settings'
-import { StatCards } from './StatCards'
+import { BASIS_LABEL, SERIES_LABEL, flowSupported, fmtGexShort, totalDex, totalNet } from './values'
+import {
+  loadSettings,
+  metricOfSeries,
+  saveSettings,
+  scopeOfSeries,
+  type GexBasis,
+  type GexChartSettings,
+  type GexSeries,
+} from './settings'
+import { DeltaStatCards, StatCards } from './StatCards'
+import type { GexLevelsRow, GexMultiLadder } from '@/pages/scanner/gexLevels'
+import { GEX_MULTI_POLL_MS, multiDeltaAllZero, scopeNoteEx0dte } from '@/pages/scanner/gexLevels'
+import { loadGexByStrikeMulti } from '@/pages/scanner/gexLevelsData'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Chart — v2's home-page chart, as a board card.
@@ -26,10 +37,24 @@ import { StatCards } from './StatCards'
 // listeners. A pan is sixty pointer events a second; none of them reach React.
 //
 // ── The controls ─────────────────────────────────────────────────────────────
+//   SERIES  which LADDER the bars are — γ or Δ, today's expiry or the book
 //   BASIS   OI+VOL · VOL · FLOW — which contracts the bars are priced on
 //   SPLIT   NET · C/P          — one net bar, or the call and put legs
 //   DEX     the net-delta overlay line, on its own normalised scale
 //   CARDS   the stat row above the chart — all ten, or none
+//
+// ── The three added series ───────────────────────────────────────────────────
+// γ EX-0DTE, Δ 0DTE and Δ EX-0DTE are the scanner's GEX Levels cards 8, 10 and
+// 11, drawn through THIS renderer rather than their own small SVGs. Same rows —
+// the ex-0DTE pair reads /proxy/gex-by-strike-multi through
+// pages/scanner/gexLevelsData, the same loader and the same 60s cadence the
+// scanner tab uses — so the board and the tab cannot disagree about the book.
+//
+// SPX ONLY, and disabled rather than hidden off it: the multi-expiry sweep is
+// server-side per symbol and the delta legs only exist on the socket feed and
+// that endpoint. See GexSeries in settings.ts. The stat row follows: a delta
+// ladder gets DeltaStatCards, because seven of the gamma row's ten tiles are
+// gamma facts with no delta equivalent.
 //
 // All four are chips because each is one click and each changes what the BARS
 // are. CARDS used to be a cog holding ten individual switches; the row shares
@@ -81,6 +106,57 @@ const EMPTY_ROWS: GexRow[] = []
  */
 const TILE_SPOT_MS = 1000
 
+/**
+ * The slim ladder, widened to the row shape the chart and the tiles read.
+ *
+ * /proxy/gex-by-strike-multi ships five fields per strike — everything a NET
+ * ladder needs — and the rest of `GexRow` is filled with zeros. That is not a
+ * loss: the split, the flow basis and the CB badge all test the rows for the
+ * legs they need and refuse rather than drawing zeros (see `sideLegsSupported`
+ * and `flowSupported` in values.ts), so a zero here can never be mistaken for a
+ * measurement.
+ */
+function widenMultiRows(rows: GexLevelsRow[]): GexRow[] {
+  return rows.map((r) => ({
+    strike: r.strike,
+    netGEX: r.netGEX,
+    netVolGEX: r.netVolGEX,
+    callGEX: r.callGEX,
+    putGEX: r.putGEX,
+    callOI: r.callOI,
+    putOI: r.putOI,
+    callVolume: 0,
+    putVolume: 0,
+    callGamma: 0,
+    putGamma: 0,
+    dte: 0,
+    netDEX: r.netDEX,
+    volNetDEX: r.volNetDEX ?? 0,
+  }))
+}
+
+/** What the card keeps of /proxy/gex-by-strike-multi — the ex-0DTE half of it. */
+interface MultiState {
+  ladder: GexMultiLadder | null
+  /** The sweep's own spot. Used only until a live tick arrives. */
+  spot: number
+  /** Every listed expiration INCLUDING 0DTE — `scopeNoteEx0dte` subtracts one. */
+  expiryCount: number
+  loading: boolean
+  err: string | null
+}
+
+const EMPTY_MULTI: MultiState = { ladder: null, spot: 0, expiryCount: 0, loading: false, err: null }
+
+/** What each series answers, for the switch's tooltips. */
+const SERIES_TITLE: Record<GexSeries, string> = {
+  'gamma-0dte': 'Dealer gamma at each strike on the expiry the feed is streaming — the live pin',
+  'gamma-ex0dte':
+    'Dealer gamma summed across every listed expiration EXCEPT 0DTE — the standing book behind today’s pin. Its own flip and its own walls, which are not meant to match the 0DTE ones',
+  'delta-0dte': 'Dealer DELTA at each strike on today’s chain — which way delta leans, and where it turns',
+  'delta-ex0dte': 'Dealer DELTA across the standing book, 0DTE excluded',
+}
+
 export interface GexChartCardProps {
   /**
    * The stripped-down card: SPX only, OI+VOL / VOL only, one net bar, no DEX
@@ -119,11 +195,32 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
         // show it on, and a selected value with no control is the thing the
         // card's own comment calls a control that lies.
         basis: stored.basis === 'flow' ? 'oi-vol' : stored.basis,
+        // Same rule for the series switch: the phone card is the live 0DTE
+        // gamma ladder, and the other three each need either a board sweep or
+        // a second stat row on a 390px screen.
+        series: 'gamma-0dte',
         split: 'net',
         showDex: false,
         cardsOn: false,
       }
     : stored
+
+  /**
+   * WHAT IS ACTUALLY DRAWN, which is not always what is stored.
+   *
+   * The three added series are SPX-only (see GexSeries). Off the socket symbol
+   * the stored choice is kept — it comes back intact the moment the board is
+   * back on SPX — but the card draws the live gamma ladder and the switch says
+   * why, which is the same treatment FLOW gets on a chain-derived ticker.
+   */
+  const seriesOff = !onSocket
+  const series: GexSeries = seriesOff ? 'gamma-0dte' : settings.series
+  const metric = metricOfSeries(series)
+  const scope = scopeOfSeries(series)
+  const wantMulti = scope === 'ex0dte'
+  const barsAreDex = metric === 'dex'
+  /** Neither a delta ladder nor a server-summed one has per-side legs to draw. */
+  const splitOff = barsAreDex || wantMulti
 
   const patch = useCallback((p: Partial<GexChartSettings>) => {
     setSettings((prev: GexChartSettings) => {
@@ -165,8 +262,87 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
     expiry: '',
   })
 
+  // ── The whole-board ladder, for the two ex-0DTE series ─────────────────────
+  // Its own request, at the endpoint's own cadence: /proxy/gex-by-strike-multi
+  // is one upstream fetch PER EXPIRATION and the server caches the body ~60s,
+  // so it does not ride the socket and it does not ride the 15s chain poll.
+  //
+  // Fetched ONLY while an ex-0DTE series is selected. A board sweep every
+  // minute for a series nobody has picked is the cost this gate exists for; the
+  // effect fires immediately on the way in, so picking the series is not a
+  // 60-second wait.
+  const [multi, setMulti] = useState<MultiState>(EMPTY_MULTI)
+  const multiFlip = multi.ladder?.gexFlip ?? null
+  /**
+   * Memoised on the LADDER, not on `multi` — a poll that returns an unchanged
+   * body still produces a new state object, and `push` bails out of a re-render
+   * by reference-comparing the rows it is handed.
+   */
+  const multiRows = useMemo<GexRow[]>(
+    () => (multi.ladder?.rows.length ? widenMultiRows(multi.ladder.rows) : EMPTY_ROWS),
+    [multi.ladder],
+  )
+
+  useEffect(() => {
+    if (!wantMulti || !onSocket) {
+      // Deliberately NOT cleared: coming back to the series should show the
+      // last good book under the refreshing state rather than an empty pane,
+      // and a stale minute on a standing book is not a stale minute on a tick.
+      return
+    }
+    let alive = true
+    const run = () => {
+      setMulti((prev) => ({ ...prev, loading: true }))
+      loadGexByStrikeMulti(SOCKET_SYMBOL)
+        .then((payload) => {
+          if (!alive) return
+          setMulti({
+            ladder: payload.ex0dte,
+            spot: payload.spot,
+            expiryCount: payload.expiryCount,
+            loading: false,
+            err: null,
+          })
+        })
+        .catch((e: unknown) => {
+          if (!alive) return
+          setMulti((prev) => ({
+            ...prev,
+            loading: false,
+            err: e instanceof Error ? e.message : String(e),
+          }))
+        })
+    }
+    run()
+    const id = setInterval(() => {
+      // Same rule useQuery's pollMs follows: a hidden tab does not sweep.
+      if (document.visibilityState !== 'hidden') run()
+    }, GEX_MULTI_POLL_MS)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') run()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      alive = false
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [wantMulti, onSocket])
+
   const handleRef = useRef<GexChartHandle | null>(null)
   const modelRef = useRef<GexChartModel>(EMPTY_MODEL)
+  /**
+   * Which source the pushes should be coming from, readable from inside the
+   * socket watchers without making them re-subscribe on a series change.
+   *
+   * A ref rather than a dependency because the `spot` watcher must NOT tear
+   * down and re-subscribe every time the series switch moves — resubscribing a
+   * 10Hz topic to change which array it reads is work for nothing.
+   */
+  const wantMultiRef = useRef(wantMulti)
+  wantMultiRef.current = wantMulti
+  const multiRowsRef = useRef<GexRow[]>(EMPTY_ROWS)
+  multiRowsRef.current = multiRows
 
   // ── Offscreen cards do not paint ────────────────────────────────────────────
   // `spot` is a 10Hz topic and every tick re-pushes the ladder, so an unguarded
@@ -196,8 +372,12 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
       basis: settings.basis,
       split: settings.split,
       showDex: settings.showDex,
+      series,
+      // Gamma ex-0DTE is the one ladder that arrives WITH a flip; see the note
+      // on `flip` in GexChartModel for why it is not derived here.
+      flip: wantMulti && !barsAreDex ? multiFlip : null,
     }),
-    [settings.basis, settings.split, settings.showDex],
+    [settings.basis, settings.split, settings.showDex, series, wantMulti, barsAreDex, multiFlip],
   )
   const drawOptsRef = useRef(drawOpts)
   drawOptsRef.current = drawOpts
@@ -269,6 +449,12 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
       const d: GexData | undefined = frame?.data
       if (!d) return
       socketRef.current = { rows: d.gexRows ?? [], expiry: d.expiry ?? '' }
+      // The SUBSCRIPTION stays live on an ex-0DTE series — only the push is
+      // skipped. Unsubscribing would narrow the socket's derived scope, and
+      // switching back would then sit on an empty chart until the next ladder
+      // CHANGE, which on a quiet book can be minutes: server-v2 dedupes the
+      // `gex` frame, so "no news" is silence, not a repeat.
+      if (wantMultiRef.current) return
       push(socketRef.current.rows, spotRef.current, symbol, socketRef.current.expiry)
     })
   }, [onSocket, push, symbol])
@@ -282,13 +468,16 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
       const px = frame?.data.spot
       if (typeof px !== 'number' || !(px > 0)) return
       spotRef.current = px
-      const s = socketRef.current
-      if (!s.rows.length) return
+      // Whichever ladder is on screen gets the live tick. The ex-0DTE sweep
+      // carries a spot of its own, but it is up to a minute old — the spot LINE
+      // has to be the live print either way.
+      const rows = wantMultiRef.current ? multiRowsRef.current : socketRef.current.rows
+      if (!rows.length) return
       // Chart every tick, tiles at most once a second. See TILE_SPOT_MS.
       const now = Date.now()
       const syncTiles = now - tileSyncRef.current >= TILE_SPOT_MS
       if (syncTiles) tileSyncRef.current = now
-      push(s.rows, px, symbol, s.expiry, syncTiles)
+      push(rows, px, symbol, wantMultiRef.current ? '' : socketRef.current.expiry, syncTiles)
     })
   }, [onSocket, push, symbol])
 
@@ -300,6 +489,18 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
     if (onSocket) return
     push(chain.rows, chain.spot, symbol, chain.expiry)
   }, [onSocket, chain, push, symbol])
+
+  // ── The ex-0DTE ladder reaching the chart ─────────────────────────────────
+  // Also the SERIES-CHANGE handler for both directions: switching to an
+  // ex-0DTE series repaints from `multi` here, and switching back repaints from
+  // the socket's last frame rather than waiting for the next one.
+  useEffect(() => {
+    if (!wantMulti) {
+      if (onSocket) push(socketRef.current.rows, spotRef.current, symbol, socketRef.current.expiry)
+      return
+    }
+    push(multiRows, spotRef.current > 0 ? spotRef.current : multi.spot, symbol, '')
+  }, [wantMulti, multiRows, multi.spot, onSocket, push, symbol])
 
   // A symbol change must not leave the previous ticker's ladder on screen while
   // the next source warms up.
@@ -325,11 +526,38 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
   // Resolved once, here, and handed to the tiles: FLOW is only really flow when
   // the rows carry the tape-derived leg, and the chart, the header total and
   // the ten cards all have to agree about that or the basis half-applies.
-  const flowActive = settings.basis === 'flow' && flowHasData
+  // FLOW is a gamma basis: it prices bars against the dealer's classified tape
+  // inventory, and there is no flowDEX. So on a delta ladder it never applies.
+  const flowActive = !barsAreDex && settings.basis === 'flow' && flowHasData
   const total = useMemo(
-    () => (view.rows.length ? totalNet(view.rows, settings.basis, flowActive) : null),
-    [view.rows, settings.basis, flowActive],
+    () =>
+      !view.rows.length
+        ? null
+        : barsAreDex
+          ? totalDex(view.rows, settings.basis)
+          : totalNet(view.rows, settings.basis, flowActive),
+    [view.rows, settings.basis, flowActive, barsAreDex],
   )
+
+  /** "11 expirations, 0DTE excluded" — the scanner's own wording. */
+  const scopeNote = wantMulti ? scopeNoteEx0dte(multi.expiryCount) : view.expiry
+  /**
+   * A server-v2 predating the slimRows delta change ships the ex-0DTE rows with
+   * both delta legs zeroed, and a flat line pinned to the axis reads as
+   * "delta is perfectly balanced" rather than "there is no delta here".
+   */
+  const multiDeltaMissing = wantMulti && barsAreDex && multiDeltaAllZero(multi.ladder)
+
+  const seriesOptions: Array<{ label: string; value: GexSeries; title?: string; disabled?: boolean }> = (
+    ['gamma-0dte', 'gamma-ex0dte', 'delta-0dte', 'delta-ex0dte'] as const
+  ).map((v) => ({
+    label: SERIES_LABEL[v],
+    value: v,
+    disabled: seriesOff && v !== 'gamma-0dte',
+    title: seriesOff
+      ? `${SERIES_LABEL[v]} is ${SOCKET_SYMBOL}-only — the board sweep and the delta legs exist for the symbol the socket streams, not for ${symbol}`
+      : SERIES_TITLE[v],
+  }))
 
   /**
    * The basis buttons. Built here rather than inline because the FLOW entry is
@@ -345,7 +573,7 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
     },
     { label: 'VOL', value: 'vol-only', title: 'Today’s volume alone, without the standing book behind it' },
   ]
-  if (!simple) {
+  if (!simple && !barsAreDex) {
     basisOptions.push({
       label: 'FLOW',
       value: 'flow',
@@ -371,7 +599,7 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
       // The expiry and the basis, for the caption under a CopyShot — the shot
       // drops this card's header, and those two are the whole difference between
       // one ladder and another that looks identical. See shell/snapshot.ts.
-      data-capture-meta={[symbol, view.expiry, BASIS_LABEL[settings.basis]]
+      data-capture-meta={[symbol, SERIES_LABEL[series], scopeNote, BASIS_LABEL[settings.basis]]
         .filter(Boolean)
         .join(' · ')}
     >
@@ -383,14 +611,25 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
             pictures. Blank until a source has said. */}
         <span
           title={
-            onSocket
-              ? 'The expiry the WebSocket is streaming'
-              : `The front expiry of ${symbol}'s option chain — the one this ladder is built from`
+            wantMulti
+              ? 'Every listed expiration except the 0DTE one, summed per strike — there is no single expiry to name'
+              : onSocket
+                ? 'The expiry the WebSocket is streaming'
+                : `The front expiry of ${symbol}'s option chain — the one this ladder is built from`
           }
           className="tabular shrink-0 rounded-sm border border-line px-1.5 py-0.5 font-mono text-2xs font-bold text-muted"
         >
-          {view.expiry || '—'}
+          {scopeNote || '—'}
         </span>
+
+        {!simple && (
+          <SegMenu
+            title="Which ladder the bars are — gamma or delta, today’s expiry or the standing book"
+            options={seriesOptions}
+            value={series}
+            onChange={(v) => patch({ series: v })}
+          />
+        )}
 
         <SegGroup
           title="Which contracts the bars are priced on"
@@ -399,19 +638,30 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
           onChange={(v) => patch({ basis: v })}
         />
 
+        {/* Both of these are GAMMA controls, and both are dimmed rather than
+            dropped on a delta ladder — a toolbar whose buttons come and go is a
+            toolbar you cannot learn. The split has no per-side delta field to
+            draw (netDEX is already net of both), and the DEX overlay would be
+            the bars a second time on a second scale. */}
         {!simple && (
           <SegGroup
-            title="One net bar per strike, or the call leg up and the put leg down"
+            title={
+              barsAreDex
+                ? 'The call/put split is gamma only — netDEX is already net of both sides, and there is no per-side delta on the wire'
+                : wantMulti
+                  ? 'The board sweep ships one net figure per strike — there are no call/put legs on it to split'
+                  : 'One net bar per strike, or the call leg up and the put leg down'
+            }
             options={[
-              { label: 'NET', value: 'net' },
-              { label: 'C/P', value: 'call-put' },
+              { label: 'NET', value: 'net', disabled: splitOff },
+              { label: 'C/P', value: 'call-put', disabled: splitOff },
             ]}
             value={settings.split}
             onChange={(v) => patch({ split: v })}
           />
         )}
 
-        {!simple && (
+        {!simple && !barsAreDex && (
           <Chip
             label="DEX"
             on={settings.showDex}
@@ -443,7 +693,9 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
           </span>
         )}
         <span
-          title={`Every strike on the ladder summed, on the ${BASIS_LABEL[flowActive ? 'flow' : settings.basis]} basis`}
+          title={`Every strike on the ladder summed, on the ${BASIS_LABEL[flowActive ? 'flow' : settings.basis]} basis${
+            barsAreDex ? ' — net DELTA dollars, summed here because the payload carries no delta total' : ''
+          }`}
           className={[
             'tabular shrink-0 font-mono text-xs font-extrabold',
             total == null ? 'text-muted opacity-50' : total >= 0 ? 'text-gexbar-pos' : 'text-gexbar-neg',
@@ -453,17 +705,36 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
         </span>
       </CardToolbar>
 
-      {settings.cardsOn && (
-        <StatCards rows={view.rows} spot={view.spot} symbol={symbol} basis={settings.basis} flowActive={flowActive} />
-      )}
+      {settings.cardsOn &&
+        (barsAreDex ? (
+          <DeltaStatCards rows={view.rows} spot={view.spot} basis={settings.basis} scopeNote={scopeNote} />
+        ) : (
+          <StatCards rows={view.rows} spot={view.spot} symbol={symbol} basis={settings.basis} flowActive={flowActive} />
+        ))}
 
       <div className="relative min-h-0 flex-1">
         <ChartFrame onMount={onMount} onResize={onResize} onVisibility={onVisibility} className="absolute inset-0" />
-        {total == null && (
-          <span className="pointer-events-none absolute left-1 top-1 text-2xs text-muted opacity-50">
-            {onSocket ? 'Waiting for the feed…' : `Loading ${symbol}'s chain…`}
+        {/* One line, top-left, for whichever of the four "there is nothing to
+            draw" states applies. The sweep's error wins over "loading" — a
+            failed request that goes on saying "sweeping the board" is the
+            state worth naming out loud. */}
+        {multi.err && wantMulti ? (
+          <span className="pointer-events-none absolute left-1 right-1 top-1 truncate text-2xs text-down opacity-80">
+            Board sweep failed — {multi.err}
           </span>
-        )}
+        ) : multiDeltaMissing ? (
+          <span className="pointer-events-none absolute left-1 right-1 top-1 truncate text-2xs text-down opacity-80">
+            Net delta is zero at every strike — server-v2 predates the netDEX legs on this endpoint
+          </span>
+        ) : total == null ? (
+          <span className="pointer-events-none absolute left-1 top-1 text-2xs text-muted opacity-50">
+            {wantMulti
+              ? 'Sweeping the board…'
+              : onSocket
+                ? 'Waiting for the feed…'
+                : `Loading ${symbol}'s chain…`}
+          </span>
+        ) : null}
       </div>
     </div>
   )

@@ -4,7 +4,7 @@ import { isSocketSymbol } from '@/data/symbol'
 import type { GexRow } from '@/contract/frames'
 import { computeMaxPain, fmtPx, strikeDp } from '../keyLevels/levelsMath'
 import type { GexBasis, StatKey } from './settings'
-import { LEVEL_BASIS_LABEL, fmtGexShort, levelsOf, posGexPct, totalNet } from './values'
+import { LEVEL_BASIS_LABEL, dexOf, fmtGexShort, levelsOf, posGexPct, totalNet } from './values'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The ten cards, ported from v2's home GEX toolbar.
@@ -79,6 +79,9 @@ interface Tile {
 }
 
 const MUTED = '--color-flat'
+
+/** U+2014. One spelling, so a missing figure looks the same in both rows. */
+const EM_DASH = '—'
 
 export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsProps) {
   const onSocket = isSocketSymbol(symbol)
@@ -245,6 +248,136 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
             className="tabular truncate font-mono text-sm font-extrabold"
             style={{ color: `var(${t.colour})` }}
           >
+            {t.value}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DeltaStatCards — the row above a DELTA ladder.
+//
+// A separate component rather than a branch inside StatCards, because seven of
+// those ten tiles are gamma facts and there is nothing to substitute for them:
+// a Call Wall is where the book has put GAMMA, the CB is the biggest gamma
+// strike, +GEX % is a gamma ratio. Printing a delta number under a gamma label
+// is the exact class of bug the note at the top of StatCards exists to prevent.
+//
+// So the delta row answers the delta questions instead — how much, which way,
+// where it turns and where it is concentrated — in the same tile shape and the
+// same order of magnitude, so switching series moves the numbers without moving
+// the layout.
+//
+// Nothing here fetches. The EM band and the Bull/Bear split are the two tiles
+// above that come from elsewhere, and neither is a delta fact.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface DeltaStatCardsProps {
+  rows: GexRow[]
+  spot: number
+  basis: GexBasis
+  /** e.g. "11 expirations, 0DTE excluded" — printed on the Scope tile. */
+  scopeNote: string
+}
+
+export function DeltaStatCards({ rows, spot, basis, scopeNote }: DeltaStatCardsProps) {
+  const kDp = useMemo(() => strikeDp(rows, spot), [rows, spot])
+
+  const tiles = useMemo(() => {
+    let total = 0
+    let long = 0
+    let short = 0
+    let peak: number | null = null
+    let peakAbs = 0
+    let zero: number | null = null
+    let prevSign = 0
+    // The rows arrive ascending by strike from every producer; sorted here
+    // anyway because the ZERO CROSSING is the one figure that would be silently
+    // wrong on an unsorted ladder rather than merely unordered.
+    const sorted = rows.length ? rows.slice().sort((a, b) => a.strike - b.strike) : []
+    for (const r of sorted) {
+      const v = dexOf(r, basis)
+      total += v
+      if (v > 0) long += v
+      else short += -v
+      if (Math.abs(v) > peakAbs) {
+        peakAbs = Math.abs(v)
+        peak = r.strike
+      }
+      const sign = v > 0 ? 1 : v < 0 ? -1 : 0
+      if (zero == null && sign !== 0 && prevSign !== 0 && sign !== prevSign) zero = r.strike
+      if (sign !== 0) prevSign = sign
+    }
+    const px = (v: number | null) => (v == null ? EM_DASH : fmtPx(v, kDp))
+    const empty = sorted.length === 0
+    return [
+      {
+        key: 'netDex',
+        label: 'Net Δ$',
+        value: empty ? EM_DASH : fmtGexShort(total),
+        colour: empty ? MUTED : total >= 0 ? '--color-gexbar-pos' : '--color-gexbar-neg',
+        title: 'Every strike on the ladder, summed. Summed here rather than read off the payload: there is no server-side delta total, and the number has to be the bars’',
+      },
+      {
+        key: 'longDex',
+        label: 'Long Δ$',
+        value: empty ? EM_DASH : fmtGexShort(long),
+        colour: '--color-gexbar-pos',
+        title: 'The positive strikes alone — where the dealer is long delta',
+      },
+      {
+        key: 'shortDex',
+        label: 'Short Δ$',
+        value: empty ? EM_DASH : fmtGexShort(-short),
+        colour: '--color-gexbar-neg',
+        title: 'The negative strikes alone — where the dealer is short delta',
+      },
+      {
+        key: 'dexZero',
+        label: 'Δ Zero',
+        value: px(zero),
+        colour: '--color-warn',
+        title: 'The lowest strike at which net delta changes sign. Not a gamma flip — it is where the delta ladder itself turns over',
+      },
+      {
+        key: 'peakDex',
+        label: 'Peak |Δ|',
+        value: px(peak),
+        colour: '--color-series-5',
+        title: 'The strike carrying the biggest absolute net delta on the whole ladder',
+      },
+      {
+        key: 'strikes',
+        label: 'Strikes',
+        value: empty ? EM_DASH : String(sorted.length),
+        colour: MUTED,
+        title: 'How many strikes this ladder covers',
+      },
+      {
+        key: 'scope',
+        label: 'Scope',
+        value: scopeNote || EM_DASH,
+        colour: MUTED,
+        title: 'Which expirations these bars are summed over',
+      },
+    ]
+  }, [rows, basis, kDp, scopeNote])
+
+  return (
+    <div className="flex shrink-0 items-stretch gap-1.5 overflow-hidden">
+      {tiles.map((t) => (
+        <div
+          key={t.key}
+          title={t.title}
+          className="flex min-w-0 flex-1 flex-col items-center justify-center gap-px rounded-sm border border-line bg-raised px-1 py-1"
+        >
+          <span className="truncate text-3xs font-bold uppercase tracking-[0.08em] text-muted opacity-70">
+            {t.label}
+          </span>
+          <span className="tabular truncate font-mono text-sm font-extrabold" style={{ color: `var(${t.colour})` }}>
             {t.value}
           </span>
         </div>

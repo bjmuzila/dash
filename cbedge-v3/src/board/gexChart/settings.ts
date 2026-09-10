@@ -29,6 +29,44 @@ export type GexBasis = 'oi-vol' | 'vol-only' | 'flow'
 export type GexSplit = 'net' | 'call-put'
 
 /**
+ * WHICH LADDER the bars are, on two axes at once — the exposure and the scope.
+ *
+ *   gamma-0dte    dealer GAMMA, the expiry the socket is streaming. The card's
+ *                 original and only series, and still the default.
+ *   gamma-ex0dte  dealer GAMMA summed across every listed expiration EXCEPT the
+ *                 0DTE one — the standing book behind today's pin.
+ *   delta-0dte    dealer DELTA, today's chain.
+ *   delta-ex0dte  dealer DELTA, the standing book.
+ *
+ * The three added ones are the scanner's GEX Levels cards 8, 10 and 11, drawn
+ * through this chart instead of their own small SVGs — same rows, same
+ * accessors, one renderer.
+ *
+ * ── SPX ONLY, and not by omission ────────────────────────────────────────────
+ * The ex-0DTE pair reads /proxy/gex-by-strike-multi, which sweeps the board for
+ * ONE symbol server-side, and the delta pair needs the `netDEX` legs that only
+ * the socket feed and that endpoint carry. On a board ticker all three would be
+ * a control that quietly draws something else, so the card disables them and
+ * says why — the same treatment FLOW already gets off the socket symbol.
+ */
+export type GexSeries = 'gamma-0dte' | 'gamma-ex0dte' | 'delta-0dte' | 'delta-ex0dte'
+
+/** Which exposure a series values a strike on. */
+export function metricOfSeries(s: GexSeries): 'gex' | 'dex' {
+  return s === 'delta-0dte' || s === 'delta-ex0dte' ? 'dex' : 'gex'
+}
+
+/** Which expirations a series is summed over. */
+export function scopeOfSeries(s: GexSeries): '0dte' | 'ex0dte' {
+  return s === 'gamma-ex0dte' || s === 'delta-ex0dte' ? 'ex0dte' : '0dte'
+}
+
+/** True for everything but the card's original live-feed gamma ladder. */
+export function isAddedSeries(s: GexSeries): boolean {
+  return s !== 'gamma-0dte'
+}
+
+/**
  * The ten stat cards. Identity only — StatCards.tsx builds them in order and
  * draws all ten or none, so nothing needs the key LIST any more.
  */
@@ -45,6 +83,8 @@ export type StatKey =
   | 'bullBear'
 
 export interface GexChartSettings {
+  /** Which ladder the bars are. See GexSeries. */
+  series: GexSeries
   basis: GexBasis
   split: GexSplit
   /** The net-DEX overlay line. Independent of the bars — see gexChartRender. */
@@ -61,6 +101,7 @@ export interface GexChartSettings {
 }
 
 export const DEFAULT_SETTINGS: GexChartSettings = {
+  series: 'gamma-0dte',
   basis: 'oi-vol',
   split: 'net',
   showDex: false,
@@ -73,10 +114,15 @@ const SETTINGS_V = 1
 
 const isBasis = (v: unknown): v is GexBasis => v === 'oi-vol' || v === 'vol-only' || v === 'flow'
 const isSplit = (v: unknown): v is GexSplit => v === 'net' || v === 'call-put'
+const isSeries = (v: unknown): v is GexSeries =>
+  v === 'gamma-0dte' || v === 'gamma-ex0dte' || v === 'delta-0dte' || v === 'delta-ex0dte'
 
 function coerce(raw: unknown): GexChartSettings {
   const p = (raw ?? {}) as Partial<GexChartSettings> & { v?: number }
   return {
+    // A blob written before the series switch existed has no `series` and was
+    // showing the live gamma ladder, which is what the default is.
+    series: isSeries(p.series) ? p.series : DEFAULT_SETTINGS.series,
     basis: isBasis(p.basis) ? p.basis : DEFAULT_SETTINGS.basis,
     split: isSplit(p.split) ? p.split : DEFAULT_SETTINGS.split,
     showDex: p.showDex === true,

@@ -34,6 +34,7 @@ const VolGexFlowCard = lazy(() => import('./volGexFlow/VolGexFlowCard').then((m)
 const FlowTapeCard = lazy(() => import('./flowTape/FlowTapeCard').then((m) => ({ default: m.FlowTapeCard })))
 const TopFlowCard = lazy(() => import('./topFlow/TopFlowCard').then((m) => ({ default: m.TopFlowCard })))
 const GaugeRailCard = lazy(() => import('./gaugeRail/GaugeRailCard').then((m) => ({ default: m.GaugeRailCard })))
+const OiByExpiryCard = lazy(() => import('./oiByExpiry/OiByExpiryCard').then((m) => ({ default: m.OiByExpiryCard })))
 
 function Deferred({ children }: { children: ReactNode }) {
   return <Suspense fallback={<div className="min-h-0 flex-1" />}>{children}</Suspense>
@@ -251,6 +252,29 @@ export const CARD_CATALOG: CardDef[] = [
     render: () => (
       <Deferred>
         <VolGexFlowCard />
+      </Deferred>
+    ),
+  },
+  {
+    // The scanner's GEX Levels card 5, with its two side-by-side mini charts
+    // folded into ONE column per date — call and put on the same column and the
+    // same scale, which is the comparison the card exists for and the one the
+    // scanner's version makes you do by eye across two panes.
+    //
+    // No ticker of its own, for the same reason Net Vol GEX Flow has none: the
+    // expiration list comes from /proxy/gex, the shared index feed, so this
+    // card is SPX whatever the board symbol says.
+    //
+    // 24 x 40 — half the board width is what twelve date columns plus their
+    // DTE row need before the ticks collide, and OPRA open interest is a
+    // once-a-day figure that does not earn a tall pane.
+    id: 'oi-by-expiry',
+    icon: '📅',
+    label: 'OI by Expiration',
+    defaultSize: { w: 24, h: 40 },
+    render: () => (
+      <Deferred>
+        <OiByExpiryCard />
       </Deferred>
     ),
   },

@@ -1,8 +1,10 @@
 import type { GexRow } from '@/contract/frames'
-import type { GexBasis, GexSplit } from './settings'
+import type { GexBasis, GexSeries, GexSplit } from './settings'
+import { metricOfSeries } from './settings'
 import {
   BASIS_LABEL,
   LEVEL_BASIS_LABEL,
+  SERIES_SERIES_NAME,
   callGexOf,
   coreStrike,
   dexOf,
@@ -12,6 +14,7 @@ import {
   fmtGexShort,
   netGexOf,
   putGexOf,
+  sideLegsSupported,
 } from './values'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,6 +92,28 @@ export interface GexChartModel {
   basis: GexBasis
   split: GexSplit
   showDex: boolean
+  /**
+   * WHICH LADDER these rows are — gamma or delta, today or the standing book.
+   *
+   * The rows look identical whichever it is, exactly as the expiry does, so the
+   * chart is told rather than left to guess. It changes four things: what the
+   * bars are valued on, whether the CALL/PUT split and the DEX overlay are
+   * offered at all (a delta ladder has neither a per-side leg nor a second
+   * delta series to lay over itself), whether the CB badge is drawn (a Core
+   * Bullseye is a gamma idea), and the series line top-left.
+   */
+  series: GexSeries
+  /**
+   * The gamma flip for THIS ladder, or null.
+   *
+   * Server-supplied, and gamma-only. v2's chart derives its flip from a 401-
+   * point Black-Scholes spot sweep that needs per-strike IV; the multi-expiry
+   * ladder is slimmed to the net figures and carries none, so the flip arrives
+   * as a number on the payload and is drawn as one dashed line rather than
+   * reconstructed. Null on the live 0DTE ladder, whose flip is a Key Levels
+   * tile and has never been a line on this chart.
+   */
+  flip: number | null
 }
 
 export const EMPTY_MODEL: GexChartModel = {
@@ -99,6 +124,8 @@ export const EMPTY_MODEL: GexChartModel = {
   basis: 'oi-vol',
   split: 'net',
   showDex: false,
+  series: 'gamma-0dte',
+  flip: null,
 }
 
 export { fmtGexShort }
@@ -238,6 +265,8 @@ interface Palette {
   dex: [number, number, number]
   core: [number, number, number]
   surface: [number, number, number]
+  /** The flip line's hue — the same amber every other surface marks a flip in. */
+  warn: [number, number, number]
 }
 
 function readPalette(el: HTMLElement): Palette {
@@ -249,6 +278,7 @@ function readPalette(el: HTMLElement): Palette {
     dex: hexToRgb(cssVar(el, '--color-dex'), [31, 141, 173]),
     core: hexToRgb(cssVar(el, '--color-level-cb'), [255, 214, 0]),
     surface: hexToRgb(cssVar(el, '--color-surface'), [15, 17, 23]),
+    warn: hexToRgb(cssVar(el, '--color-warn'), [251, 133, 1]),
   }
 }
 
@@ -361,9 +391,18 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // Resolved ONCE, from the raw rows, and passed down. A basis that half
     // applies — flow in the bars, OI+VOL in the core badge — is the exact bug
     // this single resolution exists to make impossible.
-    const flowActive = model.basis === 'flow' && flowSupported(model.rows)
-    const flowMissing = model.basis === 'flow' && !flowActive
-    const dexActive = model.showDex && dexSupported(model.rows, model.basis)
+    // BARS-ARE-DELTA is resolved first: it disqualifies the flow basis, the
+    // call/put split, the DEX overlay and the CB badge in one go, so every test
+    // below reads it rather than re-deciding from `model.series`.
+    const barsAreDex = metricOfSeries(model.series) === 'dex'
+    const flowActive = !barsAreDex && model.basis === 'flow' && flowSupported(model.rows)
+    // A delta ladder has no tape leg to draw, so FLOW there is not "missing" —
+    // it does not apply. Saying "no classified flow" over delta bars would be
+    // answering a question nobody asked.
+    const flowMissing = !barsAreDex && model.basis === 'flow' && !flowActive
+    // Suppressed when the BARS are already delta: one number, drawn twice, on
+    // two different scales, reads as two series that disagree.
+    const dexActive = model.showDex && !barsAreDex && dexSupported(model.rows, model.basis)
 
     // ── The CALL/PUT split, on flow ────────────────────────────────────────
     // The legs are their OWN wire fields (flowCallGEX / flowPutGEX), not
@@ -372,9 +411,17 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // support test, and when it fails the split is REFUSED rather than quietly
     // drawing the OI+VOL legs — which is what this chart did until 2026-09,
     // labelled "CALL/PUT · FLOW" the whole time.
-    const splitAsked = model.split === 'call-put'
+    // The split is REFUSED outright on a delta ladder: `netDEX`/`volNetDEX` are
+    // already net of both sides and there is no per-side delta field anywhere
+    // on the wire, so a "CALL/PUT · Δ" chart could only have drawn the gamma
+    // legs under a delta label.
+    const splitAsked = model.split === 'call-put' && !barsAreDex
     const flowSplitOff = flowActive && splitAsked && !flowSplitSupported(model.rows)
-    const splitting = splitAsked && !flowSplitOff
+    // Same rule one level out, for the SERVER-SUMMED ladders: they carry the net
+    // figures and no per-strike gamma, so both legs compute to zero. Refused and
+    // said out loud rather than drawn as an empty pane.
+    const sideLegsOff = splitAsked && !flowActive && !sideLegsSupported(model.rows)
+    const splitting = splitAsked && !flowSplitOff && !sideLegsOff
 
     // On flow BOTH legs are signed — dealer long positive, dealer short
     // negative — so neither one has a fixed side of the zero line to sit on.
@@ -384,7 +431,8 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // and the original stacked geometry is kept exactly as it was.
     const signedSplit = splitting && flowActive
 
-    const getNet = (r: GexRow) => netGexOf(r, model.basis, flowActive)
+    const getNet = (r: GexRow) =>
+      barsAreDex ? dexOf(r, model.basis) : netGexOf(r, model.basis, flowActive)
     const getCall = (r: GexRow) => callGexOf(r, model.spot, model.basis, flowActive)
     const getPut = (r: GexRow) => putGexOf(r, model.spot, model.basis, flowActive)
 
@@ -558,6 +606,48 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       ctx.fillText('+NET DEX', PAD_L + 3, yDex(0) - 3)
     }
 
+    // ── The gamma flip, when the ladder came with one ────────────────────────
+    // ONE dashed vertical, and nothing else: no profile curve behind it (see
+    // the note on `flip` in GexChartModel), and never over delta bars, where a
+    // gamma flip is a line from a different chart.
+    if (model.flip != null && !barsAreDex && Number.isFinite(model.flip) && model.flip > 0) {
+      const flip = model.flip
+      const first = data[0]
+      const last = data[data.length - 1]
+      let fx: number | null = null
+      if (first && last) {
+        if (flip <= first.strike) fx = xAt(0)
+        else if (flip >= last.strike) fx = xAt(data.length - 1)
+        else {
+          const i = data.findIndex((r) => r.strike >= flip)
+          const prev = i > 0 ? data[i - 1] : undefined
+          const curr = i > 0 ? data[i] : undefined
+          if (prev && curr) {
+            const span = curr.strike - prev.strike
+            fx = xAt(i - 1) + (span > 0 ? (flip - prev.strike) / span : 0) * gap
+          }
+        }
+      }
+      if (fx !== null) {
+        ctx.setLineDash([6, 5])
+        ctx.strokeStyle = withAlpha(p.warn, 0.85)
+        ctx.lineWidth = 1.3
+        ctx.beginPath()
+        ctx.moveTo(fx, PAD_T)
+        ctx.lineTo(fx, PAD_T + cH)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = withAlpha(p.warn, 0.95)
+        ctx.font = 'bold 9px ui-monospace, monospace'
+        ctx.textAlign = 'center'
+        ctx.fillText(
+          `FLIP ${Math.round(flip).toLocaleString('en-US')}`,
+          clamp(fx, PAD_L + 40, PAD_L + cW - 40),
+          PAD_T + 22,
+        )
+      }
+    }
+
     // ── Spot, interpolated between the two strikes that bracket it ──
     if (model.spot > 0) {
       let sx: number | null = null
@@ -609,7 +699,9 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // strike is the one the Key Levels card is marking. It used to read
     // "CB·Vol" always, while Key Levels derived its core on OI+VOL — same
     // label, same board, two different strikes.
-    const core = coreStrike(model.rows, model.basis)
+    // Gamma only. "CB" names the strike carrying the most GAMMA; the biggest
+    // delta strike is a different fact and does not get to wear that label.
+    const core = barsAreDex ? null : coreStrike(model.rows, model.basis)
     const coreIdx = core == null ? -1 : data.findIndex((r) => r.strike === core)
     const coreRow = coreIdx >= 0 ? data[coreIdx] : undefined
     if (coreRow) {
@@ -658,7 +750,12 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // The chart cannot work the expiry out for itself — the rows look the same
     // whichever one they came from — so the card passes it in, the same reason
     // v2's chart takes a `seriesLabel` prop rather than deriving one.
-    const seriesBits = [splitting ? 'CALL/PUT' : 'NET GEX', BASIS_LABEL[flowActive ? 'flow' : model.basis]]
+    const seriesBits = [
+      splitting ? 'CALL/PUT' : SERIES_SERIES_NAME[model.series],
+      BASIS_LABEL[flowActive ? 'flow' : model.basis],
+    ]
+    // The ex-0DTE ladders are a SUM over expirations, so there is no single one
+    // to name and the scope in the series name is the whole answer.
     if (model.expiry) seriesBits.push(model.expiry)
     ctx.fillStyle = withAlpha(p.fg, 0.55)
     ctx.font = 'bold 9px ui-monospace, monospace'
@@ -684,6 +781,14 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       ctx.font = 'bold 9px ui-monospace, monospace'
       ctx.textAlign = 'center'
       ctx.fillText('Flow carries no call/put split on this feed — showing net flow', W / 2, PAD_T + 24)
+    }
+
+    // Asked for the split on a ladder the server summed for us. Same rule again.
+    if (sideLegsOff) {
+      ctx.fillStyle = withAlpha(p.fg, 0.45)
+      ctx.font = 'bold 9px ui-monospace, monospace'
+      ctx.textAlign = 'center'
+      ctx.fillText('This ladder is summed per strike — no call/put legs to split', W / 2, PAD_T + 24)
     }
 
     // ── The hint, very dim, bottom-right ──

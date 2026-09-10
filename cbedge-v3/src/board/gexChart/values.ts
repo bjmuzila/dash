@@ -1,6 +1,6 @@
 import type { GexRow } from '@/contract/frames'
 import { deriveLevels, findCore, oiVolNet, volNet, type DerivedLevels, type LevelValue } from '@/data/levels'
-import type { GexBasis } from './settings'
+import { metricOfSeries, scopeOfSeries, type GexBasis, type GexSeries } from './settings'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ONE definition of "what is the number at this strike".
@@ -133,6 +133,21 @@ export function flowSplitSupported(rows: GexRow[]): boolean {
 }
 
 /**
+ * True when the per-side GAMMA legs rode along.
+ *
+ * The multi-expiry ladder is slimmed to the net figures — `callGamma` and
+ * `putGamma` arrive as 0 — so `callGexOf` there returns 0 at every strike and
+ * the CALL/PUT split would draw a flat, empty pane under a "CALL/PUT" label.
+ * Tested on the RAW rows for the same reason the flow tests are: densify's gap
+ * fillers carry zeroed legs too, and a ladder with one gap would report "no
+ * legs" for the whole board.
+ */
+export function sideLegsSupported(rows: GexRow[]): boolean {
+  for (const r of rows) if (n(r.callGamma) !== 0 || n(r.putGamma) !== 0) return true
+  return false
+}
+
+/**
  * True when there is a delta leg to draw. A chain feed that omits `delta`
  * leaves both DEX fields at 0, and a flat line pinned to the zero axis reads as
  * "delta is perfectly balanced" rather than "there is no delta here" — so the
@@ -247,6 +262,47 @@ export function fmtGexShort(v: number): string {
   if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(2)}M`
   if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(2)}K`
   return `${s}$${a.toFixed(2)}`
+}
+
+/**
+ * The series switch's own label, and the first half of the chart's series line.
+ *
+ * Short on purpose: it sits in a toolbar beside the basis and the split, and it
+ * is drawn top-left on the canvas beside the basis and the expiry, so the two
+ * places it appears are both places where a sentence would not fit.
+ */
+export const SERIES_LABEL: Record<GexSeries, string> = {
+  'gamma-0dte': 'γ 0DTE',
+  'gamma-ex0dte': 'γ EX-0DTE',
+  'delta-0dte': 'Δ 0DTE',
+  'delta-ex0dte': 'Δ EX-0DTE',
+}
+
+/** What the bars ARE, spelled out — the chart's series line and the tooltips. */
+export const SERIES_SERIES_NAME: Record<GexSeries, string> = {
+  'gamma-0dte': 'NET GEX',
+  'gamma-ex0dte': 'NET GEX · EX-0DTE',
+  'delta-0dte': 'NET DEX',
+  'delta-ex0dte': 'NET DEX · EX-0DTE',
+}
+
+/**
+ * Every strike's net DELTA summed, on the basis the chart is drawing.
+ *
+ * Client-side on purpose, exactly as the scanner's card 11 does it: the
+ * multi-expiry payload's `totalNetGex` is a GAMMA total and there is no
+ * server-side delta total to borrow, so summing the ladder being drawn is the
+ * only way the header number and the bars stay in lockstep.
+ */
+export function totalDex(rows: GexRow[], basis: GexBasis): number {
+  let t = 0
+  for (const r of rows) t += dexOf(r, basis)
+  return t
+}
+
+/** `{ metric, scope }` for one series — the pair the renderer and the card both need. */
+export function seriesShape(series: GexSeries): { metric: 'gex' | 'dex'; scope: '0dte' | 'ex0dte' } {
+  return { metric: metricOfSeries(series), scope: scopeOfSeries(series) }
 }
 
 export const BASIS_LABEL: Record<GexBasis, string> = {

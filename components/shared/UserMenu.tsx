@@ -295,12 +295,13 @@ export default function UserMenu() {
               resolves to /app/whats-new (no route → catch-all → Traders Dash), so
               a real navigation to the top-level Next page is required. Owner is an
               absolute external URL and is owner-gated. */}
-          {/* SITE GUIDE removed 2026-09-06. It was a next/link to "/guide",
-              which inside the Vite SPA (basename="/app") resolved to /app/guide
-              — and /app/guide is retired now and redirects to /v3 (see the
-              RETIRED block in lib/v3Routes.ts), so the row would have been a
-              button that quietly took you somewhere else. The Next route at
-              /guide still renders if it is typed; nothing links to it. */}
+          {/* SITE GUIDE removed 2026-09-06 — the row was a next/link to
+              "/guide", which inside the Vite SPA (basename="/app") resolved to
+              /app/guide, so it would have been a button that quietly took you
+              somewhere else. The guide itself was DELETED 2026-09-10: the page
+              (app/guide/page.tsx), the SPA route and lazy import in
+              app-vite/src/App.tsx, app/app/guide/route.ts and the /guide entry
+              in lib/v3Routes.ts are all gone. /guide is a 404 now. */}
 
           <a
             href="/whats-new"

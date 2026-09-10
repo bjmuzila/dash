@@ -4,6 +4,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Thursday 9/10/2026
 
+* **Feedback & Support:** moved inside the dashboard, screenshots can now be attached to any ticket or reply, and the unread badge clears once you've read it — https://cbedge.net/v3/feedback
+
+* **Notes (v3):** saved chart clips are much bigger now, with an expand button to pop one out full screen. Highlight any text or right-click any card or chart to save it straight to Notes — open the panel with the pencil in the toolbar — https://cbedge.net/v3
+
 * **Home board (v3):** new **Net Vol GEX Flow (Today)** card — the same intraday volume-gamma chart from the scanner, addable from "+ Add card" — https://cbedge.net/v3
 
 * **Home board (v3):** every green now matches — buys, calls and positive GEX read the same shade across all cards — https://cbedge.net/v3

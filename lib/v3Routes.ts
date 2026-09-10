@@ -94,7 +94,7 @@ export const PORTED: Record<string, string> = {
   "/economic-calendar": "/economic-calendar",
 
   // ── RETIRED, not ported (2026-09-06) ───────────────────────────────────────
-  // These four have no v3 equivalent and are not getting one. They are in this
+  // These three have no v3 equivalent and are not getting one. They are in this
   // table for the same reason a ported page is — so the path answers instead of
   // dead-ending — but the destination is v3's home, because there is nowhere
   // more specific to send someone.
@@ -104,18 +104,18 @@ export const PORTED: Record<string, string> = {
   //   /trading  the trade journal. Built in v3, then retired 2026-08-30.
   //   /fails    the failed-level book. Never had a nav link anywhere except the
   //             legacy list — it was a route and nothing else.
-  //   /guide    the site guide. The NEXT route at /guide (app/guide/page.tsx) is
-  //             untouched and still renders; only the SPA copy at /app/guide is
-  //             retired, and the account-menu link that pointed at it is gone.
   //
   // Their routes are still declared in app-vite/src/App.tsx and their page files
   // are still on disk, unreachable behind this redirect — deleting them (route,
   // lazy import, component, and app/app/<x>/route.ts) is a separate, one-way
   // step and is the natural follow-up once nobody misses them.
+  //
+  // /guide (the site guide) took that one-way step on 2026-09-10: page, SPA
+  // route, lazy import and app/app/guide/route.ts are all gone, so there is no
+  // longer anything to redirect TO or FROM. It is deliberately absent here.
   "/ict": "/",
   "/trading": "/",
   "/fails": "/",
-  "/guide": "/",
 
   // ── Phone build ────────────────────────────────────────────────────────────
   // The ids differ between the builds, which is the whole reason this is a MAP
