@@ -4,6 +4,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Thursday 9/10/2026
 
+* **Site Guide:** the old GEX/DEX explainer page has been retired — the explainers live in Docs — https://cbedge.net/docs
+
 * **Feedback & Support:** moved inside the dashboard, screenshots can now be attached to any ticket or reply, and the unread badge clears once you've read it — https://cbedge.net/v3/feedback
 
 * **Notes (v3):** saved chart clips are much bigger now, with an expand button to pop one out full screen. Highlight any text or right-click any card or chart to save it straight to Notes — open the panel with the pencil in the toolbar — https://cbedge.net/v3

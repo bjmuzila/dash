@@ -51,6 +51,9 @@ import { CB_CONTRACTS_CSS } from "@/pages/premarket/cbContracts.css";
 export { CB_CONTRACTS_CSS };
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+// The probe chart's crosshair reads clientX off the SVG. Type-only, so it
+// costs nothing at runtime.
+import type { MouseEvent as ReactMouseEvent } from "react";
 
 type CbTrade = {
   id: number; date: string; checkpoint: string; checkpoint_label: string | null;
@@ -448,12 +451,43 @@ function CbProbeCard({ trade, mult, onClose }: { trade: CbTrade; mult: number; o
   );
 }
 
+/**
+ * CbProbeChart — the contract's line, in the OWNER PROBE's treatment.
+ *
+ * Re-cut 2026-09-10 to match owner-vite/src/pages/Probe.tsx's ProbeChart, which
+ * is the version of this picture that actually gets read: an ice line over a
+ * fading wash, a dashed break-even at the entry fill, the session high marked
+ * green and the low red, a RIGHT-HAND price rail with the last mark in a pill
+ * tinted by P/L, and a hover crosshair whose readout carries time, price and the
+ * dollar P/L per contract.
+ *
+ * The two structural changes from what stood here before, and why:
+ *
+ *   • THE AXIS MOVED RIGHT. A left rail puts the numbers at the end you have
+ *     already read past; the prices that matter — the high, the entry, the last
+ *     — are all events at the RIGHT edge, and the rail belongs next to them.
+ *     PADL drops to 12 and PADR opens to 78, so the line gets the width the
+ *     labels used to hold.
+ *   • H AND L ARE MARKED, not just the peak. The old chart flagged the recorded
+ *     high-water mark and nothing else, so a curve that went nowhere and a curve
+ *     that halved read the same at a glance.
+ *
+ * ── EVERY LABEL IS WHITE ─────────────────────────────────────────────────────
+ * Not `--dim2`, and not white-at-40%: chart type sits on a wash and a line, so
+ * an alpha that reads fine on a flat card turns to mud over the gradient. The
+ * tokens are still tokens (`--txt` is the app's white); nothing here is a hex.
+ *
+ * COLOURS GO THROUGH `style`, never presentation attributes — a `var()` in
+ * stroke="" does not resolve and the chart falls back to black.
+ */
 function CbProbeChart({ ticks, metric, entry, peak }: {
   ticks: CbTick[]; metric: CbMetricKey;
   entry: number | null;
   peak: { v: number; ts: number } | null;   // the day's high-water mark, not an exit
 }) {
-  const W = 960, H = 340, PADL = 62, PADR = 16, PADT = 16, PADB = 28;
+  const W = 960, H = 340, PADL = 12, PADR = 78, PADT = 26, PADB = 30;
+  const [hover, setHover] = useState<number | null>(null);
+
   const pts = ticks
     .map((t) => ({ ts: n(t.ts), v: n(t[metric]) }))
     .filter((p): p is { ts: number; v: number } => p.ts != null && p.v != null);
@@ -471,13 +505,15 @@ function CbProbeChart({ ticks, metric, entry, peak }: {
   const spec = CB_METRICS.find((m) => m.key === metric)!;
   const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.v);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const hi = Math.max(...ys), lo = Math.min(...ys);
+  const hiI = ys.indexOf(hi), loI = ys.indexOf(lo);
   // The entry line is part of the picture, not an annotation on top of it — a
   // domain that excludes it draws it off-canvas.
   const domain = [...ys];
   if (metric === "mark" && entry != null) domain.push(entry);
   let minY = Math.min(...domain), maxY = Math.max(...domain);
   if (minY === maxY) { minY -= 1; maxY += 1; }
-  const gpad = (maxY - minY) * 0.08; minY -= gpad; maxY += gpad;
+  const gpad = (maxY - minY) * 0.1; minY -= gpad; maxY += gpad;
 
   const cnt = pts.length;
   const sx = (i: number) => PADL + (cnt <= 1 ? 0 : i / (cnt - 1)) * (W - PADL - PADR);
@@ -485,60 +521,123 @@ function CbProbeChart({ ticks, metric, entry, peak }: {
   const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
   const area = `${path} L${sx(cnt - 1).toFixed(1)},${H - PADB} L${sx(0).toFixed(1)},${H - PADB} Z`;
   const fmtY = (v: number) => `${spec.prefix}${v.toFixed(spec.dec)}`;
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
   const fmtT = (ts: number) => new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(new Date(ts));
-  // Index of the tick nearest the peak, so the high-water mark is flagged where
-  // it printed. Nothing happened there — that is the point of showing it.
-  // best is always an index produced by this same reduce (pts.length >= 2, checked above), so it's in range.
-  const peakIdx = peak ? pts.reduce((best, p, i) => (Math.abs(p.ts - peak.ts) < Math.abs(pts[best]!.ts - peak.ts) ? i : best), 0) : -1;
 
-  // Tokens go through `style`, not presentation attributes: a var() in
-  // stroke="" does not resolve, and the chart would fall back to black.
-  const label = { fill: "var(--dim2)", fontFamily: "ui-monospace,Menlo,Consolas,monospace" } as const;
+  // The pill's tint is the position's direction, and it is only meaningful on
+  // the price view against a real entry — on SPX spot or distance-to-CB there
+  // is nothing to be up or down against, so it stays neutral.
+  const last = pts[cnt - 1]!.v;
+  const lastUp = metric === "mark" && entry != null ? last - entry : null;
+  const pillVar = lastUp == null ? "var(--cyan)" : lastUp >= 0 ? "var(--pos)" : "var(--neg)";
+
+  // Index of the tick nearest the recorded peak, so the high-water mark the P/L
+  // is measured to is flagged where it printed. Nothing happened there — that is
+  // the point of showing it.
+  const peakIdx = peak
+    ? pts.reduce((best, p, i) => (Math.abs(p.ts - peak.ts) < Math.abs(pts[best]!.ts - peak.ts) ? i : best), 0)
+    : -1;
+
+  const MONO = "ui-monospace,Menlo,Consolas,monospace";
+  /** Every piece of type on this chart. White, mono, bold — see the note above. */
+  const label = { fill: "var(--txt)", fontFamily: MONO } as const;
+
+  const onMove = (e: ReactMouseEvent<SVGSVGElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const vx = ((e.clientX - box.left) / box.width) * W;      // client px → viewBox units
+    const i = Math.round(((vx - PADL) / (W - PADL - PADR)) * (cnt - 1));
+    setHover(i < 0 ? 0 : i > cnt - 1 ? cnt - 1 : i);
+  };
+
+  const hp = hover == null ? null : pts[hover]!;
+  const hpl = hp == null || entry == null || metric !== "mark" ? null : (hp.v - entry) * 100;
+  const hx = hp == null ? 0 : sx(hover as number);
+  // Flip the readout to the left of the crosshair near the right rail, or it
+  // draws under the price pill.
+  const tipW = 168, tipFlip = hx + 12 + tipW > W - PADR;
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="cbcsvg">
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="cbcsvg"
+      onMouseMove={onMove}
+      onMouseLeave={() => setHover(null)}
+    >
       <defs>
         <linearGradient id="cbcwg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" style={{ stopColor: "var(--cyan)" }} stopOpacity={0.28} />
+          <stop offset="0%" style={{ stopColor: "var(--cyan)" }} stopOpacity={0.22} />
           <stop offset="100%" style={{ stopColor: "var(--cyan)" }} stopOpacity={0} />
         </linearGradient>
       </defs>
 
-      {yTicks.map((v, i) => (
+      {/* Three rungs, not five: high, midpoint, low. The rail is there to price
+          the shape, and a five-line grid over a wash is fence, not scale. */}
+      {[hi, (hi + lo) / 2, lo].map((v, i) => (
         <g key={i}>
           <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} style={{ stroke: "var(--line2)" }} strokeWidth={1} />
-          <text x={PADL - 6} y={sy(v) + 3} textAnchor="end" fontSize={11} style={label}>{fmtY(v)}</text>
+          <text x={W - PADR + 10} y={sy(v) + 4} fontSize={12} fontWeight={700} style={label}>{fmtY(v)}</text>
         </g>
       ))}
+
+      <path d={area} fill="url(#cbcwg)" />
 
       {/* Entry line on the price view. Without it a rising curve reads as a
           winner even when it never got back to what was paid. */}
       {metric === "mark" && entry != null && (
         <>
           <line x1={PADL} y1={sy(entry)} x2={W - PADR} y2={sy(entry)}
-            style={{ stroke: "var(--dim2)" }} strokeWidth={1} strokeDasharray="4 4" />
-          <text x={PADL + 4} y={sy(entry) - 5} fontSize={11} style={label}>entry ${entry.toFixed(2)}</text>
+            style={{ stroke: "var(--line3)" }} strokeWidth={1} strokeDasharray="3 5" />
+          <text x={PADL + 4} y={sy(entry) - 7} fontSize={12} fontWeight={700} letterSpacing="1" style={label}>
+            ENTRY {entry.toFixed(2)}
+          </text>
         </>
       )}
 
-      <path d={area} fill="url(#cbcwg)" />
-      <path d={path} fill="none" style={{ stroke: "var(--cyan)" }} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
+      <path d={path} fill="none" style={{ stroke: "var(--cyan)" }} strokeWidth={1.9} strokeLinejoin="round" strokeLinecap="round" />
 
       {peakIdx >= 0 && (
-        <>
-          <line x1={sx(peakIdx)} y1={PADT} x2={sx(peakIdx)} y2={H - PADB}
-            style={{ stroke: "var(--posEdgeUp)" }} strokeWidth={1} strokeDasharray="3 3" />
-          <circle cx={sx(peakIdx)} cy={sy(pts[peakIdx]!.v)} r={4} style={{ fill: "var(--pos)", stroke: "var(--plate)" }} strokeWidth={1} />
-        </>
+        <line x1={sx(peakIdx)} y1={PADT} x2={sx(peakIdx)} y2={H - PADB}
+          style={{ stroke: "var(--posEdge)" }} strokeWidth={1} strokeDasharray="3 3" />
       )}
-      {/* cnt (pts.length) >= 2, guaranteed by the early return above. */}
-      <circle cx={sx(cnt - 1)} cy={sy(pts[cnt - 1]!.v)} r={3.5} style={{ fill: "var(--cyan)" }} />
 
-      <text x={PADL} y={H - 6} textAnchor="start" fontSize={11} style={label}>{fmtT(minX)}</text>
-      <text x={W - PADR} y={H - 6} textAnchor="end" fontSize={11} style={label}>{fmtT(maxX)}</text>
+      {/* High and low, marked and priced. The ring is hollow so it reads as an
+          annotation rather than another data point on the line. */}
+      <circle cx={sx(hiI)} cy={sy(hi)} r={3.4} fill="none" style={{ stroke: "var(--pos)" }} strokeWidth={1.6} />
+      <text x={sx(hiI)} y={sy(hi) - 11} fontSize={12} fontWeight={700} textAnchor="middle"
+        style={{ fill: "var(--pos)", fontFamily: MONO }}>H {fmtY(hi)}</text>
+      <circle cx={sx(loI)} cy={sy(lo)} r={3.4} fill="none" style={{ stroke: "var(--neg)" }} strokeWidth={1.6} />
+      <text x={sx(loI)} y={sy(lo) + 18} fontSize={12} fontWeight={700} textAnchor="middle"
+        style={{ fill: "var(--neg)", fontFamily: MONO }}>L {fmtY(lo)}</text>
+
+      <text x={PADL} y={H - 8} textAnchor="start" fontSize={12} fontWeight={700} style={label}>{fmtT(minX)}</text>
+      <text x={W - PADR} y={H - 8} textAnchor="end" fontSize={12} fontWeight={700} style={label}>{fmtT(maxX)}</text>
+
+      {/* The last mark, in the rail, tinted by where it sits against the entry.
+          Pill type is the PLATE colour, not white: it is sitting on a solid
+          green or red and needs to read against that, not against the page. */}
+      <circle cx={sx(cnt - 1)} cy={sy(last)} r={3.6} style={{ fill: pillVar }} />
+      <rect x={W - PADR + 4} y={sy(last) - 11} width={62} height={22} rx={5} style={{ fill: pillVar }} />
+      <text x={W - PADR + 35} y={sy(last) + 4} fontSize={13} fontWeight={700} textAnchor="middle"
+        style={{ fill: "var(--plate)", fontFamily: MONO }}>{fmtY(last)}</text>
+
+      {hp != null && (
+        <g>
+          <line x1={hx} y1={PADT} x2={hx} y2={H - PADB} style={{ stroke: "var(--line3)" }} strokeWidth={1} strokeDasharray="2 3" />
+          <circle cx={hx} cy={sy(hp.v)} r={4} style={{ fill: "var(--plate)", stroke: "var(--cyan)" }} strokeWidth={2} />
+          <g transform={`translate(${tipFlip ? hx - 12 - tipW : hx + 12},${Math.max(PADT, sy(hp.v) - 46)})`}>
+            <rect width={tipW} height={44} rx={7} style={{ fill: "var(--plate)", stroke: "var(--cyanEdge)" }} strokeWidth={1} />
+            <text x={12} y={18} fontSize={11} fontWeight={700} letterSpacing="1" style={label}>{fmtT(hp.ts)}</text>
+            <text x={12} y={35} fontSize={15} fontWeight={700} style={label}>{fmtY(hp.v)}</text>
+            {hpl != null && (
+              <text x={92} y={35} fontSize={13} fontWeight={700}
+                style={{ fill: hpl >= 0 ? "var(--pos)" : "var(--neg)", fontFamily: MONO }}>
+                {hpl >= 0 ? "+" : "−"}${Math.abs(hpl).toFixed(0)}
+              </text>
+            )}
+          </g>
+        </g>
+      )}
     </svg>
   );
 }

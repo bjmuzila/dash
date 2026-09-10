@@ -1,5 +1,12 @@
 # Changelog
 
+## Thursday 9/10/2026 — Site Guide deleted (`app-vite/src/App.tsx`, `lib/v3Routes.ts`, `components/shared/UserMenu.tsx`, `app/guide/page.tsx`, `app/app/guide/route.ts`)
+
+The `/guide` page had been unreachable since 2026-09-06 — the account-menu row came out then and nothing else linked to it — so this took the one-way step the RETIRED note in `lib/v3Routes.ts` described: the `Guide` lazy import and `<Route path="/guide">` are out of `app-vite/src/App.tsx` (a tombstone comment sits where the import was), `"/guide": "/"` is out of `PORTED` (dead config once the SPA shell route is gone; the RETIRED block is three paths now — `/ict`, `/trading`, `/fails`), and `UserMenu.tsx`'s removed-row comment no longer claims the Next route still renders. `check-routes.mjs` stays green — the guide was never a toolbar nav item and its import came out with its page.
+
+**`app/guide/page.tsx` and `app/app/guide/route.ts` still need `git rm` — the local Linux workspace on the laptop failed to start this session, so no shell was available to delete them. Until then `/guide` still renders on Next.** Not deployed.
+
+
 ## Thursday 9/10/2026 — Feedback: screenshots on tickets, a real v3 page, and an unread badge that clears (`server-v2/api-router.js`, `components/shared/feedbackShots.ts`, `components/shared/FeedbackThread.tsx`, `app/feedback/page.tsx`, `app/owner/feedback/page.tsx`, `owner-vite/src/lib/feedbackShots.ts`, `owner-vite/src/pages/Feedback.tsx`, `cbedge-v3/src/pages/Feedback.tsx`, `cbedge-v3/src/pages/feedback/*`, `cbedge-v3/src/App.tsx`, `cbedge-v3/src/shell/UserMenu.tsx`, `app/v3/feedback/route.ts`, `components/shared/LayoutShell.tsx`)
 
 Either side can now attach images to a ticket or any reply — data URLs on the existing JSON body, downscaled to 1600px in the browser, stored as bytes in a lazily-created `customer_feedback_shots` table and served back by `GET /api/feedback/shot/:sid` with an ETag — and `/feedback` was ported into v3 as `/v3/feedback` (three of AGENTS.md's four steps; no rail icon, deliberately, since support is an account-menu destination), with the Next page kept as the v2 wing's copy. The unread badge that could never be cleared was `readCol(owner)` choosing the read column from isOwner alone, so the owner opening their OWN ticket stamped `owner_read_at` and their `user_read_at` never moved; `readSet(owner, isAuthor)` now stamps by which side of the ticket the viewer is, and both columns when they are both.
