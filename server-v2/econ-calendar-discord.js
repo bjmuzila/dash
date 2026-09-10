@@ -30,6 +30,9 @@
  *
  * Env (fallback / operational only):
  *   ECON_CAL_DISABLED=1        hard-disable, whatever the page says
+ *   ECON_CAL_DISCORD_CHANNEL_ID  bot-channel fallback; a channel set here or on
+ *                              the page takes precedence over any webhook
+ *   DISCORD_BOT_TOKEN          required for the bot path (see discord-bot-poster)
  *   ECON_CAL_DISCORD_WEBHOOK   webhook fallback, then DISCORD_WEBHOOK_URL —
  *                              the button's own channel (note: the OPPOSITE
  *                              default to mg-ladder-discord.js, which wants the
@@ -58,6 +61,7 @@
  */
 
 const store = require('./scheduled-posts-store');
+const bot = require('./discord-bot-poster');
 
 const JOB_ID = 'econ-calendar';
 const CHROME_PATH = (process.env.PUPPETEER_EXECUTABLE_PATH || '').trim();
@@ -254,7 +258,20 @@ function renderMessage(template) {
     .replace(/\{time\}/g, etClock());
 }
 
+/**
+ * Two ways out, and the CHANNEL WINS when both are set — the same precedence
+ * scheduled-posts-store documents, applied in one place.
+ *
+ * Bot posts cannot carry a per-message name or avatar; the identity fields are
+ * simply not sent on that path. That is a property of Discord, not an omission
+ * here — discord-bot-poster.js explains it.
+ */
 async function postToDiscord(cfg, png, content) {
+  if (cfg.channelId) {
+    await bot.postToChannel(cfg.channelId, { content, file: png, filename: 'econ-calendar.png' });
+    return;
+  }
+
   const form = new FormData();
   form.append('payload_json', JSON.stringify({
     username: cfg.username || 'CB Edge Signals',
@@ -278,7 +295,7 @@ async function collectOnce(base, opts = {}) {
   let cfg = null;
   try {
     cfg = opts.config || (await readConfig());
-    if (!cfg.webhookUrl) throw new Error('no webhook configured');
+    if (!cfg.channelId && !cfg.webhookUrl) throw new Error('no destination configured (bot channel or webhook)');
 
     const { html, econ, pres, earn } = await fetchSnapshotHtml(base);
 
@@ -319,7 +336,7 @@ function startEconCalendarDiscord(port) {
     void (async () => {
       try {
         const cfg = await readConfig();
-        if (!cfg.enabled || !cfg.webhookUrl) return;
+        if (!cfg.enabled || (!cfg.channelId && !cfg.webhookUrl)) return;
 
         const now = etParts();
         if (now.date === lastPostedMem) return;

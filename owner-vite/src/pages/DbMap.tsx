@@ -46,6 +46,8 @@ type AgeRow = {
   table: string; dateColumn: string | null;
   oldest: string | null; newest: string | null;
   spanDays: number | null; capturedAt: string;
+  /** The newest row, trimmed by the nightly snapshot writer. */
+  sample: Record<string, string> | null;
 };
 type Policy = { days: number | null; owner: string; note?: string };
 type DbMap = {
@@ -90,6 +92,34 @@ const STATE_COLOR: Record<State, string> = {
 };
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
+
+// Both tables cap at 20 rows and scroll internally. On a phone even 20 rows of
+// a two-line cell is several screens, so it is ALSO capped at 70vh — whichever
+// is shorter wins, which is 20 rows on a desktop and about a screen on mobile.
+const VISIBLE_ROWS = 20;
+const ROW_PX = 61;   // name + sample line, or the size bar + its caption
+const HEAD_PX = 36;
+const tableScroll = (rowPx = ROW_PX): React.CSSProperties => ({
+  overflowX: "auto",
+  overflowY: "auto",
+  maxHeight: `min(${VISIBLE_ROWS * rowPx + HEAD_PX}px, 70vh)`,
+  // The sticky header needs an OPAQUE fill or rows scroll through it —
+  // OWNER_THEME.panelInset is translucent.
+  ["--head-bg" as string]: OWNER_THEME.panel,
+});
+const thSticky: React.CSSProperties = { position: "sticky", top: 0, zIndex: 1, background: OWNER_THEME.panel };
+
+/** "symbol=$SPX · expiry=2026-09-10 · strike=6500" — what this table last recorded. */
+function sampleLine(sample: Record<string, string> | null | undefined, skip?: string | null): string {
+  if (!sample) return "";
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(sample)) {
+    if (skip && k === skip) continue;   // the date is already its own column
+    parts.push(`${k}=${v}`);
+    if (parts.join(" · ").length > 110) break;
+  }
+  return parts.join(" · ");
+}
 
 const th: React.CSSProperties = {
   fontFamily: MONO, fontSize: TYPE.micro, letterSpacing: "0.1em",
@@ -251,7 +281,7 @@ export default function DbMap() {
         variant="budget"
         accent={LIGHT_BLUE}
         title="Table by table"
-        subtitle="Bars share one linear scale — light is heap, dark is indexes."
+        subtitle="Bars share one linear scale — light is heap, dark is indexes. Under each name is the newest row that table recorded. 20 rows, then scroll."
       >
         {data && !data.agesCapturedAt && (
           <p style={{ fontSize: TYPE.body, color: OWNER_THEME.orange, margin: "0 0 14px", lineHeight: 1.55 }}>
@@ -261,23 +291,35 @@ export default function DbMap() {
           </p>
         )}
 
-        <div style={{ overflowX: "auto" }}>
+        <div style={tableScroll()}>
           <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 720, fontSize: TYPE.body }}>
             <thead>
               <tr>
-                <th style={th}>Table</th>
-                <th style={th}>Size</th>
-                <th style={{ ...th, textAlign: "right" }}>Rows</th>
-                <th style={th}>Keeps</th>
-                <th style={th}>Holds</th>
-                <th style={th}>State</th>
+                <th style={{ ...th, ...thSticky }}>Table / last recorded</th>
+                <th style={{ ...th, ...thSticky }}>Size</th>
+                <th style={{ ...th, ...thSticky, textAlign: "right" }}>Rows</th>
+                <th style={{ ...th, ...thSticky }}>Keeps</th>
+                <th style={{ ...th, ...thSticky }}>Holds</th>
+                <th style={{ ...th, ...thSticky }}>State</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(({ t, policy, age, keepDays, state }) => (
                 <tr key={t.name} title={policy?.note || ""}>
-                  <td style={{ ...td, fontFamily: MONO, fontSize: TYPE.label, whiteSpace: "nowrap" }}>
-                    {t.name}
+                  <td style={{ ...td, maxWidth: 300 }}>
+                    <div style={{ fontFamily: MONO, fontSize: TYPE.label, whiteSpace: "nowrap" }}>
+                      {t.name}
+                    </div>
+                    <div
+                      title={sampleLine(age?.sample, age?.dateColumn) || undefined}
+                      style={{
+                        fontFamily: MONO, fontSize: TYPE.micro, color: OWNER_THEME.green,
+                        marginTop: 3, whiteSpace: "nowrap", overflow: "hidden",
+                        textOverflow: "ellipsis", maxWidth: 300,
+                      }}
+                    >
+                      {sampleLine(age?.sample, age?.dateColumn) || "—"}
+                    </div>
                   </td>
                   <td style={{ ...td, minWidth: 180 }}>
                     <div style={{
@@ -348,7 +390,7 @@ export default function DbMap() {
         title="Largest indexes"
         subtitle="An index far bigger than its table's data is bloat; one with no scans is dead weight. Retention fixes neither — only REINDEX does."
       >
-        <div style={{ overflowX: "auto" }}>
+        <div style={tableScroll(42)}>
           <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 560, fontSize: TYPE.body }}>
             <tbody>
               {(data?.indexes ?? []).map((i) => (

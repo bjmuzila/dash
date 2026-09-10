@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026-09-10 (g) - Scheduled posts can go out as the BOT, not just a webhook
+
+A webhook is bound to ONE channel, permanently, so "post this in every channel"
+meant one webhook per channel, each pasted in by hand. The bot is the other
+shape: one credential (`DISCORD_BOT_TOKEN`, already in .env.local) reaching any
+channel it can see, addressed by channel id.
+
+NEW: `server-v2/discord-bot-poster.js` - REST only, no gateway. discord.js is in
+the tree (discord-bot.js, the slash-command bot) but would drag a websocket,
+intents and a login lifecycle into a process that only needs to POST a message.
+`postToChannel(id, {content, file})` and `listChannels(guildId)`.
+
+  THE TRADE-OFF, so it is not discovered later: a WEBHOOK message may override
+  `username` / `avatar_url` per message - a BOT CANNOT. Bot posts always wear
+  the Discord application's own name and avatar. For "CB Edge Signals
+  everywhere" that is the better outcome, but it means the identity fields on
+  the owner page are inert on the bot path, and the page now says so.
+
+NEW: `GET /api/discord-bot/channels` (owner) - feeds the dropdown. Answers 200
+with `{ok:false, error}` rather than a status code when the bot is missing or
+not in the guild, because "DISCORD_BOT_TOKEN is not set" / "Missing Access" is
+the actual fix and belongs in front of whoever is looking at the dropdown.
+
+CHANGED: `scheduled_posts` gains `channel_id` (ADD COLUMN IF NOT EXISTS - no
+manual migration). PRECEDENCE, applied in one place and reported to the page as
+`dest`: channel set -> bot; channel blank -> webhook. A row holds BOTH, so
+switching back does not mean re-pasting a webhook. A channel id is not a secret
+and goes to the page as-is; the webhook stays masked.
+
+CHANGED: `econ-calendar-discord.js` branches on `channelId` in `postToDiscord()`
+and its "is there a destination" checks now accept either.
+
+CHANGED: `BotScheduled.tsx` - a Bot channel / Webhook segmented control. Bot mode
+is a grouped `Category / #channel` dropdown, so nobody copies an 18-digit id by
+hand. A saved channel the bot has since lost access to stays visible as an
+explicit "(not in the bot's channel list)" row instead of silently resetting the
+select to something else. The collapsed header now ends with `· bot` /
+`· webhook` / `· no destination`.
+
+TO USE THE BOT: invite it to the server with Send Messages + Attach Files, make
+sure it can see the channel, then pick the channel on owner -> BOT -> Scheduled.
+`DISCORD_GUILD_ID` is what the dropdown lists.
+
+## 2026-09-10 (f) - Scheduled-post cards collapse, default closed
+
+`owner-vite/src/pages/BotScheduled.tsx` - each job is now a disclosure row, shut
+on load. The list only grows, and a page of fully-expanded forms is one nobody
+can scan.
+
+Collapsed, the header answers the three questions on its own: name, ON/OFF
+(clickable without expanding - the click is stopPropagation'd off the row), and
+one line reading `08:00 ET · Mon–Fri · last run Sep 10, 08:00 ET (ok)`, with the
+status in red when the last run errored. Hint text, the full error, and the
+whole form live behind the chevron.
+
+A card with unsaved edits is FORCE-OPENED regardless of its collapsed state and
+wears an UNSAVED tag - a draft must never sit hidden behind a chevron where the
+next Save looks like it did nothing.
+
 ## 2026-09-10 (e) - Scheduled posts are edited on the owner BOT page, not in env
 
 The Economic Calendar post (added in (d) below) no longer reads its schedule

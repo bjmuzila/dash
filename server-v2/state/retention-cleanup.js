@@ -439,6 +439,10 @@ async function runVacuum(p) {
 // and with a row per night it is visible the day it starts.
 const DB_MAP_SNAPSHOT_TABLES = Number(process.env.DB_MAP_SNAPSHOT_TABLES || 40);
 const DB_MAP_PROBE_TIMEOUT_MS = Number(process.env.DB_MAP_PROBE_TIMEOUT_MS || 30_000);
+// Sample trimming. A row from a wide table (eod_strike_gex has 27 columns) is
+// not a UI payload; a handful of fields is enough to say what a table records.
+const SAMPLE_MAX_FIELDS = Number(process.env.DB_MAP_SAMPLE_FIELDS || 12);
+const SAMPLE_MAX_LEN = Number(process.env.DB_MAP_SAMPLE_LEN || 48);
 
 // Preference order for "which column dates this row". First exact match wins,
 // then first substring match, so `snap_ts` beats `updated_at` on a table with
@@ -458,8 +462,16 @@ async function writeDbMapSnapshot(p) {
         oldest       text,
         newest       text,
         span_days    int,
+        -- The newest row itself, trimmed. Answers "what does this table
+        -- actually record?" without anyone having to go query it — and
+        -- SELECT ... ORDER BY <col> DESC LIMIT 1 is the same sequential scan
+        -- min(date) is on an unindexed text date column, so it belongs in this
+        -- nightly job, never in a request.
+        sample       jsonb,
         PRIMARY KEY (captured_at, table_name)
       )`);
+    // Installs that predate the column.
+    await p.query(`ALTER TABLE db_map_snapshot ADD COLUMN IF NOT EXISTS sample jsonb`);
   } catch (e) {
     console.warn('[retention-cleanup] db_map_snapshot ensure failed:', e.message);
     return { error: e.message };
@@ -534,11 +546,36 @@ async function writeDbMapSnapshot(p) {
       const span = (r.lo && r.hi)
         ? Math.max(0, Math.round((Date.parse(r.hi) - Date.parse(r.lo)) / 86_400_000))
         : null;
+      // The newest row, trimmed to something a UI can show on one line. Caught
+      // separately so a failure here cannot cost us the age figures we already
+      // have — the sample just comes back null.
+      let sample = null;
+      try {
+        const one = (await p.query(`SELECT * FROM "${t}" ORDER BY "${col.c}" DESC NULLS LAST LIMIT 1`)).rows[0];
+        if (one) {
+          sample = {};
+          let n = 0;
+          for (const [k, v] of Object.entries(one)) {
+            if (n >= SAMPLE_MAX_FIELDS) break;
+            if (v === null || v === undefined) continue;
+            let out;
+            if (v instanceof Date) out = v.toISOString();
+            else if (typeof v === 'object') out = JSON.stringify(v);
+            else out = String(v);
+            if (out.length > SAMPLE_MAX_LEN) out = out.slice(0, SAMPLE_MAX_LEN) + '…';
+            sample[k] = out;
+            n += 1;
+          }
+        }
+      } catch (e) {
+        console.warn(`[retention-cleanup] db_map sample failed for ${t}:`, e.message);
+      }
+
       await p.query(
-        `INSERT INTO db_map_snapshot (captured_at, table_name, date_column, oldest, newest, span_days)
-         VALUES ($1,$2,$3,$4,$5,$6)
+        `INSERT INTO db_map_snapshot (captured_at, table_name, date_column, oldest, newest, span_days, sample)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
          ON CONFLICT (captured_at, table_name) DO NOTHING`,
-        [stamped, t, col.c, r.lo || null, r.hi || null, span]);
+        [stamped, t, col.c, r.lo || null, r.hi || null, span, sample ? JSON.stringify(sample) : null]);
       written += 1;
     } catch (e) {
       failed += 1;

@@ -26,6 +26,17 @@
  *   nothing on it. Plus last_run_at / last_status / last_error, written by the
  *   job itself, so the page can say what actually happened without a log dive.
  *
+ * DESTINATION — bot channel OR webhook, and the channel wins
+ *   `channel_id` set  -> posted by the BOT (server-v2/discord-bot-poster.js),
+ *                        one credential, any channel it can see.
+ *   `channel_id` blank -> posted through `webhook_url`, the one-channel-forever
+ *                        shape.
+ *   A row holds both so switching back does not mean re-pasting a webhook, and
+ *   the precedence is fixed rather than a third column that could disagree with
+ *   the other two. Note the identity fields below apply to WEBHOOK posts only —
+ *   a bot always wears its application's name and avatar; the poster file
+ *   explains why.
+ *
  * SECRECY — same contract as bot-targets-store.js
  *   webhook_url lives here and ONLY here. Every read path a browser can reach
  *   goes through maskUrl(); the client sees the webhook id and the last four
@@ -59,8 +70,10 @@ const JOB_DEFS = [
     label: 'Economic Calendar',
     hint: 'The calendar snapshot image — same picture as the 📅 button on the Economic Calendar toolbar.',
     envWebhook: ['ECON_CAL_DISCORD_WEBHOOK', 'DISCORD_WEBHOOK_URL'],
+    envChannel: ['ECON_CAL_DISCORD_CHANNEL_ID'],
     defaults: {
       enabled: true,
+      channelId: '',
       postAt: '08:00',
       days: 'mon,tue,wed,thu,fri',
       username: 'CB Edge Signals',
@@ -126,6 +139,10 @@ async function ensureSchema() {
         last_error  TEXT        NOT NULL DEFAULT '',
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      -- Added after the table shipped (bot posting), so ADD COLUMN IF NOT
+      -- EXISTS rather than a new CREATE — an existing install must not need a
+      -- manual migration.
+      ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT '';
     `);
     ensured = true;
     return true;
@@ -169,6 +186,14 @@ function normalizeDays(raw, fallback = 'mon,tue,wed,thu,fri') {
   return DAY_KEYS.filter((d) => want.has(d)).join(',');
 }
 
+function envValue(keys) {
+  for (const key of keys || []) {
+    const v = (process.env[key] || '').trim();
+    if (v) return v;
+  }
+  return '';
+}
+
 function envWebhook(def) {
   for (const key of def?.envWebhook || []) {
     const v = (process.env[key] || '').trim();
@@ -184,6 +209,7 @@ function fallbackJob(def) {
     label: def.label,
     hint: def.hint,
     ...def.defaults,
+    channelId: envValue(def.envChannel) || def.defaults.channelId || '',
     webhookUrl: envWebhook(def),
     webhookFromEnv: true,
     lastRunAt: null,
@@ -205,6 +231,9 @@ function rowToJob(def, row) {
     avatarUrl: row.avatar_url || '',
     message: row.message || def.defaults.message,
     postEmpty: !!row.post_empty,
+    // Not a secret — a channel id is visible to anyone in the server — so it
+    // goes to the page as-is, unlike webhook_url.
+    channelId: (row.channel_id || '').trim() || envValue(def.envChannel),
     // The row's own url wins; env is the fallback, which is what keeps a box
     // that has never opened the page posting exactly where it always did.
     webhookUrl: stored || envWebhook(def),
@@ -263,6 +292,9 @@ async function loadMasked(opts = {}) {
       ...rest,
       webhookMask: maskUrl(webhookUrl),
       hasWebhook: !!webhookUrl,
+      // Which path a post would actually take, resolved here so the page never
+      // re-implements the precedence rule and drifts from it.
+      dest: rest.channelId ? 'bot' : (webhookUrl ? 'webhook' : 'none'),
     })),
   };
 }
@@ -302,6 +334,18 @@ async function save(patch) {
     urlSql = `$${vals.length}`;
   }
 
+  // Channel id: same "-" clears convention as the webhook, but it is not a
+  // secret, so a blank simply means "not provided by this form" and keeps.
+  const rawChan = String(patch.channelId ?? '').trim();
+  let chanSql = null;
+  if (rawChan === '-') {
+    chanSql = "''";
+  } else if (rawChan) {
+    if (!/^\d{15,25}$/.test(rawChan)) {
+      throw new Error(`"${rawChan.slice(0, 40)}" is not a Discord channel id — right-click the channel → Copy Channel ID`);
+    }
+  }
+
   const set = (col, v) => { vals.push(v); return `${col} = $${vals.length}`; };
   const parts = [];
   if (patch.enabled !== undefined) parts.push(set('enabled', !!patch.enabled));
@@ -312,6 +356,8 @@ async function save(patch) {
   if (patch.message !== undefined) parts.push(set('message', String(patch.message || '').slice(0, 1000)));
   if (patch.postEmpty !== undefined) parts.push(set('post_empty', !!patch.postEmpty));
   parts.push(`webhook_url = ${urlSql}`);
+  if (chanSql) parts.push(`channel_id = ${chanSql}`);
+  else if (rawChan) parts.push(set('channel_id', rawChan));
   parts.push('updated_at = NOW()');
 
   vals.push(def.id);

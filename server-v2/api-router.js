@@ -2398,6 +2398,27 @@ register('/api/discord-share', {
       require('./econ-calendar-discord').collectOnce(`http://127.0.0.1:${port}`, { force: true }),
   };
 
+  // ── GET /api/discord-bot/channels ─────────────────────────────────────────
+  // The channel dropdown on the Scheduled tab. A bot posts by channel ID, and
+  // asking someone to right-click every channel and copy an 18-digit number is
+  // how the wrong ID ends up saved — so the server asks Discord instead.
+  // Answers 200 with { ok:false, error } rather than a status code when the bot
+  // is not configured or not in the guild: that string is the actual fix
+  // ("DISCORD_BOT_TOKEN is not set", "Missing Access") and belongs in front of
+  // whoever is looking at the dropdown.
+  register('/api/discord-bot/channels', {
+    auth: 'user', methods: ['GET'],
+    async handler(req, res, ctx, verdict) {
+      if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
+      try {
+        send(res, 200, await require('./discord-bot-poster').listChannels());
+      } catch (err) {
+        console.error('[discord-bot/channels]', err);
+        send(res, 200, { ok: false, error: String(err?.message || err), channels: [] });
+      }
+    },
+  });
+
   register('/api/scheduled-posts', {
     auth: 'user', methods: ['GET', 'POST'],
     async handler(req, res, ctx, verdict) {

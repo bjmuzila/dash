@@ -11,11 +11,24 @@ import { OWNER_THEME, rgba, homeInputStyle } from "../lib/theme";
  * server-v2/scheduled-posts-store.js, not from anything typed here, so a job
  * can never be invented in the browser and then not exist.
  *
+ * TWO KINDS OF DESTINATION, and a channel beats a webhook when both are set:
+ *   BOT CHANNEL — one credential (DISCORD_BOT_TOKEN) reaching any channel the
+ *     bot can see. Pick it from the dropdown; no per-channel setup. A bot post
+ *     CANNOT carry a per-message name or avatar, so the identity fields below
+ *     are inert on this path — that is Discord's rule, not ours.
+ *   WEBHOOK — bound to one channel forever, but it can wear any name/avatar.
+ *
  * SECRETS ARE ONE-WAY, same contract as Manage. The server sends a MASK
  * (webhook id + last four token characters), never the URL. Leaving the webhook
  * box EMPTY on save means "keep what is stored" — that is what lets the time or
  * the message be edited without retyping a credential this page was never
  * given. Typing a single "-" clears it back to the server's env fallback.
+ *
+ * CARDS ARE COLLAPSED BY DEFAULT — this list only grows, and a page of
+ * fully-expanded forms is one nobody can scan. The header row alone answers
+ * "is it on, when does it go, did it work last time"; the form is one click
+ * away. A card with unsaved edits is force-opened regardless of its collapsed
+ * state, so a draft can never be hidden behind a chevron and forgotten.
  *
  * "Post now" is NOT a dry run. It runs the real job against the real webhook
  * and the message lands in the channel. It exists because the alternative for
@@ -47,9 +60,12 @@ type Job = {
   avatarUrl: string;
   message: string;
   postEmpty: boolean;
+  channelId: string;
   webhookMask: string;
   hasWebhook: boolean;
   webhookFromEnv: boolean;
+  /** Which path a post would actually take — resolved by the server. */
+  dest: "bot" | "webhook" | "none";
   lastRunAt: string | null;
   lastStatus: string;
   lastError: string;
@@ -57,6 +73,8 @@ type Job = {
 
 /** Local edits, keyed by job id. Only what was actually touched. */
 type Draft = Partial<Job> & { webhookUrl?: string };
+
+type Channel = { id: string; name: string; category: string };
 
 const labelStyle: CSSProperties = {
   fontSize: 10,
@@ -78,6 +96,17 @@ function fmtWhen(iso: string | null): string {
   }) + " ET";
 }
 
+/** "Mon–Fri" / "Weekends" / "Mon, Wed, Fri" — the collapsed row's whole story. */
+function fmtDays(days: string): string {
+  const on = String(days || "").split(",").filter(Boolean);
+  if (on.length === 0) return "never";
+  if (on.length === 7) return "Every day";
+  const key = on.join(",");
+  if (key === "mon,tue,wed,thu,fri") return "Mon–Fri";
+  if (key === "sat,sun") return "Weekends";
+  return DAYS.filter((d) => on.includes(d.key)).map((d) => d.label).join(", ");
+}
+
 export default function BotScheduled() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [live, setLive] = useState(true);
@@ -85,6 +114,11 @@ export default function BotScheduled() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  /** Which cards are expanded. Absent = collapsed, which is the default. */
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  /** Guild channels for the bot dropdown, fetched once. */
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [channelErr, setChannelErr] = useState<string>("");
   /** Failures shown IN the card — a banner at the top of the page gets missed. */
   const [cardMsg, setCardMsg] = useState<Record<string, { kind: "ok" | "err"; text: string }>>({});
 
@@ -114,8 +148,21 @@ export default function BotScheduled() {
     }
   }
 
+  async function loadChannels() {
+    try {
+      const r = await fetch("/api/discord-bot/channels", { cache: "no-store" });
+      const j = await r.json();
+      setChannels(Array.isArray(j?.channels) ? j.channels : []);
+      // Not an error banner — a missing token only matters if you pick Bot.
+      setChannelErr(j?.ok ? "" : String(j?.error || "Bot channels unavailable"));
+    } catch (e) {
+      setChannelErr(String((e as Error)?.message || e));
+    }
+  }
+
   useEffect(() => {
     load();
+    loadChannels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -148,6 +195,9 @@ export default function BotScheduled() {
           postEmpty: val(job, "postEmpty"),
           // Absent/blank = keep what is stored. Never send the mask back.
           webhookUrl: (d.webhookUrl ?? "").trim(),
+          // "-" clears; the segmented control below sends it when Webhook is
+          // chosen, which is what makes the channel-wins precedence switchable.
+          channelId: String(val(job, "channelId") ?? "").trim() || "-",
         }),
       });
       const j = await r.json();
@@ -227,28 +277,71 @@ export default function BotScheduled() {
         const savingThis = busy === `save:${job.id}`;
         const runningThis = busy === `run:${job.id}`;
 
+        const isDirty = dirty(job);
+        // A dirty card is force-opened: unsaved edits must never sit hidden
+        // behind a chevron where the next Save looks like it did nothing.
+        const expanded = (open[job.id] ?? false) || isDirty;
+        const failed = job.lastStatus === "error";
+
         return (
-          <Card key={job.id} variant="classic">
-            {/* ── Header: name, what it is, on/off ─────────────────────────── */}
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 16, fontWeight: 800, color: OWNER_THEME.text }}>{job.label}</div>
-                {job.hint && (
-                  <div style={{ fontSize: 12, color: OWNER_THEME.text, opacity: 0.65, marginTop: 3 }}>{job.hint}</div>
-                )}
-                <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.5, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
-                  Last run {fmtWhen(job.lastRunAt)}
-                  {job.lastStatus ? ` · ${job.lastStatus}` : ""}
-                  {job.lastError ? ` — ${job.lastError}` : ""}
+          <Card key={job.id} variant="classic" padding={0}>
+            {/* ── Header row — the whole card when collapsed ───────────────── */}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setOpen((p) => ({ ...p, [job.id]: !expanded }))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpen((p) => ({ ...p, [job.id]: !expanded }));
+                }
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+                padding: "16px 20px",
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <span style={{
+                flexShrink: 0, fontSize: 11, color: OWNER_THEME.text, opacity: 0.6,
+                transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s",
+              }}>
+                ▶
+              </span>
+
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: OWNER_THEME.text }}>{job.label}</span>
+                  {isDirty && (
+                    <span style={{ fontSize: 10, fontWeight: 800, color: OWNER_THEME.orange, letterSpacing: "0.08em" }}>
+                      UNSAVED
+                    </span>
+                  )}
+                </div>
+                {/* The one line that has to answer "when does this go out" and
+                    "did it work" without opening anything. */}
+                <div style={{
+                  fontSize: 11, marginTop: 4, opacity: 0.6, color: OWNER_THEME.text,
+                  fontVariantNumeric: "tabular-nums",
+                }}>
+                  {enabled ? `${val(job, "postAt")} ET · ${fmtDays(days)}` : "Not scheduled"}
+                  {job.dest === "bot" ? " · bot" : job.dest === "webhook" ? " · webhook" : " · no destination"}
+                  {" · last run "}
+                  <span style={{ color: failed ? RED : "inherit", opacity: failed ? 1 : 0.9 }}>
+                    {fmtWhen(job.lastRunAt)}{job.lastStatus ? ` (${job.lastStatus})` : ""}
+                  </span>
                 </div>
               </div>
 
               <button
                 type="button"
-                onClick={() => patch(job, { enabled: !enabled })}
+                onClick={(e) => { e.stopPropagation(); patch(job, { enabled: !enabled }); }}
                 style={{
                   flexShrink: 0,
-                  padding: "8px 18px",
+                  padding: "7px 16px",
                   borderRadius: 10,
                   fontSize: 12,
                   fontWeight: 800,
@@ -262,6 +355,15 @@ export default function BotScheduled() {
                 {enabled ? "ON" : "OFF"}
               </button>
             </div>
+
+            {expanded && (
+            <div style={{ padding: "4px 20px 20px", borderTop: `1px solid ${OWNER_THEME.border}` }}>
+            {job.hint && (
+              <div style={{ fontSize: 12, color: OWNER_THEME.text, opacity: 0.65, marginTop: 14 }}>{job.hint}</div>
+            )}
+            {job.lastError && (
+              <div style={{ fontSize: 11, color: RED, opacity: 0.9, marginTop: 8 }}>{job.lastError}</div>
+            )}
 
             {/* ── When ─────────────────────────────────────────────────────── */}
             <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 20 }}>
@@ -306,23 +408,87 @@ export default function BotScheduled() {
 
             {/* ── Where ────────────────────────────────────────────────────── */}
             <div style={{ marginTop: 18 }}>
-              <div style={labelStyle}>Webhook URL</div>
-              <input
-                type="text"
-                value={draftFor(job).webhookUrl ?? ""}
-                onChange={(e) => patch(job, { webhookUrl: e.target.value })}
-                placeholder={
-                  job.hasWebhook
-                    ? `${job.webhookMask}${job.webhookFromEnv ? " (from server env)" : ""} — leave blank to keep`
-                    : "https://discord.com/api/webhooks/…"
-                }
-                spellCheck={false}
-                style={{ ...homeInputStyle, width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12 }}
-              />
-              <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.55, marginTop: 5 }}>
-                Paste a webhook to change the channel. Blank keeps what is stored; a single “-” clears it back to the
-                server env. The URL is never sent back to this page — only the mask above.
+              <div style={labelStyle}>Destination</div>
+
+              {/* Bot vs webhook. Picking Bot sets a channel id; picking Webhook
+                  clears it, because a channel always beats a webhook on the
+                  server and a stale channel would silently win. */}
+              <div style={{ display: "inline-flex", gap: 4, padding: 3, borderRadius: 11, border: `1px solid ${OWNER_THEME.border}`, background: OWNER_THEME.panelInset }}>
+                {([
+                  { id: "bot" as const, label: "Bot channel" },
+                  { id: "webhook" as const, label: "Webhook" },
+                ]).map((m) => {
+                  const active = (val(job, "channelId") ? "bot" : "webhook") === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() =>
+                        patch(job, m.id === "bot"
+                          ? { channelId: job.channelId || channels[0]?.id || "" }
+                          : { channelId: "" })}
+                      style={{
+                        padding: "7px 16px", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                        border: `1px solid ${active ? rgba(CYAN, 0.3) : "transparent"}`,
+                        background: active ? rgba(CYAN, 0.16) : "transparent",
+                        color: active ? CYAN : OWNER_THEME.text,
+                      }}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
               </div>
+
+              {val(job, "channelId") ? (
+                <div style={{ marginTop: 10 }}>
+                  <select
+                    value={String(val(job, "channelId"))}
+                    onChange={(e) => patch(job, { channelId: e.target.value })}
+                    style={{ ...homeInputStyle, width: "100%" }}
+                  >
+                    {/* A channel saved before the bot lost access would vanish
+                        from the list and silently reset the select — keep it
+                        visible as an explicit "unknown" row instead. */}
+                    {!channels.some((c) => c.id === val(job, "channelId")) && (
+                      <option value={String(val(job, "channelId"))}>
+                        {String(val(job, "channelId"))} (not in the bot’s channel list)
+                      </option>
+                    )}
+                    {channels.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.category ? `${c.category} / #${c.name}` : `#${c.name}`}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.55, marginTop: 5 }}>
+                    Posts as the bot — one token, any channel it can see. The name and avatar come from the Discord
+                    application itself, so the two identity fields below do nothing on this path.
+                  </div>
+                  {channelErr && (
+                    <div style={{ fontSize: 11, color: OWNER_THEME.orange, marginTop: 5 }}>{channelErr}</div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginTop: 10 }}>
+                  <input
+                    type="text"
+                    value={draftFor(job).webhookUrl ?? ""}
+                    onChange={(e) => patch(job, { webhookUrl: e.target.value })}
+                    placeholder={
+                      job.hasWebhook
+                        ? `${job.webhookMask}${job.webhookFromEnv ? " (from server env)" : ""} — leave blank to keep`
+                        : "https://discord.com/api/webhooks/…"
+                    }
+                    spellCheck={false}
+                    style={{ ...homeInputStyle, width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12 }}
+                  />
+                  <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.55, marginTop: 5 }}>
+                    Paste a webhook to change the channel. Blank keeps what is stored; a single “-” clears it back to the
+                    server env. The URL is never sent back to this page — only the mask above.
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* ── What ─────────────────────────────────────────────────────── */}
@@ -341,7 +507,7 @@ export default function BotScheduled() {
 
             <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 18 }}>
               <div style={{ flex: 1, minWidth: 220 }}>
-                <div style={labelStyle}>Posts as (blank = webhook’s own name)</div>
+                <div style={labelStyle}>Posts as (webhook only)</div>
                 <input
                   type="text"
                   value={String(val(job, "username") || "")}
@@ -350,7 +516,7 @@ export default function BotScheduled() {
                 />
               </div>
               <div style={{ flex: 2, minWidth: 260 }}>
-                <div style={labelStyle}>Avatar URL (blank = site icon)</div>
+                <div style={labelStyle}>Avatar URL (webhook only)</div>
                 <input
                   type="text"
                   value={String(val(job, "avatarUrl") || "")}
@@ -409,15 +575,15 @@ export default function BotScheduled() {
               <button
                 type="button"
                 onClick={() => runNow(job)}
-                disabled={runningThis || !job.hasWebhook}
-                title={job.hasWebhook ? "Posts for real, right now" : "No webhook configured"}
+                disabled={runningThis || job.dest === "none"}
+                title={job.dest === "none" ? "No destination configured" : "Posts for real, right now"}
                 style={{
                   padding: "10px 18px",
                   borderRadius: 10,
                   fontSize: 13,
                   fontWeight: 800,
-                  cursor: runningThis || !job.hasWebhook ? "default" : "pointer",
-                  opacity: runningThis || !job.hasWebhook ? 0.45 : 1,
+                  cursor: runningThis || job.dest === "none" ? "default" : "pointer",
+                  opacity: runningThis || job.dest === "none" ? 0.45 : 1,
                   border: `1px solid ${rgba(GREEN, 0.4)}`,
                   background: rgba(GREEN, 0.12),
                   color: GREEN,
@@ -442,6 +608,8 @@ export default function BotScheduled() {
               }}>
                 {msg.text}
               </div>
+            )}
+            </div>
             )}
           </Card>
         );
