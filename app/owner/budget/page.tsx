@@ -1,3 +1,32 @@
+// ═════════════════════════════════════════════════════════════════════════════
+// 🔒 PROTECTED DATA — NEVER DELETE BUDGET DATA WITHOUT BRANDON'S EXPLICIT
+//    CONFIRMATION, ASKED FOR AND ANSWERED IN THE CONVERSATION.
+//
+// This page reads hand-entered financial history going back to 2025-12: bank
+// statements, categorised transactions, recurring rules, the register. It is
+// NOT derived from any feed and CANNOT be regenerated. Every other table in
+// this database can be rebuilt from a recorder; these cannot be rebuilt from
+// anything.
+//
+// The rule, in full, is at the top of AGENTS.md. The short version:
+//
+//   • No DELETE / TRUNCATE / DROP / clearing UPDATE against any budget_* table
+//     without asking first and getting an explicit yes. Not as a step inside a
+//     larger task. Not because a cleanup or migration script wants it.
+//   • No retention window, cutoff or prune on a budget_* table, ever. These
+//     are deliberately unbounded. Under disk pressure trim the tape tables
+//     (option_strike_gex_history, flow_prints, strike_growth) — budget is
+//     ~1MB and is never the problem.
+//   • Asking means naming the exact statement and the exact row count it will
+//     remove, then waiting. "Confirm?" with no numbers is not asking.
+//
+// IF THIS PAGE LOOKS EMPTY, THE DATA IS NOT GONE. On 2026-09-10 every figure
+// read zero and it looked like total loss; all 927 budget_statement_tx rows
+// were present the whole time and GET /api/budget was returning 500 from a
+// stale _lib-db.cjs bundle. Check the API response and count the rows before
+// concluding anything — and never restore over a table you have not counted,
+// which is how this data would actually get lost.
+// ═════════════════════════════════════════════════════════════════════════════
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";

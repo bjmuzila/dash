@@ -4,6 +4,73 @@ This repo has **three** UIs layered on top of each other. Two are dead. Editing
 the wrong one is the #1 recurring mistake here: the change "works" in the file
 but nothing shows on the live site. Read the map below first.
 
+## 🔒 BUDGET DATA IS PROTECTED — NEVER DELETE WITHOUT BRANDON'S EXPLICIT CONFIRMATION
+
+**This is a hard stop, not a guideline.** It covers the budget app
+(`owner-vite/src/pages/Budget.tsx` + `pages/budget/*`), the budget tab of the
+owner site (`owner.cbedge.net` → `/owner/budget`), the Next owner page
+(`app/owner/budget/page.tsx`), and every table behind them:
+
+    budget_profiles          budget_register        budget_statement_tx
+    budget_categories        budget_recurring       budget_subscription
+    budget_category_rules    budget_prop            budget_amazon
+    budget_daily_balance     budget_flow_settled    budget_entries
+    budget_advice            budget_bank_balances   budget_day_entries
+
+This is hand-entered financial history going back to 2025-12 — bank statements,
+categorised transactions, recurring rules. **It cannot be regenerated from any
+feed.** Every other table in this database can be rebuilt from a recorder; these
+cannot be rebuilt from anything.
+
+### The rule
+
+- **NEVER** run `DELETE`, `TRUNCATE`, `DROP` or `UPDATE`-that-clears against any
+  `budget_*` table without asking Brandon in the conversation first and getting
+  an explicit yes. Not "I'll clean this up", not as a step inside a larger task,
+  not because a migration or a cleanup script seems to want it.
+- **NEVER** add a retention window, cutoff or prune for a `budget_*` table.
+  These tables are deliberately unbounded. If disk pressure comes up, trim the
+  tape tables (`option_strike_gex_history`, `flow_prints`, `strike_growth`) —
+  see the 2026-09-10 changelog entries. Budget is ~1 MB total; it is never the
+  problem.
+- **NEVER** run `VACUUM FULL`, a restore, or anything else that rewrites these
+  tables without asking first.
+- Asking means naming the exact statement and the exact row count it will
+  remove, and waiting for an answer. "Confirm?" with no numbers is not asking.
+
+### Existing destructive call sites — do not widen these
+
+The app already has legitimate replace-all writes. They are scoped, and they
+must stay scoped:
+
+- `_lib-db.cjs` — `DELETE FROM budget_statement_tx WHERE profile_id = $1 AND month = $2`
+  (clearStatementMonth: one month, re-imported immediately after)
+- `_lib-db.cjs` — `DELETE FROM budget_register WHERE profile_id = $1 AND entry_date
+  BETWEEN $2 AND $3 AND recurring_tag = $4` (one recurring rule, one window)
+- `_lib-db.cjs` — `DELETE FROM budget_flow_settled WHERE profile_id = $1 AND
+  entry_date < $2` (settled-flow keys only, never ledger rows)
+
+If a change would let any of these run without a `profile_id` **and** a second
+narrowing predicate, it is wrong. A client posting an empty array must never be
+read as "the table is empty now" — see the note on `replaceOwnerTodo` for the
+pattern to copy.
+
+### If the budget app looks empty, IT IS NOT DELETED
+
+2026-09-10: every figure read zero and it looked like total data loss. All 927
+`budget_statement_tx` rows were present and correctly scoped the whole time —
+`GET /api/budget?month=…` was returning 500 from
+`TypeError: D.listPropRecurring is not a function`, a stale `_lib-db.cjs`
+bundle. **Check the API response before concluding anything about the data**,
+and never "restore" over a table you have not first counted:
+
+```bash
+psql "$PGURL" -c "SELECT count(*) FROM budget_statement_tx"
+curl -s 'http://127.0.0.1:3002/api/budget?month=2026-09' | head -c 300
+```
+
+A restore over intact data is how this actually gets lost.
+
 ## DEFAULT TARGET: v3 (`cbedge-v3/`)
 
 **Assume every dashboard request means v3 unless it says otherwise.** The v3 SPA
