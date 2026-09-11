@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-09-11 (j) - AGENTS.md: v3 is the target, stated at the top
+
+A request for "the GEX Candles card on the home page" was taken to the v2 file
+(`components/dashboard/es-candles/EsChartCard.tsx`) and shipped there before the
+screen it was meant for — the v3 board card — was even opened. AGENTS.md already
+had a `DEFAULT TARGET: v3` section, but it sat at line 125, under the budget and
+owner blocks, and the section immediately after it is titled **"The live site
+(edit THIS)"** and describes v2. Read top-down, the file pointed at v2.
+
+**Changes.**
+
+- New banner as the FIRST thing in the file: **"IT IS ALWAYS v3. START IN
+  `cbedge-v3/src/`."** — with where each kind of surface lives (board cards,
+  pages, mobile, design), and the rule that a v2 filename match is not evidence
+  a request meant v2.
+- `DEFAULT TARGET: v3` retitled `— ALWAYS`; "unless it says otherwise" tightened
+  to "unless Brandon says v2 in so many words".
+- `## The live site (edit THIS)` retitled
+  `## v2 — the app/ + app-vite/ dashboard (REFERENCE ONLY, ask before editing)`,
+  with a blockquote saying everything below it is v2 reference and predates v3.
+- `## Editing a dashboard page` retitled with the v2/ask-first qualifier and now
+  answers the ES Candles example with the v3 path first.
+
+No code changed.
+
+---
+
 ## 2026-09-11 (i) - v3 GEX Candles: live card shows TODAY only, from 9:30 ET
 
 The **GEX Candles** card on the v3 board drew the whole `HISTORY_DAYS` tape, so

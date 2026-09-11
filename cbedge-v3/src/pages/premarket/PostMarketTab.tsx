@@ -499,7 +499,7 @@ export default function PostMarketTab(p: PostMarketProps) {
    * gap while looking like a chart with no morning activity.
    *
    * Now the bucket list is derived from the recording's real coverage, and a
-   * bucket that was never recorded is dropped AND named in the legend.
+   * bucket that was never recorded is simply dropped from the legend.
    */
   const evCover = useMemo(() => {
     if (!cols.length) return null;
@@ -515,11 +515,6 @@ export default function PostMarketTab(p: PostMarketProps) {
     // minutes, so a ladder that starts at 11:58 does not claim a morning.
     return BUCKET_DEFS.filter((b) => Math.min(b.until, evCover.to) - Math.max(b.from, evCover.from) >= 5);
   }, [BUCKET_DEFS, evCover]);
-
-  const missingBuckets = useMemo(
-    () => BUCKET_DEFS.filter((b) => !activeBuckets.includes(b)),
-    [BUCKET_DEFS, activeBuckets],
-  );
 
   /**
    * THE LEGEND IS THE FILTER.
@@ -1517,24 +1512,10 @@ export default function PostMarketTab(p: PostMarketProps) {
         </div>
 
         {histNote && <div className="warnbar" style={{ marginBottom: 11 }}>{histNote}</div>}
-        {/* This used to say "the ladder recorder only covers HH:MM-HH:MM" on
-            sessions the recorder had covered from the bell — the hook was
-            fetching a rolling 480-minute window anchored to the wall clock, so
-            the gap was the CALLER's and the notice pinned it on the recorder.
-            Now that the request is for the named session start to finish, a
-            short window is a real gap, and the wording no longer names a
-            culprit it cannot actually identify: a late start and a retention
-            prune look identical from here. */}
-        {!histNote && missingBuckets.length > 0 && evCover && (
-          <div className="warnbar" style={{ marginBottom: 11 }}>
-            The per-minute ladder for <b>{etDate}</b> only holds{" "}
-            <b>{etMinOfDay(evCover.from)}–{etMinOfDay(evCover.to)}</b>, so
-            the {missingBuckets.map((b) => b.label).join(" and ")} bucket
-            {missingBuckets.length > 1 ? "s are" : " is"} not drawn — those bars would be
-            an unrecorded window painted as &quot;no activity&quot;. Everything shown is inside the
-            recorded window.
-          </div>
-        )}
+        {/* The "per-minute ladder only holds HH:MM-HH:MM" coverage banner used
+            to sit here. The legend already drops buckets it has no recording
+            for, so the banner was restating in a full-width bar what the
+            legend shows structurally. Removed. */}
 
         {/* The 1/√T explanation used to live here as a paragraph. It is on the
             legend chip's tooltip now — a caveat that permanent is furniture, and

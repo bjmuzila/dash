@@ -1,5 +1,35 @@
 # AGENTS.md — read this before editing anything
 
+## ⛔ IT IS ALWAYS v3. START IN `cbedge-v3/src/`.
+
+**Every dashboard request means v3. There is no exception you may assume.**
+The customer dashboard Brandon is looking at is the **v3 SPA in `cbedge-v3/`**,
+served at **`/v3/*`**. Unless he says the word "v2" — or explicitly names a path
+under `app/`, `app-vite/` or `components/` — the file you want is under
+`cbedge-v3/src/`:
+
+- a **card** on the home board → `cbedge-v3/src/board/<card>/<Name>Card.tsx`
+- a **page** → `cbedge-v3/src/pages/<Name>.tsx`
+- the **phone build** → `cbedge-v3/src/mobile/`
+- **theme / tokens** → `cbedge-v3/src/design/`
+
+"The home page", "the board", "the GEX Candles card", "the chain", "the
+scanner" — all v3. A screenshot is v3. A description that matches a v2 filename
+is **still v3**: nearly every surface exists in both under almost the same name,
+so a name match is not evidence.
+
+**Editing v2 to satisfy a request is the #1 recurring mistake here.** The change
+compiles, the file looks right, and nothing moves on the screen Brandon is
+watching — because that screen is served from `cbedge-v3/`. Before editing any
+file under `app/`, `app-vite/` or `components/`, STOP and ask him.
+
+`## DEFAULT TARGET: v3` below has the v2↔v3 file map. Everything from
+`## v2 — the app/ + app-vite/ dashboard` onward describes **v2**, which is kept
+running but is not the default target — read those sections as reference, not as
+instructions.
+
+---
+
 This repo has **three** UIs layered on top of each other. Two are dead. Editing
 the wrong one is the #1 recurring mistake here: the change "works" in the file
 but nothing shows on the live site. Read the map below first.
@@ -122,9 +152,10 @@ customer dashboard.
 recessive step below that is `OWNER_THEME.cyan`. Do **not** fake grey by fading
 white with `opacity` — the token name `muted` invites exactly that mistake.
 
-## DEFAULT TARGET: v3 (`cbedge-v3/`)
+## DEFAULT TARGET: v3 (`cbedge-v3/`) — ALWAYS
 
-**Assume every dashboard request means v3 unless it says otherwise.** The v3 SPA
+**It is always v3.** Assume every dashboard request means v3 unless Brandon says
+"v2" in so many words. The v3 SPA
 in `cbedge-v3/` is where the work is happening — the board (`src/board/`), its
 cards, the pages under `src/pages/` and the phone build under `src/mobile/`.
 
@@ -144,8 +175,14 @@ so a request that matches a v2 filename is not evidence it meant v2:
 | Phone build | `components/mobile/` (`/app/m/*`) | `cbedge-v3/src/mobile/` (`/v3/m/*`) |
 
 If a screenshot or description could be either, the v3 file is the one to open.
+If it could ONLY be v2, ask before touching it.
 
-## The live site (edit THIS)
+## v2 — the `app/` + `app-vite/` dashboard (REFERENCE ONLY, ask before editing)
+
+> Everything from here to the end of this file describes **v2**. It still runs
+> and it is still served, but it is **not** the default target — see the banner
+> at the top. Do not act on the "edit THIS" wording below without asking
+> Brandon; it predates v3.
 
 - **Customer dashboard = React pages at `app/<name>/page.tsx`.** They are
   written as `"use client"` components and are served by the **Vite SPA in
@@ -257,10 +294,11 @@ Two owner surfaces exist, and they are not equals:
 Do NOT add owner pages to `app-vite/src/App.tsx` — that SPA has zero owner
 routes and `check-routes.mjs` only inspects the customer `NAV_ITEMS`.
 
-## Editing a dashboard page
+## Editing a dashboard page (v2 — ask first; the default is v3)
 
-"Edit the ES Candles page" → edit **`app/es-candles/page.tsx`** (the React
-component), NOT `overview.html`/`overview.js`. Map of the common ones:
+"Edit the ES Candles page" → in **v3** that is
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`. The v2 table below is the
+old map, kept for reference:
 
 | Page             | Live file (edit this)                    |
 |------------------|-------------------------------------------|
