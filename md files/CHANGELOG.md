@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026-09-11 (e) - Snapshot pills re-centred for the headless render; corner logo is now the 3.0 lockup
+
+PILLS. Every pill's text sat high in the scheduled image. MEASURED off the
+posted PNG, not guessed: the HIGH pill's interior had 4px of gap above the
+glyphs and 14px below at scale 1.5, i.e. ~3.3 CSS px too high.
+
+CAUSE: `PILL_NUDGE_EM` (0.42) corrects for html2canvas ignoring line-height
+half-leading, and its MAGNITUDE depends on the font that actually resolves. The
+iframe path (the 📅 button) runs on a desktop browser where
+`'Inter','Helvetica Neue',Arial,sans-serif` lands on Arial. Headless Chromium in
+the Docker image has neither Inter nor Helvetica Neue and resolves to a face
+with a taller ascent. Same markup, same rasteriser, different glyph box.
+
+FIX: the nudge is now an ARGUMENT. `buildSnapshotHTML(..., { pillNudgeEm })`
+defaults to the browser-measured 0.42, so the button is untouched;
+`app/api/econ-snapshot-html` passes `PILL_NUDGE_EM_HEADLESS` (0.08), measured
+from the render above. `ECON_SNAP_NUDGE_EM` overrides it, so a re-measure needs
+no code change. The render log now ends with `nudge=0.08`.
+
+  HOW TO RE-MEASURE if either drifts: find the pill's border rows in the PNG,
+  then the glyph rows inside them, and compare the gap above to the gap below.
+  Do not re-derive from font metrics - the model explains the mechanism, never
+  the magnitude. That is written into the constant's comment.
+
+LOGO. The bottom-right corner was still `/cb-edge-square.png`. It now uses
+`BRAND_LOGO_SRC` from `lib/brand.ts` - the 3.0 lockup - on both the button and
+the scheduled paths, and the box carries `BRAND_LOGO_ASPECT` (3.39:1) instead of
+the old 80x80 square, which would have squashed a lockup or shrunk it to a third
+of its height. Neither number is hardcoded; brand.ts exists so a logo path is
+never written inline again.
+
+## 2026-09-11 (d) - Confirmed: the snapshot route was fetching its data through the public origin
+
+Follow-up to (c). Proved from inside the container that the data was never the
+problem:
+
+    today = "2026-09-11"
+    events: 3343 | source: forexfactory
+    rows dated today: 26   (incl. USD High "Core CPI m/m", "CPI m/m", 2 President)
+    earnings rows: 141 | today: 14
+
+...while the posted image read "No political events today / No economic events
+today / No earnings today". Feed healthy, dates ISO and matching, filters
+correct - and the route still rendered zeros. The only thing left between the
+two is where the route fetched from: `req.nextUrl.origin`, i.e. out to
+cbedge.net and back through Cloudflare, instead of the loopback it is sitting
+on. Fixed in (c); this entry is the confirmation.
+
+ADDED: `/api/econ-snapshot-html` now logs ONE line per render -
+
+    [econ-snapshot] origin=http://127.0.0.1:3002 feed=forexfactory events=3343
+                    today=26 econ=3 pres=2 earn=14 logos=14 logo=y
+
+That line is the whole diagnosis. Its absence is what made the first empty post
+expensive: the feed was healthy, the filters were right, the image was blank,
+and nothing anywhere recorded what the route had actually fetched. `origin` is
+in the line because origin WAS the bug.
+
 ## 2026-09-11 (c) - "empty day" was hiding a dead feed; snapshot route now fetches over loopback
 
 The scheduled post skipped with "empty day" on a day the Economic Calendar page

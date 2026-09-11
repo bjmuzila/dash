@@ -1187,7 +1187,7 @@ function ExplainerMockup({
           <div className="xp-title">CB EDGE <span className="cy">GEX PLAN</span></div>
           <div className="xp-chip solo">UPDATE: {updated || snapDate}</div>
           <div className="xp-chip amber">
-            <span className="lbl">CORE BULLSEYE</span>
+            <span className="lbl">CORE</span>
             <span className="val">{controlNode ? controlNode.k : "—"}</span>
           </div>
           <div className="xp-chip cyan">
@@ -1229,8 +1229,9 @@ function ExplainerMockup({
                 matrix column never exports with dead space at the bottom. */}
             <div className="xp-mxmark">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/cb-edge-logo.png" alt="CB Edge" crossOrigin="anonymous" />
-              <span className="xp-mxmark-tag">"Real Edge · Real Orderflow"</span>
+              {/* v3 wordmark — tagline ("Your edge. Their loss.") is baked into
+                  the artwork, so no separate tag line under it. */}
+              <img src="/cbedge3.0.png" alt="CB Edge" crossOrigin="anonymous" />
             </div>
           </div>
 
@@ -1283,7 +1284,7 @@ function ExplainerMockup({
             <div className="xp-panel xp-keylevels">
               <div className="xp-panel-h">KEY LEVELS</div>
               <div className="xp-kl green"><span className="lbl">RESISTANCE</span><span className="v">{levelStrikes.resistance ?? "—"}</span></div>
-              <div className="xp-kl amber"><span className="lbl">CORE BULLSEYE (MAGNET)</span><span className="v">{controlNode ? controlNode.k : "—"}</span></div>
+              <div className="xp-kl amber"><span className="lbl">CORE (MAGNET)</span><span className="v">{controlNode ? controlNode.k : "—"}</span></div>
               <div className="xp-kl cyan"><span className="lbl">GAMMA FLIP / PIVOT</span><span className="v">{levelStrikes.pivot ?? "—"}</span></div>
               <div className="xp-kl red"><span className="lbl">SUPPORT</span><span className="v">{levelStrikes.support ?? "—"}</span></div>
             </div>
@@ -1303,7 +1304,7 @@ function ExplainerMockup({
               </div>
               <div className="xp-tp green">
                 <div className="tp-h">▲ BULL CASE {aiMap ? `· ${aiMap.bull.odds}%` : ""}</div>
-                <div className="tp-b">{aiMap ? aiMap.bull.desc : <>Holds above {levelStrikes.pivot ?? controlNode?.k ?? "—"} → grind toward {levelStrikes.resistance ?? "—"}; buy dips near the Core Bullseye.</>}</div>
+                <div className="tp-b">{aiMap ? aiMap.bull.desc : <>Holds above {levelStrikes.pivot ?? controlNode?.k ?? "—"} → grind toward {levelStrikes.resistance ?? "—"}; buy dips near the Core.</>}</div>
               </div>
               <div className="xp-tp red">
                 <div className="tp-h">▼ BEAR CASE {aiMap ? `· ${aiMap.bear.odds}%` : ""}</div>
@@ -1322,7 +1323,7 @@ function ExplainerMockup({
             <div className="xp-railnote">
               <span className="tag">CB Edge :</span>
               <span className="txt">
-                The <b>{controlNode ? controlNode.k : "control"}</b> Core Bullseye is dominant control — price gravitates there unless a catalyst breaks it.
+                The <b>{controlNode ? controlNode.k : "control"}</b> Core is dominant control — price gravitates there unless a catalyst breaks it.
                 {Number.isFinite(flip) ? <> The bigger move only comes if <b>{f(flip)}</b> fails.</> : null}
                 <span className="disc">Not financial advice · educational only.</span>
               </span>
