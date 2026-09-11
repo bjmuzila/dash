@@ -143,6 +143,20 @@ function niceTicks(min: number, max: number, count = 5): number[] {
 }
 
 /**
+ * Widest a single bar is ever drawn.
+ *
+ * These charts stretch their bars to fill the card: three categories on a
+ * 1400px card came out ~450px wide each, which reads as a block of colour
+ * rather than a measurement, and made the three-bar summaries look nothing
+ * like the column charts beside them. The SLOT still spreads across the full
+ * width — only the drawn bar is capped, and it is centred in its slot — so the
+ * spacing is unchanged and nothing overlaps. 56px sits just above
+ * EventColumns' own 24px cap, which is right: those charts have 26 columns to
+ * fit and these have three.
+ */
+const MAX_BAR_W = 56;
+
+/**
  * A bar anchored to the zero baseline, rounded only on the data end.
  * `up` decides which pair of corners is rounded — that is the whole point of
  * hand-rolling this instead of using <rect rx>: a rounded bottom on a positive
@@ -368,8 +382,9 @@ function DivBars({
 
   const y = (v: number) => PAD.top + innerH - ((v - lo) / (hi - lo)) * innerH;
   const ticks = niceTicks(lo, hi, 5);
-  const bw = values.length ? innerW / values.length : 0;
-  const gap = Math.min(10, bw * 0.3);
+  const slot = values.length ? innerW / values.length : 0;
+  const gap = Math.min(10, slot * 0.3);
+  const bw = Math.max(1, Math.min(MAX_BAR_W, slot - gap));
 
   return (
     <div ref={ref} style={{ width: "100%" }}>
@@ -385,12 +400,14 @@ function DivBars({
               </g>
             ))}
             {values.map((v, i) => {
-              const x = PAD.left + i * bw + gap / 2;
-              const w = bw - gap;
+              // Centred in its slot, capped at MAX_BAR_W. The hit target stays
+              // the whole slot — a capped bar is a smaller thing to point at.
+              const w = bw;
+              const x = PAD.left + i * slot + (slot - w) / 2;
               const up = v >= 0;
               return (
-                <g key={labels[i]} onPointerEnter={() => setHover(i)}>
-                  <rect x={PAD.left + i * bw} y={PAD.top} width={bw} height={innerH} fill="transparent" />
+                <g key={labels[i]} onPointerEnter={() => setHover(i)} onPointerDown={() => setHover(i)}>
+                  <rect x={PAD.left + i * slot} y={PAD.top} width={slot} height={innerH} fill="transparent" />
                   <path d={barPath(x, w, up ? y(v) : y(0), Math.abs(y(v) - y(0)), up)} fill={up ? UP : DOWN} opacity={hover == null || hover === i ? 1 : 0.55} />
                   {showValues ? (
                     <text x={x + w / 2} y={up ? y(v) - 6 : y(v) + 13} textAnchor="middle" fontSize={9.5} fill={INK} style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -453,7 +470,7 @@ function PairBars({
   const ticks = niceTicks(lo, hi, 5);
   const gw = labels.length ? innerW / labels.length : 0;
   const inner = gw * 0.78;
-  const bw = Math.max(1, (inner - 2) / 2);
+  const bw = Math.max(1, Math.min(MAX_BAR_W, (inner - 2) / 2));
 
   return (
     <div ref={ref} style={{ width: "100%" }}>
@@ -472,7 +489,9 @@ function PairBars({
               <g key={lab} onPointerEnter={() => setHover(i)}>
                 <rect x={PAD.left + i * gw} y={PAD.top} width={gw} height={innerH} fill="transparent" />
                 {[a[i], b[i]].map((v, k) => {
-                  const x = PAD.left + i * gw + (gw - inner) / 2 + k * (bw + 2);
+                  // Re-centre on the capped pair, not on `inner` — at wide
+                  // widths the cap makes the pair narrower than its slot.
+                  const x = PAD.left + i * gw + (gw - (bw * 2 + 2)) / 2 + k * (bw + 2);
                   const up = v >= 0;
                   return <path key={k} d={barPath(x, bw, up ? y(v) : y(0), Math.abs(y(v) - y(0)), up)} fill={colors[k]} opacity={hover == null || hover === i ? 1 : 0.5} />;
                 })}
@@ -542,7 +561,7 @@ function MultiBars({
   const ticks = niceTicks(lo, hi, 5);
   const gw = groups.length ? innerW / groups.length : 0;
   const inner = gw * 0.74;
-  const bw = Math.max(1, (inner - (series.length - 1) * 3) / series.length);
+  const bw = Math.max(1, Math.min(MAX_BAR_W, (inner - (series.length - 1) * 3) / series.length));
 
   return (
     <div ref={ref} style={{ width: "100%" }}>
@@ -563,7 +582,9 @@ function MultiBars({
                 {series.map((s, k) => {
                   const v = s.values[i];
                   if (v == null || !Number.isFinite(v)) return null;
-                  const x = PAD.left + i * gw + (gw - inner) / 2 + k * (bw + 3);
+                  // Re-centre on the capped group — see PairBars.
+                  const groupW = bw * series.length + (series.length - 1) * 3;
+                  const x = PAD.left + i * gw + (gw - groupW) / 2 + k * (bw + 3);
                   const up = v >= 0;
                   return (
                     <g key={s.label}>
@@ -591,201 +612,28 @@ function MultiBars({
   );
 }
 
-/**
- * Two horizontal bar panels sharing one row label — an EVENT LIST, not a
- * distribution.
- *
- * The vertical bar charts above answer "which month / which weekday". This
- * answers a different question: "what happened at each of the last N events,
- * in order". Rows are events, newest at the top, and the whole point is that
- * the trigger and the reaction sit on the SAME ROW so you can read one against
- * the other — a +40% VIX pop next to the SPX session that followed it, an
- * earnings gap next to the day's close.
- *
- * TWO PANELS, TWO SCALES, and that is not a mistake to be fixed. A VIX pop
- * runs +20% to +180%; the SPX session after it runs ±5%. Forcing them onto one
- * axis would render every SPX bar as a hairline. They are different quantities
- * measured in the same unit, so each panel carries its own axis and prints its
- * own range in the header — the comparison the chart supports is rank and
- * sign, not length across the gutter.
- *
- * A panel whose values are all one sign puts zero at its left edge and grows
- * one way; a panel with both signs puts zero in the middle. That is decided
- * from the data, so a filtered view of only-positive events does not waste half
- * its width on an empty negative half.
- */
-function HBars({
-  rows,
-  aTitle,
-  bTitle,
-  fmtA,
-  fmtB,
-  aColor,
-  bColor,
-  maxHeight = 520,
-  rowH = 20,
-}: {
-  rows: { key: string; label: string; sub?: string; a: number | null; b: number | null }[];
-  aTitle: string;
-  bTitle: string;
-  fmtA: (v: number) => string;
-  fmtB: (v: number) => string;
-  /** Fixed hue for panel A. Omit to colour by sign. */
-  aColor?: string;
-  /** Fixed hue for panel B. Omit to colour by sign. */
-  bColor?: string;
-  maxHeight?: number;
-  rowH?: number;
-}) {
-  const [ref, width] = useMeasuredWidth();
-  const [hover, setHover] = useState<number | null>(null);
-  const narrow = useNarrow();
-
-  // On a phone the two panels have ~110px each once the label gutter is paid
-  // for, so the gutter and the gap between them come down. The panels stay
-  // side by side: stacking them would double an already tall chart and lose
-  // the one thing the pairing is for — reading one row across.
-  const LABEL_W = narrow ? 62 : 104;
-  const GAP = narrow ? 8 : 16;
-  const panelW = Math.max(60, (width - LABEL_W - GAP) / 2);
-
-  /** lo/hi for one panel, with zero always inside the domain. */
-  const domain = (vals: (number | null)[]) => {
-    const ok = vals.filter((v): v is number => v != null && Number.isFinite(v));
-    const lo = Math.min(0, ...ok);
-    const hi = Math.max(0, ...ok);
-    const pad = (hi - lo) * 0.06 || 0.0001;
-    return { lo: lo - (lo < 0 ? pad : 0), hi: hi + (hi > 0 ? pad : 0) };
-  };
-  const dA = useMemo(() => domain(rows.map((r) => r.a)), [rows]);
-  const dB = useMemo(() => domain(rows.map((r) => r.b)), [rows]);
-
-  const scale = (v: number, d: { lo: number; hi: number }, x0: number) =>
-    x0 + ((v - d.lo) / (d.hi - d.lo || 1)) * panelW;
-
-  const H = rows.length * rowH;
-
-  const panelHead = (title: string, d: { lo: number; hi: number }, fmt: (v: number) => string) => (
-    <div style={{ width: panelW, minWidth: 0 }}>
-      <div style={{ ...capLabel, fontSize: 9.5, marginBottom: 2, textAlign: "center" }}>{title}</div>
-      <div style={{ fontSize: narrow ? 9 : 10, color: INK, opacity: 0.8, display: "flex", justifyContent: "space-between", fontVariantNumeric: "tabular-nums" }}>
-        <span>{fmt(d.lo)}</span>
-        <span>{fmt(d.hi)}</span>
-      </div>
-    </div>
-  );
-
-  return (
-    <div ref={ref} style={{ width: "100%" }}>
-      {width > 0 && rows.length ? (
-        <>
-          {/* Panel headings live in HTML above the SVG rather than as <text>
-              inside it: they are the axis labels, they never need to scroll
-              with the rows, and this way the row area can be a plain
-              overflow:auto box without a sticky-SVG trick. */}
-          <div style={{ display: "flex", gap: GAP, marginBottom: 6 }}>
-            <div style={{ width: LABEL_W, flex: "none" }} />
-            {panelHead(aTitle, dA, fmtA)}
-            {panelHead(bTitle, dB, fmtB)}
-          </div>
-
-          <div style={{ maxHeight, overflowY: "auto", overflowX: "hidden" }}>
-            <svg
-              width={width}
-              height={H}
-              role="img"
-              aria-label={`${aTitle} and ${bTitle} for the last ${rows.length} events`}
-              style={{ display: "block", touchAction: "none" }}
-              onPointerLeave={() => setHover(null)}
-            >
-              {/* zero baselines, drawn once behind everything */}
-              <line x1={scale(0, dA, LABEL_W)} x2={scale(0, dA, LABEL_W)} y1={0} y2={H} stroke="rgba(255,255,255,0.32)" />
-              <line
-                x1={scale(0, dB, LABEL_W + panelW + GAP)}
-                x2={scale(0, dB, LABEL_W + panelW + GAP)}
-                y1={0}
-                y2={H}
-                stroke="rgba(255,255,255,0.32)"
-              />
-
-              {rows.map((r, i) => {
-                const yTop = i * rowH;
-                const on = hover == null || hover === i;
-                const bar = (v: number | null, d: { lo: number; hi: number }, x0: number, fixed?: string, fmt?: (n: number) => string) => {
-                  if (v == null || !Number.isFinite(v)) return null;
-                  const xz = scale(0, d, x0);
-                  const xv = scale(v, d, x0);
-                  const x = Math.min(xz, xv);
-                  const w = Math.max(1.2, Math.abs(xv - xz));
-                  const col = fixed ?? (v >= 0 ? UP : DOWN);
-                  // Value text goes on the far side of the bar's own end, and
-                  // only when there is room for it inside the panel.
-                  const right = xv >= xz;
-                  const tx = right ? xv + 4 : xv - 4;
-                  const room = right ? x0 + panelW - xv > 46 : xv - x0 > 46;
-                  return (
-                    <>
-                      <rect x={x} y={yTop + 3} width={w} height={rowH - 7} rx={2} fill={col} opacity={on ? 1 : 0.45} />
-                      {room && fmt ? (
-                        <text
-                          x={tx}
-                          y={yTop + rowH / 2 + 3}
-                          textAnchor={right ? "start" : "end"}
-                          fontSize={9.5}
-                          fill={INK}
-                          opacity={on ? 0.95 : 0.4}
-                          style={{ fontVariantNumeric: "tabular-nums" }}
-                        >
-                          {fmt(v)}
-                        </text>
-                      ) : null}
-                    </>
-                  );
-                };
-                return (
-                  <g key={r.key} onPointerEnter={() => setHover(i)} onPointerDown={() => setHover(i)}>
-                    <rect x={0} y={yTop} width={width} height={rowH} fill={hover === i ? "rgba(255,255,255,0.05)" : "transparent"} />
-                    <text x={0} y={yTop + rowH / 2 + 4} fontSize={narrow ? 9.5 : 10.5} fontWeight={700} fill={INK} opacity={on ? 1 : 0.5} style={{ fontVariantNumeric: "tabular-nums" }}>
-                      {r.label}
-                    </text>
-                    {bar(r.a, dA, LABEL_W, aColor, fmtA)}
-                    {bar(r.b, dB, LABEL_W + panelW + GAP, bColor, fmtB)}
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
-
-          <div style={{ minHeight: 20, marginTop: 6, fontSize: 12, color: INK, fontVariantNumeric: "tabular-nums" }}>
-            {hover != null && rows[hover]
-              ? `${rows[hover].label}${rows[hover].sub ? ` · ${rows[hover].sub}` : ""} · ${aTitle} ${rows[hover].a == null ? "—" : fmtA(rows[hover].a as number)} · ${bTitle} ${rows[hover].b == null ? "—" : fmtB(rows[hover].b as number)}`
-              : narrow
-                ? "Tap a row for the detail."
-                : "Hover a row for the detail."}
-          </div>
-        </>
-      ) : (
-        <div style={{ height: Math.min(maxHeight, rows.length * rowH) + 44 }} />
-      )}
-    </div>
-  );
-}
 
 /**
- * One column per event, time running left to right. The house form for every
- * dated study on this page: Sept 11, Jackson Hole, Apple keynotes.
+ * One column per event, time running left to right.
  *
- * WHY THIS RATHER THAN HBars. HBars gives every observation a ROW, which is
- * right when they are a list to be ranked and wrong when they are a SERIES. A
- * study anchored on a date has one observation per event in a fixed order, and
- * the reader wants them in that order. Columns also fit in a third of the
- * height, and a missing observation becomes a visible gap on the timeline
- * instead of a blank row that has to be explained.
+ * THE ONE FORM FOR EVERY EVENT LIST ON THIS PAGE — Sept 11, Jackson Hole, Apple
+ * keynotes, FOMC decisions, VIX spikes, earnings prints. There is no second
+ * event chart; if a new study needs one, it uses this.
  *
- * ONE MEASURE, ONE AXIS. HBars drew two windows in two panels on two scales,
- * which is how a +1.4% day came to draw LONGER than a −4.8% week. Every one of
- * these studies now charts the EVENT SESSION alone and leaves the surrounding
- * windows to the table, where numbers are read rather than compared by length.
+ * It replaced a two-panel horizontal bar chart (`HBars`, deleted 2026-09-11)
+ * which gave every observation a ROW and drew two measures beside each other.
+ * Both halves of that were wrong here:
+ *
+ *  1. A ROW PER EVENT ranks a list. These studies are SERIES — one observation
+ *     per event in a fixed order — and the reader wants them in that order.
+ *     Columns also fit in a third of the height, and a missing observation
+ *     becomes a visible gap on the timeline rather than a blank row.
+ *  2. TWO MEASURES, TWO SCALES let a +1.4% day draw LONGER than a −4.8% week,
+ *     and a +40% VIX pop dwarf the session it was supposed to explain. Each
+ *     study now charts ONE measure — the event session — on ONE axis, and the
+ *     surrounding windows live in the table, where numbers are read rather
+ *     than compared by length. The second measure is not lost: it identifies
+ *     the column in the hover line via `sub`.
  *
  * A NULL IS NOT A ZERO, and this chart is built around that: a row with no
  * value draws a short neutral tick on the baseline plus its reason, never a
@@ -1470,16 +1318,27 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
   // longest bar is full width and every other bar is read against it.
   const maxLowNextHigh = Math.max(...vixEvents.map((e) => Math.abs(e.low_to_next_high)), 0.0001);
 
-  /** The rows the horizontal spike chart draws: newest N, VIX pop vs SPX. */
+  /**
+   * The columns the spike chart draws: the newest N spikes, OLDEST FIRST, and
+   * what SPX did after each.
+   *
+   * ONE MEASURE. This chart used to draw the VIX pop beside the SPX response on
+   * two scales — tens of percent against tenths — with a note underneath asking
+   * the reader not to compare their lengths. The trigger is the row's identity,
+   * not a second series: it names the event in the hover line, and the table
+   * below prints it. What is plotted is the thing the study is about.
+   */
   const vixBarRows = useMemo(
     () =>
-      vixEvents.slice(0, vixCount).map((e) => ({
-        key: e.date,
-        label: fmtUS(e.date),
-        sub: `VIX ${e.vix_open.toFixed(2)} → ${e.vix_high.toFixed(2)}`,
-        a: e.vix_pop,
-        b: vixMeasure === "oc" ? e.next_open_close : e.low_to_next_high,
-      })),
+      vixEvents
+        .slice(0, vixCount)
+        .reverse()
+        .map((e) => ({
+          key: e.date,
+          label: fmtUS(e.date),
+          sub: `VIX ${e.vix_open.toFixed(2)} → ${e.vix_high.toFixed(2)} · pop ${pctp(e.vix_pop, 0)}`,
+          value: vixMeasure === "oc" ? e.next_open_close : e.low_to_next_high,
+        })),
     [vixEvents, vixCount, vixMeasure],
   );
 
@@ -1845,22 +1704,27 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           ))}
         </div>
 
-        <HBars
+        <div style={{ ...capLabel, fontSize: 9.5, margin: "4px 0 10px", opacity: 0.75 }}>
+          {vixMeasure === "oc" ? "SPX next session, open → close" : "SPX low → next session high"} · last{" "}
+          {Math.min(vixCount, vixBarRows.length)} spikes
+        </div>
+        <EventColumns
           rows={vixBarRows}
-          aTitle="VIX pop (prev close → high)"
-          bTitle={vixMeasure === "oc" ? "SPX next session, open → close" : "SPX low → next session high"}
-          fmtA={(v) => pctp(v, 0)}
-          fmtB={(v) => pct(v, 1)}
-          aColor={A1}
-          maxHeight={vixCount > 20 ? 520 : 460}
+          mean={mean(vixBarRows.map((r) => r.value))}
+          fmt={(v) => pct(v, 1)}
+          fmtMean={(v) => pct(v, 2)}
+          height={300}
+          minLabelPx={54}
         />
 
         <div style={{ ...NOTE, marginTop: 8 }}>
-          Left is the trigger, right is what followed — same row, two scales,
-          because a VIX pop is measured in tens of percent and the SPX session
-          after it in tenths. Read the right column for its <em>sign and
-          spread</em>, not its length against the left one. On{" "}
-          <b>next open → close</b> the reaction is tradeable: you know a spike
+          Each column is one spike, oldest on the left, and its height is what
+          SPX did next — not how big the pop was. The pop is the row&apos;s
+          identity rather than a second series: it names the event on hover and
+          it is a column in the table below. Plotting the two side by side, which
+          this chart used to do, put tens of percent next to tenths on two
+          scales and invited exactly the comparison the numbers do not support.
+          On <b>next open → close</b> the reaction is tradeable: you know a spike
           happened before that open. On <b>low → next high</b> it is not — both
           ends are ticks you can only identify afterwards, which is why that
           version looks so much better.
@@ -2054,19 +1918,29 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           ))}
         </div>
 
-        <HBars
-          rows={fomcFiltered.slice(0, fomcCount).map((r) => ({
-            key: r.date,
-            label: fmtUS(r.date),
-            sub: `${r.bps === 0 ? "hold" : `${r.bps > 0 ? "+" : ""}${r.bps}bp`} to ${r.level.toFixed(2)}%`,
-            a: r.day,
-            b: r.after,
-          }))}
-          aTitle={L_DAY}
-          bTitle={L_AFTER}
-          fmtA={(v) => pct(v, 1)}
-          fmtB={(v) => pct(v, 1)}
-          maxHeight={fomcCount > 20 ? 520 : 460}
+        {/* The statement session alone. What followed is in the table and in
+            the by-action chart above; drawing it beside the day on a second
+            scale — which is what this chart used to do — makes a 0.2% day look
+            like the larger move. fomcFiltered is newest-first, so take the
+            newest N and THEN reverse: the chart is a timeline. */}
+        <div style={{ ...capLabel, fontSize: 9.5, margin: "4px 0 10px", opacity: 0.75 }}>
+          SPX on {L_DAY.toLowerCase()} · last {Math.min(fomcCount, fomcFiltered.length)} decisions
+        </div>
+        <EventColumns
+          rows={fomcFiltered
+            .slice(0, fomcCount)
+            .reverse()
+            .map((r) => ({
+              key: r.date,
+              label: fmtUS(r.date),
+              sub: `${r.dow} · ${r.bps === 0 ? "hold" : `${r.bps > 0 ? "+" : ""}${r.bps}bp`} to ${r.level.toFixed(2)}%`,
+              value: r.day,
+            }))}
+          mean={mean(fomcFiltered.slice(0, fomcCount).map((r) => r.day))}
+          fmt={(v) => pct(v, 1)}
+          fmtMean={(v) => pct(v, 2)}
+          height={300}
+          minLabelPx={54}
         />
 
         <Collapse
@@ -2464,20 +2338,30 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
               />
             </div>
 
-            <div style={{ marginTop: 18 }}>
-              <HBars
-                rows={earnRows.map((r) => ({
-                  key: r.session || r.date,
-                  label: fmtUS(r.session || r.date),
-                  sub: r.when || "timing unknown",
-                  a: r.gap,
-                  b: r.day,
-                }))}
-                aTitle="Gap on the open"
-                bTitle="Reaction session, close-to-close"
-                fmtA={(v) => pct(v, 1)}
-                fmtB={(v) => pct(v, 1)}
-                maxHeight={460}
+            {/* The reaction session, close to close. The GAP — the part that
+                happened while the market was shut — is the second number in
+                the table, not a second bar: the two are components of the same
+                move, and side by side they read as a comparison of two
+                independent ones. */}
+            <div style={{ marginTop: 20 }}>
+              <div style={{ ...capLabel, fontSize: 9.5, marginBottom: 10, opacity: 0.75 }}>
+                {earnTicker} on the reaction session · close-to-close
+              </div>
+              <EventColumns
+                rows={earnRows
+                  .slice()
+                  .reverse()
+                  .map((r) => ({
+                    key: r.session || r.date,
+                    label: fmtUS(r.session || r.date),
+                    sub: `${r.when || "timing unknown"} · gap ${pct(r.gap, 1)}`,
+                    value: r.day,
+                  }))}
+                mean={mean(earnRows.map((r) => r.day))}
+                fmt={(v) => pct(v, 1)}
+                fmtMean={(v) => pct(v, 2)}
+                height={300}
+                minLabelPx={54}
               />
             </div>
 

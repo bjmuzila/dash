@@ -8848,12 +8848,21 @@ if (libDb) {
               d.setMonth(d.getMonth() - 1, 1);
               return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
             })();
-            const [categories, entries, register2, recurring, amazonRows, propRows, propRecurring, dailyBalance, settledFlows] = await Promise.all([
+            // Twelve months of Amazon totals ending at the month on screen, for
+            // the comparison strip above the ledger. Grouped in SQL — the strip
+            // only ever wants per-month sums, never the delivery rows.
+            const amazonSince = (() => {
+              const [hy, hm] = month.split('-').map(Number);
+              const d = new Date(hy, (hm - 1) - 11, 1);
+              return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            })();
+            const [categories, entries, register2, recurring, amazonRows, amazonHistory, propRows, propRecurring, dailyBalance, settledFlows] = await Promise.all([
               D.listBudgetCategories(profile.id),
               D.listBudgetEntries(profile.id, 500),
               D.listRegister(profile.id, from, to),
               D.listRecurring(profile.id),
               D.listAmazonRows(profile.id, from, to),
+              D.listAmazonMonthTotals(profile.id, amazonSince, month).catch(() => []),
               D.listPropRows(profile.id, `${year}-01-01`, `${year}-12-31`),
               // Recurring Bzila rows are fetched unscoped: the stored row can be
               // in an earlier year than the one being viewed.
@@ -8865,6 +8874,15 @@ if (libDb) {
             send(res, 200, {
               profile, categories, entries, month, register: register2, recurring, amazonRows, propRows, propRecurring,
               dailyBalance, prevDailyBalance,
+              // Per-month Amazon totals (pay/gas/deliveries) for the last 12
+              // months through the selected one. Numbers are coerced here so the
+              // client never has to guess at driver types.
+              amazonHistory: (amazonHistory || []).map((r) => ({
+                month: String(r.month),
+                pay: Number(r.pay) || 0,
+                gas: Number(r.gas) || 0,
+                n: Number(r.n) || 0,
+              })),
               // Flows the Rent card has been told are already in the bank (or
               // are not coming). Keys only — the card matches them by key.
               settledFlows: (settledFlows || []).map((r) => String(r.flow_key)),

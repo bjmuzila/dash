@@ -709,6 +709,43 @@ function EsChartCard({
     return all.filter((c) => !c.date || keep.has(c.date));
   }, [historical, liveRows, isEs]);
 
+  /**
+   * ── Pre-open gate (home GEX card only) ───────────────────────────────────
+   *
+   * The home card must not start a NEW day until the cash open. ES prints all
+   * night, so from 00:00 ET the recorder stamps bars with today's date and the
+   * card rolled over to a session that is hours of thin overnight tape and no
+   * open — the card looked "stuck on nothing" every morning while the previous
+   * session, which is what you actually want to see pre-open, had scrolled off
+   * as "yesterday".
+   *
+   * So before 09:30 ET the embedded card drops today-dated bars and keeps
+   * showing the last completed session. At 09:30 the gate lifts by itself (the
+   * ticker below re-renders, the memo drops the filter) and today appears with
+   * its real open.
+   *
+   * REPLAY is exempt — `preOpenGateOff` below goes true the moment the
+   * transport opens, so the day picker, the frames and the reveal all see the
+   * unfiltered series exactly as they always did. Scoped to `embedded`: the
+   * standalone /es-candles route is unchanged.
+   */
+  const [preOpenTick, setPreOpenTick] = useState(0);
+  useEffect(() => {
+    if (!embedded) return;
+    // 30s is well inside the 1m native bar, so the gate lifts within one bar of
+    // the open without a timer that has to know about DST or holidays.
+    const id = setInterval(() => setPreOpenTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, [embedded]);
+  // Mirrors `replayOn`, which is declared further down — a state copy, not a
+  // ref, because `rows` is a memo and must re-run when it flips.
+  const [preOpenGateOff, setPreOpenGateOff] = useState(false);
+  const hideTodayPreOpen = useMemo(() => {
+    void preOpenTick; // re-evaluate on the ticker
+    if (!embedded || preOpenGateOff) return false;
+    return etMinutesOfDay(Date.now()) < RTH_OPEN_MIN;
+  }, [embedded, preOpenGateOff, preOpenTick]);
+
   // Bars actually plotted. Identity-stable at 1m/5m (rollupCandles returns the
   // same reference), so the interval switcher costs nothing at the native sizes.
   //
@@ -718,8 +755,17 @@ function EsChartCard({
   // cutoff would just eat a real bar off the left edge.
   const rows = useMemo(() => {
     const base = interval <= 5 ? rows5 : rollupCandles(rows5, interval);
-    if (chartSession !== "rth") return base;
-    const rth = base.filter((r) => {
+    const gated = (() => {
+      if (!hideTodayPreOpen) return base;
+      const today = etDayKey(Date.now());
+      const kept = base.filter((r) => (r.date ?? etDayKey(r.timestamp)) !== today);
+      // Same fallback rule as the RTH filter below: an empty chart is a worse
+      // answer than an ungated one. Only reachable if the window holds nothing
+      // but today's overnight.
+      return kept.length ? kept : base;
+    })();
+    if (chartSession !== "rth") return gated;
+    const rth = gated.filter((r) => {
       const m = etMinutesOfDay(r.timestamp);
       return m >= RTH_OPEN_MIN && m < RTH_CLOSE_MIN;
     });
@@ -727,8 +773,8 @@ function EsChartCard({
     // to filter everything away is a window that holds no cash-session bars at
     // all — a symbol whose recorder has only ever run overnight — and "no
     // candles" is a much worse answer to that than "here they are, unfiltered".
-    return rth.length ? rth : base;
-  }, [rows5, interval, chartSession]);
+    return rth.length ? rth : gated;
+  }, [rows5, interval, chartSession, hideTodayPreOpen]);
   /**
    * Content fingerprint of the plotted bars.
    *
@@ -1265,6 +1311,11 @@ function EsChartCard({
   const sharedRpTsRef = useRef<number | null>(null);
   useEffect(() => { replayEngagedRef.current = replayEngaged; }, [replayEngaged]);
   useEffect(() => { replayOnRef.current = replayOn; }, [replayOn]);
+  // Replay is exempt from the pre-open gate (see hideTodayPreOpen). Opening the
+  // transport — not engaging it — is what lifts it, so the day picker and the
+  // frame set are built from the unfiltered series the instant the panel opens,
+  // and closing it puts the gate back.
+  useEffect(() => { setPreOpenGateOff(replayOn); }, [replayOn]);
   /**
    * Tell the row when a hosted transport goes away with the card.
    *

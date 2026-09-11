@@ -53,6 +53,8 @@ type RegisterRow = {
 type Category = { id: number; name: string; amount: number; color?: string | null };
 type DailyBalance = { day: string; coastal: number; truist: number; secu: number };
 type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
+/** One month of Amazon totals, grouped server-side. `n` = deliveries logged. */
+type AmazonMonthTotal = { month: string; pay: number; gas: number; n: number };
 type PropSource = "prop" | "cbedge" | "contracts";
 // Per-stream wording for the Bzila entry form. Keeps the source-specific
 // labels/defaults in one place instead of ternaries at each field.
@@ -215,6 +217,10 @@ export default function Budget() {
   const [register, setRegister] = useState<RegisterRow[]>([]);
   const [recurring, setRecurring] = useState<RecurringRule[]>([]);
   const [amazonRows, setAmazonRows] = useState<AmazonRow[]>([]);
+  // Twelve months of Amazon totals through the selected month — the comparison
+  // strip above the ledger. The CURRENT month is taken from amazonRows instead,
+  // so a day added on this screen moves the pace figure without a refetch.
+  const [amazonHistory, setAmazonHistory] = useState<AmazonMonthTotal[]>([]);
   /**
    * Flows the Rent card has been told to ignore, by occurrence key.
    *
@@ -307,6 +313,7 @@ export default function Budget() {
     setRegister(data.register || []);
     setRecurring(data.recurring || []);
     setAmazonRows(data.amazonRows || []);
+    setAmazonHistory(data.amazonHistory || []);
     setSettledFlows(new Set<string>((data.settledFlows || []).map((k: string) => String(k))));
     setPropRows(data.propRows || []);
     setPropRecurring(data.propRecurring || []);
@@ -513,6 +520,16 @@ export default function Budget() {
     gas: amazonComputed.totalGas,
     net: amazonComputed.totalNet,
   }), [amazonComputed]);
+
+  /**
+   * The same month, plus the two counts the comparison strip needs: deliveries
+   * logged, and DISTINCT dates worked. They differ — several trips can share a
+   * date — and "$ per day worked" is only honest against the second one.
+   */
+  const amazonCurrent = useMemo(() => ({
+    ...amazonMonth,
+    workedDays: new Set(amazonComputed.rows.map((r) => r.work_date)).size,
+  }), [amazonMonth, amazonComputed]);
 
   // Bzila — the business ledger. Three streams merged into one set of entries:
   //   prop + cbedge + contracts → budget_prop rows (entered on this tab)
@@ -1505,6 +1522,9 @@ export default function Budget() {
             onAssign={assignCategory}
             onDeleteRow={deleteRow}
           />
+        )}
+        {tab === "amazon" && (
+          <AmazonMonthCompare history={amazonHistory} month={month} current={amazonCurrent} currency={currency} />
         )}
         {tab === "amazon" && (
           <div style={{ ...cardAccent(2), flex: 1, minHeight: 0, overflow: "visible", padding: 0 }}>
@@ -3716,6 +3736,156 @@ function BzilaPanel({
           </div>
         );
       })()}
+    </div>
+  );
+}
+
+// ─── Amazon month comparison ─────────────────────────────────────────────────
+//
+// The ledger under this strip is exactly one month deep. That answers "what did
+// I do this month" and nothing at all about whether that is good — $1,400 is a
+// fine month or a bad one depending entirely on the twelve before it, and that
+// number was previously only reachable by clicking back through the picker.
+//
+// Two questions, in the order they get asked:
+//
+//   1. How does this month compare? — net per month, twelve months back, gas
+//      already out. Net is the only honest series here: pay alone rewards a
+//      month spent driving further for the same money.
+//   2. Where does it land? — "on pace", which is CALENDAR-day pace
+//      (net ÷ days elapsed × days in month), not per-delivery pace. The
+//      question is what the month PAYS, and the days with no delivery are part
+//      of that answer, not missing data. It shows only while the month on
+//      screen is the one still running; a past month is already final and a
+//      projection over it would be noise.
+//
+// The current month's bar is live off `amazonRows`, not the grouped history, so
+// a day entered in the form below moves the bar and the pace immediately.
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function monthAbbr(m: string): string {
+  return MONTH_ABBR[Number(m.slice(5, 7)) - 1] || m;
+}
+type AmazonMonthPoint = { month: string; pay: number; gas: number; net: number; n: number };
+
+function AmazonMonthCompare({
+  history, month, current, currency,
+}: {
+  history: AmazonMonthTotal[];
+  month: string;
+  current: { days: number; workedDays: number; pay: number; gas: number; net: number };
+  currency: string;
+}) {
+  const isMobile = useIsMobile();
+
+  const model = useMemo(() => {
+    const prior: AmazonMonthPoint[] = history
+      .filter((h) => h.month < month)
+      .map((h) => ({ month: h.month, pay: h.pay, gas: h.gas, net: h.pay - h.gas, n: h.n }))
+      .sort((a, b) => (a.month < b.month ? -1 : 1));
+
+    const [y, m] = month.split("-").map(Number);
+    const dim = new Date(y, m, 0).getDate();
+    const isCurrent = month === currentMonth();
+    const elapsed = isCurrent ? Math.min(new Date().getDate(), dim) : dim;
+    const projected = isCurrent && elapsed > 0 ? (current.net / elapsed) * dim : current.net;
+
+    const lastMonth = prior.length ? prior[prior.length - 1] : null;
+    const win = prior.slice(-3);
+    const avg3 = win.length ? win.reduce((s, r) => s + r.net, 0) / win.length : null;
+
+    const here: AmazonMonthPoint = { month, pay: current.pay, gas: current.gas, net: current.net, n: current.days };
+    // 6 bars on a phone, 12 on a desktop — the current month always the last.
+    const shown = [...prior.slice(isMobile ? -5 : -11), here];
+    const peak = Math.max(1, ...shown.map((r) => Math.abs(r.net)), Math.abs(projected));
+
+    return { prior, shown, dim, elapsed, isCurrent, projected, lastMonth, avg3, here, peak };
+  }, [history, month, current, isMobile]);
+
+  const { shown, isCurrent, projected, lastMonth, avg3, peak, elapsed, dim } = model;
+
+  // Pace against the recent average — the one comparison worth doing in the
+  // header, because it is the one that says "keep going" or "go drive".
+  const vsAvg = avg3 != null && avg3 !== 0 ? (projected - avg3) / Math.abs(avg3) : null;
+  const perWorked = current.workedDays > 0 ? current.net / current.workedDays : 0;
+
+  const BAR_H = isMobile ? 78 : 96;
+
+  const tile = (label: string, value: string, sub: string, color?: string) => (
+    <div key={label} style={{ padding: "10px 12px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: `1px solid ${HAIRLINE}` }}>
+      <div style={{ fontSize: 10, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.65 }}>{label}</div>
+      <div style={{ marginTop: 5, fontSize: isMobile ? 19 : 22, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: color ?? HOME_THEME.text }}>{value}</div>
+      <div style={{ marginTop: 3, fontSize: 11, color: HOME_THEME.muted, opacity: 0.6 }}>{sub}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ ...card(), padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted }}>Month Comparison</span>
+        <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.6 }}>Net of gas · last {shown.length} month{shown.length === 1 ? "" : "s"}</span>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))"), gap: 10 }}>
+        {isCurrent
+          ? tile(
+              "On Pace This Month",
+              fmtMoney(projected, currency),
+              `${fmtMoney(current.net, currency)} in ${elapsed} of ${dim} days`,
+              projected < 0 ? SOFT_RED : LIGHT_BLUE,
+            )
+          : tile("Month Net", fmtMoney(current.net, currency), `${dim} days · final`, current.net < 0 ? SOFT_RED : HOME_THEME.text)}
+        {tile(
+          "Last Month",
+          lastMonth ? fmtMoney(lastMonth.net, currency) : "—",
+          lastMonth ? `${monthAbbr(lastMonth.month)} · ${lastMonth.n} deliver${lastMonth.n === 1 ? "y" : "ies"}` : "no history yet",
+          lastMonth && lastMonth.net < 0 ? SOFT_RED : HOME_THEME.text,
+        )}
+        {tile(
+          "3-Month Avg",
+          avg3 != null ? fmtMoney(avg3, currency) : "—",
+          vsAvg == null
+            ? "needs a prior month"
+            : `${isCurrent ? "pace" : "this month"} ${vsAvg >= 0 ? "+" : "−"}${Math.abs(vsAvg * 100).toFixed(0)}% vs avg`,
+          avg3 != null && avg3 < 0 ? SOFT_RED : HOME_THEME.text,
+        )}
+        {tile(
+          "Per Day Worked",
+          current.workedDays ? fmtMoney(perWorked, currency) : "—",
+          current.workedDays ? `${current.workedDays} day${current.workedDays === 1 ? "" : "s"} · ${current.days} deliver${current.days === 1 ? "y" : "ies"}` : "nothing logged yet",
+          perWorked < 0 ? SOFT_RED : HOME_THEME.green,
+        )}
+      </div>
+
+      {/* Net per month. The current column is cyan; the translucent block on top
+          of it is the rest of the month at the pace above — drawn, not stated,
+          so a short month reads as short instead of as a collapse. */}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: isMobile ? 6 : 10, paddingTop: 6 }}>
+        {shown.map((r) => {
+          const live = r.month === month;
+          const h = Math.round((Math.abs(r.net) / peak) * BAR_H);
+          const ghost = live && isCurrent && projected > r.net ? Math.round((Math.abs(projected) / peak) * BAR_H) - h : 0;
+          const fill = r.net < 0 ? SOFT_RED : live ? HOME_THEME.cyan : "rgba(125,211,252,0.42)";
+          return (
+            <div key={r.month} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <div
+                title={`${monthAbbr(r.month)} ${r.month.slice(0, 4)} · pay ${fmtMoney(r.pay, currency)} · gas ${fmtMoney(r.gas, currency)} · net ${fmtMoney(r.net, currency)} · ${r.n} deliveries`}
+                style={{ width: "100%", height: BAR_H, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "stretch" }}
+              >
+                {ghost > 0 && (
+                  <div style={{ height: ghost, borderRadius: "6px 6px 0 0", background: "rgba(33,158,188,0.20)", border: `1px dashed rgba(33,158,188,0.55)`, borderBottom: "none" }} />
+                )}
+                <div style={{ height: Math.max(h, r.net === 0 ? 2 : 4), borderRadius: ghost > 0 ? "0 0 6px 6px" : 6, background: fill, boxShadow: live ? "0 0 18px rgba(33,158,188,0.45)" : "none" }} />
+              </div>
+              <div style={{ fontSize: 10, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: live ? LIGHT_BLUE : HOME_THEME.muted, opacity: live ? 1 : 0.7, whiteSpace: "nowrap" }}>
+                {compactMoney(r.net)}
+              </div>
+              <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: live ? LIGHT_BLUE : HOME_THEME.muted, opacity: live ? 1 : 0.55 }}>
+                {monthAbbr(r.month)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

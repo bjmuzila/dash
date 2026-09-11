@@ -1,5 +1,173 @@
 # Changelog
 
+## 2026-09-11 (l) - New: server-v2/scripts/walls-backfill.js
+
+Follow-up to (h). Re-enabling `startWallsRecorder()` fixes the Level Log from the
+next 15m slot forward, but 2026-09-10 in full and 09-11 up to the restart are
+still missing from `walls_log`. The source data was never lost —
+`scanner_snapshots` / `scanner_variants` kept every sweep — so this replays them.
+
+**Why `POST /proxy/walls-run { slot }` can't do it.** `sampleUniverse()` selects
+`ts >= NOW() - interval` with `DISTINCT ON (symbol) ... ORDER BY ts DESC` — the
+newest sweep as of *right now*. Firing slot 3 at midday stamps midday levels onto
+the 10:15 row. Correct for a live slot, wrong for a past one.
+
+**What the script does.** Picks each slot's sample by that slot's own ET clock
+(last sweep at or before the slot time + `SLOT_GRACE_MINS`, no older than the
+variant's freshness window), writes the sample's real `ts`, and carries the last
+strike per (symbol, level_type) across slots so the change-only rule, `reason`,
+`prev_strike` and `delta` come out exactly as a live pass would have produced
+them. All four variants (default off `scanner_snapshots`, the other three off
+`scanner_variants`). Idempotent via
+`ON CONFLICT (date, symbol, level_type, slot, expiry_scope, basis) DO NOTHING`,
+and it pre-seeds the carry from rows already in `walls_log`, so a half-written
+day gets completed rather than contradicted.
+
+**Stray-open repair.** When the recorder comes back mid-session its first write
+lands as `reason='open'` (the `!prev` branch) at, say, slot 12. Once slots 0–11
+are filled in behind it, that row is a mid-day baseline that draws as a broken
+first step. A post-pass demotes any `reason='open'` row that now has an earlier
+row for the same (date, symbol, level_type, variant) to `'change'` and fills its
+`prev_strike`/`delta`. `--no-repair` skips it.
+
+**Deliberately not written:** `wall_events` (classification needs the
+`RESOLVE_SLOTS` window *after* the tag — replaying it would invent reactions;
+`walls-recorder.reclassifyDay()` is the tool for that, and `/v3/level-log` reads
+`log`, not `events`), and `wall_reach` / `wall_alerts` (still disabled by design).
+
+Dry run by default.
+
+```
+node server-v2/scripts/walls-backfill.js --from=2026-09-10 --to=2026-09-11
+node server-v2/scripts/walls-backfill.js --from=2026-09-10 --to=2026-09-11 --commit
+```
+
+Flags: `--date=` (repeatable), `--from=`/`--to=`, `--commit`, `--default-only`,
+`--symbol=`, `--no-repair`, `--verbose`.
+
+Files: `server-v2/scripts/walls-backfill.js` (new)
+
+## 2026-09-11 (k) - Amazon tab: month comparison strip + "on pace this month"
+
+Brandon: "can you put a monthly comparison from previous months above the
+ledger. also the 'on pace this month' for this month". The Amazon tab was one
+month deep - the ledger and its total - which answers what was done this month
+and nothing about whether that is good. $1,400 is a fine month or a bad one
+depending entirely on the twelve before it, and reaching that number meant
+clicking back through the month picker one month at a time.
+
+### New card above the ledger (`AmazonMonthCompare` in `owner-vite/src/pages/Budget.tsx`)
+
+Four tiles, then twelve bars:
+
+- **On Pace This Month** - net / days elapsed x days in the month, with
+  "$X in 11 of 30 days" underneath. CALENDAR-day pace, not per-delivery: the
+  question is what the month PAYS, and the days with no delivery are part of
+  that answer, not missing data. On a past month the tile becomes "Month Net -
+  final" instead; a projection over a finished month is noise.
+- **Last Month**, **3-Month Avg** (with pace +/-% against it), **Per Day
+  Worked** - the last one over DISTINCT dates, not row count, because several
+  trips can share a date and "$ per day" is only honest against the first.
+- **Bars** - net per month, twelve back (six on a phone), current month in cyan
+  with a dashed translucent block on top showing where the pace lands. Net is
+  the only honest series here; pay alone rewards a month spent driving further
+  for the same money.
+
+The current month's bar and every tile read `amazonRows` (the live month), not
+the grouped history, so a day entered in the form below moves the pace with no
+refetch.
+
+### `amazonHistory` on GET /api/budget (`server-v2/api-router.js`)
+
+Twelve months of totals ending at the month on screen, via the existing
+`D.listAmazonMonthTotals` (already used by the statement categorizer) - grouped
+in SQL, so the strip costs one aggregate query and never pulls a year of
+delivery rows. Numbers are coerced server-side so the client never guesses at
+driver types; the call is `.catch(() => [])`, so a history failure degrades the
+strip instead of the month.
+
+## 2026-09-11 (j) - Seasonality: every event chart is columns now, and HBars is deleted
+
+Brandon: "do the same bars for fomc and any other bar chart on the seasonality
+page". The last three `HBars` call sites are converted, so `EventColumns` is now
+the ONE form for every event list on the page, and `HBars` itself is gone.
+
+### The three conversions
+
+- **FOMC** - columns of the statement-session return, oldest on the left, over
+  the last 20 or 50 decisions (existing pill). The Thu-Fri window moves to the
+  table and the by-action chart; drawing it beside the day on a second scale
+  made a 0.2% statement session look like the bigger move.
+- **After a VIX spike** - this was the worst of the three: a +40% VIX pop drawn
+  next to the ±1% session it was supposed to explain, on two scales, with a
+  note underneath asking the reader not to compare their lengths. Now the
+  column height is only what SPX did next; the pop identifies the event in the
+  hover line and stays a column in the table. The note was rewritten to
+  describe what the chart actually does.
+- **Earnings reactions** - columns of the close-to-close reaction session. The
+  GAP is a component of that same move, not an independent one, so it reads as
+  a number in the table rather than a bar beside it.
+
+Every one of them reverses its list before drawing: the page's lists are all
+newest-first, and a time axis has to run forwards.
+
+### HBars deleted (179 lines)
+
+Nothing referenced it after the conversions. `EventColumns`' header carries the
+reasoning that used to live in HBars' - why a row-per-event ranks a list when
+these studies are series, and why two measures on two scales is the bug behind
+all of it - so the argument survives its subject.
+
+### Bar width cap on the aggregate charts (`DivBars`, `PairBars`, `MultiBars`)
+
+These stretch their bars to fill the card. The FOMC "Mon-Tue / Wednesday /
+Thu-Fri" summary drew three bars ~450px wide each on a desktop card: a block of
+colour rather than a measurement, and nothing like the column charts beside it.
+
+New `MAX_BAR_W = 56`. The SLOT still spreads across the full width - only the
+drawn bar is capped and centred in its slot, so spacing is unchanged and the
+hit target stays the whole slot. `PairBars` and `MultiBars` re-centre on the
+capped group rather than on their old `inner` width, or the group would sit
+off-centre once the cap bites.
+
+These three also now set hover on `pointerdown`, matching the touch support
+added to the column charts yesterday.
+
+### Files
+
+- `components/seasonality/SeasonalityAlmanac.tsx` - the three conversions,
+  `HBars` removed, `MAX_BAR_W` added and applied in `DivBars` / `PairBars` /
+  `MultiBars`, VIX note rewritten.
+
+Verified at 1280px and 390px by mounting the real components headless.
+
+
+## 2026-09-11 (i) - Home GEX card: ES candles hold yesterday's session until 9:30 ET
+
+The home page GEX card's **ES Candles** view rolled to a new day at midnight,
+not at the open. ES prints all night, so from 00:00 ET the recorder stamps bars
+with today's date and the card switched to a session made entirely of thin
+overnight tape with no open in it, while the last completed session — the thing
+you actually want on screen pre-market — scrolled off as "yesterday".
+
+**Fix.** `components/dashboard/es-candles/EsChartCard.tsx` now drops today-dated
+bars from the plotted series while the ET clock is before `RTH_OPEN_MIN`
+(09:30). A 30s ticker re-evaluates the gate, so today appears with its real open
+within a bar of the open — no reload, and no DST/holiday table to maintain.
+
+**Scope.** Gated on the `embedded` prop, so this is the home card only; the
+standalone `/es-candles` route is unchanged.
+
+**Replay is exempt.** A `preOpenGateOff` state mirrors `replayOn`, so merely
+OPENING the replay transport lifts the gate — the day picker, `replayFrames`
+and the reveal all see the unfiltered series exactly as before. Closing it puts
+the gate back.
+
+Falls back to the ungated series if the filter would empty the chart, matching
+the existing RTH-filter rule directly below it.
+
+---
+
 ## 2026-09-11 (h) - Level Log: walls recorder re-enabled (page had no data since 09-09)
 
 `/v3/level-log` showed "no session recorded" on every ticker card and "No
