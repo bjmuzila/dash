@@ -1,5 +1,68 @@
 # Changelog
 
+## 2026-09-11 (c) - "empty day" was hiding a dead feed; snapshot route now fetches over loopback
+
+The scheduled post skipped with "empty day" on a day the Economic Calendar page
+was showing events.
+
+CAUSE 1 - A FAILED FEED LOOKS LIKE A QUIET TUESDAY. `app/api/calendar/route.ts`
+answers **HTTP 200 with `events: []`**, `source:"unavailable"` and a `warning`
+when the upstream feed is down. Its own comment says it: "without a warning here
+a hard failure renders as an ordinary empty week". `/api/econ-snapshot-html`
+read the array, counted zero, and the cron skipped - silently, as designed, for
+the wrong reason.
+
+  FIX: the route now forwards `x-econ-feed` ("ok" / "cache" / "unavailable") and
+  `x-econ-warning`. The cron THROWS on `unavailable` instead of skipping, so the
+  tick retries inside the grace window, the card shows the reason, and nothing
+  claims the day. The genuine-quiet-day skip now logs which feed state it saw.
+
+CAUSE 2 (likely contributor) - THE ROUTE WAS FETCHING ITS OWN DATA THROUGH THE
+PUBLIC ORIGIN. It used `req.nextUrl.origin`, so `/api/calendar`,
+`/proxy/earnings-week` and every ticker logo went out to cbedge.net and back
+through Cloudflare - where `/api/calendar` sets `s-maxage=1800`, so a CDN copy
+cached during a bad minute could be served for half an hour.
+
+  FIX: `http://127.0.0.1:${PORT}`. Same process answering itself - no TLS, no
+  CDN, no cache, and it cannot fail because the public hostname is unhappy.
+
+FILTERS, for the record (unchanged, in `lib/discord/econSnapshot.ts`
+`includeTemplateEvent`): the econ lane keeps `country === "USD"` and
+`impact !== "Holiday"`, capped at 8 rows; the presidential lane is
+`impact === "President"`, capped at 6; earnings are today's rows from
+/proxy/earnings-week. A non-USD print is deliberately not on this template.
+
+## 2026-09-11 (b) - FIX: the econ-calendar watcher was never starting (lost wiring line)
+
+The scheduled post never fired. Everything else was correct: settings row right
+(`enabled:true`, `08:00`, `mon-fri`, `dest:"bot"`, channel set), bot working,
+"Post now" working, container up 16 hours.
+
+CAUSE: `server-v2/server-with-proxy.js` had lost the one line that starts the
+watcher. `docker compose logs dashboard | grep econ-cal` printed NOTHING at boot
+while `[mg-ladder] enabled` - its neighbour, started two lines above - printed
+fine. The file's mtime matched a bulk git checkout that rewrote AGENTS.md,
+nav.ts, owner-vite/package.json and others in the same second: a pull took the
+upstream copy of server-with-proxy.js and the added line went with it. Every
+other file of the feature survived (api-router, the three new server-v2 modules,
+the route, the page).
+
+WHY IT LOOKED LIKE IT WORKED: "Post now" does NOT go through the watcher. It is
+an API route that requires the module and calls `collectOnce()` directly. So a
+green test proves the bot, the channel, the snapshot route and the renderer -
+and proves nothing at all about whether the timer is running.
+
+FIX: line restored, with a comment saying exactly that, so the next person to
+lose it has the symptom and the one-command check written down next to it.
+
+DIAGNOSTIC WORTH KEEPING: if a scheduled post does nothing, the first question
+is not "is the config right" but "did the watcher start" -
+
+    docker compose logs dashboard 2>&1 | grep -iE "mg-ladder|econ-cal"
+
+mg-ladder present and econ-cal absent means the logs are intact and the line is
+gone again.
+
 ## 2026-09-11 - FIX: "Post now" was eating the day's scheduled slot
 
 The Economic Calendar post tested fine from the owner page and then never fired
