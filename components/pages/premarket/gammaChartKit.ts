@@ -651,7 +651,10 @@ export function layoutLevels(
     .filter((l): l is { k: number; label: string; color: string; dash: string } =>
       l.k != null && Number.isFinite(l.k) && l.k >= o.k0 && l.k <= o.k1)
     .map((l) => {
-      const w = l.label.length * 5.5 + 10;
+      // 5.9px/char covers 10px semibold plus the 2.6px halo the caller strokes
+      // behind the glyphs; at 5.5 two adjacent labels' halos touched and the
+      // pair read as one run of text.
+      const w = l.label.length * 5.9 + 12;
       const dir = Math.abs(l.k - o.spot) < 1e-9 ? 0 : l.k < o.spot ? -1 : 1;
       const want = o.x(l.k) + dir * (w / 2 + 12);
       const cx = Math.min(Math.max(want, o.padL + w / 2), o.W - o.padR - w / 2);

@@ -4714,23 +4714,32 @@ async function main() {
     // fixed clock (09:29 open + every 15m to 16:00). Reads scanner_snapshots —
     // no extra Theta load — and writes change-only rows into walls_log plus
     // classified touch events into wall_events. Feeds /proxy/walls + the owner
-    // Results → Walls tab.
-    // DISABLED 2026-09-10 — Walls tab removed from the owner Results page.
-    // walls_log / wall_events stop growing; /proxy/walls still serves history.
-    // startWallsRecorder();
+    // Results → Walls tab, AND the v3 Level Log page (/v3/level-log).
+    //
+    // RE-ENABLED 2026-09-11. It was commented out on 2026-09-10 because the
+    // owner Results → Walls tab had been removed — but that tab was never the
+    // only reader. /v3/level-log (the ticker rail, the wall-migration chart,
+    // /proxy/walls and /api/walls-range) draws entirely from walls_log, so with
+    // this off the page had a last recorded session of 2026-09-09 and every
+    // card read "no session recorded". scanner_snapshots was fresh the whole
+    // time; nothing was copying it into walls_log. Do not disable this again
+    // without checking /v3/level-log first.
+    startWallsRecorder();
     // Reach Rank: the distance model layered on top of Walls. Nightly at 16:45
     // ET it replays the session into wall_reach (how far each level sat in ATR
     // units, and whether price got there) and re-snapshots wall_calibration
     // as_of TOMORROW — so tomorrow's live ranking scores every level against a
     // curve fitted only on sessions it has never seen. Feeds /proxy/walls-reach
     // and decorates /proxy/walls.
-    // DISABLED 2026-09-10 — see startWallsRecorder above. Nightly reach replay +
-    // calibration off; /proxy/walls-reach still serves what's already in wall_reach.
+    // DISABLED 2026-09-10 — Reach Rank only. The recorder above is back on as of
+    // 2026-09-11; this stays off deliberately. /v3/level-log does not read
+    // wall_reach, and /proxy/walls-reach still serves what is already in it.
     // startWallsReach();
     // Proximity alerts: every 5m during RTH, anything that just came inside
     // 0.25x ATR of a level WHILE CLOSING is written to wall_alerts and shows up
     // in the Walls tab's alert feed. No email, no push — on-page only.
-    // DISABLED 2026-09-10 — see startWallsRecorder above. No new wall_alerts rows.
+    // DISABLED 2026-09-10 — proximity alerts only. Independent of the recorder
+    // above, which is back on as of 2026-09-11. No new wall_alerts rows.
     // startWallsWatch();
     // Forward walls: the next unexpired contract, swept pre-open and post-close
     // into its own table so the 0DTE stack's one-expiry-per-session invariant

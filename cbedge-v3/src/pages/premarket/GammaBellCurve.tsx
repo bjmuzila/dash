@@ -62,12 +62,25 @@ import {
 const BASIS_KEY = "cb-premarket-gbell-basis-v1";
 const ZOOM_KEY = "cb-premarket-gbell-zoom-v1";
 
-/** Top pad carries up to THREE packed rows of level labels, hence 58. */
-const PAD = { t: 58, r: 18, b: 38, l: 72 };
+/**
+ * Top pad carries up to THREE packed rows of level labels, and each row now
+ * drops its leader through its OWN horizontal lane (see the level block at the
+ * bottom of the svg) — the third lane needs room to clear the rule, hence 68.
+ */
+const PAD = { t: 68, r: 18, b: 44, l: 72 };
 /** Gap between the mass pane and the net pane. */
 const GAP = 16;
 /** The mass pane gets the lion's share — it carries the fit. */
 const TOP_SHARE = 0.6;
+/**
+ * Headroom in the NET pane, as a multiple of the bar span.
+ *
+ * Without it the tallest short-gamma bar is drawn flush to the x axis and the
+ * tallest long-gamma bar flush to the pane's ceiling — the bar *is* the edge of
+ * the card, which reads as a clipped chart rather than a full one. 1.14 keeps
+ * ~7% of the pane clear above and below the bars.
+ */
+const NET_HEAD = 1.14;
 
 /**
  * The card's stylesheet. It carries the whole `.gdist` block because this is
@@ -188,7 +201,7 @@ export default function GammaBellCurve({
   }, []);
   // Back to a wide card's ratio now that this is the only chart in the row —
   // 0.62 was tuned for a half-width column and letterboxes at full width.
-  const H = Math.round(Math.min(660, Math.max(440, W * 0.44)));
+  const H = Math.round(Math.min(700, Math.max(476, W * 0.47)));
   const plotW = Math.max(80, W - PAD.l - PAD.r);
   const plotH = H - PAD.t - PAD.b;
   const topH = Math.max(60, (plotH - GAP) * TOP_SHARE);
@@ -354,11 +367,19 @@ export default function GammaBellCurve({
     const yTop = (m: number) => topY1 - m * massPx;
 
     // BOTTOM: net GEX, one linear scale across both signs.
+    //
+    // The bars get `botH / NET_HEAD` of the pane rather than all of it, and the
+    // leftover is split evenly above and below — so the tallest bar on each side
+    // stops short of the pane ceiling and of the x axis instead of being drawn
+    // flush against them. The zero line still sits at its true proportion
+    // WITHIN that band, so the two sides keep their relative scale.
     const maxP = Math.max(0, ...binsIn.map((b) => b.net));
     const maxN = Math.max(0, ...binsIn.map((b) => -b.net));
     const span = maxP + maxN || 1;
-    const zeroY = botY0 + botH * (maxP / span);
-    const netPx = (botH / span) * yScale;
+    const drawH = botH / NET_HEAD;
+    const slack = (botH - drawH) / 2;
+    const zeroY = botY0 + slack + drawH * (maxP / span);
+    const netPx = (drawH / span) * yScale;
     const yNet = (v: number) => zeroY - v * netPx;
 
     // ── BAR WIDTH ───────────────────────────────────────────────────────────
@@ -733,15 +754,43 @@ export default function GammaBellCurve({
 
           {/* ── shared: level rules across both panes ──────────────────────── */}
           {levels.map((l) => {
-            const ly = 14 + l.row * 14;
+            const ly = 16 + l.row * 15;
+            const xk = x(l.k);
+            // LEADER. It used to be a vertical stub and then ONE segment straight
+            // to the rule — which, over a 60px offset and a 6px drop, drew as a
+            // near-horizontal diagonal hanging off a short tick: a lopsided "L"
+            // that read as a glitch rather than as a pointer.
+            //
+            // Now it is a proper orthogonal elbow with rounded corners: out of
+            // the label, across THIS ROW'S OWN lane (so three stacked labels
+            // never share a horizontal and never cross each other's text), then
+            // one clean vertical down onto the top of the rule. A label sitting
+            // over its own strike skips the elbow and draws a single vertical.
+            const yA = ly + 4;              // leaves the label
+            const yLane = ly + 10;          // this row's horizontal lane
+            const yB = topY0 - 5;           // lands on the top of the rule
+            const dx = xk - l.cx;
+            const r = Math.min(5, Math.abs(dx) / 2);
+            const s = Math.sign(dx) || 1;
+            const lead = Math.abs(dx) < 2.5
+              ? `M${l.cx.toFixed(1)},${yA} V${yB.toFixed(1)}`
+              : `M${l.cx.toFixed(1)},${yA} V${(yLane - r).toFixed(1)}`
+                + ` Q${l.cx.toFixed(1)},${yLane} ${(l.cx + s * r).toFixed(1)},${yLane}`
+                + ` H${(xk - s * r).toFixed(1)}`
+                + ` Q${xk.toFixed(1)},${yLane} ${xk.toFixed(1)},${(yLane + r).toFixed(1)}`
+                + ` V${yB.toFixed(1)}`;
             return (
               <g key={l.label}>
-                <line x1={x(l.k)} x2={x(l.k)} y1={topY0 - 6} y2={botY1}
+                <line x1={xk} x2={xk} y1={topY0 - 6} y2={botY1}
                   stroke={l.color} strokeWidth={1.2} strokeDasharray={l.dash} opacity={0.85} />
-                <path d={`M${l.cx.toFixed(1)},${ly + 4} L${l.cx.toFixed(1)},${(topY0 - 12).toFixed(1)} L${x(l.k).toFixed(1)},${topY0 - 6}`}
-                  fill="none" stroke={l.color} strokeWidth={1} opacity={0.45} />
+                <path d={lead} fill="none" stroke={l.color} strokeWidth={1}
+                  strokeLinecap="round" strokeLinejoin="round" opacity={0.45} />
+                {/* No letter-spacing here. Tracking added to 10px bold split the
+                    double-l in "wall" into two loose strokes; the halo keeps the
+                    glyphs crisp where a leader passes behind them instead. */}
                 <text x={l.cx} y={ly} textAnchor="middle" fontSize={10} fill={l.color}
-                  fontWeight={700} style={{ letterSpacing: ".04em" }}>{l.label}</text>
+                  fontWeight={600} stroke="var(--panel)" strokeWidth={2.6} paintOrder="stroke"
+                  style={{ fontVariantNumeric: "tabular-nums" }}>{l.label}</text>
               </g>
             );
           })}

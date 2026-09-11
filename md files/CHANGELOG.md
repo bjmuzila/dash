@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-09-11 (h) - Level Log: walls recorder re-enabled (page had no data since 09-09)
+
+`/v3/level-log` showed "no session recorded" on every ticker card and "No
+recorded levels for SPX on 2026-09-11" under the chart. Not a frontend bug —
+`walls_log` had no rows after **2026-09-09**.
+
+**Cause.** `startWallsRecorder()` in `server-v2/server-with-proxy.js` was
+commented out on 2026-09-10 ("Walls tab removed from the owner Results page").
+That tab was never the only reader: the whole Level Log page — the ticker rail,
+the wall-migration chart, `/proxy/walls` and `/api/walls-range` — draws from
+`walls_log`. `scanner_snapshots` stayed fresh the entire time (SPX 12:04 ET on
+09-11); nothing was copying it into `walls_log`.
+
+**Fix.** Re-enabled `startWallsRecorder()` and rewrote the comment block above it
+to name `/v3/level-log` as a consumer, so the next cleanup does not repeat it.
+`startWallsReach()` and `startWallsWatch()` stay disabled on purpose (Reach Rank
+and proximity alerts; the Level Log reads neither) — their comments now say so
+independently instead of pointing at the recorder.
+
+**After deploy.** 09-10 and today's earlier slots can be backfilled with
+`POST /proxy/walls-run { slot }` — writes are idempotent on
+`(date, symbol, level_type, slot)`.
+
+Files: `server-v2/server-with-proxy.js`
+
+## 2026-09-11 (g) - Premarket gamma bell: level-label leaders and net-pane headroom
+
+Two cosmetic complaints on the gamma bell card (/premarket): the "Put wall" /
+"Call wall" callouts read as broken, and the short-gamma bars sat flush on the
+bottom edge of the card.
+
+**1. The leader lines.** Each level label drew a vertical stub and then ONE
+segment straight to the rule — `M cx,ly+4 L cx,topY0-12 L x(k),topY0-6`. Over a
+60px horizontal offset and a 6px drop that renders as a near-horizontal diagonal
+hanging off a short tick: a lopsided "L" that reads as a glitch, not a pointer.
+Replaced with a proper orthogonal elbow with rounded corners — out of the label,
+across THAT ROW'S OWN horizontal lane (`ly + 10`, so three stacked labels never
+share a horizontal or cross each other's text), then one clean vertical onto the
+top of the rule. A label sitting over its own strike (|dx| < 2.5px) skips the
+elbow and draws a single vertical.
+
+**2. The label text.** Dropped `letter-spacing: .04em` — tracking added to 10px
+bold split the double-l in "wall" into two loose strokes. Weight 700 -> 600,
+plus a `paintOrder="stroke"` halo in `var(--panel)` so the glyphs stay crisp
+where a leader passes behind them, and `tabular-nums` on the strike number.
+
+**3. Net-pane headroom.** New `NET_HEAD = 1.14`: the bars get `botH / NET_HEAD`
+of the pane and the leftover is split evenly above and below, so the tallest bar
+on each side stops ~7% short of the pane ceiling and of the x axis instead of
+being drawn flush against them. The zero line still sits at its true proportion
+WITHIN that band, so the two sides keep their relative scale.
+
+**4. Card geometry.** `PAD.t` 58 -> 68 (the third label lane needs room to clear
+the rule), `PAD.b` 38 -> 44, and the svg height `min(660, max(440, W*0.44))` ->
+`min(700, max(476, W*0.47))`.
+
+**5. Label collision width.** `layoutLevels()` estimated label width at
+5.5px/char + 10; with the new halo two adjacent labels' halos touched and the
+pair read as one run of text. Now 5.9px/char + 12.
+
+FILES (both copies kept in sync — v3 is the live one):
+- `cbedge-v3/src/pages/premarket/GammaBellCurve.tsx`
+- `cbedge-v3/src/pages/premarket/gammaChartKit.ts`
+- `components/pages/premarket/GammaBellCurve.tsx`
+- `components/pages/premarket/gammaChartKit.ts`
+
+**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build`) to appear
+on cbedge.net.
+
 ## 2026-09-11 (f) - Postgres map: "last recorded" line was always blank
 
 The line under each table name on /owner/db-map (the Postgres page) rendered
