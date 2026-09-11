@@ -1,5 +1,27 @@
 # Changelog
 
+## Friday 9/11/2026 — Seasonality: Sept 11 anniversary study, every event chart redrawn as columns, phone layout (`components/seasonality/*`)
+
+Added a **Sept 11 anniversary** section (`sections.ts`, `eventDates.ts`, `SeasonalityAlmanac.tsx`) computing day/week/month windows off the existing `YEAR_CURVES` — 2001 and the seven weekend years print "market closed"/"no session" instead of the fabricated 0.00% the forward-filled axis would otherwise hand you, and drop out of every mean. Then replaced the two-panel `HBars` row chart with a new `EventColumns` (one column per event, time left-to-right, one measure on one axis) across **all six** event studies — Sept 11, Jackson Hole, Apple keynotes, FOMC, VIX spikes, earnings — deleted `HBars` (179 lines), capped `DivBars`/`PairBars`/`MultiBars` bars at `MAX_BAR_W = 56` (three categories were drawing ~450px wide), and gave the whole page a phone layout: new `useNarrow.ts` (560px, effect-only so it can't desync at hydration) for SVG geometry plus a `@media (max-width:560px)` block in `SHELL_CSS` for tiles (now two-up), card padding, tables and the 99-year matrix (all twelve months now fit).
+
+Verified by mounting the real components headless at 1280px and 390px — desktop output unchanged above 560px. Mockups in `generated/2026-09-10-sep11-chart-options.html` and `generated/2026-09-10-sep11-bar-treatments.html`.
+
+
+## Friday 9/11/2026 — Whale Archive built end-to-end; Buy/Sell became a directional bias read (`server-v2/api-router.js`, `server-v2/_lib-lse.cjs`, `cbedge-v3/src/pages/Whales.tsx`)
+
+Registered `/api/lse/whales` and `/api/lse/contract-candles` in `server-v2/api-router.js` (both had been falling through the `app/api/[...proxy]` catch-all as 501, which rendered as an empty archive and `Could not load bars — 501`), added a `premium < TF_WHALE_FLOOR` carve-out to the `lse_top_flow_prints` retention delete so $1M+ prints are never swept, and rounded strikes to 1/1000 at source in `server-v2/_lib-lse.cjs` (`504.99999999999994` was also being pasted into `?strike=` and matching nothing).
+
+Client side, `cbedge-v3/src/pages/Whales.tsx` and `cbedge-v3/src/board/topFlow/TopFlowCard.tsx` replaced the `B/S` column with a directional **Bias** column (buying calls / selling puts = bullish), the whale toolbar folded into labelled `SegMenu` pills that wear the accent only when off-default (`cbedge-v3/src/design/primitives/Controls.tsx`, two new optional props), filters now persist to `localStorage` under `cb-v3-whales:filters`, and the CSV export plus the `VOL`/`OI` columns were dropped.
+
+## Friday 9/11/2026 — Level Log had no data since 9/09: walls recorder re-enabled + backfill (`server-v2/server-with-proxy.js`, `server-v2/scripts/walls-backfill.js`)
+
+`/v3/level-log` read "no session recorded" on every ticker card because `startWallsRecorder()` had been commented out of `server-v2/server-with-proxy.js` on 2026-09-10 when the owner Results → Walls tab was removed — but the Level Log page (rail, migration chart, `/proxy/walls`, `/api/walls-range`) is the real consumer of `walls_log`, so nothing wrote it after 9/09 while `scanner_snapshots` stayed fresh the whole time. Re-enabled it, rewrote the comment block to name the page so the next cleanup doesn't repeat it (`startWallsReach()` / `startWallsWatch()` stay off deliberately, with their own reasons), and added `server-v2/scripts/walls-backfill.js` — a dry-run-by-default replay that picks each slot's sample by that slot's own ET clock (which is why `POST /proxy/walls-run {slot}` cannot do it: `sampleUniverse()` selects `ts >= NOW() - interval`) and carries the last strike per (symbol, level_type) so `reason` / `prev_strike` / `delta` come out identical to a live pass.
+
+Backfilled 9/10 + 9/11 across all four variants: **17,218 rows written, 2,023 stray `reason='open'` rows repaired** (the recorder had resumed mid-session, so each of 169 symbols × 3 levels had a mid-day baseline that got demoted to `'change'` once the earlier slots landed behind it). Verified live — 169 tickers with an open baseline on both days, log advancing to slot 17 (13:45 ET). `wall_events` deliberately NOT replayed (classification needs the `RESOLVE_SLOTS` window *after* the tag — use `walls-recorder.reclassifyDay()`); `/v3/level-log` reads `log`, not `events`.
+
+Screenshot: `generated/2026-09-11-level-log-restored.jpg`
+
+
 ## Thursday 9/10/2026 — Site Guide deleted (`app-vite/src/App.tsx`, `lib/v3Routes.ts`, `components/shared/UserMenu.tsx`, `app/guide/page.tsx`, `app/app/guide/route.ts`)
 
 The `/guide` page had been unreachable since 2026-09-06 — the account-menu row came out then and nothing else linked to it — so this took the one-way step the RETIRED note in `lib/v3Routes.ts` described: the `Guide` lazy import and `<Route path="/guide">` are out of `app-vite/src/App.tsx` (a tombstone comment sits where the import was), `"/guide": "/"` is out of `PORTED` (dead config once the SPA shell route is gone; the RETIRED block is three paths now — `/ict`, `/trading`, `/fails`), and `UserMenu.tsx`'s removed-row comment no longer claims the Next route still renders. `check-routes.mjs` stays green — the guide was never a toolbar nav item and its import came out with its page.

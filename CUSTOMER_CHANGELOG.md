@@ -2,6 +2,16 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Friday 9/11/2026
+
+* **Seasonality Almanac:** new **Sept 11** section — what SPX did on the anniversary every year since 2001. Every event chart was redrawn, and the whole page now works on a phone — https://cbedge.net/explore/seasonality
+
+* **Level Log:** fixed — the ticker cards and wall migration chart were blank. Levels are recording again, and Wednesday's and today's missing sessions have been restored — https://cbedge.net/v3/level-log
+
+* **Whale Archive:** now live — the $1M+ print archive loads, with bullish/bearish totals, premium and expiry filters, and your filter choices remembered between visits — https://cbedge.net/v3/whales
+
+* **Top Flow:** Buy/Sell now reads as direction — selling puts shows Bullish, not Bearish. Contract charts open instead of erroring, and strikes show as 505, not 504.99999999999994 — https://cbedge.net/v3
+
 ## Thursday 9/10/2026
 
 * **Site Guide:** the old GEX/DEX explainer page has been retired — the explainers live in Docs — https://cbedge.net/docs

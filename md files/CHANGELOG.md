@@ -1,52 +1,5 @@
 # Changelog
 
-## 2026-09-11 (l) - New: server-v2/scripts/walls-backfill.js
-
-Follow-up to (h). Re-enabling `startWallsRecorder()` fixes the Level Log from the
-next 15m slot forward, but 2026-09-10 in full and 09-11 up to the restart are
-still missing from `walls_log`. The source data was never lost —
-`scanner_snapshots` / `scanner_variants` kept every sweep — so this replays them.
-
-**Why `POST /proxy/walls-run { slot }` can't do it.** `sampleUniverse()` selects
-`ts >= NOW() - interval` with `DISTINCT ON (symbol) ... ORDER BY ts DESC` — the
-newest sweep as of *right now*. Firing slot 3 at midday stamps midday levels onto
-the 10:15 row. Correct for a live slot, wrong for a past one.
-
-**What the script does.** Picks each slot's sample by that slot's own ET clock
-(last sweep at or before the slot time + `SLOT_GRACE_MINS`, no older than the
-variant's freshness window), writes the sample's real `ts`, and carries the last
-strike per (symbol, level_type) across slots so the change-only rule, `reason`,
-`prev_strike` and `delta` come out exactly as a live pass would have produced
-them. All four variants (default off `scanner_snapshots`, the other three off
-`scanner_variants`). Idempotent via
-`ON CONFLICT (date, symbol, level_type, slot, expiry_scope, basis) DO NOTHING`,
-and it pre-seeds the carry from rows already in `walls_log`, so a half-written
-day gets completed rather than contradicted.
-
-**Stray-open repair.** When the recorder comes back mid-session its first write
-lands as `reason='open'` (the `!prev` branch) at, say, slot 12. Once slots 0–11
-are filled in behind it, that row is a mid-day baseline that draws as a broken
-first step. A post-pass demotes any `reason='open'` row that now has an earlier
-row for the same (date, symbol, level_type, variant) to `'change'` and fills its
-`prev_strike`/`delta`. `--no-repair` skips it.
-
-**Deliberately not written:** `wall_events` (classification needs the
-`RESOLVE_SLOTS` window *after* the tag — replaying it would invent reactions;
-`walls-recorder.reclassifyDay()` is the tool for that, and `/v3/level-log` reads
-`log`, not `events`), and `wall_reach` / `wall_alerts` (still disabled by design).
-
-Dry run by default.
-
-```
-node server-v2/scripts/walls-backfill.js --from=2026-09-10 --to=2026-09-11
-node server-v2/scripts/walls-backfill.js --from=2026-09-10 --to=2026-09-11 --commit
-```
-
-Flags: `--date=` (repeatable), `--from=`/`--to=`, `--commit`, `--default-only`,
-`--symbol=`, `--no-repair`, `--verbose`.
-
-Files: `server-v2/scripts/walls-backfill.js` (new)
-
 ## 2026-09-11 (k) - Amazon tab: month comparison strip + "on pace this month"
 
 Brandon: "can you put a monthly comparison from previous months above the
@@ -76,6 +29,12 @@ Four tiles, then twelve bars:
 The current month's bar and every tile read `amazonRows` (the live month), not
 the grouped history, so a day entered in the form below moves the pace with no
 refetch.
+
+Follow-up: every label, sub-line and axis caption in this card is `HOME_THEME.text`
+at high opacity rather than `HOME_THEME.muted` - Brandon: "gray font white please".
+The muted grey the rest of the page uses for captions was too faint against the
+solid panel here, where the captions carry the units ("in 11 of 30 days",
+"% vs avg") and are not decoration.
 
 ### `amazonHistory` on GET /api/budget (`server-v2/api-router.js`)
 

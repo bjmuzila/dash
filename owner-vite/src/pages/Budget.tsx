@@ -3812,17 +3812,17 @@ function AmazonMonthCompare({
 
   const tile = (label: string, value: string, sub: string, color?: string) => (
     <div key={label} style={{ padding: "10px 12px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: `1px solid ${HAIRLINE}` }}>
-      <div style={{ fontSize: 10, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.65 }}>{label}</div>
+      <div style={{ fontSize: 10, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.9 }}>{label}</div>
       <div style={{ marginTop: 5, fontSize: isMobile ? 19 : 22, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: color ?? HOME_THEME.text }}>{value}</div>
-      <div style={{ marginTop: 3, fontSize: 11, color: HOME_THEME.muted, opacity: 0.6 }}>{sub}</div>
+      <div style={{ marginTop: 3, fontSize: 11, color: HOME_THEME.text, opacity: 0.75 }}>{sub}</div>
     </div>
   );
 
   return (
     <div style={{ ...card(), padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted }}>Month Comparison</span>
-        <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.6 }}>Net of gas · last {shown.length} month{shown.length === 1 ? "" : "s"}</span>
+        <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text }}>Month Comparison</span>
+        <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.75 }}>Net of gas · last {shown.length} month{shown.length === 1 ? "" : "s"}</span>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))"), gap: 10 }}>
@@ -3876,10 +3876,10 @@ function AmazonMonthCompare({
                 )}
                 <div style={{ height: Math.max(h, r.net === 0 ? 2 : 4), borderRadius: ghost > 0 ? "0 0 6px 6px" : 6, background: fill, boxShadow: live ? "0 0 18px rgba(33,158,188,0.45)" : "none" }} />
               </div>
-              <div style={{ fontSize: 10, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: live ? LIGHT_BLUE : HOME_THEME.muted, opacity: live ? 1 : 0.7, whiteSpace: "nowrap" }}>
+              <div style={{ fontSize: 10, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: live ? LIGHT_BLUE : HOME_THEME.text, opacity: live ? 1 : 0.85, whiteSpace: "nowrap" }}>
                 {compactMoney(r.net)}
               </div>
-              <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: live ? LIGHT_BLUE : HOME_THEME.muted, opacity: live ? 1 : 0.55 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: live ? LIGHT_BLUE : HOME_THEME.text, opacity: live ? 1 : 0.8 }}>
                 {monthAbbr(r.month)}
               </div>
             </div>
