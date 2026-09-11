@@ -788,11 +788,52 @@ export function GexCandlesCard({
    */
   const activeDay = replayOn ? (replayDay || barDays[0] || '') : ''
 
-  /** The tape, scoped to the rewound session. Live, the whole thing. */
-  const dayBars = useMemo(
-    () => (activeDay ? allBars.filter((b) => etDay(b.t) === activeDay) : allBars),
-    [allBars, activeDay],
-  )
+  /**
+   * ── Live: TODAY only, from 09:30 ET ────────────────────────────────────────
+   *
+   * The tape is pulled `HISTORY_DAYS` deep because the replay day picker and
+   * the roll-up need it, but the LIVE card should be showing the session that
+   * is happening — not today's bars with a block of yesterday's tape hanging
+   * off the left edge at yesterday's prices, which is what the board drew all
+   * session.
+   *
+   * So from the cash open the live card scopes itself to today's ET date.
+   * Before 09:30 the scope is OFF and the tape is untouched: pre-market there
+   * is no session to frame yet, and the prior session plus the overnight is
+   * exactly the context you want at 06:00.
+   *
+   * REPLAY IS UNTOUCHED. The scope is keyed off `!replayOn`, so `activeDay`
+   * still wins wherever it is set — the day picker keeps every day in
+   * `barDays`, and the scrubber, the timeline and the clip all behave exactly
+   * as before.
+   *
+   * The 30s ticker is what closes the scope at the open without a reload. It
+   * only runs live, and it only re-renders (the memo below is what actually
+   * re-filters), so it costs nothing measurable.
+   */
+  const [openTick, setOpenTick] = useState(0)
+  useEffect(() => {
+    if (replayOn) return
+    const id = setInterval(() => setOpenTick((n) => n + 1), 30_000)
+    return () => clearInterval(id)
+  }, [replayOn])
+  const liveToday = useMemo(() => {
+    void openTick // re-evaluate on the ticker
+    if (replayOn) return ''
+    const now = Date.now()
+    return etMinutesOfDay(now) >= RTH_OPEN_MIN ? etDay(now) : ''
+  }, [replayOn, openTick])
+
+  /** The tape, scoped to the rewound session. Live, today from the open on. */
+  const dayBars = useMemo(() => {
+    if (activeDay) return allBars.filter((b) => etDay(b.t) === activeDay)
+    if (!liveToday) return allBars
+    const today = allBars.filter((b) => etDay(b.t) === liveToday)
+    // Same fallback rule as filterSession: an empty chart is a worse answer
+    // than an unscoped one. Reachable on a holiday, and in the first seconds
+    // after the open before the recorder has written today's first bar.
+    return today.length ? today : allBars
+  }, [allBars, activeDay, liveToday])
 
   // ── The replay cursor ──────────────────────────────────────────────────────
   // The timeline is the BARS, not the GEX columns: the candles are always there

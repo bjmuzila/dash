@@ -1,28 +1,33 @@
 # Changelog
 
-## 2026-09-11 (i) - Home GEX card: ES candles hold yesterday's session until 9:30 ET
+## 2026-09-11 (i) - v3 GEX Candles: live card shows TODAY only, from 9:30 ET
 
-The home page GEX card's **ES Candles** view rolled to a new day at midnight,
-not at the open. ES prints all night, so from 00:00 ET the recorder stamps bars
-with today's date and the card switched to a session made entirely of thin
-overnight tape with no open in it, while the last completed session — the thing
-you actually want on screen pre-market — scrolled off as "yesterday".
+The **GEX Candles** card on the v3 board drew the whole `HISTORY_DAYS` tape, so
+mid-session the chart carried a block of yesterday's bars hanging off the left
+edge at yesterday's prices with today's session squeezed in beside it.
 
-**Fix.** `components/dashboard/es-candles/EsChartCard.tsx` now drops today-dated
-bars from the plotted series while the ET clock is before `RTH_OPEN_MIN`
-(09:30). A 30s ticker re-evaluates the gate, so today appears with its real open
-within a bar of the open — no reload, and no DST/holiday table to maintain.
+**Fix.** `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx` — `dayBars` now
+scopes to today's ET date once the clock reaches `RTH_OPEN_MIN` (09:30). A 30s
+ticker closes the scope at the open without a reload and without a DST/holiday
+table.
 
-**Scope.** Gated on the `embedded` prop, so this is the home card only; the
-standalone `/es-candles` route is unchanged.
+**Before the open the scope is OFF** and the tape is untouched — pre-market
+there is no session to frame yet, and the prior session plus the overnight is
+the right context.
 
-**Replay is exempt.** A `preOpenGateOff` state mirrors `replayOn`, so merely
-OPENING the replay transport lifts the gate — the day picker, `replayFrames`
-and the reveal all see the unfiltered series exactly as before. Closing it puts
-the gate back.
+**Replay is untouched.** The scope is keyed off `!replayOn`, so `activeDay`
+still wins wherever it is set: the day picker keeps every day in `barDays`, and
+the timeline, scrubber and cursor clip behave exactly as before. The replay tab
+(`<GexCandlesCard replay />`) seeds `replayOn` true, so it never sees the scope
+at all.
 
-Falls back to the ungated series if the filter would empty the chart, matching
-the existing RTH-filter rule directly below it.
+Falls back to the unscoped tape if the filter would empty the chart (holiday, or
+the first seconds after the open), matching `filterSession`'s existing rule.
+
+**Note.** An earlier pass this session put the same gate in v2
+(`components/dashboard/es-candles/EsChartCard.tsx`) — wrong surface, since the
+live card is v3. That file has been reverted to its prior state; no v2 behaviour
+changed.
 
 ---
 

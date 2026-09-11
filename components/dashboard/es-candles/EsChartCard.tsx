@@ -710,41 +710,42 @@ function EsChartCard({
   }, [historical, liveRows, isEs]);
 
   /**
-   * ── Pre-open gate (home GEX card only) ───────────────────────────────────
+   * ── Today-only gate (home GEX card only) ─────────────────────────────────
    *
-   * The home card must not start a NEW day until the cash open. ES prints all
-   * night, so from 00:00 ET the recorder stamps bars with today's date and the
-   * card rolled over to a session that is hours of thin overnight tape and no
-   * open — the card looked "stuck on nothing" every morning while the previous
-   * session, which is what you actually want to see pre-open, had scrolled off
-   * as "yesterday".
+   * Once the cash session is open, the home card shows TODAY and nothing else.
+   * The rolling window is two sessions wide (see `rows5`), which is right for
+   * the standalone route — you can scroll back into yesterday, and the GEX
+   * overlay has 48h of columns to sit on — but on the home card it meant the
+   * chart opened framed on a chunk of yesterday's tape hanging off the left
+   * edge, at yesterday's prices, with today's session squeezed beside it.
    *
-   * So before 09:30 ET the embedded card drops today-dated bars and keeps
-   * showing the last completed session. At 09:30 the gate lifts by itself (the
-   * ticker below re-renders, the memo drops the filter) and today appears with
-   * its real open.
+   * So from 09:30 ET the embedded card drops every bar not dated today. Before
+   * the open the gate is OFF and the series is untouched: pre-market there is
+   * no today session worth looking at yet, and the prior session plus the
+   * overnight is exactly the right context. The gate closes by itself at the
+   * open — the 30s ticker below re-renders and the memo starts filtering.
    *
-   * REPLAY is exempt — `preOpenGateOff` below goes true the moment the
-   * transport opens, so the day picker, the frames and the reveal all see the
-   * unfiltered series exactly as they always did. Scoped to `embedded`: the
-   * standalone /es-candles route is unchanged.
+   * REPLAY is exempt. `todayGateOff` mirrors `replayOn`, so merely OPENING the
+   * transport restores the full window: the day picker keeps both sessions, the
+   * frames are built from them, and the reveal behaves exactly as before.
+   * Scoped to `embedded`, so the standalone /es-candles route is unchanged.
    */
-  const [preOpenTick, setPreOpenTick] = useState(0);
+  const [todayGateTick, setTodayGateTick] = useState(0);
   useEffect(() => {
     if (!embedded) return;
-    // 30s is well inside the 1m native bar, so the gate lifts within one bar of
+    // 30s is well inside the 1m native bar, so the gate closes within one bar of
     // the open without a timer that has to know about DST or holidays.
-    const id = setInterval(() => setPreOpenTick((n) => n + 1), 30_000);
+    const id = setInterval(() => setTodayGateTick((n) => n + 1), 30_000);
     return () => clearInterval(id);
   }, [embedded]);
   // Mirrors `replayOn`, which is declared further down — a state copy, not a
   // ref, because `rows` is a memo and must re-run when it flips.
-  const [preOpenGateOff, setPreOpenGateOff] = useState(false);
-  const hideTodayPreOpen = useMemo(() => {
-    void preOpenTick; // re-evaluate on the ticker
-    if (!embedded || preOpenGateOff) return false;
-    return etMinutesOfDay(Date.now()) < RTH_OPEN_MIN;
-  }, [embedded, preOpenGateOff, preOpenTick]);
+  const [todayGateOff, setTodayGateOff] = useState(false);
+  const todayOnly = useMemo(() => {
+    void todayGateTick; // re-evaluate on the ticker
+    if (!embedded || todayGateOff) return false;
+    return etMinutesOfDay(Date.now()) >= RTH_OPEN_MIN;
+  }, [embedded, todayGateOff, todayGateTick]);
 
   // Bars actually plotted. Identity-stable at 1m/5m (rollupCandles returns the
   // same reference), so the interval switcher costs nothing at the native sizes.
@@ -756,12 +757,12 @@ function EsChartCard({
   const rows = useMemo(() => {
     const base = interval <= 5 ? rows5 : rollupCandles(rows5, interval);
     const gated = (() => {
-      if (!hideTodayPreOpen) return base;
+      if (!todayOnly) return base;
       const today = etDayKey(Date.now());
-      const kept = base.filter((r) => (r.date ?? etDayKey(r.timestamp)) !== today);
+      const kept = base.filter((r) => (r.date ?? etDayKey(r.timestamp)) === today);
       // Same fallback rule as the RTH filter below: an empty chart is a worse
-      // answer than an ungated one. Only reachable if the window holds nothing
-      // but today's overnight.
+      // answer than an ungated one. Reachable on a holiday, or in the first
+      // seconds after the open before the recorder has written a bar.
       return kept.length ? kept : base;
     })();
     if (chartSession !== "rth") return gated;
@@ -774,7 +775,7 @@ function EsChartCard({
     // all — a symbol whose recorder has only ever run overnight — and "no
     // candles" is a much worse answer to that than "here they are, unfiltered".
     return rth.length ? rth : gated;
-  }, [rows5, interval, chartSession, hideTodayPreOpen]);
+  }, [rows5, interval, chartSession, todayOnly]);
   /**
    * Content fingerprint of the plotted bars.
    *
@@ -1311,11 +1312,11 @@ function EsChartCard({
   const sharedRpTsRef = useRef<number | null>(null);
   useEffect(() => { replayEngagedRef.current = replayEngaged; }, [replayEngaged]);
   useEffect(() => { replayOnRef.current = replayOn; }, [replayOn]);
-  // Replay is exempt from the pre-open gate (see hideTodayPreOpen). Opening the
+  // Replay is exempt from the today-only gate (see todayOnly). Opening the
   // transport — not engaging it — is what lifts it, so the day picker and the
-  // frame set are built from the unfiltered series the instant the panel opens,
-  // and closing it puts the gate back.
-  useEffect(() => { setPreOpenGateOff(replayOn); }, [replayOn]);
+  // frame set are built from the full window the instant the panel opens, and
+  // closing it puts the gate back.
+  useEffect(() => { setTodayGateOff(replayOn); }, [replayOn]);
   /**
    * Tell the row when a hosted transport goes away with the card.
    *
