@@ -67,6 +67,8 @@ type Job = {
   /** Which path a post would actually take — resolved by the server. */
   dest: "bot" | "webhook" | "none";
   lastRunAt: string | null;
+  /** ET date of the last successful SCHEDULED post — the scheduler's day-claim. */
+  lastPostDate: string;
   lastStatus: string;
   lastError: string;
 };
@@ -598,6 +600,12 @@ export default function BotScheduled() {
                 Unsaved changes — “Post now” uses what is saved, not what is on screen.
               </div>
             )}
+
+            <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.5, marginTop: 8 }}>
+              “Post now” does not use up today’s scheduled slot — the timer still fires at{" "}
+              {String(val(job, "postAt"))} ET.
+              {job.lastPostDate ? ` Last scheduled post: ${job.lastPostDate}.` : " No scheduled post yet."}
+            </div>
 
             {msg && (
               <div style={{

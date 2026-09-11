@@ -74,6 +74,7 @@ import {
   nyTodayISO,
 } from "./calendar";
 import { useLiveYear, type LiveVixEvent } from "./useLiveYear";
+import { useNarrow } from "./useNarrow";
 
 const UP = ES_CANDLE_UP;
 const DOWN = ES_CANDLE_DOWN;
@@ -301,6 +302,7 @@ function Collapse({
   return (
     <details ref={ref} className="sea-disc" open={open} style={{ marginTop: 14, border: `1px solid ${SEA.line}`, borderRadius: 12, background: SEA.card2 }}>
       <summary
+        className="sea-discsum"
         style={{
           listStyle: "none",
           cursor: "pointer",
@@ -637,9 +639,14 @@ function HBars({
 }) {
   const [ref, width] = useMeasuredWidth();
   const [hover, setHover] = useState<number | null>(null);
+  const narrow = useNarrow();
 
-  const LABEL_W = 104;
-  const GAP = 16;
+  // On a phone the two panels have ~110px each once the label gutter is paid
+  // for, so the gutter and the gap between them come down. The panels stay
+  // side by side: stacking them would double an already tall chart and lose
+  // the one thing the pairing is for — reading one row across.
+  const LABEL_W = narrow ? 62 : 104;
+  const GAP = narrow ? 8 : 16;
   const panelW = Math.max(60, (width - LABEL_W - GAP) / 2);
 
   /** lo/hi for one panel, with zero always inside the domain. */
@@ -661,7 +668,7 @@ function HBars({
   const panelHead = (title: string, d: { lo: number; hi: number }, fmt: (v: number) => string) => (
     <div style={{ width: panelW, minWidth: 0 }}>
       <div style={{ ...capLabel, fontSize: 9.5, marginBottom: 2, textAlign: "center" }}>{title}</div>
-      <div style={{ fontSize: 10, color: INK, opacity: 0.8, display: "flex", justifyContent: "space-between", fontVariantNumeric: "tabular-nums" }}>
+      <div style={{ fontSize: narrow ? 9 : 10, color: INK, opacity: 0.8, display: "flex", justifyContent: "space-between", fontVariantNumeric: "tabular-nums" }}>
         <span>{fmt(d.lo)}</span>
         <span>{fmt(d.hi)}</span>
       </div>
@@ -736,9 +743,9 @@ function HBars({
                   );
                 };
                 return (
-                  <g key={r.key} onPointerEnter={() => setHover(i)}>
+                  <g key={r.key} onPointerEnter={() => setHover(i)} onPointerDown={() => setHover(i)}>
                     <rect x={0} y={yTop} width={width} height={rowH} fill={hover === i ? "rgba(255,255,255,0.05)" : "transparent"} />
-                    <text x={0} y={yTop + rowH / 2 + 4} fontSize={10.5} fontWeight={700} fill={INK} opacity={on ? 1 : 0.5} style={{ fontVariantNumeric: "tabular-nums" }}>
+                    <text x={0} y={yTop + rowH / 2 + 4} fontSize={narrow ? 9.5 : 10.5} fontWeight={700} fill={INK} opacity={on ? 1 : 0.5} style={{ fontVariantNumeric: "tabular-nums" }}>
                       {r.label}
                     </text>
                     {bar(r.a, dA, LABEL_W, aColor, fmtA)}
@@ -752,7 +759,9 @@ function HBars({
           <div style={{ minHeight: 20, marginTop: 6, fontSize: 12, color: INK, fontVariantNumeric: "tabular-nums" }}>
             {hover != null && rows[hover]
               ? `${rows[hover].label}${rows[hover].sub ? ` · ${rows[hover].sub}` : ""} · ${aTitle} ${rows[hover].a == null ? "—" : fmtA(rows[hover].a as number)} · ${bTitle} ${rows[hover].b == null ? "—" : fmtB(rows[hover].b as number)}`
-              : "Hover a row for the detail."}
+              : narrow
+                ? "Tap a row for the detail."
+                : "Hover a row for the detail."}
           </div>
         </>
       ) : (
@@ -808,11 +817,18 @@ function EventColumns({
 }) {
   const [ref, width] = useMeasuredWidth();
   const [hover, setHover] = useState<number | null>(null);
+  const narrow = useNarrow();
 
-  const L = 46;
-  // Right margin carries the mean label, so it is only paid for when there is one.
-  const R = meanValue == null ? 12 : 96;
-  const T = 16;
+  // PHONE GEOMETRY. At 390px the desktop gutters (46 left + 96 right) eat 40%
+  // of the plot, and 26 columns land at 7px each. So on a phone the value axis
+  // tightens and the mean label moves INSIDE the plot — it is a one-line
+  // annotation, and a 96px margin to hold it is the most expensive furniture
+  // on the chart.
+  const L = narrow ? 30 : 46;
+  // Right margin carries the mean label, so it is only paid for when there is
+  // one AND there is room for it.
+  const R = meanValue == null || narrow ? 6 : 96;
+  const T = narrow && meanValue != null ? 26 : 16;
   const B = 34;
   const PW = Math.max(40, width - L - R);
   const PH = height - T - B;
@@ -853,7 +869,7 @@ function EventColumns({
                   y2={y(t)}
                   stroke={Math.abs(t) < 1e-12 ? "rgba(255,255,255,0.26)" : "rgba(255,255,255,0.07)"}
                 />
-                <text x={L - 8} y={y(t) + 3.5} fontSize={10} fill={INK} opacity={0.45} textAnchor="end" style={{ fontVariantNumeric: "tabular-nums" }}>
+                <text x={L - 6} y={y(t) + 3.5} fontSize={narrow ? 9 : 10} fill={INK} opacity={0.45} textAnchor="end" style={{ fontVariantNumeric: "tabular-nums" }}>
                   {Math.abs(t) < 1e-12 ? "0" : fmt(t)}
                 </text>
               </g>
@@ -863,7 +879,7 @@ function EventColumns({
               const on = hover == null || hover === i;
               const x0 = cx(i) - barW / 2;
               return (
-                <g key={r.key} onPointerEnter={() => setHover(i)}>
+                <g key={r.key} onPointerEnter={() => setHover(i)} onPointerDown={() => setHover(i)}>
                   {/* Full-height hit target: the columns are ~10px wide and a
                       1-in-20 year is a hairline, so the bar itself is not a
                       target anybody can land on. */}
@@ -877,7 +893,10 @@ function EventColumns({
                   {r.value == null ? (
                     <>
                       <rect x={x0} y={y(0) - 1} width={barW} height={2} fill="rgba(255,255,255,0.18)" />
-                      {r.note ? (
+                      {/* The reason label needs ~26px of column to itself. On
+                          a phone there isn't any, and it overprints its
+                          neighbours — the tap readout below still names it. */}
+                      {r.note && !narrow ? (
                         <text x={cx(i)} y={y(0) - 8} fontSize={8.5} fill={INK} opacity={on ? 0.4 : 0.2} textAnchor="middle">
                           {r.note}
                         </text>
@@ -910,7 +929,17 @@ function EventColumns({
             {meanValue != null ? (
               <>
                 <line x1={L} x2={L + PW} y1={y(meanValue)} y2={y(meanValue)} stroke={A1} strokeWidth={1.25} />
-                <text x={L + PW + 8} y={y(meanValue) + 3.5} fontSize={10} fontWeight={700} fill={A1} style={{ fontVariantNumeric: "tabular-nums" }}>
+                {/* On a phone the label sits above the plot, left-aligned with
+                    the rule's own colour carrying the connection — there is no
+                    margin left to park it in. */}
+                <text
+                  x={narrow ? L : L + PW + 8}
+                  y={narrow ? 10 : y(meanValue) + 3.5}
+                  fontSize={10}
+                  fontWeight={700}
+                  fill={A1}
+                  style={{ fontVariantNumeric: "tabular-nums" }}
+                >
                   mean {(fmtMean ?? fmt)(meanValue)}
                 </text>
               </>
@@ -920,7 +949,9 @@ function EventColumns({
           <div style={{ minHeight: 20, marginTop: 4, fontSize: 12, color: INK, fontVariantNumeric: "tabular-nums" }}>
             {hover != null && rows[hover]
               ? `${rows[hover].label} · ${rows[hover].value == null ? rows[hover].note || "no value" : fmt(rows[hover].value as number)}${rows[hover].sub ? ` · ${rows[hover].sub}` : ""}`
-              : "Hover a column for the detail."}
+              : narrow
+                ? "Tap a column for the detail."
+                : "Hover a column for the detail."}
           </div>
         </>
       ) : (
@@ -1105,8 +1136,11 @@ type Cell = { t: string; c?: string; bar?: number } | string | number;
 
 function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
   return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5, color: INK, fontVariantNumeric: "tabular-nums" }}>
+    // Scrolls sideways rather than shrinking: a return table with eight columns
+    // cannot be made to fit 390px without lying about a number. SHELL_CSS tightens
+    // the cells on a phone so fewer of them are off-screen.
+    <div className="sea-tablewrap" style={{ overflowX: "auto" }}>
+      <table className="sea-table" style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5, color: INK, fontVariantNumeric: "tabular-nums" }}>
         <thead>
           <tr>
             {/* keyed by position, not label — the barometer table repeats
@@ -1229,8 +1263,9 @@ function HeatTable({
     data = [...data].reverse();
   }
   return (
-    <div style={{ overflow: "auto", maxHeight, width: "100%" }}>
+    <div className="sea-heatwrap" style={{ overflow: "auto", maxHeight, width: "100%" }}>
       <table
+        className="sea-heat"
         style={{
           borderCollapse: "separate",
           borderSpacing: 2,
@@ -1303,6 +1338,10 @@ function HeatTable({
 function Tile({ label, value, sub, color }: { label: string; value: ReactNode; sub?: string; color?: string }) {
   return (
     <div
+      // sea-tile: SHELL_CSS drops these to two-up on a phone. The flex basis
+      // below is an inline style, so that rule has to be !important — see the
+      // phone block in SeasonalityView.
+      className="sea-tile"
       style={{
         flex: "1 1 160px",
         minWidth: 148,
@@ -1347,6 +1386,10 @@ type FomcSample = "wed" | "scheduled" | "all";
 export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
   const A = ALMANAC;
   const M = A.months;
+  // Phone flag for the CONTENT (shorter dates in a table). The charts read the
+  // same hook for themselves; layout is handled by SHELL_CSS. False until after
+  // hydration — see useNarrow.
+  const narrow = useNarrow();
   const [era, setEra] = useState<string>(ERA_KEYS[0]);
   const [dowEra, setDowEra] = useState<string>(ERA_KEYS[0]);
 
@@ -2357,7 +2400,9 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             head={["Year", "Date", "Week into", "Sept 11", "Week after", "Month after"]}
             rows={sep11Rows.map((r) => [
               { t: String(r.year) + (r.note ? " *" : ""), c: INK },
-              `${r.dow} ${fmtLongDate(r.iso)}`,
+              // "Thu 9/11/2025" instead of "Thu Sep 11, 2025": this column is the
+              // widest thing in the table and the one a phone can least afford.
+              narrow ? `${r.dow} ${fmtUS(r.iso)}` : `${r.dow} ${fmtLongDate(r.iso)}`,
               { t: pct(r.into), c: signColor(r.into) },
               r.session ? { t: pct(r.day), c: signColor(r.day) } : { t: r.why, c: INK },
               { t: pct(r.after), c: signColor(r.after) },

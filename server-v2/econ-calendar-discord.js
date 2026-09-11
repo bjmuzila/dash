@@ -50,9 +50,12 @@
  * next 08:00: that is DST-proof without any date math, it re-reads the settings
  * every minute for free, and a redeploy at 07:59 or 08:03 still posts exactly
  * once. Two guards keep it to once:
- *   · last_run_at in the settings table — survives a restart, so a process that
- *     comes back up at 08:04 does not repost what 08:00 already sent;
+ *   · last_post_date in the settings table — the ET date of the last SUCCESSFUL
+ *     SCHEDULED post. Deliberately NOT last_run_at, which "Post now" also
+ *     writes: a manual test at 07:50 must not cancel the 08:00 post;
  *   · an in-memory date, for the case where the table is unreachable.
+ * A tick that declines to post while inside the window logs the reason once per
+ * day — silence was the worst part of the first version.
  * And a GRACE WINDOW (default 90 min) bounds how late a missed post may still
  * go out: a restart at 08:01 still posts, a redeploy at 14:00 does not push a
  * "morning" calendar into the channel.
@@ -114,13 +117,6 @@ function etParts(d = new Date()) {
     minute: Number(parts.minute),
     day: String(parts.weekday || '').slice(0, 3).toLowerCase(), // mon, tue, ...
   };
-}
-
-function etDateOf(iso) {
-  if (!iso) return '';
-  const t = new Date(iso);
-  if (Number.isNaN(t.getTime())) return '';
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(t);
 }
 
 function etClock() {
@@ -292,6 +288,10 @@ async function postToDiscord(cfg, png, content) {
  * Always records the outcome on the job row, so the page can show what happened.
  */
 async function collectOnce(base, opts = {}) {
+  // `force` is the page's "Post now". A manual run reports its outcome like any
+  // other, but must NOT claim the day — testing at 07:50 cancelling the 08:00
+  // post is exactly the bug this distinction exists to prevent.
+  const scheduled = !opts.force;
   let cfg = null;
   try {
     cfg = opts.config || (await readConfig());
@@ -307,8 +307,8 @@ async function collectOnce(base, opts = {}) {
 
     const png = await renderPng(html);
     await postToDiscord(cfg, png, renderMessage(cfg.message));
-    console.log(`[econ-cal] posted — ${econ} econ / ${pres} pres / ${earn} earnings (${Math.round(png.length / 1024)}KB)`);
-    await store.markRun(JOB_ID, { status: 'ok' });
+    console.log(`[econ-cal] posted${scheduled ? '' : ' (manual)'} — ${econ} econ / ${pres} pres / ${earn} earnings (${Math.round(png.length / 1024)}KB)`);
+    await store.markRun(JOB_ID, { status: 'ok', postedDate: scheduled ? etParts().date : '' });
     return { ok: true, econ, pres, earn };
   } catch (e) {
     console.log(`[econ-cal] post failed — ${e.message}`);
@@ -329,6 +329,10 @@ function startEconCalendarDiscord(port) {
   let stopped = false;
   let busy = false;
   let lastPostedMem = '';
+  // One explanation per ET day, not one per minute. A scheduled post that
+  // silently does nothing is the hardest kind of thing to debug — if the window
+  // is open and we are still not posting, the log says why, exactly once.
+  let explainedFor = '';
 
   const timer = setInterval(() => {
     if (stopped || busy) return;
@@ -336,23 +340,39 @@ function startEconCalendarDiscord(port) {
     void (async () => {
       try {
         const cfg = await readConfig();
-        if (!cfg.enabled || (!cfg.channelId && !cfg.webhookUrl)) return;
-
         const now = etParts();
-        if (now.date === lastPostedMem) return;
-        // Survives a restart — the in-memory date above does not.
-        if (cfg.live && etDateOf(cfg.lastRunAt) === now.date && cfg.lastStatus === 'ok') return;
-        if (!cfg.days.split(',').includes(now.day)) return;
 
         const [h, m] = cfg.postAt.split(':').map(Number);
         const minsLate = (now.hour * 60 + now.minute) - (h * 60 + m);
-        // Not yet, or so late that this is a redeploy rather than the morning.
-        if (minsLate < 0 || minsLate > GRACE_MIN) return;
+        // Inside the window the job is supposed to fire in. Outside it there is
+        // nothing to explain, so silence is correct.
+        const inWindow = minsLate >= 0 && minsLate <= GRACE_MIN;
 
-        // Claim the day BEFORE awaiting the post, so a slow render cannot let
-        // the next tick fire a second one.
-        lastPostedMem = now.date;
-        await collectOnce(base, { config: cfg });
+        const explain = (why) => {
+          if (!inWindow || explainedFor === now.date) return;
+          explainedFor = now.date;
+          console.log(`[econ-cal] ${now.date} ${cfg.postAt} ET slot skipped — ${why}`);
+        };
+
+        if (!cfg.enabled) { explain('the job is OFF on owner → BOT → Scheduled'); return; }
+        if (!cfg.channelId && !cfg.webhookUrl) { explain('no destination configured'); return; }
+        if (!cfg.days.split(',').includes(now.day)) { explain(`${now.day} is not in "${cfg.days}"`); return; }
+        if (now.date === lastPostedMem) return;
+        // The day-claim. Written only by a SUCCESSFUL scheduled post, so a
+        // manual "Post now" earlier today does not suppress this one, and a
+        // FAILED attempt is retried on the next tick until the grace window
+        // closes.
+        if (cfg.live && cfg.lastPostDate === now.date) return;
+        if (!inWindow) {
+          if (minsLate > GRACE_MIN) explain(`${minsLate}m past the slot — beyond the ${GRACE_MIN}m grace window`);
+          return;
+        }
+
+        const res = await collectOnce(base, { config: cfg });
+        // Claim in memory only once it actually landed. The `busy` flag already
+        // prevents a second tick overlapping this one, so claiming early would
+        // buy nothing and would burn the day on a transient Discord 500.
+        if (res?.ok) lastPostedMem = now.date;
       } catch (e) {
         console.log(`[econ-cal] tick failed — ${e.message}`);
       } finally {

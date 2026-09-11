@@ -143,6 +143,11 @@ async function ensureSchema() {
       -- EXISTS rather than a new CREATE — an existing install must not need a
       -- manual migration.
       ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT '';
+      -- ET date (YYYY-MM-DD) of the last SCHEDULED post. This, not last_run_at,
+      -- is what stops a job posting twice in a day — because last_run_at is
+      -- also written by the page's "Post now", and a manual test must never eat
+      -- the day's scheduled slot. That bug shipped once; this column is the fix.
+      ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS last_post_date TEXT NOT NULL DEFAULT '';
     `);
     ensured = true;
     return true;
@@ -213,6 +218,7 @@ function fallbackJob(def) {
     webhookUrl: envWebhook(def),
     webhookFromEnv: true,
     lastRunAt: null,
+    lastPostDate: '',
     lastStatus: '',
     lastError: '',
   };
@@ -239,6 +245,8 @@ function rowToJob(def, row) {
     webhookUrl: stored || envWebhook(def),
     webhookFromEnv: !stored,
     lastRunAt: row.last_run_at ? new Date(row.last_run_at).toISOString() : null,
+    // The day-claim for the scheduler. Empty means "has not posted on schedule".
+    lastPostDate: row.last_post_date || '',
     lastStatus: row.last_status || '',
     lastError: row.last_error || '',
   };
@@ -366,14 +374,27 @@ async function save(patch) {
   return loadMasked({ fresh: true });
 }
 
-/** Called by the job itself after a run. Best-effort — never throws upward. */
-async function markRun(id, { status, error = '' } = {}) {
+/**
+ * Called by the job itself after a run. Best-effort — never throws upward.
+ *
+ * `postedDate` (an ET YYYY-MM-DD) is passed ONLY by a successful SCHEDULED run
+ * and is what claims the day. A manual "Post now" records last_run_at/status
+ * like any other run but leaves the claim alone, so testing at 07:50 does not
+ * cancel the 08:00 post.
+ */
+async function markRun(id, { status, error = '', postedDate = '' } = {}) {
   if (!byId(id)) return;
   try {
     if (!(await ensureSchema())) return;
+    const claim = String(postedDate || '').trim();
     await getPool().query(
-      `UPDATE scheduled_posts SET last_run_at = NOW(), last_status = $1, last_error = $2 WHERE id = $3`,
-      [String(status || '').slice(0, 40), String(error || '').slice(0, 500), id],
+      `UPDATE scheduled_posts
+          SET last_run_at = NOW(),
+              last_status = $1,
+              last_error  = $2,
+              last_post_date = CASE WHEN $3 = '' THEN last_post_date ELSE $3 END
+        WHERE id = $4`,
+      [String(status || '').slice(0, 40), String(error || '').slice(0, 500), claim, id],
     );
     cache = { at: 0, jobs: null, live: false };
   } catch (e) {

@@ -4837,6 +4837,23 @@ async function main() {
     // Guarded — never crash startup if puppeteer/chromium is missing.
     try { require('./mg-ladder-discord').startMgLadderDiscord(PORT); }
     catch (e) { console.warn('[mg-ladder] start failed:', e.message); }
+    // Economic Calendar snapshot -> Discord, on the schedule set at
+    // owner -> BOT -> Scheduled (server-v2/scheduled-posts-store.js, job
+    // "econ-calendar"). Same picture as the toolbar's Discord button and NOT a
+    // second copy of it: the template stays in lib/discord/econSnapshot.ts and
+    // is served as finished HTML by the internal /api/econ-snapshot-html, which
+    // that module screenshots with html2canvas in headless Chromium (see its
+    // header for why not page.screenshot).
+    //
+    // DO NOT DROP THIS LINE. Without it the owner page still saves settings and
+    // "Post now" still works — that runs through the API router, not the timer —
+    // so the only symptom is that the scheduled post silently never fires. It
+    // was lost once to a git overwrite and cost a morning to find. If
+    // `docker compose logs dashboard | grep econ-cal` prints nothing at boot,
+    // this line is missing again.
+    // Guarded — never crash startup if puppeteer/chromium is missing.
+    try { require('./econ-calendar-discord').startEconCalendarDiscord(PORT); }
+    catch (e) { console.warn('[econ-cal] start failed:', e.message); }
     // Owner options watchlist: every 60s during market hours, refreshes every
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.

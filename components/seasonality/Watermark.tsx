@@ -77,6 +77,10 @@ export function SeaCard({
 }) {
   return (
     <Card
+      // Hook for SHELL_CSS's phone breakpoint, which trims the card padding
+      // with !important — Card writes its padding INLINE, so nothing weaker
+      // can reach it. Same reason the background is set inline below.
+      className="sea-card"
       title={title}
       subtitle={subtitle}
       padding={padding}

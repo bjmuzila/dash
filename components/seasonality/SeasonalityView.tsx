@@ -80,6 +80,7 @@ import {
 import { SeaCard } from "./Watermark";
 import { SEA } from "./seaTheme";
 import { useLiveYear } from "./useLiveYear";
+import { useNarrow } from "./useNarrow";
 import {
   ALMANAC,
   DEFAULT_BASELINE,
@@ -354,10 +355,50 @@ const SHELL_CSS = `
      second copy to keep in sync and nothing hidden from a screen reader. */
   .sea-shell{grid-template-columns:minmax(0,1fr)}
   .sea-rail{position:static;max-height:none;display:flex;gap:6px;overflow-x:auto;
-    padding:8px;scrollbar-width:thin}
+    padding:8px;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
   .sea-rail>div{display:flex;gap:6px;align-items:center;flex:none}
   .sea-railgrp{padding:0 4px 0 8px;white-space:nowrap;align-self:center;font-size:8.5px}
   .sea-railitem{width:auto;white-space:nowrap;border:1px solid ${SEA.line}}
+}
+
+/* ── phone ──────────────────────────────────────────────────────────────────
+   Everything here is layout CSS with no JS twin. The SVG charts cannot be
+   reached this way — they compute their own geometry — so they read
+   useNarrow() instead, at the SAME 560px breakpoint. Keep the two in step.
+
+   !important is load-bearing, not laziness: every value it overrides is an
+   INLINE style (the shared Card writes its padding inline, Tile writes its
+   flex basis inline), and nothing weaker than !important beats those. */
+@media (max-width:560px){
+  .sea-shell{padding:8px;gap:10px;border-radius:12px}
+  /* A card's 20px of padding is 10% of a 390px screen, twice. */
+  .sea-card{padding:13px!important}
+
+  /* Stat tiles two-up instead of one-up. Four tiles stacked is an entire
+     phone screen of chrome before the reader reaches the chart. */
+  /* Basis is half the row minus the 12px gap and a pixel of slack: at exactly
+     50% - 6px a fractional container width rounds the pair over the edge and
+     they drop back to one-up, which is the bug this rule exists to fix. */
+  .sea-tile{flex:1 1 calc(50% - 9px)!important;min-width:0!important;padding:10px 11px!important}
+  .sea-tile>div:nth-child(2){font-size:19px!important}
+
+  /* Tables keep every column and scroll — a returns table cannot drop a column
+     without dropping a number — but the cells stop being desktop-roomy. */
+  .sea-table{font-size:11.5px!important}
+  .sea-table th,.sea-table td{padding:7px 8px!important}
+  .sea-tablewrap{overscroll-behavior-x:contain}
+
+  /* The 99-year month matrix: smaller cells fit seven or eight months per
+     screen instead of five, and the year column stops being a desktop 62px. */
+  .sea-heat{min-width:0!important;font-size:9.5px!important}
+  .sea-heat col:first-child{width:36px!important}
+  .sea-heat th{font-size:8.5px!important;padding:2px 1px!important}
+  .sea-heat td{height:21px!important}
+  .sea-heatwrap{overscroll-behavior-x:contain}
+
+  /* A disclosure's label and its hint sit on one line at desktop width and
+     collide at 390px. */
+  .sea-discsum{flex-wrap:wrap!important;padding:10px 12px!important;gap:6px!important}
 }
 `;
 
@@ -366,6 +407,7 @@ export default function SeasonalityView() {
   // on the first render on both sides — see useLiveYear for why that matters.
   const live = useLiveYear();
   const LIVE = live.pct.length;
+  const narrow = useNarrow();
 
   const [mode, setMode] = useState<Mode>("pct");
   const [baselineKey, setBaselineKey] = useState<string>(DEFAULT_BASELINE);
@@ -458,9 +500,24 @@ export default function SeasonalityView() {
   );
   const yearSeries = mode === "pct" ? live.pct : live.px;
 
-  const padRight = overlaySeries.length ? RIGHT_GUTTER_WIDE : PAD.right;
-  const innerW = Math.max(0, width - PAD.left - padRight);
-  const innerH = CHART_H - PAD.top - PAD.bottom;
+  // ── phone geometry ───────────────────────────────────────────────────────
+  //
+  // The desktop gutters are 62 left + 82 right, which on a 390px screen is 37%
+  // of the chart spent on axis furniture — the plot came out ~180px wide. On a
+  // phone the left axis tightens, the SECOND-UNIT RIGHT AXIS IS DROPPED (it is
+  // a convenience for reading index level off a % chart, not the chart's
+  // subject; the INDEX LEVEL toggle still gives it properly), and the overlay
+  // end-labels tuck in against the line instead of taking their own column.
+  //
+  // false until after hydration — see useNarrow — so the server and the first
+  // client paint agree on the desktop geometry either way.
+  const P = narrow ? { top: 14, right: 10, bottom: 26, left: 40 } : PAD;
+  const CH = narrow ? 330 : CHART_H;
+  const labelDx = narrow ? 6 : YEAR_LABEL_DX;
+
+  const padRight = overlaySeries.length ? (narrow ? 46 : RIGHT_GUTTER_WIDE) : P.right;
+  const innerW = Math.max(0, width - P.left - padRight);
+  const innerH = CH - P.top - P.bottom;
 
   const { yMin, yMax } = useMemo(() => {
     const all = [...seasonSeries, ...yearSeries, ...overlaySeries.flatMap((o) => o.values)];
@@ -476,8 +533,8 @@ export default function SeasonalityView() {
     return { yMin: lo, yMax: hi };
   }, [seasonSeries, yearSeries, overlaySeries, mode]);
 
-  const x = (i: number) => PAD.left + (innerW * i) / (N - 1);
-  const y = (v: number) => PAD.top + innerH - (innerH * (v - yMin)) / (yMax - yMin);
+  const x = (i: number) => P.left + (innerW * i) / (N - 1);
+  const y = (v: number) => P.top + innerH - (innerH * (v - yMin)) / (yMax - yMin);
 
   const path = (arr: number[]) =>
     arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(2)},${y(v).toFixed(2)}`).join(" ");
@@ -506,7 +563,7 @@ export default function SeasonalityView() {
   const onMove = (e: ReactPointerEvent<SVGSVGElement>) => {
     if (innerW <= 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const px = e.clientX - rect.left - PAD.left;
+    const px = e.clientX - rect.left - P.left;
     const i = Math.round((px / innerW) * (N - 1));
     setHover(i < 0 ? 0 : i > N - 1 ? N - 1 : i);
   };
@@ -649,7 +706,9 @@ export default function SeasonalityView() {
             </span>
             <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <span style={{ width: 22, height: 2, background: YEAR_COLOR, display: "inline-block" }} />
-              2026 {mode === "pct" ? "(index level on right axis)" : "(% on right axis)"}
+              {/* The second-unit axis is dropped on a phone, so the legend
+                  must stop pointing at it. */}
+              {LIVE_YEAR} {narrow ? "" : mode === "pct" ? "(index level on right axis)" : "(% on right axis)"}
             </span>
           </div>
         </div>
@@ -821,7 +880,7 @@ export default function SeasonalityView() {
             <>
             <svg
               width={width}
-              height={CHART_H}
+              height={CH}
               role="img"
               aria-label="S&P 500 seasonality versus 2026 year to date"
               style={{ display: "block", touchAction: "none", overflow: "visible" }}
@@ -832,15 +891,15 @@ export default function SeasonalityView() {
               {ticks.map((t) => (
                 <g key={`y${t}`}>
                   <line
-                    x1={PAD.left}
-                    x2={PAD.left + innerW}
+                    x1={P.left}
+                    x2={P.left + innerW}
                     y1={y(t)}
                     y2={y(t)}
                     stroke={t === 0 && mode === "pct" ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.07)"}
                     strokeWidth={1}
                   />
                   <text
-                    x={PAD.left - 8}
+                    x={P.left - 8}
                     y={y(t) + 4}
                     textAnchor="end"
                     fontSize={11}
@@ -850,9 +909,12 @@ export default function SeasonalityView() {
                     {mode === "pct" ? `${t.toFixed(1)}%` : Math.round(t).toLocaleString("en-US")}
                   </text>
                   {/* Same tick, the other unit. This is what makes the 2026
-                      LEVEL readable straight off a seasonal % chart. */}
+                      LEVEL readable straight off a seasonal % chart — and it is
+                      the first thing to go on a phone, where its gutter is
+                      worth more to the plot than the convenience is. */}
+                  {narrow ? null : (
                   <text
-                    x={PAD.left + innerW + 8}
+                    x={P.left + innerW + 8}
                     y={y(t) + 4}
                     textAnchor="start"
                     fontSize={11}
@@ -863,6 +925,7 @@ export default function SeasonalityView() {
                       ? Math.round(pctToPx(t)).toLocaleString("en-US")
                       : `${pxToPct(t).toFixed(1)}%`}
                   </text>
+                  )}
                 </g>
               ))}
 
@@ -875,13 +938,13 @@ export default function SeasonalityView() {
                   <line
                     x1={x(m.day)}
                     x2={x(m.day)}
-                    y1={PAD.top}
-                    y2={PAD.top + innerH}
+                    y1={P.top}
+                    y2={P.top + innerH}
                     stroke="rgba(255,255,255,0.07)"
                     strokeDasharray="3 4"
                   />
                   {mi % (innerW < 470 ? 2 : 1) === 0 ? (
-                    <text x={x(m.day) + 4} y={CHART_H - 10} fontSize={11} fontWeight={700} fill={INK}>
+                    <text x={x(m.day) + 4} y={CH - 10} fontSize={11} fontWeight={700} fill={INK}>
                       {m.label}
                     </text>
                   ) : null}
@@ -891,8 +954,8 @@ export default function SeasonalityView() {
               {/* the part of the year 2026 has not reached yet */}
               <rect
                 x={x(LIVE - 1)}
-                y={PAD.top}
-                width={Math.max(0, PAD.left + innerW - x(LIVE - 1))}
+                y={P.top}
+                width={Math.max(0, P.left + innerW - x(LIVE - 1))}
                 height={innerH}
                 fill="rgba(255,255,255,0.025)"
               />
@@ -913,14 +976,14 @@ export default function SeasonalityView() {
                         price ticks, so the two label sets cannot collide. */}
                     <line
                       x1={x(endI)}
-                      x2={PAD.left + innerW + YEAR_LABEL_DX - 4}
+                      x2={P.left + innerW + labelDx - 4}
                       y1={y(o.values[endI])}
                       y2={y(o.values[endI])}
                       stroke={o.color}
                       strokeWidth={1}
                       opacity={0.35}
                     />
-                    <text x={PAD.left + innerW + YEAR_LABEL_DX} y={y(o.values[endI]) + 4} fontSize={11} fontWeight={800} fill={o.color}>
+                    <text x={P.left + innerW + labelDx} y={y(o.values[endI]) + 4} fontSize={11} fontWeight={800} fill={o.color}>
                       {o.short}
                     </text>
                   </g>
@@ -945,8 +1008,8 @@ export default function SeasonalityView() {
                   <line
                     x1={x(hover)}
                     x2={x(hover)}
-                    y1={PAD.top}
-                    y2={PAD.top + innerH}
+                    y1={P.top}
+                    y2={P.top + innerH}
                     stroke="rgba(255,255,255,0.35)"
                   />
                   <circle cx={x(hover)} cy={y(seasonSeries[hover])} r={3.5} fill={SEASON_COLOR} />
@@ -963,7 +1026,7 @@ export default function SeasonalityView() {
             </svg>
             </>
           ) : (
-            <div style={{ height: CHART_H }} />
+            <div style={{ height: CH }} />
           )}
         </div>
 
