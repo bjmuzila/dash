@@ -703,8 +703,16 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .ec-impact{text-align:left;min-width:0}
 .impact-pill{display:inline-block;line-height:1;text-align:center;border:1px solid;border-radius:8px;padding:${pillPadTop}px ${pillPadH}px ${pillPadBot}px;font-size:${pillFontSize}px;font-weight:800;text-transform:uppercase;white-space:nowrap}
 .pill-inner-04{display:inline-block;letter-spacing:0.04em;margin-right:-0.04em}
-.logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;justify-content:flex-end;opacity:0.96}
-.logo-wrap img{width:${LOGO_W}px;height:${LOGO_H}px;object-fit:contain}
+/* NO FLEX, NO object-fit. html2canvas implements neither reliably: object-fit is
+   simply not supported (the image is drawn to fill whatever box it computes),
+   and a flex container's children get measured badly enough that the corner
+   logo came out ~148x98 instead of the box it was given. An absolutely
+   positioned block with explicit width AND height is the one form it gets
+   right. Because LOGO_W/LOGO_H are derived from BRAND_LOGO_ASPECT, "fill the
+   box" and "preserve the aspect" are the same instruction here — which is why
+   dropping object-fit costs nothing. */
+.logo-wrap{position:absolute;bottom:18px;right:22px;width:${LOGO_W}px;height:${LOGO_H}px;opacity:0.96}
+.logo-wrap img{display:block;width:${LOGO_W}px;height:${LOGO_H}px}
 </style></head><body>
 <div class="snapshot" id="root">
   <div class="topbar">

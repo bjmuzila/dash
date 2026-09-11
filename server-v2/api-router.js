@@ -9116,11 +9116,22 @@ if (libDb) {
             // Most recent snapshot row per table. Empty until retention-cleanup
             // has run once since this shipped — the page says so rather than
             // showing a blank column with no explanation.
+            //
+            // `sample` is the newest row itself (the "last recorded" line under
+            // each table name). It is a column retention-cleanup adds, so on an
+            // install that predates it the first query errors — fall back to the
+            // shape without it rather than losing the whole ages block.
             pool.query(`
               SELECT DISTINCT ON (table_name)
-                     table_name, date_column, oldest, newest, span_days, captured_at
+                     table_name, date_column, oldest, newest, span_days, captured_at, sample
                 FROM db_map_snapshot
-               ORDER BY table_name, captured_at DESC`).catch(() => ({ rows: [] })),
+               ORDER BY table_name, captured_at DESC`)
+              .catch(() => pool.query(`
+                SELECT DISTINCT ON (table_name)
+                       table_name, date_column, oldest, newest, span_days, captured_at
+                  FROM db_map_snapshot
+                 ORDER BY table_name, captured_at DESC`))
+              .catch(() => ({ rows: [] })),
             pool.query(`SELECT max(captured_at) AS at FROM db_map_snapshot`).catch(() => ({ rows: [{ at: null }] })),
           ]);
 
@@ -9147,6 +9158,14 @@ if (libDb) {
               oldest: r.oldest, newest: r.newest,
               spanDays: r.span_days == null ? null : Number(r.span_days),
               capturedAt: r.captured_at,
+              // jsonb — already an object off the driver; a text column on an
+              // odd install is parsed here so the page always gets an object.
+              sample: (() => {
+                const s = r.sample;
+                if (!s) return null;
+                if (typeof s === 'string') { try { return JSON.parse(s); } catch { return null; } }
+                return typeof s === 'object' ? s : null;
+              })(),
             })),
             agesCapturedAt: (snapAt.rows[0] || {}).at || null,
             policies,

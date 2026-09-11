@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-11 (f) - Postgres map: "last recorded" line was always blank
+
+The line under each table name on /owner/db-map (the Postgres page) rendered
+"—" for every row. retention-cleanup.js has been writing the newest row into
+`db_map_snapshot.sample` nightly the whole time — the API never read it back.
+
+FIX in `server-v2/api-router.js`, `/api/owner/db-map`:
+- the `SELECT DISTINCT ON (table_name)` now selects `sample`, with a fallback to
+  the old column list if `sample` does not exist (an install predating the
+  column would otherwise lose the entire ages block to the existing `.catch`).
+- the `ages` mapper now returns `sample`, parsing it if a driver hands back text
+  instead of a jsonb object.
+
+No client change — `DbMap.tsx` already reads `age.sample` via `sampleLine()`.
+Rows whose last nightly snapshot predates the `sample` column stay blank until
+the next retention run (00:05–00:40 ET, weekdays).
+
 ## 2026-09-11 (e) - Snapshot pills re-centred for the headless render; corner logo is now the 3.0 lockup
 
 PILLS. Every pill's text sat high in the scheduled image. MEASURED off the
