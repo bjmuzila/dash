@@ -22,7 +22,7 @@
 // ── Types ────────────────────────────────────────────────────────────────────
 
 /** Traffic channel, derived from referrer + UTM. Cheap grouping for the owner UI. */
-export type Channel = "direct" | "search" | "social" | "paid" | "email" | "referral" | "internal";
+export type Channel = "direct" | "ai" | "search" | "social" | "paid" | "email" | "referral" | "internal";
 
 export interface ReferrerInfo {
   /** Full inbound URL, capped. Null for direct traffic and self-referrals. */
@@ -77,9 +77,71 @@ export const SELF_HOSTS = new Set(["cbedge.net", "localhost", "127.0.0.1"]);
 const SEARCH_HOSTS = [
   "google.", "bing.com", "duckduckgo.com", "search.yahoo.", "yahoo.com",
   "ecosia.org", "brave.com", "startpage.com", "baidu.com", "yandex.",
-  "qwant.com", "searx", "perplexity.ai", "chatgpt.com", "chat.openai.com",
-  "claude.ai", "gemini.google.com", "copilot.microsoft.com",
+  "qwant.com", "searx",
 ];
+
+/**
+ * AI assistants — their own channel, NOT "search".
+ *
+ * ── 2026-09-12 ──────────────────────────────────────────────────────────────
+ * These hosts used to sit in SEARCH_HOSTS, which hid the biggest non-direct
+ * source on the site inside the Google bucket. Two things were wrong with that:
+ *
+ *  1. It is not search. Nobody typed a query into a results page and picked us
+ *     off a list of ten blue links — an assistant answered a question and cited
+ *     us inside the answer. The intent, the copy that earns the click, and what
+ *     you would do to get more of it are all different from SEO.
+ *  2. It only caught a THIRD of them. Every assistant stamps
+ *     ?utm_source=<their host> on the links it hands out, but the ones opened
+ *     from a native app (the ChatGPT phone and desktop apps) send NO Referer
+ *     header at all. With host as the only test, those arrivals fell through to
+ *     `utm.utmSource ? "referral" : "direct"` and landed in "referral".
+ *     Measured over 2026-08-28 → 09-12: 90 ChatGPT sessions, 23 classified
+ *     "search" and 67 "referral" — the same source, split across two buckets,
+ *     top of neither.
+ *
+ * So both tests live here: the referrer host when we get one, and the
+ * auto-stamped utm_source when we don't.
+ */
+const AI_HOSTS = [
+  "chatgpt.com", "chat.openai.com", "openai.com",
+  "perplexity.ai", "claude.ai", "gemini.google.com", "bard.google.com",
+  "copilot.microsoft.com", "you.com", "poe.com", "grok.com", "x.ai",
+  "meta.ai", "duck.ai", "mistral.ai", "chat.deepseek.com", "kimi.com",
+];
+
+/**
+ * The same assistants as utm_source values, for the majority of arrivals that
+ * carry no referrer. Kept as an exact-match Set (not a substring scan like the
+ * host lists) because a source is a short tag we compare whole — substring
+ * matching "x.ai" would swallow a campaign tagged "max.ai-launch".
+ *
+ * Deliberately mirrors AUTO_TAG_SOURCES in owner-vite's AcquisitionPanel, which
+ * answers the neighbouring question ("did WE write this tag, or did a platform")
+ * and cannot import from here — the owner site is a separate Vite app.
+ */
+const AI_SOURCES = new Set([
+  "chatgpt.com", "chat.openai.com", "openai.com", "chatgpt", "openai",
+  "perplexity.ai", "perplexity",
+  "claude.ai", "claude", "anthropic.com",
+  "gemini.google.com", "gemini", "bard.google.com", "bard",
+  "copilot.microsoft.com", "copilot",
+  "you.com", "poe.com", "grok.com", "grok", "x.ai",
+  "meta.ai", "duck.ai", "mistral.ai", "deepseek.com", "kimi.com",
+]);
+
+/** True when this utm_source is an assistant's own auto-stamp. */
+export function isAiSource(source: string | null | undefined): boolean {
+  if (!source) return false;
+  return AI_SOURCES.has(source.trim().toLowerCase());
+}
+
+/** True when this referrer host is an AI assistant. */
+export function isAiHost(host: string | null | undefined): boolean {
+  if (!host) return false;
+  const h = host.trim().toLowerCase();
+  return AI_HOSTS.some((a) => h === a || h.endsWith("." + a));
+}
 
 const SOCIAL_HOSTS = [
   "t.co", "twitter.com", "x.com", "reddit.com", "old.reddit.com",
@@ -206,6 +268,12 @@ export function classifyChannel(ref: ReferrerInfo, utm: UtmInfo): Channel {
 
   const host = ref.referrerHost;
   if (ref.isSelf) return "internal";
+
+  // AI before everything host-based, and before the no-referrer fallback: the
+  // assistant's auto-stamped utm_source is the ONLY signal on a click out of a
+  // native assistant app, which is where most of them come from. See AI_HOSTS.
+  if (isAiHost(host) || isAiSource(utm.utmSource)) return "ai";
+
   if (!host) return utm.utmSource ? "referral" : "direct";
   if (SEARCH_HOSTS.some((h) => host.includes(h))) return "search";
   if (SOCIAL_HOSTS.some((h) => host === h || host.endsWith("." + h))) return "social";

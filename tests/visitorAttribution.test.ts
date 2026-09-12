@@ -115,10 +115,48 @@ test("channel: nothing at all is direct", () => {
   assert.equal(classifyChannel(noRef, noUtm), "direct");
 });
 
-test("channel: search engines and AI assistants are search", () => {
-  for (const host of ["google.com", "google.co.uk", "bing.com", "duckduckgo.com", "chatgpt.com", "perplexity.ai"]) {
+test("channel: search engines are search", () => {
+  for (const host of ["google.com", "google.co.uk", "bing.com", "duckduckgo.com", "yandex.ru"]) {
     assert.equal(classifyChannel({ ...noRef, referrerHost: host }, noUtm), "search", host);
   }
+});
+
+// ── AI assistants (2026-09-12) ───────────────────────────────────────────────
+// These were "search" until the ChatGPT traffic turned out to be the largest
+// non-direct source on the site and two thirds of it was landing in "referral".
+// See the AI_HOSTS block in lib/visitorAttribution.ts.
+
+test("channel: an assistant's referrer host is ai, not search", () => {
+  for (const host of [
+    "chatgpt.com", "chat.openai.com", "perplexity.ai", "claude.ai",
+    "gemini.google.com", "copilot.microsoft.com",
+  ]) {
+    assert.equal(classifyChannel({ ...noRef, referrerHost: host }, noUtm), "ai", host);
+  }
+});
+
+test("channel: an assistant's auto-stamped utm_source is ai with NO referrer", () => {
+  // The ChatGPT phone/desktop apps send no Referer header at all. utm_source is
+  // the only signal, and without this test those arrivals read as "referral".
+  for (const source of ["chatgpt.com", "chatgpt", "openai", "perplexity.ai", "claude.ai", "gemini"]) {
+    assert.equal(classifyChannel(noRef, { ...noUtm, utmSource: source }), "ai", source);
+  }
+});
+
+test("channel: ai does not swallow a campaign that merely looks like one", () => {
+  // Exact match on the source, so a tag of ours is never relabelled.
+  assert.equal(classifyChannel(noRef, { ...noUtm, utmSource: "max.ai-launch" }), "referral");
+  assert.equal(
+    classifyChannel(noRef, { ...noUtm, utmSource: "newsletter", utmMedium: "email" }),
+    "email"
+  );
+});
+
+test("channel: a paid click from an assistant host is still paid", () => {
+  assert.equal(
+    classifyChannel({ ...noRef, referrerHost: "chatgpt.com" }, { ...noUtm, utmSource: "chatgpt.com", utmMedium: "cpc" }),
+    "paid"
+  );
 });
 
 test("channel: socials are social, including subdomains", () => {

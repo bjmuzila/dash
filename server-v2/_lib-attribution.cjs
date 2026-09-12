@@ -22,6 +22,8 @@ __export(visitorAttribution_exports, {
   SELF_HOSTS: () => SELF_HOSTS,
   buildAttribution: () => buildAttribution,
   classifyChannel: () => classifyChannel,
+  isAiHost: () => isAiHost,
+  isAiSource: () => isAiSource,
   parseReferrer: () => parseReferrer,
   parseUserAgent: () => parseUserAgent,
   parseUtm: () => parseUtm
@@ -48,14 +50,64 @@ var SEARCH_HOSTS = [
   "baidu.com",
   "yandex.",
   "qwant.com",
-  "searx",
-  "perplexity.ai",
+  "searx"
+];
+var AI_HOSTS = [
   "chatgpt.com",
   "chat.openai.com",
+  "openai.com",
+  "perplexity.ai",
   "claude.ai",
   "gemini.google.com",
-  "copilot.microsoft.com"
+  "bard.google.com",
+  "copilot.microsoft.com",
+  "you.com",
+  "poe.com",
+  "grok.com",
+  "x.ai",
+  "meta.ai",
+  "duck.ai",
+  "mistral.ai",
+  "chat.deepseek.com",
+  "kimi.com"
 ];
+var AI_SOURCES = /* @__PURE__ */ new Set([
+  "chatgpt.com",
+  "chat.openai.com",
+  "openai.com",
+  "chatgpt",
+  "openai",
+  "perplexity.ai",
+  "perplexity",
+  "claude.ai",
+  "claude",
+  "anthropic.com",
+  "gemini.google.com",
+  "gemini",
+  "bard.google.com",
+  "bard",
+  "copilot.microsoft.com",
+  "copilot",
+  "you.com",
+  "poe.com",
+  "grok.com",
+  "grok",
+  "x.ai",
+  "meta.ai",
+  "duck.ai",
+  "mistral.ai",
+  "deepseek.com",
+  "kimi.com"
+]);
+function isAiSource(source) {
+  if (!source) return false;
+  return AI_SOURCES.has(source.trim().toLowerCase());
+}
+function isAiHost(host) {
+  if (!host) return false;
+  const h = host.trim().toLowerCase();
+  return AI_HOSTS.some((a) => h === a || h.endsWith("." + a));
+}
 var SOCIAL_HOSTS = [
   "t.co",
   "twitter.com",
@@ -159,6 +211,7 @@ function classifyChannel(ref, utm) {
   if (/^(social|social_paid|social-network)$/.test(medium)) return "social";
   const host = ref.referrerHost;
   if (ref.isSelf) return "internal";
+  if (isAiHost(host) || isAiSource(utm.utmSource)) return "ai";
   if (!host) return utm.utmSource ? "referral" : "direct";
   if (SEARCH_HOSTS.some((h) => host.includes(h))) return "search";
   if (SOCIAL_HOSTS.some((h) => host === h || host.endsWith("." + h))) return "social";
@@ -230,6 +283,8 @@ function buildAttribution(input) {
   SELF_HOSTS,
   buildAttribution,
   classifyChannel,
+  isAiHost,
+  isAiSource,
   parseReferrer,
   parseUserAgent,
   parseUtm

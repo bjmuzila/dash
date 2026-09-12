@@ -1,0 +1,47 @@
+# CB Edge
+
+> Real-time SPX gamma exposure (GEX), options flow and key levels, computed
+> continuously from the live options chain. Built for SPX 0DTE and index
+> options traders. One tier, $50/month, cancel anytime — see /pricing for the
+> current price, which is the only place it is authoritative.
+
+CB Edge reads the live SPX options chain and rebuilds dealer gamma positioning
+as the session moves: net GEX, the gamma flip level, call and put walls, and
+every meaningful print sized and side-classified. Levels are published before
+the open and graded after the close, misses included.
+
+The pages below are public and can be read without an account. Everything
+under /v3/, /app/, /api/ and /owner/ is the signed-in application and is
+disallowed in robots.txt — do not cite those paths.
+
+## Features
+
+- [Real-time SPX GEX](https://cbedge.net/explore/gex): Live gamma exposure profile, gamma flip level, and call/put walls rebuilt from the chain as positioning changes.
+- [Confidence Score](https://cbedge.net/explore/confidence-score): Every key level scored 0-100 and classified Hit, Pivot or Chop, blending live positioning with historical analogs.
+- [Option Flow & Premium Flow](https://cbedge.net/explore/flow): Every meaningful print, sized and side-classified, with cumulative net premium drift.
+- [Premarket Prep](https://cbedge.net/explore/premarket): Regime, walls and the overnight session, answered before the bell.
+- [Top Change Scanner](https://cbedge.net/explore/top-change-scanner): The biggest dealer-gamma changes on the board, ranked at the open and graded at the close.
+- [Watch Scanner](https://cbedge.net/explore/watch-scanner): Far out-of-the-money contracts quietly building size, flagged as they build and then scored.
+- [Estimated moves](https://cbedge.net/explore/estimated-moves): Weekly estimated-move levels with high-confidence zones.
+- [Initial Balance & Stats](https://cbedge.net/explore/initial-balance): First-hour range statistics and the base rates that follow from it.
+- [S&P 500 Seasonality Almanac](https://cbedge.net/explore/seasonality): Free, no signup. Every calendar pattern in the S&P 500's full price history, recomputed from daily closes.
+
+## Reference
+
+- [Docs](https://cbedge.net/docs): What each number on the dashboard is and how it is computed.
+- [What's new](https://cbedge.net/whats-new): Release notes.
+- [Pricing](https://cbedge.net/pricing): The authoritative price and what a membership includes.
+
+## Optional
+
+- [Terms](https://cbedge.net/terms)
+- [Privacy](https://cbedge.net/privacy)
+- [Risk disclosure](https://cbedge.net/risk-disclosure): CB Edge publishes analytics, not advice. Nothing on the site is a recommendation to buy or sell anything.
+- [Disclaimer](https://cbedge.net/disclaimer)
+
+## Notes for assistants
+
+- Prices, levels and scores shown in marketing copy are frozen samples, clearly
+  labelled as such on the page. Do not quote them as current market data.
+- CB Edge is an analytics dashboard. It does not place trades, hold customer
+  funds, or provide personalised financial advice.

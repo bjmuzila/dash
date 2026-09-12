@@ -370,7 +370,7 @@ function setSize(){
  * headline outside this box is not "tight", it is covered. */
 function safeInsets(){
   var tall=H/W>=1.4;
-  return tall ? {t:0.09,b:0.20,l:0.05,r:0.14} : {t:0.05,b:0.05,l:0.05,r:0.05};
+  return tall ? {t:0.08,b:0.17,l:0.05,r:0.13} : {t:0.05,b:0.05,l:0.05,r:0.05};
 }
 function placeSafe(){
   var box=stage.querySelector('.safe');
@@ -1970,6 +1970,7 @@ function loadTpl(name){
   // TPL[name]() reads C, which applyTheme has just re-pointed. Custom ones are
   // frozen HTML, so restore() puts them back exactly and reskin() then swaps
   // the palette they were saved under for this one.
+  refitBase=null;   // a new design, so nothing to re-fit back to
   var th=THEME||themeNow();
   if(name.indexOf('custom:')===0){
     var t=customTpls()[name.slice(7)];
@@ -1997,58 +1998,293 @@ function loadTpl(name){
 /* ── Re-fit: one layout, any canvas ──────────────────────────────────────────
  *
  * A post built at 1600×900 is not a 1080×1920 post with different numbers on
- * it — it is the same content that has to be rescaled and RE-STACKED, because
- * 9:16 has a third of the width and twice the height. Cropping to the new frame
- * throws half the design away; stretching to it squashes every screenshot.
+ * it. 9:16 has two thirds of the width and more than twice the height, so a
+ * layout that merely SHRINKS to fit lands as a small block of content floating
+ * in a screen and a half of empty background — which is exactly what the first
+ * version of this did. A side-by-side design has to become a COLUMN.
  *
- * What this does instead:
- *   1. Bands the layers by vertical overlap. Anything that shares a horizontal
- *      run — a label beside its number, two screenshots side by side — is one
- *      band and stays one band; the relationship inside a row is the design.
- *   2. Scales everything by ONE factor, so nothing changes proportion relative
- *      to anything else. The factor is whichever of width or height binds.
- *   3. Re-stacks the bands down the new canvas, keeping their order and their
- *      left alignment relative to the content block, and re-opens the gaps
- *      between them proportionally — capped, so a tall canvas does not turn a
- *      tight stack into scattered debris. Whatever height is left over centres
- *      the block.
+ * The unit of the re-fit is the CLUSTER, not the layer: any layers whose boxes
+ * touch are one thing — the number sitting on its card, the label on its pill —
+ * and they move, scale and stay together, always. Clusters that merely share a
+ * horizontal run (the copy column and the screenshot beside it) are separable,
+ * and that separation is the whole trick.
+ *
+ * Two arrangements are costed and the better one wins:
+ *
+ *   KEEP  — clusters stay in the rows they are in. Right for 16:9 → 1:1 or 4:5.
+ *   STACK — rows too wide for the new column are broken and their clusters
+ *           re-emitted down the page in reading order (column by column, top to
+ *           bottom). Clusters that DO still fit beside each other stay beside
+ *           each other, so a label · value · note line is never pulled apart.
+ *
+ * Each is then solved for size by refitSolve — rows grow to fill the width and
+ * the stack grows to fill the height — and the one that renders the most ink
+ * wins. STACK has to win by a clear margin to be worth the disruption.
+ *
+ * Vertical gaps are the ORIGINAL gaps, scaled, so tight pairs (eyebrow under
+ * headline) stay tight; only pairs that were never stacked get a fresh gap.
+ * Leftover height re-opens the gaps proportionally, capped, and then centres
+ * what is left. A row that had to be broken out of its band is centred in the
+ * column; a row that kept its place keeps its left alignment.
  *
  * Font size, letter spacing, corner radius and an image's crop all scale with
- * the box, so text reflows at the same measure it had and a cropped screenshot
- * keeps its crop. Border WIDTHS are left alone: a 1px hairline at 0.67 is a
- * smudge, and it was never part of the proportion.
+ * the box. Border WIDTHS do not: a 1px hairline at 0.67 is a smudge, and it was
+ * never part of the proportion.
  *
  * It is one mutation batch, so Ctrl+Z undoes the whole re-fit in one step. */
 var REFIT_MARGIN=0.055;   // side margin, as a share of the SHORT edge
-var REFIT_GAP_MAX=3.2;    // a gap may open to this multiple of its scaled self
+var REFIT_GAP_MAX=2.4;    // a gap may open to this multiple of its scaled self
+var REFIT_PAD=6;          // boxes within this of each other count as touching
+var REFIT_STACK_WIN=1.08; // stacking must beat keeping by this much INK to be used
+var REFIT_NEW_GAP=0.06;   // gap for a pair that was never stacked, × content height
+
+/* INK, not box. A text layer's box is almost always far wider than its words —
+ * the templates give a headline 1400px of room so it can be retyped longer — and
+ * measuring the box instead of the glyphs was quietly wrecking the re-fit: a
+ * short subhead with a wide box "touched" the panel on the other side of the
+ * canvas, so the two columns clustered into one 1432px-wide lump that could
+ * never be split, and every row then measured full width and could never grow.
+ *
+ * A Range over the inline content reports the LINE BOXES, which is the text as
+ * drawn. Everything else (images, logos, boxes) is its box. Ink is used for
+ * clustering, rows and scaling; the layer's own box is still what gets moved. */
+function inkBox(d){
+  var eds=d.querySelectorAll('.ed');
+  if(!eds.length) return null;
+  var sr=stage.getBoundingClientRect(), z=Z||1;
+  var l=Infinity,t=Infinity,r=-Infinity,b=-Infinity,got=false;
+  eds.forEach(function(e){
+    var rng=document.createRange();
+    try{ rng.selectNodeContents(e); }catch(err){ return; }
+    var rects=rng.getClientRects();
+    for(var i=0;i<rects.length;i++){
+      var q=rects[i];
+      if(q.width<0.5&&q.height<0.5) continue;
+      l=Math.min(l,q.left); t=Math.min(t,q.top);
+      r=Math.max(r,q.right); b=Math.max(b,q.bottom);
+      got=true;
+    }
+  });
+  if(!got) return null;
+  var out={l:(l-sr.left)/z, t:(t-sr.top)/z, w:(r-l)/z, h:(b-t)/z};
+  // Bullets sit outside the text, so a list keeps its own left edge.
+  if(d.dataset.t==='list'){ out.w+=out.l-d.offsetLeft; out.l=d.offsetLeft; }
+  return out;
+}
+// One record per layer: l/t/w/h is the box that gets MOVED, il/it/iw/ih is the
+// ink that gets MEASURED.
+function refitBoxes(list){
+  return list.map(function(d){
+    var o={d:d,l:d.offsetLeft,t:d.offsetTop,w:d.offsetWidth,h:d.offsetHeight};
+    var ink=inkBox(d);
+    o.il=ink?ink.l:o.l; o.it=ink?ink.t:o.t;
+    o.iw=ink?Math.max(1,ink.w):o.w; o.ih=ink?Math.max(1,ink.h):o.h;
+    return o;
+  });
+}
+function rectsTouch(a,b,pad){
+  return !(a.il+a.iw+pad<=b.il || b.il+b.iw+pad<=a.il ||
+           a.it+a.ih+pad<=b.it || b.it+b.ih+pad<=a.it);
+}
+// Connected components over "boxes touch". A card and everything printed on it
+// come back as one cluster, so no re-fit can ever separate them.
+function refitClusters(boxes){
+  var n=boxes.length, seen=new Array(n), out=[], i, j;
+  for(i=0;i<n;i++){
+    if(seen[i]) continue;
+    var stack=[i], group=[]; seen[i]=1;
+    while(stack.length){
+      var k=stack.pop(); group.push(boxes[k]);
+      for(j=0;j<n;j++){
+        if(!seen[j] && rectsTouch(boxes[k],boxes[j],REFIT_PAD)){ seen[j]=1; stack.push(j); }
+      }
+    }
+    out.push({items:group,
+      l:Math.min.apply(null,group.map(function(x){return x.il})),
+      t:Math.min.apply(null,group.map(function(x){return x.it})),
+      r:Math.max.apply(null,group.map(function(x){return x.il+x.iw})),
+      b:Math.max.apply(null,group.map(function(x){return x.it+x.ih}))});
+  }
+  return out;
+}
+// Clusters that share a horizontal run. A band is what KEEP treats as one row
+// and what STACK is allowed to break.
+function refitBands(cls){
+  var bands=[], cur=null;
+  cls.slice().sort(function(a,b){ return (a.t-b.t)||(a.l-b.l); }).forEach(function(c){
+    if(cur && c.t<cur.b-2){
+      cur.items.push(c);
+      cur.b=Math.max(cur.b,c.b); cur.l=Math.min(cur.l,c.l); cur.r=Math.max(cur.r,c.r);
+    } else { cur={items:[c],t:c.t,b:c.b,l:c.l,r:c.r}; bands.push(cur); }
+  });
+  return bands;
+}
+function refitRow(items,split){
+  return {items:items,split:!!split,
+    l:Math.min.apply(null,items.map(function(x){return x.l})),
+    t:Math.min.apply(null,items.map(function(x){return x.t})),
+    r:Math.max.apply(null,items.map(function(x){return x.r})),
+    b:Math.max.apply(null,items.map(function(x){return x.b}))};
+}
+/* Rows for one arrangement.
+ *
+ * split=false is KEEP: every band is a row, untouched.
+ *
+ * split=true walks each band in READING ORDER — left column fully, then the
+ * next column — and starts a new row whenever the next cluster would push the
+ * row past colTarget, or does not sit on the same line as the row so far. The
+ * span test is measured from the row's left edge, so the original spacing
+ * inside a kept row is preserved exactly. */
+function refitRows(bands,split,colTarget){
+  var rows=[];
+  bands.forEach(function(band){
+    if(!split || band.items.length<2){ rows.push(refitRow(band.items,false)); return; }
+    var minL=band.l, col=Math.max(1,colTarget*0.5);
+    var ord=band.items.slice().sort(function(a,b){
+      var ba=Math.floor((a.l-minL)/col), bb=Math.floor((b.l-minL)/col);
+      return (ba-bb)||(a.t-b.t)||(a.l-b.l);
+    });
+    var made=[], cur=null;
+    ord.forEach(function(c){
+      var sameLine=cur && c.t<cur.b-2 && c.b>cur.t+2;
+      if(cur && sameLine && (c.r-cur.l)<=colTarget){
+        cur.items.push(c);
+        cur.r=Math.max(cur.r,c.r); cur.b=Math.max(cur.b,c.b); cur.t=Math.min(cur.t,c.t);
+      } else { cur={items:[c],l:c.l,t:c.t,r:c.r,b:c.b}; made.push(cur); }
+    });
+    made.forEach(function(x){ rows.push(refitRow(x.items,made.length>1)); });
+  });
+  return rows;
+}
+// Cost an arrangement: its rows, the gaps it wants, and the one scale that
+// would draw all of it at the same size. refitSolve takes it from there.
+function refitPlan(rows,availW,availH,newGap){
+  var colW=Math.max(1,Math.max.apply(null,rows.map(function(r){return r.r-r.l})));
+  var gaps=[], i;
+  for(i=1;i<rows.length;i++){
+    var g=rows[i].t-rows[i-1].b;
+    gaps.push(g>0?g:newGap);   // never stacked before, so it has no gap to keep
+  }
+  var sumH=rows.reduce(function(a,r){return a+(r.b-r.t)},0);
+  var sumG=gaps.reduce(function(a,g){return a+g},0);
+  var s=Math.min(availW/colW, availH/Math.max(1,sumH+sumG));
+  return {rows:rows,gaps:gaps,colW:colW,sumH:sumH,sumG:sumG,s:s};
+}
+
+/* ── Filling the frame ───────────────────────────────────────────────────────
+ *
+ * One scale for the whole layout is not enough. A 16:9 design dropped into 9:16
+ * is bounded by WIDTH, so a single scale leaves a screen's worth of height over
+ * — and pouring that into the gaps just spaces the same small type further
+ * apart, which is the "wasted space" you can see from across the room.
+ *
+ * So each ROW gets its own scale. A row is grown until it fills the column,
+ * capped at REFIT_ROW_UP× the base, and then everything is scaled together
+ * until the stack fills the height too. Proportions INSIDE a row never change —
+ * a card and its number grow as one — only the relative size of one row against
+ * another, which is exactly what anyone does by hand when a desktop layout is
+ * rebuilt for a phone: each block goes full width and its type comes up with it.
+ *
+ * A row narrower than REFIT_ROW_MIN of the column is exempt. That is the logo,
+ * the small badge, the lone date stamp — blowing those up to full width is not
+ * "filling the frame", it is a mistake, and the width test is what tells the
+ * difference between a headline block and a mark.
+ *
+ * The arrangement that renders the most INK — Σ area × scale² — wins, which is
+ * the honest way to ask "which of these two is bigger on the screen". */
+var REFIT_ROW_UP=1.7;    // a row may grow to this multiple of the base scale
+var REFIT_ROW_MIN=0.5;   // …but only if it is already this much of the column
+
+function refitSolve(pl,availW,availH){
+  var s0=pl.s, n=pl.rows.length, k;
+  var rw=pl.rows.map(function(r){ return Math.max(1,r.r-r.l); });
+  var rh=pl.rows.map(function(r){ return Math.max(1,r.b-r.t); });
+  // The most each row may be drawn at: enough to fill the column, never more
+  // than REFIT_ROW_UP× the base, and a mark is pinned at the base.
+  var cap=pl.rows.map(function(r,i){
+    if(rw[i] < pl.colW*REFIT_ROW_MIN) return s0;
+    return Math.max(s0, Math.min(availW/rw[i], s0*REFIT_ROW_UP));
+  });
+  var heightAt=function(g){
+    var t=pl.sumG*s0;
+    for(var i=0;i<n;i++) t+=rh[i]*Math.min(cap[i],s0*g);
+    return t;
+  };
+  // NOTHING EVER SHRINKS BELOW s0 — growth is spent out of leftover height
+  // only. Growing rows first and shrinking the lot to fit afterwards reads as
+  // more ink but is a worse composition: it takes size off the wide rows, which
+  // are the ones carrying the design, and hands it to the narrow ones.
+  var g=1;
+  if(heightAt(1)<availH-1){
+    if(heightAt(REFIT_ROW_UP)<=availH) g=REFIT_ROW_UP;
+    else {
+      var lo=1, hi=REFIT_ROW_UP, mid;
+      for(k=0;k<24;k++){ mid=(lo+hi)/2; if(heightAt(mid)<=availH) lo=mid; else hi=mid; }
+      g=lo;
+    }
+  }
+  var si=cap.map(function(c){ return Math.min(c, s0*g); });
+  var used=pl.sumG*s0;
+  for(k=0;k<n;k++) used+=rh[k]*si[k];
+  pl.si=si; pl.gsc=s0; pl.usedH=used;
+  // Score = how much CONTENT gets drawn: Σ cluster area × scale². Measured on
+  // the clusters, never on the row boxes — a row spanning two columns has a
+  // hole down the middle, and counting that hole as ink scores a desktop layout
+  // stranded in a phone frame above the column that should replace it.
+  pl.score=pl.rows.reduce(function(acc,r,i){
+    return acc+r.items.reduce(function(a2,c){
+      return a2+(c.r-c.l)*(c.b-c.t)*si[i]*si[i];
+    },0);
+  },0);
+  return pl;
+}
+
+function refitPlace(pl,m,top,availW,availH){
+  var si=pl.si, gsc=pl.gsc;
+  var spare=Math.max(0, availH-pl.usedH);
+  var room=pl.gaps.reduce(function(a,g){ return a+g*gsc*(REFIT_GAP_MAX-1); },0);
+  var take=Math.min(spare,room);
+  var gs=pl.gaps.map(function(g){
+    return g*gsc + (room>0 ? take*(g*gsc*(REFIT_GAP_MAX-1)/room) : 0);
+  });
+  var kept=pl.rows.filter(function(r){return !r.split});
+  var baseL=kept.length ? Math.min.apply(null,kept.map(function(r){return r.l}))
+                        : Math.min.apply(null,pl.rows.map(function(r){return r.l}));
+  // Mixed alignment reads as a mistake. Once most of the rows have been broken
+  // out of their bands and centred, the few that kept their place have to be
+  // centred too or the composition has no edge to sit against.
+  var splits=pl.rows.filter(function(r){return r.split}).length;
+  var centreAll=splits*2>=pl.rows.length;
+  var y=top+Math.round((spare-take)/2);
+  pl.rows.forEach(function(row,ri){
+    var s=si[ri], rowW=(row.r-row.l)*s;
+    var x=(row.split||centreAll) ? m+Math.round((availW-rowW)/2)
+                                 : m+Math.round((row.l-baseL)*s);
+    x=Math.max(m, Math.min(x, m+availW-Math.round(rowW)));
+    // Placed by INK: nx/ny are where the glyphs have to land, not where the box
+    // goes — refitLayer works the box back out from that.
+    row.items.forEach(function(cl){
+      cl.items.forEach(function(b){
+        refitLayer(b, s, x+Math.round((b.il-row.l)*s), Math.round(y+(b.it-row.t)*s));
+      });
+    });
+    y += (row.b-row.t)*s + (gs[ri]||0);
+  });
+}
 
 function refitLayout(){
   var list=lyList();
-  if(!list.length){ return false; }
+  if(!list.length) return false;
 
-  var boxes=list.map(function(d){
-    return {d:d,l:d.offsetLeft,t:d.offsetTop,w:d.offsetWidth,h:d.offsetHeight};
-  });
-  boxes.sort(function(a,b){ return (a.t-b.t)||(a.l-b.l); });
-
-  // Bands: a layer joins the open band if it starts before that band ends.
-  var bands=[], cur=null;
-  boxes.forEach(function(b){
-    if(cur && b.t < cur.b-2){
-      cur.items.push(b);
-      cur.b=Math.max(cur.b,b.t+b.h);
-      cur.l=Math.min(cur.l,b.l); cur.r=Math.max(cur.r,b.l+b.w);
-    } else {
-      cur={items:[b],t:b.t,b:b.t+b.h,l:b.l,r:b.l+b.w};
-      bands.push(cur);
-    }
-  });
+  var boxes=refitBoxes(list);
+  var cls=refitClusters(boxes);
+  var bands=refitBands(cls);
 
   var m=Math.round(Math.min(W,H)*REFIT_MARGIN);
   var availW=Math.max(40,W-2*m);
   // Vertically, a tall canvas re-fits into the SAFE AREA, not the full frame:
   // on a phone feed the top bar and the caption/handle block are painted over
-  // those strips, so centring in the raw frame puts the first and last band
+  // those strips, so centring in the raw frame puts the first and last row
   // under app chrome. On anything that is not phone-shaped this is just the
   // margin box. Horizontally the frame is used in full — the right-hand action
   // rail overlaps an edge, it does not black it out, and giving up a seventh of
@@ -2056,41 +2292,107 @@ function refitLayout(){
   var ins=safeInsets(), tall=H/W>=1.4;
   var top=tall?Math.round(H*ins.t):m, bot=tall?H-Math.round(H*ins.b):H-m;
   var availH=Math.max(40,bot-top);
-  var cl=Math.min.apply(null,bands.map(function(x){return x.l}));
-  var cr=Math.max.apply(null,bands.map(function(x){return x.r}));
-  var contentW=Math.max(1,cr-cl);
 
-  var gaps=[], i;
-  for(i=1;i<bands.length;i++) gaps.push(Math.max(0,bands[i].t-bands[i-1].b));
-  var sumH=bands.reduce(function(a,x){return a+(x.b-x.t)},0);
-  var sumG=gaps.reduce(function(a,x){return a+x},0);
+  var contentH=Math.max(1,
+    Math.max.apply(null,cls.map(function(c){return c.b})) -
+    Math.min.apply(null,cls.map(function(c){return c.t})));
+  var newGap=Math.max(16,Math.round(contentH*REFIT_NEW_GAP));
 
-  var s=Math.min(availW/contentW, availH/Math.max(1,sumH+sumG));
-  if(!isFinite(s)||s<=0) return false;
-
-  // Spare height goes back into the gaps, proportionally and capped; the rest
-  // centres the block.
-  var spare=Math.max(0, availH-(sumH+sumG)*s);
-  var room=gaps.reduce(function(a,g){ return a+g*s*(REFIT_GAP_MAX-1); },0);
-  var take=Math.min(spare,room);
-  var gs=gaps.map(function(g){
-    return g*s + (room>0 ? take*(g*s*(REFIT_GAP_MAX-1)/room) : 0);
+  /* Rather than one stacked arrangement, try a RANGE of column widths.
+   *
+   * The column decides everything: narrow it and more clusters break onto their
+   * own rows, which makes the stack taller and therefore smaller; widen it and
+   * more of them stay side by side, which is shorter and bigger but keeps more
+   * of the desktop shape. Neither end is right for every design — the levels
+   * card wants one narrow column, the weekly-results board wants a wider one
+   * that keeps its two stat cards paired — so the widths are simply tried and
+   * the best-scoring one is used. KEEP is the same search at an infinite column
+   * and gets the benefit of the doubt on a tie, since it disturbs least. */
+  var wideCl=Math.max.apply(null,cls.map(function(c){return c.r-c.l}));
+  var targets=[Infinity], best=null, seen={};
+  [1,1.3,1.7,2.2,2.8].forEach(function(f){ targets.push(Math.round(wideCl*f)); });
+  targets.forEach(function(T){
+    var key=String(T);
+    if(seen[key]) return;
+    seen[key]=1;
+    var rows=refitRows(bands, T!==Infinity, T);
+    var pl=refitSolve(refitPlan(rows,availW,availH,newGap),availW,availH);
+    if(!isFinite(pl.s)||pl.s<=0) return;
+    pl.rank=pl.score*(T===Infinity?REFIT_STACK_WIN:1);
+    if(!best||pl.rank>best.rank) best=pl;
   });
-  var y=top+Math.round((spare-take)/2);
-  var x0=m+Math.round((availW-contentW*s)/2);
-
-  bands.forEach(function(band,bi){
-    band.items.forEach(function(b){
-      refitLayer(b, s, x0+Math.round((b.l-cl)*s), Math.round(y+(b.t-band.t)*s));
-    });
-    y += (band.b-band.t)*s + (gs[bi]||0);
-  });
+  if(!best) return false;
+  refitPlace(best,m,top,availW,availH);
   return true;
 }
 
+/* Re-fitting is destructive — a stacked column has no memory of having been two
+ * columns, so flipping 16:9 → 9:16 → 16:9 would otherwise leave a narrow strip
+ * down the middle of a wide canvas, each pass compounding the last.
+ *
+ * So the layout as it stood BEFORE the first re-fit of a run is kept, and each
+ * further size change re-fits THAT rather than the previous result. Every size
+ * is then a fresh read of the original design instead of a copy of a copy.
+ *
+ * The base is dropped the moment the layout is edited (see pushHist) — a re-fit
+ * must never throw away work done after it. The next size change then re-bases
+ * on the edited layout: back to compounding, but nothing is lost, which is the
+ * right way round. Ctrl+Z still undoes any single re-fit. */
+var refitBase=null, refitting=false;
+function refitMark(){
+  refitting=true;
+  setTimeout(function(){ refitting=false; },350);   // outlives the 300ms history debounce
+}
+function refitCapture(){
+  if(!refitBase) refitBase={W:W,H:H,html:stage.innerHTML};
+}
+function refitRestoreBase(){
+  if(!refitBase||!refitBase.html) return false;
+  var tmp=document.createElement('div'); tmp.innerHTML=refitBase.html;
+  var fresh=Array.prototype.slice.call(tmp.querySelectorAll('.ly'));
+  if(!fresh.length) return false;
+  stage.querySelectorAll('.ly').forEach(function(x){ x.remove(); });
+  fresh.forEach(function(d){
+    stage.appendChild(d);
+    d.querySelectorAll('.hnd,.eh').forEach(function(h){h.remove()});
+    d.classList.remove('sel');
+    var rim=d.querySelector('img'); if(rim&&rim.dataset.cw) applyCrop(rim);
+    d.querySelectorAll('.ed').forEach(function(n){n.contentEditable='false'});
+    wire(d);
+    if(d.dataset.t==='image') styleImg(d);
+    if(d.dataset.t==='logo') logoFallback(d);
+    if(d.dataset.t==='image'||d.dataset.t==='logo') d.addEventListener('dblclick',function(){pick(d)});
+  });
+  select(null);
+  return true;
+}
+// The one entry point. fromBase=true on a size change, so the re-fit reads the
+// original design; false on the button, which re-bases on what is on screen.
+function runRefit(fromBase){
+  refitMark();
+  // Changing the canvas size does not move a single layer, so capturing here is
+  // capturing the pre-re-fit design either way.
+  if(fromBase && refitBase) refitRestoreBase(); else refitCapture();
+  var ok=refitLayout();
+  refitMark();
+  return ok;
+}
+
+/* nx/ny is where this layer's INK has to land — the rows were measured on the
+ * glyphs, not on the boxes.
+ *
+ * The BOX still scales by exactly s and keeps its full width. That is not
+ * sloppiness, it is the only way the line breaks survive: re-cutting the box to
+ * the measured text looks tidier but the text then re-wraps against its own
+ * measurement, and a headline splits a word onto a second line that lands on
+ * top of the line beneath it. So the box keeps its proportion and is simply
+ * offset so the ink inside it lands on nx/ny, whatever the alignment and
+ * whatever empty room hangs off the side. The stage clips, and empty room is
+ * invisible. */
 function refitLayer(b,s,nx,ny){
   var d=b.d;
-  d.style.left=px(nx); d.style.top=px(ny);
+  d.style.left=px(Math.round(nx-(b.il-b.l)*s));
+  d.style.top=px(Math.round(ny-(b.it-b.t)*s));
   d.style.width=px(Math.max(8,Math.round(b.w*s)));
   // Only layers that were given an explicit height keep one — a text layer's
   // height is its content and has to stay that way or it clips at the new size.
@@ -2155,9 +2457,9 @@ var autoRefit=true;
 document.getElementById('size').onchange=function(){
   var p=this.value.split('x'); W=+p[0]; H=+p[1];
   setSize(); fit(); applyFx();
-  if(autoRefit) refitLayout();
+  if(autoRefit) runRefit(true);
 };
-document.getElementById('relay').onclick=function(){ refitLayout(); };
+document.getElementById('relay').onclick=function(){ runRefit(false); };
 document.getElementById('autorelay').onclick=function(){
   autoRefit=!autoRefit; this.classList.toggle('on',autoRefit);
 };
@@ -2373,6 +2675,7 @@ function serialize(){
           html:stage.innerHTML};
 }
 function restore(s){
+  refitBase=null;   // undo, or a different canvas entirely
   W=s.W;H=s.H; document.getElementById('size').value=W+'x'+H;
   document.getElementById('bg').value=s.bg; stage.style.background=s.bg;
   document.getElementById('ac').value=s.ac;
@@ -2407,6 +2710,8 @@ function histBtns(){
 }
 function pushHist(){
   if(applying) return;
+  // Anything the user changes invalidates the re-fit base — see refitBase.
+  if(!refitting) refitBase=null;
   var snap=JSON.stringify(serialize());
   if(HI>=0 && HIST[HI]===snap) return;
   HIST=HIST.slice(0,HI+1);

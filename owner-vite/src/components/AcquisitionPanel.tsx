@@ -329,25 +329,49 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
     // campaign on Monday and register on Thursday, and a window-scoped index
     // would report that campaign as having produced nothing.
     //
-    // The key is the account when we have one and the IP when we don't, which
-    // is the only join available — the arrival is anonymous by definition, so
-    // there is no user id on it to match. That makes these numbers ATTRIBUTED,
-    // not audited: a shared office IP can credit a campaign with a signup that
-    // came from the desk next door, and a phone that changes networks between
-    // arriving and registering breaks the link the other way. Directionally
-    // right, not billable. The footnote under the table says so.
-    const identity = new Map<string, { registeredAt: number | null; paid: boolean }>();
+    // ── 2026-09-12: THIS COLUMN USED TO BE STRUCTURALLY ZERO ─────────────────
+    // The old index filed each row under ONE key — `u:<userId>` when the row
+    // was signed in, `ip:<ip>` when it wasn't — and that made a signup
+    // impossible to count. An arrival is anonymous by definition, so it lands
+    // under `ip:X`; the rows that carry the account (and therefore the
+    // created_at) land under `u:Y`. The two never met, so `registeredAt` was
+    // always null for exactly the keys the campaign table looks up, and the
+    // only rows that could set it were people who were ALREADY signed in when
+    // they arrived — who are then correctly dropped by the "already had an
+    // account" test below. Every source read 0 signups, including the ones that
+    // had produced paying customers that week.
+    //
+    // The fix: a signed-in row files itself under BOTH keys, so the IP is the
+    // bridge from the anonymous click to the account that shows up on it later.
+    // Verified against 2026-08-28 → 09-12: the ai channel goes from 0 to 9
+    // signups, 1 of them paying — which matches user_attribution (the audited
+    // cookie-based record the Sales page reads) for the same window.
+    //
+    // A key holds a LIST, not one account: a household or office IP has several,
+    // and collapsing them to MIN(registeredAt) let one long-standing customer on
+    // that IP mask a genuine new signup behind "already had an account".
+    //
+    // Still ATTRIBUTED, not audited — a shared IP can credit the wrong source,
+    // and a phone that changes networks between clicking and registering loses
+    // the link entirely. The footnote under the table says so.
+    type Account = { registeredAt: number; paid: boolean };
+    const identity = new Map<string, Account[]>();
+    const fileAccount = (key: string, acct: Account) => {
+      const list = identity.get(key);
+      if (!list) { identity.set(key, [acct]); return; }
+      // Same account seen on the same key again (every pageview it made) — keep
+      // one entry, but let a later row upgrade it to paying.
+      const dup = list.find((a) => a.registeredAt === acct.registeredAt);
+      if (dup) { dup.paid = dup.paid || acct.paid; return; }
+      list.push(acct);
+    };
     for (const r of rows) {
-      if (r.isBot) continue;
-      const key = r.userId ? `u:${r.userId}` : r.ip ? `ip:${r.ip}` : "";
-      if (!key) continue;
-      const prev = identity.get(key) ?? { registeredAt: null, paid: false };
+      if (r.isBot || !r.userId) continue;
       const created = r.userCreatedAt ? Date.parse(r.userCreatedAt) : NaN;
-      if (r.userId && Number.isFinite(created)) {
-        prev.registeredAt = prev.registeredAt == null ? created : Math.min(prev.registeredAt, created);
-      }
-      if (r.isSubscriber) prev.paid = true;
-      identity.set(key, prev);
+      if (!Number.isFinite(created)) continue;
+      const acct: Account = { registeredAt: created, paid: Boolean(r.isSubscriber) };
+      fileAccount(`u:${r.userId}`, acct);
+      if (r.ip) fileAccount(`ip:${r.ip}`, { ...acct });
     }
 
     // Per campaign: unique arrivals, and the earliest arrival time of each, so
@@ -378,11 +402,15 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
         let signups = 0;
         let paid = 0;
         for (const [who, arrivedAt] of agg.arrivals) {
-          const id = identity.get(who);
-          if (!id || id.registeredAt == null) continue;
-          if (id.registeredAt < arrivedAt - GRACE_MS) continue; // already had an account
+          const accounts = identity.get(who);
+          if (!accounts) continue;
+          // ANY account on this key that was created at or after the click. An
+          // older account on the same key is someone who already had one, and
+          // must not veto a new registration sitting beside it.
+          const fresh = accounts.filter((a) => a.registeredAt >= arrivedAt - GRACE_MS);
+          if (!fresh.length) continue;
           signups++;
-          if (id.paid) paid++;
+          if (fresh.some((a) => a.paid)) paid++;
         }
         return { source, medium, campaign, sessions: agg.arrivals.size, signups, paid };
       })
@@ -563,12 +591,13 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
         everywhere except the bot counter.
         <br />
         <b style={{ color: T.text, opacity: 1 }}>Signups and Paid are attributed, not audited.</b>{" "}
-        An arrival is anonymous by definition, so the only way to connect it to the account that
-        appears later is the account id where we have one and the IP where we don't. A shared office
-        or campus IP can credit the wrong campaign; a phone that switches networks between clicking
-        and registering loses the link entirely. Read them as direction, not as billing. Both are
-        also bounded by how far back the fetched visit log reaches — a signup whose click has been
-        pruned counts for nobody.
+        An arrival is anonymous by definition, so the bridge to the account that appears later is the
+        IP it shows up on. A shared office or campus IP can credit the wrong campaign; a phone that
+        switches networks between clicking and registering loses the link entirely. Read them as
+        direction, not as billing — the audited answer for one customer is on the Sales page, which
+        reads the first-touch cookie recorded on the account itself. Both columns are also bounded by
+        how far back the fetched visit log reaches: a signup whose click has been pruned counts for
+        nobody.
       </div>
     </div>
   );

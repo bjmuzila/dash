@@ -159,6 +159,20 @@ export const POSTMARKET_CSS = `
 .pmk .evrow .pmtrack i.up{background:var(--amber);left:50%}
 .pmk .evrow .pmtrack i.dn{background:var(--neg);right:50%}
 .pmk .evrow .pmtrack.off{background:none;box-shadow:none}
+/* ── THE WINDOW PRESET ──────────────────────────────────────────────────────
+   Section 3's bars can be cut into AM/MID/PM, LDN/NY, clock hours, or not cut
+   at all. This is the picker: a segmented control, exactly one lit. It reads as
+   ONE control rather than four chips — the hairline box and the shared row are
+   what say "pick one of these", against the legend below where every chip is an
+   independent switch. */
+.pmk .evpreset{display:inline-flex;align-items:center;gap:1px;padding:1px;
+  border:1px solid var(--line2);border-radius:5px;background:var(--sunken);
+  font-size:var(--text-3xs)}
+.pmk .evpreset .pchip{background:none;border:0;cursor:pointer;font:inherit;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--dim2);padding:2px 7px;border-radius:4px;
+  transition:color .12s ease,background .12s ease}
+.pmk .evpreset .pchip:hover{color:var(--txt)}
+.pmk .evpreset .pchip.on{background:var(--line2);color:var(--txt)}
 .pmk .evlegend{display:flex;gap:14px;flex-wrap:wrap;font-size:9.5px;letter-spacing:.05em;
   text-transform:uppercase;color:var(--dim2)}
 .pmk .evlegend i{display:inline-block;width:9px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}

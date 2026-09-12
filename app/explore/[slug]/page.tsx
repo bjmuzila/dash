@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
@@ -46,6 +47,124 @@ import DelayedLiveView from "@/components/explore/DelayedLiveView";
 // window, not per visitor.
 export const dynamic = "force-dynamic";
 
+// ── DISCOVERABILITY (added 2026-09-12) ───────────────────────────────────────
+//
+// Until today these eight pages had NO metadata of their own. Every one of them
+// inherited the root layout's title and description verbatim, so /explore/flow
+// and /explore/gex were, to anything reading the page as a document, the same
+// document as the landing page: same <title>, same description, no canonical.
+// /explore/seasonality already does this properly — this is that pattern,
+// applied to the pages that were missing it.
+//
+// It matters more than ordinary SEO housekeeping right now. Over
+// 2026-08-28 → 09-12 ChatGPT was the single largest non-direct source on the
+// site (90 sessions, 46% of all non-direct arrivals), and every one of those
+// arrivals landed on a URL out of sitemap.xml — /, /explore/flow,
+// /explore/confidence-score, /explore/premarket, /explore/estimated-moves.
+// An assistant quoting a page has nothing to quote but its title, description
+// and structured data, and all eight were handing it the landing page's.
+//
+// Host comes from the same env as the root layout's metadataBase and sitemap.ts,
+// so the three can never disagree.
+const SITE = (process.env.NEXT_PUBLIC_SITE_URL || "https://cbedge.net").replace(/\/+$/, "");
+
+/** Title/description for one feature page. One place, so the <head>, the
+ *  OpenGraph card and the JSON-LD can never drift apart. */
+function seo(entry: (typeof EXPLORE)[string]) {
+  const title = `${entry.title} — CB Edge`;
+  // Tagline first (it is the one line written to say what the screen IS), then
+  // the opening sentence of the body for the detail. Trimmed at a sentence
+  // boundary rather than mid-word, and capped: a description that runs long is
+  // truncated by everything that reads it.
+  const first = (entry.body[0] ?? "").split(/(?<=\.)\s/)[0] ?? "";
+  const desc = `${entry.tagline} ${first}`.replace(/\s+/g, " ").trim().slice(0, 300);
+  return { title, description: desc };
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const entry = EXPLORE[slug];
+  // Unknown slug renders notFound() below; give it nothing rather than a title
+  // that claims a page exists.
+  if (!entry) return {};
+
+  const { title, description } = seo(entry);
+  const path = `/explore/${entry.slug}`;
+  return {
+    title,
+    description,
+    alternates: { canonical: path },
+    openGraph: { title, description, url: path, type: "article" },
+    twitter: { card: "summary_large_image", title, description },
+  };
+}
+
+/**
+ * Structured data for the page.
+ *
+ * WebPage + BreadcrumbList + the product it belongs to, as one @graph. The
+ * SoftwareApplication carries `featureList` off the page's own highlights, which
+ * is the honest machine-readable version of what this screen does.
+ *
+ * DELIBERATELY NO `offers` AND NO FAQPage. A price in structured data is a
+ * promise that goes stale the day /pricing changes and nobody remembers this
+ * file; and a FAQPage needs real questions and answers, which these entries do
+ * not have — inventing them to win a rich result is exactly the kind of claim
+ * this site's whole argument forbids.
+ */
+function exploreJsonLd(entry: (typeof EXPLORE)[string]) {
+  const { title, description } = seo(entry);
+  const url = `${SITE}/explore/${entry.slug}`;
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebPage",
+        "@id": url,
+        url,
+        name: title,
+        description,
+        isPartOf: { "@type": "WebSite", "@id": `${SITE}/#website`, url: SITE, name: "CB Edge" },
+        about: { "@id": `${SITE}/#software` },
+        breadcrumb: {
+          "@type": "BreadcrumbList",
+          itemListElement: [
+            { "@type": "ListItem", position: 1, name: "CB Edge", item: SITE },
+            { "@type": "ListItem", position: 2, name: "Features", item: `${SITE}/#features` },
+            { "@type": "ListItem", position: 3, name: entry.title, item: url },
+          ],
+        },
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": `${SITE}/#software`,
+        name: "CB Edge",
+        url: SITE,
+        applicationCategory: "FinanceApplication",
+        operatingSystem: "Web",
+        description:
+          "Real-time SPX gamma exposure, options flow and key levels, computed from the live options chain.",
+        featureList: entry.highlights,
+      },
+    ],
+  };
+}
+
+/** JSON-LD as a script tag. `<` is escaped so a value carrying "</script>"
+ *  cannot close the tag early — the one injection this pattern is prone to. */
+function JsonLd({ data }: { data: unknown }) {
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(data).replace(/</g, "\\u003c") }}
+    />
+  );
+}
+
 const toneColor: Record<NonNullable<TeaserStat["tone"]>, string> = {
   cyan: V3.levelCw,
   green: V3.up,
@@ -76,6 +195,8 @@ export default async function ExplorePage({
         fontFamily: V3_SANS,
       }}
     >
+      <JsonLd data={exploreJsonLd(entry)} />
+
       {/* Shared public toolbar — same band on every public page. */}
       <PublicNav active="Features" />
 

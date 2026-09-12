@@ -226,6 +226,93 @@ const LOG_KEY = "cb-postmarket-log-v1";
  */
 const PM_FROM_MIN = 15 * 60;
 
+/**
+ * SECTION 3'S WINDOWS ARE A CHOICE, NOT A CONSTANT.
+ *
+ * The build bars used to be hard-wired to AM / MID / PM. That split answers one
+ * question well — "which third of the session laid this book down" — and three
+ * other questions badly:
+ *
+ *   · LDN/NY — whether a strike was built while London was still on the bid or
+ *     only after it went home. London's ET day ends 11:30, so inside RTH the
+ *     honest cut is open→11:30 (both books open) and 11:30→close (NY alone).
+ *   · HOURLY — where inside a third the move actually happened. A strike that
+ *     is "70% AM" is a different strike depending on whether that was the first
+ *     ten minutes or 11:20.
+ *   · NOW — how the book SITS, with the build taken out entirely. Composition
+ *     is a story about the past; sometimes the question is just the shape on
+ *     the screen at the last recorded minute.
+ *
+ * Every preset is a list of [from, until) ET minute windows and nothing else,
+ * so the whole rest of section 3 — coverage filtering, the legend switches, the
+ * segment maths, the dominant label — is unchanged by the choice. NOW is the
+ * empty list: no windows, so no segments, so each row falls through to its
+ * solid bar.
+ */
+type EvPreset = "session" | "ldnny" | "hourly" | "now";
+
+const EV_PRESETS: { key: EvPreset; label: string; help: string }[] = [
+  { key: "session", label: "am/mid/pm",
+    help: "The session in thirds \u2014 open\u219212:00, 12:00\u219215:00, 15:00\u2192close.\n"
+      + "The default: which part of the day laid the book down." },
+  { key: "ldnny", label: "ldn/ny",
+    help: "London's ET day ends 11:30, so inside RTH this cuts the session into\n"
+      + "open\u219211:30 (London still trading alongside NY) and 11:30\u2192close (NY alone).\n"
+      + "Which book was open when the strike was built." },
+  { key: "hourly", label: "hourly",
+    help: "One window per clock hour \u2014 09:30\u219210:00, then 10\u219211 and so on to the bell.\n"
+      + "Use it when a third of the day is too coarse to see where the move sat." },
+  { key: "now", label: "now",
+    help: "Drops the build split entirely. Each bar is the strike's gamma as the book\n"
+      + "SITS at the last recorded minute, with its share of the board beside it \u2014\n"
+      + "no history, no composition." },
+];
+
+/**
+ * The build ramp, blue → violet → amber, in TIME order. AM/MID/PM name those
+ * three colours directly; every other preset interpolates across the same ramp,
+ * so "early is blue, late is amber" keeps meaning the same thing no matter how
+ * many windows the reader has asked for.
+ */
+const rampColor = (i: number, n: number): string => {
+  if (n <= 1) return "var(--violet)";
+  const t = i / (n - 1);
+  const pct = Math.round((t <= 0.5 ? t * 2 : (t - 0.5) * 2) * 100);
+  return t <= 0.5
+    ? `color-mix(in srgb, var(--violet) ${pct}%, var(--blue))`
+    : `color-mix(in srgb, var(--amber) ${pct}%, var(--violet))`;
+};
+
+/** The window list for a preset, in ET minutes. `now` deliberately has none. */
+type EvBucket = { from: number; until: number; color: string; label: string };
+
+function bucketsFor(preset: EvPreset): EvBucket[] {
+  if (preset === "now") return [];
+  if (preset === "ldnny") {
+    const LDN_END = 11 * 60 + 30;
+    return [
+      { from: RTH_OPEN_MIN, until: LDN_END, color: "var(--blue)", label: "LDN" },
+      { from: LDN_END, until: RTH_CLOSE_MIN, color: "var(--amber)", label: "NY" },
+    ];
+  }
+  if (preset === "hourly") {
+    const out: EvBucket[] = [];
+    for (let m = RTH_OPEN_MIN; m < RTH_CLOSE_MIN;) {
+      // The first window is the half hour 09:30→10:00; every one after it is a
+      // whole clock hour, and the last is clipped at the bell.
+      const until = Math.min(RTH_CLOSE_MIN, (Math.floor(m / 60) + 1) * 60);
+      out.push({ from: m, until, color: "", label: etMinOfDay(m) });
+      m = until;
+    }
+    return out.map((b, i) => ({ ...b, color: rampColor(i, out.length) }));
+  }
+  return [
+    { from: RTH_OPEN_MIN, until: 12 * 60, color: "var(--blue)", label: "AM" },
+    { from: 12 * 60, until: PM_FROM_MIN, color: "var(--violet)", label: "MID" },
+    { from: PM_FROM_MIN, until: RTH_CLOSE_MIN, color: "var(--amber)", label: "PM" },
+  ];
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  component
@@ -481,11 +568,12 @@ export default function PostMarketTab(p: PostMarketProps) {
     closeShare: number | null;
   };
 
-  const BUCKET_DEFS = useMemo(() => [
-    { from: RTH_OPEN_MIN, until: 12 * 60, color: "var(--blue)", label: "AM" },
-    { from: 12 * 60, until: PM_FROM_MIN, color: "var(--violet)", label: "MID" },
-    { from: PM_FROM_MIN, until: RTH_CLOSE_MIN, color: "var(--amber)", label: "PM" },
-  ], []);
+  /**
+   * WHICH WINDOWS THE BARS ARE CUT INTO — see EV_PRESETS at the top of the file.
+   * Everything below this line is preset-agnostic: it reads a list of windows.
+   */
+  const [evPreset, setEvPreset] = useState<EvPreset>("session");
+  const BUCKET_DEFS = useMemo(() => bucketsFor(evPreset), [evPreset]);
 
   /**
    * WHICH BUCKETS THE RECORDING CAN ACTUALLY SUPPORT.
@@ -560,12 +648,16 @@ export default function PostMarketTab(p: PostMarketProps) {
    * dropped rather than fudged.
    */
   const pmAnchor = useMemo(() => {
-    if (!cols.length) return null;
-    if (!activeBuckets.some((b) => b.from === PM_FROM_MIN)) return null;
+    if (!cols.length || !evCover) return null;
+    // Gated on the RECORDING's coverage, not on the bucket list. The power hour
+    // is a different measurement from the build split — it has its own chip and
+    // its own scale — so picking hourly windows, or NOW, must not silently take
+    // this column away.
+    if (evCover.from > PM_FROM_MIN || evCover.to < PM_FROM_MIN + 5) return null;
     const i = idxAtMin(PM_FROM_MIN);
     if (i < 0 || !cols[i]) return null;
     return Math.abs(etMinutes(cols[i].ts) - PM_FROM_MIN) <= 10 ? i : null;
-  }, [cols, activeBuckets, idxAtMin]);
+  }, [cols, evCover, idxAtMin]);
 
   /**
    * BOARD TOTAL per column — Σ|net| over the WHOLE ladder, not the ±60 window.
@@ -590,7 +682,7 @@ export default function PostMarketTab(p: PostMarketProps) {
         strike: b.strike, net: b.net,
         segs: [], dominant: null, pmShare: null, pmBase: null, closeShare: null,
       };
-      if (!e || e.vals.length < 3 || !activeBuckets.length || bounds.some((i) => i < 0)) return base;
+      if (!e || e.vals.length < 3) return base;
 
       const last = e.vals.length - 1;
       /**
@@ -602,6 +694,17 @@ export default function PostMarketTab(p: PostMarketProps) {
         const tot = colAbsTotal[i] ?? 0;
         return tot > 0 ? (Math.abs(e.vals[i] ?? 0) / tot) * 100 : 0;
       };
+
+      const closeShare = shareAt(last);
+      const pmBase = pmAnchor != null ? shareAt(pmAnchor) : null;
+      const pmShare = pmBase != null ? closeShare - pmBase : null;
+
+      // No windows (the NOW preset) or an unusable boundary: the row still
+      // carries its share and its power hour, it just has no composition. That
+      // separation is the whole reason NOW is one line of state and not a mode.
+      if (!activeBuckets.length || bounds.some((i) => i < 0)) {
+        return { ...base, pmShare, pmBase, closeShare };
+      }
 
       const cuts = [0, ...bounds.map((i) => Math.min(i, last))];
       cuts[cuts.length - 1] = last;                       // the final bucket always ends at the close
@@ -624,10 +727,6 @@ export default function PostMarketTab(p: PostMarketProps) {
       const segs = allSegs.filter((s) => !hiddenBuckets.includes(s.label));
       const firstSeg = segs[0];
       const dominant = firstSeg ? segs.reduce((bb, x) => (x.share > bb.share ? x : bb), firstSeg) : null;
-
-      const closeShare = shareAt(last);
-      const pmBase = pmAnchor != null ? shareAt(pmAnchor) : null;
-      const pmShare = pmBase != null ? closeShare - pmBase : null;
 
       return { ...base, segs, dominant, pmShare, pmBase, closeShare };
     });
@@ -1440,10 +1539,36 @@ export default function PostMarketTab(p: PostMarketProps) {
         )}
       </div>
 
-      {/* ── 3. HOW THE BOOK WAS BUILT ────────────────────────────────────── */}
+      {/* ── 3. HOW THE BOOK WAS BUILT ──────────────────────────────────────
+          …or LDN/NY, or hour by hour, or not "built" at all but the book as it
+          SITS. The windows are a preset (see EV_PRESETS at the top of the file);
+          the heading follows the choice, because "How the book was built" over
+          a NOW ladder is a caption describing the wrong chart. */}
       <div className="sec">
         <div className="sechead">
-          <h3><span className="secn">3</span>How the book was built</h3>
+          <h3>
+            <span className="secn">3</span>
+            {evPreset === "now" ? "How the book sits now" : "How the book was built"}
+          </h3>
+          {/* THE WINDOW PRESET. One row, one lit option — this picks what the
+              bars are cut into, and the legend below picks which of those cuts
+              are drawn. Changing the preset clears the hidden set: a window
+              switched off under AM/MID/PM has no counterpart under HOURLY, and
+              carrying the labels over would hide a window nobody switched off. */}
+          <div className="evpreset" role="group" aria-label="Build windows">
+            {EV_PRESETS.map((opt) => (
+              <button
+                type="button"
+                key={opt.key}
+                className={`pchip${evPreset === opt.key ? " on" : ""}`}
+                aria-pressed={evPreset === opt.key}
+                onClick={() => { setEvPreset(opt.key); setHiddenBuckets([]); }}
+                title={opt.help}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
           {/* Only the buckets the recording can actually support are listed. A
               legend entry for a window that was never recorded is a promise the
               bars cannot keep — that is how "there is no blue" reads as a
@@ -1466,6 +1591,10 @@ export default function PostMarketTab(p: PostMarketProps) {
                     : `${b.label} — click to hide this window. Hidden windows leave the rest of each bar where it was, so the lengths stay comparable.`}
                 >
                   <i style={{ background: off ? "var(--line3)" : b.color }} />
+                  {/* Name first, clock second. Under HOURLY the name IS the
+                      clock, so the helper drops the duplicate rather than
+                      printing "09:30 · 09:30–10:00". */}
+                  {b.label === etMinOfDay(b.from) ? "" : `${b.label} · `}
                   {`${etMinOfDay(b.from)}–${b.until >= RTH_CLOSE_MIN ? "close" : etMinOfDay(b.until)}`}
                 </button>
               );
@@ -1631,6 +1760,13 @@ export default function PostMarketTab(p: PostMarketProps) {
                     <div className="builtcol mono">
                       {meaningful && r.dominant && (
                         <span style={{ color: r.dominant.color }}>{Math.round(r.dominant.share * 100)}% {r.dominant.label}</span>
+                      )}
+                      {/* NOW has no dominant window to name, so the slot prints
+                          the only thing that is true without a history: what
+                          fraction of the board's gamma this strike is carrying
+                          at the last recorded minute. */}
+                      {meaningful && !r.dominant && evPreset === "now" && r.closeShare != null && (
+                        <span style={{ color: "var(--dim)" }}>{r.closeShare.toFixed(1)}% of board</span>
                       )}
                       {/* Points of BOARD SHARE, not a percentage of the strike's
                           own 15:00 value. The latter is what produced "+610%"

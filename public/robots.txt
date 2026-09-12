@@ -10,4 +10,33 @@ Disallow: /auth/
 Disallow: /checkout/
 Disallow: /unsubscribe
 
+# AI assistants and their crawlers are explicitly welcome on the public site.
+# Not a courtesy: over 2026-08-28 -> 09-12, ChatGPT citations were the largest
+# non-direct source of traffic here (46% of all non-direct arrivals). The
+# Disallow list above already keeps them out of the app, so "*" covers them —
+# these stanzas exist so the intent survives the next edit to this file.
+#   GPTBot / ClaudeBot / CCBot / Google-Extended / PerplexityBot  = training + index crawlers
+#   OAI-SearchBot / ChatGPT-User / Perplexity-User                = fetching a page to answer a question now
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: ClaudeBot
+User-agent: Claude-User
+User-agent: anthropic-ai
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+User-agent: CCBot
+User-agent: Bingbot
+Allow: /
+Disallow: /v3/
+Disallow: /app/
+Disallow: /api/
+Disallow: /proxy/
+Disallow: /owner/
+Disallow: /auth/
+Disallow: /checkout/
+Disallow: /unsubscribe
+
 Sitemap: https://cbedge.net/sitemap.xml
