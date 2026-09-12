@@ -111,6 +111,11 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   #guides .gv{top:0;bottom:0;width:1px}
   #guides .gh{left:0;right:0;height:1px}
   #stage.exp #guides{display:none}
+  /* Safe area — editor-only, like the guides. The phone feeds put chrome over
+     the top and bottom of a 9:16 frame (caption, handle, the action rail), so
+     anything that MUST be read has to sit inside this box. Never exported. */
+  #stage .safe{position:absolute;pointer-events:none;z-index:45;border:1px dashed var(--gold);opacity:.5;border-radius:6px}
+  #stage.exp .safe{display:none}
 
   .ly{position:absolute;cursor:move}
   .ly.sel{outline:2px solid var(--acc);outline-offset:2px}
@@ -179,18 +184,38 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
     <option value="1080x1080">Square — 1080×1080</option>
     <option value="1080x1350">Portrait 4:5 — 1080×1350</option>
     <option value="1200x1200">Square big — 1200×1200</option>
+    <option value="1080x1920">TikTok / Reels / Shorts 9:16 — 1080×1920</option>
+    <option value="1080x1620">Portrait 2:3 — 1080×1620</option>
   </select>
+  <div class="row" style="margin-top:8px">
+    <button id="relay" class="pri" style="flex:1">Re-fit layout</button>
+    <button id="autorelay" class="on">Auto</button>
+  </div>
+  <p class="empty" style="margin:2px 0 0">Re-fit rescales and re-stacks every layer into the current canvas — the way to take a 16:9 post to 9:16 without rebuilding it. With <b>Auto</b> on it runs on every size change. Ctrl+Z puts it back.</p>
+  <div class="row" style="margin-top:8px">
+    <button id="tgrid" class="on">Grid lines</button>
+    <button id="tsafe">Safe area</button>
+  </div>
+
+  <h3>Theme</h3>
   <div class="f2">
     <div><label>Background</label><input type="color" id="bg" value="#05060A"></div>
     <div><label>Accent</label><input type="color" id="ac" value="#219EBC"></div>
   </div>
-  <div class="row" style="margin-top:8px">
-    <button id="tgrid" class="on">Grid lines</button>
+  <div class="f2">
+    <div><label>Panel</label><input type="color" id="pn" value="#0D1119"></div>
+    <div><label>Text</label><input type="color" id="tx" value="#FFFFFF"></div>
   </div>
   <div class="f2">
     <div><label>Border</label><input type="color" id="bd" value="#219EBC"></div>
     <div><label>Thickness</label><input type="number" id="bw" min="0" max="60" step="1" value="0"></div>
   </div>
+  <div class="row" style="margin-top:8px">
+    <button id="thsave" class="pri" style="flex:1">Save theme</button>
+    <button id="thauto" class="on">Auto</button>
+    <button id="threset">Reset</button>
+  </div>
+  <p class="empty" id="thmsg" style="margin:2px 0 0">The theme — these four colours, the canvas border and the FX below — is remembered and re-applied to EVERY template you load, so changing it once changes every post you build after. Presets you reload keep the look they were saved with.</p>
   <label>FX · light</label>
   <div class="row">
     <button data-fx="lights">Lights</button>
@@ -290,7 +315,12 @@ var stage=document.getElementById('stage'), W=1600, H=900, Z=0.55, sel=null, sel
 // owner-vite/src/lib/theme.ts. mut/dim/body are white-at-reduced-opacity
 // flattened over the panel, which is how the dashboard renders muted text.
 // Nothing in here is green: the accent is cyan and secondaries are its family.
-var C={
+//
+// C IS NOT A CONSTANT. Every TPL function reads it at the moment the template
+// is built, so re-pointing these keys before loadTpl() is what makes a saved
+// theme reach the built-in templates — see applyPalette(). PAL_DEF is the
+// shipped palette and the only thing a theme reset goes back to.
+var PAL_DEF={
   bg:'#05060A',      // OWNER_THEME.bg
   panel:'#0D1119',   // OWNER_THEME.panel
   panelUp:'#16181F', // OWNER_THEME.panelHover — nested/raised tiles
@@ -305,6 +335,8 @@ var C={
   orange:'#FB8501',  // OWNER_THEME.orange
   red:'#f4948e'      // SOFT_RED
 };
+var C={};
+for(var _k in PAL_DEF) C[_k]=PAL_DEF[_k];
 
 // Every logo layer starts as the real CB Edge mark, embedded as a data URI
 // rather than fetched from /cbedge3.0.png.
@@ -327,6 +359,35 @@ function px(v){return v+'px'}
 function setSize(){
   stage.style.width=px(W); stage.style.height=px(H);
   applyZoom();
+  placeSafe();
+}
+
+/* ── Safe area ───────────────────────────────────────────────────────────────
+ * Editor-only, like the alignment guides — see the .safe rule in the CSS.
+ * On a 9:16 feed the app paints its own chrome over the frame: caption and
+ * handle across the bottom, the action rail up the right, the top bar. The
+ * numbers below are the usual worst case across TikTok / Reels / Shorts. A
+ * headline outside this box is not "tight", it is covered. */
+function safeInsets(){
+  var tall=H/W>=1.4;
+  return tall ? {t:0.09,b:0.20,l:0.05,r:0.14} : {t:0.05,b:0.05,l:0.05,r:0.05};
+}
+function placeSafe(){
+  var box=stage.querySelector('.safe');
+  if(!box) return;
+  var i=safeInsets();
+  box.style.left=px(Math.round(W*i.l));   box.style.right=px(Math.round(W*i.r));
+  box.style.top=px(Math.round(H*i.t));    box.style.bottom=px(Math.round(H*i.b));
+}
+var SAFE=false;
+function toggleSafe(on){
+  SAFE=!!on;
+  var box=stage.querySelector('.safe');
+  if(SAFE&&!box){
+    box=document.createElement('div'); box.className='safe';
+    stage.appendChild(box); placeSafe();
+  } else if(!SAFE&&box){ box.remove(); }
+  document.getElementById('tsafe').classList.toggle('on',SAFE);
 }
 function applyZoom(){
   stage.style.transform='scale('+Z+')';
@@ -339,6 +400,166 @@ function fit(){
   Z=Math.min(1,avail/W); applyZoom();
 }
 function accent(){return document.getElementById('ac').value}
+
+/* ── The theme ───────────────────────────────────────────────────────────────
+ *
+ * THE PROBLEM THIS SOLVES: the four colour pickers, the canvas border and the
+ * FX bank used to be per-canvas state that reset to the shipped values on every
+ * reload and on every template load. Changing the look meant redoing it on each
+ * template, every week.
+ *
+ * So the theme is now ONE saved object (localStorage 'cbe_studio_theme'),
+ * re-applied after every template load. Two halves:
+ *
+ *   1. The canvas: stage background, the frame, and the FX plate.
+ *   2. The PALETTE (C). Every TPL function reads C at build time, so pointing
+ *      C at the theme before TPL[name]() is what carries a theme into the
+ *      built-in templates — no template needs to know the theme exists.
+ *
+ * Only bg / panel / text / accent are pickers. panelUp, line, body, mut and dim
+ * are text-over-panel mixes, at the alphas the shipped constants were authored
+ * at (measured back out of them — see MIX below), so a theme left at the
+ * defaults reproduces PAL_DEF to within a rounding step and nothing that
+ * already exists shifts. gold / orange / red / pale / blue are semantic — a
+ * warning is not a brand colour — and never move.
+ *
+ * Presets (saved posts) are NOT re-themed: a finished post reopens as it was
+ * saved. Templates are, because that is the whole point.
+ */
+var THEME_KEY='cbe_studio_theme';
+var THEME_DEF={bg:PAL_DEF.bg, panel:PAL_DEF.panel, text:'#FFFFFF', ac:'#219EBC',
+               bd:'#219EBC', bw:0, grid:true,
+               fx:{on:[],amt:45,seed:7}};
+// alpha of text over panel for each derived key, measured off PAL_DEF.
+var MIX={panelUp:0.03, line:0.093, lineHard:0.093, body:0.77, mut:0.54, dim:0.38};
+var themeAuto=true;
+// THEME is the live theme, and it is deliberately NOT "whatever the colour
+// pickers say". Reopening a preset writes that post's own colours into the
+// pickers; the theme must survive that, or loading a template straight after
+// would inherit the preset instead of the theme. Only a user edit moves it.
+var THEME=null;
+
+function mix(base,over,a){
+  var b=hex2rgb(base), o=hex2rgb(over);
+  var h=function(n){ n=Math.max(0,Math.min(255,Math.round(n))); return (n<16?'0':'')+n.toString(16); };
+  return '#'+h(b[0]+(o[0]-b[0])*a)+h(b[1]+(o[1]-b[1])*a)+h(b[2]+(o[2]-b[2])*a);
+}
+function normHex(v){
+  v=String(v||'').trim();
+  if(v.charAt(0)!=='#') return v.toLowerCase();
+  v=v.slice(1);
+  if(v.length===3) v=v[0]+v[0]+v[1]+v[1]+v[2]+v[2];
+  return '#'+v.toLowerCase();
+}
+// The theme as the controls currently read it. This is the only reader — save,
+// re-apply and the reskin diff all go through it, so they cannot disagree.
+function themeNow(){
+  return {bg:document.getElementById('bg').value,
+          panel:document.getElementById('pn').value,
+          text:document.getElementById('tx').value,
+          ac:document.getElementById('ac').value,
+          bd:document.getElementById('bd').value,
+          bw:+document.getElementById('bw').value||0,
+          grid:document.querySelector('#stage .grid') ? document.querySelector('#stage .grid').style.display!=='none' : true,
+          fx:{on:FX.slice(), amt:+document.getElementById('fxamt').value||0, seed:FXSEED}};
+}
+// C for a given theme. Kept pure so reskin() can build the OLD palette too.
+function paletteFor(t){
+  var p={};
+  for(var k in PAL_DEF) p[k]=PAL_DEF[k];
+  p.bg=t.bg; p.panel=t.panel;
+  // A theme still on the shipped panel and text IS the shipped palette — take
+  // PAL_DEF verbatim rather than re-deriving it. The mixes land within a few
+  // units of those constants, but the constants carry a slight blue cast the
+  // alphas cannot reproduce, and an untouched studio must not drift at all.
+  if(normHex(t.panel)===normHex(PAL_DEF.panel) && normHex(t.text)==='#ffffff') return p;
+  for(var m in MIX) p[m]=mix(t.panel,t.text,MIX[m]);
+  return p;
+}
+function applyPalette(t){
+  var p=paletteFor(t);
+  for(var k in p) C[k]=p[k];
+}
+// Push the theme onto the canvas. Does NOT touch existing layers — loadTpl
+// rebuilds them, and reskin() handles the ones it cannot.
+function applyTheme(t){
+  applyPalette(t);
+  stage.style.background=t.bg;
+  var gr=stage.querySelector('.grid');
+  if(gr){ gr.style.display=t.grid===false?'none':'block'; }
+  document.getElementById('tgrid').classList.toggle('on',t.grid!==false);
+  applyFrame();
+  setFx((t.fx&&t.fx.on)||[], t.fx?t.fx.amt:null);
+}
+function loadTheme(){
+  var t=null;
+  try{ t=JSON.parse(localStorage.getItem(THEME_KEY)||'null'); }catch(e){}
+  if(!t) return null;
+  var out={};
+  for(var k in THEME_DEF) out[k]=(t[k]==null?THEME_DEF[k]:t[k]);
+  if(!out.fx||typeof out.fx!=='object') out.fx={on:[],amt:45,seed:7};
+  return out;
+}
+function themeToControls(t){
+  document.getElementById('bg').value=t.bg;
+  document.getElementById('pn').value=t.panel;
+  document.getElementById('tx').value=t.text;
+  document.getElementById('ac').value=t.ac;
+  document.getElementById('bd').value=t.bd;
+  document.getElementById('bw').value=t.bw;
+  if(t.fx&&t.fx.seed!=null) FXSEED=t.fx.seed;
+}
+function thmsg(s){
+  var p=document.getElementById('thmsg');
+  p.dataset.base=p.dataset.base||p.innerHTML;
+  p.innerHTML=s;
+  clearTimeout(p._t);
+  p._t=setTimeout(function(){ p.innerHTML=p.dataset.base; },2600);
+}
+function saveTheme(quiet){
+  THEME=themeNow();
+  try{ localStorage.setItem(THEME_KEY,JSON.stringify(THEME)); }
+  catch(e){ thmsg('Could not save the theme: '+e.message); return; }
+  if(!quiet) thmsg('Theme saved. Every template you load from here on uses it.');
+}
+// Auto-save. Every user-driven theme control calls this; restore() and the
+// boot path do NOT, or reopening a preset would quietly overwrite the theme
+// with that post's own look.
+function themeTouched(){
+  THEME=themeNow();
+  applyPalette(THEME);
+  if(themeAuto) saveTheme(true);
+}
+
+/* Re-skin a canvas that was built under a DIFFERENT palette.
+ *
+ * loadTpl rebuilds a built-in template from C, so those come out themed for
+ * free. A CUSTOM template is stored as frozen HTML with its colours already
+ * baked in, so the only way to theme it is to diff the palette it was saved
+ * under against the current one and swap the values that moved. Anything the
+ * old palette does not name is left exactly alone — a colour picked by hand on
+ * one layer is not a theme colour and must survive. */
+function reskin(from,to){
+  var pf=paletteFor(from), pt=paletteFor(to);
+  var map={};
+  for(var k in pf){ if(normHex(pf[k])!==normHex(pt[k])) map[normHex(pf[k])]=pt[k]; }
+  if(normHex(from.ac)!==normHex(to.ac)) map[normHex(from.ac)]=to.ac;
+  var keys=Object.keys(map);
+  if(!keys.length) return;
+  var swap=function(v){ var h=map[normHex(rgb2hex(v)||v)]; return h||null; };
+  stage.querySelectorAll('.ly, .ly *').forEach(function(el){
+    ['color','backgroundColor','borderColor'].forEach(function(prop){
+      var v=el.style[prop]; if(!v) return;
+      var n=swap(v); if(n) el.style[prop]=n;
+    });
+    ['bgc','bd','col'].forEach(function(d){
+      if(el.dataset && el.dataset[d]){ var n2=swap(el.dataset[d]); if(n2) el.dataset[d]=n2; }
+    });
+  });
+  stage.querySelectorAll('.ly[data-t=box]').forEach(styleBox);
+  stage.querySelectorAll('.ly[data-t=image]').forEach(styleImg);
+  stage.querySelectorAll('.ly[data-t=list]').forEach(styleList);
+}
 
 // ── Editor chrome: the guide overlay and the FX plate ───────────────────────
 // Both live inside #stage so they sit in canvas coordinates and scale with the
@@ -355,6 +576,8 @@ function chrome(){
   if(!guides){ guides=document.createElement('div'); guides.id='guides'; }
   stage.appendChild(guides);   // last child, so new layers can't paint over it
   guides.innerHTML='';
+  var safe=stage.querySelector('.safe'); if(safe) safe.remove();
+  toggleSafe(SAFE);            // stage.innerHTML may have just dropped it
   applyFx();
 }
 
@@ -652,8 +875,8 @@ function applyFrame(){
   var w=Math.max(0,+document.getElementById('bw').value||0);
   frameEl.style.border=w?(w+'px solid '+document.getElementById('bd').value):'0 solid transparent';
 }
-document.getElementById('bw').oninput=applyFrame;
-document.getElementById('bd').oninput=applyFrame;
+document.getElementById('bw').oninput=function(){ applyFrame(); themeTouched(); };
+document.getElementById('bd').oninput=function(){ applyFrame(); themeTouched(); };
 
 function applyFx(){
   if(!fxPlate) return;
@@ -667,17 +890,19 @@ function setFx(list,amt){
   document.querySelectorAll('#side button[data-fx]').forEach(function(b){ b.classList.toggle('on',FX.indexOf(b.dataset.fx)>=0); });
   applyFx();
 }
+// FX is part of the theme — see the Theme section. Every handler here is a
+// user edit, so each one auto-saves with the colours.
 document.querySelectorAll('#side button[data-fx]').forEach(function(b){
   b.onclick=function(){
     var k=b.dataset.fx, i=FX.indexOf(k);
     if(i>=0) FX.splice(i,1); else FX.push(k);
     b.classList.toggle('on',i<0);
-    applyFx();
+    applyFx(); themeTouched();
   };
 });
-document.getElementById('fxamt').oninput=applyFx;
-document.getElementById('fxshuf').onclick=function(){ FXSEED=(Math.random()*1e6)|0; applyFx(); };
-document.getElementById('fxclear').onclick=function(){ setFx([],null); };
+document.getElementById('fxamt').oninput=function(){ applyFx(); themeTouched(); };
+document.getElementById('fxshuf').onclick=function(){ FXSEED=(Math.random()*1e6)|0; applyFx(); themeTouched(); };
+document.getElementById('fxclear').onclick=function(){ setFx([],null); themeTouched(); };
 
 function mkLayer(o){
   var d=document.createElement('div');
@@ -1740,15 +1965,153 @@ function refreshT(){
 }
 
 function loadTpl(name){
+  // A template LOADS UNDER THE CURRENT THEME — that is the contract, and it is
+  // why the theme is worth saving at all. Built-ins get it for free because
+  // TPL[name]() reads C, which applyTheme has just re-pointed. Custom ones are
+  // frozen HTML, so restore() puts them back exactly and reskin() then swaps
+  // the palette they were saved under for this one.
+  var th=THEME||themeNow();
   if(name.indexOf('custom:')===0){
     var t=customTpls()[name.slice(7)];
-    if(t) restore(t);
+    if(!t) return;
+    restore(t);
+    var was={bg:t.bg||THEME_DEF.bg,
+             panel:(t.pal&&t.pal.panel)||THEME_DEF.panel,
+             text:(t.pal&&t.pal.text)||THEME_DEF.text,
+             ac:t.ac||THEME_DEF.ac};
+    themeToControls(th);
+    applyTheme(th);
+    reskin(was,th);
+    select(null);
+    afhelp();
     return;
   }
+  themeToControls(th);
+  applyTheme(th);
   stage.querySelectorAll('.ly').forEach(function(x){x.remove()});
   TPL[name]().forEach(mkLayer);
   select(null);
   afhelp();   // last post's fill report doesn't belong on the next one
+}
+
+/* ── Re-fit: one layout, any canvas ──────────────────────────────────────────
+ *
+ * A post built at 1600×900 is not a 1080×1920 post with different numbers on
+ * it — it is the same content that has to be rescaled and RE-STACKED, because
+ * 9:16 has a third of the width and twice the height. Cropping to the new frame
+ * throws half the design away; stretching to it squashes every screenshot.
+ *
+ * What this does instead:
+ *   1. Bands the layers by vertical overlap. Anything that shares a horizontal
+ *      run — a label beside its number, two screenshots side by side — is one
+ *      band and stays one band; the relationship inside a row is the design.
+ *   2. Scales everything by ONE factor, so nothing changes proportion relative
+ *      to anything else. The factor is whichever of width or height binds.
+ *   3. Re-stacks the bands down the new canvas, keeping their order and their
+ *      left alignment relative to the content block, and re-opens the gaps
+ *      between them proportionally — capped, so a tall canvas does not turn a
+ *      tight stack into scattered debris. Whatever height is left over centres
+ *      the block.
+ *
+ * Font size, letter spacing, corner radius and an image's crop all scale with
+ * the box, so text reflows at the same measure it had and a cropped screenshot
+ * keeps its crop. Border WIDTHS are left alone: a 1px hairline at 0.67 is a
+ * smudge, and it was never part of the proportion.
+ *
+ * It is one mutation batch, so Ctrl+Z undoes the whole re-fit in one step. */
+var REFIT_MARGIN=0.055;   // side margin, as a share of the SHORT edge
+var REFIT_GAP_MAX=3.2;    // a gap may open to this multiple of its scaled self
+
+function refitLayout(){
+  var list=lyList();
+  if(!list.length){ return false; }
+
+  var boxes=list.map(function(d){
+    return {d:d,l:d.offsetLeft,t:d.offsetTop,w:d.offsetWidth,h:d.offsetHeight};
+  });
+  boxes.sort(function(a,b){ return (a.t-b.t)||(a.l-b.l); });
+
+  // Bands: a layer joins the open band if it starts before that band ends.
+  var bands=[], cur=null;
+  boxes.forEach(function(b){
+    if(cur && b.t < cur.b-2){
+      cur.items.push(b);
+      cur.b=Math.max(cur.b,b.t+b.h);
+      cur.l=Math.min(cur.l,b.l); cur.r=Math.max(cur.r,b.l+b.w);
+    } else {
+      cur={items:[b],t:b.t,b:b.t+b.h,l:b.l,r:b.l+b.w};
+      bands.push(cur);
+    }
+  });
+
+  var m=Math.round(Math.min(W,H)*REFIT_MARGIN);
+  var availW=Math.max(40,W-2*m);
+  // Vertically, a tall canvas re-fits into the SAFE AREA, not the full frame:
+  // on a phone feed the top bar and the caption/handle block are painted over
+  // those strips, so centring in the raw frame puts the first and last band
+  // under app chrome. On anything that is not phone-shaped this is just the
+  // margin box. Horizontally the frame is used in full — the right-hand action
+  // rail overlaps an edge, it does not black it out, and giving up a seventh of
+  // the width of a still costs more than it saves.
+  var ins=safeInsets(), tall=H/W>=1.4;
+  var top=tall?Math.round(H*ins.t):m, bot=tall?H-Math.round(H*ins.b):H-m;
+  var availH=Math.max(40,bot-top);
+  var cl=Math.min.apply(null,bands.map(function(x){return x.l}));
+  var cr=Math.max.apply(null,bands.map(function(x){return x.r}));
+  var contentW=Math.max(1,cr-cl);
+
+  var gaps=[], i;
+  for(i=1;i<bands.length;i++) gaps.push(Math.max(0,bands[i].t-bands[i-1].b));
+  var sumH=bands.reduce(function(a,x){return a+(x.b-x.t)},0);
+  var sumG=gaps.reduce(function(a,x){return a+x},0);
+
+  var s=Math.min(availW/contentW, availH/Math.max(1,sumH+sumG));
+  if(!isFinite(s)||s<=0) return false;
+
+  // Spare height goes back into the gaps, proportionally and capped; the rest
+  // centres the block.
+  var spare=Math.max(0, availH-(sumH+sumG)*s);
+  var room=gaps.reduce(function(a,g){ return a+g*s*(REFIT_GAP_MAX-1); },0);
+  var take=Math.min(spare,room);
+  var gs=gaps.map(function(g){
+    return g*s + (room>0 ? take*(g*s*(REFIT_GAP_MAX-1)/room) : 0);
+  });
+  var y=top+Math.round((spare-take)/2);
+  var x0=m+Math.round((availW-contentW*s)/2);
+
+  bands.forEach(function(band,bi){
+    band.items.forEach(function(b){
+      refitLayer(b, s, x0+Math.round((b.l-cl)*s), Math.round(y+(b.t-band.t)*s));
+    });
+    y += (band.b-band.t)*s + (gs[bi]||0);
+  });
+  return true;
+}
+
+function refitLayer(b,s,nx,ny){
+  var d=b.d;
+  d.style.left=px(nx); d.style.top=px(ny);
+  d.style.width=px(Math.max(8,Math.round(b.w*s)));
+  // Only layers that were given an explicit height keep one — a text layer's
+  // height is its content and has to stay that way or it clips at the new size.
+  if(d.style.height) d.style.height=px(Math.max(8,Math.round(b.h*s)));
+
+  var scalePx=function(v){ var n=parseFloat(v); return isFinite(n)?px(Math.max(1,Math.round(n*s*100)/100)):null; };
+  d.querySelectorAll('.ed').forEach(function(e){
+    var fs=scalePx(e.style.fontSize); if(fs) e.style.fontSize=fs;
+    if(e.style.letterSpacing){
+      var ls=parseFloat(e.style.letterSpacing);
+      if(isFinite(ls)) e.style.letterSpacing=px(Math.round(ls*s*100)/100);
+    }
+  });
+  if(d.dataset.t==='list'){
+    d.dataset.fs=Math.max(8,Math.round((+d.dataset.fs||28)*s));
+    styleList(d);
+  }
+  if(d.style.borderRadius){ var r=scalePx(d.style.borderRadius); if(r) d.style.borderRadius=r; }
+  if(d.dataset.rad!=null) d.dataset.rad=Math.round((+d.dataset.rad||0)*s);
+  var im=d.querySelector('img');
+  if(im && im.dataset.cw) scaleCrop(im,s,s);
 }
 
 document.getElementById('apply').onclick=function(){loadTpl(document.getElementById('tpl').value)};
@@ -1757,14 +2120,18 @@ document.getElementById('tsave').onclick=function(){
   var n=prompt('Template name'); if(!n) return;
   select(null);
   var clone=stage.cloneNode(true);
-  clone.querySelectorAll('.hnd,.eh').forEach(function(h){h.remove()});
+  clone.querySelectorAll('.hnd,.eh,.safe').forEach(function(h){h.remove()});
   clone.querySelectorAll('.ly[data-t=image]').forEach(function(d){
     var lbl=(d.querySelector('.ph')||{}).textContent||'Paste a screenshot, or double-click';
     d.innerHTML='<div class="ph">'+lbl+'</div>';
   });
   clone.querySelectorAll('.ly[data-t=logo] img').forEach(function(im){ im.src=LOGO_SRC; delete im.dataset.url; });
   var t=customTpls();
+  // pal records the THEME this template was built under, so loading it later
+  // under a different one can diff the two and re-skin. Templates saved before
+  // pal existed fall back to THEME_DEF, which is what they were built under.
   t[n]={W:W,H:H,bg:document.getElementById('bg').value,ac:accent(),
+        pal:{panel:document.getElementById('pn').value,text:document.getElementById('tx').value},
         fx:{on:FX.slice(),amt:+document.getElementById('fxamt').value,seed:FXSEED},
         frame:{c:document.getElementById('bd').value,w:+document.getElementById('bw').value},
         html:clone.innerHTML};
@@ -1784,20 +2151,48 @@ document.getElementById('tdel').onclick=function(){
   localStorage.setItem('cbe_tpls',JSON.stringify(t));
   refreshT();
 };
+var autoRefit=true;
 document.getElementById('size').onchange=function(){
-  var p=this.value.split('x'); W=+p[0]; H=+p[1]; setSize(); fit(); applyFx();
+  var p=this.value.split('x'); W=+p[0]; H=+p[1];
+  setSize(); fit(); applyFx();
+  if(autoRefit) refitLayout();
 };
-document.getElementById('bg').oninput=function(){stage.style.background=this.value};
+document.getElementById('relay').onclick=function(){ refitLayout(); };
+document.getElementById('autorelay').onclick=function(){
+  autoRefit=!autoRefit; this.classList.toggle('on',autoRefit);
+};
+document.getElementById('tsafe').onclick=function(){ toggleSafe(!SAFE); };
+
+// ── Theme controls ──────────────────────────────────────────────────────────
+// Each of these is a USER edit, so each one auto-saves. Nothing the program
+// does to the same inputs (restore, boot, loadTpl) goes through here.
+document.getElementById('bg').oninput=function(){ stage.style.background=this.value; themeTouched(); };
+document.getElementById('pn').oninput=themeTouched;
+document.getElementById('tx').oninput=themeTouched;
 document.getElementById('ac').oninput=function(){
   // .bar was the old accent strip. New canvases have none, but presets saved
   // before the border replaced it still carry one, so this stays null-safe.
   var bar=stage.querySelector('.bar'); if(bar) bar.style.background=this.value;
   stage.querySelectorAll('.ly[data-t=list] .dot').forEach(function(x){x.style.background=this.value}.bind(this));
   applyFx();   // lights, rays, smoke and the scan grid are all tinted from the accent
+  themeTouched();
+};
+document.getElementById('thsave').onclick=function(){ saveTheme(); };
+document.getElementById('thauto').onclick=function(){
+  themeAuto=!themeAuto; this.classList.toggle('on',themeAuto);
+  if(themeAuto) saveTheme();
+  else thmsg('Auto-save off — the theme only changes when you press Save theme.');
+};
+document.getElementById('threset').onclick=function(){
+  var t={}; for(var k in THEME_DEF) t[k]=THEME_DEF[k];
+  t.fx={on:[],amt:45,seed:7};
+  themeToControls(t); applyTheme(t); saveTheme(true);
+  thmsg('Theme back to the CB Edge default. Reload the template to see it on this canvas.');
 };
 document.getElementById('tgrid').onclick=function(){
   var g=stage.querySelector('.grid'); var on=g.style.display!=='none';
   g.style.display=on?'none':'block'; this.classList.toggle('on',!on);
+  themeTouched();
 };
 document.getElementById('zin').onclick=function(){Z=Math.min(1.5,Z+0.1);applyZoom()};
 document.getElementById('zout').onclick=function(){Z=Math.max(0.15,Z-0.1);applyZoom()};
@@ -1969,6 +2364,9 @@ document.getElementById('autofill').onclick=function(){
 
 function serialize(){
   clearGuides();   // never bake an in-progress guide into a saved preset
+  // .safe rides along in the html like #guides does — chrome() drops and
+  // rebuilds it on restore, and it is display:none in export. Removing it here
+  // would be a mutation on every history push, which is a loop.
   return {W:W,H:H,bg:document.getElementById('bg').value,ac:accent(),
           fx:{on:FX.slice(),amt:+document.getElementById('fxamt').value,seed:FXSEED},
           frame:{c:document.getElementById('bd').value,w:+document.getElementById('bw').value},
@@ -2029,8 +2427,14 @@ function goHist(step){
 }
 new MutationObserver(function(recs){
   if(applying){ clearTimeout(htimer); htimer=null; return; }
+  var isSafe=function(n){ return n && n.classList && n.classList.contains('safe'); };
   var real=recs.some(function(rec){
     if(guides && (rec.target===guides || guides.contains(rec.target))) return false;
+    if(isSafe(rec.target)) return false;                   // editor overlay, like guides
+    if(rec.type==='childList'){
+      var touched=[].concat([].slice.call(rec.addedNodes),[].slice.call(rec.removedNodes));
+      if(touched.length && touched.every(isSafe)) return false;
+    }
     if(rec.type==='attributes'){
       if(rec.target===stage) return false;                 // zoom transform, canvas size
       if(rec.attributeName==='class') return false;        // selection outline
@@ -2123,11 +2527,17 @@ function syncSelects(){
   document.querySelectorAll('.tsel select').forEach(function(s){ if(s._sync) s._sync(); });
 }
 
-stage.style.background=C.bg;
+// The saved theme is read BEFORE the first template is built, so the studio
+// opens on last week's look rather than on the shipped one and the first
+// template of the session is already themed.
+THEME=loadTheme()||(function(){ var t={}; for(var k in THEME_DEF) t[k]=THEME_DEF[k]; return t; })();
+themeToControls(THEME);
+applyPalette(THEME);
+stage.style.background=THEME.bg;
 ['tpl','size','pload'].forEach(function(id){ themeSelect(document.getElementById(id)); });
 // 'alerts' is now the first option, so the dropdown has to be pointed at the
 // template we actually load or the label and the canvas disagree on first paint.
-chrome(); setSize(); refreshT(); document.getElementById('tpl').value='levels'; loadTpl('levels'); fit(); refreshP(); syncSelects();
+chrome(); setSize(); applyTheme(THEME); refreshT(); document.getElementById('tpl').value='levels'; loadTpl('levels'); fit(); refreshP(); syncSelects();
 pushHist(); histBtns();
 window.addEventListener('resize',fit);
 </script>

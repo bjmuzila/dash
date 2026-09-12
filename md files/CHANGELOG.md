@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-09-12 (a) - Post Studio: the theme is saved and follows every template; 9:16 re-fit
+
+Two things the studio could not do: keep a look across templates, and turn a
+16:9 post into a phone post.
+
+THEME. The colour pickers, the canvas border and the FX bank were per-canvas
+state that reset to the shipped values on every reload AND on every template
+load, so changing the look meant redoing it on each template, every week. They
+are now one saved object (localStorage `cbe_studio_theme`), written on every
+edit (Auto, on by default — there is also an explicit Save theme and a Reset)
+and RE-APPLIED AFTER EVERY TEMPLATE LOAD.
+
+- New sidebar section: Background, Accent, **Panel**, **Text**, plus the border
+  and the FX that were already there.
+- `C` — the palette every TPL function reads — is no longer a constant. Panel
+  and text drive `panelUp`/`line`/`lineHard`/`body`/`mut`/`dim` as text-over-panel
+  mixes, so a built-in template picks up the theme with no template change.
+  `gold`/`orange`/`red`/`pale`/`blue` are semantic and never move. A theme still
+  on the shipped panel+text returns `PAL_DEF` verbatim, so an untouched studio
+  does not drift by even one unit.
+- A CUSTOM template is frozen HTML, so it cannot be rebuilt from `C`. Its record
+  now carries the palette it was saved under (`pal`), and loading it diffs that
+  against the current theme and swaps only the values that moved — a colour
+  picked by hand on one layer survives.
+- `THEME` is deliberately NOT "whatever the pickers say": reopening a preset
+  writes that post's colours into the pickers, and only a user edit moves the
+  theme. So a preset reopens exactly as saved, and a template loaded straight
+  after it still gets the theme.
+
+9:16. New canvas sizes 1080×1920 (TikTok / Reels / Shorts) and 1080×1620, and a
+**Re-fit layout** button (Auto, on by default, runs on every size change).
+Cropping to the new frame throws half the design away and stretching squashes
+every screenshot, so instead it bands the layers by vertical overlap — anything
+sharing a horizontal run stays one row — scales by ONE factor so nothing changes
+proportion, and re-stacks the bands, re-opening the gaps proportionally (capped)
+with the leftover height centring the block. Font size, letter spacing, corner
+radius and an image's crop all scale with the box; border widths do not. One
+mutation batch, so Ctrl+Z undoes the whole re-fit.
+
+A tall canvas re-fits into the SAFE AREA, not the raw frame: the feeds paint the
+caption/handle block and the top bar over those strips. **Safe area** toggles an
+editor-only dashed box showing them (never exported, like the guides).
+
+Verified in headless Chromium against the real document: default palette
+byte-identical to the shipped constants; theme survives reload; built-in and
+custom templates both adopt it; presets do not; auto-save off / explicit save /
+reset all behave; re-fit to 1080×1920 leaves 0 of 18 layers overflowing and undo
+restores the 16:9 layout. No console errors.
+
+Touched: `owner-vite/src/pages/studioHtml.ts` only. The root `x-post-studio.html`
+copy is dead per AGENTS.md and was not updated.
+
 ## 2026-09-11 (j) - AGENTS.md: v3 is the target, stated at the top
 
 A request for "the GEX Candles card on the home page" was taken to the v2 file
