@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-09-12 (d) - owner hub: a card for voltick.cbedge.net
+
+`owner-vite/src/pages/Hub.tsx` (the /owner overview, the command-bar hub) gets
+one card above the search box, linking out to voltick.cbedge.net.
+
+It is a plain `<a href>` to an absolute URL, deliberately NOT a `HubLink`.
+`HUB_LINKS` feeds the ⌘K index and the pin/recent store in `lib/hubPrefs.ts`,
+and both assume a client-side route: adding voltick there would put an off-site
+URL through `navigate()`, which 404s inside this SPA, and would let it be pinned
+as if it were an owner page.
+
+Above the command bar rather than in the group grid below it, for the same
+reason: a link that leaves the site should not sit in a list where every other
+row stays on it.
+
+Theme: `classicCardAccentStyle` + `LIGHT_BLUE` + `TYPE` + `rgba` from
+`lib/theme`, all already imported by this file. Secondary text is
+`OWNER_THEME.green`, not white at reduced opacity - there is no grey in this
+theme and fading white to fake one is the mistake the token name `muted`
+invites. The card wraps to a stacked layout under about 600px.
+
+The bolt is `\u26A1\uFE0E`, not a bare `⚡`. Without the variation selector the
+glyph renders as an emoji and the system font paints it its own orange,
+discarding the `color` set on it. Same trap as Voltick's `FLIP_MARK`.
+
+Nothing else changed. `nav.ts`, `registry.ts` and `hubPrefs.ts` are untouched,
+so `check-owner-pages.mjs` has nothing new to inspect.
+
+**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build owners`).
+
 ## 2026-09-12 (c) - voltick: the owner console demo is the first page, and both hostnames share one allowlist
 
 Follow-on to (b). Two changes, neither of which touches the trading stack.

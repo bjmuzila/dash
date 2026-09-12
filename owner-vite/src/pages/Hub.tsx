@@ -257,6 +257,104 @@ export default function Hub() {
     </div>
   );
 
+  // ── voltick.cbedge.net ─────────────────────────────────────────────────────
+  /**
+   * The one card on this hub that is NOT an owner route: it leaves the site.
+   *
+   * voltick.cbedge.net is the Voltick / CB Edge merger sandbox — its own
+   * container, its own SPA, its own Cloudflare Access application. So this is a
+   * plain <a href> to an absolute URL, deliberately NOT a HubLink: HUB_LINKS
+   * feeds the ⌘K index and the pin/recent store, both of which assume a
+   * client-side route, and navigate() on an off-site URL would just 404 inside
+   * this SPA.
+   *
+   * It sits ABOVE the command bar because it is a destination, not a route to
+   * be searched for, and because a link that leaves the site should not be
+   * mixed into a list where every other row stays on it.
+   */
+  const voltickCard = (
+    <a
+      href="https://voltick.cbedge.net"
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        ...classicCardAccentStyle,
+        display: "flex",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: 16,
+        padding: "15px 18px",
+        borderRadius: 14,
+        textDecoration: "none",
+        color: OWNER_THEME.text,
+        border: `1px solid ${rgba(LIGHT_BLUE, 0.4)}`,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          flexShrink: 0,
+          width: 38,
+          height: 38,
+          borderRadius: 10,
+          display: "grid",
+          placeItems: "center",
+          fontSize: TYPE.title,
+          color: LIGHT_BLUE,
+          background: rgba(LIGHT_BLUE, 0.12),
+          border: `1px solid ${rgba(LIGHT_BLUE, 0.3)}`,
+        }}
+      >
+        {/* U+26A1 + U+FE0E — the variation selector forces TEXT presentation.
+            A bare bolt renders as an emoji and the system font paints it its
+            own orange, discarding the colour set here. */}
+        {"⚡︎"}
+      </span>
+
+      <span style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+        <span
+          style={{
+            fontSize: TYPE.micro,
+            fontWeight: 800,
+            letterSpacing: "0.16em",
+            textTransform: "uppercase",
+            color: LIGHT_BLUE,
+          }}
+        >
+          Merger sandbox
+        </span>
+        <span style={{ fontSize: TYPE.subhead, fontWeight: 700, letterSpacing: "0.01em", color: OWNER_THEME.text }}>
+          Voltick · CB Edge
+        </span>
+        <span style={{ fontSize: TYPE.body, color: OWNER_THEME.green }}>
+          The contents board, the owner console demo and the design system. Separate subdomain, separate
+          Cloudflare Access allowlist.
+        </span>
+      </span>
+
+      <span
+        style={{
+          marginLeft: "auto",
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: TYPE.label,
+          fontWeight: 800,
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          color: OWNER_THEME.bg,
+          background: LIGHT_BLUE,
+          borderRadius: 999,
+          padding: "8px 16px",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Open <span aria-hidden>↗</span>
+      </span>
+    </a>
+  );
+
   // ── command bar ────────────────────────────────────────────────────────────
   const commandBar = (
     <div
@@ -358,6 +456,7 @@ export default function Hub() {
         </div>
       ) : (
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 18 }}>
+          {voltickCard}
           {commandBar}
 
           {query ? (
