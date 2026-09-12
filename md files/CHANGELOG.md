@@ -22072,3 +22072,44 @@ Baseline untouched.
 for check-theme to fail on. The real file now carries the fix (20 findings, at
 baseline) and the latest `PostMarketTab.tsx` is on disk. The stray `-1` file
 must be deleted by hand — it is a duplicate with no imports pointing at it.
+
+---
+
+## 2026-09-12 — v3 Post-Market §3: distinct window colours, full-width ladder
+
+**Colours.** The build-window ramp was a blue→violet→amber interpolation. Fine
+at three windows, useless at seven — the middle steps landed within a few
+degrees of each other and an HOURLY bar read as one purple smear. It is now a
+fixed list of seven SEPARATE hues, cool at the open and hot into the bell, every
+one a token this page already carries: cyan → light blue → indigo → violet →
+rose → clay → amber. Windows index into it evenly, so three-window presets still
+pick recognisably "morning blue / midday violet / power-hour amber".
+
+**Layout.** Section 3 is two rows now:
+
+- The ladder takes the **full width of the card**. It was sharing a 1.35fr/1fr
+  row, which left a seven-window bar roughly 40px of track to say seven things
+  in.
+- **Wall migration** and **Written vs traded** moved underneath it, side by side
+  in a `.body.two` row with a top border.
+
+Both rows use classes (`.body.one`, `.body.two.stack`), not inline
+`grid-template-columns`, so the 1180px collapse rule can still undo them.
+
+**Files:**
+- `cbedge-v3/src/pages/premarket/PostMarketTab.tsx` — `EV_RAMP` replaces the
+  interpolating `rampColor`; section 3 split into a full-width ladder row and a
+  two-column row beneath.
+- `cbedge-v3/src/pages/premarket/postMarketTab.css.ts` — `.body.one`,
+  `.body.stack`, and an explicit 540px cap on the full-width ladder (it no
+  longer has a sibling column handing it a height, so `flex:1 1 0` had nothing
+  to grow into).
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`).
+
+**Fix (same day):** the new row under the ladder was given `className="body two
+stack"` — but `.pmk .stack` already exists in `postMarketTab.css.ts` as the 13px
+call/put composition bar (`display:flex;height:13px;overflow:hidden`). So the
+row became a 13px grey pill with both panels clipped inside it, and Wall
+migration and Written vs traded disappeared from the page. Class renamed to
+`undercard` on both sides.

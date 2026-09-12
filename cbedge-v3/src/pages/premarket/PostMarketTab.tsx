@@ -1817,7 +1817,7 @@ export default function PostMarketTab(p: PostMarketProps) {
 
         {/* The two reads that sit UNDER the ladder — both are about the same
             recorded session, neither is worth half the card's width. */}
-        <div className="body two stack">
+        <div className="body two undercard">
           <div className="col">
             {/* WALL MIGRATION */}
             <div className="colhead">
