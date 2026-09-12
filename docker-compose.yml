@@ -388,3 +388,41 @@ services:
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8087:8087"
+
+  # voltick.cbedge.net — the Voltick / CB Edge merger sandbox (voltick-vite/
+  # Dockerfile: node build stage → nginx), reverse-proxying /api /proxy /ws to
+  # the DASHBOARD container (same compose network → dashboard:3002).
+  #
+  # Same surface as the owners service, not the narrow one budget/daily get:
+  # this is where Voltick surfaces get rebuilt against CB Edge's live feed, so
+  # it needs the market-data paths and /ws/gex from day one. It is also the
+  # reason it is NOT public — see the access note below.
+  #
+  # ACCESS IS CLOUDFLARE ACCESS, IN FRONT OF THIS CONTAINER — a one-time-PIN
+  # policy on an email allowlist, exactly like demo.cbedge.net. There is no
+  # sign-in code inside the SPA, so revoking someone is a change in the
+  # Cloudflare dashboard and nothing here rebuilds. If that policy does not
+  # exist, this subdomain is open to anyone with the URL. Create it before
+  # routing DNS.
+  #
+  # Reached only via the Cloudflare Tunnel — add to /etc/cloudflared/config.yml
+  # ABOVE the catch-all 404 rule:
+  #     - hostname: voltick.cbedge.net
+  #       service: http://127.0.0.1:8088
+  # then `cloudflared tunnel route dns <tunnel> voltick.cbedge.net` and
+  # `systemctl restart cloudflared`.
+  voltick:
+    build:
+      context: ./voltick-vite
+    image: voltick-web:latest
+    container_name: voltick-web
+    restart: unless-stopped
+    depends_on:
+      # demo-web serves /demo on this host: the owner console demo is the first
+      # entry on the contents board, proxied over the compose network rather
+      # than copied into this image so there is only ever one demo build.
+      - dashboard
+      - demo-web
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8088:8088"

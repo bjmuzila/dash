@@ -3,6 +3,11 @@
 A standalone, **read-only, data-free** replica of `owner.cbedge.net` for showing a
 prospective partner how the console is laid out and what lives on each screen.
 
+**Served at two URLs, one build.** `demo.cbedge.net` is this container directly.
+`voltick.cbedge.net/demo/` is the same container, proxied by `voltick-vite`'s
+nginx, where it is the first entry on the merger sandbox's contents board. There
+is no second copy: `node build.mjs` plus a `demo-web` rebuild updates both.
+
 - All 28 routes render, grouped exactly like the real rail.
 - **Every customer, revenue, affiliate and visitor record is synthetic.** Emails use the
   reserved `.test` TLD so nothing can resolve to a real person.
@@ -77,32 +82,39 @@ if you use `cloudflared tunnel route dns <tunnel> demo.cbedge.net`).
 This is the part that makes it a private link. Access sits **in front of** the container, so the
 demo itself needs no login code at all.
 
-Cloudflare dashboard → **Zero Trust** → **Access** → **Applications** → **Add an application**
-→ **Self-hosted**:
+**One allowlist, two hostnames.** `demo.cbedge.net` and `voltick.cbedge.net` admit the same
+people: Brandon, plus whoever he adds. So the emails live in a reusable **Access Group** rather
+than being typed into each application, or the two drift and someone revoked from one keeps the
+other.
+
+Cloudflare dashboard → **Zero Trust** → **Access** → **Groups** → **Add a group**:
 
 | Field | Value |
 |-------|-------|
-| Application name | `CB Edge — owner demo` |
+| Group name | `CB Edge insiders` |
+| Include → Emails | your own, plus each email you hand out |
+
+Then → **Applications** → **Add an application** → **Self-hosted**, once per hostname:
+
+| Field | Value |
+|-------|-------|
+| Application name | `CB Edge — owner demo` / `CB Edge — Voltick sandbox` |
 | Session duration | `24 hours` |
-| Domain | `demo.cbedge.net` |
+| Domain | `demo.cbedge.net` / `voltick.cbedge.net` |
 
-Then **Add a policy**:
+Each gets one policy: Action `Allow`, and the **only** Include is the `CB Edge insiders` group.
 
-| Field | Value |
-|-------|-------|
-| Policy name | `Partner review` |
-| Action | `Allow` |
-| Include → Emails | the partner's email, plus your own |
+Login method: leave **One-time PIN** enabled. A guest visits the link, types their email, gets a
+6-digit code, and they are in. No account for them to create, no password for you to issue.
 
-Login method: leave **One-time PIN** enabled. He visits the link, types his email, gets a
-6-digit code, and he's in. No account for him to create, no password for you to issue.
+**Revoking is one click** — remove the email from the group. Both links die for that person at
+once, and stay alive for everyone else.
 
-**Revoking is one click** — delete the policy, or remove his email from it. The link dies
-immediately for him and stays alive for you.
+If someone should see the demo but NOT the sandbox, give the demo application its own policy with
+that email instead of the group. Keep the group as the default; a per-application email list is
+the exception, not the pattern.
 
 Free plan covers up to 50 Access users, so this costs nothing.
-
----
 
 ## 4. Before you send the link
 
@@ -122,3 +134,7 @@ cd /opt/dashboard && docker compose stop demo-web && docker compose rm -f demo-w
 ```
 
 Then delete the Access application and the tunnel ingress rule.
+
+**Note:** `voltick.cbedge.net/demo/` proxies to this container, so stopping `demo-web` also puts
+a 502 on that route. Remove the `/demo` entry from `voltick-vite/src/lib/nav.ts` and the
+`location /demo/` block from `voltick-vite/nginx.conf` in the same change.

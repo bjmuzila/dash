@@ -1,5 +1,138 @@
 # Changelog
 
+## 2026-09-12 (c) - voltick: the owner console demo is the first page, and both hostnames share one allowlist
+
+Follow-on to (b). Two changes, neither of which touches the trading stack.
+
+**1. `/demo/` on voltick.cbedge.net serves the owner console demo.**
+
+`voltick-vite/nginx.conf` gains a `location /demo/` that proxies to
+`demo-web:8087` over the compose network, plus a `= /demo` 301 onto the trailing
+slash. `docker-compose.yml` adds `demo-web` to the `voltick` service's
+`depends_on`.
+
+PROXIED, NOT COPIED. The alternative was widening the voltick build context to
+the repo root so the Dockerfile could COPY `demo-owner/dist/index.html` into the
+image. That bakes a 290KB page into a second image, and the copy nobody
+remembers to rebuild is the one people end up looking at. One container, one
+build: `node demo-owner/build.mjs` then a `demo-web` rebuild updates
+demo.cbedge.net and voltick.cbedge.net/demo/ together.
+
+Two nginx details worth keeping: the upstream is a variable (`set $demo
+demo-web:8087`) so DNS is resolved at request time and nginx starts even when
+demo-web is momentarily down, the same reason `$up` exists. And because a
+variable in `proxy_pass` makes any URI part be sent literally instead of having
+the location prefix stripped, the prefix comes off with `rewrite ^/demo/(.*)$
+/$1 break` and `proxy_pass` carries no URI of its own. `proxy_pass
+http://$demo/;` would send "/" for every request under /demo/.
+
+**2. The contents board can list things the SPA does not own.**
+
+`VoltickLink` gains `external?: true`. An external item is filtered out of
+`VOLTICK_ROUTES` (so React Router never claims the path) and rendered by `Home`
+as a plain `<a>` rather than a `<Link>`. A client-side Link to a path nginx owns
+routes internally and lands on NotFound, which is exactly the bug this flag
+exists to prevent. `VOLTICK_ITEMS` is the full list, `VOLTICK_ROUTES` is the
+SPA's subset, and `findRoute` reads the full list so the header still names an
+external page.
+
+The demo is the first entry, in a new first group ("The console"), marked
+external.
+
+**3. ACCESS: one Cloudflare Access GROUP, two applications.**
+
+demo.cbedge.net and voltick.cbedge.net admit the same people: Brandon plus
+whoever he adds. The emails now live in a reusable Access Group
+(`CB Edge insiders`), and each hostname gets a self-hosted application whose one
+Allow policy includes only that group. Typing the list into two applications is
+how someone revoked from one keeps the other.
+
+Removing an email from the group kills both links at once. A guest who should see
+the demo but not the sandbox gets a per-application policy instead, as the
+exception.
+
+Written up in `voltick-vite/README.md` and `demo-owner/README.md` (section 3
+rewritten). `demo-owner/README.md` also notes that stopping `demo-web` now puts a
+502 on voltick's /demo/, and what to remove in the same change.
+
+**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build voltick`),
+plus the Access group and applications, which are dashboard-only.
+
+## 2026-09-12 (b) - voltick.cbedge.net: a new Vite SPA for the Voltick / CB Edge merger sandbox
+
+A separate subdomain, a separate container, a separate SPA. Nothing in the
+trading stack changed: `server-v2/`, `cbedge-v3/` and every existing service are
+untouched. This is additive.
+
+**New: `voltick-vite/`** - node build stage to nginx, the same two-stage shape as
+`owner-vite/` and `affiliate-vite/`, listening on 8088.
+
+- `nginx.conf` proxies `/api`, `/proxy` and `/ws` to `dashboard:3002` over the
+  compose network, plus the Next chart routes and `/_next` for same-origin
+  iframe embeds. Same surface as the owners service, not the narrow budget/daily
+  one: this is where Voltick surfaces get rebuilt against CB Edge's live feed, so
+  it needs the market-data paths and the socket from day one. Lazy `resolver`
+  so nginx starts even when the dashboard container is momentarily down, and
+  `index.html` is `no-store` while `/assets/` is immutable, both copied from
+  owner-vite for the reasons written there.
+- `docker-compose.yml` gains a `voltick` service on `127.0.0.1:8088`,
+  `depends_on: dashboard`.
+
+**ACCESS IS CLOUDFLARE ACCESS, IN FRONT OF THE CONTAINER** - a one-time-PIN
+policy on an email allowlist, exactly how `demo.cbedge.net` is gated. There is no
+sign-in code in the SPA on purpose: an allowlist in the bundle means a redeploy
+every time the list changes, and an allowlist in the backend means a new endpoint
+in `server-v2` for a sandbox. Revoking someone is a change in the Cloudflare
+dashboard and nothing rebuilds.
+
+**Until that Access policy exists, the subdomain is open to anyone with the
+URL.** Create the policy BEFORE routing DNS.
+
+**The contents board is the routing table.** `src/lib/nav.ts` holds the list;
+`Home.tsx` renders it and `App.tsx` builds one route per entry from the same
+array, so a link on the board and the route that answers it cannot drift apart.
+Adding a page is two edits: an item in `nav.ts` with a `key`, and that key in
+`src/pages/registry.ts` pointing at a `lazy()` import. A key with no registry
+entry renders `Placeholder` rather than 404, which is the correct state for a
+page that is listed and not yet written.
+
+**Built:** `/design-system` and `/colours` (the Voltick system, rendered from
+`src/theme.ts` rather than described, so the reference cannot go stale) and
+`/feed-check`. **Listed, placeholder for now:** `/overview`, `/surface-map`,
+`/vocabulary`, `/questions`.
+
+`/feed-check` is read-only and exists because the reverse proxy is the one thing
+about a new subdomain that can be silently wrong: an unproxied path falls through
+`try_files` and comes back as `index.html` with a 200 on it, so a fetch gets a
+page of HTML rather than a 404. The page calls `/proxy/health`,
+`/proxy/self-metrics` and `/api/auth/me` and says "not proxied" when the
+content-type is `text/html`. Its `/ws/gex` probe is opt-in behind a button, opens
+with `?topics=spot,status` (scalars are not implied and must be listed), closes
+on unmount, and flags open-then-die inside 3s as the stolen-upgrade signature
+from AGENTS.md. That socket counts fully as Cloudflare bandwidth served, so it is
+never opened on page load.
+
+**Theme:** `src/theme.ts` is a port of Voltick's `web/src/theme.jsx`, with the
+five non-negotiables at the top - reserved colours mean one thing each (import
+the token, a near-miss hex is worse than a reuse), no grey text, no em-dashes in
+anything a user reads, never buy/sell/signal/entry/target/prediction, dark only.
+`FLIP_MARK` carries U+FE0E because a bare bolt renders as emoji and the system
+font paints it orange, which is the Volt's reserved colour. Hover and focus live
+in `index.css`, not inline, and the aurora heights are pinned in pixels.
+`md files/VOLTICK-DESIGN-SYSTEM.md` is the full reference.
+
+**Still to do on the VPS** (nothing in this repo does it):
+
+    /etc/cloudflared/config.yml, ABOVE the catch-all 404 rule:
+      - hostname: voltick.cbedge.net
+        service: http://127.0.0.1:8088
+    cloudflared tunnel route dns <tunnel> voltick.cbedge.net
+    systemctl restart cloudflared
+    docker compose build voltick && docker compose up -d voltick
+    then create the Cloudflare Access application + email allowlist
+
+**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build`).
+
 ## 2026-09-12 (a) - Post Studio: the theme is saved and follows every template; 9:16 re-fit
 
 Two things the studio could not do: keep a look across templates, and turn a

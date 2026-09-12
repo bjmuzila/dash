@@ -1,0 +1,197 @@
+/**
+ * Voltick global CSS. Tokens live in src/theme.ts; the custom properties below
+ * mirror them for the places CSS has to reach on its own (hover, focus,
+ * selection, the aurora), because hover and focus cannot be inline styles in
+ * React and navigation that does not answer the pointer reads as disabled.
+ */
+
+:root {
+  --ink: #0a0d10;
+  --panel: #0e1216;
+  --elev: #141a21;
+  --line: #1e2630;
+
+  --paper: #e7ece9;
+  --paper-display: #d6ddd8;
+  --paper-quiet: #c0c5c3;
+
+  --accent: #2f6bff;
+  --accent-text: #6aa0ff;
+  --sky: #7fb0ff;
+  --accent-soft: rgba(47, 107, 255, 0.12);
+
+  --volt: #ffd166;
+  --flip: #b48cff;
+  --reversal: #ff5fa2;
+  --surge: #4d8cff;
+  --premarket: #8adb57;
+  --good: #3ddc8e;
+  --bad: #ff6b7a;
+
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  /* Selecting glows Volt Blue instead of browser beige. */
+  background: rgba(47, 107, 255, 0.4);
+  color: var(--paper);
+}
+
+a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Inner scrollers must not drag the page behind them. */
+.vk-scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* Wide content scrolls inside its own container. The page body never scrolls
+   sideways. */
+.vk-xscroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+/* ── The aurora ────────────────────────────────────────────────────────────
+   A shared static gradient sky. It is what stops a dark product reading as a
+   black rectangle.
+
+   `isolation: isolate` is load-bearing: the bloom is a z-index -1
+   pseudo-element, and without a stacking context it paints behind its own
+   parent's background, which is to say not at all.
+
+   Every variant's height is PINNED IN PIXELS. Percentage heights drift on a
+   tall page: the sky stretches until its gradient stops fall outside the
+   viewport and it draws nothing at all, unnoticed, for months. If you add a
+   variant, pin its height. */
+.vk-aurora {
+  position: relative;
+  isolation: isolate;
+}
+
+.vk-aurora::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.vk-aurora-page::before {
+  height: 820px;
+  background:
+    radial-gradient(1100px 520px at 10% -12%, rgba(47, 107, 255, 0.26), transparent 60%),
+    radial-gradient(880px 460px at 92% -6%, rgba(77, 140, 255, 0.18), transparent 62%),
+    radial-gradient(760px 420px at 46% 112%, rgba(61, 220, 142, 0.06), transparent 66%);
+}
+
+.vk-aurora-band::before {
+  height: 240px;
+  background:
+    radial-gradient(900px 300px at 18% -30%, rgba(47, 107, 255, 0.2), transparent 62%),
+    radial-gradient(700px 260px at 88% -10%, rgba(127, 176, 255, 0.12), transparent 64%);
+}
+
+.vk-aurora-panel::before {
+  height: 320px;
+  background:
+    radial-gradient(620px 280px at 6% -40%, rgba(47, 107, 255, 0.18), transparent 64%),
+    radial-gradient(520px 240px at 96% -20%, rgba(127, 176, 255, 0.1), transparent 66%);
+}
+
+.vk-aurora-bar::before {
+  height: 120px;
+  background: radial-gradient(700px 160px at 50% -60%, rgba(47, 107, 255, 0.22), transparent 64%);
+}
+
+/* ── Interaction ───────────────────────────────────────────────────────────
+   Hover and focus live here, not in inline styles. */
+.vk-row {
+  border: 1px solid var(--line);
+  background: var(--elev);
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+
+.vk-row:hover,
+.vk-row:focus-visible {
+  border-color: rgba(47, 107, 255, 0.55);
+  background: #171e26;
+}
+
+.vk-row:active {
+  transform: translateY(1px);
+}
+
+/* The lit pill. Two backgrounds in one declaration: the face paints to the
+   padding box, the aurora to the border box. That is the only way to put a
+   gradient on a border without a wrapper element. The face must stay near
+   opaque and dark, or the halo shines through and the pill renders as a solid
+   blue slab, which is the opposite of the effect. */
+.vk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 99px;
+  border: 1px solid transparent;
+  color: var(--paper);
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  background:
+    linear-gradient(#0d1117f0, #0d1117f0) padding-box,
+    linear-gradient(118deg, #2f6bffd6, #7fb0ffa6 38%, #2f6bff5c 64%, #4d8cffc4) border-box;
+  box-shadow: 0 0 0 0 rgba(47, 107, 255, 0);
+  transition: box-shadow 200ms ease;
+}
+
+.vk-pill:hover,
+.vk-pill:focus-visible {
+  box-shadow: 0 0 22px 2px rgba(47, 107, 255, 0.3);
+}
+
+/* Everything meant to be read is visible at rest. A section may animate in, but
+   from a visible resting state, never parked waiting on an observer. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
