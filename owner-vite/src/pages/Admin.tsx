@@ -1322,6 +1322,14 @@ export default function Admin() {
       {/* Body */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 20 }}>
 
+        {/* Who can open voltick.cbedge.net. FIRST on the page, deliberately:
+            it is the one list here that is added to weekly while the merger is
+            live, and a panel you have to scroll past four others to reach is a
+            panel that gets managed somewhere else instead. Comped Access sits
+            further down because it is the same gesture on a door that changes
+            far less often. */}
+        <VoltickAccessPanel />
+
         {/* Server controls + signal alerts — moved off the (now deleted) Infra
             tab. Feed toggles, maintenance mode, manual job triggers. */}
         <OwnerControls />
@@ -1338,11 +1346,6 @@ export default function Admin() {
             support cases). Sits above the lists it explains — a comped email
             shows up in "Not Paying" below, because it isn't. */}
         <CompAccessPanel />
-
-        {/* Who can open voltick.cbedge.net. Sits beside Comped Access because
-            the two are the same gesture on different doors, and keeping them
-            together is what stops one list quietly going stale. */}
-        <VoltickAccessPanel />
 
         {/* Always shown — sourced from Supabase auth, independent of Stripe config. */}
         <NotPayingPanel />

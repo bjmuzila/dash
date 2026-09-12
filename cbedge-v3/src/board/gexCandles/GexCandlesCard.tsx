@@ -29,8 +29,11 @@ import {
   isAutoBucket,
   loadSettings,
   saveSettings,
+  TAPE_DAYS,
+  TAPE_DAYS_LABEL,
   type ChartSettings,
   type Interval,
+  type TapeDays,
 } from './settings'
 import {
   candlesUrl,
@@ -599,7 +602,13 @@ export function GexCandlesCard({
   // the default 5 calendar days is not always enough to cover the oldest of
   // them. 7 is the ETF route's own dxFeed ceiling, so it is the most that can be
   // asked for and still answered.
-  const candleDays = replayOn ? REPLAY_CANDLE_DAYS : undefined
+  // THE DAY PICKER WIDENS THE REQUEST TOO. The default 5 calendar days holds 3
+  // sessions only when none of them is a weekend or a holiday — Tue asking for
+  // 3D over a Monday holiday reaches back to the Thursday, which 5 days does
+  // not cover. Same ceiling the replay path uses, for the same reason: 7 is the
+  // ETF route's own dxFeed limit, so it is the most that can be asked for and
+  // still answered. At 1D nothing changes.
+  const candleDays = replayOn || settings.tapeDays > 1 ? REPLAY_CANDLE_DAYS : undefined
   const candlesQ = useQuery<unknown>(
     useEs
       ? esCandlesUrl(settings.interval, candleDays)
@@ -824,16 +833,41 @@ export function GexCandlesCard({
     return etMinutesOfDay(now) >= RTH_OPEN_MIN ? etDay(now) : ''
   }, [replayOn, openTick])
 
-  /** The tape, scoped to the rewound session. Live, today from the open on. */
+  /**
+   * The tape, scoped to the rewound session. Live, the newest `tapeDays`
+   * sessions ending at today.
+   *
+   * COUNTED IN SESSIONS THE TAPE ACTUALLY HAS, never in calendar days: `barDays`
+   * is the ET days that came back with bars in them, so 3D on a Tuesday reaches
+   * Thu-Fri-Mon over a holiday weekend by itself, with no market-calendar table
+   * to keep current. It is also why the request above widens — a window the
+   * payload cannot fill is a picker that silently does less than it says.
+   *
+   * REPLAY IS UNTOUCHED. `activeDay` is one picked session by construction and
+   * still wins outright: the scrubber, the timeline and the clip all span that
+   * session and nothing either side of it.
+   */
   const dayBars = useMemo(() => {
     if (activeDay) return allBars.filter((b) => etDay(b.t) === activeDay)
-    if (!liveToday) return allBars
-    const today = allBars.filter((b) => etDay(b.t) === liveToday)
+    const want = settings.tapeDays
+    // Pre-market, at 1D, the scope stays OFF exactly as it was — there is no
+    // session to frame yet and the prior day plus the overnight is the context
+    // you want at 06:00. Above 1D the picker is an explicit ask, so honour it
+    // from the newest session the tape holds.
+    if (!liveToday) {
+      if (want <= 1) return allBars
+      const keep = new Set(barDays.slice(0, want))
+      const scoped = allBars.filter((b) => keep.has(etDay(b.t)))
+      return scoped.length ? scoped : allBars
+    }
+    const from = barDays.indexOf(liveToday)
+    const keep = new Set(from >= 0 ? barDays.slice(from, from + want) : [liveToday])
+    const scoped = allBars.filter((b) => keep.has(etDay(b.t)))
     // Same fallback rule as filterSession: an empty chart is a worse answer
     // than an unscoped one. Reachable on a holiday, and in the first seconds
     // after the open before the recorder has written today's first bar.
-    return today.length ? today : allBars
-  }, [allBars, activeDay, liveToday])
+    return scoped.length ? scoped : allBars
+  }, [allBars, barDays, activeDay, liveToday, settings.tapeDays])
 
   // ── The replay cursor ──────────────────────────────────────────────────────
   // The timeline is the BARS, not the GEX columns: the candles are always there
@@ -1042,7 +1076,11 @@ export function GexCandlesCard({
   // `replayOn` is in the key so entering or leaving replay reframes ONCE. It is
   // the only replay state that belongs here: the cursor moving is not a scale
   // change, and reframing on every scrub tick would fight the pan and the zoom.
-  const viewKey = `${symbol}|${useEs ? 'ES' : 'IDX'}|${settings.interval}|${session}|${replayOn ? 'R' : 'L'}`
+  // `tapeDays` is in the key because it changes how many bars are on the pane by
+  // a factor of three, and frameRecent sizes the window in BARS — without the
+  // reframe, switching 1D -> 3D leaves the two older sessions off the left edge
+  // and looks exactly like the picker did nothing.
+  const viewKey = `${symbol}|${useEs ? 'ES' : 'IDX'}|${settings.interval}|${session}|${settings.tapeDays}D|${replayOn ? 'R' : 'L'}`
   const framedRef = useRef('')
 
   // BEFORE the setBars effect below, deliberately. The interval is what the
@@ -1360,6 +1398,21 @@ export function GexCandlesCard({
       onChange={onInterval}
     />
   )
+  // HOW MANY SESSIONS OF BARS, beside how wide each one is. Folded on the
+  // desktop like the interval it sits next to, open in the phone sheet.
+  // Suppressed while rewound: replay is one picked session and the day dropdown
+  // on the transport is the control for which — a second day picker there would
+  // be two controls disagreeing about one thing.
+  const daysOptions = TAPE_DAYS.map((d) => ({ label: TAPE_DAYS_LABEL[d], value: String(d) }))
+  const onDays = (v: string) => patch({ tapeDays: Number(v) as TapeDays })
+  const daysTitle =
+    'How many sessions of candles to draw. 1D is today from the cash open; 2D and 3D add the sessions before it. The GEX bubbles and the rail stay on the newest session either way'
+  const daysPicker = replayOn ? null : (
+    <SegGroup size={ctlSize} title={daysTitle} options={daysOptions} value={String(settings.tapeDays)} onChange={onDays} />
+  )
+  const daysMenu = replayOn ? null : (
+    <SegMenu size={ctlSize} title={daysTitle} options={daysOptions} value={String(settings.tapeDays)} onChange={onDays} />
+  )
   // COPIES ONLY — see isCopy. The first card follows the board ticker and the
   // toolbar search sets that, so a picker there would be a second control over
   // one value. Null (not hidden) on instance 1 so the header keeps no empty
@@ -1449,6 +1502,9 @@ export function GexCandlesCard({
         useEs ? 'ES' : symbol,
         expiry,
         `${settings.interval}m`,
+        // Only when it is not the resting 1D: a caption that says "1D" on every
+        // shot is a word the reader has to skip past on every shot.
+        !replayOn && settings.tapeDays > 1 ? TAPE_DAYS_LABEL[settings.tapeDays] : '',
         session.toUpperCase(),
         // A shot of a rewound chart that does not say so is a shot of a lie.
         replayOn && cursor
@@ -1504,6 +1560,7 @@ export function GexCandlesCard({
             fold would cost a tap and save nothing. */}
         {phone ? tapePicker : tapeMenu}
         {!phone && intervalMenu}
+        {!phone && daysMenu}
         {!phone && !spxOnly && sessionMenu}
         <div className="relative shrink-0">
           <button
@@ -1519,7 +1576,9 @@ export function GexCandlesCard({
                 chart is currently set to — otherwise the two settings you
                 change most are invisible until you open the sheet. */}
             {phone
-              ? `${INTERVAL_LABEL[settings.interval]} · ${session.toUpperCase()} ⚙`
+              ? `${INTERVAL_LABEL[settings.interval]}${
+                  !replayOn && settings.tapeDays > 1 ? ` · ${TAPE_DAYS_LABEL[settings.tapeDays]}` : ''
+                } · ${session.toUpperCase()} ⚙`
               : '⚙ Layers'}
           </button>
           <Popover open={settingsOpen} onClose={() => setSettingsOpen(false)} sheet={phone}>
@@ -1531,6 +1590,7 @@ export function GexCandlesCard({
               {/* No Expiry section either — the card follows the nearest
                   expiration on every width; there is nothing to pick. */}
               {phone && <PanelSection title="Interval">{intervalPicker}</PanelSection>}
+              {phone && daysPicker && <PanelSection title="Days">{daysPicker}</PanelSection>}
               {/* No Session section when the tape decides it — see spxOnly. */}
               {phone && !spxOnly && <PanelSection title="Session">{sessionPicker}</PanelSection>}
 

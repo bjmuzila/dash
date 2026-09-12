@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import {
   homeShellStyle,
   homeHeaderStyle,
@@ -406,132 +406,67 @@ export default function Hub() {
 // store, both of which assume a client-side route, and navigate() on an
 // off-site URL just 404s inside this SPA.
 //
-// It carries a one-field grant box against /api/admin/voltick-access, the same
-// endpoint the full Voltick Access panel on /owner/admin uses. This is the
-// hurry version: email, Enter, done, with the defaults (no note, no expiry,
-// invite email on). Anything else — an expiry, a note, revoking, resending —
-// lives on the panel, and the link says so. Two surfaces onto one endpoint,
-// with no second copy of the state.
+// A LINK, and only a link. A one-field grant box lived here briefly and came
+// back out: this page is where you go to get somewhere, and a control that
+// writes to the database does not belong on it. Granting, revoking, expiry and
+// resend all live on one panel, at the top of /owner/admin, so there is exactly
+// one place that list is managed and one place to look when it is wrong.
 function VoltickCard() {
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const grant = async () => {
-    const addr = email.trim().toLowerCase();
-    if (!addr) return;
-    setBusy(true);
-    setNotice(null);
-    try {
-      const res = await fetch("/api/admin/voltick-access", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: addr, note: null, expiresAt: null, sendInvite: true }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
-      if (j?.inviteSent) setNotice(`Granted. Email sent to ${addr}.`);
-      else if (j?.inviteError) setNotice(`Granted, but the email failed (${j.inviteError}).`);
-      else setNotice(`Granted for ${addr}.`);
-      setEmail("");
-    } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Grant failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
-    <div
+    <a
+      href="https://voltick.cbedge.net"
+      target="_blank"
+      rel="noopener noreferrer"
       style={{
         ...classicCardAccentStyle,
+        display: "flex",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: 16,
         padding: "15px 18px",
         borderRadius: 14,
+        textDecoration: "none",
+        color: OWNER_THEME.text,
         border: `1px solid ${rgba(LIGHT_BLUE, 0.4)}`,
-        display: "flex",
-        flexDirection: "column",
-        gap: 12,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        <span
-          aria-hidden
-          style={{
-            flexShrink: 0, width: 38, height: 38, borderRadius: 10, display: "grid", placeItems: "center",
-            fontSize: TYPE.title, color: LIGHT_BLUE,
-            background: rgba(LIGHT_BLUE, 0.12), border: `1px solid ${rgba(LIGHT_BLUE, 0.3)}`,
-          }}
-        >
-          {/* U+26A1 + U+FE0E — the variation selector forces TEXT presentation.
-              A bare bolt renders as an emoji and the system font paints it its
-              own orange, discarding the colour set here. */}
-          {"\u26A1\uFE0E"}
+      <span
+        aria-hidden
+        style={{
+          flexShrink: 0, width: 38, height: 38, borderRadius: 10, display: "grid", placeItems: "center",
+          fontSize: TYPE.title, color: LIGHT_BLUE,
+          background: rgba(LIGHT_BLUE, 0.12), border: `1px solid ${rgba(LIGHT_BLUE, 0.3)}`,
+        }}
+      >
+        {/* U+26A1 + U+FE0E — the variation selector forces TEXT presentation.
+            A bare bolt renders as an emoji and the system font paints it its
+            own orange, discarding the colour set here. */}
+        {"\u26A1\uFE0E"}
+      </span>
+
+      <span style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+        <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: LIGHT_BLUE }}>
+          Merger sandbox
         </span>
-
-        <span style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-          <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: LIGHT_BLUE }}>
-            Merger sandbox
-          </span>
-          <span style={{ fontSize: TYPE.subhead, fontWeight: 700, letterSpacing: "0.01em", color: OWNER_THEME.text }}>
-            Voltick · CB Edge
-          </span>
-          <span style={{ fontSize: TYPE.body, color: OWNER_THEME.green }}>
-            The contents board, the owner console demo and the design system.
-          </span>
+        <span style={{ fontSize: TYPE.subhead, fontWeight: 700, letterSpacing: "0.01em", color: OWNER_THEME.text }}>
+          Voltick · CB Edge
         </span>
+        <span style={{ fontSize: TYPE.body, color: OWNER_THEME.green }}>
+          The contents board, the owner console demo and the design system. Who gets in is managed at the
+          top of Admin.
+        </span>
+      </span>
 
-        <a
-          href="https://voltick.cbedge.net"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            marginLeft: "auto", flexShrink: 0, display: "flex", alignItems: "center", gap: 8,
-            fontSize: TYPE.label, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
-            color: OWNER_THEME.bg, background: LIGHT_BLUE, borderRadius: 999, padding: "8px 16px",
-            whiteSpace: "nowrap", textDecoration: "none",
-          }}
-        >
-          Open <span aria-hidden>↗</span>
-        </a>
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", borderTop: `1px solid ${OWNER_THEME.border}`, paddingTop: 11 }}>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") grant(); }}
-          placeholder="let someone in…"
-          aria-label="Email to grant Voltick sandbox access"
-          style={{
-            flex: "1 1 200px", minWidth: 0, padding: "7px 11px", fontSize: TYPE.body,
-            fontFamily: "ui-monospace, monospace", background: "rgba(0,0,0,0.35)",
-            border: `1px solid ${OWNER_THEME.border}`, borderRadius: 8, color: OWNER_THEME.text, outline: "none",
-          }}
-        />
-        <button
-          onClick={grant}
-          disabled={busy || !email.trim()}
-          style={{
-            flexShrink: 0, padding: "7px 16px", borderRadius: 8, cursor: busy || !email.trim() ? "default" : "pointer",
-            fontSize: TYPE.body, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase",
-            color: OWNER_THEME.bg, background: LIGHT_BLUE, border: `1px solid ${LIGHT_BLUE}`,
-            opacity: busy || !email.trim() ? 0.5 : 1,
-          }}
-        >
-          {busy ? "…" : "Grant"}
-        </button>
-        <Link
-          to="/owner/admin"
-          title="Expiry, notes, resend and revoke live on the full panel"
-          style={{ flexShrink: 0, fontSize: TYPE.body, color: LIGHT_BLUE, textDecoration: "none" }}
-        >
-          manage →
-        </Link>
-        {notice && (
-          <div style={{ flexBasis: "100%", fontSize: TYPE.body, color: OWNER_THEME.green }}>{notice}</div>
-        )}
-      </div>
-    </div>
+      <span
+        style={{
+          marginLeft: "auto", flexShrink: 0, display: "flex", alignItems: "center", gap: 8,
+          fontSize: TYPE.label, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
+          color: OWNER_THEME.bg, background: LIGHT_BLUE, borderRadius: 999, padding: "8px 16px",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Open <span aria-hidden>↗</span>
+      </span>
+    </a>
   );
 }

@@ -133,7 +133,15 @@
       <li>Come back to voltick.cbedge.net.</li>
     </ol>
 
-    <a class="cta" href="https://cbedge.net/sign-in">Sign in at cbedge.net &rarr;</a>
+    <!--
+      ?next= sends them straight back here after they sign in. cbedge.net's
+      AuthForm sanitises it: a path, or an https URL on cbedge.net or one of its
+      subdomains, and nothing else. The href below is hardcoded to the root so
+      the link works with no JavaScript at all; the script under it upgrades it
+      to the exact page they were trying to reach. Order matters - the working
+      link ships first, the improvement is optional.
+    -->
+    <a class="cta" id="signin" href="https://cbedge.net/sign-in?next=https%3A%2F%2Fvoltick.cbedge.net%2F">Sign in at cbedge.net &rarr;</a>
 
     <div class="foot">
       Already signed in and still seeing this? Your account is not on the list yet, or the grant has
@@ -146,5 +154,24 @@
       <a class="quiet" href="/">Try again</a>
     </div>
   </main>
+
+<script>
+  // Return them to the page they actually asked for, not just the root.
+  // nginx serves this file in place of that page, so location.pathname is still
+  // the original request. Same-origin paths only, and never this page itself.
+  (function () {
+    try {
+      var a = document.getElementById("signin");
+      if (!a) return;
+      var path = window.location.pathname + window.location.search;
+      if (!path.startsWith("/") || path.startsWith("//")) path = "/";
+      if (path.indexOf("/denied.html") === 0) path = "/";
+      a.href = "https://cbedge.net/sign-in?next=" +
+        encodeURIComponent("https://voltick.cbedge.net" + path);
+    } catch (e) {
+      /* the hardcoded href in the markup already works */
+    }
+  })();
+</script>
 </body>
 </html>

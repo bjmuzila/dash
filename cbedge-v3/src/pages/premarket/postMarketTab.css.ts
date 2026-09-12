@@ -228,6 +228,20 @@ export const POSTMARKET_CSS = `
 @media (max-width:1180px){
   .pmk .col.evcol .evchart{flex:0 1 auto;max-height:440px}
 }
+/* ── SECTION 3 IS TWO ROWS NOW ──────────────────────────────────────────────
+   The ladder owns the full width of the card and the two reads that used to sit
+   beside it — wall migration, written vs traded — share the row beneath it.
+
+   The ladder therefore no longer has a sibling column handing it a height, so
+   flex:1 1 0 has nothing to grow into (an auto grid row makes the parent height
+   indefinite and flex-grow is ignored) and the min-height would be the whole
+   panel. It gets an explicit cap instead and scrolls inside it, which is what
+   the 440px cap was always doing — just taller, because a full-width ladder can
+   afford the rows. */
+.pmk .body.one{grid-template-columns:1fr}
+.pmk .body.one .col.evcol .evchart{flex:0 1 auto;min-height:0;max-height:540px}
+/* The row under the ladder reads as a separate band, not a continuation of it. */
+.pmk .body.stack{border-top:1px solid var(--line)}
 /* Written vs traded — two bars growing away from a centred strike label. */
 .pmk .mrow{display:grid;grid-template-columns:1fr 52px 1fr;align-items:center;height:18px;gap:6px}
 .pmk .mrow .mleft{display:flex;justify-content:flex-end}

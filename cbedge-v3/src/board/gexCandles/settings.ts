@@ -26,6 +26,31 @@ export const INTERVAL_LABEL: Record<Interval, string> = {
 }
 
 /**
+ * HOW MANY SESSIONS OF BARS THE LIVE CARD SHOWS — 1, 2 or 3.
+ *
+ * The tape is fetched several calendar days deep regardless (the replay picker
+ * and the roll-up both need it); this is a DRAW-time scope on top of it, the
+ * same mechanism `liveToday` already used to pin the card to one session. 1 is
+ * that behaviour unchanged and stays the default: the board's job is the
+ * session that is happening.
+ *
+ * Capped at 3 on purpose. Retention on the gamma side is three sessions
+ * (REPLAY_HISTORY_MINUTES), the ETF candle route's own ceiling is 7 calendar
+ * days, and three sessions is already the most that reads as context rather
+ * than as a different chart. Note that only the NEWEST session carries bubbles
+ * and a rail — the gamma request reaches one session — so 2D and 3D widen the
+ * candles and leave the ladder where it was.
+ */
+export type TapeDays = 1 | 2 | 3
+
+export const TAPE_DAYS: TapeDays[] = [1, 2, 3]
+export const TAPE_DAYS_LABEL: Record<TapeDays, string> = {
+  1: '1D',
+  2: '2D',
+  3: '3D',
+}
+
+/**
  * Which time bucket the bubbles aggregate at. Storage is always one column per
  * MINUTE; this is a DRAW-time aggregation.
  *
@@ -85,6 +110,11 @@ export interface ChartSettings {
   symbol: string
   session: Session
   interval: Interval
+  /**
+   * How many sessions of bars the LIVE card draws — see TapeDays. Ignored in
+   * replay, which is one picked session by construction.
+   */
+  tapeDays: TapeDays
   /** Master on/off for the whole bubble layer. */
   bubblesOn: boolean
   /** Which GEX quantity a bubble is sized by. Also what the rail lists. */
@@ -171,6 +201,8 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   symbol: 'SPX',
   session: 'eth',
   interval: 5,
+  // 1 is the behaviour the card already had: today, from the cash open.
+  tapeDays: 1,
   bubblesOn: true,
   gexMetric: 'voloi',
   countdown: true,
@@ -602,6 +634,9 @@ function coerce(raw: unknown): ChartSettings {
     for (const k of STALE_ON_UPGRADE) delete p[k]
   }
   const interval = INTERVALS.includes(p.interval as Interval) ? (p.interval as Interval) : DEFAULT_SETTINGS.interval
+  const tapeDays = TAPE_DAYS.includes(p.tapeDays as TapeDays)
+    ? (p.tapeDays as TapeDays)
+    : DEFAULT_SETTINGS.tapeDays
   return {
     // normalizeSymbol also retires ES/NQ onto SPX/NDX, so a blob saved before
     // the futures were dropped reopens on a symbol that still has candles
@@ -609,6 +644,7 @@ function coerce(raw: unknown): ChartSettings {
     symbol: typeof p.symbol === 'string' && p.symbol ? normalizeSymbol(p.symbol) : DEFAULT_SETTINGS.symbol,
     session: p.session === 'rth' ? 'rth' : 'eth',
     interval,
+    tapeDays,
     bubblesOn: p.bubblesOn !== false,
     gexMetric: p.gexMetric === 'vol' ? 'vol' : 'voloi',
     countdown: p.countdown !== false,

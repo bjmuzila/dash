@@ -269,18 +269,34 @@ const EV_PRESETS: { key: EvPreset; label: string; help: string }[] = [
 ];
 
 /**
- * The build ramp, blue → violet → amber, in TIME order. AM/MID/PM name those
- * three colours directly; every other preset interpolates across the same ramp,
- * so "early is blue, late is amber" keeps meaning the same thing no matter how
- * many windows the reader has asked for.
+ * THE WINDOW PALETTE — categorical, not a gradient.
+ *
+ * This was a blue→violet→amber interpolation. It reads fine at three windows
+ * and is useless at seven: the middle four steps land within a few degrees of
+ * each other, so an HOURLY bar was one long purple smear and the whole point of
+ * splitting the session by hour was invisible.
+ *
+ * So the ramp is a fixed list of SEPARATE hues, cool at the open and hot into
+ * the bell, every one of them a token this page already carries. Windows index
+ * into it evenly, which means the three-window presets still pick recognisably
+ * "morning blue / midday violet / power-hour amber" while seven windows get
+ * seven colours a reader can actually tell apart.
  */
+const EV_RAMP = [
+  "var(--cyan)",                                              // deep teal
+  "var(--blue)",                                              // light blue
+  "color-mix(in srgb, var(--violet) 65%, var(--cyan))",       // indigo
+  "var(--violet)",                                            // purple
+  "color-mix(in srgb, var(--violet) 40%, var(--color-clay))", // rose
+  "var(--color-clay)",                                        // burnt orange
+  "var(--amber)",                                             // amber
+];
+
 const rampColor = (i: number, n: number): string => {
-  if (n <= 1) return "var(--violet)";
-  const t = i / (n - 1);
-  const pct = Math.round((t <= 0.5 ? t * 2 : (t - 0.5) * 2) * 100);
-  return t <= 0.5
-    ? `color-mix(in srgb, var(--violet) ${pct}%, var(--blue))`
-    : `color-mix(in srgb, var(--amber) ${pct}%, var(--violet))`;
+  if (n <= 1) return EV_RAMP[3]!;
+  // Evenly spaced across the whole ramp, so the first window is always the
+  // coolest colour and the last always the hottest whatever the bucket count.
+  return EV_RAMP[Math.round((i / (n - 1)) * (EV_RAMP.length - 1))]!;
 };
 
 /** The window list for a preset, in ET minutes. `now` deliberately has none. */
@@ -1650,7 +1666,15 @@ export default function PostMarketTab(p: PostMarketProps) {
             legend chip's tooltip now — a caveat that permanent is furniture, and
             it was taking four lines off the ladder every session. */}
 
-        <div className="body" style={{ gridTemplateColumns: "1.35fr 1fr" }}>
+        {/* THE LADDER GETS THE WHOLE CARD.
+            It used to share the row with wall migration and written-vs-traded at
+            1.35fr / 1fr, which left the bars about half the width they needed:
+            under HOURLY a seven-window bar had roughly 40px of track to say
+            seven things in. The ladder is the section, so it takes the full
+            width and the two panels move underneath it, side by side.
+            A CLASS, not an inline grid-template-columns — an inline one outranks
+            the stylesheet and the narrow-screen collapse could never undo it. */}
+        <div className="body one">
           <div className="col evcol" style={{ position: "relative" }}>
             <div className="chart evchart" ref={evChartRef} onScroll={onEvScroll}>
               {evRows.length === 0 && (
@@ -1789,7 +1813,11 @@ export default function PostMarketTab(p: PostMarketProps) {
               <button type="button" className="recenter" onClick={repinEv}>⤒ back to close</button>
             )}
           </div>
+        </div>
 
+        {/* The two reads that sit UNDER the ladder — both are about the same
+            recorded session, neither is worth half the card's width. */}
+        <div className="body two stack">
           <div className="col">
             {/* WALL MIGRATION */}
             <div className="colhead">
@@ -1825,8 +1853,11 @@ export default function PostMarketTab(p: PostMarketProps) {
               <div className="tiny">Needs the recorded ladder.</div>
             )}
 
+          </div>
+
+          <div className="col">
             {/* WRITTEN vs TRADED */}
-            <div className="colhead" style={{ marginTop: 16 }}>
+            <div className="colhead">
               <h3>Written vs traded</h3>
               <span className="tiny">gamma added ↔ time at price</span>
             </div>

@@ -1,424 +1,5 @@
 # Changelog
 
-## 2026-09-12 (g) - voltick: real email + password auth, granted from the owner console
-
-Replaces Cloudflare Access on voltick.cbedge.net with a login on the CB Edge
-account people already have, and a grant list managed exactly the way comped
-access is.
-
-### It reuses the CB Edge session rather than building a second one
-
-The session cookie is domain-wide - it is how owner.cbedge.net reads
-/api/auth/me today - so voltick.cbedge.net can read a session created by signing
-in at cbedge.net. A separate `vk_users` table was designed and then dropped: it
-would have meant a second password store, a second invite mail and a second
-reset flow for the same outcome.
-
-### THE GATE IS NGINX, NOT REACT
-
-`voltick-vite/nginx.conf` puts `auth_request /_vkauth` on `/`, `/index.html`,
-`/assets/` and `/demo/`. nginx asks the backend who you are BEFORE it serves a
-byte.
-
-This is the whole point and it is worth being explicit about: a gate inside the
-SPA has already shipped the bundle - the contents board, the design system, and
-`/demo/`, which is the owner console layout - to the browser before it decides
-to render a login screen. **Hidden is not "not sent".**
-
-    200 -> serve        401 no session      403 no grant       503 DB trouble
-
-Everything but 200 lands on `denied.html`, a standalone static page and the only
-unauthenticated thing this host serves. It is NOT a route in the SPA, because
-the SPA is what must not be handed over. Fails CLOSED: a database hiccup denies.
-
-`/api`, `/proxy` and `/ws` are deliberately left ungated - the backend enforces
-its own auth on all of them, an unauthenticated caller reaches exactly what they
-would reach at cbedge.net/api/*, and gating `/api` here would also gate
-`/api/voltick/verify`, which is the gate.
-
-### New: `voltick_access`, a deliberate twin of `comp_access`
-
-Same shape, same email key, same stamp-don't-delete revoke. A grant buys
-**voltick.cbedge.net and nothing else**: NOT is_paid (that is still a comp) and
-NOT is_owner.
-
-Two tables rather than a column on comp_access, because the two lists answer
-different questions and get revoked on different days. Folded together,
-un-comping a customer would silently lock them out of the sandbox.
-
-- `lib/db.ts` - CREATE TABLE, `listVoltickAccess` / `grantVoltickAccess` /
-  `getVoltickAccess` / `revokeVoltickAccess` / `canOpenVoltick`.
-- `server-v2/_lib-db.cjs` - the same five, hand-added per AGENTS.md's rule that
-  every new function goes in BOTH until the bundle is reconciled. If they drift,
-  the Admin panel (Next, reads lib/db.ts) and the gate (server-v2, reads the
-  bundle) disagree about who has access, and the symptom is a grant that shows
-  in the panel and still 403s at the door.
-
-`canOpenVoltick` is deliberately NOT folded into `getSessionWithUser()`. That
-function is on the critical path for every paid route and every websocket
-upgrade, and the one time it drifted from its ws-auth twin it 401'd every comped
-user on the site. A sandbox subdomain is not worth a join there.
-
-### New routes
-
-- `server-v2/api-router.js` - `/api/voltick/verify` (`auth: 'user'`, the gate
-  nginx calls) and `/api/voltick/me`. `auth: 'user'` not `'subscriber'`: someone
-  granted the sandbox usually is NOT a paying customer and must not have to be.
-- `app/api/admin/voltick-access/route.ts` - owner-only CRUD, a near-verbatim
-  twin of `app/api/admin/comp-access/route.ts`.
-- `lib/emails/voltick-invite.ts` - the invite, in the Voltick palette.
-
-Granting provisions the CB Edge account with `password_hash = NULL` and mails a
-7-day set-password link (the same one-shot token forgot-password uses). One
-difference from comp-invite worth keeping: an account that ALREADY has a
-password gets a plain "the sandbox is open to you" note with **no token in it**.
-Mailing an unsolicited credential link to a working account is phish-shaped and
-trains people badly.
-
-### Two surfaces, one endpoint
-
-- `owner-vite/src/pages/Admin.tsx` - `VoltickAccessPanel`, beside Comped Access:
-  note, expiry, resend, revoke. A copy of `CompAccessPanel` rather than a shared
-  component, the same way budget-vite and daily-vite are copies - a shared panel
-  guarantees a change meant for one eventually surprises the other.
-- `owner-vite/src/pages/Hub.tsx` - the Voltick card gains one field and a Grant
-  button, with defaults (no note, no expiry, invite on) and a "manage" link to
-  the panel. No second copy of the state; both POST the same endpoint.
-
-Sign out on voltick now POSTs `/api/auth/logout` instead of hitting Cloudflare's
-edge logout. That signs you out of cbedge.net too, because it is one session.
-That is the honest behaviour for a shared cookie.
-
-### Deploy order matters
-
-`docker compose build dashboard voltick owners` and bring the DASHBOARD up
-first, or with, voltick. A voltick image whose backend has no
-`/api/voltick/verify` gets 404 on every auth_request and denies everyone,
-including you. The `voltick_access` table creates itself on boot from the schema
-block in lib/db.ts; no manual migration.
-
-**Then delete the Cloudflare Access application for voltick.cbedge.net.** Two
-gates means two prompts to reach one page.
-
-**Needs a deploy** (`push.ps1` -> GitHub -> VPS).
-
-## 2026-09-12 (f) - voltick: a sign out button
-
-`voltick-vite/src/components/Shell.tsx` gets a Sign out link in the header, on
-every page including the contents board.
-
-It points at `/cdn-cgi/access/logout`, which Cloudflare handles at the EDGE: the
-request never reaches this container's nginx, so there is nothing to add to
-`nginx.conf` and no path for the SPA to claim. It clears the `CF_Authorization`
-cookie for this hostname, which is the only session this site has - there is no
-login of our own to sign out of.
-
-A plain `<a>`, not a `<Link>`: a client-side route would swallow it, the same
-trap as the `/demo/` entry in `nav.ts`.
-
-Why it was needed: signed in, there was no way to see the gate working. A
-`curl -sI` from a shell proves it (302 to the team login, `auth_status: NONE`)
-but that is not something you do from a browser. The button also makes the
-"log in as someone NOT on the allowlist and confirm you are denied" test
-possible, which is the test that checks the allowlist rather than just the
-login.
-
-`https://dawn-mode-a754.cloudflareaccess.com/cdn-cgi/access/logout` signs out of
-every Access application at once, if a per-hostname logout is not enough.
-
-**Note:** the demo console's own "Sign out" pill (`demo-owner/template.html`) is
-still decorative. Pointing it at the same path would make it real on both
-demo.cbedge.net and voltick.cbedge.net/demo/.
-
-**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build voltick`).
-
-## 2026-09-12 (e) - voltick.cbedge.net is live, and the tunnel outage that got us there
-
-Deployed and verified. `voltick-web` on 8088, `/demo/` proxying to `demo-web`,
-both `curl -sI` checks 200 on the box. Cloudflare Access is in front:
-`curl -sI https://voltick.cbedge.net` returns 302 to
-`dawn-mode-a754.cloudflareaccess.com/cdn-cgi/access/login/...` with
-`auth_status: NONE`. The owner hub card is in the shipped bundle
-(`docker exec owners-web grep -rl "voltick.cbedge.net"
-/usr/share/nginx/html/assets` -> `Hub-<hash>.js`).
-
-### The cloudflared outage - read this before editing config.yml again
-
-Adding the voltick rule took the WHOLE TUNNEL down for a few minutes: every
-hostname, not just voltick. Two causes, both worth remembering.
-
-**1. The rule landed BELOW the catch-all.** `- service: http_status:404` must be
-the LAST entry in `ingress:`. Anything after it is unreachable, and cloudflared
-refuses to start rather than silently ignoring it, so the service failed its
-restart and took cbedge.net, owner, budget, recipe, affiliate, daily and demo
-with it.
-
-`cloudflared tunnel ingress validate` names this in one line:
-
-    Validation failed: Rule #10 is matching the hostname '', but this will match
-    every hostname, meaning the rules which follow it will never be triggered.
-
-**ALWAYS run `cloudflared tunnel ingress validate` BEFORE
-`systemctl restart cloudflared`.** Validate reads the file without touching the
-running tunnel; restart on a bad file is an outage. The sequence is validate ->
-restart -> `systemctl is-active cloudflared` -> `cloudflared tunnel ingress rule
-https://<host>`.
-
-Note `cloudflared tunnel ingress url` is NOT a command. It is `ingress rule`.
-
-**2. `nano` inside a pasted multi-command block.** The lines after the `nano`
-line get typed into the editor buffer instead of the shell. Edit
-`/etc/cloudflared/config.yml` with a `cat > ... <<'EOF'` heredoc that rewrites
-the whole file, or with `sed -i '<n>s|.*|<new line>|'` by line number. Never
-paste a block that contains an interactive editor, and wait for the prompt
-between commands - queued pastes landed inside a running command more than once
-this session.
-
-There is a backup at `/etc/cloudflared/config.yml.bak` from before the rewrite.
-
-### A false alarm worth not chasing twice
-
-Pasting VPS output into a chat client turns `www.cbedge.net` into a markdown
-link, so `cat config.yml` appeared to show
-`- hostname: [www.cbedge.net](https://www.cbedge.net)` even after two successful
-`sed` replacements. The FILE was always fine. `grep -c 'hostname: \['
-/etc/cloudflared/config.yml` returns 0 and gives the linkifier nothing to chew
-on - use a check whose output cannot be rewritten, not a `cat`.
-
-### Cloudflare Access, as actually built
-
-The dashboard has been renamed since demo-owner's README was written:
-
-- Access groups are now **Rule groups**, a TAB under
-  Zero Trust -> Access controls -> Policies.
-- An application is Access controls -> Applications -> Create new application ->
-  **Public DNS** (not Private destinations / Workers / Service auth - voltick is
-  a real DNS record on the tunnel).
-
-A policy cannot reference a rule group that does not exist yet: the Include
-dropdown reads "No valid options" and saving fails with
-`access.api.error.invalid_request: include field should not be empty`. Create
-the policy with Include -> **Emails** first; swap it to a rule group later, once
-there are enough people to be worth one list.
-
-**Still open:** `demo.cbedge.net`'s policy has its own email list. Point both at
-one `CB Edge insiders` rule group when that gets built.
-
-## 2026-09-12 (d) - owner hub: a card for voltick.cbedge.net
-
-`owner-vite/src/pages/Hub.tsx` (the /owner overview, the command-bar hub) gets
-one card above the search box, linking out to voltick.cbedge.net.
-
-It is a plain `<a href>` to an absolute URL, deliberately NOT a `HubLink`.
-`HUB_LINKS` feeds the ⌘K index and the pin/recent store in `lib/hubPrefs.ts`,
-and both assume a client-side route: adding voltick there would put an off-site
-URL through `navigate()`, which 404s inside this SPA, and would let it be pinned
-as if it were an owner page.
-
-Above the command bar rather than in the group grid below it, for the same
-reason: a link that leaves the site should not sit in a list where every other
-row stays on it.
-
-Theme: `classicCardAccentStyle` + `LIGHT_BLUE` + `TYPE` + `rgba` from
-`lib/theme`, all already imported by this file. Secondary text is
-`OWNER_THEME.green`, not white at reduced opacity - there is no grey in this
-theme and fading white to fake one is the mistake the token name `muted`
-invites. The card wraps to a stacked layout under about 600px.
-
-The bolt is `\u26A1\uFE0E`, not a bare `⚡`. Without the variation selector the
-glyph renders as an emoji and the system font paints it its own orange,
-discarding the `color` set on it. Same trap as Voltick's `FLIP_MARK`.
-
-Nothing else changed. `nav.ts`, `registry.ts` and `hubPrefs.ts` are untouched,
-so `check-owner-pages.mjs` has nothing new to inspect.
-
-**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build owners`).
-
-## 2026-09-12 (c) - voltick: the owner console demo is the first page, and both hostnames share one allowlist
-
-Follow-on to (b). Two changes, neither of which touches the trading stack.
-
-**1. `/demo/` on voltick.cbedge.net serves the owner console demo.**
-
-`voltick-vite/nginx.conf` gains a `location /demo/` that proxies to
-`demo-web:8087` over the compose network, plus a `= /demo` 301 onto the trailing
-slash. `docker-compose.yml` adds `demo-web` to the `voltick` service's
-`depends_on`.
-
-PROXIED, NOT COPIED. The alternative was widening the voltick build context to
-the repo root so the Dockerfile could COPY `demo-owner/dist/index.html` into the
-image. That bakes a 290KB page into a second image, and the copy nobody
-remembers to rebuild is the one people end up looking at. One container, one
-build: `node demo-owner/build.mjs` then a `demo-web` rebuild updates
-demo.cbedge.net and voltick.cbedge.net/demo/ together.
-
-Two nginx details worth keeping: the upstream is a variable (`set $demo
-demo-web:8087`) so DNS is resolved at request time and nginx starts even when
-demo-web is momentarily down, the same reason `$up` exists. And because a
-variable in `proxy_pass` makes any URI part be sent literally instead of having
-the location prefix stripped, the prefix comes off with `rewrite ^/demo/(.*)$
-/$1 break` and `proxy_pass` carries no URI of its own. `proxy_pass
-http://$demo/;` would send "/" for every request under /demo/.
-
-**2. The contents board can list things the SPA does not own.**
-
-`VoltickLink` gains `external?: true`. An external item is filtered out of
-`VOLTICK_ROUTES` (so React Router never claims the path) and rendered by `Home`
-as a plain `<a>` rather than a `<Link>`. A client-side Link to a path nginx owns
-routes internally and lands on NotFound, which is exactly the bug this flag
-exists to prevent. `VOLTICK_ITEMS` is the full list, `VOLTICK_ROUTES` is the
-SPA's subset, and `findRoute` reads the full list so the header still names an
-external page.
-
-The demo is the first entry, in a new first group ("The console"), marked
-external.
-
-**3. ACCESS: one Cloudflare Access GROUP, two applications.**
-
-demo.cbedge.net and voltick.cbedge.net admit the same people: Brandon plus
-whoever he adds. The emails now live in a reusable Access Group
-(`CB Edge insiders`), and each hostname gets a self-hosted application whose one
-Allow policy includes only that group. Typing the list into two applications is
-how someone revoked from one keeps the other.
-
-Removing an email from the group kills both links at once. A guest who should see
-the demo but not the sandbox gets a per-application policy instead, as the
-exception.
-
-Written up in `voltick-vite/README.md` and `demo-owner/README.md` (section 3
-rewritten). `demo-owner/README.md` also notes that stopping `demo-web` now puts a
-502 on voltick's /demo/, and what to remove in the same change.
-
-**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build voltick`),
-plus the Access group and applications, which are dashboard-only.
-
-## 2026-09-12 (b) - voltick.cbedge.net: a new Vite SPA for the Voltick / CB Edge merger sandbox
-
-A separate subdomain, a separate container, a separate SPA. Nothing in the
-trading stack changed: `server-v2/`, `cbedge-v3/` and every existing service are
-untouched. This is additive.
-
-**New: `voltick-vite/`** - node build stage to nginx, the same two-stage shape as
-`owner-vite/` and `affiliate-vite/`, listening on 8088.
-
-- `nginx.conf` proxies `/api`, `/proxy` and `/ws` to `dashboard:3002` over the
-  compose network, plus the Next chart routes and `/_next` for same-origin
-  iframe embeds. Same surface as the owners service, not the narrow budget/daily
-  one: this is where Voltick surfaces get rebuilt against CB Edge's live feed, so
-  it needs the market-data paths and the socket from day one. Lazy `resolver`
-  so nginx starts even when the dashboard container is momentarily down, and
-  `index.html` is `no-store` while `/assets/` is immutable, both copied from
-  owner-vite for the reasons written there.
-- `docker-compose.yml` gains a `voltick` service on `127.0.0.1:8088`,
-  `depends_on: dashboard`.
-
-**ACCESS IS CLOUDFLARE ACCESS, IN FRONT OF THE CONTAINER** - a one-time-PIN
-policy on an email allowlist, exactly how `demo.cbedge.net` is gated. There is no
-sign-in code in the SPA on purpose: an allowlist in the bundle means a redeploy
-every time the list changes, and an allowlist in the backend means a new endpoint
-in `server-v2` for a sandbox. Revoking someone is a change in the Cloudflare
-dashboard and nothing rebuilds.
-
-**Until that Access policy exists, the subdomain is open to anyone with the
-URL.** Create the policy BEFORE routing DNS.
-
-**The contents board is the routing table.** `src/lib/nav.ts` holds the list;
-`Home.tsx` renders it and `App.tsx` builds one route per entry from the same
-array, so a link on the board and the route that answers it cannot drift apart.
-Adding a page is two edits: an item in `nav.ts` with a `key`, and that key in
-`src/pages/registry.ts` pointing at a `lazy()` import. A key with no registry
-entry renders `Placeholder` rather than 404, which is the correct state for a
-page that is listed and not yet written.
-
-**Built:** `/design-system` and `/colours` (the Voltick system, rendered from
-`src/theme.ts` rather than described, so the reference cannot go stale) and
-`/feed-check`. **Listed, placeholder for now:** `/overview`, `/surface-map`,
-`/vocabulary`, `/questions`.
-
-`/feed-check` is read-only and exists because the reverse proxy is the one thing
-about a new subdomain that can be silently wrong: an unproxied path falls through
-`try_files` and comes back as `index.html` with a 200 on it, so a fetch gets a
-page of HTML rather than a 404. The page calls `/proxy/health`,
-`/proxy/self-metrics` and `/api/auth/me` and says "not proxied" when the
-content-type is `text/html`. Its `/ws/gex` probe is opt-in behind a button, opens
-with `?topics=spot,status` (scalars are not implied and must be listed), closes
-on unmount, and flags open-then-die inside 3s as the stolen-upgrade signature
-from AGENTS.md. That socket counts fully as Cloudflare bandwidth served, so it is
-never opened on page load.
-
-**Theme:** `src/theme.ts` is a port of Voltick's `web/src/theme.jsx`, with the
-five non-negotiables at the top - reserved colours mean one thing each (import
-the token, a near-miss hex is worse than a reuse), no grey text, no em-dashes in
-anything a user reads, never buy/sell/signal/entry/target/prediction, dark only.
-`FLIP_MARK` carries U+FE0E because a bare bolt renders as emoji and the system
-font paints it orange, which is the Volt's reserved colour. Hover and focus live
-in `index.css`, not inline, and the aurora heights are pinned in pixels.
-`md files/VOLTICK-DESIGN-SYSTEM.md` is the full reference.
-
-**Still to do on the VPS** (nothing in this repo does it):
-
-    /etc/cloudflared/config.yml, ABOVE the catch-all 404 rule:
-      - hostname: voltick.cbedge.net
-        service: http://127.0.0.1:8088
-    cloudflared tunnel route dns <tunnel> voltick.cbedge.net
-    systemctl restart cloudflared
-    docker compose build voltick && docker compose up -d voltick
-    then create the Cloudflare Access application + email allowlist
-
-**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build`).
-
-## 2026-09-12 (a) - Post Studio: the theme is saved and follows every template; 9:16 re-fit
-
-Two things the studio could not do: keep a look across templates, and turn a
-16:9 post into a phone post.
-
-THEME. The colour pickers, the canvas border and the FX bank were per-canvas
-state that reset to the shipped values on every reload AND on every template
-load, so changing the look meant redoing it on each template, every week. They
-are now one saved object (localStorage `cbe_studio_theme`), written on every
-edit (Auto, on by default — there is also an explicit Save theme and a Reset)
-and RE-APPLIED AFTER EVERY TEMPLATE LOAD.
-
-- New sidebar section: Background, Accent, **Panel**, **Text**, plus the border
-  and the FX that were already there.
-- `C` — the palette every TPL function reads — is no longer a constant. Panel
-  and text drive `panelUp`/`line`/`lineHard`/`body`/`mut`/`dim` as text-over-panel
-  mixes, so a built-in template picks up the theme with no template change.
-  `gold`/`orange`/`red`/`pale`/`blue` are semantic and never move. A theme still
-  on the shipped panel+text returns `PAL_DEF` verbatim, so an untouched studio
-  does not drift by even one unit.
-- A CUSTOM template is frozen HTML, so it cannot be rebuilt from `C`. Its record
-  now carries the palette it was saved under (`pal`), and loading it diffs that
-  against the current theme and swaps only the values that moved — a colour
-  picked by hand on one layer survives.
-- `THEME` is deliberately NOT "whatever the pickers say": reopening a preset
-  writes that post's colours into the pickers, and only a user edit moves the
-  theme. So a preset reopens exactly as saved, and a template loaded straight
-  after it still gets the theme.
-
-9:16. New canvas sizes 1080×1920 (TikTok / Reels / Shorts) and 1080×1620, and a
-**Re-fit layout** button (Auto, on by default, runs on every size change).
-Cropping to the new frame throws half the design away and stretching squashes
-every screenshot, so instead it bands the layers by vertical overlap — anything
-sharing a horizontal run stays one row — scales by ONE factor so nothing changes
-proportion, and re-stacks the bands, re-opening the gaps proportionally (capped)
-with the leftover height centring the block. Font size, letter spacing, corner
-radius and an image's crop all scale with the box; border widths do not. One
-mutation batch, so Ctrl+Z undoes the whole re-fit.
-
-A tall canvas re-fits into the SAFE AREA, not the raw frame: the feeds paint the
-caption/handle block and the top bar over those strips. **Safe area** toggles an
-editor-only dashed box showing them (never exported, like the guides).
-
-Verified in headless Chromium against the real document: default palette
-byte-identical to the shipped constants; theme survives reload; built-in and
-custom templates both adopt it; presets do not; auto-save off / explicit save /
-reset all behave; re-fit to 1080×1920 leaves 0 of 18 layers overflowing and undo
-restores the 16:9 layout. No console errors.
-
-Touched: `owner-vite/src/pages/studioHtml.ts` only. The root `x-post-studio.html`
-copy is dead per AGENTS.md and was not updated.
-
 ## 2026-09-11 (j) - AGENTS.md: v3 is the target, stated at the top
 
 A request for "the GEX Candles card on the home page" was taken to the v2 file
@@ -22417,3 +21998,77 @@ app-vite `/app/*` as the live UI; the live UI is now `cbedge-v3` at `/v3/*`.
 
 **Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`) to appear
 on cbedge.net.
+
+---
+
+## 2026-09-11 — v3 Post-Market tab: drop the ladder-coverage banner
+
+**What:** Removed the full-width warn bar above section 3's ladder that read
+"The per-minute ladder for <date> only holds HH:MM–HH:MM, so the <bucket>
+bucket is not drawn — those bars would be an unrecorded window painted as 'no
+activity'. Everything shown is inside the recorded window."
+
+**Why:** The legend already drops any bucket the recording doesn't cover, so
+the banner restated structurally-visible information in a bar that ate a row
+off the chart every short session.
+
+**Files:**
+- `cbedge-v3/src/pages/premarket/PostMarketTab.tsx` — removed the
+  `!histNote && missingBuckets.length > 0 && evCover` warn bar JSX and the
+  now-unused `missingBuckets` useMemo. `evCover` / `activeBuckets` untouched;
+  the `histNote` bar is untouched.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`).
+
+---
+
+## 2026-09-12 — v3 Post-Market §3: pick the build windows (AM/MID/PM · LDN/NY · HOURLY · NOW)
+
+**What:** Section 3's bars were hard-wired to AM / MID / PM. They now sit behind
+a segmented preset picker in the section head:
+
+- **am/mid/pm** (default, unchanged) — open→12:00, 12:00→15:00, 15:00→close.
+- **ldn/ny** — open→11:30 (London still on alongside NY) and 11:30→close (NY
+  alone). 11:30 ET is London's close, so inside RTH that is the honest cut.
+- **hourly** — 09:30→10:00 then every clock hour to the bell.
+- **now** — no build split at all: solid bars for the book as it SITS at the
+  last recorded minute, with "X.X% of board" where the dominant-window label
+  normally prints.
+
+**Why:** "70% AM" is a different strike depending on whether that was the first
+ten minutes or 11:20, and whether London was still trading when it happened.
+
+**How it's wired:** a preset is just a list of `[from, until)` ET windows, so
+coverage filtering, the legend switches, the segment maths and the dominant
+label are all unchanged — `now` is simply the empty list. Colors interpolate
+across the same blue→violet→amber time ramp, so "early is blue, late is amber"
+holds at any bucket count. Switching preset clears the hidden-window set (a
+window hidden under AM/MID/PM has no counterpart under HOURLY).
+
+**Also fixed:** the 15:00→close power-hour column was gated on a bucket starting
+exactly at 15:00, so it would have silently vanished under HOURLY and NOW. It is
+now gated on the recording's own coverage of 15:00, which is what it always
+meant — it is a separate measurement with its own chip and its own scale.
+
+**Files:**
+- `cbedge-v3/src/pages/premarket/PostMarketTab.tsx` — `EvPreset`, `EV_PRESETS`,
+  `rampColor`, `bucketsFor`, `evPreset` state, preset picker in `.sechead`,
+  heading follows the preset, legend chips carry their window name, `pmAnchor`
+  re-gated on coverage, `evRows` computes share/power-hour before the bucket
+  guard.
+- `cbedge-v3/src/pages/premarket/postMarketTab.css.ts` — `.evpreset`, `.pchip`.
+
+**Needs a deploy** (`push.ps1` → GitHub → VPS `docker compose build`).
+
+**Follow-up (same day):** the new `.pchip` rule tripped the theme check —
+`font-size:9.5px` is off the type scale and pushed the file to 21 findings
+against a baseline of 20. The size now sits on `.evpreset` as
+`font-size:var(--text-3xs)` (9px) and `.pchip` inherits it via `font:inherit`.
+Baseline untouched.
+
+**Follow-up 2:** the `.pchip` fix had landed on disk as a stray duplicate file,
+`cbedge-v3/src/pages/premarket/postMarketTab.css-1.ts`, leaving the real
+`postMarketTab.css.ts` still at 21 findings and adding a second unbaselined file
+for check-theme to fail on. The real file now carries the fix (20 findings, at
+baseline) and the latest `PostMarketTab.tsx` is on disk. The stray `-1` file
+must be deleted by hand — it is a duplicate with no imports pointing at it.

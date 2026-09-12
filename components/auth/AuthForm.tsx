@@ -40,6 +40,41 @@ declare global {
   }
 }
 
+/**
+ * Sanitise `next` before navigating to it.
+ *
+ * `next` comes off the query string, so it is attacker-controlled: anyone can
+ * hand out cbedge.net/sign-in?next=https://evil.example and this form used to
+ * walk the user there the instant they signed in. That is a textbook open
+ * redirect, and a login page is the worst place to have one — the victim has
+ * just typed a password and is primed to trust whatever comes next.
+ *
+ * Two shapes are allowed and nothing else:
+ *   - a same-origin PATH ("/home", "/pricing"). "//evil.example" is rejected,
+ *     because a protocol-relative URL is not a path however much it looks like
+ *     one.
+ *   - an https URL on cbedge.net or one of its subdomains. This is what lets
+ *     voltick.cbedge.net send someone here and get them back, which is the
+ *     reason this function exists rather than a plain `startsWith("/")`.
+ *
+ * Anything else falls back to /home rather than erroring: a bad `next` is not
+ * the user's problem to solve on a login screen.
+ */
+function safeNext(next: string | undefined): string {
+  const FALLBACK = "/home";
+  if (!next) return FALLBACK;
+  if (next.startsWith("/") && !next.startsWith("//")) return next;
+  try {
+    const u = new URL(next);
+    if (u.protocol !== "https:") return FALLBACK;
+    const host = u.hostname.toLowerCase();
+    if (host === "cbedge.net" || host.endsWith(".cbedge.net")) return u.toString();
+  } catch {
+    /* not a URL at all */
+  }
+  return FALLBACK;
+}
+
 export default function AuthForm({
   mode,
   next = "/home",
@@ -208,7 +243,7 @@ export default function AuthForm({
             email,
             password,
             turnstileToken: captchaToken,
-            emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
+            emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(safeNext(next))}`,
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -222,7 +257,7 @@ export default function AuthForm({
           return;
         }
         if (data.session) {
-          window.location.assign(next);
+          window.location.assign(safeNext(next));
         } else {
           setNotice("Check your email to confirm your account, then sign in.");
           setConfirm("");
@@ -241,7 +276,7 @@ export default function AuthForm({
           return;
         }
         // Hard navigation so middleware + browser client pick up the new session.
-        window.location.assign(next);
+        window.location.assign(safeNext(next));
       }
     } catch {
       setError("Network error. Please try again.");
