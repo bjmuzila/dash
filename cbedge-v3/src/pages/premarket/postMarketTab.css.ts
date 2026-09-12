@@ -241,9 +241,9 @@ export const POSTMARKET_CSS = `
 .pmk .body.one{grid-template-columns:1fr}
 .pmk .body.one .col.evcol .evchart{flex:0 1 auto;min-height:0;max-height:540px}
 /* The row under the ladder reads as a separate band, not a continuation of it.
-   NAMED `undercard`, NOT `stack`: `.pmk .stack` is already taken further down
+   NAMED 'undercard', NOT 'stack': '.pmk .stack' is already taken further down
    this same sheet by the 13px call/put composition bar — flex, overflow:hidden,
-   sunken fill. Putting `stack` on this row collapsed both panels into a 13px
+   sunken fill. Putting 'stack' on this row collapsed both panels into a 13px
    grey pill and the wall migration and written-vs-traded panels vanished off
    the page. Grep this file before naming a layout class. */
 .pmk .body.undercard{border-top:1px solid var(--line)}

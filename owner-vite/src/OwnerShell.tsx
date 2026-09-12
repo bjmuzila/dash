@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { Link, useLocation, Outlet } from "react-router-dom";
 import { OWNER_SIDEBAR_GROUPS, OWNER_PINNED_LINKS } from "./lib/nav";
 import type { OwnerLink } from "./lib/nav";
-import { OWNER_THEME } from "./lib/theme";
+import { OWNER_THEME, OWNER_LIGHT_BLUE } from "./lib/theme";
 import OwnerToolbar from "./OwnerToolbar";
 
 /**
@@ -341,6 +341,51 @@ export default function OwnerShell() {
       {/* Pinned — above every group, with no group header of its own. Not starrable. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {OWNER_PINNED_LINKS.map((link) => navLink(link, OWNER_THEME.cyan, { star: false }))}
+      </div>
+
+      {/* voltick.cbedge.net — the ONE rail entry that leaves this site.
+          A plain <a target="_blank">, not a navLink: navLink renders a
+          react-router <Link>, which would try to route an absolute URL inside
+          this SPA and land on NotFound. It is also deliberately kept out of
+          lib/nav.ts, because that file is the ROUTE TABLE as well as the rail —
+          an entry there would demand a page module, fail check-owner-pages.mjs,
+          and turn up in the ⌘K index as something the hub would try to
+          navigate() to.
+
+          Not starrable and not reorderable for the same reason: the favorites
+          store is keyed by href and resolves back through HUB_LINKS, which this
+          is not in. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <a
+          href="https://voltick.cbedge.net"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            padding: "6px 9px",
+            borderRadius: 7,
+            fontSize: 13,
+            fontWeight: 600,
+            textDecoration: "none",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            color: OWNER_THEME.text,
+            border: `1px solid ${OWNER_LIGHT_BLUE}33`,
+            background: `${OWNER_LIGHT_BLUE}0f`,
+          }}
+        >
+          <span aria-hidden style={{ width: 16, textAlign: "center", fontSize: 13, color: OWNER_LIGHT_BLUE }}>
+            {/* U+26A1 + U+FE0E — the variation selector forces TEXT
+                presentation. A bare bolt renders as an emoji and the system
+                font paints it its own orange. */}
+            {"\u26A1\uFE0E"}
+          </span>
+          Voltick
+          <span aria-hidden style={{ marginLeft: "auto", fontSize: 11, color: OWNER_LIGHT_BLUE }}>↗</span>
+        </a>
       </div>
 
       {favLinks.length > 0 && (
