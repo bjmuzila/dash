@@ -10583,6 +10583,65 @@ Return exactly one element per input key, in the same order. Never merge, split,
     });
   }
 
+  // ── voltick.cbedge.net gate ────────────────────────────────────────────────
+  //
+  // /api/voltick/verify is what voltick-vite's nginx calls with `auth_request`
+  // BEFORE it serves index.html, /assets/* or /demo/. 200 = serve it, anything
+  // else = the denied page. The point of gating at nginx rather than in React is
+  // that a React gate has already shipped the whole bundle (and the owner
+  // console demo behind /demo/) to the browser before it decides to hide it.
+  //
+  // auth: 'user' is deliberate, not 'subscriber'. A person granted the sandbox
+  // usually is NOT a paying customer, and must not have to be one. 'user' gives
+  // any valid session a userId and 401s a visitor with no cookie, which is
+  // exactly the two answers auth_request wants.
+  //
+  // Owner passes unconditionally; everyone else needs a live voltick_access row
+  // (libDb.canOpenVoltick). A DB hiccup returns 503 and nginx denies, because
+  // failing open on a gate is not a failure mode worth having.
+  //
+  // The body is never read by nginx, so this stays a bare status code plus a
+  // tiny JSON payload for curl.
+  {
+    register('/api/voltick/verify', {
+      auth: 'user', methods: ['GET', 'HEAD'],
+      async handler(req, res, ctx, verdict) {
+        try {
+          const userId = verdict && verdict.userId;
+          if (!userId) { send(res, 401, { ok: false, reason: 'no-session' }); return; }
+          const allowed = await libDb.canOpenVoltick(userId);
+          if (!allowed) { send(res, 403, { ok: false, reason: 'no-voltick-access' }); return; }
+          send(res, 200, { ok: true }, { 'Cache-Control': 'no-store' });
+        } catch (err) {
+          // Deny, but say it is us and not them, so a DB outage does not read as
+          // "you were removed from the list".
+          send(res, 503, { ok: false, reason: 'verify-unavailable', detail: String(err) });
+        }
+      },
+    });
+
+    // Who am I, for the sandbox's own header. Same gate as above, but it
+    // answers 200 with { user: null } for a signed-out visitor instead of 401,
+    // so the SPA can render something rather than fetch-erroring. In practice
+    // nginx has already turned that visitor away before the SPA loads.
+    register('/api/voltick/me', {
+      auth: 'public', identify: true, methods: ['GET'],
+      async handler(req, res, ctx, verdict) {
+        try {
+          const userId = verdict && verdict.userId;
+          if (!userId) { send(res, 200, { user: null }, { 'Cache-Control': 'no-store' }); return; }
+          const u = await libDb.getUserById(userId).catch(() => null);
+          const allowed = await libDb.canOpenVoltick(userId);
+          send(res, 200, {
+            user: { email: u && u.email ? u.email : null, isOwner: Boolean(u && u.is_owner), allowed },
+          }, { 'Cache-Control': 'no-store' });
+        } catch (err) {
+          send(res, 500, { error: String(err) });
+        }
+      },
+    });
+  }
+
   // /api/admin/discord-connections — linked-Discord accounts. discordAvatarUrl
   // inlined from lib/discord.ts.
   {

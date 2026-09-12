@@ -135,6 +135,11 @@ __export(db_exports, {
   getRecentPageVisits: () => getRecentPageVisits,
   getRecentTrades: () => getRecentTrades,
   getSessionWithUser: () => getSessionWithUser,
+  canOpenVoltick: () => canOpenVoltick,
+  listVoltickAccess: () => listVoltickAccess,
+  grantVoltickAccess: () => grantVoltickAccess,
+  getVoltickAccess: () => getVoltickAccess,
+  revokeVoltickAccess: () => revokeVoltickAccess,
   getSnapshots: () => getSnapshots,
   getSubscription: () => getSubscription,
   getSubscriptionByCustomer: () => getSubscriptionByCustomer,
@@ -2702,6 +2707,85 @@ async function consumePasswordReset(tokenHash) {
     [tokenHash]
   );
   return rows[0];
+}
+
+// ── Voltick sandbox access ───────────────────────────────────────────────────
+// Hand-added to this bundle AND to lib/db.ts, per the rule in AGENTS.md: until
+// lib/db.ts and _lib-db.cjs are reconciled, treat this file as a source file and
+// add every new function to both. If these two ever disagree, the owner Admin
+// panel (Next, reads lib/db.ts) and the voltick gate (server-v2, reads this
+// file) will disagree about who has access, and the symptom is a grant that
+// shows in the panel and still 403s at the door.
+//
+// See the voltick_access CREATE TABLE in lib/db.ts for what it does and does
+// not grant. It is NOT part of is_paid and NOT part of is_owner.
+
+var VOLTICK_ROW_SELECT = `SELECT va.email, va.note, va.expires_at, va.granted_at, va.granted_by,
+            u.id AS user_id, (u.password_hash IS NOT NULL) AS has_password
+       FROM voltick_access va
+       LEFT JOIN users u ON LOWER(u.email) = va.email`;
+
+async function listVoltickAccess() {
+  return queryAll(
+    `${VOLTICK_ROW_SELECT}
+      WHERE va.revoked_at IS NULL
+        AND (va.expires_at IS NULL OR va.expires_at > NOW())
+      ORDER BY va.granted_at DESC`
+  );
+}
+
+async function grantVoltickAccess(email, opts = {}) {
+  const norm = String(email || '').trim().toLowerCase();
+  await pgQuery(
+    `INSERT INTO voltick_access (email, note, expires_at, granted_by, granted_at, revoked_at)
+     VALUES ($1, $2, $3, $4, NOW(), NULL)
+     ON CONFLICT (email) DO UPDATE
+       SET note       = EXCLUDED.note,
+           expires_at = EXCLUDED.expires_at,
+           granted_by = EXCLUDED.granted_by,
+           granted_at = NOW(),
+           revoked_at = NULL`,
+    [norm, opts.note ?? null, opts.expiresAt ?? null, opts.grantedBy ?? null]
+  );
+  return queryOne(`${VOLTICK_ROW_SELECT} WHERE va.email = ?`, [norm]);
+}
+
+async function getVoltickAccess(email) {
+  return queryOne(
+    `${VOLTICK_ROW_SELECT}
+      WHERE va.email = ?
+        AND va.revoked_at IS NULL
+        AND (va.expires_at IS NULL OR va.expires_at > NOW())`,
+    [String(email || '').trim().toLowerCase()]
+  );
+}
+
+async function revokeVoltickAccess(email) {
+  const res = await pgQuery(
+    `UPDATE voltick_access SET revoked_at = NOW()
+      WHERE email = $1 AND revoked_at IS NULL`,
+    [String(email || '').trim().toLowerCase()]
+  );
+  return { revoked: (res.rowCount ?? 0) > 0 };
+}
+
+/** THE GATE. Owner always passes; everyone else needs a live grant. Keyed on
+ *  users.id so /api/voltick/verify can answer from a verified session with no
+ *  second lookup. Deliberately NOT folded into getSessionWithUser -- that is on
+ *  the critical path for every paid route and every websocket upgrade. */
+async function canOpenVoltick(userId) {
+  if (!userId) return false;
+  const row = await queryOne(
+    `SELECT (u.is_owner OR va.email IS NOT NULL) AS allowed
+       FROM users u
+       LEFT JOIN voltick_access va
+              ON va.email = LOWER(u.email)
+             AND va.revoked_at IS NULL
+             AND (va.expires_at IS NULL OR va.expires_at > NOW())
+      WHERE u.id = ?`,
+    [userId]
+  );
+  return Boolean(row && row.allowed);
 }
 async function upsertEmTrackerRow(r) {
   const pool = await getDb();
@@ -5750,6 +5834,11 @@ async function getLatestMultGreekStaticSnapshot() {
   getRecentPageVisits,
   getRecentTrades,
   getSessionWithUser,
+  canOpenVoltick,
+  listVoltickAccess,
+  grantVoltickAccess,
+  getVoltickAccess,
+  revokeVoltickAccess,
   getSnapshots,
   getSubscription,
   getSubscriptionByCustomer,

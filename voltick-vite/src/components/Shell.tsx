@@ -101,22 +101,33 @@ export default function Shell() {
           )}
 
           {/*
-            Sign out of Cloudflare Access.
-            /cdn-cgi/access/logout is handled by Cloudflare at the EDGE: the
-            request never reaches this container's nginx, so there is nothing to
-            add to nginx.conf and no route for the SPA to claim. It clears the
-            CF_Authorization cookie for this hostname, which is the only session
-            this site has — there is no login of our own to sign out of.
-            A plain <a>, not a Link: a client-side route would swallow it.
+            Sign out of the CB Edge session — the one this site actually runs
+            on. POST /api/auth/logout clears the domain-wide cookie, then we
+            reload: nginx's auth_request fails on the next request and serves
+            denied.html. There is no client-side "logged out" state to render,
+            and deliberately so. The gate is at the door, not in here.
+
+            This signs you out of cbedge.net too, because it is one session.
+            That is the honest behaviour for a shared cookie; pretending
+            otherwise would mean leaving a live session behind after someone
+            clicked Sign out.
           */}
-          <a
-            href="/cdn-cgi/access/logout"
+          <button
+            type="button"
+            onClick={() => {
+              fetch("/api/auth/logout", { method: "POST", credentials: "include" })
+                .catch(() => { /* log out locally regardless */ })
+                .finally(() => { window.location.href = "/"; });
+            }}
             style={{
               display: "inline-flex",
               alignItems: "center",
               minHeight: 44,
               paddingInline: 12,
               marginRight: -12,
+              background: "none",
+              border: "none",
+              cursor: "pointer",
               fontFamily: MONO,
               fontSize: 11,
               fontWeight: 600,
@@ -126,7 +137,7 @@ export default function Shell() {
             }}
           >
             Sign out
-          </a>
+          </button>
         </div>
 
         {here && (

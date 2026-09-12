@@ -6,36 +6,52 @@ facing and nothing here is load bearing.
 
 ## Access
 
-**Cloudflare Access, in front of the container.** One-time-PIN on an email
-allowlist. There is no sign-in code in this app: adding or revoking someone is a
-change in the Cloudflare dashboard and nothing here rebuilds.
+**Email and password, on the CB Edge account you already have.** No second
+password system, and no Cloudflare Access.
 
-That is deliberate. An allowlist living in a bundle means a redeploy every time
-the list changes, and an allowlist living in the backend means a new endpoint in
-`server-v2` for a sandbox.
+The session cookie is domain-wide, which is the whole trick: it is how
+`owner.cbedge.net` reads `/api/auth/me` today, so a session created by signing
+in at cbedge.net is readable here.
 
-**One list, two hostnames.** `voltick.cbedge.net` and `demo.cbedge.net` admit the
-same people: Brandon plus whoever he adds. So the allowlist lives in a reusable
-**Access Group**, not typed into each application, or the two drift and someone
-revoked from one keeps the other.
+**The gate is nginx, not React.** `auth_request /_vkauth` calls
+`/api/voltick/verify` (`server-v2/api-router.js`) BEFORE serving `index.html`,
+`/assets/*` or `/demo/`. A React gate would have already shipped the whole
+bundle, and the owner console behind `/demo/`, to the browser before deciding to
+hide it. Hidden is not "not sent".
 
-Zero Trust → Access → **Groups** → Add a group:
+| Answer | Meaning | What nginx does |
+|---|---|---|
+| 200 | owner, or a live `voltick_access` row | serves the file |
+| 401 | no session | `denied.html` |
+| 403 | signed in, no grant | `denied.html` |
+| 503 | the backend could not tell | `denied.html` |
 
-| Field | Value |
-|---|---|
-| Group name | `CB Edge insiders` |
-| Include → Emails | `bjmuzila@gmail.com`, plus each email you add |
+`public/denied.html` is the only unauthenticated page, and it is a standalone
+file rather than a route in the SPA for exactly that reason. Gating fails
+CLOSED: a database hiccup denies rather than admits.
 
-Then one self-hosted application per hostname (`voltick.cbedge.net`,
-`demo.cbedge.net`), each with a single Allow policy whose only Include is the
-**`CB Edge insiders`** group. Session 24 hours, One-time PIN as the login method.
-Removing an email from the group kills both links at once.
+### Who gets in
 
-Free plan covers 50 Access users, so this costs nothing.
+`voltick_access` — a table built as a deliberate twin of `comp_access`. A grant
+buys **voltick.cbedge.net and nothing else**: not paid access on cbedge.net
+(that is still a comp) and not owner access.
 
-If a gate ever does move into the app, it fails **closed**, the way
-`owner-vite/src/AuthGate.tsx` does: any error blocks rather than exposing the
-app.
+Managed from the owner console, two surfaces onto one endpoint
+(`/api/admin/voltick-access`):
+
+- **`/owner/admin` → Voltick Access** — the full panel, beside Comped Access:
+  grant with a note and an expiry, resend an invite, revoke.
+- **`/owner` → the Voltick card** — one field and a Grant button, for when you
+  just want someone in.
+
+Granting provisions the CB Edge account with no password and mails a 7-day
+set-password link, the same one-shot token machinery forgot-password uses. The
+recipient never signs up: they click, pick a password, and they are in. An
+account that already has a password gets a plain "the sandbox is open to you"
+note with **no** token in it.
+
+Revoking stamps `revoked_at` and never deletes the account. Access is gone on
+that session's next cache miss, about 8 seconds.
 
 ## /demo · the owner console
 
@@ -138,7 +154,28 @@ docker compose build voltick && docker compose up -d voltick
 Compose declares `depends_on: demo-web`, so `up -d voltick` starts it if it is
 not.
 
-Finally create the Cloudflare Access application for `voltick.cbedge.net` with a
-single Allow policy on the **`CB Edge insiders`** group described above.
-**Create it before routing DNS.** Until that policy exists the subdomain is open
-to anyone who knows the URL, and `/demo/` behind it is the owner console layout.
+The gate needs `dashboard` running (that is where `/api/voltick/verify` lives),
+which `depends_on` already guarantees. Deploy the dashboard before, or with,
+this container: a voltick image whose backend has no `/api/voltick/verify` route
+answers 404 to every `auth_request`, and nginx denies everything, including you.
+
+**Cloudflare Access is no longer used here.** It gated this subdomain until the
+login shipped; delete that application once you have signed in through the new
+gate. Leaving both on means two prompts to get to one page.
+
+### Verifying the gate
+
+```bash
+curl -sI https://voltick.cbedge.net | head -1        # no cookie  -> 200 denied.html
+curl -sI https://voltick.cbedge.net/demo/ | head -1  # no cookie  -> 200 denied.html
+```
+
+nginx serves `denied.html` with a 200, not a 401, because it is a page a person
+reads rather than an error a client handles. To see the gate's own answer:
+
+```bash
+docker exec voltick-web wget -qS -O /dev/null http://dashboard:3002/api/voltick/verify 2>&1 | head -3
+```
+
+That should be `401` from inside the container with no cookie attached. A `404`
+there means the dashboard image predates `/api/voltick/verify`.

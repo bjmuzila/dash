@@ -1017,6 +1017,33 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_comp_access_live
       ON comp_access(email) WHERE revoked_at IS NULL;
 
+    -- Voltick sandbox access. A DELIBERATE TWIN of comp_access above: same
+    -- shape, same email key, same stamp-don't-delete revoke. Read that block
+    -- for the reasoning; only the difference is written here.
+    --
+    -- WHAT IT GRANTS: voltick.cbedge.net, and nothing else. It is NOT joined
+    -- into is_paid, so a voltick grant buys nothing on cbedge.net -- the
+    -- account sees what any signed-in free account sees, plus the sandbox.
+    -- Comping someone stays a separate, deliberate act, and so does is_owner.
+    --
+    -- WHY A SECOND TABLE rather than a column on comp_access: the two lists
+    -- answer different questions and get revoked on different days. Folding
+    -- them together would mean un-comping a customer silently locked them out
+    -- of the sandbox, or the reverse.
+    --
+    -- Read by /api/voltick/verify (server-v2/api-router.js), which voltick's
+    -- nginx calls with auth_request BEFORE serving any file.
+    CREATE TABLE IF NOT EXISTS voltick_access (
+      email        TEXT PRIMARY KEY,
+      note         TEXT,
+      expires_at   TIMESTAMPTZ,
+      granted_by   TEXT,
+      granted_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      revoked_at   TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_voltick_access_live
+      ON voltick_access(email) WHERE revoked_at IS NULL;
+
     -- Churn log. One row per subscription that has ever signalled it is leaving,
     -- written by the Stripe webhook (app/api/stripe/webhook/route.ts).
     --
@@ -4075,6 +4102,109 @@ export async function revokeCompAccess(email: string): Promise<{ revoked: boolea
     [email.trim().toLowerCase()]
   );
   return { revoked: (res.rowCount ?? 0) > 0 };
+}
+
+// ── Voltick sandbox access (owner-granted) ───────────────────────────────────
+// Twin of the comped-access block above. See the voltick_access CREATE TABLE
+// for what it does and does not grant. Owner-only; the API surface is
+// app/api/admin/voltick-access, and the gate is /api/voltick/verify.
+
+export interface VoltickAccessRow {
+  email: string;
+  note: string | null;
+  expires_at: string | null;
+  granted_at: string;
+  granted_by: string | null;
+  /** users.id once an account row exists for this email, else null. Granting
+   *  creates that row up front, so this is normally non-null immediately. */
+  user_id: string | null;
+  /** false = the account exists but has no password yet (invited, hasn't set
+   *  one). The admin card shows this as "no password yet". Null when there is
+   *  no account row at all. */
+  has_password: boolean | null;
+}
+
+const VOLTICK_ROW_SELECT = `SELECT va.email, va.note, va.expires_at, va.granted_at, va.granted_by,
+            u.id AS user_id, (u.password_hash IS NOT NULL) AS has_password
+       FROM voltick_access va
+       LEFT JOIN users u ON LOWER(u.email) = va.email`;
+
+/** Live grants only (not revoked, not expired), newest first. */
+export async function listVoltickAccess(): Promise<VoltickAccessRow[]> {
+  return queryAll<VoltickAccessRow>(
+    `${VOLTICK_ROW_SELECT}
+      WHERE va.revoked_at IS NULL
+        AND (va.expires_at IS NULL OR va.expires_at > NOW())
+      ORDER BY va.granted_at DESC`
+  );
+}
+
+/** Grant (or re-grant). Upsert so re-granting a previously revoked or expired
+ *  email revives that row rather than failing on the primary key -- revoked_at
+ *  is explicitly cleared for exactly that case. */
+export async function grantVoltickAccess(
+  email: string,
+  opts: { note?: string | null; expiresAt?: string | null; grantedBy?: string | null } = {}
+): Promise<VoltickAccessRow | undefined> {
+  const norm = email.trim().toLowerCase();
+  await pgQuery(
+    `INSERT INTO voltick_access (email, note, expires_at, granted_by, granted_at, revoked_at)
+     VALUES ($1, $2, $3, $4, NOW(), NULL)
+     ON CONFLICT (email) DO UPDATE
+       SET note       = EXCLUDED.note,
+           expires_at = EXCLUDED.expires_at,
+           granted_by = EXCLUDED.granted_by,
+           granted_at = NOW(),
+           revoked_at = NULL`,
+    [norm, opts.note ?? null, opts.expiresAt ?? null, opts.grantedBy ?? null]
+  );
+  return queryOne<VoltickAccessRow>(`${VOLTICK_ROW_SELECT} WHERE va.email = ?`, [norm]);
+}
+
+/** Read one LIVE grant. Used by the invite endpoint after it creates the account. */
+export async function getVoltickAccess(email: string): Promise<VoltickAccessRow | undefined> {
+  return queryOne<VoltickAccessRow>(
+    `${VOLTICK_ROW_SELECT}
+      WHERE va.email = ?
+        AND va.revoked_at IS NULL
+        AND (va.expires_at IS NULL OR va.expires_at > NOW())`,
+    [email.trim().toLowerCase()]
+  );
+}
+
+/** Revoke by stamping revoked_at (the row stays as history). */
+export async function revokeVoltickAccess(email: string): Promise<{ revoked: boolean }> {
+  const res = await pgQuery(
+    `UPDATE voltick_access SET revoked_at = NOW()
+      WHERE email = $1 AND revoked_at IS NULL`,
+    [email.trim().toLowerCase()]
+  );
+  return { revoked: (res.rowCount ?? 0) > 0 };
+}
+
+/**
+ * THE GATE. Given a users.id, may this account open voltick.cbedge.net?
+ *
+ * Owner always may. Everyone else needs a live voltick_access row. Deliberately
+ * keyed on user_id rather than email so the caller (/api/voltick/verify) can
+ * answer straight from a verified session with no second lookup, and
+ * deliberately NOT folded into getSessionWithUser(): that function is on the
+ * critical path for every paid route and every websocket upgrade, and the one
+ * time it drifted from its ws-auth twin it 401'd every comped user on the site.
+ * A sandbox subdomain is not worth putting a join there.
+ */
+export async function canOpenVoltick(userId: string): Promise<boolean> {
+  const row = await queryOne<{ allowed: boolean }>(
+    `SELECT (u.is_owner OR va.email IS NOT NULL) AS allowed
+       FROM users u
+       LEFT JOIN voltick_access va
+              ON va.email = LOWER(u.email)
+             AND va.revoked_at IS NULL
+             AND (va.expires_at IS NULL OR va.expires_at > NOW())
+      WHERE u.id = ?`,
+    [userId]
+  );
+  return Boolean(row?.allowed);
 }
 
 export async function deleteSession(tokenHash: string): Promise<void> {

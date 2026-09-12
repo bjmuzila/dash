@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="color-scheme" content="dark">
+<title>Voltick · sign in</title>
+<!--
+  The ONE page voltick serves without checking a session, so it cannot be part
+  of the SPA: the SPA is what must not be handed over yet. Plain HTML, no
+  bundle, no fetch, nothing that reveals what is behind the door.
+
+  nginx sends every 401 / 403 / 503 from auth_request here (see nginx.conf).
+  Voltick palette, inlined: ink #0a0d10 · panel #0e1216 · elev #141a21 ·
+  line #1e2630 · paper #e7ece9 · quiet #c0c5c3 · Volt Blue #2f6bff ·
+  accent text #6aa0ff. No grey text, and no em-dashes in anything read here.
+-->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: #0a0d10;
+    color: #e7ece9;
+    font: 400 15px/1.6 "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    position: relative;
+    isolation: isolate;
+  }
+  /* The page aurora, pinned in pixels. A percentage height drifts until the
+     gradient stops fall outside the viewport and it draws nothing. */
+  body::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 820px;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(1100px 520px at 10% -12%, rgba(47,107,255,0.26), transparent 60%),
+      radial-gradient(880px 460px at 92% -6%, rgba(77,140,255,0.18), transparent 62%);
+  }
+  .card {
+    width: 100%;
+    max-width: 460px;
+    background: #141a21;
+    border: 1px solid #1e2630;
+    border-radius: 12px;
+    box-shadow: 0 8px 26px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.045);
+    padding: 28px 26px;
+  }
+  .mark {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 18px;
+  }
+  .wordmark { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: #e7ece9; }
+  .tag {
+    font: 600 10px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: #6aa0ff;
+    border: 1px solid rgba(47,107,255,0.45);
+    background: rgba(47,107,255,0.10);
+    border-radius: 99px;
+    padding: 4px 10px;
+  }
+  h1 { margin: 0 0 10px; font-size: 20px; font-weight: 700; color: #d6ddd8; }
+  p { margin: 0 0 14px; color: #c0c5c3; font-size: 14px; }
+  ol { margin: 0 0 18px; padding-left: 20px; color: #c0c5c3; font-size: 14px; }
+  li { margin-bottom: 6px; }
+  a.cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 0 18px;
+    border-radius: 99px;
+    border: 1px solid transparent;
+    color: #e7ece9;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    touch-action: manipulation;
+    background:
+      linear-gradient(#0d1117f0, #0d1117f0) padding-box,
+      linear-gradient(118deg, #2f6bffd6, #7fb0ffa6 38%, #2f6bff5c 64%, #4d8cffc4) border-box;
+    transition: box-shadow 200ms ease;
+  }
+  a.cta:hover, a.cta:focus-visible { box-shadow: 0 0 22px 2px rgba(47,107,255,0.30); }
+  a.quiet { color: #6aa0ff; text-decoration: none; }
+  .foot {
+    margin-top: 20px;
+    padding-top: 14px;
+    border-top: 1px solid #1e2630;
+    font: 400 12.5px/1.6 inherit;
+    color: #c0c5c3;
+  }
+  :focus-visible { outline: 2px solid #6aa0ff; outline-offset: 2px; border-radius: 6px; }
+  @media (prefers-reduced-motion: reduce) { * { transition-duration: 0.001ms !important; } }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark">
+      <svg width="18" height="22" viewBox="0 0 18 22" role="img" aria-label="Voltick">
+        <desc>A lightning bolt, the Voltick mark, filled with a Volt Blue to Bolt Sky gradient.</desc>
+        <defs>
+          <linearGradient id="b" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#7fb0ff"/>
+            <stop offset="100%" stop-color="#2f6bff"/>
+          </linearGradient>
+        </defs>
+        <path d="M10.5 1 2 12.4h5.1L6.6 21 16 9.2h-5.2L10.5 1z" fill="url(#b)"/>
+      </svg>
+      <span class="wordmark">Voltick</span>
+      <span class="tag">CB Edge sandbox</span>
+    </div>
+
+    <h1>Sign in to continue</h1>
+    <p>
+      This sandbox is open to a short list of people. It uses your CB Edge account, so there is no
+      separate password to remember.
+    </p>
+    <ol>
+      <li>Sign in at cbedge.net with your email and password.</li>
+      <li>Come back to voltick.cbedge.net.</li>
+    </ol>
+
+    <a class="cta" href="https://cbedge.net/sign-in">Sign in at cbedge.net &rarr;</a>
+
+    <div class="foot">
+      Already signed in and still seeing this? Your account is not on the list yet, or the grant has
+      expired. Ask Brandon to add you.
+      <br><br>
+      No password yet, or forgotten it? Use
+      <a class="quiet" href="https://cbedge.net/sign-in">Forgot password?</a> with the email address
+      the invite went to.
+      <br><br>
+      <a class="quiet" href="/">Try again</a>
+    </div>
+  </main>
+</body>
+</html>
