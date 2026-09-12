@@ -99,6 +99,34 @@ export default function Shell() {
               Contents
             </Link>
           )}
+
+          {/*
+            Sign out of Cloudflare Access.
+            /cdn-cgi/access/logout is handled by Cloudflare at the EDGE: the
+            request never reaches this container's nginx, so there is nothing to
+            add to nginx.conf and no route for the SPA to claim. It clears the
+            CF_Authorization cookie for this hostname, which is the only session
+            this site has — there is no login of our own to sign out of.
+            A plain <a>, not a Link: a client-side route would swallow it.
+          */}
+          <a
+            href="/cdn-cgi/access/logout"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              minHeight: 44,
+              paddingInline: 12,
+              marginRight: -12,
+              fontFamily: MONO,
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: PAPER_QUIET,
+            }}
+          >
+            Sign out
+          </a>
         </div>
 
         {here && (

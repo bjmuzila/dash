@@ -1,5 +1,107 @@
 # Changelog
 
+## 2026-09-12 (f) - voltick: a sign out button
+
+`voltick-vite/src/components/Shell.tsx` gets a Sign out link in the header, on
+every page including the contents board.
+
+It points at `/cdn-cgi/access/logout`, which Cloudflare handles at the EDGE: the
+request never reaches this container's nginx, so there is nothing to add to
+`nginx.conf` and no path for the SPA to claim. It clears the `CF_Authorization`
+cookie for this hostname, which is the only session this site has - there is no
+login of our own to sign out of.
+
+A plain `<a>`, not a `<Link>`: a client-side route would swallow it, the same
+trap as the `/demo/` entry in `nav.ts`.
+
+Why it was needed: signed in, there was no way to see the gate working. A
+`curl -sI` from a shell proves it (302 to the team login, `auth_status: NONE`)
+but that is not something you do from a browser. The button also makes the
+"log in as someone NOT on the allowlist and confirm you are denied" test
+possible, which is the test that checks the allowlist rather than just the
+login.
+
+`https://dawn-mode-a754.cloudflareaccess.com/cdn-cgi/access/logout` signs out of
+every Access application at once, if a per-hostname logout is not enough.
+
+**Note:** the demo console's own "Sign out" pill (`demo-owner/template.html`) is
+still decorative. Pointing it at the same path would make it real on both
+demo.cbedge.net and voltick.cbedge.net/demo/.
+
+**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build voltick`).
+
+## 2026-09-12 (e) - voltick.cbedge.net is live, and the tunnel outage that got us there
+
+Deployed and verified. `voltick-web` on 8088, `/demo/` proxying to `demo-web`,
+both `curl -sI` checks 200 on the box. Cloudflare Access is in front:
+`curl -sI https://voltick.cbedge.net` returns 302 to
+`dawn-mode-a754.cloudflareaccess.com/cdn-cgi/access/login/...` with
+`auth_status: NONE`. The owner hub card is in the shipped bundle
+(`docker exec owners-web grep -rl "voltick.cbedge.net"
+/usr/share/nginx/html/assets` -> `Hub-<hash>.js`).
+
+### The cloudflared outage - read this before editing config.yml again
+
+Adding the voltick rule took the WHOLE TUNNEL down for a few minutes: every
+hostname, not just voltick. Two causes, both worth remembering.
+
+**1. The rule landed BELOW the catch-all.** `- service: http_status:404` must be
+the LAST entry in `ingress:`. Anything after it is unreachable, and cloudflared
+refuses to start rather than silently ignoring it, so the service failed its
+restart and took cbedge.net, owner, budget, recipe, affiliate, daily and demo
+with it.
+
+`cloudflared tunnel ingress validate` names this in one line:
+
+    Validation failed: Rule #10 is matching the hostname '', but this will match
+    every hostname, meaning the rules which follow it will never be triggered.
+
+**ALWAYS run `cloudflared tunnel ingress validate` BEFORE
+`systemctl restart cloudflared`.** Validate reads the file without touching the
+running tunnel; restart on a bad file is an outage. The sequence is validate ->
+restart -> `systemctl is-active cloudflared` -> `cloudflared tunnel ingress rule
+https://<host>`.
+
+Note `cloudflared tunnel ingress url` is NOT a command. It is `ingress rule`.
+
+**2. `nano` inside a pasted multi-command block.** The lines after the `nano`
+line get typed into the editor buffer instead of the shell. Edit
+`/etc/cloudflared/config.yml` with a `cat > ... <<'EOF'` heredoc that rewrites
+the whole file, or with `sed -i '<n>s|.*|<new line>|'` by line number. Never
+paste a block that contains an interactive editor, and wait for the prompt
+between commands - queued pastes landed inside a running command more than once
+this session.
+
+There is a backup at `/etc/cloudflared/config.yml.bak` from before the rewrite.
+
+### A false alarm worth not chasing twice
+
+Pasting VPS output into a chat client turns `www.cbedge.net` into a markdown
+link, so `cat config.yml` appeared to show
+`- hostname: [www.cbedge.net](https://www.cbedge.net)` even after two successful
+`sed` replacements. The FILE was always fine. `grep -c 'hostname: \['
+/etc/cloudflared/config.yml` returns 0 and gives the linkifier nothing to chew
+on - use a check whose output cannot be rewritten, not a `cat`.
+
+### Cloudflare Access, as actually built
+
+The dashboard has been renamed since demo-owner's README was written:
+
+- Access groups are now **Rule groups**, a TAB under
+  Zero Trust -> Access controls -> Policies.
+- An application is Access controls -> Applications -> Create new application ->
+  **Public DNS** (not Private destinations / Workers / Service auth - voltick is
+  a real DNS record on the tunnel).
+
+A policy cannot reference a rule group that does not exist yet: the Include
+dropdown reads "No valid options" and saving fails with
+`access.api.error.invalid_request: include field should not be empty`. Create
+the policy with Include -> **Emails** first; swap it to a rule group later, once
+there are enough people to be worth one list.
+
+**Still open:** `demo.cbedge.net`'s policy has its own email list. Point both at
+one `CB Edge insiders` rule group when that gets built.
+
 ## 2026-09-12 (d) - owner hub: a card for voltick.cbedge.net
 
 `owner-vite/src/pages/Hub.tsx` (the /owner overview, the command-bar hub) gets
