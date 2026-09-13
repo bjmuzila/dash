@@ -798,50 +798,30 @@ export function GexCandlesCard({
   const activeDay = replayOn ? (replayDay || barDays[0] || '') : ''
 
   /**
-   * ── Live: TODAY only, from 09:30 ET ────────────────────────────────────────
+   * ── Live: THE NEWEST `tapeDays` SESSIONS, and nothing else ─────────────────
    *
-   * The tape is pulled `HISTORY_DAYS` deep because the replay day picker and
-   * the roll-up need it, but the LIVE card should be showing the session that
-   * is happening — not today's bars with a block of yesterday's tape hanging
-   * off the left edge at yesterday's prices, which is what the board drew all
-   * session.
+   * The tape is pulled several calendar days deep because the replay day picker
+   * and the roll-up need it, but the LIVE card should be showing the session
+   * that is happening — not today's bars with a block of last week hanging off
+   * the left edge at last week's prices.
    *
-   * So from the cash open the live card scopes itself to today's ET date.
-   * Before 09:30 the scope is OFF and the tape is untouched: pre-market there
-   * is no session to frame yet, and the prior session plus the overnight is
-   * exactly the context you want at 06:00.
+   * COUNTED IN SESSIONS THE TAPE ACTUALLY HAS (`barDays`), never in calendar
+   * days and never against the wall clock. That is the whole mechanism, and it
+   * is what the first version of this got wrong: it anchored on "today's ET
+   * date once it is past 09:30", so on a Saturday — or a holiday, or the first
+   * minutes after the open before the recorder has written a bar — today was
+   * not in `barDays`, the filter matched nothing, and the fallback handed back
+   * the WHOLE seven-day tape. 2D drew four days. Anchoring at the newest
+   * session the payload holds cannot miss: the tape has no future days in it,
+   * so `barDays[0]` IS today whenever today has traded, and is Friday on a
+   * Saturday.
    *
-   * REPLAY IS UNTOUCHED. The scope is keyed off `!replayOn`, so `activeDay`
-   * still wins wherever it is set — the day picker keeps every day in
-   * `barDays`, and the scrubber, the timeline and the clip all behave exactly
-   * as before.
+   * 1D is therefore exactly one session — the current one — at every hour of
+   * the day, including pre-market and over a weekend.
    *
-   * The 30s ticker is what closes the scope at the open without a reload. It
-   * only runs live, and it only re-renders (the memo below is what actually
-   * re-filters), so it costs nothing measurable.
-   */
-  const [openTick, setOpenTick] = useState(0)
-  useEffect(() => {
-    if (replayOn) return
-    const id = setInterval(() => setOpenTick((n) => n + 1), 30_000)
-    return () => clearInterval(id)
-  }, [replayOn])
-  const liveToday = useMemo(() => {
-    void openTick // re-evaluate on the ticker
-    if (replayOn) return ''
-    const now = Date.now()
-    return etMinutesOfDay(now) >= RTH_OPEN_MIN ? etDay(now) : ''
-  }, [replayOn, openTick])
-
-  /**
-   * The tape, scoped to the rewound session. Live, the newest `tapeDays`
-   * sessions ending at today.
-   *
-   * COUNTED IN SESSIONS THE TAPE ACTUALLY HAS, never in calendar days: `barDays`
-   * is the ET days that came back with bars in them, so 3D on a Tuesday reaches
-   * Thu-Fri-Mon over a holiday weekend by itself, with no market-calendar table
-   * to keep current. It is also why the request above widens — a window the
-   * payload cannot fill is a picker that silently does less than it says.
+   * No ticker any more either. The old 30s interval existed to notice 09:30
+   * passing; now the scope moves when the poll brings the first bar of the new
+   * session, which is the same moment and costs nothing to detect.
    *
    * REPLAY IS UNTOUCHED. `activeDay` is one picked session by construction and
    * still wins outright: the scrubber, the timeline and the clip all span that
@@ -849,25 +829,14 @@ export function GexCandlesCard({
    */
   const dayBars = useMemo(() => {
     if (activeDay) return allBars.filter((b) => etDay(b.t) === activeDay)
-    const want = settings.tapeDays
-    // Pre-market, at 1D, the scope stays OFF exactly as it was — there is no
-    // session to frame yet and the prior day plus the overnight is the context
-    // you want at 06:00. Above 1D the picker is an explicit ask, so honour it
-    // from the newest session the tape holds.
-    if (!liveToday) {
-      if (want <= 1) return allBars
-      const keep = new Set(barDays.slice(0, want))
-      const scoped = allBars.filter((b) => keep.has(etDay(b.t)))
-      return scoped.length ? scoped : allBars
-    }
-    const from = barDays.indexOf(liveToday)
-    const keep = new Set(from >= 0 ? barDays.slice(from, from + want) : [liveToday])
+    if (!barDays.length) return allBars
+    const keep = new Set(barDays.slice(0, settings.tapeDays))
     const scoped = allBars.filter((b) => keep.has(etDay(b.t)))
     // Same fallback rule as filterSession: an empty chart is a worse answer
-    // than an unscoped one. Reachable on a holiday, and in the first seconds
-    // after the open before the recorder has written today's first bar.
+    // than an unscoped one. Unreachable while `barDays` is derived from
+    // `allBars`, and kept so it stays unreachable if that ever changes.
     return scoped.length ? scoped : allBars
-  }, [allBars, barDays, activeDay, liveToday, settings.tapeDays])
+  }, [allBars, barDays, activeDay, settings.tapeDays])
 
   // ── The replay cursor ──────────────────────────────────────────────────────
   // The timeline is the BARS, not the GEX columns: the candles are always there

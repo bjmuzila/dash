@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-09-13 (a) - GEX Candles (v3): the day selector now actually scopes
+
+Reported with a screenshot: 2D was drawing FOUR days (Sep 8-11).
+
+Yesterday's `dayBars` anchored the window on "today's ET date, once the clock is
+past 09:30" (`liveToday`). On a Saturday - and on a holiday, and in the first
+minutes after the open before the recorder has written a bar - that date is not
+in `barDays`, so the filter matched nothing and the empty-result fallback handed
+back the whole 7-day tape.
+
+Now the window is anchored at `barDays[0]`, the newest session the payload
+actually holds. The tape cannot contain future days, so that IS today whenever
+today has traded and is Friday on a Saturday. 1D is one session at every hour,
+including pre-market and over a weekend; 2D is two, 3D is three.
+
+- Dropped `liveToday`, the `openTick` state and its 30s interval. They existed
+  to notice 09:30 passing; the scope now moves when the poll brings the first
+  bar of the new session, which is the same moment.
+- Also drops the old pre-market exception (scope OFF before 09:30). 1D means the
+  current day, as asked.
+
+**Changed (cbedge-v3):**
+- `src/board/gexCandles/GexCandlesCard.tsx` - `dayBars` memo and the block
+  comment above it.
+
+**Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build`).
+
 ## 2026-09-12 (i) - owner rail: a Voltick link on every owner page
 
 `owner-vite/src/OwnerShell.tsx` gains one entry in the left rail, under Hub and
