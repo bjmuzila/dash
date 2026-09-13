@@ -10356,6 +10356,59 @@ Return exactly one element per input key, in the same order. Never merge, split,
     },
   });
 
+  // /api/core-hold — DOES THE OPENING BRACKET HOLD? Owner.
+  //
+  //   GET /api/core-hold?days=60[&end=YYYY-MM-DD][&scope=&basis=][&symbols=A,B]
+  //   → { ok, days, end, scope, basis, dates:[first,last], sessions_in_window,
+  //       totals, rows: [{ symbol, sessions, scored, inside, inside_rate,
+  //                        never_left_rate, above_core_rate, width_pct, … }] }
+  //
+  // The put wall and call wall AS CAPTURED AT 09:29 are a range; the CORE sits
+  // inside it. Per symbol, over the newest N recorded sessions: how often the
+  // close landed inside that range, how often price never left it at all, which
+  // side of the CORE the inside closes finished on, and — the control — how wide
+  // the bracket was as a percent of the open.
+  //
+  // READ width_pct BEFORE inside_rate. A bracket 6% wide that contains the close
+  // 95% of the time has said nothing. The model, the sources and what is
+  // deliberately not counted (a session that opened OUTSIDE its own bracket, an
+  // inverted one) are all in server-v2/core-hold.js.
+  //
+  // Owner-gated because it is a research surface, not a product one: it reads
+  // every symbol at once and the honest answer may be "the bracket is just
+  // width", which is a finding, not a feature.
+  register('/api/core-hold', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const walls = require('./walls-recorder');
+        const { coreHold } = require('./core-hold');
+        const u = new URL(req.url || '/', 'http://localhost');
+        const SYM_RE = /^[A-Z][A-Z.]{0,11}$/;
+        const listRaw = String(u.searchParams.get('symbols') || '');
+        const symbols = listRaw
+          ? [...new Set(listRaw.split(',').map((v) => String(v).trim().toUpperCase()).filter((v) => SYM_RE.test(v)))].slice(0, 60)
+          : null;
+
+        const pool = walls.getPool();
+        if (!pool || !(await walls.ensureSchema())) {
+          send(res, 503, { ok: false, error: 'no DB' }, { 'Cache-Control': NO_STORE });
+          return;
+        }
+        const out = await coreHold(pool, {
+          days: u.searchParams.get('days'),
+          end: u.searchParams.get('end'),
+          scope: u.searchParams.get('scope'),
+          basis: u.searchParams.get('basis'),
+          symbols,
+        });
+        send(res, 200, out, { 'Cache-Control': NO_STORE });
+      } catch (e) {
+        send(res, 500, { ok: false, error: String(e?.message || e) }, { 'Cache-Control': NO_STORE });
+      }
+    },
+  });
+
   // ── Owner admin routes (all fail-closed owner-gated in the originals via
   // getServerUserId+OWNER_USER_ID → enforceAuth 'owner'). All libDb-backed. ──
 

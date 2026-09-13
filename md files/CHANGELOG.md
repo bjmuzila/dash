@@ -1,5 +1,73 @@
 # Changelog
 
+## 2026-09-13 (e) - Open bracket: does the close land inside the 09:29 walls?
+
+New owner study. `/api/core-hold` + an **Open bracket** tab on `/dev/results`,
+beside Confidence and Contracts.
+
+```
+call wall ────────────────────────────  ceiling
+                  CORE                  the heavy node inside it
+put wall  ────────────────────────────  floor
+```
+
+Take the put wall and call wall **as captured at 09:29**, treat them as a range,
+and ask the only thing that range is really claiming: did the close land inside
+it. Per symbol, over the newest N recorded sessions.
+
+**The levels are frozen at the open.** They roll during the day — that is what
+the level log draws — but the bracket you could have traded is the one you knew
+at 09:29. A wall that rolled down to meet price at 14:00 does not get to score
+itself as having contained it. "Walls rolled" sits beside the rate as context,
+never inside it.
+
+**Four numbers, and the third one is the point:**
+
+- **Closed inside** — the headline. Full history: it needs an open capture and a
+  daily close, and neither table is pruned.
+- **Never left** — price never traded outside the bracket at all, not just where
+  it finished. Needs the intraday path, so it is bounded by
+  `scanner_snapshots` retention (10 days) and carries its own denominator rather
+  than quietly shrinking the headline's.
+- **Bracket width** — median width as a percent of the 09:29 spot. THE CONTROL.
+  A bracket 6% wide that contains the close 95% of the time has told you
+  nothing; one 1.1% wide that does it 70% of the time is a level. Printed in
+  cyan, not the win-rate colours, because it is not a score — colouring a wide
+  bracket green would be the exact mistake the column exists to prevent. Sorting
+  by it puts the NARROWEST first.
+- **Closed above the CORE** — of the closes that landed inside, which side of the
+  CORE they finished on. The CORE's half of the question: containment is one
+  thing, a CORE that works as a midline is another.
+
+**Not counted, and why.** A session that opened OUTSIDE its own bracket (spot
+already through a wall at 09:29) is reported as "opened outside" and left out of
+the rate — price is not being contained there, it is being chased, and averaging
+the two answers neither. An INVERTED bracket (call wall below put wall, which
+happens on a thin chain when both walls land on the same strikes) is dropped
+entirely: "inside" has no meaning and the width would be negative. A close
+exactly ON a wall counts as inside — the wall is the edge of the range.
+
+**Sources, chosen so the window is not 10 days.** Opens and rolls from
+`walls_log`; neither pruned. The close is `wall_atr.close` — true daily bars
+from the reach backfill — NOT `scanner_snapshots`, which retention cuts at 10
+days; the last 5-minute scanner spot is only the fallback for sessions the
+backfill has not reached (in practice today), and how many closes came from it
+is printed under the table. `wall_atr` belongs to walls-reach, so a missing
+table is caught and the fallback carries the arm rather than 500ing the study.
+
+Totals are POOLED, not an average of the per-symbol rates — a ticker with four
+sessions must not weigh the same as SPX with sixty. Width is the exception: a
+median of medians, since pooling widths across symbols would only measure which
+tickers are volatile.
+
+Window is the newest N sessions the recorder wrote, globally (20 / 60 / 120 /
+All, default 60), under the selected variant — one window for everybody, so the
+per-symbol Sessions column shows who was missing instead of hiding it behind a
+private window. No poll: nothing changes until tomorrow's 09:29 capture.
+
+Files: `server-v2/core-hold.js` (new), `server-v2/api-router.js`,
+`owner-vite/src/pages/Results.tsx`.
+
 ## 2026-09-13 (d) - Snapshots: a ticker logo in the caption, and hidden rows give their height back
 
 **The Level Log's variant line is out of the picture.** `non-0DTE · vol-only GEX ·

@@ -1,11 +1,16 @@
 /**
  * /dev/results — owner-only results board.
  *
- * Two tabs: Confidence (MVC checkpoint hit rates, /api/confidence/checkpoints)
- * and Contracts (the CB contract trade log, /api/cb-trades). Inherits the owner
- * guard from app/dev/layout.tsx.
+ * Three tabs: Confidence (MVC checkpoint hit rates,
+ * /api/confidence/checkpoints), Contracts (the CB contract trade log,
+ * /api/cb-trades) and Open bracket (does the close land inside the 09:29 put
+ * wall → call wall range, /api/core-hold). Inherits the owner guard from
+ * app/dev/layout.tsx.
  *
- * The ICT Results, Fail Rate and Walls tabs were removed — see CHANGELOG.
+ * The ICT Results and Fail Rate tabs were removed — see CHANGELOG. The old
+ * Walls tab went with them; Open bracket is not it rebuilt, it is a narrower
+ * question asked of the OPEN levels only, against tables that are never
+ * pruned.
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -32,7 +37,7 @@ function wrColor(wr: number | null): string {
   return RED;
 }
 
-type TabKey = "checkpoints" | "contracts";
+type TabKey = "checkpoints" | "contracts" | "bracket";
 
 export default function Results() {
   const [tab, setTab] = useState<TabKey>("checkpoints");
@@ -62,9 +67,10 @@ export default function Results() {
       <div className="tab-strip" style={{ display: "flex", gap: 8, marginBottom: 18, flexShrink: 0 }}>
         <button onClick={() => setTab("checkpoints")} style={tabBtn("checkpoints")}>Confidence</button>
         <button onClick={() => setTab("contracts")} style={tabBtn("contracts")}>Contracts</button>
+        <button onClick={() => setTab("bracket")} style={tabBtn("bracket")}>Open bracket</button>
       </div>
 
-      {tab === "contracts" ? <TradesView /> : <CheckpointsView />}
+      {tab === "contracts" ? <TradesView /> : tab === "bracket" ? <BracketView /> : <CheckpointsView />}
     </PageShell>
   );
 }
@@ -1013,4 +1019,229 @@ function etClock(ts: number) {
   const t = Number(ts);
   if (!Number.isFinite(t) || t <= 0) return "—";
   return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: true }).format(new Date(t));
+}
+
+// ── Open bracket tab: does price close inside the 09:29 walls? ──
+//
+//     call wall ────────────────────────────  ceiling
+//                       CORE                  the heavy node inside it
+//     put wall  ────────────────────────────  floor
+//
+// The levels are FROZEN AT THE OPEN — a wall that rolled down to meet price at
+// 14:00 must not get to score itself as having contained it. `Rolled` is beside
+// the rate as context, never inside it.
+//
+// READ WIDTH FIRST. A bracket 6% wide that contains the close 95% of the time
+// has told you nothing; one 1.1% wide that does it 70% of the time is a level.
+// The width column is the control arm and it is why this table is not a list of
+// 90%s to be pleased about. Model and caveats: server-v2/core-hold.js.
+type BracketRow = {
+  symbol: string;
+  sessions: number; scored: number; inside: number;
+  opened_outside: number; inverted: number; no_close: number; incomplete: number;
+  scanner_closes: number;
+  above_core: number; below_core: number;
+  path_sessions: number; never_left: number;
+  rolled: number;
+  inside_rate: number | null; never_left_rate: number | null;
+  rolled_rate: number | null; above_core_rate: number | null; width_pct: number | null;
+};
+type BracketResp = {
+  ok?: boolean; days?: number; scope?: string; basis?: string;
+  dates?: [string, string]; sessions_in_window?: number;
+  // Pooled, not an average of the per-symbol rates — a ticker with four sessions
+  // must not weigh the same as SPX with sixty.
+  totals?: Omit<BracketRow, "symbol"> & { symbols: number };
+  rows?: BracketRow[];
+};
+
+type SortKey = "symbol" | "sessions" | "inside" | "never" | "width" | "rolled";
+
+const DAY_OPTS = [20, 60, 120, 500] as const;
+
+function BracketView() {
+  const [resp, setResp] = useState<BracketResp | null>(null);
+  const [days, setDays] = useState<number>(60);
+  const [scope, setScope] = useState<"0dte" | "agg">("0dte");
+  const [basis, setBasis] = useState<"oivol" | "vol">("oivol");
+  const [sort, setSort] = useState<SortKey>("sessions");
+  const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await fetch(`/api/core-hold?days=${days}&scope=${scope}&basis=${basis}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j: BracketResp = await r.json();
+      if (!j?.ok) throw new Error(String((j as { error?: string })?.error || "no data"));
+      setResp(j);
+      setLoaded(true);
+    } catch (e) { setErr(String(e)); setLoaded(true); }
+  }, [days, scope, basis]);
+
+  // No poll. Nothing in this window changes until tomorrow's 09:29 capture, and
+  // a 500-session scan on a timer is a query nobody asked for.
+  useEffect(() => { setLoaded(false); load(); }, [load]);
+
+  const rows = useMemo(() => {
+    const list = [...(resp?.rows ?? [])];
+    const val = (r: BracketRow): number => {
+      switch (sort) {
+        case "inside": return r.inside_rate ?? -1;
+        case "never": return r.never_left_rate ?? -1;
+        // Narrowest first — a tight bracket is the interesting end of this one.
+        case "width": return r.width_pct == null ? -Infinity : -r.width_pct;
+        case "rolled": return r.rolled_rate ?? -1;
+        default: return r.sessions;
+      }
+    };
+    if (sort === "symbol") list.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    else list.sort((a, b) => val(b) - val(a) || a.symbol.localeCompare(b.symbol));
+    return list;
+  }, [resp, sort]);
+
+  const t = resp?.totals;
+  const pctTxt = (n: number | null | undefined) => (n == null ? "—" : `${Math.round(n * 100)}%`);
+  const wTxt = (w: number | null | undefined) => (w == null ? "—" : `${w.toFixed(2)}%`);
+
+  const chip = (on: boolean): React.CSSProperties => ({
+    fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+    border: `1px solid ${on ? C.cyan : C.border}`,
+    background: on ? rgba(C.cyan, 0.18) : "transparent",
+    color: on ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
+  });
+
+  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const thSort = (key: SortKey): React.CSSProperties => ({ ...th, cursor: "pointer", color: sort === key ? C.cyan : C.label });
+  const td: React.CSSProperties = { padding: "10px 14px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)", color: C.label };
+
+  // A rate cell: the percentage in the win-rate colour, the fraction beside it
+  // in plain type. The fraction is not decoration — 3/3 and 41/60 are the same
+  // number and not the same evidence, and this table exists to tell them apart.
+  const rateCell = (rate: number | null, hit: number, n: number) => (
+    <td style={td}>
+      <span style={{ fontWeight: 800, color: wrColor(rate) }}>{pctTxt(rate)}</span>
+      <span style={{ color: MUTED }}>{n > 0 ? `  ${hit}/${n}` : "  —"}</span>
+    </td>
+  );
+
+  const statCard = (label: string, sub: string, big: string, color: string, line: string) => (
+    <div className="card-hover" style={{ ...CARD, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+        <span style={{ fontSize: 17, fontWeight: 800, color: C.label }}>{label}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>pooled</span>
+      </div>
+      <div style={{ fontSize: 14, color: C.label }}>{sub}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span style={{ fontSize: 30, fontWeight: 800, color, fontFamily: "var(--font-mono)", lineHeight: 1 }}>{big}</span>
+        <span style={{ fontSize: 14, color: MUTED, fontFamily: "var(--font-mono)" }}>{line}</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Open bracket</span>
+        <span style={{ fontSize: 14, color: C.label }}>
+          the 09:29 put wall → call wall, frozen · did the close land inside it
+          {resp?.dates ? ` · ${resp.dates[0]} → ${resp.dates[1]} (${resp.sessions_in_window} sessions)` : ""}
+        </span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {DAY_OPTS.map((d) => (
+            <button key={d} onClick={() => setDays(d)} style={chip(days === d)}>{d === 500 ? "All" : `${d}d`}</button>
+          ))}
+          <button onClick={() => setScope("0dte")} style={chip(scope === "0dte")}>0DTE</button>
+          <button onClick={() => setScope("agg")} style={chip(scope === "agg")}>Non-0DTE</button>
+          <button onClick={() => setBasis("oivol")} style={chip(basis === "oivol")}>OI+Vol</button>
+          <button onClick={() => setBasis("vol")} style={chip(basis === "vol")}>Vol only</button>
+        </div>
+      </div>
+
+      {t && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginBottom: 22 }}>
+          {statCard("Closed inside", "between the open put wall and call wall", pctTxt(t.inside_rate), wrColor(t.inside_rate),
+            `${t.inside} / ${t.scored} sessions${t.opened_outside ? ` · ${t.opened_outside} opened outside` : ""}`)}
+          {statCard("Never left", "price never traded outside it at all", pctTxt(t.never_left_rate), wrColor(t.never_left_rate),
+            `${t.never_left} / ${t.path_sessions} · last 10 days only`)}
+          {/* Deliberately NOT in the win-rate colours. It is the control, not a
+              score — colouring a wide bracket green would be the exact mistake
+              this card exists to prevent. */}
+          {statCard("Bracket width", "median, as a percent of the 09:29 spot", wTxt(t.width_pct), C.cyan,
+            "read this before the rate")}
+          {statCard("Closed above the CORE", "of the closes that landed inside", pctTxt(t.above_core_rate), C.purple,
+            `${t.above_core} above · ${t.below_core} below`)}
+        </div>
+      )}
+
+      {err && <div style={{ color: RED, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load the bracket study: {err}</div>}
+
+      {!loaded ? (
+        <div style={{ color: C.label, fontSize: 14 }}>Reading the level log…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14 }}>
+          No recorded opens on this variant yet.
+        </div>
+      ) : (
+        <div style={{ ...CARD, padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <th style={thSort("symbol")} onClick={() => setSort("symbol")}>Symbol</th>
+                  <th style={thSort("sessions")} onClick={() => setSort("sessions")}>Sessions</th>
+                  <th style={thSort("width")} onClick={() => setSort("width")}>Width</th>
+                  <th style={thSort("inside")} onClick={() => setSort("inside")}>Closed inside</th>
+                  <th style={thSort("never")} onClick={() => setSort("never")}>Never left</th>
+                  <th style={th}>Above core</th>
+                  <th style={th}>Opened outside</th>
+                  <th style={thSort("rolled")} onClick={() => setSort("rolled")}>Walls rolled</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.symbol} style={{ borderBottom: `1px solid ${rgba(C.border, 0.5)}` }}>
+                    <td style={{ ...td, fontWeight: 800 }}>{r.symbol}</td>
+                    <td style={td}>{r.sessions}</td>
+                    <td style={{ ...td, color: C.cyan, fontWeight: 700 }}>{wTxt(r.width_pct)}</td>
+                    {rateCell(r.inside_rate, r.inside, r.scored)}
+                    {rateCell(r.never_left_rate, r.never_left, r.path_sessions)}
+                    <td style={{ ...td, color: MUTED }}>
+                      {r.above_core + r.below_core > 0 ? `${pctTxt(r.above_core_rate)}  ${r.above_core}/${r.above_core + r.below_core}` : "—"}
+                    </td>
+                    <td style={{ ...td, color: MUTED }}>{r.opened_outside || "—"}</td>
+                    <td style={{ ...td, color: MUTED }}>{pctTxt(r.rolled_rate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* The caveats worth carrying under the table rather than in a doc nobody
+          opens. All of them are about the DENOMINATOR, which is where a
+          hit-rate table lies if it is going to. */}
+      <div style={{ marginTop: 14, fontSize: 14, color: MUTED, lineHeight: 1.6 }}>
+        <div>
+          Levels are frozen at 09:29 — a wall that rolled later is still measured at
+          where it opened, which is the only bracket you could have traded. “Walls
+          rolled” is how often they moved at all.
+        </div>
+        <div>
+          A session that opened OUTSIDE its own bracket is counted in “opened outside”
+          and left out of the rate — price is not being contained there, it is being
+          chased. A close exactly on a wall counts as inside.
+          {t && t.inverted > 0 ? ` ${t.inverted} inverted bracket(s) (call wall under put wall) dropped.` : ""}
+          {t && t.no_close > 0 ? ` ${t.no_close} session(s) had no close to compare.` : ""}
+        </div>
+        <div>
+          “Never left” reads the 5-minute scanner path, which retention cuts at 10 days —
+          its denominator is smaller than the headline’s on purpose, never folded into it.
+          {t && t.scanner_closes > 0 ? ` ${t.scanner_closes} close(s) are the last 5-minute spot rather than the official daily bar.` : ""}
+        </div>
+      </div>
+    </>
+  );
 }
