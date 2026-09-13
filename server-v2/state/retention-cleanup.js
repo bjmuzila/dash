@@ -57,7 +57,15 @@ const RETENTION = {
   // The daily engine (test=strike-gex-move) has no such problem: it reads
   // eod_strike_gex, which keeps 400 sessions and is pruned by its own recorder.
   strike_growth:              Number(process.env.RETENTION_STRIKE_GROWTH_DAYS || 5),
-  option_strike_gex_history:  Number(process.env.RETENTION_GEX_HISTORY_DAYS || 10),
+  // 5 days. The live panels that read this table — the ES-Candles heatmap, the
+  // GEX bubble trail, the strike rail — never look back further than a week,
+  // and the table is the single largest object in the database (~19GB / ~20M
+  // rows at 11 days resident, on a 30GB plan). Everything past 5 days was
+  // paying disk for a lookback nothing queries.
+  //
+  // NOTE: a VPS env override of RETENTION_GEX_HISTORY_DAYS wins over this
+  // default. Clear or set it to 5 there, or this number changes nothing.
+  option_strike_gex_history:  Number(process.env.RETENTION_GEX_HISTORY_DAYS || 5),
   // Sessions of option_strike_gex_history kept at FULL 1-minute resolution.
   // Older days survive, thinned to the 5-minute grid. See the thinning note on
   // the DELETE below — this is the number that pays for the multi-ticker roster.

@@ -18,7 +18,8 @@
 //     chrome. v3 already has ONE way to make a card full size — the expand
 //     control every Card carries (design/primitives/Expand.tsx) — and the range
 //     switch that made the popout worth opening lives in the toolbar, where it
-//     works at either size. So TODAY / 5 SESSIONS is a control, not a mode.
+//     works at either size. So the range is a control, not a mode — and it now
+//     runs TODAY / 5 SESSIONS / MONTHLY / ALL TIME, which a modal could not.
 //   · v2 defaulted the popout to 5 sessions because opening it was an explicit
 //     act. Here the range is always on screen, so it opens on TODAY: up to
 //     thirteen requests must not be the cost of landing on the page.
@@ -63,6 +64,7 @@ import { SegGroup } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
 import { Page } from '@/design/primitives/Page'
 import { usePageSymbol } from '@/data/symbol'
+import { tickerLogoUrls } from '@/pages/economicCalendar/ChipLogo'
 import { TickerRail } from '@/pages/levelLog/TickerRail'
 import { MIG_H, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
 import {
@@ -77,8 +79,37 @@ import {
 } from '@/pages/levelLog/wallData'
 import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 
-/** How many sessions the week view asks for. v2's number. */
-const WEEK_SESSIONS = 5
+/**
+ * THE RANGE SWITCH — how many recorded sessions the chart is drawn from.
+ *
+ * TODAY is one known date. 5 SESSIONS is v2's week view and v2's number.
+ * MONTHLY and ALL TIME are v3's, and they exist because the question the week
+ * view answers — did this wall hold its strike across sessions — is a better
+ * question the further back it is asked: a CORE that has sat on the same strike
+ * for six weeks is a different object from one that rolled on Tuesday.
+ *
+ * They cost ONE request each, not one per session: /api/walls-range returns the
+ * newest N sessions the symbol actually recorded, with a 5-minute price line
+ * per session, in a single query (see wallData.ts). MONTHLY is 21 sessions — a
+ * trading month, not 30 calendar days — and ALL TIME asks for the route's own
+ * ceiling, so it is "everything the recorder has" without the page having to
+ * know how much that is.
+ */
+type RangeKey = '1' | '5' | '21' | 'all'
+
+/** Sessions requested per range. `all` is /api/walls-range's cap (260). */
+const RANGE_SESSIONS: Record<RangeKey, number> = { '1': 1, '5': 5, '21': 21, all: 260 }
+
+/** How the range reads in the snapshot caption. Empty for TODAY — the date says it. */
+const RANGE_TAG: Record<RangeKey, string> = {
+  '1': '',
+  '5': '5 sessions',
+  '21': '21 sessions',
+  all: 'all recorded sessions',
+}
+
+/** Filename suffix for the toolbar camera. Empty for TODAY. */
+const RANGE_FILE: Record<RangeKey, string> = { '1': '', '5': '-5d', '21': '-1m', all: '-all' }
 
 /**
  * The card's FLOOR, not its height. The plot at its designed 250 plus the
@@ -121,12 +152,27 @@ const BASIS_OPTIONS: Array<{ label: string; value: GexBasis; title: string }> = 
   { label: 'Vol only', value: 'vol', title: 'netVolGEX alone — today’s volume, no open interest' },
 ]
 
-const RANGE_OPTIONS: Array<{ label: string; value: '1' | '5'; title: string }> = [
+/**
+ * "All time" rather than "All", because the view switch two chips to the left
+ * already owns that word for a different question — a row reading `All … All`
+ * is two answers to two questions and looks like one.
+ */
+const RANGE_OPTIONS: Array<{ label: string; value: RangeKey; title: string }> = [
   { label: 'Today', value: '1', title: 'Just the selected date' },
   {
     label: '5 sessions',
     value: '5',
     title: 'The last 5 recorded sessions ending on the selected date',
+  },
+  {
+    label: 'Monthly',
+    value: '21',
+    title: 'The last 21 recorded sessions — a trading month — ending on the selected date',
+  },
+  {
+    label: 'All time',
+    value: 'all',
+    title: 'Every session the recorder has for this symbol, up to the selected date',
   },
 ]
 
@@ -142,7 +188,7 @@ export default function LevelLog() {
   const [view, setView] = useState<LogView>('all')
   const [scope, setScope] = useState<ExpScope>('0dte')
   const [basis, setBasis] = useState<GexBasis>('oivol')
-  const [range, setRange] = useState<'1' | '5'>('1')
+  const [range, setRange] = useState<RangeKey>('1')
   // Bumped by Refresh. It is a dep of the fetch effect and nothing else — the
   // requests are `no-store`, so a bump is a genuine re-read of the recorder.
   const [nonce, setNonce] = useState(0)
@@ -155,7 +201,7 @@ export default function LevelLog() {
   const { days, loading } = useWallDays(
     symbol,
     date,
-    range === '5' ? WEEK_SESSIONS : 1,
+    RANGE_SESSIONS[range],
     nonce + tick,
     scope,
     basis,
@@ -175,8 +221,15 @@ export default function LevelLog() {
               icon: '🧱',
               label: 'Wall migration',
               group: 'This page',
-              meta: `${symbol} · ${range === '5' ? `5 sessions to ${date}` : date} · ${variantTag(scope, basis)}`,
-              file: `${symbol.toLowerCase()}-wall-migration-${view}-${scope}-${basis}-${date}${range === '5' ? '-5d' : ''}`,
+              meta: `${symbol} · ${RANGE_TAG[range] ? `${RANGE_TAG[range]} to ${date}` : date} · ${variantTag(scope, basis)}`,
+              /**
+               * The company mark at the head of the caption. The card's header
+               * is dropped from every shot (shell/snapshot.ts) and the header is
+               * where the symbol chip lives, so without this the PNG says AAPL
+               * in small grey type and nowhere else.
+               */
+              badge: tickerLogoUrls(symbol),
+              file: `${symbol.toLowerCase()}-wall-migration-${view}-${scope}-${basis}-${date}${RANGE_FILE[range]}`,
               resolve: () =>
                 document.querySelector<HTMLElement>(`[data-card-instance="${CARD_ID}"]`),
             },
@@ -268,11 +321,24 @@ export default function LevelLog() {
               options={RANGE_OPTIONS}
               value={range}
               onChange={setRange}
-              title="One session, or the last five recorded ones"
+              title="One session, or the last five, twenty-one, or every recorded one"
             />
           </CardToolbar>
 
-          <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
+          {/**
+           * ON THE PAGE, NOT IN THE PICTURE.
+           *
+           * Every one of these words is already in the shot's caption — the
+           * variant is `metaOf` (see the registration above), and `live · 1m`
+           * is a fact about a tab that is open, which a PNG pasted into Discord
+           * tomorrow is not. Left in, it printed a second, longer caption
+           * directly above the real one, in a smaller font, saying the same
+           * thing plus the recorder's cadence.
+           *
+           * It stays on screen because on screen it is answering a question you
+           * can still act on: which variant am I looking at, and is this live.
+           */}
+          <div className="mb-1.5 flex flex-wrap items-baseline gap-2" data-capture-hide>
             <span className="tabular font-mono text-2xs text-muted">
               {variantTag(scope, basis)} · {VIEW_SCOPE[view]} view · 09:29 open + every 15m to 16:00
               ET, change-only
@@ -295,9 +361,11 @@ export default function LevelLog() {
             <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm text-muted">
               {loading
                 ? 'Loading sessions…'
-                : range === '5'
-                  ? `No recorded sessions for ${symbol} in the ${WEEK_SESSIONS} weekdays ending ${date} on ${variantTag(scope, basis)}.`
-                  : `No recorded levels for ${symbol} on ${date} — ${variantTag(scope, basis)}.`}
+                : range === 'all'
+                  ? `No recorded sessions for ${symbol} at all on ${variantTag(scope, basis)}.`
+                  : range === '1'
+                    ? `No recorded levels for ${symbol} on ${date} — ${variantTag(scope, basis)}.`
+                    : `No recorded sessions for ${symbol} in the ${RANGE_SESSIONS[range]} sessions ending ${date} on ${variantTag(scope, basis)}.`}
             </div>
           )}
         </Card>

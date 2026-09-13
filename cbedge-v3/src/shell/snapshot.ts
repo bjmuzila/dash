@@ -39,9 +39,15 @@
 // ── The contract with the page ───────────────────────────────────────────────
 // Two attributes, both optional:
 //   · `data-capture-hide` — the element is removed from the clone. Use it on the
-//     control that STARTS a capture, so a button is never in its own PNG.
+//     control that STARTS a capture, so a button is never in its own PNG, and on
+//     a row whose words the caption already says. A hidden row that was STACKED
+//     gives its height back to the picture rather than leaving a hole; see
+//     trimHeight for the one case where it cannot.
 //   · `data-capture-meta` — the card's own words for the caption strip, after
 //     the name and the time. The contract date, the ticker, the basis.
+//
+// And one option on the call rather than the DOM: `badge`, a same-origin image
+// drawn at the HEAD of the caption — the ticker's company logo. See ShotOptions.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { tokenHex, tokenHexAlpha } from '@/design/theme'
@@ -58,6 +64,23 @@ export interface ShotOptions {
    * attribute wins where both exist, because the card is closer to the truth.
    */
   meta?: string
+  /**
+   * A SMALL PICTURE AT THE HEAD OF THE CAPTION — the company logo of the ticker
+   * the card is drawn from, ahead of the name and the time.
+   *
+   * The card's own header is dropped from every shot (see buildClone), and on a
+   * ticker-scoped page the header is where the symbol lived, so the caption is
+   * the only place left that says WHAT was photographed. A 22px mark there is
+   * read before any of the words are.
+   *
+   * A list is tried in order and the first that loads wins — the mirrored PNG,
+   * then the live resolver (see pages/economicCalendar/ChipLogo's
+   * `tickerLogoUrls`). None of them loading prints the caption unchanged.
+   *
+   * MUST BE SAME-ORIGIN. A cross-origin image taints the output canvas and
+   * `toBlob` then throws, which loses the whole shot rather than the badge.
+   */
+  badge?: string | string[]
   /** Download name, used only when the clipboard write is refused. */
   filename?: string
   /**
@@ -71,7 +94,7 @@ export interface ShotOptions {
   bare?: boolean
 }
 
-/** Elements the page wants out of the picture — see the header. */
+/** Elements the page wants out of the picture — see the header, and trimHeight. */
 const HIDE_ATTR = 'data-capture-hide'
 
 /**
@@ -126,6 +149,14 @@ const CAPTION_PAD = 16
 const CAPTION_PX = 13
 const LOGO_H = 24
 const LOGO_ALPHA = 0.85
+/**
+ * The ticker badge at the head of the caption. Smaller than the CB Edge mark
+ * opposite it — that one is the publisher and this one is a label on the
+ * sentence that follows it — and at full opacity, because a company mark washed
+ * to 85% reads as a watermark rather than as part of the caption.
+ */
+const BADGE_H = 22
+const BADGE_GAP = 8
 const SEP = '  ·  '
 
 /** Served from the v2 public/ root, which is the same origin. */
@@ -606,15 +637,59 @@ function imgToDataUrl(src: HTMLImageElement): string | null {
 }
 
 /**
+ * HOW MUCH HEIGHT COMES OFF WITH THE CHROME.
+ *
+ * Every element's computed height is pinned onto the clone, so a node that is
+ * REMOVED does not give its space back — the ones after it slide up and the
+ * same number of empty pixels opens at the bottom. The card's own header has
+ * always been accounted for here; a hidden row inside the body was not, and a
+ * card that hid one photographed with a band of bare plate under it.
+ *
+ * ONLY WHAT WAS STACKED. A hidden element gives its height back when it was one
+ * of a vertical run — a status line above a chart, in a block or a flex column.
+ * In a flex ROW (the camera button in its own header, which is the original use
+ * of this attribute) removing it changes the width, not the height, and
+ * subtracting anything would crop the picture. Grid is left alone too: a removed
+ * item does not close its track.
+ *
+ * Absolutely positioned and already-zero-height elements are out for the same
+ * reason — they were never holding any of the height in the first place.
+ */
+function trimHeight(el: HTMLElement, header: HTMLElement | null): number {
+  let trim = header ? header.getBoundingClientRect().height : 0
+  for (const hidden of el.querySelectorAll<HTMLElement>(`[${HIDE_ATTR}]`)) {
+    if (header?.contains(hidden)) continue
+    // A hidden node inside another hidden node is already counted by its
+    // ancestor — counting it again would take the space off twice.
+    if (hidden.parentElement?.closest(`[${HIDE_ATTR}]`)) continue
+    const parent = hidden.parentElement
+    if (!parent || !el.contains(parent)) continue
+    const pcs = getComputedStyle(parent)
+    const flex = pcs.display.includes('flex')
+    const stacked = flex
+      ? pcs.flexDirection.startsWith('column')
+      : pcs.display.includes('block') || pcs.display.includes('flow-root')
+    if (!stacked) continue
+    const cs = getComputedStyle(hidden)
+    if (cs.position === 'absolute' || cs.position === 'fixed') continue
+    const h = hidden.getBoundingClientRect().height
+    if (!h) continue
+    trim += h + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0)
+  }
+  return trim
+}
+
+/**
  * A detached, self-contained copy of `el`, sized to its border box.
  *
  * Everything the SVG document cannot reach back into the page for — styles,
  * canvas bitmaps, image bytes, live form values — is materialised here.
  *
  * Returns the clone AND the height it should be rendered at: dropping the card's
- * own header takes that many pixels off the picture as well as out of it. The
- * body is a chart at a fixed bitmap size, so leaving the height alone would just
- * open a band of empty plate under it.
+ * own header — and any stacked row wearing `data-capture-hide` — takes those
+ * pixels off the picture as well as out of it. The body is a chart at a fixed
+ * bitmap size, so leaving the height alone would just open a band of empty plate
+ * under it. See trimHeight.
  */
 function buildClone(el: HTMLElement, w: number, h: number): { clone: HTMLElement; height: number } {
   const clone = el.cloneNode(true) as HTMLElement
@@ -636,7 +711,7 @@ function buildClone(el: HTMLElement, w: number, h: number): { clone: HTMLElement
   // `:scope >` deliberately: a Multi Greek column or any nested Card has a
   // header of its own and that one is content, not chrome.
   const header = el.querySelector<HTMLElement>(':scope > header')
-  const height = header ? Math.max(1, h - header.getBoundingClientRect().height) : h
+  const height = Math.max(1, h - trimHeight(el, header))
 
   const pairs: Array<[Element, Element]> = []
   pairUp(el, clone, pairs)
@@ -749,15 +824,36 @@ function stampNow(): string {
  */
 let logoPromise: Promise<HTMLImageElement | null> | null = null
 function loadLogo(): Promise<HTMLImageElement | null> {
-  if (!logoPromise) {
-    logoPromise = new Promise<HTMLImageElement | null>((resolve) => {
-      const img = new Image()
-      img.onload = () => resolve(img)
-      img.onerror = () => resolve(null)
-      img.src = LOGO_SRC
-    })
-  }
+  if (!logoPromise) logoPromise = loadImage(LOGO_SRC)
   return logoPromise
+}
+
+/**
+ * One image, or null. Never rejects — a caption without a badge beats no shot.
+ */
+function loadImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => resolve(null)
+    img.src = src
+  })
+}
+
+/**
+ * The first of `srcs` that loads. Sequential rather than raced on purpose: the
+ * order IS the preference (the mirrored copy before the live resolver, which
+ * costs a PG lookup and a round trip to a third party), and racing them would
+ * fire that request every time even when the mirror has the file.
+ */
+async function loadBadge(srcs: string | string[] | undefined): Promise<HTMLImageElement | null> {
+  const list = srcs == null ? [] : Array.isArray(srcs) ? srcs : [srcs]
+  for (const src of list) {
+    if (!src) continue
+    const img = await loadImage(src)
+    if (img?.naturalWidth && img.naturalHeight) return img
+  }
+  return null
 }
 
 /**
@@ -774,6 +870,7 @@ function frame(
   title: string,
   meta: string | null,
   logo: HTMLImageElement | null,
+  badge: HTMLImageElement | null,
 ): HTMLCanvasElement {
   const w = shot.width / scale
   const cardH = shot.height / scale
@@ -813,12 +910,21 @@ function frame(
     ctx.globalAlpha = 1
   }
 
-  const room = Math.max(40, w - CAPTION_PAD * 2 - logoW - 16)
+  // The ticker badge leads the line. Drawn before the text is measured so the
+  // caption's left edge and its room are the same number in both branches.
+  let textX = CAPTION_PAD
+  if (badge?.naturalWidth && badge.naturalHeight) {
+    const badgeW = (badge.naturalWidth / badge.naturalHeight) * BADGE_H
+    ctx.drawImage(badge, CAPTION_PAD, mid - BADGE_H / 2, badgeW, BADGE_H)
+    textX = CAPTION_PAD + badgeW + BADGE_GAP
+  }
+
+  const room = Math.max(40, w - textX - CAPTION_PAD - logoW - 16)
   ctx.textAlign = 'left'
   ctx.font = `600 ${CAPTION_PX}px ${face}`
   ctx.fillStyle = tokenHex('--color-fg')
   const titleW = Math.min(ctx.measureText(title).width, room)
-  ctx.fillText(title, CAPTION_PAD, mid, room)
+  ctx.fillText(title, textX, mid, room)
 
   // Time and the card's own note in the quieter weight, so the name still reads
   // first at a glance in a Discord thumbnail. `--color-muted` is white today
@@ -828,7 +934,7 @@ function frame(
   const tail = meta ? `${SEP}${stampNow()}${SEP}${meta}` : `${SEP}${stampNow()}`
   ctx.font = `400 ${CAPTION_PX}px ${face}`
   ctx.fillStyle = tokenHexAlpha('--color-muted', 0.7)
-  ctx.fillText(tail, CAPTION_PAD + titleW, mid, Math.max(20, room - titleW))
+  ctx.fillText(tail, textX + titleW, mid, Math.max(20, room - titleW))
 
   return out
 }
@@ -970,11 +1076,14 @@ export async function captureAndCopy(el: HTMLElement, opts: ShotOptions = {}): P
   // The DOM wins where both exist: the card is closer to the truth than the
   // menu entry that pointed at it.
   const meta = metaOf(el) ?? opts.meta ?? null
-  const [{ canvas, scale }, logo] = await Promise.all([
+  const [{ canvas, scale }, logo, badge] = await Promise.all([
     rasterise(el),
     opts.bare ? Promise.resolve(null) : loadLogo(),
+    opts.bare ? Promise.resolve(null) : loadBadge(opts.badge),
   ])
-  const out = opts.bare ? canvas : frame(canvas, scale, opts.title ?? 'CB Edge', meta, logo)
+  const out = opts.bare
+    ? canvas
+    : frame(canvas, scale, opts.title ?? 'CB Edge', meta, logo, badge)
   return deliver(out, opts.filename ?? 'snapshot.png')
 }
 

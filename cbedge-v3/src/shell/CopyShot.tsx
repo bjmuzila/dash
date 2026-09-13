@@ -61,6 +61,17 @@ export interface CopyShotTarget {
    * wins where both exist.
    */
   meta?: string
+  /**
+   * The ticker's company logo, for the head of the PNG's caption. One URL or a
+   * list tried in order — `tickerLogoUrls(symbol)` from
+   * pages/economicCalendar/ChipLogo builds the mirror-then-proxy pair.
+   *
+   * Worth it on a TICKER-SCOPED surface and nowhere else: every shot drops the
+   * card's own header, which on those pages is where the symbol was, so without
+   * this the picture never says which ticker it is of. Same-origin only — see
+   * ShotOptions.badge.
+   */
+  badge?: string | string[]
   /** Menu heading. See GROUP_ORDER. */
   group?: string
   /** Download name stem, used only when the clipboard write is refused. */
@@ -249,6 +260,7 @@ function useShot() {
       const result = await captureAndCopy(el, {
         title: target.label,
         meta: target.meta,
+        badge: target.badge,
         filename: `${slug(target.file ?? target.label)}.png`,
       })
       setState(result)

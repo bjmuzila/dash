@@ -4485,6 +4485,10 @@ async function insertOptionStrikeGexRows(rows) {
 }
 // How many TRADING SESSIONS of strike history to keep — sessions, not hours.
 //
+// 5, to match RETENTION.option_strike_gex_history in state/retention-cleanup.js
+// — this POST-path prune used to cut to 3 sessions, undercutting the nightly
+// policy by two days whenever anything wrote through the API route.
+//
 // 3, not 2. At 2 the window is exactly "yesterday and today", and the moment a
 // weekend date enters the count (see the weekday filter in the prune below, and
 // why it was needed) or a holiday lands, Friday falls off before anyone has
@@ -4492,7 +4496,7 @@ async function insertOptionStrikeGexRows(rows) {
 // the nightly retention job already thins to the 5-minute grid outside RTH —
 // and it is the difference between "Friday is there on Monday morning" and a
 // support ticket.
-var GEX_HISTORY_KEEP_SESSIONS = Number(process.env.GEX_HISTORY_KEEP_SESSIONS || 3);
+var GEX_HISTORY_KEEP_SESSIONS = Number(process.env.GEX_HISTORY_KEEP_SESSIONS || 5);
 // Prune at most this often. The old wall-clock DELETE was a cheap range scan;
 // this one does a DISTINCT over `date`, and insertOptionStrikeGexRows runs
 // several times a minute (once per symbol/expiry the recorders sweep). No

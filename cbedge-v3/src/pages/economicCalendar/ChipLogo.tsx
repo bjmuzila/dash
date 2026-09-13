@@ -43,6 +43,21 @@ function proxyLogoUrl(sym: string, name?: string): string {
   return `/proxy/ticker-logo?raw=1&sym=${encodeURIComponent(sym.toUpperCase())}&name=${encodeURIComponent(name || '')}`
 }
 
+/**
+ * THE SAME RESOLUTION ORDER, as plain URLs, for a consumer that cannot mount a
+ * component and wait for `onError` — the snapshot caption's badge, which draws
+ * to a canvas (shell/snapshot.ts). Try them in order; the first that loads wins.
+ *
+ * Both are SAME-ORIGIN on purpose. `raw=1` makes the proxy stream the bytes
+ * rather than 302 to a third-party host, and a redirected image taints a capture
+ * canvas — `toBlob` then throws and the whole PNG is lost. The mirror-then-proxy
+ * rule and the ?v cache-buster stay in THIS file, which is the one that has to
+ * be bumped when public/logos grows.
+ */
+export function tickerLogoUrls(sym: string, company?: string): string[] {
+  return [localLogoUrl(sym), proxyLogoUrl(sym, company)]
+}
+
 export function ChipLogo({
   sym,
   company,

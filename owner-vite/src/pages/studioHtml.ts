@@ -326,9 +326,14 @@ var PAL_DEF={
   panelUp:'#16181F', // OWNER_THEME.panelHover — nested/raised tiles
   line:'#23272F',    // border rgba(255,255,255,0.10) over panel
   lineHard:'#23272F',// --lineHard: the default hairline on an image card
-  body:'#C2C7D0',    // white @ ~80%
-  mut:'#8E9196',     // white @ ~55% — labels
-  dim:'#6A6E75',     // white @ ~38% — footers, strikethroughs
+  // NO GREY TEXT. body/mut/dim were white at 80/55/38% and read as washed-out
+  // on a phone screen and in a feed's compressed JPEG. The dashboard itself has
+  // no grey — OWNER_THEME.text / textSecondary / textMuted are all #FFFFFF, and
+  // hierarchy comes from SIZE and WEIGHT, not from fading the ink. The three
+  // names stay so no template has to change; they are simply all white now.
+  body:'#FFFFFF',    // running text
+  mut:'#FFFFFF',     // labels
+  dim:'#FFFFFF',     // footers, strikethroughs
   pale:'#8ECAE6',    // OWNER_THEME.green (pale blue) — secondary highlight
   blue:'#7dd3fc',    // OWNER_LIGHT_BLUE — the card accent
   gold:'#FFB703',    // OWNER_THEME.gold — codes, badges
@@ -430,8 +435,10 @@ var THEME_KEY='cbe_studio_theme';
 var THEME_DEF={bg:PAL_DEF.bg, panel:PAL_DEF.panel, text:'#FFFFFF', ac:'#219EBC',
                bd:'#219EBC', bw:0, grid:true,
                fx:{on:[],amt:45,seed:7}};
-// alpha of text over panel for each derived key, measured off PAL_DEF.
-var MIX={panelUp:0.03, line:0.093, lineHard:0.093, body:0.77, mut:0.54, dim:0.38};
+// How much of the theme's TEXT colour each derived key carries over the panel.
+// The two surface keys are faint washes; the three text keys are the text
+// colour itself, at full strength — see the no-grey note on PAL_DEF.
+var MIX={panelUp:0.03, line:0.093, lineHard:0.093, body:1, mut:1, dim:1};
 var themeAuto=true;
 // THEME is the live theme, and it is deliberately NOT "whatever the colour
 // pickers say". Reopening a preset writes that post's own colours into the
@@ -2104,6 +2111,59 @@ function refitClusters(boxes){
       t:Math.min.apply(null,group.map(function(x){return x.it})),
       r:Math.max.apply(null,group.map(function(x){return x.il+x.iw})),
       b:Math.max.apply(null,group.map(function(x){return x.it+x.ih}))});
+  }
+  return refitCaptions(out);
+}
+
+/* A LABEL BELONGS TO WHAT IT LABELS.
+ *
+ * "ALL SCORED TICKERS" sits 14px above its card and never touches it, so the
+ * two came out as separate clusters — and the re-fit, quite reasonably, sent
+ * them to opposite ends of the post. A caption stranded from its card is worse
+ * than any amount of empty space.
+ *
+ * So a short line sitting just above something wider, and over it, is folded
+ * into it. All three tests are needed: the gap has to be small RELATIVE TO THE
+ * LABEL'S OWN HEIGHT (a caption is set close), the label has to be the shorter
+ * of the two (or it is a paragraph, not a label), and it has to sit over the
+ * thing horizontally (or it is just the next block down). */
+var REFIT_LABEL_LEAD=1.8;    // allowed gap, × the label's own height
+var REFIT_LABEL_GAP=0.035;   // …and never more than this much of the content height
+var REFIT_LABEL_MAX=0.06;    // a label is no taller than this much of the content
+function refitCaptions(cls){
+  var n=cls.length, owner=new Array(n), i, j;
+  if(!n) return cls;
+  var top=Math.min.apply(null,cls.map(function(c){return c.t}));
+  var bot=Math.max.apply(null,cls.map(function(c){return c.b}));
+  var contentH=Math.max(1,bot-top);
+  var find=function(k){ while(owner[k]!=null&&owner[k]!==k) k=owner[k]; return k; };
+  for(i=0;i<n;i++){
+    var a=cls[i], ah=a.b-a.t, aw=a.r-a.l, bestJ=-1, bestGap=Infinity;
+    // Absolute sanity first: a caption is a LINE, and it is set CLOSE. Without
+    // these two, a 191px-tall card qualifies as a "label" for the card below it
+    // (its own height buys it a 344px lead) and the whole column fuses.
+    if(ah>contentH*REFIT_LABEL_MAX) continue;
+    var maxGap=Math.min(ah*REFIT_LABEL_LEAD, contentH*REFIT_LABEL_GAP);
+    for(j=0;j<n;j++){
+      if(j===i) continue;
+      var b=cls[j], gap=b.t-a.b;
+      if(gap<-2 || gap>maxGap) continue;
+      if(ah > (b.b-b.t)*0.6) continue;                     // not a label, a block
+      if(aw > (b.r-b.l)*1.02) continue;                    // wider than what it labels
+      var ov=Math.min(a.r,b.r)-Math.max(a.l,b.l);
+      if(ov < aw*0.7) continue;                            // not sitting over it
+      if(gap<bestGap){ bestGap=gap; bestJ=j; }
+    }
+    if(bestJ>=0 && find(bestJ)!==find(i)) owner[i]=find(bestJ);
+  }
+  var byRoot={}, out=[];
+  for(i=0;i<n;i++){
+    var r=find(i);
+    if(!byRoot[r]){ byRoot[r]={items:[],l:Infinity,t:Infinity,r:-Infinity,b:-Infinity}; out.push(byRoot[r]); }
+    var g=byRoot[r], c=cls[i];
+    g.items=g.items.concat(c.items);
+    g.l=Math.min(g.l,c.l); g.t=Math.min(g.t,c.t);
+    g.r=Math.max(g.r,c.r); g.b=Math.max(g.b,c.b);
   }
   return out;
 }

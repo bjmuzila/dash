@@ -33,8 +33,8 @@ import { useEffect, useState } from 'react'
  * poll at all and the reason it gives — "so an open tab never hammers the
  * recorder" — is still right for every case except the live one: the session
  * has to BE today (a past date cannot change), the tab has to be visible, and
- * it is the single-session view only. The week view would cost up to thirteen
- * requests a minute to move one of five slices.
+ * it is the single-session view only. A multi-session range would re-read every
+ * session on it once a minute to move the last of five — or of 260 — slices.
  */
 export const LIVE_POLL_MS = 60_000
 
@@ -442,6 +442,18 @@ export function useMinuteTick(enabled: boolean): number {
   return tick
 }
 
+/**
+ * The longest range the per-session fallback will attempt.
+ *
+ * That path is ONE request per candidate weekday plus one tape request per day
+ * that had rows — thirteen for five sessions, and it has always been that. The
+ * month and all-time ranges are only affordable because /api/walls-range
+ * answers them in a single query; fanning 260 sessions out over the old path
+ * would be eight hundred requests to draw a chart, so a server that lacks the
+ * route serves the short ranges and returns nothing for the long ones.
+ */
+const LEGACY_FALLBACK_MAX = 5
+
 export type WallDays = { days: DaySlice[]; loading: boolean }
 
 const NO_DAYS: WallDays = { days: [], loading: false }
@@ -452,13 +464,17 @@ const NO_DAYS: WallDays = { days: [], loading: false }
  * `count === 1` is the inline card: one known date, so the log and the tape go
  * out together and there is no waterfall to hoist.
  *
- * `count > 1` is the week view, and it keeps v2's two waves. The level logs are
- * small and cheap, so it asks for MORE candidate weekdays than it needs
- * (holidays, days before the ticker entered the scanner universe) and keeps the
- * newest `count` that came back with rows. Only THOSE days then get a tape
- * request. The levels are set on screen before the tapes land, because the tape
- * only sharpens the price line — a spinner there would hide a chart that is
- * already readable.
+ * `count > 1` is a multi-session range — five sessions, a trading month, or
+ * everything recorded. All three are ONE request to /api/walls-range, which
+ * returns the sessions the symbol actually has plus a 5-minute price line for
+ * each.
+ *
+ * THE PER-SESSION FALLBACK IS SHORT-RANGE ONLY. Below it is v2's two-wave path,
+ * kept for a server without the range route: one log request per candidate
+ * weekday, then one tape request per day that had rows. At five sessions that
+ * is thirteen requests, which is what it always cost. At 260 it would be eight
+ * hundred, so a long range on an old server draws nothing and says so rather
+ * than spending the afternoon proving it — see LEGACY_FALLBACK_MAX.
  */
 export function useWallDays(
   symbol: string | null,
@@ -527,6 +543,12 @@ export function useWallDays(
       if (!alive) return
       if (ranged) {
         setState({ days: ranged, loading: false })
+        return
+      }
+
+      // Long ranges have no fallback on purpose — see LEGACY_FALLBACK_MAX.
+      if (count > LEGACY_FALLBACK_MAX) {
+        setState(NO_DAYS)
         return
       }
 

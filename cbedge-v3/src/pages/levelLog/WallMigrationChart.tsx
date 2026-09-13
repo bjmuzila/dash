@@ -635,6 +635,27 @@ export function WallMigrationChart({
   const lastPt = last.spotDrawn[last.spotDrawn.length - 1]
   const lastSpot = lastPt ? lastPt.v : null
 
+  /**
+   * HOW MANY SESSIONS GET NAMED, and how many boundaries get a line.
+   *
+   * The rail printed a weekday and a date under EVERY slice, which is right for
+   * five and unreadable for twenty-one — at 260 each slice is under three
+   * pixels and the "MONDAY" over it is forty. So the rail stamps about ten
+   * sessions however many are drawn, anchored on the LAST one: the newest
+   * session is the one being read against the others and it must always carry
+   * its own date. The weekday name comes off as soon as the slices are too
+   * narrow to hold it; the m/d stamp is what survives.
+   *
+   * The session dividers thin with the stamps once they would out-number the
+   * data — 260 hairlines a pixel apart is a grey wash, not a set of edges — so
+   * past that point a line is drawn only where a date is printed, and the two
+   * read as one rail.
+   */
+  const stampEvery = Math.max(1, Math.ceil(N / 10))
+  const isStamped = (i: number) => (N - 1 - i) % stampEvery === 0
+  const showDow = N <= 6
+  const thinDividers = N > 40
+
   return (
     <div className={fill ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-col'}>
       {compact ? null : (
@@ -691,18 +712,20 @@ export function WallMigrationChart({
           {/* Session boundaries. Solid, unlike the dashed "log stopped writing"
               mark, because they are a different kind of edge: one is a gap in
               the clock, the other a gap in the rows. */}
-          {segs.slice(1).map((seg, k) => (
-            <line
-              key={`div-${seg.date}`}
-              x1={(k + 1) * segW}
-              x2={(k + 1) * segW}
-              y1={0}
-              y2={height}
-              stroke={alpha(T.text, 0.22)}
-              strokeWidth={1}
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
+          {segs.slice(1).map((seg, k) =>
+            thinDividers && !isStamped(k + 1) ? null : (
+              <line
+                key={`div-${seg.date}`}
+                x1={(k + 1) * segW}
+                x2={(k + 1) * segW}
+                y1={0}
+                y2={height}
+                stroke={alpha(T.text, 0.22)}
+                strokeWidth={1}
+                vectorEffect="non-scaling-stroke"
+              />
+            ),
+          )}
           {/* Where the log stopped writing. Everything right of it is the
               forward fill — the levels held, which is why there are no rows —
               and the reader is entitled to see which half is captures and which
@@ -744,8 +767,9 @@ export function WallMigrationChart({
         </svg>
       </div>
 
-      {/* One clock rail for a single session; one date stamp per slice for a
-          week, because 09:29/12:45/16:00 repeated five times says nothing. */}
+      {/* One clock rail for a single session; date stamps across the slices for
+          anything longer, because 09:29/12:45/16:00 repeated five — or two
+          hundred — times says nothing. How many stamps: see stampEvery. */}
       {compact ? null : N === 1 ? (
         <div className="tabular mt-1 flex justify-between font-mono text-2xs text-muted" aria-hidden>
           <span>{slotClock(0)}</span>
@@ -754,12 +778,22 @@ export function WallMigrationChart({
         </div>
       ) : (
         <div className="mt-1 flex text-muted" aria-hidden>
-          {segs.map((seg) => (
-            <span key={seg.date} className="block text-center" style={{ flex: `0 0 ${segW}%` }}>
-              <span className="block text-2xs font-extrabold uppercase tracking-widest text-fg">
-                {dowName(seg.date)}
-              </span>
-              <span className="tabular block font-mono text-2xs">{mdShort(seg.date)}</span>
+          {segs.map((seg, i) => (
+            <span
+              key={seg.date}
+              className="block overflow-visible whitespace-nowrap text-center"
+              style={{ flex: `0 0 ${segW}%` }}
+            >
+              {isStamped(i) ? (
+                <>
+                  {showDow ? (
+                    <span className="block text-2xs font-extrabold uppercase tracking-widest text-fg">
+                      {dowName(seg.date)}
+                    </span>
+                  ) : null}
+                  <span className="tabular block font-mono text-2xs">{mdShort(seg.date)}</span>
+                </>
+              ) : null}
             </span>
           ))}
         </div>

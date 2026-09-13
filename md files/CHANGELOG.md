@@ -1,5 +1,117 @@
 # Changelog
 
+## 2026-09-13 (d) - Snapshots: a ticker logo in the caption, and hidden rows give their height back
+
+**The Level Log's variant line is out of the picture.** `non-0DTE · vol-only GEX ·
+level view · 09:29 open + every 15m to 16:00 ET, change-only` sat directly above
+a caption band that already said the ticker, the range and the variant — a
+second, longer caption in a smaller font. It now wears `data-capture-hide`, so
+it stays on screen (where "which variant, and is this live" is still a question
+you can act on) and leaves the PNG.
+
+**`data-capture-hide` now returns the height it took.** Every element's computed
+height is pinned onto the capture clone, so a removed node did NOT free its
+space — the rows after it slid up and the same pixels opened as bare plate at
+the bottom. `trimHeight()` in `shell/snapshot.ts` now subtracts hidden elements
+as well as the card header, but ONLY where they were STACKED (a block or a
+flex-column parent). In a flex row — the camera button in the sector wheel's
+own header, the original use of the attribute — removing an element changes the
+width, not the height, so nothing is subtracted and the picture is not cropped.
+Grid, absolute/fixed, zero-height and nested-inside-another-hidden are all out
+for the same reason.
+
+**A ticker logo at the head of the caption.** New `badge` on `ShotOptions` and on
+`CopyShotTarget`: one URL or a list tried in order, first that loads wins, drawn
+22px at the left of the caption before the name. Same-origin only — a
+cross-origin image taints the output canvas and `toBlob` then throws, losing the
+whole shot.
+
+Why it belongs there and not in the card: **every shot drops the card's own
+`<header>`**, and on a ticker-scoped page the header is where the symbol chip,
+the date and the switches live. Without this the PNG never shows what it is a
+picture of except in small grey caption type.
+
+`ChipLogo` now exports `tickerLogoUrls(sym, company?)` — the same
+mirror-then-proxy pair the chips resolve through (`/logos/<SYM>.png?v=LOGO_REV`,
+then `/proxy/ticker-logo?raw=1`), as plain URLs for a consumer that draws to a
+canvas and cannot wait on `onError`. The mirror rule and the `?v` cache-buster
+stay in the one file that has to be bumped when `public/logos` grows.
+
+Level Log registers `badge: tickerLogoUrls(symbol)`. Any other ticker-scoped
+surface is one line away from the same thing.
+
+Files: `cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/shell/CopyShot.tsx`,
+`cbedge-v3/src/pages/economicCalendar/ChipLogo.tsx`,
+`cbedge-v3/src/pages/LevelLog.tsx`.
+
+## 2026-09-13 (c) - Level Log (v3): the range switch gets MONTHLY and ALL TIME
+
+The wall-migration range offered TODAY and 5 SESSIONS, which is what v2's popout
+offered. Two more: **Monthly** (21 recorded sessions — a trading month, not 30
+calendar days) and **All time** (every session the recorder has for the symbol,
+up to /api/walls-range's own 260 ceiling, so the page never has to know how much
+that is).
+
+Labelled "All time" rather than "All" because the view switch two chips to the
+left already owns that word for a different question — `All … All` in one
+toolbar row is two answers that look like one.
+
+Cost: still ONE request. `/api/walls-range` already returned the newest N
+sessions the symbol actually recorded plus a 5-minute `scanner_snapshots.spot`
+line per session, in a single query — the new ranges just ask for a bigger N.
+The live 1-minute tick is unchanged and still fires only on TODAY.
+
+`useWallDays`'s per-session FALLBACK (the pre-range-route path: one log request
+per candidate weekday, then one tape request per day with rows) is now capped at
+5 sessions — `LEGACY_FALLBACK_MAX`. At five that path is thirteen requests, which
+is what it always cost; at 260 it would be eight hundred. A server without the
+range route now serves the short ranges and draws nothing for the long ones
+instead of spending the afternoon proving it.
+
+`WallMigrationChart` axis rail: a weekday + date under every slice is right for
+five and unreadable for twenty-one. The rail now stamps ~10 sessions however many
+are drawn, anchored on the LAST one so the newest always carries its own date;
+the weekday name drops off above 6 sessions and the m/d stamp survives. Session
+divider lines thin to the stamped boundaries above 40 sessions — 260 hairlines a
+pixel apart is a grey wash, not a set of edges.
+
+Files: `cbedge-v3/src/pages/LevelLog.tsx`,
+`cbedge-v3/src/pages/levelLog/wallData.ts`,
+`cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`.
+
+## 2026-09-13 (a) - Post Studio: a label stays with its card, and no grey type anywhere
+
+LABELS. "ALL SCORED TICKERS" sits 14px above its card and never touches it, so
+the two came out as separate clusters and the re-fit sent them to opposite ends
+of the post — the caption ended up beside the logo. A caption stranded from the
+thing it names is worse than any amount of empty space.
+
+A short line sitting just above something wider, and over it, is now folded into
+it. Five tests, and all of them earn their keep: the gap is small relative to
+the label's own height (a caption is set close) AND never more than 3.5% of the
+content height, the label is no taller than 6% of the content and no more than
+60% of what it labels, it is not wider than what it labels, and it overlaps it
+horizontally. The two absolute tests are what stop a 191px-tall card qualifying
+as a "label" for the card beneath it — its own height would otherwise buy it a
+344px lead and the whole right-hand column fused into one unsplittable block.
+
+NO GREY TYPE, every template. `body`/`mut`/`dim` were white at 80/55/38% and
+read as washed out on a phone and through a feed's JPEG. They are all #FFFFFF
+now — which is also what the dashboard itself does (OWNER_THEME.text /
+textSecondary / textMuted are all white); hierarchy comes from size and weight,
+not from fading the ink. The three names stay, so not one template changed: all
+104 colour references in TPL go through the palette. A custom theme's Text
+colour now drives those three at full strength instead of three alphas.
+
+Image-slot placeholder text stays dim — it is a hint for an empty slot, not post
+content, and a white one would read as a headline.
+
+Checked on the weekly-results board: both section labels now ride with their
+cards, every line renders white, no ink outside the frame at 9:16, 4:5, 1:1 or
+16:9, and the theme suite is green.
+
+Touched: `owner-vite/src/pages/studioHtml.ts`.
+
 ## 2026-09-13 (b) - Earnings chips (v3): the full ticker-logo mirror
 
 The economic-calendar earnings board defaults to `mcapMin = 0`, so every name in
@@ -22595,3 +22707,24 @@ Change: `public/v3` added to root `.gitignore` and untracked via
 `git rm -r --cached public/v3`. A failed v3 build now 404s loudly instead of
 silently serving a fossil. The underlying build failure inside the image is still
 to be diagnosed.
+
+## 2026-09-13 — option_strike_gex_history retention cut to 5 days
+
+`server-v2/state/retention-cleanup.js` — `RETENTION.option_strike_gex_history`
+default 10 → **5** days. The table was the largest object in the database
+(~19GB / ~20.4M rows, 14.7GB of that indexes, at 11 days resident on a 30GB
+plan) and nothing reads past a week: the ES-Candles heatmap, the GEX bubble
+trail and the strike rail all work inside 5 sessions. Full 1-minute resolution
+still stops at `gex_history_fullres_days` (2); older days stay thinned to the
+5-minute grid, front expiry only.
+
+`server-v2/_lib-db.cjs` — `GEX_HISTORY_KEEP_SESSIONS` default 3 → **5**. This is
+the POST-path prune that runs on `insertOptionStrikeGexRows()`
+(`/api/snapshots/option-strike-gex-history`). At 3 it undercut the nightly
+policy by two days any time something wrote through the API route; both numbers
+now say 5.
+
+**Not done in code:** the VPS has `RETENTION_GEX_HISTORY_DAYS` set to 120 —
+`/owner/db-map` reads the live value and shows it. The env var wins over the
+default, so it has to be cleared or set to 5 on the VPS before this takes
+effect. Until then the table keeps growing.
