@@ -65,7 +65,11 @@
  *
  * ── SOURCES ──────────────────────────────────────────────────────────────────
  *   OPEN    walls_log, slot 0 / reason 'open', all three level types. Never
- *           pruned. `spot` on those rows is the 09:29 print.
+ *           pruned. `spot` on those rows is the 09:29 print. It also defines the
+ *           WINDOW and the per-symbol session count for every anchor, so a later
+ *           anchor is still measured over "the sessions the recorder wrote".
+ *   ANCHOR  scanner_variants (or scanner_snapshots for the default variant) —
+ *           the first sweep at or after the anchor's clock time. See above.
  *   ROLL    walls_log, reason 'change' on the same session. Never pruned.
  *   CLOSE   wall_atr.close — the TRUE daily close from daily bars (walls-reach's
  *           ATR backfill). Deliberately not scanner_snapshots, which retention
@@ -75,7 +79,29 @@
  *   PATH    scanner_snapshots min/max spot per session — the NEVER LEFT arm
  *           only. 10 days, and said out loud.
  *
- * Read API: GET /api/core-hold?days=&end=&scope=&basis=[&symbols=]  (owner)
+ * ── THE ANCHOR — WHEN THE BRACKET IS TAKEN ───────────────────────────────────
+ * 09:29 is the recorder's own open capture and the default. It is also the WORST
+ * anchor for the vol-only basis, and for an obvious reason: vol-only GEX is
+ * netVolGEX alone — only what has traded TODAY — and at 09:29 almost nothing
+ * has. The walls it produces are drawn from a handful of prints and they move as
+ * soon as real volume arrives, so a bracket frozen there is measuring noise.
+ *
+ * So the anchor is a parameter: 09:29, 09:35, 09:45 or 10:00. Everything else in
+ * this file is unchanged by it — the bracket is still frozen at the anchor, the
+ * close is still the daily close, "never left" now runs FROM the anchor rather
+ * than from the open, and `rolled` counts only moves after it.
+ *
+ * WHERE A LATER ANCHOR'S LEVELS COME FROM. walls_log is a 15-minute grid —
+ * slot 0 is 09:29, then 09:45, 10:00 and on — and it is CHANGE-ONLY, so there is
+ * no row at 09:35 at all and no guarantee of one at 09:45. The sweep tables have
+ * a row every minute or few: `scanner_variants` for the three non-default
+ * variants (never pruned), `scanner_snapshots` for the default one (pruned at 10
+ * days). So a later anchor reads the FIRST sweep at or after its clock time,
+ * within ANCHOR_GRACE_MIN, and the response says which table answered — a
+ * vol-only study has full history, the default variant's has ten days, and that
+ * difference is not something to discover from a suspiciously round number.
+ *
+ * Read API: GET /api/core-hold?days=&end=&scope=&basis=&anchor=[&symbols=] (owner)
  * Consumed by: owner-vite Results → Open bracket
  */
 
@@ -84,6 +110,33 @@ const variants = require('./scanner-variants');
 /** The default window. 60 sessions is about a quarter. */
 const DEFAULT_DAYS = 60;
 const MAX_DAYS = 500;
+
+/**
+ * WHERE THE BRACKET IS TAKEN.
+ *
+ * `slot` is the walls_log slot the anchor sits AT or AFTER, and it is what
+ * `rolled` counts past — a wall that moved at 09:45 has not rolled on a 10:00
+ * bracket, it is part of it. 09:35 falls between slot 0 (09:29) and slot 1
+ * (09:45), so it shares slot 0's answer.
+ */
+const ANCHORS = {
+  open: { label: '09:29', mins: 9 * 60 + 29, slot: 0, live: false },
+  '0935': { label: '09:35', mins: 9 * 60 + 35, slot: 0, live: true },
+  '0945': { label: '09:45', mins: 9 * 60 + 45, slot: 1, live: true },
+  '1000': { label: '10:00', mins: 10 * 60, slot: 2, live: true },
+};
+const DEFAULT_ANCHOR = 'open';
+
+/**
+ * How late a sweep may be and still count as the anchor. The 0DTE legs are
+ * written every minute and the aggregate legs ride a 5-sweep sub-cadence, so ten
+ * minutes covers a slow leg and a restart without ever letting a session with a
+ * real gap anchor itself at 11:00 and be counted as a 09:45 reading.
+ */
+const ANCHOR_GRACE_MIN = 10;
+
+const hhmm = (mins) =>
+  `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}:00`;
 
 const pct = (n, d) => (d > 0 ? n / d : null);
 
@@ -109,6 +162,8 @@ async function coreHold(pool, opts = {}) {
   const end = /^\d{4}-\d{2}-\d{2}$/.test(String(opts.end || '')) ? String(opts.end) : null;
   const variant = variants.normalize(opts.scope, opts.basis);
   const only = Array.isArray(opts.symbols) && opts.symbols.length ? opts.symbols : null;
+  const anchorKey = ANCHORS[String(opts.anchor || '')] ? String(opts.anchor) : DEFAULT_ANCHOR;
+  const anchor = ANCHORS[anchorKey];
 
   // ── The window, and every 09:29 capture inside it ──────────────────────────
   // All three level types in one read — the bracket is a row per session built
@@ -137,7 +192,8 @@ async function coreHold(pool, opts = {}) {
 
   // "YYYY-MM-DD" strings throughout. They go back into the DATE columns as
   // ::date[] (so the indexes are usable — a to_char() on the column would not
-  // be) and into scanner_snapshots, whose `date` is TEXT, as ::text[].
+  // be) and into scanner_snapshots and scanner_variants, whose `date` is TEXT,
+  // as ::text[].
   const key = (date, symbol) => `${date}|${symbol}`;
 
   /** One session, assembled from its three open rows. */
@@ -163,16 +219,75 @@ async function coreHold(pool, opts = {}) {
   const dates = [...new Set(opens.map((r) => r.date))].sort();
   const symbols = [...new Set(opens.map((r) => r.symbol))].sort();
 
+  // ── A LATER ANCHOR: re-take the bracket off the sweep tables ──────────────
+  //
+  // The window, the symbol list and the per-symbol session count all stay the
+  // walls_log ones — "the sessions the recorder wrote" is the population either
+  // way — and only the four numbers that MAKE the bracket are replaced. A
+  // session with no sweep inside the grace window keeps no bracket at all and
+  // falls out as `incomplete`, which is the honest answer: there was nothing to
+  // freeze at 09:45.
+  //
+  // DISTINCT ON … ORDER BY ts ASC is the FIRST sweep at or after the anchor, not
+  // the newest: 09:45 means the reading as of 09:45, and taking the last row in
+  // the window would quietly make it 09:55 on any symbol whose leg is slow.
+  let anchorSource = 'walls_log';
+  if (anchor.live) {
+    const isDefaultVariant = variants.isDefault(variant);
+    anchorSource = isDefaultVariant ? 'scanner_snapshots' : 'scanner_variants';
+    const from = hhmm(anchor.mins);
+    const to = hhmm(anchor.mins + ANCHOR_GRACE_MIN);
+    const sql = isDefaultVariant
+      ? `SELECT DISTINCT ON (date, symbol) date, symbol, spot, call_wall, put_wall, cb
+           FROM scanner_snapshots
+          WHERE date = ANY($1::text[]) AND symbol = ANY($2::text[]) AND spot > 0
+            AND (ts AT TIME ZONE 'America/New_York')::time >= $3::time
+            AND (ts AT TIME ZONE 'America/New_York')::time <= $4::time
+          ORDER BY date, symbol, ts ASC`
+      : `SELECT DISTINCT ON (date, symbol) date, symbol, spot, call_wall, put_wall, cb
+           FROM scanner_variants
+          WHERE date = ANY($1::text[]) AND symbol = ANY($2::text[]) AND spot > 0
+            AND expiry_scope = $5 AND basis = $6
+            AND (ts AT TIME ZONE 'America/New_York')::time >= $3::time
+            AND (ts AT TIME ZONE 'America/New_York')::time <= $4::time
+          ORDER BY date, symbol, ts ASC`;
+    const args = isDefaultVariant
+      ? [dates, symbols, from, to]
+      : [dates, symbols, from, to, variant.scope, variant.basis];
+    const { rows: anchorRows } = await pool.query(sql, args);
+    const taken = new Map();
+    for (const r of anchorRows) {
+      taken.set(key(r.date, r.symbol), {
+        spot: Number(r.spot),
+        cw: Number(r.call_wall),
+        pw: Number(r.put_wall),
+        cb: Number(r.cb),
+      });
+    }
+    for (const [k, sess] of sessions) {
+      const t = taken.get(k);
+      // No sweep in the window → no bracket. Nulled rather than left as the
+      // 09:29 one, which would silently mix two anchors in one column.
+      sess.spot = t && t.spot > 0 ? t.spot : null;
+      sess.cw = t && t.cw > 0 ? t.cw : null;
+      sess.pw = t && t.pw > 0 ? t.pw : null;
+      sess.cb = t && t.cb > 0 ? t.cb : null;
+    }
+  }
+
   // ── Did the levels roll after the open? ───────────────────────────────────
   const { rows: rollRows } = await pool.query(
     `SELECT to_char(date, 'YYYY-MM-DD') AS date, symbol, COUNT(*)::int AS n
        FROM walls_log
       WHERE reason <> 'open'
         AND level_type IN ('call_wall', 'put_wall')
+        AND slot > $5
         AND date = ANY($1::date[]) AND symbol = ANY($2::text[])
         AND expiry_scope = $3 AND basis = $4
       GROUP BY 1, 2`,
-    [dates, symbols, variant.scope, variant.basis],
+    // Only moves AFTER the anchor are rolls. A wall that moved at 09:45 has not
+    // rolled on a 10:00 bracket — it is part of it.
+    [dates, symbols, variant.scope, variant.basis, anchor.slot],
   );
   const rolls = new Map(rollRows.map((r) => [key(r.date, r.symbol), r.n]));
 
@@ -215,11 +330,14 @@ async function coreHold(pool, opts = {}) {
   const extremes = new Map();
   try {
     const { rows: pathRows } = await pool.query(
+      // FROM THE ANCHOR FORWARD. On a 10:00 bracket, where price went at 09:40
+      // is not an escape from a range that did not exist yet.
       `SELECT date, symbol, MIN(spot) AS lo, MAX(spot) AS hi
          FROM scanner_snapshots
         WHERE spot > 0 AND date = ANY($1::text[]) AND symbol = ANY($2::text[])
+          AND (ts AT TIME ZONE 'America/New_York')::time >= $3::time
         GROUP BY 1, 2`,
-      [dates, symbols],
+      [dates, symbols, hhmm(anchor.mins)],
     );
     for (const r of pathRows) {
       const lo = Number(r.lo);
@@ -417,6 +535,11 @@ async function coreHold(pool, opts = {}) {
     end,
     scope: variant.scope,
     basis: variant.basis,
+    anchor: anchorKey,
+    anchor_label: anchor.label,
+    // Which table the bracket was read from. walls_log is never pruned;
+    // scanner_variants is not either; scanner_snapshots is, at 10 days.
+    anchor_source: anchorSource,
     dates: [dates[0], dates[dates.length - 1]],
     sessions_in_window: dates.length,
     totals,
@@ -424,4 +547,4 @@ async function coreHold(pool, opts = {}) {
   };
 }
 
-module.exports = { coreHold, DEFAULT_DAYS, MAX_DAYS };
+module.exports = { coreHold, ANCHORS, DEFAULT_ANCHOR, DEFAULT_DAYS, MAX_DAYS };

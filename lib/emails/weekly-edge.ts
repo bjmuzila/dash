@@ -10,18 +10,16 @@
 // gets reused week to week without touching markup. Sensible defaults are
 // filled in from the most recent week so a blank call still renders.
 //
-// CURRENT ISSUE: week of Sep 7-11, 2026, sending Labor Day. Recap covers
-// Aug 31 - Sep 4 (162k payrolls vs ~55k expected, September hike odds to ~65%,
-// oil +10%); the week ahead is a HOLIDAY MONDAY, a thin Tue/Wed, then PPI +
-// Oracle Thursday and August CPI Friday - the last inflation print before the
-// Sep 15-16 FOMC.
+// CURRENT ISSUE: week of Sep 14-18, 2026. Recap covers Sep 8-11 (sticky core
+// CPI at +0.3%, hike odds to ~90%, the 10-year knocking on 5%); the week ahead
+// is the FOMC decision + dot plot Wednesday at 2:00 with retail sales that
+// morning, and QUARTERLY EXPIRATION Friday.
 //
 // DASHBOARD PLACEHOLDERS: every stat block is empty and renders as a dashed
-// "[ADD ...]" box - the two result tiles, the confidence table, the Core Wall
-// auto-buy rows, the GEX scanner rows and the wall-migration chart. Fill them
-// from the owner Results / Scanner pages before sending. Nothing stale ships:
-// a stat that is not filled in reads as an obvious blank, never as last week's
-// number.
+// "[ADD ...]" box - the two result tiles, the confidence table, the auto-buy
+// rows, the scanner catch and the core-migration chart. Fill from the owner
+// Results / Scanner pages before sending. An unfilled stat reads as an obvious
+// blank, never as last week's number.
 //
 // Same brand shell/conventions as cb-confidence.ts (see EMAILS_HANDOFF.md),
 // with one deliberate deviation: logo is TOP-LEFT (not centered) per request.
@@ -216,25 +214,29 @@ export interface WeeklyEdgeOpts {
 // Russell rather than the Dow this week on purpose: the gap between mega-cap AI
 // and small caps IS the story, and a flat Dow tile would hide it.
 const DEFAULT_INDEX_MOVES: IndexMove[] = [
-  { name: "S&amp;P 500", pct: "+0.1%" },
-  { name: "Nasdaq", pct: "+0.4%" },
-  { name: "Dow", pct: "-0.3%" },
+  { name: "S&amp;P 500", pct: "-0.8%" },
+  { name: "Nasdaq", pct: "-0.7%" },
+  { name: "Dow", pct: "-1.6%" },
 ];
 
 const DEFAULT_CALENDAR: CalendarEvent[] = [
-  { day: "MON 9/7", desc: "<strong>Labor Day &mdash; US markets closed.</strong> No data, no earnings, no session." },
-  { day: "TUE 9/8", desc: "<strong>NFIB Small Business Optimism</strong> at 6:00, NY Fed inflation expectations, and consumer credit at 3:00. A thin holiday-shortened tape." },
-  { day: "WED 9/9", desc: "MBA mortgage applications and <strong>ADP</strong>. Light again &mdash; the whole week is back-loaded into Thursday and Friday." },
-  { day: "THU 9/10", desc: "<strong>PPI</strong> and <strong>jobless claims</strong> at 8:30, wholesale trade and existing home sales at 10:00. <strong>Oracle</strong>, Adobe and Macy's report." },
-  { day: "FRI 9/11", desc: "<strong>August CPI</strong> at 8:30 and preliminary UMich sentiment at 10:00. The last major inflation read before the <strong>Sep 15&ndash;16 FOMC</strong>." },
+  { day: "MON 9/14", desc: "Nothing on the calendar. The tape spends the day positioning into Wednesday." },
+  { day: "TUE 9/15", desc: "<strong>Empire State Manufacturing</strong> at 8:30, and the <strong>FOMC's two-day meeting begins</strong>. Trip.com reports after the close." },
+  { day: "WED 9/16", desc: "<strong>August retail sales</strong> plus import and export prices at 8:30. Then the whole week: the <strong>FOMC statement and the dot plot at 2:00</strong>, and <strong>Chair Warsh's press conference at 2:30</strong>. Lennar after the bell." },
+  { day: "THU 9/17", desc: "<strong>Jobless claims</strong>, housing starts and building permits at 8:30, pending home sales at 10:00 — the first full session to trade the decision rather than anticipate it." },
+  { day: "FRI 9/18", desc: "Industrial production at 9:15 and Leading Indicators at 10:00 — and <strong>quarterly expiration</strong>. Quad witching, the biggest gamma roll of the quarter." },
 ];
+
 
 // Only two days have names worth showing. A grid padded out with filler on a
 // holiday-shortened week reads as a busier calendar than the week actually is.
+// A quiet earnings week by design of the calendar — the Fed is the event. Two
+// names only; padding this grid would misrepresent where the risk actually is.
 const DEFAULT_EARNINGS: EarningsDay[] = [
-  { label: "Thu 9/10 — Oracle is the AI read", tickers: [{ symbol: "ORCL" }, { symbol: "ADBE" }, { symbol: "M" }] },
-  { label: "Fri 9/11", tickers: [{ symbol: "KR" }] },
+  { label: "Tue 9/15", tickers: [{ symbol: "TCOM" }] },
+  { label: "Wed 9/16", tickers: [{ symbol: "LEN" }] },
 ];
+
 
 
 /**
@@ -245,16 +247,15 @@ const DEFAULT_EARNINGS: EarningsDay[] = [
 const DEFAULT_GEX_SCANNER_ROWS: GexScannerRow[] = [];
 
 
+
 /**
  * Core Wall auto-buy prints, week of Aug 24–28. These are the FIVE BEST of the
  * fifteen the wall took that week — 6 of the 15 peaked at 2x or better, 14 of 15
  * peaked above entry, and one (8/24 10:30, 7630P) never ticked up at all. The
  * note under the table states that split; do not print the winners without it.
  */
-const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [
-  { date: "09-03", time: "9:45", contract: "7720C", entry: "$8.35", close: "$27.70", realizedPct: "+232%", dollars: "+$1,935", peak: "$37.10", peakAt: "2:16 PM", peakPct: "+344%" },
-  { date: "09-03", time: "10:30", contract: "7720C", entry: "$3.05", close: "$27.70", realizedPct: "+808%", dollars: "+$2,465", peak: "$35.65", peakAt: "2:02 PM", peakPct: "+1,069%" },
-];
+const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [];
+
 
 
 /**
@@ -272,13 +273,8 @@ const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [
  * and 8/24 9:45 (9.7) both cleared ≤15, and only 8/28 9:45 (22.1) and 8/24
  * 10:30 (15.2) missed every threshold.
  */
-const DEFAULT_CONF_ROWS: ConfRow[] = [
-  { date: "09-04", s945: "7750", c945: "6.1", hit945: false, s1030: "7750", c1030: "17.8", hit1030: false, s1200: "7700", c1200: "8.8", hit1200: false },
-  { date: "09-03", s945: "7720", c945: "0.2", hit945: true, s1030: "7720", c1030: "0.2", hit1030: true, s1200: "7750", c1200: "0.1", hit1200: true },
-  { date: "09-02", s945: "7660", c945: "0.3", hit945: true, s1030: "7675", c1030: "0.0", hit1030: true, s1200: "7680", c1200: "4.4", hit1200: true },
-  { date: "09-01", s945: "7625", c945: "0.1", hit945: true, s1030: "7660", c1030: "0.1", hit1030: true, s1200: "7660", c1200: "0.1", hit1200: true },
-  { date: "08-31", s945: "7650", c945: "10.9", hit945: false, s1030: "7650", c1030: "15.9", hit1030: false, s1200: "7670", c1200: "0.0", hit1200: true },
-];
+const DEFAULT_CONF_ROWS: ConfRow[] = [];
+
 
 
 /**
@@ -319,49 +315,46 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   // is intersected rather than Pick'd — Required<Partial<X>> is still Partial<X>.
   & { scannerProof: ScannerProof } {
   return {
-    issueLabel: opts.issueLabel || "Week of Sep 7–11",
-    recapHeadline: opts.recapHeadline || "162,000 jobs — triple the estimate — and the market started pricing a hike",
+    issueLabel: opts.issueLabel || "Week of Sep 14–18",
+    recapHeadline: opts.recapHeadline || "Core CPI came in hot, and the 10-year went looking for 5%",
     recapBody: opts.recapBody || [
-      "Flat on the surface, loud underneath. The S&amp;P finished the week +0.1%, the Nasdaq +0.4%, the Dow -0.3% — and then Friday's August employment report landed with 162,000 jobs against roughly 55,000 expected. Unemployment held at 4.1%, and the prior two months were revised up as well: June to 31,000 and July to 21,000. Odds of a September <em>hike</em> moved to about 65% from 55% before the print. The FOMC meets Sep 15–16.",
-      "Rates did the damage. The 10-year pushed to 4.78%, its highest intraday level since November 2023, and the 2-year to 4.37%; gold gave back 1.4% to $4,476.60. Good news for the economy is now bad news for the tape, and Friday closed with all three majors lower. Away from the macro, NVIDIA spent the week buying the AI stack outright — $3.5 billion into MediaTek, $35 billion of AI infrastructure through Lambda and roughly $13 billion for Hugging Face — and Apple began its post-Cook era under new CEO John Ternus.",
+      "Four sessions, and Friday was the only green one. The S&amp;P finished the week -0.8%, the Nasdaq -0.7%, the Dow -1.6%, with Friday's bounce snapping a four-day losing streak. August CPI itself was fine — +0.4% on the month, 3.4% year over year, both in line. <strong style=\"color:#ffffff;\">Core was the problem: +0.3% against +0.2% expected.</strong> That is the number the Fed actually reacts to, and odds of a hike at this week's meeting went to roughly 90%.",
+      "The bond market did the moving. The 10-year pushed toward 5%, Germany's went through 3.51% and Japan's hit 2.985% — its highest since 1996. The consumer is not enjoying it either: preliminary Michigan sentiment came in at 47.8 against 51.0 expected. The bright spot was Oracle, where cloud revenue grew 62% year over year and dragged the rest of the AI-infrastructure complex up with it. Energy did the other half of the damage — more on that below.",
     ],
     indexMoves: opts.indexMoves || DEFAULT_INDEX_MOVES,
-    aheadHeadline: opts.aheadHeadline || "A four-day week that ends on CPI — the last inflation print before the Fed decides",
+    aheadHeadline: opts.aheadHeadline || "The Fed decides Wednesday at 2:00, and Friday is quarterly expiration",
     calendarEvents: opts.calendarEvents || DEFAULT_CALENDAR,
     earningsDays: opts.earningsDays || DEFAULT_EARNINGS,
-    aheadNote: opts.aheadNote || "The shape of this week matters as much as the content. A closed Monday and a near-empty Tuesday and Wednesday, then everything at once: PPI and Oracle Thursday, August CPI Friday morning. Nowcasts have headline CPI near 3.4% and core near 2.4% with energy doing most of the lifting — and a hot print on top of 162,000 jobs turns a September hike from a coin flip into the base case, five days before the meeting. Oracle Thursday night is the other question: whether the hyperscalers can keep financing the AI buildout with the long end at 4.78%. A thin holiday tape running into a Thursday–Friday data wall is exactly the setup where the 9:45 open gaps and the 12:00 read earns its keep.",
-    oilHeadline: opts.oilHeadline || "The war premium came straight back — and diesel just hit a record",
-    oilPrice: opts.oilPrice || "$91.48",
-    oilChangeNote: opts.oilChangeNote || "WTI, Sep 4 · roughly +10% on the week · Brent back near $96 · US diesel $5.85/gal, an all-time high",
+    aheadNote: opts.aheadNote || "Two things own this week and neither is an earnings report. Wednesday at 2:00 the Fed decides with the market already at ~90% for a hike — which means the decision itself is close to priced and <strong style=\"color:#ffffff;\">the dot plot is the real event</strong>, along with whatever Warsh does with it at 2:30. Retail sales land at 8:30 that same morning, so Wednesday is a two-gap day. Then Friday is quarterly expiration: the biggest gamma roll of the quarter, where the 9:45 and 10:30 windows open into positioning that has nothing to do with the news. A hawkish dot plot on Wednesday and a quad-witching Friday in the same week is about as much forced repositioning as the calendar produces.",
+    oilHeadline: opts.oilHeadline || "Crude is back over $100",
+    oilPrice: opts.oilPrice || "$100.05",
+    oilChangeNote: opts.oilChangeNote || "WTI, Sep 11 · roughly +8% on the week · refiners at 52-week highs",
     oilBody: opts.oilBody || [
-      "Last week this letter said crude had stopped being the thing that set overnight gap risk. That held for exactly one week. WTI added close to 10% to $91.48 and Brent went back to roughly $96 as US–Iran tensions re-escalated, unwinding the de-escalation trade the market had spent August leaning into. Worth saying plainly: the read was wrong, and five sessions was all it took to prove it.",
-      "The part that reaches past the futures screen is diesel. US pump prices hit an all-time high of $5.85 a gallon on Friday, with wars in Iran and Ukraine squeezing global distillate supply. Diesel is what moves freight and heats houses, and it feeds into inflation with a lag — which puts it directly in front of Friday's CPI print and the Fed meeting behind it.",
+      "WTI closed the week at $100.05, up about 8% and back over the hundred handle after recovering from Thursday's dip. Refiners pushed to 52-week highs on it. Two weeks ago this letter had crude at $83 and the war premium draining away; it is now $100 with the premium fully back on, which is a useful reminder of how fast that particular read can go stale.",
+      "The part that matters for Wednesday: this is the same energy complex doing most of the lifting inside the CPI print the Fed is about to respond to. Crude at $100 alongside core running +0.3% is the hawkish argument delivered in two numbers, and it is why the dot plot is the thing to watch rather than the hike itself.",
     ],
-    // 10 of 15 inside 5 points: 4/5 at 12:00, 3/5 at both 9:45 and 10:30. No
-    // clean window this week, so the tile is 80% and not 100% — say the real
-    // number rather than reaching for a threshold that flatters it.
-    coreBullseyePct: opts.coreBullseyePct || "80%",
-    coreBullseyeSub: opts.coreBullseyeSub || "&le;5 pts &middot; 12:00 CB &middot; 4 of 5 sessions",
+    coreBullseyePct: opts.coreBullseyePct || "—",
+    coreBullseyeSub: opts.coreBullseyeSub || "[fill before send]",
     // A "loss" here is a BREACH — price left the estimated-move band. Do not
     // write the note as "failed to reach"; that is the opposite of what happens.
-    // Low VIX narrows the band; what actually decides the week is whether the
-    // RANGE stays inside it. Both prior weeks ran on a low VIX and scored 41.0%
-    // then 82.4%, so vol alone explains neither.
-    estMovePct: opts.estMovePct || "71.7%",
-    estMoveSub: opts.estMoveSub || "167-66 &middot; 233 of 404 tickers scored",
+    // What decides the week is whether the RANGE stays inside the band, not the
+    // VIX level on its own. Expiration week and an FOMC day both widen realized
+    // range, so expect pressure on this number.
+    estMovePct: opts.estMovePct || "—",
+    estMoveSub: opts.estMoveSub || "[fill before send]",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
-    resultsNote: opts.resultsNote ||
-      "A ✓ means the Core read landed within 5 points of where SPX actually printed. Across Aug 31 – Sep 4 that was 10 of 15 — 4 of 5 at 12:00, 3 of 5 at both 9:45 and 10:30. The shape matters more than the total: <strong style=\"color:#ffffff;\">Tuesday, Wednesday and Thursday went 9 for 9</strong> across all three windows, and every single miss landed on the two days that had something behind them — the month-end open on Monday and the jobs report on Friday. Widen the tolerance to 15 points and the week is 13 of 15.",
-    estMoveNote: opts.estMoveNote ||
-      "Estimated Move: <strong style=\"color:#ffffff;\">167 wins against 66 losses</strong> on 233 scored names, 71.7%. That is three very different weeks in a row — 41.0%, then 82.4%, now 71.7% — from a model that has not changed. A win is price staying inside the band, so the number is really a read on the range: when the tape covers more ground than implied vol says it should, breaches come earlier and the score falls. Printed here every week either way.",
-    showScannerProof: opts.showScannerProof !== false,
+    resultsNote: opts.resultsNote || "[ADD CORE SUMMARY — hit rate per window, what a ✓ means, and the week's misses]",
+    estMoveNote: opts.estMoveNote || "[ADD ESTIMATED MOVE SUMMARY — win-loss, names scored, Core Board, and the range read behind it]",
+    // Flip to `!== false` (or pass showScannerProof: true) once a catch is in;
+    // until then the section renders its dashed placeholder rather than
+    // carrying last issue's DELL card forward into a new letter.
+    showScannerProof: opts.showScannerProof === true,
     scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
     // Names the flag time, the high AND where it last marked. The high is the
     // headline number on the dashboard card, so it is the one a reader will
     // check — but a high is not an exit, and $15.65 is the honest second half
     // of that sentence. Do not print the 1,019% without the $15.65.
-    scannerProofNote: opts.scannerProofNote ??
-      "Flagged <strong style=\"color:#ffffff;\">Sep 2 at 11:00 AM</strong> with DELL at 441.78 — a 485 call 9.8% out of the money on the Sep 4 expiry, graded A+, 4.9M in premium. $1.68 at the flag; it printed $18.80 at 3:44 PM (+$1,712 per contract) and last marked $15.65, +832%. The high is a high, not an exit. One contract is not a track record, and options can and do go to zero.",
+    scannerProofNote: opts.scannerProofNote ?? "[ADD SCANNER CAPTION — flag time, the high, AND where it last marked]",
     gexScannerRows: opts.gexScannerRows || DEFAULT_GEX_SCANNER_ROWS,
     // The label says "winners" out loud. That is the denominator disclosure for
     // a filtered list — do not soften it to "flags" or "catches", which would
@@ -376,22 +369,17 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     // Dated file, one per issue. Next week: save the new PNG to public/ under a
     // new date and repoint WALL_CHART_URL — never reuse a filename, or every
     // already-delivered letter silently starts showing the newer chart.
-    wallChartUrl: opts.wallChartUrl ?? WALL_CHART_URL,
-    wallChartLabel: opts.wallChartLabel || "Core migration — Aug 31 – Sep 4",
-    wallChartHeadline: opts.wallChartHeadline || "Five sessions, put wall to call wall, with CORE drawn through the middle",
-    // Empty by design — the chart carries its own legend and axis labels, so a
-    // paragraph under it only repeats what the reader can already see. Pass a
-    // string to bring the caption back for an issue that needs one.
+    // "" renders the dashed placeholder. Save this week's PNG to public/ under a
+    // NEW dated name and point this at it — WALL_CHART_URL still holds LAST
+    // week's file and reusing it would show the wrong five sessions.
+    wallChartUrl: opts.wallChartUrl ?? "",
+    wallChartLabel: opts.wallChartLabel || "Core migration — Sep 8–11",
+    wallChartHeadline: opts.wallChartHeadline || "[ADD CORE-MIGRATION HEADLINE]",
     wallChartNote: opts.wallChartNote ?? "",
     showAutoBuy: opts.showAutoBuy !== false,
     autoBuyRows: opts.autoBuyRows || DEFAULT_AUTO_BUY_ROWS,
-    autoBuyLabel: opts.autoBuyLabel || "Core Wall auto buy — Thursday Sep 3",
-    // This caption earns its place: it explains why two rows on the same
-    // contract show wildly different percentages, and it defines "sold" as the
-    // close. Without it the 808% looks like a different, better trade than the
-    // 232% — it is the same trade with a cheaper entry.
-    autoBuyNote: opts.autoBuyNote ??
-      "Both windows bought the same contract on Thursday. The 9:45 read paid $8.35; the 10:30 read got it at $3.05 after a dip to $1.80 — <strong style=\"color:#ffffff;\">same $27.70 close, so the later fill earned roughly four times the percentage on an identical trade.</strong> Realized is entry to the closing bell, which is a real exit. Peak is only the high it touched on the way, and nobody sells the high.",
+    autoBuyLabel: opts.autoBuyLabel || "Core Wall auto buy",
+    autoBuyNote: opts.autoBuyNote ?? "",
     ctaUrl: opts.ctaUrl || PRICING_URL,
     // NO PROMO CODE. Pricing is $50/mo or $500/yr flat — do not reintroduce
     // EDGE3, a struck-through list price, or "instead of $1,000". That offer is
@@ -418,7 +406,7 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   };
 }
 
-export const WEEKLY_EDGE_SUBJECT = "The Weekly Edge — 162,000 jobs, 65% odds of a hike, and CPI on Friday";
+export const WEEKLY_EDGE_SUBJECT = "The Weekly Edge — the Fed decides Wednesday, and Friday is quad witching";
 
 /** Plain-text fallback. */
 export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
@@ -638,7 +626,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
 <title>${escapeHtml(WEEKLY_EDGE_SUBJECT)}</title>
 </head>
 <body style="margin:0;padding:0;background:#05060A;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Payrolls came in at triple the estimate, oil ripped 10%, and Friday's CPI is the last inflation print before the Fed meets.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Core CPI ran hot, the 10-year is knocking on 5%, and crude is back over $100 — into a Fed decision and a quarterly expiration.</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#05060A;">
     <tr>
       <td align="center" style="padding:32px 16px;">
@@ -845,7 +833,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 <tr>
                   <td align="center" style="padding:26px 20px;">
                     <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.16em;text-transform:uppercase;color:#00E676;">${escapeHtml(o.priceMonthly)}/month &middot; ${escapeHtml(o.priceAnnual)}/year</div>
-                    <div style="font:900 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;">CPI Friday. FOMC the week after. <span style="color:#00E676;">Don't trade it blind.</span></div>
+                    <div style="font:900 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;">Fed Wednesday, expiration Friday. <span style="color:#00E676;">Don't trade it blind.</span></div>
                     <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">Live GEX levels, Core confidence scoring, the Core Wall auto buy and estimated-move tracking. <strong style="color:#ffffff;">${escapeHtml(o.priceMonthly)} a month, or ${escapeHtml(o.priceAnnual)} a year.</strong> No code, no promo, nothing expiring at midnight.</div>
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;"><tr>
                       <td align="center" style="border-radius:12px;background:#00C853;">

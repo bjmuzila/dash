@@ -1,5 +1,107 @@
 # Changelog
 
+## 2026-09-13 (h) - Open bracket: pick when the bracket is taken — 09:29 / 09:35 / 09:45 / 10:00
+
+09:29 is the worst possible anchor for **VOL ONLY**, and for an obvious reason:
+vol-only GEX is `netVolGEX` alone — what has traded TODAY — and at 09:29 almost
+nothing has. The walls it produces come off a handful of prints and move as soon
+as real volume arrives, so a bracket frozen there is measuring noise.
+
+New `anchor` param on `/api/core-hold` and a chip row leading the toolbar:
+**09:29** (default) / **09:35** / **09:45** / **10:00**. Everything else is
+unchanged by it — the bracket is still frozen AT the anchor, the close is still
+the daily close — with two consequences that follow properly:
+
+- **Walls rolled** counts moves AFTER the anchor only. A wall that moved at 09:45
+  has not rolled on a 10:00 bracket; it is part of it. (`ANCHORS[key].slot` is
+  the walls_log slot the anchor sits at or after — 09:35 falls between slot 0
+  and slot 1, so it shares slot 0's answer.)
+- **Never left** watches price from the anchor forward. Where price went at 09:40
+  is not an escape from a range that did not exist yet.
+
+**Where a later anchor's levels come from.** `walls_log` is a 15-minute grid —
+slot 0 is 09:29, then 09:45, 10:00 — and it is CHANGE-ONLY, so there is no 09:35
+row at all and no guarantee of one at 09:45. The sweep tables have a row every
+minute or few, so a later anchor reads the FIRST sweep at or after its clock
+time, within `ANCHOR_GRACE_MIN` (10 min — covers the aggregate legs' 5-sweep
+sub-cadence and a restart, without letting a session with a real gap anchor
+itself at 11:00 and be counted as a 09:45 reading). `DISTINCT ON … ORDER BY ts
+ASC`, deliberately: 09:45 means the reading AS OF 09:45, and taking the newest
+row in the window would quietly make it 09:55 on any slow leg.
+
+Which table, and therefore how far back: `scanner_variants` for the three
+non-default variants — **not pruned, full history** — and `scanner_snapshots`
+for 0DTE · OI+Vol, which retention cuts at 10 days. The response carries
+`anchor_source` and the footnote under the table says it outright, because that
+is not a thing to discover from a suspiciously round session count. So the
+vol-only study Brandon actually wanted has the full window; the default
+variant's later anchors have ten days.
+
+The window, the symbol list and the per-symbol session count stay the
+`walls_log` ones at every anchor — "the sessions the recorder wrote" is the
+population either way. A session with no sweep inside the grace window keeps no
+bracket and falls out as `incomplete` rather than silently keeping its 09:29 one,
+which would mix two anchors in one column.
+
+Files: `server-v2/core-hold.js`, `server-v2/api-router.js`,
+`owner-vite/src/pages/Results.tsx`.
+
+## 2026-09-13 - The Weekly Edge rebuilt for the week of Sep 14-18 (FOMC week)
+
+`lib/emails/weekly-edge.ts`. New issue. Subject: "The Weekly Edge - the Fed
+decides Wednesday, and Friday is quad witching".
+
+RECAP (Sep 8-11) - four sessions, one green:
+- S&P -0.8% / Nasdaq -0.7% / Dow -1.6%; Friday snapped a four-day losing streak.
+- August CPI was IN LINE (+0.4% m/m, 3.4% y/y). CORE was not: +0.3% vs +0.2%
+  expected. The copy makes that distinction explicitly rather than saying "CPI
+  came in hot" - headline in line and core hot is a different story, and it is
+  the one that moved hike odds to ~90%.
+- 10-year toward 5%; Bund through 3.51%; JGB 2.985%, highest since 1996.
+- UMich prelim sentiment 47.8 vs 51.0 expected.
+- Oracle cloud revenue +62% y/y, dragged the AI-infra complex with it.
+
+WEEK AHEAD - two events, neither an earnings report:
+- WED 9/16: retail sales 8:30, then FOMC statement + DOT PLOT at 2:00 and Warsh
+  at 2:30. `aheadNote` argues the hike is ~priced at 90% so the DOT PLOT is the
+  actual event - that framing is the useful one for a 0DTE reader, not "will
+  they hike".
+- FRI 9/18: quarterly expiration / quad witching. Called out as the biggest
+  gamma roll of the quarter, with the 9:45 and 10:30 windows opening into
+  positioning unrelated to news. Sep 18 IS the third Friday - verified against
+  the calendar, not assumed.
+- Earnings grid is TCOM (Tue) and LEN (Wed) only. Two names is what the week
+  has; padding it would misrepresent where the risk is.
+
+OIL - crude back over $100. WTI $100.05, ~+8% on the week, refiners at 52-week
+highs. The copy points at its own recent record: two issues ago this letter had
+crude at $83 with the war premium draining away. It says so - "a useful reminder
+of how fast that particular read can go stale". Second para ties $100 crude to
+the +0.3% core print as the hawkish case in two numbers.
+
+ALL DASHBOARD STATS ARE PLACEHOLDERS, by request. Every one renders as a visible
+dashed "[ADD ...]" box: Core tile, Estimated Move tile, confidence table,
+`resultsNote`, `estMoveNote`, auto-buy rows, scanner catch, core-migration chart.
+- `showScannerProof` flipped back to `=== true` so last issue's DELL card does
+  not carry forward. Flip to `!== false` once a catch is in.
+- `wallChartUrl` back to "". `WALL_CHART_URL` still holds the Sep 4 file; save
+  this week's chart under a NEW dated name and repoint it. Reusing a filename
+  retro-changes the image inside every already-delivered letter.
+- `autoBuyLabel` reset to plain "Core Wall auto buy" - it must not claim "best N
+  of M" until there is a denominator.
+
+CTA unchanged: $50/mo, $500/yr, no code. Headline now "Fed Wednesday, expiration
+Friday."
+
+OPEN ITEM CARRIED FORWARD: the earnings tiles still hotlink
+`logos.stocktwits-cdn.com/<SYMBOL>.png`. Third-party host, no hotlink guarantee,
+and the tile has a WHITE background so a 404 renders as a white square on the
+dark card. TCOM and LEN are likelier to resolve than last week's single-letter
+`M`, but this is unverified until a test send. Options: self-host four PNGs in
+public/, or drop logos for ticker text chips.
+
+Preview: `generated/2026-09-13-weekly-edge-preview.html` / `.jpg`.
+
 ## 2026-09-13 (g) - Open bracket: the table gets the page, the stat row pays for it
 
 The scroll box took whatever the stat row left, which on a laptop was four rows

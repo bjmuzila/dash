@@ -10358,16 +10358,22 @@ Return exactly one element per input key, in the same order. Never merge, split,
 
   // /api/core-hold — DOES THE OPENING BRACKET HOLD? Owner.
   //
-  //   GET /api/core-hold?days=60[&end=YYYY-MM-DD][&scope=&basis=][&symbols=A,B]
+  //   GET /api/core-hold?days=60[&end=][&scope=&basis=][&anchor=][&symbols=A,B]
   //   → { ok, days, end, scope, basis, dates:[first,last], sessions_in_window,
   //       totals, rows: [{ symbol, sessions, scored, inside, inside_rate,
   //                        never_left_rate, above_core_rate, width_pct, … }] }
   //
-  // The put wall and call wall AS CAPTURED AT 09:29 are a range; the CORE sits
-  // inside it. Per symbol, over the newest N recorded sessions: how often the
-  // close landed inside that range, how often price never left it at all, which
+  // The put wall and call wall AS CAPTURED AT THE ANCHOR are a range; the CORE
+  // sits inside it. Per symbol, over the newest N recorded sessions: how often
+  // the close landed inside that range, how often price never left it, which
   // side of the CORE the inside closes finished on, and — the control — how wide
-  // the bracket was as a percent of the open.
+  // the bracket was as a percent of spot.
+  //
+  // `anchor` is open (09:29, the default) | 0935 | 0945 | 1000. It matters most
+  // on basis=vol: vol-only GEX is today's volume alone, and at 09:29 there is
+  // barely any. A later anchor reads the sweep tables instead of walls_log —
+  // `anchor_source` in the response says which, and therefore how far back the
+  // answer goes.
   //
   // READ width_pct BEFORE inside_rate. A bracket 6% wide that contains the close
   // 95% of the time has said nothing. The model, the sources and what is
@@ -10400,6 +10406,7 @@ Return exactly one element per input key, in the same order. Never merge, split,
           end: u.searchParams.get('end'),
           scope: u.searchParams.get('scope'),
           basis: u.searchParams.get('basis'),
+          anchor: u.searchParams.get('anchor'),
           symbols,
         });
         send(res, 200, out, { 'Cache-Control': NO_STORE });

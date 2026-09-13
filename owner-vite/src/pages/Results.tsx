@@ -1057,6 +1057,7 @@ type BracketRow = {
 };
 type BracketResp = {
   ok?: boolean; days?: number; scope?: string; basis?: string;
+  anchor?: string; anchor_label?: string; anchor_source?: string;
   dates?: [string, string]; sessions_in_window?: number;
   // Pooled, not an average of the per-symbol rates — a ticker with four sessions
   // must not weigh the same as SPX with sixty.
@@ -1067,6 +1068,24 @@ type BracketResp = {
 type SortKey = "symbol" | "sessions" | "inside" | "never" | "width" | "rolled";
 
 const DAY_OPTS = [20, 60, 120, 500] as const;
+
+/**
+ * WHEN THE BRACKET IS TAKEN.
+ *
+ * 09:29 is the recorder's open capture and the default — and the worst anchor
+ * for VOL ONLY, because vol-only GEX is today's volume alone and at 09:29 there
+ * is barely any of it. The later anchors read the sweep tables instead of the
+ * 15-minute level log (which has no 09:35 row at all), so they also change how
+ * far back the answer reaches — the footnote under the table says which table
+ * answered.
+ */
+const ANCHOR_OPTS = [
+  { key: "open", label: "09:29" },
+  { key: "0935", label: "09:35" },
+  { key: "0945", label: "09:45" },
+  { key: "1000", label: "10:00" },
+] as const;
+type AnchorKey = (typeof ANCHOR_OPTS)[number]["key"];
 
 /**
  * HOW MUCH TABLE IS GUARANTEED.
@@ -1092,6 +1111,7 @@ function BracketView() {
   const [days, setDays] = useState<number>(60);
   const [scope, setScope] = useState<"0dte" | "agg">("0dte");
   const [basis, setBasis] = useState<"oivol" | "vol">("oivol");
+  const [anchor, setAnchor] = useState<AnchorKey>("open");
   const [sort, setSort] = useState<SortKey>("sessions");
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1099,14 +1119,14 @@ function BracketView() {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const r = await fetch(`/api/core-hold?days=${days}&scope=${scope}&basis=${basis}`, { cache: "no-store" });
+      const r = await fetch(`/api/core-hold?days=${days}&scope=${scope}&basis=${basis}&anchor=${anchor}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j: BracketResp = await r.json();
       if (!j?.ok) throw new Error(String((j as { error?: string })?.error || "no data"));
       setResp(j);
       setLoaded(true);
     } catch (e) { setErr(String(e)); setLoaded(true); }
-  }, [days, scope, basis]);
+  }, [days, scope, basis, anchor]);
 
   // No poll. Nothing in this window changes until tomorrow's 09:29 capture, and
   // a 500-session scan on a timer is a query nobody asked for.
@@ -1187,10 +1207,15 @@ function BracketView() {
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 10, flexShrink: 0, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Open bracket</span>
         <span style={{ fontSize: 14, color: C.label }}>
-          the 09:29 put wall → call wall, frozen · did the close land inside it
+          the {resp?.anchor_label ?? "09:29"} put wall → call wall, frozen · did the close land inside it
           {resp?.dates ? ` · ${resp.dates[0]} → ${resp.dates[1]} (${resp.sessions_in_window} sessions)` : ""}
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {/* WHEN, then how far back, then which levels. The anchor leads because
+              it is the one that changes what the study is OF. */}
+          {ANCHOR_OPTS.map((a) => (
+            <button key={a.key} onClick={() => setAnchor(a.key)} style={chip(anchor === a.key)}>{a.label}</button>
+          ))}
           {DAY_OPTS.map((d) => (
             <button key={d} onClick={() => setDays(d)} style={chip(days === d)}>{d === 500 ? "All" : `${d}d`}</button>
           ))}
@@ -1295,10 +1320,21 @@ function BracketView() {
           rates, which would weigh a ticker with four sessions the same as SPX with sixty.
         </div>
         <div>
-          Levels are frozen at 09:29 — a wall that rolled later is still measured at
-          where it opened, which is the only bracket you could have traded. “Walls
-          rolled” is how often they moved at all.
+          Levels are frozen at {resp?.anchor_label ?? "09:29"} — a wall that rolled later is
+          still measured where it was then, which is the only bracket you could have
+          traded. “Walls rolled” counts moves AFTER the anchor only, and “never left”
+          watches price from the anchor forward.
         </div>
+        {resp?.anchor_source && resp.anchor_source !== "walls_log" ? (
+          <div>
+            The level log is a 15-minute grid with no {resp.anchor_label} row, so this anchor
+            reads <code>{resp.anchor_source}</code> — the first sweep at or after{" "}
+            {resp.anchor_label}.
+            {resp.anchor_source === "scanner_snapshots"
+              ? " That table is pruned at 10 days, so the 0DTE · OI+Vol variant reaches back only that far on a later anchor; the other three read scanner_variants, which is not pruned."
+              : " That table is not pruned, so the history is the full one."}
+          </div>
+        ) : null}
         <div>
           A session that opened OUTSIDE its own bracket is counted in “opened outside”
           and left out of the rate — price is not being contained there, it is being
