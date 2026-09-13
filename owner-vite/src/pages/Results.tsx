@@ -1331,7 +1331,7 @@ function BracketView() {
             reads <code>{resp.anchor_source}</code> — the first sweep at or after{" "}
             {resp.anchor_label}.
             {resp.anchor_source === "scanner_snapshots"
-              ? " That table is pruned at 10 days, so the 0DTE · OI+Vol variant reaches back only that far on a later anchor; the other three read scanner_variants, which is not pruned."
+              ? " That table is pruned at 10 days for most symbols — the fourteen MAIN tickers are exempt and keep every sweep — so on a later anchor the 0DTE · OI+Vol variant reaches back ten days outside MAIN. The other three variants read scanner_variants, which is not pruned at all."
               : " That table is not pruned, so the history is the full one."}
           </div>
         ) : null}
@@ -1350,8 +1350,10 @@ function BracketView() {
           that was.
         </div>
         <div>
-          “Never left” reads the 5-minute scanner path, which retention cuts at 10 days —
-          its denominator is smaller than the headline’s on purpose, never folded into it.
+          “Never left” reads the 5-minute scanner path. Retention cuts that at 10 days for
+          most symbols; the fourteen MAIN tickers are exempt and keep every sweep, so their
+          denominator fills in over time. It stays separate from the headline’s on purpose,
+          never folded into it.
           {t && t.scanner_closes > 0 ? ` ${t.scanner_closes} close(s) are the last 5-minute spot rather than the official daily bar.` : ""}
         </div>
       </div>

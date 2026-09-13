@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Sunday 9/13/2026
+
+* **Level Log:** the range switch now goes past 5 sessions — **Monthly** and **All time** show a wall holding its strike across weeks, not just days. Charts you copy are cleaner and carry the ticker's logo — https://cbedge.net/v3/level-log
+
 ## Friday 9/11/2026
 
 * **Seasonality Almanac:** new **Sept 11** section — what SPX did on the anniversary every year since 2001. Every event chart was redrawn, and the whole page now works on a phone — https://cbedge.net/explore/seasonality

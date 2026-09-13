@@ -1,12 +1,19 @@
 /**
- * The persistent chrome: one bar, then the routed page.
+ * The persistent chrome: one bar, one left rail, then the routed page.
  *
- * Deliberately a bar rather than Voltick's 180px left rail. The rail carries the
- * product's six destinations; this site is a contents board whose list changes
- * every week, and a rail that has to be re-cut every time a page is added is a
- * rail that goes stale. When a real Voltick surface lands here, it brings the
- * rail with it.
+ * The rail is a contents list, not Voltick's product rail. It lists the
+ * CATEGORIES from lib/nav.ts, each with its own mark, and a category opens to
+ * the pages inside it. That keeps it one row per category at rest, so adding a
+ * page never lengthens the rail, which is what went stale about a flat rail of
+ * every destination.
+ *
+ * It is generated from the same array Home renders, so the rail, the contents
+ * board and the router cannot disagree about what exists.
+ *
+ * Below BP_MOBILE the rail is hidden (index.css) and the contents board is the
+ * only navigation, which is the right shape for a phone.
  */
+import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   ACCENT,
@@ -17,16 +24,35 @@ import {
   NAV_BG,
   PAPER,
   PAPER_QUIET,
+  R_MD,
   SKY,
   W_BOLD,
+  W_MED,
   rgba,
 } from "../theme";
-import { findRoute } from "../lib/nav";
+import { VOLTICK_SECTIONS, findGroup, findRoute } from "../lib/nav";
+
+const RAIL_W = 244;
 
 export default function Shell() {
   const { pathname } = useLocation();
   const here = findRoute(pathname);
   const atHome = pathname === "/";
+
+  /**
+   * Which categories are open. Closed at rest: the rail's job is to be a short
+   * list you expand, not a wall. The category holding the current page opens
+   * itself, so the rail always shows where you are.
+   */
+  const [open, setOpen] = useState<Record<string, boolean>>(() => {
+    const g = findGroup(pathname);
+    return g ? { [g.title]: true } : {};
+  });
+
+  useEffect(() => {
+    const g = findGroup(pathname);
+    if (g) setOpen((prev) => (prev[g.title] ? prev : { ...prev, [g.title]: true }));
+  }, [pathname]);
 
   return (
     <div className="vk-aurora vk-aurora-page" style={{ minHeight: "100%" }}>
@@ -44,7 +70,7 @@ export default function Shell() {
       >
         <div
           style={{
-            maxWidth: CONTENT_MAX,
+            maxWidth: CONTENT_MAX + RAIL_W,
             marginInline: "auto",
             padding: "0 20px",
             minHeight: 56,
@@ -143,7 +169,7 @@ export default function Shell() {
         {here && (
           <div
             style={{
-              maxWidth: CONTENT_MAX,
+              maxWidth: CONTENT_MAX + RAIL_W,
               marginInline: "auto",
               padding: "0 20px 10px",
               fontFamily: MONO,
@@ -157,7 +183,135 @@ export default function Shell() {
         )}
       </header>
 
-      <Outlet />
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          maxWidth: CONTENT_MAX + RAIL_W,
+          marginInline: "auto",
+        }}
+      >
+        <nav
+          className="vk-rail vk-scroll"
+          aria-label="Contents"
+          style={{
+            width: RAIL_W,
+            flexShrink: 0,
+            position: "sticky",
+            top: 56,
+            alignSelf: "flex-start",
+            maxHeight: "calc(100vh - 56px)",
+            padding: "20px 12px 40px",
+            borderRight: `1px solid ${LINE}`,
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {VOLTICK_SECTIONS.map((group) => {
+              const isOpen = !!open[group.title];
+              const holdsHere = group.items.some((i) => i.path === pathname);
+              return (
+                <div key={group.title}>
+                  <button
+                    type="button"
+                    className="vk-railrow"
+                    aria-expanded={isOpen}
+                    onClick={() =>
+                      setOpen((prev) => ({ ...prev, [group.title]: !prev[group.title] }))
+                    }
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      width: "100%",
+                      minHeight: 40,
+                      padding: "8px 10px",
+                      borderRadius: R_MD,
+                      border: "1px solid transparent",
+                      background: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      font: "inherit",
+                      fontSize: 14,
+                      fontWeight: W_MED,
+                      color: holdsHere ? ACCENT_TEXT : PAPER,
+                    }}
+                  >
+                    <span aria-hidden style={{ fontSize: 15, lineHeight: 1, width: 18 }}>
+                      {group.icon}
+                    </span>
+                    <span style={{ flex: 1 }}>{group.title}</span>
+                    <span
+                      aria-hidden
+                      style={{
+                        fontFamily: MONO,
+                        fontSize: 10,
+                        color: PAPER_QUIET,
+                        transform: isOpen ? "rotate(90deg)" : "none",
+                        transition: "transform 140ms ease",
+                      }}
+                    >
+                      ▶
+                    </span>
+                  </button>
+
+                  {isOpen && (
+                    <ul style={{ listStyle: "none", margin: "2px 0 6px", padding: 0 }}>
+                      {group.items.map((item) => {
+                        const active = item.path === pathname;
+                        const style = {
+                          display: "flex",
+                          alignItems: "center",
+                          minHeight: 36,
+                          padding: "6px 10px 6px 38px",
+                          borderRadius: R_MD,
+                          fontSize: 13,
+                          color: active ? ACCENT_TEXT : PAPER,
+                          background: active ? rgba(ACCENT, 0.12) : "none",
+                          boxShadow: active ? `inset 2px 0 0 ${ACCENT}` : "none",
+                        } as const;
+                        return (
+                          <li key={item.path}>
+                            {/* nginx owns an external path, so it is a real
+                                navigation and never a client-side Link. */}
+                            {item.external ? (
+                              <a href={item.path} className="vk-raillink" style={style}>
+                                {item.label}
+                                <span style={{ marginLeft: 6, color: PAPER_QUIET }}>↗</span>
+                              </a>
+                            ) : (
+                              <Link to={item.path} className="vk-raillink" style={style}>
+                                {item.label}
+                                {item.status === "planned" && (
+                                  <span
+                                    style={{
+                                      marginLeft: 8,
+                                      fontFamily: MONO,
+                                      fontSize: 9,
+                                      letterSpacing: "0.08em",
+                                      textTransform: "uppercase",
+                                      color: PAPER_QUIET,
+                                    }}
+                                  >
+                                    soon
+                                  </span>
+                                )}
+                              </Link>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </nav>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Outlet />
+        </div>
+      </div>
 
       <footer
         style={{
@@ -167,7 +321,7 @@ export default function Shell() {
       >
         <div
           style={{
-            maxWidth: CONTENT_MAX,
+            maxWidth: CONTENT_MAX + RAIL_W,
             marginInline: "auto",
             padding: "18px 20px 34px",
             fontSize: 12,

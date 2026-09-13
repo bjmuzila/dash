@@ -99,9 +99,9 @@ router entry and renders as a plain anchor, so the click is a real navigation.
 ## Design rules that are defects when broken
 
 They are restated at the top of `src/theme.ts` and rendered live at
-`/design-system` and `/colours`. In short:
+`/design-system` and `/colors`. In short:
 
-1. A reserved colour means exactly one thing. Import the token. A near-miss hex
+1. A reserved color means exactly one thing. Import the token. A near-miss hex
    is worse than a reuse.
 2. No grey text. Secondary information is size, weight, spacing, position.
 3. No em-dashes in anything a user reads. Middle dot, comma, colon, parentheses.

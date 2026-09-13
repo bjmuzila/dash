@@ -10,8 +10,9 @@ import type { ComponentType, LazyExoticComponent } from "react";
  * no nav entry ships a chunk nothing links to, so do not leave one behind.
  */
 export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
+  Newsletter: lazy(() => import("./Newsletter")),
   DesignSystem: lazy(() => import("./DesignSystem")),
-  Colours: lazy(() => import("./Colours")),
+  Colors: lazy(() => import("./Colors")),
   FeedCheck: lazy(() => import("./FeedCheck")),
   // Overview, SurfaceMap, Vocabulary and Questions are listed in nav.ts and
   // render Placeholder until a component lands here.

@@ -105,18 +105,18 @@ export function Card({
 
 /**
  * A small pill carrying a mark plus a value, as in `★ VOLT 772`. Mark and value
- * both take the level's reserved colour.
+ * both take the level's reserved color.
  */
 export function Chip({
   mark,
   label,
   value,
-  colour,
+  color,
 }: {
   mark?: string;
   label: string;
   value?: ReactNode;
-  colour: string;
+  color: string;
 }) {
   return (
     <span
@@ -126,13 +126,13 @@ export function Chip({
         gap: 7,
         padding: "5px 11px",
         borderRadius: R_PILL,
-        border: `1px solid ${rgba(colour, 0.45)}`,
-        background: rgba(colour, 0.1),
+        border: `1px solid ${rgba(color, 0.45)}`,
+        background: rgba(color, 0.1),
         fontFamily: MONO,
         fontSize: 11,
         fontWeight: 700,
         letterSpacing: "0.06em",
-        color: colour,
+        color: color,
         whiteSpace: "nowrap",
       }}
     >

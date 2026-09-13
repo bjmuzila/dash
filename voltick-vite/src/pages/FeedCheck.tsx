@@ -209,19 +209,19 @@ export default function FeedCheck() {
 }
 
 function StateTag({ state }: { state: Probe["state"] | string }) {
-  // GOOD and BAD are data colours, so they are not used for UI state here. The
+  // GOOD and BAD are data colors, so they are not used for UI state here. The
   // tag says what happened in Paper, with chrome carrying the emphasis.
   void GOOD;
   void BAD;
-  const map: Record<string, { text: string; ring: string; colour: string }> = {
-    idle: { text: "Idle", ring: LINE, colour: PAPER_QUIET },
-    running: { text: "Running", ring: rgba(ACCENT, 0.5), colour: ACCENT_TEXT },
-    opening: { text: "Opening", ring: rgba(ACCENT, 0.5), colour: ACCENT_TEXT },
-    open: { text: "Open", ring: rgba(ACCENT, 0.6), colour: ACCENT_TEXT },
-    ok: { text: "Answered", ring: rgba(ACCENT, 0.6), colour: ACCENT_TEXT },
-    closed: { text: "Closed", ring: LINE, colour: PAPER_QUIET },
-    html: { text: "Not proxied", ring: rgba(ACCENT, 0.35), colour: PAPER },
-    fail: { text: "Failed", ring: rgba(ACCENT, 0.35), colour: PAPER },
+  const map: Record<string, { text: string; ring: string; color: string }> = {
+    idle: { text: "Idle", ring: LINE, color: PAPER_QUIET },
+    running: { text: "Running", ring: rgba(ACCENT, 0.5), color: ACCENT_TEXT },
+    opening: { text: "Opening", ring: rgba(ACCENT, 0.5), color: ACCENT_TEXT },
+    open: { text: "Open", ring: rgba(ACCENT, 0.6), color: ACCENT_TEXT },
+    ok: { text: "Answered", ring: rgba(ACCENT, 0.6), color: ACCENT_TEXT },
+    closed: { text: "Closed", ring: LINE, color: PAPER_QUIET },
+    html: { text: "Not proxied", ring: rgba(ACCENT, 0.35), color: PAPER },
+    fail: { text: "Failed", ring: rgba(ACCENT, 0.35), color: PAPER },
   };
   const m = map[state] ?? map.idle;
   return (
@@ -232,7 +232,7 @@ function StateTag({ state }: { state: Probe["state"] | string }) {
         fontWeight: W_MED,
         letterSpacing: "0.09em",
         textTransform: "uppercase",
-        color: m.colour,
+        color: m.color,
         border: `1px solid ${m.ring}`,
         borderRadius: R_PILL,
         padding: "2px 8px",

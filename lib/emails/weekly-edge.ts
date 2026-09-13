@@ -40,7 +40,7 @@ const AFFILIATE_BANNER_URL = `${SITE_URL}/affiliate-program-banner.jpg`;
  * FILENAME on purpose — a new one ships each issue, so a generic name would
  * overwrite the art in every previously sent letter still sitting in inboxes.
  */
-const WALL_CHART_URL = `${SITE_URL}/core-migration-2026-09-04.png`;
+const WALL_CHART_URL = `${SITE_URL}/core-migration-2026-09-11.png`;
 /**
  * Tradeify partner link. Third-party host, so `lib/emails/utm.ts` leaves it
  * alone by design (rule 4: never tag someone else's site) — the `?ref=Bzila`
@@ -60,6 +60,8 @@ const SANS = "-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
 
 export interface IndexMove { name: string; pct: string; }
 export interface CalendarEvent { day: string; desc: string; }
+/** One pull-quote in the AI band. `quote` must stay verbatim and attributed. */
+export interface StoryQuote { quote: string; name: string; org: string; }
 export interface EarningsTicker { symbol: string; logoUrl?: string; }
 export interface EarningsDay { label: string; tickers: EarningsTicker[]; }
 export interface ConfRow { date: string; s945: string; c945: string; s1030: string; c1030: string; s1200: string; c1200: string; hit945: boolean; hit1030: boolean; hit1200: boolean; }
@@ -86,7 +88,16 @@ export interface ScannerProof {
   vsOpen: string;
   score: string;
   strength: string;
-  /** The realized move, stated as the contract's own premium. */
+  /**
+   * The move, stated as the contract's own premium. OPTIONAL — leave all three
+   * as "" when no price line was captured and the result row is dropped
+   * entirely.
+   *
+   * NEVER SYNTHESISE THIS FROM `vsOpen`. "+406% vs open" is a scanner metric
+   * about unusual activity against open interest; it is NOT what the contract
+   * returned. Presenting one as the other would be a fabricated performance
+   * claim.
+   */
   resultFrom: string;
   resultTo: string;
   resultPct: string;
@@ -135,12 +146,18 @@ export interface AutoBuyRow {
   contract: string;
   /** Fill price at the window. */
   entry: string;
-  /** THE ACTUAL EXIT — the dashboard's "sold"/CLOSE price at the bell. */
-  close: string;
+  /**
+   * THE ACTUAL EXIT — the dashboard's "sold"/CLOSE price at the bell.
+   * OPTIONAL: some exports only carry entry + peak. When close is omitted on
+   * ANY row the table drops the Realized column entirely and presents itself as
+   * peak-only, rather than showing a blank cell that a reader fills in with an
+   * assumption. Half a realized column is worse than none.
+   */
+  close?: string;
   /** Realized return from entry to close, e.g. "+808%". */
-  realizedPct: string;
+  realizedPct?: string;
   /** Realized dollars per contract, e.g. "+$2,465". */
-  dollars: string;
+  dollars?: string;
   /** Intraday high after entry — NOT an exit. */
   peak: string;
   /** Time of that high, e.g. "2:02 PM". */
@@ -157,7 +174,17 @@ export interface WeeklyEdgeOpts {
   aheadHeadline?: string;
   calendarEvents?: CalendarEvent[];
   earningsDays?: EarningsDay[];
+  /** "" hides the paragraph under the week-ahead calendar. */
   aheadNote?: string;
+  /** Set false to drop the AI-story band. */
+  showAiStory?: boolean;
+  aiStoryEyebrow?: string;
+  aiStoryHeadline?: string;
+  aiStoryQuotes?: StoryQuote[];
+  /** Body paragraphs under the quotes. */
+  aiStoryBody?: string[];
+  /** Smaller muted counter-read line. Keep it — see the note in withDefaults. */
+  aiStoryCounter?: string;
   oilHeadline?: string;
   oilPrice?: string;
   oilChangeNote?: string;
@@ -222,20 +249,29 @@ const DEFAULT_INDEX_MOVES: IndexMove[] = [
 const DEFAULT_CALENDAR: CalendarEvent[] = [
   { day: "MON 9/14", desc: "Nothing on the calendar. The tape spends the day positioning into Wednesday." },
   { day: "TUE 9/15", desc: "<strong>Empire State Manufacturing</strong> at 8:30, and the <strong>FOMC's two-day meeting begins</strong>. Trip.com reports after the close." },
-  { day: "WED 9/16", desc: "<strong>August retail sales</strong> plus import and export prices at 8:30. Then the whole week: the <strong>FOMC statement and the dot plot at 2:00</strong>, and <strong>Chair Warsh's press conference at 2:30</strong>. Lennar after the bell." },
-  { day: "THU 9/17", desc: "<strong>Jobless claims</strong>, housing starts and building permits at 8:30, pending home sales at 10:00 — the first full session to trade the decision rather than anticipate it." },
+  { day: "WED 9/16", desc: "<strong>August retail sales</strong> plus import and export prices at 8:30. Then the whole week: the <strong>FOMC statement and the dot plot at 2:00</strong>, and <strong>Chair Warsh's press conference at 2:30</strong>. General Mills before the bell, Lennar after it — a homebuilder reporting into 7%+ mortgage rates, hours after the Fed speaks." },
+  { day: "THU 9/17", desc: "<strong>Jobless claims</strong>, housing starts and building permits at 8:30, pending home sales at 10:00 — the first full session to trade the decision rather than anticipate it. Darden and Carnival before the bell, <strong>FedEx</strong> after the close." },
   { day: "FRI 9/18", desc: "Industrial production at 9:15 and Leading Indicators at 10:00 — and <strong>quarterly expiration</strong>. Quad witching, the biggest gamma roll of the quarter." },
 ];
 
 
 // Only two days have names worth showing. A grid padded out with filler on a
 // holiday-shortened week reads as a busier calendar than the week actually is.
-// A quiet earnings week by design of the calendar — the Fed is the event. Two
-// names only; padding this grid would misrepresent where the risk actually is.
+// The Fed is the event, but this is not an empty earnings week — FedEx Thursday
+// night is a real macro read on freight, and Lennar reports hours after the
+// decision with mortgage rates over 7%.
+//
+// SOURCING CAVEAT: Kiplinger's day-by-day calendar gives PLAY / TCOM / LEN /
+// CCL. GIS, DRI and FDX come from a second source whose weekday labels were
+// wrong (it called Sep 17 a Wednesday), so those three are placed on their
+// customary slots — GIS Wed BMO, DRI Thu BMO, FDX Thu AMC. VERIFY before send.
 const DEFAULT_EARNINGS: EarningsDay[] = [
+  { label: "Mon 9/14", tickers: [{ symbol: "PLAY" }] },
   { label: "Tue 9/15", tickers: [{ symbol: "TCOM" }] },
-  { label: "Wed 9/16", tickers: [{ symbol: "LEN" }] },
+  { label: "Wed 9/16 — Lennar reports after the Fed", tickers: [{ symbol: "GIS" }, { symbol: "LEN" }] },
+  { label: "Thu 9/17 — FedEx after the close", tickers: [{ symbol: "FDX" }, { symbol: "DRI" }, { symbol: "CCL" }] },
 ];
+
 
 
 
@@ -254,7 +290,11 @@ const DEFAULT_GEX_SCANNER_ROWS: GexScannerRow[] = [];
  * peaked above entry, and one (8/24 10:30, 7630P) never ticked up at all. The
  * note under the table states that split; do not print the winners without it.
  */
-const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [];
+const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [
+  { date: "09-09", time: "9:45", contract: "7630P", entry: "$4.95", peak: "$11.55", peakAt: "11:27 AM", peakPct: "+133%" },
+  { date: "09-09", time: "10:30", contract: "7630P", entry: "$3.45", peak: "$13.70", peakAt: "11:25 AM", peakPct: "+297%" },
+  { date: "09-09", time: "12:00", contract: "7630P", entry: "$6.25", peak: "$9.45", peakAt: "12:20 PM", peakPct: "+51%" },
+];
 
 
 
@@ -273,7 +313,14 @@ const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [];
  * and 8/24 9:45 (9.7) both cleared ≤15, and only 8/28 9:45 (22.1) and 8/24
  * 10:30 (15.2) missed every threshold.
  */
-const DEFAULT_CONF_ROWS: ConfRow[] = [];
+const DEFAULT_CONF_ROWS: ConfRow[] = [
+  { date: "09-11", s945: "7700", c945: "24.5", hit945: false, s1030: "7700", c1030: "24.5", hit1030: false, s1200: "7680", c1200: "4.5", hit1200: true },
+  { date: "09-10", s945: "7590", c945: "0.1", hit945: true, s1030: "7620", c1030: "10.3", hit1030: false, s1200: "7590", c1200: "0.1", hit1200: true },
+  { date: "09-09", s945: "7630", c945: "0.4", hit945: true, s1030: "7630", c1030: "0.4", hit1030: true, s1200: "7630", c1200: "0.4", hit1200: true },
+  // 12:00 landed 5.0 away and scored a MISS — the <=5 test is strict, not
+  // rounded. Left as the dashboard scored it; resultsNote calls it out.
+  { date: "09-08", s945: "7650", c945: "21.7", hit945: false, s1030: "7675", c1030: "3.3", hit1030: true, s1200: "7700", c1200: "5.0", hit1200: false },
+];
 
 
 
@@ -283,27 +330,29 @@ const DEFAULT_CONF_ROWS: ConfRow[] = [];
  * `edge3-annual.ts` → `DEFAULT_PROOF` — keep the two in sync if either changes.
  */
 const DEFAULT_SCANNER_PROOF: ScannerProof = {
-  rank: "2",
-  ticker: "DELL",
-  premium: "4.9M",
-  headline: "485",
-  expiry: "2026-09-04",
-  spot: "441.78",
-  captured: "Sep 2 · 11:00 AM ET",
-  otm: "9.8%",
-  vsOpen: "+623%",
-  score: "15",
+  rank: "3",
+  ticker: "AMD",
+  premium: "1.8M",
+  headline: "520",
+  expiry: "2026-09-09",
+  spot: "493.51",
+  captured: "Sep 8 · 10:15 AM ET",
+  otm: "5.4%",
+  vsOpen: "+406%",
+  score: "8",
   strength: "Very strong",
-  // In -> the 3:44 PM high. `resultTo` is a HIGH, not an exit; the note under
-  // the card says so and also gives where it last marked ($15.65, +832%).
-  resultFrom: "$1.68",
-  resultTo: "$18.80",
-  resultPct: "+1,019%",
+  // No price line supplied for this catch, so NO RESULT ROW. See the note on
+  // the interface: an absent result is rendered as absent, never inferred from
+  // the card's own metrics.
+  resultFrom: "",
+  resultTo: "",
+  resultPct: "",
 };
 
 function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "issueLabel" | "recapHeadline" | "recapBody" | "indexMoves" | "aheadHeadline" | "calendarEvents" |
-  "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
+  "earningsDays" | "aheadNote" |
+  "showAiStory" | "aiStoryEyebrow" | "aiStoryHeadline" | "aiStoryQuotes" | "aiStoryBody" | "aiStoryCounter" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
   "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" | "scannerProofNote" |
   "gexScannerRows" | "gexScannerLabel" | "gexScannerNote" |
@@ -325,7 +374,33 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     aheadHeadline: opts.aheadHeadline || "The Fed decides Wednesday at 2:00, and Friday is quarterly expiration",
     calendarEvents: opts.calendarEvents || DEFAULT_CALENDAR,
     earningsDays: opts.earningsDays || DEFAULT_EARNINGS,
-    aheadNote: opts.aheadNote || "Two things own this week and neither is an earnings report. Wednesday at 2:00 the Fed decides with the market already at ~90% for a hike — which means the decision itself is close to priced and <strong style=\"color:#ffffff;\">the dot plot is the real event</strong>, along with whatever Warsh does with it at 2:30. Retail sales land at 8:30 that same morning, so Wednesday is a two-gap day. Then Friday is quarterly expiration: the biggest gamma roll of the quarter, where the 9:45 and 10:30 windows open into positioning that has nothing to do with the news. A hawkish dot plot on Wednesday and a quad-witching Friday in the same week is about as much forced repositioning as the calendar produces.",
+    // Sourced Sep 12-13 across Axios, ABC News, CNBC and the Washington Post.
+    // Every quote here is verbatim from those reports — "take over the entire
+    // internet", "pace the frontier", "Dario is right". Do not paraphrase them
+    // into something punchier; they are quotes and they are attributed.
+    // The Palihapitiya criticism stays in. Three CEOs agreeing is the story,
+    // but printing it without the obvious counter-read — that a slowdown suits
+    // the incumbent proposing it — would be carrying their water.
+    aheadNote: opts.aheadNote ?? "",
+    showAiStory: opts.showAiStory !== false,
+    aiStoryEyebrow: opts.aiStoryEyebrow || "The AI trade",
+    aiStoryHeadline: opts.aiStoryHeadline || "Three CEOs who compete on this just agreed to slow it down",
+    // VERBATIM AND ATTRIBUTED. Sourced Sep 12–13 from Axios, ABC News, CNBC and
+    // the Washington Post. Do not tighten these into punchier lines — they are
+    // quotations with names on them.
+    aiStoryQuotes: opts.aiStoryQuotes || [
+      { quote: "We must slow the pace at which we improve the capabilities of AI models.", name: "Dario Amodei", org: "Anthropic" },
+      { quote: "I agree with Dario that we need to pace the frontier.", name: "Sam Altman", org: "OpenAI" },
+      { quote: "Dario is right.", name: "Elon Musk", org: "xAI" },
+    ],
+    aiStoryBody: opts.aiStoryBody || [
+      "Amodei's warning on Friday was that AI agents could &ldquo;take over the entire internet&rdquo; inside six to twelve months. Altman and Musk agreed the same afternoon. Nothing proposed is binding.",
+      "<strong style=\"color:#ffffff;\">What it means for the tape:</strong> the AI-capex complex is what has carried this market — it is most of why the Nasdaq held up through August, and it is why Oracle moved the whole group last week. That complex now has its own founders arguing publicly for a slower build, landing in the same four-day week as a Fed decision and a quarterly expiration.",
+    ],
+    // KEEP THIS. Three competing CEOs agreeing is the story; printing it without
+    // the cui-bono objection would be carrying their water.
+    aiStoryCounter: opts.aiStoryCounter ??
+      "Not everyone read it as altruism — Chamath Palihapitiya argued the essay conveniently concentrates power with Anthropic, and the administration has shown no appetite for slowing anything down.",
     oilHeadline: opts.oilHeadline || "Crude is back over $100",
     oilPrice: opts.oilPrice || "$100.05",
     oilChangeNote: opts.oilChangeNote || "WTI, Sep 11 · roughly +8% on the week · refiners at 52-week highs",
@@ -333,28 +408,39 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
       "WTI closed the week at $100.05, up about 8% and back over the hundred handle after recovering from Thursday's dip. Refiners pushed to 52-week highs on it. Two weeks ago this letter had crude at $83 and the war premium draining away; it is now $100 with the premium fully back on, which is a useful reminder of how fast that particular read can go stale.",
       "The part that matters for Wednesday: this is the same energy complex doing most of the lifting inside the CPI print the Fed is about to respond to. Crude at $100 alongside core running +0.3% is the hawkish argument delivered in two numbers, and it is why the dot plot is the thing to watch rather than the hike itself.",
     ],
-    coreBullseyePct: opts.coreBullseyePct || "—",
-    coreBullseyeSub: opts.coreBullseyeSub || "[fill before send]",
+    // 7 of 12 inside 5 points — the weakest week this letter has printed. Tile
+    // is the best window (12:00, 3 of 4). Do NOT widen the threshold to make it
+    // look better; the note carries the bad number in full.
+    coreBullseyePct: opts.coreBullseyePct || "75%",
+    coreBullseyeSub: opts.coreBullseyeSub || "&le;5 pts &middot; 12:00 CB &middot; 3 of 4 sessions",
     // A "loss" here is a BREACH — price left the estimated-move band. Do not
     // write the note as "failed to reach"; that is the opposite of what happens.
     // What decides the week is whether the RANGE stays inside the band, not the
     // VIX level on its own. Expiration week and an FOMC day both widen realized
     // range, so expect pressure on this number.
-    estMovePct: opts.estMovePct || "—",
-    estMoveSub: opts.estMoveSub || "[fill before send]",
+    // CORE BOARD ONLY this week (22 names). The prior three issues quoted the
+    // full 404-ticker universe. DIFFERENT DENOMINATOR — the sub says so, and so
+    // does the note, because 71.7% -> 70.0% looks like a flat week and is not a
+    // like-for-like comparison. If the all-tickers number turns up, use that in
+    // the tile and keep Core Board in the note, as previous issues did.
+    estMovePct: opts.estMovePct || "70.0%",
+    estMoveSub: opts.estMoveSub || "Core Board &middot; 14-6 &middot; 20 of 22 scored",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
-    resultsNote: opts.resultsNote || "[ADD CORE SUMMARY — hit rate per window, what a ✓ means, and the week's misses]",
-    estMoveNote: opts.estMoveNote || "[ADD ESTIMATED MOVE SUMMARY — win-loss, names scored, Core Board, and the range read behind it]",
+    resultsNote: opts.resultsNote ||
+      "A ✓ means the Core read landed within 5 points of where SPX actually printed. Over the four sessions of Sep 8–11 that was <strong style=\"color:#ffffff;\">7 of 12</strong> — 3 of 4 at 12:00, 2 of 4 at both 9:45 and 10:30. That is the weakest week since this letter started printing the table, and the rows show where it went: Friday's CPI open put both morning windows 24.5 points out, and Tuesday's 9:45 missed by 21.7. The two middle sessions went 5 of 6 between them. One more worth flagging — Tuesday's 12:00 landed 5.0 points away and scored as a miss. The test is strict, not rounded, and it stays that way in a bad week as well as a good one.",
+    estMoveNote: opts.estMoveNote ||
+      "Estimated Move on the Core Board: <strong style=\"color:#ffffff;\">14 wins against 6 losses</strong> across the 22 names, 70.0%. A win is price staying inside the band, so the number tracks how far the tape actually travelled versus what implied vol said it would. One clarification, because it matters for anyone keeping score: last week's letter quoted 71.7% on the full 404-ticker universe, and this week's 70.0% is the 22-name Core Board. Similar figures, different measurements — not a flat week.",
     // Flip to `!== false` (or pass showScannerProof: true) once a catch is in;
     // until then the section renders its dashed placeholder rather than
     // carrying last issue's DELL card forward into a new letter.
-    showScannerProof: opts.showScannerProof === true,
+    showScannerProof: opts.showScannerProof !== false,
     scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
     // Names the flag time, the high AND where it last marked. The high is the
     // headline number on the dashboard card, so it is the one a reader will
     // check — but a high is not an exit, and $15.65 is the honest second half
     // of that sentence. Do not print the 1,019% without the $15.65.
-    scannerProofNote: opts.scannerProofNote ?? "[ADD SCANNER CAPTION — flag time, the high, AND where it last marked]",
+    scannerProofNote: opts.scannerProofNote ??
+      "Flagged <strong style=\"color:#ffffff;\">Sep 8 at 10:15 AM</strong> with AMD at 493.51 — a 520 call 5.4% out of the money on the very next day's expiry, graded A+ on 1.8M in premium. The scanner's claim is the flag and the timestamp, both of which are on the card. One contract is not a track record, and options can and do go to zero.",
     gexScannerRows: opts.gexScannerRows || DEFAULT_GEX_SCANNER_ROWS,
     // The label says "winners" out loud. That is the denominator disclosure for
     // a filtered list — do not soften it to "flags" or "catches", which would
@@ -372,14 +458,18 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     // "" renders the dashed placeholder. Save this week's PNG to public/ under a
     // NEW dated name and point this at it — WALL_CHART_URL still holds LAST
     // week's file and reusing it would show the wrong five sessions.
-    wallChartUrl: opts.wallChartUrl ?? "",
-    wallChartLabel: opts.wallChartLabel || "Core migration — Sep 8–11",
-    wallChartHeadline: opts.wallChartHeadline || "[ADD CORE-MIGRATION HEADLINE]",
+    wallChartUrl: opts.wallChartUrl ?? WALL_CHART_URL,
+    // SPANS SEP 4, NOT SEP 8. The chart's own first panel is FRIDAY 9/4 — five
+    // sessions back from 9/11 reaches past the Labor Day holiday. Labelling it
+    // "Sep 8–11" would contradict the day labels printed inside the image.
+    wallChartLabel: opts.wallChartLabel || "Core migration — five sessions, Sep 4 to Sep 11",
+    wallChartHeadline: opts.wallChartHeadline || "Four sessions of the walls stepping down, then Friday's CPI gap",
     wallChartNote: opts.wallChartNote ?? "",
     showAutoBuy: opts.showAutoBuy !== false,
     autoBuyRows: opts.autoBuyRows || DEFAULT_AUTO_BUY_ROWS,
-    autoBuyLabel: opts.autoBuyLabel || "Core Wall auto buy",
-    autoBuyNote: opts.autoBuyNote ?? "",
+    autoBuyLabel: opts.autoBuyLabel || "Core Wall auto buy — Wednesday Sep 9",
+    autoBuyNote: opts.autoBuyNote ??
+      "All three windows bought the same put on Wednesday. The 10:30 fill at <strong style=\"color:#ffffff;\">$3.45</strong> was the best of them and produced the biggest move; the 12:00 paid $6.25 for the same contract two hours later and got the least out of it. Same read, three entries, three very different outcomes.",
     ctaUrl: opts.ctaUrl || PRICING_URL,
     // NO PROMO CODE. Pricing is $50/mo or $500/yr flat — do not reintroduce
     // EDGE3, a struck-through list price, or "instead of $1,000". That offer is
@@ -440,8 +530,16 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     "",
     ...o.earningsDays.map((d) => `${strip(d.label)}: ${d.tickers.map((t) => t.symbol).join(", ")}`),
     "",
-    strip(o.aheadNote),
-    "",
+    ...(o.aheadNote ? [strip(o.aheadNote), ""] : []),
+    ...(o.showAiStory && o.aiStoryQuotes.length ? [
+      strip(o.aiStoryEyebrow).toUpperCase(),
+      strip(o.aiStoryHeadline),
+      "",
+      ...o.aiStoryQuotes.flatMap((q) => [`  "${strip(q.quote)}"`, `    — ${q.name}, ${q.org}`, ""]),
+      ...o.aiStoryBody.map(strip),
+      ...(o.aiStoryCounter ? [strip(o.aiStoryCounter)] : []),
+      "",
+    ] : []),
     "OIL & THE WAR SITUATION",
     strip(o.oilHeadline),
     `${o.oilPrice} — ${o.oilChangeNote}`,
@@ -463,9 +561,13 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     ] : []),
     ...(o.showAutoBuy && o.autoBuyRows.length ? [
       strip(o.autoBuyLabel).toUpperCase(),
-      "  (realized = bought at the CB window, sold at the close. peak = intraday high, not an exit)",
+      o.autoBuyRows.every((r) => !!r.close)
+        ? "  (realized = bought at the CB window, sold at the close. peak = intraday high, not an exit)"
+        : "  (peak = intraday high after entry, not an exit)",
       ...o.autoBuyRows.map((r) =>
-        `  ${r.date} ${r.time.padEnd(5)} ${r.contract}  ${r.entry} -> ${r.close}  ${r.realizedPct} (${r.dollars}/ct)  · peak ${r.peak} ${r.peakPct} ${r.peakAt}`
+        r.close
+          ? `  ${r.date} ${r.time.padEnd(5)} ${r.contract}  ${r.entry} -> ${r.close}  ${r.realizedPct} (${r.dollars}/ct)  · peak ${r.peak} ${r.peakPct} ${r.peakAt}`
+          : `  ${r.date} ${r.time.padEnd(5)} ${r.contract}  ${r.entry} -> ${r.peak} ${r.peakPct} (${r.peakAt})`
       ),
       ...(o.autoBuyNote ? [strip(o.autoBuyNote)] : []),
       "",
@@ -474,7 +576,9 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
       const q = o.scannerProof;
       return [
         "WHAT THE FLOW SCANNER CAUGHT",
-        `${q.ticker} — ${q.resultFrom} -> ${q.resultTo} = ${q.resultPct} (high, not an exit)`,
+        ...(q.resultFrom && q.resultTo
+          ? [`${q.ticker} — ${q.resultFrom} -> ${q.resultTo} = ${q.resultPct} (high, not an exit)`]
+          : []),
         `  #${q.rank} ${q.ticker}   ${q.headline}`,
         `  ${q.premium}`,
         `  ${q.expiry} · spot ${q.spot}`,
@@ -670,9 +774,38 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 ${o.calendarEvents.map(eventRow).join("")}
               </table>
               ${o.earningsDays.map(earningsDay).join("")}
-              <div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:14px;">${o.aheadNote}</div>
+              ${o.aheadNote ? `<div style="font:400 13px/1.65 ${SANS};color:#d4dde6;margin-top:14px;">${o.aheadNote}</div>` : ""}
             </td>
           </tr>
+
+          <!-- THE AI TRADE — pull-quote band. Three short quotations carry this
+               better than a paragraph would: the whole point is that three
+               rivals said the same thing, and seeing the names stacked makes
+               that argument visually instead of asking the reader to parse it. -->
+          ${o.showAiStory && o.aiStoryQuotes.length ? `
+          <tr>
+            <td style="padding:24px 28px 0 28px;">
+              <div style="font:800 11px/1 ${SANS};letter-spacing:0.14em;text-transform:uppercase;color:#38BDF8;">&#9679; ${escapeHtml(o.aiStoryEyebrow)}</div>
+              <div style="font:800 17px/1.35 ${SANS};color:#ffffff;margin-top:8px;">${o.aiStoryHeadline}</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
+                ${o.aiStoryQuotes.map((q, i) => `
+                <tr>
+                  <td style="padding:${i ? "8px" : "0"} 0 0 0;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:10px;background:rgba(255,255,255,0.02);">
+                      <tr>
+                        <td style="padding:13px 16px;">
+                          <div style="font:600 14px/1.5 ${SANS};color:#ffffff;">&ldquo;${q.quote}&rdquo;</div>
+                          <div style="font:700 10px/1 ${SANS};letter-spacing:0.08em;text-transform:uppercase;color:#9fb3c8;padding-top:9px;">${escapeHtml(q.name)} <span style="color:#6b7d8f;font-weight:400;">&middot; ${escapeHtml(q.org)}</span></div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>`).join("")}
+              </table>
+              ${o.aiStoryBody.map((para) => `<div style="font:400 13px/1.65 ${SANS};color:#d4dde6;margin-top:12px;">${para}</div>`).join("")}
+              ${o.aiStoryCounter ? `<div style="font:400 12px/1.6 ${SANS};color:#6b7d8f;margin-top:12px;">${o.aiStoryCounter}</div>` : ""}
+            </td>
+          </tr>` : ""}
 
           <!-- OIL & WAR -->
           <tr>
@@ -718,7 +851,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               ${o.showWallChart ? (o.wallChartUrl ? `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">${escapeHtml(o.wallChartLabel)}</div>
               <div style="font:800 15px/1.35 ${SANS};color:#ffffff;margin-bottom:10px;">${o.wallChartHeadline}</div>
-              <img src="${wallChart}" alt="SPX core migration, five sessions to 2026-09-04 — put wall, call wall, CORE and spot" width="584" style="display:block;width:100%;max-width:584px;height:auto;border:1px solid rgba(255,255,255,0.10);border-radius:10px;">
+              <img src="${wallChart}" alt="SPX core migration, five sessions to 2026-09-11 — put wall, call wall, CORE and spot" width="584" style="display:block;width:100%;max-width:584px;height:auto;border:1px solid rgba(255,255,255,0.10);border-radius:10px;">
               ${o.wallChartNote ? `<div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.wallChartNote}</div>` : ""}` : `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">${escapeHtml(o.wallChartLabel)}</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed rgba(255,255,255,0.18);border-radius:10px;">
@@ -730,26 +863,36 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                    never an exit; the note below the table says so. -->
               ${o.showAutoBuy ? (o.autoBuyRows.length ? `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">${escapeHtml(o.autoBuyLabel)}</div>
+              ${(() => {
+                // All-or-nothing: the Realized column appears only when EVERY
+                // row has a close. A mixed table would invite the reader to
+                // read a peak as a result on the rows that lack one.
+                const realized = o.autoBuyRows.every((r) => !!r.close);
+                const hdr = `padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);`;
+                const sub = `font-weight:400;letter-spacing:0.02em;text-transform:none;color:#6b7d8f;`;
+                return `
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:2px solid #FFB300;border-radius:12px;background:#080B11;border-collapse:separate;box-shadow:0 0 0 1px rgba(255,179,0,0.18);">
                 <tr>
-                  <td style="padding:9px 8px 9px 14px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">CB</td>
-                  <td style="padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Contract</td>
-                  <td align="right" style="padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">In &rarr; sold<br><span style="font-weight:400;letter-spacing:0.02em;text-transform:none;color:#6b7d8f;">held to the close</span></td>
-                  <td align="right" style="padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Realized</td>
-                  <td align="right" style="padding:9px 14px 9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Peak<br><span style="font-weight:400;letter-spacing:0.02em;text-transform:none;color:#6b7d8f;">not an exit</span></td>
+                  <td style="${hdr}padding-left:14px;">CB</td>
+                  <td style="${hdr}">Contract</td>
+                  <td align="right" style="${hdr}">In &rarr; ${realized ? "sold" : "peak"}<br><span style="${sub}">${realized ? "held to the close" : "intraday high, not an exit"}</span></td>
+                  ${realized ? `<td align="right" style="${hdr}">Realized</td>` : ""}
+                  <td align="right" style="${hdr}padding-right:14px;">${realized ? "Peak<br><span style=\"" + sub + "\">not an exit</span>" : "At peak"}</td>
                 </tr>
                 ${o.autoBuyRows.map((r, i) => {
                   const edge = i < o.autoBuyRows.length - 1 ? "border-bottom:1px solid rgba(255,255,255,0.06);" : "";
+                  const cell = `padding:10px 8px;font:600 12px/1.4 ${SANS};white-space:nowrap;${edge}`;
                   return `
                 <tr>
-                  <td style="padding:10px 8px 10px 14px;font:700 12px/1.4 ${SANS};color:#ffffff;white-space:nowrap;${edge}">${escapeHtml(r.time)}<br><span style="font-weight:400;font-size:10px;color:#6b7d8f;">${escapeHtml(r.date)}</span></td>
-                  <td style="padding:10px 8px;font:700 12px/1.4 ${SANS};color:#8ECAE6;white-space:nowrap;${edge}">${escapeHtml(r.contract)}</td>
-                  <td align="right" style="padding:10px 8px;font:600 12px/1.4 ${SANS};color:#d4dde6;white-space:nowrap;${edge}">${escapeHtml(r.entry)} <span style="color:#6b7d8f;">&rarr;</span> <span style="color:#ffffff;font-weight:700;">${escapeHtml(r.close)}</span></td>
-                  <td align="right" style="padding:10px 8px;font:800 13px/1.3 ${SANS};color:#00E676;white-space:nowrap;${edge}">${escapeHtml(r.realizedPct)}<br><span style="font-weight:600;font-size:10px;color:#9fb3c8;">${escapeHtml(r.dollars)}/ct</span></td>
-                  <td align="right" style="padding:10px 14px 10px 8px;font:600 12px/1.4 ${SANS};color:#9fb3c8;white-space:nowrap;${edge}">${escapeHtml(r.peak)}<br><span style="font-weight:400;font-size:10px;color:#6b7d8f;">${escapeHtml(r.peakPct)} &middot; ${escapeHtml(r.peakAt)}</span></td>
+                  <td style="${cell}padding-left:14px;font-weight:700;color:#ffffff;">${escapeHtml(r.time)}<br><span style="font-weight:400;font-size:10px;color:#6b7d8f;">${escapeHtml(r.date)}</span></td>
+                  <td style="${cell}font-weight:700;color:#8ECAE6;">${escapeHtml(r.contract)}</td>
+                  <td align="right" style="${cell}color:#d4dde6;">${escapeHtml(r.entry)} <span style="color:#6b7d8f;">&rarr;</span> <span style="color:#ffffff;font-weight:700;">${escapeHtml(realized ? (r.close as string) : r.peak)}</span></td>
+                  ${realized ? `<td align="right" style="${cell}font:800 13px/1.3 ${SANS};color:#00E676;">${escapeHtml(r.realizedPct as string)}<br><span style="font-weight:600;font-size:10px;color:#9fb3c8;">${escapeHtml(r.dollars as string)}/ct</span></td>` : ""}
+                  <td align="right" style="${cell}padding-right:14px;${realized ? "color:#9fb3c8;" : "font:800 13px/1.3 " + SANS + ";color:#00E676;"}">${realized ? escapeHtml(r.peak) + `<br><span style="font-weight:400;font-size:10px;color:#6b7d8f;">${escapeHtml(r.peakPct)} &middot; ${escapeHtml(r.peakAt)}</span>` : escapeHtml(r.peakPct) + `<br><span style="font-weight:400;font-size:10px;color:#6b7d8f;">${escapeHtml(r.peakAt)}</span>`}</td>
                 </tr>`;
                 }).join("")}
-              </table>
+              </table>`;
+              })()}
               ${o.autoBuyNote ? `<div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.autoBuyNote}</div>` : ""}` : `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">Core Wall auto buy</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed rgba(255,255,255,0.18);border-radius:10px;">
@@ -782,14 +925,15 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                     <div style="font:800 12px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#F2A65A;padding-top:8px;">&#9733; ${sp.strength}</div>
                   </td>
                 </tr>
+                ${sp.resultFrom && sp.resultTo ? `
                 <tr>
                   <td style="padding:0 18px 16px 18px;">
-                    <div style="border-top:1px solid rgba(255,179,0,0.28);padding-top:12px;font:800 16px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">
+                    <div style="border-top:1px solid rgba(255,179,0,0.28);padding-top:12px;font:800 16px/1.3 ${SANS};color:#ffffff;">
                       ${sp.resultFrom} <span style="color:#6b7d8f;">&rarr;</span> ${sp.resultTo}
                       <span style="color:#00E676;">&nbsp;${sp.resultPct}</span>
                     </div>
                   </td>
-                </tr>
+                </tr>` : ""}
               </table>
               ${o.scannerProofNote ? `<div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.scannerProofNote}</div>` : ""}` : o.gexScannerRows.length ? `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">${escapeHtml(o.gexScannerLabel)}</div>

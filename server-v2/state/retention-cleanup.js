@@ -29,6 +29,12 @@
 // Per-statement ceiling for THIS pool only (see the SET in getPool). Generous
 // on purpose: a per-date DELETE here takes seconds, so anything approaching
 // this is a bug worth surfacing rather than a budget to spend.
+// The reviewed MAIN lane — indices + mega-caps, fourteen names. A plain data
+// module: no pg, no fetch, no side effects, safe to pull in at module load.
+// See RETENTION.scanner_keep_symbols for why retention reads the FILE and not
+// the live roster.
+const { MAIN: SCANNER_MAIN } = require('../scanner-tickers');
+
 const STATEMENT_TIMEOUT_MS = Number(process.env.RETENTION_STATEMENT_TIMEOUT_MS || 600_000);
 
 // Safety stop for the per-date loops, so a bad cutoff can never spin forever.
@@ -91,6 +97,35 @@ const RETENTION = {
   greek_snapshots:            Number(process.env.RETENTION_GREEK_SNAPSHOTS_DAYS || 10),
   ticker_wall_snapshots:      Number(process.env.RETENTION_TICKER_WALL_DAYS || 10),
   scanner_snapshots:          Number(process.env.RETENTION_SCANNER_SNAPSHOTS_DAYS || 10),
+  // ── THE MAIN LANE IS KEPT FOR GOOD ───────────────────────────────────────
+  //
+  // scanner_snapshots is what the LEVEL LOG is actually built on. walls_log and
+  // wall_events have never been pruned — the log itself is already lifetime —
+  // but the things that make it readable are not: the 5-minute price line the
+  // chart draws under the levels (/api/walls-range reads it from here), the
+  // "never left" arm of the Open bracket study, and every bracket anchored
+  // later than 09:29 on the default variant. At 10 days all three quietly stop
+  // at ten days while the levels beside them go back months.
+  //
+  // So the fourteen MAIN tickers are exempt and keep every sweep forever. The
+  // cost is small enough to be the wrong thing to economise on: MAIN sweeps on
+  // the 2-minute hot lane, ~195 rows a session each, ~2,700 rows a day for all
+  // fourteen — call it 700k rows a year in a narrow table, against the
+  // ~20M-row monster that is option_strike_gex_history. Everything outside MAIN
+  // still goes at RETENTION_SCANNER_SNAPSHOTS_DAYS.
+  //
+  // FROM THE FILE, NOT THE ROSTER. scanner-tickers.js MAIN is the reviewed,
+  // committed list; roster-store's overrides are live-editable from the owner
+  // Watchlists page. Retention must not be something a page edit can turn into
+  // a delete — taking a ticker off the roster would otherwise make its whole
+  // history eligible that night, and there is no undo for that.
+  //
+  // Override with RETENTION_SCANNER_KEEP_SYMBOLS (comma-separated); set it to
+  // the empty string to keep nothing and prune everything on the day count.
+  scanner_keep_symbols: (process.env.RETENTION_SCANNER_KEEP_SYMBOLS != null
+    ? String(process.env.RETENTION_SCANNER_KEEP_SYMBOLS)
+        .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
+    : SCANNER_MAIN),
   watch_snapshots_days:       Number(process.env.RETENTION_WATCH_SNAPSHOTS_DAYS || 60),   // created_at-based
   preview_snapshots_days:     Number(process.env.RETENTION_PREVIEW_SNAPSHOTS_DAYS || 30),  // created_at-based
   home_static_snapshots_days: Number(process.env.RETENTION_HOME_STATIC_DAYS || 5),         // created_at-based
@@ -369,8 +404,14 @@ async function runDeletes(p) {
   await run('ticker_wall_snapshots',
     `DELETE FROM ticker_wall_snapshots WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.ticker_wall_snapshots} days'`);
 
+  // Everything outside the kept list ages out on the day count; the MAIN lane
+  // is kept for good. See RETENTION.scanner_keep_symbols for why, and why the
+  // list comes from the file rather than the live roster.
   await run('scanner_snapshots',
-    `DELETE FROM scanner_snapshots WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.scanner_snapshots} days'`);
+    `DELETE FROM scanner_snapshots
+      WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.scanner_snapshots} days'
+        AND NOT (symbol = ANY($1::text[]))`,
+    [RETENTION.scanner_keep_symbols]);
 
   // watch_snapshots has NO created_at column — it stamps `ts` as epoch
   // MILLISECONDS (verified 2026-09-09: min 1787668205044, max 1788974038960).

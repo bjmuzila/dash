@@ -1367,20 +1367,26 @@ export function GexCandlesCard({
       onChange={onInterval}
     />
   )
-  // HOW MANY SESSIONS OF BARS, beside how wide each one is. Folded on the
-  // desktop like the interval it sits next to, open in the phone sheet.
+  // HOW MANY SESSIONS OF BARS — IN THE COGWHEEL, at every width.
+  //
+  // Not in the header beside the interval, where it started. The header is the
+  // one row that has to survive a quarter-width card (see "THE HEADER IS
+  // FOLDED" above) and this is a set-once control: you pick 2D to look at
+  // yesterday's shape and leave it there. The interval is the one you reach for
+  // mid-session, so it keeps the slot.
+  //
+  // Open (SegGroup), not folded (SegMenu): inside the panel there is room, and
+  // three two-character segments cost less than a click.
+  //
   // Suppressed while rewound: replay is one picked session and the day dropdown
   // on the transport is the control for which — a second day picker there would
   // be two controls disagreeing about one thing.
   const daysOptions = TAPE_DAYS.map((d) => ({ label: TAPE_DAYS_LABEL[d], value: String(d) }))
   const onDays = (v: string) => patch({ tapeDays: Number(v) as TapeDays })
   const daysTitle =
-    'How many sessions of candles to draw. 1D is today from the cash open; 2D and 3D add the sessions before it. The GEX bubbles and the rail stay on the newest session either way'
+    'How many sessions of candles to draw. 1D is the current session; 2D and 3D add the sessions before it. The GEX bubbles and the rail stay on the newest session either way'
   const daysPicker = replayOn ? null : (
     <SegGroup size={ctlSize} title={daysTitle} options={daysOptions} value={String(settings.tapeDays)} onChange={onDays} />
-  )
-  const daysMenu = replayOn ? null : (
-    <SegMenu size={ctlSize} title={daysTitle} options={daysOptions} value={String(settings.tapeDays)} onChange={onDays} />
   )
   // COPIES ONLY — see isCopy. The first card follows the board ticker and the
   // toolbar search sets that, so a picker there would be a second control over
@@ -1529,7 +1535,6 @@ export function GexCandlesCard({
             fold would cost a tap and save nothing. */}
         {phone ? tapePicker : tapeMenu}
         {!phone && intervalMenu}
-        {!phone && daysMenu}
         {!phone && !spxOnly && sessionMenu}
         <div className="relative shrink-0">
           <button
@@ -1559,7 +1564,9 @@ export function GexCandlesCard({
               {/* No Expiry section either — the card follows the nearest
                   expiration on every width; there is nothing to pick. */}
               {phone && <PanelSection title="Interval">{intervalPicker}</PanelSection>}
-              {phone && daysPicker && <PanelSection title="Days">{daysPicker}</PanelSection>}
+              {/* EVERY WIDTH, unlike Interval and Session above — this one
+                  lives in the panel on the desktop too. See daysPicker. */}
+              {daysPicker && <PanelSection title="Days">{daysPicker}</PanelSection>}
               {/* No Session section when the tape decides it — see spxOnly. */}
               {phone && !spxOnly && <PanelSection title="Session">{sessionPicker}</PanelSection>}
 

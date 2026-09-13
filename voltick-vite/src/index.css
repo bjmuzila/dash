@@ -153,6 +153,35 @@ a {
   transform: translateY(1px);
 }
 
+/* ── The left rail ─────────────────────────────────────────────────────────
+   Category rows expand to the pages inside them. Hover and focus live here for
+   the same reason everything else does: a row that does not answer the pointer
+   reads as disabled.
+
+   Below the one breakpoint the rail is gone entirely and the contents board is
+   the navigation. A 244px rail on a 390px screen is not a rail, it is the page. */
+.vk-railrow,
+.vk-raillink {
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.vk-railrow:hover,
+.vk-railrow:focus-visible,
+.vk-raillink:hover,
+.vk-raillink:focus-visible {
+  background: #171e26;
+}
+
+.vk-railrow:hover {
+  border-color: rgba(47, 107, 255, 0.35) !important;
+}
+
+@media (max-width: 760px) {
+  .vk-rail {
+    display: none;
+  }
+}
+
 /* The lit pill. Two backgrounds in one declaration: the face paints to the
    padding box, the aurora to the border box. That is the only way to put a
    gradient on a border without a wrapper element. The face must stay near

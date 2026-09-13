@@ -30,9 +30,10 @@ export default function Home() {
       title="Voltick · CB Edge"
       lede={
         <>
-          A sandbox for the merger. Nothing here is live to customers and nothing here is load bearing:
-          it is where the two products get put beside each other, argued about, and cut down to one. Pages
-          are added to the list below as they are built.
+          The landing board for the merger sandbox. Nothing here is live to customers and nothing here is
+          load bearing: it is where the two products get put beside each other, argued about, and cut down
+          to one. Most of the list below is still planned. Pages arrive as demos and sandboxes of the real
+          site, one at a time, and every one of them is reachable from here.
         </>
       }
     >
@@ -143,9 +144,9 @@ export default function Home() {
 
 function StatusTag({ status }: { status: VoltickStatus }) {
   const live = status === "live";
-  // GOOD is a data colour and never UI chrome, so "live" here is stated with
+  // GOOD is a data color and never UI chrome, so "live" here is stated with
   // Volt Blue chrome and a Paper word, not with green.
-  const colour = live ? ACCENT_TEXT : PAPER_QUIET;
+  const color = live ? ACCENT_TEXT : PAPER_QUIET;
   const ring = live ? rgba(ACCENT, 0.5) : LINE;
   void GOOD;
   return (
@@ -156,7 +157,7 @@ function StatusTag({ status }: { status: VoltickStatus }) {
         fontWeight: 600,
         letterSpacing: "0.09em",
         textTransform: "uppercase",
-        color: colour,
+        color: color,
         border: `1px solid ${ring}`,
         borderRadius: R_PILL,
         padding: "2px 8px",

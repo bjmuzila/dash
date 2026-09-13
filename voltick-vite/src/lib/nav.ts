@@ -8,7 +8,9 @@
  *   2. that same `key` in src/pages/registry.ts, pointing at a lazy() import
  *
  * Miss step 2 and the route renders Placeholder rather than 404, which is the
- * intended state for a page that is planned but not written yet.
+ * intended state for a page that is planned and not written yet. Most of the
+ * list is in that state on purpose: the pages arrive as demos and sandboxes of
+ * the real site, one at a time.
  *
  * Copy rules apply to every string in this file: no em-dashes, and nothing that
  * reads as advice. Middle dot, comma, colon or parentheses.
@@ -38,14 +40,56 @@ export type VoltickLink = {
 
 export type VoltickGroup = {
   title: string;
+  /**
+   * The group's mark in the left rail. One emoji, and it is chrome: it stands
+   * for the category, never for a data level. The reserved marks (star, bolt,
+   * diamond) are spoken for by the color vocabulary and never appear here.
+   */
+  icon: string;
   blurb: string;
   items: VoltickLink[];
 };
 
 export const VOLTICK_SECTIONS: VoltickGroup[] = [
   {
-    title: "The console",
-    blurb: "Where the merged product starts from: the CB Edge owner console, laid out in full.",
+    title: "Newsletter",
+    icon: "📰",
+    blurb: "The Weekly Edge, drawn in the Voltick system instead of the email's own palette.",
+    items: [
+      {
+        label: "The Weekly Edge",
+        path: "/newsletter",
+        key: "Newsletter",
+        note: "Last Sunday's letter, retyped into Voltick surfaces, type and reserved colors.",
+        status: "live",
+      },
+    ],
+  },
+  {
+    title: "Theme",
+    icon: "🎨",
+    blurb: "The Voltick system, rendered from the tokens this app actually ships. Almost everything here is a theme page today.",
+    items: [
+      {
+        label: "Design system",
+        path: "/design-system",
+        key: "DesignSystem",
+        note: "Surfaces, text, type, shape, elevation and the aurora, drawn live from src/theme.ts.",
+        status: "live",
+      },
+      {
+        label: "Color vocabulary",
+        path: "/colors",
+        key: "Colors",
+        note: "The reserved colors and their marks. Each one means exactly one thing.",
+        status: "live",
+      },
+    ],
+  },
+  {
+    title: "Demos",
+    icon: "🖥️",
+    blurb: "Sandbox copies of real surfaces, safe to click through. Synthetic records only, nothing customer facing.",
     items: [
       {
         label: "Owner console demo",
@@ -59,6 +103,7 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
   },
   {
     title: "The merger",
+    icon: "🔀",
     blurb: "What Voltick and CB Edge each already are, and what one product made of both looks like.",
     items: [
       {
@@ -92,27 +137,8 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
     ],
   },
   {
-    title: "Design",
-    blurb: "The Voltick system, rendered from the tokens this app actually ships.",
-    items: [
-      {
-        label: "Design system",
-        path: "/design-system",
-        key: "DesignSystem",
-        note: "Surfaces, text, type, shape, elevation and the aurora, drawn live from src/theme.ts.",
-        status: "live",
-      },
-      {
-        label: "Colour vocabulary",
-        path: "/colours",
-        key: "Colours",
-        note: "The reserved colours and their marks. Each one means exactly one thing.",
-        status: "live",
-      },
-    ],
-  },
-  {
     title: "Plumbing",
+    icon: "🔌",
     blurb: "Proof that this subdomain reaches the CB Edge backend the way it is meant to.",
     items: [
       {
@@ -134,4 +160,9 @@ export const VOLTICK_ROUTES: VoltickLink[] = VOLTICK_ITEMS.filter((r) => !r.exte
 
 export function findRoute(path: string): VoltickLink | undefined {
   return VOLTICK_ITEMS.find((r) => r.path === path);
+}
+
+/** The group a path sits in, so the rail can open itself on the current page. */
+export function findGroup(path: string): VoltickGroup | undefined {
+  return VOLTICK_SECTIONS.find((g) => g.items.some((i) => i.path === path));
 }

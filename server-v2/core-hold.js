@@ -77,7 +77,8 @@
  *           sessions the backfill has not reached, and how many closes came from
  *           it is reported.
  *   PATH    scanner_snapshots min/max spot per session — the NEVER LEFT arm
- *           only. 10 days, and said out loud.
+ *           only. 10 days for most symbols and lifetime for the MAIN fourteen,
+ *           and said out loud either way.
  *
  * ── THE ANCHOR — WHEN THE BRACKET IS TAKEN ───────────────────────────────────
  * 09:29 is the recorder's own open capture and the default. It is also the WORST
@@ -96,7 +97,9 @@
  * no row at 09:35 at all and no guarantee of one at 09:45. The sweep tables have
  * a row every minute or few: `scanner_variants` for the three non-default
  * variants (never pruned), `scanner_snapshots` for the default one (pruned at 10
- * days). So a later anchor reads the FIRST sweep at or after its clock time,
+ * days — EXCEPT the fourteen MAIN tickers, which are exempt and kept for good;
+ * see RETENTION.scanner_keep_symbols in state/retention-cleanup.js). So a later
+ * anchor reads the FIRST sweep at or after its clock time,
  * within ANCHOR_GRACE_MIN, and the response says which table answered — a
  * vol-only study has full history, the default variant's has ten days, and that
  * difference is not something to discover from a suspiciously round number.
@@ -325,8 +328,10 @@ async function coreHold(pool, opts = {}) {
   //
   // scanner_snapshots.date is TEXT where every other table here has a DATE
   // column, which is why this one alone takes a ::text[]. It is also the only
-  // pruned source in this file (10 days), which is why this arm carries its own
-  // denominator instead of shrinking the headline's.
+  // pruned source in this file — 10 days, except the fourteen MAIN tickers,
+  // which retention exempts and keeps for good — which is why this arm carries
+  // its own denominator instead of shrinking the headline's. The MAIN names
+  // will simply show it filling in as the exemption accrues.
   const extremes = new Map();
   try {
     const { rows: pathRows } = await pool.query(

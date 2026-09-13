@@ -1,5 +1,318 @@
 # Changelog
 
+## 2026-09-13 - Weekly Edge: AI quote cards restyled to the standard card
+
+`lib/emails/weekly-edge.ts`. The pull-quote cards had their own look - tinted
+fill, 3px accent rule, accent-coloured names. Now they use the SAME treatment as
+every other card in the letter:
+
+  border: 1px solid rgba(255,255,255,0.10)
+  background: rgba(255,255,255,0.02)
+  border-radius: 10px
+
+That is byte-for-byte the index tiles, the result tiles and the oil card. The
+accent rule is gone, names moved from `#8ECAE6` to `#9fb3c8` (the same muted
+label colour the rest of the letter uses for card metadata), and the counter-read
+lost its left rule - it is just muted text under the body now.
+
+Eyebrow moved `#8ECAE6` -> `#38BDF8`, matching LAST WEEK RECAP and THIS WEEK
+AHEAD. The band is market content and now reads as market content; the section
+colours already carry meaning (cyan = market, orange = oil, green = results) and
+a fourth hue was diluting that.
+
+Net effect: the quotes stop looking like a designed callout and start looking
+like the dashboard. The layout still does the work - three stacked cards, three
+names - without a colour treatment nothing else in the letter has.
+
+Preview regenerated: `generated/2026-09-13-weekly-edge-preview.html` / `.jpg`.
+
+## 2026-09-13 - Weekly Edge: AI story promoted to its own pull-quote band
+
+`lib/emails/weekly-edge.ts`. The AI-slowdown copy was a wall of text jammed into
+`aheadNote`. It is now a proper band between THIS WEEK AHEAD and OIL, built out
+of the quotes rather than around them.
+
+Shape: cyan eyebrow "THE AI TRADE" -> headline -> three quote cards -> two body
+paragraphs -> a muted, indented counter-read.
+
+WHY QUOTE CARDS AND NOT A PARAGRAPH - this is a design decision with an argument
+behind it, not decoration. The story IS that three rivals said the same thing.
+Stacking the three names down the page makes that case visually; a paragraph
+asks the reader to hold three attributions in their head and assemble it
+themselves. The layout is doing the work the sentence was doing badly.
+
+- Each card: `rgba(142,202,230,0.06)` fill, 3px `#8ECAE6` left rule, rounded on
+  the right only so the rule reads as a margin mark. Quote in white 14px,
+  attribution as NAME (accent) + org (muted) in small caps underneath.
+- Counter-read is deliberately DEMOTED - 12px, muted, its own thin left rule. It
+  belongs in the band but not at the same weight as the quotes.
+- New `StoryQuote` type and opts: `showAiStory`, `aiStoryEyebrow`,
+  `aiStoryHeadline`, `aiStoryQuotes`, `aiStoryBody`, `aiStoryCounter`.
+- Plain-text renderer emits the quotes as indented blocks with em-dash
+  attributions, so the text part keeps the same structure.
+- `aheadNote` is now `?? ""` and its `<div>` only renders when non-empty. It is
+  empty this issue; the week-ahead detail lives in the calendar rows.
+
+Quotes remain VERBATIM and attributed - Axios / ABC / CNBC / WaPo, Sep 12-13. A
+pull-quote card invites tightening the words to fit the box. Do not.
+
+Preview regenerated: `generated/2026-09-13-weekly-edge-preview.html` / `.jpg`.
+
+## 2026-09-13 - Weekly Edge: aheadNote replaced with the AI-slowdown story
+
+`lib/emails/weekly-edge.ts`. The "two things own this week" paragraph is gone.
+`aheadNote` is now about Friday's story: Anthropic's Dario Amodei calling on the
+industry to slow the pace of frontier capability gains, with Sam Altman and Elon
+Musk agreeing.
+
+VERIFIED BEFORE WRITING. This is a present-day claim going to paying subscribers,
+so it was checked against four outlets (Axios, ABC News, CNBC, Washington Post),
+all Sep 12-13. Every quotation in the copy is verbatim from those reports:
+  - Amodei: AI agents could "take over the entire internet" (6-12 months)
+  - Altman: needs to "pace the frontier"
+  - Musk, on X: "Dario is right"
+DO NOT paraphrase those into something snappier. They are attributed quotes.
+
+WHAT IS DELIBERATELY IN THERE:
+- The Chamath Palihapitiya counter-read - that the essay conveniently
+  concentrates power with Anthropic. Three competing CEOs agreeing is the story,
+  but printing it without the obvious cui-bono objection would be carrying their
+  water. A market letter's job is the second question.
+- "the administration has shown no appetite for slowing anything down" - kept
+  general. A widely-circulated Trump quote exists in headlines but the body text
+  could not be fetched to confirm it, so no verbatim quote is attributed to him.
+
+WHAT IS DELIBERATELY NOT IN THERE: any claim that this changes policy or capex.
+Nothing is binding. The copy says so and then makes the only point that matters
+to a trader - the AI-capex complex is what has carried this tape, and it now has
+its own founders arguing publicly for a slower build, in the same week as a Fed
+decision and a quarterly expiration.
+
+The Fed/expiration detail it replaced is NOT lost - every bit of it is still in
+the day-by-day calendar rows directly above, which is where it reads better.
+
+Preview regenerated: `generated/2026-09-13-weekly-edge-preview.html` / `.jpg`.
+
+## 2026-09-13 - Weekly Edge: AMD scanner catch (no result row - see below)
+
+`lib/emails/weekly-edge.ts`. `DEFAULT_SCANNER_PROOF` -> AMD:
+
+  #3 AMD 520C - 1.8M premium - Sep 9 expiry, spot 493.51
+  captured Sep 8, 10:15 AM ET - OTM 5.4% - +406% vs open - score 8 - A+ - proj C
+
+NO PRICE LINE WAS SUPPLIED, so `resultFrom`/`resultTo`/`resultPct` are "" and the
+result row is DROPPED. The DELL card had a detail view (in $1.68 -> high $18.80,
+last $15.65); this one is the scanner card alone.
+
+THE TEMPTING WRONG MOVE, WRITTEN INTO THE TYPE SO IT DOES NOT HAPPEN LATER: the
+card shows "+406% vs open" and it would slot neatly into the result row. It is
+NOT a return. It is a scanner metric about unusual activity measured against open
+interest - what the flow did, not what the contract paid. Printing it where the
++1,019% sat last week would be a fabricated performance claim on a card that
+otherwise reports facts. The interface doc comment now says exactly that.
+
+- `resultFrom`/`resultTo` empty -> row omitted in BOTH the HTML and plain-text
+  renderers. Same all-or-nothing principle as the auto-buy Realized column.
+- `showScannerProof` back to `!== false`.
+- Caption rewritten to claim only what is on the card: the flag, the timestamp,
+  the strike, the moneyness, the grade, the premium. Plus the standing risk line.
+
+TO GET THE RESULT ROW BACK: expand "price line" on that card and send the in /
+high / last figures, same as the DELL shot. One screenshot restores it.
+
+Preview regenerated: `generated/2026-09-13-weekly-edge-preview.html` / `.jpg`.
+NO PLACEHOLDERS REMAIN - the issue is complete.
+
+REMAINING PRE-SEND CHECKS:
+1. Verify GIS / DRI / FDX earnings days (second-source, weekday labels were wrong).
+2. Earnings logos still hotlink logos.stocktwits-cdn.com; a 404 renders white.
+3. Estimated Move tile is CORE BOARD this week, not the 404-ticker universe the
+   prior three issues used - swap it if the all-tickers figure turns up.
+
+## 2026-09-13 (i) - The MAIN fourteen keep every scanner sweep, for good
+
+**The level log itself was already lifetime.** `walls_log` and `wall_events`
+have never been in the retention list — nothing prunes them. What was NOT
+lifetime is the table the log is READ against: `scanner_snapshots`, at 10 days.
+That is the 5-minute price line the wall-migration chart draws under the levels
+(`/api/walls-range` takes it from there), the "never left" arm of the Open
+bracket study, and every bracket anchored later than 09:29 on the default
+variant. All three stopped at ten days while the levels beside them went back
+months.
+
+`state/retention-cleanup.js` — the `scanner_snapshots` delete now carries
+`AND NOT (symbol = ANY($1))`, exempting `RETENTION.scanner_keep_symbols`, which
+defaults to the fourteen **MAIN** tickers: SPY QQQ SPX NDX VIX AAPL AMD AMZN
+GOOGL META MSFT NVDA SPCX TSLA. Everything outside MAIN still ages out at
+`RETENTION_SCANNER_SNAPSHOTS_DAYS`.
+
+**The cost is the wrong thing to economise on.** MAIN runs on the 2-minute hot
+lane — ~195 rows a session each, ~2,700 a day for all fourteen, call it 700k
+rows a year in a narrow table. Against the ~20M-row
+`option_strike_gex_history` that was the actual disk problem, it is noise.
+
+**Read from the FILE, not the roster.** `scanner-tickers.js` MAIN is the
+reviewed, committed list; roster-store's overrides are live-editable from the
+owner Watchlists page. Retention must not be something a page edit can turn into
+a delete — taking a ticker off the roster would otherwise make its entire
+history eligible that night, and there is no undo. Override deliberately with
+`RETENTION_SCANNER_KEEP_SYMBOLS` (comma-separated); set it to the empty string
+to keep nothing.
+
+**Forward-looking only.** Rows already deleted are gone — MAIN history starts
+accruing from the next nightly run, so the price line and the "never left"
+denominators fill in over the coming weeks rather than appearing at once. The
+three non-default variants are unaffected: `scanner_variants` was never pruned,
+so vol-only and non-0DTE already have their full sweep history back to the
+variant split.
+
+Notes updated in `server-v2/core-hold.js` and the Open bracket footnotes, which
+both asserted a flat 10 days.
+
+Files: `server-v2/state/retention-cleanup.js`, `server-v2/core-hold.js`,
+`owner-vite/src/pages/Results.tsx`.
+
+## 2026-09-13 - Weekly Edge: core-migration chart for Sep 4-11
+
+`public/core-migration-2026-09-11.png` (1400x622, ~85KB). `WALL_CHART_URL`
+repointed; `wallChartUrl` defaults to it again.
+
+LABEL SAYS SEP 4, NOT SEP 8. The chart's own first panel is FRIDAY 9/4 - five
+sessions back from 9/11 reaches past the Labor Day holiday, so the span is
+9/4, 9/8, 9/9, 9/10, 9/11. Labelling it "Sep 8-11" to match the recap week would
+have contradicted the day labels printed INSIDE the image, which a reader can
+see. Label reads "Core migration - five sessions, Sep 4 to Sep 11".
+
+Headline: "Four sessions of the walls stepping down, then Friday's CPI gap".
+That is what the picture shows - a staircase lower Fri through Thu, then a hard
+gap up on 9/11 with CORE resetting to ~7,660 and price riding it.
+
+USEFUL COINCIDENCE WORTH KNOWING: that Friday gap is the visual explanation of
+the week's two worst Core reads - 9/11's 9:45 and 10:30 both landed 24.5 points
+out. `resultsNote` already names Friday's CPI open as the culprit a few lines
+above, and the chart shows it. No caption added, per the standing "no detail text
+on the migration chart" instruction - but if a caption is ever wanted on this
+section, that connection is the one to write.
+
+Dated filename, as always. Never reuse one - it retro-changes the image inside
+every already-delivered letter.
+
+Preview regenerated: `generated/2026-09-13-weekly-edge-preview.html` / `.jpg`.
+STILL OPEN: scanner catch only.
+
+## 2026-09-13 - Weekly Edge: Estimated Move for Sep 8-11 (Core Board, 70.0%)
+
+`lib/emails/weekly-edge.ts`. Tile: 70.0%, sub "Core Board - 14-6 - 20 of 22
+scored". Green.
+
+DENOMINATOR CHANGE, AND IT IS THE WHOLE POINT OF THIS ENTRY. The number supplied
+this week is the CORE BOARD (22 tickers). The previous three issues put the FULL
+404-TICKER universe in that tile:
+
+  wk 8/21  41.0%  (96-138,  233 of 404)
+  wk 8/28  82.4%  (192-41,  233 of 404)   + Core Board 17-3 / 85.0% in the note
+  wk 9/04  71.7%  (167-66,  233 of 404)
+  wk 9/11  70.0%  (14-6,     20 of  22)   <- Core Board in the TILE
+
+71.7% -> 70.0% reads as a flat week and IS NOT A LIKE-FOR-LIKE COMPARISON. Two
+different populations, two different measurements.
+
+Handled by saying so rather than hiding it:
+- The tile sub leads with "Core Board", not a bare win-loss.
+- `estMoveNote` states outright that last week was 71.7% on 404 tickers and this
+  week is the 22-name board - "similar figures, different measurements - not a
+  flat week".
+- A comment above `estMovePct` records the preferred shape: when the all-tickers
+  number is available, IT goes in the tile and Core Board rides in the note, the
+  way the 8/28 issue did it.
+
+Silently swapping the universe behind a headline percentage is the kind of thing
+that only gets noticed once, by the one reader who was tracking it - and then
+every other number in the letter is suspect. If the all-tickers figure turns up
+before send, swap the tile and keep the note.
+
+Preview regenerated: `generated/2026-09-13-weekly-edge-preview.html` / `.jpg`.
+STILL OPEN: core-migration chart, scanner catch.
+
+## 2026-09-13 - Weekly Edge: Core rows + auto-buy for Sep 8-11
+
+`lib/emails/weekly-edge.ts`.
+
+CORE - four sessions (Mon 9/7 was Labor Day):
+
+| Date  | 9:45           | 10:30          | 12:00        |
+|-------|----------------|----------------|--------------|
+| 09-11 | 7700 / 24.5 X  | 7700 / 24.5 X  | 7680 / 4.5 v |
+| 09-10 | 7590 / 0.1 v   | 7620 / 10.3 X  | 7590 / 0.1 v |
+| 09-09 | 7630 / 0.4 v   | 7630 / 0.4 v   | 7630 / 0.4 v |
+| 09-08 | 7650 / 21.7 X  | 7675 / 3.3 v   | 7700 / 5.0 X |
+
+- 7 of 12 inside 5 points. THE WEAKEST WEEK THIS LETTER HAS PRINTED (prior weeks:
+  10/15, 10/15, 10/15). Tile is 75% - the best window, 12:00 at 3 of 4.
+- `resultsNote` says "weakest week since this letter started printing the table"
+  in those words. It does. The whole value of publishing a scorecard is that the
+  bad weeks appear in the same format as the good ones, and the two 24.5s on
+  Friday's CPI open are sitting in the table regardless - naming it is free.
+- CALLED OUT: 9/08 12:00 landed 5.0 away and scored a MISS. The <=5 test is
+  strict, not rounded. Flagging a coin-flip that went AGAINST us, in a week that
+  was already the worst, is the cheapest credibility available. Do not "fix" that
+  row to a hit.
+
+AUTO BUY - 9/9, all three windows on the same 7630P:
+  9:45  $4.95 -> $11.55  +133%  (11:27 AM)
+  10:30 $3.45 -> $13.70  +297%  (11:25 AM)
+  12:00 $6.25 ->  $9.45   +51%  (12:20 PM)
+
+NO CLOSE PRICES were supplied this week, only entry + peak. Rather than guess an
+exit or leave blank cells, `AutoBuyRow.close/realizedPct/dollars` are now
+OPTIONAL and the table is ALL-OR-NOTHING:
+- every row has a close  -> "IN -> SOLD / held to the close" + a Realized column
+- any row missing one    -> "IN -> PEAK / intraday high, not an exit", no
+                            Realized column at all
+A mixed table would let a reader take a peak for a result on the rows that lack
+one. Half a realized column is worse than none. Send the P/L column and it
+upgrades itself back automatically.
+
+The caption earns its place again: three entries on ONE contract produced +133%,
++297% and +51%. Without a line saying so, that reads as three different trades
+rather than the same read filled at three prices.
+
+Preview regenerated: `generated/2026-09-13-weekly-edge-preview.html` / `.jpg`.
+STILL OPEN: Estimated Move, core-migration chart, scanner catch.
+
+## 2026-09-13 - Weekly Edge: earnings week filled out (was under-reported)
+
+`lib/emails/weekly-edge.ts`. The Sep 14-18 earnings grid had only TCOM and LEN -
+built off a single week-ahead article. Checked against three calendars and it was
+missing the names that actually matter.
+
+| Day       | Reports                                |
+|-----------|----------------------------------------|
+| Mon 9/14  | PLAY (AMC)                             |
+| Tue 9/15  | TCOM (AMC)                             |
+| Wed 9/16  | GIS (BMO), LEN (AMC)                   |
+| Thu 9/17  | DRI (BMO), CCL (BMO), FDX (AMC)        |
+| Fri 9/18  | none                                   |
+
+- FedEx Thursday night is the one that belonged in there - the quarter's first
+  read on freight, and a genuine macro datapoint in a week framed around the Fed.
+  `aheadNote` now nods to it instead of flatly saying no earnings matter.
+- Lennar's slot got a line of its own: a homebuilder reporting HOURS after the
+  decision with mortgage rates over 7%. That juxtaposition is the interesting
+  part, not the EPS number.
+
+SOURCING CAVEAT, RECORDED IN THE CODE TOO: Kiplinger's day-by-day calendar is the
+spine (PLAY / TCOM / LEN / CCL). GIS, DRI and FDX come from a second source whose
+WEEKDAY LABELS WERE WRONG - it called Sep 17 a Wednesday - so those three are
+placed on their customary slots (GIS Wed BMO, DRI Thu BMO, FDX Thu AMC) rather
+than on that article's stated days. A third source (Reuters diary via itiger)
+looked authoritative but was the 2025 calendar, not 2026, and was discarded.
+
+VERIFY GIS / DRI / FDX BEFORE SENDING. A week-ahead that puts FedEx on the wrong
+day is the kind of error a trading audience catches immediately.
+
+Preview regenerated: `generated/2026-09-13-weekly-edge-preview.html` / `.jpg`.
+
 ## 2026-09-13 (h) - Open bracket: pick when the bracket is taken — 09:29 / 09:35 / 09:45 / 10:00
 
 09:29 is the worst possible anchor for **VOL ONLY**, and for an obvious reason:
@@ -22957,3 +23270,102 @@ now say 5.
 `/owner/db-map` reads the live value and shows it. The env var wins over the
 default, so it has to be cleared or set to 5 on the VPS before this takes
 effect. Until then the table keeps growing.
+
+## 2026-09-13 · voltick.cbedge.net contents board regrouped
+
+`voltick-vite/src/lib/nav.ts` · the landing board's categories recut so the
+grouping matches what the site actually holds today. **Theme** now leads
+(Design system, Colour vocabulary), followed by **Demos** (owner console demo,
+external), **The merger** (four planned pages, unchanged) and **Plumbing**
+(feed check). Nothing was deleted and no route changed: the router is still
+generated from this same array, so links and routes cannot drift.
+
+`voltick-vite/src/pages/Home.tsx` · lede rewritten. It now says plainly that
+this is the landing board, that most of the list is still planned, and that
+pages arrive as demos and sandboxes of the real site one at a time. The card
+treatment is unchanged: label, Built/Planned tag, one line note, path.
+
+Mockup of the result: `generated/2026-09-13-voltick-hub.html`.
+
+## 2026-09-13 · voltick.cbedge.net spelling cut to "color", left rail added
+
+**Spelling.** Every user-facing "colour" in `voltick-vite` is now "color",
+along with the identifiers behind them: `Chip`'s `colour` prop is `color`, the
+page file `src/pages/Colours.tsx` is `src/pages/Colors.tsx`, the registry key
+`Colours` is `Colors`, and the route `/colours` is `/colors`. Touched:
+`theme.ts`, `index.css`, `lib/nav.ts`, `pages/registry.ts`, `pages/Home.tsx`,
+`pages/Colors.tsx`, `pages/DesignSystem.tsx`, `pages/FeedCheck.tsx`,
+`components/PageCard.tsx`, `README.md`.
+
+**Left rail.** `components/Shell.tsx` gained a 244px sticky rail beside the
+routed page. It lists the CATEGORIES from `lib/nav.ts`, one row each with an
+emoji mark (Theme, Demos, The merger, Plumbing), and a row opens to the pages
+inside it. Closed at rest; the category holding the current page opens itself,
+and the current page carries a Volt Blue inset rule. Planned pages are marked
+"soon" and external ones render as real anchors, same rule as the board.
+
+`lib/nav.ts` gained `icon` on `VoltickGroup` and a `findGroup(path)` helper.
+`index.css` gained `.vk-railrow` / `.vk-raillink` hover and focus, plus the
+`max-width: 760px` rule that removes the rail on a phone, where the contents
+board is the navigation.
+
+The rail is generated from the same array Home renders and App routes from, so
+rail, board and router still cannot disagree about what exists.
+
+**Left over:** the old `voltick-vite/src/pages/Colours.tsx` could not be deleted
+from this session (no shell on the device). Nothing imports it, so it does not
+ship, but `git rm voltick-vite/src/pages/Colours.tsx` is still wanted.
+
+Mockup of the result: `generated/2026-09-13-voltick-hub-rail.html`.
+
+## 2026-09-13 · voltick.cbedge.net first content page: The Weekly Edge
+
+`voltick-vite/src/pages/Newsletter.tsx` · new. Last Sunday's Weekly Edge
+(`generated/2026-09-13-weekly-edge-preview.html`, itself from
+`lib/emails/weekly-edge.ts`) rebuilt on Voltick surfaces, type and reserved
+colors. Route `/newsletter`, listed first in `lib/nav.ts` under a new
+**Newsletter** group, key registered in `pages/registry.ts`.
+
+The words are the letter's, with two edits: em-dashes became middle dots,
+commas and colons, and "colour" is spelled "color". Everything visual was
+remapped, since the email paints its own palette and none of those hexes exist
+in this system:
+
+| Email | Voltick |
+|---|---|
+| cyan eyebrow `#38BDF8` | `ACCENT_TEXT` |
+| green `#00E676` | `GOOD`, data only, never chrome |
+| red `#FF4757` | `BAD`, data only, never chrome |
+| amber `#FFB300` | `VOLT`, spent on the scorecard and the flow card |
+| greys `#9fb3c8` / `#6b7d8f` | `PAPER_QUIET`, the one quiet token |
+
+Structure: a lede rule, then one `Card` per section (last week, this week
+ahead, the AI trade, oil, the CB Edge scorecard, access, affiliate, partner).
+The ticker logos from the email are gone; earnings names are mono pills instead,
+so the page carries no third-party image loads. The core-migration chart is
+still the hosted PNG at `cbedge.net`. Tables sit in `.vk-xscroll`, so the page
+body never scrolls sideways on a phone.
+
+Numbers are frozen at Sep 11, the letter's own. When this becomes a live surface
+it reads them from the API.
+
+Mockup of the result: `generated/2026-09-13-voltick-newsletter.html`.
+
+## 2026-09-13 · Weekly Edge page: commercial blocks held empty, Tradeify removed
+
+`voltick-vite/src/pages/Newsletter.tsx`. The two commercial blocks are now
+placeholders and the partner block is gone:
+
+- **Sale card** ($50/month, $500/year, "Get access") replaced by a `Slot`.
+- **Affiliate program** (20% recurring, attribution and payout copy,
+  affiliate.cbedge.net) replaced by a `Slot`.
+- **Partner · Tradeify** removed outright, including the code BZILA and the
+  `tradeify.co/?ref=Bzila` affiliate link. Nothing of it remains on the page.
+
+`Slot` is a new local component: a DASHED Volt Blue outline over a 4% wash,
+with an eyebrow reading "Placeholder", the block's name and one line of what
+belongs there. Dashed rather than solid on purpose, since a solid border is how
+this system says "separate object, finished". Nothing inside is styled as
+content, so a placeholder cannot be mistaken for a live section in a screenshot.
+
+Mockup updated: `generated/2026-09-13-voltick-newsletter.html`.

@@ -50,7 +50,7 @@ export default function DesignSystem() {
         <Card title="The non-negotiables" subtitle="Five rules. Breaking any of them is a defect, not a style disagreement.">
           <ol style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 9, color: PAPER }}>
             <li>
-              The reserved colours mean one thing each. A colour is a word in this product, and a test fails
+              The reserved colors mean one thing each. A color is a word in this product, and a test fails
               the build on a near-miss hex.
             </li>
             <li>No grey text, ever.</li>
