@@ -118,11 +118,11 @@ export default function Colours() {
           </div>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 18 }}>
-            <Chip mark={VOLT_MARK} label="Volt" value="772" colour={VOLT} />
-            <Chip mark={WALL_MARK} label="Walls" value="748/784" colour={SURGE} />
-            <Chip mark={FLIP_MARK} label="Flip" value="760" colour={FLIP} />
-            <Chip mark={REVERSAL_MARK} label="Reversal" value="741" colour={REVERSAL} />
-            <Chip mark={COIL_MARK} label="Coil" value="766" colour={COIL} />
+            <Chip mark={VOLT_MARK} label="Volt" value="772" color={VOLT} />
+            <Chip mark={WALL_MARK} label="Walls" value="748/784" color={SURGE} />
+            <Chip mark={FLIP_MARK} label="Flip" value="760" color={FLIP} />
+            <Chip mark={REVERSAL_MARK} label="Reversal" value="741" color={REVERSAL} />
+            <Chip mark={COIL_MARK} label="Coil" value="766" color={COIL} />
           </div>
           <p style={{ margin: "10px 0 0", fontSize: 12, color: PAPER_QUIET }}>
             Example data only, not a live quote.
