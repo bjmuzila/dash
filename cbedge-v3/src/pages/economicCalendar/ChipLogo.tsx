@@ -31,8 +31,9 @@
 import { useState } from 'react'
 import { CAL, T, alpha } from '@/design/theme'
 
-/** Mirror revision. Must match v2's LOGO_REV. 2026-08-30: +424 mirrored logos. */
-export const LOGO_REV = 3
+/** Mirror revision. Must match v2's LOGO_REV. 2026-09-13: +4,303 mirrored logos
+ *  (full davidepalazzo/ticker-logos set, 5,118 total in public/logos). */
+export const LOGO_REV = 4
 
 function localLogoUrl(sym: string): string {
   return `/logos/${encodeURIComponent(sym.toUpperCase())}.png?v=${LOGO_REV}`

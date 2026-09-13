@@ -1,29 +1,85 @@
 # Changelog
 
-## 2026-09-13 (a) - GEX Candles (v3): the day selector now actually scopes
+## 2026-09-13 (b) - Earnings chips (v3): the full ticker-logo mirror
 
-Reported with a screenshot: 2D was drawing FOUR days (Sep 8-11).
+The economic-calendar earnings board defaults to `mcapMin = 0`, so every name in
+the week feed draws a chip - and `public/logos/` only held 815 of them. Everything
+else fell through to `/proxy/ticker-logo`, which costs a PG lookup, a HEAD to
+GitHub and up to two Wikidata calls per chip before it answers, then to a
+ticker-text square when it doesn't.
 
-Yesterday's `dayBars` anchored the window on "today's ET date, once the clock is
-past 09:30" (`liveToday`). On a Saturday - and on a holiday, and in the first
-minutes after the open before the recorder has written a bar - that date is not
-in `barDays`, so the filter matched nothing and the empty-result fallback handed
-back the whole 7-day tape.
+Mirrored the whole upstream `davidepalazzo/ticker-logos` set: **+4,303 PNGs**,
+5,118 total. The 12 local-only files not present upstream (ALAB, EOG, HEI.A, IMO,
+IPG, PAYC, PBR.A, SGH, SPCX, TEM, XYZ, ZTS - the hand-cropped ones among them are
+in the script's MANUAL set) were left untouched.
 
-Now the window is anchored at `barDays[0]`, the newest session the payload
-actually holds. The tape cannot contain future days, so that IS today whenever
-today has traded and is Friday on a Saturday. 1D is one session at every hour,
-including pre-market and over a weekend; 2D is two, 3D is three.
+### Downscaled, because 4,300 files ride to the VPS on every pull
 
+Raw upstream is 81 MB at 128-250 px. Each icon was thumbnailed to a 128 px box
+(LANCZOS) and quantized to 128 colors with alpha preserved, keeping whichever of
+the quantized or optimized-RGBA encode came out smaller: **81 MB -> 9.2 MB**,
+~2.2 KB average. Chips render at 30-34 px, so 128 px still covers 2x DPR with
+room over.
+
+### LOGO_REV 3 -> 4
+
+`/logos/:path*` is served `Cache-Control: immutable, max-age=1y` on the PATH, so
+every browser that asked for one of these 4,303 files while it was a 404 is
+holding that 404 for a year. Only a new `?v=` makes it ask again. Bumped in
+`cbedge-v3/src/pages/economicCalendar/ChipLogo.tsx`.
+
+**Open:** v2's `components/shared/ChipLogo.tsx` reads the same mirror and still
+says `LOGO_REV = 3`. It is under the ask-first v2 tree, so it was not touched -
+v2's chips keep their cached 404s until that constant is bumped too.
+
+
+## 2026-09-13 (a) - GEX Candles (v3): a 1D / 2D / 3D bar-day selector
+
+The card pinned itself to TODAY from the cash open, so the board could never
+show yesterday's session next to this one. New per-card setting `tapeDays`
+(1 | 2 | 3) widens that draw-time scope to the newest N sessions.
+
+### Counted in sessions, never in calendar days
+
+The window is anchored at `barDays[0]` - the newest ET day the payload actually
+came back holding - and takes N days from there. The tape has no future days in
+it, so that IS today whenever today has traded, and is Friday on a Saturday. No
+market-calendar table to keep current, and 3D on a Tuesday reaches Thu/Fri/Mon
+over a holiday weekend by itself.
+
+The first cut of this anchored on the WALL CLOCK instead ("today's ET date, once
+past 09:30"). On a Saturday - and on a holiday, and in the minutes after the
+open before the recorder has written a bar - that date is not in `barDays`, the
+filter matched nothing, and the empty-result fallback handed back the whole
+7-day tape: 2D drew four days. Anchoring at the newest session the payload holds
+cannot miss that way.
+
+So 1D is exactly one session at every hour of the day, pre-market and weekends
+included. This also retires the old pre-market exception, where the scope
+switched off entirely before 09:30 and the card drew the full tape.
+
+### The rest
+
+- The request widens with it: above 1D the candle fetch asks for
+  `REPLAY_CANDLE_DAYS` (7, the ETF route's dxFeed ceiling) instead of the
+  default 5 - 5 calendar days does not always hold 3 sessions.
+- Bubbles and the rail are UNCHANGED: the gamma request reaches one session, so
+  2D/3D widen the candles only and the ladder stays on the newest day.
+- Replay is untouched - `activeDay` still wins, and the picker is suppressed
+  while rewound (the transport's day dropdown is the control there).
+- `tapeDays` joins `viewKey` so 1D -> 3D re-frames once (frameRecent sizes the
+  window in bars).
 - Dropped `liveToday`, the `openTick` state and its 30s interval. They existed
   to notice 09:30 passing; the scope now moves when the poll brings the first
-  bar of the new session, which is the same moment.
-- Also drops the old pre-market exception (scope OFF before 09:30). 1D means the
-  current day, as asked.
+  bar of the new session, which is the same moment and costs nothing to detect.
 
 **Changed (cbedge-v3):**
-- `src/board/gexCandles/GexCandlesCard.tsx` - `dayBars` memo and the block
-  comment above it.
+- `src/board/gexCandles/settings.ts` - `TapeDays`, `TAPE_DAYS`,
+  `TAPE_DAYS_LABEL`, `ChartSettings.tapeDays`, default `1`, `coerce` clamp.
+  No `SETTINGS_V` bump needed: an older blob takes the default.
+- `src/board/gexCandles/GexCandlesCard.tsx` - `candleDays`, the `dayBars` scope,
+  `viewKey`, `daysPicker`/`daysMenu` (header on desktop, "Days" section in the
+  phone sheet), phone `Layers` button label, `data-capture-meta`.
 
 **Needs a deploy** (`push.ps1` -> GitHub -> VPS `docker compose build`).
 
