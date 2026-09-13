@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-09-13 (f) - Open bracket: the table scrolls, and the CORE is usually one of the walls
+
+**The table card scrolls itself now.** Eighty symbols ran off the bottom of the
+screen and took the caveats under the table with them. PageShell's `<main>` is a
+flex column with a definite height, so the card takes `flex: 1` + `minHeight: 0`
+— it SHRINKS into what the head, the stat cards and the footnotes leave instead
+of pushing its full content height past the viewport — and its inner div is the
+scroller. Column heads are `position: sticky` on the `th` (not the `thead`: a
+sticky `<tr>` never worked and a sticky `thead` is recent), on
+`panelBgStrong` rather than the card's own surface, because CARD is a
+45%-translucent plate and rows slide visibly through a translucent header. The
+footnotes are `flexShrink: 0` below it and always on screen — they are the
+denominator warnings, and a caveat you have to scroll a hundred rows to reach is
+a caveat nobody reads.
+
+**The CORE is usually one of the two walls.** It is the single largest |net GEX|
+node on the chain, and the largest node overall is normally also the largest node
+on one side of spot — which is the definition of a wall. Positive gamma at that
+strike makes it the call wall, negative makes it the put wall. So most sessions
+the bracket holds only TWO distinct prices and the CORE is one of its own edges.
+
+That made the old "Closed above the CORE" number meaningless: when the CORE IS
+the call wall, every inside close is below it by construction, and the rate was
+re-measuring containment under another name. (It is why that card read 35/65.)
+
+Fixed by counting where the CORE actually sat — `core_is_cw` / `core_is_pw` /
+`core_interior` — and taking the above/below split ONLY over the interior
+sessions, where the CORE is a genuine third price and a midline question has an
+answer. New **CORE as a midline** card and **Core inside** column report how
+often that is, because how rarely the CORE is its own level is itself the
+finding. Equality is on the strike with a 1e-6 epsilon; the values come from the
+same log rows, so they are bit-identical when they are the same strike.
+
+Files: `server-v2/core-hold.js`, `owner-vite/src/pages/Results.tsx`.
+
 ## 2026-09-13 (e) - Open bracket: does the close land inside the 09:29 walls?
 
 New owner study. `/api/core-hold` + an **Open bracket** tab on `/dev/results`,

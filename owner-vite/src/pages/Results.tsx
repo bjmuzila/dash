@@ -1034,17 +1034,26 @@ function etClock(ts: number) {
 // READ WIDTH FIRST. A bracket 6% wide that contains the close 95% of the time
 // has told you nothing; one 1.1% wide that does it 70% of the time is a level.
 // The width column is the control arm and it is why this table is not a list of
-// 90%s to be pleased about. Model and caveats: server-v2/core-hold.js.
+// 90%s to be pleased about.
+//
+// AND THE CORE IS USUALLY ONE OF THE TWO WALLS, not a third level: it is the
+// biggest node on the chain, which is normally also the biggest node on one side
+// of spot. So "which side of the CORE" is only asked of the sessions where the
+// CORE sat strictly INSIDE the bracket — everywhere else that question is the
+// containment rate wearing a different name. The "core inside" column is how
+// often it is a genuine third price at all. Model: server-v2/core-hold.js.
 type BracketRow = {
   symbol: string;
   sessions: number; scored: number; inside: number;
   opened_outside: number; inverted: number; no_close: number; incomplete: number;
   scanner_closes: number;
+  core_is_cw: number; core_is_pw: number; core_interior: number;
   above_core: number; below_core: number;
   path_sessions: number; never_left: number;
   rolled: number;
   inside_rate: number | null; never_left_rate: number | null;
-  rolled_rate: number | null; above_core_rate: number | null; width_pct: number | null;
+  rolled_rate: number | null; above_core_rate: number | null;
+  core_interior_rate: number | null; width_pct: number | null;
 };
 type BracketResp = {
   ok?: boolean; days?: number; scope?: string; basis?: string;
@@ -1112,7 +1121,20 @@ function BracketView() {
     color: on ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
   });
 
-  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  // `position: sticky` on the CELLS, not on <thead> — Chrome only started
+  // honouring a sticky thead recently and a sticky <tr> never worked, so the th
+  // is the element that has always been reliable here.
+  //
+  // panelBgStrong, not the card's own surface: CARD is a 45%-translucent plate,
+  // and a translucent header has rows sliding visibly through it. This is the
+  // one place on the page that needs the opaque token.
+  const th: React.CSSProperties = {
+    padding: "10px 14px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em",
+    textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap",
+    position: "sticky", top: 0, zIndex: 1,
+    background: HOME_THEME.panelBgStrong,
+    boxShadow: `inset 0 -1px 0 ${C.border}`,
+  };
   const thSort = (key: SortKey): React.CSSProperties => ({ ...th, cursor: "pointer", color: sort === key ? C.cyan : C.label });
   const td: React.CSSProperties = { padding: "10px 14px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)", color: C.label };
 
@@ -1142,7 +1164,7 @@ function BracketView() {
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexShrink: 0, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Open bracket</span>
         <span style={{ fontSize: 14, color: C.label }}>
           the 09:29 put wall → call wall, frozen · did the close land inside it
@@ -1160,7 +1182,7 @@ function BracketView() {
       </div>
 
       {t && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginBottom: 22 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginBottom: 22, flexShrink: 0 }}>
           {statCard("Closed inside", "between the open put wall and call wall", pctTxt(t.inside_rate), wrColor(t.inside_rate),
             `${t.inside} / ${t.scored} sessions${t.opened_outside ? ` · ${t.opened_outside} opened outside` : ""}`)}
           {statCard("Never left", "price never traded outside it at all", pctTxt(t.never_left_rate), wrColor(t.never_left_rate),
@@ -1170,7 +1192,11 @@ function BracketView() {
               this card exists to prevent. */}
           {statCard("Bracket width", "median, as a percent of the 09:29 spot", wTxt(t.width_pct), C.cyan,
             "read this before the rate")}
-          {statCard("Closed above the CORE", "of the closes that landed inside", pctTxt(t.above_core_rate), C.purple,
+          {/* The CORE is usually one of the walls — see the note at the top of
+              this view — so this card has to lead with how often it is not. */}
+          {statCard("CORE as a midline", "how often it sat inside, not on a wall", pctTxt(t.core_interior_rate), C.purple,
+            `${t.core_interior} inside · ${t.core_is_cw} = call wall · ${t.core_is_pw} = put wall`)}
+          {statCard("Closed above the CORE", "inside closes, interior-CORE sessions only", pctTxt(t.above_core_rate), C.purple,
             `${t.above_core} above · ${t.below_core} below`)}
         </div>
       )}
@@ -1184,8 +1210,22 @@ function BracketView() {
           No recorded opens on this variant yet.
         </div>
       ) : (
-        <div style={{ ...CARD, padding: 0, overflow: "hidden" }}>
-          <div style={{ overflowX: "auto" }}>
+        /**
+         * THE TABLE SCROLLS, NOT THE PAGE.
+         *
+         * PageShell's <main> is a flex column with a definite height, so a card
+         * that asks for `flex: 1` gets exactly what the head, the stat cards and
+         * the footnotes leave — and `minHeight: 0` is what lets it SHRINK to
+         * that rather than push its full content height out of the viewport,
+         * which is how eighty symbols ran off the bottom of the screen with the
+         * caveats under them unreachable.
+         *
+         * The footnotes stay below it and always on screen, which is the point:
+         * they are the denominator warnings, and a caveat you have to scroll
+         * past a hundred rows to reach is a caveat nobody reads.
+         */
+        <div style={{ ...CARD, padding: 0, overflow: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <div className="wall-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -1194,6 +1234,7 @@ function BracketView() {
                   <th style={thSort("width")} onClick={() => setSort("width")}>Width</th>
                   <th style={thSort("inside")} onClick={() => setSort("inside")}>Closed inside</th>
                   <th style={thSort("never")} onClick={() => setSort("never")}>Never left</th>
+                  <th style={th}>Core inside</th>
                   <th style={th}>Above core</th>
                   <th style={th}>Opened outside</th>
                   <th style={thSort("rolled")} onClick={() => setSort("rolled")}>Walls rolled</th>
@@ -1207,6 +1248,11 @@ function BracketView() {
                     <td style={{ ...td, color: C.cyan, fontWeight: 700 }}>{wTxt(r.width_pct)}</td>
                     {rateCell(r.inside_rate, r.inside, r.scored)}
                     {rateCell(r.never_left_rate, r.never_left, r.path_sessions)}
+                    <td style={{ ...td, color: MUTED }}>
+                      {r.core_interior_rate != null
+                        ? `${pctTxt(r.core_interior_rate)}  ${r.core_interior}/${r.core_is_cw + r.core_is_pw + r.core_interior}`
+                        : "—"}
+                    </td>
                     <td style={{ ...td, color: MUTED }}>
                       {r.above_core + r.below_core > 0 ? `${pctTxt(r.above_core_rate)}  ${r.above_core}/${r.above_core + r.below_core}` : "—"}
                     </td>
@@ -1223,7 +1269,7 @@ function BracketView() {
       {/* The caveats worth carrying under the table rather than in a doc nobody
           opens. All of them are about the DENOMINATOR, which is where a
           hit-rate table lies if it is going to. */}
-      <div style={{ marginTop: 14, fontSize: 14, color: MUTED, lineHeight: 1.6 }}>
+      <div style={{ marginTop: 14, flexShrink: 0, fontSize: 14, color: MUTED, lineHeight: 1.6 }}>
         <div>
           Levels are frozen at 09:29 — a wall that rolled later is still measured at
           where it opened, which is the only bracket you could have traded. “Walls
@@ -1235,6 +1281,13 @@ function BracketView() {
           chased. A close exactly on a wall counts as inside.
           {t && t.inverted > 0 ? ` ${t.inverted} inverted bracket(s) (call wall under put wall) dropped.` : ""}
           {t && t.no_close > 0 ? ` ${t.no_close} session(s) had no close to compare.` : ""}
+        </div>
+        <div>
+          The CORE is the biggest node on the chain, which is normally also the biggest
+          node on one side of spot — so most sessions it IS the call wall or the put wall
+          rather than a third level. “Above core” is therefore taken only over the
+          sessions where it sat strictly inside the bracket; “core inside” is how often
+          that was.
         </div>
         <div>
           “Never left” reads the 5-minute scanner path, which retention cuts at 10 days —

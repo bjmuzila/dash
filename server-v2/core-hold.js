@@ -7,8 +7,24 @@
  * question that range is really making a claim about: DID PRICE CLOSE INSIDE IT?
  *
  *     call wall ────────────────────────────  ceiling
- *                       CORE                  the heavy node inside it
+ *                       CORE                  usually ONE OF THE TWO — see below
  *     put wall  ────────────────────────────  floor
+ *
+ * ── THE CORE IS USUALLY A WALL, NOT A THIRD LEVEL ────────────────────────────
+ * The CORE is the single largest |net GEX| node on the chain, and the largest
+ * node overall is normally also the largest node on one side of spot — which is
+ * the definition of a wall. Positive gamma at that strike makes it the CALL
+ * wall, negative makes it the PUT wall. So most sessions the bracket has only
+ * TWO distinct prices in it and the CORE is one of its own edges.
+ *
+ * That is why "which side of the CORE did the close land on" cannot be asked of
+ * every session: when the CORE IS the call wall, "below the CORE" and "inside
+ * the bracket" are the same statement, and the rate measures nothing but the
+ * containment rate again. So this counts where the CORE sat —
+ * `core_is_cw` / `core_is_pw` / `core_interior` — and the above/below split is
+ * taken ONLY over the interior sessions, where the CORE is a genuine third
+ * price and a midline question has an answer. The interior count is reported
+ * alongside, because how OFTEN the CORE is its own level is itself the finding.
  *
  * The levels are FROZEN AT THE OPEN. They roll during the day — that is what
  * the level log draws — but a bracket you can trade is one you know at 09:29,
@@ -24,10 +40,10 @@
  *               it finished. Needs the intraday path, so it is bounded by
  *               scanner_snapshots retention (10 days) and carries its own
  *               denominator rather than quietly shrinking the headline's.
- *   ABOVE/BELOW of the closes that landed inside, which side of the CORE they
- *               landed on. The CORE's half of the question: a bracket that
- *               contains the close is one thing, a CORE that the close respects
- *               as a midline is another.
+ *   ABOVE/BELOW of the closes that landed inside ON A SESSION WHERE THE CORE WAS
+ *               A GENUINE INTERIOR LEVEL, which side of the CORE they landed on.
+ *               See the note above for why the other sessions are excluded
+ *               rather than pooled.
  *   WIDTH       median bracket width as a percent of the open spot — THE
  *               CONTROL. A bracket 6% wide that contains the close 95% of the
  *               time has told you nothing; one 1.1% wide that does it 70% of
@@ -246,7 +262,19 @@ async function coreHold(pool, opts = {}) {
     no_close: 0,
     incomplete: 0,
     scanner_closes: 0,
-    /** Of the closes that landed inside, which side of the CORE. */
+    /**
+     * WHERE THE CORE SAT. Most sessions it IS one of the walls — see the header.
+     * Counted over every session with a usable bracket, scored or not, because
+     * this is a fact about the levels rather than about the close.
+     */
+    core_is_cw: 0,
+    core_is_pw: 0,
+    core_interior: 0,
+    /**
+     * Of the inside closes on an INTERIOR-CORE session, which side of the CORE.
+     * Deliberately not asked of the sessions where the CORE is a wall: there the
+     * answer is the containment rate wearing a different name.
+     */
     above_core: 0,
     below_core: 0,
     /** The NEVER LEFT arm, with its own (shorter) denominator. */
@@ -254,12 +282,13 @@ async function coreHold(pool, opts = {}) {
     never_left: 0,
     /** Context, not score. */
     rolled: 0,
-    _widths: [],
     inside_rate: null,
     never_left_rate: null,
     rolled_rate: null,
     above_core_rate: null,
+    core_interior_rate: null,
     width_pct: null,
+    _widths: [],
   });
   const by = new Map(symbols.map((s) => [s, blank(s)]));
 
@@ -281,6 +310,23 @@ async function coreHold(pool, opts = {}) {
       continue;
     }
     row._widths.push(((s.cw - s.pw) / s.spot) * 100);
+
+    // Where the CORE sat. Strikes come from the same rows as the walls, so they
+    // are bit-identical when they are the same strike; the epsilon is only there
+    // so a future source that rounds differently cannot turn an equal strike
+    // into a spurious "interior" level a hundredth of a point wide.
+    const EPS = 1e-6;
+    let coreInterior = false;
+    if (s.cb > 0) {
+      if (Math.abs(s.cb - s.cw) <= EPS) row.core_is_cw++;
+      else if (Math.abs(s.cb - s.pw) <= EPS) row.core_is_pw++;
+      else if (s.cb < s.cw && s.cb > s.pw) {
+        row.core_interior++;
+        coreInterior = true;
+      }
+      // A CORE outside its own bracket is possible on a thin chain and is
+      // counted nowhere: it is neither an edge nor a midline.
+    }
 
     if (s.spot > s.cw || s.spot < s.pw) {
       row.opened_outside++;
@@ -306,7 +352,9 @@ async function coreHold(pool, opts = {}) {
     // On a wall counts as inside — the wall is the edge of the range.
     if (close <= s.cw && close >= s.pw) {
       row.inside++;
-      if (s.cb > 0) {
+      // Interior CORE only — see the header. On a session where the CORE is the
+      // call wall, every inside close is below it by construction.
+      if (coreInterior) {
         if (close > s.cb) row.above_core++;
         else if (close < s.cb) row.below_core++;
       }
@@ -319,6 +367,9 @@ async function coreHold(pool, opts = {}) {
     r.never_left_rate = pct(r.never_left, r.path_sessions);
     r.rolled_rate = pct(r.rolled, r.sessions);
     r.above_core_rate = pct(r.above_core, r.above_core + r.below_core);
+    // Over sessions with a usable bracket, not over every session — a session
+    // with no bracket had no CORE placement to classify.
+    r.core_interior_rate = pct(r.core_interior, r.core_is_cw + r.core_is_pw + r.core_interior);
     r.width_pct = median(r._widths);
     delete r._widths;
   }
@@ -339,6 +390,9 @@ async function coreHold(pool, opts = {}) {
     no_close: sum((r) => r.no_close),
     incomplete: sum((r) => r.incomplete),
     scanner_closes: sum((r) => r.scanner_closes),
+    core_is_cw: sum((r) => r.core_is_cw),
+    core_is_pw: sum((r) => r.core_is_pw),
+    core_interior: sum((r) => r.core_interior),
     above_core: sum((r) => r.above_core),
     below_core: sum((r) => r.below_core),
     path_sessions: sum((r) => r.path_sessions),
@@ -348,12 +402,14 @@ async function coreHold(pool, opts = {}) {
     never_left_rate: null,
     rolled_rate: null,
     above_core_rate: null,
+    core_interior_rate: null,
     width_pct: median(rows.map((r) => r.width_pct).filter((w) => w != null)),
   };
   totals.inside_rate = pct(totals.inside, totals.scored);
   totals.never_left_rate = pct(totals.never_left, totals.path_sessions);
   totals.rolled_rate = pct(totals.rolled, totals.sessions);
   totals.above_core_rate = pct(totals.above_core, totals.above_core + totals.below_core);
+  totals.core_interior_rate = pct(totals.core_interior, totals.core_is_cw + totals.core_is_pw + totals.core_interior);
 
   return {
     ok: true,
