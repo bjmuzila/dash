@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-09-13 (g) - Open bracket: the table gets the page, the stat row pays for it
+
+The scroll box took whatever the stat row left, which on a laptop was four rows
+— a scroller that short is a worse way to read eighty symbols than no scroller.
+
+**A floor, in rows.** `TABLE_MIN_H = HEAD_H + MIN_ROWS * ROW_H` (38 + 14 × 34),
+on the card and on its scroller. On a full-height monitor `flex: 1` still wins
+and the table runs to the bottom of the viewport; on a short window the page is
+allowed to scroll under it rather than the table being squeezed to nothing. The
+numbers are constants, not measurements — the floor only has to be close, and
+being a pixel out means fourteen and a half rows, not a broken layout.
+
+**Rows got shorter.** Cell padding 10px → 7px vertical (header 9px), so the same
+height holds ~20% more symbols.
+
+**The stat row got out of the way.** Every pixel up there is a row down here:
+card padding 16/18 → 11/14, the big number 30 → 24, internal gap 8 → 3, grid gap
+14 → 10 and the margin under it 22 → 12, track `auto-fill minmax(280)` →
+`auto-fit minmax(228)` so five cards stay on one row instead of wrapping to two.
+The "POOLED" chip came off all of them and is said once, in the footnotes, where
+it was always a caveat rather than a label.
+
+Files: `owner-vite/src/pages/Results.tsx`.
+
 ## 2026-09-13 (f) - Open bracket: the table scrolls, and the CORE is usually one of the walls
 
 **The table card scrolls itself now.** Eighty symbols ran off the bottom of the

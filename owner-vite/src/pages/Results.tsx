@@ -1068,6 +1068,25 @@ type SortKey = "symbol" | "sessions" | "inside" | "never" | "width" | "rolled";
 
 const DAY_OPTS = [20, 60, 120, 500] as const;
 
+/**
+ * HOW MUCH TABLE IS GUARANTEED.
+ *
+ * The card takes what the stat row leaves, which on a laptop was four rows —
+ * a scroller that short is a worse way to read eighty symbols than no scroller
+ * at all. So the scroll box carries a FLOOR of MIN_ROWS, and the page is
+ * allowed to scroll under it on a short window rather than the table being
+ * squeezed to nothing. On a full-height monitor `flex: 1` still wins and the
+ * table runs to the bottom of the viewport.
+ *
+ * ROW_H is the real painted row: 7px of padding each side of a 14px line. It is
+ * a constant rather than a measurement because the floor only has to be close —
+ * being a pixel out means fourteen and a half rows, not a broken layout.
+ */
+const ROW_H = 34;
+const HEAD_H = 38;
+const MIN_ROWS = 14;
+const TABLE_MIN_H = HEAD_H + MIN_ROWS * ROW_H;
+
 function BracketView() {
   const [resp, setResp] = useState<BracketResp | null>(null);
   const [days, setDays] = useState<number>(60);
@@ -1129,14 +1148,14 @@ function BracketView() {
   // and a translucent header has rows sliding visibly through it. This is the
   // one place on the page that needs the opaque token.
   const th: React.CSSProperties = {
-    padding: "10px 14px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em",
+    padding: "9px 14px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em",
     textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap",
     position: "sticky", top: 0, zIndex: 1,
     background: HOME_THEME.panelBgStrong,
     boxShadow: `inset 0 -1px 0 ${C.border}`,
   };
   const thSort = (key: SortKey): React.CSSProperties => ({ ...th, cursor: "pointer", color: sort === key ? C.cyan : C.label });
-  const td: React.CSSProperties = { padding: "10px 14px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)", color: C.label };
+  const td: React.CSSProperties = { padding: "7px 14px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)", color: C.label };
 
   // A rate cell: the percentage in the win-rate colour, the fraction beside it
   // in plain type. The fraction is not decoration — 3/3 and 41/60 are the same
@@ -1148,23 +1167,24 @@ function BracketView() {
     </td>
   );
 
+  // Compact on purpose: every pixel this row spends is a row the table does not
+  // get. The big number and the sub-line carry the card — the "POOLED" chip that
+  // used to sit opposite the label is in the footnote now, said once instead of
+  // four times.
   const statCard = (label: string, sub: string, big: string, color: string, line: string) => (
-    <div className="card-hover" style={{ ...CARD, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-        <span style={{ fontSize: 17, fontWeight: 800, color: C.label }}>{label}</span>
-        <span style={{ fontSize: 14, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>pooled</span>
-      </div>
-      <div style={{ fontSize: 14, color: C.label }}>{sub}</div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <span style={{ fontSize: 30, fontWeight: 800, color, fontFamily: "var(--font-mono)", lineHeight: 1 }}>{big}</span>
-        <span style={{ fontSize: 14, color: MUTED, fontFamily: "var(--font-mono)" }}>{line}</span>
+    <div className="card-hover" style={{ ...CARD, padding: "11px 14px", display: "flex", flexDirection: "column", gap: 3 }}>
+      <span style={{ fontSize: 14, fontWeight: 800, color: C.label, letterSpacing: "0.04em" }}>{label}</span>
+      <span style={{ fontSize: 13, color: MUTED, lineHeight: 1.35 }}>{sub}</span>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
+        <span style={{ fontSize: 24, fontWeight: 800, color, fontFamily: "var(--font-mono)", lineHeight: 1 }}>{big}</span>
+        <span style={{ fontSize: 13, color: MUTED, fontFamily: "var(--font-mono)" }}>{line}</span>
       </div>
     </div>
   );
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexShrink: 0, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 10, flexShrink: 0, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Open bracket</span>
         <span style={{ fontSize: 14, color: C.label }}>
           the 09:29 put wall → call wall, frozen · did the close land inside it
@@ -1182,7 +1202,7 @@ function BracketView() {
       </div>
 
       {t && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginBottom: 22, flexShrink: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(228px, 1fr))", gap: 10, marginBottom: 12, flexShrink: 0 }}>
           {statCard("Closed inside", "between the open put wall and call wall", pctTxt(t.inside_rate), wrColor(t.inside_rate),
             `${t.inside} / ${t.scored} sessions${t.opened_outside ? ` · ${t.opened_outside} opened outside` : ""}`)}
           {statCard("Never left", "price never traded outside it at all", pctTxt(t.never_left_rate), wrColor(t.never_left_rate),
@@ -1224,8 +1244,8 @@ function BracketView() {
          * they are the denominator warnings, and a caveat you have to scroll
          * past a hundred rows to reach is a caveat nobody reads.
          */
-        <div style={{ ...CARD, padding: 0, overflow: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <div className="wall-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <div style={{ ...CARD, padding: 0, overflow: "hidden", flex: 1, minHeight: TABLE_MIN_H, display: "flex", flexDirection: "column" }}>
+          <div className="wall-scroll" style={{ flex: 1, minHeight: TABLE_MIN_H, overflow: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -1269,7 +1289,11 @@ function BracketView() {
       {/* The caveats worth carrying under the table rather than in a doc nobody
           opens. All of them are about the DENOMINATOR, which is where a
           hit-rate table lies if it is going to. */}
-      <div style={{ marginTop: 14, flexShrink: 0, fontSize: 14, color: MUTED, lineHeight: 1.6 }}>
+      <div style={{ marginTop: 12, flexShrink: 0, fontSize: 13, color: MUTED, lineHeight: 1.55 }}>
+        <div>
+          The cards are POOLED across every symbol — not an average of the per-symbol
+          rates, which would weigh a ticker with four sessions the same as SPX with sixty.
+        </div>
         <div>
           Levels are frozen at 09:29 — a wall that rolled later is still measured at
           where it opened, which is the only bracket you could have traded. “Walls
