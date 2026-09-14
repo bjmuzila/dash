@@ -481,6 +481,48 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   }
   const hp = hover == null ? null : bars[hover]!
   const hpl = hp == null || entry == null ? null : (hp.close - entry) * 100
+  const hpct = hp == null || entry == null || entry <= 0 ? null : ((hp.close - entry) / entry) * 100
+
+  // ── THE HOVER READOUT ──────────────────────────────────────────────────
+  // A whale chart can answer a question a plain option chart cannot: what the
+  // PRINT is worth at the minute under the cursor. Size is on the row, so the
+  // position's value (mark x size x 100) and the open P/L against the entry are
+  // both arithmetic — and they are the numbers actually being asked for when
+  // someone scrubs a $9.78M print across the day.
+  //
+  // Every row is conditional on the input it needs. A lookup has no entry and
+  // no size, so it renders as time + mark + volume and the box shrinks to fit
+  // rather than printing four dashes.
+  const dollars = (v: number) => {
+    const a = Math.abs(v)
+    const sign = v < 0 ? '\u2212' : ''
+    if (a >= 1_000_000) return `${sign}$${(a / 1_000_000).toFixed(2)}M`
+    if (a >= 1_000) return `${sign}$${(a / 1_000).toFixed(0)}K`
+    return `${sign}$${a.toFixed(0)}`
+  }
+  const hrows: Array<{ k: string; v: string; ink?: string; big?: boolean }> = []
+  if (hp) {
+    hrows.push({ k: 'MARK', v: fmt(hp.close), big: true })
+    if (hpl != null) {
+      hrows.push({
+        k: 'VS ENTRY',
+        v: `${hpl >= 0 ? '+' : '\u2212'}$${Math.abs(hpl).toFixed(0)}/ct`,
+        ink: hpl >= 0 ? 'var(--color-up)' : 'var(--color-down)',
+      })
+    }
+    hrows.push({ k: 'BAR VOL', v: hp.volume >= 1000 ? `${(hp.volume / 1000).toFixed(1)}k` : String(hp.volume) })
+    if (size && size > 0) {
+      hrows.push({ k: 'POSITION', v: dollars(hp.close * size * 100), ink: 'var(--color-warn)' })
+      if (entry != null && entry > 0) {
+        const pl = (hp.close - entry) * size * 100
+        hrows.push({ k: 'OPEN P/L', v: dollars(pl), ink: pl >= 0 ? 'var(--color-up)' : 'var(--color-down)' })
+      }
+    }
+  }
+  const BOXW = 132 * S
+  const HEADH = 20 * S
+  const ROWH = 15 * S
+  const BOXH = HEADH + hrows.length * ROWH + 6 * S
 
   return (
     <svg
@@ -600,13 +642,14 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
             textAnchor={anchor}
             fontSize={8.5 * S}
             fontWeight={700}
+            // Inside the bar the ink is still WHITE, not the page ground: the
+            // bar it sits on is the accent blue, and dark-on-accent was
+            // unreadable at 8.5px (2026-09-14).
             style={{
-              fill: inside
-                ? 'var(--color-bg)'
-                : i === fillIdx ? 'var(--color-accent)' : 'var(--color-fg)',
+              fill: inside || i !== fillIdx ? 'var(--color-fg)' : 'var(--color-accent)',
               fontFamily: MONO,
             }}
-            opacity={inside ? 1 : i === fillIdx ? 1 : 0.7}
+            opacity={inside || i === fillIdx ? 1 : 0.7}
           >
             {v >= 10_000 ? `${(v / 1000).toFixed(0)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}
           </text>
@@ -626,21 +669,40 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
 
       {hp && (
         <g>
-          <line x1={x(hover as number)} y1={PADT} x2={x(hover as number)} y2={PADT + priceH}
+          <line x1={x(hover as number)} y1={PADT} x2={x(hover as number)} y2={vTop + volH}
             style={{ stroke: 'var(--color-fg)' }} strokeWidth={1} strokeDasharray="2 3" opacity={0.4} />
           <circle cx={x(hover as number)} cy={y(hp.close)} r={3 * S}
             style={{ fill: 'var(--color-bg)', stroke: 'var(--color-accent)' }} strokeWidth={1.6 * S} />
-          <g transform={`translate(${Math.min(W - PADR - 96 * S, Math.max(PADL, x(hover as number) + 8))},${PADT + 2})`}>
-            <rect width={94 * S} height={34 * S} rx={5 * S}
+          {/* Clamped on both ends. The box follows the cursor until it would
+              cross the price rail, then stops — a readout sliding under the rail
+              labels is worse than one that stops moving. */}
+          <g transform={`translate(${Math.min(W - PADR - BOXW - 2, Math.max(PADL, x(hover as number) + 10))},${PADT + 2})`}>
+            <rect width={BOXW} height={BOXH} rx={6 * S}
               style={{ fill: 'var(--color-surface2)', stroke: 'var(--color-line)' }} strokeWidth={1} />
-            <text x={7 * S} y={13 * S} fontSize={8.5 * S} fontWeight={700} style={label}>{etTime(hp.time)}</text>
-            <text x={7 * S} y={27 * S} fontSize={11 * S} fontWeight={700} style={label}>{fmt(hp.close)}</text>
-            {hpl != null && (
-              <text x={54 * S} y={27 * S} fontSize={9.5 * S} fontWeight={700}
-                style={{ fill: hpl >= 0 ? 'var(--color-up)' : 'var(--color-down)', fontFamily: MONO }}>
-                {hpl >= 0 ? '+' : '−'}${Math.abs(hpl).toFixed(0)}
+            {/* Header band: the minute, and the move in percent. A rounded rect
+                plus a square one, so only the TOP corners round. */}
+            <rect width={BOXW} height={HEADH} rx={6 * S} style={{ fill: 'var(--color-raised)' }} />
+            <rect y={HEADH - 6 * S} width={BOXW} height={6 * S} style={{ fill: 'var(--color-raised)' }} />
+            <text x={9 * S} y={HEADH - 6 * S} fontSize={9 * S} fontWeight={700} style={label} opacity={0.65}>
+              {etTime(hp.time)}
+            </text>
+            {hpct != null && (
+              <text x={BOXW - 9 * S} y={HEADH - 6 * S} textAnchor="end" fontSize={9 * S} fontWeight={700}
+                style={{ fill: hpct >= 0 ? 'var(--color-up)' : 'var(--color-down)', fontFamily: MONO }}>
+                {hpct >= 0 ? '+' : '\u2212'}{Math.abs(hpct).toFixed(1)}%
               </text>
             )}
+            {hrows.map((r, i) => {
+              const ry = HEADH + (i + 1) * ROWH - 4 * S
+              return (
+                <g key={r.k}>
+                  <text x={9 * S} y={ry} fontSize={8 * S} fontWeight={700} letterSpacing="0.08em"
+                    style={label} opacity={0.45}>{r.k}</text>
+                  <text x={BOXW - 9 * S} y={ry} textAnchor="end" fontSize={(r.big ? 11 : 9.5) * S} fontWeight={700}
+                    style={{ fill: r.ink ?? 'var(--color-fg)', fontFamily: MONO }}>{r.v}</text>
+                </g>
+              )
+            })}
           </g>
         </g>
       )}
