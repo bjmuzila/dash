@@ -416,6 +416,37 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   const bw = Math.max(1, ((W - PADL - PADR) / n) * 0.62)
   const fillIdx = vols.indexOf(vMax)
 
+  // ── WHICH VOLUME BARS GET A NUMBER ──────────────────────────────────────
+  // Only the ones that stand out. A number over every bar is a wall of type
+  // nobody reads, and the reason to look at this pane at all is "which minute
+  // did the size go through" — so the labels are the answer to that and
+  // nothing else.
+  //
+  // A bar qualifies on BOTH counts: at least 3x the day's average bar, and at
+  // least a third of the tallest. The average alone labels a dead contract's
+  // every twitch; the fraction alone labels nothing on a session with one
+  // enormous print. Capped at four, biggest first, and a label is dropped if it
+  // would land on top of one already placed.
+  const volLabels = useMemo(() => {
+    if (n < 6) return [] as number[]
+    const floor = Math.max(vAvg * 3, vMax * 0.33)
+    const cand = vols
+      .map((v, i) => ({ v, i }))
+      .filter((c) => c.v > 0 && c.v >= floor)
+      .sort((a, b) => b.v - a.v)
+      .slice(0, 4)
+    const kept: number[] = []
+    const minGap = 30 * (wide ? 1.75 : 1)
+    for (const c of cand) {
+      if (kept.some((k) => Math.abs(x(k) - x(c.i)) < minGap)) continue
+      kept.push(c.i)
+    }
+    return kept
+    // x() and the sizing constants are derived from the same inputs, so the
+    // bar list and the width are the whole dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vols, vAvg, vMax, n, W, PADL, PADR, wide])
+
   // WHERE the entry sits on the line. The print timestamp is matched to the
   // nearest bar OPEN rather than the first bar at or after it, so a fill a few
   // seconds either side of a boundary lands on the bar it belongs to. Out of
@@ -552,6 +583,35 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
       ))}
       <line x1={PADL} y1={vy(vAvg)} x2={W - PADR} y2={vy(vAvg)}
         style={{ stroke: 'var(--color-fg)' }} strokeWidth={1} strokeDasharray="1 3" opacity={0.3} />
+
+      {/* The standout bars, numbered. A tall bar's top is at the very edge of
+          the pane, so its label goes INSIDE it in the page ground rather than
+          above it in the gap, where it would collide with the price chart. */}
+      {volLabels.map((i) => {
+        const v = vols[i]!
+        const top = vy(v)
+        const inside = top < vTop + 11 * S
+        const anchor = x(i) < PADL + 22 * S ? 'start' : x(i) > W - PADR - 22 * S ? 'end' : 'middle'
+        return (
+          <text
+            key={`vl-${i}`}
+            x={anchor === 'start' ? PADL : anchor === 'end' ? W - PADR : x(i)}
+            y={inside ? top + 8.5 * S : top - 3 * S}
+            textAnchor={anchor}
+            fontSize={8.5 * S}
+            fontWeight={700}
+            style={{
+              fill: inside
+                ? 'var(--color-bg)'
+                : i === fillIdx ? 'var(--color-accent)' : 'var(--color-fg)',
+              fontFamily: MONO,
+            }}
+            opacity={inside ? 1 : i === fillIdx ? 1 : 0.7}
+          >
+            {v >= 10_000 ? `${(v / 1000).toFixed(0)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}
+          </text>
+        )
+      })}
       <text x={W - PADR + 7 * S} y={vTop + 8 * S} fontSize={9 * S} fontWeight={700} style={label}>
         {vMax >= 1000 ? `${(vMax / 1000).toFixed(1)}k` : vMax}
       </text>

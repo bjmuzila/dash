@@ -1,15 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
-import {
-  BOARD_COLS,
-  Board,
-  compactBoard,
-  resolveBoard,
-  settleBoard,
-  snapLaneX,
-  type BoardItem,
-} from '@/design/primitives/Board'
+import { BOARD_COLS, Board, compactBoard, resolveBoard, settleBoard, type BoardItem } from '@/design/primitives/Board'
 import { useAuth } from '@/data/auth'
 import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import { ToolbarSlot } from '@/shell/ToolbarSlot'
@@ -323,50 +315,39 @@ export default function BoardPage() {
   const removeCard = (id: string) => {
     setLayoutState((prev) => arrange(prev.filter((i) => i.id !== id)))
   }
-  // ── THE CATALOG REMOVES TOO ────────────────────────────────────────────────
-  //
-  // The ✕ beside a catalog row that already has a count. Taking a card off used
-  // to mean finding it on the board and using its own header ✕ — fine for the
-  // card you are looking at, and the wrong shape for "I added that by mistake"
-  // or for a card that is three screens down. The menu is already the list of
-  // what exists and how many, so it is the natural place to give one back.
-  //
-  // It removes the LAST instance of the type — the one `+` most recently added
-  // — so add and remove are symmetric in the same row, and the ordinals of the
-  // copies that stay (`#2`, `#3`) do not shuffle under the user.
-  //
-  // AND THE MENU STAYS OPEN, unlike add. Adding is one decision and closing is
-  // the confirmation; pruning is usually several, and a menu that shut after
-  // each ✕ would have to be reopened three times to walk three copies back.
-  const removeLastOfType = (type: string) => {
-    setLayoutState((prev) => {
-      const last = [...prev].reverse().find((i) => cardTypeOf(i.id) === type)
-      if (!last) return prev
-      return arrange(prev.filter((i) => i.id !== last.id))
-    })
-  }
 
-  // ── ONE, TWO OR THREE PER ROW, WITHOUT DRAGGING ────────────────────────────
+  // ── ONE, TWO OR THREE PER ROW ──────────────────────────────────────────────
   //
   // The lane rule in design/primitives/Board.tsx already means a card can only
-  // be the whole board, a half of it or a third of it. Getting to the one you
-  // want still meant dragging a corner and reading the result off the screen,
-  // which is a lot of hand for a choice with exactly three answers.
+  // be the whole board, a half of it or a third of it. Reaching the layout you
+  // want still meant dragging each card to the width you wanted and then
+  // dragging it up beside its neighbour, which is a lot of hand for a choice
+  // with three answers.
   //
-  // So the choice is STATED instead: 1 · 2 · 3 in the card's own header while
-  // the board is unlocked, and the card takes that width on the spot. The drag
-  // still works and lands on the same three widths; this is the same decision
-  // made with one click.
+  // So the choice is STATED, once, for the whole board: 1 · 2 · 3 in the
+  // toolbar, in edit mode. It relays every card in reading order into rows of
+  // that many, each an exact share of the width, keeping each card's height.
+  // One click puts three cards across; dragging still works and still lands on
+  // the same three widths.
   //
-  // The card is PINNED for the settle that follows, the same way it is after a
-  // resize gesture. Without the pin, fillGaps would hand a card narrowed to a
-  // third the space it just gave up and widen it straight back — the button
-  // would appear to do nothing.
-  const setCardLanes = (id: string, lanes: number) => {
-    const w = Math.round(BOARD_COLS / lanes)
+  // Reading order, not a re-sort: the board you were looking at comes back in
+  // the same sequence, just in a different shape. A row is as tall as its
+  // tallest card, so nothing is cropped by the reflow.
+  const setBoardLanes = (n: number) => {
+    const w = Math.round(BOARD_COLS / n)
     setLayoutState((prev) => {
-      const next = prev.map((i) => (i.id === id ? { ...i, w, x: snapLaneX(i.x, w) } : i))
-      return free ? settleBoard(next, id) : compactBoard(compactBoard(next, id))
+      const order = [...prev].sort((a, b) => a.y - b.y || a.x - b.x)
+      const next: BoardItem[] = []
+      let y = 0
+      for (let i = 0; i < order.length; i += n) {
+        const row = order.slice(i, i + n)
+        row.forEach((c, j) => next.push({ ...c, w, x: j * w, y }))
+        y += row.reduce((m, c) => Math.max(m, c.h), 0)
+      }
+      // resolveBoard in free mode: the rows were just placed on purpose and
+      // gravity would pull the short cards in a row up under the previous one,
+      // which is the ragged board the reflow exists to fix.
+      return free ? resolveBoard(next) : compactBoard(next)
     })
   }
 
@@ -480,6 +461,42 @@ export default function BoardPage() {
               {free ? 'Free placement' : 'Auto-arrange'}
             </button>
           )}
+          {/* Cards per row. An action on the WHOLE board, so it lives up here
+              with the other board-level controls rather than on each card —
+              the point of it is that one click states the shape, and a control
+              repeated on every card would be three clicks again. Pressed when
+              every card is already that width. */}
+          {!locked && layout.length > 0 && (
+            <span className="flex items-center gap-1.5">
+              <span className="text-2xs text-faint">Per row</span>
+              <span className="flex overflow-hidden rounded-sm border border-line" role="group" aria-label="Cards per row">
+                {[1, 2, 3].map((n) => {
+                  const w = Math.round(BOARD_COLS / n)
+                  const on = layout.every((i) => i.w === w)
+                  return (
+                    <button
+                      key={n}
+                      onClick={() => setBoardLanes(n)}
+                      aria-pressed={on}
+                      title={
+                        n === 1
+                          ? 'One card per row, full width'
+                          : n === 2
+                            ? 'Two per row, each a half'
+                            : 'Three per row, each a third'
+                      }
+                      className={[
+                        'px-2 py-1 text-xs font-medium transition-colors',
+                        on ? 'bg-raised text-fg' : 'text-muted hover:bg-raised hover:text-fg',
+                      ].join(' ')}
+                    >
+                      {n}
+                    </button>
+                  )
+                })}
+              </span>
+            </span>
+          )}
           {!locked && (
             <button
               onClick={() => void saveLayout()}
@@ -546,45 +563,18 @@ export default function BoardPage() {
                 {CARD_CATALOG.map((c) => {
                   const n = countByType.get(c.id) ?? 0
                   return (
-                    // A ROW, NOT A BUTTON, now that it holds two of them — a
-                    // button inside a button is invalid HTML and the inner one
-                    // stops firing. The hover tint moves to the row so the whole
-                    // strip still highlights as one target.
-                    <div
+                    <button
                       key={c.id}
-                      className="flex w-full items-center pr-1.5 text-sm hover:bg-raised"
+                      onClick={() => addCard(c.id)}
+                      title={n > 0 ? `Add another ${c.label} — ${n} on the board` : `Add ${c.label}`}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg hover:bg-raised"
                     >
-                      <button
-                        onClick={() => addCard(c.id)}
-                        title={n > 0 ? `Add another ${c.label} — ${n} on the board` : `Add ${c.label}`}
-                        className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 pr-2 text-left text-fg"
-                      >
-                        <span aria-hidden className="w-4 shrink-0 text-center leading-none">
-                          {c.icon}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">{c.label}</span>
-                        {n > 0 && <span className="shrink-0 text-xs text-faint">×{n}</span>}
-                      </button>
-                      {/* Held, not dropped, when the count is 0: `invisible`
-                          keeps the row's width so the labels do not jog left and
-                          right as cards come and go. */}
-                      <button
-                        onClick={() => removeLastOfType(c.id)}
-                        disabled={n === 0}
-                        aria-label={`Remove ${c.label}`}
-                        title={
-                          n > 1
-                            ? `Remove the last ${c.label} — ${n} on the board`
-                            : `Remove ${c.label} from the board`
-                        }
-                        className={[
-                          'shrink-0 rounded-sm px-1 py-0.5 text-xs leading-none transition-colors',
-                          n > 0 ? 'text-faint hover:text-down' : 'invisible',
-                        ].join(' ')}
-                      >
-                        ✕
-                      </button>
-                    </div>
+                      <span aria-hidden className="w-4 shrink-0 text-center leading-none">
+                        {c.icon}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{c.label}</span>
+                      {n > 0 && <span className="shrink-0 text-xs text-faint">×{n}</span>}
+                    </button>
                   )
                 })}
               </div>
@@ -636,37 +626,13 @@ export default function BoardPage() {
                 }
                 actions={
                   !locked && (
-                    <span className="flex items-center gap-2">
-                      {/* Cards per row. The pressed one is the width the card
-                          already has, so the control doubles as a readout of
-                          which of the three it is currently on. */}
-                      <span className="flex overflow-hidden rounded-sm border border-line" role="group" aria-label="Cards per row">
-                        {[1, 2, 3].map((n) => {
-                          const on = (layout.find((i) => i.id === id)?.w ?? 0) === Math.round(BOARD_COLS / n)
-                          return (
-                            <button
-                              key={n}
-                              onClick={() => setCardLanes(id, n)}
-                              title={n === 1 ? 'Full width' : n === 2 ? 'Half width — two per row' : 'Third width — three per row'}
-                              aria-pressed={on}
-                              className={[
-                                'px-1.5 text-2xs leading-4 transition-colors',
-                                on ? 'bg-raised text-fg' : 'text-faint hover:bg-raised hover:text-fg',
-                              ].join(' ')}
-                            >
-                              {n}
-                            </button>
-                          )
-                        })}
-                      </span>
-                      <button
-                        onClick={() => removeCard(id)}
-                        title="Remove card"
-                        className="text-xs text-faint hover:text-down"
-                      >
-                        ✕
-                      </button>
-                    </span>
+                    <button
+                      onClick={() => removeCard(id)}
+                      title="Remove card"
+                      className="text-xs text-faint hover:text-down"
+                    >
+                      ✕
+                    </button>
                   )
                 }
                 fill

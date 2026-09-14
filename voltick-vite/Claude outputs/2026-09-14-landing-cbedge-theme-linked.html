@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CB Edge — the seven cards, explained</title>
+<!-- Images are read from ./v3-screens/<name>.png. Drop a replacement in with the
+     same filename and this page picks it up on reload. Names in use:
+     home-board, spx-gex, flow, premarket, estimated-moves,
+     ib-stats, top-change, watch-scanner -->
+<style>
+/* ─────────────────────────────────────────────────────────────────────────────
+   Every value below is transcribed from components/landing/v3Theme.ts.
+   Nothing here invents a colour, a radius or a type size.
+
+   The three rules that file enforces, restated because breaking them is what
+   makes a page stop looking like CB Edge:
+     1. FLAT, NOT GLASS. No backdrop-filter, no gradient fill, no glow ring.
+        A card is an 8px radius, an opaque #0f1117 plate, an opaque hairline.
+     2. TEXT IS WHITE. fg, muted and faint are all #ffffff, and there is no
+        text opacity anywhere. Secondary information is size and weight.
+     3. THE SURFACE LADDER IS THE ONLY DEPTH. app -> bg -> surface -> surface2
+        -> raised. A nested block steps up the ladder, never into a tint.
+   One accent: #219ebc.
+   ───────────────────────────────────────────────────────────────────────── */
+:root{
+  --app:#020304; --rail:#040507; --bg:#07080b;
+  --surface:#0f1117; --surface2:#14171d; --raised:#191b22; --line:#23272e;
+  --fg:#ffffff;
+  --up:#35c28e; --down:#e0645f; --flat:#7a828d; --warn:#e0a44a;
+  --cb:#ffd600; --cw:#29b6f6; --pw:#ff4757;
+  --cyan:#219ebc; --orange:#fb8501; --refresh:#1fd98a;
+  --r-sm:4px; --r-md:8px; --r-lg:12px;
+  --sans:'Inter',ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--app);color:var(--fg);font-family:var(--sans);font-size:13px;line-height:1.55;
+  -webkit-font-smoothing:antialiased}
+img{display:block;max-width:100%}
+a{color:var(--cyan);text-decoration:none}
+::selection{background:rgba(33,158,188,.4);color:var(--fg)}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:2px;border-radius:var(--r-sm)}
+
+/* numbers a visitor reads: sans with tabular figures, never mono at size */
+.num{font-family:var(--sans);font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1,"lnum" 1}
+
+/* ── the dock ───────────────────────────────────────────────────────────── */
+header.pnav{position:sticky;top:0;z-index:60;background:var(--bg);border-bottom:1px solid var(--line)}
+.pnav-in{position:relative;display:flex;align-items:center;gap:12px;height:52px;
+  padding:0 clamp(12px,2vw,20px);max-width:1400px;margin-inline:auto}
+.logo{display:inline-flex;align-items:center;gap:8px;color:var(--fg);font-weight:700;font-size:15px;letter-spacing:.02em}
+.logo .mk{width:18px;height:18px;border-radius:var(--r-sm);background:var(--cyan);color:var(--bg);
+  display:grid;place-items:center;font-size:11px;font-weight:700}
+.pnav-tabs{position:absolute;left:50%;transform:translateX(-50%);display:flex;gap:2px}
+.pnav-link{display:inline-flex;align-items:center;height:34px;padding:0 14px;border-radius:var(--r-md);
+  font-size:13px;font-weight:600;letter-spacing:.03em;color:var(--fg);border:1px solid transparent;background:transparent;
+  transition:background .14s,border-color .14s}
+.pnav-link:hover{background:var(--raised);border-color:var(--cyan)}
+.pnav-link[aria-current="page"]{background:var(--surface2)}
+.pnav-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.pnav-cta{display:inline-flex;align-items:center;height:34px;padding:0 16px;border-radius:var(--r-md);
+  background:var(--cyan);color:var(--bg);font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  border:1px solid var(--cyan);transition:background .14s}
+.pnav-cta:hover{background:rgba(33,158,188,.85)}
+.pnav-ghost{display:inline-flex;align-items:center;height:34px;padding:0 14px;border-radius:var(--r-md);
+  background:var(--surface);color:var(--fg);font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  border:1px solid var(--line);transition:background .14s,border-color .14s}
+.pnav-ghost:hover{background:var(--raised);border-color:var(--cyan)}
+
+/* ── the shell: a column of section plates on the app ground ───────────── */
+.shell{position:relative;display:flex;flex-direction:column;align-items:center;gap:16px;
+  padding:6px clamp(14px,3vw,28px) 0}
+section.card{position:relative;width:min(1140px,100%);overflow:hidden;
+  background:var(--surface);border:1px solid rgba(255,255,255,.09);border-radius:var(--r-md);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045), 0 16px 36px -14px rgba(0,0,0,.95)}
+.pad{padding:clamp(18px,2.6vw,30px)}
+
+/* ── chips ──────────────────────────────────────────────────────────────── */
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:var(--r-sm);
+  font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.chip.live{border:1px solid rgba(31,217,138,.4);background:rgba(31,217,138,.12);color:var(--refresh)}
+.chip.brand{border:1px solid rgba(33,158,188,.4);background:rgba(33,158,188,.12);color:var(--cyan)}
+.chip.warn{border:1px solid rgba(224,164,74,.4);background:rgba(224,164,74,.12);color:var(--warn)}
+
+/* ── display type ───────────────────────────────────────────────────────── */
+h1{font-size:clamp(28px,3.4vw,44px);line-height:1.08;letter-spacing:-.02em;font-weight:700;
+  margin:14px 0 16px;color:var(--fg);text-wrap:balance}
+h1 em{font-style:normal;color:var(--cyan)}
+h2{font-size:clamp(22px,2.8vw,32px);font-weight:700;letter-spacing:-.02em;line-height:1.15;
+  margin:14px 0 12px;max-width:34ch;color:var(--fg);text-wrap:balance}
+h2 em{font-style:normal;color:var(--refresh)}
+h2.c{margin-inline:auto}
+h3{font-size:15px;font-weight:700;margin:0;color:var(--fg)}
+p{margin:0;color:var(--fg)}
+.sub{font-size:15px;line-height:1.6;max-width:46ch;text-wrap:pretty}
+.lede{font-size:15px;max-width:66ch;line-height:1.6;text-wrap:pretty}
+.lede.c{margin-inline:auto}
+.eyebrow{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--cyan)}
+.cap{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg);margin-top:8px}
+.cap.r{text-align:right}
+
+/* ── buttons ────────────────────────────────────────────────────────────── */
+.cta-row{display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;margin-top:22px}
+.cta{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  min-width:300px;padding:16px 32px;border-radius:var(--r-md);border:1px solid var(--cyan);
+  background:var(--cyan);color:var(--bg);font-size:18px;font-weight:700;letter-spacing:.01em;text-align:center;
+  box-shadow:0 6px 16px -6px rgba(33,158,188,.55);transition:background .14s,box-shadow .14s,transform .14s}
+.cta .s{font-size:13px;font-weight:600;letter-spacing:.04em}
+.cta:hover{background:rgba(33,158,188,.88);transform:translateY(-1px);box-shadow:0 10px 24px -8px rgba(33,158,188,.7)}
+.cta:active{transform:translateY(0);box-shadow:0 2px 8px -4px rgba(33,158,188,.5)}
+.ghost{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 20px;
+  border-radius:var(--r-md);border:1px solid var(--line);background:var(--raised);color:var(--fg);
+  font-size:13px;font-weight:600;transition:background .14s,border-color .14s}
+.ghost:hover{background:var(--surface2);border-color:var(--cyan)}
+.note{font-size:13px;line-height:1.5;margin-top:13px;max-width:48ch}
+.note b{font-weight:700;color:var(--refresh)}
+
+/* ── hero ───────────────────────────────────────────────────────────────── */
+.hero{display:grid;grid-template-columns:1fr 1fr;gap:clamp(22px,3vw,42px);align-items:center}
+.sub b{color:var(--fg);font-weight:700}
+
+/* ── the fact strip ─────────────────────────────────────────────────────── */
+.strip{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);background:var(--surface2)}
+.strip > div{padding:16px 18px;border-right:1px solid var(--line)}
+.strip > div:nth-child(4n){border-right:none}
+.strip .n{font-size:24px;font-weight:700;color:var(--cyan);line-height:1}
+.strip .l{font-size:13px;font-weight:600;margin:7px 0 3px}
+.strip .s{font-size:10px;line-height:1.45}
+
+/* ── a screen capture: v3's flat card, nothing more ─────────────────────── */
+.shot{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden}
+.shot img{width:100%;height:auto}
+.shot.crop{height:168px}
+.shot.crop img{height:auto;transform:translateY(-4%)}
+
+/* ── the seven cards ────────────────────────────────────────────────────── */
+.grid{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:18px}
+.cell{flex:1 1 260px;max-width:360px;color:var(--fg);background:var(--surface2);
+  border:1px solid var(--line);border-radius:var(--r-md);padding:14px;
+  transition:background .14s,border-color .14s}
+.cell:hover{background:var(--raised);border-color:var(--cyan)}
+.cell .t{font-weight:700;font-size:15px;margin:12px 0 5px}
+.cell .d{font-size:13px;line-height:1.5}
+.cell .go{margin-top:8px;font-size:13px;font-weight:700;color:var(--cyan);letter-spacing:.04em}
+
+/* ── an explain row ─────────────────────────────────────────────────────── */
+.split{display:grid;grid-template-columns:minmax(0,.86fr) minmax(0,1.14fr);gap:clamp(20px,2.6vw,36px);align-items:center}
+.split > *{min-width:0}
+.split.rev .copy{order:2}
+.rows{display:flex;flex-direction:column;gap:8px;margin-top:18px}
+.row{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 13px}
+.row .k{font-size:13px;font-weight:700;color:var(--fg)}
+.row .v{font-size:13px;line-height:1.5;margin-top:2px}
+.go{font-size:13px;font-weight:700;color:var(--cyan);letter-spacing:.04em}
+.golink{display:inline-block;margin-top:16px}
+
+/* level marks, used only where a level is named */
+.mcb{color:var(--cb)} .mcw{color:var(--cw)} .mpw{color:var(--pw)}
+.mup{color:var(--up)} .mdn{color:var(--down)}
+
+.benefits{display:flex;align-items:center;gap:18px;flex-wrap:wrap;justify-content:center;margin-top:16px;font-size:13px}
+.benefits b{color:var(--refresh);font-weight:700}
+.signin{display:block;margin-top:18px;font-size:15px;font-weight:600;color:var(--fg);
+  text-decoration:underline;text-underline-offset:3px}
+.legal{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;
+  padding:26px 16px 30px;font-size:13px;color:var(--fg)}
+.legal a{color:var(--fg);text-decoration:underline;text-underline-offset:3px}
+.legal .dot{color:var(--flat)}
+.smallprint{width:min(1140px,100%);margin:0 auto;padding:0 clamp(14px,3vw,28px);font-size:10px;
+  line-height:1.6;color:var(--fg);text-align:center}
+.c{text-align:center}
+
+@media (max-width:900px){
+  .hero{grid-template-columns:1fr}
+  .strip{grid-template-columns:1fr 1fr}
+  .strip > div:nth-child(2n){border-right:none}
+  .strip > div:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  .split,.split.rev{grid-template-columns:1fr}
+  .split.rev .copy{order:0}
+  .pnav-tabs{display:none}
+}
+@media (max-width:620px){
+  .strip{grid-template-columns:1fr}
+  .strip > div{border-right:none;border-bottom:1px solid var(--line)}
+  .strip > div:last-child{border-bottom:none}
+  .cta{width:100%;min-width:0}
+  .shot.crop{height:auto}
+  .shot.crop img{transform:none}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition-duration:.14s !important;transform:none !important}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body>
+
+<header class="pnav">
+  <div class="pnav-in">
+    <a class="logo" href="#top"><span class="mk">▤</span> CB EDGE</a>
+    <nav class="pnav-tabs">
+      <a class="pnav-link" href="#top" aria-current="page">Overview</a>
+      <a class="pnav-link" href="#close">Pricing</a>
+      <a class="pnav-link" href="#cards">Docs</a>
+    </nav>
+    <div class="pnav-right">
+      <a class="pnav-cta" href="#close">Get full access ›</a>
+      <a class="pnav-ghost" href="#">Login</a>
+    </div>
+  </div>
+</header>
+
+<div class="shell" id="top">
+
+  <!-- ═══ 1 · HERO ══════════════════════════════════════════════════════ -->
+  <section class="card">
+    <div class="pad hero">
+      <div>
+        <span class="chip live">● Live · SPX 0DTE</span>
+        <h1>Know where the market <em>has</em> to turn. Before it turns.</h1>
+        <p class="sub">
+          Dealers are forced buyers below the gamma flip and forced sellers above it. CB Edge computes
+          that line off the live SPX chain every 15 seconds,
+          <b>and shows it to you right here, free, before you ever make an account.</b>
+        </p>
+        <div class="cta-row">
+          <a class="cta" href="#close"><span>Get full access →</span><span class="s">$50/mo · Cancel anytime</span></a>
+          <a class="ghost" href="#cards">See the screens ↓</a>
+        </div>
+        <p class="note">
+          The live level panel is <b>free forever</b>. No card, no email. Membership unlocks history,
+          rate of change, flow, alerts and every other page.
+        </p>
+      </div>
+
+      <div>
+        <div class="shot"><img alt="SPX net gamma exposure by strike with Core, call wall and put wall marked" src="v3-screens/spx-gex.png"></div>
+        <p class="cap r">Live capture · /v3/analysis</p>
+      </div>
+    </div>
+
+    <div class="strip">
+      <div><div class="n num">15s</div><div class="l">Chain-to-screen latency</div><div class="s">Every level, every 15 seconds</div></div>
+      <div><div class="n num">ES + NQ</div><div class="l">Futures structure, graded</div><div class="s">Initial Balance on both roots</div></div>
+      <div><div class="n num">Daily</div><div class="l">Auto-graded scoreboard</div><div class="s">Hits and misses, published</div></div>
+      <div><div class="n num">$50</div><div class="l">Per month, everything</div><div class="s">No tiers, no codes, no upsell</div></div>
+    </div>
+  </section>
+
+  <!-- ═══ 2 · THE BOARD + THE SEVEN CARDS ══════════════════════════════ -->
+  <section class="card" id="cards">
+    <div class="pad">
+      <div class="shot"><img alt="The CB Edge board: key levels rail, gauge rail, GEX candles, multi greek and net premium" src="v3-screens/home-board.png"></div>
+      <p class="cap r">The whole board · /v3</p>
+
+      <div class="grid">
+        <a class="cell" href="#gex">
+          <div class="shot crop"><img alt="Net GEX by expiration" src="v3-screens/spx-gex.png"></div>
+          <div class="t">Real-time SPX GEX</div>
+          <div class="d">Live gamma exposure profiles and flip levels straight from the options chain.</div>
+          <div class="go">Explore →</div>
+        </a>
+        <a class="cell" href="#flow">
+          <div class="shot crop"><img alt="Net premium drift and the side split" src="v3-screens/flow.png"></div>
+          <div class="t">Option &amp; Premium Flow</div>
+          <div class="d">Every print side-classified, with cumulative net premium drift across the session.</div>
+          <div class="go">Explore →</div>
+        </a>
+        <a class="cell" href="#premarket">
+          <div class="shot crop"><img alt="Premarket Prep regime and key levels" src="v3-screens/premarket.png"></div>
+          <div class="t">Premarket Prep</div>
+          <div class="d">What regime am I in, where are the walls, what happened overnight — answered before the bell, on every name.</div>
+          <div class="go">Explore →</div>
+        </a>
+        <a class="cell" href="#em">
+          <div class="shot crop"><img alt="Weekly estimated move and zones" src="v3-screens/estimated-moves.png"></div>
+          <div class="t">Estimated moves</div>
+          <div class="d">Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results.</div>
+          <div class="go">Explore →</div>
+        </a>
+        <a class="cell" href="#ib">
+          <div class="shot crop"><img alt="Initial balance break bias and rule families" src="v3-screens/ib-stats.png"></div>
+          <div class="t">Initial Balance &amp; Stats</div>
+          <div class="d">The first hour, graded. Break direction, extension targets and failure rates on every ES &amp; NQ session.</div>
+          <div class="go">Explore →</div>
+        </a>
+        <a class="cell" href="#topchange">
+          <div class="shot crop"><img alt="Top change scanner picks with grades" src="v3-screens/top-change.png"></div>
+          <div class="t">Top Change Scanner</div>
+          <div class="d">The biggest dealer-gamma changes on the board, ranked at the open, tracked through the session and graded at the close.</div>
+          <div class="go">Explore →</div>
+        </a>
+        <a class="cell" href="#watch">
+          <div class="shot crop"><img alt="Watch scanner tracked results" src="v3-screens/watch-scanner.png"></div>
+          <div class="t">Watch Scanner</div>
+          <div class="d">Far out-of-the-money contracts quietly building size, flagged as they build — then scored on what actually happened.</div>
+          <div class="go">Explore →</div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 3 · Real-time SPX GEX ════════════════════════════════════════ -->
+  <section class="card" id="gex">
+    <div class="pad split">
+      <div class="copy">
+        <div class="eyebrow">Real-time SPX GEX</div>
+        <h2>Live gamma exposure profiles and flip levels.</h2>
+        <p class="lede">Straight from the options chain. Dealer positioning at every strike, not a line drawn on a chart.</p>
+        <div class="rows">
+          <div class="row"><div class="k">0DTE alone, or every listed expiration</div><div class="v">Two profiles side by side, so today's pin and the structural book never get read as one number.</div></div>
+          <div class="row"><div class="k">The levels carry names</div><div class="v"><span class="mcb">Core</span>, <span class="mcw">call wall</span>, <span class="mpw">put wall</span>, gamma flip and max pain, marked on the ladder and carried onto every other page.</div></div>
+          <div class="row"><div class="k">Regime on the label</div><div class="v">Positive or negative gamma stated before you read a single figure, because it changes what the same level means.</div></div>
+        </div>
+        <a class="go golink" href="#close">Open a board →</a>
+      </div>
+      <div>
+        <div class="shot"><img alt="Net GEX by expiration for SPX, with Core, call wall and put wall" src="v3-screens/spx-gex.png"></div>
+        <p class="cap r">/v3/analysis</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 4 · Option & Premium Flow ════════════════════════════════════ -->
+  <section class="card" id="flow">
+    <div class="pad split rev">
+      <div class="copy">
+        <div class="eyebrow">Option &amp; Premium Flow</div>
+        <h2>Every print side-classified.</h2>
+        <p class="lede">With cumulative net premium drift across the whole session, read against price.</p>
+        <div class="rows">
+          <div class="row"><div class="k">Four buckets, not two</div><div class="v"><span class="mup">Buy calls</span> and <span class="mup">sell puts</span> on one side, <span class="mdn">buy puts</span> and <span class="mdn">sell calls</span> on the other. A bought put and a sold call are both bearish and they are not the same trade.</div></div>
+          <div class="row"><div class="k">Drift, not a scroll</div><div class="v">Net premium accumulated through the session, so an hour of one-sided paper reads as a shape instead of a thousand rows.</div></div>
+          <div class="row"><div class="k">Filtered to what you trade</div><div class="v">DTE, contract size, premium floor and moneyness, per ticker off your watchlist or combined across the board.</div></div>
+        </div>
+        <a class="go golink" href="#close">See the tape →</a>
+      </div>
+      <div>
+        <div class="shot"><img alt="Net premium drift with the buy calls, buy puts, sell call and sell put split" src="v3-screens/flow.png"></div>
+        <p class="cap">/v3/flow</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 5 · Premarket Prep ═══════════════════════════════════════════ -->
+  <section class="card" id="premarket">
+    <div class="pad split">
+      <div class="copy">
+        <div class="eyebrow">Premarket Prep</div>
+        <h2>What regime am I in, where are the walls, what happened overnight.</h2>
+        <p class="lede">Answered before the bell, on every name. One page at 09:00 instead of six.</p>
+        <div class="rows">
+          <div class="row"><div class="k">The regime, in a sentence</div><div class="v">Range day, fade the walls. Suppression until the flip breaks. Written in words at the top, with the net GEX it came from beside it.</div></div>
+          <div class="row"><div class="k">What moved overnight</div><div class="v">Every named level with what it was and where it is now, so a wall that slid 50 points is not something you find out at 10:30.</div></div>
+          <div class="row"><div class="k">Any name, same read</div><div class="v">Switch the ticker and the whole prep redraws. 0DTE and ex-0DTE profiles sit on one axis so you can see which book is holding the level.</div></div>
+        </div>
+        <a class="go golink" href="#close">Read the prep →</a>
+      </div>
+      <div>
+        <div class="shot"><img alt="Premarket Prep: regime line, one-axis GEX levels and the key level cards" src="v3-screens/premarket.png"></div>
+        <p class="cap r">/v3/premarket</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 6 · Estimated moves ══════════════════════════════════════════ -->
+  <section class="card" id="em">
+    <div class="pad split rev">
+      <div class="copy">
+        <div class="eyebrow">Estimated moves</div>
+        <h2>Weekly estimated-move levels with high-confidence zones.</h2>
+        <p class="lede">Backed by 2+ years of historical data, and the results are printed on the same page as the levels.</p>
+        <div class="rows">
+          <div class="row"><div class="k">The week's band</div><div class="v">Close, up and down, set once for the week and left alone. A band that redraws itself on Wednesday was never a band.</div></div>
+          <div class="row"><div class="k">Hit rate, published</div><div class="v">The recorded hit rate sits under the band with the hits and the misses both counted. Not a claim, a tally.</div></div>
+          <div class="row"><div class="k">Zones and the pivot</div><div class="v">Near and far edges either side, the weekly pivot, and how this week's band compares with the 4 and 12 week averages.</div></div>
+        </div>
+        <a class="go golink" href="#close">See this week →</a>
+      </div>
+      <div>
+        <div class="shot"><img alt="Weekly estimated move, hit rate, buy and sell zones and the weekly pivot" src="v3-screens/estimated-moves.png"></div>
+        <p class="cap">/v3/est-moves</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 7 · Initial Balance & Stats ══════════════════════════════════ -->
+  <section class="card" id="ib">
+    <div class="pad split">
+      <div class="copy">
+        <div class="eyebrow">Initial Balance &amp; Stats</div>
+        <h2>The first hour, <em>graded</em>.</h2>
+        <p class="lede">Break direction, extension targets and failure rates on every ES &amp; NQ session.</p>
+        <div class="rows">
+          <div class="row"><div class="k">A break bias with a number on it</div><div class="v">High first or low first, scored from the session's own structure rather than a feeling about the open.</div></div>
+          <div class="row"><div class="k">Fourteen rules, four families</div><div class="v">Grouped so correlated priors stop overcounting. Each rule shows its hit rate and its last five outcomes.</div></div>
+          <div class="row"><div class="k">Expansion or chop, stated</div><div class="v">Single-side trend, rotational chop and contained range as competing percentages, with the last five sessions on the strip above.</div></div>
+        </div>
+        <a class="go golink" href="#close">Open IB stats →</a>
+      </div>
+      <div>
+        <div class="shot"><img alt="IB stats: break bias gauge, expansion matrix and the fourteen rules in four families" src="v3-screens/ib-stats.png"></div>
+        <p class="cap r">/v3/scanner · IB Stats</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 8 · Top Change Scanner ═══════════════════════════════════════ -->
+  <section class="card" id="topchange">
+    <div class="pad split rev">
+      <div class="copy">
+        <div class="eyebrow">Top Change Scanner</div>
+        <h2>The biggest dealer-gamma changes, <em>graded at the close</em>.</h2>
+        <p class="lede">Ranked at the open, tracked through the session, then scored on what the contract actually did.</p>
+        <div class="rows">
+          <div class="row"><div class="k">Ranked by score, not by size</div><div class="v">A gate on absolute change and on change versus open interest, so a big name's ordinary day does not crowd out a real one.</div></div>
+          <div class="row"><div class="k">Entry, peak, close, on every pick</div><div class="v">The price at the moment it was flagged, the best it printed, the time it printed, and where it finished.</div></div>
+          <div class="row"><div class="k">A scorecard on the same screen</div><div class="v">Grades from <span class="mup">A+</span> to <span class="mdn">F</span>, counted up for the session. The failures stay on the board next to the winners.</div></div>
+        </div>
+        <a class="go golink" href="#close">Open the scanner →</a>
+      </div>
+      <div>
+        <div class="shot"><img alt="Top change scanner: hourly GEX change picks with grades and the session scorecard" src="v3-screens/top-change.png"></div>
+        <p class="cap">/v3/scanner · GEX Δ Top</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 9 · Watch Scanner ════════════════════════════════════════════ -->
+  <section class="card" id="watch">
+    <div class="pad split">
+      <div class="copy">
+        <div class="eyebrow">Watch Scanner</div>
+        <h2>Far out-of-the-money contracts quietly building size.</h2>
+        <p class="lede">Flagged as they build, then scored on what actually happened.</p>
+        <div class="rows">
+          <div class="row"><div class="k">The strike nobody is watching</div><div class="v">The highest gamma strike inside 30 days that sits more than 15% away from spot, which is the opposite of where the near-money book is looking.</div></div>
+          <div class="row"><div class="k">Flagged while it is still cheap</div><div class="v">Refreshed every two minutes with a recorded sweep every 30 minutes through the session, so the flag is stamped when it happened.</div></div>
+          <div class="row"><div class="k">Tracked, win or lose</div><div class="v">Entry, high, max move, how far it was from spot when flagged, and whether spot ever reached the strike. <span class="mup">Open</span>, <span class="mcw">touched</span> or expired, all left on the page.</div></div>
+        </div>
+        <a class="go golink" href="#close">Open the watch list →</a>
+      </div>
+      <div>
+        <div class="shot"><img alt="Watch scanner: far out of the money strikes building size, with tracked results" src="v3-screens/watch-scanner.png"></div>
+        <p class="cap r">/v3/scanner · Watch</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 10 · CLOSE ═══════════════════════════════════════════════════ -->
+  <section class="card" id="close">
+    <div class="pad c">
+      <h2 class="c">Tomorrow&rsquo;s levels print at 9:30 ET.</h2>
+      <p class="lede c" style="margin-bottom:22px">
+        You have seen the board and the graded record, without an account. The rest of it, history, rate of
+        change, flow and alerts, is one click away.
+      </p>
+      <a class="cta" href="#"><span>Get full access →</span><span class="s">$50/mo · Cancel anytime</span></a>
+      <div class="benefits">
+        <span>✓ <b>Full access</b>, every page</span>
+        <span>✓ Cancel in <b>one click</b></span>
+        <span>✓ Free live level <b>stays free</b> either way</span>
+      </div>
+      <a class="signin" href="#">Already a member? Sign in</a>
+    </div>
+  </section>
+
+</div>
+
+<div class="legal">
+  <a href="#">Terms</a><span class="dot">·</span>
+  <a href="#">Risk Disclosure</a><span class="dot">·</span>
+  <a href="#">Privacy</a><span class="dot">·</span>
+  <a href="#">Disclaimer</a>
+</div>
+<p class="smallprint">
+  Screens on this page are live captures of the CB Edge dashboard from one session. CB Edge describes
+  option positioning and records how named levels and flagged strikes behaved. Nothing here is investment
+  advice or a recommendation to buy or sell any security. Past behaviour of a level is not a prediction of
+  future behaviour. © 2026 CB Edge.
+</p>
+<div style="height:24px"></div>
+
+</body>
+</html>

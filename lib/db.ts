@@ -119,23 +119,34 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_playbook_date ON playbook_feed(date);
     CREATE INDEX IF NOT EXISTS idx_playbook_ts ON playbook_feed(timestamp);
 
-    -- NOTE: UNIQUE is ("slotKey","intervalMinutes"), NOT slotKey alone. slotKey is
-    -- 'YYYY-MM-DDTHH:MM' and carries no interval, so a 1m bar at 09:30 and a 5m
-    -- bar at 09:30 are the SAME key. Under the old slotKey-only UNIQUE the 1m bar
-    -- silently overwrote the 5m bar's close+volume (and left intervalMinutes
-    -- reading 5, so the damage didn't even show up in a GROUP BY). Existing DBs
-    -- are migrated by scripts/migrate-es-candles-composite-key.sql — this CREATE
-    -- is IF NOT EXISTS and will NOT retrofit them.
+    -- NOTE: UNIQUE is ("slotKey","intervalMinutes","contract"), NOT slotKey alone.
+    -- slotKey is 'YYYY-MM-DDTHH:MM' and carries no interval, so a 1m bar at 09:30
+    -- and a 5m bar at 09:30 are the SAME key. Under the old slotKey-only UNIQUE the
+    -- 1m bar silently overwrote the 5m bar's close+volume (and left intervalMinutes
+    -- reading 5, so the damage didn't even show up in a GROUP BY).
+    --
+    -- The contract column joined the key on 2026-09-14. Before it, this table had
+    -- no idea WHICH future a bar belonged to: symbol was the literal '/ES' on
+    -- every row — so a quarterly roll silently interleaved two contracts trading
+    -- ~30-40pt apart into one series. The chart drew that as a cliff at the roll
+    -- boundary and autoscaled the pane around it. It is NOT NULL DEFAULT '' rather
+    -- than nullable on purpose: NULLs never compare equal in a UNIQUE constraint,
+    -- so a nullable column would silently stop deduplicating pre-migration rows.
+    --
+    -- Existing DBs are migrated by scripts/migrate-es-candles-contract-key.sql —
+    -- this CREATE is IF NOT EXISTS and will NOT retrofit them.
     CREATE TABLE IF NOT EXISTS es_candles (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
       "slotKey" TEXT NOT NULL, time TEXT, symbol TEXT,
       "intervalMinutes" INTEGER NOT NULL DEFAULT 5,
+      contract TEXT NOT NULL DEFAULT '',
       source TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, "avgVolume" REAL,
-      CONSTRAINT es_candles_slot_interval_key UNIQUE ("slotKey", "intervalMinutes")
+      CONSTRAINT es_candles_slot_interval_contract_key UNIQUE ("slotKey", "intervalMinutes", contract)
     );
     CREATE INDEX IF NOT EXISTS idx_ec_date ON es_candles(date);
     CREATE INDEX IF NOT EXISTS idx_ec_slot ON es_candles("slotKey");
     CREATE INDEX IF NOT EXISTS idx_ec_interval_date ON es_candles("intervalMinutes", date);
+    CREATE INDEX IF NOT EXISTS idx_ec_contract_interval_date ON es_candles(contract, "intervalMinutes", date);
 
     CREATE TABLE IF NOT EXISTS nq_candles (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
@@ -6002,6 +6013,12 @@ export interface EsCandleDbRecord {
   time: string;
   symbol: string;
   intervalMinutes: number;
+  /**
+   * The actual futures contract this bar came off, e.g. "/ESZ6". '' for rows
+   * written before 2026-09-14, when every row said `symbol: '/ES'` and the
+   * contract was unrecoverable. Part of the UNIQUE key — see ensureAllTables.
+   */
+  contract: string;
   source: string;
   open: number;
   high: number;
@@ -6016,48 +6033,93 @@ export async function ensureEsCandlesTable(): Promise<void> { /* handled in ensu
 export async function upsertEsCandle(r: Omit<EsCandleDbRecord, "id">): Promise<void> {
   const pool = await getDb();
   await pool.query(
-    // Conflict target MUST include "intervalMinutes" — on slotKey alone a 1-minute
-    // bar and a 5-minute bar at the same clock time are the same row, and this
-    // upsert would overwrite the 5m close+volume with 1m values. See
-    // scripts/migrate-es-candles-composite-key.sql.
-    `INSERT INTO es_candles (timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-     ON CONFLICT("slotKey","intervalMinutes") DO UPDATE SET
+    // Conflict target MUST include "intervalMinutes" AND contract — on slotKey
+    // alone a 1-minute bar and a 5-minute bar at the same clock time are the same
+    // row, and this upsert would overwrite the 5m close+volume with 1m values.
+    // Without contract, the 09:30 bar of ESZ6 overwrites the 09:30 bar of ESU6
+    // across a roll, which is how two contracts ~35pt apart ended up in one
+    // series. See scripts/migrate-es-candles-contract-key.sql.
+    `INSERT INTO es_candles (timestamp,date,"slotKey",time,symbol,"intervalMinutes",contract,source,open,high,low,close,volume,"avgVolume")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ON CONFLICT("slotKey","intervalMinutes",contract) DO UPDATE SET
        timestamp=EXCLUDED.timestamp, high=GREATEST(es_candles.high,EXCLUDED.high), low=LEAST(es_candles.low,EXCLUDED.low),
        close=EXCLUDED.close, volume=EXCLUDED.volume, "avgVolume"=EXCLUDED."avgVolume"`,
     [r.timestamp, r.date, r.slotKey, r.time ?? "", r.symbol ?? "/ES", r.intervalMinutes ?? 5,
-     r.source ?? "dxlink", r.open, r.high, r.low, r.close, r.volume, r.avgVolume ?? 0]
+     r.contract ?? "", r.source ?? "dxlink", r.open, r.high, r.low, r.close, r.volume, r.avgVolume ?? 0]
   );
 }
 
 /**
- * Read ES candles at ONE aggregation.
+ * Read ES candles at ONE aggregation, optionally for ONE contract.
  *
  * `intervalMinutes` is REQUIRED in every query and defaults to 5. This table now
  * holds mixed intervals, and an unfiltered `SELECT *` returns 1m and 5m bars
  * interleaved in a single ascending-by-timestamp array — which looks like
  * plausible data and is not. Every existing caller (chart, IB stats, signals
  * engine, backtests) wants 5m, hence the default: their behaviour is unchanged.
+ *
+ * ── `contract` (2026-09-14) ─────────────────────────────────────────────────
+ * The same argument now applies one level up. The table holds MULTIPLE FUTURES,
+ * and ESU6 and ESZ6 trade ~30-40pt apart, so an unfiltered read across a roll
+ * returns a series with a cliff in it that is, again, not data.
+ *
+ *   undefined  — every contract, ascending. THE EXISTING BEHAVIOUR, so the
+ *                signals engine, IB stats and the backtests are untouched by
+ *                this change. Correct for anything that wants raw history and
+ *                does its own roll handling.
+ *   'latest'   — only the newest contract present in the window. What a CHART
+ *                wants: one continuous series that starts short after a roll and
+ *                grows, rather than a long one with a step in it.
+ *   '/ESZ6'    — that contract only.
+ *
+ * '' is a legacy row (written before the contract column existed). Those all
+ * belong to whatever future was front at the time and are indistinguishable
+ * from each other, which is exactly why 'latest' stops including them the
+ * moment a real contract code starts landing.
  */
+export type EsContractFilter = string | "latest" | undefined;
+
+/** `contract = (newest contract in this window)`, as a WHERE fragment + params. */
+function esContractClause(
+  contract: EsContractFilter, scopeSql: string, scopeParams: unknown[]
+): { sql: string; params: unknown[] } {
+  if (!contract) return { sql: "", params: [] };
+  if (contract !== "latest") return { sql: ` AND contract = ?`, params: [contract] };
+  // Correlated on the SAME window, not on the whole table: a 5-day pull taken
+  // mid-roll should follow the contract that is actually trading in those five
+  // days, not one that appeared after the window closed.
+  return {
+    sql: ` AND contract = (SELECT contract FROM es_candles WHERE ${scopeSql} ORDER BY timestamp DESC LIMIT 1)`,
+    params: scopeParams,
+  };
+}
+
 export async function getEsCandles(
-  date?: string, daysBack?: number, limit = 2000, intervalMinutes = 5
+  date?: string, daysBack?: number, limit = 2000, intervalMinutes = 5,
+  contract?: EsContractFilter
 ): Promise<EsCandleDbRecord[]> {
   if (date) {
+    const scope = `date = ? AND "intervalMinutes" = ?`;
+    const c = esContractClause(contract, scope, [date, intervalMinutes]);
     return queryAll<EsCandleDbRecord>(
-      `SELECT * FROM es_candles WHERE date = ? AND "intervalMinutes" = ? ORDER BY timestamp ASC LIMIT ?`,
-      [date, intervalMinutes, limit]
+      `SELECT * FROM es_candles WHERE ${scope}${c.sql} ORDER BY timestamp ASC LIMIT ?`,
+      [date, intervalMinutes, ...c.params, limit]
     );
   }
   if (daysBack) {
     const cutoff = new Date(Date.now() - daysBack * 86400_000).toISOString().slice(0, 10);
+    const scope = `date >= ? AND "intervalMinutes" = ?`;
+    const c = esContractClause(contract, scope, [cutoff, intervalMinutes]);
     return queryAll<EsCandleDbRecord>(
-      `SELECT * FROM es_candles WHERE date >= ? AND "intervalMinutes" = ? ORDER BY timestamp ASC LIMIT ?`,
-      [cutoff, intervalMinutes, limit]
+      `SELECT * FROM es_candles WHERE ${scope}${c.sql} ORDER BY timestamp ASC LIMIT ?`,
+      [cutoff, intervalMinutes, ...c.params, limit]
     );
   }
+  const scope = `"intervalMinutes" = ?`;
+  const c = esContractClause(contract, scope, [intervalMinutes]);
   return queryAll<EsCandleDbRecord>(
-    `SELECT * FROM es_candles WHERE "intervalMinutes" = ? ORDER BY timestamp DESC LIMIT ?`,
-    [intervalMinutes, limit]
+    `SELECT * FROM es_candles WHERE ${scope}${c.sql} ORDER BY timestamp DESC LIMIT ?`,
+    [intervalMinutes, ...c.params, limit]
   );
 }
 

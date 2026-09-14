@@ -413,23 +413,29 @@ async function ensureAllTables(pool) {
     CREATE INDEX IF NOT EXISTS idx_playbook_date ON playbook_feed(date);
     CREATE INDEX IF NOT EXISTS idx_playbook_ts ON playbook_feed(timestamp);
 
-    -- NOTE: UNIQUE is ("slotKey","intervalMinutes"), NOT slotKey alone. slotKey is
-    -- 'YYYY-MM-DDTHH:MM' and carries no interval, so a 1m bar at 09:30 and a 5m
-    -- bar at 09:30 are the SAME key. Under the old slotKey-only UNIQUE the 1m bar
-    -- silently overwrote the 5m bar's close+volume (and left intervalMinutes
-    -- reading 5, so the damage didn't even show up in a GROUP BY). Existing DBs
-    -- are migrated by scripts/migrate-es-candles-composite-key.sql \u2014 this CREATE
-    -- is IF NOT EXISTS and will NOT retrofit them.
+    -- NOTE: UNIQUE is ("slotKey","intervalMinutes","contract"), NOT slotKey alone.
+    -- slotKey is 'YYYY-MM-DDTHH:MM' and carries no interval, so a 1m bar at 09:30
+    -- and a 5m bar at 09:30 are the SAME key.
+    --
+    -- The contract column joined the key on 2026-09-14: before it, symbol was the
+    -- literal '/ES' on every row, so a quarterly roll interleaved two contracts
+    -- ~30-40pt apart into one series. NOT NULL DEFAULT '' because NULLs never
+    -- compare equal in a UNIQUE constraint.
+    --
+    -- Existing DBs are migrated by scripts/migrate-es-candles-contract-key.sql \u2014
+    -- this CREATE is IF NOT EXISTS and will NOT retrofit them.
     CREATE TABLE IF NOT EXISTS es_candles (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
       "slotKey" TEXT NOT NULL, time TEXT, symbol TEXT,
       "intervalMinutes" INTEGER NOT NULL DEFAULT 5,
+      contract TEXT NOT NULL DEFAULT '',
       source TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, "avgVolume" REAL,
-      CONSTRAINT es_candles_slot_interval_key UNIQUE ("slotKey", "intervalMinutes")
+      CONSTRAINT es_candles_slot_interval_contract_key UNIQUE ("slotKey", "intervalMinutes", contract)
     );
     CREATE INDEX IF NOT EXISTS idx_ec_date ON es_candles(date);
     CREATE INDEX IF NOT EXISTS idx_ec_slot ON es_candles("slotKey");
     CREATE INDEX IF NOT EXISTS idx_ec_interval_date ON es_candles("intervalMinutes", date);
+    CREATE INDEX IF NOT EXISTS idx_ec_contract_interval_date ON es_candles(contract, "intervalMinutes", date);
 
     CREATE TABLE IF NOT EXISTS nq_candles (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
@@ -3927,9 +3933,9 @@ async function upsertEsCandle(r) {
     // bar and a 5-minute bar at the same clock time are the same row, and this
     // upsert would overwrite the 5m close+volume with 1m values. See
     // scripts/migrate-es-candles-composite-key.sql.
-    `INSERT INTO es_candles (timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-     ON CONFLICT("slotKey","intervalMinutes") DO UPDATE SET
+    `INSERT INTO es_candles (timestamp,date,"slotKey",time,symbol,"intervalMinutes",contract,source,open,high,low,close,volume,"avgVolume")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ON CONFLICT("slotKey","intervalMinutes",contract) DO UPDATE SET
        timestamp=EXCLUDED.timestamp, high=GREATEST(es_candles.high,EXCLUDED.high), low=LEAST(es_candles.low,EXCLUDED.low),
        close=EXCLUDED.close, volume=EXCLUDED.volume, "avgVolume"=EXCLUDED."avgVolume"`,
     [
@@ -3939,6 +3945,7 @@ async function upsertEsCandle(r) {
       r.time ?? "",
       r.symbol ?? "/ES",
       r.intervalMinutes ?? 5,
+      r.contract ?? "",
       r.source ?? "dxlink",
       r.open,
       r.high,
@@ -3949,23 +3956,37 @@ async function upsertEsCandle(r) {
     ]
   );
 }
-async function getEsCandles(date, daysBack, limit = 2e3, intervalMinutes = 5) {
+function esContractClause(contract, scopeSql, scopeParams) {
+  if (!contract) return { sql: "", params: [] };
+  if (contract !== "latest") return { sql: ` AND contract = ?`, params: [contract] };
+  return {
+    sql: ` AND contract = (SELECT contract FROM es_candles WHERE ${scopeSql} ORDER BY timestamp DESC LIMIT 1)`,
+    params: scopeParams
+  };
+}
+async function getEsCandles(date, daysBack, limit = 2e3, intervalMinutes = 5, contract) {
   if (date) {
+    const scope = `date = ? AND "intervalMinutes" = ?`;
+    const c = esContractClause(contract, scope, [date, intervalMinutes]);
     return queryAll(
-      `SELECT * FROM es_candles WHERE date = ? AND "intervalMinutes" = ? ORDER BY timestamp ASC LIMIT ?`,
-      [date, intervalMinutes, limit]
+      `SELECT * FROM es_candles WHERE ${scope}${c.sql} ORDER BY timestamp ASC LIMIT ?`,
+      [date, intervalMinutes, ...c.params, limit]
     );
   }
   if (daysBack) {
     const cutoff = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10);
+    const scope = `date >= ? AND "intervalMinutes" = ?`;
+    const c = esContractClause(contract, scope, [cutoff, intervalMinutes]);
     return queryAll(
-      `SELECT * FROM es_candles WHERE date >= ? AND "intervalMinutes" = ? ORDER BY timestamp ASC LIMIT ?`,
-      [cutoff, intervalMinutes, limit]
+      `SELECT * FROM es_candles WHERE ${scope}${c.sql} ORDER BY timestamp ASC LIMIT ?`,
+      [cutoff, intervalMinutes, ...c.params, limit]
     );
   }
+  const scope = `"intervalMinutes" = ?`;
+  const c = esContractClause(contract, scope, [intervalMinutes]);
   return queryAll(
-    `SELECT * FROM es_candles WHERE "intervalMinutes" = ? ORDER BY timestamp DESC LIMIT ?`,
-    [intervalMinutes, limit]
+    `SELECT * FROM es_candles WHERE ${scope}${c.sql} ORDER BY timestamp DESC LIMIT ?`,
+    [intervalMinutes, ...c.params, limit]
   );
 }
 async function upsertNqCandle(r) {

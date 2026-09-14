@@ -239,6 +239,11 @@ const TT_FLOW_SUB_BATCH = Number(process.env.TT_FLOW_SUB_BATCH || 1500);
 // repaints. 10s keeps it visibly live without one delta every ~5s.
 const CANDLE_FLUSH_MS = Number(process.env.CANDLE_FLUSH_MS || 10000);
 
+// How often the roll watchdog re-asks tastytrade which contract is front. The
+// answer changes four times a year, so this is deliberately lazy — it exists to
+// catch a roll within the hour, not within the second. See _checkFuturesRoll.
+const ROLL_CHECK_MS = Number(process.env.ROLL_CHECK_MS || 30 * 60 * 1000);
+
 // ES 1-minute candle stream. OFF by default — it is a second dxLink subscription
 // on top of {=5m} at 5x the bar rate, so it is opt-in per environment rather than
 // something a deploy silently turns on. Set ES_1M_CANDLES=1 in .env.local.
@@ -591,32 +596,88 @@ function isOptionsRthEt(ts = Date.now()) {
 }
 
 /**
- * Resolve the front (nearest-expiry, active) /ES future's dxLink streamer symbol.
- * Uses the futures list for the ES product and picks the soonest non-expired
- * contract. Returns e.g. "/ESU25:XCME".
+ * ── WHICH FUTURES CONTRACT THE WHOLE DASHBOARD IS LOOKING AT ────────────────
+ *
+ * This decides the ES/NQ contract for the socket feed, the candle tables, the
+ * ES−SPX basis and every level drawn on the GEX Candles card. Getting it late
+ * is not cosmetic: between the CME roll date and expiry, the old contract is
+ * still quoting but the volume has gone, so the chart is a thin book and the
+ * basis drifts against a contract nobody is trading.
+ *
+ * It used to sort by `expiration-date` and take the first one still in the
+ * future. That rolls on EXPIRATION FRIDAY — about eight days after the market
+ * actually rolls — and, because it ran once inside connect(), it then never
+ * re-checked, so past expiry the feed sat on a dead contract until the process
+ * restarted.
+ *
+ * Three tiers now, most explicit first:
+ *
+ *   1. ES_CONTRACT / NQ_CONTRACT env var. Either form is accepted ("/ESZ6" or
+ *      "/ESZ26:XCME"); it is matched against the instrument list, so a typo
+ *      fails loudly to tier 2 instead of subscribing to a symbol that does not
+ *      exist. This is the manual roll: set it on the evening you want to move,
+ *      restart, done.
+ *   2. tastytrade's own `active-month` flag. This is the broker's answer to
+ *      "which contract is the live one", and it flips a few business days
+ *      before expiry rather than on expiry.
+ *   3. The original nearest-non-expired sort, so a schema change upstream
+ *      degrades to the old behaviour rather than to nothing.
+ *
+ * Returns `contract` alongside the two symbols: the short TT code ("/ESZ6") is
+ * what es_candles stores, so a roll is visible in the data rather than being a
+ * silent 35-point step in the middle of a series.
  */
-async function resolveFrontEsSymbol() {
-  const json = await ttGet(`/instruments/futures?product-code[]=ES`);
-  const items = json?.data?.items || [];
+function pickFrontFuture(items, code, override) {
   const today = todayYmd().ymd;
-  const active = items
-    .filter((it) => it['streamer-symbol'] && (it['expiration-date'] || '') >= today)
+  const live = items.filter((it) => it['streamer-symbol']);
+
+  // 1. explicit override
+  const want = String(override || '').trim().toUpperCase();
+  if (want) {
+    const hit = live.find((it) =>
+      String(it.symbol || '').toUpperCase() === want ||
+      String(it['streamer-symbol'] || '').toUpperCase() === want);
+    if (hit) return { it: hit, via: 'env' };
+    console.warn(`[FEED] ${code}_CONTRACT="${override}" matched no ${code} instrument — ignoring it and falling back to active-month.`);
+  }
+
+  // 2. the broker's active-month flag, expiry-sorted in case more than one
+  //    month is flagged (quarterlies + serials can both come back true).
+  const activeMonth = live
+    .filter((it) => it['active-month'] && (it['expiration-date'] || '') >= today)
     .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
-  const front = active[0] || items.find((it) => it['streamer-symbol']);
-  if (!front?.['streamer-symbol']) throw new Error('No active ES future found');
-  return { streamerSymbol: front['streamer-symbol'], ttSymbol: front['symbol'] || front['streamer-symbol'] };
+  if (activeMonth[0]) return { it: activeMonth[0], via: 'active-month' };
+
+  // 3. nearest non-expired — the original rule.
+  const byExpiry = live
+    .filter((it) => (it['expiration-date'] || '') >= today)
+    .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
+  const front = byExpiry[0] || live[0];
+  return front ? { it: front, via: 'expiry' } : null;
+}
+
+async function resolveFrontFuture(code, override) {
+  const json = await ttGet(`/instruments/futures?product-code[]=${encodeURIComponent(code)}`);
+  const items = json?.data?.items || [];
+  const picked = pickFrontFuture(items, code, override);
+  if (!picked?.it?.['streamer-symbol']) throw new Error(`No active ${code} future found`);
+  const it = picked.it;
+  const ttSymbol = it.symbol || it['streamer-symbol'];
+  return {
+    streamerSymbol: it['streamer-symbol'],
+    ttSymbol,
+    contract: ttSymbol,
+    expiration: it['expiration-date'] || '',
+    via: picked.via,
+  };
+}
+
+async function resolveFrontEsSymbol() {
+  return resolveFrontFuture('ES', process.env.ES_CONTRACT);
 }
 
 async function resolveFrontNqSymbol() {
-  const json = await ttGet(`/instruments/futures?product-code[]=NQ`);
-  const items = json?.data?.items || [];
-  const today = todayYmd().ymd;
-  const active = items
-    .filter((it) => it['streamer-symbol'] && (it['expiration-date'] || '') >= today)
-    .sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
-  const front = active[0] || items.find((it) => it['streamer-symbol']);
-  if (!front?.['streamer-symbol']) throw new Error('No active NQ future found');
-  return { streamerSymbol: front['streamer-symbol'], ttSymbol: front['symbol'] || front['streamer-symbol'] };
+  return resolveFrontFuture('NQ', process.env.NQ_CONTRACT);
 }
 
 /** Get a dxLink API quote token + url from Tastytrade. */
@@ -2203,6 +2264,9 @@ class TastytradeProxy {
     this.underlying = null; // { symbol, klass, marketDataParam, streamerSymbol }
     this.vixSymbol = null;  // resolved dxLink streamer symbol for VIX
     this.esSymbol = null;   // resolved dxLink streamer symbol for front ES future
+    this.esContract = '';   // short TT code for that contract, e.g. "/ESZ6"
+    this.esExpiration = ''; // its expiration-date, used by the roll watchdog
+    this.nqContract = '';
     this.nqSymbol = null;   // resolved dxLink streamer symbol for front NQ future
     this.esCandleSymbol = null; // candle stream symbol, e.g. "/ESU26:XCME{=5m}"
     this.esCandles = new Map(); // slotKey -> { timestamp, date, slotKey, time, open, high, low, close, volume }
@@ -2309,13 +2373,15 @@ class TastytradeProxy {
     }
     try {
       const esRes = await resolveFrontEsSymbol();
-      this.esSymbol = esRes.streamerSymbol;     // dxLink streamer symbol (/ESU26:XCME)
-      this.esTtSymbol = esRes.ttSymbol;         // TT instrument symbol for REST (/ESU6)
+      this.esSymbol = esRes.streamerSymbol;     // dxLink streamer symbol (/ESZ26:XCME)
+      this.esTtSymbol = esRes.ttSymbol;         // TT instrument symbol for REST (/ESZ6)
+      this.esContract = esRes.contract;         // what es_candles rows are stamped with
+      this.esExpiration = esRes.expiration;
       this.esCandleSymbol = `${this.esSymbol}{=5m}`;
       // Second aggregation off the SAME contract. Gated by ES_1M_CANDLES so the
       // extra stream can be killed without a redeploy if bandwidth/CPU bites.
       this.es1mCandleSymbol = ES_1M_ENABLED ? `${this.esSymbol}{=1m}` : null;
-      console.log(`[FEED] ES front streamer=${this.esSymbol} ttSymbol=${this.esTtSymbol} candle=${this.esCandleSymbol}${this.es1mCandleSymbol ? ` +1m=${this.es1mCandleSymbol}` : ' (1m disabled)'}`);
+      console.log(`[FEED] ES front streamer=${this.esSymbol} ttSymbol=${this.esTtSymbol} expires=${esRes.expiration} via=${esRes.via} candle=${this.esCandleSymbol}${this.es1mCandleSymbol ? ` +1m=${this.es1mCandleSymbol}` : ' (1m disabled)'}`);
       // Prior close for ES future day-change.
       // The authoritative baseline is dxLink Summary.prevDayClosePrice (official
       // exchange settle for the current session, set in _onEvent). The REST
@@ -2328,14 +2394,18 @@ class TastytradeProxy {
       if (!this._esSettleTimer) {
         this._esSettleTimer = setInterval(() => this._refreshEsSettle().catch(() => {}), 60 * 60 * 1000);
       }
+      if (!this._rollWatchTimer) {
+        this._rollWatchTimer = setInterval(() => this._checkFuturesRoll().catch(() => {}), ROLL_CHECK_MS);
+      }
     } catch (err) {
       console.warn('[FEED] ES resolve failed:', err.message.slice(0, 120));
     }
     try {
       const nqRes = await resolveFrontNqSymbol();
       this.nqSymbol = nqRes.streamerSymbol;
+      this.nqContract = nqRes.contract;
       this.nqCandleSymbol = `${this.nqSymbol}{=5m}`;
-      console.log(`[FEED] NQ front streamer=${this.nqSymbol} candle=${this.nqCandleSymbol}`);
+      console.log(`[FEED] NQ front streamer=${this.nqSymbol} expires=${nqRes.expiration} via=${nqRes.via} candle=${this.nqCandleSymbol}`);
     } catch (err) {
       console.warn('[FEED] NQ resolve failed:', err.message.slice(0, 120));
     }
@@ -4186,7 +4256,16 @@ class TastytradeProxy {
             close, // last close wins
             volume: Math.max(prev.volume, volume), // dxFeed candle volume is cumulative-per-bar
           }
-        : { timestamp: slotMs, date, slotKey, time, symbol: isNq ? '/NQ' : '/ES', intervalMinutes, source: 'dxlink', open, high, low, close, volume };
+        : {
+            timestamp: slotMs, date, slotKey, time,
+            symbol: isNq ? '/NQ' : '/ES',
+            // `symbol` is a LABEL ('/ES' on every ES row, always has been);
+            // `contract` is the actual future the bar came off, and is part of
+            // the es_candles unique key so a roll cannot overwrite the outgoing
+            // contract's bars with the incoming one's.
+            contract: isNq ? (this.nqContract || '') : (this.esContract || ''),
+            intervalMinutes, source: 'dxlink', open, high, low, close, volume,
+          };
       map.set(slotKey, merged);
       // Track WHICH slots changed so the flush can broadcast just those bars
       // instead of the whole 600-bar array every cycle.
@@ -5031,6 +5110,62 @@ class TastytradeProxy {
     this.flowTimer = null;
     this.premiumTimer = null;
     this.client?.close();
+  }
+
+  /**
+   * ── THE ROLL WATCHDOG ──────────────────────────────────────────────────────
+   *
+   * The front contract is resolved once, inside connect(). Before this existed
+   * that was the ONLY time it was ever resolved, so the feed stayed pinned to
+   * whatever was front when the process started — through the roll, through
+   * expiry, and on into a contract that had stopped trading entirely. The only
+   * cure was noticing and restarting.
+   *
+   * So: re-resolve on a timer and compare. A change is a real event and gets a
+   * loud log either way, but the ACT of rolling is a full stop()/start() — the
+   * candle maps, the flush timers and three dxLink candle subscriptions all key
+   * off the contract, and rebuilding them piecemeal is how you end up with two
+   * contracts interleaved in one series.
+   *
+   * That teardown is ~10-20s of no feed, which is nothing at 19:00 and very much
+   * something at 10:15. So a roll detected during the options session is only
+   * REPORTED; it is applied at the next check outside 09:30-16:15 ET. Since the
+   * whole point of rolling is to follow liquidity that moved days ago, waiting
+   * for the close costs nothing.
+   */
+  async _checkFuturesRoll() {
+    if (this.idle || !this.client || this._rolling) return;
+    let next;
+    try {
+      next = await resolveFrontEsSymbol();
+    } catch (err) {
+      // A failed lookup must never roll anything — staying on a known contract
+      // beats acting on a half-answer from a flaky REST call.
+      console.warn('[ROLL] ES re-resolve failed:', String(err?.message || err).slice(0, 120));
+      return;
+    }
+    if (!next?.contract || next.contract === this.esContract) return;
+
+    const line = `[ROLL] ES front contract changed ${this.esContract || '(none)'} → ${next.contract} `
+      + `(expires ${next.expiration}, via ${next.via})`;
+    if (isOptionsRthEt()) {
+      console.warn(`${line} — deferring the reconnect until after 16:15 ET`);
+      return;
+    }
+    console.warn(`${line} — reconnecting the feed onto it now`);
+    this._rolling = true;
+    // Drop the outgoing contract's bars rather than letting the new
+    // subscription's snapshot merge into maps still holding ESU6 highs and lows.
+    // The DB rows are safe: they are keyed by contract and stay queryable.
+    this.esCandles = new Map();
+    this.es1mCandles = new Map();
+    try {
+      await this.reconnect();
+    } catch (err) {
+      console.warn('[ROLL] reconnect failed:', String(err?.message || err).slice(0, 120));
+    } finally {
+      this._rolling = false;
+    }
   }
 
   /**

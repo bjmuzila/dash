@@ -508,6 +508,65 @@ export function settleBoard(items: BoardItem[], pinnedId?: string | null, cols =
   )
 }
 
+// ── DROP A CARD INTO A ROW AND THE ROW RE-SPLITS ─────────────────────────────
+//
+// "If it's 1 and 1 and I try to move the card beside the upper one, it should
+// force it to 2 per row."
+//
+// Until now it could not: two full-width cards, no room in that row, so the
+// collision rule did the only thing it knows and put one of them back on its
+// own row. But "put this beside that" IS the request, and the widths are the
+// thing that should give — a row with two cards in it is a row of halves, with
+// three it is a row of thirds. Nobody should have to narrow both cards first
+// and then aim them.
+//
+// So the row a card is dropped into is re-split among everyone now in it, and
+// the row it LEFT is re-split among whoever is still there. Drag the second
+// card up and both become halves; drag it away again and the first goes back
+// to full width. The two directions are the same function, which is why
+// neither can drift out of step with the other.
+//
+// Capped at three, which is the lane rule: a fourth card has nowhere to be, so
+// this declines and the ordinary collision rules put it on the next row.
+
+/** Lay every card sharing this row top out as an equal share of the board. */
+export function spreadRow(
+  items: BoardItem[],
+  top: number,
+  cols = BOARD_COLS,
+  rank: (m: BoardItem) => number = (m) => m.x,
+): BoardItem[] {
+  const row = items.filter((o) => o.y === top)
+  if (!row.length || row.length > 3) return items
+  const w = Math.round(cols / row.length)
+  const sorted = [...row].sort((a, b) => rank(a) - rank(b))
+  const byId = new Map(sorted.map((m, i) => [m.id, { ...m, w, x: i * w }]))
+  return items.map((o) => byId.get(o.id) ?? o)
+}
+
+/**
+ * Put the card on the row it is being dropped into and re-split that row.
+ *
+ * The row is whoever the card's band actually overlaps, taken at their topmost
+ * edge: a tall card let go across two rows joins the upper one, which is the
+ * row the hand was aiming at. `dropX` is the drag's UNCLAMPED column position —
+ * a full-width card cannot be moved right (there is nowhere for its right edge
+ * to go), so its own x cannot say which side of the row it wants and the
+ * pointer has to. Ties go left.
+ */
+export function joinRow(items: BoardItem[], id: string, cols = BOARD_COLS, dropX?: number): BoardItem[] {
+  const me = items.find((i) => i.id === id)
+  if (!me) return items
+  const band = items.filter((o) => o.id !== id && me.y < o.y + o.h && o.y < me.y + me.h)
+  if (!band.length) return items
+  const top = Math.min(...band.map((o) => o.y))
+  const row = items.filter((o) => o.id !== id && o.y === top)
+  if (!row.length || row.length + 1 > 3) return items
+  const moved = items.map((o) => (o.id === id ? { ...o, y: top } : o))
+  const rank = (m: BoardItem) => (m.id === id ? (dropX ?? m.x) - 0.5 : m.x) + m.w / 2
+  return spreadRow(moved, top, cols, rank)
+}
+
 type Gesture =
   | { kind: 'move'; id: string; startX: number; startY: number; origX: number; origY: number }
   | { kind: 'resize'; id: string; startX: number; startY: number; origW: number; origH: number }
@@ -602,6 +661,22 @@ export function Board({
   const gestureRef = useRef<Gesture>(null)
   const draftRef = useRef<BoardItem[] | null>(null)
   const startRef = useRef<BoardItem[] | null>(null)
+  /** The drag's UNCLAMPED column position, and the row it started on — both
+      needed by the release maths (see joinRow) and neither derivable from the
+      draft, because the draft has already been clamped and settled. */
+  const dropXRef = useRef<number | null>(null)
+  const fromYRef = useRef<number | null>(null)
+  /**
+   * The RAW gesture: everyone where they were at pointer-down, plus the dragged
+   * card where the pointer has put it, and nothing settled yet.
+   *
+   * The release maths has to run on this rather than on the draft. The draft has
+   * already had the collision rules applied to it, which is what pushes the card
+   * you are dragging TOWARD out of your way — so by the time you let go, the row
+   * you were aiming at is not in the draft any more and joinRow would find
+   * nothing to join. Settling is a view of the gesture, not the gesture.
+   */
+  const rawRef = useRef<BoardItem[] | null>(null)
   const baseId = useId()
 
   gestureRef.current = gesture
@@ -711,19 +786,56 @@ export function Board({
   // So the guidance is honest by construction: the outline cannot disagree with
   // where the card lands, because it is computed by the code that lands it.
   //
-  // In FREE mode the release maths is resolveBoard, which leaves the pinned card
-  // exactly where it is — so the preview always equals the pinned box and the
-  // slot never draws. That is correct, not a missing feature: there is no jump
-  // to warn about when the card lands where the hand let go.
+  // In FREE mode the card lands where the hand let go, so most of the time the
+  // preview equals the pinned box and no slot is drawn — correctly, since there
+  // is no jump to warn about. It DOES draw when the drop joins a row: the card
+  // is about to become a half or a third and to sit on that row's top edge, and
+  // that is exactly the change worth showing before it happens.
+  /**
+   * THE RELEASE MATHS, in one place. The landing slot is drawn by running this,
+   * and letting go runs the same call — so the outline cannot disagree with
+   * where the card lands, because it is computed by the code that lands it.
+   *
+   * Only a MOVE re-splits rows. A resize is the user stating a width, and a
+   * rule that immediately restated it would make the gesture pointless.
+   */
+  const release = useCallback(
+    (items: BoardItem[], g: NonNullable<Gesture>) => {
+      let out = items
+      if (g.kind === 'move') {
+        out = joinRow(out, g.id, cols, dropXRef.current ?? undefined)
+        const from = fromYRef.current
+        // The row it LEFT closes up behind it, the same way the row it joined
+        // opened up: two halves become one full-width card again.
+        if (from != null && (out.find((i) => i.id === g.id)?.y ?? -1) !== from) out = spreadRow(out, from, cols)
+        // ALONE ON A ROW IS FULL WIDTH. One card per row is the first of the
+        // three answers, so a card dropped where nothing else is takes the
+        // whole width rather than sitting as a lone third with dead board
+        // beside it. Only when its band touches nothing — a card dropped
+        // alongside a neighbour whose row top does not match exactly must not
+        // balloon over it.
+        const me = out.find((i) => i.id === g.id)
+        if (me && !out.some((p) => p.id !== g.id && me.y < p.y + p.h && p.y < me.y + me.h)) {
+          out = spreadRow(out, me.y, cols)
+        }
+      }
+      return free ? settleBoard(out, g.id, cols) : compactBoard(compactBoard(out, g.id))
+    },
+    [cols, free],
+  )
+  const releaseRef = useRef(release)
+  releaseRef.current = release
+
   const preview =
-    gesture && draft
-      ? free
-        ? (resolveBoard(draft, gesture.id, cols).find((i) => i.id === gesture.id) ?? null)
-        : (compactBoard(compactBoard(draft, gesture.id)).find((i) => i.id === gesture.id) ?? null)
-      : null
+    gesture && rawRef.current ? (release(rawRef.current, gesture).find((i) => i.id === gesture.id) ?? null) : null
   // Nothing to point at when the card is already sitting in its landing slot.
+  // Size counts as well as position now: a card about to become a half is not
+  // in its landing slot just because the slot starts at the same corner.
   const pinned = gesture ? (byId.get(gesture.id) ?? null) : null
-  const showPreview = preview != null && pinned != null && (preview.x !== pinned.x || preview.y !== pinned.y)
+  const showPreview =
+    preview != null &&
+    pinned != null &&
+    (preview.x !== pinned.x || preview.y !== pinned.y || preview.w !== pinned.w || preview.h !== pinned.h)
 
   const onDownMove = useCallback(
     (e: ReactPointerEvent, id: string) => {
@@ -737,6 +849,9 @@ export function Board({
       ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
       const snapshot = active.map((x) => ({ ...x }))
       startRef.current = snapshot
+      dropXRef.current = it.x
+      fromYRef.current = it.y
+      rawRef.current = snapshot
       setGesture({ kind: 'move', id, startX: e.clientX, startY: e.clientY, origX: it.x, origY: it.y })
       setDraft(snapshot)
     },
@@ -753,6 +868,9 @@ export function Board({
       ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
       const snapshot = active.map((x) => ({ ...x }))
       startRef.current = snapshot
+      dropXRef.current = null
+      fromYRef.current = null
+      rawRef.current = snapshot
       setGesture({ kind: 'resize', id, startX: e.clientX, startY: e.clientY, origW: it.w, origH: it.h })
       setDraft(snapshot)
     },
@@ -771,6 +889,10 @@ export function Board({
       const next = base.map((it) => {
         if (it.id !== g.id) return { ...it }
         if (g.kind === 'move') {
+          // Unclamped, and kept even though the card itself is clamped: a
+          // full-width card has nowhere to the right to go, so this is the only
+          // record of which HALF of the row the pointer is asking for.
+          dropXRef.current = g.origX + dxCols
           // NO POSITION SNAPPING. A magnet that pulled a dragged card onto its
           // neighbours' edges was tried and removed: at this grid resolution the
           // card can already be put within ~2% of the board of wherever the
@@ -803,7 +925,41 @@ export function Board({
         // in a row are the same width by construction now.
         return { ...it, w, x: snapLaneX(it.x, w, cols), h }
       })
-      setDraft(free ? resolveBoard(next, g.id, cols) : compactBoard(next, g.id))
+      rawRef.current = next
+      if (g.kind === 'move') {
+        // ── THE ROW MAKES ROOM WHILE YOU ARE STILL HOLDING THE CARD ──────────
+        //
+        // "When I place it to the right of 2 cards, those should move left and
+        // show the ability to put in the 3rd."
+        //
+        // Re-splitting only on release meant the drag showed the OPPOSITE of
+        // what was about to happen: the two cards already in the row have no
+        // space for a third, so the collision rules pushed one of them down and
+        // the row read as full. You had to let go on faith.
+        //
+        // So the release maths runs every frame and IS the draft. The two halves
+        // narrow to thirds and slide left as you come over the row, the empty
+        // third opens on the right, and letting go changes nothing that was not
+        // already on screen.
+        //
+        // The card in the hand is the one exception: it keeps the pointer's
+        // position, because a card that stops following the hand is not being
+        // dragged any more. It does take the width it is about to land at —
+        // that is the "ability to put in the 3rd" made visible, and the lifted
+        // card would otherwise cover the very gap it just opened.
+        const shown = releaseRef.current(next, g)
+        const land = shown.find((i) => i.id === g.id)
+        const hand = next.find((i) => i.id === g.id)
+        setDraft(
+          land && hand
+            ? shown.map((i) =>
+                i.id === g.id ? { ...land, x: clamp(dropXRef.current ?? hand.x, 0, cols - land.w), y: hand.y } : i,
+              )
+            : shown,
+        )
+      } else {
+        setDraft(free ? resolveBoard(next, g.id, cols) : compactBoard(next, g.id))
+      }
     }
     const onUp = () => {
       const committed = draftRef.current
@@ -811,7 +967,12 @@ export function Board({
       setGesture(null)
       setDraft(null)
       startRef.current = null
-      if (!committed) return
+      if (!committed) {
+        dropXRef.current = null
+        fromYRef.current = null
+        rawRef.current = null
+        return
+      }
       // Auto-arrange commits with a SECOND compaction: the first one holds the
       // pinned card, the second lets it float like everything else.
       //
@@ -820,11 +981,11 @@ export function Board({
       // resizing themselves under a moving pointer is the board arguing with the
       // hand, which is the thing all of this exists to stop. Let go and it
       // tidies, in one animated step you can see happen.
-      onLayoutChange(
-        free
-          ? settleBoard(committed, g?.id ?? null, cols)
-          : compactBoard(compactBoard(committed, g?.id ?? null)),
-      )
+      const raw = rawRef.current
+      onLayoutChange(g && raw ? releaseRef.current(raw, g) : committed)
+      dropXRef.current = null
+      fromYRef.current = null
+      rawRef.current = null
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)

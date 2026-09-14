@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CB Edge · landing page for new customers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+/* ──────────────────────────────────────────────────────────────────────────
+   Tokens, lifted verbatim from voltick-vite/src/theme.ts. Nothing hand-minted.
+   ────────────────────────────────────────────────────────────────────────── */
+:root{
+  --ink:#0a0d10; --panel:#0e1216; --elev:#141a21; --line:#1e2630;
+  --nav:rgba(10,13,16,.8);
+  --paper:#e7ece9; --paper-display:#d6ddd8; --paper-quiet:#c0c5c3;
+  --accent:#2f6bff; --accent-text:#6aa0ff; --sky:#7fb0ff;
+  --accent-soft:rgba(47,107,255,.12);
+  --volt:#ffd166; --flip:#b48cff; --reversal:#ff5fa2; --surge:#4d8cff; --premarket:#8adb57;
+  --good:#3ddc8e; --bad:#ff6b7a;
+  --sans:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',Arial,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
+  --r-sm:6px; --r-md:10px; --r-lg:12px; --r-pill:99px;
+  --card-shadow:0 8px 26px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.045);
+  --max:1180px;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--ink);color:var(--paper);font-family:var(--sans);
+  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+img{max-width:100%}
+a{color:var(--accent-text);text-decoration:none}
+::selection{background:rgba(47,107,255,.40);color:var(--paper)}
+:focus-visible{outline:2px solid var(--accent-text);outline-offset:2px;border-radius:6px}
+
+.wrap{max-width:var(--max);margin-inline:auto;padding-inline:20px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ── The aurora. Heights pinned in px, never percentages. ───────────────── */
+.aurora{position:relative;isolation:isolate}
+.aurora::before{content:"";position:absolute;inset:0 0 auto 0;z-index:-1;pointer-events:none}
+.aurora-page::before{
+  height:900px;
+  background:
+    radial-gradient(1100px 520px at 10% -12%, rgba(47,107,255,.26), transparent 60%),
+    radial-gradient(880px 460px at 92% -6%, rgba(77,140,255,.18), transparent 62%),
+    radial-gradient(760px 420px at 46% 112%, rgba(61,220,142,.06), transparent 66%);
+}
+.aurora-band::before{
+  height:240px;
+  background:
+    radial-gradient(900px 300px at 18% -30%, rgba(47,107,255,.20), transparent 62%),
+    radial-gradient(700px 260px at 88% -10%, rgba(127,176,255,.12), transparent 64%);
+}
+.aurora-bar::before{height:120px;background:radial-gradient(700px 160px at 50% -60%, rgba(47,107,255,.22), transparent 64%)}
+
+/* Hero backdrop: the vertical "tape" of bars both references put behind the
+   headline. Built from repeating gradients, so there is no image to load. */
+.tape{
+  position:absolute;inset:0;z-index:-1;pointer-events:none;opacity:.5;
+  background:
+    repeating-linear-gradient(90deg, rgba(47,107,255,.18) 0 2px, transparent 2px 9px),
+    repeating-linear-gradient(90deg, rgba(127,176,255,.10) 0 1px, transparent 1px 17px);
+  mask-image:radial-gradient(760px 260px at 50% 38%, #000 0%, transparent 78%);
+  -webkit-mask-image:radial-gradient(760px 260px at 50% 38%, #000 0%, transparent 78%);
+}
+.tape::after{
+  content:"";position:absolute;left:50%;top:6%;width:3px;height:42%;
+  background:linear-gradient(180deg, transparent, var(--volt) 40%, transparent);
+  transform:translateX(120px);filter:blur(1px);opacity:.75;
+}
+
+/* ── Nav ────────────────────────────────────────────────────────────────── */
+header.bar{
+  position:sticky;top:0;z-index:58;background:var(--nav);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);
+}
+.bar-in{min-height:58px;display:flex;align-items:center;gap:16px}
+.burger{display:none;margin-left:auto;width:38px;height:38px;border-radius:var(--r-md);
+  border:1px solid var(--line);background:none;color:var(--paper);font-size:15px;cursor:pointer}
+.brand{display:inline-flex;align-items:center;gap:9px;color:var(--paper);font-weight:700;letter-spacing:-.01em;font-size:16px}
+.bolt{width:20px;height:20px;border-radius:5px;display:grid;place-items:center;
+  background:linear-gradient(140deg,var(--accent),var(--sky));color:#071026;font-size:11px;font-weight:800}
+nav.links{display:flex;gap:22px;margin-inline:auto}
+nav.links a{color:var(--paper);font-size:13.5px;font-weight:600}
+nav.links a:hover{color:var(--accent-text)}
+.bar-cta{display:flex;align-items:center;gap:10px}
+.ghost{display:inline-flex;align-items:center;min-height:36px;padding:0 14px;border-radius:var(--r-pill);
+  border:1px solid var(--line);color:var(--paper);font-size:13px;font-weight:600}
+.ghost:hover{border-color:rgba(47,107,255,.55)}
+.solid{display:inline-flex;align-items:center;min-height:36px;padding:0 16px;border-radius:var(--r-pill);
+  background:var(--accent);color:#f2f6ff;font-size:13px;font-weight:600;border:1px solid transparent}
+.solid:hover{box-shadow:0 0 20px 2px rgba(47,107,255,.32)}
+
+/* ── The lit pill. Two backgrounds in one declaration: face to the padding
+      box, aurora to the border box. ────────────────────────────────────── */
+.pill{
+  display:inline-flex;align-items:center;gap:9px;min-height:50px;padding:0 24px;
+  border-radius:var(--r-pill);border:1px solid transparent;color:var(--paper);
+  font-family:var(--sans);font-size:15px;font-weight:600;cursor:pointer;
+  background:
+    linear-gradient(#0d1117f0,#0d1117f0) padding-box,
+    linear-gradient(118deg,#2f6bffd6,#7fb0ffa6 38%,#2f6bff5c 64%,#4d8cffc4) border-box;
+  transition:box-shadow 200ms ease;
+}
+.pill:hover,.pill:focus-visible{box-shadow:0 0 22px 2px rgba(47,107,255,.30)}
+
+/* ── Type scale ─────────────────────────────────────────────────────────── */
+.eyebrow{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--paper-quiet)}
+h1{font-size:clamp(34px,6.2vw,62px);line-height:1.02;letter-spacing:-.03em;font-weight:800;margin:18px 0 0;color:var(--paper-display)}
+h1 .lit{color:var(--paper);display:block}
+h2{font-size:clamp(26px,3.4vw,38px);line-height:1.08;letter-spacing:-.022em;font-weight:800;margin:10px 0 0;color:var(--paper-display)}
+h2 .lit{color:var(--paper);display:block}
+h3{font-size:15.5px;font-weight:700;margin:0;letter-spacing:-.005em;color:var(--paper)}
+p{margin:14px 0 0;color:var(--paper-quiet)}
+.lede{font-size:17px;max-width:620px}
+.strong{color:var(--paper);font-weight:600}
+
+.badge{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;
+  font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--accent-text);
+  border:1px solid rgba(47,107,255,.45);background:var(--accent-soft);border-radius:var(--r-pill);padding:5px 13px}
+
+/* ── Hero ───────────────────────────────────────────────────────────────── */
+section.hero{position:relative;padding:86px 0 0;text-align:center}
+section.hero .wrap{display:flex;flex-direction:column;align-items:center}
+section.hero .wrap > *{max-width:100%}
+section.hero .lede{margin-top:20px;text-align:center}
+.hero-cta{margin-top:30px}
+.hero-note{margin-top:14px;font-size:12.5px;color:var(--paper-quiet)}
+
+/* ── Tabs + product shot ────────────────────────────────────────────────── */
+.tabs{display:flex;flex-wrap:wrap;gap:4px;justify-content:center;margin:44px auto 18px;
+  padding:5px;border:1px solid var(--line);background:rgba(14,18,22,.72);border-radius:var(--r-pill);width:max-content;max-width:100%}
+.tab{font-size:12.5px;font-weight:600;color:var(--paper-quiet);padding:7px 14px;border-radius:var(--r-pill);
+  border:1px solid transparent;background:none;cursor:pointer;font-family:var(--sans);display:inline-flex;align-items:center;gap:7px}
+.tab .dot{width:5px;height:5px;border-radius:50%;background:var(--line)}
+.tab[aria-selected="true"]{color:var(--paper);border-color:rgba(47,107,255,.55);background:rgba(47,107,255,.10)}
+.tab[aria-selected="true"] .dot{background:var(--accent-text)}
+
+.shot{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-lg);
+  box-shadow:var(--card-shadow);overflow:hidden;width:100%;min-width:0}
+/* Only the ladder may be wider than the phone, and it scrolls inside its own
+   box. The page body never scrolls sideways. */
+.xscroll{overflow-x:auto;overscroll-behavior-x:contain;max-width:100%}
+.shot-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);
+  font-family:var(--mono);font-size:11.5px;color:var(--paper)}
+.shot-bar .tick{color:var(--paper);font-weight:600}
+.shot-bar .chg{color:var(--good)}
+.shot-bar .right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.tag{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  border-radius:var(--r-pill);padding:3px 9px;border:1px solid var(--line);color:var(--paper)}
+.tag.pos{border-color:rgba(61,220,142,.45);color:var(--good)}
+.cap{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--paper-quiet);text-align:right;margin-top:8px}
+
+/* the strike ladder */
+.ladder{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11.5px}
+.ladder th{font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--paper-quiet);
+  font-weight:600;text-align:left;padding:9px 14px;border-bottom:1px solid var(--line)}
+.ladder td{padding:4px 14px;border-bottom:1px solid rgba(30,38,48,.5);white-space:nowrap;color:var(--paper)}
+.ladder tr.spot td{background:rgba(47,107,255,.10)}
+.ladder .strike{width:74px;font-weight:600}
+.ladder .barcell{width:46%}
+.bar{height:11px;border-radius:2px;display:inline-block;vertical-align:middle}
+.bar.up{background:var(--good)}
+.bar.dn{background:var(--bad)}
+.val{font-size:10.5px;color:var(--paper);margin-left:7px}
+.mark{font-weight:600}
+.m-volt{color:var(--volt)} .m-flip{color:var(--flip)} .m-wall{color:var(--surge)}
+.m-rev{color:var(--reversal)} .m-coil{color:var(--accent-text)}
+.note{color:var(--paper-quiet);font-size:10.5px}
+.legend{display:flex;flex-wrap:wrap;gap:16px;padding:10px 14px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:10px;color:var(--paper-quiet)}
+
+/* ── Feature rows ───────────────────────────────────────────────────────── */
+section.row{padding:96px 0}
+section.row.band{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel)}
+.row-grid{display:grid;grid-template-columns:minmax(0,0.82fr) minmax(0,1.18fr);gap:52px;align-items:center}
+.row-grid > *{min-width:0}
+.row-grid.flip{grid-template-columns:minmax(0,1.18fr) minmax(0,0.82fr)}
+.row-grid.flip .copy{order:2}
+.points{list-style:none;margin:26px 0 0;padding:0;display:flex;flex-direction:column;gap:18px}
+.points li{display:grid;grid-template-columns:22px 1fr;gap:10px}
+.points .pm{font-size:13px;line-height:1.5}
+.points p{margin:3px 0 0;font-size:13.5px}
+.textcta{display:inline-flex;align-items:center;gap:8px;margin-top:28px;min-height:40px;padding:0 16px;
+  border:1px solid var(--line);border-radius:var(--r-pill);color:var(--paper);font-size:13px;font-weight:600}
+.textcta:hover{border-color:rgba(47,107,255,.55);color:var(--accent-text)}
+
+/* ── Small mock panels ─────────────────────────────────────────────────── */
+.mock{background:var(--elev);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--card-shadow);overflow:hidden}
+.mock-bar{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);
+  font-family:var(--mono);font-size:10.5px;color:var(--paper-quiet)}
+.tape-row{display:grid;grid-template-columns:52px 52px 84px minmax(0,1fr) 62px 46px;gap:8px;padding:6px 12px;
+  font-family:var(--mono);font-size:10.5px;border-bottom:1px solid rgba(30,38,48,.5);align-items:center;color:var(--paper)}
+.tape-row > *{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side{font-size:9.5px;font-weight:600;border-radius:var(--r-sm);padding:2px 6px;text-align:center}
+.side.ask{background:rgba(61,220,142,.16);color:var(--good)}
+.side.bid{background:rgba(255,107,122,.16);color:var(--bad)}
+.side.mid{background:rgba(47,107,255,.14);color:var(--accent-text)}
+
+/* ── Bento ─────────────────────────────────────────────────────────────── */
+.bento{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-top:38px}
+.cell{background:var(--elev);border:1px solid var(--line);border-radius:var(--r-lg);
+  box-shadow:var(--card-shadow);padding:22px}
+.cell.w3{grid-column:span 3}
+.cell.w2{grid-column:span 2}
+.cell .pm{font-size:15px}
+.cell h3{margin-top:10px}
+.cell p{font-size:13.5px;margin-top:8px}
+.stat{font-family:var(--mono);font-size:30px;font-weight:800;letter-spacing:-.02em;color:var(--paper)}
+
+/* ── Graded record strip ───────────────────────────────────────────────── */
+.grades{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-top:32px}
+.grade{background:var(--elev);border:1px solid var(--line);border-radius:var(--r-lg);padding:18px;box-shadow:var(--card-shadow)}
+.grade .pct{font-family:var(--mono);font-size:28px;font-weight:800;letter-spacing:-.02em}
+.grade .what{font-size:13px;color:var(--paper);margin-top:4px;font-weight:600}
+.grade .den{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--paper-quiet);margin-top:8px}
+
+/* ── Social proof placeholder ──────────────────────────────────────────── */
+.proof{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:34px}
+.slot{border:1px dashed var(--line);border-radius:var(--r-lg);background:rgba(20,26,33,.5);
+  padding:20px;min-height:132px;display:flex;flex-direction:column;gap:10px}
+.slot .who{display:flex;align-items:center;gap:9px}
+.slot .av{width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:var(--panel)}
+.slot .lines{display:flex;flex-direction:column;gap:6px;margin-top:auto}
+.slot .ln{height:8px;border-radius:4px;background:rgba(199,205,203,.12)}
+.slot .ln.s{width:62%}
+.slot .hint{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--paper-quiet)}
+
+/* ── Pricing ───────────────────────────────────────────────────────────── */
+.prices{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:34px;max-width:720px;margin-inline:auto}
+.price{background:var(--elev);border:1px solid var(--line);border-radius:var(--r-lg);padding:24px;box-shadow:var(--card-shadow);text-align:left}
+.price.best{border-color:rgba(47,107,255,.5)}
+.price .amt{font-family:var(--mono);font-size:38px;font-weight:800;letter-spacing:-.03em;color:var(--paper)}
+.price .per{font-family:var(--mono);font-size:12px;color:var(--paper-quiet)}
+.price p{font-size:13px}
+.save{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--accent-text);border:1px solid rgba(47,107,255,.45);background:var(--accent-soft);
+  border-radius:var(--r-pill);padding:2px 8px;margin-left:8px}
+.included{list-style:none;margin:26px auto 0;padding:0;max-width:720px;
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px 22px;text-align:left}
+.included li{font-size:13.5px;color:var(--paper);display:grid;grid-template-columns:18px 1fr;gap:8px}
+
+/* ── FAQ ───────────────────────────────────────────────────────────────── */
+.faq{max-width:780px;margin:34px auto 0}
+details{border-bottom:1px solid var(--line)}
+summary{cursor:pointer;list-style:none;padding:18px 34px 18px 0;font-size:15px;font-weight:600;
+  color:var(--paper);position:relative}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";position:absolute;right:6px;top:16px;font-family:var(--mono);font-size:17px;color:var(--accent-text)}
+details[open] summary::after{content:"–"}
+details p{margin:0 0 20px;font-size:14px;max-width:660px}
+
+/* ── Footer ────────────────────────────────────────────────────────────── */
+footer{border-top:1px solid var(--line);background:var(--panel);padding:52px 0 40px;margin-top:0}
+.fgrid{display:grid;grid-template-columns:1.4fr repeat(3,1fr);gap:32px}
+.fcol h4{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--paper-quiet);margin:0 0 12px}
+.fcol a{display:block;color:var(--paper);font-size:13.5px;padding:4px 0}
+.fcol a:hover{color:var(--accent-text)}
+.legal{margin-top:34px;padding-top:20px;border-top:1px solid var(--line);font-size:12px;color:var(--paper-quiet);max-width:860px}
+
+.center{text-align:center}
+.center .lede{margin-inline:auto}
+.center h2{max-width:780px;margin-inline:auto}
+
+@media (max-width:980px){
+  .row-grid,.row-grid.flip{grid-template-columns:1fr;gap:30px}
+  .row-grid.flip .copy{order:0}
+  .bento{grid-template-columns:repeat(2,1fr)}
+  .cell.w3,.cell.w2{grid-column:span 1}
+  .fgrid{grid-template-columns:1fr 1fr}
+}
+/* The bar drops to brand plus one action. A five-link nav at 390px is not a
+   nav, it is the page. */
+@media (max-width:860px){
+  nav.links{display:none}
+  .ghost{display:none}
+  .bar-cta{margin-left:auto}
+}
+@media (max-width:620px){
+  section.hero{padding-top:56px}
+  section.row{padding:64px 0}
+  .bento{grid-template-columns:1fr}
+  .fgrid{grid-template-columns:1fr}
+  .tabs{border-radius:var(--r-lg)}
+  .ladder .barcell{width:34%}
+  .shot-bar{font-size:10.5px;flex-wrap:wrap}
+  .tape-row{grid-template-columns:46px 44px minmax(0,1fr) 56px 40px;font-size:9.5px;gap:6px}
+  .tape-row > :nth-child(3){display:none}
+  .ladder td,.ladder th{padding-inline:10px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition-duration:.001ms !important;animation-duration:.001ms !important}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body class="aurora aurora-page">
+
+<header class="bar aurora aurora-bar">
+  <div class="wrap bar-in">
+    <a class="brand" href="#top"><span class="bolt">⚡</span> CB&nbsp;Edge</a>
+    <nav class="links">
+      <a href="#board">Platform</a>
+      <a href="#why">Why CB Edge</a>
+      <a href="#members">Members</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="bar-cta">
+      <a class="ghost" href="#">Log in</a>
+      <a class="solid" href="#pricing">Sign up</a>
+    </div>
+  </div>
+</header>
+
+<!-- ── Hero ───────────────────────────────────────────────────────────── -->
+<section class="hero" id="top">
+  <div class="tape"></div>
+  <div class="wrap">
+    <span class="badge">⚡ 0DTE levels, live from the open</span>
+    <h1>The chart shows you where price went.<span class="lit">CB Edge shows you why it stopped.</span></h1>
+    <p class="lede">
+      Dealers do not pick the levels they defend. <span class="strong">Their hedge does</span>, and it is
+      set before the bell. CB Edge names those strikes on SPX, the index complex and the movers,
+      then keeps score on how each one behaved. <span class="strong">Your edge, their loss.</span>
+    </p>
+    <div class="hero-cta"><a class="pill" href="#pricing">Start your membership <span aria-hidden="true">→</span></a></div>
+    <p class="hero-note">No decoder ring of tiers. One membership, everything on this page.</p>
+  </div>
+
+  <div class="wrap">
+    <div class="tabs" role="tablist" aria-label="Product surfaces">
+      <button class="tab" role="tab" aria-selected="true"><span class="dot"></span>GEX board</button>
+      <button class="tab" role="tab" aria-selected="false"><span class="dot"></span>GEX candles</button>
+      <button class="tab" role="tab" aria-selected="false"><span class="dot"></span>Flow tape</button>
+      <button class="tab" role="tab" aria-selected="false"><span class="dot"></span>Chain</button>
+      <button class="tab" role="tab" aria-selected="false"><span class="dot"></span>Scanner</button>
+      <button class="tab" role="tab" aria-selected="false"><span class="dot"></span>Alerts</button>
+    </div>
+
+    <div class="shot">
+      <div class="shot-bar">
+        <span class="tick">SPX · GEX board</span>
+        <span>6,412.80</span>
+        <span class="chg">▲ 0.41%</span>
+        <span class="right">
+          <span class="tag">all exp</span>
+          <span class="tag pos">Positive gamma</span>
+        </span>
+      </div>
+      <div class="xscroll">
+      <table class="ladder">
+        <thead>
+          <tr><th>Strike</th><th>Net gamma</th><th>What sits there</th><th style="text-align:right">From price</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="strike">6460</td><td class="barcell"><span class="bar up" style="width:26%"></span><span class="val">+$104M</span></td><td></td><td style="text-align:right">+0.74%</td></tr>
+          <tr><td class="strike">6450</td><td class="barcell"><span class="bar up" style="width:41%"></span><span class="val">+$168M</span></td><td><span class="mark m-wall">‖ Wall</span> <span class="note">where the book thickens and price slows</span></td><td style="text-align:right">+0.58%</td></tr>
+          <tr><td class="strike">6440</td><td class="barcell"><span class="bar up" style="width:33%"></span><span class="val">+$131M</span></td><td></td><td style="text-align:right">+0.43%</td></tr>
+          <tr><td class="strike">6430</td><td class="barcell"><span class="bar up" style="width:58%"></span><span class="val">+$242M</span></td><td><span class="mark m-volt">★ Volt</span> <span class="note">the heaviest magnet on the board today</span></td><td style="text-align:right">+0.27%</td></tr>
+          <tr><td class="strike">6425</td><td class="barcell"><span class="bar up" style="width:19%"></span><span class="val">+$77M</span></td><td><span class="note">◇ expected move, +1σ by the close</span></td><td style="text-align:right">+0.19%</td></tr>
+          <tr class="spot"><td class="strike">6412</td><td class="barcell"><span class="bar up" style="width:9%"></span><span class="val">+$36M</span></td><td><span class="mark m-coil">◀ Spot</span></td><td style="text-align:right">0.00%</td></tr>
+          <tr><td class="strike">6400</td><td class="barcell"><span class="bar up" style="width:14%"></span><span class="val">+$58M</span></td><td><span class="mark m-coil">◆ Coil</span> <span class="note">two levels stacked inside a quiet band</span></td><td style="text-align:right">-0.20%</td></tr>
+          <tr><td class="strike">6390</td><td class="barcell"><span class="bar dn" style="width:11%"></span><span class="val">-$44M</span></td><td><span class="mark m-flip">⚡︎ Flip</span> <span class="note">gamma changes sign here</span></td><td style="text-align:right">-0.36%</td></tr>
+          <tr><td class="strike">6375</td><td class="barcell"><span class="bar dn" style="width:29%"></span><span class="val">-$118M</span></td><td></td><td style="text-align:right">-0.59%</td></tr>
+          <tr><td class="strike">6360</td><td class="barcell"><span class="bar dn" style="width:47%"></span><span class="val">-$193M</span></td><td><span class="mark m-rev">↘ Reversal</span> <span class="note">turned price on touch, 8 of the last 9</span></td><td style="text-align:right">-0.82%</td></tr>
+          <tr><td class="strike">6350</td><td class="barcell"><span class="bar dn" style="width:62%"></span><span class="val">-$255M</span></td><td><span class="mark m-wall">‖ Wall</span> <span class="note">put side, where hedging concentrates</span></td><td style="text-align:right">-0.98%</td></tr>
+          <tr><td class="strike">6325</td><td class="barcell"><span class="bar dn" style="width:22%"></span><span class="val">-$91M</span></td><td></td><td style="text-align:right">-1.37%</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="legend">
+        <span><span class="mark m-volt">★</span> Volt</span>
+        <span><span class="mark m-wall">‖</span> Wall</span>
+        <span><span class="mark m-flip">⚡︎</span> Flip</span>
+        <span><span class="mark m-rev">↘</span> Reversal</span>
+        <span><span class="mark m-coil">◆</span> Coil</span>
+        <span style="margin-left:auto">Green: dealers long gamma here. Red: dealers short it.</span>
+      </div>
+    </div>
+    <p class="cap">Illustrative data, drawn from the real surfaces</p>
+  </div>
+</section>
+
+<!-- ── GEX board ──────────────────────────────────────────────────────── -->
+<section class="row" id="board">
+  <div class="wrap row-grid">
+    <div class="copy">
+      <span class="eyebrow">GEX board</span>
+      <h2>The levels dealers have to defend,<span class="lit">named before the open.</span></h2>
+      <p>
+        Every board reads the whole option chain and marks the strikes where hedging actually
+        concentrates, so you are reading positioning rather than a line somebody drew on a chart.
+      </p>
+      <ul class="points">
+        <li><span class="pm m-volt">★</span><div><h3>The Volt</h3><p>The heaviest magnet on the board, and whether it is sticky or slippery today.</p></div></li>
+        <li><span class="pm m-wall">‖</span><div><h3>Walls and the flip</h3><p>Where the book thickens either side, and the strike where dealer gamma changes sign.</p></div></li>
+        <li><span class="pm m-coil">⇕</span><div><h3>The expected move</h3><p>The band the option market opened with, frozen at 09:30 so it cannot drift by noon.</p></div></li>
+      </ul>
+      <a class="textcta" href="#pricing">Open a board <span aria-hidden="true">→</span></a>
+    </div>
+    <div>
+      <div class="mock">
+        <div class="mock-bar"><span>GEX candles · SPX · 5m</span><span style="margin-left:auto">0DTE</span></div>
+        <div style="padding:16px 14px 18px">
+          <svg viewBox="0 0 560 250" width="100%" height="230" role="img" aria-label="Illustrative candle chart with gamma levels drawn across it">
+            <defs>
+              <linearGradient id="voltband" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stop-color="#ffd166" stop-opacity=".16"/>
+                <stop offset="100%" stop-color="#ffd166" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <rect x="0" y="54" width="560" height="26" fill="url(#voltband)"/>
+            <line x1="0" y1="68" x2="560" y2="68" stroke="#ffd166" stroke-width="1.5" stroke-dasharray="6 5"/>
+            <text x="6" y="62" fill="#ffd166" font-family="ui-monospace,monospace" font-size="9">★ 6430</text>
+            <line x1="0" y1="132" x2="560" y2="132" stroke="#4d8cff" stroke-width="1" stroke-dasharray="3 4"/>
+            <text x="6" y="127" fill="#4d8cff" font-family="ui-monospace,monospace" font-size="9">‖ 6412</text>
+            <line x1="0" y1="176" x2="560" y2="176" stroke="#b48cff" stroke-width="1.5"/>
+            <text x="6" y="171" fill="#b48cff" font-family="ui-monospace,monospace" font-size="9">⚡︎ 6390 flip</text>
+            <line x1="0" y1="216" x2="560" y2="216" stroke="#ff5fa2" stroke-width="1" stroke-dasharray="3 4"/>
+            <text x="6" y="211" fill="#ff5fa2" font-family="ui-monospace,monospace" font-size="9">↘ 6360</text>
+            <g>
+              <g stroke="#ff6b7a" fill="#ff6b7a"><line x1="118" y1="150" x2="118" y2="196" stroke-width="1"/><rect x="113" y="162" width="10" height="26"/></g>
+              <g stroke="#ff6b7a" fill="#ff6b7a"><line x1="138" y1="156" x2="138" y2="200" stroke-width="1"/><rect x="133" y="170" width="10" height="22"/></g>
+              <g stroke="#3ddc8e" fill="#3ddc8e"><line x1="158" y1="140" x2="158" y2="192" stroke-width="1"/><rect x="153" y="150" width="10" height="30"/></g>
+              <g stroke="#3ddc8e" fill="#3ddc8e"><line x1="178" y1="124" x2="178" y2="170" stroke-width="1"/><rect x="173" y="132" width="10" height="28"/></g>
+              <g stroke="#ff6b7a" fill="#ff6b7a"><line x1="198" y1="126" x2="198" y2="164" stroke-width="1"/><rect x="193" y="134" width="10" height="20"/></g>
+              <g stroke="#3ddc8e" fill="#3ddc8e"><line x1="218" y1="104" x2="218" y2="150" stroke-width="1"/><rect x="213" y="112" width="10" height="30"/></g>
+              <g stroke="#3ddc8e" fill="#3ddc8e"><line x1="238" y1="88" x2="238" y2="128" stroke-width="1"/><rect x="233" y="96" width="10" height="24"/></g>
+              <g stroke="#ff6b7a" fill="#ff6b7a"><line x1="258" y1="74" x2="258" y2="118" stroke-width="1"/><rect x="253" y="88" width="10" height="22"/></g>
+              <g stroke="#3ddc8e" fill="#3ddc8e"><line x1="278" y1="66" x2="278" y2="112" stroke-width="1"/><rect x="273" y="74" width="10" height="28"/></g>
+              <g stroke="#ff6b7a" fill="#ff6b7a"><line x1="298" y1="62" x2="298" y2="104" stroke-width="1"/><rect x="293" y="70" width="10" height="24"/></g>
+              <g stroke="#ff6b7a" fill="#ff6b7a"><line x1="318" y1="66" x2="318" y2="116" stroke-width="1"/><rect x="313" y="76" width="10" height="30"/></g>
+              <g stroke="#3ddc8e" fill="#3ddc8e"><line x1="338" y1="70" x2="338" y2="118" stroke-width="1"/><rect x="333" y="80" width="10" height="26"/></g>
+              <g stroke="#ff6b7a" fill="#ff6b7a"><line x1="358" y1="74" x2="358" y2="126" stroke-width="1"/><rect x="353" y="86" width="10" height="28"/></g>
+              <g stroke="#3ddc8e" fill="#3ddc8e"><line x1="378" y1="68" x2="378" y2="120" stroke-width="1"/><rect x="373" y="76" width="10" height="30"/></g>
+              <g stroke="#ff6b7a" fill="#ff6b7a"><line x1="398" y1="64" x2="398" y2="110" stroke-width="1"/><rect x="393" y="72" width="10" height="24"/></g>
+              <g stroke="#3ddc8e" fill="#3ddc8e"><line x1="418" y1="58" x2="418" y2="104" stroke-width="1"/><rect x="413" y="64" width="10" height="26"/></g>
+              <g stroke="#ff6b7a" fill="#ff6b7a"><line x1="438" y1="60" x2="438" y2="102" stroke-width="1"/><rect x="433" y="68" width="10" height="22"/></g>
+              <g stroke="#3ddc8e" fill="#3ddc8e"><line x1="458" y1="56" x2="458" y2="100" stroke-width="1"/><rect x="453" y="62" width="10" height="26"/></g>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <p class="cap">Illustrative data</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Flow tape ─────────────────────────────────────────────────────── -->
+<section class="row band aurora aurora-band" id="flow">
+  <div class="wrap row-grid flip">
+    <div>
+      <div class="mock">
+        <div class="mock-bar"><span>Flow tape · unusual only</span><span style="margin-left:auto">1,940 boards scanned</span></div>
+        <div class="tape-row" style="color:var(--paper-quiet);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase">
+          <span>Time</span><span>Ticker</span><span>Contract</span><span>Why unusual</span><span>Premium</span><span>Side</span>
+        </div>
+        <div class="tape-row"><span>09:41:12</span><span>SPY</span><span>640C · Sep 19</span><span class="note">42x the contract's own history</span><span>$1.04M</span><span class="side ask">Ask</span></div>
+        <div class="tape-row"><span>09:44:03</span><span>NVDA</span><span>185P · Oct 17</span><span class="note">into the put wall at 185</span><span>$612K</span><span class="side bid">Bid</span></div>
+        <div class="tape-row"><span>09:52:47</span><span>QQQ</span><span>598C · Sep 18</span><span class="note">rolled up, same size kept</span><span>$883K</span><span class="side ask">Ask</span></div>
+        <div class="tape-row"><span>10:03:19</span><span>TSLA</span><span>420C · Nov 21</span><span class="note">calls sold into the Volt</span><span>$1.38M</span><span class="side mid">Mid</span></div>
+        <div class="tape-row"><span>10:11:58</span><span>SPX</span><span>6390P · 0DTE</span><span class="note">at the flip, held past the hour</span><span>$2.21M</span><span class="side bid">Bid</span></div>
+        <div class="tape-row" style="border-bottom:none"><span>10:18:26</span><span>AMD</span><span>175C · Oct 03</span><span class="note">27x, no offsetting leg</span><span>$497K</span><span class="side ask">Ask</span></div>
+      </div>
+      <p class="cap">Illustrative data</p>
+    </div>
+    <div class="copy">
+      <span class="eyebrow">Flow tape</span>
+      <h2>Every print,<span class="lit">explained as it crosses.</span></h2>
+      <p>
+        Sweeps, blocks and splits as they happen, with the side they filled on and what the premium
+        actually was. No jargon wall and no decoder ring.
+      </p>
+      <ul class="points">
+        <li><span class="pm m-wall">↯</span><div><h3>Unusual, not merely large</h3><p>Scored against the contract's own history, so a big name's ordinary day does not crowd out a real one.</p></div></li>
+        <li><span class="pm m-coil">⇄</span><div><h3>Which side it hit</h3><p>Bid, mid or ask on every row, because a print at the bid and one at the ask are not the same event.</p></div></li>
+        <li><span class="pm m-coil">◷</span><div><h3>Kept, not flushed</h3><p>Rows carry whether the position was still there an hour later, so you can tell size from noise.</p></div></li>
+      </ul>
+      <a class="textcta" href="#pricing">See the tape <span aria-hidden="true">→</span></a>
+    </div>
+  </div>
+</section>
+
+<!-- ── The board / terminal ──────────────────────────────────────────── -->
+<section class="row" id="desk">
+  <div class="wrap row-grid">
+    <div class="copy">
+      <span class="eyebrow">Your desk</span>
+      <h2>One home board.<span class="lit">Drag it into the shape you want.</span></h2>
+      <p>
+        Cards, not pages. Put the GEX board, the candles, the chain, the scanner and the level log
+        where your eye already looks, and the layout stays that way on the next session.
+      </p>
+      <ul class="points">
+        <li><span class="pm m-coil">▦</span><div><h3>Move anything anywhere</h3><p>Every surface is a card on one board, so the desk is arranged rather than navigated.</p></div></li>
+        <li><span class="pm m-coil">⌂</span><div><h3>The layout is yours</h3><p>Saved per account, and the phone build opens the same six screens from the same cards.</p></div></li>
+        <li><span class="pm m-volt">⚑</span><div><h3>Alerts in the corner</h3><p>Arm the Volt, a wall, the flip or any strike you pick, and watch them land without leaving the board.</p></div></li>
+      </ul>
+      <a class="textcta" href="#pricing">Open the board <span aria-hidden="true">→</span></a>
+    </div>
+    <div>
+      <div class="mock" style="padding:14px;display:grid;grid-template-columns:1fr 1fr;gap:12px;background:var(--panel)">
+        <div class="mock" style="grid-column:span 2;box-shadow:none">
+          <div class="mock-bar"><span>GEX candles</span><span style="margin-left:auto">SPX</span></div>
+          <div style="padding:12px">
+            <svg viewBox="0 0 400 96" width="100%" height="88" role="img" aria-label="Illustrative sparkline">
+              <line x1="0" y1="34" x2="400" y2="34" stroke="#ffd166" stroke-width="1" stroke-dasharray="5 5"/>
+              <line x1="0" y1="72" x2="400" y2="72" stroke="#b48cff" stroke-width="1"/>
+              <polyline fill="none" stroke="#6aa0ff" stroke-width="2"
+                points="4,80 34,72 64,74 94,60 124,62 154,48 184,52 214,40 244,44 274,36 304,40 334,30 364,34 396,26"/>
+            </svg>
+          </div>
+        </div>
+        <div class="mock" style="box-shadow:none">
+          <div class="mock-bar"><span>Level log</span></div>
+          <div style="padding:10px 12px;font-family:var(--mono);font-size:10.5px;display:flex;flex-direction:column;gap:7px">
+            <span><span class="m-volt">★</span> 6430 held · 2 touches</span>
+            <span><span class="m-flip">⚡︎</span> 6390 crossed 10:22</span>
+            <span><span class="m-rev">↘</span> 6360 turned price</span>
+            <span><span class="m-wall">‖</span> 6450 slowed it</span>
+          </div>
+        </div>
+        <div class="mock" style="box-shadow:none">
+          <div class="mock-bar"><span>Expected move</span></div>
+          <div style="padding:14px 12px">
+            <div class="mono" style="font-size:24px;font-weight:800;letter-spacing:-.02em">±42.6</div>
+            <div class="note" style="margin-top:6px">frozen at the open · opened wider than 7 of the last 10</div>
+          </div>
+        </div>
+      </div>
+      <p class="cap">Illustrative data</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── The graded record ─────────────────────────────────────────────── -->
+<section class="row band aurora aurora-band" id="record">
+  <div class="wrap center">
+    <span class="eyebrow">The graded record</span>
+    <h2>We grade our own levels,<span class="lit">every night.</span></h2>
+    <p class="lede">
+      What CB Edge names at 09:30 is what it gets marked on at 16:00. A level that quietly redraws
+      itself at noon is not a level.
+    </p>
+    <div class="grades">
+      <div class="grade"><div class="pct m-rev">94%</div><div class="what">↘ Reversal turned price on touch</div><div class="den">denominator: touches</div></div>
+      <div class="grade"><div class="pct m-coil">85%</div><div class="what">◆ Coil held on touch</div><div class="den">denominator: touches</div></div>
+      <div class="grade"><div class="pct" style="color:var(--paper)">62%</div><div class="what">⇕ Day stayed inside the band</div><div class="den">once per session</div></div>
+      <div class="grade"><div class="pct m-volt">90</div><div class="what">★ Trading days banked so far</div><div class="den">90 is where the model settles</div></div>
+    </div>
+    <p style="margin-top:22px;font-size:13px;max-width:760px;margin-inline:auto">
+      These are recorded outcomes, not a win rate and not a forecast. Past behaviour of a level says
+      nothing about its next touch.
+    </p>
+  </div>
+</section>
+
+<!-- ── Why ───────────────────────────────────────────────────────────── -->
+<section class="row" id="why">
+  <div class="wrap">
+    <h2 style="max-width:620px">Why traders choose CB&nbsp;Edge</h2>
+    <div class="bento">
+      <div class="cell w3">
+        <span class="pm m-volt">⚡︎</span>
+        <h3>Alerts that reach you</h3>
+        <p>Arm the Volt, a wall, the flip or any strike. Push to the phone, the desktop or your Discord the moment price gets there.</p>
+      </div>
+      <div class="cell w3">
+        <span class="pm m-coil">⌁</span>
+        <h3>The index complex and the movers</h3>
+        <div class="stat" style="margin-top:10px">1,940</div>
+        <p>Boards loaded, including a long tail most tools never bother with. The list grows and nothing is trimmed to make room.</p>
+      </div>
+      <div class="cell w2">
+        <span class="pm m-coil">◷</span>
+        <h3>Levels frozen at the open</h3>
+        <p>Named at 09:30, graded at 16:00, never quietly moved in between.</p>
+      </div>
+      <div class="cell w2">
+        <span class="pm m-coil">▤</span>
+        <h3>Read the market too</h3>
+        <p>Economic and earnings calendars, seasonality back to 1928, expected moves and the daily letter, in one place.</p>
+      </div>
+      <div class="cell w2">
+        <span class="pm m-coil">⌘</span>
+        <h3>Ask it in your own words</h3>
+        <p>The boards, the tape and the record are readable by an assistant you already use.</p>
+      </div>
+      <div class="cell w3">
+        <span class="pm m-coil">▢</span>
+        <h3>Built for the phone, not shrunk onto it</h3>
+        <p>Six screens drawn for a 390px board, each one the same card you arranged on the desktop. Alerts arrive there first.</p>
+      </div>
+      <div class="cell w3">
+        <span class="pm m-coil">◈</span>
+        <h3>Mechanics, never a call to action</h3>
+        <p>CB Edge describes where hedging sits and how those levels behaved. It never tells you what to do about it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Members / social proof, deliberately empty ───────────────────── -->
+<section class="row band aurora aurora-band" id="members">
+  <div class="wrap center">
+    <span class="eyebrow">Members</span>
+    <h2>What traders say<span class="lit">about CB Edge.</span></h2>
+    <p class="lede">
+      Both reference sites lean hardest on this block: bullflow runs a wall of real X posts,
+      voltick runs a shorter graded strip. The slots below are the layout only, waiting on real
+      quotes and real handles.
+    </p>
+    <div class="proof">
+      <div class="slot"><div class="who"><span class="av"></span><span class="hint">handle</span></div><div class="lines"><span class="ln"></span><span class="ln"></span><span class="ln s"></span></div></div>
+      <div class="slot"><div class="who"><span class="av"></span><span class="hint">handle</span></div><div class="lines"><span class="ln"></span><span class="ln s"></span></div></div>
+      <div class="slot"><div class="who"><span class="av"></span><span class="hint">handle</span></div><div class="lines"><span class="ln"></span><span class="ln"></span><span class="ln s"></span></div></div>
+      <div class="slot"><div class="who"><span class="av"></span><span class="hint">handle</span></div><div class="lines"><span class="ln"></span><span class="ln s"></span></div></div>
+      <div class="slot"><div class="who"><span class="av"></span><span class="hint">handle</span></div><div class="lines"><span class="ln"></span><span class="ln"></span><span class="ln s"></span></div></div>
+      <div class="slot"><div class="who"><span class="av"></span><span class="hint">handle</span></div><div class="lines"><span class="ln"></span><span class="ln s"></span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Pricing ───────────────────────────────────────────────────────── -->
+<section class="row" id="pricing">
+  <div class="wrap center">
+    <span class="eyebrow">Pricing</span>
+    <h2>Stop guessing at the levels.<span class="lit">Start reading the positioning.</span></h2>
+    <p class="lede">
+      Every board, the flow tape, the candles, the chain, the scanner, the alerts, the calendars and
+      the graded record. One membership, no tiers to decode.
+    </p>
+    <div class="prices">
+      <div class="price">
+        <span class="eyebrow">Monthly</span>
+        <div style="margin-top:10px"><span class="amt">$50</span><span class="per"> / month</span></div>
+        <p>Cancel any time, from your own dashboard.</p>
+      </div>
+      <div class="price best">
+        <span class="eyebrow">Yearly <span class="save">16% off</span></span>
+        <div style="margin-top:10px"><span class="amt">$500</span><span class="per"> / year</span></div>
+        <p>Billed once. Same product, same everything.</p>
+      </div>
+    </div>
+    <div class="hero-cta"><a class="pill" href="#">Start your membership <span aria-hidden="true">→</span></a></div>
+    <p class="hero-note">Already a member? <a href="#">Log in ↗</a></p>
+
+    <ul class="included">
+      <li><span class="m-volt">★</span> GEX board and GEX candles</li>
+      <li><span class="m-wall">↯</span> Unusual flow tape</li>
+      <li><span class="m-coil">▦</span> Chain, scanner and level log</li>
+      <li><span class="m-flip">⚡︎</span> Strike alerts to phone, desktop or Discord</li>
+      <li><span class="m-coil">▤</span> Economic and earnings calendars</li>
+      <li><span class="m-coil">◷</span> Seasonality almanac, 1928 onward</li>
+      <li><span class="m-coil">▢</span> The phone build, included</li>
+      <li><span class="m-coil">◈</span> The nightly graded record</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ── FAQ ───────────────────────────────────────────────────────────── -->
+<section class="row band aurora aurora-band" id="faq">
+  <div class="wrap">
+    <div class="center"><h2>Frequently asked questions</h2></div>
+    <div class="faq">
+      <details open>
+        <summary>Do you offer a trial?</summary>
+        <p>No trial, and no free tier. Monthly is the small commitment: one month, cancelled from your own dashboard whenever you like.</p>
+      </details>
+      <details>
+        <summary>Where does the option data come from?</summary>
+        <p>Institutional option feeds, read as the full chain rather than a sampled slice. Open interest updates daily from OPRA, and quotes stream through the session.</p>
+      </details>
+      <details>
+        <summary>Does CB Edge tell me what to trade?</summary>
+        <p>No, and it is built not to. Every surface describes mechanics and locations: where hedging concentrates, where gamma changes sign, how a named level behaved on its last touches. What you do with that is yours.</p>
+      </details>
+      <details>
+        <summary>What does the graded record actually measure?</summary>
+        <p>Named levels are frozen at the open and marked at the close. A reversal and a coil are graded on touch, so their denominator is touches. The expected move band is graded once per session, on whether the day stayed inside it.</p>
+      </details>
+      <details>
+        <summary>How many tickers do you cover?</summary>
+        <p>The index complex, the megacaps, the daily movers and a long tail beyond them. Boards are added as coverage grows and nothing is removed to make room.</p>
+      </details>
+      <details>
+        <summary>Is there a phone version?</summary>
+        <p>Yes, and it is included. Six screens drawn for a phone rather than a desktop board squeezed down, and alerts land there first.</p>
+      </details>
+      <details>
+        <summary>Do I need options experience to use it?</summary>
+        <p>Every level carries a plain sentence explaining what sits there and why price tends to react to it, so the board reads without the vocabulary first. The learn pages cover the rest.</p>
+      </details>
+    </div>
+    <div class="center" style="margin-top:28px">
+      <a class="textcta" href="#">Still have a question? Talk to us <span aria-hidden="true">→</span></a>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ────────────────────────────────────────────────────────── -->
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div class="fcol">
+        <a class="brand" href="#top" style="margin-bottom:12px"><span class="bolt">⚡</span> CB&nbsp;Edge</a>
+        <p style="font-size:13px;max-width:280px;margin-top:10px">
+          Option positioning explained, on the boards you actually trade, graded against what price
+          did next.
+        </p>
+      </div>
+      <div class="fcol">
+        <h4>Platform</h4>
+        <a href="#board">GEX board</a>
+        <a href="#flow">Flow tape</a>
+        <a href="#desk">The board</a>
+        <a href="#pricing">Pricing</a>
+      </div>
+      <div class="fcol">
+        <h4>Learn</h4>
+        <a href="#record">The graded record</a>
+        <a href="#board">What a Volt is</a>
+        <a href="#board">Walls and the flip</a>
+        <a href="#board">Expected move</a>
+      </div>
+      <div class="fcol">
+        <h4>Company</h4>
+        <a href="#faq">FAQ</a>
+        <a href="#">Support</a>
+        <a href="#">Terms</a>
+        <a href="#">Privacy</a>
+      </div>
+    </div>
+    <p class="legal">
+      CB Edge is an educational tool. It describes option positioning and records how named levels
+      behaved. It does not provide investment advice, does not recommend any security, and nothing on
+      this page is a recommendation to buy or sell anything. Illustrations on this page use example
+      data. Past behaviour of a level is not a prediction of future behaviour. © 2026 CB Edge.
+    </p>
+  </div>
+</footer>
+
+<script>
+// The hero tab strip is presentational here: it switches the selected state so
+// the pattern reads, and does not swap a screenshot it does not have.
+document.querySelectorAll('.tabs .tab').forEach(function (btn, _i, all) {
+  btn.addEventListener('click', function () {
+    all.forEach(function (b) { b.setAttribute('aria-selected', 'false'); });
+    btn.setAttribute('aria-selected', 'true');
+  });
+});
+</script>
+</body>
+</html>

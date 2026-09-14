@@ -80,9 +80,10 @@ function coalesceCandles(list, tbl, defSymbol) {
     if (!(ts > 0) || !slotKey) continue;
     const intervalMinutes = Number(r.intervalMinutes ?? 5);
     // nq_candles is still UNIQUE("slotKey") alone; es_candles is
-    // UNIQUE("slotKey","intervalMinutes"). The dedupe key MUST match the
-    // conflict target or the statement can still collide inside one chunk.
-    const k = tbl === 'nq_candles' ? slotKey : `${slotKey}\u0000${intervalMinutes}`;
+    // UNIQUE("slotKey","intervalMinutes","contract"). The dedupe key MUST match
+    // the conflict target or the statement can still collide inside one chunk.
+    const contract = String(r.contract ?? '');
+    const k = tbl === 'nq_candles' ? slotKey : `${slotKey}\u0000${intervalMinutes}\u0000${contract}`;
     const high = Number(r.high);
     const low = Number(r.low);
     const prev = byKey.get(k);
@@ -94,6 +95,7 @@ function coalesceCandles(list, tbl, defSymbol) {
         time: String(r.time ?? slotKey.slice(11)),
         symbol: String(r.symbol ?? defSymbol),
         intervalMinutes,
+        contract,
         source: String(r.source ?? 'dxlink'),
         open: Number(r.open),
         high,
@@ -114,7 +116,11 @@ function coalesceCandles(list, tbl, defSymbol) {
   return Array.from(byKey.values());
 }
 
-const CANDLE_COLS = 13;
+// es_candles carries `contract` (2026-09-14); nq_candles does not yet. The two
+// column lists therefore differ in length, so the tuple builder below cannot use
+// one constant.
+const CANDLE_COLS_ES = 14;
+const CANDLE_COLS_NQ = 13;
 // 500 * 13 = 6500 params, well under Postgres' 65535-param cap.
 const CANDLE_CHUNK = 500;
 
@@ -144,7 +150,14 @@ async function writeCandles(rows, table = 'es_candles') {
   //     live recorder.
   //   nq_candles → still UNIQUE("slotKey") (5m only, no 1m writer). Same latent
   //     flaw; migrate it before adding any second NQ aggregation.
-  const conflictTarget = tbl === 'nq_candles' ? '"slotKey"' : '"slotKey","intervalMinutes"';
+  const conflictTarget = tbl === 'nq_candles' ? '"slotKey"' : '"slotKey","intervalMinutes",contract';
+  // es_candles gained `contract` on 2026-09-14 so a quarterly roll stops writing
+  // ESZ6 bars over ESU6 bars at the same clock time. nq_candles has no such
+  // column yet, so its column list is the original 13.
+  const colList = tbl === 'nq_candles'
+    ? '(timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")'
+    : '(timestamp,date,"slotKey",time,symbol,"intervalMinutes",contract,source,open,high,low,close,volume,"avgVolume")';
+  const nCols = tbl === 'nq_candles' ? CANDLE_COLS_NQ : CANDLE_COLS_ES;
 
   // One multi-row upsert per chunk instead of one statement per row. The forming
   // bar is rewritten on every tick, which made this the #2 and #4 statements by
@@ -159,16 +172,24 @@ async function writeCandles(rows, table = 'es_candles') {
     const params = [];
     for (const r of chunk) {
       const b = params.length;
-      params.push(
-        r.timestamp, r.date, r.slotKey, r.time, r.symbol, r.intervalMinutes, r.source,
-        r.open, r.high, r.low, r.close, r.volume, r.avgVolume,
-      );
-      tuples.push(`(${Array.from({ length: CANDLE_COLS }, (_, j) => `$${b + j + 1}`).join(',')})`);
+      if (tbl === 'nq_candles') {
+        params.push(
+          r.timestamp, r.date, r.slotKey, r.time, r.symbol, r.intervalMinutes, r.source,
+          r.open, r.high, r.low, r.close, r.volume, r.avgVolume,
+        );
+      } else {
+        params.push(
+          r.timestamp, r.date, r.slotKey, r.time, r.symbol, r.intervalMinutes,
+          r.contract ?? '', r.source,
+          r.open, r.high, r.low, r.close, r.volume, r.avgVolume,
+        );
+      }
+      tuples.push(`(${Array.from({ length: nCols }, (_, j) => `$${b + j + 1}`).join(',')})`);
     }
     try {
       await p.query(
         `INSERT INTO ${tbl}
-           (timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")
+           ${colList}
          VALUES ${tuples.join(',')}
          ON CONFLICT(${conflictTarget}) DO UPDATE SET
            timestamp=EXCLUDED.timestamp,

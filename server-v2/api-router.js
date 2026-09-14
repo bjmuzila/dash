@@ -6210,7 +6210,12 @@ if (libDb) {
             await upsert({
               timestamp: Number(c.timestamp), date: String(c.date), slotKey: String(c.slotKey),
               time: String(c.time ?? ''), symbol: String(c.symbol ?? '/ES'),
-              intervalMinutes: Number(c.intervalMinutes ?? 5), source: String(c.source ?? 'dxlink'),
+              intervalMinutes: Number(c.intervalMinutes ?? 5),
+              // '' is the legacy value and is accepted: a poster that predates
+              // the contract column still writes, it just cannot be told apart
+              // from the other pre-2026-09-14 rows.
+              contract: String(c.contract ?? ''),
+              source: String(c.source ?? 'dxlink'),
               open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close),
               volume: Number(c.volume), avgVolume: Number(c.avgVolume ?? 0),
             });
@@ -6224,9 +6229,25 @@ if (libDb) {
         const daysBack = sp.get('daysBack') ? Number(sp.get('daysBack')) : undefined;
         const limit = Math.min(Number(sp.get('limit') ?? 2000), 50000);
         const interval = Number(sp.get('interval') ?? 5) === 1 ? 1 : 5;
+        // ── ?contract (2026-09-14) ────────────────────────────────────────────
+        // es_candles holds every future it has ever recorded, and ESU6/ESZ6 sit
+        // ~30-40pt apart, so an unfiltered read across a quarterly roll returns
+        // one series with a cliff in the middle of it.
+        //
+        //   (default) 'latest' — the newest contract in the window. What a chart
+        //                        wants: continuous, and short for a few sessions
+        //                        after a roll rather than wrong.
+        //   ?contract=/ESZ6    — that contract.
+        //   ?contract=all      — every row, the pre-2026-09-14 behaviour. For
+        //                        backtests and anything doing its own roll
+        //                        handling.
+        //
+        // NQ has no contract column yet, so the param is ES-only.
+        const contractParam = sp.get('contract');
+        const contract = contractParam === 'all' ? undefined : (contractParam || 'latest');
         const rows = isNq(sp.get('symbol'))
           ? await libDb.getNqCandles(date, daysBack, limit)
-          : await libDb.getEsCandles(date, daysBack, limit, interval);
+          : await libDb.getEsCandles(date, daysBack, limit, interval, contract);
         // ?lite=1 — columnar/tuple encoding. Same rows, ~8-10x fewer bytes.
         //
         // The verbose form repeats every key on every bar ("timestamp":,"open":,
@@ -6240,12 +6261,17 @@ if (libDb) {
         // was, so every other caller is untouched.
         if (sp.get('lite') === '1') {
           const cols = ['timestamp', 'date', 'slotKey', 'time', 'symbol', 'intervalMinutes', 'open', 'high', 'low', 'close', 'volume', 'avgVolume'];
+          // Which contract actually answered, so a chart can label the series
+          // (and a thin one right after a roll explains itself). Not a column:
+          // every row in the response shares it by construction.
+          const answeredContract = String(rows[rows.length - 1]?.contract ?? '');
           // Numbers emitted as numbers, not strings — the client's per-row
           // Number() coercion becomes unnecessary on the lite path.
           const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
           send(res, 200, {
             lite: 1,
             cols,
+            contract: answeredContract,
             rows: rows.map((r) => [
               num(r.timestamp), String(r.date ?? ''), String(r.slotKey ?? ''), String(r.time ?? ''),
               String(r.symbol ?? ''), num(r.intervalMinutes), num(r.open), num(r.high),
