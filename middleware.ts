@@ -331,9 +331,13 @@ export async function middleware(req: NextRequest) {
   // Owners always pass. Routes needed to actually buy/see pricing stay
   // reachable. /home stays exempt as the LOOP GUARD: unpaid users are sent
   // there, and app/home/page.tsx forwards them on to /pricing (the "delayed
-  // data" mode it used to render for them was retired 2026-09). /mult-greek and
-  // the two *-snapshot APIs are still listed for the same historical reason and
-  // are harmless. Everything else redirects to /home.
+  // data" mode it used to render for them was retired 2026-09). /mult-greek is
+  // exempt for the SAME reason and must stay exempt: as of 2026-09-14 it is
+  // also a thin redirect (app/mult-greek/page.tsx — paid to /v3, unpaid to
+  // /pricing), and dropping it from this list would have middleware bounce it
+  // to /home before the page could answer. The two *-snapshot APIs are listed
+  // for the same historical reason and are harmless. Everything else
+  // redirects to /home.
   const PAID_EXEMPT = /^\/(pricing|home|mult-greek|api\/stripe|api\/home-snapshot|api\/mult-greek-snapshot)(\/.*)?$/;
   if (!isOwner && !isPaid && !PAID_EXEMPT.test(path)) {
     const url = req.nextUrl.clone();

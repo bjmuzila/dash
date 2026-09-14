@@ -1,5 +1,72 @@
 # Changelog
 
+## 2026-09-14 (k) - /mult-greek is closed
+
+The last v2 PAGE still rendering its own client to customers. Bare `/mult-greek`
+is a Next route, so it is not in `next.config.js`'s SPA aliases and never passed
+through `lib/v3Routes.ts`, and it is in middleware's `PAID_EXEMPT` - three
+separate reasons nothing ever redirected it. It quietly stayed alive after v3
+became the dashboard.
+
+30 days to today: 18 distinct visitors landed on it. One of them spent the bulk
+of his only real session there and then asked for a refund because the product
+"wasn't working" - he was looking at the retired dashboard.
+
+`app/mult-greek/page.tsx` is now a thin redirect mirroring `app/home/page.tsx`:
+paid to `/v3`, unpaid to `/pricing`. It STAYS in `PAID_EXEMPT` - dropping it
+would have middleware bounce it to `/home` before the page could answer - and
+stays out of `next.config.js`'s aliases, which would move the decision ahead of
+the paid gate and reopen the unpaid loop. Comments in all three files corrected;
+they still described the old behaviour.
+
+Left in place on purpose: `MultGreekClient.tsx` (178KB), the snapshot recorder
+and `/api/mult-greek-snapshot`. Nothing renders the client now. Deleting it is a
+separate decision from closing the door. The numbers themselves did not move -
+Multi Greek is a board card in v3 and the phone Heat tab at `/v3/m/heat`.
+
+`app/mult-greek/page.tsx`, `middleware.ts`, `next.config.js`, `lib/v3Routes.ts`
+
+## 2026-09-14 (j) - v3 had no visit tracking at all
+
+Every `page_visits` row in the database came from v2's `lib/pageStatus.ts`, a
+Next-side hook mounted per page. v3 never had an equivalent, so a paid customer
+disappeared from analytics the moment they crossed over. 30 days to today: 5,254
+visit rows, exactly ONE of them `/v3/*`.
+
+The damage was not a gap in a chart. `/home` (325 rows) is `app/home/page.tsx`,
+a redirect - each row is somebody ENTERING v3 and going dark, not a page anyone
+read. `/options-chain`, `/traders-dashboard` and friends are flash rows logged by
+the v2 SPA before `V3Redirect.tsx` bounces them client-side. And a customer
+asking for a refund showed "last seen" four days stale while he was signed in
+that morning.
+
+New `cbedge-v3/src/data/pageVisit.ts`, mounted once in `App.tsx` inside
+`BrowserRouter`. One row per route the user lands on, phone build included.
+Because the Shell mounts once and never unmounts, this is one router-driven hook
+rather than v2's per-page one - a per-page hook would be forgotten on the next
+route added.
+
+Same endpoint, field names and session-entry rules as v2, deliberately: both
+write the same table and the owner map, the acquisition panel and
+`/api/admin/customer-activity` read it as one stream. The `cb:visit-entry`
+sessionStorage key is shared on purpose - a visitor who lands on the marketing
+pages, signs in and is redirected into v3 is ONE visit, and a key of our own
+would report every arriving customer as two sessions from two sources.
+
+`path` stores `window.location.pathname`, so v3 rows read `/v3/traders-dashboard`
+and are no longer confusable with the v2 page of the same name. Query strings are
+left off: `/scanner?tab=ibstats` is the Scanner page, and folding the tab in would
+multiply `distinct_pages`. Labels come from `NAV` and `MOBILE_TABS` rather than a
+third copy.
+
+Carries a same-path dedupe v2 lacks. v2's log has paths repeating in the same
+second throughout, which inflates every load count in the owner panel roughly 2x
+- one customer's "57 page loads" was really about 30. Checked at report time, not
+on mount, so StrictMode's second pass does not skip the report its first pass
+cancelled.
+
+`cbedge-v3/src/data/pageVisit.ts` (new), `cbedge-v3/src/App.tsx`
+
 ## 2026-09-14 (i) - Key Levels: the Stats clipboard row is VOL-only
 
 The camera menu's `Stats` row (the one that copies characters, not a PNG) read

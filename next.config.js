@@ -116,6 +116,11 @@ const nextConfig = {
   // user: /home -> /app/home -> not exempt -> /home -> ... Widen PAID_EXEMPT to
   // /^\/(app\/)?(pricing|home|mult-greek|...)/ first if you ever want them here.
   //
+  // Both are now thin redirects into /v3 (app/home/page.tsx and, since
+  // 2026-09-14, app/mult-greek/page.tsx). That does NOT make them safe to add
+  // here: an alias would move the redirect decision ahead of the paid gate and
+  // reopen the same loop. The page is the right place for it.
+  //
   // permanent: false (307) on purpose — a 301 is cached by the browser
   // essentially forever, so getting this list wrong once would be very hard to
   // walk back. Switch to true only when the layout has settled.

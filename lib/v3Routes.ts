@@ -72,11 +72,13 @@ export const PORTED: Record<string, string> = {
   //
   // NOTE the OTHER /home and /mult-greek: the NEXT routes app/home/page.tsx and
   // app/mult-greek/page.tsx are different pages and are in middleware's
-  // PAID_EXEMPT — they are where the paywall SENDS people. /home forwards paid
-  // users to /v3 and unpaid ones to /pricing; /mult-greek still renders its own
-  // client (delayed for unpaid). Neither goes through this table. Do not "unify"
-  // them — next.config.js excludes both from its aliases for the same reason,
-  // and redirecting either one loops an unpaid user.
+  // PAID_EXEMPT — they are where the paywall SENDS people. BOTH now forward
+  // paid users to /v3 and unpaid ones to /pricing; /mult-greek stopped
+  // rendering its own client on 2026-09-14, having been the last v2 page still
+  // serving one to customers (18 distinct visitors in the preceding 30 days,
+  // one of them a refund request). Neither goes through this table. Do not
+  // "unify" them — next.config.js excludes both from its aliases for the same
+  // reason, and redirecting either one loops an unpaid user.
   "/home": "/",
   "/board": "/",
   "/es-candles": "/",
