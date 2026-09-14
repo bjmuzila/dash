@@ -120,11 +120,29 @@ export const PORTED: Record<string, string> = {
   "/trading": "/",
   "/fails": "/",
 
+  // /options RETIRED 2026-09-14. An orphan: a real route in SPA_ROUTES and in
+  // app-vite's App.tsx, but in neither this table nor LEGACY_NAV — so nothing
+  // in v3 linked to it and nothing sent it back, and /app/options just sat
+  // there rendering. Zero loads from zero visitors in the 30 days to
+  // 2026-09-14. v3 answers the question twice over, at /options-chain (the GEX
+  // matrix) and /chain (the quoted chain), but they are different pages and
+  // picking one for somebody following an old link is a guess — so this goes
+  // to the board like the other retirements.
+  "/options": "/",
+
   // ── Phone build ────────────────────────────────────────────────────────────
   // The ids differ between the builds, which is the whole reason this is a MAP
   // and not a prefix rule. v2's heatmap tab is v3's Heat tab; v2's ES-candles
   // tab is v3's SPX tab (same card, carrying the SPX/ES tape switch in its
-  // header). v2's /m/chain and /m/prep have no v3 counterpart and stay in v2.
+  // header). v2's /m/chain has no v3 counterpart and stays in v2.
+  //
+  // /m/prep RETIRED 2026-09-14 (Brandon). Premarket Prep on the phone is not
+  // being built in v3 and is no longer worth a door in the Legacy menu, so it
+  // comes out of LEGACY_NAV below and lands here instead — pointed at the phone
+  // build's default tab rather than v3's desktop root, because whoever follows
+  // an old /m/* link is holding a phone. Page files stay on disk, unreachable,
+  // the same way /ict and /trading were left.
+  "/m/prep": "/m/gex",
   "/m/gex": "/m/gex",
   "/m/heatmap": "/m/heat",
   "/m/es": "/m/spx",
@@ -155,7 +173,14 @@ export interface LegacyNavItem {
  * long version is on /v3/legacy.
  */
 // ICT, Journal, Fails and Guide came OUT of this list on 2026-09-06 — retired,
-// not ported; see the RETIRED block in PORTED above. Seven left.
+// not ported; see the RETIRED block in PORTED above. Premarket Prep (phone)
+// followed on 2026-09-14 and is in PORTED's phone block. Six left.
+//
+// /level-log STAYS despite v3 having a page of its own at /v3/level-log: that
+// page is `partial` (the wall-migration chart and the range switch), and the
+// ticker rail, log card, capture rail, churn strip and timeline are still only
+// here. It is deliberately NOT in PORTED — /app/level-log must keep rendering
+// v2. Only the bare /level-log alias points at v3, in next.config.js.
 export const LEGACY_NAV: LegacyNavItem[] = [
   { path: "/levels", label: "Levels", icon: "📏" },
   { path: "/level-log", label: "Level Log", icon: "🧱", partial: true },
@@ -163,7 +188,6 @@ export const LEGACY_NAV: LegacyNavItem[] = [
   { path: "/confidence-score", label: "Confidence Score", icon: "📐" },
   { path: "/test", label: "Test Lab", icon: "⚗️" },
   { path: "/m/chain", label: "Option Chain (phone)", icon: "⛓️", phone: true },
-  { path: "/m/prep", label: "Premarket Prep (phone)", icon: "🌅", phone: true },
 ];
 
 /** One destination in v3's rail, mirrored for the bar v2 pages wear. */

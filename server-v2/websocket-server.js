@@ -390,8 +390,9 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   // owner/active-subscriber — see server-v2/ws-auth.js.
   const WS_AUTH_REQUIRED = process.env.WS_AUTH_REQUIRED === '1';
   let verifyWsRequest = null;
+  let sessionStillLive = null;
   if (WS_AUTH_REQUIRED) {
-    try { ({ verifyWsRequest } = require('./ws-auth')); }
+    try { ({ verifyWsRequest, sessionStillLive } = require('./ws-auth')); }
     catch (e) { log.log?.('[WS] ws-auth module failed to load — auth DISABLED:', e?.message); }
   }
 
@@ -429,6 +430,9 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     verifyWsRequest(request)
       .then((res) => {
         if (res && res.ok) {
+          // Carry the session identity onto the request so the connection
+          // handler can pin it to the socket — see the revalidation sweep below.
+          request.cbSession = { userId: res.userId || null, tokenHash: res.tokenHash || null };
           accept();
         } else {
           log.log?.(`[WS] upgrade rejected (${res?.reason || 'unknown'})`);
@@ -443,6 +447,9 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
 
   wss.on('connection', (ws, request) => {
     ws.isAlive = true;
+    // Whose socket this is. Null when WS_AUTH_REQUIRED is off, in which case
+    // there is no session to revalidate and the sweep skips it.
+    ws.cbSession = request.cbSession || null;
     accountConnect();
     // Optional ?topics=flow,spot scoping — null means "everything" (default).
     ws.topics = parseTopics(request);
@@ -663,6 +670,40 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   }, WS_ALERT_INTERVAL_MS);
   if (bwMonitor.unref) bwMonitor.unref();
 
+  // ── SESSION REVALIDATION ────────────────────────────────────────────────────
+  //
+  // The upgrade handler is the ONLY gate a /ws/gex connection ever passed. A
+  // socket opened before a sign-out, a device kick (one-device-per-account,
+  // 2026-09-14) or a Stripe cancellation kept streaming live GEX for as long as
+  // it stayed connected — which is hours, because a working client has no
+  // reason to reconnect. The paywall was enforced on every HTTP request and on
+  // exactly one moment of the socket's life.
+  //
+  // Once a minute rather than on the 30s pinger: this costs one indexed query
+  // per authenticated socket, and a minute of over-run on a kicked device is
+  // not worth doubling that. The check itself fails OPEN (see sessionStillLive)
+  // so a DB blip cannot disconnect every paying customer at once.
+  //
+  // 1008 = policy violation. The client's reconnect loop re-runs the upgrade
+  // gate and is rejected there with a 401, which is where it belongs — rather
+  // than this handler trying to explain itself over a socket it is closing.
+  const revalidator = WS_AUTH_REQUIRED && sessionStillLive
+    ? setInterval(() => {
+        for (const ws of wss.clients) {
+          const s = ws.cbSession;
+          if (!s || !s.tokenHash) continue;
+          Promise.resolve(sessionStillLive(s.tokenHash))
+            .then((live) => {
+              if (live) return;
+              log.log?.(`[WS] closing socket — session no longer valid (user ${s.userId || '?'})`);
+              try { ws.close(1008, 'session ended'); } catch { /* noop */ }
+            })
+            .catch(() => { /* fail open — next sweep tries again */ });
+        }
+      }, 60000)
+    : null;
+  if (revalidator && revalidator.unref) revalidator.unref();
+
   // Keepalive ping / dead-socket reaping.
   const pinger = setInterval(() => {
     for (const ws of wss.clients) {
@@ -683,6 +724,7 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
 
   function close() {
     clearInterval(pinger);
+    if (revalidator) clearInterval(revalidator);
     clearInterval(bwMonitor);
     unsubscribe();
     for (const ws of wss.clients) ws.terminate();

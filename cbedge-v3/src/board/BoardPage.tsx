@@ -323,6 +323,28 @@ export default function BoardPage() {
   const removeCard = (id: string) => {
     setLayoutState((prev) => arrange(prev.filter((i) => i.id !== id)))
   }
+  // ── THE CATALOG REMOVES TOO ────────────────────────────────────────────────
+  //
+  // The ✕ beside a catalog row that already has a count. Taking a card off used
+  // to mean finding it on the board and using its own header ✕ — fine for the
+  // card you are looking at, and the wrong shape for "I added that by mistake"
+  // or for a card that is three screens down. The menu is already the list of
+  // what exists and how many, so it is the natural place to give one back.
+  //
+  // It removes the LAST instance of the type — the one `+` most recently added
+  // — so add and remove are symmetric in the same row, and the ordinals of the
+  // copies that stay (`#2`, `#3`) do not shuffle under the user.
+  //
+  // AND THE MENU STAYS OPEN, unlike add. Adding is one decision and closing is
+  // the confirmation; pruning is usually several, and a menu that shut after
+  // each ✕ would have to be reopened three times to walk three copies back.
+  const removeLastOfType = (type: string) => {
+    setLayoutState((prev) => {
+      const last = [...prev].reverse().find((i) => cardTypeOf(i.id) === type)
+      if (!last) return prev
+      return arrange(prev.filter((i) => i.id !== last.id))
+    })
+  }
 
   // ── ONE, TWO OR THREE PER ROW, WITHOUT DRAGGING ────────────────────────────
   //
@@ -524,18 +546,45 @@ export default function BoardPage() {
                 {CARD_CATALOG.map((c) => {
                   const n = countByType.get(c.id) ?? 0
                   return (
-                    <button
+                    // A ROW, NOT A BUTTON, now that it holds two of them — a
+                    // button inside a button is invalid HTML and the inner one
+                    // stops firing. The hover tint moves to the row so the whole
+                    // strip still highlights as one target.
+                    <div
                       key={c.id}
-                      onClick={() => addCard(c.id)}
-                      title={n > 0 ? `Add another ${c.label} — ${n} on the board` : `Add ${c.label}`}
-                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg hover:bg-raised"
+                      className="flex w-full items-center pr-1.5 text-sm hover:bg-raised"
                     >
-                      <span aria-hidden className="w-4 shrink-0 text-center leading-none">
-                        {c.icon}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">{c.label}</span>
-                      {n > 0 && <span className="shrink-0 text-xs text-faint">×{n}</span>}
-                    </button>
+                      <button
+                        onClick={() => addCard(c.id)}
+                        title={n > 0 ? `Add another ${c.label} — ${n} on the board` : `Add ${c.label}`}
+                        className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 pr-2 text-left text-fg"
+                      >
+                        <span aria-hidden className="w-4 shrink-0 text-center leading-none">
+                          {c.icon}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">{c.label}</span>
+                        {n > 0 && <span className="shrink-0 text-xs text-faint">×{n}</span>}
+                      </button>
+                      {/* Held, not dropped, when the count is 0: `invisible`
+                          keeps the row's width so the labels do not jog left and
+                          right as cards come and go. */}
+                      <button
+                        onClick={() => removeLastOfType(c.id)}
+                        disabled={n === 0}
+                        aria-label={`Remove ${c.label}`}
+                        title={
+                          n > 1
+                            ? `Remove the last ${c.label} — ${n} on the board`
+                            : `Remove ${c.label} from the board`
+                        }
+                        className={[
+                          'shrink-0 rounded-sm px-1 py-0.5 text-xs leading-none transition-colors',
+                          n > 0 ? 'text-faint hover:text-down' : 'invisible',
+                        ].join(' ')}
+                      >
+                        ✕
+                      </button>
+                    </div>
                   )
                 })}
               </div>

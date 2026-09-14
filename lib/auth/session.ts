@@ -10,7 +10,13 @@
 // maintenance flag.
 
 import { randomBytes, createHash } from "crypto";
-import { insertSession, getSessionWithUser, deleteSession, type SessionWithUser } from "@/lib/db";
+import {
+  insertSession,
+  getSessionWithUser,
+  deleteSession,
+  enforceSingleSession,
+  type SessionWithUser,
+} from "@/lib/db";
 
 export const SESSION_COOKIE = "cbe_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -79,20 +85,47 @@ function hashToken(token: string): string {
 }
 
 /** Creates a session row and returns the raw token to set as the cookie value.
- *  The raw token is never persisted -- only its hash. */
+ *  The raw token is never persisted -- only its hash.
+ *
+ *  ONE DEVICE PER ACCOUNT (2026-09-14). Every other session for this user is
+ *  dropped here, so signing in anywhere signs you out everywhere else. This is
+ *  the ONLY place sessions are minted -- password login, signup and the Google
+ *  callback all come through it -- which is why the rule lives here rather than
+ *  in three route handlers that would drift apart.
+ *
+ *  The owner is exempt, enforced inside enforceSingleSession()'s own SQL rather
+ *  than by a flag passed from here; see the note on it in lib/db.ts.
+ *
+ *  Kicking is best-effort. If it throws, the person still gets the session they
+ *  just asked for -- refusing a paid customer their login because a cleanup
+ *  query failed is a worse outcome than a second device surviving until the
+ *  next sign-in. */
 export async function createSession(
   userId: string,
   meta?: { userAgent?: string | null; ip?: string | null },
 ): Promise<{ token: string; expiresAt: Date }> {
   const token = randomBytes(32).toString("base64url");
+  const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
   await insertSession({
-    token_hash: hashToken(token),
+    token_hash: tokenHash,
     user_id: userId,
     expires_at: expiresAt,
     user_agent: meta?.userAgent ?? null,
     ip: meta?.ip ?? null,
   });
+
+  try {
+    const kicked = await enforceSingleSession(userId, tokenHash);
+    // The DB row is gone, but validateSessionToken() below holds a resolved
+    // session for CACHE_TTL_MS keyed on the token hash -- and in this process
+    // that cache is what middleware actually reads. Evict the kicked hashes or
+    // the old device keeps working for up to 8 more seconds.
+    for (const h of kicked) cache.delete(h);
+  } catch (err) {
+    console.error("[auth/session] single-session enforcement failed:", err);
+  }
+
   return { token, expiresAt };
 }
 

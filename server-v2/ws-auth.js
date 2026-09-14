@@ -242,9 +242,70 @@ async function verifyWsRequest(upgradeReq) {
   }
 
   const access = getAccessFor(session);
+  // tokenHash rides along on SUCCESS only, so the socket can be re-checked
+  // later without holding the raw cookie value in memory for the life of the
+  // connection. See sessionStillLive() below and the revalidation sweep in
+  // websocket-server.js.
+  const tokenHash = (() => {
+    try {
+      const cookies = parseCookies(upgradeReq.headers && upgradeReq.headers.cookie);
+      const raw = cookies[SESSION_COOKIE];
+      return raw ? crypto.createHash('sha256').update(raw).digest('hex') : null;
+    } catch { return null; }
+  })();
   return access.ok
-    ? { ok: true, userId: session.userId, reason: access.reason }
+    ? { ok: true, userId: session.userId, reason: access.reason, tokenHash }
     : { ok: false, userId: session.userId, reason: access.reason };
+}
+
+/**
+ * Is this session STILL live and still entitled? Keyed on the token hash, and
+ * deliberately CACHE-BYPASSING: the 8s cache exists to spare the DB on the
+ * connect path, but this runs once a minute per socket and its whole job is to
+ * notice a row that has gone away.
+ *
+ * Added 2026-09-14 with one-device-per-account. The upgrade handler is the only
+ * gate a /ws/gex connection ever passed, so a socket opened before a sign-out,
+ * a device kick or a Stripe cancellation kept streaming live GEX for as long as
+ * it stayed connected — hours, in practice, since the client has no reason to
+ * reconnect.
+ *
+ * Returns true on a transient failure. A DB blip must not disconnect every
+ * paying customer at once; the sweep runs again in a minute.
+ */
+async function sessionStillLive(tokenHash) {
+  if (!tokenHash) return true; // nothing to check against — leave it alone
+  const pool = getAuthPool();
+  if (!pool) return true;
+  try {
+    const r = await pool.query(
+      `SELECT s.user_id, u.is_owner,
+              (COALESCE(sub.status IN ('active','trialing'), FALSE)
+                OR ca.email IS NOT NULL)                     AS is_paid,
+              (ca.email IS NOT NULL)                         AS is_comped
+         FROM sessions s
+         JOIN users u ON u.id = s.user_id
+         LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
+         LEFT JOIN comp_access ca
+                ON ca.email = LOWER(u.email)
+               AND ca.revoked_at IS NULL
+               AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+        WHERE s.token_hash = $1 AND s.expires_at > NOW()
+        LIMIT 1`,
+      [tokenHash]
+    );
+    const row = r.rows?.[0];
+    if (!row) return false; // session row is gone — signed out, or kicked
+    return getAccessFor({
+      userId: row.user_id,
+      isOwner: !!row.is_owner,
+      isPaid: !!row.is_paid,
+      isComped: !!row.is_comped,
+    }).ok;
+  } catch (e) {
+    console.warn('[ws-auth] revalidate failed (keeping socket):', e?.message || e);
+    return true;
+  }
 }
 
 /** Same decision, keyed directly on a userId (no session token) — exported
@@ -286,6 +347,7 @@ const isTransientAuthFailure = (access) =>
 
 module.exports = {
   verifyWsRequest,
+  sessionStillLive,
   getAccessForUser,
   invalidateSessionCache,
   isTransientAuthFailure,

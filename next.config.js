@@ -133,11 +133,51 @@ const nextConfig = {
       // SPA the same way every other dashboard route does.
       'm/gex', 'm/heatmap', 'm/es', 'm/chain', 'm/em', 'm/econ',
     ];
-    return SPA_ROUTES.map((r) => ({
-      source: `/${r}`,
-      destination: `/app/${r}`,
-      permanent: false,
-    }));
+    return [
+      ...SPA_ROUTES.map((r) => ({
+        source: `/${r}`,
+        destination: `/app/${r}`,
+        permanent: false,
+      })),
+      // ── Bare aliases that point at v3, not at the SPA ──────────────────────
+      //
+      // /level-log is the one route that lives in BOTH wings on purpose. v3 has
+      // a page at /v3/level-log, but it is `partial` — the wall-migration chart
+      // and the range switch — while the ticker rail, log card, capture rail,
+      // churn strip and timeline are still only in v2 at /app/level-log, which
+      // is what the Legacy menu links to and must keep rendering v2.
+      //
+      // So it CANNOT go in SPA_ROUTES (that would alias it to /app/level-log,
+      // the v2 page, which is not what a bare bookmark should open) and it
+      // CANNOT go in PORTED (that table catches /app/* and would take the v2
+      // page away with it). A direct redirect is the only spelling that moves
+      // the bare path without touching the /app one.
+      //
+      // Before this, bare /level-log 404'd: it was in LEGACY_NAV but in neither
+      // table, so only the /app/ spelling resolved and every bookmark or pasted
+      // link to it died.
+      { source: '/level-log', destination: '/v3/level-log', permanent: false },
+
+      // ── DEAD v2 PROTOTYPES, CLOSED 2026-09-14 ─────────────────────────────
+      //
+      // Nine Next routes under app/ that still RENDERED to any paid account.
+      // None is in SPA_ROUTES, so none ever became /app/*, so none ever reached
+      // lib/v3Routes.ts — the forwarding table only sees /app/*. That is the
+      // whole mechanism: a page.tsx that is not in SPA_ROUTES renders forever.
+      // /mult-greek was the one with traffic; these had none (zero loads, zero
+      // visitors, 30 days to 2026-09-14) and were found by the same audit.
+      //
+      // Sent to /v3 rather than deleted: a redirect is one line to walk back,
+      // and the page files are untouched on disk. Unpaid users hitting these
+      // now land on /v3, get bounced by the paid gate to /home, and end at
+      // /pricing — the same path as every other gated route, no loop.
+      ...['gex', 'gex2', 'home3', 'market-matrix', 'mobile', 'obook', 'squeeze',
+          'chat', 'toolbar-preview'].map((r) => ({
+        source: `/${r}`,
+        destination: '/v3',
+        permanent: false,
+      })),
+    ];
   },
   async rewrites() {
     const internalProxyBase = process.env.PROXY_URL || `http://127.0.0.1:${process.env.PORT || '3002'}`;

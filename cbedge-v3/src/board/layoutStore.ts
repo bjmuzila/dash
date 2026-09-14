@@ -223,6 +223,34 @@ function catalogOverscale(items: BoardItem[]): number {
   return seen > 0 && Number.isFinite(smallest) ? smallest : 1
 }
 
+// ── AN OVER-SCALED BOARD THAT STILL FITS (2026-09-14) ────────────────────────
+//
+// The `right > BOARD_COLS` trigger below only sees a board that has been pushed
+// off the grid HORIZONTALLY. It cannot see the case customers actually report as
+// "the cards are huge and I can't see anything": a board doubled in BOTH
+// dimensions that still fits across.
+//
+// That is a reachable state, not a hypothesis. repairHalfSizeBoard() doubles w
+// AND h on any board whose right edge lands between BOARD_COLS/4 and
+// BOARD_COLS/2 — a perfectly current board with a few cards on the left half
+// matches that description. After the doubling its right edge is between
+// BOARD_COLS/2 and BOARD_COLS, so it FITS, so the trigger below never fires;
+// and because that repair is behind a one-shot key it never runs again either.
+// Every card is twice as wide and twice as tall, permanently. A 19-row card
+// becomes 38 rows — 304px of chart becomes 608px, and one card fills the screen.
+//
+// The catalog already knows how to prove this: catalogOverscale() returns a
+// clean power-of-two only when EVERY card on the board is that same multiple of
+// its own default size, which is true of a uniformly scaled board and false the
+// moment anyone has resized anything. So the evidence is the same evidence the
+// off-grid repair already trusts — it was simply never consulted unless the
+// board had also fallen off the right edge.
+//
+// Safe on every load for the same reason the off-grid check is: a correct board
+// has cards at (or near) their defaults, the ratio is 1, unanimity fails on the
+// first card, and nothing happens. A user who deliberately set EVERY card to
+// exactly 2x its default and nothing else is the false positive, and they are
+// one drag from undoing it — as against a board that cannot be read at all.
 function repairOverscaledBoard(): void {
   const raw = localStorage.getItem(LAYOUT_KEY)
   if (!raw) return
@@ -233,16 +261,25 @@ function repairOverscaledBoard(): void {
   )
   if (!items.length) return
   const right = items.reduce((m, i) => Math.max(m, i.x + i.w), 0)
-  if (!(right > BOARD_COLS)) return
+  const over = catalogOverscale(items)
+  // Two independent reasons to act. Off the grid is proof on its own; unanimous
+  // catalog evidence is proof even when the board still fits.
+  const offGrid = right > BOARD_COLS
+  if (!offGrid && over < 2) return
 
-  let factor = 1 / catalogOverscale(items)
-  // Whatever the catalog said (including "no idea", which is 1), the board has
-  // to end up on the grid. Keep halving until it does.
-  let fitted = right * factor
-  while (fitted > BOARD_COLS) {
-    factor /= 2
-    fitted /= 2
+  let factor = 1 / over
+  // Whatever the catalog said (including "no idea", which is 1), a board that is
+  // off the grid has to end up back on it. Keep halving until it does. A board
+  // that already fits is corrected by the catalog factor alone — halving it to
+  // "fit" would shrink a board that was never too wide.
+  if (offGrid) {
+    let fitted = right * factor
+    while (fitted > BOARD_COLS) {
+      factor /= 2
+      fitted /= 2
+    }
   }
+  if (factor === 1) return
   rescaleStored(LAYOUT_KEY, factor)
   // Same reasoning as the migration: the account's copy is untouched by this, so
   // the synced marker has to go or the next load adopts it over the repair.

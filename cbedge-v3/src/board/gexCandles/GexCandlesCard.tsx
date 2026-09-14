@@ -1422,7 +1422,16 @@ export function GexCandlesCard({
   ]
   const tapeTitle =
     'Which tape the candles come from. SPX is the cash index (09:30–16:00 ET only). ES is the front-month future — it trades nearly around the clock, so this is the one that has an overnight — with the same SPX gamma drawn over it, every strike shifted by the ES−SPX basis'
-  const onTape = (v: 'spx' | 'es') => patch({ esCandles: v === 'es' })
+  // THE SESSION FOLLOWS THE TAPE. ES trades nearly around the clock, so an ES
+  // tape on RTH throws away the overnight that is the only reason to be on it;
+  // SPX cash does not exist outside 09:30-16:00 ET, so coming back to it on ETH
+  // leaves an empty overnight gap on the left of every column. Switching the
+  // tape therefore switches the session with it - ES -> ETH, SPX -> RTH - which
+  // is what `spxOnly` derives outright (see the prop). Here it is a DEFAULT, not
+  // a lock: the Session picker is still live, so a deliberate ES-on-RTH is one
+  // click away and survives until the tape is switched again.
+  const onTape = (v: 'spx' | 'es') =>
+    patch({ esCandles: v === 'es', session: v === 'es' ? 'eth' : 'rth' })
   const tapePicker = esCapable ? (
     <SegGroup
       size={ctlSize}

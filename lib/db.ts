@@ -4217,6 +4217,44 @@ export async function deleteAllSessionsForUser(userId: string): Promise<void> {
   await pgQuery(`DELETE FROM sessions WHERE user_id = $1`, [userId]);
 }
 
+/**
+ * ONE DEVICE PER ACCOUNT. Drops every session for this user EXCEPT the one just
+ * created, so the newest sign-in wins and whoever was signed in before is
+ * signed out. Added 2026-09-14 (Brandon): a subscription is for a person, and
+ * an account that works on four devices at once is a shared account.
+ *
+ * THE OWNER IS EXEMPT, and the exemption is a join in this statement rather
+ * than an `if (isOwner)` at the call site. Owner work runs the dashboard,
+ * owner.cbedge.net and a phone at the same time, and an exemption that lives in
+ * a caller is one refactor away from being dropped — here it cannot be called
+ * wrong.
+ *
+ * Returns the hashes it deleted so the caller can evict them from the
+ * in-process validation cache (lib/auth/session.ts holds a resolved session for
+ * CACHE_TTL_MS keyed by exactly this hash). Without that, the device being
+ * kicked keeps working until the cache entry ages out.
+ *
+ * Newest-wins, not oldest-holds: the person at the keyboard asking to sign in
+ * is the one who gets in. The alternative refuses a login to somebody whose
+ * other session is a browser they closed three weeks ago.
+ */
+export async function enforceSingleSession(
+  userId: string,
+  keepTokenHash: string
+): Promise<string[]> {
+  const res = await pgQuery(
+    `DELETE FROM sessions s
+       USING users u
+      WHERE u.id = s.user_id
+        AND s.user_id = $1
+        AND s.token_hash <> $2
+        AND u.is_owner = FALSE
+      RETURNING s.token_hash`,
+    [userId, keepTokenHash]
+  );
+  return (res.rows ?? []).map((r: { token_hash: string }) => r.token_hash);
+}
+
 /** Housekeeping: drop expired rows. Cheap and idempotent -- fine to call on a
  *  timer or opportunistically (e.g. a fraction of login attempts). */
 export async function deleteExpiredSessions(): Promise<number> {

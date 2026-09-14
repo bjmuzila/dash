@@ -1,5 +1,202 @@
 # Changelog
 
+## 2026-09-14 (s) - The board comes back huge, and it stays huge
+
+Reported by a customer: "the cards on the home page are huge and I can't see
+anything." Not a stale bundle this time - prod is serving index-DFE-FiBD.js built
+today, and /v3's index.html is `no-store`, so nobody is holding an old one. It is
+a local board in the wrong units, and it is a hole in our own repair.
+
+`repairHalfSizeBoard()` doubles w AND h on any board whose right edge lands
+between BOARD_COLS/4 and BOARD_COLS/2. A perfectly current board with a few cards
+on the left half matches that description. After doubling, its right edge lands
+between BOARD_COLS/2 and BOARD_COLS - so it FITS, so `repairOverscaledBoard()`'s
+`right > BOARD_COLS` trigger never fires - and the half-size repair is behind a
+one-shot key, so it never runs again either. Every card twice as wide and twice
+as tall, permanently. A 19-row card becomes 38 rows: 304px of chart becomes
+608px and one card fills the viewport.
+
+The fix consults evidence that was already there. `catalogOverscale()` returns a
+clean power of two only when EVERY card is that same multiple of its own catalog
+default - true of a uniformly scaled board, false the moment anyone resizes
+anything. It was simply never asked unless the board had ALSO fallen off the
+right edge. `repairOverscaledBoard()` now acts on either proof: off the grid, or
+unanimous catalog evidence while still fitting. The halving fallback stays tied
+to the off-grid case only - halving a board that already fits would shrink one
+that was never too wide.
+
+Safe on every load for the same reason the off-grid check is: a correct board has
+cards at their defaults, the ratio is 1, unanimity fails on the first card,
+nothing happens. And because this runs BEFORE the one-shot half-size repair in
+module order, a board that repair wrongly doubles is corrected on the next reload
+rather than never - the hole is now self-healing, not just closed.
+
+`repairHalfSizeBoard()` is deliberately NOT tightened. Its mistakes are now
+caught, and a new heuristic in that function is how this file got here.
+
+For a customer stuck right now: one reload on the shipped build fixes it.
+
+`cbedge-v3/src/board/layoutStore.ts`
+
+## 2026-09-14 (r) - The WebSocket outlived the session
+
+The upgrade handler was the ONLY gate a /ws/gex connection ever passed. A socket
+opened before a sign-out, a device kick or a Stripe cancellation kept streaming
+live GEX for as long as it stayed connected - hours, since a working client has
+no reason to reconnect. The paywall was enforced on every HTTP request and on
+exactly one moment of the socket's life.
+
+`sessionStillLive(tokenHash)` in `ws-auth.js` - the same session/paid query,
+deliberately cache-bypassing, because the 8s cache exists to spare the DB on the
+connect path and this runs once a minute per socket with the specific job of
+noticing a row that has gone away. `verifyWsRequest` now returns the token HASH
+on success and the upgrade handler pins it to the socket, so nothing holds a raw
+cookie value for the life of a connection.
+
+The sweep runs at 60s, not on the 30s pinger: one indexed query per authenticated
+socket, and a minute of over-run on a kicked device is not worth doubling that.
+It FAILS OPEN - a DB blip must not disconnect every paying customer at once.
+Close code 1008; the client's reconnect loop re-runs the upgrade gate and gets
+its 401 there, which is where the explanation belongs.
+
+No-op when WS_AUTH_REQUIRED is off: there is no session to revalidate.
+
+`server-v2/ws-auth.js`, `server-v2/websocket-server.js`
+
+## 2026-09-14 (q) - Nine dead prototypes and /options closed
+
+The rest of the audit that found /mult-greek. A `page.tsx` under `app/` that is
+not in `SPA_ROUTES` never becomes `/app/*`, and `lib/v3Routes.ts` only ever sees
+`/app/*` - so it renders forever. That is the whole mechanism, and these are the
+rest of the routes it left standing.
+
+Nine Next prototypes now redirect to `/v3` from `next.config.js`: `/gex`,
+`/gex2`, `/home3`, `/market-matrix`, `/mobile`, `/obook`, `/squeeze`, `/chat`,
+`/toolbar-preview`. Zero loads from zero visitors in the preceding 30 days, but
+reachable by any paid account. Redirected rather than deleted - one line to walk
+back, page files untouched.
+
+`/options` is different: a real route in `SPA_ROUTES` and in app-vite's App.tsx,
+but in neither `PORTED` nor `LEGACY_NAV` - so nothing in v3 linked to it and
+nothing sent it back, and `/app/options` sat there rendering. Retired through
+`PORTED` as `"/options": "/"` so both spellings move. v3 answers the question
+twice over at `/options-chain` and `/chain`, but they are different pages and
+picking one for somebody following an old link is a guess.
+
+`next.config.js`, `lib/v3Routes.ts`
+
+## 2026-09-14 (p) - One device per account
+
+RE-ADDED: first written as (n) and lost when a concurrent writer rewrote the top
+of this file from a stale copy.
+
+A subscription is for a person; an account that works on four devices at once is
+a shared account. Signing in now drops every other session for that user, so the
+newest sign-in wins and whoever was signed in before is signed out.
+
+`enforceSingleSession(userId, keepTokenHash)` in `lib/db.ts`, called from
+`createSession()` - the ONLY place sessions are minted (password login, signup
+and the Google callback all come through it), which is why the rule lives there
+rather than in three route handlers that would drift apart.
+
+THE OWNER IS EXEMPT, and the exemption is a join inside the DELETE rather than an
+`if (isOwner)` at the call site: owner work runs the dashboard, owner.cbedge.net
+and a phone at once, and an exemption living in a caller is one refactor away
+from being dropped. `/api/auth/internal-session` mints against OWNER_USER_ID and
+is covered by the same join.
+
+The DELETE returns the hashes it dropped and `createSession` evicts them from the
+in-process validation cache in `lib/auth/session.ts` - that cache is what
+middleware actually reads, so without the eviction the kicked device keeps
+working for up to CACHE_TTL_MS (8s) more.
+
+Best-effort on purpose: if the cleanup query throws, the person still gets the
+session they just asked for. Refusing a paid customer their login because a
+cleanup failed is worse than a second device surviving to the next sign-in.
+
+Newest-wins, not oldest-holds - the alternative refuses a login to somebody whose
+other session is a browser they closed three weeks ago. Tabs are free (one cookie
+jar, one session); a second BROWSER, profile, incognito window or device is a
+second session and is a kick.
+
+`lib/db.ts`, `lib/auth/session.ts`
+
+## 2026-09-14 (o) - Level Log's bare path, and Premarket Prep (phone) retired
+
+RE-ADDED: first written as (m) and lost to the same concurrent write as (p).
+
+Bare `/level-log` 404'd. It is in `LEGACY_NAV` but was in neither `SPA_ROUTES`
+nor `PORTED`, so only the `/app/` spelling resolved and every bookmark or pasted
+link to it died.
+
+It is the one route that lives in both wings on purpose: v3 has `/v3/level-log`,
+but that page is `partial` (the wall-migration chart and the range switch) while
+the ticker rail, log card, capture rail, churn strip and timeline are still only
+in v2. So it cannot go in `SPA_ROUTES` - that aliases to the v2 page, not what a
+bare bookmark should open - and it cannot go in `PORTED`, which catches `/app/*`
+and would take the v2 page away with it. A direct redirect in `next.config.js` is
+the only spelling that moves the bare path and leaves `/app/level-log` alone.
+
+Premarket Prep on the phone is retired. Out of `LEGACY_NAV`, into `PORTED` as
+`"/m/prep": "/m/gex"` - pointed at the phone build's default tab rather than v3's
+desktop root, because whoever follows an old `/m/*` link is holding a phone. Page
+files stay on disk and unreachable, the same way `/ict` and `/trading` were left.
+18 loads from 8 visitors in the preceding 30 days.
+
+Nothing else in `LEGACY_NAV` auto-redirects to v3 - verified against prod, both
+spellings, all seven entries. Six left.
+
+`next.config.js`, `lib/v3Routes.ts`
+
+## 2026-09-14 (n) - + Add card removes as well as adds
+
+Each row of the catalog menu now carries a ✕ beside its count, in
+`cbedge-v3/src/board/BoardPage.tsx`. It removes the LAST instance of that type,
+so `+` and `✕` are symmetric in the same row and the ordinals of the copies that
+stay (`#2`, `#3`) do not shuffle. Unlike add, the ✕ leaves the menu OPEN —
+pruning is usually several clicks, and reopening the menu between each one is
+the annoyance.
+
+Why: taking a card off meant finding it on the board and using its own header ✕.
+That is fine for the card you are looking at and wrong for "added that by
+mistake" or for a card three screens down. The menu already lists what exists
+and how many of each, so it is where one gets given back.
+
+The row is a `<div>` now, not a `<button>`: a button inside a button is invalid
+HTML and the inner one stops firing. The hover tint moved to the row, so the
+strip still highlights as one target. With a count of 0 the ✕ is `invisible`
+rather than dropped, so labels don't jog sideways as cards come and go.
+
+## 2026-09-14 (m) - GEX bubbles are bubbles again, not tick marks
+
+At 1m the marks were drawing ~6px wide and ~15px tall: a column of vertical
+ovals rather than bubbles. Three numbers in `BUBBLES`
+(`cbedge-v3/src/board/gexCandles/settings.ts`):
+
+- `profiles[1].aspect` 2.4 -> 1.15
+- `capOfSpacing` 0.28 -> 0.46 (peers)
+- `topOfSpacing` 0.44 -> 0.56 (the boosted leader)
+
+Why: `aspect: 2.4` was answering a ~3.4px horizontal spacing that the STRIDE no
+longer allows — drawn dots are thinned to `bucketPxPerDot` (11px), so the
+horizontal budget is now the same order as the vertical one and the 2.4x stretch
+was buying height into a gutter that was already 44% empty. The size moves off
+`aspect` and onto the two spacing shares, which spend the axis that was sitting
+idle.
+
+Measured on a 2.5h 1m window (~11px per drawn dot): peers go from 6.2 x 14.8px
+to 10.1 x 11.6px, the leader from 9.7 x 14.8 to 12.3 x 14.2. Peers still keep a
+hairline (0.92 of the spacing). `topOfSpacing` is deliberately past the 0.5
+geometric limit — consecutive LEADERS now overlap by about a tenth of their
+width, which was the explicit ask. The leader-to-4th spread is preserved: the
+ratio to `capOfSpacing` stays 1.22, so the profiles' `topBoost` still lands
+instead of being clipped. Glow at 1m falls to 0 by its own bound
+(`pxPerDot / 2 - topCapPx`) — the marks get the room, not the halo.
+
+Not the old sausage: that was the leader at `capPx * topBoost`, ~1.9x the
+spacing, with a 7px halo over the gap. Coarser rungs keep `aspect: 1` and are
+round as before, just larger by the same two shares.
+
 ## 2026-09-14 (k) - /mult-greek is closed
 
 The last v2 PAGE still rendering its own client to customers. Bare `/mult-greek`

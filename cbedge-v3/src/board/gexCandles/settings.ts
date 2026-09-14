@@ -293,7 +293,7 @@ export const BUBBLES = {
    * apart from its neighbour AND `capOfSpacing` leaves it a real radius to vary
    * within — which is the whole point, because size is the signal.
    *
-   * WHY IT IS NOT SMALLER. `capOfSpacing` (0.28) sizes every mark off the
+   * WHY IT IS NOT SMALLER. `capOfSpacing` (0.46) sizes every mark off the
    * EFFECTIVE spacing, and `minPx` (1.2) is the hard floor underneath. Below
    * ~4.3px per drawn dot the cap has fallen to the floor and every row of the
    * bucket draws at 1.2px: four levels, one size, no ranking. Measured across a
@@ -375,10 +375,21 @@ export const BUBBLES = {
   //            by a circle, it put all four rows on `minPx` — the size channel
   //            dead. Sideways there is genuinely no room; vertically there is a
   //            whole pane, and placeBucket's fit pass already keeps two strikes
-  //            clear of each other. 2.4 is a firm oval and still obviously a
-  //            mark; past ~3 the trail reads as a set of vertical BARS, which
-  //            is the "this level was one thing for the whole stretch" claim
-  //            the layer exists not to make.
+  //            clear of each other.
+  //
+  //            1.15 (2026-09-14). It was 2.4, and 2.4 was answering a spacing
+  //            of ~3.4px that the STRIDE no longer lets happen: drawn dots are
+  //            thinned to `bucketPxPerDot` (11px), so the horizontal budget at
+  //            1m is now the same order as the vertical one and stretching it
+  //            2.4x bought height nobody asked for. What it drew was a column
+  //            of tall tick marks — 6px wide and 15px high on a 2.5h window —
+  //            which is the vertical-BARS failure the paragraph above warns
+  //            about, reached from the other side. At 1.15 a mark is a bubble
+  //            with a hint of height: round enough to read as one sample, still
+  //            taller than wide so a crowded bucket has somewhere to give. The
+  //            size that was coming out of `aspect` instead comes out of the
+  //            widened `capOfSpacing` / `topOfSpacing` below, which spends it on
+  //            the axis that was sitting empty.
   //
   //   rankMix  the share of the size budget given to a row's PLACE in its
   //            bucket (1st..4th -> 1, .75, .5, .25) rather than to its gamma.
@@ -391,7 +402,7 @@ export const BUBBLES = {
   //            sorted by |netGex| first and the blend is monotone in the rank,
   //            so the ORDER never changes.
   profiles: {
-    1: { capPx: 9, floorPx: 1.6, topBoost: 1.6, ringPx: 1.1, aspect: 2.4, rankMix: 0.4 },
+    1: { capPx: 9, floorPx: 1.6, topBoost: 1.6, ringPx: 1.1, aspect: 1.15, rankMix: 0.4 },
     5: { capPx: 13, floorPx: 2.5, topBoost: 1.55, ringPx: 1.4, aspect: 1, rankMix: 0 },
     15: { capPx: 16, floorPx: 3, topBoost: 1.5, ringPx: 1.6, aspect: 1, rankMix: 0 },
     30: { capPx: 18, floorPx: 3.5, topBoost: 1.46, ringPx: 1.8, aspect: 1, rankMix: 0 },
@@ -452,8 +463,16 @@ export const BUBBLES = {
    * boosted leader fit inside it too — which meant one dot per bucket dictated
    * the size of all the others, and the whole ladder paid a 30-40% tax for a
    * mark that already has a ring and a glow to set it apart.
+   *
+   * 0.46 (2026-09-14), from 0.28. 0.28 left 44% of the spacing as empty gutter
+   * — a peer drew 0.56 of the gap to its neighbour — and at 1m that gutter was
+   * the whole reason the marks had to be stretched vertically to be visible at
+   * all. Spending it is the trade asked for: at 0.46 a peer's diameter is 0.92
+   * of the spacing, so peers still keep a hairline and only the BOOSTED leader
+   * crosses into its neighbour (see `topOfSpacing`). The geometric limit is
+   * still 0.5, and this is deliberately under it.
    */
-  capOfSpacing: 0.28,
+  capOfSpacing: 0.46,
   /**
    * The leader's own share of the spacing — larger than the peers', so it stands
    * apart, and still a bound, so it cannot fuse.
@@ -474,13 +493,23 @@ export const BUBBLES = {
    * clipped, and the leader draws at 3.0-4.5x the 4th row across every zoom
    * instead of 2.5-4.0.
    *
-   * 0.44 and not higher, because 0.5 is where consecutive leaders TOUCH. At 0.44
-   * a leader's diameter is ~0.88 of the spacing: a visible hairline between one
-   * bucket and the next, and no hairline is the sausage. If this needs to go
-   * further the honest lever is the STRIDE (`bucketPxPerDot`), which buys room
-   * rather than spending room that is not there.
+   * 0.56 (2026-09-14), from 0.44, and this one is PAST the geometric limit on
+   * purpose: at 0.56 a leader's diameter is ~1.12 of the spacing, so consecutive
+   * leaders overlap by about a tenth of their width. That was the ask — bubbles
+   * rather than ovals, and a little overlap is acceptable — and it is the leader
+   * ROW only, which is four marks' worth of gold on the chart and the row whose
+   * size is the signal. It is not the old sausage: that was the leader drawing
+   * at `capPx * topBoost` (14px of radius into 15px of room, 1.9x the spacing)
+   * with a 7px glow painted across what was left. The ratio to `capOfSpacing`
+   * stays 1.22 so the profiles' own `topBoost` still lands rather than being
+   * clipped, and the glow is bounded by `pxPerDot / 2 - topCapPx`, which at this
+   * share is zero — the marks get the room, not the halo.
+   *
+   * If the overlap ever needs to go further the honest lever is still the STRIDE
+   * (`bucketPxPerDot`), which buys room rather than spending room that is not
+   * there.
    */
-  topOfSpacing: 0.44,
+  topOfSpacing: 0.56,
   /** Absolute floor. Old dots never shrink past this, whatever the fit does. */
   minPx: 1.2,
 
