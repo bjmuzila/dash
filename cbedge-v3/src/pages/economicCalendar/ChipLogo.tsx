@@ -20,6 +20,10 @@
 //      so a B share misses stages 1 and 2 every time. See classParent.
 //   4. A ticker-text chip. Nothing resolved.
 //
+// 1–3 are `tickerLogoUrls`, which snapshot.ts also walks for a shot's caption
+// badge. The chip renders by stepping through that array, so the two cannot
+// disagree about what a company's mark is.
+//
 // The ?v query is not decoration. v2's next.config.js serves /logos/:path* with
 // `Cache-Control: immutable, max-age=1y` and applies it to the PATH, with no
 // idea whether the file exists — so a 404 for an unmirrored ticker was cached
@@ -72,6 +76,30 @@ function classParent(sym: string): string | null {
   return root && root !== up ? root : null
 }
 
+/**
+ * THE LADDER, as data — every same-origin URL worth trying for this ticker, best
+ * first. Exported because the chip is not the only thing that draws a company
+ * mark: shell/snapshot.ts takes a `badge` list for the head of a shot's caption
+ * and walks it with exactly this "first one that loads wins" rule (see
+ * ShotOptions.badge, and LevelLog.tsx which passes it).
+ *
+ * ONE list, one order, one place to change it. The component below renders by
+ * walking this array rather than keeping a parallel set of named stages — when
+ * those were written out twice, a stage added here did not reach the caption
+ * badge, and a shot of a card quietly carried a worse mark than the card did.
+ *
+ * EVERY ENTRY MUST BE SAME-ORIGIN. `raw=1` on the resolver is what keeps it so:
+ * it streams the bytes instead of redirecting to a third-party host. A
+ * cross-origin image taints the capture canvas and `toBlob` throws, which loses
+ * the whole shot rather than one 22px badge.
+ */
+export function tickerLogoUrls(sym: string, company?: string): string[] {
+  const parent = classParent(sym)
+  const urls = [localLogoUrl(sym), proxyLogoUrl(sym, company)]
+  if (parent) urls.push(localLogoUrl(parent))
+  return urls
+}
+
 export function ChipLogo({
   sym,
   company,
@@ -90,19 +118,19 @@ export function ChipLogo({
    */
   lazy?: boolean
 }) {
-  const [stage, setStage] = useState<'local' | 'proxy' | 'parent' | 'text'>('local')
+  // HOW FAR DOWN tickerLogoUrls WE HAVE FALLEN, and for WHICH ticker.
+  //
+  // The symbol is carried in state beside the index because these chips are
+  // rendered from a list and React reuses the instance: a row that scrolls from
+  // a dead ticker to a live one would otherwise inherit an exhausted index and
+  // print as text forever, having never asked for its own logo at all.
+  const [tried, setTried] = useState<{ sym: string; i: number }>({ sym, i: 0 })
+  const i = tried.sym === sym ? tried.i : 0
 
-  // Computed once per render rather than inside the error handler: whether a
-  // fourth stage exists at all decides where stage 2 hands off to.
-  const parent = classParent(sym)
+  const urls = tickerLogoUrls(sym, company)
+  const src = urls[i]
 
-  function nextStage(s: typeof stage): typeof stage {
-    if (s === 'local') return 'proxy'
-    if (s === 'proxy') return parent ? 'parent' : 'text'
-    return 'text'
-  }
-
-  if (stage === 'text') {
+  if (!src) {
     return (
       <span
         className="flex shrink-0 items-center justify-center text-center font-extrabold leading-none"
@@ -130,22 +158,16 @@ export function ChipLogo({
       style={{ width: size, height: size, borderRadius: radius }}
     >
       <img
-        // Remount on stage change so the browser actually re-requests.
-        key={stage}
-        src={
-          stage === 'local'
-            ? localLogoUrl(sym)
-            : stage === 'parent'
-              ? localLogoUrl(parent as string)
-              : proxyLogoUrl(sym, company)
-        }
+        // Remount on every rung so the browser actually re-requests.
+        key={src}
+        src={src}
         alt={sym}
         width={size}
         height={size}
         loading={lazy ? 'lazy' : 'eager'}
         decoding="async"
         style={{ width: size, height: size, objectFit: 'contain' }}
-        onError={() => setStage(nextStage)}
+        onError={() => setTried({ sym, i: i + 1 })}
       />
     </span>
   )
