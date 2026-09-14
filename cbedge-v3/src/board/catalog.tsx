@@ -78,7 +78,10 @@ export interface CardDef {
   Title?: ComponentType
   /**
    * Default footprint in grid units when first added to a board.
-   * The grid is BOARD_COLS (48) wide with BOARD_ROW_H (8px) rows. These have been
+   * The grid is BOARD_COLS (48) wide with BOARD_ROW_H (8px) rows, and a width
+   * is only ever a third (16), a half (24) or the whole board (48) — see the
+   * lane rule in design/primitives/Board.tsx. Anything else is snapped to the
+   * nearest of those on the way in, so write one of the three. These have been
    * doubled twice (12/32 -> 24/16 -> 48/8), so a card is the size it always was.
    */
   defaultSize: { w: number; h: number }
@@ -185,7 +188,7 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'gex-candles',
     icon: '🕯️',
     label: 'GEX Candles',
-    defaultSize: { w: 32, h: 48 },
+    defaultSize: { w: 24, h: 48 },
     // The instance id is threaded in so the SECOND and later copies can hold
     // their own ticker (and their own settings) instead of all following the
     // board symbol — two copies of one chart is not why anyone adds a second.
@@ -282,7 +285,7 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'net-premium',
     icon: '💵',
     label: 'Net Premium',
-    defaultSize: { w: 32, h: 48 },
+    defaultSize: { w: 24, h: 48 },
     render: () => (
       <Deferred>
         <NetPremiumCard />
@@ -320,7 +323,7 @@ export const CARD_CATALOG: CardDef[] = [
       </Deferred>
     ),
   },
-  { id: 'quick-links', icon: '🔗', label: 'Quick Links', defaultSize: { w: 12, h: 24 }, render: () => <QuickLinksCard /> },
+  { id: 'quick-links', icon: '🔗', label: 'Quick Links', defaultSize: { w: 16, h: 24 }, render: () => <QuickLinksCard /> },
   {
     id: 'key-levels',
     icon: '📏',

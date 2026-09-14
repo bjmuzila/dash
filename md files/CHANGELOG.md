@@ -23369,3 +23369,33 @@ this system says "separate object, finished". Nothing inside is styled as
 content, so a placeholder cannot be mistaken for a live section in a screenshot.
 
 Mockup updated: `generated/2026-09-13-voltick-newsletter.html`.
+
+## 2026-09-13 · v3 board: a row holds one, two or three cards and nothing else
+
+`cbedge-v3/src/design/primitives/Board.tsx`, `cbedge-v3/src/board/catalog.tsx`.
+
+The 48-column grid let a card be any width, so a row could end up with four
+cards, or with two that were 26 and 22 wide and looked wrong for a reason you
+could not see. A card's width is now the whole board (48), a half (24) or a
+third (16), and its left edge sits on a boundary of its own width: halves at 0
+and 24, thirds at 0, 16 and 32.
+
+- `laneWidths` / `snapLaneW` / `snapLaneX` / `snapBoard` are the rule, new in
+  Board.tsx. `snapBoard` puts every card on a lane and settles any overlap that
+  reopens by dropping it DOWN only, so a card never changes lane to get out of
+  the way.
+- `compactBoard` and `resolveBoard` lane-snap their input; `resolveBoard` and
+  `settleBoard` lane-snap their output too, because `squeezeAside`, `stepAside`
+  and `fillGaps` all reach widths by arithmetic and would otherwise invent an
+  illegal one. Every read path (`sanitizeLayout`) and every write path (add,
+  remove, drag, resize, load) goes through one of these, so an old saved board
+  is corrected on open.
+- Resize now picks the nearest lane rather than the nearest column. The
+  neighbour-size match still runs on HEIGHT; width no longer needs it, since two
+  cards in a row are the same width by construction.
+- Drag guides are drawn at the thirds and halves instead of all 48 columns.
+- Catalog defaults moved onto legal widths: GEX Candles and Net Premium 32 -> 24,
+  Quick Links 12 -> 16.
+
+Verified against the engine offline: lane snap is idempotent, leaves no overlap,
+and produces only 16/24/48 widths on lane-aligned x.

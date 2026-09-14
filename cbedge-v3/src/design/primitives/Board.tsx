@@ -71,6 +71,71 @@ export const BOARD_ROW_H = 8
 export const BOARD_MIN_W = 4
 export const BOARD_MIN_H = 6
 
+// ── ONE, TWO OR THREE ACROSS ─────────────────────────────────────────────────
+//
+// A row holds one card, two, or three. Nothing else. So a card's width is the
+// whole board, a half of it or a third of it, and its left edge sits on a
+// boundary of its OWN width: halves at 0 and 24, thirds at 0, 16 and 32.
+//
+// That is a stronger rule than "whatever width you drag to", and it is the
+// point. Two cards sharing a row come out the same size without anyone aiming
+// for it, three come out exact thirds, and a fourth cannot wedge itself into a
+// sliver at the end of a row. Everything below still runs — the drag, the
+// squeeze, the gap-closing — but its result is put back on a lane before it is
+// committed, so none of them can invent a width the rule does not allow.
+//
+// 48 divides by both 2 and 3, which is why the lane sizes are whole units and
+// three thirds add up to the board exactly rather than leaving a column over.
+
+/** The only widths a card may have, narrowest first: a third, a half, all of it. */
+export function laneWidths(cols = BOARD_COLS): number[] {
+  return [Math.round(cols / 3), Math.round(cols / 2), cols]
+}
+
+/** Nearest legal width. A tie goes to the wider one. */
+export function snapLaneW(w: number, cols = BOARD_COLS): number {
+  return laneWidths(cols).reduce((best, o) => (Math.abs(o - w) <= Math.abs(best - w) ? o : best))
+}
+
+/** Nearest legal left edge for a card that is `w` wide. */
+export function snapLaneX(x: number, w: number, cols = BOARD_COLS): number {
+  const lanes = Math.max(1, Math.round(cols / w))
+  return clamp(Math.round(x / w), 0, lanes - 1) * w
+}
+
+/** Every card onto a legal width and lane. Only x, w and the floors change. */
+function laneSnap(items: BoardItem[], cols = BOARD_COLS): BoardItem[] {
+  return items.map((i) => {
+    const w = snapLaneW(i.w, cols)
+    return { ...i, w, x: snapLaneX(i.x, w, cols), y: Math.max(0, i.y), h: Math.max(BOARD_MIN_H, i.h) }
+  })
+}
+
+/**
+ * Lane-snap, then settle whatever now overlaps by dropping it DOWN. Vertical
+ * only: a card never changes lane to get out of the way, because changing lane
+ * is the one thing that would break the rule it was just snapped into. The
+ * pinned card is placed first, so it keeps the lane the pointer chose and the
+ * others move around it.
+ */
+export function snapBoard(items: BoardItem[], pinnedId?: string | null, cols = BOARD_COLS): BoardItem[] {
+  const snapped = laneSnap(items, cols).sort((a, b) => a.y - b.y || a.x - b.x)
+  const ordered = pinnedId
+    ? [...snapped.filter((i) => i.id === pinnedId), ...snapped.filter((i) => i.id !== pinnedId)]
+    : snapped
+  const placed: BoardItem[] = []
+  for (const it of ordered) {
+    for (let guard = 0; guard <= placed.length; guard++) {
+      const hit = placed.find((p) => boardCollides(it, p))
+      if (!hit) break
+      it.y = hit.y + hit.h
+    }
+    placed.push(it)
+  }
+  const byId = new Map(placed.map((p) => [p.id, p]))
+  return items.map((orig) => byId.get(orig.id) ?? orig)
+}
+
 /** Do two items share any cell? Touching edges don't count. */
 export function boardCollides(a: BoardItem, b: BoardItem): boolean {
   if (a.id === b.id) return false
@@ -87,7 +152,10 @@ export function boardCollides(a: BoardItem, b: BoardItem): boolean {
  * instead of the dragged card jumping around.
  */
 export function compactBoard(items: BoardItem[], pinnedId?: string | null): BoardItem[] {
-  const order = [...items].sort((a, b) => a.y - b.y || a.x - b.x)
+  // Lanes first: gravity only ever changes y, so a card that arrives off-lane
+  // (an older saved board, a card added at a catalog size) would stay off-lane
+  // forever otherwise.
+  const order = laneSnap(items).sort((a, b) => a.y - b.y || a.x - b.x)
   const ordered = pinnedId
     ? [...order.filter((i) => i.id === pinnedId), ...order.filter((i) => i.id !== pinnedId)]
     : order
@@ -252,7 +320,7 @@ function stepAside(it: BoardItem, placed: BoardItem[], cols: number): BoardItem 
 }
 
 export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols = BOARD_COLS): BoardItem[] {
-  const order = [...items].sort((a, b) => a.y - b.y || a.x - b.x)
+  const order = laneSnap(items, cols).sort((a, b) => a.y - b.y || a.x - b.x)
   const ordered = pinnedId
     ? [...order.filter((i) => i.id === pinnedId), ...order.filter((i) => i.id !== pinnedId)]
     : order
@@ -271,7 +339,15 @@ export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols 
   }
 
   const byId = new Map(placed.map((p) => [p.id, p]))
-  return items.map((orig) => byId.get(orig.id) ?? orig)
+  // squeezeAside trims a card to whatever width clears the collision and
+  // stepAside slides it sideways to whatever column is free. Both are useful
+  // and neither respects the one/two/three rule, so the result goes back onto
+  // its lanes and anything that overlaps again is settled downward.
+  return snapBoard(
+    items.map((orig) => byId.get(orig.id) ?? orig),
+    pinnedId,
+    cols,
+  )
 }
 
 // ── CLOSING THE LEFTOVER SPACE ───────────────────────────────────────────────
@@ -421,7 +497,15 @@ function fillGapsOnce(items: BoardItem[], cols: number, maxGap: number, pinnedId
  * the middle of a board should leave its neighbours a little wider, not a hole.
  */
 export function settleBoard(items: BoardItem[], pinnedId?: string | null, cols = BOARD_COLS): BoardItem[] {
-  return fillGaps(resolveBoard(items, pinnedId, cols), cols, Math.max(2, Math.round(cols / 4)), pinnedId)
+  // fillGaps hands a card whatever slack sits beside it, which is how a pair of
+  // thirds with a hole between them becomes a pair of halves. It reaches those
+  // widths by arithmetic rather than by rule, so the lane snap has the last word
+  // here too.
+  return snapBoard(
+    fillGaps(resolveBoard(items, pinnedId, cols), cols, Math.max(2, Math.round(cols / 4)), pinnedId),
+    pinnedId,
+    cols,
+  )
 }
 
 type Gesture =
@@ -694,30 +778,30 @@ export function Board({
           // yourself — it was overriding a placement you had just made. Closing
           // the leftover happens on RELEASE, where it cannot fight the hand
           // (see fillGaps).
-          return { ...it, x: clamp(g.origX + dxCols, 0, cols - it.w), y: Math.max(0, g.origY + dyRows) }
+          return {
+            ...it,
+            x: snapLaneX(clamp(g.origX + dxCols, 0, cols - it.w), it.w, cols),
+            y: Math.max(0, g.origY + dyRows),
+          }
         }
         // Snap onto a neighbour's exact size in the last grid unit of travel —
         // see MATCH_SNAP. The raw drag value is computed first and clamped
         // first, so a snap can never carry the card past a bound.
         const peers = rowNeighbours(base, it)
-        let w = snapToMatch(
-          clamp(g.origW + dxCols, minW, cols - it.x),
-          peers.map((p) => p.w),
-          minW,
-          cols - it.x,
-        )
+        // Width is a lane, so the drag picks the nearest lane rather than a
+        // column. The neighbour-size match below is then a no-op on width (the
+        // peers are on lanes too) and still does its work on height.
+        let w = snapLaneW(clamp(g.origW + dxCols, minW, cols), cols)
         let h = snapToMatch(
           Math.max(minH, g.origH + dyRows),
           peers.map((p) => p.h),
           minH,
           Number.POSITIVE_INFINITY,
         )
-        // The neighbour-SIZE match above is kept — it is what makes two cards
-        // the same size on purpose, and it is a snap onto a value you are
-        // aiming at rather than one the board picked for you. There is no
-        // edge magnet: a resize lands where you drag it, and any sliver left
-        // over is closed on release.
-        return { ...it, w, h }
+        // The neighbour-SIZE match on HEIGHT is kept — it is what makes two
+        // cards the same size on purpose. Width no longer needs it: two cards
+        // in a row are the same width by construction now.
+        return { ...it, w, x: snapLaneX(it.x, w, cols), h }
       })
       setDraft(free ? resolveBoard(next, g.id, cols) : compactBoard(next, g.id))
     }
@@ -811,7 +895,12 @@ export function Board({
           style={{
             zIndex: 0,
             backgroundImage: [
-              `repeating-linear-gradient(to right, color-mix(in srgb, var(--color-accent) 14%, transparent) 0 1px, transparent 1px ${colW}px)`,
+              // The lanes, not the 48 raw columns: a hairline every column was a
+              // ruler for a grid you could land anywhere on. What a card can
+              // actually land on now is a third or a half, so that is what the
+              // guides say.
+              `repeating-linear-gradient(to right, color-mix(in srgb, var(--color-accent) 14%, transparent) 0 1px, transparent 1px ${colW * (cols / 3)}px)`,
+              `repeating-linear-gradient(to right, color-mix(in srgb, var(--color-accent) 10%, transparent) 0 1px, transparent 1px ${colW * (cols / 2)}px)`,
               ...(free
                 ? [
                     `repeating-linear-gradient(to bottom, color-mix(in srgb, var(--color-accent) 9%, transparent) 0 1px, transparent 1px ${rowH + gutter}px)`,
