@@ -11,7 +11,7 @@ import { chainGexUrl, chainToGex } from '../chainGex'
 import { parseChain } from '../multiGreek/mgMath'
 import { CardHeading } from '../cardTitle'
 import { computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from './levelsMath'
-import { dexOf, netGexOf } from '../gexChart/values'
+import { dexOf, levelsOf, netGexOf } from '../gexChart/values'
 import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -336,8 +336,8 @@ function LevelsBody({
   // ── 📋 Stats, as TEXT ──────────────────────────────────────────────────────
   //
   // The one row in the camera's menu that is not a picture. Six lines — the
-  // ticker, the CORE, both walls, and the two whole-board totals — straight onto
-  // the clipboard as characters.
+  // ticker, the CORE, both walls, and the two whole-board totals, all on the
+  // VOLUME-ONLY basis — straight onto the clipboard as characters.
   //
   // Text rather than a PNG because of what happens next: this gets pasted into a
   // Discord message and typed around. It can be quoted, searched, corrected and
@@ -345,18 +345,31 @@ function LevelsBody({
   // do none of that, and it is the one thing on this board where the numbers
   // ARE the content — there is no chart to look at.
   //
-  // Both totals are the WHOLE ladder on the OI+VOL basis, which is what the rest
-  // of the board means by "net" (see gexChart/values.ts). ASCII signs, not the
+  // ── VOL-ONLY, and deliberately not what the axis above it draws ───────────
+  // Every one of the six lines is read on the VOLUME basis — today's traded
+  // book — where the axis draws OI+VOL, the standing one. That is a real
+  // disagreement between the card and its own clipboard row, and it is the
+  // point: the line gets pasted into a message about what is happening TODAY,
+  // and open interest is yesterday's positioning carried forward.
+  //
+  // So the levels are re-derived here rather than read off the props: `core`,
+  // `callWall` and `putWall` arrived from data/levels.ts on the OI+VOL basis
+  // (see the block at the top of this file), and `levelsOf(…, 'vol-only')` is
+  // the SAME finders run against `volNet` — one definition, other basis, never
+  // a second local derivation.
+  //
+  // Both totals are likewise the whole ladder on VOL. ASCII signs, not the
   // U+2212 `fmtGexShort` uses — that minus exists to stop a signed column
   // jittering in a table, and outside a table it is a character that pastes
   // oddly and does not match a search for "-".
   const statsTargets = useMemo<CopyShotTarget[]>(() => {
     if (!rows.length || !(spot > 0)) return NO_TARGETS
+    const volLevels = levelsOf(rows, spot, 'vol-only')
     let gex = 0
     let dex = 0
     for (const r of rows) {
-      gex += netGexOf(r, 'oi-vol', false)
-      dex += dexOf(r, 'oi-vol')
+      gex += netGexOf(r, 'vol-only', false)
+      dex += dexOf(r, 'vol-only')
     }
     // The sign is EXPLICIT on both totals. Positive and negative gamma are two
     // different regimes and "which one" is the first thing anyone reads off
@@ -374,9 +387,9 @@ function LevelsBody({
       v == null ? '—' : v.toFixed(kDp)
     const text = [
       `Ticker: ${symbol}`,
-      `Core: ${level(core?.strike)}`,
-      `Call Wall: ${level(callWall)}`,
-      `Put Wall: ${level(putWall)}`,
+      `Core: ${level(volLevels.core?.strike)}`,
+      `Call Wall: ${level(volLevels.callWall)}`,
+      `Put Wall: ${level(volLevels.putWall)}`,
       `Net Gex: ${money(gex)}`,
       `Net Dex: ${money(dex)}`,
     ].join('\n')
@@ -385,7 +398,7 @@ function LevelsBody({
         id: 'key-levels-stats',
         icon: '📋',
         label: 'Stats',
-        hint: 'Copy the levels as TEXT — ticker, core, both walls, net GEX and net DEX',
+        hint: 'Copy the VOL-only levels as TEXT — ticker, core, both walls, net GEX and net DEX',
         group: 'Home board',
         capture: async () => {
           const { copyText } = await import('@/shell/snapshot')
@@ -393,7 +406,7 @@ function LevelsBody({
         },
       },
     ]
-  }, [rows, spot, symbol, core, callWall, putWall, kDp])
+  }, [rows, spot, symbol, kDp])
   useCopyShotTargets(statsTargets)
 
   return (

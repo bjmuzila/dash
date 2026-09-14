@@ -365,10 +365,6 @@ export default function Whales() {
   // denominator is those two and not `total` — see the tile note below.
   const readable = (s?.bull ?? 0) + (s?.bear ?? 0)
   const pctOf = (v: number) => (readable > 0 ? `${Math.round((v / readable) * 100)}% of readable premium` : '—')
-  const sessionMax = useMemo(
-    () => Math.max(1, ...(d?.sessions ?? []).map((x) => Number(x.total))),
-    [d],
-  )
   const tickerMax = useMemo(
     () => Math.max(1, ...(d?.tickers ?? []).map((x) => Number(x.total))),
     [d],
@@ -676,52 +672,11 @@ export default function Whales() {
             </div>
           </Card>
 
-          {/* ── premium by session ────────────────────────────────────────── */}
-          <Card title="Whale premium by session" note="click a bar to filter the table to that day">
-            <div className="px-3 pb-2 pt-3">
-              <div className="flex h-[104px] items-end gap-[5px]">
-                {(d?.sessions ?? []).map((x) => {
-                  const h = (v: number) => Math.max(1, (Number(v) / sessionMax) * 100)
-                  return (
-                    <button
-                      key={x.d}
-                      type="button"
-                      onClick={() => setDay((cur) => (cur === x.d ? null : x.d))}
-                      title={`${x.d} · ${num(x.n)} prints · ${money(x.total)}`}
-                      // h-full is load-bearing, not decoration. The two stacked
-                      // divs size themselves in PERCENT, and a percentage height
-                      // resolves against nothing unless its parent's height is
-                      // definite. Under the row's `items-end` this button was
-                      // auto-height — so both bars computed to zero and every
-                      // session rendered as an empty 104px box with only its
-                      // date label showing.
-                      className={[
-                        'flex h-full flex-1 flex-col justify-end gap-px rounded-sm',
-                        day === x.d ? 'outline outline-1 outline-offset-2 outline-accent' : '',
-                      ].join(' ')}
-                    >
-                      {/* shrink-0 for the same reason: a flex child with a % height
-                          is still allowed to shrink below it, and two of them in a
-                          104px box will. */}
-                      <div className="shrink-0 rounded-t-sm bg-up" style={{ height: `${h(x.bull)}%` }} />
-                      <div className="shrink-0 rounded-b-sm bg-down opacity-85" style={{ height: `${h(x.bear)}%` }} />
-                    </button>
-                  )
-                })}
-                {!d?.sessions.length && <div className="w-full text-sm text-faint">No sessions in range.</div>}
-              </div>
-              <div className="mt-1.5 flex gap-[5px]">
-                {(d?.sessions ?? []).map((x) => (
-                  <div key={x.d} className="flex-1 text-center text-2xs text-faint">{x.d.slice(5)}</div>
-                ))}
-              </div>
-              <div className="flex gap-3 pt-2 text-2xs text-faint">
-                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-up align-[-1px]" />Bullish</span>
-                <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-down align-[-1px]" />Bearish</span>
-                <span className="ml-auto">Mid and unclassified prints are in the total and in neither bucket</span>
-              </div>
-            </div>
-          </Card>
+          {/* The WHALE PREMIUM BY SESSION chart was removed 2026-09-14 — on a
+              one- or two-session range it is a single 104px slab of green and
+              red that says nothing the tiles do not. The `day` drill-down it
+              drove is kept below (state, row filter, day chip) so bringing the
+              chart back is one block, not a rewrite. */}
         </div>
 
         {/* ── right column ───────────────────────────────────────────────── */}

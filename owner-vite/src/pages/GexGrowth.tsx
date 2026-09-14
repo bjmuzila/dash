@@ -2540,6 +2540,46 @@ export default function GexGrowth() {
   const maxAbs = rail.reduce((m, s) => Math.max(m, Math.abs(railMag(s))), 0) || 1;
   const selRow = rail.find((s) => s.symbol === sel) ?? null;
   const withBaseline = (board ?? []).filter((s) => s.prevDate).length;
+  /**
+   * HOW FAR THE 09:25 SETTLED-OI RE-STAMP HAS GOT — BOARD-WIDE.
+   *
+   * The SETTLED / PROVISIONAL chip below answers this for the ONE name that
+   * happens to be open, which is the wrong question when you are waiting to
+   * publish: the pass walks the roster name by name, so the symbol on screen
+   * can be settled while eighty behind it are still on the provisional 16:05
+   * read. Counting the whole board is the only honest "is it done yet".
+   *
+   * Counted off `oiSettled` — TODAY'S re-stamp, the thing that is actually
+   * running. `prevOiSettled` rides along as `paired` because a fully
+   * re-stamped board can still be undrawable if the BASELINE session never got
+   * its own pass, and that is a different sentence worth being able to say.
+   *
+   * Null on every other basis: nothing re-stamps there, so "0/169" would read
+   * as a failure rather than as "not applicable".
+   */
+  const restamp = useMemo(() => {
+    if (basis !== "oi" || !board?.length) return null;
+    const pending = board.filter((s) => !s.oiSettled).map((s) => s.symbol).sort();
+    const total = board.length;
+    const done = total - pending.length;
+    const paired = board.filter((s) => s.oiSettled && s.prevOiSettled).length;
+    return { total, done, paired, pending };
+  }, [basis, board]);
+  const restampDone = !!restamp && restamp.done >= restamp.total;
+  /**
+   * While the pass is mid-flight, re-read the board on a timer so the counter
+   * is not something you have to keep hitting ↻ to trust. Self-cancelling:
+   * the moment every name is re-stamped the condition goes false and no further
+   * timer is scheduled. Only on `oi`, and only on the LATEST session — an older
+   * date is a finished file that will never change. It re-reads the BOARD
+   * alone, never the open ladder, so nothing moves under the cursor.
+   */
+  const restampWaiting = !!restamp && !restampDone && !date;
+  useEffect(() => {
+    if (!restampWaiting) return;
+    const id = window.setInterval(() => { loadBoard(); }, 60_000);
+    return () => window.clearInterval(id);
+  }, [restampWaiting, loadBoard]);
   // Level mode needs no baseline, so a name on its first session is a real row
   // there and a "—" in Δ mode. One flag, read in both places that care.
   const railHasValue = (s: BoardSymbol) => mode === "levels" || !!s.prevDate;
@@ -2943,6 +2983,31 @@ export default function GexGrowth() {
               </span>
             );
           })()}
+
+          {/* IS THE BOARD DONE YET — the counter you watch while the 09:25 pass
+              walks the roster. Board-wide and independent of which symbol is
+              open, which is the whole point: the chip beside it describes one
+              name, and one settled name says nothing about the other 168. */}
+          {restamp ? (
+            <span
+              title={restampDone
+                ? `All ${restamp.total} names on this board have been re-stamped from the settled OCC file — the 09:25 pass is finished for this session.${
+                    restamp.paired < restamp.total
+                      ? ` ${restamp.total - restamp.paired} of them still have a PROVISIONAL baseline, so those Δs stay lagged even though today's side is settled.`
+                      : " Every Δ on the board is a true session-over-session change in open interest."}`
+                : `The 09:25 settled-OI pass is still running: ${restamp.done} of ${restamp.total} names re-stamped, ${restamp.pending.length} still on the provisional 16:05 read. Waiting on ${restamp.pending.slice(0, 12).join(", ")}${
+                    restamp.pending.length > 12 ? ` and ${restamp.pending.length - 12} more` : ""}.${
+                    restampWaiting ? " The board re-reads itself every minute until this finishes." : ""}`}
+              style={{
+                ...toneChip(restampDone ? "pos" : "warn"),
+                fontSize: 10, fontWeight: 800, padding: "2px 7px", flexShrink: 0,
+              }}
+            >
+              {restampDone
+                ? `all ${restamp.total} re-stamped`
+                : `re-stamped ${restamp.done}/${restamp.total}`}
+            </span>
+          ) : null}
 
           {/* Settled-OI provenance. Only meaningful on `oi`, and it is the flag
               that says whether the Δ on screen is a real ΔOI or two
