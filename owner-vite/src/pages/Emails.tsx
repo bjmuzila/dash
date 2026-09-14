@@ -68,6 +68,7 @@ function slugPreview(input: string): string {
 
 interface Counts { all: number; subscribers: number; notPaying: number; waitlist: number; oldEmails: number; oldEmails2: number }
 interface Lists { all: string[]; subscribers: string[]; notPaying: string[]; waitlist: string[]; oldEmails: string[]; oldEmails2: string[] }
+interface Preset { id: string; label: string; hidden?: boolean }
 interface SendRecord {
   id: number;
   subject: string;
@@ -75,6 +76,83 @@ interface SendRecord {
   sent_count: number;
   failed_count: number;
   created_at: string;
+}
+
+// One row in the template picker. The label and the delete/restore control are
+// SIBLING buttons inside a div, not a button inside a button - nesting them is
+// invalid HTML and React will warn (and the inner click gets swallowed in some
+// browsers).
+function PresetRow({
+  preset,
+  loading,
+  busy,
+  dimmed,
+  onLoad,
+  onAction,
+  actionLabel,
+  actionTitle,
+  actionColor,
+}: {
+  preset: Preset;
+  loading: boolean;
+  busy: boolean;
+  dimmed?: boolean;
+  onLoad: () => void;
+  onAction: () => void;
+  actionLabel: string;
+  actionTitle: string;
+  actionColor: string;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "stretch",
+        gap: 6,
+        opacity: dimmed ? 0.6 : 1,
+      }}
+    >
+      <button
+        onClick={onLoad}
+        disabled={loading || busy}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          textAlign: "left",
+          cursor: loading || busy ? "default" : "pointer",
+          padding: "10px 12px",
+          borderRadius: 10,
+          border: `1px solid ${loading ? HOME_THEME.cyan : "rgba(255,255,255,0.08)"}`,
+          background: loading ? "rgba(33,158,188,0.10)" : "rgba(255,255,255,0.03)",
+          color: HOME_THEME.text,
+          fontSize: 14,
+          opacity: loading ? 0.7 : 1,
+        }}
+      >
+        {loading ? "Loading…" : `📨 ${preset.label}`}
+      </button>
+      <button
+        onClick={onAction}
+        disabled={busy || loading}
+        title={actionTitle}
+        aria-label={`${actionTitle}: ${preset.label}`}
+        style={{
+          flex: "0 0 auto",
+          width: 38,
+          cursor: busy || loading ? "default" : "pointer",
+          borderRadius: 10,
+          border: `1px solid ${actionColor}44`,
+          background: `${actionColor}14`,
+          color: actionColor,
+          fontSize: 14,
+          lineHeight: 1,
+          opacity: busy ? 0.5 : 1,
+        }}
+      >
+        {busy ? "…" : actionLabel}
+      </button>
+    </div>
+  );
 }
 
 export default function Emails() {
@@ -96,7 +174,13 @@ export default function Emails() {
 
   const [sending, setSending] = useState(false);
   const [loadingPreset, setLoadingPreset] = useState<string | null>(null);
-  const [presets, setPresets] = useState<Array<{ id: string; label: string }>>([]);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  // Deleting a template is a server-side HIDE (see lib/emails/hiddenTemplates.ts)
+  // - the .ts module stays on disk, it just drops out of the picker. So the page
+  // fetches hidden ones too and parks them behind a collapsed "Deleted" section
+  // with a Restore button, rather than pretending they are gone for good.
+  const [busyPreset, setBusyPreset] = useState<string | null>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SendRecord[]>([]);
@@ -133,6 +217,45 @@ export default function Emails() {
     }
   }
 
+  // Delete = hide from the picker. Reversible, and the server keeps the flag in
+  // ./state so it survives a redeploy.
+  async function deletePreset(p: Preset) {
+    if (!window.confirm(`Delete template "${p.label}"?\n\nIt disappears from this list but stays restorable under "Deleted templates".`)) return;
+    setBusyPreset(p.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/email-templates?id=${encodeURIComponent(p.id)}`, { method: "DELETE" });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `Delete failed (${res.status})`);
+      setPresets((prev) => prev.map((x) => (x.id === p.id ? { ...x, hidden: true } : x)));
+      setResult(`Deleted "${p.label}".`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setBusyPreset(null);
+    }
+  }
+
+  async function restorePreset(p: Preset) {
+    setBusyPreset(p.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/email-templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: p.id }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `Restore failed (${res.status})`);
+      setPresets((prev) => prev.map((x) => (x.id === p.id ? { ...x, hidden: false } : x)));
+      setResult(`Restored "${p.label}".`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Restore failed");
+    } finally {
+      setBusyPreset(null);
+    }
+  }
+
   // Preselect the audience from ?audience= (e.g. the admin page's "Email these →"
   // deep-links to ?audience=not_paying).
   // Accepts a comma-separated list (?audience=subscribers,waitlist) as well as
@@ -164,7 +287,8 @@ export default function Emails() {
         if (alive) setError(e instanceof Error ? e.message : "Load failed");
       }
       try {
-        const tr = await fetch("/api/admin/email-templates");
+        // includeHidden=1 so the Deleted section has something to restore from.
+        const tr = await fetch("/api/admin/email-templates?includeHidden=1");
         const tj = await tr.json().catch(() => ({}));
         if (alive && tr.ok) setPresets(tj.templates ?? []);
       } catch { /* presets are optional */ }
@@ -172,6 +296,9 @@ export default function Emails() {
     })();
     return () => { alive = false; };
   }, []);
+
+  const livePresets = presets.filter((p) => !p.hidden);
+  const deletedPresets = presets.filter((p) => p.hidden);
 
   const isCustom = audiences.includes("custom");
 
@@ -327,29 +454,75 @@ export default function Emails() {
                   background: "rgba(0,0,0,0.25)",
                 }}
               >
-                {presets.map((p) => {
-                  const active = loadingPreset === p.id;
-                  return (
-                    <button
-                      key={p.id}
-                      onClick={() => loadPreset(p.id)}
+                {livePresets.length === 0 && (
+                  <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.6 }}>
+                    Every template is deleted — restore one below.
+                  </div>
+                )}
+                {livePresets.map((p) => (
+                  <PresetRow
+                    key={p.id}
+                    preset={p}
+                    loading={loadingPreset === p.id}
+                    busy={busyPreset === p.id}
+                    onLoad={() => loadPreset(p.id)}
+                    onAction={() => deletePreset(p)}
+                    actionLabel="🗑"
+                    actionTitle="Delete template"
+                    actionColor={HOME_THEME.red}
+                  />
+                ))}
+              </div>
+
+              {deletedPresets.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <button
+                    onClick={() => setShowDeleted((v) => !v)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: HOME_THEME.muted,
+                      fontSize: 14,
+                      cursor: "pointer",
+                      padding: 0,
+                      textDecoration: "underline",
+                    }}
+                  >
+                    {showDeleted ? "Hide" : "Show"} deleted templates ({deletedPresets.length})
+                  </button>
+                  {showDeleted && (
+                    <div
                       style={{
-                        textAlign: "left",
-                        cursor: active ? "default" : "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                        maxHeight: 220,
+                        overflowY: "auto",
+                        marginTop: 8,
                         padding: "10px 12px",
                         borderRadius: 10,
-                        border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.08)"}`,
-                        background: active ? "rgba(33,158,188,0.10)" : "rgba(255,255,255,0.03)",
-                        color: HOME_THEME.text,
-                        fontSize: 14,
-                        opacity: active ? 0.7 : 1,
+                        border: `1px solid ${HOME_THEME.border}`,
+                        background: "rgba(0,0,0,0.25)",
                       }}
                     >
-                      {active ? "Loading…" : `📨 ${p.label}`}
-                    </button>
-                  );
-                })}
-              </div>
+                      {deletedPresets.map((p) => (
+                        <PresetRow
+                          key={p.id}
+                          preset={p}
+                          loading={loadingPreset === p.id}
+                          busy={busyPreset === p.id}
+                          dimmed
+                          onLoad={() => loadPreset(p.id)}
+                          onAction={() => restorePreset(p)}
+                          actionLabel="↩"
+                          actionTitle="Restore template"
+                          actionColor={HOME_THEME.green}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

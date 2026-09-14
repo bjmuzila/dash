@@ -25,13 +25,33 @@ import { edge3AnnualEmail, edge3AnnualText, EDGE3_ANNUAL_SUBJECT } from "@/lib/e
 import { seasonalityFreeEmail, seasonalityFreeText, SEASONALITY_FREE_SUBJECT } from "@/lib/emails/seasonality-free";
 import { v3ComingSoonEmail, v3ComingSoonText, V3_COMING_SOON_SUBJECT } from "@/lib/emails/v3-coming-soon";
 import { wholeBoardEmail, wholeBoardText, WHOLE_BOARD_SUBJECT } from "@/lib/emails/whole-board";
+import { hiddenTemplateIdSet, hideTemplate, restoreTemplate } from "@/lib/emails/hiddenTemplates";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
-// raw HTML. Read-only; does not send anything.
+// raw HTML. Never sends anything.
+//
+// DELETE ?id=<id>  hides a template from the picker
+// POST   { id }    restores a hidden one
+//
+// "Delete" is a HIDE, not a file removal: the templates below are compiled TS
+// modules baked into the Docker image, so nothing on disk can be rewritten at
+// runtime. The hidden-id list lives in the bind-mounted ./state dir - see
+// lib/emails/hiddenTemplates.ts for the full reasoning.
 export const dynamic = "force-dynamic";
 
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
+
+// Fails CLOSED, same as /api/admin/send-email: an unset OWNER_USER_ID rejects
+// everyone rather than opening the endpoint to any signed-in user.
+async function ownerGate(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
+  const userId = await getServerUserId();
+  if (!userId) return { ok: false, res: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  if (!OWNER_USER_ID || userId !== OWNER_USER_ID) {
+    return { ok: false, res: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+  }
+  return { ok: true };
+}
 
 // html/text are THUNKS, not rendered strings. buildTemplates() runs on every
 // request — including the plain list request that only needs id + label — so
@@ -231,15 +251,15 @@ function newestFirst(templates: Template[]): Template[] {
 }
 
 export async function GET(req: NextRequest) {
-  const userId = await getServerUserId();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!OWNER_USER_ID || userId !== OWNER_USER_ID) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const gate = await ownerGate();
+  if (!gate.ok) return gate.res;
 
   const id = req.nextUrl.searchParams.get("id");
   const templates = buildTemplates();
   if (id) {
+    // Deliberately NOT filtered by the hidden list: the picker's "Hidden"
+    // section can still preview/restore one, and a hidden template is only
+    // hidden from the list, not deactivated.
     const t = templates.find((x) => x.id === id);
     if (!t) return NextResponse.json({ error: "Unknown template" }, { status: 404 });
     try {
@@ -248,7 +268,7 @@ export async function GET(req: NextRequest) {
         template: { id: t.id, label: t.label, subject: t.subject, html: t.html(), text: t.text() },
       });
     } catch (err) {
-      // Name the offender — a blank composer with no explanation is what made
+      // Name the offender - a blank composer with no explanation is what made
       // the last one of these hard to spot.
       return NextResponse.json(
         { error: `Template "${t.id}" failed to render: ${err instanceof Error ? err.message : String(err)}` },
@@ -256,9 +276,71 @@ export async function GET(req: NextRequest) {
       );
     }
   }
-  // No id: return the list (id + label only) for a picker, newest template on top.
-  return NextResponse.json({
-    ok: true,
-    templates: newestFirst(templates).map((t) => ({ id: t.id, label: t.label })),
-  });
+
+  // No id: return the list (id + label only) for a picker, newest template on
+  // top. Deleted (hidden) ones are dropped unless ?includeHidden=1, which the
+  // owner page uses so it can render a "Hidden" section with restore buttons.
+  // A hidden-list read failure must never take the whole picker down, so it
+  // degrades to "nothing is hidden".
+  const includeHidden = req.nextUrl.searchParams.get("includeHidden") === "1";
+  let hidden: Set<string>;
+  try {
+    hidden = await hiddenTemplateIdSet();
+  } catch (err) {
+    console.error("[email-templates] hidden list read failed - showing all:", err);
+    hidden = new Set<string>();
+  }
+
+  const list = newestFirst(templates)
+    .filter((t) => includeHidden || !hidden.has(t.id))
+    .map((t) => ({ id: t.id, label: t.label, hidden: hidden.has(t.id) }));
+
+  return NextResponse.json({ ok: true, templates: list, hiddenCount: hidden.size });
+}
+
+// DELETE ?id=<id> - hide a template from the picker. Reversible via POST.
+export async function DELETE(req: NextRequest) {
+  const gate = await ownerGate();
+  if (!gate.ok) return gate.res;
+
+  const id = (req.nextUrl.searchParams.get("id") || "").trim();
+  if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+  // Reject unknown ids so a typo can't silently accumulate dead entries in the
+  // state file.
+  if (!buildTemplates().some((t) => t.id === id)) {
+    return NextResponse.json({ error: "Unknown template" }, { status: 404 });
+  }
+
+  try {
+    const hidden = await hideTemplate(id);
+    return NextResponse.json({ ok: true, id, hidden: true, hiddenCount: hidden.length });
+  } catch (err) {
+    return NextResponse.json(
+      { error: `Failed to delete template: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 500 }
+    );
+  }
+}
+
+// POST { id } - restore a previously deleted template.
+export async function POST(req: NextRequest) {
+  const gate = await ownerGate();
+  if (!gate.ok) return gate.res;
+
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  const id = typeof body?.id === "string" ? body.id.trim() : "";
+  if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+  if (!buildTemplates().some((t) => t.id === id)) {
+    return NextResponse.json({ error: "Unknown template" }, { status: 404 });
+  }
+
+  try {
+    const hidden = await restoreTemplate(id);
+    return NextResponse.json({ ok: true, id, hidden: false, hiddenCount: hidden.length });
+  } catch (err) {
+    return NextResponse.json(
+      { error: `Failed to restore template: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 500 }
+    );
+  }
 }
