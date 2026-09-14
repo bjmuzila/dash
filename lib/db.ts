@@ -6143,7 +6143,7 @@ function esContractClause(
   // mid-roll should follow the contract that is actually trading in those five
   // days, not one that appeared after the window closed.
   return {
-    sql: ` AND contract = (SELECT contract FROM es_candles WHERE ${scopeSql} ORDER BY timestamp DESC LIMIT 1)`,
+    sql: ` AND contract = (SELECT contract FROM es_candles WHERE ${scopeSql} ORDER BY timestamp DESC, (contract <> '') DESC LIMIT 1)`,
     params: scopeParams,
   };
 }
