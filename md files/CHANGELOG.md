@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-09-14 (b) - Earnings chips: share classes borrow the parent's mark
+
+Six of twelve names on this week's board printed as text squares. Checked each
+against the upstream icon set: **KMTS, CHRN, FPS, LUXE and HUBG are not in it at
+all**, and neither is **LEN.B**. The mirror is not incomplete - the source is.
+`davidepalazzo/ticker-logos` is a stale snapshot (it still ships XLNX, ZNGA and
+INFO, all delisted years ago) and it has real gaps in current names: HUBB, HUBC
+and HUBS are all present, HUBG is not.
+
+LEN.B is a different problem and a fixable one. Upstream files exactly ONE icon
+per COMPANY, named after the ordinary class - of 5,107 icons exactly one carries
+a dot - so every B share misses the mirror and the live resolver both, and then
+prints as a text square sitting two cells from its own parent's logo.
+
+### A fourth stage, ahead of the text chip only
+
+`local -> proxy -> PARENT local -> text`. `classParent()` maps `LEN.B -> LEN`,
+`BRK.B -> BRK`, `HEI.A -> HEI`. It runs only after the exact symbol has already
+missed at BOTH earlier stages, so a hand-cropped `PBR.A.png` in the mirror still
+wins - see MANUAL in scripts/fetch-ticker-logos.mjs, which protects those.
+
+The pattern is deliberately narrow: one letter after a dot or a dash, 1-5 letter
+root, nothing else. A loose rule here does not degrade gracefully, it MISLABELS -
+strip more and BRK.B stops being Berkshire's B share and becomes whatever BRK is.
+
+The other five need a logo source that isn't this repo. That means the resolver
+in `server-v2/ticker-logo.js`, which is proxy code - not touched, Brandon's call.
+
+
 ## 2026-09-14 - Snapshot: wait for in-flight images instead of deleting them
 
 The camera button on the earnings board photographed every chip as a blank. The

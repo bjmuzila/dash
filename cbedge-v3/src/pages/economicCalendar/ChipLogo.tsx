@@ -15,7 +15,10 @@
 //      than 302 to a third-party host. A redirected image taints a capture
 //      canvas and toBlob then throws, which used to kill the whole earnings
 //      board PNG over one 16px image.
-//   3. A ticker-text chip. Nothing resolved.
+//   3. The PARENT ticker's mirrored PNG, for share classes only — LEN.B borrows
+//      Lennar's. Upstream files one icon per company under the ordinary class,
+//      so a B share misses stages 1 and 2 every time. See classParent.
+//   4. A ticker-text chip. Nothing resolved.
 //
 // The ?v query is not decoration. v2's next.config.js serves /logos/:path* with
 // `Cache-Control: immutable, max-age=1y` and applies it to the PATH, with no
@@ -43,6 +46,32 @@ function proxyLogoUrl(sym: string, name?: string): string {
   return `/proxy/ticker-logo?raw=1&sym=${encodeURIComponent(sym.toUpperCase())}&name=${encodeURIComponent(name || '')}`
 }
 
+/**
+ * THE PARENT TICKER OF A SHARE CLASS, or null when there isn't one.
+ *
+ * `LEN.B` is Lennar. `HEI.A` is HEICO. The upstream icon set files exactly one
+ * PNG per COMPANY and names it after the ordinary class — of 5,107 icons exactly
+ * one carries a dot — so every B share on the board falls through the mirror and
+ * the live resolver both, and prints as a text square next to its own parent's
+ * logo two cells over. That is the failure this exists to stop.
+ *
+ * A hand-cropped `PBR.A.png` in the mirror still wins: this is tried only after
+ * the exact symbol has already missed, in the mirror AND at the resolver. See
+ * MANUAL in scripts/fetch-ticker-logos.mjs, which protects those files.
+ *
+ * Deliberately narrow — one letter after a dot or a dash, nothing else. A loose
+ * rule here does not degrade, it MISLABELS: strip more and `BRK.B` stops being
+ * Berkshire's B share and starts being whatever `BRK` happens to be.
+ */
+function classParent(sym: string): string | null {
+  const up = sym.toUpperCase()
+  const m = /^([A-Z]{1,5})[.-][A-Z]$/.exec(up)
+  // `noUncheckedIndexedAccess` is on, so a matched group is still `| undefined`
+  // to the compiler. Bind it before testing rather than returning `m[1]`.
+  const root = m?.[1]
+  return root && root !== up ? root : null
+}
+
 export function ChipLogo({
   sym,
   company,
@@ -61,7 +90,17 @@ export function ChipLogo({
    */
   lazy?: boolean
 }) {
-  const [stage, setStage] = useState<'local' | 'proxy' | 'text'>('local')
+  const [stage, setStage] = useState<'local' | 'proxy' | 'parent' | 'text'>('local')
+
+  // Computed once per render rather than inside the error handler: whether a
+  // fourth stage exists at all decides where stage 2 hands off to.
+  const parent = classParent(sym)
+
+  function nextStage(s: typeof stage): typeof stage {
+    if (s === 'local') return 'proxy'
+    if (s === 'proxy') return parent ? 'parent' : 'text'
+    return 'text'
+  }
 
   if (stage === 'text') {
     return (
@@ -93,14 +132,20 @@ export function ChipLogo({
       <img
         // Remount on stage change so the browser actually re-requests.
         key={stage}
-        src={stage === 'local' ? localLogoUrl(sym) : proxyLogoUrl(sym, company)}
+        src={
+          stage === 'local'
+            ? localLogoUrl(sym)
+            : stage === 'parent'
+              ? localLogoUrl(parent as string)
+              : proxyLogoUrl(sym, company)
+        }
         alt={sym}
         width={size}
         height={size}
         loading={lazy ? 'lazy' : 'eager'}
         decoding="async"
         style={{ width: size, height: size, objectFit: 'contain' }}
-        onError={() => setStage((s) => (s === 'local' ? 'proxy' : 'text'))}
+        onError={() => setStage(nextStage)}
       />
     </span>
   )
