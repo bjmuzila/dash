@@ -1792,6 +1792,49 @@ async function ensureAllTables(pool) {
     );
     CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
   `);
+
+  // ── es_candles.contract, applied on every boot ────────────────────────────
+  //
+  // Separate from the CREATE block above because CREATE TABLE IF NOT EXISTS is a
+  // no-op on a table that already exists — it will not add a column and it will
+  // not change a constraint. Every deploy with an existing es_candles therefore
+  // had the new code reading a column the DB did not have, which is a 500 on
+  // /api/snapshots/candles, not a degraded chart.
+  //
+  // So this is the schema, not a migration script (same reasoning as the
+  // trial_history backfill above): idempotent, cheap, and it runs on every boot
+  // so no environment can be left behind by a SQL file nobody remembered to run.
+  // scripts/migrate-es-candles-contract-key.sql stays for applying it by hand.
+  //
+  // Widening a unique key can only make it LESS restrictive, so this cannot fail
+  // on existing rows and needs no de-duplication pass.
+  //
+  // Wrapped: a failure here must degrade the ES chart, not take down getDb() and
+  // with it every other route in the process. getEsCandles falls back to an
+  // unfiltered read when the column is missing.
+  try {
+    await pool.query(`
+      ALTER TABLE es_candles ADD COLUMN IF NOT EXISTS contract TEXT NOT NULL DEFAULT '';
+      ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS es_candles_slot_interval_key;
+      ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS "es_candles_slotKey_intervalMinutes_key";
+      DO $do$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'es_candles_slot_interval_contract_key'
+        ) THEN
+          ALTER TABLE es_candles
+            ADD CONSTRAINT es_candles_slot_interval_contract_key
+            UNIQUE ("slotKey", "intervalMinutes", contract);
+        END IF;
+      END
+      $do$;
+      CREATE INDEX IF NOT EXISTS idx_ec_contract_interval_date
+        ON es_candles(contract, "intervalMinutes", date);
+    `);
+  } catch (err) {
+    console.warn('[db] es_candles contract migration skipped:',
+      String(err && err.message).slice(0, 160));
+  }
 }
 async function getQuoteSymbols(clerkUserId) {
   await getDb();
@@ -3964,7 +4007,15 @@ function esContractClause(contract, scopeSql, scopeParams) {
     params: scopeParams
   };
 }
-async function getEsCandles(date, daysBack, limit = 2e3, intervalMinutes = 5, contract) {
+/**
+ * A missing `contract` column — Postgres 42703. Expected exactly once, on the
+ * first boot after this change against a DB whose ensureAllTables ALTER has not
+ * landed yet (or was refused). Anything else rethrows.
+ */
+function isUndefinedColumn(err) {
+  return err?.code === "42703" || /column .*contract.* does not exist/i.test(String(err?.message || ""));
+}
+async function esCandlesQuery(date, daysBack, limit = 2e3, intervalMinutes = 5, contract) {
   if (date) {
     const scope = `date = ? AND "intervalMinutes" = ?`;
     const c = esContractClause(contract, scope, [date, intervalMinutes]);
@@ -3988,6 +4039,17 @@ async function getEsCandles(date, daysBack, limit = 2e3, intervalMinutes = 5, co
     `SELECT * FROM es_candles WHERE ${scope}${c.sql} ORDER BY timestamp DESC LIMIT ?`,
     [intervalMinutes, ...c.params, limit]
   );
+}
+
+async function getEsCandles(date, daysBack, limit = 2e3, intervalMinutes = 5, contract) {
+  try {
+    return await esCandlesQuery(date, daysBack, limit, intervalMinutes, contract);
+  } catch (err) {
+    if (!contract || !isUndefinedColumn(err)) throw err;
+    console.warn("[db] es_candles has no contract column yet \u2014 serving the unfiltered series. "
+      + "Run scripts/migrate-es-candles-contract-key.sql (or restart so ensureAllTables applies it).");
+    return esCandlesQuery(date, daysBack, limit, intervalMinutes, undefined);
+  }
 }
 async function upsertNqCandle(r) {
   const pool = await getDb();

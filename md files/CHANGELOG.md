@@ -22861,3 +22861,63 @@ Change: `public/v3` added to root `.gitignore` and untracked via
 `git rm -r --cached public/v3`. A failed v3 build now 404s loudly instead of
 silently serving a fossil. The underlying build failure inside the image is still
 to be diagnosed.
+
+## 2026-09-14 (g) - v3 board: a row holds one, two or three cards, and decides that itself
+
+`cbedge-v3/src/design/primitives/Board.tsx`, `cbedge-v3/src/board/BoardPage.tsx`,
+`cbedge-v3/src/board/catalog.tsx`.
+
+The 48-column grid let a card be any width, so a row could end up with four
+cards, or with two that were 26 and 22 wide and looked wrong for a reason you
+could not see. And two full-width cards could not be put side by side at all:
+there is no room in that row, so the collision rule put one of them back below.
+
+THE LANE RULE. A card's width is the whole board (48), a half (24) or a third
+(16), and its left edge sits on a boundary of its own width: halves at 0 and 24,
+thirds at 0, 16 and 32.
+
+- `laneWidths` / `snapLaneW` / `snapLaneX` / `snapBoard` are the rule.
+  `snapBoard` puts every card on a lane and settles any overlap that reopens by
+  dropping it DOWN only, so a card never changes lane to get out of the way.
+- `compactBoard` and `resolveBoard` lane-snap their input; `resolveBoard` and
+  `settleBoard` lane-snap their output too, because `squeezeAside`, `stepAside`
+  and `fillGaps` all reach widths by arithmetic and would otherwise invent an
+  illegal one. Every read and write path goes through one of these, so an old
+  saved board is corrected on open.
+- Resize picks the nearest lane rather than the nearest column. The
+  neighbour-size match still runs on HEIGHT; width no longer needs it.
+- Drag guides are drawn at the thirds and halves instead of all 48 columns.
+- Catalog defaults moved onto legal widths: GEX Candles and Net Premium 32 -> 24,
+  Quick Links 12 -> 16.
+
+THE ROWS DECIDE. `spreadRow(items, top, cols, rank)` lays every card sharing a
+row top out as an equal share of the board. `joinRow(items, id, cols, dropX)`
+moves the dragged card onto the row its band overlaps and spreads that row.
+
+- Drop a full-width card beside another and both become halves; drop a third in
+  and all three become thirds. Capped at three: a fourth declines and falls
+  through to the ordinary collision rules.
+- The row a card LEAVES is spread too, so two halves become one full-width card
+  again. Same function both directions, so they cannot drift out of step.
+- A card alone on a row takes the whole width. One per row is the first of the
+  three answers, not a special case. Guarded on band overlap so a card dropped
+  beside a neighbour whose row top does not match exactly cannot balloon over it.
+- `dropX` is the drag's UNCLAMPED column position: a full-width card cannot be
+  moved right, so its own x cannot say which side of the row the pointer wants.
+  Ties go left.
+- The release maths runs on the RAW gesture, not the settled draft - the draft
+  has already pushed the card you were aiming at out of the way, so by release
+  time the row to join was not in it. One `release()` serves both the landing
+  outline and the commit.
+- It runs EVERY FRAME and IS the draft: the two halves narrow to thirds and
+  slide left as the card comes over the row, the empty third opens on the right,
+  and letting go changes nothing that was not already on screen. The card in the
+  hand keeps the pointer's position but takes the width it is about to land at,
+  so it does not cover the gap it just opened.
+
+NO CONTROL FOR IT. An earlier pass put `1 2 3` in the card headers, then in the
+toolbar. Both are removed. A number in the toolbar states one shape for the whole
+board and a board is not one shape - one row wants a single full-width chart, the
+next wants two, the next three. Card headers are a bare X again.
+
+Mockup: `generated/2026-09-14-board-lanes-lab.html`.

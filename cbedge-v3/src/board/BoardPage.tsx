@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
-import { BOARD_COLS, Board, compactBoard, resolveBoard, settleBoard, type BoardItem } from '@/design/primitives/Board'
+import { Board, compactBoard, resolveBoard, settleBoard, type BoardItem } from '@/design/primitives/Board'
 import { useAuth } from '@/data/auth'
 import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import { ToolbarSlot } from '@/shell/ToolbarSlot'
@@ -316,41 +316,6 @@ export default function BoardPage() {
     setLayoutState((prev) => arrange(prev.filter((i) => i.id !== id)))
   }
 
-  // ── ONE, TWO OR THREE PER ROW ──────────────────────────────────────────────
-  //
-  // The lane rule in design/primitives/Board.tsx already means a card can only
-  // be the whole board, a half of it or a third of it. Reaching the layout you
-  // want still meant dragging each card to the width you wanted and then
-  // dragging it up beside its neighbour, which is a lot of hand for a choice
-  // with three answers.
-  //
-  // So the choice is STATED, once, for the whole board: 1 · 2 · 3 in the
-  // toolbar, in edit mode. It relays every card in reading order into rows of
-  // that many, each an exact share of the width, keeping each card's height.
-  // One click puts three cards across; dragging still works and still lands on
-  // the same three widths.
-  //
-  // Reading order, not a re-sort: the board you were looking at comes back in
-  // the same sequence, just in a different shape. A row is as tall as its
-  // tallest card, so nothing is cropped by the reflow.
-  const setBoardLanes = (n: number) => {
-    const w = Math.round(BOARD_COLS / n)
-    setLayoutState((prev) => {
-      const order = [...prev].sort((a, b) => a.y - b.y || a.x - b.x)
-      const next: BoardItem[] = []
-      let y = 0
-      for (let i = 0; i < order.length; i += n) {
-        const row = order.slice(i, i + n)
-        row.forEach((c, j) => next.push({ ...c, w, x: j * w, y }))
-        y += row.reduce((m, c) => Math.max(m, c.h), 0)
-      }
-      // resolveBoard in free mode: the rows were just placed on purpose and
-      // gravity would pull the short cards in a row up under the previous one,
-      // which is the ragged board the reflow exists to fix.
-      return free ? resolveBoard(next) : compactBoard(next)
-    })
-  }
-
   // ── CLEAR ALL ──────────────────────────────────────────────────────────────
   //
   // Removing cards one ✕ at a time is the only way to start over today, and it
@@ -460,42 +425,6 @@ export default function BoardPage() {
             >
               {free ? 'Free placement' : 'Auto-arrange'}
             </button>
-          )}
-          {/* Cards per row. An action on the WHOLE board, so it lives up here
-              with the other board-level controls rather than on each card —
-              the point of it is that one click states the shape, and a control
-              repeated on every card would be three clicks again. Pressed when
-              every card is already that width. */}
-          {!locked && layout.length > 0 && (
-            <span className="flex items-center gap-1.5">
-              <span className="text-2xs text-faint">Per row</span>
-              <span className="flex overflow-hidden rounded-sm border border-line" role="group" aria-label="Cards per row">
-                {[1, 2, 3].map((n) => {
-                  const w = Math.round(BOARD_COLS / n)
-                  const on = layout.every((i) => i.w === w)
-                  return (
-                    <button
-                      key={n}
-                      onClick={() => setBoardLanes(n)}
-                      aria-pressed={on}
-                      title={
-                        n === 1
-                          ? 'One card per row, full width'
-                          : n === 2
-                            ? 'Two per row, each a half'
-                            : 'Three per row, each a third'
-                      }
-                      className={[
-                        'px-2 py-1 text-xs font-medium transition-colors',
-                        on ? 'bg-raised text-fg' : 'text-muted hover:bg-raised hover:text-fg',
-                      ].join(' ')}
-                    >
-                      {n}
-                    </button>
-                  )
-                })}
-              </span>
-            </span>
           )}
           {!locked && (
             <button
