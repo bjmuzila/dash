@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-09-14 (c) - v3 build fix: ChipLogo never exported `tickerLogoUrls`
+
+`/v3` was 404ing on the VPS. The Docker step is non-fatal by design, so the
+deploy went out clean and the real error sat in the build log:
+
+```
+src/pages/LevelLog.tsx (67:9): "tickerLogoUrls" is not exported by
+"src/pages/economicCalendar/ChipLogo.tsx", imported by "src/pages/LevelLog.tsx"
+```
+
+LevelLog passes `badge: tickerLogoUrls(symbol)` into its CopyShot target, and
+`ShotOptions.badge` in shell/snapshot.ts documents that list by name - "the
+mirrored PNG, then the live resolver (see pages/economicCalendar/ChipLogo's
+`tickerLogoUrls`)". Every caller and every comment agreed it existed. The
+function did not.
+
+Note what caught it and what did not. `build:fast` is bare `vite build` with no
+`tsc`, so this is ROLLUP failing to resolve an import at bundle time, not a type
+error - which is why `check:theme` passed, the image built, and only the v3 step
+fell over.
+
+### The ladder is data now, not a stage machine
+
+`tickerLogoUrls(sym, company)` returns every same-origin URL worth trying, best
+first: mirrored PNG, live resolver, then the share-class parent's PNG. The chip
+renders by walking that array; snapshot.ts walks the same array for the caption
+badge. They cannot disagree about what a company's mark is any more - which was
+the actual failure mode when the two were written out separately: a rung added
+to the chip never reached the badge, and a shot of a card carried a worse mark
+than the card did.
+
+Also fixed on the way past:
+
+- `classParent` returned `m[1]` directly. `noUncheckedIndexedAccess` is on, so a
+  matched group is still `| undefined` - TS2322 under our tsconfig, invisible to
+  `build:fast`, fatal to `npm run check`.
+- The chip's fallback index is now keyed by symbol. These render from a list and
+  React reuses the instance, so a row scrolling from a dead ticker to a live one
+  inherited an exhausted index and printed as text forever, having never asked
+  for its own logo at all.
+
+Verified: `tsc --noEmit` clean under the real tsconfig, the import resolves in a
+bundle, check-theme at zero hits (the file is not in theme-baseline.json, so zero
+is the requirement).
+
+
 ## 2026-09-14 (b) - Earnings chips: share classes borrow the parent's mark
 
 Six of twelve names on this week's board printed as text squares. Checked each
