@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
-import { Board, compactBoard, resolveBoard, settleBoard, type BoardItem } from '@/design/primitives/Board'
+import {
+  BOARD_COLS,
+  Board,
+  compactBoard,
+  resolveBoard,
+  settleBoard,
+  snapLaneX,
+  type BoardItem,
+} from '@/design/primitives/Board'
 import { useAuth } from '@/data/auth'
 import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import { ToolbarSlot } from '@/shell/ToolbarSlot'
@@ -316,6 +324,30 @@ export default function BoardPage() {
     setLayoutState((prev) => arrange(prev.filter((i) => i.id !== id)))
   }
 
+  // ── ONE, TWO OR THREE PER ROW, WITHOUT DRAGGING ────────────────────────────
+  //
+  // The lane rule in design/primitives/Board.tsx already means a card can only
+  // be the whole board, a half of it or a third of it. Getting to the one you
+  // want still meant dragging a corner and reading the result off the screen,
+  // which is a lot of hand for a choice with exactly three answers.
+  //
+  // So the choice is STATED instead: 1 · 2 · 3 in the card's own header while
+  // the board is unlocked, and the card takes that width on the spot. The drag
+  // still works and lands on the same three widths; this is the same decision
+  // made with one click.
+  //
+  // The card is PINNED for the settle that follows, the same way it is after a
+  // resize gesture. Without the pin, fillGaps would hand a card narrowed to a
+  // third the space it just gave up and widen it straight back — the button
+  // would appear to do nothing.
+  const setCardLanes = (id: string, lanes: number) => {
+    const w = Math.round(BOARD_COLS / lanes)
+    setLayoutState((prev) => {
+      const next = prev.map((i) => (i.id === id ? { ...i, w, x: snapLaneX(i.x, w) } : i))
+      return free ? settleBoard(next, id) : compactBoard(compactBoard(next, id))
+    })
+  }
+
   // ── CLEAR ALL ──────────────────────────────────────────────────────────────
   //
   // Removing cards one ✕ at a time is the only way to start over today, and it
@@ -555,13 +587,37 @@ export default function BoardPage() {
                 }
                 actions={
                   !locked && (
-                    <button
-                      onClick={() => removeCard(id)}
-                      title="Remove card"
-                      className="text-xs text-faint hover:text-down"
-                    >
-                      ✕
-                    </button>
+                    <span className="flex items-center gap-2">
+                      {/* Cards per row. The pressed one is the width the card
+                          already has, so the control doubles as a readout of
+                          which of the three it is currently on. */}
+                      <span className="flex overflow-hidden rounded-sm border border-line" role="group" aria-label="Cards per row">
+                        {[1, 2, 3].map((n) => {
+                          const on = (layout.find((i) => i.id === id)?.w ?? 0) === Math.round(BOARD_COLS / n)
+                          return (
+                            <button
+                              key={n}
+                              onClick={() => setCardLanes(id, n)}
+                              title={n === 1 ? 'Full width' : n === 2 ? 'Half width — two per row' : 'Third width — three per row'}
+                              aria-pressed={on}
+                              className={[
+                                'px-1.5 text-2xs leading-4 transition-colors',
+                                on ? 'bg-raised text-fg' : 'text-faint hover:bg-raised hover:text-fg',
+                              ].join(' ')}
+                            >
+                              {n}
+                            </button>
+                          )
+                        })}
+                      </span>
+                      <button
+                        onClick={() => removeCard(id)}
+                        title="Remove card"
+                        className="text-xs text-faint hover:text-down"
+                      >
+                        ✕
+                      </button>
+                    </span>
                   )
                 }
                 fill

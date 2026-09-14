@@ -22704,3 +22704,51 @@ Change: `public/v3` added to root `.gitignore` and untracked via
 `git rm -r --cached public/v3`. A failed v3 build now 404s loudly instead of
 silently serving a fossil. The underlying build failure inside the image is still
 to be diagnosed.
+
+## 2026-09-13 · v3 board: a row holds one, two or three cards and nothing else
+
+`cbedge-v3/src/design/primitives/Board.tsx`, `cbedge-v3/src/board/catalog.tsx`.
+
+The 48-column grid let a card be any width, so a row could end up with four
+cards, or with two that were 26 and 22 wide and looked wrong for a reason you
+could not see. A card's width is now the whole board (48), a half (24) or a
+third (16), and its left edge sits on a boundary of its own width: halves at 0
+and 24, thirds at 0, 16 and 32.
+
+- `laneWidths` / `snapLaneW` / `snapLaneX` / `snapBoard` are the rule, new in
+  Board.tsx. `snapBoard` puts every card on a lane and settles any overlap that
+  reopens by dropping it DOWN only, so a card never changes lane to get out of
+  the way.
+- `compactBoard` and `resolveBoard` lane-snap their input; `resolveBoard` and
+  `settleBoard` lane-snap their output too, because `squeezeAside`, `stepAside`
+  and `fillGaps` all reach widths by arithmetic and would otherwise invent an
+  illegal one. Every read path (`sanitizeLayout`) and every write path (add,
+  remove, drag, resize, load) goes through one of these, so an old saved board
+  is corrected on open.
+- Resize picks the nearest lane rather than the nearest column. The
+  neighbour-size match still runs on HEIGHT; width no longer needs it, since two
+  cards in a row are the same width by construction.
+- Drag guides are drawn at the thirds and halves instead of all 48 columns.
+- Catalog defaults moved onto legal widths: GEX Candles and Net Premium 32 -> 24,
+  Quick Links 12 -> 16.
+
+Verified against the engine offline: the lane snap is idempotent, leaves no
+overlap, and produces only 16/24/48 widths on lane-aligned x.
+
+## 2026-09-14 · v3 board: 1 · 2 · 3 in each card's header while editing
+
+`cbedge-v3/src/board/BoardPage.tsx`.
+
+The lane rule above means a card can only be full, half or third width, but
+reaching the one you want still meant dragging a corner and reading the result
+off the screen. Unlock the board and every card header now carries a
+three-button group before the ✕: 1 (full width), 2 (half, two per row), 3
+(third, three per row). Click one and the card takes that width immediately.
+
+- The pressed button is the width the card already has, so the control is also
+  the readout for which of the three it is on.
+- The card is PINNED for the settle that follows, exactly as after a resize
+  gesture. Unpinned, `fillGaps` hands a card narrowed to a third the space it
+  just gave up and widens it straight back, and the button looks broken.
+- Dragging still works and still lands on the same three widths. This is the
+  same decision made with one click.

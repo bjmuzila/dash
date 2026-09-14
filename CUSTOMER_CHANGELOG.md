@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Monday 9/14/2026
+
+* **GEX Candles:** new **Days** setting under the gear — show 1, 2 or 3 sessions of candles instead of just today — https://cbedge.net/v3
+
 ## Sunday 9/13/2026
 
 * **Level Log:** the range switch now goes past 5 sessions — **Monthly** and **All time** show a wall holding its strike across weeks, not just days. Charts you copy are cleaner and carry the ticker's logo — https://cbedge.net/v3/level-log
