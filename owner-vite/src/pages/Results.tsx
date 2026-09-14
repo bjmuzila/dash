@@ -7,6 +7,13 @@
  * wall → call wall range, /api/core-hold). Inherits the owner guard from
  * app/dev/layout.tsx.
  *
+ * OPEN BRACKET HAS TWO CUTS AND A DRILL-DOWN, the same shape the Daily Grades
+ * board uses. BY TICKER is the per-symbol board; BY SESSION is `by_date` from
+ * the same response — one row per trading day, every symbol pooled into it — so
+ * switching is a re-render and never a refetch. Clicking any row opens the
+ * sessions behind it (`detail=1`, narrowed server-side to that ticker or that
+ * one day), which are the same per-session verdicts the rates are folded from.
+ *
  * The ICT Results and Fail Rate tabs were removed — see CHANGELOG. The old
  * Walls tab went with them; Open bracket is not it rebuilt, it is a narrower
  * question asked of the OPEN levels only, against tables that are never
@@ -1055,6 +1062,37 @@ type BracketRow = {
   rolled_rate: number | null; above_core_rate: number | null;
   core_interior_rate: number | null; width_pct: number | null;
 };
+/**
+ * THE SAME NUMBERS CUT BY SESSION. One row per DATE, every symbol that recorded
+ * an open that day pooled into it — so `sessions` doubles as the roster size for
+ * the day. Server-side in the same pass as the per-symbol rows, which is what
+ * guarantees the two cuts can never disagree.
+ */
+type BracketDay = Omit<BracketRow, "symbol"> & { date: string };
+
+/**
+ * ONE SESSION, the row behind every rate on the board. `status` is what decides
+ * which denominator it landed in, and it is the only field the table colours by:
+ *
+ *   inside          closed between the walls (ON a wall counts as inside)
+ *   outside         closed through one of them
+ *   opened_outside  spot was already through a wall at the anchor — not scored
+ *   no_close        had a bracket, nothing to compare it to
+ *   inverted        call wall under put wall — dropped
+ *   incomplete      no bracket at the anchor at all
+ */
+type BracketSession = {
+  date: string; symbol: string;
+  spot: number | null; put_wall: number | null; call_wall: number | null; core: number | null;
+  width_pct: number | null; close: number | null; close_src: "daily" | "scanner" | null;
+  status: "inside" | "outside" | "opened_outside" | "no_close" | "inverted" | "incomplete";
+  inside: boolean | null;
+  core_pos: "cw" | "pw" | "interior" | "outside" | null;
+  core_side: "above" | "below" | null;
+  never_left: boolean | null; lo: number | null; hi: number | null;
+  rolled: number;
+};
+
 type BracketResp = {
   ok?: boolean; days?: number; scope?: string; basis?: string;
   anchor?: string; anchor_label?: string; anchor_source?: string;
@@ -1063,9 +1101,19 @@ type BracketResp = {
   // must not weigh the same as SPX with sixty.
   totals?: Omit<BracketRow, "symbol"> & { symbols: number };
   rows?: BracketRow[];
+  by_date?: BracketDay[];
+  // Only present with detail=1 — the board never asks for it, the drill-down does.
+  detail?: BracketSession[] | null;
+  detail_total?: number; detail_truncated?: boolean;
 };
 
 type SortKey = "symbol" | "sessions" | "inside" | "never" | "width" | "rolled";
+
+/** Which cut of the study the table is showing. */
+type CutKey = "symbol" | "date";
+
+/** What a drill-down was opened on — one ticker's sessions, or one day's. */
+type Drill = { kind: CutKey; id: string };
 
 const DAY_OPTS = [20, 60, 120, 500] as const;
 
@@ -1113,6 +1161,11 @@ function BracketView() {
   const [basis, setBasis] = useState<"oivol" | "vol">("oivol");
   const [anchor, setAnchor] = useState<AnchorKey>("open");
   const [sort, setSort] = useState<SortKey>("sessions");
+  // WHICH CUT. Both come out of the same response — switching is a re-render,
+  // never a refetch, the same deal the Daily Grades board makes with its tabs.
+  const [cut, setCut] = useState<CutKey>("symbol");
+  /** The open drill-down: one ticker's sessions, or one day's. */
+  const [drill, setDrill] = useState<Drill | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -1148,6 +1201,11 @@ function BracketView() {
     else list.sort((a, b) => val(b) - val(a) || a.symbol.localeCompare(b.symbol));
     return list;
   }, [resp, sort]);
+
+  // Newest session first, always. A back catalogue sorted by anything else is a
+  // table you have to search rather than read, and the per-symbol sorts above
+  // answer "which ticker" — this cut answers "which day".
+  const dayRows = useMemo(() => resp?.by_date ?? [], [resp]);
 
   const t = resp?.totals;
   const pctTxt = (n: number | null | undefined) => (n == null ? "—" : `${Math.round(n * 100)}%`);
@@ -1211,6 +1269,9 @@ function BracketView() {
           {resp?.dates ? ` · ${resp.dates[0]} → ${resp.dates[1]} (${resp.sessions_in_window} sessions)` : ""}
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {/* The cut leads: it is the only control here that does not refetch. */}
+          <button onClick={() => setCut("symbol")} style={chip(cut === "symbol")}>By ticker</button>
+          <button onClick={() => setCut("date")} style={chip(cut === "date")}>By session</button>
           {/* WHEN, then how far back, then which levels. The anchor leads because
               it is the one that changes what the study is OF. */}
           {ANCHOR_OPTS.map((a) => (
@@ -1250,7 +1311,7 @@ function BracketView() {
 
       {!loaded ? (
         <div style={{ color: C.label, fontSize: 14 }}>Reading the level log…</div>
-      ) : rows.length === 0 ? (
+      ) : (cut === "date" ? dayRows : rows).length === 0 ? (
         <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14 }}>
           No recorded opens on this variant yet.
         </div>
@@ -1271,40 +1332,71 @@ function BracketView() {
          */
         <div style={{ ...CARD, padding: 0, overflow: "hidden", flex: 1, minHeight: TABLE_MIN_H, display: "flex", flexDirection: "column" }}>
           <div className="wall-scroll" style={{ flex: 1, minHeight: TABLE_MIN_H, overflow: "auto" }}>
+            {/* EVERY ROW OPENS ITS OWN SESSIONS. A ticker opens its record, a
+                date opens that day's board — the same click the Daily Grades
+                table makes, and the reason a rate here is never a number you
+                have to take on trust. */}
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  <th style={thSort("symbol")} onClick={() => setSort("symbol")}>Symbol</th>
-                  <th style={thSort("sessions")} onClick={() => setSort("sessions")}>Sessions</th>
-                  <th style={thSort("width")} onClick={() => setSort("width")}>Width</th>
-                  <th style={thSort("inside")} onClick={() => setSort("inside")}>Closed inside</th>
-                  <th style={thSort("never")} onClick={() => setSort("never")}>Never left</th>
-                  <th style={th}>Core inside</th>
-                  <th style={th}>Above core</th>
-                  <th style={th}>Opened outside</th>
-                  <th style={thSort("rolled")} onClick={() => setSort("rolled")}>Walls rolled</th>
+                  {cut === "date" ? (
+                    <>
+                      <th style={th}>Session</th>
+                      <th style={th}>Tickers</th>
+                      <th style={th}>Width</th>
+                      <th style={th}>Closed inside</th>
+                      <th style={th}>Never left</th>
+                      <th style={th}>Core inside</th>
+                      <th style={th}>Above core</th>
+                      <th style={th}>Opened outside</th>
+                      <th style={th}>Walls rolled</th>
+                    </>
+                  ) : (
+                    <>
+                      <th style={thSort("symbol")} onClick={() => setSort("symbol")}>Symbol</th>
+                      <th style={thSort("sessions")} onClick={() => setSort("sessions")}>Sessions</th>
+                      <th style={thSort("width")} onClick={() => setSort("width")}>Width</th>
+                      <th style={thSort("inside")} onClick={() => setSort("inside")}>Closed inside</th>
+                      <th style={thSort("never")} onClick={() => setSort("never")}>Never left</th>
+                      <th style={th}>Core inside</th>
+                      <th style={th}>Above core</th>
+                      <th style={th}>Opened outside</th>
+                      <th style={thSort("rolled")} onClick={() => setSort("rolled")}>Walls rolled</th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={r.symbol} style={{ borderBottom: `1px solid ${rgba(C.border, 0.5)}` }}>
-                    <td style={{ ...td, fontWeight: 800 }}>{r.symbol}</td>
-                    <td style={td}>{r.sessions}</td>
-                    <td style={{ ...td, color: C.cyan, fontWeight: 700 }}>{wTxt(r.width_pct)}</td>
-                    {rateCell(r.inside_rate, r.inside, r.scored)}
-                    {rateCell(r.never_left_rate, r.never_left, r.path_sessions)}
-                    <td style={{ ...td, color: MUTED }}>
-                      {r.core_interior_rate != null
-                        ? `${pctTxt(r.core_interior_rate)}  ${r.core_interior}/${r.core_is_cw + r.core_is_pw + r.core_interior}`
-                        : "—"}
-                    </td>
-                    <td style={{ ...td, color: MUTED }}>
-                      {r.above_core + r.below_core > 0 ? `${pctTxt(r.above_core_rate)}  ${r.above_core}/${r.above_core + r.below_core}` : "—"}
-                    </td>
-                    <td style={{ ...td, color: MUTED }}>{r.opened_outside || "—"}</td>
-                    <td style={{ ...td, color: MUTED }}>{pctTxt(r.rolled_rate)}</td>
-                  </tr>
-                ))}
+                {/* One map over both cuts — the columns line up by design, so
+                    the union is cast once here rather than the body written twice. */}
+                {((cut === "date" ? dayRows : rows) as Array<BracketRow | BracketDay>).map((r) => {
+                  const isDay = cut === "date";
+                  const id = isDay ? (r as BracketDay).date : (r as BracketRow).symbol;
+                  return (
+                    <tr
+                      key={id}
+                      className="card-hover"
+                      onClick={() => setDrill({ kind: cut, id })}
+                      style={{ borderBottom: `1px solid ${rgba(C.border, 0.5)}`, cursor: "pointer" }}
+                    >
+                      <td style={{ ...td, fontWeight: 800, color: C.cyan }}>{id}</td>
+                      <td style={td}>{r.sessions}</td>
+                      <td style={{ ...td, color: C.cyan, fontWeight: 700 }}>{wTxt(r.width_pct)}</td>
+                      {rateCell(r.inside_rate, r.inside, r.scored)}
+                      {rateCell(r.never_left_rate, r.never_left, r.path_sessions)}
+                      <td style={{ ...td, color: MUTED }}>
+                        {r.core_interior_rate != null
+                          ? `${pctTxt(r.core_interior_rate)}  ${r.core_interior}/${r.core_is_cw + r.core_is_pw + r.core_interior}`
+                          : "—"}
+                      </td>
+                      <td style={{ ...td, color: MUTED }}>
+                        {r.above_core + r.below_core > 0 ? `${pctTxt(r.above_core_rate)}  ${r.above_core}/${r.above_core + r.below_core}` : "—"}
+                      </td>
+                      <td style={{ ...td, color: MUTED }}>{r.opened_outside || "—"}</td>
+                      <td style={{ ...td, color: MUTED }}>{pctTxt(r.rolled_rate)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1356,7 +1448,205 @@ function BracketView() {
           never folded into it.
           {t && t.scanner_closes > 0 ? ` ${t.scanner_closes} close(s) are the last 5-minute spot rather than the official daily bar.` : ""}
         </div>
+        <div>
+          Click any row for the sessions behind it — a ticker opens its own record,
+          a session opens that day's board. Those rows are the same verdicts these
+          rates are folded from, not a second study.
+        </div>
       </div>
+
+      {drill && (
+        <BracketSessionsModal
+          drill={drill}
+          days={days}
+          scope={scope}
+          basis={basis}
+          anchor={anchor}
+          anchorLabel={resp?.anchor_label ?? "09:29"}
+          onClose={() => setDrill(null)}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * THE DRILL-DOWN — the sessions behind one row of the board.
+ *
+ * Opened on a TICKER it is that symbol's record: every session it recorded an
+ * open for, newest first, ungraded ones included. Opened on a SESSION it is that
+ * day's board: every symbol that recorded an open, judged the same way. Both are
+ * `/api/core-hold?detail=1` with the same anchor, scope and basis the board is
+ * on — a drill-down that quietly re-read a different variant than the rate it
+ * was opened from would be worse than no drill-down at all.
+ *
+ * NARROW ON THE SERVER, never in here. A ticker asks with `symbols=`; a day asks
+ * with `end=<that date>&days=1`, which is exactly the one session. Fetching the
+ * whole window and filtering client-side would ship tens of thousands of rows to
+ * throw nearly all of them away, and would hit the response's own detail cap.
+ *
+ * Fetches on open and drops the rows on close — the 16:00 sweep and the ATR
+ * backfill both land during a session, and a cached table would go stale inside
+ * the same visit.
+ */
+function BracketSessionsModal({
+  drill, days, scope, basis, anchor, anchorLabel, onClose,
+}: {
+  drill: Drill;
+  days: number;
+  scope: string;
+  basis: string;
+  anchor: AnchorKey;
+  anchorLabel: string;
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<BracketSession[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      setErr(null);
+      setRows(null);
+      const q = drill.kind === "symbol"
+        ? `days=${days}&symbols=${encodeURIComponent(drill.id)}`
+        : `days=1&end=${encodeURIComponent(drill.id)}`;
+      try {
+        const r = await fetch(`/api/core-hold?${q}&scope=${scope}&basis=${basis}&anchor=${anchor}&detail=1`, { cache: "no-store" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j: BracketResp = await r.json();
+        if (!j?.ok) throw new Error(String((j as { error?: string })?.error || "no data"));
+        if (!dead) setRows(j.detail ?? []);
+      } catch (e) { if (!dead) { setErr(String(e)); setRows([]); } }
+    })();
+    return () => { dead = true; };
+  }, [drill, days, scope, basis, anchor]);
+
+  const th: React.CSSProperties = {
+    padding: "9px 12px", fontSize: 13, fontWeight: 800, letterSpacing: "0.08em",
+    textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap",
+    position: "sticky", top: 0, zIndex: 1,
+    background: HOME_THEME.panelBgStrong,
+    boxShadow: `inset 0 -1px 0 ${C.border}`,
+  };
+  const td: React.CSSProperties = { padding: "7px 12px", fontSize: 13, whiteSpace: "nowrap", fontFamily: "var(--font-mono)", color: C.label };
+  const px = (n: number | null) => (n == null ? "—" : n.toFixed(2));
+
+  // The verdict carries the row. Green/red only where a rate was actually
+  // earned — the three "not scored" states are muted on purpose, because an
+  // amber wall of skipped sessions reads as failure rather than as exclusion.
+  const VERDICT: Record<BracketSession["status"], { label: string; color: string }> = {
+    inside: { label: "Inside", color: GREEN },
+    outside: { label: "Closed out", color: RED },
+    opened_outside: { label: "Opened outside", color: AMBER },
+    no_close: { label: "No close", color: MUTED },
+    inverted: { label: "Inverted", color: MUTED },
+    incomplete: { label: "No bracket", color: MUTED },
+  };
+
+  const scored = (rows ?? []).filter((r) => r.status === "inside" || r.status === "outside");
+  const inside = scored.filter((r) => r.status === "inside").length;
+  const path = (rows ?? []).filter((r) => r.never_left != null);
+  const never = path.filter((r) => r.never_left).length;
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 1000, background: "rgba(5,6,10,0.72)",
+      backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...CARD, width: "min(1180px, 100%)", maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 16, fontWeight: 800, color: C.cyan, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+            {drill.id}
+          </span>
+          <span style={{ fontSize: 13, color: C.label }}>
+            {drill.kind === "symbol" ? "every recorded session" : "every ticker that recorded an open"} · bracket frozen at {anchorLabel}
+          </span>
+          <span style={{ marginLeft: "auto", fontSize: 13, color: MUTED, fontFamily: "var(--font-mono)" }}>
+            {scored.length > 0 ? `${Math.round((inside / scored.length) * 100)}% inside  ${inside}/${scored.length}` : "nothing scored"}
+            {path.length > 0 ? ` · ${Math.round((never / path.length) * 100)}% never left  ${never}/${path.length}` : ""}
+          </span>
+          <button onClick={onClose} style={{
+            fontSize: 13, fontWeight: 800, padding: "5px 12px", borderRadius: 8, cursor: "pointer",
+            border: `1px solid ${C.border}`, background: "transparent", color: C.label, fontFamily: "inherit",
+          }}>Close</button>
+        </div>
+
+        {err && <div style={{ color: RED, fontSize: 13, padding: "12px 18px", fontFamily: "var(--font-mono)" }}>Couldn&apos;t load the sessions: {err}</div>}
+
+        {rows == null ? (
+          <div style={{ padding: "18px", fontSize: 14, color: C.label }}>Reading the sessions…</div>
+        ) : rows.length === 0 ? (
+          <div style={{ padding: "18px", fontSize: 14, color: C.label }}>No recorded opens here on this variant.</div>
+        ) : (
+          <div className="wall-scroll" style={{ overflow: "auto", flex: 1 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <th style={th}>{drill.kind === "symbol" ? "Session" : "Symbol"}</th>
+                  <th style={th}>Verdict</th>
+                  <th style={th}>Put wall</th>
+                  <th style={th}>CORE</th>
+                  <th style={th}>Call wall</th>
+                  <th style={th}>Width</th>
+                  <th style={th}>{anchorLabel} spot</th>
+                  <th style={th}>Close</th>
+                  <th style={th}>Never left</th>
+                  <th style={th}>Rolled</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const v = VERDICT[r.status] ?? VERDICT.incomplete;
+                  return (
+                    <tr key={`${r.date}|${r.symbol}`} style={{ borderBottom: `1px solid ${rgba(C.border, 0.5)}` }}>
+                      <td style={{ ...td, fontWeight: 800 }}>{drill.kind === "symbol" ? r.date : r.symbol}</td>
+                      <td style={{ ...td, fontWeight: 800, color: v.color }}>
+                        {v.label}
+                        {/* Which side of the CORE, but only where the CORE was a
+                            genuine third price — see the note on the board. */}
+                        {r.core_side ? <span style={{ color: MUTED, fontWeight: 600 }}>{`  ${r.core_side} core`}</span> : null}
+                      </td>
+                      <td style={td}>{px(r.put_wall)}</td>
+                      <td style={{ ...td, color: r.core_pos === "interior" ? C.purple : MUTED }}>
+                        {px(r.core)}
+                        {r.core_pos === "cw" ? <span style={{ color: MUTED }}>{"  = CW"}</span>
+                          : r.core_pos === "pw" ? <span style={{ color: MUTED }}>{"  = PW"}</span> : null}
+                      </td>
+                      <td style={td}>{px(r.call_wall)}</td>
+                      <td style={{ ...td, color: C.cyan }}>{r.width_pct == null ? "—" : `${r.width_pct.toFixed(2)}%`}</td>
+                      <td style={td}>{px(r.spot)}</td>
+                      <td style={td}>
+                        {px(r.close)}
+                        {/* A scanner close is the last 5-minute spot, not the
+                            official daily bar. Marked, never silently mixed. */}
+                        {r.close_src === "scanner" ? <span style={{ color: AMBER }}>{"  *"}</span> : null}
+                      </td>
+                      <td style={{ ...td, color: r.never_left == null ? MUTED : r.never_left ? GREEN : RED }}>
+                        {r.never_left == null ? "—" : r.never_left ? "yes" : "no"}
+                      </td>
+                      <td style={{ ...td, color: MUTED }}>{r.rolled || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: "10px 18px", fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+          A close exactly ON a wall counts as inside. “Never left” reads the 5-minute
+          scanner path from the anchor forward and is blank where retention has cut it.
+          <span style={{ color: AMBER }}> *</span> marks a close taken from the last
+          5-minute spot rather than the official daily bar.
+        </div>
+      </div>
+    </div>
   );
 }

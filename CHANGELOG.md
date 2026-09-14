@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-09-14 (a) - ES rolled to December, and es_candles learned which contract a bar is
+
+`server-v2/proxy-tastytrade.js` picked the front ES/NQ contract by nearest
+non-expired expiry and resolved it once inside connect(), so the feed sat on the
+thin ESU6 book for four sessions after the Sep 10 roll and would have sat on a
+dead one after expiry; it now prefers `ES_CONTRACT`/`NQ_CONTRACT`, then
+tastytrade's `active-month`, and re-checks every 30 minutes (deferring the
+reconnect outside 09:30-16:15 ET). `es_candles` gained a `contract` column inside
+its unique key - `lib/db.ts`, `server-v2/_lib-db.cjs`,
+`server-v2/state/es-candle-writer.js`, `server-v2/api-router.js`,
+`server-v2/scripts/migrate-es-candles-contract-key.sql` - so a roll can no longer
+upsert the incoming contract's bars over the outgoing one's, with
+`?contract=latest` serving the chart one continuous series.
+
+Two follow-ups the first deploy needed: the boot migration sat at the end of
+ensureAllTables, which getDb() flags as done BEFORE awaiting, so it never ran and
+every candle write died on the missing column - the writer now ensures it on its
+own pool, and getDb() runs it as a separate step.
+
+Live on v9.14.14:
+`[FEED] ES front streamer=/ESZ26:XCME ttSymbol=/ESZ6 expires=2026-12-18 via=active-month`
+
+OPEN - NOT FIXED. The SPX->ES basis still resolves to September, so GEX bubbles
+sit ~68pt below the ESZ6 candles (measured: SPX 7656.98, ESU6 7660.00 -> 3.02;
+ESZ6 7728.50 -> 71.52). The cause is a tie: every contract's 16:00 bar shares one
+timestamp, so a 16:00-scoped `ORDER BY timestamp DESC LIMIT 1` picks arbitrarily.
+Fix is committed to `server-v2/es-spx-basis.js` (take the contract from the newest
+bar overall, not the newest 16:00 bar) but is NOT deployed or verified.
+
 ## 2026-09-13 (b) - GEX Candles (v3): the day selector moves into the cogwheel
 
 Follow-up to (a). The 1D/2D/3D picker sat in the header beside the interval; it

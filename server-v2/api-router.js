@@ -10400,10 +10400,18 @@ Return exactly one element per input key, in the same order. Never merge, split,
 
   // /api/core-hold — DOES THE OPENING BRACKET HOLD? Owner.
   //
-  //   GET /api/core-hold?days=60[&end=][&scope=&basis=][&anchor=][&symbols=A,B]
+  //   GET /api/core-hold?days=60[&end=][&scope=&basis=][&anchor=][&symbols=A,B][&detail=1]
   //   → { ok, days, end, scope, basis, dates:[first,last], sessions_in_window,
   //       totals, rows: [{ symbol, sessions, scored, inside, inside_rate,
-  //                        never_left_rate, above_core_rate, width_pct, … }] }
+  //                        never_left_rate, above_core_rate, width_pct, … }],
+  //       by_date: [{ date, …the same fields, that session pooled… }],
+  //       detail: [{ date, symbol, spot, put_wall, call_wall, core, width_pct,
+  //                  close, close_src, status, inside, core_pos, core_side,
+  //                  never_left, lo, hi, rolled }] | null }
+  //
+  // `by_date` is the board cut by SESSION instead of by symbol and always comes
+  // back. `detail=1` adds the per-session rows behind both cuts — capped, so a
+  // drill-down asks with `symbols=` or `end=`+`days=1` rather than for the lot.
   //
   // The put wall and call wall AS CAPTURED AT THE ANCHOR are a range; the CORE
   // sits inside it. Per symbol, over the newest N recorded sessions: how often
@@ -10450,6 +10458,9 @@ Return exactly one element per input key, in the same order. Never merge, split,
           basis: u.searchParams.get('basis'),
           anchor: u.searchParams.get('anchor'),
           symbols,
+          // Opt-in only. Absent it the response is the board, which is what
+          // every reader but the drill-down wants.
+          detail: /^(1|true|yes|sessions)$/i.test(String(u.searchParams.get('detail') || '')),
         });
         send(res, 200, out, { 'Cache-Control': NO_STORE });
       } catch (e) {

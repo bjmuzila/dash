@@ -104,7 +104,10 @@
  * vol-only study has full history, the default variant's has ten days, and that
  * difference is not something to discover from a suspiciously round number.
  *
- * Read API: GET /api/core-hold?days=&end=&scope=&basis=&anchor=[&symbols=] (owner)
+ * Read API: GET /api/core-hold?days=&end=&scope=&basis=&anchor=[&symbols=][&detail=1]
+ *            (owner). `detail=1` adds `detail[]` — one row per SESSION, the
+ *            drill-down behind the board. `by_date[]` (the same numbers cut by
+ *            session instead of by symbol) is always returned.
  * Consumed by: owner-vite Results → Open bracket
  */
 
@@ -113,6 +116,15 @@ const variants = require('./scanner-variants');
 /** The default window. 60 sessions is about a quarter. */
 const DEFAULT_DAYS = 60;
 const MAX_DAYS = 500;
+
+/**
+ * The per-session drill-down cap. `detail=1` on a 500-day window over the whole
+ * roster is symbols x dates — tens of thousands of rows — and a page that asks
+ * for that has asked by accident. The newest MAX_DETAIL are returned and
+ * `detail_truncated` says so; a caller that wants a specific ticker or a
+ * specific day narrows with `symbols=` or `end=`+`days=1` instead of paging.
+ */
+const MAX_DETAIL = 4000;
 
 /**
  * WHERE THE BRACKET IS TAKEN.
@@ -190,7 +202,11 @@ async function coreHold(pool, opts = {}) {
     [days, end, variant.scope, variant.basis, only],
   );
   if (!opens.length) {
-    return { ok: true, days, end, scope: variant.scope, basis: variant.basis, dates: [], rows: [] };
+    return {
+      ok: true, days, end, scope: variant.scope, basis: variant.basis,
+      dates: [], rows: [], by_date: [], detail: opts.detail ? [] : null,
+      detail_total: 0, detail_truncated: false,
+    };
   }
 
   // "YYYY-MM-DD" strings throughout. They go back into the DATE columns as
@@ -373,8 +389,14 @@ async function coreHold(pool, opts = {}) {
   }
 
   // ── Assembly ───────────────────────────────────────────────────────────────
-  const blank = (sym) => ({
-    symbol: sym,
+  //
+  // ONE PASS, THREE READERS. Every session is judged once, in `judgeSession`,
+  // into a verdict row; `tally` then folds that same verdict into the per-symbol
+  // accumulator AND the per-date one, and the verdicts themselves are kept as
+  // the drill-down. A rate on the board and the sessions behind it can therefore
+  // never disagree — they are the same arithmetic read twice, not two studies of
+  // the same tables.
+  const STATS = () => ({
     sessions: 0,
     /** Sessions with a usable bracket AND a close — the INSIDE denominator. */
     scored: 0,
@@ -413,90 +435,67 @@ async function coreHold(pool, opts = {}) {
     width_pct: null,
     _widths: [],
   });
+  const blank = (sym) => ({ symbol: sym, ...STATS() });
+  /**
+   * A DATE row. `sessions` is the number of SYMBOLS that recorded an open that
+   * day — one session per symbol per date — so it doubles as the roster size,
+   * and the rates beside it are that day pooled across the board rather than
+   * one ticker's.
+   */
+  const blankDay = (date) => ({ date, ...STATS() });
+
   const by = new Map(symbols.map((s) => [s, blank(s)]));
+  const byDate = new Map(dates.map((d) => [d, blankDay(d)]));
+  /** One verdict per session — the rows behind every rate on the board. */
+  const detail = [];
+
+  const tally = (row, v) => {
+    if (!row) return;
+    row.sessions++;
+    if (v.rolled > 0) row.rolled++;
+    if (v.status === 'incomplete') { row.incomplete++; return; }
+    if (v.status === 'inverted') { row.inverted++; return; }
+    row._widths.push(v.width_pct);
+    if (v.core_pos === 'cw') row.core_is_cw++;
+    else if (v.core_pos === 'pw') row.core_is_pw++;
+    else if (v.core_pos === 'interior') row.core_interior++;
+    if (v.status === 'opened_outside') { row.opened_outside++; return; }
+    if (v.never_left != null) {
+      row.path_sessions++;
+      if (v.never_left) row.never_left++;
+    }
+    if (v.status === 'no_close') { row.no_close++; return; }
+    row.scored++;
+    if (v.close_src === 'scanner') row.scanner_closes++;
+    if (v.inside) {
+      row.inside++;
+      if (v.core_side === 'above') row.above_core++;
+      else if (v.core_side === 'below') row.below_core++;
+    }
+  };
 
   for (const s of sessions.values()) {
-    const row = by.get(s.symbol);
-    if (!row) continue;
-    row.sessions++;
-
     const k = key(s.date, s.symbol);
-    if ((rolls.get(k) ?? 0) > 0) row.rolled++;
-
-    // A bracket needs both walls and the 09:29 print that positions us in it.
-    if (!(s.cw > 0) || !(s.pw > 0) || !(s.spot > 0)) {
-      row.incomplete++;
-      continue;
-    }
-    if (s.cw <= s.pw) {
-      row.inverted++;
-      continue;
-    }
-    row._widths.push(((s.cw - s.pw) / s.spot) * 100);
-
-    // Where the CORE sat. Strikes come from the same rows as the walls, so they
-    // are bit-identical when they are the same strike; the epsilon is only there
-    // so a future source that rounds differently cannot turn an equal strike
-    // into a spurious "interior" level a hundredth of a point wide.
-    const EPS = 1e-6;
-    let coreInterior = false;
-    if (s.cb > 0) {
-      if (Math.abs(s.cb - s.cw) <= EPS) row.core_is_cw++;
-      else if (Math.abs(s.cb - s.pw) <= EPS) row.core_is_pw++;
-      else if (s.cb < s.cw && s.cb > s.pw) {
-        row.core_interior++;
-        coreInterior = true;
-      }
-      // A CORE outside its own bracket is possible on a thin chain and is
-      // counted nowhere: it is neither an edge nor a midline.
-    }
-
-    if (s.spot > s.cw || s.spot < s.pw) {
-      row.opened_outside++;
-      continue;
-    }
-
-    // NEVER LEFT is asked of every session that opened inside, whether or not a
-    // close is available — the two arms are independent and a session missing
-    // one should still answer the other.
-    const ex = extremes.get(k);
-    if (ex) {
-      row.path_sessions++;
-      if (ex.hi <= s.cw && ex.lo >= s.pw) row.never_left++;
-    }
-
-    const close = closes.get(k);
-    if (!(close > 0)) {
-      row.no_close++;
-      continue;
-    }
-    row.scored++;
-    if (closeSrc.get(k) === 'scanner') row.scanner_closes++;
-    // On a wall counts as inside — the wall is the edge of the range.
-    if (close <= s.cw && close >= s.pw) {
-      row.inside++;
-      // Interior CORE only — see the header. On a session where the CORE is the
-      // call wall, every inside close is below it by construction.
-      if (coreInterior) {
-        if (close > s.cb) row.above_core++;
-        else if (close < s.cb) row.below_core++;
-      }
-    }
+    const v = judgeSession(s, {
+      rolled: rolls.get(k) ?? 0,
+      close: closes.get(k) ?? null,
+      closeSrc: closeSrc.get(k) ?? null,
+      path: extremes.get(k) ?? null,
+    });
+    detail.push(v);
+    tally(by.get(s.symbol), v);
+    tally(byDate.get(s.date), v);
   }
 
   const rows = [...by.values()].filter((r) => r.sessions > 0);
-  for (const r of rows) {
-    r.inside_rate = pct(r.inside, r.scored);
-    r.never_left_rate = pct(r.never_left, r.path_sessions);
-    r.rolled_rate = pct(r.rolled, r.sessions);
-    r.above_core_rate = pct(r.above_core, r.above_core + r.below_core);
-    // Over sessions with a usable bracket, not over every session — a session
-    // with no bracket had no CORE placement to classify.
-    r.core_interior_rate = pct(r.core_interior, r.core_is_cw + r.core_is_pw + r.core_interior);
-    r.width_pct = median(r._widths);
-    delete r._widths;
-  }
+  rows.forEach(finalize);
   rows.sort((a, b) => b.sessions - a.sessions || a.symbol.localeCompare(b.symbol));
+
+  // Newest session first — the same order the drill-down and every other
+  // back-catalogue table on the owner side uses.
+  const dayRows = [...byDate.values()].filter((r) => r.sessions > 0);
+  dayRows.forEach(finalize);
+  dayRows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 
   // Pooled, NOT an average of the per-symbol rates — a ticker with four sessions
   // must not weigh the same as SPX with sixty. The width is the exception: it is
@@ -534,6 +533,18 @@ async function coreHold(pool, opts = {}) {
   totals.above_core_rate = pct(totals.above_core, totals.above_core + totals.below_core);
   totals.core_interior_rate = pct(totals.core_interior, totals.core_is_cw + totals.core_is_pw + totals.core_interior);
 
+  // THE DRILL-DOWN IS OPT-IN. The board is a few dozen rows; the sessions behind
+  // it are symbols × dates, which on a 500-day window over the whole roster is
+  // tens of thousands of rows nobody asked for. `detail=1` asks for them, and a
+  // caller that wants a readable page asks with `symbols=` or a one-day window.
+  let detailOut = null;
+  let truncated = false;
+  if (opts.detail) {
+    detail.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.symbol.localeCompare(b.symbol)));
+    truncated = detail.length > MAX_DETAIL;
+    detailOut = truncated ? detail.slice(0, MAX_DETAIL) : detail;
+  }
+
   return {
     ok: true,
     days,
@@ -549,7 +560,106 @@ async function coreHold(pool, opts = {}) {
     sessions_in_window: dates.length,
     totals,
     rows,
+    /** The same numbers cut by SESSION instead of by symbol, newest first. */
+    by_date: dayRows,
+    /** Per-session verdicts, only when asked for. */
+    detail: detailOut,
+    detail_total: detail.length,
+    detail_truncated: truncated,
   };
 }
 
-module.exports = { coreHold, ANCHORS, DEFAULT_ANCHOR, DEFAULT_DAYS, MAX_DAYS };
+/**
+ * ONE SESSION, JUDGED.
+ *
+ * The whole model in one place: which bracket it had, where it closed, and the
+ * single `status` that decides which denominator it lands in. Every count on the
+ * board is a fold of these, so a rate that looks wrong can be read back to the
+ * sessions that made it rather than re-derived.
+ *
+ *   status  incomplete     no bracket at the anchor (no walls, or no spot)
+ *           inverted       call wall under put wall — dropped, see the header
+ *           opened_outside spot was already through a wall at the anchor
+ *           no_close       had a bracket, nothing to compare it to
+ *           inside         closed between the walls (ON a wall counts as inside)
+ *           outside        closed through one of them
+ */
+function judgeSession(s, { rolled, close, closeSrc, path }) {
+  const v = {
+    date: s.date,
+    symbol: s.symbol,
+    spot: s.spot > 0 ? s.spot : null,
+    put_wall: s.pw > 0 ? s.pw : null,
+    call_wall: s.cw > 0 ? s.cw : null,
+    core: s.cb > 0 ? s.cb : null,
+    width_pct: null,
+    close: close > 0 ? close : null,
+    close_src: close > 0 ? closeSrc : null,
+    status: 'incomplete',
+    inside: null,
+    /** cw | pw | interior | outside — where the CORE sat in its own bracket. */
+    core_pos: null,
+    /** above | below — inside closes on an interior-CORE session only. */
+    core_side: null,
+    never_left: null,
+    lo: path ? path.lo : null,
+    hi: path ? path.hi : null,
+    rolled,
+  };
+
+  // A bracket needs both walls and the anchor print that positions us in it.
+  if (!(s.cw > 0) || !(s.pw > 0) || !(s.spot > 0)) return v;
+  if (s.cw <= s.pw) { v.status = 'inverted'; return v; }
+
+  v.width_pct = ((s.cw - s.pw) / s.spot) * 100;
+
+  // Where the CORE sat. Strikes come from the same rows as the walls, so they
+  // are bit-identical when they are the same strike; the epsilon is only there
+  // so a future source that rounds differently cannot turn an equal strike
+  // into a spurious "interior" level a hundredth of a point wide.
+  const EPS = 1e-6;
+  if (s.cb > 0) {
+    if (Math.abs(s.cb - s.cw) <= EPS) v.core_pos = 'cw';
+    else if (Math.abs(s.cb - s.pw) <= EPS) v.core_pos = 'pw';
+    else if (s.cb < s.cw && s.cb > s.pw) v.core_pos = 'interior';
+    // A CORE outside its own bracket is possible on a thin chain and is counted
+    // nowhere: it is neither an edge nor a midline.
+    else v.core_pos = 'outside';
+  }
+
+  if (s.spot > s.cw || s.spot < s.pw) { v.status = 'opened_outside'; return v; }
+
+  // NEVER LEFT is asked of every session that opened inside, whether or not a
+  // close is available — the two arms are independent and a session missing one
+  // should still answer the other.
+  if (path) v.never_left = path.hi <= s.cw && path.lo >= s.pw;
+
+  if (!(close > 0)) { v.status = 'no_close'; return v; }
+
+  // On a wall counts as inside — the wall is the edge of the range.
+  v.inside = close <= s.cw && close >= s.pw;
+  v.status = v.inside ? 'inside' : 'outside';
+  // Interior CORE only — see the header. On a session where the CORE is the
+  // call wall, every inside close is below it by construction.
+  if (v.inside && v.core_pos === 'interior') {
+    if (close > s.cb) v.core_side = 'above';
+    else if (close < s.cb) v.core_side = 'below';
+  }
+  return v;
+}
+
+/** The rates, computed the same way for a symbol row, a date row and totals. */
+function finalize(r) {
+  r.inside_rate = pct(r.inside, r.scored);
+  r.never_left_rate = pct(r.never_left, r.path_sessions);
+  r.rolled_rate = pct(r.rolled, r.sessions);
+  r.above_core_rate = pct(r.above_core, r.above_core + r.below_core);
+  // Over sessions with a usable bracket, not over every session — a session
+  // with no bracket had no CORE placement to classify.
+  r.core_interior_rate = pct(r.core_interior, r.core_is_cw + r.core_is_pw + r.core_interior);
+  r.width_pct = median(r._widths);
+  delete r._widths;
+  return r;
+}
+
+module.exports = { coreHold, ANCHORS, DEFAULT_ANCHOR, DEFAULT_DAYS, MAX_DAYS, MAX_DETAIL };

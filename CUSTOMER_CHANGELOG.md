@@ -4,7 +4,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Monday 9/14/2026
 
-* **GEX Candles:** new **Days** setting under the gear — show 1, 2 or 3 sessions of candles instead of just today — https://cbedge.net/v3
+* **GEX Candles:** new **Days** setting under the gear — show 1, 2 or 3 sessions of candles instead of just today. The ES chart follows the new December contract and updates live again — https://cbedge.net/v3
 
 ## Sunday 9/13/2026
 

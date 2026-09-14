@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-09-14 (m) - Open bracket: a per-session cut, and the sessions behind every rate
+
+`/owner/results` → Open bracket answered "which ticker" and nothing else. It now
+also answers "which session", and every rate on it opens the sessions it was
+folded from — the same two moves the Daily Grades board makes.
+
+Added:
+- `server-v2/core-hold.js` — one pass now judges each session into a verdict
+  (`judgeSession`) and folds that same verdict into BOTH a per-symbol and a
+  per-date accumulator (`tally`), so the two cuts can never disagree. New in the
+  response: `by_date[]` (one row per trading day, every symbol pooled, newest
+  first — same fields as `rows[]`) always, and `detail[]` (one row per session:
+  walls, CORE and its placement, width, close and its source, verdict, never-left
+  and the path extremes, rolls) behind `detail=1`, capped at `MAX_DETAIL` 4000.
+  No arithmetic changed — `finalize()` is the old rate block, lifted out.
+- `server-v2/api-router.js` — `/api/core-hold` passes `detail` through
+  (`1|true|yes|sessions`); still owner-gated, still no-store.
+- `owner-vite/src/pages/Results.tsx` — BY TICKER / BY SESSION chips (a
+  re-render, not a refetch — both cuts ride one response), and
+  `BracketSessionsModal`: click a ticker for its record, a date for that day's
+  board. The modal narrows SERVER-side (`symbols=` or `end=`+`days=1`) rather
+  than pulling the window and filtering, so it never hits the detail cap.
+  Scanner-sourced closes are starred, "never left" is blank where retention cut
+  it, and the CORE column marks `= CW` / `= PW` when it was not a third price.
+
+Note: the bracket study is live on read — today's session lands in it as soon as
+the 09:29 open capture and a close exist. `wall_atr` (the official daily bar) is
+written by Reach Rank, which has been DISABLED since 2026-09-10, so today's close
+comes from the last 5-minute scanner spot and shows with a `*`.
+
 ## 2026-09-14 (l) - Probe: the entry dot sits on the line, and the lookup can carry a position
 
 **The dot was in open space.** The entry marker was drawn at the entry PRICE on
