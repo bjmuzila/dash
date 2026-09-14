@@ -28,12 +28,65 @@ export function getPool(): Pool {
   return _pool;
 }
 
+/**
+ * es_candles.contract, ensured independently of ensureAllTables.
+ *
+ * 2026-09-14. This migration used to live at the END of ensureAllTables. That
+ * was wrong twice over: ensureAllTables is ONE enormous statement, so anything
+ * throwing earlier in it skips everything after; and getDb() sets
+ * _tablesEnsured BEFORE awaiting, so that skip is permanent for the life of the
+ * process, with no retry and no log. The column never got added, every ES
+ * candle write died on it, and the chart quietly stopped updating.
+ *
+ * So it runs on its own, after ensureAllTables rather than inside it. A
+ * rejection clears the cached promise so the next getDb() retries instead of
+ * the failure sticking forever.
+ *
+ * server-v2/state/es-candle-writer.js ensures the same thing on ITS pool — it
+ * never calls getDb(), so this function cannot cover it.
+ */
+let _contractEnsured: Promise<void> | null = null;
+function ensureEsCandlesContract(pool: Pool): Promise<void> {
+  if (_contractEnsured) return _contractEnsured;
+  _contractEnsured = (async () => {
+    await pool.query(`ALTER TABLE es_candles ADD COLUMN IF NOT EXISTS contract TEXT NOT NULL DEFAULT ''`);
+    await pool.query(`ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS es_candles_slot_interval_key`);
+    await pool.query(`ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS "es_candles_slotKey_intervalMinutes_key"`);
+    await pool.query(`DO $do$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'es_candles_slot_interval_contract_key'
+        ) THEN
+          ALTER TABLE es_candles
+            ADD CONSTRAINT es_candles_slot_interval_contract_key
+            UNIQUE ("slotKey", "intervalMinutes", contract);
+        END IF;
+      END
+      $do$`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ec_contract_interval_date
+                        ON es_candles(contract, "intervalMinutes", date)`);
+  })().catch((err) => {
+    _contractEnsured = null;
+    console.warn("[db] es_candles contract migration failed (will retry):",
+      String(err && err.message).slice(0, 160));
+  });
+  return _contractEnsured;
+}
+
 export async function getDb(): Promise<Pool> {
   const pool = getPool();
   if (!_tablesEnsured) {
     _tablesEnsured = true;
-    await ensureAllTables(pool);
+    try {
+      await ensureAllTables(pool);
+    } catch (err) {
+      // Previously this propagated and, because the flag is already set, left
+      // every later migration step unrun and unmentioned. Log it and carry on:
+      // the individual ensures below are what the hot paths actually need.
+      console.warn("[db] ensureAllTables failed:", String((err as Error)?.message).slice(0, 200));
+    }
   }
+  await ensureEsCandlesContract(pool);
   return pool;
 }
 
@@ -1729,48 +1782,6 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     ON CONFLICT (email_key) DO NOTHING;
   `);
 
-  // ── es_candles.contract, applied on every boot ────────────────────────────
-  //
-  // Separate from the CREATE block above because CREATE TABLE IF NOT EXISTS is a
-  // no-op on a table that already exists — it will not add a column and it will
-  // not change a constraint. Every deploy with an existing es_candles therefore
-  // had the new code reading a column the DB did not have, which is a 500 on
-  // /api/snapshots/candles, not a degraded chart.
-  //
-  // So this is the schema, not a migration script (same reasoning as the
-  // trial_history backfill above): idempotent, cheap, and it runs on every boot
-  // so no environment can be left behind by a SQL file nobody remembered to run.
-  // scripts/migrate-es-candles-contract-key.sql stays for applying it by hand.
-  //
-  // Widening a unique key can only make it LESS restrictive, so this cannot fail
-  // on existing rows and needs no de-duplication pass.
-  //
-  // Wrapped: a failure here must degrade the ES chart, not take down getDb() and
-  // with it every other route in the process. getEsCandles falls back to an
-  // unfiltered read when the column is missing.
-  try {
-    await pool.query(`
-      ALTER TABLE es_candles ADD COLUMN IF NOT EXISTS contract TEXT NOT NULL DEFAULT '';
-      ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS es_candles_slot_interval_key;
-      ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS "es_candles_slotKey_intervalMinutes_key";
-      DO $do$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint WHERE conname = 'es_candles_slot_interval_contract_key'
-        ) THEN
-          ALTER TABLE es_candles
-            ADD CONSTRAINT es_candles_slot_interval_contract_key
-            UNIQUE ("slotKey", "intervalMinutes", contract);
-        END IF;
-      END
-      $do$;
-      CREATE INDEX IF NOT EXISTS idx_ec_contract_interval_date
-        ON es_candles(contract, "intervalMinutes", date);
-    `);
-  } catch (err) {
-    console.warn('[db] es_candles contract migration skipped:',
-      String(err && err.message).slice(0, 160));
-  }
 }
 
 // ── Quotes list prefs (per-user customized toolbar quotes) ──────────────────

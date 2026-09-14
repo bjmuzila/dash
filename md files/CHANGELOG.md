@@ -1,346 +1,81 @@
 # Changelog
 
-## 2026-09-14 (t) - The ES feed never rolled, and es_candles could not tell you
-
-`resolveFrontEsSymbol()` sorted the ES instrument list by `expiration-date` and
-took the first one not yet expired. That is not the front contract, it is the
-contract that has not died yet. CME's roll date for ESU6 was Thursday Sep 10;
-volume and open interest left for ESZ6 that day, and the feed stayed on ESU6 -
-quoting, thin, and four sessions behind the market it was drawing.
-
-Worse, it ran ONCE, inside `connect()`. Nothing re-checked it. Past expiration
-Friday the subscription would have sat on a contract that had stopped trading
-entirely until someone noticed and restarted the process.
-
-Three tiers now, most explicit first. `ES_CONTRACT` / `NQ_CONTRACT` accept either
-symbol form ("/ESZ6" or "/ESZ26:XCME") and are matched against the instrument
-list, so a typo falls through loudly instead of subscribing to nothing. Failing
-that, tastytrade's own `active-month` flag - the broker's answer to which
-contract is live, and it flips a few business days before expiry rather than on
-it. Failing THAT, the old nearest-non-expired sort, so an upstream schema change
-degrades to previous behaviour rather than to no feed.
-
-`_checkFuturesRoll()` re-asks every 30 minutes. A change is logged either way,
-but the act of rolling is a full `stop()`/`start()`: the candle maps, the flush
-timers and three dxLink candle subscriptions all key off the contract, and
-rebuilding them piecemeal is how two contracts end up interleaved in one series.
-That teardown is ~10-20s of no feed, so a roll detected inside 09:30-16:15 ET is
-reported and deferred to the next check after the close. The point of rolling is
-to follow liquidity that moved days ago; waiting for the bell costs nothing.
-
-### es_candles had no idea which future a bar came off
-
-`symbol` was the literal string '/ES' on every row - set in the Candle handler,
-never derived from what was actually subscribed. So the table mixed contracts
-trading ~30-40pt apart with nothing to separate them. The chart drew the roll as
-a cliff and autoscaled the pane around it.
-
-The quiet half was worse. UNIQUE was ("slotKey","intervalMinutes"), so on any
-session where both contracts recorded, the incoming contract's 09:30 bar upserted
-straight OVER the outgoing one's. Not mixed in - destroyed.
-
-`contract` is now a column and part of that key. Widening a unique key can only
-make it less restrictive, so the migration cannot fail on existing data and needs
-no dedupe pass; pre-migration rows get '' because NULL never compares equal to
-NULL in a UNIQUE constraint and a nullable column would silently stop
-deduplicating every one of them.
-
-`/api/snapshots/candles` gained `?contract=`, defaulting to `latest` - the newest
-contract in the window, which is what a chart wants: continuous, and short for a
-few sessions after a roll rather than wrong. `?contract=all` is the old
-behaviour, for backtests doing their own roll handling. `getEsCandles()` with no
-contract argument is byte-identical to before, so the signals engine, IB stats
-and the backtests are untouched.
-
-The basis needed nothing. `es-spx-basis.js` reads the 16:00 close out of the same
-table and serves a per-day `days` map, so Friday's bubbles convert with Friday's
-basis and Tuesday's with the new contract's. That part was already right.
-
-Run `server-v2/scripts/migrate-es-candles-contract-key.sql` before deploying.
-
-`server-v2/proxy-tastytrade.js`, `server-v2/api-router.js`,
-`server-v2/state/es-candle-writer.js`, `lib/db.ts`, `server-v2/_lib-db.cjs`,
-`server-v2/scripts/migrate-es-candles-contract-key.sql`
-
-## 2026-09-14 (s) - The board comes back huge, and it stays huge
-
-Reported by a customer: "the cards on the home page are huge and I can't see
-anything." Not a stale bundle this time - prod is serving index-DFE-FiBD.js built
-today, and /v3's index.html is `no-store`, so nobody is holding an old one. It is
-a local board in the wrong units, and it is a hole in our own repair.
-
-`repairHalfSizeBoard()` doubles w AND h on any board whose right edge lands
-between BOARD_COLS/4 and BOARD_COLS/2. A perfectly current board with a few cards
-on the left half matches that description. After doubling, its right edge lands
-between BOARD_COLS/2 and BOARD_COLS - so it FITS, so `repairOverscaledBoard()`'s
-`right > BOARD_COLS` trigger never fires - and the half-size repair is behind a
-one-shot key, so it never runs again either. Every card twice as wide and twice
-as tall, permanently. A 19-row card becomes 38 rows: 304px of chart becomes
-608px and one card fills the viewport.
-
-The fix consults evidence that was already there. `catalogOverscale()` returns a
-clean power of two only when EVERY card is that same multiple of its own catalog
-default - true of a uniformly scaled board, false the moment anyone resizes
-anything. It was simply never asked unless the board had ALSO fallen off the
-right edge. `repairOverscaledBoard()` now acts on either proof: off the grid, or
-unanimous catalog evidence while still fitting. The halving fallback stays tied
-to the off-grid case only - halving a board that already fits would shrink one
-that was never too wide.
-
-Safe on every load for the same reason the off-grid check is: a correct board has
-cards at their defaults, the ratio is 1, unanimity fails on the first card,
-nothing happens. And because this runs BEFORE the one-shot half-size repair in
-module order, a board that repair wrongly doubles is corrected on the next reload
-rather than never - the hole is now self-healing, not just closed.
-
-`repairHalfSizeBoard()` is deliberately NOT tightened. Its mistakes are now
-caught, and a new heuristic in that function is how this file got here.
-
-For a customer stuck right now: one reload on the shipped build fixes it.
-
-`cbedge-v3/src/board/layoutStore.ts`
-
-## 2026-09-14 (r) - The WebSocket outlived the session
-
-The upgrade handler was the ONLY gate a /ws/gex connection ever passed. A socket
-opened before a sign-out, a device kick or a Stripe cancellation kept streaming
-live GEX for as long as it stayed connected - hours, since a working client has
-no reason to reconnect. The paywall was enforced on every HTTP request and on
-exactly one moment of the socket's life.
-
-`sessionStillLive(tokenHash)` in `ws-auth.js` - the same session/paid query,
-deliberately cache-bypassing, because the 8s cache exists to spare the DB on the
-connect path and this runs once a minute per socket with the specific job of
-noticing a row that has gone away. `verifyWsRequest` now returns the token HASH
-on success and the upgrade handler pins it to the socket, so nothing holds a raw
-cookie value for the life of a connection.
-
-The sweep runs at 60s, not on the 30s pinger: one indexed query per authenticated
-socket, and a minute of over-run on a kicked device is not worth doubling that.
-It FAILS OPEN - a DB blip must not disconnect every paying customer at once.
-Close code 1008; the client's reconnect loop re-runs the upgrade gate and gets
-its 401 there, which is where the explanation belongs.
-
-No-op when WS_AUTH_REQUIRED is off: there is no session to revalidate.
-
-`server-v2/ws-auth.js`, `server-v2/websocket-server.js`
-
-## 2026-09-14 (q) - Nine dead prototypes and /options closed
-
-The rest of the audit that found /mult-greek. A `page.tsx` under `app/` that is
-not in `SPA_ROUTES` never becomes `/app/*`, and `lib/v3Routes.ts` only ever sees
-`/app/*` - so it renders forever. That is the whole mechanism, and these are the
-rest of the routes it left standing.
-
-Nine Next prototypes now redirect to `/v3` from `next.config.js`: `/gex`,
-`/gex2`, `/home3`, `/market-matrix`, `/mobile`, `/obook`, `/squeeze`, `/chat`,
-`/toolbar-preview`. Zero loads from zero visitors in the preceding 30 days, but
-reachable by any paid account. Redirected rather than deleted - one line to walk
-back, page files untouched.
-
-`/options` is different: a real route in `SPA_ROUTES` and in app-vite's App.tsx,
-but in neither `PORTED` nor `LEGACY_NAV` - so nothing in v3 linked to it and
-nothing sent it back, and `/app/options` sat there rendering. Retired through
-`PORTED` as `"/options": "/"` so both spellings move. v3 answers the question
-twice over at `/options-chain` and `/chain`, but they are different pages and
-picking one for somebody following an old link is a guess.
-
-`next.config.js`, `lib/v3Routes.ts`
-
-## 2026-09-14 (p) - One device per account
-
-RE-ADDED: first written as (n) and lost when a concurrent writer rewrote the top
-of this file from a stale copy.
-
-A subscription is for a person; an account that works on four devices at once is
-a shared account. Signing in now drops every other session for that user, so the
-newest sign-in wins and whoever was signed in before is signed out.
-
-`enforceSingleSession(userId, keepTokenHash)` in `lib/db.ts`, called from
-`createSession()` - the ONLY place sessions are minted (password login, signup
-and the Google callback all come through it), which is why the rule lives there
-rather than in three route handlers that would drift apart.
-
-THE OWNER IS EXEMPT, and the exemption is a join inside the DELETE rather than an
-`if (isOwner)` at the call site: owner work runs the dashboard, owner.cbedge.net
-and a phone at once, and an exemption living in a caller is one refactor away
-from being dropped. `/api/auth/internal-session` mints against OWNER_USER_ID and
-is covered by the same join.
-
-The DELETE returns the hashes it dropped and `createSession` evicts them from the
-in-process validation cache in `lib/auth/session.ts` - that cache is what
-middleware actually reads, so without the eviction the kicked device keeps
-working for up to CACHE_TTL_MS (8s) more.
-
-Best-effort on purpose: if the cleanup query throws, the person still gets the
-session they just asked for. Refusing a paid customer their login because a
-cleanup failed is worse than a second device surviving to the next sign-in.
-
-Newest-wins, not oldest-holds - the alternative refuses a login to somebody whose
-other session is a browser they closed three weeks ago. Tabs are free (one cookie
-jar, one session); a second BROWSER, profile, incognito window or device is a
-second session and is a kick.
-
-`lib/db.ts`, `lib/auth/session.ts`
-
-## 2026-09-14 (o) - Level Log's bare path, and Premarket Prep (phone) retired
-
-RE-ADDED: first written as (m) and lost to the same concurrent write as (p).
-
-Bare `/level-log` 404'd. It is in `LEGACY_NAV` but was in neither `SPA_ROUTES`
-nor `PORTED`, so only the `/app/` spelling resolved and every bookmark or pasted
-link to it died.
-
-It is the one route that lives in both wings on purpose: v3 has `/v3/level-log`,
-but that page is `partial` (the wall-migration chart and the range switch) while
-the ticker rail, log card, capture rail, churn strip and timeline are still only
-in v2. So it cannot go in `SPA_ROUTES` - that aliases to the v2 page, not what a
-bare bookmark should open - and it cannot go in `PORTED`, which catches `/app/*`
-and would take the v2 page away with it. A direct redirect in `next.config.js` is
-the only spelling that moves the bare path and leaves `/app/level-log` alone.
-
-Premarket Prep on the phone is retired. Out of `LEGACY_NAV`, into `PORTED` as
-`"/m/prep": "/m/gex"` - pointed at the phone build's default tab rather than v3's
-desktop root, because whoever follows an old `/m/*` link is holding a phone. Page
-files stay on disk and unreachable, the same way `/ict` and `/trading` were left.
-18 loads from 8 visitors in the preceding 30 days.
-
-Nothing else in `LEGACY_NAV` auto-redirects to v3 - verified against prod, both
-spellings, all seven entries. Six left.
-
-`next.config.js`, `lib/v3Routes.ts`
-
-## 2026-09-14 (n) - + Add card removes as well as adds
-
-Each row of the catalog menu now carries a ✕ beside its count, in
-`cbedge-v3/src/board/BoardPage.tsx`. It removes the LAST instance of that type,
-so `+` and `✕` are symmetric in the same row and the ordinals of the copies that
-stay (`#2`, `#3`) do not shuffle. Unlike add, the ✕ leaves the menu OPEN —
-pruning is usually several clicks, and reopening the menu between each one is
-the annoyance.
-
-Why: taking a card off meant finding it on the board and using its own header ✕.
-That is fine for the card you are looking at and wrong for "added that by
-mistake" or for a card three screens down. The menu already lists what exists
-and how many of each, so it is where one gets given back.
-
-The row is a `<div>` now, not a `<button>`: a button inside a button is invalid
-HTML and the inner one stops firing. The hover tint moved to the row, so the
-strip still highlights as one target. With a count of 0 the ✕ is `invisible`
-rather than dropped, so labels don't jog sideways as cards come and go.
-
-## 2026-09-14 (m) - GEX bubbles are bubbles again, not tick marks
-
-At 1m the marks were drawing ~6px wide and ~15px tall: a column of vertical
-ovals rather than bubbles. Three numbers in `BUBBLES`
-(`cbedge-v3/src/board/gexCandles/settings.ts`):
-
-- `profiles[1].aspect` 2.4 -> 1.15
-- `capOfSpacing` 0.28 -> 0.46 (peers)
-- `topOfSpacing` 0.44 -> 0.56 (the boosted leader)
-
-Why: `aspect: 2.4` was answering a ~3.4px horizontal spacing that the STRIDE no
-longer allows — drawn dots are thinned to `bucketPxPerDot` (11px), so the
-horizontal budget is now the same order as the vertical one and the 2.4x stretch
-was buying height into a gutter that was already 44% empty. The size moves off
-`aspect` and onto the two spacing shares, which spend the axis that was sitting
-idle.
-
-Measured on a 2.5h 1m window (~11px per drawn dot): peers go from 6.2 x 14.8px
-to 10.1 x 11.6px, the leader from 9.7 x 14.8 to 12.3 x 14.2. Peers still keep a
-hairline (0.92 of the spacing). `topOfSpacing` is deliberately past the 0.5
-geometric limit — consecutive LEADERS now overlap by about a tenth of their
-width, which was the explicit ask. The leader-to-4th spread is preserved: the
-ratio to `capOfSpacing` stays 1.22, so the profiles' `topBoost` still lands
-instead of being clipped. Glow at 1m falls to 0 by its own bound
-(`pxPerDot / 2 - topCapPx`) — the marks get the room, not the halo.
-
-Not the old sausage: that was the leader at `capPx * topBoost`, ~1.9x the
-spacing, with a 7px halo over the gap. Coarser rungs keep `aspect: 1` and are
-round as before, just larger by the same two shares.
-
-## 2026-09-14 (k) - /mult-greek is closed
-
-The last v2 PAGE still rendering its own client to customers. Bare `/mult-greek`
-is a Next route, so it is not in `next.config.js`'s SPA aliases and never passed
-through `lib/v3Routes.ts`, and it is in middleware's `PAID_EXEMPT` - three
-separate reasons nothing ever redirected it. It quietly stayed alive after v3
-became the dashboard.
-
-30 days to today: 18 distinct visitors landed on it. One of them spent the bulk
-of his only real session there and then asked for a refund because the product
-"wasn't working" - he was looking at the retired dashboard.
-
-`app/mult-greek/page.tsx` is now a thin redirect mirroring `app/home/page.tsx`:
-paid to `/v3`, unpaid to `/pricing`. It STAYS in `PAID_EXEMPT` - dropping it
-would have middleware bounce it to `/home` before the page could answer - and
-stays out of `next.config.js`'s aliases, which would move the decision ahead of
-the paid gate and reopen the unpaid loop. Comments in all three files corrected;
-they still described the old behaviour.
-
-Left in place on purpose: `MultGreekClient.tsx` (178KB), the snapshot recorder
-and `/api/mult-greek-snapshot`. Nothing renders the client now. Deleting it is a
-separate decision from closing the door. The numbers themselves did not move -
-Multi Greek is a board card in v3 and the phone Heat tab at `/v3/m/heat`.
-
-`app/mult-greek/page.tsx`, `middleware.ts`, `next.config.js`, `lib/v3Routes.ts`
-
-## 2026-09-14 (j) - v3 had no visit tracking at all
-
-Every `page_visits` row in the database came from v2's `lib/pageStatus.ts`, a
-Next-side hook mounted per page. v3 never had an equivalent, so a paid customer
-disappeared from analytics the moment they crossed over. 30 days to today: 5,254
-visit rows, exactly ONE of them `/v3/*`.
-
-The damage was not a gap in a chart. `/home` (325 rows) is `app/home/page.tsx`,
-a redirect - each row is somebody ENTERING v3 and going dark, not a page anyone
-read. `/options-chain`, `/traders-dashboard` and friends are flash rows logged by
-the v2 SPA before `V3Redirect.tsx` bounces them client-side. And a customer
-asking for a refund showed "last seen" four days stale while he was signed in
-that morning.
-
-New `cbedge-v3/src/data/pageVisit.ts`, mounted once in `App.tsx` inside
-`BrowserRouter`. One row per route the user lands on, phone build included.
-Because the Shell mounts once and never unmounts, this is one router-driven hook
-rather than v2's per-page one - a per-page hook would be forgotten on the next
-route added.
-
-Same endpoint, field names and session-entry rules as v2, deliberately: both
-write the same table and the owner map, the acquisition panel and
-`/api/admin/customer-activity` read it as one stream. The `cb:visit-entry`
-sessionStorage key is shared on purpose - a visitor who lands on the marketing
-pages, signs in and is redirected into v3 is ONE visit, and a key of our own
-would report every arriving customer as two sessions from two sources.
-
-`path` stores `window.location.pathname`, so v3 rows read `/v3/traders-dashboard`
-and are no longer confusable with the v2 page of the same name. Query strings are
-left off: `/scanner?tab=ibstats` is the Scanner page, and folding the tab in would
-multiply `distinct_pages`. Labels come from `NAV` and `MOBILE_TABS` rather than a
-third copy.
-
-Carries a same-path dedupe v2 lacks. v2's log has paths repeating in the same
-second throughout, which inflates every load count in the owner panel roughly 2x
-- one customer's "57 page loads" was really about 30. Checked at report time, not
-on mount, so StrictMode's second pass does not skip the report its first pass
-cancelled.
-
-`cbedge-v3/src/data/pageVisit.ts` (new), `cbedge-v3/src/App.tsx`
-
-## 2026-09-14 (i) - Key Levels: the Stats clipboard row is VOL-only
-
-The camera menu's `Stats` row (the one that copies characters, not a PNG) read
-everything on the OI+VOL basis - core and both walls off the card's own props,
-both totals summed with `'oi-vol'`. That is the standing book. The line gets
-pasted into a message about what is trading TODAY, so all six lines now read the
-VOLUME basis.
-
-Levels are re-derived with `levelsOf(rows, spot, 'vol-only')` - the same finders
-in `data/levels.ts` run against `volNet`, not a second local derivation - and the
-two totals sum `netGexOf` / `dexOf` with `'vol-only'`. The axis above it is
-unchanged and still draws OI+VOL; the disagreement is deliberate and documented
-at the call site. Row hint updated to say VOL-only.
-
-`cbedge-v3/src/board/keyLevels/KeyLevelsCard.tsx`
+## 2026-09-14 (l) - Probe: the entry dot sits on the line, and the lookup can carry a position
+
+**The dot was in open space.** The entry marker was drawn at the entry PRICE on
+the print's bar - but the fill price and that bar's mark are two different numbers.
+CRWD 210P filled at 11.50 while the mark sat near 12.80, so the ring floated a
+centimetre under the line reading as a bug. It is now on the LINE at that bar: the
+dashed rung already says what was paid, the dot says when.
+
+**H and L stopped clipping.** When the high or low is the first or last bar, a
+centred label hangs off the canvas - "H 15.23" rendered as "15.23". Labels near
+either edge now anchor to the edge.
+
+**The lookup can carry a position.** SIZE and COST, both optional, on the whale
+page's Contract lookup. Size alone turns on POSITION in the hover readout; size and
+cost together turn on OPEN P/L and the entry rung - so the full B readout works for
+a contract nobody printed a million dollars into, not just for a whale row.
+
+A typed cost has no timestamp, so `ContractProbe` takes `entryAt`: pass null and
+the entry draws as a rung with no marker. Without it a hand-typed entry would be
+marked at the row's `ts`, and a lookup's ts is "now" - the dot would land on the
+last bar of the day at a price nothing traded at there.
+
+`cbedge-v3/src/board/topFlow/ContractProbe.tsx`, `cbedge-v3/src/pages/Whales.tsx`
+
+## 2026-09-14 (k) - Probe: the volume label was black on a blue bar
+
+The standout-volume labels drew in `--color-bg` when they sat INSIDE a tall bar -
+dark type on the accent blue, invisible at 8.5px. They are white now wherever they
+land; only an un-hovered smaller bar keeps the dimmed ink.
+
+Also re-committed the (j) hover readout - the previous write landed a stale copy of
+the file on disk, so the box was still drawing the old two-line time+mark layout.
+
+`cbedge-v3/src/board/topFlow/ContractProbe.tsx`
+
+## 2026-09-14 (j) - Contract probe: the hover box says what the print is worth
+
+The readout under the cursor was time, mark and the per-contract move. On a chart
+whose whole subject is a $9.78M print, the question being asked while scrubbing
+across the day is not "what was the mark" - it is "what was that position worth,
+and what was it up".
+
+Both are arithmetic the row already carries: POSITION is mark x size x 100, OPEN
+P/L is (mark - entry) x size x 100. The box is now a header band (the minute, and
+the move in percent) over up to five rows - MARK, VS ENTRY, BAR VOL, POSITION,
+OPEN P/L - each conditional on the input it needs. A lookup has no entry and no
+size, so it draws time + mark + volume and the box shrinks to fit rather than
+printing four dashes.
+
+BAR VOL is the other addition: the volume pane labels only the standout bars, and
+this answers the same question for whichever minute is under the cursor.
+
+The crosshair now runs the full height, through the volume pane, so the bar being
+read is the bar the line is on. The box is clamped at the price rail rather than
+sliding under the rail labels.
+
+`cbedge-v3/src/board/topFlow/ContractProbe.tsx`
+
+## 2026-09-14 (i) - Contract probe: the standout volume bars carry their number
+
+The volume pane said WHEN the size went through and never HOW MUCH - the only
+number on it was the axis max in the rail. A number over every bar is a wall of
+type nobody reads, so only the bars that stand out get one.
+
+A bar qualifies on both counts: at least 3x the session's average bar AND at least
+a third of the tallest. The average alone labels a dead contract's every twitch;
+the fraction alone labels nothing on a day with one enormous print. Capped at
+four, biggest first, and a label is dropped when it would land on one already
+placed.
+
+A tall bar's top sits at the very edge of the pane, so its label goes INSIDE the
+bar in the page ground rather than above it in the gap, where it would collide
+with the price chart. Labels near either end anchor to the edge instead of the bar
+so they cannot run off the canvas. The print's own bar keeps the accent ink.
+
+`cbedge-v3/src/board/topFlow/ContractProbe.tsx`
 
 ## 2026-09-14 (h) - Whales: the session chart is out
 
@@ -23184,80 +22919,3 @@ Change: `public/v3` added to root `.gitignore` and untracked via
 `git rm -r --cached public/v3`. A failed v3 build now 404s loudly instead of
 silently serving a fossil. The underlying build failure inside the image is still
 to be diagnosed.
-
-## 2026-09-14 (b) · v3 board: "Per row 1 · 2 · 3" moved into the toolbar
-
-`cbedge-v3/src/board/BoardPage.tsx`.
-
-The per-card version shipped this morning was wrong twice over: three clicks to
-say one thing, and a row of numbers in every card header to read past. The
-control is now a single `1 · 2 · 3` group in the board toolbar, edit mode only,
-beside the placement switch. Card headers are back to a bare ✕.
-
-- `setBoardLanes(n)` relays every card in READING ORDER into rows of n, each
-  `48/n` columns wide, keeping each card's height. A row is as tall as its
-  tallest card, so the reflow crops nothing.
-- Free placement commits with `resolveBoard`, not `compactBoard`: the rows were
-  just placed on purpose, and gravity would pull the short cards in a row up
-  under the previous one, which is the ragged board the reflow exists to fix.
-- The pressed button is the width every card is already on, so the control is
-  also the readout.
-- Dragging is unchanged and still lands on the same three widths.
-
-Mockup: `generated/2026-09-14-board-lanes-lab.html` (drag a card, click 1/2/3).
-
-## 2026-09-14 (c) · v3 board: drop a card into a row and the row re-splits
-
-`cbedge-v3/src/design/primitives/Board.tsx`.
-
-"If it's 1 and 1 and I try to move the card beside the upper one, it should
-force it to 2 per row." It could not: two full-width cards, no room in that row,
-so the collision rule put one of them back on its own row. The widths are now
-the thing that gives.
-
-- `spreadRow(items, top, cols, rank)` lays every card sharing a row top out as
-  an equal share of the board. `joinRow(items, id, cols, dropX)` moves the
-  dragged card onto the row its band overlaps (taken at the topmost edge) and
-  spreads that row. Capped at three; a fourth declines and falls through to the
-  ordinary collision rules.
-- The row a card LEAVES is spread too, so two halves become one full-width card
-  again when one of them is dragged away. Same function both directions, so they
-  cannot drift out of step.
-- A card that lands where nothing else is takes the whole width. One per row is
-  the first of the three answers, not a special case. Guarded on band overlap so
-  a card dropped beside a neighbour whose row top does not match exactly cannot
-  balloon over it.
-- `dropX` is the drag's UNCLAMPED column position, kept in a ref: a full-width
-  card cannot be moved right, so its own x cannot say which side of the row the
-  pointer wants. Ties go left.
-- The release maths now runs on the RAW gesture (everyone as they were at
-  pointer-down, plus the dragged card where the pointer put it), not on the
-  settled draft. The draft has already pushed the card you were aiming at out of
-  the way, so by release time the row to join was not in it. One `release()`
-  serves both the landing outline and the commit, so the outline cannot promise
-  a spot the release will not give.
-
-Mockup: `generated/2026-09-14-board-lanes-lab.html`.
-
-## 2026-09-14 (d) · v3 board: the row makes room while the card is still in the hand
-
-`cbedge-v3/src/design/primitives/Board.tsx`.
-
-"When I place it to the right of 2 cards, those should move left and show the
-ability to put in the 3rd."
-
-Re-splitting only on release meant the drag showed the opposite of what was
-about to happen: two halves have no room for a third, so the collision rules
-pushed one of them down and the row read as full. You had to let go on faith.
-
-- `release()` now runs every pointermove and IS the draft. The two halves narrow
-  to thirds and slide left as the card comes over the row, the empty third opens
-  on the right, and letting go changes nothing that was not already on screen.
-- The card in the hand keeps the POINTER's position — a card that stops
-  following the hand is not being dragged any more — but takes the width it is
-  about to land at, so the lifted card does not cover the gap it just opened.
-- Resize is unchanged: it still drafts through `resolveBoard` / `compactBoard`.
-  A resize is the user stating a width, and a row rule that restated it mid-drag
-  would make the gesture pointless.
-
-Mockup: `generated/2026-09-14-board-lanes-lab.html`.

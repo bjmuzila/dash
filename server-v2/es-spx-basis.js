@@ -117,19 +117,63 @@ async function getEsSpxBasis() {
     return cache.value;
   }
 
+  // ── ONE CONTRACT, THE ONE THE CHART IS PLOTTING (2026-09-14) ───────────────
+  //
+  // The header above calls this basis "roll-correct by construction" because it
+  // reads the same es_candles the chart plots. That held only while the table
+  // held ONE future. It now holds every contract it has recorded, and ESU6 and
+  // ESZ6 sit ~70pt apart, so an unfiltered read mixes them: the newest 16:00
+  // close can be September's while the chart draws December's, and every SPX
+  // strike then lands one calendar spread below the candle it belongs to. Same
+  // class of bug as the ESM->ESU roll named in the header — the one this file
+  // exists to prevent.
+  //
+  // So pin to the newest contract present, which is exactly what
+  // /api/snapshots/candles?contract=latest serves the chart. Same contract on
+  // both sides, and the construction argument holds again.
+  //
+  // Historical sessions use that contract too, deliberately: the chart shows
+  // ESZ6 candles for the backfilled days, so those columns must convert with an
+  // ESZ6 basis. A day with no close for this contract drops out of `days` and
+  // the card falls back to the newest basis — a small error. Converting it with
+  // the outgoing contract's basis would be a ~70pt one.
+  const CLOSE_WHERE = `time LIKE '16:00%' AND close > 0`;
   let rows;
   try {
     // The 16:00 ET bar = the RTH close. `time` is already ET, so this is the close,
     // not a UTC-shifted midday bar. Shared pool via _lib-db.cjs — see the header.
     rows = await queryAll(
-      `SELECT date, close FROM es_candles
-        WHERE time LIKE '16:00%' AND close > 0
+      `SELECT date, close, contract FROM es_candles
+        WHERE ${CLOSE_WHERE}
+          AND contract = (SELECT contract FROM es_candles
+                           WHERE ${CLOSE_WHERE}
+                           ORDER BY timestamp DESC LIMIT 1)
         ORDER BY date DESC LIMIT 30`
     );
   } catch (e) {
-    console.warn('[es-spx-basis] es_candles query failed:', e?.message);
-    lastReason = `db: ${e?.message || 'query failed'}`;
-    return cache.value;
+    // A DB that has not picked up the contract column yet (Postgres 42703).
+    // Fall back to the unfiltered read rather than losing the basis outright:
+    // pre-roll that answer is correct, and it is what this file did for its
+    // whole life before today.
+    const missingCol = e?.code === '42703'
+      || /column .*contract.* does not exist/i.test(String(e?.message || ''));
+    if (!missingCol) {
+      console.warn('[es-spx-basis] es_candles query failed:', e?.message);
+      lastReason = `db: ${e?.message || 'query failed'}`;
+      return cache.value;
+    }
+    console.warn('[es-spx-basis] es_candles has no contract column yet - basis may straddle a roll');
+    try {
+      rows = await queryAll(
+        `SELECT date, close FROM es_candles
+          WHERE ${CLOSE_WHERE}
+          ORDER BY date DESC LIMIT 30`
+      );
+    } catch (e2) {
+      console.warn('[es-spx-basis] es_candles query failed:', e2?.message);
+      lastReason = `db: ${e2?.message || 'query failed'}`;
+      return cache.value;
+    }
   }
 
   // One basis PER ET SESSION, for every date where both closes exist. Both are 16:00
@@ -166,7 +210,7 @@ async function getEsSpxBasis() {
   }
   lastReason = null;
   cache = { at: Date.now(), value: { ...latest, days } };
-  console.log(`[es-spx-basis] ${latest.date} basis=${latest.basis} (ES ${latest.esClose} − ^GSPC ${latest.spxClose}), ${Object.keys(days).length} days`);
+  console.log(`[es-spx-basis] ${latest.date} basis=${latest.basis} (ES ${latest.esClose} − ^GSPC ${latest.spxClose}), ${Object.keys(days).length} days, contract=${rows[0]?.contract ?? '(unfiltered)'}`);
   return cache.value;
 }
 

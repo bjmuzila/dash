@@ -261,6 +261,11 @@ export default function Whales() {
   const [lkStrike, setLkStrike] = useState('')
   const [lkExpiry, setLkExpiry] = useState('')
   const [lkType, setLkType] = useState<'C' | 'P'>('C')
+  // Optional. With them the probe's hover box can answer the two questions it
+  // answers for a print — what the position is worth at that minute, and what
+  // it is up — for a contract you are only thinking about.
+  const [lkSize, setLkSize] = useState('')
+  const [lkEntry, setLkEntry] = useState('')
   const [lookup, setLookup] = useState<WhaleRow | null>(null)
 
   useEffect(() => {
@@ -319,17 +324,28 @@ export default function Whales() {
   const openLookup = () => {
     if (!lkReady) return
     const t = lkTicker.trim().toUpperCase()
+    // Blank means "not asked", not zero — an empty size must leave POSITION off
+    // the hover box rather than print $0.
+    const sizeN = Number(lkSize)
+    const size = Number.isFinite(sizeN) && sizeN > 0 ? Math.round(sizeN) : null
+    const entryN = Number(lkEntry)
+    const price = Number.isFinite(entryN) && entryN > 0 ? entryN : null
     setLookup({
-      // Keyed on the contract so switching strikes remounts the probe rather
-      // than leaving the previous contract's bars on screen mid-fetch.
-      id: `lookup:${t}:${lkExpiry}:${lkStrikeNum}:${lkType}`,
+      // Keyed on the whole question, size and cost included, so editing any
+      // field remounts the probe rather than leaving the previous contract's
+      // bars on screen mid-fetch.
+      id: `lookup:${t}:${lkExpiry}:${lkStrikeNum}:${lkType}:${size ?? ''}:${price ?? ''}`,
       ts: Date.now(),
       osi: null,
       underlying: t,
       type: lkType,
       strike: lkStrikeNum,
       expiry: lkExpiry,
-      dte: null, size: null, price: null, premium: 0, spot: null,
+      dte: null,
+      size,
+      price,
+      premium: size && price ? size * price * 100 : 0,
+      spot: null,
       side: null, action: null, sideReason: null,
       bid: null, ask: null, quoteAgeMs: null, vol: null, oi: null,
       sessionDate: etYmd(new Date()),
@@ -345,6 +361,8 @@ export default function Whales() {
     setLkStrike(String(strike))
     setLkExpiry(expiry)
     setLkType(cp)
+    setLkSize('')
+    setLkEntry('')
     setLookup({
       id: `lookup:${t}:${expiry}:${strike}:${cp}`,
       ts: Date.now(),
@@ -731,6 +749,31 @@ export default function Whales() {
                 />
               </div>
 
+              {/* Both optional. Size alone gives POSITION on the hover box; size
+                  and cost together give OPEN P/L and the entry rung. */}
+              <div className="flex items-center gap-2">
+                <input
+                  value={lkSize}
+                  onChange={(e) => setLkSize(e.target.value.replace(/[^\d]/g, '').slice(0, 7))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                  placeholder="SIZE (opt)"
+                  inputMode="numeric"
+                  aria-label="Contracts held"
+                  title="Contracts — turns on POSITION in the hover readout"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                />
+                <input
+                  value={lkEntry}
+                  onChange={(e) => setLkEntry(e.target.value.replace(/[^\d.]/g, '').slice(0, 8))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                  placeholder="COST (opt)"
+                  inputMode="decimal"
+                  aria-label="Cost basis"
+                  title="What you paid per contract — turns on the entry rung and OPEN P/L"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                />
+              </div>
+
               <button
                 type="button"
                 onClick={openLookup}
@@ -749,13 +792,13 @@ export default function Whales() {
 
             {lookup ? (
               <div className="flex min-h-[360px] flex-col border-t border-line">
-                <ContractProbe key={lookup.id} row={lookup} onClose={() => setLookup(null)} />
+                <ContractProbe key={lookup.id} row={lookup} onClose={() => setLookup(null)} entryAt={null} />
               </div>
             ) : (
               <div className="border-t border-line px-3 py-2 text-2xs leading-relaxed text-faint">
-                Any contract, whether or not a whale ever touched it. There is no
-                entry to mark — the panel draws the contract's own price and
-                volume.
+                Any contract, whether or not a whale ever touched it. Add a size
+                and a cost and the hover readout carries what the position is
+                worth and what it is up.
               </div>
             )}
           </Card>

@@ -78,7 +78,21 @@ const fmtDate = (iso: string | null) => {
 const VAULT_FLOOR_MS = Date.parse('2026-01-02T00:00:00Z')
 const VAULT_EXPIRY_GRACE_DAYS = 120
 
-export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () => void }) {
+export function ContractProbe({ row, onClose, entryAt }: {
+  row: TopFlowRow
+  onClose: () => void
+  /**
+   * When the entry price is NOT tied to a moment — a hand-typed cost basis on
+   * the whale page's contract lookup, say — pass null and the chart draws the
+   * entry as a rung with no marker. Left undefined it is the print's own
+   * timestamp, which is the normal case.
+   *
+   * Without this a typed entry would be marked at `row.ts`, and a lookup's
+   * `ts` is "now" — so the dot would land on the last bar of the day at a price
+   * nothing traded at there.
+   */
+  entryAt?: number | null
+}) {
   const [range, setRange] = useState<Range>('1d')
   // 0 = the source the print's age says to try; 1 = the other one. Reset on
   // every row and every range, or a fallback taken for one contract sticks to
@@ -250,7 +264,7 @@ export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () =
       </div>
 
       {bars.length >= 2 ? (
-        <ProbeChart bars={bars} entry={entry} entryTs={row.ts} size={row.size} wide={big} />
+        <ProbeChart bars={bars} entry={entry} entryTs={entryAt === undefined ? row.ts : entryAt} size={row.size} wide={big} />
       ) : (
         <div className="px-1 py-6 text-2xs leading-relaxed text-faint">
           {q.loading
@@ -468,6 +482,12 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
 
   const label = { fill: 'var(--color-fg)', fontFamily: MONO } as const
   const fmt = (v: number) => v.toFixed(2)
+  /** Keep a point label inside the plot when its point is near an edge. */
+  const EDGE = 26
+  const edgeAnchor = (i: number) =>
+    x(i) < PADL + EDGE ? 'start' : x(i) > W - PADR - EDGE ? 'end' : 'middle'
+  const edgeX = (i: number) =>
+    x(i) < PADL + EDGE ? PADL : x(i) > W - PADR - EDGE ? W - PADR : x(i)
   // Type and glyph sizes are in USER units and both viewBoxes display at roughly
   // 1:1, so without this the popped-out chart would draw the same 9px labels on
   // a canvas three times the width.
@@ -573,16 +593,22 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
           with the volume pane. */}
       {entry != null && entry > 0 && entryI != null && (() => {
         const ex = x(entryI)
+        // ON THE LINE, not on the rung. The fill price and the bar's mark are
+        // two different numbers — a print that crossed the spread filled at
+        // 11.50 while the mark sat at 12.80 — and a dot floating in open space
+        // below the line reads as a bug. The dashed rung already says WHAT was
+        // paid; the dot says WHEN, so it belongs on the price it is pointing at.
+        const ey = y(bars[entryI]!.close)
         const flip = ex > PADL + (W - PADL - PADR) * 0.8
-        const lowHalf = y(entry) > PADT + priceH * 0.66
+        const lowHalf = ey > PADT + priceH * 0.66
         return (
           <g>
-            <circle cx={ex} cy={y(entry)} r={4 * S} fill="none"
+            <circle cx={ex} cy={ey} r={4 * S} fill="none"
               style={{ stroke: 'var(--color-fg)' }} strokeWidth={1.4 * S} opacity={0.85} />
-            <circle cx={ex} cy={y(entry)} r={1.6 * S} style={{ fill: 'var(--color-fg)' }} />
+            <circle cx={ex} cy={ey} r={1.6 * S} style={{ fill: 'var(--color-fg)' }} />
             <text
               x={flip ? ex - 8 * S : ex + 8 * S}
-              y={lowHalf ? y(entry) - 8 * S : y(entry) + 12 * S}
+              y={lowHalf ? ey - 8 * S : ey + 12 * S}
               textAnchor={flip ? 'end' : 'start'}
               fontSize={9 * S}
               fontWeight={700}
@@ -595,11 +621,14 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
         )
       })()}
 
+      {/* The high or the low is often the FIRST or LAST bar, and a centred label
+          there hangs half off the canvas — "H 15.23" rendered as "15.23" with
+          the H clipped. Anchor to the edge instead when it is close to one. */}
       <circle cx={x(hiI)} cy={y(hi)} r={2.6 * S} fill="none" style={{ stroke: 'var(--color-up)' }} strokeWidth={1.4 * S} />
-      <text x={x(hiI)} y={y(hi) - 8 * S} textAnchor="middle" fontSize={9 * S} fontWeight={700}
+      <text x={edgeX(hiI)} y={y(hi) - 8 * S} textAnchor={edgeAnchor(hiI)} fontSize={9 * S} fontWeight={700}
         style={{ fill: 'var(--color-up)', fontFamily: MONO }}>H {fmt(hi)}</text>
       <circle cx={x(loI)} cy={y(lo)} r={2.6 * S} fill="none" style={{ stroke: 'var(--color-down)' }} strokeWidth={1.4 * S} />
-      <text x={x(loI)} y={y(lo) + 13 * S} textAnchor="middle" fontSize={9 * S} fontWeight={700}
+      <text x={edgeX(loI)} y={y(lo) + 13 * S} textAnchor={edgeAnchor(loI)} fontSize={9 * S} fontWeight={700}
         style={{ fill: 'var(--color-down)', fontFamily: MONO }}>L {fmt(lo)}</text>
 
       {/* Last mark, in the rail, tinted by where it sits against the entry. Pill
