@@ -767,6 +767,61 @@ function buildClone(el: HTMLElement, w: number, h: number): { clone: HTMLElement
 
 // ── Rasterising ──────────────────────────────────────────────────────────────
 
+/**
+ * HOW LONG A SHOT WILL WAIT ON AN IMAGE THAT IS STILL IN FLIGHT.
+ *
+ * Long enough for /proxy/ticker-logo's worst case, short enough that a genuinely
+ * dead image does not hold the camera open. Nothing fails when it expires — the
+ * shot is taken without whatever had not arrived, which is the old behaviour.
+ */
+const IMAGE_SETTLE_MS = 3000
+
+/**
+ * WAIT FOR THE PICTURES, the way rasterise already waits for the fonts.
+ *
+ * buildClone inlines every <img> as a data URI and DROPS the ones it cannot read
+ * — an unresolvable reference fails the whole SVG load, not just itself. But
+ * `complete` is false for an image still in flight, so "has not arrived yet" and
+ * "is never going to arrive" reach that branch looking identical, and the
+ * in-flight one is deleted out of a picture it was a beat away from appearing
+ * in. On screen it then shows up a moment later, which is why the card looks
+ * right and the shot of it does not.
+ *
+ * Invisible while every image is a same-origin hit off the mirror. It is the
+ * ENTIRE earnings board the moment those chips fall through to
+ * /proxy/ticker-logo, which costs a PG lookup, a HEAD to GitHub and up to two
+ * Wikidata calls before it answers — every chip is in flight at once and the
+ * shot catches none of them.
+ *
+ * Only images the browser has actually started fetching are waited on:
+ * `currentSrc` is empty for a lazy image still below the fold, and those are
+ * meant to be dropped rather than waited out (see ChipLogo's `lazy` prop, which
+ * anything that gets photographed already turns off).
+ *
+ * Never rejects. A broken image resolves on its error event, not the timeout.
+ */
+function settleImages(el: HTMLElement): Promise<void> {
+  const pending = Array.from(el.querySelectorAll('img')).filter(
+    (img) => !img.complete && !!img.currentSrc,
+  )
+  if (!pending.length) return Promise.resolve()
+
+  return Promise.race([
+    Promise.all(
+      pending.map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            img.addEventListener('load', () => resolve(), { once: true })
+            img.addEventListener('error', () => resolve(), { once: true })
+          }),
+      ),
+    ).then(() => undefined),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, IMAGE_SETTLE_MS)
+    }),
+  ])
+}
+
 /** The subtree, rendered by the browser itself. See shotScale for the multiply. */
 async function rasterise(el: HTMLElement): Promise<{ canvas: HTMLCanvasElement; scale: number }> {
   const rect = el.getBoundingClientRect()
@@ -775,6 +830,10 @@ async function rasterise(el: HTMLElement): Promise<{ canvas: HTMLCanvasElement; 
   // Text inside the SVG document is measured against the same faces the page is
   // using — but only once they have actually loaded.
   await document.fonts?.ready?.catch(() => undefined)
+
+  // Same idea for the bitmaps: buildClone deletes an <img> it cannot read, and
+  // an image that is merely still loading reads exactly like one that failed.
+  await settleImages(el)
 
   const { clone, height } = buildClone(el, w, Math.max(1, Math.ceil(rect.height)))
   const h = Math.ceil(height)
