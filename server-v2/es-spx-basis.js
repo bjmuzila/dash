@@ -143,11 +143,27 @@ async function getEsSpxBasis() {
     // The 16:00 ET bar = the RTH close. `time` is already ET, so this is the close,
     // not a UTC-shifted midday bar. Shared pool via _lib-db.cjs — see the header.
     rows = await queryAll(
+      // THE CONTRACT COMES FROM THE NEWEST BAR, NOT THE NEWEST 16:00 BAR.
+      //
+      // Scoping the subquery to 16:00 rows (the first version of this, same
+      // day) does not work: every contract's 16:00 bar for a given session
+      // shares one bar instant, so they share a `timestamp`, and
+      // ORDER BY timestamp DESC LIMIT 1 is a TIE that Postgres breaks however
+      // it likes. On 2026-09-11 it picked the legacy row and the basis stayed
+      // September's — 67.75pt short — while the chart drew December.
+      //
+      // The newest bar overall has no such tie (ESZ6 was live at 14:22 while
+      // the legacy rows stopped at 12:38) and is the same rule
+      // getEsCandles(contract:'latest') uses, so both sides agree by
+      // construction rather than by coincidence. The secondary sort is a
+      // belt-and-braces tie-break toward a real contract code: '' means
+      // "some pre-2026-09-14 contract, unknowable", which is never the better
+      // answer when a named one is available at the same instant.
       `SELECT date, close, contract FROM es_candles
         WHERE ${CLOSE_WHERE}
           AND contract = (SELECT contract FROM es_candles
-                           WHERE ${CLOSE_WHERE}
-                           ORDER BY timestamp DESC LIMIT 1)
+                           ORDER BY timestamp DESC, (contract <> '') DESC
+                           LIMIT 1)
         ORDER BY date DESC LIMIT 30`
     );
   } catch (e) {

@@ -12,6 +12,7 @@ import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { useIsPhone } from '@/design/useIsPhone'
 import { CbMark } from '@/shell/Brand'
 import { BzilaLogo } from '@/shell/BzilaAlerts'
+import { AlertsPill } from '@/shell/AlertsFeed'
 import { BotAlertButton } from '@/shell/BotAlert'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
 import { NotesPanelProvider, useNotesPanel } from '@/shell/NotesPanelContext'
@@ -477,6 +478,20 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
           signed-out account gets the same wordmark, drawn flat and inert.
           See shell/BzilaAlerts.tsx. */}
       <BzilaLogo />
+      {/* ── SIGNAL ALERTS — the newest one, always on screen ──────────────────
+          The pill beside the wordmark carries the latest signal: its colour,
+          its keyword, the headline and how long ago. Clicking it opens the rest
+          — scrollable, filterable by type, with a Settings tab that arms or
+          disarms each signal.
+
+          It sits LEFT, next to the brand, rather than out on the right with the
+          utilities: it is the one thing in this bar that changes on its own,
+          and the eye already goes to that corner for the symbol.
+
+          NOT ON THE PHONE BUILD for now — 390px has no room for a headline —
+          and NOT WIRED to any feed yet (placeholder rows). See
+          shell/AlertsFeed.tsx. */}
+      {!mobile && <AlertsPill />}
       <div className="flex-1" />
       {/* ── THE PAGE'S OWN CONTROLS ────────────────────────────────────────────
           Empty on every route that puts nothing in it. The home board fills it

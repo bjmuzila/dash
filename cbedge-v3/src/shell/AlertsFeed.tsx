@@ -1,0 +1,156 @@
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import { alpha } from '@/design/theme'
+import type { AlertItem } from '@/shell/alertTypes'
+import { TYPE_BY_ID } from '@/shell/alertTypes'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE ALERTS PILL — the newest signal, in the toolbar, all the time.
+//
+// A bell with a number tells you SOMETHING happened. This tells you WHAT: the
+// type's colour, its keyword, the headline, and how long ago. That is the whole
+// argument for spending toolbar width on it — you can decide whether to look
+// without clicking, which is the decision you make thirty times a session.
+//
+// Click it and the rest open underneath, scrollable, with the filter chips and
+// a settings tab that arms or disarms each signal. See AlertsPanel.tsx.
+//
+// WHY THE PANEL IS LAZY: Shell.tsx is the ENTRY chunk, capped at 37.1KB brotli
+// by budgets.json. The pill has to be in it — it is toolbar chrome and it draws
+// on first paint. The panel (list, chips, settings switches) is several KB that
+// only matters once someone clicks. Same split, same reason, as BzilaAlerts /
+// BzilaPanel, BotAlert / BotAlertPanel and NotesDock.
+//
+// ── NO DATA YET (2026-09-14) ────────────────────────────────────────────────
+// This is the UI only. `useAlertsFeed` below returns the placeholder list from
+// AlertsPanel's SAMPLE so the pill and the panel can be looked at; nothing
+// polls, nothing subscribes, and no endpoint is named anywhere in these three
+// files. Wiring it means replacing the body of `useAlertsFeed` — the components
+// already take the shape they will get.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AlertsPanel = lazy(() => import('@/shell/AlertsPanel'))
+
+/** Placeholder feed. Replace the body when the signals engine is wired. */
+export function useAlertsFeed(): AlertItem[] {
+  const [items, setItems] = useState<AlertItem[]>([])
+  useEffect(() => {
+    let alive = true
+    // Imported lazily for the same reason the panel is: the entry chunk should
+    // not carry a list of demo strings.
+    void import('@/shell/AlertsPanel').then((m) => {
+      if (alive) setItems(m.SAMPLE)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+  return items
+}
+
+/** "18s", "4m", "2h" — the pill has room for three characters, not a clock. */
+function age(at: string): string {
+  const [h, m] = at.split(':').map(Number)
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return ''
+  const now = new Date()
+  let mins = now.getHours() * 60 + now.getMinutes() - (h * 60 + m)
+  if (mins < 0) mins += 24 * 60
+  if (mins < 1) return 'now'
+  if (mins < 60) return `${mins}m`
+  return `${Math.floor(mins / 60)}h`
+}
+
+export function AlertsPill() {
+  const items = useAlertsFeed()
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+
+  // pointerdown rather than click so a drag that starts outside closes too —
+  // matching BzilaAlerts and BotAlert.
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('pointerdown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const latest = items[0]
+  const type = latest ? TYPE_BY_ID[latest.kind] : null
+  const rest = Math.max(0, items.length - 1)
+
+  // Fresh = drawn in the type's colour with a pulsing dot. Older than an hour
+  // and the pill goes quiet: a bar that is permanently lit stops meaning
+  // anything, which is the failure mode of every notification badge.
+  const fresh = useMemo(() => !!latest && !age(latest.at).endsWith('h'), [latest])
+
+  return (
+    <div ref={wrapRef} className="relative min-w-0 shrink">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={latest ? `${TYPE_BY_ID[latest.kind].name} — ${latest.text}` : 'Signal alerts'}
+        style={type && (open || fresh) ? { borderColor: type.color } : undefined}
+        className={[
+          'flex h-6 max-w-[22rem] items-center gap-1.5 overflow-hidden rounded-sm border px-1.5 transition-colors',
+          open ? 'bg-raised' : 'border-line bg-surface2 hover:bg-raised',
+          fresh ? '' : 'opacity-60',
+        ].join(' ')}
+      >
+        {latest && type ? (
+          <>
+            {/* The dot. It is the only moving thing in the toolbar, and only
+                while the newest alert is still recent. */}
+            {fresh && (
+              <span
+                aria-hidden
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ background: type.color, boxShadow: `0 0 6px ${alpha(type.color, 0.7)}` }}
+              />
+            )}
+            <span
+              className="shrink-0 rounded-[2px] border px-1 text-3xs font-bold uppercase leading-[13px] tracking-wide"
+              style={{ borderColor: type.color, color: type.color }}
+            >
+              {type.tag}
+            </span>
+            <span className="truncate text-2xs text-fg opacity-90">{latest.text}</span>
+            <span className="shrink-0 text-3xs tabular-nums opacity-40">{age(latest.at)}</span>
+            {rest > 0 && (
+              <span className="ml-0.5 shrink-0 border-l border-line pl-1.5 text-3xs font-bold text-warn">
+                +{rest}
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="shrink-0 rounded-[2px] border border-line px-1 text-3xs font-bold uppercase leading-[13px] tracking-wide text-faint opacity-60">
+              Alerts
+            </span>
+            <span className="truncate text-2xs text-faint opacity-50">No signals yet</span>
+          </>
+        )}
+        <span aria-hidden className="shrink-0 text-3xs opacity-40">
+          {open ? '▲' : '▾'}
+        </span>
+      </button>
+
+      {open && (
+        <Suspense fallback={null}>
+          <AlertsPanel items={items} close={() => setOpen(false)} />
+        </Suspense>
+      )}
+    </div>
+  )
+}
+
+export default AlertsPill

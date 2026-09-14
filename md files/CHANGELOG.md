@@ -22919,3 +22919,40 @@ Change: `public/v3` added to root `.gitignore` and untracked via
 `git rm -r --cached public/v3`. A failed v3 build now 404s loudly instead of
 silently serving a fossil. The underlying build failure inside the image is still
 to be diagnosed.
+
+---
+
+## 2026-09-14 — v3 toolbar: signal alerts pill + feed panel (UI only)
+
+Added the alerts feed to the v3 toolbar. UI only — nothing polls, nothing
+subscribes, no endpoint is named.
+
+New files:
+- `cbedge-v3/src/shell/alertTypes.ts` — the signal catalogue (one row per type),
+  colour per type via `design/theme.ts` tokens, plus the two per-browser
+  localStorage sets: `alerts:armed` (Settings switches) and `alerts:shown`
+  (Feed filter chips). Deliberately separate — muting a type for an afternoon
+  must not disarm it.
+- `cbedge-v3/src/shell/AlertsFeed.tsx` — `<AlertsPill>`, the toolbar trigger.
+  Shows the NEWEST alert inline: type colour, keyword tag, headline, age, and
+  `+n` for what is behind it. Pulsing dot only while the newest is under an hour
+  old, then the pill fades. Panel is `lazy()` — Shell.tsx is the entry chunk
+  (37.1KB brotli budget), same split as BzilaAlerts/BzilaPanel and BotAlert.
+- `cbedge-v3/src/shell/AlertsPanel.tsx` — the dropdown. Two tabs: FEED
+  (filter chips + scrollable rows) and SETTINGS (one switch per signal, same
+  names and order as the background signals engine's switchboard). Carries
+  `SAMPLE`, the placeholder rows — delete it and pass a real list through
+  `items` and the wiring is done.
+
+Changed:
+- `cbedge-v3/src/shell/Shell.tsx` — `<AlertsPill />` mounted beside `BzilaLogo`,
+  left of the flex spacer. Desktop only (`!mobile`); 390px has no room for a
+  headline.
+
+Signals covered: GEX Flip Cross, **GEX A**, **GEX B**, Initial Balance Formed,
+Initial Balance Break, Whale Option Prints, Flow/GEX Divergence, Bzila
+Confluence (MASTER). GEX A borrows the call-wall blue and GEX B the put-wall
+red, so a feed row is the same colour as the line that fired it.
+
+No colour literals: every per-type colour is a token reference through
+`design/theme.ts` (`LEVEL_COLORS`, `VIOLET`, `LIGHT_BLUE`, `T.*`).
