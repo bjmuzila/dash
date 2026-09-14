@@ -408,7 +408,12 @@ export default function EconomicCalendar() {
               icon: '📅',
               label: 'Earnings week board',
               group: 'This page',
-              meta: `${earnWeek === 0 ? 'This week' : 'Next week'} · ${earnShown} names`,
+              // NO CAPTION, AND SO NO `meta`. The board is the poster: it prints
+              // its own title, its own week range, its own cbedge.net and its own
+              // mark. The caption was adding a SECOND CB Edge mark and a line
+              // ("This week · N names") saying what the header and the per-column
+              // counts already say. See CopyShotTarget.bare.
+              bare: true,
               file: `earnings-${earnWeek === 0 ? 'this' : 'next'}-week-${today}`,
               resolve: () => boardRef.current,
             },
@@ -426,7 +431,7 @@ export default function EconomicCalendar() {
               },
             ]
           : NO_TARGETS,
-    [boardMounted, activeTab, earnWeek, earnShown, today],
+    [boardMounted, activeTab, earnWeek, today],
   )
   useCopyShotTargets(shotTargets)
 
@@ -1087,14 +1092,26 @@ function EarningsBoard({
         style={{ border: `1px solid ${BOARD.edge}`, background: BOARD.header }}
       >
         <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="text-sm font-black tracking-[0.14em] text-fg">
+          {/* The poster's accent, not plain white. Everything else on this board
+              is white or near it — twelve company names, five date strips, every
+              count — so a white title was one more white thing rather than the
+              thing you read first. Teal is the brand colour the econ template
+              already prints its own headings in. */}
+          <span
+            className="text-sm font-black tracking-[0.14em]"
+            style={{ color: CAL.accent }}
+          >
             {earnWeek === 0 ? 'EARNINGS THIS WEEK' : 'EARNINGS NEXT WEEK'}
           </span>
           <span className="tabular font-mono text-xs leading-tight tracking-[0.04em] text-fg">
             {dayDate(first)} – {dayDate(last)}
           </span>
         </div>
-        <span className="tabular ml-auto font-mono text-xs font-extrabold leading-none text-fg">
+        {/* The domain is the whole point of the picture once it has been pasted
+            into a Discord someone else reads. At 11px it was a footnote in the
+            corner; this is the size a watermark has to be to survive a
+            screenshot of a screenshot. */}
+        <span className="tabular ml-auto font-mono text-xl font-extrabold leading-none text-fg">
           cbedge.net
         </span>
       </div>
@@ -1118,8 +1135,23 @@ function EarningsBoard({
           baked-in black plate, and the board's ground is near-black but not
           black, so the plate showed as a faintly different rectangle. Inside
           boardRef, so the capture carries it. */}
-      <div className="flex justify-end pt-3">
-        <img src="/cbedge3.0.png" alt="CB Edge" className="block h-14 w-auto" />
+      {/* The deep link sits opposite the mark on the same baseline. Whoever the
+          image reaches sees the brand on the right and, on the left, exactly
+          where to go and see it live — a poster that says cbedge.net and nothing
+          else makes the reader guess which of thirty pages this was.
+
+          `items-end` rather than `items-center`: the mark is a 56px banner and
+          the URL is one line of 13px type, so centring them floated the text in
+          the middle of the mark's height instead of sitting it on the floor of
+          the picture. */}
+      <div className="flex items-end justify-between gap-3 pt-3">
+        <span
+          className="tabular min-w-0 truncate font-mono text-sm font-semibold leading-none"
+          style={{ color: CAL.accent }}
+        >
+          cbedge.net/v3/economic-calendar
+        </span>
+        <img src="/cbedge3.0.png" alt="CB Edge" className="block h-14 w-auto shrink-0" />
       </div>
     </div>
   )

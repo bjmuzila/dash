@@ -253,6 +253,19 @@ export const ChainMatrix = memo(function ChainMatrix({
   const totalScale: Scale = { max: totalAbs[0] ?? 1, top3: totalAbs.slice(0, 3) }
   const grandVisibleTotal = [...rowTotals.values()].reduce((a, b) => a + b, 0)
 
+  // ── ⅀ Total's own CORE level ───────────────────────────────────────────────
+  // Every expiry column paints its CB gold; the ⅀ column was the one column
+  // that never named its own. Its core is the same statement made of the summed
+  // figure: the strike carrying the largest |net| ACROSS the columns the ⅀ is
+  // summing. Gated on the GEX tab exactly like the per-column ★ — "the core
+  // level" is a claim about gamma, not about a 15-minute delta.
+  const totalMvc: number | null =
+    greekMode === 'gex'
+      ? ([...rowTotals.entries()]
+          .filter(([, v]) => v !== 0)
+          .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0]?.[0] ?? null)
+      : null
+
   // ── Levels-only mode ───────────────────────────────────────────────────────
   // Intensity at its bottom stop drops the heat field entirely and paints ONLY
   // each column's CB / CW / PW. Walls are read through valueAt(), so they follow
@@ -705,6 +718,7 @@ export const ChainMatrix = memo(function ChainMatrix({
               (() => {
                 const tot = rowTotals.get(strike) ?? 0
                 const totWall = levelsOnly ? wallAt(totalWalls, strike) : null
+                const isTotMvc = totalMvc != null && totalMvc === strike && tot !== 0
                 const heat = levelsOnly
                   ? totWall && tot !== 0
                     ? skinRankBg(tot, WALL_RANK[totWall], SK)
@@ -712,6 +726,9 @@ export const ChainMatrix = memo(function ChainMatrix({
                   : tot !== 0
                     ? skinMetricBg(tot, totalScale.max, rankOf(tot, totalScale.top3), intensity, SK)
                     : 'transparent'
+                // Same rule the expiry cells use: levels-only names the wall,
+                // every other slider position marks the CORE level only.
+                const totLevel = !SK.levelFill ? null : (totWall ?? (isTotMvc ? ('cb' as const) : null))
                 return (
                   <div
                     style={{
@@ -723,22 +740,55 @@ export const ChainMatrix = memo(function ChainMatrix({
                       color: tot === 0 ? CHAIN.none : alpha(T.text, 0.92),
                       ...(CELL.shadow && tot !== 0 ? { textShadow: CELL.shadow } : {}),
                       borderRadius: CELL.radius || undefined,
-                      background: totWall ? (levelFillBg(totWall, SK, heat) ?? heat) : heat,
+                      background: totLevel ? (levelFillBg(totLevel, SK, heat) ?? heat) : heat,
                       borderLeft: `2px solid ${alpha(T.cyan, selMode ? 0.8 : 0.35)}`,
                       boxShadow: isATM
                         ? `inset 0 2px 0 ${T.text}, inset 0 -2px 0 ${T.text}, inset -2px 0 0 ${T.text}`
                         : undefined,
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
+                      // relative so the ★ can be pinned to the corner instead of
+                      // riding in the flex row and pushing the figure off its
+                      // right edge.
+                      ...(SK.levelFill ? { position: 'relative' as const } : {}),
                       // The ⅀ column answers an expiry selection by RE-SUMMING,
                       // so it dims for a strike pick only.
                       opacity: strikeDim ? 0.13 : 1,
                       transition: 'opacity .12s',
+                      // CLASSIC does not fill levels, so the ring is the only
+                      // thing that can carry CB there — as on the expiry cells.
+                      ...(isTotMvc && !SK.levelFill
+                        ? { outline: `2px solid ${CHAIN.mvc}`, outlineOffset: '-2px' }
+                        : {}),
                       display: 'flex',
                       alignItems: 'baseline',
                       justifyContent: 'flex-end',
                     }}
                   >
+                    {isTotMvc &&
+                      (SK.levelFill ? (
+                        <span
+                          title="CB - Core Bullseye — highest |⅀ net GEX|"
+                          style={{
+                            position: 'absolute',
+                            top: 1,
+                            left: 4,
+                            fontSize: 'var(--text-2xs)',
+                            lineHeight: 1,
+                            color: LEVEL_ON_SOLID,
+                            pointerEvents: 'none',
+                          }}
+                        >
+                          ★
+                        </span>
+                      ) : (
+                        <span
+                          title="CB - Core Bullseye — highest |⅀ net GEX|"
+                          style={{ color: LEVEL_COLORS.cb, lineHeight: 1, marginRight: 'auto', ...MARKER_EDGE }}
+                        >
+                          ★
+                        </span>
+                      ))}
                     {isCountMode || !CELL.signColors ? (
                       <span
                         style={{

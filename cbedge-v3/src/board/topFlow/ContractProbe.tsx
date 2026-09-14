@@ -250,7 +250,7 @@ export function ContractProbe({ row, onClose }: { row: TopFlowRow; onClose: () =
       </div>
 
       {bars.length >= 2 ? (
-        <ProbeChart bars={bars} entry={entry} size={row.size} wide={big} />
+        <ProbeChart bars={bars} entry={entry} entryTs={row.ts} size={row.size} wide={big} />
       ) : (
         <div className="px-1 py-6 text-2xs leading-relaxed text-faint">
           {q.loading
@@ -362,9 +362,12 @@ function ProbeExpandIcon({ size = 12, collapse = false }: { size?: number; colla
 
 const MONO = 'ui-monospace,Menlo,Consolas,monospace'
 
-function ProbeChart({ bars, entry, size, wide = false }: {
+function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   bars: Bar[]
   entry: number | null
+  /** Epoch ms of the print. Places the entry MARKER on the line — the dashed
+   *  rung says what was paid, the dot says when. */
+  entryTs?: number | null
   size: number | null
   /** Popped out over the page — a bigger canvas, and type scaled to match it. */
   wide?: boolean
@@ -413,6 +416,25 @@ function ProbeChart({ bars, entry, size, wide = false }: {
   const bw = Math.max(1, ((W - PADL - PADR) / n) * 0.62)
   const fillIdx = vols.indexOf(vMax)
 
+  // WHERE the entry sits on the line. The print timestamp is matched to the
+  // nearest bar OPEN rather than the first bar at or after it, so a fill a few
+  // seconds either side of a boundary lands on the bar it belongs to. Out of
+  // range (an entry before the window starts, on 3D/1W/1M) draws no marker —
+  // pinning it to bar 0 would put the dot on a minute it was not printed in.
+  const entryI = useMemo(() => {
+    if (entryTs == null || !Number.isFinite(entryTs) || n === 0) return null
+    const first = bars[0]!.time, lastT = bars[n - 1]!.time
+    const span = lastT - first
+    const slack = Math.max(60_000, span / Math.max(1, n - 1))
+    if (entryTs < first - slack || entryTs > lastT + slack) return null
+    let best = 0, bestD = Infinity
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(bars[i]!.time - entryTs)
+      if (d < bestD) { bestD = d; best = i }
+    }
+    return best
+  }, [bars, entryTs, n])
+
   const label = { fill: 'var(--color-fg)', fontFamily: MONO } as const
   const fmt = (v: number) => v.toFixed(2)
   // Type and glyph sizes are in USER units and both viewBoxes display at roughly
@@ -458,14 +480,47 @@ function ProbeChart({ bars, entry, size, wide = false }: {
         <>
           <line x1={PADL} y1={y(entry)} x2={W - PADR} y2={y(entry)}
             style={{ stroke: 'var(--color-fg)' }} strokeWidth={1} strokeDasharray="1 3" opacity={0.55} />
-          <text x={PADL + 2} y={y(entry) - 5 * S} fontSize={9 * S} fontWeight={700} letterSpacing="0.6" style={label}>
-            ENTRY {fmt(entry)}
-          </text>
+          {/* With no marker to hang it on, the rung keeps its left-edge label. */}
+          {entryI == null && (
+            <text x={PADL + 2} y={y(entry) - 5 * S} fontSize={9 * S} fontWeight={700} letterSpacing="0.6" style={label}>
+              ENTRY {fmt(entry)}
+            </text>
+          )}
         </>
       )}
 
       <path d={line} fill="none" style={{ stroke: 'var(--color-accent)' }} strokeWidth={1.4 * S}
         strokeLinejoin="round" strokeLinecap="round" />
+
+      {/* ENTRY MARKER. Same ring vocabulary as the high and the low, filled with
+          the page ground so the price line reads THROUGH it rather than behind
+          a blob. Sits on the print's bar, at the price paid. The label flips to
+          the left inside the last fifth of the canvas and above the dot when the
+          entry is in the bottom third, so it never runs off the rail or collides
+          with the volume pane. */}
+      {entry != null && entry > 0 && entryI != null && (() => {
+        const ex = x(entryI)
+        const flip = ex > PADL + (W - PADL - PADR) * 0.8
+        const lowHalf = y(entry) > PADT + priceH * 0.66
+        return (
+          <g>
+            <circle cx={ex} cy={y(entry)} r={4 * S} fill="none"
+              style={{ stroke: 'var(--color-fg)' }} strokeWidth={1.4 * S} opacity={0.85} />
+            <circle cx={ex} cy={y(entry)} r={1.6 * S} style={{ fill: 'var(--color-fg)' }} />
+            <text
+              x={flip ? ex - 8 * S : ex + 8 * S}
+              y={lowHalf ? y(entry) - 8 * S : y(entry) + 12 * S}
+              textAnchor={flip ? 'end' : 'start'}
+              fontSize={9 * S}
+              fontWeight={700}
+              letterSpacing="0.6"
+              style={label}
+            >
+              ENTRY {fmt(entry)}
+            </text>
+          </g>
+        )
+      })()}
 
       <circle cx={x(hiI)} cy={y(hi)} r={2.6 * S} fill="none" style={{ stroke: 'var(--color-up)' }} strokeWidth={1.4 * S} />
       <text x={x(hiI)} y={y(hi) - 8 * S} textAnchor="middle" fontSize={9 * S} fontWeight={700}

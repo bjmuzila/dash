@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Chip, SegGroup, SegMenu } from '@/design/primitives/Controls'
+import { DatePicker } from '@/design/primitives/DatePicker'
 import { useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { ContractProbe } from '@/board/topFlow/ContractProbe'
@@ -247,6 +248,21 @@ export default function Whales() {
   const [day, setDay] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
+  // ── CONTRACT LOOKUP ────────────────────────────────────────────────────────
+  // The archive answers "what printed big"; this answers "what did THIS contract
+  // do", print or no print. They are different questions and the second one was
+  // only reachable by finding a whale row for the contract first — so a strike
+  // nobody swung a million dollars at had no way in at all.
+  //
+  // Deliberately NOT saved to localStorage with the filters: a lookup is a
+  // question you asked once, and restoring last week's expiry on open would put
+  // a dead contract in the panel every morning.
+  const [lkTicker, setLkTicker] = useState(saved.ticker || 'SPY')
+  const [lkStrike, setLkStrike] = useState('')
+  const [lkExpiry, setLkExpiry] = useState('')
+  const [lkType, setLkType] = useState<'C' | 'P'>('C')
+  const [lookup, setLookup] = useState<WhaleRow | null>(null)
+
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -285,6 +301,64 @@ export default function Whales() {
     () => (selectedId ? rows.find((r) => r.id === selectedId) ?? null : null),
     [rows, selectedId],
   )
+
+  const lkStrikeNum = Number(lkStrike)
+  const lkReady =
+    lkTicker.trim().length > 0 &&
+    Number.isFinite(lkStrikeNum) && lkStrikeNum > 0 &&
+    /^\d{4}-\d{2}-\d{2}$/.test(lkExpiry)
+
+  // ContractProbe draws a CONTRACT, and everything else on its face — entry,
+  // size, premium — is about one PRINT. A lookup has no print, so those fields
+  // are null and the probe renders them as dashes, which is the true answer:
+  // there is no entry here, only the contract's day.
+  //
+  // `ts` is the probe's time anchor, not a claim that something traded now — it
+  // is what the 1D/3D/1W/1M windows are measured back from, so "now" is the
+  // only value that means "the most recent bars".
+  const openLookup = () => {
+    if (!lkReady) return
+    const t = lkTicker.trim().toUpperCase()
+    setLookup({
+      // Keyed on the contract so switching strikes remounts the probe rather
+      // than leaving the previous contract's bars on screen mid-fetch.
+      id: `lookup:${t}:${lkExpiry}:${lkStrikeNum}:${lkType}`,
+      ts: Date.now(),
+      osi: null,
+      underlying: t,
+      type: lkType,
+      strike: lkStrikeNum,
+      expiry: lkExpiry,
+      dte: null, size: null, price: null, premium: 0, spot: null,
+      side: null, action: null, sideReason: null,
+      bid: null, ask: null, quoteAgeMs: null, vol: null, oi: null,
+      sessionDate: etYmd(new Date()),
+    })
+  }
+
+  /** Load a contract into the lookup panel and show it — used by the repeat
+   *  strikes list, where every row IS a contract worth looking into. */
+  const lookupContract = (ticker: string, strike: number, expiry: string, type: string) => {
+    const t = ticker.trim().toUpperCase()
+    const cp = type === 'P' ? 'P' : 'C'
+    setLkTicker(t)
+    setLkStrike(String(strike))
+    setLkExpiry(expiry)
+    setLkType(cp)
+    setLookup({
+      id: `lookup:${t}:${expiry}:${strike}:${cp}`,
+      ts: Date.now(),
+      osi: null,
+      underlying: t,
+      type: cp,
+      strike,
+      expiry,
+      dte: null, size: null, price: null, premium: 0, spot: null,
+      side: null, action: null, sideReason: null,
+      bid: null, ask: null, quoteAgeMs: null, vol: null, oi: null,
+      sessionDate: etYmd(new Date()),
+    })
+  }
 
   const s = d?.summary
   // Only prints that carry a side land in a directional bucket, so the
@@ -614,13 +688,23 @@ export default function Whales() {
                       type="button"
                       onClick={() => setDay((cur) => (cur === x.d ? null : x.d))}
                       title={`${x.d} · ${num(x.n)} prints · ${money(x.total)}`}
+                      // h-full is load-bearing, not decoration. The two stacked
+                      // divs size themselves in PERCENT, and a percentage height
+                      // resolves against nothing unless its parent's height is
+                      // definite. Under the row's `items-end` this button was
+                      // auto-height — so both bars computed to zero and every
+                      // session rendered as an empty 104px box with only its
+                      // date label showing.
                       className={[
-                        'flex flex-1 flex-col justify-end gap-px rounded-sm',
+                        'flex h-full flex-1 flex-col justify-end gap-px rounded-sm',
                         day === x.d ? 'outline outline-1 outline-offset-2 outline-accent' : '',
                       ].join(' ')}
                     >
-                      <div className="rounded-t-sm bg-up" style={{ height: `${h(x.bull)}%` }} />
-                      <div className="rounded-b-sm bg-down opacity-85" style={{ height: `${h(x.bear)}%` }} />
+                      {/* shrink-0 for the same reason: a flex child with a % height
+                          is still allowed to shrink below it, and two of them in a
+                          104px box will. */}
+                      <div className="shrink-0 rounded-t-sm bg-up" style={{ height: `${h(x.bull)}%` }} />
+                      <div className="shrink-0 rounded-b-sm bg-down opacity-85" style={{ height: `${h(x.bear)}%` }} />
                     </button>
                   )
                 })}
@@ -642,6 +726,85 @@ export default function Whales() {
 
         {/* ── right column ───────────────────────────────────────────────── */}
         <div className="flex flex-col gap-2">
+
+          {/* ── contract lookup ──────────────────────────────────────────────
+              Four fields and the same probe the table opens. The expiry is the
+              themed DatePicker, never a native <input type="date">: that widget
+              renders the OS calendar — a white Chrome popup on Windows — which
+              inside this rail reads as a bug (see DatePicker's own note).
+          ──────────────────────────────────────────────────────────────────── */}
+          <Card title="Contract lookup" note="any strike, print or not">
+            <div className="flex flex-col gap-2 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <input
+                  value={lkTicker}
+                  onChange={(e) => setLkTicker(e.target.value.toUpperCase().slice(0, 12))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                  placeholder="TICKER"
+                  aria-label="Underlying"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs uppercase text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                />
+                <input
+                  value={lkStrike}
+                  onChange={(e) => setLkStrike(e.target.value.replace(/[^\d.]/g, '').slice(0, 9))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                  placeholder="STRIKE"
+                  inputMode="decimal"
+                  aria-label="Strike"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <DatePicker
+                  value={lkExpiry}
+                  onChange={setLkExpiry}
+                  size="sm"
+                  placeholder="EXPIRY"
+                  title="Contract expiry"
+                  // The picker's `sm` trigger is content-width by design (it is
+                  // a toolbar chip everywhere else). Here it is a FIELD, sitting
+                  // under two full-width inputs, so the trigger is stretched to
+                  // the wrapper rather than left as a pill floating in a gap.
+                  className="flex-1 [&>button]:w-full [&>button]:py-1 [&>button]:text-left"
+                />
+                <SegGroup<'C' | 'P'>
+                  title="Calls or puts"
+                  options={[{ label: 'CALL', value: 'C' }, { label: 'PUT', value: 'P' }]}
+                  value={lkType}
+                  onChange={setLkType}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={openLookup}
+                disabled={!lkReady}
+                title={lkReady ? 'Draw this contract' : 'Needs a ticker, a strike and an expiry'}
+                className={[
+                  'rounded-sm border px-2 py-1 text-2xs font-bold uppercase tracking-[0.1em] transition-colors',
+                  lkReady
+                    ? 'border-accent bg-accent/10 text-accent hover:bg-accent/20'
+                    : 'cursor-not-allowed border-line text-faint opacity-50',
+                ].join(' ')}
+              >
+                Look up
+              </button>
+            </div>
+
+            {lookup ? (
+              <div className="flex min-h-[360px] flex-col border-t border-line">
+                <ContractProbe key={lookup.id} row={lookup} onClose={() => setLookup(null)} />
+              </div>
+            ) : (
+              <div className="border-t border-line px-3 py-2 text-2xs leading-relaxed text-faint">
+                Any contract, whether or not a whale ever touched it. There is no
+                entry to mark — the panel draws the contract's own price and
+                volume.
+              </div>
+            )}
+          </Card>
+
           <Card title="Where the size went" note={span.label}>
             <div className="py-1">
               {(d?.tickers ?? []).map((t) => (
@@ -678,7 +841,13 @@ export default function Whales() {
           <Card title="Repeat strikes" note="3+ whale prints, same contract">
             <div className="py-1">
               {(d?.repeats ?? []).map((r) => (
-                <div key={r.osi} className="grid grid-cols-[1fr_38px_74px] items-center gap-2 px-3 py-1.5">
+                <button
+                  key={r.osi}
+                  type="button"
+                  onClick={() => lookupContract(r.ticker, Number(r.strike), r.expiry, r.type)}
+                  title="Open this contract in the lookup"
+                  className="grid w-full grid-cols-[1fr_38px_74px] items-center gap-2 px-3 py-1.5 text-left hover:bg-raised"
+                >
                   <span className="truncate text-xs text-fg">
                     {/* SQL hands this back as text (MAX(payload->>'strike')), so it
                         carries the raw float's digits — back through Number() to
@@ -692,7 +861,7 @@ export default function Whales() {
                   >
                     {money(r.total)}
                   </span>
-                </div>
+                </button>
               ))}
               {!d?.repeats.length && (
                 <div className="px-3 py-2 text-sm text-faint">

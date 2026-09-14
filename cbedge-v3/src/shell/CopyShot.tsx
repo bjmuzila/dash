@@ -72,6 +72,20 @@ export interface CopyShotTarget {
    * ShotOptions.badge.
    */
   badge?: string | string[]
+  /**
+   * NO CAPTION BAND AND NO MARK — for a target that IS the poster rather than a
+   * card photographed out of the page.
+   *
+   * The earnings week board is the case: it carries its own title, its own week
+   * range, its own cbedge.net and its own 56px mark INSIDE the capture element.
+   * Framed, the picture came out wearing the CB Edge mark twice — the board's at
+   * the bottom right and the caption's at the caption's right — and the caption
+   * spent its line repeating a week the header had already named.
+   *
+   * Forwards to ShotOptions.bare. `meta` is ignored alongside it: there is no
+   * caption left for it to land in.
+   */
+  bare?: boolean
   /** Menu heading. See GROUP_ORDER. */
   group?: string
   /** Download name stem, used only when the clipboard write is refused. */
@@ -261,6 +275,7 @@ function useShot() {
         title: target.label,
         meta: target.meta,
         badge: target.badge,
+        bare: target.bare,
         filename: `${slug(target.file ?? target.label)}.png`,
       })
       setState(result)

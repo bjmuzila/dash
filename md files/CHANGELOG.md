@@ -1,5 +1,129 @@
 # Changelog
 
+## 2026-09-14 (g) - Whales: a contract lookup, and the session bars that drew at zero
+
+**The session chart was empty.** `WHALE PREMIUM BY SESSION` rendered a 104px box
+with two date labels in it and no bars. The two stacked divs size themselves in
+PERCENT, and a percentage height resolves against nothing unless the parent's
+height is definite - under the row's `items-end` the bar button was auto-height,
+so both halves computed to zero. `h-full` on the button and `shrink-0` on the two
+halves; the bars are back.
+
+**A contract lookup, first card in the right rail.** The archive answers "what
+printed big". It had no answer for "what did THIS contract do" unless a whale had
+already swung a million dollars at it - the only way into the probe was clicking a
+row. Now: ticker, strike, expiry, call/put, and the same `ContractProbe` the table
+opens. The expiry is the themed `DatePicker`, never a native `<input type="date">`
+- that widget draws the OS calendar, a white Chrome popup on Windows, which inside
+this rail reads as a bug.
+
+A lookup carries no print, so entry, size and premium render as dashes. That is
+the true answer rather than a gap: there is no entry on a contract nobody was
+asked about, only the contract's own price and volume. The fields are deliberately
+NOT saved with the filters - restoring last week's expiry every morning would put
+a dead contract in the panel.
+
+**Repeat strikes are now buttons.** Every row in that list IS a contract worth
+looking into, so clicking one loads it into the lookup.
+
+`cbedge-v3/src/pages/Whales.tsx`
+
+## 2026-09-14 (f) - Whale contract probe: the entry is a point, not a rung
+
+The chart drew the entry as a dashed rung across the whole canvas with the price
+labelled at the left edge - it said WHAT was paid and never WHEN. On a 1D probe
+where the print landed at 11:59 and the line spent the morning above it, the rung
+alone makes an entry look like a level rather than a moment.
+
+`ProbeChart` now takes `entryTs` (the print's epoch ms) and puts a ring on the
+line at that bar, at the price paid: the same open-ring vocabulary as the H and L
+markers, with a small solid centre so the price line reads through it. The
+`ENTRY 1.63` label moved off the left edge and onto the marker - it flips to the
+left of the dot inside the last fifth of the canvas and above it when the entry
+sits in the bottom third, so it never runs into the price rail or the volume
+pane.
+
+The bar is matched by NEAREST open rather than first-at-or-after, so a fill a few
+seconds either side of a boundary lands on the bar it belongs to. An entry
+outside the window - the 3D/1W/1M ranges reach back further than the print - gets
+no marker at all and the rung keeps its left-edge label; pinning the dot to bar 0
+would put it on a minute the contract was not printed in.
+
+`cbedge-v3/src/board/topFlow/ContractProbe.tsx`
+
+## 2026-09-14 (e) - Earnings week board poster: four fixes to the shot
+
+**One mark, not two.** The board is a poster, not a card photographed out of a
+page: it prints its own title, its own week range, its own cbedge.net and its own
+56px mark, all inside `boardRef`. It was then going through `frame()` anyway, so
+every shot came out wearing the CB Edge mark TWICE - the board's bottom right,
+the caption's at the caption's right - and the caption line spent itself
+repeating a week the header had already named.
+
+`ShotOptions.bare` existed for exactly this and was never wired through
+CopyShot. Added `CopyShotTarget.bare`, forwarded it in `captureAndCopy`, and set
+it on `econ-calendar:board`. `meta` went with it - there is no caption left for
+it to land in, and "This week · N names" was saying what the header and the
+per-column counts both already say.
+
+**The domain got readable.** `cbedge.net` top right was `text-xs` - 11px, a
+footnote in the corner of a 1700px image. Now `text-xl` (24px): the size a
+watermark has to be to survive someone screenshotting the screenshot.
+
+**The title stands out.** `EARNINGS THIS WEEK` was `text-fg`, and so is every
+company name, every date strip and every count on the board - a white title was
+one more white thing rather than the first thing read. Now `CAL.accent`, the same
+teal the econ template already prints its headings in.
+
+**The deep link is on it.** Bottom left, opposite the mark on the same baseline:
+`cbedge.net/v3/economic-calendar`. A poster that says only `cbedge.net` makes
+whoever it reaches guess which of thirty pages it came from. `items-end` rather
+than `items-center` - the mark is a 56px banner and the URL is one 13px line, so
+centring floated the text up the middle of the mark instead of sitting it on the
+floor of the picture.
+
+Both touched files are at zero check-theme hits and neither is in
+theme-baseline.json, so zero is the requirement.
+
+
+## 2026-09-14 (d) - The five orphan tickers get marks
+
+The names on this week's board that exist in NO upstream icon set. Four are now
+real marks Brandon supplied; one is a generated placeholder.
+
+| Ticker | public/logos/ | Plate |
+|---|---|---|
+| KMTS | real mark | #f0f3f9 |
+| CHRN | real mark | white |
+| FPS  | real mark | #1a1e21 |
+| HUBG | real mark | #d5503f |
+| LUXE | placeholder | keyed |
+
+Each supplied file is flattened onto ITS OWN corner colour before the alpha is
+dropped, not onto a blanket white. FPS is near-black and HUBG is red; a white
+matte would have rung both marks with a halo at 34px. Then 128px, LANCZOS,
+optimized - same treatment as the 4,303 mirrored ones.
+
+### The placeholder, for anything still missing
+
+Two characters, not four. Four are ~8px tall inside a 34px chip and read as
+noise; two fill the plate. The plate colour is keyed off the symbol through an
+FNV-1a hash into a fixed 12-colour palette, so it is stable for that ticker
+forever and two names in the same row do not collide. A plain polynomial hash
+was tried first and put CHRN/FPS on one colour and LUXE/HUBG on another - FNV's
+avalanche is what separates short strings sharing letters.
+
+It is deliberately not an invented brand mark. It reads as "no logo on file",
+which is true, and a real PNG dropped at the same path overwrites it with no
+other change.
+
+**LUXE was declined.** The file supplied was a stock-library comp with the asset
+ID `2489946907` inside the frame, and the wordmark is a generic one the agency
+sells - not LuxUrban's. Cropping the number does not fix the licence.
+
+Preview: `generated/2026-09-14-missing-logo-placeholders.png` (git-ignored).
+
+
 ## 2026-09-14 (c) - v3 build fix: ChipLogo never exported `tickerLogoUrls`
 
 `/v3` was 404ing on the VPS. The Docker step is non-fatal by design, so the
@@ -22704,51 +22828,3 @@ Change: `public/v3` added to root `.gitignore` and untracked via
 `git rm -r --cached public/v3`. A failed v3 build now 404s loudly instead of
 silently serving a fossil. The underlying build failure inside the image is still
 to be diagnosed.
-
-## 2026-09-13 · v3 board: a row holds one, two or three cards and nothing else
-
-`cbedge-v3/src/design/primitives/Board.tsx`, `cbedge-v3/src/board/catalog.tsx`.
-
-The 48-column grid let a card be any width, so a row could end up with four
-cards, or with two that were 26 and 22 wide and looked wrong for a reason you
-could not see. A card's width is now the whole board (48), a half (24) or a
-third (16), and its left edge sits on a boundary of its own width: halves at 0
-and 24, thirds at 0, 16 and 32.
-
-- `laneWidths` / `snapLaneW` / `snapLaneX` / `snapBoard` are the rule, new in
-  Board.tsx. `snapBoard` puts every card on a lane and settles any overlap that
-  reopens by dropping it DOWN only, so a card never changes lane to get out of
-  the way.
-- `compactBoard` and `resolveBoard` lane-snap their input; `resolveBoard` and
-  `settleBoard` lane-snap their output too, because `squeezeAside`, `stepAside`
-  and `fillGaps` all reach widths by arithmetic and would otherwise invent an
-  illegal one. Every read path (`sanitizeLayout`) and every write path (add,
-  remove, drag, resize, load) goes through one of these, so an old saved board
-  is corrected on open.
-- Resize picks the nearest lane rather than the nearest column. The
-  neighbour-size match still runs on HEIGHT; width no longer needs it, since two
-  cards in a row are the same width by construction.
-- Drag guides are drawn at the thirds and halves instead of all 48 columns.
-- Catalog defaults moved onto legal widths: GEX Candles and Net Premium 32 -> 24,
-  Quick Links 12 -> 16.
-
-Verified against the engine offline: the lane snap is idempotent, leaves no
-overlap, and produces only 16/24/48 widths on lane-aligned x.
-
-## 2026-09-14 · v3 board: 1 · 2 · 3 in each card's header while editing
-
-`cbedge-v3/src/board/BoardPage.tsx`.
-
-The lane rule above means a card can only be full, half or third width, but
-reaching the one you want still meant dragging a corner and reading the result
-off the screen. Unlock the board and every card header now carries a
-three-button group before the ✕: 1 (full width), 2 (half, two per row), 3
-(third, three per row). Click one and the card takes that width immediately.
-
-- The pressed button is the width the card already has, so the control is also
-  the readout for which of the three it is on.
-- The card is PINNED for the settle that follows, exactly as after a resize
-  gesture. Unpinned, `fillGaps` hands a card narrowed to a third the space it
-  just gave up and widens it straight back, and the button looks broken.
-- Dragging still works and still lands on the same three widths. This is the
-  same decision made with one click.
