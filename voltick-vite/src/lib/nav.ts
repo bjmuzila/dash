@@ -87,6 +87,21 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
     ],
   },
   {
+    title: "Almanac",
+    icon: "📅",
+    blurb:
+      "CB Edge's public seasonality almanac, ported whole and repainted in the Voltick palette. A static copy: it renders the compiled data and asks the backend for nothing.",
+    items: [
+      {
+        label: "Seasonality",
+        path: "/seasonality",
+        key: "Seasonality",
+        note: "Ninety-eight years of S&P 500 calendar behaviour, nineteen sections, drawn in Voltick surfaces and type.",
+        status: "live",
+      },
+    ],
+  },
+  {
     title: "Demos",
     icon: "🖥️",
     blurb: "Sandbox copies of real surfaces, safe to click through. Synthetic records only, nothing customer facing.",

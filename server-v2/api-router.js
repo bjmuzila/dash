@@ -8880,6 +8880,9 @@ if (libDb) {
               amazonHistory: (amazonHistory || []).map((r) => ({
                 month: String(r.month),
                 pay: Number(r.pay) || 0,
+                // Tips are earnings that arrive a day late; they belong in the
+                // month's pay side, not hidden in a per-row detail.
+                tips: Number(r.tips) || 0,
                 gas: Number(r.gas) || 0,
                 n: Number(r.n) || 0,
               })),
@@ -8999,7 +9002,17 @@ if (libDb) {
           }
           if (action === 'recurringDelete') { await D.deleteRecurring(profile.id, Number(body?.id ?? 0)); send(res, 200, { ok: true }); return; }
           if (action === 'amazon') {
-            const row = await D.insertAmazonRow({ profile_id: profile.id, work_date: String(body?.date ?? '').trim(), pay: Number(body?.pay ?? 0), gas: Number(body?.gas ?? 0) });
+            const row = await D.insertAmazonRow({ profile_id: profile.id, work_date: String(body?.date ?? '').trim(), pay: Number(body?.pay ?? 0), tips: Number(body?.tips ?? 0), gas: Number(body?.gas ?? 0) });
+            send(res, 200, { ok: true, amazon: row }); return;
+          }
+          // Patch a logged day. Tips post about 24h after the block pays, so the
+          // row is always saved before its last number is known — this is what
+          // makes the tip an edit instead of a delete-and-retype.
+          if (action === 'amazonUpdate') {
+            const patch = {};
+            if (body?.date != null) patch.work_date = String(body.date).trim();
+            for (const f of ['pay', 'tips', 'gas']) if (body?.[f] != null) patch[f] = Number(body[f]) || 0;
+            const row = await D.updateAmazonRow(profile.id, Number(body?.id ?? 0), patch);
             send(res, 200, { ok: true, amazon: row }); return;
           }
           if (action === 'deleteAmazon') { await D.deleteAmazonRow(profile.id, Number(body?.id ?? 0)); send(res, 200, { ok: true }); return; }
@@ -9685,7 +9698,10 @@ if (libDb) {
             // Amazon REFUND would also match — it is rare, and it is one click
             // to drop from the review list before saving, which is cheaper than
             // a descriptor test that misses the real deposits.
-            const amazonTarget = Number((amazonMonths || [])[0]?.pay) || 0;
+            // Pay AND tips: both land in the bank as Amazon deposits, so the
+            // allocation target has to include the tip or every tipped month
+            // looks short and spills into Bzila.
+            const amazonTarget = (Number((amazonMonths || [])[0]?.pay) || 0) + (Number((amazonMonths || [])[0]?.tips) || 0);
             const split = {
               month: m,
               target: amazonTarget,

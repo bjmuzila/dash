@@ -52,9 +52,16 @@ type RegisterRow = {
 };
 type Category = { id: number; name: string; amount: number; color?: string | null };
 type DailyBalance = { day: string; coastal: number; truist: number; secu: number };
-type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
+/**
+ * One logged Flex day. `tips` is its own column, not part of `pay`, because the
+ * two numbers arrive a day apart: the block pays on the day, the customer tip
+ * posts roughly 24h later. Keeping it separate is what lets a day be entered
+ * when it is driven and topped up when the tip lands, instead of being deleted
+ * and retyped.
+ */
+type AmazonRow = { id: number; work_date: string; pay: number; tips: number; gas: number };
 /** One month of Amazon totals, grouped server-side. `n` = deliveries logged. */
-type AmazonMonthTotal = { month: string; pay: number; gas: number; n: number };
+type AmazonMonthTotal = { month: string; pay: number; tips: number; gas: number; n: number };
 type PropSource = "prop" | "cbedge" | "contracts";
 // Per-stream wording for the Bzila entry form. Keeps the source-specific
 // labels/defaults in one place instead of ternaries at each field.
@@ -290,6 +297,9 @@ export default function Budget() {
   // Amazon composer
   const [azDate, setAzDate] = useState(todayIso());
   const [azPay, setAzPay] = useState("");
+  // Usually left blank at entry time — the tip is not known yet. It gets filled
+  // in on the row itself the next day (see AmazonTable's tip cell).
+  const [azTips, setAzTips] = useState("");
   const [azGas, setAzGas] = useState("");
 
   // Bzila composer
@@ -502,10 +512,16 @@ export default function Budget() {
   }, [register, recurring, month]);
 
   const amazonComputed = useMemo(() => {
-    const rows = amazonRows.map((r) => ({ ...r, net: r.pay - r.gas }));
+    // tips is coerced rather than trusted: rows written before the column
+    // existed come back without it.
+    const rows = amazonRows.map((r) => {
+      const tips = Number(r.tips) || 0;
+      return { ...r, tips, net: r.pay + tips - r.gas };
+    });
     const totalPay = rows.reduce((s, r) => s + r.pay, 0);
+    const totalTips = rows.reduce((s, r) => s + r.tips, 0);
     const totalGas = rows.reduce((s, r) => s + r.gas, 0);
-    return { rows, totalPay, totalGas, totalNet: totalPay - totalGas };
+    return { rows, totalPay, totalTips, totalGas, totalNet: totalPay + totalTips - totalGas };
   }, [amazonRows]);
 
   /**
@@ -517,6 +533,7 @@ export default function Budget() {
   const amazonMonth = useMemo(() => ({
     days: amazonComputed.rows.length,
     pay: amazonComputed.totalPay,
+    tips: amazonComputed.totalTips,
     gas: amazonComputed.totalGas,
     net: amazonComputed.totalNet,
   }), [amazonComputed]);
@@ -1293,9 +1310,10 @@ export default function Budget() {
     post({ action: "recurringUpdate", id, ...patch });
   const deleteRecurringRule = async (id: number) => post({ action: "recurringDelete", id });
   const saveAmazon = async (): Promise<boolean> => {
-    if (azDate.trim() === "" || (azPay.trim() === "" && azGas.trim() === "")) return false;
-    await post({ action: "amazon", date: azDate, pay: Number(azPay || 0), gas: Number(azGas || 0) });
+    if (azDate.trim() === "" || (azPay.trim() === "" && azTips.trim() === "" && azGas.trim() === "")) return false;
+    await post({ action: "amazon", date: azDate, pay: Number(azPay || 0), tips: Number(azTips || 0), gas: Number(azGas || 0) });
     setAzPay("");
+    setAzTips("");
     setAzGas("");
     // The date deliberately survives: entering a week of Flex days is the same
     // date over and over, or one tap on "Yesterday" — re-picking it every time
@@ -1303,6 +1321,14 @@ export default function Budget() {
     return true;
   };
   const deleteAz = async (id: number) => post({ action: "deleteAmazon", id });
+  /**
+   * Patch one logged day. This exists for tips: Flex pays the block on the day
+   * and the customer tip about 24 hours later, so the row is always saved
+   * before its final number is known. Editing the field on the row is the
+   * whole fix — the day never has to be deleted and re-entered.
+   */
+  const updateAz = async (id: number, patch: { pay?: number; tips?: number; gas?: number }) =>
+    post({ action: "amazonUpdate", id, ...patch });
   // Bzila ledger (prop + cbedge + contracts). Contracts can also arrive from the
   // Payments register — see bzilaComputed.
   const addProp = async () => {
@@ -1393,7 +1419,7 @@ export default function Budget() {
           <StatTile label="Income" value={fmtMoney(rangeTotals.income, currency)} sub={`${RANGE_WINDOW_LABEL[range]} inflows${range === "monthly" ? " · incl. Amazon" : ""}`} valueColor={HOME_THEME.green} />
           <StatTile label="Expenses" value={fmtMoney(rangeTotals.expenses, currency)} sub={`${RANGE_WINDOW_LABEL[range]} outflows`} valueColor={SOFT_RED} />
           <StatTile label="Net Profit" value={fmtMoney(rangeTotals.net, currency)} sub="Income − expenses" valueColor={rangeTotals.net < 0 ? SOFT_RED : HOME_THEME.green} />
-          <StatTile label="Amazon" value={fmtMoney(amazonComputed.totalNet, currency)} sub={`${amazonComputed.rows.length} day${amazonComputed.rows.length === 1 ? "" : "s"} · net of gas`} valueColor={amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.text} />
+          <StatTile label="Amazon" value={fmtMoney(amazonComputed.totalNet, currency)} sub={`${amazonComputed.rows.length} day${amazonComputed.rows.length === 1 ? "" : "s"} · ${amazonComputed.totalTips > 0 ? `incl. ${fmtMoney(amazonComputed.totalTips, currency)} tips · ` : ""}net of gas`} valueColor={amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.text} />
           <StatTile label="Bzila" value={fmtMoney(bzilaMonth.net, currency)} sub={`${fmtMoney(bzilaMonth.inAmt, currency)} in · ${fmtMoney(bzilaMonth.outAmt, currency)} out`} valueColor={bzilaMonth.net < 0 ? SOFT_RED : HOME_THEME.green} />
         </div>
 
@@ -1528,7 +1554,7 @@ export default function Budget() {
         )}
         {tab === "amazon" && (
           <div style={{ ...cardAccent(2), flex: 1, minHeight: 0, overflow: "visible", padding: 0 }}>
-            <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} />
+            <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} onUpdate={updateAz} />
           </div>
         )}
         {tab === "bzila" && (
@@ -1553,10 +1579,12 @@ export default function Budget() {
           <AmazonEntry
             date={azDate}
             pay={azPay}
+            tips={azTips}
             gas={azGas}
             currency={currency}
             onDate={setAzDate}
             onPay={setAzPay}
+            onTips={setAzTips}
             onGas={setAzGas}
             onSave={saveAmazon}
           />
@@ -3765,14 +3793,14 @@ const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep
 function monthAbbr(m: string): string {
   return MONTH_ABBR[Number(m.slice(5, 7)) - 1] || m;
 }
-type AmazonMonthPoint = { month: string; pay: number; gas: number; net: number; n: number };
+type AmazonMonthPoint = { month: string; pay: number; tips: number; gas: number; net: number; n: number };
 
 function AmazonMonthCompare({
   history, month, current, currency,
 }: {
   history: AmazonMonthTotal[];
   month: string;
-  current: { days: number; workedDays: number; pay: number; gas: number; net: number };
+  current: { days: number; workedDays: number; pay: number; tips: number; gas: number; net: number };
   currency: string;
 }) {
   const isMobile = useIsMobile();
@@ -3780,7 +3808,7 @@ function AmazonMonthCompare({
   const model = useMemo(() => {
     const prior: AmazonMonthPoint[] = history
       .filter((h) => h.month < month)
-      .map((h) => ({ month: h.month, pay: h.pay, gas: h.gas, net: h.pay - h.gas, n: h.n }))
+      .map((h) => ({ month: h.month, pay: h.pay, tips: h.tips || 0, gas: h.gas, net: h.pay + (h.tips || 0) - h.gas, n: h.n }))
       .sort((a, b) => (a.month < b.month ? -1 : 1));
 
     const [y, m] = month.split("-").map(Number);
@@ -3793,7 +3821,7 @@ function AmazonMonthCompare({
     const win = prior.slice(-3);
     const avg3 = win.length ? win.reduce((s, r) => s + r.net, 0) / win.length : null;
 
-    const here: AmazonMonthPoint = { month, pay: current.pay, gas: current.gas, net: current.net, n: current.days };
+    const here: AmazonMonthPoint = { month, pay: current.pay, tips: current.tips, gas: current.gas, net: current.net, n: current.days };
     // 6 bars on a phone, 12 on a desktop — the current month always the last.
     const shown = [...prior.slice(isMobile ? -5 : -11), here];
     const peak = Math.max(1, ...shown.map((r) => Math.abs(r.net)), Math.abs(projected));
@@ -3868,7 +3896,7 @@ function AmazonMonthCompare({
           return (
             <div key={r.month} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
               <div
-                title={`${monthAbbr(r.month)} ${r.month.slice(0, 4)} · pay ${fmtMoney(r.pay, currency)} · gas ${fmtMoney(r.gas, currency)} · net ${fmtMoney(r.net, currency)} · ${r.n} deliveries`}
+                title={`${monthAbbr(r.month)} ${r.month.slice(0, 4)} · pay ${fmtMoney(r.pay, currency)} · tips ${fmtMoney(r.tips, currency)} · gas ${fmtMoney(r.gas, currency)} · net ${fmtMoney(r.net, currency)} · ${r.n} deliveries`}
                 style={{ width: "100%", height: BAR_H, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "stretch" }}
               >
                 {ghost > 0 && (
@@ -3913,15 +3941,23 @@ function AmazonMonthCompare({
 //
 // Desktop keeps the four-across row exactly as it was — it was never the
 // problem, and a stacked form would be a downgrade with a mouse.
+//  5. Tips. Flex pays the block on the day and the customer tip about 24 hours
+//     later, so this form is nearly always filled in without one. It is here
+//     anyway for the case where yesterday is being entered today and the tip is
+//     already known; the normal path is to leave it blank and fill the tip in
+//     on the row itself the next day, which is why the table's tip cell is
+//     editable and this field is optional.
 function AmazonEntry({
-  date, pay, gas, currency, onDate, onPay, onGas, onSave,
+  date, pay, tips, gas, currency, onDate, onPay, onTips, onGas, onSave,
 }: {
   date: string;
   pay: string;
+  tips: string;
   gas: string;
   currency: string;
   onDate: (v: string) => void;
   onPay: (v: string) => void;
+  onTips: (v: string) => void;
   onGas: (v: string) => void;
   onSave: () => Promise<boolean>;
 }) {
@@ -3931,9 +3967,10 @@ function AmazonEntry({
   const [busy, setBusy] = useState(false);
 
   const payNum = Number(pay || 0);
+  const tipsNum = Number(tips || 0);
   const gasNum = Number(gas || 0);
-  const net = payNum - gasNum;
-  const canSave = date.trim() !== "" && (pay.trim() !== "" || gas.trim() !== "");
+  const net = payNum + tipsNum - gasNum;
+  const canSave = date.trim() !== "" && (pay.trim() !== "" || tips.trim() !== "" || gas.trim() !== "");
 
   const save = async () => {
     if (!canSave || busy) return;
@@ -3965,9 +4002,10 @@ function AmazonEntry({
 
   if (!isMobile) {
     return (
-      <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "150px 1fr 1fr 110px", gap: 10, alignItems: "center" }}>
+      <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "150px 1fr 1fr 1fr 110px", gap: 10, alignItems: "center" }}>
         <input type="date" value={date} onChange={(e) => onDate(e.target.value)} style={field()} />
         <input ref={payRef} value={pay} onChange={(e) => onPay(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="Pay" {...moneyProps} style={field()} />
+        <input value={tips} onChange={(e) => onTips(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="Tips (optional)" title="Tips post ~24h later — leave blank and fill it in on the row below" {...moneyProps} style={{ ...field(), color: HOME_THEME.cyan }} />
         <input value={gas} onChange={(e) => onGas(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="Gas" {...moneyProps} style={field()} />
         <button onClick={save} disabled={!canSave || busy} style={{ ...primary(), opacity: canSave && !busy ? 1 : 0.45 }}>Add Day</button>
       </div>
@@ -4000,7 +4038,10 @@ function AmazonEntry({
       </div>
 
       {/* Pay and Gas side by side: they are two halves of one number, and
-          entering them one under the other loses that. Both are thumb-width. */}
+          entering them one under the other loses that. Both are thumb-width.
+          Tips sits UNDER them, full width and labelled as later: at the kerb it
+          is not knowable yet, and putting it in the pair would imply it is
+          expected now. */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <div>
           <span style={lbl}>Pay</span>
@@ -4022,6 +4063,20 @@ function AmazonEntry({
             {...moneyProps}
             style={{ ...field(), fontSize: 19, fontWeight: 800, textAlign: "right", color: HOME_THEME.orange }}
           />
+        </div>
+      </div>
+
+      <div>
+        <span style={lbl}>Tips · optional</span>
+        <input
+          value={tips}
+          onChange={(e) => onTips(e.target.value)}
+          placeholder="0.00"
+          {...moneyProps}
+          style={{ ...field(), fontSize: 19, fontWeight: 800, textAlign: "right", color: HOME_THEME.cyan }}
+        />
+        <div style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.7, marginTop: 5 }}>
+          Tips post about a day late — leave this blank and tap the tip on the day&apos;s row tomorrow.
         </div>
       </div>
 
@@ -4055,25 +4110,86 @@ function AmazonEntry({
       {/* Says why the button is dead instead of leaving you tapping it. */}
       {!canSave && (
         <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, textAlign: "center", marginTop: -4 }}>
-          Enter pay or gas to save this day.
+          Enter pay, tips or gas to save this day.
         </div>
       )}
     </div>
   );
 }
 
-function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: number })[]; currency: string; onDelete: (id: number) => void }) {
+/**
+ * The tip cell: a number you tap and type into, right on the row.
+ *
+ * This is the reason the tips column exists. A Flex day pays twice — the block
+ * on the day, the customer tip about 24 hours later — so every row is written
+ * before its final figure is known, and the only way to correct it used to be
+ * deleting the day and retyping it from memory. An untipped row shows a muted
+ * "+ tip" instead of $0.00, so what is still outstanding is visible down the
+ * column rather than having to be remembered.
+ */
+function TipCell({ value, currency, onCommit }: { value: number; currency: string; onCommit: (v: number) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ? String(value) : "");
+  useEffect(() => { setDraft(value ? String(value) : ""); }, [value]);
+
+  const commit = () => {
+    setEditing(false);
+    const n = draft.trim() === "" ? 0 : Number(draft);
+    if (Number.isFinite(n) && n !== value) onCommit(n);
+  };
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        type="number"
+        inputMode="decimal"
+        step="0.01"
+        enterKeyHint="done"
+        value={draft}
+        placeholder="0.00"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") { setDraft(value ? String(value) : ""); setEditing(false); }
+        }}
+        style={{ ...field(), padding: "4px 8px", fontSize: 16, width: 96, textAlign: "right" }}
+      />
+    );
+  }
+  return (
+    <span
+      onClick={() => setEditing(true)}
+      title="Tips post ~24h after the block — click to fill this in"
+      style={{
+        cursor: "text",
+        color: value ? HOME_THEME.cyan : HOME_THEME.muted,
+        fontWeight: value ? 800 : 600,
+        opacity: value ? 1 : 0.6,
+        borderBottom: "1px dotted rgba(139,148,167,0.35)",
+      }}
+    >
+      {value ? fmtMoney(value, currency) : "+ tip"}
+    </span>
+  );
+}
+
+function AmazonTable({ rows, currency, onDelete, onUpdate }: { rows: (AmazonRow & { net: number })[]; currency: string; onDelete: (id: number) => void; onUpdate: (id: number, patch: { tips?: number }) => void }) {
   const isMobile = useIsMobile();
   const totalPay = rows.reduce((s, r) => s + r.pay, 0);
+  const totalTips = rows.reduce((s, r) => s + r.tips, 0);
   const totalGas = rows.reduce((s, r) => s + r.gas, 0);
-  const totalNet = totalPay - totalGas;
+  const totalNet = totalPay + totalTips - totalGas;
+  const awaitingTips = rows.filter((r) => !r.tips).length;
   return (
     <div style={isMobile ? scrollX : undefined}>
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: isMobile ? 460 : undefined }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: isMobile ? 540 : undefined }}>
       <thead>
         <tr style={{ position: "sticky", top: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)", zIndex: 1 }}>
           <th style={th("left")}>Date</th>
           <th style={th("right")}>Pay</th>
+          <th style={th("right")} title="Posts about 24h after the block — click a cell to fill it in">Tips</th>
           <th style={th("right")}>Gas</th>
           <th style={th("right")}>Net Pay</th>
           <th style={th("center")}></th>
@@ -4081,7 +4197,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
       </thead>
       <tbody>
         {rows.length === 0 && (
-          <tr><td colSpan={5} style={{ padding: "22px 16px", color: HOME_THEME.muted, textAlign: "center" }}>No Amazon days logged this month yet.</td></tr>
+          <tr><td colSpan={6} style={{ padding: "22px 16px", color: HOME_THEME.muted, textAlign: "center" }}>No Amazon days logged this month yet.</td></tr>
         )}
         {rows.map((r) => (
           <tr key={r.id} style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}>
@@ -4090,6 +4206,9 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
               <span style={{ color: HOME_THEME.muted, marginLeft: 8, fontSize: 14 }}>{weekday(r.work_date)}</span>
             </td>
             <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right" }}>{fmtMoney(r.pay, currency)}</td>
+            <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right" }}>
+              <TipCell value={r.tips} currency={currency} onCommit={(v) => onUpdate(r.id, { tips: v })} />
+            </td>
             <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right", color: HOME_THEME.orange }}>{fmtMoney(r.gas, currency)}</td>
             <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right", fontWeight: 900, color: r.net >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(r.net, currency)}</td>
             <td style={{ padding: "10px 12px", textAlign: "center" }}>
@@ -4101,8 +4220,18 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
       {rows.length > 0 && (
         <tfoot>
           <tr style={{ position: "sticky", bottom: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)" }}>
-            <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 14, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
+            <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 14, letterSpacing: "0.12em", color: HOME_THEME.muted }}>
+              Total
+              {/* How many days are still waiting on a tip — the one number that
+                  says whether this month's figure is final. */}
+              {awaitingTips > 0 && (
+                <span style={{ marginLeft: 8, textTransform: "none", letterSpacing: 0, fontWeight: 700, fontSize: 12, color: HOME_THEME.muted, opacity: 0.75 }}>
+                  {awaitingTips} day{awaitingTips === 1 ? "" : "s"} without a tip
+                </span>
+              )}
+            </td>
             <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", textAlign: "right", fontWeight: 900 }}>{fmtMoney(totalPay, currency)}</td>
+            <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", textAlign: "right", fontWeight: 900, color: HOME_THEME.cyan }}>{fmtMoney(totalTips, currency)}</td>
             <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", textAlign: "right", fontWeight: 900, color: HOME_THEME.orange }}>{fmtMoney(totalGas, currency)}</td>
             <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", textAlign: "right", fontWeight: 900, color: totalNet >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(totalNet, currency)}</td>
             <td />

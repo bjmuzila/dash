@@ -1,5 +1,102 @@
 # Changelog
 
+## 2026-09-14 (j) - Voltick: /seasonality, the CB Edge almanac ported and repainted
+
+`voltick.cbedge.net/seasonality` is cbedge.net/explore/seasonality, whole:
+nineteen sections, the same rail, the same charts, tables and copy, the same
+ninety-eight years of numbers. New `voltick-vite/src/pages/seasonality/` holds
+the port; `pages/Seasonality.tsx` is the page around it.
+
+**The components were not recoloured.** `SeasonalityView.tsx` and
+`SeasonalityAlmanac.tsx` reach every colour through `HOME_THEME.*` / `SEA.*`, so
+the whole retheme is two files:
+
+- `seasonality/homeTheme.ts` - a NAME BRIDGE onto `src/theme.ts`, no hex in it.
+  Chrome takes the Voltick surface ladder and the two paper steps. The data half
+  deliberately avoids the reserved level colours (there are no levels on this
+  page, and spending VOLT on "the modern era average" would say something
+  false): `cyan -> ACCENT_TEXT`, `green -> SKY`, `orange -> VOLT`, `red -> BAD`,
+  and the bar/heat direction pair is `GOOD` / `BAD`.
+- `seasonality/seaTheme.ts` - the six-step surface ladder by role. `app`/`rail`
+  are INK, `shell` PANEL, `card` ELEV; `card2` and `cardHi` are washes over the
+  card rather than two invented surface hexes.
+
+Everything else is byte-for-byte the CB Edge original apart from import paths.
+Two exceptions, both noted in the files: `Watermark.tsx` draws the Voltick bolt
+as inline SVG instead of loading the CB Edge PNG (voltick-vite ships no assets
+and `/assets/*` is behind nginx's `auth_request`, so an `<img>` would be a second
+gated request per card), and one unused `type FomcDecision` import is dropped
+because this app compiles with `noUnusedLocals`.
+
+**STATIC.** `seasonality/useLiveYear.ts` has had its `/api/public-seasonality`
+freshness call removed and returns the compiled arrays, so nothing extends the
+current-year line and the page never goes looking for a newer one. It stays a
+hook so restoring the live extension is a change to that one file. The almanac's
+two event studies (`/api/public-daily`, `/api/public-earnings`) are left in
+place: those two sections have no static data behind them at all, both routes
+exist in `server-v2/api-router.js`, and nginx here proxies `/api` to `dashboard`
+without `auth_request`. They already degrade to a stated empty state when the
+call does not land.
+
+Wired the usual two edits: an `Almanac` group in `lib/nav.ts` and the
+`Seasonality` key in `pages/registry.ts`. `tsc --noEmit` and `vite build` both
+clean; the route code-splits to a 370 KB chunk (118 KB gzipped) that only loads
+when the page is opened. Checked at 1600px and at 390px: the rail collapses to
+its strip and nothing scrolls sideways.
+
+## 2026-09-14 (i) - Owner Budget: Amazon tips are their own column, filled in a day late
+
+Flex pays twice for one day: the block on the day, the customer tip about 24
+hours later. The Amazon tab only had `pay`, so a day was always logged before its
+final number existed and the only way to correct it was to delete the day and
+retype it from memory - which is how a correct pay figure gets lost fixing a tip.
+
+`budget_amazon` gets a `tips REAL NOT NULL DEFAULT 0` column (added by
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so existing rows read 0), plus
+`updateAmazonRow(profileId, id, patch)` - a partial update, so filling in a tip
+cannot disturb the pay or gas that were right when they were typed. New
+`amazonUpdate` action on `/api/budget`. `listAmazonMonthTotals` now sums tips
+alongside pay.
+
+Net is `pay + tips - gas` everywhere it is computed: the ledger rows, the month
+totals, the comparison strip's twelve bars, the Overview Amazon tile and the
+Real Month Amazon card.
+
+**The tip is edited on the row, not in the form.** The table has a Tips column
+whose cells are click-to-type; an untipped row shows a muted `+ tip` rather than
+$0.00, so what is still outstanding reads straight down the column, and the
+footer says how many days are still waiting on one. The entry form has a tips
+field too (optional, labelled as such) for the case where yesterday is entered
+today and the tip is already known - but the normal path is to leave it blank.
+
+One behaviour change worth knowing: the Real Month auto-categorizer allocates
+the month's Amazon/Zelle deposits against what the Amazon tab says was earned.
+That target is now pay + tips. Without it every tipped month looked short and
+the difference spilled into Bzila.
+
+`server-v2/_lib-db.cjs`, `server-v2/api-router.js`,
+`owner-vite/src/pages/Budget.tsx`, `owner-vite/src/pages/budget/RealMonth.tsx`
+
+## 2026-09-14 (h) - Admin: Customer Activity sorts from its column headers
+
+The panel had three chips - Recent / Time / Pages - and nothing else. Two
+problems: no way to reverse a sort (the quietest customers are the interesting
+ones and they were permanently at the bottom), and "Pages" sorted by
+`totalLoads`, not `distinctPages`, so the column it was named after was the one
+column that could not be sorted.
+
+Every header is now a sort button: Customer, Last login, Time (approx), Loads,
+Pages, Most viewed. Click to sort, click again to flip. Text columns open A-Z,
+numeric and date columns open high-first. The active column shows the direction
+arrow and a dim `<->` marks the rest as clickable. Ties fall back to most recent
+first so the order is stable. Loads and Pages are now separate questions - how
+often they came back vs how much of the product they have seen.
+
+The `Recent` chip stays: last-seen is not a column of its own (it sits under the
+email), and it is still the default sort.
+
+`owner-vite/src/pages/Admin.tsx`
+
 ## 2026-09-14 (g) - Whales: a contract lookup, and the session bars that drew at zero
 
 **The session chart was empty.** `WHALE PREMIUM BY SESSION` rendered a 104px box

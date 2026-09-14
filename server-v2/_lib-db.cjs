@@ -39,6 +39,7 @@ __export(db_exports, {
   createUser: () => createUser,
   deleteAllSessionsForUser: () => deleteAllSessionsForUser,
   deleteAmazonRow: () => deleteAmazonRow,
+  updateAmazonRow: () => updateAmazonRow,
   deleteBudgetCategory: () => deleteBudgetCategory,
   deleteBzilaAlert: () => deleteBzilaAlert,
   deleteDashboardLayout: () => deleteDashboardLayout,
@@ -707,13 +708,14 @@ async function ensureAllTables(pool) {
     );
     CREATE INDEX IF NOT EXISTS idx_budget_recurring_profile ON budget_recurring(profile_id);
 
-    -- Amazon delivery log: one row per delivery (date, gross pay, gas cost).
+    -- Amazon delivery log: one row per delivery (date, gross pay, tips, gas cost).
     -- Multiple rows per work_date are allowed (several trips in one day).
     CREATE TABLE IF NOT EXISTS budget_amazon (
       id SERIAL PRIMARY KEY,
       profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
       work_date TEXT NOT NULL,
       pay REAL NOT NULL DEFAULT 0,
+      tips REAL NOT NULL DEFAULT 0,
       gas REAL NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -721,6 +723,11 @@ async function ensureAllTables(pool) {
     CREATE INDEX IF NOT EXISTS idx_budget_amazon_profile ON budget_amazon(profile_id);
     -- Drop the old one-row-per-day uniqueness so multiple deliveries can share a date.
     ALTER TABLE budget_amazon DROP CONSTRAINT IF EXISTS budget_amazon_profile_id_work_date_key;
+    -- Tips land ~24h AFTER the block pays, so the day is entered with pay+gas
+    -- and the tip is filled in later (updateAmazonRow). Added as its own column
+    -- rather than folded into pay so the late edit is a one-field change on the
+    -- existing row instead of deleting the day and re-entering it.
+    ALTER TABLE budget_amazon ADD COLUMN IF NOT EXISTS tips REAL NOT NULL DEFAULT 0;
 
     -- Bzila business ledger: one row per dated event. The source column splits the
     -- streams entered here \u2014 'prop' (firm evals/resets + payouts), 'cbedge'
@@ -5323,12 +5330,39 @@ async function adoptDefaultBudgetProfile(targetName) {
 async function insertAmazonRow(input) {
   const pool = await getDb();
   const result = await pool.query(
-    `INSERT INTO budget_amazon (profile_id, work_date, pay, gas)
-     VALUES ($1,$2,$3,$4)
+    `INSERT INTO budget_amazon (profile_id, work_date, pay, tips, gas)
+     VALUES ($1,$2,$3,$4,$5)
      RETURNING *`,
-    [input.profile_id, input.work_date, input.pay, input.gas]
+    [input.profile_id, input.work_date, input.pay, input.tips || 0, input.gas]
   );
   return result.rows[0];
+}
+/**
+ * Patch one logged day in place — the whole point of the tips column.
+ *
+ * Amazon Flex pays the block first and the customer tip about a day later, so
+ * the row is written before its final number is known. Only the fields present
+ * in `patch` are touched, so filling in a tip cannot disturb the pay or gas
+ * that were right when they were typed.
+ */
+async function updateAmazonRow(profileId, id, patch) {
+  const pool = await getDb();
+  const sets = [];
+  const vals = [];
+  for (const col of ["work_date", "pay", "tips", "gas"]) {
+    if (patch[col] === undefined || patch[col] === null) continue;
+    vals.push(col === "work_date" ? String(patch[col]) : Number(patch[col]) || 0);
+    sets.push(`${col} = $${vals.length}`);
+  }
+  if (!sets.length) return null;
+  vals.push(id, profileId);
+  const result = await pool.query(
+    `UPDATE budget_amazon SET ${sets.join(", ")}, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $${vals.length - 1} AND profile_id = $${vals.length}
+      RETURNING *`,
+    vals
+  );
+  return result.rows[0] || null;
 }
 async function deleteAmazonRow(profileId, id) {
   const pool = await getDb();
@@ -5454,6 +5488,7 @@ async function listAmazonMonthTotals(profileId, sinceMonth, untilMonth) {
   return queryAll(
     `SELECT SUBSTR(work_date, 1, 7) AS month,
             SUM(pay)      AS pay,
+            SUM(tips)     AS tips,
             SUM(gas)      AS gas,
             COUNT(*)::int AS n
        FROM budget_amazon
@@ -5744,6 +5779,7 @@ async function getLatestMultGreekStaticSnapshot() {
   createUser,
   deleteAllSessionsForUser,
   deleteAmazonRow,
+  updateAmazonRow,
   deleteBudgetCategory,
   deleteBzilaAlert,
   deleteDashboardLayout,

@@ -389,7 +389,10 @@ export default function RealMonth({
    * on its own has repeatedly read as more money than it was.
    */
   bzila?: { inAmt: number; outAmt: number; net: number } | null;
-  amazon?: { days: number; pay: number; gas: number; net: number } | null;
+  // `tips` is optional only so an older caller still type-checks; the Amazon
+  // tab always sends it. Tips are earnings that post ~24h after the block, so
+  // they belong on the pay side of this card's arithmetic.
+  amazon?: { days: number; pay: number; tips?: number; gas: number; net: number } | null;
   onOpenCategories?: () => void;
   /** Called after a budget edit lands, so the page re-reads its categories. */
   onCategoriesChanged?: () => void | Promise<void>;
@@ -1242,7 +1245,7 @@ export default function RealMonth({
             label="Amazon net, after gas"
             value={amazon ? fmtMoney(amazon.net, currency) : "—"}
             sub={amazon && amazon.days > 0
-              ? `${fmtMoney(amazon.pay, currency)} − ${fmtMoney(amazon.gas, currency)} gas · ${amazon.days} day${amazon.days === 1 ? "" : "s"} · ${fmtMoney(amazon.net / amazon.days, currency)}/day`
+              ? `${fmtMoney(amazon.pay + (amazon.tips || 0), currency)}${amazon.tips ? ` (incl. ${fmtMoney(amazon.tips, currency)} tips)` : ""} − ${fmtMoney(amazon.gas, currency)} gas · ${amazon.days} day${amazon.days === 1 ? "" : "s"} · ${fmtMoney(amazon.net / amazon.days, currency)}/day`
               : "no delivery days logged"}
             valueColor={amazon ? (amazon.net >= 0 ? MONEY_IN : MONEY_OUT) : HOME_THEME.muted}
           />

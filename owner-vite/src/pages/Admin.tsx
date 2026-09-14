@@ -100,6 +100,16 @@ interface ActivityRow {
   paid: boolean;
 }
 
+/** Every column of the table above, plus `lastSeen` (shown under the email). */
+type ActivitySortKey = "lastSeen" | "email" | "lastLogin" | "time" | "loads" | "pages" | "topPath";
+
+/** Epoch ms for sorting; "never"/unparseable sorts to the bottom of a descending list. */
+function activityTime(iso: string | null): number {
+  if (!iso) return -Infinity;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? -Infinity : t;
+}
+
 function fmtDuration(sec: number): string {
   if (!sec || sec < 60) return `${Math.round(sec)}s`;
   const m = Math.round(sec / 60);
@@ -127,7 +137,24 @@ function CustomerActivityPanel() {
   const [rows, setRows] = useState<ActivityRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [sort, setSort] = useState<"lastSeen" | "time" | "pages">("lastSeen");
+  // Sorting is driven by the column headers: click one to sort by it, click it
+  // again to flip the direction. `lastSeen` is the default and has no column of
+  // its own (it rides under the customer's email), so the "Recent" chip in the
+  // header bar stays as the way back to it.
+  const [sortKey, setSortKey] = useState<ActivitySortKey>("lastSeen");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const toggleSort = useCallback((k: ActivitySortKey) => {
+    setSortKey((prev) => {
+      if (prev === k) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return prev;
+      }
+      // Text columns read best A→Z on the first click; every numeric or date
+      // column is asked as "who is the most", so those open descending.
+      setSortDir(k === "email" || k === "topPath" ? "asc" : "desc");
+      return k;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -147,13 +174,51 @@ function CustomerActivityPanel() {
 
   const sorted = rows
     ? [...rows].sort((a, b) => {
-        if (sort === "time") return b.approxActiveSec - a.approxActiveSec;
-        if (sort === "pages") return b.totalLoads - a.totalLoads;
-        return new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime();
+        let d = 0;
+        switch (sortKey) {
+          case "email":     d = (a.email ?? "").localeCompare(b.email ?? "", undefined, { sensitivity: "base" }); break;
+          case "lastLogin": d = activityTime(a.lastLogin) - activityTime(b.lastLogin); break;
+          case "time":      d = a.approxActiveSec - b.approxActiveSec; break;
+          // Loads and Pages are two different questions — how often they came
+          // back vs how much of the product they have seen — and the old
+          // "Pages" chip answered the first one for both.
+          case "loads":     d = a.totalLoads - b.totalLoads; break;
+          case "pages":     d = a.distinctPages - b.distinctPages; break;
+          case "topPath":   d = (a.topPath ?? "").localeCompare(b.topPath ?? "", undefined, { sensitivity: "base" }); break;
+          default:          d = activityTime(a.lastSeen) - activityTime(b.lastSeen); break;
+        }
+        // Ties fall back to most-recent-first so the order is stable and the
+        // useful half of a tied block is at the top.
+        if (d === 0) return activityTime(b.lastSeen) - activityTime(a.lastSeen);
+        return sortDir === "asc" ? d : -d;
       })
     : [];
 
   const COLS = "1.6fr 100px 90px 70px 70px 1fr";
+
+  // A header cell that sorts. The arrow shows the direction on the ACTIVE
+  // column and a dim ↕ everywhere else, so it is visible that the others are
+  // clickable without three arrows competing for the eye.
+  const headCell = (k: ActivitySortKey, label: string) => {
+    const on = sortKey === k;
+    return (
+      <button
+        type="button"
+        onClick={() => toggleSort(k)}
+        title={`Sort by ${label}${on ? (sortDir === "asc" ? " (descending)" : " (ascending)") : ""}`}
+        style={{
+          display: "flex", alignItems: "center", gap: 4, minWidth: 0,
+          padding: 0, margin: 0, background: "none", border: "none", cursor: "pointer",
+          font: "inherit", textAlign: "left",
+          color: on ? T.cyan : T.muted,
+          fontWeight: on ? 700 : 500,
+        }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        <span style={{ flexShrink: 0, fontSize: 9, opacity: on ? 1 : 0.4 }}>{on ? (sortDir === "asc" ? "\u25b2" : "\u25bc") : "\u2195"}</span>
+      </button>
+    );
+  };
 
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
@@ -164,19 +229,19 @@ function CustomerActivityPanel() {
         </span>
         <span style={{ fontSize: 14, color: T.textSecondary }}>last login · time on site (approx) · pages</span>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
-          {(["lastSeen", "time", "pages"] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setSort(s)}
-              style={{
-                ...homeSecondaryButtonStyle, padding: "4px 10px", fontSize: 14,
-                borderColor: sort === s ? T.cyan : undefined,
-                color: sort === s ? T.cyan : undefined,
-              }}
-            >
-              {s === "lastSeen" ? "Recent" : s === "time" ? "Time" : "Pages"}
-            </button>
-          ))}
+          {/* Everything else sorts from its column header now. "Recent" stays a
+              chip because last-seen is not a column — it sits under the email. */}
+          <button
+            onClick={() => toggleSort("lastSeen")}
+            title="Sort by last seen"
+            style={{
+              ...homeSecondaryButtonStyle, padding: "4px 10px", fontSize: 14,
+              borderColor: sortKey === "lastSeen" ? T.cyan : undefined,
+              color: sortKey === "lastSeen" ? T.cyan : undefined,
+            }}
+          >
+            Recent {sortKey === "lastSeen" ? (sortDir === "asc" ? "\u25b2" : "\u25bc") : ""}
+          </button>
           <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 14, opacity: loading ? 0.5 : 1 }}>
             {loading ? "…" : "↻"}
           </button>
@@ -184,12 +249,12 @@ function CustomerActivityPanel() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 10, fontWeight: 500, color: T.muted, letterSpacing: "0.01em" }}>
-        <span>Customer</span>
-        <span>Last login</span>
-        <span>Time (approx)</span>
-        <span>Loads</span>
-        <span>Pages</span>
-        <span>Most viewed</span>
+        {headCell("email", "Customer")}
+        {headCell("lastLogin", "Last login")}
+        {headCell("time", "Time (approx)")}
+        {headCell("loads", "Loads")}
+        {headCell("pages", "Pages")}
+        {headCell("topPath", "Most viewed")}
       </div>
 
       <div style={{ maxHeight: 380, overflowY: "auto" }}>
