@@ -8,7 +8,6 @@ import { SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
 import { chainGexUrl, chainToGex, EMPTY_CHAIN_GEX } from '../chainGex'
 import { EMPTY_MODEL, mountGexChart, type GexChartHandle, type GexChartModel } from './gexChartRender'
-import { useDailyEm } from './dailyEm'
 import { BASIS_LABEL, SERIES_LABEL, flowSupported, fmtGexShort, totalDex, totalNet } from './values'
 import {
   loadSettings,
@@ -366,20 +365,6 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
     handle.setModel(modelRef.current)
   }, [])
 
-  // ── Today's frozen expected-move band ──────────────────────────────────────
-  // Read, never derived. /api/daily-em writes the row on the session's first
-  // read and serves that same row for the rest of the day, so every board
-  // draws the identical two rails — which is the only way a level of this kind
-  // is worth anything. See dailyEm.ts for why it cannot be computed here.
-  //
-  // The chip gates the REQUEST, not just the drawing: a board with the rails
-  // off has no reason to be asking for them.
-  //
-  // It follows the page symbol like everything else on this card. The two ±1σ
-  // stat tiles above are a DIFFERENT band — the weekly published one — and the
-  // canvas labels them `·D` so the pair cannot be confused for one number.
-  const emBand = useDailyEm(symbol, settings.showEm)
-
   // The settings the renderer needs, in one object so `push` takes a stable
   // dependency rather than three.
   const drawOpts = useMemo(
@@ -391,22 +376,8 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
       // Gamma ex-0DTE is the one ladder that arrives WITH a flip; see the note
       // on `flip` in GexChartModel for why it is not derived here.
       flip: wantMulti && !barsAreDex ? multiFlip : null,
-      // Drawn on every series, gamma or delta, 0DTE or the standing book: the
-      // rails are PRICES on the x axis and say nothing about what the bars are
-      // measuring, so there is no ladder they stop being true for.
-      em: settings.showEm ? emBand : null,
     }),
-    [
-      settings.basis,
-      settings.split,
-      settings.showDex,
-      settings.showEm,
-      series,
-      wantMulti,
-      barsAreDex,
-      multiFlip,
-      emBand,
-    ],
+    [settings.basis, settings.split, settings.showDex, series, wantMulti, barsAreDex, multiFlip],
   )
   const drawOptsRef = useRef(drawOpts)
   drawOptsRef.current = drawOpts
@@ -698,20 +669,6 @@ export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
             title="Net dealer DELTA exposure as a line across the bars, on its own normalised scale — it answers which way delta leans and where it turns, not how many dollars"
           />
         )}
-
-        {/* The DAILY expected-move rails. Not the ±1σ tiles above — those are
-            the weekly published band. The title says which is which, because
-            a card carrying two different EMs owes the reader that. */}
-        <Chip
-          label="EM"
-          on={settings.showEm}
-          onClick={() => patch({ showEm: !settings.showEm })}
-          title={
-            emBand
-              ? `Today's expected move: ±${emBand.em.toFixed(2)} off the ${emBand.refClose.toFixed(2)} prior close — ${emBand.down.toFixed(0)} to ${emBand.up.toFixed(0)}. Read from ${emBand.expiry || 'the front expiry'}'s ATM straddle once this morning and frozen, so the levels do not move all day. The ±1σ tiles above are the WEEKLY band, which is a different number`
-              : `No expected-move band recorded for ${symbol} yet today — it is written on the session's first read of the option chain. The ±1σ tiles above are the WEEKLY published band, which is a different number`
-          }
-        />
 
         {!simple && (
           <Chip

@@ -154,6 +154,24 @@ export interface ChartSettings {
    */
   levelLabels: boolean
   /**
+   * THE DAILY EXPECTED-MOVE RAILS on the price pane — two horizontals at ±1σ
+   * off the previous session's close, with the price in a chip at the right
+   * edge.
+   *
+   * A separate switch from `levelLabels`, and not folded into it, because they
+   * are a different kind of level. CORE / CW / PW come off the newest GEX
+   * column and move with the book. The EM band was decided once this morning
+   * from the front expiry's ATM straddle and is frozen for the session — it
+   * does not move, which is the only reason it is worth marking. Wanting the
+   * walls without the band, or the band without the walls, are both ordinary.
+   *
+   * On by default: it is the day's boundary and it costs two hairlines.
+   *
+   * NOTE it has nothing to do with the GEX Chart card's `+1σ (EM)` tiles, which
+   * are the WEEKLY published band off /api/em-tracker. See data/dailyEm.ts.
+   */
+  emLevels: boolean
+  /**
    * DEAD (2026-09-04). The expiry pin, from when the card carried a dropdown to
    * set one. The dropdown is gone and the card draws the NEAREST expiration
    * always, so nothing reads this and nothing writes it.
@@ -218,6 +236,9 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // where the session's magnet and its two walls are, and unlike the rail they
   // take no width from the chart.
   levelLabels: true,
+  // On by default, same reasoning: two hairlines at the edges of the day's
+  // range, and a band nobody switched on is a band nobody knows exists.
+  emLevels: true,
   expiry: '',
   bubbleBucket: BUBBLE_BUCKET_DEFAULT,
   bubbleScale: 1,
@@ -681,6 +702,9 @@ function coerce(raw: unknown): ChartSettings {
     spotLine: p.spotLine !== false,
     railOn: p.railOn !== false,
     levelLabels: p.levelLabels !== false,
+    // `!== false`, like levelLabels: a blob written before the rails existed
+    // should come back with them ON, which is what a card created today shows.
+    emLevels: p.emLevels !== false,
     expiry: typeof p.expiry === 'string' ? p.expiry : '',
     bubbleBucket: isBubbleBucket(p.bubbleBucket) ? p.bubbleBucket : DEFAULT_SETTINGS.bubbleBucket,
     bubbleScale: clampScale(p.bubbleScale),

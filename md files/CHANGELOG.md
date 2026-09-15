@@ -23446,3 +23446,104 @@ dropped while hiding), so they hold their position rather than shifting the
 ladder.
 
 Files: `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`.
+
+## 2026-09-15 (i) — v3 Options Chain: gold is the Core's alone; NEAR CORE just turns the ordinary fill back on
+
+Correcting (f)/(g). NEAR CORE was washing qualifying strikes in the Core's gold,
+which made them read as second Cores. They are not levels — they are ordinary
+strikes that happen to be big.
+
+NEAR CORE no longer paints anything of its own. It decides **which cells get the
+ordinary sign-coloured Intensity fill** (`skinMetricBg`) — same ramp, same net-GEX
+hue, same slider — and nothing else. Gold belongs to the ★ Core cell and to it
+only; CB / CW / PW keep their own colours as before.
+
+That makes it a bottom-stop feature in practice, which is where it was asked
+for: LEVELS switches the heat field off, so a strike carrying 80% of the Core
+goes blank beside one carrying 2%, and this turns the fill back on for the ones
+clearing the threshold. Above the bottom stop every cell already has that fill,
+so the toggle is a no-op there — one paint rule on this grid, not two.
+
+Removed from heatSkins: `nearCoreFillBg()`, `nearCoreAlpha()` and the per-skin
+`nearCore` alpha band.
+
+Also corrected in the comments: a column's core |value| **is** its max —
+`columnWalls` picks CB as the largest |net| over the same visible strikes
+`scaleOf` takes `max` from — so "≥ 50% of core" and "≥ 50% of the column max" are
+the same cut. Earlier comments claimed the two measured different things. The
+"core" wording stays because the Core is the thing on screen you are comparing
+against.
+
+Files: `cbedge-v3/src/pages/OptionsChain.tsx`,
+`cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`,
+`cbedge-v3/src/pages/optionsChain/useChainData.ts`,
+`cbedge-v3/src/pages/optionsChain/heatSkins.ts`.
+
+
+## 2026-09-15 (g) — The daily EM rails move to GEX Candles, off the GEX Chart
+
+Correction to (f). The band went onto the **GEX Chart**, and it belongs on **GEX
+Candles**. ±EM is a price level for the session; the candles card is the one
+with a price axis to hang it on. The GEX Chart's x axis is strikes, so the rails
+were two more verticals competing with the flip line, the spot line and the bars
+— saying nothing that a horizontal on the price pane does not say better.
+
+**Reverted, fully:** `board/gexChart/gexChartRender.ts`,
+`board/gexChart/settings.ts`, `board/gexChart/GexChartCard.tsx` are back to
+their pre-(f) state — no `em` on `GexChartModel`, no `showEm`, no `EM` chip, no
+`xForPrice`. `board/gexChart/dailyEm.ts` is left as an empty `export {}` with a
+pointer, because the tooling in this session could not delete a file on the
+laptop; **it is safe to delete by hand.**
+
+**Kept, unchanged:** the whole server side — `server-v2/daily-em.js`, the
+`/api/daily-em` route, the `daily_em` table — and `--color-level-em` in
+tokens.css. None of that was ever card-specific.
+
+**Rehoused:** the reader is now `src/data/dailyEm.ts`, which is where AGENTS.md
+puts an API reader. It gained a `date` argument (see replay below).
+
+### On the candles pane
+
+Two dashed horizontals with the price in a chip at the **right** edge —
+CORE / CW / PW own the left one, so the two families never collide at a shared
+price and tell themselves apart at a glance. `plotW` excludes the price scale,
+so a right-aligned chip still clears the axis labels. The line stops short of
+its own chip rather than running under it.
+
+**These get a line and the walls do not, and that is the difference between
+them.** The walls' hairlines were dropped in an earlier pass because three
+horizontals across a pane already carrying candles, bubbles and a heatmap
+competed with the price action, and each said nothing its tag did not — the tag
+sits *at* the level, so the height is the line. An EM rail is a **boundary**, and
+the whole use of one is watching price travel toward it, stall under it or go
+through it. That reading needs the line carried across the session. Two of them,
+at the extremes of the day rather than in the thick of it, at a third of the ink.
+
+New `setEmBand` on the chart handle rather than two more keys on `ChartLevels`,
+because it is a different *kind* of level: CORE / CW / PW come off the newest GEX
+column and move with the book; ±EM was decided this morning and does not move,
+which is the only reason it is worth marking. Drawn above the bubble
+early-return, so it survives Bubbles being switched off.
+
+New `EM` chip in the cogwheel's Layer section, on by default, separate from
+`Levels` — wanting the walls without the band, or the band without the walls,
+are both ordinary. It gates the request as well as the layer.
+
+**⚠ The ES basis.** The band is quoted in SPX cash and an ES pane plots futures
+40–60 points above it, so the card shifts `up` / `down` by `basis.basis` before
+handing them over — the same correction `shiftColumns` makes for strikes, and the
+one v2 lost a fortnight to in July 2026. Today's basis, not a per-day lookup: the
+band is one session's. No usable basis and the rails draw at cash prices, which
+is the fallback the bubbles already take and the banner under the chart already
+names.
+
+**Replay.** `activeDay` is passed through to `/api/daily-em?date=`, so a rewound
+Tuesday asks for Tuesday's row. Sessions predating the table answer with no band
+and the rails do not draw — hanging *today's* band over a rewound session would
+be a level that is plainly false, and false is worse than absent.
+
+Files: `cbedge-v3/src/data/dailyEm.ts` (new),
+`cbedge-v3/src/board/gexCandles/chart.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts`,
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
+`cbedge-v3/src/board/gexChart/*` (reverted).

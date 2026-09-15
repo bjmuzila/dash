@@ -57,21 +57,6 @@ export interface SkinDef {
    */
   levelFill: null | { mode: 'level' | 'blend'; alpha: Record<WallKind, number> }
   /**
-   * The GOLD alpha band a NEAR-CORE strike is washed at — one that is not itself
-   * CB/CW/PW but carries at least the chosen fraction of the Core |value|.
-   * [at the threshold, just under Core]: a strike that barely qualifies comes in
-   * barely there and one nearly as big as CB is nearly as gold, so the band
-   * reads as a ranking rather than a flat second tier.
-   *
-   * Gold, not the sign's colour, and deliberately so. The heat ramp already
-   * paints every strike against its column MAX; near-core answers a different
-   * question — how does this compare to the CORE — and a mark in the Core's own
-   * colour is the only one that says so at a glance. It rides OVER the heat, so
-   * the sign underneath survives, and both stops stay under CB's own alpha so
-   * the Core is never out-painted by something near it.
-   */
-  nearCore: readonly [number, number]
-  /**
    * Where the Intensity slider is tuned to sit for this skin, and its ceiling.
    * Switching skins MOVES the slider there — the ramps are different shapes, so
    * 1.75 on one is not 1.75 on the other and carrying a number across lands
@@ -85,9 +70,6 @@ export const HEAT_SKINS: Record<HeatSkin, SkinDef> = {
     label: 'CLASSIC',
     ramp: { base: 0.02, span: 0.16, max: 0.18, ease: 1.4 },
     rank: [0.9, 0.45, 0.25],
-    // CLASSIC's heat is a wash (0.18 max on the ramp), so gold needs a little
-    // more of its own to register — but it still tops out well under VIVID.
-    nearCore: [0.14, 0.4],
     levelFill: null,
     intensity: { def: 1.75, max: 3 },
   },
@@ -99,9 +81,6 @@ export const HEAT_SKINS: Record<HeatSkin, SkinDef> = {
     // the genuinely large strikes approach the cap.
     ramp: { base: 0.05, span: 0.25, max: 1, ease: 0.4 },
     rank: [0.95, 0.62, 0.4],
-    // VIVID paints to near-opaque, so the gold has to carry further to be seen
-    // over a hot tile — and still stops short of CB's own 0.85.
-    nearCore: [0.22, 0.6],
     // CW and PW at full strength (the wall IS the colour), CB pulled back to
     // .85 because gold at 1.0 swamps the row. The heat still shows through CB.
     levelFill: { mode: 'blend', alpha: { cb: 0.85, cw: 1, pw: 1 } },
@@ -146,17 +125,6 @@ export function skinMetricBg(
   const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), skin.ramp.ease)
   const a = Math.min(skin.ramp.max, skin.ramp.base + eased * skin.ramp.span)
   return alpha(n >= 0 ? GEX_POS : GEX_NEG, Number(a.toFixed(2)))
-}
-
-/**
- * The near-core wash, as a fraction of the way from the threshold to the Core.
- * Split out so the fill below and any future marker read the same ramp.
- */
-function nearCoreAlpha(ratio: number, threshold: number, skin: SkinDef): number {
-  const [lo, hi] = skin.nearCore
-  const span = 1 - threshold
-  const pos = span <= 0 ? 1 : Math.min(Math.max((ratio - threshold) / span, 0), 1)
-  return lo + pos * (hi - lo)
 }
 
 /**
@@ -207,44 +175,6 @@ export function levelFillBg(kind: WallKind, skin: SkinDef, beneath: string): str
     )
   }
   return `linear-gradient(${over},${over}), ${under}`
-}
-
-/**
- * Fill for a NEAR-CORE strike: one that is not CB / CW / PW, but carries
- * `threshold` or more of its column's Core |value|.
- *
- * The SAME diagonal gold wash the Core wears, pulled back. That is the whole
- * idea — "this strike is most of the Core" said in the Core's own colour, along
- * the Core's own geometry, so the two read as one family and the figure still
- * sits on its own sign where the gold has faded out. The strength is a function
- * of the ratio to Core, so lowering the threshold brings new strikes in at the
- * faint end instead of jumping the ones already marked.
- *
- * Applies at EVERY Intensity position, not just the bottom stop: the heat ramp
- * measures a strike against its column MAX, which is a different question, and
- * at any slider position the answer to "how big is this next to Core" is not
- * otherwise on the screen.
- *
- * `beneath` is the heat already computed for the cell, which shows through —
- * 'transparent' in levels-only, the ramp everywhere else. Returns null below the
- * threshold so the caller can fall through to plain heat.
- */
-export function nearCoreFillBg(
-  value: number,
-  cbAbs: number,
-  threshold: number,
-  skin: SkinDef,
-  beneath: string,
-): string | null {
-  const n = value || 0
-  const m = cbAbs || 0
-  if (!n || m <= 0) return null
-  const ratio = Math.min(Math.abs(n) / m, 1)
-  const t = Math.min(Math.max(threshold, 0), 0.99)
-  if (ratio < t) return null
-  const over = alpha(LEVEL_FILL_COLOR.cb, Number(nearCoreAlpha(ratio, t, skin).toFixed(2)))
-  const fade = alpha(LEVEL_FILL_COLOR.cb, 0)
-  return `linear-gradient(${CB_WASH_ANGLE},${over} 0%,${over} ${CB_WASH_HOLD}%,${fade} ${CB_WASH_END}%), ${beneath}`
 }
 
 // ── Cell geometry, as THIS grid wears each skin ──────────────────────────────

@@ -44,7 +44,6 @@ import {
   CHAIN_CELL,
   HEAT_SKINS,
   levelFillBg,
-  nearCoreFillBg,
   skinMetricBg,
   skinRankBg,
   type HeatSkin,
@@ -343,15 +342,24 @@ export const ChainMatrix = memo(function ChainMatrix({
     : null
 
   // ── Near-core strikes ──────────────────────────────────────────────────────
-  // The heat ramp scales every strike against its column MAX. NEAR CORE asks a
-  // different question — what fraction of the CORE is this — and answers it in
-  // the Core's own gold, washed along the same diagonal the ★ cell wears. So
-  // "half of Core" means the same thing in a $40B column and a $200M one, and
-  // the mark reads as family with the Core rather than as more heat.
+  // GOLD IS THE CORE'S, AND ONLY THE CORE'S. A near-core strike is not a level
+  // and is not a second Core — it is an ordinary strike that happens to be big,
+  // so it is painted the way every ordinary strike is: the SIGN's colour on the
+  // Intensity ramp. Nothing about the fill is new; what NEAR CORE changes is
+  // WHICH cells get one.
   //
-  // At EVERY slider position, not just the bottom stop. At the bottom stop it is
-  // the only thing between CB/CW/PW and a blank column; above it the ramp is
-  // answering the other question and this one still is not on screen.
+  // That makes it a bottom-stop feature in practice. LEVELS switches the heat
+  // field off and paints CB / CW / PW alone, so a strike carrying 80% of the
+  // Core goes blank next to one carrying 2%; NEAR CORE turns the ordinary fill
+  // back on for the ones clearing the threshold. Anywhere above the bottom stop
+  // every cell already has that fill, so the toggle is a no-op there rather than
+  // a second layer — which is the point: there is only ever one paint rule.
+  //
+  // The column's core |value| is also its max (columnWalls picks CB as the
+  // largest |net| over the same visible strikes scaleOf takes its max from), so
+  // "≥ 50% of core" and "≥ 50% of the column max" are the same cut. The core
+  // wording is kept because the Core is the thing on screen you are comparing
+  // against.
   const nearCoreOn = nearCore
   const nearCoreThreshold = Math.min(Math.max((nearCorePct || 0) / 100, 0), 0.99)
 
@@ -672,18 +680,23 @@ export const ChainMatrix = memo(function ChainMatrix({
                 : value != null
                   ? skinMetricBg(value, cellScale.max, cellRank, intensity, SK)
                   : 'transparent'
-              // Near-core is the fallback layer, never an override: CB already
-              // wears the full wash and CW / PW have colours of their own, so a
-              // cell that is any of the three keeps them whatever the threshold
-              // is set to.
+              // Near-core never overrides a level: CB wears the gold wash and
+              // CW / PW have colours of their own, so a cell that is any of the
+              // three keeps them whatever the threshold is set to. Everything
+              // else that clears it takes the SAME ramp fill an unfiltered grid
+              // would have given it — so this only ever shows up where that fill
+              // was switched off, at the LEVELS stop.
               const cbAbsHere = coreAbsByCol[colIdx] ?? 0
               const nearHit =
-                nearCoreOn && !isMvc && !cellWall && isNearCore(value, cbAbsHere, nearCoreThreshold)
-              const background = cellLevel
-                ? (levelFillBg(cellLevel, SK, heat) ?? heat)
-                : nearHit
-                  ? (nearCoreFillBg(value as number, cbAbsHere, nearCoreThreshold, SK, heat) ?? heat)
-                  : heat
+                nearCoreOn &&
+                !isMvc &&
+                !cellWall &&
+                value != null &&
+                isNearCore(value, cbAbsHere, nearCoreThreshold)
+              const fill = nearHit
+                ? skinMetricBg(value as number, cellScale.max, cellRank, intensity, SK)
+                : heat
+              const background = cellLevel ? (levelFillBg(cellLevel, SK, fill) ?? fill) : fill
 
               return (
                 <div
@@ -830,6 +843,9 @@ export const ChainMatrix = memo(function ChainMatrix({
                     : 'transparent'
                 const totNearHit =
                   nearCoreOn && !isTotMvc && !totWall && isNearCore(tot, totalCoreAbs, nearCoreThreshold)
+                const totFill = totNearHit
+                  ? skinMetricBg(tot, totalScale.max, rankOf(tot, totalScale.top3), intensity, SK)
+                  : heat
                 // Same rule the expiry cells use: levels-only names the wall,
                 // every other slider position marks the CORE level only.
                 const totLevel = !SK.levelFill ? null : (totWall ?? (isTotMvc ? ('cb' as const) : null))
@@ -844,11 +860,7 @@ export const ChainMatrix = memo(function ChainMatrix({
                       color: tot === 0 ? CHAIN.none : alpha(T.text, 0.92),
                       ...(CELL.shadow && tot !== 0 ? { textShadow: CELL.shadow } : {}),
                       borderRadius: CELL.radius || undefined,
-                      background: totLevel
-                        ? (levelFillBg(totLevel, SK, heat) ?? heat)
-                        : totNearHit
-                          ? (nearCoreFillBg(tot, totalCoreAbs, nearCoreThreshold, SK, heat) ?? heat)
-                          : heat,
+                      background: totLevel ? (levelFillBg(totLevel, SK, totFill) ?? totFill) : totFill,
                       borderLeft: `2px solid ${alpha(T.cyan, selMode ? 0.8 : 0.35)}`,
                       boxShadow: isATM
                         ? `inset 0 2px 0 ${T.text}, inset 0 -2px 0 ${T.text}, inset -2px 0 0 ${T.text}`

@@ -533,16 +533,17 @@ export default function OptionsChain({
                       </span>
                     </div>
                   </Field>
-                  {/* NEAR CORE — the Core's own gold, washed onto the strikes
-                      carrying a real fraction of it. Lives at EVERY slider
-                      position, not just the bottom stop: the heat ramp scales
-                      against the column MAX, which is a different question, and
-                      "how big is this next to Core" is otherwise unanswered
-                      wherever the slider sits. CB / CW / PW keep their own
-                      paint — the threshold can never repaint a level. */}
+                  {/* NEAR CORE — gold is the Core's alone. This does not add a
+                      layer; it decides WHICH cells get the ordinary sign-coloured
+                      Intensity fill. So it shows up at the LEVELS stop, where
+                      that fill is switched off and a strike carrying 80% of the
+                      Core goes blank beside one carrying 2%. Above the bottom
+                      stop every cell already has the fill and the toggle is a
+                      no-op — one paint rule, not two. CB / CW / PW always keep
+                      their own colour. */}
                   <Field
                     label="Near core"
-                    hint="Wash the strikes carrying this share or more of their column's core in the core's gold. Works at any Intensity, on any greek. CB / CW / PW keep their own colour."
+                    hint="At the LEVELS stop, also paint the strikes carrying this share or more of their column's core — in the ordinary sign colour on the Intensity ramp. CB / CW / PW keep their own colour."
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
                       <button

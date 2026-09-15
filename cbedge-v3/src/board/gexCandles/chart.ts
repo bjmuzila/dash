@@ -27,6 +27,7 @@ import { BUBBLES } from './settings'
 // is banned from src/ by scripts/check-theme.mjs (non-negotiable #1), and the
 // 8-digit hex this returns is accepted by every canvas fill and chart option.
 import { tokenHexAlpha } from '@/design/theme'
+import type { DailyEmBand } from '@/data/dailyEm'
 
 /**
  * Read one design token off the mounted element.
@@ -153,6 +154,33 @@ export interface ChartLevels {
   pw: number | null
 }
 
+/**
+ * TODAY'S EXPECTED-MOVE BAND, in the price space THIS CHART IS DRAWING.
+ *
+ * A separate setter from `setLevels` and not a fourth and fifth key on
+ * ChartLevels, because it is a different KIND of level and the difference is
+ * the point:
+ *
+ *   CORE / CW / PW  come off the newest GEX column and move whenever the book
+ *                   does. They are a reading of right now.
+ *   ±EM             was decided once this morning off the front expiry's ATM
+ *                   straddle, anchored to the prior session's close, and frozen
+ *                   for the session (see data/dailyEm.ts). It does not move,
+ *                   which is the only reason it is worth marking.
+ *
+ * They also have their own switch on the card, arrive from a different source
+ * at a different cadence, and — on an ES tape — need the basis applied by the
+ * caller, which the walls already get upstream. One setter each keeps all of
+ * that from having to be re-decided every time either one changes.
+ *
+ * ⚠ `up` / `down` must ALREADY be in the chart's price space. On ES that means
+ * shifted by the ES−SPX basis, exactly as `shiftColumns` does for the strikes:
+ * the band is quoted in SPX cash and the candles are futures 40-60 points
+ * higher, so an unshifted rail lands a basis below the price it belongs to.
+ * The chart cannot do that itself — it does not know the basis.
+ */
+export type ChartEmBand = Pick<DailyEmBand, 'up' | 'down' | 'date'>
+
 export interface ChartDrawOpts {
   /** Master on/off for the bubble layer. */
   on: boolean
@@ -232,6 +260,14 @@ export interface EsChartHandle {
    * to know where the walls are.
    */
   setLevels: (levels: ChartLevels | null) => void
+  /**
+   * The two DAILY expected-move rails. `null` clears the layer.
+   *
+   * Drawn beside the CORE / CW / PW tags and under the same clip, but from its
+   * own state and behind its own switch — see ChartEmBand for why it is not a
+   * pair of extra keys on ChartLevels, and for the ES basis the CALLER owes it.
+   */
+  setEmBand: (band: ChartEmBand | null) => void
   /**
    * The volume histogram along the bottom of the price pane.
    *
@@ -319,6 +355,12 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     cw: cssVar(container, '--color-level-cw'),
     pw: cssVar(container, '--color-level-pw'),
   }
+  // The EM rails' ink. One token for both, because they are the two edges of
+  // ONE symmetric band — painting them up-green and down-red would read as
+  // direction where there is none by construction. Violet is the one family
+  // this pane is not already spending: the walls own blue and red, the core
+  // gold, the candles green and red.
+  const emInk = cssVar(container, '--color-level-em')
   // Ink for the text INSIDE a tag: the page ground, so the tag reads as a
   // filled label rather than as coloured text on a chart.
   const appInk = cssVar(container, '--color-app')
@@ -499,6 +541,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   let railSink: RailSink | null = null
   /** CORE / CW / PW on the pane. null = the layer is off or has nothing yet. */
   let levels: ChartLevels | null = null
+  /** The daily EM rails. null = the layer is off, or nothing recorded today. */
+  let emBand: ChartEmBand | null = null
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
   // through React.
@@ -1143,6 +1187,78 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       ctx.restore()
     }
 
+    // ── THE DAILY EXPECTED-MOVE RAILS ────────────────────────────────────────
+    //
+    // Two horizontals at fixed prices. They are the only marks on this pane
+    // that do not move with the data: the band was decided once this morning
+    // off the front expiry's ATM straddle, anchored to the previous session's
+    // close, and frozen server-side. Nothing here may recompute it — see
+    // ChartEmBand and data/dailyEm.ts.
+    //
+    // ── These DO get a line, and CORE / CW / PW do not ───────────────────────
+    // That is not an inconsistency, it is the difference between the two. The
+    // walls' hairlines were dropped because three of them across a pane already
+    // carrying candles, bubbles and a heatmap were three horizontals competing
+    // with the price action, and each said nothing its tag did not — the tag
+    // sits AT the level, so the height IS the line.
+    //
+    // An EM rail is a BOUNDARY, and the whole use of one is watching price
+    // travel toward it, stall under it, or go through it. That reading needs
+    // the line carried across the session, not a chip at the left margin you
+    // have to sight along. There are two of them, they sit at the extremes of
+    // the day rather than in the thick of it, and they are drawn at a third of
+    // the ink the walls used — so the argument that retired the wall lines does
+    // not reach these.
+    //
+    // Right edge for the tags, deliberately: CORE / CW / PW own the left one.
+    // Opposite ends means the two families never collide at a shared price and
+    // tell themselves apart at a glance. `plotW` is the pane WITHOUT the price
+    // scale, so right-aligned inside it still clears the axis labels.
+    if (emBand) {
+      ctx.save()
+      ctx.font = '700 9px ui-sans-serif, system-ui, sans-serif'
+      ctx.textBaseline = 'middle'
+      ctx.textAlign = 'left'
+      ctx.beginPath()
+      ctx.rect(0, 0, plotW, plotH)
+      ctx.clip()
+      for (const [price, label] of [
+        [emBand.up, 'EM+'],
+        [emBand.down, 'EM−'],
+      ] as Array<[number | null, string]>) {
+        if (price == null || !(price > 0)) continue
+        const yRaw = yOfPrice(price)
+        if (yRaw == null) continue
+        const y = Math.round(yRaw) + 0.5
+        if (y < 0 || y > plotH) continue
+
+        const text = `${label} ${price.toFixed(2)}`
+        const tw = ctx.measureText(text).width
+        const chipW = tw + 6
+        const chipX = Math.max(2, plotW - chipW - 2)
+
+        // The line stops where the chip starts rather than running under it —
+        // a dashed rule crossing its own label is the one place this layer
+        // could look like a rendering fault.
+        ctx.setLineDash([3, 4])
+        ctx.strokeStyle = emInk
+        ctx.globalAlpha = 0.45
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(0, y)
+        ctx.lineTo(Math.max(0, chipX - 4), y)
+        ctx.stroke()
+        ctx.globalAlpha = 1
+        ctx.setLineDash([])
+
+        ctx.fillStyle = emInk
+        ctx.fillRect(chipX, y - 6, chipW, 12)
+        ctx.fillStyle = appInk
+        ctx.fillText(text, chipX + 3, y + 0.5)
+      }
+      ctx.restore()
+    }
+
     if (!drawOpts.on || !snaps.length) {
       // Off, or nothing loaded yet. Neither is "out of range" — the note exists
       // to explain an EMPTY layer that has data, not a layer that is switched
@@ -1535,6 +1651,14 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // repaint on a toggle or a new ladder. Without it the frame is identical
       // to the last one and the draw loop skips it — the tags would appear
       // whenever something ELSE happened to move the chart.
+      version++
+    },
+    setEmBand(next) {
+      emBand = next
+      // Same reason as setLevels: the band changes at most twice a day (once
+      // when the row lands, once if the chip is toggled), and neither of those
+      // moves the chart on its own. Without the bump the rails would appear
+      // the next time something else did.
       version++
     },
     scrollToNow() {

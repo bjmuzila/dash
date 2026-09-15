@@ -944,12 +944,10 @@ export function useChainData(opts: UseChainDataOpts) {
     }
   }, [])
   // ── Near core ──────────────────────────────────────────────────────────────
-  // The heat ramp measures every strike against its column MAX. "How big is
-  // this next to the CORE" is a different question and it is not otherwise on
-  // the screen at any slider position — hardest of all at the bottom stop, where
-  // the field is off entirely and a strike carrying 80% of the Core paints
-  // exactly like one carrying 2%. This marks the ones that are a real fraction
-  // of it, in the Core's own gold, wherever the slider is.
+  // Which strikes get the ordinary sign-coloured Intensity fill — not a fill of
+  // their own. It exists for the LEVELS stop, where that fill is switched off
+  // and a strike carrying 80% of the Core goes blank beside one carrying 2%.
+  // Gold stays the Core's alone.
   // Default 50% — "half of Core" is the question Brandon actually asks of the
   // levels view, and it is the number that reads without being a second chain.
   const [nearCore, setNearCore] = useState(false)

@@ -58,6 +58,7 @@ import { BASIS_URL, isPlausibleBasis, NO_BASIS, parseBasis, shiftColumns } from 
 import { bubbleWindowMax, buildBubbleModel } from './bubbles'
 import { buildRail, GexRail } from './GexRail'
 import { mountEsChart, type EsChartHandle } from './chart'
+import { useDailyEm } from '@/data/dailyEm'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Candles — v2's ES chart rebuilt for v3, scoped to GEX BUBBLES ONLY.
@@ -1121,6 +1122,47 @@ export function GexCandlesCard({
     [settings.levelLabels, railModel, apply],
   )
 
+  // ── THE DAILY EXPECTED-MOVE RAILS ──────────────────────────────────────────
+  //
+  // ±1σ off the PREVIOUS session's close, decided once this morning from the
+  // front expiry's ATM straddle and frozen server-side for the rest of the day
+  // (/api/daily-em, server-v2/daily-em.js). Read, never derived: the candles
+  // and the GEX columns carry no IV and no marks, so there is no straddle here
+  // to price — and a band recomputed client-side would slide all session as
+  // that straddle decays, which is exactly what a level must not do.
+  //
+  // `activeDay` is '' live and a session date in replay, so a rewound Tuesday
+  // asks for Tuesday's row. Sessions that predate the table answer with no
+  // band and the rails simply do not draw — which is right. Hanging TODAY's
+  // band over a rewound session would be a level that is plainly false, and
+  // false is worse than absent.
+  //
+  // The chip gates the REQUEST as well as the layer: a card with the rails off
+  // has no reason to be asking for them.
+  const emBand = useDailyEm(symbol, settings.emLevels, activeDay || undefined)
+
+  // ⚠ THE BASIS. The band is quoted in SPX CASH and an ES pane plots futures
+  // 40-60 points above it, so an unshifted rail lands one basis below the price
+  // it belongs to — the same bug `shiftColumns` exists to prevent for strikes,
+  // and the one v2 lost a fortnight to in July 2026. The walls get their shift
+  // upstream in `columns`; this band arrives from its own route and has to be
+  // shifted here.
+  //
+  // TODAY'S basis, not a per-day lookup: the band is one session's, so there is
+  // only ever one session to convert. With no usable basis the rails are drawn
+  // at cash prices — the same fallback the bubbles take, and the same banner
+  // under the chart already says so.
+  const emDrawn = useMemo(() => {
+    if (!emBand) return null
+    const shift = useEs && isPlausibleBasis(basis.basis) ? basis.basis : 0
+    return { up: emBand.up + shift, down: emBand.down + shift, date: emBand.date }
+  }, [emBand, useEs, basis])
+
+  useEffect(
+    () => apply((h) => h.setEmBand(settings.emLevels ? emDrawn : null)),
+    [settings.emLevels, emDrawn, apply],
+  )
+
   // Volume strip and the dashed last-price line. Both are pure chart state —
   // no data of their own, nothing derived — so they are one-line effects rather
   // than anything the render path has to know about. The volume figures ride
@@ -1610,6 +1652,21 @@ export function GexCandlesCard({
                     on={settings.levelLabels}
                     onClick={() => patch({ levelLabels: !settings.levelLabels })}
                     title="CORE, CW and PW drawn on the chart itself — a tag at the left edge of each, name and price, no line. Same three levels the rail tags: CORE is the biggest gamma strike on the ladder, CW the call wall above spot, PW the put wall below"
+                  />
+                  {/* Its own switch, not folded into Levels — see `emLevels` in
+                      settings.ts. The walls move with the book; this one was
+                      decided this morning and does not move at all, which is
+                      the whole reason it is drawn. */}
+                  <Chip
+                    size={ctlSize}
+                    label="EM"
+                    on={settings.emLevels}
+                    onClick={() => patch({ emLevels: !settings.emLevels })}
+                    title={
+                      emBand
+                        ? `Today's expected move: ±${emBand.em.toFixed(2)} off the ${emBand.refClose.toFixed(2)} prior close — ${emBand.down.toFixed(2)} to ${emBand.up.toFixed(2)}. Read once this morning from ${emBand.expiry || 'the front expiry'}'s ATM straddle and frozen, so the two rails do not move all session`
+                        : `No expected-move band recorded for ${symbol}${activeDay ? ` on ${activeDay}` : ' today'} — it is written on the session's first read of the option chain, and a past session that predates it has none to draw`
+                    }
                   />
                   <Chip
                     size={ctlSize}
