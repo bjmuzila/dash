@@ -1,6 +1,49 @@
 # Changelog
 
-## 2026-09-15 (k) - Owner site: customer info consolidated onto three Info pages
+## 2026-09-15 (f) - Owner site: click any customer name → customer card
+
+**One click, the whole person.** Every email printed on the owner site — the
+Sales subscription and cancellation tables, every list on Customers (never
+bought, not paying, activity, Discord, Far CB, unsubscribes, feedback) and the
+map's pinned visitor card — is now a `<CustomerName>` that opens a modal
+dossier (design: idea 1 of `generated/2026-09-15-customer-card-idea-*.png`).
+
+**What the card shows.** Header: email, verified dot, status chip (paying /
+cancelling · ends date / cancelled / comped / past due / reached checkout /
+free), plan chip, coupon chip, Discord, unsubscribed, open-feedback count;
+actions Email (deep-links Emails → Custom with the address prefilled via new
+`?to=`), Reset password, Stripe ↗. Three tiles: **Identity** (location + IP,
+member since, last login + login count, came from with landing path, device,
+sign-in method, Discord link date, email preference), **Money** (total spent +
+invoice count, plan + status, coupon with % and duration, renews/ends,
+cancellation reason + survey answer + free-text comment, failed payments, first
+paid), **Usage** for the selected window (loads, sessions, time, pages) with
+lifetime totals, most-used page and Far CB tickers. Below: the **page feed**
+grouped by ET day with time-per-page (gap to the next load, 30-min session
+cap, last page of a session shows —; pricing / checkout / account rows are
+flagged), a Today / 7d / 30d / All switch, the **share-of-time** bars per page,
+and an **Also on file** tile (feedback items, emails sent, comp grant, recent
+invoices with hosted links).
+
+**Backend.** New owner-only `GET /api/admin/customer?email=` (or `?userId=`)
+in `server-v2/api-router.js`. Reads users + sessions, the last 400 page_visits
+(sessionised and timed), the local subscriptions row, subscription_cancellations,
+user_attribution, customer_feedback, far_cb_custom_tickers, email_unsubscribes,
+comp_access and email_sends, plus a live Stripe pull (subscriptions with
+discounts expanded, invoices, customer) when a stripe_customer_id exists.
+Every section is best-effort: a failed source lands in `warnings[]` and blanks
+its own tile instead of failing the card.
+
+**Wiring.** `owner-vite/src/components/CustomerCard.tsx` exports
+`openCustomerCard(email)`, `<CustomerName>` and `<CustomerCardHost>`. The host is
+mounted once in `OwnerShell.tsx`; names dispatch a window event, so no page
+threads props or context. Esc / backdrop click closes; ↻ reloads.
+
+## 2026-09-15 (e) - Sales: Active Subscriptions + Cancellations moved up under Profit per Month
+
+Order is now KPIs → Profit per Month → Active Subscriptions / Cancellations → Revenue by source → Campaign Links → Expenses. The chart says what happened this month; the two lists right under it are the names behind it.
+
+## 2026-09-15 (d) - Owner site: customer info consolidated onto three Info pages
 
 **The problem.** owner.cbedge.net's Info group had four pages - Admin,
 Visitors, Overview, Sales - and the customer picture was smeared across all of

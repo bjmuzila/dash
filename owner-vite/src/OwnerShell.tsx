@@ -5,6 +5,7 @@ import { OWNER_SIDEBAR_GROUPS, OWNER_PINNED_LINKS } from "./lib/nav";
 import type { OwnerLink } from "./lib/nav";
 import { OWNER_THEME, OWNER_LIGHT_BLUE } from "./lib/theme";
 import OwnerToolbar from "./OwnerToolbar";
+import { CustomerCardHost } from "./components/CustomerCard";
 
 /**
  * OwnerShell — persistent left rail + content outlet for the owner-vite app.
@@ -419,6 +420,9 @@ export default function OwnerShell() {
       >
         <Outlet />
       </Suspense>
+      {/* The customer card modal — one instance for every page. Any name
+          rendered through <CustomerName> (or openCustomerCard()) opens it. */}
+      <CustomerCardHost />
     </main>
   );
 

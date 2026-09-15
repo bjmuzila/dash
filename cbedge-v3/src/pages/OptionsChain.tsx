@@ -63,6 +63,7 @@ import {
   type ReplayScope,
 } from './optionsChain/useChainData'
 import type { DataMode } from './optionsChain/chainMath'
+import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 
 /** The ↻ button's four states and its 1800ms revert, transcribed from v2's
  *  useRefreshButton — the labels are what tells you a refresh actually ran. */
@@ -217,10 +218,55 @@ export default function OptionsChain({
     }
   }, [hoverCell, c.columns, c.dodRows])
 
+  // ── 📸 The page, offered to the toolbar's camera ───────────────────────────
+  //
+  // Nothing was published here, so the camera's menu said "nothing to capture"
+  // on the one page that is photographed more than any other. Two rows: the
+  // whole pane (bar + grid, what a screenshot of the tab would be) and the grid
+  // on its own for a picture that is only strikes. Both resolve at click time —
+  // see CopyShotTarget.resolve. The scroller's offset travels with the clone
+  // (shell/snapshot.ts carryScroll), so the PNG shows the strikes on screen.
+  //
+  // Published only once there are strikes: a photograph of the empty state is
+  // never the thing anyone meant to take.
+  const pageRef = useRef<HTMLElement | null>(null)
+  const hasGrid = c.visibleStrikes.length > 0
+  const shotMeta = `${c.activeTicker} · ${c.greekMode.toUpperCase()} · ${c.displayPercent}% strikes${
+    c.replay.on && c.replay.frame ? ' · REPLAY' : ''
+  }`
+  const shotTargets = useMemo<CopyShotTarget[]>(
+    () =>
+      hasGrid
+        ? [
+            {
+              id: 'chain:page',
+              icon: '🧮',
+              label: 'Options Chain',
+              group: 'This page',
+              meta: shotMeta,
+              file: `chain-${c.activeTicker.toLowerCase()}`,
+              resolve: () => pageRef.current,
+            },
+            {
+              id: 'chain:grid',
+              icon: '▦',
+              label: 'Chain grid only',
+              hint: 'Copy a PNG of just the strike grid, without the toolbar',
+              group: 'This page',
+              meta: shotMeta,
+              file: `chain-grid-${c.activeTicker.toLowerCase()}`,
+              resolve: () => chainScrollRef.current,
+            },
+          ]
+        : NO_TARGETS,
+    [hasGrid, shotMeta, c.activeTicker],
+  )
+  useCopyShotTargets(shotTargets)
+
   const replayPinned = c.replay.on
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <main ref={pageRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {/* Load progress. 8 at fetch start, 100 on success, 0 after 800ms. */}
       {c.loadProgress > 0 && (
         <div style={{ position: 'relative', height: 3, background: T.bg, flexShrink: 0 }}>

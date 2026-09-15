@@ -7,6 +7,7 @@ import {
   homeSecondaryButtonStyle,
 } from "../lib/theme";
 import { fmtRelative } from "../lib/utils";
+import { CustomerName } from "./CustomerCard";
 
 /**
  * Customer panels — the per-person lists that used to sit on the Admin page.
@@ -85,7 +86,7 @@ export function NotPayingPanel() {
         ) : (
           emails?.map((email) => (
             <div key={email} style={{ padding: "6px 16px", fontSize: 14, color: T.text, fontFamily: "var(--font-mono)", borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
-              {email}
+              <CustomerName email={email} />
             </div>
           ))
         )}
@@ -265,7 +266,7 @@ export function CustomerActivityPanel() {
             <div key={r.userId} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14, alignItems: "center" }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
+                  <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><CustomerName email={r.email} /></span>
                   {r.paid && <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 8, background: `${T.green}18`, border: `1px solid ${T.green}44`, color: T.green, flexShrink: 0 }}>paid</span>}
                 </div>
                 <div style={{ fontSize: 14, color: "rgba(255,255,255,0.45)" }}>{fmtRelative(r.lastSeen)} · {r.sessionCount} session{r.sessionCount !== 1 ? "s" : ""}</div>
@@ -349,7 +350,7 @@ export function FarCbTickersPanel() {
           rows.map((r) => (
             <div key={r.symbol} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14, alignItems: "center" }}>
               <span style={{ color: T.text, fontWeight: 700, fontFamily: "var(--font-mono)" }}>{r.symbol}</span>
-              <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.added_by_email ?? r.added_by_id ?? "—"}</span>
+              <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.added_by_email ? <CustomerName email={r.added_by_email} /> : (r.added_by_id ?? "—")}</span>
               <span style={{ color: T.textSecondary, fontSize: 14 }}>{r.created_at ? new Date(r.created_at).toLocaleString() : "—"}</span>
             </div>
           ))
@@ -467,7 +468,7 @@ export function UnsubscribePanel() {
         ) : (
           rows?.map((r) => (
             <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14 }}>
-              <span style={{ flex: 1, minWidth: 0, color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
+              <span style={{ flex: 1, minWidth: 0, color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><CustomerName email={r.email} /></span>
               <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: r.source === "manual" ? `${T.orange}18` : `${T.muted}18`, border: `1px solid ${r.source === "manual" ? T.orange : T.muted}44`, color: r.source === "manual" ? T.orange : T.muted, flexShrink: 0 }}>
                 {r.source}
               </span>
@@ -546,7 +547,7 @@ export function DiscordConnectionsPanel() {
           rows.map((r) => (
             <div key={r.email} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14, alignItems: "center" }}>
               <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
+                <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><CustomerName email={r.email} /></span>
                 {r.is_owner && <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 8, background: `${T.gold}18`, border: `1px solid ${T.gold}44`, color: T.gold, flexShrink: 0 }}>owner</span>}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
@@ -680,7 +681,7 @@ export function FeedbackPanel() {
                     }}>
                       {f.category}
                     </span>
-                    <span style={{ fontSize: 14, color: T.text }}>{f.email || f.clerk_user_id || "unknown"}</span>
+                    <span style={{ fontSize: 14, color: T.text }}>{f.email ? <CustomerName email={f.email} /> : (f.clerk_user_id || "unknown")}</span>
                     {f.page && <span style={{ fontSize: 14, color: T.textSecondary, fontFamily: "var(--font-mono)" }}>{f.page}</span>}
                     {f.created_at && (
                       <span style={{ fontSize: 14, color: T.textSecondary }}>{new Date(f.created_at).toLocaleString()}</span>

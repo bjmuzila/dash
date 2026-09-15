@@ -12,7 +12,7 @@
  * Frames are built in ES space with basis=0 so SPX-level inputs map 1:1 to ES.
  */
 
-const { evaluateFrame, evaluateGexChangeTop, __setAlertCacheForTest } = require('./signals-engine');
+const { evaluateFrame, evaluateGexChangeTop, evaluateWhalePrints, __setAlertCacheForTest } = require('./signals-engine');
 
 // flip_cross is production-disabled by default via the live DB-backed
 // ALERT_CATALOG toggle (isAlertEnabled('flip_cross')), not the old
@@ -22,6 +22,7 @@ const { evaluateFrame, evaluateGexChangeTop, __setAlertCacheForTest } = require(
 __setAlertCacheForTest('flip_cross', true);
 __setAlertCacheForTest('core_change', true);
 __setAlertCacheForTest('core_touch', true);
+__setAlertCacheForTest('whale_print', true);
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -264,6 +265,87 @@ const step = 4000;
   check('nothing fired while off', evaluateGexChangeTop(rows, mem).length === 0);
   __setAlertCacheForTest('gex_change_top', true);
   check('and not replayed when switched back on', evaluateGexChangeTop(rows, mem).length === 0);
+})();
+
+// ── WHALE PRINTS ────────────────────────────────────────────────────────────
+// Rows are /api/lse/whales rows — ALREADY filtered by that route to ≥$1M, OTM,
+// BUY, ≤90 DTE. These tests are about announcing, not qualifying: nothing here
+// asserts a premium floor or a moneyness rule, because this detector no longer
+// owns either. It owns "have we said this yet".
+const WROW = (over = {}) => ({
+  id: 'p1', ts: 1_757_000_000_000, underlying: 'NVDA', osi: 'NVDA260918C00190000',
+  type: 'C', strike: 190, expiry: '2026-09-18', dte: 3,
+  side: 'BUY', action: 'BUY CALL', size: 500, price: 26.4, premium: 1_320_000,
+  spot: 182.5, sessionDate: '2026-09-15', ...over,
+});
+
+// 12) one row → one signal, with the archive's id kept on it
+(() => {
+  console.log('12) whale print fires once');
+  const mem = freshMem();
+  const out = evaluateWhalePrints([WROW()], mem);
+  check('one signal', out.length === 1);
+  check('call buy is LONG', out[0].direction === 'long');
+  check('premium rounds into the headline', out[0].setup.includes('$1.3M'));
+  check('ticker + strike + right in the level name', out[0].levelName === 'NVDA 190C');
+  check('spot rides along as the price', out[0].priceEs === 182.5);
+  check('$1.32M scores a 3', out[0].score === 3);
+  check('the archive row id is on the signal', out[0].meta.printId === 'p1');
+  check('a re-poll of the same row fires nothing', evaluateWhalePrints([WROW()], mem).length === 0);
+})();
+
+// 13) put buys are SHORT, and size scores up
+(() => {
+  console.log('13) direction + conviction');
+  const mem = freshMem();
+  const out = evaluateWhalePrints([
+    WROW({ id: 'p2', underlying: 'SPY', type: 'P', strike: 640, premium: 5_400_000 }),
+  ], mem);
+  check('put buy is SHORT', out[0].direction === 'short');
+  check('≥$5M scores a 5', out[0].score === 5);
+  check('reason names the DTE and the expiry', out[0].reason.includes('3DTE') && out[0].reason.includes('exp 2026-09-18'));
+})();
+
+// 14) one whale split across rows collapses to one alert
+(() => {
+  console.log('14) per-contract cooldown');
+  const mem = freshMem();
+  const t = 1_757_000_000_000;
+  const fills = [
+    WROW({ id: 'a', ts: t }),
+    WROW({ id: 'b', ts: t + 4_000 }),      // same contract, 4s later
+    WROW({ id: 'c', ts: t + 9_000 }),      // and again
+    WROW({ id: 'd', ts: t + 5_000, strike: 195, osi: 'NVDA260918C00195000' }), // different strike
+  ];
+  const out = evaluateWhalePrints(fills, mem);
+  check('three fills on one contract post once', out.filter((s) => s.levelName === 'NVDA 190C').length === 1);
+  check('a different strike still fires', out.filter((s) => s.levelName === 'NVDA 195C').length === 1);
+
+  // Past the cooldown window the same contract is allowed to speak again.
+  const later = evaluateWhalePrints([WROW({ id: 'e', ts: t + 11 * 60_000 })], mem);
+  check('and fires again after the cooldown', later.length === 1);
+})();
+
+// 15) malformed rows are dropped, not fired — a row with no id cannot be deduped
+(() => {
+  console.log('15) rows that cannot be deduped are dropped');
+  const mem = freshMem();
+  check('no id → nothing', evaluateWhalePrints([WROW({ id: null })], mem).length === 0);
+  // `Number(null)` is 0, not NaN — this is the case that would otherwise stamp
+  // a signal at the epoch and land it under 1970 on the feed.
+  check('null ts → nothing', evaluateWhalePrints([WROW({ id: 'x', ts: null })], mem).length === 0);
+  check('zero ts → nothing', evaluateWhalePrints([WROW({ id: 'y', ts: 0 })], mem).length === 0);
+  check('an empty batch is fine', evaluateWhalePrints([], mem).length === 0);
+})();
+
+// 16) toggle off — bookkeeping still runs, so switching on does not dump the day
+(() => {
+  console.log('16) whale prints disabled → seen, not fired');
+  __setAlertCacheForTest('whale_print', false);
+  const mem = freshMem();
+  check('nothing fired while off', evaluateWhalePrints([WROW({ id: 'q' })], mem).length === 0);
+  __setAlertCacheForTest('whale_print', true);
+  check('and not replayed when switched back on', evaluateWhalePrints([WROW({ id: 'q' })], mem).length === 0);
 })();
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);

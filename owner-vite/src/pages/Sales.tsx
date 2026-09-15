@@ -9,6 +9,7 @@ import {
 } from "../lib/theme";
 import { LiveKpiCard, type LivePoint } from "../components/LiveKpiCard";
 import CampaignLinkBuilder, { type CampaignSeedRow } from "../components/CampaignLinkBuilder";
+import { CustomerName } from "../components/CustomerCard";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -840,7 +841,7 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
             }}
           >
             <div style={CELL}>
-              <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.customer_email}</div>
+              <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><CustomerName email={s.customer_email} /></div>
               {s.plan_name && s.plan_name !== "—" && (
                 <div style={{ fontSize: 14, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
                   {s.plan_name.startsWith("price_") ? s.plan_name.slice(0, 18) + "…" : s.plan_name}
@@ -934,7 +935,7 @@ function CancellationsPanel({ cancellations, leaving }: { cancellations: StripeS
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <span style={{ minWidth: 0, flex: 1, fontSize: 14, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {s.customer_email}
+                  <CustomerName email={s.customer_email} />
                 </span>
                 <span style={{
                   flexShrink: 0, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap",
@@ -1597,23 +1598,9 @@ export default function Sales() {
               expensesMonthly={expensesMonthly}
             />
 
-            {/* Which links produced the money above. Directly under the profit
-                chart and ABOVE the signup list on purpose: the chart says what
-                happened, this says which channel did it, and the lists below
-                are the names behind both. */}
-            <RevenueBySourceCard
-              live={data.subscriptions}
-              cancelled={data.cancellations ?? []}
-            />
-
-            {/* The short links that FEED the Revenue-by-source table above —
-                moved here from the old Overview page on 2026-09-15, because
-                this is the page where you find out whether a link paid off.
-                The "Signed up · never bought" list that used to sit here is on
-                the Customers page now: it's a list of people, not money. */}
-            <CampaignLinkBuilder rows={campaignRows} />
-
-            {/* Active Subscriptions + Cancellations — above Expenses.
+            {/* Active Subscriptions + Cancellations — directly under the profit
+                chart: the chart says what happened this month, these are the
+                names behind it (who's paying, who's leaving).
                 `alignItems: stretch` (grid's default, stated here so it doesn't
                 get lost) plus a flex-column wrapper on the left makes both cards
                 end on the same line: the taller list sets the row height and the
@@ -1627,6 +1614,19 @@ export default function Sales() {
                 leaving={data.subscriptions.filter(s => displayStatus(s).key === "cancelling")}
               />
             </div>
+
+            {/* Which links produced the money above — which channel did it. */}
+            <RevenueBySourceCard
+              live={data.subscriptions}
+              cancelled={data.cancellations ?? []}
+            />
+
+            {/* The short links that FEED the Revenue-by-source table above —
+                moved here from the old Overview page on 2026-09-15, because
+                this is the page where you find out whether a link paid off.
+                The "Signed up · never bought" list that used to sit here is on
+                the Customers page now: it's a list of people, not money. */}
+            <CampaignLinkBuilder rows={campaignRows} />
 
             {/* Expenses — recurring + one-off costs, netted into the KPI above */}
             <ExpensesPanel

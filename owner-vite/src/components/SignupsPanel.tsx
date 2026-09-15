@@ -5,6 +5,7 @@ import {
   homePanelStyle,
   homeSecondaryButtonStyle,
 } from "../lib/theme";
+import { CustomerName } from "./CustomerCard";
 
 /**
  * "Signed up · never bought" — the trial funnel, one row per account that has
@@ -228,7 +229,7 @@ export function SignupsPanel() {
                       title={r.verified ? "Email verified" : "Email never verified"}
                       style={{ width: 7, height: 7, borderRadius: 999, flex: "none", background: r.verified ? T.green : T.muted, opacity: r.verified ? 1 : 0.5 }}
                     />
-                    <span style={{ fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis" }}>{r.email}</span>
+                    <span style={{ fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis" }}><CustomerName email={r.email} /></span>
                     {r.discord && <span style={{ fontSize: 12, color: T.muted }}>· {r.discord}</span>}
                   </span>
                   <span style={{ ...cell, color: T.muted }} title={new Date(r.createdAt).toLocaleString()}>{ago(r.createdAt)}</span>

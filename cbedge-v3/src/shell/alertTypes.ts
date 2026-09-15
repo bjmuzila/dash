@@ -109,8 +109,9 @@ export const ALERT_TYPES: AlertType[] = [
     id: 'whale',
     short: 'Whale',
     name: 'Whale Option Prints',
-    // The /v3/whales page IS the definition — same floor, same moneyness, same
-    // expiry ceiling — so an alert can always be found on that page.
+    // The /v3/whales page is not just the definition, it is the SOURCE: the
+    // engine reads that page's own endpoint with these filters in the query
+    // string, so an alert can always be found on that page.
     hint: '≥ $1M premium, OTM, under 90 DTE',
     tag: 'WHALE',
     color: LEVEL_COLORS.pw,

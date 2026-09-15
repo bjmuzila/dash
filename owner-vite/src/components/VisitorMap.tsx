@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CustomerName } from "./CustomerCard";
 import type { CSSProperties, ReactNode } from "react";
 import { geoNaturalEarth1, geoPath, geoArea, geoBounds, geoCentroid } from "d3-geo";
 import { feature } from "topojson-client";
@@ -798,7 +799,7 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
             <div style={sectionLabel}>Account</div>
             {acct.signedIn ? (
               <>
-                {acct.email && <Row label="Email" value={acct.email} />}
+                {acct.email && <Row label="Email" value={<CustomerName email={acct.email} />} />}
                 {acct.discord && <Row label="Discord" value={acct.discord} />}
                 {acct.userId && <Row label="User ID" value={`${acct.userId.slice(0, 14)}…`} />}
                 {acct.accountCreatedAt && <Row label="Member since" value={fmtDate(acct.accountCreatedAt)} />}

@@ -10784,6 +10784,322 @@ Return exactly one element per input key, in the same order. Never merge, split,
     });
   }
 
+  // /api/admin/customer?email=… — ONE customer, everything we hold on them.
+  //
+  // WHY THIS EXISTS (2026-09-15): the owner site could answer every question
+  // about customers in aggregate — who's paying, who visited, who cancelled —
+  // but "tell me about THIS person" meant reading them off five different
+  // tables on three pages. This is the card behind a clicked name: identity,
+  // location, money, lifecycle, and the page-by-page feed with time per page.
+  //
+  // Every section is INDEPENDENT and best-effort. Stripe down, comp_access
+  // table missing, no page_visits yet — each of those blanks its own section
+  // and the rest of the card still renders. Nothing here can 500 the card
+  // except "no such account".
+  //
+  // Time per page = gap to the NEXT load by the same user, capped at the
+  // 30-minute session boundary (same rule as getCustomerActivity, so the
+  // total agrees with the Customer Activity table). The last page of every
+  // session gets no time — that's a lower bound, stated on the card.
+  {
+    let _stripeForCard;
+    function stripeForCard() {
+      if (_stripeForCard !== undefined) return _stripeForCard;
+      const key = (process.env.STRIPE_SECRET_KEY || '').trim();
+      if (!key) { _stripeForCard = null; return null; }
+      try { const Stripe = require('stripe'); _stripeForCard = new Stripe(key); }
+      catch (e) { console.warn('[api-router] stripe not loadable for customer card:', e.message); _stripeForCard = null; }
+      return _stripeForCard;
+    }
+    const SESSION_GAP_SEC = 1800;
+    const FEED_LIMIT = 400;
+
+    /** Recurring discount → a plain description for the card. */
+    const couponOf = (sub) => {
+      const list = [];
+      if (sub?.discount) list.push(sub.discount);
+      if (Array.isArray(sub?.discounts)) for (const d of sub.discounts) if (d && typeof d !== 'string') list.push(d);
+      const out = [];
+      for (const d of list) {
+        const c = d.coupon;
+        if (!c) continue;
+        out.push({
+          code: d.promotion_code?.code ?? c.name ?? c.id,
+          percentOff: c.percent_off ?? null,
+          amountOff: c.amount_off ?? null,
+          duration: c.duration,
+          durationMonths: c.duration_in_months ?? null,
+          start: d.start ?? null,
+          end: d.end ?? null,
+        });
+      }
+      return out;
+    };
+
+    register('/api/admin/customer', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const email = (sp.get('email') || '').trim().toLowerCase();
+          const userId = (sp.get('userId') || '').trim();
+          if (!email && !userId) { send(res, 400, { ok: false, error: 'email or userId required' }); return; }
+
+          // ── Account ───────────────────────────────────────────────────────
+          const user = await libDb.queryOne(
+            `SELECT u.id, u.email, u.is_owner, u.email_verified_at, u.google_sub,
+                    (u.password_hash IS NOT NULL) AS has_password,
+                    u.discord_id, u.discord_username, u.discord_avatar, u.discord_connected_at,
+                    u.created_at,
+                    s.last_login_at, s.login_count, s.last_ua
+               FROM users u
+               LEFT JOIN (
+                 SELECT user_id, MAX(created_at) AS last_login_at, COUNT(*)::int AS login_count,
+                        (ARRAY_AGG(user_agent ORDER BY created_at DESC))[1] AS last_ua
+                   FROM sessions GROUP BY user_id
+               ) s ON s.user_id = u.id
+              WHERE ${userId ? 'u.id = ?' : 'lower(u.email) = ?'}
+              LIMIT 1`,
+            [userId || email]
+          );
+          if (!user) { send(res, 404, { ok: false, error: 'No account with that email' }, { 'Cache-Control': NO_STORE }); return; }
+          const uid = user.id;
+          const ekey = String(user.email || email).toLowerCase();
+          const warnings = [];
+          const soft = async (label, fn, fallback) => {
+            try { return await fn(); }
+            catch (e) { warnings.push(`${label}: ${e?.message || e}`); return fallback; }
+          };
+
+          // ── Everything else, concurrently ─────────────────────────────────
+          const [visitRows, localSub, storedCancels, attribution, feedback, farCb, unsub, comp, emailSends] = await Promise.all([
+            soft('visits', () => libDb.queryAll(
+              `SELECT id, page_key, page_label, path, ip, country, region, city,
+                      is_entry, referrer_host, utm_source, utm_medium, utm_campaign, channel,
+                      browser, os, device_type, created_at
+                 FROM page_visits
+                WHERE user_id = ? AND COALESCE(is_bot, FALSE) = FALSE
+                ORDER BY created_at DESC
+                LIMIT ?`, [uid, FEED_LIMIT]), []),
+            soft('subscription', () => libDb.getSubscription(uid), null),
+            soft('cancellations', () => libDb.queryAll(
+              `SELECT * FROM subscription_cancellations WHERE clerk_user_id = ? OR lower(customer_email) = ? ORDER BY first_seen_at DESC`, [uid, ekey]), []),
+            soft('attribution', () => libDb.queryOne(`SELECT * FROM user_attribution WHERE user_id = ?`, [uid]), null),
+            soft('feedback', () => libDb.queryAll(
+              `SELECT id, category, message, page, status, created_at FROM customer_feedback
+                WHERE clerk_user_id = ? OR lower(email) = ? ORDER BY created_at DESC LIMIT 50`, [uid, ekey]), []),
+            soft('farCb', () => libDb.queryAll(
+              `SELECT symbol, created_at, active FROM far_cb_custom_tickers
+                WHERE added_by_id = ? OR lower(added_by_email) = ? ORDER BY created_at DESC`, [uid, ekey]), []),
+            soft('unsubscribe', () => libDb.queryOne(`SELECT source, created_at FROM email_unsubscribes WHERE email = ?`, [ekey]), null),
+            soft('comp', () => libDb.queryOne(
+              `SELECT note, expires_at, granted_by, granted_at, revoked_at FROM comp_access WHERE lower(email) = ?`, [ekey]), null),
+            soft('emails', () => libDb.queryAll(
+              `SELECT subject, audience, created_at FROM email_sends
+                WHERE recipients::text ILIKE ? ORDER BY created_at DESC LIMIT 30`, [`%${ekey}%`]), []),
+          ]);
+
+          // ── Feed: time per page ───────────────────────────────────────────
+          // Rows arrive newest-first. Walk oldest→newest so each row can look at
+          // the one after it; then hand back newest-first, grouped by session.
+          const asc = visitRows.slice().reverse();
+          let sessionNo = 0;
+          let prevMs = null;
+          for (let i = 0; i < asc.length; i++) {
+            const r = asc[i];
+            const ms = new Date(r.created_at).getTime();
+            if (prevMs == null || (ms - prevMs) / 1000 > SESSION_GAP_SEC) sessionNo += 1;
+            r.session = sessionNo;
+            const next = asc[i + 1];
+            if (next) {
+              const gap = (new Date(next.created_at).getTime() - ms) / 1000;
+              r.secondsOnPage = gap > SESSION_GAP_SEC ? null : Math.round(gap);
+            } else {
+              r.secondsOnPage = null; // still there, or the last page of the last session
+            }
+            prevMs = ms;
+          }
+          const feed = asc.reverse().map((r) => ({
+            id: r.id,
+            at: r.created_at,
+            pageKey: r.page_key,
+            pageLabel: r.page_label,
+            path: r.path,
+            isEntry: !!r.is_entry,
+            session: r.session,
+            secondsOnPage: r.secondsOnPage,
+            referrerHost: r.referrer_host,
+            utmSource: r.utm_source,
+            utmCampaign: r.utm_campaign,
+            channel: r.channel,
+            browser: r.browser, os: r.os, deviceType: r.device_type,
+            country: r.country, region: r.region, city: r.city,
+          }));
+
+          // Per-page totals over the whole feed (not just one window — the card
+          // has its own window pills and filters client-side).
+          const byPage = new Map();
+          for (const f of feed) {
+            const k = f.path || f.pageKey || '(unknown)';
+            const b = byPage.get(k) || { path: k, label: f.pageLabel || f.pageKey || k, loads: 0, seconds: 0 };
+            b.loads += 1; b.seconds += f.secondsOnPage || 0;
+            byPage.set(k, b);
+          }
+          const pages = [...byPage.values()].sort((a, b) => b.seconds - a.seconds || b.loads - a.loads);
+          const totalSeconds = pages.reduce((a, p) => a + p.seconds, 0);
+          const sessions = sessionNo;
+
+          // Location + device: the most recent row that has them.
+          const latestGeo = visitRows.find((r) => r.city || r.region || r.country) || null;
+          const latestDev = visitRows.find((r) => r.browser || r.os || r.device_type) || null;
+          const firstVisit = asc.length ? visitRows[visitRows.length - 1].created_at : null;
+          const lastVisit = visitRows.length ? visitRows[0].created_at : null;
+
+          // ── Stripe: live, best-effort ─────────────────────────────────────
+          let stripe = null;
+          const client = stripeForCard();
+          const custId = localSub?.stripe_customer_id || null;
+          if (client && custId) {
+            stripe = await soft('stripe', async () => {
+              const [subs, invoices, customer] = await Promise.all([
+                client.subscriptions.list({ customer: custId, status: 'all', limit: 20, expand: ['data.discounts'] }),
+                client.invoices.list({ customer: custId, limit: 100 }),
+                client.customers.retrieve(custId).catch(() => null),
+              ]);
+              const paid = invoices.data.filter((i) => i.status === 'paid');
+              const totalSpent = paid.reduce((a, i) => a + (i.amount_paid || 0), 0);
+              const subsOut = subs.data
+                .sort((a, b) => b.created - a.created)
+                .map((s) => {
+                  const item = s.items?.data?.[0];
+                  const price = item?.price;
+                  const cd = s.cancellation_details || {};
+                  return {
+                    id: s.id,
+                    status: s.status,
+                    planName: price?.nickname ?? price?.lookup_key ?? price?.id ?? null,
+                    amount: price?.unit_amount ?? null,
+                    interval: price?.recurring?.interval ?? null,
+                    created: s.created,
+                    currentPeriodEnd: item?.current_period_end ?? s.current_period_end ?? null,
+                    cancelAtPeriodEnd: !!s.cancel_at_period_end,
+                    cancelAt: s.cancel_at ?? null,
+                    canceledAt: s.canceled_at ?? null,
+                    endedAt: s.ended_at ?? null,
+                    cancelReason: cd.reason ?? null,
+                    cancelFeedback: cd.feedback ?? null,
+                    cancelComment: cd.comment ?? null,
+                    trialStart: s.trial_start ?? null,
+                    trialEnd: s.trial_end ?? null,
+                    coupons: couponOf(s),
+                  };
+                });
+              return {
+                customerId: custId,
+                customerCreated: customer?.created ?? null,
+                totalSpent,
+                invoices: invoices.data
+                  .sort((a, b) => b.created - a.created)
+                  .slice(0, 30)
+                  .map((i) => ({
+                    id: i.id, number: i.number ?? null, status: i.status,
+                    amountDue: i.amount_due ?? 0, amountPaid: i.amount_paid ?? 0,
+                    discount: (i.total_discount_amounts || []).reduce((a, d) => a + (d.amount || 0), 0),
+                    created: i.created, paidAt: i.status_transitions?.paid_at ?? null,
+                    url: i.hosted_invoice_url ?? null,
+                  })),
+                failedInvoices: invoices.data.filter((i) => i.status === 'open' && i.attempt_count > 0).length,
+                subscriptions: subsOut,
+              };
+            }, null);
+          }
+
+          // Cancellation, one answer: live Stripe first, then our stored copy.
+          const liveCancel = stripe?.subscriptions?.find((s) => s.cancelAtPeriodEnd || s.status === 'canceled') || null;
+          const stored = storedCancels[0] || null;
+          const cancellation = (liveCancel || stored) ? {
+            cancelAtPeriodEnd: liveCancel?.cancelAtPeriodEnd ?? !!stored?.cancel_at_period_end,
+            status: liveCancel?.status ?? stored?.status ?? null,
+            reason: liveCancel?.cancelReason ?? stored?.reason ?? null,
+            feedback: liveCancel?.cancelFeedback ?? stored?.feedback ?? null,
+            comment: liveCancel?.cancelComment ?? stored?.comment ?? null,
+            cancelAt: liveCancel?.cancelAt ?? null,
+            canceledAt: liveCancel?.canceledAt ?? stored?.canceled_at ?? null,
+            endedAt: liveCancel?.endedAt ?? stored?.ended_at ?? null,
+            reactivatedAt: stored?.reactivated_at ?? null,
+            firstSeenAt: stored?.first_seen_at ?? null,
+            source: liveCancel ? 'stripe' : 'stored',
+          } : null;
+
+          const paidNow = !!localSub?.status && libDb.PAID_STATUSES.has(localSub.status);
+          const compLive = !!comp && !comp.revoked_at && (!comp.expires_at || new Date(comp.expires_at).getTime() > Date.now());
+
+          send(res, 200, {
+            ok: true,
+            account: {
+              id: uid,
+              email: user.email,
+              isOwner: !!user.is_owner,
+              verified: !!user.email_verified_at,
+              verifiedAt: user.email_verified_at,
+              hasPassword: !!user.has_password,
+              googleLinked: !!user.google_sub,
+              createdAt: user.created_at,
+              lastLoginAt: user.last_login_at ?? null,
+              logins: Number(user.login_count) || 0,
+              lastUserAgent: user.last_ua ?? null,
+              discord: user.discord_username ? {
+                username: user.discord_username,
+                id: user.discord_id,
+                avatarUrl: user.discord_avatar
+                  ? `https://cdn.discordapp.com/avatars/${user.discord_id}/${user.discord_avatar}.${user.discord_avatar.startsWith('a_') ? 'gif' : 'png'}?size=64`
+                  : null,
+                connectedAt: user.discord_connected_at,
+              } : null,
+            },
+            location: latestGeo ? { city: latestGeo.city, region: latestGeo.region, country: latestGeo.country, ip: latestGeo.ip, at: latestGeo.created_at } : null,
+            device: latestDev ? { browser: latestDev.browser, os: latestDev.os, deviceType: latestDev.device_type } : null,
+            attribution: attribution ? {
+              channel: attribution.channel, utmSource: attribution.utm_source, utmMedium: attribution.utm_medium,
+              utmCampaign: attribution.utm_campaign, referrerHost: attribution.referrer_host,
+              landingPath: attribution.landing_path, firstSeenAt: attribution.first_seen_at,
+            } : null,
+            access: {
+              paid: paidNow,
+              localStatus: localSub?.status ?? null,
+              localPriceId: localSub?.price_id ?? null,
+              localPeriodEnd: localSub?.current_period_end ?? null,
+              comp: comp ? { live: compLive, note: comp.note, expiresAt: comp.expires_at, grantedAt: comp.granted_at, grantedBy: comp.granted_by, revokedAt: comp.revoked_at } : null,
+            },
+            stripe,
+            cancellation,
+            usage: {
+              loads: visitRows.length,
+              feedTruncated: visitRows.length >= FEED_LIMIT,
+              sessions,
+              totalSeconds,
+              firstVisit,
+              lastVisit,
+              pages,
+            },
+            feed,
+            feedback: feedback.map((f) => ({ id: f.id, category: f.category, message: f.message, page: f.page, status: f.status, at: f.created_at })),
+            farCbTickers: farCb.map((t) => ({ symbol: t.symbol, at: t.created_at, active: !!t.active })),
+            email: {
+              unsubscribed: !!unsub,
+              unsubscribedAt: unsub?.created_at ?? null,
+              unsubscribeSource: unsub?.source ?? null,
+              sends: emailSends.map((e) => ({ subject: e.subject, audience: e.audience, at: e.created_at })),
+            },
+            warnings,
+          }, { 'Cache-Control': NO_STORE });
+        } catch (err) {
+          send(res, 500, { ok: false, error: 'Customer load failed', detail: String(err?.message || err) });
+        }
+      },
+    });
+  }
+
   // /api/unsubscribe — public RFC-8058 one-click / confirmation-page unsubscribe.
   // verifyUnsubscribe (HMAC) inlined from lib/unsubscribe.ts. Ported verbatim.
   {

@@ -11,17 +11,89 @@ type Hidden = { date: string; item: string; hiddenAt: string };
 
 // The changelog is written in markdown and bullets routinely use **bold** to
 // call out a feature name. Nothing was interpreting it, so the site literally
-// printed the asterisks ("Added a new **GEX Map**"). Handle the one construct
-// the changelog actually uses; everything else stays plain text.
+// printed the asterisks ("Added a new **GEX Map**"). Bullets also carry links
+// — markdown `[text](url)`, bare `https://...` URLs, and in-app paths like
+// `/v3/chain` — which used to print as dead text. Handle those constructs;
+// everything else stays plain text.
+const LINK_STYLE: React.CSSProperties = {
+  color: LIGHT_BLUE,
+  textDecoration: "underline",
+  textDecorationColor: `${LIGHT_BLUE}66`,
+  textUnderlineOffset: 2,
+  fontWeight: 600,
+  wordBreak: "break-word",
+};
+
+function isExternal(href: string): boolean {
+  if (!/^https?:\/\//i.test(href)) return false;
+  try {
+    const host = new URL(href).hostname.toLowerCase();
+    return !(host === "cbedge.net" || host.endsWith(".cbedge.net"));
+  } catch {
+    return true;
+  }
+}
+
+function Link({ href, children }: { href: string; children: React.ReactNode }) {
+  const external = isExternal(href);
+  return (
+    <a
+      href={href}
+      style={LINK_STYLE}
+      target={external ? "_blank" : undefined}
+      rel={external ? "noopener noreferrer" : undefined}
+    >
+      {children}
+    </a>
+  );
+}
+
+// Order matters: markdown links first (their `(url)` would otherwise be eaten
+// by the bare-URL rule), then bare URLs, then in-app paths. A path must start
+// with `/` followed by a letter and sit at a word boundary so "and/or",
+// "24/7" or a closing ")/" don't turn into links. Trailing punctuation is left
+// outside a bare URL so "see https://x.com." doesn't link the period.
+const LINK_RE = /(\[[^\]]+\]\([^)\s]+\))|(https?:\/\/[^\s<>"')]+[^\s<>"'.,;:!?)])|((?<![\w/.:])\/[A-Za-z][\w\-./?=&#%]*)/g;
+
+function linkify(text: string, keyBase: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  let n = 0;
+  for (const m of text.matchAll(LINK_RE)) {
+    const start = m.index ?? 0;
+    if (start > last) out.push(<React.Fragment key={`${keyBase}t${n++}`}>{text.slice(last, start)}</React.Fragment>);
+    const [raw, md, bare, path] = m;
+    if (md) {
+      const mm = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(md);
+      if (mm) {
+        out.push(<Link key={`${keyBase}l${n++}`} href={mm[2]}>{mm[1]}</Link>);
+      } else {
+        out.push(<React.Fragment key={`${keyBase}t${n++}`}>{raw}</React.Fragment>);
+      }
+    } else if (bare) {
+      out.push(<Link key={`${keyBase}l${n++}`} href={bare}>{bare}</Link>);
+    } else if (path) {
+      // Strip a trailing period/comma that belongs to the sentence, not the path.
+      const trimmed = path.replace(/[.,;:!?]+$/, "");
+      const tail = path.slice(trimmed.length);
+      out.push(<Link key={`${keyBase}l${n++}`} href={trimmed}>{trimmed}</Link>);
+      if (tail) out.push(<React.Fragment key={`${keyBase}t${n++}`}>{tail}</React.Fragment>);
+    }
+    last = start + raw.length;
+  }
+  if (last < text.length) out.push(<React.Fragment key={`${keyBase}t${n++}`}>{text.slice(last)}</React.Fragment>);
+  return out;
+}
+
 function renderInline(text: string): React.ReactNode {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
   return parts.map((part, i) =>
     part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
       <strong key={i} style={{ fontWeight: 700, color: HOME_THEME.text }}>
-        {part.slice(2, -2)}
+        {linkify(part.slice(2, -2), `b${i}`)}
       </strong>
     ) : (
-      <React.Fragment key={i}>{part}</React.Fragment>
+      <React.Fragment key={i}>{linkify(part, `p${i}`)}</React.Fragment>
     )
   );
 }

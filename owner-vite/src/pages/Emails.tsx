@@ -261,7 +261,11 @@ export default function Emails() {
   // Accepts a comma-separated list (?audience=subscribers,waitlist) as well as
   // a single value, so a deep-link can preselect a multi-audience send.
   useEffect(() => {
-    const a = new URLSearchParams(window.location.search).get("audience");
+    const sp = new URLSearchParams(window.location.search);
+    // ?to=<email> (the customer card's Email button) → Custom, prefilled.
+    const to = (sp.get("to") || "").trim();
+    if (to) { setAudiences(["custom"]); setCustomTo(to); return; }
+    const a = sp.get("audience");
     if (!a) return;
     const VALID: string[] = ["all", "subscribers", "not_paying", "waitlist", "old_emails", "old_emails2", "custom"];
     const wanted = a.split(",").map((s) => s.trim()).filter((s) => VALID.includes(s)) as Audience[];

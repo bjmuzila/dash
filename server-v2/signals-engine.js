@@ -26,6 +26,9 @@
  *   2) INITIAL BALANCE  (kind='ib_formed' / 'ib_break')
  *        IB = the 09:30–10:30 ET range of today's ES candles.
  *          ib_formed : fired RIGHT AT 10:30 ET (10:30–10:35 window), once a day.
+ *                      Carries the scanner's Live Read for the range that just
+ *                      closed — the −100…+100 break-bias score and the
+ *                      conditioned "N% LOW first" gauge (ib-live-read.js).
  *                      Carries the range (IBH/IBL/width) AND the historical
  *                      break split — of the last N graded sessions, how often
  *                      this market broke the IB high, the low, both or neither
@@ -58,11 +61,12 @@
  *        happens at the core is the trade; this only says you are there.
  *
  *   4) WHALE PRINTS  (kind='whale_print')
- *        a single OTM option PURCHASE (side='buy') ≥ WHALE_MIN_PREMIUM ($1M) with
- *        0–90 DTE, pulled from the persisted tape via /proxy/flow-history —
- *        the SAME filter the /v3/whales page shows (≥$1M, OTM, under 90 DTE),
- *        so an alert and that page never disagree. Call buy = LONG, put buy =
- *        SHORT. Deduped by print identity, never re-fires.
+ *        READ STRAIGHT OFF THE /v3/whales PAGE'S OWN ENDPOINT — /api/lse/whales,
+ *        over lse_top_flow_prints, with that page's filters in the query string
+ *        (≥$1M premium, OTM, BUY, ≤90 DTE). Every row it returns is already a
+ *        whale by the page's definition, so this file re-decides nothing: if it
+ *        is on that page, it is an alert, and the two cannot disagree. Call buy
+ *        = LONG, put buy = SHORT. Deduped on the archive's own row id.
  *
  * Dedup: per (kind,direction,rounded-level) cooldown = COOLDOWN_MS.
  * Gates:  futures session + a real basis + chartReady (skips warmup/off-hours).
@@ -107,14 +111,27 @@ const COOLDOWN_MS    = Number(process.env.SIGNALS_COOLDOWN_MS    || 10 * 60_000)
 // Initial Balance (detector #2): 09:30–10:30 ET range; a break needs IB_BREAK pts
 // of penetration so a one-tick poke through the extreme isn't an extension.
 const IB_BREAK           = Number(process.env.SIGNALS_IB_BREAK           || 2.0);  // ES pts beyond IBH/IBL
-// Whale prints (detector #4). THE /v3/whales PAGE IS THE DEFINITION (2026-09-15):
-// OTM option BUYS ≥ $1M premium, under 90 DTE. The window used to be 1–7 DTE with
-// 0DTE excluded, which meant the alerts and the page a trader checks them against
-// were showing two different populations. 0DTE is back in and the ceiling matches
-// that page's widest stop (≤90).
-const WHALE_MIN_PREMIUM  = Number(process.env.SIGNALS_WHALE_MIN_PREMIUM  || 1_000_000); // $
-const WHALE_DTE_MIN      = Number(process.env.SIGNALS_WHALE_DTE_MIN      || 0);    // 0DTE included
-const WHALE_DTE_MAX      = Number(process.env.SIGNALS_WHALE_DTE_MAX      || 90);   // matches /v3/whales ≤90
+// Whale prints (detector #4). THE /v3/whales PAGE IS THE DEFINITION, and as of
+// 2026-09-15 it is the SOURCE too.
+//
+// It used to only claim to be. The detector read /proxy/flow-history — a
+// DIFFERENT table (flow_prints, not lse_top_flow_prints) — and, because that
+// endpoint defaults `underlying` to SPX when the caller omits it, the tape it
+// saw was SPX-only. Every whale on any other ticker was invisible, and the two
+// surfaces could never have agreed no matter how the gates were tuned.
+//
+// Now the filters below are QUERY PARAMETERS on that page's own route, not
+// conditions this file evaluates. Changing one changes which rows come back;
+// there is no second copy of the rule to drift.
+const WHALE_MIN_PREMIUM  = Number(process.env.SIGNALS_WHALE_MIN_PREMIUM  || 1_000_000); // → min_premium
+const WHALE_DTE_MAX      = Number(process.env.SIGNALS_WHALE_DTE_MAX      || 90);        // → max_dte
+// The one filter /api/lse/whales has no control for, so it is applied here.
+// Default 0 keeps 0DTE in, which is what the page shows.
+const WHALE_DTE_MIN      = Number(process.env.SIGNALS_WHALE_DTE_MIN      || 0);
+// Rows per pull. The route caps at 500 and `sort=time` orders newest-first, so
+// on a day with more than this many qualifying prints it is the OLDEST that
+// fall off — which is the right end to lose when the job is alerting.
+const WHALE_ROW_LIMIT    = Number(process.env.SIGNALS_WHALE_ROW_LIMIT    || 500);
 
 // ── PG pool (same lazy, no-DB-safe pattern as gex-history-writer / play-recorder) ──
 let pool = null;
@@ -563,6 +580,16 @@ function evaluateFrame(cur, mem, cfg = {}) {
     mem.ibFormedDay = ibDay;
     const width = ctx.ibh - ctx.ibl;
     const conf = confluenceAt(ctx.ibh, 'IBH').concat(confluenceAt(ctx.ibl, 'IBL'));
+    // THE SCANNER'S READ OF THE RANGE THAT JUST CLOSED. Null when the static
+    // export is missing or the tape has no range yet — the sentence is dropped
+    // rather than padded with zeroes, same as the card's own empty state.
+    //
+    // The score here is SMALLER than the one the card shows later in the day,
+    // and that is correct: the ±22 one-sided-break term and the ×0.4 rotation
+    // damp both need a break, and at 10:30 nothing has broken yet. This is the
+    // read AT FORMATION, which is the moment the alert is about.
+    const read = ibLiveReadAt(cur.esCandles);
+    const readSide = read ? (read.side === 'H' ? 'HIGH' : 'LOW') : null;
     out.push({
       ts, kind: 'ib_formed', direction: 'neutral',
       setup: 'Initial Balance formed',
@@ -579,15 +606,40 @@ function evaluateFrame(cur, mem, cfg = {}) {
       // ibStatsCache is filled once a day by refreshIbStats(); if it is empty
       // (no DB, first run, endpoint down) the sentence simply stops after the
       // range rather than printing zeroes.
+      // THE ONLY MULTI-LINE `reason` IN THE FILE. Three lines, one claim each:
+      //
+      //   IB 5990.00–6010.00 (20.00 pts) · last 90: 41% broke high, …
+      //   CB Edge -63 STRONG BEARISH BREAK
+      //   83.3% break low first
+      //
+      // Line 1 is the range and the UNCONDITIONAL history of this market's
+      // breaks. Lines 2 and 3 are the scanner's CONDITIONED read of the range
+      // that just closed — this formation order, this width class, this inner
+      // ORB — and the contrast between line 1 and line 3 is the information.
+      //
+      // THE POPULATION IS NOT IN THE SENTENCE. Which stack survived and how
+      // many sessions are behind it are in `meta.liveRead`, not here: an alert
+      // is read in a glance, and "83.3% break low first" is the claim. The card
+      // is where you go to see what it was measured over.
+      //
+      // Newlines survive the TEXT column and Discord renders them. A surface
+      // that collapses whitespace needs `white-space: pre-line` on the row.
       reason: `IB ${ctx.ibl.toFixed(2)}–${ctx.ibh.toFixed(2)} (${width.toFixed(2)} pts)`
         + (ibStatsCache.n > 0
           ? ` · last ${ibStatsCache.n}: ${ibStatsCache.high}% broke high, ${ibStatsCache.low}% broke low`
             + `, ${ibStatsCache.both}% both, ${ibStatsCache.none}% contained`
+          : '')
+        + (read
+          ? `\nCB Edge ${read.scoreText} ${read.verdict}`
+            + `\n${read.sidePct}% break ${readSide.toLowerCase()} first`
           : ''),
       meta: {
         ibh: +ctx.ibh.toFixed(2), ibl: +ctx.ibl.toFixed(2), ibWidth: +width.toFixed(2),
         basis: +(basis || 0).toFixed(2),
         stats: ibStatsCache.n > 0 ? { ...ibStatsCache } : null,
+        // The whole Live Read, not just the two rendered numbers, so a row can
+        // be re-read later without re-deriving which population it came from.
+        liveRead: read,
       },
     });
   }
@@ -697,26 +749,32 @@ function evaluateFrame(cur, mem, cfg = {}) {
 }
 
 // ── pure detector #7: Whale prints (kind='whale_print') ──
-// A single OTM option PURCHASE ≥ WHALE_MIN_PREMIUM with 1–7 DTE. Sells are
-// ignored (short premium is a different trade — a whale *paying* for convexity
-// is the positioning signal), and 0DTE is excluded: same-day OTM lottos are the
-// noisiest part of the tape and don't express a directional view worth alerting.
+// ROWS IN ARE ALREADY WHALES. They come from /api/lse/whales with the page's
+// filters in the query string (min_premium, moneyness=otm, action=BUY, max_dte),
+// so this function decides nothing about whether a print QUALIFIES — it decides
+// whether the print has been ANNOUNCED. Re-checking premium/OTM/side here would
+// be a second copy of the page's rule, which is the exact failure this replaced:
+// two filters over two tables, drifting apart in silence.
+//
 //   call buy  → LONG   (paying up for upside)
 //   put  buy  → SHORT  (paying up for downside)
+//
 // Dedup has TWO layers:
-//   1) print identity (ts|symbol|price|size) — a re-poll of the same tape never
-//      re-fires a print already alerted. mem.whaleSeen, capped.
-//   2) per-CONTRACT cooldown (ticker|strike|type) — the coalescer can split one
-//      whale's fills into several blocks seconds apart, each a DISTINCT print id
-//      that rounds to the same "$1.3M" line. Without this, one whale posts 3-4
-//      identical alerts (the SNDK 1750P case). Once a contract fires, further
-//      whale prints on that exact contract are suppressed for WHALE_CONTRACT_COOLDOWN_MS.
-// `rows` = /proxy/flow-history tape shape: { ts, underlying, symbol, expiration,
-// strike, type:'C'|'P', side:'buy'|'sell', premium, is_otm, spot }.
+//   1) THE ARCHIVE'S OWN ROW ID. lse_top_flow_prints has a primary key, so the
+//      identity is the row's, not a (ts|symbol|price|size) tuple synthesized
+//      here and hoped to be unique. mem.whaleSeen, capped.
+//   2) per-CONTRACT cooldown (ticker|strike|type) — one whale's fills can be
+//      recorded as several rows seconds apart, each a DISTINCT id that rounds
+//      to the same "$1.3M" line. Without this, one whale posts 3-4 identical
+//      alerts (the SNDK 1750P case). Once a contract fires, further prints on
+//      that exact contract are suppressed for WHALE_CONTRACT_COOLDOWN_MS.
+//
+// `rows` = /api/lse/whales row shape: { id, ts, underlying, osi, type:'C'|'P',
+// strike, expiry, dte, side, action, size, price, premium, spot, sessionDate }.
 const WHALE_SEEN_MAX = 4000;
 const WHALE_CONTRACT_COOLDOWN_MS = Number(process.env.SIGNALS_WHALE_CONTRACT_COOLDOWN_MS || 10 * 60_000);
 function evaluateWhalePrints(rows, mem, cfg = {}) {
-  const C = { WHALE_MIN_PREMIUM, WHALE_DTE_MIN, WHALE_DTE_MAX, WHALE_CONTRACT_COOLDOWN_MS, ...cfg };
+  const C = { WHALE_DTE_MIN, WHALE_CONTRACT_COOLDOWN_MS, ...cfg };
   if (!mem.whaleContractAt) mem.whaleContractAt = new Map(); // contract key -> last fire ms
   const out = [];
   // NOTE: toggle is checked below, AFTER dedup bookkeeping (mem.whaleSeen /
@@ -726,60 +784,46 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
   if (!Array.isArray(rows) || !rows.length) return out;
   if (!mem.whaleSeen) mem.whaleSeen = new Set();
 
-  const todayEt = etDateStr();
-  const dteOf = (expiration) => {
-    if (!expiration) return null;
-    const exp = Date.parse(`${String(expiration).slice(0, 10)}T00:00:00-05:00`);
-    if (!Number.isFinite(exp)) return null;
-    const today = Date.parse(`${todayEt}T00:00:00-05:00`);
-    return Math.round((exp - today) / 86_400_000);
-  };
-
   // Funnel counters — when nothing fires, this is the ONLY way to know which
-  // gate ate the tape. Logged below on any poll that produces no signal.
-  const rej = { total: 0, side: 0, otm: 0, premium: 0, dte: 0, seen: 0 };
+  // gate ate the batch. Logged below on any poll that produces no signal.
+  const rej = { total: 0, shape: 0, dteMin: 0, seen: 0, contract: 0 };
 
   for (const r of rows) {
     if (!r) continue;
     rej.total++;
-    // Purchases only. NOTE: flow-processor coerces mid/unknown-side prints to
-    // side='buy' when writing the tape (tapeSide), so `side` alone would let
-    // unclassifiable prints through as "purchases". A real buy also carries a
-    // directional action ('BUY CALL'/'BUY PUT') and a non-neutral bucket — the
-    // neutral collapse is what tells the two apart.
-    if (r.side !== 'buy') { rej.side++; continue; }
-    if (r.bucket === 'neutral' || !String(r.action || '').startsWith('BUY')) { rej.side++; continue; }
-    // /proxy/flow-history maps the is_otm COLUMN to an isOtm FIELD before it goes
-    // over the wire. Accept both so this detector works against the HTTP tape and
-    // a raw flow_prints row alike.
-    const otm = r.isOtm ?? r.is_otm;
-    if (!otm) { rej.otm++; continue; }              // OTM only (frozen at print time)
-    const premium = Number(r.premium) || 0;
-    if (premium < C.WHALE_MIN_PREMIUM) { rej.premium++; continue; }
-    const dte = dteOf(r.expiration);
-    if (dte == null || dte < C.WHALE_DTE_MIN || dte > C.WHALE_DTE_MAX) { rej.dte++; continue; }
 
-    const ts = Number(r.ts);
-    if (!Number.isFinite(ts)) continue;
-    const id = `${ts}|${r.symbol || ''}|${r.price ?? ''}|${r.size ?? ''}`;
+    // `Number(null)` is 0, not NaN, so a null ts would sail through a plain
+    // isFinite check and stamp a signal at the epoch. Tested for explicitly.
+    const ts = r.ts == null ? NaN : Number(r.ts);
+    const id = r.id != null ? String(r.id) : null;
+    // A row with no id or no timestamp cannot be deduped or stamped, and a row
+    // that cannot be deduped would re-fire on every poll. Dropped, counted.
+    if (!id || !Number.isFinite(ts) || ts <= 0) { rej.shape++; continue; }
+
+    const dte = r.dte == null ? null : Number(r.dte);
+    if (C.WHALE_DTE_MIN > 0 && (dte == null || dte < C.WHALE_DTE_MIN)) { rej.dteMin++; continue; }
+
     if (mem.whaleSeen.has(id)) { rej.seen++; continue; }
     mem.whaleSeen.add(id);
 
-    const ticker = String(r.underlying || r.symbol || '').toUpperCase();
+    const ticker = String(r.underlying || r.osi || '').toUpperCase();
     const isCall = r.type === 'C';
     const direction = isCall ? 'long' : 'short';
     const strike = Number(r.strike);
+    const premium = Number(r.premium) || 0;
 
-    // Per-contract cooldown: collapse a whale whose fills the coalescer split into
-    // several near-identical blocks down to ONE alert. Keyed on the contract, not
+    // Per-contract cooldown: collapse a whale whose fills were recorded as
+    // several near-identical rows down to ONE alert. Keyed on the contract, not
     // the print, so a genuinely new whale on a different strike still fires.
     const contractKey = `${ticker}|${Number.isFinite(strike) ? strike : '?'}|${r.type}`;
     const lastFired = mem.whaleContractAt.get(contractKey) || 0;
-    if (ts - lastFired < C.WHALE_CONTRACT_COOLDOWN_MS) { rej.seen++; continue; }
+    if (ts - lastFired < C.WHALE_CONTRACT_COOLDOWN_MS) { rej.contract++; continue; }
     mem.whaleContractAt.set(contractKey, ts);
+
     const prem = premium >= 1e6 ? `$${(premium / 1e6).toFixed(1)}M` : `$${Math.round(premium / 1e3)}K`;
     // Score by conviction: bigger premium = higher score (3 → 5).
     const score = premium >= 5e6 ? 5 : premium >= 2.5e6 ? 4 : 3;
+    const expiry = r.expiry ? String(r.expiry).slice(0, 10) : null;
 
     if (!alertOn) continue; // toggle off — dedup state above still updated
 
@@ -795,24 +839,31 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
       priceSpx: Number(r.spot) || null,
       score,
       confluence: null,
-      reason: `${prem} OTM ${isCall ? 'call' : 'put'} purchased, ${dte}DTE (exp ${String(r.expiration).slice(0, 10)}) → ${isCall ? 'bullish' : 'bearish'} positioning`,
+      reason: `${prem} OTM ${isCall ? 'call' : 'put'} purchased`
+        + (dte == null ? '' : `, ${dte}DTE`)
+        + (expiry ? ` (exp ${expiry})` : '')
+        + ` → ${isCall ? 'bullish' : 'bearish'} positioning`,
       meta: {
         ticker, strike: Number.isFinite(strike) ? strike : null, type: r.type,
-        premium: Math.round(premium), dte, expiration: r.expiration ?? null,
+        premium: Math.round(premium), dte, expiration: expiry,
         size: r.size ?? null, price: r.price ?? null, spot: Number(r.spot) || null,
+        // The archive's own keys, so a stored signal can be matched back to the
+        // exact row /v3/whales is showing.
+        printId: id, osi: r.osi ?? null, action: r.action ?? null, side: r.side ?? null,
+        sessionDate: r.sessionDate ?? null,
       },
     });
   }
 
   // Whales are rare, so "no signal" is the normal case and indistinguishable
-  // from "the detector is broken" — which is exactly the hole we've been stuck
-  // in. Print the funnel whenever a non-empty tape yields nothing, so the logs
+  // from "the detector is broken" — which is exactly the hole this spent months
+  // in. Print the funnel whenever a non-empty batch yields nothing, so the logs
   // name the gate instead of us guessing at it.
   if (!out.length && rej.total > 0) {
     console.log(
-      `[signals] whale funnel — ${rej.total} print(s) in, 0 fired ` +
-      `(side/neutral ${rej.side}, not-OTM ${rej.otm}, <$${(C.WHALE_MIN_PREMIUM / 1e6).toFixed(1)}M ${rej.premium}, ` +
-      `dte outside ${C.WHALE_DTE_MIN}-${C.WHALE_DTE_MAX} ${rej.dte}, already-seen ${rej.seen})`
+      `[signals] whale funnel — ${rej.total} row(s) in, 0 fired ` +
+      `(no id/ts ${rej.shape}, under ${C.WHALE_DTE_MIN}DTE ${rej.dteMin}, ` +
+      `already-seen ${rej.seen}, contract cooldown ${rej.contract})`
     );
   }
 
@@ -832,11 +883,18 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
 }
 
 // ── engine loop ───────────────────────────────────────────────────────────────
-// Whale tape: the persisted flow_prints day tape, pulled at the $1M floor in SQL
-// so we're not dragging the full tape across the wire every eval. Polled on a
-// slower cadence than EVAL_MS (prints don't need 3s resolution) and seeded on the
-// first pass with `seeded=false` → that first batch only PRIMES the dedup set, so
-// a restart mid-session doesn't spam every whale print from earlier in the day.
+// Whale tape: TODAY'S ROWS OFF THE /v3/whales ENDPOINT, with that page's filters
+// as query parameters. Polled on a slower cadence than EVAL_MS (prints don't
+// need 3s resolution) and seeded on the first pass with `seeded=false` → that
+// first batch only PRIMES the dedup set, so a restart mid-session doesn't spam
+// every whale print from earlier in the day.
+//
+// `sides` is left at the route's default ('directional'), which drops prints
+// whose side could never be classified. Same call the page makes: a row you
+// cannot attribute to a buyer is not a weaker whale, it is an unreadable one.
+//
+// The route is auth:'subscriber' and INTERNAL_API_TOKEN takes the internal
+// bypass in enforceAuth — the same way this file already reads /api/ib-results.
 let whaleCache = { at: 0, rows: [], seeded: false };
 const WHALE_POLL_MS = Number(process.env.SIGNALS_WHALE_POLL_MS || 20_000);
 // On the seeding pass, prints newer than this still fire (a redeploy shouldn't
@@ -846,18 +904,34 @@ async function refreshWhales(base) {
   if (Date.now() - whaleCache.at < WHALE_POLL_MS) return null;
   whaleCache.at = Date.now();
   try {
-    const url = `${base}/proxy/flow-history?date=${etDateStr()}&limit=20000&minPremium=${WHALE_MIN_PREMIUM}`;
-    const res = await fetch(url, {
+    const day = etDateStr();
+    const qs = new URLSearchParams({
+      from: day, to: day,
+      min_premium: String(WHALE_MIN_PREMIUM),
+      moneyness: 'otm',
+      action: 'BUY',
+      max_dte: String(WHALE_DTE_MAX),
+      sort: 'time',
+      limit: String(WHALE_ROW_LIMIT),
+    });
+    const res = await fetch(`${base}/api/lse/whales?${qs}`, {
       headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
       cache: 'no-store',
     });
-    if (!res.ok) { console.log(`[signals] whale tape — /proxy/flow-history ${res.status}`); return null; }
+    if (!res.ok) { console.log(`[signals] whale tape — /api/lse/whales ${res.status}`); return null; }
     const j = await res.json().catch(() => ({}));
-    whaleCache.rows = Array.isArray(j.tape) ? j.tape : [];
-    // An empty tape at the $1M SQL floor is itself the answer (nothing that big
-    // printed, or flow_prints isn't being written) — distinguish it from "rows
-    // came back and every one was filtered out", which the funnel log covers.
-    if (!whaleCache.rows.length) console.log('[signals] whale tape — 0 rows ≥ $1M premium today');
+    // The route answers 200-with-error when there is no DB, rather than a 5xx,
+    // so an error field is a real failure even on a 200.
+    if (j && j.error) { console.log(`[signals] whale tape — ${j.error}`); return null; }
+    // Newest-first off the wire (`sort=time` is ts DESC). Reversed so the
+    // per-contract cooldown sees a whale's fills in the order they printed.
+    whaleCache.rows = (Array.isArray(j.rows) ? j.rows : []).slice().reverse();
+    // An empty archive for today is itself the answer (nothing that big printed,
+    // or lse_top_flow_prints isn't being written) — distinguish it from "rows
+    // came back and every one was deduped", which the funnel log covers.
+    if (!whaleCache.rows.length) {
+      console.log(`[signals] whale tape — 0 rows on /v3/whales today (≥ $${(WHALE_MIN_PREMIUM / 1e6).toFixed(1)}M, OTM, BUY, ≤${WHALE_DTE_MAX}DTE)`);
+    }
     return whaleCache.rows;
   } catch (e) {
     console.log(`[signals] whale tape — fetch failed: ${e.message}`);
@@ -1060,6 +1134,30 @@ async function refreshIbStats(base) {
   }
 }
 
+// ── The scanner's LIVE READ, quoted at 10:30 ────────────────────────────────
+// /v3/scanner → IB Stats → Live Read prints two numbers this alert never had:
+// the −100…+100 "Overall break bias" score and the gauge's "N% LOW/HIGH first".
+// ib-live-read.js is a port of the page's own functions against the page's own
+// static export — same population, same stack, same arithmetic — so the alert
+// and the card cannot disagree.
+//
+// WINDOW IS PINNED TO 60. computeContextLevels() builds IBH/IBL from 09:30–10:30
+// and nothing else; asking the Live Read for a 15m or 30m range would describe a
+// DIFFERENT range from the one in the same sentence.
+const IB_LIVE_READ_WIN = 60;
+
+// Required LAZILY and never cached as a failure: a process whose public/data is
+// missing still starts, and the alert just drops the sentence.
+function ibLiveReadAt(esCandles) {
+  try {
+    const m = require('./ib-live-read');
+    return m.liveReadAt(esCandles, { symbol: IB_STATS_SYMBOL, win: IB_LIVE_READ_WIN });
+  } catch (e) {
+    console.log(`[signals] ib live read unavailable: ${e.message}`);
+    return null;
+  }
+}
+
 let cbCache = { spx: null, size: null, at: 0 };
 async function refreshCb(base) {
   if (Date.now() - cbCache.at < 60_000) return;
@@ -1132,6 +1230,10 @@ function readFrame() {
     cbSpx:   cbCache.spx,
     cbSize:  cbCache.size,
     ctx:     computeContextLevels(s.esCandles),
+    // The RAW 5m tape as well as the levels derived from it: the 10:30 Live
+    // Read re-reads the range bars themselves (formation order, the inner
+    // ORB, the midpoint close), none of which survive into `ctx`.
+    esCandles: Array.isArray(s.esCandles) ? s.esCandles : [],
     chartReady: !!(s.status && s.status.chartReady),
   };
 }
@@ -1228,7 +1330,7 @@ module.exports = {
   getRecentSignals,
   runOnce,
   evaluateFrame,   // pure — used by signals-engine.selftest.js
-  evaluateWhalePrints,     // pure — OTM ≥$1M 0-90DTE option BUYS off the flow tape (#7)
+  evaluateWhalePrints,     // pure — rows off /api/lse/whales → one signal each (#7)
   evaluateGexChangeTop,    // pure — new scanner picks → one signal each (#8)
   computeContextLevels,
   inSession,
