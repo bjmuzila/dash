@@ -44,8 +44,8 @@ import {
   CHAIN_CELL,
   HEAT_SKINS,
   levelFillBg,
+  nearCoreFillBg,
   skinMetricBg,
-  skinNearCoreBg,
   skinRankBg,
   type HeatSkin,
 } from './heatSkins'
@@ -172,6 +172,8 @@ export interface ChainMatrixProps {
   colScales: Scale[]
   volMvcByCol: Array<number | null>
   mvcByCol: Array<number | null>
+  /** |active greek| at each column's core — NEAR CORE's denominator. */
+  coreAbsByCol: number[]
   valueAt: (col: ExpColumn, strike: number) => number | null
   /** "" when live, or the replayed session's date — decides which column counts
    *  as 0DTE and is therefore excluded from ⅀ Total. */
@@ -209,6 +211,7 @@ export const ChainMatrix = memo(function ChainMatrix({
   colScales,
   volMvcByCol,
   mvcByCol,
+  coreAbsByCol,
   valueAt,
   sessionDate,
   showTotalCol,
@@ -233,6 +236,11 @@ export const ChainMatrix = memo(function ChainMatrix({
   const isCountMode = isOiMode || isVolMode
   const fmtVal = isOiMode ? fmtChg : isVolMode ? fmtCount : fmtMoney
 
+  // The ★ marks the core of whatever tab is on, so its tooltip has to name that
+  // tab — "highest |net GEX|" on the PREM tab is simply wrong.
+  const coreTip = `CB - Core Bullseye — highest |${greekMode === 'oi' ? 'ΔOI' : greekMode.toUpperCase()}|`
+  const coreTotalTip = `CB - Core Bullseye — highest |⅀ ${greekMode === 'oi' ? 'ΔOI' : greekMode.toUpperCase()}|`
+
   const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.classic
   const CELL = CHAIN_CELL[heatSkin] ?? CHAIN_CELL.classic
 
@@ -244,12 +252,13 @@ export const ChainMatrix = memo(function ChainMatrix({
   // two narrow tracks in a wall of grey.
   //
   // With hideUnsel on, the unpicked columns and strikes are dropped from the
-  // grid rather than washed out. Columns are filtered out of renderIdx, so the
-  // gridTemplateColumns built from it shrinks with them and the survivors
-  // inflate to the full width. Strikes are filtered out of the ladder, so every
-  // per-strike pass below — ⅀ Total, the column totals, the levels-only walls —
-  // runs over exactly what is on screen and the ⅀ figure keeps meaning "the sum
-  // of what you are looking at".
+  // grid rather than washed out. Columns are filtered out of renderIdx and the
+  // tracks they vacated are RESERVED (see ghostExpCols), so the picked columns
+  // keep the exact width they had and simply slide left — hiding rearranges the
+  // grid, it does not resize it. Strikes are filtered out of the ladder, so
+  // every per-strike pass below — ⅀ Total, the column totals, the levels-only
+  // walls — runs over exactly what is on screen and the ⅀ figure keeps meaning
+  // "the sum of what you are looking at".
   //
   // Both are gated on there BEING a selection: with nothing picked there is
   // nothing unpicked, and the toggle is inert rather than emptying the grid.
@@ -261,14 +270,21 @@ export const ChainMatrix = memo(function ChainMatrix({
     : visibleStrikes
 
   // Drop holiday / non-trading expirations entirely; keep empty placeholders.
-  const renderIdx = Array.from({ length: gridCols })
+  // This is the LAYOUT set — what the grid would render with nothing hidden, and
+  // therefore how many expiry tracks it is entitled to either way.
+  const layoutIdx = Array.from({ length: gridCols })
     .map((_, i) => i)
     .filter((i) => {
       const c = columns[i]
-      if (!c) return !hideCols
-      if (hideCols && !selExps.has(c.expiration)) return false
+      if (!c) return true
       return isTradingDay(new Date(`${c.expiration}T00:00:00`))
     })
+  const renderIdx = hideCols
+    ? layoutIdx.filter((i) => {
+        const c = columns[i]
+        return c != null && selExps.has(c.expiration)
+      })
+    : layoutIdx
 
   // ── ⅀ Total ────────────────────────────────────────────────────────────────
   // Per strike, across every rendered expiration EXCEPT 0DTE — where "0DTE"
@@ -305,11 +321,11 @@ export const ChainMatrix = memo(function ChainMatrix({
   // summing. Gated on the GEX tab exactly like the per-column ★ — "the core
   // level" is a claim about gamma, not about a 15-minute delta.
   const totalMvc: number | null =
-    greekMode === 'gex'
-      ? ([...rowTotals.entries()]
-          .filter(([, v]) => v !== 0)
-          .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0]?.[0] ?? null)
-      : null
+    [...rowTotals.entries()]
+      .filter(([, v]) => v !== 0)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0]?.[0] ?? null
+  /** |⅀| at the ⅀ column's own core — NEAR CORE's denominator there. */
+  const totalCoreAbs = totalMvc == null ? 0 : Math.abs(rowTotals.get(totalMvc) ?? 0)
 
   // ── Levels-only mode ───────────────────────────────────────────────────────
   // Intensity at its bottom stop drops the heat field entirely and paints ONLY
@@ -327,16 +343,16 @@ export const ChainMatrix = memo(function ChainMatrix({
     : null
 
   // ── Near-core strikes ──────────────────────────────────────────────────────
-  // Levels-only answers "where is the wall" and stops there: with the gamma
-  // field off, a strike carrying 80% of the Core paints identically to one
-  // carrying 2% — both are simply not a wall. NEAR CORE puts those back, tinted
-  // on the SIGN like ordinary heat but scaled against the column's CB rather
-  // than its max, so "half of Core" means the same thing in every column
-  // regardless of how big that column is.
+  // The heat ramp scales every strike against its column MAX. NEAR CORE asks a
+  // different question — what fraction of the CORE is this — and answers it in
+  // the Core's own gold, washed along the same diagonal the ★ cell wears. So
+  // "half of Core" means the same thing in a $40B column and a $200M one, and
+  // the mark reads as family with the Core rather than as more heat.
   //
-  // Only in levels-only. Everywhere else the full heat field is already drawing
-  // this relationship with more resolution than a threshold can.
-  const nearCoreOn = levelsOnly && nearCore
+  // At EVERY slider position, not just the bottom stop. At the bottom stop it is
+  // the only thing between CB/CW/PW and a blank column; above it the ramp is
+  // answering the other question and this one still is not on screen.
+  const nearCoreOn = nearCore
   const nearCoreThreshold = Math.min(Math.max((nearCorePct || 0) / 100, 0), 0.99)
 
   // ── Reserved (ghost) tracks ────────────────────────────────────────────────
@@ -349,10 +365,16 @@ export const ChainMatrix = memo(function ChainMatrix({
   // The tracks need real (empty) elements, one per row: the grid auto-places and
   // rows are `display: contents` wrappers, so a row short of a cell would pull
   // the next row's first cell up and shear the grid.
-  // Hiding is the one case where the reserved tracks are wrong: their whole job
-  // is to hold a hidden column's width open, which is exactly what HIDE is asked
-  // to reclaim. Replay is the only caller that passes layoutExpCols at all.
-  const ghostExpCols = hideCols ? 0 : Math.max(0, (layoutExpCols || 0) - renderIdx.length)
+  // Hiding reserves tracks for exactly the same reason replay does, so the two
+  // share the mechanism: the base is whichever is larger — the session's full
+  // expiry count (replay) or what would have rendered unhidden. Live passes
+  // layoutExpCols = 0, so before HIDE existed this was 0 and the whole thing
+  // stayed switched off; with columns hidden, layoutIdx.length takes over and
+  // the vacated tracks are held open at the right-hand end. That is what makes
+  // the surviving columns slide left at their original width instead of
+  // stretching to fill the container.
+  const layoutBase = Math.max(layoutExpCols || 0, hideCols ? layoutIdx.length : 0)
+  const ghostExpCols = Math.max(0, layoutBase - renderIdx.length)
   const ghostTotalCols = layoutExpCols > 0 && !showTotalCol ? 1 : 0
   const ghostCols = ghostExpCols + ghostTotalCols
   const ghostTemplate =
@@ -591,7 +613,9 @@ export const ChainMatrix = memo(function ChainMatrix({
               const cellScale = colScales[colIdx] ?? { max: 1, top3: [] as number[] }
               const value = col ? valueAt(col, strike) : null
 
-              const isMvc = greekMode === 'gex' && col != null && mvcByCol[colIdx] === strike
+              // ★ marks the core of the ACTIVE greek — not GEX on every tab. See
+              // coreCols in useChainData for why the claim is scoped to the tab.
+              const isMvc = col != null && mvcByCol[colIdx] === strike
               // ✕ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
               const isVolMvc =
                 greekMode === 'gex' && dataMode === 'oi-vol' && col != null && volMvcByCol[colIdx] === strike
@@ -641,17 +665,25 @@ export const ChainMatrix = memo(function ChainMatrix({
               // A wall paints as a wall; everything else in levels-only is
               // 'transparent' unless NEAR CORE claims it. The wall check comes
               // first so turning the threshold down can never repaint CB/CW/PW.
-              const cbAbsHere = levelsOnly ? (wallsByCol[colIdx]?.cbAbs ?? 0) : 0
               const heat = levelsOnly
                 ? cellWall && value != null
                   ? skinRankBg(value, WALL_RANK[cellWall], SK)
-                  : nearCoreOn && isNearCore(value, cbAbsHere, nearCoreThreshold)
-                    ? skinNearCoreBg(value as number, cbAbsHere, nearCoreThreshold, SK)
-                    : 'transparent'
+                  : 'transparent'
                 : value != null
                   ? skinMetricBg(value, cellScale.max, cellRank, intensity, SK)
                   : 'transparent'
-              const background = cellLevel ? (levelFillBg(cellLevel, SK, heat) ?? heat) : heat
+              // Near-core is the fallback layer, never an override: CB already
+              // wears the full wash and CW / PW have colours of their own, so a
+              // cell that is any of the three keeps them whatever the threshold
+              // is set to.
+              const cbAbsHere = coreAbsByCol[colIdx] ?? 0
+              const nearHit =
+                nearCoreOn && !isMvc && !cellWall && isNearCore(value, cbAbsHere, nearCoreThreshold)
+              const background = cellLevel
+                ? (levelFillBg(cellLevel, SK, heat) ?? heat)
+                : nearHit
+                  ? (nearCoreFillBg(value as number, cbAbsHere, nearCoreThreshold, SK, heat) ?? heat)
+                  : heat
 
               return (
                 <div
@@ -709,7 +741,7 @@ export const ChainMatrix = memo(function ChainMatrix({
                       // wash only fades further along the diagonal), so the ★
                       // already has its own ground and a glow just softens it.
                       <span
-                        title="CB - Core Bullseye — highest |net GEX|"
+                        title={coreTip}
                         style={{
                           position: 'absolute',
                           top: 1,
@@ -724,7 +756,7 @@ export const ChainMatrix = memo(function ChainMatrix({
                       </span>
                     ) : (
                       <span
-                        title="CB - Core Bullseye — highest |net GEX|"
+                        title={coreTip}
                         style={{ color: LEVEL_COLORS.cb, lineHeight: 1, ...MARKER_EDGE }}
                       >
                         ★
@@ -789,16 +821,15 @@ export const ChainMatrix = memo(function ChainMatrix({
                 // The ⅀ column is ranked as its OWN column everywhere else, so
                 // it gets its own Core here too — near-core in ⅀ means "a real
                 // fraction of the summed Core", not of any one expiry's.
-                const totCbAbs = levelsOnly ? (totalWalls?.cbAbs ?? 0) : 0
                 const heat = levelsOnly
                   ? totWall && tot !== 0
                     ? skinRankBg(tot, WALL_RANK[totWall], SK)
-                    : nearCoreOn && isNearCore(tot, totCbAbs, nearCoreThreshold)
-                      ? skinNearCoreBg(tot, totCbAbs, nearCoreThreshold, SK)
-                      : 'transparent'
+                    : 'transparent'
                   : tot !== 0
                     ? skinMetricBg(tot, totalScale.max, rankOf(tot, totalScale.top3), intensity, SK)
                     : 'transparent'
+                const totNearHit =
+                  nearCoreOn && !isTotMvc && !totWall && isNearCore(tot, totalCoreAbs, nearCoreThreshold)
                 // Same rule the expiry cells use: levels-only names the wall,
                 // every other slider position marks the CORE level only.
                 const totLevel = !SK.levelFill ? null : (totWall ?? (isTotMvc ? ('cb' as const) : null))
@@ -813,7 +844,11 @@ export const ChainMatrix = memo(function ChainMatrix({
                       color: tot === 0 ? CHAIN.none : alpha(T.text, 0.92),
                       ...(CELL.shadow && tot !== 0 ? { textShadow: CELL.shadow } : {}),
                       borderRadius: CELL.radius || undefined,
-                      background: totLevel ? (levelFillBg(totLevel, SK, heat) ?? heat) : heat,
+                      background: totLevel
+                        ? (levelFillBg(totLevel, SK, heat) ?? heat)
+                        : totNearHit
+                          ? (nearCoreFillBg(tot, totalCoreAbs, nearCoreThreshold, SK, heat) ?? heat)
+                          : heat,
                       borderLeft: `2px solid ${alpha(T.cyan, selMode ? 0.8 : 0.35)}`,
                       boxShadow: isATM
                         ? `inset 0 2px 0 ${T.text}, inset 0 -2px 0 ${T.text}, inset -2px 0 0 ${T.text}`
@@ -841,7 +876,7 @@ export const ChainMatrix = memo(function ChainMatrix({
                     {isTotMvc &&
                       (SK.levelFill ? (
                         <span
-                          title="CB - Core Bullseye — highest |⅀ net GEX|"
+                          title={coreTotalTip}
                           style={{
                             position: 'absolute',
                             top: 1,
@@ -856,7 +891,7 @@ export const ChainMatrix = memo(function ChainMatrix({
                         </span>
                       ) : (
                         <span
-                          title="CB - Core Bullseye — highest |⅀ net GEX|"
+                          title={coreTotalTip}
                           style={{ color: LEVEL_COLORS.cb, lineHeight: 1, marginRight: 'auto', ...MARKER_EDGE }}
                         >
                           ★

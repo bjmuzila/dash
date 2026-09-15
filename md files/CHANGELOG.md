@@ -23382,3 +23382,67 @@ Files: `cbedge-v3/src/pages/OptionsChain.tsx`,
 `cbedge-v3/src/pages/optionsChain/useChainData.ts`,
 `cbedge-v3/src/pages/optionsChain/chainMath.ts`,
 `cbedge-v3/src/pages/optionsChain/heatSkins.ts`.
+
+## 2026-09-15 (g) — v3 Options Chain: the ★ core follows the active greek; NEAR CORE works at any Intensity
+
+Two things the previous pass got too narrow.
+
+### The ★ core is now the ACTIVE greek's core, at any Intensity
+`isMvc` was gated on `greekMode === 'gex'`, so DEX / CHEX / VEX / OI / VOL /
+PREM had the page's loudest mark missing entirely and no answer to "which strike
+is this tab's biggest". The per-column core is now read through `valueAt`
+(`coreCols` in useChainData), so it is GEX on the GEX tab and that tab's own
+core everywhere else, and the ★ + gold CB wash paint wherever the Intensity
+slider sits. Tooltips name the tab (`highest |PREM|`, `highest |ΔOI|`) instead of
+claiming GEX on every one. The ⅀ Total column's own core is ungated the same way.
+
+The ✕ stays GEX-only — "the volume-GEX peak" is a claim about gamma specifically.
+
+### NEAR CORE: gold, and at every slider position
+Was levels-only and painted on the SIGN. Now:
+
+- **Gold, not the sign.** Near-core strikes wear the *same* diagonal wash the
+  Core does, pulled back — the Core's colour along the Core's geometry, so the
+  two read as one family and the figure still lands on its own sign where the
+  gold has faded. `nearCoreFillBg()` replaces `skinNearCoreBg()`; the per-skin
+  `nearCore` tuple is now a GOLD alpha band (CLASSIC `[0.14, 0.40]`, VIVID
+  `[0.22, 0.60]`), both under CB's own `0.85` so the Core is never out-painted.
+- **Every Intensity position.** The heat ramp scales against the column MAX;
+  near-core asks what fraction of the CORE a strike is, which is a different
+  question and was not on screen at any slider position. The cog control is no
+  longer inert above the bottom stop.
+- Denominator is `coreAbsByCol` (|active greek| at the column's core), so it
+  follows the tab like the ★ does; the ⅀ column uses its own summed core.
+- Still a fallback layer, never an override: CB / CW / PW keep their own paint
+  whatever the threshold is set to.
+
+Files: `cbedge-v3/src/pages/OptionsChain.tsx`,
+`cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`,
+`cbedge-v3/src/pages/optionsChain/useChainData.ts`,
+`cbedge-v3/src/pages/optionsChain/chainMath.ts`,
+`cbedge-v3/src/pages/optionsChain/heatSkins.ts`.
+
+## 2026-09-15 (h) — v3 Options Chain: HIDE REST keeps the cell size, slides left
+
+HIDE REST dropped the unpicked columns and let the survivors stretch to fill the
+container — so hiding down to two expiries turned two narrow tracks into two
+very wide ones, which is a different-looking page rather than a filtered view of
+the same one.
+
+The reserved-track ("ghost") mechanism replay already uses now covers hiding
+too. `renderIdx` is split into a LAYOUT set (`layoutIdx` — everything that would
+render unhidden) and the render set, and `ghostExpCols` reserves the difference:
+
+    const layoutBase = Math.max(layoutExpCols || 0, hideCols ? layoutIdx.length : 0)
+    const ghostExpCols = Math.max(0, layoutBase - renderIdx.length)
+
+Ghost tracks are sized with the same `minmax(78|84px, 1fr)` as real ones, so the
+picked columns keep the exact width they had and simply slide left, with the
+vacated tracks held open at the right-hand end. Live still passes
+`layoutExpCols = 0`, so nothing changes when HIDE is off.
+
+Empty placeholder columns are kept in the layout set again (they were being
+dropped while hiding), so they hold their position rather than shifting the
+ladder.
+
+Files: `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`.

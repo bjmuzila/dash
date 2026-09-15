@@ -533,32 +533,18 @@ export default function OptionsChain({
                       </span>
                     </div>
                   </Field>
-                  {/* NEAR CORE — only reachable from the bottom stop, because
-                      it only means anything there. Above it the gamma field is
-                      already drawing every strike's size with more resolution
-                      than a threshold can, and a second ramp on top of it would
-                      just be a brighter version of what is already painted.
-                      Rendered INERT rather than hidden (the Greek tabs' rule),
-                      so sliding off LEVELS does not make a control disappear. */}
+                  {/* NEAR CORE — the Core's own gold, washed onto the strikes
+                      carrying a real fraction of it. Lives at EVERY slider
+                      position, not just the bottom stop: the heat ramp scales
+                      against the column MAX, which is a different question, and
+                      "how big is this next to Core" is otherwise unanswered
+                      wherever the slider sits. CB / CW / PW keep their own
+                      paint — the threshold can never repaint a level. */}
                   <Field
                     label="Near core"
-                    hint="Levels-only: also tint the strikes carrying this share or more of their column's Core |net|. Walls keep their own colour."
+                    hint="Wash the strikes carrying this share or more of their column's core in the core's gold. Works at any Intensity, on any greek. CB / CW / PW keep their own colour."
                   >
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        width: '100%',
-                        opacity: c.levelsOnly ? 1 : 0.4,
-                        pointerEvents: c.levelsOnly ? undefined : 'none',
-                      }}
-                      title={
-                        c.levelsOnly
-                          ? undefined
-                          : 'Levels only — drag Intensity to its bottom stop to mark near-core strikes'
-                      }
-                    >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
                       <button
                         onClick={c.toggleNearCore}
                         style={{ ...segStyle(c.nearCore), height: 26, padding: '0 10px', fontSize: 'var(--text-2xs)' }}
@@ -688,6 +674,7 @@ export default function OptionsChain({
             colScales={c.colScales}
             volMvcByCol={c.volMvcByCol}
             mvcByCol={c.mvcByCol}
+            coreAbsByCol={c.coreAbsByCol}
             valueAt={c.valueAt}
             sessionDate={c.sessionDate}
             showTotalCol={c.showTotalCol}

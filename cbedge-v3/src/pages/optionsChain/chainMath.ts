@@ -206,12 +206,15 @@ export interface ColumnWalls {
   cw: number | null
   pw: number | null
   /**
-   * |net| AT the CB strike — the column's own yardstick. Levels-only paints only
-   * CB/CW/PW, which answers "where is the wall" and not "is anything else near
-   * it": a strike carrying 80% of the Core reads exactly like one carrying 2%.
-   * Carrying the magnitude out with the strikes lets the grid mark the ones that
-   * are a real fraction of Core without re-scanning the column. 0 when the
-   * column is empty.
+   * |net| AT the CB strike — the column's own yardstick, carried out with the
+   * strikes so a caller can ask "what fraction of Core is this" without
+   * re-scanning the column. 0 when the column is empty.
+   *
+   * The chain's own NEAR CORE reads its denominator from useChainData's
+   * coreCols instead, because that one follows the ACTIVE greek and these walls
+   * are only computed in levels-only. This stays because it is the honest
+   * completion of what columnWalls knows, and it is what any caller measuring
+   * against CB should use rather than re-deriving it.
    */
   cbAbs: number
 }

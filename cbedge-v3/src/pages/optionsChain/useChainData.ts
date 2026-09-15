@@ -808,12 +808,44 @@ export function useChainData(opts: UseChainDataOpts) {
     [columns, visibleStrikes, valueAt],
   )
 
-  /** MVC per column = the visible strike with the highest ABSOLUTE net GEX.
-   *  Always keyed on GEX (that is the MVC definition), whatever tab is active. */
-  const mvcByCol = useMemo(
-    () => columns.map((col) => peakStrike(col, visibleStrikes, (c) => c.gex)),
-    [columns, visibleStrikes],
+  /**
+   * CORE per column = the visible strike with the highest ABSOLUTE value of the
+   * ACTIVE greek — read through valueAt, so it is GEX on the GEX tab and DEX /
+   * CHEX / VEX / OI / VOL / PREM on theirs.
+   *
+   * It used to be pinned to GEX and the ★ was suppressed on every other tab, on
+   * the reading that "MVC" is a gamma definition. That left six tabs with the
+   * page's loudest mark missing and no answer at all to "which strike is this
+   * tab's biggest" — the question the mark exists to answer. The claim is now
+   * scoped to the tab you are on: the ★ on the PREM tab marks the premium core,
+   * and its tooltip says so. The ✕ below is the one that stays GEX-only,
+   * because "the volume-GEX peak" is a statement about gamma specifically.
+   *
+   * Paired with the |value| there, which is the yardstick NEAR CORE measures
+   * every other strike in the column against.
+   */
+  const coreCols = useMemo(
+    () =>
+      columns.map((col) => {
+        let strike: number | null = null
+        let abs = 0
+        for (const s of visibleStrikes) {
+          if (s == null) continue
+          const v = valueAt(col, s)
+          if (v == null) continue
+          const a = Math.abs(v)
+          if (a > abs) {
+            abs = a
+            strike = s
+          }
+        }
+        return { strike, abs }
+      }),
+    [columns, visibleStrikes, valueAt],
   )
+  const mvcByCol = useMemo(() => coreCols.map((c) => c.strike), [coreCols])
+  /** |active greek| at each column's core — NEAR CORE's denominator. */
+  const coreAbsByCol = useMemo(() => coreCols.map((c) => c.abs), [coreCols])
   /** The pure-volume GEX peak — the ✕ marker on the OI+Vol view. */
   const volMvcByCol = useMemo(
     () => columns.map((col) => peakStrike(col, visibleStrikes, (c) => c.volGex)),
@@ -912,9 +944,12 @@ export function useChainData(opts: UseChainDataOpts) {
     }
   }, [])
   // ── Near core ──────────────────────────────────────────────────────────────
-  // Levels-only paints CB / CW / PW and nothing else, which is the point of it
-  // and also its blind spot: a strike carrying 80% of the Core looks exactly
-  // like one carrying 2%. This marks the ones that are a real fraction of it.
+  // The heat ramp measures every strike against its column MAX. "How big is
+  // this next to the CORE" is a different question and it is not otherwise on
+  // the screen at any slider position — hardest of all at the bottom stop, where
+  // the field is off entirely and a strike carrying 80% of the Core paints
+  // exactly like one carrying 2%. This marks the ones that are a real fraction
+  // of it, in the Core's own gold, wherever the slider is.
   // Default 50% — "half of Core" is the question Brandon actually asks of the
   // levels view, and it is the number that reads without being a second chain.
   const [nearCore, setNearCore] = useState(false)
@@ -1032,6 +1067,7 @@ export function useChainData(opts: UseChainDataOpts) {
     layoutExpCols,
     colScales,
     mvcByCol,
+    coreAbsByCol,
     volMvcByCol,
     valueAt,
     oiSnapshot,
