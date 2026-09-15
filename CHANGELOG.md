@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 (b) - Whale floor stop at $500K, and the contract probe stops drawing at 0.7x
+
+`cbedge-v3/src/pages/Whales.tsx` gained a `≥$500K` stop on the FLOOR menu and a
+header note when the pick is under the server's own floor - the API clamps
+`min_premium` up to `TF_WHALE_FLOOR` (`LSE_WHALE_FLOOR`, $1M default), so until
+that env var is lowered $500K returns the $1M list.
+`cbedge-v3/src/board/topFlow/ContractProbe.tsx` now measures its container
+(ResizeObserver) and sets the viewBox width to it, so one user unit is one CSS
+pixel instead of a fixed 320-unit canvas squashed into a ~230px board tile;
+readout lines step up to 12px/10px inline.
+
 ## 2026-09-15 (a) - v3 home board: named layouts, and loading any of them
 
 `cbedge-v3/src/board/layoutStore.ts` gained a named-layout library
@@ -22601,3 +22612,11 @@ Change: `public/v3` added to root `.gitignore` and untracked via
 `git rm -r --cached public/v3`. A failed v3 build now 404s loudly instead of
 silently serving a fossil. The underlying build failure inside the image is still
 to be diagnosed.
+
+## 2026-09-15 — Analytics: Strategy Builder card removed
+
+`cbedge-v3/src/pages/Analysis.tsx` — dropped the `StrategyBuilderCard` import and
+the full-width slot it occupied at the bottom of the analytics grid, so the AI
+daily strategy card no longer renders on `/v3/analytics`. The component file
+`cbedge-v3/src/pages/analysis/cards/StrategyBuilder.tsx` was left in place,
+unreferenced, rather than deleted.

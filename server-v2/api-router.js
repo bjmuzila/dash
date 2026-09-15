@@ -135,6 +135,16 @@ catch (e) { console.warn('[api-router] _lib-attribution.cjs not loaded — visit
 let levelsEngine = null;
 try { levelsEngine = require('./levels-engine.js'); }
 catch (e) { console.warn('[api-router] levels-engine.js not loaded:', e.message); }
+// Daily expected-move band — server-v2/daily-em.js. Computes the front-expiry
+// ATM straddle ONCE per ET session, anchors it to the previous session's close
+// and freezes the result in its own `daily_em` table, so every client draws the
+// identical two levels all day. Owns its table through libDb.pgQuery rather
+// than through the _lib-db.cjs bundle (see the header in that file). Loaded
+// defensively: without it /api/daily-em is simply never registered and the GEX
+// Chart's EM rails stay off.
+let dailyEm = null;
+try { dailyEm = require('./daily-em'); }
+catch (e) { console.warn('[api-router] daily-em.js not loaded — daily EM band off:', e.message); }
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -11049,6 +11059,67 @@ Return exactly one element per input key, in the same order. Never merge, split,
     register('/api/em-tracker/import-sheet', {
       auth: 'owner', methods: ['POST'],
       async handler(req, res) { send(res, 410, { error: 'Endpoint retired — use /api/em-tracker/evaluate' }); },
+    });
+  }
+
+  // /api/daily-em?ticker=SPX — the DAILY expected-move band, frozen for the session.
+  //
+  // Everything the product called "EM" before this was the WEEKLY band:
+  // em_tracker, /api/levels, the /em page, the GEX Chart's two ±1σ tiles. This is
+  // the other one — today's front-expiry ATM straddle, anchored to the PREVIOUS
+  // session's close — and the whole reason it has a table instead of being
+  // computed per request is that it must not move. A level that slides as the
+  // straddle decays is not a level; you cannot say "price rejected the EM high"
+  // about a line that was somewhere else an hour ago. See server-v2/daily-em.js.
+  //
+  //   GET                  the recorded row for today, recording it if this is
+  //                        the session's first read. ?date=YYYY-MM-DD reads a
+  //                        past session (read-only — a past band cannot be
+  //                        reconstructed from a live chain and is never written).
+  //   POST ?force=1        recompute and overwrite today's row. Owner/internal
+  //                        only, and the reason a bad first read of the day is
+  //                        fixable rather than permanent.
+  //
+  // Subscriber on the read for the same reason /api/em-tracker is: it draws on
+  // a customer's board, and an owner-gated read is a card that is silently
+  // empty for everyone but Brandon.
+  if (dailyEm) {
+    const emTicker = (raw) => {
+      const t = String(raw ?? 'SPX').trim().toUpperCase();
+      return /^[A-Z0-9/.^-]{1,12}$/.test(t) ? t : 'SPX';
+    };
+    register('/api/daily-em', {
+      auth: 'subscriber', methods: ['GET', 'POST'],
+      async handler(req, res, ctx, access) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const ticker = emTicker(sp.get('ticker'));
+          if (req.method === 'POST') {
+            // Same two-verb shape /api/em-tracker uses: subscriber reads, owner
+            // writes, enforced in the handler rather than by `auth` so one
+            // pathname can carry both.
+            const token = req.headers['x-internal-token'] || '';
+            const trusted = !!ctx.internalToken && token === ctx.internalToken;
+            const isOwner = trusted || access?.who === 'internal'
+              || (!!ctx.ownerUserId && access?.userId === ctx.ownerUserId);
+            if (!isOwner) { send(res, 403, { error: 'owner-only' }); return; }
+            const out = await dailyEm.getOrRecord(ctx, ticker, { force: true });
+            send(res, 200, { ok: true, band: out.band, recomputed: out.fresh }, { 'Cache-Control': NO_STORE });
+            return;
+          }
+          const date = (sp.get('date') || '').trim();
+          const out = await dailyEm.getOrRecord(ctx, ticker, date ? { date } : {});
+          // 200 with a null band, not a 404: "no band recorded for this session
+          // yet" is a normal state every morning before the first read lands,
+          // and the card draws nothing rather than showing an error for it.
+          send(res, 200, {
+            ticker,
+            date: date || dailyEm.etDate(),
+            band: out.band,
+            fresh: out.fresh,
+          }, { 'Cache-Control': NO_STORE });
+        } catch (err) { send(res, 500, { error: String(err?.message || err) }); }
+      },
     });
   }
 

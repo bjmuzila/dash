@@ -57,6 +57,7 @@ import {
   DATA_MODE_LABEL,
   DISPLAY_PERCENTS,
   GREEK_MODES,
+  NEAR_CORE_PCTS,
   useChainData,
   type GreekMode,
   type ReplayScope,
@@ -341,6 +342,50 @@ export default function OptionsChain({
               </button>
             )}
 
+            {/* DIM ↔ HIDE — what a focus selection does to everything it did
+                NOT pick. Dimming holds the grid's geometry still, which is the
+                right default and the wrong thing once the pick is what you came
+                to read: two expiries end up two narrow tracks in a wall of grey.
+                HIDE drops the rest and lets the survivors fill the page.
+
+                Rides beside the FOCUS pill rather than in the cog, because it is
+                only meaningful while a selection is live and that is exactly
+                when the pill is on screen. The preference itself outlives the
+                selection (localStorage), so clearing focus and picking again
+                does not silently go back to dimming. */}
+            {c.hasSel && (
+              <button
+                onClick={c.toggleHideUnsel}
+                title={
+                  c.hideUnsel
+                    ? 'Showing only the focused expiries / strikes — click to dim the rest in place instead'
+                    : 'Dimming everything outside the focus — click to hide it entirely and let the focused columns fill the width'
+                }
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  height: 20,
+                  padding: '0 8px',
+                  borderRadius: 999,
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  border: `1px solid ${alpha(T.cyan, c.hideUnsel ? 0.5 : 0.26)}`,
+                  background: c.hideUnsel ? alpha(T.cyan, 0.14) : 'transparent',
+                  color: c.hideUnsel ? T.cyan : T.muted,
+                  // On the scale (non-negotiable #1). The FOCUS pill beside it
+                  // is an off-scale 9.5 held by the baseline; a NEW control does
+                  // not get to add to that count.
+                  fontSize: 'var(--text-3xs)',
+                  fontWeight: 800,
+                  letterSpacing: '0.06em',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {c.hideUnsel ? '◱ HIDE REST' : '◧ DIM REST'}
+              </button>
+            )}
+
             {/* OI provenance: the Δ column only means anything once TWO daily
                 snapshots exist, so say which two days are being compared — and
                 say so just as plainly when there is no baseline yet, rather than
@@ -433,6 +478,11 @@ export default function OptionsChain({
                   {/* OI+Vol / Vol Only stays live in replay — strike_growth
                       records BOTH bases, so the toggle means the same thing
                       rewound as it does live.
+                      OI ONLY is the third: OPEN INTEREST NET GEX, the settled
+                      book with today's volume term zeroed. It is NOT recorded,
+                      so it is DISABLED while replay is on — greyed with a
+                      title saying why, rather than vanishing from the group or
+                      quietly showing a different number than its label claims.
                       "flow" is deliberately absent: v2 filters it out of this
                       control too. parseExpiration still implements it. */}
                   <Field label="Basis">
@@ -440,8 +490,16 @@ export default function OptionsChain({
                       options={[
                         { label: DATA_MODE_LABEL['oi-vol'], value: 'oi-vol' },
                         { label: DATA_MODE_LABEL['vol-only'], value: 'vol-only' },
+                        {
+                          label: DATA_MODE_LABEL['oi-only'],
+                          value: 'oi-only',
+                          disabled: c.replay.on,
+                          title: c.replay.on
+                            ? 'OI-only net GEX is not recorded — replay carries the OI+Vol net and the pure-volume series only'
+                            : 'Net GEX from OPEN INTEREST alone — the settled book, with today\u2019s volume term zeroed',
+                        },
                       ]}
-                      value={c.dataMode as 'oi-vol' | 'vol-only'}
+                      value={c.dataMode as 'oi-vol' | 'vol-only' | 'oi-only'}
                       onChange={(v) => c.setDataMode(v as DataMode)}
                     />
                   </Field>
@@ -475,6 +533,47 @@ export default function OptionsChain({
                       </span>
                     </div>
                   </Field>
+                  {/* NEAR CORE — only reachable from the bottom stop, because
+                      it only means anything there. Above it the gamma field is
+                      already drawing every strike's size with more resolution
+                      than a threshold can, and a second ramp on top of it would
+                      just be a brighter version of what is already painted.
+                      Rendered INERT rather than hidden (the Greek tabs' rule),
+                      so sliding off LEVELS does not make a control disappear. */}
+                  <Field
+                    label="Near core"
+                    hint="Levels-only: also tint the strikes carrying this share or more of their column's Core |net|. Walls keep their own colour."
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        width: '100%',
+                        opacity: c.levelsOnly ? 1 : 0.4,
+                        pointerEvents: c.levelsOnly ? undefined : 'none',
+                      }}
+                      title={
+                        c.levelsOnly
+                          ? undefined
+                          : 'Levels only — drag Intensity to its bottom stop to mark near-core strikes'
+                      }
+                    >
+                      <button
+                        onClick={c.toggleNearCore}
+                        style={{ ...segStyle(c.nearCore), height: 26, padding: '0 10px', fontSize: 'var(--text-2xs)' }}
+                      >
+                        {c.nearCore ? 'ON' : 'OFF'}
+                      </button>
+                      <ChainDropdown
+                        value={c.nearCorePct}
+                        options={NEAR_CORE_PCTS}
+                        onChange={(v) => c.setNearCorePct(Number(v))}
+                        formatLabel={(v) => `≥ ${v}% of core`}
+                      />
+                    </div>
+                  </Field>
+
                   {/* Skin — how the cell is PAINTED, not what it says. Same
                       values, same ranks, same walls either way. */}
                   <Field label="Skin">
@@ -584,6 +683,8 @@ export default function OptionsChain({
             intensity={c.deferredIntensity}
             heatSkin={c.heatSkin}
             levelsOnly={c.levelsOnly}
+            nearCore={c.nearCore}
+            nearCorePct={c.nearCorePct}
             colScales={c.colScales}
             volMvcByCol={c.volMvcByCol}
             mvcByCol={c.mvcByCol}
@@ -598,6 +699,7 @@ export default function OptionsChain({
             oiChangeMap={c.oiSnapshot.map}
             selExps={c.selExps}
             selStrikes={c.selStrikes}
+            hideUnsel={c.hideUnsel}
             onToggleExp={c.toggleExpSel}
             onToggleStrike={c.toggleStrikeSel}
             onCellClick={onCellClick}

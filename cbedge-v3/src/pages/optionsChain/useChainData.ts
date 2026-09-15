@@ -48,6 +48,17 @@ import {
   type Scale,
 } from './chainMath'
 import { CHAIN_DEFAULT_SKIN, CHAIN_HEAT_SKIN_KEY, HEAT_SKINS, isHeatSkin, type HeatSkin } from './heatSkins'
+
+/** Remembered across sessions: hide the unselected rows/columns vs dim them. */
+const CHAIN_HIDE_UNSEL_KEY = 'cb.chain.hideUnsel'
+
+/** Levels-only: mark the strikes carrying this share or more of their column's
+ *  Core. Both remembered across sessions. */
+const CHAIN_NEAR_CORE_KEY = 'cb.chain.nearCore'
+const CHAIN_NEAR_CORE_PCT_KEY = 'cb.chain.nearCorePct'
+
+/** The thresholds the control offers, as PERCENT of the Core level. */
+export const NEAR_CORE_PCTS = [25, 33, 40, 50, 60, 75, 90] as const
 import { etDateKey, etToday, isSessionLive, isSpxFeedLive, isTradingDay } from './marketSession'
 
 // ── Modes ────────────────────────────────────────────────────────────────────
@@ -62,10 +73,14 @@ import { etDateKey, etToday, isSessionLive, isSpxFeedLive, isTradingDay } from '
 export const GREEK_MODES = ['gex', 'dex', 'chex', 'vex', 'oi', 'vol', 'prem'] as const
 export type GreekMode = (typeof GREEK_MODES)[number]
 
-export const DATA_MODES = ['oi-vol', 'vol-only', 'flow'] as const
+export const DATA_MODES = ['oi-vol', 'vol-only', 'oi-only', 'flow'] as const
 export const DATA_MODE_LABEL: Record<DataMode, string> = {
   'oi-vol': 'OI + Vol',
   'vol-only': 'Vol Only',
+  // OPEN INTEREST NET GEX — the settled book on its own, with today's volume
+  // term zeroed. The mirror of Vol Only: what dealers were carrying into the
+  // session, before anything traded in it.
+  'oi-only': 'OI Only',
   flow: 'Flow GEX',
 }
 
@@ -625,8 +640,10 @@ export function useChainData(opts: UseChainDataOpts) {
         const strike = Number(key.slice(bar + 1))
         if (!Number.isFinite(strike)) return
         cells.set(strike, {
-          // "flow" is not recorded, so it reads as OI+Vol rather than silently
-          // rendering an empty grid on a tab that looks available.
+          // Only the OI+Vol net and the pure-volume series are recorded, so
+          // "flow" and "oi-only" read as OI+Vol rather than silently rendering
+          // an empty grid on a basis that looks available. The Basis control
+          // says so in its title while replay is on.
           gex: dataMode === 'vol-only' ? v.vol : v.net,
           volGex: v.vol,
           // Not recorded. Zero — not a live value — because a live DEX beside a
@@ -878,6 +895,76 @@ export function useChainData(opts: UseChainDataOpts) {
       return next
     })
   }, [])
+  // ── Hide vs dim the unselected ─────────────────────────────────────────────
+  // A focus selection greys everything it did not pick. On a wide chain the
+  // greyed columns still cost their track width, so the two picked expiries sit
+  // in a 10%-wide sliver of the page. HIDE drops them from the grid entirely and
+  // the picked ones inflate to fill it. The setting is a VIEW preference, not
+  // part of the selection, so it survives clearing the focus and is remembered
+  // across sessions.
+  const [hideUnsel, setHideUnsel] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      setHideUnsel(window.localStorage.getItem(CHAIN_HIDE_UNSEL_KEY) === '1')
+    } catch {
+      /* ignore */
+    }
+  }, [])
+  // ── Near core ──────────────────────────────────────────────────────────────
+  // Levels-only paints CB / CW / PW and nothing else, which is the point of it
+  // and also its blind spot: a strike carrying 80% of the Core looks exactly
+  // like one carrying 2%. This marks the ones that are a real fraction of it.
+  // Default 50% — "half of Core" is the question Brandon actually asks of the
+  // levels view, and it is the number that reads without being a second chain.
+  const [nearCore, setNearCore] = useState(false)
+  const [nearCorePct, setNearCorePctState] = useState(50)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      setNearCore(window.localStorage.getItem(CHAIN_NEAR_CORE_KEY) === '1')
+      const savedPct = Number(window.localStorage.getItem(CHAIN_NEAR_CORE_PCT_KEY))
+      if (Number.isFinite(savedPct) && savedPct > 0 && savedPct < 100) setNearCorePctState(savedPct)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+  const toggleNearCore = useCallback(() => {
+    setNearCore((v) => {
+      const next = !v
+      try {
+        window.localStorage.setItem(CHAIN_NEAR_CORE_KEY, next ? '1' : '0')
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }, [])
+  // Moving the threshold is itself the statement that you want the marks, so it
+  // turns the feature on rather than quietly changing a number nothing is using.
+  const setNearCorePct = useCallback((pct: number) => {
+    setNearCorePctState(pct)
+    setNearCore(true)
+    try {
+      window.localStorage.setItem(CHAIN_NEAR_CORE_PCT_KEY, String(pct))
+      window.localStorage.setItem(CHAIN_NEAR_CORE_KEY, '1')
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const toggleHideUnsel = useCallback(() => {
+    setHideUnsel((v) => {
+      const next = !v
+      try {
+        window.localStorage.setItem(CHAIN_HIDE_UNSEL_KEY, next ? '1' : '0')
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }, [])
+
   // A focus selection is about the columns/strikes on screen — a new ticker, a
   // new expiry window or a jump in/out of replay invalidates it.
   useEffect(() => {
@@ -959,6 +1046,12 @@ export function useChainData(opts: UseChainDataOpts) {
     clearSel,
     toggleExpSel,
     toggleStrikeSel,
+    hideUnsel,
+    toggleHideUnsel,
+    nearCore,
+    toggleNearCore,
+    nearCorePct,
+    setNearCorePct,
     // replay
     replay: {
       on: replayOn,

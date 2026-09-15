@@ -36,7 +36,11 @@ export type AlertKind =
 
 export interface AlertType {
   id: AlertKind
-  /** The chip label — short enough for the filter row. */
+  /**
+   * The chip label. Kept TIGHT on purpose — all eight chips plus "All" have to
+   * sit on one row of a 28rem panel without the last one being clipped, so this
+   * is the field to shorten if a ninth type is ever added.
+   */
   short: string
   /** The settings row's name. */
   name: string
@@ -103,7 +107,7 @@ export const ALERT_TYPES: AlertType[] = [
   },
   {
     id: 'whale',
-    short: 'Whales',
+    short: 'Whale',
     name: 'Whale Option Prints',
     // The /v3/whales page IS the definition — same floor, same moneyness, same
     // expiry ceiling — so an alert can always be found on that page.
@@ -114,7 +118,7 @@ export const ALERT_TYPES: AlertType[] = [
   },
   {
     id: 'gexChangeTop',
-    short: 'GEX Chg',
+    short: 'GEX',
     name: 'Top GEX Change',
     hint: "every pick the scanner's Top GEX Change board files",
     tag: 'GEX CHG',

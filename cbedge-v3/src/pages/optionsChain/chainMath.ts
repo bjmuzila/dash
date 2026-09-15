@@ -21,7 +21,7 @@ import { etDateKey, etToday, isTradingDay } from './marketSession'
 
 // ── Wire + cell types ────────────────────────────────────────────────────────
 
-const DATA_MODES = ['oi-vol', 'vol-only', 'flow'] as const
+const DATA_MODES = ['oi-vol', 'vol-only', 'oi-only', 'flow'] as const
 export type DataMode = (typeof DATA_MODES)[number]
 
 /** Per-strike, per-expiration greek values. */
@@ -83,7 +83,8 @@ export interface Expiration {
  * VERBATIM from v2. The contract-count basis, the S² scaling, the 0.01 and the
  * ×100 multiplier are all load-bearing:
  *
- *   contracts = OI + volume per side  (vol-only mode zeroes the OI term)
+ *   contracts = OI + volume per side  (vol-only zeroes the OI term,
+ *                                      oi-only zeroes the volume term)
  *   GEX  = (γc·cc − γp·pc) · S² · 0.01 · 100
  *   DEX  = (|Δc|·cc − |Δp|·pc) · S · 100
  *   CHEX = (−θc·cc + θp·pc) · S · 100
@@ -120,12 +121,16 @@ export function parseExpiration(
       const p = it.put as Record<string, unknown> | undefined
       const num = (o: Record<string, unknown> | undefined, k: string) =>
         o ? parseFloat(String(o[k])) || 0 : 0
+      // The two one-sided bases are mirror images of each other: vol-only
+      // drops the settled book and leaves today's tape, oi-only drops today's
+      // tape and leaves the settled book — OPEN INTEREST NET GEX, the dealer
+      // position carried into the session before a single contract trades.
       const cnt = (o: Record<string, unknown> | undefined) =>
         o
           ? (dataMode === 'vol-only'
               ? 0
               : parseInt(String(o['open-interest'] ?? o.openInterest ?? 0), 10) || 0) +
-            (parseInt(String(o.volume ?? 0), 10) || 0)
+            (dataMode === 'oi-only' ? 0 : parseInt(String(o.volume ?? 0), 10) || 0)
           : 0
 
       const cc = cnt(c)
@@ -200,6 +205,15 @@ export interface ColumnWalls {
   cb: number | null
   cw: number | null
   pw: number | null
+  /**
+   * |net| AT the CB strike — the column's own yardstick. Levels-only paints only
+   * CB/CW/PW, which answers "where is the wall" and not "is anything else near
+   * it": a strike carrying 80% of the Core reads exactly like one carrying 2%.
+   * Carrying the magnitude out with the strikes lets the grid mark the ones that
+   * are a real fraction of Core without re-scanning the column. 0 when the
+   * column is empty.
+   */
+  cbAbs: number
 }
 
 /**
@@ -250,7 +264,21 @@ export function columnWalls(rows: Array<{ strike: number; net: number }>): Colum
       .filter((r) => (r.net || 0) < 0)
       .sort((a, b) => a.net - b.net)
       .find((r) => r.strike !== cb)?.strike ?? null
-  return { cb, cw, pw }
+  return { cb, cw, pw, cbAbs }
+}
+
+/**
+ * Is this value a big enough fraction of its column's Core to be worth marking?
+ *
+ * `threshold` is a FRACTION (0.5 = "half of Core or more"), compared sign-blind
+ * — a put wall at 60% of a call-side Core is exactly the kind of strike the
+ * question is about. CB itself passes trivially (ratio 1) and the caller
+ * excludes it, along with CW/PW, because those already have their own paint.
+ */
+export function isNearCore(value: number | null | undefined, cbAbs: number, threshold: number): boolean {
+  if (value == null || !Number.isFinite(value) || value === 0) return false
+  if (!(cbAbs > 0)) return false
+  return Math.abs(value) / cbAbs >= threshold
 }
 
 /** Which level (if any) this strike is in that column. CB wins ties by order. */

@@ -57,6 +57,19 @@ export interface SkinDef {
    */
   levelFill: null | { mode: 'level' | 'blend'; alpha: Record<WallKind, number> }
   /**
+   * The alpha band levels-only paints a NEAR-CORE strike across — one that is
+   * not itself CB/CW/PW but carries at least the chosen fraction of the Core.
+   * [at the threshold, at Core]: a strike that only just qualifies comes in
+   * barely there and one just under CB is nearly a wall, so the band reads as a
+   * ranking and not as a fourth flat tier.
+   *
+   * Both stops sit UNDER the skin's rank-3 floor on purpose. Levels-only is the
+   * one view where three things are being claimed — Core, Call Wall, Put Wall —
+   * and a near-core strike is context for them, not a fourth claim. If it can
+   * paint as hot as a wall, the view stops meaning what its name says.
+   */
+  nearCore: readonly [number, number]
+  /**
    * Where the Intensity slider is tuned to sit for this skin, and its ceiling.
    * Switching skins MOVES the slider there — the ramps are different shapes, so
    * 1.75 on one is not 1.75 on the other and carrying a number across lands
@@ -70,6 +83,9 @@ export const HEAT_SKINS: Record<HeatSkin, SkinDef> = {
     label: 'CLASSIC',
     ramp: { base: 0.02, span: 0.16, max: 0.18, ease: 1.4 },
     rank: [0.9, 0.45, 0.25],
+    // CLASSIC's whole range is a wash (max 0.18 on the ramp), so its near-core
+    // band is narrow and low — 0.22 is already assertive on this skin.
+    nearCore: [0.08, 0.22],
     levelFill: null,
     intensity: { def: 1.75, max: 3 },
   },
@@ -81,6 +97,9 @@ export const HEAT_SKINS: Record<HeatSkin, SkinDef> = {
     // the genuinely large strikes approach the cap.
     ramp: { base: 0.05, span: 0.25, max: 1, ease: 0.4 },
     rank: [0.95, 0.62, 0.4],
+    // VIVID paints to near-opaque, so the band can be wider and still land
+    // clearly below the 0.4 rank-3 floor the walls sit on.
+    nearCore: [0.16, 0.36],
     // CW and PW at full strength (the wall IS the colour), CB pulled back to
     // .85 because gold at 1.0 swamps the row. The heat still shows through CB.
     levelFill: { mode: 'blend', alpha: { cb: 0.85, cw: 1, pw: 1 } },
@@ -124,6 +143,34 @@ export function skinMetricBg(
   const ratio = Math.min(Math.abs(n) / m, 1)
   const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), skin.ramp.ease)
   const a = Math.min(skin.ramp.max, skin.ramp.base + eased * skin.ramp.span)
+  return alpha(n >= 0 ? GEX_POS : GEX_NEG, Number(a.toFixed(2)))
+}
+
+/**
+ * Fill for a NEAR-CORE strike in levels-only mode: one that is not a wall, but
+ * carries `threshold` or more of its column's Core |net|.
+ *
+ * Hue is the SIGN, exactly like the ordinary heat — this is not a new kind of
+ * level and it must not read as one. What is different is the yardstick: the
+ * alpha is a function of the value's ratio to CORE, not to the column max, and
+ * it is remapped so the threshold lands at the bottom of the skin's near-core
+ * band and Core itself at the top. Lower the threshold and the newly-qualifying
+ * strikes come in at the faint end rather than all the existing ones jumping.
+ *
+ * Returns 'transparent' below the threshold, so the caller can paint
+ * unconditionally and let this decide.
+ */
+export function skinNearCoreBg(value: number, cbAbs: number, threshold: number, skin: SkinDef): string {
+  const n = value || 0
+  const m = cbAbs || 0
+  if (!n || m <= 0) return 'transparent'
+  const ratio = Math.min(Math.abs(n) / m, 1)
+  const t = Math.min(Math.max(threshold, 0), 0.99)
+  if (ratio < t) return 'transparent'
+  const [lo, hi] = skin.nearCore
+  const span = 1 - t
+  const pos = span <= 0 ? 1 : (ratio - t) / span
+  const a = lo + pos * (hi - lo)
   return alpha(n >= 0 ? GEX_POS : GEX_NEG, Number(a.toFixed(2)))
 }
 

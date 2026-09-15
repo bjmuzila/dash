@@ -27,12 +27,15 @@ import { ALERT_TYPES, TYPE_BY_ID, fetchMasterEnabled, readShown, writeShown } fr
 // SAMPLE list that used to live in this file is gone.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ONE ROW, ALWAYS. Nine chips will not fit a 24rem panel, and wrapping them
-// pushed the feed down a line and made the panel's height jump as types were
-// filtered. They scroll sideways instead — `shrink-0` on each chip is what stops
-// flex from compressing them into unreadable slivers rather than overflowing.
+// ONE ROW, AND IT FITS. Wrapping made the panel's height jump as types were
+// filtered, and scrolling sideways just moved the problem — the last chip sat
+// half-cut at the right edge and read as broken rather than as scrollable.
+// So the row is sized to hold every chip: the panel is 28rem, the chips carry
+// `px-1.5`, and the labels in ALERT_TYPES are short. `overflow-x-auto` stays as
+// a safety net for a future ninth type, with `shrink-0` keeping chips legible
+// rather than squeezed, but nothing should reach it.
 const CHIP =
-  'shrink-0 cursor-pointer select-none whitespace-nowrap rounded-full border px-2 py-[2px] text-3xs font-bold uppercase tracking-wide transition-colors disabled:cursor-not-allowed'
+  'shrink-0 cursor-pointer select-none whitespace-nowrap rounded-full border px-1.5 py-[2px] text-3xs font-bold uppercase tracking-wide outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent disabled:cursor-not-allowed'
 
 export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () => void }) {
   const [shown, setShown] = useState<AlertKind[]>(() => readShown())
@@ -88,7 +91,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
       // The panel is wider than its trigger, and the trigger shrinks. `w-[24rem]`
       // with a `max-w` tied to the viewport keeps it from hanging off either
       // edge on a narrow window, where the pill itself is only ~9rem wide.
-      className="absolute left-0 top-[calc(100%+6px)] z-40 w-[24rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-md border border-line bg-surface shadow-2xl"
+      className="absolute left-0 top-[calc(100%+6px)] z-40 w-[28rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-md border border-line bg-surface shadow-2xl"
     >
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 border-b border-line bg-surface2 px-2.5 py-2">
@@ -99,7 +102,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
         <button
           type="button"
           onClick={close}
-          className="ml-auto text-3xs uppercase tracking-wide text-fg opacity-80 transition-opacity hover:opacity-100"
+          className="ml-auto text-3xs uppercase tracking-wide text-fg opacity-80 outline-none transition-opacity hover:opacity-100 focus-visible:ring-1 focus-visible:ring-accent"
         >
           Close
         </button>

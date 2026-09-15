@@ -32,6 +32,7 @@ import { memo, type CSSProperties } from 'react'
 import { alpha, CHAIN, LEVEL_COLORS, LEVEL_ON_SOLID, SHADOW, T } from '@/design/theme'
 import {
   columnWalls,
+  isNearCore,
   oiSides,
   rankOf,
   wallAt,
@@ -39,7 +40,15 @@ import {
   type ExpColumn,
   type Scale,
 } from './chainMath'
-import { CHAIN_CELL, HEAT_SKINS, levelFillBg, skinMetricBg, skinRankBg, type HeatSkin } from './heatSkins'
+import {
+  CHAIN_CELL,
+  HEAT_SKINS,
+  levelFillBg,
+  skinMetricBg,
+  skinNearCoreBg,
+  skinRankBg,
+  type HeatSkin,
+} from './heatSkins'
 import { fmtChg, fmtCount, fmtExpHeader, fmtMoney, fmtStrike, skinFig } from './format'
 import { etDateKey, etToday, isTradingDay } from './marketSession'
 import type { GreekMode, OiSnapEntry } from './useChainData'
@@ -155,6 +164,11 @@ export interface ChainMatrixProps {
   intensity: number
   heatSkin: HeatSkin
   levelsOnly: boolean
+  /** Levels-only: also tint the non-wall strikes that carry `nearCorePct` or
+   *  more of their column's Core |net|. Ignored outside levels-only. */
+  nearCore: boolean
+  /** The threshold as a PERCENT (50 = half of Core). */
+  nearCorePct: number
   colScales: Scale[]
   volMvcByCol: Array<number | null>
   mvcByCol: Array<number | null>
@@ -171,6 +185,9 @@ export interface ChainMatrixProps {
   oiChangeMap: Map<string, OiSnapEntry>
   selExps: Set<string>
   selStrikes: Set<number>
+  /** With a focus selection live: drop the unpicked rows/columns from the grid
+   *  entirely instead of dimming them in place. */
+  hideUnsel: boolean
   onToggleExp: (exp: string, solo: boolean) => void
   onToggleStrike: (strike: number, solo: boolean) => void
   onCellClick: (v: { strike: number; colIdx: number; x: number; y: number }) => void
@@ -187,6 +204,8 @@ export const ChainMatrix = memo(function ChainMatrix({
   intensity,
   heatSkin,
   levelsOnly,
+  nearCore,
+  nearCorePct,
   colScales,
   volMvcByCol,
   mvcByCol,
@@ -201,6 +220,7 @@ export const ChainMatrix = memo(function ChainMatrix({
   oiChangeMap,
   selExps,
   selStrikes,
+  hideUnsel,
   onToggleExp,
   onToggleStrike,
   onCellClick,
@@ -216,12 +236,37 @@ export const ChainMatrix = memo(function ChainMatrix({
   const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.classic
   const CELL = CHAIN_CELL[heatSkin] ?? CHAIN_CELL.classic
 
+  // ── Hide the unpicked ──────────────────────────────────────────────────────
+  // A focus selection normally DIMS what it did not pick, which keeps the grid's
+  // geometry intact — every column holds its track and the picked ones stay
+  // where the eye last saw them. That is the right default, and it is the wrong
+  // thing when the point of the pick was to READ the two expiries: they end up
+  // two narrow tracks in a wall of grey.
+  //
+  // With hideUnsel on, the unpicked columns and strikes are dropped from the
+  // grid rather than washed out. Columns are filtered out of renderIdx, so the
+  // gridTemplateColumns built from it shrinks with them and the survivors
+  // inflate to the full width. Strikes are filtered out of the ladder, so every
+  // per-strike pass below — ⅀ Total, the column totals, the levels-only walls —
+  // runs over exactly what is on screen and the ⅀ figure keeps meaning "the sum
+  // of what you are looking at".
+  //
+  // Both are gated on there BEING a selection: with nothing picked there is
+  // nothing unpicked, and the toggle is inert rather than emptying the grid.
+  const selModeCols = selExps.size > 0
+  const hideCols = hideUnsel && selModeCols
+  const hideRows = hideUnsel && selStrikes.size > 0
+  const rowStrikes: Array<number | null> = hideRows
+    ? visibleStrikes.filter((s) => s != null && selStrikes.has(s))
+    : visibleStrikes
+
   // Drop holiday / non-trading expirations entirely; keep empty placeholders.
   const renderIdx = Array.from({ length: gridCols })
     .map((_, i) => i)
     .filter((i) => {
       const c = columns[i]
-      if (!c) return true
+      if (!c) return !hideCols
+      if (hideCols && !selExps.has(c.expiration)) return false
       return isTradingDay(new Date(`${c.expiration}T00:00:00`))
     })
 
@@ -232,9 +277,9 @@ export const ChainMatrix = memo(function ChainMatrix({
   // picked, the column sums exactly those (0DTE included — an explicit pick
   // outranks the default exclusion) and says so in its header.
   const todayKey = sessionDate || etDateKey(etToday())
-  const selMode = selExps.size > 0
+  const selMode = selModeCols
   const rowTotals = new Map<number, number>()
-  visibleStrikes.forEach((strike) => {
+  rowStrikes.forEach((strike) => {
     if (strike == null) return
     let sum = 0
     renderIdx.forEach((colIdx) => {
@@ -273,13 +318,26 @@ export const ChainMatrix = memo(function ChainMatrix({
   // the same strike the ★ marker already names. The ⅀ column is ranked as its
   // own column; Δ columns are left bare, because "the wall" is a statement about
   // gamma, not about a 15-minute delta.
-  const liveStrikes = visibleStrikes.filter((s): s is number => s != null)
+  const liveStrikes = rowStrikes.filter((s): s is number => s != null)
   const wallsByCol = levelsOnly
     ? columns.map((col) => columnWalls(liveStrikes.map((s) => ({ strike: s, net: valueAt(col, s) ?? 0 }))))
     : []
   const totalWalls = levelsOnly
     ? columnWalls(liveStrikes.map((s) => ({ strike: s, net: rowTotals.get(s) ?? 0 })))
     : null
+
+  // ── Near-core strikes ──────────────────────────────────────────────────────
+  // Levels-only answers "where is the wall" and stops there: with the gamma
+  // field off, a strike carrying 80% of the Core paints identically to one
+  // carrying 2% — both are simply not a wall. NEAR CORE puts those back, tinted
+  // on the SIGN like ordinary heat but scaled against the column's CB rather
+  // than its max, so "half of Core" means the same thing in every column
+  // regardless of how big that column is.
+  //
+  // Only in levels-only. Everywhere else the full heat field is already drawing
+  // this relationship with more resolution than a threshold can.
+  const nearCoreOn = levelsOnly && nearCore
+  const nearCoreThreshold = Math.min(Math.max((nearCorePct || 0) / 100, 0), 0.99)
 
   // ── Reserved (ghost) tracks ────────────────────────────────────────────────
   // Expiry tracks are 1fr, so they divide the container: drop from 4 columns to
@@ -291,7 +349,10 @@ export const ChainMatrix = memo(function ChainMatrix({
   // The tracks need real (empty) elements, one per row: the grid auto-places and
   // rows are `display: contents` wrappers, so a row short of a cell would pull
   // the next row's first cell up and shear the grid.
-  const ghostExpCols = Math.max(0, (layoutExpCols || 0) - renderIdx.length)
+  // Hiding is the one case where the reserved tracks are wrong: their whole job
+  // is to hold a hidden column's width open, which is exactly what HIDE is asked
+  // to reclaim. Replay is the only caller that passes layoutExpCols at all.
+  const ghostExpCols = hideCols ? 0 : Math.max(0, (layoutExpCols || 0) - renderIdx.length)
   const ghostTotalCols = layoutExpCols > 0 && !showTotalCol ? 1 : 0
   const ghostCols = ghostExpCols + ghostTotalCols
   const ghostTemplate =
@@ -338,7 +399,7 @@ export const ChainMatrix = memo(function ChainMatrix({
       {renderIdx.map((i) => {
         const col = columns[i]
         const colTotal = col
-          ? visibleStrikes.reduce<number>((s, k) => {
+          ? rowStrikes.reduce<number>((s, k) => {
               const v = k == null ? null : valueAt(col, k)
               return s + (v ?? 0)
             }, 0)
@@ -417,7 +478,7 @@ export const ChainMatrix = memo(function ChainMatrix({
       <div style={cornerStyle('right')}>Strike</div>
 
       {/* ── One row per shared strike ── */}
-      {visibleStrikes.map((strike, rowIdx) => {
+      {rowStrikes.map((strike, rowIdx) => {
         // Padding row (the chain ran out on this side of the centre): keep the
         // row so the centre stays put, but render it empty.
         if (strike == null) {
@@ -577,10 +638,16 @@ export const ChainMatrix = memo(function ChainMatrix({
               // CORE level only — the ★ strike.
               const cellLevel = !SK.levelFill ? null : (cellWall ?? (isMvc ? ('cb' as const) : null))
 
+              // A wall paints as a wall; everything else in levels-only is
+              // 'transparent' unless NEAR CORE claims it. The wall check comes
+              // first so turning the threshold down can never repaint CB/CW/PW.
+              const cbAbsHere = levelsOnly ? (wallsByCol[colIdx]?.cbAbs ?? 0) : 0
               const heat = levelsOnly
                 ? cellWall && value != null
                   ? skinRankBg(value, WALL_RANK[cellWall], SK)
-                  : 'transparent'
+                  : nearCoreOn && isNearCore(value, cbAbsHere, nearCoreThreshold)
+                    ? skinNearCoreBg(value as number, cbAbsHere, nearCoreThreshold, SK)
+                    : 'transparent'
                 : value != null
                   ? skinMetricBg(value, cellScale.max, cellRank, intensity, SK)
                   : 'transparent'
@@ -719,10 +786,16 @@ export const ChainMatrix = memo(function ChainMatrix({
                 const tot = rowTotals.get(strike) ?? 0
                 const totWall = levelsOnly ? wallAt(totalWalls, strike) : null
                 const isTotMvc = totalMvc != null && totalMvc === strike && tot !== 0
+                // The ⅀ column is ranked as its OWN column everywhere else, so
+                // it gets its own Core here too — near-core in ⅀ means "a real
+                // fraction of the summed Core", not of any one expiry's.
+                const totCbAbs = levelsOnly ? (totalWalls?.cbAbs ?? 0) : 0
                 const heat = levelsOnly
                   ? totWall && tot !== 0
                     ? skinRankBg(tot, WALL_RANK[totWall], SK)
-                    : 'transparent'
+                    : nearCoreOn && isNearCore(tot, totCbAbs, nearCoreThreshold)
+                      ? skinNearCoreBg(tot, totCbAbs, nearCoreThreshold, SK)
+                      : 'transparent'
                   : tot !== 0
                     ? skinMetricBg(tot, totalScale.max, rankOf(tot, totalScale.top3), intensity, SK)
                     : 'transparent'

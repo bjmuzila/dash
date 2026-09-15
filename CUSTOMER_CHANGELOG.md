@@ -4,7 +4,11 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Tuesday 9/15/2026
 
-* **Home board:** save your board under a name, then load any saved layout back — a pre-market board, a 0DTE board, one for the review — https://cbedge.net/v3
+* **Home board:** save your board under a name, then load any saved layout back — a pre-market board, a 0DTE board, one for the review. The contract chart that opens from Top Flow is readable again — it was shrinking to fit the card — https://cbedge.net/v3
+
+* **Whale Archive:** the premium filter now has a **$500K** stop below $1M — https://cbedge.net/v3/whales
+
+* **Analytics:** the Strategy Builder card has been removed from the page — https://cbedge.net/v3/analytics
 
 ## Monday 9/14/2026
 

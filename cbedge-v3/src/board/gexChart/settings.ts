@@ -90,6 +90,18 @@ export interface GexChartSettings {
   /** The net-DEX overlay line. Independent of the bars — see gexChartRender. */
   showDex: boolean
   /**
+   * The DAILY expected-move rails.
+   *
+   * NOT the ±1σ the two stat tiles show — those are the WEEKLY published band
+   * off /api/em-tracker. These are today's front-expiry ATM straddle anchored
+   * to the previous session's close, frozen server-side for the session and
+   * drawn as two static verticals. See board/gexChart/dailyEm.ts.
+   *
+   * On by default: it is a price level the chart cannot otherwise show, and a
+   * band nobody switched on is a band nobody knows exists.
+   */
+  showEm: boolean
+  /**
    * The stat card row: all ten, or none.
    *
    * There used to be a per-card `cards: Record<StatKey, boolean>` behind a cog
@@ -105,6 +117,7 @@ export const DEFAULT_SETTINGS: GexChartSettings = {
   basis: 'oi-vol',
   split: 'net',
   showDex: false,
+  showEm: true,
   cardsOn: true,
 }
 
@@ -126,6 +139,10 @@ function coerce(raw: unknown): GexChartSettings {
     basis: isBasis(p.basis) ? p.basis : DEFAULT_SETTINGS.basis,
     split: isSplit(p.split) ? p.split : DEFAULT_SETTINGS.split,
     showDex: p.showDex === true,
+    // `!== false`, not `=== true`, for the same reason `cardsOn` below is: a
+    // blob written before the rails existed should come back with them ON,
+    // which is what a card created today shows.
+    showEm: p.showEm !== false,
     // `!== false`, not `=== true`: a blob written before the row had a switch
     // at all should come back with the row ON, which is what it was showing.
     // A stale `cards` map alongside it is simply dropped — an unknown key in

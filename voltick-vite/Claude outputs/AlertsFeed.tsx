@@ -198,6 +198,7 @@ const FEED_LIMIT = 50
 
 export function useAlertsFeed(): AlertItem[] {
   const [items, setItems] = useState<AlertItem[]>([])
+  const sigRef = useRef('')
 
   useEffect(() => {
     let alive = true
@@ -212,7 +213,15 @@ export function useAlertsFeed(): AlertItem[] {
         const j = (await r.json()) as { rows?: SignalRow[] }
         if (!alive || !Array.isArray(j?.rows)) return
         // The route already orders newest-first; the map only drops unknowns.
-        setItems(j.rows.map(toItem).filter((x): x is AlertItem => x !== null))
+        const next = j.rows.map(toItem).filter((x): x is AlertItem => x !== null)
+        // A poll that found nothing new must not hand React a new array — a new
+        // array is a new render of the pill and the open panel every 20 seconds,
+        // which is the other half of the flashing. `id` is the row's primary
+        // key, so newest-id + count is enough to tell "same list" from "changed".
+        const sig = `${next.length}:${next[0]?.id ?? 0}`
+        if (sig === sigRef.current) return
+        sigRef.current = sig
+        setItems(next)
       } catch {
         // Offline, or a free account the proxy gate refuses. Keep what is on
         // screen — an empty toolbar is a worse lie than a slightly stale one.
@@ -297,6 +306,13 @@ export function AlertsPill() {
           // beside the wordmark read as a second button competing with the
           // brand, and the tag already says what kind of alert this is. Hover
           // is the only affordance it needs — the row is still a button.
+          //
+          // THE FLASHING BORDER (2026-09-15) was the browser's default focus
+          // ring. Clicking the pill focuses it, the ring stays after the panel
+          // closes, and every poll that re-rendered the button made it blink.
+          // `outline-none` kills the mouse case; `focus-visible` puts a proper
+          // ring back for keyboard users only, where it belongs.
+          'outline-none focus-visible:ring-1 focus-visible:ring-accent',
           'flex h-6 max-w-[7rem] items-center gap-1.5 overflow-hidden rounded-sm px-1.5 transition-colors lg:max-w-[13rem] xl:max-w-[16rem]',
           open ? 'bg-raised' : 'hover:bg-raised',
           fresh ? '' : 'opacity-90',

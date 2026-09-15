@@ -1,4 +1,5 @@
 import type { GexRow } from '@/contract/frames'
+import type { DailyEmBand } from './dailyEm'
 import type { GexBasis, GexSeries, GexSplit } from './settings'
 import { metricOfSeries } from './settings'
 import {
@@ -114,6 +115,22 @@ export interface GexChartModel {
    * tile and has never been a line on this chart.
    */
   flip: number | null
+  /**
+   * TODAY'S DAILY EXPECTED-MOVE BAND, or null.
+   *
+   * Two vertical rails at fixed PRICES — `up` and `down` — and nothing else.
+   * Read, never derived: the band is computed once per session server-side and
+   * frozen (see board/gexChart/dailyEm.ts and server-v2/daily-em.js), which is
+   * the entire point of it. A band this module recomputed per frame would slide
+   * across the session as the straddle decays, and a level that slides cannot
+   * be referred back to — "price rejected the EM high" says nothing about a
+   * line that was forty points away an hour ago.
+   *
+   * NOT the ±1σ on the two stat tiles above the chart: those are the WEEKLY
+   * published band. The rails carry a `·D` in their label so the two can share
+   * a card without either being mistaken for the other.
+   */
+  em: DailyEmBand | null
 }
 
 export const EMPTY_MODEL: GexChartModel = {
@@ -126,6 +143,7 @@ export const EMPTY_MODEL: GexChartModel = {
   showDex: false,
   series: 'gamma-0dte',
   flip: null,
+  em: null,
 }
 
 export { fmtGexShort }
@@ -267,6 +285,8 @@ interface Palette {
   surface: [number, number, number]
   /** The flip line's hue — the same amber every other surface marks a flip in. */
   warn: [number, number, number]
+  /** Both daily-EM rails. One hue: they are two edges of one band. */
+  em: [number, number, number]
 }
 
 function readPalette(el: HTMLElement): Palette {
@@ -279,6 +299,7 @@ function readPalette(el: HTMLElement): Palette {
     core: hexToRgb(cssVar(el, '--color-level-cb'), [255, 214, 0]),
     surface: hexToRgb(cssVar(el, '--color-surface'), [15, 17, 23]),
     warn: hexToRgb(cssVar(el, '--color-warn'), [251, 133, 1]),
+    em: hexToRgb(cssVar(el, '--color-level-em'), [176, 123, 224]),
   }
 }
 
@@ -604,6 +625,83 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       ctx.font = 'bold 8px ui-monospace, monospace'
       ctx.textAlign = 'left'
       ctx.fillText('+NET DEX', PAD_L + 3, yDex(0) - 3)
+    }
+
+    // ── Where a PRICE sits on the x axis ─────────────────────────────────────
+    // The bars are indexed by strike, not positioned by price, so anything
+    // quoted in dollars — the EM rails below — has to be interpolated between
+    // the two strikes that bracket it. Clamped to the plot edges rather than
+    // dropped when it is off-window, which is what the flip and spot lines
+    // already do a few lines down: a rail pinned to the edge reads as "the
+    // level is further out this way", and the label carries the real price.
+    const xForPrice = (price: number): number | null => {
+      const lo = data[0]
+      const hi = data[data.length - 1]
+      if (!lo || !hi || !Number.isFinite(price)) return null
+      if (price <= lo.strike) return xAt(0)
+      if (price >= hi.strike) return xAt(data.length - 1)
+      const i = data.findIndex((r) => r.strike >= price)
+      const prev = i > 0 ? data[i - 1] : undefined
+      const curr = i > 0 ? data[i] : undefined
+      if (!prev || !curr) return null
+      const span = curr.strike - prev.strike
+      return xAt(i - 1) + (span > 0 ? (price - prev.strike) / span : 0) * gap
+    }
+
+    // ── The DAILY expected-move band ─────────────────────────────────────────
+    //
+    // Two rails at fixed prices, and a faint fill between them. They are the
+    // only marks on this chart that do NOT move with the data: the band was
+    // decided once this morning off the front-expiry ATM straddle, anchored to
+    // the previous session's close, and frozen (server-v2/daily-em.js). Nothing
+    // in this function may recompute it — see `em` in GexChartModel.
+    //
+    // Drawn FIRST, under the flip and the spot line, because it is a context
+    // for the session rather than a reading of the current book, and because
+    // two more solid verticals over the top of those two would be a thicket.
+    //
+    // The `·D` in the label is load-bearing. The stat row directly above this
+    // chart carries `+1σ (EM)` / `−1σ (EM)` from the WEEKLY published band, and
+    // an unlabelled `EM+` here would read as the same number drawn twice.
+    const em = model.em
+    if (em && em.up > 0 && em.down > 0) {
+      const xUp = xForPrice(em.up)
+      const xDn = xForPrice(em.down)
+      if (xUp !== null && xDn !== null) {
+        // Only fill when the two rails are genuinely apart on screen. Zoomed
+        // far enough in that both clamp to the same edge, a full-width wash
+        // would say "the whole window is inside the band" when the truth is
+        // that the whole window is outside it.
+        if (Math.abs(xUp - xDn) > 2) {
+          ctx.fillStyle = withAlpha(p.em, 0.05)
+          ctx.fillRect(Math.min(xUp, xDn), PAD_T, Math.abs(xUp - xDn), cH)
+        }
+        ctx.setLineDash([2, 4])
+        ctx.strokeStyle = withAlpha(p.em, 0.8)
+        ctx.lineWidth = 1.2
+        ctx.beginPath()
+        ctx.moveTo(xUp, PAD_T)
+        ctx.lineTo(xUp, PAD_T + cH)
+        ctx.moveTo(xDn, PAD_T)
+        ctx.lineTo(xDn, PAD_T + cH)
+        ctx.stroke()
+        ctx.setLineDash([])
+        // Third row of labels, under spot (PAD_T + 10) and the flip
+        // (PAD_T + 22), so the three never sit on top of each other.
+        ctx.fillStyle = withAlpha(p.em, 0.95)
+        ctx.font = 'bold 9px ui-monospace, monospace'
+        ctx.textAlign = 'center'
+        ctx.fillText(
+          `+EM·D ${Math.round(em.up).toLocaleString('en-US')}`,
+          clamp(xUp, PAD_L + 42, PAD_L + cW - 42),
+          PAD_T + 34,
+        )
+        ctx.fillText(
+          `−EM·D ${Math.round(em.down).toLocaleString('en-US')}`,
+          clamp(xDn, PAD_L + 42, PAD_L + cW - 42),
+          PAD_T + 34,
+        )
+      }
     }
 
     // ── The gamma flip, when the ladder came with one ────────────────────────

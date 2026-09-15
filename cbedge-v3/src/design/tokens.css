@@ -223,6 +223,16 @@
   --color-level-cw: #29b6f6;
   --color-level-pw: #ff4757;
 
+  /* The DAILY expected-move rails on the GEX Chart — the front-expiry ATM
+     straddle anchored to the prior session's close, frozen for the session.
+     ONE hue for both rails on purpose: they are the two edges of one band, not
+     a bullish level and a bearish one, and painting them --color-up /
+     --color-down would read as direction where the band is symmetric by
+     construction. Violet because it is the one family that chart is not
+     already spending — the bars own blue and amber, the core owns yellow, the
+     flip owns warn and spot owns fg. */
+  --color-level-em: #b07be0;
+
   /* ── Economic calendar ────────────────────────────────────────────────
      Impact ramp + the actual/forecast/previous trio, matching v2's
      EconCalendarPanel so a user moving between the two reads the same
