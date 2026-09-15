@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 (a) - v3 home board: named layouts, and loading any of them
+
+`cbedge-v3/src/board/layoutStore.ts` gained a named-layout library
+(`PRESETS_KEY` in localStorage, plus `fetchServerLayouts`/`deleteServerLayout`
+and a `makeDefault` argument on `saveServerLayout`), and
+`cbedge-v3/src/board/BoardPage.tsx` gained the "Layouts" toolbar panel that
+saves the board under a name and loads any saved name back. Everyone's library
+is per browser; the owner's is mirrored to Postgres through the existing
+`/api/dashboard-layout` route, which already held 12 named templates per page -
+no server change.
+
 ## 2026-09-14 (a) - ES rolled to December, and es_candles learned which contract a bar is
 
 `server-v2/proxy-tastytrade.js` picked the front ES/NQ contract by nearest

@@ -41,42 +41,25 @@
  *        session H/L, IBH/IBL, volume POC/VAH/VAL) within CONFLUENCE_DIST — each
  *        stacked level is +1 score.
  *
+ *   3b) THE CORE LEVEL  (kind='core_change' / 'core_touch')
+ *        The CB / MVC scored SPX strike — the one level on the board that is not
+ *        a wall. Two events, no direction (both 'neutral'):
+ *          core_change : the scored strike MOVED by ≥ CORE_MOVE_MIN SPX points.
+ *                        The first core seen in a process is remembered quietly,
+ *                        so a restart is not reported as a move. A move re-arms
+ *                        the touch latch below.
+ *          core_touch  : price came within CORE_TOUCH of it. Latched — price
+ *                        must leave by CORE_REARM before it can fire again, so
+ *                        an hour grinding on the level is one alert.
+ *        Deliberately NOT wall logic: no reject, no break, no long/short. What
+ *        happens at the core is the trade; this only says you are there.
+ *
  *   4) WHALE PRINTS  (kind='whale_print')
  *        a single OTM option PURCHASE (side='buy') ≥ WHALE_MIN_PREMIUM ($1M) with
- *        1–7 DTE (0DTE excluded — that's noise/hedging, not positioning), pulled
- *        from the persisted tape via /proxy/flow-history. Call buy = LONG,
- *        put buy = SHORT. Deduped by print identity, never re-fires.
- *
- *   5) BZILA CONFLUENCE v2  ("Bzila GEX Confluence System", kind='bzila_confluence')
- *        a separate, independently-scored setup ported from the polished
- *        strategy doc. Triggers only off a Level reaction (Put/Call Wall, or
- *        Flip cross/break — same events as 1-3 above, own touch/reject/break
- *        state so it never shares cooldowns with the primary detectors), then
- *        needs ≥ BZ_MIN_SCORE (default 4, out of 6) weighted points:
- *          Regime match (net GEX beyond ±GEX_REGIME_BAND)  +2
- *          GEX momentum supportive (|Net GEX| growing)      +1
- *          DEX sign/momentum supportive (totals.totalDeltaOiVol) +1
- *          Strong flow (net call-buy+put-sell / put-buy+call-sell) +1
- *          ICT bias agrees (/api/ict-setups, ≤60min) + Confidence≥70 +1
- *        Confidence ≥ BZ_CONFIDENCE_MIN (65, from /api/confidence score.hit) is
- *        a separate hard gate, not one of the scored points. Hard no-trade
- *        overrides (block the fire outright): GEX weakening sharply (≥15%)
- *        while relying on that regime; DEX AND flow both opposing the
- *        direction; any BREAK/trend reaction (Flip cross, Wall break, CB break)
- *        firing without supportive GEX momentum — a break only pays in a
- *        short-gamma regime that is actively STRENGTHENING.
- *        Cooldowns are keyed per LEVEL (not level+direction), so a level that
- *        just fired cannot immediately fire the opposite way.
- *        CB reactions (hold + break) are DISABLED by default — both variants were
- *        rejected in live use. SIGNALS_BZ_CB=1 brings them back.
- *
- *   6) FLOW GEX DIVERGENCE  (kind='flow_divergence')
- *        aggregate Flow GEX (Σ per-strike flowGEX) opposes the short-term price
- *        move — price up while ΣflowGEX < −FD_THRESHOLD, or price down while it's
- *        > +FD_THRESHOLD — AND one strike dominates that aggregate (|maxFlow| >
- *        FD_OUTLIER_MIN and |maxFlow|/|Σflow| > FD_OUTLIER_RATIO). The monster bar
- *        is flagged as the likely catalyst; direction = price direction. Own
- *        prev-price state (mem.fdPrev), independent of the detectors above.
+ *        0–90 DTE, pulled from the persisted tape via /proxy/flow-history —
+ *        the SAME filter the /v3/whales page shows (≥$1M, OTM, under 90 DTE),
+ *        so an alert and that page never disagree. Call buy = LONG, put buy =
+ *        SHORT. Deduped by print identity, never re-fires.
  *
  * Dedup: per (kind,direction,rounded-level) cooldown = COOLDOWN_MS.
  * Gates:  futures session + a real basis + chartReady (skips warmup/off-hours).
@@ -95,7 +78,7 @@ const EVAL_MS        = Number(process.env.SIGNALS_EVAL_MS        || 3000);   // 
 const CROSS_BUFFER   = Number(process.env.SIGNALS_CROSS_BUFFER   || 1.0);    // flip penetration
 // NOTE: flip_cross used to be gated by a compile-time SIGNALS_FLIP_CROSS env
 // var. It's now a live, DB-backed per-alert toggle — see ALERT_CATALOG /
-// isAlertEnabled() below. Same for BZ_CB / MR_CALL_SHORT / BZILA below.
+// isAlertEnabled() below.
 const WALL_TOUCH     = Number(process.env.SIGNALS_WALL_TOUCH     || 1.5);    // "at the wall"
 const WALL_REJECT    = Number(process.env.SIGNALS_WALL_REJECT    || 1.5);    // push-back = fade
 const WALL_BREAK     = Number(process.env.SIGNALS_WALL_BREAK     || 2.0);    // close-through = break
@@ -103,26 +86,32 @@ const CB_TOUCH       = Number(process.env.SIGNALS_CB_TOUCH       || 1.5);
 const CB_REJECT      = Number(process.env.SIGNALS_CB_REJECT      || 1.5);
 const CB_BREAK       = Number(process.env.SIGNALS_CB_BREAK       || 2.0);
 const CB_MIN_SIZE    = Number(process.env.SIGNALS_CB_MIN_SIZE    || 2.0);    // $B reach filter
+// ── The core level (CB / MVC) ───────────────────────────────────────────────
+// CORE_MOVE_MIN : SPX points the core must move before it counts as a CHANGE.
+//   The scored strike is published on a strike grid, so any real move is at
+//   least one strike; a sub-point wobble is the snapshot re-reading the same
+//   level, not the core relocating.
+// CORE_TOUCH    : ES points from the core that counts as "at it".
+// CORE_REARM    : how far price must LEAVE before a touch can fire again. Wider
+//   than CORE_TOUCH on purpose — without a gap, price sitting on the level
+//   re-fires every time it jitters across the threshold.
+const CORE_MOVE_MIN  = Number(process.env.SIGNALS_CORE_MOVE_MIN   || 1.0);   // SPX pts
+const CORE_TOUCH     = Number(process.env.SIGNALS_CORE_TOUCH      || 1.5);   // ES pts
+const CORE_REARM     = Number(process.env.SIGNALS_CORE_REARM      || 4.0);   // ES pts
 const CONFLUENCE_DIST= Number(process.env.SIGNALS_CONFLUENCE_DIST|| 2.0);    // stack window
 const TOUCH_WINDOW_MS= Number(process.env.SIGNALS_TOUCH_WINDOW_MS|| 5 * 60_000); // touch validity
 const COOLDOWN_MS    = Number(process.env.SIGNALS_COOLDOWN_MS    || 10 * 60_000);
-const BZ_MIN_SCORE       = Number(process.env.SIGNALS_BZ_MIN_SCORE       || 4);   // need 4-of-5 confluence
-const BZ_CONFIDENCE_MIN  = Number(process.env.SIGNALS_BZ_CONFIDENCE_MIN  || 65);  // Confidence Score gate
-// Regime deadband ($): |net GEX| must exceed this for a gamma regime to be "on".
-// Matches greeks-cross-alerts.js GREEKS_CROSS_GEX_BAND (0.5B) but wider by
-// default — a regime that can't clear $1B isn't worth staking a break trade on.
-const GEX_REGIME_BAND    = Number(process.env.SIGNALS_GEX_REGIME_BAND    || 1e9); // $1B
-// Flow GEX divergence (detector #6): aggregate flow opposing price + one strike dominating.
-const FD_THRESHOLD       = Number(process.env.SIGNALS_FD_THRESHOLD       || 2e9); // |Σ flowGEX| for a directional aggregate ($)
-const FD_OUTLIER_RATIO   = Number(process.env.SIGNALS_FD_OUTLIER_RATIO   || 1.5); // |maxFlow| / |Σ flowGEX| to be "concentrated"
-const FD_OUTLIER_MIN     = Number(process.env.SIGNALS_FD_OUTLIER_MIN     || 3e9); // min |maxFlow| for a "monster" bar ($)
 // Initial Balance (detector #2): 09:30–10:30 ET range; a break needs IB_BREAK pts
 // of penetration so a one-tick poke through the extreme isn't an extension.
 const IB_BREAK           = Number(process.env.SIGNALS_IB_BREAK           || 2.0);  // ES pts beyond IBH/IBL
-// Whale prints (detector #4): OTM option BUYS ≥ $1M premium, 1–7 DTE.
+// Whale prints (detector #4). THE /v3/whales PAGE IS THE DEFINITION (2026-09-15):
+// OTM option BUYS ≥ $1M premium, under 90 DTE. The window used to be 1–7 DTE with
+// 0DTE excluded, which meant the alerts and the page a trader checks them against
+// were showing two different populations. 0DTE is back in and the ceiling matches
+// that page's widest stop (≤90).
 const WHALE_MIN_PREMIUM  = Number(process.env.SIGNALS_WHALE_MIN_PREMIUM  || 1_000_000); // $
-const WHALE_DTE_MIN      = Number(process.env.SIGNALS_WHALE_DTE_MIN      || 1);    // 0DTE excluded
-const WHALE_DTE_MAX      = Number(process.env.SIGNALS_WHALE_DTE_MAX      || 7);
+const WHALE_DTE_MIN      = Number(process.env.SIGNALS_WHALE_DTE_MIN      || 0);    // 0DTE included
+const WHALE_DTE_MAX      = Number(process.env.SIGNALS_WHALE_DTE_MAX      || 90);   // matches /v3/whales ≤90
 
 // ── PG pool (same lazy, no-DB-safe pattern as gex-history-writer / play-recorder) ──
 let pool = null;
@@ -239,57 +228,25 @@ async function getRecentSignals({ limit = 50, since = 0, kind = '' } = {}) {
 
 // ── live alert on/off catalog (DB-backed, ~20s poll into an in-memory cache) ──
 // Replaces the old compile-time env kill switches (SIGNALS_FLIP_CROSS,
-// SIGNALS_BZ_CB, SIGNALS_MR_CALL_SHORT, SIGNALS_BZILA) with a live per-alert-key
+// SIGNALS_BZ_CB, SIGNALS_MR_CALL_SHORT) with a live per-alert-key
 // toggle Brandon can flip from the /dev/owner admin page without a redeploy — a
 // background poll refreshes this cache every ~20s, and setAlertEnabled() also
 // updates it immediately on write so a flip takes effect right away.
 const ALERT_CATALOG = [
   { key: 'flip_cross',           label: 'GEX Flip Cross',                               group: 'primary', defaultEnabled: false },
-  // GEX A / GEX B — the two scored gamma levels either side of spot. The
-  // DETECTORS are not written yet (2026-09-15); the keys exist now so the
-  // owner switchboard and the dashboard's alerts tab both carry the row from
-  // the day the detector lands, rather than needing a redeploy to reveal it.
-  { key: 'gex_a',                label: 'GEX A — cross / reclaim',                      group: 'primary', defaultEnabled: true },
-  { key: 'gex_b',                label: 'GEX B — cross / reject',                       group: 'primary', defaultEnabled: true },
+  // THE CORE LEVEL — the CB / MVC scored strike, the one level on the board that
+  // is not a wall. Two events, two keys, because they answer different questions:
+  // "the core moved" is a change in the map, "price is at the core" is a change
+  // in where we are on it.
+  { key: 'core_change',          label: 'Core level change (SPX)',                      group: 'primary', defaultEnabled: true },
+  { key: 'core_touch',           label: 'Core level touch (SPX)',                       group: 'primary', defaultEnabled: true },
   { key: 'ib_formed',            label: 'Initial Balance Formed (info only)',           group: 'primary', defaultEnabled: true },
   { key: 'ib_break',             label: 'Initial Balance Break',                        group: 'primary', defaultEnabled: true },
   { key: 'whale_print',          label: 'Whale Option Prints',                          group: 'primary', defaultEnabled: true },
-  { key: 'flow_divergence',      label: 'Flow GEX Divergence',                          group: 'primary', defaultEnabled: true },
-  { key: 'bzila_confluence',     label: 'Bzila Confluence — MASTER (all setups below)', group: 'bzila',   defaultEnabled: false },
-  { key: 'bzila_flip_cross',     label: 'Bzila: Flip cross breakout/breakdown',         group: 'bzila',   defaultEnabled: true },
-  { key: 'bzila_mr_put_long',    label: 'Bzila: Mean-reversion long (Put Wall)',        group: 'bzila',   defaultEnabled: true },
-  { key: 'bzila_mr_call_short',  label: 'Bzila: Mean-reversion short (Call Wall)',      group: 'bzila',   defaultEnabled: false },
-  { key: 'bzila_putwall_break',  label: 'Bzila: Put Wall break (trend down)',           group: 'bzila',   defaultEnabled: true },
-  { key: 'bzila_callwall_break', label: 'Bzila: Call Wall break (trend up)',            group: 'bzila',   defaultEnabled: true },
-  { key: 'bzila_cb_reaction',    label: 'Bzila: CB hold/break',                         group: 'bzila',   defaultEnabled: false },
+  { key: 'gex_change_top',       label: 'Top GEX Change (scanner pick)',                group: 'primary', defaultEnabled: true },
 ];
 const ALERT_CATALOG_BY_KEY = new Map(ALERT_CATALOG.map((a) => [a.key, a]));
 
-// Literal `setup` strings fired inside evaluateBzilaConfluence → their catalog
-// sub-key. Falls back to null (governed by the bzila_confluence master key
-// alone) for any setup string not recognized here.
-function bzilaSubKey(setup) {
-  switch (setup) {
-    case 'Trend breakout long (Flip cross)':
-    case 'Trend breakdown short (Flip cross)':
-      return 'bzila_flip_cross';
-    case 'Mean-reversion long (Put Wall)':
-      return 'bzila_mr_put_long';
-    case 'Mean-reversion short (Call Wall)':
-      return 'bzila_mr_call_short';
-    case 'Trend breakdown short (Put Wall break)':
-      return 'bzila_putwall_break';
-    case 'Trend breakout long (Call Wall break)':
-      return 'bzila_callwall_break';
-    case 'CB support hold':
-    case 'CB resistance hold':
-    case 'CB break ↑':
-    case 'CB break ↓':
-      return 'bzila_cb_reaction';
-    default:
-      return null;
-  }
-}
 
 let alertCache = new Map(ALERT_CATALOG.map((a) => [a.key, a.defaultEnabled]));
 
@@ -510,7 +467,7 @@ function evaluateFrame(cur, mem, cfg = {}) {
   const C = {
     CROSS_BUFFER, WALL_TOUCH, WALL_REJECT, WALL_BREAK, CB_TOUCH, CB_REJECT, CB_BREAK,
     CB_MIN_SIZE, CONFLUENCE_DIST, TOUCH_WINDOW_MS, COOLDOWN_MS,
-    IB_BREAK, ...cfg,
+    IB_BREAK, CORE_MOVE_MIN, CORE_TOUCH, CORE_REARM, ...cfg,
   };
   const out = [];
   const { ts, priceEs, basis } = cur;
@@ -654,261 +611,71 @@ function evaluateFrame(cur, mem, cfg = {}) {
     }
   }
 
+  // ── 5) THE CORE LEVEL — change, and touch ──────────────────────────────────
+  // The CB / MVC scored strike (cur.cbSpx, refreshed once a minute). These two
+  // are deliberately NOT wall logic: there is no reject, no break, no direction.
+  // A core level is a place the board is centred on, so the only two things
+  // worth saying about it are that it MOVED and that price is AT it.
+  //
+  // `direction: 'neutral'` for both. A core touch is not a trade instruction —
+  // what happens at the level is the trade, and this engine does not claim to
+  // know which way that goes.
+  //
+  // Both are keyed in SPX, not ES: the core is published as an SPX strike, and a
+  // trader reads "core moved to 6625", never "to 6625 + basis".
+  if (cur.cbSpx != null && Number.isFinite(cur.cbSpx) && cbEs != null) {
+    const coreSpx = Number(cur.cbSpx);
+
+    // ── 5a) CHANGE ───────────────────────────────────────────────────────────
+    // First core seen in a process is remembered silently — announcing it would
+    // make every restart look like the level had just moved.
+    if (mem.corePrevSpx == null) {
+      mem.corePrevSpx = coreSpx;
+    } else if (Math.abs(coreSpx - mem.corePrevSpx) >= C.CORE_MOVE_MIN) {
+      const from = mem.corePrevSpx;
+      const up = coreSpx > from;
+      mem.corePrevSpx = coreSpx;
+      // A move re-arms the touch: the new level has not been tested yet, and
+      // the old latch was about a strike that is no longer the core.
+      mem.coreTouched = false;
+      fire({
+        kind: 'core_change',
+        direction: 'neutral',
+        setup: `Core level ${up ? '↑' : '↓'} ${from.toFixed(0)} → ${coreSpx.toFixed(0)}`,
+        levelName: 'Core',
+        levelEs: cbEs,
+        base: 3,
+        reason: `SPX core level moved ${up ? 'up' : 'down'} ${Math.abs(coreSpx - from).toFixed(0)} pts`
+          + ` (${from.toFixed(0)} → ${coreSpx.toFixed(0)})`
+          + (cur.cbSize != null ? ` · ${Number(cur.cbSize).toFixed(1)}B` : ''),
+      });
+    }
+
+    // ── 5b) TOUCH ────────────────────────────────────────────────────────────
+    // Latched: one signal per visit. Price has to leave by CORE_REARM before the
+    // level can announce itself again, so an hour spent grinding on the core is
+    // one alert rather than forty.
+    const dist = Math.abs(priceEs - cbEs);
+    if (mem.coreTouched && dist > C.CORE_REARM) mem.coreTouched = false;
+    if (!mem.coreTouched && dist <= C.CORE_TOUCH) {
+      mem.coreTouched = true;
+      const from = prev && prev.priceEs != null ? (prev.priceEs < cbEs ? 'below' : 'above') : null;
+      fire({
+        kind: 'core_touch',
+        direction: 'neutral',
+        setup: 'Core level touch',
+        levelName: 'Core',
+        levelEs: cbEs,
+        base: 3,
+        reason: `ES ${priceEs.toFixed(2)} is at the core level (SPX ${coreSpx.toFixed(0)})`
+          + (from ? `, arriving from ${from}` : '')
+          + (cur.cbSize != null ? ` · ${Number(cur.cbSize).toFixed(1)}B` : ''),
+      });
+    }
+  }
+
   // Carry state forward.
   mem.prev = { priceEs, flipEs, callEs, putEs, cbEs, ts };
-  return out;
-}
-
-// ── pure detector #2: Bzila GEX Confluence System v2 (kind='bzila_confluence') ──
-// cur adds: totalNetGex, dex, flowScore, ictBias ('bull'|'bear'|null), confidence
-// (0-100|null). Independent touch/reject/break state (mem.bzLevels/bzPrev) so it
-// never shares cooldown state with evaluateFrame's primary detectors.
-//
-// v2 weighted scoring (need ≥ BZ_MIN_SCORE, default 4, out of a 6 max):
-//   Regime match                       +2
-//   GEX momentum supportive (mag ↑)    +1
-//   DEX sign/momentum supportive       +1
-//   Strong flow                        +1
-//   ICT/IB bias agrees + Confidence≥70 +1
-// Confidence ≥ BZ_CONFIDENCE_MIN (65) is a separate hard gate, not a scored point.
-// Hard no-trade overrides (block the fire outright, regardless of score):
-//   - GEX weakening sharply (mag ↓ ≥15%) while relying on that regime
-//   - DEX AND flow both opposing the trade direction
-//   - Flip reactions without supportive GEX momentum ("near flip, no momentum")
-function evaluateBzilaConfluence(cur, mem, cfg = {}) {
-  const C = {
-    WALL_TOUCH, WALL_REJECT, WALL_BREAK, CB_TOUCH, CB_REJECT, CB_BREAK,
-    CROSS_BUFFER, TOUCH_WINDOW_MS, COOLDOWN_MS, BZ_MIN_SCORE, BZ_CONFIDENCE_MIN,
-    GEX_REGIME_BAND, ...cfg,
-  };
-  const out = [];
-  const { ts, priceEs, basis } = cur;
-  if (!isAlertEnabled('bzila_confluence')) return out; // live DB-backed master toggle
-  if (!(priceEs > 0)) return out;
-
-  const toEs = (spx) => (spx != null && Number.isFinite(spx) ? spx + (basis || 0) : null);
-  const flipEs = toEs(cur.flipSpx);
-  const callEs = toEs(cur.callSpx);
-  const putEs  = toEs(cur.putSpx);
-  const cbEs   = toEs(cur.cbSpx);
-
-  // Regime: sign of Net GEX sets the session mode — positive = fade walls
-  // (mean-revert), negative = trade breakouts (trend).
-  //
-  // DEADBAND: net GEX oscillating across zero (±sub-$B) is NOT a regime, it's
-  // noise. Without a band, tng = -0.05B flips the whole session mode and the
-  // break detectors start firing reversals into each other. Inside the band no
-  // regime is active → regimeOk=false → -2 points → below BZ_MIN_SCORE → no fire.
-  const tng = cur.totalNetGex || 0;
-  const positiveGexRegime = tng >  C.GEX_REGIME_BAND;
-  const negativeGexRegime = tng < -C.GEX_REGIME_BAND;
-
-  const prev = mem.bzPrev;
-  // GEX momentum: is |Net GEX| growing (strengthening the active regime) or
-  // shrinking (weakening — possible regime flip ahead)?
-  const gexNowAbs  = Math.abs(cur.totalNetGex || 0);
-  const gexPrevAbs = Math.abs(prev ? prev.totalNetGex ?? cur.totalNetGex : cur.totalNetGex);
-  const gexMomentumUp   = gexPrevAbs > 0 ? gexNowAbs > gexPrevAbs : gexNowAbs > 0;
-  const gexWeakeningSharply = gexPrevAbs > 0 && gexNowAbs < gexPrevAbs * 0.85;
-
-  const flowBias = cur.flowScore > 0 ? 'long' : cur.flowScore < 0 ? 'short' : null;
-  const dexBias  = cur.dex > 0 ? 'long' : cur.dex < 0 ? 'short' : null;
-  const prevDex  = prev ? prev.dex ?? cur.dex : cur.dex;
-  // "DEX sign/momentum supportive": either already on-side, or turning that way.
-  const dexSupports = (direction) =>
-    dexBias === direction ||
-    (direction === 'long' && cur.dex > prevDex) ||
-    (direction === 'short' && cur.dex < prevDex);
-  const ictBias  = cur.ictBias === 'bull' ? 'long' : cur.ictBias === 'bear' ? 'short' : null;
-  const confOk        = cur.confidence == null ? true : cur.confidence >= C.BZ_CONFIDENCE_MIN;
-  const ictConfBonus  = (direction) => ictBias === direction && cur.confidence != null && cur.confidence >= 70;
-  const opposite = (d) => (d === 'long' ? 'short' : 'long');
-
-  const scoreOf = (direction, regimeOk) => {
-    let n = 0;
-    if (regimeOk) n += 2;
-    if (gexMomentumUp) n += 1;
-    if (dexSupports(direction)) n += 1;
-    if (flowBias === direction) n += 1;
-    if (ictConfBonus(direction)) n += 1;
-    return n;
-  };
-
-  const st = (key) => mem.bzLevels[key] || (mem.bzLevels[key] = { touchedAt: 0, side: 0 });
-
-  // Same touch→reject/break machinery as evaluateFrame's reactLevel, but keyed
-  // into mem.bzLevels so state never collides with the primary detectors.
-  const reactLevel = (key, es, opts) => {
-    if (es == null || es <= 0 || !prev) return;
-    const s = st(key);
-    const dist = priceEs - es;
-    if (Math.abs(dist) <= opts.touch) { s.touchedAt = ts; if (s.side === 0) s.side = Math.sign(prev.priceEs - es) || 1; }
-    const touchedRecently = ts - s.touchedAt <= C.TOUCH_WINDOW_MS;
-    const prevDist = prev.priceEs - es;
-    if (prevDist < opts.brk && dist >= opts.brk) { opts.onBreak('up'); s.touchedAt = 0; s.side = 0; return; }
-    if (prevDist > -opts.brk && dist <= -opts.brk) { opts.onBreak('down'); s.touchedAt = 0; s.side = 0; return; }
-    if (touchedRecently) {
-      if (s.side < 0 && dist <= -opts.rej) { opts.onReject('from_below'); s.touchedAt = 0; s.side = 0; }
-      else if (s.side > 0 && dist >= opts.rej) { opts.onReject('from_above'); s.touchedAt = 0; s.side = 0; }
-    }
-    if (Math.abs(dist) > Math.max(opts.brk, opts.touch) * 2) s.side = 0;
-  };
-
-  const fire = (direction, setup, levelName, levelEs, regimeOk, { requireGexMomentum = false } = {}) => {
-    const subKey = bzilaSubKey(setup);
-    if (subKey && !isAlertEnabled(subKey)) return; // live DB-backed per-setup toggle
-    if (!confOk) return; // No-Trade Rule: Confidence < BZ_CONFIDENCE_MIN
-    // No-Trade: GEX weakening sharply while the setup depends on that regime.
-    if (regimeOk && gexWeakeningSharply) return;
-    // No-Trade: near Flip without momentum — flip reactions need GEX strengthening.
-    if (requireGexMomentum && !gexMomentumUp) return;
-    // No-Trade: DEX and flow both opposing the trade direction.
-    if (dexBias === opposite(direction) && flowBias === opposite(direction)) return;
-    const n = scoreOf(direction, regimeOk);
-    if (n < C.BZ_MIN_SCORE) return; // "need ≥4 points to trade"
-    // Cooldown key is DIRECTION-AGNOSTIC: a level that just fired must go quiet
-    // regardless of which way the next signal points. Keying on direction let a
-    // SHORT break and a LONG break fire off the same CB minutes apart — the
-    // detector reversing on itself is exactly the whipsaw we must not alert on.
-    const key = `bzila_confluence:${levelEs != null ? Math.round(levelEs) : 'x'}`;
-    const last = mem.cooldowns.get(key) || 0;
-    if (ts - last < C.COOLDOWN_MS) return;
-    mem.cooldowns.set(key, ts);
-    const parts = [];
-    if (regimeOk) parts.push('Regime×2');
-    if (gexMomentumUp) parts.push('GEX↑');
-    if (dexSupports(direction)) parts.push('DEX');
-    if (flowBias === direction) parts.push('Flow');
-    if (ictConfBonus(direction)) parts.push('ICT+Conf70');
-    out.push({
-      ts, kind: 'bzila_confluence', direction, setup, levelName,
-      levelEs: levelEs != null ? +levelEs.toFixed(2) : null,
-      levelSpx: levelEs != null ? +(levelEs - (basis || 0)).toFixed(2) : null,
-      priceEs: +priceEs.toFixed(2),
-      priceSpx: +(priceEs - (basis || 0)).toFixed(2),
-      score: n,
-      confluence: parts.join(', '),
-      reason: `Bzila GEX Confluence v2 — ${n}/6 (${parts.join('+')})`
-        + (cur.confidence != null ? `, Confidence ${cur.confidence.toFixed(0)}` : ''),
-      meta: {
-        basis: +(basis || 0).toFixed(2), confidence: cur.confidence ?? null,
-        flowScore: cur.flowScore ?? null, dex: cur.dex ?? null, ictBias: cur.ictBias ?? null,
-        gexNowAbs: +gexNowAbs.toFixed(2), gexMomentumUp,
-      },
-    });
-  };
-
-  // ── Flip cross (trend regime confirmation) — needs GEX momentum to fire ──
-  if (prev && flipEs != null && prev.flipEs != null) {
-    const upCross   = prev.priceEs <= prev.flipEs && priceEs >= flipEs + C.CROSS_BUFFER;
-    const downCross = prev.priceEs >= prev.flipEs && priceEs <= flipEs - C.CROSS_BUFFER;
-    if (upCross) fire('long', 'Trend breakout long (Flip cross)', 'Flip', flipEs, negativeGexRegime, { requireGexMomentum: true });
-    else if (downCross) fire('short', 'Trend breakdown short (Flip cross)', 'Flip', flipEs, negativeGexRegime, { requireGexMomentum: true });
-  }
-
-  // ── Mean-reversion: Put Wall support / Call Wall resistance reject ──
-  reactLevel('bz_put', putEs, {
-    touch: C.WALL_TOUCH, rej: C.WALL_REJECT, brk: C.WALL_BREAK,
-    onReject: (from) => { if (from === 'from_above') fire('long', 'Mean-reversion long (Put Wall)', 'Put Wall', putEs, positiveGexRegime); },
-    onBreak: (dir) => { if (dir === 'down') fire('short', 'Trend breakdown short (Put Wall break)', 'Put Wall', putEs, negativeGexRegime, { requireGexMomentum: true }); },
-  });
-  reactLevel('bz_call', callEs, {
-    touch: C.WALL_TOUCH, rej: C.WALL_REJECT, brk: C.WALL_BREAK,
-    onReject: (from) => { if (from === 'from_below') fire('short', 'Mean-reversion short (Call Wall)', 'Call Wall', callEs, positiveGexRegime); },
-    onBreak: (dir) => { if (dir === 'up') fire('long', 'Trend breakout long (Call Wall break)', 'Call Wall', callEs, negativeGexRegime, { requireGexMomentum: true }); },
-  });
-
-  // ── CB key-level reaction — DISABLED by default (SIGNALS_BZ_CB=1 to re-enable) ──
-  // Both variants were rejected in live use:
-  //   - CB break ↑/↓  : whipsawed around a moving CB on a 2pt threshold
-  //   - CB hold       : fired constantly, scored high (6/6) on both sides of the
-  //                     same level, and carried no edge worth acting on
-  // The detector is left intact (not deleted) so it can be backtested off the
-  // trade_signals history before anyone decides to bring it back. Do NOT re-enable
-  // without a win-rate number to point at.
-  if (isAlertEnabled('bzila_cb_reaction')) {
-    reactLevel('bz_cb', cbEs, {
-      touch: C.CB_TOUCH, rej: C.CB_REJECT, brk: C.CB_BREAK,
-      onReject: (from) => {
-        if (from === 'from_above') fire('long', 'CB support hold', 'CB', cbEs, positiveGexRegime);
-        else fire('short', 'CB resistance hold', 'CB', cbEs, positiveGexRegime);
-      },
-      // A break is a TREND setup: it only pays in a short-gamma regime that is
-      // actively STRENGTHENING. Same gate the Flip cross already carried — without
-      // it, breaks fired into a decaying regime and reversed within the hour.
-      onBreak: (dir) => fire(dir === 'up' ? 'long' : 'short', `CB break ${dir === 'up' ? '↑' : '↓'}`, 'CB', cbEs, negativeGexRegime, { requireGexMomentum: true }),
-    });
-  }
-
-  mem.bzPrev = { priceEs, flipEs, ts, totalNetGex: cur.totalNetGex, dex: cur.dex };
-  return out;
-}
-
-// ── pure detector #6: Flow GEX divergence (kind='flow_divergence') ──
-// The aggregate flow (Σ per-strike flowGEX) points AGAINST the short-term price
-// move, while a single strike dominates that aggregate — the "monster" bar is
-// flagged as the likely catalyst, direction = price direction. Ported from
-// Brandon's detect_flow_divergence snippet. Own prev-price state (mem.fdPrev) so
-// it never shares cooldown/prev with the other detectors. cur adds: totalFlowGex,
-// maxFlow, maxFlowStrike (all from gexRows[].flowGEX, in $).
-function evaluateFlowDivergence(cur, mem, cfg = {}) {
-  const C = { FD_THRESHOLD, FD_OUTLIER_RATIO, FD_OUTLIER_MIN, COOLDOWN_MS, ...cfg };
-  const out = [];
-  const { ts, priceEs, basis } = cur;
-
-  const prev = mem.fdPrev;
-  mem.fdPrev = { priceEs, ts };                 // carry forward for next frame's direction
-  if (!(priceEs > 0) || !prev || !(prev.priceEs > 0)) return out;
-  if (!isAlertEnabled('flow_divergence')) return out; // live DB-backed toggle
-
-  const totalFlow = Number(cur.totalFlowGex) || 0;
-  const maxFlow   = Number(cur.maxFlow) || 0;
-  const maxStrike = Number(cur.maxFlowStrike);
-  if (!(Math.abs(maxFlow) > 0) || !Number.isFinite(maxStrike) || maxStrike <= 0) return out;
-
-  // 1) Aggregate flow vs short-term price direction (price vs the prior frame; a
-  //    vs-open / vs-VWAP baseline could swap in here later).
-  const priceUp = priceEs > prev.priceEs;
-  const aggDivergence =
-    (priceUp && totalFlow < -C.FD_THRESHOLD) || (!priceUp && totalFlow > C.FD_THRESHOLD);
-
-  // 2) One strike dominates the aggregate (concentrated outlier).
-  const outlierRatio = Math.abs(maxFlow) / (Math.abs(totalFlow) + 1e6);
-  const strongOutlier = outlierRatio > C.FD_OUTLIER_RATIO && Math.abs(maxFlow) > C.FD_OUTLIER_MIN;
-
-  if (!(aggDivergence && strongOutlier)) return out;
-
-  const direction = priceUp ? 'long' : 'short';
-  const key = `flow_divergence:${direction}:${Math.round(maxStrike)}`;
-  const last = mem.cooldowns.get(key) || 0;
-  if (ts - last < C.COOLDOWN_MS) return out;
-  mem.cooldowns.set(key, ts);
-
-  const levelEs = Number.isFinite(maxStrike) ? maxStrike + (basis || 0) : null;
-  const score = Math.max(1, Math.min(5,
-    3 + (Math.abs(maxFlow) > 2 * C.FD_OUTLIER_MIN ? 1 : 0) + (outlierRatio > 2.5 ? 1 : 0)));
-
-  out.push({
-    ts,
-    kind: 'flow_divergence',
-    direction,
-    setup: 'Flow GEX divergence',
-    levelName: `Flow ${Math.round(maxStrike)}`,
-    levelEs: levelEs != null ? +levelEs.toFixed(2) : null,
-    levelSpx: +maxStrike.toFixed(2),
-    priceEs: +priceEs.toFixed(2),
-    priceSpx: +(priceEs - (basis || 0)).toFixed(2),
-    score,
-    confluence: null,
-    reason: `Aggregate Flow GEX ${(totalFlow / 1e9).toFixed(1)}B but monster ${(maxFlow / 1e9).toFixed(1)}B at ${Math.round(maxStrike)} → ${priceUp ? 'bullish' : 'bearish'} catalyst likely`,
-    meta: {
-      basis: +(basis || 0).toFixed(2),
-      totalFlowGex: Math.round(totalFlow),
-      maxFlow: Math.round(maxFlow),
-      maxStrike: Math.round(maxStrike),
-      outlierRatio: +outlierRatio.toFixed(2),
-    },
-  });
   return out;
 }
 
@@ -1081,6 +848,133 @@ async function refreshWhales(base) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TOP GEX CHANGE (kind='gex_change_top') — the scanner's picks, as alerts.
+//
+// /v3/scanner → GEX Change → Top GEX Change is a leaderboard that only exists
+// while a browser tab is open on it. gex-change-top-recorder.js is already
+// writing every pick into `gex_change_top` — the half-hour slots AND the live
+// triggers that cross into "★ Very strong" between slots — so the alert is a
+// READ of that table, not a second copy of its scoring. One alert per pick,
+// which is what "an alert for every GEX change that comes up from the scanner"
+// asks for: if the card appears on that page, it appears here.
+//
+// DIRECTION IS 'neutral', DELIBERATELY. A pick is a strike whose gamma is
+// building fast; the row carries no call/put right, so calling it long or short
+// would be this file inventing a bias the scanner never claimed. It is a "look
+// at this contract" alert, and the score it carries is the scanner's own 0–100.
+//
+// The recorder is required LAZILY, inside the function. It pulls in the
+// strike-growth pool and a good deal else, and the engine must still start in a
+// process where that module is absent or broken.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GEX_TOP_POLL_MS = Number(process.env.SIGNALS_GEX_TOP_POLL_MS || 60_000);
+const GEX_TOP_SEEN_MAX = 2000;
+let gexTopCache = { at: 0, rows: [], seeded: false, day: null };
+
+async function refreshGexChangeTop() {
+  if (Date.now() - gexTopCache.at < GEX_TOP_POLL_MS) return null;
+  gexTopCache.at = Date.now();
+  try {
+    const rec = require('./gex-change-top-recorder');
+    if (typeof rec.getHistory !== 'function') return null;
+    const j = await rec.getHistory({ limitSlots: 40 });
+    const slots = Array.isArray(j?.slots) ? j.slots : [];
+    // getHistory groups by slot; the alert wants the picks themselves.
+    const rows = [];
+    for (const sl of slots) {
+      const picks = Array.isArray(sl?.rows) ? sl.rows : Array.isArray(sl?.picks) ? sl.picks : [];
+      for (const r of picks) rows.push({ ...r, slot: r.slot ?? sl.slot });
+    }
+    gexTopCache.rows = rows.length ? rows : slots;
+    return gexTopCache.rows;
+  } catch (e) {
+    console.log(`[signals] gex-change-top — read failed: ${e.message}`);
+    return null;
+  }
+}
+
+/** Stable identity for a pick: the probe id when there is one, else the strike
+ *  under its slot. A row re-read on the next poll must not fire twice. */
+function gexTopKey(r) {
+  if (r?.watch_id != null) return `w:${r.watch_id}`;
+  return `s:${r?.date ?? ''}:${r?.slot ?? ''}:${r?.symbol ?? ''}:${r?.expiry ?? ''}:${r?.strike ?? ''}`;
+}
+
+const fmtUsd = (v) => {
+  const n = Math.abs(Number(v) || 0);
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `$${Math.round(n / 1e3)}k`;
+  return `$${Math.round(n)}`;
+};
+
+/** PURE. rows → one signal per pick not already in mem.gexTopSeen. */
+function evaluateGexChangeTop(rows, mem) {
+  const out = [];
+  if (!Array.isArray(rows) || !rows.length) return out;
+  if (!mem.gexTopSeen) mem.gexTopSeen = new Set();
+
+  // Bookkeeping runs whether or not the toggle is on, so switching the alert
+  // back on mid-session does not replay the morning. Same rule as whales.
+  const alertOn = isAlertEnabled('gex_change_top');
+
+  for (const r of rows) {
+    const key = gexTopKey(r);
+    if (mem.gexTopSeen.has(key)) continue;
+    mem.gexTopSeen.add(key);
+    if (!alertOn) continue;
+
+    const symbol = String(r?.symbol ?? '').toUpperCase();
+    const strike = Number(r?.strike);
+    if (!symbol || !Number.isFinite(strike)) continue;
+
+    const chg = Number(r?.latest_chg) || 0;
+    const pct = Number(r?.pct_open) || 0;
+    const score100 = Number(r?.score) || 0;
+    const live = r?.live === true;
+
+    out.push({
+      ts: Date.parse(r?.ts) || Date.now(),
+      kind: 'gex_change_top',
+      direction: 'neutral',
+      setup: live ? 'Top GEX Change — live trigger' : 'Top GEX Change — scanner pick',
+      levelName: `${symbol} ${strike}`,
+      levelEs: null,
+      levelSpx: strike,
+      priceEs: Number(r?.spot) || 0,
+      priceSpx: Number(r?.spot) || null,
+      // The scanner's 0–100 score compressed onto this engine's 1–5, so a pick
+      // sorts against a wall reject rather than swamping it.
+      score: Math.max(1, Math.min(5, Math.round(score100 / 20) || 1)),
+      confluence: null,
+      reason: `Δ GEX ${chg >= 0 ? '+' : '−'}${fmtUsd(chg)} · ${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(0)}% vs open`
+        + (r?.expiry ? ` · exp ${r.expiry}` : '')
+        + (r?.proj_grade ? ` · grade ${r.proj_grade}` : ''),
+      meta: {
+        symbol, strike,
+        expiry: r?.expiry ?? null,
+        slot: r?.slot ?? null,
+        rank: r?.rank ?? null,
+        latestChg: chg,
+        pctOpen: pct,
+        zScore: r?.z_score ?? null,
+        scannerScore: score100,
+        watchId: r?.watch_id ?? null,
+        live,
+      },
+    });
+  }
+
+  // Bounded, like mem.whaleSeen — a day of picks is small, but the set must not
+  // be the thing that grows forever in a process that runs for weeks.
+  if (mem.gexTopSeen.size > GEX_TOP_SEEN_MAX) {
+    mem.gexTopSeen = new Set(Array.from(mem.gexTopSeen).slice(-Math.floor(GEX_TOP_SEEN_MAX / 2)));
+  }
+  return out;
+}
+
 // ib_formed is a once-per-day signal, but `mem` is per-process — a redeploy at
 // 1pm would otherwise re-fire today's IB. Before the IB detector can run, ask the
 // DB whether today already has an ib_formed row and seed mem.ibFormedDay from it.
@@ -1128,42 +1022,10 @@ async function refreshCb(base) {
 
 // ICT bias: most recent bull/bear setup from /api/ict-setups (today), only
 // trusted for 60 min so a stale morning setup doesn't linger all session.
-let ictCache = { bias: null, at: 0 };
-async function refreshIct(base) {
-  if (Date.now() - ictCache.at < 60_000) return;
-  try {
-    const res = await fetch(`${base}/api/ict-setups?date=${etDateStr()}`, {
-      headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
-      cache: 'no-store',
-    });
-    if (!res.ok) { ictCache = { bias: null, at: Date.now() }; return; }
-    const j = await res.json().catch(() => ({}));
-    const setups = Array.isArray(j.setups) ? j.setups : [];
-    const cutoff = Date.now() - 60 * 60_000;
-    const recent = setups
-      .filter((s) => s && (s.dir === 'bull' || s.dir === 'bear') && Number(s.trigger_ts) >= cutoff)
-      .sort((a, b) => Number(b.trigger_ts) - Number(a.trigger_ts))[0];
-    ictCache = { bias: recent ? recent.dir : null, at: Date.now() };
-  } catch { /* keep last */ }
-}
+// NOTE (2026-09-15): the ICT-bias and Confidence-score readers that used to sit
+// here fed ONE consumer — the Bzila confluence gate — and went with it. Nothing
+// in this engine polls /api/ict-setups or /api/confidence any more.
 
-// Confidence Score (score.hit, 0-100) from /api/confidence — the doc's ≥65
-// no-trade filter. Cached 60s; treated as "pass" if the route errors/404s
-// (e.g. no MVC snapshot yet) so a data hiccup doesn't silently gate everything.
-let confCache = { value: null, at: 0 };
-async function refreshConfidence(base) {
-  if (Date.now() - confCache.at < 60_000) return;
-  try {
-    const res = await fetch(`${base}/api/confidence`, {
-      headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
-      cache: 'no-store',
-    });
-    if (!res.ok) { confCache = { value: null, at: Date.now() }; return; }
-    const j = await res.json().catch(() => ({}));
-    const hit = Number(j?.score?.hit);
-    confCache = { value: Number.isFinite(hit) ? hit : null, at: Date.now() };
-  } catch { /* keep last */ }
-}
 
 // ── NO DISCORD (2026-09-15) ──────────────────────────────────────────────────
 // This engine used to fan every signal out to a "CB Edge Signals" webhook.
@@ -1196,17 +1058,6 @@ function readFrame() {
   const flow = s.flow || {};
   const callNet = Number(flow.callBuyVol || 0) - Number(flow.callSellVol || 0);
   const putNet  = Number(flow.putBuyVol  || 0) - Number(flow.putSellVol  || 0);
-  // Flow GEX aggregates for the divergence detector: Σ flowGEX and the single
-  // strike carrying the biggest |flowGEX| (the "monster" bar). Same per-strike
-  // flowGEX the /home heatmap + options-chain read off gexRows.
-  const rows = Array.isArray(s.gexRows) ? s.gexRows : [];
-  let totalFlowGex = 0, maxFlow = 0, maxFlowStrike = null;
-  for (const r of rows) {
-    const f = Number(r && r.flowGEX || 0);
-    if (!Number.isFinite(f)) continue;
-    totalFlowGex += f;
-    if (Math.abs(f) > Math.abs(maxFlow)) { maxFlow = f; maxFlowStrike = Number(r.strike); }
-  }
   return {
     ts: Date.now(),
     priceEs,
@@ -1219,23 +1070,13 @@ function readFrame() {
     cbSize:  cbCache.size,
     ctx:     computeContextLevels(s.esCandles),
     chartReady: !!(s.status && s.status.chartReady),
-    // ── Bzila Confluence inputs ──
-    totalNetGex: Number(s.totalNetGex) || 0,
-    dex: Number(totals.totalDeltaOiVol ?? totals.totalDeltaVol ?? 0),
-    flowScore: callNet - putNet, // bullish = net call-buy + net put-sell
-    ictBias: ictCache.bias,
-    confidence: confCache.value,
-    // ── Flow GEX divergence inputs (detector #6) ──
-    totalFlowGex,
-    maxFlow,
-    maxFlowStrike,
   };
 }
 
 async function runOnce(base, { force = false } = {}) {
   if (!force && !inSession()) return { skipped: 'off-session' };
-  const [, , , whaleRows] = await Promise.all([
-    refreshCb(base), refreshIct(base), refreshConfidence(base), refreshWhales(base),
+  const [, whaleRows, gexTopRows] = await Promise.all([
+    refreshCb(base), refreshWhales(base), refreshGexChangeTop(),
     hydrateIbFormedDay(),
   ]);
 
@@ -1259,10 +1100,25 @@ async function runOnce(base, { force = false } = {}) {
     }
   }
 
+  // Scanner picks are table-driven like whale prints: no basis, no price, no
+  // warm chart. Same seed rule too — the first read of a process marks the
+  // day's existing picks seen so a restart does not replay the leaderboard.
+  const gexTopSigs = [];
+  if (gexTopRows) {
+    const fired = evaluateGexChangeTop(gexTopRows, mem);
+    if (!gexTopCache.seeded) {
+      gexTopCache.seeded = true;
+      console.log(`[signals] gex-change-top seeded — ${fired.length} pick(s) marked seen`);
+    } else {
+      gexTopSigs.push(...fired);
+    }
+  }
+
   const frame = readFrame();
-  if (!force && !frame.chartReady) { await emit(whaleSigs); return { skipped: 'warming', fired: whaleSigs.length }; }
-  if (!(frame.priceEs > 0) || !(frame.basis !== 0)) { await emit(whaleSigs); return { skipped: 'no-price-or-basis', fired: whaleSigs.length }; }
-  const sigs = [...whaleSigs, ...evaluateFrame(frame, mem), ...evaluateBzilaConfluence(frame, mem), ...evaluateFlowDivergence(frame, mem)];
+  const tapeSigs = [...whaleSigs, ...gexTopSigs];
+  if (!force && !frame.chartReady) { await emit(tapeSigs); return { skipped: 'warming', fired: tapeSigs.length }; }
+  if (!(frame.priceEs > 0) || !(frame.basis !== 0)) { await emit(tapeSigs); return { skipped: 'no-price-or-basis', fired: tapeSigs.length }; }
+  const sigs = [...whaleSigs, ...gexTopSigs, ...evaluateFrame(frame, mem)];
   await emit(sigs);
   return { fired: sigs.length, price: frame.priceEs };
 }
@@ -1270,14 +1126,9 @@ async function runOnce(base, { force = false } = {}) {
 /** Persist + alert + log a batch of signals. */
 async function emit(sigs) {
   for (const sig of sigs) {
-    // Belt-and-suspenders: re-derive this signal's live toggle key(s) and skip it
-    // if disabled, in case some call site upstream missed a gate. Bzila signals
-    // must have BOTH the master key and their own sub-key enabled.
+    // Belt-and-suspenders: re-check this signal's live toggle and skip it if
+    // disabled, in case some call site upstream missed a gate.
     if (!isAlertEnabled(sig.kind)) continue;
-    if (sig.kind === 'bzila_confluence') {
-      const subKey = bzilaSubKey(sig.setup);
-      if (subKey && !isAlertEnabled(subKey)) continue;
-    }
     sig.sessionDate = etDateStr(new Date(sig.ts));
     await insertSignal(sig);
     console.log(`[signals] ${sig.direction.toUpperCase()} ${sig.setup} @ ${sig.levelName ?? '-'} ES ${sig.priceEs} (score ${sig.score}${sig.confluence ? ', +' + sig.confluence : ''})`);
@@ -1314,9 +1165,8 @@ module.exports = {
   getRecentSignals,
   runOnce,
   evaluateFrame,   // pure — used by signals-engine.selftest.js
-  evaluateBzilaConfluence, // pure — used by signals-engine.selftest.js
-  evaluateFlowDivergence,  // pure — flow-vs-price divergence detector (#6)
-  evaluateWhalePrints,     // pure — OTM ≥$1M 1-7DTE option BUYS off the flow tape (#7)
+  evaluateWhalePrints,     // pure — OTM ≥$1M 0-90DTE option BUYS off the flow tape (#7)
+  evaluateGexChangeTop,    // pure — new scanner picks → one signal each (#8)
   computeContextLevels,
   inSession,
   _mem: mem,
@@ -1327,6 +1177,5 @@ module.exports = {
   setAlertEnabled,
   isAlertEnabled,
   refreshAlertCache,
-  bzilaSubKey,
   __setAlertCacheForTest, // test-only — used by signals-engine.selftest.js
 };

@@ -12,7 +12,7 @@
  * Frames are built in ES space with basis=0 so SPX-level inputs map 1:1 to ES.
  */
 
-const { evaluateFrame, evaluateFlowDivergence, __setAlertCacheForTest } = require('./signals-engine');
+const { evaluateFrame, evaluateGexChangeTop, __setAlertCacheForTest } = require('./signals-engine');
 
 // flip_cross is production-disabled by default via the live DB-backed
 // ALERT_CATALOG toggle (isAlertEnabled('flip_cross')), not the old
@@ -20,6 +20,8 @@ const { evaluateFrame, evaluateFlowDivergence, __setAlertCacheForTest } = requir
 // the in-memory cache directly (test-only escape hatch — see signals-engine.js)
 // to keep the pure flip-cross logic (tests 1/2/8/9) covered.
 __setAlertCacheForTest('flip_cross', true);
+__setAlertCacheForTest('core_change', true);
+__setAlertCacheForTest('core_touch', true);
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -34,11 +36,6 @@ function frame(ts, priceEs, extra = {}) {
 function run(mem, frames) {
   const all = [];
   for (const f of frames) for (const s of evaluateFrame(f, mem)) all.push(s);
-  return all;
-}
-function runFd(mem, frames) {
-  const all = [];
-  for (const f of frames) for (const s of evaluateFlowDivergence(f, mem)) all.push(s);
   return all;
 }
 const T = 1_700_000_000_000; // arbitrary base epoch ms
@@ -157,27 +154,89 @@ const step = 4000;
   check('only one flip_cross', sigs.filter((x) => x.kind === 'flip_cross').length === 1);
 })();
 
-// 10) FLOW GEX DIVERGENCE — price up, aggregate flow bearish, one strike dominates → LONG
+// 9b) CORE LEVEL CHANGE — the scored strike moves; the first one is silent
 (() => {
-  console.log('10) flow divergence → long catalyst');
-  const sigs = runFd(freshMem(), [
-    frame(T,        5000, { totalFlowGex: -2.5e9, maxFlow: -4.5e9, maxFlowStrike: 5075 }), // seed prev
-    frame(T + step, 5005, { totalFlowGex: -2.5e9, maxFlow: -4.5e9, maxFlowStrike: 5075 }), // price up → fire
+  console.log('9b) core level change');
+  const mem = freshMem();
+  const sigs = run(mem, [
+    frame(T,            5000, { cbSpx: 5050, cbSize: 3.1 }), // first core seen → remembered, not announced
+    frame(T + step,     5000, { cbSpx: 5050, cbSize: 3.1 }), // unchanged → nothing
+    frame(T + 2 * step, 5000, { cbSpx: 5075, cbSize: 3.4 }), // moved 25 pts → fire
   ]);
-  const s = sigs.find((x) => x.kind === 'flow_divergence');
-  check('flow_divergence fired', !!s);
-  check('direction long', !!s && s.direction === 'long');
-  check('level Flow 5075', !!s && s.levelName === 'Flow 5075' && Math.round(s.levelSpx) === 5075);
+  const chg = sigs.filter((x) => x.kind === 'core_change');
+  check('one core_change', chg.length === 1);
+  check('direction neutral', chg[0].direction === 'neutral');
+  check('setup names both strikes', chg[0].setup.includes('5050') && chg[0].setup.includes('5075'));
+  check('level is the new core', Math.round(chg[0].levelSpx) === 5075);
 })();
 
-// 11) NO DIVERGENCE — aggregate flow agrees with price (both bullish) → no fire
+// 9c) CORE LEVEL TOUCH — latched, one alert per visit
 (() => {
-  console.log('11) flow aligned with price → no signal');
-  const sigs = runFd(freshMem(), [
-    frame(T,        5000, { totalFlowGex: 3e9, maxFlow: 4.5e9, maxFlowStrike: 5075 }),
-    frame(T + step, 5005, { totalFlowGex: 3e9, maxFlow: 4.5e9, maxFlowStrike: 5075 }),
+  console.log('9c) core level touch latches until price leaves');
+  const mem = freshMem();
+  const sigs = run(mem, [
+    frame(T,            5040, { cbSpx: 5050 }), // 10 away → nothing
+    frame(T + step,     5049, { cbSpx: 5050 }), // within 1.5 → fire
+    frame(T + 2 * step, 5050, { cbSpx: 5050 }), // still on it → latched, silent
+    frame(T + 3 * step, 5051, { cbSpx: 5050 }), // still inside re-arm gap → silent
   ]);
-  check('no flow_divergence', sigs.filter((x) => x.kind === 'flow_divergence').length === 0);
+  const touch = sigs.filter((x) => x.kind === 'core_touch');
+  check('one core_touch', touch.length === 1);
+  check('direction neutral', touch[0].direction === 'neutral');
+  check('arrival side noted', touch[0].reason.includes('from below'));
+})();
+
+// 9d) CORE TOUCH RE-ARMS once price leaves by CORE_REARM
+(() => {
+  console.log('9d) core touch re-arms after price leaves');
+  const mem = freshMem();
+  const sigs = run(mem, [
+    frame(T,             5049, { cbSpx: 5050 }), // fire
+    frame(T + step,      5060, { cbSpx: 5050 }), // away by 10 → re-armed
+    // Cooldown is keyed kind:direction:level, so step past COOLDOWN_MS (10 min).
+    frame(T + 11 * 60_000, 5050, { cbSpx: 5050 }), // back on it → fire again
+  ]);
+  check('two core_touch', sigs.filter((x) => x.kind === 'core_touch').length === 2);
+})();
+
+// 10) TOP GEX CHANGE — one signal per scanner pick, never twice for the same row
+(() => {
+  console.log('10) top gex change → one alert per pick');
+  const mem = freshMem();
+  const rows = [
+    { date: '2026-09-15', slot: '10:30', rank: 1, symbol: 'nvda', expiry: '2026-09-19',
+      strike: 180, spot: 178.4, latest_chg: 7.4e8, pct_open: 62, score: 88, watch_id: 991, ts: null },
+    { date: '2026-09-15', slot: '10:37', rank: 1, symbol: 'SPY', expiry: '2026-09-17',
+      strike: 660, spot: 658.2, latest_chg: -5.1e8, pct_open: -41, score: 51, watch_id: 992, live: true },
+  ];
+  const first = evaluateGexChangeTop(rows, mem);
+  check('two picks fired', first.length === 2);
+  check('kind gex_change_top', first.every((x) => x.kind === 'gex_change_top'));
+  check('direction neutral', first.every((x) => x.direction === 'neutral'));
+  check('symbol upper-cased in level', first[0].levelName === 'NVDA 180');
+  check('score compressed 0-100 → 1-5', first[0].score === 4 && first[1].score === 3);
+  check('live trigger labelled', first[1].setup.includes('live trigger'));
+
+  // Same rows again on the next poll — the leaderboard is re-read every minute.
+  check('no re-fire on re-read', evaluateGexChangeTop(rows, mem).length === 0);
+
+  // A new pick lands in the same slot.
+  const more = evaluateGexChangeTop([...rows,
+    { date: '2026-09-15', slot: '11:00', rank: 2, symbol: 'TSLA', expiry: '2026-10-17',
+      strike: 430, spot: 421, latest_chg: 9e8, pct_open: 77, score: 94, watch_id: 993 }], mem);
+  check('only the new pick fires', more.length === 1 && more[0].meta.symbol === 'TSLA');
+})();
+
+// 11) TOP GEX CHANGE OFF — bookkeeping still runs, nothing is emitted
+(() => {
+  console.log('11) top gex change disabled → seen, not fired');
+  __setAlertCacheForTest('gex_change_top', false);
+  const mem = freshMem();
+  const rows = [{ date: '2026-09-15', slot: '10:30', rank: 1, symbol: 'AMD',
+    expiry: '2026-09-19', strike: 170, spot: 168, latest_chg: 6e8, pct_open: 55, score: 70, watch_id: 994 }];
+  check('nothing fired while off', evaluateGexChangeTop(rows, mem).length === 0);
+  __setAlertCacheForTest('gex_change_top', true);
+  check('and not replayed when switched back on', evaluateGexChangeTop(rows, mem).length === 0);
 })();
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);

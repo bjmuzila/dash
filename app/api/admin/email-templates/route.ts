@@ -25,6 +25,7 @@ import { edge3AnnualEmail, edge3AnnualText, EDGE3_ANNUAL_SUBJECT } from "@/lib/e
 import { seasonalityFreeEmail, seasonalityFreeText, SEASONALITY_FREE_SUBJECT } from "@/lib/emails/seasonality-free";
 import { v3ComingSoonEmail, v3ComingSoonText, V3_COMING_SOON_SUBJECT } from "@/lib/emails/v3-coming-soon";
 import { wholeBoardEmail, wholeBoardText, WHOLE_BOARD_SUBJECT } from "@/lib/emails/whole-board";
+import { fomcHalfOffEmail, fomcHalfOffText, FOMC_HALF_OFF_SUBJECT } from "@/lib/emails/fomc-half-off";
 import { hiddenTemplateIdSet, hideTemplate, restoreTemplate } from "@/lib/emails/hiddenTemplates";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
@@ -239,6 +240,13 @@ function buildTemplates(): Template[] {
       subject: WHOLE_BOARD_SUBJECT,
       html: wholeBoardEmail,
       text: wholeBoardText,
+    },
+    {
+      id: "fomc-half-off",
+      label: "FOMC half-off — $250/yr instead of $500, 2 spots",
+      subject: FOMC_HALF_OFF_SUBJECT,
+      html: fomcHalfOffEmail,
+      text: fomcHalfOffText,
     },
   ];
 }

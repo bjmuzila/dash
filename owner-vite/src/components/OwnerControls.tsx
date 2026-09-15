@@ -169,8 +169,8 @@ export function OwnerControls() {
   }, []);
 
   // Signal Alerts — live DB-backed per-alert-key MASTER toggles for the
-  // background alert workers. The dashboard toolbar's own switches are a
-  // per-browser preference layered under these; see cbedge-v3/src/shell.
+  // background alert workers. The dashboard toolbar reads these to decide which
+  // chips it can offer; see cbedge-v3/src/shell/alertTypes.ts.
   const [signalAlerts, setSignalAlerts] = useState<SignalAlertRow[] | null>(null);
   const [signalAlertsBusy, setSignalAlertsBusy] = useState<string | null>(null);
 
@@ -472,10 +472,8 @@ export function OwnerControls() {
 
             NO LONGER DISCORD (2026-09-15). The engine's webhook fan-out is gone;
             a signal now lands in `trade_signals` and is read by the dashboard's
-            own alerts feed in the v3 toolbar. Customers have their own per-type
-            switches there, saved in their browser — but this row is the master:
-            a kind turned OFF here never fires for anyone, and the toolbar draws
-            its row locked. */}
+            own alerts feed in the v3 toolbar. A kind turned OFF here never fires
+            for anyone, and the toolbar draws its chip struck-through. */}
         <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text }}>Signal Alerts</span>
@@ -485,60 +483,35 @@ export function OwnerControls() {
           </div>
           {!signalAlerts ? (
             <span style={{ fontSize: 14, color: HOME_THEME.textMuted }}>Loading…</span>
-          ) : (() => {
-            const masterEnabled = signalAlerts.find((r) => r.key === "bzila_confluence")?.enabled ?? true;
-            return (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {signalAlerts.map((row) => {
-                  const isBzilaSub = row.group === "bzila" && row.key !== "bzila_confluence";
-                  const dimmed = isBzilaSub && !masterEnabled;
-                  const busy = signalAlertsBusy === row.key;
-                  return (
-                    <div
-                      key={row.key}
+          ) : (
+            /* One flat list. The Bzila group — a master row plus six indented
+               sub-setups that only fired while the master was on — is gone with
+               its detector (2026-09-15), and with it the only reason this list
+               needed a hierarchy. */
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {signalAlerts.map((row) => {
+                const busy = signalAlertsBusy === row.key;
+                return (
+                  <div key={row.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <button
+                      onClick={() => toggleSignalAlert(row.key, row.enabled)}
+                      disabled={busy}
                       style={{
-                        display: "flex", alignItems: "center", gap: 10,
-                        paddingLeft: isBzilaSub ? 22 : 0,
-                        opacity: dimmed ? 0.45 : 1,
+                        ...homeButtonStyle, padding: "4px 12px", borderRadius: 7, fontSize: 14,
+                        minWidth: 74, textAlign: "center",
+                        opacity: busy ? 0.6 : 1,
+                        cursor: busy ? "wait" : "pointer",
+                        background: row.enabled ? homeButtonStyle.background : "rgba(255,255,255,0.04)",
                       }}
                     >
-                      <button
-                        onClick={() => toggleSignalAlert(row.key, row.enabled)}
-                        disabled={busy}
-                        title={
-                          row.key === "bzila_confluence"
-                            ? "Master switch — must be ON for any Bzila sub-setup below to fire."
-                            : isBzilaSub
-                            ? "Independently toggleable, but only fires while the Bzila Confluence master switch above is also ON."
-                            : undefined
-                        }
-                        style={{
-                          ...homeButtonStyle, padding: "4px 12px", borderRadius: 7, fontSize: 14,
-                          minWidth: 74, textAlign: "center",
-                          opacity: busy ? 0.6 : 1,
-                          cursor: busy ? "wait" : "pointer",
-                          background: row.enabled ? homeButtonStyle.background : "rgba(255,255,255,0.04)",
-                        }}
-                      >
-                        {busy ? "…" : row.enabled ? "● ON" : "○ OFF"}
-                      </button>
-                      <span style={{ fontSize: 14, color: HOME_THEME.text }}>{row.label}</span>
-                      <span
-                        style={{
-                          fontSize: 12, fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase",
-                          padding: "2px 7px", borderRadius: 5,
-                          color: row.group === "bzila" ? HOME_THEME.cyan : HOME_THEME.textMuted,
-                          border: `1px solid ${row.group === "bzila" ? HOME_THEME.cyan : HOME_THEME.border}66`,
-                        }}
-                      >
-                        {row.group}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })()}
+                      {busy ? "…" : row.enabled ? "● ON" : "○ OFF"}
+                    </button>
+                    <span style={{ fontSize: 14, color: HOME_THEME.text }}>{row.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
       </div>

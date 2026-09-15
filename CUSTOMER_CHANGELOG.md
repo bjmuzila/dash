@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Tuesday 9/15/2026
+
+* **Home board:** save your board under a name, then load any saved layout back — a pre-market board, a 0DTE board, one for the review — https://cbedge.net/v3
+
 ## Monday 9/14/2026
 
 * **GEX Candles:** new **Days** setting under the gear — show 1, 2 or 3 sessions of candles instead of just today. The ES chart follows the new December contract and updates live again — https://cbedge.net/v3
