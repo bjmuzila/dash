@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-15 (h) - Visitors map back on its own page
+
+`/owner/visitors` is a real page again (restored verbatim, plus a Customers → button); the map is out of the Customers page, which links to it with a Map → button. The `/owner/visitors` redirect is gone; Info group is now Sales · Customers · Visitors · Admin. Names in the map's pinned card still open the customer card.
+
+## 2026-09-15 (g) - v3 board: which ticker each customer is looking at
+
+**Beacon.** `cbedge-v3/src/data/symbol.tsx` now logs the board's page symbol
+to the existing `ticker_events` log (`POST /api/ticker-event`, source `home`):
+`render` once per mount for the symbol the board opened on, `click` whenever
+the viewer switches it. sendBeacon, fire-and-forget, never awaited; a free
+session's 403 is ignored. Nothing retroactive - counts start at deploy.
+
+**Where it shows.** Customers page gets a third ticker card, **Home · Board
+Tickers** (clicks = switches, impressions = opened-on), beside Flow and EM.
+The customer card's Usage tile lists that person's board tickers for the
+selected window (switch count, or "opened on" for defaults), and ticker events
+are interleaved into the page feed as `TKR switched to NVDA · Home board` rows
+so the session reads as one story. `/api/admin/customer` now returns
+`tickers[]` (per source+ticker rollup) and feed rows carry `kind: "visit" |
+"ticker"`.
+
 ## 2026-09-15 (f) - Owner site: click any customer name → customer card
 
 **One click, the whole person.** Every email printed on the owner site — the

@@ -8,11 +8,12 @@ import type { ComponentType, LazyExoticComponent } from "react";
  */
 export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   Hub: lazy(() => import("./Hub")),
-  // ControlPanel (Overview) and Visitors were retired 2026-09-15 — folded
-  // into Customers + Admin. Their hrefs redirect; see OWNER_REDIRECTS in nav.
+  // ControlPanel (Overview) was retired 2026-09-15 — folded into Customers +
+  // Admin. Its href redirects; see OWNER_REDIRECTS in nav.
   Admin: lazy(() => import("./Admin")),
   Sales: lazy(() => import("./Sales")),
   Customers: lazy(() => import("./Customers")),
+  Visitors: lazy(() => import("./Visitors")),
   Affiliates: lazy(() => import("./Affiliates")),
   Probe: lazy(() => import("./Probe")),
   Results: lazy(() => import("./Results")),

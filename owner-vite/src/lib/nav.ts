@@ -56,15 +56,17 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     //   Customers  the people  (traffic, signups, activity, map, feedback)
     //   Admin      the machine (system health, controls, checks, access)
     //
-    // Overview (/owner/dev/owner) and Visitors (/owner/visitors) were folded
-    // into these: Overview's traffic half went to Customers and its system
-    // half to Admin; Visitors' map went to Customers whole. Both old hrefs
-    // redirect (OWNER_REDIRECTS below) so bookmarks keep working.
+    // Overview (/owner/dev/owner) was folded into these: its traffic half
+    // went to Customers and its system half to Admin; the old href redirects
+    // (OWNER_REDIRECTS below) so bookmarks keep working. Visitors stays its
+    // own page: the d3 world map wants the whole viewport, and it dominated
+    // the Customers page's frame budget when it sat in the middle of it.
     label: "Info",
     accent: OWNER_THEME.cyan,
     links: [
       { label: "Sales", href: "/owner/dev/sales", glyph: "$", key: "Sales" },
       { label: "Customers", href: "/owner/customers", glyph: "◍", key: "Customers" },
+      { label: "Visitors", href: "/owner/visitors", glyph: "🌐", key: "Visitors" },
       { label: "Admin", href: "/owner/dev/admin", glyph: "⚿", key: "Admin" },
     ],
   },
@@ -144,8 +146,6 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
 export const OWNER_REDIRECTS: { from: string; to: string }[] = [
   // Overview → its traffic half is Customers; the system half is on Admin.
   { from: "/owner/dev/owner", to: "/owner/customers" },
-  // Visitors → the map is the middle of the Customers page.
-  { from: "/owner/visitors", to: "/owner/customers" },
 ];
 
 /**

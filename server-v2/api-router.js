@@ -10872,7 +10872,7 @@ Return exactly one element per input key, in the same order. Never merge, split,
           };
 
           // ── Everything else, concurrently ─────────────────────────────────
-          const [visitRows, localSub, storedCancels, attribution, feedback, farCb, unsub, comp, emailSends] = await Promise.all([
+          const [visitRows, localSub, storedCancels, attribution, feedback, farCb, unsub, comp, emailSends, tickerRows] = await Promise.all([
             soft('visits', () => libDb.queryAll(
               `SELECT id, page_key, page_label, path, ip, country, region, city,
                       is_entry, referrer_host, utm_source, utm_medium, utm_campaign, channel,
@@ -10897,6 +10897,12 @@ Return exactly one element per input key, in the same order. Never merge, split,
             soft('emails', () => libDb.queryAll(
               `SELECT subject, audience, created_at FROM email_sends
                 WHERE recipients::text ILIKE ? ORDER BY created_at DESC LIMIT 30`, [`%${ekey}%`]), []),
+            // Which tickers they looked at, and where: source 'home' is the v3
+            // board's page symbol (render = opened on it, click = switched to
+            // it); 'flow' / 'em' are the Flow and Estimated-Moves pages.
+            soft('tickers', () => libDb.queryAll(
+              `SELECT ticker, event, source, created_at FROM ticker_events
+                WHERE user_id = ? ORDER BY created_at DESC LIMIT 300`, [uid]), []),
           ]);
 
           // ── Feed: time per page ───────────────────────────────────────────
@@ -10935,6 +10941,29 @@ Return exactly one element per input key, in the same order. Never merge, split,
             browser: r.browser, os: r.os, deviceType: r.device_type,
             country: r.country, region: r.region, city: r.city,
           }));
+
+          // Ticker events fold INTO the feed (as their own row kind, interleaved
+          // by time) so "opened ES Candles, switched the board to NVDA, opened
+          // pricing" reads as one story — and are also rolled up per ticker.
+          const tickerFeed = tickerRows.map((t) => ({
+            kind: 'ticker',
+            id: `t${t.ticker}|${t.created_at}`,
+            at: t.created_at,
+            ticker: t.ticker,
+            event: t.event,          // 'click' (switched to) | 'render' (opened on)
+            source: t.source,        // 'home' | 'flow' | 'em' | …
+          }));
+          const byTicker = new Map();
+          for (const t of tickerRows) {
+            const k = `${t.source || '?'}|${t.ticker}`;
+            const b = byTicker.get(k) || { ticker: t.ticker, source: t.source, clicks: 0, renders: 0, lastAt: t.created_at };
+            if (t.event === 'click') b.clicks += 1; else b.renders += 1;
+            if (t.created_at > b.lastAt) b.lastAt = t.created_at;
+            byTicker.set(k, b);
+          }
+          const tickers = [...byTicker.values()].sort((a, b) => (b.clicks - a.clicks) || (b.renders - a.renders));
+          const mergedFeed = [...feed.map((f) => ({ kind: 'visit', ...f })), ...tickerFeed]
+            .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
           // Per-page totals over the whole feed (not just one window — the card
           // has its own window pills and filters client-side).
@@ -11082,7 +11111,8 @@ Return exactly one element per input key, in the same order. Never merge, split,
               lastVisit,
               pages,
             },
-            feed,
+            feed: mergedFeed,
+            tickers,
             feedback: feedback.map((f) => ({ id: f.id, category: f.category, message: f.message, page: f.page, status: f.status, at: f.created_at })),
             farCbTickers: farCb.map((t) => ({ symbol: t.symbol, at: t.created_at, active: !!t.active })),
             email: {

@@ -67,13 +67,18 @@ export function CustomerName({ email, children, style, title }: { email: string 
 
 // ─── API shape (mirrors server-v2/api-router.js /api/admin/customer) ─────────
 
-interface FeedRow {
+interface VisitRow {
+  kind: "visit";
   id: number; at: string; pageKey: string | null; pageLabel: string | null; path: string | null;
   isEntry: boolean; session: number; secondsOnPage: number | null;
   referrerHost: string | null; utmSource: string | null; utmCampaign: string | null; channel: string | null;
   browser: string | null; os: string | null; deviceType: string | null;
   country: string | null; region: string | null; city: string | null;
 }
+/** A ticker_events row folded into the feed: which symbol they put the v3
+ *  board (source "home"), Flow or EM page on. */
+interface TickerRow { kind: "ticker"; id: string; at: string; ticker: string; event: "click" | "render" | string; source: string | null }
+type FeedRow = VisitRow | TickerRow;
 interface Coupon { code: string; percentOff: number | null; amountOff: number | null; duration: string; durationMonths: number | null; start: number | null; end: number | null }
 interface StripeSub {
   id: string; status: string; planName: string | null; amount: number | null; interval: string | null;
@@ -103,6 +108,7 @@ interface CustomerData {
   } | null;
   usage: { loads: number; feedTruncated: boolean; sessions: number; totalSeconds: number; firstVisit: string | null; lastVisit: string | null; pages: { path: string; label: string; loads: number; seconds: number }[] };
   feed: FeedRow[];
+  tickers: { ticker: string; source: string | null; clicks: number; renders: number; lastAt: string }[];
   feedback: { id: number; category: string; message: string; page: string | null; status: string; at: string }[];
   farCbTickers: { symbol: string; at: string; active: boolean }[];
   email: { unsubscribed: boolean; unsubscribedAt: string | null; unsubscribeSource: string | null; sends: { subject: string; audience: string; at: string }[] };
@@ -240,25 +246,37 @@ function CustomerCard({ data, onClose, onRefresh, loading }: { data: CustomerDat
       const k = dayKeyET(f.at);
       let d = out[out.length - 1];
       if (!d || d.key !== k) { d = { key: k, label: dayLabelET(f.at), rows: [], seconds: 0 }; out.push(d); }
-      d.rows.push(f); d.seconds += f.secondsOnPage ?? 0;
+      d.rows.push(f); d.seconds += f.kind === "visit" ? (f.secondsOnPage ?? 0) : 0;
     }
     return out;
   }, [feedInWin]);
 
   // Share-of-time bars for the same window.
+  const visitsInWin = useMemo(() => feedInWin.filter((f): f is VisitRow => f.kind === "visit"), [feedInWin]);
   const pageShare = useMemo(() => {
     const m = new Map<string, { label: string; loads: number; seconds: number }>();
-    for (const f of feedInWin) {
+    for (const f of visitsInWin) {
       const k = f.path || f.pageKey || "(unknown)";
       const b = m.get(k) ?? { label: f.pageLabel || f.pageKey || k, loads: 0, seconds: 0 };
       b.loads += 1; b.seconds += f.secondsOnPage ?? 0; m.set(k, b);
     }
     return [...m.entries()].map(([path, v]) => ({ path, ...v })).sort((x, y) => y.seconds - x.seconds || y.loads - x.loads).slice(0, 8);
-  }, [feedInWin]);
+  }, [visitsInWin]);
   const shareMax = pageShare.length ? Math.max(...pageShare.map((p) => p.seconds), 1) : 1;
-  const winSeconds = feedInWin.reduce((s, f) => s + (f.secondsOnPage ?? 0), 0);
-  const winSessions = new Set(feedInWin.map((f) => f.session)).size;
-  const winPages = new Set(feedInWin.map((f) => f.path || f.pageKey)).size;
+  const winSeconds = visitsInWin.reduce((s, f) => s + (f.secondsOnPage ?? 0), 0);
+  const winSessions = new Set(visitsInWin.map((f) => f.session)).size;
+  const winPages = new Set(visitsInWin.map((f) => f.path || f.pageKey)).size;
+  // Board tickers in the window — switched-to first, then opened-on.
+  const homeTickers = useMemo(() => {
+    const m = new Map<string, { clicks: number; renders: number }>();
+    for (const f of feedInWin) {
+      if (f.kind !== "ticker" || f.source !== "home") continue;
+      const b = m.get(f.ticker) ?? { clicks: 0, renders: 0 };
+      if (f.event === "click") b.clicks += 1; else b.renders += 1;
+      m.set(f.ticker, b);
+    }
+    return [...m.entries()].map(([ticker, v]) => ({ ticker, ...v })).sort((a, b) => b.clicks - a.clicks || b.renders - a.renders);
+  }, [feedInWin]);
 
   const fireReset = useCallback(async () => {
     if (!window.confirm(`Send a password-reset email to ${a.email}?`)) return;
@@ -281,7 +299,7 @@ function CustomerCard({ data, onClose, onRefresh, loading }: { data: CustomerDat
     for (const v of [x.channel, x.utmSource, x.utmCampaign]) if (v && !parts.includes(v)) parts.push(v);
     return parts.join(" · ") || x.referrerHost || "direct";
   };
-  const entry = data.feed.find((f) => f.isEntry && (f.channel || f.utmSource || f.referrerHost)) ?? null;
+  const entry = data.feed.find((f): f is VisitRow => f.kind === "visit" && f.isEntry && !!(f.channel || f.utmSource || f.referrerHost)) ?? null;
   const cameFromText = attr ? srcText(attr) : entry ? srcText(entry) : "unknown";
   const dev = data.device;
   const openFeedback = data.feedback.filter((f) => f.status === "open").length;
@@ -373,7 +391,7 @@ function CustomerCard({ data, onClose, onRefresh, loading }: { data: CustomerDat
           <div style={sect}>Usage · {WINDOWS.find((w) => w.key === win)?.label}</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             {[
-              { l: "Loads", v: feedInWin.length.toLocaleString() },
+              { l: "Loads", v: visitsInWin.length.toLocaleString() },
               { l: "Sessions", v: winSessions.toLocaleString() },
               { l: "Time ≈", v: dur(winSeconds) },
               { l: "Pages", v: winPages.toLocaleString() },
@@ -388,6 +406,14 @@ function CustomerCard({ data, onClose, onRefresh, loading }: { data: CustomerDat
             Lifetime <b>{data.usage.loads.toLocaleString()}{data.usage.feedTruncated ? "+" : ""}</b> loads · <b>{data.usage.sessions}</b> sessions · <b>{dur(data.usage.totalSeconds)}</b>
             {data.usage.pages[0] && <> · most time on <b>{data.usage.pages[0].label}</b></>}
             {data.farCbTickers.length > 0 && <> · Far CB <b>{data.farCbTickers.map((t) => t.symbol).join(", ")}</b></>}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6, lineHeight: 1.55 }}>
+            Board tickers · {WINDOWS.find((w) => w.key === win)?.label}:{" "}
+            {homeTickers.length === 0
+              ? <span style={{ opacity: 0.6 }}>none logged</span>
+              : homeTickers.slice(0, 8).map((t, i) => (
+                <span key={t.ticker}>{i > 0 && ", "}<b style={{ fontFamily: "var(--font-mono)" }}>{t.ticker}</b>{t.clicks > 0 && <span style={{ color: T.cyan }}> ×{t.clicks}</span>}{t.clicks === 0 && <span style={{ opacity: 0.5 }}> (opened on)</span>}</span>
+              ))}
             {data.usage.firstVisit && <> · first seen {dateOf(data.usage.firstVisit)}</>}
           </div>
         </div>
@@ -404,15 +430,34 @@ function CustomerCard({ data, onClose, onRefresh, loading }: { data: CustomerDat
               ))}
             </div>
           </div>
+          {/* The feed scrolls INSIDE its tile (capped height) so the money and
+              share-of-time cards stay in view next to it; the modal itself only
+              scrolls for the tiles below. */}
+          <div className="owner-scroll" style={{ maxHeight: 420, overflowY: "auto", paddingRight: 6 }}>
           {days.length === 0 ? (
             <div style={{ fontSize: 13, opacity: 0.6, padding: "10px 0" }}>No page loads in this window.</div>
           ) : days.map((d) => (
             <div key={d.key} style={{ marginBottom: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, color: T.cyan, padding: "6px 0 2px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, color: T.cyan, padding: "6px 0 2px", position: "sticky", top: 0, background: "#0d121b" }}>
                 <span>{d.label}</span>
                 <span style={{ fontFamily: "var(--font-mono)", opacity: 0.8 }}>{d.rows.length} loads · {dur(d.seconds)}</span>
               </div>
               {d.rows.map((f, i) => {
+                if (f.kind === "ticker") {
+                  const where = f.source === "home" ? "Home board" : f.source === "flow" ? "Flow" : f.source === "em" ? "Est. Moves" : (f.source || "—");
+                  const switched = f.event === "click";
+                  return (
+                    <div key={f.id} style={{ display: "grid", gridTemplateColumns: "56px minmax(0,1fr) 70px", gap: 10, padding: "5px 0", borderBottom: `1px solid rgba(255,255,255,0.05)`, alignItems: "center", fontSize: 13 }}>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, opacity: 0.6 }}>{timeOf(f.at)}</span>
+                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: switched ? 1 : 0.7 }}>
+                        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", padding: "1px 6px", borderRadius: 5, marginRight: 7, color: T.orange, background: ownerRgba(T.orange, 0.14) }}>TKR</span>
+                        {switched ? "switched to" : "opened on"} <b style={{ fontFamily: "var(--font-mono)" }}>{f.ticker}</b>
+                        <span style={{ opacity: 0.55 }}> · {where}</span>
+                      </span>
+                      <span />
+                    </div>
+                  );
+                }
                 const isPub = (f.pageKey || "").startsWith("public:") || (f.path || "") === "/" || /^\/(pricing|sign-in|sign-up|whats-new|docs)/.test(f.path || "");
                 const label = f.pageLabel || (f.pageKey || "").replace(/^public:/, "") || f.path || "—";
                 const flag = /checkout/i.test(f.path || "") ? { t: "checkout", c: T.gold } : /pricing/i.test(f.path || "") ? { t: "pricing", c: T.gold } : /account/i.test(f.path || "") && leaving ? { t: "account", c: T.red } : null;
@@ -432,6 +477,7 @@ function CustomerCard({ data, onClose, onRefresh, loading }: { data: CustomerDat
               })}
             </div>
           ))}
+          </div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

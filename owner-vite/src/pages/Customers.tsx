@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { LiveKpiCard, useLiveSeries, type LivePoint } from "../components/LiveKpiCard";
 import AcquisitionPanel from "../components/AcquisitionPanel";
-import { VisitorMap } from "../components/VisitorMap";
 import { SignupsPanel } from "../components/SignupsPanel";
 import {
   CustomerActivityPanel,
@@ -11,6 +10,7 @@ import {
   UnsubscribePanel,
   FeedbackPanel,
 } from "../components/customerPanels";
+import { Link } from "react-router-dom";
 import { useIsMobile } from "../hooks/useIsMobile";
 import {
   OWNER_THEME as HOME_THEME,
@@ -30,14 +30,14 @@ import {
  * world map; Admin had the per-person lists (activity, Discord, unsubscribes,
  * feedback, not-paying); Sales had the "signed up · never bought" funnel. Same
  * question — "who is using this, and what are they doing?" — answered in four
- * places with four different windows. This page is the one place.
+ * places with four different windows. This page is the one place. (The world
+ * map stayed on /owner/visitors: it wants the whole viewport.)
  *
  * Layout, top to bottom, is "numbers → traffic → who":
  *
  *   KPI strip            visits · users · subscribers · on today · logged in · waitlist
  *   Traffic / signups    bucketed at the header granularity
  *   Top pages            what people are actually on
- *   World map            where they are (the old Visitors page, whole)
  *   Acquisition          how they arrived (channel / referrer / campaign / device)
  *   Ticker visits        Flow + EM
  *   Signed up · never bought   the trial funnel, by name
@@ -45,8 +45,8 @@ import {
  *   Customer activity    last login, ~time on site, pages
  *   Discord · Far CB · Unsubscribes · Feedback
  *
- * Data: ONE /api/page-visits fetch feeds the KPI strip, the charts, top pages,
- * the map and acquisition. Its window is the RANGE picker in the header
+ * Data: ONE /api/page-visits fetch feeds the KPI strip, the charts, top pages
+ * and acquisition. Its window is the RANGE picker in the header
  * (Today / 7d / 30d / 90d / All), which is server-side — a wider range costs a
  * query, not a bigger client-side filter. The GRANULARITY picker next to it
  * only changes how the charts bucket what's loaded. The per-person panels
@@ -1505,11 +1505,6 @@ const CustomersOverview = React.memo(function CustomersOverview({ metrics, gran 
         accent={pc(3)}
       />
 
-      {/* Where they are. The old /owner/visitors page, whole — inside this
-          React.memo section so the KPI strip's live-series ticks never
-          re-render the d3 projection; only a new visit array does. */}
-      <VisitorMap rows={visits} />
-
       {/* Acquisition — where the traffic came from. Channel / referrer / campaign
           / device, all off the same visit log the cards above read. Sessions
           (entry rows) are its denominator, never pageviews. The Campaign Link
@@ -1772,6 +1767,9 @@ export default function Customers() {
           </div>
           {/* Granularity — how the charts bucket what's loaded. */}
           <GranTabs value={gran} onChange={setGran} />
+          <Link to="/owner/visitors" style={{ ...homeSecondaryButtonStyle, padding: "5px 14px", fontSize: 14, textDecoration: "none" }}>
+            🌐 Map →
+          </Link>
           <button
             onClick={() => { void refresh(); void loadVisits(range); }}
             disabled={busy}
@@ -1826,7 +1824,10 @@ export default function Customers() {
         )}
 
         {/* Product usage — which tickers get opened where. */}
-        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "repeat(2, minmax(0,1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "repeat(3, minmax(0,1fr))", gap: 12 }}>
+          {/* source "home" = the v3 board's page symbol (cbedge-v3 data/symbol.tsx):
+              clicks are switches, impressions are what the board opened on. */}
+          <TickerVisitsCard source="home" icon="⌂" label="Home · Board Tickers" />
           <TickerVisitsCard source="flow" icon="📡" label="Flow · Ticker Visits" />
           <TickerVisitsCard source="em" icon="🎯" label="EM · Ticker Visits" />
         </div>

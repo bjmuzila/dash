@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE PAGE SYMBOL — one ticker for the whole board.
@@ -51,13 +51,50 @@ function readStored(): string {
   }
 }
 
+// ── Owner analytics: which ticker is the board on ────────────────────────────
+// Logged to ticker_events (server-v2 /api/ticker-event) under source "home",
+// the same log the Flow and EM pages write to. Two events, kept distinct on
+// purpose:
+//   render — the symbol the board OPENED on (once per mount). A viewer who
+//            never touches the search logs their default, so SPX-only use is
+//            visible rather than absent.
+//   click  — the viewer actively SWITCHED to this symbol.
+// Best-effort and fire-and-forget: sendBeacon when available, never awaited,
+// never allowed to throw. A free (non-subscriber) session gets a 403 here and
+// that is fine — nothing reads the response.
+function logHomeTicker(ticker: string, event: 'click' | 'render'): void {
+  const body = JSON.stringify({ source: 'home', ticker, event })
+  try {
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      navigator.sendBeacon('/api/ticker-event', new Blob([body], { type: 'application/json' }))
+      return
+    }
+  } catch {
+    /* fall through to fetch */
+  }
+  void fetch('/api/ticker-event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    keepalive: true,
+  }).catch(() => {})
+}
+
 export function PageSymbolProvider({ children }: { children: ReactNode }) {
   const [symbol, setSymbolState] = useState<string>(() => readStored())
+
+  // The symbol the board opened on — once per mount, not on every re-render.
+  useEffect(() => {
+    logHomeTicker(readStored(), 'render')
+  }, [])
 
   const setSymbol = useCallback((next: string) => {
     const s = next.trim().toUpperCase()
     if (!PAGE_TICKER_RE.test(s)) return
-    setSymbolState(s)
+    setSymbolState((prev) => {
+      if (prev !== s) logHomeTicker(s, 'click')
+      return s
+    })
     try {
       localStorage.setItem(KEY, s)
     } catch {
