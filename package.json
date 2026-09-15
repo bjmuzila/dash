@@ -1,6 +1,6 @@
 {
     "name":  "bzila-dashboard",
-    "version":  "v9.15.7",
+    "version":  "v9.15.8",
     "private":  true,
     "workspaces":  [
 
