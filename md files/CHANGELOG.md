@@ -1,34 +1,140 @@
 # Changelog
 
-## 2026-09-14 (m) - Open bracket: a per-session cut, and the sessions behind every rate
+## 2026-09-15 (c) - The feed reconnects itself when dxLink goes quiet
 
-`/owner/results` → Open bracket answered "which ticker" and nothing else. It now
-also answers "which session", and every rate on it opens the sessions it was
-folded from — the same two moves the Daily Grades board makes.
+**A dead feed that looks alive.** dxLink's worst failure mode is the socket
+staying OPEN while the channel stops delivering. There is no `close` and no
+`error`, so `_onClose` never runs and `reconnect()` is never called. The process
+looks healthy from every angle a health check can see - and every number
+downstream freezes at whatever it held the moment the feed went silent.
 
-Added:
-- `server-v2/core-hold.js` — one pass now judges each session into a verdict
-  (`judgeSession`) and folds that same verdict into BOTH a per-symbol and a
-  per-date accumulator (`tally`), so the two cuts can never disagree. New in the
-  response: `by_date[]` (one row per trading day, every symbol pooled, newest
-  first — same fields as `rows[]`) always, and `detail[]` (one row per session:
-  walls, CORE and its placement, width, close and its source, verdict, never-left
-  and the path extremes, rolls) behind `detail=1`, capped at `MAX_DETAIL` 4000.
-  No arithmetic changed — `finalize()` is the old rate block, lifted out.
-- `server-v2/api-router.js` — `/api/core-hold` passes `detail` through
-  (`1|true|yes|sessions`); still owner-gated, still no-store.
-- `owner-vite/src/pages/Results.tsx` — BY TICKER / BY SESSION chips (a
-  re-render, not a refetch — both cuts ride one response), and
-  `BracketSessionsModal`: click a ticker for its record, a date for that day's
-  board. The modal narrows SERVER-side (`symbols=` or `end=`+`days=1`) rather
-  than pulling the window and filtering, so it never hits the detail cap.
-  Scanner-sourced closes are starred, "never left" is blank where retention cut
-  it, and the CORE column marks `= CW` / `= PW` when it was not a third price.
+It happened mid-session today, on stream. SPX spot sat at 7607.74 for 133
+seconds while REST said 7601. `/api/chains` still answered **200**, with 14 of
+242 strikes carrying greeks, because the live greek maps had stopped filling.
+GEX is `gamma x contracts x spot^2`, so the Multi Greek ladder computed to zero
+across the board and rendered as dashes. The banner said "Index stream frozen -
+re-subscribe / recreate dashboard", which is an instruction to a HUMAN: recovery
+required someone to notice and press Reconnect Feed.
 
-Note: the bracket study is live on read — today's session lands in it as soon as
-the 09:29 open capture and a close exist. `wall_atr` (the official daily bar) is
-written by Reach Rank, which has been DISABLED since 2026-09-10, so today's close
-comes from the last 5-minute scanner spot and shows with a `*`.
+**The signal is arrival, not readyState.** `_onEvent` now stamps `_spotTickAt`
+on every underlying index Quote it accepts. A new watchdog
+(`_checkFeedStale`, on its own interval next to the roll watcher) reads only
+that: a stamp older than `FEED_STALE_MS` (45s) means the channel is dead no
+matter what the socket claims about itself. It then calls the same
+`reconnect()` the owner console's button calls.
+
+The timer is created once in `start()` and deliberately NOT cleared by `stop()`,
+matching `_rollWatchTimer` and `_esSettleTimer` above it. A watchdog that dies
+with the feed is a watchdog that never fires - the feed being down is the entire
+thing it exists for.
+
+**It does not defer during RTH, and that is the point.** `_checkFuturesRoll`
+waits for 16:15 before rolling, because a roll is elective: the liquidity it
+chases moved days ago, so it is not worth 10-20s of teardown mid-session. A
+frozen feed is the opposite. During RTH is exactly when a two-minute freeze is
+worst, and a 15-second reconnect is the cheapest thing on the menu. Today's
+freeze ran at midday; deferring would have cost the rest of the session.
+
+Guards, each for a specific way this could be worse than the bug: it stands down
+while `idle`, `_rolling`, `_resuming` or already reconnecting, so two bring-ups
+never interleave on one channel. It stands down outside the index options session
+- SPX cash genuinely does not tick overnight, and reconnecting then is a
+self-inflicted outage on a feed that is behaving. `_spotTickAt` is armed at
+bring-up so a feed still subscribing does not read as stale since the epoch, and
+re-armed after a successful reconnect so a 20s resubscribe does not immediately
+retrip it. `FEED_STALE_COOLDOWN_MS` (2min) floors the gap between attempts so a
+genuinely dead upstream cannot become a reconnect loop - but a FAILED reconnect
+leaves the stamp stale on purpose, so past the cooldown it tries again, forever.
+
+**`ttGet` had no timeout, which is why requests hung instead of failing.**
+`fetch()` has no default one: an upstream that accepts the connection and then
+never answers leaves the promise pending for the life of the process. Four
+`/api/chains` requests sat `(pending)` in DevTools indefinitely today for exactly
+this reason - the cards had nothing to render and no error to render either.
+Every TT REST call now carries `AbortSignal.timeout(TT_HTTP_TIMEOUT_MS)` (8s),
+and the abort is normalized into `TT GET <path> -> timeout after 8000ms` rather
+than a bare "The operation was aborted" that names neither the call nor the wait.
+A hung upstream is now a fast, visible 502.
+
+All three knobs are env-tunable: `FEED_STALE_MS`, `FEED_STALE_COOLDOWN_MS`,
+`TT_HTTP_TIMEOUT_MS`. Touched `server-v2/proxy-tastytrade.js` only.
+
+## 2026-09-15 (b) - Home board: layouts have names, and you can load any of them
+
+**One board was never enough.** The v3 home board could be saved, singular - one
+arrangement per browser, one `Default` row per account. There is now a LIBRARY:
+name the board, press Save, and load any name back later. A pre-market board, a
+0DTE board, a board for the review.
+
+"Layouts" sits in the toolbar and is visible OUTSIDE edit mode, unlike Save
+layout and Clear all. Those are counterparts to a gesture; loading a saved board
+is not an edit in progress, it is how you get to the board you want, and making
+someone press "Edit layout" first to reach it is ceremony in front of the common
+case. The button wears the loaded name (`Layouts · Premarket`), so the board on
+screen can always say which one it is.
+
+**Where they live, which is two places on purpose.** Everyone's library is the
+BROWSER - one localStorage key, free, synchronous, works signed out. The OWNER's
+is additionally mirrored into Postgres through `/api/dashboard-layout`, which has
+always been able to hold 12 named templates per page (`dashboard_layouts`, keyed
+`(clerk_user_id, page, name)`); v3 simply only ever wrote one of them. **No
+server change** - the client stopped pretending the table had one row. The panel
+says which tier you are on rather than leaving "saved" meaning two things to two
+people.
+
+Local is written FIRST and is what the board reads, so a slow or failed request
+never costs a save; the account copy is merged over the local one when it
+arrives, server winning a name collision (it has seen the other machine) and
+local-only names kept rather than dropped.
+
+**A preset is not the autoloaded board.** `cb-v3-board-layout` and the account's
+`Default` template are untouched: opening the page still restores exactly what
+was on screen last time. Loading a preset is an EDIT - it replaces the working
+board, the local autosave takes it like any gesture, and the header says
+"Unsaved layout" until Save layout is pressed. A named save posts
+`makeDefault: false` for the same reason: adding "Premarket" to the library must
+not silently change which board the next machine opens with.
+
+Names are case-insensitive and cleaned with the server's own rule, so
+"Premarket" and "premarket" cannot become two rows the user reads as one name.
+Deleting a preset has no arming click (unlike Clear all) - it removes a saved
+copy and leaves the board on screen alone, so the worst case is re-saving
+something that is still right there.
+
+`cbedge-v3/src/board/layoutStore.ts` - named-layout library (`PRESETS_KEY`,
+`readPresets`/`writePresets`/`upsertPreset`/`removePreset`/`mergePresets`,
+`cleanPresetName`), plus `fetchServerLayouts`, `deleteServerLayout`,
+`setDefaultServerLayout` and a `makeDefault` argument on `saveServerLayout`.
+`cbedge-v3/src/board/BoardPage.tsx` - the Layouts panel and its handlers.
+
+## 2026-09-15 (a) - Whales: a $500K floor stop, and the probe stops rendering at 0.7x
+
+**FLOOR has a $500K stop.** `≥$500K` is now the first option on the whale page's
+FLOOR menu, above `≥$1M`. One thing to know about it: the API clamps
+`min_premium` UP to its own floor (`TF_WHALE_FLOOR`, from `LSE_WHALE_FLOOR`, $1M
+by default) because below that line the table keeps only the last seven days - a
+lower ask would hand back a week dressed as an archive. So until that env var is
+lowered on the VPS, picking $500K returns the $1M list. Rather than let the
+control look broken, the header now says so when the pick is under the server's
+floor: "asked for $500.0K, archive floor is $1.00M". Lower `LSE_WHALE_FLOOR` and
+both the note and the clamp go away on their own - the page reads the floor off
+the response, it is not hardcoded.
+
+**The contract probe was drawn at 0.7x on the board.** The chart was a fixed
+320-unit viewBox stretched to `width: 100%`. In the board tile the probe column
+is 330px at best and around 230px when the card is narrow, so the whole picture
+scaled down with it and every 9px label rendered at six - legible popped out,
+mud on the home board. The canvas is now measured (ResizeObserver) and the
+viewBox width is set to the container's, so one user unit is one CSS pixel and
+type keeps the size it was written at whatever the card does. Glyphs are nudged
+to 1.15x inline, and the right-hand price rail got the padding that needs.
+
+The panel's own readout lines were fixed at 10px over 9px labels in BOTH
+placements. Inline they now step up to 12px/10px (IN/NOW, SIZE/PREM/VOL/OI, the
+expiry line, the range tabs, the source badge and the footnote); popped out they
+keep the sizes the big layout was drawn for.
+
+`cbedge-v3/src/pages/Whales.tsx`, `cbedge-v3/src/board/topFlow/ContractProbe.tsx`
 
 ## 2026-09-14 (l) - Probe: the entry dot sits on the line, and the lookup can carry a position
 
@@ -22987,89 +23093,171 @@ red, so a feed row is the same colour as the line that fired it.
 No colour literals: every per-type colour is a token reference through
 `design/theme.ts` (`LEVEL_COLORS`, `VIOLET`, `LIGHT_BLUE`, `T.*`).
 
+## 2026-09-15 — Analytics: Strategy Builder removed
+- `cbedge-v3/src/pages/Analysis.tsx`: dropped the `StrategyBuilderCard` import and its full-width slot at the bottom of the analytics grid. The card component file remains at `src/pages/analysis/cards/StrategyBuilder.tsx` but is no longer rendered anywhere on `/v3/analytics`.
+
+## 2026-09-15 — CB auto-buy now tracks the VOLUME-ONLY core level
+- `server-v2/cb-contract-track.js`: `cbAtCheckpoint()` now resolves the CB from
+  `mvc_snapshots."strikeVolOnly"` (heaviest |netVolGEX| strike — today's traded
+  gamma only) instead of `"strikeOIVol" ?? "strikeVolOnly"` (netGEX + netVolGEX).
+  The OI fallback was removed deliberately: falling back would return an OI+VOL
+  strike under a vol-only label. A session with no vol-only strike now resolves
+  to no CB and the checkpoint records a reason. In practice `mvc-auto-snapshot`
+  always writes the column (it falls back to the nearest strike), so this is a
+  guard, not a regular path.
+- Affects every surface fed by `cb_trades`: the Contracts card on the v3
+  premarket page (`cbedge-v3/src/pages/premarket/CbContracts.tsx`) and the
+  owner Results → Contracts tab. Both read the recorded `cb_strike`, so no
+  client change was needed.
+- NOT changed: `/api/confidence/checkpoints` (the "how close did SPX get to the
+  CB" hit-rate board on Results), the premarket rail, and Key Levels all still
+  draw the OI+VOL CORE. The auto-buy strike can therefore differ from the CORE
+  printed beside it on the same screen — intentional, and documented in the
+  file header.
+
+## 2026-09-15 (b) — CB auto-buy records BOTH bases; owner Results gets the switch
+Supersedes the entry above. The auto-buy no longer picks one CB definition — it
+runs every checkpoint on both and lets the record settle which is better.
+
+- `server-v2/cb-contract-track.js`
+  - `cb_trades` gains a `basis` column (`'oivol'` | `'vol'`, default `'oivol'`).
+    The old `UNIQUE (date, checkpoint)` constraint is DROPPED and replaced by a
+    unique index on `(date, checkpoint, basis)` — with the two-column key still
+    in place the `vol` run collides with the `oivol` row and `ON CONFLICT DO
+    NOTHING` silently records nothing. Existing rows backfill to `'oivol'`,
+    which is what they actually were.
+  - `cbAtCheckpoint(date, min, basis)` reads `"strikeOIVol"` or
+    `"strikeVolOnly"` off `mvc_snapshots`. Neither falls back to the other.
+  - `runCheckpoint({ date, checkpoint, basis })` — one basis per call; `tick()`
+    loops `BASES` for each due checkpoint, sequentially. Cost: two walks per
+    checkpoint and at most six open rows re-priced per minute instead of three.
+  - `applyStreamBars()` now fans each dxLink bar out by STREAMER SYMBOL, not by
+    the subscription's single `tradeId`. When both bases land on the same
+    contract there are two open rows on one symbol; `cb-stream.track()` keeps
+    only the last `tradeId`, so the other row got no bars while `isFresh()` told
+    `pollOpen` to skip its REST probe — it would have sat there looking flat.
+  - `listTrades({ basis })` defaults to `'oivol'`; `basis: 'all'` returns both.
+    `enrichWithTrades(data, { basis })` filters too — its `date|checkpoint` map
+    would otherwise have one basis silently overwrite the other.
+  - `diagnose()` resolves and walks both bases (`cbByBasis`, `liveWalkByBasis`);
+    the existing `cb` / `liveWalk` keys still hold the default basis.
+- `server-v2/api-router.js`
+  - `/api/cb-trades` accepts `?basis=oivol|vol|all` (default `oivol`) and
+    returns `basis` + `bases`. `POST {action:'checkpoint'}` accepts `basis`.
+  - `/api/cb-contracts` is pinned to the DEFAULT basis. The subscriber card on
+    the v3 premarket page stays on the OI+VOL CB; unfiltered it would render
+    every checkpoint twice.
+- `owner-vite/src/pages/Results.tsx` — Contracts tab gets a CB switch
+  (`OI+Vol` / `Vol only`, purple, beside the range buttons). It drives the whole
+  tab: roll-up cards, table and footer totals, so the two are compared over the
+  same sessions and never pooled into one win rate. Footer names the basis on
+  screen.
+- `server-v2/cb-contract-track.selftest.js` — unchanged, 47/47 pass.
+- First `vol` rows appear at the next 9:45 ET checkpoint; the column cannot be
+  backfilled (TastyTrade has no per-contract history), so the comparison starts
+  from the deploy and fills forward.
+
+## 2026-09-15 (c) — Owner emails: FOMC half-off template ($250/yr, 2 spots)
+
+- `lib/emails/fomc-half-off.ts` (new) — `fomcHalfOffEmail()`, `fomcHalfOffText()`,
+  `FOMC_HALF_OFF_SUBJECT`. A full year at $250 instead of $500, capped at two
+  seats, closing at the end of FOMC.
+  - Band order copied from `edge3-annual.ts`: logo → hero → WHY NOW → WHAT YOU
+    GET → THE OFFER → CTA → sign-off. Same palette (bg `#05060A`, panel
+    `#0D1119`, nested card `#080B11`, cyan `#219EBC`, accent `#8ECAE6`), same
+    560px shell, same footer, and it keeps `{{UNSUBSCRIBE_URL}}`.
+  - ONE deliberate difference: edge3 leads its offer card with a promo CODE;
+    this one has NO CODE and leads with the SEAT COUNT, because the scarcity is
+    the argument. The two checkouts are discounted by hand — a code chip would
+    send people hunting for a coupon that does not exist in Stripe. If a code is
+    ever minted, put it back the way edge3-annual.ts does it.
+  - `FomcHalfOffOpts`: `price` (250), `listPrice` (500), `spots` (2),
+    `deadline` ("the end of FOMC"), `ctaUrl`, `email`. The only warm colour in
+    the email is the amber `#F2A65A` FOMC mark in the WHY NOW card.
+- `app/api/admin/email-templates/route.ts` — imported and appended to
+  `buildTemplates()` as `fomc-half-off`, "FOMC half-off — $250/yr instead of
+  $500, 2 spots". Appended (not inserted) so `newestFirst()` puts it on top of
+  the picker at `/owner/admin/emails`.
+- Marketing graphic for the same offer: `generated/2026-09-15-fomc-50-off-post.png`
+  (2000x1125, git-ignored).
+
 
 ---
 
-## 2026-09-15 — Signal alerts: master on the owner site, preference in the toolbar, no Discord
+## 2026-09-15 — v3 alerts panel: Settings tab removed, pill unboxed, chips on one row
 
-### Discord fan-out removed
-`server-v2/signals-engine.js` — deleted `sendDiscord()`, its call site in the
-detection loop, and `DISCORD_WEBHOOK` / `DISCORD_USERNAME` / `DISCORD_AVATAR`.
-A signal now lands in `trade_signals` and is read by the dashboard's own alerts
-feed. `SIGNALS_DISCORD_WEBHOOK` is inert — nothing reads it; unsetting it on the
-VPS is tidy but optional. `discord-relay.js` (the signals.txt path) is a
-SEPARATE mechanism and was NOT touched. `server-with-proxy.js` unchanged.
-
-### Two layers of on/off, and they are different questions
-- **MASTER** — owner.cbedge.net → Admin → Signal Alerts, DB-backed, served by
-  `GET/POST /proxy/signal-alerts` (POST is owner-only via proxy-auth). Off there
-  = the kind never fires for anyone.
-- **LOCAL** — the Settings tab in the v3 toolbar's alerts panel, saved per
-  browser in `alerts:armed`. A customer silencing whale prints is a preference,
-  not a change to what the engine runs. The dashboard never POSTs.
-
-v3 reads the master once per panel open (`fetchMasterEnabled` in
-`shell/alertTypes.ts`, new `serverKey` field per type). A kind the owner
-disarmed draws its row **locked**, captioned "Off — switched off by CB Edge",
-and is filtered out of the feed — the local choice is remembered underneath, so
-re-arming on the owner site restores it. A failed or refused fetch means
-"assume armed", so an offline moment never reads as everything-off.
-
-### GEX A / GEX B master keys added
-`ALERT_CATALOG` gains `gex_a` and `gex_b` (group `primary`, default on). The
-**detectors are not written yet** — the keys exist so the owner switchboard and
-the toolbar tab both carry the row from the day a detector lands, without a
-redeploy to reveal it.
-
-### Owner console wording
-`owner-vite/src/components/OwnerControls.tsx` — Signal Alerts caption no longer
-says "→ Discord"; it now reads as the master switch it is.
-
-Feed ROWS are still placeholder (`SAMPLE` in `AlertsPanel.tsx`). Wiring them =
-replace the body of `useAlertsFeed` with a read of `/proxy/signals`.
+- **Settings tab gone.** `AlertsPanel.tsx` is one view now. The per-signal
+  switches were customer-facing controls over a state only the owner can write
+  (`POST /proxy/signal-alerts` is owner-gated by proxy-auth), so they could never
+  have changed the outcome. Arming lives on owner.cbedge.net → Admin → Signal
+  Alerts and nowhere else.
+- **Master still shows through.** The panel still reads
+  `GET /proxy/signal-alerts` on open: a kind CB Edge has switched off is filtered
+  out of the feed and its chip is drawn struck-through and disabled. The empty
+  state now names which of three reasons it is empty for — nothing fired, every
+  kind is off upstream, or the chips are filtering it out.
+- **`alerts:armed` retired.** `readArmed`/`writeArmed` deleted from
+  `alertTypes.ts`; only `alerts:shown` (the chips) is kept per browser. Stale
+  `alerts:armed` values in older browsers are simply never read.
+- **Toolbar pill lost its box.** No border, no plate — the coloured type tag is
+  the only edge, hover is the only affordance. The `+n` divider rule went with
+  it.
+- **Chips stay on one row.** The filter row is `flex` + `overflow-x-auto` with
+  `shrink-0` chips and a hidden scrollbar, so nine types scroll sideways instead
+  of wrapping and shoving the feed down a line.
 
 
 ---
 
-## 2026-09-15 — Signals catalogue cut down; Top GEX Change added
+## 2026-09-15 — `gex_a` / `gex_b` replaced by the two real core-level alerts
 
-### Removed: Bzila Confluence (all 7 keys) and Flow GEX Divergence
-`server-v2/signals-engine.js` — `evaluateBzilaConfluence`, `bzilaSubKey`, the
-master + six sub-keys, the `emit()` sub-key gate, and the `BZ_*` /
-`GEX_REGIME_BAND` consts are gone. `evaluateFlowDivergence` and the `FD_*`
-consts went with them. `isAlertEnabled()` defaults an UNKNOWN key to `true`, so
-deleting the catalogue rows without the detectors would have made both fire
-unconditionally — they had to go together.
+The GEX A / GEX B keys were a guess and never had a definition. Deleted and
+replaced with what was actually wanted: **the SPX core level (CB / MVC scored
+strike)**, two events.
 
-Fallout removed in the same pass: `refreshIct` / `refreshConfidence` and their
-caches (the Bzila gate was their only consumer — the engine no longer polls
-`/api/ict-setups` or `/api/confidence`), and the Bzila / divergence fields on the
-frame object.
+- **`core_change`** — the scored strike MOVED by ≥ `SIGNALS_CORE_MOVE_MIN`
+  (default 1.0 SPX pt; the strike grid means any real move clears it, a
+  sub-point wobble is the snapshot re-reading the same level). The first core
+  seen in a process is remembered **silently**, so a restart is never reported
+  as a move. A move re-arms the touch latch.
+- **`core_touch`** — price came within `SIGNALS_CORE_TOUCH` (1.5 ES pts).
+  **Latched**: price must leave by `SIGNALS_CORE_REARM` (4.0) before it can fire
+  again, so an hour grinding on the level is one alert, not forty. The reason
+  line names which side price arrived from.
 
-`owner-vite/.../OwnerControls.tsx` — the Signal Alerts list is flat again; the
-master-row + indented-sub-row hierarchy existed only for Bzila. Caption no longer
-mentions Discord.
+Both are `direction: 'neutral'` and deliberately **not** wall logic — no reject,
+no break, no long/short. What happens at the core is the trade; these only say
+the level moved, or that you are on it. Keyed in SPX (the core is published as an
+SPX strike), converted to ES only for the touch distance and confluence.
 
-### Whale prints now match the /v3/whales page
-`WHALE_DTE_MIN` 1 → **0**, `WHALE_DTE_MAX` 7 → **90**. The floor ($1M) and OTM
-BUY filter were already right. The old 1–7 DTE window meant the alerts and the
-page a trader checks them against were showing two different populations.
+Lives inside `evaluateFrame` as section 5, using the `cbSpx`/`cbSize` the
+once-a-minute `refreshCb` already fetched — no new data source.
 
-### New: Top GEX Change (`gex_change_top`)
-One alert per pick the scanner's Top GEX Change board files — the half-hour slots
-AND the live triggers that cross into "★ Very strong" between them. It READS
-`gex_change_top` via `gex-change-top-recorder.getHistory()` (required lazily) on
-a 60s poll; it does not re-implement the scoring. `direction: 'neutral'` on
-purpose — the row carries no call/put right, so calling it long or short would
-invent a bias the scanner never claimed. Scanner's 0–100 score is compressed onto
-this engine's 1–5. Deduped by `watch_id` (else date/slot/symbol/expiry/strike),
-seeded on first read so a restart does not replay the day, bounded set.
+Self-test: three new cases (9b, 9c, 9d) — first-core-is-silent, touch latches,
+touch re-arms after price leaves. 8 new checks, all passing.
 
-Self-test: two new cases (10, 11) replace the two flow-divergence ones — 8 new
-checks, all passing. The 12 pre-existing failures in cases 1–9 reproduce
-identically on the untouched baseline outside the server process; unrelated.
+**v3 feed colours re-spread** so all seven types are distinct: core touch keeps
+the CB gold (it is that level), core change takes the UI accent (a change to the
+map, not an event on it), and whale prints move to the put-wall red that freed up.
 
-### GEX A / GEX B — still placeholders, now default OFF
-No detector, and no definition of what the A and B levels are. Flipped to
-`defaultEnabled: false` so an armed row can never imply a signal that cannot
-fire; they draw struck-through and disabled in the toolbar until defined.
+## 2026-09-15 (d) — FOMC half-off email carries the code (FOMC)
+
+Reverses the "no code on purpose" note from (c). Brandon set the coupon up in
+Stripe, so the offer card leads with the code again, the way `edge3-annual.ts`
+does, and the seat count sits beside it instead of replacing it: the code is how
+you pay $250, the two seats are why you pay it today.
+
+- `lib/emails/fomc-half-off.ts`
+  - New `code` opt, default `"FOMC"`.
+  - Offer card: dashed `FOMC` chip under "Use at checkout", with
+    "2 seats at this price" + the deadline line beneath it.
+  - Hero pill is now "50% off the annual plan · code FOMC"; the invoice's
+    discount row reads `Discount · FOMC`; the CTA footnote is "Apply FOMC at
+    checkout"; the preheader and the plain-text body name the code too.
+  - Subject: "Half off the year — $250 instead of $500, two spots (code FOMC)".
+  - If the coupon is ever retired in Stripe, the chip goes with it — a chip for a
+    code that does not exist sends people hunting at checkout.
+- `generated/2026-09-15-fomc-50-off-post.png` — regenerated to match: header pill
+  reads CODE FOMC · 2 SPOTS, a USE AT CHECKOUT / FOMC chip sits under the annual
+  plan, and the old "no code needed" pill is now "instant access · cancel
+  anytime" (it contradicted the code).

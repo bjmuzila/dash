@@ -1,7 +1,8 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { alpha } from '@/design/theme'
 import type { AlertItem } from '@/shell/alertTypes'
-import { TYPE_BY_ID } from '@/shell/alertTypes'
+import type { AlertKind } from '@/shell/alertTypes'
+import { ALERT_TYPES, TYPE_BY_ID } from '@/shell/alertTypes'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE ALERTS PILL — the newest signal, in the toolbar, all the time.
@@ -27,27 +28,157 @@ import { TYPE_BY_ID } from '@/shell/alertTypes'
 // per-kind master state from GET /proxy/signal-alerts, and a kind the owner has
 // turned off is drawn locked. See alertTypes.ts.
 //
-// The FEED ROWS are still placeholder — `useAlertsFeed` returns AlertsPanel's
-// SAMPLE. Wiring them means replacing the body of this hook with a read of
-// /proxy/signals; the components already take the shape they will get.
+// The FEED IS LIVE: `useAlertsFeed` polls GET /proxy/signals, which reads the
+// `trade_signals` table the engine writes. Rows whose `kind` is not in
+// ALERT_TYPES are dropped rather than drawn untyped — a new detector shipping
+// server-side shows up here the moment its type is added to alertTypes.ts, and
+// never as a colourless row nobody can filter.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AlertsPanel = lazy(() => import('@/shell/AlertsPanel'))
 
-/** Placeholder feed. Replace the body when the signals engine is wired. */
+// ── Mapping a trade_signals row onto a feed item ────────────────────────────
+
+/** serverKey → the type id the UI knows it by. Built once. */
+const KIND_BY_SERVER_KEY: Record<string, AlertKind> = Object.fromEntries(
+  ALERT_TYPES.map((t) => [t.serverKey, t.id]),
+) as Record<string, AlertKind>
+
+/**
+ * The engine builds `reason` and `setup` by concatenating optional segments —
+ * a size that may be null, an expiry that may be missing, an arrival side that
+ * needs a prior frame. Every absent segment leaves the separator or the space
+ * that was going to join it, which is where "SPX 6600 ,  · 3.4B" comes from.
+ * Rather than make each detector defensive about its own punctuation, the text
+ * is tidied once, here, on the way to the screen.
+ */
+function tidy(v: unknown): string {
+  const parts = String(v ?? '')
+    .replace(/\s+/g, ' ')
+    // Split on the separator the engine joins segments with, clean each segment
+    // on its own, then DROP the empty ones and rejoin. Doing it segment-wise is
+    // why "A ·  · B" becomes "A · B" instead of losing the separator entirely —
+    // a single regex pass over the whole string cannot tell a dangling dot from
+    // a valid one, because both are " · ".
+    .split('·')
+    .map((part) =>
+      part
+        .replace(/\s+([,.;:%])/g, '$1')   // "6600 ," → "6600,"
+        .replace(/([(\[])\s+/g, '$1')     // "( SPX" → "(SPX"
+        .replace(/\s+([)\]])/g, '$1')     // "6600 )" → "6600)"
+        .replace(/([,;:])\s*(?=[,;:])/g, '') // ", ," from two missing clauses
+        .replace(/^[\s,;:]+/g, '')
+        .replace(/[\s,;:]+$/g, '')        // a comma left hanging by a dropped clause
+        .trim(),
+    )
+    .filter(Boolean)
+  return parts.join(' · ').replace(/\s+/g, ' ').trim()
+}
+
+/** "10:37" in ET — the column the feed sorts and `age()` reads. */
+function etClock(ts: unknown): string {
+  const ms = Number(ts)
+  if (!Number.isFinite(ms) || ms <= 0) return ''
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date(ms))
+  } catch {
+    return ''
+  }
+}
+
+interface SignalRow {
+  id?: number
+  ts?: number | string
+  kind?: string
+  direction?: string
+  setup?: string
+  level_name?: string | null
+  level_spx?: number | null
+  score?: number | null
+  confluence?: string | null
+  reason?: string | null
+  meta?: Record<string, unknown> | string | null
+}
+
+function toItem(row: SignalRow): AlertItem | null {
+  const kind = KIND_BY_SERVER_KEY[String(row?.kind ?? '')]
+  if (!kind) return null
+  const t = TYPE_BY_ID[kind]
+
+  // `setup` usually restates the type ("Core level touch", "IB break ↑"), so the
+  // row header shows the type name and only the PART of setup that adds
+  // something becomes the variant after the tag.
+  let variant = tidy(row.setup)
+  if (variant.toLowerCase().startsWith(t.name.toLowerCase())) variant = variant.slice(t.name.length)
+  variant = tidy(variant)
+
+  // `reason` is the sentence a detector wrote; `setup` is the fallback when a
+  // detector left it empty, so a row is never blank.
+  const text = tidy(row.reason) || tidy(row.setup) || t.name
+
+  const bits: string[] = []
+  const lvl = Number(row.level_spx)
+  if (row.level_name && Number.isFinite(lvl)) bits.push(`${row.level_name} ${lvl.toFixed(0)}`)
+  else if (row.level_name) bits.push(String(row.level_name))
+  if (row.confluence) bits.push(`with ${row.confluence}`)
+  const score = Number(row.score)
+  if (Number.isFinite(score) && score > 0) bits.push(`score ${score}`)
+
+  return {
+    id: Number(row.id) || Number(row.ts) || 0,
+    kind,
+    variant: variant || undefined,
+    text,
+    meta: bits.length ? tidy(bits.join(' · ')) : undefined,
+    at: etClock(row.ts),
+  }
+}
+
+// ── The poll ────────────────────────────────────────────────────────────────
+// 20s, and only while the tab is visible: a parked dashboard should not be a
+// request every twenty seconds all night. The catch-up happens on the way back,
+// which is also when a returning trader most wants the list correct.
+const FEED_POLL_MS = 20_000
+const FEED_LIMIT = 50
+
 export function useAlertsFeed(): AlertItem[] {
   const [items, setItems] = useState<AlertItem[]>([])
+
   useEffect(() => {
     let alive = true
-    // Imported lazily for the same reason the panel is: the entry chunk should
-    // not carry a list of demo strings.
-    void import('@/shell/AlertsPanel').then((m) => {
-      if (alive) setItems(m.SAMPLE)
-    })
+
+    const load = async () => {
+      try {
+        const r = await fetch(`/proxy/signals?limit=${FEED_LIMIT}`, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+        })
+        if (!r.ok) return
+        const j = (await r.json()) as { rows?: SignalRow[] }
+        if (!alive || !Array.isArray(j?.rows)) return
+        // The route already orders newest-first; the map only drops unknowns.
+        setItems(j.rows.map(toItem).filter((x): x is AlertItem => x !== null))
+      } catch {
+        // Offline, or a free account the proxy gate refuses. Keep what is on
+        // screen — an empty toolbar is a worse lie than a slightly stale one.
+      }
+    }
+
+    void load()
+    const tick = () => {
+      if (!document.hidden) void load()
+    }
+    const id = window.setInterval(tick, FEED_POLL_MS)
+    document.addEventListener('visibilitychange', tick)
     return () => {
       alive = false
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', tick)
     }
   }, [])
+
   return items
 }
 
@@ -96,6 +227,11 @@ export function AlertsPill() {
   const fresh = useMemo(() => !!latest && !age(latest.at).endsWith('h'), [latest])
 
   return (
+    /* `min-w-0` + `shrink` is what lets this yield: without min-w-0 a flex item
+       refuses to go below its content width, and the pill pushed the clock, the
+       ticker picker and the account menu off the right edge of the toolbar on
+       anything narrower than a wide desktop. It gives up its headline first,
+       then its own width, and never the controls beside it. */
     <div ref={wrapRef} className="relative min-w-0 shrink">
       <button
         type="button"
@@ -108,7 +244,7 @@ export function AlertsPill() {
           // beside the wordmark read as a second button competing with the
           // brand, and the tag already says what kind of alert this is. Hover
           // is the only affordance it needs — the row is still a button.
-          'flex h-6 max-w-[22rem] items-center gap-1.5 overflow-hidden rounded-sm px-1.5 transition-colors',
+          'flex h-6 max-w-[9rem] items-center gap-1.5 overflow-hidden rounded-sm px-1.5 transition-colors lg:max-w-[15rem] xl:max-w-[22rem]',
           open ? 'bg-raised' : 'hover:bg-raised',
           fresh ? '' : 'opacity-80',
         ].join(' ')}
@@ -130,7 +266,10 @@ export function AlertsPill() {
             >
               {type.tag}
             </span>
-            <span className="truncate text-2xs text-fg opacity-95">{latest.text}</span>
+            {/* The headline is the first thing to go. Under `lg` the pill is
+                dot + tag + age + count — still the four facts that decide
+                whether to open it — and the full line is in the tooltip. */}
+            <span className="hidden truncate text-2xs text-fg opacity-95 lg:inline">{latest.text}</span>
             <span className="shrink-0 text-3xs tabular-nums opacity-70">{age(latest.at)}</span>
             {rest > 0 && (
               <span className="ml-0.5 shrink-0 pl-1 text-3xs font-bold text-warn">+{rest}</span>
@@ -141,7 +280,7 @@ export function AlertsPill() {
             <span className="shrink-0 text-3xs font-bold uppercase leading-[13px] tracking-wide text-fg opacity-80">
               Alerts
             </span>
-            <span className="truncate text-2xs text-fg opacity-75">No signals yet</span>
+            <span className="hidden truncate text-2xs text-fg opacity-75 lg:inline">No signals yet</span>
           </>
         )}
         <span aria-hidden className="shrink-0 text-3xs opacity-70">

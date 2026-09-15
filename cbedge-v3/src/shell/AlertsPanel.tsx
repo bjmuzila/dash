@@ -22,22 +22,10 @@ import { ALERT_TYPES, TYPE_BY_ID, fetchMasterEnabled, readShown, writeShown } fr
 // this feed and its chip is drawn off and disabled — so an empty list says
 // which of the two reasons it is empty for.
 //
-// ── NO FEED DATA YET ────────────────────────────────────────────────────────
-// `SAMPLE` below is placeholder copy. Wiring the rows means replacing the body
-// of `useAlertsFeed` in AlertsFeed.tsx with a read of /proxy/signals.
+// THE ROWS ARE REAL. `useAlertsFeed` (AlertsFeed.tsx) polls GET /proxy/signals
+// every 20s and maps `trade_signals` rows onto AlertItem. The placeholder
+// SAMPLE list that used to live in this file is gone.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/** PLACEHOLDER. Delete when the signals engine feeds this. */
-export const SAMPLE: AlertItem[] = [
-  { id: 8, kind: 'gexChangeTop', variant: 'Live trigger', text: 'NVDA 180 — Δ GEX +$740M, +62% vs open', meta: '10:37 · exp 2026-09-19 · grade B', at: '10:37' },
-  { id: 7, kind: 'coreTouch', text: 'Price is at the core level (SPX 6 600), arriving from below', meta: 'core 6 600 · 3.4B', at: '10:22' },
-  { id: 6, kind: 'coreChange', variant: '↑', text: 'Core moved up 25 pts — 6 575 → 6 600', meta: '3.4B', at: '10:14' },
-  { id: 5, kind: 'flip', text: 'Crossed the flip at 6 600 — positive gamma', meta: 'flip 6 600 · spot 6 603.8', at: '10:06' },
-  { id: 4, kind: 'whale', text: '$4.1M SPX 6650C swept at ask', meta: '2 400 × $17.10 · OTM · 3 DTE', at: '09:58' },
-  { id: 3, kind: 'gexChangeTop', variant: 'Scanner pick', text: 'SPY 660 — Δ GEX −$510M, −41% vs open', meta: '09:30 slot · rank 1', at: '09:52' },
-  { id: 2, kind: 'ibBreak', text: 'IB high 6 596 broken — extension up', meta: 'IB 6 572 / 6 596 · range 24.0', at: '09:47' },
-  { id: 1, kind: 'ibFormed', text: 'Initial balance 6 572 / 6 596', at: '09:30' },
-]
 
 // ONE ROW, ALWAYS. Nine chips will not fit a 24rem panel, and wrapping them
 // pushed the feed down a line and made the panel's height jump as types were
@@ -97,7 +85,10 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
   return (
     <div
       role="menu"
-      className="absolute left-0 top-[calc(100%+6px)] z-40 w-[24rem] overflow-hidden rounded-md border border-line bg-surface shadow-2xl"
+      // The panel is wider than its trigger, and the trigger shrinks. `w-[24rem]`
+      // with a `max-w` tied to the viewport keeps it from hanging off either
+      // edge on a narrow window, where the pill itself is only ~9rem wide.
+      className="absolute left-0 top-[calc(100%+6px)] z-40 w-[24rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-md border border-line bg-surface shadow-2xl"
     >
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 border-b border-line bg-surface2 px-2.5 py-2">

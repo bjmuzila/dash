@@ -212,8 +212,11 @@ async function getRecentSignals({ limit = 50, since = 0, kind = '' } = {}) {
   if (since > 0) { params.push(since); where.push(`ts >= $${params.length}`); }
   if (kind)      { params.push(kind);  where.push(`kind = $${params.length}`); }
   params.push(Math.min(200, Math.max(1, limit)));
+  // `meta` is in the SELECT so the dashboard's feed can draw the small line
+  // under a row (a scanner pick's expiry and rank, a whale's contract) without
+  // a second query per signal.
   const sql = `SELECT id, ts, session_date, kind, direction, setup, level_name,
-                      level_es, level_spx, price_es, price_spx, score, confluence, reason
+                      level_es, level_spx, price_es, price_spx, score, confluence, reason, meta
                FROM trade_signals
                ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                ORDER BY ts DESC LIMIT $${params.length}`;
