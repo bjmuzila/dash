@@ -452,8 +452,8 @@ function VoltickCard() {
           Voltick · CB Edge
         </span>
         <span style={{ fontSize: TYPE.body, color: OWNER_THEME.green }}>
-          The contents board, the owner console demo and the design system. Who gets in is managed at the
-          top of Admin.
+          The contents board, the owner console demo and the design system. Who gets in is managed under
+          Voltick Access on Admin.
         </span>
       </span>
 

@@ -944,10 +944,10 @@ export function useChainData(opts: UseChainDataOpts) {
     }
   }, [])
   // ── Near core ──────────────────────────────────────────────────────────────
-  // Which strikes get the ordinary sign-coloured Intensity fill — not a fill of
-  // their own. It exists for the LEVELS stop, where that fill is switched off
-  // and a strike carrying 80% of the Core goes blank beside one carrying 2%.
-  // Gold stays the Core's alone.
+  // A filter on the heat: switched on, only the strikes carrying this share or
+  // more of their column's core are painted at all, in the ordinary sign colour
+  // on the Intensity ramp. Everything under the threshold is left bare. Gold
+  // stays the core's alone, and CB / CW / PW are exempt from the cut.
   // Default 50% — "half of Core" is the question Brandon actually asks of the
   // levels view, and it is the number that reads without being a second chain.
   const [nearCore, setNearCore] = useState(false)

@@ -36,7 +36,8 @@ import { OWNER_THEME, OWNER_LIGHT_BLUE } from "./theme";
  * the route table, and every bookmark and deep link in existence. So the URL
  * scheme (/owner/dev/sales vs /greeks vs /database) stays as inconsistent as it
  * was: the sidebar group and the URL do not agree, and that's accepted, because
- * making them agree means breaking links.
+ * making them agree means breaking links. When a page IS retired, its href goes
+ * in OWNER_REDIRECTS rather than just disappearing.
  */
 
 export type OwnerLink = { label: string; href: string; glyph: string; key: string };
@@ -49,16 +50,22 @@ export const OWNER_PINNED_LINKS: OwnerLink[] = [
 
 export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
   {
-    // Reading the numbers. Overview lives here rather than under System: it is
-    // the traffic/signups/pages report, and the only reason it ever sat with
-    // Dev is that its URL is /owner/dev/owner.
+    // Reading the numbers — THREE pages, one per job, since 2026-09-15:
+    //
+    //   Sales      the money   (Stripe, revenue, expenses, campaign links)
+    //   Customers  the people  (traffic, signups, activity, map, feedback)
+    //   Admin      the machine (system health, controls, checks, access)
+    //
+    // Overview (/owner/dev/owner) and Visitors (/owner/visitors) were folded
+    // into these: Overview's traffic half went to Customers and its system
+    // half to Admin; Visitors' map went to Customers whole. Both old hrefs
+    // redirect (OWNER_REDIRECTS below) so bookmarks keep working.
     label: "Info",
     accent: OWNER_THEME.cyan,
     links: [
-      { label: "Admin", href: "/owner/dev/admin", glyph: "⚿", key: "Admin" },
-      { label: "Visitors", href: "/owner/visitors", glyph: "◍", key: "Visitors" },
-      { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞", key: "ControlPanel" },
       { label: "Sales", href: "/owner/dev/sales", glyph: "$", key: "Sales" },
+      { label: "Customers", href: "/owner/customers", glyph: "◍", key: "Customers" },
+      { label: "Admin", href: "/owner/dev/admin", glyph: "⚿", key: "Admin" },
     ],
   },
   {
@@ -129,11 +136,16 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
   },
 ];
 
-// The Control Panel (/owner/dev/owner) is one page. The Infra tab was removed:
-// its system + hosting cards moved to the top of Overview, and its Controls
-// section moved to the Admin page.
-export const OWNER_CONTROL_SECTIONS: { id: string; label: string }[] = [
-  { id: "overview", label: "Overview" },
+/**
+ * Retired hrefs → where they went. Rendered by App.jsx as <Navigate replace>,
+ * so every bookmark and deep link to the old page lands on the new one instead
+ * of the 404. Not nav entries (no key), so check-owner-pages.mjs ignores them.
+ */
+export const OWNER_REDIRECTS: { from: string; to: string }[] = [
+  // Overview → its traffic half is Customers; the system half is on Admin.
+  { from: "/owner/dev/owner", to: "/owner/customers" },
+  // Visitors → the map is the middle of the Customers page.
+  { from: "/owner/visitors", to: "/owner/customers" },
 ];
 
 /**

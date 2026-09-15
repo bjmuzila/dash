@@ -10,15 +10,13 @@ import {
  * ─────────────────────────────────────────────────────────────────────────────
  * OWNER CONTROLS — feed toggles, manual job triggers, and signal-alert switches.
  *
- * Lifted out of ControlPanel's Infra tab (which no longer exists) into a
- * self-contained component so it can render on the Admin page. It owns all of
- * its own state and fetches — nothing is threaded in from a parent.
+ * Lifted out of the old Control Panel's Infra tab into a self-contained
+ * component so it can render on the Admin page. It owns all of its own state
+ * and fetches — nothing is threaded in from a parent.
  *
- * Note on duplication: ControlPanel's sidebar still has its own compact
- * idle/mvc/maintenance quick-toggles with their own copy of this state. Both
- * seed from the same /proxy endpoints on mount, so they converge; they're
- * deliberately independent rather than sharing a store, because a shared store
- * for three booleans isn't worth the coupling between two separate routes.
+ * 2026-09-15: the Control Panel (Overview) page is gone, and with it the
+ * duplicate idle/mvc/maintenance quick-toggles that lived in its drawer. This
+ * is now the ONE place those switches exist.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 

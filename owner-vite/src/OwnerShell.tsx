@@ -77,9 +77,10 @@ export default function OwnerShell() {
   const [favs, setFavs] = useState<string[]>([]);
   const [hovered, setHovered] = useState<string | null>(null);
 
-  // Exact-match only: a link is active solely on its own page. Control Panel
-  // section links (/owner/dev/owner?tab=…) share one pathname → disambiguate on
-  // the tab. Only ONE link is ever highlighted at a time.
+  // Exact-match only: a link is active solely on its own page. Links that
+  // carry ?tab= share one pathname → disambiguate on the tab (no current link
+  // does, since Overview was retired; kept so a tabbed page can come back).
+  // Only ONE link is ever highlighted at a time.
   const isActive = (href: string) => {
     const q = href.indexOf("?tab=");
     if (q >= 0) return pathname === href.slice(0, q) && activeTab === href.slice(q + 5);

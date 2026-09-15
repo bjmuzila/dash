@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-09-15 (k) - Owner site: customer info consolidated onto three Info pages
+
+**The problem.** owner.cbedge.net's Info group had four pages - Admin,
+Visitors, Overview, Sales - and the customer picture was smeared across all of
+them. Traffic charts, top pages and acquisition sat on Overview; the world map
+was its own page; the per-person lists (activity, Discord, unsubscribes,
+feedback, not-paying) were on Admin; the "signed up, never bought" funnel was
+on Sales. Same question, four tabs, four different time windows.
+
+**Now: one page per job.**
+
+| Page | Route | What it is |
+|---|---|---|
+| **Sales** | `/owner/dev/sales` | The money. Stripe KPIs, profit per month, revenue by source, subscriptions, cancellations, expenses - plus the **Campaign Link Builder**, moved here from Overview because this is the page where you find out whether a link paid. |
+| **Customers** (new) | `/owner/customers` | The people. KPI strip (visits, users, subscribers, on today, logged in, waitlist), traffic / signups / cumulative charts, top pages, the **world map**, acquisition, Flow + EM ticker visits, then every by-name list: signed up · never bought, signed up · not paying, customer activity, Discord connections, Far CB tickers, unsubscribes, feedback. |
+| **Admin** | `/owner/dev/admin` | The machine. **System health** (status dots, server tiles, Hetzner + Cloudflare hosting strip, rows written today - the top of the old Overview), Controls, System Checks, Voltick Access, Comped Access. |
+
+**Retired.** Overview (`/owner/dev/owner`) and Visitors (`/owner/visitors`)
+no longer exist as pages; both hrefs redirect to `/owner/customers` via a new
+`OWNER_REDIRECTS` list in `owner-vite/src/lib/nav.ts`, rendered by `App.jsx`
+as `<Navigate replace>`, so bookmarks keep working. `pages/ControlPanel.tsx`
+(3,272 lines) and `pages/Visitors.tsx` are now comment-only stubs, out of the
+registry and the build - **delete both files** when convenient; nothing
+imports them. The dead `{false && ...}` levels-publish block that ControlPanel
+still polled `/proxy/levels-status` for every 60s went with it.
+
+**Files.**
+- `owner-vite/src/pages/Customers.tsx` - new. ControlPanel's bucketers, KPI strip, MetricsTabSection, TopPagesCard and TickerVisitsCard, minus every system tile, plus the Visitors page's fetch/range/beacon-age logic. ONE `/api/page-visits` fetch (server-side range picker: Today / 7d / 30d / 90d / All, opens on All) feeds the strip, charts, top pages, map and acquisition; hourly refresh + refetch on tab focus, as Visitors did. The granularity picker only changes chart bucketing.
+- `owner-vite/src/components/SystemHealth.tsx` - new. Self-contained: owns the `/ws/gex` status tap and the 60s poll of `/proxy/idle`, `/api/db` counts, `/api/db/health`, hetzner/cloudflare metrics, `/proxy/self-metrics`. Renders status dots + SystemStrip + HostingStrip (own Live / 7d / 30d switch, since the upstreams have no yearly) + rows-written card.
+- `owner-vite/src/components/customerPanels.tsx` - the six per-person panels lifted verbatim out of Admin.tsx, exported.
+- `owner-vite/src/components/SignupsPanel.tsx` - "Signed up · never bought", lifted verbatim out of Sales.tsx.
+- `owner-vite/src/lib/utils.ts` - `fmtRelative` shared (was duplicated in Admin).
+- `Admin.tsx` shrank from 1,433 to ~720 lines; `Sales.tsx` lost the signups block and gained a one-shot `/api/page-visits?days=90` fetch for the link builder's "already used" chips.
+- `nav.ts` Info group is now Sales · Customers · Admin. `OWNER_CONTROL_SECTIONS` (the one-tab tab list) is gone.
+- `OwnerControls.tsx` header comment: the duplicate quick-toggles it referenced no longer exist.
+- `Hub.tsx` Voltick card copy: "managed under Voltick Access on Admin" (it is no longer the top panel).
+
+`tsc --noEmit`, `check-owner-pages.mjs` and `vite build` all pass; all three
+pages and both redirects rendered in a headless smoke test against mocked
+endpoints.
+
 ## 2026-09-15 (c) - The feed reconnects itself when dxLink goes quiet
 
 **A dead feed that looks alive.** dxLink's worst failure mode is the socket
@@ -23479,71 +23520,23 @@ Files: `cbedge-v3/src/pages/OptionsChain.tsx`,
 `cbedge-v3/src/pages/optionsChain/useChainData.ts`,
 `cbedge-v3/src/pages/optionsChain/heatSkins.ts`.
 
+## 2026-09-15 (j) — v3 Options Chain: NEAR CORE is a filter on the heat
 
-## 2026-09-15 (g) — The daily EM rails move to GEX Candles, off the GEX Chart
+Supersedes (i). NEAR CORE now *subtracts* rather than adds. Switched on, at any
+Intensity position:
 
-Correction to (f). The band went onto the **GEX Chart**, and it belongs on **GEX
-Candles**. ±EM is a price level for the session; the candles card is the one
-with a price axis to hang it on. The GEX Chart's x axis is strikes, so the rails
-were two more verticals competing with the flip line, the spot line and the bars
-— saying nothing that a horizontal on the price pane does not say better.
+- a strike carrying `nearCorePct` or more of its column's core keeps the ordinary
+  sign-coloured Intensity fill, unchanged;
+- everything under the threshold is left bare — no fill at all;
+- CB / CW / PW and the ★ core are exempt, so the dial can never make a level
+  disappear, and gold stays the core's alone.
 
-**Reverted, fully:** `board/gexChart/gexChartRender.ts`,
-`board/gexChart/settings.ts`, `board/gexChart/GexChartCard.tsx` are back to
-their pre-(f) state — no `em` on `GexChartModel`, no `showEm`, no `EM` chip, no
-`xForPrice`. `board/gexChart/dailyEm.ts` is left as an empty `export {}` with a
-pointer, because the tooling in this session could not delete a file on the
-laptop; **it is safe to delete by hand.**
+So the grid shows the strikes that actually matter against the core and nothing
+else, with the slider still deciding how hot those look. Switched off, nothing
+changes anywhere.
 
-**Kept, unchanged:** the whole server side — `server-v2/daily-em.js`, the
-`/api/daily-em` route, the `daily_em` table — and `--color-level-em` in
-tokens.css. None of that was ever card-specific.
+Same rule in the ⅀ Total column, against its own summed core.
 
-**Rehoused:** the reader is now `src/data/dailyEm.ts`, which is where AGENTS.md
-puts an API reader. It gained a `date` argument (see replay below).
-
-### On the candles pane
-
-Two dashed horizontals with the price in a chip at the **right** edge —
-CORE / CW / PW own the left one, so the two families never collide at a shared
-price and tell themselves apart at a glance. `plotW` excludes the price scale,
-so a right-aligned chip still clears the axis labels. The line stops short of
-its own chip rather than running under it.
-
-**These get a line and the walls do not, and that is the difference between
-them.** The walls' hairlines were dropped in an earlier pass because three
-horizontals across a pane already carrying candles, bubbles and a heatmap
-competed with the price action, and each said nothing its tag did not — the tag
-sits *at* the level, so the height is the line. An EM rail is a **boundary**, and
-the whole use of one is watching price travel toward it, stall under it or go
-through it. That reading needs the line carried across the session. Two of them,
-at the extremes of the day rather than in the thick of it, at a third of the ink.
-
-New `setEmBand` on the chart handle rather than two more keys on `ChartLevels`,
-because it is a different *kind* of level: CORE / CW / PW come off the newest GEX
-column and move with the book; ±EM was decided this morning and does not move,
-which is the only reason it is worth marking. Drawn above the bubble
-early-return, so it survives Bubbles being switched off.
-
-New `EM` chip in the cogwheel's Layer section, on by default, separate from
-`Levels` — wanting the walls without the band, or the band without the walls,
-are both ordinary. It gates the request as well as the layer.
-
-**⚠ The ES basis.** The band is quoted in SPX cash and an ES pane plots futures
-40–60 points above it, so the card shifts `up` / `down` by `basis.basis` before
-handing them over — the same correction `shiftColumns` makes for strikes, and the
-one v2 lost a fortnight to in July 2026. Today's basis, not a per-day lookup: the
-band is one session's. No usable basis and the rails draw at cash prices, which
-is the fallback the bubbles already take and the banner under the chart already
-names.
-
-**Replay.** `activeDay` is passed through to `/api/daily-em?date=`, so a rewound
-Tuesday asks for Tuesday's row. Sessions predating the table answer with no band
-and the rails do not draw — hanging *today's* band over a rewound session would
-be a level that is plainly false, and false is worse than absent.
-
-Files: `cbedge-v3/src/data/dailyEm.ts` (new),
-`cbedge-v3/src/board/gexCandles/chart.ts`,
-`cbedge-v3/src/board/gexCandles/settings.ts`,
-`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
-`cbedge-v3/src/board/gexChart/*` (reverted).
+Files: `cbedge-v3/src/pages/OptionsChain.tsx`,
+`cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`,
+`cbedge-v3/src/pages/optionsChain/useChainData.ts`.

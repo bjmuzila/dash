@@ -533,17 +533,16 @@ export default function OptionsChain({
                       </span>
                     </div>
                   </Field>
-                  {/* NEAR CORE — gold is the Core's alone. This does not add a
-                      layer; it decides WHICH cells get the ordinary sign-coloured
-                      Intensity fill. So it shows up at the LEVELS stop, where
-                      that fill is switched off and a strike carrying 80% of the
-                      Core goes blank beside one carrying 2%. Above the bottom
-                      stop every cell already has the fill and the toggle is a
-                      no-op — one paint rule, not two. CB / CW / PW always keep
-                      their own colour. */}
+                  {/* NEAR CORE — a FILTER on the heat, not a fill of its own.
+                      On, only the strikes carrying this share or more of their
+                      column's core keep the ordinary Intensity fill and the rest
+                      go bare, so the grid shows the strikes that matter against
+                      the core and nothing else. Gold stays the core's alone, and
+                      CB / CW / PW keep their own paint whatever the dial says —
+                      the threshold can never make a wall disappear. */}
                   <Field
                     label="Near core"
-                    hint="At the LEVELS stop, also paint the strikes carrying this share or more of their column's core — in the ordinary sign colour on the Intensity ramp. CB / CW / PW keep their own colour."
+                    hint="Paint only the strikes carrying this share or more of their column's core, in the ordinary sign colour on the Intensity ramp. Everything under the threshold is left bare; CB / CW / PW always keep their own colour."
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
                       <button

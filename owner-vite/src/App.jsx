@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import OwnerShell from './OwnerShell.tsx'
 import AuthGate from './AuthGate.tsx'
-import { OWNER_ROUTES } from './lib/nav.ts'
+import { OWNER_ROUTES, OWNER_REDIRECTS } from './lib/nav.ts'
 import { PAGES } from './pages/registry.ts'
 import NotFound from './pages/NotFound.tsx'
 
@@ -20,6 +20,10 @@ export default function App() {
             const Comp = PAGES[r.key] || NotFound
             return <Route key={r.path} path={r.path} element={<Comp />} />
           })}
+          {/* Retired pages — old bookmarks land on the page that absorbed them. */}
+          {OWNER_REDIRECTS.map((r) => (
+            <Route key={r.from} path={r.from} element={<Navigate to={r.to} replace />} />
+          ))}
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>

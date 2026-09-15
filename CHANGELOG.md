@@ -22620,3 +22620,26 @@ the full-width slot it occupied at the bottom of the analytics grid, so the AI
 daily strategy card no longer renders on `/v3/analytics`. The component file
 `cbedge-v3/src/pages/analysis/cards/StrategyBuilder.tsx` was left in place,
 unreferenced, rather than deleted.
+
+
+---
+
+## 2026-09-15 — Signal alerts feed in the v3 toolbar
+
+New `cbedge-v3/src/shell/` trio — `alertTypes.ts` (catalogue + `serverKey` per
+type + `fetchMasterEnabled`), `AlertsFeed.tsx` (the toolbar pill, `useAlertsFeed`
+polling `GET /proxy/signals` every 20s, `tidy()` for the concatenated detector
+strings) and `AlertsPanel.tsx` (the dropdown: one filter-chip row, scrollable
+feed) — mounted in `Shell.tsx` beside `BzilaLogo`, desktop only.
+
+`server-v2/signals-engine.js`: Discord fan-out deleted (`sendDiscord`,
+`DISCORD_WEBHOOK`, username/avatar); Bzila Confluence (master + 6 sub-keys, the
+detector, `bzilaSubKey`, the `BZ_*` consts and the now-orphaned `refreshIct` /
+`refreshConfidence`) and Flow GEX Divergence removed; `core_change` /
+`core_touch` added inside `evaluateFrame`; `gex_change_top` added reading
+`gex-change-top-recorder.getHistory()` on a 60s poll; whale DTE widened 1–7 → 0–90
+to match `/v3/whales`; `ib_formed` tightened to 10:30–10:35 and now quotes the
+break split from `GET /api/ib-results`; `ib_break` reduced to one per session.
+`getRecentSignals` now SELECTs `meta`. Owner switchboard
+(`owner-vite/src/components/OwnerControls.tsx`) flattened, Discord wording gone.
+Self-test gained cases 9a–9d, 10 and 11.
