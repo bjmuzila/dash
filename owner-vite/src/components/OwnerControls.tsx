@@ -168,8 +168,9 @@ export function OwnerControls() {
     fetch("/proxy/maintenance").then((r) => r.json()).then((j) => setMaint(!!j?.maintenance)).catch(() => { /* non-fatal */ });
   }, []);
 
-  // Signal Alerts — live DB-backed per-alert-key toggles for the background
-  // alert workers.
+  // Signal Alerts — live DB-backed per-alert-key MASTER toggles for the
+  // background alert workers. The dashboard toolbar's own switches are a
+  // per-browser preference layered under these; see cbedge-v3/src/shell.
   const [signalAlerts, setSignalAlerts] = useState<SignalAlertRow[] | null>(null);
   const [signalAlertsBusy, setSignalAlertsBusy] = useState<string | null>(null);
 
@@ -465,14 +466,21 @@ export function OwnerControls() {
           </div>
         )}
 
-        {/* ── Signal Alerts — live per-kind toggles for the background trade-signal
-            engine (Discord "CB Edge Signals"). DB-backed; a flip here takes effect
-            within ~20s, no redeploy. Replaces the old compile-time env kill switches. */}
+        {/* ── Signal Alerts — the MASTER switch per alert kind for the background
+            trade-signal engine. DB-backed; a flip here takes effect within ~20s,
+            no redeploy. Replaces the old compile-time env kill switches.
+
+            NO LONGER DISCORD (2026-09-15). The engine's webhook fan-out is gone;
+            a signal now lands in `trade_signals` and is read by the dashboard's
+            own alerts feed in the v3 toolbar. Customers have their own per-type
+            switches there, saved in their browser — but this row is the master:
+            a kind turned OFF here never fires for anyone, and the toolbar draws
+            its row locked. */}
         <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text }}>Signal Alerts</span>
             <span style={{ fontSize: 14, color: HOME_THEME.textMuted }}>
-              on/off per alert type for the background signals engine → Discord. No redeploy needed.
+              master on/off per alert type for the background signals engine. Off here means off for every customer. No redeploy needed.
             </span>
           </div>
           {!signalAlerts ? (

@@ -7,14 +7,25 @@ import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import { ToolbarSlot } from '@/shell/ToolbarSlot'
 import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, placeNewCard } from './catalog'
 import {
+  type NamedLayout,
+  cleanPresetName,
+  deleteServerLayout,
   fetchServerLayout,
+  fetchServerLayouts,
+  mergePresets,
+  readActivePreset,
   readFreeMode,
   readLocalLayout,
+  readPresets,
   readSyncedLayout,
+  removePreset,
   sameLayout,
   saveServerLayout,
+  upsertPreset,
+  writeActivePreset,
   writeFreeMode,
   writeLocalLayout,
+  writePresets,
   writeSyncedLayout,
 } from './layoutStore'
 
@@ -34,6 +45,19 @@ import {
 // a layout per animation frame; posting those would be a request storm, and it
 // would make every accidental nudge permanent across every device the user owns.
 // Saving to the account is an act, not a side effect.
+
+// ── Named layouts ────────────────────────────────────────────────────────────
+// A third thing, beside those two: a LIBRARY. The board can be saved under a
+// name and any saved name loaded back — a pre-market board, a 0DTE board, a
+// board for the review. The library is per BROWSER (localStorage) for everyone,
+// and for the owner it is mirrored into Postgres through the same route, which
+// has always held up to 12 named templates per page. See the block at the foot
+// of layoutStore.ts.
+//
+// Loading a preset is an EDIT, not a load: it replaces the working board, the
+// local autosave takes it like any gesture, and the header says "Unsaved
+// layout" until Save layout is pressed. A board the user was only looking at is
+// not one they committed to their account.
 //
 // ── The same card, more than once ────────────────────────────────────────────
 // Every catalog entry can be added as many times as the user wants: two GEX
@@ -83,7 +107,7 @@ function defaultLayout(): BoardItem[] {
 type Remote = 'idle' | 'loading' | 'saving' | 'error'
 
 export default function BoardPage() {
-  const { isSignedIn, isLoaded } = useAuth()
+  const { isSignedIn, isLoaded, isOwner } = useAuth()
 
   // Read both keys ONCE, before anything can rewrite them. `boot.local` vs
   // `boot.synced` is the whole basis for deciding whether the server copy may
@@ -101,6 +125,17 @@ export default function BoardPage() {
   const [remoteErr, setRemoteErr] = useState<string | null>(null)
   const savedOnceRef = useRef(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
+
+  // ── The named-layout library ───────────────────────────────────────────────
+  // Read from localStorage at mount for everyone; the owner's account copy is
+  // merged over it when the fetch below answers.
+  const [presets, setPresets] = useState<NamedLayout[]>(() => readPresets())
+  const [activeName, setActiveName] = useState<string | null>(() => readActivePreset())
+  const [nameDraft, setNameDraft] = useState(() => readActivePreset() ?? '')
+  const [layoutsOpen, setLayoutsOpen] = useState(false)
+  const [presetBusy, setPresetBusy] = useState(false)
+  const [presetErr, setPresetErr] = useState<string | null>(null)
+  const layoutsRef = useRef<HTMLDivElement | null>(null)
   /** The board's scroll port. Its only child is the grid — see shotTargets. */
   const boardRef = useRef<HTMLDivElement | null>(null)
 
@@ -207,6 +242,121 @@ export default function BoardPage() {
       setRemoteErr((err as Error).message)
     }
   }, [layout])
+
+  // ── The owner's library, off the account ───────────────────────────────────
+  //
+  // Owner only, and that is the whole storage rule: everyone's library is the
+  // browser's, the owner's is also the account's. A failure here is SILENT —
+  // the local library is already on screen and is the one the board reads, so
+  // a request that did not land costs nothing the user can see. It is the save
+  // that reports, because that is the one they are waiting on.
+  useEffect(() => {
+    if (!isOwner) return
+    const ac = new AbortController()
+    let alive = true
+    fetchServerLayouts(ac.signal)
+      .then((rows) => {
+        if (!alive || rows.length === 0) return
+        setPresets((prev) => {
+          const merged = mergePresets(prev, rows)
+          writePresets(merged)
+          return merged
+        })
+      })
+      .catch(() => {
+        /* the browser's library still stands */
+      })
+    return () => {
+      alive = false
+      ac.abort()
+    }
+  }, [isOwner])
+
+  /**
+   * Save the board on screen under the typed name. Local FIRST and always, so
+   * the library is never waiting on a network round trip; the account write is
+   * an extra the owner gets, and the only part that can report a failure.
+   *
+   * `makeDefault: false` — adding "Premarket" to the library must not change
+   * which board the next machine opens with. That is what Save layout is for.
+   */
+  const savePreset = useCallback(async () => {
+    const name = cleanPresetName(nameDraft)
+    if (!name) {
+      setPresetErr('Name this layout first')
+      return
+    }
+    const snapshot = layout
+    const next = upsertPreset(presets, name, snapshot)
+    setPresets(next)
+    writePresets(next)
+    setActiveName(name)
+    writeActivePreset(name)
+    setNameDraft(name)
+    setPresetErr(null)
+    setFlash(true)
+    setTimeout(() => setFlash(false), 1200)
+    if (!isOwner) return
+    setPresetBusy(true)
+    try {
+      await saveServerLayout(snapshot, name, false)
+    } catch (err) {
+      setPresetErr(`Account copy failed — ${(err as Error).message}`)
+    } finally {
+      setPresetBusy(false)
+    }
+  }, [nameDraft, presets, layout, isOwner])
+
+  /**
+   * Put a saved layout on the board. Through `arrange` with tidy OFF, exactly
+   * like adopting the account's board: loading is not the user rearranging
+   * anything, so a free-placement board must come back with its gaps intact.
+   */
+  const loadPreset = useCallback((p: NamedLayout) => {
+    setLayoutState(arrangeRef.current(p.layout, false))
+    setActiveName(p.name)
+    writeActivePreset(p.name)
+    setNameDraft(p.name)
+    setPresetErr(null)
+    setLayoutsOpen(false)
+  }, [])
+
+  /**
+   * Drop one from the library. Local immediately — the row the user clicked ✕
+   * on has to go — and off the account too when the owner is the one deleting.
+   *
+   * No arming click, unlike Clear all: this removes a SAVED COPY and leaves the
+   * board on screen untouched, so the worst case is re-saving a layout that is
+   * still right there, rather than losing the arrangement you were looking at.
+   */
+  const deletePreset = useCallback(
+    async (p: NamedLayout) => {
+      const next = removePreset(presets, p.name)
+      setPresets(next)
+      writePresets(next)
+      if (activeName && activeName.toLowerCase() === p.name.toLowerCase()) {
+        setActiveName(null)
+        writeActivePreset(null)
+      }
+      if (!isOwner) return
+      try {
+        await deleteServerLayout(p.name)
+      } catch (err) {
+        setPresetErr(`Account copy failed — ${(err as Error).message}`)
+      }
+    },
+    [presets, activeName, isOwner],
+  )
+
+  // Close the layout library on an outside click, like the add-card menu.
+  useEffect(() => {
+    if (!layoutsOpen) return
+    const onDown = (e: PointerEvent) => {
+      if (layoutsRef.current && !layoutsRef.current.contains(e.target as Node)) setLayoutsOpen(false)
+    }
+    window.addEventListener('pointerdown', onDown)
+    return () => window.removeEventListener('pointerdown', onDown)
+  }, [layoutsOpen])
 
   // Close the add-card menu on an outside click.
   useEffect(() => {
@@ -467,6 +617,107 @@ export default function BoardPage() {
               {clearArmed ? 'Clear all?' : 'Clear all'}
             </button>
           )}
+          {/* ── THE LAYOUT LIBRARY ──────────────────────────────────────
+              Outside edit mode on purpose, unlike Save layout and Clear all.
+              Those are counterparts to gestures; LOADING a saved board is not
+              an edit the user is in the middle of making, it is how they get
+              to the board they want — and making them press "Edit layout"
+              first to reach it would be ceremony in front of the common case.
+              The button wears the loaded layout's name, so the board on screen
+              can always say which one it is. */}
+          <div className="relative" ref={layoutsRef}>
+            <button
+              onClick={() => setLayoutsOpen((v) => !v)}
+              title="Save this board under a name, or load one you saved earlier"
+              className={[
+                'max-w-[14rem] truncate rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
+                layoutsOpen
+                  ? 'border-accent bg-raised text-fg'
+                  : 'border-line bg-surface text-muted hover:bg-raised hover:text-fg',
+              ].join(' ')}
+            >
+              {activeName ? `Layouts · ${activeName}` : 'Layouts'}
+            </button>
+            {layoutsOpen && (
+              <div className="absolute right-0 top-full z-20 mt-1 w-72 rounded-md border border-line bg-surface p-2 shadow-lg">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void savePreset()
+                    }}
+                    placeholder="Layout name"
+                    maxLength={40}
+                    autoFocus
+                    className="min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-40 focus:border-accent"
+                  />
+                  <button
+                    onClick={() => void savePreset()}
+                    disabled={!cleanPresetName(nameDraft) || presetBusy}
+                    title={
+                      presets.some(
+                        (p) => p.name.toLowerCase() === cleanPresetName(nameDraft).toLowerCase(),
+                      )
+                        ? `Replace "${cleanPresetName(nameDraft)}" with the board on screen`
+                        : 'Save the board on screen under this name'
+                    }
+                    className="shrink-0 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-bg transition-opacity disabled:cursor-default disabled:opacity-40"
+                  >
+                    {presetBusy ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+                {presetErr && <p className="mt-1 text-2xs text-down">{presetErr}</p>}
+                <div className="mt-2 max-h-64 overflow-y-auto">
+                  {presets.length === 0 ? (
+                    <p className="px-1 py-2 text-xs text-faint">
+                      No saved layouts yet — name this board above and press Save.
+                    </p>
+                  ) : (
+                    presets.map((p) => {
+                      const on = !!activeName && activeName.toLowerCase() === p.name.toLowerCase()
+                      return (
+                        <div
+                          key={p.name}
+                          className={[
+                            'flex items-center gap-1 rounded-sm px-1',
+                            on ? 'bg-raised' : 'hover:bg-raised',
+                          ].join(' ')}
+                        >
+                          <button
+                            onClick={() => loadPreset(p)}
+                            title={`Load "${p.name}" — ${p.layout.length} card${p.layout.length === 1 ? '' : 's'}`}
+                            className={[
+                              'min-w-0 flex-1 truncate py-1.5 text-left text-sm',
+                              on ? 'text-fg' : 'text-muted hover:text-fg',
+                            ].join(' ')}
+                          >
+                            {p.name}
+                          </button>
+                          <span className="shrink-0 text-2xs text-faint">{p.layout.length}</span>
+                          <button
+                            onClick={() => void deletePreset(p)}
+                            title={`Delete "${p.name}"`}
+                            className="shrink-0 px-1 text-xs text-faint hover:text-down"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+                {/* Say where these actually went. The two tiers are invisible
+                    otherwise, and "saved" meaning two different things to two
+                    people is exactly the kind of thing to state plainly. */}
+                <p className="mt-2 border-t border-line pt-1.5 text-2xs text-faint">
+                  {isOwner
+                    ? 'Saved to your account — on every browser you sign in on.'
+                    : 'Saved in this browser.'}
+                </p>
+              </div>
+            )}
+          </div>
           <button
             onClick={() => setLocked((v) => !v)}
             className={[

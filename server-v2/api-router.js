@@ -11302,7 +11302,17 @@ Return exactly one element per input key, in the same order. Never merge, split,
   // so what the 5-10 pt auto-sell did with it.
   //
   // GET   ?since=20 | ?all=1 | ?date=YYYY-MM-DD   → { trades, summary, config }
+  //       ?basis=oivol|vol|all                    → which CB definition's rows
   //       ?ticks=<tradeId>                        → { ticks } (the poll curve)
+  //
+  // THE BASIS SWITCH. Every checkpoint is now recorded TWICE — once off the
+  // OI+VOL CB (netGEX + netVolGEX, the historical definition) and once off the
+  // VOL-ONLY CB (netVolGEX alone) — so the two can be compared over the same
+  // sessions instead of argued about. `basis` picks which set of rows comes
+  // back and it DEFAULTS TO 'oivol', which is what every row written before the
+  // column existed actually was. 'all' returns both and is for a caller that
+  // wants to diff them; the summary that ships with it would then pool two
+  // strategies into one win rate, so the board asks for one basis at a time.
   // POST  { action: 'tick' | 'checkpoint' | 'poll' | 'settle' }
   //       'tick' is what server-v2/cb-trade-recorder.js calls once a minute and
   //       does the whole job; the other three exist so a session can be repaired
@@ -11330,12 +11340,18 @@ Return exactly one element per input key, in the same order. Never merge, split,
             const date = sp.get('date') || undefined;
             const all = sp.get('all') === '1';
             const since = Number(sp.get('since')) || 20;
-            const trades = await cbTrack.listTrades({ date, all, since });
+            // 'all' is passed through verbatim; anything else normalises to a
+            // real basis inside listTrades, so a junk value reads as the default
+            // rather than as an empty table.
+            const basisParam = sp.get('basis') === 'all' ? 'all' : cbTrack.normBasis(sp.get('basis'));
+            const trades = await cbTrack.listTrades({ date, all, since, basis: basisParam });
             send(res, 200, {
               trades,
               summary: cbTrack.summarize(trades),
               config: cbTrack.CONFIG,
               checkpoints: cbTrack.CHECKPOINTS,
+              basis: basisParam,
+              bases: cbTrack.BASES,
             }, { 'Cache-Control': NO_STORE });
           } catch (err) { send(res, 500, { error: String(err) }); }
           return;
@@ -11354,7 +11370,12 @@ Return exactly one element per input key, in the same order. Never merge, split,
           if (action === 'checkpoint') {
             const checkpoint = String(body.checkpoint || '');
             const d = date || cbTrack.etParts().date;
-            send(res, 200, await cbTrack.runCheckpoint(ctx, { date: d, checkpoint }));
+            // One basis per call, same as the recorder. Omit it and you get the
+            // default one — never both, because a hand-repair that silently
+            // wrote two rows would be indistinguishable from a double-fire.
+            send(res, 200, await cbTrack.runCheckpoint(ctx, {
+              date: d, checkpoint, basis: cbTrack.normBasis(body.basis),
+            }));
             return;
           }
           send(res, 400, { error: 'unknown action' });
@@ -11400,12 +11421,18 @@ Return exactly one element per input key, in the same order. Never merge, split,
         try {
           const sp = new URL(req.url || '/', 'http://localhost').searchParams;
           const etDate = cbTrack.etParts().date;
-          let trades = await cbTrack.listTrades({ date: etDate });
+          // ONE BASIS, AND IT IS THE DEFAULT ONE. The recorder writes two rows
+          // per checkpoint now (OI+VOL and VOL-only); handing both to this card
+          // would render every checkpoint twice with no way to tell the rows
+          // apart. The customer surface stays on the historical OI+VOL CB — the
+          // owner Results → Contracts tab is where the comparison lives.
+          const basis = cbTrack.DEFAULT_BASIS;
+          let trades = await cbTrack.listTrades({ date: etDate, basis });
           let today = true;
           if (!trades.length) {
             // since:1 = the single most recent date that has rows, whenever it
             // was. listTrades already orders by checkpoint within the date.
-            trades = await cbTrack.listTrades({ since: 1 });
+            trades = await cbTrack.listTrades({ since: 1, basis });
             today = false;
           }
           const date = trades.length ? String(trades[0].date) : etDate;
@@ -11422,7 +11449,7 @@ Return exactly one element per input key, in the same order. Never merge, split,
           // friends — the rule the card describes in its own header, not a
           // secret), and the card reads MULTIPLIER off it to turn a price
           // difference into dollars.
-          send(res, 200, { date, today, trades, config: cbTrack.CONFIG }, { 'Cache-Control': NO_STORE });
+          send(res, 200, { date, today, basis, trades, config: cbTrack.CONFIG }, { 'Cache-Control': NO_STORE });
         } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });

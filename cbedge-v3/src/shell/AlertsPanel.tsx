@@ -1,7 +1,15 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { T, alpha } from '@/design/theme'
 import type { AlertItem, AlertKind } from '@/shell/alertTypes'
-import { ALERT_TYPES, TYPE_BY_ID, readArmed, readShown, writeArmed, writeShown } from '@/shell/alertTypes'
+import {
+  ALERT_TYPES,
+  TYPE_BY_ID,
+  fetchMasterEnabled,
+  readArmed,
+  readShown,
+  writeArmed,
+  writeShown,
+} from '@/shell/alertTypes'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE ALERTS DROPDOWN — the rest of the feed, and the switchboard.
@@ -11,12 +19,20 @@ import { ALERT_TYPES, TYPE_BY_ID, readArmed, readShown, writeArmed, writeShown }
 //
 //   FEED      what has fired today. Filter CHIPS across the top hide a type
 //             from THIS list and nothing else — a view control.
-//   SETTINGS  one switch per signal: is this type armed at all. The same rows,
-//             in the same order, as the background signals engine's switchboard,
-//             so a name here is the name there.
+//   SETTINGS  one switch per signal: does THIS BROWSER want it. The same rows,
+//             in the same order and under the same names, as the owner console's
+//             Signal Alerts switchboard.
 //
-// Both live in localStorage per browser (see alertTypes.ts). Neither is sent
-// anywhere yet.
+// ── THE MASTER WINS ─────────────────────────────────────────────────────────
+// Each row also carries the engine's own state, read once per open from
+// GET /proxy/signal-alerts. A kind the owner has turned OFF there never fires
+// for anybody, so its row is drawn LOCKED and labelled rather than left
+// switchable — a switch that cannot change the outcome is worse than no switch.
+// The local preference under it is remembered, so re-arming on the owner site
+// restores whatever the customer had chosen.
+//
+// Nothing here ever POSTs: the master is owner-only by proxy-auth, and the
+// customer's own choice is a browser preference (localStorage, alertTypes.ts).
 //
 // ── NO DATA YET (2026-09-14) ────────────────────────────────────────────────
 // `SAMPLE` below is placeholder copy so the panel can be looked at and reviewed.
@@ -41,14 +57,27 @@ const CHIP =
 const TAB =
   'flex-1 cursor-pointer border-b-2 py-2 text-center text-3xs font-bold uppercase tracking-widest transition-colors'
 
-function Switch({ on, color, onClick }: { on: boolean; color: string; onClick: () => void }) {
+function Switch({
+  on,
+  color,
+  onClick,
+  locked = false,
+}: {
+  on: boolean
+  color: string
+  onClick: () => void
+  locked?: boolean
+}) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
+      aria-disabled={locked}
+      disabled={locked}
       onClick={onClick}
-      className="relative h-[14px] w-[26px] shrink-0 rounded-full border transition-colors"
+      title={locked ? 'Switched off by CB Edge' : undefined}
+      className="relative h-[14px] w-[26px] shrink-0 rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-40"
       style={{
         borderColor: on ? color : T.border,
         background: on ? alpha(color, 0.26) : T.panelBg,
@@ -71,6 +100,21 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
   const [tab, setTab] = useState<'feed' | 'settings'>('feed')
   const [shown, setShown] = useState<AlertKind[]>(() => readShown())
   const [armed, setArmed] = useState<AlertKind[]>(() => readArmed())
+  // null until the ask returns — and null means "assume armed", so a free
+  // account or a dropped connection never reads as "everything is off".
+  const [master, setMaster] = useState<Record<string, boolean> | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    void fetchMasterEnabled().then((m) => {
+      if (alive && m) setMaster(m)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const isLive = (id: AlertKind) => master?.[TYPE_BY_ID[id].serverKey] ?? true
 
   const toggleShown = (id: AlertKind) => {
     setShown((prev) => {
@@ -95,7 +139,14 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
     setShown(next)
   }
 
-  const visible = useMemo(() => items.filter((a) => shown.includes(a.kind)), [items, shown])
+  // A kind the owner disarmed is not in the feed either, whatever the chips or
+  // the local switches say: it is not firing, so showing yesterday's rows for
+  // it under a live-looking list would be the feed lying about the engine.
+  const visible = useMemo(
+    () => items.filter((a) => shown.includes(a.kind) && armed.includes(a.kind) && isLive(a.kind)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, shown, armed, master],
+  )
 
   return (
     <div
@@ -218,16 +269,27 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
                 {group === 'primary' ? 'Primary' : 'Bzila'}
               </p>
               {ALERT_TYPES.filter((t) => t.group === group).map((t) => {
-                const on = armed.includes(t.id)
+                const live = isLive(t.id)
+                const on = live && armed.includes(t.id)
                 return (
                   <div
                     key={t.id}
                     className="flex items-center gap-2 border-b border-line px-2.5 py-1.5 transition-colors hover:bg-raised"
                   >
-                    <Switch on={on} color={t.color} onClick={() => toggleArmed(t.id)} />
+                    <Switch
+                      on={on}
+                      color={t.color}
+                      locked={!live}
+                      onClick={() => live && toggleArmed(t.id)}
+                    />
                     <div className="min-w-0 flex-1">
                       <p className={['truncate text-xs', on ? 'opacity-95' : 'opacity-70'].join(' ')}>{t.name}</p>
-                      <p className="truncate text-3xs opacity-60">{t.hint}</p>
+                      {/* When CB Edge has the kind switched off there is nothing
+                          a local switch can do, so the row says why instead of
+                          pretending. The browser's own choice is still kept. */}
+                      <p className="truncate text-3xs opacity-60">
+                        {live ? t.hint : 'Off — switched off by CB Edge'}
+                      </p>
                     </div>
                     <span
                       className="shrink-0 rounded-[2px] border px-1 text-3xs font-bold uppercase leading-[13px] tracking-wide"
@@ -245,7 +307,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
 
       <div className="flex items-center border-t border-line bg-surface2 px-2.5 py-1.5 text-3xs uppercase tracking-wide opacity-70">
         <span>Esc to close</span>
-        <span className="ml-auto">Not wired yet</span>
+        <span className="ml-auto">{master ? 'Synced with CB Edge' : 'Saved in this browser'}</span>
       </div>
     </div>
   )

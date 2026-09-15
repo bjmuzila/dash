@@ -546,55 +546,272 @@ export function sameLayout(a: BoardItem[] | null, b: BoardItem[] | null): boolea
   return true
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// NAMED LAYOUTS ("presets")
+//
+// One board was never enough: a pre-market board, a 0DTE board, a board for
+// reviewing the day. So a board can be SAVED UNDER A NAME and any saved name
+// loaded back onto the screen.
+//
+// ── Where they live, and why it is split ─────────────────────────────────────
+// For everyone: the BROWSER. localStorage, one key holding the whole library.
+// It is free, synchronous, works signed out, and a layout library is a working
+// preference rather than account data — the same tier the card settings and the
+// free-placement flag already use.
+//
+// For the OWNER, additionally: POSTGRES, through the same /api/dashboard-layout
+// route the single-board save already uses. That route has always been able to
+// hold up to 12 NAMED templates per page (`dashboard_layouts`, keyed
+// (clerk_user_id, page, name)) — v3's home board simply only ever wrote one of
+// them, `Default`. Nothing on the server changes for this; the client stopped
+// pretending the table had one row.
+//
+// The two are not a sync engine. Local is written first and is what the board
+// reads on open, so a failed or slow request never costs the owner a save; the
+// account's copy is merged OVER the local one when it arrives (mergePresets),
+// because the account is the copy that saw the other machine.
+//
+// ── The named library is NOT the autoloaded board ────────────────────────────
+// `cb-v3-board-layout` (the working board) and the account's `Default` template
+// are untouched by any of this: opening the page still restores exactly what
+// was on screen last time, saved or not. Loading a preset is an EDIT — it
+// replaces the working board, autosaves locally like any other gesture, and
+// leaves the header saying "Unsaved layout" until Save layout is pressed. A
+// preset the user merely looked at is not a board they committed to.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The browser's whole layout library. */
+export const PRESETS_KEY = 'cb-v3-board-presets'
+/** Which named layout is on screen, for the button's label. Cosmetic. */
+export const ACTIVE_KEY = 'cb-v3-board-preset'
+/** The server's own per-page cap (LAYOUT_MAX_TEMPLATES in api-router.js). */
+export const MAX_PRESETS = 12
+
+export interface NamedLayout {
+  name: string
+  layout: BoardItem[]
+  updatedAt: string | null
+  /** Server rows only — the template the account auto-loads. */
+  isDefault?: boolean
+}
+
 /**
- * The account's saved board, or null when there isn't one. A 401/403 is also
- * null rather than a throw: not signed in is not a failure, it just means there
- * is nothing to load.
+ * The server's cleanLayoutName, reproduced exactly. A name that round-trips
+ * differently locally and remotely would give the owner two rows for one
+ * layout, one of which they can never overwrite.
  */
-export async function fetchServerLayout(signal?: AbortSignal): Promise<ServerLayout | null> {
-  const res = await fetch(`${ENDPOINT}?page=${encodeURIComponent(BOARD_PAGE)}`, {
-    credentials: 'same-origin',
-    headers: { accept: 'application/json' },
-    signal,
-  })
-  if (res.status === 401 || res.status === 403) return null
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-  const data = (await res.json()) as { templates?: unknown }
-  const templates = Array.isArray(data?.templates) ? data.templates : []
-  const rows = templates.filter((t): t is Record<string, unknown> => !!t && typeof t === 'object')
-  const pick = rows.find((t) => t.isDefault === true) ?? rows[0]
-  if (!pick) return null
-  // Same distinction readKey makes, for the same reason: a user who cleared
-  // their board and pressed Save layout has an account copy that is legitimately
-  // `[]`, and folding that into null would hand every OTHER machine they sign in
-  // on the starter three instead of the empty board they saved.
-  const layout =
-    Array.isArray(pick.layout) && pick.layout.length === 0
-      ? []
-      : sanitizeLayout(pick.layout, undefined, serverToCurrentGrid)
-  if (!layout) return null
-  return {
-    name: typeof pick.name === 'string' ? pick.name : BOARD_TEMPLATE,
-    layout,
-    updatedAt: typeof pick.updatedAt === 'string' ? pick.updatedAt : null,
+export function cleanPresetName(v: string): string {
+  return String(v ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 40)
+}
+
+const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+
+/**
+ * The library, reconciled against this build's catalog on the way out — a
+ * preset saved before a card was retired is still a usable board without it.
+ *
+ * An EMPTY preset survives, for the same reason readKey keeps an empty working
+ * board: "a board with nothing on it" is something a user can save on purpose.
+ */
+export function readPresets(): NamedLayout[] {
+  try {
+    const raw = localStorage.getItem(PRESETS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    const out: NamedLayout[] = []
+    for (const p of parsed) {
+      if (!p || typeof p !== 'object') continue
+      const row = p as Record<string, unknown>
+      const name = cleanPresetName(String(row.name ?? ''))
+      if (!name || out.some((o) => sameName(o.name, name))) continue
+      const layout =
+        Array.isArray(row.layout) && row.layout.length === 0 ? [] : sanitizeLayout(row.layout)
+      if (!layout) continue
+      out.push({
+        name,
+        layout,
+        updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : null,
+      })
+    }
+    return sortPresets(out)
+  } catch {
+    return []
+  }
+}
+
+export function writePresets(list: NamedLayout[]): void {
+  try {
+    localStorage.setItem(
+      PRESETS_KEY,
+      JSON.stringify(
+        list.slice(0, MAX_PRESETS).map((p) => ({
+          name: p.name,
+          layout: p.layout.map(gridOnly),
+          updatedAt: p.updatedAt,
+        })),
+      ),
+    )
+  } catch {
+    /* best-effort — the in-memory library still works for this session */
+  }
+}
+
+/** Alphabetical, case-insensitive: the list is read, not scrolled by recency. */
+function sortPresets(list: NamedLayout[]): NamedLayout[] {
+  return [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+}
+
+/**
+ * Save under a name, replacing any layout already under it. Matching is
+ * case-INSENSITIVE so "Premarket" and "premarket" cannot both exist — two rows
+ * a user reads as one name is how you lose a layout you thought you overwrote.
+ * The name the user just typed wins, so re-saving can also fix its casing.
+ */
+export function upsertPreset(list: NamedLayout[], name: string, layout: BoardItem[]): NamedLayout[] {
+  const clean = cleanPresetName(name)
+  if (!clean) return list
+  const kept = list.filter((p) => !sameName(p.name, clean))
+  return sortPresets([
+    ...kept,
+    { name: clean, layout: layout.map(gridOnly), updatedAt: new Date().toISOString() },
+  ]).slice(0, MAX_PRESETS)
+}
+
+export function removePreset(list: NamedLayout[], name: string): NamedLayout[] {
+  return list.filter((p) => !sameName(p.name, name))
+}
+
+export function readActivePreset(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_KEY) || null
+  } catch {
+    return null
+  }
+}
+
+export function writeActivePreset(name: string | null): void {
+  try {
+    if (name) localStorage.setItem(ACTIVE_KEY, name)
+    else localStorage.removeItem(ACTIVE_KEY)
+  } catch {
+    /* best-effort */
   }
 }
 
 /**
- * Write the board to the account. `makeDefault` is always true: this board keeps
- * one template, and the route's own rule is that the first template saved for a
- * page becomes the default anyway — being explicit means a board saved before
- * some other template existed still comes back on the next load.
+ * The account's library laid over the browser's. The SERVER wins a name
+ * collision: it is the copy that has seen every machine, and a browser that
+ * merely holds an older blob under the same name has nothing to add.
+ *
+ * Names only in the browser are KEPT rather than dropped. A local-only preset
+ * is either one saved before the account answered or one from a machine that
+ * never pushed; discarding it on the strength of "the server did not mention
+ * it" would delete layouts the user can see, which is the one outcome worth
+ * avoiding here.
  */
-export async function saveServerLayout(layout: BoardItem[], name = BOARD_TEMPLATE): Promise<void> {
+export function mergePresets(local: NamedLayout[], server: NamedLayout[]): NamedLayout[] {
+  const localOnly = local.filter((l) => !server.some((s) => sameName(s.name, l.name)))
+  return sortPresets([
+    ...localOnly,
+    ...server.map((s) => ({ name: s.name, layout: s.layout, updatedAt: s.updatedAt })),
+  ]).slice(0, MAX_PRESETS)
+}
+
+// ── THE WIRE ────────────────────────────────────────────────────────────────
+
+async function postLayout(body: Record<string, unknown>): Promise<void> {
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ page: BOARD_PAGE, name, layout: layout.map(gridOnly), makeDefault: true }),
+    body: JSON.stringify({ page: BOARD_PAGE, ...body }),
   })
   if (!res.ok) {
     const detail = (await res.json().catch(() => null)) as { error?: string } | null
     throw new Error(detail?.error || `${res.status} ${res.statusText}`)
   }
+}
+
+/**
+ * EVERY template the account holds for this page.
+ *
+ * A 401/403 answers `[]` rather than throwing: not signed in is not a failure,
+ * there is simply nothing to load. A row this build cannot render at all falls
+ * out; a row holding an empty board is kept, per readPresets.
+ */
+export async function fetchServerLayouts(signal?: AbortSignal): Promise<NamedLayout[]> {
+  const res = await fetch(`${ENDPOINT}?page=${encodeURIComponent(BOARD_PAGE)}`, {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+    signal,
+  })
+  if (res.status === 401 || res.status === 403) return []
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  const data = (await res.json()) as { templates?: unknown }
+  const templates = Array.isArray(data?.templates) ? data.templates : []
+  const out: NamedLayout[] = []
+  for (const row of templates) {
+    if (!row || typeof row !== 'object') continue
+    const t = row as Record<string, unknown>
+    // Same distinction readKey makes, for the same reason: a user who cleared
+    // their board and saved it has an account copy that is legitimately `[]`,
+    // and folding that into null would hand every OTHER machine they sign in
+    // on the starter three instead of the empty board they saved.
+    const layout =
+      Array.isArray(t.layout) && t.layout.length === 0
+        ? []
+        : sanitizeLayout(t.layout, undefined, serverToCurrentGrid)
+    if (!layout) continue
+    out.push({
+      name: typeof t.name === 'string' ? t.name : BOARD_TEMPLATE,
+      layout,
+      updatedAt: typeof t.updatedAt === 'string' ? t.updatedAt : null,
+      isDefault: t.isDefault === true,
+    })
+  }
+  return out
+}
+
+/**
+ * The account's AUTOLOADING board — the row flagged default, or the only row
+ * there is. This is what replaces the screen on open, so it deliberately does
+ * not care how many named templates sit beside it.
+ */
+export async function fetchServerLayout(signal?: AbortSignal): Promise<ServerLayout | null> {
+  const all = await fetchServerLayouts(signal)
+  const pick = all.find((t) => t.isDefault) ?? all[0]
+  if (!pick) return null
+  return { name: pick.name, layout: pick.layout, updatedAt: pick.updatedAt }
+}
+
+/**
+ * Write a board to the account under a name.
+ *
+ * `makeDefault` defaults to TRUE because the caller that has always existed —
+ * "Save layout" — means the board that comes back on open. Saving a NAMED
+ * preset passes false: adding "Premarket" to the library must not silently
+ * change which board the next machine opens with. (The route makes the first
+ * template for a page the default regardless, which is correct: the library's
+ * only entry is the only thing it could load.)
+ */
+export async function saveServerLayout(
+  layout: BoardItem[],
+  name = BOARD_TEMPLATE,
+  makeDefault = true,
+): Promise<void> {
+  await postLayout({ name, layout: layout.map(gridOnly), makeDefault })
+}
+
+/** Drop one named template from the account. */
+export async function deleteServerLayout(name: string): Promise<void> {
+  await postLayout({ name, action: 'delete' })
+}
+
+/** Pick the template the account auto-loads. */
+export async function setDefaultServerLayout(name: string): Promise<void> {
+  await postLayout({ name, action: 'set-default' })
 }

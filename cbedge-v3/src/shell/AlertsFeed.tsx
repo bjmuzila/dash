@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { alpha } from '@/design/theme'
 import type { AlertItem } from '@/shell/alertTypes'
-import { TYPE_BY_ID } from '@/shell/alertTypes'
+import { TYPE_BY_ID, readArmed } from '@/shell/alertTypes'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE ALERTS PILL — the newest signal, in the toolbar, all the time.
@@ -20,12 +20,14 @@ import { TYPE_BY_ID } from '@/shell/alertTypes'
 // only matters once someone clicks. Same split, same reason, as BzilaAlerts /
 // BzilaPanel, BotAlert / BotAlertPanel and NotesDock.
 //
-// ── NO DATA YET (2026-09-14) ────────────────────────────────────────────────
-// This is the UI only. `useAlertsFeed` below returns the placeholder list from
-// AlertsPanel's SAMPLE so the pill and the panel can be looked at; nothing
-// polls, nothing subscribes, and no endpoint is named anywhere in these three
-// files. Wiring it means replacing the body of `useAlertsFeed` — the components
-// already take the shape they will get.
+// ── WHAT IS LIVE AND WHAT IS NOT (2026-09-15) ───────────────────────────────
+// The SWITCHBOARD is wired: the Settings tab reads the signals engine's own
+// per-kind master state from GET /proxy/signal-alerts, and a kind the owner has
+// turned off is drawn locked. See alertTypes.ts.
+//
+// The FEED ROWS are still placeholder — `useAlertsFeed` returns AlertsPanel's
+// SAMPLE. Wiring them means replacing the body of this hook with a read of
+// /proxy/signals; the components already take the shape they will get.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AlertsPanel = lazy(() => import('@/shell/AlertsPanel'))
@@ -60,7 +62,15 @@ function age(at: string): string {
 }
 
 export function AlertsPill() {
-  const items = useAlertsFeed()
+  const all = useAlertsFeed()
+  // The pill shows the newest alert THIS BROWSER still wants. A kind switched
+  // off in the Settings tab should not keep sitting in the toolbar — that is
+  // the whole point of switching it off. Read on every render rather than held
+  // in state: the panel writes localStorage directly, and this is eight keys.
+  const items = useMemo(() => {
+    const armed = readArmed()
+    return all.filter((a) => armed.includes(a.kind))
+  }, [all])
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
 

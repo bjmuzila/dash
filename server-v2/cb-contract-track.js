@@ -83,6 +83,34 @@
  *   escape hatch /api/social-media/day-list uses — this needs no esbuild rebundle
  *   of _lib-db.cjs to ship.
  *
+ * TWO BASES, RECORDED SIDE BY SIDE — THE WHOLE POINT OF THE `basis` COLUMN
+ *   The CB is "the heaviest gamma strike", and there are two honest answers to
+ *   that, which disagree often enough to be worth settling with money:
+ *
+ *     'oivol'  `mvc_snapshots.strikeOIVol` — netGEX + netVolGEX, the standing
+ *              book PLUS today's volume. The historical definition here, and
+ *              what the premarket rail, Key Levels and the Confidence hit-rate
+ *              board all draw.
+ *     'vol'    `mvc_snapshots.strikeVolOnly` — netVolGEX alone, only what has
+ *              TRADED today. Reads as "where is today's flow building"; it moves
+ *              faster and it is a different strike on plenty of sessions.
+ *
+ *   EVERY CHECKPOINT RUNS BOTH. One row per (date, checkpoint, basis), each with
+ *   its own walk, its own contract and its own P&L, so the two can be compared
+ *   over the same sessions rather than argued about. That doubles the walk at
+ *   each checkpoint and the per-minute re-price (at most six open rows instead
+ *   of three) — the cost is deliberate and it is the price of the comparison.
+ *   When both bases land on the same strike the two rows are simply identical,
+ *   which is itself the answer for that session.
+ *
+ *   `basis` keys match server-v2/scanner-variants.js ('oivol' / 'vol') on
+ *   purpose — same two bases, same names, so nothing has to translate.
+ *
+ *   THE DEFAULT IS 'oivol' EVERYWHERE A CALLER DOES NOT ASK. Rows written before
+ *   this column existed were OI+VOL, so the backfill default is also the true
+ *   one; the subscriber card (/api/cb-contracts) and the Confidence board merge
+ *   stay on it, and the owner Results → Contracts tab is what switches.
+ *
  * Nothing here throws at the caller. A probe miss, a chain gap, no MVC snapshot
  * at the checkpoint — each degrades to a row with a reason, and the hit-rate
  * half of the Confidence board renders exactly as it did before this existed.
@@ -113,6 +141,22 @@ const CHECKPOINTS = [
   { key: '1030', label: '10:30', min: 10 * 60 + 30 },
   { key: '1200', label: '12:00', min: 12 * 60 },
 ];
+
+/**
+ * THE TWO CB DEFINITIONS. See the header. `column` is the mvc_snapshots column
+ * the CB strike is read from and is interpolated into SQL — so it is a literal
+ * in this table and never anything a caller can supply.
+ */
+const BASES = [
+  { key: 'oivol', label: 'OI + Volume', column: 'strikeOIVol' },
+  { key: 'vol', label: 'Volume only', column: 'strikeVolOnly' },
+];
+const DEFAULT_BASIS = 'oivol';
+/** Anything a query string or a body can carry, turned into a real basis. */
+function normBasis(b) {
+  return BASES.find((x) => x.key === String(b))?.key ?? DEFAULT_BASIS;
+}
+const basisDef = (b) => BASES.find((x) => x.key === normBasis(b));
 
 // PROBE TICKER — 'SPXW', deliberately, not 'SPX'. probeRestTT() resolves the
 // chain under chainTicker('SPXW') === 'SPX' (so the same cached chain is reused)
@@ -244,6 +288,7 @@ function ensureTables() {
         id               SERIAL PRIMARY KEY,
         date             TEXT NOT NULL,          -- ET session date
         checkpoint       TEXT NOT NULL,          -- '0945' | '1030' | '1200'
+        basis            TEXT NOT NULL DEFAULT 'oivol',  -- 'oivol' | 'vol' — which CB this row bought
         checkpoint_label TEXT,
         ticker           TEXT NOT NULL DEFAULT 'SPXW',
         expiration       TEXT NOT NULL,          -- = date (0DTE)
@@ -284,9 +329,20 @@ function ensureTables() {
         pnl_usd          REAL,                   -- pnl x multiplier
         polls            INTEGER NOT NULL DEFAULT 0,
         last_error       TEXT,                   -- why the most recent poll did not price
-        updated_at       BIGINT,
-        UNIQUE (date, checkpoint)
+        updated_at       BIGINT
       );
+      -- THE KEY GAINED A THIRD COLUMN. Every row written before basis existed
+      -- was the OI+VOL CB, so the column's DEFAULT is also the historically true
+      -- value and the backfill is a no-op rewrite rather than a guess. The old
+      -- two-column UNIQUE has to GO, not just be joined: with it in place the
+      -- 'vol' run of a checkpoint collides with the 'oivol' row already there
+      -- and silently records nothing (ON CONFLICT DO NOTHING), which looks
+      -- exactly like the recorder having been down.
+      ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS basis TEXT NOT NULL DEFAULT 'oivol';
+      UPDATE cb_trades SET basis = 'oivol' WHERE basis IS NULL;
+      ALTER TABLE cb_trades DROP CONSTRAINT IF EXISTS cb_trades_date_checkpoint_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS cb_trades_date_cp_basis_key
+        ON cb_trades(date, checkpoint, basis);
       ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS last_error TEXT;
       ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS cb_strike REAL;
       ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS cb_price REAL;
@@ -381,9 +437,25 @@ async function probeContract(ctx, { expiry, side, strike }) {
 }
 
 // ── The CB at a checkpoint, from the same table the board reads ────────────
-async function cbAtCheckpoint(date, checkpointMin) {
+/**
+ * The CB for ONE basis. 'oivol' reads `strikeOIVol` (netGEX + netVolGEX), 'vol'
+ * reads `strikeVolOnly` (netVolGEX alone) — see the header.
+ *
+ * NEITHER FALLS BACK TO THE OTHER, deliberately. Reading the OI+VOL strike when
+ * the vol-only one is missing would hand back an OI+VOL answer under a vol-only
+ * label, and the entire value of recording both is that a row's basis is exactly
+ * what it says. A basis with no strike at a checkpoint resolves to no CB and the
+ * checkpoint records a reason under THAT basis, leaving the other one to run
+ * normally. In practice mvc-auto-snapshot writes both columns on every snapshot
+ * (each falls back to the nearest strike), so this is a guard, not a path.
+ *
+ * `column` comes from the BASES table above, never from a caller — it is
+ * interpolated into the SELECT.
+ */
+async function cbAtCheckpoint(date, checkpointMin, basis = DEFAULT_BASIS) {
+  const col = basisDef(basis).column;
   const rows = await db().queryAll(
-    `SELECT time, timestamp, "strikeOIVol", "strikeVolOnly", "spxPrice"
+    `SELECT time, timestamp, "${col}" AS cb_col, "spxPrice"
        FROM mvc_snapshots WHERE date = ? ORDER BY timestamp ASC LIMIT 2000`,
     [date],
   );
@@ -401,7 +473,7 @@ async function cbAtCheckpoint(date, checkpointMin) {
     const rawSpx = num(r.spxPrice);
     return {
       min,
-      strike: num(r.strikeOIVol) ?? num(r.strikeVolOnly),
+      strike: num(r.cb_col),
       spx: rawSpx != null && rawSpx > 1000 ? rawSpx : null,
     };
   }).filter((x) => x.min != null && x.strike != null);
@@ -411,38 +483,48 @@ async function cbAtCheckpoint(date, checkpointMin) {
 // ── Actions ────────────────────────────────────────────────────────────────
 
 /**
- * Open (or explicitly skip) ONE checkpoint for ONE session. Idempotent: the
- * UNIQUE (date, checkpoint) constraint means a double-fire is a no-op, so a
- * restart mid-morning can safely re-run every due checkpoint.
+ * Open (or explicitly skip) ONE checkpoint for ONE session ON ONE BASIS.
+ * Idempotent: the UNIQUE (date, checkpoint, basis) index means a double-fire is
+ * a no-op, so a restart mid-morning can safely re-run every due checkpoint.
+ *
+ * ONE BASIS PER CALL. `tick` runs it once per entry in BASES, so the two walks
+ * are independent — a 'vol' checkpoint that finds no CB does not stop the
+ * 'oivol' one from trading, and neither row can be mistaken for the other.
  */
-async function runCheckpoint(ctx, { date, checkpoint }) {
+async function runCheckpoint(ctx, { date, checkpoint, basis = DEFAULT_BASIS }) {
   const cp = CHECKPOINTS.find((c) => c.key === checkpoint);
   if (!cp) return { ok: false, reason: 'unknown checkpoint' };
-  const existing = await q(`SELECT id, status FROM cb_trades WHERE date = $1 AND checkpoint = $2`, [date, cp.key]);
-  if (existing.length) return { ok: true, skipped: true, reason: 'already recorded', id: existing[0].id };
+  const bas = normBasis(basis);
+  const existing = await q(
+    `SELECT id, status FROM cb_trades WHERE date = $1 AND checkpoint = $2 AND basis = $3`,
+    [date, cp.key, bas],
+  );
+  if (existing.length) return { ok: true, skipped: true, reason: 'already recorded', basis: bas, id: existing[0].id };
 
   const now = Date.now();
+  // `basis` is appended as the LAST parameter so every existing call site's
+  // positional row is untouched — one column added, nothing renumbered.
   const write = (row) => q(
     `INSERT INTO cb_trades
        (date, checkpoint, checkpoint_label, ticker, expiration, strike, cb_strike, cb_price, walk_steps,
         side, occ_symbol, streamer_symbol,
         status, skip_reason, probe_ts, probe_price, probe_bid, probe_ask, probe_spot, probe_dist,
         entry_ts, entry_price, entry_spot, last_ts, last_price, last_spot, last_dist,
-        best_price, worst_price, closest_dist, polls, updated_at)
+        best_price, worst_price, closest_dist, polls, updated_at, basis)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
-     ON CONFLICT (date, checkpoint) DO NOTHING
+             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
+     ON CONFLICT (date, checkpoint, basis) DO NOTHING
      RETURNING *`,
-    row,
+    [...row, bas],
   );
 
-  const cb = await cbAtCheckpoint(date, cp.min);
+  const cb = await cbAtCheckpoint(date, cp.min, bas);
   if (!cb) {
     const [r] = await write([date, cp.key, cp.label, PROBE_TICKER, date, 0, null, null, null,
       'C', null, null,
-      'skipped', 'no MVC snapshot within the checkpoint window', now, null, null, null, null, null,
+      'skipped', `no ${basisDef(bas).label} CB in mvc_snapshots within the checkpoint window`, now, null, null, null, null, null,
       null, null, null, null, null, null, null, null, null, null, 0, now]);
-    return { ok: true, status: 'skipped', reason: 'no MVC snapshot', id: r?.id ?? null };
+    return { ok: true, status: 'skipped', basis: bas, reason: 'no MVC snapshot', id: r?.id ?? null };
   }
 
   const cbStrike = cb.strike;
@@ -459,7 +541,7 @@ async function runCheckpoint(ctx, { date, checkpoint }) {
       'C', null, null,
       'skipped', 'no SPX price at the checkpoint — cannot pick a side', now, null, null, null, null, null,
       null, null, null, null, null, null, null, null, null, null, 0, now]);
-    return { ok: true, status: 'skipped', reason: 'no SPX price', id: r?.id ?? null };
+    return { ok: true, status: 'skipped', basis: bas, reason: 'no SPX price', id: r?.id ?? null };
   }
 
   const side = decideSide(spot, cbStrike) || 'C';
@@ -472,7 +554,7 @@ async function runCheckpoint(ctx, { date, checkpoint }) {
       round2(walk.cbPrice), null, side, null, null,
       'skipped', walk.reason, now, null, null, null, round2(spot), dist,
       null, null, null, null, null, null, null, null, null, dist, 0, now]);
-    return { ok: true, status: 'skipped', reason: walk.reason, id: r?.id ?? null, cbStrike, side };
+    return { ok: true, status: 'skipped', basis: bas, reason: walk.reason, id: r?.id ?? null, cbStrike, side };
   }
 
   const p = walk.probe;
@@ -485,7 +567,7 @@ async function runCheckpoint(ctx, { date, checkpoint }) {
   ]);
   if (row) await recordTick(row.id, now, p.mark, p.bid, p.ask, spot, dist);
   return {
-    ok: true, status: 'open', id: row?.id ?? null,
+    ok: true, status: 'open', basis: bas, id: row?.id ?? null,
     cbStrike, strike: walk.strike, side, steps: walk.steps,
     cbPrice: round2(walk.cbPrice), mark: round2(p.mark),
   };
@@ -561,41 +643,68 @@ async function recordTick(tradeId, ts, mark, bid, ask, spot, dist, ohlc = null) 
 async function applyStreamBars(openRows) {
   if (!cbStream) return { bars: 0 };
   const byId = new Map(openRows.map((t) => [t.id, t]));
+  /**
+   * EVERY ROW HOLDING THE CONTRACT, not just the one the subscription remembers.
+   *
+   * cb-stream keys its subscriptions by streamer symbol and each one carries a
+   * single `tradeId`, which was fine when a checkpoint produced one row. With
+   * two bases running, the OI+VOL and VOL-only walks land on the SAME contract
+   * on any session where the two CBs agree — one symbol, two open rows — and
+   * `track()` overwrites the sub's tradeId with whichever row it saw last. A
+   * bar matched by id alone would then feed one row and starve the other, while
+   * `isFresh(symbol)` told pollOpen to skip the REST probe for BOTH. The second
+   * row would sit there looking flat.
+   *
+   * Fanning each bar out by SYMBOL fixes that at the only place it matters. The
+   * id map stays as the fallback for a bar whose symbol no longer matches an
+   * open row.
+   */
+  const bySymbol = new Map();
+  for (const t of openRows) {
+    const sym = String(t.streamer_symbol || '').trim();
+    if (!sym) continue;
+    if (!bySymbol.has(sym)) bySymbol.set(sym, []);
+    bySymbol.get(sym).push(t);
+  }
   const bars = cbStream.drain();
   let applied = 0;
   for (const b of bars) {
-    const t = byId.get(b.tradeId);
-    if (!t) continue;                       // position closed while the bar formed
-    // Spot is NOT streamed here — only the contract is subscribed. The distance
-    // to the CB keeps whatever the last REST probe established; the stream's job
-    // is the contract's price, not SPX's.
-    const spot = num(t.last_spot);
-    const dist = distanceToCb(spot, num(t.cb_strike) ?? num(t.strike));
-    await recordTick(t.id, b.ts, b.close, b.bid, b.ask, spot, dist,
-      { open: b.open, high: b.high, low: b.low });
+    const targets = bySymbol.get(String(b.symbol || '').trim())
+      ?? (byId.has(b.tradeId) ? [byId.get(b.tradeId)] : []);
+    if (!targets.length) continue;          // position closed while the bar formed
+    for (const t of targets) {
+      // Spot is NOT streamed here — only the contract is subscribed. The
+      // distance to the CB keeps whatever the last REST probe established; the
+      // stream's job is the contract's price, not SPX's. Two rows on one
+      // contract still have their OWN CB, so the distance is computed per row.
+      const spot = num(t.last_spot);
+      const dist = distanceToCb(spot, num(t.cb_strike) ?? num(t.strike));
+      await recordTick(t.id, b.ts, b.close, b.bid, b.ask, spot, dist,
+        { open: b.open, high: b.high, low: b.low });
 
-    const prevBest = num(t.best_price);
-    const prevWorst = num(t.worst_price);
-    const isBest = prevBest == null || b.high > prevBest;
-    const isWorst = prevWorst == null || b.low < prevWorst;
-    const { pnl, pnlUsd } = computePnl(num(t.entry_price), b.close);
-    await q(
-      `UPDATE cb_trades SET
-         last_ts=$1, last_price=$2,
-         best_price=$3, best_ts=$4, worst_price=$5, worst_ts=$6,
-         pnl=$7, pnl_usd=$8, polls=polls+1, last_error=NULL, updated_at=$1
-       WHERE id=$9`,
-      [b.ts, round2(b.close),
-        round2(isBest ? b.high : prevBest), isBest ? b.ts : (t.best_ts ?? null),
-        round2(isWorst ? b.low : prevWorst), isWorst ? b.ts : (t.worst_ts ?? null),
-        pnl, pnlUsd, t.id],
-    );
-    // Keep the in-memory row current so a REST fallback later in the same tick
-    // does not overwrite a peak this bar just set.
-    if (isBest) { t.best_price = b.high; t.best_ts = b.ts; }
-    if (isWorst) { t.worst_price = b.low; t.worst_ts = b.ts; }
-    t.last_price = b.close;
-    applied += 1;
+      const prevBest = num(t.best_price);
+      const prevWorst = num(t.worst_price);
+      const isBest = prevBest == null || b.high > prevBest;
+      const isWorst = prevWorst == null || b.low < prevWorst;
+      const { pnl, pnlUsd } = computePnl(num(t.entry_price), b.close);
+      await q(
+        `UPDATE cb_trades SET
+           last_ts=$1, last_price=$2,
+           best_price=$3, best_ts=$4, worst_price=$5, worst_ts=$6,
+           pnl=$7, pnl_usd=$8, polls=polls+1, last_error=NULL, updated_at=$1
+         WHERE id=$9`,
+        [b.ts, round2(b.close),
+          round2(isBest ? b.high : prevBest), isBest ? b.ts : (t.best_ts ?? null),
+          round2(isWorst ? b.low : prevWorst), isWorst ? b.ts : (t.worst_ts ?? null),
+          pnl, pnlUsd, t.id],
+      );
+      // Keep the in-memory row current so a REST fallback later in the same tick
+      // does not overwrite a peak this bar just set.
+      if (isBest) { t.best_price = b.high; t.best_ts = b.ts; }
+      if (isWorst) { t.worst_price = b.low; t.worst_ts = b.ts; }
+      t.last_price = b.close;
+      applied += 1;
+    }
   }
   return { bars: applied };
 }
@@ -752,9 +861,14 @@ async function tick(ctx, { now = new Date() } = {}) {
   const st = await settleStale(ctx, { today: et.date });
   if (st.staleClosed) out.stale = st;
 
+  // EVERY BASIS, EVERY DUE CHECKPOINT. Sequential rather than parallel on
+  // purpose: each walk is a run of probe calls against the same proxy, and two
+  // walks racing each other buy nothing but a thicker burst.
   for (const cp of dueCheckpoints(et.minutes)) {
-    const r = await runCheckpoint(ctx, { date: et.date, checkpoint: cp.key });
-    if (r && !r.skipped) out.opened.push({ checkpoint: cp.key, ...r });
+    for (const b of BASES) {
+      const r = await runCheckpoint(ctx, { date: et.date, checkpoint: cp.key, basis: b.key });
+      if (r && !r.skipped) out.opened.push({ checkpoint: cp.key, basis: b.key, ...r });
+    }
   }
   if (et.minutes >= 9 * 60 + 30 && et.minutes < 16 * 60) {
     out.polled = await pollOpen(ctx, { date: et.date });
@@ -780,7 +894,7 @@ async function diagnose(ctx, { date } = {}) {
     recorder: _lastTick
       ? { lastTickAt: _lastTick.at, agoSeconds: Math.round((Date.now() - _lastTick.at) / 1000), lastResult: _lastTick.result ?? null }
       : { lastTickAt: null, note: 'no tick has run in this process — the recorder is not firing, or the process restarted' },
-    config: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, CHECKPOINT_GRACE_MIN },
+    config: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, CHECKPOINT_GRACE_MIN, BASES, DEFAULT_BASIS },
     stream: cbStream ? cbStream.health() : { enabled: false, note: 'cb-stream not loaded — REST polling only' },
     dueNow: dueCheckpoints(et.minutes).map((c) => c.key),
     checkpoints: [],
@@ -788,9 +902,9 @@ async function diagnose(ctx, { date } = {}) {
   };
   try {
     out.rows = await q(
-      `SELECT id, checkpoint, strike, cb_strike, cb_price, walk_steps, side, status, skip_reason,
+      `SELECT id, checkpoint, basis, strike, cb_strike, cb_price, walk_steps, side, status, skip_reason,
               last_error, polls, probe_price, entry_price, last_price, last_ts, updated_at
-         FROM cb_trades WHERE date = $1 ORDER BY checkpoint`, [d]);
+         FROM cb_trades WHERE date = $1 ORDER BY checkpoint, basis`, [d]);
     const ticks = await q(
       `SELECT trade_id, count(*)::int AS ticks FROM cb_trade_ticks
         WHERE trade_id = ANY($1::int[]) GROUP BY trade_id`,
@@ -800,47 +914,91 @@ async function diagnose(ctx, { date } = {}) {
     out.rows = out.rows.map((r) => ({ ...r, tickCount: byId.get(r.id) ?? 0 }));
   } catch (e) { out.rowsError = String(e.message || e); }
 
-  // Resolve each checkpoint's CB from mvc_snapshots, then probe the one that is
-  // live right now — the two failure modes (no snapshot vs. probe miss) look
-  // identical from the UI and this is what separates them.
+  // Resolve each checkpoint's CB from mvc_snapshots — BOTH BASES, because "the
+  // vol row is missing and the oivol row is not" is now a real state and it is
+  // invisible if only one is asked for. The two failure modes (no snapshot vs.
+  // probe miss) look identical from the UI and this is what separates them.
   for (const cp of CHECKPOINTS) {
-    const entry = { key: cp.key, label: cp.label };
-    try {
-      const cb = await cbAtCheckpoint(d, cp.min);
-      entry.cb = cb ? { strike: cb.strike, spx: cb.spx, snapshotMin: cb.min } : null;
-      if (!cb) entry.note = 'no mvc_snapshots row within the checkpoint window';
-    } catch (e) { entry.error = String(e.message || e); }
+    const entry = { key: cp.key, label: cp.label, cbByBasis: {} };
+    for (const b of BASES) {
+      try {
+        const cb = await cbAtCheckpoint(d, cp.min, b.key);
+        entry.cbByBasis[b.key] = cb ? { strike: cb.strike, spx: cb.spx, snapshotMin: cb.min } : null;
+        if (!cb) entry.cbByBasis[b.key] = null;
+      } catch (e) { entry.cbByBasis[b.key] = { error: String(e.message || e) }; }
+    }
+    // `cb` stays on the DEFAULT basis so every existing reader of this dump
+    // keeps meaning what it meant; the per-basis map is additive beside it.
+    entry.cb = entry.cbByBasis[DEFAULT_BASIS] ?? null;
+    if (!entry.cb) entry.note = `no ${basisDef(DEFAULT_BASIS).label} CB in mvc_snapshots within the checkpoint window`;
     out.checkpoints.push(entry);
   }
-  const liveCb = out.checkpoints.filter((c) => c.cb).pop();
-  if (liveCb?.cb?.strike && liveCb.cb.spx != null) {
-    // Run the REAL walk, so the diagnosis shows every strike it would try and
-    // what each priced at — that trail is the whole answer to "why did it skip".
-    const side = decideSide(liveCb.cb.spx, liveCb.cb.strike) || 'C';
-    const w = await walkForContract(ctx, { expiry: d, side, cbStrike: liveCb.cb.strike, spot: liveCb.cb.spx });
-    out.liveWalk = {
-      asked: { ticker: PROBE_TICKER, expiry: d, side, cb: liveCb.cb.strike, spot: liveCb.cb.spx, buyMin: BUY_MIN },
-      candidates: walkCandidates(liveCb.cb.strike, liveCb.cb.spx, side).slice(0, 10),
+
+  // Run the REAL walk on each basis, so the diagnosis shows every strike it
+  // would try and what each priced at — that trail is the whole answer to "why
+  // did it skip", and the two bases skip for different reasons.
+  out.liveWalkByBasis = {};
+  for (const b of BASES) {
+    const live = out.checkpoints.filter((c) => c.cbByBasis?.[b.key]?.strike).pop();
+    const cb = live?.cbByBasis?.[b.key];
+    if (!cb?.strike || cb.spx == null) {
+      out.liveWalkByBasis[b.key] = {
+        skipped: `no ${b.label} CB + SPX resolved for any checkpoint today — mvc_snapshots is empty or unparseable`,
+      };
+      continue;
+    }
+    const side = decideSide(cb.spx, cb.strike) || 'C';
+    const w = await walkForContract(ctx, { expiry: d, side, cbStrike: cb.strike, spot: cb.spx });
+    out.liveWalkByBasis[b.key] = {
+      asked: { ticker: PROBE_TICKER, expiry: d, basis: b.key, side, cb: cb.strike, spot: cb.spx, buyMin: BUY_MIN },
+      candidates: walkCandidates(cb.strike, cb.spx, side).slice(0, 10),
       trail: w.trail,
       picked: w.ok ? { strike: w.strike, mark: w.probe.mark, steps: w.steps } : null,
       reason: w.ok ? null : w.reason,
       cbPrice: w.cbPrice ?? null,
     };
-  } else {
-    out.liveWalk = { skipped: 'no CB + SPX resolved for any checkpoint today — mvc_snapshots is empty or unparseable' };
   }
+  // Unchanged key for every existing reader: the default basis's walk.
+  out.liveWalk = out.liveWalkByBasis[DEFAULT_BASIS];
   return out;
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────
-async function listTrades({ date, since = 20, all = false, limit = 500 } = {}) {
-  if (date) return q(`SELECT * FROM cb_trades WHERE date = $1 ORDER BY checkpoint ASC`, [date]);
-  if (all) return q(`SELECT * FROM cb_trades ORDER BY date DESC, checkpoint ASC LIMIT $1`, [limit]);
+/**
+ * ONE BASIS AT A TIME, and 'oivol' unless asked otherwise.
+ *
+ * Every caller of this predates the basis column and expects one row per
+ * checkpoint; handing back both bases unfiltered would double every table and
+ * every roll-up on every surface at once, reading as a duplicate-row bug rather
+ * than as a second dataset. `basis: 'all'` is the deliberate opt-in for a caller
+ * that wants to compare them, and nothing in-tree asks for it yet.
+ *
+ * `since` counts DATES THAT HAVE ROWS, and it counts them across bases, so the
+ * window is the same set of sessions whichever basis is being read.
+ */
+async function listTrades({ date, since = 20, all = false, limit = 500, basis = DEFAULT_BASIS } = {}) {
+  const every = String(basis) === 'all';
+  const bas = every ? null : normBasis(basis);
+  const where = every ? '' : ' AND basis = $2';
+  const order = 'ORDER BY date DESC, checkpoint ASC, basis ASC';
+  if (date) {
+    return q(`SELECT * FROM cb_trades WHERE date = $1${where} ORDER BY checkpoint ASC, basis ASC`,
+      every ? [date] : [date, bas]);
+  }
+  if (all) {
+    return q(
+      every
+        ? `SELECT * FROM cb_trades ${order} LIMIT $1`
+        : `SELECT * FROM cb_trades WHERE basis = $2 ${order} LIMIT $1`,
+      every ? [limit] : [limit, bas],
+    );
+  }
   const dates = await q(`SELECT DISTINCT date FROM cb_trades ORDER BY date DESC LIMIT $1`, [since]);
   if (!dates.length) return [];
+  const ds = dates.map((d) => d.date);
   return q(
-    `SELECT * FROM cb_trades WHERE date = ANY($1::text[]) ORDER BY date DESC, checkpoint ASC`,
-    [dates.map((d) => d.date)],
+    `SELECT * FROM cb_trades WHERE date = ANY($1::text[])${where} ${order}`,
+    every ? [ds] : [ds, bas],
   );
 }
 
@@ -894,12 +1052,16 @@ function summarize(trades) {
  */
 const n2 = (v) => { const x = num(v); return x == null ? null : x; };
 
-async function enrichWithTrades(data) {
+async function enrichWithTrades(data, { basis = DEFAULT_BASIS } = {}) {
   if (!data || !Array.isArray(data.days) || !data.days.length) return data;
+  const bas = normBasis(basis);
   const dates = data.days.map((d) => d.date);
   let rows = [];
   try {
-    rows = await q(`SELECT * FROM cb_trades WHERE date = ANY($1::text[])`, [dates]);
+    // ONE BASIS. The map below is keyed on date|checkpoint, so two rows per
+    // checkpoint would have one silently overwrite the other and the board would
+    // show whichever came back last — a coin flip dressed as a number.
+    rows = await q(`SELECT * FROM cb_trades WHERE date = ANY($1::text[]) AND basis = $2`, [dates, bas]);
   } catch (e) {
     data.contracts = { enabled: false, note: String(e.message || e) };
     return data;
@@ -943,6 +1105,8 @@ async function enrichWithTrades(data) {
   data.contracts = {
     enabled: true,
     source: 'tastytrade',
+    basis: bas,
+    basisLabel: basisDef(bas).label,
     buyMin: BUY_MIN,
     multiplier: MULTIPLIER,
     daysRecorded: new Set(rows.map((r) => r.date)).size,
@@ -953,6 +1117,9 @@ async function enrichWithTrades(data) {
 
 module.exports = {
   CHECKPOINTS,
+  BASES,
+  DEFAULT_BASIS,
+  normBasis,
   ensureTables,
   runCheckpoint,
   pollOpen,
@@ -977,5 +1144,5 @@ module.exports = {
   dueCheckpoints,
   snapshotAt,
   etParts,
-  CONFIG: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, MULTIPLIER, CHECKPOINT_GRACE_MIN },
+  CONFIG: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, MULTIPLIER, CHECKPOINT_GRACE_MIN, BASES, DEFAULT_BASIS },
 };

@@ -292,8 +292,18 @@ function CheckpointsView() {
 // rewrites its own history and "no trades this week" becomes indistinguishable
 // from "the recorder was down". They stay in the table, greyed, with the price
 // and reason that disqualified them.
+//
+// TWO CBs, ONE SWITCH. The recorder runs every checkpoint TWICE — once off the
+// OI+VOL CB (netGEX + netVolGEX, the definition the rail and Key Levels draw)
+// and once off the VOL-ONLY CB (netVolGEX alone, today's traded gamma) — and
+// writes a row per basis. The switch below picks which set the whole tab reads:
+// the roll-up cards, the table and the footer totals all follow it, so the two
+// are compared over the same sessions and never pooled into one win rate.
+// 'oivol' is the default because every row recorded before the split was one.
 type CbTrade = {
   id: number; date: string; checkpoint: string; checkpoint_label: string | null;
+  /** Which CB definition this row bought — see CB_BASES. */
+  basis?: "oivol" | "vol" | null;
   ticker: string; expiration: string; side: "C" | "P";
   strike: number;              // the contract actually bought (where the walk landed)
   cb_strike: number | null;    // the CB it targets — what the sell distance measures to
@@ -347,11 +357,20 @@ const n = (v: unknown): number | null => {
 const contractLabel = (t: CbTrade) =>
   t.strike ? `${Number(t.strike).toFixed(0)}${t.side}` : "—";
 
+/** The two CB definitions the recorder writes. Keys match server-v2. */
+const CB_BASES = [
+  { key: "oivol" as const, label: "OI+Vol", hint: "CB = the heaviest |netGEX + netVolGEX| strike — the standing book plus today's volume. The definition the premarket rail, Key Levels and the Confidence board all draw." },
+  { key: "vol" as const, label: "Vol only", hint: "CB = the heaviest |netVolGEX| strike — only what has TRADED today, no standing book. Moves faster, and it is a different strike on plenty of sessions." },
+];
+type CbBasis = (typeof CB_BASES)[number]["key"];
+
 function TradesView() {
   const [trades, setTrades] = useState<CbTrade[]>([]);
   const [summary, setSummary] = useState<CbSummary[]>([]);
   const [config, setConfig] = useState<CbConfig | null>(null);
   const [range, setRange] = useState<"7d" | "20d" | "all">("20d");
+  // The whole tab reads one basis at a time — see the note above the type.
+  const [basis, setBasis] = useState<CbBasis>("oivol");
   const [showSkipped, setShowSkipped] = useState(true);
   const [openTrade, setOpenTrade] = useState<CbTrade | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -360,7 +379,7 @@ function TradesView() {
   const [status, setStatus] = useState<{ text: string; bad: boolean } | null>(null);
   const [diag, setDiag] = useState<unknown>(null);
 
-  const qs = range === "all" ? "?all=1" : range === "7d" ? "?since=7" : "?since=20";
+  const qs = (range === "all" ? "?all=1" : range === "7d" ? "?since=7" : "?since=20") + `&basis=${basis}`;
 
   const load = useCallback(async () => {
     setErr(null);
@@ -451,6 +470,17 @@ function TradesView() {
     color: range === key ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
   });
 
+  // The basis switch wears PURPLE, not the range buttons' cyan, because it does
+  // something categorically different: the range changes how much of one
+  // dataset is on screen, this changes WHICH dataset. Same colour would read as
+  // one more filter on the same rows.
+  const basisBtn = (key: CbBasis): React.CSSProperties => ({
+    fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+    border: `1px solid ${basis === key ? C.purple : C.border}`,
+    background: basis === key ? rgba(C.purple, 0.18) : "transparent",
+    color: basis === key ? C.purple : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
+  });
+
   const th: React.CSSProperties = { padding: "10px 14px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
   const td: React.CSSProperties = { padding: "10px 14px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
@@ -467,7 +497,16 @@ function TradesView() {
         <span style={{ fontSize: 14, color: C.label }}>
           0DTE probed on TastyTrade at 9:45 / 10:30 / 12:00 · from the CB, walk toward the money to the first strike over ${buyMin.toFixed(2)} · held and re-priced every minute to the bell · ×{mult}
         </span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {/* WHICH CB. Both are recorded every session; this picks which one the
+              cards, the table and the totals below are reporting. */}
+          <span style={{ fontSize: 14, fontWeight: 800, color: MUTED, textTransform: "uppercase", letterSpacing: "0.1em" }}>CB</span>
+          {CB_BASES.map((b) => (
+            <button key={b.key} onClick={() => setBasis(b.key)} title={b.hint} style={basisBtn(b.key)}>
+              {b.label}
+            </button>
+          ))}
+          <span style={{ width: 1, alignSelf: "stretch", background: C.border, margin: "0 4px" }} />
           <button
             onClick={() => setShowSkipped((v) => !v)}
             title="Skipped rows are checkpoints that were probed but never qualified — keeping them visible is what separates 'nothing set up' from 'the recorder was down'."
@@ -563,7 +602,8 @@ function TradesView() {
         <div style={{ color: C.label, fontSize: 14, flexShrink: 0 }}>Loading contracts…</div>
       ) : trades.length === 0 ? (
         <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14, lineHeight: 1.6, flexShrink: 0 }}>
-          No checkpoints recorded yet. The tracker writes a row per checkpoint as each session runs —
+          No {CB_BASES.find((b) => b.key === basis)?.label} checkpoints recorded yet. The tracker writes a row per
+          checkpoint per basis as each session runs —
           TastyTrade has no per-contract history, so this table fills forward from the day the recorder
           went live and cannot be backfilled. First rows appear at 9:45 ET on the next trading day.
         </div>
@@ -683,7 +723,8 @@ function TradesView() {
               net {totals.usd >= 0 ? "+" : "−"}${Math.abs(totals.usd).toFixed(0)}
             </span>
             <span style={{ marginLeft: "auto" }}>
-              ←CB marks a walked strike · held to the bell, no exit rule · <span style={{ fontWeight: 800 }}>*</span> unrealized
+              CB = <span style={{ fontWeight: 800, color: C.purple }}>{CB_BASES.find((b) => b.key === basis)?.label}</span>
+              {" · "}←CB marks a walked strike · held to the bell, no exit rule · <span style={{ fontWeight: 800 }}>*</span> unrealized
             </span>
           </div>
         </div>

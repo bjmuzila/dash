@@ -90,7 +90,14 @@ const DTE_STOPS: Array<{ label: string; value: number | null; title: string }> =
   { label: '≤90', value: 90, title: 'Expiring within a quarter' },
 ]
 
+// The archive's own floor is a SERVER value (LSE_WHALE_FLOOR, $1M by default)
+// and the API clamps `min_premium` up to it — below the floor the table holds
+// only the last seven days, so a lower ask would return a week dressed as an
+// archive. $500K is here for the deployment that lowers that env var; while the
+// server is still on $1M the page says so under the header rather than quietly
+// handing back the same list.
 const FLOORS = [
+  { label: '≥$500K', value: 500_000 },
   { label: '≥$1M', value: 1_000_000 },
   { label: '≥$2.5M', value: 2_500_000 },
   { label: '≥$5M', value: 5_000_000 },
@@ -416,6 +423,17 @@ export default function Whales() {
             {' '}· {num(d.unreadable?.n)} unreadable hidden ({money(d.unreadable?.premium)})
           </span>
         ) : null}
+        {/* The server clamps `min_premium` UP to its own floor, so a pick below
+            it returns the floor's list. Saying that beats a control that looks
+            like it did nothing. */}
+        {d && floor < (d.whaleFloor ?? 1_000_000) ? (
+          <span
+            className="text-warn"
+            title="The archive only keeps prints at or above its own floor permanently; anything smaller is purged after 7 days, so the API answers this filter at the floor."
+          >
+            {' '}· asked for {money(floor)}, archive floor is {money(d.whaleFloor)}
+          </span>
+        ) : null}
       </div>
 
       {/* ── filters ───────────────────────────────────────────────────────────
@@ -450,7 +468,7 @@ export default function Whales() {
 
         <SegMenu<string>
           label="FLOOR"
-          title="Hide prints below this dollar premium. $1M is the archive's own floor — nothing smaller is kept"
+          title="Hide prints below this dollar premium. The archive's own floor is the lowest that returns anything — nothing smaller than it is kept permanently"
           options={FLOORS.map((f) => ({ label: f.label, value: String(f.value) }))}
           value={String(floor)}
           defaultValue={String(DEFAULTS.floor)}

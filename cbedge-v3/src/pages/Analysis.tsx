@@ -32,7 +32,6 @@ import { ConfidenceCard } from './analysis/cards/Confidence'
 import { NetGreeksCard } from './analysis/cards/NetGreeks'
 import { InitialBalanceCard } from './analysis/cards/InitialBalance'
 import { TickerLevelsCard } from './analysis/cards/TickerLevels'
-import { StrategyBuilderCard } from './analysis/cards/StrategyBuilder'
 import './analysis/analysis.css'
 
 export default function AnalysisPage() {
@@ -75,9 +74,6 @@ export default function AnalysisPage() {
         <NetGreeksCard />
         <InitialBalanceCard />
         <TickerLevelsCard />
-
-        {/* Full-width AI daily strategy. */}
-        <StrategyBuilderCard />
       </div>
     </main>
   )

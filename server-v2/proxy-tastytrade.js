@@ -244,6 +244,40 @@ const CANDLE_FLUSH_MS = Number(process.env.CANDLE_FLUSH_MS || 10000);
 // catch a roll within the hour, not within the second. See _checkFuturesRoll.
 const ROLL_CHECK_MS = Number(process.env.ROLL_CHECK_MS || 30 * 60 * 1000);
 
+// ── FEED STALENESS WATCHDOG ────────────────────────────────────────────────
+//
+// dxLink's nastiest failure mode is documented at length in the Trade branch of
+// _onEvent: the socket stays OPEN while the feed goes quiet. No 'close', no
+// 'error', so nothing in the reconnect path ever fires. The process sits there
+// looking healthy while every downstream number freezes at whatever it held
+// when the feed went silent.
+//
+// 2026-09-15: that happened mid-session. The SPX spot sat at 7607.74 for over
+// two minutes while REST said 7601. /api/chains still answered 200 — with 14 of
+// 242 strikes carrying greeks, because the live greek maps had stopped filling —
+// so GEX (γ · contracts · spot²) computed to zero across the board and the whole
+// Multi Greek ladder rendered as dashes. The banner said "Index stream frozen —
+// re-subscribe / recreate dashboard", which is a HUMAN instruction: recovery
+// required someone to notice and press Reconnect Feed. That someone was live on
+// stream at the time.
+//
+// So: watch the one thing that is never legitimately quiet during a session —
+// the underlying index Quote — and reconnect on our own when it goes silent.
+const FEED_STALE_MS = Number(process.env.FEED_STALE_MS || 45000);
+// Floor between watchdog-initiated reconnects. A genuinely dead upstream (TT
+// down, creds revoked) must not turn this into a reconnect loop that never lets
+// the feed finish coming up; past the cooldown it tries again, forever, because
+// a feed that is still down is still worth another attempt.
+const FEED_STALE_COOLDOWN_MS = Number(process.env.FEED_STALE_COOLDOWN_MS || 120000);
+
+// Hard ceiling on a single Tastytrade REST call. fetch() has NO default timeout:
+// an upstream that accepts the connection and then never answers leaves the
+// promise pending for the life of the process. On 2026-09-15 four /api/chains
+// requests sat "(pending)" in DevTools indefinitely for exactly this reason —
+// the card had nothing to render and no error to show either. An 8s ceiling
+// turns that into a fast, visible 502.
+const TT_HTTP_TIMEOUT_MS = Number(process.env.TT_HTTP_TIMEOUT_MS || 8000);
+
 // ES 1-minute candle stream. OFF by default — it is a second dxLink subscription
 // on top of {=5m} at 5x the bar rate, so it is opt-in per environment rather than
 // something a deploy silently turns on. Set ES_1M_CANDLES=1 in .env.local.
@@ -315,14 +349,28 @@ const TT_UA = process.env.TT_USER_AGENT || 'spx-gex-dashboard/1.0';
 
 async function ttGet(path) {
   const token = await getAccessToken();
-  const res = await fetch(`${TT_BASE_URL}${path}`, {
-    headers: {
-      // OAuth2 access tokens use the Bearer scheme.
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      'User-Agent': TT_UA,
-    },
-  });
+  let res;
+  try {
+    res = await fetch(`${TT_BASE_URL}${path}`, {
+      headers: {
+        // OAuth2 access tokens use the Bearer scheme.
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        'User-Agent': TT_UA,
+      },
+      // See TT_HTTP_TIMEOUT_MS. Without this a hung upstream hangs the caller
+      // forever — and every route above it, up to the browser's fetch.
+      signal: AbortSignal.timeout(TT_HTTP_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // Normalize the abort into something a caller's 502 handler can print.
+    // DOMException 'TimeoutError' otherwise surfaces as a bare "The operation
+    // was aborted", which says nothing about which call or how long it waited.
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      throw new Error(`TT GET ${path} -> timeout after ${TT_HTTP_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  }
   if (!res.ok) {
     throw new Error(`TT GET ${path} -> ${res.status} ${await res.text().catch(() => '')}`);
   }
@@ -2252,6 +2300,12 @@ class TastytradeProxy {
       catch { return false; }
     })();
     this.spot = 0;
+    // Wall-clock of the last underlying index Quote this feed accepted. The
+    // feed-staleness watchdog reads it; _onEvent stamps it. 0 = nothing yet,
+    // which start() treats as "just came up" rather than "stale forever".
+    this._spotTickAt = 0;
+    // Wall-clock of the last watchdog-initiated reconnect (cooldown floor).
+    this._lastStaleReconnectAt = 0;
     // Cash-basis = (broker spot − esFut), captured while the live RTH SPX quote
     // is fresh. Off-hours the SPX quote goes stale, so we publish a DISPLAY spot
     // of (esFut + cashBasis) that tracks the live ES future. Persisted across the
@@ -2397,6 +2451,22 @@ class TastytradeProxy {
       if (!this._rollWatchTimer) {
         this._rollWatchTimer = setInterval(() => this._checkFuturesRoll().catch(() => {}), ROLL_CHECK_MS);
       }
+      // Feed-staleness watchdog. Created once and deliberately NOT cleared by
+      // stop() — same as the two timers above — because the thing it exists to
+      // recover from is the feed being down, and a watchdog that dies with the
+      // feed is a watchdog that never fires. Checks at a third of the stale
+      // threshold so detection latency is bounded by ~FEED_STALE_MS, not 2x it.
+      if (!this._feedWatchTimer) {
+        this._feedWatchTimer = setInterval(
+          () => this._checkFeedStale().catch(() => {}),
+          Math.max(5000, Math.floor(FEED_STALE_MS / 3)),
+        );
+        this._feedWatchTimer.unref?.();
+      }
+      // Arm the clock at bring-up so the first interval tick doesn't read an
+      // as-yet-unwritten _spotTickAt as "stale since the epoch" and reconnect a
+      // feed that is still subscribing.
+      this._spotTickAt = Date.now();
     } catch (err) {
       console.warn('[FEED] ES resolve failed:', err.message.slice(0, 120));
     }
@@ -3912,6 +3982,11 @@ class TastytradeProxy {
       if (sym === this.spotSymbol) {
         if (mid > 0) {
           this.spot = mid;
+          // Proof of delivery for the whole dxLink channel. The watchdog
+          // (_checkFeedStale) reads ONLY this: if index quotes are arriving the
+          // socket is genuinely alive, and if they are not, nothing else on the
+          // channel is trustworthy either.
+          this._spotTickAt = Date.now();
           marketState.setSpot(this._effectiveSpot()); // corrected, not raw — see note above
           this._publishSpotDisplay(); // refresh display SPX + RTH basis capture
         }
@@ -5133,6 +5208,80 @@ class TastytradeProxy {
    * whole point of rolling is to follow liquidity that moved days ago, waiting
    * for the close costs nothing.
    */
+  /**
+   * FEED-STALENESS WATCHDOG — the automatic half of the "Reconnect Feed" button.
+   *
+   * dxLink can go silent with the socket still open (see FEED_STALE_MS, and the
+   * long note in the Trade branch of _onEvent). Nothing in the transport notices:
+   * there is no close and no error, so _onClose never runs and reconnect() is
+   * never called. Every consumer downstream keeps serving its last value — the
+   * spot freezes, the live greek maps stop filling, GEX computes to zero off a
+   * frozen spot, and the chain still answers 200 the whole time.
+   *
+   * The only honest signal is arrival: has an underlying index Quote landed
+   * recently? _onEvent stamps this._spotTickAt on every one it accepts, so a
+   * stamp older than FEED_STALE_MS means the channel is dead regardless of what
+   * the socket's readyState claims.
+   *
+   * WHY THIS DOESN'T DEFER DURING RTH, unlike _checkFuturesRoll:
+   * a roll is elective — the liquidity it chases moved days ago, so it can wait
+   * for 16:15 rather than spend 10-20s of teardown mid-session. A frozen feed is
+   * the opposite. During RTH is exactly when a two-minute freeze is worst, and
+   * the 10-20s reconnect is the cheapest thing on offer. The 2026-09-15 incident
+   * ran 133s frozen at 12:xx ET; deferring to 16:15 would have meant the rest of
+   * the session.
+   */
+  async _checkFeedStale() {
+    // Never fight another state transition for the socket. Each of these means
+    // someone is already rebuilding the feed, and stacking a reconnect on top
+    // interleaves two bring-ups on one channel.
+    if (this.idle || this._rolling || this._resuming || this._staleReconnecting) return;
+    if (!this.client) return; // never brought up, or stopped on purpose
+
+    const at = this._spotTickAt || 0;
+    if (!at) return; // start() arms this; 0 means we have not come up yet
+    const age = Date.now() - at;
+    if (age < FEED_STALE_MS) return; // healthy
+
+    // Weekends and the overnight gap are legitimately quiet for the INDEX quote:
+    // SPX cash does not tick. Reconnecting then would be a self-inflicted outage
+    // on a feed that is behaving correctly. Futures keep the rest of the board
+    // alive out of hours, and _refreshEsSettle/_publishSpotDisplay cover display.
+    if (!isOptionsRthEt()) return;
+
+    const since = Date.now() - (this._lastStaleReconnectAt || 0);
+    if (since < FEED_STALE_COOLDOWN_MS) {
+      console.warn(
+        `[FEED-WATCHDOG] index quote ${Math.round(age / 1000)}s stale, but last `
+        + `auto-reconnect was ${Math.round(since / 1000)}s ago — waiting out the cooldown`,
+      );
+      return;
+    }
+
+    console.error(
+      `[FEED-WATCHDOG] index quote stale ${Math.round(age / 1000)}s `
+      + `(threshold ${Math.round(FEED_STALE_MS / 1000)}s) — socket is open but the `
+      + 'channel is dead. Reconnecting the feed automatically.',
+    );
+    this._staleReconnecting = true;
+    this._lastStaleReconnectAt = Date.now();
+    marketState.setStatus({ feedWatchdogFiredAt: new Date().toISOString() });
+    try {
+      await this.reconnect();
+      // Re-arm so the next tick measures from the reconnect, not from the last
+      // quote of the dead channel — otherwise a feed that needs 20s to resubscribe
+      // reads as still-stale and trips the watchdog again the moment it is up.
+      this._spotTickAt = Date.now();
+      console.log('[FEED-WATCHDOG] reconnect complete — waiting for quotes');
+    } catch (err) {
+      console.error('[FEED-WATCHDOG] reconnect FAILED:', String(err?.message || err).slice(0, 200));
+      // Leave _spotTickAt alone: still stale, so the next tick past the cooldown
+      // tries again. A dead upstream should keep being retried, not given up on.
+    } finally {
+      this._staleReconnecting = false;
+    }
+  }
+
   async _checkFuturesRoll() {
     if (this.idle || !this.client || this._rolling) return;
     let next;

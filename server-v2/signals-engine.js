@@ -5,7 +5,7 @@
  * Actionable trade-signal engine for the ES Candles page. Turns the live GEX
  * heatmap levels into concrete long/short ES signals — ALERTS ONLY, it never
  * places or sizes an order. It is the "brain" the trading bot will read from
- * later; today it just records signals and (optionally) pings a Discord webhook.
+ * later; today it just records signals — the CB Edge dashboard reads them.
  *
  * INPUTS (all from the same feed the ES Candles chart uses):
  *   marketState.getState() → { esFut, spot(SPX), basis, callWall, putWall,
@@ -106,7 +106,6 @@ const CB_MIN_SIZE    = Number(process.env.SIGNALS_CB_MIN_SIZE    || 2.0);    // 
 const CONFLUENCE_DIST= Number(process.env.SIGNALS_CONFLUENCE_DIST|| 2.0);    // stack window
 const TOUCH_WINDOW_MS= Number(process.env.SIGNALS_TOUCH_WINDOW_MS|| 5 * 60_000); // touch validity
 const COOLDOWN_MS    = Number(process.env.SIGNALS_COOLDOWN_MS    || 10 * 60_000);
-const DISCORD_WEBHOOK= process.env.SIGNALS_DISCORD_WEBHOOK || ''; // NOTE: no longer falls back to DISCORD_WEBHOOK_URL — that's shared w/ calendar/GEX buttons
 const BZ_MIN_SCORE       = Number(process.env.SIGNALS_BZ_MIN_SCORE       || 4);   // need 4-of-5 confluence
 const BZ_CONFIDENCE_MIN  = Number(process.env.SIGNALS_BZ_CONFIDENCE_MIN  || 65);  // Confidence Score gate
 // Regime deadband ($): |net GEX| must exceed this for a gamma regime to be "on".
@@ -246,6 +245,12 @@ async function getRecentSignals({ limit = 50, since = 0, kind = '' } = {}) {
 // updates it immediately on write so a flip takes effect right away.
 const ALERT_CATALOG = [
   { key: 'flip_cross',           label: 'GEX Flip Cross',                               group: 'primary', defaultEnabled: false },
+  // GEX A / GEX B — the two scored gamma levels either side of spot. The
+  // DETECTORS are not written yet (2026-09-15); the keys exist now so the
+  // owner switchboard and the dashboard's alerts tab both carry the row from
+  // the day the detector lands, rather than needing a redeploy to reveal it.
+  { key: 'gex_a',                label: 'GEX A — cross / reclaim',                      group: 'primary', defaultEnabled: true },
+  { key: 'gex_b',                label: 'GEX B — cross / reject',                       group: 'primary', defaultEnabled: true },
   { key: 'ib_formed',            label: 'Initial Balance Formed (info only)',           group: 'primary', defaultEnabled: true },
   { key: 'ib_break',             label: 'Initial Balance Break',                        group: 'primary', defaultEnabled: true },
   { key: 'whale_print',          label: 'Whale Option Prints',                          group: 'primary', defaultEnabled: true },
@@ -1160,41 +1165,16 @@ async function refreshConfidence(base) {
   } catch { /* keep last */ }
 }
 
-// Shared Discord identity so the engine's posts and the signals.txt relay
-// (discord-relay.js) render as ONE bot, not two. Both MUST use the same username
-// + avatar_url; if the two webhooks also point at the same channel, they're
-// indistinguishable. Keep these in sync with discord-relay.js post().
-const DISCORD_USERNAME = 'CB Edge Signals';
-const DISCORD_AVATAR = `${(process.env.SIGNALS_SITE_URL || 'https://cbedge.net').replace(/\/+$/, '')}/cb-edge-logo.png`;
-
-async function sendDiscord(sig) {
-  if (!DISCORD_WEBHOOK) return;
-  const dot = sig.direction === 'long' ? '🟢' : sig.direction === 'short' ? '🔴' : '⚪';
-  const conf = sig.confluence ? ` • +${sig.confluence}` : '';
-  // Price label is instrument-aware. ES-based level signals (walls, flip, CB) live
-  // in ES price space → "→ ES 7596". Whale prints carry an OPTION on any ticker;
-  // priceEs is that underlying's spot, NOT ES — labelling it "ES" was wrong
-  // (e.g. "SPY 748P → ES 751"). Show the ticker instead, or drop the tag entirely.
-  let priceLabel = '';
-  if (Number.isFinite(sig.priceEs) && sig.priceEs > 0) {
-    if (sig.kind === 'whale_print') {
-      const tkr = sig.meta?.ticker || sig.levelName || '';
-      priceLabel = ` → ${tkr} ${sig.priceEs.toFixed(2)}`.replace('  ', ' ');
-    } else {
-      priceLabel = ` → ES ${sig.priceEs.toFixed(2)}`;
-    }
-  }
-  const content = `${dot} **${sig.direction.toUpperCase()}** • ${sig.setup}${priceLabel}`
-    + (sig.levelEs != null ? ` @ ${sig.levelName} ${sig.levelEs.toFixed(2)}` : '')
-    + ` • score ${sig.score}${conf}`;
-  try {
-    await fetch(DISCORD_WEBHOOK, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: DISCORD_USERNAME, avatar_url: DISCORD_AVATAR, content }),
-    });
-  } catch { /* alerts are best-effort */ }
-}
+// ── NO DISCORD (2026-09-15) ──────────────────────────────────────────────────
+// This engine used to fan every signal out to a "CB Edge Signals" webhook.
+// It does not any more. A signal now lands in `trade_signals` and is read from
+// /proxy/signals by the dashboard's own alerts feed — one surface, in the app
+// the trader is already looking at, with per-type switches in the toolbar.
+//
+// What was removed: SIGNALS_DISCORD_WEBHOOK / DISCORD_USERNAME / DISCORD_AVATAR
+// and sendDiscord(). The env var is now inert — unsetting it on the VPS is
+// tidy, but nothing reads it. discord-relay.js is a SEPARATE path (signals.txt)
+// and is untouched.
 
 const mem = {
   prev: null, levels: {}, cooldowns: new Map(), bzPrev: null, bzLevels: {}, fdPrev: null,
@@ -1300,7 +1280,6 @@ async function emit(sigs) {
     }
     sig.sessionDate = etDateStr(new Date(sig.ts));
     await insertSignal(sig);
-    void sendDiscord(sig);
     console.log(`[signals] ${sig.direction.toUpperCase()} ${sig.setup} @ ${sig.levelName ?? '-'} ES ${sig.priceEs} (score ${sig.score}${sig.confluence ? ', +' + sig.confluence : ''})`);
   }
 }
@@ -1314,7 +1293,7 @@ function startSignalsEngine(port) {
     console.log('[signals] disabled via SIGNALS_ENGINE_DISABLED=1');
     return () => {};
   }
-  console.log(`[signals] enabled — GEX/CB signal engine every ${EVAL_MS}ms during the futures session; alerts-only${DISCORD_WEBHOOK ? ' + Discord' : ''}, no orders`);
+  console.log(`[signals] enabled — GEX/CB signal engine every ${EVAL_MS}ms during the futures session; alerts-only (in-app feed), no orders`);
   ensureSchema().catch(() => {});
   // Live per-alert toggle cache: seed immediately (fire-and-forget, don't block
   // startup), then keep it fresh on its own timer so a flip from the owner admin

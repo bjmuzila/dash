@@ -14,9 +14,19 @@ import { LEVEL_COLORS, LIGHT_BLUE, T, VIOLET } from '@/design/theme'
 // here is a token via design/theme.ts — no literal, and re-theming still means
 // editing tokens.css.
 //
-// NO DATA YET (2026-09-14). Nothing in this file talks to a server; `SAMPLE` in
-// AlertsPanel.tsx is placeholder copy so the UI can be seen. When the feed is
-// wired, the ids below are what the endpoint should key on.
+// TWO LAYERS OF ON/OFF, and they are not the same question:
+//
+//   MASTER   `serverKey` below is the row's key in the signals engine's
+//            ALERT_CATALOG (server-v2/signals-engine.js), flipped from
+//            owner.cbedge.net → Admin → Signal Alerts and served by
+//            GET /proxy/signal-alerts. Off there and the kind never fires for
+//            anyone — the toolbar draws its row locked and says so.
+//   LOCAL    the switches in the toolbar's Settings tab, saved in THIS browser
+//            (`alerts:armed`). A customer silencing whale prints for an
+//            afternoon is a preference, not a change to what the engine runs.
+//
+// The feed ROWS are still placeholder (`SAMPLE` in AlertsPanel.tsx); only the
+// switchboard is live. Wiring the feed means replacing `useAlertsFeed`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type AlertKind =
@@ -43,6 +53,8 @@ export interface AlertType {
   color: string
   /** Which band it sits under in settings. */
   group: 'primary' | 'bzila'
+  /** The key this type has in the engine's ALERT_CATALOG — the master switch. */
+  serverKey: string
 }
 
 export const ALERT_TYPES: AlertType[] = [
@@ -54,6 +66,7 @@ export const ALERT_TYPES: AlertType[] = [
     tag: 'FLIP',
     color: VIOLET,
     group: 'primary',
+    serverKey: 'flip_cross',
   },
   {
     id: 'gexA',
@@ -63,6 +76,7 @@ export const ALERT_TYPES: AlertType[] = [
     tag: 'GEX A',
     color: LEVEL_COLORS.cw,
     group: 'primary',
+    serverKey: 'gex_a',
   },
   {
     id: 'gexB',
@@ -72,6 +86,7 @@ export const ALERT_TYPES: AlertType[] = [
     tag: 'GEX B',
     color: LEVEL_COLORS.pw,
     group: 'primary',
+    serverKey: 'gex_b',
   },
   {
     id: 'ibFormed',
@@ -81,6 +96,7 @@ export const ALERT_TYPES: AlertType[] = [
     tag: 'IB',
     color: LIGHT_BLUE,
     group: 'primary',
+    serverKey: 'ib_formed',
   },
   {
     id: 'ibBreak',
@@ -90,6 +106,7 @@ export const ALERT_TYPES: AlertType[] = [
     tag: 'IB BRK',
     color: T.orange,
     group: 'primary',
+    serverKey: 'ib_break',
   },
   {
     id: 'whale',
@@ -99,6 +116,7 @@ export const ALERT_TYPES: AlertType[] = [
     tag: 'WHALE',
     color: LEVEL_COLORS.cb,
     group: 'primary',
+    serverKey: 'whale_print',
   },
   {
     id: 'divergence',
@@ -108,6 +126,7 @@ export const ALERT_TYPES: AlertType[] = [
     tag: 'DIV',
     color: T.purple,
     group: 'primary',
+    serverKey: 'flow_divergence',
   },
   {
     id: 'bzila',
@@ -117,6 +136,7 @@ export const ALERT_TYPES: AlertType[] = [
     tag: 'BZILA',
     color: T.green,
     group: 'bzila',
+    serverKey: 'bzila_confluence',
   },
 ]
 
@@ -172,3 +192,29 @@ export const readArmed = (): AlertKind[] => readSet(ARMED_KEY) ?? ALL_IDS
 export const writeArmed = (ids: AlertKind[]) => writeSet(ARMED_KEY, ids)
 export const readShown = (): AlertKind[] => readSet(SHOWN_KEY) ?? ALL_IDS
 export const writeShown = (ids: AlertKind[]) => writeSet(SHOWN_KEY, ids)
+
+// ── The master switchboard ──────────────────────────────────────────────────
+// GET /proxy/signal-alerts → { alerts: [{ key, label, group, enabled }] }.
+// Readable by any paid account (proxy-auth gates the surface to subscribers and
+// the owner); the matching POST is owner-only, which is why nothing in the
+// dashboard ever writes to it. A kind missing from the response is treated as
+// ARMED, so a server that has not learned about a new key yet does not silently
+// hide its row.
+
+export async function fetchMasterEnabled(): Promise<Record<string, boolean> | null> {
+  try {
+    const r = await fetch('/proxy/signal-alerts', { cache: 'no-store', credentials: 'same-origin' })
+    if (!r.ok) return null
+    const j = (await r.json()) as { alerts?: { key?: unknown; enabled?: unknown }[] }
+    if (!Array.isArray(j?.alerts)) return null
+    const out: Record<string, boolean> = {}
+    for (const row of j.alerts) {
+      if (typeof row?.key === 'string') out[row.key] = row.enabled !== false
+    }
+    return out
+  } catch {
+    // Offline, or a free account the gate refuses. Nothing is locked on a
+    // failure to ask — see the `?? true` at every call site.
+    return null
+  }
+}
