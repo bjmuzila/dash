@@ -103,7 +103,7 @@ export function AlertsPill() {
         className={[
           'flex h-6 max-w-[22rem] items-center gap-1.5 overflow-hidden rounded-sm border px-1.5 transition-colors',
           open ? 'bg-raised' : 'border-line bg-surface2 hover:bg-raised',
-          fresh ? '' : 'opacity-60',
+          fresh ? '' : 'opacity-80',
         ].join(' ')}
       >
         {latest && type ? (
@@ -123,8 +123,8 @@ export function AlertsPill() {
             >
               {type.tag}
             </span>
-            <span className="truncate text-2xs text-fg opacity-90">{latest.text}</span>
-            <span className="shrink-0 text-3xs tabular-nums opacity-40">{age(latest.at)}</span>
+            <span className="truncate text-2xs text-fg opacity-95">{latest.text}</span>
+            <span className="shrink-0 text-3xs tabular-nums opacity-70">{age(latest.at)}</span>
             {rest > 0 && (
               <span className="ml-0.5 shrink-0 border-l border-line pl-1.5 text-3xs font-bold text-warn">
                 +{rest}
@@ -133,13 +133,13 @@ export function AlertsPill() {
           </>
         ) : (
           <>
-            <span className="shrink-0 rounded-[2px] border border-line px-1 text-3xs font-bold uppercase leading-[13px] tracking-wide text-faint opacity-60">
+            <span className="shrink-0 rounded-[2px] border border-line px-1 text-3xs font-bold uppercase leading-[13px] tracking-wide text-fg opacity-80">
               Alerts
             </span>
-            <span className="truncate text-2xs text-faint opacity-50">No signals yet</span>
+            <span className="truncate text-2xs text-fg opacity-75">No signals yet</span>
           </>
         )}
-        <span aria-hidden className="shrink-0 text-3xs opacity-40">
+        <span aria-hidden className="shrink-0 text-3xs opacity-70">
           {open ? '▲' : '▾'}
         </span>
       </button>

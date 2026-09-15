@@ -58,7 +58,8 @@ function Switch({ on, color, onClick }: { on: boolean; color: string; onClick: (
         aria-hidden
         className="absolute left-[1px] top-[1px] h-2.5 w-2.5 rounded-full transition-transform"
         style={{
-          background: on ? color : T.flat,
+          background: on ? color : T.text,
+          opacity: on ? 1 : 0.4,
           transform: on ? 'translateX(12px)' : 'none',
         }}
       />
@@ -103,14 +104,14 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
     >
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 border-b border-line bg-surface2 px-2.5 py-2">
-        <span className="text-3xs font-bold uppercase tracking-widest opacity-70">Alerts</span>
+        <span className="text-3xs font-bold uppercase tracking-widest opacity-85">Alerts</span>
         {visible.length > 0 && (
           <span className="rounded-full bg-warn px-1.5 text-3xs font-bold text-bg">{visible.length}</span>
         )}
         <button
           type="button"
           onClick={close}
-          className="ml-auto text-3xs uppercase tracking-wide opacity-35 transition-opacity hover:opacity-80"
+          className="ml-auto text-3xs uppercase tracking-wide opacity-65 transition-opacity hover:opacity-90"
         >
           Close
         </button>
@@ -121,14 +122,14 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
         <button
           type="button"
           onClick={() => setTab('feed')}
-          className={[TAB, tab === 'feed' ? 'border-accent text-accent' : 'border-transparent opacity-40'].join(' ')}
+          className={[TAB, tab === 'feed' ? 'border-accent text-accent' : 'border-transparent opacity-70'].join(' ')}
         >
           Feed
         </button>
         <button
           type="button"
           onClick={() => setTab('settings')}
-          className={[TAB, tab === 'settings' ? 'border-accent text-accent' : 'border-transparent opacity-40'].join(' ')}
+          className={[TAB, tab === 'settings' ? 'border-accent text-accent' : 'border-transparent opacity-70'].join(' ')}
         >
           Settings
         </button>
@@ -145,7 +146,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
               style={
                 allShown
                   ? { borderColor: T.cyan, color: T.cyan, background: alpha(T.cyan, 0.11) }
-                  : { borderColor: T.border, color: T.flat }
+                  : { borderColor: T.border, color: T.text, opacity: 0.7 }
               }
             >
               All
@@ -161,7 +162,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
                   style={
                     on
                       ? { borderColor: t.color, color: t.color, background: alpha(t.color, 0.11) }
-                      : { borderColor: T.border, color: T.flat, textDecoration: 'line-through' }
+                      : { borderColor: T.border, color: T.text, opacity: 0.7, textDecoration: 'line-through' }
                   }
                 >
                   {t.short}
@@ -173,7 +174,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
           {/* ── The scrollable feed ───────────────────────────────────────── */}
           <div className="max-h-60 overflow-y-auto">
             {visible.length === 0 ? (
-              <p className="py-8 text-center text-xs text-faint opacity-30">
+              <p className="py-8 text-center text-xs text-fg opacity-60">
                 {items.length === 0 ? 'No signals yet today.' : 'Nothing matches those filters.'}
               </p>
             ) : (
@@ -197,10 +198,10 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
                         >
                           {a.variant ? `${t.tag} · ${a.variant}` : t.name}
                         </span>
-                        <span className="ml-auto shrink-0 text-3xs tabular-nums opacity-30">{a.at}</span>
+                        <span className="ml-auto shrink-0 text-3xs tabular-nums opacity-60">{a.at}</span>
                       </div>
-                      <p className="mt-px text-xs opacity-85">{a.text}</p>
-                      {a.meta && <p className="mt-px text-3xs tabular-nums opacity-30">{a.meta}</p>}
+                      <p className="mt-px text-xs opacity-95">{a.text}</p>
+                      {a.meta && <p className="mt-px text-3xs tabular-nums opacity-60">{a.meta}</p>}
                     </div>
                   </div>
                 )
@@ -213,7 +214,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
         <div className="max-h-[17.5rem] overflow-y-auto">
           {(['primary', 'bzila'] as const).map((group) => (
             <div key={group}>
-              <p className="bg-bg px-2.5 pb-1 pt-2 text-3xs font-bold uppercase tracking-widest opacity-25">
+              <p className="bg-bg px-2.5 pb-1 pt-2 text-3xs font-bold uppercase tracking-widest opacity-60">
                 {group === 'primary' ? 'Primary' : 'Bzila'}
               </p>
               {ALERT_TYPES.filter((t) => t.group === group).map((t) => {
@@ -225,12 +226,12 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
                   >
                     <Switch on={on} color={t.color} onClick={() => toggleArmed(t.id)} />
                     <div className="min-w-0 flex-1">
-                      <p className={['truncate text-xs', on ? 'opacity-90' : 'opacity-40'].join(' ')}>{t.name}</p>
-                      <p className="truncate text-3xs opacity-30">{t.hint}</p>
+                      <p className={['truncate text-xs', on ? 'opacity-95' : 'opacity-70'].join(' ')}>{t.name}</p>
+                      <p className="truncate text-3xs opacity-60">{t.hint}</p>
                     </div>
                     <span
                       className="shrink-0 rounded-[2px] border px-1 text-3xs font-bold uppercase leading-[13px] tracking-wide"
-                      style={{ borderColor: t.color, color: t.color, opacity: on ? 0.8 : 0.3 }}
+                      style={{ borderColor: t.color, color: t.color, opacity: on ? 1 : 0.55 }}
                     >
                       {t.tag}
                     </span>
@@ -242,7 +243,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
         </div>
       )}
 
-      <div className="flex items-center border-t border-line bg-surface2 px-2.5 py-1.5 text-3xs uppercase tracking-wide opacity-40">
+      <div className="flex items-center border-t border-line bg-surface2 px-2.5 py-1.5 text-3xs uppercase tracking-wide opacity-70">
         <span>Esc to close</span>
         <span className="ml-auto">Not wired yet</span>
       </div>
