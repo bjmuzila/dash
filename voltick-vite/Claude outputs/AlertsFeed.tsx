@@ -102,10 +102,37 @@ interface SignalRow {
   meta?: Record<string, unknown> | string | null
 }
 
+/** `meta` arrives as a jsonb object, or as a string if the driver did not parse it. */
+function metaOf(row: SignalRow): Record<string, unknown> {
+  const m = row?.meta
+  if (m && typeof m === 'object') return m as Record<string, unknown>
+  if (typeof m === 'string') {
+    try {
+      const j = JSON.parse(m)
+      return j && typeof j === 'object' ? (j as Record<string, unknown>) : {}
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
+const num = (v: unknown): number | null => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/** "2026-09-18" → "09-18". The year is never the thing you are checking. */
+function shortExpiry(v: unknown): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v ?? ''))
+  return m ? `${m[2]}-${m[3]}` : ''
+}
+
 function toItem(row: SignalRow): AlertItem | null {
   const kind = KIND_BY_SERVER_KEY[String(row?.kind ?? '')]
   if (!kind) return null
   const t = TYPE_BY_ID[kind]
+  const m = metaOf(row)
 
   // `setup` usually restates the type ("Core level touch", "IB break ↑"), so the
   // row header shows the type name and only the PART of setup that adds
@@ -114,23 +141,49 @@ function toItem(row: SignalRow): AlertItem | null {
   if (variant.toLowerCase().startsWith(t.name.toLowerCase())) variant = variant.slice(t.name.length)
   variant = tidy(variant)
 
-  // `reason` is the sentence a detector wrote; `setup` is the fallback when a
-  // detector left it empty, so a row is never blank.
-  const text = tidy(row.reason) || tidy(row.setup) || t.name
+  // ── The headline ─────────────────────────────────────────────────────────
+  // Default: the sentence the detector wrote. A scanner pick is the exception —
+  // the thing you need off that row is the CONTRACT, so the ticker, its expiry
+  // and its strike lead, and the Δ GEX that got it picked drops to the line
+  // underneath. See the gex_change_top branch.
+  let text = tidy(row.reason) || tidy(row.setup) || t.name
+  let short = variant || tidy(row.setup) || t.name
 
   const bits: string[] = []
-  const lvl = Number(row.level_spx)
-  if (row.level_name && Number.isFinite(lvl)) bits.push(`${row.level_name} ${lvl.toFixed(0)}`)
-  else if (row.level_name) bits.push(String(row.level_name))
+
+  if (kind === 'gexChangeTop') {
+    const symbol = String(m.symbol ?? '').toUpperCase()
+    const strike = num(m.strike)
+    const exp = shortExpiry(m.expiry)
+    const head = [symbol, strike != null ? String(strike) : '', exp].filter(Boolean).join(' ')
+    if (head) {
+      text = head
+      short = head
+    }
+    // Everything that used to be the headline becomes the detail line.
+    const detail = tidy(row.reason)
+    if (detail) bits.push(detail)
+    if (m.live === true) variant = 'Live trigger'
+    else if (!variant) variant = 'Scanner pick'
+  } else {
+    // The level, but never twice: `level_name` is often already "MU 1005", and
+    // appending level_spx to it produced "MU 1005 1005".
+    const lvl = num(row.level_spx)
+    const name = row.level_name ? String(row.level_name) : ''
+    if (name && lvl != null && !name.includes(lvl.toFixed(0))) bits.push(`${name} ${lvl.toFixed(0)}`)
+    else if (name) bits.push(name)
+  }
+
   if (row.confluence) bits.push(`with ${row.confluence}`)
-  const score = Number(row.score)
-  if (Number.isFinite(score) && score > 0) bits.push(`score ${score}`)
+  const score = num(row.score)
+  if (score != null && score > 0) bits.push(`score ${score}`)
 
   return {
     id: Number(row.id) || Number(row.ts) || 0,
     kind,
     variant: variant || undefined,
     text,
+    short: short || t.name,
     meta: bits.length ? tidy(bits.join(' · ')) : undefined,
     at: etClock(row.ts),
   }
@@ -244,9 +297,9 @@ export function AlertsPill() {
           // beside the wordmark read as a second button competing with the
           // brand, and the tag already says what kind of alert this is. Hover
           // is the only affordance it needs — the row is still a button.
-          'flex h-6 max-w-[9rem] items-center gap-1.5 overflow-hidden rounded-sm px-1.5 transition-colors lg:max-w-[15rem] xl:max-w-[22rem]',
+          'flex h-6 max-w-[7rem] items-center gap-1.5 overflow-hidden rounded-sm px-1.5 transition-colors lg:max-w-[13rem] xl:max-w-[16rem]',
           open ? 'bg-raised' : 'hover:bg-raised',
-          fresh ? '' : 'opacity-80',
+          fresh ? '' : 'opacity-90',
         ].join(' ')}
       >
         {latest && type ? (
@@ -266,24 +319,24 @@ export function AlertsPill() {
             >
               {type.tag}
             </span>
-            {/* The headline is the first thing to go. Under `lg` the pill is
-                dot + tag + age + count — still the four facts that decide
-                whether to open it — and the full line is in the tooltip. */}
-            <span className="hidden truncate text-2xs text-fg opacity-95 lg:inline">{latest.text}</span>
-            <span className="shrink-0 text-3xs tabular-nums opacity-70">{age(latest.at)}</span>
+            {/* `short`, never `text`. A toolbar that truncates a sentence
+                mid-word is a toolbar that was handed the wrong string. Under
+                `lg` even this goes, leaving dot + tag + age + count. */}
+            <span className="hidden truncate text-2xs text-fg lg:inline">{latest.short}</span>
+            <span className="shrink-0 text-3xs tabular-nums text-fg">{age(latest.at)}</span>
             {rest > 0 && (
               <span className="ml-0.5 shrink-0 pl-1 text-3xs font-bold text-warn">+{rest}</span>
             )}
           </>
         ) : (
           <>
-            <span className="shrink-0 text-3xs font-bold uppercase leading-[13px] tracking-wide text-fg opacity-80">
+            <span className="shrink-0 text-3xs font-bold uppercase leading-[13px] tracking-wide text-fg">
               Alerts
             </span>
-            <span className="hidden truncate text-2xs text-fg opacity-75 lg:inline">No signals yet</span>
+            <span className="hidden truncate text-2xs text-fg lg:inline">No signals yet</span>
           </>
         )}
-        <span aria-hidden className="shrink-0 text-3xs opacity-70">
+        <span aria-hidden className="shrink-0 text-3xs text-fg">
           {open ? '▲' : '▾'}
         </span>
       </button>

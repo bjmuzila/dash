@@ -92,14 +92,14 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
     >
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 border-b border-line bg-surface2 px-2.5 py-2">
-        <span className="text-3xs font-bold uppercase tracking-widest opacity-85">Alerts</span>
+        <span className="text-3xs font-bold uppercase tracking-widest text-fg">Alerts</span>
         {visible.length > 0 && (
           <span className="rounded-full bg-warn px-1.5 text-3xs font-bold text-bg">{visible.length}</span>
         )}
         <button
           type="button"
           onClick={close}
-          className="ml-auto text-3xs uppercase tracking-wide opacity-65 transition-opacity hover:opacity-90"
+          className="ml-auto text-3xs uppercase tracking-wide text-fg opacity-80 transition-opacity hover:opacity-100"
         >
           Close
         </button>
@@ -114,7 +114,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
           style={
             allShown
               ? { borderColor: T.cyan, color: T.cyan, background: alpha(T.cyan, 0.11) }
-              : { borderColor: T.border, color: T.text, opacity: 0.7 }
+              : { borderColor: T.border, color: T.text }
           }
         >
           All
@@ -136,7 +136,9 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
                   : {
                       borderColor: T.border,
                       color: T.text,
-                      opacity: live ? 0.7 : 0.35,
+                      // An unavailable kind is dimmed; a merely-unchecked one is
+                      // full white with a strike through it. Both are readable.
+                      opacity: live ? 1 : 0.5,
                       textDecoration: 'line-through',
                     }
               }
@@ -150,7 +152,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
       {/* ── The scrollable feed ─────────────────────────────────────────────── */}
       <div className="max-h-60 overflow-y-auto">
         {visible.length === 0 ? (
-          <p className="py-8 text-center text-xs text-fg opacity-60">{emptyNote}</p>
+          <p className="py-8 text-center text-xs text-fg">{emptyNote}</p>
         ) : (
           visible.map((a) => {
             const t = TYPE_BY_ID[a.kind]
@@ -172,10 +174,10 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
                     >
                       {a.variant ? `${t.tag} · ${a.variant}` : t.name}
                     </span>
-                    <span className="ml-auto shrink-0 text-3xs tabular-nums opacity-60">{a.at}</span>
+                    <span className="ml-auto shrink-0 text-3xs tabular-nums text-fg">{a.at}</span>
                   </div>
-                  <p className="mt-px text-xs opacity-95">{a.text}</p>
-                  {a.meta && <p className="mt-px text-3xs tabular-nums opacity-60">{a.meta}</p>}
+                  <p className="mt-px text-xs text-fg">{a.text}</p>
+                  {a.meta && <p className="mt-px text-3xs tabular-nums text-fg opacity-80">{a.meta}</p>}
                 </div>
               </div>
             )
@@ -183,7 +185,7 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
         )}
       </div>
 
-      <div className="flex items-center border-t border-line bg-surface2 px-2.5 py-1.5 text-3xs uppercase tracking-wide opacity-70">
+      <div className="flex items-center border-t border-line bg-surface2 px-2.5 py-1.5 text-3xs uppercase tracking-wide text-fg opacity-80">
         <span>Esc to close</span>
         <span className="ml-auto">{master ? 'Synced with CB Edge' : 'Saved in this browser'}</span>
       </div>

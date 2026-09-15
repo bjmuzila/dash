@@ -25,15 +25,18 @@
  *
  *   2) INITIAL BALANCE  (kind='ib_formed' / 'ib_break')
  *        IB = the 09:30–10:30 ET range of today's ES candles.
- *          ib_formed : fired once, the first eval at/after 10:30 ET, carrying the
- *                      IBH/IBL/width — informational (direction='neutral'), it's
- *                      the "stats in play" marker the Scanner IB tab backtests.
- *          ib_break  : price crosses IBH (+IB_BREAK buf) → LONG, or IBL (−buf) →
- *                      SHORT. Extension out of the IB is the tradable event.
- *                      RTH ONLY (09:30–16:00 ET) — the IB is an RTH range, so
- *                      globex extension out of it is meaningless. Latched per
- *                      side until price re-enters the range, so one extension
- *                      fires once instead of dithering on the threshold.
+ *          ib_formed : fired RIGHT AT 10:30 ET (10:30–10:35 window), once a day.
+ *                      Carries the range (IBH/IBL/width) AND the historical
+ *                      break split — of the last N graded sessions, how often
+ *                      this market broke the IB high, the low, both or neither
+ *                      (from /api/ib-results, refreshed once a day).
+ *                      Informational, direction='neutral'.
+ *          ib_break  : the FIRST break of the day and only that. 1-min close
+ *                      beyond IBH (+IB_BREAK) → LONG, beyond IBL (−buf) →
+ *                      SHORT. One latch for the whole session, so a day that
+ *                      breaks one way, rotates and breaks the other prints ONE
+ *                      alert. RTH ONLY (09:30–16:00 ET) — the IB is an RTH
+ *                      range, so globex extension out of it is meaningless.
  *        Both are annotated with confluence like any other level signal.
  *
  *   3) CONFLUENCE ANNOTATION  (booster only — no standalone signal)
@@ -551,7 +554,11 @@ function evaluateFrame(cur, mem, cfg = {}) {
   // mem.ibFormedDay from the DB so a redeploy can't re-fire today's signal.
   const ibDay = etDateStr(new Date(ts));
   const ibMins = etMinutesOf(ts);
-  const inIbFireWindow = ibMins >= 630 && ibMins < 645; // 10:30–10:45 ET
+  // RIGHT AT 10:30 (2026-09-15). The window used to run to 10:45 so a slow
+  // first frame still caught it; in practice that meant the alert could land
+  // fifteen minutes after the bar it describes. Five minutes is enough slack for
+  // the eval tick and a restart, and still reads as "10:30".
+  const inIbFireWindow = ibMins >= 630 && ibMins < 635; // 10:30–10:35 ET
   if (isAlertEnabled('ib_formed') && ctx.ibComplete && inIbFireWindow && ctx.ibh != null && ctx.ibl != null && mem.ibFormedDay !== ibDay) {
     mem.ibFormedDay = ibDay;
     const width = ctx.ibh - ctx.ibl;
@@ -566,14 +573,31 @@ function evaluateFrame(cur, mem, cfg = {}) {
       priceSpx: +(priceEs - (basis || 0)).toFixed(2),
       score: 3,
       confluence: conf.length ? [...new Set(conf)].join(', ') : null,
-      reason: `IB ${ctx.ibl.toFixed(2)}–${ctx.ibh.toFixed(2)} (${width.toFixed(2)} pts) — stats in play`,
-      meta: { ibh: +ctx.ibh.toFixed(2), ibl: +ctx.ibl.toFixed(2), ibWidth: +width.toFixed(2), basis: +(basis || 0).toFixed(2) },
+      // The range, then the base rates: of the last N sessions, how often did
+      // this market break the IB high, the low, both, or neither. That is the
+      // "stats in play" this signal always claimed to carry and never did.
+      // ibStatsCache is filled once a day by refreshIbStats(); if it is empty
+      // (no DB, first run, endpoint down) the sentence simply stops after the
+      // range rather than printing zeroes.
+      reason: `IB ${ctx.ibl.toFixed(2)}–${ctx.ibh.toFixed(2)} (${width.toFixed(2)} pts)`
+        + (ibStatsCache.n > 0
+          ? ` · last ${ibStatsCache.n}: ${ibStatsCache.high}% broke high, ${ibStatsCache.low}% broke low`
+            + `, ${ibStatsCache.both}% both, ${ibStatsCache.none}% contained`
+          : ''),
+      meta: {
+        ibh: +ctx.ibh.toFixed(2), ibl: +ctx.ibl.toFixed(2), ibWidth: +width.toFixed(2),
+        basis: +(basis || 0).toFixed(2),
+        stats: ibStatsCache.n > 0 ? { ...ibStatsCache } : null,
+      },
     });
   }
 
-  // ib_break: extension out of a COMPLETE IB. A break is a threshold CROSS this
-  // frame (prev inside, now beyond by ≥ IB_BREAK) — price simply sitting outside
-  // the range must not re-fire every cooldown window.
+  // ── ib_break: THE FIRST BREAK OF THE DAY, AND ONLY THAT (2026-09-15) ───────
+  // It used to latch PER SIDE and re-arm whenever a 1-min bar closed back inside
+  // the range, so a session that broke high, came back, then broke low printed
+  // two alerts — and a day that rotated across both extremes printed several.
+  // The event worth an alert is "the IB just gave way", which happens once.
+  // After it fires, nothing else about the IB is announced today.
   //
   // RTH ONLY. The IB is the 09:30–10:30 RTH range, so an "extension" out of it is
   // only meaningful while that session is still trading. ibComplete is just
@@ -581,36 +605,26 @@ function evaluateFrame(cur, mem, cfg = {}) {
   // session (globex reopens 18:00 ET) — so without this gate, evening globex was
   // firing IB breaks against a range formed nine hours earlier that morning.
   //
-  // HYSTERESIS. Price parked exactly on the threshold (IBH + IB_BREAK) dithers
-  // across it tick by tick, and each crossing is a fresh "break" — the cooldown
-  // only spaced the duplicates out, it didn't stop them. Once a side breaks, that
-  // side is latched until price returns INSIDE the range, so one extension = one
-  // signal. mem.ibBroke resets daily with the IB itself.
-  //
-  // CONFIRM ON A 1-MINUTE CLOSE, NOT A TICK. The old check fired the instant the
-  // live tick crossed IBH+IB_BREAK, so a wick that pierced the extreme and
-  // reversed still printed a break (the reject-and-fade that defines a sell day).
-  // Now the trigger is the last CLOSED 1-min bar (mem.last1mClose): a wick that
-  // closes the minute back inside the range never fires. One sustained extension
-  // = one signal; the latch re-arms only when a 1-min bar closes back inside.
+  // CONFIRM ON A 1-MINUTE CLOSE, NOT A TICK. A wick that pierces the extreme and
+  // reverses is the reject-and-fade that defines a sell day, not a break. The
+  // trigger is the last CLOSED 1-min bar (mem.last1mClose), so a minute that
+  // closes back inside the range never fires. With one-per-day this also means
+  // the alert cannot be spent on a wick.
   const ibRth = ibMins >= 570 && ibMins < 960;   // 09:30–16:00 ET
   const c1 = mem.last1mClose;                     // last completed 1-min bar close
   if (ctx.ibComplete && ibRth && ctx.ibh != null && ctx.ibl != null && c1 != null) {
     const brk = C.IB_BREAK;
-    // Reset the latch on a new session, so yesterday's break can't mute today's.
-    if (mem.ibBrokeDay !== ibDay) { mem.ibBrokeDay = ibDay; mem.ibBroke = { up: false, down: false }; }
-    if (!mem.ibBroke) mem.ibBroke = { up: false, down: false };
-    // A 1-min bar CLOSED back inside the range → re-arm both sides.
-    if (c1 < ctx.ibh + brk && c1 > ctx.ibl - brk) mem.ibBroke = { up: false, down: false };
+    // One latch, not two, and it resets with the session.
+    if (mem.ibBrokeDay !== ibDay) { mem.ibBrokeDay = ibDay; mem.ibBroke = false; }
 
-    if (!mem.ibBroke.up && c1 >= ctx.ibh + brk) {
-      mem.ibBroke.up = true;
+    if (!mem.ibBroke && c1 >= ctx.ibh + brk) {
+      mem.ibBroke = true;
       fire({ kind: 'ib_break', direction: 'long', setup: 'IB break ↑', levelName: 'IBH', levelEs: ctx.ibh, base: 3,
-        reason: `1-min close above the Initial Balance high (${ctx.ibh.toFixed(2)}) → upside extension` });
-    } else if (!mem.ibBroke.down && c1 <= ctx.ibl - brk) {
-      mem.ibBroke.down = true;
+        reason: `First break of the Initial Balance — 1-min close above ${ctx.ibh.toFixed(2)} → upside extension` });
+    } else if (!mem.ibBroke && c1 <= ctx.ibl - brk) {
+      mem.ibBroke = true;
       fire({ kind: 'ib_break', direction: 'short', setup: 'IB break ↓', levelName: 'IBL', levelEs: ctx.ibl, base: 3,
-        reason: `1-min close below the Initial Balance low (${ctx.ibl.toFixed(2)}) → downside extension` });
+        reason: `First break of the Initial Balance — 1-min close below ${ctx.ibl.toFixed(2)} → downside extension` });
     }
   }
 
@@ -1002,6 +1016,50 @@ async function hydrateIbFormedDay() {
   }
 }
 
+// ── The IB base rates that ib_formed quotes ─────────────────────────────────
+// GET /api/ib-results?symbol=ES&limit=N returns one row per past session with a
+// `break_side` of 'H' | 'L' | 'BOTH' | 'NONE' (plus the 0/1 columns the scanner's
+// scoreboard reads). Counting those four gives exactly the split the 10:30 alert
+// wants: how often this market has broken the IB high, the low, both or neither.
+//
+// Refreshed ONCE A DAY — it is a rolling window of finished sessions and cannot
+// change intraday — and refreshed BEFORE 10:30 because that is the only moment
+// anything reads it.
+const IB_STATS_SYMBOL = process.env.SIGNALS_IB_STATS_SYMBOL || 'ES';
+const IB_STATS_LIMIT = Number(process.env.SIGNALS_IB_STATS_LIMIT || 90);
+let ibStatsCache = { n: 0, high: 0, low: 0, both: 0, none: 0, day: null };
+
+async function refreshIbStats(base) {
+  const today = etDateStr();
+  if (ibStatsCache.day === today) return;
+  try {
+    const res = await fetch(`${base}/api/ib-results?symbol=${IB_STATS_SYMBOL}&limit=${IB_STATS_LIMIT}`, {
+      headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
+      cache: 'no-store',
+    });
+    if (!res.ok) return;
+    const j = await res.json().catch(() => ({}));
+    const rows = Array.isArray(j?.rows) ? j.rows : Array.isArray(j) ? j : [];
+    // Today's own row, if the recorder has already written one, is not a past
+    // session — and a row with no break_side was never graded.
+    const graded = rows.filter((r) => r && r.date !== today && typeof r.break_side === 'string' && r.break_side);
+    const n = graded.length;
+    if (!n) return;
+    const count = (side) => graded.filter((r) => String(r.break_side).toUpperCase() === side).length;
+    const pct = (k) => Math.round((k / n) * 100);
+    ibStatsCache = {
+      n,
+      high: pct(count('H')),
+      low: pct(count('L')),
+      both: pct(count('BOTH')),
+      none: pct(count('NONE')),
+      day: today,
+    };
+  } catch {
+    /* keep whatever we had; ib_formed just prints the range alone */
+  }
+}
+
 let cbCache = { spx: null, size: null, at: 0 };
 async function refreshCb(base) {
   if (Date.now() - cbCache.at < 60_000) return;
@@ -1044,6 +1102,8 @@ async function refreshCb(base) {
 const mem = {
   prev: null, levels: {}, cooldowns: new Map(), bzPrev: null, bzLevels: {}, fdPrev: null,
   ibFormedDay: null,        // ET date the ib_formed signal already fired for
+  ibBroke: false,           // the day's ONE ib_break has fired
+  ibBrokeDay: null,         // ET date that latch belongs to
   ibBroke: { up: false, down: false }, // IB break latch — cleared when price re-enters the range
   ibBrokeDay: null,         // ET date the latch above belongs to
   min1: null,               // in-progress 1-min bar { key, last } (tick-fed)
@@ -1080,7 +1140,7 @@ async function runOnce(base, { force = false } = {}) {
   if (!force && !inSession()) return { skipped: 'off-session' };
   const [, whaleRows, gexTopRows] = await Promise.all([
     refreshCb(base), refreshWhales(base), refreshGexChangeTop(),
-    hydrateIbFormedDay(),
+    hydrateIbFormedDay(), refreshIbStats(base),
   ]);
 
   // Whale prints are tape-driven, not frame-driven: they don't need a basis, a

@@ -127,14 +127,20 @@ export const TYPE_BY_ID: Record<AlertKind, AlertType> = Object.fromEntries(
   ALERT_TYPES.map((t) => [t.id, t]),
 ) as Record<AlertKind, AlertType>
 
-/** One alert as the feed draws it. No server shape is implied yet. */
+/** One alert as the feed draws it. */
 export interface AlertItem {
   id: number
   kind: AlertKind
   /** "Cross up", "Rejection" — the variant, appended to the type name. */
   variant?: string
-  /** The one-line headline the pill and the row show. */
+  /** The row's headline in the panel — the full sentence. */
   text: string
+  /**
+   * The PILL's headline. Short enough for a toolbar: "IB low break",
+   * "MU 1005C 09-18". The panel never shows it and the pill never shows `text`
+   * — a toolbar that has to truncate a sentence is a toolbar that is too long.
+   */
+  short: string
   /** The small monospaced line under it. Optional. */
   meta?: string
   /** ISO-ish clock string for now; a timestamp once this is wired. */

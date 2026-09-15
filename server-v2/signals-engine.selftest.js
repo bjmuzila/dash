@@ -154,6 +154,33 @@ const step = 4000;
   check('only one flip_cross', sigs.filter((x) => x.kind === 'flip_cross').length === 1);
 })();
 
+// 9a) IB BREAK — the first one only, whichever side, once per day
+(() => {
+  console.log('9a) ib_break fires once a day');
+  __setAlertCacheForTest('ib_break', true);
+  const mem = freshMem();
+  // The IB gate is RTH-only (09:30–16:00 ET), and the module-wide T above is
+  // 17:13 ET — outside it. This case needs its own base epoch: Tue 11:00 ET.
+  const R = 1_699_977_600_000;
+  const ibCtx = { ibComplete: true, ibh: 5020, ibl: 4980 };
+  const mk = (ts, price) => ({ ...frame(ts, price, { ctx: ibCtx }) });
+  // Drive the 1-min close tracker: a minute must advance for last1mClose to set.
+  const sigs = [];
+  const feed = [
+    [R,                 5000], // inside
+    [R + 60_000,        5025], // minute rolls → close 5000 recorded, still inside
+    [R + 120_000,       5025], // close 5025 → above IBH + 2 → FIRST BREAK
+    [R + 180_000,       4990], // back inside
+    [R + 240_000,       4975], // close 4990 inside
+    [R + 300_000,       4975], // close 4975 → below IBL - 2 → must NOT fire again
+  ];
+  for (const [ts, px] of feed) for (const x of evaluateFrame(mk(ts, px), mem)) sigs.push(x);
+  const brks = sigs.filter((x) => x.kind === 'ib_break');
+  check('exactly one ib_break', brks.length === 1);
+  check('and it is the upside one', brks[0] && brks[0].direction === 'long');
+  check('reason says first break', brks[0] && brks[0].reason.includes('First break'));
+})();
+
 // 9b) CORE LEVEL CHANGE — the scored strike moves; the first one is silent
 (() => {
   console.log('9b) core level change');
