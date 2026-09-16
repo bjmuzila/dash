@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-16 (a) - Whale Archive: tracked contracts, saved per login
+
+Added `whale_alerts` (Postgres, keyed on `clerk_user_id`) plus four routes in
+`server-v2/api-router.js` — `/api/whale-alerts` GET/POST and
+`/api/whale-alerts/:id` PATCH/DELETE — backing a new Tracked contracts card at
+the bottom of `cbedge-v3/src/pages/Whales.tsx`, built from the new
+`cbedge-v3/src/pages/whales/alertsStore.ts` and `.../TrackedAlertsCard.tsx`, with
+TRACK buttons on every print row and beside LOOK UP. A tracked contract is a
+flag with a note and a saved chart, NOT a notification: nothing fires, rows are
+grouped by tracked date / ticker / expiry, and the server deletes them on read
+once the expiry is past in ET. `cbedge-v3/src/board/topFlow/ContractProbe.tsx`
+had its source picking lifted out as `probeUrls()` / `loadProbeBars()` and now
+exports `ProbeChart`, so the card loads bars from exactly where the probe does.
+
 ## 2026-09-15 (b) - Whale floor stop at $500K, and the contract probe stops drawing at 0.7x
 
 `cbedge-v3/src/pages/Whales.tsx` gained a `≥$500K` stop on the FLOOR menu and a

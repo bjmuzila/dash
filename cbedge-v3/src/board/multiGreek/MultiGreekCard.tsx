@@ -13,6 +13,8 @@ import {
   cellAlpha,
   columnStats,
   fmtGex,
+  isNearCore,
+  NEAR_CORE_PCTS,
   parseChain,
   pickColumns,
   strikeGex,
@@ -82,6 +84,8 @@ const EXTRA_TICKERS_KEY = 'cb-v3-mg-extra-tickers'
 const COLS_KEY = 'cb-v3-mg-col-count'
 const EX0_STORE_KEY = 'cb-v3-mg-ex0'
 const BASIS_STORE_KEY = 'cb-v3-mg-basis'
+const NEAR_CORE_KEY = 'cb-v3-mg-near-core'
+const NEAR_CORE_PCT_KEY = 'cb-v3-mg-near-core-pct'
 
 /** Strike rail width, matching v2 so the two boards read at the same rhythm. */
 const RAIL_PX = 76
@@ -213,6 +217,15 @@ interface PanelProps {
   basis: Basis
   intensity: number
   showLevels: boolean
+  /**
+   * NEAR CORE — a filter on the wash, not a wash of its own. On, only the
+   * strikes carrying `nearCorePct` or more of their column's core are painted
+   * at all; everything under it is left bare. CB / CW / PW are exempt, and the
+   * core keeps its gold. See the cell below.
+   */
+  nearCore: boolean
+  /** The threshold as a PERCENT (50 = half of core). */
+  nearCorePct: number
   /** Returns false when the symbol was refused (a duplicate), so the box snaps back. */
   onCommitTicker: (next: string) => boolean
   /** false = the ticker is read-only text. See MultiGreekCardProps.pinnedFirst. */
@@ -249,6 +262,8 @@ function TickerPanel({
   basis,
   intensity,
   showLevels,
+  nearCore,
+  nearCorePct,
   onCommitTicker,
   onRemove,
   isPageSymbol,
@@ -453,6 +468,10 @@ function TickerPanel({
   }
 
   const gridCols = `${RAIL_PX}px repeat(${Math.max(1, display.length)}, minmax(0, 1fr))`
+  // Clamped here rather than at every cell: the control cannot emit anything out
+  // of range, but a stored value from an older build can.
+  const nearCoreThreshold = Math.min(Math.max((nearCorePct || 0) / 100, 0), 0.99)
+
   const front = display[0]
 
   /** The badge a strike earns in a column, if any. */
@@ -671,10 +690,6 @@ function TickerPanel({
                 const s = stats.get(c.key)
                 const v = valuesByCol.get(c.key)?.get(strike) ?? 0
                 const rank = s ? s.top3.indexOf(strike) : -1
-                const alpha = s ? cellAlpha(v, s.maxAbs, rank, intensity) : 0
-                const hue = v >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
-                const heat =
-                  alpha > 0 ? `color-mix(in srgb, ${hue} ${(alpha * 100).toFixed(1)}%, transparent)` : 'transparent'
                 // NOT gated on showLevels. That switch turns off the LABELS —
                 // the CB / CW / PW badges and the ★ — and nothing else. The
                 // gold on the core is colour, not a label: it is how the core
@@ -683,6 +698,22 @@ function TickerPanel({
                 const level = levelOf(c.key, strike)
                 const isFront = front != null && c.key === front.key
                 const isCb = level === 'cb'
+                // NEAR CORE. A filter on WHICH cells get the wash — never a
+                // second kind of wash. A strike that clears the threshold is
+                // painted exactly as it would have been with the filter off,
+                // on the same ramp at the same Intensity; one under it is left
+                // bare. So the ladder shows the strikes that matter against the
+                // core and nothing else, and gold stays the core's alone.
+                //
+                // A level is exempt whatever the dial says: a CW badge sitting
+                // on an unpainted cell reads as a bug, and the threshold has no
+                // business deciding where the walls are.
+                const painted =
+                  !nearCore || level != null || (s ? isNearCore(v, s.maxAbs, nearCoreThreshold) : false)
+                const alpha = painted && s ? cellAlpha(v, s.maxAbs, rank, intensity) : 0
+                const hue = v >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
+                const heat =
+                  alpha > 0 ? `color-mix(in srgb, ${hue} ${(alpha * 100).toFixed(1)}%, transparent)` : 'transparent'
                 const f = fmtGex(v)
                 // The ex-0DTE TOTAL has no single expiry behind it, so there is
                 // no chain row to open and no baseline to diff — it stays inert
@@ -731,7 +762,7 @@ function TickerPanel({
                           }
                         : {
                             background: alpha > 0 ? heat : undefined,
-                            outline: rank === 0 && v !== 0 ? `1px solid ${hue}` : undefined,
+                            outline: painted && rank === 0 && v !== 0 ? `1px solid ${hue}` : undefined,
                             outlineOffset: -1,
                           }
                     }
@@ -846,6 +877,27 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
   const [basis, setBasis] = useState<Basis>(() => (readStored(BASIS_STORE_KEY, 'oivol') === 'vol' ? 'vol' : 'oivol'))
   const [intensity, setIntensity] = useState(1.75)
   const [showLevels, setShowLevels] = useState(true)
+  // NEAR CORE — see the PanelProps note. Remembered, unlike the chain's HIDE:
+  // this is a way of reading the ladder rather than a state some click just put
+  // the board into, so coming back to a board that is still filtered is the
+  // board you left.
+  const [nearCore, setNearCore] = useState(() => readStored(NEAR_CORE_KEY, '0') === '1')
+  const [nearCorePct, setNearCorePctState] = useState(() => {
+    const n = Number(readStored(NEAR_CORE_PCT_KEY, '50'))
+    return Number.isFinite(n) && n > 0 && n < 100 ? n : 50
+  })
+  const commitNearCore = useCallback((on: boolean) => {
+    setNearCore(on)
+    write(NEAR_CORE_KEY, on ? '1' : '0')
+  }, [])
+  // Moving the threshold is itself the statement that you want the filter, so it
+  // switches on rather than quietly changing a number nothing is reading.
+  const commitNearCorePct = useCallback((pct: number) => {
+    setNearCorePctState(pct)
+    setNearCore(true)
+    write(NEAR_CORE_PCT_KEY, String(pct))
+    write(NEAR_CORE_KEY, '1')
+  }, [])
   const [cogOpen, setCogOpen] = useState(false)
   // The click card lives at BOARD level, not inside a panel: it is positioned
   // in viewport coordinates and only one can be open at a time, so a panel
@@ -1087,6 +1139,25 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
                 onChange={setIntensity}
                 title="How hard the wash ramps. The top three strikes in a column keep their fixed steps at every setting."
               />
+              {/* NEAR CORE — the option chain's control, on the ladder. It
+                  decides WHICH cells get the wash above, never what they look
+                  like: a strike that clears the threshold is painted exactly as
+                  it would have been with the filter off. Levels are exempt, and
+                  gold stays the core's. */}
+              <div className="flex gap-1">
+                <Chip
+                  label={nearCore ? `NEAR CORE ≥ ${nearCorePct}%` : 'NEAR CORE'}
+                  on={nearCore}
+                  onClick={() => commitNearCore(!nearCore)}
+                  title="Paint only the strikes carrying this share or more of their column's core. Everything under the threshold is left bare; CB / CW / PW always keep theirs."
+                />
+              </div>
+              <SegGroup
+                title="The share of the column's core a strike has to carry to be painted"
+                options={NEAR_CORE_PCTS.map((n) => ({ label: `${n}`, value: String(n) }))}
+                value={String(nearCorePct)}
+                onChange={(v) => commitNearCorePct(Number(v))}
+              />
               <div className="flex gap-1">
                 <Chip
                   label="CB / CW / PW"
@@ -1115,6 +1186,8 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
             basis={basis}
             intensity={intensity}
             showLevels={showLevels}
+            nearCore={nearCore}
+            nearCorePct={nearCorePct}
             /* Slot 0 is the page symbol; an added panel is its extras index + 1,
                which is exactly `slot + 1` — the head carries slot -1. */
             onCommitTicker={(next) => commitTicker(slot + 1, next)}

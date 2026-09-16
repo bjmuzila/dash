@@ -625,6 +625,37 @@ input[type='date']::-webkit-datetime-edit-year-field:focus {
   }
 }
 
+/* THE ALERTS PILL, ON ARRIVAL (shell/AlertsFeed.tsx). The pill is deliberately
+   borderless — a box beside the wordmark reads as a second button competing
+   with the brand — so "a new signal just landed" cannot be a border that stays.
+   It is a border that FLASHES: three beats in the alert type's own colour, then
+   gone, leaving the quiet pill behind. The colour arrives as `--alert-flash`,
+   set inline at the call site from ALERT_TYPES, because the ring has to be the
+   kind's colour and @keyframes cannot take an argument.
+
+   Drawn with box-shadow rather than `border`, so nothing in the toolbar shifts
+   by a pixel when it fires — a row that jumps on every alert is worse than no
+   alert. Same reason it lives in this file as .mg-cb-glow and .bzila-lit above:
+   @keyframes cannot be scoped to a component without a CSS module.
+
+   The reduced-motion rule below collapses this to nothing, which is correct:
+   the coloured tag and the pulsing dot still say a new alert is there. */
+@keyframes alert-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--alert-flash) 0%, transparent);
+  }
+  30%,
+  70% {
+    box-shadow:
+      0 0 0 1px var(--alert-flash),
+      0 0 9px color-mix(in srgb, var(--alert-flash) 45%, transparent);
+  }
+}
+.alert-flash {
+  animation: alert-flash 800ms ease-in-out 3;
+}
+
 /* Respect the user's motion preference globally rather than per-component. */
 @media (prefers-reduced-motion: reduce) {
   *,

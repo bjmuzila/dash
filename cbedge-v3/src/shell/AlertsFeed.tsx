@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { alpha } from '@/design/theme'
 import type { AlertItem } from '@/shell/alertTypes'
@@ -196,6 +197,13 @@ function toItem(row: SignalRow): AlertItem | null {
 const FEED_POLL_MS = 20_000
 const FEED_LIMIT = 50
 
+// ── The arrival flash ───────────────────────────────────────────────────────
+// Three beats of 800ms (see `.alert-flash`, design/tokens.css) and then the
+// pill is quiet again. Bounded on purpose: the dot already marks "recent" for
+// the next hour, so the flash only has to answer "did one just land while I was
+// looking at the chart", and a ring that keeps going stops being read.
+const FLASH_MS = 2400
+
 export function useAlertsFeed(): AlertItem[] {
   const [items, setItems] = useState<AlertItem[]>([])
   const sigRef = useRef('')
@@ -288,6 +296,37 @@ export function AlertsPill() {
   // anything, which is the failure mode of every notification badge.
   const fresh = useMemo(() => !!latest && !age(latest.at).endsWith('h'), [latest])
 
+  // FLASH ON ARRIVAL. `latest.id` is the row's primary key, so a poll that
+  // changed nothing cannot fire this — that was the old flashing bug, and the
+  // signature check in `useAlertsFeed` plus this id compare are the two halves
+  // of not repeating it.
+  //
+  // The first load never flashes: opening the dashboard at 2pm should not
+  // announce a signal from 9:40 as if it just happened. `seenRef` starting at
+  // null is what distinguishes "first list I have seen" from "a new top row".
+  const [flash, setFlash] = useState(false)
+  const seenRef = useRef<number | null>(null)
+  const latestId = latest?.id ?? null
+
+  useEffect(() => {
+    if (latestId == null) return
+    if (seenRef.current === null) {
+      seenRef.current = latestId
+      return
+    }
+    if (latestId === seenRef.current) return
+    seenRef.current = latestId
+    // Off for one frame first: re-applying a class that is already on does not
+    // restart a CSS animation, so back-to-back alerts would flash once.
+    setFlash(false)
+    const raf = requestAnimationFrame(() => setFlash(true))
+    const t = window.setTimeout(() => setFlash(false), FLASH_MS)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.clearTimeout(t)
+    }
+  }, [latestId])
+
   return (
     /* `min-w-0` + `shrink` is what lets this yield: without min-w-0 a flex item
        refuses to go below its content width, and the pill pushed the clock, the
@@ -301,6 +340,7 @@ export function AlertsPill() {
         aria-haspopup="menu"
         aria-expanded={open}
         title={latest ? `${TYPE_BY_ID[latest.kind].name} — ${latest.text}` : 'Signal alerts'}
+        style={{ '--alert-flash': type?.color ?? 'var(--color-warn)' } as CSSProperties}
         className={[
           // NO BOX. The coloured tag is the only edge in here: a bordered pill
           // beside the wordmark read as a second button competing with the
@@ -316,6 +356,8 @@ export function AlertsPill() {
           'flex h-6 max-w-[7rem] items-center gap-1.5 overflow-hidden rounded-sm px-1.5 transition-colors lg:max-w-[13rem] xl:max-w-[16rem]',
           open ? 'bg-raised' : 'hover:bg-raised',
           fresh ? '' : 'opacity-90',
+          // The arrival flash — the type's colour, three beats, then gone.
+          flash ? 'alert-flash' : '',
         ].join(' ')}
       >
         {latest && type ? (

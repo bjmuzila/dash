@@ -23554,3 +23554,74 @@ selection empties (`cb.chain.hideUnsel` and its localStorage round-trip removed)
 Files: `cbedge-v3/src/pages/OptionsChain.tsx`,
 `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`,
 `cbedge-v3/src/pages/optionsChain/useChainData.ts`.
+
+## 2026-09-16 (c) — v3 Options Chain: FOCUS / HIDE REST back on the toolbar, out of the screenshot
+
+Reverts the control move in (b) — the two chips belong on the toolbar where the
+selection is made, not buried in the cog. What (b) was actually solving was that
+they showed up in every capture of the grid.
+
+Both now carry `data-capture-hide`, so `shell/snapshot.ts` strips them from the
+clone and the PNG shows the grid without the buttons used to set it up. The
+Focus field added to the cog's GRID section is removed again.
+
+Unchanged from (b): the ⅀ header still prints the selected date span
+(`9/16-9/18`) rather than `Sel 3`, and HIDE still resets to DIM whenever the
+selection empties.
+
+Files: `cbedge-v3/src/pages/OptionsChain.tsx`.
+
+## 2026-09-16 (d) — Multi Greek card: NEAR CORE, the option chain's filter on the home board
+
+The ladder had the chain's Intensity slider but not its threshold, so a strike
+carrying 80% of the core looked much like one carrying 20% once the wash was
+turned down — and four panels of that is a lot of colour saying very little.
+
+`NEAR CORE` in the card's cog, under HEAT: a chip plus the same
+25 / 33 / 40 / 50 / 60 / 75 / 90 % thresholds the chain offers. On, only the
+strikes carrying that share or more of their column's core keep the wash;
+everything under it is left bare, including its rank-1 outline. A painted strike
+looks exactly as it did with the filter off — same ramp, same Intensity, same
+sign colour. The filter decides WHICH cells get a wash, never what one looks
+like, so gold stays the core's alone.
+
+CB / CW / PW are exempt at any threshold: a wall badge on an unpainted cell reads
+as a bug, and the dial has no business moving where the walls are.
+
+Remembered (`cb-v3-mg-near-core`, `cb-v3-mg-near-core-pct`), unlike the chain's
+HIDE REST — this is a way of reading the ladder, not a state a click just put the
+board into. Picking a threshold turns the filter on.
+
+`mgMath.ts` gains `isNearCore()` and `NEAR_CORE_PCTS`, kept local rather than
+imported from the chain for the same reason `CB_WASH` is: `maxAbs` there IS the
+core's magnitude (columnStats picks `cb` as the strike that set it), so the cut
+is the same one the chain makes.
+
+Files: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`,
+`cbedge-v3/src/board/multiGreek/mgMath.ts`.
+
+## 2026-09-16 (e) — v3 Options Chain: the camera has targets again
+
+The toolbar's 📸 menu had no rows on /v3/options-chain — the page published none.
+`useCopyShotTargets` is how a surface offers itself (see `board/BoardPage.tsx`),
+and this page had no call to it, no `data-capture-meta`, and no ref on its root.
+Restored:
+
+- **Options Chain** — the whole page, so the shot carries the toolbar's statement
+  of what you are looking at.
+- **Chain grid only** — the grid alone, for when the caption already says that
+  and the toolbar is chrome eating the top of the image. Hands over the GRID, not
+  the scroll port: the ladder is taller than the window and a shot of the port is
+  a shot of whichever strikes happened to be showing.
+
+Both resolve at click time — the grid sits behind two early returns (the replay
+empty state, the no-strikes state), so a ref read at publish time is stale about
+as often as not.
+
+`data-capture-meta` on the page root gives the caption its tail —
+`SPX · GEX · 10% strikes` — so the grid-only shot still answers what it is.
+
+Pairs with (c): the FOCUS and DIM/HIDE REST chips carry `data-capture-hide`, so
+neither shot shows the controls used to set it up.
+
+Files: `cbedge-v3/src/pages/OptionsChain.tsx`.

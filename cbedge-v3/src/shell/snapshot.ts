@@ -1146,7 +1146,18 @@ export async function copyOrDownload(blob: Blob, filename: string): Promise<Shot
   return 'saved'
 }
 
-async function deliver(canvas: HTMLCanvasElement, filename: string): Promise<ShotResult> {
+/**
+ * ENCODE ONLY — the pixels, with nothing decided about where they go.
+ *
+ * The clipboard-claim path in shell/CopyShot.tsx needs the two halves apart:
+ * it hands Chrome a PROMISE of this blob at click time and only then starts
+ * the capture, so the write is registered while the click is still warm.
+ */
+export function encodeShot(canvas: HTMLCanvasElement): Promise<Blob> {
+  return toBlob(canvas)
+}
+
+export async function deliverCanvas(canvas: HTMLCanvasElement, filename: string): Promise<ShotResult> {
   let blob = await toBlob(canvas)
   if (await copyBlob(blob)) return 'copied'
 
@@ -1166,8 +1177,14 @@ function metaOf(el: HTMLElement): string | null {
   return el.querySelector(`[${META_ATTR}]`)?.getAttribute(META_ATTR) || null
 }
 
-/** Photograph `el`, frame it, and put it on the clipboard. */
-export async function captureAndCopy(el: HTMLElement, opts: ShotOptions = {}): Promise<ShotResult> {
+/**
+ * Photograph `el` and frame it — the finished canvas, not yet delivered.
+ *
+ * Split out of `captureAndCopy` for the claim path: the caller that already
+ * registered a clipboard write needs the pixels in its own hands so it can
+ * settle that write, and only fall back to the ladder below if it is refused.
+ */
+export async function captureCanvas(el: HTMLElement, opts: ShotOptions = {}): Promise<HTMLCanvasElement> {
   // The DOM wins where both exist: the card is closer to the truth than the
   // menu entry that pointed at it.
   const meta = metaOf(el) ?? opts.meta ?? null
@@ -1176,10 +1193,13 @@ export async function captureAndCopy(el: HTMLElement, opts: ShotOptions = {}): P
     opts.bare ? Promise.resolve(null) : loadLogo(),
     opts.bare ? Promise.resolve(null) : loadBadge(opts.badge),
   ])
-  const out = opts.bare
-    ? canvas
-    : frame(canvas, scale, opts.title ?? 'CB Edge', meta, logo, badge)
-  return deliver(out, opts.filename ?? 'snapshot.png')
+  return opts.bare ? canvas : frame(canvas, scale, opts.title ?? 'CB Edge', meta, logo, badge)
+}
+
+/** Photograph `el`, frame it, and put it on the clipboard. */
+export async function captureAndCopy(el: HTMLElement, opts: ShotOptions = {}): Promise<ShotResult> {
+  const out = await captureCanvas(el, opts)
+  return deliverCanvas(out, opts.filename ?? 'snapshot.png')
 }
 
 /**

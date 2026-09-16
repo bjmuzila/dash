@@ -242,6 +242,59 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'snapshot'
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CLAIMING THE CLIPBOARD BEFORE THE PICTURE EXISTS.
+//
+// Chrome only lets a page write to the clipboard while the click that asked for
+// it is still warm. A shot of one small card beat that window; a shot of a
+// multi-chart card or the whole board does not — the engine is a dynamic
+// import, the clone is thousands of nodes, the SVG has to decode and the PNG
+// has to encode, and by the time `clipboard.write` was finally called the
+// activation was long gone. It rejected, the capture fell out of the bottom of
+// snapshot.ts into a download, and "Copy" quietly became a file in ~/Downloads.
+// Shrinking never helped, because size was never what was wrong.
+//
+// So the write is registered FIRST, synchronously, in the click handler, with a
+// PROMISE of the blob in the ClipboardItem — which is exactly what promised
+// clipboard items are for. Chrome parks the write against the live activation
+// and waits for the pixels, however long they take.
+//
+// Returns null where promised items are not supported; the caller then takes
+// the old path, which still copies and still falls back to a download.
+// ─────────────────────────────────────────────────────────────────────────────
+type ClipboardClaim = {
+  /** The pixels arrived — hand them over and let the parked write complete. */
+  fill: (blob: Blob) => void
+  /** The capture died. Settle the parked write so it is not left hanging. */
+  drop: () => void
+  /** True once the bitmap is actually on the clipboard. Never rejects. */
+  ok: Promise<boolean>
+}
+
+function claimClipboard(): ClipboardClaim | null {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') return null
+  let fill!: (blob: Blob) => void
+  let drop!: () => void
+  const pixels = new Promise<Blob>((resolve, reject) => {
+    fill = resolve
+    drop = () => reject(new Error('capture abandoned'))
+  })
+  // Nobody awaits `pixels` itself, so an abandoned capture would surface as an
+  // unhandled rejection. The write below is its only real consumer.
+  pixels.catch(() => {})
+  try {
+    const ok = navigator.clipboard
+      .write([new ClipboardItem({ 'image/png': pixels })])
+      .then(() => true)
+      .catch(() => false)
+    return { fill, drop, ok }
+  } catch {
+    // Older engines reject a non-Blob ClipboardItem value synchronously.
+    drop()
+    return null
+  }
+}
+
 /** The capture itself, plus the two seconds of feedback that follow it. */
 function useShot() {
   const [state, setState] = useState<ShotState>('idle')
@@ -257,6 +310,10 @@ function useShot() {
   const take = useCallback(async (target: CopyShotTarget) => {
     if (timer.current) clearTimeout(timer.current)
     setState('working')
+    // BEFORE the first await, while the click is still a user gesture. See
+    // claimClipboard. A composed target owns its own delivery, so it is left
+    // alone; everything else goes through the claim.
+    const claim = target.capture ? null : claimClipboard()
     try {
       // A target that composes its own picture. See CopyShotTarget.capture.
       if (target.capture) {
@@ -270,16 +327,28 @@ function useShot() {
       // is in the ENTRY chunk (the toolbar mounts it on every route) and the
       // capture is a few hundred lines nobody who is not the owner will ever
       // run — see budgets.json, where `entry` is the tightest number there is.
-      const { captureAndCopy } = await import('@/shell/snapshot')
-      const result = await captureAndCopy(el, {
+      const { captureCanvas, deliverCanvas, encodeShot } = await import('@/shell/snapshot')
+      const filename = `${slug(target.file ?? target.label)}.png`
+      const canvas = await captureCanvas(el, {
         title: target.label,
         meta: target.meta,
         badge: target.badge,
         bare: target.bare,
-        filename: `${slug(target.file ?? target.label)}.png`,
+        filename,
       })
-      setState(result)
+      if (claim) {
+        claim.fill(await encodeShot(canvas))
+        if (await claim.ok) {
+          setState('copied')
+          timer.current = setTimeout(() => setState('idle'), 2200)
+          return
+        }
+        // Refused for a reason the claim could not fix — almost always the
+        // bitmap. deliverCanvas shrinks and tries again before it downloads.
+      }
+      setState(await deliverCanvas(canvas, filename))
     } catch (e) {
+      claim?.drop()
       console.error('[copyshot]', e)
       setState('err')
     }

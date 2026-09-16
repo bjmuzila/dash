@@ -4,6 +4,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Wednesday 9/16/2026
 
+* **Whale Archive:** track any contract — from a print or the lookup — and it stays in a new card at the bottom with your own notes and its chart, on every device you sign in on — https://cbedge.net/v3/whales
+
 * **Phone app:** new **Alert** tab in the bottom bar — the full signal feed on your phone, with the same filters you use on the desktop — https://cbedge.net/v3/m/alerts
 
 ## Tuesday 9/15/2026

@@ -331,6 +331,33 @@ export function fmtGex(v: number | null | undefined): { sign: '+' | '−' | ''; 
 const RANK_ALPHA = [0.9, 0.45, 0.25]
 const RAMP = { base: 0.04, span: 0.55, max: 0.62, ease: 1.6 }
 
+/**
+ * NEAR CORE — the thresholds the control offers, as a PERCENT of the column's
+ * core |GEX|.
+ *
+ * Twin of the option chain's, in pages/optionsChain/useChainData.ts. Kept as its
+ * own constant for the same reason CB_WASH is: that module owns a page, this
+ * ladder owns a card, and only the one decision is shared.
+ */
+export const NEAR_CORE_PCTS = [25, 33, 40, 50, 60, 75, 90] as const
+
+/**
+ * Is this strike carrying `threshold` (a FRACTION, 0.5 = half) or more of its
+ * column's core?
+ *
+ * `maxAbs` IS the core's magnitude — columnStats picks cb as the strike that set
+ * it — so this is the same cut as "a share of the column maximum". The core
+ * wording is what is on screen to compare against.
+ *
+ * Sign-blind: a put wall at 60% of a call-side core is exactly the strike the
+ * question is about.
+ */
+export function isNearCore(value: number, maxAbs: number, threshold: number): boolean {
+  if (!value || !Number.isFinite(value)) return false
+  if (!(maxAbs > 0)) return false
+  return Math.abs(value) / maxAbs >= threshold
+}
+
 export function cellAlpha(value: number, maxAbs: number, rank: number, intensity: number): number {
   if (!value) return 0
   const fixed = rank >= 0 ? RANK_ALPHA[rank] : undefined
