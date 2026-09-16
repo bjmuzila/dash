@@ -166,72 +166,163 @@ const lastSkipWarnAt = new Map();
 const lastSkipReason = new Map();
 
 /**
- * Ensure net_vol_gex exists. server-v2 connects to Postgres directly and does
- * NOT run lib/db.ts's ensureAllTables, so the column add can't rely on the
- * Next.js init path. Idempotent; runs once per process.
+ * Ensure the columns and indexes this writer INSERTs into exist. server-v2
+ * connects to Postgres directly and does NOT run lib/db.ts's ensureAllTables,
+ * so the column adds can't rely on the Next.js init path.
+ *
+ * ── 2026-09-16: IT MUST NOT RUN WHEN THERE IS NOTHING TO DO ─────────────────
+ *
+ * This function is eleven DDL statements. Every ALTER takes an ACCESS EXCLUSIVE
+ * lock on option_strike_gex_history and every CREATE INDEX locks out writes —
+ * on the table THIS WRITER is appending ~1/min and the bubbles card reads. A
+ * DDL statement waiting for a lock is not passive: Postgres queues lock
+ * requests FIFO, so every read and insert arriving after it parks behind it.
+ * On statement_timeout the old catch left `columnEnsured` false, so all eleven
+ * re-ran on the NEXT write tick, and the jam rebuilt itself. On 2026-09-16 that
+ * pattern (here and in the es_candles migration in _lib-db.cjs) timed out
+ * queries site-wide and cost ~40 minutes of snapshot rows — which are
+ * point-in-time and cannot be backfilled from anything.
+ *
+ * So: a catalog precheck that locks NOTHING on the table answers "is this
+ * already done?", and once it is — the normal case for the life of the
+ * deployment — this takes no lock at all. Only genuinely missing objects get a
+ * statement, each on a dedicated client with a 3s lock_timeout so a blocked
+ * migration fails instead of queueing the world behind it. A failure backs off
+ * five minutes rather than retrying on the next write.
+ *
+ * Losing a snapshot minute is permanent; delaying a column add is not. When
+ * those two trade off, the write wins.
  */
+const OSGH_COLUMNS = [
+  // name            DDL type, for the ALTER that adds it if missing
+  ['net_vol_gex',   'REAL'],
+  // Raw per-strike call/put gamma, alongside the already-multiplied net_gex /
+  // net_vol_gex columns. Needed to reconstruct Flow GEX (gamma × dealer
+  // inventory × spot²) for any past instant from flow_prints, instead of only
+  // ever having "now"'s value out of the in-memory FlowGexAccumulator.
+  ['call_gamma',    'REAL'],
+  ['put_gamma',     'REAL'],
+  // Per-side implied vol. Needed for IV skew — skew(K) = IV(K) − IV(ATM), and
+  // "ATM" is whichever strike sat nearest spot AT THAT SNAPSHOT, so IV has to
+  // be stored per strike per tick; it cannot be reconstructed later from
+  // anything else in this table.
+  ['call_iv',       'REAL'],
+  ['put_iv',        'REAL'],
+  // Per-strike DELTA exposure, on the same cadence and in the same row as
+  // gamma. computeGexSummary has emitted netDEX/volNetDEX per strike all along;
+  // it simply was never persisted, so every DEX view could only show "now".
+  // greek_snapshots is NOT a substitute: different writer, different cadence,
+  // so its rows do not line up slot-for-slot and any join smears two clocks.
+  //
+  // Two columns for the same reason gamma has two: net_dex is the OI book,
+  // net_vol_dex is the volume book, and the OI+Vol basis the dashboard reads is
+  // their sum. Storing only the sum would make the split unrecoverable.
+  ['net_dex',       'REAL'],
+  ['net_vol_dex',   'REAL'],
+];
+
+/** Indexes this writer's readers depend on. `snap` carries an INCLUDE fallback. */
+const OSGH_INDEXES = ['idx_osgh_symbol_ts', 'idx_osgh_symbol_lookup', 'idx_osgh_symbol_snap'];
+
+let columnRetryAt = 0;
+const COLUMN_RETRY_MS = 5 * 60_000;
+
 async function ensureVolColumn(p) {
   if (columnEnsured) return;
+  if (Date.now() < columnRetryAt) return;
+
+  const wantCols = OSGH_COLUMNS.map(([n]) => n).concat('symbol');
   try {
-    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_gex REAL');
-    // Raw per-strike call/put gamma, alongside the already-multiplied net_gex /
-    // net_vol_gex columns. Needed to reconstruct Flow GEX (gamma × dealer
-    // inventory × spot²) for any past instant from flow_prints, instead of only
-    // ever having "now"'s value out of the in-memory FlowGexAccumulator.
-    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS call_gamma REAL');
-    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS put_gamma REAL');
-    // Per-side implied vol. Needed for IV skew — skew(K) = IV(K) − IV(ATM),
-    // and "ATM" is whichever strike sat nearest spot AT THAT SNAPSHOT, so IV
-    // has to be stored per strike per tick; it cannot be reconstructed later
-    // from anything else in this table.
-    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS call_iv REAL');
-    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS put_iv REAL');
-    // Per-strike DELTA exposure, stored on the same cadence and in the same row
-    // as gamma. computeGexSummary has emitted netDEX/volNetDEX per strike all
-    // along; it simply was never persisted, so every DEX view could only ever
-    // show "now" and nothing historical could be reconstructed. greek_snapshots
-    // is NOT a substitute: it is a different writer on a different cadence, so
-    // its rows do not line up slot-for-slot with this table and any join
-    // smears two clocks together.
-    //
-    // Two columns for the same reason gamma has two: net_dex is the OI book,
-    // net_vol_dex is the volume book, and the OI+Vol basis the dashboard reads
-    // is their sum. Storing only the sum would make the split unrecoverable.
-    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_dex REAL');
-    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_dex REAL');
-    // Multi-underlying. Mirrors the DDL in _lib-db.cjs ensureAllTables — kept
-    // here too because server-v2 boots without running that Next-side init, and
-    // this writer must not INSERT a symbol column that doesn't exist yet.
-    await p.query(`ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS symbol TEXT NOT NULL DEFAULT '${DEFAULT_SYMBOL}'`);
-    await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_ts ON option_strike_gex_history (symbol, timestamp)');
-    await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_lookup ON option_strike_gex_history (symbol, date, expiry, strike, timestamp DESC)');
-    // Snapshot-shaped index for the reads that do NOT care about strike.
-    //
-    // /api/gex-map's session catalog (COUNT(DISTINCT timestamp) GROUP BY date,
-    // expiry) and its minute spot path both walk a whole (symbol, date, expiry)
-    // partition — ~390 snapshots × ~260 strikes ≈ 100k rows for one SPX
-    // session. idx_osgh_symbol_lookup puts `strike` ahead of `timestamp`, so
-    // neither read could be satisfied in index order, and the spot path had to
-    // touch the heap for every one of those rows just to read one float.
-    //
-    // timestamp before strike, with spot INCLUDEd as a non-key payload, makes
-    // both index-only. INCLUDE needs PG 11+, and it gets its OWN try/catch so a
-    // server too old for it falls back to the plain 4-column index instead of
-    // aborting ensureVolColumn — which would leave columnEnsured false and
-    // re-run every ALTER on every single write.
-    try {
-      await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_snap ON option_strike_gex_history (symbol, date, expiry, timestamp) INCLUDE (spot)');
-    } catch (e) {
-      console.warn('[gex-history] covering index unavailable, falling back:', e.message);
-      try {
-        await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_snap ON option_strike_gex_history (symbol, date, expiry, timestamp)');
-      } catch (e2) {
-        console.warn('[gex-history] snapshot index create failed:', e2.message);
-      }
+    // Catalog-only: pg_attribute / pg_class take no lock on the table itself.
+    // to_regclass rather than a ::regclass cast because this can run before the
+    // table exists, and the cast THROWS on a missing relation.
+    const pre = await p.query(
+      `SELECT
+         (SELECT array_agg(attname::text) FROM pg_attribute
+            WHERE attrelid = t.oid AND NOT attisdropped AND attname = ANY($1::text[])) AS cols,
+         (SELECT array_agg(relname::text) FROM pg_class
+            WHERE relkind = 'i' AND relname = ANY($2::text[])) AS idx
+       FROM (SELECT to_regclass('option_strike_gex_history') AS oid) t
+       WHERE t.oid IS NOT NULL`,
+      [wantCols, OSGH_INDEXES],
+    );
+
+    const row = pre.rows[0];
+    if (!row) {
+      // Table not created yet — _lib-db.cjs ensureAllTables owns that. Come
+      // back later instead of throwing an ALTER at a missing relation once a
+      // minute.
+      columnRetryAt = Date.now() + COLUMN_RETRY_MS;
+      return;
     }
+
+    const haveCols = new Set(row.cols || []);
+    const haveIdx = new Set(row.idx || []);
+    const missingCols = OSGH_COLUMNS.filter(([n]) => !haveCols.has(n));
+    const needSymbol = !haveCols.has('symbol');
+    const missingIdx = OSGH_INDEXES.filter((n) => !haveIdx.has(n));
+
+    // The steady state. No lock, no DDL, and never checked again this process.
+    if (!missingCols.length && !needSymbol && !missingIdx.length) {
+      columnEnsured = true;
+      return;
+    }
+
+    // Dedicated client so lock_timeout cannot leak onto an unrelated pooled
+    // query, RESET ALL before it goes back to the pool.
+    const client = await p.connect();
+    try {
+      await client.query(`SET lock_timeout = '3s'`);
+      await client.query(`SET statement_timeout = '60s'`);
+
+      for (const [name, type] of missingCols) {
+        await client.query(`ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS ${name} ${type}`);
+      }
+      // Multi-underlying. Mirrors the DDL in _lib-db.cjs ensureAllTables — kept
+      // here too because server-v2 boots without running that Next-side init,
+      // and this writer must not INSERT a symbol column that doesn't exist yet.
+      if (needSymbol) {
+        await client.query(`ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS symbol TEXT NOT NULL DEFAULT '${DEFAULT_SYMBOL}'`);
+      }
+
+      if (missingIdx.includes('idx_osgh_symbol_ts')) {
+        await client.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_ts ON option_strike_gex_history (symbol, timestamp)');
+      }
+      if (missingIdx.includes('idx_osgh_symbol_lookup')) {
+        await client.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_lookup ON option_strike_gex_history (symbol, date, expiry, strike, timestamp DESC)');
+      }
+      // Snapshot-shaped index for the reads that do NOT care about strike.
+      //
+      // /api/gex-map's session catalog (COUNT(DISTINCT timestamp) GROUP BY
+      // date, expiry) and its minute spot path both walk a whole
+      // (symbol, date, expiry) partition — ~390 snapshots × ~260 strikes ≈ 100k
+      // rows for one SPX session. idx_osgh_symbol_lookup puts `strike` ahead of
+      // `timestamp`, so neither read could be satisfied in index order, and the
+      // spot path had to touch the heap for every one of those rows just to
+      // read one float.
+      //
+      // timestamp before strike, with spot INCLUDEd as a non-key payload, makes
+      // both index-only. INCLUDE needs PG 11+, so it keeps its own try/catch and
+      // falls back to the plain 4-column index on an older server.
+      if (missingIdx.includes('idx_osgh_symbol_snap')) {
+        try {
+          await client.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_snap ON option_strike_gex_history (symbol, date, expiry, timestamp) INCLUDE (spot)');
+        } catch (e) {
+          console.warn('[gex-history] covering index unavailable, falling back:', e.message);
+          await client.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_snap ON option_strike_gex_history (symbol, date, expiry, timestamp)');
+        }
+      }
+      console.log('[gex-history] schema ensured (%d column(s), %d index(es))',
+        missingCols.length + (needSymbol ? 1 : 0), missingIdx.length);
+    } finally {
+      try { await client.query('RESET ALL'); } catch { /* releasing anyway */ }
+      client.release();
+    }
+
     columnEnsured = true;
   } catch (e) {
-    console.warn('[gex-history] ensure net_vol_gex column failed:', e.message);
+    columnRetryAt = Date.now() + COLUMN_RETRY_MS;
+    console.warn('[gex-history] schema ensure failed (retry in 5m):', e.message);
   }
 }
 

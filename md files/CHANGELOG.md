@@ -1,5 +1,97 @@
 # Changelog
 
+## 2026-09-16 (j) - Whales: the tracked drawer is one pane, and the ticker card is two rankings
+
+**The frozen pane is gone.** The tracked-contract drawer was a two-up: live on
+the left, the bars as they stood the minute you tracked it on the right. The
+live probe already carries the entry rung, the marker at the moment of the
+print and the move against it, so "what has it done since" reads off one
+picture - the pair spent half the width saying it twice at half the resolution,
+and the RE-SNAPSHOT button existed to keep the weaker half current. Live now
+runs full width. The snapshot is still taken and still stored server-side: it
+is the one thing about a tracked contract that cannot be rebuilt later, so it
+keeps being recorded whether or not anything draws it.
+
+**WHERE THE SIZE WENT is two columns.** One list ranked by TOTAL with a split
+bar answered "who printed the most" and left "who is the biggest bullish bet,
+who is the biggest bearish bet" to be eyeballed off the ratio of two colours in
+a 7px bar. Those are the two questions the card is for, so each gets a column,
+sorted on its own side, with the dollar figure on every row. The columns are
+deliberately not the same tickers in the same order - a name can top one and be
+absent from the other - and a ticker with nothing on a side is dropped from that
+side rather than padded in at $0. Each bar scales to the biggest value in ITS
+OWN column, so lengths compare within a column and not across, which is why the
+number is always shown.
+
+Both columns still draw from the server's top-tickers-by-total list, so a name
+that never cracks that list cannot appear even if it leads one side; widening
+that is a `tickers` limit change on `/api/lse/whales`, not a UI change.
+
+`SplitBar` and `tickerMax` deleted with it.
+
+`cbedge-v3/src/pages/Whales.tsx`, `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`
+
+## 2026-09-16 (i) - The gex-history writer was locking the table it writes to
+
+Same anti-pattern as the es_candles migration, on the table the bubbles card
+reads. `ensureVolColumn()` in `gex-history-writer.js` was ELEVEN DDL statements
+- eight `ALTER TABLE ... ADD COLUMN` plus three `CREATE INDEX` - against
+`option_strike_gex_history`, the table this writer appends to ~1/min. Every
+ALTER takes ACCESS EXCLUSIVE and every CREATE INDEX locks out writes, with no
+`lock_timeout`; a DDL statement waiting on a lock queues every later read and
+insert behind it (FIFO), and on statement_timeout the catch left
+`columnEnsured` false so all eleven re-ran on the NEXT write tick. Its own
+comment already flagged the danger for the INCLUDE case ("would leave
+columnEnsured false and re-run every ALTER on every single write") - it just
+applied to all of them.
+
+Cost today: roughly 14:38-15:11 ET of snapshot minutes are missing or partial
+and 15:12 onward was dark until the lock was cleared. Those rows are
+point-in-time chain state and cannot be backfilled from anything - the table is
+pruned to 48h and nothing else stores per-strike gamma/IV/DEX at that minute.
+The chart heals forward only.
+
+Now: a catalog precheck (`pg_attribute`/`pg_class`, no lock on the table)
+decides what is actually missing, so the steady state takes no lock and is
+never checked again in that process; only genuinely absent columns/indexes get
+a statement; those run on a dedicated client with `lock_timeout = '3s'` and
+`RESET ALL` before release; failures back off 5 minutes. The INCLUDE fallback
+for `idx_osgh_symbol_snap` is kept. Losing a snapshot minute is permanent and
+delaying a column add is not, so the write wins that trade.
+
+`server-v2/gex-history-writer.js`
+
+## 2026-09-16 (h) - The es_candles migration was taking the site down every request
+
+Site-wide `canceling statement due to statement timeout` on unrelated queries -
+`ensureAllTables`, `greeks-ts`, `gex-change-top`, `tpo-profiles`, `auto-mvc`,
+`/proxy/gex-vol-flow` 500 (the bubbles card drew nothing because its request
+errored). `pg_stat_activity` had three `ALTER TABLE es_candles DROP CONSTRAINT`
+statements in `Lock: relation` for 80+ seconds with readers queued behind them.
+
+`ensureEsCandlesContract()` in `_lib-db.cjs` ran five DDL statements with no
+`lock_timeout`. Every one takes ACCESS EXCLUSIVE on es_candles, the es-candle
+writers stream into it constantly, so the ALTER could not get its lock - and a
+DDL statement WAITING on a lock is not passive: Postgres queues lock requests
+FIFO, so every SELECT and INSERT arriving after it parked behind it. The ALTER
+then hit statement_timeout, the catch cleared `_contractEnsured` so the next
+`getDb()` would retry, `getDb()` runs on every request, and the jam re-formed
+instantly. The migration was ALREADY FULLY APPLIED (`has_col 1, old_uniques 0,
+has_new 1, has_idx 1`) - it was locking the table every request to do nothing.
+
+Now: a catalog-only precheck (`pg_attribute`/`pg_constraint`/`pg_class`, which
+lock nothing on es_candles) returns early when it is applied, so the steady
+state takes no lock at all; each statement is guarded on its own so a
+half-applied table finishes without redoing the done parts; the DDL that does
+run goes through a dedicated client with `lock_timeout = '3s'` and `RESET ALL`
+before release; and a failure backs off 5 minutes instead of retrying on the
+very next request.
+
+Also set on the database as a belt-and-braces stop, outside the repo:
+`ALTER ROLE CURRENT_USER SET lock_timeout = '3s'`.
+
+`server-v2/_lib-db.cjs`
+
 ## 2026-09-16 (g) - /api/whale-alerts restored: the route had been deleted, not un-deployed
 
 `Could not reach your tracked list - 501` was not a deploy lag. The whole

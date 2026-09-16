@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { ContractProbe, ProbeChart } from '@/board/topFlow/ContractProbe'
+import { ContractProbe } from '@/board/topFlow/ContractProbe'
 import { fmtPremium, fmtStrike } from '@/data/flowMath'
 import { alertToRow, type AlertsStore, type WhaleAlert } from './alertsStore'
 
@@ -325,7 +325,22 @@ function AlertRow({ a, mark, open, onToggle, store }: {
       {open && (
         <tr>
           <td colSpan={9} className="border-t border-line bg-surface2 p-0">
-            <div className="grid grid-cols-1 gap-2 p-2 lg:grid-cols-2">
+            {/* ── ONE PANE, THE LIVE ONE ──────────────────────────────────────
+                This was a two-up: live on the left, the bars frozen at the
+                minute you tracked it on the right. The frozen pane is gone.
+                The live probe already carries the entry rung, the marker at
+                the moment of the print and the move against it, so "what has
+                it done since" is legible in one picture — and the pair cost
+                half the width to say it twice, at half the resolution, with a
+                RE-SNAPSHOT button whose job was to keep the weaker half
+                current.
+
+                The snapshot itself is still taken and still stored server-side
+                (see the SNAPSHOT note in api-router.js) — it is the one thing
+                about a tracked contract that cannot be rebuilt later, so it
+                keeps being recorded whether or not anything draws it.
+            ──────────────────────────────────────────────────────────────── */}
+            <div className="p-2">
               <div className="flex min-h-[380px] flex-col rounded-sm border border-line bg-surface">
                 <div className="border-b border-line px-3 py-1 text-3xs font-bold uppercase tracking-[0.11em] text-faint">
                   Live — redrawn from the saved contract
@@ -339,43 +354,6 @@ function AlertRow({ a, mark, open, onToggle, store }: {
                   // contract the lookup panel makes.
                   entryAt={a.printTs ?? null}
                 />
-              </div>
-
-              <div className="flex flex-col rounded-sm border border-line bg-surface">
-                <div className="flex items-center gap-2 border-b border-line px-3 py-1">
-                  <span className="text-3xs font-bold uppercase tracking-[0.11em] text-faint">
-                    {a.snapshot ? `Tracked — frozen ${fmtTime(a.snapshot.at)}` : 'Tracked'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => store.resnapshot(a.id)}
-                    title="Replace the frozen picture with where the contract is now"
-                    className="ml-auto rounded-sm border border-accent/50 bg-accent/10 px-1.5 py-0.5 text-3xs font-bold uppercase tracking-[0.08em] text-accent hover:bg-accent/20"
-                  >
-                    Re-snapshot
-                  </button>
-                </div>
-                {a.snapshot?.bars?.length ? (
-                  <>
-                    <div className="px-2 pt-2">
-                      <ProbeChart
-                        bars={a.snapshot.bars}
-                        entry={a.entryPrice}
-                        entryTs={a.printTs ?? null}
-                        size={a.printSize}
-                      />
-                    </div>
-                    <div className="tabular px-3 py-2 text-3xs text-faint">
-                      The bars as they stood the minute you tracked it. The live pane is the same
-                      contract today — the pair is the answer to "what has it done since".
-                    </div>
-                  </>
-                ) : (
-                  <div className="px-3 py-6 text-2xs leading-relaxed text-faint">
-                    No frozen picture for this one — the contract had no bars when it was tracked.
-                    RE-SNAPSHOT takes one now.
-                  </div>
-                )}
               </div>
             </div>
           </td>

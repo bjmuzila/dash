@@ -228,18 +228,6 @@ function Card({ title, note, className, children }: {
   )
 }
 
-/** A bullish/bearish split bar. Both halves are drawn from the same total so
- *  two rows are comparable to each other, not just internally. */
-function SplitBar({ bull, bear, max }: { bull: number; bear: number; max: number }) {
-  const w = (v: number) => `${max > 0 ? Math.max(0, (v / max) * 100) : 0}%`
-  return (
-    <div className="flex h-[7px] overflow-hidden rounded-sm bg-fg/10">
-      <i className="block h-full bg-up" style={{ width: w(bull) }} />
-      <i className="block h-full bg-down" style={{ width: w(bear) }} />
-    </div>
-  )
-}
-
 export default function Whales() {
   // Lazy initialiser, not a useEffect that overwrites afterwards: reading
   // storage on first render means the first fetch already goes out with the
@@ -454,10 +442,6 @@ export default function Whales() {
   // denominator is those two and not `total` — see the tile note below.
   const readable = (s?.bull ?? 0) + (s?.bear ?? 0)
   const pctOf = (v: number) => (readable > 0 ? `${Math.round((v / readable) * 100)}% of readable premium` : '—')
-  const tickerMax = useMemo(
-    () => Math.max(1, ...(d?.tickers ?? []).map((x) => Number(x.total))),
-    [d],
-  )
   const bucketMax = useMemo(
     () => Math.max(1, ...(d?.buckets ?? []).map((x) => Number(x.total))),
     [d],
@@ -955,36 +939,67 @@ export default function Whales() {
               new row and drew them full width under the table. The grid has
               two columns, so it gets exactly two children.
           ──────────────────────────────────────────────────────────── */}
+          {/* ── WHERE THE SIZE WENT: TWO RANKINGS, NOT ONE ────────────────────
+              One list ranked by TOTAL with a split bar made the card answer
+              "who printed the most", and left "who is the biggest bullish bet
+              and who is the biggest bearish bet" to be eyeballed off the ratio
+              of two colours in a seven-pixel bar. Those are the two questions
+              actually being asked of it, so they get a column each, sorted on
+              their own side.
+
+              The two columns are NOT the same tickers in the same order, and
+              that is the point — a name can top one and be absent from the
+              other. Each bar is scaled to the biggest value in ITS OWN column,
+              so within a column the lengths compare; across columns they do
+              not, which is why the dollar figure is always on the row.
+
+              Both columns draw from the same server list (the top tickers by
+              total premium for the range), so a name that never cracks that
+              list cannot appear here even if it leads one side. Widening it is
+              a `tickers` limit change on /api/lse/whales, not a UI change.
+          ──────────────────────────────────────────────────────────────────── */}
           <Card title="Where the size went" note={span.label}>
-            <div className="py-1">
-              {(d?.tickers ?? []).map((t) => (
-                <button
-                  key={t.ticker}
-                  type="button"
-                  onClick={() => setTicker((cur) => (cur.toUpperCase() === t.ticker ? '' : t.ticker))}
-                  className="grid w-full grid-cols-[52px_1fr_92px] items-center gap-2 px-3 py-1.5 text-left hover:bg-raised"
-                  title={`${num(t.n)} prints · ${money(t.total)} · ${money(Number(t.bull))} bullish vs ${money(Number(t.bear))} bearish`}
-                >
-                  <span className="text-sm font-semibold text-fg">{t.ticker}</span>
-                  <SplitBar bull={Number(t.bull)} bear={Number(t.bear)} max={tickerMax} />
-                  {/* The bar has always been split bull/bear; the NUMBER beside it
-                      was a single total, so the one thing this card is for — how
-                      lopsided a ticker is — had to be eyeballed off seven pixels
-                      of bar. Both sides are now spelled out under the total in
-                      their own ink. They do NOT have to add up to it: prints with
-                      no readable side count in the total and in neither half, the
-                      same split the tiles at the top of the page make. */}
-                  <span className="text-right">
-                    <span className="tabular block text-xs text-muted">{money(t.total)}</span>
-                    <span className="tabular block text-3xs leading-tight">
-                      <span className="text-up">{money(Number(t.bull))}</span>
-                      <span className="text-faint"> / </span>
-                      <span className="text-down">{money(Number(t.bear))}</span>
-                    </span>
-                  </span>
-                </button>
-              ))}
-              {!d?.tickers.length && <div className="px-3 py-2 text-sm text-faint">Nothing in range.</div>}
+            <div className="grid grid-cols-2 gap-px bg-line">
+              {([
+                { key: 'bull' as const, label: 'Bullish', ink: 'text-up', bar: 'bg-up' },
+                { key: 'bear' as const, label: 'Bearish', ink: 'text-down', bar: 'bg-down' },
+              ]).map((side) => {
+                const list = (d?.tickers ?? [])
+                  .map((t) => ({ ticker: t.ticker, n: Number(t.n), v: Number(t[side.key]), total: Number(t.total) }))
+                  // A ticker with nothing on this side is not a zero-length bar,
+                  // it is not on this side. Dropping it keeps the column short
+                  // and honest instead of padding it with names at $0.
+                  .filter((x) => x.v > 0)
+                  .sort((a, b) => b.v - a.v)
+                const max = Math.max(1, ...list.map((x) => x.v))
+                return (
+                  <div key={side.key} className="min-w-0 bg-surface py-1">
+                    <div className={['px-2.5 pb-1 text-2xs font-bold uppercase tracking-[0.11em]', side.ink].join(' ')}>
+                      {side.label}
+                    </div>
+                    {list.map((x) => (
+                      <button
+                        key={x.ticker}
+                        type="button"
+                        onClick={() => setTicker((cur) => (cur.toUpperCase() === x.ticker ? '' : x.ticker))}
+                        className="block w-full px-2.5 py-1 text-left hover:bg-raised"
+                        title={`${x.ticker} — ${money(x.v)} ${side.label.toLowerCase()} of ${money(x.total)} total · ${num(x.n)} prints`}
+                      >
+                        <span className="flex items-baseline justify-between gap-1.5">
+                          <span className="truncate text-xs font-semibold text-fg">{x.ticker}</span>
+                          <span className={['tabular shrink-0 text-2xs', side.ink].join(' ')}>{money(x.v)}</span>
+                        </span>
+                        <span className="mt-0.5 block h-[5px] overflow-hidden rounded-sm bg-fg/10">
+                          <i className={['block h-full', side.bar].join(' ')} style={{ width: `${(x.v / max) * 100}%` }} />
+                        </span>
+                      </button>
+                    ))}
+                    {!list.length && (
+                      <div className="px-2.5 py-2 text-2xs text-faint">Nothing {side.label.toLowerCase()} in range.</div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </Card>
 
