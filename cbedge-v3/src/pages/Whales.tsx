@@ -948,15 +948,13 @@ export default function Whales() {
               </div>
             )}
           </Card>
-        </div>
 
-        {/* ── the rail ───────────────────────────────────────────────────────
-            Three roll-ups over the SAME filtered range as the table, each a
-            filter you can click back into it. They belong beside the prints,
-            not under them: read together they are "who, when, and again?" for
-            the list on the left.
-        ────────────────────────────────────────────────────────────────────── */}
-        <div className="flex min-w-0 flex-col gap-2">
+          {/* ── the roll-ups ────────────────────────────────────────────────────────────
+              Under the lookup, IN THE SAME COLUMN. These were briefly a
+              third child of a two-column grid, which wrapped them onto a
+              new row and drew them full width under the table. The grid has
+              two columns, so it gets exactly two children.
+          ──────────────────────────────────────────────────────────── */}
           <Card title="Where the size went" note={span.label}>
             <div className="py-1">
               {(d?.tickers ?? []).map((t) => (
@@ -964,12 +962,26 @@ export default function Whales() {
                   key={t.ticker}
                   type="button"
                   onClick={() => setTicker((cur) => (cur.toUpperCase() === t.ticker ? '' : t.ticker))}
-                  className="grid w-full grid-cols-[56px_1fr_74px] items-center gap-2 px-3 py-1.5 text-left hover:bg-raised"
-                  title={`${num(t.n)} prints · ${money(t.total)}`}
+                  className="grid w-full grid-cols-[52px_1fr_92px] items-center gap-2 px-3 py-1.5 text-left hover:bg-raised"
+                  title={`${num(t.n)} prints · ${money(t.total)} · ${money(Number(t.bull))} bullish vs ${money(Number(t.bear))} bearish`}
                 >
                   <span className="text-sm font-semibold text-fg">{t.ticker}</span>
                   <SplitBar bull={Number(t.bull)} bear={Number(t.bear)} max={tickerMax} />
-                  <span className="tabular text-right text-xs text-muted">{money(t.total)}</span>
+                  {/* The bar has always been split bull/bear; the NUMBER beside it
+                      was a single total, so the one thing this card is for — how
+                      lopsided a ticker is — had to be eyeballed off seven pixels
+                      of bar. Both sides are now spelled out under the total in
+                      their own ink. They do NOT have to add up to it: prints with
+                      no readable side count in the total and in neither half, the
+                      same split the tiles at the top of the page make. */}
+                  <span className="text-right">
+                    <span className="tabular block text-xs text-muted">{money(t.total)}</span>
+                    <span className="tabular block text-3xs leading-tight">
+                      <span className="text-up">{money(Number(t.bull))}</span>
+                      <span className="text-faint"> / </span>
+                      <span className="text-down">{money(Number(t.bear))}</span>
+                    </span>
+                  </span>
                 </button>
               ))}
               {!d?.tickers.length && <div className="px-3 py-2 text-sm text-faint">Nothing in range.</div>}

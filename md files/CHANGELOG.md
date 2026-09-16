@@ -1,44 +1,15 @@
 # Changelog
 
-## 2026-09-16 (e) - Probe: the AM monthly is gone from index chains
+## 2026-09-16 (e) - Whales: WHERE THE SIZE WENT spells out the bull/bear split
 
-Probing SPX 7700C for the 9/18 monthly came back at **0.13**. The contract was
-9.35. The probe was not mispricing it - it was pricing a different strike.
+The bar was already split green/red, but the figure beside it was one total — so
+"how lopsided is this ticker" had to be read off seven pixels of bar. Each row
+now carries the two sides under the total in their own ink (`$44.05M / $15.90M`,
+up over down). They deliberately do not add up to the total: prints with no
+readable side count in the total and in neither half, same as the tiles at the
+top of the page. Value column widened 74 -> 92px to fit.
 
-`fetchChain()` -> `preferPmSettlement()` only collapsed AM/PM collisions on the
-same `expiration|strike|type` key. The AM-settled monthly also lists strikes the
-PM item never carries (8065 on this expiration), and those orphans survived. They
-were then the only rows left with `rootSymbol === "SPX"` on that date, and
-`probeRestTT()` preferred the root the caller typed - so every SPX strike typed
-for 9/18 snapped onto a dead AM leg quoted at pennies. 7615 resolved to 8065 too.
-The card showed the strike you typed, so nothing on screen said so.
-
-- `preferPmSettlement(contracts, root)` now PURGES rather than de-duplicates: on
-  an index root, an expiration that lists any PM leg loses every AM leg, orphan
-  strikes included. AM-only expirations and every non-index ticker pass through
-  untouched.
-- `probeRestTT()` no longer filters candidates by the typed root. The purge
-  leaves one contract per strike and all of them are the live PM leg, so `SPX`
-  and `SPXW` now resolve identically.
-
-The AM monthly is unreachable through this proxy for index roots, which is the
-intent - after 09:30 ET it is settled, its OI is frozen and its greeks are dead.
-
-Files: `server-v2/proxy-tastytrade.js`.
-
-## 2026-09-16 (d) - Whales: the rail is back, and the tracked card comes up with it
-
-The two-column grid had only one child, so WHERE THE SIZE WENT, EXPIRY BUCKETS
-and REPEAT STRIKES were stacked under the prints table instead of in the 320px
-rail beside it, and the 320 column rendered empty. They are back in the rail.
-
-The prints card now GROWS to the rail's height (`flex-1`, table scrolling inside
-with a 420px floor) rather than stopping dead at `max-h-[480px]`. That fixed
-height was what left the wide empty band between the table and TRACKED
-CONTRACTS - the grid row was as tall as the rail, the left column was not, and
-the tracked card sat below all of it. It now follows the prints directly.
-
-`cbedge-v3/src/pages/Whales.tsx` - `Card` takes an optional `className`.
+`cbedge-v3/src/pages/Whales.tsx`
 
 ## 2026-09-16 - budget.cbedge.net reads the statement, like the laptop does
 
