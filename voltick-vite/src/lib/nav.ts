@@ -114,6 +114,13 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
         status: "live",
         external: true,
       },
+      {
+        label: "Customer card",
+        path: "/customer-card",
+        key: "CustomerCard",
+        note: "One customer on one screen: identity, money, usage and the page feed, with no tabs to open.",
+        status: "live",
+      },
     ],
   },
   {

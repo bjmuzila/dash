@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-09-16 (d) - Voltick: the customer card, as a page instead of a modal
+
+The dossier mockup, built for real on voltick.cbedge.net at `/customer-card`.
+One customer on one screen, no tabs: Identity, Money and Usage across the top,
+the page feed and the share-of-time bars underneath, a roster strip above it
+that swaps the card. Today / 7d / 30d / All switches the feed between event
+rows and one-row-per-day summaries.
+
+A page rather than a modal on purpose. The modal shape is what the owner
+console will want when a name is clicked in Subscriptions or on the map, but a
+route is linkable, deep-linkable and testable, and it is the same component
+either way.
+
+Every record is synthetic and lives in `customerData.ts` with the field names
+the owner console already uses, so it can be pointed at a real endpoint later
+without the layout moving. The three header buttons are inert: a live "Reset
+password" here would mail a token to a made-up address.
+
+Colors: none of the reserved data colors appear (a plan is not a level on a
+board). Chrome is ACCENT and SKY; GOOD and BAD mark only the two states that
+are money arriving or money stopping. The share bars rank by accent opacity
+rather than by hue.
+
+`voltick-vite/src/pages/customer/CustomerCard.tsx` (new)
+`voltick-vite/src/pages/customer/customerData.ts` (new)
+`voltick-vite/src/lib/nav.ts`, `voltick-vite/src/pages/registry.ts`
+
 ## 2026-09-16 (c) - Probe chart: the canvas is measured, so the type stops scaling with the pane
 
 The chart is `width: 100%` over a FIXED viewBox, and every size inside it is in

@@ -15,6 +15,7 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   Colors: lazy(() => import("./Colors")),
   FeedCheck: lazy(() => import("./FeedCheck")),
   Seasonality: lazy(() => import("./Seasonality")),
+  CustomerCard: lazy(() => import("./customer/CustomerCard")),
   // Overview, SurfaceMap, Vocabulary and Questions are listed in nav.ts and
   // render Placeholder until a component lands here.
 };
