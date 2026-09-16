@@ -22643,3 +22643,22 @@ break split from `GET /api/ib-results`; `ib_break` reduced to one per session.
 `getRecentSignals` now SELECTs `meta`. Owner switchboard
 (`owner-vite/src/components/OwnerControls.tsx`) flattened, Discord wording gone.
 Self-test gained cases 9a–9d, 10 and 11.
+
+
+## 2026-09-16 — Signal Alerts as a phone tab (`/v3/m/alerts`)
+
+New `cbedge-v3/src/mobile/pages/MAlerts.tsx` — a full-height feed with the filter
+chips pinned under the header, registered as the sixth tab in
+`cbedge-v3/src/mobile/mobileNav.ts` (`alerts`, 🔔, "Alert", plus a
+`MOBILE_TO_DESKTOP` mapping to `/`) and routed from `cbedge-v3/src/App.tsx`
+(`lazy()` + `<Route path="/m/alerts">`). Layout is the only phone-side code: the
+20s poll (`useAlertsFeed`), the catalogue (`ALERT_TYPES` / `TYPE_BY_ID`) and the
+filter + master state (`readShown` / `writeShown`, `fetchMasterEnabled`) are all
+imported from `src/shell/AlertsFeed.tsx` and `src/shell/alertTypes.ts`.
+
+`cbedge-v3/AGENTS.md`: phone-build table gained the `/m/alerts` row and a note
+explaining the exception — the feed is toolbar chrome on the desktop and
+`Shell.tsx` drops the toolbar on `/m/*`, so without a tab it is unreachable on a
+phone. `app/v3/m/[tab]/route.ts` untouched; that handler is already generic.
+
+Mockup: `generated/2026-09-16-mobile-alerts-tab.html`.

@@ -388,6 +388,10 @@ export const ChainMatrix = memo(function ChainMatrix({
   const ghostTemplate =
     (ghostExpCols > 0 ? ` repeat(${ghostExpCols}, minmax(${isCountMode ? 84 : 78}px, 1fr))` : '') +
     (ghostTotalCols > 0 ? ` minmax(${isCountMode ? 92 : 88}px, 1.15fr)` : '')
+  // `data-capture-trim` on the first reserved cell of the header row is where a
+  // CopyShot stops: the picture is the grid as far as that element's left edge,
+  // so a hidden-column shot frames what is on screen instead of the empty space
+  // held open beside it. See shell/snapshot.ts.
   const ghostCells = (keyPrefix: string, header = false) =>
     ghostCols === 0
       ? null
@@ -395,6 +399,7 @@ export const ChainMatrix = memo(function ChainMatrix({
           <div
             key={`${keyPrefix}-ghost-${g}`}
             aria-hidden
+            {...(header && g === 0 ? { 'data-capture-trim': '' } : {})}
             style={
               header
                 ? { position: 'sticky', top: 0, zIndex: 3, background: HDR_BG, borderBottom: `1px solid ${T.border}` }
@@ -407,11 +412,17 @@ export const ChainMatrix = memo(function ChainMatrix({
     <div
       style={{
         display: 'grid',
+        // Reserved tracks sit AFTER the mirrored strike rail, not before it. Two
+        // things fall out of that: the right-hand strike numbers stay beside the
+        // data they mirror instead of being pushed to the far edge by empty
+        // space, and everything the grid actually draws ends up in one unbroken
+        // block on the left — which is what lets a screenshot stop at the first
+        // reserved track (data-capture-trim) and still contain both rails.
         gridTemplateColumns: `${STRIKE_COL}px ${renderIdx
           .map(() => `minmax(${isCountMode ? 84 : 78}px, 1fr)`)
           .join(' ')}${
           showTotalCol ? ` minmax(${isCountMode ? 92 : 88}px, 1.15fr)` : ''
-        }${ghostTemplate} ${STRIKE_COL}px`,
+        } ${STRIKE_COL}px${ghostTemplate}`,
         borderRadius: 12,
         overflow: 'clip',
         border: `1px solid ${T.border}`,
@@ -504,8 +515,8 @@ export const ChainMatrix = memo(function ChainMatrix({
           </div>
         </div>
       )}
-      {ghostCells('hdr', true)}
       <div style={cornerStyle('right')}>Strike</div>
+      {ghostCells('hdr', true)}
 
       {/* ── One row per shared strike ── */}
       {rowStrikes.map((strike, rowIdx) => {
@@ -521,8 +532,8 @@ export const ChainMatrix = memo(function ChainMatrix({
               {showTotalCol && (
                 <div style={{ padding: '2px 8px', fontSize: 12, borderLeft: `2px solid ${alpha(T.cyan, 0.25)}` }} />
               )}
-              {ghostCells(`pad-${rowIdx}`)}
               <div style={{ ...railBase('right'), padding: '2px 8px', fontSize: 12 }} />
+              {ghostCells(`pad-${rowIdx}`)}
             </div>
           )
         }
@@ -930,8 +941,8 @@ export const ChainMatrix = memo(function ChainMatrix({
                 )
               })()}
 
-            {ghostCells(`row-${strike}`)}
             {rail('right')}
+            {ghostCells(`row-${strike}`)}
           </div>
         )
       })}

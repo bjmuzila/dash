@@ -34,7 +34,7 @@
  */
 
 import type { NextRequest } from "next/server";
-import { buildSnapshotHTML, PILL_NUDGE_EM_HEADLESS } from "@/lib/discord/econSnapshot";
+import { buildSnapshotHTML, PILL_NUDGE_EM_HEADLESS, pickSnapshotEarnings, MIN_EARN_MCAP } from "@/lib/discord/econSnapshot";
 import { BRAND_LOGO_SRC } from "@/lib/brand";
 import type { CalEvent, EarnRow } from "@/lib/discord/econSnapshot";
 
@@ -105,14 +105,14 @@ export async function GET(req: NextRequest) {
   const feedOk = feedSource !== "unavailable" && !calJson.error;
   const quote: string = typeof quoteJson.quote === "string" ? quoteJson.quote : "";
 
-  // /proxy/earnings-week returns the whole week — today only, biggest first.
-  // Identical filter/sort to buildCalendarTemplateImage(); if one changes the
-  // other must, or the button and the cron stop agreeing on the earnings lane.
+  // /proxy/earnings-week returns the whole week. pickSnapshotEarnings narrows it
+  // to today, $1B+, biggest first — the ONE copy of that rule, shared with the
+  // browser button, so the two surfaces cannot drift apart on the earnings lane
+  // (they each held their own copy of the filter until this call replaced both).
   const today = etToday();
   const allEarn: EarnRow[] = Array.isArray(ernJson.rows) ? (ernJson.rows as EarnRow[]) : [];
-  const earnings: EarnRow[] = allEarn
-    .filter((r) => r.date === today)
-    .sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
+  const earnings: EarnRow[] = pickSnapshotEarnings(allEarn, today);
+  const earnTodayAll = allEarn.filter((r) => r.date === today).length;
 
   const logoDataUrl = await getImageDataUrl(BRAND_LOGO_SRC);
 
@@ -153,7 +153,8 @@ export async function GET(req: NextRequest) {
   console.log(
     `[econ-snapshot] origin=${origin} feed=${feedOk ? feedSource || "ok" : "unavailable"} ` +
     `events=${events.length} today=${todays.length} econ=${econCount} pres=${presCount} ` +
-    `earn=${earnings.length} logos=${Object.keys(tickerLogos).length} logo=${logoDataUrl ? "y" : "n"} ` +
+    `earn=${earnings.length}/${earnTodayAll} (mcap>=${MIN_EARN_MCAP / 1e9}B) ` +
+    `logos=${Object.keys(tickerLogos).length} logo=${logoDataUrl ? "y" : "n"} ` +
     `nudge=${pillNudgeEm}` +
     (feedWarning ? ` warning=${feedWarning}` : "")
   );

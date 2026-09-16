@@ -1,114 +1,5 @@
 # Changelog
 
-## 2026-09-15 (i) - Customers: Home board · visitation card
-
-Under Pages being visited: the home board on its own (v3 `/v3`, `/v3/home` and legacy `/home`), bucketed at the header granularity - loads and distinct people side by side, with range totals (loads · people · with accounts · paying). Owner and bot rows excluded. Lives in `Customers.tsx` as `HomeVisitationCard`.
-
-## 2026-09-15 (h) - Visitors map back on its own page
-
-`/owner/visitors` is a real page again (restored verbatim, plus a Customers → button); the map is out of the Customers page, which links to it with a Map → button. The `/owner/visitors` redirect is gone; Info group is now Sales · Customers · Visitors · Admin. Names in the map's pinned card still open the customer card.
-
-## 2026-09-15 (g) - v3 board: which ticker each customer is looking at
-
-**Beacon.** `cbedge-v3/src/data/symbol.tsx` now logs the board's page symbol
-to the existing `ticker_events` log (`POST /api/ticker-event`, source `home`):
-`render` once per mount for the symbol the board opened on, `click` whenever
-the viewer switches it. sendBeacon, fire-and-forget, never awaited; a free
-session's 403 is ignored. Nothing retroactive - counts start at deploy.
-
-**Where it shows.** Customers page gets a third ticker card, **Home · Board
-Tickers** (clicks = switches, impressions = opened-on), beside Flow and EM.
-The customer card's Usage tile lists that person's board tickers for the
-selected window (switch count, or "opened on" for defaults), and ticker events
-are interleaved into the page feed as `TKR switched to NVDA · Home board` rows
-so the session reads as one story. `/api/admin/customer` now returns
-`tickers[]` (per source+ticker rollup) and feed rows carry `kind: "visit" |
-"ticker"`.
-
-## 2026-09-15 (f) - Owner site: click any customer name → customer card
-
-**One click, the whole person.** Every email printed on the owner site — the
-Sales subscription and cancellation tables, every list on Customers (never
-bought, not paying, activity, Discord, Far CB, unsubscribes, feedback) and the
-map's pinned visitor card — is now a `<CustomerName>` that opens a modal
-dossier (design: idea 1 of `generated/2026-09-15-customer-card-idea-*.png`).
-
-**What the card shows.** Header: email, verified dot, status chip (paying /
-cancelling · ends date / cancelled / comped / past due / reached checkout /
-free), plan chip, coupon chip, Discord, unsubscribed, open-feedback count;
-actions Email (deep-links Emails → Custom with the address prefilled via new
-`?to=`), Reset password, Stripe ↗. Three tiles: **Identity** (location + IP,
-member since, last login + login count, came from with landing path, device,
-sign-in method, Discord link date, email preference), **Money** (total spent +
-invoice count, plan + status, coupon with % and duration, renews/ends,
-cancellation reason + survey answer + free-text comment, failed payments, first
-paid), **Usage** for the selected window (loads, sessions, time, pages) with
-lifetime totals, most-used page and Far CB tickers. Below: the **page feed**
-grouped by ET day with time-per-page (gap to the next load, 30-min session
-cap, last page of a session shows —; pricing / checkout / account rows are
-flagged), a Today / 7d / 30d / All switch, the **share-of-time** bars per page,
-and an **Also on file** tile (feedback items, emails sent, comp grant, recent
-invoices with hosted links).
-
-**Backend.** New owner-only `GET /api/admin/customer?email=` (or `?userId=`)
-in `server-v2/api-router.js`. Reads users + sessions, the last 400 page_visits
-(sessionised and timed), the local subscriptions row, subscription_cancellations,
-user_attribution, customer_feedback, far_cb_custom_tickers, email_unsubscribes,
-comp_access and email_sends, plus a live Stripe pull (subscriptions with
-discounts expanded, invoices, customer) when a stripe_customer_id exists.
-Every section is best-effort: a failed source lands in `warnings[]` and blanks
-its own tile instead of failing the card.
-
-**Wiring.** `owner-vite/src/components/CustomerCard.tsx` exports
-`openCustomerCard(email)`, `<CustomerName>` and `<CustomerCardHost>`. The host is
-mounted once in `OwnerShell.tsx`; names dispatch a window event, so no page
-threads props or context. Esc / backdrop click closes; ↻ reloads.
-
-## 2026-09-15 (e) - Sales: Active Subscriptions + Cancellations moved up under Profit per Month
-
-Order is now KPIs → Profit per Month → Active Subscriptions / Cancellations → Revenue by source → Campaign Links → Expenses. The chart says what happened this month; the two lists right under it are the names behind it.
-
-## 2026-09-15 (d) - Owner site: customer info consolidated onto three Info pages
-
-**The problem.** owner.cbedge.net's Info group had four pages - Admin,
-Visitors, Overview, Sales - and the customer picture was smeared across all of
-them. Traffic charts, top pages and acquisition sat on Overview; the world map
-was its own page; the per-person lists (activity, Discord, unsubscribes,
-feedback, not-paying) were on Admin; the "signed up, never bought" funnel was
-on Sales. Same question, four tabs, four different time windows.
-
-**Now: one page per job.**
-
-| Page | Route | What it is |
-|---|---|---|
-| **Sales** | `/owner/dev/sales` | The money. Stripe KPIs, profit per month, revenue by source, subscriptions, cancellations, expenses - plus the **Campaign Link Builder**, moved here from Overview because this is the page where you find out whether a link paid. |
-| **Customers** (new) | `/owner/customers` | The people. KPI strip (visits, users, subscribers, on today, logged in, waitlist), traffic / signups / cumulative charts, top pages, the **world map**, acquisition, Flow + EM ticker visits, then every by-name list: signed up · never bought, signed up · not paying, customer activity, Discord connections, Far CB tickers, unsubscribes, feedback. |
-| **Admin** | `/owner/dev/admin` | The machine. **System health** (status dots, server tiles, Hetzner + Cloudflare hosting strip, rows written today - the top of the old Overview), Controls, System Checks, Voltick Access, Comped Access. |
-
-**Retired.** Overview (`/owner/dev/owner`) and Visitors (`/owner/visitors`)
-no longer exist as pages; both hrefs redirect to `/owner/customers` via a new
-`OWNER_REDIRECTS` list in `owner-vite/src/lib/nav.ts`, rendered by `App.jsx`
-as `<Navigate replace>`, so bookmarks keep working. `pages/ControlPanel.tsx`
-(3,272 lines) and `pages/Visitors.tsx` are now comment-only stubs, out of the
-registry and the build - **delete both files** when convenient; nothing
-imports them. The dead `{false && ...}` levels-publish block that ControlPanel
-still polled `/proxy/levels-status` for every 60s went with it.
-
-**Files.**
-- `owner-vite/src/pages/Customers.tsx` - new. ControlPanel's bucketers, KPI strip, MetricsTabSection, TopPagesCard and TickerVisitsCard, minus every system tile, plus the Visitors page's fetch/range/beacon-age logic. ONE `/api/page-visits` fetch (server-side range picker: Today / 7d / 30d / 90d / All, opens on All) feeds the strip, charts, top pages, map and acquisition; hourly refresh + refetch on tab focus, as Visitors did. The granularity picker only changes chart bucketing.
-- `owner-vite/src/components/SystemHealth.tsx` - new. Self-contained: owns the `/ws/gex` status tap and the 60s poll of `/proxy/idle`, `/api/db` counts, `/api/db/health`, hetzner/cloudflare metrics, `/proxy/self-metrics`. Renders status dots + SystemStrip + HostingStrip (own Live / 7d / 30d switch, since the upstreams have no yearly) + rows-written card.
-- `owner-vite/src/components/customerPanels.tsx` - the six per-person panels lifted verbatim out of Admin.tsx, exported.
-- `owner-vite/src/components/SignupsPanel.tsx` - "Signed up · never bought", lifted verbatim out of Sales.tsx.
-- `owner-vite/src/lib/utils.ts` - `fmtRelative` shared (was duplicated in Admin).
-- `Admin.tsx` shrank from 1,433 to ~720 lines; `Sales.tsx` lost the signups block and gained a one-shot `/api/page-visits?days=90` fetch for the link builder's "already used" chips.
-- `nav.ts` Info group is now Sales · Customers · Admin. `OWNER_CONTROL_SECTIONS` (the one-tab tab list) is gone.
-- `OwnerControls.tsx` header comment: the duplicate quick-toggles it referenced no longer exist.
-- `Hub.tsx` Voltick card copy: "managed under Voltick Access on Admin" (it is no longer the top panel).
-
-`tsc --noEmit`, `check-owner-pages.mjs` and `vite build` all pass; all three
-pages and both redirects rendered in a headless smoke test against mocked
-endpoints.
-
 ## 2026-09-15 (c) - The feed reconnects itself when dxLink goes quiet
 
 **A dead feed that looks alive.** dxLink's worst failure mode is the socket
@@ -23608,3 +23499,30 @@ Same rule in the ⅀ Total column, against its own summed core.
 Files: `cbedge-v3/src/pages/OptionsChain.tsx`,
 `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`,
 `cbedge-v3/src/pages/optionsChain/useChainData.ts`.
+
+## 2026-09-16 — v3 Options Chain: a screenshot frames what is on screen, not the reserved space
+
+With HIDE REST on, the grid holds the hidden expiries' tracks open so the visible
+columns keep their width — and CopyShot photographed all of it, so a three-column
+shot was mostly empty page.
+
+Two changes:
+
+- **The reserved tracks moved to the far right**, after the mirrored strike rail
+  rather than before it (`gridTemplateColumns` and the matching DOM order in the
+  header, padding and strike rows). The right-hand strike numbers now sit beside
+  the data they mirror instead of being pushed to the edge by empty space, and
+  everything the grid actually draws is one unbroken block on the left.
+- **New capture contract: `data-capture-trim`.** The shot is cropped at that
+  element's left edge. ChainMatrix puts it on the first reserved header cell, so
+  the picture ends where the content does and still contains both rails.
+
+The crop happens AFTER rasterising, not by rendering into a narrower box: the
+chain's tracks are `minmax(78px, 1fr)`, so a narrower clone would squeeze the
+real columns instead of dropping the empty ones. The clone is built at full
+width and the canvas is cut, so surviving pixels are identical to an uncropped
+shot. `shotScale` is measured on the cropped width, so discarded pixels no longer
+buy the picture a coarser scale.
+
+Files: `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`,
+`cbedge-v3/src/shell/snapshot.ts`.

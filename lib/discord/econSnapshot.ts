@@ -22,6 +22,7 @@
 
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { BRAND_LOGO_SRC, BRAND_LOGO_ASPECT } from "@/lib/brand";
+import { ANTICIPATED_SYMBOLS } from "@/lib/econCalendar";
 
 // NOTE: lib/snapshot (html2canvas) is imported DYNAMICALLY inside
 // renderAndCapture(), not at module scope. Everything above the "Off-screen
@@ -96,6 +97,46 @@ export interface CalEvent {
 
 function etToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+}
+
+/**
+ * THE EARNINGS LANE IS A $1B+ LANE.
+ *
+ * /proxy/earnings-week hands back the full Nasdaq calendar with no market-cap
+ * floor (the recorder dropped its own — see server-with-proxy's route comment),
+ * so an ordinary Wednesday buries LEN and LUXE under a dozen $40M names nobody
+ * trades. Worse, those are exactly the tickers with no logo, so the lane reads
+ * as a row of grey initials. A snapshot is 1280px wide and read in a Discord
+ * scroll: the only useful earnings lane is the one a trader recognises.
+ *
+ * Rows whose cap the provider did not supply come back as 0, NOT as small — so
+ * a strict floor would silently drop a real name on a day the quote lookup
+ * failed. An unknown cap therefore survives when the symbol is on the curated
+ * ANTICIPATED_SYMBOLS list in lib/econCalendar; an unknown cap that is ALSO
+ * unknown to that list is a micro-cap in every case observed and is dropped.
+ */
+export const MIN_EARN_MCAP = 1e9;
+
+export function isSnapshotEarning(r: EarnRow): boolean {
+  const cap = Number(r.market_cap) || 0;
+  if (cap >= MIN_EARN_MCAP) return true;
+  return cap <= 0 && ANTICIPATED_SYMBOLS.has(String(r.symbol || "").toUpperCase());
+}
+
+/**
+ * Today's earnings for the snapshot: today only, $1B+, biggest first.
+ *
+ * ONE copy, called by both surfaces — the browser button
+ * (buildCalendarTemplateImage below) and the scheduled post's HTML route
+ * (app/api/econ-snapshot-html). They used to hold the same filter twice with a
+ * comment asking whoever edited one to remember the other; this is that comment
+ * made unnecessary.
+ */
+export function pickSnapshotEarnings(rows: EarnRow[], today = etToday()): EarnRow[] {
+  return rows
+    .filter((r) => r.date === today)
+    .filter(isSnapshotEarning)
+    .sort((a, b) => (Number(b.market_cap) || 0) - (Number(a.market_cap) || 0));
 }
 
 function todayLong() {
@@ -819,12 +860,10 @@ export async function buildCalendarTemplateImage(): Promise<string> {
   const events: CalEvent[] = calJson.events ?? [];
   const quote: string = quoteJson.quote ?? "";
 
-  // /proxy/earnings-week returns the whole week — keep today only, biggest first.
-  const today = etToday();
+  // /proxy/earnings-week returns the whole week — pickSnapshotEarnings keeps
+  // today only, $1B+, biggest first. Same call the cron's HTML route makes.
   const allEarn: EarnRow[] = Array.isArray(ernJson.rows) ? ernJson.rows : [];
-  const earnings: EarnRow[] = allEarn
-    .filter(r => r.date === today)
-    .sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
+  const earnings: EarnRow[] = pickSnapshotEarnings(allEarn, etToday());
 
   let logoDataUrl = "";
   if (logoRes?.ok) logoDataUrl = await blobToDataUrl(await logoRes.blob());

@@ -45,6 +45,13 @@
 //     trimHeight for the one case where it cannot.
 //   · `data-capture-meta` — the card's own words for the caption strip, after
 //     the name and the time. The contract date, the ticker, the basis.
+//   · `data-capture-trim` — WHERE THE PICTURE ENDS. The shot is cropped at this
+//     element's left edge. For a surface that holds width open beside what it
+//     draws — the options chain reserves the tracks its hidden expiry columns
+//     would have occupied, so the visible ones keep their size — the element is
+//     as wide as the page and the picture was mostly empty. Put it on the first
+//     thing that is only spacing and the shot frames the content. The element
+//     must sit AFTER everything that belongs in the picture.
 //
 // And one option on the call rather than the DOM: `badge`, a same-origin image
 // drawn at the HEAD of the caption — the ticker's company logo. See ShotOptions.
@@ -96,6 +103,27 @@ export interface ShotOptions {
 
 /** Elements the page wants out of the picture — see the header, and trimHeight. */
 const HIDE_ATTR = 'data-capture-hide'
+
+/**
+ * WHERE THE PICTURE ENDS, horizontally. See the header contract.
+ *
+ * A crop AFTER rasterising rather than a narrower render, deliberately: the
+ * chain's tracks are `minmax(78px, 1fr)`, so rendering the clone into a narrower
+ * box would squeeze the real columns rather than drop the empty ones. The clone
+ * is built at the element's true width and the canvas is cut — what survives is
+ * pixel-identical to what is on screen.
+ */
+const TRIM_ATTR = 'data-capture-trim'
+
+/** CSS px from the element's left edge to the first trim marker, or null. */
+function trimWidth(el: HTMLElement, rect: DOMRect, full: number): number | null {
+  const marker = el.querySelector(`[${TRIM_ATTR}]`)
+  if (!(marker instanceof HTMLElement)) return null
+  const cut = Math.round(marker.getBoundingClientRect().left - rect.left)
+  // A marker at 0, off the left edge, or past the right edge tells us nothing —
+  // fall back to the whole element rather than emitting a sliver.
+  return cut > 1 && cut < full ? cut : null
+}
 
 /**
  * A card's own contribution to the caption — its ticker, its contract date, the
@@ -835,6 +863,8 @@ async function rasterise(el: HTMLElement): Promise<{ canvas: HTMLCanvasElement; 
   // an image that is merely still loading reads exactly like one that failed.
   await settleImages(el)
 
+  // The clone is always built at the element's FULL width — see TRIM_ATTR.
+  const crop = trimWidth(el, rect, w)
   const { clone, height } = buildClone(el, w, Math.max(1, Math.ceil(rect.height)))
   const h = Math.ceil(height)
   const body = new XMLSerializer().serializeToString(clone)
@@ -852,14 +882,20 @@ async function rasterise(el: HTMLElement): Promise<{ canvas: HTMLCanvasElement; 
   })
 
   // The caption band rides under the card, so the budget has to cover both or
-  // the frame is the thing that tips the write over the limit.
-  const scale = shotScale(w, h + CAPTION_BAND)
+  // the frame is the thing that tips the write over the limit. Measured on the
+  // CROPPED width — the pixels that are being thrown away should not be buying
+  // the picture a coarser scale.
+  const outW = crop ?? w
+  const scale = shotScale(outW, h + CAPTION_BAND)
   const out = document.createElement('canvas')
-  out.width = Math.round(w * scale)
+  out.width = Math.round(outW * scale)
   out.height = Math.round(h * scale)
   const ctx = out.getContext('2d')
   if (!ctx) throw new Error('no 2d context')
-  ctx.drawImage(img, 0, 0, out.width, out.height)
+  // Drawn at FULL width onto a narrower canvas: the overflow past the right edge
+  // is clipped, which is the crop. Nothing is rescaled, so the surviving pixels
+  // are exactly the ones an uncropped shot would have had.
+  ctx.drawImage(img, 0, 0, Math.round(w * scale), Math.round(h * scale))
   return { canvas: out, scale }
 }
 

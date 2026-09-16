@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Wednesday 9/16/2026
+
+* **Phone app:** new **Alert** tab in the bottom bar — the full signal feed on your phone, with the same filters you use on the desktop — https://cbedge.net/v3/m/alerts
+
 ## Tuesday 9/15/2026
 
 * **Home board:** a new alerts feed in the toolbar — the newest signal is always on screen, click it for the rest. Covers the core level moving or being touched, IB formed and broken, whale prints and the scanner's top GEX change — https://cbedge.net/v3
