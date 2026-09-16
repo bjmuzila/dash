@@ -23825,3 +23825,20 @@ The field stays on `SignalRow` because `/proxy/signals` still returns it.
 
 Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/shell/alertTypes.ts`,
 `cbedge-v3/src/shell/AlertsPanel.tsx`, `cbedge-v3/src/mobile/pages/MAlerts.tsx`.
+
+---
+
+## 2026-09-16 — owner-vite build fix: stray `VisitorMap-1.tsx`
+
+The VPS deploy failed on `target owners` with three `TS2307` errors from
+`owner-vite/src/components/VisitorMap-1.tsx`: it imports `./CustomerName`,
+`./mapTheme` and `./countryMaps`, none of which exist. It is a stale copy of
+`VisitorMap.tsx`, made before those were consolidated into
+`./CustomerCard`, `../lib/theme` and `../lib/countryMaps`. Nothing imports it,
+but `tsc` still type-checks it, so the Docker build died at `npm run build`.
+
+Neutralised it to a comment + `export {}` stub (this session had no shell on the
+laptop, so the file could not be deleted outright). Full original content saved
+to `_to_delete/VisitorMap-1.tsx.bak` — delete both when convenient.
+
+Files: `owner-vite/src/components/VisitorMap-1.tsx`, `_to_delete/VisitorMap-1.tsx.bak`.
