@@ -63,7 +63,6 @@ import {
   type ReplayScope,
 } from './optionsChain/useChainData'
 import type { DataMode } from './optionsChain/chainMath'
-import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 
 /** The ↻ button's four states and its 1800ms revert, transcribed from v2's
  *  useRefreshButton — the labels are what tells you a refresh actually ran. */
@@ -218,55 +217,10 @@ export default function OptionsChain({
     }
   }, [hoverCell, c.columns, c.dodRows])
 
-  // ── 📸 The page, offered to the toolbar's camera ───────────────────────────
-  //
-  // Nothing was published here, so the camera's menu said "nothing to capture"
-  // on the one page that is photographed more than any other. Two rows: the
-  // whole pane (bar + grid, what a screenshot of the tab would be) and the grid
-  // on its own for a picture that is only strikes. Both resolve at click time —
-  // see CopyShotTarget.resolve. The scroller's offset travels with the clone
-  // (shell/snapshot.ts carryScroll), so the PNG shows the strikes on screen.
-  //
-  // Published only once there are strikes: a photograph of the empty state is
-  // never the thing anyone meant to take.
-  const pageRef = useRef<HTMLElement | null>(null)
-  const hasGrid = c.visibleStrikes.length > 0
-  const shotMeta = `${c.activeTicker} · ${c.greekMode.toUpperCase()} · ${c.displayPercent}% strikes${
-    c.replay.on && c.replay.frame ? ' · REPLAY' : ''
-  }`
-  const shotTargets = useMemo<CopyShotTarget[]>(
-    () =>
-      hasGrid
-        ? [
-            {
-              id: 'chain:page',
-              icon: '🧮',
-              label: 'Options Chain',
-              group: 'This page',
-              meta: shotMeta,
-              file: `chain-${c.activeTicker.toLowerCase()}`,
-              resolve: () => pageRef.current,
-            },
-            {
-              id: 'chain:grid',
-              icon: '▦',
-              label: 'Chain grid only',
-              hint: 'Copy a PNG of just the strike grid, without the toolbar',
-              group: 'This page',
-              meta: shotMeta,
-              file: `chain-grid-${c.activeTicker.toLowerCase()}`,
-              resolve: () => chainScrollRef.current,
-            },
-          ]
-        : NO_TARGETS,
-    [hasGrid, shotMeta, c.activeTicker],
-  )
-  useCopyShotTargets(shotTargets)
-
   const replayPinned = c.replay.on
 
   return (
-    <main ref={pageRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {/* Load progress. 8 at fetch start, 100 on success, 0 after 800ms. */}
       {c.loadProgress > 0 && (
         <div style={{ position: 'relative', height: 3, background: T.bg, flexShrink: 0 }}>
@@ -352,85 +306,6 @@ export default function OptionsChain({
                 {c.replay.frame ? 'REPLAY' : 'LIVE'}
               </span>
             </div>
-
-            {/* Focus readout — and the only way OUT of a selection, so it only
-                renders while something is actually selected. */}
-            {c.hasSel && (
-              <button
-                onClick={c.clearSel}
-                title="Clear the focus selection"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  height: 20,
-                  padding: '0 8px',
-                  borderRadius: 999,
-                  cursor: 'pointer',
-                  flexShrink: 0,
-                  border: `1px solid ${alpha(T.cyan, 0.5)}`,
-                  background: alpha(T.cyan, 0.14),
-                  color: T.cyan,
-                  fontSize: 9.5,
-                  fontWeight: 800,
-                  letterSpacing: '0.06em',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                FOCUS:{' '}
-                {[
-                  c.selExps.size ? `${c.selExps.size} exp` : null,
-                  c.selStrikes.size ? `${c.selStrikes.size} strike${c.selStrikes.size > 1 ? 's' : ''}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(' + ')}{' '}
-                ✕
-              </button>
-            )}
-
-            {/* DIM ↔ HIDE — what a focus selection does to everything it did
-                NOT pick. Dimming holds the grid's geometry still, which is the
-                right default and the wrong thing once the pick is what you came
-                to read: two expiries end up two narrow tracks in a wall of grey.
-                HIDE drops the rest and lets the survivors fill the page.
-
-                Rides beside the FOCUS pill rather than in the cog, because it is
-                only meaningful while a selection is live and that is exactly
-                when the pill is on screen. The preference itself outlives the
-                selection (localStorage), so clearing focus and picking again
-                does not silently go back to dimming. */}
-            {c.hasSel && (
-              <button
-                onClick={c.toggleHideUnsel}
-                title={
-                  c.hideUnsel
-                    ? 'Showing only the focused expiries / strikes — click to dim the rest in place instead'
-                    : 'Dimming everything outside the focus — click to hide it entirely and let the focused columns fill the width'
-                }
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  height: 20,
-                  padding: '0 8px',
-                  borderRadius: 999,
-                  cursor: 'pointer',
-                  flexShrink: 0,
-                  border: `1px solid ${alpha(T.cyan, c.hideUnsel ? 0.5 : 0.26)}`,
-                  background: c.hideUnsel ? alpha(T.cyan, 0.14) : 'transparent',
-                  color: c.hideUnsel ? T.cyan : T.muted,
-                  // On the scale (non-negotiable #1). The FOCUS pill beside it
-                  // is an off-scale 9.5 held by the baseline; a NEW control does
-                  // not get to add to that count.
-                  fontSize: 'var(--text-3xs)',
-                  fontWeight: 800,
-                  letterSpacing: '0.06em',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {c.hideUnsel ? '◱ HIDE REST' : '◧ DIM REST'}
-              </button>
-            )}
 
             {/* OI provenance: the Δ column only means anything once TWO daily
                 snapshots exist, so say which two days are being compared — and
@@ -549,6 +424,42 @@ export default function OptionsChain({
                       onChange={(v) => c.setDataMode(v as DataMode)}
                     />
                   </Field>
+                  {/* FOCUS — was two chips in the toolbar. They were only ever
+                      live while something was picked, so they made the bar jump,
+                      and they landed in every screenshot of the grid saying what
+                      the ⅀ header now says in dates. The pick itself is still
+                      made on the grid (click a column header or a strike;
+                      shift-click = only that one, click again to drop it); what
+                      lives here is the view choice and the way out. */}
+                  {c.hasSel && (
+                    <Field
+                      label={`Focus · ${[
+                        c.selExps.size ? `${c.selExps.size} exp` : null,
+                        c.selStrikes.size ? `${c.selStrikes.size} strike${c.selStrikes.size > 1 ? 's' : ''}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' + ')}`}
+                      hint="Hide drops the unpicked rows and columns instead of dimming them; the picked ones keep their width and slide left."
+                    >
+                      <SegGroup
+                        options={[
+                          { label: 'DIM REST', value: 'dim' },
+                          { label: 'HIDE REST', value: 'hide' },
+                        ]}
+                        value={c.hideUnsel ? 'hide' : 'dim'}
+                        onChange={(v) => {
+                          if ((v === 'hide') !== c.hideUnsel) c.toggleHideUnsel()
+                        }}
+                      />
+                      <button
+                        onClick={c.clearSel}
+                        title="Clear the focus selection"
+                        style={{ ...segStyle(false), height: 26, padding: '0 10px', fontSize: 'var(--text-2xs)' }}
+                      >
+                        CLEAR
+                      </button>
+                    </Field>
+                  )}
                 </PanelSection>
 
                 <PanelSection title="Heat">

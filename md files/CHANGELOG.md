@@ -23526,3 +23526,31 @@ buy the picture a coarser scale.
 
 Files: `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`,
 `cbedge-v3/src/shell/snapshot.ts`.
+
+## 2026-09-16 (b) — v3 Options Chain: focus controls move into the cog; ⅀ names its dates
+
+Three changes, all about what a focused chain says about itself.
+
+**The FOCUS pill and the DIM/HIDE REST chip are gone from the toolbar.** They
+only existed while something was picked, so the bar jumped as you selected, and
+they landed in every screenshot of the grid restating what the ⅀ header now says
+better. Both moved into the cog under GRID, as a `DIM REST / HIDE REST` segmented
+control plus `CLEAR`, shown only while a selection is live. The pick itself is
+still made on the grid — click a column header or a strike, shift-click for only
+that one, click again to drop it.
+
+**⅀ header prints the DATES, not a count.** `Sel 3` became `9/16-9/18` — first to
+last selected expiry in calendar order, or the single date when one is picked.
+Which expiries the column is summing is the whole question a screenshot of it has
+to answer a day later, and a count never did. `Total` unchanged with nothing
+picked.
+
+**HIDE no longer persists; every new focus starts on DIM.** Clicking a column
+header is a "show me this one" gesture, and having the rest of the board vanish
+because of a choice made in an earlier session reads as a broken page. The
+setting now lives exactly as long as the selection does — it resets when the
+selection empties (`cb.chain.hideUnsel` and its localStorage round-trip removed).
+
+Files: `cbedge-v3/src/pages/OptionsChain.tsx`,
+`cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`,
+`cbedge-v3/src/pages/optionsChain/useChainData.ts`.

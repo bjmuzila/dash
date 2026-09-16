@@ -54,6 +54,28 @@ import type { GreekMode, OiSnapEntry } from './useChainData'
 
 const MONO = 'var(--font-mono)'
 
+/** "2026-09-16" → "9/16". Leading zeros off: the header is 56px of 10px type. */
+function mdOf(iso: string): string {
+  const [, m, d] = iso.split('-')
+  return m && d ? `${Number(m)}/${Number(d)}` : iso
+}
+
+/**
+ * What the ⅀ column is summing, said as DATES rather than a count.
+ *
+ * "Sel 3" told you how many expiries were picked and nothing about which — and
+ * which is the whole question a screenshot of this column has to answer a day
+ * later. One expiry prints its own date; several print the span, first to last
+ * in calendar order (not click order, which is not a fact about the data).
+ */
+function selSpanLabel(exps: string[]): string {
+  if (!exps.length) return 'Total'
+  const sorted = [...exps].sort()
+  const first = mdOf(sorted[0] as string)
+  const last = mdOf(sorted[sorted.length - 1] as string)
+  return first === last ? first : `${first}-${last}`
+}
+
 /** Sticky header + rails must be FULLY OPAQUE — rows scroll under them. */
 const HDR_BG = T.panel
 /** Both strike rails. */
@@ -501,7 +523,7 @@ export const ChainMatrix = memo(function ChainMatrix({
           }}
         >
           <div style={{ fontSize: 10, fontWeight: 700, color: T.cyan, letterSpacing: '0.04em' }}>
-            {selMode ? `Sel ${selExps.size}` : 'Total'}
+            {selMode ? selSpanLabel([...selExps]) : 'Total'}
           </div>
           <div
             style={{

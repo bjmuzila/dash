@@ -6,6 +6,8 @@ import { useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { ContractProbe } from '@/board/topFlow/ContractProbe'
 import { biasOf, biasTitle } from '@/board/topFlow/TopFlowCard'
+import { TrackedAlertsCard, TrackButton } from './whales/TrackedAlertsCard'
+import { contractKey, useWhaleAlerts } from './whales/alertsStore'
 import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,14 +92,7 @@ const DTE_STOPS: Array<{ label: string; value: number | null; title: string }> =
   { label: '≤90', value: 90, title: 'Expiring within a quarter' },
 ]
 
-// The archive's own floor is a SERVER value (LSE_WHALE_FLOOR, $1M by default)
-// and the API clamps `min_premium` up to it — below the floor the table holds
-// only the last seven days, so a lower ask would return a week dressed as an
-// archive. $500K is here for the deployment that lowers that env var; while the
-// server is still on $1M the page says so under the header rather than quietly
-// handing back the same list.
 const FLOORS = [
-  { label: '≥$500K', value: 500_000 },
   { label: '≥$1M', value: 1_000_000 },
   { label: '≥$2.5M', value: 2_500_000 },
   { label: '≥$5M', value: 5_000_000 },
@@ -275,6 +270,61 @@ export default function Whales() {
   const [lkEntry, setLkEntry] = useState('')
   const [lookup, setLookup] = useState<WhaleRow | null>(null)
 
+  // ── TRACKED CONTRACTS ──────────────────────────────────────────────────────
+  // A tracked contract is a row in Postgres against your LOGIN — the one thing
+  // on this page that is not per browser, because a contract you flagged at the
+  // desk is one you want on the laptop. The card renders at the bottom; the two
+  // ways in are the TRACK cell on a print and the button beside LOOK UP.
+  //
+  // `busyKey` is the contract being written, not a boolean: two rows pressed in
+  // the same second must not both go grey.
+  const alerts = useWhaleAlerts()
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+  const trackedIds = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const a of alerts.alerts) m.set(contractKey(a), a.id)
+    return m
+  }, [alerts.alerts])
+
+  /** The card's identity for a row, or null when the row is not a whole contract. */
+  const trackKeyOf = (r: WhaleRow) =>
+    r.underlying && r.expiry && r.type && r.strike != null
+      ? `${r.underlying}|${r.strike}|${r.type}|${r.expiry}`
+      : null
+
+  /** Track, or untrack if it is already there — the button is a toggle. */
+  const toggleTrack = async (r: WhaleRow, source: 'whale' | 'lookup') => {
+    // All four identity fields are nullable on a flow row, and a row missing
+    // any of them is not a contract the probe could draw either — so it is not
+    // one the card can hold. The button is not rendered for those (trackKeyOf
+    // returns null); this is the same guard, for the callers that are not it.
+    const key = trackKeyOf(r)
+    if (!key || !r.underlying || !r.expiry || !r.type || r.strike == null) return
+    if (busyKey) return
+    setBusyKey(key)
+    try {
+      const existing = trackedIds.get(key)
+      if (existing != null) { await alerts.remove(existing); return }
+      await alerts.track({
+        underlying: r.underlying,
+        strike: r.strike,
+        optType: r.type === 'P' ? 'P' : 'C',
+        expiry: r.expiry,
+        osi: r.osi,
+        source,
+        // A lookup has no print behind it. Sending the synthetic "now" as a
+        // print time would make the row claim a fill that never happened.
+        printTs: source === 'whale' ? r.ts : null,
+        printSize: r.size,
+        printPremium: source === 'whale' ? r.premium : null,
+        entryPrice: r.price,
+      })
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -423,17 +473,6 @@ export default function Whales() {
             {' '}· {num(d.unreadable?.n)} unreadable hidden ({money(d.unreadable?.premium)})
           </span>
         ) : null}
-        {/* The server clamps `min_premium` UP to its own floor, so a pick below
-            it returns the floor's list. Saying that beats a control that looks
-            like it did nothing. */}
-        {d && floor < (d.whaleFloor ?? 1_000_000) ? (
-          <span
-            className="text-warn"
-            title="The archive only keeps prints at or above its own floor permanently; anything smaller is purged after 7 days, so the API answers this filter at the floor."
-          >
-            {' '}· asked for {money(floor)}, archive floor is {money(d.whaleFloor)}
-          </span>
-        ) : null}
       </div>
 
       {/* ── filters ───────────────────────────────────────────────────────────
@@ -468,7 +507,7 @@ export default function Whales() {
 
         <SegMenu<string>
           label="FLOOR"
-          title="Hide prints below this dollar premium. The archive's own floor is the lowest that returns anything — nothing smaller than it is kept permanently"
+          title="Hide prints below this dollar premium. $1M is the archive's own floor — nothing smaller is kept"
           options={FLOORS.map((f) => ({ label: f.label, value: String(f.value) }))}
           value={String(floor)}
           defaultValue={String(DEFAULTS.floor)}
@@ -609,7 +648,10 @@ export default function Whales() {
                       <th className="px-2 py-2 text-right font-bold">Size</th>
                       <th className="px-2 py-2 text-right font-bold">Price</th>
                       <th className="px-2 py-2 text-right font-bold">Premium</th>
-
+                      <th
+                        className="px-2 py-2 text-right font-bold"
+                        title="Keep this contract in Tracked contracts, at the bottom of the page"
+                      >Track</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -633,7 +675,7 @@ export default function Whales() {
                         <Fragment key={r.id}>
                           {newDay && (
                             <tr>
-                              <td colSpan={10} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
+                              <td colSpan={11} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
                                 {fmtDayHeader(r.sessionDate)}
                                 {agg ? ` · ${num(agg.n)} prints · ${money(agg.total)}` : ''}
                               </td>
@@ -686,7 +728,23 @@ export default function Whales() {
                             <td className={['tabular px-2 py-1.5 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
                               {money(r.premium)}
                             </td>
-
+                            {/* stopPropagation lives in TrackButton: this cell
+                                is inside a row whose click opens the probe, and
+                                tracking a print is not a request to open it. */}
+                            <td className="px-2 py-1.5 text-right">
+                              {(() => {
+                                const k = trackKeyOf(r)
+                                if (!k) return null
+                                return (
+                                  <TrackButton
+                                    compact
+                                    tracked={trackedIds.has(k)}
+                                    busy={busyKey === k}
+                                    onClick={() => void toggleTrack(r, 'whale')}
+                                  />
+                                )
+                              })()}
+                            </td>
                           </tr>
                         </Fragment>
                       )
@@ -792,20 +850,56 @@ export default function Whales() {
                 />
               </div>
 
-              <button
-                type="button"
-                onClick={openLookup}
-                disabled={!lkReady}
-                title={lkReady ? 'Draw this contract' : 'Needs a ticker, a strike and an expiry'}
-                className={[
-                  'rounded-sm border px-2 py-1 text-2xs font-bold uppercase tracking-[0.1em] transition-colors',
-                  lkReady
-                    ? 'border-accent bg-accent/10 text-accent hover:bg-accent/20'
-                    : 'cursor-not-allowed border-line text-faint opacity-50',
-                ].join(' ')}
-              >
-                Look up
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={openLookup}
+                  disabled={!lkReady}
+                  title={lkReady ? 'Draw this contract' : 'Needs a ticker, a strike and an expiry'}
+                  className={[
+                    'flex-1 rounded-sm border px-2 py-1 text-2xs font-bold uppercase tracking-[0.1em] transition-colors',
+                    lkReady
+                      ? 'border-accent bg-accent/10 text-accent hover:bg-accent/20'
+                      : 'cursor-not-allowed border-line text-faint opacity-50',
+                  ].join(' ')}
+                >
+                  Look up
+                </button>
+                {/* Tracks what the FIELDS say, not what the panel is showing —
+                    so a contract can be tracked without drawing it first, and
+                    an edited strike tracks the strike you just typed. Size and
+                    cost ride along when they are filled: they are what turns a
+                    watch into a position the card can price. */}
+                {lkReady && (() => {
+                  const t = lkTicker.trim().toUpperCase()
+                  const k = `${t}|${lkStrikeNum}|${lkType}|${lkExpiry}`
+                  const sizeN = Number(lkSize)
+                  const entryN = Number(lkEntry)
+                  return (
+                    <TrackButton
+                      tracked={trackedIds.has(k)}
+                      busy={busyKey === k}
+                      onClick={() => void toggleTrack({
+                        id: `lookup-track:${k}`,
+                        ts: Date.now(),
+                        osi: null,
+                        underlying: t,
+                        type: lkType,
+                        strike: lkStrikeNum,
+                        expiry: lkExpiry,
+                        dte: null,
+                        size: Number.isFinite(sizeN) && sizeN > 0 ? Math.round(sizeN) : null,
+                        price: Number.isFinite(entryN) && entryN > 0 ? entryN : null,
+                        premium: 0,
+                        spot: null,
+                        side: null, action: null, sideReason: null,
+                        bid: null, ask: null, quoteAgeMs: null, vol: null, oi: null,
+                        sessionDate: etYmd(new Date()),
+                      }, 'lookup')}
+                    />
+                  )
+                })()}
+              </div>
             </div>
 
             {lookup ? (
@@ -888,6 +982,14 @@ export default function Whales() {
           </Card>
         </div>
       </div>
+
+      {/* ── tracked contracts ──────────────────────────────────────────────
+          Full width UNDER both columns, not in the right rail: its rows carry
+          a note and a two-pane chart, and neither survives a 320px column.
+          Last on the page because it is the thing you scroll to on purpose —
+          the archive above is what you came for, this is what you kept.
+      ──────────────────────────────────────────────────────────────────── */}
+      <TrackedAlertsCard store={alerts} />
     </Page>
   )
 }

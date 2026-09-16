@@ -49,8 +49,6 @@ import {
 } from './chainMath'
 import { CHAIN_DEFAULT_SKIN, CHAIN_HEAT_SKIN_KEY, HEAT_SKINS, isHeatSkin, type HeatSkin } from './heatSkins'
 
-/** Remembered across sessions: hide the unselected rows/columns vs dim them. */
-const CHAIN_HIDE_UNSEL_KEY = 'cb.chain.hideUnsel'
 
 /** Levels-only: mark the strikes carrying this share or more of their column's
  *  Core. Both remembered across sessions. */
@@ -931,18 +929,17 @@ export function useChainData(opts: UseChainDataOpts) {
   // A focus selection greys everything it did not pick. On a wide chain the
   // greyed columns still cost their track width, so the two picked expiries sit
   // in a 10%-wide sliver of the page. HIDE drops them from the grid entirely and
-  // the picked ones inflate to fill it. The setting is a VIEW preference, not
-  // part of the selection, so it survives clearing the focus and is remembered
-  // across sessions.
+  // the picked ones slide left at the width they had.
+  //
+  // DIM is what a fresh selection always starts on, and that is not a default
+  // that can be remembered: clicking a column header is a "show me this one"
+  // gesture, and having the rest of the board vanish because of a choice made in
+  // some earlier session is a page that looks broken. So the setting lives only
+  // as long as the selection does — it is reset the moment the selection empties,
+  // which is what makes the NEXT pick start on DIM.
   const [hideUnsel, setHideUnsel] = useState(false)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      setHideUnsel(window.localStorage.getItem(CHAIN_HIDE_UNSEL_KEY) === '1')
-    } catch {
-      /* ignore */
-    }
-  }, [])
+  const toggleHideUnsel = useCallback(() => setHideUnsel((v) => !v), [])
+
   // ── Near core ──────────────────────────────────────────────────────────────
   // A filter on the heat: switched on, only the strikes carrying this share or
   // more of their column's core are painted at all, in the ordinary sign colour
@@ -986,23 +983,16 @@ export function useChainData(opts: UseChainDataOpts) {
     }
   }, [])
 
-  const toggleHideUnsel = useCallback(() => {
-    setHideUnsel((v) => {
-      const next = !v
-      try {
-        window.localStorage.setItem(CHAIN_HIDE_UNSEL_KEY, next ? '1' : '0')
-      } catch {
-        /* ignore */
-      }
-      return next
-    })
-  }, [])
-
   // A focus selection is about the columns/strikes on screen — a new ticker, a
   // new expiry window or a jump in/out of replay invalidates it.
   useEffect(() => {
     clearSel()
   }, [activeTicker, selectedExpiry, replayDate, replayScope, clearSel])
+  // …and with nothing picked there is nothing to hide, so the next pick starts
+  // on DIM. See the note above for why this is not a remembered preference.
+  useEffect(() => {
+    if (!hasSel) setHideUnsel(false)
+  }, [hasSel])
 
   // ── Layout facts the grid needs ────────────────────────────────────────────
   const gridCols = replayFrame

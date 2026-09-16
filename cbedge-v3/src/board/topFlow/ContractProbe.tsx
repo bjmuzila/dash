@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, roundStrike } from '@/data/flowMath'
@@ -38,7 +38,7 @@ import type { TopFlowRow } from './TopFlowCard'
 // of showing an empty frame that reads as a bug.
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface Bar {
+export interface Bar {
   /** Epoch ms, bar open. */
   time: number
   open: number
@@ -47,7 +47,7 @@ interface Bar {
   close: number
   volume: number
 }
-interface BarsResponse { bars: Bar[]; count?: number; source?: string; error?: string }
+export interface BarsResponse { bars: Bar[]; count?: number; source?: string; error?: string }
 
 type Range = '1d' | '3d' | '1w' | '1m'
 const RANGES: Array<{ key: Range; label: string; days: number }> = [
@@ -78,6 +78,78 @@ const fmtDate = (iso: string | null) => {
 const VAULT_FLOOR_MS = Date.parse('2026-01-02T00:00:00Z')
 const VAULT_EXPIRY_GRACE_DAYS = 120
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SOURCE PICKING, LIFTED OUT OF THE COMPONENT
+//
+// The Tracked contracts card has to load the SAME bars this panel loads, from
+// outside a render — once to freeze the picture the moment a contract is
+// tracked, and once per row to put a mark in the list. Two copies of "which
+// route holds this contract" is two things to keep in step, and the copy that
+// drifts is the one that quietly stops finding anything.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The part of a row that decides where its bars come from. */
+export interface ProbeKey {
+  underlying: string | null
+  expiry: string | null
+  strike: number | null
+  type: string | null
+  osi: string | null
+  /** The print's own moment — or "now" for a contract nobody printed into. */
+  ts: number
+}
+
+/** Both routes that might hold this contract, best bet first. Either can be null. */
+export function probeUrls(row: ProbeKey, startMs: number): Array<string | null> {
+  // Rounded, not raw: this value goes into `?strike=` below, and the vault
+  // matches on the exact string — `504.99999999999994` finds nothing.
+  const strike = roundStrike(row.strike) ?? 0
+  const hasParts = Boolean(row.underlying && row.expiry && strike > 0 && row.type)
+  const proxy = hasParts
+    ? `/proxy/option-history?${new URLSearchParams({
+        ticker: row.underlying!, expiry: row.expiry!, strike: String(strike), type: row.type!,
+        start: ymd(startMs), end: ymd(Date.now()),
+      }).toString()}`
+    : null
+  const vault = row.osi
+    ? `/api/lse/contract-candles?${new URLSearchParams({
+        ticker: row.osi, start: ymd(startMs), end: ymd(Date.now() + 86_400_000),
+      }).toString()}`
+    : hasParts
+      ? `/api/lse/contract-candles?${new URLSearchParams({
+          underlying: row.underlying!, strike: String(strike), expiry: row.expiry!,
+          type: row.type === 'C' ? 'call' : 'put',
+          start: ymd(startMs), end: ymd(Date.now() + 86_400_000),
+        }).toString()}`
+      : null
+  // Today's print reads dxLink first; anything older goes to the vault first.
+  return ymd(row.ts) === ymd(Date.now()) ? [proxy, vault] : [vault, proxy]
+}
+
+/**
+ * The bars, from whichever of the two routes has them. Same fallback the panel
+ * does: an EMPTY answer is not an error, it is the other source's turn.
+ *
+ * `days` is how far back from the row's own moment to read — 0 is that session,
+ * 2 is the 3D window the card freezes at.
+ */
+export async function loadProbeBars(row: ProbeKey, days = 2, signal?: AbortSignal): Promise<Bar[]> {
+  const urls = probeUrls(row, row.ts - days * 86_400_000)
+  for (const u of urls) {
+    if (!u) continue
+    try {
+      const r = await fetch(u, { credentials: 'same-origin', signal })
+      if (!r.ok) continue
+      const j = (await r.json()) as BarsResponse
+      const bars = (j?.bars ?? []).filter((b) => b && b.close > 0)
+      if (bars.length) return bars
+    } catch {
+      /* try the other source; a dead route is not a dead contract */
+    }
+  }
+  return []
+}
+
 export function ContractProbe({ row, onClose, entryAt }: {
   row: TopFlowRow
   onClose: () => void
@@ -100,34 +172,13 @@ export function ContractProbe({ row, onClose, entryAt }: {
   const [attempt, setAttempt] = useState(0)
   useEffect(() => { setAttempt(0) }, [row.id, range])
 
-  const printedToday = ymd(row.ts) === ymd(Date.now())
   const span = RANGES.find((r) => r.key === range) ?? RANGES[0]!
   const startMs = row.ts - span.days * 86_400_000
 
-  const urls = useMemo(() => {
-    // Rounded, not raw: this value goes into `?strike=` below, and the vault
-    // matches on the exact string — `504.99999999999994` finds nothing.
-    const strike = roundStrike(row.strike) ?? 0
-    const proxy = row.underlying && row.expiry && strike > 0 && row.type
-      ? `/proxy/option-history?${new URLSearchParams({
-          ticker: row.underlying, expiry: row.expiry, strike: String(strike), type: row.type,
-          start: ymd(startMs), end: ymd(Date.now()),
-        }).toString()}`
-      : null
-    const vault = row.osi
-      ? `/api/lse/contract-candles?${new URLSearchParams({
-          ticker: row.osi, start: ymd(startMs), end: ymd(Date.now() + 86_400_000),
-        }).toString()}`
-      : row.underlying && row.expiry && strike > 0 && row.type
-        ? `/api/lse/contract-candles?${new URLSearchParams({
-            underlying: row.underlying, strike: String(strike), expiry: row.expiry,
-            type: row.type === 'C' ? 'call' : 'put',
-            start: ymd(startMs), end: ymd(Date.now() + 86_400_000),
-          }).toString()}`
-        : null
-    // Today's print reads dxLink first; anything older goes to the vault first.
-    return printedToday ? [proxy, vault] : [vault, proxy]
-  }, [row.underlying, row.expiry, row.strike, row.type, row.osi, startMs, printedToday])
+  const urls = useMemo(
+    () => probeUrls(row, startMs),
+    [row.underlying, row.expiry, row.strike, row.type, row.osi, row.ts, startMs],
+  )
 
   const url = urls[attempt] ?? null
   const q = useQuery<BarsResponse>(url, { staleMs: 30_000 })
@@ -172,11 +223,7 @@ export function ContractProbe({ row, onClose, entryAt }: {
     }
   }, [expanded])
 
-  const body = (big: boolean) => {
-    /** Micro label ink (SIZE, PREM, VOL, OI, IN, NOW) and the value beside it. */
-    const rk = big ? 'text-3xs text-faint' : 'text-2xs text-faint'
-    const rv = big ? 'tabular text-2xs text-muted' : 'tabular text-xs text-muted'
-    return (
+  const body = (big: boolean) => (
     <>
       <div className="flex items-baseline gap-2">
         <span className={[big ? 'text-lg' : 'text-sm', 'font-bold tracking-[0.02em] text-fg'].join(' ')}>
@@ -208,15 +255,7 @@ export function ContractProbe({ row, onClose, entryAt }: {
           </button>
         </span>
       </div>
-      {/* ── READOUT TYPE ──────────────────────────────────────────────────
-          These lines used to be a flat text-2xs value over a text-3xs label —
-          10px and 9px — in BOTH placements. That is fine in the popped-out
-          dialog and unreadable in the board tile, where the panel is a third of
-          the width and there is no compensating space. Inline they now step up
-          to 12px/10px; popped out they keep the sizes the big layout was drawn
-          for. `rk`/`rv` are those two, so the four stat lines below cannot drift
-          apart from each other. */}
-      <div className={[big ? 'text-2xs' : 'text-xs', 'tabular -mt-1 text-muted'].join(' ')}>{fmtDate(row.expiry)}</div>
+      <div className="tabular -mt-1 text-2xs text-muted">{fmtDate(row.expiry)}</div>
 
       <div className="flex items-center gap-2">
         <span className={[big ? 'text-xl' : 'text-base', 'leading-none', ink].join(' ')}>{dir < 0 ? '▼' : '▲'}</span>
@@ -225,10 +264,10 @@ export function ContractProbe({ row, onClose, entryAt }: {
         </span>
       </div>
 
-      <div className={rv}>
-        <span className={rk}>IN</span> <span className="text-fg">{entry?.toFixed(2) ?? '—'}</span>
+      <div className="tabular text-2xs text-muted">
+        <span className="text-3xs text-faint">IN</span> <span className="text-fg">{entry?.toFixed(2) ?? '—'}</span>
         {' → '}
-        <span className={rk}>NOW</span> <span className="text-fg">{last?.toFixed(2) ?? '—'}</span>
+        <span className="text-3xs text-faint">NOW</span> <span className="text-fg">{last?.toFixed(2) ?? '—'}</span>
         {perCt != null && (
           <>
             {' · '}
@@ -236,10 +275,10 @@ export function ContractProbe({ row, onClose, entryAt }: {
           </>
         )}
       </div>
-      <div className={rv}>
-        <span className={rk}>SIZE</span> <span className="text-fg">{row.size?.toLocaleString() ?? '—'}</span>
+      <div className="tabular text-2xs text-muted">
+        <span className="text-3xs text-faint">SIZE</span> <span className="text-fg">{row.size?.toLocaleString() ?? '—'}</span>
         {' · '}
-        <span className={rk}>PREM</span> <span className="text-fg">{fmtPremium(row.premium)}</span>
+        <span className="text-3xs text-faint">PREM</span> <span className="text-fg">{fmtPremium(row.premium)}</span>
         {/* Vol/OI are LIVE numbers, joined at serve time on the Top Flow card.
             An archived whale print carries neither — there is no "now" for it —
             so the pair is omitted rather than printed as two permanent dashes.
@@ -249,9 +288,9 @@ export function ContractProbe({ row, onClose, entryAt }: {
         {row.vol !== null || row.oi !== null ? (
           <>
             {' · '}
-            <span className={rk}>VOL</span> <span className="text-fg">{row.vol?.toLocaleString() ?? '—'}</span>
+            <span className="text-3xs text-faint">VOL</span> <span className="text-fg">{row.vol?.toLocaleString() ?? '—'}</span>
             {' · '}
-            <span className={rk}>OI</span> <span className="text-fg">{row.oi?.toLocaleString() ?? '—'}</span>
+            <span className="text-3xs text-faint">OI</span> <span className="text-fg">{row.oi?.toLocaleString() ?? '—'}</span>
           </>
         ) : null}
       </div>
@@ -263,15 +302,14 @@ export function ContractProbe({ row, onClose, entryAt }: {
             type="button"
             onClick={() => setRange(r.key)}
             className={[
-              'tabular rounded-sm border px-2 py-0.5 transition-colors',
-              big ? 'text-2xs' : 'text-xs',
+              'tabular rounded-sm border px-2 py-0.5 text-2xs transition-colors',
               range === r.key ? 'border-fg/25 bg-raised text-fg' : 'border-line text-muted hover:text-fg',
             ].join(' ')}
           >
             {r.label}
           </button>
         ))}
-        <span className={['ml-auto', big ? 'text-3xs' : 'text-2xs', 'text-faint'].join(' ')}>
+        <span className="ml-auto text-3xs text-faint">
           {q.loading && !bars.length ? 'loading…' : q.data?.source === 'lse' ? 'vault' : bars.length ? 'live' : ''}
         </span>
       </div>
@@ -292,13 +330,12 @@ export function ContractProbe({ row, onClose, entryAt }: {
         </div>
       )}
 
-      <div className={['tabular', big ? 'text-3xs' : 'text-2xs', 'text-faint'].join(' ')}>
+      <div className="tabular text-3xs text-faint">
         Option price (mark) · contract volume · entry @ {entry?.toFixed(2) ?? '—'} · printed {etTime(row.ts)}
         {big ? ' · click outside or press Esc to close' : ''}
       </div>
     </>
-    )
-  }
+  )
 
   return (
     <>
@@ -390,7 +427,7 @@ function ProbeExpandIcon({ size = 12, collapse = false }: { size?: number; colla
 
 const MONO = 'ui-monospace,Menlo,Consolas,monospace'
 
-function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
+export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   bars: Bar[]
   entry: number | null
   /** Epoch ms of the print. Places the entry MARKER on the line — the dashed
@@ -401,45 +438,12 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   wide?: boolean
 }) {
   const [hover, setHover] = useState<number | null>(null)
-
-  // ── WHY THE CANVAS IS MEASURED ────────────────────────────────────────────
-  // This used to be a fixed 320-unit viewBox stretched to `width: 100%`. In the
-  // board tile the probe column is 330px wide at best and full-width-of-a-narrow
-  // -card at worst — around 230px — so the whole picture was drawn at ~0.7x and
-  // every 9px label rendered at six. The chart was legible in the popped-out
-  // dialog and mud everywhere else, which is exactly the report: "the card is
-  // shrunk and impossible to read".
-  //
-  // The fix is to make one user unit equal one CSS pixel instead of letting the
-  // browser scale the type down: measure the container, use that as the viewBox
-  // width, and the labels keep the size they were written at whatever the card
-  // does. Type is also nudged up a notch inline, because 9px mono at true size
-  // is the smallest thing on the board.
-  const wrapRef = useRef<HTMLDivElement | null>(null)
-  const [cw, setCw] = useState(0)
-  useLayoutEffect(() => {
-    const el = wrapRef.current
-    if (!el) return
-    const read = () => setCw(el.getBoundingClientRect().width)
-    read()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(read)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-
-  // Below ~250 there is no width left for a plot AND a price rail, so it scales
-  // down again — but a tile that narrow is a different problem from this one.
-  const W = wide ? 1000 : Math.max(250, Math.round(cw || 320))
+  const W = wide ? 1000 : 320
   const H = wide ? 460 : 250
-  // Type and glyph sizes are in USER units. Popped out, the viewBox is three
-  // times the display width, so everything is scaled to match; inline it is now
-  // 1:1 and the bump is a readability nudge, not a correction.
-  const S = wide ? 1.75 : 1.15
-  const PADL = wide ? 14 : 9
-  const PADR = wide ? 62 : 52
-  const PADT = wide ? 22 : 18
-  const PADB = wide ? 30 : 26
+  const PADL = wide ? 14 : 8
+  const PADR = wide ? 62 : 46
+  const PADT = wide ? 22 : 16
+  const PADB = wide ? 30 : 24
   const GAP = wide ? 14 : 9
   const volH = Math.round((H - PADT - PADB - GAP) * 0.24)
   const priceH = H - PADT - PADB - GAP - volH
@@ -497,7 +501,7 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
       .sort((a, b) => b.v - a.v)
       .slice(0, 4)
     const kept: number[] = []
-    const minGap = 30 * S
+    const minGap = 30 * (wide ? 1.75 : 1)
     for (const c of cand) {
       if (kept.some((k) => Math.abs(x(k) - x(c.i)) < minGap)) continue
       kept.push(c.i)
@@ -506,7 +510,7 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
     // x() and the sizing constants are derived from the same inputs, so the
     // bar list and the width are the whole dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vols, vAvg, vMax, n, W, PADL, PADR, S])
+  }, [vols, vAvg, vMax, n, W, PADL, PADR, wide])
 
   // WHERE the entry sits on the line. The print timestamp is matched to the
   // nearest bar OPEN rather than the first bar at or after it, so a fill a few
@@ -535,6 +539,10 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
     x(i) < PADL + EDGE ? 'start' : x(i) > W - PADR - EDGE ? 'end' : 'middle'
   const edgeX = (i: number) =>
     x(i) < PADL + EDGE ? PADL : x(i) > W - PADR - EDGE ? W - PADR : x(i)
+  // Type and glyph sizes are in USER units and both viewBoxes display at roughly
+  // 1:1, so without this the popped-out chart would draw the same 9px labels on
+  // a canvas three times the width.
+  const S = wide ? 1.75 : 1
 
   const onMove = (e: ReactMouseEvent<SVGSVGElement>) => {
     const box = e.currentTarget.getBoundingClientRect()
@@ -588,7 +596,6 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   const BOXH = HEADH + hrows.length * ROWH + 6 * S
 
   return (
-    <div ref={wrapRef} style={{ width: '100%', minWidth: 0 }}>
     <svg
       viewBox={`0 0 ${W} ${H}`}
       style={{ width: '100%', height: 'auto', display: 'block' }}
@@ -780,6 +787,5 @@ function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
         </g>
       )}
     </svg>
-    </div>
   )
 }
