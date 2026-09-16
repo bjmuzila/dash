@@ -1,104 +1,44 @@
 # Changelog
 
-## 2026-09-16 (f) - Voltick's visitor map is now the console's, not a lookalike
+## 2026-09-16 (e) - Probe: the AM monthly is gone from index chains
 
-The hand-built map from (e) is replaced. It looked close and was a fork: my own
-Mercator projection, my own dot rules, my own legend. "Just like the owner one"
-is not a resemblance target, it is a copy instruction.
+Probing SPX 7700C for the 9/18 monthly came back at **0.13**. The contract was
+9.35. The probe was not mispricing it - it was pricing a different strike.
 
-`owner-vite/src/components/VisitorMap.tsx` is now copied into
-`voltick-vite/src/pages/visitors/VisitorMap.tsx` VERBATIM. The only edits are
-the three import lines at the top:
+`fetchChain()` -> `preferPmSettlement()` only collapsed AM/PM collisions on the
+same `expiration|strike|type` key. The AM-settled monthly also lists strikes the
+PM item never carries (8065 on this expiration), and those orphans survived. They
+were then the only rows left with `rootSymbol === "SPX"` on that date, and
+`probeRestTT()` preferred the root the caller typed - so every SPX strike typed
+for 9/18 snapped onto a dead AM leg quoted at pennies. 7615 resolved to 8065 too.
+The card showed the strike you typed, so nothing on screen said so.
 
-  ../lib/theme      -> ./ownerTheme   (the 7 OWNER_THEME tokens it reads)
-  ../lib/countryMaps-> ./countryMaps  (a copy beside it)
-  ./CustomerCard    -> ./CustomerName (a stub that opens /customer-card)
+- `preferPmSettlement(contracts, root)` now PURGES rather than de-duplicates: on
+  an index root, an expiration that lists any PM leg loses every AM leg, orphan
+  strikes included. AM-only expirations and every non-index ticker pass through
+  untouched.
+- `probeRestTT()` no longer filters candidates by the typed root. The purge
+  leaves one contract per strike and all of them are the live PM leg, so `SPX`
+  and `SPXW` now resolve identically.
 
-So it is the same d3 Natural Earth projection, the same choropleth ramp, the
-same gold-solid / gold-ring / slate-ring dot vocabulary, the same fan-out, the
-same pinned country and visitor cards, the same legend strip and per-country
-counts. The page around it is a copy of `owner-vite/src/pages/Visitors.tsx`,
-including the header counts, which are computed by the console's own arithmetic
-so the header and the map cannot disagree.
+The AM monthly is unreachable through this proxy for index roots, which is the
+intent - after 09:30 ET it is settled, its OI is frozen and its greeks are dead.
 
-The banner at the top of the copied file says to keep it a copy: fix the
-console, re-copy, patch the same three lines. A change made here and not there
-is a fork, and whoever compares the two screens next will believe the wrong one.
+Files: `server-v2/proxy-tastytrade.js`.
 
-**Synthetic rows, not a fetch.** `sampleVisits.ts` builds ~4,600 page_visits
-rows from a seeded generator (mulberry32, fixed seed) in the exact
-`VisitorMapRow` shape /api/page-visits returns, and reproduces the edge cases
-the map is made of: loads outnumber visitors, some visitors have a country and
-no coordinate (dashed, on the centroid), a few rows are XX or T1 and land in
-Unknown, and paying / signed-in / anonymous are three different dots. Nothing
-on the page reaches the backend.
+## 2026-09-16 (d) - Whales: the rail is back, and the tracked card comes up with it
 
-Not ported, because there is nothing behind them here: the hourly refresh and
-refresh-on-focus, the beacon-stale warning, the truncation notice, the "no geo
-data yet" notice. Refresh restamps the clock and its tooltip says so.
+The two-column grid had only one child, so WHERE THE SIZE WENT, EXPIRY BUCKETS
+and REPEAT STRIKES were stacked under the prints table instead of in the 320px
+rail beside it, and the 320 column rendered empty. They are back in the rail.
 
-**New deps and a vendored asset.** `d3-geo` and `topojson-client` (plus the
-three @types) are added to voltick-vite, and `public/countries-110m.json` is
-vendored the same way the console does it, fetched at runtime so it never
-enters the bundle. package-lock.json is regenerated; run `npm install` in
-voltick-vite before the next build.
+The prints card now GROWS to the rail's height (`flex-1`, table scrolling inside
+with a 420px floor) rather than stopping dead at `max-h-[480px]`. That fixed
+height was what left the wide empty band between the table and TRACKED
+CONTRACTS - the grid row was as tall as the rail, the left column was not, and
+the tracked card sat below all of it. It now follows the prints directly.
 
-STALE, delete when convenient (this session could not remove files on the
-laptop): `voltick-vite/src/pages/visitors/world.ts`,
-`voltick-vite/src/pages/visitors/visitors.ts`, `voltick-vite/tools/gen-world.py`.
-Nothing imports them any more.
-
-`voltick-vite/src/pages/visitors/*` (VisitorMap, VisitorsMap, ownerTheme,
-countryMaps, CustomerName, sampleVisits)
-`voltick-vite/public/countries-110m.json`, `package.json`, `package-lock.json`
-`voltick-vite/src/lib/nav.ts`
-
-## 2026-09-16 (d) - Voltick: the customer card, as a page instead of a modal
-
-The dossier mockup, built for real on voltick.cbedge.net at `/customer-card`.
-One customer on one screen, no tabs: Identity, Money and Usage across the top,
-the page feed and the share-of-time bars underneath, a roster strip above it
-that swaps the card. Today / 7d / 30d / All switches the feed between event
-rows and one-row-per-day summaries.
-
-A page rather than a modal on purpose. The modal shape is what the owner
-console will want when a name is clicked in Subscriptions or on the map, but a
-route is linkable, deep-linkable and testable, and it is the same component
-either way.
-
-Every record is synthetic and lives in `customerData.ts` with the field names
-the owner console already uses, so it can be pointed at a real endpoint later
-without the layout moving. The three header buttons are inert: a live "Reset
-password" here would mail a token to a made-up address.
-
-Colors: none of the reserved data colors appear (a plan is not a level on a
-board). Chrome is ACCENT and SKY; GOOD and BAD mark only the two states that
-are money arriving or money stopping. The share bars rank by accent opacity
-rather than by hue.
-
-`voltick-vite/src/pages/customer/CustomerCard.tsx` (new)
-`voltick-vite/src/pages/customer/customerData.ts` (new)
-`voltick-vite/src/lib/nav.ts`, `voltick-vite/src/pages/registry.ts`
-
-## 2026-09-16 (c) - Probe chart: the canvas is measured, so the type stops scaling with the pane
-
-The chart is `width: 100%` over a FIXED viewBox, and every size inside it is in
-user units — so the whole picture was being scaled by whatever box it landed
-in. In the tracked-alerts two-up the panes are far wider than the 320-unit
-narrow viewBox, so the 9px labels, the rings and the pill all drew at roughly
-1.4x: `ENTRY`, `H`, `L` and `VOLUME · PRINT` came out oversized and the chart
-was taller than it needed to be. Same bug as the board column drawing them at
-six, just the other way round.
-
-The container is now measured (ResizeObserver) and the viewBox width is set to
-it, so one user unit is one CSS pixel and type keeps the size it was written at
-whatever the placement. Height tracks width with a cap (320 inline, 520 popped
-out) so a wide pane gets a wider chart, not a taller page. Padding is derived
-from the type scale rather than a wide/narrow flag, and the popped-out type
-scale drops from a stretch-correcting 1.75 to a gentle 1.15-1.45 now that there
-is no stretch to correct.
-
-`cbedge-v3/src/board/topFlow/ContractProbe.tsx`
+`cbedge-v3/src/pages/Whales.tsx` - `Card` takes an optional `className`.
 
 ## 2026-09-16 - budget.cbedge.net reads the statement, like the laptop does
 
@@ -23825,20 +23765,3 @@ The field stays on `SignalRow` because `/proxy/signals` still returns it.
 
 Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/shell/alertTypes.ts`,
 `cbedge-v3/src/shell/AlertsPanel.tsx`, `cbedge-v3/src/mobile/pages/MAlerts.tsx`.
-
----
-
-## 2026-09-16 — owner-vite build fix: stray `VisitorMap-1.tsx`
-
-The VPS deploy failed on `target owners` with three `TS2307` errors from
-`owner-vite/src/components/VisitorMap-1.tsx`: it imports `./CustomerName`,
-`./mapTheme` and `./countryMaps`, none of which exist. It is a stale copy of
-`VisitorMap.tsx`, made before those were consolidated into
-`./CustomerCard`, `../lib/theme` and `../lib/countryMaps`. Nothing imports it,
-but `tsc` still type-checks it, so the Docker build died at `npm run build`.
-
-Neutralised it to a comment + `export {}` stub (this session had no shell on the
-laptop, so the file could not be deleted outright). Full original content saved
-to `_to_delete/VisitorMap-1.tsx.bak` — delete both when convenient.
-
-Files: `owner-vite/src/components/VisitorMap-1.tsx`, `_to_delete/VisitorMap-1.tsx.bak`.

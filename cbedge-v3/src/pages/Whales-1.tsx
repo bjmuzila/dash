@@ -964,12 +964,26 @@ export default function Whales() {
                   key={t.ticker}
                   type="button"
                   onClick={() => setTicker((cur) => (cur.toUpperCase() === t.ticker ? '' : t.ticker))}
-                  className="grid w-full grid-cols-[56px_1fr_74px] items-center gap-2 px-3 py-1.5 text-left hover:bg-raised"
-                  title={`${num(t.n)} prints · ${money(t.total)}`}
+                  className="grid w-full grid-cols-[52px_1fr_92px] items-center gap-2 px-3 py-1.5 text-left hover:bg-raised"
+                  title={`${num(t.n)} prints · ${money(t.total)} · ${money(Number(t.bull))} bullish vs ${money(Number(t.bear))} bearish`}
                 >
                   <span className="text-sm font-semibold text-fg">{t.ticker}</span>
                   <SplitBar bull={Number(t.bull)} bear={Number(t.bear)} max={tickerMax} />
-                  <span className="tabular text-right text-xs text-muted">{money(t.total)}</span>
+                  {/* The bar has always been split bull/bear; the NUMBER beside
+                      it was a single total, so the one thing the card is for —
+                      how lopsided a ticker is — had to be eyeballed off seven
+                      pixels of bar. The two sides are now spelled out under the
+                      total in their own ink. They do NOT have to add up to it:
+                      prints with no readable side are in the total and in
+                      neither half, same as the tiles at the top of the page. */}
+                  <span className="text-right">
+                    <span className="tabular block text-xs text-muted">{money(t.total)}</span>
+                    <span className="tabular block text-3xs leading-tight">
+                      <span className="text-up">{money(Number(t.bull))}</span>
+                      <span className="text-faint"> / </span>
+                      <span className="text-down">{money(Number(t.bear))}</span>
+                    </span>
+                  </span>
                 </button>
               ))}
               {!d?.tickers.length && <div className="px-3 py-2 text-sm text-faint">Nothing in range.</div>}

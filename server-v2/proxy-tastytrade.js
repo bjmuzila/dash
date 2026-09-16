@@ -408,9 +408,27 @@ async function ttGet(path) {
  * @param {Array} contracts from fetchChain()
  * @returns {{contracts:Array, dropped:number}}
  */
-function preferPmSettlement(contracts) {
+function preferPmSettlement(contracts, root = null) {
+  // Pass 1 — index roots only: PURGE, not just de-duplicate. Same-strike
+  // collisions are the common case, but the AM monthly also lists a handful of
+  // strikes the PM item never carries (e.g. SPX 8065 on the Sep-2026 monthly).
+  // Those orphans survived the key-collision pass and were then the ONLY
+  // root-symbol "SPX" rows left on that date, so a nearest-strike walk could
+  // snap any requested strike onto a dead AM leg quoted at pennies. On an
+  // expiration that lists ANY PM leg, every AM leg goes — orphans included.
+  // AM-only expirations are untouched, so no date loses coverage.
+  let pool = contracts;
+  if (root && INDEX_ROOTS.has(root)) {
+    const pmExpiries = new Set();
+    for (const c of contracts) if (c.settlementType === 'PM') pmExpiries.add(c.expiration);
+    if (pmExpiries.size) {
+      pool = contracts.filter((c) => !(c.settlementType === 'AM' && pmExpiries.has(c.expiration)));
+    }
+  }
+  // Pass 2 — collapse whatever same-key collisions remain (non-index roots, and
+  // any index date the purge left alone).
   const byKey = new Map();
-  for (const c of contracts) {
+  for (const c of pool) {
     const key = `${c.expiration}|${c.strike}|${c.type}`;
     const prev = byKey.get(key);
     if (!prev) { byKey.set(key, c); continue; }
@@ -419,7 +437,7 @@ function preferPmSettlement(contracts) {
     if (rank(c) > rank(prev)) byKey.set(key, c);
   }
   const dropped = contracts.length - byKey.size;
-  return { contracts: dropped > 0 ? [...byKey.values()] : contracts, dropped };
+  return { contracts: dropped > 0 ? [...byKey.values()] : pool, dropped };
 }
 
 /**
@@ -481,11 +499,13 @@ async function fetchChain(underlying = SYMBOL) {
   }
 
   const expirations = [...expSet].sort();
-  // Monthly Fridays: drop the AM-settled duplicate so exactly ONE contract owns
-  // each (expiration, strike, type). See preferPmSettlement() above.
-  const { contracts: deduped, dropped } = preferPmSettlement(contracts);
+  // Monthly Fridays: on an index root the AM-settled monthly is dropped whole
+  // for any expiration that also lists PM legs, so exactly ONE contract owns
+  // each (expiration, strike, type) and no AM orphan strike is reachable.
+  // See preferPmSettlement() above.
+  const { contracts: deduped, dropped } = preferPmSettlement(contracts, String(underlying).toUpperCase());
   if (dropped > 0) {
-    console.log(`[CHAIN] ${String(underlying).toUpperCase()}: dropped ${dropped} AM-settled duplicate legs (PM contract kept)`);
+    console.log(`[CHAIN] ${String(underlying).toUpperCase()}: dropped ${dropped} AM-settled legs (PM contract kept)`);
   }
   return { expirations, contracts: deduped };
 }
@@ -863,19 +883,14 @@ async function probeRestTT({ ticker, expiry, type, strike }) {
   const n = firstFiniteNumber;
   const reqStrike = Number(strike);
   const root = chainTicker(ticker);
-  const wantRoot = String(ticker || '').toUpperCase().replace(/^\./, '');
 
   const ttChain = await getChainCached(ticker).catch(() => ({ expirations: [], contracts: [] }));
-  const cands = (ttChain.contracts || []).filter((c) => c.expiration === expiry && c.type === type);
-  // fetchChain() already collapses the monthly-Friday AM/PM collision to the PM
-  // contract, so there is normally exactly one candidate per strike. This kept
-  // preference is belt-and-braces for any future root that legitimately shares a
-  // (expiration, strike, type) key: prefer the root the user typed, else any
-  // match. Typing "SPX" on a monthly Friday now resolves to the live SPXW leg,
-  // which is intended — the AM monthly is settled and dead by then.
-  const pool = cands.some((c) => c.rootSymbol === wantRoot)
-    ? cands.filter((c) => c.rootSymbol === wantRoot)
-    : cands;
+  // fetchChain() purges the AM monthly on any index expiration that also lists
+  // PM legs, so the surviving candidates are exactly one contract per strike and
+  // all of them are the live PM leg. Nothing is filtered by the root the caller
+  // typed: that preference is what used to strand a "SPX" request on the few AM
+  // orphan strikes the purge now removes. "SPX" and "SPXW" resolve identically.
+  const pool = (ttChain.contracts || []).filter((c) => c.expiration === expiry && c.type === type);
   let best = null, bestDist = Infinity;
   for (const c of pool) {
     const d = Math.abs(Number(c.strike) - reqStrike);

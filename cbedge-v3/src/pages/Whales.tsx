@@ -211,9 +211,14 @@ function Tile({ k, v, sub, ink }: { k: string; v: string; sub?: string; ink?: st
   )
 }
 
-function Card({ title, note, children }: { title: string; note?: string; children: React.ReactNode }) {
+function Card({ title, note, className, children }: {
+  title: string
+  note?: string
+  className?: string
+  children: React.ReactNode
+}) {
   return (
-    <div className="flex min-h-0 flex-col rounded-md border border-line bg-surface">
+    <div className={['flex min-h-0 flex-col rounded-md border border-line bg-surface', className ?? ''].join(' ')}>
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
         <h2 className="text-2xs font-bold uppercase tracking-[0.11em] text-faint">{title}</h2>
         {note && <span className="ml-auto text-2xs text-faint">{note}</span>}
@@ -649,12 +654,18 @@ export default function Whales() {
         <div className="flex min-w-0 flex-col gap-2">
 
           {/* ── prints ───────────────────────────────────────────────────── */}
+          {/* The prints card GROWS to the height of the right-hand rail rather
+              than stopping at a fixed 480 and leaving a dead band under it with
+              the tracked card stranded below. The table scrolls inside whatever
+              height that leaves, with a floor so a short rail cannot squash it
+              to a couple of rows. */}
           <Card
+            className="flex-1"
             title="Prints"
             note={d ? `${num(rows.length)} shown${s && s.n > rows.length ? ` of ${num(s.n)}` : ''}${day ? ` · ${day}` : ''}` : undefined}
           >
-            <div className="flex min-h-0">
-              <div className="max-h-[480px] min-w-0 flex-1 overflow-auto">
+            <div className="flex min-h-0 flex-1">
+              <div className="min-h-[420px] min-w-0 flex-1 overflow-auto">
                 <table className="w-full border-collapse text-xs">
                   <thead className="sticky top-0 z-[1] bg-surface">
                     <tr className="text-2xs uppercase tracking-[0.09em] text-faint">
@@ -937,7 +948,15 @@ export default function Whales() {
               </div>
             )}
           </Card>
+        </div>
 
+        {/* ── the rail ───────────────────────────────────────────────────────
+            Three roll-ups over the SAME filtered range as the table, each a
+            filter you can click back into it. They belong beside the prints,
+            not under them: read together they are "who, when, and again?" for
+            the list on the left.
+        ────────────────────────────────────────────────────────────────────── */}
+        <div className="flex min-w-0 flex-col gap-2">
           <Card title="Where the size went" note={span.label}>
             <div className="py-1">
               {(d?.tickers ?? []).map((t) => (
