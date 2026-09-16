@@ -57,6 +57,15 @@ export const MOBILE_TABS: MobileTab[] = [
   // one made narrow. /v3/options-chain is untouched.
   { id: 'em', path: '/m/em', label: 'Moves', title: 'Estimated Moves', icon: '↔️' },
   { id: 'econ', path: '/m/econ', label: 'Cal', title: 'Economic Calendar', icon: '📅' },
+  // THE ONE TAB THAT IS NOT A CARD, and the exception is on purpose. The signal
+  // feed has no board card: on the desktop it is TOOLBAR CHROME — the pill in
+  // src/shell/Shell.tsx and its dropdown in src/shell/AlertsPanel.tsx — and
+  // Shell.tsx drops the toolbar entirely on /m/*, so without a tab the feed is
+  // not cramped on a phone, it is unreachable. src/mobile/pages/MAlerts.tsx
+  // still imports the poll, the catalogue and the filter state from
+  // src/shell/AlertsFeed.tsx and src/shell/alertTypes.ts, so only the LAYOUT is
+  // phone-side; nothing about what fires or how a row reads is duplicated.
+  { id: 'alerts', path: '/m/alerts', label: 'Alert', title: 'Signal Alerts', icon: '🔔' },
 ]
 
 export const MOBILE_ROOT = '/m'
@@ -81,6 +90,9 @@ export const MOBILE_TO_DESKTOP: Record<string, string> = {
   '/m/spx': '/',
   '/m/em': '/em',
   '/m/econ': '/',
+  // No desktop page of its own — the feed lives in the toolbar, which is on
+  // every desktop route, so the board is the honest landing.
+  '/m/alerts': '/',
 }
 
 export function isMobilePath(pathname: string | null | undefined): boolean {

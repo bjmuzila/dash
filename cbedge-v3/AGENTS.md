@@ -174,9 +174,10 @@ a catch-all would swallow `/v3/assets/*.js` and hand back HTML.
 
 ## The phone build — `/v3/m/*`
 
-Six screens, and **not one of them is a phone-only implementation of anything**.
-Each is a HOME-BOARD CARD or a v3 page rendered full-bleed inside
-`src/mobile/MobileShell.tsx`:
+Six screens. **Five of them are not a phone-only implementation of anything** —
+each is a HOME-BOARD CARD or a v3 page rendered full-bleed inside
+`src/mobile/MobileShell.tsx`. The sixth, `/m/alerts`, is the single exception,
+and the reason is below the table:
 
 | Tab | What it actually is |
 |---|---|
@@ -186,6 +187,20 @@ Each is a HOME-BOARD CARD or a v3 page rendered full-bleed inside
 | `/m/chain` | `pages/OptionsChain` |
 | `/m/em` | `pages/Em` |
 | `/m/econ` | `board/econCalendar/EconCalendarCard` |
+| `/m/alerts` | *(no card — see below)* `src/mobile/pages/MAlerts.tsx` |
+
+**`/m/alerts` is the one exception, and it is not a loophole.** The signal feed
+has no board card: on the desktop it is TOOLBAR CHROME — the pill in
+`src/shell/Shell.tsx` opening the `absolute` dropdown in
+`src/shell/AlertsPanel.tsx` — and `Shell.tsx` drops the toolbar entirely on
+`/m/*`, so on a phone the feed is not cramped, it is unreachable. A tab is the
+only door. What the screen does NOT re-implement is everything that could
+drift: the poll (`useAlertsFeed` from `src/shell/AlertsFeed.tsx`), the
+catalogue (`ALERT_TYPES` / `TYPE_BY_ID`) and the filter + master state
+(`readShown`/`writeShown`, `fetchMasterEnabled`) are all imported, so a
+detector added to `alertTypes.ts` shows up on the phone the same build. Only
+the layout is phone-side. If you find yourself adding a second exception,
+check first whether the surface could be a card instead.
 
 That is the whole design. v2 shipped six bespoke phone pages under
 `components/mobile/` and they drifted from the desktop within a week, because

@@ -172,6 +172,21 @@ export interface ChartSettings {
    */
   emLevels: boolean
   /**
+   * Draw the dashed hairline with each EM tag, or the tag alone.
+   *
+   * Under `emLevels`, not beside it: with the layer off this means nothing.
+   *
+   * Its own switch because the tag and the line answer different questions. The
+   * tag says WHERE the day's boundary is; the line is what lets you watch price
+   * travel toward it, stall under it or go through it. On a pane already
+   * carrying candles, bubbles and a heatmap the line is the half you may not
+   * want — and losing it should not cost you the level. Off, the EM marks are
+   * drawn exactly like CORE / CW / PW: a chip at the left edge, no rule.
+   *
+   * On by default: watching price work into the band is the reason to mark it.
+   */
+  emLines: boolean
+  /**
    * DEAD (2026-09-04). The expiry pin, from when the card carried a dropdown to
    * set one. The dropdown is gone and the card draws the NEAREST expiration
    * always, so nothing reads this and nothing writes it.
@@ -239,6 +254,7 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // On by default, same reasoning: two hairlines at the edges of the day's
   // range, and a band nobody switched on is a band nobody knows exists.
   emLevels: true,
+  emLines: true,
   expiry: '',
   bubbleBucket: BUBBLE_BUCKET_DEFAULT,
   bubbleScale: 1,
@@ -705,6 +721,9 @@ function coerce(raw: unknown): ChartSettings {
     // `!== false`, like levelLabels: a blob written before the rails existed
     // should come back with them ON, which is what a card created today shows.
     emLevels: p.emLevels !== false,
+    // `!== false` again: a blob written before the line had a switch was
+    // showing the line, and that is what it should come back as.
+    emLines: p.emLines !== false,
     expiry: typeof p.expiry === 'string' ? p.expiry : '',
     bubbleBucket: isBubbleBucket(p.bubbleBucket) ? p.bubbleBucket : DEFAULT_SETTINGS.bubbleBucket,
     bubbleScale: clampScale(p.bubbleScale),

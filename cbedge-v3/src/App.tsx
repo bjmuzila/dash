@@ -128,6 +128,13 @@ const MHeat = lazy(() => import('@/mobile/pages/MHeat'))
 const MSpx = lazy(() => import('@/mobile/pages/MSpx'))
 const MEm = lazy(() => import('@/mobile/pages/MEm'))
 const MEcon = lazy(() => import('@/mobile/pages/MEcon'))
+// /m/alerts — the signal feed. The ONE phone screen that is not a board card,
+// because the desktop original is toolbar chrome (the pill in Shell.tsx) and
+// Shell.tsx drops the toolbar on /m/*. It imports the poll and the catalogue
+// from src/shell/AlertsFeed.tsx and src/shell/alertTypes.ts, both of which are
+// already in the entry chunk, so this route's own chunk is layout and nothing
+// else. See src/mobile/pages/MAlerts.tsx.
+const MAlerts = lazy(() => import('@/mobile/pages/MAlerts'))
 
 // STILL RETIRED 2026-08-30 — Test Lab (/test) and Journal (/trading) are gone
 // from v3, along with the ICT, ES Candles, Board and Multi Greek rail slots
@@ -189,6 +196,7 @@ export default function App() {
             <Route path="/m/spx" element={<MSpx />} />
             <Route path="/m/em" element={<MEm />} />
             <Route path="/m/econ" element={<MEcon />} />
+            <Route path="/m/alerts" element={<MAlerts />} />
 
             <Route path="*" element={<NotFound />} />
           </Routes>

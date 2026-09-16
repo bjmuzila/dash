@@ -266,8 +266,15 @@ export interface EsChartHandle {
    * Drawn beside the CORE / CW / PW tags and under the same clip, but from its
    * own state and behind its own switch — see ChartEmBand for why it is not a
    * pair of extra keys on ChartLevels, and for the ES basis the CALLER owes it.
+   *
+   * `lines` draws the dashed hairline across the pane as well as the tag. Its
+   * own flag, and not folded into the band being present, because the tag and
+   * the line answer different questions: the tag says WHERE the boundary is,
+   * the line is what lets you watch price approach it. On a busy pane the
+   * second is the one you may not want, and losing it should not cost you the
+   * first. Tag-only is then exactly how CORE / CW / PW are drawn.
    */
-  setEmBand: (band: ChartEmBand | null) => void
+  setEmBand: (band: ChartEmBand | null, lines?: boolean) => void
   /**
    * The volume histogram along the bottom of the price pane.
    *
@@ -543,6 +550,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   let levels: ChartLevels | null = null
   /** The daily EM rails. null = the layer is off, or nothing recorded today. */
   let emBand: ChartEmBand | null = null
+  /** Draw the dashed hairline with each EM tag, or the tag alone. */
+  let emLines = true
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
   // through React.
@@ -1152,10 +1161,20 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     // you could see where the wall was but not what it was without reading it
     // off the axis. So the price rides in the tag now, formatted exactly as the
     // price scale formats it (2dp), and the line is not needed to connect them.
+    //
+    // Both families of tag live on the LEFT edge, so the EM rails have to know
+    // where the wall chips landed to avoid stacking on top of one at a shared
+    // price. Every chip this pass draws records its row and its right edge
+    // here; the EM block reads it and slides right past anything in its way.
+    const chipRows: Array<{ y: number; right: number }> = []
+    /** Chip height, and therefore the y distance at which two of them collide. */
+    const CHIP_H = 12
+
     if (levels) {
       ctx.save()
       ctx.font = '700 9px ui-sans-serif, system-ui, sans-serif'
       ctx.textBaseline = 'middle'
+      ctx.textAlign = 'left'
       // The plot only. Below plotH is the time axis, where a level line would
       // be drawing across the clock.
       ctx.beginPath()
@@ -1183,37 +1202,45 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         ctx.fillRect(2, y - 6, tw + 6, 12)
         ctx.fillStyle = appInk
         ctx.fillText(text, 5, y + 0.5)
+        chipRows.push({ y, right: 2 + tw + 6 })
       }
       ctx.restore()
     }
 
     // ── THE DAILY EXPECTED-MOVE RAILS ────────────────────────────────────────
     //
-    // Two horizontals at fixed prices. They are the only marks on this pane
-    // that do not move with the data: the band was decided once this morning
-    // off the front expiry's ATM straddle, anchored to the previous session's
-    // close, and frozen server-side. Nothing here may recompute it — see
-    // ChartEmBand and data/dailyEm.ts.
+    // Two marks at fixed prices. They are the only thing on this pane that does
+    // not move with the data: the band was decided once this morning off the
+    // front expiry's ATM straddle, anchored to the previous session's close,
+    // and frozen server-side. Nothing here may recompute it — see ChartEmBand
+    // and data/dailyEm.ts.
     //
-    // ── These DO get a line, and CORE / CW / PW do not ───────────────────────
-    // That is not an inconsistency, it is the difference between the two. The
-    // walls' hairlines were dropped because three of them across a pane already
-    // carrying candles, bubbles and a heatmap were three horizontals competing
-    // with the price action, and each said nothing its tag did not — the tag
-    // sits AT the level, so the height IS the line.
+    // ── LEFT edge, with CORE / CW / PW ───────────────────────────────────────
+    // Same margin, same chip shape, same 2dp as the price scale, so the pane
+    // has ONE column of labels to read rather than two facing each other across
+    // it. Colour is what separates the families — violet for the band, the
+    // level palette for the walls — and colour does that without costing a
+    // second place to look.
     //
-    // An EM rail is a BOUNDARY, and the whole use of one is watching price
-    // travel toward it, stall under it, or go through it. That reading needs
-    // the line carried across the session, not a chip at the left margin you
-    // have to sight along. There are two of them, they sit at the extremes of
-    // the day rather than in the thick of it, and they are drawn at a third of
-    // the ink the walls used — so the argument that retired the wall lines does
-    // not reach these.
+    // The cost of sharing the margin is a collision when an EM rail lands
+    // within a chip's height of a wall. That is not rare on purpose: the call
+    // wall sitting on the EM high IS the day's setup, and it is the one moment
+    // this layer must not turn into one chip drawn over another. So a chip that
+    // would overlap slides right, past the far edge of whatever is already
+    // there, and stays on its own line. It never moves VERTICALLY: the height
+    // is the price, and a tag nudged off its level is a tag that lies.
     //
-    // Right edge for the tags, deliberately: CORE / CW / PW own the left one.
-    // Opposite ends means the two families never collide at a shared price and
-    // tell themselves apart at a glance. `plotW` is the pane WITHOUT the price
-    // scale, so right-aligned inside it still clears the axis labels.
+    // ── The line is optional, and the walls' never come back ─────────────────
+    // The walls' hairlines were dropped because three horizontals across a pane
+    // already carrying candles, bubbles and a heatmap competed with the price
+    // action, and each said nothing its tag did not. An EM rail is a BOUNDARY,
+    // and the use of one is watching price travel toward it, stall under it or
+    // go through it — a reading that wants the line carried across the session.
+    // There are two of them, at the extremes of the day rather than in the
+    // thick of it, at a third of the ink.
+    //
+    // That is an argument for offering the line, not for forcing it, so it has
+    // its own switch. Off, these are tags exactly like the walls'.
     if (emBand) {
       ctx.save()
       ctx.font = '700 9px ui-sans-serif, system-ui, sans-serif'
@@ -1233,28 +1260,43 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         if (y < 0 || y > plotH) continue
 
         const text = `${label} ${price.toFixed(2)}`
-        const tw = ctx.measureText(text).width
-        const chipW = tw + 6
-        const chipX = Math.max(2, plotW - chipW - 2)
+        const chipW = ctx.measureText(text).width + 6
+        // Slide past anything already occupying this row — including the other
+        // EM rail, which `chipRows` collects too, for the zoom level where the
+        // two are a few pixels apart.
+        let chipX = 2
+        for (const r of chipRows) {
+          if (Math.abs(r.y - y) < CHIP_H) chipX = Math.max(chipX, r.right + 3)
+        }
+        // A chip that has been pushed clean off the pane is worse than none:
+        // it clips to a coloured stub carrying no number. Drop back to the
+        // margin and let it overlap rather than draw that.
+        if (chipX + chipW > plotW - 2) chipX = 2
 
-        // The line stops where the chip starts rather than running under it —
-        // a dashed rule crossing its own label is the one place this layer
-        // could look like a rendering fault.
-        ctx.setLineDash([3, 4])
-        ctx.strokeStyle = emInk
-        ctx.globalAlpha = 0.45
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.moveTo(0, y)
-        ctx.lineTo(Math.max(0, chipX - 4), y)
-        ctx.stroke()
-        ctx.globalAlpha = 1
-        ctx.setLineDash([])
+        if (emLines) {
+          // The line starts AFTER the chip rather than running under it — a
+          // dashed rule crossing its own label is the one place this layer
+          // could look like a rendering fault.
+          const from = chipX + chipW + 4
+          if (from < plotW) {
+            ctx.setLineDash([3, 4])
+            ctx.strokeStyle = emInk
+            ctx.globalAlpha = 0.45
+            ctx.lineWidth = 1
+            ctx.beginPath()
+            ctx.moveTo(from, y)
+            ctx.lineTo(plotW, y)
+            ctx.stroke()
+            ctx.globalAlpha = 1
+            ctx.setLineDash([])
+          }
+        }
 
         ctx.fillStyle = emInk
         ctx.fillRect(chipX, y - 6, chipW, 12)
         ctx.fillStyle = appInk
         ctx.fillText(text, chipX + 3, y + 0.5)
+        chipRows.push({ y, right: chipX + chipW })
       }
       ctx.restore()
     }
@@ -1653,10 +1695,11 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // whenever something ELSE happened to move the chart.
       version++
     },
-    setEmBand(next) {
+    setEmBand(next, lines = true) {
       emBand = next
+      emLines = lines
       // Same reason as setLevels: the band changes at most twice a day (once
-      // when the row lands, once if the chip is toggled), and neither of those
+      // when the row lands, once if a chip is toggled), and neither of those
       // moves the chart on its own. Without the bump the rails would appear
       // the next time something else did.
       version++

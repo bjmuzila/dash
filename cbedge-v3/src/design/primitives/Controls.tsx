@@ -237,21 +237,45 @@ export function Chip({
   onClick,
   title,
   size = 'sm',
+  disabled = false,
 }: {
   label: string
   on: boolean
   onClick: () => void
   title?: string
   size?: ControlSize
+  /**
+   * Inert and dimmed — the toggle is REAL but means nothing right now, because
+   * something it depends on is off (EM line under EM, say).
+   *
+   * Same rule SegGroup's per-option `disabled` follows, and for the same
+   * reason: a control whose buttons come and go is a control you cannot learn,
+   * and a chip that vanishes gives no reason for having vanished. A dimmed one
+   * with a `title` saying what to turn on first is the honest version.
+   *
+   * The stored value is NOT rewritten while it is dimmed. A chip that is on but
+   * disabled stays on, so switching its parent back restores what you had
+   * rather than a default.
+   *
+   * Added 2026-09-16. Additive: with the prop omitted this renders
+   * byte-identically to before, so no existing caller moved.
+   */
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={() => {
+        // Guarded as well as `disabled`, matching SegGroup: a disabled button
+        // still receives a programmatic click.
+        if (!disabled) onClick()
+      }}
+      disabled={disabled}
       title={title}
       className={[
         CHIP_SIZE[size],
         'rounded-sm border font-semibold tracking-wide transition-colors',
+        'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:opacity-40',
         on ? 'border-accent bg-raised text-fg' : 'border-line text-muted opacity-60 hover:opacity-100',
       ].join(' ')}
     >

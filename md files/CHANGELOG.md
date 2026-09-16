@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-09-15 (i) - Customers: Home board · visitation card
+
+Under Pages being visited: the home board on its own (v3 `/v3`, `/v3/home` and legacy `/home`), bucketed at the header granularity - loads and distinct people side by side, with range totals (loads · people · with accounts · paying). Owner and bot rows excluded. Lives in `Customers.tsx` as `HomeVisitationCard`.
+
 ## 2026-09-15 (h) - Visitors map back on its own page
 
 `/owner/visitors` is a real page again (restored verbatim, plus a Customers → button); the map is out of the Customers page, which links to it with a Map → button. The `/owner/visitors` redirect is gone; Info group is now Sales · Customers · Visitors · Admin. Names in the map's pinned card still open the customer card.

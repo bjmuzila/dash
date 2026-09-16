@@ -1159,8 +1159,8 @@ export function GexCandlesCard({
   }, [emBand, useEs, basis])
 
   useEffect(
-    () => apply((h) => h.setEmBand(settings.emLevels ? emDrawn : null)),
-    [settings.emLevels, emDrawn, apply],
+    () => apply((h) => h.setEmBand(settings.emLevels ? emDrawn : null, settings.emLines)),
+    [settings.emLevels, settings.emLines, emDrawn, apply],
   )
 
   // Volume strip and the dashed last-price line. Both are pure chart state —
@@ -1664,8 +1664,25 @@ export function GexCandlesCard({
                     onClick={() => patch({ emLevels: !settings.emLevels })}
                     title={
                       emBand
-                        ? `Today's expected move: ±${emBand.em.toFixed(2)} off the ${emBand.refClose.toFixed(2)} prior close — ${emBand.down.toFixed(2)} to ${emBand.up.toFixed(2)}. Read once this morning from ${emBand.expiry || 'the front expiry'}'s ATM straddle and frozen, so the two rails do not move all session`
+                        ? `Today's expected move: ±${emBand.em.toFixed(2)} off the ${emBand.refClose.toFixed(2)} prior close — ${emBand.down.toFixed(2)} to ${emBand.up.toFixed(2)}. A chip at the left edge for each, beside CORE/CW/PW. Read once this morning from ${emBand.expiry || 'the front expiry'}'s ATM straddle and frozen, so the two levels do not move all session`
                         : `No expected-move band recorded for ${symbol}${activeDay ? ` on ${activeDay}` : ' today'} — it is written on the session's first read of the option chain, and a past session that predates it has none to draw`
+                    }
+                  />
+                  {/* Under the EM chip, and dimmed rather than dropped when it
+                      is off — a toolbar whose buttons come and go is a toolbar
+                      you cannot learn. Off, the EM marks are chips exactly like
+                      CORE/CW/PW; on, each carries a dashed rule across the pane
+                      so you can watch price work into the band. */}
+                  <Chip
+                    size={ctlSize}
+                    label="EM line"
+                    on={settings.emLines}
+                    disabled={!settings.emLevels}
+                    onClick={() => patch({ emLines: !settings.emLines })}
+                    title={
+                      settings.emLevels
+                        ? 'Carry a dashed hairline across the chart from each EM chip. Off, the two levels are tags at the left edge and nothing else — the way CORE, CW and PW are drawn'
+                        : 'Turn EM on first — this decides whether those two levels carry a line across the chart or are tags only'
                     }
                   />
                   <Chip
