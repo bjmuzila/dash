@@ -154,20 +154,27 @@ export default function MAlerts() {
                 style={{ boxShadow: `inset 2px 0 0 0 ${t.color}` }}
               >
                 <div className="min-w-0 flex-1">
+                  {/* Same order as the desktop panel, and for the same
+                      reason: ticker first, title biggest, the detector's
+                      sentence underneath it. At arm's length the symbol and the
+                      colour bar are the two things that survive. */}
                   <div className="flex items-baseline gap-1.5">
                     <span
-                      className="truncate text-3xs font-bold uppercase tracking-wide"
+                      className="shrink-0 text-base font-bold tracking-tight"
                       style={{ color: t.color }}
                     >
-                      {a.variant ? `${t.tag} · ${a.variant}` : t.name}
+                      {a.ticker}
+                    </span>
+                    <span className="truncate text-base font-semibold leading-tight text-fg">
+                      {a.title}
                     </span>
                     <span className="ml-auto shrink-0 text-3xs tabular-nums text-fg opacity-80">
                       {a.at}
                     </span>
                   </div>
-                  <p className="mt-0.5 text-sm leading-snug text-fg">{a.text}</p>
+                  <p className="mt-0.5 text-xs leading-snug text-fg opacity-90">{a.text}</p>
                   {a.meta && (
-                    <p className="mt-0.5 text-2xs tabular-nums text-fg opacity-80">{a.meta}</p>
+                    <p className="mt-0.5 text-2xs tabular-nums text-fg opacity-70">{a.meta}</p>
                   )}
                 </div>
               </li>

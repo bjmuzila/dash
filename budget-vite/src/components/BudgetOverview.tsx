@@ -140,10 +140,10 @@ export default function BudgetOverview({ o, briefing, rent, categories, unsorted
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
         <SafeToSpend o={o} currency={currency} />
-        <SpendPace o={o} currency={currency} />
+        <SpendPace o={o} currency={currency} month={month} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
-        <CategoryDonut o={o} currency={currency} />
+        <CategoryDonut o={o} currency={currency} month={month} />
         <BalanceCheck o={o} currency={currency} />
       </div>
 
@@ -454,8 +454,12 @@ function Tiles({ o, currency }: { o: Overview; currency: string }) {
       <Tile k="Expenses" v={fmtK(t.expenses, currency)} sub="Month outflows" tone={SOFT_RED} />
       <Tile k="Net profit" v={fmtK(t.netProfit, currency)} sub="Income − expenses"
             tone={t.netProfit < 0 ? SOFT_RED : '#5ECB92'} />
+      {/* Tips are already inside `amazon`; the sub spells them out the way the
+          desktop does, because "net of gas" alone reads as pay − gas. */}
       <Tile k="Amazon" v={fmt0(t.amazon, currency)}
-            sub={`${t.amazonDays} day${t.amazonDays === 1 ? '' : 's'} · net of gas`}
+            sub={`${t.amazonDays} day${t.amazonDays === 1 ? '' : 's'}`
+                 + (t.amazonTips > 0 ? ` · incl. ${fmt0(t.amazonTips, currency)} tips` : '')
+                 + ' · net of gas'}
             tone={t.amazon < 0 ? SOFT_RED : T.ink} />
       <Tile k="Bzila" v={fmtK(t.bzila, currency)}
             sub={`${fmtK(t.bzilaIn, currency)} in · ${fmtK(t.bzilaOut, currency)} out`}
@@ -466,8 +470,17 @@ function Tiles({ o, currency }: { o: Overview; currency: string }) {
 
 // ── Safe to spend ────────────────────────────────────────────────────────────
 
+/**
+ * The headline is `safe` — what is free for the WHOLE month — not `safe / days`.
+ *
+ * The desktop's monthly view shows the month figure and calls it "left this
+ * month"; the per-day number is what its DAILY range shows. Leading with the
+ * per-day figure here meant the same card read "-$8" on the phone and "-$117"
+ * on the laptop for the same month, which looks like a broken number rather
+ * than a different unit. Per-day is kept underneath, where it costs nothing.
+ */
 function SafeToSpend({ o, currency }: { o: Overview; currency: string }) {
-  const neg = o.safePerDay < 0
+  const neg = o.safe < 0
   const pct = Math.min(100, Math.max(0, (o.todayDay / o.daysInMonth) * 100))
   return (
     <div style={card({ padding: 12, display: 'flex', flexDirection: 'column' })}>
@@ -475,10 +488,11 @@ function SafeToSpend({ o, currency }: { o: Overview; currency: string }) {
       <div style={{ fontSize: 27, fontWeight: 800, lineHeight: 1, letterSpacing: '-0.02em',
                     fontVariantNumeric: 'tabular-nums', color: neg ? SOFT_RED : GOOD,
                     textShadow: `0 0 26px ${neg ? 'rgba(244,148,142,.45)' : 'rgba(142,202,230,.45)'}` }}>
-        {fmt0(o.safePerDay, currency)}
-        <span style={{ fontSize: 12, fontWeight: 800 }}>/day</span>
+        {fmt0(o.safe, currency)}
+        <span style={{ fontSize: 11, fontWeight: 800 }}> left this month</span>
       </div>
-      <KV k="Free" v={fmt0(o.safe, currency)} tone={o.safe < 0 ? SOFT_RED : T.ink} />
+      <KV k="Per day" v={`${fmt0(o.safePerDay, currency)}/day`}
+          tone={o.safePerDay < 0 ? SOFT_RED : T.ink} />
       <KV k="Bills due" v={fmt0(o.billsLeft, currency)} tone={SOFT_RED} />
       <KV k="Days left" v={String(o.daysLeft)} />
       <div style={{ marginTop: 'auto', paddingTop: 11 }}>
@@ -497,21 +511,67 @@ function SafeToSpend({ o, currency }: { o: Overview; currency: string }) {
 
 // ── Spend pace ───────────────────────────────────────────────────────────────
 
-function SpendPace({ o, currency }: { o: Overview; currency: string }) {
+/**
+ * Shown when the month was never imported on Real Month. A statement-backed
+ * card with no statement must NOT draw zeros: a flat line along the bottom
+ * reads as a month of no spending, which is the one thing it definitely does
+ * not mean.
+ */
+function NoStatement({ title, month, months }: { title: string; month: string; months: string[] }) {
+  const others = months.filter((m) => m !== month).slice(0, 6)
+  return (
+    <div style={card({ padding: 12, display: 'flex', flexDirection: 'column' })}>
+      <Head small title={title} />
+      <div style={{ flex: 1, display: 'grid', placeItems: 'center', textAlign: 'center', padding: '16px 4px' }}>
+        <div>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink }}>No statement yet</div>
+          <div style={{ ...body(11), marginTop: 5, lineHeight: 1.45 }}>
+            {others.length
+              ? `This card reads what actually cleared. Imported: ${others.join(', ')}.`
+              : 'Import the month on Real Month and this fills in.'}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Cumulative CLEARED spend against two references: the straight budget ramp
+ * (demoted — it is what you intended) and the typical month's own curve.
+ *
+ * The benchmark is the average of prior months' day-by-day curves, not a
+ * straight line. Rent and the big bills clear before the 5th, so against a
+ * ramp this badge would read OVER every month until the line catches up near
+ * the 25th. The desktop's badge names which reference it used, and so does
+ * this one — "over by $1,654" means two different things depending on it.
+ */
+function SpendPace({ o, currency, month }: { o: Overview; currency: string; month: string }) {
+  const st = o.stmt
+  if (!st || !st.imported || !st.hasCurve) {
+    return <NoStatement title="Spend pace" month={month} months={st?.months || []} />
+  }
+
   const W = 150, H = 76
-  const n = o.cum.length
-  const over = o.spentMtd > o.paceNow
-  const delta = Math.abs(o.spentMtd - o.paceNow)
+  const n = st.cum.length
+  const upto = Math.max(1, Math.min(o.todayDay, n))
+  const spent = st.cum[upto - 1] || 0
+
+  const avgSoFar = st.avgCum && upto > 0 ? st.avgCum[Math.min(upto, st.avgCum.length) - 1] : null
+  const benchmark = avgSoFar != null ? avgSoFar : (st.budget * upto) / Math.max(n, 1)
+  const usingAvg = avgSoFar != null
+  const over = spent > benchmark
+  const delta = Math.abs(spent - benchmark)
   const stroke = over ? SOFT_RED : GOOD
 
-  // Only draw up to today. A flat forward projection reads as "spending
-  // stopped", which is the opposite of true.
-  const upto = Math.max(1, Math.min(o.todayDay, n))
-  const peak = Math.max(o.budgetTotal, ...o.cum, 1)
+  const peak = Math.max(st.budget, st.avgTotal, ...st.cum, 1)
   const x = (i: number) => (n > 1 ? (i / (n - 1)) * W : 0)
-  const y = (v: number) => H - (v / peak) * (H - 6)
-  const path = o.cum.slice(0, upto)
+  const y = (v: number) => H - (Math.min(v, peak) / peak) * (H - 6)
+  const path = st.cum.slice(0, upto)
     .map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  const avgPath = st.avgCum
+    ? st.avgCum.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+    : ''
 
   return (
     <div style={card({ padding: 12, display: 'flex', flexDirection: 'column' })}>
@@ -520,8 +580,9 @@ function SpendPace({ o, currency }: { o: Overview; currency: string }) {
                        padding: '4px 7px', borderRadius: 999, color: stroke, whiteSpace: 'nowrap',
                        background: over ? 'rgba(244,148,142,.13)' : 'rgba(142,202,230,.13)',
                        border: `1px solid ${over ? 'rgba(244,148,142,.4)' : 'rgba(142,202,230,.4)'}` }}>
-          {over ? 'OVER' : 'UNDER'} {fmt0(delta, currency)}
+          {over ? 'OVER' : 'UNDER'} {fmt0(delta, currency)} {usingAvg ? 'vs avg' : 'vs budget'}
         </span>} />
+      <div style={{ ...body(10), marginTop: -4, marginBottom: 4 }}>imported statement</div>
       {n > 1 && (
         <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none"
              style={{ display: 'block' }} aria-hidden>
@@ -531,17 +592,24 @@ function SpendPace({ o, currency }: { o: Overview; currency: string }) {
               <stop offset="100%" stopColor={stroke} stopOpacity="0" />
             </linearGradient>
           </defs>
-          {/* Straight-line budget: where you'd be spending evenly. */}
-          <line x1="0" y1={y(0)} x2={W} y2={y(o.budgetTotal)}
-                stroke="rgba(255,255,255,0.28)" strokeWidth="1" strokeDasharray="3 4" />
+          {/* Straight-line budget: what you intended, not what a month of
+              yours actually looks like. Demoted, but kept. */}
+          <line x1="0" y1={y(st.budget / Math.max(n, 1))} x2={W} y2={y(st.budget)}
+                stroke="rgba(255,255,255,0.20)" strokeWidth="1" strokeDasharray="3 4" />
+          {/* The typical month's real shape — rent step and all. */}
+          {avgPath && <path d={avgPath} fill="none" stroke="rgba(246,189,96,0.75)" strokeWidth="1.5"
+                            strokeDasharray="3 4" strokeLinejoin="round" strokeLinecap="round" />}
           <path d={`${path} L${x(upto - 1).toFixed(1)},${H} L0,${H} Z`} fill="url(#paceFill)" />
           <path d={path} fill="none" stroke={stroke} strokeWidth="2"
                 strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-          {o.todayDay > 0 && <circle cx={x(upto - 1)} cy={y(o.cum[upto - 1])} r="3" fill={stroke} />}
+          {o.todayDay > 0 && <circle cx={x(upto - 1)} cy={y(spent)} r="3" fill={stroke} />}
         </svg>
       )}
-      <KV k="Spent MTD" v={fmt0(o.spentMtd, currency)} />
-      <KV k="Budget" v={fmt0(o.budgetTotal, currency)} />
+      <KV k="Spent" v={fmt0(spent, currency)} />
+      {st.avgTotal > 0 && (
+        <KV k={`Typical month (${st.avgN} mo)`} v={fmt0(st.avgTotal, currency)} />
+      )}
+      <KV k="Budget" v={fmt0(st.budget, currency)} />
     </div>
   )
 }
@@ -549,35 +617,49 @@ function SpendPace({ o, currency }: { o: Overview; currency: string }) {
 // ── Where it went ────────────────────────────────────────────────────────────
 
 /**
- * Interactive donut. Tapping a slice selects it and the centre swaps to that
- * category's share; tapping it again clears. Drawn as a stroked circle with dash
+ * Interactive donut over the CLEARED statement, each category against what it
+ * costs in a typical month. Tapping a slice selects it and the centre swaps to
+ * that category; tapping again clears. Drawn as a stroked circle with dash
  * offsets rather than arc paths — same picture, no trigonometry, no seams.
+ *
+ * The averages divide by IMPORTED months, not by months a category happens to
+ * appear in: an imported month where a category saw nothing is a real zero.
  */
-function CategoryDonut({ o, currency }: { o: Overview; currency: string }) {
+function CategoryDonut({ o, currency, month }: { o: Overview; currency: string; month: string }) {
   const [sel, setSel] = useState<string | null>(null)
-  const total = o.slices.reduce((n, s) => n + s.value, 0)
+  const st = o.stmt
+  const slices = st?.slices || []
+  const total = slices.reduce((n, s) => n + s.value, 0)
 
-  if (!o.slices.length || total <= 0) {
+  if (!st || !st.imported) {
+    return <NoStatement title="Where it went" month={month} months={st?.months || []} />
+  }
+  if (!slices.length || total <= 0) {
     return (
       <div style={card({ padding: 12 })}>
         <Head small title="Where it went" />
-        <div style={{ ...body(13), marginTop: 6 }}>Nothing spent yet this month.</div>
+        <div style={{ ...body(13), marginTop: 6 }}>Nothing cleared yet this month.</div>
       </div>
     )
   }
 
+  const hasAvg = st.avgN > 0
   const R = 44, C = 2 * Math.PI * R
   let acc = 0
-  const active = o.slices.find((s) => s.label === sel) || o.slices[0]
+  const active = slices.find((s) => s.label === sel) || slices[0]
+  const activeAvg = sel === null ? st.avgTotal : (active.avg ?? 0)
 
   return (
     <div style={card({ padding: 12 })}>
       <Head small title="Where it went" right={fmtK(total, currency)} />
+      <div style={{ ...body(10), marginTop: -4, marginBottom: 4 }}>
+        imported statement{hasAvg ? ' · vs a typical month' : ''}
+      </div>
       <div style={{ display: 'flex', justifyContent: 'center' }}>
         <svg width="120" height="120" viewBox="0 0 112 112">
           <g transform="rotate(-90 56 56)">
             <circle cx="56" cy="56" r={R} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="15" />
-            {o.slices.map((s) => {
+            {slices.map((s) => {
               const len = (s.value / total) * C
               const dim = sel !== null && s.label !== sel
               const el = (
@@ -593,29 +675,45 @@ function CategoryDonut({ o, currency }: { o: Overview; currency: string }) {
               return el
             })}
           </g>
-          <text x="56" y="52" textAnchor="middle" fill={T.ink} fontSize="9"
+          <text x="56" y="50" textAnchor="middle" fill={T.ink} fontSize="9"
                 fontFamily={MONO} style={{ letterSpacing: '0.08em' }}>
-            {active.label.toUpperCase().slice(0, 10)}
+            {(sel === null ? 'SPENT' : active.label.toUpperCase()).slice(0, 10)}
           </text>
-          <text x="56" y="68" textAnchor="middle" fill={T.ink} fontSize="15" fontWeight="800">
-            {Math.round((active.value / total) * 100)}%
+          <text x="56" y="65" textAnchor="middle" fill={T.ink} fontSize="15" fontWeight="800">
+            {fmtK(sel === null ? total : active.value, currency)}
           </text>
+          {hasAvg && (
+            <text x="56" y="76" textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="8" fontWeight="700">
+              usually {fmtK(activeAvg, currency)}
+            </text>
+          )}
         </svg>
       </div>
       <div style={{ marginTop: 8 }}>
-        {o.slices.slice(0, 4).map((s) => (
-          <button key={s.label} onClick={() => setSel(sel === s.label ? null : s.label)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '4px 0',
-                           background: 'none', border: 'none', width: '100%', cursor: 'pointer',
-                           opacity: sel !== null && s.label !== sel ? 0.45 : 1 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: s.colour, flexShrink: 0 }} />
-            <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: T.ink, textAlign: 'left',
-                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {s.label}
-            </span>
-            <span style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{fmtK(s.value, currency)}</span>
-          </button>
-        ))}
+        {slices.slice(0, 5).map((s) => {
+          const avg = s.avg ?? 0
+          // A percentage against a near-zero average is noise, not a signal.
+          const pct = hasAvg && avg > 1 ? Math.round(((s.value - avg) / avg) * 100) : null
+          return (
+            <button key={s.label} onClick={() => setSel(sel === s.label ? null : s.label)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '4px 0',
+                             background: 'none', border: 'none', width: '100%', cursor: 'pointer',
+                             opacity: sel !== null && s.label !== sel ? 0.45 : 1 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: s.colour, flexShrink: 0 }} />
+              <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: T.ink, textAlign: 'left',
+                             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {s.label}
+              </span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{fmtK(s.value, currency)}</span>
+              {pct !== null && (
+                <span style={{ width: 42, textAlign: 'right', fontSize: 10, fontWeight: 800,
+                               fontFamily: MONO, color: pct > 0 ? SOFT_RED : GOOD }}>
+                  {pct > 0 ? '▲' : '▼'}{Math.abs(pct)}%
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
     </div>
   )

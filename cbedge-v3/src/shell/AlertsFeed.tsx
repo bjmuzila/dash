@@ -129,62 +129,86 @@ function shortExpiry(v: unknown): string {
   return m ? `${m[2]}-${m[3]}` : ''
 }
 
+/** `SPX` for the index detectors; the print's own underlying for the rest. */
+function tickerOf(kind: AlertKind, m: Record<string, unknown>): string {
+  if (kind === 'whale') return String(m.ticker ?? '').toUpperCase()
+  if (kind === 'gexChangeTop') return String(m.symbol ?? '').toUpperCase()
+  // Flip, core and IB are all read off the same index — the engine never puts a
+  // symbol on them because there is only one it could be.
+  return 'SPX'
+}
+
+const escapeRe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Take the symbol out of a title that is about to be drawn behind it. */
+function dropTicker(v: string, ticker: string): string {
+  if (!ticker) return v
+  return tidy(v.replace(new RegExp(`\\b${escapeRe(ticker)}\\b`, 'gi'), ' '))
+}
+
 function toItem(row: SignalRow): AlertItem | null {
   const kind = KIND_BY_SERVER_KEY[String(row?.kind ?? '')]
   if (!kind) return null
   const t = TYPE_BY_ID[kind]
   const m = metaOf(row)
+  const ticker = tickerOf(kind, m)
 
-  // `setup` usually restates the type ("Core level touch", "IB break ↑"), so the
-  // row header shows the type name and only the PART of setup that adds
-  // something becomes the variant after the tag.
-  let variant = tidy(row.setup)
-  if (variant.toLowerCase().startsWith(t.name.toLowerCase())) variant = variant.slice(t.name.length)
-  variant = tidy(variant)
+  // ── The title ────────────────────────────────────────────────────────────
+  // `setup` is what the detector called this event ("Core level ↑ 7650 → 7685",
+  // "Whale put buy — QQQ 690P $1.0M"), and that IS the title. Two things come
+  // out of it: the type's own name where `setup` opens by restating it, and the
+  // ticker, which is now drawn in front rather than inside.
+  let title = tidy(row.setup)
+  if (title.toLowerCase().startsWith(t.name.toLowerCase())) title = title.slice(t.name.length)
+  title = dropTicker(tidy(title), ticker)
 
-  // ── The headline ─────────────────────────────────────────────────────────
-  // Default: the sentence the detector wrote. A scanner pick is the exception —
-  // the thing you need off that row is the CONTRACT, so the ticker, its expiry
-  // and its strike lead, and the Δ GEX that got it picked drops to the line
-  // underneath. See the gex_change_top branch.
-  let text = tidy(row.reason) || tidy(row.setup) || t.name
-  let short = variant || tidy(row.setup) || t.name
+  // The sentence the detector wrote, always the second line. It is the WHY, and
+  // it is never the title — a title you have to read to the end of is a caption.
+  const text = tidy(row.reason) || tidy(row.setup) || t.name
 
   const bits: string[] = []
 
-  if (kind === 'gexChangeTop') {
-    const symbol = String(m.symbol ?? '').toUpperCase()
+  if (kind === 'whale') {
+    // "Whale put buy" → "Put buy". The chip, the dot and the colour all already
+    // say whale; with the ticker leading, the word is the third time.
+    title = tidy(title.replace(/^whale\s+/i, ''))
+    title = title ? title[0].toUpperCase() + title.slice(1) : title
+    // No level line: `level_name` is "QQQ 690P", which the title now carries,
+    // and `level_spx` is null on an option print — the two together were what
+    // printed "SPY 747P 0".
+  } else if (kind === 'gexChangeTop') {
+    // The CONTRACT is what you need off a scanner pick, so the title is the
+    // strike and the expiry, and the Δ GEX that got it picked stays in `text`.
     const strike = num(m.strike)
     const exp = shortExpiry(m.expiry)
-    const head = [symbol, strike != null ? String(strike) : '', exp].filter(Boolean).join(' ')
-    if (head) {
-      text = head
-      short = head
-    }
-    // Everything that used to be the headline becomes the detail line.
-    const detail = tidy(row.reason)
-    if (detail) bits.push(detail)
-    if (m.live === true) variant = 'Live trigger'
-    else if (!variant) variant = 'Scanner pick'
+    const head = [strike != null ? String(strike) : '', exp].filter(Boolean).join(' ')
+    const tail = m.live === true ? 'Live trigger' : 'Scanner pick'
+    title = tidy([head, tail].filter(Boolean).join(' · '))
   } else {
     // The level, but never twice: `level_name` is often already "MU 1005", and
-    // appending level_spx to it produced "MU 1005 1005".
+    // appending level_spx to it produced "MU 1005 1005". A zero or missing SPX
+    // value is dropped rather than printed as "0".
     const lvl = num(row.level_spx)
     const name = row.level_name ? String(row.level_name) : ''
-    if (name && lvl != null && !name.includes(lvl.toFixed(0))) bits.push(`${name} ${lvl.toFixed(0)}`)
-    else if (name) bits.push(name)
+    if (name && lvl != null && lvl !== 0 && !name.includes(lvl.toFixed(0))) {
+      bits.push(`${name} ${lvl.toFixed(0)}`)
+    } else if (name) bits.push(name)
   }
 
   if (row.confluence) bits.push(`with ${row.confluence}`)
-  const score = num(row.score)
-  if (score != null && score > 0) bits.push(`score ${score}`)
+  // `row.score` is deliberately NOT drawn. It is the engine's internal ranking
+  // number, on no scale the reader has been given — "score 5" answers nothing
+  // you can act on, and a number with no units beside a real price reads as if
+  // it were one. The field stays on SignalRow because the route still sends it.
 
   return {
     id: Number(row.id) || Number(row.ts) || 0,
     kind,
-    variant: variant || undefined,
+    ticker,
+    title: title || t.name,
     text,
-    short: short || t.name,
+    // The pill leads with the ticker too, for the same reason the row does.
+    short: tidy([ticker, title].filter(Boolean).join(' ')) || t.name,
     meta: bits.length ? tidy(bits.join(' · ')) : undefined,
     at: etClock(row.ts),
   }

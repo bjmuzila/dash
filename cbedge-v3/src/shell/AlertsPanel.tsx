@@ -166,21 +166,41 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
               >
                 <span
                   aria-hidden
-                  className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full"
+                  className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full"
                   style={{ background: t.color }}
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
+                  {/* ── THE TITLE ────────────────────────────────────────────
+                      The biggest type in the row, and the row's whole first
+                      impression. It used to be the SMALLEST — a 3xs uppercase
+                      tag line over a larger sentence — so the eye landed on the
+                      explanation and had to work back up for the subject.
+
+                      TICKER FIRST, in the type's colour. Scanning this list is
+                      asking "what is this about", and the answer is a symbol,
+                      not a verb. The type's tag is gone from the line: `setup`
+                      already names the detector, and "WHALE · WHALE PUT BUY"
+                      was the same word twice. Colour, dot and chip still say
+                      which kind it is. */}
+                  <div className="flex items-baseline gap-1.5">
                     <span
-                      className="truncate text-3xs font-bold uppercase tracking-wide"
+                      className="shrink-0 text-sm font-bold tracking-tight"
                       style={{ color: t.color }}
                     >
-                      {a.variant ? `${t.tag} · ${a.variant}` : t.name}
+                      {a.ticker}
                     </span>
-                    <span className="ml-auto shrink-0 text-3xs tabular-nums text-fg">{a.at}</span>
+                    <span className="truncate text-sm font-semibold leading-tight text-fg">
+                      {a.title}
+                    </span>
+                    <span className="ml-auto shrink-0 text-3xs tabular-nums text-fg opacity-80">
+                      {a.at}
+                    </span>
                   </div>
-                  <p className="mt-px text-xs text-fg">{a.text}</p>
-                  {a.meta && <p className="mt-px text-3xs tabular-nums text-fg opacity-80">{a.meta}</p>}
+                  {/* The detector's sentence — the WHY, one step down. */}
+                  <p className="mt-0.5 text-2xs leading-snug text-fg opacity-90">{a.text}</p>
+                  {a.meta && (
+                    <p className="mt-px text-3xs tabular-nums text-fg opacity-70">{a.meta}</p>
+                  )}
                 </div>
               </div>
             )

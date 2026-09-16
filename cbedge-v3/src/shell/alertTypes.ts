@@ -136,14 +136,29 @@ export const TYPE_BY_ID: Record<AlertKind, AlertType> = Object.fromEntries(
 export interface AlertItem {
   id: number
   kind: AlertKind
-  /** "Cross up", "Rejection" — the variant, appended to the type name. */
-  variant?: string
-  /** The row's headline in the panel — the full sentence. */
+  /**
+   * THE SYMBOL, AND IT LEADS. "QQQ", "SPY", or "SPX" for the index detectors
+   * (flip, core, IB), which do not carry an underlying of their own because
+   * they are all about the same one. First thing in the row and first thing in
+   * the pill: scanning a feed is asking "what is this about", and the answer is
+   * always a ticker.
+   */
+  ticker: string
+  /**
+   * The row's TITLE — the biggest text in the row, and the only line drawn in
+   * the type's colour. The ticker is NOT in it: `toItem` strips the symbol out
+   * so "QQQ · Put buy — 690P $1.0M" never reads "QQQ · Whale put buy — QQQ
+   * 690P". Neither is the type's tag — every detector's `setup` already names
+   * itself, and "WHALE · WHALE PUT BUY" was the same word twice.
+   */
+  title: string
+  /** The sentence under the title — the detector's own `reason`. */
   text: string
   /**
-   * The PILL's headline. Short enough for a toolbar: "IB low break",
-   * "MU 1005C 09-18". The panel never shows it and the pill never shows `text`
-   * — a toolbar that has to truncate a sentence is a toolbar that is too long.
+   * The PILL's headline — ticker first, then the title. Short enough for a
+   * toolbar: "SPY Put buy — 747P $5.9M". The panel never shows it and the pill
+   * never shows `text` — a toolbar that has to truncate a sentence is a toolbar
+   * that is too long.
    */
   short: string
   /** The small monospaced line under it. Optional. */

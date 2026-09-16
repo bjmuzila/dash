@@ -92,7 +92,16 @@ const DTE_STOPS: Array<{ label: string; value: number | null; title: string }> =
   { label: '≤90', value: 90, title: 'Expiring within a quarter' },
 ]
 
+// The ≥$500K stop is offered even though the API clamps `min_premium` UP to its
+// own floor (TF_WHALE_FLOOR, from LSE_WHALE_FLOOR, $1M by default): below that
+// line the table keeps only the last seven days, so a lower ask would hand back
+// a week dressed as an archive. Until that env var is lowered on the VPS,
+// picking $500K returns the $1M list — and rather than let the control look
+// broken, the header says so (see the clamp note there). Lower LSE_WHALE_FLOOR
+// and both the note and the clamp go away on their own: the page reads the floor
+// off the response, it is not hardcoded here.
 const FLOORS = [
+  { label: '≥$500K', value: 500_000 },
   { label: '≥$1M', value: 1_000_000 },
   { label: '≥$2.5M', value: 2_500_000 },
   { label: '≥$5M', value: 5_000_000 },
@@ -462,6 +471,20 @@ export default function Whales() {
         {maxDte !== null ? (
           <span className="text-faint">{maxDte === 0 ? ' · 0DTE only' : ` · ≤${maxDte} DTE`}</span>
         ) : null}
+        {/* The FLOOR pick can be BELOW what the server will serve: /api/lse/whales
+            clamps min_premium up to its own floor because under that line the
+            table is a rolling 7-day mirror, not the archive. Saying so is the
+            difference between a control that looks broken and one that explains
+            itself. Read off the response, so lowering LSE_WHALE_FLOOR on the VPS
+            retires this note with no code change. */}
+        {d && floor < (d.whaleFloor ?? 0) ? (
+          <span
+            className="text-warn"
+            title="Prints below the archive floor are only kept for seven days, so the API raises a lower ask rather than return a week of data dressed as the archive. Lowering LSE_WHALE_FLOOR on the server is what opens this up."
+          >
+            {' '}· asked for {money(floor)}, archive floor is {money(d.whaleFloor)}
+          </span>
+        ) : null}
         {/* An archive that is quietly showing you less than it holds has to say
             so. Only when something is actually hidden — a permanent parenthetical
             about a filter that is removing nothing is noise. */}
@@ -507,7 +530,7 @@ export default function Whales() {
 
         <SegMenu<string>
           label="FLOOR"
-          title="Hide prints below this dollar premium. $1M is the archive's own floor — nothing smaller is kept"
+          title="Hide prints below this dollar premium. The archive's own floor is the server's — a pick under it is clamped up, and the header says so when that happens"
           options={FLOORS.map((f) => ({ label: f.label, value: String(f.value) }))}
           value={String(floor)}
           defaultValue={String(DEFAULTS.floor)}

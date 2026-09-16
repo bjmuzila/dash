@@ -272,6 +272,9 @@ export type BudgetTiles = {
   netProfit: number
   amazon: number
   amazonDays: number
+  /** Flex tips for the month. Part of `amazon` already — carried separately
+   *  only so the tile can say "incl. $10.00 tips" the way the desktop does. */
+  amazonTips: number
   bzila: number
   bzilaIn: number
   bzilaOut: number
@@ -304,6 +307,36 @@ export type BudgetOverview = {
   prevWkOut: number
 
   slices: { label: string; value: number; colour: string }[]
+
+  /**
+   * What actually CLEARED — the imported bank/card statement
+   * (`budget_statement_tx`). Spend Pace and Where It Went read this and
+   * nothing else; bills, balances, the calendar and every tile stay on the
+   * register, because those are questions about the plan and about the bank,
+   * not about what a category cost.
+   *
+   * `imported` false means the month was never imported on Real Month: the
+   * cards say so rather than drawing a flat line, which would read as a month
+   * of no spending.
+   */
+  stmt: {
+    imported: boolean
+    hasCurve: boolean
+    /** Every month with a statement, newest first — what the empty state offers. */
+    months: string[]
+    /** Cumulative cleared spend, one entry per day of the month. */
+    cum: number[]
+    spent: number
+    budget: number
+    /** The typical month's own day-by-day curve, resampled onto this month's
+     *  length. Null when there is no prior statement to average. */
+    avgCum: number[] | null
+    avgTotal: number
+    avgN: number
+    slices: { label: string; value: number; colour: string; avg: number | null }[]
+    slicesTotal: number
+  }
+
   upcomingPay: (BudgetBill & { tag: string; days: number })[]
 
   reconcile: {

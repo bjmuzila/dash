@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-09-16 (b) - Whales: the $500K floor stop is back
+
+It had been reverted out of `Whales.tsx` — `FLOORS` was `$1M / $2.5M / $5M`
+again and the clamp note was gone, so the 2026-09-15 (a) change was not on the
+page. Restored as it was: `≥$500K` is the first FLOOR option, and when the pick
+is under the server's own floor the header says "asked for $500.0K, archive floor
+is $1.00M" instead of quietly serving the $1M list. The FLOOR tooltip no longer
+hardcodes "$1M is the archive's own floor" — the floor is read off the response,
+so lowering `LSE_WHALE_FLOOR` on the VPS retires the note and the clamp with no
+code change.
+
+`cbedge-v3/src/pages/Whales.tsx`
+
+## 2026-09-16 - budget.cbedge.net reads the statement, like the laptop does
+
+The phone's Money page and /owner/budget disagreed on four cards for the same
+month. Three of them were one cause.
+
+**Spend Pace and Where It Went were reading the wrong ledger.** The desktop
+moved both cards onto the imported bank statement (`budget_statement_tx`) - the
+register is the PLAN, a statement is what actually cleared, and a card headed
+"spent" has to mean the second one. `_lib-household-budget.cjs`, which builds
+everything the phone shows, had no statement source at all: it was still
+cumulating register rows. Same month, same screen name, $4,415 on the phone
+against $2,695.40 on the laptop, and a donut of entirely different categories.
+
+New `loadStatement()` pulls the same 11-month window /api/budget/real pulls,
+including the flex-gas correction that moves Amazon Flex fill-ups out of the
+fuel category - skip that and the donut disagrees by the whole gas bill.
+New `buildStatementSpend()` is a port of the desktop's `paceSeries` and
+`slicesFor("monthly")`: cleared spend per day, the typical month's own
+day-by-day CURVE as the benchmark (a straight ramp reads OVER every month until
+it catches up near the 25th, because rent clears before the 5th), and per
+-category averages divided by IMPORTED months, not by months a category happens
+to appear in. It arrives as `overview.stmt`; the register-derived `cum`,
+`spentMtd` and `slices` are untouched beside it.
+
+A month with no statement now says so on both cards instead of drawing zeros,
+which reads as a month of no spending.
+
+**Amazon was $10 light.** `buildAmazon` summed `pay - gas`. Tips are their own
+column - Flex pays the block on the day and the tip days later - so the desktop
+sums `pay + tips - gas`. Amazon net folds into Income and Net Profit, so one
+dropped column moved three tiles: $922/$4,972/$197 against the laptop's
+$932/$4,982/$207. The tile sub now spells the tips out the way the desktop does.
+
+**Safe to Spend was the same number in a different unit.** The phone led with
+`safe / daysLeft` and the desktop's monthly view leads with `safe`, so one card
+read -$8 and the other -$117 for the same month. Headline is now the month, with
+per-day kept on the line below.
+
+Files: `server-v2/_lib-household-budget.cjs`,
+`budget-vite/src/api.ts`, `budget-vite/src/components/BudgetOverview.tsx`.
+
 ## 2026-09-15 (c) - The feed reconnects itself when dxLink goes quiet
 
 **A dead feed that looks alive.** dxLink's worst failure mode is the socket
@@ -23625,3 +23679,62 @@ Pairs with (c): the FOCUS and DIM/HIDE REST chips carry `data-capture-hide`, so
 neither shot shows the controls used to set it up.
 
 Files: `cbedge-v3/src/pages/OptionsChain.tsx`.
+
+## 2026-09-16 (f) — v3 toolbar: the alerts pill flashes on arrival
+
+A new signal used to land silently. The pill swapped its tag, headline and age,
+and if you were reading a chart you missed the change — the pulsing dot says
+"recent" for an hour, which is a different question from "one just landed".
+
+The pill now FLASHES its border in the alert type's own colour when the top row
+changes: three 800ms beats (`.alert-flash`, `design/tokens.css`), then quiet.
+Drawn with `box-shadow`, not a real border, so the toolbar does not shift a
+pixel when it fires; the colour arrives as an inline `--alert-flash` var because
+`@keyframes` cannot take an argument. The pill stays borderless at rest — the
+flash is the only box it ever has.
+
+Two things it will not do. It never fires on the first load (opening at 2pm
+must not announce a 9:40 signal as new) — that is the null-start `seenRef`. And
+it cannot fire on a poll that changed nothing: the trigger is `latest.id`, the
+row's primary key, which with the existing signature check in `useAlertsFeed` is
+why this is not a return of the old every-20-seconds blink. The global
+reduced-motion rule collapses it to nothing, leaving tag and dot to carry it.
+
+Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/design/tokens.css`.
+
+## 2026-09-16 (g) — v3 alerts: ticker first, title biggest, score gone
+
+The feed rows were upside down. The smallest text in the row — a 9px uppercase
+tag line — was the subject, and the biggest was the detector's explanation, so
+the eye landed on "$1.0M OTM put purchased, 9DTE…" and had to work back up to
+find out it was QQQ. Scanning this list is asking WHAT IS THIS ABOUT, and the
+answer is a ticker.
+
+So the row is now, in order of size: the **ticker** in the type's colour, then
+the **title** beside it at `text-sm` (`text-base` on the phone), then the
+detector's sentence one step down, then the small meta line. `AlertItem` gains
+`ticker` and `title`; `variant` is gone, and both the desktop panel and
+`/m/alerts` read the new pair. The pill's `short` leads with the ticker too.
+
+The ticker is `meta.ticker` for a whale print, `meta.symbol` for a scanner pick,
+and `SPX` for flip / core / IB — those detectors carry no symbol because there
+is only one they could be about.
+
+Three redundancies fell out of putting it in front:
+
+- the type's TAG left the title — every `setup` already names its detector, and
+  "WHALE · WHALE PUT BUY" was the same word twice. Colour, dot and chip still
+  say which kind it is.
+- the ticker is stripped from inside the title, so a whale reads
+  "QQQ · Put buy — 690P $1.0M", not "QQQ · Whale put buy — QQQ 690P $1.0M".
+- a whale's level line is dropped entirely: `level_name` is "SPY 747P", which
+  the title now carries, and `level_spx` is null on an option print — the two
+  together were what printed the stray "SPY 747P 0".
+
+**`score` is no longer drawn.** It was the engine's internal 1–5 ranking, on no
+scale the reader has ever been given — "score 5" is not a decision you can make
+— and sitting beside a level and a strike it read as if it were another price.
+The field stays on `SignalRow` because `/proxy/signals` still returns it.
+
+Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/shell/alertTypes.ts`,
+`cbedge-v3/src/shell/AlertsPanel.tsx`, `cbedge-v3/src/mobile/pages/MAlerts.tsx`.

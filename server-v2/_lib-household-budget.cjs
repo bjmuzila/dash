@@ -167,6 +167,12 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
   const yr = m.slice(0, 4);
   const yearRegister = await optional(libDb, 'listRegister', profile.id, `${yr}-01-01`, `${yr}-12-31`);
 
+  // What actually cleared. Feeds Spend Pace and Where It Went ONLY — bills,
+  // balances, the calendar and every tile stay on the register, because those
+  // are questions about the plan and about the bank, not about what a category
+  // cost. See loadStatement.
+  const statement = await loadStatement(profile.id, m, categories);
+
   // Per-bank beginning balances come from is_beginning rows.
   const bal = { coastal: 0, truist: 0, secu: 0 };
   const beginningByBank = { coastal: null, truist: null, secu: null };
@@ -336,8 +342,95 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     overview: buildOverview({
       month: m, today, rows, register, recurring, categories, bankNow,
       dailyBalance, prevDailyBalance, categorySpend: spentByCategory, unsorted,
-      amazon, bzila, yearRegister,
+      amazon, bzila, yearRegister, statement,
     }),
+  };
+}
+
+/**
+ * Imported bank/card statements — `budget_statement_tx`, the same source
+ * /owner/budget's Spend Pace and Where It Went read.
+ *
+ * The register is the PLAN: what you expect to pay and what you typed in.
+ * A statement is what actually cleared. A card headed "spent" has to mean the
+ * second one, and until this existed the phone and the laptop quietly meant
+ * different things by the same word — $4,415 of register rows against $2,695
+ * of cleared charges, on the same month, on two screens.
+ *
+ * Window: the 11 months before the loaded one plus itself, anchored to the
+ * LOADED month rather than to today, so scrolling back to March gets March's
+ * own run-up and its own benchmark.
+ *
+ * Every helper is optional() — an older _lib-db.cjs without the statement
+ * tables must degrade to "no statement for this month", never a 500 on the
+ * whole month.
+ */
+async function loadStatement(profileId, month, categories) {
+  const trendSince = (() => {
+    const y = Number(month.slice(0, 4));
+    const mm = Number(month.slice(5, 7));
+    if (!Number.isFinite(y) || !Number.isFinite(mm)) return '0000-01';
+    const d = new Date(Date.UTC(y, mm - 1 - 11, 1));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  })();
+
+  const [monthRows, trend, daily, flexGasRows] = await Promise.all([
+    optional(libDb, 'listStatementMonths', profileId),
+    optional(libDb, 'listStatementCategoryTrend', profileId, trendSince, month),
+    optional(libDb, 'listStatementDailyTrend', profileId, trendSince, month),
+    optional(libDb, 'listAmazonGasByMonth', profileId, trendSince, month),
+  ]);
+
+  const rows = (trend || []).map((r) => ({
+    month: String(r.month).slice(0, 7),
+    categoryId: r.category_id == null ? null : Number(r.category_id),
+    spent: Number(r.spent) || 0,
+  }));
+
+  // ── Flex gas comes back out of the fuel category ───────────────────────────
+  // Every Sheetz swipe is filed to ONE fuel category, including the fill-ups
+  // burned driving Amazon Flex — there is no telling them apart at the till.
+  // What IS known per month is the Flex share, logged per delivery on the
+  // Amazon tab. The correction is applied HERE, on read, exactly as
+  // /api/budget/real applies it: it MOVES the money into the Flex category
+  // rather than deleting it, capped at what the fuel category actually held,
+  // so the month still adds up to what cleared. Skip it and the phone's donut
+  // disagrees with the laptop's by the whole gas bill.
+  const FUEL_RE = /\b(sheet?z|gas|fuel)\b/i;
+  const FLEX_RE = /flex|amazon/i;
+  const cats = categories || [];
+  const fuelCat = cats.find((c) => FUEL_RE.test(String(c.name || '')) && !FLEX_RE.test(String(c.name || ''))) || null;
+  const flexCat = cats.find((c) => FLEX_RE.test(String(c.name || '')) && FUEL_RE.test(String(c.name || ''))) || null;
+  if (fuelCat) {
+    const gasByMonth = {};
+    for (const r of flexGasRows || []) {
+      const mk = String(r.month || '').slice(0, 7);
+      if (mk) gasByMonth[mk] = (gasByMonth[mk] || 0) + (Number(r.gas) || 0);
+    }
+    const fuelRowFor = new Map();
+    for (const t of rows) if (t.categoryId === fuelCat.id) fuelRowFor.set(t.month, t);
+    for (const [mk, gas] of Object.entries(gasByMonth)) {
+      const row = fuelRowFor.get(mk);
+      if (!row || !(gas > 0)) continue;
+      const move = Math.min(gas, row.spent);
+      if (!(move > 0)) continue;
+      row.spent -= move;
+      if (flexCat) {
+        let dest = rows.find((t) => t.month === mk && t.categoryId === flexCat.id);
+        if (!dest) { dest = { month: mk, categoryId: flexCat.id, spent: 0 }; rows.push(dest); }
+        dest.spent += move;
+      }
+    }
+  }
+
+  return {
+    months: (monthRows || []).map((r) => String(r.month).slice(0, 7)),
+    trend: rows,
+    daily: (daily || []).map((r) => ({
+      date: typeof r.tx_date === 'string' ? r.tx_date.slice(0, 10)
+        : new Date(r.tx_date).toISOString().slice(0, 10),
+      spent: Number(r.spent) || 0,
+    })),
   };
 }
 
@@ -353,14 +446,136 @@ async function optional(db, fn, ...args) {
 }
 
 /**
- * Amazon delivery income for the month: gross pay minus gas, per the desktop's
- * `amazonComputed`. The desktop folds this INTO Income and Net Profit, which is
- * why the phone's net used to read lower than the laptop's for the same month.
+ * Amazon delivery income for the month: pay PLUS tips, minus gas — the desktop's
+ * `amazonComputed` exactly. The desktop folds this INTO Income and Net Profit,
+ * which is why the phone's net used to read lower than the laptop's.
+ *
+ * Tips are their own column because Flex pays the block on the day and the tip
+ * days later; dropping them here is what made the phone read $10 light on
+ * Amazon, Income and Net Profit at once. `tips` is coerced rather than trusted:
+ * rows written before the column existed come back without it.
  */
 function buildAmazon(rows) {
-  let pay = 0, gas = 0;
-  for (const r of rows) { pay += Number(r.pay) || 0; gas += Number(r.gas) || 0; }
-  return { days: rows.length, pay, gas, net: pay - gas };
+  let pay = 0, tips = 0, gas = 0;
+  for (const r of rows) {
+    pay += Number(r.pay) || 0;
+    tips += Number(r.tips) || 0;
+    gas += Number(r.gas) || 0;
+  }
+  return { days: rows.length, pay, tips, gas, net: pay + tips - gas };
+}
+
+/**
+ * Spend Pace and Where It Went, off the imported statement — a port of the
+ * desktop's `paceSeries` (daily) and `slicesFor("monthly")` memos.
+ *
+ * Two things here are NOT obvious and both were learned on the desktop:
+ *
+ *   1. The benchmark is the average of prior months' own day-by-day CURVES,
+ *      not a straight ramp. Rent and the big bills clear before the 5th, so
+ *      cumulative spend jumps most of the month's total in four days and then
+ *      crawls; against a straight line that reads "massively over pace" every
+ *      single month until the line catches up near the 25th — a badge that is
+ *      always red, which says nothing. With the rent step in the benchmark
+ *      too, "ahead of a normal month on the 16th" becomes a real statement.
+ *
+ *   2. Averages divide by IMPORTED months, not by months a category happens to
+ *      appear in. A month you imported where a category saw nothing is a real
+ *      zero and has to pull the average down; a month you never imported is
+ *      unknown and must not count at all.
+ *
+ * A month with no statement returns `imported: false` and empty series — the
+ * caller shows "no statement" rather than a flat line along the bottom, which
+ * reads as a month of no spending.
+ */
+function buildStatementSpend({ month, daysInMonth, todayDay, budgetTotal, categories, statement }) {
+  const st = statement || { months: [], trend: [], daily: [] };
+  const months = st.months || [];
+  const imported = months.includes(month);
+  const round2 = (n) => Math.round(n * 100) / 100;
+
+  // Day-level outflow bucketed by month. One source for BOTH this month's
+  // curve and the benchmark, so the two are always the same kind of number.
+  const byMonth = new Map();
+  for (const r of st.daily || []) {
+    const ym = r.date.slice(0, 7);
+    const dim = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0).getDate();
+    const arr = byMonth.get(ym) || new Array(dim).fill(0);
+    const d = Number(r.date.slice(8, 10)) - 1;
+    if (d >= 0 && d < arr.length) arr[d] += r.spent;
+    byMonth.set(ym, arr);
+  }
+  const cumulate = (vals) => { let a = 0; return vals.map((v) => round2((a += v))); };
+
+  const thisMonthDays = byMonth.get(month) || null;
+  const cum = thisMonthDays ? cumulate(thisMonthDays) : [];
+  const spent = cum.length && todayDay > 0 ? (cum[Math.min(todayDay, cum.length) - 1] || 0) : 0;
+
+  // The typical month's shape, resampled onto this month's length so a 28-day
+  // February and a 31-day March line up by POSITION rather than by raw index —
+  // otherwise February contributes nothing to days 29-31 and drags the tail
+  // of the average down.
+  const curves = [];
+  for (const [ym, arr] of byMonth) {
+    if (ym === month) continue;               // never average a month into its own benchmark
+    if (!arr.some((v) => v > 0)) continue;
+    const c = cumulate(arr);
+    curves.push(Array.from({ length: daysInMonth }, (_, i) => {
+      const pos = daysInMonth === 1 ? 0 : (i / (daysInMonth - 1)) * (c.length - 1);
+      const lo = Math.floor(pos);
+      const hi = Math.min(c.length - 1, lo + 1);
+      return round2(c[lo] + (c[hi] - c[lo]) * (pos - lo));
+    }));
+  }
+  const avgCum = curves.length
+    ? Array.from({ length: daysInMonth }, (_, i) =>
+      round2(curves.reduce((n, c) => n + c[i], 0) / curves.length))
+    : null;
+  const avgN = months.filter((m) => m !== month).length;
+  const avgTotal = avgCum ? avgCum[avgCum.length - 1] : 0;
+
+  // Per-category spend for the donut: this month off the statement, each line
+  // carrying what that category costs in a typical month.
+  const thisMonth = new Map();
+  const avgByCat = new Map();
+  for (const r of st.trend || []) {
+    if (r.month === month) thisMonth.set(r.categoryId, (thisMonth.get(r.categoryId) || 0) + r.spent);
+    else avgByCat.set(r.categoryId, (avgByCat.get(r.categoryId) || 0) + r.spent);
+  }
+  if (avgN > 0) for (const [k, v] of avgByCat) avgByCat.set(k, round2(v / avgN));
+  else avgByCat.clear();
+  const hasAvg = avgN > 0;
+
+  const slices = (categories || [])
+    .map((c, i) => ({
+      label: c.name,
+      value: round2(thisMonth.get(c.id) || 0),
+      colour: c.color || CATEGORY_COLOURS[i % CATEGORY_COLOURS.length],
+      avg: hasAvg ? (avgByCat.get(c.id) || 0) : null,
+    }))
+    .filter((x) => x.value > 0)
+    .sort((a, b) => b.value - a.value);
+  const uncat = round2(thisMonth.get(null) || 0);
+  if (uncat > 0) {
+    slices.push({
+      label: 'Uncategorized', value: uncat, colour: 'rgba(255,255,255,0.35)',
+      avg: hasAvg ? (avgByCat.get(null) || 0) : null,
+    });
+  }
+
+  return {
+    imported,
+    hasCurve: thisMonthDays != null,
+    months,
+    cum,
+    spent,
+    budget: budgetTotal,
+    avgCum,
+    avgTotal,
+    avgN,
+    slices,
+    slicesTotal: round2(slices.reduce((n, x) => n + x.value, 0)),
+  };
 }
 
 /**
@@ -605,7 +820,7 @@ function isoDay(v) {
  */
 function buildOverview({ month, today, rows, register, recurring, categories, bankNow,
                          dailyBalance, prevDailyBalance, categorySpend, unsorted,
-                         amazon, bzila, yearRegister }) {
+                         amazon, bzila, yearRegister, statement }) {
   const [iy, im] = month.split('-').map(Number);
   const daysInMonth = new Date(iy, im, 0).getDate();
   const ym = today.slice(0, 7);
@@ -701,6 +916,14 @@ function buildOverview({ month, today, rows, register, recurring, categories, ba
     .sort((a, b) => b.value - a.value);
   if (unsorted > 0) slices.push({ label: 'Unsorted', value: unsorted, colour: 'rgba(255,255,255,0.30)' });
 
+  // ── Spend, as it actually CLEARED ─────────────────────────────────────────
+  // `cum` / `spentMtd` / `slices` above are the register — the plan. Spend Pace
+  // and Where It Went read this instead, which is the desktop's source for
+  // those two cards and nothing else.
+  const stmt = buildStatementSpend({
+    month, daysInMonth, todayDay, budgetTotal, categories, statement,
+  });
+
   /**
    * Balance check. Only CLEARED money counts — real register rows. A scheduled
    * bill hasn't left the bank yet, so counting it would show a permanent
@@ -743,6 +966,9 @@ function buildOverview({ month, today, rows, register, recurring, categories, ba
     netProfit: incomeRaw + paymentsRaw + az.net,
     amazon: az.net,
     amazonDays: az.days,
+    // Spelled out on the tile the way the desktop spells it: "18 days ·
+    // incl. $10.00 tips · net of gas".
+    amazonTips: az.tips || 0,
     bzila: bz.net,
     bzilaIn: bz.inAmt,
     bzilaOut: bz.outAmt,
@@ -754,6 +980,8 @@ function buildOverview({ month, today, rows, register, recurring, categories, ba
     budgetTotal, paceNow, spentMtd, cum,
     week, wkOut, prevWkOut,
     slices, upcomingPay, reconcile,
+    // What cleared, for the two spend cards. See buildStatementSpend.
+    stmt,
     // Day cells for the calendar grid, and the running balance for the
     // projection line — both derived from the same rows as everything else.
     days: dayList.map((g) => ({ date: g.date, net: g.net, out: g.out, count: g.rows.length })),

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
 import { useQuery } from '@/data/api'
 import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
-import { SegGroup, Slider, Popover, PanelSection, Chip } from '../gexCandles/controls'
+import { SegGroup, Slider, Dropdown, Popover, PanelSection, Chip } from '../gexCandles/controls'
 import { CellCard } from './CellCard'
 import {
   BASIS_LABEL,
@@ -89,6 +89,23 @@ const NEAR_CORE_PCT_KEY = 'cb-v3-mg-near-core-pct'
 
 /** Strike rail width, matching v2 so the two boards read at the same rhythm. */
 const RAIL_PX = 76
+
+/**
+ * HOW LONG THE LADDER LEAVES YOUR SCROLL ALONE.
+ *
+ * Centring on the money is right on arrival and wrong the moment you have gone
+ * looking at a wall four screens up: the latch below stops it fighting a live
+ * gesture, but the latch used to clear the instant the ATM strike moved — and on
+ * a 15s poll in a fast tape that is a few seconds later. You scroll, you read
+ * two rows, the ladder yanks back.
+ *
+ * So the latch now clears on a QUIET PERIOD rather than on the next re-anchor:
+ * ten seconds since you last moved the panel yourself. Re-anchoring inside that
+ * window schedules the recentre for when the window closes instead of doing it
+ * immediately, so the ladder still finds its way back to the money on its own —
+ * just not out from under you.
+ */
+const RECENTRE_QUIET_MS = 10_000
 
 /**
  * ── THE CORE BULLSEYE FILL ───────────────────────────────────────────────────
@@ -276,7 +293,12 @@ function TickerPanel({
   const q = useQuery<unknown>(ticker ? chainsUrl(ticker) : null, { staleMs: 15_000, pollMs: 15_000 })
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const userScrolledRef = useRef(false)
+  /** When the user last moved this panel themselves. 0 = never. */
+  const lastUserScrollRef = useRef(0)
   const anchorRef = useRef('')
+  /** Bumped when the quiet period closes — the centring effect below has no
+   *  dependency array, so it needs a render to run in. */
+  const [recentreTick, setRecentreTick] = useState(0)
   const [draft, setDraft] = useState(ticker)
   useEffect(() => setDraft(ticker), [ticker])
   /**
@@ -366,12 +388,28 @@ function TickerPanel({
   useEffect(() => {
     if (anchorRef.current === anchorKey) return
     anchorRef.current = anchorKey
-    userScrolledRef.current = false
+    if (!userScrolledRef.current) return
+    const since = Date.now() - lastUserScrollRef.current
+    if (since >= RECENTRE_QUIET_MS) {
+      userScrolledRef.current = false
+      return
+    }
+    // Still inside the quiet period: come back when it closes rather than
+    // dropping the re-anchor on the floor, so the ladder does find the money
+    // again — ten seconds after you stopped reading, not while you are.
+    const t = setTimeout(() => {
+      userScrolledRef.current = false
+      setRecentreTick((n) => n + 1)
+    }, RECENTRE_QUIET_MS - since)
+    return () => clearTimeout(t)
   }, [anchorKey])
 
   // No dependency array, matching v2: the ladder can be re-laid-out by a resize
   // or a column change that no single value here captures, and re-centring is
-  // idempotent. The latch is what stops it fighting the user.
+  // idempotent. The latch is what stops it fighting the user, and recentreTick
+  // is read here only so the closing of the quiet period gets a render to act
+  // in — it is a trigger, not a value.
+  void recentreTick
   useEffect(() => {
     const el = bodyRef.current
     if (!el || atm == null || userScrolledRef.current) return
@@ -392,7 +430,9 @@ function TickerPanel({
     const mark = () => {
       const before = el.scrollTop
       requestAnimationFrame(() => {
-        if (el.scrollTop !== before) userScrolledRef.current = true
+        if (el.scrollTop === before) return
+        userScrolledRef.current = true
+        lastUserScrollRef.current = Date.now()
       })
     }
     el.addEventListener('wheel', mark, { passive: true })
@@ -436,8 +476,10 @@ function TickerPanel({
       // A deliberate pan is exactly the gesture the re-centring latch exists
       // for — stop pulling the ladder back to the money underneath the hand.
       userScrolledRef.current = true
+      lastUserScrollRef.current = Date.now()
       el.setPointerCapture?.(e.pointerId)
     }
+    lastUserScrollRef.current = Date.now()
     el.scrollTop = p.top - dy
   }
 
@@ -1144,20 +1186,24 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
                   like: a strike that clears the threshold is painted exactly as
                   it would have been with the filter off. Levels are exempt, and
                   gold stays the core's. */}
-              <div className="flex gap-1">
+              {/* An ON/OFF beside a "≥ N% of core" dropdown — the option
+                  chain's shape, so the two surfaces read the same. A bare row of
+                  seven numbers said nothing about what they were a percent OF,
+                  and ate the width of a 60-wide popover to say it. */}
+              <div className="flex items-center gap-1">
                 <Chip
-                  label={nearCore ? `NEAR CORE ≥ ${nearCorePct}%` : 'NEAR CORE'}
+                  label="NEAR CORE"
                   on={nearCore}
                   onClick={() => commitNearCore(!nearCore)}
                   title="Paint only the strikes carrying this share or more of their column's core. Everything under the threshold is left bare; CB / CW / PW always keep theirs."
                 />
+                <Dropdown
+                  value={String(nearCorePct)}
+                  options={NEAR_CORE_PCTS.map((n) => ({ label: `≥ ${n}% of core`, value: String(n) }))}
+                  onChange={(v) => commitNearCorePct(Number(v))}
+                  title="The share of the column's core a strike has to carry to be painted"
+                />
               </div>
-              <SegGroup
-                title="The share of the column's core a strike has to carry to be painted"
-                options={NEAR_CORE_PCTS.map((n) => ({ label: `${n}`, value: String(n) }))}
-                value={String(nearCorePct)}
-                onChange={(v) => commitNearCorePct(Number(v))}
-              />
               <div className="flex gap-1">
                 <Chip
                   label="CB / CW / PW"
