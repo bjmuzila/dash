@@ -295,6 +295,9 @@ function TickerPanel({
   const userScrolledRef = useRef(false)
   /** When the user last moved this panel themselves. 0 = never. */
   const lastUserScrollRef = useRef(0)
+  /** When the centring effect last wrote scrollTop — so the scroll event that
+   *  write produces is not mistaken for the user. */
+  const programmaticRef = useRef(0)
   const anchorRef = useRef('')
   /** Bumped when the quiet period closes — the centring effect below has no
    *  dependency array, so it needs a render to run in. */
@@ -419,28 +422,39 @@ function TickerPanel({
     // the scroll container carries `relative` below. v2 does not, so its ATM
     // row lands a constant offset (panel header + column header + totals row)
     // below true centre. Fixed here rather than reproduced.
-    el.scrollTop = Math.max(0, Math.round(row.offsetTop - el.clientHeight / 2 + row.offsetHeight / 2))
+    const target = Math.max(0, Math.round(row.offsetTop - el.clientHeight / 2 + row.offsetHeight / 2))
+    // Already there: writing scrollTop anyway fires a scroll event, and this
+    // effect runs on EVERY render, so the listener below would see a steady
+    // drip of scrolls it has to tell apart from yours. Cheapest fix is not to
+    // write.
+    if (Math.abs(el.scrollTop - target) < 1) return
+    programmaticRef.current = Date.now()
+    el.scrollTop = target
   })
 
-  // Latch only when the gesture actually moved the panel — a wheel event on an
-  // already-pinned ladder should not stop it re-centring later.
+  // ── The latch ──────────────────────────────────────────────────────────────
+  // ONE `scroll` listener, not `wheel` + `touchmove`.
+  //
+  // Those two catch a mouse wheel and a finger and nothing else — not a
+  // trackpad's momentum tail, not Page Up, not an arrow key, not a drag of a
+  // scrollbar. Every one of those moved the ladder without arming the latch, so
+  // the very next re-anchor pulled it straight back to the money and the panel
+  // was unreadable while the tape moved. `scroll` fires for all of them.
+  //
+  // The price of `scroll` is that it also fires for the centring effect's own
+  // write. That is what programmaticRef is for: the effect stamps the clock
+  // immediately before it writes, and an event arriving within a frame or two of
+  // that stamp is the effect hearing itself, not you. Anything else is you.
   useEffect(() => {
     const el = bodyRef.current
     if (!el) return
-    const mark = () => {
-      const before = el.scrollTop
-      requestAnimationFrame(() => {
-        if (el.scrollTop === before) return
-        userScrolledRef.current = true
-        lastUserScrollRef.current = Date.now()
-      })
+    const onScroll = () => {
+      if (Date.now() - programmaticRef.current < 150) return
+      userScrolledRef.current = true
+      lastUserScrollRef.current = Date.now()
     }
-    el.addEventListener('wheel', mark, { passive: true })
-    el.addEventListener('touchmove', mark, { passive: true })
-    return () => {
-      el.removeEventListener('wheel', mark)
-      el.removeEventListener('touchmove', mark)
-    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
   // ── Grab-and-drag the ladder ───────────────────────────────────────────────
@@ -479,7 +493,6 @@ function TickerPanel({
       lastUserScrollRef.current = Date.now()
       el.setPointerCapture?.(e.pointerId)
     }
-    lastUserScrollRef.current = Date.now()
     el.scrollTop = p.top - dy
   }
 
@@ -928,17 +941,24 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
     const n = Number(readStored(NEAR_CORE_PCT_KEY, '50'))
     return Number.isFinite(n) && n > 0 && n < 100 ? n : 50
   })
+  // Persisted by EFFECT rather than only inside the commit callbacks, so the
+  // store can never disagree with what is on screen — including after a hot
+  // reload, which re-runs the lazy initialisers below against whatever the store
+  // last held.
+  useEffect(() => {
+    write(NEAR_CORE_KEY, nearCore ? '1' : '0')
+  }, [nearCore])
+  useEffect(() => {
+    write(NEAR_CORE_PCT_KEY, String(nearCorePct))
+  }, [nearCorePct])
   const commitNearCore = useCallback((on: boolean) => {
     setNearCore(on)
-    write(NEAR_CORE_KEY, on ? '1' : '0')
   }, [])
   // Moving the threshold is itself the statement that you want the filter, so it
   // switches on rather than quietly changing a number nothing is reading.
   const commitNearCorePct = useCallback((pct: number) => {
     setNearCorePctState(pct)
     setNearCore(true)
-    write(NEAR_CORE_PCT_KEY, String(pct))
-    write(NEAR_CORE_KEY, '1')
   }, [])
   const [cogOpen, setCogOpen] = useState(false)
   // The click card lives at BOARD level, not inside a panel: it is positioned

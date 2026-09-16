@@ -121,6 +121,13 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
         note: "One customer on one screen: identity, money, usage and the page feed, with no tabs to open.",
         status: "live",
       },
+      {
+        label: "Visitors map",
+        path: "/visitors-map",
+        key: "VisitorsMap",
+        note: "The owner console's visitor map, ported component for component, drawing synthetic loads.",
+        status: "live",
+      },
     ],
   },
   {

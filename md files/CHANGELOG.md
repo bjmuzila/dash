@@ -1,5 +1,58 @@
 # Changelog
 
+## 2026-09-16 (f) - Voltick's visitor map is now the console's, not a lookalike
+
+The hand-built map from (e) is replaced. It looked close and was a fork: my own
+Mercator projection, my own dot rules, my own legend. "Just like the owner one"
+is not a resemblance target, it is a copy instruction.
+
+`owner-vite/src/components/VisitorMap.tsx` is now copied into
+`voltick-vite/src/pages/visitors/VisitorMap.tsx` VERBATIM. The only edits are
+the three import lines at the top:
+
+  ../lib/theme      -> ./ownerTheme   (the 7 OWNER_THEME tokens it reads)
+  ../lib/countryMaps-> ./countryMaps  (a copy beside it)
+  ./CustomerCard    -> ./CustomerName (a stub that opens /customer-card)
+
+So it is the same d3 Natural Earth projection, the same choropleth ramp, the
+same gold-solid / gold-ring / slate-ring dot vocabulary, the same fan-out, the
+same pinned country and visitor cards, the same legend strip and per-country
+counts. The page around it is a copy of `owner-vite/src/pages/Visitors.tsx`,
+including the header counts, which are computed by the console's own arithmetic
+so the header and the map cannot disagree.
+
+The banner at the top of the copied file says to keep it a copy: fix the
+console, re-copy, patch the same three lines. A change made here and not there
+is a fork, and whoever compares the two screens next will believe the wrong one.
+
+**Synthetic rows, not a fetch.** `sampleVisits.ts` builds ~4,600 page_visits
+rows from a seeded generator (mulberry32, fixed seed) in the exact
+`VisitorMapRow` shape /api/page-visits returns, and reproduces the edge cases
+the map is made of: loads outnumber visitors, some visitors have a country and
+no coordinate (dashed, on the centroid), a few rows are XX or T1 and land in
+Unknown, and paying / signed-in / anonymous are three different dots. Nothing
+on the page reaches the backend.
+
+Not ported, because there is nothing behind them here: the hourly refresh and
+refresh-on-focus, the beacon-stale warning, the truncation notice, the "no geo
+data yet" notice. Refresh restamps the clock and its tooltip says so.
+
+**New deps and a vendored asset.** `d3-geo` and `topojson-client` (plus the
+three @types) are added to voltick-vite, and `public/countries-110m.json` is
+vendored the same way the console does it, fetched at runtime so it never
+enters the bundle. package-lock.json is regenerated; run `npm install` in
+voltick-vite before the next build.
+
+STALE, delete when convenient (this session could not remove files on the
+laptop): `voltick-vite/src/pages/visitors/world.ts`,
+`voltick-vite/src/pages/visitors/visitors.ts`, `voltick-vite/tools/gen-world.py`.
+Nothing imports them any more.
+
+`voltick-vite/src/pages/visitors/*` (VisitorMap, VisitorsMap, ownerTheme,
+countryMaps, CustomerName, sampleVisits)
+`voltick-vite/public/countries-110m.json`, `package.json`, `package-lock.json`
+`voltick-vite/src/lib/nav.ts`
+
 ## 2026-09-16 (d) - Voltick: the customer card, as a page instead of a modal
 
 The dossier mockup, built for real on voltick.cbedge.net at `/customer-card`.

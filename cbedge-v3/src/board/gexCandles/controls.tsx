@@ -26,6 +26,7 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export { SegGroup, SegMenu, Chip, Popover, PanelSection } from '@/design/primitives/Controls'
+import { POPOVER_SAFE_ATTR } from '@/design/primitives/Controls'
 
 export function Slider({
   label,
@@ -114,7 +115,16 @@ export function Dropdown<T extends string>({
         <span className="text-3xs opacity-50">▾</span>
       </button>
       <Popover open={open} onClose={() => setOpen(false)}>
-        <div className="flex max-h-64 w-36 flex-col overflow-y-auto">
+        {/* POPOVER_SAFE_ATTR, and it is load-bearing.
+            
+            This menu is PORTALLED, so to a Popover this Dropdown was opened from
+            inside — a card's cog — the click lands outside its own ref. That
+            outer panel closes on POINTERDOWN, which unmounts this menu before
+            the option's onClick can fire: the pick silently does not take, and
+            the control reads as if it snapped back to its old value.
+            
+            The attribute is how Popover is told "this is mine". See its onDown. */}
+        <div className="flex max-h-64 w-36 flex-col overflow-y-auto" {...{ [POPOVER_SAFE_ATTR]: '' }}>
           {options.map((o) => (
             <button
               key={o.value}
