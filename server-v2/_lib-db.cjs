@@ -335,29 +335,112 @@ function getPool() {
 // So it runs on its own, after ensureAllTables rather than inside it, with its
 // own promise. A rejection clears that promise so the next getDb() retries
 // instead of the failure sticking forever.
+//
+// ── 2026-09-16: IT MUST NOT RUN WHEN THERE IS NOTHING TO DO ──────────────────
+//
+// Every statement below takes an ACCESS EXCLUSIVE lock on es_candles. The
+// es-candle writers stream into that table continuously, so a bare ALTER often
+// cannot get its lock immediately - and a DDL statement WAITING for a lock is
+// not passive: Postgres queues lock requests FIFO, so every ordinary SELECT and
+// INSERT that arrives afterwards parks behind it. The ALTER then hit
+// statement_timeout, the catch below cleared _contractEnsured so "the next
+// getDb() retries", getDb() runs on EVERY request, and the jam immediately
+// re-formed. One already-applied migration took the whole site down with
+// `canceling statement due to statement timeout` on unrelated queries.
+//
+// Three changes, and each one is load-bearing:
+//
+//   PRECHECK   The catalogs (pg_attribute, pg_constraint, pg_class) answer
+//              "is this already applied?" and they lock NOTHING on es_candles.
+//              Applied is the normal case forever after the first boot, so the
+//              normal case now takes no lock at all. Each statement is also
+//              guarded individually, so a half-applied table finishes without
+//              re-running the parts that are done.
+//   LOCK_TIMEOUT  3s, on a dedicated client. A blocked ALTER now gives up
+//              instead of queueing the world behind it. Failing is the correct
+//              outcome here: the migration can wait for a quiet moment, the
+//              live chart cannot wait for the migration.
+//   BACKOFF    A failure no longer retries on the very next request. Without
+//              this, "retry" and "hammer" are the same thing.
+//
+// The retry itself is still right - see the note above about the failure
+// sticking forever - it just has to be a retry and not a spin.
 let _contractEnsured = null;
+let _contractRetryAt = 0;
+const CONTRACT_RETRY_MS = 5 * 60_000;
+
 function ensureEsCandlesContract(pool) {
   if (_contractEnsured) return _contractEnsured;
+  if (Date.now() < _contractRetryAt) return Promise.resolve();
   _contractEnsured = (async () => {
-    await pool.query(`ALTER TABLE es_candles ADD COLUMN IF NOT EXISTS contract TEXT NOT NULL DEFAULT ''`);
-    await pool.query(`ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS es_candles_slot_interval_key`);
-    await pool.query(`ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS "es_candles_slotKey_intervalMinutes_key"`);
-    await pool.query(`DO $do$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint WHERE conname = 'es_candles_slot_interval_contract_key'
-        ) THEN
-          ALTER TABLE es_candles
-            ADD CONSTRAINT es_candles_slot_interval_contract_key
-            UNIQUE ("slotKey", "intervalMinutes", contract);
-        END IF;
-      END
-      $do$`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ec_contract_interval_date
-                        ON es_candles(contract, "intervalMinutes", date)`);
+    // Catalog-only. to_regclass (not 'es_candles'::regclass) because this can
+    // run before ensureAllTables has created the table, and the cast THROWS on
+    // a missing relation while to_regclass returns null.
+    const pre = await pool.query(`
+      SELECT
+        (SELECT count(*) FROM pg_attribute
+           WHERE attrelid = t.oid AND attname = 'contract' AND NOT attisdropped)::int AS has_col,
+        (SELECT count(*) FROM pg_constraint
+           WHERE conrelid = t.oid
+             AND conname IN ('es_candles_slot_interval_key',
+                             'es_candles_slotKey_intervalMinutes_key'))::int AS old_uniques,
+        (SELECT count(*) FROM pg_constraint
+           WHERE conrelid = t.oid
+             AND conname = 'es_candles_slot_interval_contract_key')::int AS has_new,
+        (SELECT count(*) FROM pg_class
+           WHERE relname = 'idx_ec_contract_interval_date' AND relkind = 'i')::int AS has_idx
+      FROM (SELECT to_regclass('es_candles') AS oid) t
+      WHERE t.oid IS NOT NULL`);
+
+    const r = pre.rows[0];
+    // No table yet. ensureAllTables creates it with the final shape (see the
+    // CONSTRAINT in its CREATE TABLE), so there is no migration to run.
+    if (!r) return;
+    // The normal path: already applied, nothing locked, nothing done.
+    if (r.has_col === 1 && r.old_uniques === 0 && r.has_new === 1 && r.has_idx === 1) return;
+
+    // A dedicated client so lock_timeout cannot leak to an unrelated pooled
+    // query, and RESET ALL before release in case it is handed back out.
+    const client = await pool.connect();
+    try {
+      await client.query(`SET lock_timeout = '3s'`);
+      await client.query(`SET statement_timeout = '30s'`);
+
+      if (r.has_col !== 1) {
+        await client.query(`ALTER TABLE es_candles ADD COLUMN IF NOT EXISTS contract TEXT NOT NULL DEFAULT ''`);
+      }
+      if (r.old_uniques > 0) {
+        await client.query(`ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS es_candles_slot_interval_key`);
+        await client.query(`ALTER TABLE es_candles DROP CONSTRAINT IF EXISTS "es_candles_slotKey_intervalMinutes_key"`);
+      }
+      if (r.has_new !== 1) {
+        // Still the DO block rather than a plain ADD CONSTRAINT: two processes
+        // can reach this at once and the loser would otherwise throw 42710.
+        await client.query(`DO $do$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_constraint WHERE conname = 'es_candles_slot_interval_contract_key'
+            ) THEN
+              ALTER TABLE es_candles
+                ADD CONSTRAINT es_candles_slot_interval_contract_key
+                UNIQUE ("slotKey", "intervalMinutes", contract);
+            END IF;
+          END
+          $do$`);
+      }
+      if (r.has_idx !== 1) {
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ec_contract_interval_date
+                              ON es_candles(contract, "intervalMinutes", date)`);
+      }
+      console.log('[db] es_candles contract migration applied');
+    } finally {
+      try { await client.query('RESET ALL'); } catch { /* releasing anyway */ }
+      client.release();
+    }
   })().catch((err) => {
     _contractEnsured = null;
-    console.warn('[db] es_candles contract migration failed (will retry):',
+    _contractRetryAt = Date.now() + CONTRACT_RETRY_MS;
+    console.warn('[db] es_candles contract migration failed (retry in 5m):',
       String(err && err.message).slice(0, 160));
   });
   return _contractEnsured;
