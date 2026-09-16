@@ -4950,6 +4950,324 @@ if (libDb) {
     },
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // /api/whale-alerts — TRACKED CONTRACTS, per login.
+  //
+  // A tracked contract is a CONTRACT someone flagged on /v3/whales, not a
+  // notification. Nothing here fires, emails or watches a price: the row exists
+  // so the contract, its note and the picture it had the day it was flagged are
+  // on the page tomorrow and on a different machine. Saying that plainly here
+  // matters, because "alert" reads like a trigger and every future change to
+  // this table will be tempted to make it one.
+  //
+  //   GET    /api/whale-alerts        → { alerts: [...] }   this login's only
+  //   POST   /api/whale-alerts        → { ok, alert }       track (upsert)
+  //   PATCH  /api/whale-alerts/:id    → { ok, alert }       note / snapshot
+  //   DELETE /api/whale-alerts/:id    → { ok }              stop tracking
+  //
+  // ── EVERY QUERY IS KEYED ON THE LOGIN ──────────────────────────────────────
+  // There is no route that reads a row without `clerk_user_id = ?` in the same
+  // WHERE. An id belonging to someone else answers 404, never 403 — same choice
+  // customer_feedback makes, and for the same reason: 403 confirms the row is
+  // real, which is a fact about another customer's list.
+  //
+  // ── EXPIRY DELETES THE ROW, ON READ ────────────────────────────────────────
+  // Past expiry a tracked contract is a dead symbol whose bars the vault drops
+  // anyway (~120 days), so it is removed rather than greyed. The delete runs at
+  // the top of every GET for that user, which means no cron, no sweeper and no
+  // second place that knows the rule — the list cleans itself the next time its
+  // owner looks at it. A contract expiring TODAY survives today — `<`, not
+  // `<=`, because 0DTE is exactly when a flag is being used — and "today" is
+  // read in ET rather than the container's clock, or a UTC box would delete a
+  // 0DTE flag at 8pm the evening before its own session ends elsewhere.
+  //
+  // ── THE SNAPSHOT IS THE ONLY THING THAT CANNOT BE REBUILT ──────────────────
+  // The chart is NOT stored. It is redrawn from underlying/strike/type/expiry
+  // every time the drawer opens, so it can never go stale and costs nothing.
+  // What IS stored is `snapshot`: the bars as they stood the minute the
+  // contract was tracked — the one picture that is genuinely unrecoverable
+  // later. Capped hard below, because a JSONB column with no ceiling on a
+  // per-user table is a bill waiting to happen.
+  //
+  // Table created lazily here rather than in lib/db.ts's ensureSchema so
+  // _lib-db.cjs needs no rebuild — same reasoning as level_log_ticker_prefs
+  // above, and everything goes through libDb.queryAll's `?` → `$n` rewriting.
+  // ───────────────────────────────────────────────────────────────────────────
+  const WA_MAX_PER_USER = 200;     // a list, not a database
+  const WA_MAX_NOTE = 500;
+  const WA_MAX_SNAPSHOT_BARS = 800;
+  const WA_SYM_RE = /^[A-Z][A-Z.]{0,11}$/;
+  const WA_YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  let whaleAlertsSchema = null;
+  function ensureWhaleAlertsSchema() {
+    if (!whaleAlertsSchema) {
+      whaleAlertsSchema = (async () => {
+        await libDb.queryAll(
+          `CREATE TABLE IF NOT EXISTS whale_alerts (
+             id             BIGSERIAL PRIMARY KEY,
+             clerk_user_id  TEXT NOT NULL,
+             osi            TEXT,
+             underlying     TEXT NOT NULL,
+             strike         NUMERIC NOT NULL,
+             opt_type       CHAR(1) NOT NULL,
+             expiry         DATE NOT NULL,
+             source         TEXT NOT NULL DEFAULT 'whale',
+             print_ts       TIMESTAMPTZ,
+             print_size     INTEGER,
+             print_premium  NUMERIC,
+             entry_price    NUMERIC,
+             note           TEXT NOT NULL DEFAULT '',
+             snapshot       JSONB,
+             snapshot_at    TIMESTAMPTZ,
+             created_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+             updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+           )`,
+          [],
+        );
+        // One row per user per contract: pressing TRACK on a strike that is
+        // already tracked must update the row, not stack a second one that the
+        // card would then render twice.
+        await libDb.queryAll(
+          `CREATE UNIQUE INDEX IF NOT EXISTS whale_alerts_uniq
+             ON whale_alerts (clerk_user_id, underlying, strike, opt_type, expiry)`,
+          [],
+        );
+        await libDb.queryAll(
+          `CREATE INDEX IF NOT EXISTS whale_alerts_user_created
+             ON whale_alerts (clerk_user_id, created_at DESC)`,
+          [],
+        );
+      })().catch((e) => { whaleAlertsSchema = null; throw e; });
+    }
+    return whaleAlertsSchema;
+  }
+
+  /** DB row → the camelCase shape the card renders. Numerics arrive as strings. */
+  function waRow(r) {
+    const num = (v) => (v == null ? null : Number(v));
+    const ms = (v) => (v == null ? null : new Date(v).getTime());
+    let snapshot = r.snapshot ?? null;
+    if (typeof snapshot === 'string') { try { snapshot = JSON.parse(snapshot); } catch { snapshot = null; } }
+    return {
+      id: Number(r.id),
+      underlying: r.underlying,
+      strike: Number(r.strike),
+      optType: r.opt_type,
+      // DATE comes back as a Date in node-postgres; the client wants the plain
+      // YMD it sent, and toISOString() on a midnight-UTC date is that string.
+      expiry: r.expiry instanceof Date ? r.expiry.toISOString().slice(0, 10) : String(r.expiry).slice(0, 10),
+      osi: r.osi ?? null,
+      source: r.source === 'lookup' ? 'lookup' : 'whale',
+      printTs: ms(r.print_ts),
+      printSize: r.print_size == null ? null : Number(r.print_size),
+      printPremium: num(r.print_premium),
+      entryPrice: num(r.entry_price),
+      note: r.note ?? '',
+      snapshot,
+      createdAt: ms(r.created_at) ?? Date.now(),
+    };
+  }
+
+  const WA_COLS = `id, clerk_user_id, osi, underlying, strike, opt_type, expiry, source,
+                   print_ts, print_size, print_premium, entry_price, note, snapshot, created_at`;
+
+  /**
+   * Trusted-shape guard for the frozen picture. The client sends bars it just
+   * fetched from our own routes, but this lands in a JSONB column on a
+   * per-user table, so it is rebuilt field by field rather than stored as
+   * handed over — an unbounded object from a browser is not a thing to keep.
+   */
+  function cleanSnapshot(v) {
+    if (!v || typeof v !== 'object' || !Array.isArray(v.bars)) return null;
+    const bars = [];
+    for (const b of v.bars) {
+      if (!b || typeof b !== 'object') continue;
+      const time = Number(b.time), close = Number(b.close);
+      if (!Number.isFinite(time) || !Number.isFinite(close) || close <= 0) continue;
+      bars.push({
+        time,
+        open: Number(b.open) || close,
+        high: Number(b.high) || close,
+        low: Number(b.low) || close,
+        close,
+        volume: Number(b.volume) || 0,
+      });
+      if (bars.length >= WA_MAX_SNAPSHOT_BARS) break;
+    }
+    if (!bars.length) return null;
+    const at = Number(v.at);
+    return {
+      bars,
+      at: Number.isFinite(at) ? at : Date.now(),
+      range: typeof v.range === 'string' ? v.range.slice(0, 4) : '3d',
+    };
+  }
+
+  /** Everything the four identity fields have to satisfy, or a reason they do not. */
+  function cleanContract(body) {
+    const underlying = String(body?.underlying ?? '').trim().toUpperCase().slice(0, 12);
+    if (!WA_SYM_RE.test(underlying)) return { error: 'Bad underlying' };
+    const strike = Number(body?.strike);
+    if (!Number.isFinite(strike) || strike <= 0) return { error: 'Bad strike' };
+    const optType = String(body?.optType ?? '').trim().toUpperCase().slice(0, 1);
+    if (optType !== 'C' && optType !== 'P') return { error: 'Bad option type' };
+    const expiry = String(body?.expiry ?? '').trim().slice(0, 10);
+    if (!WA_YMD_RE.test(expiry)) return { error: 'Bad expiry' };
+    return { underlying, strike, optType, expiry };
+  }
+
+  const waOptional = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+
+  register('/api/whale-alerts', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+      try {
+        await ensureWhaleAlertsSchema();
+
+        if (req.method === 'POST') {
+          const body = await readJson(req);
+          const c = cleanContract(body);
+          if (c.error) return send(res, 400, { error: c.error });
+
+          // The cap is enforced against OTHER contracts, so re-tracking one you
+          // already hold is never refused for being the 201st.
+          const countRows = await libDb.queryAll(
+            `SELECT COUNT(*)::int AS n FROM whale_alerts
+              WHERE clerk_user_id = ?
+                AND NOT (underlying = ? AND strike = ? AND opt_type = ? AND expiry = ?)`,
+            [userId, c.underlying, c.strike, c.optType, c.expiry],
+          );
+          if ((countRows?.[0]?.n ?? 0) >= WA_MAX_PER_USER) {
+            return send(res, 409, { error: `Tracked list is full (${WA_MAX_PER_USER}). Remove one first.` });
+          }
+
+          const snapshot = cleanSnapshot(body?.snapshot);
+          const printTs = Number(body?.printTs);
+          const rows = await libDb.queryAll(
+            `INSERT INTO whale_alerts
+               (clerk_user_id, osi, underlying, strike, opt_type, expiry, source,
+                print_ts, print_size, print_premium, entry_price, note, snapshot, snapshot_at)
+             VALUES (?, ?, ?, ?, ?, ?::date, ?,
+                     ?, ?, ?, ?, ?, ?::jsonb, ?)
+             ON CONFLICT (clerk_user_id, underlying, strike, opt_type, expiry) DO UPDATE SET
+               -- Re-tracking REFRESHES the contract's facts but never wipes a
+               -- note: the note is the only thing here a person typed, and
+               -- pressing TRACK twice must not be how it is lost. COALESCE on
+               -- the snapshot for the same reason — a re-track that came back
+               -- with no bars keeps the picture that worked.
+               osi           = COALESCE(EXCLUDED.osi, whale_alerts.osi),
+               source        = EXCLUDED.source,
+               print_ts      = COALESCE(EXCLUDED.print_ts, whale_alerts.print_ts),
+               print_size    = COALESCE(EXCLUDED.print_size, whale_alerts.print_size),
+               print_premium = COALESCE(EXCLUDED.print_premium, whale_alerts.print_premium),
+               entry_price   = COALESCE(EXCLUDED.entry_price, whale_alerts.entry_price),
+               note          = CASE WHEN EXCLUDED.note = '' THEN whale_alerts.note ELSE EXCLUDED.note END,
+               snapshot      = COALESCE(EXCLUDED.snapshot, whale_alerts.snapshot),
+               snapshot_at   = COALESCE(EXCLUDED.snapshot_at, whale_alerts.snapshot_at),
+               updated_at    = CURRENT_TIMESTAMP
+             RETURNING ${WA_COLS}`,
+            [
+              userId,
+              String(body?.osi ?? '').trim().slice(0, 32) || null,
+              c.underlying, c.strike, c.optType, c.expiry,
+              body?.source === 'lookup' ? 'lookup' : 'whale',
+              Number.isFinite(printTs) && printTs > 0 ? new Date(printTs) : null,
+              waOptional(body?.printSize) == null ? null : Math.round(Number(body.printSize)),
+              waOptional(body?.printPremium),
+              waOptional(body?.entryPrice),
+              String(body?.note ?? '').slice(0, WA_MAX_NOTE),
+              snapshot ? JSON.stringify(snapshot) : null,
+              snapshot ? new Date(snapshot.at) : null,
+            ],
+          );
+          return send(res, 200, { ok: true, alert: waRow(rows[0]) });
+        }
+
+        // GET — the self-cleaning read. The delete is first so the list that
+        // comes back is the list that is true, not the list minus a row the
+        // client has to know to hide.
+        await libDb.queryAll(
+          `DELETE FROM whale_alerts
+             WHERE clerk_user_id = ?
+               AND expiry < (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date`,
+          [userId],
+        );
+        const rows = await libDb.queryAll(
+          `SELECT ${WA_COLS} FROM whale_alerts
+            WHERE clerk_user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ${WA_MAX_PER_USER}`,
+          [userId],
+        );
+        return send(res, 200, { alerts: (rows ?? []).map(waRow) },
+          { 'Cache-Control': 'private, no-store' });
+      } catch (err) {
+        return send(res, 500, { error: 'Tracked contracts failed', detail: String(err) });
+      }
+    },
+  });
+
+  registerDynamic('/api/whale-alerts/:id', {
+    auth: 'subscriber', methods: ['PATCH', 'DELETE'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+      const id = Number(ctx.params?.id ?? 0);
+      if (!Number.isFinite(id) || id <= 0) return send(res, 400, { error: 'Bad id' });
+      try {
+        await ensureWhaleAlertsSchema();
+
+        if (req.method === 'DELETE') {
+          // The user id is in the WHERE, not checked after a read: a row that
+          // is not theirs matches nothing and answers the same 404 a row that
+          // never existed does.
+          const rows = await libDb.queryAll(
+            'DELETE FROM whale_alerts WHERE id = ? AND clerk_user_id = ? RETURNING id',
+            [id, userId],
+          );
+          if (!rows?.length) return send(res, 404, { error: 'Not found' });
+          return send(res, 200, { ok: true });
+        }
+
+        const body = await readJson(req);
+        const sets = [];
+        const params = [];
+        if (typeof body?.note === 'string') {
+          sets.push(`note = ?`);
+          params.push(body.note.slice(0, WA_MAX_NOTE));
+        }
+        if (body?.snapshot !== undefined) {
+          const snap = cleanSnapshot(body.snapshot);
+          sets.push(`snapshot = ?::jsonb`, `snapshot_at = ?`);
+          params.push(snap ? JSON.stringify(snap) : null, snap ? new Date(snap.at) : null);
+        }
+        if (body?.entryPrice !== undefined) {
+          sets.push(`entry_price = ?`);
+          params.push(waOptional(body.entryPrice));
+        }
+        if (!sets.length) return send(res, 400, { error: 'Nothing to update' });
+        sets.push('updated_at = CURRENT_TIMESTAMP');
+        params.push(id, userId);
+        const rows = await libDb.queryAll(
+          `UPDATE whale_alerts SET ${sets.join(', ')}
+            WHERE id = ? AND clerk_user_id = ?
+            RETURNING ${WA_COLS}`,
+          params,
+        );
+        if (!rows?.length) return send(res, 404, { error: 'Not found' });
+        return send(res, 200, { ok: true, alert: waRow(rows[0]) });
+      } catch (err) {
+        return send(res, 500, { error: 'Tracked contract update failed', detail: String(err) });
+      }
+    },
+  });
+
   // /api/dashboard-layout — saved card layouts ("templates") for a dashboard
   // page's drag/resize grid, per user PER PAGE.
   //
