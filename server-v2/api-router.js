@@ -135,6 +135,16 @@ catch (e) { console.warn('[api-router] _lib-attribution.cjs not loaded — visit
 let levelsEngine = null;
 try { levelsEngine = require('./levels-engine.js'); }
 catch (e) { console.warn('[api-router] levels-engine.js not loaded:', e.message); }
+// Daily expected-move band — server-v2/daily-em.js. Computes the front-expiry
+// ATM straddle ONCE per ET session, anchors it to the previous session's close
+// and freezes the result in its own `daily_em` table, so every client draws the
+// identical two levels all day. Owns its table through libDb.pgQuery rather
+// than through the _lib-db.cjs bundle (see the header in that file). Loaded
+// defensively: without it /api/daily-em is simply never registered and the GEX
+// Chart's EM rails stay off.
+let dailyEm = null;
+try { dailyEm = require('./daily-em'); }
+catch (e) { console.warn('[api-router] daily-em.js not loaded — daily EM band off:', e.message); }
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -4936,324 +4946,6 @@ if (libDb) {
           { 'Cache-Control': 'private, max-age=15' });
       } catch (err) {
         return send(res, 500, { error: 'Level-log rail failed', detail: String(err) });
-      }
-    },
-  });
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // /api/whale-alerts — TRACKED CONTRACTS, per login.
-  //
-  // A tracked contract is a CONTRACT someone flagged on /v3/whales, not a
-  // notification. Nothing here fires, emails or watches a price: the row exists
-  // so the contract, its note and the picture it had the day it was flagged are
-  // on the page tomorrow and on a different machine. Saying that plainly here
-  // matters, because "alert" reads like a trigger and every future change to
-  // this table will be tempted to make it one.
-  //
-  //   GET    /api/whale-alerts        → { alerts: [...] }   this login's only
-  //   POST   /api/whale-alerts        → { ok, alert }       track (upsert)
-  //   PATCH  /api/whale-alerts/:id    → { ok, alert }       note / snapshot
-  //   DELETE /api/whale-alerts/:id    → { ok }              stop tracking
-  //
-  // ── EVERY QUERY IS KEYED ON THE LOGIN ──────────────────────────────────────
-  // There is no route that reads a row without `clerk_user_id = ?` in the same
-  // WHERE. An id belonging to someone else answers 404, never 403 — same choice
-  // customer_feedback makes, and for the same reason: 403 confirms the row is
-  // real, which is a fact about another customer's list.
-  //
-  // ── EXPIRY DELETES THE ROW, ON READ ────────────────────────────────────────
-  // Past expiry a tracked contract is a dead symbol whose bars the vault drops
-  // anyway (~120 days), so it is removed rather than greyed. The delete runs at
-  // the top of every GET for that user, which means no cron, no sweeper and no
-  // second place that knows the rule — the list cleans itself the next time its
-  // owner looks at it. A contract expiring TODAY survives today — `<`, not
-  // `<=`, because 0DTE is exactly when a flag is being used — and "today" is
-  // read in ET rather than the container's clock, or a UTC box would delete a
-  // 0DTE flag at 8pm the evening before its own session ends elsewhere.
-  //
-  // ── THE SNAPSHOT IS THE ONLY THING THAT CANNOT BE REBUILT ──────────────────
-  // The chart is NOT stored. It is redrawn from underlying/strike/type/expiry
-  // every time the drawer opens, so it can never go stale and costs nothing.
-  // What IS stored is `snapshot`: the bars as they stood the minute the
-  // contract was tracked — the one picture that is genuinely unrecoverable
-  // later. Capped hard below, because a JSONB column with no ceiling on a
-  // per-user table is a bill waiting to happen.
-  //
-  // Table created lazily here rather than in lib/db.ts's ensureSchema so
-  // _lib-db.cjs needs no rebuild — same reasoning as level_log_ticker_prefs
-  // above, and everything goes through libDb.queryAll's `?` → `$n` rewriting.
-  // ───────────────────────────────────────────────────────────────────────────
-  const WA_MAX_PER_USER = 200;     // a list, not a database
-  const WA_MAX_NOTE = 500;
-  const WA_MAX_SNAPSHOT_BARS = 800;
-  const WA_SYM_RE = /^[A-Z][A-Z.]{0,11}$/;
-  const WA_YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-  let whaleAlertsSchema = null;
-  function ensureWhaleAlertsSchema() {
-    if (!whaleAlertsSchema) {
-      whaleAlertsSchema = (async () => {
-        await libDb.queryAll(
-          `CREATE TABLE IF NOT EXISTS whale_alerts (
-             id             BIGSERIAL PRIMARY KEY,
-             clerk_user_id  TEXT NOT NULL,
-             osi            TEXT,
-             underlying     TEXT NOT NULL,
-             strike         NUMERIC NOT NULL,
-             opt_type       CHAR(1) NOT NULL,
-             expiry         DATE NOT NULL,
-             source         TEXT NOT NULL DEFAULT 'whale',
-             print_ts       TIMESTAMPTZ,
-             print_size     INTEGER,
-             print_premium  NUMERIC,
-             entry_price    NUMERIC,
-             note           TEXT NOT NULL DEFAULT '',
-             snapshot       JSONB,
-             snapshot_at    TIMESTAMPTZ,
-             created_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-             updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-           )`,
-          [],
-        );
-        // One row per user per contract: pressing TRACK on a strike that is
-        // already tracked must update the row, not stack a second one that the
-        // card would then render twice.
-        await libDb.queryAll(
-          `CREATE UNIQUE INDEX IF NOT EXISTS whale_alerts_uniq
-             ON whale_alerts (clerk_user_id, underlying, strike, opt_type, expiry)`,
-          [],
-        );
-        await libDb.queryAll(
-          `CREATE INDEX IF NOT EXISTS whale_alerts_user_created
-             ON whale_alerts (clerk_user_id, created_at DESC)`,
-          [],
-        );
-      })().catch((e) => { whaleAlertsSchema = null; throw e; });
-    }
-    return whaleAlertsSchema;
-  }
-
-  /** DB row → the camelCase shape the card renders. Numerics arrive as strings. */
-  function waRow(r) {
-    const num = (v) => (v == null ? null : Number(v));
-    const ms = (v) => (v == null ? null : new Date(v).getTime());
-    let snapshot = r.snapshot ?? null;
-    if (typeof snapshot === 'string') { try { snapshot = JSON.parse(snapshot); } catch { snapshot = null; } }
-    return {
-      id: Number(r.id),
-      underlying: r.underlying,
-      strike: Number(r.strike),
-      optType: r.opt_type,
-      // DATE comes back as a Date in node-postgres; the client wants the plain
-      // YMD it sent, and toISOString() on a midnight-UTC date is that string.
-      expiry: r.expiry instanceof Date ? r.expiry.toISOString().slice(0, 10) : String(r.expiry).slice(0, 10),
-      osi: r.osi ?? null,
-      source: r.source === 'lookup' ? 'lookup' : 'whale',
-      printTs: ms(r.print_ts),
-      printSize: r.print_size == null ? null : Number(r.print_size),
-      printPremium: num(r.print_premium),
-      entryPrice: num(r.entry_price),
-      note: r.note ?? '',
-      snapshot,
-      createdAt: ms(r.created_at) ?? Date.now(),
-    };
-  }
-
-  const WA_COLS = `id, clerk_user_id, osi, underlying, strike, opt_type, expiry, source,
-                   print_ts, print_size, print_premium, entry_price, note, snapshot, created_at`;
-
-  /**
-   * Trusted-shape guard for the frozen picture. The client sends bars it just
-   * fetched from our own routes, but this lands in a JSONB column on a
-   * per-user table, so it is rebuilt field by field rather than stored as
-   * handed over — an unbounded object from a browser is not a thing to keep.
-   */
-  function cleanSnapshot(v) {
-    if (!v || typeof v !== 'object' || !Array.isArray(v.bars)) return null;
-    const bars = [];
-    for (const b of v.bars) {
-      if (!b || typeof b !== 'object') continue;
-      const time = Number(b.time), close = Number(b.close);
-      if (!Number.isFinite(time) || !Number.isFinite(close) || close <= 0) continue;
-      bars.push({
-        time,
-        open: Number(b.open) || close,
-        high: Number(b.high) || close,
-        low: Number(b.low) || close,
-        close,
-        volume: Number(b.volume) || 0,
-      });
-      if (bars.length >= WA_MAX_SNAPSHOT_BARS) break;
-    }
-    if (!bars.length) return null;
-    const at = Number(v.at);
-    return {
-      bars,
-      at: Number.isFinite(at) ? at : Date.now(),
-      range: typeof v.range === 'string' ? v.range.slice(0, 4) : '3d',
-    };
-  }
-
-  /** Everything the four identity fields have to satisfy, or a reason they do not. */
-  function cleanContract(body) {
-    const underlying = String(body?.underlying ?? '').trim().toUpperCase().slice(0, 12);
-    if (!WA_SYM_RE.test(underlying)) return { error: 'Bad underlying' };
-    const strike = Number(body?.strike);
-    if (!Number.isFinite(strike) || strike <= 0) return { error: 'Bad strike' };
-    const optType = String(body?.optType ?? '').trim().toUpperCase().slice(0, 1);
-    if (optType !== 'C' && optType !== 'P') return { error: 'Bad option type' };
-    const expiry = String(body?.expiry ?? '').trim().slice(0, 10);
-    if (!WA_YMD_RE.test(expiry)) return { error: 'Bad expiry' };
-    return { underlying, strike, optType, expiry };
-  }
-
-  const waOptional = (v) => {
-    const n = Number(v);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  };
-
-  register('/api/whale-alerts', {
-    auth: 'subscriber', methods: ['GET', 'POST'],
-    async handler(req, res, ctx, access) {
-      const userId = access.userId;
-      if (!userId) return send(res, 401, { error: 'Unauthorized' });
-      try {
-        await ensureWhaleAlertsSchema();
-
-        if (req.method === 'POST') {
-          const body = await readJson(req);
-          const c = cleanContract(body);
-          if (c.error) return send(res, 400, { error: c.error });
-
-          // The cap is enforced against OTHER contracts, so re-tracking one you
-          // already hold is never refused for being the 201st.
-          const countRows = await libDb.queryAll(
-            `SELECT COUNT(*)::int AS n FROM whale_alerts
-              WHERE clerk_user_id = ?
-                AND NOT (underlying = ? AND strike = ? AND opt_type = ? AND expiry = ?)`,
-            [userId, c.underlying, c.strike, c.optType, c.expiry],
-          );
-          if ((countRows?.[0]?.n ?? 0) >= WA_MAX_PER_USER) {
-            return send(res, 409, { error: `Tracked list is full (${WA_MAX_PER_USER}). Remove one first.` });
-          }
-
-          const snapshot = cleanSnapshot(body?.snapshot);
-          const printTs = Number(body?.printTs);
-          const rows = await libDb.queryAll(
-            `INSERT INTO whale_alerts
-               (clerk_user_id, osi, underlying, strike, opt_type, expiry, source,
-                print_ts, print_size, print_premium, entry_price, note, snapshot, snapshot_at)
-             VALUES (?, ?, ?, ?, ?, ?::date, ?,
-                     ?, ?, ?, ?, ?, ?::jsonb, ?)
-             ON CONFLICT (clerk_user_id, underlying, strike, opt_type, expiry) DO UPDATE SET
-               -- Re-tracking REFRESHES the contract's facts but never wipes a
-               -- note: the note is the only thing here a person typed, and
-               -- pressing TRACK twice must not be how it is lost. COALESCE on
-               -- the snapshot for the same reason — a re-track that came back
-               -- with no bars keeps the picture that worked.
-               osi           = COALESCE(EXCLUDED.osi, whale_alerts.osi),
-               source        = EXCLUDED.source,
-               print_ts      = COALESCE(EXCLUDED.print_ts, whale_alerts.print_ts),
-               print_size    = COALESCE(EXCLUDED.print_size, whale_alerts.print_size),
-               print_premium = COALESCE(EXCLUDED.print_premium, whale_alerts.print_premium),
-               entry_price   = COALESCE(EXCLUDED.entry_price, whale_alerts.entry_price),
-               note          = CASE WHEN EXCLUDED.note = '' THEN whale_alerts.note ELSE EXCLUDED.note END,
-               snapshot      = COALESCE(EXCLUDED.snapshot, whale_alerts.snapshot),
-               snapshot_at   = COALESCE(EXCLUDED.snapshot_at, whale_alerts.snapshot_at),
-               updated_at    = CURRENT_TIMESTAMP
-             RETURNING ${WA_COLS}`,
-            [
-              userId,
-              String(body?.osi ?? '').trim().slice(0, 32) || null,
-              c.underlying, c.strike, c.optType, c.expiry,
-              body?.source === 'lookup' ? 'lookup' : 'whale',
-              Number.isFinite(printTs) && printTs > 0 ? new Date(printTs) : null,
-              waOptional(body?.printSize) == null ? null : Math.round(Number(body.printSize)),
-              waOptional(body?.printPremium),
-              waOptional(body?.entryPrice),
-              String(body?.note ?? '').slice(0, WA_MAX_NOTE),
-              snapshot ? JSON.stringify(snapshot) : null,
-              snapshot ? new Date(snapshot.at) : null,
-            ],
-          );
-          return send(res, 200, { ok: true, alert: waRow(rows[0]) });
-        }
-
-        // GET — the self-cleaning read. The delete is first so the list that
-        // comes back is the list that is true, not the list minus a row the
-        // client has to know to hide.
-        await libDb.queryAll(
-          `DELETE FROM whale_alerts
-             WHERE clerk_user_id = ?
-               AND expiry < (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date`,
-          [userId],
-        );
-        const rows = await libDb.queryAll(
-          `SELECT ${WA_COLS} FROM whale_alerts
-            WHERE clerk_user_id = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT ${WA_MAX_PER_USER}`,
-          [userId],
-        );
-        return send(res, 200, { alerts: (rows ?? []).map(waRow) },
-          { 'Cache-Control': 'private, no-store' });
-      } catch (err) {
-        return send(res, 500, { error: 'Tracked contracts failed', detail: String(err) });
-      }
-    },
-  });
-
-  registerDynamic('/api/whale-alerts/:id', {
-    auth: 'subscriber', methods: ['PATCH', 'DELETE'],
-    async handler(req, res, ctx, access) {
-      const userId = access.userId;
-      if (!userId) return send(res, 401, { error: 'Unauthorized' });
-      const id = Number(ctx.params?.id ?? 0);
-      if (!Number.isFinite(id) || id <= 0) return send(res, 400, { error: 'Bad id' });
-      try {
-        await ensureWhaleAlertsSchema();
-
-        if (req.method === 'DELETE') {
-          // The user id is in the WHERE, not checked after a read: a row that
-          // is not theirs matches nothing and answers the same 404 a row that
-          // never existed does.
-          const rows = await libDb.queryAll(
-            'DELETE FROM whale_alerts WHERE id = ? AND clerk_user_id = ? RETURNING id',
-            [id, userId],
-          );
-          if (!rows?.length) return send(res, 404, { error: 'Not found' });
-          return send(res, 200, { ok: true });
-        }
-
-        const body = await readJson(req);
-        const sets = [];
-        const params = [];
-        if (typeof body?.note === 'string') {
-          sets.push(`note = ?`);
-          params.push(body.note.slice(0, WA_MAX_NOTE));
-        }
-        if (body?.snapshot !== undefined) {
-          const snap = cleanSnapshot(body.snapshot);
-          sets.push(`snapshot = ?::jsonb`, `snapshot_at = ?`);
-          params.push(snap ? JSON.stringify(snap) : null, snap ? new Date(snap.at) : null);
-        }
-        if (body?.entryPrice !== undefined) {
-          sets.push(`entry_price = ?`);
-          params.push(waOptional(body.entryPrice));
-        }
-        if (!sets.length) return send(res, 400, { error: 'Nothing to update' });
-        sets.push('updated_at = CURRENT_TIMESTAMP');
-        params.push(id, userId);
-        const rows = await libDb.queryAll(
-          `UPDATE whale_alerts SET ${sets.join(', ')}
-            WHERE id = ? AND clerk_user_id = ?
-            RETURNING ${WA_COLS}`,
-          params,
-        );
-        if (!rows?.length) return send(res, 404, { error: 'Not found' });
-        return send(res, 200, { ok: true, alert: waRow(rows[0]) });
-      } catch (err) {
-        return send(res, 500, { error: 'Tracked contract update failed', detail: String(err) });
       }
     },
   });
@@ -11092,6 +10784,352 @@ Return exactly one element per input key, in the same order. Never merge, split,
     });
   }
 
+  // /api/admin/customer?email=… — ONE customer, everything we hold on them.
+  //
+  // WHY THIS EXISTS (2026-09-15): the owner site could answer every question
+  // about customers in aggregate — who's paying, who visited, who cancelled —
+  // but "tell me about THIS person" meant reading them off five different
+  // tables on three pages. This is the card behind a clicked name: identity,
+  // location, money, lifecycle, and the page-by-page feed with time per page.
+  //
+  // Every section is INDEPENDENT and best-effort. Stripe down, comp_access
+  // table missing, no page_visits yet — each of those blanks its own section
+  // and the rest of the card still renders. Nothing here can 500 the card
+  // except "no such account".
+  //
+  // Time per page = gap to the NEXT load by the same user, capped at the
+  // 30-minute session boundary (same rule as getCustomerActivity, so the
+  // total agrees with the Customer Activity table). The last page of every
+  // session gets no time — that's a lower bound, stated on the card.
+  {
+    let _stripeForCard;
+    function stripeForCard() {
+      if (_stripeForCard !== undefined) return _stripeForCard;
+      const key = (process.env.STRIPE_SECRET_KEY || '').trim();
+      if (!key) { _stripeForCard = null; return null; }
+      try { const Stripe = require('stripe'); _stripeForCard = new Stripe(key); }
+      catch (e) { console.warn('[api-router] stripe not loadable for customer card:', e.message); _stripeForCard = null; }
+      return _stripeForCard;
+    }
+    const SESSION_GAP_SEC = 1800;
+    const FEED_LIMIT = 400;
+
+    /** Recurring discount → a plain description for the card. */
+    const couponOf = (sub) => {
+      const list = [];
+      if (sub?.discount) list.push(sub.discount);
+      if (Array.isArray(sub?.discounts)) for (const d of sub.discounts) if (d && typeof d !== 'string') list.push(d);
+      const out = [];
+      for (const d of list) {
+        const c = d.coupon;
+        if (!c) continue;
+        out.push({
+          code: d.promotion_code?.code ?? c.name ?? c.id,
+          percentOff: c.percent_off ?? null,
+          amountOff: c.amount_off ?? null,
+          duration: c.duration,
+          durationMonths: c.duration_in_months ?? null,
+          start: d.start ?? null,
+          end: d.end ?? null,
+        });
+      }
+      return out;
+    };
+
+    register('/api/admin/customer', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const email = (sp.get('email') || '').trim().toLowerCase();
+          const userId = (sp.get('userId') || '').trim();
+          if (!email && !userId) { send(res, 400, { ok: false, error: 'email or userId required' }); return; }
+
+          // ── Account ───────────────────────────────────────────────────────
+          const user = await libDb.queryOne(
+            `SELECT u.id, u.email, u.is_owner, u.email_verified_at, u.google_sub,
+                    (u.password_hash IS NOT NULL) AS has_password,
+                    u.discord_id, u.discord_username, u.discord_avatar, u.discord_connected_at,
+                    u.created_at,
+                    s.last_login_at, s.login_count, s.last_ua
+               FROM users u
+               LEFT JOIN (
+                 SELECT user_id, MAX(created_at) AS last_login_at, COUNT(*)::int AS login_count,
+                        (ARRAY_AGG(user_agent ORDER BY created_at DESC))[1] AS last_ua
+                   FROM sessions GROUP BY user_id
+               ) s ON s.user_id = u.id
+              WHERE ${userId ? 'u.id = ?' : 'lower(u.email) = ?'}
+              LIMIT 1`,
+            [userId || email]
+          );
+          if (!user) { send(res, 404, { ok: false, error: 'No account with that email' }, { 'Cache-Control': NO_STORE }); return; }
+          const uid = user.id;
+          const ekey = String(user.email || email).toLowerCase();
+          const warnings = [];
+          const soft = async (label, fn, fallback) => {
+            try { return await fn(); }
+            catch (e) { warnings.push(`${label}: ${e?.message || e}`); return fallback; }
+          };
+
+          // ── Everything else, concurrently ─────────────────────────────────
+          const [visitRows, localSub, storedCancels, attribution, feedback, farCb, unsub, comp, emailSends, tickerRows] = await Promise.all([
+            soft('visits', () => libDb.queryAll(
+              `SELECT id, page_key, page_label, path, ip, country, region, city,
+                      is_entry, referrer_host, utm_source, utm_medium, utm_campaign, channel,
+                      browser, os, device_type, created_at
+                 FROM page_visits
+                WHERE user_id = ? AND COALESCE(is_bot, FALSE) = FALSE
+                ORDER BY created_at DESC
+                LIMIT ?`, [uid, FEED_LIMIT]), []),
+            soft('subscription', () => libDb.getSubscription(uid), null),
+            soft('cancellations', () => libDb.queryAll(
+              `SELECT * FROM subscription_cancellations WHERE clerk_user_id = ? OR lower(customer_email) = ? ORDER BY first_seen_at DESC`, [uid, ekey]), []),
+            soft('attribution', () => libDb.queryOne(`SELECT * FROM user_attribution WHERE user_id = ?`, [uid]), null),
+            soft('feedback', () => libDb.queryAll(
+              `SELECT id, category, message, page, status, created_at FROM customer_feedback
+                WHERE clerk_user_id = ? OR lower(email) = ? ORDER BY created_at DESC LIMIT 50`, [uid, ekey]), []),
+            soft('farCb', () => libDb.queryAll(
+              `SELECT symbol, created_at, active FROM far_cb_custom_tickers
+                WHERE added_by_id = ? OR lower(added_by_email) = ? ORDER BY created_at DESC`, [uid, ekey]), []),
+            soft('unsubscribe', () => libDb.queryOne(`SELECT source, created_at FROM email_unsubscribes WHERE email = ?`, [ekey]), null),
+            soft('comp', () => libDb.queryOne(
+              `SELECT note, expires_at, granted_by, granted_at, revoked_at FROM comp_access WHERE lower(email) = ?`, [ekey]), null),
+            soft('emails', () => libDb.queryAll(
+              `SELECT subject, audience, created_at FROM email_sends
+                WHERE recipients::text ILIKE ? ORDER BY created_at DESC LIMIT 30`, [`%${ekey}%`]), []),
+            // Which tickers they looked at, and where: source 'home' is the v3
+            // board's page symbol (render = opened on it, click = switched to
+            // it); 'flow' / 'em' are the Flow and Estimated-Moves pages.
+            soft('tickers', () => libDb.queryAll(
+              `SELECT ticker, event, source, created_at FROM ticker_events
+                WHERE user_id = ? ORDER BY created_at DESC LIMIT 300`, [uid]), []),
+          ]);
+
+          // ── Feed: time per page ───────────────────────────────────────────
+          // Rows arrive newest-first. Walk oldest→newest so each row can look at
+          // the one after it; then hand back newest-first, grouped by session.
+          const asc = visitRows.slice().reverse();
+          let sessionNo = 0;
+          let prevMs = null;
+          for (let i = 0; i < asc.length; i++) {
+            const r = asc[i];
+            const ms = new Date(r.created_at).getTime();
+            if (prevMs == null || (ms - prevMs) / 1000 > SESSION_GAP_SEC) sessionNo += 1;
+            r.session = sessionNo;
+            const next = asc[i + 1];
+            if (next) {
+              const gap = (new Date(next.created_at).getTime() - ms) / 1000;
+              r.secondsOnPage = gap > SESSION_GAP_SEC ? null : Math.round(gap);
+            } else {
+              r.secondsOnPage = null; // still there, or the last page of the last session
+            }
+            prevMs = ms;
+          }
+          const feed = asc.reverse().map((r) => ({
+            id: r.id,
+            at: r.created_at,
+            pageKey: r.page_key,
+            pageLabel: r.page_label,
+            path: r.path,
+            isEntry: !!r.is_entry,
+            session: r.session,
+            secondsOnPage: r.secondsOnPage,
+            referrerHost: r.referrer_host,
+            utmSource: r.utm_source,
+            utmCampaign: r.utm_campaign,
+            channel: r.channel,
+            browser: r.browser, os: r.os, deviceType: r.device_type,
+            country: r.country, region: r.region, city: r.city,
+          }));
+
+          // Ticker events fold INTO the feed (as their own row kind, interleaved
+          // by time) so "opened ES Candles, switched the board to NVDA, opened
+          // pricing" reads as one story — and are also rolled up per ticker.
+          const tickerFeed = tickerRows.map((t) => ({
+            kind: 'ticker',
+            id: `t${t.ticker}|${t.created_at}`,
+            at: t.created_at,
+            ticker: t.ticker,
+            event: t.event,          // 'click' (switched to) | 'render' (opened on)
+            source: t.source,        // 'home' | 'flow' | 'em' | …
+          }));
+          const byTicker = new Map();
+          for (const t of tickerRows) {
+            const k = `${t.source || '?'}|${t.ticker}`;
+            const b = byTicker.get(k) || { ticker: t.ticker, source: t.source, clicks: 0, renders: 0, lastAt: t.created_at };
+            if (t.event === 'click') b.clicks += 1; else b.renders += 1;
+            if (t.created_at > b.lastAt) b.lastAt = t.created_at;
+            byTicker.set(k, b);
+          }
+          const tickers = [...byTicker.values()].sort((a, b) => (b.clicks - a.clicks) || (b.renders - a.renders));
+          const mergedFeed = [...feed.map((f) => ({ kind: 'visit', ...f })), ...tickerFeed]
+            .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+          // Per-page totals over the whole feed (not just one window — the card
+          // has its own window pills and filters client-side).
+          const byPage = new Map();
+          for (const f of feed) {
+            const k = f.path || f.pageKey || '(unknown)';
+            const b = byPage.get(k) || { path: k, label: f.pageLabel || f.pageKey || k, loads: 0, seconds: 0 };
+            b.loads += 1; b.seconds += f.secondsOnPage || 0;
+            byPage.set(k, b);
+          }
+          const pages = [...byPage.values()].sort((a, b) => b.seconds - a.seconds || b.loads - a.loads);
+          const totalSeconds = pages.reduce((a, p) => a + p.seconds, 0);
+          const sessions = sessionNo;
+
+          // Location + device: the most recent row that has them.
+          const latestGeo = visitRows.find((r) => r.city || r.region || r.country) || null;
+          const latestDev = visitRows.find((r) => r.browser || r.os || r.device_type) || null;
+          const firstVisit = asc.length ? visitRows[visitRows.length - 1].created_at : null;
+          const lastVisit = visitRows.length ? visitRows[0].created_at : null;
+
+          // ── Stripe: live, best-effort ─────────────────────────────────────
+          let stripe = null;
+          const client = stripeForCard();
+          const custId = localSub?.stripe_customer_id || null;
+          if (client && custId) {
+            stripe = await soft('stripe', async () => {
+              const [subs, invoices, customer] = await Promise.all([
+                client.subscriptions.list({ customer: custId, status: 'all', limit: 20, expand: ['data.discounts'] }),
+                client.invoices.list({ customer: custId, limit: 100 }),
+                client.customers.retrieve(custId).catch(() => null),
+              ]);
+              const paid = invoices.data.filter((i) => i.status === 'paid');
+              const totalSpent = paid.reduce((a, i) => a + (i.amount_paid || 0), 0);
+              const subsOut = subs.data
+                .sort((a, b) => b.created - a.created)
+                .map((s) => {
+                  const item = s.items?.data?.[0];
+                  const price = item?.price;
+                  const cd = s.cancellation_details || {};
+                  return {
+                    id: s.id,
+                    status: s.status,
+                    planName: price?.nickname ?? price?.lookup_key ?? price?.id ?? null,
+                    amount: price?.unit_amount ?? null,
+                    interval: price?.recurring?.interval ?? null,
+                    created: s.created,
+                    currentPeriodEnd: item?.current_period_end ?? s.current_period_end ?? null,
+                    cancelAtPeriodEnd: !!s.cancel_at_period_end,
+                    cancelAt: s.cancel_at ?? null,
+                    canceledAt: s.canceled_at ?? null,
+                    endedAt: s.ended_at ?? null,
+                    cancelReason: cd.reason ?? null,
+                    cancelFeedback: cd.feedback ?? null,
+                    cancelComment: cd.comment ?? null,
+                    trialStart: s.trial_start ?? null,
+                    trialEnd: s.trial_end ?? null,
+                    coupons: couponOf(s),
+                  };
+                });
+              return {
+                customerId: custId,
+                customerCreated: customer?.created ?? null,
+                totalSpent,
+                invoices: invoices.data
+                  .sort((a, b) => b.created - a.created)
+                  .slice(0, 30)
+                  .map((i) => ({
+                    id: i.id, number: i.number ?? null, status: i.status,
+                    amountDue: i.amount_due ?? 0, amountPaid: i.amount_paid ?? 0,
+                    discount: (i.total_discount_amounts || []).reduce((a, d) => a + (d.amount || 0), 0),
+                    created: i.created, paidAt: i.status_transitions?.paid_at ?? null,
+                    url: i.hosted_invoice_url ?? null,
+                  })),
+                failedInvoices: invoices.data.filter((i) => i.status === 'open' && i.attempt_count > 0).length,
+                subscriptions: subsOut,
+              };
+            }, null);
+          }
+
+          // Cancellation, one answer: live Stripe first, then our stored copy.
+          const liveCancel = stripe?.subscriptions?.find((s) => s.cancelAtPeriodEnd || s.status === 'canceled') || null;
+          const stored = storedCancels[0] || null;
+          const cancellation = (liveCancel || stored) ? {
+            cancelAtPeriodEnd: liveCancel?.cancelAtPeriodEnd ?? !!stored?.cancel_at_period_end,
+            status: liveCancel?.status ?? stored?.status ?? null,
+            reason: liveCancel?.cancelReason ?? stored?.reason ?? null,
+            feedback: liveCancel?.cancelFeedback ?? stored?.feedback ?? null,
+            comment: liveCancel?.cancelComment ?? stored?.comment ?? null,
+            cancelAt: liveCancel?.cancelAt ?? null,
+            canceledAt: liveCancel?.canceledAt ?? stored?.canceled_at ?? null,
+            endedAt: liveCancel?.endedAt ?? stored?.ended_at ?? null,
+            reactivatedAt: stored?.reactivated_at ?? null,
+            firstSeenAt: stored?.first_seen_at ?? null,
+            source: liveCancel ? 'stripe' : 'stored',
+          } : null;
+
+          const paidNow = !!localSub?.status && libDb.PAID_STATUSES.has(localSub.status);
+          const compLive = !!comp && !comp.revoked_at && (!comp.expires_at || new Date(comp.expires_at).getTime() > Date.now());
+
+          send(res, 200, {
+            ok: true,
+            account: {
+              id: uid,
+              email: user.email,
+              isOwner: !!user.is_owner,
+              verified: !!user.email_verified_at,
+              verifiedAt: user.email_verified_at,
+              hasPassword: !!user.has_password,
+              googleLinked: !!user.google_sub,
+              createdAt: user.created_at,
+              lastLoginAt: user.last_login_at ?? null,
+              logins: Number(user.login_count) || 0,
+              lastUserAgent: user.last_ua ?? null,
+              discord: user.discord_username ? {
+                username: user.discord_username,
+                id: user.discord_id,
+                avatarUrl: user.discord_avatar
+                  ? `https://cdn.discordapp.com/avatars/${user.discord_id}/${user.discord_avatar}.${user.discord_avatar.startsWith('a_') ? 'gif' : 'png'}?size=64`
+                  : null,
+                connectedAt: user.discord_connected_at,
+              } : null,
+            },
+            location: latestGeo ? { city: latestGeo.city, region: latestGeo.region, country: latestGeo.country, ip: latestGeo.ip, at: latestGeo.created_at } : null,
+            device: latestDev ? { browser: latestDev.browser, os: latestDev.os, deviceType: latestDev.device_type } : null,
+            attribution: attribution ? {
+              channel: attribution.channel, utmSource: attribution.utm_source, utmMedium: attribution.utm_medium,
+              utmCampaign: attribution.utm_campaign, referrerHost: attribution.referrer_host,
+              landingPath: attribution.landing_path, firstSeenAt: attribution.first_seen_at,
+            } : null,
+            access: {
+              paid: paidNow,
+              localStatus: localSub?.status ?? null,
+              localPriceId: localSub?.price_id ?? null,
+              localPeriodEnd: localSub?.current_period_end ?? null,
+              comp: comp ? { live: compLive, note: comp.note, expiresAt: comp.expires_at, grantedAt: comp.granted_at, grantedBy: comp.granted_by, revokedAt: comp.revoked_at } : null,
+            },
+            stripe,
+            cancellation,
+            usage: {
+              loads: visitRows.length,
+              feedTruncated: visitRows.length >= FEED_LIMIT,
+              sessions,
+              totalSeconds,
+              firstVisit,
+              lastVisit,
+              pages,
+            },
+            feed: mergedFeed,
+            tickers,
+            feedback: feedback.map((f) => ({ id: f.id, category: f.category, message: f.message, page: f.page, status: f.status, at: f.created_at })),
+            farCbTickers: farCb.map((t) => ({ symbol: t.symbol, at: t.created_at, active: !!t.active })),
+            email: {
+              unsubscribed: !!unsub,
+              unsubscribedAt: unsub?.created_at ?? null,
+              unsubscribeSource: unsub?.source ?? null,
+              sends: emailSends.map((e) => ({ subject: e.subject, audience: e.audience, at: e.created_at })),
+            },
+            warnings,
+          }, { 'Cache-Control': NO_STORE });
+        } catch (err) {
+          send(res, 500, { ok: false, error: 'Customer load failed', detail: String(err?.message || err) });
+        }
+      },
+    });
+  }
+
   // /api/unsubscribe — public RFC-8058 one-click / confirmation-page unsubscribe.
   // verifyUnsubscribe (HMAC) inlined from lib/unsubscribe.ts. Ported verbatim.
   {
@@ -11370,6 +11408,67 @@ Return exactly one element per input key, in the same order. Never merge, split,
     });
   }
 
+  // /api/daily-em?ticker=SPX — the DAILY expected-move band, frozen for the session.
+  //
+  // Everything the product called "EM" before this was the WEEKLY band:
+  // em_tracker, /api/levels, the /em page, the GEX Chart's two ±1σ tiles. This is
+  // the other one — today's front-expiry ATM straddle, anchored to the PREVIOUS
+  // session's close — and the whole reason it has a table instead of being
+  // computed per request is that it must not move. A level that slides as the
+  // straddle decays is not a level; you cannot say "price rejected the EM high"
+  // about a line that was somewhere else an hour ago. See server-v2/daily-em.js.
+  //
+  //   GET                  the recorded row for today, recording it if this is
+  //                        the session's first read. ?date=YYYY-MM-DD reads a
+  //                        past session (read-only — a past band cannot be
+  //                        reconstructed from a live chain and is never written).
+  //   POST ?force=1        recompute and overwrite today's row. Owner/internal
+  //                        only, and the reason a bad first read of the day is
+  //                        fixable rather than permanent.
+  //
+  // Subscriber on the read for the same reason /api/em-tracker is: it draws on
+  // a customer's board, and an owner-gated read is a card that is silently
+  // empty for everyone but Brandon.
+  if (dailyEm) {
+    const emTicker = (raw) => {
+      const t = String(raw ?? 'SPX').trim().toUpperCase();
+      return /^[A-Z0-9/.^-]{1,12}$/.test(t) ? t : 'SPX';
+    };
+    register('/api/daily-em', {
+      auth: 'subscriber', methods: ['GET', 'POST'],
+      async handler(req, res, ctx, access) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const ticker = emTicker(sp.get('ticker'));
+          if (req.method === 'POST') {
+            // Same two-verb shape /api/em-tracker uses: subscriber reads, owner
+            // writes, enforced in the handler rather than by `auth` so one
+            // pathname can carry both.
+            const token = req.headers['x-internal-token'] || '';
+            const trusted = !!ctx.internalToken && token === ctx.internalToken;
+            const isOwner = trusted || access?.who === 'internal'
+              || (!!ctx.ownerUserId && access?.userId === ctx.ownerUserId);
+            if (!isOwner) { send(res, 403, { error: 'owner-only' }); return; }
+            const out = await dailyEm.getOrRecord(ctx, ticker, { force: true });
+            send(res, 200, { ok: true, band: out.band, recomputed: out.fresh }, { 'Cache-Control': NO_STORE });
+            return;
+          }
+          const date = (sp.get('date') || '').trim();
+          const out = await dailyEm.getOrRecord(ctx, ticker, date ? { date } : {});
+          // 200 with a null band, not a 404: "no band recorded for this session
+          // yet" is a normal state every morning before the first read lands,
+          // and the card draws nothing rather than showing an error for it.
+          send(res, 200, {
+            ticker,
+            date: date || dailyEm.etDate(),
+            band: out.band,
+            fresh: out.fresh,
+          }, { 'Cache-Control': NO_STORE });
+        } catch (err) { send(res, 500, { error: String(err?.message || err) }); }
+      },
+    });
+  }
+
   // /api/ict-setups — ICT setup recorder. GET recap (subscriber), POST scan/grade
   // (token-gated inside, cron-driven). analyzeICT via the _lib-ict.cjs bundle;
   // db reads/writes via libDb. Ported verbatim from app/api/ict-setups/route.ts.
@@ -11620,7 +11719,17 @@ Return exactly one element per input key, in the same order. Never merge, split,
   // so what the 5-10 pt auto-sell did with it.
   //
   // GET   ?since=20 | ?all=1 | ?date=YYYY-MM-DD   → { trades, summary, config }
+  //       ?basis=oivol|vol|all                    → which CB definition's rows
   //       ?ticks=<tradeId>                        → { ticks } (the poll curve)
+  //
+  // THE BASIS SWITCH. Every checkpoint is now recorded TWICE — once off the
+  // OI+VOL CB (netGEX + netVolGEX, the historical definition) and once off the
+  // VOL-ONLY CB (netVolGEX alone) — so the two can be compared over the same
+  // sessions instead of argued about. `basis` picks which set of rows comes
+  // back and it DEFAULTS TO 'oivol', which is what every row written before the
+  // column existed actually was. 'all' returns both and is for a caller that
+  // wants to diff them; the summary that ships with it would then pool two
+  // strategies into one win rate, so the board asks for one basis at a time.
   // POST  { action: 'tick' | 'checkpoint' | 'poll' | 'settle' }
   //       'tick' is what server-v2/cb-trade-recorder.js calls once a minute and
   //       does the whole job; the other three exist so a session can be repaired
@@ -11648,12 +11757,18 @@ Return exactly one element per input key, in the same order. Never merge, split,
             const date = sp.get('date') || undefined;
             const all = sp.get('all') === '1';
             const since = Number(sp.get('since')) || 20;
-            const trades = await cbTrack.listTrades({ date, all, since });
+            // 'all' is passed through verbatim; anything else normalises to a
+            // real basis inside listTrades, so a junk value reads as the default
+            // rather than as an empty table.
+            const basisParam = sp.get('basis') === 'all' ? 'all' : cbTrack.normBasis(sp.get('basis'));
+            const trades = await cbTrack.listTrades({ date, all, since, basis: basisParam });
             send(res, 200, {
               trades,
               summary: cbTrack.summarize(trades),
               config: cbTrack.CONFIG,
               checkpoints: cbTrack.CHECKPOINTS,
+              basis: basisParam,
+              bases: cbTrack.BASES,
             }, { 'Cache-Control': NO_STORE });
           } catch (err) { send(res, 500, { error: String(err) }); }
           return;
@@ -11672,7 +11787,12 @@ Return exactly one element per input key, in the same order. Never merge, split,
           if (action === 'checkpoint') {
             const checkpoint = String(body.checkpoint || '');
             const d = date || cbTrack.etParts().date;
-            send(res, 200, await cbTrack.runCheckpoint(ctx, { date: d, checkpoint }));
+            // One basis per call, same as the recorder. Omit it and you get the
+            // default one — never both, because a hand-repair that silently
+            // wrote two rows would be indistinguishable from a double-fire.
+            send(res, 200, await cbTrack.runCheckpoint(ctx, {
+              date: d, checkpoint, basis: cbTrack.normBasis(body.basis),
+            }));
             return;
           }
           send(res, 400, { error: 'unknown action' });
@@ -11718,12 +11838,18 @@ Return exactly one element per input key, in the same order. Never merge, split,
         try {
           const sp = new URL(req.url || '/', 'http://localhost').searchParams;
           const etDate = cbTrack.etParts().date;
-          let trades = await cbTrack.listTrades({ date: etDate });
+          // ONE BASIS, AND IT IS THE DEFAULT ONE. The recorder writes two rows
+          // per checkpoint now (OI+VOL and VOL-only); handing both to this card
+          // would render every checkpoint twice with no way to tell the rows
+          // apart. The customer surface stays on the historical OI+VOL CB — the
+          // owner Results → Contracts tab is where the comparison lives.
+          const basis = cbTrack.DEFAULT_BASIS;
+          let trades = await cbTrack.listTrades({ date: etDate, basis });
           let today = true;
           if (!trades.length) {
             // since:1 = the single most recent date that has rows, whenever it
             // was. listTrades already orders by checkpoint within the date.
-            trades = await cbTrack.listTrades({ since: 1 });
+            trades = await cbTrack.listTrades({ since: 1, basis });
             today = false;
           }
           const date = trades.length ? String(trades[0].date) : etDate;
@@ -11740,7 +11866,7 @@ Return exactly one element per input key, in the same order. Never merge, split,
           // friends — the rule the card describes in its own header, not a
           // secret), and the card reads MULTIPLIER off it to turn a price
           // difference into dollars.
-          send(res, 200, { date, today, trades, config: cbTrack.CONFIG }, { 'Cache-Control': NO_STORE });
+          send(res, 200, { date, today, basis, trades, config: cbTrack.CONFIG }, { 'Cache-Control': NO_STORE });
         } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });

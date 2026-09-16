@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, roundStrike } from '@/data/flowMath'
@@ -438,13 +438,46 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   wide?: boolean
 }) {
   const [hover, setHover] = useState<number | null>(null)
-  const W = wide ? 1000 : 320
-  const H = wide ? 460 : 250
-  const PADL = wide ? 14 : 8
-  const PADR = wide ? 62 : 46
-  const PADT = wide ? 22 : 16
-  const PADB = wide ? 30 : 24
-  const GAP = wide ? 14 : 9
+
+  // ── THE CANVAS IS MEASURED, NOT FIXED ───────────────────────────
+  // The svg is `width: 100%`, so a fixed viewBox means the whole picture is
+  // scaled by whatever box it lands in — and every size in here is in USER
+  // units. A 320-unit viewBox in the ~990px pane of the tracked-alerts two-up
+  // drew the 9px labels at nearly thirty, which is the same bug as the board
+  // column drawing them at six, just the other way round. Measuring the
+  // container and setting the viewBox width to it keeps one user unit at one
+  // CSS pixel, so type is the size it was written at whatever the placement is.
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const [cw, setCw] = useState<number | null>(null)
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width
+      if (w && w > 0) setCw(w)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
+  // The fallbacks are the old fixed widths, so the first paint before the
+  // observer fires is the chart it always was rather than a collapsed one.
+  const W = Math.round(clamp(cw ?? (wide ? 1000 : 320), wide ? 560 : 260, 1600))
+  // Height tracks width so the picture does not letterbox, but it is CAPPED: a
+  // wide pane should get a wider chart, not a taller page.
+  const H = wide
+    ? Math.round(clamp(W * 0.42, 300, 520))
+    : Math.round(clamp(W * 0.78, 190, 320))
+  // Padding is keyed off the type scale rather than a wide/narrow flag, so the
+  // price rail always has exactly the room its own labels need.
+  const PS = wide ? 1.3 : 1
+  const PADL = Math.round(6 + 4 * PS)
+  // Wide enough for the last-mark pill (38*S) plus its 2-unit offset.
+  const PADR = Math.round(42 + 14 * PS)
+  const PADT = Math.round(12 + 6 * PS)
+  const PADB = Math.round(18 + 8 * PS)
+  const GAP = Math.round(7 + 5 * PS)
   const volH = Math.round((H - PADT - PADB - GAP) * 0.24)
   const priceH = H - PADT - PADB - GAP - volH
 
@@ -533,16 +566,20 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
 
   const label = { fill: 'var(--color-fg)', fontFamily: MONO } as const
   const fmt = (v: number) => v.toFixed(2)
+  // Type and glyph sizes are in USER units and the viewBox now displays at 1:1,
+  // so this is no longer undoing a stretch — it is a gentle step up on a
+  // roomier canvas, capped so a wide pane gets slightly larger labels instead
+  // of the blown-up ones a fixed viewBox used to hand it.
+  const S = wide
+    ? clamp(1.15 + (W - 560) / 1600, 1.15, 1.45)
+    : clamp(1 + (W - 320) / 1600, 1, 1.35)
+
   /** Keep a point label inside the plot when its point is near an edge. */
-  const EDGE = 26
+  const EDGE = 26 * S
   const edgeAnchor = (i: number) =>
     x(i) < PADL + EDGE ? 'start' : x(i) > W - PADR - EDGE ? 'end' : 'middle'
   const edgeX = (i: number) =>
     x(i) < PADL + EDGE ? PADL : x(i) > W - PADR - EDGE ? W - PADR : x(i)
-  // Type and glyph sizes are in USER units and both viewBoxes display at roughly
-  // 1:1, so without this the popped-out chart would draw the same 9px labels on
-  // a canvas three times the width.
-  const S = wide ? 1.75 : 1
 
   const onMove = (e: ReactMouseEvent<SVGSVGElement>) => {
     const box = e.currentTarget.getBoundingClientRect()
@@ -596,12 +633,13 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   const BOXH = HEADH + hrows.length * ROWH + 6 * S
 
   return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      style={{ width: '100%', height: 'auto', display: 'block' }}
-      onMouseMove={onMove}
-      onMouseLeave={() => setHover(null)}
-    >
+    <div ref={boxRef} style={{ width: '100%' }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        style={{ width: '100%', height: 'auto', display: 'block' }}
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+      >
       <defs>
         <linearGradient id="cbtf-wash" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" style={{ stopColor: 'var(--color-accent)' }} stopOpacity={0.20} />
@@ -786,6 +824,7 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
           </g>
         </g>
       )}
-    </svg>
+      </svg>
+    </div>
   )
 }

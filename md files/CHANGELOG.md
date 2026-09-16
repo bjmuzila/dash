@@ -1,17 +1,24 @@
 # Changelog
 
-## 2026-09-16 (b) - Whales: the $500K floor stop is back
+## 2026-09-16 (c) - Probe chart: the canvas is measured, so the type stops scaling with the pane
 
-It had been reverted out of `Whales.tsx` — `FLOORS` was `$1M / $2.5M / $5M`
-again and the clamp note was gone, so the 2026-09-15 (a) change was not on the
-page. Restored as it was: `≥$500K` is the first FLOOR option, and when the pick
-is under the server's own floor the header says "asked for $500.0K, archive floor
-is $1.00M" instead of quietly serving the $1M list. The FLOOR tooltip no longer
-hardcodes "$1M is the archive's own floor" — the floor is read off the response,
-so lowering `LSE_WHALE_FLOOR` on the VPS retires the note and the clamp with no
-code change.
+The chart is `width: 100%` over a FIXED viewBox, and every size inside it is in
+user units — so the whole picture was being scaled by whatever box it landed
+in. In the tracked-alerts two-up the panes are far wider than the 320-unit
+narrow viewBox, so the 9px labels, the rings and the pill all drew at roughly
+1.4x: `ENTRY`, `H`, `L` and `VOLUME · PRINT` came out oversized and the chart
+was taller than it needed to be. Same bug as the board column drawing them at
+six, just the other way round.
 
-`cbedge-v3/src/pages/Whales.tsx`
+The container is now measured (ResizeObserver) and the viewBox width is set to
+it, so one user unit is one CSS pixel and type keeps the size it was written at
+whatever the placement. Height tracks width with a cap (320 inline, 520 popped
+out) so a wide pane gets a wider chart, not a taller page. Padding is derived
+from the type scale rather than a wide/narrow flag, and the popped-out type
+scale drops from a stretch-correcting 1.75 to a gentle 1.15-1.45 now that there
+is no stretch to correct.
+
+`cbedge-v3/src/board/topFlow/ContractProbe.tsx`
 
 ## 2026-09-16 - budget.cbedge.net reads the statement, like the laptop does
 
