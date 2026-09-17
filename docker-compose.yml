@@ -389,6 +389,32 @@ services:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8087:8087"
 
+  # voltick.cbedge.net/v3 — the CB Edge v3 board and pages, repainted in Voltick.
+  #
+  # voltick-v3/ is a copy of cbedge-v3/ whose intended difference is exactly
+  # three files: src/design/tokens.css (the palette), the first-paint pair in
+  # index.html that has to match it, and its own Dockerfile + nginx.conf. v3's
+  # rule that no hex may appear outside tokens.css is what makes a whole-app
+  # repaint one file; anything else that diverges here is a fork and a bug.
+  #
+  # Loopback only, and NOT a Cloudflare Tunnel hostname of its own: the only
+  # thing that reaches it is voltick-web's `location ^~ /v3/`, which carries the
+  # same auth_request gate every other path there does. Give this its own
+  # hostname and you have published v3 with no gate in front of it.
+  #
+  # It talks to no backend. The cards draw whatever the app fetches through
+  # voltick-web's existing /api /proxy /ws proxies, so there is nothing to wire
+  # up here.
+  voltick-v3:
+    build:
+      context: ./voltick-v3
+    image: voltick-v3:latest
+    container_name: voltick-v3
+    restart: unless-stopped
+    ports:
+      # Loopback only — voltick-web reaches it over the compose network.
+      - "127.0.0.1:8089:8089"
+
   # voltick.cbedge.net — the Voltick / CB Edge merger sandbox (voltick-vite/
   # Dockerfile: node build stage → nginx), reverse-proxying /api /proxy /ws to
   # the DASHBOARD container (same compose network → dashboard:3002).
@@ -423,6 +449,8 @@ services:
       # than copied into this image so there is only ever one demo build.
       - dashboard
       - demo-web
+      # voltick-v3 serves /v3 the same way, for the same reason.
+      - voltick-v3
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8088:8088"

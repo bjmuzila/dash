@@ -1,167 +1,81 @@
 # Changelog
 
-## 2026-09-16 (j) - Whales: the tracked drawer is one pane, and the ticker card is two rankings
+## 2026-09-16 (g) - The ported visitor map, repainted in Voltick
 
-**The frozen pane is gone.** The tracked-contract drawer was a two-up: live on
-the left, the bars as they stood the minute you tracked it on the right. The
-live probe already carries the entry rung, the marker at the moment of the
-print and the move against it, so "what has it done since" reads off one
-picture - the pair spent half the width saying it twice at half the resolution,
-and the RE-SNAPSHOT button existed to keep the weaker half current. Live now
-runs full width. The snapshot is still taken and still stored server-side: it
-is the one thing about a tracked contract that cannot be rebuilt later, so it
-keeps being recorded whether or not anything draws it.
+Same component, same behaviour, Voltick paint. Every colour the map draws now
+comes from `src/pages/visitors/mapTheme.ts`, which is built from
+`src/theme.ts`, and `VisitorMap.tsx` mints no hex of its own. `ownerTheme.ts`
+is gone.
 
-**WHERE THE SIZE WENT is two columns.** One list ranked by TOTAL with a split
-bar answered "who printed the most" and left "who is the biggest bullish bet,
-who is the biggest bearish bet" to be eyeballed off the ratio of two colours in
-a 7px bar. Those are the two questions the card is for, so each gets a column,
-sorted on its own side, with the dollar figure on every row. The columns are
-deliberately not the same tickers in the same order - a name can top one and be
-absent from the other - and a ticker with nothing on a side is dropped from that
-side rather than padded in at $0. Each bar scales to the biggest value in ITS
-OWN column, so lengths compare within a column and not across, which is why the
-number is always shown.
+  #219EBC owner teal     -> ACCENT / ACCENT_TEXT   chrome, active control
+  #7dd3fc light blue     -> SKY                    country names, counts
+  #8A93A6 slate          -> PAPER_QUIET            anonymous
+  #0D1119 panel          -> ELEV                   pinned card, and the dot ring
+  three-stop teal ramp   -> three-stop ACCENT ramp, same sqrt domain, same
+                            reason for not topping out near white
 
-Both columns still draw from the server's top-tickers-by-total list, so a name
-that never cracks that list cannot appear even if it leads one side; widening
-that is a `tickers` limit change on `/api/lse/whales`, not a UI change.
+Gold is the one that is not a swap. Voltick's gold is VOLT and VOLT is spoken
+for: it means the strongest level on a board, and a subscription is not a
+level. So the "has an account" hue is GOOD, which on this sandbox already means
+money (the customer card uses it the same way). The console's two-channel logic
+is untouched and is the part worth keeping: HUE says they have an account, FILL
+says they are paying. Solid is a customer, a ring is a free registration, a
+quiet ring is a stranger. Every string that said "gold" or "slate" now says
+solid, ring or quiet ring, so the legend, the tooltips and the notes describe
+what is actually on screen.
 
-`SplitBar` and `tickerMax` deleted with it.
+Rule 2 applied while I was in there: secondary text was `text` at 0.4-0.75
+opacity in fifteen places, which is how you get grey. It takes PAPER_QUIET now.
 
-`cbedge-v3/src/pages/Whales.tsx`, `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`
+The page around the map is Voltick's: PageShell, the mono stat strip, the
+toolbar on PANEL with a LINE hairline, no frosted 18px glass. Header counts are
+still the console's arithmetic, so the header and the map cannot disagree.
 
-## 2026-09-16 (i) - The gex-history writer was locking the table it writes to
+STALE, delete when convenient: `voltick-vite/src/pages/visitors/world.ts`,
+`visitors.ts`, `ownerTheme.ts`, and `voltick-vite/tools/gen-world.py`.
 
-Same anti-pattern as the es_candles migration, on the table the bubbles card
-reads. `ensureVolColumn()` in `gex-history-writer.js` was ELEVEN DDL statements
-- eight `ALTER TABLE ... ADD COLUMN` plus three `CREATE INDEX` - against
-`option_strike_gex_history`, the table this writer appends to ~1/min. Every
-ALTER takes ACCESS EXCLUSIVE and every CREATE INDEX locks out writes, with no
-`lock_timeout`; a DDL statement waiting on a lock queues every later read and
-insert behind it (FIFO), and on statement_timeout the catch left
-`columnEnsured` false so all eleven re-ran on the NEXT write tick. Its own
-comment already flagged the danger for the INCLUDE case ("would leave
-columnEnsured false and re-run every ALTER on every single write") - it just
-applied to all of them.
+`voltick-vite/src/pages/visitors/mapTheme.ts` (new)
+`voltick-vite/src/pages/visitors/VisitorMap.tsx`, `VisitorsMap.tsx`, `CustomerName.tsx`
 
-Cost today: roughly 14:38-15:11 ET of snapshot minutes are missing or partial
-and 15:12 onward was dark until the lock was cleared. Those rows are
-point-in-time chain state and cannot be backfilled from anything - the table is
-pruned to 48h and nothing else stores per-strike gamma/IV/DEX at that minute.
-The chart heals forward only.
+## 2026-09-16 (e) - Voltick: the visitors world map, with no map library
 
-Now: a catalog precheck (`pg_attribute`/`pg_class`, no lock on the table)
-decides what is actually missing, so the steady state takes no lock and is
-never checked again in that process; only genuinely absent columns/indexes get
-a statement; those run on a dedicated client with `lock_timeout = '3s'` and
-`RESET ALL` before release; failures back off 5 minutes. The INCLUDE fallback
-for `idx_osgh_symbol_snap` is kept. Losing a snapshot minute is permanent and
-delaying a column add is not, so the write wins that trade.
+`/visitors-map` on voltick.cbedge.net. Every recorded load placed on the world,
+one dot per visitor rather than per city, so a location with nine people on it
+looks like nine people. Range strip (Today / 7d / 30d / 90d / All) restates
+every number in the toolbar from the rows in range. Scroll to zoom about the
+cursor, drag to pan, double-click to zoom in, Esc to unpin. Click a dot for the
+email, Discord, member-since and subscription, or a country for its own card.
 
-`server-v2/gex-history-writer.js`
+**No d3 and no tiles.** `tools/gen-world.py` takes world-atlas 110m (Natural
+Earth, public domain), projects it into Web Mercator ONCE and writes
+`world.ts`: 176 path strings plus the matching `project()`, so a dot and the
+coastline under it cannot drift apart. Pan, zoom and hit testing are a viewBox
+and arithmetic. Antarctica is cut and the frame stops at 84N / 56S.
 
-## 2026-09-16 (h) - The es_candles migration was taking the site down every request
+Rings that cross the antimeridian are unwrapped and repeated a world to the
+side. Without that, Russia and the Aleutians have a 360-degree jump in the
+middle of the ring and paint a band straight across the page - which is exactly
+what the first render did.
 
-Site-wide `canceling statement due to statement timeout` on unrelated queries -
-`ensureAllTables`, `greeks-ts`, `gex-change-top`, `tpo-profiles`, `auto-mvc`,
-`/proxy/gex-vol-flow` 500 (the bubbles card drew nothing because its request
-errored). `pg_stat_activity` had three `ALTER TABLE es_candles DROP CONSTRAINT`
-statements in `Lock: relation` for 80+ seconds with readers queued behind them.
+The fan-out for people sharing a location is measured in MAP units, not screen
+units. That is the whole reason zooming separates them; a pixel-sized fan would
+hold the same gap forever and the zoom would be decorative. Dot radius and
+stroke widths are divided by the zoom, so those do stay put.
 
-`ensureEsCandlesContract()` in `_lib-db.cjs` ran five DDL statements with no
-`lock_timeout`. Every one takes ACCESS EXCLUSIVE on es_candles, the es-candle
-writers stream into it constantly, so the ALTER could not get its lock - and a
-DDL statement WAITING on a lock is not passive: Postgres queues lock requests
-FIFO, so every SELECT and INSERT arriving after it parked behind it. The ALTER
-then hit statement_timeout, the catch cleared `_contractEnsured` so the next
-`getDb()` would retry, `getDb()` runs on every request, and the jam re-formed
-instantly. The migration was ALREADY FULLY APPLIED (`has_col 1, old_uniques 0,
-has_new 1, has_idx 1`) - it was locking the table every request to do nothing.
+Colors: paying is GOOD, signed-in-not-paying is SKY, anonymous is a quiet ring,
+country-only rows are dashed and dimmed at the centre of their country. No
+reserved board color appears - a visitor is not a level on a chart. Country
+fill is visitors in range on a square root, so one dominant country does not
+flatten the other sixty to black.
 
-Now: a catalog-only precheck (`pg_attribute`/`pg_constraint`/`pg_class`, which
-lock nothing on es_candles) returns early when it is applied, so the steady
-state takes no lock at all; each statement is guarded on its own so a
-half-applied table finishes without redoing the done parts; the DDL that does
-run goes through a dedicated client with `lock_timeout = '3s'` and `RESET ALL`
-before release; and a failure backs off 5 minutes instead of retrying on the
-very next request.
+364 synthetic visitors, 61 countries, fixed seed, baked. Refresh restamps the
+clock and changes nothing else, and says so in its tooltip.
 
-Also set on the database as a belt-and-braces stop, outside the repo:
-`ALTER ROLE CURRENT_USER SET lock_timeout = '3s'`.
-
-`server-v2/_lib-db.cjs`
-
-## 2026-09-16 (g) - /api/whale-alerts restored: the route had been deleted, not un-deployed
-
-`Could not reach your tracked list - 501` was not a deploy lag. The whole
-`/api/whale-alerts` section - both routes, `ensureWhaleAlertsSchema`, the
-`WA_*` bounds, `cleanContract`, `cleanSnapshot` and `WA_COLS` - was DELETED from
-`server-v2/api-router.js` in v9.16.9 (it had been added in v9.16.4). With no
-registration, every request fell through to Next's `app/api/[...proxy]`
-catch-all, which answers 501 by design - the same failure mode as
-`/api/eod-strike-gex-board` and `/api/lse/contract-candles` before it. Prod was
-building exactly what git held; nothing on the VPS could have fixed it.
-
-Recovered verbatim from `397d3834~1` (317 lines) and spliced back in after
-`/api/level-log-rail`, ahead of `/api/dashboard-layout` - the position it had.
-No behavior change to anything else in the file; `node --check` passes and none
-of the restored top-level names (`WA_*`, `cleanContract`, `cleanSnapshot`,
-`ensureWhaleAlertsSchema`, `waOptional`) collide with what was added since.
-
-`server-v2/api-router.js`
-
-## 2026-09-16 (e) - Whales: WHERE THE SIZE WENT spells out the bull/bear split
-
-The bar was already split green/red, but the figure beside it was one total — so
-"how lopsided is this ticker" had to be read off seven pixels of bar. Each row
-now carries the two sides under the total in their own ink (`$44.05M / $15.90M`,
-up over down). They deliberately do not add up to the total: prints with no
-readable side count in the total and in neither half, same as the tiles at the
-top of the page. Value column widened 74 -> 92px to fit.
-
-`cbedge-v3/src/pages/Whales.tsx`
-
-## 2026-09-16 - budget.cbedge.net reads the statement, like the laptop does
-
-The phone's Money page and /owner/budget disagreed on four cards for the same
-month. Three of them were one cause.
-
-**Spend Pace and Where It Went were reading the wrong ledger.** The desktop
-moved both cards onto the imported bank statement (`budget_statement_tx`) - the
-register is the PLAN, a statement is what actually cleared, and a card headed
-"spent" has to mean the second one. `_lib-household-budget.cjs`, which builds
-everything the phone shows, had no statement source at all: it was still
-cumulating register rows. Same month, same screen name, $4,415 on the phone
-against $2,695.40 on the laptop, and a donut of entirely different categories.
-
-New `loadStatement()` pulls the same 11-month window /api/budget/real pulls,
-including the flex-gas correction that moves Amazon Flex fill-ups out of the
-fuel category - skip that and the donut disagrees by the whole gas bill.
-New `buildStatementSpend()` is a port of the desktop's `paceSeries` and
-`slicesFor("monthly")`: cleared spend per day, the typical month's own
-day-by-day CURVE as the benchmark (a straight ramp reads OVER every month until
-it catches up near the 25th, because rent clears before the 5th), and per
--category averages divided by IMPORTED months, not by months a category happens
-to appear in. It arrives as `overview.stmt`; the register-derived `cum`,
-`spentMtd` and `slices` are untouched beside it.
-
-A month with no statement now says so on both cards instead of drawing zeros,
-which reads as a month of no spending.
-
-**Amazon was $10 light.** `buildAmazon` summed `pay - gas`. Tips are their own
-column - Flex pays the block on the day and the tip days later - so the desktop
-sums `pay + tips - gas`. Amazon net folds into Income and Net Profit, so one
-dropped column moved three tiles: $922/$4,972/$197 against the laptop's
-$932/$4,982/$207. The tile sub now spells the tips out the way the desktop does.
-
-**Safe to Spend was the same number in a different unit.** The phone led with
-`safe / daysLeft` and the desktop's monthly view leads with `safe`, so one card
-read -$8 and the other -$117 for the same month. Headline is now the month, with
-per-day kept on the line below.
-
-Files: `server-v2/_lib-household-budget.cjs`,
-`budget-vite/src/api.ts`, `budget-vite/src/components/BudgetOverview.tsx`.
+`voltick-vite/src/pages/visitors/VisitorsMap.tsx` (new)
+`voltick-vite/src/pages/visitors/world.ts` (new, generated)
+`voltick-vite/src/pages/visitors/visitors.ts` (new)
+`voltick-vite/tools/gen-world.py` (new)
+`voltick-vite/src/lib/nav.ts`, `voltick-vite/src/pages/registry.ts`
 
 ## 2026-09-15 (c) - The feed reconnects itself when dxLink goes quiet
 
@@ -23789,106 +23703,123 @@ neither shot shows the controls used to set it up.
 
 Files: `cbedge-v3/src/pages/OptionsChain.tsx`.
 
-## 2026-09-16 (f) — v3 toolbar: the alerts pill flashes on arrival
+## 2026-09-16 (f) — Multi Greek card: the near-core % reads like the chain's, and the ladder stops yanking
 
-A new signal used to land silently. The pill swapped its tag, headline and age,
-and if you were reading a chart you missed the change — the pulsing dot says
-"recent" for an hour, which is a different question from "one just landed".
+**NEAR CORE % is a dropdown now.** The bare `25 33 40 50 60 75 90` row said
+nothing about what the numbers were a percent OF and ate the width of a 60-wide
+popover to say it. Replaced with the option chain's shape: an ON/OFF chip beside
+a `≥ 50% of core` dropdown, so the two surfaces read the same.
 
-The pill now FLASHES its border in the alert type's own colour when the top row
-changes: three 800ms beats (`.alert-flash`, `design/tokens.css`), then quiet.
-Drawn with `box-shadow`, not a real border, so the toolbar does not shift a
-pixel when it fires; the colour arrives as an inline `--alert-flash` var because
-`@keyframes` cannot take an argument. The pill stays borderless at rest — the
-flash is the only box it ever has.
+**Auto-centre leaves your scroll alone for ten seconds.** The ladder centres on
+the money, which is right on arrival and wrong once you have gone looking at a
+wall four screens up. The user-scroll latch existed for that, but it cleared on
+the next re-anchor — and on a 15s poll in a fast tape the ATM strike moves within
+a few seconds, so you scrolled, read two rows, and got yanked back.
 
-Two things it will not do. It never fires on the first load (opening at 2pm
-must not announce a 9:40 signal as new) — that is the null-start `seenRef`. And
-it cannot fire on a poll that changed nothing: the trigger is `latest.id`, the
-row's primary key, which with the existing signature check in `useAlertsFeed` is
-why this is not a return of the old every-20-seconds blink. The global
-reduced-motion rule collapses it to nothing, leaving tag and dot to carry it.
+The latch now clears on a QUIET PERIOD instead: `RECENTRE_QUIET_MS = 10_000`
+since you last moved the panel yourself. Re-anchoring inside that window
+schedules the recentre for when the window closes rather than dropping it, so the
+ladder still finds the money on its own — ten seconds after you stopped reading,
+not while you are. The wheel/touch latch and the grab-drag both stamp the clock,
+and the drag re-stamps as it moves, so the ten seconds run from the end of the
+gesture rather than its first 4px.
 
-Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/design/tokens.css`.
+Files: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
 
-## 2026-09-16 (g) — v3 alerts: ticker first, title biggest, score gone
+## 2026-09-16 (g) — Two real bugs: a portalled dropdown that could not be clicked, and a latch that missed most scrolls
 
-The feed rows were upside down. The smallest text in the row — a 9px uppercase
-tag line — was the subject, and the biggest was the detector's explanation, so
-the eye landed on "$1.0M OTM put purchased, 9DTE…" and had to work back up to
-find out it was QQQ. Scanning this list is asking WHAT IS THIS ABOUT, and the
-answer is a ticker.
+**The near-core % "flipped back to 50".** It never took at all. `Dropdown` in
+`board/gexCandles/controls.tsx` renders its menu through a portal, so to the cog
+`Popover` it was opened from, a click on an option lands OUTSIDE that panel's
+ref. The panel closes on `pointerdown`, which unmounts the menu before the
+option's `onClick` can fire — the pick silently does not take, and the control
+reads as if it snapped back.
 
-So the row is now, in order of size: the **ticker** in the type's colour, then
-the **title** beside it at `text-sm` (`text-base` on the phone), then the
-detector's sentence one step down, then the small meta line. `AlertItem` gains
-`ticker` and `title`; `variant` is gone, and both the desktop panel and
-`/m/alerts` read the new pair. The pill's `short` leads with the ticker too.
+`POPOVER_SAFE_ATTR` on the menu is how `Popover` is told "this is mine" (see its
+`onDown`), and `Dropdown` was not carrying it. Added. This fixes every caller of
+that control, not just the Multi Greek card.
 
-The ticker is `meta.ticker` for a whale print, `meta.symbol` for a scanner pick,
-and `SPX` for flip / core / IB — those detectors carry no symbol because there
-is only one they could be about.
+**The re-centre latch missed most scroll gestures.** It listened for `wheel` and
+`touchmove`, which catch a mouse wheel and a finger and nothing else — not a
+trackpad's momentum tail, not Page Up, not an arrow key, not a scrollbar drag.
+Any of those moved the ladder without arming the latch, so the next re-anchor
+pulled it straight back to the money. That is why it still snapped after about a
+second whatever the quiet period said.
 
-Three redundancies fell out of putting it in front:
+Replaced with one `scroll` listener, which fires for all of them. The cost is
+that it also hears the centring effect's own write, so that effect now stamps
+`programmaticRef` immediately before touching `scrollTop`, and an event inside
+150ms of the stamp is the effect hearing itself. The effect also returns early
+when the ladder is already centred — it runs on every render, and writing
+`scrollTop` to the value it already holds fires a scroll event for nothing.
 
-- the type's TAG left the title — every `setup` already names its detector, and
-  "WHALE · WHALE PUT BUY" was the same word twice. Colour, dot and chip still
-  say which kind it is.
-- the ticker is stripped from inside the title, so a whale reads
-  "QQQ · Put buy — 690P $1.0M", not "QQQ · Whale put buy — QQQ 690P $1.0M".
-- a whale's level line is dropped entirely: `level_name` is "SPY 747P", which
-  the title now carries, and `level_spx` is null on an option print — the two
-  together were what printed the stray "SPY 747P 0".
+Also: NEAR CORE's on/off and threshold now persist by effect rather than only in
+their commit callbacks, so the store cannot disagree with what is on screen —
+including across a hot reload, which re-runs the lazy initialisers against
+whatever the store last held.
 
-**`score` is no longer drawn.** It was the engine's internal 1–5 ranking, on no
-scale the reader has ever been given — "score 5" is not a decision you can make
-— and sitting beside a level and a strike it read as if it were another price.
-The field stays on `SignalRow` because `/proxy/signals` still returns it.
-
-Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/shell/alertTypes.ts`,
-`cbedge-v3/src/shell/AlertsPanel.tsx`, `cbedge-v3/src/mobile/pages/MAlerts.tsx`.
+Files: `cbedge-v3/src/board/gexCandles/controls.tsx`,
+`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
 
 ---
 
-## 2026-09-17 — v3 board: paint gating, pass 1 (non-negotiable 5)
+## 2026-09-17 — v3 board: paint gating (non-negotiable 5), and the budget that caught up with it
 
 An audit of all twelve board cards against rule 5 — *a card nobody can see does
-not paint*. Three cards were doing work for pixels nobody was looking at.
+not paint*. Three were doing work for pixels nobody was looking at.
 
 **GEX Candles — the big one.** `<ChartFrame onMount={onMount} />` took none of
 the three visibility signals, and `onMount` received `frame.visible` and dropped
 it. So `chart.ts`'s steady rAF loop ran its full overlay rebuild — the bubble
 band (up to ~320 segments, each with its own `priceToCoordinate`) plus the GEX
 rail — for a card scrolled out of the board's viewport, on every frame the view
-moved. And it moves constantly: live bars keep arriving whether you are looking
-or not.
+moved. It moves constantly: live bars arrive whether you are looking or not.
 
 `MountOpts` now carries an optional `visible: () => boolean`, the card passes
-`frame.visible` straight through, and `draw()` checks it before `readPlotW()` —
-a hidden card costs one boolean per frame. The loop stays scheduled rather than
-being cancelled and re-armed off the visibility edge; `missedWhileHidden` clears
-`lastSig` on the first frame back so the skipped repaint happens immediately.
-A per-frame loop is exactly the case the rule says to answer with
+`frame.visible` through, and `draw()` checks it before `readPlotW()` — a hidden
+card costs one boolean per frame. The loop stays scheduled rather than being
+cancelled and re-armed off the visibility edge; `missedWhileHidden` clears
+`lastSig` on the first frame back so the skipped repaint happens at once. A
+per-frame loop is exactly the case the rule says to answer with
 `handle.visible()` rather than `onVisibility`.
 
 **Gauge Rail.** `setInterval(sample, 5_000)` with no tab check, writing React
 state on a card whose rings only fill once a minute — a backgrounded board
-re-rendered the rail twelve times per bucket it could actually fill. Now follows
-the same shape as `VolGexFlowCard`'s `usePoll`: skip while hidden, one catch-up
-tick on `visibilitychange`.
+re-rendered the rail twelve times per bucket it could actually fill.
 
 **Economic Calendar.** `setInterval(() => setNow(Date.now()), 60_000)`, ungated,
 re-rendering the week's calendar plus the earnings table once a minute forever in
-a background tab. Same gate, same catch-up.
+a background tab.
 
-Still open from the audit, not touched here: Net Premium gates its *paint*
-(`NetDriftChart` honours `onVisibility` correctly) but not its *compute* — the
-`mergeTape` → filter → `buildNetSeries` → `buildSpotSeries` → `ordersByMin`
-chain re-runs on every `useFrame('flow')` tick regardless of visibility. And
+Both now follow `VolGexFlowCard`'s `usePoll` shape: skip while hidden, one
+catch-up tick on `visibilitychange`. `npm run perf` passes, including
+`gex-candles does not paint off screen (0 ≤ 0)`.
+
+**Two build fixes found on the way.** `shell/AlertsFeed.tsx` had three
+`noUncheckedIndexedAccess` errors that were failing `tsc`: `title[0]` is
+`string | undefined` on an empty title, and `Number.isFinite` takes `unknown` and
+returns a plain boolean, so it rejects NaN but does not narrow away the
+`undefined` that a string with no colon destructures to. Both guards are needed;
+neither covers the other's case.
+
+**And the budget.** `entry` 38900 → 44000, `css` 8500 → 9000, deliberately, per
+rule 7 — see the `$raised` note in `budgets.json` for what grew and what was
+ruled out first. The short version: every panel in the entry was already `lazy()`,
+the shell is honestly that size now, and `CopyShotMenu` is the one split still
+available. Worth knowing: the root Dockerfile runs `build:fast`, so the deploy
+never runs this check — it is a commit-time gate, and it had not been run since
+the shell work landed, which is why v9.16.19 shipped green while local was
+4.1kb over.
+
+Still open: Net Premium gates its *paint* (`NetDriftChart` honours
+`onVisibility` correctly) but not its *compute* — the `mergeTape` → filter →
+`buildNetSeries` → `buildSpotSeries` → `ordersByMin` chain re-runs on every
+`useFrame('flow')` tick regardless of visibility. And
 `board/topFlow/ContractProbe-1.tsx` is a 33KB stray twin of `ContractProbe.tsx`,
 the same shape as the `VisitorMap-1.tsx` file that broke the owners build.
 
 Files: `cbedge-v3/src/board/gexCandles/chart.ts`,
 `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
 `cbedge-v3/src/board/gaugeRail/GaugeRailCard.tsx`,
-`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`.
+`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`,
+`cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/budgets.json`.
