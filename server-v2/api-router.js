@@ -88,6 +88,14 @@ catch (e) { console.warn('[api-router] _lib-confidence-route.cjs not loaded:', e
 let cbTrack = null;
 try { cbTrack = require('./cb-contract-track'); }
 catch (e) { console.warn('[api-router] cb-contract-track not loaded — contract tracking off:', e.message); }
+// Auto-Buy Lab — the entry/exit replay engine behind owner Results → Auto-Buy
+// Lab. Pure read: it replays the exit rules over the minute bars cb-contract-
+// track already recorded and scores entry filters over the same rows. Records
+// nothing, probes nothing. Depends on cb-contract-track, so it is only useful
+// when that loaded — the route below checks both.
+let autobuyLab = null;
+try { autobuyLab = require('./autobuy-lab'); }
+catch (e) { console.warn('[api-router] autobuy-lab not loaded — Auto-Buy Lab off:', e.message); }
 // Premarket Prep's server-side "prior close" GEX baseline — the thing that
 // makes the page's "Biggest GEX Changes" card and the Net GEX "vs prior close"
 // chip work. Replaces a localStorage snapshot the page took of ITSELF between
@@ -12117,6 +12125,43 @@ Return exactly one element per input key, in the same order. Never merge, split,
         } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });
+
+    // /api/autobuy-lab — the owner Results → Auto-Buy Lab board.
+    //
+    // GET ?since=120 | ?all=1        how many recorded sessions to replay
+    //     ?basis=oivol|vol           which CB definition's rows
+    //     ?clock=0945|1030|1200      which checkpoint is the fire clock
+    //     ?exit=A|B|C                which exit rule set to replay
+    //     ?filters=premium,walk,…   which entry filters are armed (AND-stack)
+    //
+    // Everything it returns is computed from cb_trades + cb_trade_ticks: the
+    // stats, the exit-reason mix, the equity curve, the checkpoint × exit
+    // matrix, the ranked sweep and the per-filter drop-one-out lift. Filters
+    // that need intraday market context nobody records yet come back with
+    // available:false and a `needs` string rather than a fabricated score.
+    //
+    // READ-ONLY, and GET-only for that reason — there is no write path here to
+    // gate. Owner auth matches /api/cb-trades, since this is the same trade
+    // history viewed a different way.
+    if (autobuyLab) {
+      register('/api/autobuy-lab', {
+        auth: 'owner', methods: ['GET'],
+        async handler(req, res) {
+          try {
+            const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+            const data = await autobuyLab.build({
+              since: sp.get('since'),
+              all: sp.get('all') === '1',
+              basis: sp.get('basis'),
+              clock: sp.get('clock'),
+              exit: sp.get('exit'),
+              filters: sp.has('filters') ? sp.get('filters') : null,
+            });
+            send(res, 200, data, { 'Cache-Control': NO_STORE });
+          } catch (err) { send(res, 500, { error: String(err && err.message || err) }); }
+        },
+      });
+    }
 
     // /api/cb-contracts — the SUBSCRIBER-FACING slice of the route above, for
     // the Contracts card on the premarket page

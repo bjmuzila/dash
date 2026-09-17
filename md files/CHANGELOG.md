@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-09-17 - owner: Auto-Buy Lab, wired to a real replay engine
+
+Fourth tab on `/owner/dev/results`, next to Confidence / Contracts / Open
+bracket, plus the endpoint behind it. It answers the two questions the contract
+log cannot answer about itself: which of those timed buys should have been
+SKIPPED, and which exit rule should have CLOSED the ones that were taken.
+
+**It is a replay, not a simulator.** `server-v2/autobuy-lab.js` reads the rows
+cb-contract-track already recorded and walks each trade's real minute bars from
+`cb_trade_ticks`. Every stat on the page - win rate, expectancy, profit factor,
+max drawdown, the exit-reason mix, the equity curve, the checkpoint x exit
+matrix, the ranked sweep, the per-filter drop-one-out lift - is computed from
+those bars. Nothing is fabricated.
+
+Two honesty rules in the walk. Bar CLOSES only: mark_high exists, but filling a
+65% target off an intra-minute high nobody could have hit is how a replay
+invents money. And a trade with no ticks scores as `nodata`, excluded and
+counted separately, so a week the recorder was down reads as missing rather
+than as a week of scratches.
+
+**HALF THE FILTER LIST IS GREYED OUT ON PURPOSE.** The confluence stack people
+actually want - VWAP + slope, opening-range retest, GEX regime, TICK/ADD/VOLD,
+EMA stack, RVOL, CVD, VIX1D, econ-calendar veto - needs per-session intraday
+context that NOTHING records at the checkpoint minute. Those come back with
+`available:false` and a `needs` string naming exactly what would have to be
+recorded; they cannot be armed and they score nothing. A filter that silently
+scores against invented context is worse than one that says it has no data.
+
+What IS derivable from the recorded columns is wired and does real work: the
+$1.00 premium rule, walk depth, CB distance at the probe, whether spot drifted
+toward the CB between probe and fill, and what the CB strike itself priced.
+Five live filters, thirty-two subsets, swept against three checkpoints and
+three exit sets.
+
+**Flipping a filter is the whole interaction.** Each toggle re-runs the sweep.
+The Hypothetical Ticket panel shows the order the armed stack would place -
+real strike, premium, debit, target/stop/trail prices, max gain, max risk,
+expected value at the chosen size - and under it a delta strip says what that
+one toggle did to fires, win rate, expectancy and drawdown. That pairing is the
+point: a filter that lifts expectancy by cutting the sample to nine trades is
+not an improvement, and you only see it when both numbers move together.
+
+Read-only, GET-only, owner auth - same trade history as /api/cb-trades viewed a
+different way. Nothing on the tab places, modifies or cancels an order.
+
+Files: `server-v2/autobuy-lab.js` (new), `server-v2/api-router.js`
+(`/api/autobuy-lab`), `owner-vite/src/pages/results/AutoBuyLab.tsx` (new),
+`owner-vite/src/pages/Results.tsx` (tab key, button, branch, header docblock).
+
 ## 2026-09-17 - voltick-v3: all of v3, repainted, at voltick.cbedge.net/v3/
 
 Every v3 card and page now exists on voltick in the Voltick palette. The whole
