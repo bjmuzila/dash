@@ -24135,36 +24135,44 @@ window). Clicking a card re-points the whole board at that anchor.
 
 Files: `owner-vite/src/pages/Results.tsx`.
 
-## Wall migration — price axis, crosshair readout, no labels on the plot
+## Wall migration — the axis carries the strikes, the rail carries the hours
 
-The v3 Wall Migration chart now carries a **price axis** down its right-hand
-gutter and a **readout line** above the plot, and writes nothing inside the plot
-at all.
+Nothing is written on the plot any more. Every number the chart has to say is
+said by its two axes.
 
-The axis prints round price ticks chosen off the drawn range (so a $3 AAPL day
-and a 300-point SPX week both get sensible numbers), plus a solid tag at each
-drawn level's current strike and one for spot. It is HTML positioned by
-percentage of the plot height, not SVG `<text>` — the viewBox is squashed to the
-card's width, so anything drawn inside it comes out stretched, and the
-percentage keeps the ticks on their price when `fill` scales the plot past its
-viewBox.
+**The price axis**, down a 46px right-hand gutter, prints every strike each
+drawn level held over the span: the live one at full weight in the level's
+colour, the ones it has already left dimmed in the same colour. No pills — a
+solid plate on the axis reads as a control and shouts down the strikes above and
+below it, which are the ones the level is being compared against. Spot is the
+same: bare white type on its rung. Round price ticks
+fill in around them and are dropped wherever one would land within nine pixels
+of a strike or of spot — the strikes are the numbers being read, and the round
+one is the one nobody asked for. A strike within a pill's height of spot steps
+to the other side of the gutter, just inside the plot's right edge, rather than
+off its own rung. It is HTML positioned by percentage of the plot height, not
+SVG `<text>`: the viewBox is squashed to the card's width, so anything drawn
+inside it comes out stretched, and the percentage keeps every rung on its price
+when `fill` scales the plot past its viewBox.
 
-The readout is one line: `AT <time> · SPOT · <each drawn level>`, with the most
-recent roll (`last roll 12:45 · Put Wall 325→330`) pushed to the right end.
-Hovering the plot draws a single hairline crosshair and the line reads that
-slot — fractional, so it says 12:54 rather than snapping to the 15-minute grid.
-With the pointer away it reads the last drawn slot, so a screenshot still says
-where the levels ended and when they last moved. Spot is the nearest recorded
-sample, never interpolated.
+**The clock rail** on a single session now stamps the open and then every hour
+on the hour to the end of the tape, instead of three stamps across 390 minutes
+that made every read of "when did that roll" an estimate off the thirds. Slots
+are 15 minutes, so it is every fourth slot from slot 2. The week view keeps its
+date stamps, and both take the axis gutter so 16:00 still sits under 16:00.
 
-Why not per-change labels: a tag per roll is fine for a three-roll session and a
-wall of boxes on a week, and the boxes land on top of the steps they describe.
-The question is almost never "what was the wall at 11:27" but "what were the
-levels when price was here" — which the crosshair answers directly, at no cost
-in ink. Four label treatments and three x-axis variants were mocked up and
-rejected before landing on this; the mocks are in `generated/`.
+Rejected on the way here, all mocked up in `generated/`: four boxed-label
+treatments, three x-axis time rails, a hover readout (worth nothing in a
+screenshot, which is how this panel mostly travels), a change log under the plot
+and the probe's ring-and-bare-type marks on the steps themselves. Every one of
+them put a second copy of the axis on top of the shape being read.
 
-`compact` (the ticker rail's 62px tiles) is untouched: no readout, no axis, no
-crosshair.
+**One label survives on the plot: the open.** Each level's first written strike
+is stamped on the left rail in the probe's ENTRY vocabulary — bare type, no
+plate, in the level's colour, reading `345 OPEN`. It earns the room the other
+labels did not: the open has no step corner of its own to hang a tag on, and
+every other strike in the session is read as a move away from it.
+
+`compact` (the ticker rail's 62px tiles) is untouched: no axis, no rail.
 
 Files: `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`.

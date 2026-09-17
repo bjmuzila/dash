@@ -48,7 +48,7 @@
 //     however sure the loop bound made us; the binding is what narrows it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { type MouseEvent, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ES_CANDLE_UP, LEVEL_COLORS, T, alpha } from '@/design/theme'
 import {
   DENSE_MIN_SAMPLES,
@@ -92,19 +92,6 @@ function priceTicks(lo: number, hi: number): number[] {
   const out: number[] = []
   for (let t = Math.ceil(lo / step) * step; t <= hi; t += step) out.push(Number(t.toFixed(6)))
   return out
-}
-
-/**
- * FRACTIONAL slot → wall-clock ET. `slotClock` answers for the 15-minute grid;
- * the crosshair lands between those, and rounding it to the grid would have the
- * readout say 12:45 across a quarter hour of tape. The inverse of slotAtMins.
- */
-function clockAtSlot(s: number): string {
-  const OPEN = 9 * 60 + 29
-  const GRID = 9 * 60 + 45
-  const m = s <= 0 ? OPEN : s <= 1 ? OPEN + s * (GRID - OPEN) : GRID + (s - 1) * 15
-  const r = Math.round(m)
-  return `${String(Math.floor(r / 60)).padStart(2, '0')}:${String(r % 60).padStart(2, '0')}`
 }
 
 /** Painted size of a legend colour swatch — border included (border-box). */
@@ -195,13 +182,6 @@ export function WallMigrationChart({
    * appears later (a week fetch landing, the view switching) arrives visible.
    */
   const [off, setOff] = useState<Set<MigKey>>(() => new Set())
-  /**
-   * WHERE THE CROSSHAIR IS, as a fraction of the plot's width. Null when the
-   * pointer is off the chart, which is the state the readout falls back to the
-   * last drawn slot in — so the panel reads the same in a screenshot as it does
-   * under the mouse.
-   */
-  const [hover, setHover] = useState<number | null>(null)
   const toggle = (k: MigKey) =>
     setOff((prev) => {
       const next = new Set(prev)
@@ -674,116 +654,95 @@ export function WallMigrationChart({
   const lastPt = last.spotDrawn[last.spotDrawn.length - 1]
   const lastSpot = lastPt ? lastPt.v : null
 
-  // ── THE READOUT ────────────────────────────────────────────────────────────
-  //
-  // NOTHING IS WRITTEN INSIDE THE PLOT. Every strike a label would have carried
-  // is read off one line above the chart, driven by the crosshair, plus the
-  // price axis on the right. Two reasons that beat tagging each step:
-  //
-  //   1. A tag per change is a tag per change — fine for a three-roll session,
-  //      a wall of boxes on a week, and the boxes land on top of the very steps
-  //      they describe, which is the shape being read.
-  //   2. The question is almost never "what was the wall at 11:27"; it is "what
-  //      were the levels WHEN PRICE WAS HERE". The crosshair asks that directly,
-  //      one slot at a time, and costs the plot no ink at all.
-  //
-  // With the pointer away it reads the last drawn slot, so a still frame still
-  // says where everything ended and when it last moved.
-
-  /** Pointer x → which day, and which fractional slot inside it. */
-  const hoverAt = (() => {
-    if (hover == null || compact) return null
-    const xPct = hover * 100
-    const i = Math.min(N - 1, Math.max(0, Math.floor(xPct / segW)))
-    const seg = segs[i]
-    if (!seg) return null
-    const span = Math.max(1, seg.lastSlot)
-    const s = Math.min(seg.lastSlot, Math.max(0, ((xPct - i * segW) / segW) * span))
-    return { i, seg, s }
-  })()
-
-  const readSeg = hoverAt ? hoverAt.seg : last
-  const readSlot = hoverAt ? hoverAt.s : readSeg.lastSlot
-  const readIdx = Math.max(0, Math.min(readSeg.lastSlot, Math.round(readSlot)))
-
-  /** A level at the read slot — the forward fill, walked back to its last row. */
-  const valAt = (lt: WallLevel): number | null => {
-    const arr = readSeg.series.get(lt)
-    if (!arr) return null
-    for (let s = readIdx; s >= 0; s--) {
-      const v = arr[s]
-      if (v != null) return v
-    }
-    return null
-  }
-
-  /**
-   * Spot at the read slot — the NEAREST sample, never interpolated. A price
-   * this panel prints has to be a price that was recorded; a number invented
-   * between two samples is exactly the kind of thing a reader would screenshot.
-   */
-  const spotAt = (() => {
-    let best: { s: number; v: number } | null = null
-    for (const p of readSeg.spotDrawn) {
-      if (!best || Math.abs(p.s - readSlot) < Math.abs(best.s - readSlot)) best = p
-    }
-    return best ? best.v : null
-  })()
-
-  /** The most recent slot on which any drawn level was written to a new strike. */
-  const lastRoll = (() => {
-    let hit: { i: number; s: number; lt: WallLevel; from: number; to: number } | null = null
-    for (let i = 0; i < N; i++) {
-      const seg = segs[i]
-      if (!seg) continue
-      for (const lt of drawn) {
-        const arr = seg.series.get(lt)
-        if (!arr) continue
-        let prev: number | null = null
-        for (let s = 0; s <= seg.lastSlot; s++) {
-          const v = arr[s]
-          if (v == null) continue
-          if (prev != null && v !== prev && (!hit || i > hit.i || (i === hit.i && s >= hit.s))) {
-            hit = { i, s, lt, from: prev, to: v }
-          }
-          prev = v
-        }
-      }
-    }
-    return hit
-  })()
-
-  const rollSeg = lastRoll ? segs[lastRoll.i] : null
-
   /** Fraction of the plot HEIGHT a price sits at — the axis is HTML, not SVG. */
   const yPct = (v: number) => `${(y(v) / height) * 100}%`
 
-  const onMove = (e: MouseEvent<HTMLDivElement>) => {
-    const r = e.currentTarget.getBoundingClientRect()
-    if (r.width <= 0) return
-    setHover(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)))
-  }
+  // ── WHAT THE PRICE AXIS PRINTS ─────────────────────────────────────────────
+  //
+  // Nothing is written on the plot itself. Every strike a level held over the
+  // span gets a rung on the axis instead — the live one as the contract probe's
+  // solid rail pill, the ones it has already left dimmed in the same colour.
+  // Read the axis and you have the whole ladder the session was traded against,
+  // in one column, with no type sitting on top of the steps it describes.
+  const axisStrikes = (() => {
+    type Rung = { key: string; lt: WallLevel; v: number; live: boolean }
+    const out: Rung[] = []
+    for (const lt of drawn) {
+      if (off.has(lt)) continue
+      const live = lastOf(lt)
+      const seen = new Set<number>()
+      for (const seg of segs) {
+        const arr = seg.series.get(lt)
+        if (!arr) continue
+        for (let sl = 0; sl <= seg.lastSlot; sl++) {
+          const v = arr[sl]
+          if (v == null || seen.has(v)) continue
+          seen.add(v)
+          out.push({ key: `${lt}-${v}`, lt, v, live: live != null && v === live })
+        }
+      }
+    }
+    // Two levels on the same strike would stack two labels on one rung; the
+    // heavier line wins, which is the order `drawOrder` already puts them in.
+    const byY = new Map<string, Rung>()
+    for (const r of out) {
+      const slot = Math.round(y(r.v))
+      const held = byY.get(String(slot))
+      if (!held || (r.live && !held.live)) byY.set(String(slot), r)
+    }
+    return [...byY.values()]
+  })()
 
   /**
-   * HOW MANY SESSIONS GET NAMED, and how many boundaries get a line.
-   *
-   * The rail printed a weekday and a date under EVERY slice, which is right for
-   * five and unreadable for twenty-one — at 260 each slice is under three
-   * pixels and the "MONDAY" over it is forty. So the rail stamps about ten
-   * sessions however many are drawn, anchored on the LAST one: the newest
-   * session is the one being read against the others and it must always carry
-   * its own date. The weekday name comes off as soon as the slices are too
-   * narrow to hold it; the m/d stamp is what survives.
-   *
-   * The session dividers thin with the stamps once they would out-number the
-   * data — 260 hairlines a pixel apart is a grey wash, not a set of edges — so
-   * past that point a line is drawn only where a date is printed, and the two
-   * read as one rail.
+   * WHERE EACH LEVEL OPENED. The first strike the span wrote, marked on the
+   * left rail in the probe's ENTRY vocabulary — bare type, no plate, in the
+   * level's colour. It is the only label the plot carries, and it earns the
+   * room: the open has no step corner of its own, every other strike in the
+   * session is read as a move away from it, and unlike the axis rungs it says
+   * WHEN as well as what.
    */
-  const stampEvery = Math.max(1, Math.ceil(N / 10))
-  const isStamped = (i: number) => (N - 1 - i) % stampEvery === 0
-  const showDow = N <= 6
-  const thinDividers = N > 40
+  const opens = (() => {
+    const first = segs[0]
+    if (!first) return []
+    const out: { lt: WallLevel; v: number }[] = []
+    for (const lt of drawn) {
+      if (off.has(lt)) continue
+      const arr = first.series.get(lt)
+      if (!arr) continue
+      for (let sl = 0; sl <= first.lastSlot; sl++) {
+        const v = arr[sl]
+        if (v != null) {
+          out.push({ lt, v })
+          break
+        }
+      }
+    }
+    return out
+  })()
+
+  /**
+   * ROUND TICKS ONLY WHERE A STRIKE IS NOT. The strikes are the numbers being
+   * read; a 335 printed nine pixels under a 337 rung is two numbers fighting
+   * over one line of the axis, and the round one is the one nobody asked for.
+   */
+  const axisTicks = priceTicks(lo, hi).filter(
+    (t) => !axisStrikes.some((r) => Math.abs(y(r.v) - y(t)) < 9) && Math.abs(y(t) - y(lastSpot ?? lo)) >= 9,
+  )
+
+  /**
+   * HOW OFTEN THE CLOCK RAIL STAMPS, on a single session: the open, then every
+   * hour on the hour to the end of the tape. Three stamps across a 390-minute
+   * chart meant every read of "when did that roll" was an estimate off the
+   * thirds; slots are 15 minutes, so every fourth slot from slot 2 is :00.
+   */
+  const clockStamps = (() => {
+    if (N !== 1) return []
+    const out: number[] = [0]
+    for (let sl = 2; sl <= last.lastSlot; sl += 4) out.push(sl)
+    const tail = out[out.length - 1]
+    if (tail != null && last.lastSlot - tail >= 2) out.push(last.lastSlot)
+    return out
+  })()
 
   return (
     <div className={fill ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-col'}>
@@ -823,52 +782,6 @@ export function WallMigrationChart({
       </div>
       )}
 
-      {/* THE READOUT. One line, above the plot, in place of every in-plot tag.
-          Idle it reads the last slot; under the crosshair it reads that slot. */}
-      {compact ? null : (
-        <div
-          className="mb-1.5 flex flex-wrap items-baseline gap-x-4 gap-y-1 rounded-sm px-2 py-1"
-          style={{ background: alpha(T.text, 0.04) }}
-        >
-          <span className="tabular font-mono text-xs">
-            <span className="text-2xs uppercase tracking-widest text-muted">at </span>
-            <span className="font-extrabold text-fg">
-              {N > 1 ? `${mdShort(readSeg.date)} ` : ''}
-              {clockAtSlot(readSlot)}
-            </span>
-          </span>
-
-          {spotAt != null && !off.has('spot') ? (
-            <span className="tabular font-mono text-xs">
-              <span className="text-2xs uppercase tracking-widest text-muted">spot </span>
-              <span className="font-extrabold text-fg">{wallNum(spotAt)}</span>
-            </span>
-          ) : null}
-
-          {drawn.map((lt) => {
-            const v = valAt(lt)
-            if (v == null || off.has(lt)) return null
-            return (
-              <span key={lt} className="tabular font-mono text-xs" style={{ color: LEVEL_COLOR[lt] }}>
-                <span className="text-2xs uppercase tracking-widest" style={{ opacity: 0.75 }}>
-                  {LEVEL_LABEL[lt]}{' '}
-                </span>
-                <span className="font-extrabold">{wallStrike(v)}</span>
-              </span>
-            )
-          })}
-
-          {lastRoll ? (
-            <span className="tabular ml-auto font-mono text-2xs text-muted">
-              last roll {N > 1 && rollSeg ? `${mdShort(rollSeg.date)} ` : ''}
-              {slotClock(lastRoll.s)} ·{' '}
-              <span style={{ color: LEVEL_COLOR[lastRoll.lt] }}>{LEVEL_LABEL[lastRoll.lt]}</span>{' '}
-              {wallStrike(lastRoll.from)}→{wallStrike(lastRoll.to)}
-            </span>
-          ) : null}
-        </div>
-      )}
-
       {/* preserveAspectRatio="none" — the x axis is slots, the y axis is price,
           and the two have no business sharing a scale. Every stroke carries
           vectorEffect so the squash never thickens a line, and there is no
@@ -877,13 +790,6 @@ export function WallMigrationChart({
         className={fill ? 'relative min-h-0 flex-1' : 'relative'}
         style={compact ? undefined : { paddingRight: AXIS_W }}
       >
-        {/* The hover surface is the SVG's own box, so the fraction it reports is
-            a fraction of the PLOT and not of the plot plus its axis gutter. */}
-        <div
-          className={fill ? 'h-full' : ''}
-          onMouseMove={compact ? undefined : onMove}
-          onMouseLeave={compact ? undefined : () => setHover(null)}
-        >
         <svg
           viewBox={`0 0 100 ${height}`}
           height={fill ? undefined : height}
@@ -949,21 +855,32 @@ export function WallMigrationChart({
               vectorEffect="non-scaling-stroke"
             />
           ))}
-          {/* The crosshair. One hairline, no dot and no box — every number it
-              stands for is already on the readout line above the plot. */}
-          {hoverAt ? (
-            <line
-              x1={x(hoverAt.i, hoverAt.s)}
-              x2={x(hoverAt.i, hoverAt.s)}
-              y1={0}
-              y2={height}
-              stroke={alpha(T.text, 0.38)}
-              strokeWidth={1}
-              vectorEffect="non-scaling-stroke"
-            />
-          ) : null}
         </svg>
-        </div>
+
+        {/* THE OPENS, on the left rail. Everything else the chart says is on
+            one of the two axes; this is the one number that belongs beside the
+            line it starts. */}
+        {compact ? null : (
+          <div className="pointer-events-none absolute inset-0" aria-hidden>
+            {opens.map((o) => (
+              <span
+                key={`open-${o.lt}`}
+                className="tabular absolute whitespace-nowrap font-mono text-2xs font-extrabold"
+                style={{
+                  left: 2,
+                  top: yPct(o.v),
+                  transform: 'translateY(-50%)',
+                  marginTop: o.lt === 'cb' ? -9 : 9,
+                  letterSpacing: '0.6px',
+                  color: LEVEL_COLOR[o.lt],
+                }}
+              >
+                {wallStrike(o.v)}
+                <span style={{ opacity: 0.6, fontWeight: 400 }}> OPEN</span>
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* THE PRICE AXIS. HTML, not <text>: the viewBox is squashed to the
             card's width, so anything drawn inside it comes out stretched. Ticks
@@ -975,30 +892,60 @@ export function WallMigrationChart({
             style={{ width: AXIS_W }}
             aria-hidden
           >
-            {priceTicks(lo, hi).map((t) => (
+            {axisTicks.map((t) => (
               <span
                 key={`tick-${t}`}
-                className="tabular absolute font-mono text-2xs text-muted"
-                style={{ left: 7, top: yPct(t), transform: 'translateY(-50%)' }}
+                className="tabular absolute font-mono text-2xs"
+                style={{ left: 8, top: yPct(t), transform: 'translateY(-50%)', color: T.faint }}
               >
                 {wallStrike(t)}
               </span>
             ))}
-            {/* The live strikes, as solid tags — the legend's numbers, put where
-                the eye already is. This is what the in-plot labels were for. */}
+            {/* EVERY STRIKE THE LEVELS HELD. The ones already left print dim in
+                the level's colour; the live one is the pill below. */}
+            {axisStrikes.map((r) => {
+              if (r.live) return null
+              /**
+               * A strike within a pill's height of spot would be printed UNDER
+               * the spot pill and lost. It steps to the other side of the
+               * gutter instead — just inside the plot's right edge — rather
+               * than off its own rung, which is the one thing an axis label
+               * may never do.
+               */
+              const underSpot = lastSpot != null && Math.abs(y(r.v) - y(lastSpot)) < 9
+              return (
+                <span
+                  key={`held-${r.key}`}
+                  className="tabular absolute font-mono text-2xs"
+                  style={{
+                    left: underSpot ? 'auto' : 8,
+                    right: underSpot ? AXIS_W + 3 : undefined,
+                    top: yPct(r.v),
+                    transform: 'translateY(-50%)',
+                    color: LEVEL_COLOR[r.lt],
+                    opacity: 0.55,
+                  }}
+                >
+                  {wallStrike(r.v)}
+                </span>
+              )
+            })}
+            {/* The live strikes. Bare type like every other rung, just at full
+                weight and full opacity — a solid pill on the axis reads as a
+                control and shouts down the strikes above and below it, which
+                are the ones the level is being compared against. */}
             {drawn.map((lt) => {
               const v = lastOf(lt)
               if (v == null || off.has(lt)) return null
               return (
                 <span
                   key={`tag-${lt}`}
-                  className="tabular absolute rounded-sm px-1 font-mono text-2xs font-extrabold"
+                  className="tabular absolute font-mono text-2xs font-extrabold"
                   style={{
-                    left: 3,
+                    left: 8,
                     top: yPct(v),
                     transform: 'translateY(-50%)',
-                    background: LEVEL_COLOR[lt],
-                    color: T.bg,
+                    color: LEVEL_COLOR[lt],
                   }}
                 >
                   {wallStrike(v)}
@@ -1007,13 +954,12 @@ export function WallMigrationChart({
             })}
             {lastSpot != null && !off.has('spot') ? (
               <span
-                className="tabular absolute rounded-sm px-1 font-mono text-2xs font-extrabold"
+                className="tabular absolute font-mono text-2xs font-extrabold"
                 style={{
-                  left: 3,
+                  left: 8,
                   top: yPct(lastSpot),
                   transform: 'translateY(-50%)',
-                  background: T.text,
-                  color: T.bg,
+                  color: T.text,
                 }}
               >
                 {wallNum(lastSpot)}
@@ -1028,13 +974,28 @@ export function WallMigrationChart({
           hundred — times says nothing. How many stamps: see stampEvery. */}
       {compact ? null : N === 1 ? (
         <div
-          className="tabular mt-1 flex justify-between font-mono text-2xs text-muted"
+          className="tabular relative mt-1 h-3 font-mono text-2xs text-muted"
           style={{ paddingRight: AXIS_W }}
           aria-hidden
         >
-          <span>{slotClock(0)}</span>
-          <span>{slotClock(Math.round(last.lastSlot / 2))}</span>
-          <span>{slotClock(last.lastSlot)}</span>
+          <div className="absolute inset-y-0 left-0" style={{ right: AXIS_W }}>
+            {clockStamps.map((sl, k) => {
+              const first = k === 0
+              const lastOne = k === clockStamps.length - 1
+              return (
+                <span
+                  key={`cs-${sl}`}
+                  className="absolute whitespace-nowrap"
+                  style={{
+                    left: `${x(0, sl)}%`,
+                    transform: `translateX(${first ? '0' : lastOne ? '-100%' : '-50%'})`,
+                  }}
+                >
+                  {slotClock(sl)}
+                </span>
+              )
+            })}
+          </div>
         </div>
       ) : (
         <div className="mt-1 flex text-muted" style={{ paddingRight: AXIS_W }} aria-hidden>
@@ -1059,9 +1020,10 @@ export function WallMigrationChart({
         </div>
       )}
 
-      {/* No caption under the plot. The legend names every series and the page
-          head carries the scope, and a paragraph under a 250px plot was taller
-          than half the plot. */}
+      {/* No caption and no log under the plot. Every written strike is marked
+          on the step it belongs to, the live ones ride the price axis, and the
+          legend names the series — a second copy of all of it as a row of text
+          under the chart was one thing too many to read. */}
     </div>
   )
 }
