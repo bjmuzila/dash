@@ -1,5 +1,5 @@
 import type { DragEvent as ReactDragEvent, ReactNode } from 'react'
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { preload } from '@/data/api'
 import { isMobilePath } from '@/mobile/mobileNav'
@@ -90,9 +90,7 @@ export interface NavItem {
 // thing and they stay — see src/board/catalog.tsx. This list, App.tsx's routes
 // and ALL_PAGES/LIVE_ROUTES in pages/TradersDashboard.tsx move together.
 export const NAV: NavItem[] = [
-  // Home is the card tiles. The old grid board is a page like any other now.
-  { to: '/', label: 'Cards', icon: '🗂️' },
-  { to: '/board', label: 'Board', icon: '🧩' },
+  { to: '/', label: 'Home', icon: '🏠' },
   {
     to: '/traders-dashboard',
     label: 'Traders Dash',
@@ -161,7 +159,7 @@ export const NAV: NavItem[] = [
 // CbMark, the one square form of the brand (see shell/Brand.tsx). Sized on one
 // axis because the asset is square by construction.
 function Logo() {
-  return <CbMark className="mb-2 h-8 w-8 shrink-0" title="Voltick" />
+  return <CbMark className="mb-2 h-8 w-8 shrink-0" title="CB Edge" />
 }
 
 // Drag-to-reorder for the rail — mirrors v2's GexGroupNav, rewritten fresh for
@@ -596,7 +594,41 @@ export function Shell({ children }: { children: ReactNode }) {
   // component: the socket, the store, the page symbol and the auth read are one
   // instance for the session, and a phone that mounted its own would open a
   // second WebSocket the moment someone long-pressed back to the desktop.
-  const mobile = isMobilePath(useLocation().pathname)
+  const { pathname, search } = useLocation()
+  const mobile = isMobilePath(pathname)
+
+  // ── EMBED — ?embed=1 drops the RAIL and the TOOLBAR ─────────────────────────
+  // voltick.cbedge.net frames this app inside its OWN chrome, and two sets of
+  // bars around one board is not a layout, it is two products arguing. So the
+  // host asks for the page without its furniture and keeps its own.
+  //
+  // What goes is the two bars and the notes dock — chrome the host replaces or
+  // does not want. What STAYS is everything below the providers: the socket, the
+  // store, the page symbol, the auth read, the copy-shot registry, the replay
+  // dock, and — load-bearing — ExpandStageHost, without which every card
+  // silently loses its expand button.
+  //
+  // A flag on the URL rather than a build mode, because one container serves
+  // both: framed at voltick.cbedge.net/v3, and bare for anyone opening it
+  // directly.
+  // STICKY for the tab, not just the first load. The flag arrives on the iframe's
+  // src; the moment someone clicks a card inside the frame the URL becomes
+  // /cards/<id> with no query and the bars would come straight back. So the
+  // first ?embed=1 is remembered for this browsing context — which is the frame
+  // itself, so it cannot leak into a tab opened from inside it. ?embed=0 clears
+  // it, which is how you get the furniture back without closing the frame.
+  const embed = useMemo(() => {
+    const asked = new URLSearchParams(search).get('embed')
+    try {
+      if (asked === '1') sessionStorage.setItem('cb-embed', '1')
+      else if (asked === '0') sessionStorage.removeItem('cb-embed')
+      return sessionStorage.getItem('cb-embed') === '1'
+    } catch {
+      // Private mode, or storage blocked. Fall back to the URL alone: the frame
+      // still renders, it just regains its bars on the next in-frame click.
+      return asked === '1'
+    }
+  }, [search])
 
   // Three providers, all above the toolbar AND the page:
   //   PageSymbolProvider — the search sets the symbol and the cards read it,
@@ -627,7 +659,14 @@ export function Shell({ children }: { children: ReactNode }) {
               nothing for a signed-out visitor or on a phone, and mounted here
               so BOTH branches below get it. See shell/NoteClipMenu.tsx. */}
           <NoteClipSlot />
-          {mobile ? (
+          {embed ? (
+            // No rail, no toolbar, no dock. The host draws those.
+            <div className="cb-viewport flex flex-col overflow-hidden bg-bg text-fg">
+              <ReplayDockHost>
+                <ExpandStageHost>{children}</ExpandStageHost>
+              </ReplayDockHost>
+            </div>
+          ) : mobile ? (
             <div className="cb-viewport flex flex-col overflow-hidden bg-bg text-fg">
               <Toolbar mobile />
               <ReplayDockHost>{children}</ReplayDockHost>

@@ -134,15 +134,14 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
     title: "CB Edge v3",
     icon: "📊",
     blurb:
-      "The v3 board and its pages, repainted in Voltick. A copy of cbedge-v3 whose only intended difference is its token file, served by its own container.",
+      "The v3 board and its pages, repainted in Voltick. Its own app in its own container, framed inside this site so the bars above and to the left stay with you.",
     items: [
       {
         label: "The v3 board",
-        path: "/v3/",
-        key: "V3",
-        note: "Every card and every page of v3, in Voltick surfaces and the Voltick colour vocabulary. Served by the voltick-v3 container, not by this SPA.",
+        path: "/v3-board",
+        key: "V3Board",
+        note: "Every card and every page of v3, in Voltick surfaces and the Voltick colour vocabulary. Framed inside this site, so these bars stay put.",
         status: "live",
-        external: true,
       },
     ],
   },

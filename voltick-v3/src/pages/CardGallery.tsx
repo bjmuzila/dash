@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { CARD_CATALOG, CARD_BY_ID } from '@/board/catalog'
 import { BOARD_ROW_H } from '@/design/primitives/Board'
@@ -74,6 +74,51 @@ function paneHeight(rows: number): number {
   return Math.max(360, rows * BOARD_ROW_H)
 }
 
+/**
+ * The height you dragged a card to, per card, per browser.
+ *
+ * A card's `defaultSize` is the footprint the GRID would give it, which is a
+ * reasonable first guess and nothing more: open a cog and a card grows a row of
+ * controls, add a panel and it grows another, and a pane sized for neither is
+ * where a card starts looking broken. So the pane is draggable and it remembers,
+ * because re-dragging the same card to the same height every visit is worse than
+ * a bad default.
+ *
+ * Per card id, so Multi Greek being tall does not make Key Levels tall. Keyed
+ * under this app's own prefix and never read by anything else, so a browser with
+ * no storage (private mode, blocked) just gets the default every time — the
+ * feature degrades to what it replaced.
+ */
+const HEIGHT_KEY = 'voltick-card-height:'
+const MIN_PANE = 220
+const MAX_PANE = 4000
+
+function loadHeight(cardId: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(HEIGHT_KEY + cardId)
+    const n = raw ? Number(raw) : NaN
+    return Number.isFinite(n) && n >= MIN_PANE && n <= MAX_PANE ? n : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function saveHeight(cardId: string, px: number) {
+  try {
+    localStorage.setItem(HEIGHT_KEY + cardId, String(Math.round(px)))
+  } catch {
+    /* best effort: a pane that will not persist still resizes */
+  }
+}
+
+function forgetHeight(cardId: string) {
+  try {
+    localStorage.removeItem(HEIGHT_KEY + cardId)
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function CardGallery() {
   const { cardId } = useParams()
   const card = useMemo(() => (cardId ? CARD_BY_ID.get(cardId) : undefined), [cardId])
@@ -141,6 +186,42 @@ function Tiles() {
 /* ── One card, open ────────────────────────────────────────────────────────── */
 
 function OneCard({ card }: { card: (typeof CARD_CATALOG)[number] }) {
+  const fallback = paneHeight(card.defaultSize.h)
+  const [height, setHeight] = useState(() => loadHeight(card.id, fallback))
+  const pane = useRef<HTMLDivElement | null>(null)
+
+  // Re-read when the card changes: this component is remounted per card (see the
+  // `key` below), but the state initialiser only runs on mount, and a future
+  // refactor that drops the key would otherwise carry one card's height to the
+  // next one silently.
+  useEffect(() => setHeight(loadHeight(card.id, fallback)), [card.id, fallback])
+
+  // Native `resize` fires no event of its own, so the pane is watched instead.
+  // This also catches the window getting narrower, which is not a drag and must
+  // not be saved as one — hence the comparison against what we last stored.
+  useEffect(() => {
+    const el = pane.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let last = height
+    const ro = new ResizeObserver(() => {
+      const h = el.getBoundingClientRect().height
+      if (!h || Math.abs(h - last) < 2) return
+      last = h
+      saveHeight(card.id, h)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+    // `height` is read once to seed `last`; re-subscribing on every pixel of a
+    // drag would tear the observer down mid-gesture.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card.id])
+
+  const reset = useCallback(() => {
+    forgetHeight(card.id)
+    setHeight(fallback)
+    if (pane.current) pane.current.style.height = ''
+  }, [card.id, fallback])
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3 sm:p-4">
       <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -154,8 +235,21 @@ function OneCard({ card }: { card: (typeof CARD_CATALOG)[number] }) {
           {card.label}
         </h1>
         <span className="font-mono text-2xs tracking-widest text-muted uppercase">{card.id}</span>
-        <span className="ml-auto hidden font-mono text-2xs text-muted sm:inline">
-          {card.defaultSize.w}×{card.defaultSize.h} on the grid
+        <span className="ml-auto hidden items-baseline gap-3 font-mono text-2xs text-muted sm:flex">
+          <span>
+            {card.defaultSize.w}×{card.defaultSize.h} on the grid
+          </span>
+          {/* Only offered once the pane is not the default, so it is never a
+              button that does nothing. */}
+          {Math.round(height) !== fallback && (
+            <button
+              type="button"
+              onClick={reset}
+              className="cursor-pointer border-0 bg-transparent p-0 font-mono text-2xs text-accent underline"
+            >
+              reset height
+            </button>
+          )}
         </span>
       </header>
 
@@ -168,13 +262,23 @@ function OneCard({ card }: { card: (typeof CARD_CATALOG)[number] }) {
           reusing the last one's tree: these hold sockets, canvases and chart
           instances, and handing a live one to a different card is how a chart
           ends up drawing someone else's data. */}
+      {/* DRAG THE BOTTOM EDGE. `resize: vertical` is the browser's own handle —
+          no drag maths, no pointer capture, no ghost element, and it keeps
+          working inside the iframe voltick frames this app in. It needs a
+          non-visible overflow to appear at all, which the card already has.
+
+          Width is not resizable on purpose: the pane is already the full width
+          of the page, and letting it exceed that would put a card's own
+          horizontal scrollbar inside the page's. */}
       <div
         key={card.id}
+        ref={pane}
         className="flex min-h-0 flex-col overflow-hidden rounded-md border border-line bg-surface"
-        style={{ height: paneHeight(card.defaultSize.h) }}
+        style={{ height, resize: 'vertical', minHeight: MIN_PANE, maxHeight: MAX_PANE }}
       >
         {card.render(card.id)}
       </div>
+      <p className="m-0 font-mono text-2xs text-muted">Drag the bottom edge to resize. Kept per card.</p>
     </div>
   )
 }
