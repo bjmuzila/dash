@@ -1,0 +1,1149 @@
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useIsPhone } from '@/design/useIsPhone'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Board — the customizable card grid (terminal home, and anywhere else a page
+// wants add/remove/resize/drag cards with a saved arrangement).
+//
+// v3-native, not a port of v2's DashGrid: same well-known grid-compaction idea
+// (float up, push past collisions), rewritten against this app's primitives
+// and rules. No colour literals here — every visual comes from the caller's
+// own Card/tokens; this file only computes geometry.
+//
+// Contract:
+//   - Fixed COLS-column grid. Each item is {id,x,y,w,h} in grid units.
+//   - Drag from the element carrying `data-board-handle`.
+//   - Resize from the handle this component renders in each tile's corner.
+//   - CARDS NEVER OVERLAP. In the default (auto-arrange) mode they also compact
+//     toward the top-left ("snap close to the other cards") — every gesture
+//     re-runs compaction, so a saved layout can never come back as a stack.
+//   - free=true (the board's default) turns the GRAVITY off, not the collision
+//     rule. Cards stay on the row they were dropped on and a deliberate gap
+//     stays a gap. A card in the way is first asked to GIVE UP SOME WIDTH OR
+//     HEIGHT and stay where it is (squeezeAside); only if it cannot does it move
+//     at all, and then by the shortest route (stepAside).
+//   - NOTHING SNAPS THE POSITION. A card goes where the pointer puts it. The
+//     leftover space is closed on RELEASE instead (fillGaps), where tidying
+//     cannot fight the hand.
+//   - GUIDED, NOT FORCED. The card follows the pointer; nothing is dragged out
+//     of the hand. What the board adds is a dashed LANDING SLOT drawn where the
+//     card will actually come to rest, plus column guides for the duration of
+//     the gesture. See the `preview` block below for why the slot is computed
+//     with the release maths rather than approximated.
+//   - locked=true renders statically: no handles, no listeners. Use this
+//     outside "edit layout" mode if the page wants a locked default view.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface BoardItem {
+  id: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+// ── THE GRID, AND WHY IT IS 48 WIDE ──────────────────────────────────────────
+//
+// It started at 12 columns and 32px rows, and that was the real reason "put the
+// cards where I want" kept failing. Twelve columns means one column is 8% of the
+// board and an edge can only land on one of thirteen places. Two charts beside a
+// 5-wide panel is 3 + 3 + 5 = 11: there is a spare column and NO arrangement
+// spends it — make the charts equal and a hole is left, close the hole and the
+// charts are different widths. Never a snapping bug; the grid was too coarse to
+// express the layout being asked for.
+//
+// 24 fixed that particular board and still felt like slots. At 48 an edge lands
+// within ~2% of the board of wherever the pointer is, and at that resolution the
+// grid stops being something you can feel — which is the whole point, and also
+// why the position magnet that used to live in this file is gone: there is no
+// longer a gap so small you cannot close it by hand.
+//
+// Chosen by driving the real engine in generated/2026-09-06-board-lab.html
+// against these presets, rather than guessed. 48 columns, 8px rows, no position
+// snapping, squeeze on, gap-closing on.
+//
+// Everything stored is in these units. layoutStore.ts rescales boards saved
+// under an older grid once, per browser — see cb-v3-board-grid.
+export const BOARD_COLS = 48
+export const BOARD_ROW_H = 8
+/** Smallest a card may be, in grid units. The squeeze below stops here. */
+export const BOARD_MIN_W = 4
+export const BOARD_MIN_H = 6
+
+// ── ONE, TWO OR THREE ACROSS ─────────────────────────────────────────────────
+//
+// A row holds one card, two, or three. Nothing else. So a card's width is the
+// whole board, a half of it or a third of it, and its left edge sits on a
+// boundary of its OWN width: halves at 0 and 24, thirds at 0, 16 and 32.
+//
+// That is a stronger rule than "whatever width you drag to", and it is the
+// point. Two cards sharing a row come out the same size without anyone aiming
+// for it, three come out exact thirds, and a fourth cannot wedge itself into a
+// sliver at the end of a row. Everything below still runs — the drag, the
+// squeeze, the gap-closing — but its result is put back on a lane before it is
+// committed, so none of them can invent a width the rule does not allow.
+//
+// 48 divides by both 2 and 3, which is why the lane sizes are whole units and
+// three thirds add up to the board exactly rather than leaving a column over.
+
+/** The only widths a card may have, narrowest first: a third, a half, all of it. */
+export function laneWidths(cols = BOARD_COLS): number[] {
+  return [Math.round(cols / 3), Math.round(cols / 2), cols]
+}
+
+/** Nearest legal width. A tie goes to the wider one. */
+export function snapLaneW(w: number, cols = BOARD_COLS): number {
+  return laneWidths(cols).reduce((best, o) => (Math.abs(o - w) <= Math.abs(best - w) ? o : best))
+}
+
+/** Nearest legal left edge for a card that is `w` wide. */
+export function snapLaneX(x: number, w: number, cols = BOARD_COLS): number {
+  const lanes = Math.max(1, Math.round(cols / w))
+  return clamp(Math.round(x / w), 0, lanes - 1) * w
+}
+
+/** Every card onto a legal width and lane. Only x, w and the floors change. */
+function laneSnap(items: BoardItem[], cols = BOARD_COLS): BoardItem[] {
+  return items.map((i) => {
+    const w = snapLaneW(i.w, cols)
+    return { ...i, w, x: snapLaneX(i.x, w, cols), y: Math.max(0, i.y), h: Math.max(BOARD_MIN_H, i.h) }
+  })
+}
+
+/**
+ * Lane-snap, then settle whatever now overlaps by dropping it DOWN. Vertical
+ * only: a card never changes lane to get out of the way, because changing lane
+ * is the one thing that would break the rule it was just snapped into. The
+ * pinned card is placed first, so it keeps the lane the pointer chose and the
+ * others move around it.
+ */
+export function snapBoard(items: BoardItem[], pinnedId?: string | null, cols = BOARD_COLS): BoardItem[] {
+  const snapped = laneSnap(items, cols).sort((a, b) => a.y - b.y || a.x - b.x)
+  const ordered = pinnedId
+    ? [...snapped.filter((i) => i.id === pinnedId), ...snapped.filter((i) => i.id !== pinnedId)]
+    : snapped
+  const placed: BoardItem[] = []
+  for (const it of ordered) {
+    for (let guard = 0; guard <= placed.length; guard++) {
+      const hit = placed.find((p) => boardCollides(it, p))
+      if (!hit) break
+      it.y = hit.y + hit.h
+    }
+    placed.push(it)
+  }
+  const byId = new Map(placed.map((p) => [p.id, p]))
+  return items.map((orig) => byId.get(orig.id) ?? orig)
+}
+
+/** Do two items share any cell? Touching edges don't count. */
+export function boardCollides(a: BoardItem, b: BoardItem): boolean {
+  if (a.id === b.id) return false
+  if (a.x + a.w <= b.x || b.x + b.w <= a.x) return false
+  if (a.y + a.h <= b.y || b.y + b.h <= a.y) return false
+  return true
+}
+
+/**
+ * Gravity pass: every card floats up until something is in the way, then
+ * anything still overlapping gets pushed down past it. `pinnedId` keeps one
+ * card exactly where the pointer put it while everything else gets out of
+ * its way — that's what makes a drag look like it "snaps" the others aside
+ * instead of the dragged card jumping around.
+ */
+export function compactBoard(items: BoardItem[], pinnedId?: string | null): BoardItem[] {
+  // Lanes first: gravity only ever changes y, so a card that arrives off-lane
+  // (an older saved board, a card added at a catalog size) would stay off-lane
+  // forever otherwise.
+  const order = laneSnap(items).sort((a, b) => a.y - b.y || a.x - b.x)
+  const ordered = pinnedId
+    ? [...order.filter((i) => i.id === pinnedId), ...order.filter((i) => i.id !== pinnedId)]
+    : order
+
+  const placed: BoardItem[] = []
+  for (const src of ordered) {
+    const it: BoardItem = { ...src, x: Math.max(0, src.x), y: Math.max(0, src.y) }
+    if (pinnedId && it.id === pinnedId) {
+      placed.push(it)
+      continue
+    }
+    while (it.y > 0 && !placed.some((p) => boardCollides({ ...it, y: it.y - 1 }, p))) it.y--
+    for (let guard = 0; guard <= placed.length; guard++) {
+      const hit = placed.find((p) => boardCollides(it, p))
+      if (!hit) break
+      it.y = hit.y + hit.h
+    }
+    placed.push(it)
+  }
+
+  const byId = new Map(placed.map((p) => [p.id, p]))
+  return items.map((orig) => byId.get(orig.id) ?? orig)
+}
+
+// ── FREE PLACEMENT ───────────────────────────────────────────────────────────
+//
+// "I can't move the chart to fill that space without kicking off the heatmap."
+// That is gravity, not collision. compactBoard floats EVERY card up to the first
+// free row on every gesture, so the board has no such thing as an empty row: the
+// moment a card is widened, the card beside it is pushed out of the row and then
+// re-floated somewhere else entirely. Nothing is wrong with the arithmetic — the
+// board is simply doing a thing the user did not ask for.
+//
+// resolveBoard is compactBoard with the float removed and nothing else changed:
+//
+//   - the pinned card sits exactly where the pointer left it;
+//   - a card that OVERLAPS it drops to just below it — the minimum move that
+//     restores the no-overlap rule;
+//   - a card that overlaps nothing is not touched, so a hole in the board stays
+//     a hole and the arrangement is the user's.
+//
+// It is a separate function rather than a `gravity` flag inside compactBoard on
+// purpose: compactBoard is called from layoutStore's sanitizer and from every
+// add/remove path, and a boolean that silently changes what those do is exactly
+// how a saved free layout comes back compacted.
+// ── MAKING ROOM ──────────────────────────────────────────────────────────────
+//
+// "When moving the bottom GEX Candles into the empty space, I want the ones
+// around it to get smaller to fit it in. Instead the things on the right go down
+// a row. I don't want that."
+//
+// Every version of this board so far has had exactly one answer to a collision:
+// somebody MOVES. That is the wrong first answer. Dropping a card into a space
+// that is nearly big enough is a request to share the row, not to evict whoever
+// is in it — and eviction is destructive in a way shrinking is not, because the
+// evicted card leaves the screen area you were looking at and takes its row with
+// it. Shrinking costs a neighbour some width. Moving costs you your layout.
+//
+// So the neighbour is asked to give something up first. The card is trimmed on
+// the side the collision is actually on, keeping its OPPOSITE edge nailed down —
+// trim the right edge back to the newcomer's left, or move the left edge in to
+// the newcomer's right while the right edge stays put. Either reads as the card
+// being squeezed from that side, which is what was asked for; neither reads as
+// the card moving, because the edge you were not pushing on does not move.
+//
+// Four candidates (left, right, top, bottom), cheapest first, same rule as
+// stepAside: the smallest concession that resolves the overlap.
+//
+// TWO FLOORS, and they are what keeps this from being worse than moving:
+//   - BOARD_MIN_W / BOARD_MIN_H, below which a card is not a card any more;
+//   - half of what the card currently is. Past that it is not making room, it is
+//     being crushed, and being sent to the next row is the kinder outcome. This
+//     is the line between "the ones around it get smaller" and "the ones around
+//     it get destroyed".
+//
+// Returns null when no legal squeeze exists, and the caller falls through to
+// stepAside — moving is still there, it is just no longer the first idea.
+function squeezeAside(it: BoardItem, placed: BoardItem[]): BoardItem | null {
+  if (!placed.some((p) => boardCollides(it, p))) return it
+  const floorW = Math.max(BOARD_MIN_W, Math.floor(it.w / 2))
+  const floorH = Math.max(BOARD_MIN_H, Math.floor(it.h / 2))
+  const cur: BoardItem = { ...it }
+
+  // One trim per pass; a second neighbour may need a second. Bounded by the
+  // number of cards that could possibly be hit.
+  for (let guard = 0; guard <= placed.length; guard++) {
+    const hit = placed.find((p) => boardCollides(cur, p))
+    if (!hit) return cur
+
+    const right = hit.x - cur.x // keep my left edge, pull my right edge in
+    const leftX = hit.x + hit.w // keep my right edge, push my left edge in
+    const leftW = cur.x + cur.w - leftX
+    const bottom = hit.y - cur.y // keep my top, raise my bottom
+    const topY = hit.y + hit.h // keep my bottom, lower my top
+    const topH = cur.y + cur.h - topY
+
+    const cands: { cost: number; box: BoardItem }[] = []
+    if (right >= floorW) cands.push({ cost: cur.w - right, box: { ...cur, w: right } })
+    if (leftW >= floorW) cands.push({ cost: cur.w - leftW, box: { ...cur, x: leftX, w: leftW } })
+    if (bottom >= floorH) cands.push({ cost: cur.h - bottom, box: { ...cur, h: bottom } })
+    if (topH >= floorH) cands.push({ cost: cur.h - topH, box: { ...cur, y: topY, h: topH } })
+    if (!cands.length) return null
+
+    const best = cands.reduce((a, b) => (b.cost < a.cost ? b : a))
+    cur.x = best.box.x
+    cur.y = best.box.y
+    cur.w = best.box.w
+    cur.h = best.box.h
+  }
+
+  return placed.some((p) => boardCollides(cur, p)) ? null : cur
+}
+
+// ── STEPPING ASIDE ───────────────────────────────────────────────────────────
+//
+// The card that has to give way, and how far. compactBoard's answer is always
+// "down, past the thing you hit", which under gravity is fine because the board
+// re-floats afterwards. With gravity off it is not: a card nudged one column
+// into its neighbour would send that neighbour to the bottom of the board and
+// leave it there. "Kicking off the heatmap" is a card being moved much further
+// than the gesture asked for.
+//
+// So this SEARCHES instead of stepping. It offers, for every card already
+// placed, the four positions that clear it — below, right, left, above — keeps
+// the ones that are on the board AND collide with nothing, and takes whichever
+// is the shortest move from where the card actually was.
+//
+// A search, not a loop, and that is the point. The obvious version — "push, then
+// look again, then push again" — ping-pongs: pushed left out of A it lands in B,
+// pushed right out of B it lands back in A, and after the guard trips it gets
+// dumped at the bottom anyway, which is the behaviour this was meant to remove.
+// Testing every candidate against everything placed settles it in one pass and
+// cannot oscillate.
+//
+// The fallback (below everything) is reached only when the board genuinely has
+// no room in any row the card overlaps — a very wide card in a full band. It
+// always terminates.
+function stepAside(it: BoardItem, placed: BoardItem[], cols: number): BoardItem {
+  if (!placed.some((p) => boardCollides(it, p))) return it
+  const at = (x: number, y: number) => ({ ...it, x, y })
+  const cands: BoardItem[] = []
+  for (const p of placed) {
+    cands.push(at(it.x, p.y + p.h)) // below p
+    cands.push(at(p.x + p.w, it.y)) // right of p
+    cands.push(at(p.x - it.w, it.y)) // left of p
+    cands.push(at(it.x, p.y - it.h)) // above p
+  }
+  const cost = (c: BoardItem) => Math.abs(c.x - it.x) + Math.abs(c.y - it.y)
+  let best: BoardItem | null = null
+  for (const c of cands) {
+    if (c.x < 0 || c.y < 0 || c.x + c.w > cols) continue
+    if (placed.some((p) => boardCollides(c, p))) continue
+    if (!best || cost(c) < cost(best)) best = c
+  }
+  return (
+    best ?? {
+      ...it,
+      x: Math.min(it.x, Math.max(0, cols - it.w)),
+      y: placed.reduce((m, p) => Math.max(m, p.y + p.h), 0),
+    }
+  )
+}
+
+export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols = BOARD_COLS): BoardItem[] {
+  const order = laneSnap(items, cols).sort((a, b) => a.y - b.y || a.x - b.x)
+  const ordered = pinnedId
+    ? [...order.filter((i) => i.id === pinnedId), ...order.filter((i) => i.id !== pinnedId)]
+    : order
+
+  const placed: BoardItem[] = []
+  for (const src of ordered) {
+    const it: BoardItem = { ...src, x: Math.max(0, src.x), y: Math.max(0, src.y) }
+    if (pinnedId && it.id === pinnedId) {
+      placed.push(it)
+      continue
+    }
+    // MAKE ROOM before MOVING OUT — see squeezeAside. A card that can give up
+    // some width or height and stay put does that; only a card that cannot goes
+    // looking for somewhere else to be.
+    placed.push(squeezeAside(it, placed) ?? stepAside(it, placed, cols))
+  }
+
+  const byId = new Map(placed.map((p) => [p.id, p]))
+  // squeezeAside trims a card to whatever width clears the collision and
+  // stepAside slides it sideways to whatever column is free. Both are useful
+  // and neither respects the one/two/three rule, so the result goes back onto
+  // its lanes and anything that overlaps again is settled downward.
+  return snapBoard(
+    items.map((orig) => byId.get(orig.id) ?? orig),
+    pinnedId,
+    cols,
+  )
+}
+
+// ── CLOSING THE LEFTOVER SPACE ───────────────────────────────────────────────
+//
+// "Let it be free will on where the edges go, but try to limit the empty space."
+//
+// Those pull against each other and both are right. Gravity limited empty space
+// by taking the placement away from you. Free placement gives the placement back
+// and leaves the slivers: a two-column strip beside a chart, a margin down the
+// right edge, a band under a card that nothing will ever occupy. None of it is
+// where you PUT anything — it is what was left when you stopped dragging.
+//
+// So the tidying is decoupled from the placing. You choose the edges; on release
+// each card reaches into the dead space immediately beside and below it and
+// takes it. Nothing moves — only widths and heights change, and only into space
+// that is already empty — so the arrangement you made is exactly the arrangement
+// you keep.
+//
+// Bounded by `maxGap`, and that bound is the whole design. Unbounded, every card
+// would stretch to the far side of the board and the board would be a stretch of
+// cards. At a quarter of the width it swallows slivers, margins and the hole a
+// removed card leaves, and it leaves a DELIBERATE hole — a card set apart from
+// the rest — alone. That is the "best guess": a small space beside a card was an
+// accident, a large one was a decision.
+//
+// LEFT and UP are not filled, on purpose. A gap on a card's left is the same gap
+// as the one on its neighbour's right, and both cards growing into it is how you
+// get a fight; the neighbour's right-fill already closes it. The exceptions are
+// the board's own left edge (nothing to the left to close it) and, for width
+// only, the right edge.
+//
+// This is also what UNDOES a squeeze. A neighbour trimmed to make room for a
+// card gets that width back the moment the card is dragged away again — the
+// space it was holding becomes an adjacent gap, and closing adjacent gaps is
+// exactly what this does. The board gives room and takes it back symmetrically,
+// with no memory of who was originally how wide.
+//
+// ── THE PINNED CARD IS FROZEN ────────────────────────────────────────────────
+//
+// `pinnedId` is the card the gesture just finished with, and the tidy-up does
+// not touch it AT ALL — not its position, not its size.
+//
+// Position was always exempt. SIZE was not, and that was a bug you could not
+// work around: "the gauge card I want to make smaller but not able to". Drag its
+// bottom edge up, and the shrink opens a gap between it and the card below —
+// which is a gap adjacent to the card, which is precisely what this function
+// closes, so it grew straight back to the size it started at. The board silently
+// undid the only thing the gesture was for. Same in the other axis: narrow a
+// card and it widens itself back into the space it just freed.
+//
+// A resize is the user stating a size. Nothing here gets to overrule it. So the
+// pinned card neither grows nor moves, and its NEIGHBOURS absorb whatever space
+// it gave up — which is still "limit the empty space", just paid for by the
+// cards that were not being adjusted.
+function fillGaps(items: BoardItem[], cols: number, maxGap: number, pinnedId?: string | null): BoardItem[] {
+  // ── RUN IT TO A FIXED POINT ────────────────────────────────────────────────
+  // Widening a card changes which cards are in its COLUMN band, and heightening
+  // one changes which are in its ROW band, so a single pass can leave a gap that
+  // only became fillable because of a fill earlier in the same pass. Left there,
+  // the second gesture on an untouched board would quietly move things — the
+  // board would look like it was still thinking about the last drag.
+  //
+  // Repeating until nothing changes makes settling IDEMPOTENT: settle(settle(x))
+  // === settle(x), which is the property that makes it safe to run on every
+  // release. It converges in one or two passes; the cap is a bound, not a plan.
+  let out = items.map((i) => ({ ...i }))
+  for (let pass = 0; pass < 4; pass++) {
+    const next = fillGapsOnce(out, cols, maxGap, pinnedId)
+    if (JSON.stringify(next) === JSON.stringify(out)) break
+    out = next
+  }
+  return out
+}
+
+function fillGapsOnce(items: BoardItem[], cols: number, maxGap: number, pinnedId?: string | null): BoardItem[] {
+  const out = items.map((i) => ({ ...i }))
+  const rowBand = (it: BoardItem) => out.filter((o) => o.id !== it.id && o.y < it.y + it.h && it.y < o.y + o.h)
+  const colBand = (it: BoardItem) => out.filter((o) => o.id !== it.id && o.x < it.x + it.w && it.x < o.x + o.w)
+
+  // ── INTERIOR GAPS CLOSE COMPLETELY, AND ARE SHARED ─────────────────────────
+  //
+  // A gap BETWEEN two cards on the same rows is never deliberate. Nothing can be
+  // in it — you would have to drag a card there, and if you did, both sides would
+  // squeeze to let it in. So it closes however wide it is, and the two cards
+  // flanking it split it: the left one grows right, the right one grows LEFT.
+  //
+  // Splitting is what makes the squeeze reversible. Drag a card out from between
+  // two neighbours it had squeezed and they take back what they gave up, evenly,
+  // instead of the left one swallowing the whole hole and the row ending up
+  // lopsided every time a card is moved through it.
+  //
+  // Growing left MOVES a card's origin, so the pinned card is exempt: it takes
+  // no share and its neighbour closes the gap alone. The slide is also clamped
+  // to the room that card actually has on ITS rows, which need not be the same
+  // rows as the gap.
+  //
+  // Gaps at the board's own EDGES are different and stay bounded by maxGap —
+  // there is no card on the far side, so space at the end of a row can be
+  // deliberate, and a lone card should not be stretched across the board.
+  for (const it of [...out].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const band = rowBand(it)
+    // Left edge of the board.
+    if (it.id !== pinnedId && it.x > 0 && it.x <= maxGap && !band.some((o) => o.x < it.x)) {
+      it.w += it.x
+      it.x = 0
+    }
+    const rights = band.filter((o) => o.x >= it.x + it.w)
+    if (!rights.length) {
+      // Right edge of the board.
+      const gap = cols - (it.x + it.w)
+      if (gap > 0 && gap <= maxGap && it.id !== pinnedId) it.w += gap
+      continue
+    }
+    const n = rights.reduce((a, b) => (b.x < a.x ? b : a))
+    const gap = n.x - (it.x + it.w)
+    if (gap <= 0) continue
+    const nWall = rowBand(n)
+      .filter((o) => o.x + o.w <= n.x)
+      .reduce((m, o) => Math.max(m, o.x + o.w), 0)
+    const room = n.x - nWall
+    // Normally the two flanking cards split the gap. When one of them is the
+    // card the user just finished, it takes NO share and the other closes the
+    // whole thing — see the frozen-pin note above.
+    const share =
+      n.id === pinnedId ? 0 : it.id === pinnedId ? Math.min(gap, room) : Math.min(Math.floor(gap / 2), room)
+    if (it.id !== pinnedId) it.w += gap - share
+    n.x -= share
+    n.w += share
+  }
+
+  for (const it of out) {
+    // Down: only toward a card that is actually there. The board has no bottom,
+    // so "the space below" is otherwise infinite and filling it is meaningless.
+    if (it.id === pinnedId) continue
+    const below = colBand(it).filter((o) => o.y >= it.y + it.h)
+    if (!below.length) continue
+    const gap = below.reduce((m, o) => Math.min(m, o.y), Number.POSITIVE_INFINITY) - (it.y + it.h)
+    if (gap > 0 && gap <= maxGap) it.h += gap
+  }
+
+  return out
+}
+
+/**
+ * The release pass in free mode: settle collisions, then close the dead space.
+ * Exported because BoardPage runs it for add/remove too — a card removed from
+ * the middle of a board should leave its neighbours a little wider, not a hole.
+ */
+export function settleBoard(items: BoardItem[], pinnedId?: string | null, cols = BOARD_COLS): BoardItem[] {
+  // fillGaps hands a card whatever slack sits beside it, which is how a pair of
+  // thirds with a hole between them becomes a pair of halves. It reaches those
+  // widths by arithmetic rather than by rule, so the lane snap has the last word
+  // here too.
+  return snapBoard(
+    fillGaps(resolveBoard(items, pinnedId, cols), cols, Math.max(2, Math.round(cols / 4)), pinnedId),
+    pinnedId,
+    cols,
+  )
+}
+
+// ── DROP A CARD INTO A ROW AND THE ROW RE-SPLITS ─────────────────────────────
+//
+// "If it's 1 and 1 and I try to move the card beside the upper one, it should
+// force it to 2 per row."
+//
+// Until now it could not: two full-width cards, no room in that row, so the
+// collision rule did the only thing it knows and put one of them back on its
+// own row. But "put this beside that" IS the request, and the widths are the
+// thing that should give — a row with two cards in it is a row of halves, with
+// three it is a row of thirds. Nobody should have to narrow both cards first
+// and then aim them.
+//
+// So the row a card is dropped into is re-split among everyone now in it, and
+// the row it LEFT is re-split among whoever is still there. Drag the second
+// card up and both become halves; drag it away again and the first goes back
+// to full width. The two directions are the same function, which is why
+// neither can drift out of step with the other.
+//
+// Capped at three, which is the lane rule: a fourth card has nowhere to be, so
+// this declines and the ordinary collision rules put it on the next row.
+
+/** Lay every card sharing this row top out as an equal share of the board. */
+export function spreadRow(
+  items: BoardItem[],
+  top: number,
+  cols = BOARD_COLS,
+  rank: (m: BoardItem) => number = (m) => m.x,
+): BoardItem[] {
+  const row = items.filter((o) => o.y === top)
+  if (!row.length || row.length > 3) return items
+  const w = Math.round(cols / row.length)
+  const sorted = [...row].sort((a, b) => rank(a) - rank(b))
+  const byId = new Map(sorted.map((m, i) => [m.id, { ...m, w, x: i * w }]))
+  return items.map((o) => byId.get(o.id) ?? o)
+}
+
+/**
+ * Put the card on the row it is being dropped into and re-split that row.
+ *
+ * The row is whoever the card's band actually overlaps, taken at their topmost
+ * edge: a tall card let go across two rows joins the upper one, which is the
+ * row the hand was aiming at. `dropX` is the drag's UNCLAMPED column position —
+ * a full-width card cannot be moved right (there is nowhere for its right edge
+ * to go), so its own x cannot say which side of the row it wants and the
+ * pointer has to. Ties go left.
+ */
+export function joinRow(items: BoardItem[], id: string, cols = BOARD_COLS, dropX?: number): BoardItem[] {
+  const me = items.find((i) => i.id === id)
+  if (!me) return items
+  const band = items.filter((o) => o.id !== id && me.y < o.y + o.h && o.y < me.y + me.h)
+  if (!band.length) return items
+  const top = Math.min(...band.map((o) => o.y))
+  const row = items.filter((o) => o.id !== id && o.y === top)
+  if (!row.length || row.length + 1 > 3) return items
+  const moved = items.map((o) => (o.id === id ? { ...o, y: top } : o))
+  const rank = (m: BoardItem) => (m.id === id ? (dropX ?? m.x) - 0.5 : m.x) + m.w / 2
+  return spreadRow(moved, top, cols, rank)
+}
+
+type Gesture =
+  | { kind: 'move'; id: string; startX: number; startY: number; origX: number; origY: number }
+  | { kind: 'resize'; id: string; startX: number; startY: number; origW: number; origH: number }
+  | null
+
+export interface BoardProps {
+  layout: BoardItem[]
+  onLayoutChange: (next: BoardItem[]) => void
+  /** id -> rendered card content. A missing id is simply not drawn. */
+  render: (id: string) => ReactNode
+  cols?: number
+  rowH?: number
+  gutter?: number
+  locked?: boolean
+  minW?: number
+  minH?: number
+  /**
+   * Free placement: keep cards on the row they were dropped on and let the board
+   * hold empty space. Collision is still enforced — see resolveBoard.
+   */
+  free?: boolean
+}
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, v))
+}
+
+// ── MATCHING A NEIGHBOUR'S SIZE ──────────────────────────────────────────────
+//
+// "Two GEX Candles side by side should be the same size, and I can't make them
+// the same size with edit layout." Both halves of that were true. A resize is a
+// pointer drag quantised to whole grid units, so landing on a neighbour's exact
+// w AND h means getting two independent rounded numbers right by eye, on a
+// control with no readout and no ruler — at which point one card is 5 rows and
+// the other 6 and the pair looks broken for a reason you cannot see.
+//
+// So the drag SNAPS to the sizes its neighbours already are. Within one grid
+// unit of a neighbour's width or height, it takes that exact value. Equal is
+// the thing being aimed at, so equal is what the last unit of travel does.
+//
+// NEIGHBOURS, not every card on the board. A card two rows down is not what
+// this card is being lined up with, and snapping to it would make every size on
+// a busy board sticky for no reason. A neighbour is a card whose ROW BAND
+// overlaps this one's — the cards actually sitting beside it, which is the
+// arrangement the complaint is about.
+/** How near, in grid units, a drag has to come before it snaps onto a match. */
+const MATCH_SNAP = 2
+
+/**
+ * Take the nearest of `targets` within `tol`, or leave `v` alone. Out-of-range
+ * targets are skipped rather than clamped, so a snap can never carry a card past
+ * a bound. Used for the neighbour-SIZE match on a resize — the one snap the
+ * board still does, because "make these two the same size" is a value you are
+ * aiming at, not one the board picked for you.
+ */
+function snapToMatch(v: number, targets: number[], lo: number, hi: number, tol = MATCH_SNAP): number {
+  let best = v
+  let bestD = tol + 1
+  for (const t of targets) {
+    if (t < lo || t > hi) continue
+    const d = Math.abs(t - v)
+    if (d <= tol && d < bestD) {
+      bestD = d
+      best = t
+    }
+  }
+  return best
+}
+
+/** Cards whose row band overlaps `it` — the ones sitting beside it. */
+function rowNeighbours(items: BoardItem[], it: BoardItem): BoardItem[] {
+  return items.filter((o) => o.id !== it.id && o.y < it.y + it.h && it.y < o.y + o.h)
+}
+
+export function Board({
+  layout,
+  onLayoutChange,
+  render,
+  cols = BOARD_COLS,
+  rowH = BOARD_ROW_H,
+  gutter = 8,
+  locked = false,
+  minW = BOARD_MIN_W,
+  minH = BOARD_MIN_H,
+  free = false,
+}: BoardProps) {
+  const phone = useIsPhone()
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const [width, setWidth] = useState(0)
+  const [gesture, setGesture] = useState<Gesture>(null)
+  const [draft, setDraft] = useState<BoardItem[] | null>(null)
+  const gestureRef = useRef<Gesture>(null)
+  const draftRef = useRef<BoardItem[] | null>(null)
+  const startRef = useRef<BoardItem[] | null>(null)
+  /** The drag's UNCLAMPED column position, and the row it started on — both
+      needed by the release maths (see joinRow) and neither derivable from the
+      draft, because the draft has already been clamped and settled. */
+  const dropXRef = useRef<number | null>(null)
+  const fromYRef = useRef<number | null>(null)
+  /**
+   * The RAW gesture: everyone where they were at pointer-down, plus the dragged
+   * card where the pointer has put it, and nothing settled yet.
+   *
+   * The release maths has to run on this rather than on the draft. The draft has
+   * already had the collision rules applied to it, which is what pushes the card
+   * you are dragging TOWARD out of your way — so by the time you let go, the row
+   * you were aiming at is not in the draft any more and joinRow would find
+   * nothing to join. Settling is a view of the gesture, not the gesture.
+   */
+  const rawRef = useRef<BoardItem[] | null>(null)
+  const baseId = useId()
+
+  gestureRef.current = gesture
+  draftRef.current = draft
+
+  // ── MEASURING THE BOARD, AND WHY IT IS THIS DEFENSIVE ──────────────────────
+  //
+  // Every tile is absolutely positioned from `colW`, so ONE number decides the
+  // whole board's geometry. If it is measured wrong, nothing looks broken in an
+  // obvious way — the board just comes up as a scale model of itself, every card
+  // proportionally correct inside a container half the width it should be, with
+  // the text in each card wrapped into a column. That is the bug this replaces:
+  // a board rendering at ~640px inside a ~1290px pane, on load, intermittently.
+  //
+  // The old version measured ONCE in an effect and then trusted a ResizeObserver
+  // to correct it. Both halves can fail:
+  //
+  //   - the first read happens before the shell's flex layout has settled, so
+  //     the number is a transient width, not the real one;
+  //   - the RO is the only thing that can fix that, and an RO can stop
+  //     delivering. Its callback here changes the board's HEIGHT, which can add
+  //     or remove the scroll port's scrollbar, which changes the width, which
+  //     calls the callback: the classic "ResizeObserver loop completed with
+  //     undelivered notifications". After that the width is frozen at whatever
+  //     it was, forever, and only a manual window resize brings it back.
+  //
+  // So: never trust a single source.
+  //
+  //   1. `measure` is idempotent — it only sets state when the value actually
+  //      changed, which is what makes everything below safe to over-call.
+  //   2. It runs after EVERY commit (useLayoutEffect with no deps). This is the
+  //      safety net: a wrong width cannot survive a re-render, so the board
+  //      self-heals on the next state change even if every listener has failed.
+  //   3. The observer watches the wrapper AND its parent (the scroll port), and
+  //      is joined by window resize, tab visibility, and fonts-ready — the four
+  //      ways this container changes size without the wrapper itself being
+  //      re-laid-out first.
+  //   4. Every callback goes through a rAF. That is the documented fix for the
+  //      delivery loop above: the re-measure lands on the next frame instead of
+  //      inside the notification that triggered it.
+  //
+  // getBoundingClientRect over clientWidth: it is the box the tiles are actually
+  // positioned in, and it is subpixel, so a fractional layout does not round the
+  // board a pixel narrower on every pass.
+  const measure = useCallback(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const w = el.getBoundingClientRect().width
+    if (w > 0) setWidth((prev) => (Math.abs(prev - w) > 0.5 ? w : prev))
+  }, [])
+
+  useLayoutEffect(measure)
+
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    let raf = 0
+    const schedule = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(measure)
+    }
+    const ro = new ResizeObserver(schedule)
+    ro.observe(el)
+    if (el.parentElement) ro.observe(el.parentElement)
+    window.addEventListener('resize', schedule)
+    document.addEventListener('visibilitychange', schedule)
+    // Web fonts land after first paint and reflow the shell around the board.
+    document.fonts?.ready.then(schedule).catch(() => {})
+    schedule()
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+      window.removeEventListener('resize', schedule)
+      document.removeEventListener('visibilitychange', schedule)
+    }
+  }, [measure])
+
+  const colW = cols > 0 && width > 0 ? (width + gutter) / cols : 0
+  const active = draft ?? layout
+  const byId = new Map(active.map((i) => [i.id, i]))
+  const maxRows = active.reduce((m, i) => Math.max(m, i.y + i.h), 0)
+  // Two spare rows of slack under the tallest card, in a unit half the size it
+  // used to be — hence 4, not 2. Same slack, finer grid.
+  const gridRows = Math.max(maxRows + 4, 12)
+  const containerH = gridRows * rowH + (gridRows - 1) * gutter
+
+  const pxBox = (it: BoardItem) => ({
+    left: it.x * colW,
+    top: it.y * (rowH + gutter),
+    width: Math.max(0, it.w * colW - gutter),
+    height: Math.max(0, it.h * (rowH + gutter) - gutter),
+  })
+
+  // ── The landing slot ───────────────────────────────────────────────────────
+  //
+  // The card under the pointer is PINNED: it sits exactly where the hand put it,
+  // which is the only way a drag feels like dragging. But the release runs one
+  // more compaction, and the card then floats up to the first free row — so the
+  // place it is being held is very often NOT the place it ends up.
+  //
+  // That gap is the whole complaint about grids that "fight you": you let go and
+  // the card jumps. The fix is not to stop the float (a board with holes in it is
+  // worse) but to SHOW the destination while the drag is still happening. This
+  // runs the exact release maths — the same double compaction as onUp — and
+  // draws the result as an outline underneath everything.
+  //
+  // So the guidance is honest by construction: the outline cannot disagree with
+  // where the card lands, because it is computed by the code that lands it.
+  //
+  // In FREE mode the card lands where the hand let go, so most of the time the
+  // preview equals the pinned box and no slot is drawn — correctly, since there
+  // is no jump to warn about. It DOES draw when the drop joins a row: the card
+  // is about to become a half or a third and to sit on that row's top edge, and
+  // that is exactly the change worth showing before it happens.
+  /**
+   * THE RELEASE MATHS, in one place. The landing slot is drawn by running this,
+   * and letting go runs the same call — so the outline cannot disagree with
+   * where the card lands, because it is computed by the code that lands it.
+   *
+   * Only a MOVE re-splits rows. A resize is the user stating a width, and a
+   * rule that immediately restated it would make the gesture pointless.
+   */
+  const release = useCallback(
+    (items: BoardItem[], g: NonNullable<Gesture>) => {
+      let out = items
+      if (g.kind === 'move') {
+        out = joinRow(out, g.id, cols, dropXRef.current ?? undefined)
+        const from = fromYRef.current
+        // The row it LEFT closes up behind it, the same way the row it joined
+        // opened up: two halves become one full-width card again.
+        if (from != null && (out.find((i) => i.id === g.id)?.y ?? -1) !== from) out = spreadRow(out, from, cols)
+        // ALONE ON A ROW IS FULL WIDTH. One card per row is the first of the
+        // three answers, so a card dropped where nothing else is takes the
+        // whole width rather than sitting as a lone third with dead board
+        // beside it. Only when its band touches nothing — a card dropped
+        // alongside a neighbour whose row top does not match exactly must not
+        // balloon over it.
+        const me = out.find((i) => i.id === g.id)
+        if (me && !out.some((p) => p.id !== g.id && me.y < p.y + p.h && p.y < me.y + me.h)) {
+          out = spreadRow(out, me.y, cols)
+        }
+      }
+      return free ? settleBoard(out, g.id, cols) : compactBoard(compactBoard(out, g.id))
+    },
+    [cols, free],
+  )
+  const releaseRef = useRef(release)
+  releaseRef.current = release
+
+  const preview =
+    gesture && rawRef.current ? (release(rawRef.current, gesture).find((i) => i.id === gesture.id) ?? null) : null
+  // Nothing to point at when the card is already sitting in its landing slot.
+  // Size counts as well as position now: a card about to become a half is not
+  // in its landing slot just because the slot starts at the same corner.
+  const pinned = gesture ? (byId.get(gesture.id) ?? null) : null
+  const showPreview =
+    preview != null &&
+    pinned != null &&
+    (preview.x !== pinned.x || preview.y !== pinned.y || preview.w !== pinned.w || preview.h !== pinned.h)
+
+  const onDownMove = useCallback(
+    (e: ReactPointerEvent, id: string) => {
+      if (locked) return
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-board-handle]')) return
+      if (target.closest('a,button,input,select,textarea')) return
+      const it = byId.get(id)
+      if (!it) return
+      e.preventDefault()
+      ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+      const snapshot = active.map((x) => ({ ...x }))
+      startRef.current = snapshot
+      dropXRef.current = it.x
+      fromYRef.current = it.y
+      rawRef.current = snapshot
+      setGesture({ kind: 'move', id, startX: e.clientX, startY: e.clientY, origX: it.x, origY: it.y })
+      setDraft(snapshot)
+    },
+    [active, byId, locked],
+  )
+
+  const onDownResize = useCallback(
+    (e: ReactPointerEvent, id: string) => {
+      if (locked) return
+      const it = byId.get(id)
+      if (!it) return
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+      const snapshot = active.map((x) => ({ ...x }))
+      startRef.current = snapshot
+      dropXRef.current = null
+      fromYRef.current = null
+      rawRef.current = snapshot
+      setGesture({ kind: 'resize', id, startX: e.clientX, startY: e.clientY, origW: it.w, origH: it.h })
+      setDraft(snapshot)
+    },
+    [active, byId, locked],
+  )
+
+  useEffect(() => {
+    if (!gesture) return
+    const cell = rowH + gutter
+    const onMove = (e: PointerEvent) => {
+      const g = gestureRef.current
+      const base = startRef.current
+      if (!g || !base || colW <= 0) return
+      const dxCols = Math.round((e.clientX - g.startX) / colW)
+      const dyRows = Math.round((e.clientY - g.startY) / cell)
+      const next = base.map((it) => {
+        if (it.id !== g.id) return { ...it }
+        if (g.kind === 'move') {
+          // Unclamped, and kept even though the card itself is clamped: a
+          // full-width card has nowhere to the right to go, so this is the only
+          // record of which HALF of the row the pointer is asking for.
+          dropXRef.current = g.origX + dxCols
+          // NO POSITION SNAPPING. A magnet that pulled a dragged card onto its
+          // neighbours' edges was tried and removed: at this grid resolution the
+          // card can already be put within ~2% of the board of wherever the
+          // pointer is, so the magnet was not closing a gap you could not close
+          // yourself — it was overriding a placement you had just made. Closing
+          // the leftover happens on RELEASE, where it cannot fight the hand
+          // (see fillGaps).
+          return {
+            ...it,
+            x: snapLaneX(clamp(g.origX + dxCols, 0, cols - it.w), it.w, cols),
+            y: Math.max(0, g.origY + dyRows),
+          }
+        }
+        // Snap onto a neighbour's exact size in the last grid unit of travel —
+        // see MATCH_SNAP. The raw drag value is computed first and clamped
+        // first, so a snap can never carry the card past a bound.
+        const peers = rowNeighbours(base, it)
+        // Width is a lane, so the drag picks the nearest lane rather than a
+        // column. The neighbour-size match below is then a no-op on width (the
+        // peers are on lanes too) and still does its work on height.
+        let w = snapLaneW(clamp(g.origW + dxCols, minW, cols), cols)
+        let h = snapToMatch(
+          Math.max(minH, g.origH + dyRows),
+          peers.map((p) => p.h),
+          minH,
+          Number.POSITIVE_INFINITY,
+        )
+        // The neighbour-SIZE match on HEIGHT is kept — it is what makes two
+        // cards the same size on purpose. Width no longer needs it: two cards
+        // in a row are the same width by construction now.
+        return { ...it, w, x: snapLaneX(it.x, w, cols), h }
+      })
+      rawRef.current = next
+      if (g.kind === 'move') {
+        // ── THE ROW MAKES ROOM WHILE YOU ARE STILL HOLDING THE CARD ──────────
+        //
+        // "When I place it to the right of 2 cards, those should move left and
+        // show the ability to put in the 3rd."
+        //
+        // Re-splitting only on release meant the drag showed the OPPOSITE of
+        // what was about to happen: the two cards already in the row have no
+        // space for a third, so the collision rules pushed one of them down and
+        // the row read as full. You had to let go on faith.
+        //
+        // So the release maths runs every frame and IS the draft. The two halves
+        // narrow to thirds and slide left as you come over the row, the empty
+        // third opens on the right, and letting go changes nothing that was not
+        // already on screen.
+        //
+        // The card in the hand is the one exception: it keeps the pointer's
+        // position, because a card that stops following the hand is not being
+        // dragged any more. It does take the width it is about to land at —
+        // that is the "ability to put in the 3rd" made visible, and the lifted
+        // card would otherwise cover the very gap it just opened.
+        const shown = releaseRef.current(next, g)
+        const land = shown.find((i) => i.id === g.id)
+        const hand = next.find((i) => i.id === g.id)
+        setDraft(
+          land && hand
+            ? shown.map((i) =>
+                i.id === g.id ? { ...land, x: clamp(dropXRef.current ?? hand.x, 0, cols - land.w), y: hand.y } : i,
+              )
+            : shown,
+        )
+      } else {
+        setDraft(free ? resolveBoard(next, g.id, cols) : compactBoard(next, g.id))
+      }
+    }
+    const onUp = () => {
+      const committed = draftRef.current
+      const g = gestureRef.current
+      setGesture(null)
+      setDraft(null)
+      startRef.current = null
+      if (!committed) {
+        dropXRef.current = null
+        fromYRef.current = null
+        rawRef.current = null
+        return
+      }
+      // Auto-arrange commits with a SECOND compaction: the first one holds the
+      // pinned card, the second lets it float like everything else.
+      //
+      // Free mode has no float to run — instead the commit is where the dead
+      // space gets closed. ON RELEASE ONLY, never during the drag: cards
+      // resizing themselves under a moving pointer is the board arguing with the
+      // hand, which is the thing all of this exists to stop. Let go and it
+      // tidies, in one animated step you can see happen.
+      const raw = rawRef.current
+      onLayoutChange(g && raw ? releaseRef.current(raw, g) : committed)
+      dropXRef.current = null
+      fromYRef.current = null
+      rawRef.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [gesture, colW, cols, rowH, gutter, minW, minH, free, onLayoutChange])
+
+  // ── Phone: one column, no grid ─────────────────────────────────────────────
+  //
+  // The grid above is 12 columns of absolutely-positioned pixels. On a 390px
+  // screen a 4-column card is 97px wide, and there is no arrangement of twelve
+  // of those that is worth looking at — the board does not need to be
+  // responsive so much as it needs to STOP on a phone.
+  //
+  // So: the same cards, in reading order, full width, stacked. Drag and resize
+  // are not wired up at all — they are a pointer gesture the phone would have
+  // to steal from the chart's own pan, and a saved arrangement made by a thumb
+  // is one the desktop then has to live with.
+  //
+  // Height comes from the card's own grid height so a tall card stays tall,
+  // floored at something a chart can actually be read in and capped at 78vh so
+  // one card never fills the screen with no hint that another follows. The cap
+  // is CSS `min()` rather than a measured innerHeight: the browser then
+  // re-evaluates it on rotation and on the URL bar collapsing, neither of which
+  // fires anything React would hear.
+  if (phone) {
+    const ordered = [...active].sort((a, b) => a.y - b.y || a.x - b.x)
+    return (
+      <div ref={wrapRef} className="flex w-full flex-col" style={{ gap: gutter }}>
+        {ordered.map((it) => (
+          <div
+            key={`${baseId}-${it.id}`}
+            // Same attribute the desktop tile carries: scripts/perf-check.mjs
+            // attributes a canvas to a card by walking up to it, and a phone
+            // layout that dropped it would make the card invisible to the perf
+            // budget rather than exempt from it.
+            data-card-id={it.id}
+            className="relative flex w-full flex-col overflow-hidden"
+            style={{ height: `min(${Math.max(280, it.h * (rowH + gutter) - gutter)}px, 78vh)` }}
+          >
+            {render(it.id)}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div ref={wrapRef} className="relative w-full" style={{ height: containerH }}>
+      {/* ── Column guides ───────────────────────────────────────────────────
+          Only in edit mode, and only while a card is actually moving. A grid
+          drawn the whole time is wallpaper; a grid that appears under the hand
+          is a ruler. It says what the card is snapping TO — the columns are
+          otherwise invisible, so a card that jumps a column reads as the board
+          being twitchy rather than as the card taking the next slot. */}
+      {/* FREE mode adds ROW guides to the column ones. Under gravity the row a
+          card is dropped on is a suggestion — it floats — so drawing rows would
+          be a lie. With gravity off the row is the thing being chosen, and it is
+          the only axis with no other visual cue at all. */}
+      {!locked && gesture && colW > 0 && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0"
+          style={{
+            zIndex: 0,
+            backgroundImage: [
+              // The lanes, not the 48 raw columns: a hairline every column was a
+              // ruler for a grid you could land anywhere on. What a card can
+              // actually land on now is a third or a half, so that is what the
+              // guides say.
+              `repeating-linear-gradient(to right, color-mix(in srgb, var(--color-accent) 14%, transparent) 0 1px, transparent 1px ${colW * (cols / 3)}px)`,
+              `repeating-linear-gradient(to right, color-mix(in srgb, var(--color-accent) 10%, transparent) 0 1px, transparent 1px ${colW * (cols / 2)}px)`,
+              ...(free
+                ? [
+                    `repeating-linear-gradient(to bottom, color-mix(in srgb, var(--color-accent) 9%, transparent) 0 1px, transparent 1px ${rowH + gutter}px)`,
+                  ]
+                : []),
+            ].join(', '),
+          }}
+        />
+      )}
+
+      {/* The landing slot. Drawn UNDER the tiles (z-0) so it reads as a hole in
+          the board the card is about to drop into, not as a second card. */}
+      {showPreview && preview && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute rounded-md"
+          style={{
+            ...pxBox(preview),
+            zIndex: 0,
+            border: '2px dashed color-mix(in srgb, var(--color-accent) 55%, transparent)',
+            background: 'color-mix(in srgb, var(--color-accent) 7%, transparent)',
+            transition: 'left 90ms ease, top 90ms ease, width 90ms ease, height 90ms ease',
+          }}
+        />
+      )}
+
+      {active.map((it) => {
+        const box = pxBox(it)
+        const isDragging = gesture?.id === it.id
+        return (
+          <div
+            key={`${baseId}-${it.id}`}
+            // The tile's identity, in the DOM. scripts/perf-check.mjs attributes
+            // every canvas it instruments to a card by walking up to this
+            // attribute — without it a paint is just "something on the page
+            // drew", and a per-card redraw budget is not possible at all.
+            data-card-id={it.id}
+            onPointerDown={(e) => onDownMove(e, it.id)}
+            className="absolute"
+            style={{
+              left: box.left,
+              top: box.top,
+              width: box.width,
+              height: box.height,
+              transition: isDragging ? 'none' : 'left 120ms ease, top 120ms ease, width 120ms ease, height 120ms ease',
+              zIndex: isDragging ? 50 : 1,
+              touchAction: locked ? undefined : 'none',
+              // The card in the hand is lifted off the board — it is the only
+              // one not in its final place, and it has to read that way for the
+              // outline underneath to mean anything. Slightly transparent so
+              // the slot stays visible when the two overlap.
+              ...(isDragging
+                ? {
+                    opacity: 0.92,
+                    filter: 'drop-shadow(0 8px 18px color-mix(in srgb, var(--color-app) 65%, transparent))',
+                  }
+                : null),
+            }}
+          >
+            {/*
+              Must be a flex column, not just a sized box: Card (and every
+              card body under it) fills its space via `flex-1`/`min-h-0`,
+              which only takes effect inside a flex parent. Without `flex
+              flex-col` here, Card has no layout instruction to obey and
+              shrinks to its header's content height instead of the pixel
+              height this tile was just given — the card LOOKS unsized even
+              though `box.height` above is correct.
+            */}
+            <div className="relative flex h-full w-full flex-col overflow-hidden">
+              {render(it.id)}
+              {!locked && (
+                <div
+                  onPointerDown={(e) => onDownResize(e, it.id)}
+                  title="Drag to resize"
+                  className="absolute bottom-0.5 right-0.5 h-4 w-4 cursor-nwse-resize rounded-br-md"
+                  style={{ background: 'linear-gradient(135deg, transparent 50%, var(--color-accent) 50%)', opacity: 0.6 }}
+                />
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}

@@ -1,0 +1,647 @@
+import type { CSSProperties, ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The small controls a card's toolbar and settings popover are built from.
+//
+// These four lived in board/gexCandles/controls.tsx, whose header said they
+// belonged here "the moment a second card wants one, and not before." The GEX
+// Chart is that second card: it needs a segmented basis switch, toggle chips, a
+// cog popover and section headings, and copying four twenty-line components
+// into a second file is how two cards start drifting apart visually.
+//
+// gexCandles/controls.tsx re-exports them, so nothing that imported them from
+// there had to change; what stays in that file is the pieces only the candles
+// card uses (Slider, Dropdown, SymbolPicker).
+//
+// Structural only — every colour comes from a token utility, nothing here
+// carries a literal.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Control sizing. `sm` is the board's own density — a 10px label in a button two
+ * pixels tall, which is right when a card is one of twelve on a 27" monitor and
+ * wrong the instant a thumb is the pointer.
+ *
+ * `touch` is the same control at a real hit target (34px, where both platforms'
+ * guidelines land). It is a SIZE, not a phone flag: a card asks for it because
+ * it knows it is being touched, and this file stays ignorant of viewports.
+ */
+export type ControlSize = 'sm' | 'touch'
+
+const SEG_SIZE: Record<ControlSize, string> = {
+  sm: 'px-1.5 py-0.5 text-2xs',
+  touch: 'min-h-[34px] flex-1 px-3 py-1.5 text-sm',
+}
+
+const CHIP_SIZE: Record<ControlSize, string> = {
+  sm: 'px-2 py-0.5 text-2xs',
+  touch: 'min-h-[34px] px-3 py-1.5 text-sm',
+}
+
+export function SegGroup<T extends string>({
+  options,
+  value,
+  onChange,
+  title,
+  size = 'sm',
+}: {
+  size?: ControlSize
+  options: Array<{
+    label: string
+    value: T
+    title?: string
+    /**
+     * Inert and dimmed — the option is REAL but the data behind it is not
+     * there right now (a basis the current rows cannot support, say).
+     *
+     * Deliberately not "hidden": a control whose buttons come and go is a
+     * control you cannot learn, and the option vanishing gives no reason. A
+     * greyed button with a `title` saying why is the honest version.
+     *
+     * A disabled option that is also the SELECTED one stays highlighted and
+     * stays readable. That combination is legal on purpose — a stored choice
+     * must not be silently rewritten just because this ticker cannot serve it,
+     * and the other options are still one click away, so nobody is stranded.
+     */
+    disabled?: boolean
+    /**
+     * Ink for this option WHEN SELECTED. Optional, and omitting it is the
+     * default everywhere — a group whose options are peers (RTH/ETH, 5m/15m)
+     * should not colour them differently, and every existing caller omits it.
+     *
+     * It exists for the one case where the options are not peers but opposites
+     * and v2 painted them so: the scanner's Positive / Negative direction
+     * filter, where the selected state carrying the up or down colour is the
+     * fastest read on the control. Pass a TOKEN, never a hex.
+     *
+     * Added 2026-09-03 for /v3/scanner. Additive by construction: with the prop
+     * omitted this renders byte-identically to before, so no other page moved.
+     */
+    activeColor?: string
+  }>
+  value: T
+  onChange: (v: T) => void
+  title?: string
+}) {
+  return (
+    <div
+      className={[
+        'flex items-center rounded-sm border border-line',
+        // At touch size the group spans its row so each option gets a third of
+        // the width instead of a 28px sliver.
+        size === 'touch' ? 'w-full' : 'shrink-0',
+      ].join(' ')}
+      title={title}
+    >
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          disabled={o.disabled}
+          // Guarded as well as `disabled`, because a disabled button still
+          // fires nothing but a future refactor to a div would.
+          onClick={() => {
+            if (!o.disabled) onChange(o.value)
+          }}
+          title={o.title}
+          // Only the SELECTED option wears its `activeColor`; an unselected one
+          // keeps the muted ink, so the group still reads as one control rather
+          // than a row of competing colours. Undefined leaves the class-driven
+          // colour alone entirely — see the prop's note above.
+          style={o.activeColor && o.value === value ? { color: o.activeColor } : undefined}
+          className={[
+            SEG_SIZE[size],
+            'font-semibold tracking-wide transition-colors first:rounded-l-sm last:rounded-r-sm',
+            o.value === value ? 'bg-raised text-fg' : 'text-muted',
+            // Four states, and the selected-but-disabled one is why this is a
+            // table rather than one ternary: it must still read as SELECTED
+            // (that is what the chart is showing) while reading as unavailable.
+            o.disabled
+              ? o.value === value
+                ? 'cursor-not-allowed opacity-50'
+                : 'cursor-not-allowed opacity-25'
+              : o.value === value
+                ? ''
+                : 'opacity-60 hover:opacity-100',
+          ].join(' ')}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SegMenu — a SegGroup that only shows the option you are on.
+//
+// The candles card's header carried four segmented groups spelled out in full:
+// SPX|ES, 1m|5m|15m|30m|1h, RTH|ETH. Eleven buttons, ten of which say what the
+// chart is NOT set to — and on a board with two candle cards side by side that
+// row is wider than the card, so it wraps or clips and the ⚙ falls off the end.
+//
+// This is the same control with the same options and the same handler, folded
+// down to its current value. Click it and the full group drops under the
+// button, so nothing is hidden — it is one click deeper, in exchange for a
+// header that is the width of the word "5m".
+//
+// A SegGroup, not a list, inside the panel: it is the identical control the
+// header used to show, so the muscle memory (and the disabled/activeColor
+// behaviour above) survives the fold.
+// ─────────────────────────────────────────────────────────────────────────────
+export function SegMenu<T extends string>({
+  options,
+  value,
+  onChange,
+  title,
+  size = 'sm',
+  align = 'right',
+  label,
+  defaultValue,
+}: {
+  size?: ControlSize
+  options: Array<{ label: string; value: T; title?: string; disabled?: boolean; activeColor?: string }>
+  value: T
+  onChange: (v: T) => void
+  title?: string
+  align?: 'left' | 'right'
+  /**
+   * A standing name for the group, shown dimmed before the value: `DTE ≤90 ▾`.
+   *
+   * Folding a group to its value solves width but costs identity — a lone `≤90`
+   * in a row of eight folded pills does not say what it caps, and `ALL` appears
+   * in three different groups meaning three different things. With the label the
+   * pill reads as a sentence and the row can be scanned instead of decoded.
+   */
+  label?: string
+  /**
+   * The value that means "not filtering". When given, a pill whose value is
+   * anything else wears the accent.
+   *
+   * This is the real reason to fold: unfolded, "what is narrowing this list"
+   * means reading every group; folded WITH this, it is a colour scan. Omit it
+   * for a group whose options are peers (RTH/ETH, 5m/15m) — none of those is a
+   * default and colouring one would be a lie.
+   */
+  defaultValue?: T
+}) {
+  const [open, setOpen] = useState(false)
+  const current = options.find((o) => o.value === value)
+  // `undefined` means the caller did not opt in — NOT that the default is
+  // undefined, which is why this is an explicit check and not a truthiness test
+  // (an empty string is a legitimate "no filter" value).
+  const off = defaultValue !== undefined && value !== defaultValue
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={title}
+        aria-expanded={open}
+        className={[
+          CHIP_SIZE[size],
+          'flex items-center gap-1 rounded-sm border font-semibold tracking-wide hover:bg-raised hover:text-fg',
+          // With both new props omitted this resolves to the same utilities the
+          // trigger has always carried, so every existing caller is unmoved.
+          off ? 'border-accent bg-raised text-fg' : 'border-line text-muted',
+        ].join(' ')}
+      >
+        {label ? <span className="text-3xs tracking-[0.1em] opacity-60">{label}</span> : null}
+        <span className={off ? 'text-accent' : undefined}>{current?.label ?? '—'}</span>
+        <span className="text-3xs opacity-50">▾</span>
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} align={align}>
+        {/* w-max: the group sizes to its options rather than to the trigger,
+            which is the width of ONE of them. */}
+        <div className="w-max">
+          <SegGroup
+            size={size}
+            options={options}
+            value={value}
+            onChange={(v) => {
+              onChange(v)
+              setOpen(false)
+            }}
+          />
+        </div>
+      </Popover>
+    </div>
+  )
+}
+
+export function Chip({
+  label,
+  on,
+  onClick,
+  title,
+  size = 'sm',
+  disabled = false,
+}: {
+  label: string
+  on: boolean
+  onClick: () => void
+  title?: string
+  size?: ControlSize
+  /**
+   * Inert and dimmed — the toggle is REAL but means nothing right now, because
+   * something it depends on is off (EM line under EM, say).
+   *
+   * Same rule SegGroup's per-option `disabled` follows, and for the same
+   * reason: a control whose buttons come and go is a control you cannot learn,
+   * and a chip that vanishes gives no reason for having vanished. A dimmed one
+   * with a `title` saying what to turn on first is the honest version.
+   *
+   * The stored value is NOT rewritten while it is dimmed. A chip that is on but
+   * disabled stays on, so switching its parent back restores what you had
+   * rather than a default.
+   *
+   * Added 2026-09-16. Additive: with the prop omitted this renders
+   * byte-identically to before, so no existing caller moved.
+   */
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        // Guarded as well as `disabled`, matching SegGroup: a disabled button
+        // still receives a programmatic click.
+        if (!disabled) onClick()
+      }}
+      disabled={disabled}
+      title={title}
+      className={[
+        CHIP_SIZE[size],
+        'rounded-sm border font-semibold tracking-wide transition-colors',
+        'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:opacity-40',
+        on ? 'border-accent bg-raised text-fg' : 'border-line text-muted opacity-60 hover:opacity-100',
+      ].join(' ')}
+    >
+      {label}
+    </button>
+  )
+}
+
+/** Kept clear of the viewport edge so a popover is never half off-screen. */
+const POP_EDGE = 8
+/** Gap between the trigger and the panel. */
+const POP_GAP = 4
+/**
+ * Above every board tile and above the Multi Greek cell card (200).
+ *
+ * Board.tsx gives each tile `zIndex: 1`, which makes the tile its own stacking
+ * context — a z-index set INSIDE a tile can never beat a later sibling tile,
+ * however large. That is why the panel is portalled to <body>: only at the root
+ * does this number mean anything.
+ */
+const POP_Z = 250
+
+interface PopPos {
+  left: number
+  top: number
+  maxH: number
+}
+
+/**
+ * Marks a node that is VISUALLY inside an open Popover but DOM-wise is not —
+ * a menu of its own that portals to <body>, such as the options chain's %
+ * strikes dropdown.
+ *
+ * Without this the popover's click-outside closed on the pointerdown that was
+ * meant to pick a row: the row lives in a different portal, so `contains()` said
+ * "outside", the panel unmounted, and the `click` that would have fired on
+ * mouseup never landed on anything. From the outside that reads as "I clicked
+ * the option and nothing happened", intermittently — it depended on whether the
+ * unmount beat the mouseup.
+ *
+ * Any portalled menu that can be opened from inside a Popover must carry this
+ * attribute on its outermost node.
+ */
+export const POPOVER_SAFE_ATTR = 'data-popover-safe'
+
+/**
+ * A click-outside-to-close popover anchored under its trigger.
+ *
+ * Portalled to <body> and positioned in viewport coordinates. It used to be an
+ * `absolute` child of the trigger's wrapper, which meant a wide panel on a
+ * narrow card was clipped twice over: by the Card's `overflow-hidden`, and by
+ * the board tile's stacking context. On a three-column Multi Greek the cog
+ * panel lost its whole left edge — the section labels and the first half of
+ * every control.
+ *
+ * Positioning rules: aligned to the trigger's wrapper (`align` picks which
+ * edge), clamped to the viewport horizontally, and flipped above the trigger
+ * when there is more room up than down. Whatever height is left is handed to
+ * the panel as a max-height with its own scroll, so a tall panel on a short
+ * window is scrollable rather than cut off.
+ */
+export function Popover({
+  open,
+  onClose,
+  children,
+  align = 'right',
+  sheet = false,
+  z = POP_Z,
+}: {
+  open: boolean
+  onClose: () => void
+  children: ReactNode
+  align?: 'left' | 'right'
+  /**
+   * Stacking override for a host that outranks POP_Z.
+   *
+   * POP_Z (250) clears every board tile, which is what almost every caller
+   * needs. It does NOT clear a portalled MODAL — the ladder modal sits at 9999
+   * — so a menu opened from inside one would render behind its own scrim.
+   * Those callers pass the host's z, plus one.
+   */
+  z?: number
+  /**
+   * Bottom sheet instead of an anchored panel.
+   *
+   * A panel anchored under its trigger is the wrong shape on a phone twice
+   * over: it opens at the TOP of the screen (the toolbar is up there) which is
+   * the far end from the thumb, and a 256px panel on a 390px viewport is not a
+   * panel, it is the screen with a margin. A sheet pinned to the bottom edge is
+   * where the hand already is, and it needs no measuring — which is also why
+   * `place()` is skipped entirely in this mode.
+   */
+  sheet?: boolean
+}) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const anchorRef = useRef<HTMLSpanElement | null>(null)
+  const [pos, setPos] = useState<PopPos | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node | null
+      if (!ref.current || ref.current.contains(t)) return
+      // A menu this panel opened, portalled somewhere else in the DOM. It is
+      // "inside" as far as the user is concerned. See POPOVER_SAFE_ATTR.
+      if (t instanceof Element && t.closest(`[${POPOVER_SAFE_ATTR}]`)) return
+      onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('pointerdown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open, onClose])
+
+  const place = useCallback(() => {
+    const el = ref.current
+    const anchor = anchorRef.current
+    if (!el || !anchor) return
+    // The trigger's wrapper — the `relative` div every call site puts the
+    // button and this popover in. Its box is the thing to align to; the
+    // zero-size anchor span alone would only give the wrapper's BOTTOM edge,
+    // which is not enough to flip the panel above the trigger.
+    const host = (anchor.offsetParent as HTMLElement | null) ?? anchor
+    const a = host.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+
+    let left = align === 'right' ? a.right - w : a.left
+    left = Math.min(Math.max(POP_EDGE, left), Math.max(POP_EDGE, vw - w - POP_EDGE))
+
+    const below = vh - (a.bottom + POP_GAP) - POP_EDGE
+    const above = a.top - POP_GAP - POP_EDGE
+    // Only flip when it does not fit below AND there is genuinely more room up.
+    const flip = h > below && above > below
+    const maxH = Math.max(120, flip ? above : below)
+    const top = flip ? Math.max(POP_EDGE, a.top - POP_GAP - Math.min(h, maxH)) : a.bottom + POP_GAP
+
+    setPos((prev) =>
+      prev && prev.left === left && prev.top === top && prev.maxH === maxH ? prev : { left, top, maxH },
+    )
+  }, [align])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null)
+      return
+    }
+    if (sheet) return // fixed to the bottom edge — nothing to measure
+    place()
+    window.addEventListener('resize', place)
+    // Capture phase: the board and the ladders scroll in their own containers,
+    // and those scrolls do not bubble to window.
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open, place, sheet])
+
+  if (!open || typeof document === 'undefined') return null
+
+  return (
+    <>
+      {/*
+        Stays in the DOM where the popover used to be, so `offsetParent` still
+        resolves to the trigger's wrapper after the panel itself has left for
+        <body>. Zero-size and inert — it draws nothing and catches nothing.
+      */}
+      <span ref={anchorRef} aria-hidden className="pointer-events-none absolute left-0 top-0 block h-0 w-0" />
+      {createPortal(
+        <div
+          ref={ref}
+          style={
+            sheet
+              ? {
+                  position: 'fixed',
+                  left: POP_EDGE,
+                  right: POP_EDGE,
+                  // Clear of the home indicator / gesture bar, which sits over
+                  // the bottom ~20px and swallows a tap meant for the last row.
+                  bottom: `calc(${POP_EDGE}px + env(safe-area-inset-bottom, 0px))`,
+                  zIndex: z,
+                  maxHeight: '68vh',
+                }
+              : {
+                  position: 'fixed',
+                  left: pos?.left ?? 0,
+                  top: pos?.top ?? 0,
+                  zIndex: z,
+                  maxHeight: pos?.maxH,
+                  // Hidden for the one frame between mounting (needed to measure
+                  // the panel) and having somewhere to put it.
+                  visibility: pos ? 'visible' : 'hidden',
+                }
+          }
+          className={[
+            'overflow-y-auto rounded-md border border-line bg-surface shadow-lg',
+            sheet ? 'p-3' : 'p-2',
+          ].join(' ')}
+        >
+          {children}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Select — the themed replacement for a native <select>.
+//
+// Same reason DatePicker exists next door: the CLOSED control can be styled all
+// day, but the open menu is drawn by the operating system and is not ours. On
+// Windows Chrome that is a light-grey list with a blue highlight, on macOS a
+// translucent sheet, on iOS a wheel — three different widgets, none of them the
+// app. `color-scheme: dark` in tokens.css darkens the popup and stops there; the
+// SHAPE is still the platform's.
+//
+// So this is the whole control: a trigger that shows the current option, and a
+// list drawn from the same tokens as everything else, portalled through Popover
+// (which handles clipping, stacking and the flip-when-there-is-no-room-below).
+//
+// `value` / `onChange` take and give the option's string value, so it is a
+// drop-in swap for a native select's `e.target.value` handler.
+//
+// It carries POPOVER_SAFE_ATTR unconditionally: a Select opened from INSIDE
+// another Popover (the BOT composer, a card's cog panel) lives in a different
+// portal, so without the marker the parent's click-outside would fire on the
+// pointerdown meant to pick a row and the panel would unmount before the click
+// landed. See that constant's note.
+//
+// `triggerClassName` / `triggerStyle` exist for the replay transports, whose
+// surrounding chrome is inline-styled from the theme object rather than the
+// token utilities. They override the DEFAULT trigger paint only — pass tokens,
+// never literals (cbedge-v3/AGENTS.md non-negotiable #1).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SELECT_TRIGGER_SIZE: Record<ControlSize, string> = {
+  sm: 'px-1.5 py-0.5 text-2xs',
+  touch: 'min-h-[34px] px-3 py-1.5 text-sm',
+}
+
+export interface SelectOption<T extends string> {
+  value: T
+  label: string
+  /** Secondary text on the right of the row — a date behind a label, a count. */
+  sub?: string
+  title?: string
+  disabled?: boolean
+}
+
+export function Select<T extends string>({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  title,
+  disabled = false,
+  empty = '—',
+  align = 'left',
+  size = 'sm',
+  menuWidth = 'w-40',
+  className = '',
+  triggerClassName,
+  triggerStyle,
+  menuZ,
+}: {
+  value: T
+  options: Array<SelectOption<T>>
+  onChange: (v: T) => void
+  ariaLabel?: string
+  title?: string
+  disabled?: boolean
+  /** Shown when nothing matches `value` — an empty option list, or a cleared value. */
+  empty?: string
+  align?: 'left' | 'right'
+  size?: ControlSize
+  /** Tailwind width for the menu. The trigger is the width of its own label. */
+  menuWidth?: string
+  className?: string
+  triggerClassName?: string
+  triggerStyle?: CSSProperties
+  /** Only when the host outranks POP_Z — a portalled modal. See Popover's `z`. */
+  menuZ?: number
+}) {
+  const [open, setOpen] = useState(false)
+  const current = options.find((o) => o.value === value)
+  const dead = disabled || options.length === 0
+
+  return (
+    <div className={['relative shrink-0', className].join(' ')}>
+      <button
+        type="button"
+        onClick={() => {
+          if (!dead) setOpen((v) => !v)
+        }}
+        disabled={dead}
+        title={title}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={triggerStyle}
+        className={
+          triggerClassName ??
+          [
+            SELECT_TRIGGER_SIZE[size],
+            'flex items-center gap-1 rounded-sm border font-semibold tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+            open ? 'border-accent bg-raised text-fg' : 'border-line text-muted hover:bg-raised hover:text-fg',
+          ].join(' ')
+        }
+      >
+        <span className="truncate">{current?.label ?? empty}</span>
+        <span className="text-3xs opacity-50">▾</span>
+      </button>
+
+      <Popover open={open} onClose={() => setOpen(false)} align={align} z={menuZ}>
+        <div
+          {...{ [POPOVER_SAFE_ATTR]: '' }}
+          role="listbox"
+          className={['flex max-h-64 flex-col overflow-y-auto', menuWidth].join(' ')}
+        >
+          {options.length === 0 && <div className="px-1.5 py-2 text-xs text-faint opacity-60">{empty}</div>}
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="option"
+              aria-selected={o.value === value}
+              disabled={o.disabled}
+              title={o.title}
+              onClick={() => {
+                if (o.disabled) return
+                onChange(o.value)
+                setOpen(false)
+              }}
+              className={[
+                'flex items-baseline justify-between gap-2 rounded-sm px-1.5 py-1 text-left transition-colors',
+                o.disabled
+                  ? 'cursor-not-allowed text-muted opacity-30'
+                  : o.value === value
+                    ? 'bg-raised font-bold text-accent'
+                    : 'text-muted hover:bg-raised hover:text-fg',
+              ].join(' ')}
+            >
+              <span className="tabular truncate text-xs font-semibold">{o.label}</span>
+              {o.sub && <span className="tabular shrink-0 font-mono text-3xs opacity-60">{o.sub}</span>}
+            </button>
+          ))}
+        </div>
+      </Popover>
+    </div>
+  )
+}
+
+export function PanelSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-line pt-2 first:border-t-0 first:pt-0">
+      <span className="text-3xs font-bold uppercase tracking-[0.12em] text-faint opacity-60">{title}</span>
+      {children}
+    </div>
+  )
+}

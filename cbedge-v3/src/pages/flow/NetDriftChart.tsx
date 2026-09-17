@@ -55,9 +55,24 @@ export interface NetDriftChartProps {
    * meaningless. Shape is the point; the level is read off the crosshair.
    */
   spotPts?: readonly NetPoint[]
+  /**
+   * The frame's visibility, forwarded to whoever owns the props.
+   *
+   * This chart already gates its own PAINT (see the pushes below). What it
+   * cannot gate is the work its parent does to BUILD `series`, `ordersByMin`
+   * and `spotPts` in the first place — on the board card that is a full
+   * mergeTape over the session's tape on every socket frame, running for a card
+   * scrolled out of view. So the edge is published rather than kept private,
+   * and a parent that wants it can stop feeding this chart at the source.
+   *
+   * Fired on the initial state too, which `ChartFrame.onVisibility` deliberately
+   * is not — a parent gating on it needs to know where it starts, not only when
+   * it changes.
+   */
+  onVisibility?: (visible: boolean) => void
 }
 
-export function NetDriftChart({ series, ordersByMin, spotPts }: NetDriftChartProps) {
+export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility }: NetDriftChartProps) {
   const chartRef = useRef<IChartApi | null>(null)
   const callRef = useRef<ISeriesApi<'Line'> | null>(null)
   const putRef = useRef<ISeriesApi<'Line'> | null>(null)
@@ -78,6 +93,10 @@ export function NetDriftChart({ series, ordersByMin, spotPts }: NetDriftChartPro
   const spotByMinRef = useRef<Map<number, number>>(new Map())
 
   const visibleRef = useRef(true)
+  // A ref, not the prop directly: onMount is created per render but must not be
+  // re-run, and the crosshair/mount closures below capture once.
+  const onVisibilityRef = useRef(onVisibility)
+  onVisibilityRef.current = onVisibility
   /** Set while hidden; applied on the way back in. */
   const pendingRef = useRef<NetSeries | null>(null)
   const pendingSpotRef = useRef<readonly NetPoint[] | null>(null)
@@ -159,6 +178,9 @@ export function NetDriftChart({ series, ordersByMin, spotPts }: NetDriftChartPro
   const onMount = (handle: ChartHandle) => {
     hostRef.current = handle.el
     visibleRef.current = handle.visible()
+    // The initial state. ChartFrame does not fire onVisibility for it, and a
+    // parent that gates its compute on this needs the starting value.
+    onVisibilityRef.current?.(visibleRef.current)
     let disposed = false
     let chart: IChartApi | null = null
 
@@ -349,6 +371,7 @@ export function NetDriftChart({ series, ordersByMin, spotPts }: NetDriftChartPro
         onMount={onMount}
         onVisibility={(v) => {
           visibleRef.current = v
+          onVisibilityRef.current?.(v)
           if (v && pendingRef.current) {
             apply(pendingRef.current)
             pendingRef.current = null

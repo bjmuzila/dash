@@ -1,0 +1,305 @@
+# AGENTS.md — cbedge-v3
+
+Read this before editing anything. It is short on purpose; if it grows past two
+screens something has gone wrong with the architecture, not the doc.
+
+## What this is
+
+Version 3 of the CB Edge dashboard. A **frontend only**, and a clean-slate one:
+it shares no code with v2 — no imports, no copied components, no `@/app/...`
+aliases into the Next tree, its own `package.json` and `node_modules`.
+
+It lives **inside** the `spx-gex-dashboard-tt-fixed` repo, as a sibling to
+`app-vite/`, `owner-vite/`, `budget-vite/` and `recipe-vite/`. That is not a
+compromise of the clean-slate goal — it is how code reaches the VPS. The deploy
+pipeline pulls exactly one repo; a separate one would need its own clone, its own
+compose service and its own tunnel rule to buy nothing. The isolation that
+matters is the dependency graph, and that is intact.
+
+**The backend is unchanged.** `server-v2/` in the v2 repo stays exactly where it
+is and keeps doing everything it does: the recorders, the levels engine,
+walls-reach, the TastyTrade and ThetaData proxies, the WebSocket. That code is
+correct and expensive to reproduce. v3 talks to it over HTTP and one WebSocket
+and nothing else.
+
+v3 is served at **`/v3/*`**. v2 keeps `/app/*`. Both run at the same time until
+v3 is complete. There is no cutover day.
+
+## Non-negotiables
+
+These are the rules the repo exists to enforce. Each one is enforced by a script,
+not by memory.
+
+1. **Everything follows tokens.css.** No colour literals outside
+   `src/design/tokens.css` — no hex, no `rgb()`, no `hsl()`. A colour needed as
+   a JS string comes from `src/design/theme.ts` (`T.*`, `alpha()`, `mix()`),
+   which is `var(--color-…)` underneath so it keeps tracking the token.
+
+   Also banned: **Tailwind's default palette** (`text-gray-400`, `bg-zinc-900`,
+   `border-red-500`, …). Tailwind v4 still ships it and it is not a literal, so
+   it slips past a hex scan — and it is exactly what made v2's text come out
+   grey. The app's own utilities have no shade number: `text-fg` / `text-muted`
+   / `text-faint` (all white today), the surface ladder `bg-bg` → `bg-surface` →
+   `bg-surface2` → `bg-raised`, and `border-line`. Anything with a border and a
+   background is a `Card`; the page frame is `Page`. Never invent a plate colour.
+
+   **Type sizes come from the scale, too** — `text-3xs` 9, `text-2xs` 10,
+   `text-xs` 11, `text-sm` 13, `text-base` 15, `text-lg` 18, `text-xl` 24,
+   `text-2xl` 32. No `text-[10px]`, no `font-size:11.5px`, no `fontSize: 12`.
+   Canvas and SVG cannot use a class, so they read the number off the same
+   scale rather than typing one. Text that names no size gets 13px from `body`
+   in tokens.css — it does NOT fall through to the browser's 16px, which is
+   what used to put a 16px label next to an 11px one in the same row.
+
+   And `var(--typo)` is caught too — an unknown custom property renders as
+   nothing at all, silently, which is the most expensive five minutes in a
+   stylesheet.
+
+   `npm run check:theme` enforces all three and `npm run build` runs it. It
+   carries a `theme-baseline.json` in the `budgets.json` style: violations that
+   already existed are grandfathered per file, the build fails when a file goes
+   ABOVE its number, and a file that reaches zero is dropped and can never
+   regress. Clean a file up, then `npm run theme:update`. **Never raise a number
+   to make a build pass.**
+
+2. **Pages never touch the socket.** They call `useFrame` / `useField` /
+   `watchFrame` from `src/data/hooks.ts`. There is no topic list to maintain —
+   scoping is derived from what is actually subscribed. `npm run check:ws`
+   proves it.
+
+3. **No request waterfalls.** A route fires everything it needs in parallel at
+   entry. If a component fetches something that a parent's fetch had to resolve
+   first, hoist it. Use `preload()` on nav intent.
+
+4. **Charts are imperative.** Mount through `ChartFrame`, update through
+   `watchFrame` + the chart library's own API. Never push a tick through React
+   state on its way to a chart.
+
+5. **A card nobody can see does not paint.** `ChartFrame` reports its own
+   visibility three ways — `handle.visible()` for a per-frame loop,
+   `onVisibility` for an on-demand renderer, `data-visible` on the element. Use
+   one. The board is N cards on ONE main thread sharing ONE animation frame, and
+   the cards below the fold are most of that budget if nothing stops them —
+   nothing in the browser stops them for you. `npm run perf` catches a renderer
+   that ignores all three.
+
+6. **Every canvas v3 owns carries `data-cb-layer`.** One line where it is
+   created. It is how the perf check tells our layers from the ones a chart
+   library made for itself, and it is what makes a per-card redraw number
+   possible at all.
+
+7. **Budgets are hard limits, and they ratchet.** `npm run build` fails if a
+   chunk is over. Raise a number in `budgets.json` deliberately, in a diff
+   someone can see — never work around it. When a chunk gets SMALLER, pull the
+   number back down with `npm run budgets:ratchet`: a budget carrying 40%
+   headroom has stopped enforcing anything, and the check now says so on every
+   run.
+
+8. **Source maps do not ship.** `dist/` is copied to `public/v3` and served, so
+   a shipped map publishes v3's entire source to anyone who opens devtools on a
+   customer page. Off by default; build with `CB_SOURCEMAPS=1` when you need
+   them locally.
+
+9. **No silent catch-all route.** An unregistered route renders NotFound. v2 fell
+   through to `/traders-dashboard`, which made missing pages look like they
+   half-worked.
+
+## Where things live
+
+| Concern | File |
+|---|---|
+| Wire contract (WS frames) | `src/contract/frames.ts` |
+| Socket, topic derivation, reconnect | `src/data/socket.ts` |
+| Store, rAF coalescing, selectors | `src/data/store.ts`, `src/data/hooks.ts` |
+| REST dedupe / cache / preload | `src/data/api.ts` |
+| Last-known-state cache | `src/data/cache.ts` |
+| Design tokens (the only colours) | `src/design/tokens.css` |
+| Primitives | `src/design/primitives/*` |
+| App frame + nav | `src/shell/Shell.tsx` |
+| Routes | `src/App.tsx` |
+| Early boot (socket opens here) | `index.html` |
+
+## Living inside the v2 repo: two traps
+
+Both cost real time on 2026-08-19. Both are already handled — this is here so
+nobody "tidies up" the handling.
+
+1. **`css.postcss` in `vite.config.ts` must stay pinned.** The repo root has a
+   `postcss.config.js` loading Tailwind **v3**. Vite searches UPWARD for a
+   PostCSS config, finds it, and runs v3 over this app's v4 stylesheet — dying
+   with "`@layer base` is used but no matching `@tailwind base` directive". It
+   only reproduces when a parent config exists, so it passes on a standalone
+   checkout and fails only inside the Docker image.
+
+2. **No `package-lock.json`.** Regenerating it on Windows records the win32
+   builds of the native binaries rollup and `@tailwindcss/oxide` ship as
+   optional platform packages; npm then skips the linux-x64 ones on a cold
+   install and `vite build` dies with "Cannot find module
+   @rollup/rollup-linux-x64-gnu". It is gitignored, and the Dockerfile deletes
+   it defensively. `app-vite` avoids this the same way.
+
+The shape of both: **a standalone checkout is not the environment this builds
+in.** Before trusting a green local build, consider what the parent directory
+adds.
+
+## The early boot
+
+`index.html` opens the WebSocket and starts the IndexedDB read **before the
+bundle is fetched**, and buffers frames until `startSocket()` in
+`src/data/socket.ts` takes over. This is worth 300–800ms on a cold load and it is
+the reason `startSocket()` is called at module scope in `main.tsx` rather than in
+an effect.
+
+Two consequences worth knowing:
+
+- The boot connection is deliberately **unscoped**. Scoping is applied ~1.2s
+  later, once the first route has settled. Reconnecting at boot just to add a
+  `?topics=` param would give back the head start to save a few hundred bytes.
+- `--cb-bg` / `--cb-fg` are duplicated in `index.html` so the first paint is the
+  right colour. `check-budgets.mjs` fails the build if they drift from
+  `tokens.css`.
+
+## Adding a page — FOUR steps, not three
+
+1. `src/pages/<Name>.tsx`, default export, composed from primitives.
+2. A `lazy()` route in `src/App.tsx`.
+3. A `NAV` entry in `src/shell/Shell.tsx` (with `prefetch` URLs if it loads data).
+4. **`app/v3/<name>/route.ts` in the v2 repo**, three lines calling
+   `serveSpaShell("v3")`.
+
+Miss step 4 and the page works when you click to it in-app but 404s on a hard
+refresh or a shared link — exactly the failure `components/mobile/mobileNav.ts`
+warns about for the phone build. Deliberately not solved with a catch-all route:
+a catch-all would swallow `/v3/assets/*.js` and hand back HTML.
+
+## The phone build — `/v3/m/*`
+
+Six screens. **Five of them are not a phone-only implementation of anything** —
+each is a HOME-BOARD CARD or a v3 page rendered full-bleed inside
+`src/mobile/MobileShell.tsx`. The sixth, `/m/alerts`, is the single exception,
+and the reason is below the table:
+
+| Tab | What it actually is |
+|---|---|
+| `/m/gex` | `board/gexChart/GexChartCard` |
+| `/m/heat` | `board/multiGreek/MultiGreekCard` with `singleColumn` |
+| `/m/spx` | `board/gexCandles/GexCandlesCard` (carries the SPX/ES tape switch) |
+| `/m/chain` | `pages/OptionsChain` |
+| `/m/em` | `pages/Em` |
+| `/m/econ` | `board/econCalendar/EconCalendarCard` |
+| `/m/alerts` | *(no card — see below)* `src/mobile/pages/MAlerts.tsx` |
+
+**`/m/alerts` is the one exception, and it is not a loophole.** The signal feed
+has no board card: on the desktop it is TOOLBAR CHROME — the pill in
+`src/shell/Shell.tsx` opening the `absolute` dropdown in
+`src/shell/AlertsPanel.tsx` — and `Shell.tsx` drops the toolbar entirely on
+`/m/*`, so on a phone the feed is not cramped, it is unreachable. A tab is the
+only door. What the screen does NOT re-implement is everything that could
+drift: the poll (`useAlertsFeed` from `src/shell/AlertsFeed.tsx`), the
+catalogue (`ALERT_TYPES` / `TYPE_BY_ID`) and the filter + master state
+(`readShown`/`writeShown`, `fetchMasterEnabled`) are all imported, so a
+detector added to `alertTypes.ts` shows up on the phone the same build. Only
+the layout is phone-side. If you find yourself adding a second exception,
+check first whether the surface could be a card instead.
+
+That is the whole design. v2 shipped six bespoke phone pages under
+`components/mobile/` and they drifted from the desktop within a week, because
+two renderers for the same number is two places to fix it. Here a fix to a card
+is a fix to the phone. **Never add a mobile-only fetch, or a second component,
+for something a card already computes** — make the card handle the width
+instead, as `GexCandlesCard` does with `useIsPhone()`.
+
+- **Registry: `src/mobile/mobileNav.ts`** — the tab list, the desktop→mobile
+  redirect map, the "Desktop site" map. Adding a tab is TWO edits: that array
+  and a `<Route>` in `src/App.tsx`. Step 4 of "Adding a page" is already done
+  generically — `app/v3/m/[tab]/route.ts` in the v2 repo is ONE dynamic segment,
+  which is bounded and so cannot swallow `/v3/assets/*`.
+- **Shell:** `MobileShell` draws ONE header and the bottom tab bar. On a
+  card screen the header IS the `Card` header, so the card's own `<CardToolbar>`
+  lands in it and the phone never shows two stacked bars. `chrome="bare"` is for
+  a page that already has a toolbar. `fill` = no scroll (charts own their
+  gestures); the default scrolls.
+- **`src/shell/Shell.tsx` branches on the route**, dropping the rail and toolbar
+  on `/m/*` and keeping all three providers. One socket, one store, one auth
+  read across a long-press to the desktop and back.
+- **Redirect:** `MobileRedirect`, mounted once in `App.tsx`. Only routes in
+  `DESKTOP_TO_MOBILE` redirect; desktop browsers are never pushed off `/m/*`, so
+  the phone build can be opened on a laptop by typing the URL. Long-press any
+  tab for the session opt-out.
+- **`/v3` is no longer owner-gated.** `middleware.ts` lost its
+  `/^\/v3(\/.*)?$/` line on 2026-09-03; v3 is a normal paid route now. The note
+  under "Deploy" below is history.
+
+## Adding a frame type
+
+1. Describe it in `src/contract/frames.ts` — transcribed from what
+   `server-v2/websocket-server.js` actually emits, not inferred from a log.
+2. Read it with `useField`. That is the whole process; nothing else needs to
+   know, including the socket.
+
+## Adding a card to the board
+
+`src/board/catalog.tsx` — one entry in `CARD_CATALOG`, and the "+ Add card"
+dropdown, `BoardPage` and `Board` all pick it up. Big cards go behind `lazy()`;
+a card that is a few lines stays static, because a chunk boundary costs more
+than it saves.
+
+Then, before you push:
+
+- Anything that paints must go through `ChartFrame` and honour ONE of its
+  visibility signals (non-negotiable 5), and tag its canvas `data-cb-layer`
+  (non-negotiable 6).
+- Run **`npm run perf`**. It adds every card in the catalog to a board and
+  measures your new one automatically — there is no list to update. It is the
+  only thing standing between the fifteenth card and a board that runs at 15fps
+  for a reason nobody can point at.
+
+## Commands
+
+```
+npm run dev             # dev server on :5273, proxying to VITE_BACKEND_ORIGIN
+npm run build           # typecheck + theme + build + budget check (fails on either)
+npm run mock            # serve dist/ with synthetic data, no backend needed
+npm run check           # typecheck + theme + build + budgets + ws scope + perf
+npm run check:theme     # no colour literals, no Tailwind palette, no unknown var
+npm run theme:update    # re-record theme-baseline.json after cleaning a file up
+npm run check:ws        # proves topic derivation is correct
+npm run perf            # per-card redraw guard: idle quiet, offscreen silent,
+                        # interaction still paints
+npm run budgets:ratchet # pull budgets.json down to what dist/ actually weighs
+```
+
+`npm run build` and `npm run check` run `check:theme`. The DEPLOY runs it too —
+the Dockerfile's cbedge-v3 step calls `npm run check:theme` before
+`build:fast` — because that is the one gate that catches a push made without
+building first. A failure there costs the deploy `/v3`, not the site.
+
+To catch it one step earlier, install the repo's pre-commit hook once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+It runs the theme check only when a commit touches `cbedge-v3/`.
+`git commit --no-verify` skips it.
+
+`check:ws` and `perf` are the two that catch silent failures — a wrong topic
+scope and a runaway repaint both look completely fine on screen for a while.
+
+## Deploy
+
+Wired up, same shape as `app-vite`:
+
+- `Dockerfile` builds this app every deploy → `public/v3`. Do not remove that
+  step or new pages stop appearing — the exact failure v2's Dockerfile comment
+  warns about for `public/app`.
+- It runs `npm run build:fast`, **not** `npm run build`. Budgets are meant to
+  fail a commit, not a deploy; an over-budget v3 bundle must never be able to
+  block a v2 hotfix from reaching the VPS. Run `npm run check` on the laptop
+  before pushing.
+- Source maps are NOT emitted (see non-negotiable 8). The deploy would serve
+  them publicly out of `public/v3`.
+- `middleware.ts` USED to gate `/v3*` to owner-only, the same treatment `/home3`
+  gets. That pattern came out on 2026-09-03 with the phone build; `/v3*` is now
+  a normal paid route.
+- Live at `cbedge.net/v3/` after `push.ps1` → GitHub → VPS pull + rebuild.

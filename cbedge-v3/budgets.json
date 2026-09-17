@@ -1,10 +1,11 @@
 {
   "$comment": "Hard limits, in BROTLI-compressed bytes, enforced by scripts/check-budgets.mjs on every build. These are set close to current reality on purpose — a budget with 4x headroom enforces nothing. Raising a number is a deliberate decision that shows up in a diff, which is the whole point: 'no exceptions' only survives if a machine enforces it. LOWERING one matters just as much and is far easier to forget, which is what `ratchet` is for: `npm run budgets:ratchet` pulls every number back down to what the bundle actually weighs today. `data` covers any `data-*` manualChunk — a STATIC TABLE rather than a page (today: data-seasonality, the almanac's encoded year curves and event date tables). It is separate from `route` on purpose: folding a 300KB table into the page budget would mean raising `route` to ~130kb, and a route budget with that much headroom stops enforcing anything for the twelve pages that carry no table at all. Its 78000 is a FIRST number, taken from the brotli weight of the SOURCES before the chunk had ever been built — ratchet it after the first real build.",
-  "entry": 38900,
+  "$raised": "2026-09-17 — entry 38900 -> 44000, css 8500 -> 9000. NOT a workaround; the shell genuinely grew. What landed since these numbers were last set: the alerts feed (shell/AlertsFeed.tsx + alertTypes.ts, both eager because AlertsPill is always on the toolbar and its headline comes from toItem()), and CopyShot. Before raising, every panel in the entry was checked for a missed split and all of them were already lazy: AlertsPanel, BzilaPanel, BotAlertPanel, NotesDock, NoteClipMenu, and snapshot.ts behind a dynamic import inside useShot. THE ONE SPLIT STILL ON THE TABLE is CopyShotMenu — a click-to-open surface sitting in the same module as CopyShotProvider, so Rollup cannot split it where it is. Moving it to its own file (and with it the menu-only helpers: useShot, claimClipboard, slug, GLYPH, TONE, loadOrder/saveOrder, rankOf) should give a few kb back; ratchet these numbers down when it lands. Headroom here is ~2% on purpose - enough that a comment does not fail a build, tight enough to still enforce. NOTE the deploy never sees this check: the root Dockerfile runs `build:fast` (plain vite build), deliberately, so an over-budget v3 cannot cost the site a hotfix. That makes this a COMMIT-time gate only, and it had not been run since the shell work landed - which is why v9.16.19 shipped green while local was 4.1kb over.",
+  "entry": 44000,
   "react": 55000,
   "route": 59100,
   "data": 78000,
-  "css": 8500,
+  "css": 9000,
   "html": 2600,
   "totalInitial": 108400,
   "ratchet": {

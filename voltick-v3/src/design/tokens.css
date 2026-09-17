@@ -1,0 +1,716 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   TOKENS — voltick-v3. The single source of truth for every colour, space and
+   type step, repainted from CB Edge v3 into Voltick.
+
+   This app is a copy of cbedge-v3. The copy's whole justification is THIS FILE:
+   v3's rule is that no hex may appear anywhere in src/ outside tokens.css, and
+   `scripts/check-theme.mjs` fails the build if one does. That rule held, so
+   repainting every card and every page is editing the values below and nothing
+   else. Not one component was recoloured by hand, which is also why a component
+   fix can still be carried across from v3 verbatim.
+
+   THE MAPPING. Every value below is a Voltick token from
+   voltick-vite/src/theme.ts. Nothing is invented and nothing is a near-miss of
+   one, because a near-miss hex is worse than a reuse:
+
+     surfaces          INK / PANEL / ELEV / LINE. Voltick ships four steps and
+                       v3 wants six, so app, rail and bg share INK (both apps
+                       are full-bleed dark) and `raised` is mixed from ELEV
+                       rather than minted.
+     text              PAPER, and PAPER_QUIET one step down. Voltick's rule 2 is
+                       no grey text, so the quiet step is a token, never white
+                       at an opacity.
+     up / down         GOOD / BAD.
+     accent            ACCENT, and ACCENT_TEXT wherever the accent has to BE
+                       text (card titles, the DEX line, the calendar accent).
+     the walls         This is where the two systems turn out to be the same
+                       system. Voltick's reserved colours were written for a
+                       gamma board: VOLT is the strongest level on it, SURGE is
+                       a wall, REVERSAL is where price turns, FLIP is the gamma
+                       flip. So the Core Bullseye is VOLT, the call wall is
+                       SURGE, the put wall is REVERSAL, and the flip is FLIP.
+                       The GEX bubble leader is VOLT for the same reason it was
+                       gold in v3: it is the biggest wall in the bucket.
+     v2 parity         Repointed. On voltick there is nothing to be in parity
+                       with, so each of those tokens lands on the Voltick colour
+                       that does its job. The NAMES stay, because the pages that
+                       read them still read them.
+
+   Type scale and the 4px spacing step are v3's, untouched: they are what makes
+   the board dense, not what makes it CB Edge. Shape and the two font families
+   are Voltick's.
+
+   ⚠ --color-bg and --color-fg are duplicated in index.html's inline <style> so
+   the first paint is correct before this file loads. Change one, change both —
+   scripts/check-budgets.mjs fails the build if they drift.
+   ──────────────────────────────────────────────────────────────────────── */
+
+@import 'tailwindcss';
+
+/* `static`, not a bare @theme. Tailwind v4 tree-shakes a theme block down to
+   the variables it can SEE used, and it cannot see a var name built at runtime:
+   `var(--color-level-${key})` in the Multi Greek badges and the GEX rail's
+   level tags resolved to an empty string, so those marks painted transparent —
+   a colour silently missing, which is the one failure mode a token file exists
+   to prevent. `static` emits every token on :root whether or not a utility
+   references it. It costs a few hundred bytes of CSS against a budget with
+   four times the headroom, and it makes the rule at the top of this file
+   ("var(--color-…) always works") actually true. */
+@theme static {
+  /* ── Surfaces ──────────────────────────────────────────────────────────
+     Dark-slate ramp (2026-08-27), from the reference mockup
+     (20260818darkslatecardtheme.html): app → rail → shell → card → card-2
+     → card-hi, darkest to lightest.
+
+     bg       dashboard canvas — page background AND the top toolbar's band
+     rail     left icon rail — darker than bg, its own column
+     app      outermost tone, for a future floating-shell wrapper (unused
+              today — v3 is full-bleed, no outer app frame yet)
+     surface  cards, panels ("card")
+     surface2 nested rows / table headers ("card-2")
+     raised   hovered / elevated surface ("card-hi")
+     line     borders and dividers                                         */
+  --color-app: #0a0d10;
+  --color-rail: #0a0d10;
+  --color-bg: #0a0d10;
+  --color-surface: #0e1216;
+  --color-surface2: #141a21;
+  --color-raised: color-mix(in srgb, #141a21 92%, #e7ece9);
+  --color-line: #1e2630;
+
+  /* ── Text ─────────────────────────────────────────────────────────────
+     All white per Brandon 2026-08-27 — the grey secondary/faint tones read
+     too dim against the dark-slate surfaces. `muted`/`faint` stay as
+     separate tokens (still what card headers, axis ticks and disabled
+     copy point at) in case a step-down grey comes back later; today all
+     three resolve to the same white.
+     fg      primary text
+     muted   labels, axis ticks, secondary text
+     faint   disabled, watermarks                                          */
+  --color-fg: #e7ece9;
+  --color-muted: #e7ece9;
+  --color-faint: #c0c5c3;
+
+  /* ── Semantic ─────────────────────────────────────────────────────────
+     Directional colour for a trading UI.
+
+     THE POSITIVE IS SETTLED (Brandon, 2026-09-10): #22c55e, the same green the
+     Net Premium card's call line is drawn in. The board used to carry two
+     greens — this token's mint #35c28e on every BUY, every "Calls", the GEX
+     Chart's stat tiles and the gauge rail, and --color-netdrift-call's #22c55e
+     on the one chart carried over from v2 — and side by side on one board they
+     read as two different meanings of "up" rather than one. They are now the
+     same value.
+
+     They stay SEPARATE TOKENS. --color-netdrift-call is pinned to v2's line
+     colour and must not follow this one if the UI's positive ever moves again;
+     the same reasoning keeps --color-candle-up its own token. Matching values
+     is agreement today, not a merge.
+
+     --color-series-2 keeps the old mint: it is a slot in a categorical ramp,
+     not a direction, and a series that happened to be green is not "up".
+
+     The pair still separates on hue AND lightness, so it survives a
+     colourblind check. Move the red with it or not at all.                  */
+  --color-up: #3ddc8e;
+  --color-down: #ff6b7a;
+  /* The directional pair the traders dashboard and the sector wheel read.
+     Separate names from --color-up/--color-down on purpose: those are the UI's
+     provisional semantic pair, these are the MOVE colours (a % change, a wheel
+     wedge). This is where the two pairs split (Brandon, 2026-09-03): the
+     dashboard's "up" is the CHART BLUE — the same #29b6f6 the GEX bubbles and
+     bars use on the candles (--color-gex-pos below) — so the sector wheel reads
+     as part of the dashboard instead of dropping a lone mint green into it.
+     Down keeps the clay red; the up/down contrast is hue AND lightness, so the
+     pair still survives a colourblind check.                                 */
+  --color-move-up: #4d8cff;
+  --color-move-down: #ff6b7a;
+  --color-flat: #c0c5c3;
+  --color-accent: #2f6bff;
+  --color-warn: #ffd166;
+
+  /* ── Data series ──────────────────────────────────────────────────────
+     Categorical ramp for charts. Keep to 6; if a chart needs more than six
+     distinguishable series it needs a different chart.                     */
+  --color-series-1: #2f6bff;
+  --color-series-2: #3ddc8e;
+  --color-series-3: #ffd166;
+  --color-series-4: #b48cff;
+  --color-series-5: #7fb0ff;
+  --color-series-6: #ff6b7a;
+
+  /* ── Candles ──────────────────────────────────────────────────────────
+     Carried across from v2 VERBATIM (ES_CANDLE_UP / ES_CANDLE_DOWN in
+     components/shared/homeTheme.ts) because "the exact same candle colour"
+     was the requirement. Deliberately NOT --color-up/--color-down: those
+     are the UI's directional pair and are still provisional, and a candle
+     body is the one place where matching v2 pixel-for-pixel matters more
+     than internal consistency. Body, border and wick all take these.       */
+  --color-candle-up: #3ddc8e;
+  --color-candle-down: #ff6b7a;
+
+  /* ── GEX bubbles ──────────────────────────────────────────────────────
+     Sign sets the hue: blue positive gamma, red negative. These two are the
+     PEERS' fill and the leader's ring and glow. Read as hex here and
+     converted to rgba() at draw time by rgba() in
+     board/gexCandles/bubbles.ts — canvas needs an alpha channel per bubble,
+     which a token cannot carry.                                            */
+  --color-gex-pos: #4d8cff;
+  --color-gex-neg: #ff5fa2;
+
+  /* ── GEX bubbles: THE LEADER ──────────────────────────────────────────
+     The biggest wall in a bucket is GOLD, not a pale version of its own
+     sign. It draws as a radial gradient — white core, --color-gex-lead-hi
+     through the middle, --color-gex-lead at the rim — with the sign colour
+     as a ring around it and as its glow.
+
+     Gold because gold already means "the wall" everywhere else on this
+     card: it is the CB tag on the rail and the amber half of the GEX bars
+     (--color-gexbar-neg, the same #ffb300). One hue for one idea.
+
+     It replaced a pale tint of the sign colour (--color-gex-pos-hot /
+     -neg-hot, #c8f5ff / #ffcdd2, deleted 2026-09-03). Those were nearly
+     white and nearly indistinguishable from each other at 3px, so at small
+     sizes the leader read as "a white dot" and the sign had to come from
+     the ring anyway. Now the ring is the only thing carrying it and the
+     core is free to say something else.                                    */
+  --color-gex-lead: #ffd166;
+  --color-gex-lead-hi: color-mix(in srgb, #ffd166 65%, #e7ece9);
+
+  /* ── GEX Chart bars ───────────────────────────────────────────────────
+     A SECOND positive/negative pair, and deliberately not the four above.
+
+     v2 draws its bubbles blue/RED and its home-page GEX chart bars
+     blue/AMBER, and the chart is the one being matched value-for-value —
+     so v3 carries both pairs rather than quietly recolouring one surface
+     to agree with the other. They are different marks answering different
+     questions: a bubble is a level on a price chart, a bar is a magnitude
+     on its own axis.
+
+     If these ever converge, this is the pair to delete.                   */
+  --color-gexbar-pos: #4d8cff;
+  --color-gexbar-neg: #ffd166;
+
+  /* ── Net Drift (Premium) lines ────────────────────────────────────────
+     The call and put lines on the /flow chart and the board's Net Premium
+     card. Carried across from v2 VERBATIM — components/pages/Flow.tsx draws
+     them with BUY_GREEN (#22c55e) and HOME_THEME.red (#ef4444), and "the
+     same colour as the v2 lines" is the spec (Brandon, 2026-08-31).
+
+     Deliberately NOT --color-up/--color-down, for the same reason
+     --color-candle-up/down exist: those are v3's provisional directional
+     pair (a mint and a clay), and this chart is one of the surfaces where
+     matching v2 value-for-value matters more than internal consistency.
+
+     The minute-volume histogram under the lines takes the same two at 55%,
+     which is v2's rgba(34,197,94,.55) / rgba(239,68,68,.55) exactly.        */
+  --color-netdrift-call: #3ddc8e;
+  --color-netdrift-put: #ff6b7a;
+
+  /* ── DEX overlay ──────────────────────────────────────────────────────
+     The net-delta line the GEX Chart draws across its bars, on its own
+     normalised scale. A THIRD hue on purpose: the line is not a bar and
+     does not share the bars' sign convention, so borrowing either gexbar
+     colour would read as "same series, different shape." v2's home chart
+     uses rgb(18,103,131); this is that value one notch brighter, so it
+     still reads where it crosses a 90%-opacity bar.                        */
+  --color-dex: #6aa0ff;
+
+  /* ── Flip / shadow ────────────────────────────────────────────────────
+     Two values the premarket board needs that no existing token covers.
+
+     violet marks the GAMMA FLIP. It is deliberately a third hue: the flip is
+     neither a wall (level-cw / level-pw) nor a sign (candle-up / candle-down),
+     and borrowing either would read as "same series, different shape". Carried
+     across from v2's premarket stylesheet, where it was the only hex typed
+     into the page rather than derived from the theme.
+
+     shadow is pure black, for drop shadows. A shadow is not really a palette
+     colour — it is the absence of light under a raised surface — but a
+     component still may not type `rgba(0,0,0,.35)`, so it lives here with
+     everything else and reaches components as alpha(SHADOW, 0.35).           */
+  --color-violet: #b48cff;
+  --color-shadow: #000000;
+
+  /* The GEX-watch feed's PUT colour. A clay, not a red: it is paired against
+     --color-accent to encode call-vs-put, and the two separate at ΔE 17.8
+     under deuteranopia where a blue/red pair collapses. Move it and the accent
+     together or not at all. */
+  --color-clay: #ff5fa2;
+
+  /* ── Key levels ───────────────────────────────────────────────────────
+     The wall palette shared by the Key Levels tiles, the Multi Greek
+     ladder badges and any future levels rail. cb = Core Bullseye /
+     magnet, cw = call wall, pw = put wall.                                 */
+  --color-level-cb: #ffd166;
+  --color-level-cw: #4d8cff;
+  --color-level-pw: #ff5fa2;
+
+  /* The DAILY expected-move rails on the GEX Chart — the front-expiry ATM
+     straddle anchored to the prior session's close, frozen for the session.
+     ONE hue for both rails on purpose: they are the two edges of one band, not
+     a bullish level and a bearish one, and painting them --color-up /
+     --color-down would read as direction where the band is symmetric by
+     construction. Violet because it is the one family that chart is not
+     already spending — the bars own blue and amber, the core owns yellow, the
+     flip owns warn and spot owns fg. */
+  --color-level-em: color-mix(in srgb, #b48cff 72%, #e7ece9);
+
+  /* ── Economic calendar ────────────────────────────────────────────────
+     Impact ramp + the actual/forecast/previous trio, matching v2's
+     EconCalendarPanel so a user moving between the two reads the same
+     colour as the same importance.                                         */
+  --color-impact-high: #ff6b7a;
+  --color-impact-medium: #ffd166;
+  --color-impact-low: color-mix(in srgb, #2f6bff 45%, #0a0d10);
+  --color-impact-holiday: #c0c5c3;
+  --color-impact-president: #b48cff;
+  --color-impact-faded: color-mix(in srgb, #1e2630 70%, #0a0d10);
+  --color-cal-accent: #6aa0ff;
+  --color-cal-actual: #3ddc8e;
+  --color-cal-forecast: #ffd166;
+  --color-cal-previous: #c0c5c3;
+
+  /* ── Seasonality (/v3/seasonality) ────────────────────────────────────
+     The overlay series on the year-vs-average chart, and the two greys the
+     almanac needs. FOUR overlay hues and not one more: with the seasonal
+     average and the live year already drawn, six lines is the ceiling at
+     which hues stay separable, and each overlay carries a dash pattern and
+     an end label as well as its colour.
+
+     NOT --color-series-1..6: that ramp is tuned for categorical bars on a
+     surface plate, and these are 1.8px lines over a near-black ground with
+     two fixed hues (v2-green, v2-orange) already spoken for. overlay-1 is
+     also the almanac's third bar hue, for the one chart that needs three
+     (FOMC: before / during / after) — same series, same value, one token.
+
+     heat-base is the neutral a heatmap cell starts from before it is mixed
+     toward the up/down hue, so a zero cell reads as "no signal" rather than
+     as a washed-out direction. It sits between --color-surface2 and
+     --color-raised on purpose: a hair lighter than the tile it is drawn on.
+
+     on-accent is ink ON a solid v2-cyan fill (the "Click to open" pill).
+     Solid, never a white at an opacity — a translucent label lets the fill
+     read through it and stops being legible.                                */
+  --color-sea-overlay-1: #b48cff;
+  --color-sea-overlay-2: #3ddc8e;
+  --color-sea-overlay-3: #ff5fa2;
+  --color-sea-overlay-4: #7fb0ff;
+  --color-sea-heat-base: #141a21;
+  --color-sea-on-accent: #071026;
+
+  /* ── v2 parity ────────────────────────────────────────────────────────
+     The Analysis page (/v3/analytics) is a 1:1 port of v2's /app/analytics and
+     carries a REQUIREMENT that it render v2's colours, not v3's dark-slate
+     palette (Brandon, 2026-08-30: "keep colors the same as the v2 version").
+     Same reasoning as --color-candle-up/down above: where matching v2
+     value-for-value is the spec, the v2 value gets its own token rather than a
+     component typing a hex.
+
+     Why these are NOT just T.cyan / T.orange / T.red / T.green: theme.ts maps
+     v2's NAMES onto v3's VALUES on purpose, so those four resolve to #5b8cff,
+     #e0a44a, #e0645f and #35c28e — four different colours. Reaching for them on
+     that page is the one mistake this block exists to prevent.
+
+     SCOPE: this page only. Nothing else in v3 reads them, and no existing token
+     changed value to make them exist. If v3 ever adopts v2's palette wholesale,
+     this block is what gets promoted — and then deleted.
+
+     Three of these duplicate a value that is already here under a different
+     name: v2-cyan == cal-accent, v2-red == impact-high, v2-pos == cal-actual.
+     Deliberate. A card title is not a calendar accent and the page's positive
+     figure is not an econ "actual"; they happen to agree today and must be free
+     to move apart tomorrow.                                                  */
+  --color-v2-cyan: #6aa0ff; /* every card title. v2's HOME_THEME.cyan */
+  --color-v2-orange: #ffd166; /* replay, BETA tags, warnings. v2's .orange */
+  --color-v2-red: #ff6b7a; /* every negative figure. v2's .red */
+  --color-v2-green: #7fb0ff; /* v2's .green — a LIGHT BLUE. One use: the
+                                Strategy card's "Confirmation triggers" title */
+  --color-v2-pos: #3ddc8e; /* v2's page-local POS_GREEN. The page declares its
+                              own green precisely BECAUSE .green is a blue */
+  --color-v2-purple: #b48cff; /* the page-background glow's second radial */
+  --color-v2-bg: #0a0d10; /* page canvas, and a faded econ row's plate */
+  --color-v2-panel: #0e1216; /* the ladder's spot-price chip, and the base for
+                                the 45% / 72% / 97% panel washes */
+  --color-v2-ink: #071026; /* ink ON a solid fill: the CB/CW/PW ladder tags, an
+                              active replay button, the active Replay toggle */
+  --color-v2-refresh: #3ddc8e; /* the refresh button's success state + glow.
+                                  v2's REFRESH_GREEN */
+  --color-v2-badge-ink: #071026; /* ink on the econ calendar's solid TODAY badge */
+  --color-v2-lightblue: #7fb0ff; /* the embed-mode card radial. NOTE: v2's
+                                    homeTheme.LIGHT_BLUE is #7dd3fc, but the
+                                    .analytics-embed CSS paints
+                                    rgba(126,211,252,.10) = #7ed3fc. The CSS is
+                                    what reaches the screen, so it wins. */
+
+  /* ── The scanner's leg of v2's palette ───────────────────────────────────
+     Added 2026-09-03. The /v3/scanner page runs on v2's palette rather than
+     v3's semantics (Brandon). The three below are the values v2 paints on that
+     page that no token here already carries.
+
+     The one collision v2 did NOT intend is dropped on the way across:
+     HOME_THEME.green #8ECAE6 does THREE jobs in v2 — card subtitles and table
+     headers (chrome), the tab accent, and the positive/up semantic. Those are
+     --color-v2-green, --color-v2-accent and --color-v2-refresh here, so a
+     "good" number is no longer the same colour as the column heading above it.
+     Everything else v2 paints per-surface is kept per-surface: the page really
+     does use four different greens, and that is v2's, not a porting slip.    */
+  --color-v2-accent: #7fb0ff; /* v2's homeTheme LIGHT_BLUE, declared there as
+                                 "the one card accent". NOT --color-v2-lightblue
+                                 #7ed3fc above — that one is what the embed CSS
+                                 actually paints, and the two differ by a digit
+                                 on purpose. The tab accent for IB Stats and
+                                 Watch This. */
+  --color-v2-neg: #ff5fa2; /* the probability engine's own NEG, commented in v2
+                              as "true red (not pink)" — the Bearish Edge gauge
+                              only. The page's default negative stays
+                              --color-v2-red #EF4444, one card above it. */
+  --color-v2-chip: #7fb0ff; /* SCANNER-SPECIFIC. The GEX Levels scope chip's
+                               plate and edge. v2 names it nowhere else. */
+  --color-v2-neutral: #c0c5c3; /* v2's NEUTRAL from scannerStyles.ts, imported
+                                  by six tabs. Duplicates --color-impact-holiday
+                                  deliberately, on the same reasoning the block
+                                  above gives for v2-cyan == cal-accent: a
+                                  scanner neutral is not a calendar holiday.
+                                  They agree today and must be free to move
+                                  apart tomorrow. */
+
+
+  /* ── Type scale ───────────────────────────────────────────────────────
+     Numbers use the tabular font so columns do not jitter as prices tick.  */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  --text-3xs: 0.5625rem; /* 9px — badge ink, micro labels */
+  --text-2xs: 0.625rem; /* 10px — column heads, chips, note lines */
+  --text-xs: 0.6875rem; /* 11px — dense table cells, axis ticks */
+  --text-sm: 0.8125rem; /* 13px — default UI text */
+  --text-base: 0.9375rem; /* 15px — body */
+  --text-lg: 1.125rem; /* 18px — card titles */
+  --text-xl: 1.5rem; /* 24px — stat values */
+  --text-2xl: 2rem; /* 32px — hero numbers */
+
+  /* ── Space ────────────────────────────────────────────────────────────
+     4px base. Everything is a multiple; nothing is a one-off.              */
+  --spacing: 0.25rem;
+
+  /* ── Shape ────────────────────────────────────────────────────────────  */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   THE SCANNER'S CARD EDGE.
+
+   /v3/scanner runs on v2's palette (Brandon, 2026-09-03). v2 draws a card edge
+   as a WHITE HAIRLINE, rgba(255,255,255,0.10); v3's --color-line is an opaque
+   slate #23272e. Six sites reach the edge through an inline style and are
+   remapped one by one, but 37 more go through the `border-line` utility and the
+   Card primitive — neither of which the scanner owns.
+
+   Rather than recolour every v3 page or fork the primitives, the scanner's root
+   carries `.scanner-v2` and the token is redefined FOR THAT SUBTREE ONLY. That
+   is what custom properties are for, and it is the ONE global-token override the
+   scanner gets — everything else that diverges is remapped per call site.
+
+   This CANNOT live in the @theme block above: `@theme static` takes custom
+   property declarations, not rules.
+
+   Delete this to put the scanner back on the v3 edge. Nothing else changes.
+   ───────────────────────────────────────────────────────────────────────────*/
+.scanner-v2 {
+  --color-line: #1e2630;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   SCROLLBARS — app-wide, once, instead of per panel.
+
+   Every scroller in v3 (the board, the econ calendar card, the flow tape, the
+   chain, the premarket page, every popover list) was painting the platform's
+   DEFAULT bar: a light grey track and a mid-grey thumb on Windows, which is the
+   one bright rectangle on a #07080b dashboard and reads as a piece of another
+   app leaking through. Nothing declared it — the bar is simply what you get
+   when nobody says otherwise.
+
+   Two halves, because the two engines expose different things:
+
+     · `color-scheme: dark` tells the browser the whole document is dark. That
+       alone fixes the bars Firefox and Safari draw, plus every other bit of
+       native UI we do not style — <select> popups, autofill, form controls,
+       the overscroll gutter. index.html carries the same value as a <meta> so
+       the first frame is right; this is the CSS half, which is what actually
+       binds once the sheet loads.
+
+     · `::-webkit-scrollbar` is Chrome/Edge, where a dark color-scheme still
+       leaves a bar lighter than these surfaces. Track is transparent so it
+       takes whatever card it sits on; the thumb is a white wash so it works
+       on every step of the surface ladder without a second rule.
+
+   No token is hardcoded here — thumb and hover are color-mix() over
+   --color-fg, so they follow the palette if it ever moves.
+
+   OPT-OUT: a panel that must hide its bar keeps doing it locally and still
+   wins — a class + pseudo-element selector outranks the bare `*` below (see
+   the Multi Greek ladder, which hides the bar so the track stops eating a
+   slice of a three-column ladder).
+   ──────────────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+  /* Firefox / Safari. `thin` rather than `auto`: these are panel scrollers on a
+     dense board, not a document scrollbar. */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-fg) 18%, transparent) transparent;
+}
+
+/* Chrome / Edge. The `*` is deliberate: the rule has to reach every scroller,
+   including the ones inside components that never think about their bar. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--color-fg) 14%, transparent);
+  border-radius: 999px;
+  /* A transparent border + padding-box clip is what insets the thumb inside the
+     10px gutter. Without it the thumb is a full-width slab that touches the
+     card's edge on both sides. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--color-fg) 26%, transparent);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: color-mix(in srgb, var(--color-fg) 34%, transparent);
+}
+
+/* Where a vertical and a horizontal bar meet. Left unpainted it is a light
+   square in the corner of the one panel that scrolls both ways. */
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   NATIVE FORM CHROME — the date picker, app-wide, once.
+
+   `color-scheme: dark` above already hands the browser the dark popup: the
+   calendar panel a date input opens, the <select> menu, autofill. What it does
+   NOT do is recolour the little CALENDAR GLYPH webkit paints inside the field.
+   That indicator is drawn in the platform's own near-black, which on a bg-this-
+   dark input is a smudge you have to know is there — the one control on the
+   board you cannot see the affordance for.
+
+   v2 solved this in `app/globals.css` ("Dark dropdowns everywhere") by swapping
+   in an inline SVG with the accent colour written into the data URI. Same idea
+   here, one difference: the SVG is a MASK, not a background image, so the ink
+   comes from `--color-accent` and follows the palette instead of freezing a hex
+   into a URL nobody would think to grep. The stroke colour inside the mask is
+   irrelevant — a mask reads alpha only.
+
+   Lives here rather than on the one page that has a date input today, for the
+   same reason the scrollbars do: it is native chrome, and the next date input
+   should not have to remember.
+   ──────────────────────────────────────────────────────────────────────── */
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'],
+input[type='month'],
+input[type='week'] {
+  color-scheme: dark;
+}
+
+input[type='date']::-webkit-calendar-picker-indicator,
+input[type='time']::-webkit-calendar-picker-indicator,
+input[type='datetime-local']::-webkit-calendar-picker-indicator,
+input[type='month']::-webkit-calendar-picker-indicator,
+input[type='week']::-webkit-calendar-picker-indicator {
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 120ms ease-out;
+  background-color: var(--color-accent);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='18' rx='2'/><line x1='16' y1='2' x2='16' y2='6'/><line x1='8' y1='2' x2='8' y2='6'/><line x1='3' y1='10' x2='21' y2='10'/></svg>")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='18' rx='2'/><line x1='16' y1='2' x2='16' y2='6'/><line x1='8' y1='2' x2='8' y2='6'/><line x1='3' y1='10' x2='21' y2='10'/></svg>")
+    center / contain no-repeat;
+}
+
+input[type='date']:hover::-webkit-calendar-picker-indicator,
+input[type='date']:focus::-webkit-calendar-picker-indicator {
+  opacity: 1;
+}
+
+/* The field's own text. Webkit splits a date input into month/day/year spans;
+   left alone the SEPARATORS and the placeholder letters render in the UA's
+   colour, not ours, so a field reading "mm/dd/yyyy" sits at a different weight
+   from every other label beside it. */
+input[type='date']::-webkit-datetime-edit-text,
+input[type='date']::-webkit-datetime-edit-month-field,
+input[type='date']::-webkit-datetime-edit-day-field,
+input[type='date']::-webkit-datetime-edit-year-field {
+  color: inherit;
+}
+
+input[type='date']::-webkit-datetime-edit-month-field:focus,
+input[type='date']::-webkit-datetime-edit-day-field:focus,
+input[type='date']::-webkit-datetime-edit-year-field:focus {
+  background: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  border-radius: 3px;
+  outline: none;
+}
+
+/* Numbers must not jitter as they tick. Any element showing a live figure
+   should carry .tabular (or font-mono). */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Stale data — painted from cache, not yet confirmed live. Applied by panels
+   while the first live frame is outstanding. Intentionally subtle: the point
+   is that the screen is never empty, not that the user is warned. */
+.stale {
+  opacity: 0.55;
+  transition: opacity 120ms ease-out;
+}
+
+/* The Multi Greek ladder's Core Bullseye cell. A slow white pulse rather than a
+   static ring: the CB moves strike during the session, and a mark that breathes
+   is findable in peripheral vision on a board of four ladders in a way a fixed
+   outline is not. Lives here because @keyframes cannot be scoped to a component
+   without a CSS module, and this file is already where .stale and .tabular are. */
+@keyframes cb-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 3px color-mix(in srgb, var(--color-fg) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 10px color-mix(in srgb, var(--color-fg) 85%, transparent);
+  }
+}
+.mg-cb-glow {
+  animation: cb-glow 2.4s ease-in-out infinite;
+}
+
+/* The CB Edge wordmark in the toolbar, LIT. It doubles as the Bzila alerts
+   button (shell/BzilaAlerts.tsx), and when an alert has landed that this
+   browser has not acknowledged the logo breathes instead of sitting under a
+   static badge: the toolbar is a row of quiet chrome, and a slow ring is what
+   peripheral vision picks up while you are reading a chart. It rides on top of
+   the dot the component draws, not instead of it — the reduced-motion rule
+   below kills the animation, and the dot is what still says "new" then.
+
+   Same shape and same reason as .mg-cb-glow above, including why it lives in
+   this file: @keyframes cannot be scoped to a component without a CSS module. */
+@keyframes bzila-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-warn) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--color-warn) 0%, transparent);
+  }
+}
+.bzila-lit {
+  animation: bzila-pulse 1.8s ease-out infinite;
+}
+
+/* 100dvh where supported; see the note in index.html. */
+.cb-viewport {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* One bounded turn, for the toolbar's ↻ refresh (shell/RefreshButton.tsx).
+   Not Tailwind's `animate-spin`, which is 1s per turn and infinite: the button
+   spins ONCE as acknowledgement and stops, because a refresh that comes back
+   with identical numbers — the common case — is otherwise indistinguishable
+   from a dead button. The duration is set at the call site, next to the
+   timeout that clears it, so the two cannot drift apart.
+
+   Here rather than in the component for the same reason as the two above:
+   @keyframes cannot be scoped to a component without a CSS module. */
+@keyframes cb-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* THE ALERTS PILL, ON ARRIVAL (shell/AlertsFeed.tsx). The pill is deliberately
+   borderless — a box beside the wordmark reads as a second button competing
+   with the brand — so "a new signal just landed" cannot be a border that stays.
+   It is a border that FLASHES: three beats in the alert type's own colour, then
+   gone, leaving the quiet pill behind. The colour arrives as `--alert-flash`,
+   set inline at the call site from ALERT_TYPES, because the ring has to be the
+   kind's colour and @keyframes cannot take an argument.
+
+   Drawn with box-shadow rather than `border`, so nothing in the toolbar shifts
+   by a pixel when it fires — a row that jumps on every alert is worse than no
+   alert. Same reason it lives in this file as .mg-cb-glow and .bzila-lit above:
+   @keyframes cannot be scoped to a component without a CSS module.
+
+   The reduced-motion rule below collapses this to nothing, which is correct:
+   the coloured tag and the pulsing dot still say a new alert is there. */
+@keyframes alert-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--alert-flash) 0%, transparent);
+  }
+  30%,
+  70% {
+    box-shadow:
+      0 0 0 1px var(--alert-flash),
+      0 0 9px color-mix(in srgb, var(--alert-flash) 45%, transparent);
+  }
+}
+.alert-flash {
+  animation: alert-flash 800ms ease-in-out 3;
+}
+
+/* Respect the user's motion preference globally rather than per-component. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── A CONTROL BAR THAT STAYS ONE ROW ────────────────────────────────────────
+   Card headers (design/primitives/Card.tsx) and any other strip of controls
+   that must not reflow. The row never wraps; if the controls are wider than the
+   card, it scrolls sideways instead of growing a second line.
+
+   The scrollbar is hidden rather than styled. The global rule above gives every
+   scrollable a thin one, which is right for a panel and wrong here: the header
+   is 32px tall, so even a thin bar takes a visible slice out of a row whose
+   whole job is to be a fixed, predictable height. Scrolling still works by
+   wheel, trackpad and drag — only the indicator is gone.
+
+   `overscroll-behavior-x: contain` keeps a sideways flick inside the bar rather
+   than letting it turn into a browser back-navigation. */
+.cb-bar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.cb-bar::-webkit-scrollbar {
+  height: 0;
+  width: 0;
+  display: none;
+}

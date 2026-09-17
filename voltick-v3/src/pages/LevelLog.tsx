@@ -1,0 +1,375 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// LEVEL LOG — /v3/level-log
+//
+// FIRST SLICE OF THE PORT: the WALL MIGRATION chart and nothing else.
+//
+// v2's /app/level-log is 2,608 lines and thirteen surfaces; the spec for all of
+// it is docs/parity/level-log.md (283 checklist rows, Parts A–Q). What has come
+// across here is Part H (`WallMigrationChart`), Part I's RANGE behaviour, and
+// the slice of Part P those two need. Still to come, in the parity doc's order:
+// the ticker rail (E), the log card head (F), the capture rail and chips (G),
+// the churn strip (J), the timeline (L), the reaction legend (M) and
+// `buildLogText` (Q). Nothing below is a placeholder for them — they are simply
+// not built yet, and this page says what it shows.
+//
+// WHAT IS DELIBERATELY NOT v2's:
+//   · Part I's popout. v2 drew the week view in a portalled modal with its own
+//     scrim, Escape handler and close button, which Part S lists as v2-only
+//     chrome. v3 already has ONE way to make a card full size — the expand
+//     control every Card carries (design/primitives/Expand.tsx) — and the range
+//     switch that made the popout worth opening lives in the toolbar, where it
+//     works at either size. So the range is a control, not a mode — and it now
+//     runs TODAY / 5 SESSIONS / MONTHLY / ALL TIME, which a modal could not.
+//   · v2 defaulted the popout to 5 sessions because opening it was an explicit
+//     act. Here the range is always on screen, so it opens on TODAY: up to
+//     thirteen requests must not be the cost of landing on the page.
+//
+// THE TICKER IS THE TOOLBAR'S. This page carries no ticker box of its own — it
+// reads `usePageSymbol()`, the one symbol the app toolbar sets, for exactly the
+// reason src/data/symbol.tsx gives: a second picker for the same thing is a
+// second way to end up looking at two symbols at once and not notice. Only the
+// DATE lives in the query string, so /v3/level-log?date=2026-09-02 still shares
+// a session — which is why app/v3/level-log/route.ts has to answer it.
+//
+// THE RAIL SETS THAT SAME SYMBOL. The card strip above the log (Part E, as
+// cards — see levelLog/TickerRail.tsx) is a SELECTOR, not a second picker: a
+// card writes the page symbol the toolbar owns, so the two always agree and the
+// log below is always the log of the card that is lit. Which cards are on the
+// rail is per browser, and the owner's copy also lives in Postgres — the
+// two-tier note is in levelLog/railStore.ts.
+//
+// LIVE ON TODAY, ONE MINUTE AT A TIME. The price line is a 1-minute tape, so a
+// minute is the cadence the data itself has. v2 polls not at all — "so an open
+// tab never hammers the recorder" — and that reasoning survives everywhere it
+// still applies: the tick runs ONLY when the selected date is today ET, only
+// while the tab is visible, and only in the single-session view (the week view
+// would spend up to thirteen requests a minute to move one of five slices). A
+// past session cannot change, so a tab left on one costs nothing at all.
+//
+// SNAPSHOT is the toolbar camera's, not a button of this page's own. The page
+// publishes the CARD — not the plot — to `useCopyShotTargets`, because a PNG of
+// the lines alone is a picture of some lines with no idea what they are of; the
+// card carries the ticker, the date, the variant and the legend. It resolves
+// through `[data-card-instance]` at click time rather than a ref, so the shot
+// still finds the card while it is expanded and living outside its tile.
+//
+// REST-only: no socket, no canvas. Non-negotiables 2, 4, 5 and 6 have nothing
+// to bite on.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Card, CardToolbar } from '@/design/primitives/Card'
+import { SegGroup } from '@/design/primitives/Controls'
+import { DatePicker } from '@/design/primitives/DatePicker'
+import { Page } from '@/design/primitives/Page'
+import { usePageSymbol } from '@/data/symbol'
+import { tickerLogoUrls } from '@/pages/economicCalendar/ChipLogo'
+import { TickerRail } from '@/pages/levelLog/TickerRail'
+import { MIG_H, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
+import {
+  type ExpScope,
+  type GexBasis,
+  type LogView,
+  VIEW_SCOPE,
+  todayETStr,
+  useMinuteTick,
+  useWallDays,
+  variantTag,
+} from '@/pages/levelLog/wallData'
+import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
+
+/**
+ * THE RANGE SWITCH — how many recorded sessions the chart is drawn from.
+ *
+ * TODAY is one known date. 5 SESSIONS is v2's week view and v2's number.
+ * MONTHLY and ALL TIME are v3's, and they exist because the question the week
+ * view answers — did this wall hold its strike across sessions — is a better
+ * question the further back it is asked: a CORE that has sat on the same strike
+ * for six weeks is a different object from one that rolled on Tuesday.
+ *
+ * They cost ONE request each, not one per session: /api/walls-range returns the
+ * newest N sessions the symbol actually recorded, with a 5-minute price line
+ * per session, in a single query (see wallData.ts). MONTHLY is 21 sessions — a
+ * trading month, not 30 calendar days — and ALL TIME asks for the route's own
+ * ceiling, so it is "everything the recorder has" without the page having to
+ * know how much that is.
+ */
+type RangeKey = '1' | '5' | '21' | 'all'
+
+/** Sessions requested per range. `all` is /api/walls-range's cap (260). */
+const RANGE_SESSIONS: Record<RangeKey, number> = { '1': 1, '5': 5, '21': 21, all: 260 }
+
+/** How the range reads in the snapshot caption. Empty for TODAY — the date says it. */
+const RANGE_TAG: Record<RangeKey, string> = {
+  '1': '',
+  '5': '5 sessions',
+  '21': '21 sessions',
+  all: 'all recorded sessions',
+}
+
+/** Filename suffix for the toolbar camera. Empty for TODAY. */
+const RANGE_FILE: Record<RangeKey, string> = { '1': '', '5': '-5d', '21': '-1m', all: '-all' }
+
+/**
+ * The card's FLOOR, not its height. The plot at its designed 250 plus the
+ * header, the toolbar row, the variant line, the legend and the axis stamps.
+ *
+ * The card used to be pinned to exactly this, which left the bottom two thirds
+ * of the page empty below it — on a 1440p monitor the chart this page exists
+ * for got 250px and the wallpaper got 700. It now FILLS what the rail leaves,
+ * and this number is only what it may not shrink below when the viewport is
+ * short (or the rail is three rows deep), at which point the column scrolls
+ * instead of squeezing the plot into a strip.
+ */
+const CARD_MIN_H = MIG_H + 132
+
+/**
+ * The card's DOM identity — `data-card-instance` on the Card, and what the
+ * snapshot target resolves through. A constant because the two have to agree,
+ * and an expanded card is portalled out of its tile, so a query is the only
+ * lookup that still finds it.
+ */
+const CARD_ID = 'level-log-wall-migration'
+
+const VIEW_OPTIONS: Array<{ label: string; value: LogView; title: string }> = [
+  { label: 'Walls', value: 'walls', title: 'Call wall + put wall only' },
+  { label: 'Core', value: 'core', title: 'CORE level only' },
+  { label: 'All', value: 'all', title: 'Walls + CORE on one timeline' },
+]
+
+const SCOPE_OPTIONS: Array<{ label: string; value: ExpScope; title: string }> = [
+  { label: '0DTE', value: '0dte', title: 'Nearest listed contract only — chain.expirations[0]' },
+  { label: 'Non-0DTE', value: 'agg', title: 'Every OTHER listed expiration, summed per strike' },
+]
+
+const BASIS_OPTIONS: Array<{ label: string; value: GexBasis; title: string }> = [
+  {
+    label: 'OI + Vol',
+    value: 'oivol',
+    title: 'netGEX + netVolGEX — open interest and today’s volume',
+  },
+  { label: 'Vol only', value: 'vol', title: 'netVolGEX alone — today’s volume, no open interest' },
+]
+
+/**
+ * "All time" rather than "All", because the view switch two chips to the left
+ * already owns that word for a different question — a row reading `All … All`
+ * is two answers to two questions and looks like one.
+ */
+const RANGE_OPTIONS: Array<{ label: string; value: RangeKey; title: string }> = [
+  { label: 'Today', value: '1', title: 'Just the selected date' },
+  {
+    label: '5 sessions',
+    value: '5',
+    title: 'The last 5 recorded sessions ending on the selected date',
+  },
+  {
+    label: 'Monthly',
+    value: '21',
+    title: 'The last 21 recorded sessions — a trading month — ending on the selected date',
+  },
+  {
+    label: 'All time',
+    value: 'all',
+    title: 'Every session the recorder has for this symbol, up to the selected date',
+  },
+]
+
+export default function LevelLog() {
+  // The ticker follows the app toolbar; only the date is this page's own, and
+  // it lives in the query string so /v3/level-log?date=2026-09-02 is a
+  // shareable link — which is also why app/v3/level-log/route.ts has to answer
+  // the hard refresh.
+  const { symbol, setSymbol } = usePageSymbol()
+  const [params, setParams] = useSearchParams()
+  const date = (params.get('date') || '').trim() || todayETStr()
+
+  const [view, setView] = useState<LogView>('all')
+  const [scope, setScope] = useState<ExpScope>('0dte')
+  const [basis, setBasis] = useState<GexBasis>('oivol')
+  const [range, setRange] = useState<RangeKey>('1')
+  // Bumped by Refresh. It is a dep of the fetch effect and nothing else — the
+  // requests are `no-store`, so a bump is a genuine re-read of the recorder.
+  const [nonce, setNonce] = useState(0)
+
+  // Live only where a minute can change the answer — see the header note.
+  const isToday = date === todayETStr()
+  const live = isToday && range === '1'
+  const tick = useMinuteTick(live)
+
+  const { days, loading } = useWallDays(
+    symbol,
+    date,
+    RANGE_SESSIONS[range],
+    nonce + tick,
+    scope,
+    basis,
+  )
+
+  /**
+   * The toolbar camera's row for this page. Published only once a session has
+   * actually landed, so the menu never offers a shot of the empty state, and
+   * named the way v2's SnapLogButton named its file.
+   */
+  const shotTargets = useMemo<CopyShotTarget[]>(
+    () =>
+      days.length
+        ? [
+            {
+              id: 'level-log:wall-migration',
+              icon: '🧱',
+              label: 'Wall migration',
+              group: 'This page',
+              meta: `${symbol} · ${RANGE_TAG[range] ? `${RANGE_TAG[range]} to ${date}` : date} · ${variantTag(scope, basis)}`,
+              /**
+               * The company mark at the head of the caption. The card's header
+               * is dropped from every shot (shell/snapshot.ts) and the header is
+               * where the symbol chip lives, so without this the PNG says AAPL
+               * in small grey type and nowhere else.
+               */
+              badge: tickerLogoUrls(symbol),
+              file: `${symbol.toLowerCase()}-wall-migration-${view}-${scope}-${basis}-${date}${RANGE_FILE[range]}`,
+              resolve: () =>
+                document.querySelector<HTMLElement>(`[data-card-instance="${CARD_ID}"]`),
+            },
+          ]
+        : NO_TARGETS,
+    [days.length, symbol, date, range, scope, basis, view],
+  )
+  useCopyShotTargets(shotTargets)
+
+  const setDate = (next: string) => {
+    const q = new URLSearchParams(params)
+    q.set('date', next || todayETStr())
+    setParams(q, { replace: true })
+  }
+
+  return (
+    /**
+     * `fill` — the page owns the viewport and the log card takes what the rail
+     * leaves, rather than both sitting at the top of a mostly empty scroll
+     * page. The column supplies its own gutter, which is what Page's fill
+     * variant expects of a route (see Replay.tsx, same shape), and it keeps
+     * `overflow-y-auto` so a short window scrolls instead of crushing the plot
+     * below CARD_MIN_H.
+     */
+    <Page fill>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        {/* Above the log, and driving it: the card whose symbol is lit is the
+            session drawn underneath. Same date and same variant switches, so the
+            rail's numbers and the chart's are one reading of one recorder. */}
+        <TickerRail
+          date={date}
+          view={view}
+          scope={scope}
+          basis={basis}
+          nonce={nonce + tick}
+          symbol={symbol}
+          onPick={setSymbol}
+        />
+
+        <Card
+          title="Level Log"
+          expandId={CARD_ID}
+          fill
+          style={{ minHeight: CARD_MIN_H }}
+          actions={
+            <button
+              type="button"
+              onClick={() => setNonce((n) => n + 1)}
+              title="Re-read the recorder for this date"
+              className="rounded-sm px-1 text-xs text-faint transition-colors hover:bg-raised hover:text-fg"
+            >
+              <span aria-hidden>↻</span>
+            </button>
+          }
+        >
+          <CardToolbar>
+            {/* WHICH TICKER, said out loud. The app toolbar owns the symbol and
+                the rail above is a SELECTOR, so nothing between them and the plot
+                named it — the chart read as a set of levels with no ticker on
+                it, expanded most of all, where the rail is off screen. */}
+            <span
+              title="The ticker this log is drawn from — set on the app toolbar, or by picking a card above"
+              className="tabular shrink-0 rounded-sm border border-line bg-surface2 px-1.5 py-0.5 font-mono text-2xs font-semibold uppercase tracking-wide text-fg"
+            >
+              {symbol}
+            </span>
+            {/* The OS date field is the wrong control in a row of SegGroups —
+                mm/dd/yyyy in the platform's own font, opening the platform's
+                own calendar. Same "YYYY-MM-DD" value, same today cap, drawn
+                from our tokens. */}
+            <DatePicker
+              size="sm"
+              value={date}
+              max={todayETStr()}
+              onChange={setDate}
+              title="Session date, ET"
+              label={(v) => v}
+              className="shrink-0"
+            />
+            <SegGroup options={VIEW_OPTIONS} value={view} onChange={setView} title="Which levels" />
+            <SegGroup
+              options={SCOPE_OPTIONS}
+              value={scope}
+              onChange={setScope}
+              title="Which contracts"
+            />
+            <SegGroup options={BASIS_OPTIONS} value={basis} onChange={setBasis} title="Which GEX" />
+            <SegGroup
+              options={RANGE_OPTIONS}
+              value={range}
+              onChange={setRange}
+              title="One session, or the last five, twenty-one, or every recorded one"
+            />
+          </CardToolbar>
+
+          {/**
+           * ON THE PAGE, NOT IN THE PICTURE.
+           *
+           * Every one of these words is already in the shot's caption — the
+           * variant is `metaOf` (see the registration above), and `live · 1m`
+           * is a fact about a tab that is open, which a PNG pasted into Discord
+           * tomorrow is not. Left in, it printed a second, longer caption
+           * directly above the real one, in a smaller font, saying the same
+           * thing plus the recorder's cadence.
+           *
+           * It stays on screen because on screen it is answering a question you
+           * can still act on: which variant am I looking at, and is this live.
+           */}
+          <div className="mb-1.5 flex flex-wrap items-baseline gap-2" data-capture-hide>
+            <span className="tabular font-mono text-2xs text-muted">
+              {variantTag(scope, basis)} · {VIEW_SCOPE[view]} view · 09:29 open + every 15m to 16:00
+              ET, change-only
+            </span>
+            {live ? (
+              <span className="text-2xs text-muted" title="Re-reads the recorder and the 1-minute tape every minute while this tab is open">
+                live · 1m
+              </span>
+            ) : null}
+            {/* Only while there is nothing on screen. A pip that blinks on every
+                minute tick is noise about a refresh nobody asked to watch. */}
+            {loading && !days.length ? (
+              <span className="text-2xs text-faint">loading…</span>
+            ) : null}
+          </div>
+
+          {days.length ? (
+            <WallMigrationChart days={days} view={view} fill />
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm text-muted">
+              {loading
+                ? 'Loading sessions…'
+                : range === 'all'
+                  ? `No recorded sessions for ${symbol} at all on ${variantTag(scope, basis)}.`
+                  : range === '1'
+                    ? `No recorded levels for ${symbol} on ${date} — ${variantTag(scope, basis)}.`
+                    : `No recorded sessions for ${symbol} in the ${RANGE_SESSIONS[range]} sessions ending ${date} on ${variantTag(scope, basis)}.`}
+            </div>
+          )}
+        </Card>
+      </div>
+    </Page>
+  )
+}

@@ -4,7 +4,11 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Wednesday 9/16/2026
 
-* **Whale Archive:** track any contract — from a print or the lookup — and it stays in a new card at the bottom with your own notes and its chart, on every device you sign in on — https://cbedge.net/v3/whales
+* **Whole dashboard:** fixed a database stall that made every page slow or error for part of Wednesday afternoon — https://cbedge.net/v3
+
+* **Alerts:** a new signal now flashes the toolbar alert in its own color as it lands, and every alert leads with the ticker in larger type — the score number is gone — https://cbedge.net/v3
+
+* **Whale Archive:** track any contract — from a print or the lookup — and it stays in a card at the bottom with your own notes and its chart, on every device you sign in on. Where the size went now ranks top bullish and top bearish premium in their own columns, the roll-ups sit beside the prints under the lookup, and the contract charts are sized to fit — https://cbedge.net/v3/whales
 
 * **Phone app:** new **Alert** tab in the bottom bar — the full signal feed on your phone, with the same filters you use on the desktop — https://cbedge.net/v3/m/alerts
 

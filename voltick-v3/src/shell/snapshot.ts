@@ -1,0 +1,1236 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// COPYSHOT — v3's capture engine. A DOM subtree in, a framed PNG on the
+// clipboard out.
+//
+// ── Why this is not html2canvas ──────────────────────────────────────────────
+// v2 captures with html2canvas (`lib/snapshot.ts`), and the obvious move was to
+// add the same dependency here. It does not work, for a reason specific to v3
+// rather than a matter of taste: html2canvas re-implements CSS colour parsing,
+// and its parser knows hex and the plain rgb / hsl forms only. Every wash, edge
+// and ring in this app is an `alpha()` call, which is `color-mix()` — see
+// design/theme.ts, where that is the SANCTIONED way to get a token at an
+// opacity — and Chrome resolves those to the `color(srgb …)` form. html2canvas
+// throws on the first one it meets, and no amount of writing the app carefully
+// avoids them without giving up the token bridge. It would also cost ~45KB
+// brotli of route budget for a button one person presses a few times a day.
+//
+// So the browser does the rendering instead. The subtree is cloned, every
+// computed style is pinned onto the clone, the clone is serialised into an
+// `<svg><foreignObject>` and drawn to a canvas through an `Image`. Whatever CSS
+// Chrome can paint, this can photograph — `color-mix`, container queries, all
+// of it — because Chrome is the one painting. No dependency, no budget line.
+//
+// ── What it cannot do ────────────────────────────────────────────────────────
+// Known and accepted, because the alternative was nothing at all:
+//
+//   · PSEUDO-ELEMENTS (`::before` / `::after`) are not cloned. Nothing on the
+//     board draws content with them today; a decorative rule or dot would go
+//     missing rather than break the shot.
+//   · CROSS-ORIGIN images are dropped. An `<svg>` image whose subresources are
+//     unreachable fails to load AT ALL — silently — so a picture that cannot be
+//     inlined has to go rather than take the whole capture down with it.
+//   · A card scrolled out of view has not painted (non-negotiable 5), so its
+//     canvases photograph blank. That is the visibility gate working, not the
+//     capture failing.
+//   · A GRID that is scrolled shifts by transforming its children, which loses
+//     any transform they had of their own. Nothing on the board does this; the
+//     scrollers that matter are the flex and block ones. See carryScroll.
+//
+// ── The contract with the page ───────────────────────────────────────────────
+// Two attributes, both optional:
+//   · `data-capture-hide` — the element is removed from the clone. Use it on the
+//     control that STARTS a capture, so a button is never in its own PNG, and on
+//     a row whose words the caption already says. A hidden row that was STACKED
+//     gives its height back to the picture rather than leaving a hole; see
+//     trimHeight for the one case where it cannot.
+//   · `data-capture-meta` — the card's own words for the caption strip, after
+//     the name and the time. The contract date, the ticker, the basis.
+//   · `data-capture-trim` — WHERE THE PICTURE ENDS. The shot is cropped at this
+//     element's left edge. For a surface that holds width open beside what it
+//     draws — the options chain reserves the tracks its hidden expiry columns
+//     would have occupied, so the visible ones keep their size — the element is
+//     as wide as the page and the picture was mostly empty. Put it on the first
+//     thing that is only spacing and the shot frames the content. The element
+//     must sit AFTER everything that belongs in the picture.
+//
+// And one option on the call rather than the DOM: `badge`, a same-origin image
+// drawn at the HEAD of the caption — the ticker's company logo. See ShotOptions.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { tokenHex, tokenHexAlpha } from '@/design/theme'
+
+/** What actually happened to the PNG. The clipboard is not always available. */
+export type ShotResult = 'copied' | 'saved'
+
+export interface ShotOptions {
+  /** Leads the caption strip. Usually the card's own name. */
+  title?: string
+  /**
+   * Caption tail when the element publishes no `data-capture-meta` of its own —
+   * for a surface the registration knows more about than the DOM does. The
+   * attribute wins where both exist, because the card is closer to the truth.
+   */
+  meta?: string
+  /**
+   * A SMALL PICTURE AT THE HEAD OF THE CAPTION — the company logo of the ticker
+   * the card is drawn from, ahead of the name and the time.
+   *
+   * The card's own header is dropped from every shot (see buildClone), and on a
+   * ticker-scoped page the header is where the symbol lived, so the caption is
+   * the only place left that says WHAT was photographed. A 22px mark there is
+   * read before any of the words are.
+   *
+   * A list is tried in order and the first that loads wins — the mirrored PNG,
+   * then the live resolver (see pages/economicCalendar/ChipLogo's
+   * `tickerLogoUrls`). None of them loading prints the caption unchanged.
+   *
+   * MUST BE SAME-ORIGIN. A cross-origin image taints the output canvas and
+   * `toBlob` then throws, which loses the whole shot rather than the badge.
+   */
+  badge?: string | string[]
+  /** Download name, used only when the clipboard write is refused. */
+  filename?: string
+  /**
+   * Deliver the pixels with no caption band and no mark.
+   *
+   * For a surface that IS the poster rather than a card photographed out of the
+   * page — the Economic Calendar template (board/econCalendar/econTemplate.ts)
+   * carries its own title bar, its own date and its own CB Edge mark, and the
+   * caption would say every one of them a second time.
+   */
+  bare?: boolean
+}
+
+/** Elements the page wants out of the picture — see the header, and trimHeight. */
+const HIDE_ATTR = 'data-capture-hide'
+
+/**
+ * WHERE THE PICTURE ENDS, horizontally. See the header contract.
+ *
+ * A crop AFTER rasterising rather than a narrower render, deliberately: the
+ * chain's tracks are `minmax(78px, 1fr)`, so rendering the clone into a narrower
+ * box would squeeze the real columns rather than drop the empty ones. The clone
+ * is built at the element's true width and the canvas is cut — what survives is
+ * pixel-identical to what is on screen.
+ */
+const TRIM_ATTR = 'data-capture-trim'
+
+/** CSS px from the element's left edge to the first trim marker, or null. */
+function trimWidth(el: HTMLElement, rect: DOMRect, full: number): number | null {
+  const marker = el.querySelector(`[${TRIM_ATTR}]`)
+  if (!(marker instanceof HTMLElement)) return null
+  const cut = Math.round(marker.getBoundingClientRect().left - rect.left)
+  // A marker at 0, off the left edge, or past the right edge tells us nothing —
+  // fall back to the whole element rather than emitting a sliver.
+  return cut > 1 && cut < full ? cut : null
+}
+
+/**
+ * A card's own contribution to the caption — its ticker, its contract date, the
+ * basis it is drawing. Put it on the card root or on anything inside it:
+ *
+ *   <div data-capture-meta={`${symbol} · ${expiry}`}>
+ *
+ * The caption reads `Net Premium · Sep 2, 17:15 ET · SPX · 9-2-26`.
+ *
+ * EVERY SHOT DROPS THE CARD'S OWN HEADER — that is not conditional on this
+ * attribute, and every card is expected to publish here whatever its header was
+ * carrying. One shape for every screenshot: the card, then one line under it.
+ * A card with nothing to add (Quick Links, the Economic Calendar) publishes
+ * nothing and its caption is just the name and the time, which is all its header
+ * said anyway.
+ */
+const META_ATTR = 'data-capture-meta'
+
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+/**
+ * THE FRAME. The picture is the card and nothing but the card — no matte, no
+ * title band, no strip bolted underneath. The caption and the mark are laid ON
+ * the bottom of it, over a scrim that fades up out of the app's own background,
+ * so the whole image is the thing being shared and the attribution costs no
+ * height at all.
+ *
+ * The earlier cut was v2's framing: a title band on top, 18px of matte all
+ * round, a centred watermark below. Three pieces of furniture around a card that
+ * already had a header saying the same name, and the card came out smaller than
+ * the chrome around it.
+ */
+/**
+ * A shallow band of plain background below the card, and the fade that joins
+ * the two.
+ *
+ * The band is 32px rather than 0 because every card in this app has something
+ * living on its bottom edge — Net Premium's "Last print" line, GEX Candles' time
+ * axis, a ladder's last row — and a caption laid straight over that is two
+ * strings on one line. 32px is enough to clear all of them and still read as the
+ * card fading into its own footer rather than as a bar bolted underneath: there
+ * is no rule, no plate, and the fade starts well up inside the card.
+ */
+const CAPTION_BAND = 32
+/** How far up the fade reaches, measured from the bottom of the whole image. */
+const SCRIM_H = 76
+/** Distance from the bottom edge to the caption's centre line. */
+const CAPTION_BASE = 16
+const CAPTION_PAD = 16
+/** Type sizes off `tokens.css`'s scale — 13 is `text-sm`. */
+const CAPTION_PX = 13
+const LOGO_H = 24
+const LOGO_ALPHA = 0.85
+/**
+ * The ticker badge at the head of the caption. Smaller than the CB Edge mark
+ * opposite it — that one is the publisher and this one is a label on the
+ * sentence that follows it — and at full opacity, because a company mark washed
+ * to 85% reads as a watermark rather than as part of the caption.
+ */
+const BADGE_H = 22
+const BADGE_GAP = 8
+const SEP = '  ·  '
+
+/** Served from the v2 public/ root, which is the same origin. */
+const LOGO_SRC = '/cbedge3.0.png'
+
+/**
+ * THE PIXEL BUDGET, and why it exists.
+ *
+ * The whole board is not a card — it is every card, at full height, and on a
+ * 27" monitor that is something like 2400×3000 CSS pixels. At devicePixelRatio
+ * 2 that is a 29-megapixel bitmap, and Chrome will not put one of those on the
+ * clipboard: `navigator.clipboard.write` rejects, and the capture used to fall
+ * out of the bottom into a download. "Copy" quietly becoming "saved to
+ * ~/Downloads" on exactly the shot you most want to paste is the worst possible
+ * place for that fallback to fire.
+ *
+ * So the multiply is derived from the OUTPUT SIZE rather than from the display:
+ * 2× while the picture is small enough to stay under the budget, sliding down
+ * toward 1× as it grows. A card is unaffected — the budget is four times the
+ * biggest card anyone has on a board — and the board comes back at whatever
+ * fidelity fits in one clipboard write.
+ */
+const MAX_SHOT_PIXELS = 12_000_000
+/** Never below this, however large the surface: a mush is not a screenshot. */
+const MIN_SHOT_SCALE = 0.75
+
+function shotScale(w: number, h: number): number {
+  const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
+  const area = Math.max(1, w * h)
+  return Math.max(MIN_SHOT_SCALE, Math.min(dpr, Math.sqrt(MAX_SHOT_PIXELS / area)))
+}
+
+// ── Which declarations actually have to travel ───────────────────────────────
+//
+// The clone is rendered inside an `<svg>` image, which is its own document: it
+// cannot see the page's stylesheets, so a class name means nothing there and
+// every value has to be pinned on as an inline declaration.
+//
+// Naively that is ~340 properties on every node — a mid-sized card serialises
+// to several megabytes of `style="…"`, which is slow to build, slow to encode
+// and slow for Chrome to parse back. Almost all of it is redundant, and there
+// are exactly two ways a declaration can be redundant:
+//
+//   · it is INHERITED and matches the parent — the clone's parent carries it,
+//     so the child gets the same value for free;
+//   · it is at the UA DEFAULT for its tag — the SVG document runs the same UA
+//     stylesheet, so leaving it out lands on the same value.
+//
+// Getting that wrong is a wrong-looking picture, so the test is conservative:
+// a property listed in INHERITED is dropped when it matches the parent, and
+// EVERY OTHER property must match the parent AND the tag default before it is
+// dropped. Either way the value the clone ends up with is the value that was
+// measured — by inheritance or by default — never a guess.
+
+/**
+ * Properties CSS inherits, spelled out rather than detected.
+ *
+ * Only entries that are certain are here. A property wrongly listed would be
+ * dropped on a child whose parent differs, which paints the wrong thing; a
+ * property wrongly MISSING just falls through to the stricter test above and
+ * costs a few bytes. The asymmetry is the reason this is a short list of sure
+ * things rather than a long list of likely ones.
+ */
+const INHERITED = new Set([
+  'color',
+  'font-family',
+  'font-size',
+  'font-style',
+  'font-weight',
+  'font-stretch',
+  'font-kerning',
+  'font-feature-settings',
+  'font-variation-settings',
+  'font-variant',
+  'font-variant-caps',
+  'font-variant-numeric',
+  'font-variant-ligatures',
+  'line-height',
+  'letter-spacing',
+  'word-spacing',
+  'text-align',
+  'text-indent',
+  'text-transform',
+  'text-shadow',
+  'text-rendering',
+  'white-space',
+  'white-space-collapse',
+  'word-break',
+  'overflow-wrap',
+  'hyphens',
+  'tab-size',
+  'direction',
+  'visibility',
+  'cursor',
+  'caret-color',
+  'pointer-events',
+  'image-rendering',
+  'user-select',
+  '-webkit-user-select',
+  '-webkit-font-smoothing',
+  'list-style-type',
+  'list-style-position',
+  'list-style-image',
+  'border-collapse',
+  'border-spacing',
+  'caption-side',
+  'empty-cells',
+  'quotes',
+  'orphans',
+  'widows',
+  // SVG's inherited presentation properties. The sector wheel is hundreds of
+  // arcs that all take their fill and stroke from one ancestor.
+  'fill',
+  'fill-opacity',
+  'fill-rule',
+  'stroke',
+  'stroke-width',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'stroke-miterlimit',
+  'stroke-dasharray',
+  'stroke-dashoffset',
+  'stroke-opacity',
+  'text-anchor',
+  'dominant-baseline',
+  'paint-order',
+  'shape-rendering',
+  'clip-rule',
+  'color-interpolation',
+  'color-interpolation-filters',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+])
+
+/**
+ * Properties that are NEVER pruned, however redundant they look.
+ *
+ * The prune test above rests on one assumption: a property left out lands on
+ * the tag default, and the tag default is what the sandbox measured. Border
+ * width breaks that assumption, and it cost a whole afternoon of white
+ * rectangles round every card.
+ *
+ * Tailwind's preflight sets `border: 0 solid currentColor` on every element, so
+ * a plain div computes to `border-style: solid`, `border-width: 0px`,
+ * `border-color: <the text colour>` — white, in this app. Against a bare div in
+ * the sandbox (`none` / `0px` / black) that reads as: style DIFFERS, keep it;
+ * colour DIFFERS, keep it; width MATCHES at 0px, drop it. Both zeros are real,
+ * and they mean completely different things — the sandbox's is zero because the
+ * style is `none`, and an omitted width under a written `border-style: solid`
+ * falls back to the initial value, which is `medium`. Three white pixels around
+ * every element in the picture.
+ *
+ * The shape of the bug is a computed value that another property FIXES UP, and
+ * that is a short, closed list in CSS: the width of a border, an outline or a
+ * column rule is reported as 0 whenever its style is none. Writing those
+ * families whole costs ~19 declarations a node and takes the whole class of
+ * mistake off the table.
+ */
+const ALWAYS = new Set([
+  'border-top-width',
+  'border-right-width',
+  'border-bottom-width',
+  'border-left-width',
+  'border-top-style',
+  'border-right-style',
+  'border-bottom-style',
+  'border-left-style',
+  'border-top-color',
+  'border-right-color',
+  'border-bottom-color',
+  'border-left-color',
+  'outline-width',
+  'outline-style',
+  'outline-color',
+  'outline-offset',
+  'column-rule-width',
+  'column-rule-style',
+  'column-rule-color',
+  // The two that decide where everything else lands. They are effectively never
+  // prunable in practice, and a layout that silently collapses because one of
+  // them was is not a failure worth risking to save two declarations.
+  'width',
+  'height',
+])
+
+/**
+ * The UA's computed style for a bare element of each tag, read from a sandbox
+ * document with no stylesheets — which is exactly the environment the clone is
+ * about to be rendered in.
+ *
+ * `baseline()` is the same reading for a tag the UA stylesheet says NOTHING
+ * about (a plain `div`, or a plain `g` inside SVG). Comparing a tag's defaults
+ * against the baseline is how the prune tells "this value is just inherited" —
+ * safe to leave out — from "the UA declares this for this tag", which is not:
+ * a UA rule beats inheritance, so an `<h2>` whose font-size was dropped because
+ * it matched its parent comes back at the UA's 1.5em and bold. Same disease as
+ * the border-width note above, on the inherited side.
+ *
+ * Lives for one capture and is torn down in a `finally`.
+ */
+class TagDefaults {
+  private frame: HTMLIFrameElement | null = null
+  private doc: Document | null = null
+  private svgHost: SVGSVGElement | null = null
+  private cache = new Map<string, Map<string, string>>()
+
+  private ensure(): Document | null {
+    if (this.doc) return this.doc
+    const f = document.createElement('iframe')
+    f.setAttribute('aria-hidden', 'true')
+    f.setAttribute('tabindex', '-1')
+    f.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;border:0;visibility:hidden'
+    document.body.appendChild(f)
+    this.frame = f
+    this.doc = f.contentDocument
+    return this.doc
+  }
+
+  /** Empty map when the sandbox is unavailable — the caller then keeps everything. */
+  for(el: Element): Map<string, string> {
+    return this.read(el.namespaceURI === SVG_NS, el.tagName.toLowerCase())
+  }
+
+  /**
+   * The defaults of a tag the UA stylesheet has no opinion about, in the same
+   * namespace. Anything a tag's own defaults differ from here is UA-declared.
+   */
+  baseline(el: Element): Map<string, string> {
+    const svg = el.namespaceURI === SVG_NS
+    return this.read(svg, svg ? 'g' : 'div')
+  }
+
+  private read(svg: boolean, tag: string): Map<string, string> {
+    const key = svg ? `svg:${tag}` : tag
+    const hit = this.cache.get(key)
+    if (hit) return hit
+
+    const out = new Map<string, string>()
+    const doc = this.ensure()
+    const view = doc?.defaultView
+    if (doc?.body && view) {
+      try {
+        let probe: Element
+        if (svg) {
+          let host = this.svgHost
+          if (!host) {
+            host = doc.createElementNS(SVG_NS, 'svg')
+            doc.body.appendChild(host)
+            this.svgHost = host
+          }
+          probe = doc.createElementNS(SVG_NS, tag)
+          host.appendChild(probe)
+        } else {
+          probe = doc.createElement(tag)
+          doc.body.appendChild(probe)
+        }
+        const cs = view.getComputedStyle(probe)
+        for (let i = 0; i < cs.length; i++) {
+          const prop = cs.item(i)
+          if (prop) out.set(prop, cs.getPropertyValue(prop))
+        }
+        probe.remove()
+      } catch {
+        /* an exotic tag; keeping every declaration for it is only wasteful */
+      }
+    }
+    this.cache.set(key, out)
+    return out
+  }
+
+  dispose(): void {
+    this.frame?.remove()
+    this.frame = null
+    this.doc = null
+    this.svgHost = null
+    this.cache.clear()
+  }
+}
+
+// ── Cloning ──────────────────────────────────────────────────────────────────
+
+/** Pin one element's computed style onto its clone. See the block above. */
+function applyStyle(
+  src: Element,
+  dst: Element,
+  cs: CSSStyleDeclaration,
+  parentCs: CSSStyleDeclaration | null,
+  defaults: TagDefaults,
+): void {
+  const style = (dst as HTMLElement).style
+  if (!style) return
+
+  // The root has no parent inside the capture, so nothing about it can be left
+  // to inheritance and every declaration is written.
+  const defs = parentCs ? defaults.for(src) : null
+  const base = parentCs ? defaults.baseline(src) : null
+
+  for (let i = 0; i < cs.length; i++) {
+    const prop = cs.item(i)
+    if (!prop) continue
+    const v = cs.getPropertyValue(prop)
+
+    if (parentCs && !ALWAYS.has(prop)) {
+      const inherited = prop.startsWith('--') || INHERITED.has(prop)
+      const sameAsParent = parentCs.getPropertyValue(prop) === v
+      // Inherited: the clone gets it from its parent — UNLESS the UA stylesheet
+      // declares this property for this tag, which beats inheritance. Custom
+      // properties are in neither map, so they compare equal and stay prunable.
+      const uaSilent = defs?.get(prop) === base?.get(prop)
+      if (inherited ? sameAsParent && uaSilent : sameAsParent && defs?.get(prop) === v) continue
+    }
+
+    style.setProperty(prop, v, cs.getPropertyPriority(prop))
+  }
+
+  // A background pointing at a URL we cannot inline. An unresolvable reference
+  // inside the SVG does not degrade — it fails the whole image load, silently —
+  // so anything that is not already a data: URI is dropped here.
+  const bg = cs.getPropertyValue('background-image')
+  if (bg.includes('url(') && !bg.includes('url("data:') && !bg.includes('url(data:')) {
+    style.setProperty('background-image', 'none')
+  }
+
+  // No scrollbars in a photograph. A scroller's offset travels as a margin (see
+  // carryScroll), so the clone has nothing left to scroll — but `overflow: auto`
+  // over overflowing content still draws the bar, and the SVG document draws the
+  // CLASSIC one, eating 15px of the numbers it was pointing at. The app hides
+  // these on screen anyway; this makes the picture agree.
+  for (const axis of ['overflow-x', 'overflow-y'] as const) {
+    const o = cs.getPropertyValue(axis)
+    if (o === 'auto' || o === 'scroll') style.setProperty(axis, 'hidden')
+  }
+
+  // NOTE ON THE BOX, because the obvious "fix" here is a bug:
+  //
+  // An earlier cut restated every element's box from `getBoundingClientRect`,
+  // on the belief that `getComputedStyle().width` is the CONTENT width whatever
+  // `box-sizing` says — which would shrink the clone by its own padding at
+  // every level of nesting. It is not: Chrome's resolved `width` HONOURS
+  // `box-sizing`, so a border-box element reports its border box and a
+  // content-box element its content box. Copying `width` and `box-sizing`
+  // together, which the loop above already does, reproduces the geometry
+  // exactly.
+  //
+  // Measuring instead was strictly worse: the rect is fractional and a text box
+  // pinned to its own exact width re-wraps on the tiniest metric difference in
+  // the SVG document, and a transformed element's rect already has the
+  // transform in it, which the copied `transform` would then apply twice.
+}
+
+/**
+ * Style the whole tree, top down.
+ *
+ * Recursive rather than a flat walk because every node needs its PARENT's
+ * computed style to decide what it can leave out, and the parent's is already
+ * in hand one frame up the stack.
+ */
+function styleTree(
+  src: Element,
+  dst: Element,
+  parentCs: CSSStyleDeclaration | null,
+  defaults: TagDefaults,
+): void {
+  const cs = getComputedStyle(src)
+  applyStyle(src, dst, cs, parentCs, defaults)
+  const a = src.children
+  const b = dst.children
+  const n = Math.min(a.length, b.length)
+  for (let i = 0; i < n; i++) {
+    const sc = a[i]
+    const dc = b[i]
+    if (sc && dc) styleTree(sc, dc, cs, defaults)
+  }
+  // After the children, never before: it rewrites the first child's margin and
+  // the style pass would otherwise put the live value straight back.
+  carryScroll(src, dst, cs)
+}
+
+/**
+ * Every (source, clone) element pair, in document order.
+ *
+ * Collected BEFORE anything is mutated: the clone is about to have nodes
+ * removed and canvases swapped out, and a walk over a tree changing underneath
+ * it loses its place. `cloneNode(true)` guarantees the two trees are
+ * structurally identical at this moment, which is what makes the index-wise
+ * descent sound.
+ */
+function pairUp(src: Element, dst: Element, out: Array<[Element, Element]>): void {
+  out.push([src, dst])
+  const a = src.children
+  const b = dst.children
+  const n = Math.min(a.length, b.length)
+  for (let i = 0; i < n; i++) {
+    const sc = a[i]
+    const dc = b[i]
+    if (sc && dc) pairUp(sc, dc, out)
+  }
+}
+
+/**
+ * Carry a scroll offset across to the clone.
+ *
+ * A scroll position is not a style, so `cloneNode` starts every scroller at the
+ * top — which is how the Multi Greek ladder photographed at strike 950 for a
+ * $324 stock. That ladder auto-scrolls so ATM sits in the middle of the box, and
+ * the middle is the entire point of the card; a shot of the top of it is a shot
+ * of a column of dashes.
+ *
+ * The offset travels as a NEGATIVE MARGIN on the first element child rather
+ * than as a scroll: the container keeps its own `overflow`, so everything above
+ * the offset is clipped exactly as it is on screen, and normal flow carries the
+ * shift down through every sibling. A transform on the container would move its
+ * background and border too; a wrapper element around the children would break
+ * the flex and grid containers this app is built out of.
+ *
+ * Grid is the one layout this cannot shift — margin on one item does not move
+ * the rest of the track — so those children are translated individually
+ * instead.
+ */
+function carryScroll(src: Element, dst: Element, cs: CSSStyleDeclaration): void {
+  const top = src.scrollTop
+  const left = src.scrollLeft
+  if (!top && !left) return
+
+  if (cs.display.includes('grid')) {
+    for (const child of Array.from(dst.children)) {
+      const s = (child as HTMLElement).style
+      if (s) s.setProperty('transform', `translate(${-left}px, ${-top}px)`)
+    }
+    return
+  }
+
+  const first = dst.firstElementChild as HTMLElement | null
+  if (!first?.style) return
+  // Added to whatever margin the child already carries, which the style pass
+  // has already written out in full.
+  const mt = parseFloat(getComputedStyle(src.firstElementChild ?? src).marginTop) || 0
+  const ml = parseFloat(getComputedStyle(src.firstElementChild ?? src).marginLeft) || 0
+  if (top) first.style.setProperty('margin-top', `${mt - top}px`)
+  if (left) first.style.setProperty('margin-left', `${ml - left}px`)
+}
+
+/** A canvas's bitmap as an `<img>`, or null when the canvas cannot be read. */
+function canvasToImg(src: HTMLCanvasElement, dst: Element): HTMLImageElement | null {
+  let url: string
+  try {
+    url = src.toDataURL('image/png')
+  } catch {
+    return null // tainted by a cross-origin draw; there is nothing to photograph
+  }
+  const img = document.createElement('img')
+  img.setAttribute('style', dst.getAttribute('style') ?? '')
+  const r = src.getBoundingClientRect()
+  img.setAttribute('width', String(Math.round(r.width)))
+  img.setAttribute('height', String(Math.round(r.height)))
+  img.setAttribute('src', url)
+  return img
+}
+
+/** Re-encode a same-origin `<img>` as a data URI. Null when it cannot be read. */
+function imgToDataUrl(src: HTMLImageElement): string | null {
+  if (src.currentSrc.startsWith('data:')) return src.currentSrc
+  const w = src.naturalWidth
+  const h = src.naturalHeight
+  if (!w || !h || !src.complete) return null
+  try {
+    const c = document.createElement('canvas')
+    c.width = w
+    c.height = h
+    const ctx = c.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(src, 0, 0)
+    return c.toDataURL('image/png')
+  } catch {
+    return null // cross-origin, so the canvas is tainted
+  }
+}
+
+/**
+ * HOW MUCH HEIGHT COMES OFF WITH THE CHROME.
+ *
+ * Every element's computed height is pinned onto the clone, so a node that is
+ * REMOVED does not give its space back — the ones after it slide up and the
+ * same number of empty pixels opens at the bottom. The card's own header has
+ * always been accounted for here; a hidden row inside the body was not, and a
+ * card that hid one photographed with a band of bare plate under it.
+ *
+ * ONLY WHAT WAS STACKED. A hidden element gives its height back when it was one
+ * of a vertical run — a status line above a chart, in a block or a flex column.
+ * In a flex ROW (the camera button in its own header, which is the original use
+ * of this attribute) removing it changes the width, not the height, and
+ * subtracting anything would crop the picture. Grid is left alone too: a removed
+ * item does not close its track.
+ *
+ * Absolutely positioned and already-zero-height elements are out for the same
+ * reason — they were never holding any of the height in the first place.
+ */
+function trimHeight(el: HTMLElement, header: HTMLElement | null): number {
+  let trim = header ? header.getBoundingClientRect().height : 0
+  for (const hidden of el.querySelectorAll<HTMLElement>(`[${HIDE_ATTR}]`)) {
+    if (header?.contains(hidden)) continue
+    // A hidden node inside another hidden node is already counted by its
+    // ancestor — counting it again would take the space off twice.
+    if (hidden.parentElement?.closest(`[${HIDE_ATTR}]`)) continue
+    const parent = hidden.parentElement
+    if (!parent || !el.contains(parent)) continue
+    const pcs = getComputedStyle(parent)
+    const flex = pcs.display.includes('flex')
+    const stacked = flex
+      ? pcs.flexDirection.startsWith('column')
+      : pcs.display.includes('block') || pcs.display.includes('flow-root')
+    if (!stacked) continue
+    const cs = getComputedStyle(hidden)
+    if (cs.position === 'absolute' || cs.position === 'fixed') continue
+    const h = hidden.getBoundingClientRect().height
+    if (!h) continue
+    trim += h + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0)
+  }
+  return trim
+}
+
+/**
+ * A detached, self-contained copy of `el`, sized to its border box.
+ *
+ * Everything the SVG document cannot reach back into the page for — styles,
+ * canvas bitmaps, image bytes, live form values — is materialised here.
+ *
+ * Returns the clone AND the height it should be rendered at: dropping the card's
+ * own header — and any stacked row wearing `data-capture-hide` — takes those
+ * pixels off the picture as well as out of it. The body is a chart at a fixed
+ * bitmap size, so leaving the height alone would just open a band of empty plate
+ * under it. See trimHeight.
+ */
+function buildClone(el: HTMLElement, w: number, h: number): { clone: HTMLElement; height: number } {
+  const clone = el.cloneNode(true) as HTMLElement
+  const defaults = new TagDefaults()
+
+  try {
+    // Styles first: this measures the LIVE element, so it has to run while the
+    // two trees still line up and before anything is pulled out of the clone.
+    styleTree(el, clone, null, defaults)
+  } finally {
+    defaults.dispose()
+  }
+
+  // The Card primitive's own header — the row carrying the card's name and its
+  // toolbar. It always comes off: the caption under the picture says the name,
+  // the time and whatever the card published (see META_ATTR), so leaving the
+  // header in prints all of it twice with the chart squeezed underneath.
+  //
+  // `:scope >` deliberately: a Multi Greek column or any nested Card has a
+  // header of its own and that one is content, not chrome.
+  const header = el.querySelector<HTMLElement>(':scope > header')
+  const height = Math.max(1, h - trimHeight(el, header))
+
+  const pairs: Array<[Element, Element]> = []
+  pairUp(el, clone, pairs)
+
+  for (const [src, dst] of pairs) {
+    // A descendant of something already removed. Its own turn is a no-op.
+    if (dst !== clone && !clone.contains(dst)) continue
+
+    if (src === header || src.hasAttribute(HIDE_ATTR)) {
+      dst.remove()
+      continue
+    }
+    if (src instanceof HTMLScriptElement || src instanceof HTMLIFrameElement) {
+      dst.remove()
+      continue
+    }
+    if (src instanceof HTMLCanvasElement) {
+      const img = canvasToImg(src, dst)
+      if (img) dst.replaceWith(img)
+      else dst.remove()
+      continue
+    }
+    if (src instanceof HTMLImageElement) {
+      const url = imgToDataUrl(src)
+      // An image that cannot be inlined has to go: an unresolvable reference
+      // fails the whole SVG load, not just itself.
+      if (url) dst.setAttribute('src', url)
+      else dst.remove()
+      continue
+    }
+    // `cloneNode` copies the ATTRIBUTE, which is not the live value.
+    if (src instanceof HTMLInputElement && dst instanceof HTMLInputElement) {
+      dst.setAttribute('value', src.value)
+      if (src.checked) dst.setAttribute('checked', '')
+    }
+    if (src instanceof HTMLTextAreaElement) dst.textContent = src.value
+  }
+
+  // The root sheds whatever was positioning it on the page — it is the whole
+  // picture now, at 0,0.
+  clone.style.setProperty('box-sizing', 'border-box')
+  clone.style.setProperty('width', `${w}px`)
+  clone.style.setProperty('height', `${height}px`)
+  clone.style.setProperty('margin', '0')
+  clone.style.setProperty('position', 'static')
+  clone.style.setProperty('inset', 'auto')
+  clone.style.setProperty('transform', 'none')
+  clone.style.setProperty('max-width', 'none')
+  clone.style.setProperty('max-height', 'none')
+
+  return { clone, height }
+}
+
+// ── Rasterising ──────────────────────────────────────────────────────────────
+
+/**
+ * HOW LONG A SHOT WILL WAIT ON AN IMAGE THAT IS STILL IN FLIGHT.
+ *
+ * Long enough for /proxy/ticker-logo's worst case, short enough that a genuinely
+ * dead image does not hold the camera open. Nothing fails when it expires — the
+ * shot is taken without whatever had not arrived, which is the old behaviour.
+ */
+const IMAGE_SETTLE_MS = 3000
+
+/**
+ * WAIT FOR THE PICTURES, the way rasterise already waits for the fonts.
+ *
+ * buildClone inlines every <img> as a data URI and DROPS the ones it cannot read
+ * — an unresolvable reference fails the whole SVG load, not just itself. But
+ * `complete` is false for an image still in flight, so "has not arrived yet" and
+ * "is never going to arrive" reach that branch looking identical, and the
+ * in-flight one is deleted out of a picture it was a beat away from appearing
+ * in. On screen it then shows up a moment later, which is why the card looks
+ * right and the shot of it does not.
+ *
+ * Invisible while every image is a same-origin hit off the mirror. It is the
+ * ENTIRE earnings board the moment those chips fall through to
+ * /proxy/ticker-logo, which costs a PG lookup, a HEAD to GitHub and up to two
+ * Wikidata calls before it answers — every chip is in flight at once and the
+ * shot catches none of them.
+ *
+ * Only images the browser has actually started fetching are waited on:
+ * `currentSrc` is empty for a lazy image still below the fold, and those are
+ * meant to be dropped rather than waited out (see ChipLogo's `lazy` prop, which
+ * anything that gets photographed already turns off).
+ *
+ * Never rejects. A broken image resolves on its error event, not the timeout.
+ */
+function settleImages(el: HTMLElement): Promise<void> {
+  const pending = Array.from(el.querySelectorAll('img')).filter(
+    (img) => !img.complete && !!img.currentSrc,
+  )
+  if (!pending.length) return Promise.resolve()
+
+  return Promise.race([
+    Promise.all(
+      pending.map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            img.addEventListener('load', () => resolve(), { once: true })
+            img.addEventListener('error', () => resolve(), { once: true })
+          }),
+      ),
+    ).then(() => undefined),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, IMAGE_SETTLE_MS)
+    }),
+  ])
+}
+
+/** The subtree, rendered by the browser itself. See shotScale for the multiply. */
+async function rasterise(el: HTMLElement): Promise<{ canvas: HTMLCanvasElement; scale: number }> {
+  const rect = el.getBoundingClientRect()
+  const w = Math.max(1, Math.ceil(rect.width))
+
+  // Text inside the SVG document is measured against the same faces the page is
+  // using — but only once they have actually loaded.
+  await document.fonts?.ready?.catch(() => undefined)
+
+  // Same idea for the bitmaps: buildClone deletes an <img> it cannot read, and
+  // an image that is merely still loading reads exactly like one that failed.
+  await settleImages(el)
+
+  // The clone is always built at the element's FULL width — see TRIM_ATTR.
+  const crop = trimWidth(el, rect, w)
+  const { clone, height } = buildClone(el, w, Math.max(1, Math.ceil(rect.height)))
+  const h = Math.ceil(height)
+  const body = new XMLSerializer().serializeToString(clone)
+  const svg =
+    `<svg xmlns="${SVG_NS}" width="${w}" height="${h}">` +
+    `<foreignObject x="0" y="0" width="100%" height="100%">${body}</foreignObject>` +
+    `</svg>`
+
+  const img = new Image()
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () =>
+      reject(new Error('the browser refused the serialised page — usually an asset it could not reach'))
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  })
+
+  // The caption band rides under the card, so the budget has to cover both or
+  // the frame is the thing that tips the write over the limit. Measured on the
+  // CROPPED width — the pixels that are being thrown away should not be buying
+  // the picture a coarser scale.
+  const outW = crop ?? w
+  const scale = shotScale(outW, h + CAPTION_BAND)
+  const out = document.createElement('canvas')
+  out.width = Math.round(outW * scale)
+  out.height = Math.round(h * scale)
+  const ctx = out.getContext('2d')
+  if (!ctx) throw new Error('no 2d context')
+  // Drawn at FULL width onto a narrower canvas: the overflow past the right edge
+  // is clipped, which is the crop. Nothing is rescaled, so the surviving pixels
+  // are exactly the ones an uncropped shot would have had.
+  ctx.drawImage(img, 0, 0, Math.round(w * scale), Math.round(h * scale))
+  return { canvas: out, scale }
+}
+
+/** ET, the only clock this app tells time in. */
+function stampNow(): string {
+  return `${new Date().toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })} ET`
+}
+
+/**
+ * The mark, loaded once per tab and kept.
+ *
+ * Resolves to null on any failure — a missing logo prints a caption without one
+ * rather than losing the shot.
+ */
+let logoPromise: Promise<HTMLImageElement | null> | null = null
+function loadLogo(): Promise<HTMLImageElement | null> {
+  if (!logoPromise) logoPromise = loadImage(LOGO_SRC)
+  return logoPromise
+}
+
+/**
+ * One image, or null. Never rejects — a caption without a badge beats no shot.
+ */
+function loadImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => resolve(null)
+    img.src = src
+  })
+}
+
+/**
+ * The first of `srcs` that loads. Sequential rather than raced on purpose: the
+ * order IS the preference (the mirrored copy before the live resolver, which
+ * costs a PG lookup and a round trip to a third party), and racing them would
+ * fire that request every time even when the mirror has the file.
+ */
+async function loadBadge(srcs: string | string[] | undefined): Promise<HTMLImageElement | null> {
+  const list = srcs == null ? [] : Array.isArray(srcs) ? srcs : [srcs]
+  for (const src of list) {
+    if (!src) continue
+    const img = await loadImage(src)
+    if (img?.naturalWidth && img.naturalHeight) return img
+  }
+  return null
+}
+
+/**
+ * The card, with the caption and the mark laid over its bottom edge.
+ *
+ * `Net Premium · Sep 2, 17:15 ET · SPX · 9-2-26` on the left, the CB Edge mark
+ * on the right, both sitting on a scrim that fades up out of the app's own
+ * background. Nothing is added below the card, so the image is exactly the card
+ * and the attribution rides for free.
+ */
+function frame(
+  shot: HTMLCanvasElement,
+  scale: number,
+  title: string,
+  meta: string | null,
+  logo: HTMLImageElement | null,
+  badge: HTMLImageElement | null,
+): HTMLCanvasElement {
+  const w = shot.width / scale
+  const cardH = shot.height / scale
+  const h = cardH + CAPTION_BAND
+
+  const out = document.createElement('canvas')
+  out.width = Math.round(w * scale)
+  out.height = Math.round(h * scale)
+  const ctx = out.getContext('2d')
+  if (!ctx) return shot
+  ctx.scale(scale, scale)
+
+  const face = getComputedStyle(document.body).fontFamily
+
+  ctx.fillStyle = tokenHex('--color-bg')
+  ctx.fillRect(0, 0, w, h)
+  ctx.drawImage(shot, 0, 0, w, cardH)
+
+  // The scrim. Transparent at the top so it reads as the card dimming into its
+  // own footer rather than as a bar someone stuck on.
+  const scrimTop = Math.max(0, h - SCRIM_H)
+  const g = ctx.createLinearGradient(0, scrimTop, 0, h)
+  g.addColorStop(0, tokenHexAlpha('--color-bg', 0))
+  g.addColorStop(1, tokenHexAlpha('--color-bg', 0.92))
+  ctx.fillStyle = g
+  ctx.fillRect(0, scrimTop, w, h - scrimTop)
+
+  const mid = h - CAPTION_BASE
+  ctx.textBaseline = 'middle'
+
+  // The mark goes down first so the caption knows how much room is left.
+  let logoW = 0
+  if (logo?.naturalWidth && logo.naturalHeight) {
+    logoW = (logo.naturalWidth / logo.naturalHeight) * LOGO_H
+    ctx.globalAlpha = LOGO_ALPHA
+    ctx.drawImage(logo, w - CAPTION_PAD - logoW, mid - LOGO_H / 2, logoW, LOGO_H)
+    ctx.globalAlpha = 1
+  }
+
+  // The ticker badge leads the line. Drawn before the text is measured so the
+  // caption's left edge and its room are the same number in both branches.
+  let textX = CAPTION_PAD
+  if (badge?.naturalWidth && badge.naturalHeight) {
+    const badgeW = (badge.naturalWidth / badge.naturalHeight) * BADGE_H
+    ctx.drawImage(badge, CAPTION_PAD, mid - BADGE_H / 2, badgeW, BADGE_H)
+    textX = CAPTION_PAD + badgeW + BADGE_GAP
+  }
+
+  const room = Math.max(40, w - textX - CAPTION_PAD - logoW - 16)
+  ctx.textAlign = 'left'
+  ctx.font = `600 ${CAPTION_PX}px ${face}`
+  ctx.fillStyle = tokenHex('--color-fg')
+  const titleW = Math.min(ctx.measureText(title).width, room)
+  ctx.fillText(title, textX, mid, room)
+
+  // Time and the card's own note in the quieter weight, so the name still reads
+  // first at a glance in a Discord thumbnail. `--color-muted` is white today
+  // (every text token is — see tokens.css), and the whole difference between fg
+  // and muted in this app is the opacity utility a class would carry; a canvas
+  // has no class, so it takes the alpha from the token itself.
+  const tail = meta ? `${SEP}${stampNow()}${SEP}${meta}` : `${SEP}${stampNow()}`
+  ctx.font = `400 ${CAPTION_PX}px ${face}`
+  ctx.fillStyle = tokenHexAlpha('--color-muted', 0.7)
+  ctx.fillText(tail, textX + titleW, mid, Math.max(20, room - titleW))
+
+  return out
+}
+
+// ── Delivery ─────────────────────────────────────────────────────────────────
+
+function toBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png')
+  })
+}
+
+function download(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/**
+ * PLAIN TEXT to the clipboard.
+ *
+ * The other half of this file photographs pixels; some things are better as
+ * characters. A levels line pasted into Discord as text can be quoted, searched
+ * and read by a phone's screen reader, and it survives being copied on again —
+ * a PNG of six numbers is none of those. See board/keyLevels/KeyLevelsCard.tsx.
+ *
+ * `writeText` is the modern path. The `execCommand` fallback is not superstition:
+ * it is the one that still works when the async clipboard is unavailable (an
+ * insecure origin, a permission the user declined), and for text there is no
+ * sensible download to fall back to instead — a .txt in ~/Downloads is not what
+ * anybody meant by copy. Throws when both fail, so the caller shows the error
+ * rather than reporting a copy that did not happen.
+ */
+export async function copyText(text: string): Promise<ShotResult> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return 'copied'
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+
+  // Off-screen rather than hidden: `display:none` cannot hold a selection, and
+  // a selection is what execCommand copies.
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.setAttribute('readonly', '')
+  ta.setAttribute('aria-hidden', 'true')
+  ta.style.cssText = 'position:fixed;left:-99999px;top:0;opacity:0'
+  document.body.appendChild(ta)
+  try {
+    ta.select()
+    ta.setSelectionRange(0, text.length)
+    if (document.execCommand('copy')) return 'copied'
+  } catch {
+    /* reported below */
+  } finally {
+    ta.remove()
+  }
+  throw new Error('the browser refused the clipboard')
+}
+
+/** One attempt at the clipboard. False means "not this blob", not "never". */
+async function copyBlob(blob: Blob): Promise<boolean> {
+  try {
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') return false
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Half-size copy of a canvas, for the retry ladder below. */
+function shrink(src: HTMLCanvasElement, factor: number): HTMLCanvasElement {
+  const out = document.createElement('canvas')
+  out.width = Math.max(1, Math.round(src.width * factor))
+  out.height = Math.max(1, Math.round(src.height * factor))
+  const ctx = out.getContext('2d')
+  if (!ctx) return src
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(src, 0, 0, out.width, out.height)
+  return out
+}
+
+/**
+ * The clipboard, and only then a download.
+ *
+ * The clipboard is the whole point — the shot is going into Discord or a DM,
+ * and a file in ~/Downloads is two more steps. Chrome refuses a write for two
+ * different reasons and they want different answers: it refuses because the
+ * bitmap is too big, which SHRINKING fixes, and it refuses on an insecure
+ * origin or a stale gesture, which nothing here fixes.
+ *
+ * There is no way to tell the two apart from the rejection, so this tries
+ * smaller twice before giving up. `shotScale` already sizes the capture to stay
+ * under the limit; this is the belt to that pair of braces, and it is what
+ * stopped "Whole board" quietly arriving in ~/Downloads instead of on the
+ * clipboard. The download is still there for the cases that are genuinely not
+ * about size — losing the capture entirely would be worse than either.
+ */
+const RETRY_FACTORS = [0.62, 0.45]
+
+export async function copyOrDownload(blob: Blob, filename: string): Promise<ShotResult> {
+  if (await copyBlob(blob)) return 'copied'
+  download(blob, filename)
+  return 'saved'
+}
+
+/**
+ * ENCODE ONLY — the pixels, with nothing decided about where they go.
+ *
+ * The clipboard-claim path in shell/CopyShot.tsx needs the two halves apart:
+ * it hands Chrome a PROMISE of this blob at click time and only then starts
+ * the capture, so the write is registered while the click is still warm.
+ */
+export function encodeShot(canvas: HTMLCanvasElement): Promise<Blob> {
+  return toBlob(canvas)
+}
+
+export async function deliverCanvas(canvas: HTMLCanvasElement, filename: string): Promise<ShotResult> {
+  let blob = await toBlob(canvas)
+  if (await copyBlob(blob)) return 'copied'
+
+  for (const f of RETRY_FACTORS) {
+    blob = await toBlob(shrink(canvas, f))
+    if (await copyBlob(blob)) return 'copied'
+  }
+
+  download(blob, filename)
+  return 'saved'
+}
+
+/** The card's own contribution to the caption. See META_ATTR. */
+function metaOf(el: HTMLElement): string | null {
+  const own = el.getAttribute(META_ATTR)
+  if (own) return own
+  return el.querySelector(`[${META_ATTR}]`)?.getAttribute(META_ATTR) || null
+}
+
+/**
+ * Photograph `el` and frame it — the finished canvas, not yet delivered.
+ *
+ * Split out of `captureAndCopy` for the claim path: the caller that already
+ * registered a clipboard write needs the pixels in its own hands so it can
+ * settle that write, and only fall back to the ladder below if it is refused.
+ */
+export async function captureCanvas(el: HTMLElement, opts: ShotOptions = {}): Promise<HTMLCanvasElement> {
+  // The DOM wins where both exist: the card is closer to the truth than the
+  // menu entry that pointed at it.
+  const meta = metaOf(el) ?? opts.meta ?? null
+  const [{ canvas, scale }, logo, badge] = await Promise.all([
+    rasterise(el),
+    opts.bare ? Promise.resolve(null) : loadLogo(),
+    opts.bare ? Promise.resolve(null) : loadBadge(opts.badge),
+  ])
+  return opts.bare ? canvas : frame(canvas, scale, opts.title ?? 'CB Edge', meta, logo, badge)
+}
+
+/** Photograph `el`, frame it, and put it on the clipboard. */
+export async function captureAndCopy(el: HTMLElement, opts: ShotOptions = {}): Promise<ShotResult> {
+  const out = await captureCanvas(el, opts)
+  return deliverCanvas(out, opts.filename ?? 'snapshot.png')
+}
+
+/**
+ * A SMALL JPEG of `el`, as a data URL — the note-clip path.
+ *
+ * `captureAndCopy` above is the sharing path: full fidelity, caption band, the
+ * mark, straight onto the clipboard. A clip filed in the Notes dock is a
+ * different job — it is a thumbnail in a 320px drawer, it lives in
+ * localStorage next to the note text, and the whole notes key has to stay
+ * inside the ~5MB origin quota (shell/notes.tsx sheds images when it doesn't).
+ * So: no caption, no logo, downscaled to `maxWidth`, JPEG rather than PNG.
+ *
+ * JPEG has no alpha, so the canvas is flattened onto `--color-bg` first —
+ * without that, every transparent corner comes back black.
+ */
+export async function captureThumb(
+  el: HTMLElement,
+  maxWidth = 720,
+  quality = 0.72,
+): Promise<string> {
+  const { canvas } = await rasterise(el)
+  const ratio = Math.min(1, maxWidth / Math.max(1, canvas.width))
+  const src = ratio === 1 ? canvas : shrink(canvas, ratio)
+
+  const out = document.createElement('canvas')
+  out.width = src.width
+  out.height = src.height
+  const ctx = out.getContext('2d')
+  if (!ctx) return src.toDataURL('image/jpeg', quality)
+  ctx.fillStyle = tokenHex('--color-bg')
+  ctx.fillRect(0, 0, out.width, out.height)
+  ctx.drawImage(src, 0, 0)
+  return out.toDataURL('image/jpeg', quality)
+}

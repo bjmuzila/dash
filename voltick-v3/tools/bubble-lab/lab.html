@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Bubble Lab — GEX Candles</title>
+<style>
+  :root {
+    --bg: #05070b;
+    --panel: #0b1017;
+    --line: rgba(255,255,255,.10);
+    --fg: #e6edf3;
+    --muted: rgba(230,237,243,.55);
+    --accent: #29b6f6;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+  }
+  /* ── Controls ───────────────────────────────────────────────────────────── */
+  aside {
+    width: 340px; flex: 0 0 340px; height: 100vh; overflow-y: auto;
+    background: var(--panel); border-right: 1px solid var(--line); padding: 14px 14px 40px;
+  }
+  aside h1 { font-size: 13px; margin: 0 0 2px; letter-spacing: .02em; }
+  aside .sub { color: var(--muted); font-size: 11px; margin-bottom: 14px; }
+  fieldset { border: 0; border-top: 1px solid var(--line); margin: 0 0 12px; padding: 10px 0 0; }
+  legend {
+    font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); padding: 0 6px 0 0;
+  }
+  .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  .row label { flex: 0 0 96px; color: var(--muted); font-size: 11px; }
+  .row input[type=range] { flex: 1; min-width: 0; height: 3px; accent-color: var(--accent); }
+  .row .val {
+    flex: 0 0 52px; text-align: right; font-variant-numeric: tabular-nums;
+    color: var(--accent); font-size: 11px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+  button {
+    background: rgba(255,255,255,.05); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 5px; padding: 4px 9px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,.10); }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  /* ── Sheet ──────────────────────────────────────────────────────────────── */
+  main { flex: 1; min-width: 0; height: 100vh; overflow: auto; padding: 14px 16px 60px; }
+  .sess { margin-bottom: 20px; }
+  .sess h2 { font-size: 12px; margin: 0 0 1px; font-weight: 700; }
+  .sess .meta { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+  .cells { display: flex; gap: 10px; flex-wrap: wrap; }
+  .cell.wide { flex: 1 1 100%; }
+  .cell.half { flex: 1 1 calc(50% - 5px); min-width: 380px; }
+  .cell { border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #04060a; }
+  .cell .cap {
+    font-size: 10px; color: var(--muted); padding: 3px 7px; border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; gap: 10px;
+  }
+  .cell canvas { display: block; }
+  .empty { color: var(--muted); padding: 40px 4px; max-width: 640px; }
+  code { background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Bubble Lab</h1>
+  <div class="sub">The live <code>bubbles.ts</code>, drawn against frozen sessions. Every cell is the same code the card runs.</div>
+
+  <fieldset>
+    <legend>Mode</legend>
+    <div class="chips">
+      <button id="metricBtn">Vol+OI</button>
+      <button id="dayBtn" class="on">Day</button>
+      <button id="modeBtn">per-bar</button>
+      <button id="barBtn">1m bars</button>
+      <button id="bucketBtn" class="on">auto bucket</button>
+      <button id="rebuildBtn">Redraw</button>
+    </div>
+  </fieldset>
+
+  <fieldset id="autoFields">
+    <legend>The numbers</legend>
+  </fieldset>
+
+  <fieldset>
+    <legend>Export</legend>
+    <div class="chips">
+      <button id="copyBtn">Copy constants</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+    <div class="sub" style="margin:8px 0 0">Paste into <code>settings.ts</code>. Nothing here writes to the app.</div>
+  </fieldset>
+</aside>
+
+<main id="sheet"></main>
+
+<script src="./lab.bundle.js"></script>
+<script src="./fixtures.js"></script>
+<script>
+(() => {
+  const L = window.BubbleLab
+  const fixtures = window.__BUBBLE_FIXTURES || []
+  const sheet = document.getElementById('sheet')
+
+  if (!L) {
+    sheet.innerHTML = '<div class="empty">No <code>lab.bundle.js</code>. Run <code>node tools/bubble-lab/build.mjs</code> first.</div>'
+    return
+  }
+  if (!fixtures.length) {
+    sheet.innerHTML = '<div class="empty">No fixtures yet.<br><br>' +
+      'Capture one: <code>node tools/bubble-lab/capture.mjs --name fri-pin --symbol SPX</code><br>' +
+      'then <code>node tools/bubble-lab/build.mjs</code> and reload this page.</div>'
+    return
+  }
+
+  // The card's palette, from tokens.css. Hardcoded here rather than read off a
+  // CSS var so the lab renders the same colours whatever this page's theme is.
+  const palette = {
+    pos: [41, 182, 246], posHot: [200, 245, 255],
+    neg: [255, 71, 87], negHot: [255, 205, 210],
+  }
+
+  const state = {
+    metric: 'voloi',
+    // Latest ET session only, vs everything the capture reached back for.
+    //
+    // The 48h reach is a testing-phase flag on the card (prevDay), and on this
+    // fixture it is two thirds of the chart: an overnight book the recorder
+    // republishes frozen once a minute, with no candles behind it. It is real
+    // data and it is not a session, so it belongs behind a switch rather than
+    // in the default picture — and seeing the two side by side is the fastest
+    // way to tell a layer bug from an overnight artefact.
+    dayOnly: true,
+    // Candle timeframe. The bubbles do NOT depend on it — the bucket comes from
+    // the visible span in pixels — so flipping this is the check that they
+    // don't: the dots must not move when the bars underneath them do.
+    barMin: 1,
+    // Bubble bucket. 'auto' is the pixel rule the card ships with — the smallest
+    // rung whose dots own `bucketPxPerDot`. 1 and 5 force it, which is the only
+    // way to see what a fixed bucket actually costs: 1m across a session is 390
+    // dots on 1500px and they cannot help but fuse, 5m on a half-hour view is
+    // six. Both are correct somewhere and neither is correct everywhere, which
+    // is the argument for auto — made here rather than asserted.
+    bucketMin: 'auto',
+  }
+
+  /**
+   * Roll the fixture's 1m bars up to `barMin`.
+   *
+   * Plain epoch-aligned buckets, not the 09:30-anchored grid candles.ts uses:
+   * 09:30 ET is thirty minutes past the hour and 5 divides 30, so for the two
+   * rungs this selector offers the two grids coincide exactly. (They stop
+   * coinciding at 15m and up, which is why the app rolls up the careful way and
+   * this does not need to.)
+   */
+  function rollBars(bars, barMin) {
+    if (barMin <= 1) return bars
+    const step = barMin * 60_000
+    const out = []
+    let cur = null
+    for (const b of bars) {
+      const t = Math.floor(b.t / step) * step
+      if (!cur || cur.t !== t) {
+        cur = { t, o: b.o, h: b.h, l: b.l, c: b.c }
+        out.push(cur)
+      } else {
+        if (b.h > cur.h) cur.h = b.h
+        if (b.l < cur.l) cur.l = b.l
+        cur.c = b.c
+      }
+    }
+    return out
+  }
+
+  const ET_DAY = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  function scope(fx) {
+    if (!state.dayOnly) return { columns: fx.columns, bars: fx.bars, from: fx.from, to: fx.to }
+    const last = ET_DAY.format(new Date(fx.to))
+    const columns = fx.columns.filter((c) => ET_DAY.format(new Date(c.slotTs)) === last)
+    if (!columns.length) return { columns: fx.columns, bars: fx.bars, from: fx.from, to: fx.to }
+    const from = columns[0].slotTs
+    const to = columns[columns.length - 1].slotTs
+    return { columns, bars: fx.bars.filter((b) => b.t >= from - 18e5 && b.t <= to + 18e5), from, to }
+  }
+
+  // The three zooms are the whole reason this is a grid. Sizing rules that look
+  // fine across a full session fall apart at 30 minutes, where the rows are far
+  // apart and the marks have room to bloat — and the other way round. Judging
+  // one zoom at a time is how this layer kept shipping half-right.
+  // The full session gets a row to itself at the full width of the sheet. It is
+  // the cell every question is actually asked of — where a row starts, whether
+  // it breaks, whether the morning survives the afternoon — and at a third of
+  // the width a change of a pixel in the size law is invisible, which is the
+  // one thing this tool exists to prevent. The two zooms under it are the
+  // spacing checks and they read fine at half width.
+  const ZOOMS = [
+    { label: 'full session', minutes: 0, share: 1, height: 460 },
+    { label: 'last 2h', minutes: 120, share: 0.5, height: 300 },
+    { label: 'last 30m', minutes: 30, share: 0.5, height: 300 },
+  ]
+  // Cells are measured off the sheet, not hardcoded, so a wider window is a
+  // bigger chart rather than more empty margin.
+  function cellSize(zoom) {
+    const avail = Math.max(420, sheet.clientWidth - 32)
+    const w = zoom.share >= 1 ? avail : Math.max(380, Math.floor((avail - 10) / 2))
+    return { w, h: zoom.height }
+  }
+
+  // ── The geometry ─────────────────────────────────────────────────────────
+  // A linear stand-in for lightweight-charts' scales. It answers the same four
+  // questions `drawBubbles` asks, with the same null-outside-the-plot contract —
+  // including the price-scale gutter on the right, which is what `timeWindow()`
+  // probes for. If the layer looks right through this it looks right through the
+  // real one, because the layer never sees anything else.
+  const GUTTER = 56, PAD_T = 8, PAD_B = 16
+  function makeGeo(w, h, tMin, tMax, pLo, pHi) {
+    const x0 = 0, x1 = w - GUTTER
+    const y0 = PAD_T, y1 = h - PAD_B
+    const span = Math.max(1, tMax - tMin)
+    const prange = Math.max(1e-6, pHi - pLo)
+    return {
+      width: w,
+      height: h,
+      // The plot rect the layer clips to. The real chart takes this from
+      // ts.width() / ts.height(); here it is the sheet minus the gutter. The
+      // real one's timeAtX keeps answering out in the gutter (it is index
+      // arithmetic, not a hit test) where this stand-in returns null, so the
+      // gutter has to be stated rather than probed for — which is exactly the
+      // bug this pair of fields exists to close.
+      plotWidth: x1,
+      plotHeight: h,
+      xOfTime: (ms) => x0 + ((ms - tMin) / span) * (x1 - x0),
+      timeAtX: (x) => (x < x0 || x > x1 ? null : tMin + ((x - x0) / (x1 - x0)) * span),
+      yOfPrice: (p) => y1 - ((p - pLo) / prange) * (y1 - y0),
+      _x0: x0, _x1: x1, _y0: y0, _y1: y1, _tMin: tMin, _tMax: tMax, _pLo: pLo, _pHi: pHi,
+    }
+  }
+
+  function drawCandles(ctx, bars, geo) {
+    if (!bars.length) return
+    const n = bars.length
+    const bw = Math.max(1, Math.min(6, ((geo._x1 - geo._x0) / n) * 0.7))
+    for (const b of bars) {
+      const x = geo.xOfTime(b.t)
+      if (x < geo._x0 - 4 || x > geo._x1 + 4) continue
+      const up = b.c >= b.o
+      ctx.strokeStyle = up ? 'rgba(38,166,154,.85)' : 'rgba(239,83,80,.85)'
+      ctx.fillStyle = ctx.strokeStyle
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(x, geo.yOfPrice(b.h))
+      ctx.lineTo(x, geo.yOfPrice(b.l))
+      ctx.stroke()
+      const yo = geo.yOfPrice(b.o), yc = geo.yOfPrice(b.c)
+      const top = Math.min(yo, yc)
+      ctx.fillRect(x - bw / 2, top, bw, Math.max(1, Math.abs(yc - yo)))
+    }
+  }
+
+  function drawCell(canvas, fx, zoom) {
+    const { w: CELL_W, h: CELL_H } = cellSize(zoom)
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.round(CELL_W * dpr)
+    canvas.height = Math.round(CELL_H * dpr)
+    canvas.style.width = CELL_W + 'px'
+    canvas.style.height = CELL_H + 'px'
+    const ctx = canvas.getContext('2d')
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, CELL_W, CELL_H)
+
+    const view = scope(fx)
+    const tMax = view.to
+    const tMin = zoom.minutes ? Math.max(view.from, tMax - zoom.minutes * 60_000) : view.from
+    const bars = rollBars(view.bars.filter((b) => b.t >= tMin && b.t <= tMax), state.barMin)
+    const src = bars.length ? bars : rollBars(view.bars, state.barMin)
+    let lo = Infinity, hi = -Infinity
+    for (const b of src) { if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h }
+    if (!Number.isFinite(lo)) return { drew: false, rows: 0 }
+    // The real chart autoscales to the CANDLES, so a level far from price is
+    // off-pane there too. Same here — 6% of the range as breathing room.
+    const pad = Math.max(1, (hi - lo) * 0.06)
+    const geo = makeGeo(CELL_W, CELL_H, tMin, tMax, lo - pad, hi + pad)
+
+    // Price gridlines, so the gutter reads as a chart rather than dead space.
+    ctx.strokeStyle = 'rgba(255,255,255,.05)'
+    ctx.fillStyle = 'rgba(230,237,243,.30)'
+    ctx.font = '9px ui-monospace, monospace'
+    const steps = CELL_H > 380 ? 9 : 5
+    for (let i = 0; i <= steps; i++) {
+      const p = geo._pLo + ((geo._pHi - geo._pLo) * i) / steps
+      const y = geo.yOfPrice(p)
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(geo._x1, y); ctx.stroke()
+      ctx.fillText(p.toFixed(0), geo._x1 + 6, y + 3)
+    }
+
+    // ET clock along the bottom. Without it the full-session cell is a
+    // 24-hour strip with no way to say WHEN a row started, which is half of
+    // what you are looking for.
+    ctx.fillStyle = 'rgba(230,237,243,.38)'
+    ctx.font = '9px ui-monospace, monospace'
+    const hours = Math.max(1, Math.round((tMax - tMin) / 3600_000))
+    const tickEvery = hours > 12 ? 4 : hours > 4 ? 2 : hours > 1 ? 1 : 0.5
+    const fmtEt = (ms) =>
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
+      }).format(new Date(ms))
+    const step = tickEvery * 3600_000
+    for (let t = Math.ceil(tMin / step) * step; t <= tMax; t += step) {
+      const x = geo.xOfTime(t)
+      if (x < 24 || x > geo._x1 - 24) continue
+      ctx.strokeStyle = 'rgba(255,255,255,.04)'
+      ctx.beginPath(); ctx.moveTo(x, geo._y0); ctx.lineTo(x, geo._y1); ctx.stroke()
+      const lab = fmtEt(t)
+      ctx.fillText(lab, x - ctx.measureText(lab).width / 2, CELL_H - 4)
+    }
+
+    drawCandles(ctx, bars, geo)
+
+    // THE REAL MODEL, THE REAL DRAW.
+    const columns = view.columns.filter((c) => c.slotTs >= view.from && c.slotTs <= tMax)
+    // Same rule the card uses, unless the chip is forcing a rung.
+    const msPerPx = (tMax - tMin) / Math.max(1, geo._x1 - geo._x0)
+    const need = L.BUBBLES.bucketPxPerDot * msPerPx
+    const rungs = L.BUBBLES.bucketRungsMin
+    const autoMs = (rungs.find((m) => m * 60000 >= need) ?? rungs[rungs.length - 1]) * 60000
+    const bucketMs = state.bucketMin === 'auto' ? autoMs : state.bucketMin * 60000
+    const snaps = L.buildBubbleModel(columns, { metric: state.metric, bucketMs })
+    const drew = L.drawBubbles(ctx, snaps, geo, palette)
+
+    const rows = snaps.length ? snaps[snaps.length - 1].marks.length : 0
+    // Say when a forced bucket is finer than the auto rule would allow: that is
+    // the case where dots overlap, and the caption should admit it rather than
+    // leave you wondering whether the size law broke.
+    const bucketLabel = `${Math.round(bucketMs / 60000)}m` +
+      (state.bucketMin !== 'auto' && bucketMs < autoMs ? ' (tight)' : '')
+    // How many DISTINCT strikes the whole trail holds. The number that matters:
+    // `levels` is what a vertical slice shows, this is what the eye counts.
+    const distinct = new Set()
+    for (const s of snaps) for (const m of s.marks) distinct.add(m.strike)
+    return { drew, rows, distinct: distinct.size, snaps: snaps.length, bucketLabel }
+  }
+
+  // ── The sheet ────────────────────────────────────────────────────────────
+  const cells = []
+  for (const fx of fixtures) {
+    const sec = document.createElement('section')
+    sec.className = 'sess'
+    const days = Math.round((fx.to - fx.from) / 60000)
+    sec.innerHTML =
+      `<h2>${fx.name}${fx.note ? ` — ${fx.note}` : ''}</h2>` +
+      `<div class="meta">${fx.symbol} · exp ${fx.expiry} · ${fx.columns.length} columns · ${days}m span · captured ${String(fx.capturedAt).slice(0, 16).replace('T', ' ')}</div>`
+    const wrap = document.createElement('div')
+    wrap.className = 'cells'
+    for (const z of ZOOMS) {
+      const cell = document.createElement('div')
+      cell.className = 'cell ' + (z.share >= 1 ? 'wide' : 'half')
+      const cap = document.createElement('div')
+      cap.className = 'cap'
+      cap.innerHTML = `<span>${z.label}</span><span class="stat"></span>`
+      const cv = document.createElement('canvas')
+      cell.appendChild(cap)
+      cell.appendChild(cv)
+      wrap.appendChild(cell)
+      cells.push({ canvas: cv, fx, zoom: z, stat: cap.querySelector('.stat') })
+    }
+    sec.appendChild(wrap)
+    sheet.appendChild(sec)
+  }
+
+  let raf = 0
+  function redraw() {
+    if (raf) return
+    raf = requestAnimationFrame(() => {
+      raf = 0
+      for (const c of cells) {
+        let r
+        try {
+          r = drawCell(c.canvas, c.fx, c.zoom)
+        } catch (e) {
+          c.stat.textContent = 'error'
+          c.stat.style.color = '#ff6b6b'
+          console.error(c.fx.name, c.zoom.label, e)
+          continue
+        }
+        c.stat.style.color = ''
+        c.stat.textContent = r && r.drew
+          ? `${state.barMin}m bars · ${r.bucketLabel} bucket · ${r.snaps} dots · ${r.rows} rows · ${r.distinct} strikes`
+          : 'nothing drawn'
+      }
+    })
+  }
+
+  // ── Control building ─────────────────────────────────────────────────────
+  // Generated from the objects themselves, so a constant added to BUBBLE_AUTO
+  // shows up here on the next build with nothing to wire.
+  const RANGES = {
+    bucketPxPerDot: [4, 80, 1],
+    levels: [1, 10, 1], minPerSide: [0, 3, 1], dwell: [0, 60, 1],
+    floorPx: [0.5, 8, 0.1], capPx: [4, 30, 0.5], topBoost: [1, 2.5, 0.01], minPx: [0.5, 4, 0.1],
+    gapPx: [0, 4, 0.1], fitPasses: [0, 12, 1], jitterPx: [0, 8, 0.5],
+    fade: [0, 0.95, 0.05], ageKeep: [0.2, 1, 0.05],
+    ringPx: [0, 4, 0.1], glowFactor: [0, 2, 0.05], glowMaxPx: [0, 20, 0.5],
+  }
+  const initial = { auto: { ...L.BUBBLES } }
+
+  function buildFields(target, obj, host) {
+    for (const key of Object.keys(obj)) {
+      const v = obj[key]
+      // Skips `profiles` and `bucketRungsMin`: a slider per rung per field is a
+      // wall of controls, and the profiles are meant to be edited in
+      // settings.ts where the comment explaining them lives. The chips force a
+      // rung; the numbers below apply to whichever one is active.
+      if (typeof v !== 'number') continue
+      const [min, max, step] = RANGES[key] ?? [0, Math.max(1, v * 3), v > 3 ? 1 : 0.01]
+      const row = document.createElement('div')
+      row.className = 'row'
+      const dec = String(step).includes('.') ? String(step).split('.')[1].length : 0
+      row.innerHTML =
+        `<label title="${key}">${key}</label>` +
+        `<input type="range" min="${min}" max="${max}" step="${step}" value="${v}" />` +
+        `<span class="val">${Number(v).toFixed(dec)}</span>`
+      const input = row.querySelector('input')
+      const out = row.querySelector('.val')
+      input.addEventListener('input', () => {
+        const n = Number(input.value)
+        target[key] = n
+        out.textContent = n.toFixed(dec)
+        redraw()
+      })
+      host.appendChild(row)
+      row._reset = () => { input.value = obj[key]; out.textContent = Number(obj[key]).toFixed(dec) }
+    }
+  }
+  buildFields(L.BUBBLES, initial.auto, document.getElementById('autoFields'))
+
+  const metricBtn = document.getElementById('metricBtn')
+  metricBtn.addEventListener('click', () => {
+    state.metric = state.metric === 'voloi' ? 'vol' : 'voloi'
+    metricBtn.textContent = state.metric === 'voloi' ? 'Vol+OI' : 'Vol'
+    redraw()
+  })
+  const dayBtn = document.getElementById('dayBtn')
+  dayBtn.addEventListener('click', () => {
+    state.dayOnly = !state.dayOnly
+    dayBtn.textContent = state.dayOnly ? 'Day' : '48h'
+    dayBtn.classList.toggle('on', state.dayOnly)
+    redraw()
+  })
+  const barBtn = document.getElementById('barBtn')
+  barBtn.addEventListener('click', () => {
+    state.barMin = state.barMin === 1 ? 5 : 1
+    barBtn.textContent = `${state.barMin}m bars`
+    barBtn.classList.toggle('on', state.barMin === 5)
+    redraw()
+  })
+
+  const BUCKETS = ['auto', 1, 5]
+  const bucketBtn = document.getElementById('bucketBtn')
+  bucketBtn.addEventListener('click', () => {
+    const next = BUCKETS[(BUCKETS.indexOf(state.bucketMin) + 1) % BUCKETS.length]
+    state.bucketMin = next
+    bucketBtn.textContent = next === 'auto' ? 'auto bucket' : `${next}m bucket`
+    bucketBtn.classList.toggle('on', next === 'auto')
+    redraw()
+  })
+
+  const modeBtn = document.getElementById('modeBtn')
+  modeBtn.addEventListener('click', () => {
+    L.BUBBLES.strikeMode = L.BUBBLES.strikeMode === 'per-bar' ? 'latest' : 'per-bar'
+    modeBtn.textContent = L.BUBBLES.strikeMode
+    modeBtn.classList.toggle('on', L.BUBBLES.strikeMode === 'latest')
+    redraw()
+  })
+  document.getElementById('rebuildBtn').addEventListener('click', redraw)
+
+  document.getElementById('copyBtn').addEventListener('click', () => {
+    const fmt = (o) => Object.entries(o)
+      .map(([k, v]) => `  ${k}: ${typeof v === 'number' ? Number(v.toFixed(4)) : JSON.stringify(v)},`)
+      .join('\n')
+    const text = `export const BUBBLES = {\n${fmt(L.BUBBLES)}\n} as const\n`
+    navigator.clipboard?.writeText(text)
+    console.log(text)
+    const b = document.getElementById('copyBtn')
+    b.textContent = 'copied — also in console'
+    setTimeout(() => { b.textContent = 'Copy constants' }, 1600)
+  })
+
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    Object.assign(L.BUBBLES, initial.auto)
+    document.querySelectorAll('#autoFields .row').forEach((r) => r._reset && r._reset())
+    redraw()
+  })
+
+  // A wider window is a bigger chart, so the sheet has to redraw when it
+  // changes. Debounced through the same rAF gate every control uses.
+  let rt = 0
+  window.addEventListener('resize', () => {
+    clearTimeout(rt)
+    rt = setTimeout(redraw, 120)
+  })
+
+  redraw()
+})()
+</script>
+</body>
+</html>

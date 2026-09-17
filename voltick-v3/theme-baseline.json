@@ -1,0 +1,25 @@
+{
+  "_README": "Violations that already existed when check-theme.mjs was added. The build fails when a file goes ABOVE its number here. Clean a file up and run `npm run theme:update` to pull its number down; a file at zero is removed and can never regress. Never raise a number to make a build pass.",
+  "files": {
+    "src/board/chart-render.ts": 8,
+    "src/board/gexCandles/chart.ts": 1,
+    "src/board/gexChart/gexChartRender.ts": 1,
+    "src/design/primitives/Dock.tsx": 4,
+    "src/pages/OptionsChain.tsx": 15,
+    "src/pages/Premarket.tsx": 39,
+    "src/pages/optionsChain/ChainMatrix.tsx": 15,
+    "src/pages/optionsChain/ReplayBar.tsx": 4,
+    "src/pages/optionsChain/StrikeHoverCard.tsx": 9,
+    "src/pages/optionsChain/heatSkins.ts": 2,
+    "src/pages/optionsChain/pickers.tsx": 3,
+    "src/pages/premarket/GammaBellCurve.tsx": 4,
+    "src/pages/premarket/GexChurnFeed.tsx": 7,
+    "src/pages/premarket/GexHeatBar.tsx": 15,
+    "src/pages/premarket/GexProfile.tsx": 1,
+    "src/pages/premarket/GexWatchFeed.tsx": 7,
+    "src/pages/premarket/PostMarketTab.tsx": 2,
+    "src/pages/premarket/cbContracts.css.ts": 16,
+    "src/pages/premarket/historicalRecap.css.ts": 3,
+    "src/pages/premarket/postMarketTab.css.ts": 20
+  }
+}

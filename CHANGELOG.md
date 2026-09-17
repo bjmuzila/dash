@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-16 (k) - Whale Archive layout + two Postgres lock storms
+
+Restored the deleted `/api/whale-alerts` block in `server-v2/api-router.js`
+(recovered from `397d3834~1`) which had been answering 501 through Next's
+`app/api/[...proxy]` catch-all, and reworked `cbedge-v3/src/pages/Whales.tsx` +
+`cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx` + `ContractProbe.tsx` - the
+$500K floor stop, roll-ups back in the right rail under the lookup, WHERE THE
+SIZE WENT as separate bullish/bearish rankings, a single live pane in the
+tracked drawer, and a measured (ResizeObserver) probe canvas so type stops
+scaling with the pane. Fixed the site-wide `statement timeout` outage in
+`server-v2/_lib-db.cjs` and `server-v2/gex-history-writer.js`, where
+already-applied DDL took ACCESS EXCLUSIVE locks on every request and queued all
+reads behind them - both now catalog-precheck, use `lock_timeout = '3s'` and
+back off 5 minutes.
+
 ## 2026-09-16 (a) - Whale Archive: tracked contracts, saved per login
 
 Added `whale_alerts` (Postgres, keyed on `clerk_user_id`) plus four routes in
@@ -22676,3 +22691,27 @@ explaining the exception — the feed is toolbar chrome on the desktop and
 phone. `app/v3/m/[tab]/route.ts` untouched; that handler is already generic.
 
 Mockup: `generated/2026-09-16-mobile-alerts-tab.html`.
+
+## 2026-09-16 — v3 alerts: arrival flash, ticker-first rows, no score
+
+**The pill flashes on arrival.** `cbedge-v3/src/shell/AlertsFeed.tsx` watches
+`latest.id` and, when the top row changes, flashes the pill's border in the
+alert type's colour — three 800ms beats via `.alert-flash` in
+`cbedge-v3/src/design/tokens.css`, drawn with `box-shadow` so the toolbar never
+shifts, colour passed inline as `--alert-flash`. Never fires on first load
+(null-start `seenRef`) and cannot fire on a no-change poll.
+
+**Rows lead with the ticker and the title is the biggest text.** `AlertItem`
+(`cbedge-v3/src/shell/alertTypes.ts`) drops `variant` for `ticker` + `title`;
+`toItem` derives the ticker from `meta.ticker` / `meta.symbol`, defaulting to
+`SPX` for the index detectors, and strips the symbol and the type's tag back
+out of the title. `cbedge-v3/src/shell/AlertsPanel.tsx` and
+`cbedge-v3/src/mobile/pages/MAlerts.tsx` render ticker + title at `text-sm` /
+`text-base` over the detector's sentence, which drops a size.
+
+**`score` is no longer drawn** — an internal 1–5 ranking on no scale the reader
+was given. Also dropped: the whale level line, which was printing "SPY 747P 0".
+
+Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/shell/alertTypes.ts`,
+`cbedge-v3/src/shell/AlertsPanel.tsx`, `cbedge-v3/src/mobile/pages/MAlerts.tsx`,
+`cbedge-v3/src/design/tokens.css`.

@@ -23847,3 +23847,48 @@ The field stays on `SignalRow` because `/proxy/signals` still returns it.
 
 Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/shell/alertTypes.ts`,
 `cbedge-v3/src/shell/AlertsPanel.tsx`, `cbedge-v3/src/mobile/pages/MAlerts.tsx`.
+
+---
+
+## 2026-09-17 — v3 board: paint gating, pass 1 (non-negotiable 5)
+
+An audit of all twelve board cards against rule 5 — *a card nobody can see does
+not paint*. Three cards were doing work for pixels nobody was looking at.
+
+**GEX Candles — the big one.** `<ChartFrame onMount={onMount} />` took none of
+the three visibility signals, and `onMount` received `frame.visible` and dropped
+it. So `chart.ts`'s steady rAF loop ran its full overlay rebuild — the bubble
+band (up to ~320 segments, each with its own `priceToCoordinate`) plus the GEX
+rail — for a card scrolled out of the board's viewport, on every frame the view
+moved. And it moves constantly: live bars keep arriving whether you are looking
+or not.
+
+`MountOpts` now carries an optional `visible: () => boolean`, the card passes
+`frame.visible` straight through, and `draw()` checks it before `readPlotW()` —
+a hidden card costs one boolean per frame. The loop stays scheduled rather than
+being cancelled and re-armed off the visibility edge; `missedWhileHidden` clears
+`lastSig` on the first frame back so the skipped repaint happens immediately.
+A per-frame loop is exactly the case the rule says to answer with
+`handle.visible()` rather than `onVisibility`.
+
+**Gauge Rail.** `setInterval(sample, 5_000)` with no tab check, writing React
+state on a card whose rings only fill once a minute — a backgrounded board
+re-rendered the rail twelve times per bucket it could actually fill. Now follows
+the same shape as `VolGexFlowCard`'s `usePoll`: skip while hidden, one catch-up
+tick on `visibilitychange`.
+
+**Economic Calendar.** `setInterval(() => setNow(Date.now()), 60_000)`, ungated,
+re-rendering the week's calendar plus the earnings table once a minute forever in
+a background tab. Same gate, same catch-up.
+
+Still open from the audit, not touched here: Net Premium gates its *paint*
+(`NetDriftChart` honours `onVisibility` correctly) but not its *compute* — the
+`mergeTape` → filter → `buildNetSeries` → `buildSpotSeries` → `ordersByMin`
+chain re-runs on every `useFrame('flow')` tick regardless of visibility. And
+`board/topFlow/ContractProbe-1.tsx` is a 33KB stray twin of `ContractProbe.tsx`,
+the same shape as the `VisitorMap-1.tsx` file that broke the owners build.
+
+Files: `cbedge-v3/src/board/gexCandles/chart.ts`,
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
+`cbedge-v3/src/board/gaugeRail/GaugeRailCard.tsx`,
+`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`.

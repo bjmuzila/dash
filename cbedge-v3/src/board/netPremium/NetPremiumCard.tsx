@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
 import { useFrame } from '@/data/hooks'
@@ -118,7 +118,30 @@ export function NetPremiumCard() {
   // Live prints. The socket streams the index only, so for any other ticker the
   // ticker gate below drops them and the card runs off the REST tape alone.
   const flowFrame = useFrame<FlowFrame>('flow')
-  const liveTape = useMemo(() => flowFrame?.data.tape ?? [], [flowFrame])
+
+  // ── The COMPUTE gate (non-negotiable 5, the half a chart cannot cover) ──────
+  //
+  // NetDriftChart gates its own paint, so an off-screen card was not drawing.
+  // It was still WORKING: every socket frame produced a new `liveTape`, and
+  // everything below here is keyed off it — mergeTape across the whole session
+  // tape, the ticker filter, the expiry Set, and the ordersByMin Map with a
+  // sort per minute. All of it for a hover tooltip on a card nobody is looking
+  // at, on the same main thread as eleven other cards.
+  //
+  // The gate is identity, not a flag: while hidden the memo hands back the SAME
+  // array it last returned, so every downstream useMemo sees an unchanged dep
+  // and skips. Nothing is throttled and nothing is dropped — the frames keep
+  // arriving, they just stop being folded in until someone can see the result,
+  // and the flip back to visible is itself a dep, so the catch-up is one
+  // recompute on the way in.
+  const [chartVisible, setChartVisible] = useState(true)
+  const heldTapeRef = useRef<FlowTapePrint[]>([])
+  const liveTape = useMemo(() => {
+    if (!chartVisible) return heldTapeRef.current
+    const tape = flowFrame?.data.tape ?? []
+    heldTapeRef.current = tape
+    return tape
+  }, [flowFrame, chartVisible])
   const merged = useMemo(() => mergeTape(history, liveTape, true), [history, liveTape])
   const own = useMemo(
     () => merged.filter((o) => normTicker(o.underlying) === active),
@@ -291,7 +314,14 @@ export function NetPremiumCard() {
               collapses to a sliver and the drift lines render as a flat smear
               across the top of the card. */}
           <div className="flex min-h-0 flex-1 flex-col">
-            <NetDriftChart series={series} ordersByMin={ordersByMin} spotPts={spotSeries.pts} />
+            <NetDriftChart
+              series={series}
+              ordersByMin={ordersByMin}
+              spotPts={spotSeries.pts}
+              // What closes the gate above. The chart owns the ChartFrame, so it
+              // is the only thing here that knows whether the card is on screen.
+              onVisibility={setChartVisible}
+            />
           </div>
           {!series.hasData && (
             <p className="pt-2 text-center text-xs text-muted">
