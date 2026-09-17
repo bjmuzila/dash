@@ -1199,6 +1199,169 @@ const HEAD_H = 38;
 const MIN_ROWS = 14;
 const TABLE_MIN_H = HEAD_H + MIN_ROWS * ROW_H;
 
+/**
+ * TODAY, AT EVERY ANCHOR.
+ *
+ * The board above answers one anchor at a time, because that is the study —
+ * pick a bracket, ask sixty sessions of it. This row answers the other
+ * question, the one you actually have open at 09:40: of the four brackets
+ * available RIGHT NOW, which one is holding today.
+ *
+ * Four requests, one per anchor, and each keeps only `by_date[0]` — the newest
+ * session in the window, which on a trading day is today. They are deliberately
+ * NOT folded into the main fetch: the board's `days`/sort state must not move
+ * when this row reloads, and this row must not wait on a 500-session scan. A
+ * short window is enough for one row, hence TODAY_DAYS.
+ *
+ * Clicking a card re-points the whole board at that anchor — the card is the
+ * preview, the board is the record behind it.
+ *
+ * `scope`/`basis` are honoured because they change WHICH levels are being
+ * bracketed; `days` is not, because the newest session is the newest session in
+ * any window.
+ */
+const TODAY_DAYS = 20;
+
+const bPct = (n: number | null | undefined) => (n == null ? "—" : `${Math.round(n * 100)}%`);
+const bWidth = (w: number | null | undefined) => (w == null ? "—" : `${w.toFixed(2)}%`);
+
+type TodayCut = { day: BracketDay | null; label: string; err: string | null };
+
+function TodayAnchorCards({
+  scope, basis, anchor, onPick,
+}: {
+  scope: "0dte" | "agg";
+  basis: "oivol" | "vol";
+  anchor: AnchorKey;
+  onPick: (a: AnchorKey) => void;
+}) {
+  const [cuts, setCuts] = useState<Partial<Record<AnchorKey, TodayCut>>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let dead = false;
+    setLoading(true);
+    Promise.all(
+      ANCHOR_OPTS.map(async (a) => {
+        try {
+          const r = await fetch(`/api/core-hold?days=${TODAY_DAYS}&scope=${scope}&basis=${basis}&anchor=${a.key}`, { cache: "no-store" });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const j: BracketResp = await r.json();
+          if (!j?.ok) throw new Error(String((j as { error?: string })?.error || "no data"));
+          return [a.key, { day: (j.by_date ?? [])[0] ?? null, label: j.anchor_label ?? a.label, err: null }] as const;
+        } catch (e) {
+          return [a.key, { day: null, label: a.label, err: String(e) }] as const;
+        }
+      }),
+    ).then((pairs) => {
+      if (dead) return;
+      setCuts(Object.fromEntries(pairs) as Partial<Record<AnchorKey, TodayCut>>);
+      setLoading(false);
+    });
+    return () => { dead = true; };
+  }, [scope, basis]);
+
+  // The newest recorded session is normally today. On a weekend, a holiday, or
+  // before the 09:29 capture lands it is the last one that traded — and saying
+  // so is the whole reason the date is printed on every card rather than once
+  // in the heading.
+  const todayIso = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+
+  const lineStyle: React.CSSProperties = {
+    display: "flex", justifyContent: "space-between", gap: 10,
+    fontSize: 13, fontFamily: "var(--font-mono)", color: MUTED,
+  };
+
+  const line = (label: string, value: string, color?: string) => (
+    <div style={lineStyle}>
+      <span>{label}</span>
+      <span style={{ color: color ?? C.label, fontWeight: 700 }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ flexShrink: 0, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 7, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+          Today by anchor
+        </span>
+        <span style={{ fontSize: 13, color: MUTED }}>
+          the newest recorded session, read at each of the four brackets · click one to point the board at it
+        </span>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(228px, 1fr))", gap: 10 }}>
+        {ANCHOR_OPTS.map((a) => {
+          const cut = cuts[a.key];
+          const d = cut?.day ?? null;
+          const on = anchor === a.key;
+          const stale = !!d && d.date !== todayIso;
+          return (
+            <div
+              key={a.key}
+              className="card-hover"
+              role="button"
+              tabIndex={0}
+              onClick={() => onPick(a.key)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick(a.key); } }}
+              style={{
+                ...CARD,
+                padding: "11px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                cursor: "pointer",
+                border: `1px solid ${on ? C.cyan : C.border}`,
+                boxShadow: on ? `0 0 0 1px ${rgba(C.cyan, 0.35)} inset` : undefined,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ fontSize: 15, fontWeight: 800, color: on ? C.cyan : C.label, fontFamily: "var(--font-mono)", letterSpacing: "0.04em" }}>
+                  {cut?.label ?? a.label}
+                </span>
+                <span style={{ fontSize: 12, color: stale ? AMBER : MUTED, fontFamily: "var(--font-mono)" }}>
+                  {d ? d.date : loading ? "…" : "—"}
+                </span>
+              </div>
+
+              {cut?.err ? (
+                <span style={{ fontSize: 13, color: RED, fontFamily: "var(--font-mono)" }}>{cut.err}</span>
+              ) : !d ? (
+                <span style={{ fontSize: 13, color: MUTED }}>
+                  {loading ? "reading the level log…" : "nothing recorded at this anchor yet"}
+                </span>
+              ) : (
+                <>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginTop: 1 }}>
+                    <span style={{ fontSize: 24, fontWeight: 800, color: wrColor(d.inside_rate), fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+                      {bPct(d.inside_rate)}
+                    </span>
+                    <span style={{ fontSize: 13, color: MUTED, fontFamily: "var(--font-mono)" }}>
+                      {d.scored > 0 ? `${d.inside} / ${d.scored} closed inside` : "no closes yet"}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
+                    {line("Never left", d.path_sessions > 0 ? `${bPct(d.never_left_rate)}  ${d.never_left}/${d.path_sessions}` : "—", wrColor(d.never_left_rate))}
+                    {line("Width", bWidth(d.width_pct), C.cyan)}
+                    {line("Core inside", d.sessions > 0 ? `${bPct(d.core_interior_rate)}  ${d.core_interior}/${d.sessions}` : "—", C.purple)}
+                    {line("Above core", `${bPct(d.above_core_rate)}  ${d.above_core}/${d.above_core + d.below_core || 0}`, C.purple)}
+                    {line("Tickers", String(d.sessions))}
+                    {line("Walls rolled", bPct(d.rolled_rate))}
+                    {d.opened_outside ? line("Opened outside", String(d.opened_outside), AMBER) : null}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function BracketView() {
   const [resp, setResp] = useState<BracketResp | null>(null);
   const [days, setDays] = useState<number>(60);
@@ -1351,6 +1514,11 @@ function BracketView() {
             `${t.above_core} above · ${t.below_core} below`)}
         </div>
       )}
+
+      {/* The pooled cards above are the window; this row is today at each of the
+          four anchors. It sits under them on purpose — you read the base rate
+          first, then what today is doing against it. */}
+      <TodayAnchorCards scope={scope} basis={basis} anchor={anchor} onPick={setAnchor} />
 
       {err && <div style={{ color: RED, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load the bracket study: {err}</div>}
 

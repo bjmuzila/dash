@@ -12,7 +12,13 @@ import { createPortal } from 'react-dom'
 import { Card } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
 import { T, alpha } from '@/design/theme'
-import { CopyShotButton, NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
+import {
+  CopyShotButton,
+  NO_TARGETS,
+  type CopyShotTarget,
+  useCopyShotTargets,
+  usePrepareShot,
+} from '@/shell/CopyShot'
 import {
   AMP,
   CAPS,
@@ -582,6 +588,16 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
     [expanded, focus, cap],
   )
   useCopyShotTargets(shotTargets)
+
+  // The wheel does not EXIST until it is popped out — collapsed, it is a tile
+  // in the grid and `panelRef` points at nothing. So when the toolbar's camera
+  // is about to shoot this id from somewhere else (see shell/shotAtlas.ts), pop
+  // it out first and close it again once the shot is done.
+  usePrepareShot('sector-wheel', () => {
+    if (expanded) return
+    setExpanded(true)
+    return () => setExpanded(false)
+  })
 
   const capOptions = useMemo(
     () =>

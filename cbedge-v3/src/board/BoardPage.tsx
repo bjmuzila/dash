@@ -3,7 +3,8 @@ import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
 import { Board, compactBoard, resolveBoard, settleBoard, type BoardItem } from '@/design/primitives/Board'
 import { useAuth } from '@/data/auth'
-import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
+import { type CopyShotTarget, registerBoardCardEnsurer, useCopyShotTargets } from '@/shell/CopyShot'
+import { ATLAS_CARD_IDS } from '@/shell/shotAtlas'
 import { ToolbarSlot } from '@/shell/ToolbarSlot'
 import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, placeNewCard } from './catalog'
 import {
@@ -138,6 +139,13 @@ export default function BoardPage() {
   const layoutsRef = useRef<HTMLDivElement | null>(null)
   /** The board's scroll port. Its only child is the grid — see shotTargets. */
   const boardRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * The live layout, readable from outside React's render — the camera's card
+   * ensurer below is called from a click handler in the toolbar, which closed
+   * over nothing of this component.
+   */
+  const layoutRef = useRef(layout)
+  layoutRef.current = layout
 
   /**
    * The board's placement rule, in one place. Every path that changes the layout
@@ -455,6 +463,58 @@ export default function BoardPage() {
   }, [layout, countByType, ordinalById])
 
   useCopyShotTargets(shotTargets)
+
+  // ── 📸 Lending the camera a card the board does not have ───────────────────
+  //
+  // The camera's menu lists every card in the catalog on every page now (see
+  // shell/shotAtlas.ts), which means a row can be clicked for a card this board
+  // is not holding. Rather than make the owner add it, find it, shoot it and
+  // take it off again, the board LENDS it: the card goes on, the shot is taken,
+  // and the undo puts the layout back byte for byte. The autosave sees both
+  // writes, so nothing is left behind in localStorage either.
+  //
+  // A card that is already here is left alone — it is only scrolled into view,
+  // because a card below the fold has not painted (Board's visibility gate) and
+  // a shot of one comes out blank — and the undo is a no-op. A lent card must
+  // never be able to remove a card the user put there themselves.
+  useEffect(() => {
+    registerBoardCardEnsurer(async (cardId: string) => {
+      const noop = () => {}
+      if (!CARD_BY_ID.has(cardId)) return noop
+      const existing = layoutRef.current.find((i) => cardTypeOf(i.id) === cardId)
+      if (existing) {
+        scrollCardIntoView(boardRef.current, existing.id)
+        return noop
+      }
+      const before = layoutRef.current
+      let addedId = ''
+      setLayoutState((prev) => {
+        const item = placeNewCard(cardId, prev)
+        addedId = item.id
+        return arrangeRef.current([...prev, item])
+      })
+      // Two frames: one for the placement, one for the tile to reach the DOM.
+      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+      scrollCardIntoView(boardRef.current, addedId)
+      return () => {
+        // Restore the ARRAY, not a filtered copy: re-arranging on the way out
+        // would settle a free board's dead space and move cards the owner never
+        // touched. If the lent card is already gone, something else has taken
+        // the board over and it is not ours to put back.
+        setLayoutState((prev) => (prev.some((i) => i.id === addedId) ? before : prev))
+      }
+    })
+    return () => registerBoardCardEnsurer(null)
+  }, [])
+
+  // The atlas duplicates the catalog's card ids on purpose — it is in the entry
+  // chunk and importing this module would drag the board in with it. This is
+  // what keeps the duplicate from drifting in silence.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const missing = CARD_CATALOG.filter((c) => !ATLAS_CARD_IDS.has(c.id)).map((c) => c.id)
+    if (missing.length) console.warn('[copyshot] cards missing from shell/shotAtlas.ts:', missing.join(', '))
+  }, [])
 
   const addCard = (id: string) => {
     setLayoutState((prev) => arrange([...prev, placeNewCard(id, prev)]))
@@ -828,4 +888,15 @@ export default function BoardPage() {
       </div>
     </Page>
   )
+}
+
+/**
+ * Bring a board card into view before the camera fires at it. Cards below the
+ * fold have not painted — see the visibility gate in design/primitives/Board.tsx
+ * — so a shot of one is a shot of an empty frame.
+ */
+function scrollCardIntoView(port: HTMLElement | null, instanceId: string): void {
+  if (!port || !instanceId) return
+  const el = port.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(instanceId)}"]`)
+  el?.scrollIntoView({ block: 'center', behavior: 'auto' })
 }

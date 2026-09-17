@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-09-17 - v3: the camera's menu is the same everywhere
+
+The 📸 menu used to list only what the page you were standing on happened to
+have published, so the row you reach for by habit - **Key Levels**, and the
+**Stats** text under it - was missing from every page except the board that
+carried the card. Arranging the menu was pointless for the same reason: the
+rows moved.
+
+The menu is now drawn from a fixed atlas (`cbedge-v3/src/shell/shotAtlas.ts`),
+in full, on every route: every board card, Whole board, Key Levels Stats, the
+econ poster, and every page surface. A row whose surface is live shoots exactly
+as before. A row whose surface is not gets made ready on the click - the menu
+navigates to the route, BORROWS the board card it needs and hands it straight
+back (`registerBoardCardEnsurer` in BoardPage restores the layout byte for
+byte), signals surfaces that must arrange themselves first (the sector wheel
+pops out and closes again, via the new `usePrepareShot`), waits for the real
+target to publish, then fires. Absent rows are dimmed, not hidden.
+
+The clipboard survives the detour because the write is still claimed
+synchronously on the click and filled when the pixels exist. A row nothing can
+make ready on its own (Estimated Move needs a ticker looked up) opens the page
+and says so with a ↗ instead of failing.
+
+Drag-to-reorder now holds everywhere, since the rows no longer come and go.
+The atlas duplicates the catalog's card ids on purpose (entry-chunk budget);
+BoardPage console.warns in DEV if the two drift.
+
+Files: `cbedge-v3/src/shell/shotAtlas.ts` (new),
+`cbedge-v3/src/shell/CopyShot.tsx`, `cbedge-v3/src/board/BoardPage.tsx`,
+`cbedge-v3/src/pages/tradersDashboard/SectorWheelCard.tsx`,
+`cbedge-v3/src/shell/Shell.tsx`.
+
 ## 2026-09-17 - owner: Auto-Buy Lab, wired to a real replay engine
 
 Fourth tab on `/owner/dev/results`, next to Confidence / Contracts / Open
@@ -24023,3 +24055,25 @@ HTML blob was burying.
 
 Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 `cbedge-v3/src/board/topFlow/TopFlowCard.tsx`, `cbedge-v3/src/pages/Whales.tsx`.
+
+## 2026-09-17 - owner: Open bracket gets a today-by-anchor row
+
+The Open bracket board answers one anchor at a time, which is right for the
+study and wrong for the question you have open at 09:40: of the four brackets
+available right now, which one is holding today.
+
+Under the pooled stat cards there is now a **Today by anchor** row - one card
+each for 09:29, 09:35, 09:45 and 10:00 - showing the newest recorded session at
+that bracket: closed-inside rate and fraction, never-left, median width, core
+inside, above core, ticker count, walls rolled, and opened-outside when it is
+non-zero. The card prints the session date, and colours it amber when that date
+is not today (weekend, holiday, or before the 09:29 capture lands).
+
+Four separate requests, one per anchor, each keeping only `by_date[0]`. They are
+deliberately not folded into the board's fetch: the board's `days` window and
+sort must not move when this row reloads, and the row must not wait behind a
+500-session scan. It honours `scope`/`basis` (those change which levels are
+bracketed) and ignores `days` (the newest session is the newest session in any
+window). Clicking a card re-points the whole board at that anchor.
+
+Files: `owner-vite/src/pages/Results.tsx`.

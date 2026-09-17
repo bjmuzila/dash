@@ -565,8 +565,9 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
       <RefreshButton />
       {/* ── 📸 ─────────────────────────────────────────────────────────────────
           The one camera in the app. Draws nothing for anyone but the owner, and
-          nothing at all until some surface on the current page has published
-          itself as worth photographing — see shell/CopyShot.tsx. */}
+          for the owner it lists EVERY shot on every page — a row whose surface
+          is not on screen navigates to it (and borrows the board card it needs)
+          before it fires. See shell/CopyShot.tsx and shell/shotAtlas.ts. */}
       <CopyShotMenu />
       {/* ── ✎ ──────────────────────────────────────────────────────────────────
           Opens the notes dock on the right, which is also where the owner's
