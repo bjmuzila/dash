@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-09-17 - owner: Results gets an Auto-Buy Lab tab
+
+Fourth tab on `/owner/dev/results`, next to Confidence / Contracts / Open
+bracket. It is the test bench for the timed 0DTE auto-buy: the thing that
+answers "at 10:15, should this fire at all?".
+
+**The shape of it.** A blind timed buy is a losing trade - theta plus fakeouts -
+so the tab is built around an AND-stack of independent filters, each armable:
+VWAP + slope, opening range + retest, GEX regime, TICK/ADD/VOLD, EMA stack,
+RVOL, CVD, VIX1D band, econ-calendar veto. Each carries a weight; the weighted
+pass rate is the confluence score, and the buy arms at 75 with no filter
+failing. Disarming a filter removes it from the denominator rather than leaving
+a hole, so the score moves the way you would expect when you turn one off.
+
+Below that: the exit set (three variants, first-condition-wins, with the
+historical mix of which condition actually closed the trade), a fire-clock x
+filter-stack expectancy matrix, drop-one-out filter lift, four equity curves,
+the ranked sweep table and the fired-trade log. Guardrails sit at the bottom -
+size cap, daily risk, loss halt, spread/OI floors, kill switch.
+
+**IT IS ALL FIXTURES AND THE PAGE SAYS SO.** There is no `/api/autobuy-lab`
+yet. Every number comes from the FIXTURES block at the bottom of the component
+and a badge in the control bar says "FIXTURE DATA - no endpoint wired". The
+scoring, the matrix lookup and the exit mix are real code running over those
+fixtures, which is the part worth reviewing; the fixture shapes are what the
+endpoint should return, so wiring it later is a swap of three consts.
+
+Nothing on the tab routes an order. "Arm Live" is not present - only a PAPER
+badge - on purpose.
+
+Files: `owner-vite/src/pages/results/AutoBuyLab.tsx` (new),
+`owner-vite/src/pages/Results.tsx` (tab key, button, branch, header docblock).
+
 ## 2026-09-17 - voltick-v3: all of v3, repainted, at voltick.cbedge.net/v3/
 
 Every v3 card and page now exists on voltick in the Voltick palette. The whole

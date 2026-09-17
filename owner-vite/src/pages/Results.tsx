@@ -1,11 +1,13 @@
 /**
  * /dev/results — owner-only results board.
  *
- * Three tabs: Confidence (MVC checkpoint hit rates,
+ * Four tabs: Confidence (MVC checkpoint hit rates,
  * /api/confidence/checkpoints), Contracts (the CB contract trade log,
  * /api/cb-trades) and Open bracket (does the close land inside the 09:29 put
- * wall → call wall range, /api/core-hold). Inherits the owner guard from
- * app/dev/layout.tsx.
+ * wall → call wall range, /api/core-hold) and Auto-Buy Lab (the entry/exit
+ * test bench for the timed 0DTE auto-buy — see pages/results/AutoBuyLab.tsx;
+ * it runs on FIXTURES until /api/autobuy-lab exists and says so on the page).
+ * Inherits the owner guard from app/dev/layout.tsx.
  *
  * OPEN BRACKET HAS TWO CUTS AND A DRILL-DOWN, the same shape the Daily Grades
  * board uses. BY TICKER is the per-symbol board; BY SESSION is `by_date` from
@@ -23,6 +25,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { PageShell } from "../components/PageCard";
 import { HOME_THEME, classicCardAccentStyle } from "../lib/theme";
+import AutoBuyLab from "./results/AutoBuyLab";
 
 // Theme sourced from the shared dashboard palette (components/shared/homeTheme.ts) —
 // single source of truth so this page matches every other page. `label`/`MUTED`
@@ -44,7 +47,7 @@ function wrColor(wr: number | null): string {
   return RED;
 }
 
-type TabKey = "checkpoints" | "contracts" | "bracket";
+type TabKey = "checkpoints" | "contracts" | "bracket" | "autobuy";
 
 export default function Results() {
   const [tab, setTab] = useState<TabKey>("checkpoints");
@@ -75,9 +78,10 @@ export default function Results() {
         <button onClick={() => setTab("checkpoints")} style={tabBtn("checkpoints")}>Confidence</button>
         <button onClick={() => setTab("contracts")} style={tabBtn("contracts")}>Contracts</button>
         <button onClick={() => setTab("bracket")} style={tabBtn("bracket")}>Open bracket</button>
+        <button onClick={() => setTab("autobuy")} style={tabBtn("autobuy")}>Auto-Buy Lab</button>
       </div>
 
-      {tab === "contracts" ? <TradesView /> : tab === "bracket" ? <BracketView /> : <CheckpointsView />}
+      {tab === "contracts" ? <TradesView /> : tab === "bracket" ? <BracketView /> : tab === "autobuy" ? <AutoBuyLab /> : <CheckpointsView />}
     </PageShell>
   );
 }
