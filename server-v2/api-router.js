@@ -14644,6 +14644,27 @@ try {
     const TF_BASE_MIN_PREMIUM = 50_000;
     /** At most one vault call per this, however many boards are open. */
     const TF_REFRESH_MS = 20_000;
+    /**
+     * How far back the sweep's `start` reaches, in ET calendar days.
+     *
+     * THE SWEEP MUST CARRY A `start`. As of 2026-09-17 the vault 502s on any
+     * /options/flow call that filters on min_premium without a date bound — at
+     * ANY threshold, `min_premium=1` included — while the same call scoped to a
+     * date returns the full 5000 rows in ~1.4s. Unscoped, we were asking it to
+     * scan every print it has ever held; it used to answer and now it does not.
+     * Dropping `start` again puts the card straight back into ERROR.
+     *
+     * Three days rather than today, because the sweep is what the session is
+     * DERIVED from, not something that already knows the session: tfMerge takes
+     * whatever arrived and lets sessionDate fall out of the newest print. On a
+     * Monday pre-open, or any holiday, `start = today` returns nothing and the
+     * card goes blank — which is the failure this window exists to avoid. Three
+     * covers a Friday tape read through a long weekend, and the row cap plus
+     * tfMerge's own trimming keep the extra days from reaching the screen.
+     */
+    const TF_LOOKBACK_DAYS = 3;
+    /** The ET date the sweep asks from — recomputed per call so it rolls over. */
+    const tfSweepStart = () => etDateStr(new Date(Date.now() - TF_LOOKBACK_DAYS * 86_400_000));
     /** The vault's own per-call cap. Asking for more is truncated upstream. */
     const TF_SWEEP_LIMIT = 5000;
     const TF_KEEP_TOP = 2000;
@@ -15041,6 +15062,8 @@ try {
       if (tfState.at && Date.now() - tfState.at < TF_REFRESH_MS) return Promise.resolve();
       tfState.inflight = lse.optionsFlow({
         minPremium: TF_BASE_MIN_PREMIUM, order: 'desc', limit: TF_SWEEP_LIMIT,
+        // Not optional — see TF_LOOKBACK_DAYS. Without it the vault 502s.
+        start: tfSweepStart(),
       })
         .then((rows) => {
           tfMerge(rows);
