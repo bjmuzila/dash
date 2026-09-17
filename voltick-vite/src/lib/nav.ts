@@ -131,6 +131,22 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
     ],
   },
   {
+    title: "CB Edge v3",
+    icon: "📊",
+    blurb:
+      "The v3 board and its pages, repainted in Voltick. A copy of cbedge-v3 whose only intended difference is its token file, served by its own container.",
+    items: [
+      {
+        label: "The v3 board",
+        path: "/v3/",
+        key: "V3",
+        note: "Every card and every page of v3, in Voltick surfaces and the Voltick colour vocabulary. Served by the voltick-v3 container, not by this SPA.",
+        status: "live",
+        external: true,
+      },
+    ],
+  },
+  {
     title: "The merger",
     icon: "🔀",
     blurb: "What Voltick and CB Edge each already are, and what one product made of both looks like.",
