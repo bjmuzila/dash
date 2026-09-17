@@ -81,6 +81,25 @@ function hasKey() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Turn an upstream error BODY into something that can sit in a UI tooltip.
+ *
+ * The vault sits behind a CDN, and when the CDN answers instead of the vault
+ * the body is a full HTML error page. Pasting that into LseError.message put a
+ * raw `<!DOCTYPE html><!--[if lt IE 7]>...` blob on the Top Flow card and the
+ * whale page, which tells the reader nothing and hides the status code that
+ * does. Anything that looks like markup is reduced to a note; a short plain
+ * body is kept because upstream's own text is usually the useful part.
+ */
+function tidyBody(text) {
+  const body = String(text || '').trim();
+  if (!body) return '';
+  const looksHtml = /^\s*(<!doctype|<html|<\?xml|<head|<body)/i.test(body) || /<\/(html|body|head)>/i.test(body);
+  if (looksHtml) return ' — upstream returned an HTML error page (CDN/edge, not the vault)';
+  const flat = body.replace(/\s+/g, ' ');
+  return ` — ${flat.slice(0, 200)}`;
+}
+
+/**
  * GET a vault path. `params` is an object; null/undefined/'' entries are dropped
  * (the SDK does the same, and an empty `start=` is a 400 upstream).
  */
@@ -110,17 +129,21 @@ async function vaultGet(path, params = {}, { timeoutMs = 60000 } = {}) {
 
   const text = await resp.text();
   if (!resp.ok) {
-    let msg = text;
+    let msg = null;
     try {
       const j = JSON.parse(text);
-      msg = j.detail || j.message || text;
-    } catch { /* upstream returned non-JSON; use the raw body */ }
-    throw new LseError(resp.status, String(msg).slice(0, 300));
+      msg = j.detail || j.message || null;
+    } catch { /* upstream returned non-JSON — handled by tidyBody() below */ }
+    throw new LseError(resp.status, msg
+      ? String(msg).slice(0, 300)
+      : `vault ${resp.status} ${resp.statusText || ''}`.trim() + ` for ${path}${tidyBody(text)}`);
   }
   try {
     return JSON.parse(text);
   } catch {
-    throw new LseError(502, `vault returned non-JSON for ${path}`);
+    // A 200 carrying HTML is the CDN/edge answering instead of the vault. Say
+    // that, rather than pasting a doctype into a card's error tooltip.
+    throw new LseError(502, `vault returned non-JSON for ${path}${tidyBody(text)}`);
   }
 }
 

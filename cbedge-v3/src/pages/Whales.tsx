@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Chip, SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
-import { useQuery } from '@/data/api'
+import { readableError, useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { ContractProbe } from '@/board/topFlow/ContractProbe'
 import { biasOf, biasTitle } from '@/board/topFlow/TopFlowCard'
@@ -612,7 +612,9 @@ export default function Whales() {
           archive with nothing to say. A failure has to look like a failure. */}
       {(d?.error || q.error) && (
         <div className="rounded-md border border-warn/40 bg-warn/5 px-3 py-2 text-sm text-warn">
-          {d?.error ?? `Could not load the whale archive — ${q.error?.message ?? 'the request failed'}.`}
+          {d?.error
+            ? readableError(d.error)
+            : `Could not load the whale archive — ${readableError(q.error)}.`}
         </div>
       )}
 

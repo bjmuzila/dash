@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
 import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
-import { useQuery } from '@/data/api'
+import { readableError, useQuery } from '@/data/api'
 import { STALE_AFTER_SEC, fmtAgo, fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { useTick } from '@/data/flowData'
 import { ContractProbe } from './ContractProbe'
@@ -724,7 +724,7 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
         <span
           title={
             failed
-              ? `The last sweep failed — showing the last data that arrived. ${q.data?.error ?? q.error?.message ?? ''}`
+              ? `The last sweep failed — showing the last data that arrived. ${readableError(q.data?.error ?? q.error, 'The server gave no reason.')}`
               : q.data?.newestTs
                 ? liveSession
                   ? `Newest print ${fmtTime(q.data.newestTs)} — ${fmtAgo(ageSec)} ago. This is the feed's live edge, not this card's refresh.`
@@ -743,7 +743,7 @@ export function TopFlowCard({ instanceId = 'top-flow' }: { instanceId?: string }
         {q.data && q.data.statsError ? (
           <span
             className="w-[46px] text-2xs text-warn"
-            title={`Live quotes / volume / OI are unavailable, so Side, Buy-Sell, Vol and OI are blank. ${q.data.statsError}`}
+            title={`Live quotes / volume / OI are unavailable, so Side, Buy-Sell, Vol and OI are blank. ${readableError(q.data.statsError)}`}
           >
             no quotes
           </span>

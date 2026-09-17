@@ -23938,3 +23938,39 @@ No server change.
 
 Files: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
 `cbedge-v3/src/board/gexCandles/gexHistory.ts`.
+
+---
+
+## 2026-09-17 — Top Flow / Whales: an HTML error page in the tooltip
+
+The whale card's badge hover read `The last sweep failed — showing the last data
+that arrived. <!DOCTYPE html> <!--[if lt IE 7]> <html class="no-js ie6 oldie"
+lang="en-US"> <![endif]-->` — a whole CDN error page pasted where the reason
+belongs. The whale page's banner had the same hole.
+
+**The cause is one line in the vault client.** When the LSE vault answers
+non-2xx, `vaultGet()` in `_lib-lse.cjs` tried `JSON.parse(body)` for a `detail`
+or `message` and, failing that, used the RAW BODY as the error message. The
+vault sits behind a CDN, and when the CDN answers instead of the vault that body
+is a full HTML document. From there it rode intact: `tfRefresh()` stores it as
+`tfState.error`, `/api/lse/top-flow` returns it 200-with-error, and the card
+prints it verbatim. Same path for `/api/lse/whales`.
+
+**The fix, in two layers.** `tidyBody()` in the client collapses any body that
+looks like markup to `upstream returned an HTML error page (CDN/edge, not the
+vault)` and keeps the STATUS in the message — which is the part worth reading
+and the part that was being hidden. A short plain-text body is still passed
+through, since upstream's own words are usually the useful ones. The same rule
+now guards the 200-carrying-HTML case, which previously said only "non-JSON".
+
+Layer two is client-side, because nothing on the client should trust a server to
+tidy its own errors: `readableError()` in `data/api.ts` runs over every error
+string before it reaches a tooltip or a banner, swapping markup for a sentence
+and flattening whitespace at 200 chars. Both whale surfaces use it.
+
+**This is cosmetic.** The sweep is still failing; the new message exposes the
+status code (403 = CDN bounce or a bad `LSE_API_KEY`, 5xx = upstream) that the
+HTML blob was burying.
+
+Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
+`cbedge-v3/src/board/topFlow/TopFlowCard.tsx`, `cbedge-v3/src/pages/Whales.tsx`.

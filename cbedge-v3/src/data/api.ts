@@ -203,6 +203,25 @@ export function useQuery<T>(url: string | null, opts: QueryOpts = {}): QueryResu
   return { ...stateRef.current, refetch: run }
 }
 
+// ── Error text that is safe to put in front of a user ────────────────────────
+//
+// An upstream that answers with an HTML error page (a CDN or edge in front of a
+// vendor API, a dev server rewriting an unknown path to index.html) hands us a
+// whole document as the "message". Rendered verbatim it filled the Top Flow
+// card's tooltip and the whale page's banner with `<!DOCTYPE html><!--[if lt
+// IE 7]>...` — noise that hides the one thing worth reading. Servers tidy their
+// own errors, but nothing on the client should trust that, so every surface
+// that prints an error string runs it through here first.
+export function readableError(raw: unknown, fallback = 'the request failed'): string {
+  const text = String(
+    raw && typeof raw === 'object' && 'message' in raw ? (raw as Error).message : raw ?? '',
+  ).trim()
+  if (!text) return fallback
+  const looksHtml = /^\s*(<!doctype|<html|<\?xml|<head|<body)/i.test(text) || /<\/(html|body|head)>/i.test(text)
+  if (looksHtml) return 'the server returned an HTML error page instead of data'
+  return text.replace(/\s+/g, ' ').slice(0, 200)
+}
+
 export function clearQueryCache(): void {
   cache.clear()
 }
