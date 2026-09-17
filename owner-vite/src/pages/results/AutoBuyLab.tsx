@@ -18,18 +18,41 @@
  * lifts expectancy by cutting the sample to nine trades is not an improvement,
  * and you can only see that when both numbers move in front of you.
  *
- * HALF THE FILTERS ARE GREYED AND THAT IS HONEST. VWAP, opening range, GEX
- * regime, TICK/ADD/VOLD, the EMA stack, RVOL, CVD and VIX1D need per-session
- * intraday context that no recorder writes at the checkpoint minute. The
- * endpoint returns them with `available:false` and a `needs` line naming
- * exactly what would have to be recorded; they cannot be armed and they score
- * nothing. The five that ARE derivable from the recorded columns — the $1.00
- * premium rule, walk depth, CB distance, spot drift toward the CB, and what the
- * CB strike itself priced — are live and do real work.
+ * FOURTEEN FILTERS ARE WIRED, ONE IS NOT, AND THE PAGE SAYS WHICH. Five read
+ * the trade row itself (the $1.00 premium rule, walk depth, CB distance, spot
+ * drift toward the CB, the CB strike's own price). Six read `etf_candles` at
+ * the checkpoint minute — VWAP + slope and RVOL and the CVD proxy off SPY,
+ * which is the only series in the roster with real volume; the opening-range
+ * break-and-retest and the EMA stack off SPX itself; the VIX band off VIX. Two
+ * read `walls_log`, which is change-only on a 15-minute slot grid and has to be
+ * carried forward: whether spot is pinned into the wall ahead, and whether
+ * there is more room to that wall than to the CB.
+ *
+ * TICK / ADD / VOLD reads `etf_candles` too, under whichever of several
+ * candidate spellings the feed actually serves — the header says which one
+ * resolved, so "does this feed carry internals?" is answered on screen. Only
+ * the econ-calendar veto is still `available:false`, because econ-alert-
+ * recorder fetches events and never stores them. Two wired ones are renamed
+ * rather than faked: it is VIX, not VIX1D, and the CVD is a signed-bar-volume
+ * proxy built on TradingView's polarity ladder, not tick delta.
+ *
+ * A DENIAL IS ALSO A RESULT. Every session the stack refuses is replayed under
+ * the same exit rules and reported beside the fired ones, three arms across the
+ * top: what it took, what it refused, and what taking everything would have
+ * done. Each filter row then carries its own bill — the trades it personally
+ * vetoed and what they went on to do. A filter whose vetoes were PROFITABLE is
+ * costing money however good its lift looks, and that is the number to build
+ * the stack on.
+ *
+ * THREE READ STATES, NOT TWO. A filter can PASS, FAIL, or have NO READ — the
+ * EMA stack genuinely cannot exist at 9:45, and RVOL needs five prior sessions
+ * before it means anything. No-read fails the AND stack but is counted and
+ * coloured separately, because "this rule rejects everything" and "this rule
+ * had nothing to read" are different problems and must never look alike.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HOME_THEME, classicCardAccentStyle } from "../../lib/theme";
+import { HOME_THEME, SOFT_RED, classicCardAccentStyle } from "../../lib/theme";
 
 const C = {
   cyan: HOME_THEME.cyan,
@@ -41,7 +64,6 @@ const C = {
 const GREEN = HOME_THEME.green;
 const RED = HOME_THEME.red;
 const WIN = "#1FD98A";
-const SOFT_RED = "#f4948e";
 const CARD = classicCardAccentStyle;
 const INSET = "rgba(0,0,0,0.30)";
 const MONO = "var(--font-mono)";
@@ -61,7 +83,16 @@ type ApiFilter = {
   available: boolean; armed: boolean;
   needs?: string;
   passRate?: number | null; passes?: number; of?: number;
+  /** Sessions where the filter had no data to read — never counted as a fail. */
+  unmeasurable?: number | null;
   lift?: number | null;
+  /**
+   * What this filter personally kept you out of: the trades that clear every
+   * OTHER armed filter and fail only this one, replayed anyway. `totalUsd`
+   * NEGATIVE means it blocked losers and earned its place; POSITIVE means it
+   * blocked winners and is costing money however good its lift looks.
+   */
+  veto?: { fires: number; winRate: number | null; avgUsd: number | null; totalUsd: number } | null;
 };
 type Stats = {
   fires: number; wins: number; winRate: number | null; avgUsd: number | null;
@@ -76,13 +107,19 @@ type ApiLive = {
   side: string; strike: number | null; cbStrike: number | null; cbPrice: number | null;
   walkSteps: number | null; probePrice: number | null; probeBid: number | null; probeAsk: number | null;
   probeSpot: number | null; probeDist: number | null; entryPrice: number | null; lastPrice: number | null;
-  occ: string | null; reads: Record<string, boolean>;
+  occ: string | null;
+  /** true / false / null — null means the filter could not be measured. */
+  reads: Record<string, boolean | null>;
+  today?: boolean;
+  context?: Record<string, number | null> | null;
 };
 type ApiTrade = {
   id: number; date: string; checkpoint: string; side: string; strike: number | null;
   entry: number | null; exit: number | null; reason: "target" | "trail" | "struct" | "stop" | "time";
   pnl: number | null; pnlUsd: number | null; holdMin: number | null;
-  cbStrike: number | null; probeDist: number | null; walkSteps: number | null;
+  cbStrike?: number | null; probeDist?: number | null; walkSteps?: number | null;
+  /** Rejected rows only: which armed filters said no to this one. */
+  blockedBy?: string[];
 };
 type ApiSweep = {
   stack: string; filters: string[]; clock: string; clockLabel: string; exit: string; exitLabel: string;
@@ -95,10 +132,18 @@ type Payload = {
   multiplier: number; buyMin: number;
   filters: ApiFilter[]; armed: string[];
   stats: Stats; noData: number; candidates: number;
+  /** Same window, same exits, the sessions the stack said NO to. */
+  rejectedStats: Stats; rejectedNoData: number;
+  /** Every filled trade at this clock with no filters at all — the yardstick. */
+  blindStats: Stats;
+  rejectedTrades: ApiTrade[];
+  internalsSource?: Record<string, string>;
   exitMix: Record<"target" | "trail" | "struct" | "stop" | "time", number>;
   equity: { date: string; pnlUsd: number; cum: number }[];
   matrix: Record<string, Record<string, { avgUsd: number | null; fires: number; winRate: number | null }>>;
   sweep: ApiSweep[];
+  /** False when the candle/wall context query failed — the trade-row filters still work. */
+  contextLoaded?: boolean;
   live: ApiLive | null;
   trades: ApiTrade[];
 };
@@ -127,6 +172,7 @@ export default function AutoBuyLab() {
   const [size, setSize] = useState(1);
   const [since, setSince] = useState<number | "all">(120);
   const [armed, setArmed] = useState<string[] | null>(null);   // null = server default
+  const [logTab, setLogTab] = useState<"fired" | "rejected">("fired");
 
   const [data, setData] = useState<Payload | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -185,7 +231,7 @@ export default function AutoBuyLab() {
     if (!reads || !liveFilters.length) return null;
     const total = liveFilters.reduce((s, f) => s + f.weight, 0);
     if (!total) return 0;
-    const got = liveFilters.reduce((s, f) => s + (reads[f.id] ? f.weight : 0), 0);
+    const got = liveFilters.reduce((s, f) => s + (reads[f.id] === true ? f.weight : 0), 0);
     return Math.round((got / total) * 100);
   }, [reads, liveFilters]);
 
@@ -195,13 +241,15 @@ export default function AutoBuyLab() {
       const inB = liveFilters.filter((f) => f.block === b);
       const total = inB.reduce((s, f) => s + f.weight, 0);
       out[b] = !reads || !total ? null
-        : Math.round((inB.reduce((s, f) => s + (reads[f.id] ? f.weight : 0), 0) / total) * 100);
+        : Math.round((inB.reduce((s, f) => s + (reads[f.id] === true ? f.weight : 0), 0) / total) * 100);
     });
     return out;
   }, [liveFilters, reads]);
 
-  const failing = reads ? liveFilters.filter((f) => !reads[f.id]) : [];
+  const failing = reads ? liveFilters.filter((f) => reads[f.id] !== true) : [];
   const fires = reads != null && failing.length === 0 && liveFilters.length > 0;
+
+  const logRows = (logTab === "fired" ? data?.trades : data?.rejectedTrades) ?? [];
 
   const exitDef = data?.exits.find((e) => e.id === exitId) ?? null;
   const clockLabel = data?.checkpoints.find((c) => c.key === clock)?.label ?? clock;
@@ -215,6 +263,10 @@ export default function AutoBuyLab() {
   const ticketStrike = ref?.strike ?? fallback?.strike ?? null;
   const ticketSide = ref?.side ?? fallback?.side ?? null;
   const ticketDate = ref?.date ?? fallback?.date ?? null;
+  // The replayed result for the very session the ticket is written against,
+  // when the stack rejected it. "It said no" is half an answer; "it said no and
+  // the trade lost $210" is the whole one.
+  const rejectedToday = ref ? (data?.rejectedTrades ?? []).find((t) => t.date === ref.date) ?? null : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20, minHeight: 0 }}>
@@ -244,6 +296,12 @@ export default function AutoBuyLab() {
         />
       </div>
 
+      {data && data.contextLoaded === false && (
+        <div style={{ ...CARD, padding: "12px 18px", borderColor: rgba(HOME_THEME.gold, 0.3), fontSize: 12, color: HOME_THEME.gold }}>
+          Candle and wall context didn’t load — the trade-row filters still score, the rest read as “no read”.
+        </div>
+      )}
+
       {err && (
         <div style={{ ...CARD, padding: 18, borderColor: rgba(RED, 0.35), color: SOFT_RED, fontFamily: MONO, fontSize: 13 }}>
           Couldn’t load the lab: {err}
@@ -261,6 +319,16 @@ export default function AutoBuyLab() {
         <Kpi k="Avg hold" v={data?.stats.avgHoldMin == null ? "—" : `${data.stats.avgHoldMin}m`} d={exitDef ? `Flatten ${Math.floor(exitDef.flattenMin / 60)}:${String(exitDef.flattenMin % 60).padStart(2, "0")} ET` : ""} />
       </div>
 
+      {/* ── The three arms. This is the comparison the whole page exists for:
+              what the stack TOOK, what it REFUSED, and what taking everything
+              would have done. A stack whose refusals were profitable is a stack
+              throwing money away, and no single-arm number can show that. ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 12 }}>
+        <ArmCard label="Fired" sub="the stack said yes" s={data?.stats} tone={WIN} />
+        <ArmCard label="Rejected" sub="the stack said no — replayed anyway" s={data?.rejectedStats} tone={C.gold} invert />
+        <ArmCard label="Blind" sub="every fill, no filters" s={data?.blindStats} tone="rgba(255,255,255,0.45)" />
+      </div>
+
       {/* ── Entry stack + ticket/gauge ── */}
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.05fr) minmax(0,1fr)", gap: 20 }} className="abl-2col">
 
@@ -269,7 +337,12 @@ export default function AutoBuyLab() {
           sub="All armed filters must pass at the clock — AND logic"
           right={<Pill tone={ticketSide === "P" ? "bad" : "cyan"}>{ticketSide === "P" ? "PUT side" : "CALL side"}</Pill>}
         >
-          <Micro>Wired — scored over the recorded rows</Micro>
+          <Micro>
+            Wired — scored over the recorded rows
+            {data?.internalsSource && Object.keys(data.internalsSource).length
+              ? ` · internals via ${Object.entries(data.internalsSource).map(([k, v]) => `${k}=${v}`).join(" ")}`
+              : " · internals: no feed symbol has resolved yet"}
+          </Micro>
           <div style={{ marginTop: 8 }}>
             {filters.filter((f) => f.available).map((f) => (
               <FilterRow key={f.id} f={f} on={(armed ?? []).includes(f.id)} read={reads?.[f.id] ?? null} onClick={() => toggle(f)} />
@@ -319,6 +392,27 @@ export default function AutoBuyLab() {
               failing={failing.map((f) => f.name)}
               stale={!ref}
             />
+
+            {!fires && rejectedToday && (
+              <>
+                <div style={{ borderTop: `1px solid ${C.border}`, margin: "14px 0 10px" }} />
+                <Micro>Denied — what it did anyway</Micro>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 10, marginTop: 8 }}>
+                  <Field label="Exit" value={rejectedToday.reason} />
+                  <Field label="Out" value={rejectedToday.exit?.toFixed(2) ?? "—"} />
+                  <Field
+                    label="Would have"
+                    value={usd((rejectedToday.pnlUsd ?? 0) * size)}
+                    color={(rejectedToday.pnlUsd ?? 0) >= 0 ? SOFT_RED : WIN}
+                  />
+                </div>
+                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 8, lineHeight: 1.55 }}>
+                  {(rejectedToday.pnlUsd ?? 0) >= 0
+                    ? "The stack refused a winner here — worth checking which filter, in the row list below."
+                    : "The stack refused a loser here — this is the filter doing its job."}
+                </div>
+              </>
+            )}
 
             {delta && (
               <>
@@ -500,28 +594,45 @@ export default function AutoBuyLab() {
           </div>
         </Panel>
 
-        <Panel title="Fired Trades" sub={`Replayed under exit ${exitId} · newest first`}>
+        <Panel
+          title={logTab === "fired" ? "Fired Trades" : "Rejected Trades"}
+          sub={logTab === "fired"
+            ? `Replayed under exit ${exitId} · newest first`
+            : `The stack said no — replayed under exit ${exitId} anyway`}
+          right={<Seg options={[{ v: "fired", l: "Fired" }, { v: "rejected", l: "Rejected" }]} value={logTab} onChange={(v) => setLogTab(v as "fired" | "rejected")} />}
+        >
           <div style={{ overflowX: "auto", maxHeight: 460 }} className="wall-scroll">
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead><tr>{["Date", "Side", "Strike", "In", "Out", "Exit", "Hold", "P/L"].map((h, i) => (
                 <th key={h} style={{ ...th, textAlign: i === 0 ? "left" : "right" }}>{h}</th>
               ))}</tr></thead>
               <tbody>
-                {(data?.trades ?? []).map((t) => (
+                {logRows.map((t) => (
                   <tr key={t.id}>
-                    <td style={{ ...td, textAlign: "left", fontFamily: "inherit" }}>{t.date}</td>
+                    <td style={{ ...td, textAlign: "left", fontFamily: "inherit" }}>
+                      {t.date}
+                      {t.blockedBy?.length ? (
+                        <div style={{ fontSize: 10, opacity: 0.5, fontFamily: MONO }}>by {t.blockedBy.join(", ")}</div>
+                      ) : null}
+                    </td>
                     <td style={{ ...td, fontFamily: "inherit", color: t.side === "P" ? SOFT_RED : C.lightBlue }}>{t.side === "P" ? "PUT" : "CALL"}</td>
                     <td style={td}>{t.strike ?? "—"}</td>
                     <td style={td}>{t.entry?.toFixed(2) ?? "—"}</td>
                     <td style={td}>{t.exit?.toFixed(2) ?? "—"}</td>
                     <td style={{ ...td, fontFamily: "inherit" }}><Pill tone={REASON_TONE[t.reason]}>{t.reason}</Pill></td>
                     <td style={td}>{t.holdMin == null ? "—" : `${t.holdMin}m`}</td>
-                    <td style={{ ...td, color: (t.pnlUsd ?? 0) >= 0 ? WIN : SOFT_RED }}>{usd(t.pnlUsd)}</td>
+                    {/* On the REJECTED tab a profit is bad news — it is money the
+                        stack refused — so the colours invert with the tab. */}
+                    <td style={{ ...td, color: (t.pnlUsd ?? 0) >= 0 ? (logTab === "fired" ? WIN : SOFT_RED) : (logTab === "fired" ? SOFT_RED : WIN) }}>
+                      {usd(t.pnlUsd)}
+                    </td>
                   </tr>
                 ))}
-                {!busy && !(data?.trades ?? []).length && (
+                {!busy && !logRows.length && (
                   <tr><td colSpan={8} style={{ ...td, textAlign: "left", fontFamily: "inherit", opacity: 0.6 }}>
-                    Nothing fired at {clockLabel} under this stack.
+                    {logTab === "fired"
+                      ? `Nothing fired at ${clockLabel} under this stack.`
+                      : `Nothing was rejected at ${clockLabel} — the stack took every fill.`}
                   </td></tr>
                 )}
               </tbody>
@@ -579,7 +690,7 @@ function Ticket({ fires, side, strike, prem, occ, exit, size, multiplier, expect
         {occ && <div style={{ fontFamily: MONO, fontSize: 10, opacity: 0.4, marginTop: 2 }}>{occ}</div>}
         {!fires && (
           <div style={{ fontSize: 11, opacity: 0.75, marginTop: 6, lineHeight: 1.55 }}>
-            {failing.length ? `Blocked by: ${failing.join(", ")}.` : "No armed filter has a live read at this checkpoint."}
+            {failing.length ? `Blocked by: ${failing.join(", ")}.` : "No armed filter has a read at this checkpoint."}
           </div>
         )}
       </div>
@@ -593,6 +704,41 @@ function Ticket({ fires, side, strike, prem, occ, exit, size, multiplier, expect
         <Field label="Max risk at stop" value={usd(-maxRisk)} color={SOFT_RED} />
         <Field label="Expected value" value={usd(ev)} color={(ev ?? 0) >= 0 ? WIN : SOFT_RED} />
       </div>
+    </div>
+  );
+}
+
+/**
+ * One arm of the comparison. `invert` flips the colour logic: on the REJECTED
+ * arm a profitable total is BAD news — it means the filters threw away money —
+ * so green/red are swapped rather than the number being hidden.
+ */
+function ArmCard({ label, sub, s, tone, invert }: {
+  label: string; sub: string; s?: Stats; tone: string; invert?: boolean;
+}) {
+  const total = s?.totalUsd ?? null;
+  const good = total == null ? null : (invert ? total < 0 : total > 0);
+  return (
+    <div style={{ ...CARD, padding: "14px 16px", borderColor: rgba(tone.startsWith("#") ? tone : WIN, 0.22) }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: tone }}>{label}</div>
+        <div style={{ fontFamily: MONO, fontSize: 12, opacity: 0.6 }}>{s?.fires ?? 0} trades</div>
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>{sub}</div>
+      <div style={{
+        fontFamily: MONO, fontSize: 24, fontWeight: 800, marginTop: 6, letterSpacing: "-0.02em",
+        color: good == null ? "inherit" : good ? WIN : SOFT_RED,
+      }}>{usd(total)}</div>
+      <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2, fontFamily: MONO }}>
+        win {pct(s?.winRate)} · avg {usd(s?.avgUsd)}
+      </div>
+      {invert && total != null && (
+        <div style={{ fontSize: 11, marginTop: 6, color: total > 0 ? SOFT_RED : WIN, lineHeight: 1.5 }}>
+          {total > 0
+            ? `The refused trades made ${usd(total)}. The stack is costing you money at this clock.`
+            : `The refused trades lost ${usd(Math.abs(total))}. The stack is earning its place.`}
+        </div>
+      )}
     </div>
   );
 }
@@ -619,7 +765,10 @@ function DeltaTile({ label, from, to, fmt, goodUp }: {
 // ── Rows, chrome, charts ────────────────────────────────────────────────────
 
 function FilterRow({ f, on, read, onClick }: { f: ApiFilter; on: boolean; read: boolean | null; onClick: () => void }) {
-  const state = !on ? "off" : read == null ? "idle" : read ? "pass" : "fail";
+  // Four states, and the fourth matters: a filter with NO DATA on this session
+  // is not a filter that failed. Showing both as a red ✕ is how you end up
+  // hunting a bug in a rule that simply had nothing to read.
+  const state = !on ? "off" : read == null ? "nodata" : read ? "pass" : "fail";
   return (
     <div
       onClick={onClick}
@@ -633,7 +782,7 @@ function FilterRow({ f, on, read, onClick }: { f: ApiFilter; on: boolean; read: 
         border: `1px solid ${
           state === "off" ? "rgba(255,255,255,0.05)"
             : state === "fail" ? rgba(RED, 0.25)
-              : state === "pass" ? rgba(C.cyan, 0.28) : C.border
+              : state === "pass" ? rgba(C.cyan, 0.28) : rgba(HOME_THEME.gold, 0.22)
         }`,
         transition: "border-color .15s, background .15s",
       }}
@@ -643,13 +792,21 @@ function FilterRow({ f, on, read, onClick }: { f: ApiFilter; on: boolean; read: 
         <div style={{ fontSize: 13, fontWeight: 700, opacity: on ? 1 : 0.5 }}>{f.name}</div>
         <div style={{ fontSize: 11, opacity: 0.55, marginTop: 1 }}>{f.detail}</div>
         <div style={{ fontSize: 10, opacity: 0.4, marginTop: 2, fontFamily: MONO }}>
-          passes {f.passes ?? 0}/{f.of ?? 0} sessions{f.lift == null ? "" : ` · lift ${usd(f.lift)}`}
+          passes {f.passes ?? 0}/{f.of ?? 0} measured
+          {f.unmeasurable ? ` · ${f.unmeasurable} no data` : ""}
+          {f.lift == null ? "" : ` · lift ${usd(f.lift)}`}
         </div>
+        {f.veto && f.veto.fires > 0 && (
+          <div style={{ fontSize: 10, marginTop: 3, fontFamily: MONO, color: f.veto.totalUsd > 0 ? SOFT_RED : WIN }}>
+            vetoed {f.veto.fires} → they {f.veto.totalUsd > 0 ? "made" : "lost"} {usd(Math.abs(f.veto.totalUsd))}
+            {f.veto.totalUsd > 0 ? " (blocking winners)" : " (blocking losers)"}
+          </div>
+        )}
       </div>
       {state === "off" ? <Pill tone="off">off</Pill>
         : state === "pass" ? <Pill tone="good">● PASS</Pill>
           : state === "fail" ? <Pill tone="bad">✕ FAIL</Pill>
-            : <Pill tone="warn">armed</Pill>}
+            : <Pill tone="warn">no read</Pill>}
       <div style={{ fontFamily: MONO, fontSize: 12, opacity: 0.7, textAlign: "right" }}>w {f.weight.toFixed(1)}</div>
     </div>
   );

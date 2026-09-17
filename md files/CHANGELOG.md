@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-09-17 - Auto-Buy Lab: internals wired, real CVD, and a denial is now a result
+
+Three changes, and the third is the one that makes the page answer the question
+it was built for.
+
+**TICK / ADD / VOLD are wired.** They read `etf_candles` like any other symbol.
+The problem was never the plumbing, it was the SPELLING: dxFeed, tastytrade,
+IQFeed and TradingView each name the NYSE internals differently, and which one
+this feed serves is a property of the feed. So INTERNALS_ALIASES is a candidate
+list per series - TICK / $TICK / TICK.NY / USI/TICK / II/TICK and the same shape
+for ADD and VOLD - tried in order, and whichever has bars wins. The payload
+reports the winner as `internalsSource` and the page prints it in the filter
+header, so "does tastytrade carry TICK?" is answered on screen instead of
+guessed in a constant. If none ever resolve, the next place to look is the LSE
+vault's /catalog, which lists every (dataset, symbol) it holds.
+
+The filter itself is 2 OF 3, not 3 of 3. These three disagree constantly at the
+margin - TICK is an instantaneous count that flips on a single program, ADD and
+VOLD are cumulative - and requiring unanimity meant it only passed on the days
+it was least needed. Whichever series the feed does not serve is absent from the
+vote; under two present and the reading is not measurable rather than a fail.
+
+**CVD follows TradingView's polarity ladder now.** The first pass signed each
+bar by `close >= open`, which quietly counted every doji as a buy. It now runs
+the real rule set at 1-minute resolution: close != open signs by the bar's own
+direction; close = open falls back to this close vs. the PREVIOUS close; still
+unchanged reuses the last known polarity. Summed into a running total, anchored
+to the session. Still named a proxy on its own row, because real CVD classifies
+each trade as lifting the offer or hitting the bid and that needs tick data
+nothing here records.
+
+**A DENIAL IS ALSO A RESULT.** Every session the stack REFUSED is now replayed
+under the same exit rules and reported beside the ones it took. Three arms
+across the top of the page: Fired, Rejected, and Blind (every fill, no filters -
+the only honest yardstick for whether the stack adds anything). On the Rejected
+arm the colours INVERT, because a profitable reject pile is bad news: it is
+money the filters threw away.
+
+Each filter row now carries its own bill too - the trades that clear every OTHER
+armed filter and fail only this one, replayed anyway. Negative total means it
+blocked losers and earned its weight; positive means it blocked winners and is
+costing money however good its lift looks. That is the number to build a stack
+on, and nothing else on the page was showing it.
+
+The trade log gained a Fired / Rejected switch, rejected rows name which filters
+blocked them, and the ticket panel - when it says NO FIRE - now shows what that
+same session went on to do anyway.
+
+Files: `server-v2/autobuy-lab.js`,
+`owner-vite/src/pages/results/AutoBuyLab.tsx`.
+
+NOT DONE, ON PURPOSE: adding the internals symbols to
+`server-v2/etf-candle-recorder.js` so bars actually start accumulating. That
+changes the dxLink subscription list the tastytrade proxy carries, and
+proxy-affecting changes get asked first. Until it lands, the internals filter
+reads "no read" - which is the truthful state.
+
 ## 2026-09-17 - v3: the camera's menu is the same everywhere
 
 The 📸 menu used to list only what the page you were standing on happened to
@@ -24077,3 +24134,37 @@ bracketed) and ignores `days` (the newest session is the newest session in any
 window). Clicking a card re-points the whole board at that anchor.
 
 Files: `owner-vite/src/pages/Results.tsx`.
+
+## Wall migration — price axis, crosshair readout, no labels on the plot
+
+The v3 Wall Migration chart now carries a **price axis** down its right-hand
+gutter and a **readout line** above the plot, and writes nothing inside the plot
+at all.
+
+The axis prints round price ticks chosen off the drawn range (so a $3 AAPL day
+and a 300-point SPX week both get sensible numbers), plus a solid tag at each
+drawn level's current strike and one for spot. It is HTML positioned by
+percentage of the plot height, not SVG `<text>` — the viewBox is squashed to the
+card's width, so anything drawn inside it comes out stretched, and the
+percentage keeps the ticks on their price when `fill` scales the plot past its
+viewBox.
+
+The readout is one line: `AT <time> · SPOT · <each drawn level>`, with the most
+recent roll (`last roll 12:45 · Put Wall 325→330`) pushed to the right end.
+Hovering the plot draws a single hairline crosshair and the line reads that
+slot — fractional, so it says 12:54 rather than snapping to the 15-minute grid.
+With the pointer away it reads the last drawn slot, so a screenshot still says
+where the levels ended and when they last moved. Spot is the nearest recorded
+sample, never interpolated.
+
+Why not per-change labels: a tag per roll is fine for a three-roll session and a
+wall of boxes on a week, and the boxes land on top of the steps they describe.
+The question is almost never "what was the wall at 11:27" but "what were the
+levels when price was here" — which the crosshair answers directly, at no cost
+in ink. Four label treatments and three x-axis variants were mocked up and
+rejected before landing on this; the mocks are in `generated/`.
+
+`compact` (the ticker rail's 62px tiles) is untouched: no readout, no axis, no
+crosshair.
+
+Files: `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`.

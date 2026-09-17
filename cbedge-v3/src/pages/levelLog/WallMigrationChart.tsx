@@ -48,7 +48,7 @@
 //     however sure the loop bound made us; the binding is what narrows it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useMemo, useState } from 'react'
+import { type MouseEvent, useMemo, useState } from 'react'
 import { ES_CANDLE_UP, LEVEL_COLORS, T, alpha } from '@/design/theme'
 import {
   DENSE_MIN_SAMPLES,
@@ -74,6 +74,38 @@ import {
  */
 export const MIG_H = 250
 const MIG_PAD = 8
+
+/** Width of the price axis gutter, in px. Reserved OUTSIDE the plot. */
+const AXIS_W = 46
+
+/**
+ * The price ticks the axis prints — round numbers inside the drawn range, five
+ * of them give or take. Chosen off the range rather than fixed, because this
+ * chart draws a $3 day on AAPL and a 300-point week on SPX with the same code.
+ */
+function priceTicks(lo: number, hi: number): number[] {
+  const span = hi - lo
+  if (!(span > 0)) return []
+  const raw = span / 5
+  const mag = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((v) => v >= raw) ?? 10 * mag
+  const out: number[] = []
+  for (let t = Math.ceil(lo / step) * step; t <= hi; t += step) out.push(Number(t.toFixed(6)))
+  return out
+}
+
+/**
+ * FRACTIONAL slot → wall-clock ET. `slotClock` answers for the 15-minute grid;
+ * the crosshair lands between those, and rounding it to the grid would have the
+ * readout say 12:45 across a quarter hour of tape. The inverse of slotAtMins.
+ */
+function clockAtSlot(s: number): string {
+  const OPEN = 9 * 60 + 29
+  const GRID = 9 * 60 + 45
+  const m = s <= 0 ? OPEN : s <= 1 ? OPEN + s * (GRID - OPEN) : GRID + (s - 1) * 15
+  const r = Math.round(m)
+  return `${String(Math.floor(r / 60)).padStart(2, '0')}:${String(r % 60).padStart(2, '0')}`
+}
 
 /** Painted size of a legend colour swatch — border included (border-box). */
 const LEGEND_SWATCH = 11
@@ -163,6 +195,13 @@ export function WallMigrationChart({
    * appears later (a week fetch landing, the view switching) arrives visible.
    */
   const [off, setOff] = useState<Set<MigKey>>(() => new Set())
+  /**
+   * WHERE THE CROSSHAIR IS, as a fraction of the plot's width. Null when the
+   * pointer is off the chart, which is the state the readout falls back to the
+   * last drawn slot in — so the panel reads the same in a screenshot as it does
+   * under the mouse.
+   */
+  const [hover, setHover] = useState<number | null>(null)
   const toggle = (k: MigKey) =>
     setOff((prev) => {
       const next = new Set(prev)
@@ -635,6 +674,96 @@ export function WallMigrationChart({
   const lastPt = last.spotDrawn[last.spotDrawn.length - 1]
   const lastSpot = lastPt ? lastPt.v : null
 
+  // ── THE READOUT ────────────────────────────────────────────────────────────
+  //
+  // NOTHING IS WRITTEN INSIDE THE PLOT. Every strike a label would have carried
+  // is read off one line above the chart, driven by the crosshair, plus the
+  // price axis on the right. Two reasons that beat tagging each step:
+  //
+  //   1. A tag per change is a tag per change — fine for a three-roll session,
+  //      a wall of boxes on a week, and the boxes land on top of the very steps
+  //      they describe, which is the shape being read.
+  //   2. The question is almost never "what was the wall at 11:27"; it is "what
+  //      were the levels WHEN PRICE WAS HERE". The crosshair asks that directly,
+  //      one slot at a time, and costs the plot no ink at all.
+  //
+  // With the pointer away it reads the last drawn slot, so a still frame still
+  // says where everything ended and when it last moved.
+
+  /** Pointer x → which day, and which fractional slot inside it. */
+  const hoverAt = (() => {
+    if (hover == null || compact) return null
+    const xPct = hover * 100
+    const i = Math.min(N - 1, Math.max(0, Math.floor(xPct / segW)))
+    const seg = segs[i]
+    if (!seg) return null
+    const span = Math.max(1, seg.lastSlot)
+    const s = Math.min(seg.lastSlot, Math.max(0, ((xPct - i * segW) / segW) * span))
+    return { i, seg, s }
+  })()
+
+  const readSeg = hoverAt ? hoverAt.seg : last
+  const readSlot = hoverAt ? hoverAt.s : readSeg.lastSlot
+  const readIdx = Math.max(0, Math.min(readSeg.lastSlot, Math.round(readSlot)))
+
+  /** A level at the read slot — the forward fill, walked back to its last row. */
+  const valAt = (lt: WallLevel): number | null => {
+    const arr = readSeg.series.get(lt)
+    if (!arr) return null
+    for (let s = readIdx; s >= 0; s--) {
+      const v = arr[s]
+      if (v != null) return v
+    }
+    return null
+  }
+
+  /**
+   * Spot at the read slot — the NEAREST sample, never interpolated. A price
+   * this panel prints has to be a price that was recorded; a number invented
+   * between two samples is exactly the kind of thing a reader would screenshot.
+   */
+  const spotAt = (() => {
+    let best: { s: number; v: number } | null = null
+    for (const p of readSeg.spotDrawn) {
+      if (!best || Math.abs(p.s - readSlot) < Math.abs(best.s - readSlot)) best = p
+    }
+    return best ? best.v : null
+  })()
+
+  /** The most recent slot on which any drawn level was written to a new strike. */
+  const lastRoll = (() => {
+    let hit: { i: number; s: number; lt: WallLevel; from: number; to: number } | null = null
+    for (let i = 0; i < N; i++) {
+      const seg = segs[i]
+      if (!seg) continue
+      for (const lt of drawn) {
+        const arr = seg.series.get(lt)
+        if (!arr) continue
+        let prev: number | null = null
+        for (let s = 0; s <= seg.lastSlot; s++) {
+          const v = arr[s]
+          if (v == null) continue
+          if (prev != null && v !== prev && (!hit || i > hit.i || (i === hit.i && s >= hit.s))) {
+            hit = { i, s, lt, from: prev, to: v }
+          }
+          prev = v
+        }
+      }
+    }
+    return hit
+  })()
+
+  const rollSeg = lastRoll ? segs[lastRoll.i] : null
+
+  /** Fraction of the plot HEIGHT a price sits at — the axis is HTML, not SVG. */
+  const yPct = (v: number) => `${(y(v) / height) * 100}%`
+
+  const onMove = (e: MouseEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect()
+    if (r.width <= 0) return
+    setHover(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)))
+  }
+
   /**
    * HOW MANY SESSIONS GET NAMED, and how many boundaries get a line.
    *
@@ -694,11 +823,67 @@ export function WallMigrationChart({
       </div>
       )}
 
+      {/* THE READOUT. One line, above the plot, in place of every in-plot tag.
+          Idle it reads the last slot; under the crosshair it reads that slot. */}
+      {compact ? null : (
+        <div
+          className="mb-1.5 flex flex-wrap items-baseline gap-x-4 gap-y-1 rounded-sm px-2 py-1"
+          style={{ background: alpha(T.text, 0.04) }}
+        >
+          <span className="tabular font-mono text-xs">
+            <span className="text-2xs uppercase tracking-widest text-muted">at </span>
+            <span className="font-extrabold text-fg">
+              {N > 1 ? `${mdShort(readSeg.date)} ` : ''}
+              {clockAtSlot(readSlot)}
+            </span>
+          </span>
+
+          {spotAt != null && !off.has('spot') ? (
+            <span className="tabular font-mono text-xs">
+              <span className="text-2xs uppercase tracking-widest text-muted">spot </span>
+              <span className="font-extrabold text-fg">{wallNum(spotAt)}</span>
+            </span>
+          ) : null}
+
+          {drawn.map((lt) => {
+            const v = valAt(lt)
+            if (v == null || off.has(lt)) return null
+            return (
+              <span key={lt} className="tabular font-mono text-xs" style={{ color: LEVEL_COLOR[lt] }}>
+                <span className="text-2xs uppercase tracking-widest" style={{ opacity: 0.75 }}>
+                  {LEVEL_LABEL[lt]}{' '}
+                </span>
+                <span className="font-extrabold">{wallStrike(v)}</span>
+              </span>
+            )
+          })}
+
+          {lastRoll ? (
+            <span className="tabular ml-auto font-mono text-2xs text-muted">
+              last roll {N > 1 && rollSeg ? `${mdShort(rollSeg.date)} ` : ''}
+              {slotClock(lastRoll.s)} ·{' '}
+              <span style={{ color: LEVEL_COLOR[lastRoll.lt] }}>{LEVEL_LABEL[lastRoll.lt]}</span>{' '}
+              {wallStrike(lastRoll.from)}→{wallStrike(lastRoll.to)}
+            </span>
+          ) : null}
+        </div>
+      )}
+
       {/* preserveAspectRatio="none" — the x axis is slots, the y axis is price,
           and the two have no business sharing a scale. Every stroke carries
           vectorEffect so the squash never thickens a line, and there is no
           <text> or <circle> inside for the same reason. */}
-      <div className={fill ? 'relative min-h-0 flex-1' : 'relative'}>
+      <div
+        className={fill ? 'relative min-h-0 flex-1' : 'relative'}
+        style={compact ? undefined : { paddingRight: AXIS_W }}
+      >
+        {/* The hover surface is the SVG's own box, so the fraction it reports is
+            a fraction of the PLOT and not of the plot plus its axis gutter. */}
+        <div
+          className={fill ? 'h-full' : ''}
+          onMouseMove={compact ? undefined : onMove}
+          onMouseLeave={compact ? undefined : () => setHover(null)}
+        >
         <svg
           viewBox={`0 0 100 ${height}`}
           height={fill ? undefined : height}
@@ -764,20 +949,95 @@ export function WallMigrationChart({
               vectorEffect="non-scaling-stroke"
             />
           ))}
+          {/* The crosshair. One hairline, no dot and no box — every number it
+              stands for is already on the readout line above the plot. */}
+          {hoverAt ? (
+            <line
+              x1={x(hoverAt.i, hoverAt.s)}
+              x2={x(hoverAt.i, hoverAt.s)}
+              y1={0}
+              y2={height}
+              stroke={alpha(T.text, 0.38)}
+              strokeWidth={1}
+              vectorEffect="non-scaling-stroke"
+            />
+          ) : null}
         </svg>
+        </div>
+
+        {/* THE PRICE AXIS. HTML, not <text>: the viewBox is squashed to the
+            card's width, so anything drawn inside it comes out stretched. Ticks
+            are placed as a PERCENTAGE of the plot height, which keeps them on
+            their price when `fill` scales the svg past its viewBox. */}
+        {compact ? null : (
+          <div
+            className="pointer-events-none absolute inset-y-0 right-0"
+            style={{ width: AXIS_W }}
+            aria-hidden
+          >
+            {priceTicks(lo, hi).map((t) => (
+              <span
+                key={`tick-${t}`}
+                className="tabular absolute font-mono text-2xs text-muted"
+                style={{ left: 7, top: yPct(t), transform: 'translateY(-50%)' }}
+              >
+                {wallStrike(t)}
+              </span>
+            ))}
+            {/* The live strikes, as solid tags — the legend's numbers, put where
+                the eye already is. This is what the in-plot labels were for. */}
+            {drawn.map((lt) => {
+              const v = lastOf(lt)
+              if (v == null || off.has(lt)) return null
+              return (
+                <span
+                  key={`tag-${lt}`}
+                  className="tabular absolute rounded-sm px-1 font-mono text-2xs font-extrabold"
+                  style={{
+                    left: 3,
+                    top: yPct(v),
+                    transform: 'translateY(-50%)',
+                    background: LEVEL_COLOR[lt],
+                    color: T.bg,
+                  }}
+                >
+                  {wallStrike(v)}
+                </span>
+              )
+            })}
+            {lastSpot != null && !off.has('spot') ? (
+              <span
+                className="tabular absolute rounded-sm px-1 font-mono text-2xs font-extrabold"
+                style={{
+                  left: 3,
+                  top: yPct(lastSpot),
+                  transform: 'translateY(-50%)',
+                  background: T.text,
+                  color: T.bg,
+                }}
+              >
+                {wallNum(lastSpot)}
+              </span>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {/* One clock rail for a single session; date stamps across the slices for
           anything longer, because 09:29/12:45/16:00 repeated five — or two
           hundred — times says nothing. How many stamps: see stampEvery. */}
       {compact ? null : N === 1 ? (
-        <div className="tabular mt-1 flex justify-between font-mono text-2xs text-muted" aria-hidden>
+        <div
+          className="tabular mt-1 flex justify-between font-mono text-2xs text-muted"
+          style={{ paddingRight: AXIS_W }}
+          aria-hidden
+        >
           <span>{slotClock(0)}</span>
           <span>{slotClock(Math.round(last.lastSlot / 2))}</span>
           <span>{slotClock(last.lastSlot)}</span>
         </div>
       ) : (
-        <div className="mt-1 flex text-muted" aria-hidden>
+        <div className="mt-1 flex text-muted" style={{ paddingRight: AXIS_W }} aria-hidden>
           {segs.map((seg, i) => (
             <span
               key={seg.date}
