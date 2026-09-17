@@ -78,14 +78,22 @@ export const MOBILE_DEFAULT_PATH = '/m/gex'
  * cramped real page beats a redirect to an unrelated one.
  */
 export const DESKTOP_TO_MOBILE: Record<string, string> = {
-  '/': '/m/gex',
+  // NOT '/': on voltick the landing page is the CARD TILES, and they are the
+  // point of the site on a phone as much as on a laptop. Redirecting '/' — which
+  // is what v3 does, because '/' there is the grid board — meant a phone opening
+  // voltick.cbedge.net/v3 never saw the cards at all. It was bounced straight to
+  // the GEX screen, which reads as somebody else's app.
+  //
+  // The grid board keeps its redirect under its new path: a drag-and-drop grid
+  // really is unusable on a handset.
+  '/board': '/m/gex',
   '/traders-dashboard': '/m/gex',
   '/em': '/m/em',
 }
 
 /** Phone route → the desktop page it stands in for (the "Desktop site" action). */
 export const MOBILE_TO_DESKTOP: Record<string, string> = {
-  '/m/gex': '/',
+  '/m/gex': '/board',
   '/m/heat': '/',
   '/m/spx': '/',
   '/m/em': '/em',

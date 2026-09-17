@@ -86,16 +86,16 @@ export default function CardGallery() {
 
 function Tiles() {
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+    <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
       <header className="mb-4">
         <h1 className="m-0 text-lg font-bold text-fg">Cards</h1>
         <p className="mt-1 mb-0 max-w-2xl text-sm text-muted">
-          Every card in the catalog. Open one and it is the only thing on the screen, with live data, to
-          be looked at or worked on.
+          Every card in the catalog, with a line on what each one is. Open one and it is the only thing
+          on the screen, with live data. Each card has its own link, so one can be sent on its own.
         </p>
       </header>
 
-      <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3 p-0">
+      <ul className="m-0 grid list-none grid-cols-1 gap-3 p-0 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
         {CARD_CATALOG.map((c) => (
           <li key={c.id} className="contents">
             <Link
@@ -116,7 +116,7 @@ function Tiles() {
       {/* The full pages are not cards and are not opened in a pane: each is a
           route of its own, so the honest thing is a link to the page. */}
       <h2 className="mt-8 mb-3 text-lg font-bold text-fg">Pages</h2>
-      <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2 p-0">
+      <ul className="m-0 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">
         {PAGES.map((p) => (
           <li key={p.path} className="contents">
             <Link
@@ -142,8 +142,8 @@ function Tiles() {
 
 function OneCard({ card }: { card: (typeof CARD_CATALOG)[number] }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
-      <header className="flex items-baseline gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3 sm:p-4">
+      <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <Link to="/cards" className="text-sm text-muted no-underline hover:text-fg">
           ← Cards
         </Link>
@@ -154,7 +154,7 @@ function OneCard({ card }: { card: (typeof CARD_CATALOG)[number] }) {
           {card.label}
         </h1>
         <span className="font-mono text-2xs tracking-widest text-muted uppercase">{card.id}</span>
-        <span className="ml-auto font-mono text-2xs text-muted">
+        <span className="ml-auto hidden font-mono text-2xs text-muted sm:inline">
           {card.defaultSize.w}×{card.defaultSize.h} on the grid
         </span>
       </header>
