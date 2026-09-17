@@ -23901,3 +23901,40 @@ laptop, so the file could not be deleted outright). Full original content saved
 to `_to_delete/VisitorMap-1.tsx.bak` — delete both when convenient.
 
 Files: `owner-vite/src/components/VisitorMap-1.tsx`, `_to_delete/VisitorMap-1.tsx.bak`.
+
+---
+
+## 2026-09-17 — GEX Candles replay: historical bubbles
+
+Rewound to any session but today, the bubbles, the rail and the CORE/CW/PW tags
+drew nothing. The candles were fine, so it read as "the bubble layer is broken".
+
+**The cause was the expiry, not the window.** The card asked for the ladder with
+the route's WINDOW branch — `option-strike-gex-history?mode=heatmap&minutes=5760
+&expiry=<front>` — and that branch filters on the expiry it is handed
+(`getOptionStrikeGexSlotsWindow`). The recorder only ever writes the FRONT expiry
+(`gex-history-writer.js`), so yesterday's columns are stored under yesterday's
+expiry and a request carrying today's came back empty. Retention was never the
+problem: the sessions are all there, under keys the request could not name.
+
+**The fix** is the route's DATE branch, which was built for the /premarket recap
+— the same problem, a past session asked for with the live front expiry.
+`minutes=0&date=<session>&expiryFallback=1` makes the handler resolve that date's
+own expiry by cash-session row count and re-read under it. The flag is honoured
+only when `minutes=0`, so replay gets its own URL (`gexHistoryDayUrl`) rather
+than another parameter on the window one. Live is byte-for-byte unchanged.
+
+Three things went with it:
+
+- the request moved BELOW `activeDay`, since the picked session is now part of
+  the URL;
+- a settled session stops polling (`pollMs: 0`) — the payload cannot change.
+  Today still polls, because the replay tab opens on the newest session;
+- the session picker now lists the TAPE's days capped at `REPLAY_SESSION_CHOICES`
+  (5 = `GEX_HISTORY_KEEP_SESSIONS`), because a one-session payload can no longer
+  enumerate the days it is not.
+
+No server change.
+
+Files: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
+`cbedge-v3/src/board/gexCandles/gexHistory.ts`.

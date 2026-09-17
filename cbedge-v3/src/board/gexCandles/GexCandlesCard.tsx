@@ -53,7 +53,7 @@ import {
   RTH_OPEN_MIN,
   type Bar,
 } from './candles'
-import { etDay, gexHistoryUrl, latestSession, parseGexHistory } from './gexHistory'
+import { etDay, gexHistoryDayUrl, gexHistoryUrl, latestSession, parseGexHistory } from './gexHistory'
 import { BASIS_URL, isPlausibleBasis, NO_BASIS, parseBasis, shiftColumns } from './basis'
 import { bubbleWindowMax, buildBubbleModel } from './bubbles'
 import { buildRail, GexRail } from './GexRail'
@@ -122,7 +122,10 @@ import { useDailyEm } from '@/data/dailyEm'
 //   basis     /proxy/es-spx-basis — ES only; see ./basis.ts
 //   expiry    /api/expirations — read for its FIRST entry only; the card has
 //             no expiry picker and draws the nearest expiration
-//   bubbles   /api/snapshots/option-strike-gex-history?mode=heatmap
+//   bubbles   /api/snapshots/option-strike-gex-history?mode=heatmap — the
+//             WINDOW branch live, and the DATE branch (minutes=0, one session,
+//             expiryFallback=1) while rewound. See THE LADDER REQUEST below:
+//             the window branch cannot answer for a past session.
 //
 // The bubble request depends on the expiry, which is the one genuine dependency
 // in the set and therefore the one place a second round trip is unavoidable —
@@ -193,6 +196,19 @@ const REPLAY_HISTORY_MINUTES = 5760
  * answered".
  */
 const REPLAY_CANDLE_DAYS = 7
+
+/**
+ * How many sessions the replay picker may offer.
+ *
+ * 5 = GEX_HISTORY_KEEP_SESSIONS, the retention `pruneOptionStrikeGexHistory`
+ * enforces in server-v2/_lib-db.cjs (env-overridable, and matched by
+ * RETENTION.option_strike_gex_history in state/retention-cleanup.js). The tape
+ * reaches further — REPLAY_CANDLE_DAYS — so without this cap the dropdown would
+ * offer days whose gamma was deleted days ago.
+ *
+ * Raising it buys nothing on its own: the ladder has to exist server-side first.
+ */
+const REPLAY_SESSION_CHOICES = 5
 
 /** `Fri 09-05` — how a session reads in the replay day picker. */
 const ET_DAY_LABEL = new Intl.DateTimeFormat('en-US', {
@@ -764,24 +780,6 @@ export function GexCandlesCard({
     const back = Math.ceil((Date.now() - preOpen) / 60_000) + 60
     return Math.min(5760, Math.max(GEX_HISTORY_MINUTES, back))
   }, [replayOn, weekendExpiry])
-  // Held in a variable rather than inlined, because the NULL case has to be
-  // readable downstream — see `allColumns`.
-  // The LEVEL TAGS keep it alive too, and they are the cheapest reason to: they
-  // read the same newest column the rail does, so a card with the bubbles and
-  // the rail both off but CORE/CW/PW on still needs this request. Without it
-  // that combination silently drew nothing.
-  const gexUrl =
-    (settings.bubblesOn || railOn || settings.levelLabels) && expiry
-      ? gexHistoryUrl(def.gexSymbol, expiry, historyMinutes, BUBBLE_LADDER_REQUEST)
-      : null
-  const gexQ = useQuery<unknown>(
-    gexUrl,
-    // The recorder writes a column a minute, so asking more often than that
-    // returns the same ladder twice — and it is the heaviest request the card
-    // makes.
-    { staleMs: 30_000, pollMs: 60_000, background: isOwner },
-  )
-
   // ── Derived ────────────────────────────────────────────────────────────────
   // The WHOLE tape the card holds. `bars` below is this, clipped to the replay
   // cursor; live, the two are the same array.
@@ -803,6 +801,53 @@ export function GexCandlesCard({
    * board's behaviour is reached by the same code path rather than a branch.
    */
   const activeDay = replayOn ? (replayDay || barDays[0] || '') : ''
+
+  // ── THE LADDER REQUEST ─────────────────────────────────────────────────────
+  // Held in a variable rather than inlined, because the NULL case has to be
+  // readable downstream — see `allColumns`.
+  // The LEVEL TAGS keep it alive too, and they are the cheapest reason to: they
+  // read the same newest column the rail does, so a card with the bubbles and
+  // the rail both off but CORE/CW/PW on still needs this request. Without it
+  // that combination silently drew nothing.
+  //
+  // TWO SHAPES, and `activeDay` picks between them — i.e. whether a SESSION has
+  // been chosen, which only replay does:
+  //
+  //   live     &minutes=<reach>&expiry=<front>            — a rolling window
+  //   rewound  &minutes=0&date=<day>&expiry=<front>&expiryFallback=1
+  //
+  // WHY REWOUND CANNOT USE THE WINDOW. The window branch of the route filters on
+  // the expiry it is GIVEN (getOptionStrikeGexSlotsWindow, server-v2/api-router
+  // .js) and the recorder only ever writes the FRONT expiry (gex-history-writer
+  // .js). Yesterday's columns are therefore stored under YESTERDAY's expiry, so
+  // a window request carrying today's front expiry came back EMPTY for every
+  // session but today: the candles drew, the bubbles and the rail did not, and
+  // a fully recorded session reported itself as "no GEX history in view".
+  //
+  // The date branch already answers this question — it was built for the
+  // /premarket recap, which has the identical problem — and `expiryFallback=1`
+  // resolves the session's OWN expiry by cash-session row count before it reads
+  // the ladder. The route honours that flag only when `minutes=0`, which is why
+  // this is a second URL rather than one more parameter on the first.
+  //
+  // A SETTLED SESSION DOES NOT POLL. The date path answers with a day that has
+  // already closed, so a 60s poll is one request a minute for a byte-for-byte
+  // identical payload. Today still polls: the replay tab opens on the newest
+  // session, and that one is still being written.
+  const replayDayIsToday = activeDay === ET_DATE.format(new Date())
+  const gexUrl =
+    (settings.bubblesOn || railOn || settings.levelLabels) && expiry
+      ? activeDay
+        ? gexHistoryDayUrl(def.gexSymbol, expiry, activeDay, BUBBLE_LADDER_REQUEST)
+        : gexHistoryUrl(def.gexSymbol, expiry, historyMinutes, BUBBLE_LADDER_REQUEST)
+      : null
+  const gexQ = useQuery<unknown>(
+    gexUrl,
+    // The recorder writes a column a minute, so asking more often than that
+    // returns the same ladder twice — and it is the heaviest request the card
+    // makes.
+    { staleMs: 30_000, pollMs: activeDay && !replayDayIsToday ? 0 : 60_000, background: isOwner },
+  )
 
   /**
    * ── Live: THE NEWEST `tapeDays` SESSIONS, and nothing else ─────────────────
@@ -968,19 +1013,24 @@ export function GexCandlesCard({
   /**
    * THE SESSIONS THE PICKER MAY OFFER, newest first.
    *
-   * The ET days the GAMMA payload actually came back holding — never a computed
-   * range. `option_strike_gex_history` is pruned to three sessions server-side
-   * (see REPLAY_HISTORY_MINUTES), holidays and half-days move which three, and a
-   * dropdown that offers a day with no ladder behind it is a dropdown that
-   * renders an empty chart and blames the user for picking wrong.
+   * REWOUND, THE TAPE NAMES THEM. The ladder request is one session at a time
+   * now (see THE LADDER REQUEST above), so the gamma payload can only ever name
+   * the day that is ALREADY selected — it cannot enumerate the others. The tape
+   * can: it is pulled REPLAY_CANDLE_DAYS deep for exactly this, and a day with
+   * candles is a day that traded.
    *
-   * With both gamma layers off there is no payload to read, so it falls back to
-   * the tape's days — the picker stays usable for scrubbing candles alone.
+   * Capped at REPLAY_SESSION_CHOICES, which is the server's retention and not a
+   * day more: a dropdown offering a week with two days of gamma behind it is a
+   * dropdown that renders an empty ladder and blames the user for picking wrong.
+   *
+   * Live it is the payload's own days, unchanged. Nothing reads it there but the
+   * picker, and the picker is not mounted.
    */
   const sessionDays = useMemo(() => {
+    if (replayOn) return barDays.slice(0, REPLAY_SESSION_CHOICES)
     const days = [...new Set(allColumns.map((c) => etDay(c.slotTs)))].sort().reverse()
     return days.length ? days : barDays
-  }, [allColumns, barDays])
+  }, [replayOn, allColumns, barDays])
 
   // A PICKED DAY CAN AGE OUT. Retention drops the oldest session every morning,
   // so a tab left open overnight can hold a `replayDay` the server no longer

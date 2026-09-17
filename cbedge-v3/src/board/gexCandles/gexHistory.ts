@@ -71,6 +71,37 @@ export function gexHistoryUrl(gexSymbol: string, expiry: string, minutes: number
   )
 }
 
+/**
+ * ONE RECORDED SESSION, by DATE — what a rewound chart asks for.
+ *
+ * The window URL above filters on the expiry it is handed, and the recorder
+ * only ever writes the FRONT expiry (server-v2/gex-history-writer.js). So a
+ * past session's columns sit under THAT session's expiry, and asking for them
+ * with today's front expiry — which is the only expiry the card knows — comes
+ * back empty. That is not a missing recording; it is the wrong key.
+ *
+ * `minutes=0` selects the route's date branch, and `expiryFallback=1` is where
+ * the fix lives: the handler looks up which expiries were actually recorded for
+ * that date and re-reads under the one with the most CASH-SESSION rows (SPX's
+ * front expiry rolls at the close, so post-close columns alone must not win the
+ * pick). The flag is honoured ONLY when `minutes=0`, which is why replay needs
+ * this URL rather than one more parameter on the window one.
+ *
+ * `date` is an ET calendar date, `YYYY-MM-DD` — the same key the recorder
+ * stamps a column with.
+ */
+export function gexHistoryDayUrl(gexSymbol: string, expiry: string, date: string, top: number): string {
+  return (
+    `/api/snapshots/option-strike-gex-history?mode=heatmap` +
+    `&minutes=0` +
+    `&date=${encodeURIComponent(date)}` +
+    `&expiry=${encodeURIComponent(expiry)}` +
+    `&expiryFallback=1` +
+    `&symbol=${encodeURIComponent(gexSymbol)}` +
+    (top > 0 ? `&top=${top}` : '')
+  )
+}
+
 export function parseGexHistory(json: unknown): GexColumn[] {
   const cols = (json as { columns?: unknown })?.columns
   if (!Array.isArray(cols)) return []
