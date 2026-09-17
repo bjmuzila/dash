@@ -1,47 +1,100 @@
-import markUrl from '@/assets/cbedge-mark.svg'
-import wordmarkUrl from '@/assets/cbedge-wordmark.png'
-
 // ─────────────────────────────────────────────────────────────────────────────
-// THE BRAND, in one file. Nothing else in v3 draws the logo.
+// THE BRAND, in one file. Nothing else in this app draws the logo.
 //
-// Two forms, and they are not interchangeable:
+// v3's version of this file renders two pieces of CB Edge ARTWORK: the square
+// badge (cbedge-mark.svg) and the horizontal lockup (cbedge-wordmark.png).
+// Artwork is exactly what a token repaint cannot reach, which is why this app
+// still said CB EDGE everywhere after the palette moved — and on the phone
+// build, where the rail head is the only branding on screen, that made a
+// voltick page read as CB Edge's.
 //
-//   <CbMark />      the square badge — CB EDGE over the red/green ladder, in
-//                   its rounded frame. The ONLY form allowed in a square slot:
-//                   the rail head, the favicon, an app icon.
-//   <CbWordmark />  the horizontal lockup: ladder + "CB EDGE" side by side.
-//                   Wide, needs ~100px of run. Toolbar, headers, share cards.
+// So this is the one file in the copy that is REPLACED rather than repainted.
+// The exports keep v3's names and their sizing contract (square badge, wide
+// lockup), so Shell.tsx, the phone rail and anything else that draws the brand
+// are untouched and stay copyable from v3.
 //
-// ── Both are ART, not drawn chrome ──────────────────────────────────────────
-// Earlier versions of this file DREW the mark from tokens so it could inherit
-// the surface it sat on. That is the right instinct for chrome and the wrong
-// one for a logo: the badge is a fixed piece of artwork with its own colours,
-// and every time it was redrawn "on theme" it stopped being the logo. So the
-// mark is now the artwork itself, as SVG.
+// It is TYPE, not art, on purpose. Voltick's mark is not mine to invent, and a
+// traced-looking approximation of one is worse than honest type: it would be a
+// logo that is not the logo, in a file whose whole job is to be the logo. When
+// the real asset exists, drop it in here and nothing else changes.
 //
-// The badge is fully vector — the frame, the ten bars and the divider are
-// shapes, and the CB EDGE lettering is the real face traced to outlines (the
-// custom type has no font file). That is why the same file serves a 20px rail
-// head and a 1024px app icon.
-//
-// The ladder's gradient runs OUTWARD FROM THE DIVIDER: deep at the centre,
-// bright at the edges, on both sides. One ramp per column, declared in user
-// space across the full 512 box, so the two columns are mirror halves of one
-// sweep rather than ten independently tinted bars.
-//
-// The wordmark stays a bitmap: it is the 2026-09 "cbedge3.0" art, trimmed and
-// composed at 96px tall — roughly 3.4x the 28px it renders at, so it is sharp
-// on retina and still under 20KB.
+// Colour comes from the tokens like everything else — no hex in this file, so
+// check-theme.mjs stays satisfied and the brand follows the palette.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The square badge. The only form allowed in a square slot: the rail head, a
+ * favicon, an app icon. Square by construction so a caller sizes it on one axis
+ * (`h-8 w-8` on the rail) and never thinks about aspect.
+ */
 export function CbMark({ className, title }: { className?: string; title?: string }) {
-  // Square by construction (a 512x512 viewBox), so a caller sizes it with one
-  // axis — `h-8 w-8` on the rail — and never has to think about aspect.
-  return <img src={markUrl} width={512} height={512} alt={title ?? 'CB Edge'} className={className} />
+  return (
+    <span
+      className={className}
+      title={title ?? 'Voltick'}
+      aria-label={title ?? 'Voltick'}
+      role="img"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        aspectRatio: '1 / 1',
+        borderRadius: 'var(--radius-md)',
+        background: 'color-mix(in srgb, var(--color-accent) 18%, var(--color-surface))',
+        border: '1px solid color-mix(in srgb, var(--color-accent) 55%, transparent)',
+        color: 'var(--color-fg)',
+        fontFamily: 'var(--font-sans)',
+        // Sized from the box rather than a fixed px, so one component serves a
+        // 20px rail head and a 96px header without a second variant.
+        fontSize: '0.58em',
+        fontWeight: 700,
+        letterSpacing: '-0.02em',
+        lineHeight: 1,
+      }}
+    >
+      V
+    </span>
+  )
 }
 
+/**
+ * The horizontal lockup. Wide: it wants ~100px of run. Toolbar, headers, share
+ * cards.
+ */
 export function CbWordmark({ className }: { className?: string }) {
-  // width/height are the intrinsic pixels of the asset — stated so the toolbar
-  // does not reflow between first paint and the image landing.
-  return <img src={wordmarkUrl} width={374} height={96} alt="CB Edge" className={className} />
+  return (
+    <span
+      className={className}
+      aria-label="Voltick"
+      role="img"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        gap: '0.4em',
+        fontFamily: 'var(--font-sans)',
+        color: 'var(--color-fg)',
+        fontSize: '1em',
+        fontWeight: 700,
+        letterSpacing: '-0.01em',
+        lineHeight: 1,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      Voltick
+      {/* The v3 tag is not decoration: this app IS v3, and someone looking at a
+          screenshot of it needs to know which board they are looking at. */}
+      <span
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.62em',
+          fontWeight: 600,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: 'var(--color-accent)',
+        }}
+      >
+        v3
+      </span>
+    </span>
+  )
 }

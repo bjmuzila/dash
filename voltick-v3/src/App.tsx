@@ -136,6 +136,12 @@ const MEcon = lazy(() => import('@/mobile/pages/MEcon'))
 // else. See src/mobile/pages/MAlerts.tsx.
 const MAlerts = lazy(() => import('@/mobile/pages/MAlerts'))
 
+// The home board — every catalog card as a tile, and one card open at a time.
+// This app's landing page. It does not exist in cbedge-v3 and has no business
+// going there: the two are separate products that happen to share a starting
+// point.
+const CardGallery = lazy(() => import('@/pages/CardGallery'))
+
 // STILL RETIRED 2026-08-30 — Test Lab (/test) and Journal (/trading) are gone
 // from v3, along with the ICT, ES Candles, Board and Multi Greek rail slots
 // (they never had pages here, only "coming soon" icons). The BOARD CARDS of the
@@ -158,7 +164,11 @@ export default function App() {
       <Shell>
         <Suspense fallback={null}>
           <Routes>
-            <Route path="/" element={<Home />} />
+            {/* HOME IS THE CARDS. This app is a place to open one card and
+                work on it, so the tile grid is the landing and the old grid
+                board is a page like any other, at /board. */}
+            <Route path="/" element={<CardGallery />} />
+            <Route path="/board" element={<Home />} />
             {/* Adding a route takes FOUR edits, not two:
                   1. this line
                   2. a NAV entry in src/shell/Shell.tsx
@@ -185,6 +195,14 @@ export default function App() {
                 /v3/feedback?tab=mine&ticket=12 is a real link — which is what
                 the account menu's unread badge points at. */}
             <Route path="/feedback" element={<Feedback />} />
+
+            {/* ── The merger review ─────────────────────────────────────────
+                /cards lists every card in src/board/catalog.tsx; /cards/:id
+                renders that one card on its own with live data. Same
+                `render()` the board calls, so there is nothing here to keep in
+                sync with a card. voltick only. */}
+            <Route path="/cards" element={<CardGallery />} />
+            <Route path="/cards/:cardId" element={<CardGallery />} />
 
             {/* ── The phone build ────────────────────────────────────────────
                 Adding a tab is TWO edits: MOBILE_TABS in

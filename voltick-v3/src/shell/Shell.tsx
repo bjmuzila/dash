@@ -90,7 +90,9 @@ export interface NavItem {
 // thing and they stay — see src/board/catalog.tsx. This list, App.tsx's routes
 // and ALL_PAGES/LIVE_ROUTES in pages/TradersDashboard.tsx move together.
 export const NAV: NavItem[] = [
-  { to: '/', label: 'Home', icon: '🏠' },
+  // Home is the card tiles. The old grid board is a page like any other now.
+  { to: '/', label: 'Cards', icon: '🗂️' },
+  { to: '/board', label: 'Board', icon: '🧩' },
   {
     to: '/traders-dashboard',
     label: 'Traders Dash',
@@ -159,7 +161,7 @@ export const NAV: NavItem[] = [
 // CbMark, the one square form of the brand (see shell/Brand.tsx). Sized on one
 // axis because the asset is square by construction.
 function Logo() {
-  return <CbMark className="mb-2 h-8 w-8 shrink-0" title="CB Edge" />
+  return <CbMark className="mb-2 h-8 w-8 shrink-0" title="Voltick" />
 }
 
 // Drag-to-reorder for the rail — mirrors v2's GexGroupNav, rewritten fresh for

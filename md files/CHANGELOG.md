@@ -1,81 +1,204 @@
 # Changelog
 
-## 2026-09-16 (g) - The ported visitor map, repainted in Voltick
+## 2026-09-17 - voltick-v3: all of v3, repainted, at voltick.cbedge.net/v3/
 
-Same component, same behaviour, Voltick paint. Every colour the map draws now
-comes from `src/pages/visitors/mapTheme.ts`, which is built from
-`src/theme.ts`, and `VisitorMap.tsx` mints no hex of its own. `ownerTheme.ts`
-is gone.
+Every v3 card and page now exists on voltick in the Voltick palette. The whole
+repaint is ONE file.
 
-  #219EBC owner teal     -> ACCENT / ACCENT_TEXT   chrome, active control
-  #7dd3fc light blue     -> SKY                    country names, counts
-  #8A93A6 slate          -> PAPER_QUIET            anonymous
-  #0D1119 panel          -> ELEV                   pinned card, and the dot ring
-  three-stop teal ramp   -> three-stop ACCENT ramp, same sqrt domain, same
-                            reason for not topping out near white
+That is not luck, it is v3's rule paying off: "no hex may appear anywhere in
+src/ outside tokens.css", enforced by scripts/check-theme.mjs. It held across
+every card, so recolouring 12 board cards and 18 pages meant rewriting 73 token
+values and touching no component. A component fix can still be carried from v3
+across verbatim.
 
-Gold is the one that is not a swap. Voltick's gold is VOLT and VOLT is spoken
-for: it means the strongest level on a board, and a subscription is not a
-level. So the "has an account" hue is GOOD, which on this sandbox already means
-money (the customer card uses it the same way). The console's two-channel logic
-is untouched and is the part worth keeping: HUE says they have an account, FILL
-says they are paying. Solid is a customer, a ring is a free registration, a
-quiet ring is a stranger. Every string that said "gold" or "slate" now says
-solid, ring or quiet ring, so the legend, the tooltips and the notes describe
-what is actually on screen.
+`voltick-v3/` is a copy of `cbedge-v3/`. Its intended diff is exactly three
+files: src/design/tokens.css, the first-paint pair in index.html, and the
+Dockerfile + nginx.conf it needs to be its own container. Anything else that
+diverges is a fork and should be treated as a bug.
 
-Rule 2 applied while I was in there: secondary text was `text` at 0.4-0.75
-opacity in fifteen places, which is how you get grey. It takes PAPER_QUIET now.
+**The mapping.** Surfaces to INK / PANEL / ELEV / LINE; Voltick ships four steps
+and v3 wants six, so app, rail and bg share INK and `raised` is mixed from ELEV
+rather than minted. Text to PAPER with PAPER_QUIET one step down, never white at
+an opacity (rule 2). up/down to GOOD/BAD, accent to ACCENT, and ACCENT_TEXT
+wherever the accent has to BE text.
 
-The page around the map is Voltick's: PageShell, the mono stat strip, the
-toolbar on PANEL with a LINE hairline, no frosted 18px glass. Header counts are
-still the console's arithmetic, so the header and the map cannot disagree.
+The walls are the part worth reading. Voltick's reserved colours were written
+for a gamma board, so they land on v3's level tokens exactly: the Core Bullseye
+is VOLT (the strongest level on a board), the call wall is SURGE (a wall), the
+put wall is REVERSAL (where price turns), the gamma flip is FLIP. The GEX bubble
+leader is VOLT for precisely the reason it was gold in v3 - it is the biggest
+wall in the bucket. Two systems, one vocabulary.
 
-STALE, delete when convenient: `voltick-vite/src/pages/visitors/world.ts`,
-`visitors.ts`, `ownerTheme.ts`, and `voltick-vite/tools/gen-world.py`.
+The v2-parity block is repointed rather than kept: on voltick there is nothing
+to be in parity WITH. The token names stay, because the pages that read them
+still read them.
 
-`voltick-vite/src/pages/visitors/mapTheme.ts` (new)
-`voltick-vite/src/pages/visitors/VisitorMap.tsx`, `VisitorsMap.tsx`, `CustomerName.tsx`
+Type scale and the 4px spacing step stay v3's - they are what makes the board
+dense, not what makes it CB Edge. Shape (6/10/12) and the two font families are
+Voltick's.
 
-## 2026-09-16 (e) - Voltick: the visitors world map, with no map library
+**Serving it.** One `location ^~ /v3/` block in voltick-vite/nginx.conf,
+modelled on the /demo/ block beside it: same `auth_request /_vkauth` gate,
+prefix stripped with `rewrite ... break`, proxied to voltick-v3:8089. `^~` so no
+regex location below can claim the prefix and drop /v3/assets/ into the SPA's
+own /assets/ rule. v3 already builds with `base: '/v3/'`, so the browser asks
+for /v3/... and the container serves from its root. Nothing existing in that
+file changed.
 
-`/visitors-map` on voltick.cbedge.net. Every recorded load placed on the world,
-one dot per visitor rather than per city, so a location with nine people on it
-looks like nine people. Range strip (Today / 7d / 30d / 90d / All) restates
-every number in the toolbar from the rows in range. Scroll to zoom about the
-cursor, drag to pan, double-click to zoom in, Esc to unpin. Click a dot for the
-email, Discord, member-since and subscription, or a country for its own card.
+The Dockerfile runs `typecheck && build:fast`, not the full `npm run build`:
+that also runs check-theme.mjs and check-budgets.mjs, which measure this app
+against v3's theme baseline, and the palette here is deliberately different. Run
+`npm run theme:update` in voltick-v3 to re-baseline it.
 
-**No d3 and no tiles.** `tools/gen-world.py` takes world-atlas 110m (Natural
-Earth, public domain), projects it into Web Mercator ONCE and writes
-`world.ts`: 176 path strings plus the matching `project()`, so a dot and the
-coastline under it cannot drift apart. Pan, zoom and hit testing are a viewBox
-and arithmetic. Antarctica is cut and the frame stops at 84N / 56S.
+**Still to do:** the cards draw live data through the proxy today. Synthetic
+fixtures for the ~15 data modules (socket.ts, liveGex, flowData, esCandles,
+useChainData and the rest) are the next stage and are the bulk of the work.
 
-Rings that cross the antimeridian are unwrapped and repeated a world to the
-side. Without that, Russia and the Aleutians have a 360-degree jump in the
-middle of the ring and paint a band straight across the page - which is exactly
-what the first render did.
+`voltick-v3/` (new: a copy of cbedge-v3)
+`voltick-v3/src/design/tokens.css`, `index.html`, `Dockerfile`, `nginx.conf`
+`voltick-vite/nginx.conf` (one added location block), `voltick-vite/src/lib/nav.ts`
+docker-compose.yml needs the voltick-v3 service (see the deploy block below).
 
-The fan-out for people sharing a location is measured in MAP units, not screen
-units. That is the whole reason zooming separates them; a pixel-sized fan would
-hold the same gap forever and the zoom would be decorative. Dot radius and
-stroke widths are divided by the zoom, so those do stay put.
+## 2026-09-16 (f) - Voltick's visitor map is now the console's, not a lookalike
 
-Colors: paying is GOOD, signed-in-not-paying is SKY, anonymous is a quiet ring,
-country-only rows are dashed and dimmed at the centre of their country. No
-reserved board color appears - a visitor is not a level on a chart. Country
-fill is visitors in range on a square root, so one dominant country does not
-flatten the other sixty to black.
+The hand-built map from (e) is replaced. It looked close and was a fork: my own
+Mercator projection, my own dot rules, my own legend. "Just like the owner one"
+is not a resemblance target, it is a copy instruction.
 
-364 synthetic visitors, 61 countries, fixed seed, baked. Refresh restamps the
-clock and changes nothing else, and says so in its tooltip.
+`owner-vite/src/components/VisitorMap.tsx` is now copied into
+`voltick-vite/src/pages/visitors/VisitorMap.tsx` VERBATIM. The only edits are
+the three import lines at the top:
 
-`voltick-vite/src/pages/visitors/VisitorsMap.tsx` (new)
-`voltick-vite/src/pages/visitors/world.ts` (new, generated)
-`voltick-vite/src/pages/visitors/visitors.ts` (new)
-`voltick-vite/tools/gen-world.py` (new)
+  ../lib/theme      -> ./ownerTheme   (the 7 OWNER_THEME tokens it reads)
+  ../lib/countryMaps-> ./countryMaps  (a copy beside it)
+  ./CustomerCard    -> ./CustomerName (a stub that opens /customer-card)
+
+So it is the same d3 Natural Earth projection, the same choropleth ramp, the
+same gold-solid / gold-ring / slate-ring dot vocabulary, the same fan-out, the
+same pinned country and visitor cards, the same legend strip and per-country
+counts. The page around it is a copy of `owner-vite/src/pages/Visitors.tsx`,
+including the header counts, which are computed by the console's own arithmetic
+so the header and the map cannot disagree.
+
+The banner at the top of the copied file says to keep it a copy: fix the
+console, re-copy, patch the same three lines. A change made here and not there
+is a fork, and whoever compares the two screens next will believe the wrong one.
+
+**Synthetic rows, not a fetch.** `sampleVisits.ts` builds ~4,600 page_visits
+rows from a seeded generator (mulberry32, fixed seed) in the exact
+`VisitorMapRow` shape /api/page-visits returns, and reproduces the edge cases
+the map is made of: loads outnumber visitors, some visitors have a country and
+no coordinate (dashed, on the centroid), a few rows are XX or T1 and land in
+Unknown, and paying / signed-in / anonymous are three different dots. Nothing
+on the page reaches the backend.
+
+Not ported, because there is nothing behind them here: the hourly refresh and
+refresh-on-focus, the beacon-stale warning, the truncation notice, the "no geo
+data yet" notice. Refresh restamps the clock and its tooltip says so.
+
+**New deps and a vendored asset.** `d3-geo` and `topojson-client` (plus the
+three @types) are added to voltick-vite, and `public/countries-110m.json` is
+vendored the same way the console does it, fetched at runtime so it never
+enters the bundle. package-lock.json is regenerated; run `npm install` in
+voltick-vite before the next build.
+
+STALE, delete when convenient (this session could not remove files on the
+laptop): `voltick-vite/src/pages/visitors/world.ts`,
+`voltick-vite/src/pages/visitors/visitors.ts`, `voltick-vite/tools/gen-world.py`.
+Nothing imports them any more.
+
+`voltick-vite/src/pages/visitors/*` (VisitorMap, VisitorsMap, ownerTheme,
+countryMaps, CustomerName, sampleVisits)
+`voltick-vite/public/countries-110m.json`, `package.json`, `package-lock.json`
+`voltick-vite/src/lib/nav.ts`
+
+## 2026-09-16 (d) - Voltick: the customer card, as a page instead of a modal
+
+The dossier mockup, built for real on voltick.cbedge.net at `/customer-card`.
+One customer on one screen, no tabs: Identity, Money and Usage across the top,
+the page feed and the share-of-time bars underneath, a roster strip above it
+that swaps the card. Today / 7d / 30d / All switches the feed between event
+rows and one-row-per-day summaries.
+
+A page rather than a modal on purpose. The modal shape is what the owner
+console will want when a name is clicked in Subscriptions or on the map, but a
+route is linkable, deep-linkable and testable, and it is the same component
+either way.
+
+Every record is synthetic and lives in `customerData.ts` with the field names
+the owner console already uses, so it can be pointed at a real endpoint later
+without the layout moving. The three header buttons are inert: a live "Reset
+password" here would mail a token to a made-up address.
+
+Colors: none of the reserved data colors appear (a plan is not a level on a
+board). Chrome is ACCENT and SKY; GOOD and BAD mark only the two states that
+are money arriving or money stopping. The share bars rank by accent opacity
+rather than by hue.
+
+`voltick-vite/src/pages/customer/CustomerCard.tsx` (new)
+`voltick-vite/src/pages/customer/customerData.ts` (new)
 `voltick-vite/src/lib/nav.ts`, `voltick-vite/src/pages/registry.ts`
+
+## 2026-09-16 (c) - Probe chart: the canvas is measured, so the type stops scaling with the pane
+
+The chart is `width: 100%` over a FIXED viewBox, and every size inside it is in
+user units — so the whole picture was being scaled by whatever box it landed
+in. In the tracked-alerts two-up the panes are far wider than the 320-unit
+narrow viewBox, so the 9px labels, the rings and the pill all drew at roughly
+1.4x: `ENTRY`, `H`, `L` and `VOLUME · PRINT` came out oversized and the chart
+was taller than it needed to be. Same bug as the board column drawing them at
+six, just the other way round.
+
+The container is now measured (ResizeObserver) and the viewBox width is set to
+it, so one user unit is one CSS pixel and type keeps the size it was written at
+whatever the placement. Height tracks width with a cap (320 inline, 520 popped
+out) so a wide pane gets a wider chart, not a taller page. Padding is derived
+from the type scale rather than a wide/narrow flag, and the popped-out type
+scale drops from a stretch-correcting 1.75 to a gentle 1.15-1.45 now that there
+is no stretch to correct.
+
+`cbedge-v3/src/board/topFlow/ContractProbe.tsx`
+
+## 2026-09-16 - budget.cbedge.net reads the statement, like the laptop does
+
+The phone's Money page and /owner/budget disagreed on four cards for the same
+month. Three of them were one cause.
+
+**Spend Pace and Where It Went were reading the wrong ledger.** The desktop
+moved both cards onto the imported bank statement (`budget_statement_tx`) - the
+register is the PLAN, a statement is what actually cleared, and a card headed
+"spent" has to mean the second one. `_lib-household-budget.cjs`, which builds
+everything the phone shows, had no statement source at all: it was still
+cumulating register rows. Same month, same screen name, $4,415 on the phone
+against $2,695.40 on the laptop, and a donut of entirely different categories.
+
+New `loadStatement()` pulls the same 11-month window /api/budget/real pulls,
+including the flex-gas correction that moves Amazon Flex fill-ups out of the
+fuel category - skip that and the donut disagrees by the whole gas bill.
+New `buildStatementSpend()` is a port of the desktop's `paceSeries` and
+`slicesFor("monthly")`: cleared spend per day, the typical month's own
+day-by-day CURVE as the benchmark (a straight ramp reads OVER every month until
+it catches up near the 25th, because rent clears before the 5th), and per
+-category averages divided by IMPORTED months, not by months a category happens
+to appear in. It arrives as `overview.stmt`; the register-derived `cum`,
+`spentMtd` and `slices` are untouched beside it.
+
+A month with no statement now says so on both cards instead of drawing zeros,
+which reads as a month of no spending.
+
+**Amazon was $10 light.** `buildAmazon` summed `pay - gas`. Tips are their own
+column - Flex pays the block on the day and the tip days later - so the desktop
+sums `pay + tips - gas`. Amazon net folds into Income and Net Profit, so one
+dropped column moved three tiles: $922/$4,972/$197 against the laptop's
+$932/$4,982/$207. The tile sub now spells the tips out the way the desktop does.
+
+**Safe to Spend was the same number in a different unit.** The phone led with
+`safe / daysLeft` and the desktop's monthly view leads with `safe`, so one card
+read -$8 and the other -$117 for the same month. Headline is now the month, with
+per-day kept on the line below.
+
+Files: `server-v2/_lib-household-budget.cjs`,
+`budget-vite/src/api.ts`, `budget-vite/src/components/BudgetOverview.tsx`.
 
 ## 2026-09-15 (c) - The feed reconnects itself when dxLink goes quiet
 
@@ -23703,123 +23826,78 @@ neither shot shows the controls used to set it up.
 
 Files: `cbedge-v3/src/pages/OptionsChain.tsx`.
 
-## 2026-09-16 (f) — Multi Greek card: the near-core % reads like the chain's, and the ladder stops yanking
+## 2026-09-16 (f) — v3 toolbar: the alerts pill flashes on arrival
 
-**NEAR CORE % is a dropdown now.** The bare `25 33 40 50 60 75 90` row said
-nothing about what the numbers were a percent OF and ate the width of a 60-wide
-popover to say it. Replaced with the option chain's shape: an ON/OFF chip beside
-a `≥ 50% of core` dropdown, so the two surfaces read the same.
+A new signal used to land silently. The pill swapped its tag, headline and age,
+and if you were reading a chart you missed the change — the pulsing dot says
+"recent" for an hour, which is a different question from "one just landed".
 
-**Auto-centre leaves your scroll alone for ten seconds.** The ladder centres on
-the money, which is right on arrival and wrong once you have gone looking at a
-wall four screens up. The user-scroll latch existed for that, but it cleared on
-the next re-anchor — and on a 15s poll in a fast tape the ATM strike moves within
-a few seconds, so you scrolled, read two rows, and got yanked back.
+The pill now FLASHES its border in the alert type's own colour when the top row
+changes: three 800ms beats (`.alert-flash`, `design/tokens.css`), then quiet.
+Drawn with `box-shadow`, not a real border, so the toolbar does not shift a
+pixel when it fires; the colour arrives as an inline `--alert-flash` var because
+`@keyframes` cannot take an argument. The pill stays borderless at rest — the
+flash is the only box it ever has.
 
-The latch now clears on a QUIET PERIOD instead: `RECENTRE_QUIET_MS = 10_000`
-since you last moved the panel yourself. Re-anchoring inside that window
-schedules the recentre for when the window closes rather than dropping it, so the
-ladder still finds the money on its own — ten seconds after you stopped reading,
-not while you are. The wheel/touch latch and the grab-drag both stamp the clock,
-and the drag re-stamps as it moves, so the ten seconds run from the end of the
-gesture rather than its first 4px.
+Two things it will not do. It never fires on the first load (opening at 2pm
+must not announce a 9:40 signal as new) — that is the null-start `seenRef`. And
+it cannot fire on a poll that changed nothing: the trigger is `latest.id`, the
+row's primary key, which with the existing signature check in `useAlertsFeed` is
+why this is not a return of the old every-20-seconds blink. The global
+reduced-motion rule collapses it to nothing, leaving tag and dot to carry it.
 
-Files: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
+Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/design/tokens.css`.
 
-## 2026-09-16 (g) — Two real bugs: a portalled dropdown that could not be clicked, and a latch that missed most scrolls
+## 2026-09-16 (g) — v3 alerts: ticker first, title biggest, score gone
 
-**The near-core % "flipped back to 50".** It never took at all. `Dropdown` in
-`board/gexCandles/controls.tsx` renders its menu through a portal, so to the cog
-`Popover` it was opened from, a click on an option lands OUTSIDE that panel's
-ref. The panel closes on `pointerdown`, which unmounts the menu before the
-option's `onClick` can fire — the pick silently does not take, and the control
-reads as if it snapped back.
+The feed rows were upside down. The smallest text in the row — a 9px uppercase
+tag line — was the subject, and the biggest was the detector's explanation, so
+the eye landed on "$1.0M OTM put purchased, 9DTE…" and had to work back up to
+find out it was QQQ. Scanning this list is asking WHAT IS THIS ABOUT, and the
+answer is a ticker.
 
-`POPOVER_SAFE_ATTR` on the menu is how `Popover` is told "this is mine" (see its
-`onDown`), and `Dropdown` was not carrying it. Added. This fixes every caller of
-that control, not just the Multi Greek card.
+So the row is now, in order of size: the **ticker** in the type's colour, then
+the **title** beside it at `text-sm` (`text-base` on the phone), then the
+detector's sentence one step down, then the small meta line. `AlertItem` gains
+`ticker` and `title`; `variant` is gone, and both the desktop panel and
+`/m/alerts` read the new pair. The pill's `short` leads with the ticker too.
 
-**The re-centre latch missed most scroll gestures.** It listened for `wheel` and
-`touchmove`, which catch a mouse wheel and a finger and nothing else — not a
-trackpad's momentum tail, not Page Up, not an arrow key, not a scrollbar drag.
-Any of those moved the ladder without arming the latch, so the next re-anchor
-pulled it straight back to the money. That is why it still snapped after about a
-second whatever the quiet period said.
+The ticker is `meta.ticker` for a whale print, `meta.symbol` for a scanner pick,
+and `SPX` for flip / core / IB — those detectors carry no symbol because there
+is only one they could be about.
 
-Replaced with one `scroll` listener, which fires for all of them. The cost is
-that it also hears the centring effect's own write, so that effect now stamps
-`programmaticRef` immediately before touching `scrollTop`, and an event inside
-150ms of the stamp is the effect hearing itself. The effect also returns early
-when the ladder is already centred — it runs on every render, and writing
-`scrollTop` to the value it already holds fires a scroll event for nothing.
+Three redundancies fell out of putting it in front:
 
-Also: NEAR CORE's on/off and threshold now persist by effect rather than only in
-their commit callbacks, so the store cannot disagree with what is on screen —
-including across a hot reload, which re-runs the lazy initialisers against
-whatever the store last held.
+- the type's TAG left the title — every `setup` already names its detector, and
+  "WHALE · WHALE PUT BUY" was the same word twice. Colour, dot and chip still
+  say which kind it is.
+- the ticker is stripped from inside the title, so a whale reads
+  "QQQ · Put buy — 690P $1.0M", not "QQQ · Whale put buy — QQQ 690P $1.0M".
+- a whale's level line is dropped entirely: `level_name` is "SPY 747P", which
+  the title now carries, and `level_spx` is null on an option print — the two
+  together were what printed the stray "SPY 747P 0".
 
-Files: `cbedge-v3/src/board/gexCandles/controls.tsx`,
-`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
+**`score` is no longer drawn.** It was the engine's internal 1–5 ranking, on no
+scale the reader has ever been given — "score 5" is not a decision you can make
+— and sitting beside a level and a strike it read as if it were another price.
+The field stays on `SignalRow` because `/proxy/signals` still returns it.
+
+Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/shell/alertTypes.ts`,
+`cbedge-v3/src/shell/AlertsPanel.tsx`, `cbedge-v3/src/mobile/pages/MAlerts.tsx`.
 
 ---
 
-## 2026-09-17 — v3 board: paint gating (non-negotiable 5), and the budget that caught up with it
+## 2026-09-16 — owner-vite build fix: stray `VisitorMap-1.tsx`
 
-An audit of all twelve board cards against rule 5 — *a card nobody can see does
-not paint*. Three were doing work for pixels nobody was looking at.
+The VPS deploy failed on `target owners` with three `TS2307` errors from
+`owner-vite/src/components/VisitorMap-1.tsx`: it imports `./CustomerName`,
+`./mapTheme` and `./countryMaps`, none of which exist. It is a stale copy of
+`VisitorMap.tsx`, made before those were consolidated into
+`./CustomerCard`, `../lib/theme` and `../lib/countryMaps`. Nothing imports it,
+but `tsc` still type-checks it, so the Docker build died at `npm run build`.
 
-**GEX Candles — the big one.** `<ChartFrame onMount={onMount} />` took none of
-the three visibility signals, and `onMount` received `frame.visible` and dropped
-it. So `chart.ts`'s steady rAF loop ran its full overlay rebuild — the bubble
-band (up to ~320 segments, each with its own `priceToCoordinate`) plus the GEX
-rail — for a card scrolled out of the board's viewport, on every frame the view
-moved. It moves constantly: live bars arrive whether you are looking or not.
+Neutralised it to a comment + `export {}` stub (this session had no shell on the
+laptop, so the file could not be deleted outright). Full original content saved
+to `_to_delete/VisitorMap-1.tsx.bak` — delete both when convenient.
 
-`MountOpts` now carries an optional `visible: () => boolean`, the card passes
-`frame.visible` through, and `draw()` checks it before `readPlotW()` — a hidden
-card costs one boolean per frame. The loop stays scheduled rather than being
-cancelled and re-armed off the visibility edge; `missedWhileHidden` clears
-`lastSig` on the first frame back so the skipped repaint happens at once. A
-per-frame loop is exactly the case the rule says to answer with
-`handle.visible()` rather than `onVisibility`.
-
-**Gauge Rail.** `setInterval(sample, 5_000)` with no tab check, writing React
-state on a card whose rings only fill once a minute — a backgrounded board
-re-rendered the rail twelve times per bucket it could actually fill.
-
-**Economic Calendar.** `setInterval(() => setNow(Date.now()), 60_000)`, ungated,
-re-rendering the week's calendar plus the earnings table once a minute forever in
-a background tab.
-
-Both now follow `VolGexFlowCard`'s `usePoll` shape: skip while hidden, one
-catch-up tick on `visibilitychange`. `npm run perf` passes, including
-`gex-candles does not paint off screen (0 ≤ 0)`.
-
-**Two build fixes found on the way.** `shell/AlertsFeed.tsx` had three
-`noUncheckedIndexedAccess` errors that were failing `tsc`: `title[0]` is
-`string | undefined` on an empty title, and `Number.isFinite` takes `unknown` and
-returns a plain boolean, so it rejects NaN but does not narrow away the
-`undefined` that a string with no colon destructures to. Both guards are needed;
-neither covers the other's case.
-
-**And the budget.** `entry` 38900 → 44000, `css` 8500 → 9000, deliberately, per
-rule 7 — see the `$raised` note in `budgets.json` for what grew and what was
-ruled out first. The short version: every panel in the entry was already `lazy()`,
-the shell is honestly that size now, and `CopyShotMenu` is the one split still
-available. Worth knowing: the root Dockerfile runs `build:fast`, so the deploy
-never runs this check — it is a commit-time gate, and it had not been run since
-the shell work landed, which is why v9.16.19 shipped green while local was
-4.1kb over.
-
-Still open: Net Premium gates its *paint* (`NetDriftChart` honours
-`onVisibility` correctly) but not its *compute* — the `mergeTape` → filter →
-`buildNetSeries` → `buildSpotSeries` → `ordersByMin` chain re-runs on every
-`useFrame('flow')` tick regardless of visibility. And
-`board/topFlow/ContractProbe-1.tsx` is a 33KB stray twin of `ContractProbe.tsx`,
-the same shape as the `VisitorMap-1.tsx` file that broke the owners build.
-
-Files: `cbedge-v3/src/board/gexCandles/chart.ts`,
-`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
-`cbedge-v3/src/board/gaugeRail/GaugeRailCard.tsx`,
-`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`,
-`cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/budgets.json`.
+Files: `owner-vite/src/components/VisitorMap-1.tsx`, `_to_delete/VisitorMap-1.tsx.bak`.
