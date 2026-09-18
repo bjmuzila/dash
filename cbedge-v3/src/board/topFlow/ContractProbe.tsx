@@ -503,16 +503,16 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   const up = entry != null ? last - entry : null
   const pillVar = up == null ? 'var(--color-accent)' : up >= 0 ? 'var(--color-up)' : 'var(--color-down)'
 
-  // Volume. The bar the print landed in is the accent one — on a whale print it
-  // usually towers over its neighbours, and that is the fastest tell between an
-  // opening trade and one that joined a busy contract.
+  // Volume. The bar the print landed in is the accent one (picked below, once
+  // the print's bar index is known) — on a whale print it usually towers over
+  // its neighbours, and that is the fastest tell between an opening trade and
+  // one that joined a busy contract.
   const vols = bars.map((b) => b.volume)
   const vMax = Math.max(1, ...vols)
   const vAvg = vols.reduce((a, b) => a + b, 0) / (vols.length || 1)
   const vTop = PADT + priceH + GAP
   const vy = (v: number) => vTop + volH - (v / vMax) * volH
   const bw = Math.max(1, ((W - PADL - PADR) / n) * 0.62)
-  const fillIdx = vols.indexOf(vMax)
 
   // ── WHICH VOLUME BARS GET A NUMBER ──────────────────────────────────────
   // Only the ones that stand out. A number over every bar is a wall of type
@@ -563,6 +563,15 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
     }
     return best
   }, [bars, entryTs, n])
+
+  // The accented volume bar is the bar the PRINT landed in, not the tallest one
+  // on the session. Those are usually the same bar on a whale print, which is
+  // why the mismatch hid for so long — but when a later minute trades more, the
+  // accent jumped to that minute while the entry dot stayed on the print, and
+  // the two halves of the chart disagreed about when the trade happened
+  // (2026-09-18). With no print in range there is nothing to point at, so it
+  // falls back to the tallest bar.
+  const fillIdx = entryI ?? vols.indexOf(vMax)
 
   const label = { fill: 'var(--color-fg)', fontFamily: MONO } as const
   const fmt = (v: number) => v.toFixed(2)
@@ -682,12 +691,15 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
           with the volume pane. */}
       {entry != null && entry > 0 && entryI != null && (() => {
         const ex = x(entryI)
-        // ON THE LINE, not on the rung. The fill price and the bar's mark are
-        // two different numbers — a print that crossed the spread filled at
-        // 11.50 while the mark sat at 12.80 — and a dot floating in open space
-        // below the line reads as a bug. The dashed rung already says WHAT was
-        // paid; the dot says WHEN, so it belongs on the price it is pointing at.
-        const ey = y(bars[entryI]!.close)
+        // ON THE RUNG, at the print's minute. The dot marks the TRADE — the
+        // price paid at the moment it was paid — so it sits where the dashed
+        // entry line crosses the print's bar. Parking it on the bar's mark
+        // instead (the old behaviour) put it above or below its own 4.55 label
+        // whenever the fill differed from the mark, which read as a chart that
+        // could not agree with itself (2026-09-18). The gap between the dot and
+        // the line at that minute is now the information: it is the edge the
+        // fill got, or gave up, against the mark.
+        const ey = y(entry)
         const flip = ex > PADL + (W - PADL - PADR) * 0.8
         const lowHalf = ey > PADT + priceH * 0.66
         return (

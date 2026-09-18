@@ -8,9 +8,9 @@
  *   2. that same `key` in src/pages/registry.ts, pointing at a lazy() import
  *
  * Miss step 2 and the route renders Placeholder rather than 404, which is the
- * intended state for a page that is planned and not written yet. Most of the
- * list is in that state on purpose: the pages arrive as demos and sandboxes of
- * the real site, one at a time.
+ * intended state for a page that is being written. Every page listed today is
+ * built: the list carries no planned entries, and a new one lands here only
+ * once its component exists.
  *
  * Copy rules apply to every string in this file: no em-dashes, and nothing that
  * reads as advice. Middle dot, comma, colon or parentheses.
@@ -142,41 +142,6 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
         key: "V3Board",
         note: "Every card and every page of v3, in Voltick surfaces and the Voltick colour vocabulary. Framed inside this site, so these bars stay put.",
         status: "live",
-      },
-    ],
-  },
-  {
-    title: "The merger",
-    icon: "🔀",
-    blurb: "What Voltick and CB Edge each already are, and what one product made of both looks like.",
-    items: [
-      {
-        label: "Overview",
-        path: "/overview",
-        key: "Overview",
-        note: "Why this sandbox exists and what gets decided here.",
-        status: "planned",
-      },
-      {
-        label: "Surface map",
-        path: "/surface-map",
-        key: "SurfaceMap",
-        note: "Every Voltick surface beside its CB Edge counterpart, and which one survives.",
-        status: "planned",
-      },
-      {
-        label: "Vocabulary",
-        path: "/vocabulary",
-        key: "Vocabulary",
-        note: "One word per concept across both products: Volt, flip, wall, coil, GEX, gamma.",
-        status: "planned",
-      },
-      {
-        label: "Open questions",
-        path: "/questions",
-        key: "Questions",
-        note: "The decisions still outstanding, with what each one blocks.",
-        status: "planned",
       },
     ],
   },

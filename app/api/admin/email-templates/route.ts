@@ -26,6 +26,7 @@ import { seasonalityFreeEmail, seasonalityFreeText, SEASONALITY_FREE_SUBJECT } f
 import { v3ComingSoonEmail, v3ComingSoonText, V3_COMING_SOON_SUBJECT } from "@/lib/emails/v3-coming-soon";
 import { wholeBoardEmail, wholeBoardText, WHOLE_BOARD_SUBJECT } from "@/lib/emails/whole-board";
 import { fomcHalfOffEmail, fomcHalfOffText, FOMC_HALF_OFF_SUBJECT } from "@/lib/emails/fomc-half-off";
+import { voltickMergerEmail, voltickMergerText, VOLTICK_MERGER_SUBJECT } from "@/lib/emails/voltick-merger";
 import { hiddenTemplateIdSet, hideTemplate, restoreTemplate } from "@/lib/emails/hiddenTemplates";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
@@ -247,6 +248,13 @@ function buildTemplates(): Template[] {
       subject: FOMC_HALF_OFF_SUBJECT,
       html: fomcHalfOffEmail,
       text: fomcHalfOffText,
+    },
+    {
+      id: "voltick-merger",
+      label: "⚡ CB Edge is joining Voltick — merger announcement (FILL THE TRANSFER CODE)",
+      subject: VOLTICK_MERGER_SUBJECT,
+      html: voltickMergerEmail,
+      text: voltickMergerText,
     },
   ];
 }

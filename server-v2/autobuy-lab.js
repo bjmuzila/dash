@@ -30,13 +30,21 @@
  *
  * Checkpoint → slot: 09:45 = slot 1, 10:30 = slot 4, 12:00 = slot 10.
  *
+ *   internals    TICK / ADD / VOLD, read from etf_candles like any other
+ *                symbol. NOBODY AGREES HOW TO SPELL THESE — dxFeed,
+ *                tastytrade, IQFeed and TradingView each have a convention —
+ *                so INTERNALS_ALIASES is a candidate list per series and
+ *                whichever spelling has bars wins. `internalsSource` in the
+ *                payload names the winner, so "does tastytrade carry TICK?" is
+ *                answered on the page instead of guessed in a constant. If
+ *                none ever resolve, the next place to look is the LSE vault's
+ *                /catalog, which lists every (dataset, symbol) it holds.
+ *
  * ── WHAT IS STILL NOT WIRED, AND WHY ───────────────────────────────────────
- * TICK / ADD / VOLD: no recorder writes NYSE internals anywhere in this
- * database. Econ-calendar veto: econ-alert-recorder FETCHES events and posts
- * them, it never stores them, so there is no table to join against a checkpoint
- * minute. Both come back `available:false` with a `needs` line. A filter that
- * silently scores against invented context is worse than one that says it has
- * no data.
+ * The econ-calendar veto: econ-alert-recorder FETCHES events and posts them, it
+ * never stores them, so there is no table to join against a checkpoint minute.
+ * It comes back `available:false` with a `needs` line. A filter that silently
+ * scores against invented context is worse than one that says it has no data.
  *
  * Two filters are wired but DELIBERATELY RENAMED, because the honest name is
  * not the one on the wish list:
@@ -114,6 +122,39 @@ function etMinutes(ts) {
 const CTX_SYMBOLS = ['SPX', 'SPY', 'VIX'];
 const WALL_SYMBOLS = ['SPX', '$SPX', 'SPXW'];
 
+/**
+ * MARKET INTERNALS — TICK / ADD / VOLD.
+ *
+ * These are index-style symbols and nobody agrees on how to spell them: dxFeed,
+ * tastytrade, IQFeed and TradingView each have their own convention, and the
+ * one that works is a property of the FEED, not of this code. So this is a
+ * CANDIDATE LIST per series, tried in order, and whichever spelling actually
+ * has bars in etf_candles wins. The payload reports which one resolved, so the
+ * answer to "does tastytrade carry TICK?" is on the page rather than in a
+ * guess committed to a constant.
+ *
+ * Costs nothing to be wrong: on the recorder's shared multi-symbol dxLink
+ * subscription a symbol the feed will not serve simply never speaks (see the
+ * note above DEFAULT_CANDLE_SYMBOLS in etf-candle-recorder.js) — it is not a
+ * failed request.
+ *
+ * If none of them ever resolve, TICK/ADD/VOLD is not on this feed and the next
+ * place to look is the LSE vault's /catalog, which lists every (dataset,
+ * symbol) it holds. The filter reads as "no read" until then, which is the
+ * truthful state, not a silent pass.
+ */
+const INTERNALS_ALIASES = {
+  tick: (process.env.AUTOBUY_TICK_SYMBOLS || 'TICK,$TICK,TICK.NY,USI/TICK,II/TICK').split(','),
+  add: (process.env.AUTOBUY_ADD_SYMBOLS || 'ADD,$ADD,ADD.NY,USI/ADD,II/ADD').split(','),
+  vold: (process.env.AUTOBUY_VOLD_SYMBOLS || 'VOLD,$VOLD,VOLD.NY,USI/VOLD,II/VOLD').split(','),
+};
+const INTERNALS_SYMBOLS = Object.values(INTERNALS_ALIASES)
+  .flat().map((x) => x.trim().toUpperCase()).filter(Boolean)
+  .filter((x, i, a) => a.indexOf(x) === i);
+
+/** TICK reading that counts as participation behind a move, either way. */
+const TICK_THRESHOLD = Number(process.env.AUTOBUY_TICK_THRESHOLD || 200);
+
 /** walls_log slot grid: slot 0 = 09:29, slot 1 = 09:45, +15m per slot. */
 const OPEN_SLOT_MIN = 9 * 60 + 29;
 const GRID_START_MIN = 9 * 60 + 45;
@@ -173,7 +214,7 @@ async function loadCandles(dates) {
        ) s
       WHERE t::time >= TIME '09:30' AND t::time <= TIME '12:05'
       ORDER BY symbol, date, et_min`,
-    [CTX_SYMBOLS, dates],
+    [[...CTX_SYMBOLS, ...INTERNALS_SYMBOLS], dates],
   );
   const bySym = new Map();
   for (const r of rows) {
@@ -225,7 +266,23 @@ function wallsAt(rows, slot) {
  * Any field that could not be computed is null, and the filter that needs it
  * returns null (unmeasurable) rather than false.
  */
-function sessionContext({ spx, spy, vix, walls, cpMin, rvolBaseline }) {
+/**
+ * First alias with bars on this session wins, and the winner is remembered so
+ * the payload can say which spelling the feed actually serves.
+ */
+function resolveInternals(candles, date) {
+  const out = { tick: null, add: null, vold: null, source: {} };
+  for (const [key, aliases] of Object.entries(INTERNALS_ALIASES)) {
+    for (const raw of aliases) {
+      const sym = String(raw).trim().toUpperCase();
+      const bars = candles.get(`${sym}|${date}`);
+      if (bars && bars.length) { out[key] = bars; out.source[key] = sym; break; }
+    }
+  }
+  return out;
+}
+
+function sessionContext({ spx, spy, vix, walls, cpMin, rvolBaseline, internals }) {
   const upto = (bars) => (bars || []).filter((b) => b.min <= cpMin);
   const spxU = upto(spx);
   const spyU = upto(spy);
@@ -237,13 +294,35 @@ function sessionContext({ spx, spy, vix, walls, cpMin, rvolBaseline }) {
     spyClose = spyU[spyU.length - 1].close;
     let pv = 0, vv = 0;
     const series = [];
+    // CVD, TradingView's rule set, applied at the finest resolution we hold
+    // (1-minute). Each bar's WHOLE volume is signed, and the polarity ladder is
+    // what makes it more than a coin flip on a doji:
+    //   1. close ≠ open        → sign by the bar's own direction
+    //   2. close = open        → compare this close to the PREVIOUS close
+    //   3. still unchanged     → reuse the last known polarity
+    // Summed into a running total, anchored to the session (the bar window is
+    // one ET session, so the reset is structural rather than a separate step).
+    //
+    // It is a PROXY and the filter's name says so: real CVD classifies each
+    // TRADE as lifting the offer or hitting the bid, which needs tick data
+    // nothing here records. This is the standard stand-in for exactly that gap.
     let delta = 0;
+    let polarity = 1;
+    let prevClose = null;
     const deltas = [];
     for (const b of spyU) {
       const tp = (b.high + b.low + b.close) / 3;
       pv += tp * b.volume; vv += b.volume;
       series.push(vv > 0 ? pv / vv : null);
-      delta += (b.close >= b.open ? 1 : -1) * b.volume;
+      let sign;
+      if (b.close > b.open) sign = 1;
+      else if (b.close < b.open) sign = -1;
+      else if (prevClose != null && b.close > prevClose) sign = 1;
+      else if (prevClose != null && b.close < prevClose) sign = -1;
+      else sign = polarity;
+      polarity = sign;
+      prevClose = b.close;
+      delta += sign * b.volume;
       deltas.push(delta);
     }
     vwap = vv > 0 ? pv / vv : null;
@@ -290,11 +369,26 @@ function sessionContext({ spx, spy, vix, walls, cpMin, rvolBaseline }) {
 
   const vixClose = vixU.length ? vixU[vixU.length - 1].close : null;
 
+  // Internals are LEVELS, read at the checkpoint minute — TICK is the reading
+  // itself, ADD is advancers minus decliners, VOLD is up-volume minus
+  // down-volume. All three are already signed, so a positive number is breadth
+  // behind an up move and the filter reads them through the trade's direction.
+  const lastOf = (bars) => {
+    if (!bars) return null;
+    const u = bars.filter((b) => b.min <= cpMin);
+    return u.length ? u[u.length - 1].close : null;
+  };
+  const tick = lastOf(internals?.tick);
+  const add = lastOf(internals?.add);
+  const vold = lastOf(internals?.vold);
+
   return {
     spxClose, spyClose, vwap, vwapSlope, rvol, cvd, cvdSlope,
     orHigh, orLow, brokeUp, brokeDown, retestUp, retestDown,
     ema8: e8, ema21: e21, ema50: e50,
     vix: vixClose,
+    tick, add, vold,
+    internalsSource: internals?.source || {},
     callWall: walls?.call_wall ?? null,
     putWall: walls?.put_wall ?? null,
     cbLevel: walls?.cb ?? null,
@@ -335,6 +429,7 @@ async function loadContexts(dates) {
         spx: candles.get(`SPX|${date}`),
         spy: candles.get(`SPY|${date}`),
         vix: candles.get(`VIX|${date}`),
+        internals: resolveInternals(candles, date),
         walls: wallsAt(walls.get(date), slot),
         cpMin: cp.min,
         rvolBaseline: baseline,
@@ -464,12 +559,28 @@ const FILTERS = [
     },
   },
 
-  // ── Not wired: nothing in this database carries it ──────────────────────
   {
-    id: 'internals', name: 'TICK / ADD / VOLD', block: 'internals', weight: 1.2, available: false,
-    detail: 'Breadth confirming the move is participation, not a thin squeeze',
-    needs: 'NYSE TICK, ADD and VOLD sampled at the checkpoint minute — no recorder writes these anywhere',
+    id: 'internals', name: 'TICK / ADD / VOLD', block: 'internals', weight: 1.2, available: true,
+    detail: 'Breadth behind the move — TICK past ±200 with ADD and VOLD agreeing, 2 of 3 required',
+    // 2 OF 3, NOT 3 OF 3. These three disagree constantly at the margin — TICK
+    // is an instantaneous count and flips on a single program, while ADD and
+    // VOLD are cumulative. Requiring unanimity meant the filter only ever
+    // passed on the days it was least needed. Whichever of the three the feed
+    // does not serve is simply absent from the vote; if fewer than two are
+    // present the reading is not measurable rather than a fail.
+    test: (t, c) => {
+      if (!c) return null;
+      const long = isLong(t);
+      const votes = [];
+      if (c.tick != null) votes.push(long ? c.tick >= TICK_THRESHOLD : c.tick <= -TICK_THRESHOLD);
+      if (c.add != null) votes.push(long ? c.add > 0 : c.add < 0);
+      if (c.vold != null) votes.push(long ? c.vold > 0 : c.vold < 0);
+      if (votes.length < 2) return null;
+      return votes.filter(Boolean).length >= 2;
+    },
   },
+
+  // ── Not wired: nothing in this database carries it ──────────────────────
   {
     id: 'calendar', name: 'No scheduled event ±30m', block: 'participation', weight: 0.5, available: false,
     detail: 'Econ-calendar veto around the fire clock',
@@ -644,8 +755,8 @@ async function build(opts = {}) {
   };
   const passes = (t, ids) => ids.every((id) => testOf(t, id) === true);
 
-  const runFor = (clockKey, ids, ex) => {
-    const rows = taken.filter((t) => t.checkpoint === clockKey && passes(t, ids));
+  /** Replay a set of rows; a row with no ticks is counted, never scored. */
+  const replayAll = (rows, ex) => {
     const out = [];
     let noData = 0;
     for (const t of rows) {
@@ -656,8 +767,39 @@ async function build(opts = {}) {
     return { results: out, noData, candidates: rows.length };
   };
 
+  const atClock = (clockKey) => taken.filter((t) => t.checkpoint === clockKey);
+  const runFor = (clockKey, ids, ex) => replayAll(atClock(clockKey).filter((t) => passes(t, ids)), ex);
+
+  /**
+   * THE OTHER HALF OF THE ANSWER. A filter that blocks a fire is only earning
+   * its place if the trade it blocked would have LOST. So every rejected
+   * session is replayed too, under the same exit rules, and reported beside the
+   * fired ones. A stack whose rejects were profitable is a stack throwing money
+   * away, and nothing else on the page would show that.
+   */
+  const rejectedFor = (clockKey, ids, ex) => replayAll(atClock(clockKey).filter((t) => !passes(t, ids)), ex);
+
+  /**
+   * What ONE filter vetoed: the trades that clear every OTHER armed filter but
+   * fail this one. That is the filter's own bill — not the whole reject pile,
+   * which any filter in the stack could have caused.
+   */
+  const vetoedBy = (clockKey, ids, id, ex) => {
+    const others = ids.filter((x) => x !== id);
+    return replayAll(
+      atClock(clockKey).filter((t) => passes(t, others) && testOf(t, id) !== true),
+      ex,
+    );
+  };
+
   const current = runFor(clock, armed, exit);
   const stats = statsOf(current.results);
+
+  const rejected = rejectedFor(clock, armed, exit);
+  const rejectedStats = statsOf(rejected.results);
+  // The blind arm: every filled trade at this clock, no filters at all. It is
+  // the only honest yardstick for "is the stack adding anything".
+  const blindStats = statsOf(replayAll(atClock(clock), exit).results);
 
   const ordered = [...current.results].sort((a, b) => String(a.trade.date).localeCompare(String(b.trade.date)));
   let cum = 0;
@@ -687,12 +829,18 @@ async function build(opts = {}) {
         : statsOf(runFor(clock, armed.concat(f.id), exit).results);
       if (other.avgUsd != null) lift = r2(isArmed ? baseAvg - other.avgUsd : other.avgUsd - baseAvg);
     }
+    // What this filter personally kept you out of, under the current stack.
+    // `veto.totalUsd` is the number that decides whether it stays: negative
+    // means it blocked losers and earned its weight; positive means it blocked
+    // winners and is costing money however good its lift looks.
+    const v = statsOf(vetoedBy(clock, isArmed ? armed : armed.concat(f.id), f.id, exit).results);
     return {
       id: f.id, name: f.name, detail: f.detail, block: f.block, weight: f.weight,
       available: true, armed: isArmed,
       passRate: measurable > 0 ? r4(hits / measurable) : null,
       passes: hits, of: measurable, unmeasurable,
       lift,
+      veto: { fires: v.fires, winRate: v.winRate, avgUsd: v.avgUsd, totalUsd: v.totalUsd },
     };
   });
 
@@ -770,12 +918,38 @@ async function build(opts = {}) {
     multiplier: MULTIPLIER,
     buyMin: Number(cbTrack.CONFIG.BUY_MIN || 1),
     contextLoaded: ctxBy.size > 0,
+    // Which spelling of TICK / ADD / VOLD the feed actually served, over the
+    // whole window. An empty object means none of the candidates ever had bars
+    // — that is the answer to whether this feed carries internals at all, and
+    // it belongs on screen rather than in a log line.
+    internalsSource: (() => {
+      const seen = {};
+      for (const c of ctxBy.values()) {
+        for (const [k, v] of Object.entries(c.internalsSource || {})) if (v) seen[k] = v;
+      }
+      return seen;
+    })(),
+    internalsCandidates: INTERNALS_ALIASES,
     filters, armed,
     stats, noData: current.noData, candidates: current.candidates,
+    // Same window, same exit rules, the sessions the stack said no to.
+    rejectedStats, rejectedNoData: rejected.noData,
+    blindStats,
     exitMix: mixOf(current.results),
     equity, matrix,
     sweep: sweep.slice(0, 60),
     live,
+    rejectedTrades: [...rejected.results]
+      .sort((a, b) => String(b.trade.date).localeCompare(String(a.trade.date)))
+      .slice(0, 40)
+      .map((r) => ({
+        id: r.trade.id, date: r.trade.date, checkpoint: r.trade.checkpoint,
+        side: r.trade.side, strike: num(r.trade.strike),
+        entry: num(r.trade.entry_price), exit: r.exitPrice, reason: r.reason,
+        pnl: r.pnl, pnlUsd: r.pnlUsd, holdMin: r.holdMin,
+        // Which armed filters said no to this one — the whole point of the row.
+        blockedBy: armed.filter((id) => testOf(r.trade, id) !== true),
+      })),
     trades: ordered.slice(-40).reverse().map((r) => ({
       id: r.trade.id, date: r.trade.date, checkpoint: r.trade.checkpoint,
       side: r.trade.side, strike: num(r.trade.strike),

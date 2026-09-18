@@ -32,8 +32,8 @@ export default function Home() {
         <>
           The landing board for the merger sandbox. Nothing here is live to customers and nothing here is
           load bearing: it is where the two products get put beside each other, argued about, and cut down
-          to one. Most of the list below is still planned. Pages arrive as demos and sandboxes of the real
-          site, one at a time, and every one of them is reachable from here.
+          to one. Pages arrive as demos and sandboxes of the real site, one at a time, and every one of
+          them is built and reachable from here.
         </>
       }
     >

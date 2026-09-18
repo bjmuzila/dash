@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Friday 9/18/2026
+
+* **Alerts:** whale prints now show a green up arrow for a call buy and a red down arrow for a put buy, with the ticker colored to match, and the alert colors changed — IB break is red, whale is gold — https://cbedge.net/v3
+
 ## Wednesday 9/16/2026
 
 * **Whole dashboard:** fixed a database stall that made every page slow or error for part of Wednesday afternoon — https://cbedge.net/v3

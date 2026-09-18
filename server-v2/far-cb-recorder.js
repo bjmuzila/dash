@@ -133,6 +133,21 @@ const BACKFILL_DAYS    = Number(process.env.FAR_CB_BACKFILL_DAYS || 60);
 // Max contracts one backfill pass will walk. Each is its own short-lived dxLink
 // connection taking a few seconds, so the pass is deliberately sequential.
 const BACKFILL_LIMIT   = Number(process.env.FAR_CB_BACKFILL_LIMIT || 200);
+// THE PREMIUM FLOOR. A flagged contract has to be worth at least this much for
+// the flag to mean anything. Penny contracts — RIVN 20C at $0.10, BB 6P at
+// $0.01, SOXS 55C at $0.03 — are not tradeable theses; they are rounding error
+// with a percentage sign, and because Max % is measured off that base they sit
+// permanently at the top of Tracked results with +1200% next to a contract
+// nobody could have filled.
+//
+// Applied in TWO places on purpose:
+//   • at flag time (upsertOrClear) so nothing new is ever tracked, and
+//   • on the way out (enrichOutcomesWithQuotes) so the rows logged BEFORE this
+//     existed leave the table without a migration or a DELETE.
+// The second is the reason this is a display floor as well as a capture floor:
+// dropping the rows from far_cb_outcomes would throw away grading history that
+// is still true, it just isn't worth showing.
+const MIN_CONTRACT_PRICE = Number(process.env.FAR_CB_MIN_PRICE || 0.50);
 
 const RTH_OPEN_MINS  = 9 * 60 + 30;
 const RTH_CLOSE_MINS = 16 * 60;
@@ -424,7 +439,21 @@ async function scanTicker(symbol) {
       for (const r of gexRows) {
         const val = oiVolNet(r);
         if (!best || Math.abs(val) > Math.abs(best.gexValue)) {
-          best = { strike: r.strike, expiry, gexValue: val, gexValueVol: Number(r.netVolGEX ?? 0), dteDays: daysBetween(today, expiry) };
+          // The flagged contract is the OTM side of the strike — the same
+          // convention optTypeOf encodes — so its mark is the price the flag is
+          // actually about, and the only one MIN_CONTRACT_PRICE can judge. Read
+          // it here, inside the expiry loop, because greekMap is per-expiry and
+          // `best` outlives it. null (not 0) when no quote came back: a missing
+          // mark is UNKNOWN, and the floor below must not read it as cheap.
+          const otmType = r.strike >= spot ? 'C' : 'P';
+          const mark = Number(greekMap.get(keyOf(expiry, r.strike, otmType))?.mark ?? 0);
+          best = {
+            strike: r.strike, expiry, gexValue: val,
+            gexValueVol: Number(r.netVolGEX ?? 0),
+            dteDays: daysBetween(today, expiry),
+            optType: otmType,
+            mark: mark > 0 ? mark : null,
+          };
         }
       }
     }
@@ -439,7 +468,22 @@ async function scanTicker(symbol) {
 // ── persistence ───────────────────────────────────────────────────────────────
 
 async function upsertOrClear(p, date, symbol, result) {
-  if (result && result.otmPct > OTM_THRESHOLD_PCT) {
+  // A KNOWN premium below MIN_CONTRACT_PRICE disqualifies the flag outright —
+  // it falls through to the same branch as "no longer qualifies", so the card
+  // leaves the board and no outcome row is opened for it.
+  //
+  // An UNKNOWN premium is NOT treated as cheap. `mark` is null whenever the
+  // greeks snapshot had no quote for that contract, and a vendor gap must not
+  // silently empty the board; the enrichment floor still hides such a row later
+  // if its recorded entry turns out to be under the floor.
+  const belowFloor = result && result.mark != null && result.mark < MIN_CONTRACT_PRICE;
+  if (belowFloor) {
+    console.log(
+      `[far-cb] ${symbol} ${result.strike}${result.optType || ''} ${result.expiry} skipped — ` +
+      `mark $${result.mark.toFixed(2)} < $${MIN_CONTRACT_PRICE.toFixed(2)} floor`
+    );
+  }
+  if (result && result.otmPct > OTM_THRESHOLD_PCT && !belowFloor) {
     await p.query(
       `INSERT INTO far_cb_watch (date, symbol, strike, expiry, gex_value, gex_value_vol, spot, otm_pct, dte_days, ts)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
@@ -499,7 +543,10 @@ async function runSweep(opts = {}) {
     try {
       const result = await scanTicker(symbol);
       await upsertOrClear(p, date, symbol, result);
-      if (result && result.otmPct > OTM_THRESHOLD_PCT) flagged += 1;
+      // Same two tests upsertOrClear applies, so the log line counts rows that
+      // were actually written rather than candidates that passed the OTM gate.
+      const cheap = result && result.mark != null && result.mark < MIN_CONTRACT_PRICE;
+      if (result && result.otmPct > OTM_THRESHOLD_PCT && !cheap) flagged += 1;
     } catch (e) {
       failed.push(`${symbol}:${e.message}`);
     }
@@ -876,7 +923,8 @@ async function computeOutcomeDetail(symbol, strike, expiry) {
   if (!p) return { ok: false, error: 'no DB' };
   const { rows } = await p.query(
     `SELECT symbol, strike, expiry, first_flagged, spot_at_flag, otm_pct_at_flag,
-            gex_value_at_flag, side, last_checked, last_spot, closest_pct, touched, touched_date, status
+            gex_value_at_flag, side, last_checked, last_spot, closest_pct, touched, touched_date, status,
+            premium_backfilled_at
      FROM far_cb_outcomes WHERE symbol = $1 AND strike = $2 AND expiry = $3`,
     [symbol, strike, expiry]
   );
@@ -916,20 +964,60 @@ async function computeOutcomeDetail(symbol, strike, expiry) {
       .catch((e) => console.warn('[far-cb] EOD backfill failed:', e.message));
   }
 
-  // Nothing recorded for this contract yet — a flag opened before the probe
-  // existed, or one the scheduled backfill has not reached. Pull it from dxLink
-  // NOW rather than showing a wall of dashes and filling it in on the second
-  // open. Tighter windows than the batch pass: someone is watching a spinner.
-  if (!contractBars.length && !probeRows.length) {
+  // THE SERIES HAS TO START ON THE FLAG DATE, and the gate that used to stand
+  // here asked the wrong question. It fired only when NOTHING at all was
+  // recorded — so a contract flagged three weeks ago whose first probe landed
+  // this morning had exactly one row, did not look empty, and was never
+  // backfilled. That is the "some of them just show the day's move" popup: one
+  // point, drawn from the flag date, with the whole life before it missing.
+  //
+  // Ask about COVERAGE instead: does what we hold begin at first_flagged? If
+  // the earliest recorded day is later than the flag, the gap in front of it is
+  // exactly what dxLink can still serve, so pull it. Tighter windows than the
+  // batch pass — someone is watching a spinner.
+  const flaggedYmd = toYmd(row.first_flagged);
+  const coverageStart = [
+    ...contractBars.map((b) => new Date(b.time).toISOString().slice(0, 10)),
+    ...probeRows.map((r) => toYmd(r.date)),
+  ].filter(Boolean).sort()[0] || null;
+  // A contract can genuinely have no quote on its flag day (no trade, or dxLink
+  // has aged the bars out), and that gap never closes. Once the vendor has been
+  // asked today, take the answer and stop re-asking on every popup open — the
+  // batch pass owns the retry, one per session.
+  const askedToday = row.premium_backfilled_at != null
+    && toYmd(row.premium_backfilled_at) === etDateStr();
+  const needsBackfill = coverageStart == null
+    || (flaggedYmd != null && coverageStart > flaggedYmd && !askedToday);
+
+  if (needsBackfill) {
     try {
       const r = await backfillContractPremium(
-        { symbol, strike, expiry, first_flagged: row.first_flagged, gex_value_at_flag: row.gex_value_at_flag },
+        {
+          symbol, strike, expiry,
+          first_flagged: row.first_flagged,
+          gex_value_at_flag: row.gex_value_at_flag,
+          // side/spot pin optTypeOf to the same contract the popup is drawing,
+          // instead of letting it fall back to the sign of the GEX value.
+          side: row.side,
+          spot_at_flag: row.spot_at_flag,
+        },
         { quietMs: 1500, hardMs: 9000 }
       );
-      if (r.bars.length) probeRows = r.bars.map((b) => ({
-        date: new Date(b.time).toISOString().slice(0, 10),
-        open: b.open, high: b.high, low: b.low, close: b.close,
-      }));
+      // MERGE, never replace. The fetched bars fill the stretch in FRONT of the
+      // first probe; the rows already held stay authoritative for the days they
+      // cover, because they are ours and they include today — and dxLink's
+      // daily bar for a session still in progress is not today's mark. Order
+      // matters: probeByDay below is a Map built in sequence, so the entries
+      // appended last win their date.
+      if (r.bars.length) {
+        probeRows = [
+          ...r.bars.map((b) => ({
+            date: new Date(b.time).toISOString().slice(0, 10),
+            open: b.open, high: b.high, low: b.low, close: b.close,
+          })),
+          ...probeRows,
+        ];
+      }
       await p.query(
         `UPDATE far_cb_outcomes SET premium_backfilled_at = now()
           WHERE symbol = $1 AND strike = $2 AND expiry = $3`,
@@ -1252,6 +1340,14 @@ async function enrichOutcomesWithQuotes(rows) {
         ? ((high - entry) / entry) * 100
         : null,
     };
+  }).filter((r) => {
+    // MIN_CONTRACT_PRICE as a DISPLAY floor — see the constant. Judge on the
+    // ENTRY (what the flag would have cost on its own date), falling back to
+    // the live mid only when no entry was ever recorded. A row with neither is
+    // kept: unpriced is unknown, not cheap, and hiding it would make a quote
+    // outage look like an empty tracker.
+    const ref = r.opt_entry ?? r.opt_price;
+    return !(ref != null && ref < MIN_CONTRACT_PRICE);
   });
 }
 
@@ -1367,4 +1463,5 @@ module.exports = {
   toYmd,
   OTM_THRESHOLD_PCT,
   MAX_DTE_DAYS,
+  MIN_CONTRACT_PRICE,
 };

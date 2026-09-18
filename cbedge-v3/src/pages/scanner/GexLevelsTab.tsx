@@ -161,7 +161,6 @@ import {
   VOL_FLOW_DEFAULT_PICK,
   VOL_FLOW_DEFAULT_SESSION,
   WINDOW_FRAC_DEFAULT,
-  WINDOW_FRAC_FULL_CHAIN,
   applyTodayHistoryRow,
   barWidth,
   baselineY,
@@ -1098,9 +1097,20 @@ function NetGammaCurveChart({
   neutral: number | null
 }) {
   const { containerRef, hover, show, hide } = useChartHover()
-  // B193 — windowFrac 1: the default half-window is a whole spot, wider than the
-  // listed chain, so every strike is on screen at first paint.
-  const pan = useChartPan(rows, spot, WINDOW_FRAC_FULL_CHAIN)
+  // B193 (superseded 2026-09-18) — this passed WINDOW_FRAC_FULL_CHAIN (1), a
+  // half-window of a whole spot, so the first paint spanned the ENTIRE listed
+  // chain (the feed's +/-8% subscribe band, ~1,900 SPX points). On 0DTE every
+  // strike carrying real gamma sits inside ~+/-1.2% of spot, so the actual
+  // curve occupied <10% of the plot width and rendered as a single needle at
+  // the flip with dead-flat zero either side -- it read as broken data (AM
+  // contract? dead greeks?) when the rows were correct all along. The trough
+  // and the net reconcile exactly with the GEX Chart card.
+  // Now opens at WINDOW_FRAC_DEFAULT (+/-6%), same as the bars, call/put and
+  // delta charts on this tab. Scroll-to-zoom and drag-to-pan still reach the
+  // whole chain from there, and the cumulative sum is still computed over ALL
+  // rows before windowing (see below), so the zero crossing stays on the real
+  // flip regardless of what is on screen.
+  const pan = useChartPan(rows, spot, WINDOW_FRAC_DEFAULT)
   // The cumulative curve is computed over the WHOLE chain and only then
   // windowed, so the zero crossing lands on the real flip.
   const cumAll = useMemo(() => cumulativeByStrike(rows), [rows])

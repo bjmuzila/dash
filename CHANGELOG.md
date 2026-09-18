@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-18 - Toolbar alerts: whale side arrow + palette swap
+
+Added an optional `bias` field to `AlertItem` in
+`cbedge-v3/src/shell/alertTypes.ts`, filled for whale prints only in
+`AlertsFeed.tsx` (`biasOf`, off the engine's `direction` column with `meta.type`
+as fallback), and drawn in `AlertsPanel.tsx` as a green up / red down arrow in
+front of the ticker with the ticker painted to match. Also swapped two catalogue
+colours in `alertTypes.ts`: IB break now takes the put-wall red and the whale
+takes the amber.
+
 ## 2026-09-16 (k) - Whale Archive layout + two Postgres lock storms
 
 Restored the deleted `/api/whale-alerts` block in `server-v2/api-router.js`
