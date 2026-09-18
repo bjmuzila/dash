@@ -4,6 +4,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Friday 9/18/2026
 
+* **Level Log:** the Wall Migration chart now has a price scale down the right showing every strike the walls and CORE held, the clock underneath marks every hour instead of three times a day, and each level's opening strike is labeled, and a blank page when you picked more than one day is fixed — https://cbedge.net/v3/level-log
+
 * **Alerts:** whale prints now show a green up arrow for a call buy and a red down arrow for a put buy, with the ticker colored to match, and the alert colors changed — IB break is red, whale is gold — https://cbedge.net/v3
 
 ## Wednesday 9/16/2026

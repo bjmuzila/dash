@@ -2702,8 +2702,63 @@ export async function linkStripeCustomer(clerkUserId: string, customerId: string
   );
 }
 
+/**
+ * SQL rank of a subscription status, used to decide which of SEVERAL Stripe
+ * subscriptions on one customer owns this user's single row.
+ *
+ *   2 = paying now      ('active','trialing')  -> PAID_STATUSES
+ *   1 = owes us money   ('past_due','unpaid','incomplete','paused', ...)
+ *   0 = over / unknown  ('canceled','incomplete_expired', NULL)
+ *
+ * Written inline rather than as a Postgres function so this needs no migration
+ * — the whole fix ships with the container.
+ */
+const SUB_STATUS_RANK = (col: string) => `
+  CASE WHEN ${col} IN ('active','trialing')            THEN 2
+       WHEN ${col} IS NULL
+         OR ${col} IN ('canceled','incomplete_expired') THEN 0
+       ELSE 1 END`;
+
+/**
+ * Does the INCOMING event get to own this user's row?
+ *
+ * WHY THIS GUARD EXISTS (2026-09-18)
+ * ----------------------------------
+ * `subscriptions` holds exactly ONE row per user (PK clerk_user_id), but a
+ * Stripe CUSTOMER can carry several subscriptions at once. Until now every
+ * webhook wrote unconditionally, so the row simply held whichever subscription
+ * fired last.
+ *
+ * That is not a tie-break, it is a race the dead subscription wins. A customer
+ * whose card was declined and who then re-subscribed on a new card has a
+ * `past_due` subscription that Stripe RETRIES for days — each retry is another
+ * `customer.subscription.updated`, each one stamped `past_due` over the
+ * `active` row the new subscription had written. is_paid flips to false and a
+ * paying customer is locked out of the product he just bought. Reported by
+ * gokar200953@hotmail.com, who had an active $50 sub and a past_due $45 sub on
+ * the same customer.
+ *
+ * So: an event about a DIFFERENT subscription than the one we hold may only
+ * take the row if it ranks at least as high. Same subscription id always wins
+ * — that is the real transition (active -> past_due -> canceled) and it MUST
+ * still be able to revoke access. Rows with no subscription id yet (the
+ * customer link written at checkout) are always claimable.
+ */
+const SUB_EVENT_WINS = `(
+  EXCLUDED.stripe_subscription_id IS NULL
+  OR subscriptions.stripe_subscription_id IS NULL
+  OR EXCLUDED.stripe_subscription_id = subscriptions.stripe_subscription_id
+  OR ${SUB_STATUS_RANK('EXCLUDED.status')} >= ${SUB_STATUS_RANK('subscriptions.status')}
+)`;
+
 /** Upsert the full subscription state from a Stripe webhook event, keyed on the
- *  Clerk user id. The webhook is the single writer of status/period fields. */
+ *  Clerk user id. The webhook is the single writer of status/period fields.
+ *
+ *  Not a blind overwrite: see SUB_EVENT_WINS. An event about a subscription
+ *  that is deader than the one we already hold is accepted and DISCARDED, which
+ *  is why every status-bearing column below is wrapped in that CASE rather than
+ *  the plain COALESCE this used to be. The customer id is the one exception —
+ *  it is the same customer either way, so it always merges. */
 export async function upsertSubscription(r: {
   clerk_user_id: string;
   stripe_customer_id?: string | null;
@@ -2719,12 +2774,22 @@ export async function upsertSubscription(r: {
         price_id, current_period_end, cancel_at_period_end)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT (clerk_user_id) DO UPDATE SET
-       stripe_customer_id     = COALESCE(EXCLUDED.stripe_customer_id,     subscriptions.stripe_customer_id),
-       stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, subscriptions.stripe_subscription_id),
-       status                 = COALESCE(EXCLUDED.status,                 subscriptions.status),
-       price_id               = COALESCE(EXCLUDED.price_id,               subscriptions.price_id),
-       current_period_end     = COALESCE(EXCLUDED.current_period_end,     subscriptions.current_period_end),
-       cancel_at_period_end   = EXCLUDED.cancel_at_period_end,
+       stripe_customer_id     = COALESCE(EXCLUDED.stripe_customer_id, subscriptions.stripe_customer_id),
+       stripe_subscription_id = CASE WHEN ${SUB_EVENT_WINS}
+                                     THEN COALESCE(EXCLUDED.stripe_subscription_id, subscriptions.stripe_subscription_id)
+                                     ELSE subscriptions.stripe_subscription_id END,
+       status                 = CASE WHEN ${SUB_EVENT_WINS}
+                                     THEN COALESCE(EXCLUDED.status, subscriptions.status)
+                                     ELSE subscriptions.status END,
+       price_id               = CASE WHEN ${SUB_EVENT_WINS}
+                                     THEN COALESCE(EXCLUDED.price_id, subscriptions.price_id)
+                                     ELSE subscriptions.price_id END,
+       current_period_end     = CASE WHEN ${SUB_EVENT_WINS}
+                                     THEN COALESCE(EXCLUDED.current_period_end, subscriptions.current_period_end)
+                                     ELSE subscriptions.current_period_end END,
+       cancel_at_period_end   = CASE WHEN ${SUB_EVENT_WINS}
+                                     THEN EXCLUDED.cancel_at_period_end
+                                     ELSE subscriptions.cancel_at_period_end END,
        updated_at             = CURRENT_TIMESTAMP`,
     [
       r.clerk_user_id,

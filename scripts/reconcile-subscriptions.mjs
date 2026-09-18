@@ -30,6 +30,14 @@
  * Run it inside the app container so DATABASE_URL and STRIPE_SECRET_KEY are set:
  *   docker compose exec -T dashboard node scripts/reconcile-subscriptions.mjs
  *
+ * ONE ROW, MANY SUBSCRIPTIONS
+ * ---------------------------
+ * A Stripe customer can hold several subscriptions; our table holds one row per
+ * user. pickWinner() decides which subscription that row represents — paying
+ * beats owing beats over. Without it (before 2026-09-18) whichever subscription
+ * came last in Stripe's list won, so a live subscription sitting next to a
+ * retrying past_due one was a coin flip re-tossed on every run.
+ *
  * SAFE TO RUN ANY TIME. Dry run by default. The write is the same idempotent
  * upsert the webhook uses, keyed on clerk_user_id, so running it twice is a
  * no-op and running it concurrently with a live webhook cannot corrupt a row.
@@ -101,10 +109,16 @@ async function fetchAllStripeSubs() {
   return out;
 }
 
-// The upsert is a byte-for-byte copy of upsertSubscription() in lib/db.ts.
-// Deliberate duplication: this script is a plain .mjs run by node inside the
-// container and cannot import the TypeScript module. If that function's SQL
-// changes, change it here too.
+// The upsert mirrors upsertSubscription() in lib/db.ts, with ONE deliberate
+// difference: no SUB_EVENT_WINS guard.
+//
+// That guard exists because the webhook sees one subscription at a time and
+// must not let a dead one clobber a live one (see lib/db.ts). This script sees
+// EVERY subscription in the account at once and picks the winner itself
+// (pickWinner below), so it is the authoritative repair — and it has to be able
+// to overwrite a stale 'active' row that the guard would refuse. Deliberate
+// duplication otherwise: this is a plain .mjs run by node inside the container
+// and cannot import the TypeScript module.
 const UPSERT_SQL = `
   INSERT INTO subscriptions
     (clerk_user_id, stripe_customer_id, stripe_subscription_id, status,
@@ -120,6 +134,34 @@ const UPSERT_SQL = `
     updated_at             = CURRENT_TIMESTAMP`;
 
 const PAID = new Set(["active", "trialing"]);
+const DEAD = new Set(["canceled", "incomplete_expired"]);
+
+/** Same three-way rank as SUB_STATUS_RANK in lib/db.ts. Keep them in step. */
+function rank(status) {
+  if (PAID.has(status)) return 2;
+  if (!status || DEAD.has(status)) return 0;
+  return 1;
+}
+
+/**
+ * One row per user, several subscriptions per Stripe customer — so somebody has
+ * to choose. Before 2026-09-18 nobody did: this script looped over Stripe's
+ * list and let the LAST subscription it happened to touch write the row, which
+ * is how a customer with an active $50 sub and a retrying past_due $45 sub got
+ * reconciled straight back out of the product he was paying for.
+ *
+ * The order: paying beats owing beats over; within a rank, the one that runs
+ * longest, then the one created most recently.
+ */
+function pickWinner(subs) {
+  return subs.slice().sort((a, b) => {
+    const r = rank(b.status) - rank(a.status);
+    if (r) return r;
+    const p = (periodEnd(b) ?? 0) - (periodEnd(a) ?? 0);
+    if (p) return p;
+    return (b.created ?? 0) - (a.created ?? 0);
+  })[0];
+}
 
 async function main() {
   const subs = await fetchAllStripeSubs();
@@ -134,6 +176,9 @@ async function main() {
   const drift = [];
   const orphans = [];
 
+  // Group by OUR user first. A user with two subscriptions gets one verdict,
+  // not two writes racing each other into the same row.
+  const byUserSubs = new Map();
   for (const sub of subs) {
     const customerId = customerIdOf(sub.customer);
     if (!customerId) continue;
@@ -143,6 +188,16 @@ async function main() {
       orphans.push({ sub: sub.id, customer: customerId, status: sub.status });
       continue;
     }
+    if (!byUserSubs.has(userId)) byUserSubs.set(userId, { customerId, subs: [] });
+    byUserSubs.get(userId).subs.push(sub);
+  }
+
+  for (const [userId, group] of byUserSubs) {
+    const customerId = group.customerId;
+    const sub = pickWinner(group.subs);
+    const alsoHas = group.subs.length > 1
+      ? group.subs.filter((s) => s.id !== sub.id).map((s) => `${s.id}:${s.status}`).join(" ")
+      : null;
 
     const local = byUser.get(userId);
     const want = {
@@ -174,6 +229,9 @@ async function main() {
       local_status: have.status,
       stripe_status: want.status,
       access: accessNow === accessAfter ? "unchanged" : accessNow ? "REVOKES" : "GRANTS",
+      // Printed so a multi-subscription customer is visible as one, rather than
+      // looking like an unexplained status flip.
+      other_subs: alsoHas,
     });
 
     if (APPLY) {

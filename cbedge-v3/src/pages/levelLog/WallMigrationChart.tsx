@@ -744,6 +744,31 @@ export function WallMigrationChart({
     return out
   })()
 
+  /**
+   * HOW MANY SESSIONS GET NAMED, and how many boundaries get a line.
+   *
+   * The rail printed a weekday and a date under EVERY slice, which is right for
+   * five and unreadable for twenty-one — at 260 each slice is under three
+   * pixels and the "MONDAY" over it is forty. So the rail stamps about ten
+   * sessions however many are drawn, anchored on the LAST one: the newest
+   * session is the one being read against the others and it must always carry
+   * its own date. The weekday name comes off as soon as the slices are too
+   * narrow to hold it; the m/d stamp is what survives.
+   *
+   * The session dividers thin with the stamps once they would out-number the
+   * data — 260 hairlines a pixel apart is a grey wash, not a set of edges — so
+   * past that point a line is drawn only where a date is printed, and the two
+   * read as one rail.
+   *
+   * These four were lost in the edit that took the in-plot labels out (the
+   * cut ran from the marks model to `return`) and took the week view down with
+   * them — `thinDividers is not defined`, a blank page on any multi-day view.
+   */
+  const stampEvery = Math.max(1, Math.ceil(N / 10))
+  const isStamped = (i: number) => (N - 1 - i) % stampEvery === 0
+  const showDow = N <= 6
+  const thinDividers = N > 40
+
   return (
     <div className={fill ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-col'}>
       {compact ? null : (

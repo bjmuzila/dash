@@ -22725,3 +22725,21 @@ was given. Also dropped: the whale level line, which was printing "SPY 747P 0".
 Files: `cbedge-v3/src/shell/AlertsFeed.tsx`, `cbedge-v3/src/shell/alertTypes.ts`,
 `cbedge-v3/src/shell/AlertsPanel.tsx`, `cbedge-v3/src/mobile/pages/MAlerts.tsx`,
 `cbedge-v3/src/design/tokens.css`.
+
+## Wall migration — price axis, hourly clock rail, open labels
+
+`cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx` now draws no labels on the
+plot: a 46px right-hand price axis prints every strike each level held (live at
+full weight, earlier ones dimmed, round ticks dropped within 9px of a strike or
+spot, no pills), the single-session clock rail stamps the open then every hour
+instead of three times, and each level's opening strike is marked on the left
+rail as `345 OPEN` in the probe's bare-type vocabulary. `compact` tiles
+untouched.
+
+## Fix — Level Log week view blanked
+
+`cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`: restored `stampEvery`,
+`isStamped`, `showDow` and `thinDividers`, which the edit that removed the
+in-plot marks cut out along with the label model, throwing
+`thinDividers is not defined` on any multi-day view.
+

@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-09-18 - Stripe: a dead subscription can no longer lock out a paying customer
+
+`subscriptions` holds ONE row per user (PK `clerk_user_id`), but a Stripe
+CUSTOMER can hold several subscriptions at once. Every webhook wrote that row
+unconditionally, so it simply held whichever subscription fired last.
+
+That is not a tie-break, it is a race the dead subscription wins. A customer
+whose card is declined and who then re-subscribes on a new card has a `past_due`
+subscription that Stripe RETRIES for days. Each retry is another
+`customer.subscription.updated`, and each one stamps `past_due` over the
+`active` row the new subscription wrote. `is_paid` flips false and the customer
+is locked out of the product he just paid for. Found on
+gokar200953@hotmail.com: active $50 sub and past_due $45 sub on one customer,
+paid and denied.
+
+**`upsertSubscription()` (lib/db.ts) now ranks the event before taking it.**
+`SUB_STATUS_RANK`: paying (`active`/`trialing`) = 2, owing (`past_due`,
+`unpaid`, `incomplete`) = 1, over (`canceled`, `incomplete_expired`, NULL) = 0.
+`SUB_EVENT_WINS` lets an event about a DIFFERENT subscription take the row only
+if it ranks at least as high. An event about the SAME subscription id always
+wins — `active → past_due → canceled` is the real transition and must still be
+able to revoke access. A row with no subscription id yet (the customer link
+written at checkout) is always claimable. Every status-bearing column is now
+`CASE WHEN … THEN COALESCE(…) ELSE <keep> END` instead of a plain `COALESCE`;
+`stripe_customer_id` still merges unconditionally, since it is the same customer
+either way. Written inline, so no migration — the fix ships with the container.
+
+**`scripts/reconcile-subscriptions.mjs` now picks a winner instead of looping.**
+It was doing the same last-write-wins over Stripe's list, so it would reconcile
+this customer straight back out of the product: run it twice, get two answers.
+Subscriptions are grouped by our user id first, `pickWinner()` sorts paying >
+owing > over, then longest-running, then newest, and only that one is compared
+and written. Drift rows print an `other_subs` column so a multi-subscription
+customer reads as one customer rather than an unexplained status flip. Its
+upsert deliberately keeps NO guard — it sees every subscription at once, so it
+is the authoritative repair and has to be able to overwrite a stale `active`
+row the webhook guard would refuse.
+
+Files: `lib/db.ts`, `scripts/reconcile-subscriptions.mjs`.
+
 ## 2026-09-18 - Far CB Watch: the popup charts the whole flag, and penny contracts stop being flags
 
 Two things, both in `server-v2/far-cb-recorder.js`.
@@ -24206,5 +24246,19 @@ rejected before landing on this; the mocks are in `generated/`.
 
 `compact` (the ticker rail's 62px tiles) is untouched: no readout, no axis, no
 crosshair.
+
+Files: `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`.
+
+## Wall migration — fix: week view crashed with `thinDividers is not defined`
+
+Any multi-day Level Log view (SPY, non-0DTE, 5 days) threw
+`Uncaught ReferenceError: thinDividers is not defined` and blanked the page.
+
+`stampEvery`, `isStamped`, `showDow` and `thinDividers` sat between the label
+model and `return` in `WallMigrationChart.tsx`, and the edit that removed the
+in-plot marks cut from the model straight through to `return` — taking all four
+with it. They are only read on the multi-day branch (session dividers and the
+date rail), so the single-session view kept working and nothing caught it.
+Restored verbatim.
 
 Files: `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`.
