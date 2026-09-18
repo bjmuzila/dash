@@ -138,6 +138,25 @@ function tickerOf(kind: AlertKind, m: Record<string, unknown>): string {
   return 'SPX'
 }
 
+/**
+ * THE SIDE OF A WHALE PRINT. `direction` is the engine's own column — 'long'
+ * for a call buy, 'short' for a put buy (signals-engine.js, evaluateWhalePrints)
+ * — so the arrow the feed draws is the detector's own verdict rather than a
+ * guess re-parsed out of the sentence. `meta.type` is the fallback for a row
+ * written before the column was populated; anything else gets no arrow at all,
+ * which is the honest answer for a detector that takes no side.
+ */
+function biasOf(kind: AlertKind, row: SignalRow, m: Record<string, unknown>): AlertItem['bias'] {
+  if (kind !== 'whale') return undefined
+  const dir = String(row?.direction ?? '').toLowerCase()
+  if (dir === 'long') return 'bullish'
+  if (dir === 'short') return 'bearish'
+  const type = String(m?.type ?? '').toUpperCase()
+  if (type.startsWith('C')) return 'bullish'
+  if (type.startsWith('P')) return 'bearish'
+  return undefined
+}
+
 const escapeRe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** Take the symbol out of a title that is about to be drawn behind it. */
@@ -213,6 +232,7 @@ function toItem(row: SignalRow): AlertItem | null {
     text,
     // The pill leads with the ticker too, for the same reason the row does.
     short: tidy([ticker, title].filter(Boolean).join(' ')) || t.name,
+    bias: biasOf(kind, row, m),
     meta: bits.length ? tidy(bits.join(' · ')) : undefined,
     at: etClock(row.ts),
   }

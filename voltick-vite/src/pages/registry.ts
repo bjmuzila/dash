@@ -18,6 +18,7 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   CustomerCard: lazy(() => import("./customer/CustomerCard")),
   VisitorsMap: lazy(() => import("./visitors/VisitorsMap")),
   V3Board: lazy(() => import("./V3Board")),
+  DataFlow: lazy(() => import("./DataFlow")),
   // Overview, SurfaceMap, Vocabulary and Questions are listed in nav.ts and
   // render Placeholder until a component lands here.
 };

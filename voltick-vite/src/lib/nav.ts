@@ -192,6 +192,13 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
         note: "Reads /proxy/health and opens /ws/gex, so a broken reverse proxy shows here first.",
         status: "live",
       },
+      {
+        label: "Data flow",
+        path: "/data-flow",
+        key: "DataFlow",
+        note: "Every path a number takes to reach a card in v3: the feeds, server-v2, the one socket, the store, the hooks.",
+        status: "live",
+      },
     ],
   },
 ];

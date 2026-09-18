@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026-09-18 - Voltick: a Data flow page, and the v3 map drawn in Voltick tokens
+
+`voltick.cbedge.net/data-flow` is a new page under Plumbing: one diagram of how
+v3 actually gets its numbers, from the upstream feeds through server-v2 to the
+board cards, plus a key for the three line styles and a list of which file owns
+which stage. It is static and asks the backend for nothing, so it cannot break
+when the feed does.
+
+The drawing is a second render rather than the one already in `generated/`. The
+first was painted in the old dashboard's greens and blues, which are not
+Voltick's, and the theme rules here are not decorative: a reserved colour means
+exactly one thing, so VOLT, FLIP and SURGE never stand in for "push" or "pull".
+Push is ACCENT solid, pull is SKY dashed, cache is PAPER_QUIET dotted, all three
+brand or neutral and none borrowed from the data vocabulary. Text sits on PAPER
+and PAPER_QUIET with no grey below them, and nothing on screen carries an
+em-dash.
+
+The asset is imported through Vite rather than dropped in `public/`, so it ships
+hashed under `/assets/` and inherits the `auth_request` gate that already covers
+`index.html`. A drawing of the backend does not belong at an ungated root path.
+The SVG is what renders (23KB, and crisp at any zoom, which matters because the
+diagram is 1480px wide); the PNG is a download link and is never fetched unless
+a visitor asks for it.
+
+Files: `voltick-vite/src/pages/DataFlow.tsx` (new),
+`voltick-vite/src/pages/registry.ts` (the key),
+`voltick-vite/src/lib/nav.ts` (the Plumbing entry),
+`voltick-vite/src/assets/2026-09-18-v3-data-flow.svg` and `.png` (new).
+Also copied to `generated/2026-09-18-v3-data-flow-voltick.svg` and `.png`.
+
+## 2026-09-18 - Toolbar alerts: a whale print now says which way it leans
+
+The alerts dropdown drew every ticker in the type's colour, so a $1.2M call buy
+and a $1.3M put buy were the same shade of red and the side was three words deep
+into the headline. Whale rows now lead with a coloured arrow: green up for
+bullish, red down for bearish, with the ticker painted to match.
+
+`bias` is a new optional field on AlertItem, filled only for whale prints from
+the engine's own `direction` column ('long' / 'short', signals-engine.js), with
+meta.type ('C' / 'P') as a fallback for older rows. Nothing re-parses the
+sentence, so the arrow can never disagree with the line underneath it. The flip,
+core and IB detectors carry direction 'neutral' and keep the type's colour with
+no arrow - a side they never took is not one the panel invents. A `sr-only`
+word carries the same meaning for screen readers, so it is not colour alone.
+
+Files: cbedge-v3/src/shell/alertTypes.ts (the field), AlertsFeed.tsx (biasOf),
+AlertsPanel.tsx (the arrow and the ticker colour).
+
 ## 2026-09-17 - Auto-Buy Lab: internals wired, real CVD, and a denial is now a result
 
 Three changes, and the third is the one that makes the page answer the question

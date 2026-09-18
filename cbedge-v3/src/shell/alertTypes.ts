@@ -163,6 +163,14 @@ export interface AlertItem {
   short: string
   /** The small monospaced line under it. Optional. */
   meta?: string
+  /**
+   * WHICH WAY THE PRINT LEANS — 'bullish' for a call buy, 'bearish' for a put
+   * buy, and undefined for every detector that has no side to take (the flip,
+   * the core, the IB). Read off the engine's own `direction` column rather than
+   * re-derived from the sentence, so the arrow can never disagree with the row.
+   * The feed draws it as a coloured arrow in front of the ticker.
+   */
+  bias?: 'bullish' | 'bearish'
   /** ISO-ish clock string for now; a timestamp once this is wired. */
   at: string
 }

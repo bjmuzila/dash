@@ -159,6 +159,11 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
         ) : (
           visible.map((a) => {
             const t = TYPE_BY_ID[a.kind]
+            // Bullish/bearish is a whale-print idea: the engine gives every
+            // other detector direction 'neutral', and painting those green or
+            // red would invent a call the detector never made.
+            const bias = a.bias
+            const biasColor = bias ? (bias === 'bullish' ? T.green : T.red) : null
             return (
               <div
                 key={a.id}
@@ -183,12 +188,35 @@ export function AlertsPanel({ items, close }: { items: AlertItem[]; close: () =>
                       was the same word twice. Colour, dot and chip still say
                       which kind it is. */}
                   <div className="flex items-baseline gap-1.5">
+                    {/* ── THE SIDE, IN FRONT OF THE SYMBOL ──────────────────
+                        A whale print is only worth a glance once you know which
+                        way it leans, and "call buy" is three words deeper into
+                        the line than the eye gets. The arrow carries it: green
+                        ▲ for a call buy, red ▼ for a put buy, and the ticker
+                        itself takes the same colour so the pair reads as one
+                        object. `bias` is the engine's own `direction` column
+                        (AlertsFeed.toItem), so this can never disagree with the
+                        sentence underneath.
+
+                        Detectors with no side — the flip, the core, the IB —
+                        have no `bias` and keep the type's colour with no arrow,
+                        which is why this is a conditional and not a default. */}
+                    {bias && (
+                      <span
+                        aria-hidden
+                        className="shrink-0 text-2xs font-bold leading-none"
+                        style={{ color: biasColor }}
+                      >
+                        {bias === 'bullish' ? '▲' : '▼'}
+                      </span>
+                    )}
                     <span
                       className="shrink-0 text-sm font-bold tracking-tight"
-                      style={{ color: t.color }}
+                      style={{ color: biasColor ?? t.color }}
                     >
                       {a.ticker}
                     </span>
+                    {bias && <span className="sr-only">{bias}</span>}
                     <span className="truncate text-sm font-semibold leading-tight text-fg">
                       {a.title}
                     </span>

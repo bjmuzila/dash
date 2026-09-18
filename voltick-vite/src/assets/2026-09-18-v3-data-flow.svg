@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="1630" viewBox="0 0 1480 1630" role="img" aria-label="CB Edge v3 data flow, from upstream feeds through server-v2 to the board cards">
+<defs>
+  <style>
+    .s  { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif; }
+    .m  { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace; }
+    .sec{ font-size: 11px; letter-spacing: 0.16em; fill: #c0c5c3; font-weight: 600; }
+    .bt { font-size: 15px; font-weight: 700; fill: #d6ddd8; }
+    .bs { font-size: 11.5px; fill: #c0c5c3; }
+    .bul{ font-size: 12px; fill: #e7ece9; }
+    .tin{ font-size: 10.5px; fill: #c0c5c3; }
+  </style>
+  <marker id="pu" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#2f6bff"/></marker>
+  <marker id="pl" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#7fb0ff"/></marker>
+  <marker id="nu" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#c0c5c3"/></marker>
+  <marker id="ca" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c0c5c3"/></marker>
+</defs>
+
+<rect width="1480" height="1630" fill="#0a0d10"/>
+
+<text x="48" y="52" class="s" font-size="27" font-weight="700" fill="#d6ddd8">How v3 data is fetched and received</text>
+<text x="48" y="76" class="s" font-size="13.5" fill="#c0c5c3">One WebSocket pushes. REST pulls only what has no push channel.</text>
+
+<g transform="translate(1046,34)">
+  <rect x="0" y="0" width="386" height="54" rx="12" fill="#141a21" stroke="#1e2630"/>
+  <line x1="16" y1="19" x2="44" y2="19" stroke="#2f6bff" stroke-width="2.6"/>
+  <text x="52" y="23" class="m tin">push · WebSocket</text>
+  <line x1="200" y1="19" x2="228" y2="19" stroke="#7fb0ff" stroke-width="2.2" stroke-dasharray="6 4"/>
+  <text x="236" y="23" class="m tin">pull · REST</text>
+  <line x1="16" y1="39" x2="44" y2="39" stroke="#c0c5c3" stroke-width="2.2" stroke-dasharray="2 3"/>
+  <text x="52" y="43" class="m tin">cache · IndexedDB</text>
+  <line x1="200" y1="39" x2="228" y2="39" stroke="#7fb0ff" stroke-width="2.2" stroke-dasharray="5 4"/>
+  <text x="236" y="43" class="m tin">boot path</text>
+</g>
+
+<!-- upstream -->
+<text x="48" y="134" class="m sec">UPSTREAM FEEDS</text>
+<rect x="48" y="148" width="440" height="62" rx="12" fill="#141a21" stroke="#1e2630"/>
+<text x="72" y="176" class="s bt">TastyTrade</text>
+<text x="72" y="195" class="m bs">proxy-tastytrade.js · chain, quotes, greeks</text>
+
+<rect x="508" y="148" width="440" height="62" rx="12" fill="#141a21" stroke="#1e2630"/>
+<text x="532" y="176" class="s bt">ThetaData</text>
+<text x="532" y="195" class="m bs">proxy-thetadata.js · history, strike GEX</text>
+
+<rect x="968" y="148" width="464" height="62" rx="12" fill="#141a21" stroke="#1e2630"/>
+<text x="992" y="176" class="s bt">IB / ES futures</text>
+<text x="992" y="195" class="m bs">ib-live-read.js · ES last, the basis leg</text>
+
+<path d="M268,210 V262" stroke="#c0c5c3" stroke-width="1.6" marker-end="url(#nu)"/>
+<path d="M728,210 V262" stroke="#c0c5c3" stroke-width="1.6" marker-end="url(#nu)"/>
+<path d="M1200,210 V262" stroke="#c0c5c3" stroke-width="1.6" marker-end="url(#nu)"/>
+
+<!-- backend -->
+<rect x="48" y="266" width="1384" height="216" rx="12" fill="#0e1216" stroke="#1e2630"/>
+<text x="72" y="292" class="m sec">server-v2 / server-with-proxy.js · ONE process serves all of it</text>
+
+<rect x="72" y="306" width="420" height="74" rx="10" fill="#141a21" stroke="rgba(47,107,255,0.45)"/>
+<text x="92" y="330" class="s bt" font-size="13.5">websocket-server.js + ws-auth.js</text>
+<text x="92" y="349" class="m bs" font-size="11">DEDUPES frames: an unchanged chain sends nothing</text>
+<text x="92" y="366" class="m bs" font-size="11">per-connection expiry · full snapshot on connect</text>
+
+<rect x="516" y="306" width="420" height="74" rx="10" fill="#141a21" stroke="rgba(127,176,255,0.40)"/>
+<text x="536" y="330" class="s bt" font-size="13.5">api-router.js</text>
+<text x="536" y="349" class="m bs" font-size="11">in-process router, no separate service</text>
+<text x="536" y="366" class="m bs" font-size="11">/api/snapshots/* · /api/chains · lite=1 payloads</text>
+
+<rect x="960" y="306" width="448" height="74" rx="10" fill="#141a21" stroke="#1e2630"/>
+<text x="980" y="330" class="s bt" font-size="13.5">recorders (server-side, scheduled)</text>
+<text x="980" y="349" class="m bs" font-size="11">etf-candle-recorder · eod-gex-recorder</text>
+<text x="980" y="366" class="m bs" font-size="11">gex-history-writer · walls-recorder · …</text>
+
+<rect x="72" y="396" width="1336" height="58" rx="10" fill="#141a21" stroke="#1e2630"/>
+<text x="92" y="420" class="s bt" font-size="13.5">Postgres</text>
+<text x="92" y="439" class="m bs" font-size="11">recorders WRITE here on their own cadence · /api/snapshots/* READS from here (this is why the ETF poll is 60s)</text>
+
+<path d="M388,482 V522" stroke="#2f6bff" stroke-width="2.2" marker-end="url(#pu)"/>
+<path d="M1092,482 V522" stroke="#7fb0ff" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#pl)"/>
+
+<!-- transport -->
+<text x="48" y="512" class="m sec">TRANSPORT</text>
+<rect x="48" y="526" width="680" height="84" rx="12" fill="#141a21" stroke="rgba(47,107,255,0.45)"/>
+<text x="72" y="552" class="s bt" fill="#6aa0ff">WebSocket · PUSH</text>
+<text x="72" y="573" class="m bs">wss://&lt;host&gt;/ws/gex?topics=gex,spot,aux,…</text>
+<text x="72" y="593" class="m bs">frames: spot · gex · aux · status · flow · esCandles · es1mCandles</text>
+
+<rect x="752" y="526" width="680" height="84" rx="12" fill="#141a21" stroke="rgba(127,176,255,0.40)"/>
+<text x="776" y="552" class="s bt" fill="#7fb0ff">REST · PULL</text>
+<text x="776" y="573" class="m bs">GET /api/snapshots/candles · /etf-candles · /option-strike-gex-history</text>
+<text x="776" y="593" class="m bs">GET /api/chains, used ONLY where there is no push channel</text>
+
+<path d="M388,610 V644" stroke="#2f6bff" stroke-width="2.2" marker-end="url(#pu)"/>
+<path d="M1092,610 V644" stroke="#7fb0ff" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#pl)"/>
+
+<!-- client ingest -->
+<text x="48" y="634" class="m sec">CLIENT INGEST</text>
+<rect x="48" y="648" width="680" height="210" rx="12" fill="#141a21" stroke="rgba(47,107,255,0.45)"/>
+<text x="72" y="676" class="m bt">data/socket.ts</text>
+<text x="222" y="676" class="s bs">exactly ONE connection for the whole app</text>
+<text x="72" y="702" class="m bul">• epoch guard: a superseded socket closes itself, never reconnects</text>
+<text x="72" y="723" class="m bul">• topics DERIVED from live store subscriptions, never hand-declared</text>
+<text x="72" y="744" class="m bul">• rescope debounce: widen 250ms · narrow 1200ms · boot settle 1200ms</text>
+<text x="72" y="765" class="m bul">• backoff 500ms × 2ⁿ up to 10s, plus 25% jitter</text>
+<text x="72" y="786" class="m bul">• backoff clears only after a connection SURVIVES 5s (STABLE_MS)</text>
+<text x="72" y="807" class="m bul">• snapshot replayed on every (re)connect, refilling every panel</text>
+<text x="72" y="828" class="m bul">• outbound: SET_EXPIRY only, queued while down, replayed on open</text>
+
+<rect x="752" y="648" width="680" height="210" rx="12" fill="#141a21" stroke="rgba(127,176,255,0.40)"/>
+<text x="776" y="676" class="m bt">data/api.ts + dedupeFetch.ts</text>
+<text x="776" y="702" class="m bul">• query() / useQuery(): dedupe + cache, staleMs 30s default</text>
+<text x="776" y="723" class="m bul">• staleMs is a TTL, NOT a refresh interval. pollMs is what refreshes</text>
+<text x="776" y="744" class="m bul">• pollMs pauses while the tab is hidden (background:true opts out)</text>
+<text x="776" y="765" class="m bul">• preload(url) from hover or route scope, killing request waterfalls</text>
+<text x="776" y="786" class="m bul">• dedupeFetch collapses identical in-flight GETs into one request</text>
+<text x="776" y="807" class="m bul">• every caller reads its own .clone() · holdMs holds 5s on candles</text>
+<text x="776" y="828" class="m bul">• a rejection is NEVER held, so a blip is not replayed to all callers</text>
+
+<path d="M388,858 V896" stroke="#2f6bff" stroke-width="2.2" marker-end="url(#pu)"/>
+<path d="M1330,858 V1232" stroke="#7fb0ff" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#pl)"/>
+<text x="1302" y="1046" class="m tin" fill="#7fb0ff" transform="rotate(-90 1302 1046)" text-anchor="middle">REST never enters the frame store</text>
+
+<!-- state -->
+<text x="48" y="886" class="m sec">STATE</text>
+<rect x="48" y="900" width="700" height="156" rx="12" fill="#141a21" stroke="rgba(47,107,255,0.45)"/>
+<text x="72" y="928" class="m bt">data/store.ts</text>
+<text x="212" y="928" class="m bs">Map&lt;frameType, lastFrame&gt;</text>
+<text x="72" y="954" class="m bul">• LAST-VALUE-WINS: these are snapshots, not events</text>
+<text x="72" y="975" class="m bul">• a late-mounting panel gets the current value at once</text>
+<text x="72" y="996" class="m bul">• rAF COALESCING: 20 frames in one 16ms window notify once</text>
+<text x="72" y="1017" class="m bul">• PER-TYPE subscriptions: a spot tick wakes only spot readers</text>
+<text x="72" y="1038" class="m bul">• the subscription set IS the ?topics= list sent back up</text>
+
+<rect x="772" y="900" width="468" height="156" rx="12" fill="#141a21" stroke="#1e2630"/>
+<text x="796" y="928" class="m bt">data/cache.ts</text>
+<text x="936" y="928" class="m bs">IndexedDB</text>
+<text x="796" y="954" class="m bul" font-size="11.5">• db cbedge-v3, object store frames</text>
+<text x="796" y="975" class="m bul" font-size="11.5">• persist() throttled 3s, then an idle callback</text>
+<text x="796" y="996" class="m bul" font-size="11.5">• restore() paints last-known state UNDER</text>
+<text x="806" y="1017" class="m bul" font-size="11.5">the first live frame</text>
+<text x="796" y="1038" class="m bul" font-size="11.5">• the read starts in boot, before React exists</text>
+
+<path d="M752,960 H768" stroke="#c0c5c3" stroke-width="2" stroke-dasharray="2 3" marker-end="url(#ca)"/>
+<path d="M768,1000 H752" stroke="#c0c5c3" stroke-width="2" stroke-dasharray="2 3" marker-end="url(#ca)"/>
+
+<path d="M388,1056 V1094" stroke="#2f6bff" stroke-width="2.2" marker-end="url(#pu)"/>
+
+<!-- hooks -->
+<text x="48" y="1084" class="m sec">THE ONLY DOOR</text>
+<rect x="48" y="1098" width="1192" height="96" rx="12" fill="#141a21" stroke="rgba(47,107,255,0.45)"/>
+<text x="72" y="1126" class="m bt">data/hooks.ts</text>
+<text x="212" y="1126" class="s bs">pages never see a WebSocket, never declare a topic, never manage a subscription</text>
+<text x="72" y="1152" class="m bul">useFrame&lt;T&gt;('gex')</text>
+<text x="290" y="1152" class="s bs">re-renders on EVERY message of that type</text>
+<text x="72" y="1176" class="m bul">useField&lt;T,R&gt;('spot', f =&gt; f.last)</text>
+<text x="400" y="1176" class="s bs">re-renders only when the derived value changes (prefer this)</text>
+
+<path d="M388,1194 V1232" stroke="#2f6bff" stroke-width="2.2" marker-end="url(#pu)"/>
+
+<!-- consumers -->
+<text x="48" y="1222" class="m sec">CONSUMERS</text>
+<rect x="48" y="1236" width="330" height="120" rx="12" fill="#141a21" stroke="rgba(47,107,255,0.45)"/>
+<text x="70" y="1262" class="m bt" font-size="13.5">useLiveGex</text>
+<text x="196" y="1262" class="m bs" font-size="11">SPX</text>
+<text x="70" y="1284" class="m bs" font-size="11">frames: gex · spot · aux · status</text>
+<text x="70" y="1302" class="m bs" font-size="11">computeGEXProfile + deriveLevels</text>
+<text x="70" y="1320" class="m bs" font-size="11">flip · call/put wall · Core · basis</text>
+<text x="70" y="1340" class="m bs" font-size="11" fill="#6aa0ff">ZERO REST calls, by design</text>
+
+<rect x="398" y="1236" width="330" height="120" rx="12" fill="#141a21" stroke="rgba(47,107,255,0.45)"/>
+<text x="420" y="1262" class="m bt" font-size="13.5">useEsCandles</text>
+<text x="564" y="1262" class="m bs" font-size="11">ES</text>
+<text x="420" y="1284" class="m bs" font-size="11">/api/snapshots/candles ONCE</text>
+<text x="420" y="1302" class="m bs" font-size="11">+ esCandles / es1mCandles frames</text>
+<text x="420" y="1320" class="m bs" font-size="11">merged on slotKey, OHLCV-compared</text>
+<text x="420" y="1340" class="m bs" font-size="11">history pulled · live bar pushed</text>
+
+<rect x="748" y="1236" width="330" height="120" rx="12" fill="#141a21" stroke="rgba(127,176,255,0.40)"/>
+<text x="770" y="1262" class="m bt" font-size="13.5">useEtfCandles</text>
+<text x="924" y="1262" class="m bs" font-size="11">SPY, QQQ…</text>
+<text x="770" y="1284" class="m bs" font-size="11">/api/snapshots/etf-candles</text>
+<text x="770" y="1302" class="m bs" font-size="11">60s poll matches the recorder,</text>
+<text x="770" y="1320" class="m bs" font-size="11">which writes once a minute, so</text>
+<text x="770" y="1340" class="m bs" font-size="11">faster would re-read identical bars</text>
+
+<rect x="1098" y="1236" width="334" height="120" rx="12" fill="#141a21" stroke="rgba(127,176,255,0.40)"/>
+<text x="1120" y="1262" class="m bt" font-size="13.5">chainGex</text>
+<text x="1224" y="1262" class="m bs" font-size="11">every non-SPX ticker</text>
+<text x="1120" y="1284" class="m bs" font-size="11">/api/chains on a poll</text>
+<text x="1120" y="1302" class="m bs" font-size="11">same output shape as useLiveGex</text>
+<text x="1120" y="1320" class="m bs" font-size="11">because the socket carries</text>
+<text x="1120" y="1340" class="m bs" font-size="11">exactly ONE underlying</text>
+
+<path d="M213,1356 V1394" stroke="#c0c5c3" stroke-width="1.8" marker-end="url(#nu)"/>
+<path d="M563,1356 V1394" stroke="#c0c5c3" stroke-width="1.8" marker-end="url(#nu)"/>
+<path d="M913,1356 V1394" stroke="#c0c5c3" stroke-width="1.8" marker-end="url(#nu)"/>
+<path d="M1265,1356 V1394" stroke="#c0c5c3" stroke-width="1.8" marker-end="url(#nu)"/>
+
+<!-- surfaces -->
+<text x="48" y="1384" class="m sec">SURFACES</text>
+<rect x="48" y="1398" width="1384" height="80" rx="12" fill="#141a21" stroke="#1e2630"/>
+<text x="72" y="1426" class="s bt">board cards · pages · mobile</text>
+<text x="72" y="1450" class="m bs">GEX Candles · Key Levels · Chain · Flow Tape · Scanner · premarket rail · phone tabs</text>
+<text x="72" y="1468" class="m tin">cbedge-v3/src/board/ · src/pages/ · src/mobile/, all reading one store through two hooks</text>
+
+<!-- boot -->
+<rect x="48" y="1506" width="1384" height="92" rx="12" fill="#0e1216" stroke="#7fb0ff" stroke-opacity="0.4" stroke-dasharray="6 4"/>
+<text x="72" y="1534" class="s bt" fill="#7fb0ff">BOOT: the inline script in index.html, before the bundle finishes downloading</text>
+<text x="72" y="1558" class="m bs">opens /ws/gex UNSCOPED and starts the IndexedDB read before React exists · frames buffer into window.__CB_BOOT__</text>
+<text x="72" y="1578" class="m bs">startSocket() then ADOPTS that already-open socket, drains the buffer and seeds the store (the head start beats the bandwidth)</text>
+
+</svg>
