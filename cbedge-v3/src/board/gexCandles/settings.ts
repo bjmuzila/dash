@@ -557,6 +557,33 @@ export const BUBBLES = {
   fitPasses: 6,
   /** Max horizontal nudge, px, for a pair that still does not fit after that. */
   jitterPx: 3,
+  /**
+   * ── HOW MUCH OF A MARK ANOTHER MARK MAY COVER, ANYWHERE ON THE PANE ───────
+   *
+   * The three numbers above are the WITHIN-BUCKET fit, and that was the only
+   * fit there was. Nothing measured a mark against the bucket NEXT to it, which
+   * is fine once the day is wide — a bucket owns `bucketPxPerDot` of x and the
+   * radii are a fraction of it — and is wrong at the open, where the pane is
+   * already scaled for a session and the first ten minutes land in a handful of
+   * pixels. Four rows x ten buckets in one column is the blob that gets
+   * reported, and it is not a sizing bug: every one of those marks is real.
+   *
+   * So drawBubbles now runs a second, GLOBAL pass over every mark on the pane
+   * and holds each one to this: penetration between two marks may not exceed
+   * `2 x maxOverlap x` the smaller one's radius along the line between their
+   * centres.
+   *
+   * 0.5 = "no mark is covered more than half way" — the edge of one may reach
+   * the centre of the other and no further. 0 would be "never touch", which
+   * reads as a sparse grid at the open because so much gets dropped to achieve
+   * it; 1 is the old behaviour, no limit at all.
+   *
+   * A mark shrinks to meet this if it can, and is DROPPED if it cannot — which
+   * is only ever the case when its centre is already under a mark that got
+   * there first, where no radius would satisfy the rule. See overlapScale in
+   * bubbles.ts.
+   */
+  maxOverlap: 0.5,
 
   // ── Colour ───────────────────────────────────────────────────────────────
   //

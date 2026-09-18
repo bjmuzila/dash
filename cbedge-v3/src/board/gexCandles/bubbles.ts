@@ -658,6 +658,83 @@ function placeBucket(snap: BubbleSnapshot, geo: BubbleGeometry, size: SizeProfil
 }
 
 /**
+ * ── HOW MUCH OF A MARK ANOTHER MARK IS ALLOWED TO COVER ──────────────────────
+ *
+ * `placeBucket` only ever fitted marks against the OTHER STRIKES IN THEIR OWN
+ * BUCKET. Nothing looked across buckets, and at the open that is exactly where
+ * the pile-up is: the session is minutes old, the pane is scaled for a whole
+ * day, so ten 1m buckets land inside a few pixels of x and their four rows each
+ * stack into one column of forty marks. Every one of them is a real sample, and
+ * drawn on top of each other they read as a blob.
+ *
+ * So there is now a second, GLOBAL fit in drawBubbles: every mark on the pane,
+ * whatever bucket it came from, is held to `BUBBLES.maxOverlap` — no mark may be
+ * covered by more than half of itself. A mark that can shrink into that budget
+ * shrinks; one that cannot, because its centre is already inside a mark that
+ * won the slot, is not drawn at all. That is the "too many prints" half of the
+ * same complaint: the pane shows what it can actually show and the rest is the
+ * trail resolving as you zoom in, exactly like the stride.
+ *
+ * Both of those need the radius of an ELLIPSE ALONG A DIRECTION, not its axes:
+ * two marks an equal number of pixels apart overlap differently depending on
+ * whether the line between them runs up the price axis or across the time axis,
+ * and at 1m the marks are ovals. This is the exact ellipse radius along the
+ * unit vector (ux, uy).
+ */
+function dirRadius(rx: number, ry: number, ux: number, uy: number): number {
+  const a = Math.max(0.001, rx)
+  const b = Math.max(0.001, ry)
+  return 1 / Math.sqrt((ux * ux) / (a * a) + (uy * uy) / (b * b))
+}
+
+/**
+ * The largest fraction of its full size a candidate may draw at and still leave
+ * BOTH marks no more than `o` covered.
+ *
+ * The rule, in one line: penetration = ra + rb - d, and it may not exceed
+ * `2 x o x min(ra, rb)`. At o = 0.5 that is "the edge of one may not pass the
+ * centre of the other", which is what "covered no more than half way" means —
+ * and it reads the same however different the two sizes are, which a plain
+ * distance threshold does not.
+ *
+ * Returns 0 when no size works: that happens exactly when the candidate's CENTRE
+ * is inside the mark it is being fitted against, and a mark with its centre
+ * under another mark is more than half covered at any radius, including a
+ * single pixel. Those are dropped rather than nudged — a nudge big enough to
+ * clear it would be bigger than the bucket it belongs to, which is the lie the
+ * jitter budget exists to stay under.
+ */
+function overlapScale(ra: number, rb: number, d: number, o: number): number {
+  // Monotone non-decreasing in s for o <= 0.5, so a bisection is exact enough
+  // and needs no case split on which of the two ends up smaller.
+  const fits = (s: number): boolean =>
+    ra + s * rb - d <= 2 * o * Math.min(ra, s * rb) + 1e-6
+  if (fits(1)) return 1
+  if (!fits(0)) return 0
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2
+    if (fits(mid)) lo = mid
+    else hi = mid
+  }
+  return lo
+}
+
+/** One mark, placed and sized, waiting on the global overlap fit. */
+interface Stamp {
+  m: BubbleMark
+  x: number
+  y: number
+  rx: number
+  ry: number
+  alpha: number
+  age: number
+  /** Position in the draw order, restored after the fit re-orders them. */
+  seq: number
+}
+
+/**
  * Returns whether anything was painted. False means the history does not reach
  * the visible window — panned into candles older than the first bucket, or newer
  * than the last. That is correct, and indistinguishable from a broken layer, so
@@ -782,7 +859,11 @@ export function drawBubbles(
   ctx.rect(0, 0, pw, ph)
   ctx.clip()
 
-  let drew = 0
+  // ── PHASE 1: PLACE EVERY MARK, DRAW NONE ──────────────────────────────────
+  // The overlap fit below is global — a mark from the 9:31 bucket has to be
+  // measured against one from 9:32 — so nothing can be painted until all of
+  // them are on the table.
+  const stamps: Stamp[] = []
   for (let i = 0; i < snaps.length; i += stride) {
     const snap = snaps[i]!
     // ON ITS CANDLE. xOfTime anchors the bucket to the bar that contains it —
@@ -802,11 +883,74 @@ export function drawBubbles(
 
     for (const { mark: m, y, rx, ry, dx } of placeBucket(snap, geo, size)) {
       if (y < -20 || y > ph + 20) continue
+      const alpha = (m.isTop ? 1 : minOpacity + m.ratio * (1 - minOpacity)) * age
+      stamps.push({ m, x: x + dx, y, rx, ry, alpha, age, seq: stamps.length })
+    }
+  }
+
+  // ── PHASE 2: THE GLOBAL OVERLAP FIT ───────────────────────────────────────
+  // Greedy, by priority: the bucket's leader first, then by area. Whatever is
+  // already accepted keeps its size and the candidate yields — shrinking to fit
+  // under `maxOverlap`, or dropping when even a speck would be more than half
+  // covered. Leaders going first is the whole point: at the open the column is
+  // mostly peers, and the marks that survive it should be the walls.
+  const order = [...stamps].sort((a, b) => {
+    if (a.m.isTop !== b.m.isTop) return a.m.isTop ? -1 : 1
+    return b.rx * b.ry - a.rx * a.ry
+  })
+  // Binned by x so this stays linear-ish. Without it a day of 1m buckets is
+  // ~1,600 marks and a pairwise pass inside the chart's rAF, every frame.
+  const binPx = 48
+  const bins = new Map<number, Stamp[]>()
+  const keep: Stamp[] = []
+  for (const c of order) {
+    let s = 1
+    const lo = Math.floor((c.x - c.rx) / binPx) - 1
+    const hi = Math.floor((c.x + c.rx) / binPx) + 1
+    for (let b = lo; b <= hi && s > 0; b++) {
+      const list = bins.get(b)
+      if (!list) continue
+      for (const o of list) {
+        const dx = c.x - o.x
+        const dy = c.y - o.y
+        const d = Math.sqrt(dx * dx + dy * dy)
+        if (d <= 0.001) { s = 0; break }
+        const ux = dx / d
+        const uy = dy / d
+        const ra = dirRadius(o.rx, o.ry, ux, uy)
+        const rb = dirRadius(c.rx, c.ry, ux, uy)
+        if (d >= ra + rb) continue
+        s = Math.min(s, overlapScale(ra, rb, d, BUBBLES.maxOverlap))
+        if (s <= 0) break
+      }
+    }
+    // Shrunk past the floor is not a mark any more, it is a pixel of noise
+    // sitting on top of a wall. Drop it — the stride already established that
+    // not every bucket gets drawn at every zoom, and this is the same bargain
+    // one axis over.
+    if (s <= 0 || Math.min(c.rx, c.ry) * s < BUBBLES.minPx) continue
+    c.rx *= s
+    c.ry *= s
+    keep.push(c)
+    const klo = Math.floor((c.x - c.rx) / binPx)
+    const khi = Math.floor((c.x + c.rx) / binPx)
+    for (let b = klo; b <= khi; b++) {
+      const list = bins.get(b)
+      if (list) list.push(c)
+      else bins.set(b, [c])
+    }
+  }
+  // Back into draw order: within a bucket the marks arrive biggest-first, so the
+  // small ones land on top of the big ones, and that is how the ladder reads.
+  keep.sort((a, b) => a.seq - b.seq)
+
+  // ── PHASE 3: PAINT ────────────────────────────────────────────────────────
+  let drew = 0
+  for (const { m, x, y, rx, ry, alpha, age } of keep) {
       const positive = m.value >= 0
       // The SATURATED sign colour: the PEERS' fill, and the leader's ring+glow.
       const base = positive ? palette.pos : palette.neg
-      const alpha = (m.isTop ? 1 : minOpacity + m.ratio * (1 - minOpacity)) * age
-      const cx = x + dx
+      const cx = x
 
       if (m.isTop) {
         // ── THE ONE GOLD MARK ─────────────────────────────────────────────────
@@ -893,7 +1037,6 @@ export function drawBubbles(
         ctx.fill()
       }
       drew++
-    }
   }
   ctx.restore()
   return drew > 0

@@ -24176,3 +24176,46 @@ every other strike in the session is read as a move away from it.
 `compact` (the ticker rail's 62px tiles) is untouched: no axis, no rail.
 
 Files: `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`.
+
+---
+
+## 2026-09-18 — GEX Candles: no bubble is covered more than half way
+
+At the open the bubble layer piled up: the session is minutes old, the pane is
+already scaled for a whole day, so ten 1m buckets land inside a few pixels of x
+and their four rows each stack into one column of forty marks. It read as a
+blob, and as "too many prints" — though every one of those marks is a real
+bucket.
+
+The cause was that the only fit there had ever been was WITHIN a bucket
+(`placeBucket`'s vertical shrink + jitter). Nothing measured a mark against the
+bucket next to it, which is inert once the day is wide and wrong at the open.
+
+`drawBubbles` is now three phases instead of one: place every mark, run a
+GLOBAL overlap fit over all of them, then paint. The rule is
+`BUBBLES.maxOverlap` (0.5): penetration between any two marks may not exceed
+`2 × maxOverlap ×` the smaller one's radius **along the line between their
+centres** — i.e. the edge of one may reach the centre of the other and no
+further. Ellipse radius is taken along that direction (`dirRadius`), not off the
+axes, because at 1m the marks are ovals and two marks the same distance apart
+overlap differently up the price axis than across the time axis.
+
+The fit is greedy by priority — the bucket's leader first, then by area — so
+what survives the open is the walls. A candidate shrinks to meet the budget
+(`overlapScale`, a bisection on a rule that is monotone for `maxOverlap ≤ 0.5`)
+and is DROPPED only when no radius works, which happens exactly when its centre
+is already inside a mark that got there first. Same bargain as the stride:
+the pane shows what it can show, and the rest resolves as you zoom in.
+
+Binned by 48px of x so the pass stays cheap inside the chart's rAF — a day of
+1m buckets is ~1,600 marks and this runs every frame.
+
+Files: `cbedge-v3/src/board/gexCandles/bubbles.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts` (new `BUBBLES.maxOverlap`).
+
+This is worst on ETH and the fix is the reason why: an ETH pane spans ~23h of
+buckets in the same width RTH spends on 6.5h, so every bucket owns a third of
+the x it owned before and the cross-bucket collision the old code never checked
+for is three times as likely. Nothing here is session-aware — the budget is
+measured in pixels — so ETH gets the same guarantee RTH does, and gets more of
+its marks thinned to earn it.
