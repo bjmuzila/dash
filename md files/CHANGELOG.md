@@ -1,84 +1,52 @@
 # Changelog
 
-## 2026-09-18 - Stripe: a dead subscription can no longer lock out a paying customer
+## 2026-09-18 - Voltick: a Data flow page, and the v3 map drawn in Voltick tokens
 
-`subscriptions` holds ONE row per user (PK `clerk_user_id`), but a Stripe
-CUSTOMER can hold several subscriptions at once. Every webhook wrote that row
-unconditionally, so it simply held whichever subscription fired last.
+`voltick.cbedge.net/data-flow` is a new page under Plumbing: one diagram of how
+v3 actually gets its numbers, from the upstream feeds through server-v2 to the
+board cards, plus a key for the three line styles and a list of which file owns
+which stage. It is static and asks the backend for nothing, so it cannot break
+when the feed does.
 
-That is not a tie-break, it is a race the dead subscription wins. A customer
-whose card is declined and who then re-subscribes on a new card has a `past_due`
-subscription that Stripe RETRIES for days. Each retry is another
-`customer.subscription.updated`, and each one stamps `past_due` over the
-`active` row the new subscription wrote. `is_paid` flips false and the customer
-is locked out of the product he just paid for. Found on
-gokar200953@hotmail.com: active $50 sub and past_due $45 sub on one customer,
-paid and denied.
+The drawing is a second render rather than the one already in `generated/`. The
+first was painted in the old dashboard's greens and blues, which are not
+Voltick's, and the theme rules here are not decorative: a reserved colour means
+exactly one thing, so VOLT, FLIP and SURGE never stand in for "push" or "pull".
+Push is ACCENT solid, pull is SKY dashed, cache is PAPER_QUIET dotted, all three
+brand or neutral and none borrowed from the data vocabulary. Text sits on PAPER
+and PAPER_QUIET with no grey below them, and nothing on screen carries an
+em-dash.
 
-**`upsertSubscription()` (lib/db.ts) now ranks the event before taking it.**
-`SUB_STATUS_RANK`: paying (`active`/`trialing`) = 2, owing (`past_due`,
-`unpaid`, `incomplete`) = 1, over (`canceled`, `incomplete_expired`, NULL) = 0.
-`SUB_EVENT_WINS` lets an event about a DIFFERENT subscription take the row only
-if it ranks at least as high. An event about the SAME subscription id always
-wins — `active → past_due → canceled` is the real transition and must still be
-able to revoke access. A row with no subscription id yet (the customer link
-written at checkout) is always claimable. Every status-bearing column is now
-`CASE WHEN … THEN COALESCE(…) ELSE <keep> END` instead of a plain `COALESCE`;
-`stripe_customer_id` still merges unconditionally, since it is the same customer
-either way. Written inline, so no migration — the fix ships with the container.
+The asset is imported through Vite rather than dropped in `public/`, so it ships
+hashed under `/assets/` and inherits the `auth_request` gate that already covers
+`index.html`. A drawing of the backend does not belong at an ungated root path.
+The SVG is what renders (23KB, and crisp at any zoom, which matters because the
+diagram is 1480px wide); the PNG is a download link and is never fetched unless
+a visitor asks for it.
 
-**`scripts/reconcile-subscriptions.mjs` now picks a winner instead of looping.**
-It was doing the same last-write-wins over Stripe's list, so it would reconcile
-this customer straight back out of the product: run it twice, get two answers.
-Subscriptions are grouped by our user id first, `pickWinner()` sorts paying >
-owing > over, then longest-running, then newest, and only that one is compared
-and written. Drift rows print an `other_subs` column so a multi-subscription
-customer reads as one customer rather than an unexplained status flip. Its
-upsert deliberately keeps NO guard — it sees every subscription at once, so it
-is the authoritative repair and has to be able to overwrite a stale `active`
-row the webhook guard would refuse.
+Files: `voltick-vite/src/pages/DataFlow.tsx` (new),
+`voltick-vite/src/pages/registry.ts` (the key),
+`voltick-vite/src/lib/nav.ts` (the Plumbing entry),
+`voltick-vite/src/assets/2026-09-18-v3-data-flow.svg` and `.png` (new).
+Also copied to `generated/2026-09-18-v3-data-flow-voltick.svg` and `.png`.
 
-Files: `lib/db.ts`, `scripts/reconcile-subscriptions.mjs`.
+## 2026-09-18 - Toolbar alerts: a whale print now says which way it leans
 
-## 2026-09-18 - Far CB Watch: the popup charts the whole flag, and penny contracts stop being flags
+The alerts dropdown drew every ticker in the type's colour, so a $1.2M call buy
+and a $1.3M put buy were the same shade of red and the side was three words deep
+into the headline. Whale rows now lead with a coloured arrow: green up for
+bullish, red down for bearish, with the ticker painted to match.
 
-Two things, both in `server-v2/far-cb-recorder.js`.
+`bias` is a new optional field on AlertItem, filled only for whale prints from
+the engine's own `direction` column ('long' / 'short', signals-engine.js), with
+meta.type ('C' / 'P') as a fallback for older rows. Nothing re-parses the
+sentence, so the arrow can never disagree with the line underneath it. The flip,
+core and IB detectors carry direction 'neutral' and keep the type's colour with
+no arrow - a side they never took is not one the panel invents. A `sr-only`
+word carries the same meaning for screen readers, so it is not colour alone.
 
-**The popup series now starts on the flag date.** The on-demand dxLink backfill
-inside `computeOutcomeDetail` was gated on `!contractBars.length &&
-!probeRows.length` - "nothing recorded at all". A contract flagged three weeks
-ago whose first 15-minute probe landed this morning has exactly ONE row, so it
-never looked empty, so the backfill never ran and the chart drew a single point.
-That is the "some of them just show the day's move" complaint: the window was
-always flagged -> today, the DATA simply started this morning.
-
-The gate now asks about coverage instead - does the earliest day we hold begin
-at `first_flagged`? - and when it doesn't, pulls the stretch in front of it. The
-fetched bars are MERGED with what was already there rather than replacing it,
-ordered so the recorded probe rows still win their own dates (they include
-today, and dxLink's daily bar for a session in progress is not today's mark).
-Repeat opens don't re-ask the vendor: `premium_backfilled_at` now comes back
-with the row and one attempt per session is the budget, because a contract with
-no quote on its flag day has a gap that never closes.
-
-**A flagged contract has to be worth $0.50.** `MIN_CONTRACT_PRICE`
-(`FAR_CB_MIN_PRICE`, default 0.50). RIVN 20C at $0.10, BB 6P at $0.01, SOXS 55C
-at $0.03 aren't theses, they're rounding error with a percentage sign - and
-since Max % is measured off that base they sat permanently at the top of Tracked
-results at +1200% on a contract nobody could have filled.
-
-Applied twice on purpose. At flag time `scanTicker` now carries the OTM side's
-`mark` on the winning strike and `upsertOrClear` drops a below-floor flag down
-the same branch as "no longer qualifies" - card off the board, no outcome row
-opened. And on the way out, `enrichOutcomesWithQuotes` filters below-floor rows
-from the response, which is what makes the three already in the table disappear
-with no migration and no DELETE: the grading history stays true, it just stops
-being shown.
-
-An UNKNOWN price is never read as cheap. `mark` is null when the greeks snapshot
-had no quote, and a vendor gap must not quietly empty the board.
-
-Files: `server-v2/far-cb-recorder.js`.
+Files: cbedge-v3/src/shell/alertTypes.ts (the field), AlertsFeed.tsx (biasOf),
+AlertsPanel.tsx (the arrow and the ticker colour).
 
 ## 2026-09-17 - Auto-Buy Lab: internals wired, real CVD, and a denial is now a result
 
@@ -24215,50 +24183,124 @@ window). Clicking a card re-points the whole board at that anchor.
 
 Files: `owner-vite/src/pages/Results.tsx`.
 
-## Wall migration — price axis, crosshair readout, no labels on the plot
+## Wall migration — the axis carries the strikes, the rail carries the hours
 
-The v3 Wall Migration chart now carries a **price axis** down its right-hand
-gutter and a **readout line** above the plot, and writes nothing inside the plot
-at all.
+Nothing is written on the plot any more. Every number the chart has to say is
+said by its two axes.
 
-The axis prints round price ticks chosen off the drawn range (so a $3 AAPL day
-and a 300-point SPX week both get sensible numbers), plus a solid tag at each
-drawn level's current strike and one for spot. It is HTML positioned by
-percentage of the plot height, not SVG `<text>` — the viewBox is squashed to the
-card's width, so anything drawn inside it comes out stretched, and the
-percentage keeps the ticks on their price when `fill` scales the plot past its
-viewBox.
+**The price axis**, down a 46px right-hand gutter, prints every strike each
+drawn level held over the span: the live one at full weight in the level's
+colour, the ones it has already left dimmed in the same colour. No pills — a
+solid plate on the axis reads as a control and shouts down the strikes above and
+below it, which are the ones the level is being compared against. Spot is the
+same: bare white type on its rung. Round price ticks
+fill in around them and are dropped wherever one would land within nine pixels
+of a strike or of spot — the strikes are the numbers being read, and the round
+one is the one nobody asked for. A strike within a pill's height of spot steps
+to the other side of the gutter, just inside the plot's right edge, rather than
+off its own rung. It is HTML positioned by percentage of the plot height, not
+SVG `<text>`: the viewBox is squashed to the card's width, so anything drawn
+inside it comes out stretched, and the percentage keeps every rung on its price
+when `fill` scales the plot past its viewBox.
 
-The readout is one line: `AT <time> · SPOT · <each drawn level>`, with the most
-recent roll (`last roll 12:45 · Put Wall 325→330`) pushed to the right end.
-Hovering the plot draws a single hairline crosshair and the line reads that
-slot — fractional, so it says 12:54 rather than snapping to the 15-minute grid.
-With the pointer away it reads the last drawn slot, so a screenshot still says
-where the levels ended and when they last moved. Spot is the nearest recorded
-sample, never interpolated.
+**The clock rail** on a single session now stamps the open and then every hour
+on the hour to the end of the tape, instead of three stamps across 390 minutes
+that made every read of "when did that roll" an estimate off the thirds. Slots
+are 15 minutes, so it is every fourth slot from slot 2. The week view keeps its
+date stamps, and both take the axis gutter so 16:00 still sits under 16:00.
 
-Why not per-change labels: a tag per roll is fine for a three-roll session and a
-wall of boxes on a week, and the boxes land on top of the steps they describe.
-The question is almost never "what was the wall at 11:27" but "what were the
-levels when price was here" — which the crosshair answers directly, at no cost
-in ink. Four label treatments and three x-axis variants were mocked up and
-rejected before landing on this; the mocks are in `generated/`.
+Rejected on the way here, all mocked up in `generated/`: four boxed-label
+treatments, three x-axis time rails, a hover readout (worth nothing in a
+screenshot, which is how this panel mostly travels), a change log under the plot
+and the probe's ring-and-bare-type marks on the steps themselves. Every one of
+them put a second copy of the axis on top of the shape being read.
 
-`compact` (the ticker rail's 62px tiles) is untouched: no readout, no axis, no
-crosshair.
+**One label survives on the plot: the open.** Each level's first written strike
+is stamped on the left rail in the probe's ENTRY vocabulary — bare type, no
+plate, in the level's colour, reading `345 OPEN`. It earns the room the other
+labels did not: the open has no step corner of its own to hang a tag on, and
+every other strike in the session is read as a move away from it.
 
-Files: `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`.
-
-## Wall migration — fix: week view crashed with `thinDividers is not defined`
-
-Any multi-day Level Log view (SPY, non-0DTE, 5 days) threw
-`Uncaught ReferenceError: thinDividers is not defined` and blanked the page.
-
-`stampEvery`, `isStamped`, `showDow` and `thinDividers` sat between the label
-model and `return` in `WallMigrationChart.tsx`, and the edit that removed the
-in-plot marks cut from the model straight through to `return` — taking all four
-with it. They are only read on the multi-day branch (session dividers and the
-date rail), so the single-session view kept working and nothing caught it.
-Restored verbatim.
+`compact` (the ticker rail's 62px tiles) is untouched: no axis, no rail.
 
 Files: `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`.
+
+---
+
+## 2026-09-18 — GEX Candles: no bubble is covered more than half way
+
+At the open the bubble layer piled up: the session is minutes old, the pane is
+already scaled for a whole day, so ten 1m buckets land inside a few pixels of x
+and their four rows each stack into one column of forty marks. It read as a
+blob, and as "too many prints" — though every one of those marks is a real
+bucket.
+
+The cause was that the only fit there had ever been was WITHIN a bucket
+(`placeBucket`'s vertical shrink + jitter). Nothing measured a mark against the
+bucket next to it, which is inert once the day is wide and wrong at the open.
+
+`drawBubbles` is now three phases instead of one: place every mark, run a
+GLOBAL overlap fit over all of them, then paint. The rule is
+`BUBBLES.maxOverlap` (0.5): penetration between any two marks may not exceed
+`2 × maxOverlap ×` the smaller one's radius **along the line between their
+centres** — i.e. the edge of one may reach the centre of the other and no
+further. Ellipse radius is taken along that direction (`dirRadius`), not off the
+axes, because at 1m the marks are ovals and two marks the same distance apart
+overlap differently up the price axis than across the time axis.
+
+The fit is greedy by priority — the bucket's leader first, then by area — so
+what survives the open is the walls. A candidate shrinks to meet the budget
+(`overlapScale`, a bisection on a rule that is monotone for `maxOverlap ≤ 0.5`)
+and is DROPPED only when no radius works, which happens exactly when its centre
+is already inside a mark that got there first. Same bargain as the stride:
+the pane shows what it can show, and the rest resolves as you zoom in.
+
+Binned by 48px of x so the pass stays cheap inside the chart's rAF — a day of
+1m buckets is ~1,600 marks and this runs every frame.
+
+Files: `cbedge-v3/src/board/gexCandles/bubbles.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts` (new `BUBBLES.maxOverlap`).
+
+This is worst on ETH and the fix is the reason why: an ETH pane spans ~23h of
+buckets in the same width RTH spends on 6.5h, so every bucket owns a third of
+the x it owned before and the cross-bucket collision the old code never checked
+for is three times as likely. Nothing here is session-aware — the budget is
+measured in pixels — so ETH gets the same guarantee RTH does, and gets more of
+its marks thinned to earn it.
+
+---
+
+## 2026-09-18 — Contract track: entry marker now lines up with its own time and price
+
+The entry bubble on the contract track (whales page, `ContractProbe`) disagreed
+with both axes.
+
+**Price.** The dot was drawn at `y(bars[entryI].close)` — the bar's MARK — while
+its label and the dashed rung both read the fill. Any print that crossed the
+spread put the dot visibly off its own `ENTRY 4.55` line. It now sits on the
+rung: `y(entry)`, at the print's bar. The gap between dot and price line at that
+minute is now the edge the fill got against the mark, which is the number worth
+seeing.
+
+**Time.** The accented volume bar was `vols.indexOf(vMax)` — the tallest bar of
+the session — not the bar the print landed in, despite the comment above it
+saying otherwise. On a whale print those are usually the same bar, which is why
+it hid; when a later minute traded more, the accent jumped there and the dot
+stayed on the print. It is now `entryI ?? vols.indexOf(vMax)`, so the histogram
+and the dot point at the same minute, with the old behaviour as the fallback
+when the print is out of the window.
+
+Files: `cbedge-v3/src/board/topFlow/ContractProbe.tsx`.
+
+### follow-up, same day — the dot was a whole bar late
+
+Putting the marker on the rung exposed the second half of it: the dot still sat
+one bar to the right of its own volume spike. `entryI` matched the print to the
+NEAREST bar open, which is only right for one-minute bars. These are
+five-minute bars, so a 09:44 print is one minute from the 09:45 open and four
+from the 09:40 one — it went to 09:45 while the 4,450 contracts sat in the
+09:40 bar underneath it. Now it takes the bar that CONTAINS the print (the last
+open at or before it), so the dot and the accented volume bar are always the
+same bar, at any range.
+
+Files: `cbedge-v3/src/board/topFlow/ContractProbe.tsx`.

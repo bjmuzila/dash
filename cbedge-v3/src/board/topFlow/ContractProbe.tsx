@@ -545,21 +545,33 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vols, vAvg, vMax, n, W, PADL, PADR, wide])
 
-  // WHERE the entry sits on the line. The print timestamp is matched to the
-  // nearest bar OPEN rather than the first bar at or after it, so a fill a few
-  // seconds either side of a boundary lands on the bar it belongs to. Out of
-  // range (an entry before the window starts, on 3D/1W/1M) draws no marker —
-  // pinning it to bar 0 would put the dot on a minute it was not printed in.
+  // WHERE the entry sits on the line. The print goes in the bar that CONTAINS
+  // it — the last bar whose OPEN is at or before the print — not the bar whose
+  // open is nearest to it.
+  //
+  // Nearest-open is only correct for one-minute bars. These are five-minute
+  // bars, and a 09:44 print is one minute from the 09:45 open and four from the
+  // 09:40 one, so nearest-open put the dot on 09:45 while the 4,450 contracts
+  // sat in the 09:40 bar underneath it: the dot and its own volume spike a
+  // whole bar apart, which is exactly how it looked (2026-09-18). A bar labelled
+  // 09:40 covers 09:40–09:45, so 09:44 belongs to it, and the wider the bars the
+  // worse nearest-open gets.
+  //
+  // Out of range (an entry before the window starts, on 3D/1W/1M) draws no
+  // marker — pinning it to bar 0 would put the dot on a minute it was not
+  // printed in.
   const entryI = useMemo(() => {
     if (entryTs == null || !Number.isFinite(entryTs) || n === 0) return null
     const first = bars[0]!.time, lastT = bars[n - 1]!.time
     const span = lastT - first
+    // The nominal bar width, so the slack scales with the range being drawn
+    // rather than assuming minutes.
     const slack = Math.max(60_000, span / Math.max(1, n - 1))
     if (entryTs < first - slack || entryTs > lastT + slack) return null
-    let best = 0, bestD = Infinity
+    let best = 0
     for (let i = 0; i < n; i++) {
-      const d = Math.abs(bars[i]!.time - entryTs)
-      if (d < bestD) { bestD = d; best = i }
+      if (bars[i]!.time <= entryTs) best = i
+      else break
     }
     return best
   }, [bars, entryTs, n])

@@ -196,6 +196,129 @@ const KV = ({ k, children }: { k: string; children: ReactNode }) => (<><span sty
 
 const BAR_COLORS = [T.cyan, T.orange, T.gold, T.green, T.purple, "#88C97A", "#E06C5E", "#B58BD8"];
 
+// ─── Notes ────────────────────────────────────────────────────────────────────
+//
+// The one WRITABLE section of the card. Everything else here is what the system
+// observed; this is what the owner knows — "asked about futures data", "refunded
+// Aug by hand", "churned on price". Stamped and stored in Postgres
+// (customer_notes), keyed on the email the card was opened by.
+//
+// Loads on its own, saves on its own, and fails on its own: a notes outage
+// prints one line inside this tile and leaves the rest of the card alone.
+
+interface NoteRow { id: number; body: string; at: string; updatedAt: string | null; by: string | null }
+
+function NotesTile({ email, userId }: { email: string; userId: string }) {
+  const [notes, setNotes] = useState<NoteRow[]>([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/admin/customer-notes?email=${encodeURIComponent(email)}`, { cache: "no-store" });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setNotes((j.notes ?? []) as NoteRow[]);
+      setErr(null);
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally { setLoaded(true); }
+  }, [email]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const save = useCallback(async () => {
+    const body = draft.trim();
+    if (!body || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch("/api/admin/customer-notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, userId, body }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setNotes((prev) => [j.note as NoteRow, ...prev]);
+      setDraft("");
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally { setBusy(false); }
+  }, [draft, busy, email, userId]);
+
+  const remove = useCallback(async (id: number) => {
+    if (!window.confirm("Delete this note?")) return;
+    try {
+      const r = await fetch(`/api/admin/customer-notes?id=${id}`, { method: "DELETE" });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setNotes((prev) => prev.filter((n) => n.id !== id));
+    } catch (e) { setErr(String((e as Error)?.message || e)); }
+  }, []);
+
+  return (
+    <div style={tile}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 9 }}>
+        <div style={{ ...sect, margin: 0 }}>Notes</div>
+        {notes.length > 0 && <span style={{ fontSize: 11, opacity: 0.5, fontFamily: "var(--font-mono)" }}>{notes.length}</span>}
+      </div>
+
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void save(); } }}
+        placeholder="Add a note… (⌘/Ctrl + Enter to save)"
+        rows={3}
+        style={{
+          width: "100%", boxSizing: "border-box", resize: "vertical", minHeight: 58,
+          background: "rgba(0,0,0,0.3)", border: `1px solid ${T.border}`, borderRadius: 8,
+          color: T.text, fontFamily: "inherit", fontSize: 13, lineHeight: 1.45, padding: "8px 10px", outline: "none",
+        }}
+      />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 7 }}>
+        <span style={{ fontSize: 11, color: err ? T.red : T.text, opacity: err ? 0.9 : 0.45, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {err ? err : busy ? "Saving…" : "Saved with a timestamp."}
+        </span>
+        <button
+          onClick={() => void save()}
+          disabled={busy || !draft.trim()}
+          style={{
+            ...homeButtonStyle, fontSize: 12, padding: "5px 14px",
+            opacity: busy || !draft.trim() ? 0.45 : 1, cursor: busy || !draft.trim() ? "default" : "pointer",
+          }}
+        >Save note</button>
+      </div>
+
+      <div className="owner-scroll" style={{ maxHeight: 260, overflowY: "auto", marginTop: 11, paddingRight: 4 }}>
+        {!loaded ? (
+          <div style={{ fontSize: 12, opacity: 0.5 }}>Loading…</div>
+        ) : notes.length === 0 ? (
+          <div style={{ fontSize: 12, opacity: 0.5 }}>No notes yet.</div>
+        ) : notes.map((n) => (
+          <div key={n.id} style={{ padding: "7px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.cyan, opacity: 0.85, whiteSpace: "nowrap" }}>
+                {dateOf(n.at)} · {timeOf(n.at)}
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
+                <span style={{ fontSize: 11, opacity: 0.4 }}>{ago(n.at)}{n.updatedAt ? " · edited" : ""}</span>
+                <button
+                  onClick={() => void remove(n.id)}
+                  title="Delete note"
+                  style={{ background: "none", border: "none", color: T.text, opacity: 0.35, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0, fontFamily: "inherit" }}
+                >×</button>
+              </span>
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 3, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{n.body}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── The card ─────────────────────────────────────────────────────────────────
 
 type Win = "today" | "7d" | "30d" | "all";
@@ -500,6 +623,8 @@ function CustomerCard({ data, onClose, onRefresh, loading }: { data: CustomerDat
             )}
             <div style={{ fontSize: 11, opacity: 0.5, marginTop: 10, lineHeight: 1.5 }}>Time = gap to the next page load, 30-min session cap. The last page of a session gets none — a lower bound.</div>
           </div>
+
+          <NotesTile email={a.email} userId={a.id} />
 
           {(data.feedback.length > 0 || data.email.sends.length > 0 || (data.stripe?.invoices.length ?? 0) > 0 || data.access.comp) && (
             <div style={tile}>

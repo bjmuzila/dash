@@ -11456,6 +11456,124 @@ Return exactly one element per input key, in the same order. Never merge, split,
     });
   }
 
+  // /api/admin/customer-notes — the owner's own notes on ONE customer.
+  //
+  // WHY (2026-09-18): the customer card answers everything the system knows
+  // about a person, and nothing the OWNER knows — "asked about futures data",
+  // "refunded Aug manually", "churned, said price". Those lived in his head.
+  // This is the one writable section of the card: type a line, it is stamped
+  // and stored, and it is there next time the name is clicked.
+  //
+  //   GET    /api/admin/customer-notes?email=…   → { ok, notes: [...] }
+  //   POST   /api/admin/customer-notes           { email, userId?, body } → { ok, note }
+  //   PATCH  /api/admin/customer-notes           { id, body }             → { ok, note }
+  //   DELETE /api/admin/customer-notes?id=…                               → { ok, deleted }
+  //
+  // Keyed on lower(email) with user_id carried alongside: the email is what the
+  // card is opened by and what survives an account being deleted and remade,
+  // the id is what survives an email change. Reads match on either.
+  //
+  // Table is created LAZILY here, same ensureX(pool) pattern as
+  // customer_feedback_messages above — regenerating the _lib-db.cjs bundle to
+  // add one table would drop unrelated hand-patches (see that note).
+  {
+    let notesEnsured = false;
+    const ensureCustomerNotes = async (pool) => {
+      if (notesEnsured) return;
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS customer_notes (
+          id         SERIAL PRIMARY KEY,
+          email      TEXT NOT NULL,
+          user_id    TEXT,
+          body       TEXT NOT NULL,
+          created_by TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_notes_email ON customer_notes(lower(email), created_at DESC)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_notes_user ON customer_notes(user_id, created_at DESC)`);
+      notesEnsured = true;
+    };
+
+    const MAX_NOTE = 8000;
+    const rowOut = (r) => ({
+      id: r.id,
+      body: r.body,
+      at: r.created_at,
+      updatedAt: r.updated_at && r.updated_at !== r.created_at ? r.updated_at : null,
+      by: r.created_by || null,
+    });
+
+    register('/api/admin/customer-notes', {
+      auth: 'owner', methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+      async handler(req, res, _ctx, access) {
+        try {
+          const pool = libDb.getPool();
+          await ensureCustomerNotes(pool);
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const method = (req.method || 'GET').toUpperCase();
+
+          if (method === 'GET') {
+            const email = (sp.get('email') || '').trim().toLowerCase();
+            const userId = (sp.get('userId') || '').trim();
+            if (!email && !userId) { send(res, 400, { ok: false, error: 'email or userId required' }); return; }
+            const { rows } = await pool.query(
+              `SELECT id, body, created_by, created_at, updated_at
+                 FROM customer_notes
+                WHERE ($1 <> '' AND lower(email) = $1) OR ($2 <> '' AND user_id = $2)
+                ORDER BY created_at DESC
+                LIMIT 200`,
+              [email, userId],
+            );
+            send(res, 200, { ok: true, notes: rows.map(rowOut) }, { 'Cache-Control': NO_STORE });
+            return;
+          }
+
+          if (method === 'DELETE') {
+            const id = Number(sp.get('id') || 0);
+            if (!Number.isInteger(id) || id <= 0) { send(res, 400, { ok: false, error: 'id required' }); return; }
+            const { rowCount } = await pool.query(`DELETE FROM customer_notes WHERE id = $1`, [id]);
+            send(res, 200, { ok: true, deleted: rowCount }, { 'Cache-Control': NO_STORE });
+            return;
+          }
+
+          const b = await readJson(req).catch(() => ({}));
+          const body = String(b?.body ?? '').trim();
+
+          if (method === 'PATCH') {
+            const id = Number(b?.id || 0);
+            if (!Number.isInteger(id) || id <= 0) { send(res, 400, { ok: false, error: 'id required' }); return; }
+            if (!body) { send(res, 400, { ok: false, error: 'body required' }); return; }
+            const { rows } = await pool.query(
+              `UPDATE customer_notes SET body = $2, updated_at = now() WHERE id = $1
+               RETURNING id, body, created_by, created_at, updated_at`,
+              [id, body.slice(0, MAX_NOTE)],
+            );
+            if (!rows[0]) { send(res, 404, { ok: false, error: 'No such note' }); return; }
+            send(res, 200, { ok: true, note: rowOut(rows[0]) }, { 'Cache-Control': NO_STORE });
+            return;
+          }
+
+          // POST
+          const email = String(b?.email ?? '').trim().toLowerCase();
+          const userId = String(b?.userId ?? '').trim() || null;
+          if (!email) { send(res, 400, { ok: false, error: 'email required' }); return; }
+          if (!body) { send(res, 400, { ok: false, error: 'body required' }); return; }
+          const { rows } = await pool.query(
+            `INSERT INTO customer_notes (email, user_id, body, created_by)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, body, created_by, created_at, updated_at`,
+            [email, userId, body.slice(0, MAX_NOTE), access?.userId || null],
+          );
+          send(res, 200, { ok: true, note: rowOut(rows[0]) }, { 'Cache-Control': NO_STORE });
+        } catch (err) {
+          send(res, 500, { ok: false, error: 'Customer notes failed', detail: String(err?.message || err) });
+        }
+      },
+    });
+  }
+
   // /api/unsubscribe — public RFC-8058 one-click / confirmation-page unsubscribe.
   // verifyUnsubscribe (HMAC) inlined from lib/unsubscribe.ts. Ported verbatim.
   {
