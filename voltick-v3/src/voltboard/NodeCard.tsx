@@ -31,8 +31,12 @@ export function NodeCard({ board, d, strike, mode, onClose }: NodeCardProps) {
   const dist = spot > 0 ? strike - spot : null
 
   // The per-date breakdown, only for the columns actually in scope.
+  // Narrow ONCE, in the map, rather than trusting `.filter` to narrow the
+  // type — it does not, and `r.col` stays possibly-undefined all the way down.
   const rows = d.cols
-    .map((i) => ({ col: board.cols[i], cell: board.cols[i].cells.get(strike) }))
+    .map((i) => board.cols[i])
+    .filter((col): col is NonNullable<typeof col> => !!col)
+    .map((col) => ({ col, cell: col.cells.get(strike) }))
     .filter((r) => r.cell && r.cell.v !== 0)
 
   const book = rows.reduce(

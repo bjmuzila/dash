@@ -223,9 +223,10 @@ function kingOf(cells: Map<number, BoardCell>): number | null {
  */
 export function flipOf(cells: Map<number, BoardCell>, spot: number): number | null {
   const ks = [...cells.keys()].sort((a, b) => a - b)
-  if (ks.length < 2) return null
+  const first = ks[0]
+  if (ks.length < 2 || first === undefined) return null
   let run = 0
-  let prevK = ks[0]
+  let prevK = first
   let prevRun = 0
   const crossings: number[] = []
   for (const k of ks) {
@@ -241,6 +242,6 @@ export function flipOf(cells: Map<number, BoardCell>, spot: number): number | nu
     run = next
   }
   if (!crossings.length) return null
-  if (!(spot > 0)) return crossings[0]
+  if (!(spot > 0)) return crossings[0] ?? null
   return crossings.reduce((a, b) => (Math.abs(b - spot) < Math.abs(a - spot) ? b : a))
 }

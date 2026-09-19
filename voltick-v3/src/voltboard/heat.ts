@@ -58,8 +58,8 @@ export function heatRef(values: number[]): number {
   const abs = values.map((v) => Math.abs(v)).filter((a) => a > 0)
   if (!abs.length) return 0
   abs.sort((a, b) => a - b)
-  const p90 = abs[Math.min(abs.length - 1, Math.floor(abs.length * 0.9))]
-  const max = abs[abs.length - 1]
+  const p90 = abs[Math.min(abs.length - 1, Math.floor(abs.length * 0.9))] ?? 0
+  const max = abs[abs.length - 1] ?? 0
   return Math.max(p90, max * HEAT_FLOOR)
 }
 

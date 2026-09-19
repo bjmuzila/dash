@@ -57,16 +57,18 @@ function setPref(key: string, v: string) {
 }
 
 export default function VoltBoard() {
-  const [symbol, setSymbol] = useState(() => pref('vb-sym', 'SPX'))
+  // pref() infers its literal fallback, so pref(k, '0') returns the TYPE '0'
+  // and `=== '1'` is a comparison TS can prove never holds. Widen at the call.
+  const [symbol, setSymbol] = useState<string>(() => pref<string>('vb-sym', 'SPX'))
   const [mode, setMode] = useState<BoardMode>(() => pref<BoardMode>(LS.mode, 'GEX'))
   const [source, setSource] = useState<BoardSource>(() => pref<BoardSource>(LS.source, 'oi'))
   const [scope, setScope] = useState<Scope>(-1)
   const [strikeCount, setStrikeCount] = useState(() => {
-    const n = Number(pref(LS.strikes, '50'))
+    const n = Number(pref<string>(LS.strikes, '50'))
     return [30, 50, 100, 150].includes(n) ? n : 50
   })
-  const [quiet, setQuiet] = useState(() => pref(LS.quiet, '0') === '1')
-  const [readOpen, setReadOpen] = useState(() => pref(LS.read, '1') === '1')
+  const [quiet, setQuiet] = useState(() => pref<string>(LS.quiet, '0') === '1')
+  const [readOpen, setReadOpen] = useState(() => pref<string>(LS.read, '1') === '1')
   const [openStrike, setOpenStrike] = useState<number | null>(null)
 
   const [board, setBoard] = useState<BoardMap | null>(null)

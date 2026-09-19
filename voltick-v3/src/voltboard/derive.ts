@@ -35,7 +35,7 @@ export function colsInScope(board: BoardMap, scope: Scope): number[] {
     const out: number[] = []
     for (let i = 0; i < board.cols.length; i++) {
       const c = board.cols[i]
-      if (c.dte < 0) continue
+      if (!c || c.dte < 0) continue
       const dow = new Date(`${c.exp}T00:00:00Z`).getUTCDay()
       if (c.dte <= 6 && dow >= 1 && dow <= 5) out.push(i)
       if (c.dte > 6) break
@@ -44,7 +44,7 @@ export function colsInScope(board: BoardMap, scope: Scope): number[] {
   }
   if (scope === 'MONTH') {
     const m = board.cols[0]?.exp.slice(0, 7)
-    return all.filter((i) => board.cols[i].exp.slice(0, 7) === m)
+    return all.filter((i) => board.cols[i]?.exp.slice(0, 7) === m)
   }
   return scope >= 0 && scope < board.cols.length ? [scope] : all
 }
@@ -55,7 +55,7 @@ export function scopeTagOf(board: BoardMap, scope: Scope): string {
   if (scope === 'WEEK') return 'this week'
   if (scope === 'MONTH') return 'this month'
   if (Array.isArray(scope)) {
-    if (scope.length === 1) return fmtDate(board.cols[scope[0]]?.exp ?? '')
+    if (scope.length === 1) return fmtDate(board.cols[scope[0] ?? -1]?.exp ?? '')
     return `${scope.length} dates`
   }
   const c = board.cols[scope]
@@ -78,7 +78,9 @@ export function aggregate(board: BoardMap, scope: Scope): Agg {
   let netTotal = 0
 
   for (const i of idxs) {
-    for (const [k, cell] of board.cols[i].cells) {
+    const col = board.cols[i]
+    if (!col) continue
+    for (const [k, cell] of col.cells) {
       const next = (byStrike.get(k) ?? 0) + cell.v
       byStrike.set(k, next)
     }
@@ -121,7 +123,7 @@ export function aggregate(board: BoardMap, scope: Scope): Agg {
   const step = (() => {
     let mn = Infinity
     for (let a = 1; a < strikes.length; a++) {
-      const d = strikes[a] - strikes[a - 1]
+      const d = (strikes[a] ?? 0) - (strikes[a - 1] ?? 0)
       if (d > 0 && d < mn) mn = d
     }
     return (mn === Infinity ? 1 : mn) * 2.5
@@ -230,9 +232,10 @@ function flipWalk(
   val: (k: number) => number,
   spot: number,
 ): { flip: number | null; crossings: number; oneSided: 'sticky' | 'slippery' | null } {
-  if (strikes.length < 2) return { flip: null, crossings: 0, oneSided: null }
+  const first = strikes[0]
+  if (strikes.length < 2 || first === undefined) return { flip: null, crossings: 0, oneSided: null }
   let run = 0
-  let prevK = strikes[0]
+  let prevK = first
   let prevRun = 0
   const hits: number[] = []
   for (const k of strikes) {
@@ -247,7 +250,7 @@ function flipWalk(
   }
   if (hits.length) {
     const flip = spot > 0 ? hits.reduce((a, b) => (Math.abs(b - spot) < Math.abs(a - spot) ? b : a)) : hits[0]
-    return { flip, crossings: hits.length, oneSided: null }
+    return { flip: flip ?? null, crossings: hits.length, oneSided: null }
   }
   // Never crossed. Which side it stayed on is the answer.
   const anyNeg = strikes.some((k) => val(k) < 0)

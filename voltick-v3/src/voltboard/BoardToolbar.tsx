@@ -116,7 +116,8 @@ export function BoardToolbar({
   scopeTag,
 }: BoardToolbarProps) {
   const frontIdx = 0
-  const frontIs0DTE = board ? !!board.cols[0] && isTodayExp(board.cols[0].exp) : false
+  const front = board?.cols[0]
+  const frontIs0DTE = front ? isTodayExp(front.exp) : false
   const on0DTE = scope === frontIdx
 
   return (
