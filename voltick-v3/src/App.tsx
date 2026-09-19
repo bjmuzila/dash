@@ -142,6 +142,12 @@ const MAlerts = lazy(() => import('@/mobile/pages/MAlerts'))
 // point.
 const CardGallery = lazy(() => import('@/pages/CardGallery'))
 
+// THE SINGLE BOARD — Voltick's Voltmap. The strike x expiration heat grid, its
+// level tiles and the Session Read, all off one derived bundle
+// (src/voltboard/derive.ts). Its own chunk: the matrix builder and the grid are
+// dead weight on every other route.
+const VoltBoard = lazy(() => import('@/voltboard/VoltBoard'))
+
 // STILL RETIRED 2026-08-30 — Test Lab (/test) and Journal (/trading) are gone
 // from v3, along with the ICT, ES Candles, Board and Multi Greek rail slots
 // (they never had pages here, only "coming soon" icons). The BOARD CARDS of the
@@ -169,6 +175,9 @@ export default function App() {
                 board is a page like any other, at /board. */}
             <Route path="/" element={<CardGallery />} />
             <Route path="/board" element={<Home />} />
+            {/* /single is the Voltmap, NOT /board — /board is the inherited
+                card grid and renaming it would break every link to it. */}
+            <Route path="/single" element={<VoltBoard />} />
             {/* Adding a route takes FOUR edits, not two:
                   1. this line
                   2. a NAV entry in src/shell/Shell.tsx

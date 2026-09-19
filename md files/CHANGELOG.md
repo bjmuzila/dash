@@ -1,109 +1,32 @@
 # Changelog
 
-## 2026-09-18 - Voltick: a Data flow page, and the v3 map drawn in Voltick tokens
+## 2026-09-18 - v3: the camera's Stats row works from anywhere, and the menu got short again
 
-`voltick.cbedge.net/data-flow` is a new page under Plumbing: one diagram of how
-v3 actually gets its numbers, from the upstream feeds through server-v2 to the
-board cards, plus a key for the three line styles and a list of which file owns
-which stage. It is static and asks the backend for nothing, so it cannot break
-when the feed does.
+Yesterday's atlas listed every board card on every page, which fixed the
+"Key Levels isn't in the menu" problem by making the panel twice as long. Rolled
+back to what was actually wanted: **the Home board group is one row, Stats**,
+and it does NOT walk you to the board to take it.
 
-The drawing is a second render rather than the one already in `generated/`. The
-first was painted in the old dashboard's greens and blues, which are not
-Voltick's, and the theme rules here are not decorative: a reserved colour means
-exactly one thing, so VOLT, FLIP and SURGE never stand in for "push" or "pull".
-Push is ACCENT solid, pull is SKY dashed, cache is PAPER_QUIET dotted, all three
-brand or neutral and none borrowed from the data vocabulary. Text sits on PAPER
-and PAPER_QUIET with no grey below them, and nothing on screen carries an
-em-dash.
+Stats is text, so it never needed pixels. The derivation moved out of
+KeyLevelsCard into `board/keyLevels/statsShot.ts` and the SPX-socket /
+`/api/chains` split moved into `board/keyLevels/levelsSource.tsx`, both
+unchanged. The card publishes the Stats target while it is on screen; everywhere
+else the menu mounts `KeyLevelsStatsProbe` off-screen for the length of the
+click - same rows, same spot, same six lines, for whatever ticker the toolbar is
+on - and unmounts it. One derivation, two publishers, no navigation.
 
-The asset is imported through Vite rather than dropped in `public/`, so it ships
-hashed under `/assets/` and inherits the `auth_request` gate that already covers
-`index.html`. A drawing of the backend does not belong at an ungated root path.
-The SVG is what renders (23KB, and crisp at any zoom, which matters because the
-diagram is 1480px wide); the PNG is a download link and is never fetched unless
-a visitor asks for it.
+The board's own card rows are gone from the atlas and the borrow-a-card bridge
+in BoardPage with them (`registerBoardCardEnsurer` reverted). Cards still
+publish themselves the moment you are on the board, which is the only place a
+picture of one means anything. The Pages group is unchanged: those rows still
+navigate, and the sector wheel still pops itself out via `usePrepareShot`.
 
-Files: `voltick-vite/src/pages/DataFlow.tsx` (new),
-`voltick-vite/src/pages/registry.ts` (the key),
-`voltick-vite/src/lib/nav.ts` (the Plumbing entry),
-`voltick-vite/src/assets/2026-09-18-v3-data-flow.svg` and `.png` (new).
-Also copied to `generated/2026-09-18-v3-data-flow-voltick.svg` and `.png`.
-
-## 2026-09-18 - Toolbar alerts: a whale print now says which way it leans
-
-The alerts dropdown drew every ticker in the type's colour, so a $1.2M call buy
-and a $1.3M put buy were the same shade of red and the side was three words deep
-into the headline. Whale rows now lead with a coloured arrow: green up for
-bullish, red down for bearish, with the ticker painted to match.
-
-`bias` is a new optional field on AlertItem, filled only for whale prints from
-the engine's own `direction` column ('long' / 'short', signals-engine.js), with
-meta.type ('C' / 'P') as a fallback for older rows. Nothing re-parses the
-sentence, so the arrow can never disagree with the line underneath it. The flip,
-core and IB detectors carry direction 'neutral' and keep the type's colour with
-no arrow - a side they never took is not one the panel invents. A `sr-only`
-word carries the same meaning for screen readers, so it is not colour alone.
-
-Files: cbedge-v3/src/shell/alertTypes.ts (the field), AlertsFeed.tsx (biasOf),
-AlertsPanel.tsx (the arrow and the ticker colour).
-
-## 2026-09-17 - Auto-Buy Lab: internals wired, real CVD, and a denial is now a result
-
-Three changes, and the third is the one that makes the page answer the question
-it was built for.
-
-**TICK / ADD / VOLD are wired.** They read `etf_candles` like any other symbol.
-The problem was never the plumbing, it was the SPELLING: dxFeed, tastytrade,
-IQFeed and TradingView each name the NYSE internals differently, and which one
-this feed serves is a property of the feed. So INTERNALS_ALIASES is a candidate
-list per series - TICK / $TICK / TICK.NY / USI/TICK / II/TICK and the same shape
-for ADD and VOLD - tried in order, and whichever has bars wins. The payload
-reports the winner as `internalsSource` and the page prints it in the filter
-header, so "does tastytrade carry TICK?" is answered on screen instead of
-guessed in a constant. If none ever resolve, the next place to look is the LSE
-vault's /catalog, which lists every (dataset, symbol) it holds.
-
-The filter itself is 2 OF 3, not 3 of 3. These three disagree constantly at the
-margin - TICK is an instantaneous count that flips on a single program, ADD and
-VOLD are cumulative - and requiring unanimity meant it only passed on the days
-it was least needed. Whichever series the feed does not serve is absent from the
-vote; under two present and the reading is not measurable rather than a fail.
-
-**CVD follows TradingView's polarity ladder now.** The first pass signed each
-bar by `close >= open`, which quietly counted every doji as a buy. It now runs
-the real rule set at 1-minute resolution: close != open signs by the bar's own
-direction; close = open falls back to this close vs. the PREVIOUS close; still
-unchanged reuses the last known polarity. Summed into a running total, anchored
-to the session. Still named a proxy on its own row, because real CVD classifies
-each trade as lifting the offer or hitting the bid and that needs tick data
-nothing here records.
-
-**A DENIAL IS ALSO A RESULT.** Every session the stack REFUSED is now replayed
-under the same exit rules and reported beside the ones it took. Three arms
-across the top of the page: Fired, Rejected, and Blind (every fill, no filters -
-the only honest yardstick for whether the stack adds anything). On the Rejected
-arm the colours INVERT, because a profitable reject pile is bad news: it is
-money the filters threw away.
-
-Each filter row now carries its own bill too - the trades that clear every OTHER
-armed filter and fail only this one, replayed anyway. Negative total means it
-blocked losers and earned its weight; positive means it blocked winners and is
-costing money however good its lift looks. That is the number to build a stack
-on, and nothing else on the page was showing it.
-
-The trade log gained a Fired / Rejected switch, rejected rows name which filters
-blocked them, and the ticket panel - when it says NO FIRE - now shows what that
-same session went on to do anyway.
-
-Files: `server-v2/autobuy-lab.js`,
-`owner-vite/src/pages/results/AutoBuyLab.tsx`.
-
-NOT DONE, ON PURPOSE: adding the internals symbols to
-`server-v2/etf-candle-recorder.js` so bars actually start accumulating. That
-changes the dxLink subscription list the tastytrade proxy carries, and
-proxy-affecting changes get asked first. Until it lands, the internals filter
-reads "no read" - which is the truthful state.
+Files: `cbedge-v3/src/board/keyLevels/statsShot.ts` (new),
+`cbedge-v3/src/board/keyLevels/levelsSource.tsx` (new),
+`cbedge-v3/src/board/keyLevels/KeyLevelsStatsProbe.tsx` (new),
+`cbedge-v3/src/board/keyLevels/KeyLevelsCard.tsx`,
+`cbedge-v3/src/shell/shotAtlas.ts`, `cbedge-v3/src/shell/CopyShot.tsx`,
+`cbedge-v3/src/board/BoardPage.tsx`, `cbedge-v3/src/shell/Shell.tsx`.
 
 ## 2026-09-17 - v3: the camera's menu is the same everywhere
 
@@ -24161,146 +24084,18 @@ HTML blob was burying.
 Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 `cbedge-v3/src/board/topFlow/TopFlowCard.tsx`, `cbedge-v3/src/pages/Whales.tsx`.
 
-## 2026-09-17 - owner: Open bracket gets a today-by-anchor row
+## 2026-09-19 — Voltick Single Board (the Voltmap) in voltick-v3
 
-The Open bracket board answers one anchor at a time, which is right for the
-study and wrong for the question you have open at 09:40: of the four brackets
-available right now, which one is holding today.
-
-Under the pooled stat cards there is now a **Today by anchor** row - one card
-each for 09:29, 09:35, 09:45 and 10:00 - showing the newest recorded session at
-that bracket: closed-inside rate and fraction, never-left, median width, core
-inside, above core, ticker count, walls rolled, and opened-outside when it is
-non-zero. The card prints the session date, and colours it amber when that date
-is not today (weekend, holiday, or before the 09:29 capture lands).
-
-Four separate requests, one per anchor, each keeping only `by_date[0]`. They are
-deliberately not folded into the board's fetch: the board's `days` window and
-sort must not move when this row reloads, and the row must not wait behind a
-500-session scan. It honours `scope`/`basis` (those change which levels are
-bracketed) and ignores `days` (the newest session is the newest session in any
-window). Clicking a card re-points the whole board at that anchor.
-
-Files: `owner-vite/src/pages/Results.tsx`.
-
-## Wall migration — the axis carries the strikes, the rail carries the hours
-
-Nothing is written on the plot any more. Every number the chart has to say is
-said by its two axes.
-
-**The price axis**, down a 46px right-hand gutter, prints every strike each
-drawn level held over the span: the live one at full weight in the level's
-colour, the ones it has already left dimmed in the same colour. No pills — a
-solid plate on the axis reads as a control and shouts down the strikes above and
-below it, which are the ones the level is being compared against. Spot is the
-same: bare white type on its rung. Round price ticks
-fill in around them and are dropped wherever one would land within nine pixels
-of a strike or of spot — the strikes are the numbers being read, and the round
-one is the one nobody asked for. A strike within a pill's height of spot steps
-to the other side of the gutter, just inside the plot's right edge, rather than
-off its own rung. It is HTML positioned by percentage of the plot height, not
-SVG `<text>`: the viewBox is squashed to the card's width, so anything drawn
-inside it comes out stretched, and the percentage keeps every rung on its price
-when `fill` scales the plot past its viewBox.
-
-**The clock rail** on a single session now stamps the open and then every hour
-on the hour to the end of the tape, instead of three stamps across 390 minutes
-that made every read of "when did that roll" an estimate off the thirds. Slots
-are 15 minutes, so it is every fourth slot from slot 2. The week view keeps its
-date stamps, and both take the axis gutter so 16:00 still sits under 16:00.
-
-Rejected on the way here, all mocked up in `generated/`: four boxed-label
-treatments, three x-axis time rails, a hover readout (worth nothing in a
-screenshot, which is how this panel mostly travels), a change log under the plot
-and the probe's ring-and-bare-type marks on the steps themselves. Every one of
-them put a second copy of the axis on top of the shape being read.
-
-**One label survives on the plot: the open.** Each level's first written strike
-is stamped on the left rail in the probe's ENTRY vocabulary — bare type, no
-plate, in the level's colour, reading `345 OPEN`. It earns the room the other
-labels did not: the open has no step corner of its own to hang a tag on, and
-every other strike in the session is read as a move away from it.
-
-`compact` (the ticker rail's 62px tiles) is untouched: no axis, no rail.
-
-Files: `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`.
-
----
-
-## 2026-09-18 — GEX Candles: no bubble is covered more than half way
-
-At the open the bubble layer piled up: the session is minutes old, the pane is
-already scaled for a whole day, so ten 1m buckets land inside a few pixels of x
-and their four rows each stack into one column of forty marks. It read as a
-blob, and as "too many prints" — though every one of those marks is a real
-bucket.
-
-The cause was that the only fit there had ever been was WITHIN a bucket
-(`placeBucket`'s vertical shrink + jitter). Nothing measured a mark against the
-bucket next to it, which is inert once the day is wide and wrong at the open.
-
-`drawBubbles` is now three phases instead of one: place every mark, run a
-GLOBAL overlap fit over all of them, then paint. The rule is
-`BUBBLES.maxOverlap` (0.5): penetration between any two marks may not exceed
-`2 × maxOverlap ×` the smaller one's radius **along the line between their
-centres** — i.e. the edge of one may reach the centre of the other and no
-further. Ellipse radius is taken along that direction (`dirRadius`), not off the
-axes, because at 1m the marks are ovals and two marks the same distance apart
-overlap differently up the price axis than across the time axis.
-
-The fit is greedy by priority — the bucket's leader first, then by area — so
-what survives the open is the walls. A candidate shrinks to meet the budget
-(`overlapScale`, a bisection on a rule that is monotone for `maxOverlap ≤ 0.5`)
-and is DROPPED only when no radius works, which happens exactly when its centre
-is already inside a mark that got there first. Same bargain as the stride:
-the pane shows what it can show, and the rest resolves as you zoom in.
-
-Binned by 48px of x so the pass stays cheap inside the chart's rAF — a day of
-1m buckets is ~1,600 marks and this runs every frame.
-
-Files: `cbedge-v3/src/board/gexCandles/bubbles.ts`,
-`cbedge-v3/src/board/gexCandles/settings.ts` (new `BUBBLES.maxOverlap`).
-
-This is worst on ETH and the fix is the reason why: an ETH pane spans ~23h of
-buckets in the same width RTH spends on 6.5h, so every bucket owns a third of
-the x it owned before and the cross-bucket collision the old code never checked
-for is three times as likely. Nothing here is session-aware — the budget is
-measured in pixels — so ETH gets the same guarantee RTH does, and gets more of
-its marks thinned to earn it.
-
----
-
-## 2026-09-18 — Contract track: entry marker now lines up with its own time and price
-
-The entry bubble on the contract track (whales page, `ContractProbe`) disagreed
-with both axes.
-
-**Price.** The dot was drawn at `y(bars[entryI].close)` — the bar's MARK — while
-its label and the dashed rung both read the fill. Any print that crossed the
-spread put the dot visibly off its own `ENTRY 4.55` line. It now sits on the
-rung: `y(entry)`, at the print's bar. The gap between dot and price line at that
-minute is now the edge the fill got against the mark, which is the number worth
-seeing.
-
-**Time.** The accented volume bar was `vols.indexOf(vMax)` — the tallest bar of
-the session — not the bar the print landed in, despite the comment above it
-saying otherwise. On a whale print those are usually the same bar, which is why
-it hid; when a later minute traded more, the accent jumped there and the dot
-stayed on the print. It is now `entryI ?? vols.indexOf(vMax)`, so the histogram
-and the dot point at the same minute, with the old behaviour as the fallback
-when the print is out of the window.
-
-Files: `cbedge-v3/src/board/topFlow/ContractProbe.tsx`.
-
-### follow-up, same day — the dot was a whole bar late
-
-Putting the marker on the rung exposed the second half of it: the dot still sat
-one bar to the right of its own volume spike. `entryI` matched the print to the
-NEAREST bar open, which is only right for one-minute bars. These are
-five-minute bars, so a 09:44 print is one minute from the 09:45 open and four
-from the 09:40 one — it went to 09:45 while the 4,450 contracts sat in the
-09:40 bar underneath it. Now it takes the bar that CONTAINS the print (the last
-open at or before it), so the dot and the accented volume bar are always the
-same bar, at any range.
-
-Files: `cbedge-v3/src/board/topFlow/ContractProbe.tsx`.
+Built Voltick's single board as a new route in `voltick-v3`, at `/v3/single`.
+New folder `voltick-v3/src/voltboard/`: `board.ts` assembles the strike x
+expiration matrix client-side from `/api/expirations` + `/api/chains` (parallel,
+reusing `chainMath.parseExpiration` so the board and the Options Chain cannot
+disagree); `derive.ts` is the ONE definition of agg/marks/cellStyle that the
+grid, tiles, ribbon and node card all read; `heat.ts` ports Voltick's
+sqrt-then-log heat curve and the meter scale verbatim. UI: `Voltmap.tsx` (grid,
+30/50/100/150 window, marks, spot row, Net profile), `StatBand.tsx` +
+`Legend.tsx`, `SessionRead.tsx`, `BoardToolbar.tsx` + `ContextBar`,
+`IbStrip.tsx` (`/api/snapshots/ib`), `NodeCard.tsx`. Registered in
+`src/App.tsx` (lazy, `/single`) and `src/shell/Shell.tsx` NAV. Audit of the
+original in `voltick-v3/docs/voltick-single-board-audit.md`. No backend or
+proxy change.

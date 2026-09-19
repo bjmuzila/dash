@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-19 - v3: CopyShot menu — fixed atlas, Stats from anywhere, pinned rows
+
+Added `cbedge-v3/src/shell/shotAtlas.ts` and reworked
+`cbedge-v3/src/shell/CopyShot.tsx` so the owner camera draws a fixed list on
+every route (pinned rows on top, everything else behind one "All shots" row,
+right-click to pin) and lifted the Key Levels Stats derivation out of
+`board/keyLevels/KeyLevelsCard.tsx` into new `statsShot.ts` / `levelsSource.tsx`
+/ `KeyLevelsStatsProbe.tsx`, so Stats is copied from any page without walking to
+the home board. Also touched `cbedge-v3/src/shell/Shell.tsx` (comment) and
+`cbedge-v3/src/pages/tradersDashboard/SectorWheelCard.tsx` (`usePrepareShot`
+pops the wheel out for its own shot); `board/BoardPage.tsx` is back to its
+original state after the borrow-a-card bridge was dropped.
+
 ## 2026-09-18 - Toolbar alerts: whale side arrow + palette swap
 
 Added an optional `bias` field to `AlertItem` in

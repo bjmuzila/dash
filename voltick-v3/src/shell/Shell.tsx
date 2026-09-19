@@ -91,6 +91,14 @@ export interface NavItem {
 // and ALL_PAGES/LIVE_ROUTES in pages/TradersDashboard.tsx move together.
 export const NAV: NavItem[] = [
   { to: '/', label: 'Home', icon: '🏠' },
+  // The Voltmap. Prefetch is the board's ACTUAL entry pair — the expirations
+  // list, then the front column, which is the waterfall this warms away.
+  {
+    to: '/single',
+    label: 'Single',
+    icon: '★',
+    prefetch: ['/api/expirations?ticker=SPX'],
+  },
   {
     to: '/traders-dashboard',
     label: 'Traders Dash',
