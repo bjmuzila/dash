@@ -67,9 +67,22 @@ export function isTodayExp(iso: string): boolean {
 
 /* ── the fetch ────────────────────────────────────────────────────────────── */
 
+/**
+ * /api/expirations is a PASS-THROUGH of the TastyTrade proxy, so the shape is
+ * TastyTrade's, not ours: `data.items[]`, each carrying `expiration-date`, and
+ * the SAME date appears many times (once per strike listing). The first cut of
+ * this file guessed `{ expirations: [...] }` and got an empty board with a live
+ * price above it — the one failure mode worth naming here, because the page
+ * looked like a rendering bug and was a parsing one.
+ *
+ * The other shapes below are tolerated, not expected. The proxy is the source
+ * of truth and it can change; an unrecognised payload must say so rather than
+ * present as "this ticker has no options".
+ */
 interface ExpirationsPayload {
+  data?: { items?: Array<Record<string, unknown>>; expirations?: unknown[] }
+  items?: Array<Record<string, unknown>>
   expirations?: unknown[]
-  data?: { expirations?: unknown[] }
 }
 
 /**
@@ -79,17 +92,31 @@ interface ExpirationsPayload {
  */
 export async function fetchExpirations(ticker: string): Promise<Expiration[]> {
   const j = await query<ExpirationsPayload>(`/api/expirations?ticker=${encodeURIComponent(ticker)}`)
-  const raw = (j?.expirations ?? j?.data?.expirations ?? []) as unknown[]
-  const out: Expiration[] = []
-  for (const r of raw) {
-    const value = typeof r === 'string' ? r : String((r as { value?: unknown })?.value ?? '')
+  const rows: unknown[] = j?.data?.items ?? j?.items ?? j?.data?.expirations ?? j?.expirations ?? []
+
+  // Deduped: `items` lists a date once per strike, so SPX comes back with
+  // thousands of rows over a few dozen real dates.
+  const seen = new Set<string>()
+  for (const r of rows) {
+    const value =
+      typeof r === 'string'
+        ? r
+        : String(
+            (r as Record<string, unknown>)?.['expiration-date'] ??
+              (r as Record<string, unknown>)?.expiration ??
+              (r as Record<string, unknown>)?.value ??
+              '',
+          )
     const iso = value.slice(0, 10)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue
     if (dteOf(iso) < 0) continue // already expired — the feed still lists it on roll day
-    out.push({ value: iso, label: fmtDate(iso) })
+    seen.add(iso)
   }
-  out.sort((a, b) => a.value.localeCompare(b.value))
-  return out.slice(0, MAX_COLUMNS)
+
+  return [...seen]
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, MAX_COLUMNS)
+    .map((iso) => ({ value: iso, label: fmtDate(iso) }))
 }
 
 interface ChainPayload {
@@ -144,7 +171,11 @@ export async function buildBoard(
       atmIv: null,
       em: null,
       builtAt: Date.now(),
-      warning: `No listed expirations came back for ${ticker}.`,
+      warning:
+        `No listed expirations came back for ${ticker}. ` +
+        `/api/expirations returned nothing this page could read — check it is ` +
+        `answering (it needs a subscriber session) and that its payload still ` +
+        `carries data.items[].expiration-date.`,
     }
   }
 

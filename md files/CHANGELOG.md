@@ -24099,3 +24099,16 @@ sqrt-then-log heat curve and the meter scale verbatim. UI: `Voltmap.tsx` (grid,
 `src/App.tsx` (lazy, `/single`) and `src/shell/Shell.tsx` NAV. Audit of the
 original in `voltick-v3/docs/voltick-single-board-audit.md`. No backend or
 proxy change.
+
+## 2026-09-19 — voltboard: fix the 24 typecheck errors that failed the VPS build
+
+`voltick-v3/tsconfig.json` has `noUncheckedIndexedAccess`, so every `arr[i]` is
+`T | undefined`; the first cut of voltboard indexed freely and `npm run
+typecheck` stopped the Docker build. Fixed in `heat.ts` (heatRef p90/max),
+`board.ts` + `derive.ts` (flip walk seed and the crossing pick, the column walk,
+the strike-step diff, colsInScope/scopeTagOf), `NodeCard.tsx` (narrow the column
+in the map, not in a later `.filter`, which does not narrow) and
+`BoardToolbar.tsx` (front column). Also `VoltBoard.tsx`: `pref()` inferred its
+literal fallback, so `pref(k,'0') === '1'` was a comparison with no overlap —
+widened to `pref<string>`. Verified against a stub project carrying the exact
+same compiler flags: 0 errors in `src/voltboard/`.
