@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
+import { CardDocLink } from '@/design/primitives/DocLink'
 import { Board, compactBoard, resolveBoard, settleBoard, type BoardItem } from '@/design/primitives/Board'
 import { useAuth } from '@/data/auth'
 import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
@@ -805,15 +806,32 @@ export default function BoardPage() {
                   </span>
                 }
                 actions={
-                  !locked && (
-                    <button
-                      onClick={() => removeCard(id)}
-                      title="Remove card"
-                      className="text-xs text-faint hover:text-down"
-                    >
-                      ✕
-                    </button>
-                  )
+                  <>
+                    {/* ── ↓MD ────────────────────────────────────────────────
+                        THE CARD'S OWN REFERENCE, as a file — what it draws,
+                        which feeds are behind it, every setting in its cog and
+                        the traps that cost somebody an afternoon.
+
+                        Keyed on the TYPE id, not the instance: two copies of
+                        GEX Candles are two copies of one thing and they read
+                        the same document.
+
+                        Drawn whether or not the board is locked, unlike the ✕
+                        beside it: reading about a card is not editing the
+                        board, and a reference you can only reach in edit mode
+                        is a reference nobody finds. It draws nothing for a card
+                        with no doc — see src/docs/docsIndex.ts. */}
+                    <CardDocLink cardTypeId={cardTypeOf(id)} />
+                    {!locked && (
+                      <button
+                        onClick={() => removeCard(id)}
+                        title="Remove card"
+                        className="text-xs text-faint hover:text-down"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </>
                 }
                 fill
               >

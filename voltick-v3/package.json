@@ -20,6 +20,7 @@
     "check:ws": "node scripts/ws-scope-check.mjs",
     "perf": "node scripts/perf-check.mjs",
     "check:casing": "node scripts/check-casing.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
     "check:parity": "node scripts/parity-check.mjs",
     "check:parity:self": "node scripts/parity-check.test.mjs",
     "check:parity:chain": "node scripts/parity-check-chain.mjs",
@@ -34,7 +35,7 @@
     "check:parity:replay:self": "node scripts/parity-check-replay.test.mjs",
     "check:parity:econ": "node scripts/parity-check-econ.mjs",
     "check:parity:econ:self": "node scripts/parity-check-econ.test.mjs",
-    "check": "npm run check:casing && npm run typecheck && npm run build:fast && npm run check:ws && npm run perf && npm run check:parity:self && npm run check:parity:chain:self && npm run check:parity:flow:self && npm run check:parity:analysis:self && npm run check:parity:em:self && npm run check:parity:replay:self && npm run check:parity:econ:self",
+    "check": "npm run check:casing && npm run check:docs && npm run typecheck && npm run build:fast && npm run check:ws && npm run perf && npm run check:parity:self && npm run check:parity:chain:self && npm run check:parity:flow:self && npm run check:parity:analysis:self && npm run check:parity:em:self && npm run check:parity:replay:self && npm run check:parity:econ:self",
     "preview": "vite preview --port 4173"
   },
   "dependencies": {

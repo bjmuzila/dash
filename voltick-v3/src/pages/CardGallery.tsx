@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { CARD_CATALOG, CARD_BY_ID } from '@/board/catalog'
 import { BOARD_ROW_H } from '@/design/primitives/Board'
+import { CardDocLink, DocLink } from '@/design/primitives/DocLink'
+import { routeDoc } from '@/docs/docsIndex'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE HOME BOARD — /v3
@@ -142,10 +144,14 @@ function Tiles() {
 
       <ul className="m-0 grid list-none grid-cols-1 gap-3 p-0 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
         {CARD_CATALOG.map((c) => (
-          <li key={c.id} className="contents">
+          // `relative flex` rather than `contents`, so the ↓MD button below can
+          // be positioned against the tile. The <Link> still fills it, so the
+          // tile is the same size and the same click target it always was.
+          <li key={c.id} className="relative flex">
             <Link
               to={`/cards/${c.id}`}
-              className="flex flex-col gap-2 rounded-md border border-line bg-surface p-4 no-underline hover:bg-surface2"
+              // `pr-14` keeps the id clear of the button parked in that corner.
+              className="flex flex-1 flex-col gap-2 rounded-md border border-line bg-surface p-4 pr-14 no-underline hover:bg-surface2"
             >
               <span aria-hidden className="text-2xl leading-none">
                 {c.icon}
@@ -154,6 +160,17 @@ function Tiles() {
               {NOTES[c.id] && <span className="text-xs leading-relaxed text-muted">{NOTES[c.id]}</span>}
               <span className="mt-auto pt-1 font-mono text-2xs tracking-wide text-muted">{c.id}</span>
             </Link>
+            {/* ── ↓MD, ON THE TILE ──────────────────────────────────────────
+                The showroom is where somebody decides whether a card is worth
+                opening, so it is also where the long answer belongs.
+
+                OUTSIDE the <Link>, not inside it. An <a> nested in an <a> is
+                invalid, and the browser only repairs that while PARSING HTML —
+                React builds this tree through the DOM API, so the nesting
+                survives and the two links fight over the click. Sitting it
+                beside the tile and positioning it absolutely costs one wrapper
+                and has no such question in it. */}
+            <CardDocLink cardTypeId={c.id} size="row" className="absolute right-3 bottom-3" />
           </li>
         ))}
       </ul>
@@ -163,10 +180,12 @@ function Tiles() {
       <h2 className="mt-8 mb-3 text-lg font-bold text-fg">Pages</h2>
       <ul className="m-0 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">
         {PAGES.map((p) => (
-          <li key={p.path} className="contents">
+          // Same shape as a card tile, and for the same reason — see the ↓MD
+          // note there for why the button may not live inside the <Link>.
+          <li key={p.path} className="relative flex">
             <Link
               to={p.path}
-              className="flex items-center gap-2 rounded-md border border-line bg-surface px-3 py-2.5 text-sm text-fg no-underline hover:bg-surface2"
+              className="flex flex-1 items-center gap-2 rounded-md border border-line bg-surface px-3 py-2.5 pr-12 text-sm text-fg no-underline hover:bg-surface2"
             >
               <span aria-hidden className="w-5 shrink-0 text-center">
                 {p.icon}
@@ -176,6 +195,15 @@ function Tiles() {
                 ↗
               </span>
             </Link>
+            {/* Every page has a written reference too, and this list is the
+                index of the pages — so it is the one place all of them can be
+                collected without visiting each route in turn. */}
+            <DocLink
+              slug={routeDoc(p.path)}
+              size="row"
+              subject={p.label}
+              className="absolute top-1/2 right-2 -translate-y-1/2"
+            />
           </li>
         ))}
       </ul>
@@ -235,6 +263,12 @@ function OneCard({ card }: { card: (typeof CARD_CATALOG)[number] }) {
           {card.label}
         </h1>
         <span className="font-mono text-2xs tracking-widest text-muted uppercase">{card.id}</span>
+        {/* A deep link lands here, so the reference has to be reachable from
+            this screen and not only from the tiles behind it. Same file the
+            card's own header button and the toolbar's ↓MD point at — see
+            routeDoc() in src/docs/docsIndex.ts, which resolves /cards/:id to
+            the CARD's document rather than the gallery's. */}
+        <CardDocLink cardTypeId={card.id} />
         <span className="ml-auto hidden items-baseline gap-3 font-mono text-2xs text-muted sm:flex">
           <span>
             {card.defaultSize.w}×{card.defaultSize.h} on the grid
@@ -299,6 +333,7 @@ function Missing({ id }: { id: string }) {
 /** The full pages, each one a route of this app. */
 const PAGES: { path: string; label: string; icon: string }[] = [
   { path: '/board', label: 'The grid board', icon: '🧩' },
+  { path: '/single', label: 'Single — the Voltmap', icon: '★' },
   { path: '/traders-dashboard', label: "Trader's Dashboard", icon: '📊' },
   { path: '/premarket', label: 'Premarket', icon: '🌅' },
   { path: '/options-chain', label: 'Options Chain', icon: '⛓️' },
@@ -312,4 +347,6 @@ const PAGES: { path: string; label: string; icon: string }[] = [
   { path: '/level-log', label: 'Level Log', icon: '🪵' },
   { path: '/seasonality', label: 'Seasonality', icon: '🗓️' },
   { path: '/whales', label: 'Whales', icon: '🐋' },
+  { path: '/feedback', label: 'Feedback & support', icon: '🎫' },
+  { path: '/legacy', label: 'v2 Legacy doors', icon: '🗄️' },
 ]

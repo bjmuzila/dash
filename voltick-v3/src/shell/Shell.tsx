@@ -6,6 +6,7 @@ import { isMobilePath } from '@/mobile/mobileNav'
 import { AuthProvider, useAuth } from '@/data/auth'
 import { PAGE_TICKER_RE, PageSymbolProvider, SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import { Chip } from '@/design/primitives/Controls'
+import { PageDocLink } from '@/design/primitives/DocLink'
 import { ExpandStageHost } from '@/design/primitives/Expand'
 import { ReplayDockHost } from '@/design/primitives/ReplayDock'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
@@ -473,6 +474,10 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
   // do that a closed list cannot — jump to a symbol that is not on the server's
   // watchlist — still works: type it and take the "USE" row.
   const { symbol, setSymbol } = usePageSymbol()
+  // Read here rather than threaded down as a prop: the ↓MD button below is
+  // route-aware and this component already re-renders on navigation (the rail
+  // and the Shell both sit under the same router).
+  const { pathname } = useLocation()
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
       {/* The wordmark, not the words. "CB Edge" set in the UI font was a
@@ -563,6 +568,26 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
           also the only surface that reaches the people whose offer email
           bounced or got filtered. See shell/OfferPill.tsx. */}
       <OfferPill />
+      {/* ── ↓MD ───────────────────────────────────────────────────────────────
+          THE PAGE'S OWN REFERENCE, as a file. Every route registered in
+          src/docs/docsIndex.ts hands back a markdown document covering what
+          the page draws, every feed behind it, every control and every known
+          trap — the thing that used to live in somebody's head and in a
+          Discord scrollback.
+
+          In the TOOLBAR rather than on each page, because the toolbar is the
+          one surface every route already has: a per-page button would be
+          twenty edits, twenty chances to forget one, and a page that quietly
+          has no way to explain itself. Route-aware, so the button is never
+          about a page you are not on.
+
+          It draws NOTHING on a route with no doc — see THE RULE in
+          src/docs/docsIndex.ts — which is what keeps NotFound and any
+          half-built page from growing a control that 404s.
+
+          Drawn on the phone build too: /m/* is where somebody is most likely
+          to be reading rather than trading. */}
+      <PageDocLink pathname={pathname} />
       <EtClock />
       {/* ── ↻ ──────────────────────────────────────────────────────────────────
           Refetch every mounted panel and reopen the live socket. Drawn on the

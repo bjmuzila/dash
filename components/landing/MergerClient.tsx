@@ -33,6 +33,10 @@
 
 import Link from "next/link";
 import PublicNav from "@/components/landing/PublicNav";
+// Every outbound link to Voltick goes through this, so each click lands in
+// page_visits as `click:voltick` with the placement. A raw <a href={VOLTICK_URL}>
+// on this page is a conversion nobody counted — see the header of that file.
+import VoltickLink from "@/components/analytics/VoltickLink";
 import {
   V3,
   V3_TEXT,
@@ -164,10 +168,10 @@ export default function MergerClient() {
               </p>
 
               <div style={ctaRow}>
-                <a href={VOLTICK_URL} style={voltCta} className="merger-cta">
+                <VoltickLink placement="landing-hero-cta" style={voltCta} className="merger-cta">
                   <span>Go to Voltick →</span>
                   <span style={ctaSub}>{VOLTICK_URL.replace(/^https?:\/\//, "")}</span>
-                </a>
+                </VoltickLink>
                 <Link href="/sign-in" style={v3GhostButton} className="merger-ghost">
                   Sign in ↓
                 </Link>
@@ -191,9 +195,9 @@ export default function MergerClient() {
                 <span style={voltCodeLabel}>Member code</span>
                 <span style={voltCode}>{VOLTICK_CODE}</span>
               </div>
-              <a href={VOLTICK_URL} style={{ ...voltBtn }} className="merger-cta">
+              <VoltickLink placement="landing-volt-card" style={voltBtn} className="merger-cta">
                 Open Voltick →
-              </a>
+              </VoltickLink>
             </div>
           </div>
 
@@ -272,7 +276,7 @@ export default function MergerClient() {
       </div>
 
       <div style={legalFooter} className="merger-legal">
-        <a href={VOLTICK_URL} style={legalLink}>Voltick</a>
+        <VoltickLink placement="landing-footer" style={legalLink}>Voltick</VoltickLink>
         <span style={legalDot}>·</span>
         <Link href="/docs" style={legalLink}>Docs</Link>
         <span style={legalDot}>·</span>

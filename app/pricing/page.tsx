@@ -7,6 +7,10 @@ import PricingActions from "@/components/pricing/PricingActions";
 import BetaGate from "@/components/pricing/BetaGate";
 import UserMenu from "@/components/shared/UserMenu";
 import PublicNav from "@/components/landing/PublicNav";
+// Tracked outbound link — see components/analytics/VoltickLink.tsx. A raw
+// anchor here would make this notice the one Voltick referral we cannot
+// measure, and it is the one put in front of someone reading prices.
+import VoltickLink from "@/components/analytics/VoltickLink";
 import {
   V3,
   V3_MONO,
@@ -23,7 +27,6 @@ import {
   SALES_CLOSED,
   SALES_CLOSED_BODY,
   VOLTICK_CODE,
-  VOLTICK_URL,
 } from "@/lib/salesClosed";
 
 export const dynamic = "force-dynamic";
@@ -157,7 +160,7 @@ export default async function PricingPage({
           >
             <b style={{ fontWeight: 700 }}>New memberships are closed.</b> The prices below are
             what CB Edge charged, kept here for reference only. If you want a GEX platform,{" "}
-            <a href={VOLTICK_URL} style={v3LinkStyle} className="pricing-link">Voltick</a>{" "}
+            <VoltickLink placement="pricing-notice" style={v3LinkStyle} className="pricing-link">Voltick</VoltickLink>{" "}
             covers 1,000+ tickers and CB Edge members get 75% off with code{" "}
             <b style={{ color: V3.cyan, fontWeight: 700 }}>{VOLTICK_CODE}</b>.
           </div>

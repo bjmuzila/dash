@@ -1,12 +1,15 @@
 import Link from "next/link";
 import AuthForm from "@/components/auth/AuthForm";
+// Tracked outbound link — see components/analytics/VoltickLink.tsx. Someone
+// who reached the sign-up page and then clicked through to Voltick is the
+// highest-intent referral on the site; it should not be the untracked one.
+import VoltickLink from "@/components/analytics/VoltickLink";
 import { BRAND_LOGO_SRC, BRAND_LOGO_ALT } from "@/lib/brand";
 import { V3, V3_RADIUS, V3_TEXT, v3PrimaryButton } from "@/components/landing/v3Theme";
 import {
   SALES_CLOSED,
   SALES_CLOSED_BODY,
   VOLTICK_CODE,
-  VOLTICK_URL,
 } from "@/lib/salesClosed";
 
 export const dynamic = "force-dynamic";
@@ -63,7 +66,7 @@ export default async function SignUpPage({
             </Link>
             <p style={{ fontSize: V3_TEXT.xs, color: V3.fg, lineHeight: 1.5, margin: "14px 0 0" }}>
               Looking for a GEX platform?{" "}
-              <a href={VOLTICK_URL} style={{ color: V3.cyan, fontWeight: 700 }}>Voltick</a>{" "}
+              <VoltickLink placement="sign-up-notice" style={{ color: V3.cyan, fontWeight: 700 }}>Voltick</VoltickLink>{" "}
               covers 1,000+ tickers. CB Edge members get 75% off with code{" "}
               <b style={{ color: V3.cyan, fontWeight: 700 }}>{VOLTICK_CODE}</b>.
             </p>
