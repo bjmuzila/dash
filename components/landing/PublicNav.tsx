@@ -18,6 +18,10 @@ import Link from "next/link";
 import { V3, V3_RADIUS, V3_TEXT, v3a } from "@/components/landing/v3Theme";
 import { BRAND_LOGO_SRC } from "@/lib/brand";
 import { SALES_CLOSED } from "@/lib/salesClosed";
+// The toolbar CTA is the most-seen link on the public site, so while sales
+// are closed it is also the most-seen chance to send someone to Voltick.
+// Tracked like the other four — see components/analytics/VoltickLink.tsx.
+import VoltickLink from "@/components/analytics/VoltickLink";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
@@ -59,6 +63,8 @@ export default function PublicNav({
         .pnav-link:hover { background: ${V3.raised}; border-color: ${V3.cyan}; color: ${V3.fg}; }
         .pnav-cta { transition: background .14s; }
         .pnav-cta:hover { background: ${v3a(V3.cyan, 0.85)}; }
+        .pnav-volt { transition: background .14s; }
+        .pnav-volt:hover { background: ${v3a(V3.accent, 0.85)}; }
         .pnav-ghost { transition: background .14s, border-color .14s; }
         .pnav-ghost:hover { background: ${V3.raised}; border-color: ${V3.cyan}; }
         @media (max-width: 960px) { .pnav-links { display: none !important; } .pnav-menu { display: block !important; } }
@@ -75,7 +81,7 @@ export default function PublicNav({
            viewport. Shrink both so the bar fits ~360px. */
         @media (max-width: 520px) {
           .pnav-logo { height: 30px !important; }
-          .pnav-cta, .pnav-cta-off, .pnav-ghost { height: 30px; padding: 0 10px; font-size: ${V3_TEXT.sm}px; }
+          .pnav-cta, .pnav-volt, .pnav-ghost { height: 30px; padding: 0 10px; font-size: ${V3_TEXT.sm}px; }
         }
       `}</style>
 
@@ -141,14 +147,21 @@ export default function PublicNav({
             </details>
             {right ?? (
               <>
-                {/* Sales closed: the buy button stays in the bar so the layout
-                    does not shift, but it is a dead <span>, not a <Link>. LOGIN
-                    is untouched and is now the only live action up here, which
-                    is right — existing members still need their way in. */}
+                {/* Sales closed: the buy button keeps its exact box so the right
+                    cluster does not shift, but it now GOES somewhere. It was a
+                    dead <span> reading SALES CLOSED — correct and useless: the
+                    most-seen control on the public site, spending its position
+                    to tell people what they cannot do. It is the same sentence
+                    either way, and one of the two versions is a door.
+
+                    V3.accent, not V3.cyan: a cyan pill in that slot is the
+                    muscle-memory "buy CB Edge" button, and this is not that.
+                    LOGIN is untouched beside it — a member's way in must not
+                    become the second-most obvious thing up here. */}
                 {SALES_CLOSED ? (
-                  <span className="pnav-cta-off" style={ctaClosedBtn} aria-disabled="true">
-                    SALES CLOSED
-                  </span>
+                  <VoltickLink placement="nav-cta" className="pnav-volt" style={voltBtn}>
+                    GO TO VOLTICK <span aria-hidden>›</span>
+                  </VoltickLink>
                 ) : (
                   <Link href="/pricing?from=nav" className="pnav-cta" style={ctaBtn}>
                     GET FULL ACCESS <span aria-hidden>›</span>
@@ -219,10 +232,13 @@ const ctaBtn: React.CSSProperties = {
   border: `1px solid ${V3.cyan}`,
 };
 
-// ctaBtn with the fill and the link taken out. Same height and padding so the
-// right cluster keeps its shape; dashed hairline on the nested-row surface so
-// it reads as deliberately off. See lib/salesClosed.ts.
-const ctaClosedBtn: React.CSSProperties = {
+// ctaBtn in Voltick's colour. Identical box — same height, padding, radius,
+// tracking — so swapping the two never moves the right cluster by a pixel; only
+// the fill and the destination change. V3.accent is v3's own UI blue, which is
+// the nearest token to Voltick's #2f6bff; no literal enters the public tree.
+// This replaced a dead `ctaClosedBtn` pill (dashed, cursor:not-allowed) that
+// said SALES CLOSED and went nowhere. See components/analytics/VoltickLink.tsx.
+const voltBtn: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
@@ -232,12 +248,12 @@ const ctaClosedBtn: React.CSSProperties = {
   fontSize: V3_TEXT.sm,
   fontWeight: 700,
   letterSpacing: "0.07em",
-  color: V3.fg,
+  // Dark ink on the accent, same contrast reasoning as ctaBtn on cyan.
+  color: V3.bg,
   textDecoration: "none",
   whiteSpace: "nowrap",
-  background: V3.surface2,
-  border: `1px dashed ${V3.line}`,
-  cursor: "not-allowed",
+  background: V3.accent,
+  border: `1px solid ${V3.accent}`,
 };
 
 const ghostBtn: React.CSSProperties = {

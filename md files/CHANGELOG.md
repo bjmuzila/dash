@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-09-20 — Every Voltick click is counted
+
+While sales are closed, sending someone to Voltick is the only conversion the
+site still has, and all four links out to it were bare anchors. Voltick's own
+analytics can see the arrival but not WHICH of our placements sent it — they
+are all the same referrer — so "does the pricing notice do anything" had no
+answer.
+
+`components/analytics/VoltickLink.tsx` is new and is now the only way to link
+to Voltick. Wired into all four: the landing hero CTA (`landing-hero-cta`), the
+landing Voltick card (`landing-volt-card`), the landing footer
+(`landing-footer`), the /pricing merger notice (`pricing-notice`) and the
+/sign-up notice (`sign-up-notice`). `VOLTICK_URL` is no longer imported by
+either page — the component owns the destination, so a raw
+`<a href={VOLTICK_URL}>` is now the obviously wrong thing to type.
+
+NO NEW ENDPOINT AND NO MIGRATION. It posts to `/api/page-status`, the beacon
+every public page already fires, so a click writes a normal `page_visits` row
+carrying IP, Cloudflare geo, browser/OS/device and `user_id` when there is one.
+Three reasons that beat a dedicated route: page-status is already in
+middleware's `PUBLIC_PATTERNS` AND registered in `server-v2/api-router.js`
+(which intercepts `/api/*` before middleware in production, so a new route
+would have to be added to both, and getting either wrong means signed-out
+visitors — everyone this page is for — silently log nothing); the visitor map
+already reads that table; and `sendBeacon` is the only thing that reliably
+survives the navigation, which on this link is the point of the click.
+
+Read it as `page_key = 'click:voltick'`: `page_label` is the placement, `path`
+the page it happened on. Group by page_label for which button, by path for
+which page. `page_load_status` also gains one row named `click:voltick` whose
+`total_loads` is the running total of Voltick clicks — a side effect of
+`isLoaded: true` being what makes page-status write a visit row at all, and
+useful enough to keep.
+
+`isEntry` is hard-false on every click. The entry flag marks the first beacon
+of a browser session and carries referrer/UTM; session counts are
+`COUNT(*) WHERE is_entry`. A click is never an arrival, and letting one claim
+the flag would invent a session and attribute it to ourselves. `noreferrer` is
+deliberately not set either — Voltick should see the traffic came from
+cbedge.net.
+
 ## 2026-09-20 — The landing page becomes the merger notice
 
 Sales were already closed behind `SALES_CLOSED` (the entry below), but `/` was

@@ -33,6 +33,16 @@ export interface DocLinkProps {
   subject?: string
   /** `chip` is the toolbar/header size; `row` is a list row's trailing tag. */
   size?: 'chip' | 'row'
+  /**
+   * POSITIONING ONLY — the gallery parks these absolutely against a tile.
+   * Not a licence to restyle the button: the plate, the border and the type
+   * size come off the tokens below and stay the same everywhere.
+   *
+   * BOTH wrappers below forward it, and that is the point. One that took it
+   * and dropped it — or did not declare it at all — fails at its CALL SITE
+   * rather than at its definition, which is exactly how the first cut of
+   * this file broke the Docker build (`CardGallery.tsx(173,55): TS2322`).
+   */
   className?: string
 }
 
@@ -76,11 +86,37 @@ export function DocLink({ slug, label = 'MD', subject, size = 'chip', className 
  * Draws nothing on a route with no entry, which is what keeps NotFound and any
  * half-built page from growing a control that leads nowhere.
  */
-export function PageDocLink({ pathname, size = 'chip' }: { pathname: string; size?: 'chip' | 'row' }) {
-  return <DocLink slug={routeDoc(pathname)} subject="this page" size={size} />
+export function PageDocLink({
+  pathname,
+  size = 'chip',
+  className,
+}: {
+  pathname: string
+  size?: 'chip' | 'row'
+  className?: string
+}) {
+  return <DocLink slug={routeDoc(pathname)} subject="this page" size={size} className={className} />
 }
 
 /** The same button, for a catalog card, by its TYPE id. */
-export function CardDocLink({ cardTypeId, label, size = 'chip' }: { cardTypeId: string; label?: string; size?: 'chip' | 'row' }) {
-  return <DocLink slug={cardDoc(cardTypeId)} label={label} subject={`the ${cardTypeId} card`} size={size} />
+export function CardDocLink({
+  cardTypeId,
+  label,
+  size = 'chip',
+  className,
+}: {
+  cardTypeId: string
+  label?: string
+  size?: 'chip' | 'row'
+  className?: string
+}) {
+  return (
+    <DocLink
+      slug={cardDoc(cardTypeId)}
+      label={label}
+      subject={`the ${cardTypeId} card`}
+      size={size}
+      className={className}
+    />
+  )
 }
