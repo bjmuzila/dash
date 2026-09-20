@@ -1,5 +1,97 @@
 # Changelog
 
+## 2026-09-20 - Sales are closed across cbedge.net, behind one switch
+
+CB Edge is joining Voltick, so the funnel is shut: no new memberships, no
+renewals, no checkout. The platform is NOT closing and no existing member loses
+anything, which is the half that matters and the half the code has to keep.
+Sign-in, the dashboard, middleware's paid gate and the Stripe billing portal are
+all untouched, so a paid member keeps full access to the last day of the term
+they bought and a yearly member keeps all twelve months.
+
+`lib/salesClosed.ts` is new and is the single switch. Everything reads
+`SALES_CLOSED` from it rather than being individually deleted, because ripping
+out a dozen join buttons is a dozen edits to put back under pressure, and the
+one that gets missed is always the server route, which is the one that can
+actually take money. Reopening is one env var: `NEXT_PUBLIC_SALES_OPEN=1`. The
+`NEXT_PUBLIC_` prefix is load-bearing. The landing page, PublicNav and the
+pricing buttons are client components, and a bare `SALES_OPEN` reads as
+undefined in the browser, which would leave every button live while only the
+API said no.
+
+THE ACTUAL LOCK is in `app/api/stripe/checkout/route.ts`, first thing in the
+handler, ahead of auth and before Stripe is constructed. A stale tab, a
+bookmarked /pricing, an old email link or a hand-rolled POST all get 410 Gone.
+Every disabled button on the site is the sign on the door; this is the door.
+410 rather than 403 on purpose: the endpoint is not forbidden to that caller, it
+has been withdrawn.
+
+Buttons are DISABLED, not removed. The two landing CTAs and the toolbar's GET
+FULL ACCESS keep their exact box and become dead `<span>`s, so nothing on the
+page reflows and a visitor gets an explanation instead of a missing control.
+`v3DisabledButton` is the new shared style: it signals "off" by flattening
+(dashed hairline, surface2 plate, no cast shadow, not-allowed cursor) and never
+by dimming the label, because this theme has no text opacity and a greyed label
+on a dark plate is the readability problem those tokens exist to prevent.
+
+Pricing drops out of the public nav but the ROUTE stays and still renders. An
+old link or a Google result has to land on an explanation, not a 404. Its title
+and description now follow the switch too, so the search result stops
+advertising "$50/mo, cancel anytime" for something nobody can buy, and the plan
+card is relabelled "Reference only. These were the prices."
+
+Sign-up renders a closed notice instead of the form rather than a disabled one.
+An account with nothing to buy is a dead row in the users table and a person who
+thinks they signed up for something.
+
+Every closed surface points at Voltick with TICK75, same wording as the
+announcement email, so the site and the inbox say one thing.
+
+Files: `lib/salesClosed.ts` (new), `components/landing/v3Theme.ts`
+(`v3DisabledButton`), `components/landing/LandingClient.tsx`,
+`components/landing/PublicNav.tsx`, `components/pricing/BetaGate.tsx`,
+`components/pricing/PricingActions.tsx`, `app/pricing/page.tsx`,
+`app/sign-up/[[...sign-up]]/page.tsx`, `app/api/stripe/checkout/route.ts`.
+
+## 2026-09-20 (a) - VOLTICK SANDBOX: the formula reference is a page (`voltick-vite/`)
+
+`voltick.cbedge.net/formulas`. The whole of `md files/FORMULAS.md` now renders
+as a route on the sandbox site, with a 23-entry contents board at the top that
+jumps to each section.
+
+Files:
+
+- `voltick-vite/src/assets/2026-09-20-cbedge-formulas.md` - the document, imported
+  with Vite's `?raw`. It lives in `src/assets/` and NOT in `public/` on purpose:
+  `public/` sits at the document root and skips nginx's `auth_request`, and an
+  ungated copy of every constant the engine uses is the wrong thing to leave at a
+  predictable URL. Imported, it is inlined into the route's hashed chunk behind
+  the gate - the same reasoning `DataFlow.tsx` already applies to its diagram.
+  Em-dashes and en-dashes are converted on the way in (theme.ts copy rule 3).
+- `voltick-vite/src/pages/Formulas.tsx` - page plus a small local markdown
+  renderer. It reads the subset this document uses (headings, fences, tables,
+  lists, rules, inline code and bold) and nothing else, which is ~180 lines
+  against a dependency and a stylesheet of colours that are not ours. Every
+  colour comes from `src/theme.ts`.
+- `voltick-vite/src/pages/registry.ts`, `voltick-vite/src/lib/nav.ts` - the two
+  edits that add a page here. New `Reference` group on the contents board.
+
+Two markdown bugs in the source document, fixed in `md files/FORMULAS.md` as well:
+
+- The dealer-inventory `mode` table (section 3) had a cell reading
+  `` `dir - min(|f|, d)` ``. Those pipes are raw, so the row tore into four
+  cells. Now escaped as `\|`, which is also what GitHub needs to render it.
+- `**default `0.045`**` nests a code span inside bold. Splitting on backticks
+  first strands the two `**` halves in different chunks and both render as
+  literal asterisks, so the renderer tokenises bold FIRST and code within it.
+  The reverse nesting never occurs in the document.
+
+Verified: `tsc --noEmit` clean, `vite build` clean, and the page SSR-rendered to
+check the parse - 23 h2, 48 h3, 23 tables, 94 code blocks, and zero stray pipes,
+backticks, asterisks or em-dashes left in the prose. Route chunk is 77.8 KB,
+lazy, so the main bundle is untouched.
+
+
 ## 2026-09-20 - Merger email now leads with "CB Edge is not closing. Sales are."
 
 The first draft buried the thing members actually care about under a bullet

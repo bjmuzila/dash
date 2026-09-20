@@ -1,6 +1,13 @@
+import Link from "next/link";
 import AuthForm from "@/components/auth/AuthForm";
 import { BRAND_LOGO_SRC, BRAND_LOGO_ALT } from "@/lib/brand";
-import { V3 } from "@/components/landing/v3Theme";
+import { V3, V3_RADIUS, V3_TEXT, v3PrimaryButton } from "@/components/landing/v3Theme";
+import {
+  SALES_CLOSED,
+  SALES_CLOSED_BODY,
+  VOLTICK_CODE,
+  VOLTICK_URL,
+} from "@/lib/salesClosed";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +37,40 @@ export default async function SignUpPage({
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={BRAND_LOGO_SRC} alt={BRAND_LOGO_ALT} style={{ width: 300, maxWidth: "80%", height: "auto" }} />
-        <AuthForm mode="signup" next={next} />
+        {SALES_CLOSED ? (
+          // Sales closed (lib/salesClosed.ts). The form is not rendered at all
+          // here rather than disabled: an account with nothing to buy is a dead
+          // row in the users table and a person who thinks they signed up for
+          // something. Sign-IN is untouched and is offered right below.
+          <div
+            style={{
+              maxWidth: 420,
+              padding: "22px 24px",
+              borderRadius: V3_RADIUS.lg,
+              border: `1px solid ${V3.cyan}`,
+              background: V3.surface,
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: V3_TEXT.lg, fontWeight: 700, color: V3.fg, marginBottom: 10 }}>
+              Sign-ups are closed
+            </div>
+            <p style={{ fontSize: V3_TEXT.base, color: V3.fg, lineHeight: 1.6, margin: "0 0 16px" }}>
+              {SALES_CLOSED_BODY}
+            </p>
+            <Link href="/sign-in" style={{ ...v3PrimaryButton, width: "100%", boxSizing: "border-box" }}>
+              Already a member? Sign in
+            </Link>
+            <p style={{ fontSize: V3_TEXT.xs, color: V3.fg, lineHeight: 1.5, margin: "14px 0 0" }}>
+              Looking for a GEX platform?{" "}
+              <a href={VOLTICK_URL} style={{ color: V3.cyan, fontWeight: 700 }}>Voltick</a>{" "}
+              covers 1,000+ tickers. CB Edge members get 75% off with code{" "}
+              <b style={{ color: V3.cyan, fontWeight: 700 }}>{VOLTICK_CODE}</b>.
+            </p>
+          </div>
+        ) : (
+          <AuthForm mode="signup" next={next} />
+        )}
       </div>
     </div>
   );

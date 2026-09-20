@@ -3,6 +3,7 @@ import { getServerUser } from "@/lib/supabase/server";
 import { getStripe, getPriceIdForPlan, type Plan } from "@/lib/stripe";
 import { getSubscription, linkStripeCustomer } from "@/lib/db";
 import { findActiveTrialWinback } from "@/lib/db";
+import { SALES_CLOSED, SALES_CLOSED_API_MESSAGE } from "@/lib/salesClosed";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,18 @@ function affiliateCode(req: NextRequest): string | null {
 // `clerk_user_id` for continuity with subscriptions.clerk_user_id — see lib/db.ts).
 export async function POST(req: NextRequest) {
   try {
+    // SALES ARE CLOSED (lib/salesClosed.ts). This is the lock; every disabled
+    // button on the site is only the sign on the door. It sits FIRST, before
+    // auth and before Stripe is even constructed, so a stale tab, a bookmarked
+    // /pricing, a direct POST or an old email link cannot create a session and
+    // charge somebody after we told the whole list we had stopped selling.
+    //
+    // 410 Gone, not 403: the endpoint is not forbidden to this caller, it has
+    // been withdrawn. 402/400 would read to a client as "fix your request".
+    if (SALES_CLOSED) {
+      return NextResponse.json({ error: SALES_CLOSED_API_MESSAGE }, { status: 410 });
+    }
+
     const user = await getServerUser();
     const userId = user?.id ?? null;
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

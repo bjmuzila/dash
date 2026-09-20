@@ -293,6 +293,33 @@ export const v3GhostButton: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+/** A control that is deliberately DEAD. Used by the sales-closed surfaces
+ *  (see lib/salesClosed.ts): the join buttons stay where they are so the page
+ *  does not reflow, but they stop being pressable.
+ *
+ *  It signals "off" by FLATTENING, not by dimming: a dashed hairline, the
+ *  nested-row surface instead of the raised one, no cast shadow, and a
+ *  not-allowed cursor. Text stays full white, because this theme has no text
+ *  opacity (see the note at the top of this file) and a greyed label on a dark
+ *  plate is the exact readability problem those tokens exist to avoid. */
+export const v3DisabledButton: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  padding: "12px 20px",
+  borderRadius: V3_RADIUS.md,
+  border: `1px dashed ${V3.line}`,
+  background: V3.surface2,
+  color: V3.fg,
+  fontSize: V3_TEXT.base,
+  fontWeight: 600,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+  cursor: "not-allowed",
+  boxShadow: "none",
+};
+
 /** A text input on a public page — inset plate, hairline, no glow. */
 export const v3InputStyle: CSSProperties = {
   width: "100%",

@@ -17,12 +17,18 @@
 import Link from "next/link";
 import { V3, V3_RADIUS, V3_TEXT, v3a } from "@/components/landing/v3Theme";
 import { BRAND_LOGO_SRC } from "@/lib/brand";
+import { SALES_CLOSED } from "@/lib/salesClosed";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
+// Pricing leaves the toolbar while sales are closed (lib/salesClosed.ts). The
+// ROUTE still exists and still renders — an old email link or a Google result
+// has to land on an explanation, not a 404 — it just stops being somewhere we
+// send people. `active="Pricing"` on that page simply matches nothing, which is
+// the correct outcome: the tab it would underline is not there.
 export const PUBLIC_NAV = [
   { label: "Overview", href: "/" },
-  { label: "Pricing", href: "/pricing?from=nav" },
+  ...(SALES_CLOSED ? [] : [{ label: "Pricing", href: "/pricing?from=nav" }]),
   { label: "Docs", href: "/docs" },
 ];
 
@@ -69,7 +75,7 @@ export default function PublicNav({
            viewport. Shrink both so the bar fits ~360px. */
         @media (max-width: 520px) {
           .pnav-logo { height: 30px !important; }
-          .pnav-cta, .pnav-ghost { height: 30px; padding: 0 10px; font-size: ${V3_TEXT.sm}px; }
+          .pnav-cta, .pnav-cta-off, .pnav-ghost { height: 30px; padding: 0 10px; font-size: ${V3_TEXT.sm}px; }
         }
       `}</style>
 
@@ -135,9 +141,19 @@ export default function PublicNav({
             </details>
             {right ?? (
               <>
-                <Link href="/pricing?from=nav" className="pnav-cta" style={ctaBtn}>
-                  GET FULL ACCESS <span aria-hidden>›</span>
-                </Link>
+                {/* Sales closed: the buy button stays in the bar so the layout
+                    does not shift, but it is a dead <span>, not a <Link>. LOGIN
+                    is untouched and is now the only live action up here, which
+                    is right — existing members still need their way in. */}
+                {SALES_CLOSED ? (
+                  <span className="pnav-cta-off" style={ctaClosedBtn} aria-disabled="true">
+                    SALES CLOSED
+                  </span>
+                ) : (
+                  <Link href="/pricing?from=nav" className="pnav-cta" style={ctaBtn}>
+                    GET FULL ACCESS <span aria-hidden>›</span>
+                  </Link>
+                )}
                 <Link href="/sign-in" className="pnav-ghost" style={ghostBtn}>
                   LOGIN
                 </Link>
@@ -201,6 +217,27 @@ const ctaBtn: React.CSSProperties = {
   whiteSpace: "nowrap",
   background: V3.cyan,
   border: `1px solid ${V3.cyan}`,
+};
+
+// ctaBtn with the fill and the link taken out. Same height and padding so the
+// right cluster keeps its shape; dashed hairline on the nested-row surface so
+// it reads as deliberately off. See lib/salesClosed.ts.
+const ctaClosedBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  height: 34,
+  padding: "0 16px",
+  borderRadius: V3_RADIUS.md,
+  fontSize: V3_TEXT.sm,
+  fontWeight: 700,
+  letterSpacing: "0.07em",
+  color: V3.fg,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+  background: V3.surface2,
+  border: `1px dashed ${V3.line}`,
+  cursor: "not-allowed",
 };
 
 const ghostBtn: React.CSSProperties = {

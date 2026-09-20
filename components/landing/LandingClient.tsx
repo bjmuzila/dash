@@ -11,6 +11,7 @@ import {
   v3a,
   v3CardStrongStyle,
   v3Chip,
+  v3DisabledButton,
   v3GhostButton,
   v3PrimaryButton,
 } from "@/components/landing/v3Theme";
@@ -19,6 +20,13 @@ import HeroVideo from "@/components/landing/HeroVideo";
 import ReceiptsStrip from "@/components/landing/ReceiptsStrip";
 import LiveLevelPanel from "@/components/landing/LiveLevelPanel";
 import GradedLedger from "@/components/landing/GradedLedger";
+import {
+  SALES_CLOSED,
+  SALES_CLOSED_LABEL,
+  SALES_CLOSED_NOTE,
+  VOLTICK_CODE,
+  VOLTICK_URL,
+} from "@/lib/salesClosed";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
@@ -217,17 +225,35 @@ export default function LandingClient() {
               </p>
 
               <div style={ctaRow}>
-                <Link href="/pricing?from=landing" style={ctaBtn} className="landing-cta">
-                  <span>Get full access →</span>
-                  <span style={ctaSub}>$50/mo · Cancel anytime</span>
-                </Link>
+                {SALES_CLOSED ? (
+                  <span style={ctaClosedBtn} aria-disabled="true">
+                    <span>{SALES_CLOSED_LABEL}</span>
+                    <span style={ctaSub}>CB Edge is joining Voltick</span>
+                  </span>
+                ) : (
+                  <Link href="/pricing?from=landing" style={ctaBtn} className="landing-cta">
+                    <span>Get full access →</span>
+                    <span style={ctaSub}>$50/mo · Cancel anytime</span>
+                  </Link>
+                )}
                 <a href="#record" style={v3GhostButton} className="landing-ghost">See the record ↓</a>
               </div>
 
-              <p style={ctaNote}>
-                The live level panel is <b style={{ color: V3.refresh, fontWeight: 700 }}>free forever</b>. No card, no email.
-                Membership unlocks history, rate of change, flow, alerts and every other page.
-              </p>
+              {SALES_CLOSED ? (
+                <p style={ctaNote}>
+                  {SALES_CLOSED_NOTE}{" "}
+                  <a href={VOLTICK_URL} style={{ color: V3.cyan, fontWeight: 700 }}>
+                    Voltick
+                  </a>{" "}
+                  covers 1,000+ tickers, and CB Edge members get 75% off with code{" "}
+                  <b style={{ color: V3.cyan, fontWeight: 700 }}>{VOLTICK_CODE}</b>.
+                </p>
+              ) : (
+                <p style={ctaNote}>
+                  The live level panel is <b style={{ color: V3.refresh, fontWeight: 700 }}>free forever</b>. No card, no email.
+                  Membership unlocks history, rate of change, flow, alerts and every other page.
+                </p>
+              )}
             </div>
 
             <LiveLevelPanel />
@@ -331,20 +357,50 @@ export default function LandingClient() {
         {/* ═══ 4 · CLOSE — "what do I do?" ══════════════════════════════ */}
         <section style={card}>
           <div style={{ ...pad, textAlign: "center" }}>
-            <h2 style={h2}>Tomorrow&apos;s levels print at 9:30 ET.</h2>
-            <p style={{ ...sectionLede, marginBottom: 22 }}>
-              You&apos;ve seen today&apos;s flip and the graded record, without an account. The rest of
-              it — history, rate of change, flow and alerts — is one click away.
-            </p>
-            <Link href="/pricing?from=landing" style={ctaBtn} className="landing-cta">
-              <span>Get full access →</span>
-              <span style={ctaSub}>$50/mo · Cancel anytime</span>
-            </Link>
-            <div style={benefitLine}>
-              <span>✓ <b style={benefitB}>Full access</b>, every page</span>
-              <span>✓ Cancel in <b style={benefitB}>one click</b></span>
-              <span>✓ Free live level <b style={benefitB}>stays free</b> either way</span>
-            </div>
+            {SALES_CLOSED ? (
+              <>
+                <h2 style={h2}>CB Edge is joining Voltick.</h2>
+                <p style={{ ...sectionLede, marginBottom: 22 }}>
+                  The platform is not shutting down. Only sales are. Every current member keeps
+                  full access to the last day of the term they paid for, and yearly members keep
+                  all twelve months.
+                </p>
+                <span style={ctaClosedBtn} aria-disabled="true">
+                  <span>{SALES_CLOSED_LABEL}</span>
+                  <span style={ctaSub}>No new subscriptions</span>
+                </span>
+                <div style={benefitLine}>
+                  <span>✓ <b style={benefitB}>Nothing renews</b>, no surprise charges</span>
+                  <span>✓ Paid terms <b style={benefitB}>run out in full</b></span>
+                  <span>✓ Free live level <b style={benefitB}>stays free</b></span>
+                </div>
+                <p style={{ ...ctaNote, margin: "16px auto 0" }}>
+                  Still want a GEX platform?{" "}
+                  <a href={VOLTICK_URL} style={{ color: V3.cyan, fontWeight: 700 }}>
+                    Voltick
+                  </a>{" "}
+                  covers 1,000+ tickers, and CB Edge members get 75% off with code{" "}
+                  <b style={{ color: V3.cyan, fontWeight: 700 }}>{VOLTICK_CODE}</b>.
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 style={h2}>Tomorrow&apos;s levels print at 9:30 ET.</h2>
+                <p style={{ ...sectionLede, marginBottom: 22 }}>
+                  You&apos;ve seen today&apos;s flip and the graded record, without an account. The rest of
+                  it — history, rate of change, flow and alerts — is one click away.
+                </p>
+                <Link href="/pricing?from=landing" style={ctaBtn} className="landing-cta">
+                  <span>Get full access →</span>
+                  <span style={ctaSub}>$50/mo · Cancel anytime</span>
+                </Link>
+                <div style={benefitLine}>
+                  <span>✓ <b style={benefitB}>Full access</b>, every page</span>
+                  <span>✓ Cancel in <b style={benefitB}>one click</b></span>
+                  <span>✓ Free live level <b style={benefitB}>stays free</b> either way</span>
+                </div>
+              </>
+            )}
             <Link href="/sign-in" style={signInLink}>Already a member? Sign in</Link>
           </div>
         </section>
@@ -509,6 +565,21 @@ const ctaRow: React.CSSProperties = {
    faces have no 800 and synthesise a blurry one. */
 const ctaBtn: React.CSSProperties = {
   ...v3PrimaryButton,
+  flexDirection: "column",
+  gap: 4,
+  textAlign: "center",
+  minWidth: 300,
+  padding: "16px 32px",
+  fontSize: V3_TEXT.lg,
+  letterSpacing: "0.01em",
+};
+
+// The join CTA with the click taken out. Same box as ctaBtn so nothing on the
+// page reflows when sales close; a dashed flat plate instead of the cyan fill
+// so it reads as switched off rather than broken. No href and no handler —
+// there is nothing to click, not a click that fails.
+const ctaClosedBtn: React.CSSProperties = {
+  ...v3DisabledButton,
   flexDirection: "column",
   gap: 4,
   textAlign: "center",

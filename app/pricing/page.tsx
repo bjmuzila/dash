@@ -19,13 +19,25 @@ import {
   v3LinkStyle,
 } from "@/components/landing/v3Theme";
 import { EXPLORE } from "@/components/explore/exploreContent";
+import {
+  SALES_CLOSED,
+  SALES_CLOSED_BODY,
+  VOLTICK_CODE,
+  VOLTICK_URL,
+} from "@/lib/salesClosed";
 
 export const dynamic = "force-dynamic";
 
-const TITLE = "Pricing — CB Edge · $50/mo, cancel anytime";
-const DESC =
-  "One membership, every page: live SPX GEX, graded levels, options flow, premarket prep, " +
-  "ES & NQ Initial Balance and the scanners. $50/mo or $500/yr. No tiers, no codes.";
+// Title/description follow the sales switch. Leaving "$50/mo, cancel anytime"
+// in the <title> while checkout is closed puts a price in the Google result for
+// a thing nobody can buy, which is the search-result version of a dead button.
+const TITLE = SALES_CLOSED
+  ? "CB Edge is joining Voltick — memberships are closed"
+  : "Pricing — CB Edge · $50/mo, cancel anytime";
+const DESC = SALES_CLOSED
+  ? "CB Edge is joining Voltick and is no longer taking new memberships. The platform stays up and existing members keep full access to the end of their paid term."
+  : "One membership, every page: live SPX GEX, graded levels, options flow, premarket prep, " +
+    "ES & NQ Initial Balance and the scanners. $50/mo or $500/yr. No tiers, no codes.";
 export const metadata: Metadata = {
   title: TITLE,
   description: DESC,
@@ -111,15 +123,45 @@ export default async function PricingPage({
         <h1 style={h1}>
           {access.ok ? (
             "You're subscribed"
+          ) : SALES_CLOSED ? (
+            <>CB Edge is joining <span style={{ color: V3.cyan }}>Voltick</span></>
           ) : (
             <>Get full access to <span style={{ color: V3.cyan }}>CB Edge</span></>
           )}
         </h1>
         <p style={lede}>
           {access.ok
-            ? "Your subscription is active — you have full access to the dashboard."
-            : "One subscription unlocks the entire platform. Live dealer positioning, graded levels, flow and estimated moves — the moment they move. One price, no tiers, no add-ons."}
+            ? SALES_CLOSED
+              ? "Your subscription is active and stays active to the end of the term you paid for. Nothing is cut short and nothing renews."
+              : "Your subscription is active — you have full access to the dashboard."
+            : SALES_CLOSED
+              ? SALES_CLOSED_BODY
+              : "One subscription unlocks the entire platform. Live dealer positioning, graded levels, flow and estimated moves — the moment they move. One price, no tiers, no add-ons."}
         </p>
+
+        {/* The merger notice, above the plan card, so a visitor reads WHY the
+            buttons are dead before they reach them. Cyan hairline plate, same
+            vocabulary as the announcement email. */}
+        {SALES_CLOSED && !access.ok && (
+          <div
+            style={{
+              margin: "18px 0 0",
+              padding: "16px 18px",
+              borderRadius: V3_RADIUS.lg,
+              border: `1px solid ${V3.cyan}`,
+              background: V3.surface2,
+              fontSize: V3_TEXT.base,
+              color: V3.fg,
+              lineHeight: 1.6,
+            }}
+          >
+            <b style={{ fontWeight: 700 }}>New memberships are closed.</b> The prices below are
+            what CB Edge charged, kept here for reference only. If you want a GEX platform,{" "}
+            <a href={VOLTICK_URL} style={v3LinkStyle} className="pricing-link">Voltick</a>{" "}
+            covers 1,000+ tickers and CB Edge members get 75% off with code{" "}
+            <b style={{ color: V3.cyan, fontWeight: 700 }}>{VOLTICK_CODE}</b>.
+          </div>
+        )}
 
         <div className="pricing-grid" style={grid}>
           {/* Platform recap */}
@@ -174,12 +216,23 @@ export default async function PricingPage({
               {/* No coupon box. The price on the card is the price at checkout —
                   nothing to type, nothing to hunt for. */}
               <div style={noCodes}>
-                <b style={{ color: V3.fg, fontWeight: 700 }}>No codes, no sales.</b>{" "}
-                The price you see is the price you pay.
+                {SALES_CLOSED ? (
+                  <>
+                    <b style={{ color: V3.fg, fontWeight: 700 }}>Reference only.</b>{" "}
+                    These were the prices. Nothing is being sold at them.
+                  </>
+                ) : (
+                  <>
+                    <b style={{ color: V3.fg, fontWeight: 700 }}>No codes, no sales.</b>{" "}
+                    The price you see is the price you pay.
+                  </>
+                )}
               </div>
 
               <p style={{ fontSize: V3_TEXT.base, color: V3.fg, margin: "0 0 18px", lineHeight: 1.5 }}>
-                Everything on the platform. Cancel anytime from your billing portal.
+                {SALES_CLOSED
+                  ? "Already a member? Everything stays on until the end of your paid term, and nothing renews."
+                  : "Everything on the platform. Cancel anytime from your billing portal."}
               </p>
 
               {userId ? (

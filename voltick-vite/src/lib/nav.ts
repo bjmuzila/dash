@@ -146,6 +146,21 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
     ],
   },
   {
+    title: "Reference",
+    icon: "\ud83d\udcd0",
+    blurb:
+      "What the engine actually computes, written down. Transcribed from the source that runs, not from a description of it.",
+    items: [
+      {
+        label: "Formula reference",
+        path: "/formulas",
+        key: "Formulas",
+        note: "Every formula, constant and threshold CB Edge computes: greeks, the exposure grids, profile and initial balance, the detectors, the scoring tables.",
+        status: "live",
+      },
+    ],
+  },
+  {
     title: "Plumbing",
     icon: "🔌",
     blurb: "Proof that this subdomain reaches the CB Edge backend the way it is meant to.",

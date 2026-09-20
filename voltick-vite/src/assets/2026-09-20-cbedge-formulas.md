@@ -1,7 +1,6 @@
-# CB Edge — Formula Reference
+# CB Edge formula reference
 
-Every quantitative formula, constant and threshold used by the live app, extracted from source.
-Generated 2026-09-09.
+Every quantitative formula, constant and threshold the CB Edge engine computes, transcribed from source. First generated 2026-09-09.
 
 **Scope:** `lib/`, `lib/calculations/`, `server-v2/computation/`, `server-v2/_lib-*.cjs` and the
 recorder/engine scripts in `server-v2/`. Dead code (`Vanilla/`, root `*.html`, `server/`) is excluded.
@@ -16,7 +15,7 @@ recorder/engine scripts in `server-v2/`. Dead code (`Vanilla/`, root `*.html`, `
 | `K` / `strike` | Option strike |
 | `T` | Time to expiry, in years |
 | `σ` / `vol` / `IV` | Implied volatility (decimal, 1.00 = 100%) |
-| `r` | Risk-free rate — **default `0.045`** everywhere |
+| `r` | Risk-free rate · **default `0.045`** everywhere |
 | `OI` | Open interest (contracts) |
 | `100` | Contract multiplier (shares per contract) |
 | `N(x)` | Standard normal CDF |
@@ -27,8 +26,8 @@ recorder/engine scripts in `server-v2/`. Dead code (`Vanilla/`, root `*.html`, `
 **Sign conventions**
 
 - **OI-basis GEX:** calls always **positive**, puts always **negative** (`Math.abs(gamma)` applied first, then signed by side).
-- **Flow / dealer-inventory basis:** **both legs positive gamma** — the sign already lives in the signed contract count (`+` = dealer long, `−` = dealer short).
-- **Contract-count basis:** `posOf(oi, vol, mode)` — `mode="vol"` → `vol` only; `mode="net"` (default) → `oi + vol`.
+- **Flow / dealer-inventory basis:** **both legs positive gamma** · the sign already lives in the signed contract count (`+` = dealer long, `−` = dealer short).
+- **Contract-count basis:** `posOf(oi, vol, mode)` · `mode="vol"` → `vol` only; `mode="net"` (default) → `oi + vol`.
 
 **Two GEX scalings coexist in the codebase** (both are used, deliberately):
 
@@ -42,7 +41,7 @@ They are algebraically identical because `100 × 0.01 = 1`. Both express **dolla
 
 ## 1. Black-Scholes core
 
-**Source:** `server-v2/computation/utils.js` — `bsGreeks`, `bsPrice`, `impliedVol`, `normCdf`
+**Source:** `server-v2/computation/utils.js` · `bsGreeks`, `bsPrice`, `impliedVol`, `normCdf`
 
 ```
 d1    = ( ln(S/K) + (r + σ²/2)·T ) / ( σ·√T )
@@ -66,7 +65,7 @@ All greeks return `0` if `S ≤ 0 || K ≤ 0 || T ≤ 0 || σ ≤ 0`.
 φ(x)      = e^(−x²/2) / √(2π)
 N(x)      = 0.5 · ( 1 + erf( x/√2 ) )
 ```
-`erf` via Abramowitz–Stegun 7.1.26:
+`erf` via Abramowitz-Stegun 7.1.26:
 ```
 t = 1 / (1 + 0.3275911·|x|)
 y = 1 − ((((1.061405429·t − 1.453152027)·t + 1.421413741)·t − 0.284496736)·t + 0.254829592)·t·e^(−x²)
@@ -80,12 +79,12 @@ put  = K·e^(−rT)·N(−d2) − S·N(−d1)
 ```
 If `T ≤ 0 || σ ≤ 0` → intrinsic only (`max(S−K,0)` / `max(K−S,0)`).
 
-**Implied volatility** — `impliedVol`
-- Newton–Raphson: seed `σ = 0.20`, max **50** iterations, `σ ← σ − (bsPrice(σ) − price)/vega`, converge at `|diff| < 1e-4`; abort if `vega ≤ 1e-8` or `σ ∉ (0, 5]`.
+**Implied volatility** · `impliedVol`
+- Newton-Raphson: seed `σ = 0.20`, max **50** iterations, `σ ← σ − (bsPrice(σ) − price)/vega`, converge at `|diff| < 1e-4`; abort if `vega ≤ 1e-8` or `σ ∉ (0, 5]`.
 - Bisection fallback: `lo = 1e-3`, `hi = 5`, max **100** iterations, tol `1e-4`.
 - Returns `NaN` if `price < intrinsic` or any of `price, S, K, T ≤ 0`.
 
-**Client-side gamma only** — `lib/calculations/calculations.ts` → `bsGamma(S,K,vol,T)` uses `r = q = 0`:
+**Client-side gamma only** · `lib/calculations/calculations.ts` → `bsGamma(S,K,vol,T)` uses `r = q = 0`:
 ```
 d1    = ( ln(S/K) + 0.5·vol²·T ) / ( vol·√T )
 gamma = φ(d1) / ( S · vol · √T )
@@ -129,7 +128,7 @@ netVolGEX    =  callGamma·callVolume·S²  −  putGamma·putVolume·S²
 ```
 where `callPos/putPos = posOf(OI, volume, mode)`.
 
-**Option-chain grid variant** — `lib/calculations/optionChain.ts` → `parseExpiration` (explicit scaling):
+**Option-chain grid variant** · `lib/calculations/optionChain.ts` → `parseExpiration` (explicit scaling):
 ```
 cnt(side) = (dataMode === "vol-only" ? 0 : OI) + volume
 gex    = ( callGamma·callCnt − putGamma·putCnt ) · S² · 0.01 · 100
@@ -173,7 +172,7 @@ flowGEX     = flowCallGEX + flowPutGEX          ← both legs positive gamma
 
 ### Vanna / Charm exposure (VEX / CHEX)
 
-**Source:** `server-v2/computation/vex-chex.js` — `mult = 100·S`, `gexMult = S²`
+**Source:** `server-v2/computation/vex-chex.js` · `mult = 100·S`, `gexMult = S²`
 
 ```
 netVanna (vex)  = callVanna·callOI·mult  − putVanna·putOI·mult
@@ -186,7 +185,7 @@ legacy `totalCharmCall += −theta·contracts·mult`, `totalCharmPut += +theta·
 
 ### Gamma flip / zero-gamma
 
-**Server** — `findGexFlip(gexRows, spot, {nearest, maxDistancePct})`, basis `oiVolNet = netGEX + netVolGEX`:
+**Server** · `findGexFlip(gexRows, spot, {nearest, maxDistancePct})`, basis `oiVolNet = netGEX + netVolGEX`:
 ```
 walk strikes ascending, cum += oiVolNet
 crossing up  : prevCum < 0 && cum ≥ 0
@@ -197,21 +196,21 @@ band = maxDistancePct > 0 ? spot·maxDistancePct/100 : ∞
 → default (legacy) mode returns the FIRST negative→positive crossing
 ```
 
-**Client** — `findGEXFlip(chain, spot)`:
+**Client** · `findGEXFlip(chain, spot)`:
 ```
 zero = strikeA + (strikeB − strikeA) · ( |a| / (|a| + |b|) )
 rounded to 0.1; exact-zero rows snap to the strike; result must be > 0 else null
 → returns the crossing nearest spot
 ```
 
-**Dealer-gamma flip** — `dealer-inventory.js` → `dealerGammaFlip`:
+**Dealer-gamma flip** · `dealer-inventory.js` → `dealerGammaFlip`:
 ```
 t        = v0 / (v0 − v1)
 crossing = k0 + t·(k1 − k0)
 → crossing with the smallest |crossing − spot|; null if < 2 rows
 ```
 
-**Profile model flip** — `calculations.ts` → `computeGEXProfile`:
+**Profile model flip** · `calculations.ts` → `computeGEXProfile`:
 ```
 levels = linspace(0.8·spot, 1.2·spot, N = 60)
 ivOf(row) = (callIV + putIV)/2 if both > 0, else whichever is quoted   ← one IV per strike
@@ -223,7 +222,7 @@ max **24** iterations or bracket `< 0.05` pts; final rounded to 2 dp.
 
 ### Walls
 
-**Server** — `findCallWall` / `findPutWall`, metric selected by `basis`:
+**Server** · `findCallWall` / `findPutWall`, metric selected by `basis`:
 
 | basis | metric |
 |---|---|
@@ -241,7 +240,7 @@ exclude: one strike (usually CB) removed before selection so CB and wall can't c
 
 **Client** (`calculations.ts`, no dead zone): call wall = `argmax(callGEX)`; put wall = `argmax(|putGEX|)`.
 
-**Heat-level walls** — `lib/calculations/heatLevels.ts` → `columnWalls`:
+**Heat-level walls** · `lib/calculations/heatLevels.ts` → `columnWalls`:
 ```
 CB = strike with max |net|            (sign-blind)
 CW = strike with max  net  , excluding CB's strike   (null if none)
@@ -261,14 +260,14 @@ totalAbs           = Σ |netGEX + netVolGEX|
 normalizedGexPct   = |netGEX + netVolGEX| / totalAbs · 100
 ```
 
-**Multi-expiry ladder** — `computeGexRowsMultiExpiry`: additive fields summed per strike
+**Multi-expiry ladder** · `computeGexRowsMultiExpiry`: additive fields summed per strike
 (`callOI, putOI, callVolume, putVolume, callGEX, putGEX, netGEX, netVolGEX, netVolGexDir, flowGEX,
 flowCallGEX, flowPutGEX, netDEX, volNetDEX, netVanna, netVolVanna, chex, volChex`);
 per-contract fields taken from the **nearest-dated** expiry at that strike. `flowInventory` not accepted.
 
-**Display formatting** — `formatGEX`: `≥1e9 → $X.XXB`, `≥1e6 → $X.XXM`, else `$X.XXK`, sign-prefixed.
+**Display formatting** · `formatGEX`: `≥1e9 → $X.XXB`, `≥1e6 → $X.XXM`, else `$X.XXK`, sign-prefixed.
 
-**Strike densify** — `densifyChainRows(chain, step=5)`: fills `floor(min/step)·step … ceil(max/step)·step`.
+**Strike densify** · `densifyChainRows(chain, step=5)`: fills `floor(min/step)·step … ceil(max/step)·step`.
 
 ---
 
@@ -288,7 +287,7 @@ turnoverRatio(ΔOI, vol)  = min(1, |ΔOI| / vol)      (0 if vol ≤ 0)
 ```
 Taker buy ⇒ dealer short (negative); taker sell ⇒ dealer long (positive).
 
-**Position-change reconciliation** — `reconcilePositionChange(signed, oiDelta, mode)`,
+**Position-change reconciliation** · `reconcilePositionChange(signed, oiDelta, mode)`,
 `f = signed flow`, `d = |ΔOI|`, `dir = sign(f)`:
 
 | mode | dealerΔ |
@@ -319,7 +318,7 @@ coverage   = withGamma / n
 | `near` | Near | 1 | 7 |
 | `front` | Front | 8 | 30 |
 | `mid` | Mid | 31 | 90 |
-| `back` | Back | 91 | — |
+| `back` | Back | 91 | none |
 
 ```
 MEASURABLE_MAX_DTE = env DEALER_GAMMA_MEASURABLE_DTE || 7
@@ -375,9 +374,9 @@ UI scale: `{normal: 1, hot: 2, extreme: 4, provisionalMaxPct: 100}`.
 QUOTE_FRESH_MS = 2500
 
 mid = (bid + ask)/2
-inside spread (bid < price < ask)  — always trusted:
+inside spread (bid < price < ask)  · always trusted:
     price > mid → buy ; price < mid → sell ; price = mid → mid
-at/outside spread — only if quote age ≤ 2500 ms:
+at/outside spread · only if quote age ≤ 2500 ms:
     price ≥ ask → buy ; price ≤ bid → sell ; else mid
 otherwise tick rule: price > lastTrade → buy ; < → sell ; = → unknown
 ```
@@ -428,7 +427,7 @@ isBullish(o) = isCall ? isBought : !isBought
 delta       += (isBullish ? +1 : −1) · size · 100 · deltaMag(o)
 
 prem = callPrem + putPrem
-ratio(a,b) = a/b        → "X.XX×", or "—" if b ≤ 0
+ratio(a,b) = a/b        → "X.XX×", or "·" if b ≤ 0
 spotMovePct = (last − open)/open · 100
 net_e = bullPrem_e − bearPrem_e                             (per expiration)
 bar pct = round( |net_e| / max(1, max|net|) · 100 )
@@ -503,10 +502,10 @@ outcome: intrinsic = 0 → max_win ; either leg at full width → max_loss ;
 touched: weekLow ≤ put_short → put ; weekHigh ≥ call_short → call
 ```
 
-**Strike increments** — SPX 5 · NDX 10 · XSP 1 · ES* 5 · NQ* 10 · SPY/QQQ/IWM/SMH 1 ·
+**Strike increments** · SPX 5 · NDX 10 · XSP 1 · ES* 5 · NQ* 10 · SPY/QQQ/IWM/SMH 1 ·
 AAPL/AMD/AMZN/GOOGL 1 · META 5 · MSFT 5 · NVDA 1 · TSLA 5 · COIN 5 · HOOD 1 · NFLX 1 · PLTR 1 · **default 1**
 
-**Default wings (pts)** — SPX 25 · NDX 100 · XSP 5 · ES* 25 · NQ* 100 · SPY 5 · QQQ 5 · IWM 3 · SMH 5 ·
+**Default wings (pts)** · SPX 25 · NDX 100 · XSP 5 · ES* 25 · NQ* 100 · SPY 5 · QQQ 5 · IWM 3 · SMH 5 ·
 AAPL 5 · AMD 5 · AMZN 5 · GOOGL 5 · META 20 · MSFT 15 · NVDA 5 · TSLA 15 · COIN 20 · HOOD 5 · NFLX 3 ·
 PLTR 3 · **fallback `inc · 5`**
 
@@ -536,11 +535,11 @@ pct      = clamp( traveled/gapAbs · 100, 0, 100 )
 filled   = pct ≥ 100 − 1e-9
 ```
 Tracker: 5-minute aligned polling, RTH `[570, close)` where close = 780 (half day) or 960;
-25,000 ms startup probe delay; NYSE/Cboe holidays and 13:00 early closes hard-coded 2026–2027.
+25,000 ms startup probe delay; NYSE/Cboe holidays and 13:00 early closes hard-coded 2026-2027.
 
 ---
 
-## 6. Market profile — TPO, Value Area, structures
+## 6. Market profile · TPO, Value Area, structures
 
 **Source:** `lib/tpo.ts`, `lib/valueArea.ts`, `lib/tpo-forecast-compute.ts`
 
@@ -569,7 +568,7 @@ VAH = bins[hiI].price ;  VAL = bins[loI].price
 ```
 Identical algorithm applied to TPO counts, bar volume, and forecast density (`vaBand`).
 
-**Volume-profile binning** — `computeValueArea`:
+**Volume-profile binning** · `computeValueArea`:
 ```
 b0 = floorBin(low) ; b1 = floorBin(high)
 n  = max(1, round((b1−b0)/binSize) + 1)
@@ -640,7 +639,7 @@ confidence = clamp(0, 100, round( 100 · (1 − meanK / medAll) ))
 
 ### IB definition
 ```
-IB window   = 09:30–10:30 ET  (minutes 570–630, first two 30-min TPO periods, 12 × 5m bars)
+IB window   = 09:30-10:30 ET  (minutes 570-630, first two 30-min TPO periods, 12 × 5m bars)
 ibHigh/ibLow= max(high)/min(low) over that window
 ibRange     = ibHigh − ibLow
 ibMid       = (ibHigh + ibLow)/2
@@ -648,7 +647,7 @@ closeLoc    = (ibClose − ibLow) / ibRange           ∈ [0,1]
 closeZone   = ≥0.75 top25 · ≤0.25 bot25 · else mid50
 bias        = ibClose > ibMid ? "H" : ibClose < ibMid ? "L" : null
 first       = whichever of ibHigh/ibLow printed at the earlier bar index
-Inner ORB   = first 3 IB bars (09:30–09:45, min < 585)
+Inner ORB   = first 3 IB bars (09:30-09:45, min < 585)
 ES_TICK     = 0.25
 ```
 
@@ -700,9 +699,9 @@ Variant B: imp = |running − lvl| must exceed 0.25·width
 ```
 
 **Fail outcome** (priority order, `mfePts = rExt · width`)
-1. `recovered` — `mfePts > peakBeforeFail`
-2. `full_rotation` — `fadeOpp`
-3. `to_mid` — `fadeMid`
+1. `recovered` · `mfePts > peakBeforeFail`
+2. `full_rotation` · `fadeOpp`
+3. `to_mid` · `fadeMid`
 4. `chop`
 
 **Helpers:** `avg(a) = Σa/n` · `med(a) = sorted[floor(n/2)]` (lower-middle) · `rate(n,d) = 100·n/d`.
@@ -866,8 +865,8 @@ baseline = median( that "HH:MM" slot's volume over ≤ 10 prior sessions )   nee
            slot volume per date = MAX of recorded volumes (cumulative-candle safe)
 rvol     = baseline > 0 ? volume/baseline : 0
 
-churn  ⟺ rvol ≥ 1.8 AND bodyPct ≤ 0.3      (high effort, no result — absorption)
-thin   ⟺ rvol ≤ 0.6 AND bodyPct ≥ 0.7      (no effort, big result — unopposed)
+churn  ⟺ rvol ≥ 1.8 AND bodyPct ≤ 0.3      (high effort, no result · absorption)
+thin   ⟺ rvol ≤ 0.6 AND bodyPct ≥ 0.7      (no effort, big result · unopposed)
 normal   otherwise (includes rvol = 0, i.e. baseline unknown)
 ```
 Forming bars (`timestamp > formingBefore`) are skipped so a partial bar never reads as "thin".
@@ -982,7 +981,7 @@ ERL = the range's own extremes.
 
 Active ⟺ `startMin ≤ etMinutes(ts) < endMin` (wrap-aware for the Asian window).
 
-**Turtle Soup raid windows** — `ictPlays.ts` → `TURTLE_RAID_WINDOWS`
+**Turtle Soup raid windows** · `ictPlays.ts` → `TURTLE_RAID_WINDOWS`
 
 | id | label | start | end |
 |---|---|---|---|
@@ -1009,8 +1008,8 @@ Judas Swing   : opens = [120, 570] ET, 60-min window, ≥ 3 bars
 Breaker       : most recent OB with ob.ts < s.ts and ob.dir ≠ s.dir; retest bar overlaps the OB zone
 CISD          : minRun = 3 same-colored candles; flip ⟺ next.close crosses back through runOpen
 2022 Model    : sweep → MSS → FVG, each link within 10 · 300,000 ms = 50 minutes
-PO3 / AMD     : accumulation 20:00 ET (prior) – 02:00 ET ; manipulation 02:00–07:00 ;
-                distribution 09:30–16:00 ; distDir = last NY close vs (accHigh+accLow)/2
+PO3 / AMD     : accumulation 20:00 ET (prior) - 02:00 ET ; manipulation 02:00-07:00 ;
+                distribution 09:30-16:00 ; distDir = last NY close vs (accHigh+accLow)/2
 CRT           : second-to-last completed hourly bucket → hi/lo/eq; first bar to sweep either extreme
 ```
 
@@ -1220,7 +1219,7 @@ invalid= flip
 
 **Source:** `lib/failLevels.ts` → `scanLevel`, `detectTriggers`
 
-Reference levels: ON high/low, PDH/PDL, PWH/PWL. RTH 570–960 min ET.
+Reference levels: ON high/low, PDH/PDL, PWH/PWL. RTH 570-960 min ET.
 `attemptCap`: 2 for PWH/PWL, ∞ otherwise.
 
 | Constant | Value | Meaning |
@@ -1357,7 +1356,7 @@ both known, disagree → transition , conf = 0.35
 both known, agree    → sign(netGex) , conf = clamp( ramp(|d|, 0.25,0.55, 1.5,1.0), 0, 1 )
 ```
 
-**Wall quality** — `QUALITY_WEIGHTS = { dist: 0.30, size: 0.22, conc: 0.16, em: 0.14, stab: 0.12, conf: 0.06 }`
+**Wall quality** · `QUALITY_WEIGHTS = { dist: 0.30, size: 0.22, conc: 0.16, em: 0.14, stab: 0.12, conf: 0.06 }`
 ```
 sizeScore = clamp( log10(peak / median_live_side) / log10(20), 0, 1 )        needs ≥ 3 live values
 concScore : share = peak/(peak + left + right) ; clamp( (share − 1/3)/(2/3), 0, 1 )
@@ -1397,7 +1396,7 @@ flipQuality = clamp( 0.6·regime.conf + 0.4·distScore(flipDistPct), 0, 1 )     
 setup = 100 · weighted_mean(present parts) ; setup_grade = GRADE_BANDS(setup)
 ```
 
-**Post-close grading** (0–25 pts per component)
+**Post-close grading** (0-25 pts per component)
 
 | Regime | Outcome → points |
 |---|---|
@@ -1437,7 +1436,7 @@ neverGreen = !(max_pct > 0) → grade forced to F
 GRADE_BANDS: ≥85 A+ · ≥72 A · ≥58 B · ≥44 C · ≥28 D · else F ;  isGood = {A+, A, B}
 ```
 
-**Feature buckets** — `dte` 0/1/2-4/5-9/10+ · `slot` <600 / <690 / <810 / <900 / 15:00+ ·
+**Feature buckets** · `dte` 0/1/2-4/5-9/10+ · `slot` <600 / <690 / <810 / <900 / 15:00+ ·
 `entry` <1 / <2 / <5 / ≥5 · `otm%` <7 / <10 / <15 / ≥15 · `rank` 1..6+ · `nsamp` ≤2 / ≤5 / ≤11 / 12+ ·
 `gexopen` <50k / <250k / <1M / 1M+ · `pctopen` <50 / <100 / <200 / 200+ ·
 `chg` <500k / <1M / <3M / 3M+ · `z` <1 / <2 / <3 / 3+
@@ -1524,7 +1523,7 @@ wall glow             : blur1 = round(4 + wallGlow·12) px @ rgba(base, 0.30 + w
                         blur2 = round(1 + wallGlow·3)  px @ rgba(base, 0.55 + wallGlow·0.45)
 ```
 
-**Chain-grid heat tint** — `lib/calculations/optionChain.ts` → `metricBg`, `rankBg`
+**Chain-grid heat tint** · `lib/calculations/optionChain.ts` → `metricBg`, `rankBg`
 ```
 RANK_FLOOR_ALPHA: rank 1 = 0.90 · rank 2 = 0.45 · rank 3 = 0.25
 otherwise: ratio = min(|value|/maxValue, 1)
@@ -1533,7 +1532,7 @@ otherwise: ratio = min(|value|/maxValue, 1)
 color: value ≥ 0 → rgba(41,182,246,α)  ·  value < 0 → rgba(255,71,87,α)
 ```
 
-**GEX bubble overlay** — `lib/gexBubbleModel.ts` (`BUBBLES.*` defined in `slotStore.ts`)
+**GEX bubble overlay** · `lib/gexBubbleModel.ts` (`BUBBLES.*` defined in `slotStore.ts`)
 ```
 stride  = spacingPx > 0 ? max(1, ceil(BUBBLES.bucketPxPerDot / spacingPx)) : 1
 mins    = max(1, round(bucketMinutes · stride))
@@ -1550,7 +1549,7 @@ ratio   = windowMax > 0 ? min(1, |net|/windowMax) : 0        ← ONE shared deno
 base    = floorPx + ratio^BUBBLES.sizeCurve · (capPx − floorPx)
 radius  = isTop ? min(base·topBoost, topCapPx) : base
 
-fit: up to fitPasses shrink passes — room = Δy − gapPx ;
+fit: up to fitPasses shrink passes · room = Δy − gapPx ;
      if (rA + rB) > room: f = room > 0 ? room/(rA+rB) : 0 ; r ← max(minPx, r·f)
      still overlapping → x-jitter ±jitterPx, alternating
 
@@ -1567,23 +1566,23 @@ age        = BUBBLES.ageKeep + (1 − BUBBLES.ageKeep) · ( (bucketTs − firstT
 
 | Window | ET | Minutes of day |
 |---|---|---|
-| RTH | 09:30 – 16:00 | 570 – 960 |
-| Initial Balance | 09:30 – 10:30 | 570 – 630 |
-| Inner ORB | 09:30 – 09:45 | 570 – 585 |
+| RTH | 09:30 - 16:00 | 570 - 960 |
+| Initial Balance | 09:30 - 10:30 | 570 - 630 |
+| Inner ORB | 09:30 - 09:45 | 570 - 585 |
 | Contained-day cutoff | 14:00 | 840 |
 | Half-day close | 13:00 | 780 |
 | Time buckets | early ≤ 11:00 · midday ≤ 13:00 · else late | ≤ 660 · ≤ 780 |
 
 **SPX / Globex feed live window** (`isSpxFeedLive`)
 ```
-daily maintenance break : 16:00 – 18:00 ET (960 – 1080) — closed every day
+daily maintenance break : 16:00 - 18:00 ET (960 - 1080) · closed every day
 Saturday                : closed
 Sunday                  : open from 20:00 ET (≥ 1200)
 Friday                  : open until 16:00 ET (< 960), then closed for the weekend
-Mon–Thu                 : open except the maintenance break
+Mon-Thu                 : open except the maintenance break
 ```
 
-**US market holidays** (`isHoliday`) — fixed: Jan 1, Jul 4, Dec 25, each weekend-observed
+**US market holidays** (`isHoliday`) · fixed: Jan 1, Jul 4, Dec 25, each weekend-observed
 (Sat → preceding Fri, Sun → following Mon). Floating (`firstDay` = weekday of the 1st, 0 = Sun):
 ```
 MLK           = 3rd Monday Jan  : day = 15 + ((8 − firstDay) mod 7)
