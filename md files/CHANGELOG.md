@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-09-20 — scripts/stripe-stop-renewals.mjs: nobody is billed again, in one run
+
+The merger notice, /pricing, /sign-up and the announcement email all promise
+two things: every member keeps access to the last day of the term they paid
+for, and nobody is billed again. The site keeps the first on its own. The
+second lives in Stripe — a subscription left alone renews on its period-end
+date whatever the site says — and Stripe's dashboard has no bulk "cancel at
+period end", only one subscription at a time.
+
+New script sets `cancel_at_period_end: true` on every `active`, `trialing` and
+`past_due` subscription (past_due because a retry that succeeds renews the
+term). That is "don't renew", NOT "cancel": status stays paid until the period
+ends, access is gated on status, so access is untouched to the day, and at
+period end Stripe ends it with no invoice and the existing
+`customer.subscription.deleted` path moves them to /home. It never calls
+`subscriptions.cancel()`, and there is no flag that makes it.
+
+Dry run by default. `--only sub_...` does one first. Skips anything already
+ending (`cancel_at_period_end` or `cancel_at` set) before any API call, so
+re-running is safe and doubles as a backstop if a member re-enables renewal
+from the billing portal. Subscriptions on a schedule reject the flag — those
+are listed under NEEDS YOU, not skipped quietly. Prints LIVE/TEST first and
+refuses a key it cannot classify. Exits 1 if anything failed or needs a hand.
+
+Walked the webhook for what each update triggers: upsert keeps status (access
+unchanged), welcome email already claimed, Discord role kept, win-back refuses
+anything live. `recordChurn` DOES write a churn row for every one — so each
+update carries `cancellation_details.comment = 'voltick-merger'` to filter on;
+`feedback` is left alone because that field is the customer's own survey
+answer. Run inside the container:
+`docker compose exec -T dashboard node scripts/stripe-stop-renewals.mjs`.
+
 ## 2026-09-20 — Every Voltick click is counted
 
 While sales are closed, sending someone to Voltick is the only conversion the
