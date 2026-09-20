@@ -251,7 +251,7 @@ function buildTemplates(): Template[] {
     },
     {
       id: "voltick-merger",
-      label: "⚡ CB Edge is joining Voltick — merger announcement (FILL THE TRANSFER CODE)",
+      label: "⚡ CB Edge is joining Voltick — merger announcement, 75% off (TICK75)",
       subject: VOLTICK_MERGER_SUBJECT,
       html: voltickMergerEmail,
       text: voltickMergerText,

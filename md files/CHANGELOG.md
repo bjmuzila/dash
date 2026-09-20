@@ -1,5 +1,67 @@
 # Changelog
 
+## 2026-09-20 - Merger email now leads with "CB Edge is not closing. Sales are."
+
+The first draft buried the thing members actually care about under a bullet
+reading "CB Edge stays live." That is not enough. "Merger" reads as "shutting
+down" to a subscriber, and an unclear announcement gets paid for in refund
+requests, so the reassurance is now the spine of the email rather than a
+footnote.
+
+The message: CB Edge is NOT closing. Only SALES are switching off. Everyone
+keeps the term they paid for, in full, on the same platform, and a yearly member
+keeps all twelve months with not a single day taken off.
+
+It lands four times on purpose. A bold line directly under the hero, before the
+merger is even explained. A cyan callout card headed "CB Edge is not closing.
+Sales are." A five-bullet list that now starts with "CB Edge is not closing" and
+"Sales are what is ending" before it gets to billing. And a quote block on its
+own for the yearly case, because that is the member with the most money on the
+table and the most reason to panic.
+
+`SUBSCRIPTION_FACTS` is the new single source for those bullets, next to
+`VOLTICK_FACTS`, so HTML and plain text cannot drift apart. Edit there, never
+inline. The plain-text body carries the same four beats in the same order.
+
+Preheader rewritten to carry it into the inbox list: "CB Edge is not closing.
+Sales are switching off. You keep every day of the subscription you paid for, on
+the same platform, and there is 75% off Voltick if you want it." That is the
+line that decides whether a worried member opens calm or opens angry.
+
+Files: `lib/emails/voltick-merger.ts`.
+Previews regenerated: `generated/2026-09-18-voltick-merger-email.html` and
+`generated/2026-09-18-voltick-merger-email-placeholder.html`.
+
+## 2026-09-19 - Merger email: TICK75 is baked in, 75% off for CB Edge members
+
+The transfer offer in `lib/emails/voltick-merger.ts` is no longer an empty slot.
+`DEFAULT_TRANSFER_CODE` is **TICK75** and the line under it reads "75% off your
+Voltick membership, for CB Edge members only." The template now renders
+send-ready with no arguments, which is how it will actually be used from the
+composer.
+
+The TODO card is kept but moved behind a deliberate gesture: the defaults are
+applied with `??`, not `||`, so passing `transferCode: ""` blanks the offer and
+brings the dashed amber "TRANSFER OFFER GOES HERE" card back. `undefined` gets
+TICK75. That keeps the guard for a genuinely unfinished draft without making the
+finished case need arguments.
+
+TICK75 has to exist on the Voltick side before this sends. The email is the
+discount the checkout honours, so the two move together or not at all.
+
+Picker label updated to "CB Edge is joining Voltick - merger announcement, 75%
+off (TICK75)" so the offer is readable without opening the template.
+
+Also dropped the "instead of one splitting my attention" line from the closing
+push, in both the HTML and the plain-text body. It now reads "everything I would
+have built next is going into Voltick instead," which says the same thing
+forward rather than apologetically.
+
+Files: `lib/emails/voltick-merger.ts`,
+`app/api/admin/email-templates/route.ts` (label only).
+Previews regenerated: `generated/2026-09-18-voltick-merger-email.html` (TICK75)
+and `generated/2026-09-18-voltick-merger-email-placeholder.html` (TODO card).
+
 ## 2026-09-18 - v3: the camera's Stats row works from anywhere, and the menu got short again
 
 Yesterday's atlas listed every board card on every page, which fixed the
