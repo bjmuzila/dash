@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-09-20 — The landing page becomes the merger notice
+
+Sales were already closed behind `SALES_CLOSED` (the entry below), but `/` was
+still LandingClient — the full sales page, selling a $50/mo membership that
+cannot be bought. A stranger read four sections of pitch and hit a dead button;
+a member arrived at a page that had not noticed anything had happened.
+
+`components/landing/MergerClient.tsx` is new and is what a signed-out visitor
+now gets while the flag is on. Four things in order: CB Edge merged with
+Voltick, said in the first line; a way to Voltick; the promise that no current
+member loses anything; sign in. No live data, no free tools, no pricing, no
+feature marketing — all of it sold the thing that is no longer for sale.
+Structure and tokens are LandingClient's: the `shell` + stacked strong-card
+plates, the two-column hero (Voltick's card takes the slot LiveLevelPanel held),
+the four-cell fact strip, PublicNav, the dotted legal footer. No hex in the file
+and no text opacity. Voltick's own `#2f6bff` is NOT typed here — `V3.accent`
+(#5b8cff) is v3's own UI blue, sits a few degrees off it and is already a token,
+so Voltick's objects read as Voltick's without a literal entering the public
+tree. If the brands ever have to match exactly that is a named token in
+`v3Theme.ts`, not an inline value.
+
+`app/page.tsx` picks between them on `SALES_CLOSED` and LandingClient stays
+imported and built — reopening sales is one env var, and a deleted sales page
+would make that flag a lie. Its metadata moves too: TITLE/DESC were the $50/mo
+pitch, which is what Google and every link preview showed. The signed-in
+redirect is deliberately unchanged: a member still in term lands on their
+dashboard, not on an announcement about a product they are using, and an
+out-of-term member is caught one hop later by middleware's paid gate.
+
+`app/api/auth/signup/route.ts` now refuses with 403 when `SALES_CLOSED`, as the
+FIRST statement in the handler — ahead of the rate limiter, the body parse and
+Turnstile. The sign-up page already stopped rendering the form and checkout
+already refused, but this route is public in middleware's allow-list, so a POST
+straight at it still created a real row and issued a real session: an account
+with nothing to buy. Sign-in, forgot-password and reset-password are untouched.
+
+`lib/salesClosed.ts`: `VOLTICK_URL` moves from `voltick.cbedge.net` to
+`voltick.io`. The subdomain on our own box sits behind a Cloudflare Access
+one-time-PIN policy on an email allowlist, so every public visitor sent there
+hit a login prompt for an account they do not have. That one string is what the
+merger notice, /pricing, /sign-up and the announcement email all point at.
+
+`app/sitemap.ts` drops `/pricing` while the flag is on. A URL in the sitemap is
+a promise a crawler gets something worth indexing, and at priority 0.9 a page
+whose only message is "you cannot buy this" was the second-strongest signal on
+the site.
+
+Not done here, and still outside the repo: Stripe cancel-at-period-end on live
+subscriptions, and public sign-ups off in Supabase Auth.
+
 ## 2026-09-20 - Sales are closed across cbedge.net, behind one switch
 
 CB Edge is joining Voltick, so the funnel is shut: no new memberships, no
@@ -24266,3 +24316,22 @@ in the map, not in a later `.filter`, which does not narrow) and
 literal fallback, so `pref(k,'0') === '1'` was a comparison with no overlap —
 widened to `pref<string>`. Verified against a stub project carrying the exact
 same compiler flags: 0 errors in `src/voltboard/`.
+
+## 2026-09-20 — docs: a complete GEX Candles reference
+
+`md files/GEX-CANDLES.md` — everything about the v3 home-board `gex-candles`
+card, written from the source in `cbedge-v3/src/board/gexCandles/` (7,044 lines
+across ten files). Covers the file map and the three mount points (board,
+Replay hub, `/v3/m/spx`); the five-route data path and why the expiry is the one
+unavoidable waterfall; `candles.ts` sanitize/rollup/session rules; the GEX
+history's two URL shapes and why a rewound session needs `minutes=0` +
+`expiryFallback=1`; the ES−SPX basis and its live fallback; the bubble layer in
+full (the seven rules, why it is stamped not stroked, the bucket/stride split,
+the per-rung size profiles and every tuned constant with its history, windowMax
+under replay, bar-anchored placement, the global overlap fit, the gold-leader
+colour rules); the rail's absolute positioning and thinning; CORE/CW/PW and the
+EM band including chip collision; the chart shell (saneBar, `synth`, framing,
+the rAF signature, visibility, axis lock); settings and their v3–v7 blob
+versions; symbols, instances, phone and copies; the folded toolbar; replay and
+its retention constants; status messages; perf notes; and a 16-item gotcha list.
+Docs only — no code, no backend, no proxy change.

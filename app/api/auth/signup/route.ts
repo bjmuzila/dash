@@ -6,6 +6,7 @@ import { hashPassword } from "@/lib/auth/password";
 import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC, sessionCookieOptions } from "@/lib/auth/session";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { rateLimit, clientIp } from "@/lib/rateLimit";
+import { SALES_CLOSED, SALES_CLOSED_API_MESSAGE } from "@/lib/salesClosed";
 
 // Enforced email/password sign-up against our own users table (replaces
 // Supabase's signUp). Same Turnstile + throttle protections as before.
@@ -18,6 +19,26 @@ export const runtime = "nodejs";
 const RATE = { windowMs: 60 * 60_000, max: 5, blockMs: 60 * 60_000 };
 
 export async function POST(req: NextRequest) {
+  // ── Sales closed: no new accounts, before anything else ──────────────────
+  //
+  // The sign-up PAGE already stops rendering the form while SALES_CLOSED is
+  // on, and app/api/stripe/checkout refuses to sell. This route was the hole
+  // between them: it is public in middleware.ts's allow-list, so a POST
+  // straight at it still created a real row and issued a real session — an
+  // account with nothing to buy, which is a dead row in the users table and a
+  // person who believes they signed up for something.
+  //
+  // FIRST statement in the handler on purpose: ahead of the rate limiter, the
+  // body parse and the Turnstile call, so a closed door costs one comparison
+  // and never touches the database or a third party.
+  //
+  // 403, not 404: the route exists and the refusal is deliberate, and the
+  // client shows `error` verbatim. Sign-IN, forgot-password and reset-password
+  // are untouched — see the header of lib/salesClosed.ts.
+  if (SALES_CLOSED) {
+    return NextResponse.json({ error: SALES_CLOSED_API_MESSAGE }, { status: 403 });
+  }
+
   const ip = clientIp(req.headers);
 
   const rl = rateLimit(`signup:${ip}`, RATE);

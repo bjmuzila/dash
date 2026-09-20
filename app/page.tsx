@@ -3,17 +3,27 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { getServerUserId } from "@/lib/supabase/server";
 import LandingClient from "@/components/landing/LandingClient";
+import MergerClient from "@/components/landing/MergerClient";
+import { SALES_CLOSED } from "@/lib/salesClosed";
 
 export const dynamic = "force-dynamic";
 
 // The landing page's own description + canonical. Without these it inherited
 // the root layout's tagline, and Google had no canonical for "/".
-const TITLE = "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels";
-const DESC =
-  "Live SPX gamma flip, Core, call and put walls computed off the options chain every 15 seconds — " +
-  "shown free, no account. Every level auto-graded in public, hits and misses. $50/mo, cancel anytime.";
-// Nested metadata objects REPLACE the root layout's, they do not merge — so
-// openGraph is spelled out in full here (siteName included).
+//
+// TWO SETS, picked by SALES_CLOSED (lib/salesClosed.ts). The sales copy below
+// promises a $50/mo membership that cannot be bought while the flag is on, and
+// that is the string Google and every link preview show — so it has to move
+// with the page, not stay behind as the site's own description of itself.
+const TITLE = SALES_CLOSED
+  ? "CB Edge has merged with Voltick"
+  : "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels";
+
+const DESC = SALES_CLOSED
+  ? "CB Edge is joining Voltick. New memberships are closed; the platform stays up and every current member keeps full access to the end of their paid term. Members sign in as usual."
+  : "Live SPX gamma flip, Core, call and put walls computed off the options chain every 15 seconds — " +
+    "shown free, no account. Every level auto-graded in public, hits and misses. $50/mo, cancel anytime.";
+
 export const metadata: Metadata = {
   title: TITLE,
   description: DESC,
@@ -53,18 +63,22 @@ const PHONE_UA = /iPhone|iPod|Android.*Mobile|Windows Phone|IEMobile|BlackBerry|
 // mounted, which is a frame of the wrong layout and a board's worth of chunks
 // nobody asked for.
 //
-// UNPAID signed-in users are not special-cased here. `/v3` is a normal paid
-// route, so middleware.ts's paid gate catches them one hop later and sends them
-// to `/home`, which is where the delayed-data dashboard lives. Repeating that
-// rule here would be a second copy of the paywall to keep in sync.
+// THE SIGNED-IN REDIRECT IS UNCHANGED BY THE MERGER. A member who is still in
+// term must land on their dashboard, not on an announcement about a product
+// they are in the middle of using. `/v3` is a normal paid route, so the paid
+// gate in middleware.ts catches an OUT-OF-TERM member one hop later and sends
+// them to `/home` — which is the correct destination for them and the reason
+// this function does not special-case them here.
 //
-// Signed-OUT phone visitors still get LandingClient. That page is the sales
-// page; sending a prospect into an app they have not bought is not a shortcut.
+// Signed-OUT visitors get the merger notice while sales are closed
+// (lib/salesClosed.ts), and LandingClient — the sales page — when they are not.
+// LandingClient is deliberately still imported and still built: reopening sales
+// is one env var, and a deleted sales page would make that flag a lie.
 export default async function RootPage() {
   const userId = await getServerUserId();
   if (userId) {
     const ua = (await headers()).get("user-agent") ?? "";
     redirect(PHONE_UA.test(ua) ? "/v3/m/gex" : "/v3");
   }
-  return <LandingClient />;
+  return SALES_CLOSED ? <MergerClient /> : <LandingClient />;
 }

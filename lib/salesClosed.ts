@@ -41,7 +41,13 @@ export const SALES_CLOSED_BODY =
   "CB Edge is not shutting down. Only sales are. The platform stays up and every current member keeps everything they paid for, to the last day of their term. Yearly members keep all twelve months.";
 
 /** Where a visitor who still wants a GEX platform should go instead. */
-export const VOLTICK_URL = "https://voltick.cbedge.net";
+// voltick.io, not voltick.cbedge.net (2026-09-20). The subdomain on our own
+// box sits behind a Cloudflare Access one-time-PIN policy on an email
+// allowlist, so every public visitor sent there hit a login prompt for an
+// account they do not have. This is the address the merger notice, the
+// pricing page, the sign-up page and the announcement email all point at,
+// so it is the ONE string to change if that ever moves again.
+export const VOLTICK_URL = "https://voltick.io";
 export const VOLTICK_CODE = "TICK75";
 export const VOLTICK_PITCH = `Voltick covers 1,000+ tickers. CB Edge members get 75% off with code ${VOLTICK_CODE}.`;
 

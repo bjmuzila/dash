@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { EXPLORE_SLUGS } from "@/components/explore/exploreContent";
+import { SALES_CLOSED } from "@/lib/salesClosed";
 
 // /sitemap.xml — the public site only. Added 2026-09-10: there was none, and
 // the URL 307'd to the landing page (see the txt|xml note on middleware.ts's
@@ -15,7 +16,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const url = (p: string) => `${SITE}${p}`;
   return [
     { url: url("/"), lastModified: now, changeFrequency: "daily", priority: 1 },
-    { url: url("/pricing"), lastModified: now, changeFrequency: "weekly", priority: 0.9 },
+    // /pricing drops out while sales are closed (lib/salesClosed.ts). A URL
+    // in here is a promise a crawler gets something worth indexing; a page
+    // whose only message is "you cannot buy this" is not that, and at
+    // priority 0.9 it was the second-strongest signal on the whole site.
+    ...(SALES_CLOSED
+      ? []
+      : [{ url: url("/pricing"), lastModified: now, changeFrequency: "weekly" as const, priority: 0.9 }]),
     { url: url("/explore/seasonality"), lastModified: now, changeFrequency: "monthly", priority: 0.8 },
     ...EXPLORE_SLUGS.map((slug) => ({
       url: url(`/explore/${slug}`),
