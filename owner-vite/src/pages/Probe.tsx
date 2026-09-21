@@ -879,7 +879,7 @@ export default function Probe() {
                         {expired && <span className="op-badge exp">Expired</span>}
                         <span className="op-chev">{isOpen ? "▾" : "▸"}</span>
                       </div>
-                      <button type="button" className="op-x" title="Remove" onClick={(e) => { e.stopPropagation(); remove(r.id); }}>×</button>
+                      <button type="button" className="op-x" title="Remove" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Delete ${r.ticker} ${r.strike % 1 ? r.strike : Math.round(r.strike)}${r.side} ${fmtExp(r.expiration)}?\n\nThis permanently removes the probe and its price history.`)) remove(r.id); }}>×</button>
                     </div>
                     <div className="op-rowsub">{fmtExp(r.expiration)}{r.note ? ` · ${r.note}` : ""}</div>
                     <div className="op-bigrow">

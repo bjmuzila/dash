@@ -24422,3 +24422,7 @@ the rAF signature, visibility, axis lock); settings and their v3–v7 blob
 versions; symbols, instances, phone and copies; the folded toolbar; replay and
 its retention constants; status messages; perf notes; and a 16-item gotcha list.
 Docs only — no code, no backend, no proxy change.
+
+
+## 2026-09-21 — owner Probe: confirm before delete
+- `owner-vite/src/pages/Probe.tsx`: the × Remove button now asks for confirmation (names the contract, warns it permanently deletes the probe + its price history) before calling `/api/watch` remove. Delete is a hard `DELETE FROM watch_options` that cascades `watch_snapshots`, so there is no undo.
