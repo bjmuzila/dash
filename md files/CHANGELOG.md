@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-21 — Whale Archive layout: prints capped, drift beside tracked
+
+Prints card is now a fixed ~20-row height (`h-[612px]`) that scrolls inside,
+instead of growing to the rail. Net Drift moved from under the tiles to a
+bottom row, left half, with Tracked contracts on the right half (`xl:grid-cols-2`,
+stacked below xl).
+
+Files: `cbedge-v3/src/pages/Whales.tsx`.
+
 ## 2026-09-21 — Net Drift spot overlay: SPY/QQQ stop zig-zagging
 
 SPY/QQQ option prints on the Trade fallback path were stamped with the SPX spot
@@ -24458,3 +24467,7 @@ Docs only — no code, no backend, no proxy change.
 
 ## 2026-09-21 — owner Probe: confirm before delete
 - `owner-vite/src/pages/Probe.tsx`: the × Remove button now asks for confirmation (names the contract, warns it permanently deletes the probe + its price history) before calling `/api/watch` remove. Delete is a hard `DELETE FROM watch_options` that cascades `watch_snapshots`, so there is no undo.
+
+
+## 2026-09-21 — Contract probe: entry marker on the price line
+- `cbedge-v3/src/board/topFlow/ContractProbe.tsx` (Whales page probe): the ENTRY dot now sits on the blue mark line at the print's bar (`y(bars[entryI].close)`) instead of on the dashed entry rung. Label still reads the price paid; the dashed rung is unchanged.

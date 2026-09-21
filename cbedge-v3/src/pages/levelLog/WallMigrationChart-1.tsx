@@ -888,7 +888,7 @@ export function WallMigrationChart({
               <span
                 key={`tick-${t}`}
                 className="tabular absolute font-mono text-2xs"
-                style={{ left: 8, top: yPct(t), transform: 'translateY(-50%)', color: T.faint }}
+                style={{ left: 8, top: yPct(t), transform: 'translateY(-50%)', color: T.faint, opacity: 0.6 }}
               >
                 {wallStrike(t)}
               </span>

@@ -711,7 +711,10 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
         // could not agree with itself (2026-09-18). The gap between the dot and
         // the line at that minute is now the information: it is the edge the
         // fill got, or gave up, against the mark.
-        const ey = y(entry)
+        // ON THE PRICE LINE (2026-09-21). The marker rides the blue mark line at
+        // the print's bar so it reads as a point on the chart; the dashed rung
+        // still carries the price paid, and the label still reads that price.
+        const ey = y(bars[entryI]!.close)
         const flip = ex > PADL + (W - PADL - PADR) * 0.8
         const lowHalf = ey > PADT + priceH * 0.66
         return (
