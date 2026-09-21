@@ -66,6 +66,11 @@ export const MOBILE_TABS: MobileTab[] = [
   // src/shell/AlertsFeed.tsx and src/shell/alertTypes.ts, so only the LAYOUT is
   // phone-side; nothing about what fires or how a row reads is duplicated.
   { id: 'alerts', path: '/m/alerts', label: 'Alert', title: 'Signal Alerts', icon: '🔔' },
+  // The $1M+ archive (2026-09-21). NOT a second page: it is pages/Whales.tsx
+  // rendered with `phone`, which swaps the arrangement (filter sheet, two-line
+  // rows, sub-tabs, probe as a sheet) and keeps the one fetch, the saved
+  // filters and the tracked store. See src/mobile/pages/MWhales.tsx.
+  { id: 'whales', path: '/m/whales', label: 'Whale', title: 'Whale Archive', icon: '🐋' },
 ]
 
 export const MOBILE_ROOT = '/m'
@@ -81,6 +86,7 @@ export const DESKTOP_TO_MOBILE: Record<string, string> = {
   '/': '/m/gex',
   '/traders-dashboard': '/m/gex',
   '/em': '/m/em',
+  '/whales': '/m/whales',
 }
 
 /** Phone route → the desktop page it stands in for (the "Desktop site" action). */
@@ -93,6 +99,7 @@ export const MOBILE_TO_DESKTOP: Record<string, string> = {
   // No desktop page of its own — the feed lives in the toolbar, which is on
   // every desktop route, so the board is the honest landing.
   '/m/alerts': '/',
+  '/m/whales': '/whales',
 }
 
 export function isMobilePath(pathname: string | null | undefined): boolean {

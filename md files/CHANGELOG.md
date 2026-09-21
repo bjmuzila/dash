@@ -24471,3 +24471,10 @@ Docs only — no code, no backend, no proxy change.
 
 ## 2026-09-21 — Contract probe: entry marker on the price line
 - `cbedge-v3/src/board/topFlow/ContractProbe.tsx` (Whales page probe): the ENTRY dot now sits on the blue mark line at the print's bar (`y(bars[entryI].close)`) instead of on the dashed entry rung. Label still reads the price paid; the dashed rung is unchanged.
+
+
+## 2026-09-21 — Whales on the phone (/v3/m/whales)
+- New 7th phone tab 🐋 "Whale" → `/m/whales` (`mobile/mobileNav.ts`, `App.tsx`, new `mobile/pages/MWhales.tsx`). `/whales` added to `DESKTOP_TO_MOBILE`; "Desktop site" hold goes back to `/whales`.
+- `pages/Whales.tsx` takes a `phone` prop (passed by MWhales, not useIsPhone, so the desktop opt-out still works). Phone layout: range/ticker/FILTERS/sort strip; FLOOR·DTE·C/P·FILL·STRIKE·unreadable in a bottom sheet with a non-default count; 3 tiles; PRINTS·SIZE·LOOKUP·TRACKED·DRIFT sub-tabs; two-line print rows with track star; tapped print opens ContractProbe as a full-height sheet with a Track button. Repeat-strike taps jump to LOOKUP.
+- Lookup / size / buckets / repeats / error JSX hoisted into consts so desktop and phone render the same markup. Desktop layout unchanged. No backend, no proxy, no v2 change.
+- `cbedge-v3/AGENTS.md` phone table gains the `/m/whales` row.

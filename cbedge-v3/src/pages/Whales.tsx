@@ -202,6 +202,44 @@ const fmtDayHeader = (iso: string) => {
   return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
+type PhoneTab = 'prints' | 'size' | 'lookup' | 'tracked' | 'drift'
+const PHONE_TABS: Array<{ key: PhoneTab; label: string }> = [
+  { key: 'prints', label: 'PRINTS' },
+  { key: 'size', label: 'SIZE' },
+  { key: 'lookup', label: 'LOOKUP' },
+  { key: 'tracked', label: 'TRACKED' },
+  { key: 'drift', label: 'DRIFT' },
+]
+
+/** Full-width segmented row for the phone filter sheet — thumb-sized, labelled. */
+function PhoneSeg({ label, options, value, onChange }: {
+  label: string
+  options: Array<{ label: string; value: string }>
+  value: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <div className="mb-3">
+      <div className="mb-1.5 text-3xs font-bold uppercase tracking-[0.1em] text-faint">{label}</div>
+      <div className="flex overflow-hidden rounded-sm border border-line">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => onChange(o.value)}
+            className={[
+              'flex-1 py-2 text-xs font-bold tracking-[0.04em]',
+              o.value === value ? 'bg-accent/15 text-accent' : 'text-faint',
+            ].join(' ')}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function Tile({ k, v, sub, ink }: { k: string; v: string; sub?: string; ink?: string }) {
   return (
     <div className="rounded-md border border-line bg-surface px-3 py-2.5">
@@ -229,7 +267,7 @@ function Card({ title, note, className, children }: {
   )
 }
 
-export default function Whales() {
+export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   // Lazy initialiser, not a useEffect that overwrites afterwards: reading
   // storage on first render means the first fetch already goes out with the
   // saved filters, instead of one request at the defaults and a second one a
@@ -252,6 +290,10 @@ export default function Whales() {
   // chose, which is what makes the day readable AS PART of it.
   const [day, setDay] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Phone layout only (see the PHONE LAYOUT note above the return). Declared
+  // unconditionally — hooks cannot sit behind the `phone` branch.
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>('prints')
+  const [filtersOpen, setFiltersOpen] = useState(false)
 
   // ── CONTRACT LOOKUP ────────────────────────────────────────────────────────
   // The archive answers "what printed big"; this answers "what did THIS contract
@@ -438,6 +480,12 @@ export default function Whales() {
     })
   }
 
+  // On the phone the lookup lives on its own tab, so a repeat strike tapped on
+  // SIZE has to take you there or the contract loads somewhere you cannot see.
+  useEffect(() => {
+    if (phone && lookup) setPhoneTab('lookup')
+  }, [phone, lookup])
+
   const s = d?.summary
   // Only prints that carry a side land in a directional bucket, so the
   // denominator is those two and not `total` — see the tile note below.
@@ -452,6 +500,619 @@ export default function Whales() {
     () => BUCKET_ORDER.map((b) => (d?.buckets ?? []).find((x) => x.bucket === b) ?? { bucket: b, n: 0, total: 0 }),
     [d],
   )
+
+
+  // ── Shared sections ─────────────────────────────────────────────────────────
+  // Hoisted out of the desktop return so the phone layout renders the SAME
+  // JSX rather than a copy that drifts. Desktop placement is unchanged.
+  const errorBanner = (
+        <div className="rounded-md border border-warn/40 bg-warn/5 px-3 py-2 text-sm text-warn">
+          {d?.error
+            ? readableError(d.error)
+            : `Could not load the whale archive — ${readableError(q.error)}.`}
+        </div>
+  )
+  const lookupCard = (
+    <>
+          {/* ── contract lookup ──────────────────────────────────────────────
+              Four fields and the same probe the table opens. The expiry is the
+              themed DatePicker, never a native <input type="date">: that widget
+              renders the OS calendar — a white Chrome popup on Windows — which
+              inside this rail reads as a bug (see DatePicker's own note).
+          ──────────────────────────────────────────────────────────────────── */}
+          <Card title="Contract lookup" note="any strike, print or not">
+            <div className="flex flex-col gap-2 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <input
+                  value={lkTicker}
+                  onChange={(e) => setLkTicker(e.target.value.toUpperCase().slice(0, 12))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                  placeholder="TICKER"
+                  aria-label="Underlying"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs uppercase text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                />
+                <input
+                  value={lkStrike}
+                  onChange={(e) => setLkStrike(e.target.value.replace(/[^\d.]/g, '').slice(0, 9))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                  placeholder="STRIKE"
+                  inputMode="decimal"
+                  aria-label="Strike"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <DatePicker
+                  value={lkExpiry}
+                  onChange={setLkExpiry}
+                  size="sm"
+                  placeholder="EXPIRY"
+                  title="Contract expiry"
+                  // The picker's `sm` trigger is content-width by design (it is
+                  // a toolbar chip everywhere else). Here it is a FIELD, sitting
+                  // under two full-width inputs, so the trigger is stretched to
+                  // the wrapper rather than left as a pill floating in a gap.
+                  className="flex-1 [&>button]:w-full [&>button]:py-1 [&>button]:text-left"
+                />
+                <SegGroup<'C' | 'P'>
+                  title="Calls or puts"
+                  options={[{ label: 'CALL', value: 'C' }, { label: 'PUT', value: 'P' }]}
+                  value={lkType}
+                  onChange={setLkType}
+                />
+              </div>
+
+              {/* Both optional. Size alone gives POSITION on the hover box; size
+                  and cost together give OPEN P/L and the entry rung. */}
+              <div className="flex items-center gap-2">
+                <input
+                  value={lkSize}
+                  onChange={(e) => setLkSize(e.target.value.replace(/[^\d]/g, '').slice(0, 7))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                  placeholder="SIZE (opt)"
+                  inputMode="numeric"
+                  aria-label="Contracts held"
+                  title="Contracts — turns on POSITION in the hover readout"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                />
+                <input
+                  value={lkEntry}
+                  onChange={(e) => setLkEntry(e.target.value.replace(/[^\d.]/g, '').slice(0, 8))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                  placeholder="COST (opt)"
+                  inputMode="decimal"
+                  aria-label="Cost basis"
+                  title="What you paid per contract — turns on the entry rung and OPEN P/L"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={openLookup}
+                  disabled={!lkReady}
+                  title={lkReady ? 'Draw this contract' : 'Needs a ticker, a strike and an expiry'}
+                  className={[
+                    'flex-1 rounded-sm border px-2 py-1 text-2xs font-bold uppercase tracking-[0.1em] transition-colors',
+                    lkReady
+                      ? 'border-accent bg-accent/10 text-accent hover:bg-accent/20'
+                      : 'cursor-not-allowed border-line text-faint opacity-50',
+                  ].join(' ')}
+                >
+                  Look up
+                </button>
+                {/* Tracks what the FIELDS say, not what the panel is showing —
+                    so a contract can be tracked without drawing it first, and
+                    an edited strike tracks the strike you just typed. Size and
+                    cost ride along when they are filled: they are what turns a
+                    watch into a position the card can price. */}
+                {lkReady && (() => {
+                  const t = lkTicker.trim().toUpperCase()
+                  const k = `${t}|${lkStrikeNum}|${lkType}|${lkExpiry}`
+                  const sizeN = Number(lkSize)
+                  const entryN = Number(lkEntry)
+                  return (
+                    <TrackButton
+                      tracked={trackedIds.has(k)}
+                      busy={busyKey === k}
+                      onClick={() => void toggleTrack({
+                        id: `lookup-track:${k}`,
+                        ts: Date.now(),
+                        osi: null,
+                        underlying: t,
+                        type: lkType,
+                        strike: lkStrikeNum,
+                        expiry: lkExpiry,
+                        dte: null,
+                        size: Number.isFinite(sizeN) && sizeN > 0 ? Math.round(sizeN) : null,
+                        price: Number.isFinite(entryN) && entryN > 0 ? entryN : null,
+                        premium: 0,
+                        spot: null,
+                        side: null, action: null, sideReason: null,
+                        bid: null, ask: null, quoteAgeMs: null, vol: null, oi: null,
+                        sessionDate: etYmd(new Date()),
+                      }, 'lookup')}
+                    />
+                  )
+                })()}
+              </div>
+            </div>
+
+            {lookup ? (
+              <div className="flex min-h-[360px] flex-col border-t border-line">
+                <ContractProbe key={lookup.id} row={lookup} onClose={() => setLookup(null)} entryAt={null} />
+              </div>
+            ) : (
+              <div className="border-t border-line px-3 py-2 text-2xs leading-relaxed text-faint">
+                Any contract, whether or not a whale ever touched it. Add a size
+                and a cost and the hover readout carries what the position is
+                worth and what it is up.
+              </div>
+            )}
+          </Card>
+    </>
+  )
+  const sizeCard = (
+    <>
+          {/* ── WHERE THE SIZE WENT: TWO RANKINGS, NOT ONE ────────────────────
+              One list ranked by TOTAL with a split bar made the card answer
+              "who printed the most", and left "who is the biggest bullish bet
+              and who is the biggest bearish bet" to be eyeballed off the ratio
+              of two colours in a seven-pixel bar. Those are the two questions
+              actually being asked of it, so they get a column each, sorted on
+              their own side.
+
+              The two columns are NOT the same tickers in the same order, and
+              that is the point — a name can top one and be absent from the
+              other. Each bar is scaled to the biggest value in ITS OWN column,
+              so within a column the lengths compare; across columns they do
+              not, which is why the dollar figure is always on the row.
+
+              Both columns draw from the same server list (the top tickers by
+              total premium for the range), so a name that never cracks that
+              list cannot appear here even if it leads one side. Widening it is
+              a `tickers` limit change on /api/lse/whales, not a UI change.
+          ──────────────────────────────────────────────────────────────────── */}
+          <Card title="Where the size went" note={span.label}>
+            <div className="grid grid-cols-2 gap-px bg-line">
+              {([
+                { key: 'bull' as const, label: 'Bullish', ink: 'text-up', bar: 'bg-up' },
+                { key: 'bear' as const, label: 'Bearish', ink: 'text-down', bar: 'bg-down' },
+              ]).map((side) => {
+                const list = (d?.tickers ?? [])
+                  .map((t) => ({ ticker: t.ticker, n: Number(t.n), v: Number(t[side.key]), total: Number(t.total) }))
+                  // A ticker with nothing on this side is not a zero-length bar,
+                  // it is not on this side. Dropping it keeps the column short
+                  // and honest instead of padding it with names at $0.
+                  .filter((x) => x.v > 0)
+                  .sort((a, b) => b.v - a.v)
+                const max = Math.max(1, ...list.map((x) => x.v))
+                return (
+                  <div key={side.key} className="min-w-0 bg-surface py-1">
+                    <div className={['px-2.5 pb-1 text-2xs font-bold uppercase tracking-[0.11em]', side.ink].join(' ')}>
+                      {side.label}
+                    </div>
+                    {list.map((x) => (
+                      <button
+                        key={x.ticker}
+                        type="button"
+                        onClick={() => setTicker((cur) => (cur.toUpperCase() === x.ticker ? '' : x.ticker))}
+                        className="block w-full px-2.5 py-1 text-left hover:bg-raised"
+                        title={`${x.ticker} — ${money(x.v)} ${side.label.toLowerCase()} of ${money(x.total)} total · ${num(x.n)} prints`}
+                      >
+                        <span className="flex items-baseline justify-between gap-1.5">
+                          <span className="truncate text-xs font-semibold text-fg">{x.ticker}</span>
+                          <span className={['tabular shrink-0 text-2xs', side.ink].join(' ')}>{money(x.v)}</span>
+                        </span>
+                        <span className="mt-0.5 block h-[5px] overflow-hidden rounded-sm bg-fg/10">
+                          <i className={['block h-full', side.bar].join(' ')} style={{ width: `${(x.v / max) * 100}%` }} />
+                        </span>
+                      </button>
+                    ))}
+                    {!list.length && (
+                      <div className="px-2.5 py-2 text-2xs text-faint">Nothing {side.label.toLowerCase()} in range.</div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </Card>
+    </>
+  )
+  const bucketsCard = (
+          <Card title="Expiry buckets" note="by premium">
+            <div className="py-1">
+              {buckets.map((b) => (
+                <div key={b.bucket} className="grid grid-cols-[56px_1fr_74px] items-center gap-2 px-3 py-1.5">
+                  <span className="text-xs text-muted">{b.bucket}</span>
+                  <div className="h-[7px] overflow-hidden rounded-sm bg-fg/10">
+                    <i className="block h-full bg-accent" style={{ width: `${(Number(b.total) / bucketMax) * 100}%` }} />
+                  </div>
+                  <span className="tabular text-right text-xs text-muted">{money(b.total)}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+  )
+  const repeatsCard = (
+          <Card title="Repeat strikes" note="3+ whale prints, same contract">
+            <div className="py-1">
+              {(d?.repeats ?? []).map((r) => (
+                <button
+                  key={r.osi}
+                  type="button"
+                  onClick={() => lookupContract(r.ticker, Number(r.strike), r.expiry, r.type)}
+                  title="Open this contract in the lookup"
+                  className="grid w-full grid-cols-[1fr_38px_74px] items-center gap-2 px-3 py-1.5 text-left hover:bg-raised"
+                >
+                  <span className="truncate text-xs text-fg">
+                    {/* SQL hands this back as text (MAX(payload->>'strike')), so it
+                        carries the raw float's digits — back through Number() to
+                        round it like every other strike on the page. */}
+                    {r.ticker} {fmtStrike(Number(r.strike))}{r.type} <span className="text-faint">{fmtExpiry(r.expiry)}</span>
+                  </span>
+                  <span className="text-xs text-faint">×{r.n}</span>
+                  <span
+                    title={`${num(r.n)} whale prints · ${money(r.bull)} bullish vs ${money(r.bear)} bearish`}
+                    className={['tabular text-right text-xs font-semibold', Number(r.bull) >= Number(r.bear) ? 'text-up' : 'text-down'].join(' ')}
+                  >
+                    {money(r.total)}
+                  </span>
+                </button>
+              ))}
+              {!d?.repeats.length && (
+                <div className="px-3 py-2 text-sm text-faint">
+                  No contract was hit three times in this range.
+                </div>
+              )}
+            </div>
+          </Card>
+  )
+
+  // ── PHONE LAYOUT (/m/whales) ───────────────────────────────────────────────
+  // The SAME page, not a second one: every piece of state, the one fetch, the
+  // saved filters, the lookup and the tracked store above are shared, and the
+  // roll-up cards below are the desktop's own JSX (hoisted into consts for the
+  // purpose). Only the arrangement is phone-side:
+  //
+  //   strip      range + ticker + FILTERS pill + sort. The five folded filters
+  //              move into a bottom sheet; the pill counts how many are off
+  //              their default, which is the desktop's accent rule as a number.
+  //   tiles      three, not five — premium + call/put split, bullish, bearish.
+  //   sub-tabs   PRINTS · SIZE · LOOKUP · TRACKED · DRIFT. The desktop's right
+  //              column and bottom row become tabs instead of a 3,000px scroll.
+  //   prints     two-line rows instead of an 11-column table.
+  //   probe      the same ContractProbe, as a full-height sheet instead of the
+  //              330px side panel.
+  //
+  // Driven by the `phone` PROP (MWhales passes it), not useIsPhone(): the tab
+  // bar's "Desktop site" opt-out lands a phone on /whales, and that has to be
+  // the desktop layout or the opt-out does nothing here.
+  if (phone) {
+    const nonDefault =
+      (floor !== DEFAULTS.floor ? 1 : 0) +
+      (maxDte !== DEFAULTS.maxDte ? 1 : 0) +
+      (type !== DEFAULTS.type ? 1 : 0) +
+      (action !== DEFAULTS.action ? 1 : 0) +
+      (moneyness !== DEFAULTS.moneyness ? 1 : 0) +
+      (showUnreadable !== DEFAULTS.showUnreadable ? 1 : 0)
+    const resetFilters = () => {
+      setFloor(DEFAULTS.floor)
+      setMaxDte(DEFAULTS.maxDte)
+      setType(DEFAULTS.type)
+      setAction(DEFAULTS.action)
+      setMoneyness(DEFAULTS.moneyness)
+      setShowUnreadable(DEFAULTS.showUnreadable)
+    }
+    const callPut = s && s.calls + s.puts > 0
+      ? `${Math.round((s.calls / (s.calls + s.puts)) * 100)} / ${Math.round((s.puts / (s.calls + s.puts)) * 100)}`
+      : '—'
+    const selKey = selected ? trackKeyOf(selected) : null
+
+    return (
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <header className="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-3 py-2">
+          <span aria-hidden>🐋</span>
+          <h1 className="text-sm font-bold text-fg">Whale Archive</h1>
+          <span className="tabular ml-auto text-2xs text-faint">
+            {q.loading && !d ? 'loading…' : d ? `${d.range.from.slice(5)} → ${d.range.to.slice(5)}` : ''}
+          </span>
+        </header>
+
+        <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap border-b border-line px-3 py-2">
+          <SegGroup<PresetKey>
+            size="touch"
+            title="How far back the archive is read"
+            options={PRESETS.map((p) => ({ label: p.label, value: p.key }))}
+            value={preset}
+            onChange={(v) => { setPreset(v); setDay(null) }}
+          />
+          <input
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value)}
+            placeholder="TICKER"
+            aria-label="Filter to one underlying"
+            autoCapitalize="characters"
+            className="tabular w-[72px] shrink-0 rounded-sm border border-line bg-bg px-2 py-1.5 text-xs uppercase text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+          />
+          <button
+            type="button"
+            onClick={() => setFiltersOpen(true)}
+            className={[
+              'flex shrink-0 items-center gap-1.5 rounded-sm border px-2.5 py-1.5 text-2xs font-bold tracking-[0.06em]',
+              nonDefault ? 'border-accent bg-accent/10 text-accent' : 'border-line text-muted',
+            ].join(' ')}
+          >
+            FILTERS
+            {nonDefault > 0 && (
+              <span className="rounded-full bg-accent px-1.5 text-3xs text-bg">{nonDefault}</span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSort((v) => (v === 'time' ? 'premium' : 'time'))}
+            title="Row order"
+            className="shrink-0 rounded-sm border border-line px-2.5 py-1.5 text-2xs font-bold tracking-[0.06em] text-muted"
+          >
+            {sort === 'time' ? 'NEWEST' : 'BIGGEST'} ⇅
+          </button>
+          {day && (
+            <button
+              type="button"
+              onClick={() => setDay(null)}
+              className="shrink-0 rounded-sm border border-accent bg-accent/10 px-2 py-1.5 text-2xs font-semibold text-accent"
+            >
+              {day} ✕
+            </button>
+          )}
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          {(d && floor < (d.whaleFloor ?? 0)) || (d && !showUnreadable && (d.unreadable?.n ?? 0) > 0) ? (
+            <div className="px-3 pt-2 text-2xs leading-relaxed text-faint">
+              {d && floor < (d.whaleFloor ?? 0) ? (
+                <span className="text-warn">Asked for {money(floor)}, archive floor is {money(d.whaleFloor)}. </span>
+              ) : null}
+              {d && !showUnreadable && (d.unreadable?.n ?? 0) > 0
+                ? `${num(d.unreadable?.n)} unreadable hidden (${money(d.unreadable?.premium)}).`
+                : null}
+            </div>
+          ) : null}
+
+          {(d?.error || q.error) && <div className="px-3 pt-2">{errorBanner}</div>}
+
+          <div className="grid shrink-0 grid-cols-2 gap-1.5 px-3 py-2">
+            <div className="col-span-2 flex items-end justify-between rounded-md border border-line bg-surface px-2.5 py-2">
+              <div>
+                <div className="text-3xs font-bold uppercase tracking-[0.1em] text-faint">Whale premium</div>
+                <div className="tabular mt-0.5 text-lg font-bold text-fg">{money(s?.total)}</div>
+                {s && <div className="tabular text-3xs text-faint">{num(s.sessions)} sessions · {num(s.n)} prints</div>}
+              </div>
+              <div className="text-right">
+                <div className="text-3xs font-bold uppercase tracking-[0.1em] text-faint">Call / put</div>
+                <div className="tabular mt-0.5 text-sm font-bold text-fg">{callPut}</div>
+              </div>
+            </div>
+            <div className="rounded-md border border-line bg-surface px-2.5 py-2">
+              <div className="text-3xs font-bold uppercase tracking-[0.1em] text-faint">Bullish</div>
+              <div className="tabular mt-0.5 text-lg font-bold text-up">{money(s?.bull)}</div>
+              {s && <div className="tabular text-3xs text-faint">{readable > 0 ? `${Math.round((s.bull / readable) * 100)}%` : '—'}</div>}
+            </div>
+            <div className="rounded-md border border-line bg-surface px-2.5 py-2">
+              <div className="text-3xs font-bold uppercase tracking-[0.1em] text-faint">Bearish</div>
+              <div className="tabular mt-0.5 text-lg font-bold text-down">{money(s?.bear)}</div>
+              {s && <div className="tabular text-3xs text-faint">{readable > 0 ? `${Math.round((s.bear / readable) * 100)}%` : '—'}</div>}
+            </div>
+          </div>
+
+          <div className="sticky top-0 z-[1] flex shrink-0 gap-4 overflow-x-auto border-b border-line bg-bg px-3">
+            {PHONE_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setPhoneTab(t.key)}
+                className={[
+                  'shrink-0 py-2 text-2xs font-bold tracking-[0.08em]',
+                  phoneTab === t.key ? 'text-fg shadow-[inset_0_-2px_0_var(--color-accent)]' : 'text-faint',
+                ].join(' ')}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {phoneTab === 'prints' && (
+            <div className="pb-3">
+              {rows.map((r, i) => {
+                const newDay = i === 0 || rows[i - 1]!.sessionDate !== r.sessionDate
+                const agg = newDay ? d?.sessions.find((x) => x.d === r.sessionDate) : null
+                const bias = biasOf(r)
+                const biasInk = bias === 'bullish' ? 'text-up' : bias === 'bearish' ? 'text-down' : 'text-faint'
+                const sideInk = r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-faint'
+                const k = trackKeyOf(r)
+                return (
+                  <Fragment key={r.id}>
+                    {newDay && (
+                      <div className="border-t border-line bg-surface2 px-3 py-1.5 text-3xs font-bold uppercase tracking-[0.1em] text-muted">
+                        {fmtDayHeader(r.sessionDate)}
+                        {agg ? ` · ${num(agg.n)} prints · ${money(agg.total)}` : ''}
+                      </div>
+                    )}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedId(r.id)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') setSelectedId(r.id) }}
+                      className={[
+                        'flex items-center gap-2 border-t border-line px-3 py-2 active:bg-raised',
+                        r.id === selectedId ? 'bg-raised' : '',
+                      ].join(' ')}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="text-sm font-bold text-fg">{r.underlying ?? '—'}</span>
+                          <span className={['tabular text-sm font-bold', r.type === 'P' ? 'text-down' : 'text-up'].join(' ')}>
+                            {fmtStrike(r.strike)}{r.type ?? '?'}
+                          </span>
+                          <span className="tabular text-2xs text-faint">{fmtExpiry(r.expiry)}</span>
+                        </div>
+                        <div className="tabular mt-0.5 flex gap-1.5 overflow-hidden whitespace-nowrap text-2xs text-faint">
+                          <span className={['font-semibold', biasInk].join(' ')}>
+                            {bias ? `${bias === 'bullish' ? '▲ BULL' : '▼ BEAR'} ${r.action === 'BUY' ? 'B' : 'S'}${r.type ?? ''}` : r.side === 'mid' ? 'n/a' : '—'}
+                          </span>
+                          <span className={sideInk}>
+                            {r.side === 'above_ask' ? '> ASK' : r.side === 'below_bid' ? '< BID' : r.side ? r.side.toUpperCase() : '—'}
+                          </span>
+                          <span>{num(r.size)} @ {r.price?.toFixed(2) ?? '—'}</span>
+                          {r.dte != null && <span>{r.dte}d</span>}
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className={['tabular text-sm font-bold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
+                          {money(r.premium)}
+                        </div>
+                        <div className="tabular mt-0.5 text-3xs text-faint">{fmtTime(r.ts)}</div>
+                      </div>
+                      {k && (
+                        <TrackButton
+                          compact
+                          tracked={trackedIds.has(k)}
+                          busy={busyKey === k}
+                          onClick={() => void toggleTrack(r, 'whale')}
+                        />
+                      )}
+                    </div>
+                  </Fragment>
+                )
+              })}
+              {!rows.length && (
+                <div className="px-3 py-4 text-sm text-faint">
+                  {q.loading ? 'Loading…' : 'No whale prints match these filters in this range.'}
+                </div>
+              )}
+              {d && s && s.n > rows.length && (
+                <div className="px-3 py-2 text-3xs text-faint">
+                  {num(rows.length)} shown of {num(s.n)} — narrow the range or raise the floor to see the rest.
+                </div>
+              )}
+            </div>
+          )}
+
+          {phoneTab === 'size' && (
+            <div className="flex flex-col gap-2 p-3">
+              {sizeCard}
+              {bucketsCard}
+              {repeatsCard}
+            </div>
+          )}
+          {phoneTab === 'lookup' && <div className="p-3">{lookupCard}</div>}
+          {phoneTab === 'tracked' && <div className="min-w-0 p-3"><TrackedAlertsCard store={alerts} /></div>}
+          {phoneTab === 'drift' && <div className="min-w-0 p-3"><NetDriftPanel /></div>}
+        </div>
+
+        {/* ── filters sheet ─────────────────────────────────────────────── */}
+        {filtersOpen && (
+          <div className="fixed inset-0 z-50 flex flex-col justify-end">
+            <button
+              type="button"
+              aria-label="Close filters"
+              onClick={() => setFiltersOpen(false)}
+              className="absolute inset-0 bg-bg/80"
+            />
+            <div className="relative max-h-[85vh] overflow-y-auto rounded-t-2xl border-t border-line bg-surface px-3.5 pb-[calc(14px+env(safe-area-inset-bottom))] pt-2">
+              <div className="mx-auto mb-3 mt-1 h-1 w-9 rounded-full bg-line" />
+              <PhoneSeg
+                label="Floor"
+                options={FLOORS.map((f) => ({ label: f.label, value: String(f.value) }))}
+                value={String(floor)}
+                onChange={(v) => setFloor(Number(v))}
+              />
+              <PhoneSeg
+                label="DTE at print"
+                options={DTE_STOPS.map((x) => ({ label: x.label, value: String(x.value) }))}
+                value={String(maxDte)}
+                onChange={(v) => setMaxDte(v === 'null' ? null : Number(v))}
+              />
+              <PhoneSeg
+                label="Calls / puts"
+                options={[{ label: 'BOTH', value: '' }, { label: 'CALLS', value: 'C' }, { label: 'PUTS', value: 'P' }]}
+                value={type}
+                onChange={(v) => setType(v as '' | 'C' | 'P')}
+              />
+              <PhoneSeg
+                label="Fill"
+                options={[{ label: 'EITHER', value: '' }, { label: 'BUY', value: 'BUY' }, { label: 'SELL', value: 'SELL' }]}
+                value={action}
+                onChange={(v) => setAction(v as '' | 'BUY' | 'SELL')}
+              />
+              <PhoneSeg
+                label="Strike"
+                options={[{ label: 'ALL', value: 'all' }, { label: 'OTM', value: 'otm' }]}
+                value={moneyness}
+                onChange={(v) => setMoneyness(v as 'all' | 'otm')}
+              />
+              <button
+                type="button"
+                role="switch"
+                aria-checked={showUnreadable}
+                onClick={() => setShowUnreadable((v) => !v)}
+                className="flex w-full items-center justify-between py-2 text-xs text-muted"
+              >
+                <span>Show unreadable prints</span>
+                <span className={['relative h-5 w-9 rounded-full transition-colors', showUnreadable ? 'bg-accent' : 'bg-line'].join(' ')}>
+                  <span className={['absolute top-0.5 h-4 w-4 rounded-full bg-fg transition-all', showUnreadable ? 'left-[18px]' : 'left-0.5'].join(' ')} />
+                </span>
+              </button>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="flex-1 rounded-md border border-line py-2.5 text-xs font-bold tracking-[0.08em] text-muted"
+                >
+                  RESET
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setFiltersOpen(false); setPhoneTab('prints') }}
+                  className="flex-1 rounded-md border border-accent bg-accent/10 py-2.5 text-xs font-bold tracking-[0.08em] text-accent"
+                >
+                  {q.loading ? 'SHOW PRINTS' : `SHOW ${num(rows.length)} PRINTS`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── probe sheet ───────────────────────────────────────────────── */}
+        {selected && (
+          <div className="fixed inset-0 z-50 flex flex-col justify-end">
+            <button
+              type="button"
+              aria-label="Close contract"
+              onClick={() => setSelectedId(null)}
+              className="absolute inset-0 bg-bg/80"
+            />
+            <div className="relative flex h-[calc(100%-32px)] flex-col overflow-hidden rounded-t-2xl border-t border-line bg-surface pb-[env(safe-area-inset-bottom)]">
+              <div className="mx-auto mb-1 mt-2 h-1 w-9 shrink-0 rounded-full bg-line" />
+              <ContractProbe key={selected.id} row={selected} onClose={() => setSelectedId(null)} />
+              {selKey && (
+                <div className="flex shrink-0 justify-end gap-2 border-t border-line px-3 py-2.5">
+                  <TrackButton
+                    tracked={trackedIds.has(selKey)}
+                    busy={busyKey === selKey}
+                    onClick={() => void toggleTrack(selected, 'whale')}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+    )
+  }
+
 
   return (
     <Page title="Whale Archive">
@@ -608,16 +1269,7 @@ export default function Whales() {
         </span>
       </div>
 
-      {/* q.error covers the case this page shipped with for months: the route
-          did not exist, the fetch failed, and the archive rendered as an empty
-          archive with nothing to say. A failure has to look like a failure. */}
-      {(d?.error || q.error) && (
-        <div className="rounded-md border border-warn/40 bg-warn/5 px-3 py-2 text-sm text-warn">
-          {d?.error
-            ? readableError(d.error)
-            : `Could not load the whale archive — ${readableError(q.error)}.`}
-        </div>
-      )}
+      {(d?.error || q.error) && errorBanner}
 
       {/* ── tiles ─────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
@@ -793,144 +1445,8 @@ export default function Whales() {
         {/* ── right column ───────────────────────────────────────────────── */}
         <div className="flex flex-col gap-2">
 
-          {/* ── contract lookup ──────────────────────────────────────────────
-              Four fields and the same probe the table opens. The expiry is the
-              themed DatePicker, never a native <input type="date">: that widget
-              renders the OS calendar — a white Chrome popup on Windows — which
-              inside this rail reads as a bug (see DatePicker's own note).
-          ──────────────────────────────────────────────────────────────────── */}
-          <Card title="Contract lookup" note="any strike, print or not">
-            <div className="flex flex-col gap-2 px-3 py-2.5">
-              <div className="flex items-center gap-2">
-                <input
-                  value={lkTicker}
-                  onChange={(e) => setLkTicker(e.target.value.toUpperCase().slice(0, 12))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
-                  placeholder="TICKER"
-                  aria-label="Underlying"
-                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs uppercase text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
-                />
-                <input
-                  value={lkStrike}
-                  onChange={(e) => setLkStrike(e.target.value.replace(/[^\d.]/g, '').slice(0, 9))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
-                  placeholder="STRIKE"
-                  inputMode="decimal"
-                  aria-label="Strike"
-                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
-                />
-              </div>
+          {lookupCard}
 
-              <div className="flex items-center gap-2">
-                <DatePicker
-                  value={lkExpiry}
-                  onChange={setLkExpiry}
-                  size="sm"
-                  placeholder="EXPIRY"
-                  title="Contract expiry"
-                  // The picker's `sm` trigger is content-width by design (it is
-                  // a toolbar chip everywhere else). Here it is a FIELD, sitting
-                  // under two full-width inputs, so the trigger is stretched to
-                  // the wrapper rather than left as a pill floating in a gap.
-                  className="flex-1 [&>button]:w-full [&>button]:py-1 [&>button]:text-left"
-                />
-                <SegGroup<'C' | 'P'>
-                  title="Calls or puts"
-                  options={[{ label: 'CALL', value: 'C' }, { label: 'PUT', value: 'P' }]}
-                  value={lkType}
-                  onChange={setLkType}
-                />
-              </div>
-
-              {/* Both optional. Size alone gives POSITION on the hover box; size
-                  and cost together give OPEN P/L and the entry rung. */}
-              <div className="flex items-center gap-2">
-                <input
-                  value={lkSize}
-                  onChange={(e) => setLkSize(e.target.value.replace(/[^\d]/g, '').slice(0, 7))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
-                  placeholder="SIZE (opt)"
-                  inputMode="numeric"
-                  aria-label="Contracts held"
-                  title="Contracts — turns on POSITION in the hover readout"
-                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
-                />
-                <input
-                  value={lkEntry}
-                  onChange={(e) => setLkEntry(e.target.value.replace(/[^\d.]/g, '').slice(0, 8))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
-                  placeholder="COST (opt)"
-                  inputMode="decimal"
-                  aria-label="Cost basis"
-                  title="What you paid per contract — turns on the entry rung and OPEN P/L"
-                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={openLookup}
-                  disabled={!lkReady}
-                  title={lkReady ? 'Draw this contract' : 'Needs a ticker, a strike and an expiry'}
-                  className={[
-                    'flex-1 rounded-sm border px-2 py-1 text-2xs font-bold uppercase tracking-[0.1em] transition-colors',
-                    lkReady
-                      ? 'border-accent bg-accent/10 text-accent hover:bg-accent/20'
-                      : 'cursor-not-allowed border-line text-faint opacity-50',
-                  ].join(' ')}
-                >
-                  Look up
-                </button>
-                {/* Tracks what the FIELDS say, not what the panel is showing —
-                    so a contract can be tracked without drawing it first, and
-                    an edited strike tracks the strike you just typed. Size and
-                    cost ride along when they are filled: they are what turns a
-                    watch into a position the card can price. */}
-                {lkReady && (() => {
-                  const t = lkTicker.trim().toUpperCase()
-                  const k = `${t}|${lkStrikeNum}|${lkType}|${lkExpiry}`
-                  const sizeN = Number(lkSize)
-                  const entryN = Number(lkEntry)
-                  return (
-                    <TrackButton
-                      tracked={trackedIds.has(k)}
-                      busy={busyKey === k}
-                      onClick={() => void toggleTrack({
-                        id: `lookup-track:${k}`,
-                        ts: Date.now(),
-                        osi: null,
-                        underlying: t,
-                        type: lkType,
-                        strike: lkStrikeNum,
-                        expiry: lkExpiry,
-                        dte: null,
-                        size: Number.isFinite(sizeN) && sizeN > 0 ? Math.round(sizeN) : null,
-                        price: Number.isFinite(entryN) && entryN > 0 ? entryN : null,
-                        premium: 0,
-                        spot: null,
-                        side: null, action: null, sideReason: null,
-                        bid: null, ask: null, quoteAgeMs: null, vol: null, oi: null,
-                        sessionDate: etYmd(new Date()),
-                      }, 'lookup')}
-                    />
-                  )
-                })()}
-              </div>
-            </div>
-
-            {lookup ? (
-              <div className="flex min-h-[360px] flex-col border-t border-line">
-                <ContractProbe key={lookup.id} row={lookup} onClose={() => setLookup(null)} entryAt={null} />
-              </div>
-            ) : (
-              <div className="border-t border-line px-3 py-2 text-2xs leading-relaxed text-faint">
-                Any contract, whether or not a whale ever touched it. Add a size
-                and a cost and the hover readout carries what the position is
-                worth and what it is up.
-              </div>
-            )}
-          </Card>
 
           {/* ── the roll-ups ────────────────────────────────────────────────────────────
               Under the lookup, IN THE SAME COLUMN. These were briefly a
@@ -938,116 +1454,11 @@ export default function Whales() {
               new row and drew them full width under the table. The grid has
               two columns, so it gets exactly two children.
           ──────────────────────────────────────────────────────────── */}
-          {/* ── WHERE THE SIZE WENT: TWO RANKINGS, NOT ONE ────────────────────
-              One list ranked by TOTAL with a split bar made the card answer
-              "who printed the most", and left "who is the biggest bullish bet
-              and who is the biggest bearish bet" to be eyeballed off the ratio
-              of two colours in a seven-pixel bar. Those are the two questions
-              actually being asked of it, so they get a column each, sorted on
-              their own side.
+          {sizeCard}
 
-              The two columns are NOT the same tickers in the same order, and
-              that is the point — a name can top one and be absent from the
-              other. Each bar is scaled to the biggest value in ITS OWN column,
-              so within a column the lengths compare; across columns they do
-              not, which is why the dollar figure is always on the row.
+          {bucketsCard}
 
-              Both columns draw from the same server list (the top tickers by
-              total premium for the range), so a name that never cracks that
-              list cannot appear here even if it leads one side. Widening it is
-              a `tickers` limit change on /api/lse/whales, not a UI change.
-          ──────────────────────────────────────────────────────────────────── */}
-          <Card title="Where the size went" note={span.label}>
-            <div className="grid grid-cols-2 gap-px bg-line">
-              {([
-                { key: 'bull' as const, label: 'Bullish', ink: 'text-up', bar: 'bg-up' },
-                { key: 'bear' as const, label: 'Bearish', ink: 'text-down', bar: 'bg-down' },
-              ]).map((side) => {
-                const list = (d?.tickers ?? [])
-                  .map((t) => ({ ticker: t.ticker, n: Number(t.n), v: Number(t[side.key]), total: Number(t.total) }))
-                  // A ticker with nothing on this side is not a zero-length bar,
-                  // it is not on this side. Dropping it keeps the column short
-                  // and honest instead of padding it with names at $0.
-                  .filter((x) => x.v > 0)
-                  .sort((a, b) => b.v - a.v)
-                const max = Math.max(1, ...list.map((x) => x.v))
-                return (
-                  <div key={side.key} className="min-w-0 bg-surface py-1">
-                    <div className={['px-2.5 pb-1 text-2xs font-bold uppercase tracking-[0.11em]', side.ink].join(' ')}>
-                      {side.label}
-                    </div>
-                    {list.map((x) => (
-                      <button
-                        key={x.ticker}
-                        type="button"
-                        onClick={() => setTicker((cur) => (cur.toUpperCase() === x.ticker ? '' : x.ticker))}
-                        className="block w-full px-2.5 py-1 text-left hover:bg-raised"
-                        title={`${x.ticker} — ${money(x.v)} ${side.label.toLowerCase()} of ${money(x.total)} total · ${num(x.n)} prints`}
-                      >
-                        <span className="flex items-baseline justify-between gap-1.5">
-                          <span className="truncate text-xs font-semibold text-fg">{x.ticker}</span>
-                          <span className={['tabular shrink-0 text-2xs', side.ink].join(' ')}>{money(x.v)}</span>
-                        </span>
-                        <span className="mt-0.5 block h-[5px] overflow-hidden rounded-sm bg-fg/10">
-                          <i className={['block h-full', side.bar].join(' ')} style={{ width: `${(x.v / max) * 100}%` }} />
-                        </span>
-                      </button>
-                    ))}
-                    {!list.length && (
-                      <div className="px-2.5 py-2 text-2xs text-faint">Nothing {side.label.toLowerCase()} in range.</div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </Card>
-
-          <Card title="Expiry buckets" note="by premium">
-            <div className="py-1">
-              {buckets.map((b) => (
-                <div key={b.bucket} className="grid grid-cols-[56px_1fr_74px] items-center gap-2 px-3 py-1.5">
-                  <span className="text-xs text-muted">{b.bucket}</span>
-                  <div className="h-[7px] overflow-hidden rounded-sm bg-fg/10">
-                    <i className="block h-full bg-accent" style={{ width: `${(Number(b.total) / bucketMax) * 100}%` }} />
-                  </div>
-                  <span className="tabular text-right text-xs text-muted">{money(b.total)}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card title="Repeat strikes" note="3+ whale prints, same contract">
-            <div className="py-1">
-              {(d?.repeats ?? []).map((r) => (
-                <button
-                  key={r.osi}
-                  type="button"
-                  onClick={() => lookupContract(r.ticker, Number(r.strike), r.expiry, r.type)}
-                  title="Open this contract in the lookup"
-                  className="grid w-full grid-cols-[1fr_38px_74px] items-center gap-2 px-3 py-1.5 text-left hover:bg-raised"
-                >
-                  <span className="truncate text-xs text-fg">
-                    {/* SQL hands this back as text (MAX(payload->>'strike')), so it
-                        carries the raw float's digits — back through Number() to
-                        round it like every other strike on the page. */}
-                    {r.ticker} {fmtStrike(Number(r.strike))}{r.type} <span className="text-faint">{fmtExpiry(r.expiry)}</span>
-                  </span>
-                  <span className="text-xs text-faint">×{r.n}</span>
-                  <span
-                    title={`${num(r.n)} whale prints · ${money(r.bull)} bullish vs ${money(r.bear)} bearish`}
-                    className={['tabular text-right text-xs font-semibold', Number(r.bull) >= Number(r.bear) ? 'text-up' : 'text-down'].join(' ')}
-                  >
-                    {money(r.total)}
-                  </span>
-                </button>
-              ))}
-              {!d?.repeats.length && (
-                <div className="px-3 py-2 text-sm text-faint">
-                  No contract was hit three times in this range.
-                </div>
-              )}
-            </div>
-          </Card>
+          {repeatsCard}
         </div>
       </div>
 
