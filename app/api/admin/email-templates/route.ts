@@ -27,6 +27,7 @@ import { v3ComingSoonEmail, v3ComingSoonText, V3_COMING_SOON_SUBJECT } from "@/l
 import { wholeBoardEmail, wholeBoardText, WHOLE_BOARD_SUBJECT } from "@/lib/emails/whole-board";
 import { fomcHalfOffEmail, fomcHalfOffText, FOMC_HALF_OFF_SUBJECT } from "@/lib/emails/fomc-half-off";
 import { voltickMergerEmail, voltickMergerText, VOLTICK_MERGER_SUBJECT } from "@/lib/emails/voltick-merger";
+import { autopayOffEmail, autopayOffText, AUTOPAY_OFF_SUBJECT } from "@/lib/emails/autopay-off";
 import { hiddenTemplateIdSet, hideTemplate, restoreTemplate } from "@/lib/emails/hiddenTemplates";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
@@ -255,6 +256,13 @@ function buildTemplates(): Template[] {
       subject: VOLTICK_MERGER_SUBJECT,
       html: voltickMergerEmail,
       text: voltickMergerText,
+    },
+    {
+      id: "autopay-off",
+      label: "💳 Automatic payment turned off — no more charges, access stays on",
+      subject: AUTOPAY_OFF_SUBJECT,
+      html: autopayOffEmail,
+      text: autopayOffText,
     },
   ];
 }
