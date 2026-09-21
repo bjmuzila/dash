@@ -24491,3 +24491,13 @@ Docs only — no code, no backend, no proxy change.
 
 ## 2026-09-21 — Whales: current contract price
 - `cbedge-v3/src/pages/Whales.tsx`: new NOW column on the Prints table (and "→ now" on the phone rows) — the contract's current mark plus % move from the print price, green/red. One batched call per 100 contracts to the existing `/proxy/api/tt/option-marks` reader, refreshed every 60s; OCC built from ticker/expiry/type/strike (SPX→SPXW, NDX→NDXP, RUT→RUTW). Expired/unquoted contracts show a dash. No proxy or backend change.
+
+## 2026-09-21 — Removed the v3 /chain page (quote-book chain)
+- `cbedge-v3/src/App.tsx`: `/chain` lazy import + `<Route>` removed (now falls to NotFound).
+- `cbedge-v3/src/shell/Shell.tsx`: 🧾 Chain rail entry removed.
+- `cbedge-v3/src/pages/TradersDashboard.tsx`: `/chain` removed from the Quick Links picker and LIVE_ROUTES.
+- `/options-chain` (GEX matrix) untouched. `pages/Chain.tsx` and `pages/chain/*` are now orphaned (nothing imports them) — not deleted yet. v2's `app/v3/chain/route.ts` shell handler left in place (v2 is ask-first).
+
+## 2026-09-21 — Whales: HIGH column + % first
+- `cbedge-v3/src/pages/Whales.tsx`: new HIGH column after PRICE — the contract's highest mark from the print's bar to now, with % above the print price. Bars via `loadProbeBars` (same source as the probe), one fetch per contract from its earliest print in the list, 4 at a time, re-read every 5 min; sliced per row so each print gets the high since its own fill.
+- HIGH and NOW cells now lead with the % move (bold) and show the price after it (small). Phone rows: "→ +5% 10.30 · H 10.90".

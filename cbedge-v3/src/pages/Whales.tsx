@@ -4,7 +4,7 @@ import { Chip, SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
 import { readableError, useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
-import { ContractProbe } from '@/board/topFlow/ContractProbe'
+import { ContractProbe, loadProbeBars } from '@/board/topFlow/ContractProbe'
 import { biasOf, biasTitle } from '@/board/topFlow/TopFlowCard'
 import { TrackedAlertsCard, TrackButton } from './whales/TrackedAlertsCard'
 import { contractKey, useWhaleAlerts } from './whales/alertsStore'
@@ -293,6 +293,109 @@ const markOf = (marks: Map<string, number>, r: TopFlowRow) => {
   return o ? marks.get(occKey(o)) ?? null : null
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HIGH SINCE THE PRINT (2026-09-21)
+//
+// The best mark the contract has reached from the print's own bar to now — "how
+// good did this whale's trade get". Read from the same bars the probe draws
+// (loadProbeBars: vault first for old prints, dxLink for today's), once per
+// CONTRACT from its earliest print in the list, then sliced per row so two
+// prints on the same strike each get the high since THEIR fill. Four requests
+// at a time; re-read every five minutes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type HighSeries = Array<[number, number]>  // [bar open ms, bar high]
+
+function useContractHighs(rows: TopFlowRow[]): Map<string, number> {
+  const jobs = useMemo(() => {
+    const m = new Map<string, TopFlowRow>()
+    for (const r of rows) {
+      const o = occOf(r)
+      if (!o) continue
+      const k = occKey(o)
+      const cur = m.get(k)
+      if (!cur || r.ts < cur.ts) m.set(k, r)
+    }
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [rows])
+  const sig = jobs.map(([k, r]) => `${k}@${r.ts}`).join(',')
+  const [series, setSeries] = useState<Map<string, HighSeries>>(new Map())
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 5 * 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    if (!jobs.length) return
+    let on = true
+    const ctrl = new AbortController()
+    let i = 0
+    const worker = async () => {
+      while (on && i < jobs.length) {
+        const [k, r] = jobs[i++]!
+        try {
+          const bars = await loadProbeBars(
+            { underlying: r.underlying, expiry: r.expiry, strike: r.strike, type: r.type, osi: r.osi, ts: r.ts },
+            0,
+            ctrl.signal,
+          )
+          const hs: HighSeries = bars
+            .filter((b) => Number.isFinite(b.high) && b.high > 0)
+            .map((b) => [b.time, b.high])
+          if (on && hs.length) setSeries((m) => new Map(m).set(k, hs))
+        } catch {
+          /* no bars → no high; the cell prints a dash */
+        }
+      }
+    }
+    void Promise.all([worker(), worker(), worker(), worker()])
+    return () => { on = false; ctrl.abort() }
+    // `sig` stands in for `jobs`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig, tick])
+
+  return useMemo(() => {
+    const out = new Map<string, number>()
+    for (const r of rows) {
+      const o = occOf(r)
+      const hs = o ? series.get(occKey(o)) : undefined
+      if (!hs) continue
+      // The bar that CONTAINS the print counts: open at or before the fill
+      // but within one bar width of it. Bars before that are someone else's day.
+      let firstIdx = -1
+      for (let j = 0; j < hs.length; j++) {
+        if (hs[j]![0] <= r.ts) firstIdx = j
+        else break
+      }
+      if (firstIdx < 0) firstIdx = 0
+      let hi = 0
+      for (let j = firstIdx; j < hs.length; j++) hi = Math.max(hi, hs[j]![1])
+      if (hi > 0) out.set(r.id, hi)
+    }
+    return out
+  }, [rows, series])
+}
+
+/** "+12% 4.10" — the move leads, the price follows. */
+function MoveCell({ value, entry }: { value: number | null; entry: number | null }) {
+  const chg = value != null && entry != null && entry > 0 ? ((value - entry) / entry) * 100 : null
+  const ink = chg == null ? 'text-muted' : chg >= 0 ? 'text-up' : 'text-down'
+  return (
+    <td className="tabular whitespace-nowrap px-2 py-1.5 text-right">
+      {chg != null && (
+        <span className={['font-semibold', ink].join(' ')}>
+          {chg >= 0 ? '+' : ''}{chg.toFixed(0)}%
+        </span>
+      )}
+      <span className={[chg != null ? 'ml-1 text-2xs opacity-80' : 'font-semibold', ink].join(' ')}>
+        {value != null ? value.toFixed(2) : '—'}
+      </span>
+    </td>
+  )
+}
+
 type PhoneTab = 'prints' | 'size' | 'lookup' | 'tracked' | 'drift'
 const PHONE_TABS: Array<{ key: PhoneTab; label: string }> = [
   { key: 'prints', label: 'PRINTS' },
@@ -496,6 +599,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     [d, day],
   )
   const marks = useContractMarks(rows)
+  const highs = useContractHighs(rows)
   const selected = useMemo(
     () => (selectedId ? rows.find((r) => r.id === selectedId) ?? null : null),
     [rows, selectedId],
@@ -1061,9 +1165,15 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                           {(() => {
                             const now = markOf(marks, r)
                             if (now == null) return null
-                            const up = r.price != null ? now >= r.price : null
+                            const chg = r.price != null && r.price > 0 ? ((now - r.price) / r.price) * 100 : null
+                            const hi = highs.get(r.id)
                             return (
-                              <span className={up == null ? 'text-muted' : up ? 'text-up' : 'text-down'}>→ {now.toFixed(2)}</span>
+                              <>
+                                <span className={chg == null ? 'text-muted' : chg >= 0 ? 'text-up' : 'text-down'}>
+                                  → {chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(0)}% ` : ''}{now.toFixed(2)}
+                                </span>
+                                {hi != null && <span className="text-faint">H {hi.toFixed(2)}</span>}
+                              </>
                             )
                           })()}
                           {r.dte != null && <span>{r.dte}d</span>}
@@ -1418,6 +1528,10 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                       <th className="px-2 py-2 text-right font-bold">Price</th>
                       <th
                         className="px-2 py-2 text-right font-bold"
+                        title="The contract's highest mark since the print, and how far that is above the print price. Re-read every five minutes"
+                      >High</th>
+                      <th
+                        className="px-2 py-2 text-right font-bold"
                         title="The contract's mark right now, and the move from the print price. Refreshes every minute; a dash means the broker has no quote (expired or delisted)"
                       >Now</th>
                       <th className="px-2 py-2 text-right font-bold">Premium</th>
@@ -1448,7 +1562,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                         <Fragment key={r.id}>
                           {newDay && (
                             <tr>
-                              <td colSpan={12} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
+                              <td colSpan={13} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
                                 {fmtDayHeader(r.sessionDate)}
                                 {agg ? ` · ${num(agg.n)} prints · ${money(agg.total)}` : ''}
                               </td>
@@ -1498,21 +1612,8 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                             <td className="tabular px-2 py-1.5 text-right text-muted">{r.dte ?? '—'}</td>
                             <td className="tabular px-2 py-1.5 text-right text-muted">{num(r.size)}</td>
                             <td className="tabular px-2 py-1.5 text-right text-muted">{r.price?.toFixed(2) ?? '—'}</td>
-                            {(() => {
-                              const now = markOf(marks, r)
-                              const chg = now != null && r.price != null && r.price > 0 ? ((now - r.price) / r.price) * 100 : null
-                              const nowInk = chg == null ? 'text-muted' : chg >= 0 ? 'text-up' : 'text-down'
-                              return (
-                                <td className="tabular whitespace-nowrap px-2 py-1.5 text-right">
-                                  <span className={['font-semibold', nowInk].join(' ')}>{now != null ? now.toFixed(2) : '—'}</span>
-                                  {chg != null && (
-                                    <span className={['ml-1 text-2xs opacity-80', nowInk].join(' ')}>
-                                      {chg >= 0 ? '+' : ''}{chg.toFixed(0)}%
-                                    </span>
-                                  )}
-                                </td>
-                              )
-                            })()}
+                            <MoveCell value={highs.get(r.id) ?? null} entry={r.price} />
+                            <MoveCell value={markOf(marks, r)} entry={r.price} />
                             <td className={['tabular px-2 py-1.5 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
                               {money(r.premium)}
                             </td>
