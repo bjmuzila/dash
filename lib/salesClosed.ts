@@ -47,7 +47,8 @@ export const SALES_CLOSED_BODY =
 // account they do not have. This is the address the merger notice, the
 // pricing page, the sign-up page and the announcement email all point at,
 // so it is the ONE string to change if that ever moves again.
-export const VOLTICK_URL = "https://voltick.io";
+// 2026-09-21: every button now goes to Brandon's referral link, voltick.io/bzila.
+export const VOLTICK_URL = "https://voltick.io/bzila";
 // ── MEMBERS ONLY ─────────────────────────────────────────────────────────────
 // The discount code is for current CB Edge members (Brandon, 2026-09-20). It
 // must not appear on any page a signed-out visitor or a non-member can reach —

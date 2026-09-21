@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-21 — Voltick buttons point at voltick.io/bzila
+
+`VOLTICK_URL` in `lib/salesClosed.ts` changes from `https://voltick.io` to
+`https://voltick.io/bzila`. `VoltickLink` defaults to that constant, so every
+Voltick button a new visitor sees moves with it: the landing page hero CTA and
+Voltick card (`MergerClient`), the landing footer, the /pricing merger notice and
+the /sign-up notice. Click tracking (`click:voltick`) is unchanged. The hero
+CTA's sub-label reads the URL, so it now shows `voltick.io/bzila`.
+
+Files: `lib/salesClosed.ts`.
+
 ## 2026-09-20 — The Voltick member code comes off every public page
 
 `TICK75` (75% off at Voltick) is for current CB Edge members only. It was
