@@ -52,8 +52,9 @@ import {
 import {
   SALES_CLOSED_BODY,
   VOLTICK_URL,
-  VOLTICK_CODE,
-  VOLTICK_PITCH,
+  // PUBLIC pitch only. VOLTICK_CODE / VOLTICK_PITCH carry the members-only
+  // discount code and must never render on this page — see lib/salesClosed.ts.
+  VOLTICK_PUBLIC_PITCH,
 } from "@/lib/salesClosed";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
@@ -190,11 +191,7 @@ export default function MergerClient() {
               <span style={v3Chip(V3.accent)}>Where {APP_NAME} continues</span>
               <div style={voltName}>Voltick</div>
               <div style={voltTag}>Know your levels.</div>
-              <p style={voltBody}>{VOLTICK_PITCH}</p>
-              <div style={voltCodeRow}>
-                <span style={voltCodeLabel}>Member code</span>
-                <span style={voltCode}>{VOLTICK_CODE}</span>
-              </div>
+              <p style={voltBody}>{VOLTICK_PUBLIC_PITCH}</p>
               <VoltickLink placement="landing-volt-card" style={voltBtn} className="merger-cta">
                 Open Voltick →
               </VoltickLink>
@@ -425,37 +422,6 @@ const voltBody: React.CSSProperties = {
   lineHeight: 1.55,
   maxWidth: "38ch",
   margin: "12px auto 16px",
-};
-
-const voltCodeRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: 10,
-  flexWrap: "wrap",
-  marginBottom: 16,
-};
-
-const voltCodeLabel: React.CSSProperties = {
-  fontFamily: V3_MONO,
-  fontSize: V3_TEXT.xs,
-  fontWeight: 700,
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
-  color: V3.fg,
-};
-
-const voltCode: React.CSSProperties = {
-  padding: "6px 12px",
-  borderRadius: V3_RADIUS.sm,
-  border: `1px solid ${v3a(V3.accent, 0.5)}`,
-  background: v3a(V3.accent, 0.14),
-  color: V3.accent,
-  fontFamily: V3_MONO,
-  fontSize: V3_TEXT.body,
-  fontWeight: 700,
-  letterSpacing: "0.16em",
-  whiteSpace: "nowrap",
 };
 
 const voltBtn: React.CSSProperties = {

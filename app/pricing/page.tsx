@@ -26,7 +26,7 @@ import { EXPLORE } from "@/components/explore/exploreContent";
 import {
   SALES_CLOSED,
   SALES_CLOSED_BODY,
-  VOLTICK_CODE,
+  VOLTICK_PUBLIC_PITCH,
 } from "@/lib/salesClosed";
 
 export const dynamic = "force-dynamic";
@@ -161,8 +161,10 @@ export default async function PricingPage({
             <b style={{ fontWeight: 700 }}>New memberships are closed.</b> The prices below are
             what CB Edge charged, kept here for reference only. If you want a GEX platform,{" "}
             <VoltickLink placement="pricing-notice" style={v3LinkStyle} className="pricing-link">Voltick</VoltickLink>{" "}
-            covers 1,000+ tickers and CB Edge members get 75% off with code{" "}
-            <b style={{ color: V3.cyan, fontWeight: 700 }}>{VOLTICK_CODE}</b>.
+            is where the work continues.{" "}
+            {/* No discount code: this notice renders for !access.ok, i.e. exactly
+                the people the members-only code is not for (lib/salesClosed.ts). */}
+            {VOLTICK_PUBLIC_PITCH}
           </div>
         )}
 

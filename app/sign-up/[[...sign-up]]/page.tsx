@@ -9,7 +9,7 @@ import { V3, V3_RADIUS, V3_TEXT, v3PrimaryButton } from "@/components/landing/v3
 import {
   SALES_CLOSED,
   SALES_CLOSED_BODY,
-  VOLTICK_CODE,
+  VOLTICK_PUBLIC_PITCH,
 } from "@/lib/salesClosed";
 
 export const dynamic = "force-dynamic";
@@ -66,9 +66,10 @@ export default async function SignUpPage({
             </Link>
             <p style={{ fontSize: V3_TEXT.xs, color: V3.fg, lineHeight: 1.5, margin: "14px 0 0" }}>
               Looking for a GEX platform?{" "}
-              <VoltickLink placement="sign-up-notice" style={{ color: V3.cyan, fontWeight: 700 }}>Voltick</VoltickLink>{" "}
-              covers 1,000+ tickers. CB Edge members get 75% off with code{" "}
-              <b style={{ color: V3.cyan, fontWeight: 700 }}>{VOLTICK_CODE}</b>.
+              <VoltickLink placement="sign-up-notice" style={{ color: V3.cyan, fontWeight: 700 }}>Voltick</VoltickLink>.{" "}
+              {/* No discount code — this page is for people who are not members,
+                  and the code is members-only (lib/salesClosed.ts). */}
+              {VOLTICK_PUBLIC_PITCH}
             </p>
           </div>
         ) : (

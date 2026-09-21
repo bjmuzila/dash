@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-20 — The Voltick member code comes off every public page
+
+`TICK75` (75% off at Voltick) is for current CB Edge members only. It was
+rendering on three pages non-members reach: the landing page's Voltick card
+(`MergerClient`), the /pricing closed notice — which renders only for
+`!access.ok`, i.e. exactly the people the code is not for — and /sign-up. A code
+on a public page is a public code.
+
+All three now render `VOLTICK_PUBLIC_PITCH`, new in `lib/salesClosed.ts`: the
+same line with no code. `VOLTICK_CODE` and `VOLTICK_PITCH` stay, under a
+MEMBERS ONLY header naming where they may appear (the member announcement email,
+anything behind the paid gate). The landing card's code row and its three style
+consts (`voltCodeRow`, `voltCodeLabel`, `voltCode`) are gone with it.
+
 ## 2026-09-20 — scripts/stripe-stop-renewals.mjs: nobody is billed again, in one run
 
 The merger notice, /pricing, /sign-up and the announcement email all promise

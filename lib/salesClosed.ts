@@ -48,8 +48,18 @@ export const SALES_CLOSED_BODY =
 // pricing page, the sign-up page and the announcement email all point at,
 // so it is the ONE string to change if that ever moves again.
 export const VOLTICK_URL = "https://voltick.io";
+// ── MEMBERS ONLY ─────────────────────────────────────────────────────────────
+// The discount code is for current CB Edge members (Brandon, 2026-09-20). It
+// must not appear on any page a signed-out visitor or a non-member can reach —
+// the landing page, /pricing's closed notice (shown to !access.ok), /sign-up.
+// Its place is the member announcement email and anything behind the paid gate.
+// A code on a public page is a public code, and every Voltick signup it pulls in
+// at 75% off is one that would otherwise have paid full price.
 export const VOLTICK_CODE = "TICK75";
 export const VOLTICK_PITCH = `Voltick covers 1,000+ tickers. CB Edge members get 75% off with code ${VOLTICK_CODE}.`;
+
+/** The same pitch with NO code — the only version a public page may render. */
+export const VOLTICK_PUBLIC_PITCH = "Voltick covers 1,000+ tickers.";
 
 /** What the checkout API says when it refuses. Plain enough to show a user. */
 export const SALES_CLOSED_API_MESSAGE =
