@@ -4127,7 +4127,7 @@ function AmazonEntry({
  * "+ tip" instead of $0.00, so what is still outstanding is visible down the
  * column rather than having to be remembered.
  */
-function TipCell({ value, currency, onCommit }: { value: number; currency: string; onCommit: (v: number) => void }) {
+function TipCell({ value, currency, onCommit, accent = HOME_THEME.cyan, emptyLabel = "+ tip", hint = "Tips post ~24h after the block — click to fill this in" }: { value: number; currency: string; onCommit: (v: number) => void; accent?: string; emptyLabel?: string; hint?: string }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ? String(value) : "");
   useEffect(() => { setDraft(value ? String(value) : ""); }, [value]);
@@ -4161,21 +4161,21 @@ function TipCell({ value, currency, onCommit }: { value: number; currency: strin
   return (
     <span
       onClick={() => setEditing(true)}
-      title="Tips post ~24h after the block — click to fill this in"
+      title={hint}
       style={{
         cursor: "text",
-        color: value ? HOME_THEME.cyan : HOME_THEME.muted,
+        color: value ? accent : HOME_THEME.muted,
         fontWeight: value ? 800 : 600,
         opacity: value ? 1 : 0.6,
         borderBottom: "1px dotted rgba(139,148,167,0.35)",
       }}
     >
-      {value ? fmtMoney(value, currency) : "+ tip"}
+      {value ? fmtMoney(value, currency) : emptyLabel}
     </span>
   );
 }
 
-function AmazonTable({ rows, currency, onDelete, onUpdate }: { rows: (AmazonRow & { net: number })[]; currency: string; onDelete: (id: number) => void; onUpdate: (id: number, patch: { tips?: number }) => void }) {
+function AmazonTable({ rows, currency, onDelete, onUpdate }: { rows: (AmazonRow & { net: number })[]; currency: string; onDelete: (id: number) => void; onUpdate: (id: number, patch: { tips?: number; gas?: number }) => void }) {
   const isMobile = useIsMobile();
   const totalPay = rows.reduce((s, r) => s + r.pay, 0);
   const totalTips = rows.reduce((s, r) => s + r.tips, 0);
@@ -4190,7 +4190,7 @@ function AmazonTable({ rows, currency, onDelete, onUpdate }: { rows: (AmazonRow 
           <th style={th("left")}>Date</th>
           <th style={th("right")}>Pay</th>
           <th style={th("right")} title="Posts about 24h after the block — click a cell to fill it in">Tips</th>
-          <th style={th("right")}>Gas</th>
+          <th style={th("right")} title="Click a cell to fill in or fix the gas for that day">Gas</th>
           <th style={th("right")}>Net Pay</th>
           <th style={th("center")}></th>
         </tr>
@@ -4209,7 +4209,11 @@ function AmazonTable({ rows, currency, onDelete, onUpdate }: { rows: (AmazonRow 
             <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right" }}>
               <TipCell value={r.tips} currency={currency} onCommit={(v) => onUpdate(r.id, { tips: v })} />
             </td>
-            <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right", color: HOME_THEME.orange }}>{fmtMoney(r.gas, currency)}</td>
+            <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right" }}>
+              {/* Gas is edited in place exactly like tips — tap the cell on the
+                  day's row, type, Enter. No delete-and-retype. */}
+              <TipCell value={r.gas} currency={currency} onCommit={(v) => onUpdate(r.id, { gas: v })} accent={HOME_THEME.orange} emptyLabel="+ gas" hint="Click to fill in or fix the gas for this day" />
+            </td>
             <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right", fontWeight: 900, color: r.net >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(r.net, currency)}</td>
             <td style={{ padding: "10px 12px", textAlign: "center" }}>
               <DeleteButton onClick={() => onDelete(r.id)} />

@@ -637,25 +637,18 @@ export default function Whales() {
         />
       </div>
 
-      {/* ── net drift (from /v3/flow) ──────────────────────────────────── */}
-      <NetDriftPanel />
-
       <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-w-0 flex-col gap-2">
 
           {/* ── prints ───────────────────────────────────────────────────── */}
-          {/* The prints card GROWS to the height of the right-hand rail rather
-              than stopping at a fixed 480 and leaving a dead band under it with
-              the tracked card stranded below. The table scrolls inside whatever
-              height that leaves, with a floor so a short rail cannot squash it
-              to a couple of rows. */}
+          {/* Fixed height: ~20 rows visible (sticky header + 20 × ~29px), the
+              rest scrolls inside the card. Not an endless card. */}
           <Card
-            className="flex-1"
             title="Prints"
             note={d ? `${num(rows.length)} shown${s && s.n > rows.length ? ` of ${num(s.n)}` : ''}${day ? ` · ${day}` : ''}` : undefined}
           >
             <div className="flex min-h-0 flex-1">
-              <div className="min-h-[420px] min-w-0 flex-1 overflow-auto">
+              <div className="h-[612px] min-w-0 flex-1 overflow-auto">
                 <table className="w-full border-collapse text-xs">
                   <thead className="sticky top-0 z-[1] bg-surface">
                     <tr className="text-2xs uppercase tracking-[0.09em] text-faint">
@@ -1058,13 +1051,15 @@ export default function Whales() {
         </div>
       </div>
 
-      {/* ── tracked contracts ──────────────────────────────────────────────
-          Full width UNDER both columns, not in the right rail: its rows carry
-          a note and a two-pane chart, and neither survives a 320px column.
-          Last on the page because it is the thing you scroll to on purpose —
-          the archive above is what you came for, this is what you kept.
+      {/* ── net drift + tracked contracts ──────────────────────────────────
+          One row UNDER both columns, split in half: Net Drift (from /v3/flow)
+          on the left, tracked contracts on the right. Neither goes in the
+          320px rail — the tracked rows carry a note and a two-pane chart.
       ──────────────────────────────────────────────────────────────────── */}
-      <TrackedAlertsCard store={alerts} />
+      <div className="grid grid-cols-1 items-start gap-2 xl:grid-cols-2">
+        <div className="min-w-0"><NetDriftPanel /></div>
+        <div className="min-w-0"><TrackedAlertsCard store={alerts} /></div>
+      </div>
     </Page>
   )
 }

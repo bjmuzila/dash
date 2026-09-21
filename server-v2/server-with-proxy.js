@@ -1084,7 +1084,7 @@ async function queryNetPremBins(pool, f, binMs, sinceMs) {
             sum(CASE WHEN type = 'P' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END) AS put_net,
             sum(CASE WHEN type = 'C' THEN size ELSE 0 END) AS call_vol,
             sum(CASE WHEN type = 'P' THEN size ELSE 0 END) AS put_vol,
-            avg(spot) FILTER (WHERE spot IS NOT NULL AND spot > 0) AS spot
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY spot) FILTER (WHERE spot IS NOT NULL AND spot > 0) AS spot
        FROM flow_prints
       WHERE ${where}
       GROUP BY 1
@@ -1105,9 +1105,11 @@ async function queryNetPremBins(pool, f, binMs, sinceMs) {
     // 9:30. Two lines on one x-axis, covering different spans.
     //
     // `spot` is the underlying level stamped on every print, so it is identical
-    // across a minute's rows and the mean over the bin IS that minute's level
-    // (mean rather than a picked row so one mis-stamped print cannot own the
-    // minute). Emitting it here means the overlay rides exactly the rows, and
+    // across a minute's rows and the MEDIAN over the bin is that minute's level.
+    // Median, not mean (changed 2026-09-21): SPY/QQQ prints on the Trade
+    // fallback path were stamped with the SPX level, and a mean let a few of
+    // those drag a SPY minute up by tens of dollars — the overlay zig-zagged.
+    // A median ignores a minority of mis-stamped prints outright. Emitting it here means the overlay rides exactly the rows, and
     // exactly the bins, the drift lines are built from — the two cannot
     // disagree about the x-axis again.
     //

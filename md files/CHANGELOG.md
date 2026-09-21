@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-21 — Net Drift spot overlay: SPY/QQQ stop zig-zagging
+
+SPY/QQQ option prints on the Trade fallback path were stamped with the SPX spot
+instead of their own root's, so `/proxy/flow-netprem`'s per-minute average mixed
+~6600 into ~660 minutes and the overlay oscillated. The Trade path now uses
+`ttFlowSpot` for TT multi-flow contracts (same as TimeAndSale), and flow-netprem
+takes the per-minute MEDIAN spot instead of the mean, which also cleans up
+prints already recorded.
+
+Files: `server-v2/proxy-tastytrade.js`, `server-v2/server-with-proxy.js`.
+
 ## 2026-09-21 — Net Drift chart on the Whale Archive
 
 The Flow page's Net Drift (Premium) chart now sits on `/v3/whales`, full width

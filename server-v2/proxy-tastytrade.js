@@ -4221,6 +4221,12 @@ class TastytradeProxy {
         const lastTs = this._tsLastPrintAt.get(sym) ?? 0;
         if (Date.now() - lastTs <= FLOW_TS_HEALTHY_MS) return;
       }
+      // TT multi-flow roots (SPY, QQQ, ...) that fall back to Trade here must be
+      // stamped with THEIR OWN underlying's spot, exactly as the TimeAndSale
+      // branch below does. Stamping the SPX level on a SPY print mixed ~6600
+      // into SPY's ~660 minutes; flow-netprem averages spot per minute, so the
+      // Net Drift spot overlay zig-zagged whenever TimeAndSale stalled.
+      const ttRootTrade = this.ttFlowContracts.get(sym);
       this.flow.addPrint({
         streamerSymbol: sym,
         price: Number(ev.price),
@@ -4229,7 +4235,9 @@ class TastytradeProxy {
         // this.spot lags at 0 until the underlying streamer quote arrives; fall
         // back to the authoritative market-state spot (set on every quote + GEX
         // recompute) so isOtm is classified correctly from the very first print.
-        spot: this.spot || marketState.getSpot(),
+        spot: ttRootTrade
+          ? (this.ttFlowSpot.get(ttRootTrade) || 0)
+          : (this.spot || marketState.getSpot()),
         iv: gk?.iv,
         oi: sm?.oi,
         volume: dvol,
