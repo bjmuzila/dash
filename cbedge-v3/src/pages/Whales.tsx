@@ -8,6 +8,7 @@ import { ContractProbe } from '@/board/topFlow/ContractProbe'
 import { biasOf, biasTitle } from '@/board/topFlow/TopFlowCard'
 import { TrackedAlertsCard, TrackButton } from './whales/TrackedAlertsCard'
 import { contractKey, useWhaleAlerts } from './whales/alertsStore'
+import { NetDriftPanel } from './whales/NetDriftPanel'
 import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -635,6 +636,9 @@ export default function Whales() {
           sub="by premium, not contracts"
         />
       </div>
+
+      {/* ── net drift (from /v3/flow) ──────────────────────────────────── */}
+      <NetDriftPanel />
 
       <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-w-0 flex-col gap-2">

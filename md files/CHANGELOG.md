@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-21 — Net Drift chart on the Whale Archive
+
+The Flow page's Net Drift (Premium) chart now sits on `/v3/whales`, full width
+under the tiles. New `NetDriftPanel` reuses `useNetPremBins`, `buildNetSeries`,
+`buildSpotSeries` and `NetDriftChart` unchanged; a ticker dropdown (Flow
+watchlist, SPX default) and RTH/24H toggle are the only controls. Filters are
+fixed at the Flow page defaults, today's session.
+
+Files: `cbedge-v3/src/pages/whales/NetDriftPanel.tsx` (new), `cbedge-v3/src/pages/Whales.tsx`.
+
 ## 2026-09-21 — Voltick buttons point at voltick.io/bzila
 
 `VOLTICK_URL` in `lib/salesClosed.ts` changes from `https://voltick.io` to
