@@ -202,6 +202,97 @@ const fmtDayHeader = (iso: string) => {
   return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CURRENT PRICE (2026-09-21)
+//
+// The archive stores what a print PAID; this is what the contract is worth now,
+// so every row answers "is this whale up or down". One batched request per
+// hundred contracts to /proxy/api/tt/option-marks — the existing marks reader
+// (live subscriber first, TastyTrade REST otherwise) — not a fetch per row. A
+// contract that has expired, or that the broker does not return, is simply
+// absent and the cell prints a dash.
+//
+// The symbol is BUILT from the four contract fields rather than trusted from
+// `osi`, because TastyTrade wants the padded OCC form ("INTC  261016C00120000")
+// and the archive's `osi` is whatever the feed that wrote it used. SPX flow is
+// the PM-settled weekly root, SPXW; NDX and RUT likewise.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const OCC_ROOT: Record<string, string> = { SPX: 'SPXW', NDX: 'NDXP', RUT: 'RUTW' }
+
+function occOf(r: Pick<TopFlowRow, 'underlying' | 'expiry' | 'type' | 'strike'>): string | null {
+  if (!r.underlying || !r.expiry || !r.type || r.strike == null) return null
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(r.expiry)
+  if (!m) return null
+  const u = r.underlying.trim().toUpperCase()
+  const root = (OCC_ROOT[u] ?? u).padEnd(6, ' ')
+  const k = Math.round(Number(r.strike) * 1000)
+  if (!Number.isFinite(k) || k <= 0) return null
+  return `${root}${m[1]!.slice(2)}${m[2]}${m[3]}${r.type === 'P' ? 'P' : 'C'}${String(k).padStart(8, '0')}`
+}
+const occKey = (s: string) => s.replace(/\s+/g, '')
+
+/** Current mark per contract (keyed by the space-free OCC). Refreshes every minute. */
+function useContractMarks(rows: TopFlowRow[]): Map<string, number> {
+  const symbols = useMemo(() => {
+    const set = new Map<string, string>()
+    for (const r of rows) {
+      const o = occOf(r)
+      if (o) set.set(occKey(o), o)
+    }
+    return [...set.values()].sort()
+  }, [rows])
+  const sig = symbols.join(',')
+  const [marks, setMarks] = useState<Map<string, number>>(new Map())
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    if (!symbols.length) return
+    let on = true
+    const ctrl = new AbortController()
+    const run = async () => {
+      const next = new Map<string, number>()
+      for (let i = 0; i < symbols.length; i += 100) {
+        const chunk = symbols.slice(i, i + 100)
+        try {
+          const r = await fetch(
+            `/proxy/api/tt/option-marks?symbols=${encodeURIComponent(chunk.join(','))}`,
+            { credentials: 'same-origin', signal: ctrl.signal },
+          )
+          if (!r.ok) continue
+          const j = (await r.json()) as { data?: { items?: Array<{ symbol: string; mark?: number; last?: number; bid?: number; ask?: number }> } }
+          for (const it of j.data?.items ?? []) {
+            const v = Number(it.mark) > 0 ? Number(it.mark) : Number(it.last) > 0 ? Number(it.last) : null
+            if (v != null) next.set(occKey(it.symbol), v)
+          }
+        } catch {
+          if (!on) return
+        }
+      }
+      // Merge rather than replace: a chunk that failed this minute keeps the
+      // value it had the last time instead of blanking to a dash.
+      if (on) setMarks((prev) => new Map([...prev, ...next]))
+    }
+    void run()
+    return () => { on = false; ctrl.abort() }
+    // `sig` stands in for `symbols` — same contracts, same request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig, tick])
+
+  return marks
+}
+
+/** The mark for a row, or null. */
+const markOf = (marks: Map<string, number>, r: TopFlowRow) => {
+  const o = occOf(r)
+  return o ? marks.get(occKey(o)) ?? null : null
+}
+
 type PhoneTab = 'prints' | 'size' | 'lookup' | 'tracked' | 'drift'
 const PHONE_TABS: Array<{ key: PhoneTab; label: string }> = [
   { key: 'prints', label: 'PRINTS' },
@@ -404,6 +495,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     () => (d?.rows ?? []).filter((r) => !day || r.sessionDate === day),
     [d, day],
   )
+  const marks = useContractMarks(rows)
   const selected = useMemo(
     () => (selectedId ? rows.find((r) => r.id === selectedId) ?? null : null),
     [rows, selectedId],
@@ -966,6 +1058,14 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                             {r.side === 'above_ask' ? '> ASK' : r.side === 'below_bid' ? '< BID' : r.side ? r.side.toUpperCase() : '—'}
                           </span>
                           <span>{num(r.size)} @ {r.price?.toFixed(2) ?? '—'}</span>
+                          {(() => {
+                            const now = markOf(marks, r)
+                            if (now == null) return null
+                            const up = r.price != null ? now >= r.price : null
+                            return (
+                              <span className={up == null ? 'text-muted' : up ? 'text-up' : 'text-down'}>→ {now.toFixed(2)}</span>
+                            )
+                          })()}
                           {r.dte != null && <span>{r.dte}d</span>}
                         </div>
                       </div>
@@ -1316,6 +1416,10 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                       <th className="px-2 py-2 text-right font-bold">DTE</th>
                       <th className="px-2 py-2 text-right font-bold">Size</th>
                       <th className="px-2 py-2 text-right font-bold">Price</th>
+                      <th
+                        className="px-2 py-2 text-right font-bold"
+                        title="The contract's mark right now, and the move from the print price. Refreshes every minute; a dash means the broker has no quote (expired or delisted)"
+                      >Now</th>
                       <th className="px-2 py-2 text-right font-bold">Premium</th>
                       <th
                         className="px-2 py-2 text-right font-bold"
@@ -1344,7 +1448,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                         <Fragment key={r.id}>
                           {newDay && (
                             <tr>
-                              <td colSpan={11} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
+                              <td colSpan={12} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
                                 {fmtDayHeader(r.sessionDate)}
                                 {agg ? ` · ${num(agg.n)} prints · ${money(agg.total)}` : ''}
                               </td>
@@ -1394,6 +1498,21 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                             <td className="tabular px-2 py-1.5 text-right text-muted">{r.dte ?? '—'}</td>
                             <td className="tabular px-2 py-1.5 text-right text-muted">{num(r.size)}</td>
                             <td className="tabular px-2 py-1.5 text-right text-muted">{r.price?.toFixed(2) ?? '—'}</td>
+                            {(() => {
+                              const now = markOf(marks, r)
+                              const chg = now != null && r.price != null && r.price > 0 ? ((now - r.price) / r.price) * 100 : null
+                              const nowInk = chg == null ? 'text-muted' : chg >= 0 ? 'text-up' : 'text-down'
+                              return (
+                                <td className="tabular whitespace-nowrap px-2 py-1.5 text-right">
+                                  <span className={['font-semibold', nowInk].join(' ')}>{now != null ? now.toFixed(2) : '—'}</span>
+                                  {chg != null && (
+                                    <span className={['ml-1 text-2xs opacity-80', nowInk].join(' ')}>
+                                      {chg >= 0 ? '+' : ''}{chg.toFixed(0)}%
+                                    </span>
+                                  )}
+                                </td>
+                              )
+                            })()}
                             <td className={['tabular px-2 py-1.5 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
                               {money(r.premium)}
                             </td>

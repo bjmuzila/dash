@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-21 — Email template: automatic payment turned off
+
+New broadcast template `lib/emails/autopay-off.ts` (`autopayOffEmail()`,
+`autopayOffText()`, `AUTOPAY_OFF_SUBJECT`) telling subscribers auto-renew is off:
+no further charges, access stays on through the end of the paid period, nothing
+to cancel. Same CB Edge dark shell, keeps `{{UNSUBSCRIBE_URL}}`, optional
+`accessUntil` date. Registered in the owner composer's picker as `autopay-off`.
+
+Files: `lib/emails/autopay-off.ts` (new), `app/api/admin/email-templates/route.ts`.
+
 ## 2026-09-21 — Whale Archive layout: prints capped, drift beside tracked
 
 Prints card is now a fixed ~20-row height (`h-[612px]`) that scrolls inside,
@@ -24478,3 +24488,6 @@ Docs only — no code, no backend, no proxy change.
 - `pages/Whales.tsx` takes a `phone` prop (passed by MWhales, not useIsPhone, so the desktop opt-out still works). Phone layout: range/ticker/FILTERS/sort strip; FLOOR·DTE·C/P·FILL·STRIKE·unreadable in a bottom sheet with a non-default count; 3 tiles; PRINTS·SIZE·LOOKUP·TRACKED·DRIFT sub-tabs; two-line print rows with track star; tapped print opens ContractProbe as a full-height sheet with a Track button. Repeat-strike taps jump to LOOKUP.
 - Lookup / size / buckets / repeats / error JSX hoisted into consts so desktop and phone render the same markup. Desktop layout unchanged. No backend, no proxy, no v2 change.
 - `cbedge-v3/AGENTS.md` phone table gains the `/m/whales` row.
+
+## 2026-09-21 — Whales: current contract price
+- `cbedge-v3/src/pages/Whales.tsx`: new NOW column on the Prints table (and "→ now" on the phone rows) — the contract's current mark plus % move from the print price, green/red. One batched call per 100 contracts to the existing `/proxy/api/tt/option-marks` reader, refreshed every 60s; OCC built from ticker/expiry/type/strike (SPX→SPXW, NDX→NDXP, RUT→RUTW). Expired/unquoted contracts show a dash. No proxy or backend change.
