@@ -15949,6 +15949,13 @@ try {
     function whFilter(o) {
       const sql = ['session_date >= ?::date', 'session_date <= ?::date', 'premium >= ?'];
       const params = [o.from, o.to, o.minPremium];
+      // MAX CONTRACT PRICE (2026-09-22) — the whale page's MAX filter, on the
+      // per-contract fill price, not the premium. null = no cap. A print with
+      // no readable price is DROPPED, same rule as the DTE filter below.
+      if (o.maxPrice != null) {
+        sql.push(`(payload->>'price') IS NOT NULL AND (payload->>'price')::float8 <= ?`);
+        params.push(o.maxPrice);
+      }
       if (o.ticker) { sql.push(`payload->>'underlying' = ?`); params.push(o.ticker); }
       if (o.type) { sql.push(`payload->>'type' = ?`); params.push(o.type); }
       if (o.action) { sql.push(`payload->>'action' = ?`); params.push(o.action); }
@@ -16087,6 +16094,11 @@ try {
           TF_WHALE_FLOOR,
         );
 
+        // Optional ceiling on the CONTRACT PRICE (per-share fill, e.g. 4.20).
+        // Ignored unless it is a positive number.
+        const askedMaxPrice = Number(params.get('max_price'));
+        const maxPrice = Number.isFinite(askedMaxPrice) && askedMaxPrice > 0 ? askedMaxPrice : null;
+
         const ticker = String(params.get('ticker') || '').trim().toUpperCase().slice(0, 12) || null;
         const rawType = String(params.get('type') || '').trim().toUpperCase().slice(0, 1);
         const type = rawType === 'C' || rawType === 'P' ? rawType : null;
@@ -16135,7 +16147,7 @@ try {
 
         try {
           await tfEnsureSchema();
-          const f = whFilter({ from, to, minPremium, ticker, type, action, moneyness, maxDte });
+          const f = whFilter({ from, to, minPremium, maxPrice, ticker, type, action, moneyness, maxDte });
           // No placeholders in here — see the note on whCte.
           const cte = whCte(f.sql, sides === 'all' ? 'TRUE' : 'act IS NOT NULL');
 

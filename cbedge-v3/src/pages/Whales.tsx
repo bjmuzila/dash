@@ -101,6 +101,17 @@ const DTE_STOPS: Array<{ label: string; value: number | null; title: string }> =
 // broken, the header says so (see the clamp note there). Lower LSE_WHALE_FLOOR
 // and both the note and the clamp go away on their own: the page reads the floor
 // off the response, it is not hardcoded here.
+/** MAX CONTRACT PRICE (2026-09-22) — the per-contract fill, not the premium.
+ *  null = no cap. "Whales in cheap contracts": a $2M print at 3.10 is a very
+ *  different bet from a $2M print at 48.00. */
+const CEILINGS: Array<{ label: string; value: number | null }> = [
+  { label: 'ANY', value: null },
+  { label: '≤50.00', value: 50 },
+  { label: '≤25.00', value: 25 },
+  { label: '≤10.00', value: 10 },
+  { label: '≤5.00', value: 5 },
+]
+
 const FLOORS = [
   { label: '≥$500K', value: 500_000 },
   { label: '≥$1M', value: 1_000_000 },
@@ -140,6 +151,7 @@ const SETTINGS_KEY = 'cb-v3-whales:filters'
 interface Saved {
   preset: PresetKey
   floor: number
+  maxPrice: number | null
   ticker: string
   type: '' | 'C' | 'P'
   action: '' | 'BUY' | 'SELL'
@@ -152,6 +164,7 @@ interface Saved {
 const DEFAULTS: Saved = {
   preset: '5d',
   floor: 1_000_000,
+  maxPrice: null,
   ticker: '',
   type: '',
   action: '',
@@ -169,6 +182,7 @@ function loadSettings(): Saved {
     return {
       preset: PRESETS.some((p) => p.key === j.preset) ? (j.preset as PresetKey) : DEFAULTS.preset,
       floor: FLOORS.some((f) => f.value === j.floor) ? (j.floor as number) : DEFAULTS.floor,
+      maxPrice: CEILINGS.some((c) => c.value === (j.maxPrice ?? null)) ? (j.maxPrice ?? null) : DEFAULTS.maxPrice,
       // Capped, uppercased and stripped the same way the input does, so a hand-
       // edited localStorage cannot put a 400-character ticker in the query.
       ticker: typeof j.ticker === 'string' ? j.ticker.trim().toUpperCase().slice(0, 12) : DEFAULTS.ticker,
@@ -534,6 +548,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   const [saved] = useState<Saved>(loadSettings)
   const [preset, setPreset] = useState<PresetKey>(saved.preset)
   const [floor, setFloor] = useState(saved.floor)
+  const [maxPrice, setMaxPrice] = useState<number | null>(saved.maxPrice)
   const [ticker, setTicker] = useState(saved.ticker)
   const [type, setType] = useState<'' | 'C' | 'P'>(saved.type)
   const [action, setAction] = useState<'' | 'BUY' | 'SELL'>(saved.action)
@@ -633,12 +648,12 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     try {
       localStorage.setItem(
         SETTINGS_KEY,
-        JSON.stringify({ preset, floor, ticker, type, action, moneyness, sort, maxDte, showUnreadable }),
+        JSON.stringify({ preset, floor, maxPrice, ticker, type, action, moneyness, sort, maxDte, showUnreadable }),
       )
     } catch {
       /* best-effort — the in-memory choice still drives this session */
     }
-  }, [preset, floor, ticker, type, action, moneyness, sort, maxDte, showUnreadable])
+  }, [preset, floor, maxPrice, ticker, type, action, moneyness, sort, maxDte, showUnreadable])
 
   const span = PRESETS.find((p) => p.key === preset) ?? PRESETS[1]!
   const to = etYmd(new Date())
@@ -646,6 +661,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
   const url = useMemo(() => {
     const sp = new URLSearchParams({ from, to, min_premium: String(floor), sort: sort === 'change' ? 'time' : sort, limit: '300' })
+    if (maxPrice !== null) sp.set('max_price', String(maxPrice))
     if (ticker.trim()) sp.set('ticker', ticker.trim().toUpperCase())
     if (type) sp.set('type', type)
     if (action) sp.set('action', action)
@@ -654,7 +670,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     // 0 is a real value here (same-day only), so this is an explicit null test.
     if (maxDte !== null) sp.set('max_dte', String(maxDte))
     return `/api/lse/whales?${sp.toString()}`
-  }, [from, to, floor, sort, ticker, type, action, moneyness, showUnreadable, maxDte])
+  }, [from, to, floor, maxPrice, sort, ticker, type, action, moneyness, showUnreadable, maxDte])
 
   const q = useQuery<WhalesResponse>(url, { staleMs: 30_000, pollMs: 60_000 })
   const d = q.data
@@ -1072,6 +1088,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   if (phone) {
     const nonDefault =
       (floor !== DEFAULTS.floor ? 1 : 0) +
+      (maxPrice !== DEFAULTS.maxPrice ? 1 : 0) +
       (maxDte !== DEFAULTS.maxDte ? 1 : 0) +
       (type !== DEFAULTS.type ? 1 : 0) +
       (action !== DEFAULTS.action ? 1 : 0) +
@@ -1079,6 +1096,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
       (showUnreadable !== DEFAULTS.showUnreadable ? 1 : 0)
     const resetFilters = () => {
       setFloor(DEFAULTS.floor)
+      setMaxPrice(DEFAULTS.maxPrice)
       setMaxDte(DEFAULTS.maxDte)
       setType(DEFAULTS.type)
       setAction(DEFAULTS.action)
@@ -1324,6 +1342,12 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                 onChange={(v) => setFloor(Number(v))}
               />
               <PhoneSeg
+                label="Max contract price"
+                options={CEILINGS.map((c) => ({ label: c.label, value: String(c.value) }))}
+                value={String(maxPrice)}
+                onChange={(v) => setMaxPrice(v === 'null' ? null : Number(v))}
+              />
+              <PhoneSeg
                 label="DTE at print"
                 options={DTE_STOPS.map((x) => ({ label: x.label, value: String(x.value) }))}
                 value={String(maxDte)}
@@ -1413,6 +1437,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
       <div className="-mt-1 text-sm text-faint">
         Every option print of {money(d?.whaleFloor ?? 1_000_000)}+ premium, kept permanently. Whole market.
         {s ? ` · ${num(s.n)} prints across ${num(s.sessions)} sessions · ${money(s.total)} total premium` : ''}
+        {maxPrice !== null ? <span className="text-faint"> · contract price ≤ {maxPrice.toFixed(2)}</span> : null}
         {maxDte !== null ? (
           <span className="text-faint">{maxDte === 0 ? ' · 0DTE only' : ` · ≤${maxDte} DTE`}</span>
         ) : null}
@@ -1480,6 +1505,14 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
           value={String(floor)}
           defaultValue={String(DEFAULTS.floor)}
           onChange={(v) => setFloor(Number(v))}
+        />
+        <SegMenu<string>
+          label="PRICE"
+          title="Hide prints whose CONTRACT price (the per-contract fill) is above this — e.g. ≤5.00 shows whales buying cheap contracts. Prints with no readable price are dropped while this is on"
+          options={CEILINGS.map((c) => ({ label: c.label, value: String(c.value) }))}
+          value={String(maxPrice)}
+          defaultValue={String(DEFAULTS.maxPrice)}
+          onChange={(v) => setMaxPrice(v === 'null' ? null : Number(v))}
         />
         <SegMenu<string>
           label="STRIKE"
