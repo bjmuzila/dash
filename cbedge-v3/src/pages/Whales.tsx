@@ -1592,17 +1592,22 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
       </div>
 
       <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="flex min-w-0 flex-col gap-2">
-
-          {/* ── prints ───────────────────────────────────────────────────── */}
-          {/* Fixed height: ~20 rows visible (sticky header + 20 × ~29px), the
-              rest scrolls inside the card. Not an endless card. */}
+        {/* ── prints ─────────────────────────────────────────────────────────
+            MATCHES THE RIGHT COLUMN (2026-09-22). On xl the card is pinned
+            absolute to this cell, so the grid row's height is set by the
+            right column alone (lookup + size + buckets + repeats) and the
+            prints card fills it exactly: its bottom always meets Net Drift /
+            Tracked, and it grows when "Where the size went" or "Repeat
+            strikes" grows. Floor of 612px (~20 rows) when that column is
+            short. Below xl it is the old fixed 612px card. */}
+        <div className="relative flex min-w-0 flex-col gap-2 xl:min-h-[612px]">
           <Card
+            className="h-[612px] xl:absolute xl:inset-0 xl:h-auto"
             title="Prints"
             note={d ? `${num(rows.length)} shown${s && s.n > rows.length ? ` of ${num(s.n)}` : ''}${day ? ` · ${day}` : ''}` : undefined}
           >
             <div className="flex min-h-0 flex-1">
-              <div className="h-[612px] min-w-0 flex-1 overflow-auto">
+              <div className="min-h-0 min-w-0 flex-1 overflow-auto">
                 <table className="w-full border-collapse text-xs">
                   <thead className="sticky top-0 z-[1] bg-surface">
                     <tr className="text-2xs uppercase tracking-[0.09em] text-faint">

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { getServerUserId } from "@/lib/supabase/server";
+import { getServerSession } from "@/lib/supabase/server";
 import LandingClient from "@/components/landing/LandingClient";
 import MergerClient from "@/components/landing/MergerClient";
 import { SALES_CLOSED } from "@/lib/salesClosed";
@@ -74,11 +74,38 @@ const PHONE_UA = /iPhone|iPod|Android.*Mobile|Windows Phone|IEMobile|BlackBerry|
 // (lib/salesClosed.ts), and LandingClient — the sales page — when they are not.
 // LandingClient is deliberately still imported and still built: reopening sales
 // is one env var, and a deleted sales page would make that flag a lie.
+// ── SIGNED IN BUT NOT PAYING, WHILE SALES ARE CLOSED (2026-09-22) ─────────────
+// Brandon: "everyone but paid or comped users should be redirected to the home
+// page if they sign in." Before this, an unpaid sign-in went / → /v3 → (paid gate)
+// → /home → /pricing, and landed on a page selling a membership nobody can buy.
+//
+// So "/" only forwards a signed-in visitor who HAS access. Access is read from the
+// SESSION (getServerSession → getSessionWithUser), which is the same truth the
+// middleware paid gate uses: a live Stripe subscription OR a live comp_access
+// grant, plus the owner. NOT lib/subscription.ts getAccess(), which reads the
+// subscriptions table alone and cannot see a comp · a comped member would have been
+// shown the merger notice instead of their dashboard.
+//
+// Everyone else who is signed in gets the merger notice, same as a visitor. This
+// is also the LOOP GUARD for app/home/page.tsx, which now sends unpaid sign-ins
+// HERE: if "/" still forwarded them to /v3, the paid gate would bounce them to
+// /home and /home straight back to "/", forever.
+//
+// With sales OPEN the old path is kept exactly: unpaid → /v3 → /home → /pricing,
+// because there is something to buy. SALES_CLOSED is the one switch for that.
+const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
+
 export default async function RootPage() {
-  const userId = await getServerUserId();
-  if (userId) {
-    const ua = (await headers()).get("user-agent") ?? "";
-    redirect(PHONE_UA.test(ua) ? "/v3/m/gex" : "/v3");
+  const session = await getServerSession();
+  if (session) {
+    const hasAccess =
+      session.isPaid ||
+      session.isOwner ||
+      (OWNER_USER_ID !== "" && session.userId === OWNER_USER_ID);
+    if (hasAccess || !SALES_CLOSED) {
+      const ua = (await headers()).get("user-agent") ?? "";
+      redirect(PHONE_UA.test(ua) ? "/v3/m/gex" : "/v3");
+    }
   }
   return SALES_CLOSED ? <MergerClient /> : <LandingClient />;
 }

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-22 — Unpaid sign-ins land on the merger page, not /pricing
+
+An account with no live subscription and no comp signed in and went
+/home → /pricing, a page selling a membership nobody can buy. Brandon: everyone
+but paid or comped users goes to the home page on sign-in.
+
+`app/home/page.tsx` (where every sign-in lands) now sends a session without
+access to `/` while `SALES_CLOSED`, and to `/pricing` only when sales are open.
+`app/page.tsx` stops forwarding an unpaid session to `/v3` while sales are
+closed and renders the merger notice instead; without that half, `/` → `/v3` →
+paid gate → `/home` → `/` would loop.
+
+Access in both now comes from `getServerSession()` (→ `getSessionWithUser`),
+the same "live Stripe sub OR live comp_access OR owner" truth the middleware
+paid gate uses. `/home` used `getAccess()`, which reads the subscriptions table
+only and never sees a comp, so a comped member reaching `/home` was being sent
+to `/pricing` after the paid gate had let them through. That is fixed with it.
+Not changed: `app/mult-greek/page.tsx` still sends unpaid visitors to `/pricing`.
+
 ## 2026-09-22 — v3 Scanner › IB Stats: historical stats opened to subscribers
 
 The "historical stats" disclosure (the sixteen stat cards) and the EOD IB
@@ -24522,3 +24541,21 @@ Docs only — no code, no backend, no proxy change.
 
 ## 2026-09-21 · GEX Candles UI spec for Voltick
 - Added `md files/GEX-CANDLES-UI-SPEC.md`: a UI-first, path-free version of GEX-CANDLES.md for handing to Voltick (wireframes, anatomy, bubble/rail/tag visuals, controls, phone, replay, states, data contract, CB Edge → Voltick colour mapping, build order + acceptance checklist).
+
+## 2026-09-22 — Whales phone: probe error line, Net Drift fit + 24H SPX-only
+- `board/topFlow/ContractProbe.tsx`: failed bars request (e.g. vault 429) falls back to the other source; error text no longer prints the raw message (it carried the `/api/...` URL).
+- `pages/flow/NetDriftChart.tsx`: `minBarSpacing: 0.05` + fixed edges so the whole window fits the width; range re-pinned on resize; `locked` prop disables drag-pan/zoom.
+- `pages/whales/NetDriftPanel.tsx`: `phone` prop → locked 320px chart; 24H toggle SPX-only. `pages/Whales.tsx` phone DRIFT tab passes `phone`.
+
+## 2026-09-22 — /flow hidden
+- `shell/Shell.tsx`: Flow rail entry commented out. `pages/TradersDashboard.tsx`: `/flow` removed from Quick Links + LIVE_ROUTES. Route and `pages/Flow.tsx` untouched.
+
+## 2026-09-22 — Whales desktop: Prints card height follows the right column
+- `pages/Whales.tsx`: on xl the Prints card is absolute-pinned to its grid cell, so its height = the right column's (lookup / where the size went / buckets / repeats), floor 612px. No gap above Net Drift on 5D, no stretched empty card on 1D; it grows/shrinks as those cards do. Below xl: unchanged fixed 612px.
+- (The two 2026-09-22 entries above were re-added again — this file was overwritten twice today by a save from an older copy. Check for an editor tab holding a stale CHANGELOG.md.)
+
+
+## 2026-09-22 — Multi Greek spot now matches the board (ES→SPX off-hours)
+- `/proxy/api/tt/chains/:ticker?live=0` (Multi Greek) returned TT REST's SPX index quote as `underlyingPrice` — frozen outside RTH, so the ladder centred/scaled GEX on a stale price.
+- Added `TastytradeProxy#liveSpot()` (returns `_effectiveSpot()`: SPX cash in RTH, ES + cash basis off-hours) and the REST branch of the chains route now overwrites `underlyingPrice` with it for the subscribed underlying. Other tickers unchanged.
+- Files: `server-v2/proxy-tastytrade.js`, `server-v2/server-with-proxy.js`.

@@ -5151,6 +5151,26 @@ class TastytradeProxy {
   }
 
   /**
+   * The subscribed underlying's EFFECTIVE spot — the same number the rest of the
+   * board prices off (_effectiveSpot(): SPX cash during RTH, ES + cash basis
+   * outside it). `?live=0` callers get fetchChainFull(), whose underlyingPrice is
+   * TT REST's index quote (mark/last/prev-close) — frozen off-hours, so the Multi
+   * Greek ladder centred and scaled its GEX on a stale price while every other
+   * card had moved. The route overwrites the REST spot with this one.
+   *
+   * Returns 0 for any other underlying, or when the feed has no spot yet, which
+   * leaves the REST value in place.
+   *
+   * @param {string} ticker
+   * @returns {number}
+   */
+  liveSpot(ticker) {
+    if (chainTicker(ticker) !== SYMBOL) return 0;
+    const px = Number(this._effectiveSpot ? this._effectiveSpot() : this.spot) || 0;
+    return px > 0 ? px : 0;
+  }
+
+  /**
    * Serve option marks for a list of OCC symbols from the LIVE maps. Returns the
    * same { items:[{symbol, iv, bid, ask, mark, last}] } shape as fetchOptionMarks
    * — but ONLY if EVERY requested symbol is present live; otherwise null (→ REST).

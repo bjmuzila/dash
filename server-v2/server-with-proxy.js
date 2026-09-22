@@ -4436,6 +4436,14 @@ async function main() {
             // null back and its payload is untouched.
             const volOverlay = live ? null : (proxy?.liveVolumeMap?.(ticker) || null);
             if (volOverlay) mergeLiveVolume(data, volOverlay);
+            // Same idea for the spot: REST's underlyingPrice is TT's index quote,
+            // frozen off-hours, while the board runs on _effectiveSpot() (ES +
+            // cash basis outside RTH). Without this the Multi Greek ladder sat
+            // hundreds of points from every other card. See liveSpot().
+            if (!live && data) {
+              const eff = proxy?.liveSpot?.(ticker) || 0;
+              if (eff > 0) data.underlyingPrice = eff;
+            }
             sendJson(res, 200, { data, context: live ? 'live' : 'rest' });
           } catch (e) {
             sendJson(res, 502, { error: String(e?.message || e), ticker });
