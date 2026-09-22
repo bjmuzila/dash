@@ -321,6 +321,10 @@ export function NetPremiumCard() {
               // What closes the gate above. The chart owns the ChartFrame, so it
               // is the only thing here that knows whether the card is on screen.
               onVisibility={setChartVisible}
+              // The session is the window (2026-09-22): 9:30 on the left edge,
+              // 4:00 on the right, no drag-pan or zoom. Unlocked, a resize or a
+              // stray drag left the day crammed against the right axis.
+              locked
             />
           </div>
           {!series.hasData && (

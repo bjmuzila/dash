@@ -43,7 +43,8 @@ const FILTERS: FlowFilters = {
 const TICKER_OPTIONS = DEFAULT_TICKERS.map((t) => ({ value: t as string, label: t as string }))
 
 /**
- * `phone`: the chart is width-locked (the whole window fits, no sideways pan).
+ * `phone`: shorter chart (320px). The chart is width-locked everywhere — the
+ * whole session fits, left-aligned, no sideways pan or zoom.
  *
  * 24H is SPX-only (2026-09-22). SPX options trade the overnight GTH session, so
  * its tape has a pre-open to show; nothing else on the list does, and a 24H
@@ -133,7 +134,7 @@ export function NetDriftPanel({ phone = false }: { phone?: boolean } = {}) {
         </div>
         {/* Flex column on purpose — see the same note in pages/Flow.tsx. */}
         <div className={['flex w-full flex-col', phone ? 'h-[320px] min-h-[320px]' : 'h-[420px] min-h-[420px]'].join(' ')}>
-          <NetDriftChart series={netSeries} ordersByMin={ordersByMin} spotPts={spotSeries.pts} locked={phone} />
+          <NetDriftChart series={netSeries} ordersByMin={ordersByMin} spotPts={spotSeries.pts} locked />
         </div>
         {!netSeries.hasData && (
           <p className="px-3 pb-3 text-center text-xs text-muted">

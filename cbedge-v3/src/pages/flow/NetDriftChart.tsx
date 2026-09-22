@@ -187,7 +187,12 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, lock
         to: s.closeSec as UTCTimestamp,
       })
     } catch {
-      /* an empty or single-point range throws; the next poll fixes it */
+      // An empty or single-point range throws. Fall back to the whole grid by
+      // index, which is the same window whenever the grid has any points.
+      const n = s.callPts.length
+      if (n > 1) {
+        try { chart.timeScale().setVisibleLogicalRange({ from: 0, to: n - 1 }) } catch { /* next poll */ }
+      }
     }
   }
 
@@ -231,8 +236,11 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, lock
           // ~1,440 one-minute bars) into a phone-width plot, so setVisibleRange
           // silently gave back only the newest slice. Let it compress.
           minBarSpacing: 0.05,
-          fixLeftEdge: true,
-          fixRightEdge: true,
+          // NO fixLeftEdge / fixRightEdge (removed 2026-09-22). fixRightEdge
+          // pins the right edge to the last bar that has a VALUE and ignores
+          // the whitespace that holds the rest of the session open — so the
+          // morning's few minutes were shoved against the price axis with the
+          // whole card empty to their left. The window is held by pin() alone.
           // The axis ticks. localization.timeFormatter below only reaches the
           // crosshair label, so both are needed to get an ET axis.
           tickMarkFormatter: (time: unknown) =>

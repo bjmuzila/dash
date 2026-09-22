@@ -24559,3 +24559,8 @@ Docs only — no code, no backend, no proxy change.
 - `/proxy/api/tt/chains/:ticker?live=0` (Multi Greek) returned TT REST's SPX index quote as `underlyingPrice` — frozen outside RTH, so the ladder centred/scaled GEX on a stale price.
 - Added `TastytradeProxy#liveSpot()` (returns `_effectiveSpot()`: SPX cash in RTH, ES + cash basis off-hours) and the REST branch of the chains route now overwrites `underlyingPrice` with it for the subscribed underlying. Other tickers unchanged.
 - Files: `server-v2/proxy-tastytrade.js`, `server-v2/server-with-proxy.js`.
+
+## 2026-09-22 — Home Net Premium card: whole session, left-aligned, no scroll
+- `board/netPremium/NetPremiumCard.tsx`: passes `locked` to NetDriftChart — no drag-pan/zoom; the 9:30–4:00 (or ETH) window always fills the card from the left edge instead of the day sitting crammed against the right axis.
+- `pages/flow/NetDriftChart.tsx`: REMOVED `fixLeftEdge`/`fixRightEdge` (added earlier today) — fixRightEdge clamps to the last bar with a value, ignoring the future whitespace, which is exactly what crammed the day against the right axis on the home card and the Whales Net Drift. Reproduced in a headless test chart and confirmed gone without them. Also: if `setVisibleRange` throws, fall back to the full grid by logical index. Resize re-pin + `minBarSpacing: 0.05` stay.
+- Whales Net Drift (desktop): now also `locked` — same no-scroll, left-aligned window as the home card.
