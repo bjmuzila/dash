@@ -452,14 +452,20 @@ async function loadContexts(dates) {
  * `long` is the trade's direction: a call gains as SPX rises. Every directional
  * filter reads through it rather than assuming calls.
  */
+/** Entry contract premium band — $1.00 to $5.00, closest to the CB. */
+const PREMIUM_BAND = [1.0, 5.0];
+
 const isLong = (t) => String(t.side).toUpperCase() !== 'P';
 
 const FILTERS = [
   // ── From the trade row itself ───────────────────────────────────────────
   {
-    id: 'premium', name: 'Entry premium ≤ $1.00', block: 'participation', weight: 1.0, available: true,
-    detail: 'The rule the tracker already buys on — probe mark at or under the floor',
-    test: (t) => (num(t.probe_price) == null ? null : num(t.probe_price) <= Number(cbTrack.CONFIG.BUY_MIN || 1)),
+    id: 'premium', name: 'Entry premium $1.00 – $5.00', block: 'participation', weight: 1.0, available: true,
+    detail: 'Contract priced between $1.00 and $5.00 — the band the entry is picked from, closest to the CB',
+    test: (t) => {
+      const px = num(t.entry_price) ?? num(t.probe_price);
+      return px == null ? null : px >= PREMIUM_BAND[0] && px <= PREMIUM_BAND[1];
+    },
   },
   {
     id: 'walk', name: 'Walk depth ≤ 2 strikes', block: 'trend', weight: 0.9, available: true,
@@ -473,17 +479,12 @@ const FILTERS = [
   },
   {
     id: 'drift', name: 'Spot drifting toward the CB', block: 'trend', weight: 1.1, available: true,
-    detail: 'Spot at the fill is closer to the CB than it was at the probe',
+    detail: 'Spot at the fill is no farther from the CB than it was at the probe — scored, not armed by default',
     test: (t) => {
       const ps = num(t.probe_spot), es = num(t.entry_spot), cb = num(t.cb_strike);
       if (ps == null || es == null || cb == null) return null;
-      return Math.abs(es - cb) < Math.abs(ps - cb);
+      return Math.abs(es - cb) <= Math.abs(ps - cb);
     },
-  },
-  {
-    id: 'cbprice', name: 'CB strike still cheap (≤ $3)', block: 'dealer', weight: 0.8, available: true,
-    detail: 'What the CB contract itself priced at — an expensive CB is one the market already believes',
-    test: (t) => (num(t.cb_price) == null ? null : num(t.cb_price) <= 3),
   },
 
   // ── From etf_candles ────────────────────────────────────────────────────
@@ -592,8 +593,8 @@ const AVAILABLE = FILTERS.filter((f) => f.available);
 const availableIds = AVAILABLE.map((f) => f.id);
 const filterById = new Map(FILTERS.map((f) => [f.id, f]));
 
-/** The subset the page is allowed to arm by default — the trade-row five. */
-const DEFAULT_ARMED = ['premium', 'walk', 'dist', 'drift', 'cbprice'];
+/** Armed by default: premium band, walk depth, CB distance. Drift is scored but not armed. */
+const DEFAULT_ARMED = ['premium', 'walk', 'dist'];
 
 function normFilters(raw) {
   if (raw == null) return DEFAULT_ARMED.slice();

@@ -183,6 +183,65 @@ function saveOrder(ids: string[]): void {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PINS — the four rows you actually take, and everything else behind one row.
+//
+// (Brandon, 2026-09-18, picking option A off the mockup.) Listing every shot on
+// every page fixed the missing-row problem and made the panel long. A menu you
+// scan is worse than a menu you aim at, and the aiming is personal: the answer
+// is a short PINNED list on top and one "All shots" row under it holding the
+// rest, shut by default.
+//
+// Right-click any row to pin or unpin it. Stored as ids, in pin order, so the
+// pinned list is also draggable — and, being ids, a pin survives the row being
+// absent: pin Stats and it is the first row on every page in the app.
+//
+// A pin for a row that does not exist right now (a board card pinned while you
+// were on the board) is KEPT in storage and simply not drawn. It comes back
+// when the row does, rather than being quietly forgotten because you walked to
+// another page.
+// ─────────────────────────────────────────────────────────────────────────────
+const PINS_KEY = 'cb-v3-copyshot-pins'
+const ALL_OPEN_KEY = 'cb-v3-copyshot-all-open'
+
+/** First run: Stats. It is the one row that is correct from anywhere. */
+const DEFAULT_PINS = ['key-levels-stats']
+
+function loadPins(): string[] {
+  try {
+    const raw = localStorage.getItem(PINS_KEY)
+    if (raw == null) return DEFAULT_PINS
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return DEFAULT_PINS
+  }
+}
+
+function savePins(ids: string[]): void {
+  try {
+    localStorage.setItem(PINS_KEY, JSON.stringify(ids))
+  } catch {
+    /* best-effort */
+  }
+}
+
+function loadAllOpen(): boolean {
+  try {
+    return localStorage.getItem(ALL_OPEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function saveAllOpen(v: boolean): void {
+  try {
+    localStorage.setItem(ALL_OPEN_KEY, v ? '1' : '0')
+  } catch {
+    /* best-effort */
+  }
+}
+
 interface CopyShotApi {
   targets: CopyShotTarget[]
   publish: (key: string, list: CopyShotTarget[]) => void
@@ -519,6 +578,9 @@ function useShot() {
 
 // ── The toolbar menu ─────────────────────────────────────────────────────────
 
+/** The pinned list's group name. Not a real group — it never reaches the atlas. */
+const PINNED = 'Pinned'
+
 /** How long to wait for a navigated-to surface to publish something shootable. */
 const READY_MS = 12_000
 /**
@@ -556,6 +618,8 @@ export function CopyShotMenu() {
   const { state, run, take } = useShot()
   const [open, setOpen] = useState(false)
   const [order, setOrder] = useState<string[]>(() => loadOrder())
+  const [pins, setPins] = useState<string[]>(() => loadPins())
+  const [allOpen, setAllOpen] = useState<boolean>(() => loadAllOpen())
   const [dragging, setDragging] = useState<string | null>(null)
   const dragId = useRef<string | null>(null)
   const navigate = useNavigate()
@@ -627,6 +691,27 @@ export function CopyShotMenu() {
       }))
   }, [rows, order])
 
+  /** The pinned rows, in pin order. A pin with no row right now is skipped. */
+  const pinnedRows = useMemo(() => {
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    return pins.map((id) => byId.get(id)).filter((r): r is Row => !!r)
+  }, [rows, pins])
+
+  const togglePin = useCallback((id: string) => {
+    setPins((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      savePins(next)
+      return next
+    })
+  }, [])
+
+  const toggleAll = useCallback(() => {
+    setAllOpen((v) => {
+      saveAllOpen(!v)
+      return !v
+    })
+  }, [])
+
   /**
    * Commit a drop. The saved list is rewritten from the group's rows AFTER the
    * move, with every other group's saved ids carried through untouched — so
@@ -639,6 +724,20 @@ export function CopyShotMenu() {
       setDragging(null)
       dragId.current = null
       if (!src || src === targetId) return
+      // The pinned list is its own order, saved under its own key — dragging in
+      // it must not touch the arrangement of the group the row also lives in.
+      if (groupName === PINNED) {
+        setPins((prev) => {
+          const ids = [...prev]
+          const from = ids.indexOf(src)
+          const to = ids.indexOf(targetId)
+          if (from < 0 || to < 0) return prev
+          ids.splice(to, 0, ...ids.splice(from, 1))
+          savePins(ids)
+          return ids
+        })
+        return
+      }
       const group = groups.find((g) => g.name === groupName)
       if (!group) return
       const ids = group.rows.map((r) => r.id)
@@ -729,6 +828,84 @@ export function CopyShotMenu() {
     void run(() => prepare(a), claim)
   }
 
+  // Nothing pinned means nothing to aim at, so the full list opens itself
+  // rather than leaving a panel with one row in it that says "All shots".
+  const showAll = allOpen || pinnedRows.length === 0
+
+  /**
+   * One row, drawn the same whether it is pinned or down in the full list —
+   * `where` only decides which saved order a drag rewrites.
+   */
+  const row = (t: Row, where: string) => {
+    const pinned = pins.includes(t.id)
+    return (
+      <button
+        key={`${where}:${t.id}`}
+        type="button"
+        onClick={() => pick(t)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          togglePin(t.id)
+        }}
+        title={[
+          t.hint ?? `Copy a PNG of ${t.label}`,
+          t.live
+            ? null
+            : t.atlas?.probe
+              ? 'reads the page ticker where you are — it does not move you'
+              : t.atlas?.needs
+                ? `not open — takes you there (${t.atlas.needs})`
+                : 'not open — takes you there and shoots it',
+          pinned ? 'right-click to unpin' : 'right-click to pin',
+          'drag to reorder',
+        ]
+          .filter(Boolean)
+          .join(' — ')}
+        draggable
+        onDragStart={(e) => {
+          dragId.current = t.id
+          setDragging(t.id)
+          e.dataTransfer.effectAllowed = 'move'
+          try {
+            e.dataTransfer.setData('text/plain', t.id)
+          } catch {
+            /* ignore — some browsers refuse a custom type here */
+          }
+        }}
+        onDragOver={(e) => {
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'move'
+        }}
+        onDrop={(e) => {
+          e.preventDefault()
+          dropOn(where, t.id)
+        }}
+        onDragEnd={() => {
+          setDragging(null)
+          dragId.current = null
+        }}
+        className={[
+          'flex w-full cursor-grab items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-raised',
+          // An absent row is dimmed, not hidden and not disabled: it works, it
+          // just has further to go. Dimming is the only honest way to say
+          // "this one costs a second".
+          t.live ? 'text-fg' : 'text-muted',
+          dragging === t.id ? 'opacity-40' : '',
+        ].join(' ')}
+      >
+        <span aria-hidden className="w-4 shrink-0 text-center leading-none">
+          {t.icon}
+        </span>
+        <span className="min-w-0 flex-1 truncate">{t.label}</span>
+        {pinned && where !== PINNED && (
+          <span aria-hidden className="text-3xs opacity-40">
+            📌
+          </span>
+        )}
+      </button>
+    )
+  }
+
   return (
     <div className="relative shrink-0">
       {/* The probe slot. `hidden` rather than absent-from-the-DOM because these
@@ -766,69 +943,48 @@ export function CopyShotMenu() {
       </button>
       <Popover open={open} onClose={close}>
         <div className="flex w-64 flex-col gap-2">
-          {groups.map((g) => (
-            <div key={g.name} className="flex flex-col gap-0.5 border-t border-line pt-2 first:border-t-0 first:pt-0">
+          {/* ── PINNED ──────────────────────────────────────────────────────
+              The whole point of option A: the rows you take are the rows you
+              see, and they are the same rows on every page. */}
+          {pinnedRows.length > 0 && (
+            <div className="flex flex-col gap-0.5">
               <span className="px-1 text-3xs font-bold uppercase tracking-[0.12em] text-faint opacity-60">
-                {g.name}
+                {PINNED}
               </span>
-              {g.rows.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => pick(t)}
-                  title={[
-                    t.hint ?? `Copy a PNG of ${t.label}`,
-                    t.live
-                      ? null
-                      : t.atlas?.probe
-                        ? 'reads the page ticker where you are — it does not move you'
-                        : t.atlas?.needs
-                          ? `not open — takes you there (${t.atlas.needs})`
-                          : 'not open — takes you there and shoots it',
-                    'drag to reorder',
-                  ]
-                    .filter(Boolean)
-                    .join(' — ')}
-                  draggable
-                  onDragStart={(e) => {
-                    dragId.current = t.id
-                    setDragging(t.id)
-                    e.dataTransfer.effectAllowed = 'move'
-                    try {
-                      e.dataTransfer.setData('text/plain', t.id)
-                    } catch {
-                      /* ignore — some browsers refuse a custom type here */
-                    }
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault()
-                    e.dataTransfer.dropEffect = 'move'
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault()
-                    dropOn(g.name, t.id)
-                  }}
-                  onDragEnd={() => {
-                    setDragging(null)
-                    dragId.current = null
-                  }}
-                  className={[
-                    'flex w-full cursor-grab items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-raised',
-                    // An absent row is dimmed, not hidden and not disabled: it
-                    // works, it just has further to go. Dimming is the only
-                    // honest way to say "this one costs a second".
-                    t.live ? 'text-fg' : 'text-muted',
-                    dragging === t.id ? 'opacity-40' : '',
-                  ].join(' ')}
-                >
-                  <span aria-hidden className="w-4 shrink-0 text-center leading-none">
-                    {t.icon}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{t.label}</span>
-                </button>
-              ))}
+              {pinnedRows.map((t) => row(t, PINNED))}
             </div>
-          ))}
+          )}
+
+          {/* ── EVERYTHING ELSE, behind one row ─────────────────────────────
+              Shut by default and remembered open — a menu that reopens the way
+              you left it is a menu you can aim at without reading. */}
+          <div className="flex flex-col gap-0.5 border-t border-line pt-2 first:border-t-0 first:pt-0">
+            <button
+              type="button"
+              onClick={toggleAll}
+              title={showAll ? 'Hide the full list' : 'Every shot in the app'}
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm text-muted hover:bg-raised hover:text-fg"
+            >
+              <span aria-hidden className="w-4 shrink-0 text-center leading-none">
+                ▤
+              </span>
+              <span className="min-w-0 flex-1 truncate">All shots</span>
+              <span aria-hidden className="text-3xs opacity-50">
+                {showAll ? '▾' : '▸'}
+              </span>
+            </button>
+            {showAll &&
+              groups.map((g) => (
+                <div key={g.name} className="mt-1.5 flex flex-col gap-0.5">
+                  <span className="px-1 text-3xs font-bold uppercase tracking-[0.12em] text-faint opacity-60">
+                    {g.name}
+                  </span>
+                  {g.rows.map((t) => row(t, g.name))}
+                </div>
+              ))}
+          </div>
+
+          <span className="px-1 text-3xs text-faint opacity-40">right-click a row to pin / unpin</span>
         </div>
       </Popover>
     </div>
