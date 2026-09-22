@@ -9614,6 +9614,246 @@ if (libDb) {
     });
   }
 
+  // /api/owner/voltick-audit — the Voltick Audit board (owner.cbedge.net →
+  // /owner/voltick-audit, owner-vite/src/pages/VoltickAudit.tsx).
+  //
+  // Cards (one per thing to change or look at on a Voltick page) and the
+  // screenshots hanging off them. A screenshot's BYTES are written once, as
+  // pasted, and never rewritten; its markup (pen / highlighter / arrow / circle
+  // / box / text) is vector JSON in image pixels, stored beside the bytes. So a
+  // markup stays editable forever and the image URL can cache immutably.
+  //
+  // Per-gesture actions, not To-Do's whole-document save: screenshots are
+  // megabytes and must never ride along with a notes keystroke. The list never
+  // carries bytes; each <img> pulls its own from /shot?id=N.
+  //
+  // GET                   → { cards, shots }
+  // POST { action: createCard | updateCard | deleteCard
+  //              | addShots | updateShot | deleteShot }
+  // GET  /api/owner/voltick-audit/shot?id=N → the image bytes
+  {
+    const VA_STATUSES = ['Open', 'In Progress', 'Done'];
+    const VA_MAX_SHOT_BYTES = 8 * 1024 * 1024;
+    const VA_MAX_SHOTS_PER_CARD = 12;
+    const VA_MAX_MARKUP_CHARS = 1_500_000;
+    let vaReady = null;
+    const vaPool = () => {
+      if (!libDb || typeof libDb.getPool !== 'function') throw new Error('database unavailable');
+      return libDb.getPool();
+    };
+    const vaEnsure = (pool) => {
+      if (!vaReady) {
+        vaReady = (async () => {
+          await pool.query(`
+            CREATE TABLE IF NOT EXISTS voltick_audit_card (
+              id SERIAL PRIMARY KEY,
+              page TEXT NOT NULL DEFAULT '',
+              title TEXT NOT NULL DEFAULT '',
+              notes TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'Open',
+              sort_order INTEGER NOT NULL DEFAULT 0,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )`);
+          await pool.query(`
+            CREATE TABLE IF NOT EXISTS voltick_audit_shot (
+              id SERIAL PRIMARY KEY,
+              card_id INTEGER NOT NULL REFERENCES voltick_audit_card(id) ON DELETE CASCADE,
+              caption TEXT NOT NULL DEFAULT '',
+              mime TEXT NOT NULL DEFAULT 'image/png',
+              filename TEXT NOT NULL DEFAULT '',
+              bytes BYTEA NOT NULL,
+              byte_size INTEGER NOT NULL DEFAULT 0,
+              width INTEGER NOT NULL DEFAULT 0,
+              height INTEGER NOT NULL DEFAULT 0,
+              markup JSONB NOT NULL DEFAULT '[]'::jsonb,
+              sort_order INTEGER NOT NULL DEFAULT 0,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )`);
+          await pool.query('CREATE INDEX IF NOT EXISTS idx_voltick_audit_shot_card ON voltick_audit_shot(card_id, sort_order, id)');
+        })().catch((e) => { vaReady = null; throw e; });
+      }
+      return vaReady;
+    };
+    const vaId = (v) => { const n = parseInt(String(v ?? ''), 10); return Number.isFinite(n) && n > 0 ? n : 0; };
+    const vaStatus = (v) => (VA_STATUSES.includes(String(v)) ? String(v) : 'Open');
+    const vaDim = (v) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n > 0 && n < 20000 ? n : 0; };
+    const vaDataUrl = (s) => {
+      const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(String(s || ''));
+      if (!m) return null;
+      const buf = Buffer.from(m[2], 'base64');
+      if (!buf.length || buf.length > VA_MAX_SHOT_BYTES) return null;
+      return { mime: m[1].toLowerCase(), buf };
+    };
+    const VA_CARD_COLS = 'id, page, title, notes, status, sort_order, created_at, updated_at';
+    // bytes deliberately excluded — the list must never carry image payloads.
+    const VA_SHOT_COLS = 'id, card_id, caption, mime, filename, byte_size, width, height, markup, sort_order, created_at';
+
+    register('/api/owner/voltick-audit', {
+      auth: 'owner', methods: ['GET', 'POST'],
+      async handler(req, res) {
+        try {
+          const pool = vaPool();
+          await vaEnsure(pool);
+
+          if (req.method === 'GET') {
+            const [cards, shots] = await Promise.all([
+              pool.query(`SELECT ${VA_CARD_COLS} FROM voltick_audit_card ORDER BY sort_order ASC, id DESC`),
+              pool.query(`SELECT ${VA_SHOT_COLS} FROM voltick_audit_shot ORDER BY card_id ASC, sort_order ASC, id ASC`),
+            ]);
+            send(res, 200, { cards: cards.rows, shots: shots.rows }, { 'Cache-Control': 'no-store' });
+            return;
+          }
+
+          // Screenshots arrive as base64 data URLs in the JSON body (no
+          // multipart parser here, same as Feedback / Media Dump). owner-vite's
+          // nginx allows 40m; a batch is at most a few downscaled images.
+          const body = await readJson(req, 38_000_000);
+          const action = String(body?.action ?? '');
+
+          if (action === 'createCard') {
+            // Newest on top: one below the current minimum.
+            const { rows: mn } = await pool.query('SELECT COALESCE(MIN(sort_order), 0) - 1 AS n FROM voltick_audit_card');
+            const { rows } = await pool.query(
+              `INSERT INTO voltick_audit_card (page, title, notes, status, sort_order)
+               VALUES ($1, $2, $3, $4, $5) RETURNING ${VA_CARD_COLS}`,
+              [
+                String(body?.page ?? '').trim().slice(0, 120),
+                String(body?.title ?? '').slice(0, 400),
+                String(body?.notes ?? '').slice(0, 20000),
+                vaStatus(body?.status),
+                Number(mn[0]?.n ?? 0),
+              ],
+            );
+            send(res, 200, { ok: true, card: rows[0] });
+            return;
+          }
+
+          if (action === 'updateCard') {
+            const id = vaId(body?.id);
+            if (!id) { send(res, 400, { error: 'missing id' }); return; }
+            // null = leave as stored, so partial patches never blank a field.
+            await pool.query(
+              `UPDATE voltick_audit_card SET
+                 page       = COALESCE($2, page),
+                 title      = COALESCE($3, title),
+                 notes      = COALESCE($4, notes),
+                 status     = COALESCE($5, status),
+                 updated_at = now()
+               WHERE id = $1`,
+              [
+                id,
+                body?.page == null ? null : String(body.page).trim().slice(0, 120),
+                body?.title == null ? null : String(body.title).slice(0, 400),
+                body?.notes == null ? null : String(body.notes).slice(0, 20000),
+                body?.status == null ? null : vaStatus(body.status),
+              ],
+            );
+            send(res, 200, { ok: true });
+            return;
+          }
+
+          if (action === 'deleteCard') {
+            const id = vaId(body?.id);
+            if (!id) { send(res, 400, { error: 'missing id' }); return; }
+            await pool.query('DELETE FROM voltick_audit_card WHERE id = $1', [id]); // shots cascade
+            send(res, 200, { ok: true });
+            return;
+          }
+
+          if (action === 'addShots') {
+            const cardId = vaId(body?.cardId);
+            if (!cardId) { send(res, 400, { error: 'missing cardId' }); return; }
+            const { rows: have } = await pool.query(
+              'SELECT COUNT(*)::int AS n, COALESCE(MAX(sort_order), 0) AS mx FROM voltick_audit_shot WHERE card_id = $1', [cardId]);
+            const { rows: exists } = await pool.query('SELECT 1 FROM voltick_audit_card WHERE id = $1', [cardId]);
+            if (!exists.length) { send(res, 404, { error: 'card not found' }); return; }
+            const room = VA_MAX_SHOTS_PER_CARD - Number(have[0]?.n ?? 0);
+            if (room <= 0) { send(res, 400, { error: `Up to ${VA_MAX_SHOTS_PER_CARD} screenshots per card.` }); return; }
+            const incoming = Array.isArray(body?.shots) ? body.shots.slice(0, room) : [];
+            let order = Number(have[0]?.mx ?? 0);
+            const out = [];
+            let rejected = 0;
+            for (const s of incoming) {
+              const img = vaDataUrl(s?.dataUrl);
+              if (!img) { rejected++; continue; }
+              order += 1;
+              const { rows } = await pool.query(
+                `INSERT INTO voltick_audit_shot (card_id, caption, mime, filename, bytes, byte_size, width, height, sort_order)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${VA_SHOT_COLS}`,
+                [cardId, String(s?.caption ?? '').slice(0, 1000), img.mime, String(s?.name ?? '').slice(0, 200),
+                 img.buf, img.buf.length, vaDim(s?.width), vaDim(s?.height), order],
+              );
+              out.push(rows[0]);
+            }
+            if (!out.length) { send(res, 400, { error: 'Nothing saved · not an image, or over 8 MB' }); return; }
+            await pool.query('UPDATE voltick_audit_card SET updated_at = now() WHERE id = $1', [cardId]);
+            send(res, 200, { ok: true, shots: out, rejected });
+            return;
+          }
+
+          if (action === 'updateShot') {
+            const id = vaId(body?.id);
+            if (!id) { send(res, 400, { error: 'missing id' }); return; }
+            let markupJson = null;
+            if (body?.markup != null) {
+              if (!Array.isArray(body.markup)) { send(res, 400, { error: 'markup must be an array' }); return; }
+              markupJson = JSON.stringify(body.markup.slice(0, 2000));
+              if (markupJson.length > VA_MAX_MARKUP_CHARS) { send(res, 400, { error: 'Too much markup on one screenshot' }); return; }
+            }
+            await pool.query(
+              `UPDATE voltick_audit_shot SET
+                 markup     = COALESCE($2::jsonb, markup),
+                 caption    = COALESCE($3, caption),
+                 updated_at = now()
+               WHERE id = $1`,
+              [id, markupJson, body?.caption == null ? null : String(body.caption).slice(0, 1000)],
+            );
+            send(res, 200, { ok: true });
+            return;
+          }
+
+          if (action === 'deleteShot') {
+            const id = vaId(body?.id);
+            if (!id) { send(res, 400, { error: 'missing id' }); return; }
+            await pool.query('DELETE FROM voltick_audit_shot WHERE id = $1', [id]);
+            send(res, 200, { ok: true });
+            return;
+          }
+
+          send(res, 400, { error: 'unknown action' });
+        } catch (err) {
+          send(res, 500, { error: req.method === 'GET' ? 'Voltick audit load failed' : 'Voltick audit save failed', detail: String(err?.message || err) });
+        }
+      },
+    });
+
+    // The bytes behind one screenshot. Immutable once written (markup lives in
+    // its own column), so it caches hard and privately.
+    register('/api/owner/voltick-audit/shot', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const id = vaId(new URL(req.url || '/', 'http://localhost').searchParams.get('id'));
+          if (!id) { send(res, 400, { error: 'bad id' }); return; }
+          const pool = vaPool();
+          await vaEnsure(pool);
+          const { rows } = await pool.query('SELECT mime, bytes FROM voltick_audit_shot WHERE id = $1', [id]);
+          if (!rows.length) { send(res, 404, { error: 'not found' }); return; }
+          const buf = rows[0].bytes;
+          res.statusCode = 200;
+          res.setHeader('Content-Type', rows[0].mime || 'application/octet-stream');
+          res.setHeader('Content-Length', String(buf.length));
+          res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+          res.end(buf);
+        } catch (err) {
+          send(res, 500, { error: 'Screenshot load failed', detail: String(err?.message || err) });
+        }
+      },
+    });
+  }
+
   // /api/budget/real — owner-only "Real Month" store: transactions read off an
   // actual bank/card statement, kept in budget_statement_tx.
   //

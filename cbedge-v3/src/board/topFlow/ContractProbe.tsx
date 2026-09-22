@@ -184,10 +184,14 @@ export function ContractProbe({ row, onClose, entryAt }: {
   const q = useQuery<BarsResponse>(url, { staleMs: 30_000 })
   const bars = useMemo(() => (q.data?.bars ?? []).filter((b) => b.close > 0), [q.data])
 
-  // An empty answer is not an error — it is the other source's turn.
+  // An empty answer is not an error — it is the other source's turn. Neither
+  // is a FAILED one (2026-09-22): the vault answers 429 "too many concurrent
+  // requests" while the whale page's HIGH column is reading it, and that used
+  // to strand the panel on an error line when the other route had the bars.
   useEffect(() => {
-    if (attempt === 0 && q.data && bars.length === 0 && urls[1]) setAttempt(1)
-  }, [attempt, q.data, bars.length, urls])
+    if (attempt !== 0 || !urls[1]) return
+    if ((q.data && bars.length === 0) || (q.error && !q.loading)) setAttempt(1)
+  }, [attempt, q.data, q.error, q.loading, bars.length, urls])
 
   // Why there is nothing, when there is nothing. Both of these are permanent
   // facts about the archive, not a failed request, and saying so is the
@@ -325,7 +329,9 @@ export function ContractProbe({ row, onClose, entryAt }: {
               : expiredOut
                 ? 'This contract expired more than ~120 days ago and has aged out of the archive. Nothing to draw.'
                 : q.error
-                  ? `Could not load bars — ${q.error.message}`
+                  // Never the raw message: api.ts puts the request URL in it,
+                  // and a path with a query string is not something to show.
+                  ? 'Could not load this contract’s bars right now — try again in a moment.'
                   : 'No bars for this contract in the window.'}
         </div>
       )}

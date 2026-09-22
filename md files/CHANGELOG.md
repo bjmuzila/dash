@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-22 — v3 Scanner › IB Stats: historical stats opened to subscribers
+
+The "historical stats" disclosure (the sixteen stat cards) and the EOD IB
+scoreboard on the v3 Scanner IB Stats tab were owner-only. They now render for
+any paid subscriber (`isPaid`) as well as the owner. `/api/ib-results` was
+already `auth: 'subscriber'` server-side, so no backend change.
+
+Files: `cbedge-v3/src/pages/scanner/IbStatsTab.tsx`.
+
 ## 2026-09-21 — Email template: automatic payment turned off
 
 New broadcast template `lib/emails/autopay-off.ts` (`autopayOffEmail()`,
@@ -24501,3 +24510,12 @@ Docs only — no code, no backend, no proxy change.
 ## 2026-09-21 — Whales: HIGH column + % first
 - `cbedge-v3/src/pages/Whales.tsx`: new HIGH column after PRICE — the contract's highest mark from the print's bar to now, with % above the print price. Bars via `loadProbeBars` (same source as the probe), one fetch per contract from its earliest print in the list, 4 at a time, re-read every 5 min; sliced per row so each print gets the high since its own fill.
 - HIGH and NOW cells now lead with the % move (bold) and show the price after it (small). Phone rows: "→ +5% 10.30 · H 10.90".
+
+## 2026-09-21 — Whales: HIGH/NOW load visible rows first
+- `cbedge-v3/src/pages/Whales.tsx`: the HIGH fetch queue is now visible-first — an IntersectionObserver tracks which print rows (`data-rid`) are on screen, and each of the 4 workers takes a contract with a visible row before falling back to table order (was alphabetical by OCC). Scrolling re-prioritises live. NOW's option-marks batches go out in table order too, so the first batch of 100 is the top of the table. Desktop table and phone rows both.
+
+## 2026-09-21 — Whales: HIGHEST CHANGE sort
+- `cbedge-v3/src/pages/Whales.tsx`: third row-order option next to NEWEST / BIGGEST — HIGHEST CHANGE ranks prints by the HIGH column's % over the print price. Sorted client-side over the newest 300 (fetch uses sort=time); rows without a loaded high sit at the bottom and climb in as highs arrive. Day headers are dropped in this mode and each row shows its date (MM/DD) with the time. Saved-filter validation accepts `change`; phone sort button cycles NEWEST → BIGGEST → TOP CHANGE.
+
+## 2026-09-21 · GEX Candles UI spec for Voltick
+- Added `md files/GEX-CANDLES-UI-SPEC.md`: a UI-first, path-free version of GEX-CANDLES.md for handing to Voltick (wireframes, anatomy, bubble/rail/tag visuals, controls, phone, replay, states, data contract, CB Edge → Voltick colour mapping, build order + acceptance checklist).

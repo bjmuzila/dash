@@ -70,9 +70,17 @@ export interface NetDriftChartProps {
    * it changes.
    */
   onVisibility?: (visible: boolean) => void
+  /**
+   * Phone mode (2026-09-22): the whole window fits the width and STAYS there —
+   * no drag-to-pan, no pinch/wheel zoom. A touch still moves the crosshair.
+   * Without this a phone could pan the day sideways, and the 24H window was
+   * clamped to the library's 0.5px minimum bar spacing, so on a ~250px plot it
+   * opened on the last few hours (mostly future whitespace) and read as empty.
+   */
+  locked?: boolean
 }
 
-export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility }: NetDriftChartProps) {
+export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, locked = false }: NetDriftChartProps) {
   const chartRef = useRef<IChartApi | null>(null)
   const callRef = useRef<ISeriesApi<'Line'> | null>(null)
   const putRef = useRef<ISeriesApi<'Line'> | null>(null)
@@ -162,9 +170,17 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility }: Ne
       ),
     )
 
-    // Pin the axis to the computed window. Deliberately NOT fitContent(), which
-    // trims the trailing whitespace and re-scrolls — floating the day's shape to
-    // the right and re-scaling it on every poll.
+    pin(s)
+  }
+
+  // Pin the axis to the computed window. Deliberately NOT fitContent(), which
+  // trims the trailing whitespace and re-scrolls — floating the day's shape to
+  // the right and re-scaling it on every poll. Also re-run on every resize (see
+  // subscribeSizeChange below): the library keeps its bar SPACING across a
+  // resize, not the range, so a narrower pane would otherwise crop the day.
+  const pin = (s: NetSeries) => {
+    const chart = chartRef.current
+    if (!chart) return
     try {
       chart.timeScale().setVisibleRange({
         from: s.openSec as UTCTimestamp,
@@ -204,10 +220,19 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility }: Ne
         rightPriceScale: { visible: true, borderColor: line },
         leftPriceScale: { visible: false },
         crosshair: { mode: CrosshairMode.Normal },
+        // Locked (phone): the window is the window. Unlocked keeps the
+        // desktop's drag and wheel exactly as they were.
+        ...(locked ? { handleScroll: false, handleScale: false } : {}),
         timeScale: {
           borderColor: line,
           timeVisible: true,
           secondsVisible: false,
+          // The default floor is 0.5px a bar, which cannot fit a 24H day (up to
+          // ~1,440 one-minute bars) into a phone-width plot, so setVisibleRange
+          // silently gave back only the newest slice. Let it compress.
+          minBarSpacing: 0.05,
+          fixLeftEdge: true,
+          fixRightEdge: true,
           // The axis ticks. localization.timeFormatter below only reaches the
           // crosshair label, so both are needed to get an ET axis.
           tickMarkFormatter: (time: unknown) =>
@@ -324,6 +349,8 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility }: Ne
               },
         )
       })
+
+      chart.timeScale().subscribeSizeChange(() => pin(seriesRef.current))
 
       apply(seriesRef.current)
       applySpot(spotDataRef.current)

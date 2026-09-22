@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Chip, SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
@@ -130,6 +130,11 @@ const FLOORS = [
 // five settings.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Row order. `change` is sorted HERE, not by the server — it ranks on the
+ *  HIGH column (best % move since the print), which only exists client-side.
+ *  The fetch for it asks for the newest 300, the same set NEWEST shows. */
+type SortKey = 'time' | 'premium' | 'change'
+
 const SETTINGS_KEY = 'cb-v3-whales:filters'
 
 interface Saved {
@@ -139,7 +144,7 @@ interface Saved {
   type: '' | 'C' | 'P'
   action: '' | 'BUY' | 'SELL'
   moneyness: 'all' | 'otm'
-  sort: 'time' | 'premium'
+  sort: SortKey
   maxDte: number | null
   showUnreadable: boolean
 }
@@ -170,7 +175,7 @@ function loadSettings(): Saved {
       type: j.type === 'C' || j.type === 'P' ? j.type : DEFAULTS.type,
       action: j.action === 'BUY' || j.action === 'SELL' ? j.action : DEFAULTS.action,
       moneyness: j.moneyness === 'otm' ? 'otm' : DEFAULTS.moneyness,
-      sort: j.sort === 'premium' ? 'premium' : DEFAULTS.sort,
+      sort: j.sort === 'premium' || j.sort === 'change' ? j.sort : DEFAULTS.sort,
       // `null` is a real stored value (no cap) and 0 is a real stored value
       // (same-day only), so this cannot be a truthiness test.
       maxDte: DTE_STOPS.some((x) => x.value === (j.maxDte ?? null)) ? (j.maxDte ?? null) : DEFAULTS.maxDte,
@@ -240,9 +245,11 @@ function useContractMarks(rows: TopFlowRow[]): Map<string, number> {
       const o = occOf(r)
       if (o) set.set(occKey(o), o)
     }
-    return [...set.values()].sort()
+    // Row order, not alphabetical: the first batch of 100 is the top of the
+    // table, which is what is on screen when the page opens.
+    return [...set.values()]
   }, [rows])
-  const sig = symbols.join(',')
+  const sig = [...symbols].sort().join(',')
   const [marks, setMarks] = useState<Map<string, number>>(new Map())
   const [tick, setTick] = useState(0)
 
@@ -306,7 +313,38 @@ const markOf = (marks: Map<string, number>, r: TopFlowRow) => {
 
 type HighSeries = Array<[number, number]>  // [bar open ms, bar high]
 
-function useContractHighs(rows: TopFlowRow[]): Map<string, number> {
+// ── VISIBLE FIRST ────────────────────────────────────────────────────────────
+// ~250 contracts at four at a time is a minute or two of fetching. The queue is
+// read LIVE by the workers: each one takes a contract that has a row on screen
+// right now before anything else, then falls back to table order. Scroll and
+// the next free worker follows you. Rows opt in with `data-rid={row.id}`.
+
+/** Row ids currently inside the viewport (clipped by their scroll container). */
+function useVisibleRowIds(dep: unknown): React.MutableRefObject<Set<string>> {
+  const visible = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const id = (e.target as HTMLElement).dataset.rid
+        if (!id) continue
+        if (e.isIntersecting) visible.current.add(id)
+        else visible.current.delete(id)
+      }
+    })
+    // After paint, so the rows this render produced are in the DOM.
+    const raf = window.requestAnimationFrame(() => {
+      document.querySelectorAll<HTMLElement>('[data-rid]').forEach((el) => io.observe(el))
+    })
+    return () => { window.cancelAnimationFrame(raf); io.disconnect(); visible.current = new Set() }
+  }, [dep])
+  return visible
+}
+
+function useContractHighs(
+  rows: TopFlowRow[],
+  visible: React.MutableRefObject<Set<string>>,
+): Map<string, number> {
   const jobs = useMemo(() => {
     const m = new Map<string, TopFlowRow>()
     for (const r of rows) {
@@ -316,9 +354,26 @@ function useContractHighs(rows: TopFlowRow[]): Map<string, number> {
       const cur = m.get(k)
       if (!cur || r.ts < cur.ts) m.set(k, r)
     }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    // Table order — the fallback when nothing on screen is still waiting.
+    return [...m.entries()]
   }, [rows])
-  const sig = jobs.map(([k, r]) => `${k}@${r.ts}`).join(',')
+  const sig = jobs.map(([k, r]) => `${k}@${r.ts}`).sort().join(',')
+  // contract key → the row ids that show it, so a visible ROW can pull its
+  // CONTRACT to the front of the queue.
+  const rowsByKey = useMemo(() => {
+    const m = new Map<string, string[]>()
+    for (const r of rows) {
+      const o = occOf(r)
+      if (!o) continue
+      const k = occKey(o)
+      const list = m.get(k)
+      if (list) list.push(r.id)
+      else m.set(k, [r.id])
+    }
+    return m
+  }, [rows])
+  const rowsByKeyRef = useRef(rowsByKey)
+  rowsByKeyRef.current = rowsByKey
   const [series, setSeries] = useState<Map<string, HighSeries>>(new Map())
   const [tick, setTick] = useState(0)
 
@@ -331,10 +386,20 @@ function useContractHighs(rows: TopFlowRow[]): Map<string, number> {
     if (!jobs.length) return
     let on = true
     const ctrl = new AbortController()
-    let i = 0
+    const pending = jobs.slice()
+    const next = () => {
+      const vis = visible.current
+      if (vis.size) {
+        const at = pending.findIndex(([k]) => (rowsByKeyRef.current.get(k) ?? []).some((id) => vis.has(id)))
+        if (at >= 0) return pending.splice(at, 1)[0]!
+      }
+      return pending.shift()
+    }
     const worker = async () => {
-      while (on && i < jobs.length) {
-        const [k, r] = jobs[i++]!
+      while (on && pending.length) {
+        const job = next()
+        if (!job) break
+        const [k, r] = job
         try {
           const bars = await loadProbeBars(
             { underlying: r.underlying, expiry: r.expiry, strike: r.strike, type: r.type, osi: r.osi, ts: r.ts },
@@ -478,7 +543,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   // OFF by default, matching the live Top Flow card. Filtered on the SERVER,
   // before the row limit, so 300 rows means 300 readable prints.
   const [showUnreadable, setShowUnreadable] = useState(saved.showUnreadable)
-  const [sort, setSort] = useState<'time' | 'premium'>(saved.sort)
+  const [sort, setSort] = useState<SortKey>(saved.sort)
   // Clicking a bar in the session chart narrows the table to that day WITHOUT
   // touching the range — the tiles and the leaderboards stay on the range you
   // chose, which is what makes the day readable AS PART of it.
@@ -580,7 +645,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   const from = etYmd(new Date(Date.now() - span.days * 86_400_000))
 
   const url = useMemo(() => {
-    const sp = new URLSearchParams({ from, to, min_premium: String(floor), sort, limit: '300' })
+    const sp = new URLSearchParams({ from, to, min_premium: String(floor), sort: sort === 'change' ? 'time' : sort, limit: '300' })
     if (ticker.trim()) sp.set('ticker', ticker.trim().toUpperCase())
     if (type) sp.set('type', type)
     if (action) sp.set('action', action)
@@ -599,7 +664,25 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     [d, day],
   )
   const marks = useContractMarks(rows)
-  const highs = useContractHighs(rows)
+  const visibleRows = useVisibleRowIds(`${rows.length}:${rows[0]?.id ?? ''}:${phoneTab}:${sort}`)
+  const highs = useContractHighs(rows, visibleRows)
+
+  // HIGHEST CHANGE: best % from the print price to the HIGH since the print.
+  // Rows whose high has not loaded yet (or has no price) sink to the bottom and
+  // climb into place as the HIGH column fills — the visible-first queue means
+  // the top of the list settles first.
+  const shown = useMemo(() => {
+    if (sort !== 'change') return rows
+    const pct = (r: WhaleRow) => {
+      const h = highs.get(r.id)
+      return h != null && r.price != null && r.price > 0 ? (h - r.price) / r.price : -Infinity
+    }
+    return rows.slice().sort((a, b) => pct(b) - pct(a) || b.ts - a.ts)
+  }, [rows, highs, sort])
+  // A ranked list crosses days on every row, so the day headers go and each
+  // row carries its own date instead.
+  const byDay = sort !== 'change'
+  const when = (r: WhaleRow) => (byDay ? fmtTime(r.ts) : `${r.sessionDate.slice(5).replace('-', '/')} ${fmtTime(r.ts)}`)
   const selected = useMemo(
     () => (selectedId ? rows.find((r) => r.id === selectedId) ?? null : null),
     [rows, selectedId],
@@ -1048,11 +1131,11 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
           </button>
           <button
             type="button"
-            onClick={() => setSort((v) => (v === 'time' ? 'premium' : 'time'))}
+            onClick={() => setSort((v) => (v === 'time' ? 'premium' : v === 'premium' ? 'change' : 'time'))}
             title="Row order"
             className="shrink-0 rounded-sm border border-line px-2.5 py-1.5 text-2xs font-bold tracking-[0.06em] text-muted"
           >
-            {sort === 'time' ? 'NEWEST' : 'BIGGEST'} ⇅
+            {sort === 'time' ? 'NEWEST' : sort === 'premium' ? 'BIGGEST' : 'TOP CHANGE'} ⇅
           </button>
           {day && (
             <button
@@ -1121,8 +1204,8 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
           {phoneTab === 'prints' && (
             <div className="pb-3">
-              {rows.map((r, i) => {
-                const newDay = i === 0 || rows[i - 1]!.sessionDate !== r.sessionDate
+              {shown.map((r, i) => {
+                const newDay = byDay && (i === 0 || shown[i - 1]!.sessionDate !== r.sessionDate)
                 const agg = newDay ? d?.sessions.find((x) => x.d === r.sessionDate) : null
                 const bias = biasOf(r)
                 const biasInk = bias === 'bullish' ? 'text-up' : bias === 'bearish' ? 'text-down' : 'text-faint'
@@ -1137,6 +1220,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                       </div>
                     )}
                     <div
+                      data-rid={r.id}
                       role="button"
                       tabIndex={0}
                       onClick={() => setSelectedId(r.id)}
@@ -1183,7 +1267,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                         <div className={['tabular text-sm font-bold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
                           {money(r.premium)}
                         </div>
-                        <div className="tabular mt-0.5 text-3xs text-faint">{fmtTime(r.ts)}</div>
+                        <div className="tabular mt-0.5 text-3xs text-faint">{when(r)}</div>
                       </div>
                       {k && (
                         <TrackButton
@@ -1219,7 +1303,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
           )}
           {phoneTab === 'lookup' && <div className="p-3">{lookupCard}</div>}
           {phoneTab === 'tracked' && <div className="min-w-0 p-3"><TrackedAlertsCard store={alerts} /></div>}
-          {phoneTab === 'drift' && <div className="min-w-0 p-3"><NetDriftPanel /></div>}
+          {phoneTab === 'drift' && <div className="min-w-0 p-3"><NetDriftPanel phone /></div>}
         </div>
 
         {/* ── filters sheet ─────────────────────────────────────────────── */}
@@ -1450,9 +1534,17 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
         <span aria-hidden className="h-4 w-px shrink-0 bg-line" />
 
-        <SegGroup<'time' | 'premium'>
+        <SegGroup<SortKey>
           title="Row order"
-          options={[{ label: 'NEWEST', value: 'time' }, { label: 'BIGGEST', value: 'premium' }]}
+          options={[
+            { label: 'NEWEST', value: 'time' },
+            { label: 'BIGGEST', value: 'premium' },
+            {
+              label: 'HIGHEST CHANGE',
+              value: 'change',
+              title: 'Ranked by the HIGH column — the best % the contract reached above the print price since it printed. Ranks the newest 300 prints; rows climb into place as their highs load',
+            },
+          ]}
           value={sort}
           onChange={setSort}
         />
@@ -1542,10 +1634,10 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((r, i) => {
+                    {shown.map((r, i) => {
                       // A day header every time the session changes, so a
                       // multi-day range reads as days rather than one wall.
-                      const newDay = i === 0 || rows[i - 1]!.sessionDate !== r.sessionDate
+                      const newDay = byDay && (i === 0 || shown[i - 1]!.sessionDate !== r.sessionDate)
                       const agg = newDay ? d?.sessions.find((x) => x.d === r.sessionDate) : null
                       // Side stays inked by where the FILL sat; the Bias cell
                       // is inked by what the trade means. Two questions, two
@@ -1569,6 +1661,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                             </tr>
                           )}
                           <tr
+                            data-rid={r.id}
                             onClick={() => setSelectedId((id) => (id === r.id ? null : r.id))}
                             title="Open the contract's chart"
                             className={[
@@ -1576,7 +1669,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                               r.id === selectedId ? 'bg-raised' : '',
                             ].join(' ')}
                           >
-                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-faint">{fmtTime(r.ts)}</td>
+                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-faint">{when(r)}</td>
                             <td className="px-2 py-1.5 font-semibold text-fg">{r.underlying ?? '—'}</td>
                             <td className="tabular whitespace-nowrap px-2 py-1.5 text-muted">
                               <span className="text-fg">{fmtStrike(r.strike)}</span>{' '}

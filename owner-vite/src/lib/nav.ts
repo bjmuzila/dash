@@ -125,6 +125,10 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Dev", href: "/owner/dev", glyph: "⚙", key: "Dev" },
       { label: "Database", href: "/database", glyph: "⛁", key: "Database" },
       { label: "Postgres", href: "/owner/db-map", glyph: "⛃", key: "DbMap" },
+      // Voltick Audit — cards per Voltick page (notes + marked-up screenshots)
+      // of what to change or look at. System: you open it to work on the
+      // product's code/UI, not to read numbers or send anything.
+      { label: "Voltick Audit", href: "/owner/voltick-audit", glyph: "⚡︎", key: "VoltickAudit" },
     ],
   },
   {

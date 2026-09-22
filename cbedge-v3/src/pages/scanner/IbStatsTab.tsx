@@ -61,7 +61,7 @@
 
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
-import { useIsOwner } from '@/data/auth'
+import { useAuth } from '@/data/auth'
 import { Card } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
 import { Stat } from '@/design/primitives/Stat'
@@ -1505,9 +1505,11 @@ export default function IbStatsTab() {
   // G162 — the disclosure defaults closed.
   const [showStats, setShowStats] = useState(false)
 
-  // G3/G4 — the TAB is public; exactly two blocks inside it are gated. v3
-  // resolves ownership in one place instead of v2's two-field test (G5).
-  const { isOwner } = useIsOwner()
+  // G3/G4 — the TAB is public; the historical stats block and the EOD
+  // scoreboard are open to every paid subscriber (and the owner). The data
+  // behind them (/api/ib-results) is already subscriber-gated server-side.
+  const { isPaid, isOwner: ownerFlag } = useAuth()
+  const isSubscriber = isPaid || ownerFlag
 
   const [ds, setDs] = useState<IbDataset | undefined>(undefined)
   const [dsErr, setDsErr] = useState<string | null>(null)
@@ -1728,8 +1730,8 @@ export default function IbStatsTab() {
             </>
           )}
 
-          {/* ── G162 — the owner disclosure and its sixteen cards. */}
-          {isOwner && (
+          {/* ── G162 — the historical-stats disclosure and its sixteen cards (subscribers). */}
+          {isSubscriber && (
             <>
               <button
                 type="button"
@@ -1744,8 +1746,8 @@ export default function IbStatsTab() {
             </>
           )}
 
-          {/* ── G219–G235 — the EOD scoreboard, owner only. */}
-          {isOwner && <IbDailyResults sym={sym} rows={results} err={resultsErr} />}
+          {/* ── G219–G235 — the EOD scoreboard, subscribers. */}
+          {isSubscriber && <IbDailyResults sym={sym} rows={results} err={resultsErr} />}
         </>
       )}
     </div>

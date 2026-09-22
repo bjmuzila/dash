@@ -42,9 +42,19 @@ const FILTERS: FlowFilters = {
 
 const TICKER_OPTIONS = DEFAULT_TICKERS.map((t) => ({ value: t as string, label: t as string }))
 
-export function NetDriftPanel() {
+/**
+ * `phone`: the chart is width-locked (the whole window fits, no sideways pan).
+ *
+ * 24H is SPX-only (2026-09-22). SPX options trade the overnight GTH session, so
+ * its tape has a pre-open to show; nothing else on the list does, and a 24H
+ * toggle on SPY just re-drew RTH. The pick is remembered, but any other ticker
+ * reads as RTH and hides the toggle — switching back to SPX restores it.
+ */
+export function NetDriftPanel({ phone = false }: { phone?: boolean } = {}) {
   const [active, setActive] = useState<string>('SPX')
-  const [chartSpan, setChartSpan] = useState<ChartSpan>('rth')
+  const [spanPick, setChartSpan] = useState<ChartSpan>('rth')
+  const allows24h = active === 'SPX'
+  const chartSpan: ChartSpan = allows24h ? spanPick : 'rth'
   const date = todayYmdET()
   const isToday = true
 
@@ -92,16 +102,18 @@ export function NetDriftPanel() {
           options={TICKER_OPTIONS}
         />
         {switching && <span className="text-2xs text-faint">loading…</span>}
-        <span className="ml-auto">
-          <SegGroup<ChartSpan>
-            value={chartSpan}
-            onChange={setChartSpan}
-            options={[
-              { label: 'RTH', value: 'rth', title: 'Regular trading hours only (9:30–4:00 ET)' },
-              { label: '24H', value: '24h', title: 'Full session — includes pre-open and the overnight global session' },
-            ]}
-          />
-        </span>
+        {allows24h && (
+          <span className="ml-auto">
+            <SegGroup<ChartSpan>
+              value={chartSpan}
+              onChange={setChartSpan}
+              options={[
+                { label: 'RTH', value: 'rth', title: 'Regular trading hours only (9:30–4:00 ET)' },
+                { label: '24H', value: '24h', title: 'Full session — includes pre-open and the overnight global session' },
+              ]}
+            />
+          </span>
+        )}
       </div>
       <div className={switching ? 'stale flex min-h-0 flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}>
         <div className="flex flex-wrap items-center justify-center gap-6 px-3 py-2 text-xs font-semibold">
@@ -120,8 +132,8 @@ export function NetDriftPanel() {
           )}
         </div>
         {/* Flex column on purpose — see the same note in pages/Flow.tsx. */}
-        <div className="flex h-[420px] min-h-[420px] w-full flex-col">
-          <NetDriftChart series={netSeries} ordersByMin={ordersByMin} spotPts={spotSeries.pts} />
+        <div className={['flex w-full flex-col', phone ? 'h-[320px] min-h-[320px]' : 'h-[420px] min-h-[420px]'].join(' ')}>
+          <NetDriftChart series={netSeries} ordersByMin={ordersByMin} spotPts={spotSeries.pts} locked={phone} />
         </div>
         {!netSeries.hasData && (
           <p className="px-3 pb-3 text-center text-xs text-muted">
