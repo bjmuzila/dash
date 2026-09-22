@@ -24564,3 +24564,10 @@ Docs only — no code, no backend, no proxy change.
 - `board/netPremium/NetPremiumCard.tsx`: passes `locked` to NetDriftChart — no drag-pan/zoom; the 9:30–4:00 (or ETH) window always fills the card from the left edge instead of the day sitting crammed against the right axis.
 - `pages/flow/NetDriftChart.tsx`: REMOVED `fixLeftEdge`/`fixRightEdge` (added earlier today) — fixRightEdge clamps to the last bar with a value, ignoring the future whitespace, which is exactly what crammed the day against the right axis on the home card and the Whales Net Drift. Reproduced in a headless test chart and confirmed gone without them. Also: if `setVisibleRange` throws, fall back to the full grid by logical index. Resize re-pin + `minBarSpacing: 0.05` stay.
 - Whales Net Drift (desktop): now also `locked` — same no-scroll, left-aligned window as the home card.
+
+## 2026-09-22 — v3 phone alerts (/m/alerts): no sideways scroll, gold whales, bias-coloured tickers
+- `cbedge-v3/src/mobile/pages/MAlerts.tsx` only (desktop panel untouched).
+- Filter chips wrap onto a second line instead of scrolling horizontally; list clips horizontal overflow and long text wraps.
+- Row header is now ticker + type tag + time; the title moved to its own line so it no longer collides with the ticker/time.
+- Whale alerts use CB gold (`LEVEL_COLORS.cb`) for chip, tag and row edge on the phone.
+- Ticker is coloured by the alert's `bias` (▲ green bullish / ▼ red bearish), falling back to the type colour when there is no side.

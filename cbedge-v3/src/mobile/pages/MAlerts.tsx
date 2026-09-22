@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
-import { T, alpha } from '@/design/theme'
+import { LEVEL_COLORS, T, alpha } from '@/design/theme'
 import { useAlertsFeed } from '@/shell/AlertsFeed'
 import type { AlertKind } from '@/shell/alertTypes'
 import { ALERT_TYPES, TYPE_BY_ID, fetchMasterEnabled, readShown, writeShown } from '@/shell/alertTypes'
 import { MobileShell } from '../MobileShell'
+import type { AlertType } from '@/shell/alertTypes'
+
+// PHONE-ONLY COLOUR OVERRIDES. Whales read in CB gold here (the desktop panel
+// keeps the catalogue's colour), and the ticker is inked by the print's lean —
+// up for bullish, down for bearish — falling back to the type colour when the
+// detector has no side.
+const WHALE_GOLD = LEVEL_COLORS.cb
+const colorOf = (t: AlertType) => (t.id === 'whale' ? WHALE_GOLD : t.color)
+const tickerInk = (bias: 'bullish' | 'bearish' | undefined, t: AlertType) =>
+  bias === 'bullish' ? T.green : bias === 'bearish' ? T.red : colorOf(t)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /m/alerts — THE SIGNAL FEED, phone edition.
@@ -30,9 +40,9 @@ import { MobileShell } from '../MobileShell'
 // NOT `fill`: this is a list, it owns no drag gesture, and it scrolls.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// 28px tall, which clears the 44px tap floor once the row's padding is counted,
-// and the row scrolls sideways because eight chips will not fit 390px — unlike
-// the desktop panel, where the one-row-fits-all sizing is the whole point.
+// 28px tall, which clears the 44px tap floor once the row's padding is counted.
+// The chips WRAP onto a second line rather than scrolling sideways — nothing on
+// this screen scrolls horizontally.
 const CHIP =
   'shrink-0 cursor-pointer select-none whitespace-nowrap rounded-full border px-2 py-[3px] text-3xs font-bold uppercase tracking-wide outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent disabled:cursor-not-allowed'
 
@@ -86,7 +96,7 @@ export default function MAlerts() {
         : 'Nothing matches those filters.'
 
   const chips = (
-    <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="flex flex-wrap items-center gap-1.5">
       <button
         type="button"
         onClick={setAll}
@@ -112,7 +122,7 @@ export default function MAlerts() {
             className={CHIP}
             style={
               on
-                ? { borderColor: t.color, color: t.color, background: alpha(t.color, 0.11) }
+                ? { borderColor: colorOf(t), color: colorOf(t), background: alpha(colorOf(t), 0.11) }
                 : {
                     borderColor: T.border,
                     color: T.text,
@@ -140,7 +150,7 @@ export default function MAlerts() {
       {visible.length === 0 ? (
         <p className="px-4 py-10 text-center text-xs text-fg opacity-80">{emptyNote}</p>
       ) : (
-        <ul className="min-h-0">
+        <ul className="min-h-0 overflow-x-hidden">
           {visible.map((a) => {
             const t = TYPE_BY_ID[a.kind]
             return (
@@ -151,30 +161,40 @@ export default function MAlerts() {
                 // edge rather than a 6px dot — at arm's length the bar is the
                 // thing you sort the list by.
                 className="flex gap-2.5 border-b border-line px-3 py-2.5"
-                style={{ boxShadow: `inset 2px 0 0 0 ${t.color}` }}
+                style={{ boxShadow: `inset 3px 0 0 0 ${colorOf(t)}` }}
               >
                 <div className="min-w-0 flex-1">
                   {/* Same order as the desktop panel, and for the same
                       reason: ticker first, title biggest, the detector's
                       sentence underneath it. At arm's length the symbol and the
                       colour bar are the two things that survive. */}
+                  {/* Ticker + time on one line, the title on its own line
+                      beneath — nothing competes for the row's width, so
+                      nothing overlaps or runs off the side. */}
                   <div className="flex items-baseline gap-1.5">
                     <span
                       className="shrink-0 text-base font-bold tracking-tight"
-                      style={{ color: t.color }}
+                      style={{ color: tickerInk(a.bias, t) }}
                     >
+                      {a.bias === 'bullish' ? '▲ ' : a.bias === 'bearish' ? '▼ ' : ''}
                       {a.ticker}
                     </span>
-                    <span className="truncate text-base font-semibold leading-tight text-fg">
-                      {a.title}
+                    <span
+                      className="shrink-0 rounded-sm border px-1 text-3xs font-bold uppercase tracking-wide"
+                      style={{ borderColor: alpha(colorOf(t), 0.5), color: colorOf(t) }}
+                    >
+                      {t.tag}
                     </span>
                     <span className="ml-auto shrink-0 text-3xs tabular-nums text-fg opacity-80">
                       {a.at}
                     </span>
                   </div>
-                  <p className="mt-0.5 text-xs leading-snug text-fg opacity-90">{a.text}</p>
+                  <p className="mt-0.5 break-words text-sm font-semibold leading-tight text-fg">
+                    {a.title}
+                  </p>
+                  <p className="mt-0.5 break-words text-xs leading-snug text-fg opacity-90">{a.text}</p>
                   {a.meta && (
-                    <p className="mt-0.5 text-2xs tabular-nums text-fg opacity-70">{a.meta}</p>
+                    <p className="mt-0.5 break-words text-2xs tabular-nums text-fg opacity-70">{a.meta}</p>
                   )}
                 </div>
               </li>
