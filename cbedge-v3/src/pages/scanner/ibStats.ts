@@ -2582,8 +2582,8 @@ export function timeBuckets(rEnd: number): [number, string][] {
  */
 export const OWNER_CARDS = {
   disclosure: {
-    show: (n: number): string => `Show historical stats (${n} sessions) ▼ (owner)`,
-    hide: 'Hide historical stats ▲ (owner)',
+    show: (n: number): string => `Show historical stats (${n} sessions) ▼`,
+    hide: 'Hide historical stats ▲',
   },
 
   header: {

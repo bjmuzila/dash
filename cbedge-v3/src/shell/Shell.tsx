@@ -116,7 +116,9 @@ export const NAV: NavItem[] = [
   // Prefetches the recorder's symbol list on hover — the first thing every one
   // of the four tabs needs, whichever one you land on.
   { to: '/replay', label: 'Replay', icon: '⏱️', prefetch: ['/proxy/strike-growth/replay-meta'] },
-  { to: '/flow', label: 'Flow', icon: '🌊' },
+  // /flow HIDDEN 2026-09-22 (Brandon): off the rail for now, page left as-is.
+  // The route still answers /v3/flow; restore this line to bring it back.
+  // { to: '/flow', label: 'Flow', icon: '🌊' },
   // Prefetches the default tab's first feed on hover. /scanner opens on GEX
   // Change Top (Brandon, 2026-09-02 — v2 had two disagreeing answers for this
   // and DEFAULT_TAB in pages/scanner/scannerNav.ts is now the only one), so the

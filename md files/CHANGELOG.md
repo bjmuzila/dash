@@ -7,7 +7,10 @@ scoreboard on the v3 Scanner IB Stats tab were owner-only. They now render for
 any paid subscriber (`isPaid`) as well as the owner. `/api/ib-results` was
 already `auth: 'subscriber'` server-side, so no backend change.
 
-Files: `cbedge-v3/src/pages/scanner/IbStatsTab.tsx`.
+Follow-up: dropped the "(owner)" suffix from the Show/Hide historical stats
+button label (`ibStats.ts` → `OWNER_CARDS.disclosure`).
+
+Files: `cbedge-v3/src/pages/scanner/IbStatsTab.tsx`, `cbedge-v3/src/pages/scanner/ibStats.ts`.
 
 ## 2026-09-21 — Email template: automatic payment turned off
 
