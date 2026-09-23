@@ -545,9 +545,25 @@ function filterFlowByStrike(rows, { strike, strikeMin, strikeMax } = {}) {
 /** Page the tape backwards on print time — flow is served newest-first. */
 async function* pageOptionsFlow(opts = {}) {
   const maxRows = opts.maxRows ?? 500_000;
+  // The vault's start/end take a DATE (YYYY-MM-DD) only — handing it the last
+  // print's ISO timestamp as the cursor 400s ("invalid date ... use
+  // YYYY-MM-DD"), which is what broke "Walk it all". So the cursor is a day:
+  // ask up to the day AFTER the oldest print seen (covers both inclusive and
+  // exclusive `end` semantics), keep only prints strictly older than it, and if
+  // that day is saturated (>5000 prints, nothing new comes back) step the
+  // cursor back a whole day and flag the pull truncated.
+  const DAY = /^\d{4}-\d{2}-\d{2}/;
+  const dayShift = (ymd, n) => {
+    const d = new Date(`${ymd}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  };
+  const floor = opts.start && DAY.test(String(opts.start)) ? String(opts.start).slice(0, 10) : null;
   let end = opts.end;
   let seen = 0;
   let lastStamp = null;
+  let skipped = false;
+  let dayHops = 0;
   for (;;) {
     const page = await optionsFlow({ ...opts, end, order: 'desc', limit: MAX_LIMIT });
     if (!page.length) return;
@@ -559,16 +575,31 @@ async function* pageOptionsFlow(opts = {}) {
       return;
     }
     const fresh = lastStamp ? page.filter((r) => stampOf(r) < lastStamp) : page;
-    if (!fresh.length) return;
+    if (!fresh.length) {
+      // Saturated day: skip to the day before the oldest print we hold.
+      if (!lastStamp || !DAY.test(lastStamp)) return;
+      // The cursor only ever moves backwards, one day at a time, and never
+      // past `start` or the week-plus the vault holds — so this cannot loop.
+      const day = lastStamp.slice(0, 10);
+      let next = day;
+      if (end && DAY.test(String(end)) && String(end).slice(0, 10) <= next) {
+        next = dayShift(String(end).slice(0, 10), -1);
+      }
+      if ((floor && next < floor) || ++dayHops > 14) return;
+      end = next;
+      lastStamp = `${day}T00:00:00`;
+      skipped = true;
+      continue;
+    }
     lastStamp = stampOf(fresh[fresh.length - 1]);
     seen += fresh.length;
     if (seen >= maxRows) {
       yield { rows: fresh.slice(0, fresh.length - (seen - maxRows)), truncated: true };
       return;
     }
-    yield { rows: fresh, truncated: false };
+    yield { rows: fresh, truncated: skipped };
     if (page.length < MAX_LIMIT) return;
-    end = lastStamp;
+    end = DAY.test(lastStamp) ? dayShift(lastStamp.slice(0, 10), 1) : lastStamp;
   }
 }
 

@@ -69,6 +69,8 @@ type Job = {
   message: string;
   postEmpty: boolean;
   channelId: string;
+  /** No own destination — posts only to the Signals webhooks on Manage. */
+  signalsOnly?: boolean;
   webhookMask: string;
   hasWebhook: boolean;
   webhookFromEnv: boolean;
@@ -211,7 +213,11 @@ export default function BotScheduled() {
             : {}),
           ...(job.kind === "times" ? { times: val(job, "times") } : {}),
           // Absent/blank = keep what is stored. Never send the mask back.
-          webhookUrl: (d.webhookUrl ?? "").trim(),
+          // "none" = Signals only. Leaving Signals only without pasting a URL
+          // sends "-" so the stored "none" is cleared (back to env fallback).
+          webhookUrl: val(job, "signalsOnly")
+            ? "none"
+            : (d.webhookUrl ?? "").trim() || (job.signalsOnly ? "-" : ""),
           // "-" clears; the segmented control below sends it when Webhook is
           // chosen, which is what makes the channel-wins precedence switchable.
           channelId: String(val(job, "channelId") ?? "").trim() || "-",
@@ -484,16 +490,20 @@ export default function BotScheduled() {
                 {([
                   { id: "bot" as const, label: "Bot channel" },
                   { id: "webhook" as const, label: "Webhook" },
+                  { id: "signals" as const, label: "Signals only" },
                 ]).map((m) => {
-                  const active = (val(job, "channelId") ? "bot" : "webhook") === m.id;
+                  const mode = val(job, "signalsOnly") ? "signals" : val(job, "channelId") ? "bot" : "webhook";
+                  const active = mode === m.id;
                   return (
                     <button
                       key={m.id}
                       type="button"
                       onClick={() =>
                         patch(job, m.id === "bot"
-                          ? { channelId: job.channelId || channels[0]?.id || "" }
-                          : { channelId: "" })}
+                          ? { signalsOnly: false, channelId: job.channelId || channels[0]?.id || "" }
+                          : m.id === "webhook"
+                            ? { signalsOnly: false, channelId: "" }
+                            : { signalsOnly: true, channelId: "" })}
                       style={{
                         padding: "7px 16px", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer",
                         border: `1px solid ${active ? rgba(CYAN, 0.3) : "transparent"}`,
@@ -507,7 +517,12 @@ export default function BotScheduled() {
                 })}
               </div>
 
-              {val(job, "channelId") ? (
+              {val(job, "signalsOnly") ? (
+                <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.7, marginTop: 10 }}>
+                  No channel of its own — this posts <strong>only</strong> to the Discords below that have a
+                  Signals webhook on BOT → Manage. The server env webhook is ignored.
+                </div>
+              ) : val(job, "channelId") ? (
                 <div style={{ marginTop: 10 }}>
                   <select
                     value={String(val(job, "channelId"))}

@@ -301,6 +301,7 @@ function fallbackJob(def) {
     channelId: envValue(def.envChannel) || def.defaults.channelId || '',
     webhookUrl: envWebhook(def),
     webhookFromEnv: true,
+    signalsOnly: false,
     lastRunAt: null,
     lastPostDate: '',
     lastStatus: '',
@@ -328,10 +329,15 @@ function rowToJob(def, row) {
     postEmpty: !!row.post_empty,
     // Not a secret — a channel id is visible to anyone in the server — so it
     // goes to the page as-is, unlike webhook_url.
-    channelId: (row.channel_id || '').trim() || envValue(def.envChannel),
+    // SIGNALS ONLY: webhook_url = 'none' means "no own destination at all" —
+    // neither a channel nor a webhook, and NO env fallback — so the post goes
+    // only to the Signals webhooks on BOT → Manage. Without this, clearing the
+    // job's destination fell back to the env webhook and kept posting there.
+    signalsOnly: stored === 'none',
+    channelId: stored === 'none' ? '' : ((row.channel_id || '').trim() || envValue(def.envChannel)),
     // The row's own url wins; env is the fallback, which is what keeps a box
     // that has never opened the page posting exactly where it always did.
-    webhookUrl: stored || envWebhook(def),
+    webhookUrl: stored === 'none' ? '' : (stored || envWebhook(def)),
     webhookFromEnv: !stored,
     lastRunAt: row.last_run_at ? new Date(row.last_run_at).toISOString() : null,
     // The day-claim for the scheduler. Empty means "has not posted on schedule".
@@ -393,7 +399,7 @@ async function loadMasked(opts = {}) {
     signals,
     jobs: jobs.map(({ webhookUrl, ...rest }) => ({
       ...rest,
-      webhookMask: maskUrl(webhookUrl),
+      webhookMask: rest.signalsOnly ? '' : maskUrl(webhookUrl),
       hasWebhook: !!webhookUrl,
       // Which path a post would actually take, resolved here so the page never
       // re-implements the precedence rule and drifts from it.
@@ -473,6 +479,8 @@ async function save(patch) {
   const vals = [];
   if (raw === '-') {
     urlSql = "''";
+  } else if (raw === 'none') {
+    urlSql = "'none'";                  // Signals only — see rowToJob
   } else if (raw) {
     if (!validUrl(raw)) {
       throw new Error('That does not look like a Discord webhook URL (https://discord.com/api/webhooks/<id>/<token>)');

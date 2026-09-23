@@ -967,7 +967,13 @@ export default function LseData() {
     if (tab === "catalog") params.set("limit", String(PREVIEW_ROWS * 4));
     try {
       const r = await fetch(`${path}?${params}`, { credentials: "include" });
-      const j = await r.json();
+      // Read as text first: an edge error (Cloudflare 502/524) is an HTML page,
+      // and r.json() on it surfaces as "Unexpected token '<'" — useless.
+      const raw = await r.text();
+      let j: any = null;
+      try { j = JSON.parse(raw); } catch {
+        throw new Error(`HTTP ${r.status} — the server/edge returned an HTML error page, not data (vault or Cloudflare error). Try narrowing: add an underlying, a trade date or a start date.`);
+      }
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       let got: Row[] = Array.isArray(j.rows) ? j.rows : [];
 

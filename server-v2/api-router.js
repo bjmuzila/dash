@@ -14765,9 +14765,14 @@ try {
 
     /** LseError carries the upstream status; anything else is ours (500). */
     const fail = (res, err) => {
-      const status = err instanceof lse.LseError
+      // Upstream 5xx goes out as 424, not 502/503/504: Cloudflare swaps an
+      // origin 502/504 for its own HTML error page, so the JSON error never
+      // reached the browser and the page died on r.json() with
+      // "Unexpected token '<'" instead of showing what the vault said.
+      let status = err instanceof lse.LseError
         ? (err.status && err.status >= 400 ? err.status : 502)
         : 500;
+      if (status >= 502 && status <= 504) status = 424;
       console.error('[api-router] /api/lse error:', err?.message || err);
       return send(res, status, { error: err?.message ? String(err.message) : String(err) });
     };
@@ -14958,6 +14963,14 @@ try {
           end: params.get('end') || undefined,
           order: params.get('order') || 'desc',
         };
+        // ALWAYS carry a date bound. The vault 502s on /options/flow calls that
+        // filter on min_premium with no start (see TF_LOOKBACK_DAYS below) —
+        // which is exactly the page's default: blank underlying + $100K floor.
+        // The tape is only the trailing week anyway, so a week-back start
+        // loses nothing.
+        if (!opts.start && !opts.end) {
+          opts.start = etDateStr(new Date(Date.now() - 7 * 86_400_000));
+        }
         try {
           if (params.get('all') !== '1') {
             const rows = await lse.optionsFlow({ ...opts, limit: params.get('limit') });

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-23 - Scheduled posts: "Signals only" destination
+
+- **Bug:** a scheduled job with no channel of its own fell back to the server env webhook (for levels, MG_LADDER / HOME_SIGNALS / SIGNALS / DISCORD_WEBHOOK_URL). So Voltick Levels kept posting into a Discord whose Signals row on Manage was empty.
+- **Fix:** a third Destination option on the Scheduled tab, **Signals only**. It stores `webhook_url = 'none'`, ignores both the env webhook and the env channel, and posts only to the Discords with a Signals webhook on Manage. Switching back to Webhook or Bot clears it.
+- Files: `server-v2/scheduled-posts-store.js`, `owner-vite/src/pages/BotScheduled.tsx`.
+
 ## 2026-09-23 - Voltick Levels embed: no time in the title
 
 - The embed title is now just `⚡ Voltick Levels`, because the time already shows on the message and in the embed footer. A `— {time} ET` left in an older stored message line gets stripped. The default message is now `⚡ Voltick Levels`.
