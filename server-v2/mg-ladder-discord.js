@@ -33,14 +33,21 @@
  * button's webhook and a DIFFERENT channel. Set MG_LADDER_DISCORD_WEBHOOK to
  * override all of it.
  *
- * Env:
- *   MG_LADDER_DISCORD_WEBHOOK  explicit override; skips the resolution below
- *   HOME_SIGNALS_DISCORD_WEBHOOK / SIGNALS_DISCORD_WEBHOOK
- *                              the CB Edge Signals channel (default target)
- *   DISCORD_WEBHOOK_URL        last-resort fallback (in-app share webhook)
- *   MG_LADDER_DISABLED=1       hard-disable
+ * SETTINGS LIVE IN THE OWNER PAGE (owner → BOT → Scheduled, job `mg-ladder`).
+ * On/off, window start/end, interval, days, bot channel or webhook, identity
+ * and the message line come from server-v2/scheduled-posts-store.js and are
+ * re-read every minute — no restart. The webhook env chain above is the
+ * store's fallback when the row has no webhook of its own, so a box that has
+ * never opened the page keeps posting exactly where it always did.
+ *
+ * Env (fallback / operational only):
+ *   MG_LADDER_DISCORD_WEBHOOK  webhook fallback chain head (then HOME_SIGNALS_…,
+ *                              SIGNALS_…, DISCORD_WEBHOOK_URL)
+ *   MG_LADDER_DISCORD_CHANNEL_ID  bot-channel fallback
+ *   MG_LADDER_DISABLED=1       hard-disable, whatever the page says
  *   MG_LADDER_TICKERS          default "SPX,SPY,QQQ"
- *   MG_LADDER_INTERVAL_MIN     default 15
+ *   MG_LADDER_INTERVAL_MIN     only honoured when the settings table is down
+ *   MG_LADDER_GRACE_MIN        how late a slot may still post, default 3
  *   PUPPETEER_EXECUTABLE_PATH  /usr/bin/chromium in Docker
  *   INTERNAL_API_TOKEN         forwarded to the local proxy like every recorder
  *
@@ -52,16 +59,11 @@
 
 const TICKERS = (process.env.MG_LADDER_TICKERS || 'SPX,SPY,QQQ')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
-const INTERVAL_MIN = Math.max(1, Number(process.env.MG_LADDER_INTERVAL_MIN || 15));
-// Ordered so the DEFAULT target is the CB Edge Signals channel. DISCORD_WEBHOOK_URL
-// is deliberately last: it is the in-app share button's webhook and points at a
-// different channel, so it must never win over a signals webhook that is set.
-const WEBHOOK = [
-  process.env.MG_LADDER_DISCORD_WEBHOOK,
-  process.env.HOME_SIGNALS_DISCORD_WEBHOOK,
-  process.env.SIGNALS_DISCORD_WEBHOOK,
-  process.env.DISCORD_WEBHOOK_URL,
-].map((v) => (v || '').trim()).find(Boolean) || '';
+const store = require('./scheduled-posts-store');
+const bot = require('./discord-bot-poster');
+
+const JOB_ID = 'mg-ladder';
+const GRACE_MIN = Math.max(0, Number(process.env.MG_LADDER_GRACE_MIN || 3));
 const CHROME_PATH = (process.env.PUPPETEER_EXECUTABLE_PATH || '').trim();
 
 // Shared identity with discord-relay.js / signals-engine.js so everything the
@@ -69,6 +71,23 @@ const CHROME_PATH = (process.env.PUPPETEER_EXECUTABLE_PATH || '').trim();
 const SITE_URL = (process.env.SIGNALS_SITE_URL || 'https://cbedge.net').replace(/\/+$/, '');
 const DISCORD_USERNAME = 'CB Edge Signals';
 const DISCORD_AVATAR = `${SITE_URL}/cb-edge-logo.png`;
+
+// ── Config ──────────────────────────────────────────────────────────────────
+
+/**
+ * The owner page is the source of truth. MG_LADDER_INTERVAL_MIN is read ONLY
+ * when the settings table is unreachable, so a stale VPS env var can never
+ * outrank what the page shows.
+ */
+async function readConfig() {
+  const job = await store.getJob(JOB_ID);
+  if (!job) throw new Error(`scheduled-posts has no job "${JOB_ID}"`);
+  if (job.live) return job;
+  return {
+    ...job,
+    intervalMin: store.normalizeInterval(process.env.MG_LADDER_INTERVAL_MIN, job.intervalMin),
+  };
+}
 
 // ── ET helpers (same shape as every other server-v2 recorder) ────────────────
 
@@ -80,11 +99,31 @@ function nowParts() {
   return { hour: Number(get('hour')), minute: Number(get('minute')), weekday: get('weekday') };
 }
 
-function isRTH() {
+const toMins = (hhmm) => { const [h, m] = String(hhmm || '').split(':').map(Number); return h * 60 + m; };
+
+/**
+ * The slot "now" belongs to, or null when outside the window / off-day.
+ * Slots are start, start+N, … while < end. `late` is minutes past the slot.
+ */
+function currentSlot(cfg) {
   const { hour, minute, weekday } = nowParts();
-  if (weekday === 'Sat' || weekday === 'Sun') return false;
-  const mins = hour * 60 + minute;
-  return mins >= 570 && mins < 960; // 09:30–16:00 ET
+  const day = String(weekday || '').slice(0, 3).toLowerCase();
+  if (!String(cfg.days || '').split(',').includes(day)) return null;
+  const start = toMins(cfg.postAt);
+  const end = toMins(cfg.endAt);
+  const every = Math.max(1, Number(cfg.intervalMin) || 15);
+  const mins = (hour % 24) * 60 + minute;
+  if (!(mins >= start && mins < end)) return null;
+  const slot = start + Math.floor((mins - start) / every) * every;
+  const hh = String(Math.floor(slot / 60)).padStart(2, '0');
+  const mm = String(slot % 60).padStart(2, '0');
+  return { key: `${todayETStr()} ${hh}:${mm}`, late: mins - slot };
+}
+
+function etLongDate() {
+  return new Date().toLocaleDateString('en-US', {
+    timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric',
+  });
 }
 
 function todayETStr() {
@@ -157,7 +196,7 @@ async function expiriesFor(base, ticker) {
 }
 
 /** Per-strike NET GEX over the WHOLE chain, OI+VOL basis — strikeGex()'s default. */
-function netGexByStrike(items, spot) {
+function netGexByStrike(items, spot, basis = 'oi+vol') {
   const out = [];
   for (const grp of (items || [])) {
     for (const s of (grp.strikes || [])) {
@@ -165,8 +204,10 @@ function netGexByStrike(items, spot) {
       if (!(strike > 0)) continue;
       const c = s.call || {}, p = s.put || {};
       const cg = Math.abs(Number(c.gamma) || 0), pg = Math.abs(Number(p.gamma) || 0);
-      const cc = (Number(c['open-interest']) || 0) + (Number(c.volume) || 0);
-      const pc = (Number(p['open-interest']) || 0) + (Number(p.volume) || 0);
+      // basis 'vol' = today's volume only (Voltick "Surge"); default OI+VOL.
+      const withOi = basis !== 'vol';
+      const cc = (withOi ? Number(c['open-interest']) || 0 : 0) + (Number(c.volume) || 0);
+      const pc = (withOi ? Number(p['open-interest']) || 0 : 0) + (Number(p.volume) || 0);
       const net = (cg * cc - pg * pc) * spot * spot * 0.01 * 100;
       if (!Number.isFinite(net)) continue;
       out.push({ strike, net });
@@ -175,15 +216,126 @@ function netGexByStrike(items, spot) {
   return out;
 }
 
+/**
+ * Chain totals — matched to the v3 Key Levels "Stats" copy button
+ * (cbedge-v3/src/board/keyLevels/statsShot.ts), which sums the ladder on the
+ * VOL-ONLY basis (netVolGEX / volNetDEX from computation/gex-calculator.js):
+ *   net GEX = Σ (|Γc|·volC − |Γp|·volP) · spot²
+ *   net DEX = Σ (Δc·volC − |Δp|·volP) · spot · 100
+ * Over the front expiry — the same ladder the card reads.
+ */
+function chainTotals(items, spot) {
+  let gex = 0, dex = 0;
+  for (const grp of (items || [])) {
+    for (const s of (grp.strikes || [])) {
+      const c = s.call || {}, p = s.put || {};
+      const qc = Number(c.volume) || 0;
+      const qp = Number(p.volume) || 0;
+      const g = (Math.abs(Number(c.gamma) || 0) * qc - Math.abs(Number(p.gamma) || 0) * qp) * spot * spot;
+      const d = ((Number(c.delta) || 0) * qc - Math.abs(Number(p.delta) || 0) * qp) * spot * 100;
+      if (Number.isFinite(g)) gex += g;
+      if (Number.isFinite(d)) dex += d;
+    }
+  }
+  return { netGex: gex, netDex: dex };
+}
+
+/**
+ * Per-strike books in VOLTICK's convention (Voltick repo, server/engine.js ·
+ * GEX-METHOD.md): one gamma per strike times the NET position, 1%-move dollars.
+ *   oi  = Γ × (callOI − putOI) × 100 × S² × 0.01      — the standing book
+ *   vol = Γ × (callVol − putVol) × 100 × S² × 0.01    — today's traded contracts
+ * Γ is the same for a call and put at one strike under Black-Scholes; the chain's
+ * two values are averaged (whichever side is present if only one is).
+ */
+function strikeBooks(items, spot) {
+  const byK = new Map();
+  const dollar = 100 * spot * spot * 0.01;
+  for (const grp of (items || [])) {
+    for (const s of (grp.strikes || [])) {
+      const strike = Number(s['strike-price']);
+      if (!(strike > 0)) continue;
+      const c = s.call || {}, p = s.put || {};
+      const gs = [Math.abs(Number(c.gamma) || 0), Math.abs(Number(p.gamma) || 0)].filter((g) => g > 0);
+      const g = gs.length ? gs.reduce((a, b) => a + b, 0) / gs.length : 0;
+      const netOI = (Number(c['open-interest']) || 0) - (Number(p['open-interest']) || 0);
+      const netVol = (Number(c.volume) || 0) - (Number(p.volume) || 0);
+      const cur = byK.get(strike) || { strike, oi: 0, vol: 0 };
+      cur.oi += g * netOI * dollar;
+      cur.vol += g * netVol * dollar;
+      byK.set(strike, cur);
+    }
+  }
+  return [...byK.values()].filter((r) => Number.isFinite(r.oi) && Number.isFinite(r.vol)).sort((a, b) => a.strike - b.strike);
+}
+
+/**
+ * PORT of Voltick's marksOf() (server/engine.js) — the definitions its Key
+ * Levels card draws — run on the OI column, plus its headline Surge.
+ *   Volt ★     = the single biggest |oi| strike (the king)
+ *   Reversal ↘ = the opposite-sign pole, each candidate's size weighted by its
+ *                THICK-SHELF support (opposite-sign neighbours ≥ 40% its size
+ *                within 2.5 strike steps); nodes under 5% of the Volt ignored.
+ *                revWeight 0.18 = Voltick's default before its nightly grading.
+ *   Coil ◆     = other strikes ≥ half the Volt, Volt and Reversal excluded,
+ *                heaviest first (Voltick keeps 5; the card shows the first)
+ *   Surge ↯    = the live magnet: biggest |vol| on the nearest expiration.
+ *                Voltick prefers its own classified TAPE flow when it has it and
+ *                falls back to exactly this volume read, so on a heavy-tape day
+ *                the two can differ.
+ */
+const REV_WEIGHT = 0.18;
+
+function voltickFromBooks(rows) {
+  let volt = null, voltAbs = 0;
+  for (const r of rows) if (Math.abs(r.oi) > voltAbs) { voltAbs = Math.abs(r.oi); volt = r; }
+  const voltSign = volt ? Math.sign(volt.oi) : 0;
+
+  let step = Infinity;
+  for (let a = 1; a < rows.length; a++) { const d = rows[a].strike - rows[a - 1].strike; if (d > 0 && d < step) step = d; }
+  const clusterWin = (step === Infinity ? 1 : step) * 2.5;
+
+  let reversal = null, revBest = -Infinity;
+  for (const r of rows) {
+    if (voltSign === 0 || Math.sign(r.oi) !== -voltSign) continue;
+    const size = Math.abs(r.oi);
+    if (size < 0.05 * voltAbs) continue;
+    let cluster = 0;
+    for (const r2 of rows) {
+      if (r2 !== r && Math.abs(r2.strike - r.strike) <= clusterWin
+          && Math.sign(r2.oi) === -voltSign && Math.abs(r2.oi) >= 0.4 * size) cluster++;
+    }
+    const score = size * (1 + REV_WEIGHT * Math.min(cluster, 3));
+    if (score > revBest) { revBest = score; reversal = r; }
+  }
+
+  const coils = rows
+    .filter((r) => volt && r !== volt && r !== reversal && voltAbs > 0 && Math.abs(r.oi) >= 0.5 * voltAbs)
+    .sort((a, b) => Math.abs(b.oi) - Math.abs(a.oi))
+    .slice(0, 5)
+    .map((r) => r.strike);
+
+  let surge = null, surgeAbs = 0;
+  for (const r of rows) if (Math.abs(r.vol) > surgeAbs) { surgeAbs = Math.abs(r.vol); surge = r; }
+
+  return {
+    volt: volt?.strike ?? null,
+    surge: surge?.strike ?? null,
+    reversal: reversal?.strike ?? null,
+    coil: coils[0] ?? null,
+    coils,
+  };
+}
+
 /** computeWalls(): CB = max |net|; CW = max +net excluding CB; PW = min −net excluding CB. */
 function computeWalls(rows) {
-  let cb = null, cbAbs = -1;
-  rows.forEach((r) => { const a = Math.abs(r.net); if (a > cbAbs) { cbAbs = a; cb = r.strike; } });
+  let cb = null, cbAbs = -1, cbNet = 0;
+  rows.forEach((r) => { const a = Math.abs(r.net); if (a > cbAbs) { cbAbs = a; cb = r.strike; cbNet = r.net; } });
   const pos = rows.filter((r) => r.net > 0).sort((a, b) => b.net - a.net);
   const neg = rows.filter((r) => r.net < 0).sort((a, b) => a.net - b.net);
   const cw = pos.find((r) => r.strike !== cb)?.strike ?? null;
   const pw = neg.find((r) => r.strike !== cb)?.strike ?? null;
-  return { cb, cw, pw };
+  return { cb, cw, pw, cbNet };
 }
 
 /**
@@ -212,8 +364,12 @@ async function buildRows(base) {
       const spot = Number(j?.data?.underlyingPrice ?? 0) || 0;
       if (!(spot > 0) || !items.length) { console.log(`[mg-ladder] ${ticker} — empty chain at ${front}`); continue; }
 
-      const { cb, cw, pw } = computeWalls(netGexByStrike(items, spot));
-      rows.push({ ticker, spot, expiration: front, cb, cw, pw });
+      const { cb, cw, pw, cbNet } = computeWalls(netGexByStrike(items, spot));
+      // Voltick "Surge": the core recomputed on VOLUME only.
+      const surge = computeWalls(netGexByStrike(items, spot, 'vol')).cb;
+      const { netGex, netDex } = chainTotals(items, spot);
+      const voltick = voltickFromBooks(strikeBooks(items, spot));
+      rows.push({ ticker, spot, expiration: front, cb, cw, pw, cbNet, surge, netGex, netDex, voltick });
     } catch (e) {
       console.log(`[mg-ladder] ${ticker} levels failed — ${e.message}`);
     }
@@ -514,34 +670,64 @@ async function renderPng(base, rows) {
 
 // ── Discord ─────────────────────────────────────────────────────────────────
 
-async function postToDiscord(png, content) {
+function renderMessage(template, summary) {
+  return String(template || '📊 **Multi-Greek Ladders** — {time} ET · CB {summary}')
+    .replace(/\{date\}/g, etLongDate())
+    .replace(/\{time\}/g, etClock())
+    .replace(/\{summary\}/g, summary);
+}
+
+/** Channel wins over webhook — same precedence scheduled-posts-store documents. */
+async function postOwn(cfg, png, content, filename) {
+  if (cfg.channelId) {
+    await bot.postToChannel(cfg.channelId, { content, file: png, filename });
+    return;
+  }
   const form = new FormData();
   form.append('payload_json', JSON.stringify({
-    username: DISCORD_USERNAME, avatar_url: DISCORD_AVATAR, content,
+    username: cfg.username || DISCORD_USERNAME,
+    avatar_url: cfg.avatarUrl || DISCORD_AVATAR,
+    content,
   }));
-  form.append('files[0]', new Blob([png], { type: 'image/png' }), `multigreek-ladders-${fileStamp()}.png`);
+  form.append('files[0]', new Blob([png], { type: 'image/png' }), filename);
 
-  const res = await fetch(WEBHOOK, { method: 'POST', body: form, signal: AbortSignal.timeout(20000) });
+  const res = await fetch(cfg.webhookUrl, { method: 'POST', body: form, signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`webhook ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
 }
 
 // ── Tick ────────────────────────────────────────────────────────────────────
 
+/**
+ * One attempt. `force` (the page's "Post now") ignores the window. `slotKey`
+ * is passed only by the scheduler and is what claims the slot on success, so
+ * a manual post never eats a scheduled one. Always records the outcome.
+ */
 async function collectOnce(base, opts = {}) {
-  if (!WEBHOOK) return { ok: false, error: 'no webhook' };
-  if (!isRTH() && !opts.force) return { ok: false, error: 'outside RTH' };
-
+  let cfg = null;
   try {
+    cfg = opts.config || (await readConfig());
+    if (!(await store.hasDestination(cfg))) throw new Error('no destination configured (bot channel, webhook, or a Signals webhook on BOT → Manage)');
+    if (!opts.force && !currentSlot(cfg)) return { ok: false, error: 'outside window' };
+
     const rows = await buildRows(base);
-    if (!rows.length) { console.log('[mg-ladder] no rows resolved — skip'); return { ok: false, error: 'no rows' }; }
+    if (!rows.length) throw new Error('no ladder rows resolved (chains empty?)');
 
     const png = await renderPng(base, rows);
     const summary = rows.map((r) => `${r.ticker} ${r.cb == null ? '--' : r.cb}`).join(' · ');
-    await postToDiscord(png, `📊 **Multi-Greek Ladders** — ${etClock()} ET · CB ${summary}`);
-    console.log(`[mg-ladder] posted — ${rows.map((r) => r.ticker).join(',')} (${Math.round(png.length / 1024)}KB)`);
+    const content = renderMessage(cfg.message, summary);
+    const filename = `multigreek-ladders-${fileStamp()}.png`;
+    // Own destination + every Signals webhook on BOT → Manage.
+    const out = await store.deliver(cfg, {
+      ownPost: () => postOwn(cfg, png, content, filename),
+      content, file: png, filename,
+      defaultUsername: cfg.username || DISCORD_USERNAME, defaultAvatar: cfg.avatarUrl || DISCORD_AVATAR,
+    });
+    console.log(`[mg-ladder] posted${opts.force ? ' (manual)' : ''} — ${rows.map((r) => r.ticker).join(',')} · +${out.fan.filter((r) => r.ok).length} signals (${Math.round(png.length / 1024)}KB)`);
+    await store.markRun(JOB_ID, { status: out.warning ? 'partial' : 'ok', error: out.warning, postedDate: opts.slotKey || '' });
     return { ok: true, tickers: rows.map((r) => r.ticker) };
   } catch (e) {
-    console.log(`[mg-ladder] tick failed — ${e.message}`);
+    console.log(`[mg-ladder] post failed — ${e.message}`);
+    await store.markRun(JOB_ID, { status: 'error', error: e.message });
     return { ok: false, error: e.message };
   }
 }
@@ -551,33 +737,207 @@ function startMgLadderDiscord(port) {
     console.log('[mg-ladder] disabled via MG_LADDER_DISABLED=1');
     return () => {};
   }
-  if (!WEBHOOK) {
-    console.log('[mg-ladder] off — no webhook (MG_LADDER_DISCORD_WEBHOOK / HOME_SIGNALS_DISCORD_WEBHOOK / SIGNALS_DISCORD_WEBHOOK / DISCORD_WEBHOOK_URL all unset)');
-    return () => {};
-  }
 
   const base = `http://localhost:${port}`;
-
-  // Fire on the wall-clock boundary (:00 / :15 / :30 / :45) rather than N
-  // minutes after boot, so the timestamps in the channel are readable and two
-  // redeploys in an hour don't shift the whole series.
-  function msToNextBoundary() {
-    const now = new Date();
-    const minsToNext = INTERVAL_MIN - (now.getMinutes() % INTERVAL_MIN) || INTERVAL_MIN;
-    return (minsToNext * 60 - now.getSeconds()) * 1000 - now.getMilliseconds();
-  }
-
-  console.log(`[mg-ladder] enabled — ladders for ${TICKERS.join(',')} to Discord every ${INTERVAL_MIN}m during RTH · next in ${Math.round(msToNextBoundary() / 60000)}m`);
+  console.log(`[mg-ladder] watcher up — settings from owner → BOT → Scheduled (job "${JOB_ID}"), checked every minute`);
 
   let stopped = false;
+  let busy = false;
   let timer = null;
+  // In-memory slot claim for when the settings table is unreachable.
+  let lastSlotMem = '';
+
+  // Re-arm to just after the next minute boundary so a slot minute is never
+  // skipped by setInterval drift.
+  function msToNextMinute() {
+    const now = new Date();
+    return (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 1500;
+  }
+
+  async function tick() {
+    if (busy) return;
+    busy = true;
+    try {
+      const cfg = await readConfig();
+      if (!cfg.enabled) return;
+      if (!(await store.hasDestination(cfg))) return;
+      const slot = currentSlot(cfg);
+      if (!slot || slot.late > GRACE_MIN) return;
+      if (slot.key === lastSlotMem) return;
+      if (cfg.live && cfg.lastPostDate === slot.key) return;
+      const res = await collectOnce(base, { config: cfg, slotKey: slot.key });
+      if (res?.ok) lastSlotMem = slot.key;
+    } catch (e) {
+      console.log(`[mg-ladder] tick failed — ${e.message}`);
+    } finally {
+      busy = false;
+    }
+  }
+
   function arm() {
     if (stopped) return;
-    timer = setTimeout(() => { void collectOnce(base).finally(arm); }, msToNextBoundary());
+    timer = setTimeout(() => { void tick().finally(arm); }, msToNextMinute());
+    if (typeof timer.unref === 'function') timer.unref();
   }
   arm();
 
   return () => { stopped = true; if (timer) clearTimeout(timer); };
 }
 
-module.exports = { startMgLadderDiscord, collectOnce, buildRows };
+// ── Levels (text) — job `levels-text` ───────────────────────────────────────
+//
+// Same rows as the ladder picture, posted as a plain message at fixed ET times
+// (default 09:45 and 10:30). No Chromium, no image.
+
+const TEXT_JOB_ID = 'levels-text';
+
+const fmtLvl = (v) => (v == null || !Number.isFinite(Number(v))) ? '--' : String(Number.isInteger(v) ? v : Number(v).toFixed(2));
+const fmtSpot = (v) => (Number(v) > 0)
+  ? Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '--';
+
+/** -147200000000 -> "-$147.20B"; under a billion -> "-$812.40M". Sign always shown. */
+function fmtBn(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '--';
+  const sign = n < 0 ? '-' : '+';
+  const a = Math.abs(n);
+  return a >= 1e9 ? `${sign}$${(a / 1e9).toFixed(2)}B` : `${sign}$${(a / 1e6).toFixed(2)}M`;
+}
+
+// Tickers that get the FULL block. Everything else (SPY, QQQ) shows spot + Volt only.
+const FULL_TICKERS = (process.env.VOLTICK_FULL_TICKERS || 'SPX')
+  .split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
+
+function levelsText(rows) {
+  return rows.map((r) => {
+    const v = r.voltick || {};
+    if (!FULL_TICKERS.includes(r.ticker)) {
+      return [`**${r.ticker}** ${fmtSpot(r.spot)}`, `Volt: ${fmtLvl(v.volt)}`].join('\n');
+    }
+    return [
+      `**${r.ticker}** ${fmtSpot(r.spot)}`,
+      `Volt: ${fmtLvl(v.volt)}`,
+      `Surge: ${fmtLvl(v.surge)}`,
+      `Reversal: ${fmtLvl(v.reversal)}`,
+      `Coil: ${fmtLvl(v.coil)}`,
+      `Net GEX: ${fmtBn(r.netGex)} · Net DEX: ${fmtBn(r.netDex)}`,
+    ].join('\n');
+  }).join('\n\n');
+}
+
+function renderTextMessage(template, levels) {
+  return String(template || '⚡ **Voltick Levels** — {time} ET\n\n{levels}')
+    .replace(/\\n/g, '\n')
+    .replace(/\{date\}/g, etLongDate())
+    .replace(/\{time\}/g, etClock())
+    .replace(/\{levels\}/g, levels)
+    .slice(0, 2000);
+}
+
+async function postTextOwn(cfg, content) {
+  if (cfg.channelId) {
+    await bot.postToChannel(cfg.channelId, { content });
+    return;
+  }
+  const res = await fetch(cfg.webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: cfg.username || DISCORD_USERNAME,
+      avatar_url: cfg.avatarUrl || DISCORD_AVATAR,
+      content,
+      allowed_mentions: { parse: [] },
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`webhook ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
+}
+
+async function collectLevelsText(base, opts = {}) {
+  try {
+    const cfg = opts.config || (await store.getJob(TEXT_JOB_ID));
+    if (!cfg) throw new Error(`scheduled-posts has no job "${TEXT_JOB_ID}"`);
+    if (!(await store.hasDestination(cfg))) throw new Error('no destination configured (bot channel, webhook, or a Signals webhook on BOT → Manage)');
+
+    const rows = await buildRows(base);
+    if (!rows.length) throw new Error('no level rows resolved (chains empty?)');
+
+    const content = renderTextMessage(cfg.message, levelsText(rows));
+    const out = await store.deliver(cfg, {
+      ownPost: () => postTextOwn(cfg, content),
+      content,
+      defaultUsername: cfg.username || DISCORD_USERNAME, defaultAvatar: cfg.avatarUrl || DISCORD_AVATAR,
+    });
+    console.log(`[levels-text] posted${opts.force ? ' (manual)' : ''} — ${rows.map((r) => r.ticker).join(',')} · +${out.fan.filter((r) => r.ok).length} signals`);
+    await store.markRun(TEXT_JOB_ID, { status: out.warning ? 'partial' : 'ok', error: out.warning, postedDate: opts.slotKey || '' });
+    return { ok: true, tickers: rows.map((r) => r.ticker) };
+  } catch (e) {
+    console.log(`[levels-text] post failed — ${e.message}`);
+    await store.markRun(TEXT_JOB_ID, { status: 'error', error: e.message });
+    return { ok: false, error: e.message };
+  }
+}
+
+/** Slot for a times job: the listed time we are 0..GRACE_MIN past, or null. */
+function timesSlot(cfg) {
+  const { hour, minute, weekday } = nowParts();
+  const day = String(weekday || '').slice(0, 3).toLowerCase();
+  if (!String(cfg.days || '').split(',').includes(day)) return null;
+  const mins = (hour % 24) * 60 + minute;
+  for (const t of String(cfg.times || '').split(',').filter(Boolean)) {
+    const late = mins - toMins(t);
+    if (late >= 0 && late <= GRACE_MIN) return { key: `${todayETStr()} ${t}`, late };
+  }
+  return null;
+}
+
+function startLevelsTextDiscord(port) {
+  if (process.env.MG_LADDER_DISABLED === '1') {
+    console.log('[levels-text] disabled via MG_LADDER_DISABLED=1');
+    return () => {};
+  }
+  const base = `http://localhost:${port}`;
+  console.log(`[levels-text] watcher up — settings from owner → BOT → Scheduled (job "${TEXT_JOB_ID}"), checked every minute`);
+
+  let stopped = false;
+  let busy = false;
+  let timer = null;
+  let lastSlotMem = '';
+
+  const msToNextMinute = () => {
+    const now = new Date();
+    return (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 1500;
+  };
+
+  async function tick() {
+    if (busy) return;
+    busy = true;
+    try {
+      const cfg = await store.getJob(TEXT_JOB_ID);
+      if (!cfg || !cfg.enabled) return;
+      const slot = timesSlot(cfg);
+      if (!slot || slot.key === lastSlotMem) return;
+      if (cfg.live && cfg.lastPostDate === slot.key) return;
+      if (!(await store.hasDestination(cfg))) return;
+      const res = await collectLevelsText(base, { config: cfg, slotKey: slot.key });
+      if (res?.ok) lastSlotMem = slot.key;
+    } catch (e) {
+      console.log(`[levels-text] tick failed — ${e.message}`);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function arm() {
+    if (stopped) return;
+    timer = setTimeout(() => { void tick().finally(arm); }, msToNextMinute());
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+  arm();
+  return () => { stopped = true; if (timer) clearTimeout(timer); };
+}
+
+module.exports = {
+  startMgLadderDiscord, collectOnce, buildRows, readConfig, JOB_ID,
+  startLevelsTextDiscord, collectLevelsText, levelsText, voltickFromBooks, strikeBooks, TEXT_JOB_ID,
+};

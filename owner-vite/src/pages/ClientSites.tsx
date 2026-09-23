@@ -23,9 +23,25 @@ import {
  * on the VPS, which the demo-sites nginx serves generically — changes are live
  * on the next refresh, with no deploy.
  *
+ * Visit counts come from the demo-sites nginx log: a "view" is one open of the
+ * site's page (a refresh counts again); failed logins are wrong passwords.
+ *
  * Passwords are stored as bcrypt hashes and cannot be read back. The page shows
  * a password once, right after it is set, in a ready-to-send message.
  */
+
+type Visit = { t: string; user: string | null; country: string | null; device: string | null };
+
+type SiteStats = {
+  views: number;
+  visitors: number;
+  today: number;
+  failedLogins: number;
+  lastView: Visit | null;
+  byUser: { user: string; views: number }[];
+  recent: Visit[];
+  days: { day: string; views: number }[];
+};
 
 type Site = {
   slug: string;
@@ -36,6 +52,8 @@ type Site = {
   index: { bytes: number; mtime: number } | null;
   createdAt: string | null;
   updatedAt: string | null;
+  /** null when the visit log isn't mounted yet. */
+  stats: SiteStats | null;
 };
 
 type ApiResult = {
@@ -374,6 +392,88 @@ function NewSiteCard({
   );
 }
 
+// ── visits ───────────────────────────────────────────────────────────────────
+
+function StatTile({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
+  return (
+    <div style={{ padding: "10px 12px", borderRadius: 12, background: T.panelInset, border: `1px solid ${T.border}`, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+      <span style={{ ...labelStyle, fontSize: TYPE.micro }}>{label}</span>
+      <span style={{ fontSize: TYPE.display - 6, fontWeight: 800, color: tone || T.text, fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{value}</span>
+    </div>
+  );
+}
+
+function visitLine(v: Visit): string {
+  return [fmtWhen(v.t), v.user ? `as ${v.user}` : null, v.device, v.country].filter(Boolean).join(" · ");
+}
+
+function VisitStats({ stats }: { stats: SiteStats | null }) {
+  const [open, setOpen] = useState(false);
+  if (!stats) {
+    return (
+      <div style={{ fontSize: TYPE.label, color: T.cyan }}>
+        Visit tracking isn’t running yet — it starts once the visit log folder is mounted (see the Client Sites deploy note).
+      </div>
+    );
+  }
+  const max = Math.max(1, ...stats.days.map((d) => d.views));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <span style={labelStyle}>Visits</span>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
+        <StatTile label="Views" value={stats.views.toLocaleString("en-US")} />
+        <StatTile label="Today" value={stats.today.toLocaleString("en-US")} />
+        <StatTile label="Visitors" value={stats.visitors.toLocaleString("en-US")} />
+        <StatTile label="Wrong passwords" value={stats.failedLogins.toLocaleString("en-US")} tone={stats.failedLogins ? T.gold : undefined} />
+      </div>
+
+      {/* last 14 days, one bar per day */}
+      <div aria-label="Views per day, last 14 days" style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 56, padding: "0 2px" }}>
+        {stats.days.map((d) => (
+          <div
+            key={d.day}
+            title={`${d.day}: ${d.views} view${d.views === 1 ? "" : "s"}`}
+            style={{
+              flex: 1,
+              height: d.views ? `${Math.max(8, (d.views / max) * 100)}%` : 2,
+              borderRadius: "3px 3px 0 0",
+              background: d.views ? T.lightBlue : T.border,
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: TYPE.micro, color: T.cyan }}>
+        <span>14 days ago</span><span>today</span>
+      </div>
+
+      <div style={{ fontSize: TYPE.body, color: T.text }}>
+        {stats.lastView ? <>Last opened {visitLine(stats.lastView)}</> : "Not opened yet."}
+      </div>
+      {stats.byUser.length > 0 && (
+        <div style={{ fontSize: TYPE.label, color: T.green }}>
+          By login: {stats.byUser.map((u) => `${u.user} ${u.views}`).join(" · ")}
+        </div>
+      )}
+      {stats.recent.length > 0 && (
+        <div>
+          <button type="button" onClick={() => setOpen((o) => !o)} style={smallBtn}>
+            {open ? "Hide recent visits" : `Recent visits (${stats.recent.length})`}
+          </button>
+          {open && (
+            <ul style={{ margin: "8px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
+              {stats.recent.map((v, i) => (
+                <li key={`${v.t}-${i}`} style={{ fontSize: TYPE.label, color: T.text, padding: "4px 0", borderBottom: `1px solid ${T.border}` }}>
+                  {visitLine(v)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── one site ─────────────────────────────────────────────────────────────────
 
 function SiteCard({
@@ -491,6 +591,8 @@ function SiteCard({
             {site.index ? "Replace page…" : "Upload page…"}
           </button>
         </div>
+
+        <VisitStats stats={site.stats} />
 
         {/* logins */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

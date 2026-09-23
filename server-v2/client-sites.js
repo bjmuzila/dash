@@ -11,6 +11,7 @@
  *   /demo-sites/sites/<slug>/index.html   (host: /opt/demo-sites-data)  — the site
  *   /demo-sites/auth/<slug>.htpasswd      (host: /opt/demo-sites-auth)  — its logins
  *   /demo-sites/auth/<slug>.json          (host: /opt/demo-sites-auth)  — label + dates
+ *   /demo-sites/logs/access.log           (host: /opt/demo-sites-logs)  — nginx visit log (read-only here)
  *
  * Both host folders live OUTSIDE the git checkout on purpose: writing into
  * /opt/dashboard would leave a dirty working tree for the next `git pull` /
@@ -24,7 +25,8 @@
  * sent to the client.
  *
  * One owner-only route, POST actions keyed by `action`, so every write goes
- * through the same validation.
+ * through the same validation. GET also returns per-site visit stats read from
+ * the demo-sites nginx access log (see "visit tracking" below).
  */
 
 const fs = require('fs');
@@ -37,6 +39,7 @@ catch (e) { console.warn('[client-sites] bcryptjs not loaded — writes disabled
 
 const SITES_DIR = process.env.DEMO_SITES_DIR || '/demo-sites/sites';
 const AUTH_DIR = process.env.DEMO_SITES_AUTH_DIR || '/demo-sites/auth';
+const LOG_FILE = process.env.DEMO_SITES_LOG || '/demo-sites/logs/access.log';
 const PUBLIC_BASE = (process.env.DEMO_SITES_BASE_URL || 'https://sites.cbedge.net').replace(/\/+$/, '');
 
 // Must match the slug regex in demo-sites/nginx.conf.
@@ -116,8 +119,118 @@ async function writeMeta(slug, meta) {
   await atomicWrite(metaPath(slug), JSON.stringify(meta, null, 2) + '\n');
 }
 
+// ── visit tracking ──────────────────────────────────────────────────────────
+//
+// demo-sites/nginx.conf writes one JSON line per request to access.log
+// (log_format `sites`): t, ip (CF-Connecting-IP — the tunnel hides the real
+// remote_addr), u (the login used, also set on a FAILED attempt), m, p (path),
+// s (status), ua, c (Cloudflare country).
+//
+// A "view" is a successful GET of a page — /<slug>/ or /<slug>/*.html with
+// status 200/304. The sites are single self-contained files, so one view is
+// one open of the site (every refresh counts: the site sends no-store).
+// A failed login is a 401 that carried a username (the browser's first,
+// credential-less request also 401s, and is not counted).
+//
+// Parsed on demand and cached by the file's size+mtime, so an idle page costs
+// one stat(). Only the newest 30 MB are read.
+const LOG_MAX_READ = 30 * 1024 * 1024;
+const RECENT_PER_SITE = 25;
+const DAYS = 14;
+let logCache = { key: '', stats: new Map(), available: false };
+
+function isPageView(slug, p) {
+  if (p === `/${slug}/`) return true;
+  return p.startsWith(`/${slug}/`) && /\.html?$/i.test(p);
+}
+
+/** 'YYYY-MM-DD' in America/New_York for an ISO timestamp. */
+function etDay(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+function emptyStats() {
+  return { views: 0, visitors: new Set(), byUser: new Map(), failedLogins: 0, lastView: null, recent: [], days: new Map() };
+}
+
+async function readVisitStats() {
+  let st;
+  try { st = await fs.promises.stat(LOG_FILE); }
+  catch { logCache = { key: '', stats: new Map(), available: false }; return logCache; }
+  const key = `${st.size}:${st.mtimeMs}`;
+  if (key === logCache.key) return logCache;
+
+  const start = Math.max(0, st.size - LOG_MAX_READ);
+  const fh = await fs.promises.open(LOG_FILE, 'r');
+  let text;
+  try {
+    const buf = Buffer.alloc(st.size - start);
+    await fh.read(buf, 0, buf.length, start);
+    text = buf.toString('utf8');
+  } finally { await fh.close(); }
+  if (start > 0) text = text.slice(text.indexOf('\n') + 1); // drop the partial first line
+
+  const stats = new Map();
+  for (const line of text.split('\n')) {
+    if (!line || line[0] !== '{') continue;
+    let r;
+    try { r = JSON.parse(line); } catch { continue; }
+    const m = /^\/([a-z0-9][a-z0-9-]{0,39})\//.exec(String(r.p || ''));
+    if (!m) continue;
+    const slug = m[1];
+    let s = stats.get(slug);
+    if (!s) { s = emptyStats(); stats.set(slug, s); }
+    const status = Number(r.s);
+    const user = r.u ? String(r.u) : '';
+    if (status === 401 && user) { s.failedLogins += 1; continue; }
+    if (r.m !== 'GET' || (status !== 200 && status !== 304) || !isPageView(slug, String(r.p))) continue;
+    s.views += 1;
+    const who = r.ip ? String(r.ip) : user || 'unknown';
+    s.visitors.add(who);
+    if (user) s.byUser.set(user, (s.byUser.get(user) || 0) + 1);
+    const day = etDay(r.t);
+    if (day) s.days.set(day, (s.days.get(day) || 0) + 1);
+    const visit = { t: r.t, user: user || null, country: r.c || null, device: deviceOf(r.ua) };
+    s.lastView = visit;
+    s.recent.push(visit);
+    if (s.recent.length > RECENT_PER_SITE * 4) s.recent.splice(0, s.recent.length - RECENT_PER_SITE);
+  }
+  logCache = { key, stats, available: true };
+  return logCache;
+}
+
+function deviceOf(ua) {
+  const s = String(ua || '');
+  if (/iPhone|Android.+Mobile|Mobile Safari/i.test(s)) return 'Phone';
+  if (/iPad|Tablet|Android/i.test(s)) return 'Tablet';
+  if (!s) return null;
+  return 'Computer';
+}
+
+function summarize(s) {
+  const today = etDay(new Date().toISOString());
+  const days = [];
+  for (let i = DAYS - 1; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    days.push({ day: d, views: (s && s.days.get(d)) || 0 });
+  }
+  if (!s) return { views: 0, visitors: 0, today: 0, failedLogins: 0, lastView: null, byUser: [], recent: [], days };
+  return {
+    views: s.views,
+    visitors: s.visitors.size,
+    today: s.days.get(today) || 0,
+    failedLogins: s.failedLogins,
+    lastView: s.lastView,
+    byUser: [...s.byUser.entries()].map(([user, views]) => ({ user, views })).sort((a, b) => b.views - a.views),
+    recent: s.recent.slice(-RECENT_PER_SITE).reverse(),
+    days,
+  };
+}
+
 async function describeSite(slug) {
-  const [users, meta] = await Promise.all([readUsers(slug), readMeta(slug)]);
+  const [users, meta, log] = await Promise.all([readUsers(slug), readMeta(slug), readVisitStats()]);
   let index = null;
   try {
     const st = await fs.promises.stat(path.join(siteDir(slug), 'index.html'));
@@ -133,6 +246,7 @@ async function describeSite(slug) {
     index,
     createdAt: meta.createdAt || null,
     updatedAt: meta.updatedAt || null,
+    stats: log.available ? summarize(log.stats.get(slug)) : null,
   };
 }
 
@@ -277,4 +391,4 @@ function registerClientSites(register, h) {
   });
 }
 
-module.exports = { registerClientSites, _test: { handleAction, listSites, SLUG_RE } };
+module.exports = { registerClientSites, _test: { handleAction, listSites, readVisitStats, SLUG_RE } };

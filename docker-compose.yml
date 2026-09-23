@@ -36,6 +36,8 @@ services:
       # checkout so uploads never dirty /opt/dashboard.
       - /opt/demo-sites-data:/demo-sites/sites
       - /opt/demo-sites-auth:/demo-sites/auth
+      # demo-sites' nginx visit log — read-only here, for the page's view counts.
+      - /opt/demo-sites-logs:/demo-sites/logs:ro
     ports:
       # Bind to localhost only — Cloudflare reaches the origin via cloudflared
       # tunnel (no public port). Do NOT expose to 0.0.0.0 without TLS+firewall.
@@ -491,6 +493,8 @@ services:
     volumes:
       - /opt/demo-sites-data:/usr/share/nginx/html:ro
       - /opt/demo-sites-auth:/etc/nginx/auth:ro
+      # Visit log (JSON lines) read by the owner Client Sites page.
+      - /opt/demo-sites-logs:/var/log/demo-sites
       - ./demo-sites/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       # Only robots.txt is read from here (see nginx.conf).
       - ./demo-sites/public:/usr/share/nginx/robots:ro

@@ -28,10 +28,17 @@
  *                 20 points toward the CB and the thing barely moves, so the
  *                 sell rule fires on a contract that never repriced. Walking in
  *                 until the premium clears a dollar buys something that actually
- *                 responds to the move being traded. There is deliberately NO
- *                 upper bound (owner's call) — the walk stops at the FIRST
- *                 strike over $1.00, so it naturally lands just over it unless
- *                 the CB itself is already near the money.
+ *                 responds to the move being traded.
+ *
+ *                 THE CEILING (owner's call, 2026-09-23): the buy is a BAND,
+ *                 over $1.00 (CB_BUY_MIN) and at most $5.00 (CB_BUY_MAX). A CB
+ *                 already priced over $5.00 is not voided — the walk turns
+ *                 around and steps one strike at a time FARTHER OTM (away from
+ *                 the money) and buys the first strike that prices inside the
+ *                 band. Premium falls as the strike moves away from spot, so
+ *                 it lands just under $5.00. `walk_steps` counts strikes moved
+ *                 from the CB in EITHER direction; strike vs cb_strike tells
+ *                 which way it went.
  *
  *   2. SIDE       the leg that gains as SPX travels TO the CB: SPX under the CB
  *                 buys calls, SPX over it buys puts. The CB is a magnet, so the
@@ -119,6 +126,9 @@
 // ── Tunables (env-overridable so a rule change needs no code deploy) ────────
 // The buy price is a FLOOR, not a ceiling. See "THE WALK" in the header.
 const BUY_MIN = Number(process.env.CB_BUY_MIN || 1.0);                  // $ premium, strictly greater
+// The ceiling. A strike priced over this is too rich — the walk steps farther
+// OTM until one prices at or under it.
+const BUY_MAX = Number(process.env.CB_BUY_MAX || 5.0);                  // $ premium, inclusive
 // SPX 0DTE lists 5-wide almost everywhere, 25-wide far out. The walk STEPS by
 // this and then uses whatever strike the chain actually resolved to, so a wrong
 // guess here costs a duplicate probe, never a phantom contract.
@@ -205,6 +215,24 @@ function decideSide(spot, strike) {
 /** Rule 1: a contract qualifies once its mark clears the floor. */
 function qualifies(mark, min = BUY_MIN) {
   return Number.isFinite(mark) && mark > min;
+}
+
+/** The buy band: over the floor AND at or under the ceiling. */
+function inBand(mark, min = BUY_MIN, max = BUY_MAX) {
+  return qualifies(mark, min) && mark <= max;
+}
+
+/**
+ * The OTM leg of the walk: from `fromStrike`, one step at a time AWAY from the
+ * money (calls step up, puts step down). Used when a strike prices over the
+ * ceiling. `fromStrike` itself is not included.
+ */
+function otmCandidates(fromStrike, side, { step = STRIKE_STEP, maxSteps = WALK_MAX_STEPS } = {}) {
+  if (!Number.isFinite(fromStrike)) return [];
+  const dir = side === 'C' ? 1 : -1;
+  const out = [];
+  for (let i = 1; i <= maxSteps; i++) out.push(fromStrike + dir * i * step);
+  return out;
 }
 
 /**
@@ -295,7 +323,7 @@ function ensureTables() {
         strike           REAL NOT NULL,          -- the contract actually bought (the walk's landing strike)
         cb_strike        REAL,                   -- the CB live at the checkpoint — what distance is measured to
         cb_price         REAL,                   -- what the CB strike itself priced at (why the walk happened)
-        walk_steps       INTEGER,                -- strikes stepped from the CB toward the money (0 = the CB itself)
+        walk_steps       INTEGER,                -- strikes stepped from the CB, either direction (0 = the CB itself)
         side             TEXT NOT NULL,          -- 'C' | 'P'
         occ_symbol       TEXT,
         streamer_symbol  TEXT,
@@ -575,7 +603,8 @@ async function runCheckpoint(ctx, { date, checkpoint, basis = DEFAULT_BASIS }) {
 
 /**
  * Rule 1, executed: price the CB, then step toward the money until something
- * clears $1.00.
+ * clears $1.00. If a strike prices OVER $5.00 (CB_BUY_MAX), turn around and step
+ * farther OTM until one lands in the $1.00–$5.00 band.
  *
  * Strikes are resolved through the probe rather than assumed. probeRestTT snaps
  * to the nearest strike in the TT chain and reports `resolvedStrike`, so a step
@@ -595,25 +624,72 @@ async function walkForContract(ctx, { expiry, side, cbStrike, spot }) {
   const candidates = walkCandidates(cbStrike, spot, side);
   if (!candidates.length) return { ok: false, reason: 'no walkable strikes (CB or spot missing)', trail, cbPrice };
 
-  for (let i = 0; i < candidates.length; i++) {
-    const want = candidates[i];
+  const band = `$${BUY_MIN.toFixed(2)}–$${BUY_MAX.toFixed(2)}`;
+  // Probe one strike; returns { strike, p } for a new priced listing, or null.
+  const tryStrike = async (want, steps) => {
     const p = await probeContract(ctx, { expiry, side, strike: want });
-    if (!p.found) { trail.push({ want, error: p.reason }); continue; }
+    if (!p.found) { trail.push({ want, error: p.reason, steps }); return null; }
     const strike = p.resolvedStrike ?? want;
-    if (seen.has(strike)) continue;          // the step fell inside one listing gap
+    if (seen.has(strike)) return null;       // the step fell inside one listing gap
     seen.add(strike);
-    trail.push({ strike, mark: p.mark, steps: i });
+    trail.push({ strike, mark: p.mark, steps });
+    return { strike, p };
+  };
+
+  // Leg 1 — the CB, then toward the money, while the premium is under the band.
+  let richFrom = null;   // first strike that priced OVER the ceiling
+  let richSteps = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const hit = await tryStrike(candidates[i], i);
+    if (!hit) continue;
     // Only step 0 is the CB. If the CB itself could not be priced this stays
     // null, which is the honest answer — not the price of whatever we walked to.
-    if (i === 0) cbPrice = p.mark;
-    if (qualifies(p.mark)) {
-      return { ok: true, strike, probe: p, steps: i, trail, cbPrice };
+    if (i === 0) cbPrice = hit.p.mark;
+    if (inBand(hit.p.mark)) return { ok: true, strike: hit.strike, probe: hit.p, steps: i, trail, cbPrice };
+    if (Number.isFinite(hit.p.mark) && hit.p.mark > BUY_MAX) {
+      // Too rich. If a cheaper strike already sat just OTM of this one (we
+      // jumped from under $1 to over $5 in one step), there is nothing in the
+      // band between them — stop rather than cross back.
+      if (i > 0 && trail.some((x) => x.mark != null && x.mark <= BUY_MIN)) {
+        return {
+          ok: false, trail, cbPrice,
+          reason: `premium jumped past the ${band} band between adjacent strikes near ${hit.strike}`,
+        };
+      }
+      richFrom = hit.strike;
+      richSteps = i;
+      break;
     }
   }
+
+  // Leg 2 — over the ceiling: step FARTHER OTM until a strike prices in band.
+  if (richFrom != null) {
+    const otm = otmCandidates(richFrom, side);
+    for (let j = 0; j < otm.length; j++) {
+      const hit = await tryStrike(otm[j], null);
+      if (!hit) continue;
+      const steps = Math.round(Math.abs(hit.strike - cbStrike) / STRIKE_STEP);
+      trail[trail.length - 1].steps = steps;
+      if (inBand(hit.p.mark)) return { ok: true, strike: hit.strike, probe: hit.p, steps, trail, cbPrice };
+      if (Number.isFinite(hit.p.mark) && hit.p.mark <= BUY_MIN) {
+        return {
+          ok: false, trail, cbPrice,
+          reason: `walked OTM from ${richFrom} — premium fell from over $${BUY_MAX.toFixed(2)} `
+            + `to $${hit.p.mark.toFixed(2)} at ${hit.strike} without landing in the ${band} band`,
+        };
+      }
+    }
+    return {
+      ok: false, trail, cbPrice,
+      reason: `walked ${otm.length} strikes OTM from ${richFrom} (${richSteps} from the CB) — `
+        + `nothing priced at or under $${BUY_MAX.toFixed(2)}`,
+    };
+  }
+
   const priced = trail.filter((x) => x.mark != null);
   const reason = priced.length
     ? `walked ${priced.length} strike${priced.length === 1 ? '' : 's'} from the CB to `
-      + `${priced[priced.length - 1].strike} — none priced over $${BUY_MIN.toFixed(2)} `
+      + `${priced[priced.length - 1].strike} — none priced in the ${band} band `
       + `(best $${Math.max(...priced.map((x) => x.mark)).toFixed(2)})`
     : `no strike near the CB could be priced — ${trail[0]?.error ?? 'probe returned nothing'}`;
   return { ok: false, reason, trail, cbPrice };
@@ -894,7 +970,7 @@ async function diagnose(ctx, { date } = {}) {
     recorder: _lastTick
       ? { lastTickAt: _lastTick.at, agoSeconds: Math.round((Date.now() - _lastTick.at) / 1000), lastResult: _lastTick.result ?? null }
       : { lastTickAt: null, note: 'no tick has run in this process — the recorder is not firing, or the process restarted' },
-    config: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, CHECKPOINT_GRACE_MIN, BASES, DEFAULT_BASIS },
+    config: { BUY_MIN, BUY_MAX, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, CHECKPOINT_GRACE_MIN, BASES, DEFAULT_BASIS },
     stream: cbStream ? cbStream.health() : { enabled: false, note: 'cb-stream not loaded — REST polling only' },
     dueNow: dueCheckpoints(et.minutes).map((c) => c.key),
     checkpoints: [],
@@ -950,7 +1026,7 @@ async function diagnose(ctx, { date } = {}) {
     const side = decideSide(cb.spx, cb.strike) || 'C';
     const w = await walkForContract(ctx, { expiry: d, side, cbStrike: cb.strike, spot: cb.spx });
     out.liveWalkByBasis[b.key] = {
-      asked: { ticker: PROBE_TICKER, expiry: d, basis: b.key, side, cb: cb.strike, spot: cb.spx, buyMin: BUY_MIN },
+      asked: { ticker: PROBE_TICKER, expiry: d, basis: b.key, side, cb: cb.strike, spot: cb.spx, buyMin: BUY_MIN, buyMax: BUY_MAX },
       candidates: walkCandidates(cb.strike, cb.spx, side).slice(0, 10),
       trail: w.trail,
       picked: w.ok ? { strike: w.strike, mark: w.probe.mark, steps: w.steps } : null,
@@ -1108,6 +1184,7 @@ async function enrichWithTrades(data, { basis = DEFAULT_BASIS } = {}) {
     basis: bas,
     basisLabel: basisDef(bas).label,
     buyMin: BUY_MIN,
+    buyMax: BUY_MAX,
     multiplier: MULTIPLIER,
     daysRecorded: new Set(rows.map((r) => r.date)).size,
     daysShown: dates.length,
@@ -1136,6 +1213,8 @@ module.exports = {
   // pure helpers, exported for the selftest
   decideSide,
   qualifies,
+  inBand,
+  otmCandidates,
   walkCandidates,
   walkForContract,
   distanceToCb,
@@ -1144,5 +1223,5 @@ module.exports = {
   dueCheckpoints,
   snapshotAt,
   etParts,
-  CONFIG: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, MULTIPLIER, CHECKPOINT_GRACE_MIN, BASES, DEFAULT_BASIS },
+  CONFIG: { BUY_MIN, BUY_MAX, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, MULTIPLIER, CHECKPOINT_GRACE_MIN, BASES, DEFAULT_BASIS },
 };

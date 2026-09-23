@@ -2355,7 +2355,8 @@ register('/api/discord-share', {
         if (!ownerOk(ctx, verdict)) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
         const body = await readJson(req, 10_000);
         const id = str(body?.id, 40);
-        const cls = botStore.ASSET_CLASSES.includes(body?.assetClass) ? body.assetClass : 'notes';
+        const cls = botStore.ASSET_CLASSES.includes(body?.assetClass) || body?.assetClass === botStore.SIGNALS_KEY
+          ? body.assetClass : 'notes';
         if (!id) { send(res, 400, { ok: false, error: 'id is required' }); return; }
 
         const [target] = await botStore.resolve([id], cls);
@@ -2414,6 +2415,10 @@ register('/api/discord-share', {
   const RUNNERS = {
     'econ-calendar': (port) =>
       require('./econ-calendar-discord').collectOnce(`http://127.0.0.1:${port}`, { force: true }),
+    'mg-ladder': (port) =>
+      require('./mg-ladder-discord').collectOnce(`http://localhost:${port}`, { force: true }),
+    'levels-text': (port) =>
+      require('./mg-ladder-discord').collectLevelsText(`http://localhost:${port}`, { force: true }),
   };
 
   // ── GET /api/discord-bot/channels ─────────────────────────────────────────

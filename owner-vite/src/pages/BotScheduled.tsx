@@ -53,8 +53,16 @@ type Job = {
   id: string;
   label: string;
   hint?: string;
+  /** 'daily' = one post at postAt; 'interval' = every intervalMin from postAt until endAt. */
+  kind?: "daily" | "interval" | "times";
+  /** Message tokens this job fills in. */
+  tokens?: string[];
   enabled: boolean;
   postAt: string;
+  endAt?: string;
+  intervalMin?: number;
+  /** 'times' jobs: comma list of HH:MM ET. */
+  times?: string;
   days: string;
   username: string;
   avatarUrl: string;
@@ -65,7 +73,7 @@ type Job = {
   hasWebhook: boolean;
   webhookFromEnv: boolean;
   /** Which path a post would actually take — resolved by the server. */
-  dest: "bot" | "webhook" | "none";
+  dest: "bot" | "webhook" | "signals" | "none";
   lastRunAt: string | null;
   /** ET date of the last successful SCHEDULED post — the scheduler's day-claim. */
   lastPostDate: string;
@@ -111,6 +119,8 @@ function fmtDays(days: string): string {
 
 export default function BotScheduled() {
   const [jobs, setJobs] = useState<Job[]>([]);
+  /** Discords on BOT → Manage with a Signals webhook — every job also posts there. */
+  const [signals, setSignals] = useState<{ id: string; label: string; masked: string }[]>([]);
   const [live, setLive] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -130,8 +140,9 @@ export default function BotScheduled() {
       return rest;
     });
 
-  function applyPayload(j: { jobs?: Job[]; live?: boolean }) {
+  function applyPayload(j: { jobs?: Job[]; live?: boolean; signals?: { id: string; label: string; masked: string }[] }) {
     setJobs(Array.isArray(j?.jobs) ? j.jobs : []);
+    if (Array.isArray(j?.signals)) setSignals(j.signals);
     setLive(j?.live !== false);
     setDrafts({});
   }
@@ -195,6 +206,10 @@ export default function BotScheduled() {
           avatarUrl: val(job, "avatarUrl"),
           message: val(job, "message"),
           postEmpty: val(job, "postEmpty"),
+          ...(job.kind === "interval"
+            ? { endAt: val(job, "endAt"), intervalMin: Number(val(job, "intervalMin")) || 15 }
+            : {}),
+          ...(job.kind === "times" ? { times: val(job, "times") } : {}),
           // Absent/blank = keep what is stored. Never send the mask back.
           webhookUrl: (d.webhookUrl ?? "").trim(),
           // "-" clears; the segmented control below sends it when Webhook is
@@ -284,6 +299,13 @@ export default function BotScheduled() {
         // behind a chevron where the next Save looks like it did nothing.
         const expanded = (open[job.id] ?? false) || isDirty;
         const failed = job.lastStatus === "error";
+        const isInterval = job.kind === "interval";
+        const isTimes = job.kind === "times";
+        const whenLine = isInterval
+          ? `Every ${val(job, "intervalMin")}m · ${val(job, "postAt")}–${val(job, "endAt")} ET · ${fmtDays(days)}`
+          : isTimes
+            ? `${String(val(job, "times") || "").split(",").filter(Boolean).join(", ")} ET · ${fmtDays(days)}`
+            : `${val(job, "postAt")} ET · ${fmtDays(days)}`;
 
         return (
           <Card key={job.id} variant="classic" padding={0}>
@@ -329,8 +351,9 @@ export default function BotScheduled() {
                   fontSize: 11, marginTop: 4, opacity: 0.6, color: OWNER_THEME.text,
                   fontVariantNumeric: "tabular-nums",
                 }}>
-                  {enabled ? `${val(job, "postAt")} ET · ${fmtDays(days)}` : "Not scheduled"}
-                  {job.dest === "bot" ? " · bot" : job.dest === "webhook" ? " · webhook" : " · no destination"}
+                  {enabled ? whenLine : "Not scheduled"}
+                  {job.dest === "bot" ? " · bot" : job.dest === "webhook" ? " · webhook" : job.dest === "signals" ? "" : " · no destination"}
+                  {signals.length ? ` · +${signals.length} Signals` : ""}
                   {" · last run "}
                   <span style={{ color: failed ? RED : "inherit", opacity: failed ? 1 : 0.9 }}>
                     {fmtWhen(job.lastRunAt)}{job.lastStatus ? ` (${job.lastStatus})` : ""}
@@ -369,8 +392,24 @@ export default function BotScheduled() {
 
             {/* ── When ─────────────────────────────────────────────────────── */}
             <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 20 }}>
+              {isTimes ? (
+                <div>
+                  <div style={labelStyle}>Times (ET)</div>
+                  <input
+                    type="text"
+                    value={String(val(job, "times") || "")}
+                    onChange={(e) => patch(job, { times: e.target.value })}
+                    placeholder="09:45, 10:30"
+                    spellCheck={false}
+                    style={{ ...homeInputStyle, width: 220, fontVariantNumeric: "tabular-nums" }}
+                  />
+                  <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.55, marginTop: 5 }}>
+                    Comma-separated, 24h — one post at each.
+                  </div>
+                </div>
+              ) : (
               <div>
-                <div style={labelStyle}>Post at (ET)</div>
+                <div style={labelStyle}>{isInterval ? "Start (ET)" : "Post at (ET)"}</div>
                 <input
                   type="time"
                   value={String(val(job, "postAt") || "")}
@@ -378,6 +417,32 @@ export default function BotScheduled() {
                   style={{ ...homeInputStyle, width: 130 }}
                 />
               </div>
+              )}
+
+              {isInterval && (
+                <>
+                  <div>
+                    <div style={labelStyle}>End (ET)</div>
+                    <input
+                      type="time"
+                      value={String(val(job, "endAt") || "")}
+                      onChange={(e) => patch(job, { endAt: e.target.value })}
+                      style={{ ...homeInputStyle, width: 130 }}
+                    />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Every (min)</div>
+                    <input
+                      type="number"
+                      min={1}
+                      max={240}
+                      value={String(val(job, "intervalMin") ?? "")}
+                      onChange={(e) => patch(job, { intervalMin: Number(e.target.value) })}
+                      style={{ ...homeInputStyle, width: 90 }}
+                    />
+                  </div>
+                </>
+              )}
 
               <div style={{ flex: 1, minWidth: 260 }}>
                 <div style={labelStyle}>Days</div>
@@ -493,17 +558,31 @@ export default function BotScheduled() {
               )}
             </div>
 
+            {/* Fan-out from BOT → Manage: every Discord with a Signals webhook. */}
+            <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.7, marginTop: 10 }}>
+              {signals.length
+                ? <>Also posts to the <strong>Signals</strong> webhook of: {signals.map((s) => s.label).join(", ")} (BOT → Manage).</>
+                : <>Add a <strong>Signals</strong> webhook to a Discord on BOT → Manage and this will post there too.</>}
+            </div>
+
             {/* ── What ─────────────────────────────────────────────────────── */}
             <div style={{ marginTop: 18 }}>
               <div style={labelStyle}>Message</div>
-              <input
-                type="text"
+              {/* Textarea so multi-line messages (the text levels post) survive an edit. */}
+              <textarea
+                rows={isTimes ? 3 : 2}
                 value={String(val(job, "message") || "")}
                 onChange={(e) => patch(job, { message: e.target.value })}
-                style={{ ...homeInputStyle, width: "100%" }}
+                style={{ ...homeInputStyle, width: "100%", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }}
               />
               <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.55, marginTop: 5 }}>
-                <code>{"{date}"}</code> and <code>{"{time}"}</code> are filled in when it posts. Discord markdown works.
+                {(job.tokens?.length ? job.tokens : ["{date}", "{time}"]).map((t, i, arr) => (
+                  <span key={t}>
+                    <code>{t}</code>
+                    {i < arr.length - 2 ? ", " : i === arr.length - 2 ? " and " : ""}
+                  </span>
+                ))}{" "}
+                are filled in when it posts. Discord markdown works.
               </div>
             </div>
 
@@ -529,6 +608,7 @@ export default function BotScheduled() {
               </div>
             </div>
 
+            {!isInterval && !isTimes && (
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, marginTop: 16, cursor: "pointer", fontSize: 12, color: OWNER_THEME.text }}>
               <input
                 type="checkbox"
@@ -537,6 +617,7 @@ export default function BotScheduled() {
               />
               Post even on a day with nothing on it
             </label>
+            )}
 
             {/* ── Actions ──────────────────────────────────────────────────── */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 20, flexWrap: "wrap" }}>
@@ -602,8 +683,9 @@ export default function BotScheduled() {
             )}
 
             <div style={{ fontSize: 11, color: OWNER_THEME.text, opacity: 0.5, marginTop: 8 }}>
-              “Post now” does not use up today’s scheduled slot — the timer still fires at{" "}
-              {String(val(job, "postAt"))} ET.
+              {isInterval || isTimes
+                ? `“Post now” does not use up a scheduled slot.`
+                : `“Post now” does not use up today’s scheduled slot — the timer still fires at ${String(val(job, "postAt"))} ET.`}
               {job.lastPostDate ? ` Last scheduled post: ${job.lastPostDate}.` : " No scheduled post yet."}
             </div>
 

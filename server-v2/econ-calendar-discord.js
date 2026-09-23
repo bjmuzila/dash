@@ -272,7 +272,7 @@ function renderMessage(template) {
  * simply not sent on that path. That is a property of Discord, not an omission
  * here — discord-bot-poster.js explains it.
  */
-async function postToDiscord(cfg, png, content) {
+async function postOwn(cfg, png, content) {
   if (cfg.channelId) {
     await bot.postToChannel(cfg.channelId, { content, file: png, filename: 'econ-calendar.png' });
     return;
@@ -305,7 +305,7 @@ async function collectOnce(base, opts = {}) {
   let cfg = null;
   try {
     cfg = opts.config || (await readConfig());
-    if (!cfg.channelId && !cfg.webhookUrl) throw new Error('no destination configured (bot channel or webhook)');
+    if (!(await store.hasDestination(cfg))) throw new Error('no destination configured (bot channel, webhook, or a Signals webhook on BOT → Manage)');
 
     const { html, econ, pres, earn, feed, feedWarning } = await fetchSnapshotHtml(base);
 
@@ -324,9 +324,15 @@ async function collectOnce(base, opts = {}) {
     }
 
     const png = await renderPng(html);
-    await postToDiscord(cfg, png, renderMessage(cfg.message));
-    console.log(`[econ-cal] posted${scheduled ? '' : ' (manual)'} — ${econ} econ / ${pres} pres / ${earn} earnings · feed:${feed} (${Math.round(png.length / 1024)}KB)`);
-    await store.markRun(JOB_ID, { status: 'ok', postedDate: scheduled ? etParts().date : '' });
+    const content = renderMessage(cfg.message);
+    // Own destination + every Signals webhook on BOT → Manage.
+    const out = await store.deliver(cfg, {
+      ownPost: () => postOwn(cfg, png, content),
+      content, file: png, filename: 'econ-calendar.png',
+      defaultUsername: cfg.username || 'CB Edge Signals', defaultAvatar: cfg.avatarUrl || DEFAULT_AVATAR,
+    });
+    console.log(`[econ-cal] posted${scheduled ? '' : ' (manual)'} — ${econ} econ / ${pres} pres / ${earn} earnings · feed:${feed} · +${out.fan.filter((r) => r.ok).length} signals (${Math.round(png.length / 1024)}KB)`);
+    await store.markRun(JOB_ID, { status: out.warning ? 'partial' : 'ok', error: out.warning, postedDate: scheduled ? etParts().date : '' });
     return { ok: true, econ, pres, earn };
   } catch (e) {
     console.log(`[econ-cal] post failed — ${e.message}`);
@@ -373,7 +379,7 @@ function startEconCalendarDiscord(port) {
         };
 
         if (!cfg.enabled) { explain('the job is OFF on owner → BOT → Scheduled'); return; }
-        if (!cfg.channelId && !cfg.webhookUrl) { explain('no destination configured'); return; }
+        if (!(await store.hasDestination(cfg))) { explain('no destination configured'); return; }
         if (!cfg.days.split(',').includes(now.day)) { explain(`${now.day} is not in "${cfg.days}"`); return; }
         if (now.date === lastPostedMem) return;
         // The day-claim. Written only by a SUCCESSFUL scheduled post, so a

@@ -4848,14 +4848,18 @@ async function main() {
     // 15m/30m/open change. Guarded — never crash startup if it fails to load.
     try { multGreekGexRecorder?.startMultGreekGexRecorder?.(PORT); }
     catch (e) { console.warn('[mult-greek-gex] start failed:', e.message); }
-    // Multi Greek LADDERS snapshot → Discord, every 15m on the wall-clock
-    // boundary during RTH. Same picture the page's 🗒 LADDERS button produces
-    // (SPX/SPY/QQQ front-expiry CB/CW/PW + spot), drawn in headless Chromium and
-    // posted to the CB Edge Signals channel (HOME_SIGNALS_DISCORD_WEBHOOK /
-    // SIGNALS_DISCORD_WEBHOOK), overridable via MG_LADDER_DISCORD_WEBHOOK.
+    // Multi Greek LADDERS snapshot (levels broadcast) → Discord. Schedule
+    // (window, interval, days), destination and message are set at
+    // owner -> BOT -> Scheduled (job "mg-ladder"); defaults are every 15m
+    // 09:30–16:00 ET to the CB Edge Signals channel via the old webhook env
+    // chain. Same picture the page's 🗒 LADDERS button produces.
     // Guarded — never crash startup if puppeteer/chromium is missing.
     try { require('./mg-ladder-discord').startMgLadderDiscord(PORT); }
     catch (e) { console.warn('[mg-ladder] start failed:', e.message); }
+    // Levels as TEXT (no image) at fixed ET times — job "levels-text" on
+    // owner -> BOT -> Scheduled, default 09:45 and 10:30. Same levels as above.
+    try { require('./mg-ladder-discord').startLevelsTextDiscord(PORT); }
+    catch (e) { console.warn('[levels-text] start failed:', e.message); }
     // Economic Calendar snapshot -> Discord, on the schedule set at
     // owner -> BOT -> Scheduled (server-v2/scheduled-posts-store.js, job
     // "econ-calendar"). Same picture as the toolbar's Discord button and NOT a

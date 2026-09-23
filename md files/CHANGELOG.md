@@ -1,5 +1,96 @@
 # Changelog
 
+## 2026-09-23 - Voltick Levels: ported Voltick's own marksOf definitions
+
+- The text post now computes its levels the way Voltick's Key Levels card does. The logic was ported from the Voltick repo (`server/engine.js` `marksOf` and the Surge block, plus `GEX-METHOD.md`) and runs on the front (0DTE) expiry:
+  - Per-strike GEX = Γ × (callOI − putOI) × 100 × S² × 0.01
+  - **Volt** = the largest |GEX| strike
+  - **Reversal** = the opposite-sign strike, weighted for thick shelves (neighbours ≥ 40% its size within 2.5 strike steps, nodes under 5% of the Volt ignored, revWeight 0.18)
+  - **Coil** = the heaviest other strike at ≥ half the Volt
+  - **Surge** = the largest |Γ × (callVol − putVol)| strike
+- Net GEX / Net DEX still come from the Key Levels Stats totals.
+- Known gaps against Voltick:
+  - Voltick prefers tape-classified flow for Surge when it has it.
+  - Voltick uses its own per-contract IV and its own OI snapshot.
+  - Voltick's revWeight is learned nightly.
+- File: `server-v2/mg-ladder-discord.js`. Nothing in the Voltick repo was changed.
+
+## 2026-09-23 - Voltick Levels = the Key Levels Stats copy, translated
+
+- The text post now takes the same numbers as the v3 Key Levels 📋 Stats copy (volume-only basis, same rules as `data/levels.ts`) and renames them:
+  - **Volt** = Stats Core
+  - **Reversal** = the wall opposite the Volt (Put Wall if the Volt is +γ, Call Wall if it's −γ)
+  - **Coil** = the other wall
+  - **Net GEX / Net DEX** = the Stats totals
+- **Surge** = the open-interest core (not in Stats).
+- Flip removed. SPY and QQQ still show Volt only.
+- File: `server-v2/mg-ladder-discord.js`.
+
+## 2026-09-23 - Voltick Levels: Coil drops the 🟢/🔴 markers
+
+- Coil now lists plain strikes (for example `Coil: 7745 · 7760`). File: `server-v2/mg-ladder-discord.js`.
+
+## 2026-09-23 - Voltick Levels follow the Voltick legend; GEX/DEX match Key Levels Stats
+
+- SPX block, in legend order:
+  - **Volt**: the strongest magnet, from open interest
+  - **Surge**: where today's flow (volume) is heaviest
+  - **Reversal**: the heaviest open-interest strike on the opposite gamma sign from the Volt
+  - **Flip**: where cumulative OI+VOL net GEX crosses zero nearest spot
+  - **Coil**: up to 3 strikes carrying at least half the Volt's weight, Volt and Reversal excluded; 🟢 for positive (speed bump), 🔴 for negative (fast lane)
+- Net GEX and Net DEX are now summed on the volume-only basis, the same as the v3 Key Levels 📋 Stats copy (`statsShot.ts`).
+- SPY and QQQ still show spot and Volt only.
+- File: `server-v2/mg-ladder-discord.js` (plus the hint text in `scheduled-posts-store.js`).
+
+## 2026-09-23 - Voltick Levels: SPY/QQQ show Volt only, SPX adds Net GEX / DEX
+
+- In the text post, SPY and QQQ now show only spot and Volt. SPX keeps the full block (Volt, Reversal, Surge, Coil) and adds a `Net GEX · Net DEX` line.
+- GEX and DEX use the same formulas as `computation/gex-calculator.js` (OI+VOL basis), over the front expiry.
+- `VOLTICK_FULL_TICKERS` (default `SPX`) sets which tickers get the full block.
+- Files: `server-v2/mg-ladder-discord.js`, `server-v2/scheduled-posts-store.js`.
+
+## 2026-09-23 - BOT: Voltick Levels text post, 15-min ladder image OFF by default
+
+- The `levels-text` job is renamed **Voltick Levels (text)** and now posts the Voltick names for SPX / SPY / QQQ at 09:45 and 10:30 ET:
+  - **Volt**: the core (CB)
+  - **Reversal**: the wall on the opposite side from the core (PW if the core is call-heavy, CW if it's put-heavy)
+  - **Surge**: the core recomputed on volume only
+  - **Coil**: the other wall
+- Default message: `⚡ **Voltick Levels** — {time} ET` followed by one block per ticker.
+- The 15-min Multi-Greek Ladders image job now defaults to **OFF**, so only the text post goes out.
+- Files: `server-v2/mg-ladder-discord.js`, `server-v2/scheduled-posts-store.js`.
+
+## 2026-09-23 - BOT Scheduled: "Levels (text)" job at 09:45 / 10:30 ET, no image
+
+- New job `levels-text` on owner → BOT → Scheduled: posts SPX / SPY / QQQ spot + CB / CW / PW (and spot vs CB) as a plain text message at a list of fixed ET times. Default is 09:45 and 10:30, Mon–Fri. Same levels as the ladder picture, and no Chromium involved.
+- Goes to its own bot channel/webhook plus every Discord with a **Signals** webhook on Manage. It has Post now and last-run status like the other jobs. Each time slot is claimed, so a restart won't double-post.
+- The message field on the Scheduled page is now a textarea, so multi-line messages survive an edit. New `{levels}` token.
+- Schema: `scheduled_posts.times` (added automatically with ADD COLUMN IF NOT EXISTS).
+
+Files: `server-v2/scheduled-posts-store.js`, `server-v2/mg-ladder-discord.js`, `server-v2/api-router.js`, `server-v2/server-with-proxy.js`, `owner-vite/src/pages/BotScheduled.tsx`.
+
+## 2026-09-23 - BOT: levels broadcast on Scheduled + Signals webhook on Manage (owner.cbedge.net)
+
+- **Scheduled tab** now lists the 15-minute levels broadcast (Multi-Greek Ladders, job `mg-ladder`) next to the Economic Calendar. It's an *interval* job: start / end / every-N-minutes / days, bot channel or webhook, message (`{date}` `{time}` `{summary}`), ON/OFF, Post now, last-run status. Defaults match the old behaviour (every 15m 09:30–16:00 ET, Mon–Fri, same webhook env chain), so nothing changes until it's edited. The timer re-reads settings every minute, catches a slot up to 3 min late, and claims each slot (`YYYY-MM-DD HH:MM` in `last_post_date`) so a restart won't double-post.
+- **Manage tab** has a new **Signals** row on every Discord: one webhook for the automatic posts. Every enabled Discord with a Signals webhook gets each scheduled post (econ calendar + levels broadcast) along with the job's own destination. There's no Default fallback, so an existing Discord won't start getting 15-minute posts until a Signals webhook is added. Test / 🔔 work on the row. If a Signals webhook is the same URL as the job's own webhook, it's only posted once.
+- Schema: `scheduled_posts` gains `end_at`, `interval_min` (added automatically with ADD COLUMN IF NOT EXISTS).
+
+Files: `server-v2/scheduled-posts-store.js`, `server-v2/mg-ladder-discord.js`, `server-v2/econ-calendar-discord.js`, `server-v2/bot-targets-store.js`, `server-v2/api-router.js`, `server-v2/server-with-proxy.js` (comment), `owner-vite/src/pages/BotScheduled.tsx`, `owner-vite/src/pages/BotManage.tsx`.
+
+## 2026-09-23 - CB contract walk: $1.00-$5.00 band, walks farther OTM when too rich
+
+The CB tracker's walk no longer buys anything over $1.00 with no ceiling. The
+buy is now a band: over $1.00 (`CB_BUY_MIN`) and at most $5.00 (new
+`CB_BUY_MAX`). If the CB strike (or the first priced strike) is over $5.00, the
+walk turns around and steps one strike at a time farther OTM and buys the first
+strike priced inside the band, instead of the trade getting vetoed by the Auto-Buy
+Lab premium filter. Under $1.00 still walks toward the money as before.
+`walk_steps` now counts strikes from the CB in either direction. The Auto-Buy
+Lab premium band reads the tracker's config so the two cannot drift apart.
+Already-recorded trades are unchanged; this applies from the next checkpoint.
+
+Files: `server-v2/cb-contract-track.js`, `server-v2/autobuy-lab.js`.
+
 ## 2026-09-23 - Client Sites: no minimum password length
 
 Passwords for sites.cbedge.net logins can now be any length (blank is still

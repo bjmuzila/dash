@@ -31,6 +31,9 @@ const ROUTE_ROWS = [
   { key: "futures", label: "Futures", hint: "" },
   { key: "notes", label: "Notes", hint: "" },
   { key: "equity", label: "Equity", hint: "" },
+  // Automatic posts (BOT → Scheduled: econ calendar, levels broadcast, …).
+  // No Default fallback on the server — only a Discord with this row set gets them.
+  { key: "signals", label: "Signals", hint: "automatic posts" },
 ] as const;
 
 type RouteKey = (typeof ROUTE_ROWS)[number]["key"];
@@ -611,8 +614,10 @@ export default function BotManage({ onChanged }: { onChanged?: () => void }) {
                     );
                   })}
                   <div style={{ fontSize: 11, color: OWNER_THEME.text, marginTop: 10 }}>
-                    Default {ROUTE_ROWS[0].hint}. A class with its own row wins over it. <strong>Test</strong> posts
-                    silently; <strong>🔔</strong> posts a test that really tags the role.
+                    Default {ROUTE_ROWS[0].hint}. A class with its own row wins over it. <strong>Signals</strong> is
+                    the one webhook for the automatic posts on the Scheduled tab (economic calendar, levels broadcast) —
+                    it never falls back to Default. <strong>Test</strong> posts silently; <strong>🔔</strong> posts a
+                    test that really tags the role.
                   </div>
                 </div>
               </div>

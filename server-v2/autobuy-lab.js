@@ -453,7 +453,7 @@ async function loadContexts(dates) {
  * filter reads through it rather than assuming calls.
  */
 /** Entry contract premium band — $1.00 to $5.00, closest to the CB. */
-const PREMIUM_BAND = [1.0, 5.0];
+const PREMIUM_BAND = [Number(cbTrack.CONFIG.BUY_MIN ?? 1.0), Number(cbTrack.CONFIG.BUY_MAX ?? 5.0)];
 
 const isLong = (t) => String(t.side).toUpperCase() !== 'P';
 
@@ -469,7 +469,7 @@ const FILTERS = [
   },
   {
     id: 'walk', name: 'Walk depth ≤ 2 strikes', block: 'trend', weight: 0.9, available: true,
-    detail: 'How far the walk stepped from the CB toward the money before it found a price',
+    detail: 'How many strikes the walk stepped from the CB (toward the money if under $1, farther OTM if over $5) before it landed in the band',
     test: (t) => (num(t.walk_steps) == null ? null : num(t.walk_steps) <= 2),
   },
   {

@@ -56,7 +56,9 @@
 const CACHE_TTL_MS = Number(process.env.SCHEDULED_POSTS_CACHE_TTL_MS || 10_000);
 
 /**
- * The job registry. Adding a scheduled post to the owner page is an entry here
+ * The job registry. `kind` is 'daily' (default — one post at postAt) or
+ * 'interval' (every intervalMin from postAt until endAt) or 'times' (one post
+ * at each HH:MM in `times`). Adding a scheduled post to the owner page is an entry here
  * plus a runner in api-router's /api/scheduled-posts/run — nothing else.
  *
  * `envWebhook` is the fallback chain used when the row has no url of its own,
@@ -79,6 +81,56 @@ const JOB_DEFS = [
       username: 'CB Edge Signals',
       avatarUrl: '',
       message: '📅 **Economic Calendar** — {date} · {time} ET',
+      postEmpty: false,
+    },
+  },
+  {
+    // An INTERVAL job: fires every `intervalMin` minutes from `postAt` (window
+    // start) up to but not including `endAt`, on the chosen days. Slots are
+    // anchored to the window start, so 09:30 / 15 min gives :30 :45 :00 :15 —
+    // the same wall-clock boundaries this post used before it had a row.
+    id: 'mg-ladder',
+    kind: 'interval',
+    label: 'Levels Broadcast (Multi-Greek Ladders)',
+    hint: 'SPX / SPY / QQQ front-expiry CB / CW / PW ladder image — same picture as the 🗒 LADDERS button on Multi Greek.',
+    tokens: ['{date}', '{time}', '{summary}'],
+    // Historical precedence from mg-ladder-discord.js — the Signals channel
+    // first, the in-app share webhook last. Do not reorder.
+    envWebhook: ['MG_LADDER_DISCORD_WEBHOOK', 'HOME_SIGNALS_DISCORD_WEBHOOK', 'SIGNALS_DISCORD_WEBHOOK', 'DISCORD_WEBHOOK_URL'],
+    envChannel: ['MG_LADDER_DISCORD_CHANNEL_ID'],
+    defaults: {
+      // OFF by default — Brandon wants the text Voltick Levels only. Turn on
+      // from the page if the 15-minute image is wanted again.
+      enabled: false,
+      channelId: '',
+      postAt: '09:30',
+      endAt: '16:00',
+      intervalMin: 15,
+      days: 'mon,tue,wed,thu,fri',
+      username: 'CB Edge Signals',
+      avatarUrl: '',
+      message: '📊 **Multi-Greek Ladders** — {time} ET · CB {summary}',
+      postEmpty: false,
+    },
+  },
+  {
+    // A TIMES job: one post at each listed ET time. Text only — no image.
+    id: 'levels-text',
+    kind: 'times',
+    label: 'Voltick Levels (text)',
+    hint: 'Text only, no image. Voltick Key Levels definitions (ported from Voltick engine.js marksOf) on the front expiry: Volt, Surge, Reversal, Coil + Net GEX / DEX (Key Levels Stats). SPY + QQQ: Volt only.',
+    tokens: ['{date}', '{time}', '{levels}'],
+    envWebhook: ['MG_LADDER_DISCORD_WEBHOOK', 'HOME_SIGNALS_DISCORD_WEBHOOK', 'SIGNALS_DISCORD_WEBHOOK', 'DISCORD_WEBHOOK_URL'],
+    envChannel: ['MG_LADDER_DISCORD_CHANNEL_ID'],
+    defaults: {
+      enabled: true,
+      channelId: '',
+      postAt: '09:45',
+      times: '09:45,10:30',
+      days: 'mon,tue,wed,thu,fri',
+      username: 'CB Edge Signals',
+      avatarUrl: '',
+      message: '⚡ **Voltick Levels** — {time} ET\n\n{levels}',
       postEmpty: false,
     },
   },
@@ -148,6 +200,13 @@ async function ensureSchema() {
       -- also written by the page's "Post now", and a manual test must never eat
       -- the day's scheduled slot. That bug shipped once; this column is the fix.
       ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS last_post_date TEXT NOT NULL DEFAULT '';
+      -- Interval jobs (mg-ladder). Daily jobs leave both at their defaults and
+      -- never read them. For an interval job last_post_date holds the SLOT
+      -- claim ("YYYY-MM-DD HH:MM"), not just a date.
+      ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS end_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS interval_min INTEGER NOT NULL DEFAULT 0;
+      -- Times jobs (levels-text): comma list of HH:MM ET.
+      ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS times TEXT NOT NULL DEFAULT '';
     `);
     ensured = true;
     return true;
@@ -191,6 +250,25 @@ function normalizeDays(raw, fallback = 'mon,tue,wed,thu,fri') {
   return DAY_KEYS.filter((d) => want.has(d)).join(',');
 }
 
+/** Interval minutes, clamped to 1..240. Junk keeps the fallback. */
+function normalizeInterval(raw, fallback = 15) {
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(240, n);
+}
+
+/** "9:45, 10:30 junk" -> "09:45,10:30" (sorted, deduped). Empty keeps the fallback. */
+function normalizeTimes(raw, fallback = '') {
+  const out = new Set();
+  for (const part of String(raw || '').split(/[\s,;]+/)) {
+    if (!part) continue;
+    const t = normalizeTime(part, '');
+    if (t) out.add(t);
+  }
+  if (!out.size) return fallback;
+  return [...out].sort().slice(0, 48).join(',');
+}
+
 function envValue(keys) {
   for (const key of keys || []) {
     const v = (process.env[key] || '').trim();
@@ -213,6 +291,11 @@ function fallbackJob(def) {
     id: def.id,
     label: def.label,
     hint: def.hint,
+    kind: def.kind || 'daily',
+    tokens: def.tokens || ['{date}', '{time}'],
+    endAt: '',
+    intervalMin: 0,
+    times: '',
     ...def.defaults,
     channelId: envValue(def.envChannel) || def.defaults.channelId || '',
     webhookUrl: envWebhook(def),
@@ -230,8 +313,13 @@ function rowToJob(def, row) {
     id: def.id,
     label: def.label,
     hint: def.hint,
+    kind: def.kind || 'daily',
+    tokens: def.tokens || ['{date}', '{time}'],
     enabled: !!row.enabled,
     postAt: normalizeTime(row.post_at, def.defaults.postAt),
+    endAt: def.kind === 'interval' ? normalizeTime(row.end_at, def.defaults.endAt) : '',
+    intervalMin: def.kind === 'interval' ? normalizeInterval(row.interval_min, def.defaults.intervalMin) : 0,
+    times: def.kind === 'times' ? normalizeTimes(row.times, def.defaults.times) : '',
     days: normalizeDays(row.days, def.defaults.days),
     username: row.username || '',
     avatarUrl: row.avatar_url || '',
@@ -270,10 +358,11 @@ async function loadAll({ fresh = false } = {}) {
     // page lists every job on a fresh box instead of an empty table.
     for (const def of JOB_DEFS) {
       await p.query(
-        `INSERT INTO scheduled_posts (id, enabled, post_at, days, username, avatar_url, message, post_empty)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING`,
+        `INSERT INTO scheduled_posts (id, enabled, post_at, days, username, avatar_url, message, post_empty, end_at, interval_min, times)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO NOTHING`,
         [def.id, !!def.defaults.enabled, def.defaults.postAt, def.defaults.days,
-          def.defaults.username || '', def.defaults.avatarUrl || '', def.defaults.message || '', !!def.defaults.postEmpty],
+          def.defaults.username || '', def.defaults.avatarUrl || '', def.defaults.message || '', !!def.defaults.postEmpty,
+          def.defaults.endAt || '', Number(def.defaults.intervalMin) || 0, def.defaults.times || ''],
       );
     }
     const { rows } = await p.query(`SELECT * FROM scheduled_posts WHERE id = ANY($1)`, [JOB_IDS]);
@@ -294,15 +383,20 @@ async function loadAll({ fresh = false } = {}) {
 /** Browser-facing: identical shape, webhook replaced by its mask. */
 async function loadMasked(opts = {}) {
   const { jobs, live } = await loadAll(opts);
+  // Every enabled Discord on BOT → Manage with a Signals webhook also gets
+  // each automatic post (see deliver()). Listed so the page can say where.
+  let signals = [];
+  try { signals = await require('./bot-targets-store').signalsTargetsMasked(); } catch { /* table down */ }
   return {
     live,
+    signals,
     jobs: jobs.map(({ webhookUrl, ...rest }) => ({
       ...rest,
       webhookMask: maskUrl(webhookUrl),
       hasWebhook: !!webhookUrl,
       // Which path a post would actually take, resolved here so the page never
       // re-implements the precedence rule and drifts from it.
-      dest: rest.channelId ? 'bot' : (webhookUrl ? 'webhook' : 'none'),
+      dest: rest.channelId ? 'bot' : (webhookUrl ? 'webhook' : (signals.length ? 'signals' : 'none')),
     })),
   };
 }
@@ -316,6 +410,50 @@ async function getJob(id, opts = {}) {
   // from "the table was unreachable, these are defaults" — the difference
   // decides whether a legacy env var is still allowed to override.
   return { ...(jobs.find((j) => j.id === id) || fallbackJob(def)), live };
+}
+
+// ── Delivery ─────────────────────────────────────────────────────────────────
+
+/** True when a post would land somewhere: own channel/webhook, or a Manage Signals route. */
+async function hasDestination(cfg) {
+  if (cfg?.channelId || cfg?.webhookUrl) return true;
+  try { return (await require('./bot-targets-store').signalsTargets()).length > 0; } catch { return false; }
+}
+
+/**
+ * Send one automatic post everywhere it belongs:
+ *   1. the job's own destination (bot channel or webhook), via `ownPost`, if set;
+ *   2. every enabled Discord on BOT → Manage with a Signals webhook.
+ * A Signals webhook identical to the job's own webhook is skipped (one copy).
+ * Throws only when NOTHING landed; a partial success returns `warning`.
+ */
+async function deliver(cfg, { ownPost, content = '', file = null, filename = 'image.png', defaultUsername = '', defaultAvatar = '' } = {}) {
+  const targets = require('./bot-targets-store');
+  const hasOwn = !!(cfg.channelId || cfg.webhookUrl);
+  let ownOk = false;
+  let ownErr = null;
+  if (hasOwn && typeof ownPost === 'function') {
+    try { await ownPost(); ownOk = true; } catch (e) { ownErr = e; }
+  }
+  let fan = [];
+  try {
+    fan = await targets.postToSignals({
+      content, file, filename, defaultUsername, defaultAvatar,
+      skipUrls: !cfg.channelId && cfg.webhookUrl ? [cfg.webhookUrl] : [],
+    });
+  } catch (e) {
+    fan = [{ label: 'Signals', ok: false, error: e.message }];
+  }
+  const fanOk = fan.filter((r) => r.ok).length;
+  if (!hasOwn && fan.length === 0) {
+    throw new Error('no destination configured (bot channel, webhook, or a Signals webhook on BOT → Manage)');
+  }
+  const failures = [
+    ...(ownErr ? [`own: ${ownErr.message}`] : []),
+    ...fan.filter((r) => !r.ok).map((r) => `${r.label}: ${r.error}`),
+  ];
+  if (!ownOk && fanOk === 0) throw new Error(failures.join(' · ') || 'nothing posted');
+  return { ownOk, fan, warning: failures.join(' · ') };
 }
 
 // ── Save ─────────────────────────────────────────────────────────────────────
@@ -363,6 +501,15 @@ async function save(patch) {
   if (patch.avatarUrl !== undefined) parts.push(set('avatar_url', String(patch.avatarUrl || '').slice(0, 500)));
   if (patch.message !== undefined) parts.push(set('message', String(patch.message || '').slice(0, 1000)));
   if (patch.postEmpty !== undefined) parts.push(set('post_empty', !!patch.postEmpty));
+  if (def.kind === 'interval') {
+    if (patch.endAt !== undefined) parts.push(set('end_at', normalizeTime(patch.endAt, def.defaults.endAt)));
+    if (patch.intervalMin !== undefined) parts.push(set('interval_min', normalizeInterval(patch.intervalMin, def.defaults.intervalMin)));
+  }
+  if (def.kind === 'times' && patch.times !== undefined) {
+    const t = normalizeTimes(patch.times, '');
+    if (!t) throw new Error('Add at least one time, e.g. 09:45, 10:30');
+    parts.push(set('times', t));
+  }
   parts.push(`webhook_url = ${urlSql}`);
   if (chanSql) parts.push(`channel_id = ${chanSql}`);
   else if (rawChan) parts.push(set('channel_id', rawChan));
@@ -404,6 +551,6 @@ async function markRun(id, { status, error = '', postedDate = '' } = {}) {
 
 module.exports = {
   JOB_DEFS, JOB_IDS, DAY_KEYS,
-  maskUrl, validUrl, normalizeTime, normalizeDays,
-  loadMasked, getJob, save, markRun,
+  maskUrl, validUrl, normalizeTime, normalizeDays, normalizeInterval, normalizeTimes,
+  loadMasked, getJob, save, markRun, hasDestination, deliver,
 };

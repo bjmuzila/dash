@@ -19,7 +19,8 @@
  *   A ROUTE is where one asset class lands inside it: (discord, asset_class) ->
  *   webhook URL + optional role ping.
  *
- *   asset_class is 'options' | 'futures' | 'notes' | 'equity' | 'default'.
+ *   asset_class is 'options' | 'futures' | 'notes' | 'equity' | 'default' |
+ *  'signals' (automatic scheduled posts only — see SIGNALS_KEY).
  *   Resolution is exactly one fallback deep:
  *
  *       routeFor(discord, 'options')  ->  routes['options'] ?? routes['default']
@@ -49,7 +50,13 @@
  */
 
 const ASSET_CLASSES = ['options', 'futures', 'notes', 'equity'];
-const ROUTE_KEYS = [...ASSET_CLASSES, 'default'];
+// 'signals' is the AUTOMATIC-posts route: the scheduled jobs on owner → BOT →
+// Scheduled (econ calendar, the 15-min levels broadcast, …) fan out to every
+// enabled Discord that has one. It is deliberately NOT an asset class and has
+// NO fallback to 'default' — a Discord that takes composed alerts in one room
+// must not suddenly start receiving a post every 15 minutes because of it.
+const SIGNALS_KEY = 'signals';
+const ROUTE_KEYS = [...ASSET_CLASSES, 'default', SIGNALS_KEY];
 const WEBHOOK_SLOTS = 8;
 const CACHE_TTL_MS = Number(process.env.BOT_TARGETS_CACHE_TTL_MS || 10_000);
 
@@ -329,11 +336,12 @@ async function loadTargets() {
 async function resolve(ids, assetClass) {
   const { discords } = await loadRaw();
   const want = new Set((ids || []).map(String));
-  const cls = ASSET_CLASSES.includes(assetClass) ? assetClass : 'notes';
+  const cls = ASSET_CLASSES.includes(assetClass) || assetClass === SIGNALS_KEY ? assetClass : 'notes';
   return discords
     .filter((d) => want.has(d.id) && d.enabled)
     .map((d) => {
-      const route = d.routes[cls] || d.routes.default || null;
+      // Signals never falls back to default — see SIGNALS_KEY.
+      const route = cls === SIGNALS_KEY ? (d.routes[SIGNALS_KEY] || null) : (d.routes[cls] || d.routes.default || null);
       // The embed logo falls back to the avatar: most of the time one image is
       // the brand and setting it twice is busywork. Set it only to differ.
       const identity = {
@@ -345,6 +353,71 @@ async function resolve(ids, assetClass) {
         ? { id: d.id, label: d.label, url: route.url, ping: route.ping || '', ...identity }
         : { id: d.id, label: d.label, url: null, error: `No ${cls} channel mapped for ${d.label}`, ...identity };
     });
+}
+
+/**
+ * Every enabled Discord with a Signals route — the automatic posts' fan-out
+ * list. Server-side only (carries the real URL).
+ */
+async function signalsTargets() {
+  const { discords } = await loadRaw();
+  return discords
+    .filter((d) => d.enabled && d.routes[SIGNALS_KEY]?.url)
+    .map((d) => ({
+      id: d.id,
+      label: d.label,
+      url: d.routes[SIGNALS_KEY].url,
+      ping: d.routes[SIGNALS_KEY].ping || '',
+      username: d.username || '',
+      avatarUrl: d.avatarUrl || '',
+    }));
+}
+
+/** Client-safe: which Discords an automatic post would also land in. */
+async function signalsTargetsMasked() {
+  return (await signalsTargets()).map((t) => ({ id: t.id, label: t.label, masked: maskUrl(t.url) }));
+}
+
+/** Only the configured ping may notify — never a stray mention in a message line. */
+function allowedMentionsFor(ping) {
+  const role = /^<@&(\d+)>$/.exec(ping || '');
+  if (role) return { parse: [], roles: [role[1]] };
+  const user = /^<@!?(\d+)>$/.exec(ping || '');
+  if (user) return { parse: [], users: [user[1]] };
+  if (/^@(everyone|here)$/.test(ping || '')) return { parse: ['everyone'] };
+  return { parse: [] };
+}
+
+/**
+ * Post one automatic message (+ optional PNG) to every Signals route.
+ * `skipUrls` drops webhooks the job already posted to itself, so a Discord
+ * whose Signals webhook IS the job's own webhook gets one copy, not two.
+ * Never throws — returns per-target results.
+ */
+async function postToSignals({ content = '', file = null, filename = 'image.png', skipUrls = [], defaultUsername = '', defaultAvatar = '' } = {}) {
+  const skip = new Set((skipUrls || []).map((u) => String(u || '').trim()).filter(Boolean));
+  const targets = (await signalsTargets()).filter((t) => !skip.has(t.url.trim()));
+  const results = [];
+  for (const t of targets) {
+    try {
+      const form = new FormData();
+      const body = { content: t.ping ? `${t.ping} ${content}`.slice(0, 2000) : content };
+      const username = t.username || defaultUsername;
+      const avatar = t.avatarUrl || defaultAvatar;
+      if (username) body.username = username;
+      if (avatar) body.avatar_url = avatar;
+      body.allowed_mentions = allowedMentionsFor(t.ping);
+      form.append('payload_json', JSON.stringify(body));
+      if (file) form.append('files[0]', new Blob([file], { type: 'image/png' }), filename);
+      const res = await fetch(t.url, { method: 'POST', body: form, signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`webhook ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
+      results.push({ id: t.id, label: t.label, ok: true });
+    } catch (e) {
+      console.log(`[bot-targets] signals post to ${t.label} failed — ${e.message}`);
+      results.push({ id: t.id, label: t.label, ok: false, error: e.message });
+    }
+  }
+  return results;
 }
 
 // ── Writes ───────────────────────────────────────────────────────────────────
@@ -478,6 +551,10 @@ module.exports = {
   loadMasked,
   loadTargets,
   resolve,
+  SIGNALS_KEY,
+  signalsTargets,
+  signalsTargetsMasked,
+  postToSignals,
   saveDiscord,
   deleteDiscord,
   importFromEnv,
