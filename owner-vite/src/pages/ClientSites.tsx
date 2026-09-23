@@ -195,7 +195,7 @@ function PasswordInput({ value, onChange, placeholder }: { value: string; onChan
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder || "at least 8 characters"}
+        placeholder={placeholder || "any password"}
         autoComplete="new-password"
         spellCheck={false}
         style={{ ...inputStyle, fontFamily: "'SFMono-Regular', Consolas, Menlo, monospace" }}
@@ -285,7 +285,7 @@ function NewSiteCard({
   const [slugTouched, setSlugTouched] = useState(false);
   const [username, setUsername] = useState("");
   const [userTouched, setUserTouched] = useState(false);
-  const [password, setPassword] = useState(() => generatePassword());
+  const [password, setPassword] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -300,7 +300,7 @@ function NewSiteCard({
     if (!label.trim()) return setErr("Give the site a name.");
     if (!slugOk) return setErr("Web address: lowercase letters, numbers and dashes only.");
     if (taken) return setErr(`sites.cbedge.net/${effSlug}/ is already used.`);
-    if (password.length < 8) return setErr("Password must be at least 8 characters.");
+    if (!password) return setErr("Enter a password.");
     let html: string | undefined;
     if (file) {
       try { html = await readHtmlFile(file); }
@@ -313,7 +313,7 @@ function NewSiteCard({
     if (ok) {
       setLabel(""); setSlug(""); setSlugTouched(false);
       setUsername(""); setUserTouched(false);
-      setPassword(generatePassword());
+      setPassword("");
       setFile(null);
       if (fileRef.current) fileRef.current.value = "";
     }
@@ -407,13 +407,13 @@ function SiteCard({
         ? { ok: false, text: "No page uploaded yet" }
         : { ok: true, text: "Live" };
 
-  const startEdit = (u: string) => { setErr(null); setEditingUser(u); setNewUser(""); setPw(generatePassword()); };
+  const startEdit = (u: string) => { setErr(null); setEditingUser(u); setNewUser(""); setPw(""); };
 
   const savePassword = async () => {
     setErr(null);
     const username = editingUser === "" ? newUser.trim() : (editingUser as string);
     if (!username) return setErr("Enter a username.");
-    if (pw.length < 8) return setErr("Password must be at least 8 characters.");
+    if (!pw) return setErr("Enter a password.");
     const ok = await run(
       { action: "set-user", slug: site.slug, username, password: pw },
       { slug: site.slug, label: site.label, username, password: pw },

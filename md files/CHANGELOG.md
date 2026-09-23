@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-23 - Client Sites: no minimum password length
+
+Passwords for sites.cbedge.net logins can now be any length (blank is still
+refused); the 8-character minimum is gone from both `server-v2/client-sites.js`
+and the Client Sites page. The password box now starts empty instead of
+pre-filled with a generated one - the Generate button is still there.
+
+Files: `server-v2/client-sites.js`, `owner-vite/src/pages/ClientSites.tsx`.
+
 ## 2026-09-23 - owner: Client Sites page manages sites.cbedge.net (sites + logins)
 
 New owner page **Client Sites** (owner.cbedge.net/owner/client-sites, Content

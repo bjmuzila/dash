@@ -63,7 +63,10 @@ function checkUser(u) {
 }
 function checkPassword(p) {
   const s = String(p == null ? '' : p);
-  if (s.length < 8) throw httpError(400, 'Password must be at least 8 characters.');
+  // No minimum length — Brandon's call: these are simple, hand-shared preview
+  // passwords. Blank is still refused (an empty password would be a login
+  // anyone can guess).
+  if (!s) throw httpError(400, 'Enter a password.');
   if (s.length > 72) throw httpError(400, 'Password must be 72 characters or fewer.');
   if (/[\r\n:]/.test(s)) throw httpError(400, 'Password cannot contain line breaks or ":".');
   return s;
