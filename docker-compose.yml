@@ -454,3 +454,36 @@ services:
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8088:8088"
+
+  # sites.cbedge.net — password-protected client demo sites (static, nginx).
+  #
+  # demo-sites/public/<client>/ per client, per-client basic auth in
+  # demo-sites/nginx.conf. "/" and anything without a location block is a 404,
+  # and every response carries X-Robots-Tag: noindex, nofollow.
+  #
+  # PASSWORD FILES LIVE ON THE VPS ONLY, never in git:
+  #     sudo apt-get install -y apache2-utils     # provides htpasswd
+  #     sudo mkdir -p /opt/demo-sites-auth
+  #     sudo htpasswd -cB /opt/demo-sites-auth/plm.htpasswd plm
+  # Create the directory BEFORE the first `up` — otherwise Docker creates it
+  # empty as root and /plm/ answers 500 until the htpasswd file exists.
+  # New/changed htpasswd files are read per request; no restart needed.
+  # nginx.conf changes need `docker compose restart demo-sites`.
+  #
+  # Reached only via the Cloudflare Tunnel — in /etc/cloudflared/config.yml,
+  # ABOVE the catch-all 404 rule:
+  #     - hostname: sites.cbedge.net
+  #       service: http://127.0.0.1:8090
+  # then `cloudflared tunnel route dns <tunnel> sites.cbedge.net` and
+  # `systemctl restart cloudflared`.
+  demo-sites:
+    image: nginx:alpine
+    container_name: demo-sites
+    restart: unless-stopped
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8090:80"
+    volumes:
+      - ./demo-sites/public:/usr/share/nginx/html:ro
+      - ./demo-sites/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /opt/demo-sites-auth:/etc/nginx/auth:ro

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-23 - sites.cbedge.net: password-protected client demo sites
+
+New `demo-sites/` folder served by a new `demo-sites` compose service
+(`nginx:alpine`, loopback `127.0.0.1:8090`, reached only via the Cloudflare
+Tunnel). One folder per client under `demo-sites/public/`, first one
+`public/plm/` (PLM Photography). Each client gets its own `location` block with
+basic auth and its own htpasswd file at `/opt/demo-sites-auth/<client>.htpasswd`
+on the VPS only (never in git). `/` and any path without a location block return
+a plain 404 (no listing, no client list); `robots.txt` disallows everything and
+every response carries `X-Robots-Tag: noindex, nofollow`. `demo-sites` added to
+`.dockerignore` so client previews stay out of the dashboard image.
+
+Tunnel ingress for `sites.cbedge.net` is a separate VPS step (not applied).
+
+Files: `demo-sites/nginx.conf`, `demo-sites/public/robots.txt`,
+`demo-sites/public/plm/index.html`, `docker-compose.yml`, `.dockerignore`.
+
 ## 2026-09-18 - v3: the camera's menu is pinned rows, then one "All shots" row
 
 Option A off the mockup. The panel opens on a short **Pinned** list and a single
