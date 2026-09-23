@@ -33,6 +33,7 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   // flat captioned pile of screenshots/files with no week and no parent idea.
   MediaDump: lazy(() => import("./MediaDump")),
   Emails: lazy(() => import("./Emails")),
+  ClientSites: lazy(() => import("./ClientSites")),
   Feedback: lazy(() => import("./Feedback")),
   PostStudio: lazy(() => import("./PostStudio")),
   Budget: lazy(() => import("./Budget")),

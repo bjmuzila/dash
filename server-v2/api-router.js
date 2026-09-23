@@ -16495,4 +16495,15 @@ try {
   }
 }
 
+// /api/client-sites — owner.cbedge.net "Client Sites" page: create the
+// password-protected demo sites on sites.cbedge.net, upload their page, and
+// add / change / remove their logins. Lives in its own module; see the header
+// of server-v2/client-sites.js for the folders it writes and why they sit
+// outside the git checkout. Loaded defensively like the other optional modules.
+try {
+  require('./client-sites').registerClientSites(register, { send, readJson, NO_STORE });
+} catch (e) {
+  console.warn('[api-router] client-sites not loaded — /api/client-sites off:', e.message);
+}
+
 module.exports = { handleApiRoute, register, _routes: ROUTES };

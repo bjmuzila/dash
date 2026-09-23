@@ -84,6 +84,10 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Changelog", href: "/changelog", glyph: "↻", key: "Changelog" },
       { label: "Affiliates", href: "/owner/affiliates", glyph: "⇉", key: "Affiliates" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉", key: "Emails" },
+      // sites.cbedge.net — password-protected website previews for clients:
+      // create a site, upload its page, set its logins. Content: you open it
+      // to hand something to someone, same job as Emails.
+      { label: "Client Sites", href: "/owner/client-sites", glyph: "◫", key: "ClientSites" },
       // Was "Newsletter" (/owner/newsletter) — the weekly-letter idea log. The
       // letter is gone; what survived is the shoebox: paste a screenshot, give
       // it a caption, find it again when you want to mention it. New href, so

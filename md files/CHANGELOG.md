@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-09-23 - owner: Client Sites page manages sites.cbedge.net (sites + logins)
+
+New owner page **Client Sites** (owner.cbedge.net/owner/client-sites, Content
+group): create a client site, upload/replace its page (one self-contained
+.html, max 20 MB), and add / change / remove its logins. Every site has its own
+logins; after a password is set the page shows a ready-to-send message with the
+link, username and password once (passwords are stored as bcrypt hashes and
+cannot be read back). Deleting a site needs its name typed.
+
+Backend: `server-v2/client-sites.js`, registered from `api-router.js` as
+`/api/client-sites` (owner-only; GET list, POST actions). It writes
+`/opt/demo-sites-data/<slug>/index.html` and
+`/opt/demo-sites-auth/<slug>.htpasswd` (+ `<slug>.json` for the display name),
+both bind-mounted into the dashboard container - outside the git checkout so
+uploads never dirty `/opt/dashboard`.
+
+`demo-sites/nginx.conf` is now generic: `/<slug>/` is served from
+`/opt/demo-sites-data/<slug>/` behind `/etc/nginx/auth/<slug>.htpasswd`, with a
+404 when that login file does not exist. No per-client location blocks, no
+restart to add a client. The site root moved from `demo-sites/public/` (git) to
+`/opt/demo-sites-data/` (VPS); `demo-sites/public/` now only supplies
+robots.txt, and `demo-sites/public/plm/index.html` is no longer served (copy it
+across once on deploy).
+
+Files: `server-v2/client-sites.js`, `server-v2/api-router.js`,
+`owner-vite/src/pages/ClientSites.tsx`, `owner-vite/src/pages/registry.ts`,
+`owner-vite/src/lib/nav.ts`, `demo-sites/nginx.conf`, `docker-compose.yml`.
+
+## 2026-09-23 - sites.cbedge.net/plm: PLM Photography phone design is the demo
+
+Replaced the placeholder `demo-sites/public/plm/index.html` with the "Home, dark -
+phone" design export (self-contained bundle: images, fonts and React embedded,
+no external requests). The 8 marquee/services images pointed at design-tool
+`/_blob/...` URLs that do not exist outside the tool, so they now reuse the
+bundle's own listing photos; added viewport, `noindex` robots meta and a dark
+loading screen.
+
+Files: `demo-sites/public/plm/index.html`.
+
 ## 2026-09-23 - sites.cbedge.net: password-protected client demo sites
 
 New `demo-sites/` folder served by a new `demo-sites` compose service
