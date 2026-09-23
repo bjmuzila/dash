@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-23 - owner emails: "CB Edge isn't stopping" + voltick75 subscriber broadcast
+
+New owner-composer template `voltick75-subscribers` for the Subscribers
+audience. Says CB Edge is not stopping (still built and used daily, only new
+customers are closed) and gives code `voltick75`: 75% off the Voltick monthly
+subscription for life ($22/mo for an $89 service that is going up). CTA and
+link go to `https://voltick.io/bzila`. Keeps the `{{UNSUBSCRIBE_URL}}` footer;
+no em-dashes in reader-visible copy (Voltick rule).
+
+Files: `lib/emails/voltick75-subscribers.ts`,
+`app/api/admin/email-templates/route.ts` (registered in `buildTemplates()`).
+
 ## 2026-09-23 - sites.cbedge.net: password-protected client demo sites
 
 New `demo-sites/` folder served by a new `demo-sites` compose service

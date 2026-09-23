@@ -28,6 +28,7 @@ import { wholeBoardEmail, wholeBoardText, WHOLE_BOARD_SUBJECT } from "@/lib/emai
 import { fomcHalfOffEmail, fomcHalfOffText, FOMC_HALF_OFF_SUBJECT } from "@/lib/emails/fomc-half-off";
 import { voltickMergerEmail, voltickMergerText, VOLTICK_MERGER_SUBJECT } from "@/lib/emails/voltick-merger";
 import { autopayOffEmail, autopayOffText, AUTOPAY_OFF_SUBJECT } from "@/lib/emails/autopay-off";
+import { voltick75SubscribersEmail, voltick75SubscribersText, VOLTICK75_SUBSCRIBERS_SUBJECT } from "@/lib/emails/voltick75-subscribers";
 import { hiddenTemplateIdSet, hideTemplate, restoreTemplate } from "@/lib/emails/hiddenTemplates";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
@@ -263,6 +264,13 @@ function buildTemplates(): Template[] {
       subject: AUTOPAY_OFF_SUBJECT,
       html: autopayOffEmail,
       text: autopayOffText,
+    },
+    {
+      id: "voltick75-subscribers",
+      label: "⚡ CB Edge isn't stopping + Voltick 75% off for life (voltick75) · subscribers",
+      subject: VOLTICK75_SUBSCRIBERS_SUBJECT,
+      html: voltick75SubscribersEmail,
+      text: voltick75SubscribersText,
     },
   ];
 }
