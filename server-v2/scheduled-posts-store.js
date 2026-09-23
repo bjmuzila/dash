@@ -119,7 +119,7 @@ const JOB_DEFS = [
     kind: 'times',
     label: 'Voltick Levels (text)',
     hint: 'Text only, no image. Voltick Key Levels definitions (ported from Voltick engine.js marksOf) on the front expiry: Volt, Surge, Reversal, Coil + Net GEX / DEX (Key Levels Stats). SPY + QQQ: Volt only.',
-    tokens: ['{date}', '{time}', '{levels}'],
+    tokens: ['{date}', '{time}'],
     envWebhook: ['MG_LADDER_DISCORD_WEBHOOK', 'HOME_SIGNALS_DISCORD_WEBHOOK', 'SIGNALS_DISCORD_WEBHOOK', 'DISCORD_WEBHOOK_URL'],
     envChannel: ['MG_LADDER_DISCORD_CHANNEL_ID'],
     defaults: {
@@ -130,7 +130,8 @@ const JOB_DEFS = [
       days: 'mon,tue,wed,thu,fri',
       username: 'CB Edge Signals',
       avatarUrl: '',
-      message: '⚡ **Voltick Levels** — {time} ET\n\n{levels}',
+      // Posted as an EMBED: this line is the embed title; the levels are fields.
+      message: '⚡ Voltick Levels',
       postEmpty: false,
     },
   },
@@ -427,7 +428,7 @@ async function hasDestination(cfg) {
  * A Signals webhook identical to the job's own webhook is skipped (one copy).
  * Throws only when NOTHING landed; a partial success returns `warning`.
  */
-async function deliver(cfg, { ownPost, content = '', file = null, filename = 'image.png', defaultUsername = '', defaultAvatar = '' } = {}) {
+async function deliver(cfg, { ownPost, content = '', file = null, filename = 'image.png', embeds = null, defaultUsername = '', defaultAvatar = '' } = {}) {
   const targets = require('./bot-targets-store');
   const hasOwn = !!(cfg.channelId || cfg.webhookUrl);
   let ownOk = false;
@@ -438,7 +439,7 @@ async function deliver(cfg, { ownPost, content = '', file = null, filename = 'im
   let fan = [];
   try {
     fan = await targets.postToSignals({
-      content, file, filename, defaultUsername, defaultAvatar,
+      content, file, filename, embeds, defaultUsername, defaultAvatar,
       skipUrls: !cfg.channelId && cfg.webhookUrl ? [cfg.webhookUrl] : [],
     });
   } catch (e) {

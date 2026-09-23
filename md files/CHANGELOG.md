@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-23 - Voltick Levels embed: no time in the title
+
+- The embed title is now just `⚡ Voltick Levels`, because the time already shows on the message and in the embed footer. A `— {time} ET` left in an older stored message line gets stripped. The default message is now `⚡ Voltick Levels`.
+- Files: `server-v2/mg-ladder-discord.js`, `server-v2/scheduled-posts-store.js`.
+
+## 2026-09-23 - Voltick Levels posts as a Discord embed
+
+- The Voltick Levels post is now an embed, in Voltick amber:
+  - The title comes from the job's message line.
+  - SPX is one block (Volt / Surge / Reversal / Coil), with Net GEX and Net DEX as inline fields.
+  - SPY and QQQ are inline Volt tiles.
+  - The footer has a timestamp.
+- The role ping stays in the message text so it still notifies.
+- Each Discord's embed logo from Manage shows top-right on its Signals post.
+- Supporting changes:
+  - `discord-bot-poster.postToChannel` accepts `embeds`.
+  - `bot-targets-store.postToSignals` accepts `embeds` and adds each Discord's thumbnail.
+  - `scheduled-posts-store.deliver` passes `embeds` through.
+  - The default message is now the title line, and an older stored multi-line message still works because only its first line is used.
+- Files: `server-v2/mg-ladder-discord.js`, `server-v2/discord-bot-poster.js`, `server-v2/bot-targets-store.js`, `server-v2/scheduled-posts-store.js`.
+
 ## 2026-09-23 - Voltick Levels: ported Voltick's own marksOf definitions
 
 - The text post now computes its levels the way Voltick's Key Levels card does. The logic was ported from the Voltick repo (`server/engine.js` `marksOf` and the Surge block, plus `GEX-METHOD.md`) and runs on the front (0DTE) expiry:

@@ -106,12 +106,15 @@ async function listChannels(guildId) {
  * one shape with the webhook path, and silently dropping them here is better
  * than making every call site branch. See the trade-off note at the top.
  */
-async function postToChannel(channelId, { content = '', file = null, filename = 'image.png' } = {}) {
+async function postToChannel(channelId, { content = '', file = null, filename = 'image.png', embeds = null } = {}) {
   const id = String(channelId || '').trim();
   if (!/^\d{15,25}$/.test(id)) throw new Error(`"${id.slice(0, 40)}" is not a Discord channel id`);
 
   const form = new FormData();
-  form.append('payload_json', JSON.stringify(content ? { content } : {}));
+  const payload = {};
+  if (content) payload.content = content;
+  if (Array.isArray(embeds) && embeds.length) payload.embeds = embeds;
+  form.append('payload_json', JSON.stringify(payload));
   if (file) form.append('files[0]', new Blob([file], { type: 'image/png' }), filename);
 
   const res = await fetch(`${API}/channels/${id}/messages`, {

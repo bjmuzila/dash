@@ -834,20 +834,65 @@ function renderTextMessage(template, levels) {
     .slice(0, 2000);
 }
 
-async function postTextOwn(cfg, content) {
+// Voltick amber — the Volt's colour on the Voltick board.
+const EMBED_COLOR = 0xF5B83D;
+
+/**
+ * The post as a Discord EMBED: title from the job's message line (first line,
+ * {levels} and markdown stripped, so an older stored multi-line message still
+ * works), SPX as the full block, SPY/QQQ as inline Volt tiles, GEX/DEX inline.
+ */
+function levelsEmbed(template, rows) {
+  const title = renderTextMessage(template, '')
+    .split('\n')[0].replace(/\*\*/g, '').trim().slice(0, 256) || `⚡ Voltick Levels — ${etClock()} ET`;
+  const fields = [];
+  for (const r of rows) {
+    const v = r.voltick || {};
+    if (FULL_TICKERS.includes(r.ticker)) {
+      fields.push({
+        name: `${r.ticker} · ${fmtSpot(r.spot)}`,
+        value: [
+          `Volt **${fmtLvl(v.volt)}**`,
+          `Surge **${fmtLvl(v.surge)}**`,
+          `Reversal **${fmtLvl(v.reversal)}**`,
+          `Coil **${fmtLvl(v.coil)}**`,
+        ].join('\n'),
+        inline: false,
+      });
+      fields.push({ name: 'Net GEX', value: fmtBn(r.netGex), inline: true });
+      fields.push({ name: 'Net DEX', value: fmtBn(r.netDex), inline: true });
+      fields.push({ name: '​', value: '​', inline: true });   // row filler
+    }
+  }
+  for (const r of rows) {
+    if (FULL_TICKERS.includes(r.ticker)) continue;
+    fields.push({ name: `${r.ticker} · ${fmtSpot(r.spot)}`, value: `Volt **${fmtLvl(r.voltick?.volt)}**`, inline: true });
+  }
+  return {
+    title,
+    color: EMBED_COLOR,
+    fields: fields.slice(0, 25),
+    footer: { text: 'Voltick levels · 0DTE chain' },
+    timestamp: new Date().toISOString(),
+  };
+}
+
+async function postTextOwn(cfg, content, embeds) {
   if (cfg.channelId) {
-    await bot.postToChannel(cfg.channelId, { content });
+    await bot.postToChannel(cfg.channelId, { content, embeds });
     return;
   }
+  const body = {
+    username: cfg.username || DISCORD_USERNAME,
+    avatar_url: cfg.avatarUrl || DISCORD_AVATAR,
+    embeds,
+    allowed_mentions: { parse: [] },
+  };
+  if (content) body.content = content;
   const res = await fetch(cfg.webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      username: cfg.username || DISCORD_USERNAME,
-      avatar_url: cfg.avatarUrl || DISCORD_AVATAR,
-      content,
-      allowed_mentions: { parse: [] },
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) throw new Error(`webhook ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
@@ -862,10 +907,11 @@ async function collectLevelsText(base, opts = {}) {
     const rows = await buildRows(base);
     if (!rows.length) throw new Error('no level rows resolved (chains empty?)');
 
-    const content = renderTextMessage(cfg.message, levelsText(rows));
+    const embeds = [levelsEmbed(cfg.message, rows)];
     const out = await store.deliver(cfg, {
-      ownPost: () => postTextOwn(cfg, content),
-      content,
+      ownPost: () => postTextOwn(cfg, '', embeds),
+      content: '',
+      embeds,
       defaultUsername: cfg.username || DISCORD_USERNAME, defaultAvatar: cfg.avatarUrl || DISCORD_AVATAR,
     });
     console.log(`[levels-text] posted${opts.force ? ' (manual)' : ''} — ${rows.map((r) => r.ticker).join(',')} · +${out.fan.filter((r) => r.ok).length} signals`);
@@ -939,5 +985,5 @@ function startLevelsTextDiscord(port) {
 
 module.exports = {
   startMgLadderDiscord, collectOnce, buildRows, readConfig, JOB_ID,
-  startLevelsTextDiscord, collectLevelsText, levelsText, voltickFromBooks, strikeBooks, TEXT_JOB_ID,
+  startLevelsTextDiscord, collectLevelsText, levelsText, levelsEmbed, voltickFromBooks, strikeBooks, TEXT_JOB_ID,
 };

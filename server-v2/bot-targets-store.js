@@ -370,6 +370,7 @@ async function signalsTargets() {
       ping: d.routes[SIGNALS_KEY].ping || '',
       username: d.username || '',
       avatarUrl: d.avatarUrl || '',
+      thumbnailUrl: d.thumbnailUrl || d.avatarUrl || '',
     }));
 }
 
@@ -394,14 +395,20 @@ function allowedMentionsFor(ping) {
  * whose Signals webhook IS the job's own webhook gets one copy, not two.
  * Never throws — returns per-target results.
  */
-async function postToSignals({ content = '', file = null, filename = 'image.png', skipUrls = [], defaultUsername = '', defaultAvatar = '' } = {}) {
+async function postToSignals({ content = '', file = null, filename = 'image.png', embeds = null, skipUrls = [], defaultUsername = '', defaultAvatar = '' } = {}) {
   const skip = new Set((skipUrls || []).map((u) => String(u || '').trim()).filter(Boolean));
   const targets = (await signalsTargets()).filter((t) => !skip.has(t.url.trim()));
   const results = [];
   for (const t of targets) {
     try {
       const form = new FormData();
-      const body = { content: t.ping ? `${t.ping} ${content}`.slice(0, 2000) : content };
+      const body = { content: (t.ping ? `${t.ping} ${content}` : content).trim().slice(0, 2000) };
+      if (!body.content) delete body.content;
+      if (Array.isArray(embeds) && embeds.length) {
+        // Each Discord's own embed logo (Manage) goes top-right unless the
+        // caller already set one.
+        body.embeds = embeds.map((e) => (e.thumbnail || !t.thumbnailUrl ? e : { ...e, thumbnail: { url: t.thumbnailUrl } }));
+      }
       const username = t.username || defaultUsername;
       const avatar = t.avatarUrl || defaultAvatar;
       if (username) body.username = username;
