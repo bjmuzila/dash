@@ -24378,3 +24378,8 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-09-24 — Voltick Levels bot: Volt = highest live GEX
 - `server-v2/mg-ladder-discord.js` `voltickFromBooks`: Volt/Reversal/Coil now read the OI + today's volume book instead of OI only, so the Volt is the highest-GEX strike (posted 7675 vs card 7700). Surge unchanged.
+
+## 2026-09-24 — Whale page: Snapshot on every probe, date on every time
+- `cbedge-v3/src/board/topFlow/ContractProbe.tsx`: new `shareAs` prop — an ordinary probe gets the pop-out trade card + 📸 Snapshot, headline "<label> · $prem · size ct @ price · Sep 24 10:28 AM", pill "<LABEL> · SEP 24". Chart x-axis ends and hover readout now print "Sep 24 09:30 AM" (date first — a snapshot can't be hovered).
+- `cbedge-v3/src/pages/Whales.tsx`: prints probe (desktop + phone sheet) passes `shareAs="Whale print"`, contract lookup passes `shareAs="Lookup"`.
+- `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx`: repeated-flow headline prints the date before the first time (and before the last when it is a different day).

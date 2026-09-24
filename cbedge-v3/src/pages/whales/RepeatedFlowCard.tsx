@@ -390,7 +390,11 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
   const alertInfoOf = (r: RepeatContract): ProbeAlertInfo => {
     const bits = [`Repeated flow · ${num(r.n)} orders`, money(r.total)]
     if (r.size > 0) bits.push(`${num(Math.round(r.size))} ct${r.avgPrice != null ? ` @ ${r.avgPrice.toFixed(2)}` : ''}`)
-    bits.push(`${fmtWhen(r.firstTs, multiDay)} → ${fmtWhen(r.lastTs, multiDay)}`)
+    // Date FIRST, always — the picture cannot be hovered. The second stamp
+    // drops the date when the burst stayed inside one session.
+    const dFirst = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }).format(new Date(r.firstTs))
+    const dLast = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }).format(new Date(r.lastTs))
+    bits.push(`${dFirst} ${fmtTime(r.firstTs)} → ${dLast === dFirst ? '' : `${dLast} `}${fmtTime(r.lastTs)}`)
     const expMs = Date.parse(`${String(r.expiry).slice(0, 10)}T16:00:00-04:00`)
     const days = Number.isFinite(expMs) ? Math.max(0, Math.ceil((expMs - Date.now()) / 864e5)) : null
     const day = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })

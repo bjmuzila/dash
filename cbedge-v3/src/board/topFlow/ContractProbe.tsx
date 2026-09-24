@@ -100,6 +100,17 @@ const etTime = (ms: number) =>
     timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true,
   }).format(new Date(ms))
 
+/** "Sep 24" in ET. */
+const etDay = (ms: number) =>
+  new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }).format(new Date(ms))
+
+/**
+ * "Sep 24 09:30 AM". The DATE leads every time printed on a picture: a
+ * snapshot cannot be hovered, so a bare "09:30 AM" posted a week later says
+ * nothing about which session it was (2026-09-24).
+ */
+const etDayTime = (ms: number) => `${etDay(ms)} ${etTime(ms)}`
+
 const fmtDate = (iso: string | null) => {
   if (!iso) return '—'
   const d = new Date(`${iso}T00:00:00Z`)
@@ -183,11 +194,17 @@ export async function loadProbeBars(row: ProbeKey, days = 2, signal?: AbortSigna
   return []
 }
 
-export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
+export function ContractProbe({ row, onClose, entryAt, alertInfo: alertInfoProp, shareAs }: {
   row: TopFlowRow
   onClose: () => void
   /** Tracked-contract details for the pop-out strip and its snapshot. */
   alertInfo?: ProbeAlertInfo
+  /**
+   * Give an ordinary probe the pop-out trade card + 📸 Snapshot too, labelled
+   * with this word ("Whale print", "Lookup"). Ignored when `alertInfo` is set.
+   * The whale page passes it on every probe; the board's Top Flow does not.
+   */
+  shareAs?: string
   /**
    * When the entry price is NOT tied to a moment — a hand-typed cost basis on
    * the whale page's contract lookup, say — pass null and the chart draws the
@@ -201,6 +218,28 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
   entryAt?: number | null
 }) {
   const [range, setRange] = useState<Range>('1d')
+
+  // A probe opened with `shareAs` builds its own trade-card details from the
+  // row: what printed, how big, at what, and WHEN — date first.
+  const alertInfo = useMemo<ProbeAlertInfo | undefined>(() => {
+    if (alertInfoProp) return alertInfoProp
+    if (!shareAs) return undefined
+    const bits = [shareAs]
+    if (row.premium) bits.push(fmtPremium(row.premium))
+    if (row.size) bits.push(`${row.size.toLocaleString()} ct${row.price != null ? ` @ ${row.price.toFixed(2)}` : ''}`)
+    if (row.ts) bits.push(etDayTime(row.ts))
+    const expMs = row.expiry ? Date.parse(`${String(row.expiry).slice(0, 10)}T16:00:00-04:00`) : NaN
+    const days = Number.isFinite(expMs) ? Math.max(0, Math.ceil((expMs - Date.now()) / 864e5)) : null
+    return {
+      shotId: `probe:${row.id}`,
+      shotLabel: shareAs,
+      file: `${shareAs.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${row.underlying ?? ''}-${row.strike ?? ''}${row.type ?? ''}-${row.expiry ?? ''}`,
+      headline: bits.join(' · '),
+      dteLabel: days != null ? `${days}d` : null,
+      trackedAt: row.ts || Date.now(),
+      badge: `${shareAs.toUpperCase()} · ${etDay(row.ts || Date.now()).toUpperCase()}`,
+    }
+  }, [alertInfoProp, shareAs, row])
   // 0 = the source the print's age says to try; 1 = the other one. Reset on
   // every row and every range, or a fallback taken for one contract sticks to
   // the next.
@@ -1005,9 +1044,9 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
         {volTitle}
       </text>
 
-      <text x={PADL} y={H - 6 * S} fontSize={9 * S} fontWeight={700} style={label}>{etTime(bars[0]!.time)}</text>
+      <text x={PADL} y={H - 6 * S} fontSize={9 * S} fontWeight={700} style={label}>{etDayTime(bars[0]!.time)}</text>
       <text x={W - PADR} y={H - 6 * S} textAnchor="end" fontSize={9 * S} fontWeight={700} style={label}>
-        {etTime(bars[n - 1]!.time)}
+        {etDayTime(bars[n - 1]!.time)}
       </text>
 
       {hp && (
@@ -1027,7 +1066,7 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
             <rect width={BOXW} height={HEADH} rx={6 * S} style={{ fill: 'var(--color-raised)' }} />
             <rect y={HEADH - 6 * S} width={BOXW} height={6 * S} style={{ fill: 'var(--color-raised)' }} />
             <text x={9 * S} y={HEADH - 6 * S} fontSize={9 * S} fontWeight={700} style={label} opacity={0.65}>
-              {etTime(hp.time)}
+              {etDayTime(hp.time)}
             </text>
             {hpct != null && (
               <text x={BOXW - 9 * S} y={HEADH - 6 * S} textAnchor="end" fontSize={9 * S} fontWeight={700}

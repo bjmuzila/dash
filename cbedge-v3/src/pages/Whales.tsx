@@ -939,7 +939,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
             {lookup ? (
               <div className="flex min-h-[360px] flex-col border-t border-line">
-                <ContractProbe key={lookup.id} row={lookup} onClose={() => setLookup(null)} entryAt={null} />
+                <ContractProbe key={lookup.id} row={lookup} onClose={() => setLookup(null)} entryAt={null} shareAs="Lookup" />
               </div>
             ) : (
               <div className="border-t border-line px-3 py-2 text-2xs leading-relaxed text-fg">
@@ -1461,7 +1461,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
             />
             <div className="relative flex h-[calc(100%-32px)] flex-col overflow-hidden rounded-t-2xl border-t border-line bg-surface pb-[env(safe-area-inset-bottom)]">
               <div className="mx-auto mb-1 mt-2 h-1 w-9 shrink-0 rounded-full bg-line" />
-              <ContractProbe key={selected.id} row={selected} onClose={() => setSelectedId(null)} />
+              <ContractProbe key={selected.id} row={selected} onClose={() => setSelectedId(null)} shareAs="Whale print" />
               {selKey && (
                 <div className="flex shrink-0 justify-end gap-2 border-t border-line px-3 py-2.5">
                   <TrackButton
@@ -1830,7 +1830,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
               {selected && (
                 <div className="flex w-[330px] shrink-0 flex-col border-l border-line">
-                  <ContractProbe key={selected.id} row={selected} onClose={() => setSelectedId(null)} />
+                  <ContractProbe key={selected.id} row={selected} onClose={() => setSelectedId(null)} shareAs="Whale print" />
                 </div>
               )}
             </div>
