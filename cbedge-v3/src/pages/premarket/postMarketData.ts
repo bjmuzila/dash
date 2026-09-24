@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { dedupeFetch } from "@/data/dedupeFetch";
-import { findGEXFlip, type ChainRow } from "@/data/calculations";
+import { callGEXOf, findGEXFlip, netGEXOf, putGEXOf, type ChainRow } from "@/data/calculations";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ET clock helpers — shared by every consumer of the recorded series
@@ -1087,6 +1087,64 @@ export function useNextExpiryStructure(
   }, [enabled, todayExpiry, spot, ticker]);
 
   return { next, state };
+}
+
+/**
+ * TOMORROW'S MAP, SAVED AT THE CLOSE (2026-09-24).
+ *
+ * The freeze recorder's `post` slot is captured 16:05–16:25 ET — after the
+ * front expiry has rolled off that day's 0DTE — so its chain IS the next
+ * expiry's book as it stood at the settle. No new capture and no new route:
+ * the structure is derived from a payload /proxy/premarket-freeze already
+ * returns, with the same OI+volume basis structureFromChain uses.
+ *
+ * Returns null unless the payload's expiry is strictly after the session date
+ * (a capture that landed before the roll would be today's dying book).
+ */
+export function structureFromFreeze(p: FreezePayload | null, date: string): NextStructure | null {
+  if (!p || !Array.isArray(p.gexRows) || p.gexRows.length < 5) return null;
+  const exp = String(p.expiry || "").slice(0, 10);
+  if (!exp || !date || !(exp > date.slice(0, 10))) return null;
+  const spot = p.spot;
+  if (!(spot > 0)) return null;
+
+  const rows = p.gexRows
+    .filter((r) => Number.isFinite(r.strike) && r.strike > 0)
+    .map((r) => ({
+      strike: r.strike,
+      call: callGEXOf(r, "net", spot),
+      put: putGEXOf(r, "net", spot),
+      net: netGEXOf(r, "net", spot),
+    }))
+    .sort((a, b) => a.strike - b.strike);
+  if (rows.length < 5) return null;
+
+  const cw = rows.reduce((b, r) => (r.call > b.call ? r : b), rows[0]!);
+  const pw = rows.reduce((b, r) => (Math.abs(r.put) > Math.abs(b.put) ? r : b), rows[0]!);
+  const cb = rows.reduce((b, r) => (Math.abs(r.net) > Math.abs(b.net) ? r : b), rows[0]!);
+  const chainRows: ChainRow[] = rows.map((r) => ({ strike: r.strike, netGEX: r.net, netVolGEX: 0 }));
+
+  return {
+    expiry: exp,
+    flip: findGEXFlip(chainRows, spot) ?? p.gexFlip ?? null,
+    // Per-side legs absent (pre-summed rows) → the server's own walls for
+    // that same chain, never a guess.
+    callWall: cw.call > 0 ? cw.strike : (p.callWall ?? null),
+    putWall: pw.put < 0 ? pw.strike : (p.putWall ?? null),
+    cb: cb.net !== 0 ? cb.strike : null,
+    netGex: rows.reduce((s, r) => s + r.net, 0),
+  };
+}
+
+/**
+ * The saved next-expiry structure for one SPX session — static once written.
+ * `state` is "ok" only when the post slot exists AND carries the rolled expiry.
+ */
+export function useSavedNextStructure(date: string, enabled: boolean) {
+  const { post, state } = useSessionFreeze(date, enabled);
+  const next = useMemo(() => structureFromFreeze(post, date), [post, date]);
+  const out: HistState = !enabled ? "empty" : state === "loading" ? "loading" : next ? "ok" : state === "error" ? "error" : "empty";
+  return { next, state: out, savedAt: post?.updatedAt ?? null };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

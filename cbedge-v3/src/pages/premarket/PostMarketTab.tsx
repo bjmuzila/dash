@@ -130,6 +130,7 @@ import {
   etMinutes,
   useIntradayLadder,
   useNextExpiryStructure,
+  useSavedNextStructure,
   useRecordedWalls,
   NOTES_KEY,
   LEVEL_LABEL,
@@ -405,7 +406,25 @@ export default function PostMarketTab(p: PostMarketProps) {
     useIntradayLadder(true, expiry, etDate, sym);
   /** The expiry to PRINT — what the ladder was read from, else what was asked. */
   const shownExpiry = ladderExpiry || expiry;
-  const { next, state: nextState } = useNextExpiryStructure(!frozen, expiry, spot, sym);
+  // ── TOMORROW'S MAP: saved at the close, static for the day (2026-09-24) ──
+  // SPX only (the freeze captures SPX). From the 16:05 settle onward — and on
+  // every frozen past session — the map is read from that day's `post` freeze
+  // slot, so it stops drifting between tab opens and a past session gets the
+  // map as it stood that evening. Live fetch stays the fallback while no saved
+  // copy exists yet (before the settle, or a capture that failed).
+  const wantSaved = sym === "SPX" && (frozen || etMin >= RTH_CLOSE_MIN + 5);
+  const saved = useSavedNextStructure(etDate, wantSaved);
+  const savedOk = wantSaved && saved.state === "ok" && !!saved.next;
+  const liveNext = useNextExpiryStructure(
+    !frozen && (!wantSaved || saved.state === "empty" || saved.state === "error"),
+    expiry, spot, sym,
+  );
+  const next = savedOk ? saved.next : frozen ? null : liveNext.next;
+  const nextState = savedOk
+    ? "ok"
+    : wantSaved && saved.state === "loading"
+      ? "loading"
+      : frozen ? saved.state : liveNext.state;
   // `etMin` cuts the wall log at the minute on screen for the same reason it
   // cuts the ladder below — see that comment.
   const { log: wallLog, byLevel: recorded, state: wallState } = useRecordedWalls(etDate, sym, etMin);
@@ -2000,16 +2019,18 @@ export default function PostMarketTab(p: PostMarketProps) {
           this panel can fetch is the CURRENT next expiry — so leaving it in
           would staple next week's structure onto last Tuesday's recap. There is
           no stored next-expiry chain per past session to substitute. */}
-      {frozen ? (
+      {frozen && !savedOk ? (
         <div className="sec">
           <div className="sechead">
             <h3><span className="secn">5</span>Tomorrow&apos;s Map</h3>
-            <span className="tiny right">not available for a past session</span>
+            <span className="tiny right">{nextState === "loading" ? "loading the saved map…" : "not recorded for this session"}</span>
           </div>
           <div className="warnbar">
-            This panel builds the NEXT expiry&apos;s structure from a live chain fetch. On a frozen
-            session that would be the next expiry as it stands today, not as it stood the evening of{" "}
-            {etDate} — so it is left out rather than filled in with the wrong week.
+            {nextState === "loading"
+              ? "Reading the map saved at the close…"
+              : <>No next-expiry map was saved at the close on {etDate}. It is captured from the 16:05 ET
+                settle, so sessions before that capture existed (or a missed capture) stay blank rather
+                than borrowing today&apos;s chain.</>}
           </div>
         </div>
       ) : (
@@ -2017,7 +2038,9 @@ export default function PostMarketTab(p: PostMarketProps) {
         <div className="sechead">
           <h3><span className="secn">5</span>Tomorrow&apos;s Map — after 0DTE rolls off</h3>
           <span className="tiny right">
-            {nextState === "ok" && next ? `${next.expiry} chain` : nextState === "loading" ? "loading the next expiry…" : "next expiry unavailable"}
+            {nextState === "ok" && next
+              ? `${next.expiry} chain${savedOk ? " · saved at close" : " · live"}`
+              : nextState === "loading" ? "loading the next expiry…" : "next expiry unavailable"}
           </span>
         </div>
 

@@ -24348,3 +24348,8 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `cbedge-v3/src/shell/snapshot.ts`: framed snapshots no longer draw the CB Edge mark in the caption (`loadLogo()` resolves null; `LOGO_SRC` removed).
 - `cbedge-v3/src/board/econCalendar/econTemplate.ts`: Economic Calendar poster no longer loads or renders the CB Edge mark.
 - `cbedge-v3/src/pages/EconomicCalendar.tsx`: earnings-week board — `cbedge.net` header and `cbedge.net/v3/economic-calendar` footer now read `voltick.io/bzila`; bottom-right cbedge3.0 logo removed; top-bar logo tagged `data-capture-hide` so the calendar page shot drops it.
+
+## 2026-09-24 — Post-market: Tomorrow's Map saved at the close (static + historical)
+- `cbedge-v3/src/pages/premarket/postMarketData.ts`: new `structureFromFreeze()` + `useSavedNextStructure()` — derive the next-expiry map (call/put wall, flip, max-γ strike, net GEX) from the existing `premarket_freeze` `post` slot (16:05–16:25 ET capture, already on the rolled expiry). Only used when the slot's expiry is after the session date.
+- `cbedge-v3/src/pages/premarket/PostMarketTab.tsx`: SPX from 16:05 ET onward and every frozen past session read the saved map, so it stays static for the evening and past sessions now show it. Live `/api/chains` fetch remains the fallback when no saved copy exists; frozen days with no post capture say "not recorded". Header marks "saved at close" vs "live".
+- No server or proxy changes — reads the existing `/proxy/premarket-freeze` response. Works back to the first day the freeze recorder ran.
