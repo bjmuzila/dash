@@ -401,6 +401,79 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   VOLTICK UI THEME — owner-only switch in the home board's toolbar.
+
+   `data-ui-theme="voltick"` on <html> (set by src/design/uiTheme.ts) redefines
+   the palette for the WHOLE document. Values are Voltick's own tokens, lifted
+   from voltick-vite/src/theme.ts (itself lifted from the Voltick repo) — none
+   invented here:
+
+     INK #0a0d10 page · PANEL #0e1216 chrome · ELEV #141a21 card
+     LINE #1e2630 hairline · PAPER #e7ece9 text · ACCENT #2f6bff Volt Blue
+     GOOD #3ddc8e / BAD #ff6b7a data only · VOLT #ffd166 · FLIP #b48cff
+     SURGE #4d8cff walls · SKY #7fb0ff
+
+   Unlayered, so it outranks the @theme block's :root without !important.
+   Canvas charts pick it up on the reload the toggle does (they resolve tokens
+   at mount). Delete this block and the switch becomes a no-op.
+   ───────────────────────────────────────────────────────────────────────────*/
+:root[data-ui-theme='voltick'] {
+  --color-app: #0a0d10;
+  --color-rail: #0e1216;
+  --color-bg: #0a0d10;
+  --color-surface: #141a21;
+  --color-surface2: #0e1216;
+  --color-raised: #171e26;
+  --color-line: #1e2630;
+
+  /* One text colour, optically corrected — no grey ramp. */
+  --color-fg: #e7ece9;
+  --color-muted: #e7ece9;
+  --color-faint: #c0c5c3;
+
+  --color-accent: #2f6bff;
+  --color-up: #3ddc8e;
+  --color-down: #ff6b7a;
+  --color-move-up: #4d8cff;
+  --color-move-down: #ff6b7a;
+  --color-warn: #ffd166;
+
+  --color-series-1: #2f6bff;
+  --color-series-2: #3ddc8e;
+  --color-series-3: #ffd166;
+  --color-series-4: #b48cff;
+  --color-series-5: #7fb0ff;
+  --color-series-6: #ff6b7a;
+
+  --color-candle-up: #3ddc8e;
+  --color-candle-down: #ff6b7a;
+  --color-gex-pos: #4d8cff;
+  --color-gex-neg: #ff6b7a;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+}
+
+:root[data-ui-theme='voltick'] body {
+  background: #0a0d10;
+  color: #e7ece9;
+}
+
+:root[data-ui-theme='voltick'] ::selection {
+  background: rgba(47, 107, 255, 0.4);
+  color: #e7ece9;
+}
+
+:root[data-ui-theme='voltick'] :focus-visible {
+  outline: 2px solid #6aa0ff;
+  outline-offset: 2px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
    SCROLLBARS — app-wide, once, instead of per panel.
 
    Every scroller in v3 (the board, the econ calendar card, the flow tape, the

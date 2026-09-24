@@ -5,6 +5,7 @@ import { Board, compactBoard, resolveBoard, settleBoard, type BoardItem } from '
 import { useAuth } from '@/data/auth'
 import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import { ToolbarSlot } from '@/shell/ToolbarSlot'
+import { useUiTheme } from '@/design/uiTheme'
 import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, placeNewCard } from './catalog'
 import {
   type NamedLayout,
@@ -551,6 +552,11 @@ export default function BoardPage() {
     <Page fill>
       <ToolbarSlot>
         <div className="flex items-center gap-2">
+          {/* ── VOLTICK THEME — owner only ─────────────────────────────────
+              Flips the whole UI between the CB Edge and Voltick palettes. One
+              attribute on <html>; the values live in tokens.css. Reloads so
+              the canvas charts repaint too. See design/uiTheme.ts. */}
+          {isOwner && <VoltickThemeSwitch />}
           {status && <span className={`text-xs ${toneClass}`}>{status.text}</span>}
           {/* Save layout belongs to edit mode: it is the counterpart of the
               gestures that made the board dirty, and out of edit mode there is
@@ -830,3 +836,31 @@ export default function BoardPage() {
   )
 }
 
+/** Owner-only toolbar switch: CB Edge ⇄ Voltick palette. */
+function VoltickThemeSwitch() {
+  const { theme, toggle } = useUiTheme()
+  const on = theme === 'voltick'
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={toggle}
+      title={on ? 'Voltick theme is on (owner only). Click to go back to CB Edge.' : 'Switch the UI to the Voltick theme (owner only).'}
+      className={[
+        'flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
+        on ? 'border-accent bg-raised text-fg' : 'border-line bg-surface text-muted hover:bg-raised hover:text-fg',
+      ].join(' ')}
+    >
+      <span
+        aria-hidden
+        className={['relative inline-block h-3 w-6 rounded-full border transition-colors', on ? 'border-accent bg-accent' : 'border-line bg-surface2'].join(' ')}
+      >
+        <span
+          className={['absolute top-1/2 h-2 w-2 -translate-y-1/2 rounded-full bg-fg transition-all', on ? 'left-3.5' : 'left-0.5'].join(' ')}
+        />
+      </span>
+      Voltick
+    </button>
+  )
+}

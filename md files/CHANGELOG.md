@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-24 - v3 home: owner-only Voltick theme switch
+
+- New **Voltick** switch in the home board's toolbar slot, drawn only for the owner. Flips the whole v3 UI between the CB Edge and Voltick palettes and reloads so canvas charts repaint.
+- Mechanism: `data-ui-theme="voltick"` on `<html>`; `tokens.css` redefines the surface, text, accent, up/down, series, candle, GEX, font and radius tokens under that selector using Voltick's own values (from `voltick-vite/src/theme.ts`). Preference persists per browser and is applied in `main.tsx` before first render.
+- `UiThemeGuard` in `Shell.tsx` drops the preference if a non-owner account signs in on that browser.
+
+Files: `cbedge-v3/src/design/uiTheme.ts` (new), `cbedge-v3/src/design/tokens.css`, `cbedge-v3/src/board/BoardPage.tsx`, `cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/src/main.tsx`.
+
 ## 2026-09-24 - Whale Archive: Repeated flow section
 
 - New **Repeated flow** section on `/v3/whales` (full width under the prints and the right column; on phone it sits in the SIZE tab). It shows contracts hit again and again with orders of at least **$50K** each, keeping only the ones with at least **5 / 10+ / 25+** orders (5 is the default).

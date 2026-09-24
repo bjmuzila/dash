@@ -21,6 +21,7 @@ import { RefreshButton } from '@/shell/RefreshButton'
 import { ToolbarSlotHost, ToolbarSlotProvider } from '@/shell/ToolbarSlot'
 import { UserMenu } from '@/shell/UserMenu'
 import { UpdateToast } from '@/shell/UpdateToast'
+import { readUiTheme, setUiTheme } from '@/design/uiTheme'
 
 /**
  * The notes dock, its note store and the owner's Quick Probe are ~30KB of source
@@ -572,6 +573,20 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
   )
 }
 
+// ── VOLTICK THEME GUARD ─────────────────────────────────────────────────────
+// The Voltick palette is an owner-only switch (BoardPage's toolbar slot). If a
+// browser still carries the preference once a NON-owner account is signed in
+// on it, drop it and reload back to CB Edge. Renders nothing. See
+// design/uiTheme.ts.
+function UiThemeGuard() {
+  const { isLoaded, isSignedIn, isOwner } = useAuth()
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || isOwner) return
+    if (readUiTheme() === 'voltick') setUiTheme('cbedge', { reload: true })
+  }, [isLoaded, isSignedIn, isOwner])
+  return null
+}
+
 export function Shell({ children }: { children: ReactNode }) {
   // ── /m/* keeps the TOOLBAR and drops the RAIL ───────────────────────────────
   // The rail is 64px of a 390px screen — a quarter of it, spent on a nav the
@@ -612,6 +627,7 @@ export function Shell({ children }: { children: ReactNode }) {
               layout rather than part of it, and mounted once for both branches.
               See data/appVersion.ts for why an open phone tab needs telling. */}
           <UpdateToast />
+          <UiThemeGuard />
           {/* Highlight anything for a "＋ Notes" chip; right-click a card for
               Copy image / Add snapshot to Notes. Portalled to <body>, renders
               nothing for a signed-out visitor or on a phone, and mounted here

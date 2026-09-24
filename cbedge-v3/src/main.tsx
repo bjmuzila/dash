@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import '@/design/tokens.css'
 import { startSocket } from '@/data/socket'
+import { bootUiTheme } from '@/design/uiTheme'
 import App from '@/App'
 
 // Order matters. startSocket() adopts the connection the inline script in
@@ -9,6 +10,10 @@ import App from '@/App'
 // download — so it must run BEFORE the first render, not inside an effect.
 // A useEffect here would give back most of the head start the early boot buys.
 startSocket()
+
+// Owner-only Voltick palette, if this browser chose it. Before render so the
+// first frame is already in the right colours. See design/uiTheme.ts.
+bootUiTheme()
 
 // ─────────────────────────────────────────────────────────────────────────────
 // A TAB THAT WAS OPEN ACROSS A DEPLOY.
