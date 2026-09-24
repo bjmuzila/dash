@@ -62,10 +62,24 @@ function gradePoints(maxPct, minPct, closePct) {
   return peak + pain + close;
 }
 
+/**
+ * The peak the grade is scored on (2026-09-23): the SUSTAINED peak — the best
+ * level that held for two consecutive snapshots — whenever the row carries one,
+ * falling back to the single-print max_pct for rows recorded before sustained
+ * existed. max_pct rewards contracts that spike for one sample and give it all
+ * back; sustained is the fillable move. Boundaries are unchanged, only the
+ * input moved, so read paths re-grade from the stored percentages and every
+ * date on file is graded on the same basis.
+ */
+function peakBasis(r) {
+  const s = num(r && r.sustained_pct);
+  return Number.isFinite(s) ? s : num(r && r.max_pct);
+}
+
 /** → { grade, pts, neverGreen } | null when the pick was never snapshotted. */
 function gradeFor(r) {
   if (!r) return null;
-  const pts = gradePoints(r.max_pct, r.min_pct, r.close_pct);
+  const pts = gradePoints(peakBasis(r), r.min_pct, r.close_pct);
   if (pts == null) return null;
   const neverGreen = !(num(r.max_pct) > 0);
   const grade = neverGreen
@@ -151,6 +165,18 @@ function pickFeatures(row, res) {
     pctOpenAbs: row.pct_open == null ? null : Math.abs(Number(row.pct_open)),
     zAbs: row.z_score == null ? null : Math.abs(Number(row.z_score)),
     chgAbs: row.latest_chg == null ? null : Math.abs(Number(row.latest_chg)),
+    // Absolute (log-scaled) score — comparable across slots and days, unlike
+    // `score`, which is min-max normalised inside one slot's qualifying set.
+    // Null on rows captured before 2026-09-23.
+    scoreAbs: row.score_abs == null ? null : Number(row.score_abs),
+    // Today's contract volume / open interest on the ENTRY snapshot (the probe
+    // mark at the flag). Capture-time: it is the same snapshot the entry is.
+    volOi: res && Number.isFinite(Number(res.vol_oi)) ? Number(res.vol_oi) : null,
+    // Signed tape flow on this exact contract in the WINDOW_MIN before the flag
+    // (buy premium − sell premium). Null when the tape had no prints for the
+    // contract in that window — which usually means it was not being streamed.
+    flowNetPre: row.flow_n_pre > 0 && Number.isFinite(Number(row.flow_buy_pre)) && Number.isFinite(Number(row.flow_sell_pre))
+      ? Number(row.flow_buy_pre) - Number(row.flow_sell_pre) : null,
   };
 }
 
@@ -247,6 +273,28 @@ const BUCKETS = {
     note: 'How unusual the move was against the strike’s own recent history.',
     order: ['<1', '1-2', '2-3', '3+'],
     of: (f) => (f.zAbs == null ? null : f.zAbs < 1 ? '<1' : f.zAbs < 2 ? '1-2' : f.zAbs < 3 ? '2-3' : '3+'),
+  },
+  scoreabs: {
+    label: 'Absolute score (log-scaled, 2026-09-23+)',
+    note: 'The score the recorder now RANKS on. 0 = right at the $ / % floors, 100 = $10M+ and 600%+ vs open. Unlike `score` it is not rescaled per slot, so 60 means the same thing at 10:30 and 14:00. Null before 2026-09-23.',
+    order: ['0-20', '20-40', '40-60', '60-80', '80-100'],
+    of: (f) => (f.scoreAbs == null ? null
+      : f.scoreAbs < 20 ? '0-20' : f.scoreAbs < 40 ? '20-40' : f.scoreAbs < 60 ? '40-60' : f.scoreAbs < 80 ? '60-80' : '80-100'),
+  },
+  voloi: {
+    label: 'Contract volume ÷ OI at entry',
+    note: 'GEX change is volume-driven, so this is the contract-level version of it. Above 1 means today already traded more than the whole open interest — new positioning rather than churn.',
+    order: ['<0.25', '0.25-1', '1-3', '3+'],
+    of: (f) => (f.volOi == null ? null
+      : f.volOi < 0.25 ? '<0.25' : f.volOi < 1 ? '0.25-1' : f.volOi < 3 ? '1-3' : '3+'),
+  },
+  flowpre: {
+    label: 'Net tape premium before the flag',
+    note: 'Buy − sell premium on this exact contract in the change window before it was flagged. The unsigned GEX build cannot tell bought from sold; this is the leg that can. Sparse until the flag-time subscription has been running a while — null means no prints were on the tape.',
+    order: ['sold >$50k', 'sold <$50k', 'bought <$50k', 'bought >$50k'],
+    of: (f) => (f.flowNetPre == null ? null
+      : f.flowNetPre <= -50e3 ? 'sold >$50k' : f.flowNetPre < 0 ? 'sold <$50k'
+      : f.flowNetPre < 50e3 ? 'bought <$50k' : 'bought >$50k'),
   },
   symbol: {
     label: 'Ticker',
@@ -483,9 +531,16 @@ function fitRule({ features = [], overall = null, days = null, cohort = 'selecte
   }
 
   // De-duplicate the score blend against its own two halves.
-  const scoreWins = candidates.some((c) => c.by === 'score');
+  // `score` and `scoreabs` are two scalings of the same blend: keep whichever
+  // lifts more and drop the other along with the two halves.
+  const scoreTerms = candidates.filter((c) => c.by === 'score' || c.by === 'scoreabs');
+  const scoreKey = scoreTerms.length
+    ? scoreTerms.reduce((a, b) => (Math.abs(b.lift) > Math.abs(a.lift) ? b : a)).by
+    : null;
+  const scoreWins = scoreKey != null;
   const kept = candidates.filter((c) => {
-    if (scoreWins && FIT_REDUNDANT_WITH_SCORE.includes(c.by)) {
+    if (scoreWins && (FIT_REDUNDANT_WITH_SCORE.includes(c.by)
+        || ((c.by === 'score' || c.by === 'scoreabs') && c.by !== scoreKey))) {
       rejected.push({ by: c.by, bucket: c.bucket, n: c.n, lift: c.lift, why: 'same evidence as the score term already in the rule' });
       return false;
     }
@@ -538,7 +593,7 @@ function sameRule(a, b) {
 }
 
 module.exports = {
-  GRADE_ORDER, gradePoints, gradeFor, isGood,
+  GRADE_ORDER, gradePoints, gradeFor, peakBasis, isGood,
   pickFeatures, slotMinutes, daysBetween,
   BUCKETS, BUCKET_KEYS,
   projRule, projectPick, PROJ_RULE_PATH,

@@ -227,6 +227,17 @@ const TT_FLOW_MAX_PER_EXPIRY = Number(process.env.TT_FLOW_MAX_PER_EXPIRY || 40);
 // the nearest one (the bug this replaces relative to multi-flow.js's
 // MultiFlowManager, which only ever grabbed the single nearest expiry).
 const TT_FLOW_MAX_DTE = Number(process.env.TT_FLOW_MAX_DTE || 30);
+// PICK FLOW (2026-09-23) — single contracts the GEX Change Top recorder asks to
+// have on the tape (see trackPickFlow). Its picks are >= 5% OTM, i.e. outside
+// the TT_FLOW_WINDOW_PCT band above, so without this their prints never reached
+// flow_prints. Independent of FLOW_TICKERS_ENABLE; off with PICK_FLOW_ENABLE=0.
+const PICK_FLOW_ENABLED = process.env.PICK_FLOW_ENABLE !== '0';
+// Hard ceiling on tracked pick contracts (one TimeAndSale sub each). Expired
+// contracts are dropped on every re-arm, so this only bites on a runaway day.
+const PICK_FLOW_MAX = Number(process.env.PICK_FLOW_MAX || 400);
+// Re-arm cadence: retries subscribes that were queued while the channel was
+// closed, and drops expired contracts.
+const PICK_FLOW_REARM_MS = Number(process.env.PICK_FLOW_REARM_MS || 2 * 60 * 1000);
 // Re-pick each root's window as spot drifts / days pass (0DTE rolls, etc).
 const TT_FLOW_REFRESH_MS = Number(process.env.TT_FLOW_REFRESH_MS || 5 * 60 * 1000);
 // Safety margin under Tastytrade's ~2000-symbols/subscribe-call ceiling — no
@@ -2248,6 +2259,14 @@ class TastytradeProxy {
     this.ttFlowSpot = new Map();      // root -> live spot (for isOtm tagging)
     this.ttFlowTimer = null;          // window-refresh interval
     this.ttFlowTickers = [];          // remembered roster, re-subscribed on reconnect
+    // Pick flow — see trackPickFlow. `Wanted` survives reconnects (it is the
+    // list of what SHOULD stream); `Contracts`/`SpotSym` are per-channel state
+    // and are cleared on every bring-up. Kept apart from ttFlowContracts because
+    // _startTtMultiFlow clears that map asynchronously on each bring-up.
+    this.pickFlowWanted = new Map();    // option streamerSymbol -> { root, expiration }
+    this.pickFlowContracts = new Map(); // option streamerSymbol -> root (routing key, this channel)
+    this.pickFlowSpotSym = new Map();   // underlying streamerSymbol -> root (spot key, this channel)
+    this.pickFlowTimer = null;
     // Strike-growth (DoD) recorder feed — separate from flow-record above, see
     // the STRIKE_GROWTH_FEED_* constants for the why.
     this.strikeGrowthContracts = new Map(); // option streamerSymbol -> ticker root
@@ -2591,6 +2610,20 @@ class TastytradeProxy {
     if (TT_FLOW_ENABLED) {
       this._startTtMultiFlow().catch((e) =>
         console.warn('[TT-MULTIFLOW] start failed:', String(e?.message || e).slice(0, 160)));
+    }
+
+    // Pick flow: a new dxLink channel has none of the prior subs, so forget the
+    // per-channel state and re-arm everything still wanted.
+    this.pickFlowContracts.clear();
+    this.pickFlowSpotSym.clear();
+    if (PICK_FLOW_ENABLED) {
+      this._armPickFlow().catch((e) =>
+        console.warn('[PICK-FLOW] re-arm failed:', String(e?.message || e).slice(0, 160)));
+      if (this.pickFlowTimer) clearInterval(this.pickFlowTimer);
+      this.pickFlowTimer = setInterval(() => {
+        this._armPickFlow().catch(() => {});
+      }, PICK_FLOW_REARM_MS);
+      if (this.pickFlowTimer.unref) this.pickFlowTimer.unref();
     }
 
     // Strike-growth (DoD) recorder feed: re-subscribe the last known roster on
@@ -3210,6 +3243,95 @@ class TastytradeProxy {
     console.log(`[TT-MULTIFLOW] ${root}: +${sent} contracts (total ${legs.length} in window), spot=${spot}`);
   }
 
+  // ── Pick flow (tt) ─────────────────────────────────────────────────────────
+  /**
+   * Put ONE option contract on the TimeAndSale tape so its prints land in
+   * this.flow → flow_prints like any TT_FLOW root. Called by the GEX Change Top
+   * recorder for every pick (see server-with-proxy.js). Idempotent: a contract
+   * already wanted, or already streaming via the TT_FLOW window, is a no-op.
+   * @param {{root:string, expiry:string, strike:number, type:'C'|'P'}} c
+   * @returns {Promise<{ok:boolean, streamerSymbol?:string, state?:string, error?:string}>}
+   */
+  async trackPickFlow({ root, expiry, strike, type } = {}) {
+    if (!PICK_FLOW_ENABLED) return { ok: false, error: 'PICK_FLOW_ENABLE=0' };
+    const r = String(root || '').toUpperCase();
+    const t = type === 'P' ? 'P' : 'C';
+    const k = Number(strike);
+    if (!r || !/^\d{4}-\d{2}-\d{2}$/.test(String(expiry || '')) || !(k > 0)) {
+      return { ok: false, error: 'root, expiry (YYYY-MM-DD), strike and type required' };
+    }
+    if (dteFromIso(expiry) < 0) return { ok: false, error: 'expired' };
+    let chain;
+    try {
+      chain = await fetchChain(r); // cached (REST_CHAIN_TTL_MS)
+    } catch (e) {
+      return { ok: false, error: `chain fetch failed: ${String(e?.message || e).slice(0, 120)}` };
+    }
+    const c = (chain?.contracts || []).find((x) =>
+      x.expiration === expiry && x.type === t && Math.abs(Number(x.strike) - k) < 1e-6);
+    if (!c?.streamerSymbol) return { ok: false, error: 'contract not in chain' };
+    const sym = c.streamerSymbol;
+    if (this.ttFlowContracts.has(sym)) return { ok: true, streamerSymbol: sym, state: 'in-flow-window' };
+    if (!this.pickFlowWanted.has(sym)) {
+      if (this.pickFlowWanted.size >= PICK_FLOW_MAX) this._prunePickFlow(true);
+      if (this.pickFlowWanted.size >= PICK_FLOW_MAX) return { ok: false, error: `PICK_FLOW_MAX (${PICK_FLOW_MAX}) reached` };
+      this.pickFlowWanted.set(sym, { root: r, expiration: expiry });
+    }
+    await this._armPickFlow();
+    return { ok: true, streamerSymbol: sym, state: this.pickFlowContracts.has(sym) ? 'streaming' : 'queued' };
+  }
+
+  /** Drop expired wishes; `force` also drops the oldest when at the cap. */
+  _prunePickFlow(force = false) {
+    for (const [sym, w] of this.pickFlowWanted) {
+      if (dteFromIso(w.expiration) < 0) {
+        this.pickFlowWanted.delete(sym);
+        if (this.pickFlowContracts.has(sym)) {
+          this.pickFlowContracts.delete(sym);
+          if (this.client && !this.ttFlowContracts.has(sym)) this.client.unsubscribeTimeSales([sym]);
+        }
+      }
+    }
+    if (force && this.pickFlowWanted.size >= PICK_FLOW_MAX) {
+      const oldest = this.pickFlowWanted.keys().next().value;
+      if (oldest) {
+        this.pickFlowWanted.delete(oldest);
+        this.pickFlowContracts.delete(oldest);
+        if (this.client && !this.ttFlowContracts.has(oldest)) this.client.unsubscribeTimeSales([oldest]);
+      }
+    }
+  }
+
+  /** Subscribe every wanted contract not yet live on THIS channel (and its
+   *  underlying, for spot / isOtm). Records a symbol only once the request is
+   *  actually on the wire — same rule as _subscribeTtFlowRoot. */
+  async _armPickFlow() {
+    if (!this.client || !this.client.channelOpen) return;
+    this._prunePickFlow();
+    const byRoot = new Map();
+    for (const [sym, w] of this.pickFlowWanted) {
+      if (this.pickFlowContracts.has(sym) || this.ttFlowContracts.has(sym)) continue;
+      if (!byRoot.has(w.root)) byRoot.set(w.root, []);
+      byRoot.get(w.root).push(sym);
+    }
+    for (const [root, syms] of byRoot) {
+      if (![...this.pickFlowSpotSym.values()].includes(root)) {
+        try {
+          const u = await resolveUnderlying(root); // eslint-disable-line no-await-in-loop
+          if (u?.streamerSymbol) {
+            this.pickFlowSpotSym.set(u.streamerSymbol, root);
+            this.client.subscribe([u.streamerSymbol]);
+          }
+        } catch (e) {
+          console.warn(`[PICK-FLOW] ${root} underlying resolve failed:`, String(e?.message || e).slice(0, 120));
+        }
+      }
+      if (!this.client.subscribeTimeSales(syms)) continue; // channel closed; next re-arm retries
+      for (const s of syms) this.pickFlowContracts.set(s, root);
+      console.log(`[PICK-FLOW] ${root}: +${syms.length} pick contract(s) on the tape (tracking ${this.pickFlowContracts.size})`);
+    }
+  }
+
   /** Near-the-money OTM legs spanning every expiry from 0DTE out to
    *  TT_FLOW_MAX_DTE days: OTM calls (strike >= spot) and OTM puts
    *  (strike <= spot), each capped to TT_FLOW_WINDOW_PCT of spot and
@@ -3453,6 +3575,9 @@ class TastytradeProxy {
     if (sg) { this.strikeGrowthSpot.set(sg, px); this.strikeGrowthSpotAt.set(sg, Date.now()); }
     const tt = this.ttFlowSpotSym.get(sym);
     if (tt) this.ttFlowSpot.set(tt, px);
+    // Pick-flow roots share ttFlowSpot (root -> spot), which is never cleared.
+    const pk = this.pickFlowSpotSym.get(sym);
+    if (pk) this.ttFlowSpot.set(pk, px);
   }
 
   /** Prior-session close for a strike-growth root (from the REST backstop's
@@ -4035,7 +4160,7 @@ class TastytradeProxy {
         return;
       }
       // TT multi-flow root's underlying quote → same idea, own map.
-      const ttRoot = this.ttFlowSpotSym.get(sym);
+      const ttRoot = this.ttFlowSpotSym.get(sym) || this.pickFlowSpotSym.get(sym);
       if (ttRoot) {
         if (mid > 0) this.ttFlowSpot.set(ttRoot, mid);
         return;
@@ -4119,7 +4244,7 @@ class TastytradeProxy {
         if (px > 0) this.strikeGrowthSpot.set(sgRootT, px);
         return;
       }
-      const ttRootT = this.ttFlowSpotSym.get(sym);
+      const ttRootT = this.ttFlowSpotSym.get(sym) || this.pickFlowSpotSym.get(sym);
       if (ttRootT) {
         const px = Number(ev.price);
         if (px > 0) this.ttFlowSpot.set(ttRootT, px);
@@ -4226,7 +4351,7 @@ class TastytradeProxy {
       // branch below does. Stamping the SPX level on a SPY print mixed ~6600
       // into SPY's ~660 minutes; flow-netprem averages spot per minute, so the
       // Net Drift spot overlay zig-zagged whenever TimeAndSale stalled.
-      const ttRootTrade = this.ttFlowContracts.get(sym);
+      const ttRootTrade = this.ttFlowContracts.get(sym) || this.pickFlowContracts.get(sym);
       this.flow.addPrint({
         streamerSymbol: sym,
         price: Number(ev.price),
@@ -4284,7 +4409,7 @@ class TastytradeProxy {
       // contracts are ONLY TimeAndSale-subscribed (no Quote/Greeks/Summary),
       // so this.quotes/greeks/summaries/volumes have nothing for them — that's
       // expected, addPrint/its downstream consumers treat those as optional.
-      const ttRoot = this.ttFlowContracts.get(sym);
+      const ttRoot = this.ttFlowContracts.get(sym) || this.pickFlowContracts.get(sym);
       if (ttRoot) {
         this.flow.addPrint({
           streamerSymbol: sym,

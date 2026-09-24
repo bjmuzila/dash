@@ -29,6 +29,7 @@ import { fomcHalfOffEmail, fomcHalfOffText, FOMC_HALF_OFF_SUBJECT } from "@/lib/
 import { voltickMergerEmail, voltickMergerText, VOLTICK_MERGER_SUBJECT } from "@/lib/emails/voltick-merger";
 import { autopayOffEmail, autopayOffText, AUTOPAY_OFF_SUBJECT } from "@/lib/emails/autopay-off";
 import { voltick75SubscribersEmail, voltick75SubscribersText, VOLTICK75_SUBSCRIBERS_SUBJECT } from "@/lib/emails/voltick75-subscribers";
+import { voltickCodeFixEmail, voltickCodeFixText, VOLTICK_CODE_FIX_SUBJECT } from "@/lib/emails/voltick-code-fix";
 import { hiddenTemplateIdSet, hideTemplate, restoreTemplate } from "@/lib/emails/hiddenTemplates";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
@@ -271,6 +272,13 @@ function buildTemplates(): Template[] {
       subject: VOLTICK75_SUBSCRIBERS_SUBJECT,
       html: voltick75SubscribersEmail,
       text: voltick75SubscribersText,
+    },
+    {
+      id: "voltick-code-fix",
+      label: "⚠️ Correction + apology — the code is TICK75 at voltick.io/bzila",
+      subject: VOLTICK_CODE_FIX_SUBJECT,
+      html: voltickCodeFixEmail,
+      text: voltickCodeFixText,
     },
   ];
 }

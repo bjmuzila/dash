@@ -7,7 +7,7 @@
 // THE MESSAGE, in order:
 //   1. CB Edge is NOT stopping. Brandon still builds it and uses it every day
 //      for his own trading. The only change is that it cannot take NEW customers.
-//   2. For anyone who wants more: Voltick, code voltick75 = 75% off the monthly
+//   2. For anyone who wants more: Voltick, code TICK75 = 75% off the monthly
 //      subscription FOR LIFE. $22/mo for an $89/mo service that is going up.
 //   3. Join through voltick.io/bzila (the referral link, never a bare domain).
 //
@@ -16,8 +16,10 @@
 // #0a0d10 · Volt Blue #2f6bff · accent #6aa0ff · paper #e7ece9 · quiet #c0c5c3).
 // Voltick rule: NO EM-DASHES anywhere a reader sees (code comments exempt).
 //
-// The code is printed exactly as Brandon gave it ("voltick75"). Change it in
-// VOLTICK_CODE only, so the HTML and text versions cannot drift.
+// CODE CORRECTION 2026-09-23: this went out as "voltick75", which Voltick does
+// not honour. The working code is TICK75 (see lib/emails/voltick-code-fix.ts,
+// the apology/correction follow-up). Change it in VOLTICK_CODE only, so the
+// HTML and text versions cannot drift.
 
 import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
 import { brandLogoUrl } from "@/lib/brand";
@@ -27,7 +29,7 @@ const LOGO_URL = brandLogoUrl(SITE_URL);
 
 const VOLTICK_JOIN_URL = "https://voltick.io/bzila";
 const VOLTICK_JOIN_LABEL = "voltick.io/bzila";
-const VOLTICK_CODE = "voltick75";
+const VOLTICK_CODE = "TICK75";
 const PRICE_FULL = "$89";
 const PRICE_WITH_CODE = "$22";
 

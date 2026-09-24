@@ -184,6 +184,28 @@ const LIVE_START        = String(process.env.GEX_CHANGE_TOP_LIVE_START || '10:00
 // that score-rank churn near the cutoff cannot masquerade as a crossing.
 const LIVE_SCAN_LIMIT   = Math.max(20, Number(process.env.GEX_CHANGE_TOP_LIVE_SCAN_LIMIT || 100));
 const W_ABS = 0.6, W_PCT = 0.4;                                              // score blend weights
+// ABSOLUTE SCORE (2026-09-23). `score` is min-max normalised over ONE scan's
+// qualifying set, so "80" at 10:30 and "80" at 14:00 are different amounts of
+// build and the study's score table was bucketing noise. `score_abs` puts the
+// same 0.6/0.4 blend on a fixed log scale — 0 at the $ / % floors, 100 at
+// SCORE_ABS_MAX_DOLLAR and SCORE_ABS_MAX_PCT — and is what the scan RANKS on.
+// `score` is still computed and stored so older rows stay comparable to it.
+const SCORE_ABS_MAX_DOLLAR = Number(process.env.GEX_CHANGE_TOP_SCORE_MAX_DOLLAR || 10_000_000);
+const SCORE_ABS_MAX_PCT    = Number(process.env.GEX_CHANGE_TOP_SCORE_MAX_PCT    || 600);
+// DENOMINATOR FLOOR on pct_open (|gex_open|, $). pct_open is a ratio against
+// the open GEX, and a few contracts of carried OI turn any volume into "+300%".
+// Default 0 = off at CAPTURE — the scanner tab has a view switch for it so the
+// threshold can be judged against graded picks first (Pick Study → "Open GEX").
+const MIN_GEX_OPEN = Math.max(0, Number(process.env.GEX_CHANGE_TOP_MIN_GEX_OPEN || 0));
+// PICK FLOW (2026-09-23). The multi-ticker tape only streams contracts within
+// TT_FLOW_WINDOW_PCT (5%) of spot, and MIN_OTM puts every pick at >= 5% — so
+// the signed tape almost never contained a picked contract. Each pick is now
+// handed to the feed (trackPickFlow, injected by server-with-proxy.js) and its
+// TimeAndSale prints land in flow_prints like any other root. Off with
+// GEX_CHANGE_TOP_PICK_FLOW=0.
+const PICK_FLOW = String(process.env.GEX_CHANGE_TOP_PICK_FLOW || '1') !== '0';
+/** Injected by startGexChangeTopRecorder(port, { trackPickFlow }). */
+let _trackPickFlow = null;
 // Auto-probe every captured pick into the /api/watch pipeline (see header).
 const AUTO_PROBE  = String(process.env.GEX_CHANGE_TOP_AUTOPROBE || '1') !== '0';
 /** watch_options.source stamp for rows this recorder created. */
@@ -344,6 +366,13 @@ async function _ensureSchemaOnce(p) {
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS n_samples SMALLINT');
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS gex_open DOUBLE PRECISION');
     await p.query(`CREATE INDEX IF NOT EXISTS idx_gct_watch ON gex_change_top(watch_id)`);
+    // 2026-09-23: the absolute (log-scaled) score the scan now ranks on, and the
+    // signed tape flow on the contract in the WINDOW_MIN before the flag. All
+    // nullable, no backfill — older rows genuinely do not have them.
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS score_abs REAL');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS flow_buy_pre REAL');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS flow_sell_pre REAL');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS flow_n_pre INTEGER');
     // Frozen end-of-day scorecard — one row per pick per day. Survives the
     // pruning of auto-probed contracts (and their snapshots) at expiry.
     await p.query(`
@@ -389,6 +418,14 @@ async function _ensureSchemaOnce(p) {
     await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS grade TEXT');
     await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS grade_pts REAL');
     await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS selected BOOLEAN NOT NULL DEFAULT TRUE');
+    // 2026-09-23 — frozen alongside the marks because the snapshots and the tape
+    // they come from are both pruned. entry_vol_oi is the contract's volume/OI on
+    // the entry snapshot (capture-time); flow_* is the signed tape on the contract
+    // from the flag to the close (outcome-time — shown, never a study feature).
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS entry_vol_oi REAL');
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS flow_buy REAL');
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS flow_sell REAL');
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS flow_n INTEGER');
     ensured = true;
     return true;
   } catch (e) {
@@ -470,6 +507,81 @@ async function autoProbe(pool, r) {
     console.warn(`[gex-change-top] auto-probe failed for ${r.symbol} ${kLabel}${side}:`, e.message);
     return null;
   }
+}
+
+// ── Pick flow ─────────────────────────────────────────────────────────────────
+/** The option side a pick was probed on — below spot = put, else call. */
+function pickSide(r) {
+  return Number(r.spot) > 0 && Number(r.strike) < Number(r.spot) ? 'P' : 'C';
+}
+
+/**
+ * Signed tape totals for ONE contract over [fromMs, toMs) from flow_prints.
+ * Rides the (date, underlying_norm, ts) index; expiry/strike/type are row
+ * filters. Returns { n, buy, sell, net, largest, lastTs } — n = 0 means the tape
+ * had nothing for the contract, which is NOT the same as "no trades" when the
+ * contract was not being streamed yet.
+ */
+async function contractFlow(pool, { date, symbol, expiry, strike, type, fromMs, toMs }) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n,
+            COALESCE(SUM(CASE WHEN side = 'buy'  THEN premium END), 0)::float8 AS buy,
+            COALESCE(SUM(CASE WHEN side = 'sell' THEN premium END), 0)::float8 AS sell,
+            COALESCE(MAX(premium), 0)::float8 AS largest,
+            MAX(ts)::bigint AS last_ts
+       FROM flow_prints
+      WHERE date = $1 AND underlying_norm = $2 AND expiration = $3
+        AND ABS(strike - $4::float8) < 0.001 AND type = $5
+        AND ts >= $6 AND ts < $7`,
+    [date, String(symbol).toUpperCase(), expiry, Number(strike), type, fromMs, toMs],
+  );
+  const r = rows[0] || {};
+  const buy = Number(r.buy) || 0, sell = Number(r.sell) || 0;
+  return {
+    n: Number(r.n) || 0, buy, sell, net: buy - sell,
+    largest: Number(r.largest) || 0,
+    lastTs: r.last_ts == null ? null : Number(r.last_ts),
+  };
+}
+
+/** The WINDOW_MIN of tape before a flag — a capture-time feature. Best-effort. */
+async function preFlagFlow(pool, r, date, flagMs) {
+  try {
+    const f = await contractFlow(pool, {
+      date, symbol: r.symbol, expiry: r.expiry, strike: r.strike, type: pickSide(r),
+      fromMs: flagMs - WINDOW_MIN * 60_000, toMs: flagMs,
+    });
+    return f.n > 0 ? f : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Hand picks to the feed so their prints start landing on the tape. */
+function trackFlow(rows) {
+  if (!PICK_FLOW || typeof _trackPickFlow !== 'function') return;
+  for (const r of rows) {
+    if (!r || !r.symbol || !r.expiry || !(Number(r.strike) > 0)) continue;
+    Promise.resolve()
+      .then(() => _trackPickFlow({ root: r.symbol, expiry: r.expiry, strike: Number(r.strike), type: r.side || pickSide(r) }))
+      .catch((e) => console.warn(`[gex-change-top] pick-flow track failed for ${r.symbol} ${r.strike}:`, String(e?.message || e).slice(0, 120)));
+  }
+}
+
+/**
+ * Re-hand every pick filed today. The feed's wish list is in memory, so a
+ * process restart forgets it — this runs on each interval capture and puts it
+ * back within one INTERVAL_MIN. Idempotent on the feed side.
+ */
+async function retrackToday(pool, date) {
+  if (!PICK_FLOW || typeof _trackPickFlow !== 'function') return;
+  try {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT symbol, expiry, strike, spot FROM gex_change_top WHERE date = $1`,
+      [date],
+    );
+    trackFlow(rows);
+  } catch { /* best-effort */ }
 }
 
 /**
@@ -586,6 +698,7 @@ const SCAN_SQL = `
     WHERE ABS(latest_chg) >= $3
       AND pct_open IS NOT NULL AND ABS(pct_open) >= $4
       AND otm_dist >= $5
+      AND ($8::float8 <= 0 OR ABS(COALESCE(gex_open, 0)) >= $8::float8)
       AND ($6 = 'all'
         OR ($6 = 'build' AND spot > 0 AND ((strike > spot AND latest_chg > 0) OR (strike < spot AND latest_chg < 0)))
         OR ($6 = 'pos'   AND spot > 0 AND strike > spot AND latest_chg > 0)
@@ -595,18 +708,25 @@ const SCAN_SQL = `
   ranked AS (
     SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score, n, gex_open,
            (${W_ABS} * COALESCE(ABS(latest_chg) / NULLIF(MAX(ABS(latest_chg)) OVER (), 0), 0)
-          + ${W_PCT} * COALESCE(ABS(pct_open)  / NULLIF(MAX(ABS(pct_open))  OVER (), 0), 0)) * 100 AS score
+          + ${W_PCT} * COALESCE(ABS(pct_open)  / NULLIF(MAX(ABS(pct_open))  OVER (), 0), 0)) * 100 AS score,
+           -- Absolute score: same blend on a fixed log scale (see SCORE_ABS_*).
+           (${W_ABS} * LEAST(1.0, GREATEST(0.0,
+              LN(GREATEST(ABS(latest_chg)::float8, 1.0) / GREATEST($3::float8, 1.0))
+              / LN(GREATEST(${SCORE_ABS_MAX_DOLLAR}::float8 / GREATEST($3::float8, 1.0), 1.0001))))
+          + ${W_PCT} * LEAST(1.0, GREATEST(0.0,
+              LN(GREATEST(ABS(pct_open)::float8, 0.0001) / GREATEST($4::float8, 0.0001))
+              / LN(GREATEST(${SCORE_ABS_MAX_PCT}::float8 / GREATEST($4::float8, 0.0001), 1.0001))))) * 100 AS score_abs
     FROM qualified
   ),
   -- Max ONE row per ticker: keep only its best-scored strike.
   deduped AS (
-    SELECT DISTINCT ON (symbol) symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score, n, gex_open
+    SELECT DISTINCT ON (symbol) symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score, score_abs, n, gex_open
     FROM ranked
-    ORDER BY symbol, score DESC NULLS LAST
+    ORDER BY symbol, score_abs DESC NULLS LAST
   )
-  SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score, n, gex_open
+  SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score, score_abs, n, gex_open
   FROM deduped
-  ORDER BY score DESC NULLS LAST
+  ORDER BY score_abs DESC NULLS LAST, score DESC NULLS LAST
   LIMIT $7`;
 
 // ── One capture ───────────────────────────────────────────────────────────────
@@ -627,7 +747,7 @@ async function runOnce({ force = false } = {}) {
   try {
     ({ rows: candidates } = await p.query(
       SCAN_SQL,
-      [date, EXCLUDE, MIN_DOLLAR, MIN_PCT, MIN_OTM, DIR, Math.max(TOP_N, TOP_N * CANDIDATE_MULT)],
+      [date, EXCLUDE, MIN_DOLLAR, MIN_PCT, MIN_OTM, DIR, Math.max(TOP_N, TOP_N * CANDIDATE_MULT), MIN_GEX_OPEN],
     ));
   } catch (e) {
     console.warn('[gex-change-top] scan error:', e.message);
@@ -691,6 +811,14 @@ async function runOnce({ force = false } = {}) {
   // insert loop builds its own combined list including the shadows.
   const watchIds = picks.map((x) => x.watchId);
 
+  // Signed tape in the window BEFORE the flag, per pick — read before the write
+  // so the transaction holds no slow reads.
+  const flagMs = now.getTime();
+  const preFlow = new Map();
+  for (const x of [...picks, ...shadows]) {
+    preFlow.set(x.row, await preFlagFlow(p, x.row, date, flagMs)); // eslint-disable-line no-await-in-loop
+  }
+
   // Replace this slot's bucket so a re-fire keeps exactly the latest top-N.
   const client = await p.connect();
   let written = 0;
@@ -706,19 +834,22 @@ async function runOnce({ force = false } = {}) {
     ];
     for (const item of all) {
       const r = item.row;
+      const pf = preFlow.get(r) || null;
       // Stamp the projection now, from capture-time facts only. Null unless a
       // rule is armed — see _lib-pick-grade.cjs.
       let proj = null;
       try {
         proj = PG.projectPick(PG.pickFeatures(
-          { ...r, date, slot, rank: item.rank, live: false, n_samples: r.n, gex_open: r.gex_open },
+          { ...r, date, slot, rank: item.rank, live: false, n_samples: r.n, gex_open: r.gex_open,
+            flow_n_pre: pf ? pf.n : null, flow_buy_pre: pf ? pf.buy : null, flow_sell_pre: pf ? pf.sell : null },
           { entry: null },
         ));
       } catch (e) { console.warn('[gex-change-top] projection failed:', e.message); }
       await client.query(
         `INSERT INTO gex_change_top
-           (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, proj_grade, proj_pts, n_samples, gex_open)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+           (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, proj_grade, proj_pts, n_samples, gex_open,
+            score_abs, flow_buy_pre, flow_sell_pre, flow_n_pre)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
          ON CONFLICT (date, slot, symbol, expiry, strike) DO UPDATE SET
            rank = EXCLUDED.rank, ts = EXCLUDED.ts, spot = EXCLUDED.spot,
            latest_chg = EXCLUDED.latest_chg, pct_open = EXCLUDED.pct_open,
@@ -726,11 +857,15 @@ async function runOnce({ force = false } = {}) {
            selected = EXCLUDED.selected,
            proj_grade = EXCLUDED.proj_grade, proj_pts = EXCLUDED.proj_pts,
            n_samples = EXCLUDED.n_samples, gex_open = EXCLUDED.gex_open,
+           score_abs = EXCLUDED.score_abs,
+           flow_buy_pre = EXCLUDED.flow_buy_pre, flow_sell_pre = EXCLUDED.flow_sell_pre,
+           flow_n_pre = EXCLUDED.flow_n_pre,
            watch_id = COALESCE(EXCLUDED.watch_id, gex_change_top.watch_id)`,
         [date, slot, now, item.rank, r.symbol, r.expiry, r.strike, r.spot,
          r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN, item.watchId ?? null,
          item.selected, proj ? proj.grade : null, proj ? proj.pts : null,
-         r.n ?? null, r.gex_open ?? null],
+         r.n ?? null, r.gex_open ?? null,
+         r.score_abs ?? null, pf ? pf.buy : null, pf ? pf.sell : null, pf ? pf.n : null],
       );
       if (item.selected) written++;
     }
@@ -745,6 +880,10 @@ async function runOnce({ force = false } = {}) {
 
   const probed = watchIds.filter((x) => x != null).length;
   await pruneExpiredProbes(p);
+  // Start streaming the new picks' prints, and re-arm the rest of today's
+  // (the feed's list does not survive a restart).
+  trackFlow([...picks, ...shadows].map((x) => x.row));
+  retrackToday(p, date);
 
   // Feed the live scan's dedupe set: anything the leaderboard just captured is
   // no longer a NEW crossing, so the trigger scan must not fire on it a minute
@@ -829,7 +968,7 @@ async function runLive({ force = false } = {}) {
     try {
       ({ rows: candidates } = await p.query(
         SCAN_SQL,
-        [date, EXCLUDE, MIN_DOLLAR, MIN_PCT, MIN_OTM, DIR, LIVE_SCAN_LIMIT],
+        [date, EXCLUDE, MIN_DOLLAR, MIN_PCT, MIN_OTM, DIR, LIVE_SCAN_LIMIT, MIN_GEX_OPEN],
       ));
     } catch (e) {
       console.warn('[gex-change-top] live scan error:', e.message);
@@ -883,11 +1022,15 @@ async function runLive({ force = false } = {}) {
 
     if (!taken.length) return { ok: true, triggered: 0, rejected };
 
+    const flagMs = now.getTime();
+    for (const t of taken) t.pf = await preFlagFlow(p, t.row, date, flagMs); // eslint-disable-line no-await-in-loop
+
     const client = await p.connect();
     try {
       await client.query('BEGIN');
       for (let i = 0; i < taken.length; i++) {
         const r = taken[i].row;
+        const pf = taken[i].pf || null;
         const rank = i + 1;
         let proj = null;
         try {
@@ -895,25 +1038,31 @@ async function runLive({ force = false } = {}) {
           // here is a position inside a batch of at most LIVE_MAX_PER_SCAN and
           // not a position among the day's ranked candidates. See the note there.
           proj = PG.projectPick(PG.pickFeatures(
-            { ...r, date, slot, rank, live: true, n_samples: r.n, gex_open: r.gex_open },
+            { ...r, date, slot, rank, live: true, n_samples: r.n, gex_open: r.gex_open,
+              flow_n_pre: pf ? pf.n : null, flow_buy_pre: pf ? pf.buy : null, flow_sell_pre: pf ? pf.sell : null },
             { entry: null },
           ));
         } catch (e) { console.warn('[gex-change-top] live projection failed:', e.message); }
         await client.query(
           `INSERT INTO gex_change_top
-             (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, live, proj_grade, proj_pts, n_samples, gex_open)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE,TRUE,$15,$16,$17,$18)
+             (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, live, proj_grade, proj_pts, n_samples, gex_open,
+              score_abs, flow_buy_pre, flow_sell_pre, flow_n_pre)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE,TRUE,$15,$16,$17,$18,$19,$20,$21,$22)
            ON CONFLICT (date, slot, symbol, expiry, strike) DO UPDATE SET
              rank = EXCLUDED.rank, ts = EXCLUDED.ts, spot = EXCLUDED.spot,
              latest_chg = EXCLUDED.latest_chg, pct_open = EXCLUDED.pct_open,
              z_score = EXCLUDED.z_score, score = EXCLUDED.score,
              proj_grade = EXCLUDED.proj_grade, proj_pts = EXCLUDED.proj_pts,
              n_samples = EXCLUDED.n_samples, gex_open = EXCLUDED.gex_open,
+             score_abs = EXCLUDED.score_abs,
+             flow_buy_pre = EXCLUDED.flow_buy_pre, flow_sell_pre = EXCLUDED.flow_sell_pre,
+             flow_n_pre = EXCLUDED.flow_n_pre,
              watch_id = COALESCE(EXCLUDED.watch_id, gex_change_top.watch_id)`,
           [date, slot, now, rank, r.symbol, r.expiry, r.strike, r.spot,
            r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN, taken[i].watchId ?? null,
            proj ? proj.grade : null, proj ? proj.pts : null,
-           r.n ?? null, r.gex_open ?? null],
+           r.n ?? null, r.gex_open ?? null,
+           r.score_abs ?? null, pf ? pf.buy : null, pf ? pf.sell : null, pf ? pf.n : null],
         );
       }
       await client.query('COMMIT');
@@ -935,6 +1084,7 @@ async function runLive({ force = false } = {}) {
     }
 
     _liveCount += taken.length;
+    trackFlow(taken.map((t) => t.row));
     console.log(`[gex-change-top] LIVE ${date} ${slot}: ${taken.length} new trigger(s) — `
       + taken.map((t) => `${t.row.symbol} ${t.row.strike}`).join(', ')
       + `${rejected ? ` (${rejected} under $${ENTRY_FLOOR.toFixed(2)})` : ''}`
@@ -954,7 +1104,8 @@ async function getHistory({ date, limitSlots = 20 } = {}) {
     await ensureSchema(); // best-effort; surface the real error below if it or the read fails
     const { rows } = await p.query(
       `SELECT date, slot, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, ts, watch_id,
-              proj_grade, proj_pts, COALESCE(live, FALSE) AS live
+              proj_grade, proj_pts, COALESCE(live, FALSE) AS live,
+              n_samples, gex_open, score_abs, flow_buy_pre, flow_sell_pre, flow_n_pre
          FROM gex_change_top WHERE date = $1 AND COALESCE(selected, TRUE)
         ORDER BY slot DESC, rank ASC`,
       [d],
@@ -1016,20 +1167,93 @@ async function getPickHistory({ watchId, date } = {}) {
       [id],
     );
     const { rows: pts } = await p.query(
-      `SELECT ts, mark, net_gex FROM watch_snapshots
+      `SELECT ts, mark, net_gex, volume, open_interest, net_prem FROM watch_snapshots
         WHERE watch_id = $1 AND ts >= $2 AND ts < $3
         ORDER BY ts ASC LIMIT 3000`,
       [id, bounds.start, bounds.end],
     );
+    const numOr = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
     return {
       ok: true,
       watch_id: id,
       date: d,
       contract: opt[0] || null,
-      points: pts.map((r) => ({ ts: Number(r.ts), mark: r.mark, net_gex: r.net_gex })),
+      // volume / open_interest / net_prem are the contract's own (unsigned) day
+      // totals from the same 60s probe. net_prem is volume × mark × 100 — gross
+      // premium, re-priced at each mark, NOT buy-minus-sell. The signed tape is
+      // /proxy/gex-change-top-flow.
+      points: pts.map((r) => ({
+        ts: Number(r.ts), mark: r.mark, net_gex: r.net_gex,
+        volume: numOr(r.volume), open_interest: numOr(r.open_interest), net_prem: numOr(r.net_prem),
+      })),
     };
   } catch (e) {
     return { ok: false, error: String(e?.message || e), points: [] };
+  }
+}
+
+// ── Pick tape flow (feeds /proxy/gex-change-top-flow + the card back) ─────────
+// SIGNED premium on the pick's own contract from flow_prints: buy vs sell, net,
+// print count, largest print, and a per-minute cumulative-net series for the
+// chart. Split at the flag so "was it being bought BEFORE we saw it" and "what
+// happened after" read separately. Same narrowness as getPickHistory: only
+// watch_ids a gex_change_top row references.
+const FLOW_BIN_MS = 60_000;
+async function getPickFlow({ watchId, date } = {}) {
+  const p = sg.getPool();
+  if (!p) return { ok: false, error: 'no DATABASE_URL in this process', bins: [] };
+  const id = Number(watchId);
+  if (!Number.isFinite(id)) return { ok: false, error: 'id required', bins: [] };
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : etDateStr();
+  const bounds = etDayBoundsMs(d);
+  if (!bounds) return { ok: false, error: 'bad date', bins: [] };
+  try {
+    const { rows: link } = await p.query(
+      `SELECT symbol, expiry, strike, spot, MIN(slot) OVER () AS first_slot
+         FROM gex_change_top WHERE watch_id = $1 AND date = $2 LIMIT 1`,
+      [id, d],
+    );
+    let pick = link[0];
+    if (!pick) {
+      const { rows: anyRow } = await p.query(
+        `SELECT symbol, expiry, strike, spot, NULL::text AS first_slot FROM gex_change_top WHERE watch_id = $1 LIMIT 1`, [id]);
+      pick = anyRow[0];
+    }
+    if (!pick) return { ok: false, error: 'unknown pick', bins: [] };
+    const { rows: opt } = await p.query('SELECT side FROM watch_options WHERE id = $1', [id]);
+    const type = (opt[0] && opt[0].side) || pickSide(pick);
+    const [hh, mm] = String(pick.first_slot || '').split(':').map(Number);
+    const flagMs = Number.isFinite(hh) && Number.isFinite(mm) ? bounds.start + (hh * 60 + mm) * 60_000 : null;
+    const q = { date: d, symbol: pick.symbol, expiry: pick.expiry, strike: pick.strike, type };
+    const { rows: bins } = await p.query(
+      `SELECT (ts / ${FLOW_BIN_MS})::bigint * ${FLOW_BIN_MS} AS t,
+              COALESCE(SUM(CASE WHEN side = 'buy'  THEN premium END), 0)::float8 AS buy,
+              COALESCE(SUM(CASE WHEN side = 'sell' THEN premium END), 0)::float8 AS sell,
+              COUNT(*)::int AS n
+         FROM flow_prints
+        WHERE date = $1 AND underlying_norm = $2 AND expiration = $3
+          AND ABS(strike - $4::float8) < 0.001 AND type = $5
+        GROUP BY 1 ORDER BY 1`,
+      [d, String(pick.symbol).toUpperCase(), pick.expiry, Number(pick.strike), type],
+    );
+    const pre = flagMs != null
+      ? await contractFlow(p, { ...q, fromMs: flagMs - WINDOW_MIN * 60_000, toMs: flagMs })
+      : null;
+    const post = await contractFlow(p, { ...q, fromMs: flagMs != null ? flagMs : bounds.start, toMs: bounds.end });
+    const day = await contractFlow(p, { ...q, fromMs: bounds.start, toMs: bounds.end });
+    let cum = 0;
+    return {
+      ok: true, watch_id: id, date: d, flag_ts: flagMs, window_min: WINDOW_MIN,
+      contract: { symbol: pick.symbol, expiry: pick.expiry, strike: Number(pick.strike), type },
+      pre, post, day,
+      bins: bins.map((b) => {
+        const buy = Number(b.buy) || 0, sell = Number(b.sell) || 0;
+        cum += buy - sell;
+        return { ts: Number(b.t), buy, sell, n: Number(b.n) || 0, cum };
+      }),
+    };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e), bins: [] };
   }
 }
 
@@ -1058,6 +1282,7 @@ async function computeResults(date) {
             COUNT(*)::int           AS slots,
             MIN(t.rank)::int        AS best_rank,
             MAX(t.score)            AS score,
+            MAX(t.spot)             AS spot,
             MIN(t.symbol)           AS symbol,
             MIN(t.expiry)           AS expiry,
             MIN(t.strike)           AS strike,
@@ -1087,7 +1312,7 @@ async function computeResults(date) {
   const { rows: aggs } = await p.query(
     `WITH b AS (SELECT * FROM unnest($1::int[], $2::bigint[]) AS t(watch_id, start_ms)),
      snaps AS (
-       SELECT s.watch_id, s.ts, s.mark
+       SELECT s.watch_id, s.ts, s.mark, s.volume, s.open_interest
          FROM b JOIN watch_snapshots s
            ON s.watch_id = b.watch_id
           AND s.ts >= b.start_ms AND s.ts < $3
@@ -1108,6 +1333,8 @@ async function computeResults(date) {
             COUNT(*)::int                                          AS samples,
             (array_agg(snaps.mark ORDER BY snaps.ts ASC))[1]        AS entry,
             (array_agg(snaps.ts   ORDER BY snaps.ts ASC))[1]        AS entry_ts,
+            (array_agg(snaps.volume        ORDER BY snaps.ts ASC))[1] AS entry_volume,
+            (array_agg(snaps.open_interest ORDER BY snaps.ts ASC))[1] AS entry_oi,
             MAX(snaps.mark)                                         AS max_mark,
             (array_agg(snaps.ts ORDER BY snaps.mark DESC, snaps.ts ASC))[1] AS max_ts,
             MIN(snaps.mark)                                         AS min_mark,
@@ -1122,6 +1349,20 @@ async function computeResults(date) {
   );
   const byId = new Map(aggs.map((a) => [a.watch_id, a]));
 
+  // Signed tape from each pick's flag to the close — one query per pick on the
+  // (date, underlying_norm, ts) index. Best-effort: a tape outage leaves nulls.
+  const flowById = new Map();
+  for (let i = 0; i < picks.length; i++) {
+    const r = picks[i];
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      flowById.set(r.watch_id, await contractFlow(p, {
+        date: d, symbol: r.symbol, expiry: r.expiry, strike: r.strike,
+        type: r.side || pickSide(r), fromMs: starts[i], toMs: bounds.end,
+      }));
+    } catch { /* leave unset */ }
+  }
+
   const rows = picks.map((r) => {
     const a = byId.get(r.watch_id) || {};
     // added_price is the mark at the ORIGINAL probe; on the day a pick first
@@ -1134,7 +1375,11 @@ async function computeResults(date) {
     const sustained = a.sustained_mark != null ? Number(a.sustained_mark) : null;
     const label = PG.gradeFor({
       max_pct: pctOf(max, entry), min_pct: pctOf(min, entry), close_pct: pctOf(close, entry),
+      sustained_pct: pctOf(sustained, entry),
     });
+    const eVol = Number(a.entry_volume), eOi = Number(a.entry_oi);
+    const entryVolOi = Number.isFinite(eVol) && eOi > 0 ? eVol / eOi : null;
+    const fl = flowById.get(r.watch_id) || null;
     return {
       date: d,
       watch_id: r.watch_id,
@@ -1164,6 +1409,10 @@ async function computeResults(date) {
       grade: label ? label.grade : null,
       grade_pts: label ? label.pts : null,
       samples: a.samples || 0,
+      entry_vol_oi: entryVolOi,
+      flow_buy: fl && fl.n > 0 ? fl.buy : null,
+      flow_sell: fl && fl.n > 0 ? fl.sell : null,
+      flow_n: fl ? fl.n : null,
     };
   });
   // Best performer first — the table is a "what was on offer" ranking.
@@ -1188,9 +1437,10 @@ async function runResults({ date } = {}) {
            (date, watch_id, symbol, expiry, strike, side, first_slot, slots, best_rank, score,
             entry, entry_ts, max_mark, max_ts, max_pct, min_mark, min_pct,
             close_mark, close_ts, close_pct, samples, recorded_at,
-            min_ts, sustained_mark, sustained_ts, sustained_pct, grade, grade_pts, selected)
+            min_ts, sustained_mark, sustained_ts, sustained_pct, grade, grade_pts, selected,
+            entry_vol_oi, flow_buy, flow_sell, flow_n)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW(),
-                 $22,$23,$24,$25,$26,$27,$28)
+                 $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
          ON CONFLICT (date, watch_id) DO UPDATE SET
            side = EXCLUDED.side, first_slot = EXCLUDED.first_slot, slots = EXCLUDED.slots,
            best_rank = EXCLUDED.best_rank, score = EXCLUDED.score,
@@ -1203,12 +1453,15 @@ async function runResults({ date } = {}) {
            sustained_mark = EXCLUDED.sustained_mark, sustained_ts = EXCLUDED.sustained_ts,
            sustained_pct = EXCLUDED.sustained_pct,
            grade = EXCLUDED.grade, grade_pts = EXCLUDED.grade_pts,
-           selected = EXCLUDED.selected`,
+           selected = EXCLUDED.selected,
+           entry_vol_oi = EXCLUDED.entry_vol_oi,
+           flow_buy = EXCLUDED.flow_buy, flow_sell = EXCLUDED.flow_sell, flow_n = EXCLUDED.flow_n`,
         [r.date, r.watch_id, r.symbol, r.expiry, r.strike, r.side, r.first_slot, r.slots,
          r.best_rank, r.score, r.entry, r.entry_ts, r.max_mark, r.max_ts, r.max_pct,
          r.min_mark, r.min_pct, r.close_mark, r.close_ts, r.close_pct, r.samples,
          r.min_ts, r.sustained_mark, r.sustained_ts, r.sustained_pct,
-         r.grade, r.grade_pts, r.selected !== false],
+         r.grade, r.grade_pts, r.selected !== false,
+         r.entry_vol_oi, r.flow_buy, r.flow_sell, r.flow_n],
       );
       written++;
     } catch (e) {
@@ -1217,6 +1470,18 @@ async function runResults({ date } = {}) {
   }
   console.log(`[gex-change-top] EOD scorecard ${out.date}: froze ${written} pick result(s)`);
   return { ok: true, date: out.date, written };
+}
+
+/**
+ * Re-grade a frozen row from its stored percentages. The ladder's PEAK input
+ * moved to sustained_pct on 2026-09-23 (see PG.peakBasis); re-grading on read
+ * keeps every date on one basis instead of a label that changes meaning at a
+ * deploy. The frozen `grade` column is left as written — it is the record of
+ * what the old basis said.
+ */
+function regrade(r) {
+  const label = PG.gradeFor(r);
+  return label ? { ...r, grade: label.grade, grade_pts: label.pts } : r;
 }
 
 /**
@@ -1238,7 +1503,7 @@ async function getResults({ date } = {}) {
     if (rows.length) {
       return {
         ok: true, date: d, frozen: true,
-        rows: rows.map((r) => ({
+        rows: rows.map((r) => regrade({
           ...r,
           strike: Number(r.strike),
           score: r.score == null ? null : Number(r.score),
@@ -1257,6 +1522,10 @@ async function getResults({ date } = {}) {
           sustained_pct: r.sustained_pct == null ? null : Number(r.sustained_pct),
           sustained_ts: r.sustained_ts == null ? null : Number(r.sustained_ts),
           grade_pts: r.grade_pts == null ? null : Number(r.grade_pts),
+          entry_vol_oi: r.entry_vol_oi == null ? null : Number(r.entry_vol_oi),
+          flow_buy: r.flow_buy == null ? null : Number(r.flow_buy),
+          flow_sell: r.flow_sell == null ? null : Number(r.flow_sell),
+          flow_n: r.flow_n == null ? null : Number(r.flow_n),
         })),
       };
     }
@@ -1302,6 +1571,7 @@ async function studyRows({ days = 60, cohort = 'selected' } = {}) {
     `SELECT r.date, r.watch_id, r.symbol, r.expiry, r.strike, r.side, r.first_slot,
             r.entry, r.max_pct, r.min_pct, r.close_pct, r.sustained_pct,
             r.grade, r.grade_pts, COALESCE(r.selected, TRUE) AS selected,
+            r.entry_vol_oi AS vol_oi,
             t.slot, t.rank, t.score, t.spot, t.latest_chg, t.pct_open, t.z_score,
             t.proj_grade, t.proj_pts,
             -- Provenance, and the two capture-time facts added 2026-09-05.
@@ -1310,7 +1580,8 @@ async function studyRows({ days = 60, cohort = 'selected' } = {}) {
             -- capture — reading it as "unknown scan" would put it in no bucket.
             -- n_samples/gex_open stay null on purpose for rows captured before
             -- they existed; see the ALTER TABLE note above.
-            COALESCE(t.live, FALSE) AS live, t.n_samples, t.gex_open
+            COALESCE(t.live, FALSE) AS live, t.n_samples, t.gex_open,
+            t.score_abs, t.flow_buy_pre, t.flow_sell_pre, t.flow_n_pre
        FROM gex_change_top_results r
        JOIN LATERAL (
          SELECT g.* FROM gex_change_top g
@@ -1323,8 +1594,10 @@ async function studyRows({ days = 60, cohort = 'selected' } = {}) {
     [String(d), cohort === 'all' ? 'all' : cohort === 'shadow' ? 'shadow' : 'selected'],
   );
   const out = rows.map((r) => {
-    // Prefer the frozen label; fall back for rows written before grading existed.
-    const label = r.grade ? { grade: r.grade, pts: Number(r.grade_pts) } : PG.gradeFor(r);
+    // Re-graded from the stored percentages so the whole window is on one peak
+    // basis (sustained, see PG.peakBasis). The frozen label is only used when
+    // the percentages themselves are missing.
+    const label = PG.gradeFor(r) || (r.grade ? { grade: r.grade, pts: Number(r.grade_pts) } : null);
     return {
       ...r,
       strike: Number(r.strike),
@@ -1629,8 +1902,9 @@ let _timer = null;
 let _liveTimer = null;
 let _eodTimer = null;
 let _lastEodDate = null;
-function startGexChangeTopRecorder(port) {
+function startGexChangeTopRecorder(port, opts = {}) {
   if (Number(port) > 0) PORT_HINT = Number(port); // internal /api/watch hop target
+  if (typeof opts.trackPickFlow === 'function') _trackPickFlow = opts.trackPickFlow;
   if (!process.env.DATABASE_URL) {
     console.log('[gex-change-top] no DATABASE_URL — recorder idle.');
     return;
@@ -1695,6 +1969,6 @@ function startGexChangeTopRecorder(port) {
 module.exports = {
   getStudy, getCalibration,
   fitProjRule, getRuleState, storeRule, loadStoredRule,
-  startGexChangeTopRecorder, runOnce, runLive, getHistory, getPickHistory,
+  startGexChangeTopRecorder, runOnce, runLive, getHistory, getPickHistory, getPickFlow,
   runResults, getResults, computeResults, ensureSchema,
 };

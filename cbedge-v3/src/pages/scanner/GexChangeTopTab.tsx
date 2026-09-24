@@ -128,6 +128,11 @@ import {
   SCORE_LEGEND,
   SCORECARD_COLUMNS,
   SCORECARD_FOOTNOTE,
+  SCORE_ABS_TITLE,
+  SCORE_REL_TITLE,
+  TAPE_CHIP_TITLE,
+  TAPE_LINE_LABEL,
+  TAPE_NONE,
   SCORECARD_TITLE,
   SPOT_LABEL,
   STAR_LEGEND_LEAD,
@@ -142,6 +147,12 @@ import {
   anyProjected,
   avgPeakColor,
   cardRenderKey,
+  cardScore,
+  flowColor,
+  fmtFlow,
+  fmtVolOi,
+  metricHasZeroLine,
+  preFlagNet,
   cardSubtitle,
   cardTitle,
   chartHint,
@@ -208,9 +219,11 @@ import {
   underFloorTitle,
   yDomain,
 } from '@/pages/scanner/gexChangeTop'
-import type { HistoryResponse, ResultsResponse, TopResponse } from '@/pages/scanner/gexChangeTopData'
+import type { FlowResponse, HistoryResponse, ResultsResponse, TopResponse } from '@/pages/scanner/gexChangeTopData'
 import {
   HISTORY_STALE_MS,
+  flowPoints,
+  pickFlowUrl,
   NO_STORE_STALE_MS,
   gexChangeTopUrls,
   pickHistView,
@@ -976,6 +989,19 @@ function scorecardColumns(frozen: boolean): Column<ResultRow>[] {
     // C86 — NEVER coloured. A −60% MAE is the same ink as a −2% one, even though
     // it is the pain ladder's whole input.
     lowPct: (r) => <span style={{ color: T.text }}>{fmtPctSigned(r.min_pct)}</span>,
+    // 2026-09-23 — the sustained peak the grade is scored on.
+    heldPct: (r) => (
+      <span style={{ color: r.sustained_pct == null ? T.text : peakPctTableColor(r.sustained_pct) }}>
+        {fmtPctSigned(r.sustained_pct ?? null)}
+      </span>
+    ),
+    volOi: (r) => <span style={{ color: T.text }}>{fmtVolOi(r.entry_vol_oi)}</span>,
+    tape: (r) => {
+      const net = r.flow_n != null && r.flow_n > 0 && r.flow_buy != null && r.flow_sell != null
+        ? r.flow_buy - r.flow_sell
+        : null
+      return <span style={{ color: flowColor(net) }}>{fmtFlow(net)}</span>
+    },
   }
 
   return SCORECARD_COLUMNS.map((c) => ({
@@ -1238,7 +1264,22 @@ function PickCard({
             {/* C118 — the span renders even when null, unlike C117. */}
             <span style={{ color: pctOpenColor(row.pct_open) }}>{fmtPctOpen(row.pct_open)}</span>
             {/* C119 — server-computed. The formula is the footer legend (C154). */}
-            <span style={{ color: V2.cyan }}>{fmtScore(row.score)}</span>
+            {(() => {
+              const sc = cardScore(row)
+              return (
+                <span style={{ color: V2.cyan }} title={sc.abs ? SCORE_ABS_TITLE : SCORE_REL_TITLE}>
+                  {fmtScore(sc.v)}
+                </span>
+              )
+            })()}
+            {/* 2026-09-23 — signed tape BEFORE the flag. Omitted when there were
+                no prints (null), rather than a dash: most early picks will not
+                have been on the tape yet. */}
+            {preFlagNet(row) != null && (
+              <span title={TAPE_CHIP_TITLE} style={{ color: flowColor(preFlagNet(row)) }}>
+                {TAPE_LINE_LABEL} {fmtFlow(preFlagNet(row))}
+              </span>
+            )}
             {/* C120 — renders nothing when `proj_grade` is null, the shipping default. */}
             <ProjPill grade={row.proj_grade} pts={row.proj_pts} />
           </div>
@@ -1374,6 +1415,14 @@ function PickBack({
   // `points` is a prop of the chart, and a fresh array every render would make
   // the chart redraw on every parent render for data that has not moved.
   const hist = useMemo(() => pickHistView(q.data, q.error), [q.data, q.error])
+  // The SIGNED tape on this contract (2026-09-23). Same lifecycle as the
+  // history: mounted with the back, keyed by watch_id, polled with it.
+  const fq = useQuery<FlowResponse>(wid != null ? pickFlowUrl(wid, dateArg) : null, {
+    staleMs: HISTORY_STALE_MS,
+    pollMs,
+  })
+  const tapePoints = useMemo(() => flowPoints(fq.data), [fq.data])
+  const tape = fq.data?.ok ? fq.data : undefined
   const v = derivePickCard({ row, slot, date, index, hist })
 
   return (
@@ -1495,6 +1544,36 @@ function PickBack({
             <span style={{ color: pnlColor(v.pnlPct) }}>{fmtNowPct(v.pnlPct)}</span>
           )}
         </div>
+
+        {/* 2026-09-23 — the signed tape on this contract: net before the flag
+            (the change window), net since, and the buy / sell split. */}
+        <div
+          className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-2xs"
+          style={{ color: T.text }}
+          title={TAPE_CHIP_TITLE}
+        >
+          <span className="mr-1 text-3xs uppercase tracking-wide">{TAPE_LINE_LABEL}</span>
+          {!tape || !(tape.day?.n) ? (
+            <span className="opacity-65">{TAPE_NONE}</span>
+          ) : (
+            <>
+              {tape.pre && tape.pre.n > 0 && (
+                <>
+                  <span className="opacity-65">pre </span>
+                  <span style={{ color: flowColor(tape.pre.net) }}>{fmtFlow(tape.pre.net)}</span>
+                  <span className="opacity-65"> · </span>
+                </>
+              )}
+              <span className="opacity-65">since </span>
+              <span className="font-bold" style={{ color: flowColor(tape.post?.net) }}>
+                {fmtFlow(tape.post?.net)}
+              </span>
+              <span className="opacity-65">
+                {` (B ${fmtFlow(tape.post?.buy).replace('+', '')} / S ${fmtFlow(tape.post?.sell).replace('+', '')} · ${tape.post?.n ?? 0})`}
+              </span>
+            </>
+          )}
+        </div>
       </div>
 
       {/* v2's `.op-toolbar`: RANGE LEFT, METRIC RIGHT, one row, `justify-between`. */}
@@ -1524,7 +1603,7 @@ function PickBack({
         </div>
       ) : (
         <PickChart
-          points={hist?.points ?? EMPTY_POINTS}
+          points={metric === 'flow' ? tapePoints : hist?.points ?? EMPTY_POINTS}
           metric={metric}
           entry={v.entry}
           // C149 — no peak marker on Net GEX, where a "high" means nothing.
@@ -1797,7 +1876,7 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
   }
 
   // C146 — mutually exclusive by metric.
-  if (s.metric === 'net_gex' && minY < 0 && maxY > 0) {
+  if (metricHasZeroLine(s.metric) && minY < 0 && maxY > 0) {
     const zy = sy(0)
     root.appendChild(
       paint(mk('line', { x1: GEO.PADL, y1: zy, x2: W - GEO.PADR, y2: zy, 'stroke-width': 1 }), {

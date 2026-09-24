@@ -16330,6 +16330,164 @@ try {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
+    // /api/lse/repeated-flow — REPEATED FLOW (2026-09-24). Backs the Repeated
+    // flow section on /v3/whales.
+    //
+    // The whale archive answers "who swung a million dollars". This answers the
+    // other question: "who keeps coming back to the SAME contract". Every print
+    // of at least `min_premium` (default $50K, never below TF_BASE_MIN_PREMIUM —
+    // nothing smaller is ever captured) is grouped by contract, and a contract
+    // only shows when it was hit at least `min_orders` times (5 / 10 / 25).
+    //
+    // ── ONLY THE LAST SEVEN DAYS ─────────────────────────────────────────────
+    // Below the whale floor the table is a rolling TF_RETAIN_DAYS mirror (see
+    // the WHALES ARE NEVER SWEPT note), so `from` is clamped to that window.
+    // A wider ask would silently return only the $1M+ survivors of older days
+    // and call them "repeats" — the response carries `clamped` instead.
+    //
+    // ── AN ORDER IS A PRINT ──────────────────────────────────────────────────
+    // The capture has no sweep/block flag, so "order count" is the number of
+    // stored prints on the contract. `bullN`/`bearN` count them by DIRECTION
+    // (same WH_BIAS_SQL as the archive) so the page can say how one-sided the
+    // repetition was — 25 hits split 13/12 is noise, 25/0 is a signal.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Contracts returned. Past this it is a scroll, not a signal. */
+    const RF_MAX_CONTRACTS = 60;
+    const RF_ORDER_STOPS = [5, 10, 25];
+
+    register('/api/lse/repeated-flow', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+
+        const today = tfEtDate(new Date());
+        // Oldest session the rolling mirror still holds in full.
+        const oldest = tfEtDate(new Date(Date.now() - (TF_RETAIN_DAYS - 1) * 86_400_000));
+        const rawFrom = String(params.get('from') || '').trim();
+        const rawTo = String(params.get('to') || '').trim();
+        let from = YMD.test(rawFrom) ? rawFrom : today;
+        let to = YMD.test(rawTo) ? rawTo : today;
+        if (from > to) { const t = from; from = to; to = t; }
+        let clamped = false;
+        if (from < oldest) { from = oldest; clamped = true; }
+        if (to < from) to = from;
+
+        const askedFloor = Number(params.get('min_premium'));
+        const minPremium = Math.max(
+          Number.isFinite(askedFloor) ? askedFloor : TF_BASE_MIN_PREMIUM,
+          TF_BASE_MIN_PREMIUM,
+        );
+        const askedOrders = Number(params.get('min_orders'));
+        const minOrders = Number.isFinite(askedOrders) && askedOrders >= RF_ORDER_STOPS[0]
+          ? Math.min(Math.floor(askedOrders), 500)
+          : RF_ORDER_STOPS[0];
+
+        const ticker = String(params.get('ticker') || '').trim().toUpperCase().slice(0, 12) || null;
+        const rawType = String(params.get('type') || '').trim().toUpperCase().slice(0, 1);
+        const type = rawType === 'C' || rawType === 'P' ? rawType : null;
+        const rawAction = String(params.get('action') || '').trim().toUpperCase();
+        const action = rawAction === 'BUY' || rawAction === 'SELL' ? rawAction : null;
+        const rawDte = params.get('max_dte');
+        const dteNum = rawDte === null || rawDte === '' ? NaN : Number(rawDte);
+        const maxDte = Number.isFinite(dteNum) && dteNum >= 0 ? Math.floor(dteNum) : null;
+        const moneyness = params.get('moneyness') === 'otm' ? 'otm' : 'all';
+        const sides = params.get('sides') === 'all' ? 'all' : 'directional';
+        const askedMaxPrice = Number(params.get('max_price'));
+        const maxPrice = Number.isFinite(askedMaxPrice) && askedMaxPrice > 0 ? askedMaxPrice : null;
+
+        const empty = {
+          range: { from, to },
+          clamped,
+          retainDays: TF_RETAIN_DAYS,
+          minPremium,
+          minOrders,
+          summary: { contracts: 0, orders: 0, premium: 0 },
+          contracts: [],
+        };
+
+        if (!libDb) {
+          return send(res, 200, { ...empty, error: 'No database configured — repeated flow is unavailable.' },
+            { 'Cache-Control': NO_STORE });
+        }
+
+        try {
+          await tfEnsureSchema();
+          const f = whFilter({ from, to, minPremium, maxPrice, ticker, type, action, moneyness, maxDte });
+          const cte = whCte(f.sql, sides === 'all' ? 'TRUE' : 'act IS NOT NULL');
+
+          const rows = await libDb.queryAll(`${cte},
+            g AS (
+              SELECT osi,
+                     MAX(ticker)                                                  AS ticker,
+                     MAX(payload->>'strike')                                      AS strike,
+                     MAX(opt_type)                                                AS type,
+                     MAX(payload->>'expiry')                                      AS expiry,
+                     COUNT(*)::int                                                AS n,
+                     (COUNT(*) FILTER (WHERE bias = 'bull'))::int                 AS bull_n,
+                     (COUNT(*) FILTER (WHERE bias = 'bear'))::int                 AS bear_n,
+                     COALESCE(SUM(premium), 0)                                    AS total,
+                     COALESCE(SUM(premium) FILTER (WHERE bias = 'bull'), 0)       AS bull,
+                     COALESCE(SUM(premium) FILTER (WHERE bias = 'bear'), 0)       AS bear,
+                     COALESCE(SUM(premium) FILTER (WHERE act = 'BUY'), 0)         AS bought,
+                     COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold,
+                     COALESCE(SUM((payload->>'size')::float8), 0)                 AS size,
+                     AVG(NULLIF(payload->>'price', '')::float8)                   AS avg_price,
+                     MIN(ts)                                                      AS first_ts,
+                     MAX(ts)                                                      AS last_ts,
+                     COUNT(DISTINCT session_date)::int                            AS sessions
+                FROM s
+               WHERE osi IS NOT NULL
+               GROUP BY osi
+              HAVING COUNT(*) >= ?
+            )
+            SELECT g.*,
+                   COUNT(*) OVER ()::int          AS all_contracts,
+                   SUM(g.n) OVER ()               AS all_orders,
+                   SUM(g.total) OVER ()           AS all_premium
+              FROM g
+             ORDER BY g.n DESC, g.total DESC
+             LIMIT ?`, [...f.params, minOrders, RF_MAX_CONTRACTS]);
+
+          const first = (rows && rows[0]) || null;
+          return send(res, 200, {
+            ...empty,
+            summary: {
+              contracts: whNum(first && first.all_contracts),
+              orders: whNum(first && first.all_orders),
+              premium: whNum(first && first.all_premium),
+            },
+            contracts: (rows || []).map((r) => ({
+              osi: String(r.osi),
+              ticker: r.ticker ? String(r.ticker) : '',
+              strike: r.strike === null || r.strike === undefined ? '' : String(r.strike),
+              type: r.type ? String(r.type) : '',
+              expiry: r.expiry ? String(r.expiry) : '',
+              n: whNum(r.n),
+              bullN: whNum(r.bull_n),
+              bearN: whNum(r.bear_n),
+              total: whNum(r.total),
+              bull: whNum(r.bull),
+              bear: whNum(r.bear),
+              bought: whNum(r.bought),
+              sold: whNum(r.sold),
+              size: whNum(r.size),
+              avgPrice: r.avg_price === null || r.avg_price === undefined ? null : whNum(r.avg_price),
+              firstTs: whNum(r.first_ts),
+              lastTs: whNum(r.last_ts),
+              sessions: whNum(r.sessions),
+            })),
+            error: null,
+          }, { 'Cache-Control': NO_STORE });
+        } catch (e) {
+          console.error('[api-router] /api/lse/repeated-flow failed:', e && e.message ? e.message : e);
+          return send(res, 200, { ...empty, error: `Repeated flow query failed: ${e && e.message ? e.message : String(e)}` },
+            { 'Cache-Control': NO_STORE });
+        }
+      },
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
     // /api/lse/contract-candles — the CONTRACT PROBE's bars.
     //
     // Same vault call as /api/lse/option-candles below, and deliberately not the

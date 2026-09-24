@@ -94,6 +94,11 @@ import type { PickContract, PickHist, PickPoint, ResultRow, SlotBucket } from '@
 export const EP_TOP = '/proxy/gex-change-top'
 /** C10 — one auto-probed contract's option price / net GEX for one ET session. */
 export const EP_HISTORY = '/proxy/gex-change-top-history'
+/**
+ * One pick's SIGNED tape (buy vs sell premium on its own contract, from
+ * flow_prints), split at the flag, plus per-minute cumulative net. 2026-09-23.
+ */
+export const EP_FLOW = '/proxy/gex-change-top-flow'
 /** C8 — the EOD scorecard. Frozen after the close; computed live before it. */
 export const EP_RESULTS = '/proxy/gex-change-top-results'
 /**
@@ -182,6 +187,55 @@ export interface HistoryResponse {
   error?: string
   points?: PickPoint[]
   contract?: PickContract | null
+}
+
+/** Totals for one window of the tape. `n: 0` = nothing on the tape. */
+export interface FlowTotals {
+  n: number
+  buy: number
+  sell: number
+  net: number
+  largest: number
+  lastTs: number | null
+}
+
+export interface FlowBin {
+  ts: number
+  buy: number
+  sell: number
+  n: number
+  /** Running buy − sell since the first print of the session. */
+  cum: number
+}
+
+export interface FlowResponse {
+  ok?: boolean
+  error?: string
+  flag_ts?: number | null
+  window_min?: number
+  contract?: { symbol: string; expiry: string; strike: number; type: string } | null
+  /** The change window BEFORE the flag. Null when the flag time is unknown. */
+  pre?: FlowTotals | null
+  /** Flag → end of session. */
+  post?: FlowTotals | null
+  day?: FlowTotals | null
+  bins?: FlowBin[]
+}
+
+export function pickFlowUrl(watchId: number, date?: string): string {
+  const base = `${EP_FLOW}?id=${encodeURIComponent(String(watchId))}`
+  return date ? `${base}&date=${encodeURIComponent(date)}` : base
+}
+
+/**
+ * The flow bins as chart points (`flow_cum` only), RTH-filtered like the price
+ * history so the two share an x-axis.
+ */
+export function flowPoints(data: FlowResponse | undefined): PickPoint[] {
+  if (!data?.ok || !Array.isArray(data.bins)) return []
+  return data.bins
+    .filter((b) => isRth(Number(b.ts)))
+    .map((b) => ({ ts: Number(b.ts), mark: null, net_gex: null, flow_cum: Number(b.cum) }))
 }
 
 /**

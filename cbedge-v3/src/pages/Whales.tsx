@@ -9,6 +9,7 @@ import { biasOf, biasTitle } from '@/board/topFlow/TopFlowCard'
 import { TrackedAlertsCard, TrackButton } from './whales/TrackedAlertsCard'
 import { contractKey, useWhaleAlerts } from './whales/alertsStore'
 import { NetDriftPanel } from './whales/NetDriftPanel'
+import { RepeatedFlowCard, type RepeatedFlowFilters } from './whales/RepeatedFlowCard'
 import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1031,6 +1032,16 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
             </div>
           </Card>
   )
+  // Repeated flow follows the page's contract filters but NOT its floor or
+  // range — it has its own (see RepeatedFlowCard). Memoised so the card's URL
+  // memo does not recompute on every render.
+  const rfFilters = useMemo<RepeatedFlowFilters>(
+    () => ({ ticker, type, action, moneyness, maxDte, maxPrice, showUnreadable }),
+    [ticker, type, action, moneyness, maxDte, maxPrice, showUnreadable],
+  )
+  const repeatedFlowCard = (
+    <RepeatedFlowCard filters={rfFilters} onOpen={lookupContract} phone={phone} />
+  )
   const repeatsCard = (
           <Card title="Repeat strikes" note="3+ whale prints, same contract">
             <div className="py-1">
@@ -1317,6 +1328,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
               {sizeCard}
               {bucketsCard}
               {repeatsCard}
+              {repeatedFlowCard}
             </div>
           )}
           {phoneTab === 'lookup' && <div className="p-3">{lookupCard}</div>}
@@ -1812,6 +1824,12 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
           {repeatsCard}
         </div>
       </div>
+
+      {/* ── repeated flow ──────────────────────────────────────────────────
+          Full width under both columns: it is a table, and the 320px rail
+          would fold it to three columns.
+      ──────────────────────────────────────────────────────────────────── */}
+      {repeatedFlowCard}
 
       {/* ── net drift + tracked contracts ──────────────────────────────────
           One row UNDER both columns, split in half: Net Drift (from /v3/flow)

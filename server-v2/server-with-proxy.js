@@ -160,7 +160,7 @@ const scannerVariants = require('./scanner-variants');
 const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
   getWatch, runWatchAlerts, getAlerts, startWallsWatch } = require('./walls-reach');
 const { startForwardScanner, runForwardSweep, getForward } = require('./forward-scanner-recorder');
-const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults, getStudy: getGexChangeTopStudy, getCalibration: getGexChangeTopCalibration, fitProjRule: fitGexChangeTopRule, getRuleState: getGexChangeTopRuleState, storeRule: storeGexChangeTopRule } = require('./gex-change-top-recorder');
+const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getPickFlow: getGexChangeTopPickFlow, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults, getStudy: getGexChangeTopStudy, getCalibration: getGexChangeTopCalibration, fitProjRule: fitGexChangeTopRule, getRuleState: getGexChangeTopRuleState, storeRule: storeGexChangeTopRule } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
   ALERT_CATALOG: SIGNAL_ALERT_CATALOG, listAlertSettings: listSignalAlertSettings,
@@ -3595,6 +3595,23 @@ async function main() {
         })();
         return;
       }
+      // One pick's SIGNED tape flow (buy vs sell premium on its own contract),
+      // split at the flag, plus per-minute cumulative net for the card back.
+      //   GET /proxy/gex-change-top-flow?id=<watch_id>&date=YYYY-MM-DD
+      //     → { ok, contract, flag_ts, pre, post, day, bins:[{ts,buy,sell,n,cum}] }
+      if (pathname === '/proxy/gex-change-top-flow' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await getGexChangeTopPickFlow({
+              watchId: u.searchParams.get('id'),
+              date: u.searchParams.get('date') || undefined,
+            });
+            sendJson(res, out.ok ? 200 : 404, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // EOD scorecard — how every auto-probed pick actually performed: peak mark
       // after the probe (and when it printed), low, and close.
       //   GET /proxy/gex-change-top-results?date=YYYY-MM-DD
@@ -4761,7 +4778,15 @@ async function main() {
     // Feeds /proxy/gex-change-top + the scanner "GEX Change Top" tab.
     // PORT is passed so the recorder can auto-probe each pick through the
     // origin's own /api/watch (internal-token hop) — see the recorder header.
-    startGexChangeTopRecorder(PORT);
+    // trackPickFlow puts each pick's own contract on the TimeAndSale tape — the
+    // picks sit >= 5% OTM, outside the multi-ticker flow window, so their signed
+    // prints never reached flow_prints otherwise. `proxy` is read at call time,
+    // so a feed restart (new TastytradeProxy) is picked up automatically.
+    startGexChangeTopRecorder(PORT, {
+      trackPickFlow: (c) => (proxy && typeof proxy.trackPickFlow === 'function'
+        ? proxy.trackPickFlow(c)
+        : Promise.resolve({ ok: false, error: 'feed not running' })),
+    });
     // NDX/SPY/QQQ 0DTE call/put wall recorder: writes one row per ticker every
     // 60s so the Walls & Flows tab's 5/15/30/60m windows persist server-side
     // instead of depending on a browser tab staying open. NDX runs 24/7;

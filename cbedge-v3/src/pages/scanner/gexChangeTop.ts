@@ -192,6 +192,21 @@ export interface Row {
    * leaderboard. Its slot is the exact ET minute of the crossing.
    */
   live?: boolean
+  /** How many 15-min deltas the strike had when flagged. Null before 2026-09-05. */
+  n_samples?: number | null
+  /** The open (OI-only) GEX `pct_open` is a ratio against. Null before 2026-09-05. */
+  gex_open?: number | null
+  /**
+   * The absolute, log-scaled score the recorder RANKS on since 2026-09-23 — 0 at
+   * the $ / % floors, 100 at $10M & 600%. Comparable across slots and days,
+   * unlike `score` (min-max within one slot). Null on older rows.
+   */
+  score_abs?: number | null
+  /** Signed tape on this contract in the change window BEFORE the flag. Null
+   *  when the tape had no prints for it (usually: not streamed yet). */
+  flow_buy_pre?: number | null
+  flow_sell_pre?: number | null
+  flow_n_pre?: number | null
 }
 
 /** `live` is true only when EVERY row in the bucket was trigger-written. */
@@ -260,6 +275,12 @@ export interface ResultRow {
    *  frozen before grading existed — `gradeFor()` falls back for those. */
   grade?: string | null
   grade_pts?: number | null
+  /** Contract volume ÷ OI on the entry snapshot (2026-09-23+). */
+  entry_vol_oi?: number | null
+  /** Signed tape on the contract from the flag to the close (2026-09-23+). */
+  flow_buy?: number | null
+  flow_sell?: number | null
+  flow_n?: number | null
 }
 
 /** One snapshot of the auto-probed contract. `/proxy/gex-change-top-history → points[]`. */
@@ -267,6 +288,14 @@ export interface PickPoint {
   ts: number
   mark: number | null
   net_gex: number | null
+  /** Contract day volume / OI / gross premium (vol × mark × 100) from the same
+   *  60s probe. Unsigned. Absent on responses from before 2026-09-23. */
+  volume?: number | null
+  open_interest?: number | null
+  net_prem?: number | null
+  /** Cumulative SIGNED tape premium (buy − sell) — only on points built from
+   *  `/proxy/gex-change-top-flow` bins, see `flowPoints`. */
+  flow_cum?: number | null
 }
 
 /** The probed contract's identity, as the history endpoint returns it. */
@@ -285,8 +314,12 @@ export interface PickHist {
   error?: string
 }
 
-/** The back face's two series. There is no third; see METRICS. */
-export type Metric = 'mark' | 'net_gex'
+/**
+ * The back face's series. `flow` is the cumulative signed tape premium on the
+ * contract (buy − sell, from flow_prints); `voloi` is contract volume ÷ OI from
+ * the probe snapshots. Both added 2026-09-23.
+ */
+export type Metric = 'mark' | 'net_gex' | 'flow' | 'voloi'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FIELDS ON THE WIRE WITH NO SURFACE
@@ -357,16 +390,26 @@ export const ENTRY_FLOOR = 0.5
 // is not carried onto `gex_change_top`, so it cannot be checked client-side on
 // rows already recorded. The recorder's 10:00 warm-up stands in for it.
 
-export const GATE = { chg: 500_000, pctOpen: 50, z: 2 } as const
+export const GATE = { chg: 500_000, pctOpen: 50, z: 2, gexOpen: 50_000, nSamples: 3 } as const
 
-/** Which switches are on. `z` defaults off — see the note above. */
+/**
+ * Which switches are on. `z` defaults off — see the note above.
+ *
+ * `open` and `n` (2026-09-23) are the denominator floor and the sample floor.
+ * Both OFF by default: they read `gex_open` / `n_samples`, which are null on
+ * rows captured before 2026-09-05, and a null FAILS — switched on over an older
+ * date they would hide everything. Judge them in Pick Study's "Open GEX" and
+ * "Samples" tables first.
+ */
 export interface GateOn {
   chg: boolean
   pct: boolean
   z: boolean
+  open: boolean
+  n: boolean
 }
 
-export const GATE_DEFAULT: GateOn = { chg: true, pct: true, z: false }
+export const GATE_DEFAULT: GateOn = { chg: true, pct: true, z: false, open: false, n: false }
 
 /**
  * The three conditions, each standing alone. Null fails: an unverifiable row is
@@ -381,10 +424,13 @@ export const GATE_DEFAULT: GateOn = { chg: true, pct: true, z: false }
  * WIRE WITH NO SURFACE says it is rendered nowhere, which is still true — it is
  * READ here, not displayed.
  */
+/** The fields the gate reads off a row. */
+export type GateRow = Pick<Row, 'latest_chg' | 'pct_open' | 'z_score' | 'gex_open' | 'n_samples'>
+
 export const GATE_TESTS: {
   key: keyof GateOn
   label: string
-  of: (r: Pick<Row, 'latest_chg' | 'pct_open' | 'z_score'>) => boolean
+  of: (r: GateRow) => boolean
 }[] = [
   {
     key: 'chg',
@@ -401,6 +447,16 @@ export const GATE_TESTS: {
     label: `|z| ≥ ${GATE.z}`,
     of: (r) => r.z_score != null && Math.abs(r.z_score) >= GATE.z,
   },
+  {
+    key: 'open',
+    label: `open GEX ≥ $${(GATE.gexOpen / 1000).toFixed(0)}k`,
+    of: (r) => r.gex_open != null && Math.abs(r.gex_open) >= GATE.gexOpen,
+  },
+  {
+    key: 'n',
+    label: `n ≥ ${GATE.nSamples}`,
+    of: (r) => r.n_samples != null && r.n_samples >= GATE.nSamples,
+  },
 ]
 
 /** Any switch on at all? Nothing on means the gate is inert and hides nothing. */
@@ -410,7 +466,7 @@ export function gateActive(on: GateOn): boolean {
 
 /** A row passes when every ENABLED condition passes. */
 export function passesGate(
-  r: Pick<Row, 'latest_chg' | 'pct_open' | 'z_score'>,
+  r: GateRow,
   on: GateOn,
 ): boolean {
   return GATE_TESTS.every((t) => !on[t.key] || t.of(r))
@@ -465,7 +521,7 @@ export interface GateCounts {
  * to `hidden`: a pick failing two conditions is counted by both.
  */
 export function gateCounts(slots: readonly SlotBucket[], on: GateOn): GateCounts {
-  const alone = { chg: 0, pct: 0, z: 0 } as Record<keyof GateOn, number>
+  const alone = { chg: 0, pct: 0, z: 0, open: 0, n: 0 } as Record<keyof GateOn, number>
   const active = gateActive(on)
   let total = 0
   let pass = 0
@@ -487,6 +543,12 @@ export function gateSwitchTitle(
   total: number,
 ): string {
   const base = `${label} — on its own this drops ${cost} of ${total} pick${total === 1 ? '' : 's'} on this date.`
+  if (key === 'open') {
+    return `${base}\n\nOFF BY DEFAULT. The denominator floor: pct_open is today's volume GEX over the OPEN (OI-only) GEX, so a strike with a few contracts of carried OI reads "+300%" off almost nothing. Null on rows before 2026-09-05, and a null fails.`
+  }
+  if (key === 'n') {
+    return `${base}\n\nOFF BY DEFAULT. With only 2 samples in the window the z-score is exactly 1 whatever happened, so a thin-sample pick carries no z information. Null on rows before 2026-09-05, and a null fails.`
+  }
   if (key !== 'z') return base
   return `${base}\n\nOFF BY DEFAULT. z is (latest − mean) / sd over this strike's own recent deltas, so it measures ACCELERATION, not size — a strike that builds steadily has z near zero by construction, and steady building is what this scanner is for. Use it to ask "show me only the bursts", not as a size filter.`
 }
@@ -529,8 +591,12 @@ export const FLIP_ALL_WAVE_SIZE = 6
 
 /** C136 — the back face's metric toggle, in this order. Default is `mark`. */
 export const METRICS: readonly { key: Metric; label: string }[] = [
+  // Short labels since 2026-09-23: four segments have to fit beside the 1D pill
+  // on a ~240px card back. `GEX` is still net GEX at the strike.
   { key: 'mark', label: 'Price' },
-  { key: 'net_gex', label: 'Net GEX' },
+  { key: 'net_gex', label: 'GEX' },
+  { key: 'flow', label: 'Tape' },
+  { key: 'voloi', label: 'V/OI' },
 ]
 
 /** C136 — one metric for the WHOLE tab, not one per card. Switching it on one
@@ -830,7 +896,7 @@ export function gradePoints(
 export type GradeInput = Pick<
   ResultRow,
   'max_pct' | 'min_pct' | 'close_pct' | 'grade' | 'grade_pts'
->
+> & Partial<Pick<ResultRow, 'sustained_pct'>>
 
 /**
  * C33–C36 — the grade for a scorecard row, or `null` for a row with nothing
@@ -872,7 +938,12 @@ export function gradeFor(r: GradeInput | null | undefined): GradeInfo | null {
       why: `${Number.isFinite(p) ? `${p}/100 · ` : ''}peak ${fmtPctSigned(r.max_pct)} · low ${fmtPctSigned(r.min_pct)} · close ${fmtPctSigned(r.close_pct)}`,
     }
   }
-  const pts = gradePoints(r.max_pct, r.min_pct, r.close_pct)
+  // PEAK BASIS (2026-09-23): the SUSTAINED peak when the row has one, falling
+  // back to the single-print max_pct — mirrors `peakBasis` in
+  // server-v2/_lib-pick-grade.cjs. The server re-grades on read, so this local
+  // path only runs for rows without a shipped grade.
+  const basis = r.sustained_pct != null && Number.isFinite(r.sustained_pct) ? r.sustained_pct : r.max_pct
+  const pts = gradePoints(basis, r.min_pct, r.close_pct)
   if (pts == null) return null
   const neverGreen = !(Number(r.max_pct) > 0)
   const grade: Grade = neverGreen
@@ -1544,6 +1615,56 @@ export function fmtScore(score: number | null): string {
   return `score ${score == null ? EM_DASH : score.toFixed(0)}`
 }
 
+/**
+ * The score a card shows: the absolute score when the row has one (comparable
+ * across slots), else the legacy per-slot score. Returns which one it is so the
+ * tooltip can say.
+ */
+export function cardScore(row: Pick<Row, 'score' | 'score_abs'>): { v: number | null; abs: boolean } {
+  if (row.score_abs != null && Number.isFinite(row.score_abs)) return { v: row.score_abs, abs: true }
+  return { v: row.score, abs: false }
+}
+export const SCORE_ABS_TITLE =
+  'Absolute score: 0.6·|Δ| + 0.4·|% vs open| on a fixed log scale — 0 at the $200k / 30% floors, 100 at $10M / 600%. Same meaning in every slot; this is what the board ranks on.'
+export const SCORE_REL_TITLE =
+  'Legacy score: 0.6·|Δ| + 0.4·|%| scaled against the biggest qualifier in THIS slot — not comparable across slots.'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAPE FLOW — the signed leg (2026-09-23)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** "+$1.2M" / "−$85k" — always signed; `—` for null. */
+export function fmtFlow(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return EM_DASH
+  const a = Math.abs(v)
+  const sign = v > 0 ? '+' : v < 0 ? '−' : ''
+  const body = a >= 1e6 ? `${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${(a / 1e3).toFixed(0)}k` : a.toFixed(0)
+  return `${sign}$${body}`
+}
+
+/** Net tape colour: bought up, sold down, flat neutral. */
+export function flowColor(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v) || v === 0) return T.text
+  return v > 0 ? V2.up : V2.red
+}
+
+/** Net of a pick's pre-flag tape, or null when there were no prints. */
+export function preFlagNet(row: Pick<Row, 'flow_buy_pre' | 'flow_sell_pre' | 'flow_n_pre'>): number | null {
+  if (!(Number(row.flow_n_pre) > 0)) return null
+  const b = Number(row.flow_buy_pre), s = Number(row.flow_sell_pre)
+  return Number.isFinite(b) && Number.isFinite(s) ? b - s : null
+}
+
+export const TAPE_CHIP_TITLE =
+  'Signed tape on this contract in the change window BEFORE it was flagged: buy premium − sell premium. The GEX build itself is unsigned volume and cannot tell bought from sold — this is the leg that can.'
+export const TAPE_LINE_LABEL = 'tape'
+export const TAPE_NONE = 'no prints on the tape yet'
+
+/** Scorecard cells. */
+export function fmtVolOi(v: number | null | undefined): string {
+  return v == null || !Number.isFinite(v) ? EM_DASH : `${v.toFixed(2)}×`
+}
+
 /** C117 — "OTM 3.4%", one decimal. The caller omits the span entirely when null. */
 export function fmtOtm(otmPct: number): string {
   return `OTM ${otmPct.toFixed(1)}%`
@@ -1561,7 +1682,11 @@ export function chartHint(v: {
   peakTs: number | null
   lastTs: number | null
 }): string {
-  const head = v.metric === 'mark' ? 'price (mark)' : 'net gex @ strike'
+  const head =
+    v.metric === 'mark' ? 'price (mark)'
+    : v.metric === 'net_gex' ? 'net gex @ strike'
+    : v.metric === 'flow' ? 'tape net (buy − sell) · cumulative'
+    : 'contract vol ÷ OI'
   const peakStamp = v.peakTs != null ? ` ${fmtClock(v.peakTs)}` : ''
   return `${head} · RTH · in ${fmtPx(v.entry)} ${v.trigLabel} · high ${fmtPx(v.peakMark)}${peakStamp} · ${ago(v.lastTs)}`
 }
@@ -1580,7 +1705,13 @@ export function chartHint(v: {
 export function pickSeries(points: readonly PickPoint[], metric: Metric): { ts: number; v: number }[] {
   const out: { ts: number; v: number }[] = []
   for (const p of points) {
-    const v = metric === 'mark' ? p.mark : p.net_gex
+    const v =
+      metric === 'mark' ? p.mark
+      : metric === 'net_gex' ? p.net_gex
+      : metric === 'flow' ? p.flow_cum
+      : p.volume != null && p.open_interest != null && p.open_interest > 0
+        ? p.volume / p.open_interest
+        : null
     if (v == null || !Number.isFinite(v)) continue
     out.push({ ts: p.ts, v })
   }
@@ -1631,7 +1762,14 @@ export const Y_TICK_FRACTIONS: readonly number[] = [0, 0.5, 1]
 
 /** C144 — the y tick label format. Net GEX takes the `$` form; Price is bare 2dp. */
 export function chartValueLabel(v: number, metric: Metric): string {
-  return metric === 'net_gex' ? fmtGex(v) : v.toFixed(2)
+  if (metric === 'net_gex' || metric === 'flow') return fmtGex(v)
+  if (metric === 'voloi') return `${v.toFixed(2)}×`
+  return v.toFixed(2)
+}
+
+/** Metrics whose zero line is meaningful (drawn when the domain spans 0). */
+export function metricHasZeroLine(metric: Metric): boolean {
+  return metric === 'net_gex' || metric === 'flow'
 }
 
 /**
@@ -1877,10 +2015,15 @@ export const SCORECARD_COLUMNS: readonly { key: string; label: string; align: 'l
   { key: 'peak', label: 'Peak', align: 'right' }, // C80
   { key: 'peakAt', label: 'Peak at', align: 'left' }, // C81
   { key: 'peakPct', label: 'Peak %', align: 'right' }, // C82
+  // 2026-09-23 — the sustained peak (held two snapshots). The GRADE is scored on
+  // this, not on Peak %, so it sits right beside it.
+  { key: 'heldPct', label: 'Held %', align: 'right' },
   { key: 'perContract', label: '$/ct', align: 'right' }, // C83
   { key: 'close', label: 'Close', align: 'right' }, // C84
   { key: 'closePct', label: 'Close %', align: 'right' }, // C85
   { key: 'lowPct', label: 'Low %', align: 'right' }, // C86 — NEVER coloured
+  { key: 'volOi', label: 'Vol/OI', align: 'right' }, // entry snapshot, 2026-09-23+
+  { key: 'tape', label: 'Tape net', align: 'right' }, // flag → close, 2026-09-23+
 ]
 
 /** C87 — the table footnote. Disappears with the table, so it is not shown under the empty state. */

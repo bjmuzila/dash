@@ -35,10 +35,10 @@ import { brandLogoUrl } from "@/lib/brand";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 const LOGO_URL = brandLogoUrl(SITE_URL);
-// The sandbox host is the only Voltick URL this repo can prove exists (see
-// lib/emails/voltick-invite.ts). If Voltick has a public marketing domain by
-// send time, pass it as transferUrl rather than editing this default.
-const VOLTICK_URL = "https://voltick.cbedge.net";
+// Brandon's Voltick referral link. Always the /bzila path, never a bare domain
+// and never the old sandbox host (voltick.cbedge.net), which is what an earlier
+// send pointed at. Override per-run with transferUrl rather than editing this.
+const VOLTICK_URL = "https://voltick.io/bzila";
 
 // The offer, in one place. TICK75 must exist on the Voltick side before this
 // sends; the email is the discount the checkout actually honours.

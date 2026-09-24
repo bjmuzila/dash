@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-24 - Whale Archive: Repeated flow section
+
+- New **Repeated flow** section on `/v3/whales` (full width under the prints and the right column; on phone it sits in the SIZE tab). It shows contracts hit again and again with orders of at least **$50K** each, keeping only the ones with at least **5 / 10+ / 25+** orders (5 is the default).
+- The section has its own controls: TODAY / 5D, ORDERS 5+ / 10+ / 25+, and PER ORDER ≥$50K / $100K / $250K / $500K, saved per browser. It uses the page's ticker, C/P, side, DTE, strike, price and unreadable filters, but not the $1M floor or the range.
+- Each row shows the order count, which way the orders lean (BULL/BEAR with the % of readable orders), bull and bear counts, contracts, average fill, first and last hit, and premium. Clicking a row opens the contract in the lookup.
+- New `GET /api/lse/repeated-flow` (subscriber) reads `lse_top_flow_prints`, grouped by contract. Below the whale floor that table only keeps 7 days, so `from` is clamped to that window and the response says `clamped`. An "order" is one stored print, because the capture has no sweep flag.
+- Files: `server-v2/api-router.js`, `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx` (new), `cbedge-v3/src/pages/Whales.tsx`.
+
+## 2026-09-23 - GEX Change Top: sustained grading, absolute score, pick tape flow
+
+- **Grade basis → sustained peak.** The ladder now scores the peak on `sustained_pct` (best level held two snapshots), falling back to `max_pct` on older rows. Boundaries unchanged. `/results` and the study re-grade on read so every date is on one basis; the frozen `grade` column is left as written. Scorecard gains a **Held %** column.
+- **Absolute score.** New `score_abs` (same 0.6/0.4 blend on a fixed log scale: 0 at $200k/30%, 100 at $10M/600%). The scan now RANKS on it; `score` is still stored. Cards show it (tooltip says which). New Pick Study bucket `scoreabs`.
+- **Denominator + sample floors.** Two new view switches on the tab, off by default: `open GEX ≥ $50k` and `n ≥ 3`. Recorder capture floor `GEX_CHANGE_TOP_MIN_GEX_OPEN` (default 0 = off). `/proxy/gex-change-top` now returns `gex_open`, `n_samples`, `score_abs`, pre-flag flow.
+- **Premium on the card.** `/proxy/gex-change-top-history` returns `volume`, `open_interest`, `net_prem` per snapshot. New back-face metric **V/OI**. Scorecard gains **Vol/OI** (entry snapshot, frozen as `entry_vol_oi`).
+- **Signed tape flow per pick.** Picks are ≥5% OTM, outside the multi-ticker flow window (±5%), so their prints never reached `flow_prints`. The feed now has `trackPickFlow()` — the recorder hands it every pick's contract and it is TimeAndSale-subscribed on the shared dxLink channel (re-armed on reconnect and every 2 min; expired contracts dropped; cap `PICK_FLOW_MAX`=400; off with `PICK_FLOW_ENABLE=0` / `GEX_CHANGE_TOP_PICK_FLOW=0`). New `GET /proxy/gex-change-top-flow?id=` → pre-flag / since-flag / day buy, sell, net, prints, largest + per-minute cumulative net. Card back gets a **Tape** metric and a tape line (pre · since · B/S · prints); card front shows pre-flag tape when there was any. Scorecard gains **Tape net** (flag → close, frozen as `flow_buy/flow_sell/flow_n`).
+- **Study features.** Capture-time `flow_buy_pre/flow_sell_pre/flow_n_pre` on `gex_change_top`; new Pick Study buckets `voloi` and `flowpre`. Auto-fit treats `score`/`scoreabs` as one term.
+- Back-face metric labels shortened to Price / GEX / Tape / V/OI to fit four segments.
+- Files: `server-v2/gex-change-top-recorder.js`, `server-v2/_lib-pick-grade.cjs`, `server-v2/proxy-tastytrade.js`, `server-v2/server-with-proxy.js`, `cbedge-v3/src/pages/scanner/gexChangeTop.ts`, `cbedge-v3/src/pages/scanner/gexChangeTopData.ts`, `cbedge-v3/src/pages/scanner/GexChangeTopTab.tsx`.
+
 ## 2026-09-23 - Scheduled posts: "Signals only" destination
 
 - **Bug:** a scheduled job with no channel of its own fell back to the server env webhook (for levels, MG_LADDER / HOME_SIGNALS / SIGNALS / DISCORD_WEBHOOK_URL). So Voltick Levels kept posting into a Discord whose Signals row on Manage was empty.
