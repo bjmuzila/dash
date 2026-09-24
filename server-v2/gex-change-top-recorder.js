@@ -206,6 +206,27 @@ const MIN_GEX_OPEN = Math.max(0, Number(process.env.GEX_CHANGE_TOP_MIN_GEX_OPEN 
 const PICK_FLOW = String(process.env.GEX_CHANGE_TOP_PICK_FLOW || '1') !== '0';
 /** Injected by startGexChangeTopRecorder(port, { trackPickFlow }). */
 let _trackPickFlow = null;
+// REGIME CONTEXT (2026-09-24). The GEX build is one strike; the pick is a
+// directional option bet (calls above spot, puts below). Whether the TICKER's
+// whole board and the MARKET agree with that bet is not visible from the strike
+// at all — "AMD printed two put picks on a day its heatmap was call-heavy" was
+// the case that asked for this. Stamped at capture:
+//   tk_net_gex    Σ OI+Vol net GEX over the ticker's live strike-growth window
+//                 (front expiries, ±20 strikes) — the heatmap's own basis
+//   tk_call_share call-side GEX ÷ (call + |put|) over the same window
+//   tk_flip       net-GEX zero crossing nearest spot (within TK_FLIP_BAND_PCT)
+//   tk_regime     'positive' when spot >= flip, else 'negative'; sign of
+//                 tk_net_gex when there is no flip in the band
+//   mkt_*         the same two for SPX from the live feed's market state
+// Read from the live feed snapshot (injected, see startGexChangeTopRecorder);
+// falls back to strike_growth_expiry totals (net + share, no flip) when the
+// feed has nothing for the ticker.
+/** Injected: (symbol) => Promise<{ spot, expiries:[{expiry, rows:[{strike,type,gamma,oi,volume}]}] } | null> */
+let _tickerSnapshot = null;
+const TK_FLIP_BAND_PCT = Number(process.env.GEX_CHANGE_TOP_FLIP_BAND_PCT || 15);
+const GC = require('./computation/gex-calculator');
+let _marketState = null;
+try { _marketState = require('./state/market-state'); } catch { _marketState = null; }
 // Auto-probe every captured pick into the /api/watch pipeline (see header).
 const AUTO_PROBE  = String(process.env.GEX_CHANGE_TOP_AUTOPROBE || '1') !== '0';
 /** watch_options.source stamp for rows this recorder created. */
@@ -373,6 +394,13 @@ async function _ensureSchemaOnce(p) {
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS flow_buy_pre REAL');
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS flow_sell_pre REAL');
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS flow_n_pre INTEGER');
+    // 2026-09-24 — regime context at capture (see REGIME CONTEXT at the top).
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS tk_net_gex DOUBLE PRECISION');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS tk_call_share REAL');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS tk_flip REAL');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS tk_regime TEXT');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS mkt_net_gex DOUBLE PRECISION');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS mkt_regime TEXT');
     // Frozen end-of-day scorecard — one row per pick per day. Survives the
     // pruning of auto-probed contracts (and their snapshots) at expiry.
     await p.query(`
@@ -508,6 +536,91 @@ async function autoProbe(pool, r) {
     return null;
   }
 }
+
+// ── Regime context ────────────────────────────────────────────────────────────
+/** Ticker board from the live feed snapshot: net, call share, flip, regime. */
+async function tickerContextLive(symbol) {
+  if (typeof _tickerSnapshot !== 'function') return null;
+  let snap;
+  try { snap = await _tickerSnapshot(symbol); } catch { return null; }
+  if (!snap || !(Number(snap.spot) > 0) || !Array.isArray(snap.expiries)) return null;
+  const spot = Number(snap.spot);
+  const flat = [];
+  for (const e of snap.expiries) {
+    for (const r of e.rows || []) {
+      if (!(r.gamma > 0 || r.oi > 0 || r.volume > 0)) continue;
+      flat.push({ strike: r.strike, side: r.type === 'C' ? 'call' : 'put', oi: r.oi, volume: r.volume, gamma: r.gamma, expiration: e.expiry });
+    }
+  }
+  if (!flat.length) return null;
+  const rows = GC.computeGexRowsMultiExpiry(flat, spot);
+  if (!rows.length) return null;
+  const s2 = spot * spot;
+  let call = 0, put = 0;
+  for (const r of rows) {
+    call += Number(r.callGEX || 0) + Number(r.callGamma || 0) * Number(r.callVolume || 0) * s2;
+    put += Number(r.putGEX || 0) - Number(r.putGamma || 0) * Number(r.putVolume || 0) * s2;
+  }
+  const net = GC.totalNetGex(rows);
+  const flip = GC.findGexFlip(rows, spot, { nearest: true, maxDistancePct: TK_FLIP_BAND_PCT });
+  const den = Math.abs(call) + Math.abs(put);
+  return {
+    net,
+    callShare: den > 0 ? Math.abs(call) / den : null,
+    flip: flip != null && Number.isFinite(flip) ? flip : null,
+    regime: flip != null && Number.isFinite(flip) ? (spot >= flip ? 'positive' : 'negative') : (net >= 0 ? 'positive' : 'negative'),
+  };
+}
+
+/** Fallback: the recorder's own per-expiry call/put totals at or before `at`. */
+async function tickerContextDb(pool, symbol, date, at) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT SUM(call_gex)::float8 AS call, SUM(put_gex)::float8 AS put, COUNT(*)::int AS n
+         FROM (SELECT DISTINCT ON (expiry) call_gex, put_gex
+                 FROM strike_growth_expiry
+                WHERE date = $1::date AND symbol = $2 AND ts <= $3 AND ts > $3 - INTERVAL '15 minutes'
+                ORDER BY expiry, ts DESC) x`,
+      [date, symbol, at],
+    );
+    const r = rows[0];
+    if (!r || !(r.n > 0)) return null;
+    const call = Number(r.call) || 0, put = Number(r.put) || 0;
+    const den = Math.abs(call) + Math.abs(put);
+    const net = call + put;
+    return { net, callShare: den > 0 ? Math.abs(call) / den : null, flip: null, regime: net >= 0 ? 'positive' : 'negative' };
+  } catch { return null; }
+}
+
+/** SPX market regime from the live feed's state. Null when the feed is cold. */
+function marketContext() {
+  try {
+    const st = _marketState && _marketState.getState ? _marketState.getState() : null;
+    if (!st) return null;
+    const spot = Number(st.spot), flip = Number(st.gexFlip), net = Number(st.totalNetGex);
+    if (!(spot > 0)) return null;
+    return {
+      net: Number.isFinite(net) && net !== 0 ? net : null,
+      regime: flip > 0 ? (spot >= flip ? 'positive' : 'negative') : (Number.isFinite(net) && net !== 0 ? (net > 0 ? 'positive' : 'negative') : null),
+    };
+  } catch { return null; }
+}
+
+/** Everything the regime columns need for one pick, best-effort. */
+async function pickContext(pool, r, date, at) {
+  const tk = (await tickerContextLive(r.symbol)) || (await tickerContextDb(pool, r.symbol, date, at));
+  const mk = marketContext();
+  return {
+    tk_net_gex: tk ? tk.net : null,
+    tk_call_share: tk ? tk.callShare : null,
+    tk_flip: tk ? tk.flip : null,
+    tk_regime: tk ? tk.regime : null,
+    mkt_net_gex: mk ? mk.net : null,
+    mkt_regime: mk ? mk.regime : null,
+  };
+}
+const CTX_COLS = ['tk_net_gex', 'tk_call_share', 'tk_flip', 'tk_regime', 'mkt_net_gex', 'mkt_regime'];
+const ctxVals = (c) => CTX_COLS.map((k) => (c ? c[k] ?? null : null));
 
 // ── Pick flow ─────────────────────────────────────────────────────────────────
 /** The option side a pick was probed on — below spot = put, else call. */
@@ -815,8 +928,10 @@ async function runOnce({ force = false } = {}) {
   // so the transaction holds no slow reads.
   const flagMs = now.getTime();
   const preFlow = new Map();
+  const ctxOf = new Map();
   for (const x of [...picks, ...shadows]) {
     preFlow.set(x.row, await preFlagFlow(p, x.row, date, flagMs)); // eslint-disable-line no-await-in-loop
+    ctxOf.set(x.row, await pickContext(p, x.row, date, now)); // eslint-disable-line no-await-in-loop
   }
 
   // Replace this slot's bucket so a re-fire keeps exactly the latest top-N.
@@ -835,12 +950,13 @@ async function runOnce({ force = false } = {}) {
     for (const item of all) {
       const r = item.row;
       const pf = preFlow.get(r) || null;
+      const cx = ctxOf.get(r) || null;
       // Stamp the projection now, from capture-time facts only. Null unless a
       // rule is armed — see _lib-pick-grade.cjs.
       let proj = null;
       try {
         proj = PG.projectPick(PG.pickFeatures(
-          { ...r, date, slot, rank: item.rank, live: false, n_samples: r.n, gex_open: r.gex_open,
+          { ...r, ...(cx || {}), date, slot, rank: item.rank, live: false, n_samples: r.n, gex_open: r.gex_open,
             flow_n_pre: pf ? pf.n : null, flow_buy_pre: pf ? pf.buy : null, flow_sell_pre: pf ? pf.sell : null },
           { entry: null },
         ));
@@ -848,8 +964,9 @@ async function runOnce({ force = false } = {}) {
       await client.query(
         `INSERT INTO gex_change_top
            (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, proj_grade, proj_pts, n_samples, gex_open,
-            score_abs, flow_buy_pre, flow_sell_pre, flow_n_pre)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+            score_abs, flow_buy_pre, flow_sell_pre, flow_n_pre,
+            tk_net_gex, tk_call_share, tk_flip, tk_regime, mkt_net_gex, mkt_regime)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
          ON CONFLICT (date, slot, symbol, expiry, strike) DO UPDATE SET
            rank = EXCLUDED.rank, ts = EXCLUDED.ts, spot = EXCLUDED.spot,
            latest_chg = EXCLUDED.latest_chg, pct_open = EXCLUDED.pct_open,
@@ -860,12 +977,16 @@ async function runOnce({ force = false } = {}) {
            score_abs = EXCLUDED.score_abs,
            flow_buy_pre = EXCLUDED.flow_buy_pre, flow_sell_pre = EXCLUDED.flow_sell_pre,
            flow_n_pre = EXCLUDED.flow_n_pre,
+           tk_net_gex = EXCLUDED.tk_net_gex, tk_call_share = EXCLUDED.tk_call_share,
+           tk_flip = EXCLUDED.tk_flip, tk_regime = EXCLUDED.tk_regime,
+           mkt_net_gex = EXCLUDED.mkt_net_gex, mkt_regime = EXCLUDED.mkt_regime,
            watch_id = COALESCE(EXCLUDED.watch_id, gex_change_top.watch_id)`,
         [date, slot, now, item.rank, r.symbol, r.expiry, r.strike, r.spot,
          r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN, item.watchId ?? null,
          item.selected, proj ? proj.grade : null, proj ? proj.pts : null,
          r.n ?? null, r.gex_open ?? null,
-         r.score_abs ?? null, pf ? pf.buy : null, pf ? pf.sell : null, pf ? pf.n : null],
+         r.score_abs ?? null, pf ? pf.buy : null, pf ? pf.sell : null, pf ? pf.n : null,
+         ...ctxVals(cx)],
       );
       if (item.selected) written++;
     }
@@ -1023,7 +1144,10 @@ async function runLive({ force = false } = {}) {
     if (!taken.length) return { ok: true, triggered: 0, rejected };
 
     const flagMs = now.getTime();
-    for (const t of taken) t.pf = await preFlagFlow(p, t.row, date, flagMs); // eslint-disable-line no-await-in-loop
+    for (const t of taken) {
+      t.pf = await preFlagFlow(p, t.row, date, flagMs); // eslint-disable-line no-await-in-loop
+      t.cx = await pickContext(p, t.row, date, now); // eslint-disable-line no-await-in-loop
+    }
 
     const client = await p.connect();
     try {
@@ -1031,6 +1155,7 @@ async function runLive({ force = false } = {}) {
       for (let i = 0; i < taken.length; i++) {
         const r = taken[i].row;
         const pf = taken[i].pf || null;
+        const cx = taken[i].cx || null;
         const rank = i + 1;
         let proj = null;
         try {
@@ -1038,7 +1163,7 @@ async function runLive({ force = false } = {}) {
           // here is a position inside a batch of at most LIVE_MAX_PER_SCAN and
           // not a position among the day's ranked candidates. See the note there.
           proj = PG.projectPick(PG.pickFeatures(
-            { ...r, date, slot, rank, live: true, n_samples: r.n, gex_open: r.gex_open,
+            { ...r, ...(cx || {}), date, slot, rank, live: true, n_samples: r.n, gex_open: r.gex_open,
               flow_n_pre: pf ? pf.n : null, flow_buy_pre: pf ? pf.buy : null, flow_sell_pre: pf ? pf.sell : null },
             { entry: null },
           ));
@@ -1046,8 +1171,9 @@ async function runLive({ force = false } = {}) {
         await client.query(
           `INSERT INTO gex_change_top
              (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, live, proj_grade, proj_pts, n_samples, gex_open,
-              score_abs, flow_buy_pre, flow_sell_pre, flow_n_pre)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE,TRUE,$15,$16,$17,$18,$19,$20,$21,$22)
+              score_abs, flow_buy_pre, flow_sell_pre, flow_n_pre,
+              tk_net_gex, tk_call_share, tk_flip, tk_regime, mkt_net_gex, mkt_regime)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE,TRUE,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
            ON CONFLICT (date, slot, symbol, expiry, strike) DO UPDATE SET
              rank = EXCLUDED.rank, ts = EXCLUDED.ts, spot = EXCLUDED.spot,
              latest_chg = EXCLUDED.latest_chg, pct_open = EXCLUDED.pct_open,
@@ -1057,12 +1183,16 @@ async function runLive({ force = false } = {}) {
              score_abs = EXCLUDED.score_abs,
              flow_buy_pre = EXCLUDED.flow_buy_pre, flow_sell_pre = EXCLUDED.flow_sell_pre,
              flow_n_pre = EXCLUDED.flow_n_pre,
+             tk_net_gex = EXCLUDED.tk_net_gex, tk_call_share = EXCLUDED.tk_call_share,
+             tk_flip = EXCLUDED.tk_flip, tk_regime = EXCLUDED.tk_regime,
+             mkt_net_gex = EXCLUDED.mkt_net_gex, mkt_regime = EXCLUDED.mkt_regime,
              watch_id = COALESCE(EXCLUDED.watch_id, gex_change_top.watch_id)`,
           [date, slot, now, rank, r.symbol, r.expiry, r.strike, r.spot,
            r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN, taken[i].watchId ?? null,
            proj ? proj.grade : null, proj ? proj.pts : null,
            r.n ?? null, r.gex_open ?? null,
-           r.score_abs ?? null, pf ? pf.buy : null, pf ? pf.sell : null, pf ? pf.n : null],
+           r.score_abs ?? null, pf ? pf.buy : null, pf ? pf.sell : null, pf ? pf.n : null,
+           ...ctxVals(cx)],
         );
       }
       await client.query('COMMIT');
@@ -1105,7 +1235,8 @@ async function getHistory({ date, limitSlots = 20 } = {}) {
     const { rows } = await p.query(
       `SELECT date, slot, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, ts, watch_id,
               proj_grade, proj_pts, COALESCE(live, FALSE) AS live,
-              n_samples, gex_open, score_abs, flow_buy_pre, flow_sell_pre, flow_n_pre
+              n_samples, gex_open, score_abs, flow_buy_pre, flow_sell_pre, flow_n_pre,
+              tk_net_gex, tk_call_share, tk_flip, tk_regime, mkt_net_gex, mkt_regime
          FROM gex_change_top WHERE date = $1 AND COALESCE(selected, TRUE)
         ORDER BY slot DESC, rank ASC`,
       [d],
@@ -1581,13 +1712,29 @@ async function studyRows({ days = 60, cohort = 'selected' } = {}) {
             -- n_samples/gex_open stay null on purpose for rows captured before
             -- they existed; see the ALTER TABLE note above.
             COALESCE(t.live, FALSE) AS live, t.n_samples, t.gex_open,
-            t.score_abs, t.flow_buy_pre, t.flow_sell_pre, t.flow_n_pre
+            t.score_abs, t.flow_buy_pre, t.flow_sell_pre, t.flow_n_pre,
+            t.tk_flip, t.tk_regime, t.mkt_net_gex, t.mkt_regime,
+            -- Ticker board: the stamped value, else the recorder's own per-expiry
+            -- totals at the flag (rows before 2026-09-24 have no stamp).
+            COALESCE(t.tk_net_gex, bx.call + bx.put) AS tk_net_gex,
+            COALESCE(t.tk_call_share,
+                     CASE WHEN ABS(bx.call) + ABS(bx.put) > 0
+                          THEN ABS(bx.call) / (ABS(bx.call) + ABS(bx.put)) END) AS tk_call_share
        FROM gex_change_top_results r
        JOIN LATERAL (
          SELECT g.* FROM gex_change_top g
           WHERE g.date = r.date AND g.watch_id = r.watch_id
           ORDER BY g.slot ASC LIMIT 1
        ) t ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT SUM(x.call_gex)::float8 AS call, SUM(x.put_gex)::float8 AS put
+           FROM (SELECT DISTINCT ON (e.expiry) e.call_gex, e.put_gex
+                   FROM strike_growth_expiry e
+                  WHERE t.tk_net_gex IS NULL
+                    AND e.date = r.date::date AND e.symbol = r.symbol
+                    AND e.ts <= t.ts AND e.ts > t.ts - INTERVAL '15 minutes'
+                  ORDER BY e.expiry, e.ts DESC) x
+       ) bx ON TRUE
       WHERE r.date >= to_char(NOW() AT TIME ZONE 'America/New_York' - ($1 || ' days')::interval, 'YYYY-MM-DD')
         AND ($2 = 'all' OR ($2 = 'selected') = COALESCE(r.selected, TRUE))
       ORDER BY r.date ASC, t.slot ASC`,
@@ -1905,6 +2052,7 @@ let _lastEodDate = null;
 function startGexChangeTopRecorder(port, opts = {}) {
   if (Number(port) > 0) PORT_HINT = Number(port); // internal /api/watch hop target
   if (typeof opts.trackPickFlow === 'function') _trackPickFlow = opts.trackPickFlow;
+  if (typeof opts.tickerSnapshot === 'function') _tickerSnapshot = opts.tickerSnapshot;
   if (!process.env.DATABASE_URL) {
     console.log('[gex-change-top] no DATABASE_URL — recorder idle.');
     return;

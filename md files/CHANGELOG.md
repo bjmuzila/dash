@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-24 - Public landing (merger page): Voltick info, member sections removed
+
+- `components/landing/MergerClient.tsx`: removed the 4-fact strip (Closed / Renewals / Features / Term end), the "For current members" section and the "What happens, and when" timeline.
+- Voltick card now carries a short description + four feature bullets; new "About Voltick" section (four tiles) with a "Go to voltick.io for more info" button (tracked as `landing-about`). No discount code on the public page.
+- `components/landing/PublicNav.tsx`: Docs tab removed from the top nav (footer Docs link kept).
+
+## 2026-09-24 - GEX Change Top: regime context + card expand / snapshot
+
+- **Regime at the flag.** Every pick now stamps the TICKER's board at capture (`gex_change_top.tk_net_gex / tk_call_share / tk_flip / tk_regime`) from the live strike-growth feed (OI+Vol, front expiries, flip = net-GEX zero crossing nearest spot within 15%), falling back to `strike_growth_expiry` totals. SPX backdrop stamped as `mkt_net_gex / mkt_regime` from market state.
+- **Board bias + alignment.** Three votes (spot vs flip, net sign, call share ≥55% / ≤45%) → bull / mixed / bear; a call on a bear board or a put on a bull board is **against** (the AMD-puts case). Shared logic in `_lib-pick-grade.cjs` (`boardBias`, `regimeAlign`) mirrored client-side.
+- **Where it shows.** Card chip (`bull +γ`, `⚠ vs bull +γ` in orange) with a tooltip of net GEX / call share / flip / SPX regime; new view switch **not vs board** (off by default); Pick Study buckets `align`, `bias`, `tkregime`, `tknet`, `mktregime` — older picks back-filled for net/share from `strike_growth_expiry`, so the auto-fit projection can weight it once it holds.
+- **Cards cut off.** Tile height 260 → 292 so the hint line under the chart fits again.
+- **Expand + snapshot per card.** ⤢ opens the card in the page expand stage (Esc closes; fixed-overlay fallback) with a 360px chart and the front's numbers; 📸 (owner-gated CopyShotButton) photographs the card — the 3D flip is flattened on the live node for the shot so the back face doesn't come out mirrored.
+- Files: `server-v2/gex-change-top-recorder.js`, `server-v2/_lib-pick-grade.cjs`, `server-v2/server-with-proxy.js`, `cbedge-v3/src/pages/scanner/gexChangeTop.ts`, `cbedge-v3/src/pages/scanner/GexChangeTopTab.tsx`.
+
 ## 2026-09-24 - Theme check: Voltick palette moved into tokens.css (unblocks push)
 
 - The pre-commit theme check rejected the colour literals in the econ poster and the sector wheel's Voltick skin. The Voltick palette is now a set of fixed `--color-vt-*` tokens in `src/design/tokens.css` (not overridden by the UI theme switch). The two files read them through `tokenHex()` / `tokenHexAlpha()`, so they still get plain hex values and nothing changes on screen.
@@ -24383,3 +24398,9 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `cbedge-v3/src/board/topFlow/ContractProbe.tsx`: new `shareAs` prop — an ordinary probe gets the pop-out trade card + 📸 Snapshot, headline "<label> · $prem · size ct @ price · Sep 24 10:28 AM", pill "<LABEL> · SEP 24". Chart x-axis ends and hover readout now print "Sep 24 09:30 AM" (date first — a snapshot can't be hovered).
 - `cbedge-v3/src/pages/Whales.tsx`: prints probe (desktop + phone sheet) passes `shareAs="Whale print"`, contract lookup passes `shareAs="Lookup"`.
 - `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx`: repeated-flow headline prints the date before the first time (and before the last when it is a different day).
+
+## 2026-09-24 · Voltick admin-site · Probe page (stream + GEX checker)
+- `Voltick/admin-site/index.html`: new **Probe** page (MACHINE group), modeled on owner.cbedge.net Dev probe.
+- Is it live: opens `/ws`, focuses one board, times full-grid frames + price patches; checks access=live, feed=thetadata, grid age, streamed spot vs engine quote, front expiry current.
+- Is it right: pulls `/api/admin/oi-audit` chain inputs and rebuilds each GEX cell of one expiry (`Γ × netOI × 100 × S² × 1%`, engine greeks), fits build spot (trimmed), flags MATCH ≤2% / CLOSE ≤5% / OFF; grid-sum + wall consistency; OI print via `/api/admin/data-audit`; stalest quotes via `/api/admin/quote-ages`.
+- Per-strike working panel, streamed-vs-rebuilt bars, log, copy report, 30s auto re-check. Mock mode includes one deliberate stale-OI strike. `api()` mock now accepts query strings. README + ADMIN-SETUP updated; no server change.

@@ -113,6 +113,37 @@ function slotMinutes(slot) {
 }
 
 /**
+ * REGIME READ (2026-09-24). Three votes on the ticker's board at capture:
+ *   regime   spot vs the net-GEX flip ('positive' +1 / 'negative' −1)
+ *   net      Σ OI+Vol net GEX over the window (> 0 +1 / < 0 −1)
+ *   share    call-side share of |GEX| (>= 0.55 +1 / <= 0.45 −1 / else 0)
+ * `bull` at +2 or more, `bear` at −2 or less, otherwise `mixed`. Null when the
+ * row has none of the three.
+ */
+function boardBias(row) {
+  const regime = row && row.tk_regime;
+  const net = num(row && row.tk_net_gex);
+  const share = num(row && row.tk_call_share);
+  if (!regime && !Number.isFinite(net) && !Number.isFinite(share)) return null;
+  let v = 0;
+  if (regime === 'positive') v += 1; else if (regime === 'negative') v -= 1;
+  if (Number.isFinite(net)) v += net > 0 ? 1 : net < 0 ? -1 : 0;
+  if (Number.isFinite(share)) v += share >= 0.55 ? 1 : share <= 0.45 ? -1 : 0;
+  return v >= 2 ? 'bull' : v <= -2 ? 'bear' : 'mixed';
+}
+
+/**
+ * Does the pick's side agree with the board? A call is a bullish bet and a put
+ * a bearish one (the probe BUYS the contract), so a put on a `bull` board is
+ * `against`. `mixed` boards are `neutral`.
+ */
+function regimeAlign(side, bias) {
+  if (!bias || (side !== 'C' && side !== 'P')) return null;
+  if (bias === 'mixed') return 'neutral';
+  return (side === 'C') === (bias === 'bull') ? 'with' : 'against';
+}
+
+/**
  * @param row  gex_change_top row at the pick's first slot (symbol, expiry,
  *             strike, spot, latest_chg, pct_open, z_score, score, rank, slot)
  * @param res  the matching gex_change_top_results row (entry, slots) — entry is
@@ -175,6 +206,14 @@ function pickFeatures(row, res) {
     // Signed tape flow on this exact contract in the WINDOW_MIN before the flag
     // (buy premium − sell premium). Null when the tape had no prints for the
     // contract in that window — which usually means it was not being streamed.
+    // Regime context at capture (2026-09-24). Board fields fall back to the
+    // strike_growth_expiry totals in the study query for older rows.
+    tkRegime: row.tk_regime || null,
+    tkNetGex: Number.isFinite(num(row.tk_net_gex)) ? num(row.tk_net_gex) : null,
+    tkCallShare: Number.isFinite(num(row.tk_call_share)) ? num(row.tk_call_share) : null,
+    boardBias: boardBias(row),
+    align: regimeAlign(side, boardBias(row)),
+    mktRegime: row.mkt_regime || null,
     flowNetPre: row.flow_n_pre > 0 && Number.isFinite(Number(row.flow_buy_pre)) && Number.isFinite(Number(row.flow_sell_pre))
       ? Number(row.flow_buy_pre) - Number(row.flow_sell_pre) : null,
   };
@@ -295,6 +334,37 @@ const BUCKETS = {
     of: (f) => (f.flowNetPre == null ? null
       : f.flowNetPre <= -50e3 ? 'sold >$50k' : f.flowNetPre < 0 ? 'sold <$50k'
       : f.flowNetPre < 50e3 ? 'bought <$50k' : 'bought >$50k'),
+  },
+  align: {
+    label: 'Pick vs the ticker\u2019s board',
+    note: 'A call is a bullish bet, a put a bearish one. The board is read three ways at the flag — spot vs the net-GEX flip, the sign of net GEX, and the call share — and a pick that bets against a board reading bull (or bear) is `against`. The AMD-puts-on-a-call-heavy-day case.',
+    order: ['with', 'neutral', 'against'],
+    of: (f) => f.align || null,
+  },
+  bias: {
+    label: 'Ticker board at the flag',
+    note: 'bull / mixed / bear from the three votes in boardBias(). Read beside `side` — this is the board, not the pick.',
+    order: ['bull', 'mixed', 'bear'],
+    of: (f) => f.boardBias || null,
+  },
+  tkregime: {
+    label: 'Ticker gamma regime',
+    note: 'Spot vs the ticker\u2019s net-GEX flip (positive = above: dealers dampen; negative = below: dealers amplify). Null before 2026-09-24 — the flip needs the live board, which older rows never stamped.',
+    order: ['positive', 'negative'],
+    of: (f) => f.tkRegime || null,
+  },
+  tknet: {
+    label: 'Ticker net GEX (OI+Vol)',
+    note: 'The whole window\u2019s net, not the strike\u2019s. Back-filled from strike_growth_expiry for rows older than the stamp.',
+    order: ['< -$50M', '-$50M-0', '0-$50M', '> $50M'],
+    of: (f) => (f.tkNetGex == null ? null
+      : f.tkNetGex < -50e6 ? '< -$50M' : f.tkNetGex < 0 ? '-$50M-0' : f.tkNetGex < 50e6 ? '0-$50M' : '> $50M'),
+  },
+  mktregime: {
+    label: 'SPX gamma regime',
+    note: 'The market backdrop at the flag, from the live SPX feed (spot vs flip). Null before 2026-09-24.',
+    order: ['positive', 'negative'],
+    of: (f) => f.mktRegime || null,
   },
   symbol: {
     label: 'Ticker',
@@ -593,7 +663,7 @@ function sameRule(a, b) {
 }
 
 module.exports = {
-  GRADE_ORDER, gradePoints, gradeFor, peakBasis, isGood,
+  GRADE_ORDER, gradePoints, gradeFor, peakBasis, isGood, boardBias, regimeAlign,
   pickFeatures, slotMinutes, daysBetween,
   BUCKETS, BUCKET_KEYS,
   projRule, projectPick, PROJ_RULE_PATH,

@@ -4799,6 +4799,12 @@ async function main() {
       trackPickFlow: (c) => (proxy && typeof proxy.trackPickFlow === 'function'
         ? proxy.trackPickFlow(c)
         : Promise.resolve({ ok: false, error: 'feed not running' })),
+      // Regime context: the ticker's live strike-growth board at the flag
+      // (net GEX, call share, flip). Null when the feed has nothing for it —
+      // the recorder then falls back to strike_growth_expiry totals.
+      tickerSnapshot: (sym) => (proxy && typeof proxy.getStrikeGrowthSnapshot === 'function'
+        ? proxy.getStrikeGrowthSnapshot(sym)
+        : Promise.resolve(null)),
     });
     // NDX/SPY/QQQ 0DTE call/put wall recorder: writes one row per ticker every
     // 60s so the Walls & Flows tab's 5/15/30/60m windows persist server-side

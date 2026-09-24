@@ -42,7 +42,6 @@ import {
   V3_TEXT,
   V3_RADIUS,
   V3_SANS,
-  V3_MONO,
   v3a,
   v3CardStrongStyle,
   v3Chip,
@@ -50,7 +49,6 @@ import {
   v3GhostButton,
 } from "@/components/landing/v3Theme";
 import {
-  SALES_CLOSED_BODY,
   VOLTICK_URL,
   // PUBLIC pitch only. VOLTICK_CODE / VOLTICK_PITCH carry the members-only
   // discount code and must never render on this page — see lib/salesClosed.ts.
@@ -59,62 +57,31 @@ import {
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
-/* The four facts under the hero. Same shape as LandingClient's STRIP and the
-   same discipline: four checkable statements, no adjectives. Each one answers a
-   question a member arriving at this page is actually asking. */
-const STRIP = [
-  { n: "Closed", l: "New memberships", s: "Sign-up and checkout are off" },
-  { n: "Off", l: "Renewals", s: "No one is billed again" },
-  { n: "0", l: "Features removed", s: "Every page stays exactly as it is" },
-  { n: "Full", l: "Access to term end", s: "Yearly members keep all twelve months" },
+/* What Voltick is. Checkable statements pulled from Voltick's own README — no
+   discount code here (VOLTICK_CODE is members-only, see lib/salesClosed.ts). */
+const VOLT_POINTS = [
+  "Live GEX, VEX, DEX & CEX exposure boards",
+  "Options-flow tape and cross-board scanner",
+  "Session replay and a self-grading track record",
+  "Discord + email alerts on key levels",
 ];
 
-const KEEPS = [
+const ABOUT = [
   {
-    t: "You keep your access",
-    d: "Your membership runs to the last day of the term you paid for. Renewals are off, so there is no further charge — and nothing cancels early.",
+    t: "Dealer positioning, live",
+    d: "Voltick pulls option chains across its whole watchlist, computes gamma, vanna, delta and charm exposure, and streams the finished boards to your browser every few seconds.",
   },
   {
-    t: "Nothing is removed",
-    d: "The platform is not shutting down. Every page you use today is still there, and no feature is being stripped out along the way.",
+    t: "Levels in plain language",
+    d: "Volt, Reversal, Coil, call and put walls, the gamma Flip and air pockets — each one marked on the board and explained on Voltick's Learn pages.",
   },
   {
-    t: "Your login still works",
-    d: "Same email, same password, and password reset stays available. Your account does not disappear when the term ends.",
-  },
-];
-
-const TIMELINE = [
-  {
-    k: "Now",
-    v: (
-      <>
-        New memberships and checkout are closed. Renewals are switched off, so{" "}
-        <b style={{ color: V3.refresh, fontWeight: 700 }}>no one is billed again</b>.
-      </>
-    ),
+    t: "Flow, scanner & replay",
+    d: "An options-flow tape, a scanner that ranks every board at once, and session replay to rewind the day and see how the levels played out.",
   },
   {
-    k: "Through your term",
-    v: <>Full access, unchanged. Every page you use today, exactly as it is now.</>,
-  },
-  {
-    k: "When your term ends",
-    v: (
-      <>
-        Your account stays. The member dashboard closes and you can still sign in
-        any time.
-      </>
-    ),
-  },
-  {
-    k: "From here",
-    v: (
-      <>
-        New work ships at{" "}
-        <b style={{ color: V3.accent, fontWeight: 700 }}>Voltick</b>.
-      </>
-    ),
+    t: "Graded in public",
+    d: "A self-grading track record scores the levels against what price actually did — plus Discord and email alerts so you don't have to watch all day.",
   },
 ];
 
@@ -135,8 +102,6 @@ export default function MergerClient() {
         .merger-legal a:hover { text-decoration: underline; text-underline-offset: 3px; }
         @media (max-width: 860px) {
           .merger-hero { grid-template-columns: 1fr !important; }
-          .merger-strip { grid-template-columns: repeat(2, 1fr) !important; }
-          .merger-row { grid-template-columns: 1fr !important; gap: 6px !important; }
           .merger-cta { min-width: 0 !important; width: 100%; }
         }
       `}</style>
@@ -191,67 +156,56 @@ export default function MergerClient() {
               <span style={v3Chip(V3.accent)}>Where {APP_NAME} continues</span>
               <div style={voltName}>Voltick</div>
               <div style={voltTag}>Know your levels.</div>
-              <p style={voltBody}>{VOLTICK_PUBLIC_PITCH}</p>
+              <p style={voltBody}>
+                {VOLTICK_PUBLIC_PITCH} A live dealer-positioning engine built for
+                options and futures traders.
+              </p>
+              <ul style={voltList}>
+                {VOLT_POINTS.map((pt) => (
+                  <li key={pt} style={voltItem}>
+                    <span style={{ color: V3.accent, fontWeight: 700 }}>◆</span> {pt}
+                  </li>
+                ))}
+              </ul>
               <VoltickLink placement="landing-volt-card" style={voltBtn} className="merger-cta">
                 Open Voltick →
               </VoltickLink>
             </div>
           </div>
-
-          <div style={strip} className="merger-strip">
-            {STRIP.map((s) => (
-              <div key={s.l} style={stripCell}>
-                <div style={stripN}>{s.n}</div>
-                <div style={stripL}>{s.l}</div>
-                <div style={stripS}>{s.s}</div>
-              </div>
-            ))}
-          </div>
         </section>
 
-        {/* ═══ 2 · WHAT IT MEANS FOR A MEMBER ═════════════════════════════ */}
+        {/* ═══ 2 · ABOUT VOLTICK ═════════════════════════════════════════ */}
         <section style={card}>
           <div style={pad}>
             <div style={{ textAlign: "center" }}>
-              <span style={v3Chip(V3.refresh)}>◆ For current members</span>
+              <span style={v3Chip(V3.accent)}>◆ About Voltick</span>
               <h2 style={h2}>
-                Nothing is being <em style={h2Em}>taken away</em>.
+                What <em style={h1Em}>Voltick</em> does.
               </h2>
-              <p style={sectionLede}>{SALES_CLOSED_BODY}</p>
+              <p style={sectionLede}>
+                {VOLTICK_PUBLIC_PITCH} Real-time options exposure, flow and key levels
+                on one board — the work that started at {APP_NAME} continues there.
+              </p>
             </div>
 
             <div style={tileGrid}>
-              {KEEPS.map((k) => (
+              {ABOUT.map((k) => (
                 <div key={k.t} style={tile}>
                   <div style={tileT}>{k.t}</div>
                   <div style={tileD}>{k.d}</div>
                 </div>
               ))}
             </div>
-          </div>
-        </section>
 
-        {/* ═══ 3 · TIMELINE ═══════════════════════════════════════════════ */}
-        <section style={card}>
-          <div style={pad}>
-            <div style={{ textAlign: "center" }}>
-              <span style={v3Chip(V3.cyan)}>Timeline</span>
-              <h2 style={h2}>
-                What happens, and <em style={h2Em}>when</em>.
-              </h2>
-            </div>
-            <div style={rows}>
-              {TIMELINE.map((t) => (
-                <div key={t.k} style={row} className="merger-row">
-                  <div style={rowK}>{t.k}</div>
-                  <div style={rowV}>{t.v}</div>
-                </div>
-              ))}
+            <div style={{ ...ctaRow, justifyContent: "center", marginTop: 22 }}>
+              <VoltickLink placement="landing-about" style={voltBtn} className="merger-cta">
+                Go to voltick.io for more info →
+              </VoltickLink>
             </div>
           </div>
         </section>
 
-        {/* ═══ 4 · SIGN IN ════════════════════════════════════════════════ */}
+        {/* ═══ 3 · SIGN IN ════════════════════════════════════════════════ */}
         <section id="sign-in" style={card}>
           <div style={{ ...pad, ...signInRow }}>
             <div>
@@ -424,49 +378,29 @@ const voltBody: React.CSSProperties = {
   margin: "12px auto 16px",
 };
 
+const voltList: React.CSSProperties = {
+  listStyle: "none",
+  padding: 0,
+  margin: "0 auto 18px",
+  maxWidth: "38ch",
+  textAlign: "left",
+  display: "flex",
+  flexDirection: "column",
+  gap: 7,
+};
+
+const voltItem: React.CSSProperties = {
+  fontSize: V3_TEXT.base,
+  color: V3.fg,
+  lineHeight: 1.45,
+};
+
 const voltBtn: React.CSSProperties = {
   ...v3PrimaryButton,
   border: `1px solid ${V3.accent}`,
   background: V3.accent,
   color: V3.bg,
   boxShadow: `0 6px 16px -6px ${v3a(V3.accent, 0.55)}`,
-};
-
-/* ── The fact strip ─────────────────────────────────────────────────────── */
-
-const strip: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(4, 1fr)",
-  borderTop: `1px solid ${V3.line}`,
-  background: V3.surface2,
-};
-
-const stripCell: React.CSSProperties = {
-  padding: "16px 18px",
-  borderRight: `1px solid ${V3.line}`,
-};
-
-const stripN: React.CSSProperties = {
-  fontFamily: V3_SANS,
-  fontVariantNumeric: "tabular-nums lining-nums",
-  fontFeatureSettings: '"tnum" 1, "lnum" 1',
-  fontSize: V3_TEXT.xl,
-  fontWeight: 700,
-  color: V3.cyan,
-  lineHeight: 1,
-};
-
-const stripL: React.CSSProperties = {
-  fontSize: V3_TEXT.base,
-  fontWeight: 600,
-  margin: "7px 0 3px",
-  color: V3.fg,
-};
-
-const stripS: React.CSSProperties = {
-  fontSize: V3_TEXT.xs,
-  color: V3.fg,
-  lineHeight: 1.45,
 };
 
 /* ── Section 2 ──────────────────────────────────────────────────────────── */
@@ -480,8 +414,6 @@ const h2: React.CSSProperties = {
   color: V3.fg,
   textWrap: "balance",
 };
-
-const h2Em: React.CSSProperties = { fontStyle: "normal", color: V3.refresh };
 
 const sectionLede: React.CSSProperties = {
   fontSize: V3_TEXT.body,
@@ -520,40 +452,6 @@ const tileD: React.CSSProperties = {
   fontSize: V3_TEXT.base,
   color: V3.fg,
   lineHeight: 1.5,
-};
-
-/* ── Timeline ───────────────────────────────────────────────────────────── */
-
-const rows: React.CSSProperties = {
-  marginTop: 18,
-  border: `1px solid ${V3.line}`,
-  borderRadius: V3_RADIUS.sm,
-  overflow: "hidden",
-};
-
-const row: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "210px 1fr",
-  gap: 20,
-  padding: "14px 16px",
-  borderTop: `1px solid ${V3.line}`,
-  background: V3.surface2,
-  alignItems: "start",
-};
-
-const rowK: React.CSSProperties = {
-  fontFamily: V3_MONO,
-  fontSize: V3_TEXT.xs,
-  fontWeight: 700,
-  letterSpacing: "0.1em",
-  textTransform: "uppercase",
-  color: V3.cyan,
-};
-
-const rowV: React.CSSProperties = {
-  fontSize: V3_TEXT.base,
-  color: V3.fg,
-  lineHeight: 1.55,
 };
 
 /* ── Sign-in plate ──────────────────────────────────────────────────────── */

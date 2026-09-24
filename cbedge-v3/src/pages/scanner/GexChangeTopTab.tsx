@@ -69,6 +69,10 @@
 
 import type { CSSProperties, ReactNode } from 'react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useExpandStage } from '@/design/primitives/Expand'
+import { CopyShotButton } from '@/shell/CopyShot'
+import type { ShotResult } from '@/shell/snapshot'
 import { Card } from '@/design/primitives/Card'
 import type { ChartHandle } from '@/design/primitives/ChartFrame'
 import { ChartFrame } from '@/design/primitives/ChartFrame'
@@ -147,7 +151,11 @@ import {
   anyProjected,
   avgPeakColor,
   cardRenderKey,
+  alignColor,
   cardScore,
+  regimeChipLabel,
+  regimeChipTitle,
+  rowAlign,
   flowColor,
   fmtFlow,
   fmtVolOi,
@@ -242,6 +250,84 @@ import { useQuery } from '@/data/api'
 const EMPTY_POINTS: readonly PickPoint[] = []
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PER-CARD EXPAND + SNAPSHOT (2026-09-24)
+//
+// EXPAND portals the card's back face, full size, into the page's expand stage
+// (design/primitives/Expand) — the same stage every board Card uses, so the rail
+// and toolbar stay live and Escape closes it. Without a stage (phone build) it
+// falls back to a fixed overlay.
+//
+// SNAPSHOT rides the shell's owner-gated CopyShotButton with a custom `capture`:
+// the snapshot engine has no 3D pipeline (it clones computed styles into an SVG
+// foreignObject), so a flipped tile would photograph as a mirrored or blank
+// face. `shootTile` flattens the flip on the LIVE node for the length of the
+// shot — flipper transform off, the hidden face `display: none`, the showing
+// face un-rotated — and puts every inline style back afterwards, shot or no shot.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function shotSlug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'snapshot'
+}
+
+async function shootTile(tile: HTMLElement | null, label: string): Promise<ShotResult> {
+  if (!tile) throw new Error('card is not on screen')
+  const undo: Array<() => void> = []
+  const set = (el: HTMLElement, prop: string, val: string) => {
+    const prev = el.style.getPropertyValue(prop)
+    el.style.setProperty(prop, val)
+    undo.push(() => (prev ? el.style.setProperty(prop, prev) : el.style.removeProperty(prop)))
+  }
+  try {
+    set(tile, 'perspective', 'none')
+    const flipper = tile.querySelector<HTMLElement>('[data-flip3d]')
+    if (flipper) {
+      const showBack = flipper.dataset.flip3d === 'back'
+      set(flipper, 'transform', 'none')
+      set(flipper, 'transition', 'none')
+      set(flipper, 'transform-style', 'flat')
+      Array.from(flipper.children).forEach((f, i) => {
+        const face = f as HTMLElement
+        if ((i === 1) !== showBack) set(face, 'display', 'none')
+        else set(face, 'transform', 'none')
+      })
+    }
+    const { captureCanvas, deliverCanvas } = await import('@/shell/snapshot')
+    const canvas = await captureCanvas(tile, { title: label })
+    return await deliverCanvas(canvas, `${shotSlug(label)}.png`)
+  } finally {
+    for (const u of undo.reverse()) u()
+  }
+}
+
+/** A small glyph button for a card header. Hidden from its own PNG. */
+function CardIconButton({
+  glyph,
+  title,
+  onClick,
+}: {
+  glyph: string
+  title: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      data-capture-hide
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className="shrink-0 px-0.5 text-sm leading-none opacity-70 hover:opacity-100"
+      style={{ color: T.text }}
+    >
+      {glyph}
+    </button>
+  )
+}
+
+const EXPAND_GLYPH = '⤢'
+const EXPAND_TITLE = 'Expand this card'
+
+// ─────────────────────────────────────────────────────────────────────────────
 // THE FLIP (C107, C108, C125) — GEOMETRY AND MOTION
 //
 // Everything here is transform geometry and a duration. None of it is a colour
@@ -258,7 +344,10 @@ const FLIP_PERSPECTIVE = 1200
  *  demoted "now" line + toolbar + a fixed 96px chart + hint, and both faces are
  *  `inset: 0`, so this one number is the tile's height whichever way up it is.
  *  That is what stops a flip resizing the card or reflowing the grid. */
-const FLIP_MIN_HEIGHT = 260
+const FLIP_MIN_HEIGHT = 292 // was 260; +tape line (2026-09-23) cut the hint off
+
+/** The expanded view's chart height (the tile's is the fixed 96 in GEO). */
+const EXPANDED_CHART_H = 360
 
 /** C108 — v2's transition, verbatim. Only `transform` animates, which is
  *  compositor-only: no layout, no paint, no main-thread work per frame. */
@@ -1165,8 +1254,69 @@ function PickCard({
   const isFlipped = flipped.has(v.cid)
   const hasBack = isFlipped || opened.has(v.cid)
 
+  // Expand + snapshot (2026-09-24). See PER-CARD EXPAND + SNAPSHOT above.
+  const tileRef = useRef<HTMLDivElement | null>(null)
+  const stage = useExpandStage()
+  const exKey = `gct:${v.cid}`
+  const [localOpen, setLocalOpen] = useState(false)
+  const isExpanded = stage ? stage.expandedId === exKey : localOpen
+  const expandCard = useCallback(() => {
+    if (stage) stage.expand(exKey)
+    else setLocalOpen(true)
+  }, [stage, exKey])
+  const collapseCard = useCallback(() => {
+    if (stage) stage.collapse(exKey)
+    else setLocalOpen(false)
+  }, [stage, exKey])
+  useEffect(() => {
+    if (stage || !localOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLocalOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [stage, localOpen])
+  // Collapse on unmount so a card that leaves the board cannot pin the stage.
+  const collapseRef = useRef(collapseCard)
+  collapseRef.current = collapseCard
+  const expandedRef = useRef(isExpanded)
+  expandedRef.current = isExpanded
+  useEffect(
+    () => () => {
+      if (expandedRef.current) collapseRef.current()
+    },
+    [],
+  )
+  const shotLabel = `${row.symbol} ${fmtStrike(row.strike)}${v.side} · GEX Change Top`
+  const shotTarget = useMemo(
+    () => ({
+      id: `gct-card:${v.cid}`,
+      icon: '📈',
+      label: shotLabel,
+      capture: () => shootTile(tileRef.current, shotLabel),
+    }),
+    [v.cid, shotLabel],
+  )
+  const expandedView =
+    isExpanded && v.wid != null ? (
+      <ExpandedPick
+        row={row}
+        slot={slot}
+        date={date}
+        index={index}
+        frozen={frozen}
+        metric={metric}
+        onMetric={onMetric}
+        onClose={collapseCard}
+        pollMs={historyPollMs}
+        dateArg={dateArg}
+        shotLabel={shotLabel}
+      />
+    ) : null
+
   return (
     <div
+      ref={tileRef}
       // C107 — a row with no `watch_id` has no tooltip, because it is also not
       // flippable: it was never auto-probed, so there is no price line to show.
       title={cardTitle(row, v.side, v.wid, isFlipped)}
@@ -1229,8 +1379,14 @@ function PickCard({
               </span>
               {row.symbol}
             </span>
-            <span className="text-sm" style={{ color: T.text }}>
-              {fmtStrike(row.strike)}
+            <span className="flex items-center gap-1.5">
+              <span className="text-sm" style={{ color: T.text }}>
+                {fmtStrike(row.strike)}
+              </span>
+              {v.wid != null && (
+                <CardIconButton glyph={EXPAND_GLYPH} title={EXPAND_TITLE} onClick={expandCard} />
+              )}
+              <CopyShotButton target={shotTarget} className="shrink-0 text-sm leading-none" />
             </span>
           </div>
 
@@ -1278,6 +1434,13 @@ function PickCard({
             {preFlagNet(row) != null && (
               <span title={TAPE_CHIP_TITLE} style={{ color: flowColor(preFlagNet(row)) }}>
                 {TAPE_LINE_LABEL} {fmtFlow(preFlagNet(row))}
+              </span>
+            )}
+            {/* 2026-09-24 — the TICKER's board at the flag vs this pick's side.
+                Omitted on rows captured before the stamp. */}
+            {regimeChipLabel(row) != null && (
+              <span title={regimeChipTitle(row)} style={{ color: alignColor(rowAlign(row)) }}>
+                {regimeChipLabel(row)}
               </span>
             )}
             {/* C120 — renders nothing when `proj_grade` is null, the shipping default. */}
@@ -1357,9 +1520,54 @@ function PickCard({
             facingAway={!isFlipped}
             pollMs={historyPollMs}
             dateArg={dateArg}
+            onExpand={expandCard}
+            shotTarget={shotTarget}
           />
         )}
       </div>
+      {expandedView &&
+        (stage
+          ? stage.stage && createPortal(expandedView, stage.stage)
+          : createPortal(
+              <div className="fixed inset-0 z-50 flex flex-col bg-bg p-3">{expandedView}</div>,
+              document.body,
+            ))}
+    </div>
+  )
+}
+
+/**
+ * The expanded card: the back face at page size, plus the front's numbers. Its
+ * own queries share the tile's cache entries (same URLs), so opening it costs
+ * no request the tile has not already made.
+ */
+function ExpandedPick(props: {
+  row: Row
+  slot: string
+  date: string
+  index: ScorecardIndex
+  frozen: boolean
+  metric: Metric
+  onMetric: (m: Metric) => void
+  onClose: () => void
+  pollMs: number | undefined
+  dateArg: string | undefined
+  shotLabel: string
+}) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const { shotLabel } = props
+  const target = useMemo(
+    () => ({
+      id: `gct-card-expanded:${props.row.watch_id ?? props.row.symbol}`,
+      icon: '📈',
+      label: shotLabel,
+      capture: () => shootTile(ref.current, shotLabel),
+    }),
+    [props.row.watch_id, props.row.symbol, shotLabel],
+  )
+  return (
+    <div ref={ref} className="flex min-h-0 flex-1 flex-col">
+      <PickBack {...props} facingAway={false} variant="expanded" shotTarget={target} />
     </div>
   )
 }
@@ -1390,6 +1598,9 @@ function PickBack({
   facingAway,
   pollMs,
   dateArg,
+  variant = 'face',
+  onExpand,
+  shotTarget,
 }: {
   row: Row
   slot: string
@@ -1402,7 +1613,12 @@ function PickBack({
   facingAway: boolean
   pollMs: number | undefined
   dateArg: string | undefined
+  /** 'expanded' = the page-size view: no rotation, a tall chart, front stats. */
+  variant?: 'face' | 'expanded'
+  onExpand?: () => void
+  shotTarget?: Parameters<typeof CopyShotButton>[0]['target']
 }) {
+  const expanded = variant === 'expanded'
   const wid = row.watch_id
   // C10 — keyed by `watch_id`, so the same contract in several slots shares one
   // request and one cache entry inside `query()`. That is the whole reason a
@@ -1430,8 +1646,12 @@ function PickBack({
       /* C125 — the same surface as the front, turned around, at v2's tighter
          10px/12px padding (the front is 12/14). `inset: 0` makes this the SAME
          footprint as the front rather than a block beneath it. */
-      className={`${FACE_CLASS} px-3 py-2.5`}
-      style={BACK_FACE_STYLE}
+      className={
+        expanded
+          ? 'flex min-h-0 flex-1 flex-col overflow-auto rounded-md border px-5 py-4'
+          : `${FACE_CLASS} px-3 py-2.5`
+      }
+      style={expanded ? { borderColor: V2W.border, background: V2W.panelBg } : BACK_FACE_STYLE}
       // Out of the tab order while it is turned away — the mirror of the front
       // face's guard. Purely an interaction gate: it does not affect the paint,
       // so the first half of a flip-back still shows this face rotating away.
@@ -1458,21 +1678,54 @@ function PickBack({
             {v.side}
           </span>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          title={CARD_BACK_TO_PICK}
-          className="shrink-0 px-0.5 text-base leading-none"
-          style={{ color: T.text }}
-        >
-          {CARD_CLOSE_GLYPH}
-        </button>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {!expanded && onExpand && (
+            <CardIconButton glyph={EXPAND_GLYPH} title={EXPAND_TITLE} onClick={onExpand} />
+          )}
+          {shotTarget && <CopyShotButton target={shotTarget} className="shrink-0 text-sm leading-none" />}
+          <button
+            type="button"
+            data-capture-hide
+            onClick={onClose}
+            title={expanded ? 'Close (Esc)' : CARD_BACK_TO_PICK}
+            className="shrink-0 px-0.5 text-base leading-none"
+            style={{ color: T.text }}
+          >
+            {CARD_CLOSE_GLYPH}
+          </button>
+        </span>
       </div>
 
       {/* C129 */}
       <div className="mt-0.5 font-mono text-2xs" style={{ color: T.text }}>
         {row.expiry} · {v.captured}
       </div>
+
+      {/* Expanded only — the front face's numbers, so the big view is the whole
+          card rather than just its back. */}
+      {expanded && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-3 font-mono text-sm" style={{ color: T.text }}>
+          <span className="font-extrabold" style={{ color: deltaColor(row.latest_chg) }}>
+            Δ {fmtBig(row.latest_chg)}
+          </span>
+          {v.otmPct != null && <span style={{ color: V2.orange }}>{fmtOtm(v.otmPct)}</span>}
+          <span style={{ color: pctOpenColor(row.pct_open) }}>{fmtPctOpen(row.pct_open)}</span>
+          {(() => {
+            const sc = cardScore(row)
+            return (
+              <span style={{ color: V2.cyan }} title={sc.abs ? SCORE_ABS_TITLE : SCORE_REL_TITLE}>
+                {fmtScore(sc.v)}
+              </span>
+            )
+          })()}
+          {regimeChipLabel(row) != null && (
+            <span title={regimeChipTitle(row)} style={{ color: alignColor(rowAlign(row)) }}>
+              {regimeChipLabel(row)}
+            </span>
+          )}
+          <span className="text-xs opacity-80">{regimeChipTitle(row)}</span>
+        </div>
+      )}
 
       <div className="mb-1 mt-1.5">
         <div className="flex items-center justify-between gap-2">
@@ -1603,6 +1856,7 @@ function PickBack({
         </div>
       ) : (
         <PickChart
+          height={expanded ? EXPANDED_CHART_H : undefined}
           points={metric === 'flow' ? tapePoints : hist?.points ?? EMPTY_POINTS}
           metric={metric}
           entry={v.entry}
@@ -1695,6 +1949,8 @@ interface ChartState {
   peakTs: number | null
   hover: number | null
   width: number
+  /** Drawing height in viewBox units = CSS px. GEO.H on the tile. */
+  height: number
 }
 
 function PickChart({
@@ -1702,17 +1958,20 @@ function PickChart({
   metric,
   entry,
   peakTs,
+  height = GEO.H,
 }: {
   points: readonly PickPoint[]
   metric: Metric
   entry: number | null
   peakTs: number | null
+  height?: number
 }) {
   // C148 — v2 declared `id="gct-fill"` inside every chart instance, so a Flip
   // all put ~65 duplicate DOM ids on the page and every gradient reference
   // resolved to the first one. DOM identity is step 3's, and this is the fix.
   const gradId = useId()
-  const stateRef = useRef<ChartState>({ points, metric, entry, peakTs, hover: null, width: 0 })
+  const stateRef = useRef<ChartState>({ points, metric, entry, peakTs, hover: null, width: 0, height })
+  stateRef.current.height = height
   stateRef.current.points = points
   stateRef.current.metric = metric
   stateRef.current.entry = entry
@@ -1733,7 +1992,7 @@ function PickChart({
 
   // A prop change is a redraw. The chart never re-renders React for a tick —
   // the values go through the ref above and out through this one call.
-  useEffect(draw, [draw, points, metric, entry, peakTs])
+  useEffect(draw, [draw, points, metric, entry, peakTs, height])
 
   const onMount = useCallback(
     (h: ChartHandle) => {
@@ -1785,7 +2044,7 @@ function PickChart({
   return (
     // C139 — a FIXED height. The chart never changes height with tile width, so
     // flipping a card can never reflow the grid around it.
-    <div className="h-24">
+    <div className={height === GEO.H ? 'h-24' : undefined} style={height === GEO.H ? undefined : { height }}>
       <ChartFrame
         className="h-full"
         onMount={onMount}
@@ -1809,7 +2068,8 @@ function chartWidth(boxW: number): number {
 
 function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
   const W = chartWidth(s.width)
-  root.setAttribute('viewBox', `0 0 ${W} ${GEO.H}`)
+  const H = s.height > 0 ? s.height : GEO.H
+  root.setAttribute('viewBox', `0 0 ${W} ${H}`)
   root.replaceChildren()
 
   const series = pickSeries(s.points, s.metric)
@@ -1818,9 +2078,9 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
   // for a card opened before its fetch lands, and for a single-point series.
   // The frame stays mounted, so the width is already measured when data arrives.
   if (series.length < MIN_CHART_POINTS) {
-    const t1 = mk('text', { x: W / 2, y: GEO.H / 2 - 4, 'text-anchor': 'middle', class: 'font-mono text-2xs' })
+    const t1 = mk('text', { x: W / 2, y: H / 2 - 4, 'text-anchor': 'middle', class: 'font-mono text-2xs' })
     t1.textContent = CHART_EMPTY_LINE_1
-    const t2 = mk('text', { x: W / 2, y: GEO.H / 2 + 10, 'text-anchor': 'middle', class: 'font-mono text-2xs' })
+    const t2 = mk('text', { x: W / 2, y: H / 2 + 10, 'text-anchor': 'middle', class: 'font-mono text-2xs' })
     t2.textContent = CHART_EMPTY_LINE_2
     root.append(paint(t1, { fill: T.text }), paint(t2, { fill: T.text }))
     return
@@ -1836,7 +2096,7 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
   const sx = (i: number): number =>
     GEO.PADL + (n <= 1 ? 0 : i / (n - 1)) * (W - GEO.PADL - GEO.PADR)
   const sy = (v: number): number =>
-    GEO.H - GEO.PADB - ((v - minY) / (maxY - minY || 1)) * (GEO.H - GEO.PADT - GEO.PADB)
+    H - GEO.PADB - ((v - minY) / (maxY - minY || 1)) * (H - GEO.PADT - GEO.PADB)
 
   // C144 — THREE gridlines and three ticks: bottom, middle, top. v2's own doc
   // comment claims five; the code draws three, and the code is what is on screen.
@@ -1868,9 +2128,9 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
   const first = series[0]
   const last = series[n - 1]
   if (first && last) {
-    const t0 = mk('text', { x: GEO.PADL, y: GEO.H - 4, 'text-anchor': 'start', class: 'font-mono text-3xs' })
+    const t0 = mk('text', { x: GEO.PADL, y: H - 4, 'text-anchor': 'start', class: 'font-mono text-3xs' })
     t0.textContent = chartTimeLabel(first.ts)
-    const t1 = mk('text', { x: W - GEO.PADR, y: GEO.H - 4, 'text-anchor': 'end', class: 'font-mono text-3xs' })
+    const t1 = mk('text', { x: W - GEO.PADR, y: H - 4, 'text-anchor': 'end', class: 'font-mono text-3xs' })
     t1.textContent = chartTimeLabel(last.ts)
     root.append(paint(t0, { fill: T.text }), paint(t1, { fill: T.text }))
   }
@@ -1905,7 +2165,7 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
   const line = series
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`)
     .join('')
-  const area = `${line}L${sx(n - 1).toFixed(1)},${(GEO.H - GEO.PADB).toFixed(1)}L${sx(0).toFixed(1)},${(GEO.H - GEO.PADB).toFixed(1)}Z`
+  const area = `${line}L${sx(n - 1).toFixed(1)},${(H - GEO.PADB).toFixed(1)}L${sx(0).toFixed(1)},${(H - GEO.PADB).toFixed(1)}Z`
 
   const defs = mk('defs', {})
   const grad = mk('linearGradient', { id: gradId, x1: 0, y1: 0, x2: 0, y2: 1 })
@@ -1946,7 +2206,7 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
           x1: px,
           y1: GEO.PADT,
           x2: px,
-          y2: GEO.H - GEO.PADB,
+          y2: H - GEO.PADB,
           'stroke-width': 1,
           'stroke-dasharray': '2 3',
         }),
@@ -1977,7 +2237,7 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
         x1: hx,
         y1: GEO.PADT,
         x2: hx,
-        y2: GEO.H - GEO.PADB,
+        y2: H - GEO.PADB,
         'stroke-width': 1,
         'stroke-dasharray': '3 3',
       }),
@@ -1999,7 +2259,7 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
     paint(
       mk('rect', {
         x: tX,
-        y: GEO.H - GEO.PADB + 2,
+        y: H - GEO.PADB + 2,
         width: tW,
         height: CHIP.H,
         rx: 3,
@@ -2010,7 +2270,7 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
   )
   const tText = mk('text', {
     x: tX + tW / 2,
-    y: GEO.H - GEO.PADB + 11,
+    y: H - GEO.PADB + 11,
     'text-anchor': 'middle',
     class: 'font-mono text-3xs',
   })
@@ -2021,7 +2281,7 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
   // the plot. Reads through `chartValueLabel`, so Net GEX shows "+$1.20M".
   const vLabel = chartValueLabel(hoverPt.v, s.metric)
   const vW = Math.min(GEO.PADL - 2, Math.max(CHIP.MIN_V, vLabel.length * CHIP.CHAR_W + CHIP.PAD))
-  const vY = Math.min(Math.max(0, hy - 6.5), GEO.H - GEO.PADB - CHIP.H)
+  const vY = Math.min(Math.max(0, hy - 6.5), H - GEO.PADB - CHIP.H)
   root.appendChild(
     paint(mk('rect', { x: 0, y: vY, width: vW, height: CHIP.H, rx: 3, 'stroke-width': 1 }), {
       fill: V2.bg,

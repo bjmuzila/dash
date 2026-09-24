@@ -207,6 +207,18 @@ export interface Row {
   flow_buy_pre?: number | null
   flow_sell_pre?: number | null
   flow_n_pre?: number | null
+  /**
+   * REGIME CONTEXT AT CAPTURE (2026-09-24) — the TICKER's whole board, not the
+   * strike: OI+Vol net GEX over the live window, call share of |GEX|, the
+   * net-GEX flip nearest spot, and spot-vs-flip. `mkt_*` is SPX at the same
+   * moment. All null on rows captured before the stamp.
+   */
+  tk_net_gex?: number | null
+  tk_call_share?: number | null
+  tk_flip?: number | null
+  tk_regime?: string | null
+  mkt_net_gex?: number | null
+  mkt_regime?: string | null
 }
 
 /** `live` is true only when EVERY row in the bucket was trigger-written. */
@@ -392,6 +404,67 @@ export const ENTRY_FLOOR = 0.5
 
 export const GATE = { chg: 500_000, pctOpen: 50, z: 2, gexOpen: 50_000, nSamples: 3 } as const
 
+// ─────────────────────────────────────────────────────────────────────────────
+// REGIME — the ticker's board vs the pick's side (2026-09-24)
+//
+// Mirrors `boardBias` / `regimeAlign` in server-v2/_lib-pick-grade.cjs, which
+// is what Pick Study buckets on. Change both or neither.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type BoardBias = 'bull' | 'mixed' | 'bear'
+export type Align = 'with' | 'neutral' | 'against'
+
+/** Three votes: spot vs flip, sign of net GEX, call share (>= .55 / <= .45). */
+export function boardBias(r: Pick<Row, 'tk_regime' | 'tk_net_gex' | 'tk_call_share'>): BoardBias | null {
+  const net = r.tk_net_gex
+  const share = r.tk_call_share
+  const hasNet = net != null && Number.isFinite(net)
+  const hasShare = share != null && Number.isFinite(share)
+  if (!r.tk_regime && !hasNet && !hasShare) return null
+  let v = 0
+  if (r.tk_regime === 'positive') v += 1
+  else if (r.tk_regime === 'negative') v -= 1
+  if (hasNet) v += (net as number) > 0 ? 1 : (net as number) < 0 ? -1 : 0
+  if (hasShare) v += (share as number) >= 0.55 ? 1 : (share as number) <= 0.45 ? -1 : 0
+  return v >= 2 ? 'bull' : v <= -2 ? 'bear' : 'mixed'
+}
+
+/** A call is a bullish bet, a put a bearish one; `mixed` boards are neutral. */
+export function regimeAlign(side: 'C' | 'P', bias: BoardBias | null): Align | null {
+  if (!bias) return null
+  if (bias === 'mixed') return 'neutral'
+  return (side === 'C') === (bias === 'bull') ? 'with' : 'against'
+}
+
+/** The pick's alignment, off the card's derived side. */
+export function rowAlign(r: Row): Align | null {
+  return regimeAlign(deriveSide(r), boardBias(r))
+}
+
+export function alignColor(a: Align | null): string {
+  return a === 'with' ? V2.up : a === 'against' ? V2.orange : T.text
+}
+
+/** The front-face chip: "bull +γ", "⚠ vs bear −γ". Null when nothing is stamped. */
+export function regimeChipLabel(r: Row): string | null {
+  const b = boardBias(r)
+  if (!b) return null
+  const g = r.tk_regime === 'positive' ? ' +γ' : r.tk_regime === 'negative' ? ' −γ' : ''
+  return rowAlign(r) === 'against' ? `⚠ vs ${b}${g}` : `${b}${g}`
+}
+
+/** Tooltip: the numbers behind the chip. */
+export function regimeChipTitle(r: Row): string {
+  const share = r.tk_call_share != null ? `${Math.round(r.tk_call_share * 100)}% calls` : 'call share —'
+  const flip = r.tk_flip != null ? `flip ${fmtStrike(r.tk_flip)}` : 'no flip in band'
+  const mkt = r.mkt_regime ? ` · SPX ${r.mkt_regime} γ${r.mkt_net_gex != null ? ` (${fmtGex(r.mkt_net_gex)})` : ''}` : ''
+  const a = rowAlign(r)
+  const lead = a === 'against'
+    ? `This ${deriveSide(r) === 'C' ? 'call' : 'put'} bets AGAINST the ticker's board. `
+    : ''
+  return `${lead}${r.symbol} board at the flag: net GEX ${fmtGex(r.tk_net_gex ?? null)} · ${share} · ${flip} · regime ${r.tk_regime ?? '—'}${mkt}.`
+}
+
 /**
  * Which switches are on. `z` defaults off — see the note above.
  *
@@ -407,9 +480,11 @@ export interface GateOn {
   z: boolean
   open: boolean
   n: boolean
+  /** Hide picks that bet against the ticker's board (2026-09-24). */
+  board: boolean
 }
 
-export const GATE_DEFAULT: GateOn = { chg: true, pct: true, z: false, open: false, n: false }
+export const GATE_DEFAULT: GateOn = { chg: true, pct: true, z: false, open: false, n: false, board: false }
 
 /**
  * The three conditions, each standing alone. Null fails: an unverifiable row is
@@ -425,7 +500,7 @@ export const GATE_DEFAULT: GateOn = { chg: true, pct: true, z: false, open: fals
  * READ here, not displayed.
  */
 /** The fields the gate reads off a row. */
-export type GateRow = Pick<Row, 'latest_chg' | 'pct_open' | 'z_score' | 'gex_open' | 'n_samples'>
+export type GateRow = Row
 
 export const GATE_TESTS: {
   key: keyof GateOn
@@ -456,6 +531,14 @@ export const GATE_TESTS: {
     key: 'n',
     label: `n ≥ ${GATE.nSamples}`,
     of: (r) => r.n_samples != null && r.n_samples >= GATE.nSamples,
+  },
+  {
+    key: 'board',
+    label: 'not vs board',
+    of: (r) => {
+      const a = rowAlign(r)
+      return a != null && a !== 'against'
+    },
   },
 ]
 
@@ -521,7 +604,7 @@ export interface GateCounts {
  * to `hidden`: a pick failing two conditions is counted by both.
  */
 export function gateCounts(slots: readonly SlotBucket[], on: GateOn): GateCounts {
-  const alone = { chg: 0, pct: 0, z: 0, open: 0, n: 0 } as Record<keyof GateOn, number>
+  const alone = { chg: 0, pct: 0, z: 0, open: 0, n: 0, board: 0 } as Record<keyof GateOn, number>
   const active = gateActive(on)
   let total = 0
   let pass = 0
@@ -545,6 +628,9 @@ export function gateSwitchTitle(
   const base = `${label} — on its own this drops ${cost} of ${total} pick${total === 1 ? '' : 's'} on this date.`
   if (key === 'open') {
     return `${base}\n\nOFF BY DEFAULT. The denominator floor: pct_open is today's volume GEX over the OPEN (OI-only) GEX, so a strike with a few contracts of carried OI reads "+300%" off almost nothing. Null on rows before 2026-09-05, and a null fails.`
+  }
+  if (key === 'board') {
+    return `${base}\n\nOFF BY DEFAULT. Hides calls on a bear board and puts on a bull board. The board is the TICKER's live GEX at the flag, read three ways — spot vs the net-GEX flip, the sign of net GEX, and the call share. Null on rows before 2026-09-24, and a null fails. Judge it in Pick Study → "Pick vs the ticker's board" first.`
   }
   if (key === 'n') {
     return `${base}\n\nOFF BY DEFAULT. With only 2 samples in the window the z-score is exactly 1 whatever happened, so a thin-sample pick carries no z information. Null on rows before 2026-09-05, and a null fails.`

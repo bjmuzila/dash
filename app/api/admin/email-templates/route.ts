@@ -30,6 +30,7 @@ import { voltickMergerEmail, voltickMergerText, VOLTICK_MERGER_SUBJECT } from "@
 import { autopayOffEmail, autopayOffText, AUTOPAY_OFF_SUBJECT } from "@/lib/emails/autopay-off";
 import { voltick75SubscribersEmail, voltick75SubscribersText, VOLTICK75_SUBSCRIBERS_SUBJECT } from "@/lib/emails/voltick75-subscribers";
 import { voltickCodeFixEmail, voltickCodeFixText, VOLTICK_CODE_FIX_SUBJECT } from "@/lib/emails/voltick-code-fix";
+import { voltickJoinedForcesEmail, voltickJoinedForcesText, VOLTICK_JOINED_FORCES_SUBJECT } from "@/lib/emails/voltick-joined-forces";
 import { hiddenTemplateIdSet, hideTemplate, restoreTemplate } from "@/lib/emails/hiddenTemplates";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
@@ -279,6 +280,13 @@ function buildTemplates(): Template[] {
       subject: VOLTICK_CODE_FIX_SUBJECT,
       html: voltickCodeFixEmail,
       text: voltickCodeFixText,
+    },
+    {
+      id: "voltick-joined-forces",
+      label: "🤝 CB Edge has joined forces with Voltick.io — join at voltick.io/bzila",
+      subject: VOLTICK_JOINED_FORCES_SUBJECT,
+      html: voltickJoinedForcesEmail,
+      text: voltickJoinedForcesText,
     },
   ];
 }

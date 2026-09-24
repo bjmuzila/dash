@@ -33,7 +33,6 @@ const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 export const PUBLIC_NAV = [
   { label: "Overview", href: "/" },
   ...(SALES_CLOSED ? [] : [{ label: "Pricing", href: "/pricing?from=nav" }]),
-  { label: "Docs", href: "/docs" },
 ];
 
 /**
