@@ -68,15 +68,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { CSSProperties, ReactNode } from 'react'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useExpandStage } from '@/design/primitives/Expand'
+import { ProbeChart, type Bar } from '@/board/topFlow/ContractProbe'
 import { CopyShotButton } from '@/shell/CopyShot'
 import type { ShotResult } from '@/shell/snapshot'
 import { Card } from '@/design/primitives/Card'
-import type { ChartHandle } from '@/design/primitives/ChartFrame'
-import { ChartFrame } from '@/design/primitives/ChartFrame'
-import { Chip, SegGroup } from '@/design/primitives/Controls'
+import { Chip } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
 import type { Column } from '@/design/primitives/Table'
 import { Table } from '@/design/primitives/Table'
@@ -86,7 +85,6 @@ import type {
   GateOn,
   GradeInfo,
   Metric,
-  PickPoint,
   ResultRow,
   Row,
   ScorecardIndex,
@@ -116,8 +114,6 @@ import {
   GRADE_PILL_PROVISIONAL_MARK,
   LIVE_TRIGGER_BADGE,
   LIVE_TRIGGER_TITLE,
-  MIN_CHART_POINTS,
-  METRICS,
   NEVER_GREEN_LABEL,
   NEVER_GREEN_TITLE,
   OPEN_CARD_POLL_MAX,
@@ -127,7 +123,6 @@ import {
   PROJ_LEGEND_LEAD,
   PROJ_LEGEND_TAIL,
   PROJ_PILL_PREFIX,
-  RANGE_PILL_LABEL,
   REFRESH_LABEL,
   SCORE_LEGEND,
   SCORECARD_COLUMNS,
@@ -147,7 +142,6 @@ import {
   VERY_STRONG_LABEL,
   GATE_DEFAULT,
   GATE_TESTS,
-  Y_TICK_FRACTIONS,
   anyProjected,
   avgPeakColor,
   cardRenderKey,
@@ -159,13 +153,9 @@ import {
   flowColor,
   fmtFlow,
   fmtVolOi,
-  metricHasZeroLine,
   preFlagNet,
   cardSubtitle,
   cardTitle,
-  chartHint,
-  chartTimeLabel,
-  chartValueLabel,
   cheapToggleLabel,
   cheapToggleTitle,
   closePctTableColor,
@@ -200,7 +190,6 @@ import {
   gateSwitchTitle,
   gradePillTitle,
   indexResults,
-  nearestIndexToTs,
   neverGreenColor,
   noSlotsCopy,
   peakDollarsFromRow,
@@ -208,7 +197,6 @@ import {
   peakPctTableColor,
   picksLabel,
   pctOpenColor,
-  pickSeries,
   pnlColor,
   projGradeKey,
   projPillTitle,
@@ -218,19 +206,16 @@ import {
   scorecardErrorLabel,
   scorecardFreshnessLabel,
   scorecardSummary,
-  showEntryLine,
   showResultsLabel,
   sideColor,
   slotHeaderColor,
   slotLabel,
   slotsMultiplier,
   underFloorTitle,
-  yDomain,
 } from '@/pages/scanner/gexChangeTop'
 import type { FlowResponse, HistoryResponse, ResultsResponse, TopResponse } from '@/pages/scanner/gexChangeTopData'
 import {
   HISTORY_STALE_MS,
-  flowPoints,
   pickFlowUrl,
   NO_STORE_STALE_MS,
   gexChangeTopUrls,
@@ -245,9 +230,6 @@ import { useQuery } from '@/data/api'
 // SMALL SHARED PIECES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** One frozen empty series, so "no history yet" is a stable prop identity and
- *  does not re-trigger the chart's redraw effect on every render. */
-const EMPTY_POINTS: readonly PickPoint[] = []
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PER-CARD EXPAND + SNAPSHOT (2026-09-24)
@@ -344,10 +326,8 @@ const FLIP_PERSPECTIVE = 1200
  *  demoted "now" line + toolbar + a fixed 96px chart + hint, and both faces are
  *  `inset: 0`, so this one number is the tile's height whichever way up it is.
  *  That is what stops a flip resizing the card or reflowing the grid. */
-const FLIP_MIN_HEIGHT = 292 // was 260; +tape line (2026-09-23) cut the hint off
+const FLIP_MIN_HEIGHT = 348 // 260 → 348 (2026-09-24): the back now carries the whale-page ProbeChart with its volume strip
 
-/** The expanded view's chart height (the tile's is the fixed 96 in GEO). */
-const EXPANDED_CHART_H = 360
 
 /** C108 — v2's transition, verbatim. Only `transform` animates, which is
  *  compositor-only: no layout, no paint, no main-thread work per frame. */
@@ -1592,8 +1572,6 @@ function PickBack({
   date,
   index,
   frozen,
-  metric,
-  onMetric,
   onClose,
   facingAway,
   pollMs,
@@ -1637,9 +1615,29 @@ function PickBack({
     staleMs: HISTORY_STALE_MS,
     pollMs,
   })
-  const tapePoints = useMemo(() => flowPoints(fq.data), [fq.data])
   const tape = fq.data?.ok ? fq.data : undefined
   const v = derivePickCard({ row, slot, date, index, hist })
+  // The probe snapshots as ProbeChart bars: one flat bar per 60s mark, volume =
+  // the change in the contract's day volume since the previous snapshot.
+  const bars = useMemo<Bar[]>(() => {
+    const out: Bar[] = []
+    let prevVol: number | null = null
+    for (const p of hist?.points ?? []) {
+      const m = p.mark
+      if (m == null || !Number.isFinite(m) || m <= 0) continue
+      let vol = 0
+      const cum = p.volume
+      if (cum != null && Number.isFinite(cum)) {
+        vol = prevVol != null ? Math.max(0, cum - prevVol) : 0
+        prevVol = cum
+      }
+      out.push({ time: Number(p.ts), open: m, high: m, low: m, close: m, volume: vol })
+    }
+    return out
+  }, [hist])
+  // Where the ring goes: the scorecard's entry snapshot, else the first mark.
+  const entryTs =
+    (wid != null ? index.resultById.get(wid)?.entry_ts : null) ?? bars[0]?.time ?? null
 
   return (
     <div
@@ -1729,7 +1727,7 @@ function PickBack({
 
       <div className="mb-1 mt-1.5">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-baseline gap-1">
+          <div className="flex min-w-0 items-baseline gap-1 whitespace-nowrap">
             {/*
               C130 — the headline is the PEAK, not "now": the card answers "was
               there a trade in it", not "what would I be holding at 3:55 PM".
@@ -1741,7 +1739,7 @@ function PickBack({
               NEUTRAL. See the `// BUG (v2):` marker at §SIGN COLOURS.
             */}
             <div
-              className="font-mono text-lg font-extrabold leading-none"
+              className="whitespace-nowrap font-mono text-lg font-extrabold leading-tight"
               style={{ color: peakPctCardColor(v.peakPct) }}
             >
               {fmtPeakHeadline(v.peakPct)}
@@ -1829,24 +1827,12 @@ function PickBack({
         </div>
       </div>
 
-      {/* v2's `.op-toolbar`: RANGE LEFT, METRIC RIGHT, one row, `justify-between`. */}
-      <div className="mb-1 flex items-center justify-between gap-1.5">
-        {/* C135 — NOT a control. The recorder's snapshots are one session, so
-            there is exactly one range. */}
-        <StaticPill label={RANGE_PILL_LABEL} className="text-2xs" />
-        {/* C136 — one metric for the WHOLE tab. Switching it here switches every
-            open card at once. */}
-        <SegGroup<Metric>
-          options={METRICS.map((m) => ({ label: m.label, value: m.key }))}
-          value={metric}
-          onChange={onMetric}
-        />
-      </div>
-
-      {/* C137 — three-way, in this order. The loading branch requires an empty
-          series, so a refresh over existing points keeps the chart on screen
-          instead of blanking it. */}
-      {wid != null && q.loading && !(hist?.points.length ?? 0) ? (
+      {/* 2026-09-24 — PRICE ONLY, drawn by the whale page's own ProbeChart
+          (board/topFlow/ContractProbe): the entry rung + ring on the line at
+          the flag, the high ringed green, the low red, the last mark in the
+          rail, and the contract's per-snapshot volume underneath. The GEX /
+          Tape / V/OI tabs are gone — the tape lives in the line above. */}
+      {wid != null && q.loading && !bars.length ? (
         <div className="py-6 text-center font-mono text-2xs" style={{ color: T.text }}>
           {CHART_LOADING}
         </div>
@@ -1854,448 +1840,15 @@ function PickBack({
         <div className="py-6 text-center font-mono text-2xs" style={{ color: V2.red }}>
           {hist.error}
         </div>
+      ) : bars.length < 2 ? (
+        <div className="py-6 text-center font-mono text-2xs" style={{ color: T.text }}>
+          {CHART_EMPTY_LINE_1} {CHART_EMPTY_LINE_2}
+        </div>
       ) : (
-        <PickChart
-          height={expanded ? EXPANDED_CHART_H : undefined}
-          points={metric === 'flow' ? tapePoints : hist?.points ?? EMPTY_POINTS}
-          metric={metric}
-          entry={v.entry}
-          // C149 — no peak marker on Net GEX, where a "high" means nothing.
-          peakTs={metric === 'mark' ? v.peakTs : null}
-        />
+        <ProbeChart bars={bars} entry={v.entry} entryTs={entryTs} size={null} wide={expanded} />
       )}
-
-      {/* C138 — restates C133 in one line so a cropped screenshot of the chart
-          still carries the entry and the peak. */}
-      <div
-        className="mt-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-3xs tracking-wide"
-        style={{ color: T.text }}
-      >
-        {chartHint({
-          metric,
-          entry: v.entry,
-          trigLabel: v.trigLabel,
-          peakMark: v.peakMark,
-          peakTs: v.peakTs,
-          lastTs: v.lastTs,
-        })}
-      </div>
     </div>
   )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// C139–C153 — THE CHART
-//
-// Mounted through ChartFrame, drawn imperatively into an SVG the frame owns —
-// non-negotiable 5. There is no canvas here, so there is no `data-cb-layer` to
-// place: v2's chart is SVG, and SVG keeps the tokens as `var()` strings instead
-// of forcing a resolve.
-//
-// ── VISIBILITY: TWO GATES, AND THEY COVER DIFFERENT THINGS ──────────────────
-//
-// 1. SCROLLED OUT / BACKGROUND TAB → ChartFrame's signal. This is an on-demand
-//    renderer (it paints when the data, the metric or the crosshair changes, not
-//    on a frame loop), so `draw()` returns early on `!handle.visible()` and the
-//    `onVisibility(true)` edge repaints whatever was skipped. That signal is an
-//    IntersectionObserver plus `document.hidden`.
-//
-// 2. ROTATED AWAY BY THE FLIP → `backface-visibility: hidden` on the face, and
-//    ONLY that. Be precise about it: an IntersectionObserver does NOT see a
-//    turned-away face. `rotateY(180deg)` maps the border box to a rectangle of
-//    the same area in the root's coordinate space, so the observer reports the
-//    face as intersecting and `handle.visible()` stays true — the frame's gate
-//    is about the viewport, not about which way a box is pointing.
-//
-//    `backface-visibility: hidden` is what makes the claim true, and it does it
-//    at two levels: the compositor drops the face from the paint entirely, and
-//    the face drops out of hit-testing, so a turned-away chart receives no
-//    `mousemove` and therefore does no crosshair redraws. What remains is a data
-//    or metric change while face-down, which rebuilds one 96px SVG per opened
-//    card — exactly v2's behaviour, and the reason `hasBack` keeps the number of
-//    mounted backs down to the cards someone has actually opened.
-//
-// THE GEOMETRY BELOW IS v2's, to the pixel. It is here rather than in
-// gexChangeTop.ts because it is px and DOM identity, which the logic module
-// deliberately left to step 3 (see its REMOVED block).
-// ─────────────────────────────────────────────────────────────────────────────
-
-const NS = 'http://www.w3.org/2000/svg'
-
-/** C139 — the viewBox is the box's REAL pixel width at a FIXED pixel height, so
- *  one viewBox unit is one CSS pixel and tick text renders at its literal size. */
-const GEO = { W_MIN: 160, W_FALLBACK: 240, H: 96, PADL: 44, PADR: 8, PADT: 6, PADB: 16 } as const
-/** C152, C153 — the crosshair chips. `5.4` is v2's per-character width estimate
- *  for the mono face; the value chip is capped so it never spills into the plot. */
-const CHIP = { H: 13, CHAR_W: 5.4, PAD: 8, MIN_T: 30, MIN_V: 26 } as const
-
-function mk(tag: string, attrs: Record<string, string | number>): SVGElement {
-  const e = document.createElementNS(NS, tag)
-  for (const [k, val] of Object.entries(attrs)) e.setAttribute(k, String(val))
-  return e
-}
-
-/** Colours go through `style`, not attributes: an inline declaration is the one
- *  place a `var(--color-…)` is guaranteed to resolve. */
-function paint(e: SVGElement, css: Record<string, string>): SVGElement {
-  for (const [k, val] of Object.entries(css)) e.style.setProperty(k, val)
-  return e
-}
-
-interface ChartState {
-  points: readonly PickPoint[]
-  metric: Metric
-  entry: number | null
-  peakTs: number | null
-  hover: number | null
-  width: number
-  /** Drawing height in viewBox units = CSS px. GEO.H on the tile. */
-  height: number
-}
-
-function PickChart({
-  points,
-  metric,
-  entry,
-  peakTs,
-  height = GEO.H,
-}: {
-  points: readonly PickPoint[]
-  metric: Metric
-  entry: number | null
-  peakTs: number | null
-  height?: number
-}) {
-  // C148 — v2 declared `id="gct-fill"` inside every chart instance, so a Flip
-  // all put ~65 duplicate DOM ids on the page and every gradient reference
-  // resolved to the first one. DOM identity is step 3's, and this is the fix.
-  const gradId = useId()
-  const stateRef = useRef<ChartState>({ points, metric, entry, peakTs, hover: null, width: 0, height })
-  stateRef.current.height = height
-  stateRef.current.points = points
-  stateRef.current.metric = metric
-  stateRef.current.entry = entry
-  stateRef.current.peakTs = peakTs
-
-  const handleRef = useRef<ChartHandle | null>(null)
-  const svgRef = useRef<SVGSVGElement | null>(null)
-
-  const draw = useCallback(() => {
-    const host = handleRef.current
-    const root = svgRef.current
-    if (!host || !root) return
-    // The visibility gate. A chart nobody can see does not paint; the frame
-    // calls back on the way in and this runs again.
-    if (!host.visible()) return
-    drawChart(root, stateRef.current, gradId)
-  }, [gradId])
-
-  // A prop change is a redraw. The chart never re-renders React for a tick —
-  // the values go through the ref above and out through this one call.
-  useEffect(draw, [draw, points, metric, entry, peakTs, height])
-
-  const onMount = useCallback(
-    (h: ChartHandle) => {
-      handleRef.current = h
-      stateRef.current.width = h.width
-      const root = document.createElementNS(NS, 'svg') as SVGSVGElement
-      root.setAttribute('preserveAspectRatio', 'none')
-      root.style.setProperty('width', '100%')
-      root.style.setProperty('height', '100%')
-      root.style.setProperty('display', 'block')
-      root.style.setProperty('cursor', 'crosshair')
-      h.el.appendChild(root)
-      svgRef.current = root
-
-      // C150 — nearest index in viewBox units, so the crosshair stays correct at
-      // any tile width. `onClick` stopping propagation is v2's; the tile is no
-      // longer clickable here, so reading the chart cannot close it either way.
-      const onMove = (e: MouseEvent) => {
-        const box = h.el.getBoundingClientRect()
-        if (!box.width) return
-        const s = stateRef.current
-        const n = pickSeries(s.points, s.metric).length
-        if (n < MIN_CHART_POINTS) return
-        const w = chartWidth(s.width)
-        const x = ((e.clientX - box.left) / box.width) * w
-        const frac = (x - GEO.PADL) / (w - GEO.PADL - GEO.PADR)
-        s.hover = Math.round(Math.min(1, Math.max(0, frac)) * (n - 1))
-        draw()
-      }
-      const onLeave = () => {
-        stateRef.current.hover = null
-        draw()
-      }
-      h.el.addEventListener('mousemove', onMove)
-      h.el.addEventListener('mouseleave', onLeave)
-      draw()
-
-      return () => {
-        h.el.removeEventListener('mousemove', onMove)
-        h.el.removeEventListener('mouseleave', onLeave)
-        root.remove()
-        svgRef.current = null
-        handleRef.current = null
-      }
-    },
-    [draw],
-  )
-
-  return (
-    // C139 — a FIXED height. The chart never changes height with tile width, so
-    // flipping a card can never reflow the grid around it.
-    <div className={height === GEO.H ? 'h-24' : undefined} style={height === GEO.H ? undefined : { height }}>
-      <ChartFrame
-        className="h-full"
-        onMount={onMount}
-        onResize={(w) => {
-          stateRef.current.width = w
-          draw()
-        }}
-        // THE VISIBILITY SIGNAL. On-demand renderer: repaint what was skipped.
-        onVisibility={(visible) => {
-          if (visible) draw()
-        }}
-      />
-    </div>
-  )
-}
-
-/** C139 — `boxW = 0` before the first measurement falls back to 240. */
-function chartWidth(boxW: number): number {
-  return Math.max(GEO.W_MIN, Math.round(boxW) || GEO.W_FALLBACK)
-}
-
-function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
-  const W = chartWidth(s.width)
-  const H = s.height > 0 ? s.height : GEO.H
-  root.setAttribute('viewBox', `0 0 ${W} ${H}`)
-  root.replaceChildren()
-
-  const series = pickSeries(s.points, s.metric)
-
-  // C147 — under two plotted samples there is nothing to draw. Also the state
-  // for a card opened before its fetch lands, and for a single-point series.
-  // The frame stays mounted, so the width is already measured when data arrives.
-  if (series.length < MIN_CHART_POINTS) {
-    const t1 = mk('text', { x: W / 2, y: H / 2 - 4, 'text-anchor': 'middle', class: 'font-mono text-2xs' })
-    t1.textContent = CHART_EMPTY_LINE_1
-    const t2 = mk('text', { x: W / 2, y: H / 2 + 10, 'text-anchor': 'middle', class: 'font-mono text-2xs' })
-    t2.textContent = CHART_EMPTY_LINE_2
-    root.append(paint(t1, { fill: T.text }), paint(t2, { fill: T.text }))
-    return
-  }
-
-  const showEntry = showEntryLine(s.metric, s.entry)
-  const values = series.map((p) => p.v)
-  const { minY, maxY } = yDomain(values, showEntry ? s.entry : null)
-  const n = series.length
-
-  // C143 — INDEX-spaced, not time-spaced: a gap in the snapshot series is not
-  // visible as a gap. v2's scale, transcribed.
-  const sx = (i: number): number =>
-    GEO.PADL + (n <= 1 ? 0 : i / (n - 1)) * (W - GEO.PADL - GEO.PADR)
-  const sy = (v: number): number =>
-    H - GEO.PADB - ((v - minY) / (maxY - minY || 1)) * (H - GEO.PADT - GEO.PADB)
-
-  // C144 — THREE gridlines and three ticks: bottom, middle, top. v2's own doc
-  // comment claims five; the code draws three, and the code is what is on screen.
-  for (const f of Y_TICK_FRACTIONS) {
-    const v = minY + f * (maxY - minY)
-    const y = sy(v)
-    root.appendChild(
-      paint(mk('line', { x1: GEO.PADL, y1: y, x2: W - GEO.PADR, y2: y, 'stroke-width': 1 }), {
-        stroke: alpha(T.text, 0.08),
-      }),
-    )
-    const tick = mk('text', {
-      x: GEO.PADL - 5,
-      y: y + 3,
-      'text-anchor': 'end',
-      class: 'font-mono text-3xs',
-    })
-    tick.textContent = chartValueLabel(v, s.metric)
-    root.appendChild(paint(tick, { fill: T.text }))
-  }
-
-  // C145 — TWO x labels, first and last.
-  //
-  // // BUG (v2): `chartTimeLabel` is the BROWSER's locale and the BROWSER's
-  // // timezone, while `fmtClock` (C25) pins ET. For a viewer outside New York
-  // // this axis and the "high 1:42 PM" stamp directly above it name different
-  // // times for the same sample. Transcribed as written — see the marker on
-  // // `chartTimeLabel` in gexChangeTop.ts.
-  const first = series[0]
-  const last = series[n - 1]
-  if (first && last) {
-    const t0 = mk('text', { x: GEO.PADL, y: H - 4, 'text-anchor': 'start', class: 'font-mono text-3xs' })
-    t0.textContent = chartTimeLabel(first.ts)
-    const t1 = mk('text', { x: W - GEO.PADR, y: H - 4, 'text-anchor': 'end', class: 'font-mono text-3xs' })
-    t1.textContent = chartTimeLabel(last.ts)
-    root.append(paint(t0, { fill: T.text }), paint(t1, { fill: T.text }))
-  }
-
-  // C146 — mutually exclusive by metric.
-  if (metricHasZeroLine(s.metric) && minY < 0 && maxY > 0) {
-    const zy = sy(0)
-    root.appendChild(
-      paint(mk('line', { x1: GEO.PADL, y1: zy, x2: W - GEO.PADR, y2: zy, 'stroke-width': 1 }), {
-        stroke: alpha(T.text, 0.2),
-      }),
-    )
-  }
-  if (showEntry && s.entry != null) {
-    const ey = sy(s.entry)
-    root.appendChild(
-      paint(
-        mk('line', {
-          x1: GEO.PADL,
-          y1: ey,
-          x2: W - GEO.PADR,
-          y2: ey,
-          'stroke-width': 1,
-          'stroke-dasharray': '4 4',
-        }),
-        { stroke: alpha(T.text, 0.35) },
-      ),
-    )
-  }
-
-  // C143, C148 — the area under the line, then the line.
-  const line = series
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`)
-    .join('')
-  const area = `${line}L${sx(n - 1).toFixed(1)},${(H - GEO.PADB).toFixed(1)}L${sx(0).toFixed(1)},${(H - GEO.PADB).toFixed(1)}Z`
-
-  const defs = mk('defs', {})
-  const grad = mk('linearGradient', { id: gradId, x1: 0, y1: 0, x2: 0, y2: 1 })
-  grad.append(
-    paint(mk('stop', { offset: '0%' }), { 'stop-color': alpha(V2.cyan, 0.28) }),
-    paint(mk('stop', { offset: '100%' }), { 'stop-color': alpha(V2.cyan, 0) }),
-  )
-  defs.appendChild(grad)
-  root.appendChild(defs)
-  root.appendChild(mk('path', { d: area, fill: `url(#${CSS.escape(gradId)})` }))
-  root.appendChild(
-    paint(
-      mk('path', {
-        d: line,
-        fill: 'none',
-        'stroke-width': 1.75,
-        'stroke-linejoin': 'round',
-        'stroke-linecap': 'round',
-      }),
-      { stroke: V2.cyan },
-    ),
-  )
-
-  // C149 — NEAREST charted sample to the scorecard's peak, and nothing at all
-  // when the nearest is more than five minutes away: that is a different event,
-  // and pointing at the wrong bar is worse than pointing at none.
-  // INK: `V2.green` #8ECAE6, v2's own peak-marker colour. Step 2 read it as the
-  // positive semantic and put it on MOVE_UP; 2026-09-03 reverses that — the
-  // marker is drawn UNCONDITIONALLY, so it is not a sign, and it takes the
-  // CHROME leg of the #8ECAE6 split rather than `V2.up`. See §SIGN COLOURS.
-  const peakIdx = nearestIndexToTs(series, s.peakTs)
-  const peakPt = peakIdx == null ? undefined : series[peakIdx]
-  if (peakIdx != null && peakPt) {
-    const px = sx(peakIdx)
-    root.appendChild(
-      paint(
-        mk('line', {
-          x1: px,
-          y1: GEO.PADT,
-          x2: px,
-          y2: H - GEO.PADB,
-          'stroke-width': 1,
-          'stroke-dasharray': '2 3',
-        }),
-        { stroke: alpha(V2.green, 0.35) },
-      ),
-    )
-    root.appendChild(
-      paint(mk('circle', { cx: px, cy: sy(peakPt.v), r: 3.2, 'stroke-width': 1 }), {
-        fill: V2.green,
-        stroke: V2.bg,
-      }),
-    )
-  }
-
-  // C151 — with no hover, one plain dot on the last point (no background stroke,
-  // unlike the crosshair dot). v2's asymmetry, kept.
-  const hoverPt = s.hover == null ? undefined : series[s.hover]
-  if (!hoverPt) {
-    root.appendChild(paint(mk('circle', { cx: sx(n - 1), cy: sy(last?.v ?? 0), r: 3 }), { fill: V2.cyan }))
-    return
-  }
-
-  const hx = sx(s.hover ?? 0)
-  const hy = sy(hoverPt.v)
-  root.appendChild(
-    paint(
-      mk('line', {
-        x1: hx,
-        y1: GEO.PADT,
-        x2: hx,
-        y2: H - GEO.PADB,
-        'stroke-width': 1,
-        'stroke-dasharray': '3 3',
-      }),
-      { stroke: alpha(V2.cyan, 0.5) },
-    ),
-  )
-  root.appendChild(
-    paint(mk('circle', { cx: hx, cy: hy, r: 3, 'stroke-width': 1 }), {
-      fill: V2.cyan,
-      stroke: V2.bg,
-    }),
-  )
-
-  // C152 — the time chip, clamped inside the box.
-  const tLabel = chartTimeLabel(hoverPt.ts)
-  const tW = Math.max(CHIP.MIN_T, tLabel.length * CHIP.CHAR_W + CHIP.PAD)
-  const tX = Math.min(Math.max(0, hx - tW / 2), W - tW)
-  root.appendChild(
-    paint(
-      mk('rect', {
-        x: tX,
-        y: H - GEO.PADB + 2,
-        width: tW,
-        height: CHIP.H,
-        rx: 3,
-        'stroke-width': 1,
-      }),
-      { fill: V2.bg, stroke: alpha(V2.cyan, 0.4) },
-    ),
-  )
-  const tText = mk('text', {
-    x: tX + tW / 2,
-    y: H - GEO.PADB + 11,
-    'text-anchor': 'middle',
-    class: 'font-mono text-3xs',
-  })
-  tText.textContent = tLabel
-  root.appendChild(paint(tText, { fill: T.text }))
-
-  // C153 — the value chip, capped at the left gutter so it never spills into
-  // the plot. Reads through `chartValueLabel`, so Net GEX shows "+$1.20M".
-  const vLabel = chartValueLabel(hoverPt.v, s.metric)
-  const vW = Math.min(GEO.PADL - 2, Math.max(CHIP.MIN_V, vLabel.length * CHIP.CHAR_W + CHIP.PAD))
-  const vY = Math.min(Math.max(0, hy - 6.5), H - GEO.PADB - CHIP.H)
-  root.appendChild(
-    paint(mk('rect', { x: 0, y: vY, width: vW, height: CHIP.H, rx: 3, 'stroke-width': 1 }), {
-      fill: V2.bg,
-      stroke: alpha(V2.cyan, 0.4),
-    }),
-  )
-  const vText = mk('text', {
-    x: vW / 2,
-    y: vY + 9,
-    'text-anchor': 'middle',
-    class: 'font-mono text-3xs',
-  })
-  vText.textContent = vLabel
-  root.appendChild(paint(vText, { fill: V2.cyan }))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

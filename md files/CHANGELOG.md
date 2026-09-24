@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-24 - GEX Change Top card back: whale-page price chart
+
+- The card back now draws **price only**, using the whale page's `ProbeChart` (`board/topFlow/ContractProbe`): the entry rung plus a ring on the line at the flag, the high ringed green, the low ringed red, the last mark in the rail, a per-snapshot volume strip, and the hover readout. Expanded cards use its wide mode.
+- The GEX / Tape / V/OI tabs, the 1D pill and the hint line are removed. The tape stays as the text line above the chart. The old imperative SVG chart (`PickChart`/`drawChart`) is deleted.
+- The peak headline no longer wraps, so snapshots no longer show the ▲ and % overlapping the IN line. The tile is now 348px tall to fit the chart with its volume strip.
+- Files: `cbedge-v3/src/pages/scanner/GexChangeTopTab.tsx`.
+
+## 2026-09-24 - Public landing (merger page): Voltick info, member sections removed
+
+- `components/landing/MergerClient.tsx`: removed the 4-fact strip (Closed / Renewals / Features / Term end), the "For current members" section and the "What happens, and when" timeline.
+- Voltick card now carries a short description + four feature bullets; new "About Voltick" section (four tiles) with a "Go to voltick.io for more info" button (tracked as `landing-about`). No discount code on the public page.
+- `components/landing/PublicNav.tsx`: Docs tab removed from the top nav (footer Docs link kept).
+
 ## 2026-09-24 - GEX Change Top: regime context + card expand / snapshot
 
 - **Regime at the flag.** Every pick now stamps the TICKER's board at capture (`gex_change_top.tk_net_gex / tk_call_share / tk_flip / tk_regime`) from the live strike-growth feed (OI+Vol, front expiries, flip = net-GEX zero crossing nearest spot within 15%), falling back to `strike_growth_expiry` totals. SPX backdrop stamped as `mkt_net_gex / mkt_regime` from market state.
