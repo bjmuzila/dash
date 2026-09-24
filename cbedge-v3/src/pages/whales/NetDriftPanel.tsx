@@ -94,7 +94,7 @@ export function NetDriftPanel({ phone = false }: { phone?: boolean } = {}) {
   return (
     <div className="flex min-h-0 flex-col rounded-md border border-line bg-surface">
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <h2 className="text-2xs font-bold uppercase tracking-[0.11em] text-faint">Net Drift (Premium)</h2>
+        <h2 className="text-2xs font-bold uppercase tracking-[0.11em] text-fg">Net Drift (Premium)</h2>
         <Select
           value={active}
           onChange={setActive}
@@ -102,7 +102,7 @@ export function NetDriftPanel({ phone = false }: { phone?: boolean } = {}) {
           menuWidth="w-28"
           options={TICKER_OPTIONS}
         />
-        {switching && <span className="text-2xs text-faint">loading…</span>}
+        {switching && <span className="text-2xs text-fg">loading…</span>}
         {allows24h && (
           <span className="ml-auto">
             <SegGroup<ChartSpan>
@@ -120,14 +120,14 @@ export function NetDriftPanel({ phone = false }: { phone?: boolean } = {}) {
         <div className="flex flex-wrap items-center justify-center gap-6 px-3 py-2 text-xs font-semibold">
           <span style={{ color: NET_DRIFT_CALL }}>● Calls {fmtPremium(netSeries.lastCall)}</span>
           <span style={{ color: NET_DRIFT_PUT }}>● Puts {fmtPremium(netSeries.lastPut)}</span>
-          <span className="text-muted">Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
+          <span className="text-fg">Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
           {spotSeries.last > 0 && (
-            <span className="text-muted">
+            <span className="text-fg">
               <span className="opacity-40">─</span> {active} {fmtSpot(spotSeries.last)}
             </span>
           )}
           {chartSpan === '24h' && netSeries.hasData && (
-            <span className="tabular text-muted">
+            <span className="tabular text-fg">
               {fmtEtHm(netSeries.openSec)}–{fmtEtHm(netSeries.closeSec)} ET
             </span>
           )}
@@ -137,7 +137,7 @@ export function NetDriftPanel({ phone = false }: { phone?: boolean } = {}) {
           <NetDriftChart series={netSeries} ordersByMin={ordersByMin} spotPts={spotSeries.pts} locked />
         </div>
         {!netSeries.hasData && (
-          <p className="px-3 pb-3 text-center text-xs text-muted">
+          <p className="px-3 pb-3 text-center text-xs text-fg">
             {live ? `No ${active} flow yet today.` : 'Connecting to feed…'}
           </p>
         )}

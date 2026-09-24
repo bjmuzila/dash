@@ -1,11 +1,36 @@
 # Changelog
 
-## 2026-09-24 - Tracked contracts: Snapshot button on the pop-out
+## 2026-09-24 - Theme check: Voltick palette moved into tokens.css (unblocks push)
 
-- The popped-out contract probe (⤢ on a tracked contract's chart) now shows the tracked row's details above the chart: contract and source, expiry with DTE, entry and print time, mark, move (% and $), size, premium, when it was tracked, and the note.
-- New **📸 Snapshot** button in the pop-out header. It copies a PNG of the whole panel, including that strip, with the caption `Tracked contract · <contract> · <expiry>`. It is owner-only, like every CopyShot button. The expand, close, snapshot and "press Esc" hint are `data-capture-hide`.
-- `ContractProbe` gains an optional `alertInfo` prop (`ProbeAlertInfo`). Every other probe leaves it out and looks the same as before.
+- The pre-commit theme check rejected the colour literals in the econ poster and the sector wheel's Voltick skin. The Voltick palette is now a set of fixed `--color-vt-*` tokens in `src/design/tokens.css` (not overridden by the UI theme switch). The two files read them through `tokenHex()` / `tokenHexAlpha()`, so they still get plain hex values and nothing changes on screen.
+- The poster's font sizes now use the type scale (`--text-xs/sm/base/lg`). Its three sizes that are off the scale (40 / 19 / 17px) are now `--text-vt-hero/wordmark/url` tokens.
+- Files: `cbedge-v3/src/design/tokens.css`, `cbedge-v3/src/board/econCalendar/econTemplate.ts`, `cbedge-v3/src/pages/tradersDashboard/wheelMath.ts`.
+
+## 2026-09-24 - Whale page: all text white, plus repeated-flow row → probe chart
+
+- **All text is white on /v3/whales (desktop and phone).** In the page and its whale components (`Whales.tsx`, `RepeatedFlowCard`, `TrackedAlertsCard`, `NetDriftPanel`), every `text-muted` / `text-faint` is now `text-fg`, and the dimming opacity on text and placeholders is gone.
+- The page root (the desktop `Page` wrapper and the phone `<main>`) also points `--color-muted` and `--color-faint` at `--color-fg`, so the shared controls and the inline probe chart render white on this page too. That matters under the Voltick theme, where faint is grey. Other pages are unchanged. Opacity on disabled and busy buttons is kept.
+- **Repeated flow:** clicking a row opens the probe chart right under it, instead of the lookup panel. The entry is the burst's average fill and the marker is its first order. ⤢ pops it out.
+- Files: `cbedge-v3/src/pages/Whales.tsx`, `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx`, `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`, `cbedge-v3/src/pages/whales/NetDriftPanel.tsx`.
+
+## 2026-09-24 - Tracked contracts: trade-card Snapshot on the pop-out
+
+- The popped-out contract probe (⤢ on a tracked contract's chart) is now a **trade card**, layout D of the four mockups (`generated/2026-09-24-tracked-snapshot-layouts.png`):
+  - Left: ticker, strike pill, expiry and DTE, with a print line under it (`Whale print · $1.20M · 3,880 ct @ 3.10 · Sep 23 10:42 AM`, or `Tracked from lookup · entry …`).
+  - Right: the move % as the hero number, with `entry → now · ±$P/L` under it.
+  - Below: the chart, then the note as a quote with a `TRACKED <date>` tag, then a footer with the ET time and **voltick.io/bzila**.
+- Every word on the card is fg (white); none of it is muted or faint.
+- **📸 Snapshot** button (owner-only, like every CopyShot button). The shot is taken `bare`, so it has no CB Edge caption band or logo; the card signs itself with voltick.io/bzila. The controls row and the range buttons are `data-capture-hide`.
+- `ContractProbe` gains an optional `alertInfo` prop (`ProbeAlertInfo`: headline, dteLabel, trackedAt, note). Every other probe leaves it out and looks the same as before.
 - Files: `cbedge-v3/src/board/topFlow/ContractProbe.tsx`, `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`.
+
+## 2026-09-24 - Repeated flow: grouped by burst, not by day
+
+- **Replaces the 1H/2H/4H lookback.** The new **WITHIN** control (30M / 1H / 2H / 4H / DAY) sets how tightly the orders must cluster. Each contract is scored on its **densest** window of that length: a SQL `RANGE` window frame per print, then `DISTINCT ON` keeps each contract's best frame. So a 0DTE strike hit 120 times across the day no longer outranks one hit 20 times in 30 minutes.
+- ORDERS, DIR, Bull/Bear, contracts, avg px, FIRST, LAST and premium now describe that one burst. New **Span** column (first order to last) and **All range** column (the contract's total orders for the whole range, for context). Both sort; Span sorts tightest first. The phone rows read `×20 in 24m · of 120`, and the phone sort menu adds TIGHTEST and ALL DAY.
+- **RANGE** (TODAY / 5D) is its own control again. The default is WITHIN 30M.
+- API: `/api/lse/repeated-flow` takes `window_min` (30|60|120|240|1440) instead of `within_min`, and returns `nAll` / `totalAll`. The `sinceTs` hook was removed from `whFilter`.
+- Files: `server-v2/api-router.js`, `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx`.
 
 ## 2026-09-24 - Repeated flow: time filter, Track button, sortable columns
 
@@ -24336,20 +24361,12 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-24 — owner-vite Budget: remove a canceled recurring payment
 - Payments tab: recurring rows now show × next to ✎. × stores a $0 `__recur__` marker for that one occurrence (rule untouched), so it drops off Payments, Overview, Upcoming and Yearly. Marker rows are hidden from the list. (`owner-vite/src/pages/Budget.tsx`)
 
+## 2026-09-24 — GEX Candles: NQ pre-open bubbles fix
+- Pre-open on NQ with ETH, the NDX bubbles disappeared. NDX gamma is only recorded 09:30–15:59 ET (SPX records through the overnight). Before the open, 1D kept only today's overnight NQ bars, so yesterday's NDX columns had no candles under them. On a futures tape the live card now always keeps the newest session that has gamma along with the newest `tapeDays` of bars. After the open this adds nothing. (`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`)
 
-## 2026-09-24 — v3 GEX Candles: NDX/NQ tape switch (like SPX/ES)
-- NDX now has the same switch SPX has for ES: NDX cash candles or NQ futures candles, with NDX gamma drawn over them and each strike shifted by the NQ−NDX basis. Pair config lives in `cbedge-v3/src/board/gexCandles/futures.ts`. The card reads the route, the basis limit and the socket frames from it (SPX/ES has a 250 basis limit, NDX/NQ 600). One stored flag (`esCandles`) now means "on the futures tape" for both pairs.
-- New `/proxy/nq-ndx-basis` (`server-v2/nq-ndx-basis.js`): the NQ 16:00 ET close from `nq_candles` (newest contract only) minus Yahoo's `^NDX` close, computed per session. No live-pair fallback on NQ, because the socket only streams SPX. If the route has nothing, the card draws the layer unshifted and shows a warning banner.
-- NQ 1m stream: `proxy-tastytrade.js` subscribes `/NQ…{=1m}` and adds `nq1mCandles` / `nq1mCandlesDelta` to market state, the WebSocket snapshot/topic scope/broadcast, and `cbedge-v3/src/data/socket.ts`. It is gated by `NQ_1M_CANDLES`, which defaults to whatever `ES_1M_CANDLES` is set to.
-- `nq_candles` migration (`ensureNqCandlesKey` in `server-v2/_lib-db.cjs`, mirrored in `lib/db.ts`): adds a `contract` column, pins NULL intervals to 5, and swaps UNIQUE("slotKey") for UNIQUE("slotKey","intervalMinutes",contract). It checks the catalog first and uses a 3s lock_timeout and a 5-minute backoff, the same as the ES one. `es-candle-writer.js` and `upsertNqCandle` now use that key. `getNqCandles` takes interval and contract, and its interval defaults to 5, so the IB recorder is unchanged. `/api/snapshots/candles?symbol=NQ` now honors `?interval` and `?contract` (defaults to latest). NQ roll now clears the NQ bar maps too.
-- Files: `server-v2/{nq-ndx-basis.js,server-with-proxy.js,proxy-tastytrade.js,websocket-server.js,api-router.js,_lib-db.cjs}`, `server-v2/state/{market-state.js,es-candle-writer.js,es-candle-writer.selftest.js}`, `lib/db.ts`, `cbedge-v3/src/board/gexCandles/{futures.ts,basis.ts,candles.ts,GexCandlesCard.tsx,settings.ts,symbols.ts}`, `cbedge-v3/src/data/socket.ts`.
+## 2026-09-24 — Economic Calendar snapshot poster redone (Voltick theme, layout B)
+- `cbedge-v3/src/board/econCalendar/econTemplate.ts`: `buildEconPoster()` rewritten — 1280×720, Voltick palette (Ink/Panel/Line, Paper White text, Volt Blue accent, GOOD/BAD impact), no grey text, Voltick bolt mark + `voltick.io/bzila`. One time-sorted timeline for economic prints + presidential schedule (fixes 1-econ / many-POTUS days), rows squeeze with count (13px title floor), capped at MAX_ROWS with importance ranking and a "+N more today · voltick.io/bzila" row. Earnings chips on the right with fair row allocation and "+N" overflow chip; quote of the day box. F/P columns shown when present. Old three-lane code, v3-token palette and density curves removed.
+- Scheduled Discord post (`server-v2/econ-calendar-discord.js`) still renders v2's `lib/discord/econSnapshot.ts` — not changed.
 
-## 2026-09-24 — Snapshot templates: CB Edge logo removed, links → voltick.io/bzila
-- `cbedge-v3/src/shell/snapshot.ts`: framed snapshots no longer draw the CB Edge mark in the caption (`loadLogo()` resolves null; `LOGO_SRC` removed).
-- `cbedge-v3/src/board/econCalendar/econTemplate.ts`: Economic Calendar poster no longer loads or renders the CB Edge mark.
-- `cbedge-v3/src/pages/EconomicCalendar.tsx`: earnings-week board — `cbedge.net` header and `cbedge.net/v3/economic-calendar` footer now read `voltick.io/bzila`; bottom-right cbedge3.0 logo removed; top-bar logo tagged `data-capture-hide` so the calendar page shot drops it.
-
-## 2026-09-24 — Post-market: Tomorrow's Map saved at the close (static + historical)
-- `cbedge-v3/src/pages/premarket/postMarketData.ts`: new `structureFromFreeze()` + `useSavedNextStructure()` — derive the next-expiry map (call/put wall, flip, max-γ strike, net GEX) from the existing `premarket_freeze` `post` slot (16:05–16:25 ET capture, already on the rolled expiry). Only used when the slot's expiry is after the session date.
-- `cbedge-v3/src/pages/premarket/PostMarketTab.tsx`: SPX from 16:05 ET onward and every frozen past session read the saved map, so it stays static for the evening and past sessions now show it. Live `/api/chains` fetch remains the fallback when no saved copy exists; frozen days with no post capture say "not recorded". Header marks "saved at close" vs "live".
-- No server or proxy changes — reads the existing `/proxy/premarket-freeze` response. Works back to the first day the freeze recorder ran.
+## 2026-09-24 — Scheduled Discord econ post uses the new Voltick layout
+- `lib/discord/econSnapshot.ts` (shared by the v2 📅 button and `/api/econ-snapshot-html`, which `server-v2/econ-calendar-discord.js` screenshots): `buildSnapshotHTML()` rewritten to the same Voltick "layout B · timeline" as the v3 snapshot button — one time-sorted list, row squeeze, MAX_ROWS cap with "+N more today · voltick.io/bzila", earnings chips with "+N" overflow, no grey text, no CB Edge logo. html2canvas-safe: JS truncation, measured pill nudge (`opts.pillNudgeEm`) applied as bottom-padding lift on every centred text box, rail is a real div. Signature unchanged (logo arg ignored); brand-logo fetch dropped from `buildCalendarTemplateImage()`. Dead three-lane helpers removed.

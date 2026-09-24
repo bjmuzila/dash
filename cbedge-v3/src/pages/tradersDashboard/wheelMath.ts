@@ -24,7 +24,7 @@
 // and the click-to-zoom-out target.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { MOVE_DOWN, MOVE_UP, T, isLightRgb, mixRgb, rgbHex, tokenRgb, type RGB } from '@/design/theme'
+import { MOVE_DOWN, MOVE_UP, T, isLightRgb, mixRgb, rgbHex, tokenHex, tokenRgb, type RGB } from '@/design/theme'
 
 // ── Wire shape (server: app/api/spx-sunburst/route.ts) ───────────────────────
 
@@ -249,6 +249,54 @@ export interface WheelPalette {
   inkOn: (paintedHex: string) => string
   /** Directional colour for text and strokes. */
   dir: (v: number) => string
+  /** The wheel's own chrome — hairlines, gaps, hub, captions — per skin. */
+  chrome: WheelChrome
+}
+
+// ── Skins (2026-09-24) ───────────────────────────────────────────────────────
+//
+// CB Edge = v3's tokens, exactly as before. Voltick = the Voltick design
+// system's values (Voltick DESIGN.md · web/src/theme.jsx): Ink #0a0d10, Panel
+// #0e1216, Line #1e2630, Paper White #e7ece9, the one quiet tier #c0c5c3,
+// ACCENT_TEXT #6aa0ff (Volt Blue for WORDS), and PALETTES.std GOOD #3ddc8e /
+// BAD #ff6b7a for up / down. Same grammar either way: hue = direction,
+// length = magnitude.
+export type WheelSkin = 'cbedge' | 'voltick'
+export const WHEEL_SKIN_KEY = 'cbedge.sectorWheel.skin'
+
+export interface WheelChrome {
+  bg: string
+  panel: string
+  line: string
+  text: string
+  muted: string
+  accent: string
+  /** Backing plate behind the whole wheel; null paints nothing (the card shows). */
+  plate: string | null
+}
+
+/** Voltick's fixed brand values — --color-vt-* in tokens.css, resolved to hex. */
+function voltick() {
+  return {
+    bg: tokenHex('--color-vt-ink'),
+    panel: tokenHex('--color-vt-panel'),
+    line: tokenHex('--color-vt-line'),
+    text: tokenHex('--color-vt-paper'),
+    muted: tokenHex('--color-vt-quiet'),
+    accent: tokenHex('--color-vt-accent-text'),
+    up: tokenHex('--color-vt-good'),
+    down: tokenHex('--color-vt-bad'),
+  }
+}
+
+const CB_CHROME: WheelChrome = {
+  bg: T.bg,
+  panel: T.panel,
+  line: T.border,
+  text: T.text,
+  muted: T.muted,
+  accent: T.cyan,
+  plate: null,
 }
 
 /** Neutral midpoint of the diverging scale — the panel, lifted toward the ink. */
@@ -264,23 +312,32 @@ function midpoint(panel: RGB, text: RGB): RGB {
  * paints the right hues with no magnitude ramp for that frame, which is a far
  * better failure than an SVG full of `undefined` fills.
  */
-export function wheelPalette(cap: number): WheelPalette {
-  const panel = tokenRgb('--color-surface')
-  const text = tokenRgb('--color-fg')
-  const bg = tokenRgb('--color-bg')
-  const up = tokenRgb('--color-move-up')
-  const down = tokenRgb('--color-move-down')
+export function wheelPalette(cap: number, skin: WheelSkin = 'cbedge'): WheelPalette {
+  const vt = skin === 'voltick'
+  const VOLTICK = voltick()
+  const chrome: WheelChrome = vt
+    ? { bg: VOLTICK.bg, panel: VOLTICK.panel, line: VOLTICK.line, text: VOLTICK.text,
+        muted: VOLTICK.muted, accent: VOLTICK.accent, plate: VOLTICK.bg }
+    : CB_CHROME
+  const panel = vt ? tokenRgb('--color-vt-panel') : tokenRgb('--color-surface')
+  const text = vt ? tokenRgb('--color-vt-paper') : tokenRgb('--color-fg')
+  const bg = vt ? tokenRgb('--color-vt-ink') : tokenRgb('--color-bg')
+  const up = vt ? tokenRgb('--color-vt-good') : tokenRgb('--color-move-up')
+  const down = vt ? tokenRgb('--color-vt-bad') : tokenRgb('--color-move-down')
 
   const barLen = (v: number) => Math.max(Math.min(Math.abs(v) / cap, CLAMP) * AMP, 1.5)
-  const dir = (v: number) => (v >= 0 ? MOVE_UP : MOVE_DOWN)
+  const dir = vt
+    ? (v: number) => (v >= 0 ? VOLTICK.up : VOLTICK.down)
+    : (v: number) => (v >= 0 ? MOVE_UP : MOVE_DOWN)
 
   if (!panel || !text || !bg || !up || !down) {
     return {
       fillFor: dir,
       ringFill: dir,
       barLen,
-      inkOn: () => T.text,
+      inkOn: () => chrome.text,
       dir,
+      chrome,
     }
   }
 
@@ -305,6 +362,7 @@ export function wheelPalette(cap: number): WheelPalette {
       return isLightRgb(c) ? rgbHex(bg) : rgbHex(text)
     },
     dir: (v) => rgbHex(v >= 0 ? up : down),
+    chrome,
   }
 }
 

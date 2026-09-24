@@ -911,16 +911,41 @@ export function GexCandlesCard({
    * still wins outright: the scrubber, the timeline and the clip all span that
    * session and nothing either side of it.
    */
+  const allColumns = useMemo(() => (gexUrl ? parseGexHistory(gexQ.data) : []), [gexUrl, gexQ.data])
+
+  // ── THE GAMMA'S SESSION MUST BE ON THE PANE (futures tape) ─────────────────
+  // 2026-09-24. NDX gamma is recorded in the CASH session only (09:30-15:59
+  // ET) — unlike SPX, whose recorder writes through the overnight. So before
+  // the open, NQ's tape has already started TODAY (Globex bars from midnight)
+  // while the newest NDX ladder is still YESTERDAY's. 1D kept only today's
+  // bars, every bubble column fell on a day with no candle under it, and the
+  // layer drew nothing. The cash tape never hit this: NDX cash has no bars
+  // today yet, so its newest day IS the gamma's day.
+  //
+  // So on a futures tape, live, the newest session the gamma holds is always
+  // kept alongside the newest `tapeDays` of bars. After the open the two are
+  // the same day and this adds nothing; on ES it is the same day around the
+  // clock, because SPX records overnight.
+  const gammaDay = useMemo(() => {
+    let newest = ''
+    for (const c of allColumns) {
+      const d = etDay(c.slotTs)
+      if (d > newest) newest = d
+    }
+    return newest
+  }, [allColumns])
+
   const dayBars = useMemo(() => {
     if (activeDay) return allBars.filter((b) => etDay(b.t) === activeDay)
     if (!barDays.length) return allBars
     const keep = new Set(barDays.slice(0, settings.tapeDays))
+    if (useFut && gammaDay && barDays.includes(gammaDay)) keep.add(gammaDay)
     const scoped = allBars.filter((b) => keep.has(etDay(b.t)))
     // Same fallback rule as filterSession: an empty chart is a worse answer
     // than an unscoped one. Unreachable while `barDays` is derived from
     // `allBars`, and kept so it stays unreachable if that ever changes.
     return scoped.length ? scoped : allBars
-  }, [allBars, barDays, activeDay, settings.tapeDays])
+  }, [allBars, barDays, activeDay, settings.tapeDays, useFut, gammaDay])
 
   // ── The replay cursor ──────────────────────────────────────────────────────
   // The timeline is the BARS, not the GEX columns: the candles are always there
@@ -1007,7 +1032,7 @@ export function GexCandlesCard({
   // "the bubbles did not load"; between two similarly-priced tickers it would
   // read as something much worse, which is a live chart showing another
   // instrument's gamma without saying so.
-  const allColumns = useMemo(() => (gexUrl ? parseGexHistory(gexQ.data) : []), [gexUrl, gexQ.data])
+  // (`allColumns` itself is computed above `dayBars` — see THE GAMMA'S SESSION.)
   // ── INTO ES PRICE SPACE, when the candles are ES ───────────────────────────
   // Done once here, upstream of BOTH consumers — the bubble model and the rail
   // read the same shifted columns, so they cannot disagree about where a strike

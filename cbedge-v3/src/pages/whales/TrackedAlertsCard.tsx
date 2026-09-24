@@ -120,7 +120,7 @@ export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
     <div className="rounded-md border border-line bg-surface">
       <div className="flex flex-wrap items-baseline gap-2 border-b border-line px-3 py-2">
         <span className="text-sm font-bold tracking-[0.02em] text-fg">Tracked contracts</span>
-        <span className="text-2xs text-faint">
+        <span className="text-2xs text-fg">
           saved to your login
           {ready && alerts.length ? ` · ${alerts.length} tracked` : ''}
           {loading && !ready ? ' · loading…' : ''}
@@ -134,7 +134,7 @@ export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
               onClick={() => setGroupBy(g.key)}
               className={[
                 'tabular rounded-sm border px-2 py-0.5 text-2xs font-bold tracking-[0.08em] transition-colors',
-                groupBy === g.key ? 'border-fg/25 bg-raised text-fg' : 'border-line text-muted hover:text-fg',
+                groupBy === g.key ? 'border-fg/25 bg-raised text-fg' : 'border-line text-fg hover:text-fg',
               ].join(' ')}
             >
               {g.label}
@@ -150,8 +150,8 @@ export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
       )}
 
       {ready && !alerts.length ? (
-        <div className="px-3 py-4 text-xs leading-relaxed text-faint">
-          Nothing tracked yet. Hit <span className="font-bold text-muted">TRACK</span> on a print above, or
+        <div className="px-3 py-4 text-xs leading-relaxed text-fg">
+          Nothing tracked yet. Hit <span className="font-bold text-fg">TRACK</span> on a print above, or
           on a contract in the lookup, and it lands here with its chart and a place for your note. Tracked
           contracts follow your login, not this browser — and a contract is removed on the day after it
           expires.
@@ -160,7 +160,7 @@ export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-xs">
             <thead>
-              <tr className="text-2xs uppercase tracking-[0.09em] text-faint">
+              <tr className="text-2xs uppercase tracking-[0.09em] text-fg">
                 <th className="w-6 px-1 py-2" />
                 <th className="px-2 py-2 text-left font-bold">Contract</th>
                 <th className="px-2 py-2 text-left font-bold">Expiry</th>
@@ -176,9 +176,9 @@ export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
               {groups.map((g) => (
                 <Fragment key={g.label}>
                   <tr>
-                    <td colSpan={9} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
+                    <td colSpan={9} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-fg">
                       {g.label}
-                      <span className="tabular font-normal text-faint">
+                      <span className="tabular font-normal text-fg">
                         {' '}· {g.rows.length}
                         {g.premium > 0 ? ` · ${fmtPremium(g.premium)} behind them` : ''}
                       </span>
@@ -221,7 +221,7 @@ function AlertRow({ a, mark, open, onToggle, store }: {
   const dollars = entry != null && mark != null && a.printSize
     ? (mark - entry) * a.printSize * 100
     : null
-  const ink = pct == null ? 'text-muted' : pct > 0 ? 'text-up' : pct < 0 ? 'text-down' : 'text-muted'
+  const ink = pct == null ? 'text-fg' : pct > 0 ? 'text-up' : pct < 0 ? 'text-down' : 'text-fg'
 
   // What the pop-out's trade card says about this row — see ProbeAlertInfo.
   const alertInfo = useMemo<ProbeAlertInfo>(() => {
@@ -263,7 +263,7 @@ function AlertRow({ a, mark, open, onToggle, store }: {
             onClick={onToggle}
             aria-label={open ? 'Close chart' : 'Open chart'}
             title={open ? 'Close the chart' : 'Open the chart'}
-            className="h-5 w-5 rounded-sm border border-line text-2xs leading-none text-muted hover:text-fg"
+            className="h-5 w-5 rounded-sm border border-line text-2xs leading-none text-fg hover:text-fg"
           >
             {open ? '▾' : '▸'}
           </button>
@@ -278,23 +278,23 @@ function AlertRow({ a, mark, open, onToggle, store }: {
           ].join(' ')}>
             {fmtStrike(a.strike)}{a.optType}
           </span>
-          <div className="tabular text-3xs text-faint">
+          <div className="tabular text-3xs text-fg">
             {a.source === 'whale'
               ? `from print${a.printSize ? ` · ${a.printSize.toLocaleString()} ct` : ''}${a.printPremium ? ` · ${fmtPremium(a.printPremium)}` : ''}`
               : 'from lookup · no print'}
           </div>
         </td>
-        <td className="tabular whitespace-nowrap px-2 py-1.5 text-muted">
+        <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">
           {fmtExpiry(a.expiry)}
           {/* A tracked contract is deleted the day after it expires, so this
               number is a countdown to the row leaving — worth colouring. */}
-          <span className={days != null && days <= 2 ? ' text-warn' : ' text-faint'}>
+          <span className={days != null && days <= 2 ? ' text-warn' : ' text-fg'}>
             {days != null ? ` ${days}d` : ''}
           </span>
         </td>
-        <td className="tabular px-2 py-1.5 text-right text-muted">{entry?.toFixed(2) ?? '—'}</td>
-        <td className="tabular px-2 py-1.5 text-right text-muted">
-          {mark === undefined ? <span className="text-faint opacity-50">…</span> : mark?.toFixed(2) ?? '—'}
+        <td className="tabular px-2 py-1.5 text-right text-fg">{entry?.toFixed(2) ?? '—'}</td>
+        <td className="tabular px-2 py-1.5 text-right text-fg">
+          {mark === undefined ? <span className="text-fg">…</span> : mark?.toFixed(2) ?? '—'}
         </td>
         <td className={['tabular px-2 py-1.5 text-right font-semibold', ink].join(' ')}>
           {pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`}
@@ -315,7 +315,7 @@ function AlertRow({ a, mark, open, onToggle, store }: {
               title="Click to edit"
               className={[
                 'w-full truncate text-left text-2xs',
-                a.note ? 'border-b border-dashed border-line text-muted' : 'text-faint opacity-60',
+                a.note ? 'border-b border-dashed border-line text-fg' : 'text-fg',
               ].join(' ')}
             >
               {a.note || 'add a note…'}
@@ -335,7 +335,7 @@ function AlertRow({ a, mark, open, onToggle, store }: {
             />
           )}
         </td>
-        <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-3xs text-faint">
+        <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-3xs text-fg">
           {fmtTime(a.createdAt)}
         </td>
         <td className="px-1 py-1.5">
@@ -344,7 +344,7 @@ function AlertRow({ a, mark, open, onToggle, store }: {
             onClick={() => store.remove(a.id)}
             aria-label="Stop tracking"
             title="Stop tracking this contract"
-            className="h-5 w-5 rounded-sm border border-line text-2xs leading-none text-faint hover:border-down/50 hover:text-down"
+            className="h-5 w-5 rounded-sm border border-line text-2xs leading-none text-fg hover:border-down/50 hover:text-down"
           >
             ✕
           </button>
@@ -371,7 +371,7 @@ function AlertRow({ a, mark, open, onToggle, store }: {
             ──────────────────────────────────────────────────────────────── */}
             <div className="p-2">
               <div className="flex min-h-[380px] flex-col rounded-sm border border-line bg-surface">
-                <div className="border-b border-line px-3 py-1 text-3xs font-bold uppercase tracking-[0.11em] text-faint">
+                <div className="border-b border-line px-3 py-1 text-3xs font-bold uppercase tracking-[0.11em] text-fg">
                   Live — redrawn from the saved contract
                 </div>
                 <ContractProbe
@@ -414,10 +414,10 @@ export function TrackButton({ tracked, busy, onClick, compact = false }: {
         'rounded-sm border font-bold uppercase tracking-[0.1em] transition-colors',
         compact ? 'px-1.5 py-0.5 text-3xs' : 'px-2 py-1 text-2xs',
         busy
-          ? 'cursor-wait border-line text-faint opacity-60'
+          ? 'cursor-wait border-line text-fg opacity-60'
           : tracked
             ? 'border-up/50 bg-up/10 text-up hover:border-down/50 hover:bg-down/10 hover:text-down'
-            : 'border-line text-muted hover:border-accent hover:text-accent',
+            : 'border-line text-fg hover:border-accent hover:text-accent',
       ].join(' ')}
     >
       {busy ? '…' : tracked ? 'Tracked' : 'Track'}

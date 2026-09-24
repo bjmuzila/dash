@@ -247,6 +247,11 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
   // The popped-out panel — what the 📸 photographs. Resolved at click time,
   // as CopyShotTarget.resolve asks, because the portal mounts and unmounts.
   const panelRef = useRef<HTMLDivElement | null>(null)
+  // The trade card itself, INSIDE the scrolling panel. The panel is capped at
+  // 92vh with overflow:auto, and photographing it cropped the picture to what
+  // was on screen — the TRACKED pill and the voltick.io/bzila footer fell off
+  // the bottom (2026-09-24). This node is always its full natural height.
+  const cardRef = useRef<HTMLDivElement | null>(null)
   const shotTarget = useMemo<CopyShotTarget | null>(
     () => alertInfo
       ? {
@@ -256,7 +261,7 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
           file: alertInfo.file,
           // No caption band, no CB Edge mark — the card signs itself.
           bare: true,
-          resolve: () => panelRef.current,
+          resolve: () => cardRef.current ?? panelRef.current,
         }
       : null,
     [alertInfo],
@@ -403,7 +408,7 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
     }).format(new Date())
     return (
       <>
-        <div data-capture-hide className="flex items-center justify-end gap-2">
+        <div data-capture-hide className="flex items-center justify-end gap-2 px-5 pt-4">
           {shotTarget && (
             <CopyShotButton
               target={shotTarget}
@@ -430,11 +435,15 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
           </button>
         </div>
 
+        <div ref={cardRef} className="flex flex-col gap-3 bg-surface2 px-5 pb-5 pt-2">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex items-baseline gap-2">
-              <span className="text-xl font-bold tracking-[0.02em] text-fg">{row.underlying ?? '—'}</span>
-              <span className="tabular rounded-sm border border-warn/50 bg-warn/10 px-1.5 py-px text-xs font-bold text-warn">
+            <div className="flex items-center gap-2">
+              <span className="text-xl font-bold leading-none tracking-[0.02em] text-fg">{row.underlying ?? '—'}</span>
+              {/* inline-flex + fixed height + leading-none: the strike text is
+                  centred by the box, not by a baseline the capture renderer
+                  places differently from the page. */}
+              <span className="tabular inline-flex h-5 items-center justify-center rounded-sm border border-warn/50 bg-warn/10 px-1.5 text-xs font-bold leading-none text-warn">
                 {fmtStrike(row.strike)}{row.type ?? ''}
               </span>
               <span className="tabular text-sm text-fg">
@@ -488,7 +497,7 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
 
         <div className="flex items-center justify-between gap-3">
           <span className="min-w-0 text-sm italic text-fg">{info.note ? `“${info.note}”` : ''}</span>
-          <span className="tabular shrink-0 rounded-sm bg-accent/15 px-1.5 py-px text-2xs font-bold tracking-[0.08em] text-accent">
+          <span className="tabular inline-flex h-5 shrink-0 items-center justify-center rounded-sm bg-accent/15 px-1.5 text-2xs font-bold leading-none tracking-[0.08em] text-accent">
             TRACKED {trackedDay}
           </span>
         </div>
@@ -496,6 +505,7 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
         <div className="tabular flex items-center justify-between border-t border-line pt-2 text-xs text-fg">
           <span>{stamp} ET</span>
           <span className="font-bold tracking-[0.02em]">voltick.io/bzila</span>
+        </div>
         </div>
       </>
     )
@@ -532,7 +542,11 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
           <div
             ref={panelRef}
             onClick={(e) => e.stopPropagation()}
-            className="flex flex-col gap-3 rounded-md border border-line bg-surface2 p-5"
+            className={[
+              'flex flex-col rounded-md border border-line bg-surface2',
+              // The trade card carries its own padding so the photograph has it.
+              alertInfo ? 'gap-0 p-0' : 'gap-3 p-5',
+            ].join(' ')}
             style={{
               width: 'min(1100px, 94vw)',
               maxHeight: '92vh',
@@ -749,6 +763,8 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   // (2026-09-18). With no print in range there is nothing to point at, so it
   // falls back to the tallest bar.
   const fillIdx = entryI ?? vols.indexOf(vMax)
+  /** Right edge of the "VOLUME · PRINT n" title, for the label collision test. */
+  const volTitle = `VOLUME${size ? ` · PRINT ${size.toLocaleString()}` : ''}`
 
   const label = { fill: 'var(--color-fg)', fontFamily: MONO } as const
   const fmt = (v: number) => v.toFixed(2)
@@ -759,6 +775,8 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
   const S = wide
     ? clamp(1.15 + (W - 560) / 1600, 1.15, 1.45)
     : clamp(1 + (W - 320) / 1600, 1, 1.35)
+  // 8*S mono at ~0.62em advance plus the 0.9 letter-spacing, from PADL + 2.
+  const volTitleEnd = PADL + 2 + volTitle.length * (8 * S * 0.62 + 0.9)
 
   /** Keep a point label inside the plot when its point is near an edge. */
   const EDGE = 26 * S
@@ -944,11 +962,20 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
         const top = vy(v)
         const inside = top < vTop + 11 * S
         const anchor = x(i) < PADL + 22 * S ? 'start' : x(i) > W - PADR - 22 * S ? 'end' : 'middle'
+        const lx = anchor === 'start' ? PADL : anchor === 'end' ? W - PADR : x(i)
+        // A label on the top line must not print over the VOLUME · PRINT title
+        // (2026-09-24: "2.0k" landed on "PRINT"). Estimate both boxes in mono
+        // advance widths and drop the label one line if they meet.
+        const txt = v >= 10_000 ? `${(v / 1000).toFixed(0)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)
+        const lw = txt.length * 8.5 * S * 0.62
+        const l0 = anchor === 'start' ? lx : anchor === 'end' ? lx - lw : lx - lw / 2
+        const ly0 = inside ? top + 8.5 * S : top - 3 * S
+        const hitsTitle = ly0 < vTop + 12 * S && l0 < volTitleEnd + 4 && l0 + lw > PADL
         return (
           <text
             key={`vl-${i}`}
-            x={anchor === 'start' ? PADL : anchor === 'end' ? W - PADR : x(i)}
-            y={inside ? top + 8.5 * S : top - 3 * S}
+            x={lx}
+            y={hitsTitle ? vTop + 20 * S : ly0}
             textAnchor={anchor}
             fontSize={8.5 * S}
             fontWeight={700}
@@ -961,7 +988,7 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
             }}
             opacity={inside || i === fillIdx ? 1 : 0.7}
           >
-            {v >= 10_000 ? `${(v / 1000).toFixed(0)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}
+            {txt}
           </text>
         )
       })}
@@ -969,7 +996,7 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
         {vMax >= 1000 ? `${(vMax / 1000).toFixed(1)}k` : vMax}
       </text>
       <text x={PADL + 2} y={vTop + 8 * S} fontSize={8 * S} fontWeight={700} letterSpacing="0.9" style={label} opacity={0.8}>
-        VOLUME{size ? ` · PRINT ${size.toLocaleString()}` : ''}
+        {volTitle}
       </text>
 
       <text x={PADL} y={H - 6 * S} fontSize={9 * S} fontWeight={700} style={label}>{etTime(bars[0]!.time)}</text>

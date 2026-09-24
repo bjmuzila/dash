@@ -1,161 +1,92 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// THE ECONOMIC CALENDAR TEMPLATE — v2's 1280×720 Discord card, on v3.
+// THE ECONOMIC CALENDAR TEMPLATE — the 1280×720 Discord card, Voltick theme.
 //
-// This is not a screenshot of the board card. It is a POSTER: a fixed-size
-// layout built for one job, which is to be pasted into Discord and read at a
-// glance on a phone. Three lanes — the presidential schedule, today's economic
-// prints, today's earnings — under a title bar and the quote of the day, with
-// the CB Edge mark in the corner. Every other CopyShot in this app photographs
-// something already on the screen; this one composes something that never
-// appears on it.
+// REDONE 2026-09-24 (Brandon picked layout "B · timeline" of four mockups; see
+// generated/2026-09-24-econ-voltick-b-timeline.png). The three fixed lanes are
+// gone: they broke on uneven days — one economic print and fourteen White House
+// items left the middle lane empty while the presidential lane ran off the
+// canvas. Now:
 //
-// Transcribed from v2's `lib/discord/econSnapshot.ts`, and it is meant to come
-// out looking the same: this asset has been going into the same Discord channel
-// for months and people know its shape. The palette is v3's — the impact ramp
-// is `--color-impact-*`, which carries v2's exact reds and ambers — and the
-// title/label accent is `--color-cal-accent`, v2's teal, deliberately rather
-// than v3's blue: the poster is a brand asset, not a page.
+//   1. ONE LIST sized by content — economic prints and the presidential
+//      schedule share a single time-sorted timeline on the left.
+//   2. SQUEEZE — row height splits the list area; type steps down with it and
+//      stops at a readable floor (13px titles).
+//   3. CAP, NEVER CLIP — past MAX_ROWS the most important rows are kept (High
+//      prints → market-relevant White House items → Medium → other WH → Low →
+//      gaggles/travel) and the last row reads "+N more today · voltick.io/bzila".
+//   4. Earnings chips on the right fill a fixed box; overflow becomes a "+N" chip.
 //
-// ── What did NOT come across, and why ────────────────────────────────────────
-// v2 renders this through html2canvas, which is not a browser, and a third of
-// that file is workarounds for it. The two that mattered:
+// All type is Paper White or a colour that means something — no grey text.
+// Colours are the Voltick design system's (Voltick DESIGN.md · theme.jsx), held
+// as fixed --color-vt-* tokens in src/design/tokens.css and read through
+// vtPalette() below: this poster is a Voltick brand asset, so it reads the
+// Voltick tokens, never the v3 surface/text tokens.
 //
-//   · PILL_NUDGE_EM. html2canvas puts a text baseline at (top + ascent) and
-//     ignores line-height's half-leading, so nothing centres vertically; v2
-//     compensates with asymmetric padding tuned off a real render — 0.42em of
-//     it. v3 renders through `<foreignObject>`, which IS a browser: it centres
-//     correctly, and carrying the nudge over would push every pill's text
-//     visibly low. Gone, replaced with `display:flex; align-items:center`.
-//   · The JS text truncation STAYED. html2canvas implements neither
-//     `text-overflow:ellipsis` nor `line-clamp`, so v2 clips in JS against a
-//     measured column width. v3 would not need it — but the measurements are
-//     tuned, the result is deterministic, and matching v2's line breaks is the
-//     point of the exercise.
+// This is not a screenshot of the board card. It is a POSTER composed on demand
+// and photographed; it never appears on screen.
 //
 // ── The scoping rule ─────────────────────────────────────────────────────────
 // The poster is mounted into the LIVE document (off-screen) rather than an
 // iframe, because the capture engine inlines computed style off a laid-out
 // element and that means the element has to be in this document. So every rule
 // below is scoped under `.${ROOT_CLASS}` — which also puts it at specificity
-// (0,1,0), above Tailwind's preflight at (0,0,0). Without that the preflight's
-// `border:0 solid currentColor` and `margin:0` would be fighting the poster's
-// own reset. See also the ALWAYS set in shell/snapshot.ts, which is the same
-// hazard from the other end.
+// (0,1,0), above Tailwind's preflight at (0,0,0).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { tokenHex, tokenHexAlpha } from '@/design/theme'
 import { etToday, type CalEvent, type EarnRow } from '@/data/econCalendar'
 import type { ShotResult } from '@/shell/snapshot'
+import { tokenHex, tokenHexAlpha } from '@/design/theme'
 
 /** Everything below is scoped under this, and nothing above it. */
 const ROOT_CLASS = 'cbx-econ-poster'
 
-/**
- * The canvas. LOCKED — anything that overflows shrinks, it never grows.
- *
- * 1280×672, which is v2's `.snapshot` rather than v2's `<body>`. v2's body was
- * 1280×720 with 24px of padding around a 1280-wide child, so the poster
- * overflowed it symmetrically — and it never mattered, because the capture
- * targeted `#root` (the poster) and the body was only ever the thing it sat in.
- * Here the poster IS the captured element, so the padding would be 48px of lane
- * width quietly removed from the arithmetic below. There is no wrapper.
- */
+/** The canvas. LOCKED — anything that overflows squeezes or caps, it never grows. */
 const CANVAS_W = 1280
-const CANVAS_H = 672
+const CANVAS_H = 720
 
-/**
- * Lane widths for the three panels, in grid fr units.
- *
- * Change them HERE and nowhere else: the `.grid` rule and the truncation maths
- * (which needs each panel's pixel width) both read them through `laneW()`. v2
- * had them hardcoded in the CSS plus two open-coded fractions further down,
- * which is exactly the setup where a lane gets widened and the titles keep
- * truncating to the old width.
- */
-const LANE_PRES = 1.75
-const LANE_ECON = 3.15
-const LANE_ERN = 1.4
-const LANE_TOTAL = LANE_PRES + LANE_ECON + LANE_ERN
-/** 1280 canvas − 2 border − 60 poster padding − 36 grid gaps. */
-const GRID_W = CANVAS_W - 2 - 60 - 36
-const laneW = (fr: number) => Math.round(GRID_W * (fr / LANE_TOTAL))
+// ── Geometry ─────────────────────────────────────────────────────────────────
+const LEFT_W = 860
+const PAD_X = 30
+/** Top of the timeline: brand row, the big date, the sub line. */
+const LIST_TOP = 178
+/** Height the timeline may use (bottom padding 26). */
+const LIST_H = CANVAS_H - LIST_TOP - 26
+const MIN_ROW_H = 34
+const MAX_ROW_H = 60
+/** Rows that fit at the floor height — the cap, "+N more" row included. */
+const MAX_ROWS = Math.floor(LIST_H / MIN_ROW_H)
+const TIME_COL = 78
+const DOT_COL = 22
+const TAG_COL = 66
+const COL_GAP = 10
+/** Right pane: earnings box area above the quote box. */
+const ERN_H = 440
+const ERN_GROUP_OVERHEAD = 14 + 14 + 11 + 10 + 14
+const CHIP_H = 30
+const CHIP_GAP = 8
+const CHIPS_PER_ROW = 3
 
-/**
- * THE POSTER'S FIXED CHROME SIZES, in canvas pixels.
- *
- * Every OTHER size in this file is already arithmetic — `px(16, econScale)`,
- * `Math.round(ern.sym * 0.95)` — because the three lanes re-scale with how many
- * rows land in them, and because the JS truncation divides by those very
- * numbers (`econMaxChars`, `presMaxChars`). These five are the sizes that do
- * NOT re-scale: the title badge, the date pills, the quote, the panel heads and
- * the empty-panel line all sit on chrome whose box is the same on a quiet day
- * as on a busy one. They were the only ones still typed as literals in the
- * stylesheet below, which is why `check-theme` flagged six lines here and none
- * of the twelve computed ones.
- *
- * WHY PIXELS AND NOT THE APP'S TYPE SCALE. This is a 1280×672 composition, not
- * a UI: nothing here reflows, the height is locked ("anything that overflows
- * shrinks, it never grows"), and the asset has been going into the same Discord
- * channel for months. `--text-*` is a rem ladder, so a viewer with a non-16px
- * root would rescale the badge and nothing else on a canvas where every other
- * number is absolute — and the two nearest scale steps (17→18, 30→32) would
- * push the quote's `max-width:1120px` block toward a second line on a long
- * quote, on a poster that cannot grow. This is the same carve-out AGENTS.md
- * makes for a canvas or a chart config: the number stays a number.
- *
- * Change one and you change a published brand asset. Re-run
- * `board/econCalendar` through a real capture before you do.
- */
-const BADGE_SIZE = 24
-const DATE_PILL_SIZE = 17
-const QUOTE_SIZE = 30
-const PANEL_HEAD_SIZE = 14
-const EMPTY_PANEL_SIZE = 14
-
-// ── Palette ──────────────────────────────────────────────────────────────────
-//
-// Read once per build. `tokenHex` resolves the custom property against the live
-// document, so the poster follows tokens.css exactly like everything else — and
-// it has to be hex rather than `var(--…)` because these are interpolated into a
-// stylesheet the poster carries with it.
-
-interface Palette {
-  bg: string
-  panel: string
-  border: string
-  accent: string
-  text: string
-  muted: string
-  light: string
-  high: string
-  medium: string
-  neutral: string
-  neutralBg: string
-  neutralEdge: string
-}
-
-function palette(): Palette {
+// ── Voltick palette (Voltick DESIGN.md · web/src/theme.jsx) ──────────────────
+// Held as FIXED --color-vt-* tokens in src/design/tokens.css (not overridden by
+// the UI theme switch) and resolved to hex at build time, so the SVG attributes
+// and the capture engine get plain colours.
+function vtPalette() {
   return {
-    bg: tokenHex('--color-bg'),
-    panel: tokenHex('--color-surface'),
-    border: tokenHex('--color-line'),
-    // v2's teal, not v3's blue. See the header.
-    accent: tokenHex('--color-cal-accent'),
-    text: tokenHex('--color-fg'),
-    muted: tokenHexAlpha('--color-fg', 0.72),
-    light: tokenHex('--color-series-5'),
-    high: tokenHex('--color-impact-high'),
-    medium: tokenHex('--color-impact-medium'),
-    neutral: tokenHexAlpha('--color-fg', 0.7),
-    neutralBg: tokenHexAlpha('--color-fg', 0.06),
-    neutralEdge: tokenHexAlpha('--color-fg', 0.12),
+    ink: tokenHex('--color-vt-ink'),
+    panel: tokenHex('--color-vt-panel'),
+    elev: tokenHex('--color-vt-elev'),
+    line: tokenHex('--color-vt-line'),
+    lineSoft: tokenHexAlpha('--color-vt-line', 0.6),
+    rail: tokenHex('--color-vt-rail'),
+    paper: tokenHex('--color-vt-paper'),
+    accent: tokenHex('--color-vt-accent'),
+    accentText: tokenHex('--color-vt-accent-text'),
+    sky: tokenHex('--color-vt-sky'),
+    bad: tokenHex('--color-vt-bad'),
   }
 }
-
-/** A hex token at an alpha, as `#rrggbbaa` — the form a stylesheet accepts. */
-function fade(name: string, a: number): string {
-  return tokenHexAlpha(name, a)
-}
+/** An alpha wash of a Voltick token, as #rrggbbaa. */
+const vtA = (name: string, a: number) => tokenHexAlpha(`--color-vt-${name}`, a)
 
 // ── Data shaping ─────────────────────────────────────────────────────────────
 
@@ -237,80 +168,6 @@ function priorityOf(ev: CalEvent): number {
   return i === -1 ? Number.MAX_SAFE_INTEGER : i
 }
 
-/**
- * HIGH is RED, MEDIUM is AMBER, everything else is the neutral pill.
- *
- * Matched on the leading word, case-insensitively, so a provider spelling —
- * "HIGH", "high", "High Impact" — cannot slip past an exact-match test and fall
- * through to another colour. A High print rendering in Medium amber is the one
- * mistake on this poster that actively misleads.
- */
-function impactBadge(impact: string, p: Palette): { bg: string; edge: string; ink: string } {
-  const key = (impact || '').trim().toLowerCase()
-  if (key.startsWith('high')) {
-    return { bg: fade('--color-impact-high', 0.18), edge: fade('--color-impact-high', 0.5), ink: p.high }
-  }
-  if (key.startsWith('med')) {
-    return { bg: fade('--color-impact-medium', 0.16), edge: fade('--color-impact-medium', 0.4), ink: p.medium }
-  }
-  return { bg: p.neutralBg, edge: p.neutralEdge, ink: p.neutral }
-}
-
-/**
- * Fewer rows in a lane → bigger type (fills the panel); more rows → smaller
- * type (keeps everything on-canvas). Six rows is the neutral baseline: a light
- * day of four or five events should read BIG rather than leave the panel half
- * empty.
- */
-function densityScale(n: number): number {
-  return Math.max(0.85, Math.min(1.25, 1 + (6 - n) * 0.07))
-}
-
-/**
- * The presidential lane is the sparsest on the canvas — most days it holds one
- * or two entries in a panel ~400px tall, and at densityScale's cap that read as
- * a couple of small lines floating in an empty box. This curve is deliberately
- * steeper: a one-event day should be BIG. The lane's title budget is computed
- * from the resulting row height, so growing the type here cannot push a row off
- * the locked canvas — it just spends the empty space.
- */
-function presDensityScale(n: number): number {
-  if (n <= 1) return 1.8
-  if (n === 2) return 1.5
-  if (n === 3) return 1.3
-  if (n === 4) return 1.15
-  return 1
-}
-
-/**
- * Earnings chip geometry, SOLVED for the panel rather than scaled by a curve.
- *
- * A fixed 4-wide strip of 36px logos left the bottom half of the lane blank on
- * a normal day. Scaling the chips by a hand-tuned curve produced awkward counts
- * — two per row with a wide gutter — so instead walk the candidate chips-per-row
- * from widest to narrowest and take the first whose rows actually fit. Fewer per
- * row means bigger chips, so this lands on the largest chip the day's name count
- * allows, and fixed columns always divide the width exactly.
- */
-function earnLayout(groupSizes: number[], availW: number, bodyH: number) {
-  const gap = 12
-  /** Per group: 14px padding top and bottom, the label, 12px label margin. */
-  const overhead = groupSizes.length * 52
-  let last = { perRow: 6, chipW: 30, logo: 24, sym: 10, gap }
-  for (const perRow of [2, 3, 4, 5, 6]) {
-    const chipW = Math.floor((availW - gap * (perRow - 1)) / perRow)
-    const logo = Math.min(58, Math.round(chipW * 0.78))
-    const sym = Math.max(10, Math.min(18, Math.round(logo * 0.33)))
-    const rowH = logo + 5 + sym + 3 + gap
-    const rows = groupSizes.reduce((a, n) => a + Math.ceil(n / perRow), 0)
-    last = { perRow, chipW, logo, sym, gap }
-    if (rows * rowH + overhead <= bodyH) return last
-  }
-  // More names than even the tightest layout fits. The 12-per-session slices
-  // upstream bound this, so the last candidate is the floor.
-  return last
-}
-
 const EARN_GROUP_LABEL: Record<EarnRow['session'], string> = {
   pre: 'Premarket',
   after: 'After hours',
@@ -339,104 +196,152 @@ export interface EconPosterInput {
   earnings: EarnRow[]
   /** Quote of the day, from /api/calendar-quote. Omitted when it is empty. */
   quote?: string
-  /** The CB Edge square, as a data URI. */
+  /** Unused since the CB Edge mark came off the poster (2026-09-24). Kept so callers compile. */
   markDataUrl?: string
   /** symbol → data URI. A missing logo falls back to the ticker text. */
   tickerLogos?: Record<string, string>
 }
 
+/**
+ * Rank for the "which rows make the cut" pass — LOWER is more important.
+ * High prints first (in HEADLINE_PRIORITY order), then presidential items about
+ * the economy / trade / the Fed, then Medium prints, then other presidential
+ * items, then Low prints, and gaggles / travel / photo-ops last.
+ */
+const PRES_MARKET = /\b(econom\w*|trade|tariff\w*|fed(eral reserve)?|jobs?|inflation|tax\w*|budget|treasury|china|executive order|sign\w*|address|speech|remarks|bill|deal|sanction\w*|oil|energy)\b/i
+const PRES_FLUFF = /\b(gaggle|depart\w*|arriv\w*|travel\w*|lunch|dinner|photo|marine one|air force one|motorcade|pool|lid|briefing|en route|returns?)\b/i
+
+function rankOf(ev: CalEvent): number {
+  if (ev.impact === 'President') {
+    if (PRES_FLUFF.test(ev.title) && !PRES_MARKET.test(ev.title)) return 5
+    return PRES_MARKET.test(ev.title) ? 1 : 3
+  }
+  const k = (ev.impact || '').trim().toLowerCase()
+  const pri = Math.min(priorityOf(ev), 99) / 100
+  if (k.startsWith('high')) return 0 + pri
+  if (k.startsWith('med')) return 2 + pri
+  return 4 + pri
+}
+
+type Tier = 'h' | 'm' | 'l' | 'p'
+function tierOf(ev: CalEvent): Tier {
+  if (ev.impact === 'President') return 'p'
+  const k = (ev.impact || '').trim().toLowerCase()
+  return k.startsWith('high') ? 'h' : k.startsWith('med') ? 'm' : 'l'
+}
+const TIER_LABEL: Record<Tier, string> = { h: 'High', m: 'Med', l: 'Low', p: 'POTUS' }
+
+/** The Voltick bolt mark (Voltick brand sheet v3), inline so the capture needs no fetch. */
+function voltickMark(size: number): string {
+  const VT = vtPalette()
+  return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="vtbolt" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${VT.sky}"/><stop offset="1" stop-color="${VT.accent}"/></linearGradient></defs><path d="M38 2 L12 34 L26 34 L22 49 L52 22 L35 22 Z" fill="url(#vtbolt)"/><line x1="6" y1="56" x2="58" y2="56" stroke="${VT.rail}" stroke-width="3" stroke-linecap="round"/><circle cx="18" cy="56" r="8" fill="${vtA('accent', 0.3)}"/><rect x="14" y="52" width="8" height="8" rx="1.6" transform="rotate(45 18 56)" fill="${VT.paper}"/></svg>`
+}
+
+function weekdayLong(): string {
+  return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long' })
+}
+function monthDay(): string {
+  return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })
+}
+
 /** `{ css, html }` for the poster, scoped under ROOT_CLASS. */
 export function buildEconPoster(input: EconPosterInput): { css: string; html: string } {
-  const p = palette()
+  const VT = vtPalette()
   const today = etToday()
 
-  const todays = input.events
-    .filter((e) => e.date === today && includeEvent(e))
-    .sort((a, b) => priorityOf(a) - priorityOf(b) || a.time.localeCompare(b.time))
+  // ── RULE 1 · ONE LIST, SIZED BY CONTENT ─────────────────────────────────
+  // Economic prints and the presidential schedule share one time-sorted list,
+  // so a day with 1 print and 14 White House items is simply 15 rows — no lane
+  // sits empty while another overflows.
+  const all = input.events.filter((e) => e.date === today && includeEvent(e))
+  const econTotal = all.filter((e) => e.impact !== 'President').length
+  const presTotal = all.length - econTotal
 
-  // The presidential schedule is its own lane — never mixed into the economic
-  // table, because it is a different kind of event entirely.
-  const econEvents = todays.filter((e) => e.impact !== 'President').slice(0, 8)
-  const presEvents = todays
-    .filter((e) => e.impact === 'President')
-    .sort((a, b) => a.time.localeCompare(b.time))
-    .slice(0, 6)
+  // ── RULE 3 · CAP, NEVER CLIP SILENTLY ───────────────────────────────────
+  // At most MAX_ROWS rows. Past that, the most important MAX_ROWS−1 are kept
+  // (rankOf) and the last row says how many were left out and where to see them.
+  const overflow = all.length > MAX_ROWS
+  const kept = overflow
+    ? all
+        .slice()
+        .sort((a, b) => rankOf(a) - rankOf(b) || a.time.localeCompare(b.time))
+        .slice(0, MAX_ROWS - 1)
+    : all
+  const shown = kept.slice().sort((a, b) => a.time.localeCompare(b.time) || rankOf(a) - rankOf(b))
+  const hidden = all.length - shown.length
+  const nRows = shown.length + (hidden > 0 ? 1 : 0)
 
-  const presScale = presDensityScale(presEvents.length)
-  const econScale = densityScale(Math.max(econEvents.length, 1))
-  const px = (base: number, scale: number) => Math.round(base * scale)
+  // ── RULE 2 · SQUEEZE ────────────────────────────────────────────────────
+  // Row height splits the list area; type steps down with it and stops at a
+  // readable floor. A light day reads big instead of leaving a half-empty pane.
+  const rowH = Math.max(MIN_ROW_H, Math.min(MAX_ROW_H, Math.floor(LIST_H / Math.max(nRows, 1))))
+  const titleSize = Math.max(13, Math.min(20, Math.round(rowH * 0.34)))
+  const timeSize = Math.max(12, Math.min(16, Math.round(rowH * 0.28)))
+  const fpSize = Math.max(11, Math.min(14, Math.round(rowH * 0.24)))
+  const pillH = Math.max(18, Math.min(24, Math.round(rowH * 0.46)))
+  const pillSize = Math.max(10, Math.min(12, Math.round(rowH * 0.22)))
+  const dot = Math.max(9, Math.min(13, Math.round(rowH * 0.22)))
+  const anyFp = shown.some((e) => (e.forecast || e.previous) && e.impact !== 'President')
+  const fpCol = anyFp ? 92 : 0
+  const titleColW = LEFT_W - 2 * PAD_X - TIME_COL - DOT_COL - fpCol * 2 - TAG_COL - 5 * COL_GAP
+  const titleMax = Math.max(14, Math.floor(titleColW / (titleSize * 0.56)))
 
-  // Presidential rows are STACKED — time on its own line, title underneath — so
-  // there is no time column and the title gets the full panel width.
-  const presTimeSize = px(15, presScale)
-  const presTitleSize = px(16, presScale)
-  // Measured off a real render: the presidential body is ~400px tall and the
-  // rows split it evenly. Stacking costs a line of height per row, so the
-  // padding has to give way on a busy day or the last row falls off the canvas.
-  const PRES_BODY_H = 400
-  const presRowH = PRES_BODY_H / Math.max(presEvents.length, 1)
-  const presRowPadV = Math.max(5, Math.min(px(14, presScale), Math.round(presRowH * 0.12)))
-  const presTimeLine = presTimeSize + 6
-  const presStackGap = 5
+  const rows = shown
+    .map((ev) => {
+      const t = tierOf(ev)
+      const title = ev.impact === 'President' ? stripPresidentSubject(ev.title) : ev.title
+      const f = ev.impact !== 'President' && ev.forecast ? `<span class="fp">F ${esc(ev.forecast)}</span>` : '<span></span>'
+      const pv = ev.impact !== 'President' && ev.previous ? `<span class="fp">P ${esc(ev.previous)}</span>` : '<span></span>'
+      return `<div class="row"><span class="t">${esc(ev.time ? fmtTime(ev) : 'All day')}</span><span class="dot d-${t}"></span><span class="ev">${esc(clip(title, titleMax))}</span>${anyFp ? f + pv : ''}<span class="tag tg-${t}">${TIER_LABEL[t]}</span></div>`
+    })
+    .join('')
+  const moreRow = hidden > 0
+    ? `<div class="row more"><span class="t"></span><span class="dot d-more"></span><span class="ev">+${hidden} more today · <b>voltick.io/bzila</b></span></div>`
+    : ''
+  const list = shown.length
+    ? `<div class="tl">${rows}${moreRow}</div>`
+    : `<div class="empty">No scheduled economic data or White House events today.</div>`
 
-  // Actual / Forecast / Previous are deliberately NOT on this poster. It goes
-  // out before the numbers print, so all three columns would read "–" while the
-  // Event title — the only thing anyone actually reads here — was squeezed into
-  // ~300px. Time / Event / Impact only, and Event keeps the width.
-  const econHeadSize = px(10, econScale)
-  const econTimeSize = px(14, econScale)
-  const econEventSize = px(16, econScale)
-  const econRowPadV = px(12, econScale)
-  const pillFontSize = px(11, econScale)
-  const pillHeight = px(22, econScale)
-  const pillPadH = px(10, econScale)
-  const econTimeCol = px(74, econScale)
-  const econImpactCol = px(74, econScale)
-  const econColGap = 6
-  const econRowPadH = 14
-
-  const ECON_PANEL_W = laneW(LANE_ECON)
-  const econEventColW = Math.max(
-    120,
-    ECON_PANEL_W - econRowPadH * 2 - econTimeCol - econImpactCol - econColGap * 2,
-  )
-  const econMaxChars = Math.max(12, Math.floor(econEventColW / (econEventSize * 0.56)))
-
-  const PRES_PANEL_W = laneW(LANE_PRES)
-  // Stacked rows: the title spans the panel, so the only things subtracted are
-  // the body padding (14px a side) and the row padding (6px a side).
-  const presTitleColW = Math.max(120, PRES_PANEL_W - 14 * 2 - 6 * 2)
-  // The line budget comes from the row's actual leftover height rather than a
-  // fixed 2. One event owns the whole panel and should show its full title; six
-  // events get a line each. Ellipsing text there is obvious room for was the
-  // main thing wrong with a fixed number.
-  const presTitleLines = Math.max(
-    1,
-    Math.min(
-      6,
-      Math.floor((presRowH - presRowPadV * 2 - presTimeLine - presStackGap - 1) / (presTitleSize * 1.3)),
-    ),
-  )
-  const presMaxChars = Math.max(18, Math.floor((presTitleColW / (presTitleSize * 0.56)) * presTitleLines))
-
-  const preRows = input.earnings.filter((e) => e.session === 'pre').slice(0, 12)
-  const afterRows = input.earnings.filter((e) => e.session === 'after').slice(0, 12)
-  const tbdRows = input.earnings.filter((e) => e.session !== 'pre' && e.session !== 'after').slice(0, 12)
-  // Count what is actually ON the poster, so the badge can never claim more (or
-  // fewer) names than you can see.
-  const ernCount = preRows.length + afterRows.length + tbdRows.length
-
-  // Both numbers MEASURED off a real render, not estimated. Note the −2: the
-  // panel's 1px border on each side is the difference between three chips
-  // fitting a row and wrapping to two with a dead gutter.
-  const ERN_BODY_H = 413
-  const ern = earnLayout(
-    [preRows.length, afterRows.length, tbdRows.length].filter((n) => n > 0),
-    laneW(LANE_ERN) - 2 - 32,
-    ERN_BODY_H,
-  )
-  const ernLabelSize = Math.max(11, Math.min(15, Math.round(ern.sym * 0.95)))
-  const chipFbSize = Math.max(9, Math.round(ern.logo * 0.27))
+  // ── Earnings (right pane) ───────────────────────────────────────────────
+  // Chips fill a fixed box; whatever does not fit collapses into a "+N" chip in
+  // that group rather than running off the canvas.
+  const logos = input.tickerLogos ?? {}
+  const groups = (['pre', 'after', 'unknown'] as const)
+    .map((k) => ({ k, rows: input.earnings.filter((e) => (k === 'unknown' ? e.session !== 'pre' && e.session !== 'after' : e.session === k)) }))
+    .filter((g) => g.rows.length > 0)
+  const ernTotal = groups.reduce((a, g) => a + g.rows.length, 0)
+  const chipRowsAvail = Math.max(1, Math.floor((ERN_H - groups.length * ERN_GROUP_OVERHEAD) / (CHIP_H + CHIP_GAP)))
+  // One row each to start, then hand out the rest one at a time to whichever
+  // group is still short the most — a small group is shown whole before a big
+  // one takes the room.
+  const need = groups.map((g) => Math.ceil(g.rows.length / CHIPS_PER_ROW))
+  const alloc = need.map(() => 1)
+  let spare = chipRowsAvail - alloc.length
+  while (spare > 0) {
+    let best = -1
+    for (let i = 0; i < need.length; i++) {
+      const short = (need[i] ?? 0) - (alloc[i] ?? 0)
+      if (short > 0 && (best === -1 || short < (need[best] ?? 0) - (alloc[best] ?? 0))) best = i
+    }
+    if (best === -1) break
+    alloc[best] = (alloc[best] ?? 0) + 1
+    spare--
+  }
+  const chip = (r: EarnRow) => {
+    const src = logos[r.symbol]
+    return `<span class="chip">${src ? `<img src="${src}" alt="" />` : ''}<span>${esc(r.symbol)}</span></span>`
+  }
+  const ernHtml = groups.length
+    ? groups
+        .map((g, i) => {
+          const cap = (alloc[i] ?? 1) * CHIPS_PER_ROW
+          const fits = g.rows.length <= cap
+          const vis = fits ? g.rows : g.rows.slice(0, cap - 1)
+          const extra = fits ? '' : `<span class="chip more">+${g.rows.length - vis.length}</span>`
+          return `<div class="box"><div class="lbl">${EARN_GROUP_LABEL[g.k]} · ${g.rows.length}</div><div class="chips">${vis.map(chip).join('')}${extra}</div></div>`
+        })
+        .join('')
+    : `<div class="box"><div class="lbl">No earnings today</div></div>`
 
   const quote = (() => {
     const raw = (input.quote || '').trim()
@@ -448,145 +353,76 @@ export function buildEconPoster(input: EconPosterInput): { css: string; html: st
       author = m[1].trim().replace(/^"+|"+$/g, '')
       q = q.slice(0, m.index ?? 0).trim()
     }
-    q = q.replace(/^"+|"+$/g, '').trim()
-    return author ? `"${q}" - ${author}` : `"${q}"`
+    q = clip(q.replace(/^"+|"+$/g, '').trim(), 150)
+    return author ? `“${q}” — ${author}` : `“${q}”`
   })()
 
-  const econRows = econEvents
-    .map((ev) => {
-      const b = impactBadge(ev.impact, p)
-      return `
-      <div class="econ-row">
-        <div class="ec-time">${esc(fmtTime(ev))}</div>
-        <div class="ec-event">${esc(clip(ev.title, econMaxChars))}</div>
-        <div class="ec-impact"><span class="impact-pill" style="background:${b.bg};border-color:${b.edge};color:${b.ink}">${esc(ev.impact)}</span></div>
-      </div>`
-    })
-    .join('')
-
-  const presRows = presEvents
-    .map(
-      (ev) => `
-      <div class="pres-row">
-        <div class="pr-time">${esc(fmtTime(ev))}</div>
-        <div class="pr-title">${esc(clip(stripPresidentSubject(ev.title), presMaxChars))}</div>
-      </div>`,
-    )
-    .join('')
-
-  const logos = input.tickerLogos ?? {}
-  const chips = (rows: EarnRow[]) =>
-    rows
-      .map((r) => {
-        const src = logos[r.symbol]
-        const art = src
-          ? `<img src="${src}" alt="${esc(r.symbol)}" />`
-          : `<span class="chip-fb">${esc(r.symbol.slice(0, 4))}</span>`
-        return `<div class="ern-chip"><span class="chip-logo">${art}</span><span class="chip-sym">${esc(r.symbol)}</span></div>`
-      })
-      .join('')
-
-  const group = (kind: EarnRow['session'], rows: EarnRow[]) =>
-    rows.length === 0
-      ? ''
-      : `<div class="ern-group"><div class="ern-group-label">${EARN_GROUP_LABEL[kind]}</div><div class="ern-chips">${chips(rows)}</div></div>`
-
   const R = `.${ROOT_CLASS}`
+  const SANS = `'Inter',-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif`
+  const MONO = `'JetBrains Mono',ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace`
 
+  // EVERY word on this poster is Paper White (VT.paper) or a colour that MEANS
+  // something (impact, the accent). No grey text anywhere (Brandon, 2026-09-24).
   const css = `
-${R},${R} *{box-sizing:border-box;margin:0;padding:0;border:0 solid transparent;font-family:'Inter','Helvetica Neue',Arial,sans-serif}
-${R}{width:${CANVAS_W}px;height:${CANVAS_H}px;display:flex;flex-direction:column;position:relative;overflow:hidden;border-radius:24px;color:${p.text};background:radial-gradient(circle at 15% 50%,${fade('--color-cal-accent', 0.06)} 0%,transparent 50%),radial-gradient(circle at 85% 30%,${fade('--color-series-5', 0.07)} 0%,transparent 50%),${p.bg};border:1px solid ${p.border};padding:26px 30px 30px}
-${R} .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-shrink:0}
-/* Every pill centres with flex. v2 could not — html2canvas ignores
-   align-items on a line box — and compensated with asymmetric padding tuned
-   off a real render. Here the browser does the centring, so that nudge is not
-   only unnecessary, it would push the text visibly low. See the header. */
-${R} .badge{display:flex;align-items:center;justify-content:center;height:56px;background:${fade('--color-cal-accent', 0.12)};border:1px solid ${fade('--color-cal-accent', 0.4)};color:${p.accent};padding:0 26px;font-size:${BADGE_SIZE}px;font-weight:800;border-radius:10px;text-transform:uppercase;letter-spacing:0.07em}
-${R} .date-group{display:flex;gap:10px;align-items:center}
-${R} .date-pill,${R} .today-pill{display:flex;align-items:center;justify-content:center;height:40px;border-radius:8px;padding:0 18px;font-weight:800;text-transform:uppercase;font-size:${DATE_PILL_SIZE}px;letter-spacing:0.06em}
-${R} .date-pill{background:${p.neutralBg};border:1px solid ${p.border};color:${p.text}}
-${R} .today-pill{background:${fade('--color-cal-accent', 0.16)};border:1px solid ${fade('--color-cal-accent', 0.4)};color:${p.accent}}
-${R} .quote{margin:22px auto 6px;text-align:center;font-family:Georgia,'Times New Roman',serif;font-size:${QUOTE_SIZE}px;font-style:italic;color:${p.muted};padding:0 36px;max-width:1120px;flex-shrink:0}
-/* Lane widths come from LANE_* at the top of this file — never hardcode them
-   here, or the truncation maths and the rendered columns drift apart. */
-${R} .grid{display:grid;grid-template-columns:${LANE_PRES}fr ${LANE_ECON}fr ${LANE_ERN}fr;gap:18px;margin-top:20px;flex:1;min-height:0}
-${R} .panel{border-radius:18px;border:1px solid ${p.border};background:radial-gradient(circle at 50% 0%,${fade('--color-series-5', 0.1)} 0%,transparent 60%),${p.panel};box-shadow:0 18px 40px ${fade('--color-app', 0.5)};overflow:hidden;height:100%;display:flex;flex-direction:column}
-${R} .panel-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid ${p.border};flex-shrink:0}
-${R} .panel-title{font-size:${PANEL_HEAD_SIZE}px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:${p.text};line-height:1}
-${R} .panel-count{display:flex;align-items:center;justify-content:center;min-width:26px;height:26px;font-size:${PANEL_HEAD_SIZE}px;font-weight:800;color:${p.light};background:${fade('--color-series-5', 0.1)};border-radius:8px;padding:0 7px}
-${R} .ern-body{display:flex;flex-direction:column;flex:1}
-${R} .ern-group{padding:14px 16px;border-bottom:1px solid ${p.border};flex:1}
-${R} .ern-group:last-child{border-bottom:0}
-${R} .ern-group-label{font-size:${ernLabelSize}px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:${p.accent};margin-bottom:12px;line-height:1}
-${R} .ern-chips{display:flex;flex-wrap:wrap;gap:${ern.gap}px}
-${R} .ern-chip{width:${ern.chipW}px;text-align:center;flex-shrink:0}
-${R} .chip-logo{display:block;width:${ern.logo}px;height:${ern.logo}px;margin:0 auto 5px;border-radius:8px;overflow:hidden}
-${R} .chip-logo img{width:${ern.logo}px;height:${ern.logo}px;object-fit:contain;display:block}
-${R} .chip-fb{display:flex;align-items:center;justify-content:center;width:${ern.logo}px;height:${ern.logo}px;border-radius:8px;background:${fade('--color-cal-accent', 0.1)};border:1px solid ${p.border};font-size:${chipFbSize}px;font-weight:800;color:${p.accent}}
-${R} .chip-sym{display:block;font-size:${ern.sym}px;font-weight:800;color:${p.text};letter-spacing:0.02em;line-height:${ern.sym + 3}px;white-space:nowrap}
-${R} .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
-${R} .pres-row{display:flex;flex-direction:column;gap:${presStackGap}px;padding:${presRowPadV}px 6px;border-bottom:1px solid ${p.border};flex:1;justify-content:center;min-width:0}
-${R} .pres-row:last-child{border-bottom:0}
-${R} .pr-time{color:${p.light};font-weight:700;font-size:${presTimeSize}px;line-height:${presTimeLine}px;letter-spacing:0.02em;white-space:nowrap}
-${R} .pr-title{font-size:${presTitleSize}px;font-weight:600;line-height:1.3;min-width:0}
-${R} .empty-panel{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:${fade('--color-fg', 0.35)};font-size:${EMPTY_PANEL_SIZE}px}
-${R} .econ-table{display:flex;flex-direction:column;flex:1}
-${R} .econ-row{display:grid;grid-template-columns:${econTimeCol}px 1fr ${econImpactCol}px;gap:${econColGap}px;padding:${econRowPadV}px ${econRowPadH}px;align-items:center;border-bottom:1px solid ${p.border};flex:1;min-width:0}
-${R} .econ-row:last-child{border-bottom:0}
-/* nowrap so a tight fit never silently becomes two lines. */
-${R} .econ-row.head{background:${fade('--color-fg', 0.03)};font-size:${econHeadSize}px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:${fade('--color-fg', 0.45)};flex:0 0 auto;white-space:nowrap}
-${R} .ec-time{font-size:${econTimeSize}px;line-height:${econTimeSize + 8}px;font-weight:700;color:${p.muted};white-space:nowrap}
-/* No overflow:hidden. Titles are already truncated in JS, so clipping earns
-   nothing and only risks shearing a descender. */
-${R} .ec-event{font-size:${econEventSize}px;line-height:${econEventSize + 8}px;font-weight:600;white-space:nowrap;min-width:0}
-${R} .ec-impact{display:flex;justify-content:flex-start;min-width:0}
-${R} .impact-pill{display:flex;align-items:center;justify-content:center;height:${pillHeight}px;border:1px solid;border-radius:8px;padding:0 ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap}
-${R} .mark{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;justify-content:flex-end;opacity:0.96}
-${R} .mark img{width:80px;height:80px;object-fit:contain}
+${R},${R} *{box-sizing:border-box;margin:0;padding:0;border:0 solid transparent;font-family:${SANS}}
+${R}{width:${CANVAS_W}px;height:${CANVAS_H}px;position:relative;overflow:hidden;background:${VT.ink};color:${VT.paper}}
+${R} .lp{position:absolute;left:0;top:0;bottom:0;width:${LEFT_W}px;padding:26px ${PAD_X}px}
+${R} .rp{position:absolute;right:0;top:0;bottom:0;width:${CANVAS_W - LEFT_W}px;background:${VT.panel};border-left:1px solid ${VT.line};padding:26px 26px}
+${R} .brand{display:flex;align-items:center;gap:10px;height:32px}
+${R} .wm{font-weight:800;font-size:var(--text-vt-wordmark);letter-spacing:.5px;color:${VT.paper}}
+${R} .wm b{color:${VT.accent};font-weight:800}
+${R} .eyebrow{font-weight:700;font-size:var(--text-xs);line-height:1;letter-spacing:.14em;text-transform:uppercase;color:${VT.paper}}
+${R} .h1{font-weight:900;font-size:var(--text-vt-hero);line-height:1;letter-spacing:-.01em;margin-top:14px;white-space:nowrap}
+${R} .h1 span{color:${VT.accentText}}
+${R} .sub{font-weight:600;font-size:var(--text-base);line-height:1;margin-top:10px;color:${VT.paper}}
+${R} .tl{position:absolute;left:${PAD_X}px;right:${PAD_X}px;top:${LIST_TOP}px}
+${R} .tl:before{content:'';position:absolute;left:${TIME_COL + COL_GAP + DOT_COL / 2 - 1}px;top:${Math.round(rowH / 2)}px;bottom:${Math.round(rowH / 2)}px;width:2px;background:${VT.line}}
+${R} .row{display:grid;grid-template-columns:${TIME_COL}px ${DOT_COL}px 1fr${anyFp ? ` ${fpCol}px ${fpCol}px` : ''} ${TAG_COL}px;column-gap:${COL_GAP}px;align-items:center;height:${rowH}px;border-bottom:1px solid ${VT.lineSoft}}
+${R} .row.more{grid-template-columns:${TIME_COL}px ${DOT_COL}px 1fr;border-bottom:0}
+${R} .t{font-family:${MONO};font-weight:700;font-size:${timeSize}px;color:${VT.paper};white-space:nowrap}
+${R} .dot{width:${dot}px;height:${dot}px;border-radius:50%;justify-self:center;position:relative;z-index:1;box-shadow:0 0 0 4px ${VT.ink}}
+${R} .d-h{background:${VT.bad}} ${R} .d-m{background:${VT.sky}} ${R} .d-l{background:${VT.paper}} ${R} .d-p{background:${VT.accent}}
+${R} .d-more{background:transparent;border:2px solid ${VT.accentText}}
+${R} .ev{font-weight:700;font-size:${titleSize}px;line-height:1.2;white-space:nowrap;min-width:0;color:${VT.paper}}
+${R} .more .ev{font-weight:600;color:${VT.paper}} ${R} .more .ev b{font-family:${MONO};color:${VT.accentText}}
+${R} .fp{font-family:${MONO};font-size:${fpSize}px;color:${VT.paper};white-space:nowrap}
+${R} .tag{display:flex;align-items:center;justify-content:center;height:${pillH}px;border-radius:6px;border:1px solid;font-weight:800;font-size:${pillSize}px;line-height:1;letter-spacing:.06em;text-transform:uppercase}
+${R} .tg-h{color:${VT.bad};border-color:${vtA('bad', 0.45)};background:${vtA('bad', 0.12)}}
+${R} .tg-m{color:${VT.sky};border-color:${vtA('sky', 0.40)};background:${vtA('sky', 0.10)}}
+${R} .tg-l{color:${VT.paper};border-color:${vtA('paper', 0.30)};background:${vtA('paper', 0.06)}}
+${R} .tg-p{color:${VT.accentText};border-color:${vtA('accent', 0.45)};background:${vtA('accent', 0.12)}}
+${R} .empty{position:absolute;left:${PAD_X}px;right:${PAD_X}px;top:${LIST_TOP}px;height:${LIST_H}px;display:flex;align-items:center;justify-content:center;border:1px dashed ${VT.line};border-radius:14px;font-size:var(--text-lg);font-weight:600;color:${VT.paper}}
+${R} .box{background:${VT.elev};border:1px solid ${VT.line};border-radius:12px;padding:14px;margin-top:14px}
+${R} .lbl{font-weight:700;font-size:var(--text-xs);line-height:1;letter-spacing:.14em;text-transform:uppercase;color:${VT.sky}}
+${R} .chips{display:grid;grid-template-columns:repeat(${CHIPS_PER_ROW},1fr);gap:${CHIP_GAP}px;margin-top:10px}
+${R} .chip{display:flex;align-items:center;justify-content:center;gap:6px;height:${CHIP_H}px;border-radius:8px;background:${VT.ink};border:1px solid ${VT.line};font-family:${MONO};font-weight:700;font-size:var(--text-sm);line-height:1;color:${VT.paper};white-space:nowrap;overflow:hidden}
+${R} .chip img{width:18px;height:18px;border-radius:4px;object-fit:contain;display:block}
+${R} .chip.more{color:${VT.accentText};border-style:dashed}
+${R} .qbox{position:absolute;left:26px;right:26px;bottom:78px;border:1px solid ${vtA('accent', 0.3)};background:${vtA('accent', 0.06)};border-radius:12px;padding:14px}
+${R} .qt{font-style:italic;font-weight:500;font-size:var(--text-base);line-height:1.4;margin-top:8px;color:${VT.paper}}
+${R} .foot{position:absolute;left:26px;right:26px;bottom:26px;display:flex;justify-content:space-between;align-items:center}
+${R} .url{font-family:${MONO};font-weight:800;font-size:var(--text-vt-url);line-height:1;color:${VT.paper};letter-spacing:.02em}
+${R} .url b{color:${VT.accentText};font-weight:800}
 `
 
+  const subBits = [
+    `${econTotal} release${econTotal === 1 ? '' : 's'}`,
+    `${presTotal} White House event${presTotal === 1 ? '' : 's'}`,
+    'all times ET',
+  ]
+
   const html = `
-  <div class="topbar">
-    <div class="badge">Economic Calendar</div>
-    <div class="date-group">
-      <div class="date-pill">${esc(todayLong())}</div>
-      <div class="today-pill">Today</div>
-    </div>
+  <div class="lp">
+    <div class="brand">${voltickMark(30)}<span class="wm">Vol<b>tick</b></span><span class="eyebrow" style="margin-left:8px">Economic Calendar</span></div>
+    <div class="h1">${esc(weekdayLong())}<span>.</span> ${esc(monthDay())}</div>
+    <div class="sub">${subBits.join(' · ')}</div>
+    ${list}
   </div>
-  ${quote ? `<div class="quote">${esc(quote)}</div>` : ''}
-  <div class="grid">
-    <div class="panel">
-      <div class="panel-head">
-        <div class="panel-title">Presidential Schedule</div>
-        <div class="panel-count">${presEvents.length}</div>
-      </div>
-      ${presEvents.length ? `<div class="pres-body">${presRows}</div>` : `<div class="empty-panel">No political events today</div>`}
-    </div>
-    <div class="panel">
-      <div class="panel-head">
-        <div class="panel-title">Economic Calendar</div>
-        <div class="panel-count">${econEvents.length}</div>
-      </div>
-      ${
-        econEvents.length
-          ? `<div class="econ-table">
-        <div class="econ-row head"><div>Time</div><div>Event</div><div>Impact</div></div>
-        ${econRows}
-      </div>`
-          : `<div class="empty-panel">No economic events today</div>`
-      }
-    </div>
-    <div class="panel">
-      <div class="panel-head">
-        <div class="panel-title">Earnings</div>
-        <div class="panel-count">${ernCount}</div>
-      </div>
-      ${
-        ernCount
-          ? `<div class="ern-body">${group('pre', preRows)}${group('after', afterRows)}${group('unknown', tbdRows)}</div>`
-          : `<div class="empty-panel">No earnings today</div>`
-      }
-    </div>
+  <div class="rp">
+    <div class="eyebrow">Earnings today${ernTotal ? ` · ${ernTotal}` : ''}</div>
+    ${ernHtml}
+    ${quote ? `<div class="qbox"><div class="eyebrow">Quote of the day</div><div class="qt">${esc(quote)}</div></div>` : ''}
+    <div class="foot"><span class="eyebrow">${esc(todayLong())}</span><span class="url">voltick.io/<b>bzila</b></span></div>
   </div>
   `
 
@@ -695,3 +531,4 @@ export async function fetchQuote(): Promise<string> {
     return ''
   }
 }
+

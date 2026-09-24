@@ -375,6 +375,31 @@
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
+
+  /* ── Voltick brand palette (FIXED) ────────────────────────────────────
+     Voltick DESIGN.md · web/src/theme.jsx. Read by the two Voltick-branded
+     surfaces that must NOT follow the UI theme switch: the econ-calendar
+     Discord poster (board/econCalendar/econTemplate.ts) and the sector
+     wheel's Voltick skin (pages/tradersDashboard/wheelMath.ts). Deliberately
+     NOT overridden under [data-ui-theme='voltick'].                        */
+  --color-vt-ink: #0a0d10;
+  --color-vt-panel: #0e1216;
+  --color-vt-elev: #141a21;
+  --color-vt-line: #1e2630;
+  --color-vt-rail: #3a4654;
+  --color-vt-paper: #e7ece9;
+  --color-vt-quiet: #c0c5c3;
+  --color-vt-accent: #2f6bff;
+  --color-vt-accent-text: #6aa0ff;
+  --color-vt-sky: #7fb0ff;
+  --color-vt-good: #3ddc8e;
+  --color-vt-bad: #ff6b7a;
+
+  /* Voltick poster display sizes — the econ-calendar Discord poster is a fixed
+     1280×720 canvas, and these three are off the app scale on purpose. */
+  --text-vt-hero: 2.5rem; /* 40px — poster date line */
+  --text-vt-wordmark: 1.1875rem; /* 19px — poster wordmark */
+  --text-vt-url: 1.0625rem; /* 17px — poster footer URL */
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────

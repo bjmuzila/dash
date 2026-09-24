@@ -461,7 +461,7 @@ function useContractHighs(
 /** "+12% 4.10" — the move leads, the price follows. */
 function MoveCell({ value, entry }: { value: number | null; entry: number | null }) {
   const chg = value != null && entry != null && entry > 0 ? ((value - entry) / entry) * 100 : null
-  const ink = chg == null ? 'text-muted' : chg >= 0 ? 'text-up' : 'text-down'
+  const ink = chg == null ? 'text-fg' : chg >= 0 ? 'text-up' : 'text-down'
   return (
     <td className="tabular whitespace-nowrap px-2 py-1.5 text-right">
       {chg != null && (
@@ -469,7 +469,7 @@ function MoveCell({ value, entry }: { value: number | null; entry: number | null
           {chg >= 0 ? '+' : ''}{chg.toFixed(0)}%
         </span>
       )}
-      <span className={[chg != null ? 'ml-1 text-2xs opacity-80' : 'font-semibold', ink].join(' ')}>
+      <span className={[chg != null ? 'ml-1 text-2xs' : 'font-semibold', ink].join(' ')}>
         {value != null ? value.toFixed(2) : '—'}
       </span>
     </td>
@@ -495,7 +495,7 @@ function PhoneSeg({ label, options, value, onChange }: {
 }) {
   return (
     <div className="mb-3">
-      <div className="mb-1.5 text-3xs font-bold uppercase tracking-[0.1em] text-faint">{label}</div>
+      <div className="mb-1.5 text-3xs font-bold uppercase tracking-[0.1em] text-fg">{label}</div>
       <div className="flex overflow-hidden rounded-sm border border-line">
         {options.map((o) => (
           <button
@@ -504,7 +504,7 @@ function PhoneSeg({ label, options, value, onChange }: {
             onClick={() => onChange(o.value)}
             className={[
               'flex-1 py-2 text-xs font-bold tracking-[0.04em]',
-              o.value === value ? 'bg-accent/15 text-accent' : 'text-faint',
+              o.value === value ? 'bg-accent/15 text-accent' : 'text-fg',
             ].join(' ')}
           >
             {o.label}
@@ -518,9 +518,9 @@ function PhoneSeg({ label, options, value, onChange }: {
 function Tile({ k, v, sub, ink }: { k: string; v: string; sub?: string; ink?: string }) {
   return (
     <div className="rounded-md border border-line bg-surface px-3 py-2.5">
-      <div className="text-2xs font-bold uppercase tracking-[0.11em] text-faint">{k}</div>
+      <div className="text-2xs font-bold uppercase tracking-[0.11em] text-fg">{k}</div>
       <div className={['tabular mt-1.5 text-xl font-semibold', ink ?? 'text-fg'].join(' ')}>{v}</div>
-      {sub && <div className="mt-0.5 text-2xs text-faint">{sub}</div>}
+      {sub && <div className="mt-0.5 text-2xs text-fg">{sub}</div>}
     </div>
   )
 }
@@ -534,8 +534,8 @@ function Card({ title, note, className, children }: {
   return (
     <div className={['flex min-h-0 flex-col rounded-md border border-line bg-surface', className ?? ''].join(' ')}>
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <h2 className="text-2xs font-bold uppercase tracking-[0.11em] text-faint">{title}</h2>
-        {note && <span className="ml-auto text-2xs text-faint">{note}</span>}
+        <h2 className="text-2xs font-bold uppercase tracking-[0.11em] text-fg">{title}</h2>
+        {note && <span className="ml-auto text-2xs text-fg">{note}</span>}
       </div>
       {children}
     </div>
@@ -826,7 +826,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                   onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
                   placeholder="TICKER"
                   aria-label="Underlying"
-                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs uppercase text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs uppercase text-fg outline-none placeholder:text-fg focus:border-accent"
                 />
                 <input
                   value={lkStrike}
@@ -835,7 +835,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                   placeholder="STRIKE"
                   inputMode="decimal"
                   aria-label="Strike"
-                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-fg focus:border-accent"
                 />
               </div>
 
@@ -871,7 +871,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                   inputMode="numeric"
                   aria-label="Contracts held"
                   title="Contracts — turns on POSITION in the hover readout"
-                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-fg focus:border-accent"
                 />
                 <input
                   value={lkEntry}
@@ -881,7 +881,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                   inputMode="decimal"
                   aria-label="Cost basis"
                   title="What you paid per contract — turns on the entry rung and OPEN P/L"
-                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+                  className="tabular min-w-0 flex-1 rounded-sm border border-line bg-bg px-2 py-1 text-xs text-fg outline-none placeholder:text-fg focus:border-accent"
                 />
               </div>
 
@@ -895,7 +895,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                     'flex-1 rounded-sm border px-2 py-1 text-2xs font-bold uppercase tracking-[0.1em] transition-colors',
                     lkReady
                       ? 'border-accent bg-accent/10 text-accent hover:bg-accent/20'
-                      : 'cursor-not-allowed border-line text-faint opacity-50',
+                      : 'cursor-not-allowed border-line text-fg opacity-50',
                   ].join(' ')}
                 >
                   Look up
@@ -942,7 +942,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                 <ContractProbe key={lookup.id} row={lookup} onClose={() => setLookup(null)} entryAt={null} />
               </div>
             ) : (
-              <div className="border-t border-line px-3 py-2 text-2xs leading-relaxed text-faint">
+              <div className="border-t border-line px-3 py-2 text-2xs leading-relaxed text-fg">
                 Any contract, whether or not a whale ever touched it. Add a size
                 and a cost and the hover readout carries what the position is
                 worth and what it is up.
@@ -1009,7 +1009,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                       </button>
                     ))}
                     {!list.length && (
-                      <div className="px-2.5 py-2 text-2xs text-faint">Nothing {side.label.toLowerCase()} in range.</div>
+                      <div className="px-2.5 py-2 text-2xs text-fg">Nothing {side.label.toLowerCase()} in range.</div>
                     )}
                   </div>
                 )
@@ -1023,11 +1023,11 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
             <div className="py-1">
               {buckets.map((b) => (
                 <div key={b.bucket} className="grid grid-cols-[56px_1fr_74px] items-center gap-2 px-3 py-1.5">
-                  <span className="text-xs text-muted">{b.bucket}</span>
+                  <span className="text-xs text-fg">{b.bucket}</span>
                   <div className="h-[7px] overflow-hidden rounded-sm bg-fg/10">
                     <i className="block h-full bg-accent" style={{ width: `${(Number(b.total) / bucketMax) * 100}%` }} />
                   </div>
-                  <span className="tabular text-right text-xs text-muted">{money(b.total)}</span>
+                  <span className="tabular text-right text-xs text-fg">{money(b.total)}</span>
                 </div>
               ))}
             </div>
@@ -1089,9 +1089,9 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                     {/* SQL hands this back as text (MAX(payload->>'strike')), so it
                         carries the raw float's digits — back through Number() to
                         round it like every other strike on the page. */}
-                    {r.ticker} {fmtStrike(Number(r.strike))}{r.type} <span className="text-faint">{fmtExpiry(r.expiry)}</span>
+                    {r.ticker} {fmtStrike(Number(r.strike))}{r.type} <span className="text-fg">{fmtExpiry(r.expiry)}</span>
                   </span>
-                  <span className="text-xs text-faint">×{r.n}</span>
+                  <span className="text-xs text-fg">×{r.n}</span>
                   <span
                     title={`${num(r.n)} whale prints · ${money(r.bull)} bullish vs ${money(r.bear)} bearish`}
                     className={['tabular text-right text-xs font-semibold', Number(r.bull) >= Number(r.bear) ? 'text-up' : 'text-down'].join(' ')}
@@ -1101,7 +1101,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                 </button>
               ))}
               {!d?.repeats.length && (
-                <div className="px-3 py-2 text-sm text-faint">
+                <div className="px-3 py-2 text-sm text-fg">
                   No contract was hit three times in this range.
                 </div>
               )}
@@ -1152,11 +1152,14 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     const selKey = selected ? trackKeyOf(selected) : null
 
     return (
-      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      // ALL TEXT WHITE (2026-09-24, Brandon): muted/faint are re-pointed at fg
+      // for this page's subtree, so the shared controls and the inline probe
+      // follow too — under the Voltick theme faint is a grey.
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden [--color-faint:var(--color-fg)] [--color-muted:var(--color-fg)]">
         <header className="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-3 py-2">
           <span aria-hidden>🐋</span>
           <h1 className="text-sm font-bold text-fg">Whale Archive</h1>
-          <span className="tabular ml-auto text-2xs text-faint">
+          <span className="tabular ml-auto text-2xs text-fg">
             {q.loading && !d ? 'loading…' : d ? `${d.range.from.slice(5)} → ${d.range.to.slice(5)}` : ''}
           </span>
         </header>
@@ -1175,14 +1178,14 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
             placeholder="TICKER"
             aria-label="Filter to one underlying"
             autoCapitalize="characters"
-            className="tabular w-[72px] shrink-0 rounded-sm border border-line bg-bg px-2 py-1.5 text-xs uppercase text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+            className="tabular w-[72px] shrink-0 rounded-sm border border-line bg-bg px-2 py-1.5 text-xs uppercase text-fg outline-none placeholder:text-fg focus:border-accent"
           />
           <button
             type="button"
             onClick={() => setFiltersOpen(true)}
             className={[
               'flex shrink-0 items-center gap-1.5 rounded-sm border px-2.5 py-1.5 text-2xs font-bold tracking-[0.06em]',
-              nonDefault ? 'border-accent bg-accent/10 text-accent' : 'border-line text-muted',
+              nonDefault ? 'border-accent bg-accent/10 text-accent' : 'border-line text-fg',
             ].join(' ')}
           >
             FILTERS
@@ -1194,7 +1197,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
             type="button"
             onClick={() => setSort((v) => (v === 'time' ? 'premium' : v === 'premium' ? 'change' : 'time'))}
             title="Row order"
-            className="shrink-0 rounded-sm border border-line px-2.5 py-1.5 text-2xs font-bold tracking-[0.06em] text-muted"
+            className="shrink-0 rounded-sm border border-line px-2.5 py-1.5 text-2xs font-bold tracking-[0.06em] text-fg"
           >
             {sort === 'time' ? 'NEWEST' : sort === 'premium' ? 'BIGGEST' : 'TOP CHANGE'} ⇅
           </button>
@@ -1211,7 +1214,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           {(d && floor < (d.whaleFloor ?? 0)) || (d && !showUnreadable && (d.unreadable?.n ?? 0) > 0) ? (
-            <div className="px-3 pt-2 text-2xs leading-relaxed text-faint">
+            <div className="px-3 pt-2 text-2xs leading-relaxed text-fg">
               {d && floor < (d.whaleFloor ?? 0) ? (
                 <span className="text-warn">Asked for {money(floor)}, archive floor is {money(d.whaleFloor)}. </span>
               ) : null}
@@ -1226,24 +1229,24 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
           <div className="grid shrink-0 grid-cols-2 gap-1.5 px-3 py-2">
             <div className="col-span-2 flex items-end justify-between rounded-md border border-line bg-surface px-2.5 py-2">
               <div>
-                <div className="text-3xs font-bold uppercase tracking-[0.1em] text-faint">Whale premium</div>
+                <div className="text-3xs font-bold uppercase tracking-[0.1em] text-fg">Whale premium</div>
                 <div className="tabular mt-0.5 text-lg font-bold text-fg">{money(s?.total)}</div>
-                {s && <div className="tabular text-3xs text-faint">{num(s.sessions)} sessions · {num(s.n)} prints</div>}
+                {s && <div className="tabular text-3xs text-fg">{num(s.sessions)} sessions · {num(s.n)} prints</div>}
               </div>
               <div className="text-right">
-                <div className="text-3xs font-bold uppercase tracking-[0.1em] text-faint">Call / put</div>
+                <div className="text-3xs font-bold uppercase tracking-[0.1em] text-fg">Call / put</div>
                 <div className="tabular mt-0.5 text-sm font-bold text-fg">{callPut}</div>
               </div>
             </div>
             <div className="rounded-md border border-line bg-surface px-2.5 py-2">
-              <div className="text-3xs font-bold uppercase tracking-[0.1em] text-faint">Bullish</div>
+              <div className="text-3xs font-bold uppercase tracking-[0.1em] text-fg">Bullish</div>
               <div className="tabular mt-0.5 text-lg font-bold text-up">{money(s?.bull)}</div>
-              {s && <div className="tabular text-3xs text-faint">{readable > 0 ? `${Math.round((s.bull / readable) * 100)}%` : '—'}</div>}
+              {s && <div className="tabular text-3xs text-fg">{readable > 0 ? `${Math.round((s.bull / readable) * 100)}%` : '—'}</div>}
             </div>
             <div className="rounded-md border border-line bg-surface px-2.5 py-2">
-              <div className="text-3xs font-bold uppercase tracking-[0.1em] text-faint">Bearish</div>
+              <div className="text-3xs font-bold uppercase tracking-[0.1em] text-fg">Bearish</div>
               <div className="tabular mt-0.5 text-lg font-bold text-down">{money(s?.bear)}</div>
-              {s && <div className="tabular text-3xs text-faint">{readable > 0 ? `${Math.round((s.bear / readable) * 100)}%` : '—'}</div>}
+              {s && <div className="tabular text-3xs text-fg">{readable > 0 ? `${Math.round((s.bear / readable) * 100)}%` : '—'}</div>}
             </div>
           </div>
 
@@ -1255,7 +1258,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                 onClick={() => setPhoneTab(t.key)}
                 className={[
                   'shrink-0 py-2 text-2xs font-bold tracking-[0.08em]',
-                  phoneTab === t.key ? 'text-fg shadow-[inset_0_-2px_0_var(--color-accent)]' : 'text-faint',
+                  phoneTab === t.key ? 'text-fg shadow-[inset_0_-2px_0_var(--color-accent)]' : 'text-fg',
                 ].join(' ')}
               >
                 {t.label}
@@ -1269,13 +1272,13 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                 const newDay = byDay && (i === 0 || shown[i - 1]!.sessionDate !== r.sessionDate)
                 const agg = newDay ? d?.sessions.find((x) => x.d === r.sessionDate) : null
                 const bias = biasOf(r)
-                const biasInk = bias === 'bullish' ? 'text-up' : bias === 'bearish' ? 'text-down' : 'text-faint'
-                const sideInk = r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-faint'
+                const biasInk = bias === 'bullish' ? 'text-up' : bias === 'bearish' ? 'text-down' : 'text-fg'
+                const sideInk = r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-fg'
                 const k = trackKeyOf(r)
                 return (
                   <Fragment key={r.id}>
                     {newDay && (
-                      <div className="border-t border-line bg-surface2 px-3 py-1.5 text-3xs font-bold uppercase tracking-[0.1em] text-muted">
+                      <div className="border-t border-line bg-surface2 px-3 py-1.5 text-3xs font-bold uppercase tracking-[0.1em] text-fg">
                         {fmtDayHeader(r.sessionDate)}
                         {agg ? ` · ${num(agg.n)} prints · ${money(agg.total)}` : ''}
                       </div>
@@ -1297,9 +1300,9 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                           <span className={['tabular text-sm font-bold', r.type === 'P' ? 'text-down' : 'text-up'].join(' ')}>
                             {fmtStrike(r.strike)}{r.type ?? '?'}
                           </span>
-                          <span className="tabular text-2xs text-faint">{fmtExpiry(r.expiry)}</span>
+                          <span className="tabular text-2xs text-fg">{fmtExpiry(r.expiry)}</span>
                         </div>
-                        <div className="tabular mt-0.5 flex gap-1.5 overflow-hidden whitespace-nowrap text-2xs text-faint">
+                        <div className="tabular mt-0.5 flex gap-1.5 overflow-hidden whitespace-nowrap text-2xs text-fg">
                           <span className={['font-semibold', biasInk].join(' ')}>
                             {bias ? `${bias === 'bullish' ? '▲ BULL' : '▼ BEAR'} ${r.action === 'BUY' ? 'B' : 'S'}${r.type ?? ''}` : r.side === 'mid' ? 'n/a' : '—'}
                           </span>
@@ -1314,10 +1317,10 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                             const hi = highs.get(r.id)
                             return (
                               <>
-                                <span className={chg == null ? 'text-muted' : chg >= 0 ? 'text-up' : 'text-down'}>
+                                <span className={chg == null ? 'text-fg' : chg >= 0 ? 'text-up' : 'text-down'}>
                                   → {chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(0)}% ` : ''}{now.toFixed(2)}
                                 </span>
-                                {hi != null && <span className="text-faint">H {hi.toFixed(2)}</span>}
+                                {hi != null && <span className="text-fg">H {hi.toFixed(2)}</span>}
                               </>
                             )
                           })()}
@@ -1328,7 +1331,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                         <div className={['tabular text-sm font-bold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
                           {money(r.premium)}
                         </div>
-                        <div className="tabular mt-0.5 text-3xs text-faint">{when(r)}</div>
+                        <div className="tabular mt-0.5 text-3xs text-fg">{when(r)}</div>
                       </div>
                       {k && (
                         <TrackButton
@@ -1343,12 +1346,12 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                 )
               })}
               {!rows.length && (
-                <div className="px-3 py-4 text-sm text-faint">
+                <div className="px-3 py-4 text-sm text-fg">
                   {q.loading ? 'Loading…' : 'No whale prints match these filters in this range.'}
                 </div>
               )}
               {d && s && s.n > rows.length && (
-                <div className="px-3 py-2 text-3xs text-faint">
+                <div className="px-3 py-2 text-3xs text-fg">
                   {num(rows.length)} shown of {num(s.n)} — narrow the range or raise the floor to see the rest.
                 </div>
               )}
@@ -1420,7 +1423,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                 role="switch"
                 aria-checked={showUnreadable}
                 onClick={() => setShowUnreadable((v) => !v)}
-                className="flex w-full items-center justify-between py-2 text-xs text-muted"
+                className="flex w-full items-center justify-between py-2 text-xs text-fg"
               >
                 <span>Show unreadable prints</span>
                 <span className={['relative h-5 w-9 rounded-full transition-colors', showUnreadable ? 'bg-accent' : 'bg-line'].join(' ')}>
@@ -1431,7 +1434,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                 <button
                   type="button"
                   onClick={resetFilters}
-                  className="flex-1 rounded-md border border-line py-2.5 text-xs font-bold tracking-[0.08em] text-muted"
+                  className="flex-1 rounded-md border border-line py-2.5 text-xs font-bold tracking-[0.08em] text-fg"
                 >
                   RESET
                 </button>
@@ -1477,13 +1480,16 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
 
   return (
+    // ALL TEXT WHITE — see the phone <main>. `contents` so the wrapper adds no
+    // box; custom properties still inherit through it.
+    <div className="contents [--color-faint:var(--color-fg)] [--color-muted:var(--color-fg)]">
     <Page title="Whale Archive">
-      <div className="-mt-1 text-sm text-faint">
+      <div className="-mt-1 text-sm text-fg">
         Every option print of {money(d?.whaleFloor ?? 1_000_000)}+ premium, kept permanently. Whole market.
         {s ? ` · ${num(s.n)} prints across ${num(s.sessions)} sessions · ${money(s.total)} total premium` : ''}
-        {maxPrice !== null ? <span className="text-faint"> · contract price ≤ {maxPrice.toFixed(2)}</span> : null}
+        {maxPrice !== null ? <span className="text-fg"> · contract price ≤ {maxPrice.toFixed(2)}</span> : null}
         {maxDte !== null ? (
-          <span className="text-faint">{maxDte === 0 ? ' · 0DTE only' : ` · ≤${maxDte} DTE`}</span>
+          <span className="text-fg">{maxDte === 0 ? ' · 0DTE only' : ` · ≤${maxDte} DTE`}</span>
         ) : null}
         {/* The FLOOR pick can be BELOW what the server will serve: /api/lse/whales
             clamps min_premium up to its own floor because under that line the
@@ -1504,7 +1510,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
             about a filter that is removing nothing is noise. */}
         {d && !showUnreadable && (d.unreadable?.n ?? 0) > 0 ? (
           <span
-            className="text-faint"
+            className="text-fg"
             title="These prints never got a readable side and never will — a side cannot be recovered after the fact. They are excluded from every total on this page. Turn on SHOW UNREADABLE to include them."
           >
             {' '}· {num(d.unreadable?.n)} unreadable hidden ({money(d.unreadable?.premium)})
@@ -1537,7 +1543,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
           onChange={(e) => setTicker(e.target.value)}
           placeholder="TICKER"
           aria-label="Filter to one underlying"
-          className="tabular w-24 rounded-sm border border-line bg-bg px-2 py-0.5 text-xs uppercase text-fg outline-none placeholder:text-faint placeholder:opacity-60 focus:border-accent"
+          className="tabular w-24 rounded-sm border border-line bg-bg px-2 py-0.5 text-xs uppercase text-fg outline-none placeholder:text-fg focus:border-accent"
         />
 
         <span aria-hidden className="h-4 w-px shrink-0 bg-line" />
@@ -1643,7 +1649,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
             {day} ✕
           </button>
         )}
-        <span className="ml-auto text-2xs text-faint">
+        <span className="ml-auto text-2xs text-fg">
           {q.loading && !d ? 'loading…' : d ? `${d.range.from} → ${d.range.to}` : ''}
         </span>
       </div>
@@ -1687,7 +1693,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
               <div className="min-h-0 min-w-0 flex-1 overflow-auto">
                 <table className="w-full border-collapse text-xs">
                   <thead className="sticky top-0 z-[1] bg-surface">
-                    <tr className="text-2xs uppercase tracking-[0.09em] text-faint">
+                    <tr className="text-2xs uppercase tracking-[0.09em] text-fg">
                       <th className="px-2 py-2 text-left font-bold">Time</th>
                       <th className="px-2 py-2 text-left font-bold">Ticker</th>
                       <th className="px-2 py-2 text-left font-bold">Contract</th>
@@ -1726,9 +1732,9 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                       // colour rules — a sold put is a bid-side fill (red Side)
                       // and a bullish position (green Bias), and collapsing
                       // that into one ink is what made this table misread.
-                      const ink = r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-faint'
+                      const ink = r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-fg'
                       const bias = biasOf(r)
-                      const biasInk = bias === 'bullish' ? 'text-up' : bias === 'bearish' ? 'text-down' : 'text-faint'
+                      const biasInk = bias === 'bullish' ? 'text-up' : bias === 'bearish' ? 'text-down' : 'text-fg'
                       return (
                         // Keyed on the PRINT, not the index: a fragment in an
                         // array needs its own key, and the row inside it is the
@@ -1736,7 +1742,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                         <Fragment key={r.id}>
                           {newDay && (
                             <tr>
-                              <td colSpan={13} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-muted">
+                              <td colSpan={13} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-fg">
                                 {fmtDayHeader(r.sessionDate)}
                                 {agg ? ` · ${num(agg.n)} prints · ${money(agg.total)}` : ''}
                               </td>
@@ -1751,11 +1757,11 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                               r.id === selectedId ? 'bg-raised' : '',
                             ].join(' ')}
                           >
-                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-faint">{when(r)}</td>
+                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">{when(r)}</td>
                             <td className="px-2 py-1.5 font-semibold text-fg">{r.underlying ?? '—'}</td>
-                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-muted">
+                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">
                               <span className="text-fg">{fmtStrike(r.strike)}</span>{' '}
-                              <span className="text-faint">{fmtExpiry(r.expiry)}</span>
+                              <span className="text-fg">{fmtExpiry(r.expiry)}</span>
                             </td>
                             <td className={['px-2 py-1.5 font-semibold', r.type === 'P' ? 'text-down' : 'text-up'].join(' ')}>{r.type ?? '?'}</td>
                             <td className={['tabular whitespace-nowrap px-2 py-1.5 font-semibold', ink].join(' ')}>
@@ -1778,15 +1784,15 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                                   {/* The raw verb kept faint beside it: the bias is the
                                       read, but you still need to see which of the four
                                       trades produced it. */}
-                                  <span className="font-normal text-faint opacity-70">
+                                  <span className="font-normal text-fg">
                                     {' '}{r.action === 'BUY' ? 'B' : 'S'}{r.type}
                                   </span>
                                 </>
                               ) : r.side === 'mid' ? 'n/a' : '—'}
                             </td>
-                            <td className="tabular px-2 py-1.5 text-right text-muted">{r.dte ?? '—'}</td>
-                            <td className="tabular px-2 py-1.5 text-right text-muted">{num(r.size)}</td>
-                            <td className="tabular px-2 py-1.5 text-right text-muted">{r.price?.toFixed(2) ?? '—'}</td>
+                            <td className="tabular px-2 py-1.5 text-right text-fg">{r.dte ?? '—'}</td>
+                            <td className="tabular px-2 py-1.5 text-right text-fg">{num(r.size)}</td>
+                            <td className="tabular px-2 py-1.5 text-right text-fg">{r.price?.toFixed(2) ?? '—'}</td>
                             <MoveCell value={highs.get(r.id) ?? null} entry={r.price} />
                             <MoveCell value={markOf(marks, r)} entry={r.price} />
                             <td className={['tabular px-2 py-1.5 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
@@ -1816,7 +1822,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                   </tbody>
                 </table>
                 {!rows.length && (
-                  <div className="px-2 py-4 text-sm text-faint">
+                  <div className="px-2 py-4 text-sm text-fg">
                     {q.loading ? 'Loading…' : 'No whale prints match these filters in this range.'}
                   </div>
                 )}
@@ -1873,5 +1879,6 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         <div className="min-w-0"><TrackedAlertsCard store={alerts} /></div>
       </div>
     </Page>
+    </div>
   )
 }

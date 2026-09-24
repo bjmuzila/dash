@@ -39,12 +39,14 @@ import {
   shortestForm,
   textW,
   wheelPalette,
+  WHEEL_SKIN_KEY,
   type Callout,
   type WheelLeaf,
   type WheelNode,
   type WheelPalette,
   type WheelPayload,
   type WheelRow,
+  type WheelSkin,
 } from './wheelMath'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +170,7 @@ const WheelSvg = memo(function WheelSvg({
   onLeave,
 }: WheelSvgProps) {
   const RING = focus ? RING_FOCUS : RING_ALL
-  const { fillFor, ringFill, barLen, inkOn, dir } = palette
+  const { fillFor, ringFill, barLen, inkOn, dir, chrome } = palette
   /** Bars that already have a callout skip the ticker printed inside them. */
   const calledOut = useMemo(() => new Set(callouts.map((c) => c.k)), [callouts])
 
@@ -182,9 +184,14 @@ const WheelSvg = memo(function WheelSvg({
       data-cb-layer="sector-wheel"
       style={{ display: 'block', width: '100%', height: 'auto' }}
     >
+      {/* Voltick skin paints its own ink plate so the wheel reads on Voltick's
+          ground, not the card's. CB Edge skin paints nothing here. */}
+      {chrome.plate && (
+        <rect x={-VB / 2} y={-VB / 2} width={VB} height={VB} rx={14} fill={chrome.plate} />
+      )}
       {/* scale rings */}
       {[0.5, 1].map((f) => (
-        <circle key={f} r={R0 + f * AMP} fill="none" stroke={T.border} strokeWidth={1} />
+        <circle key={f} r={R0 + f * AMP} fill="none" stroke={chrome.line} strokeWidth={1} />
       ))}
 
       {/* sector ring */}
@@ -193,7 +200,7 @@ const WheelSvg = memo(function WheelSvg({
           key={`s-${s.name}`}
           d={arcPath(s.a0, s.a1, R * RING.holeOut, R * RING.secOut - 1.5)}
           fill={ringFill(s.chg, 0.62)}
-          stroke={T.bg}
+          stroke={chrome.bg}
           strokeWidth={1}
           fillRule="evenodd"
           style={{ cursor: focus ? 'default' : 'pointer' }}
@@ -211,7 +218,7 @@ const WheelSvg = memo(function WheelSvg({
           key={`i-${n.name}-${k}`}
           d={arcPath(n.a0, n.a1, R * RING.secOut, R * RING.indOut - 1.5)}
           fill={ringFill(n.chg, 0.9)}
-          stroke={T.bg}
+          stroke={chrome.bg}
           strokeWidth={0.8}
           fillRule="evenodd"
           onMouseMove={(e) => onTip(e, n.name, `${n.rows.length} names · cap-weighted`, n.chg)}
@@ -225,7 +232,7 @@ const WheelSvg = memo(function WheelSvg({
           key={`l-${l.name}-${k}`}
           d={arcPath(l.a0, l.a1, R0, R0 + barLen(l.chg))}
           fill={fillFor(l.chg)}
-          stroke={T.bg}
+          stroke={chrome.bg}
           strokeWidth={0.6}
           onMouseMove={(e) => onTip(e, l.name, `${l.row.s} › ${l.row.i}`, l.chg)}
           onMouseLeave={onLeave}
@@ -233,10 +240,10 @@ const WheelSvg = memo(function WheelSvg({
       ))}
 
       {/* zero ring, above the feet of the bars */}
-      <circle r={R0} fill="none" stroke={alpha(T.text, 0.28)} strokeWidth={1.4} />
+      <circle r={R0} fill="none" stroke={alpha(chrome.text, 0.28)} strokeWidth={1.4} />
 
       {/* hub */}
-      <circle r={R * RING.holeOut - 3} fill={T.panel} />
+      <circle r={R * RING.holeOut - 3} fill={chrome.panel} />
 
       {/* sector labels — tangential, only where the arc genuinely fits one */}
       {sectors.map((s) => {
@@ -377,7 +384,7 @@ const WheelSvg = memo(function WheelSvg({
         fontSize={10.5}
         fontWeight={800}
         letterSpacing="0.1em"
-        fill={T.muted}
+        fill={chrome.muted}
         opacity={0.55}
         style={{ pointerEvents: 'none' }}
       >
@@ -397,7 +404,7 @@ const WheelSvg = memo(function WheelSvg({
         textAnchor="middle"
         y={12}
         fontSize={9.5}
-        fill={T.muted}
+        fill={chrome.muted}
         opacity={0.7}
         style={{ pointerEvents: 'none' }}
       >
@@ -410,7 +417,7 @@ const WheelSvg = memo(function WheelSvg({
             y={30}
             fontSize={9}
             fontWeight={700}
-            fill={T.cyan}
+            fill={chrome.accent}
             style={{ pointerEvents: 'none' }}
           >
             ← all sectors
@@ -457,8 +464,30 @@ export interface SectorWheelProps {
   failed: boolean
 }
 
+const SKIN_OPTIONS: Array<{ label: string; value: WheelSkin; title: string }> = [
+  { label: 'CB Edge', value: 'cbedge', title: 'CB Edge colours' },
+  { label: 'Voltick', value: 'voltick', title: 'Voltick colours — Paper White on Ink, green / red data' },
+]
+
 export default function SectorWheel({ payload, failed }: SectorWheelProps) {
   const [cap, setCap] = useState(3)
+  // CB Edge / Voltick colour skin. Remembered per browser; storage can throw
+  // (private window, blocked site data) and the wheel must still render.
+  const [skin, setSkinState] = useState<WheelSkin>(() => {
+    try {
+      return window.localStorage.getItem(WHEEL_SKIN_KEY) === 'voltick' ? 'voltick' : 'cbedge'
+    } catch {
+      return 'cbedge'
+    }
+  })
+  const setSkin = useCallback((v: WheelSkin) => {
+    setSkinState(v)
+    try {
+      window.localStorage.setItem(WHEEL_SKIN_KEY, v)
+    } catch {
+      /* per-viewer convenience only */
+    }
+  }, [])
   const [focus, setFocus] = useState<string | null>(null)
   const [tip, setTip] = useState<Tip | null>(null)
   // `expanded` lifts the whole card into a fixed overlay (portalled to <body>
@@ -490,7 +519,7 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
     () => buildHierarchy(rows, focus),
     [rows, focus],
   )
-  const palette = useMemo(() => wheelPalette(cap), [cap])
+  const palette = useMemo(() => wheelPalette(cap, skin), [cap, skin])
   const callouts = useMemo(
     () => buildCallouts(leaves, expanded ? 5 : 3, expanded ? 7.5 : 9.5, palette.barLen),
     [leaves, expanded, palette],
@@ -611,6 +640,12 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
 
   const controls = (
     <>
+      <SegGroup
+        options={SKIN_OPTIONS}
+        value={skin}
+        onChange={setSkin}
+        title="Colour skin — CB Edge or Voltick"
+      />
       <SegGroup
         options={capOptions}
         value={String(cap)}

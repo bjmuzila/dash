@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { readableError, useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { TrackButton } from './TrackedAlertsCard'
+import { ContractProbe } from '@/board/topFlow/ContractProbe'
+import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REPEATED FLOW (2026-09-24) — the same contract hit over and over.
@@ -27,6 +29,13 @@ import { TrackButton } from './TrackedAlertsCard'
 // each contract on its DENSEST window of that length, so ORDERS, DIR, premium,
 // FIRST and LAST all describe that one burst. ALL DAY is the whole range's
 // count, for context. RANGE (TODAY / 5D) is separate: which sessions to scan.
+//
+// CLICK A ROW (2026-09-24) — the probe chart opens right under it, the same
+// ContractProbe the prints table and Tracked contracts draw (⤢ pops it out).
+// It used to load the contract into the lookup panel, which sits in the right
+// rail far above this full-width section, so the click looked like it did
+// nothing. The burst's average fill is the entry and its first order is the
+// marker, so the chart reads "what has it done since the hammering started".
 //
 // SORT: every column header sorts (click again to flip). Client-side over the
 // server's list (top 100 by order count). Phone gets a SORT menu instead.
@@ -177,10 +186,10 @@ export const repeatKey = (r: Pick<RepeatContract, 'ticker' | 'strike' | 'type' |
 
 export type { RepeatContract }
 
-export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, busyKey, onTrack }: {
+export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey, onTrack }: {
   filters: RepeatedFlowFilters
-  /** Load the contract into the page's lookup panel. */
-  onOpen: (ticker: string, strike: number, expiry: string, type: string) => void
+  /** Unused since the row opens its own probe — kept so callers still compile. */
+  onOpen?: (ticker: string, strike: number, expiry: string, type: string) => void
   phone?: boolean
   /** Keys (repeatKey) already in Tracked contracts. */
   trackedKeys: { has: (k: string) => boolean }
@@ -195,6 +204,9 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, 
   const [cluster, setCluster] = useState<number>(saved.cluster)
   const [sortKey, setSortKey] = useState<SortKey>(saved.sortKey)
   const [sortDir, setSortDir] = useState<SortDir>(saved.sortDir)
+  // The contract whose probe is open under its row. One at a time.
+  const [openOsi, setOpenOsi] = useState<string | null>(null)
+  const toggle = (osi: string) => setOpenOsi((cur) => (cur === osi ? null : osi))
 
   useEffect(() => {
     try {
@@ -280,13 +292,13 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, 
             type="button"
             onClick={() => setSortDir((x) => (x === 'asc' ? 'desc' : 'asc'))}
             title="Flip the order"
-            className="rounded-sm border border-line px-2 py-1 text-2xs font-bold text-muted"
+            className="rounded-sm border border-line px-2 py-1 text-2xs font-bold text-fg"
           >
             {sortDir === 'asc' ? '▲' : '▼'}
           </button>
         </>
       )}
-      <span className="ml-auto text-2xs text-faint">
+      <span className="ml-auto text-2xs text-fg">
         {q.loading && !d
           ? 'loading…'
           : d
@@ -298,7 +310,7 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, 
 
   const dirOf = (r: RepeatContract) => {
     const dir = r.bullN + r.bearN
-    if (dir === 0) return { label: '—', pct: null as number | null, ink: 'text-faint' }
+    if (dir === 0) return { label: '—', pct: null as number | null, ink: 'text-fg' }
     const bull = r.bullN >= r.bearN
     const pct = Math.round(((bull ? r.bullN : r.bearN) / dir) * 100)
     return { label: bull ? 'BULL' : 'BEAR', pct, ink: bull ? 'text-up' : 'text-down' }
@@ -353,8 +365,36 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, 
     </th>
   )
 
+  /** The burst, dressed as the row ContractProbe draws. */
+  const probeRow = (r: RepeatContract): TopFlowRow => ({
+    id: `repeat:${r.osi}:${r.firstTs}`,
+    ts: r.firstTs,
+    osi: r.osi,
+    underlying: r.ticker,
+    type: r.type === 'P' ? 'P' : 'C',
+    strike: Number(r.strike),
+    expiry: r.expiry,
+    dte: null,
+    size: r.size > 0 ? Math.round(r.size) : null,
+    price: r.avgPrice,
+    premium: r.total,
+    spot: null,
+    side: null, action: null, sideReason: null,
+    bid: null, ask: null, quoteAgeMs: null, vol: null, oi: null,
+  })
+  const probe = (r: RepeatContract) => (
+    <div className="flex min-h-[380px] flex-col rounded-sm border border-line bg-surface">
+      <ContractProbe
+        key={`repeat:${r.osi}`}
+        row={probeRow(r)}
+        onClose={() => setOpenOsi(null)}
+        entryAt={r.firstTs}
+      />
+    </div>
+  )
+
   const emptyNote = (
-    <div className="px-3 py-3 text-sm text-faint">
+    <div className="px-3 py-3 text-sm text-fg">
       No contract was hit {minOrders}+ times at {FLOORS.find((f) => f.value === floor)?.label ?? money(floor)} per order
       {cluster < 1440 ? ` inside one ${clusterLabel} window` : ''}
       {multiDay ? ' in the last five sessions' : ' today'}.
@@ -364,8 +404,8 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, 
   return (
     <div className="flex min-h-0 flex-col rounded-md border border-line bg-surface">
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <h2 className="text-2xs font-bold uppercase tracking-[0.11em] text-faint">Repeated flow</h2>
-        <span className="ml-auto text-2xs text-faint">
+        <h2 className="text-2xs font-bold uppercase tracking-[0.11em] text-fg">Repeated flow</h2>
+        <span className="ml-auto text-2xs text-fg">
           same contract, {minOrders}+ orders{cluster < 1440 ? ` within ${clusterLabel}` : ''}
         </span>
       </div>
@@ -379,22 +419,26 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, 
             return (
               // A div, not a <button>: the row carries a TRACK button, and a
               // button inside a button is invalid HTML.
+              <Fragment key={r.osi}>
               <div
-                key={r.osi}
                 role="button"
                 tabIndex={0}
-                onClick={() => onOpen(r.ticker, Number(r.strike), r.expiry, r.type)}
-                onKeyDown={(e) => { if (e.key === 'Enter') onOpen(r.ticker, Number(r.strike), r.expiry, r.type) }}
-                className="block w-full cursor-pointer border-b border-line px-3 py-2 text-left last:border-b-0 active:bg-raised"
+                aria-expanded={openOsi === r.osi}
+                onClick={() => toggle(r.osi)}
+                onKeyDown={(e) => { if (e.key === 'Enter') toggle(r.osi) }}
+                className={[
+                  'block w-full cursor-pointer border-b border-line px-3 py-2 text-left active:bg-raised',
+                  openOsi === r.osi ? 'bg-raised' : '',
+                ].join(' ')}
               >
                 <span className="flex items-baseline justify-between gap-2">
                   <span className="truncate text-sm font-semibold text-fg">
                     {r.ticker} {fmtStrike(Number(r.strike))}{r.type}{' '}
-                    <span className="text-xs font-normal text-faint">{fmtExpiry(r.expiry)}</span>
+                    <span className="text-xs font-normal text-fg">{fmtExpiry(r.expiry)}</span>
                   </span>
                   <span className={['tabular shrink-0 text-sm font-semibold', dir.ink].join(' ')}>{money(r.total)}</span>
                 </span>
-                <span className="mt-0.5 flex items-baseline justify-between gap-2 text-2xs text-faint">
+                <span className="mt-0.5 flex items-baseline justify-between gap-2 text-2xs text-fg">
                   <span className="tabular">
                     <span className="font-bold text-fg">×{r.n}</span>
                     {cluster < 1440 ? ` in ${fmtSpan(r)}` : ''}
@@ -413,15 +457,17 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, 
                   />
                 </span>
               </div>
+              {openOsi === r.osi && <div className="border-b border-line bg-surface2 p-2">{probe(r)}</div>}
+              </Fragment>
             )
           })}
           {!list.length && !q.loading && emptyNote}
         </div>
       ) : (
-        <div className="max-h-[420px] min-h-0 overflow-auto">
+        <div className={[openOsi ? 'max-h-[820px]' : 'max-h-[420px]', 'min-h-0 overflow-auto'].join(' ')}>
           <table className="w-full border-collapse text-xs">
             <thead className="sticky top-0 z-[1] bg-surface">
-              <tr className="text-2xs uppercase tracking-[0.09em] text-faint">
+              <tr className="text-2xs uppercase tracking-[0.09em] text-fg">
                 {th('ticker', 'Ticker')}
                 {th('strike', 'Contract')}
                 {th('expiry', 'Exp')}
@@ -442,35 +488,42 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, 
               {list.map((r) => {
                 const dir = dirOf(r)
                 return (
+                  <Fragment key={r.osi}>
                   <tr
-                    key={r.osi}
-                    onClick={() => onOpen(r.ticker, Number(r.strike), r.expiry, r.type)}
-                    title="Open this contract in the lookup"
-                    className="cursor-pointer border-t border-line hover:bg-raised"
+                    onClick={() => toggle(r.osi)}
+                    aria-expanded={openOsi === r.osi}
+                    title={openOsi === r.osi ? 'Close the chart' : 'Open the chart'}
+                    className={[
+                      'cursor-pointer border-t border-line hover:bg-raised',
+                      openOsi === r.osi ? 'bg-raised' : '',
+                    ].join(' ')}
                   >
-                    <td className="px-2 py-1.5 font-semibold text-fg">{r.ticker}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 font-semibold text-fg">
+                      <span className="mr-1 text-2xs text-fg">{openOsi === r.osi ? '▾' : '▸'}</span>
+                      {r.ticker}
+                    </td>
                     <td className="tabular px-2 py-1.5 text-fg">{fmtStrike(Number(r.strike))}{r.type}</td>
-                    <td className="px-2 py-1.5 text-muted">{fmtExpiry(r.expiry)}</td>
+                    <td className="px-2 py-1.5 text-fg">{fmtExpiry(r.expiry)}</td>
                     <td className="tabular px-2 py-1.5 text-right font-bold text-fg">×{r.n}</td>
-                    <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-muted">{fmtSpan(r)}</td>
+                    <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-fg">{fmtSpan(r)}</td>
                     <td className={['px-2 py-1.5 font-semibold', dir.ink].join(' ')}>
-                      {dir.label}{dir.pct != null ? <span className="ml-1 text-2xs opacity-80">{dir.pct}%</span> : null}
+                      {dir.label}{dir.pct != null ? <span className="ml-1 text-2xs">{dir.pct}%</span> : null}
                     </td>
                     <td className="tabular px-2 py-1.5 text-right">
                       <span className="text-up">{r.bullN}</span>
-                      <span className="text-faint"> / </span>
+                      <span className="text-fg"> / </span>
                       <span className="text-down">{r.bearN}</span>
                     </td>
-                    <td className="tabular px-2 py-1.5 text-right text-muted">{num(Math.round(r.size))}</td>
-                    <td className="tabular px-2 py-1.5 text-right text-muted">{r.avgPrice != null ? r.avgPrice.toFixed(2) : '—'}</td>
-                    <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-muted">{fmtWhen(r.firstTs, multiDay)}</td>
-                    <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-muted">{fmtWhen(r.lastTs, multiDay)}</td>
+                    <td className="tabular px-2 py-1.5 text-right text-fg">{num(Math.round(r.size))}</td>
+                    <td className="tabular px-2 py-1.5 text-right text-fg">{r.avgPrice != null ? r.avgPrice.toFixed(2) : '—'}</td>
+                    <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-fg">{fmtWhen(r.firstTs, multiDay)}</td>
+                    <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-fg">{fmtWhen(r.lastTs, multiDay)}</td>
                     <td
                       className={['tabular px-2 py-1.5 text-right font-semibold', dir.ink].join(' ')}
                       title={`${money(r.bull)} bullish vs ${money(r.bear)} bearish`}
                     >{money(r.total)}</td>
                     <td
-                      className="tabular whitespace-nowrap px-2 py-1.5 text-right text-faint"
+                      className="tabular whitespace-nowrap px-2 py-1.5 text-right text-fg"
                       title={`${num(r.nAll)} orders · ${money(r.totalAll)} across the range`}
                     >×{r.nAll}</td>
                     <td className="px-2 py-1 text-right">
@@ -482,6 +535,12 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, 
                       />
                     </td>
                   </tr>
+                  {openOsi === r.osi && (
+                    <tr>
+                      <td colSpan={14} className="border-t border-line bg-surface2 p-2">{probe(r)}</td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )
               })}
             </tbody>
