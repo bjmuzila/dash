@@ -1,11 +1,5 @@
 # Changelog
 
-## 2026-09-24 - Public landing (merger page): Voltick info, member sections removed
-
-- `components/landing/MergerClient.tsx`: removed the 4-fact strip (Closed / Renewals / Features / Term end), the "For current members" section and the "What happens, and when" timeline.
-- Voltick card now carries a short description + four feature bullets; new "About Voltick" section (four tiles) with a "Go to voltick.io for more info" button (tracked as `landing-about`). No discount code on the public page.
-- `components/landing/PublicNav.tsx`: Docs tab removed from the top nav (footer Docs link kept).
-
 ## 2026-09-24 - GEX Change Top: regime context + card expand / snapshot
 
 - **Regime at the flag.** Every pick now stamps the TICKER's board at capture (`gex_change_top.tk_net_gex / tk_call_share / tk_flip / tk_regime`) from the live strike-growth feed (OI+Vol, front expiries, flip = net-GEX zero crossing nearest spot within 15%), falling back to `strike_growth_expiry` totals. SPX backdrop stamped as `mkt_net_gex / mkt_regime` from market state.
