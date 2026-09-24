@@ -458,7 +458,7 @@ export default function EconomicCalendar() {
         >
           <div className="flex flex-wrap items-center gap-3">
             {/* Served from the v2 public/ root, which is the same origin. */}
-            <img src="/cb-edge-logo.png" alt="CB Edge" className="block h-5 w-auto shrink-0" />
+            <img src="/cb-edge-logo.png" alt="CB Edge" data-capture-hide className="block h-5 w-auto shrink-0" />
             <span className="text-xs font-extrabold uppercase tracking-[0.15em] text-fg">
               Economic Calendar
             </span>
@@ -1112,7 +1112,7 @@ function EarningsBoard({
             corner; this is the size a watermark has to be to survive a
             screenshot of a screenshot. */}
         <span className="tabular ml-auto font-mono text-xl font-extrabold leading-none text-fg">
-          cbedge.net
+          voltick.io/bzila
         </span>
       </div>
 
@@ -1149,9 +1149,8 @@ function EarningsBoard({
           className="tabular min-w-0 truncate font-mono text-sm font-semibold leading-none"
           style={{ color: CAL.accent }}
         >
-          cbedge.net/v3/economic-calendar
+          voltick.io/bzila
         </span>
-        <img src="/cbedge3.0.png" alt="CB Edge" className="block h-14 w-auto shrink-0" />
       </div>
     </div>
   )

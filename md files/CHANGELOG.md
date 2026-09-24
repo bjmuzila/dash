@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-24 - Tracked contracts: Snapshot button on the pop-out
+
+- The popped-out contract probe (⤢ on a tracked contract's chart) now shows the tracked row's details above the chart: contract and source, expiry with DTE, entry and print time, mark, move (% and $), size, premium, when it was tracked, and the note.
+- New **📸 Snapshot** button in the pop-out header. It copies a PNG of the whole panel, including that strip, with the caption `Tracked contract · <contract> · <expiry>`. It is owner-only, like every CopyShot button. The expand, close, snapshot and "press Esc" hint are `data-capture-hide`.
+- `ContractProbe` gains an optional `alertInfo` prop (`ProbeAlertInfo`). Every other probe leaves it out and looks the same as before.
+- Files: `cbedge-v3/src/board/topFlow/ContractProbe.tsx`, `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`.
+
 ## 2026-09-24 - Repeated flow: time filter, Track button, sortable columns
 
 - **TIME** control (desktop and phone): 1H / 2H / 4H count only orders from the last 1, 2 or 4 hours. DAY is the whole session and 5D the last five sessions. The server takes `within_min` (in minutes, so the URL stays stable) and the whale archive's `whFilter` gains an optional `sinceTs` (unset for the archive).
@@ -24336,3 +24343,8 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - NQ 1m stream: `proxy-tastytrade.js` subscribes `/NQ…{=1m}` and adds `nq1mCandles` / `nq1mCandlesDelta` to market state, the WebSocket snapshot/topic scope/broadcast, and `cbedge-v3/src/data/socket.ts`. It is gated by `NQ_1M_CANDLES`, which defaults to whatever `ES_1M_CANDLES` is set to.
 - `nq_candles` migration (`ensureNqCandlesKey` in `server-v2/_lib-db.cjs`, mirrored in `lib/db.ts`): adds a `contract` column, pins NULL intervals to 5, and swaps UNIQUE("slotKey") for UNIQUE("slotKey","intervalMinutes",contract). It checks the catalog first and uses a 3s lock_timeout and a 5-minute backoff, the same as the ES one. `es-candle-writer.js` and `upsertNqCandle` now use that key. `getNqCandles` takes interval and contract, and its interval defaults to 5, so the IB recorder is unchanged. `/api/snapshots/candles?symbol=NQ` now honors `?interval` and `?contract` (defaults to latest). NQ roll now clears the NQ bar maps too.
 - Files: `server-v2/{nq-ndx-basis.js,server-with-proxy.js,proxy-tastytrade.js,websocket-server.js,api-router.js,_lib-db.cjs}`, `server-v2/state/{market-state.js,es-candle-writer.js,es-candle-writer.selftest.js}`, `lib/db.ts`, `cbedge-v3/src/board/gexCandles/{futures.ts,basis.ts,candles.ts,GexCandlesCard.tsx,settings.ts,symbols.ts}`, `cbedge-v3/src/data/socket.ts`.
+
+## 2026-09-24 — Snapshot templates: CB Edge logo removed, links → voltick.io/bzila
+- `cbedge-v3/src/shell/snapshot.ts`: framed snapshots no longer draw the CB Edge mark in the caption (`loadLogo()` resolves null; `LOGO_SRC` removed).
+- `cbedge-v3/src/board/econCalendar/econTemplate.ts`: Economic Calendar poster no longer loads or renders the CB Edge mark.
+- `cbedge-v3/src/pages/EconomicCalendar.tsx`: earnings-week board — `cbedge.net` header and `cbedge.net/v3/economic-calendar` footer now read `voltick.io/bzila`; bottom-right cbedge3.0 logo removed; top-bar logo tagged `data-capture-hide` so the calendar page shot drops it.

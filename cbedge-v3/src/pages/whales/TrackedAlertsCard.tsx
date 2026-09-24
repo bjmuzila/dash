@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { ContractProbe } from '@/board/topFlow/ContractProbe'
+import { ContractProbe, type ProbeAlertInfo } from '@/board/topFlow/ContractProbe'
 import { fmtPremium, fmtStrike } from '@/data/flowMath'
 import { alertToRow, type AlertsStore, type WhaleAlert } from './alertsStore'
 
@@ -68,6 +68,11 @@ function dte(expiry: string): number | null {
   const today = Date.parse(`${etYmd(Date.now())}T00:00:00Z`)
   return Math.round((exp - today) / 86_400_000)
 }
+
+/** "Sep 24, 10:42 AM" — the date matters on a row that can be weeks old. */
+const fmtWhen = (ms: number) =>
+  new Intl.DateTimeFormat('en-US', { timeZone: ET, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+    .format(new Date(ms))
 
 const fmtTime = (ms: number) =>
   new Intl.DateTimeFormat('en-US', { timeZone: ET, hour: 'numeric', minute: '2-digit', hour12: true })
@@ -218,6 +223,30 @@ function AlertRow({ a, mark, open, onToggle, store }: {
     : null
   const ink = pct == null ? 'text-muted' : pct > 0 ? 'text-up' : pct < 0 ? 'text-down' : 'text-muted'
 
+  // What the pop-out's trade card says about this row — see ProbeAlertInfo.
+  const alertInfo = useMemo<ProbeAlertInfo>(() => {
+    const bits: string[] = []
+    if (a.source === 'whale') {
+      bits.push('Whale print')
+      if (a.printPremium) bits.push(fmtPremium(a.printPremium))
+      if (a.printSize) bits.push(`${a.printSize.toLocaleString()} ct${entry != null ? ` @ ${entry.toFixed(2)}` : ''}`)
+      if (a.printTs) bits.push(fmtWhen(a.printTs))
+    } else {
+      bits.push('Tracked from lookup')
+      if (entry != null) bits.push(`entry ${entry.toFixed(2)}`)
+      if (a.printSize) bits.push(`${a.printSize.toLocaleString()} ct`)
+    }
+    return {
+      shotId: `tracked:${a.id}`,
+      shotLabel: 'Tracked contract',
+      file: `tracked-${a.underlying}-${a.strike}${a.optType}-${a.expiry}`,
+      headline: bits.join(' · '),
+      dteLabel: days != null ? `${days}d` : null,
+      trackedAt: a.createdAt,
+      note: a.note || undefined,
+    }
+  }, [a, days, entry])
+
   const commitNote = () => {
     if (draft == null) return
     const next = draft.trim().slice(0, 500)
@@ -353,6 +382,7 @@ function AlertRow({ a, mark, open, onToggle, store }: {
                   // at, so the entry draws as a rung with no marker — same
                   // contract the lookup panel makes.
                   entryAt={a.printTs ?? null}
+                  alertInfo={alertInfo}
                 />
               </div>
             </div>

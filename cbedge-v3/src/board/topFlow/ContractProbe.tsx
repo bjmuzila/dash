@@ -2,7 +2,34 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { createPortal } from 'react-dom'
 import { useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, roundStrike } from '@/data/flowMath'
+import { CopyShotButton, type CopyShotTarget } from '@/shell/CopyShot'
 import type { TopFlowRow } from './TopFlowCard'
+
+/**
+ * THE ALERT BEHIND THE CHART (2026-09-24) — for a probe opened from Tracked
+ * contracts. Popped out, the panel becomes a TRADE CARD (layout D, picked by
+ * Brandon): contract and print line on the left, the move as the hero number
+ * on the right, the chart, then the note as a quote and the tracked date. The
+ * 📸 photographs it BARE — no CB Edge caption band or mark — and the card
+ * carries its own `voltick.io/bzila` line instead. Every word on it is fg
+ * (white), never muted/faint: it is a picture for posting, not a panel.
+ * Omitted everywhere else, so every other probe is unchanged.
+ */
+export interface ProbeAlertInfo {
+  /** Stable CopyShot id, e.g. `tracked:42`. */
+  shotId: string
+  /** The CopyShot label (menu/tooltip). Nothing prints it — the shot is bare. */
+  shotLabel: string
+  /** Download stem when the clipboard refuses. */
+  file?: string
+  /** Under the title: "Whale print · $1.20M · 3,880 ct @ 3.10 · Sep 23 10:42 AM". */
+  headline: string
+  /** "22d", or null when the expiry cannot be read. */
+  dteLabel: string | null
+  /** Epoch ms the contract was tracked. */
+  trackedAt: number
+  note?: string
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONTRACT PROBE — what the print did after it printed.
@@ -150,9 +177,11 @@ export async function loadProbeBars(row: ProbeKey, days = 2, signal?: AbortSigna
   return []
 }
 
-export function ContractProbe({ row, onClose, entryAt }: {
+export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
   row: TopFlowRow
   onClose: () => void
+  /** Tracked-contract details for the pop-out strip and its snapshot. */
+  alertInfo?: ProbeAlertInfo
   /**
    * When the entry price is NOT tied to a moment — a hand-typed cost basis on
    * the whale page's contract lookup, say — pass null and the chart draws the
@@ -215,6 +244,23 @@ export function ContractProbe({ row, onClose, entryAt }: {
   // stops being readable. The ⤢ pops the SAME panel out over the page — see the
   // portal at the bottom of this return.
   const [expanded, setExpanded] = useState(false)
+  // The popped-out panel — what the 📸 photographs. Resolved at click time,
+  // as CopyShotTarget.resolve asks, because the portal mounts and unmounts.
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const shotTarget = useMemo<CopyShotTarget | null>(
+    () => alertInfo
+      ? {
+          id: alertInfo.shotId,
+          icon: '📌',
+          label: alertInfo.shotLabel,
+          file: alertInfo.file,
+          // No caption band, no CB Edge mark — the card signs itself.
+          bare: true,
+          resolve: () => panelRef.current,
+        }
+      : null,
+    [alertInfo],
+  )
   useEffect(() => {
     if (!expanded) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setExpanded(false) }
@@ -260,6 +306,7 @@ export function ContractProbe({ row, onClose, entryAt }: {
         </span>
       </div>
       <div className="tabular -mt-1 text-2xs text-muted">{fmtDate(row.expiry)}</div>
+
 
       <div className="flex items-center gap-2">
         <span className={[big ? 'text-xl' : 'text-base', 'leading-none', ink].join(' ')}>{dir < 0 ? '▼' : '▲'}</span>
@@ -343,6 +390,117 @@ export function ContractProbe({ row, onClose, entryAt }: {
     </>
   )
 
+  // ── THE TRADE CARD (layout D) ─────────────────────────────────────────────
+  // Only for a tracked contract, only popped out. The controls row and the
+  // range buttons wear data-capture-hide: a stacked hidden row gives its
+  // height back, so the PNG is the card and nothing else.
+  const dollars = perCt != null && row.size ? perCt * row.size : null
+  const tradeCard = (info: ProbeAlertInfo) => {
+    const trackedDay = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })
+      .format(new Date(info.trackedAt)).toUpperCase()
+    const stamp = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
+    }).format(new Date())
+    return (
+      <>
+        <div data-capture-hide className="flex items-center justify-end gap-2">
+          {shotTarget && (
+            <CopyShotButton
+              target={shotTarget}
+              label="Snapshot"
+              className="flex h-6 items-center rounded-sm border border-line px-2 text-2xs font-bold uppercase tracking-[0.08em] hover:text-fg"
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            aria-label="Collapse"
+            title="Collapse (Esc)"
+            className="flex h-6 w-6 items-center justify-center rounded-sm border border-line text-fg"
+          >
+            <ProbeExpandIcon size={12} collapse />
+          </button>
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            aria-label="Close"
+            className="text-sm leading-none text-fg"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-baseline gap-2">
+              <span className="text-xl font-bold tracking-[0.02em] text-fg">{row.underlying ?? '—'}</span>
+              <span className="tabular rounded-sm border border-warn/50 bg-warn/10 px-1.5 py-px text-xs font-bold text-warn">
+                {fmtStrike(row.strike)}{row.type ?? ''}
+              </span>
+              <span className="tabular text-sm text-fg">
+                {fmtDate(row.expiry)}{info.dteLabel ? ` · ${info.dteLabel}` : ''}
+              </span>
+            </div>
+            <div className="tabular mt-1 text-xs text-fg">{info.headline}</div>
+          </div>
+          <div className="shrink-0 text-right">
+            <div className={['tabular text-4xl font-bold leading-none', ink].join(' ')}>
+              {pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(0)}%`}
+            </div>
+            <div className="tabular mt-1 text-xs text-fg">
+              {entry?.toFixed(2) ?? '—'} → {last?.toFixed(2) ?? '—'}
+              {dollars != null && (
+                <>
+                  {' · '}
+                  <span className={ink}>{dollars >= 0 ? '+' : '−'}{fmtPremium(Math.abs(dollars))}</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div data-capture-hide className="flex shrink-0 items-center gap-1.5">
+          {RANGES.map((r) => (
+            <button
+              key={r.key}
+              type="button"
+              onClick={() => setRange(r.key)}
+              className={[
+                'tabular rounded-sm border px-2 py-0.5 text-2xs text-fg transition-colors',
+                range === r.key ? 'border-fg/25 bg-raised' : 'border-line',
+              ].join(' ')}
+            >
+              {r.label}
+            </button>
+          ))}
+          <span className="ml-auto text-3xs text-fg">
+            {q.loading && !bars.length ? 'loading…' : ''}
+          </span>
+        </div>
+
+        {bars.length >= 2 ? (
+          <ProbeChart bars={bars} entry={entry} entryTs={entryAt === undefined ? row.ts : entryAt} size={row.size} wide />
+        ) : (
+          <div className="px-1 py-6 text-xs text-fg">
+            {q.loading ? 'Loading…' : 'No bars for this contract in the window.'}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3">
+          <span className="min-w-0 text-sm italic text-fg">{info.note ? `“${info.note}”` : ''}</span>
+          <span className="tabular shrink-0 rounded-sm bg-accent/15 px-1.5 py-px text-2xs font-bold tracking-[0.08em] text-accent">
+            TRACKED {trackedDay}
+          </span>
+        </div>
+
+        <div className="tabular flex items-center justify-between border-t border-line pt-2 text-xs text-fg">
+          <span>{stamp} ET</span>
+          <span className="font-bold tracking-[0.02em]">voltick.io/bzila</span>
+        </div>
+      </>
+    )
+  }
+
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 py-2">{body(false)}</div>
@@ -372,6 +530,7 @@ export function ContractProbe({ row, onClose, entryAt }: {
           }}
         >
           <div
+            ref={panelRef}
             onClick={(e) => e.stopPropagation()}
             className="flex flex-col gap-3 rounded-md border border-line bg-surface2 p-5"
             style={{
@@ -381,7 +540,7 @@ export function ContractProbe({ row, onClose, entryAt }: {
               overflowY: 'auto',
             }}
           >
-            {body(true)}
+            {alertInfo ? tradeCard(alertInfo) : body(true)}
           </div>
         </div>,
         document.body,

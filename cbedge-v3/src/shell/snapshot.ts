@@ -187,8 +187,9 @@ const BADGE_H = 22
 const BADGE_GAP = 8
 const SEP = '  ·  '
 
-/** Served from the v2 public/ root, which is the same origin. */
-const LOGO_SRC = '/cbedge3.0.png'
+// No publisher mark on snapshots (Brandon, 2026-09-24): the CB Edge logo was
+// removed from every snapshot template. `frame()` still accepts a logo so the
+// caption layout is unchanged; `loadLogo()` now always resolves to null.
 
 /**
  * THE PIXEL BUDGET, and why it exists.
@@ -917,10 +918,8 @@ function stampNow(): string {
  * Resolves to null on any failure — a missing logo prints a caption without one
  * rather than losing the shot.
  */
-let logoPromise: Promise<HTMLImageElement | null> | null = null
 function loadLogo(): Promise<HTMLImageElement | null> {
-  if (!logoPromise) logoPromise = loadImage(LOGO_SRC)
-  return logoPromise
+  return Promise.resolve(null)
 }
 
 /**

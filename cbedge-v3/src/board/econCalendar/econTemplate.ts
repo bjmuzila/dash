@@ -588,7 +588,7 @@ ${R} .mark img{width:80px;height:80px;object-fit:contain}
       }
     </div>
   </div>
-  ${input.markDataUrl ? `<div class="mark"><img src="${input.markDataUrl}" alt="CB Edge" /></div>` : ''}`
+  `
 
   return { css, html }
 }
@@ -630,7 +630,8 @@ async function loadArt(earnings: EarnRow[]): Promise<{
   logos: Record<string, string>
 }> {
   const [mark, ...pairs] = await Promise.all([
-    asDataUrl('/cb-edge-square.png'),
+    // CB Edge mark removed from the poster (2026-09-24).
+    Promise.resolve(''),
     ...earnings.map(async (r) => {
       const url = `/proxy/ticker-logo?sym=${encodeURIComponent(r.symbol.toUpperCase())}&name=${encodeURIComponent(r.company || '')}`
       return [r.symbol, await asDataUrl(url)] as const
