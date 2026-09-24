@@ -27,6 +27,10 @@
 // still lands on SPX (RETIRED below), where the switch is one click away, and
 // none of the other cards on the board has to learn what a futures contract is.
 //
+// NQ THE SAME WAY (2026-09-24). NDX carries the same switch — NDX/NQ, NDX gamma
+// on NQ candles through the NQ−NDX basis (./futures.ts). Typing "NQ" lands on
+// NDX, exactly as "ES" lands on SPX.
+//
 // Three tiers of symbol, as in v2:
 //   1. the curated list below, always present, always first
 //   2. the server roster from /api/es-candles/tickers, fetched once, lazily,

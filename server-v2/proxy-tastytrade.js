@@ -301,6 +301,14 @@ const CANDLE_1M_FLUSH_MS = Number(process.env.CANDLE_1M_FLUSH_MS || 5000);
 // reach. The es-candles page renders every bar it is handed — this cap IS the
 // today-only window.
 const ES_1M_MAX_BARS = Number(process.env.ES_1M_MAX_BARS || 480);
+// NQ 1-minute candle stream (2026-09-24) — the NDX/NQ switch on the v3 GEX
+// Candles card needs the same 1m tape the SPX/ES switch has. Follows
+// ES_1M_CANDLES unless NQ_1M_CANDLES says otherwise, so an environment that
+// already pays for ES 1m gets NQ 1m with no extra setting, and either can still
+// be killed on its own ('0') without a redeploy. Same bar cap as ES.
+const NQ_1M_ENABLED = process.env.NQ_1M_CANDLES != null
+  ? process.env.NQ_1M_CANDLES === '1'
+  : ES_1M_ENABLED;
 
 // ThetaData greeks poll cadence (DATA_SOURCE=theta only). Greeks/all is one bulk
 
@@ -2384,6 +2392,15 @@ class TastytradeProxy {
     this.es1mCandlesDirty = false;
     this.es1mCandlesDirtySlots = new Set();
     this.es1mCandleFlushTimer = null;
+    // ── NQ 1-minute candles (NQ_1M_CANDLES) ─────────────────────────────────────
+    // The ES 1m stream's twin, for the same reason: {=1m} detail does not exist
+    // inside {=5m}. Own map and own state key (nq1mCandles) — it shares NQ 5m's
+    // slotKey space, so merging the two would interleave aggregations.
+    this.nq1mCandleSymbol = null; // e.g. "/NQZ26:XCME{=1m}"
+    this.nq1mCandles = new Map();
+    this.nq1mCandlesDirty = false;
+    this.nq1mCandlesDirtySlots = new Set();
+    this.nq1mCandleFlushTimer = null;
     // Live front-ES/NQ quotes, used by _publishEsFut/_publishNqFut to clamp the
     // last trade into the current spread. Set by Quote handler; *LastTrade by Trade.
     this.esQuote = null;          // { bid, ask, mid } for the front ES future
@@ -2509,7 +2526,8 @@ class TastytradeProxy {
       this.nqSymbol = nqRes.streamerSymbol;
       this.nqContract = nqRes.contract;
       this.nqCandleSymbol = `${this.nqSymbol}{=5m}`;
-      console.log(`[FEED] NQ front streamer=${this.nqSymbol} expires=${nqRes.expiration} via=${nqRes.via} candle=${this.nqCandleSymbol}`);
+      this.nq1mCandleSymbol = NQ_1M_ENABLED ? `${this.nqSymbol}{=1m}` : null;
+      console.log(`[FEED] NQ front streamer=${this.nqSymbol} expires=${nqRes.expiration} via=${nqRes.via} candle=${this.nqCandleSymbol}${this.nq1mCandleSymbol ? ` +1m=${this.nq1mCandleSymbol}` : ' (1m disabled)'}`);
     } catch (err) {
       console.warn('[FEED] NQ resolve failed:', err.message.slice(0, 120));
     }
@@ -2668,6 +2686,17 @@ class TastytradeProxy {
       this.client.subscribeCandle(this.es1mCandleSymbol, fromTime);
       console.log(`[FEED] subscribed ES 1m candles ${this.es1mCandleSymbol} from ${new Date(fromTime).toISOString()}`);
       this.es1mCandleFlushTimer = setInterval(() => this._flushEs1mCandles(), CANDLE_1M_FLUSH_MS);
+    }
+
+    // NQ 1-minute stream (NQ_1M_CANDLES, defaulting to ES_1M_CANDLES). Same 2-day
+    // window and cadence as ES 1m, for the same reasons. The previous interval is
+    // cleared first so a reconnect cannot stack a second flush loop.
+    if (this.nq1mCandleSymbol) {
+      const fromTime = Date.now() - 2 * 86400_000;
+      this.client.subscribeCandle(this.nq1mCandleSymbol, fromTime);
+      console.log(`[FEED] subscribed NQ 1m candles ${this.nq1mCandleSymbol} from ${new Date(fromTime).toISOString()}`);
+      if (this.nq1mCandleFlushTimer) clearInterval(this.nq1mCandleFlushTimer);
+      this.nq1mCandleFlushTimer = setInterval(() => this._flushNq1mCandles(), CANDLE_1M_FLUSH_MS);
     }
 
     // Backfill OI + volume from REST now. OI is once-daily (OPRA ~06:30 ET) and
@@ -4091,6 +4120,33 @@ class TastytradeProxy {
     writeEsCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
 
+  /**
+   * NQ 1-minute flush — _flushEs1mCandles for NQ. State + delta + persist; the
+   * rows carry intervalMinutes:1 and nq_candles' conflict target includes it
+   * (ensureNqCandlesKey), which is what lets them share the table with 5m.
+   */
+  _flushNq1mCandles() {
+    if (!this.nq1mCandlesDirty) return;
+    this.nq1mCandlesDirty = false;
+    const dirtySlots = this.nq1mCandlesDirtySlots;
+    this.nq1mCandlesDirtySlots = new Set();
+
+    const rows = [...this.nq1mCandles.values()]
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(-ES_1M_MAX_BARS);
+
+    if (this.nq1mCandles.size > ES_1M_MAX_BARS * 2) {
+      this.nq1mCandles = new Map(rows.map((r) => [r.slotKey, r]));
+    }
+
+    marketState.setStateSilent({ nq1mCandles: rows });
+
+    const delta = rows.filter((r) => dirtySlots.has(r.slotKey));
+    if (delta.length) marketState.setState({ nq1mCandlesDelta: delta });
+
+    writeNqCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
+  }
+
   _onEvent(ev) {
     marketState.setStatus({ lastFeedAt: Date.now() });
     const sym = ev.eventSymbol;
@@ -4467,9 +4523,14 @@ class TastytradeProxy {
       const symCanon = DxLinkClient.canonCandleSymbol(sym);
       const isNq = this.nqCandleSymbol && symCanon === DxLinkClient.canonCandleSymbol(this.nqCandleSymbol);
       const isEs1m = this.es1mCandleSymbol && symCanon === DxLinkClient.canonCandleSymbol(this.es1mCandleSymbol);
-      const intervalMinutes = isEs1m ? 1 : 5;
-      const { slotKey, date, time, slotMs } = isEs1m ? etOneMinSlot(barTime) : etFiveMinSlot(barTime);
-      const map = isEs1m ? this.es1mCandles : isNq ? this.nqCandles : this.esCandles;
+      // FOUR streams since 2026-09-24: NQ {=1m} too. Checked explicitly for the
+      // same reason as ES 1m — it shares the NQ contract.
+      const isNq1m = this.nq1mCandleSymbol && symCanon === DxLinkClient.canonCandleSymbol(this.nq1mCandleSymbol);
+      const is1m = isEs1m || isNq1m;
+      const isNqAny = isNq || isNq1m;
+      const intervalMinutes = is1m ? 1 : 5;
+      const { slotKey, date, time, slotMs } = is1m ? etOneMinSlot(barTime) : etFiveMinSlot(barTime);
+      const map = isEs1m ? this.es1mCandles : isNq1m ? this.nq1mCandles : isNq ? this.nqCandles : this.esCandles;
       const prev = map.get(slotKey);
       const merged = prev
         ? {
@@ -4481,18 +4542,19 @@ class TastytradeProxy {
           }
         : {
             timestamp: slotMs, date, slotKey, time,
-            symbol: isNq ? '/NQ' : '/ES',
+            symbol: isNqAny ? '/NQ' : '/ES',
             // `symbol` is a LABEL ('/ES' on every ES row, always has been);
             // `contract` is the actual future the bar came off, and is part of
             // the es_candles unique key so a roll cannot overwrite the outgoing
             // contract's bars with the incoming one's.
-            contract: isNq ? (this.nqContract || '') : (this.esContract || ''),
+            contract: isNqAny ? (this.nqContract || '') : (this.esContract || ''),
             intervalMinutes, source: 'dxlink', open, high, low, close, volume,
           };
       map.set(slotKey, merged);
       // Track WHICH slots changed so the flush can broadcast just those bars
       // instead of the whole 600-bar array every cycle.
       if (isEs1m) { this.es1mCandlesDirty = true; this.es1mCandlesDirtySlots.add(slotKey); }
+      else if (isNq1m) { this.nq1mCandlesDirty = true; this.nq1mCandlesDirtySlots.add(slotKey); }
       else if (isNq) { this.nqCandlesDirty = true; this.nqCandlesDirtySlots.add(slotKey); }
       else { this.esCandlesDirty = true; this.esCandlesDirtySlots.add(slotKey); }
       return;
@@ -5476,6 +5538,11 @@ class TastytradeProxy {
     // The DB rows are safe: they are keyed by contract and stay queryable.
     this.esCandles = new Map();
     this.es1mCandles = new Map();
+    // NQ rolls on the same quarterly calendar and reconnect() re-resolves it, so
+    // its maps go too — same reason, same safety (nq_candles is contract-keyed
+    // since 2026-09-24).
+    this.nqCandles = new Map();
+    this.nq1mCandles = new Map();
     try {
       await this.reconnect();
     } catch (err) {

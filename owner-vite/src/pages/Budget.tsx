@@ -426,8 +426,10 @@ export default function Budget() {
 
     // Manual (non-beginning) rows.
     type Line = { id: number; entry_date: string; sort_order: number; label: string; bank: Bank; amount: number; recurring: boolean; recurTag?: string };
+    // A $0 row tagged __recur__:… is a "removed" marker (the occurrence was
+    // canceled): it suppresses the synthetic twin below but isn't listed.
     const lines: Line[] = register
-      .filter((r) => !r.is_beginning)
+      .filter((r) => !r.is_beginning && !(Number(r.amount) === 0 && typeof r.recurring_tag === "string" && r.recurring_tag.startsWith("__recur__:")))
       .map((r) => ({ id: r.id, entry_date: r.entry_date, sort_order: r.sort_order, label: r.label, bank: r.bank, amount: r.amount, recurring: false }));
 
     // A recurring occurrence the user edited is "materialized" into a real
@@ -1287,6 +1289,14 @@ export default function Budget() {
   // (the bill changed or was paid early) without touching the recurring rule.
   const materializeRecurring = async (row: ComputedRow) =>
     post({ action: "registerRow", date: row.entry_date, label: row.label, bank: row.bank, amount: row.amount, recurringTag: row.recurTag });
+  // Remove one recurring occurrence (payment canceled) without touching the
+  // rule: store a $0 marker under the occurrence's __recur__ tag, which every
+  // view already treats as "materialized" and so stops projecting it.
+  const skipRecurring = async (row: ComputedRow) => {
+    if (!row.recurTag) return;
+    if (!window.confirm(`Remove ${row.label} on ${row.entry_date}? The recurring rule stays.`)) return;
+    await post({ action: "registerRow", date: row.entry_date, label: `CANCELED ${row.label}`, bank: row.bank, amount: 0, recurringTag: row.recurTag });
+  };
   // Categories.
   const addCategory = async (name: string, amount: number, color: string) =>
     post({ action: "category", name: name.trim(), amount, period: "monthly", color });
@@ -1499,6 +1509,7 @@ export default function Budget() {
               onEdit={editRow}
               onDelete={deleteRow}
               onMaterialize={materializeRecurring}
+              onSkip={skipRecurring}
             />
           </div>
         )}
@@ -1929,6 +1940,7 @@ function MonthlyRegister({
   onEdit,
   onDelete,
   onMaterialize,
+  onSkip,
 }: {
   groups: DayGroup[];
   beginningBalance: number | null;
@@ -1937,6 +1949,7 @@ function MonthlyRegister({
   onEdit: (id: number, patch: Record<string, unknown>) => void;
   onDelete: (id: number) => void;
   onMaterialize: (row: ComputedRow) => void;
+  onSkip: (row: ComputedRow) => void;
 }) {
   const isMobile = useIsMobile();
   const selRef = useRef<HTMLDivElement | null>(null);
@@ -1995,10 +2008,13 @@ function MonthlyRegister({
                       {r.recurring ? fmtMoney(r.amount, currency) : <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />}
                     </span>
                     <span style={{ textAlign: "right", minWidth: isMobile ? 66 : 100, fontWeight: 800, color: r.balance < 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(r.balance, currency)}</span>
-                    <span style={{ width: 30, textAlign: "center" }}>
-                      {r.recurring
-                        ? <EditButton title="Recurring entry — click to edit just this occurrence (amount changed or paid early)" onClick={() => onMaterialize(r)} />
-                        : <DeleteButton onClick={() => onDelete(r.id)} />}
+                    <span style={{ minWidth: 30, display: "inline-flex", gap: 4, justifyContent: "center" }}>
+                      {r.recurring ? (
+                        <>
+                          <EditButton title="Recurring entry — click to edit just this occurrence (amount changed or paid early)" onClick={() => onMaterialize(r)} />
+                          <DeleteButton onClick={() => onSkip(r)} />
+                        </>
+                      ) : <DeleteButton onClick={() => onDelete(r.id)} />}
                     </span>
                   </div>
                 );

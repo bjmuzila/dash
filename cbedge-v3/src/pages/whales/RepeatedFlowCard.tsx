@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { readableError, useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
+import { TrackButton } from './TrackedAlertsCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REPEATED FLOW (2026-09-24) — the same contract hit over and over.
@@ -20,6 +21,16 @@ import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 // Only the last seven days exist below the whale floor (the retention sweep),
 // so the window is TODAY or 5D, never the archive's 3M/ALL.
 //
+// GROUPED BY BURST (2026-09-24): WITHIN 30M / 1H / 2H / 4H / DAY is how
+// tightly the orders must cluster. A 0DTE strike hit 120 times across the day
+// is noise; hit 20 times inside 30 minutes is the signal. The server scores
+// each contract on its DENSEST window of that length, so ORDERS, DIR, premium,
+// FIRST and LAST all describe that one burst. ALL DAY is the whole range's
+// count, for context. RANGE (TODAY / 5D) is separate: which sessions to scan.
+//
+// SORT: every column header sorts (click again to flip). Client-side over the
+// server's list (top 100 by order count). Phone gets a SORT menu instead.
+//
 // An "order" is a stored print — the capture has no sweep/block flag. The
 // DIR column counts how one-sided the repetition was: 25 hits split 13/12 is
 // churn, 25/0 is someone building.
@@ -37,13 +48,13 @@ interface RepeatContract {
   total: number
   bull: number
   bear: number
-  bought: number
-  sold: number
   size: number
   avgPrice: number | null
   firstTs: number
   lastTs: number
-  sessions: number
+  /** Whole-range totals for the contract, not just the burst. */
+  nAll: number
+  totalAll: number
 }
 interface RepeatResponse {
   range: { from: string; to: string }
@@ -51,6 +62,7 @@ interface RepeatResponse {
   retainDays: number
   minPremium: number
   minOrders: number
+  windowMin?: number
   summary: { contracts: number; orders: number; premium: number }
   contracts: RepeatContract[]
   error?: string | null
@@ -67,15 +79,43 @@ const ORDER_STOPS = [
   { label: '10+', value: 10, title: 'Hit at least 10 times — stronger' },
   { label: '25+', value: 25, title: 'Hit at least 25 times — strongest' },
 ]
-type WindowKey = '1d' | '5d'
-const WINDOWS: Array<{ key: WindowKey; label: string; days: number }> = [
-  { key: '1d', label: 'TODAY', days: 0 },
-  { key: '5d', label: '5D', days: 4 },
+type RangeKey = '1d' | '5d'
+const RANGES: Array<{ key: RangeKey; label: string; days: number; title: string }> = [
+  { key: '1d', label: 'TODAY', days: 0, title: 'Scan today' },
+  { key: '5d', label: '5D', days: 4, title: 'Scan the last five sessions' },
+]
+/** Cluster window in minutes — the orders must land inside one of these. */
+const CLUSTERS: Array<{ label: string; value: number; title: string }> = [
+  { label: '30M', value: 30, title: 'All the orders inside one 30-minute window' },
+  { label: '1H', value: 60, title: 'All the orders inside one hour' },
+  { label: '2H', value: 120, title: 'All the orders inside two hours' },
+  { label: '4H', value: 240, title: 'All the orders inside four hours' },
+  { label: 'DAY', value: 1440, title: 'Anywhere in the session — no clustering' },
+]
+
+type SortKey =
+  | 'ticker' | 'strike' | 'expiry' | 'n' | 'dir' | 'split'
+  | 'size' | 'avgPrice' | 'firstTs' | 'lastTs' | 'span' | 'total' | 'nAll' | 'tracked'
+type SortDir = 'asc' | 'desc'
+const SORT_KEYS: SortKey[] = ['ticker', 'strike', 'expiry', 'n', 'dir', 'split', 'size', 'avgPrice', 'firstTs', 'lastTs', 'span', 'total', 'nAll', 'tracked']
+/** First click sorts A→Z / smallest first on these; biggest first on the rest.
+ *  SPAN is here because the tightest burst is the interesting end. */
+const TEXT_SORTS: SortKey[] = ['ticker', 'expiry', 'span']
+const PHONE_SORTS: Array<{ label: string; value: SortKey }> = [
+  { label: 'ORDERS', value: 'n' },
+  { label: 'TIGHTEST', value: 'span' },
+  { label: 'ALL DAY', value: 'nAll' },
+  { label: 'PREMIUM', value: 'total' },
+  { label: 'DIR %', value: 'dir' },
+  { label: 'LAST HIT', value: 'lastTs' },
+  { label: 'FIRST HIT', value: 'firstTs' },
+  { label: 'EXPIRY', value: 'expiry' },
+  { label: 'TICKER', value: 'ticker' },
 ]
 
 const SETTINGS_KEY = 'cb-v3-whales:repeated'
-interface Saved { floor: number; minOrders: number; win: WindowKey }
-const DEFAULTS: Saved = { floor: 50_000, minOrders: 5, win: '1d' }
+interface Saved { floor: number; minOrders: number; range: RangeKey; cluster: number; sortKey: SortKey; sortDir: SortDir }
+const DEFAULTS: Saved = { floor: 50_000, minOrders: 5, range: '1d', cluster: 30, sortKey: 'n', sortDir: 'desc' }
 
 function loadSaved(): Saved {
   try {
@@ -85,7 +125,10 @@ function loadSaved(): Saved {
     return {
       floor: FLOORS.some((f) => f.value === j.floor) ? (j.floor as number) : DEFAULTS.floor,
       minOrders: ORDER_STOPS.some((o) => o.value === j.minOrders) ? (j.minOrders as number) : DEFAULTS.minOrders,
-      win: j.win === '5d' ? '5d' : DEFAULTS.win,
+      range: j.range === '5d' ? '5d' : DEFAULTS.range,
+      cluster: CLUSTERS.some((c) => c.value === j.cluster) ? (j.cluster as number) : DEFAULTS.cluster,
+      sortKey: SORT_KEYS.includes(j.sortKey as SortKey) ? (j.sortKey as SortKey) : DEFAULTS.sortKey,
+      sortDir: j.sortDir === 'asc' ? 'asc' : 'desc',
     }
   } catch {
     return DEFAULTS
@@ -104,6 +147,13 @@ const fmtExpiry = (iso: string) => {
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
+/** How long the burst took, first order to last. */
+const fmtSpan = (r: { firstTs: number; lastTs: number }) => {
+  const m = Math.max(0, Math.round((r.lastTs - r.firstTs) / 60_000))
+  if (m < 1) return '<1m'
+  if (m < 60) return `${m}m`
+  return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}`
+}
 const fmtWhen = (ts: number, multiDay: boolean) => {
   if (!ts) return '—'
   if (!multiDay) return fmtTime(ts)
@@ -121,27 +171,50 @@ export interface RepeatedFlowFilters {
   showUnreadable: boolean
 }
 
-export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
+/** The Tracked-contracts identity — same shape as alertsStore's contractKey. */
+export const repeatKey = (r: Pick<RepeatContract, 'ticker' | 'strike' | 'type' | 'expiry'>) =>
+  `${r.ticker}|${Number(r.strike)}|${r.type === 'P' ? 'P' : 'C'}|${r.expiry}`
+
+export type { RepeatContract }
+
+export function RepeatedFlowCard({ filters, onOpen, phone = false, trackedKeys, busyKey, onTrack }: {
   filters: RepeatedFlowFilters
   /** Load the contract into the page's lookup panel. */
   onOpen: (ticker: string, strike: number, expiry: string, type: string) => void
   phone?: boolean
+  /** Keys (repeatKey) already in Tracked contracts. */
+  trackedKeys: { has: (k: string) => boolean }
+  busyKey: string | null
+  /** Track, or untrack when already tracked — the button is a toggle. */
+  onTrack: (r: RepeatContract) => void
 }) {
   const [saved] = useState<Saved>(loadSaved)
   const [floor, setFloor] = useState(saved.floor)
   const [minOrders, setMinOrders] = useState(saved.minOrders)
-  const [win, setWin] = useState<WindowKey>(saved.win)
+  const [range, setRange] = useState<RangeKey>(saved.range)
+  const [cluster, setCluster] = useState<number>(saved.cluster)
+  const [sortKey, setSortKey] = useState<SortKey>(saved.sortKey)
+  const [sortDir, setSortDir] = useState<SortDir>(saved.sortDir)
 
   useEffect(() => {
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ floor, minOrders, win })) } catch { /* best-effort */ }
-  }, [floor, minOrders, win])
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ floor, minOrders, range, cluster, sortKey, sortDir }))
+    } catch { /* best-effort */ }
+  }, [floor, minOrders, range, cluster, sortKey, sortDir])
 
-  const span = WINDOWS.find((w) => w.key === win) ?? WINDOWS[0]!
+  const sortBy = (k: SortKey) => {
+    if (k === sortKey) { setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); return }
+    setSortKey(k)
+    setSortDir(TEXT_SORTS.includes(k) ? 'asc' : 'desc')
+  }
+
+  const span = RANGES.find((w) => w.key === range) ?? RANGES[0]!
   const to = etYmd(new Date())
   const from = etYmd(new Date(Date.now() - span.days * 86_400_000))
 
   const url = useMemo(() => {
     const sp = new URLSearchParams({ from, to, min_premium: String(floor), min_orders: String(minOrders) })
+    sp.set('window_min', String(cluster))
     const t = filters.ticker.trim().toUpperCase()
     if (t) sp.set('ticker', t)
     if (filters.type) sp.set('type', filters.type)
@@ -151,23 +224,30 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
     if (filters.maxPrice !== null) sp.set('max_price', String(filters.maxPrice))
     if (filters.showUnreadable) sp.set('sides', 'all')
     return `/api/lse/repeated-flow?${sp.toString()}`
-  }, [from, to, floor, minOrders, filters])
+  }, [from, to, floor, minOrders, filters, cluster])
 
   const q = useQuery<RepeatResponse>(url, { staleMs: 30_000, pollMs: 60_000 })
   const d = q.data
-  const list = d?.contracts ?? []
-  const multiDay = win !== '1d'
+  const multiDay = range === '5d'
+  const clusterLabel = CLUSTERS.find((c) => c.value === cluster)?.label ?? `${cluster}M`
   const err = d?.error ? readableError(d.error) : q.error ? `Could not load repeated flow — ${readableError(q.error)}.` : null
 
   const size = phone ? 'touch' : 'sm'
   const controls = (
     <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-      <SegGroup<WindowKey>
+      <SegGroup<string>
         size={size}
-        title="Only the last seven days are kept below the whale floor"
-        options={WINDOWS.map((w) => ({ label: w.label, value: w.key }))}
-        value={win}
-        onChange={setWin}
+        title="WITHIN — how tightly the orders must cluster. 20 hits inside 30 minutes, not 120 across the day"
+        options={CLUSTERS.map((c) => ({ label: c.label, value: String(c.value), title: c.title }))}
+        value={String(cluster)}
+        onChange={(v) => setCluster(Number(v))}
+      />
+      <SegGroup<RangeKey>
+        size={size}
+        title="Which sessions to scan — only the last seven days are kept below the whale floor"
+        options={RANGES.map((w) => ({ label: w.label, value: w.key, title: w.title }))}
+        value={range}
+        onChange={setRange}
       />
       <SegGroup<string>
         size={size}
@@ -185,6 +265,27 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
         defaultValue={String(DEFAULTS.floor)}
         onChange={(v) => setFloor(Number(v))}
       />
+      {phone && (
+        <>
+          <SegMenu<SortKey>
+            size={size}
+            label="SORT"
+            title="Row order"
+            options={PHONE_SORTS}
+            value={sortKey}
+            defaultValue={DEFAULTS.sortKey}
+            onChange={(k) => { setSortKey(k); setSortDir(TEXT_SORTS.includes(k) ? 'asc' : 'desc') }}
+          />
+          <button
+            type="button"
+            onClick={() => setSortDir((x) => (x === 'asc' ? 'desc' : 'asc'))}
+            title="Flip the order"
+            className="rounded-sm border border-line px-2 py-1 text-2xs font-bold text-muted"
+          >
+            {sortDir === 'asc' ? '▲' : '▼'}
+          </button>
+        </>
+      )}
       <span className="ml-auto text-2xs text-faint">
         {q.loading && !d
           ? 'loading…'
@@ -203,9 +304,59 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
     return { label: bull ? 'BULL' : 'BEAR', pct, ink: bull ? 'text-up' : 'text-down' }
   }
 
+  // Signed lean for the DIR sort: +100 all bullish … -100 all bearish, so
+  // descending puts the most one-sided bulls first and ascending the bears.
+  const leanOf = (r: RepeatContract) => {
+    const dir = r.bullN + r.bearN
+    return dir > 0 ? ((r.bullN - r.bearN) / dir) * 100 : 0
+  }
+  const list = useMemo(() => {
+    const src = d?.contracts ?? []
+    const val = (r: RepeatContract): number | string => {
+      switch (sortKey) {
+        case 'ticker': return r.ticker
+        case 'strike': return Number(r.strike) || 0
+        case 'expiry': return r.expiry
+        case 'dir': return leanOf(r)
+        case 'split': return r.bullN - r.bearN
+        case 'avgPrice': return r.avgPrice ?? -Infinity
+        case 'span': return r.lastTs - r.firstTs
+        case 'tracked': return trackedKeys.has(repeatKey(r)) ? 1 : 0
+        default: return r[sortKey]
+      }
+    }
+    const sign = sortDir === 'asc' ? 1 : -1
+    return src.slice().sort((a, b) => {
+      const va = val(a)
+      const vb = val(b)
+      const c = typeof va === 'string' || typeof vb === 'string'
+        ? String(va).localeCompare(String(vb))
+        : (va as number) - (vb as number)
+      return c * sign || b.n - a.n || b.total - a.total
+    })
+  }, [d, sortKey, sortDir, trackedKeys])
+
+  const th = (k: SortKey, label: string, align: 'left' | 'right' = 'left', title?: string): ReactNode => (
+    <th
+      key={k}
+      onClick={() => sortBy(k)}
+      title={title ? `${title} — click to sort` : 'Click to sort'}
+      aria-sort={sortKey === k ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={[
+        'cursor-pointer select-none whitespace-nowrap px-2 py-2 font-bold hover:text-fg',
+        align === 'right' ? 'text-right' : 'text-left',
+        sortKey === k ? 'text-fg' : '',
+      ].join(' ')}
+    >
+      {label}
+      {sortKey === k && <span className="ml-0.5 text-accent">{sortDir === 'asc' ? '▲' : '▼'}</span>}
+    </th>
+  )
+
   const emptyNote = (
     <div className="px-3 py-3 text-sm text-faint">
       No contract was hit {minOrders}+ times at {FLOORS.find((f) => f.value === floor)?.label ?? money(floor)} per order
+      {cluster < 1440 ? ` inside one ${clusterLabel} window` : ''}
       {multiDay ? ' in the last five sessions' : ' today'}.
     </div>
   )
@@ -214,7 +365,9 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
     <div className="flex min-h-0 flex-col rounded-md border border-line bg-surface">
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
         <h2 className="text-2xs font-bold uppercase tracking-[0.11em] text-faint">Repeated flow</h2>
-        <span className="ml-auto text-2xs text-faint">same contract, {minOrders}+ orders</span>
+        <span className="ml-auto text-2xs text-faint">
+          same contract, {minOrders}+ orders{cluster < 1440 ? ` within ${clusterLabel}` : ''}
+        </span>
       </div>
       {controls}
       {err && <div className="border-b border-line bg-warn/5 px-3 py-2 text-xs text-warn">{err}</div>}
@@ -224,11 +377,15 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
           {list.map((r) => {
             const dir = dirOf(r)
             return (
-              <button
+              // A div, not a <button>: the row carries a TRACK button, and a
+              // button inside a button is invalid HTML.
+              <div
                 key={r.osi}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => onOpen(r.ticker, Number(r.strike), r.expiry, r.type)}
-                className="block w-full border-b border-line px-3 py-2 text-left last:border-b-0 active:bg-raised"
+                onKeyDown={(e) => { if (e.key === 'Enter') onOpen(r.ticker, Number(r.strike), r.expiry, r.type) }}
+                className="block w-full cursor-pointer border-b border-line px-3 py-2 text-left last:border-b-0 active:bg-raised"
               >
                 <span className="flex items-baseline justify-between gap-2">
                   <span className="truncate text-sm font-semibold text-fg">
@@ -240,13 +397,22 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
                 <span className="mt-0.5 flex items-baseline justify-between gap-2 text-2xs text-faint">
                   <span className="tabular">
                     <span className="font-bold text-fg">×{r.n}</span>
+                    {cluster < 1440 ? ` in ${fmtSpan(r)}` : ''}
+                    {r.nAll > r.n ? <span> · of {r.nAll}</span> : null}
                     {' · '}
                     <span className={dir.ink}>{dir.label}{dir.pct != null ? ` ${dir.pct}%` : ''}</span>
                     {r.avgPrice != null ? ` · avg ${r.avgPrice.toFixed(2)}` : ''}
                   </span>
                   <span className="tabular">{fmtWhen(r.firstTs, multiDay)} → {fmtWhen(r.lastTs, multiDay)}</span>
                 </span>
-              </button>
+                <span className="mt-1.5 flex justify-end">
+                  <TrackButton
+                    tracked={trackedKeys.has(repeatKey(r))}
+                    busy={busyKey === repeatKey(r)}
+                    onClick={() => onTrack(r)}
+                  />
+                </span>
+              </div>
             )
           })}
           {!list.length && !q.loading && emptyNote}
@@ -256,20 +422,20 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
           <table className="w-full border-collapse text-xs">
             <thead className="sticky top-0 z-[1] bg-surface">
               <tr className="text-2xs uppercase tracking-[0.09em] text-faint">
-                <th className="px-2 py-2 text-left font-bold">Ticker</th>
-                <th className="px-2 py-2 text-left font-bold">Contract</th>
-                <th className="px-2 py-2 text-left font-bold">Exp</th>
-                <th className="px-2 py-2 text-right font-bold" title="Times this contract was hit at or above the per-order floor">Orders</th>
-                <th
-                  className="px-2 py-2 text-left font-bold"
-                  title="Which way the orders lean, by COUNT of readable orders. Buying calls or selling puts is bullish"
-                >Dir</th>
-                <th className="px-2 py-2 text-right font-bold" title="Orders bullish / bearish">Bull / Bear</th>
-                <th className="px-2 py-2 text-right font-bold">Contracts</th>
-                <th className="px-2 py-2 text-right font-bold" title="Average per-contract fill across the orders">Avg px</th>
-                <th className="px-2 py-2 text-right font-bold">First</th>
-                <th className="px-2 py-2 text-right font-bold">Last</th>
-                <th className="px-2 py-2 text-right font-bold">Premium</th>
+                {th('ticker', 'Ticker')}
+                {th('strike', 'Contract')}
+                {th('expiry', 'Exp')}
+                {th('n', 'Orders', 'right', 'Most times this contract was hit inside one WITHIN window, each order at or above the per-order floor')}
+                {th('span', 'Span', 'right', 'First order to last order of the burst')}
+                {th('dir', 'Dir', 'left', 'Which way the orders lean, by COUNT of readable orders. Buying calls or selling puts is bullish. Sorts most one-sided bullish first')}
+                {th('split', 'Bull / Bear', 'right', 'Orders bullish / bearish')}
+                {th('size', 'Contracts', 'right')}
+                {th('avgPrice', 'Avg px', 'right', 'Average per-contract fill across the orders')}
+                {th('firstTs', 'First', 'right', 'First order of the burst')}
+                {th('lastTs', 'Last', 'right', 'Last order of the burst')}
+                {th('total', 'Premium', 'right', 'Premium inside the burst')}
+                {th('nAll', 'All range', 'right', 'Orders on this contract across the whole range, burst or not')}
+                {th('tracked', 'Track', 'right', 'Keep this contract in Tracked contracts, at the bottom of the page')}
               </tr>
             </thead>
             <tbody>
@@ -286,6 +452,7 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
                     <td className="tabular px-2 py-1.5 text-fg">{fmtStrike(Number(r.strike))}{r.type}</td>
                     <td className="px-2 py-1.5 text-muted">{fmtExpiry(r.expiry)}</td>
                     <td className="tabular px-2 py-1.5 text-right font-bold text-fg">×{r.n}</td>
+                    <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-muted">{fmtSpan(r)}</td>
                     <td className={['px-2 py-1.5 font-semibold', dir.ink].join(' ')}>
                       {dir.label}{dir.pct != null ? <span className="ml-1 text-2xs opacity-80">{dir.pct}%</span> : null}
                     </td>
@@ -302,6 +469,18 @@ export function RepeatedFlowCard({ filters, onOpen, phone = false }: {
                       className={['tabular px-2 py-1.5 text-right font-semibold', dir.ink].join(' ')}
                       title={`${money(r.bull)} bullish vs ${money(r.bear)} bearish`}
                     >{money(r.total)}</td>
+                    <td
+                      className="tabular whitespace-nowrap px-2 py-1.5 text-right text-faint"
+                      title={`${num(r.nAll)} orders · ${money(r.totalAll)} across the range`}
+                    >×{r.nAll}</td>
+                    <td className="px-2 py-1 text-right">
+                      <TrackButton
+                        compact
+                        tracked={trackedKeys.has(repeatKey(r))}
+                        busy={busyKey === repeatKey(r)}
+                        onClick={() => onTrack(r)}
+                      />
+                    </td>
                   </tr>
                 )
               })}

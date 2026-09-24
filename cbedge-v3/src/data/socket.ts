@@ -224,6 +224,9 @@ function fanOutSnapshot(frame: { symbol?: string; ts?: number; data?: unknown })
   // bar, which is what "no live pair yet" was on a slow tape.
   if (Array.isArray(d.esCandles) && d.esCandles.length) put('esCandles', d.esCandles)
   if (Array.isArray(d.es1mCandles) && d.es1mCandles.length) put('es1mCandles', d.es1mCandles)
+  // NQ, for the NDX/NQ switch (2026-09-24) — the same reason as ES above.
+  if (Array.isArray(d.nqCandles) && d.nqCandles.length) put('nqCandles', d.nqCandles)
+  if (Array.isArray(d.nq1mCandles) && d.nq1mCandles.length) put('nq1mCandles', d.nq1mCandles)
 }
 
 // ── Scope management ─────────────────────────────────────────────────────────

@@ -226,6 +226,11 @@ export interface ChartSettings {
    * socket's `esCandles` / `es1mCandles` frames, and every strike is pushed
    * through the ES−SPX basis (/proxy/es-spx-basis) before it is drawn. On any
    * other symbol the flag is ignored — there is no futures tape for AMZN.
+   *
+   * Since 2026-09-24 it means "on the FUTURES tape" for any symbol with a pair
+   * in ./futures.ts — NDX reads it too, as NQ candles under NDX gamma through
+   * /proxy/nq-ndx-basis. The name stays: renaming it would orphan every stored
+   * blob's switch.
    */
   esCandles: boolean
 }

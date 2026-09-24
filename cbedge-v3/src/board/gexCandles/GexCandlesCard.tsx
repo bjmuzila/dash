@@ -54,7 +54,8 @@ import {
   type Bar,
 } from './candles'
 import { etDay, gexHistoryDayUrl, gexHistoryUrl, latestSession, parseGexHistory } from './gexHistory'
-import { BASIS_URL, isPlausibleBasis, NO_BASIS, parseBasis, shiftColumns } from './basis'
+import { ES_MAX_BASIS, isPlausibleBasis, NO_BASIS, parseBasis, shiftColumns } from './basis'
+import { futuresPairFor } from './futures'
 import { bubbleWindowMax, buildBubbleModel } from './bubbles'
 import { buildRail, GexRail } from './GexRail'
 import { mountEsChart, type EsChartHandle } from './chart'
@@ -119,7 +120,8 @@ import { useDailyEm } from '@/data/dailyEm'
 //             …or, with the SPX/ES switch on ES (2026-09-02):
 //             /api/snapshots/candles?lite=1 on the same 30s poll, and the
 //             socket's esCandles / es1mCandles frame for the forming bar
-//   basis     /proxy/es-spx-basis — ES only; see ./basis.ts
+//   basis     /proxy/es-spx-basis on ES, /proxy/nq-ndx-basis on NQ — the
+//             futures tape only; see ./basis.ts and ./futures.ts
 //   expiry    /api/expirations — read for its FIRST entry only; the card has
 //             no expiry picker and draws the nearest expiration
 //   bubbles   /api/snapshots/option-strike-gex-history?mode=heatmap — the
@@ -150,7 +152,10 @@ import { useDailyEm } from '@/data/dailyEm'
 // strike price and there is no basis fetch — except on ES. ES is v2's original
 // pairing brought back as a switch on the SPX card rather than as a symbol
 // (see symbols.ts): futures candles, SPX gamma, and every strike shifted by the
-// ES−SPX basis before it is drawn. When the basis route has nothing usable the
+// ES−SPX basis before it is drawn. NDX got the same switch on 2026-09-24 — NQ
+// futures candles under NDX gamma, strikes shifted by the NQ−NDX basis — and
+// everything pair-specific (route, basis, frames) now comes off ./futures.ts.
+// When the basis route has nothing usable the
 // layer draws UNSHIFTED and the status line says so, because a level quietly
 // drawn one basis low is worse than a chart that admits it.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -437,7 +442,7 @@ export function GexCandlesCard({
    * For the phone build (/v3/m/spx). Two things, and they are the same thing:
    *
    *   · The card stops following the board's ticker and charts SPX. The SPX/ES
-   *     switch is `esCapable`, which is true only on SPX, so pinning the symbol
+   *     switch is `futCapable`, which is true only on SPX/NDX, so pinning the symbol
    *     is what makes that switch the ONLY symbol control on the screen — which
    *     is what was asked for, and it is also the only pair the phone has a
    *     live feed for.
@@ -590,19 +595,30 @@ export function GexCandlesCard({
   // own cadence, so nothing is lost to the throttle either.
   const { isOwner } = useAuth()
 
-  // ── SPX or ES candles ──────────────────────────────────────────────────────
-  // The switch only exists on SPX: the gamma is `$SPX` either way, and only
-  // SPX has a futures tape to swap in. On any other symbol the stored flag is
-  // simply not read, so a board that was on ES and moves to AMZN draws AMZN's
-  // own candles, and comes back to ES when it returns to SPX.
-  const esCapable = def.gexSymbol === '$SPX'
-  const useEs = esCapable && settings.esCandles
+  // ── Index or futures candles ───────────────────────────────────────────────
+  // The switch exists on symbols with a futures pair — SPX/ES and, since
+  // 2026-09-24, NDX/NQ (./futures.ts). The gamma is the index's either way; only
+  // the tape and the strike shift change. On any other symbol the stored flag
+  // is simply not read, so a board that was on ES and moves to AMZN draws
+  // AMZN's own candles, and comes back to the future when it returns.
+  //
+  // ONE stored flag (`settings.esCandles`) for both pairs: it means "on the
+  // futures tape", and a trader on ES who types NDX expects NQ, not a reset.
+  //
+  // `isSpx` is a separate test from `futCapable`, deliberately: the socket
+  // streams SPX only, so the live `spot` print and the live-basis fallback are
+  // SPX things, while NDX's cash tape keeps the HTTP live path every non-socket
+  // symbol uses.
+  const futPair = futuresPairFor(def.gexSymbol)
+  const futCapable = futPair != null
+  const useFut = futCapable && settings.esCandles
+  const isSpx = def.gexSymbol === '$SPX'
   /**
    * The session the chart actually filters on. Normally the stored setting;
    * derived from the tape when `spxOnly` — ES has an overnight, SPX cash does
    * not. See the prop.
    */
-  const session = spxOnly ? (useEs ? 'eth' : 'rth') : settings.session
+  const session = spxOnly ? (useFut ? 'eth' : 'rth') : settings.session
 
   // ── Fetches ────────────────────────────────────────────────────────────────
   // `pollMs`, not just `staleMs`. staleMs is a cache TTL and never causes a
@@ -633,16 +649,24 @@ export function GexCandlesCard({
   // still answered. At 1D nothing changes.
   const candleDays = replayOn || settings.tapeDays > 1 ? REPLAY_CANDLE_DAYS : undefined
   const candlesQ = useQuery<unknown>(
-    useEs
-      ? esCandlesUrl(settings.interval, candleDays)
+    useFut && futPair
+      ? esCandlesUrl(settings.interval, candleDays, futPair.fut)
       : candlesUrl(def, settings.interval, candleDays),
     { staleMs: 25_000, pollMs: 30_000, background: isOwner },
   )
-  // The basis, ES only. useQuery(null) neither fetches nor polls, so the
-  // request exists only while there is a futures chart to shift.
-  const basisQ = useQuery<unknown>(useEs ? BASIS_URL : null, { staleMs: 300_000, pollMs: 1_800_000 })
-  const routeBasis = useMemo(() => (useEs ? parseBasis(basisQ.data) : NO_BASIS), [useEs, basisQ.data])
-  const routeUsable = isPlausibleBasis(routeBasis.basis) || routeBasis.days.size > 0
+  // The basis, futures tape only — the pair's own route and ceiling
+  // (./futures.ts). useQuery(null) neither fetches nor polls, so the request
+  // exists only while there is a futures chart to shift.
+  const maxBasis = futPair?.maxBasis ?? ES_MAX_BASIS
+  const basisQ = useQuery<unknown>(useFut && futPair ? futPair.basisUrl : null, {
+    staleMs: 300_000,
+    pollMs: 1_800_000,
+  })
+  const routeBasis = useMemo(
+    () => (useFut ? parseBasis(basisQ.data, maxBasis) : NO_BASIS),
+    [useFut, basisQ.data, maxBasis],
+  )
+  const routeUsable = isPlausibleBasis(routeBasis.basis, routeBasis.max) || routeBasis.days.size > 0
 
   // ── The LIVE basis, as the fallback ────────────────────────────────────────
   // v2's first tier: the newest ES bar's close minus the live SPX spot, both
@@ -657,11 +681,14 @@ export function GexCandlesCard({
   //
   // Refs plus a once-a-minute sample, not state per tick: the shift re-buckets
   // the whole history, and the basis moves about a point a DAY.
-  const esCloseRef = useRef(0)
+  const futCloseRef = useRef(0)
   const spotRef = useRef(0)
   const [liveBasis, setLiveBasis] = useState(0)
   useEffect(() => {
-    if (!useEs || routeUsable) return
+    // SPX/ES only: the socket's `spot` is SPX, so there is no live NDX print to
+    // pair NQ with. On NQ the route is the only source; without it the layer
+    // draws unshifted and the banner below says so.
+    if (!useFut || routeUsable || !futPair?.liveSpotPair) return
     const unsub = watchFrame<SpotFrame>('spot', (f) => {
       const px = f?.data.spot
       if (typeof px === 'number' && px > 0) spotRef.current = px
@@ -673,8 +700,8 @@ export function GexCandlesCard({
       const m = etMinutesOfDay(Date.now())
       const wd = new Date().getUTCDay()
       if (m < RTH_OPEN_MIN || m >= RTH_CLOSE_MIN || wd === 0 || wd === 6) return
-      const b = esCloseRef.current - spotRef.current
-      const next = esCloseRef.current > 0 && spotRef.current > 0 && isPlausibleBasis(b) ? Math.round(b * 4) / 4 : 0
+      const b = futCloseRef.current - spotRef.current
+      const next = futCloseRef.current > 0 && spotRef.current > 0 && isPlausibleBasis(b) ? Math.round(b * 4) / 4 : 0
       setLiveBasis((prev) => (Math.abs(prev - next) >= 0.5 ? next : prev))
     }
     // First sample once the frames have had a moment to land, then a minute.
@@ -685,19 +712,24 @@ export function GexCandlesCard({
       clearTimeout(t0)
       clearInterval(id)
     }
-  }, [useEs, routeUsable])
+  }, [useFut, routeUsable, futPair])
 
   const basis = useMemo(
-    () => (routeUsable ? routeBasis : liveBasis > 0 ? { basis: liveBasis, days: new Map<string, number>() } : NO_BASIS),
-    [routeUsable, routeBasis, liveBasis],
+    () =>
+      routeUsable
+        ? routeBasis
+        : liveBasis > 0 && futPair?.liveSpotPair
+          ? { basis: liveBasis, days: new Map<string, number>(), max: maxBasis }
+          : NO_BASIS,
+    [routeUsable, routeBasis, liveBasis, futPair, maxBasis],
   )
   // Only once the route has ANSWERED (or failed): the moment before the first
   // response would otherwise flash the warning on every switch to ES.
   const basisMissing =
-    useEs &&
+    useFut &&
     (basisQ.error != null || basisQ.data !== undefined) &&
     !routeUsable &&
-    !(liveBasis > 0)
+    !(liveBasis > 0 && futPair?.liveSpotPair)
   const expiryQ = useQuery<ExpirationsResponse>(
     `/api/expirations?ticker=${encodeURIComponent(chainTicker(def))}`,
     { staleMs: 300_000 },
@@ -784,9 +816,9 @@ export function GexCandlesCard({
   // The WHOLE tape the card holds. `bars` below is this, clipped to the replay
   // cursor; live, the two are the same array.
   const allBars = useMemo(() => {
-    const raw = useEs ? parseEsCandles(candlesQ.data) : parseCandles(candlesQ.data)
+    const raw = useFut ? parseEsCandles(candlesQ.data) : parseCandles(candlesQ.data)
     return filterSession(rollup(raw, settings.interval), session)
-  }, [useEs, candlesQ.data, settings.interval, session])
+  }, [useFut, candlesQ.data, settings.interval, session])
 
   /** The ET days the TAPE covers, newest first. `HISTORY_DAYS` calendar days. */
   const barDays = useMemo(
@@ -1002,8 +1034,8 @@ export function GexCandlesCard({
       : weekendExpiry
         ? allColumns.filter((c) => etDay(c.slotTs) === weekendExpiry)
         : latestSession(allColumns)
-    return useEs ? shiftColumns(picked, basis) : picked
-  }, [allColumns, activeDay, weekendExpiry, useEs, basis])
+    return useFut ? shiftColumns(picked, basis) : picked
+  }, [allColumns, activeDay, weekendExpiry, useFut, basis])
 
   const columns = useMemo(
     () => (cursor ? sessionColumns.filter((c) => c.slotTs <= cursor) : sessionColumns),
@@ -1106,7 +1138,7 @@ export function GexCandlesCard({
   // a factor of three, and frameRecent sizes the window in BARS — without the
   // reframe, switching 1D -> 3D leaves the two older sessions off the left edge
   // and looks exactly like the picker did nothing.
-  const viewKey = `${symbol}|${useEs ? 'ES' : 'IDX'}|${settings.interval}|${session}|${settings.tapeDays}D|${replayOn ? 'R' : 'L'}`
+  const viewKey = `${symbol}|${useFut && futPair ? futPair.fut : 'IDX'}|${settings.interval}|${session}|${settings.tapeDays}D|${replayOn ? 'R' : 'L'}`
   const framedRef = useRef('')
 
   // BEFORE the setBars effect below, deliberately. The interval is what the
@@ -1210,9 +1242,9 @@ export function GexCandlesCard({
   // under the chart already says so.
   const emDrawn = useMemo(() => {
     if (!emBand) return null
-    const shift = useEs && isPlausibleBasis(basis.basis) ? basis.basis : 0
+    const shift = useFut && isPlausibleBasis(basis.basis, basis.max) ? basis.basis : 0
     return { up: emBand.up + shift, down: emBand.down + shift, date: emBand.date }
-  }, [emBand, useEs, basis])
+  }, [emBand, useFut, basis])
 
   useEffect(
     () => apply((h) => h.setEmBand(settings.emLevels ? emDrawn : null, settings.emLines)),
@@ -1251,7 +1283,8 @@ export function GexCandlesCard({
   // price onto the 10:04 candle the cursor is sitting on. Gating it here rather
   // than inside the callback also drops the subscription, which takes `spot` /
   // `esCandles` back OUT of the socket's derived topic scope while rewound.
-  const livePrice = esCapable && !useEs && !replayOn
+  // `isSpx`, not `futCapable`: NDX has a futures pair but no socket print.
+  const livePrice = isSpx && !useFut && !replayOn
   useEffect(() => {
     if (!livePrice) return
     return watchFrame<SpotFrame>('spot', (f) => {
@@ -1266,16 +1299,18 @@ export function GexCandlesCard({
     })
   }, [livePrice, apply])
   useEffect(() => {
-    if (!useEs || replayOn) return
-    const type = settings.interval === 1 ? 'es1mCandles' : 'esCandles'
+    if (!useFut || replayOn || !futPair) return
+    // The pair's own frames — esCandles/es1mCandles on ES, nqCandles/nq1mCandles
+    // on NQ (./futures.ts). Reading one is what scopes it onto the socket.
+    const type = settings.interval === 1 ? futPair.frame1m : futPair.frame5m
     return watchFrame<{ data?: unknown }>(type, (f) => {
       const px = newestClose(f?.data)
       if (px > 0) {
-        esCloseRef.current = px
+        futCloseRef.current = px
         apply((h) => h.setLivePrice(px))
       }
     })
-  }, [useEs, replayOn, settings.interval, apply])
+  }, [useFut, replayOn, settings.interval, futPair, apply])
 
   // ── The live price, for every symbol the SOCKET does not carry ─────────────
   // The two effects above ride /ws/gex, and that feed carries ONE underlying.
@@ -1296,9 +1331,11 @@ export function GexCandlesCard({
   // note in candles.ts. Nothing here detects whether SSE "works": if frames
   // arrive the poll never runs, and if they stop it resumes by itself.
   //
-  // `!esCapable` is the gate, not `!useEs`: on SPX the socket already does
-  // this, better, and running both would paint two sources onto one bar.
-  const httpLive = !esCapable && !replayOn
+  // On SPX the socket already does this, better, and running both would paint
+  // two sources onto one bar; on a futures tape the socket's futures frames do
+  // it. So: every symbol that is not SPX, on its own (cash) tape — which since
+  // 2026-09-24 includes NDX with the switch on NDX.
+  const httpLive = !isSpx && !useFut && !replayOn
   useEffect(() => {
     if (!httpLive) return
     let stopped = false
@@ -1419,7 +1456,7 @@ export function GexCandlesCard({
   // the start of the session, not a card with no candles, and saying "No
   // candles recorded" over a chart that is about to play is a lie.
   const empty = !error && allBars.length === 0
-  const tapeLabel = useEs ? 'ES' : def.label
+  const tapeLabel = useFut && futPair ? futPair.fut : def.label
 
   const ctlSize = phone ? ('touch' as const) : ('sm' as const)
 
@@ -1512,14 +1549,17 @@ export function GexCandlesCard({
       title="This card's symbol. Copies of the GEX Candles card each hold their own ticker — the first one follows the board. Starred tickers are the same list the toolbar uses."
     />
   ) : null
-  // SPX-only — see esCapable. Null (not hidden) elsewhere so the header row
-  // does not keep an empty slot on AMZN.
-  const tapeOptions: Array<{ label: string; value: 'spx' | 'es' }> = [
-    { label: 'SPX', value: 'spx' },
-    { label: 'ES', value: 'es' },
+  // SPX and NDX only — see futCapable. Null (not hidden) elsewhere so the
+  // header row does not keep an empty slot on AMZN. Labels come off the pair:
+  // SPX/ES on SPX, NDX/NQ on NDX. The VALUES stay 'idx'/'fut' so one stored
+  // flag drives both.
+  const idxLabel = futPair?.indexLabel ?? def.label
+  const futLabel = futPair?.fut ?? ''
+  const tapeOptions: Array<{ label: string; value: 'idx' | 'fut' }> = [
+    { label: idxLabel, value: 'idx' },
+    { label: futLabel, value: 'fut' },
   ]
-  const tapeTitle =
-    'Which tape the candles come from. SPX is the cash index (09:30–16:00 ET only). ES is the front-month future — it trades nearly around the clock, so this is the one that has an overnight — with the same SPX gamma drawn over it, every strike shifted by the ES−SPX basis'
+  const tapeTitle = `Which tape the candles come from. ${idxLabel} is the cash index (09:30–16:00 ET only). ${futLabel} is the front-month future — it trades nearly around the clock, so this is the one that has an overnight — with the same ${idxLabel} gamma drawn over it, every strike shifted by the ${futLabel}−${idxLabel} basis`
   // THE SESSION FOLLOWS THE TAPE. ES trades nearly around the clock, so an ES
   // tape on RTH throws away the overnight that is the only reason to be on it;
   // SPX cash does not exist outside 09:30-16:00 ET, so coming back to it on ETH
@@ -1528,23 +1568,23 @@ export function GexCandlesCard({
   // is what `spxOnly` derives outright (see the prop). Here it is a DEFAULT, not
   // a lock: the Session picker is still live, so a deliberate ES-on-RTH is one
   // click away and survives until the tape is switched again.
-  const onTape = (v: 'spx' | 'es') =>
-    patch({ esCandles: v === 'es', session: v === 'es' ? 'eth' : 'rth' })
-  const tapePicker = esCapable ? (
+  const onTape = (v: 'idx' | 'fut') =>
+    patch({ esCandles: v === 'fut', session: v === 'fut' ? 'eth' : 'rth' })
+  const tapePicker = futCapable ? (
     <SegGroup
       size={ctlSize}
       title={tapeTitle}
       options={tapeOptions}
-      value={useEs ? 'es' : 'spx'}
+      value={useFut ? 'fut' : 'idx'}
       onChange={onTape}
     />
   ) : null
-  const tapeMenu = esCapable ? (
+  const tapeMenu = futCapable ? (
     <SegMenu
       size={ctlSize}
       title={tapeTitle}
       options={tapeOptions}
-      value={useEs ? 'es' : 'spx'}
+      value={useFut ? 'fut' : 'idx'}
       onChange={onTape}
     />
   ) : null
@@ -1581,7 +1621,7 @@ export function GexCandlesCard({
       // the shot drops this card's header, so what is not published here is not
       // in the picture. See shell/snapshot.ts (META_ATTR).
       data-capture-meta={[
-        useEs ? 'ES' : symbol,
+        useFut && futPair ? futPair.fut : symbol,
         expiry,
         `${settings.interval}m`,
         // Only when it is not the resting 1D: a caption that says "1D" on every
@@ -1998,11 +2038,17 @@ export function GexCandlesCard({
           {candlesQ.loading ? 'Loading…' : `No candles recorded for ${tapeLabel} yet.`}
         </span>
       )}
-      {/* An unshifted ES layer looks exactly like a shifted one until you
-          notice every wall is 50 points under where price is reacting. Say it. */}
+      {/* An unshifted futures layer looks exactly like a shifted one until you
+          notice every wall is a basis under where price is reacting. Say it. */}
       {basisMissing && settings.bubblesOn && (
         <span className="shrink-0 text-xs text-warn opacity-80">
-          ES−SPX basis unavailable ({basisQ.error ? basisQ.error.message : 'route has no usable basis, no live pair yet'}) — GEX levels are drawn at SPX cash strikes.
+          {futLabel}−{idxLabel} basis unavailable (
+          {basisQ.error
+            ? basisQ.error.message
+            : futPair?.liveSpotPair
+              ? 'route has no usable basis, no live pair yet'
+              : 'route has no usable basis'}
+          ) — GEX levels are drawn at {idxLabel} cash strikes.
         </span>
       )}
 

@@ -445,6 +445,94 @@ function ensureEsCandlesContract(pool) {
   });
   return _contractEnsured;
 }
+// ── nq_candles: contract column + composite key (2026-09-24) ─────────────────
+//
+// The ES migration above, for NQ. Until today nq_candles was UNIQUE("slotKey")
+// alone — fine while it held one 5m stream, but slotKey carries no interval, so
+// the NQ 1m stream (added for the GEX Candles card's NDX/NQ switch) would
+// overwrite the 5m bar at every 5-minute boundary. Same three rules as the ES
+// one and for the same reasons: a catalog-only PRECHECK so an applied table
+// takes no lock, a 3s LOCK_TIMEOUT on a dedicated client so a blocked ALTER
+// gives up instead of queueing every NQ write behind it, and a 5-minute BACKOFF.
+let _nqKeyEnsured = null;
+let _nqKeyRetryAt = 0;
+
+function ensureNqCandlesKey(pool) {
+  if (_nqKeyEnsured) return _nqKeyEnsured;
+  if (Date.now() < _nqKeyRetryAt) return Promise.resolve();
+  _nqKeyEnsured = (async () => {
+    const pre = await pool.query(`
+      SELECT
+        (SELECT count(*) FROM pg_attribute
+           WHERE attrelid = t.oid AND attname = 'contract' AND NOT attisdropped)::int AS has_col,
+        (SELECT count(*) FROM pg_constraint
+           WHERE conrelid = t.oid AND contype = 'u'
+             AND conname <> 'nq_candles_slot_interval_contract_key')::int AS old_uniques,
+        (SELECT count(*) FROM pg_constraint
+           WHERE conrelid = t.oid
+             AND conname = 'nq_candles_slot_interval_contract_key')::int AS has_new,
+        (SELECT count(*) FROM pg_class
+           WHERE relname = 'idx_nc_contract_interval_date' AND relkind = 'i')::int AS has_idx
+      FROM (SELECT to_regclass('nq_candles') AS oid) t
+      WHERE t.oid IS NOT NULL`);
+
+    const r = pre.rows[0];
+    if (!r) return;
+    if (r.has_col === 1 && r.old_uniques === 0 && r.has_new === 1 && r.has_idx === 1) return;
+
+    const client = await pool.connect();
+    try {
+      await client.query(`SET lock_timeout = '3s'`);
+      await client.query(`SET statement_timeout = '30s'`);
+
+      if (r.has_col !== 1) {
+        await client.query(`ALTER TABLE nq_candles ADD COLUMN IF NOT EXISTS contract TEXT NOT NULL DEFAULT ''`);
+      }
+      // Every pre-existing NQ row was written as 5m. A NULL interval would never
+      // compare equal inside the new UNIQUE, so pin them before the key lands.
+      await client.query(`UPDATE nq_candles SET "intervalMinutes" = 5 WHERE "intervalMinutes" IS NULL`);
+      await client.query(`ALTER TABLE nq_candles ALTER COLUMN "intervalMinutes" SET DEFAULT 5`);
+      if (r.old_uniques > 0) {
+        // The column-level UNIQUE on "slotKey" — Postgres named it itself, so
+        // drop whatever single-column unique the catalog says is there.
+        const olds = await client.query(`
+          SELECT conname FROM pg_constraint
+           WHERE conrelid = 'nq_candles'::regclass AND contype = 'u'
+             AND conname <> 'nq_candles_slot_interval_contract_key'`);
+        for (const { conname } of olds.rows) {
+          await client.query(`ALTER TABLE nq_candles DROP CONSTRAINT IF EXISTS "${String(conname).replace(/"/g, '""')}"`);
+        }
+      }
+      if (r.has_new !== 1) {
+        await client.query(`DO $do$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_constraint WHERE conname = 'nq_candles_slot_interval_contract_key'
+            ) THEN
+              ALTER TABLE nq_candles
+                ADD CONSTRAINT nq_candles_slot_interval_contract_key
+                UNIQUE ("slotKey", "intervalMinutes", contract);
+            END IF;
+          END
+          $do$`);
+      }
+      if (r.has_idx !== 1) {
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_nc_contract_interval_date
+                              ON nq_candles(contract, "intervalMinutes", date)`);
+      }
+      console.log('[db] nq_candles contract/interval key migration applied');
+    } finally {
+      try { await client.query('RESET ALL'); } catch { /* releasing anyway */ }
+      client.release();
+    }
+  })().catch((err) => {
+    _nqKeyEnsured = null;
+    _nqKeyRetryAt = Date.now() + CONTRACT_RETRY_MS;
+    console.warn('[db] nq_candles key migration failed (retry in 5m):',
+      String(err && err.message).slice(0, 160));
+  });
+  return _nqKeyEnsured;
+}
 async function getDb() {
   const pool = getPool();
   if (!_tablesEnsured) {
@@ -459,6 +547,7 @@ async function getDb() {
     }
   }
   await ensureEsCandlesContract(pool);
+  await ensureNqCandlesKey(pool);
   return pool;
 }
 async function ensureAllTables(pool) {
@@ -567,13 +656,22 @@ async function ensureAllTables(pool) {
     CREATE INDEX IF NOT EXISTS idx_ec_interval_date ON es_candles("intervalMinutes", date);
     CREATE INDEX IF NOT EXISTS idx_ec_contract_interval_date ON es_candles(contract, "intervalMinutes", date);
 
+    -- NQ mirrors es_candles as of 2026-09-24: UNIQUE ("slotKey","intervalMinutes",
+    -- contract), so the NQ 1m stream (NDX/NQ switch on the GEX Candles card) can
+    -- share the table with the 5m bars and a roll cannot overwrite the outgoing
+    -- contract. Existing DBs are migrated by ensureNqCandlesKey below — this
+    -- CREATE is IF NOT EXISTS and will NOT retrofit them.
     CREATE TABLE IF NOT EXISTS nq_candles (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
-      "slotKey" TEXT NOT NULL UNIQUE, time TEXT, symbol TEXT, "intervalMinutes" INTEGER,
-      source TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, "avgVolume" REAL
+      "slotKey" TEXT NOT NULL, time TEXT, symbol TEXT,
+      "intervalMinutes" INTEGER NOT NULL DEFAULT 5,
+      contract TEXT NOT NULL DEFAULT '',
+      source TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, "avgVolume" REAL,
+      CONSTRAINT nq_candles_slot_interval_contract_key UNIQUE ("slotKey", "intervalMinutes", contract)
     );
     CREATE INDEX IF NOT EXISTS idx_nc_date ON nq_candles(date);
     CREATE INDEX IF NOT EXISTS idx_nc_slot ON nq_candles("slotKey");
+    CREATE INDEX IF NOT EXISTS idx_nc_contract_interval_date ON nq_candles(contract, "intervalMinutes", date);
 
     CREATE TABLE IF NOT EXISTS es_footprint (
       day TEXT PRIMARY KEY, symbol TEXT, updated_at BIGINT NOT NULL, payload JSONB NOT NULL
@@ -4087,11 +4185,15 @@ async function upsertEsCandle(r) {
     ]
   );
 }
-function esContractClause(contract, scopeSql, scopeParams) {
+function esContractClause(contract, scopeSql, scopeParams, table = "es_candles") {
   if (!contract) return { sql: "", params: [] };
   if (contract !== "latest") return { sql: ` AND contract = ?`, params: [contract] };
+  // Whitelisted — interpolated into SQL, never user-supplied.
+  const tbl = table === "nq_candles" ? "nq_candles" : "es_candles";
   return {
-    sql: ` AND contract = (SELECT contract FROM es_candles WHERE ${scopeSql} ORDER BY timestamp DESC LIMIT 1)`,
+    // Tie-break toward a real contract code: legacy '' rows share bar instants
+    // with the first contract-stamped ones (same fix lib/db.ts carries).
+    sql: ` AND contract = (SELECT contract FROM ${tbl} WHERE ${scopeSql} ORDER BY timestamp DESC, (contract <> '') DESC LIMIT 1)`,
     params: scopeParams
   };
 }
@@ -4142,9 +4244,10 @@ async function getEsCandles(date, daysBack, limit = 2e3, intervalMinutes = 5, co
 async function upsertNqCandle(r) {
   const pool = await getDb();
   await pool.query(
-    `INSERT INTO nq_candles (timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-     ON CONFLICT("slotKey") DO UPDATE SET
+    // Same conflict target as es_candles since 2026-09-24 — see ensureNqCandlesKey.
+    `INSERT INTO nq_candles (timestamp,date,"slotKey",time,symbol,"intervalMinutes",contract,source,open,high,low,close,volume,"avgVolume")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ON CONFLICT("slotKey","intervalMinutes",contract) DO UPDATE SET
        timestamp=EXCLUDED.timestamp, high=GREATEST(nq_candles.high,EXCLUDED.high), low=LEAST(nq_candles.low,EXCLUDED.low),
        close=EXCLUDED.close, volume=EXCLUDED.volume, "avgVolume"=EXCLUDED."avgVolume"`,
     [
@@ -4154,6 +4257,7 @@ async function upsertNqCandle(r) {
       r.time ?? "",
       r.symbol ?? "/NQ",
       r.intervalMinutes ?? 5,
+      r.contract ?? "",
       r.source ?? "dxlink",
       r.open,
       r.high,
@@ -4164,24 +4268,46 @@ async function upsertNqCandle(r) {
     ]
   );
 }
-async function getNqCandles(date, daysBack, limit = 2e3) {
+/**
+ * NQ bars, now with the same interval + contract filters as getEsCandles
+ * (2026-09-24). `intervalMinutes` defaults to 5 so the callers that predate the
+ * NQ 1m stream (the IB results recorder) keep getting exactly the 5m series.
+ * `contract` is undefined for every-row, 'latest' for the newest contract in the
+ * window, or a code like '/NQZ6'.
+ */
+async function nqCandlesQuery(date, daysBack, limit, intervalMinutes, contract) {
   if (date) {
+    const scope = `date = ? AND "intervalMinutes" = ?`;
+    const c = esContractClause(contract, scope, [date, intervalMinutes], "nq_candles");
     return queryAll(
-      `SELECT * FROM nq_candles WHERE date = ? ORDER BY timestamp ASC LIMIT ?`,
-      [date, limit]
+      `SELECT * FROM nq_candles WHERE ${scope}${c.sql} ORDER BY timestamp ASC LIMIT ?`,
+      [date, intervalMinutes, ...c.params, limit]
     );
   }
   if (daysBack) {
     const cutoff = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10);
+    const scope = `date >= ? AND "intervalMinutes" = ?`;
+    const c = esContractClause(contract, scope, [cutoff, intervalMinutes], "nq_candles");
     return queryAll(
-      `SELECT * FROM nq_candles WHERE date >= ? ORDER BY timestamp ASC LIMIT ?`,
-      [cutoff, limit]
+      `SELECT * FROM nq_candles WHERE ${scope}${c.sql} ORDER BY timestamp ASC LIMIT ?`,
+      [cutoff, intervalMinutes, ...c.params, limit]
     );
   }
+  const scope = `"intervalMinutes" = ?`;
+  const c = esContractClause(contract, scope, [intervalMinutes], "nq_candles");
   return queryAll(
-    `SELECT * FROM nq_candles ORDER BY timestamp DESC LIMIT ?`,
-    [limit]
+    `SELECT * FROM nq_candles WHERE ${scope}${c.sql} ORDER BY timestamp DESC LIMIT ?`,
+    [intervalMinutes, ...c.params, limit]
   );
+}
+async function getNqCandles(date, daysBack, limit = 2e3, intervalMinutes = 5, contract) {
+  try {
+    return await nqCandlesQuery(date, daysBack, limit, intervalMinutes, contract);
+  } catch (err) {
+    if (!contract || !isUndefinedColumn(err)) throw err;
+    console.warn("[db] nq_candles has no contract column yet \u2014 serving the unfiltered series.");
+    return nqCandlesQuery(date, daysBack, limit, intervalMinutes, undefined);
+  }
 }
 async function upsertIbDailyResult(r) {
   const pool = await getDb();

@@ -9,7 +9,7 @@ import { biasOf, biasTitle } from '@/board/topFlow/TopFlowCard'
 import { TrackedAlertsCard, TrackButton } from './whales/TrackedAlertsCard'
 import { contractKey, useWhaleAlerts } from './whales/alertsStore'
 import { NetDriftPanel } from './whales/NetDriftPanel'
-import { RepeatedFlowCard, type RepeatedFlowFilters } from './whales/RepeatedFlowCard'
+import { RepeatedFlowCard, type RepeatContract, type RepeatedFlowFilters } from './whales/RepeatedFlowCard'
 import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -476,10 +476,11 @@ function MoveCell({ value, entry }: { value: number | null; entry: number | null
   )
 }
 
-type PhoneTab = 'prints' | 'size' | 'lookup' | 'tracked' | 'drift'
+type PhoneTab = 'prints' | 'size' | 'repeat' | 'lookup' | 'tracked' | 'drift'
 const PHONE_TABS: Array<{ key: PhoneTab; label: string }> = [
   { key: 'prints', label: 'PRINTS' },
   { key: 'size', label: 'SIZE' },
+  { key: 'repeat', label: 'REPEATED' },
   { key: 'lookup', label: 'LOOKUP' },
   { key: 'tracked', label: 'TRACKED' },
   { key: 'drift', label: 'DRIFT' },
@@ -1039,8 +1040,39 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     () => ({ ticker, type, action, moneyness, maxDte, maxPrice, showUnreadable }),
     [ticker, type, action, moneyness, maxDte, maxPrice, showUnreadable],
   )
+  // TRACK on a repeated-flow row. Sent as a 'lookup' track: there is no single
+  // print behind a repeat, so no print time or premium — the entry is the
+  // average fill across the orders.
+  const trackRepeat = (c: RepeatContract) => {
+    const strike = Number(c.strike)
+    if (!c.ticker || !c.expiry || !Number.isFinite(strike)) return
+    void toggleTrack({
+      id: `repeat-track:${c.osi}`,
+      ts: c.lastTs || Date.now(),
+      osi: c.osi,
+      underlying: c.ticker,
+      type: c.type === 'P' ? 'P' : 'C',
+      strike,
+      expiry: c.expiry,
+      dte: null,
+      size: null,
+      price: c.avgPrice,
+      premium: 0,
+      spot: null,
+      side: null, action: null, sideReason: null,
+      bid: null, ask: null, quoteAgeMs: null, vol: null, oi: null,
+      sessionDate: etYmd(new Date()),
+    }, 'lookup')
+  }
   const repeatedFlowCard = (
-    <RepeatedFlowCard filters={rfFilters} onOpen={lookupContract} phone={phone} />
+    <RepeatedFlowCard
+      filters={rfFilters}
+      onOpen={lookupContract}
+      phone={phone}
+      trackedKeys={trackedIds}
+      busyKey={busyKey}
+      onTrack={trackRepeat}
+    />
   )
   const repeatsCard = (
           <Card title="Repeat strikes" note="3+ whale prints, same contract">
@@ -1087,7 +1119,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   //              move into a bottom sheet; the pill counts how many are off
   //              their default, which is the desktop's accent rule as a number.
   //   tiles      three, not five — premium + call/put split, bullish, bearish.
-  //   sub-tabs   PRINTS · SIZE · LOOKUP · TRACKED · DRIFT. The desktop's right
+  //   sub-tabs   PRINTS · SIZE · REPEATED · LOOKUP · TRACKED · DRIFT. The desktop's right
   //              column and bottom row become tabs instead of a 3,000px scroll.
   //   prints     two-line rows instead of an 11-column table.
   //   probe      the same ContractProbe, as a full-height sheet instead of the
@@ -1328,9 +1360,9 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
               {sizeCard}
               {bucketsCard}
               {repeatsCard}
-              {repeatedFlowCard}
             </div>
           )}
+          {phoneTab === 'repeat' && <div className="min-w-0 p-3">{repeatedFlowCard}</div>}
           {phoneTab === 'lookup' && <div className="p-3">{lookupCard}</div>}
           {phoneTab === 'tracked' && <div className="min-w-0 p-3"><TrackedAlertsCard store={alerts} /></div>}
           {phoneTab === 'drift' && <div className="min-w-0 p-3"><NetDriftPanel phone /></div>}

@@ -113,6 +113,7 @@ function buildSnapshot(state) {
     // Undefined (not an empty array) when the feed has 1m disabled, so the key is
     // dropped from the JSON entirely rather than shipped on every reconnect.
     es1mCandles: trimSnapshotCandles(state.es1mCandles),
+    nq1mCandles: trimSnapshotCandles(state.nq1mCandles),
     status: {
       ...state.status,
       // Server uptime in seconds (process lifetime).
@@ -160,6 +161,7 @@ function scopeSnapshot(snap, topics) {
   // Its own topic, NOT implied by 'esCandles' — a client asking for 5m candles
   // must not silently receive a second, 5x-denser bar array it never requested.
   if (!topics.has('es1mCandles')) out.es1mCandles = undefined;
+  if (!topics.has('nq1mCandles')) out.nq1mCandles = undefined;
   return out;
 }
 
@@ -568,6 +570,9 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     // nothing is sent.
     if (changed.has('es1mCandles')) out.push(msg('es1mCandles', state.es1mCandles, state.symbol));
     if (changed.has('es1mCandlesDelta')) out.push(msg('es1mCandles', state.es1mCandlesDelta, state.symbol));
+    // NQ 1m (NQ_1M_CANDLES): the same own-type rule as es1mCandles, against nqCandles.
+    if (changed.has('nq1mCandles')) out.push(msg('nq1mCandles', state.nq1mCandles, state.symbol));
+    if (changed.has('nq1mCandlesDelta')) out.push(msg('nq1mCandles', state.nq1mCandlesDelta, state.symbol));
     if (changed.has('spot') || changed.has('prevClose') || changed.has('basis')) {
       // basis rides on the 'spot' message too (not just 'aux') so a client
       // that only just connected/re-subscribed gets the authoritative value

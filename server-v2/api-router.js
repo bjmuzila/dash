@@ -6583,11 +6583,13 @@ if (libDb) {
         //                        backtests and anything doing its own roll
         //                        handling.
         //
-        // NQ has no contract column yet, so the param is ES-only.
+        // NQ takes the same ?interval and ?contract since 2026-09-24, when
+        // nq_candles gained the contract column and the NQ 1m stream (the v3
+        // GEX Candles card's NDX/NQ switch reads ?symbol=NQ through here).
         const contractParam = sp.get('contract');
         const contract = contractParam === 'all' ? undefined : (contractParam || 'latest');
         const rows = isNq(sp.get('symbol'))
-          ? await libDb.getNqCandles(date, daysBack, limit)
+          ? await libDb.getNqCandles(date, daysBack, limit, interval, contract)
           : await libDb.getEsCandles(date, daysBack, limit, interval, contract);
         // ?lite=1 — columnar/tuple encoding. Same rows, ~8-10x fewer bytes.
         //
@@ -15967,6 +15969,9 @@ try {
     function whFilter(o) {
       const sql = ['session_date >= ?::date', 'session_date <= ?::date', 'premium >= ?'];
       const params = [o.from, o.to, o.minPremium];
+      // Repeated flow's LAST 1H/2H/4H — print time in epoch ms. Unset on the
+      // whale archive, so its queries are unchanged.
+      if (o.sinceTs != null) { sql.push('ts >= ?'); params.push(o.sinceTs); }
       // MAX CONTRACT PRICE (2026-09-22) — the whale page's MAX filter, on the
       // per-contract fill price, not the premium. null = no cap. A print with
       // no readable price is DROPPED, same rule as the DTE filter below.
@@ -16353,7 +16358,7 @@ try {
     // ─────────────────────────────────────────────────────────────────────────
 
     /** Contracts returned. Past this it is a scroll, not a signal. */
-    const RF_MAX_CONTRACTS = 60;
+    const RF_MAX_CONTRACTS = 100;
     const RF_ORDER_STOPS = [5, 10, 25];
 
     register('/api/lse/repeated-flow', {
@@ -16395,9 +16400,16 @@ try {
         const sides = params.get('sides') === 'all' ? 'all' : 'directional';
         const askedMaxPrice = Number(params.get('max_price'));
         const maxPrice = Number.isFinite(askedMaxPrice) && askedMaxPrice > 0 ? askedMaxPrice : null;
+        // TIME LENGTH (2026-09-24): only prints in the last N minutes. Sent as
+        // minutes, not a timestamp, so the page's URL is stable and the cache
+        // key does not change every render. Unset = the whole window.
+        const askedWithin = Number(params.get('within_min'));
+        const withinMin = Number.isFinite(askedWithin) && askedWithin > 0 ? Math.min(Math.floor(askedWithin), 24 * 60) : null;
+        const sinceTs = withinMin != null ? Date.now() - withinMin * 60_000 : null;
 
         const empty = {
           range: { from, to },
+          withinMin,
           clamped,
           retainDays: TF_RETAIN_DAYS,
           minPremium,
@@ -16413,7 +16425,7 @@ try {
 
         try {
           await tfEnsureSchema();
-          const f = whFilter({ from, to, minPremium, maxPrice, ticker, type, action, moneyness, maxDte });
+          const f = whFilter({ from, to, minPremium, maxPrice, ticker, type, action, moneyness, maxDte, sinceTs });
           const cte = whCte(f.sql, sides === 'all' ? 'TRUE' : 'act IS NOT NULL');
 
           const rows = await libDb.queryAll(`${cte},

@@ -75,6 +75,10 @@ const state = {
   // interleave two aggregations into one series. Empty when 1m is disabled.
   es1mCandles: [],
   es1mCandlesDelta: [],
+  // 1-minute NQ candles (NQ_1M_CANDLES) — the NQ twin of es1mCandles, for the v3
+  // GEX Candles card's NDX/NQ switch. Same separate-keys rule, same reason.
+  nq1mCandles: [],
+  nq1mCandlesDelta: [],
   // Feed health
   status: {
     ttAuthenticated: false,

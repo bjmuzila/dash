@@ -234,10 +234,16 @@ export function parseLiveClose(json: unknown, symbol: string): number {
   return px > 0 ? px : 0
 }
 
-/** The ES futures history, lite-encoded. Same Bar shape out as the ETF route. */
-export function esCandlesUrl(interval: Interval, days = HISTORY_DAYS): string {
+/**
+ * The futures history, lite-encoded. Same Bar shape out as the ETF route.
+ * `fut` picks the table: ES (the default, and what the route assumes with no
+ * symbol) or NQ for the NDX/NQ switch — nq_candles takes the same ?interval
+ * and ?contract=latest as es_candles since 2026-09-24.
+ */
+export function esCandlesUrl(interval: Interval, days = HISTORY_DAYS, fut: 'ES' | 'NQ' = 'ES'): string {
   // 1m × ~23h × days, with room: the route caps `limit` at 50000.
-  return `/api/snapshots/candles?daysBack=${days}&limit=20000&interval=${nativeInterval(interval)}&lite=1`
+  const sym = fut === 'NQ' ? '&symbol=NQ' : ''
+  return `/api/snapshots/candles?daysBack=${days}&limit=20000&interval=${nativeInterval(interval)}&lite=1${sym}`
 }
 
 interface LiteCandlesResponse {

@@ -149,6 +149,7 @@ let multGreekGexRecorder = null;
 try { multGreekGexRecorder = require('./mult-greek-gex-recorder'); }
 catch (e) { console.warn('[mult-greek-gex] recorder not loaded:', e.message); }
 const { getEsSpxBasis, getEsSpxBasisReason } = require('./es-spx-basis');
+const { getNqNdxBasis, getNqNdxBasisReason } = require('./nq-ndx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
@@ -534,6 +535,18 @@ async function handleProxyRest(req, res) {
     getEsSpxBasis()
       .then((b) => sendJson(res, 200, b ?? { basis: null, reason: getEsSpxBasisReason() }))
       .catch((e) => sendJson(res, 500, { error: 'es-spx-basis failed', detail: String(e?.message || e) }));
+    return true;
+  }
+
+  // /proxy/nq-ndx-basis (2026-09-24)
+  // The same thing for the Nasdaq pair: our nq_candles 16:00 ET close (newest
+  // contract, the one the chart plots) minus Yahoo ^NDX's close. Drives the v3
+  // GEX Candles card's NDX/NQ switch. Same contract as /proxy/es-spx-basis:
+  // { basis, nqClose, ndxClose, date, days } or { basis: null, reason }.
+  if (pathname === '/proxy/nq-ndx-basis') {
+    getNqNdxBasis()
+      .then((b) => sendJson(res, 200, b ?? { basis: null, reason: getNqNdxBasisReason() }))
+      .catch((e) => sendJson(res, 500, { error: 'nq-ndx-basis failed', detail: String(e?.message || e) }));
     return true;
   }
 

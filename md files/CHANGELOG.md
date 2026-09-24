@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-24 - Repeated flow: time filter, Track button, sortable columns
+
+- **TIME** control (desktop and phone): 1H / 2H / 4H count only orders from the last 1, 2 or 4 hours. DAY is the whole session and 5D the last five sessions. The server takes `within_min` (in minutes, so the URL stays stable) and the whale archive's `whFilter` gains an optional `sinceTs` (unset for the archive).
+- **Track** button on every repeated-flow row, on both desktop and phone. It toggles the contract in Tracked contracts, sent as a lookup-style track with the average fill as the entry.
+- **Sorting.** On desktop, click any column header to sort; click it again to flip (▲/▼). The phone card has a SORT menu with a flip button. The sort is saved per browser. `/api/lse/repeated-flow` now returns up to 100 contracts.
+- **Phone tab.** Brought back the REPEATED phone tab, which had been reverted on disk.
+- Files: `server-v2/api-router.js`, `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx`, `cbedge-v3/src/pages/Whales.tsx`.
+
 ## 2026-09-24 - v3 home: owner-only Voltick theme switch
 
 - New **Voltick** switch in the home board's toolbar slot, drawn only for the owner. Flips the whole v3 UI between the CB Edge and Voltick palettes and reloads so canvas charts repaint.
@@ -24316,3 +24324,15 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - Removed the redundant "CB strike still cheap (≤ $3)" filter.
 - "Spot drifting toward the CB" no longer armed by default (still scored); passes when spot is no farther from the CB at fill than at probe.
 - Default armed set: premium, walk, dist.
+
+
+## 2026-09-24 — owner-vite Budget: remove a canceled recurring payment
+- Payments tab: recurring rows now show × next to ✎. × stores a $0 `__recur__` marker for that one occurrence (rule untouched), so it drops off Payments, Overview, Upcoming and Yearly. Marker rows are hidden from the list. (`owner-vite/src/pages/Budget.tsx`)
+
+
+## 2026-09-24 — v3 GEX Candles: NDX/NQ tape switch (like SPX/ES)
+- NDX now has the same switch SPX has for ES: NDX cash candles or NQ futures candles, with NDX gamma drawn over them and each strike shifted by the NQ−NDX basis. Pair config lives in `cbedge-v3/src/board/gexCandles/futures.ts`. The card reads the route, the basis limit and the socket frames from it (SPX/ES has a 250 basis limit, NDX/NQ 600). One stored flag (`esCandles`) now means "on the futures tape" for both pairs.
+- New `/proxy/nq-ndx-basis` (`server-v2/nq-ndx-basis.js`): the NQ 16:00 ET close from `nq_candles` (newest contract only) minus Yahoo's `^NDX` close, computed per session. No live-pair fallback on NQ, because the socket only streams SPX. If the route has nothing, the card draws the layer unshifted and shows a warning banner.
+- NQ 1m stream: `proxy-tastytrade.js` subscribes `/NQ…{=1m}` and adds `nq1mCandles` / `nq1mCandlesDelta` to market state, the WebSocket snapshot/topic scope/broadcast, and `cbedge-v3/src/data/socket.ts`. It is gated by `NQ_1M_CANDLES`, which defaults to whatever `ES_1M_CANDLES` is set to.
+- `nq_candles` migration (`ensureNqCandlesKey` in `server-v2/_lib-db.cjs`, mirrored in `lib/db.ts`): adds a `contract` column, pins NULL intervals to 5, and swaps UNIQUE("slotKey") for UNIQUE("slotKey","intervalMinutes",contract). It checks the catalog first and uses a 3s lock_timeout and a 5-minute backoff, the same as the ES one. `es-candle-writer.js` and `upsertNqCandle` now use that key. `getNqCandles` takes interval and contract, and its interval defaults to 5, so the IB recorder is unchanged. `/api/snapshots/candles?symbol=NQ` now honors `?interval` and `?contract` (defaults to latest). NQ roll now clears the NQ bar maps too.
+- Files: `server-v2/{nq-ndx-basis.js,server-with-proxy.js,proxy-tastytrade.js,websocket-server.js,api-router.js,_lib-db.cjs}`, `server-v2/state/{market-state.js,es-candle-writer.js,es-candle-writer.selftest.js}`, `lib/db.ts`, `cbedge-v3/src/board/gexCandles/{futures.ts,basis.ts,candles.ts,GexCandlesCard.tsx,settings.ts,symbols.ts}`, `cbedge-v3/src/data/socket.ts`.

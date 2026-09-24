@@ -79,11 +79,11 @@ function coalesceCandles(list, tbl, defSymbol) {
     const slotKey = String(r.slotKey || '');
     if (!(ts > 0) || !slotKey) continue;
     const intervalMinutes = Number(r.intervalMinutes ?? 5);
-    // nq_candles is still UNIQUE("slotKey") alone; es_candles is
-    // UNIQUE("slotKey","intervalMinutes","contract"). The dedupe key MUST match
-    // the conflict target or the statement can still collide inside one chunk.
+    // Both tables are UNIQUE("slotKey","intervalMinutes","contract") — nq_candles
+    // since 2026-09-24 (ensureNqCandlesKey in _lib-db.cjs). The dedupe key MUST
+    // match the conflict target or the statement can still collide inside one chunk.
     const contract = String(r.contract ?? '');
-    const k = tbl === 'nq_candles' ? slotKey : `${slotKey}\u0000${intervalMinutes}\u0000${contract}`;
+    const k = `${slotKey}\u0000${intervalMinutes}\u0000${contract}`;
     const high = Number(r.high);
     const low = Number(r.low);
     const prev = byKey.get(k);
@@ -116,12 +116,10 @@ function coalesceCandles(list, tbl, defSymbol) {
   return Array.from(byKey.values());
 }
 
-// es_candles carries `contract` (2026-09-14); nq_candles does not yet. The two
-// column lists therefore differ in length, so the tuple builder below cannot use
-// one constant.
-const CANDLE_COLS_ES = 14;
-const CANDLE_COLS_NQ = 13;
-// 500 * 13 = 6500 params, well under Postgres' 65535-param cap.
+// Both tables carry `contract` — es_candles since 2026-09-14, nq_candles since
+// 2026-09-24 — so they share one 14-column tuple.
+const CANDLE_COLS = 14;
+// 500 * 14 = 7000 params, well under Postgres' 65535-param cap.
 const CANDLE_CHUNK = 500;
 
 /**
@@ -148,16 +146,13 @@ async function writeCandles(rows, table = 'es_candles') {
   //     exist and EVERY write throws "no unique or exclusion constraint matching
   //     the ON CONFLICT specification" into the catch below, silently halting the
   //     live recorder.
-  //   nq_candles → still UNIQUE("slotKey") (5m only, no 1m writer). Same latent
-  //     flaw; migrate it before adding any second NQ aggregation.
-  const conflictTarget = tbl === 'nq_candles' ? '"slotKey"' : '"slotKey","intervalMinutes",contract';
-  // es_candles gained `contract` on 2026-09-14 so a quarterly roll stops writing
-  // ESZ6 bars over ESU6 bars at the same clock time. nq_candles has no such
-  // column yet, so its column list is the original 13.
-  const colList = tbl === 'nq_candles'
-    ? '(timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")'
-    : '(timestamp,date,"slotKey",time,symbol,"intervalMinutes",contract,source,open,high,low,close,volume,"avgVolume")';
-  const nCols = tbl === 'nq_candles' ? CANDLE_COLS_NQ : CANDLE_COLS_ES;
+  //   nq_candles → the same key since 2026-09-24, migrated before the NQ 1m
+  //     stream was added (ensureNqCandlesKey in _lib-db.cjs).
+  const conflictTarget = '"slotKey","intervalMinutes",contract';
+  // `contract` so a quarterly roll stops writing the incoming contract's bars
+  // over the outgoing one's at the same clock time.
+  const colList = '(timestamp,date,"slotKey",time,symbol,"intervalMinutes",contract,source,open,high,low,close,volume,"avgVolume")';
+  const nCols = CANDLE_COLS;
 
   // One multi-row upsert per chunk instead of one statement per row. The forming
   // bar is rewritten on every tick, which made this the #2 and #4 statements by
@@ -172,18 +167,11 @@ async function writeCandles(rows, table = 'es_candles') {
     const params = [];
     for (const r of chunk) {
       const b = params.length;
-      if (tbl === 'nq_candles') {
-        params.push(
-          r.timestamp, r.date, r.slotKey, r.time, r.symbol, r.intervalMinutes, r.source,
-          r.open, r.high, r.low, r.close, r.volume, r.avgVolume,
-        );
-      } else {
-        params.push(
-          r.timestamp, r.date, r.slotKey, r.time, r.symbol, r.intervalMinutes,
-          r.contract ?? '', r.source,
-          r.open, r.high, r.low, r.close, r.volume, r.avgVolume,
-        );
-      }
+      params.push(
+        r.timestamp, r.date, r.slotKey, r.time, r.symbol, r.intervalMinutes,
+        r.contract ?? '', r.source,
+        r.open, r.high, r.low, r.close, r.volume, r.avgVolume,
+      );
       tuples.push(`(${Array.from({ length: nCols }, (_, j) => `$${b + j + 1}`).join(',')})`);
     }
     try {
