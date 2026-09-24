@@ -24370,3 +24370,11 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-09-24 — Scheduled Discord econ post uses the new Voltick layout
 - `lib/discord/econSnapshot.ts` (shared by the v2 📅 button and `/api/econ-snapshot-html`, which `server-v2/econ-calendar-discord.js` screenshots): `buildSnapshotHTML()` rewritten to the same Voltick "layout B · timeline" as the v3 snapshot button — one time-sorted list, row squeeze, MAX_ROWS cap with "+N more today · voltick.io/bzila", earnings chips with "+N" overflow, no grey text, no CB Edge logo. html2canvas-safe: JS truncation, measured pill nudge (`opts.pillNudgeEm`) applied as bottom-padding lift on every centred text box, rail is a real div. Signature unchanged (logo arg ignored); brand-logo fetch dropped from `buildCalendarTemplateImage()`. Dead three-lane helpers removed.
+
+## 2026-09-24 — Repeated flow: Snapshot trade card
+- `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx`: the Repeated-flow probe now passes `alertInfo`, so popping it out (⤢) shows the same trade-card template as Tracked contracts with the 📸 Snapshot button. Headline = "Repeated flow · N orders · $total · size ct @ avg · first → last"; DTE from expiry; pill "REPEATED N× · <day>".
+- `cbedge-v3/src/board/topFlow/ContractProbe.tsx`: `ProbeAlertInfo.badge` — optional bottom-row pill text (defaults to "TRACKED <day>").
+
+
+## 2026-09-24 — Voltick Levels bot: Volt = highest live GEX
+- `server-v2/mg-ladder-discord.js` `voltickFromBooks`: Volt/Reversal/Coil now read the OI + today's volume book instead of OI only, so the Volt is the highest-GEX strike (posted 7675 vs card 7700). Surge unchanged.

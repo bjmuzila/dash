@@ -272,7 +272,7 @@ function strikeBooks(items, spot) {
 /**
  * PORT of Voltick's marksOf() (server/engine.js) — the definitions its Key
  * Levels card draws — run on the OI column, plus its headline Surge.
- *   Volt ★     = the single biggest |oi| strike (the king)
+ *   Volt ★     = the single biggest |oi + vol| strike (highest live GEX)
  *   Reversal ↘ = the opposite-sign pole, each candidate's size weighted by its
  *                THICK-SHELF support (opposite-sign neighbours ≥ 40% its size
  *                within 2.5 strike steps); nodes under 5% of the Volt ignored.
@@ -286,7 +286,12 @@ function strikeBooks(items, spot) {
  */
 const REV_WEIGHT = 0.18;
 
-function voltickFromBooks(rows) {
+function voltickFromBooks(bookRows) {
+  // Volt = HIGHEST GEX strike on the live book: standing OI + today's traded
+  // volume. OI alone is yesterday's close and misses the 0DTE positions opened
+  // this morning (e.g. 7675 posted while the card's Volt / highest GEX was 7700).
+  // Reversal + Coil are read off the same live column so they stay relative to it.
+  const rows = bookRows.map((r) => ({ strike: r.strike, oi: r.oi + r.vol, vol: r.vol }));
   let volt = null, voltAbs = 0;
   for (const r of rows) if (Math.abs(r.oi) > voltAbs) { voltAbs = Math.abs(r.oi); volt = r; }
   const voltSign = volt ? Math.sign(volt.oi) : 0;

@@ -3,7 +3,7 @@ import { SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { readableError, useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { TrackButton } from './TrackedAlertsCard'
-import { ContractProbe } from '@/board/topFlow/ContractProbe'
+import { ContractProbe, type ProbeAlertInfo } from '@/board/topFlow/ContractProbe'
 import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -382,6 +382,29 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
     side: null, action: null, sideReason: null,
     bid: null, ask: null, quoteAgeMs: null, vol: null, oi: null,
   })
+  /**
+   * The pop-out trade card + 📸 Snapshot — the same template the Tracked
+   * contracts use (ContractProbe's `alertInfo`), dressed for a burst: the
+   * headline is the burst, the pill says how many orders and which day.
+   */
+  const alertInfoOf = (r: RepeatContract): ProbeAlertInfo => {
+    const bits = [`Repeated flow · ${num(r.n)} orders`, money(r.total)]
+    if (r.size > 0) bits.push(`${num(Math.round(r.size))} ct${r.avgPrice != null ? ` @ ${r.avgPrice.toFixed(2)}` : ''}`)
+    bits.push(`${fmtWhen(r.firstTs, multiDay)} → ${fmtWhen(r.lastTs, multiDay)}`)
+    const expMs = Date.parse(`${String(r.expiry).slice(0, 10)}T16:00:00-04:00`)
+    const days = Number.isFinite(expMs) ? Math.max(0, Math.ceil((expMs - Date.now()) / 864e5)) : null
+    const day = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })
+      .format(new Date(r.firstTs)).toUpperCase()
+    return {
+      shotId: `repeat:${r.osi}`,
+      shotLabel: 'Repeated flow',
+      file: `repeated-${r.ticker}-${r.strike}${r.type}-${r.expiry}`,
+      headline: bits.join(' · '),
+      dteLabel: days != null ? `${days}d` : null,
+      trackedAt: r.firstTs,
+      badge: `REPEATED ${r.n}× · ${day}`,
+    }
+  }
   const probe = (r: RepeatContract) => (
     <div className="flex min-h-[380px] flex-col rounded-sm border border-line bg-surface">
       <ContractProbe
@@ -389,6 +412,7 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
         row={probeRow(r)}
         onClose={() => setOpenOsi(null)}
         entryAt={r.firstTs}
+        alertInfo={alertInfoOf(r)}
       />
     </div>
   )

@@ -29,6 +29,12 @@ export interface ProbeAlertInfo {
   /** Epoch ms the contract was tracked. */
   trackedAt: number
   note?: string
+  /**
+   * The pill on the card's bottom row. Defaults to "TRACKED <day>"; a surface
+   * that is not a tracked contract names itself instead (Repeated flow prints
+   * "REPEATED 7× · SEP 24").
+   */
+  badge?: string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -498,7 +504,7 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo }: {
         <div className="flex items-center justify-between gap-3">
           <span className="min-w-0 text-sm italic text-fg">{info.note ? `“${info.note}”` : ''}</span>
           <span className="tabular inline-flex h-5 shrink-0 items-center justify-center rounded-sm bg-accent/15 px-1.5 text-2xs font-bold leading-none tracking-[0.08em] text-accent">
-            TRACKED {trackedDay}
+            {info.badge ?? `TRACKED ${trackedDay}`}
           </span>
         </div>
 
