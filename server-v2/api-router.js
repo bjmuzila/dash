@@ -10699,7 +10699,7 @@ Return exactly one element per input key, in the same order. Never merge, split,
     };
     register('/api/watch', {
       auth: 'owner', methods: ['GET', 'POST'],
-      async handler(req, res, ctx) {
+      async handler(req, res, ctx, access) {
         const sp = new URL(req.url || '/', 'http://localhost').searchParams;
         if (req.method === 'GET') {
           try {
@@ -10752,6 +10752,19 @@ Return exactly one element per input key, in the same order. Never merge, split,
             const hasEntry = Number.isFinite(entryPrice) && entryPrice > 0;
             if (!ticker || !expiration || !Number.isFinite(strike)) { send(res, 400, { error: 'ticker, expiry and strike required' }); return; }
             const created = await libDb.insertWatchOption({ ticker, expiration, strike, side, note });
+            // A MANUAL add claims the row. The GEX-change-top recorder auto-probes
+            // through this same route (x-internal-token) and tags its rows
+            // watch_options.source — and the list below hides tagged rows. When the
+            // owner probes a contract the recorder already holds, the upsert hands
+            // back THAT row, still tagged: "added" on screen, invisible on the list,
+            // and later deleted by the recorder's prune/release. Clearing the tag
+            // makes it his; the recorder only ever deletes rows still tagged.
+            if (created && created.source && access?.who !== 'internal') {
+              try {
+                await libDb.getPool().query('UPDATE watch_options SET source = NULL WHERE id = $1', [created.id]);
+                created.source = null;
+              } catch (e) { console.warn('[api/watch] could not claim auto-probed row:', e.message); }
+            }
             if (created) {
               if (hasEntry) { await libDb.setWatchAddedPrice(created.id, entryPrice); created.added_price = entryPrice; }
               const snap = await probe(ctx, created);

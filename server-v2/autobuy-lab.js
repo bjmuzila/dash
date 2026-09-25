@@ -453,7 +453,7 @@ async function loadContexts(dates) {
  * filter reads through it rather than assuming calls.
  */
 /** Entry contract premium band — $1.00 to $5.00, closest to the CB. */
-const PREMIUM_BAND = [Number(cbTrack.CONFIG.BUY_MIN ?? 1.0), Number(cbTrack.CONFIG.BUY_MAX ?? 5.0)];
+const PREMIUM_BAND = [Number(cbTrack.LAB_CONFIG?.BUY_MIN ?? 1.0), Number(cbTrack.LAB_CONFIG?.BUY_MAX ?? 5.0)];
 
 const isLong = (t) => String(t.side).toUpperCase() !== 'P';
 
@@ -715,7 +715,10 @@ async function build(opts = {}) {
   const armed = normFilters(opts.filters);
   const clock = cbTrack.CHECKPOINTS.find((c) => c.key === String(opts.clock))?.key || cbTrack.CHECKPOINTS[1].key;
 
-  const trades = await cbTrack.listTrades({ since, all, basis, limit: 2000 });
+  // LAB ROWS ONLY: the recorder's banded twins ('oivol_lab' / 'vol_lab') — CB
+  // walk that steps farther OTM when the CB prices over $5.00. The Contracts
+  // page never sees these, and this page never sees the Contracts rows.
+  const trades = await cbTrack.listTrades({ since, all, basis, limit: 2000, lab: true });
   const taken = trades.filter((t) => t.status !== 'skipped' && num(t.entry_price) != null);
   const dates = [...new Set(trades.map((t) => t.date))];
 

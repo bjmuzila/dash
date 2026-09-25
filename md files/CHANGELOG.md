@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-25 - Quick Probe: probes now show in the Notes drawer; manual probe claims auto rows
+
+- `cbedge-v3/src/shell/QuickProbe.tsx`: the Notes-drawer Quick Probe card now lists the probe list under the form (ticker/strike/side, expiry, entry → mark, % change, × to remove), reloaded after each Probe and every 60s. Before, it only said "Added" and showed nothing.
+- `server-v2/api-router.js` (/api/watch add): a manual add of a contract the GEX-change-top recorder had already auto-probed used to return that recorder's row, still tagged `source`, so it was hidden from /owner/probe and the drawer and could later be pruned. A manual (non-internal) add now clears `source` so the row is the owner's.
+
+## 2026-09-25 - Auto-Buy Lab: backfill script for the lab's own contracts
+
+New one-shot `server-v2/scripts/backfill-lab-contracts.js` fills past sessions
+with lab-only rows (`oivol_lab` / `vol_lab`) so the Auto-Buy Lab has history.
+Per session + checkpoint it reads the CB/SPX from mvc_snapshots, runs the same
+$1-$5 lab walk the live recorder uses, and writes the entry, 1-minute ticks
+(SPX spot + CB distance from etf_candles) and a 16:00 close. If the lab lands on
+the strike the Contracts row bought, that row's real ticks are copied;
+otherwise prices come from dxLink 1m candle history (trade prints). Unpriceable
+checkpoints become skipped lab rows with the reason. Idempotent; never touches
+Contracts rows. Flags: `--probe`, `--dry`, `--since N`, `--date`, `--basis`.
+
+Also re-applied the lab-only `cb-contract-track.js` / `autobuy-lab.js`, which
+had been overwritten on disk with the older 09-23 version (the one that capped
+the Contracts walk at $5).
+
 ## 2026-09-25 - Auto-Buy Lab: its own $1-$5 banded contracts (Contracts page untouched)
 
 Reverted the 09-23 change that put a $5 ceiling on the real CB walk - the

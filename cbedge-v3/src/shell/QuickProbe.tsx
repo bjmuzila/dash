@@ -33,6 +33,24 @@ import { DatePicker } from '@/design/primitives/DatePicker'
 
 type Side = 'C' | 'P'
 
+/** One manual probe row, as GET /api/watch lists it (auto-probed rows are hidden server-side). */
+type ProbeRow = {
+  id: number
+  ticker: string
+  expiration: string
+  strike: number
+  side: Side
+  added_price: number | null
+  snapshot: { mark: number | null; ts: number | string | null } | null
+}
+
+const n = (v: unknown): number | null => {
+  const x = Number(v)
+  return v == null || v === '' || !Number.isFinite(x) ? null : x
+}
+const px = (v: number | null) => (v == null ? '—' : v.toFixed(2))
+const todayEt = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
+
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 function expiryLabel(ymd: string): string {
@@ -62,6 +80,37 @@ export default function QuickProbe() {
   const [error, setError] = useState<string | null>(null)
   /** Last contract successfully added, for the confirmation line. */
   const [added, setAdded] = useState<string | null>(null)
+
+  // ── the probe list itself, so a probe SHOWS here instead of only on /owner/probe
+  const [rows, setRows] = useState<ProbeRow[]>([])
+  const [listErr, setListErr] = useState<string | null>(null)
+  const loadRows = useCallback(async () => {
+    try {
+      const r = await fetch('/api/watch', { cache: 'no-store', credentials: 'same-origin' })
+      const j = await r.json().catch(() => null)
+      if (!r.ok || j?.error) {
+        setListErr(String(j?.error || `Probe list failed (${r.status}).`))
+        return
+      }
+      setRows(Array.isArray(j?.rows) ? (j.rows as ProbeRow[]) : [])
+      setListErr(null)
+    } catch {
+      setListErr("Couldn't load the probe list.")
+    }
+  }, [])
+  const removeRow = useCallback(async (id: number) => {
+    setRows((rs) => rs.filter((r) => r.id !== id))
+    try {
+      await fetch('/api/watch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ action: 'remove', id }),
+      })
+    } catch {
+      /* optimistic — the next load corrects it */
+    }
+  }, [])
 
   // Guards a stale expiry response from overwriting a newer symbol's list.
   const expiryReqRef = useRef(0)
@@ -98,6 +147,15 @@ export default function QuickProbe() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, isOwner])
 
+  // The server recorder snapshots every row each minute during RTH; re-read the
+  // list on the same cadence while the card is open.
+  useEffect(() => {
+    if (!open || !isOwner) return
+    void loadRows()
+    const t = setInterval(() => void loadRows(), 60_000)
+    return () => clearInterval(t)
+  }, [open, isOwner, loadRows])
+
   // ── add the contract to the probe list ─────────────────────────────────────
   const probe = useCallback(async () => {
     const sym = ticker.trim().toUpperCase()
@@ -132,6 +190,7 @@ export default function QuickProbe() {
         return
       }
       setAdded(`${sym} ${k}${side} · ${expiryLabel(exp)}`)
+      void loadRows()
       // Strike is the one field that changes contract to contract; clear it so
       // the next probe on the same symbol/expiry is one number and Enter.
       setStrike('')
@@ -140,7 +199,7 @@ export default function QuickProbe() {
     } finally {
       setBusy(false)
     }
-  }, [ticker, expiration, strike, side])
+  }, [ticker, expiration, strike, side, loadRows])
 
   // Owner chrome only — renders nothing (and fetches nothing) for anyone else.
   if (!isOwner) return null
@@ -325,6 +384,74 @@ export default function QuickProbe() {
               Adds the contract to the owner probe list
             </div>
           )}
+
+          {/* probe list — same rows /owner/probe shows, live-expiry first */}
+          <div className="mt-1 border-t border-line pt-2">
+            <div className="mb-1 flex items-center">
+              <span className={`${LABEL} mb-0 flex-1`}>Probing · {rows.length}</span>
+              <button
+                type="button"
+                onClick={() => void loadRows()}
+                className="cursor-pointer text-3xs font-bold uppercase tracking-[0.1em] text-accent opacity-75 hover:opacity-100"
+              >
+                Refresh
+              </button>
+            </div>
+            {listErr && <div className="text-xs leading-snug text-down">{listErr}</div>}
+            {!listErr && rows.length === 0 && (
+              <div className="text-3xs text-faint opacity-50">Nothing on the probe list yet.</div>
+            )}
+            <div className="flex flex-col gap-1">
+              {[...rows]
+                .sort((a, b) => {
+                  const t = todayEt()
+                  const ae = a.expiration < t ? 1 : 0
+                  const be = b.expiration < t ? 1 : 0
+                  return ae - be || a.expiration.localeCompare(b.expiration) || a.ticker.localeCompare(b.ticker)
+                })
+                .map((r) => {
+                  const mark = n(r.snapshot?.mark)
+                  const entry = n(r.added_price)
+                  const pnl = mark != null && entry != null ? mark - entry : null
+                  const pct = pnl != null && entry ? (pnl / entry) * 100 : null
+                  const expired = r.expiration < todayEt()
+                  return (
+                    <div
+                      key={r.id}
+                      className={[
+                        'flex items-center gap-2 rounded-sm border border-line bg-surface px-2 py-1 text-xs',
+                        expired ? 'opacity-45' : '',
+                      ].join(' ')}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-bold text-fg">
+                          {r.ticker} {n(r.strike)}
+                          <span className={r.side === 'C' ? 'text-accent' : 'text-down'}>{r.side}</span>
+                          <span className="ml-1 text-3xs font-normal text-faint">{expiryLabel(r.expiration)}</span>
+                        </div>
+                        <div className="tabular text-3xs text-muted">
+                          {px(entry)} → {px(mark)}
+                          {pct != null && (
+                            <span className={['ml-1 font-bold', pnl! >= 0 ? 'text-up' : 'text-down'].join(' ')}>
+                              {pct >= 0 ? '+' : ''}
+                              {pct.toFixed(1)}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void removeRow(r.id)}
+                        aria-label={`Stop probing ${r.ticker} ${r.strike}${r.side}`}
+                        className="cursor-pointer px-1 text-sm leading-none text-faint opacity-50 hover:opacity-100"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )
+                })}
+            </div>
+          </div>
         </div>
       )}
     </div>
