@@ -62,7 +62,7 @@ type DailyBalance = { day: string; coastal: number; truist: number; secu: number
 type AmazonRow = { id: number; work_date: string; pay: number; tips: number; gas: number };
 /** One month of Amazon totals, grouped server-side. `n` = deliveries logged. */
 type AmazonMonthTotal = { month: string; pay: number; tips: number; gas: number; n: number };
-type PropSource = "prop" | "cbedge" | "contracts";
+type PropSource = "prop" | "voltick" | "cbedge" | "contracts";
 // Per-stream wording for the Bzila entry form. Keeps the source-specific
 // labels/defaults in one place instead of ternaries at each field.
 const PROP_SOURCE_UI: Record<PropSource, {
@@ -73,6 +73,7 @@ const PROP_SOURCE_UI: Record<PropSource, {
   payoutLabel: string;
 }> = {
   prop:      { label: "Prop",      defaultFirm: "TPT",      firmPlaceholder: "Firm",            costLabel: "− Purchase", payoutLabel: "+ Payout" },
+  voltick:   { label: "Voltick",   defaultFirm: "VOLTICK",  firmPlaceholder: "Source / vendor", costLabel: "− Expense",  payoutLabel: "+ Earnings" },
   cbedge:    { label: "CB Edge",   defaultFirm: "CB EDGE",  firmPlaceholder: "Source / vendor", costLabel: "− Spend",    payoutLabel: "+ Earnings" },
   contracts: { label: "Contracts", defaultFirm: "CONTRACT", firmPlaceholder: "Client",          costLabel: "− Expense",  payoutLabel: "+ Invoice" },
 };
@@ -83,10 +84,10 @@ type PropRow = { id: number; entry_date: string; source: PropSource; firm: strin
 // marks the copies this page derives for the later months. A projection has no
 // id — there is no database row to delete, and deleting the origin is what ends
 // the series.
-type BzilaEntry = { key: string; id: number | null; date: string; stream: "prop" | "cbedge" | "contracts"; label: string; accounts: number; inAmt: number; outAmt: number; recurring?: boolean; projected?: boolean };
-const STREAM_LABEL: Record<BzilaEntry["stream"], string> = { prop: "Prop", cbedge: "CB Edge", contracts: "Contracts" };
+type BzilaEntry = { key: string; id: number | null; date: string; stream: "prop" | "voltick" | "cbedge" | "contracts"; label: string; accounts: number; inAmt: number; outAmt: number; recurring?: boolean; projected?: boolean };
+const STREAM_LABEL: Record<BzilaEntry["stream"], string> = { prop: "Prop", voltick: "Voltick", cbedge: "CB Edge", contracts: "Contracts" };
 type BzilaStreamTotal = { inAmt: number; outAmt: number; net: number };
-type BzilaStreams = { cbedge: BzilaStreamTotal; contracts: BzilaStreamTotal; prop: BzilaStreamTotal };
+type BzilaStreams = { voltick: BzilaStreamTotal; cbedge: BzilaStreamTotal; contracts: BzilaStreamTotal; prop: BzilaStreamTotal };
 type BzilaComputed = {
   months: { ym: string; rows: BzilaEntry[]; inAmt: number; outAmt: number; net: number }[];
   totalIn: number;
@@ -573,7 +574,7 @@ export default function Budget() {
     // its year total cover — a committed monthly cost belongs in both.
     const horizonYear = Number(month.slice(0, 4)) || new Date().getFullYear();
     const streamOf = (src: PropSource): BzilaEntry["stream"] =>
-      src === "cbedge" ? "cbedge" : src === "contracts" ? "contracts" : "prop";
+      src === "cbedge" ? "cbedge" : src === "voltick" ? "voltick" : src === "contracts" ? "contracts" : "prop";
 
     for (const r of sourceRows) {
       const stream = streamOf(r.source);
@@ -657,6 +658,7 @@ export default function Budget() {
       return { inAmt, outAmt, net: inAmt - outAmt };
     };
     const streamsOf = (rowsIn: BzilaEntry[]) => ({
+      voltick: streamTotalOf(rowsIn, "voltick"),
       cbedge: streamTotalOf(rowsIn, "cbedge"),
       contracts: streamTotalOf(rowsIn, "contracts"),
       prop: streamTotalOf(rowsIn, "prop"),
@@ -3566,13 +3568,14 @@ function BzilaPanel({
   const sumOut = isMonth ? monthRow?.outAmt ?? 0 : data.totalOut;
   const sumNet = sumIn - sumOut;
   const scopeStreams = isMonth
-    ? data.monthStreams[month] ?? { cbedge: EMPTY_STREAM, contracts: EMPTY_STREAM, prop: EMPTY_STREAM }
+    ? data.monthStreams[month] ?? { voltick: EMPTY_STREAM, cbedge: EMPTY_STREAM, contracts: EMPTY_STREAM, prop: EMPTY_STREAM }
     : data.streams;
   const monthName = (ym: string) => {
     const [y, m] = ym.split("-").map(Number);
     return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long" });
   };
   const STREAM_COLOR: Record<BzilaEntry["stream"], string> = {
+    voltick: CHART.gold,
     cbedge: HOME_THEME.cyan,
     contracts: LIGHT_BLUE,
     prop: HOME_THEME.orange,
@@ -3609,14 +3612,14 @@ function BzilaPanel({
 
       {/* Summary — follows the scope toggle */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-        <StatTile label={`${scopeLabel} Income`} value={fmtMoney(sumIn, currency)} sub="CB Edge · contracts · payouts" valueColor={HOME_THEME.green} />
-        <StatTile label="Expenses" value={fmtMoney(sumOut, currency)} sub="All three streams" valueColor={SOFT_RED} />
+        <StatTile label={`${scopeLabel} Income`} value={fmtMoney(sumIn, currency)} sub="Voltick · CB Edge · contracts · payouts" valueColor={HOME_THEME.green} />
+        <StatTile label="Expenses" value={fmtMoney(sumOut, currency)} sub="All streams" valueColor={SOFT_RED} />
         <StatTile label="Net" value={fmtMoney(sumNet, currency)} sub="Income − expenses" valueColor={sumNet < 0 ? SOFT_RED : HOME_THEME.green} />
       </div>
 
       {/* Per-stream breakdown */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-        {(["cbedge", "contracts", "prop"] as const).map((s) => {
+        {(["voltick", "cbedge", "contracts", "prop"] as const).map((s) => {
           const t = scopeStreams[s];
           return (
             <div key={s} style={{ ...card(), padding: 14 }}>

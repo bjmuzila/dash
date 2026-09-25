@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-25 - Auto-Buy Lab: its own $1-$5 banded contracts (Contracts page untouched)
+
+Reverted the 09-23 change that put a $5 ceiling on the real CB walk - the
+Contracts page is back to the original rule (first strike over $1.00, no cap).
+Instead the recorder now runs lab-only twin walks at each checkpoint, basis
+`oivol_lab` / `vol_lab`: same CB, but the buy is a $1.00-$5.00 band
+(`CB_LAB_BUY_MAX`). Under $1 walks toward the money as before; over $5 steps
+farther OTM until a strike prices in the band. Those rows are tracked and
+ticked like any other trade but never reach the Contracts/Confidence readers
+(`normBasis` only returns the real bases; `listTrades` excludes `_lab` unless
+`lab: true`). The Auto-Buy Lab now reads only the lab rows, so its history
+starts from the next checkpoint.
+
+Files: `server-v2/cb-contract-track.js`, `server-v2/autobuy-lab.js`.
+
 ## 2026-09-24 - GEX Change Top card back: whale-page price chart
 
 - The card back now draws **price only**, using the whale page's `ProbeChart` (`board/topFlow/ContractProbe`): the entry rung plus a ring on the line at the flag, the high ringed green, the low ringed red, the last mark in the rail, a per-snapshot volume strip, and the hover readout. Expanded cards use its wide mode.
@@ -192,20 +207,6 @@ Files: `server-v2/scheduled-posts-store.js`, `server-v2/mg-ladder-discord.js`, `
 - Schema: `scheduled_posts` gains `end_at`, `interval_min` (added automatically with ADD COLUMN IF NOT EXISTS).
 
 Files: `server-v2/scheduled-posts-store.js`, `server-v2/mg-ladder-discord.js`, `server-v2/econ-calendar-discord.js`, `server-v2/bot-targets-store.js`, `server-v2/api-router.js`, `server-v2/server-with-proxy.js` (comment), `owner-vite/src/pages/BotScheduled.tsx`, `owner-vite/src/pages/BotManage.tsx`.
-
-## 2026-09-23 - CB contract walk: $1.00-$5.00 band, walks farther OTM when too rich
-
-The CB tracker's walk no longer buys anything over $1.00 with no ceiling. The
-buy is now a band: over $1.00 (`CB_BUY_MIN`) and at most $5.00 (new
-`CB_BUY_MAX`). If the CB strike (or the first priced strike) is over $5.00, the
-walk turns around and steps one strike at a time farther OTM and buys the first
-strike priced inside the band, instead of the trade getting vetoed by the Auto-Buy
-Lab premium filter. Under $1.00 still walks toward the money as before.
-`walk_steps` now counts strikes from the CB in either direction. The Auto-Buy
-Lab premium band reads the tracker's config so the two cannot drift apart.
-Already-recorded trades are unchanged; this applies from the next checkpoint.
-
-Files: `server-v2/cb-contract-track.js`, `server-v2/autobuy-lab.js`.
 
 ## 2026-09-23 - Client Sites: no minimum password length
 
