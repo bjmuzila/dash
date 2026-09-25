@@ -51,6 +51,17 @@ import {
 import { fmtChg, fmtCount, fmtExpHeader, fmtMoney, fmtStrike, skinFig } from './format'
 import { etDateKey, etToday, isTradingDay } from './marketSession'
 import type { GreekMode, OiSnapEntry } from './useChainData'
+import { readUiTheme } from '@/design/uiTheme'
+import { voltickMarks, vtLevelsAt, type VoltickMarks, type VtLevelDef } from '@/data/voltickLevels'
+
+/**
+ * Owner-only Voltick UI theme (design/uiTheme.ts). Read once — the toolbar
+ * toggle reloads the page. On the GEX tab the matrix names Volt ★ / Surge ↯ /
+ * Reversal ↘ / Coil ◆ per column (the owner-dash bot's definitions,
+ * data/voltickLevels.ts), each a FILLED cell in its reserved colour with its
+ * own ink. No gold core, no ★/✕ markers, no CB/CW/PW fills on this theme.
+ */
+const VOLTICK_THEME = readUiTheme() === 'voltick'
 
 const MONO = 'var(--font-mono)'
 
@@ -347,6 +358,38 @@ export const ChainMatrix = memo(function ChainMatrix({
       .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0]?.[0] ?? null
   /** |⅀| at the ⅀ column's own core — NEAR CORE's denominator there. */
   const totalCoreAbs = totalMvc == null ? 0 : Math.abs(rowTotals.get(totalMvc) ?? 0)
+
+  // ── Voltick levels (Voltick UI theme, GEX tab) ─────────────────────────────
+  // book = the cell's GEX (OI + volume on the default basis), vol = the raw
+  // volume GEX. The ⅀ column gets its own set off the same summed columns.
+  const vtOn = VOLTICK_THEME && greekMode === 'gex'
+  const vtStrikes = rowStrikes.filter((s): s is number => s != null)
+  const vtByCol: Array<VoltickMarks | null> = vtOn
+    ? columns.map((col) =>
+        col
+          ? voltickMarks(
+              vtStrikes.map((s) => {
+                const cell = col.cells.get(s)
+                return { strike: s, book: cell?.gex ?? 0, vol: cell?.volGex ?? 0 }
+              }),
+            )
+          : null,
+      )
+    : []
+  const vtTotal: VoltickMarks | null = vtOn
+    ? voltickMarks(
+        vtStrikes.map((s) => {
+          let vol = 0
+          renderIdx.forEach((colIdx) => {
+            const col = columns[colIdx]
+            if (!col) return
+            if (selMode ? !selExps.has(col.expiration) : col.expiration === todayKey) return
+            vol += col.cells.get(s)?.volGex ?? 0
+          })
+          return { strike: s, book: rowTotals.get(s) ?? 0, vol }
+        }),
+      )
+    : null
 
   // ── Levels-only mode ───────────────────────────────────────────────────────
   // Intensity at its bottom stop drops the heat field entirely and paints ONLY
@@ -656,10 +699,18 @@ export const ChainMatrix = memo(function ChainMatrix({
 
               // ★ marks the core of the ACTIVE greek — not GEX on every tab. See
               // coreCols in useChainData for why the claim is scoped to the tab.
-              const isMvc = col != null && mvcByCol[colIdx] === strike
+              // Voltick theme: no gold core, no ✕ — the four Voltick levels
+              // replace them (GEX tab only).
+              const isMvc = !VOLTICK_THEME && col != null && mvcByCol[colIdx] === strike
+              const vtHere: VtLevelDef[] = vtOn ? vtLevelsAt(vtByCol[colIdx], strike) : []
+              const vtFill = vtHere[0] ?? null
               // ✕ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
               const isVolMvc =
-                greekMode === 'gex' && dataMode === 'oi-vol' && col != null && volMvcByCol[colIdx] === strike
+                !VOLTICK_THEME &&
+                greekMode === 'gex' &&
+                dataMode === 'oi-vol' &&
+                col != null &&
+                volMvcByCol[colIdx] === strike
               // …coloured by the SIGN of that volume-only GEX. A fixed-red ✕ said
               // "negative" on every strike it landed on.
               const volMvcVal = isVolMvc && col ? (col.cells.get(strike)?.volGex ?? null) : null
@@ -701,7 +752,8 @@ export const ChainMatrix = memo(function ChainMatrix({
               // Which level this cell is FILLED as, on a skin that fills levels.
               // Levels-only marks CB/CW/PW; every other slider position marks the
               // CORE level only — the ★ strike.
-              const cellLevel = !SK.levelFill ? null : (cellWall ?? (isMvc ? ('cb' as const) : null))
+              const cellLevel =
+                VOLTICK_THEME || !SK.levelFill ? null : (cellWall ?? (isMvc ? ('cb' as const) : null))
 
               // A wall paints as a wall; everything else in levels-only is
               // 'transparent' unless NEAR CORE claims it. The wall check comes
@@ -727,7 +779,11 @@ export const ChainMatrix = memo(function ChainMatrix({
                       ? metric
                       : 'transparent'
                     : heat
-              const background = cellLevel ? (levelFillBg(cellLevel, SK, fill) ?? fill) : fill
+              const background = vtFill
+                ? vtFill.fill
+                : cellLevel
+                  ? (levelFillBg(cellLevel, SK, fill) ?? fill)
+                  : fill
 
               return (
                 <div
@@ -742,8 +798,9 @@ export const ChainMatrix = memo(function ChainMatrix({
                     textAlign: 'right',
                     letterSpacing: '0',
                     fontWeight: value == null ? 400 : CELL.weight[cellRank === 1 ? 0 : cellRank ? 1 : 2],
-                    color: value == null ? CHAIN.none : CELL.text,
-                    ...(CELL.shadow && value != null ? { textShadow: CELL.shadow } : {}),
+                    color: vtFill ? vtFill.ink : value == null ? CHAIN.none : CELL.text,
+                    ...(CELL.shadow && value != null && !vtFill ? { textShadow: CELL.shadow } : {}),
+                    ...(vtFill ? { fontWeight: 800, position: 'relative' as const } : {}),
                     borderRadius: CELL.radius || undefined,
                     // The tile margin is NOT applied on the ATM row: that rule is
                     // an inset shadow on every cell in the row, and a margin
@@ -807,6 +864,17 @@ export const ChainMatrix = memo(function ChainMatrix({
                       </span>
                     ))}
 
+                  {vtFill && (
+                    // Voltick: the level mark(s) in the cell's own ink, left
+                    // edge. A strike can be two levels (Volt = Surge is common).
+                    <span
+                      title={vtHere.map((d) => d.title).join(' · ')}
+                      style={{ marginRight: 'auto', lineHeight: 1, fontWeight: 900, pointerEvents: 'none' }}
+                    >
+                      {vtHere.map((d) => d.mark).join('')} {vtHere.map((d) => d.label).join('/')}
+                    </span>
+                  )}
+
                   {isVolMvc && (
                     <span
                       title={`Highest volume GEX${volMvcVal == null ? '' : ` (${fmtMoney(volMvcVal)})`} — ${
@@ -844,7 +912,9 @@ export const ChainMatrix = memo(function ChainMatrix({
                     )
                   ) : (
                     <span>
-                      {CELL.signColors ? (
+                      {vtFill ? (
+                        value == null ? '·' : fmtMoney(value)
+                      ) : CELL.signColors ? (
                         <SignVal text={value == null ? '·' : fmtMoney(value)} />
                       ) : value == null ? (
                         '·'
@@ -861,7 +931,9 @@ export const ChainMatrix = memo(function ChainMatrix({
               (() => {
                 const tot = rowTotals.get(strike) ?? 0
                 const totWall = levelsOnly ? wallAt(totalWalls, strike) : null
-                const isTotMvc = totalMvc != null && totalMvc === strike && tot !== 0
+                const isTotMvc = !VOLTICK_THEME && totalMvc != null && totalMvc === strike && tot !== 0
+                const vtTot: VtLevelDef[] = vtOn ? vtLevelsAt(vtTotal, strike) : []
+                const vtTotFill = vtTot[0] ?? null
                 // The ⅀ column is ranked as its OWN column everywhere else, so
                 // it gets its own Core here too — near-core in ⅀ means "a real
                 // fraction of the summed Core", not of any one expiry's.
@@ -886,7 +958,8 @@ export const ChainMatrix = memo(function ChainMatrix({
                       : heat
                 // Same rule the expiry cells use: levels-only names the wall,
                 // every other slider position marks the CORE level only.
-                const totLevel = !SK.levelFill ? null : (totWall ?? (isTotMvc ? ('cb' as const) : null))
+                const totLevel =
+                  VOLTICK_THEME || !SK.levelFill ? null : (totWall ?? (isTotMvc ? ('cb' as const) : null))
                 return (
                   <div
                     style={{
@@ -895,10 +968,14 @@ export const ChainMatrix = memo(function ChainMatrix({
                       fontFamily: MONO,
                       textAlign: 'right',
                       fontWeight: 700,
-                      color: tot === 0 ? CHAIN.none : alpha(T.text, 0.92),
-                      ...(CELL.shadow && tot !== 0 ? { textShadow: CELL.shadow } : {}),
+                      color: vtTotFill ? vtTotFill.ink : tot === 0 ? CHAIN.none : alpha(T.text, 0.92),
+                      ...(CELL.shadow && tot !== 0 && !vtTotFill ? { textShadow: CELL.shadow } : {}),
                       borderRadius: CELL.radius || undefined,
-                      background: totLevel ? (levelFillBg(totLevel, SK, totFill) ?? totFill) : totFill,
+                      background: vtTotFill
+                        ? vtTotFill.fill
+                        : totLevel
+                          ? (levelFillBg(totLevel, SK, totFill) ?? totFill)
+                          : totFill,
                       borderLeft: `2px solid ${alpha(T.cyan, selMode ? 0.8 : 0.35)}`,
                       boxShadow: isATM
                         ? `inset 0 2px 0 ${T.text}, inset 0 -2px 0 ${T.text}, inset -2px 0 0 ${T.text}`
@@ -923,6 +1000,14 @@ export const ChainMatrix = memo(function ChainMatrix({
                       justifyContent: 'flex-end',
                     }}
                   >
+                    {vtTotFill && (
+                      <span
+                        title={vtTot.map((d) => d.title).join(' · ')}
+                        style={{ marginRight: 'auto', lineHeight: 1, fontWeight: 900, pointerEvents: 'none' }}
+                      >
+                        {vtTot.map((d) => d.mark).join('')} {vtTot.map((d) => d.label).join('/')}
+                      </span>
+                    )}
                     {isTotMvc &&
                       (SK.levelFill ? (
                         <span
@@ -947,7 +1032,9 @@ export const ChainMatrix = memo(function ChainMatrix({
                           ★
                         </span>
                       ))}
-                    {isCountMode || !CELL.signColors ? (
+                    {vtTotFill ? (
+                      <span>{fmtVal(tot)}</span>
+                    ) : isCountMode || !CELL.signColors ? (
                       <span
                         style={{
                           color: tot === 0 ? CHAIN.none : alpha(T.text, 0.96),

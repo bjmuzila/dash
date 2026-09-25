@@ -20,6 +20,7 @@ import { OfferPill } from '@/shell/OfferPill'
 import { RefreshButton } from '@/shell/RefreshButton'
 import { ToolbarSlotHost, ToolbarSlotProvider } from '@/shell/ToolbarSlot'
 import { UserMenu } from '@/shell/UserMenu'
+import { VoltickThemeSwitch } from '@/shell/VoltickThemeSwitch'
 import { UpdateToast } from '@/shell/UpdateToast'
 import { readUiTheme, setUiTheme } from '@/design/uiTheme'
 
@@ -457,6 +458,7 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
   // do that a closed list cannot — jump to a symbol that is not on the server's
   // watchlist — still works: type it and take the "USE" row.
   const { symbol, setSymbol } = usePageSymbol()
+  const { isOwner } = useAuth()
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
       {/* The wordmark, not the words. "CB Edge" set in the UI font was a
@@ -561,6 +563,10 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
           the page publishes — Key Levels STATS is always there and is read where
           you stand, not on the board. See shell/CopyShot.tsx + shotAtlas.ts. */}
       <CopyShotMenu />
+      {/* ── VOLTICK THEME — owner only, every page ──────────────────────────
+          CB Edge ⇄ Voltick palette. Shown on every route even where the page
+          draws nothing Voltick-specific. See shell/VoltickThemeSwitch.tsx. */}
+      {isOwner && <VoltickThemeSwitch />}
       {/* ── ✎ ──────────────────────────────────────────────────────────────────
           Opens the notes dock on the right, which is also where the owner's
           Quick Probe lives. See NotesButton above. */}

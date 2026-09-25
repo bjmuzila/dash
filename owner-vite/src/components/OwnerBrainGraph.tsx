@@ -1,105 +1,194 @@
 /**
- * OwnerBrainGraph — 3D force-directed "brain" of every owner-console route.
+ * OwnerBrainGraph — the "second brain" map of every live CB Edge source file.
  *
- * Port of the v2 components/shared/OwnerBrainGraph.tsx. Same engine (real 3D:
- * nodes in x/y/z, perspective projection, depth fog, painter's-algorithm
- * sorting, seeded "rustic" variance), but the data is owner-vite's own nav:
+ * Every file in cbedge-v3/src, server-v2 and owner-vite/src is a node; every
+ * import/require between them is an edge; folders are gold hub nodes that
+ * their files hang off, so each folder reads as its own star-cluster. Client
+ * files that call /api/ or open the socket get a bridge edge to the server.
  *
- *   core  = the owner console
- *   hubs  = OWNER_SIDEBAR_GROUPS (colored by group.accent)
- *   leafs = HUB_LINKS (every sidebar route, same list the ⌘K bar searches)
+ * Data is a committed snapshot (lib/brainMap.json) — the owners image is built
+ * with context ./owner-vite and can't see the other trees. Refresh it with:
  *
- * So there is no second copy of the route list — add a page to lib/nav.ts and
- * it grows a node here.
+ *   node owner-vite/scripts/gen-brain-map.mjs
  *
- *   • Click a leaf        → onOpen(link)  (Hub records the visit + navigates)
- *   • ⌘/Ctrl-click a leaf → opens the route in a new tab
- *   • Click a hub         → zoom-focus that group (click hub / core again to reset)
- *   • Drag background     → orbit (with inertia; auto-rotates when idle)
- *   • Drag a node         → moves it in the view plane, physics re-settles
- *   • Wheel               → zoom
+ *   • Hover            → highlights the file and everything it touches
+ *   • Click            → pins it + opens the detail panel (imports / used by)
+ *   • Drag background  → pan        • Wheel → zoom at cursor
+ *   • Drag a node      → move it, the layout re-settles around it
+ *   • Search           → jump to any file
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { OWNER_THEME, LIGHT_BLUE, TYPE, rgba } from "../lib/theme";
-import { OWNER_SIDEBAR_GROUPS } from "../lib/nav";
 import { HUB_LINKS, type HubLink } from "../lib/hubPrefs";
+import BRAIN_RAW from "../lib/brainMap.json";
 
-type Cluster = { id: string; name: string; color: string; links: HubLink[] };
+// ── data ─────────────────────────────────────────────────────────────────────
+type BrainMap = {
+  generated: string;
+  apps: { id: string; label: string; dir: string }[];
+  nodes: [string, number, number][];
+  links: [number, number, number][];
+};
+const BRAIN = BRAIN_RAW as unknown as BrainMap;
 
-const CLUSTERS: Cluster[] = OWNER_SIDEBAR_GROUPS.map((g) => ({
-  id: g.label,
-  name: g.label,
-  color: g.accent,
-  links: HUB_LINKS.filter((l) => l.group === g.label),
-})).filter((c) => c.links.length > 0);
+type Kind = "root" | "dir" | "file";
+type GNode = {
+  i: number;
+  id: string;          // repo-relative path (dirs end without slash)
+  name: string;        // basename
+  kind: Kind;
+  app: number;
+  area: string;        // colour bucket
+  lines: number;
+  r: number;
+  rgb: RGB;
+  x: number; y: number; vx: number; vy: number;
+  fixed: boolean;
+  deg: number;
+  imports: number[];   // file → files it imports
+  usedBy: number[];    // files that import it
+};
+type GLink = { s: GNode; t: GNode; kind: 0 | 1 | 2; rest: number; k: number }; // 0 import · 1 bridge · 2 folder
 
 type RGB = [number, number, number];
-
-type NodeT = {
-  id: string; // href (leaf) / group label (hub) / "OWNER" (core)
-  label: string;
-  type: "core" | "hub" | "leaf";
-  cluster: string | null;
-  link: HubLink | null;
-  rgb: RGB;
-  r: number;
-  x: number; y: number; z: number;
-  vx: number; vy: number; vz: number;
-  fx: number | null; fy: number | null; fz: number | null;
-  sx: number; sy: number; ss: number; depth: number;
-  phase: number; spd: number; lean: number; squash: number;
-};
-type LinkT = {
-  s: NodeT; t: NodeT; strong: boolean;
-  rest: number; sag: number; wob: number; alpha: number; width: number;
-};
-
-const FOV = 900;
-const WORLD_R = 430;
-const CORE_LABEL = "OWNER";
-
-function hex2rgb(h: string): RGB {
+const hex2rgb = (h: string): RGB => {
   const s = h.replace("#", "");
   return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
-}
-function mix(a: RGB, b: RGB, t: number): RGB {
-  const k = Math.max(0, Math.min(1, t));
-  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
-}
-const rgbStr = (c: RGB) => `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`;
-const rgbaStr = (c: RGB, a: number) => `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${a})`;
+};
+const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const css = (c: RGB, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
 
-const FOG_RGB: RGB = hex2rgb(OWNER_THEME.bg);
-const WHITE_RGB: RGB = hex2rgb(OWNER_THEME.text);
-const LINK_RGB: RGB = hex2rgb(OWNER_THEME.cyan);
-const LB_RGB: RGB = hex2rgb(LIGHT_BLUE);
+// One colour per area so every domain reads as its own cloud. Explicit on
+// purpose (like the v2 cluster list) — the owner theme only has ~6 accents.
+const AREA_COLORS: Record<string, string> = {
+  "v3/board": "#5AA9FF",
+  "v3/pages": "#4C7DF0",
+  "v3/data": "#2DD4BF",
+  "v3/design": "#C084FC",
+  "v3/shell": "#FF6FAE",
+  "v3/mobile": "#F472B6",
+  "v3/core": "#93C5FD",
+  "server/core": "#FB923C",
+  "server/lib": "#F97316",
+  "server/computation": "#FACC15",
+  "server/state": "#A3E635",
+  "server/scripts": "#94A3B8",
+  "server/config": "#CBD5E1",
+  "owner/pages": "#34D399",
+  "owner/components": "#10B981",
+  "owner/lib": "#6EE7B7",
+  "owner/other": "#86EFAC",
+};
+const AREA_LABEL: Record<string, string> = {
+  "v3/board": "v3 · Board cards", "v3/pages": "v3 · Pages", "v3/data": "v3 · Data", "v3/design": "v3 · Design",
+  "v3/shell": "v3 · Shell", "v3/mobile": "v3 · Mobile", "v3/core": "v3 · Boot",
+  "server/core": "Server · Core", "server/lib": "Server · _lib", "server/computation": "Server · Compute",
+  "server/state": "Server · State", "server/scripts": "Server · Scripts", "server/config": "Server · Config",
+  "owner/pages": "Owner · Pages", "owner/components": "Owner · Components", "owner/lib": "Owner · Lib", "owner/other": "Owner · Other",
+};
+const HUB_GOLD = hex2rgb(OWNER_THEME.gold);
+const ROOT_RGB = hex2rgb(OWNER_THEME.text);
+const BG_RGB = hex2rgb(OWNER_THEME.bg);
+const IMPORT_RGB = hex2rgb("#3FAF8F");   // the green web in the reference shot
+const BRIDGE_RGB = hex2rgb(LIGHT_BLUE);
 
-/* Seeded variance — never Math.random(), so the graph is stable across reloads. */
+function areaOf(appId: string, sub: string): string {
+  const top = sub.split("/")[0];
+  const isFile = !sub.includes("/");
+  if (appId === "v3") {
+    if (["board", "pages", "data", "design", "shell", "mobile"].includes(top)) return `v3/${top}`;
+    return "v3/core";
+  }
+  if (appId === "server") {
+    if (isFile) return sub.startsWith("_lib") ? "server/lib" : "server/core";
+    if (["computation", "state", "scripts", "config"].includes(top)) return `server/${top}`;
+    return "server/core";
+  }
+  if (["pages", "components", "lib"].includes(top) && !isFile) return `owner/${top}`;
+  return "owner/other";
+}
+
+/** Owner page files that map to a live route → open it from the panel. */
+const LINK_BY_FILE = new Map<string, HubLink>(
+  HUB_LINKS.map((l) => [`owner-vite/src/pages/${l.key}.tsx`, l]),
+);
+
 function hash(s: string) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
-}
-function rngFor(s: string) {
-  let a = hash(s);
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-function tint(c: RGB, r: () => number): RGB {
-  const k = (r() - 0.5) * 34;
-  const w = (r() - 0.5) * 18;
-  return [
-    Math.max(0, Math.min(255, c[0] + k + w)),
-    Math.max(0, Math.min(255, c[1] + k)),
-    Math.max(0, Math.min(255, c[2] + k - w)),
-  ];
+  return (h >>> 0) / 4294967296;
 }
 
+function buildGraph() {
+  const nodes: GNode[] = [];
+  const links: GLink[] = [];
+  const byId = new Map<string, GNode>();
+  const mk = (id: string, name: string, kind: Kind, app: number, area: string, lines = 0): GNode => {
+    const n: GNode = {
+      i: nodes.length, id, name, kind, app, area, lines, r: 3,
+      rgb: kind === "root" ? ROOT_RGB : kind === "dir" ? HUB_GOLD : hex2rgb(AREA_COLORS[area] ?? "#8B9CB3"),
+      x: 0, y: 0, vx: 0, vy: 0, fixed: false, deg: 0, imports: [], usedBy: [],
+    };
+    nodes.push(n); byId.set(id, n);
+    return n;
+  };
+
+  // app roots — spread on a wide triangle so the three trees start apart
+  const roots = BRAIN.apps.map((a, i) => {
+    const n = mk(a.dir, a.label, "root", i, "root");
+    const ang = -Math.PI / 2 + (i * 2 * Math.PI) / BRAIN.apps.length;
+    n.x = Math.cos(ang) * 700; n.y = Math.sin(ang) * 700;
+    return n;
+  });
+
+  const ensureDir = (appIdx: number, dirPath: string): GNode => {
+    const hit = byId.get(dirPath);
+    if (hit) return hit;
+    const app = BRAIN.apps[appIdx];
+    const sub = dirPath.slice(app.dir.length + 1);
+    const parentPath = dirPath.slice(0, dirPath.lastIndexOf("/"));
+    const parent = parentPath.length <= app.dir.length ? roots[appIdx] : ensureDir(appIdx, parentPath);
+    const n = mk(dirPath, sub.split("/").pop() || sub, "dir", appIdx, areaOf(app.id, sub + "/x"));
+    const a = hash(dirPath) * Math.PI * 2;
+    n.x = parent.x + Math.cos(a) * 260; n.y = parent.y + Math.sin(a) * 260;
+    links.push({ s: parent, t: n, kind: 2, rest: 240, k: 0.02 });
+    return n;
+  };
+
+  const fileNodes: GNode[] = [];
+  for (const [path, appIdx, lines] of BRAIN.nodes) {
+    const app = BRAIN.apps[appIdx];
+    const sub = path.slice(app.dir.length + 1);
+    const slash = path.lastIndexOf("/");
+    const dirPath = path.slice(0, slash);
+    const parent = dirPath.length <= app.dir.length ? roots[appIdx] : ensureDir(appIdx, dirPath);
+    const n = mk(path, path.slice(slash + 1), "file", appIdx, areaOf(app.id, sub), lines);
+    const a = hash(path) * Math.PI * 2;
+    const d = 40 + hash(path + "|d") * 120;
+    n.x = parent.x + Math.cos(a) * d; n.y = parent.y + Math.sin(a) * d;
+    links.push({ s: parent, t: n, kind: 2, rest: 30 + hash(path + "|r") * 45, k: 0.09 });
+    fileNodes.push(n);
+  }
+
+  for (const [si, ti, kind] of BRAIN.links) {
+    const s = fileNodes[si], t = fileNodes[ti];
+    if (!s || !t) continue;
+    links.push({ s, t, kind: kind === 1 ? 1 : 0, rest: 260, k: kind === 1 ? 0.0002 : 0.0007 });
+    s.imports.push(t.i); t.usedBy.push(s.i);
+  }
+
+  for (const l of links) { l.s.deg++; l.t.deg++; }
+  for (const n of nodes) {
+    if (n.kind === "root") n.r = 16;
+    else if (n.kind === "dir") n.r = 7 + Math.min(9, Math.sqrt(n.deg) * 1.5);
+    else n.r = 3.6 + Math.min(8, Math.sqrt(n.lines) / 8 + Math.sqrt(n.usedBy.length) * 1.0);
+  }
+  return { nodes, links };
+}
+
+// ── component ────────────────────────────────────────────────────────────────
 export default function OwnerBrainGraph({
   onOpen,
   pinned,
@@ -107,232 +196,215 @@ export default function OwnerBrainGraph({
   onOpen: (link: HubLink) => void;
   pinned?: Set<string>;
 }) {
+  const graph = useMemo(buildGraph, []);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const tipRef = useRef<HTMLDivElement | null>(null);
-  const [focus, setFocus] = useState<string | null>(null);
-  const focusRef = useRef<string | null>(null);
-  focusRef.current = focus;
-  const zoomedRef = useRef<string | null>(null);
 
-  // Latest callbacks/props without restarting the simulation.
-  const onOpenRef = useRef(onOpen);
-  onOpenRef.current = onOpen;
-  const pinnedRef = useRef<Set<string> | undefined>(pinned);
-  pinnedRef.current = pinned;
+  const [selected, setSelected] = useState<GNode | null>(null);
+  const [query, setQuery] = useState("");
+  const [hiddenAreas, setHiddenAreas] = useState<Set<string>>(() => new Set());
+  const [showFolders, setShowFolders] = useState(true);
+  const [showLabels, setShowLabels] = useState(true);
+
+  // bridge React state → the imperative render loop
+  const api = useRef<{ fit: () => void; focus: (n: GNode) => void; redraw: () => void } | null>(null);
+  const selRef = useRef<GNode | null>(null); selRef.current = selected;
+  const hiddenRef = useRef(hiddenAreas); hiddenRef.current = hiddenAreas;
+  const foldersRef = useRef(showFolders); foldersRef.current = showFolders;
+  const labelsRef = useRef(showLabels); labelsRef.current = showLabels;
+  const pinnedRef = useRef(pinned); pinnedRef.current = pinned;
+  const setSelRef = useRef(setSelected); setSelRef.current = setSelected;
+
+  useEffect(() => { api.current?.redraw(); }, [selected, hiddenAreas, showFolders, showLabels, pinned]);
 
   useEffect(() => {
+    const { nodes, links } = graph;
     const wrap = wrapRef.current!;
     const cv = canvasRef.current!;
     const tip = tipRef.current!;
     const ctx = cv.getContext("2d")!;
     const DPR = Math.min(window.devicePixelRatio || 1, 2);
-    let W = 0, H = 0, raf = 0, t = 0;
+    let W = 0, H = 0, raf = 0;
+    let alpha = 1;           // simulation heat — cools to 0 and the loop idles
+    let dirty = true;
+    const cam = { x: 0, y: 0, z: 0.35 };
 
-    // ── graph ──────────────────────────────────────────────────────────────
-    const nodes: NodeT[] = [];
-    const links: LinkT[] = [];
-    const mk = (
-      id: string, label: string, type: NodeT["type"], cluster: string | null,
-      color: string, baseR: number, link: HubLink | null,
-    ): NodeT => {
-      const r = rngFor(id);
-      const scale = type === "leaf" ? 0.7 + r() * 0.9 : 0.85 + r() * 0.4;
-      return {
-        id, label, type, cluster, link,
-        rgb: type === "core" ? hex2rgb(color) : tint(hex2rgb(color), r),
-        r: baseR * scale,
-        x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, fx: null, fy: null, fz: null,
-        sx: 0, sy: 0, ss: 1, depth: 0,
-        phase: r() * Math.PI * 2,
-        spd: 0.02 + r() * 0.05,
-        lean: r() * Math.PI * 2,
-        squash: 0.9 + r() * 0.2,
-      };
-    };
+    const visible = (n: GNode) => n.kind === "root" || !hiddenRef.current.has(n.area);
+    const toScreen = (x: number, y: number) => [W / 2 + (x - cam.x) * cam.z, H / 2 + (y - cam.y) * cam.z] as const;
+    const toWorld = (sx: number, sy: number) => [(sx - W / 2) / cam.z + cam.x, (sy - H / 2) / cam.z + cam.y] as const;
 
-    const core = mk(CORE_LABEL, CORE_LABEL, "core", null, OWNER_THEME.text, 20, null);
-    nodes.push(core);
-
-    const N = CLUSTERS.length;
-    CLUSTERS.forEach((c, i) => {
-      const hr = rngFor(c.id + "|hub");
-      const hub = mk("hub:" + c.id, c.name, "hub", c.id, c.color, 12, null);
-      const phi = Math.acos(1 - (2 * (i + 0.5)) / N) + (hr() - 0.5) * 0.5;
-      const theta = Math.PI * (1 + Math.sqrt(5)) * (i + 0.5) + (hr() - 0.5) * 0.7;
-      const R = 150 + hr() * 110;
-      hub.x = R * Math.sin(phi) * Math.cos(theta);
-      hub.y = R * Math.sin(phi) * Math.sin(theta);
-      hub.z = R * Math.cos(phi);
-      nodes.push(hub);
-      links.push({
-        s: core, t: hub, strong: true,
-        rest: 175 + hr() * 90, sag: (hr() - 0.5) * 26, wob: hr() * 6.28,
-        alpha: 0.24 + hr() * 0.2, width: 0.7 + hr() * 0.5,
-      });
-
-      c.links.forEach((l) => {
-        const lr = rngFor(l.href);
-        const n = mk(l.href, l.label, "leaf", c.id, c.color, 6, l);
-        const a = lr() * Math.PI * 2;
-        const b = Math.asin(lr() * 2 - 1);
-        const rr = 42 + Math.pow(lr(), 0.6) * 78;
-        n.x = hub.x + Math.cos(a) * Math.cos(b) * rr;
-        n.y = hub.y + Math.sin(b) * rr;
-        n.z = hub.z + Math.sin(a) * Math.cos(b) * rr;
-        nodes.push(n);
-        links.push({
-          s: hub, t: n, strong: false,
-          rest: 38 + lr() * 62, sag: (lr() - 0.5) * 20, wob: lr() * 6.28,
-          alpha: 0.12 + lr() * 0.22, width: 0.35 + lr() * 0.5,
-        });
-      });
-    });
-
-    // ── camera ─────────────────────────────────────────────────────────────
-    let rotY = 0.4, rotX = -0.25;
-    let velY = 0, velX = 0;
-    const cam = { zoom: 1, panX: 0, panY: 0 };
-    const camT = { zoom: 1, panX: 0, panY: 0 };
-
-    function rotate(x: number, y: number, z: number) {
-      const cy = Math.cos(rotY), sy = Math.sin(rotY);
-      const x1 = x * cy - z * sy;
-      const z1 = x * sy + z * cy;
-      const cx = Math.cos(rotX), sx = Math.sin(rotX);
-      const y2 = y * cx - z1 * sx;
-      const z2 = y * sx + z1 * cx;
-      return { x: x1, y: y2, z: z2 };
-    }
-    function unrotate(x: number, y: number, z: number) {
-      const cx = Math.cos(-rotX), sx = Math.sin(-rotX);
-      const y1 = y * cx - z * sx;
-      const z1 = y * sx + z * cx;
-      const cy = Math.cos(-rotY), sy = Math.sin(-rotY);
-      const x2 = x * cy - z1 * sy;
-      const z2 = x * sy + z1 * cy;
-      return { x: x2, y: y1, z: z2 };
-    }
-    function project(n: NodeT) {
-      const r = rotate(n.x, n.y, n.z);
-      const persp = FOV / (FOV + r.z);
-      n.ss = persp * cam.zoom;
-      n.sx = W / 2 + r.x * n.ss + cam.panX;
-      n.sy = H / 2 + r.y * n.ss + cam.panY;
-      n.depth = r.z;
-    }
-
-    // Fit the whole brain to the box — the owner hub is often narrower than
-    // the v2 full-page canvas this was tuned for.
-    let fit = 1;
     function resize() {
       W = wrap.clientWidth; H = wrap.clientHeight;
-      cv.width = W * DPR; cv.height = H * DPR;
-      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-      fit = Math.max(0.45, Math.min(1.15, Math.min(W, H) / 980));
-      if (!zoomedRef.current) camT.zoom = fit;
+      cv.width = Math.max(1, W * DPR); cv.height = Math.max(1, H * DPR);
+      dirty = true;
     }
     resize();
-    cam.zoom = camT.zoom;
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
-    // ── interaction ────────────────────────────────────────────────────────
-    let drag: NodeT | null = null;
-    let dragStart = { x: 0, y: 0, z: 0, ss: 1 };
-    let orbiting = false;
-    let downNode: NodeT | null = null;
-    let downX = 0, downY = 0, lastX = 0, lastY = 0, moved = false, downMeta = false;
-    let hover: NodeT | null = null;
-
-    function focusCluster(id: string | null) {
-      zoomedRef.current = id;
-      setFocus(id);
-      camT.zoom = id ? fit * 1.9 : fit;
-      if (!id) { camT.panX = 0; camT.panY = 0; }
-    }
-    function rel(e: PointerEvent) {
-      const r = cv.getBoundingClientRect();
-      return { x: e.clientX - r.left, y: e.clientY - r.top };
-    }
-    function pick(sx: number, sy: number): NodeT | null {
-      let best: NodeT | null = null, bd = 1e9;
+    // ── physics: grid-bucketed repulsion + springs ──────────────────────────
+    const CELL = 140;
+    function step() {
+      const grid = new Map<number, GNode[]>();
       for (const n of nodes) {
-        const d = Math.hypot(n.sx - sx, n.sy - sy);
-        if (d < n.r * n.ss + 7 && d < bd) { bd = d; best = n; }
+        const k = ((Math.floor(n.x / CELL) + 5000) * 10000) + (Math.floor(n.y / CELL) + 5000);
+        const b = grid.get(k); if (b) b.push(n); else grid.set(k, [n]);
+      }
+      for (const n of nodes) {
+        const gx = Math.floor(n.x / CELL), gy = Math.floor(n.y / CELL);
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+          const b = grid.get(((gx + dx + 5000) * 10000) + (gy + dy + 5000));
+          if (!b) continue;
+          for (const m of b) {
+            if (m.i <= n.i) continue;
+            let ddx = n.x - m.x, ddy = n.y - m.y;
+            let d2 = ddx * ddx + ddy * ddy;
+            if (d2 < 0.01) { ddx = hash(n.id) - 0.5; ddy = hash(m.id) - 0.5; d2 = 0.5; }
+            if (d2 > CELL * CELL) continue;
+            const minD = n.r + m.r + 6;
+            const f = (1800 / d2 + (d2 < minD * minD ? 0.6 : 0)) * alpha;
+            const d = Math.sqrt(d2);
+            const fx = (ddx / d) * f, fy = (ddy / d) * f;
+            n.vx += fx; n.vy += fy; m.vx -= fx; m.vy -= fy;
+          }
+        }
+      }
+      // long-range: roots and dir hubs push each other apart so clusters spread
+      const hubs = nodes.filter((n) => n.kind !== "file");
+      for (let i = 0; i < hubs.length; i++) for (let j = i + 1; j < hubs.length; j++) {
+        const a = hubs[i], b = hubs[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d2 = dx * dx + dy * dy + 1;
+        const f = (a.kind === "root" || b.kind === "root" ? 160000 : 60000) / d2 * alpha;
+        const d = Math.sqrt(d2);
+        a.vx += (dx / d) * f; a.vy += (dy / d) * f; b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+      }
+      for (const l of links) {
+        const dx = l.t.x - l.s.x, dy = l.t.y - l.s.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const f = (d - l.rest) * l.k * alpha;
+        const fx = (dx / d) * f, fy = (dy / d) * f;
+        l.s.vx += fx; l.s.vy += fy; l.t.vx -= fx; l.t.vy -= fy;
+      }
+      for (const n of nodes) {
+        n.vx -= n.x * 0.0004 * alpha; n.vy -= n.y * 0.0004 * alpha;   // weak gravity
+        if (n.fixed) { n.vx = n.vy = 0; continue; }
+        n.vx *= 0.82; n.vy *= 0.82;
+        const sp = Math.hypot(n.vx, n.vy);
+        if (sp > 30) { n.vx *= 30 / sp; n.vy *= 30 / sp; }
+        n.x += n.vx; n.y += n.vy;
+      }
+      alpha *= 0.992;
+      if (alpha < 0.02) alpha = 0;
+    }
+    // pre-settle a little so the first paint isn't a pile at the origin
+    for (let i = 0; i < 120; i++) step();
+
+    function fit() {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const n of nodes) {
+        if (!visible(n)) continue;
+        x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y);
+      }
+      if (!isFinite(x0)) return;
+      cam.x = (x0 + x1) / 2; cam.y = (y0 + y1) / 2;
+      cam.z = Math.max(0.05, Math.min(2, Math.min((W - 80) / (x1 - x0 + 1), (H - 120) / (y1 - y0 + 1))));
+      dirty = true;
+    }
+    let camAnim: { x: number; y: number; z: number } | null = null;
+    function focus(n: GNode) {
+      camAnim = { x: n.x, y: n.y, z: Math.max(cam.z, 1.4) };
+      setSelRef.current(n);
+    }
+    fit();
+
+    // ── interaction ────────────────────────────────────────────────────────
+    let hover: GNode | null = null;
+    let drag: GNode | null = null;
+    let panning = false;
+    let downX = 0, downY = 0, lastX = 0, lastY = 0, moved = false;
+    let downNode: GNode | null = null;
+
+    const rel = (e: PointerEvent | WheelEvent) => {
+      const r = cv.getBoundingClientRect();
+      return [e.clientX - r.left, e.clientY - r.top] as const;
+    };
+    function pick(sx: number, sy: number): GNode | null {
+      const [wx, wy] = toWorld(sx, sy);
+      let best: GNode | null = null, bd = Infinity;
+      for (const n of nodes) {
+        if (!visible(n) || (n.kind === "dir" && !foldersRef.current)) continue;
+        const d = Math.hypot(n.x - wx, n.y - wy);
+        const hit = n.r + 5 / cam.z;
+        if (d < hit && d < bd) { bd = d; best = n; }
       }
       return best;
     }
+    function tipText(n: GNode) {
+      if (n.kind === "root") return `${n.name} · ${nodes.filter((m) => m.app === n.app && m.kind === "file").length} files`;
+      if (n.kind === "dir") return `${n.id}/`;
+      return `${n.id} · ${n.lines} lines · imports ${n.imports.length} · used by ${n.usedBy.length}`;
+    }
     function onMove(e: PointerEvent) {
-      const s = rel(e);
-      if (Math.hypot(s.x - downX, s.y - downY) > 4) moved = true;
-
+      const [sx, sy] = rel(e);
+      if (Math.hypot(sx - downX, sy - downY) > 4) moved = true;
       if (drag) {
-        const dx = (s.x - downX) / dragStart.ss;
-        const dy = (s.y - downY) / dragStart.ss;
-        const w = unrotate(dx, dy, 0);
-        drag.fx = dragStart.x + w.x;
-        drag.fy = dragStart.y + w.y;
-        drag.fz = dragStart.z + w.z;
-      } else if (orbiting) {
-        velY = (s.x - lastX) * 0.005;
-        velX = (s.y - lastY) * 0.005;
-        rotY += velY;
-        rotX = Math.max(-1.3, Math.min(1.3, rotX + velX));
+        const [wx, wy] = toWorld(sx, sy);
+        drag.x = wx; drag.y = wy; drag.fixed = true;
+        alpha = Math.max(alpha, 0.25);
+      } else if (panning) {
+        cam.x -= (sx - lastX) / cam.z; cam.y -= (sy - lastY) / cam.z;
+        camAnim = null;
       }
-      lastX = s.x; lastY = s.y;
-
-      hover = drag || orbiting ? null : pick(s.x, s.y);
+      lastX = sx; lastY = sy;
+      const h = drag || panning ? null : pick(sx, sy);
+      if (h !== hover) { hover = h; dirty = true; }
       if (hover) {
         tip.style.opacity = "1";
-        tip.style.left = hover.sx + "px";
-        tip.style.top = hover.sy + "px";
-        tip.textContent =
-          hover.type === "core" ? "Owner console · reset view"
-            : hover.type === "hub" ? hover.label + " · " + (zoomedRef.current === hover.cluster ? "reset" : "focus")
-              : `${hover.link?.glyph ?? ""} ${hover.label} · ${hover.id}  (⌘-click: new tab)`.trim();
+        tip.style.left = sx + "px"; tip.style.top = sy + "px";
+        tip.textContent = tipText(hover);
         cv.style.cursor = "pointer";
       } else {
         tip.style.opacity = "0";
-        cv.style.cursor = orbiting ? "grabbing" : "grab";
+        cv.style.cursor = panning ? "grabbing" : "grab";
       }
+      if (drag || panning) dirty = true;
     }
     function onDown(e: PointerEvent) {
-      const s = rel(e);
-      downX = lastX = s.x; downY = lastY = s.y;
-      moved = false;
-      downMeta = e.metaKey || e.ctrlKey;
-      const n = pick(s.x, s.y);
+      const [sx, sy] = rel(e);
+      downX = lastX = sx; downY = lastY = sy; moved = false;
+      const n = pick(sx, sy);
       downNode = n;
-      if (n && n.type !== "core") {
-        drag = n;
-        dragStart = { x: n.x, y: n.y, z: n.z, ss: n.ss };
-        n.fx = n.x; n.fy = n.y; n.fz = n.z;
-      } else {
-        orbiting = true; velY = 0; velX = 0;
-      }
+      if (n) drag = n; else panning = true;
       cv.setPointerCapture(e.pointerId);
     }
     function onUp() {
-      if (drag) { drag.fx = null; drag.fy = null; drag.fz = null; }
-      if (downNode && !moved) {
-        if (downNode.type === "leaf" && downNode.link) {
-          if (downMeta) window.open(downNode.link.href, "_blank", "noopener");
-          else onOpenRef.current(downNode.link);
-        } else if (downNode.type === "hub" && downNode.cluster) {
-          focusCluster(zoomedRef.current === downNode.cluster ? null : downNode.cluster);
-        } else if (downNode.type === "core") {
-          focusCluster(null);
+      if (drag) drag.fixed = false;
+      if (!moved) {
+        if (downNode) {
+          setSelRef.current(selRef.current === downNode ? null : downNode);
+        } else {
+          setSelRef.current(null);
         }
       }
-      drag = null; downNode = null; orbiting = false;
+      drag = null; panning = false; downNode = null;
       cv.style.cursor = "grab";
+      dirty = true;
     }
     function onWheel(e: WheelEvent) {
       e.preventDefault();
-      camT.zoom = Math.max(fit * 0.5, Math.min(fit * 3, camT.zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
+      const [sx, sy] = rel(e);
+      const [wx, wy] = toWorld(sx, sy);
+      const k = Math.exp(-e.deltaY * 0.0015);
+      cam.z = Math.max(0.05, Math.min(6, cam.z * k));
+      // keep the world point under the cursor fixed
+      cam.x = wx - (sx - W / 2) / cam.z;
+      cam.y = wy - (sy - H / 2) / cam.z;
+      camAnim = null;
+      dirty = true;
     }
-    function onLeave() { tip.style.opacity = "0"; hover = null; }
+    function onLeave() { tip.style.opacity = "0"; if (hover) { hover = null; dirty = true; } }
     cv.addEventListener("pointermove", onMove);
     cv.addEventListener("pointerdown", onDown);
     cv.addEventListener("pointerup", onUp);
@@ -340,166 +412,126 @@ export default function OwnerBrainGraph({
     cv.addEventListener("wheel", onWheel, { passive: false });
     cv.addEventListener("pointerleave", onLeave);
 
-    // ── physics (3D) ───────────────────────────────────────────────────────
-    function step() {
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const a = nodes[i], b = nodes[j];
-          let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-          const d2 = dx * dx + dy * dy + dz * dz || 1;
-          const d = Math.sqrt(d2);
-          const f = Math.min(6500 / d2, 4);
-          dx /= d; dy /= d; dz /= d;
-          a.vx += dx * f; a.vy += dy * f; a.vz += dz * f;
-          b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f;
-        }
-      }
-      for (const l of links) {
-        const a = l.s, b = l.t;
-        let dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
-        const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-        const f = (d - l.rest) * (l.strong ? 0.02 : 0.032);
-        dx /= d; dy /= d; dz /= d;
-        a.vx += dx * f; a.vy += dy * f; a.vz += dz * f;
-        b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f;
-      }
-      core.fx = 0; core.fy = 0; core.fz = 0;
-      for (const n of nodes) {
-        n.vx += -n.x * 0.0012; n.vy += -n.y * 0.0012; n.vz += -n.z * 0.0012;
-        if (n.fx != null) { n.x = n.fx; n.y = n.fy!; n.z = n.fz!; n.vx = n.vy = n.vz = 0; continue; }
-        n.vx *= 0.86; n.vy *= 0.86; n.vz *= 0.86;
-        n.x += n.vx; n.y += n.vy; n.z += n.vz;
-        const d = Math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
-        if (d > WORLD_R) { const k = WORLD_R / d; n.x *= k; n.y *= k; n.z *= k; }
-      }
-    }
-
     // ── render ─────────────────────────────────────────────────────────────
-    const fogOf = (d: number) => Math.max(0, Math.min(1, (d + WORLD_R) / (WORLD_R * 2)));
-    const LINK_STROKE = rgbStr(mix(LINK_RGB, WHITE_RGB, 0.15));
     const FONT = "'Inter', ui-sans-serif, system-ui, sans-serif";
-
     function draw() {
-      // Skip work while the tab is hidden — rAF already throttles, this just
-      // avoids the O(n²) step on the rare frames it still fires.
-      if (document.hidden) { raf = requestAnimationFrame(draw); return; }
-      step(); t++;
-      const foc = focusRef.current;
-      const pins = pinnedRef.current;
-
-      if (!orbiting && !drag) {
-        rotY += velY;
-        rotX = Math.max(-1.3, Math.min(1.3, rotX + velX));
-        velY *= 0.94; velX *= 0.94;
-        if (Math.abs(velY) < 0.0008) rotY += 0.0016;
+      raf = requestAnimationFrame(draw);
+      if (alpha > 0) { step(); dirty = true; }
+      if (camAnim) {
+        cam.x += (camAnim.x - cam.x) * 0.15; cam.y += (camAnim.y - cam.y) * 0.15; cam.z += (camAnim.z - cam.z) * 0.15;
+        if (Math.abs(camAnim.z - cam.z) < 0.002 && Math.hypot(camAnim.x - cam.x, camAnim.y - cam.y) < 0.5) camAnim = null;
+        dirty = true;
       }
+      if (!dirty || document.hidden) return;
+      dirty = false;
 
-      const zid = zoomedRef.current;
-      if (zid) {
-        const group = nodes.filter((n) => n.cluster === zid);
-        if (group.length) {
-          const c = group.reduce((s, n) => ({ x: s.x + n.x, y: s.y + n.y, z: s.z + n.z }), { x: 0, y: 0, z: 0 });
-          const r = rotate(c.x / group.length, c.y / group.length, c.z / group.length);
-          const persp = FOV / (FOV + r.z);
-          camT.panX = -r.x * persp * camT.zoom;
-          camT.panY = -r.y * persp * camT.zoom;
+      const sel = selRef.current;
+      const folders = foldersRef.current;
+      const pins = pinnedRef.current;
+      const focusNode = hover || sel;
+      // neighbourhood of the focused node (imports, used-by, its folder)
+      let hot: Set<number> | null = null;
+      if (focusNode) {
+        hot = new Set([focusNode.i]);
+        for (const l of links) {
+          if (l.kind === 2 && !(folders && focusNode.kind !== "file")) { if (l.t === focusNode) hot.add(l.s.i); continue; }
+          if (l.s === focusNode) hot.add(l.t.i); else if (l.t === focusNode) hot.add(l.s.i);
         }
       }
-      cam.zoom += (camT.zoom - cam.zoom) * 0.1;
-      cam.panX += (camT.panX - cam.panX) * 0.1;
-      cam.panY += (camT.panY - cam.panY) * 0.1;
-
-      for (const n of nodes) project(n);
 
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       ctx.clearRect(0, 0, W, H);
+      const z = cam.z;
+      const lw = Math.max(0.35, Math.min(1.2, z * 0.9));
 
-      // links
-      ctx.strokeStyle = LINK_STROKE;
-      for (const l of links) {
-        const dim = foc && l.t.cluster !== foc && l.s.cluster !== foc;
-        const fog = fogOf((l.s.depth + l.t.depth) / 2);
-        const ss = (l.s.ss + l.t.ss) / 2;
-        ctx.globalAlpha = dim ? 0.03 : l.alpha * (1 - fog * 0.85);
-        ctx.lineWidth = l.width * ss;
-        const dx = l.t.sx - l.s.sx, dy = l.t.sy - l.s.sy;
-        const len = Math.hypot(dx, dy) || 1;
-        const bow = l.sag * ss * (0.75 + 0.25 * Math.sin(t * 0.01 + l.wob));
-        const cx = (l.s.sx + l.t.sx) / 2 + (dy / len) * bow;
-        const cy = (l.s.sy + l.t.sy) / 2 - (dx / len) * bow;
+      // edges, batched by style
+      const batch = (kind: 0 | 1 | 2, col: string, width: number, onlyHot: boolean | null) => {
         ctx.beginPath();
-        ctx.moveTo(l.s.sx, l.s.sy);
-        ctx.quadraticCurveTo(cx, cy, l.t.sx, l.t.sy);
-        ctx.stroke();
+        for (const l of links) {
+          if (l.kind !== kind) continue;
+          if (!visible(l.s) || !visible(l.t)) continue;
+          if (kind === 2 && !folders) continue;
+          const isHot = !!hot && hot.has(l.s.i) && hot.has(l.t.i) && (l.s === focusNode || l.t === focusNode);
+          if (onlyHot === true && !isHot) continue;
+          if (onlyHot === false && isHot) continue;
+          const [x1, y1] = toScreen(l.s.x, l.s.y);
+          const [x2, y2] = toScreen(l.t.x, l.t.y);
+          if ((x1 < -50 && x2 < -50) || (x1 > W + 50 && x2 > W + 50) || (y1 < -50 && y2 < -50) || (y1 > H + 50 && y2 > H + 50)) continue;
+          ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+        }
+        ctx.strokeStyle = col; ctx.lineWidth = width; ctx.stroke();
+      };
+      const dimK = hot ? 0.35 : 1;
+      batch(2, css(HUB_GOLD, 0.10 * dimK), lw * 0.8, hot ? false : null);
+      batch(0, css(IMPORT_RGB, 0.22 * dimK), lw, hot ? false : null);
+      ctx.setLineDash([4, 4]);
+      batch(1, css(BRIDGE_RGB, 0.12 * dimK), lw, hot ? false : null);
+      ctx.setLineDash([]);
+      if (hot) {
+        batch(2, css(HUB_GOLD, 0.55), lw * 1.3, true);
+        batch(0, css(mix(IMPORT_RGB, ROOT_RGB, 0.35), 0.9), lw * 1.6, true);
+        batch(1, css(BRIDGE_RGB, 0.8), lw * 1.4, true);
+      }
+
+      // nodes — files first, then hubs on top
+      const order = nodes.filter((n) => visible(n) && (folders || n.kind !== "dir"));
+      order.sort((a, b) => (a.kind === "file" ? 0 : a.kind === "dir" ? 1 : 2) - (b.kind === "file" ? 0 : b.kind === "dir" ? 1 : 2));
+      for (const n of order) {
+        const [sx, sy] = toScreen(n.x, n.y);
+        const rad = Math.max(1.2, n.r * z * (hover === n ? 1.35 : 1));
+        if (sx < -rad - 20 || sx > W + rad + 20 || sy < -rad - 20 || sy > H + rad + 20) continue;
+        const dim = hot && !hot.has(n.i);
+        ctx.globalAlpha = dim ? 0.16 : 1;
+        if (rad > 2.5) {
+          const g = ctx.createRadialGradient(sx - rad * 0.35, sy - rad * 0.4, rad * 0.1, sx, sy, rad);
+          g.addColorStop(0, css(mix(ROOT_RGB, n.rgb, 0.35)));
+          g.addColorStop(0.6, css(n.rgb));
+          g.addColorStop(1, css(mix(n.rgb, BG_RGB, 0.45)));
+          ctx.fillStyle = g;
+        } else {
+          ctx.fillStyle = css(n.rgb);
+        }
+        ctx.beginPath(); ctx.arc(sx, sy, rad, 0, Math.PI * 2); ctx.fill();
+        if (n === sel) {
+          ctx.strokeStyle = OWNER_THEME.text; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(sx, sy, rad + 3, 0, Math.PI * 2); ctx.stroke();
+        }
+        const link = n.kind === "file" ? LINK_BY_FILE.get(n.id) : undefined;
+        if (link && pins?.has(link.href)) {
+          ctx.strokeStyle = OWNER_THEME.gold; ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.arc(sx, sy, rad + 2, 0, Math.PI * 2); ctx.stroke();
+        }
       }
       ctx.globalAlpha = 1;
 
-      // nodes — farthest first
-      const order = [...nodes].sort((a, b) => b.depth - a.depth);
-      for (const n of order) {
-        const dim = foc && n.cluster !== foc && n.type !== "core";
-        const fog = fogOf(n.depth);
-        const body = mix(n.rgb, FOG_RGB, fog * 0.8);
-        const pulse = 1 + Math.sin(t * n.spd + n.phase) * (n.type === "leaf" ? 0.03 : 0.07);
-        const rad = Math.max(0.5, n.r * n.ss * pulse * (hover === n ? 1.4 : 1));
-        const lx = Math.cos(n.lean) * 0.34, ly = Math.sin(n.lean) * 0.34;
-        ctx.globalAlpha = dim ? 0.1 : 1;
-
-        if (!dim && fog < 0.55) {
-          const g = ctx.createRadialGradient(n.sx, n.sy, rad * 0.6, n.sx, n.sy, rad * 2.4);
-          g.addColorStop(0, rgbaStr(n.rgb, 0.27)); g.addColorStop(1, rgbaStr(n.rgb, 0));
-          ctx.fillStyle = g;
-          ctx.beginPath(); ctx.arc(n.sx, n.sy, rad * 2.4, 0, 7); ctx.fill();
-        }
-
-        const sg = ctx.createRadialGradient(n.sx - rad * lx, n.sy - rad * ly, rad * 0.1, n.sx, n.sy, rad);
-        sg.addColorStop(0, rgbStr(mix(WHITE_RGB, body, 0.45)));
-        sg.addColorStop(0.55, rgbStr(body));
-        sg.addColorStop(1, rgbStr(mix(body, FOG_RGB, 0.45)));
-        ctx.fillStyle = sg;
-        ctx.beginPath();
-        ctx.ellipse(n.sx, n.sy, rad, rad * n.squash, n.lean, 0, 7);
-        ctx.fill();
-
-        if (rad > 2.2) {
-          ctx.globalAlpha = (dim ? 0.1 : 1) * (1 - fog * 0.7) * 0.75;
-          ctx.fillStyle = OWNER_THEME.text;
-          ctx.beginPath(); ctx.arc(n.sx - rad * lx * 0.95, n.sy - rad * ly * 0.95, rad * 0.24, 0, 7); ctx.fill();
-        }
-
-        // pinned routes get a thin gold ring so they're findable in the cloud
-        if (n.type === "leaf" && pins?.has(n.id)) {
-          ctx.globalAlpha = (dim ? 0.15 : 1) * (1 - fog * 0.6);
-          ctx.strokeStyle = OWNER_THEME.gold;
-          ctx.lineWidth = Math.max(1, 1.2 * n.ss);
-          ctx.beginPath(); ctx.arc(n.sx, n.sy, rad + 3 * n.ss, 0, 7); ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
-
-        // labels: core + hubs always; leaves while their group is focused or hovered
-        const labelA = (1 - fog * 0.85) * (dim ? 0.15 : 1);
+      // labels
+      if (labelsRef.current) {
         ctx.textAlign = "center"; ctx.textBaseline = "top";
-        if (n.type === "core") {
-          ctx.globalAlpha = labelA;
-          ctx.fillStyle = OWNER_THEME.text;
-          ctx.font = `700 ${12 * Math.max(0.85, n.ss)}px ${FONT}`;
-          ctx.fillText(CORE_LABEL, n.sx, n.sy + rad + 4);
-        } else if (n.type === "hub") {
-          ctx.globalAlpha = labelA;
-          ctx.fillStyle = rgbStr(mix(n.rgb, WHITE_RGB, 0.55));
-          ctx.font = `700 ${11 * Math.max(0.8, n.ss)}px ${FONT}`;
-          ctx.fillText(n.label.toUpperCase(), n.sx, n.sy + rad + 4);
-        } else if (n.type === "leaf" && (foc === n.cluster || hover === n)) {
-          ctx.globalAlpha = labelA * 0.95;
-          ctx.fillStyle = rgbStr(mix(LB_RGB, WHITE_RGB, 0.4));
-          ctx.font = `500 ${10 * Math.max(0.8, n.ss)}px ${FONT}`;
-          ctx.fillText(n.label, n.sx, n.sy + rad + 3);
+        for (const n of order) {
+          const isHot = hot?.has(n.i);
+          const show =
+            n.kind === "root" ||
+            (n.kind === "dir" && z > 0.28) ||
+            (n.kind === "file" && (z > 1.5 || (isHot && z > 0.5) || n === focusNode || (n.usedBy.length >= 12 && z > 0.45)));
+          if (!show) continue;
+          if (hot && !isHot && n.kind !== "root") continue;
+          const [sx, sy] = toScreen(n.x, n.y);
+          if (sx < -80 || sx > W + 80 || sy < -20 || sy > H + 20) continue;
+          const rad = n.r * z;
+          const size = n.kind === "root" ? 13 : n.kind === "dir" ? 11 : 10;
+          ctx.font = `${n.kind === "file" ? 500 : 700} ${size}px ${FONT}`;
+          ctx.fillStyle = n.kind === "root" ? OWNER_THEME.text : n.kind === "dir" ? css(mix(HUB_GOLD, ROOT_RGB, 0.45), 0.9) : css(ROOT_RGB, 0.75);
+          ctx.fillText(n.kind === "root" ? n.name.toUpperCase() : n.name, sx, sy + rad + 3);
         }
-        ctx.globalAlpha = 1;
       }
-      raf = requestAnimationFrame(draw);
     }
     draw();
+
+    api.current = {
+      fit: () => { camAnim = null; fit(); },
+      focus,
+      redraw: () => { dirty = true; },
+    };
 
     return () => {
       cancelAnimationFrame(raf);
@@ -510,75 +542,197 @@ export default function OwnerBrainGraph({
       cv.removeEventListener("pointercancel", onUp);
       cv.removeEventListener("wheel", onWheel);
       cv.removeEventListener("pointerleave", onLeave);
+      api.current = null;
     };
-  }, []);
+  }, [graph]);
 
-  const total = CLUSTERS.reduce((s, c) => s + c.links.length, 0);
+  // ── search ─────────────────────────────────────────────────────────────────
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return graph.nodes
+      .filter((n) => n.kind === "file" && n.id.toLowerCase().includes(q))
+      .sort((a, b) => a.name.toLowerCase().indexOf(q) - b.name.toLowerCase().indexOf(q) || b.usedBy.length - a.usedBy.length)
+      .slice(0, 8);
+  }, [query, graph]);
+
+  const areas = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const n of graph.nodes) if (n.kind === "file") c.set(n.area, (c.get(n.area) ?? 0) + 1);
+    return Object.keys(AREA_COLORS).filter((a) => c.has(a)).map((a) => ({ id: a, n: c.get(a)! }));
+  }, [graph]);
+
+  const fileCount = BRAIN.nodes.length;
+  const importCount = BRAIN.links.filter((l) => l[2] === 0).length;
+  const sel = selected;
+  const selLink = sel ? LINK_BY_FILE.get(sel.id) : undefined;
+
+  const chip = (on: boolean, color: string): CSSProperties => ({
+    display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
+    fontSize: TYPE.micro, fontWeight: 700, letterSpacing: "0.04em",
+    color: OWNER_THEME.text, opacity: on ? 1 : 0.38,
+    background: rgba(color, on ? 0.1 : 0.03), border: `1px solid ${rgba(color, on ? 0.35 : 0.12)}`,
+    padding: "3px 9px", borderRadius: 999, whiteSpace: "nowrap",
+  });
+  const toolBtn = (active: boolean): CSSProperties => ({
+    display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
+    fontSize: TYPE.label, fontWeight: 700, letterSpacing: "0.04em",
+    color: active ? OWNER_THEME.bg : OWNER_THEME.text,
+    background: active ? LIGHT_BLUE : rgba(OWNER_THEME.panel, 0.9),
+    border: `1px solid ${active ? LIGHT_BLUE : OWNER_THEME.borderStrong}`,
+    padding: "7px 14px", borderRadius: 10,
+  });
+  const rowBtn: CSSProperties = {
+    display: "block", width: "100%", textAlign: "left", background: "none", border: "none",
+    padding: "3px 0", cursor: "pointer", color: OWNER_THEME.text, opacity: 0.85,
+    fontSize: TYPE.micro, fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap",
+    overflow: "hidden", textOverflow: "ellipsis",
+  };
 
   return (
     <div
       ref={wrapRef}
       style={{
-        position: "relative",
-        flex: 1,
-        minHeight: 0,
-        borderRadius: 18,
-        overflow: "hidden",
-        border: `1px solid ${OWNER_THEME.border}`,
-        background: `radial-gradient(circle at 50% 45%, ${OWNER_THEME.panel} 0%, ${OWNER_THEME.bg} 60%, #000 100%)`,
-        touchAction: "none",
+        position: "relative", flex: 1, minHeight: 420, borderRadius: 18, overflow: "hidden",
+        border: `1px solid ${OWNER_THEME.border}`, background: OWNER_THEME.bg, touchAction: "none",
       }}
     >
-      <canvas
-        ref={canvasRef}
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", cursor: "grab" }}
-      />
+      <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", cursor: "grab" }} />
 
-      {/* legend / group filter */}
-      <div style={{ position: "absolute", top: 14, left: 14, display: "flex", flexWrap: "wrap", gap: 8, maxWidth: "70%", zIndex: 5 }}>
-        {CLUSTERS.map((c) => {
-          const on = focus === c.id;
+      {/* legend / area filter */}
+      <div style={{ position: "absolute", top: 12, left: 12, display: "flex", flexWrap: "wrap", gap: 6, maxWidth: "min(620px, 62%)", zIndex: 5 }}>
+        {areas.map((a) => {
+          const on = !hiddenAreas.has(a.id);
           return (
             <button
-              key={c.id}
-              onMouseEnter={() => setFocus(c.id)}
-              onMouseLeave={() => setFocus(zoomedRef.current)}
-              style={{
-                display: "flex", alignItems: "center", gap: 7,
-                fontSize: TYPE.label, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
-                color: OWNER_THEME.text,
-                background: on ? rgba(c.color, 0.16) : rgba(c.color, 0.06),
-                border: `1px solid ${rgba(c.color, on ? 0.55 : 0.25)}`,
-                padding: "4px 10px", borderRadius: 999, cursor: "pointer",
-              }}
+              key={a.id}
+              style={chip(on, AREA_COLORS[a.id])}
+              onClick={() => setHiddenAreas((s) => { const n = new Set(s); if (n.has(a.id)) n.delete(a.id); else n.add(a.id); return n; })}
+              title={on ? "Hide" : "Show"}
             >
-              <span style={{ width: 9, height: 9, borderRadius: "50%", background: c.color, boxShadow: `0 0 8px ${c.color}` }} />
-              {c.name}
-              <span style={{ opacity: 0.5 }}>{c.links.length}</span>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: AREA_COLORS[a.id] }} />
+              {AREA_LABEL[a.id] ?? a.id}
+              <span style={{ opacity: 0.5 }}>{a.n}</span>
             </button>
           );
         })}
       </div>
 
-      <div style={{ position: "absolute", top: 14, right: 16, textAlign: "right", zIndex: 5, pointerEvents: "none" }}>
-        <div style={{ fontSize: TYPE.label, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>
-          Owner · Brain 3D
+      {/* search + title */}
+      <div style={{ position: "absolute", top: 12, right: 12, width: 280, zIndex: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ textAlign: "right", pointerEvents: "none" }}>
+          <div style={{ fontSize: TYPE.label, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>
+            CB Edge · Second Brain
+          </div>
+          <div style={{ fontSize: TYPE.micro, color: OWNER_THEME.text, opacity: 0.5, marginTop: 2 }}>
+            {fileCount} files · {importCount} imports · snapshot {BRAIN.generated}
+          </div>
         </div>
-        <div style={{ fontSize: TYPE.micro, color: OWNER_THEME.text, opacity: 0.55, marginTop: 3 }}>
-          {total} routes · drag to orbit · wheel to zoom · click to open
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && matches[0]) { api.current?.focus(matches[0]); setQuery(""); }
+            if (e.key === "Escape") setQuery("");
+          }}
+          placeholder="Find a file…"
+          spellCheck={false}
+          style={{
+            background: rgba(OWNER_THEME.panel, 0.92), border: `1px solid ${OWNER_THEME.borderStrong}`,
+            borderRadius: 10, padding: "8px 11px", color: OWNER_THEME.text, fontSize: TYPE.body, outline: "none",
+          }}
+        />
+        {matches.length > 0 && (
+          <div style={{ background: rgba(OWNER_THEME.panel, 0.96), border: `1px solid ${OWNER_THEME.border}`, borderRadius: 10, padding: "4px 10px" }}>
+            {matches.map((m) => (
+              <button key={m.i} style={rowBtn} onClick={() => { api.current?.focus(m); setQuery(""); }} title={m.id}>
+                <span style={{ color: AREA_COLORS[m.area] }}>●</span> {m.id.replace(/^(cbedge-v3\/src|owner-vite\/src|server-v2)\//, "")}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* detail panel */}
+      {sel && (
+        <div
+          style={{
+            position: "absolute", right: 12, top: matches.length ? 250 : 110, bottom: 70, width: 280, zIndex: 5,
+            background: rgba(OWNER_THEME.panel, 0.94), border: `1px solid ${OWNER_THEME.border}`, borderRadius: 14,
+            padding: "12px 14px", overflowY: "auto", color: OWNER_THEME.text,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 10, height: 10, borderRadius: "50%", background: css(sel.rgb), flexShrink: 0 }} />
+            <span style={{ fontSize: TYPE.body, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis" }}>{sel.name}</span>
+            <button onClick={() => setSelected(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: OWNER_THEME.text, opacity: 0.5, cursor: "pointer" }} aria-label="Close">✕</button>
+          </div>
+          <div style={{ fontSize: TYPE.micro, opacity: 0.55, fontFamily: "ui-monospace, monospace", margin: "4px 0 10px", wordBreak: "break-all" }}>{sel.id}</div>
+          {sel.kind === "file" && (
+            <div style={{ fontSize: TYPE.micro, opacity: 0.75, marginBottom: 10 }}>
+              {AREA_LABEL[sel.area]} · {sel.lines.toLocaleString()} lines
+            </div>
+          )}
+          {selLink && (
+            <button onClick={() => onOpen(selLink)} style={{ ...toolBtn(true), marginBottom: 12 }}>
+              Open {selLink.label} <span aria-hidden>→</span>
+            </button>
+          )}
+          {sel.kind !== "file" ? (
+            <NodeList title="Contains" ids={graph.nodes.filter((n) => n.id.startsWith(sel.id + "/") && n.id.slice(sel.id.length + 1).indexOf("/") === -1).map((n) => n.i)} graph={graph} rowBtn={rowBtn} onPick={(n) => api.current?.focus(n)} />
+          ) : (
+            <>
+              <NodeList title="Imports" ids={sel.imports} graph={graph} rowBtn={rowBtn} onPick={(n) => api.current?.focus(n)} />
+              <NodeList title="Used by" ids={sel.usedBy} graph={graph} rowBtn={rowBtn} onPick={(n) => api.current?.focus(n)} />
+            </>
+          )}
         </div>
+      )}
+
+      {/* bottom toolbar */}
+      <div style={{ position: "absolute", bottom: 14, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 8, zIndex: 5 }}>
+        <button style={toolBtn(false)} onClick={() => api.current?.fit()}>⊙ Fit</button>
+        <button style={toolBtn(showFolders)} onClick={() => setShowFolders((v) => !v)}>Folders</button>
+        <button style={toolBtn(showLabels)} onClick={() => setShowLabels((v) => !v)}>Labels</button>
       </div>
 
       <div
         ref={tipRef}
         style={{
-          position: "absolute", pointerEvents: "none", zIndex: 6,
-          background: rgba(OWNER_THEME.panel, 0.94), border: `1px solid ${rgba(LIGHT_BLUE, 0.35)}`,
-          color: OWNER_THEME.text, fontSize: TYPE.micro, padding: "6px 9px", borderRadius: 8,
-          opacity: 0, transform: "translate(-50%,-140%)", whiteSpace: "nowrap",
-          boxShadow: "0 4px 18px rgba(0,0,0,.5)",
+          position: "absolute", pointerEvents: "none", zIndex: 7,
+          background: rgba(OWNER_THEME.panel, 0.95), border: `1px solid ${rgba(LIGHT_BLUE, 0.35)}`,
+          color: OWNER_THEME.text, fontSize: TYPE.micro, padding: "5px 9px", borderRadius: 8,
+          opacity: 0, transform: "translate(-50%, calc(-100% - 12px))", whiteSpace: "nowrap",
+          boxShadow: "0 4px 18px rgba(0,0,0,.5)", fontFamily: "ui-monospace, monospace",
         }}
       />
+    </div>
+  );
+}
+
+function NodeList({
+  title, ids, graph, rowBtn, onPick,
+}: {
+  title: string;
+  ids: number[];
+  graph: { nodes: GNode[] };
+  rowBtn: CSSProperties;
+  onPick: (n: GNode) => void;
+}) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 4 }}>
+        {title} <span style={{ opacity: 0.5 }}>{ids.length}</span>
+      </div>
+      {ids.length === 0 && <div style={{ fontSize: TYPE.micro, opacity: 0.4 }}>—</div>}
+      {ids.map((i) => {
+        const n = graph.nodes[i];
+        return (
+          <button key={i} style={rowBtn} onClick={() => onPick(n)} title={n.id}>
+            <span style={{ color: css(n.rgb) }}>●</span> {n.id.replace(/^(cbedge-v3\/src|owner-vite\/src|server-v2)\//, "")}
+          </button>
+        );
+      })}
     </div>
   );
 }

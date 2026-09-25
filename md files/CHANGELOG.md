@@ -1,15 +1,5 @@
 # Changelog
 
-## 2026-09-25 - Every snapshot signed: Voltick bolt + voltick.io/bzila
-
-- Every 📸 snapshot (CopyShot, including the GEX Change Top tiles) now carries the **Voltick bolt and `voltick.io/bzila`** in the bottom right.
-  - **Framed shots:** the signature sits at the right end of the caption band, where the CB Edge mark used to be. The caption text stops short of it.
-  - **Bare shots** (posters and templates): a 32px band is added under the picture with the signature in it.
-  - **Trade cards** already sign themselves, so they wear `data-capture-signed` and don't get a second one.
-- The default caption title is `Voltick` instead of `CB Edge`.
-- `loadLogo()` now loads `@/assets/voltick-bolt.png` (same-origin). A failed load is not cached, and the link still prints without the bolt.
-- Files: `cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/board/topFlow/ContractProbe.tsx`.
-
 ## 2026-09-25 - Tracked contract pop-out: layout A with separate tiles and a Voltick signature
 
 - The tracked-contract pop-out now uses **layout A** (mock: `generated/2026-09-25-tracked-snapshot-a-separated.png`):
@@ -24461,6 +24451,16 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - GEX Candles (`GexRail.tsx`, `chart.ts`, `GexCandlesCard.tsx`): with the Voltick UI theme on, the rail and pane tag ★ VOLT / ↯ SURGE / ↘ REV / ◆ COIL (filled chip, own ink) instead of CORE/CW/PW; same-strike chips sit side by side.
 - Multi Greek (`MultiGreekCard.tsx`): Voltick theme swaps CB/CW/PW badges for the four Voltick levels per column, Volt takes the core's wash (Volt yellow) + glow; toggle relabelled. CB Edge theme unchanged.
 
-## 2026-09-25 — Owner Hub: Brain graph ported (owner-vite)
-- New `owner-vite/src/components/OwnerBrainGraph.tsx`: port of v2 `components/shared/OwnerBrainGraph.tsx` (3D force-directed canvas, perspective + depth fog, seeded per-node variance). Data now comes from owner-vite's own nav — core = OWNER, hubs = `OWNER_SIDEBAR_GROUPS` (group accent), leaves = `HUB_LINKS` — so there's no second route list.
-- `owner-vite/src/pages/Hub.tsx`: "Brain" toggle renders the graph instead of the "coming in a later pass" placeholder. Leaf click → same `go()` as List (records recent + navigates); ⌘/Ctrl-click opens a new tab; hub click zoom-focuses the group; drag orbits, wheel zooms. Pinned routes get a gold ring. Colors from `lib/theme` (OWNER_THEME / LIGHT_BLUE / TYPE); zoom auto-fits the panel size.
+## 2026-09-25 — Multi Greek (Voltick theme): filled level cells, no gold core, fixed heat
+- `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`: in the Voltick UI theme the core gold wash + glow are gone; a Volt/Surge/Reversal/Coil cell is a filled row in its reserved colour with its own ink (per the Voltick colour vocabulary), mark in the left corner, name on the front expiry. Heat intensity fixed at 1.75× and the Intensity slider hidden. CB Edge theme unchanged.
+
+## 2026-09-25 — Voltick theme: option chain levels + toolbar switch on every page
+- `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`: Voltick UI theme, GEX tab — each expiry column (and ⅀ Total) names Volt ★ / Surge ↯ / Reversal ↘ / Coil ◆ (data/voltickLevels.ts, bot definitions: book = cell GEX, surge = volume GEX) as filled cells in the reserved colour + ink with mark/label. Gold core fill, ★/✕ markers and CB/CW/PW fills are off on this theme.
+- `cbedge-v3/src/pages/OptionsChain.tsx`: Voltick theme hides Intensity + Skin, fixes intensity at the skin default, disables levels-only; cog summary reads "voltick".
+- New `cbedge-v3/src/shell/VoltickThemeSwitch.tsx`; switch moved from `board/BoardPage.tsx`'s ToolbarSlot into the shell toolbar (`shell/Shell.tsx`), owner-only, on every page.
+
+## 2026-09-25 — Owner Hub Brain: every live CB Edge file, "second brain" style
+- `OwnerBrainGraph.tsx` rewritten: nodes are now every source file in `cbedge-v3/src`, `server-v2` and `owner-vite/src` (552), edges are real imports/requires (1350) plus dashed client→server bridges (files hitting `/api/` or opening a WebSocket → `api-router.js` / `websocket-server.js`). Folders are gold hub nodes their files hang off; the three app roots are white.
+- 2D force layout (grid-bucketed repulsion, idles once settled), glossy spheres coloured by area (v3 Board/Pages/Data/Design/Shell/Mobile, Server Core/_lib/Compute/State/Scripts, Owner Pages/Components/Lib), thin green import web.
+- Hover highlights a file's neighbours; click opens a panel with Imports / Used by (click to jump); owner pages get an "Open" button; search box jumps to any file; area chips toggle clouds; bottom toolbar Fit / Folders / Labels; wheel zooms at cursor, drag pans or moves nodes. Pinned owner routes keep the gold ring.
+- Data is a committed snapshot `owner-vite/src/lib/brainMap.json` (the owners Docker build can't see the other trees). Refresh with `node owner-vite/scripts/gen-brain-map.mjs` (new).

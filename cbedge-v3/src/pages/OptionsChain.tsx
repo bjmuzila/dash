@@ -54,6 +54,11 @@ import { ReplayStampLayer } from '@/design/primitives/ReplayStamp'
 import { StrikeHoverCard } from './optionsChain/StrikeHoverCard'
 import { HEAT_SKINS, type HeatSkin } from './optionsChain/heatSkins'
 import { INTENSITY_MIN } from './optionsChain/chainMath'
+import { readUiTheme } from '@/design/uiTheme'
+
+/** Owner-only Voltick UI theme: fixed heat, no Intensity/Skin controls, no
+ *  levels-only mode — the look is the Voltick colour vocabulary, not a dial. */
+const VOLTICK_THEME = readUiTheme() === 'voltick'
 import {
   DATA_MODE_LABEL,
   DISPLAY_PERCENTS,
@@ -488,8 +493,14 @@ export default function OptionsChain({
               style={{ ...segStyle(cogOpen), height: 26, padding: '0 10px', fontSize: 10 }}
             >
               ⚙ {c.displayPercent}% · {c.greekMode.toUpperCase()} ·{' '}
-              {HEAT_SKINS[c.heatSkin].label.toLowerCase()} ·{' '}
-              {c.intensity <= INTENSITY_MIN.chain ? 'levels' : `${c.intensity.toFixed(2)}x`}
+              {VOLTICK_THEME ? (
+                'voltick'
+              ) : (
+                <>
+                  {HEAT_SKINS[c.heatSkin].label.toLowerCase()} ·{' '}
+                  {c.intensity <= INTENSITY_MIN.chain ? 'levels' : `${c.intensity.toFixed(2)}x`}
+                </>
+              )}
             </button>
             <Popover open={cogOpen} onClose={() => setCogOpen(false)} align="right">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 316 }}>
@@ -551,6 +562,7 @@ export default function OptionsChain({
                 </PanelSection>
 
                 <PanelSection title="Heat">
+                  {!VOLTICK_THEME && (
                   <Field
                     label="Intensity"
                     hint="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
@@ -578,6 +590,7 @@ export default function OptionsChain({
                       </span>
                     </div>
                   </Field>
+                  )}
                   {/* NEAR CORE — a FILTER on the heat, not a fill of its own.
                       On, only the strikes carrying this share or more of their
                       column's core keep the ordinary Intensity fill and the rest
@@ -607,6 +620,7 @@ export default function OptionsChain({
 
                   {/* Skin — how the cell is PAINTED, not what it says. Same
                       values, same ranks, same walls either way. */}
+                  {!VOLTICK_THEME && (
                   <Field label="Skin">
                     <SegGroup
                       options={[
@@ -617,6 +631,7 @@ export default function OptionsChain({
                       onChange={(v) => c.changeHeatSkin(v as HeatSkin)}
                     />
                   </Field>
+                  )}
                 </PanelSection>
 
                 <PanelSection title="Replay">
@@ -711,9 +726,9 @@ export default function OptionsChain({
             spot={c.spot}
             greekMode={c.greekMode}
             dataMode={c.dataMode}
-            intensity={c.deferredIntensity}
+            intensity={VOLTICK_THEME ? HEAT_SKINS[c.heatSkin].intensity.def : c.deferredIntensity}
             heatSkin={c.heatSkin}
-            levelsOnly={c.levelsOnly}
+            levelsOnly={VOLTICK_THEME ? false : c.levelsOnly}
             nearCore={c.nearCore}
             nearCorePct={c.nearCorePct}
             colScales={c.colScales}

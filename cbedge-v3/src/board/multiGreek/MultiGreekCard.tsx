@@ -139,13 +139,14 @@ const CB_FADE = 'color-mix(in srgb, var(--color-level-cb) 0%, transparent)'
 const CB_WASH = `linear-gradient(${CB_WASH_ANGLE},${CB_GOLD} 0%,${CB_FILL} 55%,${CB_FADE} 82%)`
 
 /**
- * VOLTICK THEME — the Volt takes the core's place and its wash, in the Volt's
- * own reserved yellow (tokens.css --color-vt-volt). Same stops as CB_WASH.
+ * VOLTICK THEME — no core gold, no wash, no glow. A level cell is a FILLED ROW
+ * in its own reserved colour with its own ink (Voltick "Color vocabulary"):
+ * Volt ★ #ffd166 / #1a1404 · Surge ↯ #4d8cff / #071026 · Reversal ↘ #ff5fa2 /
+ * #36081d · Coil ◆ #2f6bff. Every colour is different, so gold has nothing
+ * left to single out. The heat ramp is fixed too — the Intensity slider is
+ * hidden on this theme.
  */
-const VT_VOLT = 'var(--color-vt-volt)'
-const VT_FILL = 'color-mix(in srgb, var(--color-vt-volt) 85%, transparent)'
-const VT_FADE = 'color-mix(in srgb, var(--color-vt-volt) 0%, transparent)'
-const VT_WASH = `linear-gradient(${CB_WASH_ANGLE},${VT_VOLT} 0%,${VT_FILL} 55%,${VT_FADE} 82%)`
+const VT_FIXED_INTENSITY = 1.75
 
 /** Owner-only Voltick UI theme. Read once — the toolbar toggle reloads the page. */
 const VOLTICK_THEME = readUiTheme() === 'voltick'
@@ -797,11 +798,11 @@ function TickerPanel({
                 // the badges cleared still has to answer "where is it".
                 const vtLevels = vtByCol ? vtOf(c.key, strike) : []
                 // Voltick theme swaps CB / CW / PW for Volt / Surge / Reversal
-                // / Coil; the Volt takes the core's wash and glow.
+                // / Coil, each a filled cell in its own colour — no gold core.
                 const level = vtByCol ? null : levelOf(c.key, strike)
                 const isFront = front != null && c.key === front.key
-                const isCb = vtByCol ? vtLevels.some((d) => d.key === 'volt') : level === 'cb'
-                const coreWash = vtByCol ? VT_WASH : CB_WASH
+                const isCb = !vtByCol && level === 'cb'
+                const vtFill = vtLevels[0] ?? null
                 // NEAR CORE. A filter on WHICH cells get the wash — never a
                 // second kind of wash. A strike that clears the threshold is
                 // painted exactly as it would have been with the filter off,
@@ -817,7 +818,8 @@ function TickerPanel({
                   level != null ||
                   vtLevels.length > 0 ||
                   (s ? isNearCore(v, s.maxAbs, nearCoreThreshold) : false)
-                const alpha = painted && s ? cellAlpha(v, s.maxAbs, rank, intensity) : 0
+                const alpha =
+                  painted && s ? cellAlpha(v, s.maxAbs, rank, vtByCol ? VT_FIXED_INTENSITY : intensity) : 0
                 const hue = v >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
                 const heat =
                   alpha > 0 ? `color-mix(in srgb, ${hue} ${(alpha * 100).toFixed(1)}%, transparent)` : 'transparent'
@@ -852,7 +854,15 @@ function TickerPanel({
                       clickable ? 'cursor-pointer' : '',
                     ].join(' ')}
                     style={
-                      isCb
+                      vtFill
+                        ? {
+                            // VOLTICK FILLED ROW — the level's reserved fill,
+                            // its own ink, nothing layered over it.
+                            background: vtFill.fill,
+                            color: vtFill.ink,
+                            fontWeight: 800,
+                          }
+                        : isCb
                         ? {
                             // THE CORE. Gold washes in from the left edge and is
                             // gone by 40% of the diagonal; past that the cell is
@@ -864,7 +874,7 @@ function TickerPanel({
                             // translucent layer over another without knowing
                             // what the layer underneath resolved to — the same
                             // trick v2's levelFillBg() uses.
-                            background: `${coreWash}, ${heat}`,
+                            background: `${CB_WASH}, ${heat}`,
                             textShadow: '0 1px 2px color-mix(in srgb, var(--color-app) 85%, transparent)',
                           }
                         : {
@@ -875,7 +885,9 @@ function TickerPanel({
                     }
                   >
                     <span
-                      className={f.sign === '+' ? 'text-up' : f.sign === '−' ? 'text-down' : 'text-muted'}
+                      className={
+                        vtFill ? '' : f.sign === '+' ? 'text-up' : f.sign === '−' ? 'text-down' : 'text-muted'
+                      }
                     >
                       {f.sign}
                     </span>
@@ -890,7 +902,7 @@ function TickerPanel({
                         and the glow only softened the glyph's edge. */}
                     {showLevels && isCb && !isFront && (
                       <span
-                        title={vtByCol ? 'Volt' : 'Core Bullseye'}
+                        title="Core Bullseye"
                         className="pointer-events-none absolute left-0.5 top-px text-2xs leading-none"
                         style={{ color: 'var(--color-app)' }}
                       >
@@ -909,21 +921,20 @@ function TickerPanel({
                       </span>
                     )}
 
-                    {/* Voltick theme, front expiry: each level's mark on its
-                        own reserved fill, in its own ink. A strike can carry
-                        two (Volt = Surge is common) — they sit side by side. */}
-                    {showLevels && vtLevels.length > 0 && isFront && (
-                      <span className="pointer-events-none absolute right-0.5 top-1/2 flex -translate-y-1/2 gap-px">
-                        {vtLevels.map((d) => (
-                          <span
-                            key={d.key}
-                            title={d.title}
-                            className="rounded-[3px] px-[3px] text-3xs font-black leading-[1.3] tracking-[0.04em]"
-                            style={{ background: d.fill, color: d.ink }}
-                          >
-                            {d.mark} {d.label}
-                          </span>
-                        ))}
+                    {/* Voltick theme: the mark(s) in the cell's own ink — left
+                        corner on every column, the name on the front expiry.
+                        A strike can carry two (Volt = Surge is common). */}
+                    {showLevels && vtFill && (
+                      <span
+                        title={vtLevels.map((d) => d.title).join(' · ')}
+                        className="pointer-events-none absolute left-0.5 top-1/2 -translate-y-1/2 text-3xs font-black leading-none"
+                      >
+                        {vtLevels.map((d) => d.mark).join('')}
+                      </span>
+                    )}
+                    {showLevels && vtFill && isFront && (
+                      <span className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-3xs font-black leading-none tracking-[0.04em]">
+                        {vtLevels.map((d) => d.label).join('/')}
                       </span>
                     )}
                   </div>
@@ -1261,16 +1272,19 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
               />
             </PanelSection>
             <PanelSection title="Heat">
-              <Slider
-                label="intensity"
-                value={intensity}
-                min={0.5}
-                max={3}
-                step={0.05}
-                format={(v) => (v <= 0.51 ? 'flat' : `${v.toFixed(2)}×`)}
-                onChange={setIntensity}
-                title="How hard the wash ramps. The top three strikes in a column keep their fixed steps at every setting."
-              />
+              {/* Voltick theme: fixed ramp, no slider — the look is the spec. */}
+              {!VOLTICK_THEME && (
+                <Slider
+                  label="intensity"
+                  value={intensity}
+                  min={0.5}
+                  max={3}
+                  step={0.05}
+                  format={(v) => (v <= 0.51 ? 'flat' : `${v.toFixed(2)}×`)}
+                  onChange={setIntensity}
+                  title="How hard the wash ramps. The top three strikes in a column keep their fixed steps at every setting."
+                />
+              )}
               {/* NEAR CORE — the option chain's control, on the ladder. It
                   decides WHICH cells get the wash above, never what they look
                   like: a strike that clears the threshold is painted exactly as
@@ -1301,7 +1315,7 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
                   onClick={() => setShowLevels((v) => !v)}
                   title={
                     VOLTICK_THEME
-                      ? "Name the Volt ★, Surge ↯, Reversal ↘ and Coil ◆ — the front expiry's badges and the ★ on later expiries. The Volt's yellow stays either way."
+                      ? "Name the Volt ★, Surge ↯, Reversal ↘ and Coil ◆ — the marks and names inside each filled cell. The fills stay either way."
                       : "Name the Core Bullseye, Call Wall and Put Wall — the front expiry's badges and the ★ on later expiries. The core's gold stays either way."
                   }
                 />
