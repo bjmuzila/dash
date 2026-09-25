@@ -175,7 +175,7 @@ export function NetPremiumCard() {
     [expiry],
   )
 
-  const { bins, switching: binsSwitching, error: binsError } = useNetPremBins(
+  const { bins, error: binsError } = useNetPremBins(
     active, date, true, filters, expiry != null,
   )
 
@@ -280,12 +280,10 @@ export function NetPremiumCard() {
           {active} — not available. Coming soon.
         </p>
       ) : (
-        <div
-          className={[
-            'flex min-h-0 flex-1 flex-col',
-            historySwitching || binsSwitching ? 'stale' : '',
-          ].filter(Boolean).join(' ')}
-        >
+        // No loading fade (2026-09-25). A hung request left the whole card dimmed
+        // indefinitely; loading/staleness is carried by the "Last print" /
+        // "Feed error" line underneath instead.
+        <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex flex-wrap items-center justify-center gap-4 pb-2 text-xs font-semibold">
             {/* The legend names the lines, so it takes the lines' colours —
                 v2's pair, not v3's directional one. See NET_DRIFT_CALL. */}

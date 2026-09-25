@@ -195,8 +195,12 @@ export function UserMenu() {
         />
       )}
 
+      {/* Phone (<640px): the panel is pinned to the VIEWPORT, not the avatar.
+          The owner-only Voltick switch widened the phone toolbar enough that an
+          avatar-anchored w-60 panel ran off the right edge. Fixed + clamped
+          width keeps it on screen whatever the toolbar holds; desktop unchanged. */}
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-60 rounded-md border border-line bg-surface p-2 shadow-lg">
+        <div className="absolute right-0 top-full z-50 mt-2 w-60 rounded-md border border-line bg-surface p-2 shadow-lg max-sm:fixed max-sm:left-auto max-sm:right-2 max-sm:top-12 max-sm:mt-0 max-sm:w-[min(15rem,calc(100vw-1rem))] max-sm:max-h-[calc(100dvh-4rem)] max-sm:overflow-y-auto">
           <div className="px-2.5 py-1">
             <div className="truncate text-sm font-bold text-fg">{displayName}</div>
             {user?.email && <div className="break-all text-xs text-faint opacity-60">{user.email}</div>}

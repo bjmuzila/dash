@@ -24459,8 +24459,31 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `cbedge-v3/src/pages/OptionsChain.tsx`: Voltick theme hides Intensity + Skin, fixes intensity at the skin default, disables levels-only; cog summary reads "voltick".
 - New `cbedge-v3/src/shell/VoltickThemeSwitch.tsx`; switch moved from `board/BoardPage.tsx`'s ToolbarSlot into the shell toolbar (`shell/Shell.tsx`), owner-only, on every page.
 
+## 2026-09-25 — Owner Hub: Brain graph ported (owner-vite)
+- New `owner-vite/src/components/OwnerBrainGraph.tsx` (port of v2 `components/shared/OwnerBrainGraph.tsx`); `owner-vite/src/pages/Hub.tsx` "Brain" toggle renders it instead of the "coming in a later pass" placeholder.
+
 ## 2026-09-25 — Owner Hub Brain: every live CB Edge file, "second brain" style
 - `OwnerBrainGraph.tsx` rewritten: nodes are now every source file in `cbedge-v3/src`, `server-v2` and `owner-vite/src` (552), edges are real imports/requires (1350) plus dashed client→server bridges (files hitting `/api/` or opening a WebSocket → `api-router.js` / `websocket-server.js`). Folders are gold hub nodes their files hang off; the three app roots are white.
 - 2D force layout (grid-bucketed repulsion, idles once settled), glossy spheres coloured by area (v3 Board/Pages/Data/Design/Shell/Mobile, Server Core/_lib/Compute/State/Scripts, Owner Pages/Components/Lib), thin green import web.
 - Hover highlights a file's neighbours; click opens a panel with Imports / Used by (click to jump); owner pages get an "Open" button; search box jumps to any file; area chips toggle clouds; bottom toolbar Fit / Folders / Labels; wheel zooms at cursor, drag pans or moves nodes. Pinned owner routes keep the gold ring.
 - Data is a committed snapshot `owner-vite/src/lib/brainMap.json` (the owners Docker build can't see the other trees). Refresh with `node owner-vite/scripts/gen-brain-map.mjs` (new).
+
+## 2026-09-25 — Owner Hub: Voltick Brain tab
+- Hub header now has **CB Brain · Voltick Brain · List**. Voltick Brain maps the live Voltick repo (459 files: `web/src`, `server`, root engine modules, `theta-proxy`, `theta-stream`; tests excluded) with 1,465 import links + dashed web→`server/server.js` bridges.
+- `OwnerBrainGraph.tsx` takes `brain="cbedge" | "voltick"`; each brain has its own area/colour config. Voltick's flat `server/` is grouped by file family (Engine & data, Flow & OI, Track record, Alerts & social, Accounts & billing, Agents & bot, Features); any app root with >40 loose files (also server-v2) now hangs them off a gold hub per area so it reads as clusters instead of one ball.
+- `gen-brain-map.mjs` writes both `src/lib/brainMap.json` and new `src/lib/voltickMap.json` (Voltick = `..\Voltick` next to the repo, or `VOLTICK_ROOT`). Both are snapshots — rerun the script and commit to refresh.
+
+## 2026-09-25 — Voltick Brain on the Voltick admin site
+- `Voltick/admin-site/index.html`: new **Brain** page under MACHINE (`#/brain`) — the same force map as the owner Hub's Voltick Brain, ported to the admin site's vanilla JS and tokens: area legend toggles, search, hover highlight, Imports / Used by panel, Fit / Folders / Labels, wheel zoom, drag. README documents it.
+- Data comes from new `Voltick/admin-site/brain-data.js` (`window.VOLTICK_BRAIN`, a plain script so the file still works from disk). `gen-brain-map.mjs` now writes it alongside `voltickMap.json`, so every `push.ps1` refreshes it — it then shows as a changed file in the Voltick repo to commit with `admin-site/`.
+
+## 2026-09-25 — push.ps1 auto-refreshes the brain maps
+- New step 1 in `push.ps1` (before the commit): runs `node owner-vite/scripts/gen-brain-map.mjs`, so `brainMap.json`, `voltickMap.json` and `Voltick/admin-site/brain-data.js` are rescanned on every deploy. Failure never blocks a push.
+
+## 2026-09-25 — Voltick Brain auto-refreshes on every sync
+- New `scripts/voltick-hooks/` (install once with `install.ps1`): local-only git hooks for the Voltick clone. `post-merge` (merge/pull) and `post-rewrite` (rebase) on `bzilabranch` run `gen-brain-map.mjs --only=voltick` and, if `admin-site/brain-data.js` changed, commit just that file ("admin-site: refresh brain map"). Never blocks a sync; `.git/hooks` is never pushed, so Gnotz's repo is untouched.
+- `gen-brain-map.mjs` takes `--only=voltick` / `--only=cbedge`.
+
+## 2026-09-25 — Phone: avatar menu no longer renders off-screen
+- `cbedge-v3/src/shell/UserMenu.tsx`: below 640px the account dropdown is pinned to the viewport (`fixed right-2 top-12`, width clamped to `100vw-1rem`, scrolls if taller than the screen) instead of hanging off the avatar. The owner-only Voltick theme switch had widened the phone toolbar and pushed the w-60 panel past the right edge. Desktop unchanged.
+- `cbedge-v3/src/shell/Shell.tsx`: phone toolbar spacing tightened (`gap-1.5 px-2`, `min-w-0`) so the avatar stays on screen.

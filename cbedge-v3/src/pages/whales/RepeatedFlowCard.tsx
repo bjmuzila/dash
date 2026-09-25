@@ -122,9 +122,24 @@ const PHONE_SORTS: Array<{ label: string; value: SortKey }> = [
   { label: 'TICKER', value: 'ticker' },
 ]
 
+/** IDX/ETF vs STOCKS (2026-09-25). The list lives on the server (WH_INDEX_ETF). */
+type Universe = 'all' | 'etf' | 'stocks'
+const UNIVERSES: Array<{ label: string; value: Universe; title: string }> = [
+  { label: 'ALL', value: 'all', title: 'Every underlying' },
+  { label: 'IDX/ETF', value: 'etf', title: 'Indices and ETFs only — SPX, NDX, SPY, QQQ, IWM, sector and leveraged ETFs…' },
+  { label: 'STOCKS', value: 'stocks', title: 'Single stocks only — no indices, no ETFs' },
+]
+
 const SETTINGS_KEY = 'cb-v3-whales:repeated'
-interface Saved { floor: number; minOrders: number; range: RangeKey; cluster: number; sortKey: SortKey; sortDir: SortDir }
-const DEFAULTS: Saved = { floor: 50_000, minOrders: 5, range: '1d', cluster: 30, sortKey: 'n', sortDir: 'desc' }
+interface Saved {
+  floor: number; minOrders: number; range: RangeKey; cluster: number; sortKey: SortKey; sortDir: SortDir
+  universe: Universe
+  /** NO 0DTE — drop same-day expiries. */
+  no0dte: boolean
+}
+const DEFAULTS: Saved = {
+  floor: 50_000, minOrders: 5, range: '1d', cluster: 30, sortKey: 'n', sortDir: 'desc', universe: 'all', no0dte: false,
+}
 
 function loadSaved(): Saved {
   try {
@@ -138,6 +153,8 @@ function loadSaved(): Saved {
       cluster: CLUSTERS.some((c) => c.value === j.cluster) ? (j.cluster as number) : DEFAULTS.cluster,
       sortKey: SORT_KEYS.includes(j.sortKey as SortKey) ? (j.sortKey as SortKey) : DEFAULTS.sortKey,
       sortDir: j.sortDir === 'asc' ? 'asc' : 'desc',
+      universe: j.universe === 'etf' || j.universe === 'stocks' ? j.universe : DEFAULTS.universe,
+      no0dte: j.no0dte === true,
     }
   } catch {
     return DEFAULTS
@@ -204,15 +221,17 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
   const [cluster, setCluster] = useState<number>(saved.cluster)
   const [sortKey, setSortKey] = useState<SortKey>(saved.sortKey)
   const [sortDir, setSortDir] = useState<SortDir>(saved.sortDir)
+  const [universe, setUniverse] = useState<Universe>(saved.universe)
+  const [no0dte, setNo0dte] = useState(saved.no0dte)
   // The contract whose probe is open under its row. One at a time.
   const [openOsi, setOpenOsi] = useState<string | null>(null)
   const toggle = (osi: string) => setOpenOsi((cur) => (cur === osi ? null : osi))
 
   useEffect(() => {
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ floor, minOrders, range, cluster, sortKey, sortDir }))
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ floor, minOrders, range, cluster, sortKey, sortDir, universe, no0dte }))
     } catch { /* best-effort */ }
-  }, [floor, minOrders, range, cluster, sortKey, sortDir])
+  }, [floor, minOrders, range, cluster, sortKey, sortDir, universe, no0dte])
 
   const sortBy = (k: SortKey) => {
     if (k === sortKey) { setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); return }
@@ -227,6 +246,8 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
   const url = useMemo(() => {
     const sp = new URLSearchParams({ from, to, min_premium: String(floor), min_orders: String(minOrders) })
     sp.set('window_min', String(cluster))
+    if (universe !== 'all') sp.set('universe', universe)
+    if (no0dte) sp.set('min_dte', '1')
     const t = filters.ticker.trim().toUpperCase()
     if (t) sp.set('ticker', t)
     if (filters.type) sp.set('type', filters.type)
@@ -236,7 +257,7 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
     if (filters.maxPrice !== null) sp.set('max_price', String(filters.maxPrice))
     if (filters.showUnreadable) sp.set('sides', 'all')
     return `/api/lse/repeated-flow?${sp.toString()}`
-  }, [from, to, floor, minOrders, filters, cluster])
+  }, [from, to, floor, minOrders, filters, cluster, universe, no0dte])
 
   const q = useQuery<RepeatResponse>(url, { staleMs: 30_000, pollMs: 60_000 })
   const d = q.data
@@ -276,6 +297,23 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
         value={String(floor)}
         defaultValue={String(DEFAULTS.floor)}
         onChange={(v) => setFloor(Number(v))}
+      />
+      <SegGroup<Universe>
+        size={size}
+        title="Indices and ETFs, single stocks, or both"
+        options={UNIVERSES}
+        value={universe}
+        onChange={setUniverse}
+      />
+      <SegGroup<'all' | 'no0'>
+        size={size}
+        title="NO 0DTE drops same-day expiries — the page's DTE cap still applies on top"
+        options={[
+          { label: 'ALL DTE', value: 'all', title: 'Include same-day expiries' },
+          { label: 'NO 0DTE', value: 'no0', title: 'Drop same-day expiries' },
+        ]}
+        value={no0dte ? 'no0' : 'all'}
+        onChange={(v) => setNo0dte(v === 'no0')}
       />
       {phone && (
         <>

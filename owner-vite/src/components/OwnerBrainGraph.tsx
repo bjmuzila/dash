@@ -22,16 +22,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { OWNER_THEME, LIGHT_BLUE, TYPE, rgba } from "../lib/theme";
 import { HUB_LINKS, type HubLink } from "../lib/hubPrefs";
-import BRAIN_RAW from "../lib/brainMap.json";
+import CBEDGE_RAW from "../lib/brainMap.json";
+import VOLTICK_RAW from "../lib/voltickMap.json";
 
 // ── data ─────────────────────────────────────────────────────────────────────
 type BrainMap = {
+  name?: string;
   generated: string;
   apps: { id: string; label: string; dir: string }[];
   nodes: [string, number, number][];
   links: [number, number, number][];
 };
-const BRAIN = BRAIN_RAW as unknown as BrainMap;
 
 type Kind = "root" | "dir" | "file";
 type GNode = {
@@ -60,55 +61,113 @@ const hex2rgb = (h: string): RGB => {
 const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const css = (c: RGB, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
 
-// One colour per area so every domain reads as its own cloud. Explicit on
-// purpose (like the v2 cluster list) — the owner theme only has ~6 accents.
-const AREA_COLORS: Record<string, string> = {
-  "v3/board": "#5AA9FF",
-  "v3/pages": "#4C7DF0",
-  "v3/data": "#2DD4BF",
-  "v3/design": "#C084FC",
-  "v3/shell": "#FF6FAE",
-  "v3/mobile": "#F472B6",
-  "v3/core": "#93C5FD",
-  "server/core": "#FB923C",
-  "server/lib": "#F97316",
-  "server/computation": "#FACC15",
-  "server/state": "#A3E635",
-  "server/scripts": "#94A3B8",
-  "server/config": "#CBD5E1",
-  "owner/pages": "#34D399",
-  "owner/components": "#10B981",
-  "owner/lib": "#6EE7B7",
-  "owner/other": "#86EFAC",
-};
-const AREA_LABEL: Record<string, string> = {
-  "v3/board": "v3 · Board cards", "v3/pages": "v3 · Pages", "v3/data": "v3 · Data", "v3/design": "v3 · Design",
-  "v3/shell": "v3 · Shell", "v3/mobile": "v3 · Mobile", "v3/core": "v3 · Boot",
-  "server/core": "Server · Core", "server/lib": "Server · _lib", "server/computation": "Server · Compute",
-  "server/state": "Server · State", "server/scripts": "Server · Scripts", "server/config": "Server · Config",
-  "owner/pages": "Owner · Pages", "owner/components": "Owner · Components", "owner/lib": "Owner · Lib", "owner/other": "Owner · Other",
-};
 const HUB_GOLD = hex2rgb(OWNER_THEME.gold);
 const ROOT_RGB = hex2rgb(OWNER_THEME.text);
 const BG_RGB = hex2rgb(OWNER_THEME.bg);
 const IMPORT_RGB = hex2rgb("#3FAF8F");   // the green web in the reference shot
 const BRIDGE_RGB = hex2rgb(LIGHT_BLUE);
 
-function areaOf(appId: string, sub: string): string {
-  const top = sub.split("/")[0];
-  const isFile = !sub.includes("/");
-  if (appId === "v3") {
-    if (["board", "pages", "data", "design", "shell", "mobile"].includes(top)) return `v3/${top}`;
-    return "v3/core";
-  }
-  if (appId === "server") {
-    if (isFile) return sub.startsWith("_lib") ? "server/lib" : "server/core";
-    if (["computation", "state", "scripts", "config"].includes(top)) return `server/${top}`;
-    return "server/core";
-  }
-  if (["pages", "components", "lib"].includes(top) && !isFile) return `owner/${top}`;
-  return "owner/other";
-}
+/**
+ * One config per brain. Areas are the colour clouds; colours are explicit on
+ * purpose (like the v2 cluster list) — the owner theme only has ~6 accents.
+ * Area order here is also the legend order.
+ */
+type BrainCfg = {
+  title: string;
+  map: BrainMap;
+  areas: { id: string; label: string; color: string }[];
+  areaOf: (appId: string, sub: string) => string;
+  shortPath: RegExp;   // prefix trimmed in lists
+};
+
+const CBEDGE: BrainCfg = {
+  title: "CB Edge · Second Brain",
+  map: CBEDGE_RAW as unknown as BrainMap,
+  shortPath: /^(cbedge-v3\/src|owner-vite\/src|server-v2)\//,
+  areas: [
+    { id: "v3/board", label: "v3 · Board cards", color: "#5AA9FF" },
+    { id: "v3/pages", label: "v3 · Pages", color: "#4C7DF0" },
+    { id: "v3/data", label: "v3 · Data", color: "#2DD4BF" },
+    { id: "v3/design", label: "v3 · Design", color: "#C084FC" },
+    { id: "v3/shell", label: "v3 · Shell", color: "#FF6FAE" },
+    { id: "v3/mobile", label: "v3 · Mobile", color: "#F472B6" },
+    { id: "v3/core", label: "v3 · Boot", color: "#93C5FD" },
+    { id: "server/core", label: "Server · Core", color: "#FB923C" },
+    { id: "server/lib", label: "Server · _lib", color: "#F97316" },
+    { id: "server/computation", label: "Server · Compute", color: "#FACC15" },
+    { id: "server/state", label: "Server · State", color: "#A3E635" },
+    { id: "server/scripts", label: "Server · Scripts", color: "#94A3B8" },
+    { id: "server/config", label: "Server · Config", color: "#CBD5E1" },
+    { id: "owner/pages", label: "Owner · Pages", color: "#34D399" },
+    { id: "owner/components", label: "Owner · Components", color: "#10B981" },
+    { id: "owner/lib", label: "Owner · Lib", color: "#6EE7B7" },
+    { id: "owner/other", label: "Owner · Other", color: "#86EFAC" },
+  ],
+  areaOf(appId, sub) {
+    const top = sub.split("/")[0];
+    const isFile = !sub.includes("/");
+    if (appId === "v3") {
+      if (["board", "pages", "data", "design", "shell", "mobile"].includes(top)) return `v3/${top}`;
+      return "v3/core";
+    }
+    if (appId === "server") {
+      if (isFile) return sub.startsWith("_lib") ? "server/lib" : "server/core";
+      if (["computation", "state", "scripts", "config"].includes(top)) return `server/${top}`;
+      return "server/core";
+    }
+    if (["pages", "components", "lib"].includes(top) && !isFile) return `owner/${top}`;
+    return "owner/other";
+  },
+};
+
+// Voltick's server is ~250 flat files in one folder, so its areas come from
+// the file-name families (agent*, flow*, *cal/*rec …) rather than folders.
+const VT_SERVER_GROUPS: [string, RegExp][] = [
+  ["server/engine", /^(server|engine|engine-worker|compute-pool|thetadata|tradier|simulate|history|chainbank|ohlc|prevcloses|ticks|streamprices|datafetch|db|tallysql|hotset|watchdog|wsguard|boot-runway|bootmark|barrier|restartlog|backup|s3put|marketdays|nyfmt|geometry|operator|actuator)\.js$/],
+  ["server/accounts", /^(billing|auth|authlimit|affiliates|trial-.*|winback|member|tiers|churn|email|emailevents|passhash|apikeys|account-delete|native-auth|seedaccount|make-subscriber|usage|fairuse|mcpaccess|feedaccess|hashworker|journey|support)\.js$/],
+  ["server/agents", /^(agent|assistant|siteagent|liveagent|mcpserver|idealab|idearec)/],
+  ["server/flow", /^(flow|dark|streamflow|repeat|unusual|oi|spreads|structures|struct|trades|tradeshape|brokercash|snaptrade|brokermap|brokertime)/],
+  ["server/records", /(cal|rec|record|bank)\.js$|^(calibrate|conviction|edgeminer|baserate|bandstreak|conditional-edge|ledger|recordbank|reports|autopsy|dataaudit|recorder-census)/],
+  ["server/alerts", /^(discord|social|push|nativepush|alertbus|news|.*alerts|scorealerts|structalert|heatmap-|reel|flyer|shots|embed|badge|blog|levels-letter|feed|jpeg|guidepdf|seo-)/],
+];
+const VOLTICK: BrainCfg = {
+  title: "Voltick · Second Brain",
+  map: VOLTICK_RAW as unknown as BrainMap,
+  shortPath: /^(web\/src|server|theta-proxy|theta-stream)\//,
+  areas: [
+    { id: "web/components", label: "Web · Components", color: "#5AA9FF" },
+    { id: "web/lib", label: "Web · Helpers", color: "#93C5FD" },
+    { id: "web/pages", label: "Web · Pages", color: "#4C7DF0" },
+    { id: "web/native", label: "Web · Native stubs", color: "#C084FC" },
+    { id: "server/engine", label: "Server · Engine & data", color: "#FACC15" },
+    { id: "server/flow", label: "Server · Flow & OI", color: "#FB923C" },
+    { id: "server/records", label: "Server · Track record", color: "#F97316" },
+    { id: "server/alerts", label: "Server · Alerts & social", color: "#FF6FAE" },
+    { id: "server/accounts", label: "Server · Accounts & billing", color: "#34D399" },
+    { id: "server/agents", label: "Server · Agents & bot", color: "#2DD4BF" },
+    { id: "server/features", label: "Server · Features", color: "#FDBA74" },
+    { id: "server/scripts", label: "Server · Scripts", color: "#94A3B8" },
+    { id: "root/modules", label: "Root modules", color: "#A3E635" },
+    { id: "theta", label: "Theta proxy + stream", color: "#CBD5E1" },
+  ],
+  areaOf(appId, sub) {
+    if (appId === "web") {
+      if (sub.startsWith("pages/")) return "web/pages";
+      if (sub.startsWith("native-stubs/")) return "web/native";
+      return /\.jsx$/.test(sub) ? "web/components" : "web/lib";
+    }
+    if (appId === "server") {
+      if (sub.includes("/")) return "server/scripts";
+      for (const [id, re] of VT_SERVER_GROUPS) if (re.test(sub)) return id;
+      return "server/features";
+    }
+    if (appId === "engine") return "root/modules";
+    return "theta";
+  },
+};
+
+export const BRAINS = { cbedge: CBEDGE, voltick: VOLTICK } as const;
+export type BrainId = keyof typeof BRAINS;
 
 /** Owner page files that map to a live route → open it from the panel. */
 const LINK_BY_FILE = new Map<string, HubLink>(
@@ -121,14 +180,17 @@ function hash(s: string) {
   return (h >>> 0) / 4294967296;
 }
 
-function buildGraph() {
+function buildGraph(cfg: BrainCfg) {
+  const BRAIN = cfg.map;
+  const COLOR = new Map(cfg.areas.map((a) => [a.id, a.color]));
+  const areaOf = cfg.areaOf;
   const nodes: GNode[] = [];
   const links: GLink[] = [];
   const byId = new Map<string, GNode>();
   const mk = (id: string, name: string, kind: Kind, app: number, area: string, lines = 0): GNode => {
     const n: GNode = {
       i: nodes.length, id, name, kind, app, area, lines, r: 3,
-      rgb: kind === "root" ? ROOT_RGB : kind === "dir" ? HUB_GOLD : hex2rgb(AREA_COLORS[area] ?? "#8B9CB3"),
+      rgb: kind === "root" ? ROOT_RGB : kind === "dir" ? HUB_GOLD : hex2rgb(COLOR.get(area) ?? "#8B9CB3"),
       x: 0, y: 0, vx: 0, vy: 0, fixed: false, deg: 0, imports: [], usedBy: [],
     };
     nodes.push(n); byId.set(id, n);
@@ -137,7 +199,7 @@ function buildGraph() {
 
   // app roots — spread on a wide triangle so the three trees start apart
   const roots = BRAIN.apps.map((a, i) => {
-    const n = mk(a.dir, a.label, "root", i, "root");
+    const n = mk("app:" + (a.dir || a.id), a.label, "root", i, "root");
     const ang = -Math.PI / 2 + (i * 2 * Math.PI) / BRAIN.apps.length;
     n.x = Math.cos(ang) * 700; n.y = Math.sin(ang) * 700;
     return n;
@@ -157,14 +219,38 @@ function buildGraph() {
     return n;
   };
 
+  // Flat app roots (Voltick's server, server-v2) would be one giant ball, so
+  // when a root holds many loose files they hang off a gold hub per area.
+  const looseCount = new Map<number, number>();
+  for (const [path, appIdx] of BRAIN.nodes) {
+    const d = BRAIN.apps[appIdx].dir;
+    const rest = d ? path.slice(d.length + 1) : path;
+    if (!rest.includes("/")) looseCount.set(appIdx, (looseCount.get(appIdx) ?? 0) + 1);
+  }
+  const LABEL = new Map(cfg.areas.map((a) => [a.id, a.label]));
+  const areaHub = (appIdx: number, area: string): GNode => {
+    const id = `area:${appIdx}:${area}`;
+    const hit = byId.get(id);
+    if (hit) return hit;
+    const root = roots[appIdx];
+    const label = (LABEL.get(area) ?? area).split("·").pop()!.trim();
+    const n = mk(id, label, "dir", appIdx, area);
+    const a = hash(id) * Math.PI * 2;
+    n.x = root.x + Math.cos(a) * 260; n.y = root.y + Math.sin(a) * 260;
+    links.push({ s: root, t: n, kind: 2, rest: 240, k: 0.02 });
+    return n;
+  };
+
   const fileNodes: GNode[] = [];
   for (const [path, appIdx, lines] of BRAIN.nodes) {
     const app = BRAIN.apps[appIdx];
-    const sub = path.slice(app.dir.length + 1);
+    const sub = app.dir ? path.slice(app.dir.length + 1) : path;
     const slash = path.lastIndexOf("/");
-    const dirPath = path.slice(0, slash);
-    const parent = dirPath.length <= app.dir.length ? roots[appIdx] : ensureDir(appIdx, dirPath);
-    const n = mk(path, path.slice(slash + 1), "file", appIdx, areaOf(app.id, sub), lines);
+    const dirPath = slash < 0 ? "" : path.slice(0, slash);
+    const area = areaOf(app.id, sub);
+    const loose = dirPath.length <= app.dir.length;
+    const parent = !loose ? ensureDir(appIdx, dirPath) : (looseCount.get(appIdx) ?? 0) > 40 ? areaHub(appIdx, area) : roots[appIdx];
+    const n = mk(path, path.slice(slash + 1), "file", appIdx, area, lines);
     const a = hash(path) * Math.PI * 2;
     const d = 40 + hash(path + "|d") * 120;
     n.x = parent.x + Math.cos(a) * d; n.y = parent.y + Math.sin(a) * d;
@@ -190,13 +276,18 @@ function buildGraph() {
 
 // ── component ────────────────────────────────────────────────────────────────
 export default function OwnerBrainGraph({
+  brain = "cbedge",
   onOpen,
   pinned,
 }: {
+  brain?: BrainId;
   onOpen: (link: HubLink) => void;
   pinned?: Set<string>;
 }) {
-  const graph = useMemo(buildGraph, []);
+  const cfg = BRAINS[brain];
+  const BRAIN = cfg.map;
+  const AREA = useMemo(() => new Map(cfg.areas.map((a) => [a.id, a])), [cfg]);
+  const graph = useMemo(() => buildGraph(cfg), [cfg]);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const tipRef = useRef<HTMLDivElement | null>(null);
@@ -559,8 +650,8 @@ export default function OwnerBrainGraph({
   const areas = useMemo(() => {
     const c = new Map<string, number>();
     for (const n of graph.nodes) if (n.kind === "file") c.set(n.area, (c.get(n.area) ?? 0) + 1);
-    return Object.keys(AREA_COLORS).filter((a) => c.has(a)).map((a) => ({ id: a, n: c.get(a)! }));
-  }, [graph]);
+    return cfg.areas.filter((a) => c.has(a.id)).map((a) => ({ id: a.id, n: c.get(a.id)! }));
+  }, [graph, cfg]);
 
   const fileCount = BRAIN.nodes.length;
   const importCount = BRAIN.links.filter((l) => l[2] === 0).length;
@@ -606,12 +697,12 @@ export default function OwnerBrainGraph({
           return (
             <button
               key={a.id}
-              style={chip(on, AREA_COLORS[a.id])}
+              style={chip(on, AREA.get(a.id)!.color)}
               onClick={() => setHiddenAreas((s) => { const n = new Set(s); if (n.has(a.id)) n.delete(a.id); else n.add(a.id); return n; })}
               title={on ? "Hide" : "Show"}
             >
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: AREA_COLORS[a.id] }} />
-              {AREA_LABEL[a.id] ?? a.id}
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: AREA.get(a.id)!.color }} />
+              {AREA.get(a.id)!.label}
               <span style={{ opacity: 0.5 }}>{a.n}</span>
             </button>
           );
@@ -622,7 +713,7 @@ export default function OwnerBrainGraph({
       <div style={{ position: "absolute", top: 12, right: 12, width: 280, zIndex: 6, display: "flex", flexDirection: "column", gap: 6 }}>
         <div style={{ textAlign: "right", pointerEvents: "none" }}>
           <div style={{ fontSize: TYPE.label, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>
-            CB Edge · Second Brain
+            {cfg.title}
           </div>
           <div style={{ fontSize: TYPE.micro, color: OWNER_THEME.text, opacity: 0.5, marginTop: 2 }}>
             {fileCount} files · {importCount} imports · snapshot {BRAIN.generated}
@@ -646,7 +737,7 @@ export default function OwnerBrainGraph({
           <div style={{ background: rgba(OWNER_THEME.panel, 0.96), border: `1px solid ${OWNER_THEME.border}`, borderRadius: 10, padding: "4px 10px" }}>
             {matches.map((m) => (
               <button key={m.i} style={rowBtn} onClick={() => { api.current?.focus(m); setQuery(""); }} title={m.id}>
-                <span style={{ color: AREA_COLORS[m.area] }}>●</span> {m.id.replace(/^(cbedge-v3\/src|owner-vite\/src|server-v2)\//, "")}
+                <span style={{ color: css(m.rgb) }}>●</span> {m.id.replace(cfg.shortPath, "")}
               </button>
             ))}
           </div>
@@ -670,7 +761,7 @@ export default function OwnerBrainGraph({
           <div style={{ fontSize: TYPE.micro, opacity: 0.55, fontFamily: "ui-monospace, monospace", margin: "4px 0 10px", wordBreak: "break-all" }}>{sel.id}</div>
           {sel.kind === "file" && (
             <div style={{ fontSize: TYPE.micro, opacity: 0.75, marginBottom: 10 }}>
-              {AREA_LABEL[sel.area]} · {sel.lines.toLocaleString()} lines
+              {AREA.get(sel.area)?.label} · {sel.lines.toLocaleString()} lines
             </div>
           )}
           {selLink && (
@@ -679,11 +770,11 @@ export default function OwnerBrainGraph({
             </button>
           )}
           {sel.kind !== "file" ? (
-            <NodeList title="Contains" ids={graph.nodes.filter((n) => n.id.startsWith(sel.id + "/") && n.id.slice(sel.id.length + 1).indexOf("/") === -1).map((n) => n.i)} graph={graph} rowBtn={rowBtn} onPick={(n) => api.current?.focus(n)} />
+            <NodeList title="Contains" ids={graph.links.filter((l) => l.kind === 2 && l.s === sel).map((l) => l.t.i)} graph={graph} short={cfg.shortPath} rowBtn={rowBtn} onPick={(n) => api.current?.focus(n)} />
           ) : (
             <>
-              <NodeList title="Imports" ids={sel.imports} graph={graph} rowBtn={rowBtn} onPick={(n) => api.current?.focus(n)} />
-              <NodeList title="Used by" ids={sel.usedBy} graph={graph} rowBtn={rowBtn} onPick={(n) => api.current?.focus(n)} />
+              <NodeList title="Imports" ids={sel.imports} graph={graph} short={cfg.shortPath} rowBtn={rowBtn} onPick={(n) => api.current?.focus(n)} />
+              <NodeList title="Used by" ids={sel.usedBy} graph={graph} short={cfg.shortPath} rowBtn={rowBtn} onPick={(n) => api.current?.focus(n)} />
             </>
           )}
         </div>
@@ -711,11 +802,12 @@ export default function OwnerBrainGraph({
 }
 
 function NodeList({
-  title, ids, graph, rowBtn, onPick,
+  title, ids, graph, rowBtn, onPick, short,
 }: {
   title: string;
   ids: number[];
   graph: { nodes: GNode[] };
+  short: RegExp;
   rowBtn: CSSProperties;
   onPick: (n: GNode) => void;
 }) {
@@ -729,7 +821,7 @@ function NodeList({
         const n = graph.nodes[i];
         return (
           <button key={i} style={rowBtn} onClick={() => onPick(n)} title={n.id}>
-            <span style={{ color: css(n.rgb) }}>●</span> {n.id.replace(/^(cbedge-v3\/src|owner-vite\/src|server-v2)\//, "")}
+            <span style={{ color: css(n.rgb) }}>●</span> {n.id.replace(short, "")}
           </button>
         );
       })}

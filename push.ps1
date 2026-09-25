@@ -42,6 +42,18 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Lock check skipped (Docker uses npm install, platform-safe)." -ForegroundColor DarkGray
 
+# --- 1. Refresh the owner Hub brain maps (CB Brain + Voltick Brain) ---
+# Rescans cbedge-v3 / server-v2 / owner-vite and ..\Voltick, rewrites
+# owner-vite/src/lib/brainMap.json + voltickMap.json so they ride this commit.
+# Never blocks a deploy: on failure the old snapshot just stays.
+Write-Host "Refreshing brain maps..." -ForegroundColor Yellow
+try {
+    node "$repoRoot\owner-vite\scripts\gen-brain-map.mjs"
+    if ($LASTEXITCODE -ne 0) { Write-Host "Brain map refresh failed - keeping previous snapshot." -ForegroundColor DarkYellow }
+} catch {
+    Write-Host "Brain map refresh skipped ($($_.Exception.Message)) - keeping previous snapshot." -ForegroundColor DarkYellow
+}
+
 # --- 2. Local build gate (OPTIONAL) ---
 $doLocalBuild = $LocalBuild -and -not $SkipBuild
 if ($doLocalBuild) {

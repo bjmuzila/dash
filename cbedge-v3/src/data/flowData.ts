@@ -53,6 +53,21 @@ export function useTick(ms = 15_000): number {
   return n
 }
 
+// ── Fetch with a deadline ────────────────────────────────────────────────────
+
+/**
+ * `fetch` that gives up. A plain fetch against a server that stops answering
+ * (stuck query, dead recorder) never resolves AND never rejects — the hook sat
+ * in its loading state forever, no error was ever raised, and the card showed a
+ * flat line with no "Feed error" (2026-09-25, last print 12:42 all afternoon).
+ * The abort turns a hang into a rejection, which every caller below already
+ * reports as `error`. The signal also covers the body read (`r.json()`).
+ */
+const FETCH_TIMEOUT_MS = 10_000
+function fetchT(url: string, ms: number = FETCH_TIMEOUT_MS): Promise<Response> {
+  return fetch(url, { credentials: 'same-origin', signal: AbortSignal.timeout(ms) })
+}
+
 // ── Shared query building ────────────────────────────────────────────────────
 
 function qs(params: Record<string, string | number | undefined | null>): string {
@@ -148,7 +163,8 @@ export function useFlowHistory(
 
     const base = qs({ underlying: active, date, minPremium: minPremium > 0 ? minPremium : undefined })
     const pull = (limit: number) =>
-      fetch(`/proxy/flow-history?${base}&limit=${limit}`, { credentials: 'same-origin' })
+      // The 20k pull is a legitimately heavy query — give it more room.
+      fetchT(`/proxy/flow-history?${base}&limit=${limit}`, limit > 1000 ? 30_000 : FETCH_TIMEOUT_MS)
         .then((r) => (r.ok ? (r.json() as Promise<FlowHistoryResponse>) : null))
 
     /** Persisted ∪ held, newest version of a print winning. Ascending by ts. */
@@ -378,16 +394,19 @@ export function useNetPremBins(
       }
     }
 
+    // One request in flight at a time. The 5s interval used to stack a new
+    // request on top of every one still hanging.
+    let inFlight = false
     const load = () => {
+      if (inFlight) return
+      inFlight = true
       const prev = keyRef.current === key ? binsRef.current : []
       const nowSec = Math.floor(Date.now() / 1000)
       const last = prev[prev.length - 1]
       const since =
         isToday && last ? Math.min(last.sec - 2 * BIN_SEC, nowSec - NET_LATE_SEC) : null
 
-      fetch(`/proxy/flow-netprem?${key}${since != null ? `&since=${since}` : ''}`, {
-        credentials: 'same-origin',
-      })
+      fetchT(`/proxy/flow-netprem?${key}${since != null ? `&since=${since}` : ''}`)
         .then((r) => (r.ok ? (r.json() as Promise<NetPremResponse>) : null))
         .then((j) => {
           if (cancelled) return
@@ -408,6 +427,9 @@ export function useNetPremBins(
           if (cancelled) return
           setError(true)
           setSwitching(false)
+        })
+        .finally(() => {
+          inFlight = false
         })
     }
 

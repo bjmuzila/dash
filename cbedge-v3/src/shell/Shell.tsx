@@ -460,7 +460,14 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
   const { symbol, setSymbol } = usePageSymbol()
   const { isOwner } = useAuth()
   return (
-    <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
+    <header
+      className={[
+        'flex h-11 shrink-0 items-center border-b border-line bg-bg',
+        // Phone: tighter spacing so the owner's Voltick switch doesn't shove the
+        // avatar past the 390px edge.
+        mobile ? 'min-w-0 gap-1.5 px-2' : 'gap-3 px-3',
+      ].join(' ')}
+    >
       {/* The wordmark, not the words. "CB Edge" set in the UI font was a
           stand-in; the horizontal lockup is the brand in a wide slot, and the
           toolbar is the wide slot it was drawn for. See shell/Brand.tsx.
@@ -566,7 +573,7 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
       {/* ── VOLTICK THEME — owner only, every page ──────────────────────────
           CB Edge ⇄ Voltick palette. Shown on every route even where the page
           draws nothing Voltick-specific. See shell/VoltickThemeSwitch.tsx. */}
-      {isOwner && <VoltickThemeSwitch />}
+      {isOwner && <VoltickThemeSwitch compact={mobile} />}
       {/* ── ✎ ──────────────────────────────────────────────────────────────────
           Opens the notes dock on the right, which is also where the owner's
           Quick Probe lives. See NotesButton above. */}

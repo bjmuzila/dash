@@ -15979,12 +15979,41 @@ try {
      * rules out the JSONB key-exists operators (`?`, `?|`, `?&`), which is why
      * everything here goes through `->>`.
      */
+    /**
+     * INDICES + ETFs (2026-09-25) — Repeated flow's IDX/ETF vs STOCKS split.
+     * Cash-settled index roots (both the AM and the PM-settled weekly root)
+     * and the ETFs that carry real options volume. Anything not on the list
+     * counts as a stock. Inlined into SQL as literals: server-defined, fixed,
+     * [A-Z] only — never user input — so it cannot disturb the `?` count.
+     */
+    const WH_INDEX_ETF = [
+      'SPX', 'SPXW', 'NDX', 'NDXP', 'RUT', 'RUTW', 'VIX', 'VIXW', 'XSP', 'DJX', 'OEX', 'XEO', 'XND', 'MRUT',
+      'SPY', 'QQQ', 'IWM', 'DIA', 'RSP', 'MDY', 'VOO', 'IVV', 'VTI',
+      'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLC', 'XLU', 'XLRE', 'XLY', 'XLB', 'XLP',
+      'SMH', 'SOXX', 'XBI', 'IBB', 'KRE', 'KBE', 'XRT', 'XHB', 'ITB', 'XOP', 'OIH', 'XME', 'JETS', 'IYR', 'VNQ',
+      'GLD', 'SLV', 'GDX', 'GDXJ', 'USO', 'UNG', 'UUP', 'FXE',
+      'TLT', 'IEF', 'SHY', 'HYG', 'LQD', 'JNK', 'TMF', 'TBT',
+      'EEM', 'EFA', 'FXI', 'KWEB', 'EWZ', 'EWJ', 'EWW', 'INDA', 'ASHR',
+      'ARKK', 'TQQQ', 'SQQQ', 'SPXL', 'SPXS', 'SPXU', 'UPRO', 'SOXL', 'SOXS', 'TNA', 'TZA', 'LABU', 'LABD',
+      'UVXY', 'VXX', 'SVXY', 'VIXY', 'SH', 'PSQ', 'SDS', 'QID', 'QLD', 'SSO',
+      'IBIT', 'BITO', 'ETHA', 'FBTC', 'GBTC',
+      'TSLL', 'NVDL', 'MSTU', 'CONL',
+    ];
+    const WH_INDEX_ETF_SQL = WH_INDEX_ETF.map((t) => `'${t.replace(/[^A-Z]/g, '')}'`).join(', ');
+
     function whFilter(o) {
       const sql = ['session_date >= ?::date', 'session_date <= ?::date', 'premium >= ?'];
       const params = [o.from, o.to, o.minPremium];
-      // Repeated flow's LAST 1H/2H/4H — print time in epoch ms. Unset on the
-      // whale archive, so its queries are unchanged.
-      if (o.sinceTs != null) { sql.push('ts >= ?'); params.push(o.sinceTs); }
+      // IDX/ETF vs STOCKS — Repeated flow only; unset on the archive. No
+      // placeholders (see WH_INDEX_ETF).
+      if (o.universe === 'etf') sql.push(`payload->>'underlying' IN (${WH_INDEX_ETF_SQL})`);
+      if (o.universe === 'stocks') sql.push(`COALESCE(payload->>'underlying', '') NOT IN (${WH_INDEX_ETF_SQL})`);
+      // NO 0DTE — Repeated flow only. A print with no readable DTE is dropped,
+      // same rule as the max_dte filter below.
+      if (o.minDte != null) {
+        sql.push(`(payload->>'dte') IS NOT NULL AND (payload->>'dte')::int >= ?`);
+        params.push(o.minDte);
+      }
       // MAX CONTRACT PRICE (2026-09-22) — the whale page's MAX filter, on the
       // per-contract fill price, not the premium. null = no cap. A print with
       // no readable price is DROPPED, same rule as the DTE filter below.
@@ -16363,6 +16392,13 @@ try {
     // A wider ask would silently return only the $1M+ survivors of older days
     // and call them "repeats" — the response carries `clamped` instead.
     //
+    // ── GROUPED BY BURST, NOT BY DAY ─────────────────────────────────────────
+    // A 0DTE strike hit 120 times across the session says little. The same
+    // strike hit 20 times inside 30 minutes is the signal. So `window_min`
+    // (30 / 60 / 120 / 240 / 1440) sets a sliding window and each contract is
+    // scored on its DENSEST window: `n` and every number beside it describe
+    // that burst; `nAll` / `totalAll` are the whole range for context.
+    //
     // ── AN ORDER IS A PRINT ──────────────────────────────────────────────────
     // The capture has no sweep/block flag, so "order count" is the number of
     // stored prints on the contract. `bullN`/`bearN` count them by DIRECTION
@@ -16373,6 +16409,8 @@ try {
     /** Contracts returned. Past this it is a scroll, not a signal. */
     const RF_MAX_CONTRACTS = 100;
     const RF_ORDER_STOPS = [5, 10, 25];
+    /** Cluster windows in minutes. 1440 = the whole session. */
+    const RF_WINDOW_STOPS = [30, 60, 120, 240, 1440];
 
     register('/api/lse/repeated-flow', {
       auth: 'subscriber', methods: ['GET'],
@@ -16413,16 +16451,24 @@ try {
         const sides = params.get('sides') === 'all' ? 'all' : 'directional';
         const askedMaxPrice = Number(params.get('max_price'));
         const maxPrice = Number.isFinite(askedMaxPrice) && askedMaxPrice > 0 ? askedMaxPrice : null;
-        // TIME LENGTH (2026-09-24): only prints in the last N minutes. Sent as
-        // minutes, not a timestamp, so the page's URL is stable and the cache
-        // key does not change every render. Unset = the whole window.
-        const askedWithin = Number(params.get('within_min'));
-        const withinMin = Number.isFinite(askedWithin) && askedWithin > 0 ? Math.min(Math.floor(askedWithin), 24 * 60) : null;
-        const sinceTs = withinMin != null ? Date.now() - withinMin * 60_000 : null;
+        // CLUSTER WINDOW (2026-09-24): the orders must land inside ONE window
+        // of this many minutes — 20 hits in 30 minutes, not 120 spread over
+        // the day. Snapped to the fixed stops and inlined into the frame
+        // clause as an integer literal (never a user string).
+        const askedWin = Number(params.get('window_min'));
+        const windowMin = RF_WINDOW_STOPS.includes(askedWin) ? askedWin : RF_WINDOW_STOPS[1];
+        const windowMs = windowMin * 60_000 - 1;
+        // IDX/ETF vs STOCKS, and NO 0DTE (min_dte=1). See WH_INDEX_ETF.
+        const rawUni = String(params.get('universe') || '').toLowerCase();
+        const universe = rawUni === 'etf' || rawUni === 'stocks' ? rawUni : null;
+        const rawMinDte = Number(params.get('min_dte'));
+        const minDte = Number.isFinite(rawMinDte) && rawMinDte >= 1 ? Math.min(Math.floor(rawMinDte), 3650) : null;
 
         const empty = {
           range: { from, to },
-          withinMin,
+          windowMin,
+          universe,
+          minDte,
           clamped,
           retainDays: TF_RETAIN_DAYS,
           minPremium,
@@ -16438,40 +16484,54 @@ try {
 
         try {
           await tfEnsureSchema();
-          const f = whFilter({ from, to, minPremium, maxPrice, ticker, type, action, moneyness, maxDte, sinceTs });
+          const f = whFilter({ from, to, minPremium, maxPrice, ticker, type, action, moneyness, maxDte, universe, minDte });
           const cte = whCte(f.sql, sides === 'all' ? 'TRUE' : 'act IS NOT NULL');
 
+          // THE DENSEST WINDOW PER CONTRACT. For every print, a RANGE frame
+          // counts the prints on the same contract from it to `windowMs`
+          // later; DISTINCT ON keeps each contract's best frame. So `c_n` is
+          // "the most times this contract was hit inside any one window",
+          // and every c_* number describes THAT burst, not the whole day.
+          // n_all / total_all are the whole range, for context.
           const rows = await libDb.queryAll(`${cte},
-            g AS (
-              SELECT osi,
-                     MAX(ticker)                                                  AS ticker,
-                     MAX(payload->>'strike')                                      AS strike,
-                     MAX(opt_type)                                                AS type,
-                     MAX(payload->>'expiry')                                      AS expiry,
-                     COUNT(*)::int                                                AS n,
-                     (COUNT(*) FILTER (WHERE bias = 'bull'))::int                 AS bull_n,
-                     (COUNT(*) FILTER (WHERE bias = 'bear'))::int                 AS bear_n,
-                     COALESCE(SUM(premium), 0)                                    AS total,
-                     COALESCE(SUM(premium) FILTER (WHERE bias = 'bull'), 0)       AS bull,
-                     COALESCE(SUM(premium) FILTER (WHERE bias = 'bear'), 0)       AS bear,
-                     COALESCE(SUM(premium) FILTER (WHERE act = 'BUY'), 0)         AS bought,
-                     COALESCE(SUM(premium) FILTER (WHERE act = 'SELL'), 0)        AS sold,
-                     COALESCE(SUM((payload->>'size')::float8), 0)                 AS size,
-                     AVG(NULLIF(payload->>'price', '')::float8)                   AS avg_price,
-                     MIN(ts)                                                      AS first_ts,
-                     MAX(ts)                                                      AS last_ts,
-                     COUNT(DISTINCT session_date)::int                            AS sessions
+            rf_x AS (
+              SELECT osi, ticker, opt_type, ts, premium, bias,
+                     payload->>'strike'                          AS strike,
+                     payload->>'expiry'                          AS expiry,
+                     (payload->>'size')::float8                  AS sz,
+                     NULLIF(payload->>'price', '')::float8       AS px
                 FROM s
                WHERE osi IS NOT NULL
-               GROUP BY osi
-              HAVING COUNT(*) >= ?
+            ),
+            rf_f AS (
+              SELECT rf_x.*,
+                     COUNT(*)                                     OVER w AS c_n,
+                     COUNT(*) FILTER (WHERE bias = 'bull')        OVER w AS c_bull_n,
+                     COUNT(*) FILTER (WHERE bias = 'bear')        OVER w AS c_bear_n,
+                     SUM(premium)                                 OVER w AS c_total,
+                     COALESCE(SUM(premium) FILTER (WHERE bias = 'bull') OVER w, 0) AS c_bull,
+                     COALESCE(SUM(premium) FILTER (WHERE bias = 'bear') OVER w, 0) AS c_bear,
+                     COALESCE(SUM(sz)                             OVER w, 0) AS c_size,
+                     AVG(px)                                      OVER w AS c_px,
+                     MAX(ts)                                      OVER w AS c_end,
+                     COUNT(*)      OVER (PARTITION BY osi)               AS n_all,
+                     SUM(premium)  OVER (PARTITION BY osi)               AS total_all
+                FROM rf_x
+              WINDOW w AS (PARTITION BY osi ORDER BY ts
+                           RANGE BETWEEN CURRENT ROW AND ${windowMs}::bigint FOLLOWING)
+            ),
+            rf_best AS (
+              SELECT DISTINCT ON (osi) *
+                FROM rf_f
+               ORDER BY osi, c_n DESC, c_total DESC, ts ASC
             )
-            SELECT g.*,
-                   COUNT(*) OVER ()::int          AS all_contracts,
-                   SUM(g.n) OVER ()               AS all_orders,
-                   SUM(g.total) OVER ()           AS all_premium
-              FROM g
-             ORDER BY g.n DESC, g.total DESC
+            SELECT rf_best.*,
+                   COUNT(*)     OVER ()::int AS all_contracts,
+                   SUM(c_n)     OVER ()      AS all_orders,
+                   SUM(c_total) OVER ()      AS all_premium
+              FROM rf_best
+             WHERE c_n >= ?
+             ORDER BY c_n DESC, c_total DESC
              LIMIT ?`, [...f.params, minOrders, RF_MAX_CONTRACTS]);
 
           const first = (rows && rows[0]) || null;
@@ -16486,21 +16546,22 @@ try {
               osi: String(r.osi),
               ticker: r.ticker ? String(r.ticker) : '',
               strike: r.strike === null || r.strike === undefined ? '' : String(r.strike),
-              type: r.type ? String(r.type) : '',
+              type: r.opt_type ? String(r.opt_type) : '',
               expiry: r.expiry ? String(r.expiry) : '',
-              n: whNum(r.n),
-              bullN: whNum(r.bull_n),
-              bearN: whNum(r.bear_n),
-              total: whNum(r.total),
-              bull: whNum(r.bull),
-              bear: whNum(r.bear),
-              bought: whNum(r.bought),
-              sold: whNum(r.sold),
-              size: whNum(r.size),
-              avgPrice: r.avg_price === null || r.avg_price === undefined ? null : whNum(r.avg_price),
-              firstTs: whNum(r.first_ts),
-              lastTs: whNum(r.last_ts),
-              sessions: whNum(r.sessions),
+              // The burst — the densest window.
+              n: whNum(r.c_n),
+              bullN: whNum(r.c_bull_n),
+              bearN: whNum(r.c_bear_n),
+              total: whNum(r.c_total),
+              bull: whNum(r.c_bull),
+              bear: whNum(r.c_bear),
+              size: whNum(r.c_size),
+              avgPrice: r.c_px === null || r.c_px === undefined ? null : whNum(r.c_px),
+              firstTs: whNum(r.ts),
+              lastTs: whNum(r.c_end),
+              // The whole range, for context.
+              nAll: whNum(r.n_all),
+              totalAll: whNum(r.total_all),
             })),
             error: null,
           }, { 'Cache-Control': NO_STORE });

@@ -35,7 +35,7 @@ import OwnerBrainGraph from "../components/OwnerBrainGraph";
  */
 export default function Hub() {
   const navigate = useNavigate();
-  const [view, setView] = useState<"brain" | "list">("list");
+  const [view, setView] = useState<"brain" | "voltick" | "list">("list");
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
   const [pinned, setPinned] = useState<HubLink[]>([]);
@@ -91,7 +91,7 @@ export default function Hub() {
   };
 
   // ── shared bits ────────────────────────────────────────────────────────────
-  const toggleBtn = (id: "brain" | "list", label: string) => (
+  const toggleBtn = (id: "brain" | "voltick" | "list", label: string) => (
     <button
       onClick={() => setView(id)}
       style={{
@@ -341,14 +341,20 @@ export default function Hub() {
           Owner Hub
         </span>
         <div style={{ display: "flex", gap: 8 }}>
-          {toggleBtn("brain", "Brain")}
+          {toggleBtn("brain", "CB Brain")}
+          {toggleBtn("voltick", "Voltick Brain")}
           {toggleBtn("list", "List")}
         </div>
       </div>
 
-      {view === "brain" ? (
+      {view !== "list" ? (
         <div style={{ flex: 1, minHeight: 0, display: "flex", padding: "clamp(14px,2vw,22px)" }}>
-          <OwnerBrainGraph onOpen={go} pinned={pinnedHrefs} />
+          <OwnerBrainGraph
+            key={view}
+            brain={view === "voltick" ? "voltick" : "cbedge"}
+            onOpen={go}
+            pinned={pinnedHrefs}
+          />
         </div>
       ) : (
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 18 }}>
