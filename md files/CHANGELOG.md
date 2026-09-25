@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-25 - Every snapshot signed: Voltick bolt + voltick.io/bzila
+
+- Every 📸 snapshot (CopyShot, including the GEX Change Top tiles) now carries the **Voltick bolt and `voltick.io/bzila`** in the bottom right.
+  - **Framed shots:** the signature sits at the right end of the caption band, where the CB Edge mark used to be. The caption text stops short of it.
+  - **Bare shots** (posters and templates): a 32px band is added under the picture with the signature in it.
+  - **Trade cards** already sign themselves, so they wear `data-capture-signed` and don't get a second one.
+- The default caption title is `Voltick` instead of `CB Edge`.
+- `loadLogo()` now loads `@/assets/voltick-bolt.png` (same-origin). A failed load is not cached, and the link still prints without the bolt.
+- Files: `cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/board/topFlow/ContractProbe.tsx`.
+
+## 2026-09-25 - Tracked contract pop-out: layout A with separate tiles and a Voltick signature
+
+- The tracked-contract pop-out now uses **layout A** (mock: `generated/2026-09-25-tracked-snapshot-a-separated.png`):
+  - The header has the ticker, strike pill, expiry and DTE, with the TRACKED pill on the right.
+  - Eight **separate tile cards** with gaps between them: Contract, Expiry, Entry, Mark, Move, Size, Premium, Tracked.
+  - The note is its own card.
+  - Below that: ▲ move %, IN → NOW · $/ct, the chart, then the signature.
+- **Signature, bottom right on every trade card (A and D):** the Voltick bolt (new `cbedge-v3/src/assets/voltick-bolt.png`, cropped from `voltick-avatar.png`) plus **voltick.io/bzila**. The asset is same-origin, so the 📸 snapshot keeps it. The snapshot stays bare, with no CB Edge band.
+- `ProbeAlertInfo` gains optional `items`: when it is given, the card draws layout A; when it is left out, it draws D. Repeated flow's card doesn't pass `items`, so it stays D.
+- Files: `cbedge-v3/src/board/topFlow/ContractProbe.tsx`, `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`, `cbedge-v3/src/assets/voltick-bolt.png` (new).
+
 ## 2026-09-25 - Quick Probe: probes now show in the Notes drawer; manual probe claims auto rows
 
 - `cbedge-v3/src/shell/QuickProbe.tsx`: the Notes-drawer Quick Probe card now lists the probe list under the form (ticker/strike/side, expiry, entry → mark, % change, × to remove), reloaded after each Probe and every 60s. Before, it only said "Added" and showed nothing.
@@ -24433,3 +24454,13 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - Is it live: opens `/ws`, focuses one board, times full-grid frames + price patches; checks access=live, feed=thetadata, grid age, streamed spot vs engine quote, front expiry current.
 - Is it right: pulls `/api/admin/oi-audit` chain inputs and rebuilds each GEX cell of one expiry (`Γ × netOI × 100 × S² × 1%`, engine greeks), fits build spot (trimmed), flags MATCH ≤2% / CLOSE ≤5% / OFF; grid-sum + wall consistency; OI print via `/api/admin/data-audit`; stalest quotes via `/api/admin/quote-ages`.
 - Per-strike working panel, streamed-vs-rebuilt bars, log, copy report, 30s auto re-check. Mock mode includes one deliberate stale-OI strike. `api()` mock now accepts query strings. README + ADMIN-SETUP updated; no server change.
+
+## 2026-09-25 — Voltick theme: Volt / Surge / Reversal / Coil on GEX Candles + Multi Greek
+- New `cbedge-v3/src/data/voltickLevels.ts`: `voltickMarks()` (port of the owner-dash bot's `voltickFromBooks` — Volt = highest live OI+vol GEX, Surge = biggest vol GEX, Reversal = shelf-weighted opposite pole, Coil ≥ ½ Volt) + `VT_LEVELS` (mark, label, fill/ink tokens).
+- `design/tokens.css`: Voltick level vocabulary tokens `--color-vt-volt/-ink #ffd166/#1a1404`, `--color-vt-surge/-ink #4d8cff/#071026`, `--color-vt-reversal/-ink #ff5fa2/#36081d`, `--color-vt-coil/-ink #2f6bff/#e7ece9`, `--color-vt-flip #b48cff`, `--color-vt-premarket #8adb57`.
+- GEX Candles (`GexRail.tsx`, `chart.ts`, `GexCandlesCard.tsx`): with the Voltick UI theme on, the rail and pane tag ★ VOLT / ↯ SURGE / ↘ REV / ◆ COIL (filled chip, own ink) instead of CORE/CW/PW; same-strike chips sit side by side.
+- Multi Greek (`MultiGreekCard.tsx`): Voltick theme swaps CB/CW/PW badges for the four Voltick levels per column, Volt takes the core's wash (Volt yellow) + glow; toggle relabelled. CB Edge theme unchanged.
+
+## 2026-09-25 — Owner Hub: Brain graph ported (owner-vite)
+- New `owner-vite/src/components/OwnerBrainGraph.tsx`: port of v2 `components/shared/OwnerBrainGraph.tsx` (3D force-directed canvas, perspective + depth fog, seeded per-node variance). Data now comes from owner-vite's own nav — core = OWNER, hubs = `OWNER_SIDEBAR_GROUPS` (group accent), leaves = `HUB_LINKS` — so there's no second route list.
+- `owner-vite/src/pages/Hub.tsx`: "Brain" toggle renders the graph instead of the "coming in a later pass" placeholder. Leaf click → same `go()` as List (records recent + navigates); ⌘/Ctrl-click opens a new tab; hub click zoom-focuses the group; drag orbits, wheel zooms. Pinned routes get a gold ring. Colors from `lib/theme` (OWNER_THEME / LIGHT_BLUE / TYPE); zoom auto-fits the panel size.

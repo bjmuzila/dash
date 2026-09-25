@@ -244,8 +244,25 @@ function AlertRow({ a, mark, open, onToggle, store }: {
       dteLabel: days != null ? `${days}d` : null,
       trackedAt: a.createdAt,
       note: a.note || undefined,
+      // Layout A's tiles — this row's own numbers, so the PNG says what the
+      // table says.
+      items: [
+        { k: 'Contract', v: `${a.underlying} ${fmtStrike(a.strike)}${a.optType}`, sub: a.source === 'whale' ? 'from print' : 'from lookup' },
+        { k: 'Expiry', v: fmtExpiry(a.expiry), sub: days != null ? `${days}d to expiry` : undefined, ink: days != null && days <= 2 ? 'text-warn' : undefined },
+        { k: 'Entry', v: entry?.toFixed(2) ?? '—', sub: a.printTs ? `printed ${fmtWhen(a.printTs)}` : undefined },
+        { k: 'Mark', v: mark == null ? '—' : mark.toFixed(2) },
+        {
+          k: 'Move',
+          v: pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`,
+          sub: dollars != null ? `${dollars >= 0 ? '+' : '−'}${fmtPremium(Math.abs(dollars))}` : undefined,
+          ink,
+        },
+        { k: 'Size', v: a.printSize ? `${a.printSize.toLocaleString()} ct` : '—' },
+        { k: 'Premium', v: a.printPremium ? fmtPremium(a.printPremium) : '—' },
+        { k: 'Tracked', v: fmtWhen(a.createdAt) },
+      ],
     }
-  }, [a, days, entry])
+  }, [a, days, entry, mark, pct, dollars, ink])
 
   const commitNote = () => {
     if (draft == null) return

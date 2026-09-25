@@ -20,6 +20,7 @@ import {
   togglePin,
   type HubLink,
 } from "../lib/hubPrefs";
+import OwnerBrainGraph from "../components/OwnerBrainGraph";
 
 /**
  * /owner — command-bar hub.
@@ -346,15 +347,8 @@ export default function Hub() {
       </div>
 
       {view === "brain" ? (
-        <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "clamp(14px,2vw,22px)" }}>
-          <div style={{ ...classicCardAccentStyle, padding: "22px 26px", maxWidth: 520, textAlign: "center" }}>
-            <div style={{ fontSize: TYPE.label, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>
-              Brain graph — coming in a later pass
-            </div>
-            <p style={{ fontSize: TYPE.body, color: OWNER_THEME.text, lineHeight: 1.6, margin: 0, opacity: 0.85 }}>
-              The force-directed route map (OwnerBrainGraph) will be ported next. Use the List view to navigate for now.
-            </p>
-          </div>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", padding: "clamp(14px,2vw,22px)" }}>
+          <OwnerBrainGraph onOpen={go} pinned={pinnedHrefs} />
         </div>
       ) : (
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 18 }}>

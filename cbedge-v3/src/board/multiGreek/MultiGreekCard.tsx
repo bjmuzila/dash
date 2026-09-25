@@ -5,6 +5,8 @@ import { useQuery } from '@/data/api'
 import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { SegGroup, Slider, Dropdown, Popover, PanelSection, Chip } from '../gexCandles/controls'
 import { CellCard } from './CellCard'
+import { readUiTheme } from '@/design/uiTheme'
+import { voltickMarks, vtLevelsAt, type VoltickMarks, type VtLevelDef } from '@/data/voltickLevels'
 import {
   BASIS_LABEL,
   EX0_KEY,
@@ -135,6 +137,18 @@ const CB_FILL = 'color-mix(in srgb, var(--color-level-cb) 85%, transparent)'
 /** Fades to gold-at-zero, not `transparent`: a ramp through grey reads dirty. */
 const CB_FADE = 'color-mix(in srgb, var(--color-level-cb) 0%, transparent)'
 const CB_WASH = `linear-gradient(${CB_WASH_ANGLE},${CB_GOLD} 0%,${CB_FILL} 55%,${CB_FADE} 82%)`
+
+/**
+ * VOLTICK THEME — the Volt takes the core's place and its wash, in the Volt's
+ * own reserved yellow (tokens.css --color-vt-volt). Same stops as CB_WASH.
+ */
+const VT_VOLT = 'var(--color-vt-volt)'
+const VT_FILL = 'color-mix(in srgb, var(--color-vt-volt) 85%, transparent)'
+const VT_FADE = 'color-mix(in srgb, var(--color-vt-volt) 0%, transparent)'
+const VT_WASH = `linear-gradient(${CB_WASH_ANGLE},${VT_VOLT} 0%,${VT_FILL} 55%,${VT_FADE} 82%)`
+
+/** Owner-only Voltick UI theme. Read once — the toolbar toggle reloads the page. */
+const VOLTICK_THEME = readUiTheme() === 'voltick'
 
 function readStored(key: string, fallback: string): string {
   try {
@@ -377,6 +391,33 @@ function TickerPanel({
     return out
   }, [display, valuesByCol, spot])
 
+  /**
+   * Voltick theme: Volt / Surge / Reversal / Coil per column, the owner-dash
+   * bot's definitions (data/voltickLevels.ts) — the LIVE book (OI + volume)
+   * for Volt/Reversal/Coil and the volume-only book for Surge, whatever the
+   * basis control is on. null on the CB Edge theme.
+   */
+  const vtByCol = useMemo(() => {
+    if (!VOLTICK_THEME) return null
+    const out = new Map<string, VoltickMarks>()
+    for (const col of display) {
+      const acc = new Map<number, { book: number; vol: number }>()
+      const sources = col.key === EX0_KEY ? ex0Source.map((c) => c.expiration) : [col.expiration]
+      for (const exp of sources) {
+        const chainForExp = byExp.get(exp)
+        if (!chainForExp) continue
+        for (const [strike, row] of chainForExp.byStrike) {
+          const cur = acc.get(strike) ?? { book: 0, vol: 0 }
+          cur.book += strikeGex(row, spot, 'oivol')
+          cur.vol += strikeGex(row, spot, 'vol')
+          acc.set(strike, cur)
+        }
+      }
+      out.set(col.key, voltickMarks([...acc].map(([strike, v]) => ({ strike, book: v.book, vol: v.vol }))))
+    }
+    return out
+  }, [byExp, display, ex0Source, spot])
+
   const atm = useMemo(() => {
     const first = rows[0]
     if (!spot || first === undefined) return null
@@ -538,6 +579,10 @@ function TickerPanel({
     if (s.pw === strike) return 'pw'
     return null
   }
+
+  /** Voltick theme: the levels a strike carries in a column (can be two). */
+  const vtOf = (colKey: string, strike: number): VtLevelDef[] =>
+    vtByCol ? vtLevelsAt(vtByCol.get(colKey), strike) : []
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-surface2">
@@ -750,9 +795,13 @@ function TickerPanel({
                 // gold on the core is colour, not a label: it is how the core
                 // is found across four ladders at a glance, and a board with
                 // the badges cleared still has to answer "where is it".
-                const level = levelOf(c.key, strike)
+                const vtLevels = vtByCol ? vtOf(c.key, strike) : []
+                // Voltick theme swaps CB / CW / PW for Volt / Surge / Reversal
+                // / Coil; the Volt takes the core's wash and glow.
+                const level = vtByCol ? null : levelOf(c.key, strike)
                 const isFront = front != null && c.key === front.key
-                const isCb = level === 'cb'
+                const isCb = vtByCol ? vtLevels.some((d) => d.key === 'volt') : level === 'cb'
+                const coreWash = vtByCol ? VT_WASH : CB_WASH
                 // NEAR CORE. A filter on WHICH cells get the wash — never a
                 // second kind of wash. A strike that clears the threshold is
                 // painted exactly as it would have been with the filter off,
@@ -764,7 +813,10 @@ function TickerPanel({
                 // on an unpainted cell reads as a bug, and the threshold has no
                 // business deciding where the walls are.
                 const painted =
-                  !nearCore || level != null || (s ? isNearCore(v, s.maxAbs, nearCoreThreshold) : false)
+                  !nearCore ||
+                  level != null ||
+                  vtLevels.length > 0 ||
+                  (s ? isNearCore(v, s.maxAbs, nearCoreThreshold) : false)
                 const alpha = painted && s ? cellAlpha(v, s.maxAbs, rank, intensity) : 0
                 const hue = v >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
                 const heat =
@@ -812,7 +864,7 @@ function TickerPanel({
                             // translucent layer over another without knowing
                             // what the layer underneath resolved to — the same
                             // trick v2's levelFillBg() uses.
-                            background: `${CB_WASH}, ${heat}`,
+                            background: `${coreWash}, ${heat}`,
                             textShadow: '0 1px 2px color-mix(in srgb, var(--color-app) 85%, transparent)',
                           }
                         : {
@@ -838,7 +890,7 @@ function TickerPanel({
                         and the glow only softened the glyph's edge. */}
                     {showLevels && isCb && !isFront && (
                       <span
-                        title="Core Bullseye"
+                        title={vtByCol ? 'Volt' : 'Core Bullseye'}
                         className="pointer-events-none absolute left-0.5 top-px text-2xs leading-none"
                         style={{ color: 'var(--color-app)' }}
                       >
@@ -854,6 +906,24 @@ function TickerPanel({
                         style={{ boxShadow: `inset 0 0 0 1px var(--color-level-${level})` }}
                       >
                         {level.toUpperCase()}
+                      </span>
+                    )}
+
+                    {/* Voltick theme, front expiry: each level's mark on its
+                        own reserved fill, in its own ink. A strike can carry
+                        two (Volt = Surge is common) — they sit side by side. */}
+                    {showLevels && vtLevels.length > 0 && isFront && (
+                      <span className="pointer-events-none absolute right-0.5 top-1/2 flex -translate-y-1/2 gap-px">
+                        {vtLevels.map((d) => (
+                          <span
+                            key={d.key}
+                            title={d.title}
+                            className="rounded-[3px] px-[3px] text-3xs font-black leading-[1.3] tracking-[0.04em]"
+                            style={{ background: d.fill, color: d.ink }}
+                          >
+                            {d.mark} {d.label}
+                          </span>
+                        ))}
                       </span>
                     )}
                   </div>
@@ -1226,10 +1296,14 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
               </div>
               <div className="flex gap-1">
                 <Chip
-                  label="CB / CW / PW"
+                  label={VOLTICK_THEME ? 'Volt / Surge / Rev / Coil' : 'CB / CW / PW'}
                   on={showLevels}
                   onClick={() => setShowLevels((v) => !v)}
-                  title="Name the Core Bullseye, Call Wall and Put Wall — the front expiry's badges and the ★ on later expiries. The core's gold stays either way."
+                  title={
+                    VOLTICK_THEME
+                      ? "Name the Volt ★, Surge ↯, Reversal ↘ and Coil ◆ — the front expiry's badges and the ★ on later expiries. The Volt's yellow stays either way."
+                      : "Name the Core Bullseye, Call Wall and Put Wall — the front expiry's badges and the ★ on later expiries. The core's gold stays either way."
+                  }
                 />
               </div>
             </PanelSection>

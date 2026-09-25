@@ -60,6 +60,7 @@ import { bubbleWindowMax, buildBubbleModel } from './bubbles'
 import { buildRail, GexRail } from './GexRail'
 import { mountEsChart, type EsChartHandle } from './chart'
 import { useDailyEm } from '@/data/dailyEm'
+import { readUiTheme } from '@/design/uiTheme'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Candles — v2's ES chart rebuilt for v3, scoped to GEX BUBBLES ONLY.
@@ -1139,7 +1140,13 @@ export function GexCandlesCard({
 
   // Same history, second view: the bubbles say how the ladder got here across
   // the session, the rail says where it stands right now. No extra request.
-  const railModel = useMemo(() => buildRail(columns, settings.gexMetric), [columns, settings.gexMetric])
+  // Voltick UI theme: the rail and the pane tag Volt / Surge / Reversal / Coil
+  // instead of CORE / CW / PW. Read once — the theme toggle reloads the page.
+  const [voltickTheme] = useState(() => readUiTheme() === 'voltick')
+  const railModel = useMemo(
+    () => buildRail(columns, settings.gexMetric, voltickTheme),
+    [columns, settings.gexMetric, voltickTheme],
+  )
 
 
   // ── Chart ──────────────────────────────────────────────────────────────────
@@ -1772,7 +1779,11 @@ export function GexCandlesCard({
                     label="Levels"
                     on={settings.levelLabels}
                     onClick={() => patch({ levelLabels: !settings.levelLabels })}
-                    title="CORE, CW and PW drawn on the chart itself — a tag at the left edge of each, name and price, no line. Same three levels the rail tags: CORE is the biggest gamma strike on the ladder, CW the call wall above spot, PW the put wall below"
+                    title={
+                      voltickTheme
+                        ? 'Volt ★, Surge ↯, Reversal ↘ and Coil ◆ drawn on the chart itself — a tag at the left edge of each, name and price, no line. Volt is the highest-GEX strike (OI + volume), Surge the biggest volume GEX, Reversal the opposite-sign pole, Coil a level at least half the Volt'
+                        : 'CORE, CW and PW drawn on the chart itself — a tag at the left edge of each, name and price, no line. Same three levels the rail tags: CORE is the biggest gamma strike on the ladder, CW the call wall above spot, PW the put wall below'
+                    }
                   />
                   {/* Its own switch, not folded into Levels — see `emLevels` in
                       settings.ts. The walls move with the book; this one was

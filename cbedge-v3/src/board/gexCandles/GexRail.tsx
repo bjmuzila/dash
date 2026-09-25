@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { valueOf, type GexColumn } from './gexHistory'
 import type { GexMetric } from './settings'
 import type { EsChartHandle, RailSink } from './chart'
+import { voltickMarks, vtLevelsAt, type VoltickMarks } from '@/data/voltickLevels'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The GEX rail — the live strike ladder, pinned to the chart's price axis.
@@ -60,6 +61,12 @@ export interface RailLevels {
   cw: number | null
   /** Put wall — most −GEX below spot, CB excluded. */
   pw: number | null
+  /**
+   * Voltick theme only: Volt / Surge / Reversal / Coil off the same newest
+   * column (data/voltickLevels.ts). When present the rail and the pane tag
+   * these four INSTEAD of CB / CW / PW. null on the CB Edge theme.
+   */
+  vt?: VoltickMarks | null
 }
 
 export interface RailModel {
@@ -76,7 +83,7 @@ const EMPTY: RailModel = { rows: [], levels: { cb: null, cw: null, pw: null }, s
  * built from — one fetch, two views of it. The bubbles say how the ladder got
  * here over the session; the rail says where it stands right now.
  */
-export function buildRail(columns: GexColumn[], metric: GexMetric): RailModel {
+export function buildRail(columns: GexColumn[], metric: GexMetric, voltick = false): RailModel {
   const col = columns[columns.length - 1]
   if (!col) return EMPTY
 
@@ -124,7 +131,14 @@ export function buildRail(columns: GexColumn[], metric: GexMetric): RailModel {
     }
   }
 
-  return { rows, levels: { cb, cw, pw }, spot, maxAbs }
+  // Voltick levels read the LIVE book (OI+vol) for Volt/Reversal/Coil and the
+  // volume-only book for Surge — whatever the GEX basis control says, the same
+  // way the owner-dash bot names them.
+  const vt = voltick
+    ? voltickMarks(col.cells.map((c) => ({ strike: c.strike, book: c.net, vol: c.netVol })))
+    : null
+
+  return { rows, levels: { cb, cw, pw, vt }, spot, maxAbs }
 }
 
 /**
@@ -171,7 +185,10 @@ export function GexRail({ model, applyChart }: GexRailProps) {
    */
   const order = useMemo(() => {
     const named = new Set<number>()
-    for (const s of [levels.cb, levels.cw, levels.pw]) if (s != null) named.add(s)
+    const keyed = levels.vt
+      ? [levels.vt.volt, levels.vt.surge, levels.vt.reversal, levels.vt.coil]
+      : [levels.cb, levels.cw, levels.pw]
+    for (const s of keyed) if (s != null) named.add(s)
     const rest = rows.filter((r) => !named.has(r.strike)).sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
     return [...named, ...rest.map((r) => r.strike)]
   }, [rows, levels])
@@ -229,7 +246,8 @@ export function GexRail({ model, applyChart }: GexRailProps) {
         const pos = r.value >= 0
         const hue = pos ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
         const pct = maxAbs > 0 ? Math.max(2, (Math.abs(r.value) / maxAbs) * 100) : 0
-        const marks = TAGS.filter((t) => levels[t.key] === r.strike)
+        const marks = levels.vt ? [] : TAGS.filter((t) => levels[t.key] === r.strike)
+        const vtMarks = levels.vt ? vtLevelsAt(levels.vt, r.strike) : []
         return (
           <div
             key={r.strike}
@@ -256,6 +274,17 @@ export function GexRail({ model, applyChart }: GexRailProps) {
                   style={{ background: `var(--color-level-${m.key})`, color: 'var(--color-app)' }}
                 >
                   {m.key.toUpperCase()}
+                </span>
+              ))}
+              {/* Voltick theme: the level's mark on its own fill, its own ink. */}
+              {vtMarks.map((m) => (
+                <span
+                  key={m.key}
+                  title={m.title}
+                  className="rounded-[2px] px-[3px] text-3xs font-black leading-[1.5]"
+                  style={{ background: m.fill, color: m.ink }}
+                >
+                  {m.mark}
                 </span>
               ))}
             </span>

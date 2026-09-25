@@ -28,6 +28,7 @@ import { BUBBLES } from './settings'
 // 8-digit hex this returns is accepted by every canvas fill and chart option.
 import { tokenHexAlpha } from '@/design/theme'
 import type { DailyEmBand } from '@/data/dailyEm'
+import { VT_LEVELS, type VoltickMarks } from '@/data/voltickLevels'
 
 /**
  * Read one design token off the mounted element.
@@ -152,6 +153,12 @@ export interface ChartLevels {
   cw: number | null
   /** Put wall — most −GEX below spot, core excluded. */
   pw: number | null
+  /**
+   * Voltick UI theme: Volt ★ / Surge ↯ / Reversal ↘ / Coil ◆. When present
+   * the pane tags these four INSTEAD of CORE / CW / PW, each on its own
+   * reserved fill with its own ink (tokens.css --color-vt-*).
+   */
+  vt?: VoltickMarks | null
 }
 
 /**
@@ -374,7 +381,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   // The three level tokens, read once with everything else. The SAME variables
   // the GEX rail's tags and the Multi Greek badges use — a level is one colour
   // across the app or it is a colour scheme nobody can learn.
-  const levelInk: Record<keyof ChartLevels, string> = {
+  const levelInk: Record<'cb' | 'cw' | 'pw', string> = {
     cb: cssVar(container, '--color-level-cb'),
     cw: cssVar(container, '--color-level-cw'),
     pw: cssVar(container, '--color-level-pw'),
@@ -385,6 +392,13 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   // this pane is not already spending: the walls own blue and red, the core
   // gold, the candles green and red.
   const emInk = cssVar(container, '--color-level-em')
+  // Voltick level chips: the reserved fill and the ink that sits on it.
+  const vtInk = VT_LEVELS.map((d) => ({
+    key: d.key,
+    label: `${d.mark} ${d.label}`,
+    fill: cssVar(container, d.fillVar),
+    ink: cssVar(container, d.inkVar),
+  }))
   // Ink for the text INSIDE a tag: the page ground, so the tag reads as a
   // filled label rather than as coloured text on a chart.
   const appInk = cssVar(container, '--color-app')
@@ -1225,29 +1239,40 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       ctx.beginPath()
       ctx.rect(0, 0, plotW, plotH)
       ctx.clip()
-      for (const [key, label] of [
-        ['cb', 'CORE'],
-        ['cw', 'CW'],
-        ['pw', 'PW'],
-      ] as Array<[keyof ChartLevels, string]>) {
-        const price = levels[key]
+      // CB Edge theme: CORE / CW / PW on the level palette with app-ground ink.
+      // Voltick theme: Volt / Surge / Reversal / Coil, each on its reserved
+      // fill with its own ink. Same chip, same margin, same 2dp.
+      const vt = levels.vt
+      const chips: Array<{ price: number | null; label: string; fill: string; ink: string }> = vt
+        ? vtInk.map((d) => ({ price: vt[d.key], label: d.label, fill: d.fill, ink: d.ink }))
+        : (
+            [
+              ['cb', 'CORE'],
+              ['cw', 'CW'],
+              ['pw', 'PW'],
+            ] as Array<[keyof typeof levelInk, string]>
+          ).map(([key, label]) => ({ price: levels[key], label, fill: levelInk[key], ink: appInk }))
+      for (const chip of chips) {
+        const price = chip.price
         if (price == null || !(price > 0)) continue
         const yRaw = yOfPrice(price)
         if (yRaw == null) continue
         // Half-pixel, so a 1px line is one crisp row rather than two grey ones.
         const y = Math.round(yRaw) + 0.5
         if (y < 0 || y > plotH) continue
-        const ink = levelInk[key]
 
         // `${name} ${price}` in one chip. Same 2dp the price scale uses, so the
-        // tag and the axis cannot read as two different numbers.
-        const text = `${label} ${price.toFixed(2)}`
+        // tag and the axis cannot read as two different numbers. Two levels on
+        // one strike (Volt = Surge is common) sit side by side, never stacked.
+        const text = `${chip.label} ${price.toFixed(2)}`
         const tw = ctx.measureText(text).width
-        ctx.fillStyle = ink
-        ctx.fillRect(2, y - 6, tw + 6, 12)
-        ctx.fillStyle = appInk
-        ctx.fillText(text, 5, y + 0.5)
-        chipRows.push({ y, right: 2 + tw + 6 })
+        let x = 2
+        for (const r of chipRows) if (Math.abs(r.y - y) < CHIP_H && r.right + 2 > x) x = r.right + 2
+        ctx.fillStyle = chip.fill
+        ctx.fillRect(x, y - 6, tw + 6, 12)
+        ctx.fillStyle = chip.ink
+        ctx.fillText(text, x + 3, y + 0.5)
+        chipRows.push({ y, right: x + tw + 6 })
       }
       ctx.restore()
     }

@@ -58,6 +58,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { tokenHex, tokenHexAlpha } from '@/design/theme'
+import voltickBolt from '@/assets/voltick-bolt.png'
 
 /** What actually happened to the PNG. The clipboard is not always available. */
 export type ShotResult = 'copied' | 'saved'
@@ -175,8 +176,16 @@ const CAPTION_BASE = 16
 const CAPTION_PAD = 16
 /** Type sizes off `tokens.css`'s scale — 13 is `text-sm`. */
 const CAPTION_PX = 13
-const LOGO_H = 24
-const LOGO_ALPHA = 0.85
+const LOGO_H = 22
+/** Gap between the Voltick bolt and the link text. */
+const SIGN_GAP = 7
+/** The link that signs every snapshot, beside the bolt. */
+const SIGN_TEXT = 'voltick.io/bzila'
+/**
+ * An element that already carries the bolt + link inside itself (the probe's
+ * trade card) wears this, and a BARE capture of it is not signed twice.
+ */
+const SIGN_ATTR = 'data-capture-signed'
 /**
  * The ticker badge at the head of the caption. Smaller than the CB Edge mark
  * opposite it — that one is the publisher and this one is a label on the
@@ -187,9 +196,11 @@ const BADGE_H = 22
 const BADGE_GAP = 8
 const SEP = '  ·  '
 
-// No publisher mark on snapshots (Brandon, 2026-09-24): the CB Edge logo was
-// removed from every snapshot template. `frame()` still accepts a logo so the
-// caption layout is unchanged; `loadLogo()` now always resolves to null.
+// EVERY SNAPSHOT IS SIGNED (Brandon, 2026-09-25): the Voltick bolt and
+// `voltick.io/bzila`, bottom right. The CB Edge mark is gone (2026-09-24).
+// Framed shots carry it at the right of the caption; BARE shots (posters,
+// templates) get a caption-height band added underneath with the signature
+// in it, unless the element signs itself (SIGN_ATTR).
 
 /**
  * THE PIXEL BUDGET, and why it exists.
@@ -918,8 +929,60 @@ function stampNow(): string {
  * Resolves to null on any failure — a missing logo prints a caption without one
  * rather than losing the shot.
  */
+let boltLoad: Promise<HTMLImageElement | null> | null = null
 function loadLogo(): Promise<HTMLImageElement | null> {
-  return Promise.resolve(null)
+  // Same-origin (a Vite asset), so it never taints the canvas. A failed load
+  // is not cached — the next shot tries again.
+  if (!boltLoad) {
+    boltLoad = loadImage(voltickBolt).then((img) => {
+      if (!img) boltLoad = null
+      return img
+    })
+  }
+  return boltLoad
+}
+
+/**
+ * The signature: bolt + `voltick.io/bzila`, right-aligned to `right`, centred
+ * on `mid`. Returns the width it took so the caption can stop short of it.
+ * A missing bolt still prints the link.
+ */
+function drawSignature(
+  ctx: CanvasRenderingContext2D,
+  right: number,
+  mid: number,
+  face: string,
+  bolt: HTMLImageElement | null,
+): number {
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'left'
+  ctx.font = `700 ${CAPTION_PX}px ${face}`
+  ctx.fillStyle = tokenHex('--color-fg')
+  const tw = ctx.measureText(SIGN_TEXT).width
+  const tx = right - tw
+  ctx.fillText(SIGN_TEXT, tx, mid)
+  if (!(bolt?.naturalWidth && bolt.naturalHeight)) return tw
+  const bw = (bolt.naturalWidth / bolt.naturalHeight) * LOGO_H
+  ctx.drawImage(bolt, tx - SIGN_GAP - bw, mid - LOGO_H / 2, bw, LOGO_H)
+  return tw + SIGN_GAP + bw
+}
+
+/** A bare shot plus one caption-height band holding only the signature. */
+function signBare(shot: HTMLCanvasElement, scale: number, bolt: HTMLImageElement | null): HTMLCanvasElement {
+  const w = shot.width / scale
+  const cardH = shot.height / scale
+  const h = cardH + CAPTION_BAND
+  const out = document.createElement('canvas')
+  out.width = Math.round(w * scale)
+  out.height = Math.round(h * scale)
+  const ctx = out.getContext('2d')
+  if (!ctx) return shot
+  ctx.scale(scale, scale)
+  ctx.fillStyle = tokenHex('--color-bg')
+  ctx.fillRect(0, 0, w, h)
+  ctx.drawImage(shot, 0, 0, w, cardH)
+  drawSignature(ctx, w - CAPTION_PAD, h - CAPTION_BASE, getComputedStyle(document.body).fontFamily, bolt)
+  return out
 }
 
 /**
@@ -995,14 +1058,8 @@ function frame(
   const mid = h - CAPTION_BASE
   ctx.textBaseline = 'middle'
 
-  // The mark goes down first so the caption knows how much room is left.
-  let logoW = 0
-  if (logo?.naturalWidth && logo.naturalHeight) {
-    logoW = (logo.naturalWidth / logo.naturalHeight) * LOGO_H
-    ctx.globalAlpha = LOGO_ALPHA
-    ctx.drawImage(logo, w - CAPTION_PAD - logoW, mid - LOGO_H / 2, logoW, LOGO_H)
-    ctx.globalAlpha = 1
-  }
+  // The signature goes down first so the caption knows how much room is left.
+  const logoW = drawSignature(ctx, w - CAPTION_PAD, mid, face, logo)
 
   // The ticker badge leads the line. Drawn before the text is measured so the
   // caption's left edge and its room are the same number in both branches.
@@ -1187,12 +1244,15 @@ export async function captureCanvas(el: HTMLElement, opts: ShotOptions = {}): Pr
   // The DOM wins where both exist: the card is closer to the truth than the
   // menu entry that pointed at it.
   const meta = metaOf(el) ?? opts.meta ?? null
+  // Signs itself (the trade card) — then a bare shot gets no second signature.
+  const signed = el.hasAttribute(SIGN_ATTR) || el.querySelector(`[${SIGN_ATTR}]`) != null
   const [{ canvas, scale }, logo, badge] = await Promise.all([
     rasterise(el),
-    opts.bare ? Promise.resolve(null) : loadLogo(),
+    opts.bare && signed ? Promise.resolve(null) : loadLogo(),
     opts.bare ? Promise.resolve(null) : loadBadge(opts.badge),
   ])
-  return opts.bare ? canvas : frame(canvas, scale, opts.title ?? 'CB Edge', meta, logo, badge)
+  if (opts.bare) return signed ? canvas : signBare(canvas, scale, logo)
+  return frame(canvas, scale, opts.title ?? 'Voltick', meta, logo, badge)
 }
 
 /** Photograph `el`, frame it, and put it on the clipboard. */

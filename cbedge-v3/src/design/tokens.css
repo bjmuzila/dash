@@ -395,6 +395,23 @@
   --color-vt-good: #3ddc8e;
   --color-vt-bad: #ff6b7a;
 
+  /* ── Voltick LEVEL vocabulary (Voltick "Color vocabulary") ─────────────
+     A colour is a word: each hex means exactly one level and nothing else.
+     Read by GEX Candles + Multi Greek when the Voltick UI theme is on
+     (data/voltickLevels.ts). `-ink` is the text that sits ON a filled chip.
+       Volt ★ strongest level · Flip ⚡ gamma sign change · Reversal ↘
+       Surge ↯ / walls ‖ · Coil ◆ (same hex as ACCENT) · Pre-market state   */
+  --color-vt-volt: #ffd166;
+  --color-vt-volt-ink: #1a1404;
+  --color-vt-flip: #b48cff;
+  --color-vt-reversal: #ff5fa2;
+  --color-vt-reversal-ink: #36081d;
+  --color-vt-surge: #4d8cff;
+  --color-vt-surge-ink: #071026;
+  --color-vt-coil: #2f6bff;
+  --color-vt-coil-ink: #e7ece9;
+  --color-vt-premarket: #8adb57;
+
   /* Voltick poster display sizes — the econ-calendar Discord poster is a fixed
      1280×720 canvas, and these three are off the app scale on purpose. */
   --text-vt-hero: 2.5rem; /* 40px — poster date line */

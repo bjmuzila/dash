@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, roundStrike } from '@/data/flowMath'
 import { CopyShotButton, type CopyShotTarget } from '@/shell/CopyShot'
+import voltickBolt from '@/assets/voltick-bolt.png'
 import type { TopFlowRow } from './TopFlowCard'
 
 /**
@@ -35,6 +36,13 @@ export interface ProbeAlertInfo {
    * "REPEATED 7× · SEP 24").
    */
   badge?: string
+  /**
+   * LAYOUT A (2026-09-25, Brandon): the row's facts as separate tiles above
+   * the chart — Contract, Expiry, Entry, Mark, Move, Size, Premium, Tracked.
+   * Every trade card is layout A; omitted, the probe builds the eight tiles
+   * from the row and its live bars (the D card is retired).
+   */
+  items?: Array<{ k: string; v: string; ink?: string; sub?: string }>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -451,8 +459,18 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo: alertInfoProp,
     const stamp = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
     }).format(new Date())
-    return (
-      <>
+    // Bottom right on every card: the Voltick bolt and the handle. Same-origin
+    // asset, so the capture inlines it (a cross-origin one would be dropped).
+    const signature = (
+      <div className="tabular flex items-center justify-between border-t border-line pt-2 text-xs text-fg">
+        <span>{stamp} ET</span>
+        <span className="flex items-center gap-2 text-sm font-bold tracking-[0.02em]">
+          <img src={voltickBolt} alt="" className="h-6 w-6 rounded-sm" />
+          voltick.io/bzila
+        </span>
+      </div>
+    )
+    const controls = (
         <div data-capture-hide className="flex items-center justify-end gap-2 px-5 pt-4">
           {shotTarget && (
             <CopyShotButton
@@ -479,40 +497,8 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo: alertInfoProp,
             ✕
           </button>
         </div>
-
-        <div ref={cardRef} className="flex flex-col gap-3 bg-surface2 px-5 pb-5 pt-2">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-xl font-bold leading-none tracking-[0.02em] text-fg">{row.underlying ?? '—'}</span>
-              {/* inline-flex + fixed height + leading-none: the strike text is
-                  centred by the box, not by a baseline the capture renderer
-                  places differently from the page. */}
-              <span className="tabular inline-flex h-5 items-center justify-center rounded-sm border border-warn/50 bg-warn/10 px-1.5 text-xs font-bold leading-none text-warn">
-                {fmtStrike(row.strike)}{row.type ?? ''}
-              </span>
-              <span className="tabular text-sm text-fg">
-                {fmtDate(row.expiry)}{info.dteLabel ? ` · ${info.dteLabel}` : ''}
-              </span>
-            </div>
-            <div className="tabular mt-1 text-xs text-fg">{info.headline}</div>
-          </div>
-          <div className="shrink-0 text-right">
-            <div className={['tabular text-4xl font-bold leading-none', ink].join(' ')}>
-              {pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(0)}%`}
-            </div>
-            <div className="tabular mt-1 text-xs text-fg">
-              {entry?.toFixed(2) ?? '—'} → {last?.toFixed(2) ?? '—'}
-              {dollars != null && (
-                <>
-                  {' · '}
-                  <span className={ink}>{dollars >= 0 ? '+' : '−'}{fmtPremium(Math.abs(dollars))}</span>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-
+    )
+    const ranges = (
         <div data-capture-hide className="flex shrink-0 items-center gap-1.5">
           {RANGES.map((r) => (
             <button
@@ -531,29 +517,97 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo: alertInfoProp,
             {q.loading && !bars.length ? 'loading…' : ''}
           </span>
         </div>
-
-        {bars.length >= 2 ? (
-          <ProbeChart bars={bars} entry={entry} entryTs={entryAt === undefined ? row.ts : entryAt} size={row.size} wide />
-        ) : (
-          <div className="px-1 py-6 text-xs text-fg">
-            {q.loading ? 'Loading…' : 'No bars for this contract in the window.'}
-          </div>
-        )}
-
-        <div className="flex items-center justify-between gap-3">
-          <span className="min-w-0 text-sm italic text-fg">{info.note ? `“${info.note}”` : ''}</span>
-          <span className="tabular inline-flex h-5 shrink-0 items-center justify-center rounded-sm bg-accent/15 px-1.5 text-2xs font-bold leading-none tracking-[0.08em] text-accent">
-            {info.badge ?? `TRACKED ${trackedDay}`}
-          </span>
-        </div>
-
-        <div className="tabular flex items-center justify-between border-t border-line pt-2 text-xs text-fg">
-          <span>{stamp} ET</span>
-          <span className="font-bold tracking-[0.02em]">voltick.io/bzila</span>
-        </div>
-        </div>
-      </>
     )
+    const chart = bars.length >= 2 ? (
+      <ProbeChart bars={bars} entry={entry} entryTs={entryAt === undefined ? row.ts : entryAt} size={row.size} wide />
+    ) : (
+      <div className="px-1 py-6 text-xs text-fg">
+        {q.loading ? 'Loading…' : 'No bars for this contract in the window.'}
+      </div>
+    )
+
+    // ── LAYOUT A — separate tiles on top (Brandon, 2026-09-25) ──────────────
+    // Each fact is its own card with a gap between, not one joined grid; the
+    // note is its own card under them; then the move, the chart, the bolt.
+    // EVERY trade card is A — tracked, whale print, lookup, repeated flow. A
+    // caller that passes no `items` (everything but Tracked contracts) gets
+    // eight tiles built from the row and the live bars, and keeps its headline
+    // line under the title, which is where a burst says "7 orders · 12:01 →".
+    const derived = !info.items?.length
+    const items: NonNullable<ProbeAlertInfo['items']> = info.items?.length ? info.items : [
+      { k: 'Contract', v: `${row.underlying ?? '—'} ${fmtStrike(row.strike)}${row.type ?? ''}`, sub: info.shotLabel },
+      { k: 'Expiry', v: fmtDate(row.expiry), sub: info.dteLabel ? `${info.dteLabel} to expiry` : undefined },
+      { k: 'Entry', v: entry?.toFixed(2) ?? '—', sub: row.ts && entryAt !== null ? `printed ${etDayTime(row.ts)}` : undefined },
+      { k: 'Mark', v: last?.toFixed(2) ?? '—' },
+      {
+        k: 'Move',
+        v: pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`,
+        sub: dollars != null ? `${dollars >= 0 ? '+' : '−'}${fmtPremium(Math.abs(dollars))}` : undefined,
+        ink,
+      },
+      { k: 'Size', v: row.size ? `${row.size.toLocaleString()} ct` : '—' },
+      { k: 'Premium', v: row.premium ? fmtPremium(row.premium) : '—' },
+      { k: 'When', v: etDayTime(info.trackedAt) },
+    ]
+      return (
+        <>
+          {controls}
+          <div ref={cardRef} data-capture-signed className="flex flex-col gap-3 bg-surface2 px-5 pb-5 pt-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xl font-bold leading-none tracking-[0.02em] text-fg">{row.underlying ?? '—'}</span>
+              <span className="tabular inline-flex h-5 items-center justify-center rounded-sm border border-warn/50 bg-warn/10 px-1.5 text-xs font-bold leading-none text-warn">
+                {fmtStrike(row.strike)}{row.type ?? ''}
+              </span>
+              <span className="tabular text-sm text-fg">
+                {fmtDate(row.expiry)}{info.dteLabel ? ` · ${info.dteLabel}` : ''}
+              </span>
+              <span className="tabular ml-auto inline-flex h-5 shrink-0 items-center justify-center rounded-sm bg-accent/15 px-1.5 text-2xs font-bold leading-none tracking-[0.08em] text-accent">
+                {info.badge ?? `TRACKED ${trackedDay}`}
+              </span>
+            </div>
+            {derived && info.headline ? (
+              <div className="tabular -mt-1 text-xs text-fg">{info.headline}</div>
+            ) : null}
+
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {items.map((it) => (
+                <div key={it.k} className="min-w-0 rounded-md border border-line bg-surface px-3 py-2">
+                  <div className="text-3xs font-bold uppercase tracking-[0.1em] text-fg">{it.k}</div>
+                  <div className={['tabular mt-0.5 truncate text-base font-semibold', it.ink ?? 'text-fg'].join(' ')}>{it.v}</div>
+                  {it.sub && <div className="tabular truncate text-2xs text-fg">{it.sub}</div>}
+                </div>
+              ))}
+            </div>
+
+            {info.note ? (
+              <div className="rounded-md border border-line bg-surface px-3 py-2 text-sm text-fg">
+                <span className="mr-2 text-3xs font-bold uppercase tracking-[0.1em] text-fg">Note</span>
+                {info.note}
+              </div>
+            ) : null}
+
+            <div className="flex items-baseline gap-2">
+              <span className={['text-xl leading-none', ink].join(' ')}>{dir < 0 ? '▼' : '▲'}</span>
+              <span className={['tabular text-4xl font-bold leading-none', ink].join(' ')}>
+                {pct == null ? '—' : `${Math.abs(pct).toFixed(1)}%`}
+              </span>
+              <span className="tabular text-xs text-fg">
+                IN {entry?.toFixed(2) ?? '—'} → NOW {last?.toFixed(2) ?? '—'}
+                {perCt != null && (
+                  <>
+                    {' · '}
+                    <span className={ink}>{perCt >= 0 ? '+' : '−'}${Math.abs(perCt).toFixed(0)}/ct</span>
+                  </>
+                )}
+              </span>
+            </div>
+
+            {ranges}
+            {chart}
+            {signature}
+          </div>
+        </>
+      )
   }
 
   return (
