@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-26 — Owner Estimated Move: "Copy Shot + Record" option
+
+- `owner-vite/src/pages/EstimatedMove.tsx`: new **Copy Shot + Record** button next to Copy Shot (Estimated Moves view only). It copies the same weekly EM image with two more columns:
+  - **Last Week**: Inside / Outside. This is whether the ticker's last scored week closed inside that week's EM band (`down ≤ close ≤ up`, from the newest `/api/em-tracker` row that has a close).
+  - **Stays In**: the historical % of weeks that price stayed inside the EM (high ≤ Up and low ≥ Down). It is the same combined figure as the EM Tracker tab: the sheet tally from `/api/em-tracker/history` plus the auto-scored weeks since. It is colour-coded like the tracker.
+- The plain Copy Shot is unchanged. Read-only, with no backend changes.
+
 ## 2026-09-25 - Budget: Flex gas now comes out of Tesla, not Sheetz (from 2026-09)
 
 - From **2026-09 onward** the Amazon Flex gas correction takes the Amazon tab's monthly gas out of every statement outflow whose merchant or description contains **"Tesla"**, from whatever category it was filed in, biggest first. It's capped at what each category holds and moved into the Flex gas category. Tesla rows already filed to Flex are skipped.

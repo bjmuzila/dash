@@ -65,6 +65,88 @@ interface Snapshot {
   targetDateLabel?: string;
 }
 
+// Per-ticker record for the "Copy Shot + Record" image: did last week's
+// published EM close inside the band, and the all-time % of weeks the price
+// STAYED inside (em_tracker "hit" = weekly high <= Up and low >= Down). The %
+// matches the EM Tracker tab's combined figure: historical sheet tally + the
+// auto-scored weeks since.
+interface EmRecord {
+  lastWeek: "inside" | "outside" | null;
+  lastWeekLabel: string | null;
+  pct: number | null;
+  weeks: number;
+}
+
+// em_tracker rows are stored under the display label (ESU/NQU), but older
+// imported rows can carry the raw future root, so match every alias.
+const TRACKER_ALIASES: Record<string, string[]> = {
+  ESM: ["ESU", "ESM", "ESU6", "ESU26"],
+  NQM: ["NQU", "NQM", "NQM6", "NQU26"],
+};
+function trackerKeys(ticker: string): string[] {
+  return TRACKER_ALIASES[ticker] ?? [DISPLAY_LABEL[ticker] ?? ticker, ticker];
+}
+
+async function fetchEmRecords(): Promise<Record<string, EmRecord>> {
+  const [t, h] = await Promise.all([
+    fetch("/api/em-tracker", { cache: "no-store" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
+    fetch("/api/em-tracker/history", { cache: "no-store" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
+  ]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows: any[] = Array.isArray(t?.rows) ? t.rows : [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const summary: any[] = Array.isArray(t?.summary) ? t.summary : [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tallies: Record<string, any> = h?.tallies ?? {};
+  const n = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const x = Number(v);
+    return Number.isFinite(x) ? x : null;
+  };
+
+  const out: Record<string, EmRecord> = {};
+  for (const ticker of SYMBOLS) {
+    const keys = new Set(trackerKeys(ticker).map((k) => k.toUpperCase()));
+
+    // Last completed week: newest row that has a close and a band.
+    const done = rows
+      .filter((r) => keys.has(String(r.ticker ?? "").toUpperCase()))
+      .filter((r) => n(r.c) != null && n(r.c)! > 0)
+      .map((r) => {
+        const em = n(r.em);
+        const ref = n(r.ref_close);
+        const up = n(r.up) ?? (ref != null && em != null ? ref + em : null);
+        const down = n(r.down) ?? (ref != null && em != null ? ref - em : null);
+        return { r, up, down, c: n(r.c)! };
+      })
+      .filter((x) => x.up != null && x.down != null)
+      .sort((a, b) => {
+        const wa = String(a.r.week_start ?? ""), wb = String(b.r.week_start ?? "");
+        if (wa !== wb) return wa < wb ? 1 : -1;
+        return (Number(b.r.id) || 0) - (Number(a.r.id) || 0);
+      });
+    const last = done[0];
+    const lastWeek = last ? (last.c <= last.up! && last.c >= last.down! ? "inside" : "outside") : null;
+
+    // Stayed-inside %: historical tally + live scored weeks (same as EM Tracker).
+    let hits = 0, total = 0;
+    for (const k of keys) {
+      const hist = tallies[k];
+      if (hist) { hits += Number(hist.hits) || 0; total += Number(hist.total) || 0; }
+      const live = summary.find((s) => String(s.ticker ?? "").toUpperCase() === k);
+      if (live) { hits += Number(live.hits) || 0; total += Number(live.evaluated) || 0; }
+    }
+
+    out[ticker] = {
+      lastWeek,
+      lastWeekLabel: last ? String(last.r.week_label ?? last.r.week_start ?? "") || null : null,
+      pct: total > 0 ? (hits / total) * 100 : null,
+      weeks: total,
+    };
+  }
+  return out;
+}
+
 interface HistoryItem {
   time: number;
   open: number;
@@ -809,6 +891,8 @@ export default function EstimatedMove() {
   const busyRef = useRef(false);
   const bulkSubscribedRef = useRef(false);
   const shotRef = useRef<HTMLDivElement | null>(null);
+  const recordShotRef = useRef<HTMLDivElement | null>(null);
+  const [emRecords, setEmRecords] = useState<Record<string, EmRecord>>({});
 
   const hasCurrentData = activeView === "estimated" ? rows.length > 0 : zoneLevels.length > 0;
 
@@ -1201,12 +1285,22 @@ export default function EstimatedMove() {
     setStatus({ text: `Loaded ${snap.date} ${snap.time}`, color: "#00e676" });
   }, []);
 
-  const copyShot = useCallback(async () => {
-    if (!shotRef.current || !hasCurrentData) return;
-    setStatus({ text: "Capturing...", color: "#219EBC" });
+  const copyShot = useCallback(async (withRecord = false) => {
+    if (!hasCurrentData) return;
+    if (withRecord && activeView !== "estimated") return;
+    setStatus({ text: withRecord ? "Loading record..." : "Capturing...", color: "#219EBC" });
     try {
+      if (withRecord) {
+        const rec = await fetchEmRecords();
+        setEmRecords(rec);
+        // Let React paint the record columns before html2canvas reads the DOM.
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 30))));
+        setStatus({ text: "Capturing...", color: "#219EBC" });
+      }
+      const target = withRecord ? recordShotRef.current : shotRef.current;
+      if (!target) return;
       const html2canvas = await getHtml2Canvas();
-      const canvas = await html2canvas(shotRef.current, {
+      const canvas = await html2canvas(target, {
         backgroundColor: "#080c14",
         scale: 2,
         useCORS: true,
@@ -1221,7 +1315,7 @@ export default function EstimatedMove() {
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `${activeView === "estimated" ? "em-shot" : "zones-shot"}-${new Date().toISOString().slice(0, 10)}.png`;
+          a.download = `${activeView === "estimated" ? (withRecord ? "em-record-shot" : "em-shot") : "zones-shot"}-${new Date().toISOString().slice(0, 10)}.png`;
           document.body.appendChild(a);
           a.click();
           a.remove();
@@ -1323,9 +1417,14 @@ export default function EstimatedMove() {
           Save
         </DockButton>
         <DockButton onClick={exportCsv} title="Export CSV">Export</DockButton>
-        <DockButton onClick={copyShot} title="Copy screenshot" style={{ opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
+        <DockButton onClick={() => copyShot(false)} title="Copy screenshot" style={{ opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
           Copy Shot
         </DockButton>
+        {activeView === "estimated" && (
+          <DockButton onClick={() => copyShot(true)} title="Copy screenshot with last week's close (inside / outside the EM) and the historical % of weeks that stayed inside" style={{ opacity: hasCurrentData ? 1 : 0.4, cursor: hasCurrentData ? "pointer" : "not-allowed" }}>
+            Copy Shot + Record
+          </DockButton>
+        )}
       </Dock>
       </div>
 
@@ -1566,6 +1665,56 @@ export default function EstimatedMove() {
           </>
         )}
       </div>
+      {activeView === "estimated" && (
+        <div ref={recordShotRef} style={{ position: "fixed", top: 0, left: "-9999px", background: "#080c14", padding: "0 0 12px 0", width: 600, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
+          <div style={{ background: "#0b111b", padding: "14px 0", textAlign: "center", borderBottom: "2px solid #1a2a3a" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase" }}>Weekly Estimated Move For</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#219EBC", letterSpacing: ".1em", marginTop: 2 }}>{targetDateLabel || "--"}</div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: RECORD_COLS, background: "#0a0f18", borderBottom: `1px solid ${HT.border}` }}>
+            {["Ticker", "Up", "Down", "Last Week", "Stays In"].map((header) => (
+              <div key={header} style={{ padding: "8px 0", textAlign: "center", fontSize: 12, fontWeight: 700, color: "#219EBC", letterSpacing: ".12em", textTransform: "uppercase" }}>{header}</div>
+            ))}
+          </div>
+
+          {rows.slice(0, 13).filter((row) => !row.error).map((row) => (
+            <RecordShotRow key={row.ticker} row={row} rec={emRecords[row.ticker]} />
+          ))}
+
+          <div style={{ padding: "8px 0", textAlign: "center", fontSize: 12, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderBottom: `1px solid ${HT.border}`, borderTop: `1px solid ${HT.border}`, background: "#04070c" }}>
+            x.com/bzilatrades
+          </div>
+
+          {rows.slice(13).filter((row) => !row.error).map((row) => (
+            <RecordShotRow key={row.ticker} row={row} rec={emRecords[row.ticker]} />
+          ))}
+
+          <div style={{ padding: "8px 12px 0", textAlign: "center", fontSize: 11, color: "#8fa3b8", letterSpacing: ".04em" }}>
+            Last Week = where price closed vs last week's EM · Stays In = % of weeks price stayed inside the EM
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const RECORD_COLS = "1fr 1.15fr 1.15fr 1fr 0.9fr";
+
+function RecordShotRow({ row, rec }: { row: EMRow; rec?: EmRecord }) {
+  const cell = { padding: "9px 0", textAlign: "center" as const, fontSize: 14 };
+  const last = rec?.lastWeek ?? null;
+  const pct = rec?.pct ?? null;
+  const pctColor = pct == null ? "#8fa3b8" : pct >= 75 ? "#00e676" : pct >= 60 ? "#219EBC" : pct >= 50 ? "#e8c060" : "#EF4444";
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: RECORD_COLS, borderBottom: `1px solid ${HT.border}`, alignItems: "center" }}>
+      <div style={{ ...cell, fontWeight: 700, color: "#e8edf5" }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
+      <div style={{ ...cell, color: "#00e676" }}>{fmtPrice(row.ticker, row.up)}</div>
+      <div style={{ ...cell, color: "#EF4444" }}>{fmtPrice(row.ticker, row.down)}</div>
+      <div style={{ ...cell, fontSize: 12, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: last === "inside" ? "#00e676" : last === "outside" ? "#EF4444" : "#8fa3b8" }}>
+        {last === "inside" ? "Inside" : last === "outside" ? "Outside" : "--"}
+      </div>
+      <div style={{ ...cell, fontWeight: 700, color: pctColor }}>{pct == null ? "--" : `${Math.round(pct)}%`}</div>
     </div>
   );
 }
