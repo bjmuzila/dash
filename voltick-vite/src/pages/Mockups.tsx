@@ -42,7 +42,6 @@ export default function Mockups() {
   return (
     <PageShell
       title="Mockups"
-      lede="A proposal for cleaner Voltick menus: fewer buttons, fewer places to look, nothing duplicated. Every screen is clickable, nothing is wired to the live site."
       maxWidth={1500}
     >
       <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20, padding: 6, background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_LG, width: "fit-content", maxWidth: "100%" }}>

@@ -222,6 +222,35 @@ function Scorecard({ rows }: { rows: [string, string | number, string | number][
   );
 }
 
+/** The break between the screen itself and the write-up about it. */
+function Spacer() {
+  return (
+    <div style={{ margin: "34px 0 8px", display: "flex", alignItems: "center", gap: 12 }}>
+      <span aria-hidden="true" style={{ flex: 1, height: 1, background: LINE }} />
+      <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: PAPER_QUIET }}>About this proposal</span>
+      <span aria-hidden="true" style={{ flex: 1, height: 1, background: LINE }} />
+    </div>
+  );
+}
+
+/** Short notes on the parts of the screen above. */
+function Notes({ items }: { items: [string, string][] }) {
+  return (
+    <Frame title="How it works">
+      <Box>
+        <div style={{ display: "grid", gap: 8 }}>
+          {items.map(([what, why]) => (
+            <div key={what} style={{ display: "grid", gridTemplateColumns: "minmax(140px, 220px) 1fr", gap: 14, fontFamily: SANS, fontSize: 12.5, lineHeight: 1.5 }}>
+              <span style={{ fontWeight: 700, color: PAPER }}>{what}</span>
+              <span style={{ color: PAPER_QUIET }}>{why}</span>
+            </div>
+          ))}
+        </div>
+      </Box>
+    </Frame>
+  );
+}
+
 /** What moved, what merged, what went. */
 function Changes({ items, onCompare }: { items: [string, string][]; onCompare?: () => void }) {
   return (
@@ -399,6 +428,25 @@ export function ChartProposed({ onCompare }: { onCompare?: () => void } = {}) {
   const [drawing, setDrawing] = useState(false);
   return (
     <div style={{ display: "grid", gap: 22 }}>
+      <div style={{ display: "grid", gap: 8, justifyItems: "start" }}>
+        <Bar style={{ width: "fit-content" }}>
+          <Chip on>⚙ Chart ▾</Chip>
+          <Chip on={drawing} onClick={() => setDrawing(!drawing)}>
+            ✎ Draw
+          </Chip>
+          <Chip>⛶</Chip>
+        </Bar>
+        {drawing && (
+          <Bar style={{ width: "fit-content" }}>
+            <span style={{ width: 18, height: 18, borderRadius: 5, background: VOLT, border: `1px solid ${LINE}` }} />
+            <Chip>⤺ Undo</Chip>
+            <Chip>Clear</Chip>
+            <span style={{ fontFamily: SANS, fontSize: 11.5, color: PAPER_QUIET }}>Click a start point, then an end point · Esc to stop</span>
+          </Bar>
+        )}
+        <ChartPopover />
+      </div>
+      <Spacer />
       <Scorecard
         rows={[
           ["Toolbar buttons", 4, 3],
@@ -407,30 +455,12 @@ export function ChartProposed({ onCompare }: { onCompare?: () => void } = {}) {
           ["Places to toggle Trails", 2, 1],
         ]}
       />
-      <Frame title="Toolbar" note="⚙ Chart opens the one popover. ✎ Draw is a tool, so it lives on the toolbar and arms straight away; its colour, undo and clear ride along in a slim strip while drawing.">
-        <div style={{ display: "grid", gap: 8 }}>
-          <Bar style={{ width: "fit-content" }}>
-            <Chip on>⚙ Chart ▾</Chip>
-            <Chip on={drawing} onClick={() => setDrawing(!drawing)}>
-              ✎ Draw
-            </Chip>
-            <Chip>⛶</Chip>
-          </Bar>
-          {drawing && (
-            <Bar style={{ width: "fit-content" }}>
-              <span style={{ width: 18, height: 18, borderRadius: 5, background: VOLT, border: `1px solid ${LINE}` }} />
-              <Chip>⤺ Undo</Chip>
-              <Chip>Clear</Chip>
-              <span style={{ fontFamily: SANS, fontSize: 11.5, color: PAPER_QUIET }}>Click a start point, then an end point · Esc to stop</span>
-            </Bar>
-          )}
-        </div>
-      </Frame>
-      <Frame title="⚙ Chart popover" note="Three tabs by intent. Look is how busy and how bold. Layers is what is drawn, one row each. Studies lists only what is on the chart, with one Add button.">
-        <div style={flexWrap(18)}>
-          <ChartPopover />
-        </div>
-      </Frame>
+      <Notes
+        items={[
+          ["Toolbar", "⚙ Chart opens the one popover. ✎ Draw is a tool, so it lives on the toolbar and arms straight away; its colour, undo and clear ride along in a slim strip while drawing."],
+          ["⚙ Chart popover", "Three tabs by intent. Look is how busy and how bold. Layers is what is drawn, one row each. Studies lists only what is on the chart, with one Add button."],
+        ]}
+      />
       <Changes
         onCompare={onCompare}
         items={[
@@ -608,17 +638,8 @@ export function FlowProposed({ onCompare }: { onCompare?: () => void } = {}) {
     dark: ["Time", "Stock", "Notional", "Price", "% of day", "Score", "Level"],
   };
   return (
-    <div style={{ display: "grid", gap: 20 }}>
-      <Scorecard
-        rows={[
-          ["Tabs to choose from", "7 + 5 + 2", "4"],
-          ["Controls in the toolbar", "~18", 11],
-          ["Toolbar shapes", 8, 1],
-          ["Places to set size", 3, 1],
-        ]}
-      />
-      <Frame title="Page header" note="Four tabs, each with a sub-switch. Alerts collapse to one pill beside the tour button.">
-        <div style={{ display: "grid", gap: 8, padding: 12, background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_LG }}>
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={{ display: "grid", gap: 8, padding: 12, background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_LG }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             {P_FLOW.map((x) => (
               <Chip
@@ -644,12 +665,24 @@ export function FlowProposed({ onCompare }: { onCompare?: () => void } = {}) {
             </div>
           )}
         </div>
-      </Frame>
-      <Frame title={`Toolbar · ${t.label}${t.subs.length > 1 ? ` › ${t.subs.find(([k]) => k === sub)?.[1] ?? ""}` : ""}`} note="The same row on every tab: search, universe, direction, a few one-tap chips, Filters, then sort and time on the right. Chips that do not apply to a tab drop out rather than moving. Click ⚙ Filters, Stocks ▾ and Live ▾.">
-        <FlowToolbarP key={tab} tab={tab} />
-      </Frame>
+      <FlowToolbarP key={tab} tab={tab} />
       <SummaryLine />
       <Heads cols={heads[tab] ?? heads.tape!} />
+      <Spacer />
+      <Scorecard
+        rows={[
+          ["Tabs to choose from", "7 + 5 + 2", "4"],
+          ["Controls in the toolbar", "~18", 11],
+          ["Toolbar shapes", 8, 1],
+          ["Places to set size", 3, 1],
+        ]}
+      />
+      <Notes
+        items={[
+          ["Page header", "Four tabs, each with a sub-switch. Alerts collapse to one pill beside the tour button."],
+          ["Toolbar", "The same row on every tab: search, universe, direction, a few one-tap chips, Filters, then sort and time on the right. Chips that do not apply to a tab drop out rather than moving. Click ⚙ Filters, Stocks ▾ and Live ▾ above to open them."],
+        ]}
+      />
       <Changes
         onCompare={onCompare}
         items={[
@@ -743,18 +776,6 @@ export function AccountProposed({ onCompare }: { onCompare?: () => void } = {}) 
   const [who, setWho] = useState<Who>("member");
   return (
     <div style={{ display: "grid", gap: 20 }}>
-      <Scorecard
-        rows={[
-          ["Rows (member)", 16, 8],
-          ["Sections", 4, 3],
-          ["Rows that duplicate the rail", 3, 0],
-        ]}
-      />
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontFamily: SANS, fontSize: 13, color: PAPER_QUIET }}>Signed in as</span>
-        <Seg value={who} onChange={setWho} options={[["member", "Member"], ["owner", "Owner"], ["free", "Free account"]] as const} />
-      </div>
-      <Frame title="Rail foot + account pop-up" note="Search moves to the rail head (⌘K), where it already has a door. Help & support opens a small sub-menu instead of spreading four rows through the main one.">
         <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
           <div style={{ width: 180, minHeight: 470, display: "flex", flexDirection: "column", background: ELEV, border: `1px solid ${LINE}`, borderRadius: R_LG, overflow: "hidden" }}>
             <div style={{ padding: 10 }}>
@@ -783,7 +804,24 @@ export function AccountProposed({ onCompare }: { onCompare?: () => void } = {}) 
           <AccountPopP who={who} />
           <HelpPanel />
         </div>
-      </Frame>
+      <Spacer />
+      <Scorecard
+        rows={[
+          ["Rows (member)", 16, 8],
+          ["Sections", 4, 3],
+          ["Rows that duplicate the rail", 3, 0],
+        ]}
+      />
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontFamily: SANS, fontSize: 13, color: PAPER_QUIET }}>Show the menu above as</span>
+        <Seg value={who} onChange={setWho} options={[["member", "Member"], ["owner", "Owner"], ["free", "Free account"]] as const} />
+      </div>
+      <Notes
+        items={[
+          ["Rail foot + pop-up", "The disc at the bottom of the left rail opens this menu upward. Search moves to the rail head (⌘K), where it already has a door."],
+          ["Help & support", "Opens the small sub-menu beside it instead of spreading four rows through the main menu."],
+        ]}
+      />
       <Changes
         onCompare={onCompare}
         items={[
@@ -996,12 +1034,6 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
   const visible = SECTIONS.filter((s) => match(s.key));
   return (
     <div style={{ display: "grid", gap: 20 }}>
-      <Scorecard
-        rows={[
-          ["Places preferences live", "5+", 1],
-          ["Left-menu controls", "hide", "hide · pin · reorder"],
-        ]}
-      />
       <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
         <div style={{ width: 190, flex: "none", display: "grid", gap: 4, position: "sticky", top: 12 }}>
           <input
@@ -1114,10 +1146,23 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
           )}
         </div>
 
-        <Frame title="Preview · your left menu" style={{ flex: "none", position: "sticky", top: 12 }}>
+        <Frame title="Your left menu" style={{ flex: "none", position: "sticky", top: 12 }}>
           <RailPreview hidden={hidden} pinned={pinned} order={order} />
         </Frame>
       </div>
+      <Spacer />
+      <Scorecard
+        rows={[
+          ["Places preferences live", "5+", 1],
+          ["Left-menu controls", "hide", "hide · pin · reorder"],
+        ]}
+      />
+      <Notes
+        items={[
+          ["Search + sections", "Type in Search settings to narrow the page to the matching cards. The list on the left jumps between sections."],
+          ["Left menu", "Hide pages, ☆ pin up to five to the top of the rail, ↑↓ to reorder shelves. The rail on the right updates as you change it."],
+        ]}
+      />
       <Changes
         onCompare={onCompare}
         items={[

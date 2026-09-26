@@ -24508,3 +24508,9 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - New `voltick-vite/src/pages/MockupsBuilder.tsx`: a toolbar builder. Pick Chart / Flow / Account menu / Left rail, start from Today or Proposed, drag or tap-to-move tiles between groups, rename tiles and groups, change control kinds, add your own, sliders for size/spacing/padding/corners/screen width, live preview, named saves (browser localStorage), JSON export/import.
 - `Mockups.tsx`: tab bar is now three rows (Today, Proposed, Build). Existing tab content untouched.
 - Screenshots: `generated/2026-09-26-mockups-proposed-{chart,flow,account,settings}.png`, `generated/2026-09-26-mockups-toolbar-builder.png`.
+
+## 2026-09-26 — voltick-vite: /mockups shows only the proposed designs
+- `voltick-vite/src/pages/Mockups.tsx` rewritten: four tabs (⚙ Chart, ⚡ Flow, ◉ Account menu, ☰ Settings), each rendering the proposed design from `MockupsProposed.tsx`. The Today tabs and the toolbar builder are off the page. Old `#p-…` links still land on the right tab.
+- `MockupsProposed.tsx`: `onCompare` is optional, so no "Compare with today" button renders.
+- `MockupsBuilder.tsx` is now an `export {}` tombstone (nothing imports it); safe to delete.
+- `src/lib/nav.ts`: Mockups blurb and note reworded for the proposal.
