@@ -103,6 +103,10 @@ const Seasonality = lazy(() => import('@/pages/Seasonality'))
 // /whales — the $1M+ print archive. Its own chunk: the page pulls the Top Flow
 // probe drawer with it, and nobody on any other route should pay for that.
 const Whales = lazy(() => import('@/pages/Whales'))
+// /mockups — the owner's design board: static mockups of the chart Style panel,
+// the Flow toolbars, the account pop-up and a proposed Settings page. Owner-only
+// chrome (the rail entry is ownerOnly, the page draws nothing for anyone else).
+const Mockups = lazy(() => import('@/pages/Mockups'))
 
 // ── THE PHONE BUILD — /v3/m/* ────────────────────────────────────────────────
 // Six screens, registered in src/mobile/mobileNav.ts, each one a HOME-BOARD CARD
@@ -178,6 +182,7 @@ export default function App() {
             <Route path="/seasonality" element={<Seasonality />} />
             <Route path="/whales" element={<Whales />} />
             <Route path="/legacy" element={<Legacy />} />
+            <Route path="/mockups" element={<Mockups />} />
             {/* Support. The tab and the open ticket live in the query string, so
                 /v3/feedback?tab=mine&ticket=12 is a real link — which is what
                 the account menu's unread badge points at. */}
