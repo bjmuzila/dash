@@ -24497,3 +24497,7 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-09-25 — Voltick theme: no level tags in Multi Greek / option chain cells
 - `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`, `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`: removed the ★/↯/↘/◆ + VOLT/SURGE/REV/COIL text tags from Voltick level cells (expiry columns and ⅀ Total). The reserved fill alone marks the level.
+
+## 2026-09-25 — Voltick: /mockups owner design board
+- New `web/src/pages/Mockups.jsx` (Voltick repo, branch bzilabranch) at `/mockups`, owner-only in prod (open under `npm run dev`). Four tabs: ⚙ Chart Style (toolbar + Style/Indicators/Draw popover, all sections), ⚡ Flow Toolbars (every tab, sub-tab, chip, dropdown and the Filters panel, per view or stacked), ◉ Account Menu (rail foot + pop-up, member/owner/free), ☰ Settings (new) — proposal for hiding pages/shelves from the left rail with a live rail preview. Nothing wired or saved.
+- Wiring: route + lazy import in `App.jsx`; owner-only "Mockups" row in `AccountMenu.jsx` (its door); `/mockups` added to `server/pvpath.js` PV_PATTERNS and `server/scripts/smoke.mjs` ROUTES so the route guards stay green.
