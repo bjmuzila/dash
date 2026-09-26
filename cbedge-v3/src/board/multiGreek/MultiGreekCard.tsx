@@ -921,22 +921,8 @@ function TickerPanel({
                       </span>
                     )}
 
-                    {/* Voltick theme: the mark(s) in the cell's own ink — left
-                        corner on every column, the name on the front expiry.
-                        A strike can carry two (Volt = Surge is common). */}
-                    {showLevels && vtFill && (
-                      <span
-                        title={vtLevels.map((d) => d.title).join(' · ')}
-                        className="pointer-events-none absolute left-0.5 top-1/2 -translate-y-1/2 text-3xs font-black leading-none"
-                      >
-                        {vtLevels.map((d) => d.mark).join('')}
-                      </span>
-                    )}
-                    {showLevels && vtFill && isFront && (
-                      <span className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-3xs font-black leading-none tracking-[0.04em]">
-                        {vtLevels.map((d) => d.label).join('/')}
-                      </span>
-                    )}
+                    {/* Voltick theme: no tag in the cell — the fill IS the
+                        level (one reserved colour per level). */}
                   </div>
                 )
               })}

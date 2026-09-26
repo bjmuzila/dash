@@ -255,7 +255,14 @@ type FuelSplit = {
   flexCategoryId: number | null; flexCategoryName: string | null;
   flexGas: Record<string, number>;
   flexMoved: Record<string, number>;
+  /** From this month on, Flex gas comes out of the statement's "Tesla" rows
+   *  (whatever category they sit in) instead of the fuel category. */
+  cutover?: string;
+  source?: Record<string, "fuel" | "tesla">;
 };
+
+const TESLA_RE = /tesla/i;
+const isTeslaTx = (r: StoredTx) => r.direction === "out" && TESLA_RE.test(`${r.merchant || ""} ${r.description || ""}`);
 
 type View = "merchants" | "donut" | "ledger" | "categories" | "subs";
 type SortKey = "date" | "merchant" | "amount" | "category";
@@ -927,6 +934,38 @@ export default function RealMonth({
     }
 
     const gas = fuel?.flexGas?.[month] ?? 0;
+    const teslaMonth = !!fuel?.cutover && month >= fuel.cutover;
+    const flexCatT = fuel?.flexCategoryId != null ? catById.get(fuel.flexCategoryId) : undefined;
+    const addToFlex = (move: number) => {
+      if (!flexCatT) return;
+      const dk = flexCatT.name.toLowerCase();
+      const dest = map.get(dk);
+      if (dest) dest.spent += move;
+      else map.set(dk, { name: flexCatT.name, spent: move, count: 0, budget: flexCatT.amount ?? 0, color: flexCatT.color ?? null });
+    };
+    if (gas > 0 && teslaMonth) {
+      // Tesla months: the Flex share leaves the categories the Tesla rows
+      // were filed under, biggest first, capped at what each holds.
+      const teslaByCat = new Map<string, number>();
+      for (const r of txView) {
+        if (!isTeslaTx(r)) continue;
+        if (flexCatT && r.category_id === flexCatT.id) continue;
+        const cat = r.category_id != null ? catById.get(r.category_id) : undefined;
+        const k = (cat?.name || UNCATEGORIZED).toLowerCase();
+        teslaByCat.set(k, (teslaByCat.get(k) || 0) + r.amount);
+      }
+      let left = gas;
+      for (const [k, amt] of [...teslaByCat.entries()].sort((a, b) => b[1] - a[1])) {
+        if (!(left > 0)) break;
+        const src = map.get(k);
+        const move = src ? Math.min(left, amt, src.spent) : 0;
+        if (!src || !(move > 0)) continue;
+        src.spent -= move;
+        addToFlex(move);
+        left -= move;
+      }
+      return [...map.values()].sort((a, b) => b.spent - a.spent);
+    }
     const fuelCat = fuel?.categoryId != null ? catById.get(fuel.categoryId) : undefined;
     if (gas > 0 && fuelCat) {
       const src = map.get(fuelCat.name.toLowerCase());
@@ -948,7 +987,21 @@ export default function RealMonth({
   /** What the fuel move did THIS month, for the note under the category table. */
   const fuelNote = useMemo(() => {
     const gas = fuel?.flexGas?.[month] ?? 0;
-    if (!(gas > 0) || fuel?.categoryId == null) return null;
+    if (!(gas > 0)) return null;
+    if (fuel?.cutover && month >= fuel.cutover) {
+      const flexId = fuel.flexCategoryId;
+      let gross = 0;
+      for (const r of txView) if (isTeslaTx(r) && r.category_id !== flexId) gross += r.amount;
+      const moved = Math.min(gas, gross);
+      if (!(moved > 0)) return null;
+      return {
+        fuelName: "Tesla",
+        flexName: flexId != null ? catById.get(flexId)?.name ?? null : null,
+        gross, moved, net: gross - moved,
+        uncovered: gas - moved,
+      };
+    }
+    if (fuel?.categoryId == null) return null;
     const fuelCat = catById.get(fuel.categoryId);
     if (!fuelCat) return null;
     let filed = 0;

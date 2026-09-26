@@ -9958,23 +9958,64 @@ if (libDb) {
               if (m) flexGas[m] = (flexGas[m] || 0) + (Number(r.gas) || 0);
             }
             const flexMoved = {};
+            // Where Flex gas comes OUT of. Up to FUEL_CUTOVER it is the fuel
+            // (Sheetz) category, as before. From FUEL_CUTOVER on it is every
+            // outflow on the statement that says "Tesla", in whatever category
+            // it was filed — the car changed, the rule did not. Earlier months
+            // are left exactly as they were.
+            const FUEL_CUTOVER = '2026-09';
+            const TESLA_RE = /tesla/i;
+            const flexSource = {};
+            const moveToFlex = (m, fromRow, amount) => {
+              fromRow.spent = (Number(fromRow.spent) || 0) - amount;
+              flexMoved[m] = (flexMoved[m] || 0) + amount;
+              if (flexCat) {
+                let dest = (trend || []).find((t) => String(t.month) === m && t.category_id != null && Number(t.category_id) === flexCat.id);
+                if (!dest) { dest = { month: m, category_id: flexCat.id, spent: 0, n: 0 }; trend.push(dest); }
+                dest.spent = (Number(dest.spent) || 0) + amount;
+              }
+            };
+            const fuelRowFor = new Map();
             if (fuelCat) {
-              const fuelRowFor = new Map();
               for (const t of trend || []) {
                 if (t.category_id != null && Number(t.category_id) === fuelCat.id) fuelRowFor.set(String(t.month), t);
               }
-              for (const [m, gas] of Object.entries(flexGas)) {
-                const row = fuelRowFor.get(m);
-                if (!row || !(gas > 0)) continue;
+            }
+            const teslaMonths = Object.keys(flexGas).filter((m) => m >= FUEL_CUTOVER && flexGas[m] > 0);
+            const teslaTxFor = new Map(await Promise.all(teslaMonths.map(async (m) => [
+              m, m === month ? (tx || []) : await D.listStatementTx(profile.id, m).catch(() => []),
+            ])));
+            for (const [m, gas] of Object.entries(flexGas)) {
+              if (!(gas > 0)) continue;
+              if (m < FUEL_CUTOVER) {
+                flexSource[m] = 'fuel';
+                const row = fuelCat ? fuelRowFor.get(m) : null;
+                if (!row) continue;
                 const move = Math.min(gas, Number(row.spent) || 0);
+                if (move > 0) moveToFlex(m, row, move);
+                continue;
+              }
+              // Tesla months: take from the Tesla rows' own categories, biggest
+              // first, capped at what each actually holds. Rows already filed
+              // to the Flex category are already Flex and are skipped.
+              flexSource[m] = 'tesla';
+              const byCat = new Map();
+              for (const r of teslaTxFor.get(m) || []) {
+                if (r.direction !== 'out') continue;
+                if (!TESLA_RE.test(`${r.merchant || ''} ${r.description || ''}`)) continue;
+                const cid = r.category_id == null ? null : Number(r.category_id);
+                if (flexCat && cid === flexCat.id) continue;
+                byCat.set(cid, (byCat.get(cid) || 0) + (Number(r.amount) || 0));
+              }
+              let left = gas;
+              for (const [cid, amt] of [...byCat.entries()].sort((a, b) => b[1] - a[1])) {
+                if (!(left > 0)) break;
+                const row = (trend || []).find((t) => String(t.month) === m && (t.category_id == null ? null : Number(t.category_id)) === cid);
+                if (!row) continue;
+                const move = Math.min(left, amt, Number(row.spent) || 0);
                 if (!(move > 0)) continue;
-                row.spent = (Number(row.spent) || 0) - move;
-                flexMoved[m] = move;
-                if (flexCat) {
-                  let dest = (trend || []).find((t) => String(t.month) === m && t.category_id != null && Number(t.category_id) === flexCat.id);
-                  if (!dest) { dest = { month: m, category_id: flexCat.id, spent: 0, n: 0 }; trend.push(dest); }
-                  dest.spent = (Number(dest.spent) || 0) + move;
-                }
+                moveToFlex(m, row, move);
+                left -= move;
               }
             }
             // The stored "what to fix" pass for this month, if one was ever run.
@@ -10022,6 +10063,10 @@ if (libDb) {
                 flexCategoryName: flexCat ? flexCat.name : null,
                 flexGas,
                 flexMoved,
+                // Per month: 'fuel' = came out of the fuel category (before
+                // cutover), 'tesla' = came out of the Tesla rows (from cutover).
+                cutover: FUEL_CUTOVER,
+                source: flexSource,
               },
             });
             return;

@@ -864,16 +864,7 @@ export const ChainMatrix = memo(function ChainMatrix({
                       </span>
                     ))}
 
-                  {vtFill && (
-                    // Voltick: the level mark(s) in the cell's own ink, left
-                    // edge. A strike can be two levels (Volt = Surge is common).
-                    <span
-                      title={vtHere.map((d) => d.title).join(' · ')}
-                      style={{ marginRight: 'auto', lineHeight: 1, fontWeight: 900, pointerEvents: 'none' }}
-                    >
-                      {vtHere.map((d) => d.mark).join('')} {vtHere.map((d) => d.label).join('/')}
-                    </span>
-                  )}
+                  {/* Voltick: no tag — the reserved fill IS the level. */}
 
                   {isVolMvc && (
                     <span
@@ -1000,14 +991,6 @@ export const ChainMatrix = memo(function ChainMatrix({
                       justifyContent: 'flex-end',
                     }}
                   >
-                    {vtTotFill && (
-                      <span
-                        title={vtTot.map((d) => d.title).join(' · ')}
-                        style={{ marginRight: 'auto', lineHeight: 1, fontWeight: 900, pointerEvents: 'none' }}
-                      >
-                        {vtTot.map((d) => d.mark).join('')} {vtTot.map((d) => d.label).join('/')}
-                      </span>
-                    )}
                     {isTotMvc &&
                       (SK.levelFill ? (
                         <span

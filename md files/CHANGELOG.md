@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-25 - Budget: Flex gas now comes out of Tesla, not Sheetz (from 2026-09)
+
+- From **2026-09 onward** the Amazon Flex gas correction takes the Amazon tab's monthly gas out of every statement outflow whose merchant or description contains **"Tesla"**, from whatever category it was filed in, biggest first. It's capped at what each category holds and moved into the Flex gas category. Tesla rows already filed to Flex are skipped.
+- Months **before 2026-09** still use the fuel (Sheetz) category, exactly as before.
+- `/api/budget/real` `fuel` now also returns `cutover` and `source` (per month, `fuel` | `tesla`). The Categories note reads "Tesla $X filed − $Y Amazon Flex gas = $Z real" for Tesla months.
+- Files: `server-v2/api-router.js`, `server-v2/_lib-household-budget.cjs` (phone), `owner-vite/src/pages/budget/RealMonth.tsx`. No budget data is written or deleted; it's read-side only.
+
 ## 2026-09-25 - Tracked contract pop-out: layout A with separate tiles and a Voltick signature
 
 - The tracked-contract pop-out now uses **layout A** (mock: `generated/2026-09-25-tracked-snapshot-a-separated.png`):
@@ -24487,3 +24494,6 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-25 — Phone: avatar menu no longer renders off-screen
 - `cbedge-v3/src/shell/UserMenu.tsx`: below 640px the account dropdown is pinned to the viewport (`fixed right-2 top-12`, width clamped to `100vw-1rem`, scrolls if taller than the screen) instead of hanging off the avatar. The owner-only Voltick theme switch had widened the phone toolbar and pushed the w-60 panel past the right edge. Desktop unchanged.
 - `cbedge-v3/src/shell/Shell.tsx`: phone toolbar spacing tightened (`gap-1.5 px-2`, `min-w-0`) so the avatar stays on screen.
+
+## 2026-09-25 — Voltick theme: no level tags in Multi Greek / option chain cells
+- `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`, `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`: removed the ★/↯/↘/◆ + VOLT/SURGE/REV/COIL text tags from Voltick level cells (expiry columns and ⅀ Total). The reserved fill alone marks the level.

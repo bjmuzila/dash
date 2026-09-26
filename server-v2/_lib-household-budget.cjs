@@ -401,25 +401,57 @@ async function loadStatement(profileId, month, categories) {
   const cats = categories || [];
   const fuelCat = cats.find((c) => FUEL_RE.test(String(c.name || '')) && !FLEX_RE.test(String(c.name || ''))) || null;
   const flexCat = cats.find((c) => FLEX_RE.test(String(c.name || '')) && FUEL_RE.test(String(c.name || ''))) || null;
-  if (fuelCat) {
-    const gasByMonth = {};
-    for (const r of flexGasRows || []) {
-      const mk = String(r.month || '').slice(0, 7);
-      if (mk) gasByMonth[mk] = (gasByMonth[mk] || 0) + (Number(r.gas) || 0);
+  // From FUEL_CUTOVER on, the Flex share comes out of every "Tesla" outflow
+  // on the statement (in whatever category it was filed) instead of the fuel
+  // (Sheetz) category — same rule, same as /api/budget/real. Earlier months
+  // are untouched.
+  const FUEL_CUTOVER = '2026-09';
+  const TESLA_RE = /tesla/i;
+  const gasByMonth = {};
+  for (const r of flexGasRows || []) {
+    const mk = String(r.month || '').slice(0, 7);
+    if (mk) gasByMonth[mk] = (gasByMonth[mk] || 0) + (Number(r.gas) || 0);
+  }
+  const moveToFlex = (mk, row, move) => {
+    row.spent -= move;
+    if (flexCat) {
+      let dest = rows.find((t) => t.month === mk && t.categoryId === flexCat.id);
+      if (!dest) { dest = { month: mk, categoryId: flexCat.id, spent: 0 }; rows.push(dest); }
+      dest.spent += move;
     }
-    const fuelRowFor = new Map();
-    for (const t of rows) if (t.categoryId === fuelCat.id) fuelRowFor.set(t.month, t);
-    for (const [mk, gas] of Object.entries(gasByMonth)) {
-      const row = fuelRowFor.get(mk);
-      if (!row || !(gas > 0)) continue;
+  };
+  const fuelRowFor = new Map();
+  if (fuelCat) for (const t of rows) if (t.categoryId === fuelCat.id) fuelRowFor.set(t.month, t);
+  const teslaMonths = Object.keys(gasByMonth).filter((mk) => mk >= FUEL_CUTOVER && gasByMonth[mk] > 0);
+  const teslaTxFor = new Map(await Promise.all(teslaMonths.map(async (mk) => [
+    mk, await optional(libDb, 'listStatementTx', profileId, mk),
+  ])));
+  for (const [mk, gas] of Object.entries(gasByMonth)) {
+    if (!(gas > 0)) continue;
+    if (mk < FUEL_CUTOVER) {
+      const row = fuelCat ? fuelRowFor.get(mk) : null;
+      if (!row) continue;
       const move = Math.min(gas, row.spent);
+      if (move > 0) moveToFlex(mk, row, move);
+      continue;
+    }
+    const byCat = new Map();
+    for (const r of teslaTxFor.get(mk) || []) {
+      if (r.direction !== 'out') continue;
+      if (!TESLA_RE.test(`${r.merchant || ''} ${r.description || ''}`)) continue;
+      const cid = r.category_id == null ? null : Number(r.category_id);
+      if (flexCat && cid === flexCat.id) continue;
+      byCat.set(cid, (byCat.get(cid) || 0) + (Number(r.amount) || 0));
+    }
+    let left = gas;
+    for (const [cid, amt] of [...byCat.entries()].sort((x, y) => y[1] - x[1])) {
+      if (!(left > 0)) break;
+      const row = rows.find((t) => t.month === mk && t.categoryId === cid);
+      if (!row) continue;
+      const move = Math.min(left, amt, row.spent);
       if (!(move > 0)) continue;
-      row.spent -= move;
-      if (flexCat) {
-        let dest = rows.find((t) => t.month === mk && t.categoryId === flexCat.id);
-        if (!dest) { dest = { month: mk, categoryId: flexCat.id, spent: 0 }; rows.push(dest); }
-        dest.spent += move;
-      }
+      moveToFlex(mk, row, move);
+      left -= move;
     }
   }
 
