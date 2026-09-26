@@ -88,10 +88,10 @@ function trackerKeys(ticker: string): string[] {
 }
 
 async function fetchEmRecords(): Promise<Record<string, EmRecord>> {
-  const [t, h] = await Promise.all([
-    fetch("/api/em-tracker", { cache: "no-store" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
-    fetch("/api/em-tracker/history", { cache: "no-store" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
-  ]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getJson = (url: string): Promise<any> =>
+    fetch(url, { cache: "no-store" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+  const [t, h] = await Promise.all([getJson("/api/em-tracker"), getJson("/api/em-tracker/history")]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows: any[] = Array.isArray(t?.rows) ? t.rows : [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
