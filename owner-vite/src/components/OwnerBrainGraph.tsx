@@ -47,6 +47,7 @@ type GNode = {
   rgb: RGB;
   x: number; y: number; vx: number; vy: number;
   fixed: boolean;
+  held: boolean;       // dropped by the user — stays put until released
   deg: number;
   imports: number[];   // file → files it imports
   usedBy: number[];    // files that import it
@@ -191,7 +192,7 @@ function buildGraph(cfg: BrainCfg) {
     const n: GNode = {
       i: nodes.length, id, name, kind, app, area, lines, r: 3,
       rgb: kind === "root" ? ROOT_RGB : kind === "dir" ? HUB_GOLD : hex2rgb(COLOR.get(area) ?? "#8B9CB3"),
-      x: 0, y: 0, vx: 0, vy: 0, fixed: false, deg: 0, imports: [], usedBy: [],
+      x: 0, y: 0, vx: 0, vy: 0, fixed: false, held: false, deg: 0, imports: [], usedBy: [],
     };
     nodes.push(n); byId.set(id, n);
     return n;
@@ -297,9 +298,17 @@ export default function OwnerBrainGraph({
   const [hiddenAreas, setHiddenAreas] = useState<Set<string>>(() => new Set());
   const [showFolders, setShowFolders] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
+  const [fullScreen, setFullScreen] = useState(false);
+  const [heldCount, setHeldCount] = useState(0);
 
   // bridge React state → the imperative render loop
-  const api = useRef<{ fit: () => void; focus: (n: GNode) => void; redraw: () => void } | null>(null);
+  const api = useRef<{
+    fit: () => void; focus: (n: GNode) => void; redraw: () => void;
+    zoom: (k: number) => void; release: () => void; resize: () => void;
+  } | null>(null);
+  const fsRef = useRef(fullScreen); fsRef.current = fullScreen;
+  const setFsRef = useRef(setFullScreen); setFsRef.current = setFullScreen;
+  const setHeldRef = useRef(setHeldCount); setHeldRef.current = setHeldCount;
   const selRef = useRef<GNode | null>(null); selRef.current = selected;
   const hiddenRef = useRef(hiddenAreas); hiddenRef.current = hiddenAreas;
   const foldersRef = useRef(showFolders); foldersRef.current = showFolders;
@@ -328,6 +337,7 @@ export default function OwnerBrainGraph({
     function resize() {
       W = wrap.clientWidth; H = wrap.clientHeight;
       cv.width = Math.max(1, W * DPR); cv.height = Math.max(1, H * DPR);
+      dirty = true;
       dirty = true;
     }
     resize();
@@ -416,8 +426,11 @@ export default function OwnerBrainGraph({
     let panning = false;
     let downX = 0, downY = 0, lastX = 0, lastY = 0, moved = false;
     let downNode: GNode | null = null;
+    let velX = 0, velY = 0, lastMoveT = 0;                    // pan inertia
+    const touches = new Map<number, [number, number]>();      // two-finger pinch
+    let pinch: { d: number; mx: number; my: number } | null = null;
 
-    const rel = (e: PointerEvent | WheelEvent) => {
+    const rel = (e: PointerEvent | WheelEvent | MouseEvent) => {
       const r = cv.getBoundingClientRect();
       return [e.clientX - r.left, e.clientY - r.top] as const;
     };
@@ -427,25 +440,43 @@ export default function OwnerBrainGraph({
       for (const n of nodes) {
         if (!visible(n) || (n.kind === "dir" && !foldersRef.current)) continue;
         const d = Math.hypot(n.x - wx, n.y - wy);
-        const hit = n.r + 5 / cam.z;
-        if (d < hit && d < bd) { bd = d; best = n; }
+        if (d < n.r + 6 / cam.z && d < bd) { bd = d; best = n; }
       }
       return best;
     }
+    function zoomAt(sx: number, sy: number, k: number) {
+      const [wx, wy] = toWorld(sx, sy);
+      cam.z = Math.max(0.04, Math.min(8, cam.z * k));
+      cam.x = wx - (sx - W / 2) / cam.z; cam.y = wy - (sy - H / 2) / cam.z;   // point under cursor stays put
+      camAnim = null; dirty = true;
+    }
+    const syncHeld = () => setHeldRef.current(nodes.reduce((c, n) => c + (n.held ? 1 : 0), 0));
     function tipText(n: GNode) {
-      if (n.kind === "root") return `${n.name} · ${nodes.filter((m) => m.app === n.app && m.kind === "file").length} files`;
-      if (n.kind === "dir") return `${n.id}/`;
-      return `${n.id} · ${n.lines} lines · imports ${n.imports.length} · used by ${n.usedBy.length}`;
+      const pin = n.held ? "📌 " : "";
+      if (n.kind === "root") return `${pin}${n.name} · ${nodes.filter((m) => m.app === n.app && m.kind === "file").length} files`;
+      if (n.kind === "dir") return pin + (n.id.startsWith("area:") ? n.name : `${n.id}/`);
+      return `${pin}${n.id} · ${n.lines} lines · imports ${n.imports.length} · used by ${n.usedBy.length}`;
     }
     function onMove(e: PointerEvent) {
       const [sx, sy] = rel(e);
+      if (touches.has(e.pointerId)) touches.set(e.pointerId, [sx, sy]);
+      if (pinch && touches.size >= 2) {
+        const [a, b] = [...touches.values()];
+        const d = Math.hypot(a[0] - b[0], a[1] - b[1]), mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        zoomAt(mx, my, d / pinch.d);
+        cam.x -= (mx - pinch.mx) / cam.z; cam.y -= (my - pinch.my) / cam.z;
+        pinch = { d, mx, my };
+        return;
+      }
       if (Math.hypot(sx - downX, sy - downY) > 4) moved = true;
       if (drag) {
         const [wx, wy] = toWorld(sx, sy);
         drag.x = wx; drag.y = wy; drag.fixed = true;
-        alpha = Math.max(alpha, 0.25);
+        alpha = Math.max(alpha, 0.3);
       } else if (panning) {
-        cam.x -= (sx - lastX) / cam.z; cam.y -= (sy - lastY) / cam.z;
+        const dx = sx - lastX, dy = sy - lastY;
+        cam.x -= dx / cam.z; cam.y -= dy / cam.z;
+        velX = dx * 0.6 + velX * 0.4; velY = dy * 0.6 + velY * 0.4; lastMoveT = performance.now();
         camAnim = null;
       }
       lastX = sx; lastY = sy;
@@ -464,14 +495,29 @@ export default function OwnerBrainGraph({
     }
     function onDown(e: PointerEvent) {
       const [sx, sy] = rel(e);
-      downX = lastX = sx; downY = lastY = sy; moved = false;
+      if (e.pointerType === "touch") {
+        touches.set(e.pointerId, [sx, sy]);
+        if (touches.size === 2) {                 // second finger → pinch, cancel drag/pan
+          if (drag && !drag.held) drag.fixed = false;
+          drag = null; panning = false; downNode = null; moved = true;
+          const [a, b] = [...touches.values()];
+          pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), mx: (a[0] + b[0]) / 2, my: (a[1] + b[1]) / 2 };
+          return;
+        }
+      }
+      downX = lastX = sx; downY = lastY = sy; moved = false; velX = velY = 0;
       const n = pick(sx, sy);
       downNode = n;
       if (n) drag = n; else panning = true;
       cv.setPointerCapture(e.pointerId);
     }
-    function onUp() {
-      if (drag) drag.fixed = false;
+    function onUp(e: PointerEvent) {
+      touches.delete(e.pointerId);
+      if (pinch) { if (touches.size < 2) pinch = null; if (touches.size) return; }
+      if (drag) {
+        if (moved) { drag.held = drag.fixed = true; syncHeld(); }   // dropped → stays where you put it
+        else if (!drag.held) drag.fixed = false;
+      }
       if (!moved) {
         if (downNode) {
           setSelRef.current(selRef.current === downNode ? null : downNode);
@@ -479,6 +525,7 @@ export default function OwnerBrainGraph({
           setSelRef.current(null);
         }
       }
+      if (panning && performance.now() - lastMoveT > 80) velX = velY = 0;   // paused before release → no fling
       drag = null; panning = false; downNode = null;
       cv.style.cursor = "grab";
       dirty = true;
@@ -486,28 +533,55 @@ export default function OwnerBrainGraph({
     function onWheel(e: WheelEvent) {
       e.preventDefault();
       const [sx, sy] = rel(e);
-      const [wx, wy] = toWorld(sx, sy);
-      const k = Math.exp(-e.deltaY * 0.0015);
-      cam.z = Math.max(0.05, Math.min(6, cam.z * k));
-      // keep the world point under the cursor fixed
-      cam.x = wx - (sx - W / 2) / cam.z;
-      cam.y = wy - (sy - H / 2) / cam.z;
-      camAnim = null;
-      dirty = true;
+      // trackpad sideways scroll pans; mouse wheel and trackpad pinch (ctrl+wheel) zoom
+      if (!e.ctrlKey && e.deltaMode === 0 && Math.abs(e.deltaX) > 0 && Math.abs(e.deltaX) > Math.abs(e.deltaY) * 0.5) {
+        cam.x += e.deltaX / cam.z; cam.y += e.deltaY / cam.z; camAnim = null; dirty = true;
+        return;
+      }
+      zoomAt(sx, sy, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+    }
+    function onDbl(e: MouseEvent) {
+      const [sx, sy] = rel(e);
+      const n = pick(sx, sy);
+      if (n && n.held) { n.held = n.fixed = false; alpha = Math.max(alpha, 0.3); syncHeld(); dirty = true; }
+      else if (n) focus(n);
+      else { const [wx, wy] = toWorld(sx, sy); camAnim = { x: wx, y: wy, z: Math.min(8, cam.z * 1.8) }; }
     }
     function onLeave() { tip.style.opacity = "0"; if (hover) { hover = null; dirty = true; } }
+    function onKey(e: KeyboardEvent) {
+      if (/INPUT|TEXTAREA|SELECT/.test((document.activeElement as HTMLElement | null)?.tagName || "")) return;
+      const stepPx = 80 / cam.z;
+      switch (e.key) {
+        case "f": case "F": setFsRef.current((v) => !v); break;
+        case "Escape": if (!fsRef.current) return; setFsRef.current(false); break;
+        case "+": case "=": zoomAt(W / 2, H / 2, 1.25); break;
+        case "-": case "_": zoomAt(W / 2, H / 2, 0.8); break;
+        case "0": fit(); break;
+        case "ArrowLeft": cam.x -= stepPx; break;
+        case "ArrowRight": cam.x += stepPx; break;
+        case "ArrowUp": cam.y -= stepPx; break;
+        case "ArrowDown": cam.y += stepPx; break;
+        default: return;
+      }
+      e.preventDefault(); camAnim = null; dirty = true;
+    }
     cv.addEventListener("pointermove", onMove);
     cv.addEventListener("pointerdown", onDown);
     cv.addEventListener("pointerup", onUp);
     cv.addEventListener("pointercancel", onUp);
     cv.addEventListener("wheel", onWheel, { passive: false });
     cv.addEventListener("pointerleave", onLeave);
+    cv.addEventListener("dblclick", onDbl);
+    window.addEventListener("keydown", onKey);
 
     // ── render ─────────────────────────────────────────────────────────────
     const FONT = "'Inter', ui-sans-serif, system-ui, sans-serif";
     function draw() {
       raf = requestAnimationFrame(draw);
       if (alpha > 0) { step(); dirty = true; }
+      if (!panning && (Math.abs(velX) > 0.05 || Math.abs(velY) > 0.05)) {
+        cam.x -= velX / cam.z; cam.y -= velY / cam.z; velX *= 0.92; velY *= 0.92; dirty = true;
+      }
       if (camAnim) {
         cam.x += (camAnim.x - cam.x) * 0.15; cam.y += (camAnim.y - cam.y) * 0.15; cam.z += (camAnim.z - cam.z) * 0.15;
         if (Math.abs(camAnim.z - cam.z) < 0.002 && Math.hypot(camAnim.x - cam.x, camAnim.y - cam.y) < 0.5) camAnim = null;
@@ -587,6 +661,10 @@ export default function OwnerBrainGraph({
           ctx.strokeStyle = OWNER_THEME.text; ctx.lineWidth = 1.5;
           ctx.beginPath(); ctx.arc(sx, sy, rad + 3, 0, Math.PI * 2); ctx.stroke();
         }
+        if (n.held) {   // small white dot = pinned by you
+          ctx.fillStyle = OWNER_THEME.text;
+          ctx.beginPath(); ctx.arc(sx + rad * 0.72, sy - rad * 0.72, Math.max(1.6, rad * 0.22), 0, Math.PI * 2); ctx.fill();
+        }
         const link = n.kind === "file" ? LINK_BY_FILE.get(n.id) : undefined;
         if (link && pins?.has(link.href)) {
           ctx.strokeStyle = OWNER_THEME.gold; ctx.lineWidth = 1.2;
@@ -619,9 +697,12 @@ export default function OwnerBrainGraph({
     draw();
 
     api.current = {
-      fit: () => { camAnim = null; fit(); },
+      fit: () => { camAnim = null; velX = velY = 0; fit(); },
       focus,
       redraw: () => { dirty = true; },
+      zoom: (k) => zoomAt(W / 2, H / 2, k),
+      release: () => { for (const n of nodes) if (n.held) n.held = n.fixed = false; alpha = Math.max(alpha, 0.4); syncHeld(); dirty = true; },
+      resize,
     };
 
     return () => {
@@ -633,9 +714,27 @@ export default function OwnerBrainGraph({
       cv.removeEventListener("pointercancel", onUp);
       cv.removeEventListener("wheel", onWheel);
       cv.removeEventListener("pointerleave", onLeave);
+      cv.removeEventListener("dblclick", onDbl);
+      window.removeEventListener("keydown", onKey);
       api.current = null;
     };
   }, [graph]);
+
+  // Full screen: fixed overlay over the whole console (works everywhere), plus
+  // the browser Fullscreen API where allowed so the OS chrome goes too.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    try {
+      if (fullScreen && wrap && !document.fullscreenElement) wrap.requestFullscreen?.().catch(() => {});
+      if (!fullScreen && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    } catch { /* not allowed here — the fixed overlay still covers the page */ }
+    requestAnimationFrame(() => api.current?.resize());
+  }, [fullScreen]);
+  useEffect(() => {
+    const onFs = () => { if (!document.fullscreenElement) setFullScreen(false); };
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
 
   // ── search ─────────────────────────────────────────────────────────────────
   const matches = useMemo(() => {
@@ -684,8 +783,10 @@ export default function OwnerBrainGraph({
     <div
       ref={wrapRef}
       style={{
-        position: "relative", flex: 1, minHeight: 420, borderRadius: 18, overflow: "hidden",
-        border: `1px solid ${OWNER_THEME.border}`, background: OWNER_THEME.bg, touchAction: "none",
+        ...(fullScreen
+          ? { position: "fixed", inset: 0, zIndex: 1000, borderRadius: 0, border: "none" }
+          : { position: "relative", flex: 1, minHeight: 420, borderRadius: 18, border: `1px solid ${OWNER_THEME.border}` }),
+        overflow: "hidden", background: OWNER_THEME.bg, touchAction: "none",
       }}
     >
       <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", cursor: "grab" }} />
@@ -748,7 +849,7 @@ export default function OwnerBrainGraph({
       {sel && (
         <div
           style={{
-            position: "absolute", right: 12, top: matches.length ? 250 : 110, bottom: 70, width: 280, zIndex: 5,
+            position: "absolute", right: 12, top: matches.length ? 250 : 110, bottom: 100, width: 280, zIndex: 5,
             background: rgba(OWNER_THEME.panel, 0.94), border: `1px solid ${OWNER_THEME.border}`, borderRadius: 14,
             padding: "12px 14px", overflowY: "auto", color: OWNER_THEME.text,
           }}
@@ -785,6 +886,23 @@ export default function OwnerBrainGraph({
         <button style={toolBtn(false)} onClick={() => api.current?.fit()}>⊙ Fit</button>
         <button style={toolBtn(showFolders)} onClick={() => setShowFolders((v) => !v)}>Folders</button>
         <button style={toolBtn(showLabels)} onClick={() => setShowLabels((v) => !v)}>Labels</button>
+        {heldCount > 0 && (
+          <button style={toolBtn(false)} onClick={() => api.current?.release()}>Unpin all ({heldCount})</button>
+        )}
+        <button style={toolBtn(false)} onClick={() => setFullScreen((v) => !v)}>
+          {fullScreen ? "✕ Exit full screen" : "⛶ Full screen"}
+        </button>
+      </div>
+
+      {/* zoom buttons */}
+      <div style={{ position: "absolute", right: 12, bottom: 14, display: "flex", flexDirection: "column", gap: 6, zIndex: 5 }}>
+        <button style={{ ...toolBtn(false), width: 34, height: 34, padding: 0, justifyContent: "center", fontSize: TYPE.subhead }} onClick={() => api.current?.zoom(1.3)} title="Zoom in (+)">+</button>
+        <button style={{ ...toolBtn(false), width: 34, height: 34, padding: 0, justifyContent: "center", fontSize: TYPE.subhead }} onClick={() => api.current?.zoom(1 / 1.3)} title="Zoom out (−)">−</button>
+      </div>
+
+      {/* controls hint */}
+      <div style={{ position: "absolute", bottom: 58, left: "50%", transform: "translateX(-50%)", zIndex: 4, pointerEvents: "none", whiteSpace: "nowrap", fontSize: TYPE.micro, fontFamily: "ui-monospace, monospace", color: OWNER_THEME.text, opacity: 0.4 }}>
+        drag = pan · wheel/pinch = zoom · drag a node to pin it · double-click to release · F = full screen
       </div>
 
       <div

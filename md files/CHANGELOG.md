@@ -24503,3 +24503,8 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `src/App.tsx`: lazy route `/mockups`. `src/shell/Shell.tsx`: NAV entry "🧩 Mockups" with a new `ownerOnly` flag, filtered in the rail.
 - Not yet added: `app/v3/mockups/route.ts` (the hard-refresh shim) — under app/, pending Brandon's OK.
 - The first attempt had landed in the Voltick repo by mistake; App.jsx, AccountMenu.jsx, pvpath.js and smoke.mjs were restored byte-for-byte. `Voltick/web/src/pages/Mockups.jsx` is still on disk (untracked) and can be deleted.
+
+## 2026-09-26 — Brain maps: full screen + freer movement (owner Hub + Voltick admin)
+- `owner-vite/src/components/OwnerBrainGraph.tsx` (CB Brain + Voltick Brain) and `Voltick/admin-site/index.html` (Brain page): ⛶ Full screen button / **F** (Esc exits; fixed overlay plus the browser Fullscreen API where allowed).
+- Movement: pan keeps gliding after release (inertia); wheel and trackpad pinch zoom at the cursor, sideways trackpad scroll pans; two-finger pinch zoom/pan on touch; **+ / −** buttons and keys; arrow keys pan; **0** fits; double-click empty space zooms in, double-click a file focuses it.
+- Drag a node and it stays where you drop it (white dot marks it); double-click releases it, **Unpin all (N)** releases every one. Controls hint above the toolbar.

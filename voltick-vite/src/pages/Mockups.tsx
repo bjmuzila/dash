@@ -22,6 +22,8 @@ import { useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { PageShell } from "../components/PageCard";
 import { VOLTICK_SECTIONS } from "../lib/nav";
+import { AccountProposed, ChartProposed, FlowProposed, SettingsProposed } from "./MockupsProposed";
+import { ToolbarBuilder } from "./MockupsBuilder";
 import {
   ACCENT,
   ACCENT_TEXT,
@@ -1362,17 +1364,42 @@ function SettingsTab() {
    THE PAGE
    ════════════════════════════════════════════════════════════════════════ */
 
-type Tab = "chart" | "flow" | "account" | "settings";
-const TABS: [Tab, string][] = [
-  ["chart", "⚙ Chart Style"],
-  ["flow", "⚡︎ Flow Toolbars"],
-  ["account", "◉ Account Menu"],
-  ["settings", "☰ Settings (new)"],
+type Tab = "chart" | "flow" | "account" | "settings" | "p-chart" | "p-flow" | "p-account" | "p-settings" | "builder";
+// Two rows: TODAY pictures what ships, PROPOSED is the consolidated redesign of
+// the same surface (pages/MockupsProposed.tsx). Each proposed tab has a
+// "Compare with today" button that jumps to its twin.
+const TAB_ROWS: { title: string; note: string; tabs: [Tab, string][] }[] = [
+  {
+    title: "Today",
+    note: "as it ships",
+    tabs: [
+      ["chart", "⚙ Chart Style"],
+      ["flow", "⚡︎ Flow Toolbars"],
+      ["account", "◉ Account Menu"],
+      ["settings", "☰ Settings (new)"],
+    ],
+  },
+  {
+    title: "Proposed",
+    note: "consolidated",
+    tabs: [
+      ["p-chart", "⚙ Chart Style"],
+      ["p-flow", "⚡︎ Flow Toolbars"],
+      ["p-account", "◉ Account Menu"],
+      ["p-settings", "☰ Settings"],
+    ],
+  },
+  {
+    title: "Build",
+    note: "your own",
+    tabs: [["builder", "🛠 Toolbar builder"]],
+  },
 ];
+const ALL_TABS = TAB_ROWS.flatMap((r) => r.tabs);
 
 function readHashTab(): Tab {
   const h = typeof window !== "undefined" ? window.location.hash.slice(1) : "";
-  return TABS.find(([k]) => k === h)?.[0] ?? "chart";
+  return ALL_TABS.find(([k]) => k === h)?.[0] ?? "chart";
 }
 
 export default function Mockups() {
@@ -1386,36 +1413,49 @@ export default function Mockups() {
     }
   };
   return (
-    <PageShell title="Mockups" lede="Static pictures of the busiest Voltick menus, laid flat for reorganising. Nothing on this page is wired or saved." maxWidth={1500}>
-      <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20, padding: 6, background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_LG, width: "fit-content", maxWidth: "100%" }}>
-        {TABS.map(([k, l]) => (
-          <button
-            key={k}
-            type="button"
-            role="tab"
-            aria-selected={tab === k}
-            onClick={() => pick(k)}
-            style={{
-              fontFamily: SANS,
-              fontSize: 13,
-              fontWeight: 700,
-              padding: "8px 14px",
-              borderRadius: R_MD,
-              cursor: "pointer",
-              border: `1px solid ${tab === k ? ACCENT : "transparent"}`,
-              color: PAPER,
-              background: tab === k ? rgba(ACCENT, 0.18) : "transparent",
-              boxShadow: tab === k ? `inset 0 -1px 0 ${ACCENT}, 0 0 20px -8px ${ACCENT}` : "none",
-            }}
-          >
-            {l}
-          </button>
+    <PageShell title="Mockups" lede="Static pictures of the busiest Voltick menus, laid flat for reorganising, a consolidated proposal for each, and a builder to sketch your own. Nothing here touches the live site." maxWidth={1500}>
+      <div style={{ display: "grid", gap: 6, marginBottom: 20, padding: 6, background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_LG, width: "fit-content", maxWidth: "100%" }}>
+        {TAB_ROWS.map((row) => (
+          <div key={row.title} role="tablist" aria-label={row.title} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ width: 92, paddingLeft: 8, fontFamily: MONO, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: row.title === "Proposed" ? GOOD : row.title === "Build" ? VOLT : PAPER_QUIET, lineHeight: 1.3 }}>
+              {row.title}
+              <span style={{ display: "block", fontWeight: 600, letterSpacing: "0.04em", textTransform: "none", color: PAPER_QUIET }}>{row.note}</span>
+            </span>
+            {row.tabs.map(([k, l]) => (
+              <button
+                key={k}
+                type="button"
+                role="tab"
+                aria-selected={tab === k}
+                onClick={() => pick(k)}
+                style={{
+                  fontFamily: SANS,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  padding: "8px 14px",
+                  borderRadius: R_MD,
+                  cursor: "pointer",
+                  border: `1px solid ${tab === k ? ACCENT : "transparent"}`,
+                  color: PAPER,
+                  background: tab === k ? rgba(ACCENT, 0.18) : "transparent",
+                  boxShadow: tab === k ? `inset 0 -1px 0 ${ACCENT}, 0 0 20px -8px ${ACCENT}` : "none",
+                }}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
         ))}
       </div>
       {tab === "chart" && <ChartTab />}
       {tab === "flow" && <FlowTab />}
       {tab === "account" && <AccountTab />}
       {tab === "settings" && <SettingsTab />}
+      {tab === "p-chart" && <ChartProposed onCompare={() => pick("chart")} />}
+      {tab === "p-flow" && <FlowProposed onCompare={() => pick("flow")} />}
+      {tab === "p-account" && <AccountProposed onCompare={() => pick("account")} />}
+      {tab === "p-settings" && <SettingsProposed onCompare={() => pick("settings")} />}
+      {tab === "builder" && <ToolbarBuilder />}
     </PageShell>
   );
 }
