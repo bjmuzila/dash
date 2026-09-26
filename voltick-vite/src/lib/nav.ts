@@ -161,6 +161,20 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
     ],
   },
   {
+    title: "Mockups",
+    icon: "🧩",
+    blurb: "Static pictures of the busiest Voltick menus, laid flat for reorganising. Nothing on them is wired or saved.",
+    items: [
+      {
+        label: "Mockups",
+        path: "/mockups",
+        key: "Mockups",
+        note: "Four tabs: the chart ⚙ Style panel, every Flow toolbar and dropdown, the account pop-up, and a proposed Settings page that hides pages from the left rail.",
+        status: "live",
+      },
+    ],
+  },
+  {
     title: "Plumbing",
     icon: "🔌",
     blurb: "Proof that this subdomain reaches the CB Edge backend the way it is meant to.",

@@ -48,6 +48,7 @@ export const REVERSAL = "#ff5fa2"; // ↘ a reversal
 export const SURGE = "#4d8cff";    // ↯ ‖ surges and walls
 export const COIL = ACCENT;        // ◆ the coil (same hex as ACCENT)
 export const PREMARKET = "#8adb57";
+export const DARK_POOL = "#a855f7"; // off-exchange / dark-pool flow (Voltick theme.jsx DARK_POOL)
 
 // Inks for text sitting ON a filled row of the above.
 export const INK_ON_REVERSAL = "#36081d";

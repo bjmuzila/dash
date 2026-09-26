@@ -75,9 +75,6 @@ export interface NavItem {
    *  runs AFTER the order is applied rather than on NAV itself: a subscription
    *  that lapses and comes back finds the icon where it was left. */
   paidOnly?: boolean
-  /** Drawn only for the owner account. Chrome, not a gate — same rule as
-   *  paidOnly; the page behind it repeats the check (see pages/Mockups.tsx). */
-  ownerOnly?: boolean
 }
 
 // v3's rail. It started as a copy of v2's toolbar icon set so the rail was
@@ -148,9 +145,6 @@ export const NAV: NavItem[] = [
   // this list on 2026-08-30: those said a page was coming, this says where the
   // page actually is today. Shrinks as v3 fills in; delete it when it is empty.
   { to: '/legacy', label: 'v2 Legacy', icon: '🗄️' },
-  // The owner's design board (2026-09-25) — static mockups for reorganising
-  // menus and flow. Drawn for the owner only.
-  { to: '/mockups', label: 'Mockups', icon: '🧩', ownerOnly: true },
 ]
 
 // The rail head. It was a drawn accent square with the letters "CB" in it —
@@ -183,7 +177,7 @@ function loadOrder(): string[] {
 }
 
 function Rail() {
-  const { isPaid, isOwner } = useAuth()
+  const { isPaid } = useAuth()
   const [order, setOrder] = useState<string[]>(() => loadOrder())
   const dragId = useRef<string | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
@@ -216,7 +210,7 @@ function Rail() {
   // account's rail flickering an icon it does not have.
   const items = order
     .map((to) => NAV.find((n) => n.to === to))
-    .filter((n): n is NavItem => !!n && (!n.paidOnly || isPaid) && (!n.ownerOnly || isOwner))
+    .filter((n): n is NavItem => !!n && (!n.paidOnly || isPaid))
 
   return (
     <nav className="flex w-16 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-line bg-rail py-3">

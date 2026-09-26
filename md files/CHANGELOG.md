@@ -24498,6 +24498,8 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-25 — Voltick theme: no level tags in Multi Greek / option chain cells
 - `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`, `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`: removed the ★/↯/↘/◆ + VOLT/SURGE/REV/COIL text tags from Voltick level cells (expiry columns and ⅀ Total). The reserved fill alone marks the level.
 
-## 2026-09-25 — Voltick: /mockups owner design board
-- New `web/src/pages/Mockups.jsx` (Voltick repo, branch bzilabranch) at `/mockups`, owner-only in prod (open under `npm run dev`). Four tabs: ⚙ Chart Style (toolbar + Style/Indicators/Draw popover, all sections), ⚡ Flow Toolbars (every tab, sub-tab, chip, dropdown and the Filters panel, per view or stacked), ◉ Account Menu (rail foot + pop-up, member/owner/free), ☰ Settings (new) — proposal for hiding pages/shelves from the left rail with a live rail preview. Nothing wired or saved.
-- Wiring: route + lazy import in `App.jsx`; owner-only "Mockups" row in `AccountMenu.jsx` (its door); `/mockups` added to `server/pvpath.js` PV_PATTERNS and `server/scripts/smoke.mjs` ROUTES so the route guards stay green.
+## 2026-09-25 — v3: /mockups owner design board
+- New `cbedge-v3/src/pages/Mockups.tsx` at `/v3/mockups`, owner-only (draws "Owner only" for everyone else). Four tabs: ⚙ Chart Style (toolbar + Style/Indicators/Draw popover, every section), ⚡ Flow Toolbars (every tab, sub-tab, chip, dropdown and the Filters panel, per view or stacked), ◉ Account Menu (rail foot + pop-up, member/owner/free), ☰ Settings (new) — proposal for hiding pages/shelves from the left rail, with a live preview of the v3 rail or the Voltick rail. Nothing wired or saved. Tokens only; passes check:theme.
+- `src/App.tsx`: lazy route `/mockups`. `src/shell/Shell.tsx`: NAV entry "🧩 Mockups" with a new `ownerOnly` flag, filtered in the rail.
+- Not yet added: `app/v3/mockups/route.ts` (the hard-refresh shim) — under app/, pending Brandon's OK.
+- The first attempt had landed in the Voltick repo by mistake; App.jsx, AccountMenu.jsx, pvpath.js and smoke.mjs were restored byte-for-byte. `Voltick/web/src/pages/Mockups.jsx` is still on disk (untracked) and can be deleted.
