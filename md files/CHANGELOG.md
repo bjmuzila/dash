@@ -24498,13 +24498,13 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-25 — Voltick theme: no level tags in Multi Greek / option chain cells
 - `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`, `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`: removed the ★/↯/↘/◆ + VOLT/SURGE/REV/COIL text tags from Voltick level cells (expiry columns and ⅀ Total). The reserved fill alone marks the level.
 
-## 2026-09-25 — v3: /mockups owner design board
-- New `cbedge-v3/src/pages/Mockups.tsx` at `/v3/mockups`, owner-only (draws "Owner only" for everyone else). Four tabs: ⚙ Chart Style (toolbar + Style/Indicators/Draw popover, every section), ⚡ Flow Toolbars (every tab, sub-tab, chip, dropdown and the Filters panel, per view or stacked), ◉ Account Menu (rail foot + pop-up, member/owner/free), ☰ Settings (new) — proposal for hiding pages/shelves from the left rail, with a live preview of the v3 rail or the Voltick rail. Nothing wired or saved. Tokens only; passes check:theme.
-- `src/App.tsx`: lazy route `/mockups`. `src/shell/Shell.tsx`: NAV entry "🧩 Mockups" with a new `ownerOnly` flag, filtered in the rail.
-- Not yet added: `app/v3/mockups/route.ts` (the hard-refresh shim) — under app/, pending Brandon's OK.
-- The first attempt had landed in the Voltick repo by mistake; App.jsx, AccountMenu.jsx, pvpath.js and smoke.mjs were restored byte-for-byte. `Voltick/web/src/pages/Mockups.jsx` is still on disk (untracked) and can be deleted.
+## 2026-09-25 — voltick-vite: /mockups on the contents board
+- New `voltick-vite/src/pages/Mockups.tsx` at `voltick.cbedge.net/mockups`, listed on the contents board under a new "🧩 Mockups" group (`src/lib/nav.ts` + `src/pages/registry.ts`). Four tabs: ⚙ Chart Style (toolbar + Style/Indicators/Draw popover, every section), ⚡ Flow Toolbars (every tab, sub-tab, chip, dropdown and the Filters panel, per view or stacked), ◉ Account Menu (rail foot + pop-up, member/owner/free), ☰ Settings (new): a proposal for hiding pages/shelves from the left rail with a live preview of the Voltick rail or this sandbox's rail. Nothing wired or saved.
+- `voltick-vite/src/theme.ts`: added `DARK_POOL` (#a855f7), taken from Voltick's upstream theme.jsx.
+- Two earlier attempts went to the wrong place and were undone: cbedge-v3 `App.tsx` / `Shell.tsx` and Voltick repo `App.jsx` / `AccountMenu.jsx` / `pvpath.js` / `smoke.mjs` restored byte-for-byte. `cbedge-v3/src/pages/Mockups.tsx` and `Voltick/web/src/pages/Mockups.jsx` are now `export {}` tombstones and can be deleted.
 
-## 2026-09-26 — Brain maps: full screen + freer movement (owner Hub + Voltick admin)
-- `owner-vite/src/components/OwnerBrainGraph.tsx` (CB Brain + Voltick Brain) and `Voltick/admin-site/index.html` (Brain page): ⛶ Full screen button / **F** (Esc exits; fixed overlay plus the browser Fullscreen API where allowed).
-- Movement: pan keeps gliding after release (inertia); wheel and trackpad pinch zoom at the cursor, sideways trackpad scroll pans; two-finger pinch zoom/pan on touch; **+ / −** buttons and keys; arrow keys pan; **0** fits; double-click empty space zooms in, double-click a file focuses it.
-- Drag a node and it stays where you drop it (white dot marks it); double-click releases it, **Unpin all (N)** releases every one. Controls hint above the toolbar.
+## 2026-09-26 — voltick-vite: proposed mockups + toolbar builder
+- New `voltick-vite/src/pages/MockupsProposed.tsx`: four consolidated redesigns (Chart Style, Flow toolbars, Account menu, Settings), each with a before/after scorecard, a what-changed list and a Compare with today button. Self-contained so the Today tabs stay unchanged.
+- New `voltick-vite/src/pages/MockupsBuilder.tsx`: a toolbar builder. Pick Chart / Flow / Account menu / Left rail, start from Today or Proposed, drag or tap-to-move tiles between groups, rename tiles and groups, change control kinds, add your own, sliders for size/spacing/padding/corners/screen width, live preview, named saves (browser localStorage), JSON export/import.
+- `Mockups.tsx`: tab bar is now three rows (Today, Proposed, Build). Existing tab content untouched.
+- Screenshots: `generated/2026-09-26-mockups-proposed-{chart,flow,account,settings}.png`, `generated/2026-09-26-mockups-toolbar-builder.png`.

@@ -163,13 +163,13 @@ export const VOLTICK_SECTIONS: VoltickGroup[] = [
   {
     title: "Mockups",
     icon: "🧩",
-    blurb: "Static pictures of the busiest Voltick menus, laid flat for reorganising. Nothing on them is wired or saved.",
+    blurb: "A proposal for cleaner Voltick menus: fewer buttons, fewer places to look, nothing duplicated. Clickable pictures, nothing wired.",
     items: [
       {
         label: "Mockups",
         path: "/mockups",
         key: "Mockups",
-        note: "Four tabs: the chart ⚙ Style panel, every Flow toolbar and dropdown, the account pop-up, and a proposed Settings page that hides pages from the left rail.",
+        note: "Four proposed redesigns: the chart ⚙ panel, the Flow toolbars, the account menu, and one Settings page that can hide, pin and reorder the left menu.",
         status: "live",
       },
     ],

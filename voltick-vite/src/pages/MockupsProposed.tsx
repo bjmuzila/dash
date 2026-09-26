@@ -395,7 +395,7 @@ function ChartPopover() {
   );
 }
 
-export function ChartProposed({ onCompare }: { onCompare: () => void }) {
+export function ChartProposed({ onCompare }: { onCompare?: () => void } = {}) {
   const [drawing, setDrawing] = useState(false);
   return (
     <div style={{ display: "grid", gap: 22 }}>
@@ -597,7 +597,7 @@ function FlowToolbarP({ tab }: { tab: string }) {
   );
 }
 
-export function FlowProposed({ onCompare }: { onCompare: () => void }) {
+export function FlowProposed({ onCompare }: { onCompare?: () => void } = {}) {
   const [tab, setTab] = useState("tape");
   const [sub, setSub] = useState("all");
   const t = P_FLOW.find((x) => x.key === tab) ?? P_FLOW[0]!;
@@ -739,7 +739,7 @@ function HelpPanel() {
   );
 }
 
-export function AccountProposed({ onCompare }: { onCompare: () => void }) {
+export function AccountProposed({ onCompare }: { onCompare?: () => void } = {}) {
   const [who, setWho] = useState<Who>("member");
   return (
     <div style={{ display: "grid", gap: 20 }}>
@@ -977,7 +977,7 @@ function SettingsCard({ id, title, desc, children }: { id: string; title: string
   );
 }
 
-export function SettingsProposed({ onCompare }: { onCompare: () => void }) {
+export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {}) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState<SecKey>("menu");
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
