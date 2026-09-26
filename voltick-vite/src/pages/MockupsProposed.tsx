@@ -985,130 +985,259 @@ const SECTIONS: { key: SecKey; label: string; keywords: string }[] = [
   { key: "account", label: "Account & plan", keywords: "email billing password delete" },
 ];
 
-function MenuSection({ hidden, setHidden, pinned, setPinned, order, setOrder }: { hidden: Set<string>; setHidden: (s: Set<string>) => void; pinned: string[]; setPinned: (p: string[]) => void; order: string[]; setOrder: (o: string[]) => void }) {
-  const [preset, setPreset] = useState("everything");
-  const applyPreset = (k: string) => {
-    setPreset(k);
-    setHidden(new Set(MENU_PRESETS[k]!.hide));
-  };
-  const move = (label: string, d: -1 | 1) => {
-    const i = order.indexOf(label);
-    const j = i + d;
-    if (j < 0 || j >= order.length) return;
-    const nx = [...order];
-    [nx[i], nx[j]] = [nx[j]!, nx[i]!];
-    setOrder(nx);
-  };
-  const flipPage = (p: string) => {
-    const nx = new Set(hidden);
-    if (nx.has(p)) nx.delete(p);
-    else nx.add(p);
-    setHidden(nx);
-    setPreset("custom");
-  };
-  const flipPin = (p: string) => setPinned(pinned.includes(p) ? pinned.filter((x) => x !== p) : [...pinned, p].slice(0, 5));
-  const shelves = order.map((l) => SHELVES.find((s) => s.label === l)!).filter(Boolean);
-  const total = SHELVES.reduce((a, s) => a + s.items.length, 0);
+type RailState = {
+  hidden: Set<string>;
+  pinned: string[];
+  order: string[];
+  items: Record<string, string[]>;
+};
+
+const railInit = (): RailState => ({
+  hidden: new Set(),
+  pinned: ["/flow", "/chart"],
+  order: SHELVES.map((s) => s.label),
+  items: Object.fromEntries(SHELVES.map((s) => [s.label, s.items.map((p) => p.path)])),
+});
+
+const ALL_PAGES = SHELVES.flatMap((s) => s.items);
+const pageOf = (path: string) => ALL_PAGES.find((p) => p.path === path);
+
+const move = <T,>(list: T[], i: number, d: -1 | 1): T[] => {
+  const j = i + d;
+  if (i < 0 || j < 0 || j >= list.length) return list;
+  const nx = [...list];
+  [nx[i], nx[j]] = [nx[j]!, nx[i]!];
+  return nx;
+};
+
+/** A Mark on only one example row, so Show changes does not outline all fifty. */
+const MaybeMark = ({ on, tag, children }: { on: boolean; tag: string; children: ReactNode }) => (on ? <Mark tag={tag}>{children}</Mark> : <>{children}</>);
+
+/** The small icon buttons the rail grows in edit mode. */
+function RailBtn({ children, title, onClick, disabled, on, tone = PAPER }: { children: ReactNode; title: string; onClick: () => void; disabled?: boolean; on?: boolean; tone?: string }) {
   return (
-    <div style={{ display: "grid", gap: 10 }}>
-      <Mark tag="presets for the menu" block>
-      <Row label="Start with" hint="A starting point. Change any row below after.">
-        <Seg value={preset} onChange={applyPreset} options={[["everything", "Everything"], ["trader", "Trader essentials"], ["minimal", "Minimal"], ...(preset === "custom" ? ([["custom", "Custom"]] as const) : [])]} />
-      </Row>
-      </Mark>
-      <Mark tone="moved" tag="was Board › Default view" block>
-      <Row label="Open Voltick on" hint="The page a new tab lands on">
-        <Chip>Single board ▾</Chip>
-      </Row>
-      </Mark>
-      <div style={{ fontFamily: SANS, fontSize: 11.5, color: PAPER_QUIET }}>
-        {total - hidden.size} of {total} pages shown · ☆ pins a page to the top of the menu (up to 5) · ↑↓ reorders a shelf
-      </div>
-      {shelves.map((s, si) => (
-        <div key={s.label} style={{ border: `1px solid ${LINE}`, borderRadius: R_MD, overflow: "hidden" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: PANEL }}>
-            <span style={{ width: 18, textAlign: "center" }}>{s.icon}</span>
-            <span style={{ fontFamily: MONO, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.12em", color: PAPER, textTransform: "uppercase" }}>{s.label}</span>
-            <Mark tag={si === 0 ? "reorder" : undefined}>
-              <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-              <button type="button" disabled={si === 0} onClick={() => move(s.label, -1)} style={arrowBtn(si === 0)}>
-                ↑
-              </button>
-              <button type="button" disabled={si === shelves.length - 1} onClick={() => move(s.label, 1)} style={arrowBtn(si === shelves.length - 1)}>
-                ↓
-              </button>
-            </span>
-              </Mark>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
-            {s.items.map((p) => {
-              const on = !hidden.has(p.path);
-              const pin = pinned.includes(p.path);
-              return (
-                <div key={p.path} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderTop: `1px solid ${LINE}` }}>
-                  <Toggle on={on} onClick={() => flipPage(p.path)} />
-                  <span style={{ flex: 1, fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: on ? PAPER : PAPER_QUIET, textDecoration: on ? "none" : "line-through" }}>{p.label}</span>
-                  <Mark tag={si === 0 && p === s.items[0] ? "pin" : undefined}>
-                  <button type="button" title="Pin to the top" disabled={!on} onClick={() => flipPin(p.path)} style={{ border: "none", background: "transparent", cursor: on ? "pointer" : "default", color: pin ? VOLT : PAPER_QUIET, fontSize: 14, opacity: on ? 1 : 0.3 }}>
-                    {pin ? "★" : "☆"}
-                  </button>
-                  </Mark>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
-    </div>
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      style={{
+        width: 20,
+        height: 20,
+        flex: "none",
+        display: "inline-grid",
+        placeItems: "center",
+        padding: 0,
+        borderRadius: 5,
+        border: `1px solid ${on ? rgba(tone, 0.6) : LINE}`,
+        background: on ? rgba(tone, 0.14) : "transparent",
+        color: on ? tone : PAPER_QUIET,
+        fontSize: 11,
+        lineHeight: 1,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.25 : 1,
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
-const arrowBtn = (disabled: boolean): CSSProperties => ({ width: 24, height: 22, borderRadius: 6, border: `1px solid ${LINE}`, background: "transparent", color: PAPER, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.3 : 1 });
+const Eye = ({ off }: { off?: boolean }) => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" />
+    <circle cx="12" cy="12" r="3" />
+    {off && <path d="M3 3l18 18" />}
+  </svg>
+);
 
-function RailPreview({ hidden, pinned, order }: { hidden: Set<string>; pinned: string[]; order: string[] }) {
-  const all = SHELVES.flatMap((s) => s.items);
-  const pinnedPages = pinned.map((p) => all.find((x) => x.path === p)).filter((x): x is Page => !!x && !hidden.has(x.path));
-  const shelves = order.map((l) => SHELVES.find((s) => s.label === l)!).filter(Boolean);
+/**
+ * THE LEFT RAIL, EDITABLE WHERE IT LIVES. A small ✎ beside Search turns edit
+ * mode on: every page grows ☆ favourite, ↑ ↓ and 👁 hide; every shelf grows ↑ ↓
+ * and hide-shelf. Favourites sit at the top under Search. Done puts it back to
+ * a plain menu with the hidden rows gone.
+ */
+function EditableRail({ st, set, editing, setEditing }: { st: RailState; set: (s: RailState) => void; editing: boolean; setEditing: (v: boolean) => void }) {
+  const flipHide = (key: string) => {
+    const h = new Set(st.hidden);
+    if (h.has(key)) h.delete(key);
+    else h.add(key);
+    set({ ...st, hidden: h, pinned: st.pinned.filter((p) => p !== key) });
+  };
+  const flipPin = (path: string) => set({ ...st, pinned: st.pinned.includes(path) ? st.pinned.filter((p) => p !== path) : [...st.pinned, path].slice(0, 6) });
+  const favs = st.pinned.map(pageOf).filter((x): x is Page => !!x && !st.hidden.has(x.path));
+  const rowH = 24;
   return (
-    <div style={{ width: 180, minHeight: 520, display: "flex", flexDirection: "column", background: ELEV, border: `1px solid ${LINE}`, borderRadius: R_LG, overflow: "hidden" }}>
-      <div style={{ padding: 10 }}>
-        <div style={{ fontFamily: SANS, fontSize: 12, color: PAPER_QUIET, border: `1px solid ${LINE}`, borderRadius: R_MD, padding: "6px 9px", display: "flex", justifyContent: "space-between" }}>
+    <div style={{ width: editing ? 236 : 196, transition: "width 160ms ease", minHeight: 560, display: "flex", flexDirection: "column", background: ELEV, border: `1px solid ${editing ? rgba(ACCENT, 0.6) : LINE}`, borderRadius: R_LG, overflow: "hidden", boxShadow: editing ? `0 0 24px -10px ${ACCENT}` : "none" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: 10 }}>
+        <div style={{ flex: 1, fontFamily: SANS, fontSize: 12, color: PAPER_QUIET, border: `1px solid ${LINE}`, borderRadius: R_MD, padding: "6px 9px", display: "flex", justifyContent: "space-between" }}>
           ⌕ Search <span style={{ fontFamily: MONO, fontSize: 10 }}>⌘K</span>
         </div>
+        {!editing && (
+          <Mark tag="edit in place">
+            <RailBtn title="Edit the menu" onClick={() => setEditing(true)}>
+              ✎
+            </RailBtn>
+          </Mark>
+        )}
       </div>
-      {pinnedPages.length > 0 && (
-        <Mark tag="pinned" block>
+      {editing && (
+        <div style={{ margin: "0 10px 8px", padding: "7px 9px", borderRadius: R_MD, background: rgba(ACCENT, 0.1), border: `1px solid ${rgba(ACCENT, 0.35)}`, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ flex: 1, fontFamily: SANS, fontSize: 11, color: PAPER, lineHeight: 1.35 }}>☆ favourite · ↑↓ move · <span style={{ verticalAlign: "-1px" }}><Eye /></span> hide</span>
+          <button type="button" onClick={() => setEditing(false)} style={{ fontFamily: SANS, fontSize: 11.5, fontWeight: 700, color: PAPER, background: ACCENT, border: "none", borderRadius: 6, padding: "4px 9px", cursor: "pointer" }}>
+            Done
+          </button>
+        </div>
+      )}
+
+      {(favs.length > 0 || editing) && (
         <div style={{ paddingBottom: 6, marginBottom: 6, borderBottom: `1px solid ${LINE}` }}>
-          {pinnedPages.map((p) => (
-            <div key={p.path} style={{ display: "flex", alignItems: "center", height: 26, fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: PAPER }}>
-              <span style={{ width: 40, textAlign: "center", color: VOLT }}>★</span>
-              {p.label}
+          <div style={{ padding: "2px 12px 4px", fontFamily: MONO, fontSize: 9, fontWeight: 800, letterSpacing: "0.14em", color: VOLT }}>★ FAVOURITES</div>
+          {!favs.length && <div style={{ padding: "2px 12px 6px", fontFamily: SANS, fontSize: 11, color: PAPER_QUIET }}>Tap ☆ on any page</div>}
+          {favs.map((p, i) => (
+            <div key={p.path} style={{ display: "flex", alignItems: "center", gap: 4, height: rowH + 2, padding: "0 8px 0 12px", fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: PAPER }}>
+              <span style={{ color: VOLT, width: 16 }}>★</span>
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label}</span>
+              {editing && (
+                <>
+                  <RailBtn title="Move up" disabled={i === 0} onClick={() => set({ ...st, pinned: move(st.pinned, st.pinned.indexOf(p.path), -1) })}>
+                    ↑
+                  </RailBtn>
+                  <RailBtn title="Move down" disabled={i === favs.length - 1} onClick={() => set({ ...st, pinned: move(st.pinned, st.pinned.indexOf(p.path), 1) })}>
+                    ↓
+                  </RailBtn>
+                  <RailBtn title="Remove from favourites" on tone={VOLT} onClick={() => flipPin(p.path)}>
+                    ★
+                  </RailBtn>
+                </>
+              )}
             </div>
           ))}
         </div>
-        </Mark>
       )}
+
       <div style={{ flex: 1, paddingBottom: 8 }}>
-        {shelves.map((s) => {
-          const kids = s.items.filter((p) => !hidden.has(p.path));
-          if (!kids.length) return null;
-          const leaf = s.items.length === 1;
+        {st.order.map((label, si) => {
+          const shelf = SHELVES.find((s) => s.label === label)!;
+          const shelfKey = `shelf:${label}`;
+          const shelfHidden = st.hidden.has(shelfKey);
+          if (shelfHidden && !editing) return null;
+          const paths = st.items[label] ?? [];
+          const kids = paths.filter((p) => editing || !st.hidden.has(p));
+          if (!kids.length && !editing) return null;
+          const leaf = shelf.items.length === 1;
+          const first = si === 0;
           return (
-            <div key={s.label} style={{ marginBottom: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", height: 28, fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: PAPER }}>
-                <span style={{ width: 40, textAlign: "center" }}>{s.icon}</span>
-                {leaf ? kids[0]!.label : s.label}
+            <div key={label} style={{ marginBottom: 6, opacity: shelfHidden ? 0.4 : 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 4, height: 28, padding: "0 8px 0 0", fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: PAPER }}>
+                <span style={{ width: 36, textAlign: "center", flex: "none" }}>{shelf.icon}</span>
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: shelfHidden ? "line-through" : "none" }}>{leaf ? pageOf(paths[0] ?? "")?.label ?? label : label}</span>
+                {editing && (
+                  <MaybeMark on={first} tag="shelf ↑ ↓ hide">
+                    <span style={{ display: "inline-flex", gap: 3 }}>
+                      <RailBtn title="Move shelf up" disabled={si === 0} onClick={() => set({ ...st, order: move(st.order, si, -1) })}>
+                        ↑
+                      </RailBtn>
+                      <RailBtn title="Move shelf down" disabled={si === st.order.length - 1} onClick={() => set({ ...st, order: move(st.order, si, 1) })}>
+                        ↓
+                      </RailBtn>
+                      {leaf && (
+                        <RailBtn title={st.pinned.includes(paths[0] ?? "") ? "Remove from favourites" : "Add to favourites"} on={st.pinned.includes(paths[0] ?? "")} tone={VOLT} onClick={() => flipPin(paths[0] ?? "")}>
+                          {st.pinned.includes(paths[0] ?? "") ? "★" : "☆"}
+                        </RailBtn>
+                      )}
+                      <RailBtn title={shelfHidden ? "Show this shelf" : "Hide this shelf"} on={shelfHidden} tone={BAD} onClick={() => flipHide(shelfKey)}>
+                        <Eye off={shelfHidden} />
+                      </RailBtn>
+                    </span>
+                  </MaybeMark>
+                )}
               </div>
               {!leaf &&
-                kids.map((p) => (
-                  <div key={p.path} style={{ height: 22, display: "flex", alignItems: "center", paddingLeft: 40, fontFamily: SANS, fontSize: 12, color: PAPER_QUIET }}>
-                    {p.label}
-                  </div>
-                ))}
+                !shelfHidden &&
+                kids.map((path, ii) => {
+                  const pg = pageOf(path);
+                  if (!pg) return null;
+                  const hid = st.hidden.has(path);
+                  const fav = st.pinned.includes(path);
+                  return (
+                    <div key={path} style={{ display: "flex", alignItems: "center", gap: 3, height: rowH, padding: "0 8px 0 36px", fontFamily: SANS, fontSize: 12, color: hid ? rgba(PAPER, 0.35) : PAPER_QUIET }}>
+                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: hid ? "line-through" : "none" }}>{pg.label}</span>
+                      {!editing && fav && <span style={{ color: VOLT, fontSize: 10 }}>★</span>}
+                      {editing && (
+                        <MaybeMark on={first && ii === 0} tag="☆ ↑ ↓ hide">
+                          <span style={{ display: "inline-flex", gap: 3 }}>
+                            <RailBtn title={fav ? "Remove from favourites" : "Add to favourites"} on={fav} tone={VOLT} disabled={hid} onClick={() => flipPin(path)}>
+                              {fav ? "★" : "☆"}
+                            </RailBtn>
+                            <RailBtn title="Move up" disabled={ii === 0} onClick={() => set({ ...st, items: { ...st.items, [label]: move(paths, paths.indexOf(path), -1) } })}>
+                              ↑
+                            </RailBtn>
+                            <RailBtn title="Move down" disabled={ii === kids.length - 1} onClick={() => set({ ...st, items: { ...st.items, [label]: move(paths, paths.indexOf(path), 1) } })}>
+                              ↓
+                            </RailBtn>
+                            <RailBtn title={hid ? "Show this page" : "Hide this page"} on={hid} tone={BAD} onClick={() => flipHide(path)}>
+                              <Eye off={hid} />
+                            </RailBtn>
+                          </span>
+                        </MaybeMark>
+                      )}
+                    </div>
+                  );
+                })}
             </div>
           );
         })}
       </div>
+      {editing && (
+        <div style={{ borderTop: `1px solid ${LINE}`, padding: "8px 12px", display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: 11 }}>
+          <span style={{ color: PAPER_QUIET }}>{st.hidden.size} hidden</span>
+          <button type="button" onClick={() => set(railInit())} style={{ border: "none", background: "transparent", color: ACCENT_TEXT, fontWeight: 700, cursor: "pointer", fontFamily: SANS, fontSize: 11 }}>
+            ↺ Reset menu
+          </button>
+        </div>
+      )}
+      <div style={{ borderTop: `1px solid ${LINE}`, padding: 10, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 28, height: 28, borderRadius: 9, display: "inline-flex", alignItems: "center", justifyContent: "center", background: ACCENT, color: PAPER, fontFamily: MONO, fontWeight: W_DATA }}>B</span>
+        <span style={{ fontFamily: SANS, fontSize: 12, color: PAPER }}>Account</span>
+      </div>
+    </div>
+  );
+}
+
+/** Settings › Left menu: presets and the landing page. Editing itself lives in the rail. */
+function MenuCard({ st, set, openEditor }: { st: RailState; set: (s: RailState) => void; openEditor: () => void }) {
+  const [preset, setPreset] = useState("everything");
+  const apply = (k: string) => {
+    setPreset(k);
+    set({ ...st, hidden: new Set(MENU_PRESETS[k]!.hide) });
+  };
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <Mark tag="edit where it lives" block>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 12px", borderRadius: R_MD, background: rgba(ACCENT, 0.08), border: `1px solid ${rgba(ACCENT, 0.3)}` }}>
+          <span style={{ flex: 1, minWidth: 200, fontFamily: SANS, fontSize: 12.5, color: PAPER, lineHeight: 1.45 }}>
+            The menu is edited right in the menu. Press <b>✎</b> beside Search to favourite, reorder or hide any page.
+          </span>
+          <Chip on onClick={openEditor}>
+            ✎ Edit the menu
+          </Chip>
+        </div>
+      </Mark>
+      <Mark tag="presets for the menu" block>
+        <Row label="Start with" hint="A starting point. Change any row in the menu after.">
+          <Seg value={preset} onChange={apply} options={[["everything", "Everything"], ["trader", "Trader essentials"], ["minimal", "Minimal"]] as const} />
+        </Row>
+      </Mark>
+      <Mark tone="moved" tag="was Board › Default view" block>
+        <Row label="Open Voltick on" hint="The page a new tab lands on">
+          <Chip>Single board ▾</Chip>
+        </Row>
+      </Mark>
     </div>
   );
 }
@@ -1126,9 +1255,8 @@ function SettingsCard({ id, title, desc, children }: { id: string; title: string
 export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {}) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState<SecKey>("menu");
-  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const [pinned, setPinned] = useState<string[]>(["/flow", "/chart"]);
-  const [order, setOrder] = useState<string[]>(() => SHELVES.map((s) => s.label));
+  const [rail, setRail] = useState<RailState>(railInit);
+  const [editing, setEditing] = useState(false);
   const [cb, setCb] = useState(false);
   const [tips, setTips] = useState(true);
   const [ribbon, setRibbon] = useState(true);
@@ -1145,7 +1273,10 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
       <SideBySide old={<OldSettings />}>
         <div style={{ display: "grid", gap: 20 }}>
       <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div style={{ width: 190, flex: "none", display: "grid", gap: 4, position: "sticky", top: 12 }}>
+        <div style={{ flex: "none", position: "sticky", top: 12 }}>
+          <EditableRail st={rail} set={setRail} editing={editing} setEditing={setEditing} />
+        </div>
+        <div style={{ width: 150, flex: "none", display: "grid", gap: 4, position: "sticky", top: 12 }}>
           <Mark tag="search" block>
           <input
             value={q}
@@ -1179,11 +1310,11 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
           ))}
         </div>
 
-        <div style={{ flex: "1 1 460px", minWidth: 0, display: "grid", gap: 12 }}>
+        <div style={{ flex: "1 1 300px", minWidth: 0, display: "grid", gap: 12 }}>
           {!visible.length && <Box>Nothing matches “{q}”.</Box>}
           {match("menu") && (
-            <SettingsCard id="menu" title="Left menu" desc="Hide pages you never open, pin the ones you always do. Hidden pages stay reachable from search.">
-              <MenuSection hidden={hidden} setHidden={setHidden} pinned={pinned} setPinned={setPinned} order={order} setOrder={setOrder} />
+            <SettingsCard id="menu" title="Left menu" desc="Favourite the pages you always open, hide the ones you never do. Hidden pages stay reachable from search.">
+              <MenuCard st={rail} set={setRail} openEditor={() => setEditing(true)} />
             </SettingsCard>
           )}
           {match("chart") && (
@@ -1264,9 +1395,6 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
           )}
         </div>
 
-        <Frame title="Your left menu" style={{ flex: "none", position: "sticky", top: 12 }}>
-          <RailPreview hidden={hidden} pinned={pinned} order={order} />
-        </Frame>
       </div>
         </div>
       </SideBySide>
@@ -1274,13 +1402,14 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
       <Scorecard
         rows={[
           ["Places preferences live", "5+", 1],
-          ["Left-menu controls", "hide", "hide · pin · reorder"],
+          ["Left-menu controls", "none", "☆ ↑ ↓ hide"],
         ]}
       />
       <Notes
         items={[
           ["Search + sections", "Type in Search settings to narrow the page to the matching cards. The list on the left jumps between sections."],
-          ["Left menu", "Hide pages, ☆ pin up to five to the top of the rail, ↑↓ to reorder shelves. The rail on the right updates as you change it."],
+          ["Left menu, edited in place", "Press the small ✎ beside Search. Every page grows ☆ favourite, ↑ ↓ and hide; every shelf grows ↑ ↓ and hide-shelf. Favourites sit at the top under Search. Done returns it to a plain menu."],
+          ["Settings › Left menu", "Only the starting preset and the page Voltick opens on. The Edit the menu button there opens the same edit mode in the rail."],
         ]}
       />
       <Changes
@@ -1288,7 +1417,7 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
         items={[
           ["Five sections in tabs → one page of cards", "Scroll or search. Nothing is hidden behind a tab you did not open."],
           ["Search settings", "Type “watermark” or “billing” and only the matching card stays."],
-          ["Left menu: hide → hide, pin, reorder", "Pins sit at the top of the rail under search. Shelves move with ↑↓."],
+          ["Left menu: nothing → edit right in the rail", "A small ✎ in the rail itself: favourite, reorder and hide without leaving the page you are on."],
           ["Start with: Everything · Trader essentials · Minimal", "A starting point instead of 27 switches. Any change shows Custom."],
           ["Open Voltick on", "Moved from Board into Left menu: it is a question about where you land."],
           ["Chart defaults + ⚙ Chart", "Settings holds the defaults, the chart button changes the one on screen, and both open the same panel."],

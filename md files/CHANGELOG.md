@@ -1,12 +1,5 @@
 # Changelog
 
-## 2026-09-26 — Owner Estimated Move: "Copy Shot + Record" option
-
-- `owner-vite/src/pages/EstimatedMove.tsx`: new **Copy Shot + Record** button next to Copy Shot (Estimated Moves view only). It copies the same weekly EM image with two more columns:
-  - **Last Week**: Inside / Outside. This is whether the ticker's last scored week closed inside that week's EM band (`down ≤ close ≤ up`, from the newest `/api/em-tracker` row that has a close).
-  - **Stays In**: the historical % of weeks that price stayed inside the EM (high ≤ Up and low ≥ Down). It is the same combined figure as the EM Tracker tab: the sheet tally from `/api/em-tracker/history` plus the auto-scored weeks since. It is colour-coded like the tracker.
-- The plain Copy Shot is unchanged. Read-only, with no backend changes.
-
 ## 2026-09-25 - Budget: Flex gas now comes out of Tesla, not Sheetz (from 2026-09)
 
 - From **2026-09 onward** the Amazon Flex gas correction takes the Amazon tab's monthly gas out of every statement outflow whose merchant or description contains **"Tesla"**, from whatever category it was filed in, biggest first. It's capped at what each category holds and moved into the Flex gas category. Tesla rows already filed to Flex are skipped.
@@ -24526,8 +24519,12 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `MockupsProposed.tsx`: each tab now shows the proposed UI first, exactly as it would sit on the site (no titles or notes above it), then an "About this proposal" spacer, then the before/after scorecard, a short "How it works" list and "What changed and why". Account's member/owner/free switch moved below the spacer.
 - `Mockups.tsx`: page lede removed so the tab bar and the screen come first.
 
-## 2026-09-26 — affiliate.cbedge.net retired, affiliate signup killed
-- `docker-compose.yml`: `affiliates` (affiliate-web) service removed; comment block marks it retired. `affiliate-vite/` kept in tree, not built.
-- `server-v2/affiliate-routes.cjs`: only `/api/aff/owner/*` still registers. Apply, login/logout/me, stats, creatives, code requests, payout method, `/api/aff/go` (the `/r/<CODE>` redirect) and `/api/aff/internal/referral` (commission accrual from the Stripe webhook) now 404.
-- `app/api/stripe/checkout/route.ts`: a leftover `cbe_ref` cookie no longer stamps `affiliate_code` on new subscriptions.
-- VPS follow-up: `docker rm -f affiliate-web`, remove the `affiliate.cbedge.net` rule from `/etc/cloudflared/config.yml`, restart cloudflared, delete the DNS record in Cloudflare.
+## 2026-09-26 — voltick-vite: /mockups old vs new, side by side, with Show changes
+- Each tab now shows NEW MENU (proposed) on the left and OLD MENU (what ships today) on the right, then a 200px gap, then Details (scorecard, How it works, What changed and why).
+- New `pages/MockupsOld.tsx`: the old Chart Style toolbar + popover, Flow tabs/alerts bar/toolbars, account pop-up, and a mock of the real Settings page (from `web/src/pages/Settings.jsx`).
+- New `pages/mockupsMark.tsx`: `ChangesCtx` + `<Mark>`. A "◎ Show changes" button on the page outlines every change: green = new or merged, amber = moved or renamed, red dashed = removed from that surface, each with a small tag saying where it went. Off by default so the menus look exactly like the site.
+- Screenshots: `generated/2026-09-26-mockups-compare-{chart,flow,account,settings}.png`.
+
+## 2026-09-26 — voltick-vite: left menu edited right in the rail (Settings mockup)
+- `MockupsProposed.tsx` Settings tab: the rail now sits on the left and edits in place. A small ✎ beside Search opens edit mode: every page gets ☆ favourite, ↑ ↓ and hide; every shelf gets ↑ ↓ and hide-shelf; favourites sit at the top and reorder; Done / ↺ Reset menu at the foot. Settings › Left menu keeps only Start with presets, Open Voltick on, and an "✎ Edit the menu" button that opens the same mode.
+- Spec: `md files/VOLTICK-LEFT-MENU-EDIT.md`. Screenshot: `generated/2026-09-26-left-menu-edit-mode.png`.
