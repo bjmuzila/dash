@@ -4,6 +4,8 @@ import CondorTrackerAdmin from "../components/CondorTrackerAdmin";
 import LevelsPublish from "../components/LevelsPublish";
 import { HOME_THEME as HT, homeShellStyle } from "../lib/theme";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockExpiryPicker } from "../components/DockToolbar";
+// Same-origin asset so html2canvas inlines it in the Copy Shot + Record image.
+import voltickBolt from "../assets/voltick-bolt.png";
 
 async function getHtml2Canvas() {
   const mod = await import("html2canvas" as never);
@@ -74,6 +76,7 @@ interface EmRecord {
   lastWeek: "inside" | "outside" | null;
   lastWeekLabel: string | null;
   pct: number | null;
+  hits: number;
   weeks: number;
 }
 
@@ -141,6 +144,7 @@ async function fetchEmRecords(): Promise<Record<string, EmRecord>> {
       lastWeek,
       lastWeekLabel: last ? String(last.r.week_label ?? last.r.week_start ?? "") || null : null,
       pct: total > 0 ? (hits / total) * 100 : null,
+      hits,
       weeks: total,
     };
   }
@@ -1693,13 +1697,24 @@ export default function EstimatedMove() {
           <div style={{ padding: "8px 12px 0", textAlign: "center", fontSize: 11, color: "#8fa3b8", letterSpacing: ".04em" }}>
             Last Week = where price closed vs last week's EM · Stays In = % of weeks price stayed inside the EM
           </div>
+
+          {/* Signature, bottom right — same as the trade-card snapshots. */}
+          <div style={{ margin: "10px 14px 0", paddingTop: 8, borderTop: `1px solid ${HT.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#eef7ff" }}>
+            <span>
+              {new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true }).format(new Date())} ET
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 700, letterSpacing: ".02em" }}>
+              <img src={voltickBolt} alt="" style={{ width: 24, height: 24, borderRadius: 2 }} />
+              voltick.io/bzila
+            </span>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-const RECORD_COLS = "1fr 1.15fr 1.15fr 1fr 0.9fr";
+const RECORD_COLS = "0.9fr 1.1fr 1.1fr 0.95fr 1.25fr";
 
 function RecordShotRow({ row, rec }: { row: EMRow; rec?: EmRecord }) {
   const cell = { padding: "9px 0", textAlign: "center" as const, fontSize: 14 };
@@ -1714,7 +1729,7 @@ function RecordShotRow({ row, rec }: { row: EMRow; rec?: EmRecord }) {
       <div style={{ ...cell, fontSize: 12, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: last === "inside" ? "#00e676" : last === "outside" ? "#EF4444" : "#8fa3b8" }}>
         {last === "inside" ? "Inside" : last === "outside" ? "Outside" : "--"}
       </div>
-      <div style={{ ...cell, fontWeight: 700, color: pctColor }}>{pct == null ? "--" : `${Math.round(pct)}%`}</div>
+      <div style={{ ...cell, fontWeight: 700, color: pctColor }}>{pct == null ? "--" : `${rec!.hits}/${rec!.weeks} ${Math.round(pct)}%`}</div>
     </div>
   );
 }

@@ -24525,3 +24525,9 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-26 — voltick-vite: /mockups leads with the screen, write-up below
 - `MockupsProposed.tsx`: each tab now shows the proposed UI first, exactly as it would sit on the site (no titles or notes above it), then an "About this proposal" spacer, then the before/after scorecard, a short "How it works" list and "What changed and why". Account's member/owner/free switch moved below the spacer.
 - `Mockups.tsx`: page lede removed so the tab bar and the screen come first.
+
+## 2026-09-26 — affiliate.cbedge.net retired, affiliate signup killed
+- `docker-compose.yml`: `affiliates` (affiliate-web) service removed; comment block marks it retired. `affiliate-vite/` kept in tree, not built.
+- `server-v2/affiliate-routes.cjs`: only `/api/aff/owner/*` still registers. Apply, login/logout/me, stats, creatives, code requests, payout method, `/api/aff/go` (the `/r/<CODE>` redirect) and `/api/aff/internal/referral` (commission accrual from the Stripe webhook) now 404.
+- `app/api/stripe/checkout/route.ts`: a leftover `cbe_ref` cookie no longer stamps `affiliate_code` on new subscriptions.
+- VPS follow-up: `docker rm -f affiliate-web`, remove the `affiliate.cbedge.net` rule from `/etc/cloudflared/config.yml`, restart cloudflared, delete the DNS record in Cloudflare.

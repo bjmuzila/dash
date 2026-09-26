@@ -150,7 +150,15 @@ function registerAffiliateRoutes({ register, send, readJson }) {
     return 0;
   }
   let n = 0;
-  const add = (path, def) => { register(path, def); n++; };
+  // 2026-09-26 — AFFILIATE PROGRAM RETIRED. affiliate.cbedge.net is gone and
+  // nobody can apply, log in, mint a referral click or accrue a commission.
+  // Only the owner console routes (/api/aff/owner/*) still register, so the
+  // ledger stays readable and existing balances can be paid out. Everything
+  // else falls through to Next and 404s. The handlers below are kept as-is.
+  const add = (path, def) => {
+    if (!path.startsWith('/api/aff/owner/')) return;
+    register(path, def); n++;
+  };
 
   const fail = (res, code, error) => send(res, code, { error }, nostore);
 

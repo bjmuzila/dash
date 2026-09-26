@@ -20,6 +20,8 @@ function publicOrigin(req: NextRequest): string {
   return new URL(req.url).origin;
 }
 
+const AFFILIATE_PROGRAM_RETIRED = true;
+
 /**
  * The affiliate attribution cookie, minted by /api/aff/go on
  * affiliate.cbedge.net with Domain=.cbedge.net so it survives the hop here.
@@ -36,6 +38,9 @@ function publicOrigin(req: NextRequest): string {
  * now the attribution for every affiliate-sourced purchase.
  */
 function affiliateCode(req: NextRequest): string | null {
+  // 2026-09-26 — affiliate program retired. A leftover cbe_ref cookie no
+  // longer attributes a purchase to anyone.
+  if (AFFILIATE_PROGRAM_RETIRED) return null;
   const raw = req.cookies.get("cbe_ref")?.value;
   if (!raw) return null;
   const code = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
