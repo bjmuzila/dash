@@ -14,7 +14,8 @@
 import { useState } from "react";
 import { PageShell } from "../components/PageCard";
 import { AccountProposed, ChartProposed, FlowProposed, SettingsProposed } from "./MockupsProposed";
-import { ACCENT, LINE, PANEL, PAPER, R_LG, R_MD, SANS, rgba } from "../theme";
+import { ACCENT, LINE, MONO, PANEL, PAPER, PAPER_QUIET, R_LG, R_MD, SANS, rgba } from "../theme";
+import { ChangesCtx, MARK_COLOR } from "./mockupsMark";
 
 type Tab = "chart" | "flow" | "account" | "settings";
 const TABS: [Tab, string][] = [
@@ -31,6 +32,7 @@ function readHashTab(): Tab {
 
 export default function Mockups() {
   const [tab, setTab] = useState<Tab>(readHashTab);
+  const [show, setShow] = useState(false);
   const pick = (k: Tab) => {
     setTab(k);
     try {
@@ -44,7 +46,8 @@ export default function Mockups() {
       title="Mockups"
       maxWidth={1500}
     >
-      <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20, padding: 6, background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_LG, width: "fit-content", maxWidth: "100%" }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 28 }}>
+      <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: 6, background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_LG, width: "fit-content", maxWidth: "100%" }}>
         {TABS.map(([k, l]) => (
           <button
             key={k}
@@ -69,10 +72,48 @@ export default function Mockups() {
           </button>
         ))}
       </div>
+        <button
+          type="button"
+          aria-pressed={show}
+          onClick={() => setShow(!show)}
+          style={{
+            fontFamily: SANS,
+            fontSize: 13,
+            fontWeight: 700,
+            padding: "10px 16px",
+            borderRadius: R_MD,
+            cursor: "pointer",
+            color: PAPER,
+            border: `1px solid ${show ? MARK_COLOR.new : LINE}`,
+            background: show ? rgba(MARK_COLOR.new, 0.16) : PANEL,
+            boxShadow: show ? `0 0 20px -8px ${MARK_COLOR.new}` : "none",
+          }}
+        >
+          {show ? "✓ Showing changes" : "◎ Show changes"}
+        </button>
+        {show && (
+          <span style={{ display: "inline-flex", gap: 14, flexWrap: "wrap", fontFamily: SANS, fontSize: 12, color: PAPER_QUIET }}>
+            {(
+              [
+                ["new", "New or merged"],
+                ["moved", "Moved or renamed"],
+                ["gone", "Removed from here"],
+              ] as const
+            ).map(([k, l]) => (
+              <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 14, height: 14, borderRadius: 4, border: `2px ${k === "gone" ? "dashed" : "solid"} ${MARK_COLOR[k]}`, background: rgba(MARK_COLOR[k], 0.15) }} />
+                <span style={{ fontFamily: MONO, fontSize: 11 }}>{l}</span>
+              </span>
+            ))}
+          </span>
+        )}
+      </div>
+      <ChangesCtx.Provider value={show}>
       {tab === "chart" && <ChartProposed />}
       {tab === "flow" && <FlowProposed />}
       {tab === "account" && <AccountProposed />}
       {tab === "settings" && <SettingsProposed />}
+      </ChangesCtx.Provider>
     </PageShell>
   );
 }

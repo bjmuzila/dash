@@ -42,6 +42,8 @@ import {
   W_MED,
   rgba,
 } from "../theme";
+import { Mark } from "./mockupsMark";
+import { OldAccount, OldChart, OldFlow, OldSettings } from "./MockupsOld";
 
 type Opt<K extends string> = readonly (readonly [K, string])[];
 
@@ -225,10 +227,32 @@ function Scorecard({ rows }: { rows: [string, string | number, string | number][
 /** The break between the screen itself and the write-up about it. */
 function Spacer() {
   return (
-    <div style={{ margin: "34px 0 8px", display: "flex", alignItems: "center", gap: 12 }}>
+    <div style={{ margin: "200px 0 8px", display: "flex", alignItems: "center", gap: 12 }}>
       <span aria-hidden="true" style={{ flex: 1, height: 1, background: LINE }} />
-      <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: PAPER_QUIET }}>About this proposal</span>
+      <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: PAPER_QUIET }}>Details</span>
       <span aria-hidden="true" style={{ flex: 1, height: 1, background: LINE }} />
+    </div>
+  );
+}
+
+/** NEW menu on the left, OLD menu on the right. Stacks on a narrow screen. */
+function SideBySide({ children, old }: { children: ReactNode; old: ReactNode }) {
+  const head = (label: string, sub: string, c: string) => (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12, paddingBottom: 8, borderBottom: `2px solid ${c}` }}>
+      <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: c }}>{label}</span>
+      <span style={{ fontFamily: SANS, fontSize: 12, color: PAPER_QUIET }}>{sub}</span>
+    </div>
+  );
+  return (
+    <div style={{ display: "flex", gap: 36, flexWrap: "wrap", alignItems: "flex-start" }}>
+      <div style={{ flex: "1 1 560px", minWidth: 0 }}>
+        {head("New menu", "proposed", GOOD)}
+        {children}
+      </div>
+      <div style={{ flex: "1 1 560px", minWidth: 0 }}>
+        {head("Old menu", "what ships today", PAPER_QUIET)}
+        {old}
+      </div>
     </div>
   );
 }
@@ -297,6 +321,7 @@ function LookTab() {
   return (
     <>
       <SecHead top={4}>Preset</SecHead>
+      <Mark tag="was Density" block>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
         {(
           [
@@ -316,6 +341,7 @@ function LookTab() {
           </button>
         ))}
       </div>
+      </Mark>
       {preset === "custom" && <div style={{ fontFamily: SANS, fontSize: 11, color: VOLT, marginTop: 6 }}>● Custom · you changed a setting below. Pick a preset to reset.</div>}
       <SecHead>Levels</SecHead>
       <Slider label="How many" value={shown} onChange={touch(setShown)} color={GOOD} min={4} max={14} suffix="" />
@@ -325,9 +351,11 @@ function LookTab() {
       <Row label="Line length">
         <Seg value={len} onChange={touch(setLen)} options={[["ext", "Full"], ["small", "Stub"], ["label", "Tag"]] as const} />
       </Row>
+      <Mark tag="3 sliders, folded" block>
       <button type="button" onClick={() => setBoldOpen(!boldOpen)} style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", margin: "6px 0 0", padding: "8px 0", border: "none", borderTop: `1px solid ${LINE}`, background: "transparent", color: PAPER, fontFamily: SANS, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
         Boldness <span style={{ color: PAPER_QUIET, fontSize: 11 }}>{boldOpen ? "▴" : `gamma ${g} · nodes ${n} · dark pool ${dp} ▾`}</span>
       </button>
+      </Mark>
       {boldOpen && (
         <>
           <Slider label="Gamma levels" value={g} onChange={touch(setG)} color={ACCENT} />
@@ -355,6 +383,8 @@ function LayersTab() {
   return (
     <>
       <div style={{ fontFamily: SANS, fontSize: 11.5, color: PAPER_QUIET, margin: "2px 0 6px" }}>One row per thing on the chart. A switch turns it on, the choice beside it says how.</div>
+      <Mark tag="Trails, Forward, ranges, watermark · one list" block>
+      <div>
       {layers.map((l) => (
         <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: `1px solid ${LINE}` }}>
           <Toggle on={l.on} onClick={() => set(l.key, { on: !l.on })} />
@@ -365,6 +395,8 @@ function LayersTab() {
           {l.options && l.on && <Seg size={11} value={l.opt ?? ""} onChange={(v) => set(l.key, { opt: v })} options={l.options} />}
         </div>
       ))}
+      </div>
+      </Mark>
     </>
   );
 }
@@ -389,9 +421,11 @@ function StudiesTab() {
           </button>
         </div>
       ))}
+      <Mark tag="one Add instead of 7 rows" block>
       <button type="button" onClick={() => setAdding(!adding)} style={{ marginTop: 8, width: "100%", padding: "8px 10px", borderRadius: 9, border: `1px dashed ${LINE}`, background: "transparent", color: ACCENT_TEXT, cursor: "pointer", fontFamily: SANS, fontSize: 12, fontWeight: 700 }}>
         ＋ Add a study
       </button>
+      </Mark>
       {adding && (
         <div style={{ marginTop: 8 }}>
           <Menu
@@ -413,13 +447,17 @@ function ChartPopover() {
   return (
     <Pop>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <Seg value={tab} onChange={setTab} options={[["look", "Look"], ["layers", "Layers"], ["studies", "Studies"]] as const} />
+        <Mark tag="tabs by intent">
+          <Seg value={tab} onChange={setTab} options={[["look", "Look"], ["layers", "Layers"], ["studies", "Studies"]] as const} />
+        </Mark>
       </div>
       {tab === "look" ? <LookTab /> : tab === "layers" ? <LayersTab /> : <StudiesTab />}
+      <Mark tag="said once + Reset" block>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, paddingTop: 10, borderTop: `1px solid ${LINE}`, fontFamily: SANS, fontSize: 11, color: PAPER_QUIET }}>
         <span>Saved on this device</span>
         <span style={{ color: ACCENT_TEXT, fontWeight: 700 }}>↺ Reset</span>
       </div>
+      </Mark>
     </Pop>
   );
 }
@@ -428,12 +466,18 @@ export function ChartProposed({ onCompare }: { onCompare?: () => void } = {}) {
   const [drawing, setDrawing] = useState(false);
   return (
     <div style={{ display: "grid", gap: 22 }}>
+      <SideBySide old={<OldChart />}>
+        <div style={{ display: "grid", gap: 22 }}>
       <div style={{ display: "grid", gap: 8, justifyItems: "start" }}>
         <Bar style={{ width: "fit-content" }}>
-          <Chip on>⚙ Chart ▾</Chip>
-          <Chip on={drawing} onClick={() => setDrawing(!drawing)}>
-            ✎ Draw
-          </Chip>
+          <Mark tone="moved" tag="was ⚙ Style">
+            <Chip on>⚙ Chart ▾</Chip>
+          </Mark>
+          <Mark tag="was a popover tab">
+            <Chip on={drawing} onClick={() => setDrawing(!drawing)}>
+              ✎ Draw
+            </Chip>
+          </Mark>
           <Chip>⛶</Chip>
         </Bar>
         {drawing && (
@@ -446,6 +490,8 @@ export function ChartProposed({ onCompare }: { onCompare?: () => void } = {}) {
         )}
         <ChartPopover />
       </div>
+        </div>
+      </SideBySide>
       <Spacer />
       <Scorecard
         rows={[
@@ -495,6 +541,7 @@ type ActiveFilter = { id: string; label: string };
 
 function SummaryLine() {
   return (
+    <Mark tag="was a 5-box strip" block>
     <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "baseline", padding: "10px 14px", background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_LG, fontFamily: SANS, fontSize: 12.5, color: PAPER }}>
       <span>
         Net <b style={{ fontFamily: MONO, fontSize: 16, color: GOOD }}>+$17.7M</b> <span style={{ color: PAPER_QUIET }}>bought</span>
@@ -508,13 +555,16 @@ function SummaryLine() {
       <span style={{ color: PAPER_QUIET }}>Put / call 0.41 · two-sided</span>
       <span style={{ marginLeft: "auto", color: ACCENT_TEXT, fontWeight: 700 }}>Details ▾</span>
     </div>
+    </Mark>
   );
 }
 
 function FiltersDrawer({ onClose, lit }: { onClose: () => void; lit: string[] }) {
   const group = (title: string, rows: [string, string[]][]) => (
     <div style={{ marginBottom: 10 }}>
-      <SecHead top={6}>{title}</SecHead>
+      <Mark tag="grouped" block>
+        <SecHead top={6}>{title}</SecHead>
+      </Mark>
       {rows.map(([k, opts]) => (
         <div key={k} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", margin: "7px 0" }}>
           <span style={{ width: 92, fontFamily: SANS, fontSize: 12, fontWeight: 700, color: PAPER }}>{k}</span>
@@ -582,28 +632,37 @@ function FlowToolbarP({ tab }: { tab: string }) {
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <Bar>
-        <Field ph="Ticker or contract · SPY 600C 10/2" w={250} />
+        <Mark tag="finds contracts too">
+          <Field ph="Ticker or contract · SPY 600C 10/2" w={250} />
+        </Mark>
         <Chip on={menu === "universe"} onClick={() => setMenu(menu === "universe" ? null : "universe")}>
           Stocks ▾
         </Chip>
-        {tab !== "market" && <Seg value={dir} onChange={setDir} options={[["all", "All"], ["up", "▲ Bullish"], ["dn", "▼ Bearish"]] as const} />}
+        {tab !== "market" && (
+          <Mark tag="was ▲ ▼">
+            <Seg value={dir} onChange={setDir} options={[["all", "All"], ["up", "▲ Bullish"], ["dn", "▼ Bearish"]] as const} />
+          </Mark>
+        )}
         <span style={{ width: 1, height: 22, background: LINE }} />
         {quicks.map((k) => (
           <Chip key={k} on={quick[k]} tone={k.startsWith("★") ? VOLT : ACCENT} onClick={() => q(k)}>
             {k}
           </Chip>
         ))}
-        <Chip on={drawer} onClick={() => setDrawer(!drawer)}>
-          ⚙ Filters{active.length ? ` · ${active.length}` : ""}
-        </Chip>
+        <Mark tag="drawer + presets">
+          <Chip on={drawer} onClick={() => setDrawer(!drawer)}>
+            ⚙ Filters{active.length ? ` · ${active.length}` : ""}
+          </Chip>
+        </Mark>
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <Seg value="new" options={[["new", "Newest"], ["big", "Biggest"]] as const} />
-          <Chip on={menu === "when"} onClick={() => setMenu(menu === "when" ? null : "when")}>
+          <Mark tag="incl. pause"><Chip on={menu === "when"} onClick={() => setMenu(menu === "when" ? null : "when")}>
             <span style={{ color: GOOD }}>●</span> Live ▾
-          </Chip>
+          </Chip></Mark>
         </span>
       </Bar>
       {active.length > 0 && (
+        <Mark tag="active filters, one ✕ away" block>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {active.map((f) => (
             <span key={f.id} style={{ fontFamily: SANS, fontSize: 11.5, fontWeight: 700, color: PAPER, border: `1px solid ${rgba(ACCENT, 0.5)}`, background: rgba(ACCENT, 0.1), borderRadius: 99, padding: "3px 6px 3px 10px" }}>
@@ -617,6 +676,7 @@ function FlowToolbarP({ tab }: { tab: string }) {
             Clear
           </button>
         </div>
+        </Mark>
       )}
       <div style={flexWrap()}>
         {menu === "universe" && <Menu value="Stocks" items={[["Stocks", "Company names only"], ["ETFs", "Funds and index products"], ["All", "Everything the tape saw"]]} />}
@@ -639,8 +699,12 @@ export function FlowProposed({ onCompare }: { onCompare?: () => void } = {}) {
   };
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      <SideBySide old={<OldFlow />}>
+        <div style={{ display: "grid", gap: 12 }}>
       <div style={{ display: "grid", gap: 8, padding: 12, background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_LG }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <Mark tag="4 tabs instead of 7 + 5">
+            <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
             {P_FLOW.map((x) => (
               <Chip
                 key={x.key}
@@ -654,20 +718,30 @@ export function FlowProposed({ onCompare }: { onCompare?: () => void } = {}) {
                 {x.label}
               </Chip>
             ))}
+            </span>
+            </Mark>
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              <Chip>⚑ 3 alerts ▾</Chip>
-              <Chip>?</Chip>
+              <Mark tag="was a full row">
+                <Chip>⚑ 3 alerts ▾</Chip>
+              </Mark>
+              <Mark tone="moved" tag="tour">
+                <Chip>?</Chip>
+              </Mark>
             </span>
           </div>
           {t.subs.length > 1 && (
             <div style={{ display: "flex", gap: 0 }}>
-              <Seg value={sub} onChange={setSub} options={t.subs} />
+              <Mark tag="sub-switch">
+                <Seg value={sub} onChange={setSub} options={t.subs} />
+              </Mark>
             </div>
           )}
         </div>
       <FlowToolbarP key={tab} tab={tab} />
       <SummaryLine />
       <Heads cols={heads[tab] ?? heads.tape!} />
+        </div>
+      </SideBySide>
       <Spacer />
       <Scorecard
         rows={[
@@ -735,8 +809,16 @@ function AccountPopP({ who }: { who: Who }) {
           <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: W_BOLD, color: PAPER, overflow: "hidden", textOverflow: "ellipsis" }}>member@example.com</div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
             <span style={{ fontFamily: MONO, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.06em", color: plan[1], border: `1px solid ${rgba(plan[1], 0.45)}`, borderRadius: R_SM, padding: "1px 6px", textTransform: "uppercase" }}>{plan[0]}</span>
-            {admin && <span style={{ fontFamily: SANS, fontSize: 11, fontWeight: 700, color: ACCENT_TEXT }}>Owner tools →</span>}
-            {!member && <span style={{ fontFamily: SANS, fontSize: 11, fontWeight: 700, color: ACCENT_TEXT }}>Upgrade →</span>}
+            {admin && (
+              <Mark tone="moved" tag="was a big tile">
+                <span style={{ fontFamily: SANS, fontSize: 11, fontWeight: 700, color: ACCENT_TEXT }}>Owner tools →</span>
+              </Mark>
+            )}
+            {!member && (
+              <Mark tag="new">
+                <span style={{ fontFamily: SANS, fontSize: 11, fontWeight: 700, color: ACCENT_TEXT }}>Upgrade →</span>
+              </Mark>
+            )}
           </div>
         </div>
       </div>
@@ -745,10 +827,18 @@ function AccountPopP({ who }: { who: Who }) {
       {member && row("▭", "Plan & billing")}
       {row("✦", "What's new", badge("3"))}
       {hr}
-      {row("?", "Help & support", badge("1"))}
+      <Mark tag="how to use · blog · support" block>
+        {row("?", "Help & support", badge("1"))}
+      </Mark>
       {row("◌", "Suggest a feature")}
-      {row("⚇", "Community", <span style={{ marginLeft: "auto", fontFamily: SANS, fontSize: 11, color: PAPER_QUIET }}>Discord · Affiliates</span>)}
-      {member && row("‹›", "API & agents")}
+      <Mark tag="discord + affiliates" block>
+        {row("⚇", "Community", <span style={{ marginLeft: "auto", fontFamily: SANS, fontSize: 11, color: PAPER_QUIET }}>Discord · Affiliates</span>)}
+      </Mark>
+      {member && (
+        <Mark tag="API + connect an agent" block>
+          {row("‹›", "API & agents")}
+        </Mark>
+      )}
       {hr}
       {row("⇥", "Sign out", undefined, true)}
     </div>
@@ -776,12 +866,16 @@ export function AccountProposed({ onCompare }: { onCompare?: () => void } = {}) 
   const [who, setWho] = useState<Who>("member");
   return (
     <div style={{ display: "grid", gap: 20 }}>
+      <SideBySide old={<OldAccount who={who} />}>
+        <div style={{ display: "grid", gap: 20 }}>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
           <div style={{ width: 180, minHeight: 470, display: "flex", flexDirection: "column", background: ELEV, border: `1px solid ${LINE}`, borderRadius: R_LG, overflow: "hidden" }}>
             <div style={{ padding: 10 }}>
+              <Mark tone="moved" tag="search lives here now" block>
               <div style={{ fontFamily: SANS, fontSize: 12, color: PAPER_QUIET, border: `1px solid ${LINE}`, borderRadius: R_MD, padding: "6px 9px", display: "flex", justifyContent: "space-between" }}>
                 ⌕ Search <span style={{ fontFamily: MONO, fontSize: 10 }}>⌘K</span>
               </div>
+              </Mark>
             </div>
             <div style={{ flex: 1, padding: "4px 12px", fontFamily: SANS, fontSize: 12, color: PAPER_QUIET, lineHeight: 2 }}>
               Education
@@ -802,8 +896,12 @@ export function AccountProposed({ onCompare }: { onCompare?: () => void } = {}) 
             </div>
           </div>
           <AccountPopP who={who} />
-          <HelpPanel />
+          <Mark tag="help sub-menu">
+            <HelpPanel />
+          </Mark>
         </div>
+        </div>
+      </SideBySide>
       <Spacer />
       <Scorecard
         rows={[
@@ -913,12 +1011,16 @@ function MenuSection({ hidden, setHidden, pinned, setPinned, order, setOrder }: 
   const total = SHELVES.reduce((a, s) => a + s.items.length, 0);
   return (
     <div style={{ display: "grid", gap: 10 }}>
+      <Mark tag="presets for the menu" block>
       <Row label="Start with" hint="A starting point. Change any row below after.">
         <Seg value={preset} onChange={applyPreset} options={[["everything", "Everything"], ["trader", "Trader essentials"], ["minimal", "Minimal"], ...(preset === "custom" ? ([["custom", "Custom"]] as const) : [])]} />
       </Row>
+      </Mark>
+      <Mark tone="moved" tag="was Board › Default view" block>
       <Row label="Open Voltick on" hint="The page a new tab lands on">
         <Chip>Single board ▾</Chip>
       </Row>
+      </Mark>
       <div style={{ fontFamily: SANS, fontSize: 11.5, color: PAPER_QUIET }}>
         {total - hidden.size} of {total} pages shown · ☆ pins a page to the top of the menu (up to 5) · ↑↓ reorders a shelf
       </div>
@@ -927,7 +1029,8 @@ function MenuSection({ hidden, setHidden, pinned, setPinned, order, setOrder }: 
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: PANEL }}>
             <span style={{ width: 18, textAlign: "center" }}>{s.icon}</span>
             <span style={{ fontFamily: MONO, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.12em", color: PAPER, textTransform: "uppercase" }}>{s.label}</span>
-            <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+            <Mark tag={si === 0 ? "reorder" : undefined}>
+              <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
               <button type="button" disabled={si === 0} onClick={() => move(s.label, -1)} style={arrowBtn(si === 0)}>
                 ↑
               </button>
@@ -935,6 +1038,7 @@ function MenuSection({ hidden, setHidden, pinned, setPinned, order, setOrder }: 
                 ↓
               </button>
             </span>
+              </Mark>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
             {s.items.map((p) => {
@@ -944,9 +1048,11 @@ function MenuSection({ hidden, setHidden, pinned, setPinned, order, setOrder }: 
                 <div key={p.path} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderTop: `1px solid ${LINE}` }}>
                   <Toggle on={on} onClick={() => flipPage(p.path)} />
                   <span style={{ flex: 1, fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: on ? PAPER : PAPER_QUIET, textDecoration: on ? "none" : "line-through" }}>{p.label}</span>
+                  <Mark tag={si === 0 && p === s.items[0] ? "pin" : undefined}>
                   <button type="button" title="Pin to the top" disabled={!on} onClick={() => flipPin(p.path)} style={{ border: "none", background: "transparent", cursor: on ? "pointer" : "default", color: pin ? VOLT : PAPER_QUIET, fontSize: 14, opacity: on ? 1 : 0.3 }}>
                     {pin ? "★" : "☆"}
                   </button>
+                  </Mark>
                 </div>
               );
             })}
@@ -971,6 +1077,7 @@ function RailPreview({ hidden, pinned, order }: { hidden: Set<string>; pinned: s
         </div>
       </div>
       {pinnedPages.length > 0 && (
+        <Mark tag="pinned" block>
         <div style={{ paddingBottom: 6, marginBottom: 6, borderBottom: `1px solid ${LINE}` }}>
           {pinnedPages.map((p) => (
             <div key={p.path} style={{ display: "flex", alignItems: "center", height: 26, fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: PAPER }}>
@@ -979,6 +1086,7 @@ function RailPreview({ hidden, pinned, order }: { hidden: Set<string>; pinned: s
             </div>
           ))}
         </div>
+        </Mark>
       )}
       <div style={{ flex: 1, paddingBottom: 8 }}>
         {shelves.map((s) => {
@@ -1034,14 +1142,18 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
   const visible = SECTIONS.filter((s) => match(s.key));
   return (
     <div style={{ display: "grid", gap: 20 }}>
+      <SideBySide old={<OldSettings />}>
+        <div style={{ display: "grid", gap: 20 }}>
       <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
         <div style={{ width: 190, flex: "none", display: "grid", gap: 4, position: "sticky", top: 12 }}>
+          <Mark tag="search" block>
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search settings"
             style={{ width: "100%", boxSizing: "border-box", fontFamily: SANS, fontSize: 12.5, color: PAPER, background: PANEL, border: `1px solid ${LINE}`, borderRadius: R_MD, padding: "8px 10px", marginBottom: 6, outline: "none" }}
           />
+          </Mark>
           {SECTIONS.map((s) => (
             <button
               key={s.key}
@@ -1075,6 +1187,7 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
             </SettingsCard>
           )}
           {match("chart") && (
+            <Mark tag="new section" block>
             <SettingsCard id="chart" title="Chart" desc="The defaults every chart opens with. The ⚙ Chart button changes the one you are looking at.">
               <Row label="Preset">
                 <Seg value="full" options={[["full", "Full"], ["calm", "Calm"], ["minimal", "Minimal"]] as const} />
@@ -1083,8 +1196,10 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
                 <Chip>Open ⚙ Chart settings</Chip>
               </Row>
             </SettingsCard>
+            </Mark>
           )}
           {match("flow") && (
+            <Mark tag="new section" block>
             <SettingsCard id="flow" title="Flow" desc="How the tape opens.">
               <Row label="Open on">
                 <Seg value="tape" options={[["tape", "Tape"], ["patterns", "Patterns"], ["market", "Market"], ["dark", "Dark Pool"]] as const} />
@@ -1096,12 +1211,15 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
                 <Chip>None ▾</Chip>
               </Row>
             </SettingsCard>
+            </Mark>
           )}
           {match("display") && (
             <SettingsCard id="display" title="Display" desc="Applies to every page.">
+              <Mark tone="moved" tag="was ◑ CB on each page" block>
               <Row label="Colour-blind palette" hint="Moved here from the ◑ CB button on each page">
                 <Toggle on={cb} onClick={() => setCb(!cb)} />
               </Row>
+              </Mark>
               <Row label="Hover tips">
                 <Toggle on={tips} onClick={() => setTips(!tips)} />
               </Row>
@@ -1150,6 +1268,8 @@ export function SettingsProposed({ onCompare }: { onCompare?: () => void } = {})
           <RailPreview hidden={hidden} pinned={pinned} order={order} />
         </Frame>
       </div>
+        </div>
+      </SideBySide>
       <Spacer />
       <Scorecard
         rows={[

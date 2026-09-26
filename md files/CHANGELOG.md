@@ -24514,3 +24514,7 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `MockupsProposed.tsx`: `onCompare` is optional, so no "Compare with today" button renders.
 - `MockupsBuilder.tsx` is now an `export {}` tombstone (nothing imports it); safe to delete.
 - `src/lib/nav.ts`: Mockups blurb and note reworded for the proposal.
+
+## 2026-09-26 — voltick-vite: /mockups leads with the screen, write-up below
+- `MockupsProposed.tsx`: each tab now shows the proposed UI first, exactly as it would sit on the site (no titles or notes above it), then an "About this proposal" spacer, then the before/after scorecard, a short "How it works" list and "What changed and why". Account's member/owner/free switch moved below the spacer.
+- `Mockups.tsx`: page lede removed so the tab bar and the screen come first.
