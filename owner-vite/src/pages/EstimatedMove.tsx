@@ -86,6 +86,9 @@ const TRACKER_ALIASES: Record<string, string[]> = {
   ESM: ["ESU", "ESM", "ESU6", "ESU26"],
   NQM: ["NQU", "NQM", "NQM6", "NQU26"],
 };
+// ES / NQ borrow the cash index's stays-inside % (SPX / NDX): the futures
+// rows are a short, roll-broken record, the index record is the long one.
+const RECORD_PCT_PROXY: Record<string, string> = { ESM: "SPX", NQM: "NDX" };
 function trackerKeys(ticker: string): string[] {
   return TRACKER_ALIASES[ticker] ?? [DISPLAY_LABEL[ticker] ?? ticker, ticker];
 }
@@ -148,8 +151,16 @@ async function fetchEmRecords(): Promise<Record<string, EmRecord>> {
       weeks: total,
     };
   }
+  // ES / NQ show exactly the SPX / NDX stays-inside record (hits/weeks and %).
+  for (const [fut, idx] of Object.entries(RECORD_PCT_PROXY)) {
+    const src = out[idx];
+    if (out[fut] && src) out[fut] = { ...out[fut], hits: src.hits, weeks: src.weeks, pct: src.pct };
+  }
   return out;
 }
+
+// Ticker label on the Copy Shot + Record image: plain ES / NQ for the futures.
+const RECORD_LABEL: Record<string, string> = { ESM: "ES", NQM: "NQ" };
 
 interface HistoryItem {
   time: number;
@@ -1723,7 +1734,7 @@ function RecordShotRow({ row, rec }: { row: EMRow; rec?: EmRecord }) {
   const pctColor = pct == null ? "#8fa3b8" : pct >= 75 ? "#00e676" : pct >= 60 ? "#219EBC" : pct >= 50 ? "#e8c060" : "#EF4444";
   return (
     <div style={{ display: "grid", gridTemplateColumns: RECORD_COLS, borderBottom: `1px solid ${HT.border}`, alignItems: "center" }}>
-      <div style={{ ...cell, fontWeight: 700, color: "#e8edf5" }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
+      <div style={{ ...cell, fontWeight: 700, color: "#e8edf5" }}>{RECORD_LABEL[row.ticker] ?? DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
       <div style={{ ...cell, color: "#00e676" }}>{fmtPrice(row.ticker, row.up)}</div>
       <div style={{ ...cell, color: "#EF4444" }}>{fmtPrice(row.ticker, row.down)}</div>
       <div style={{ ...cell, fontSize: 12, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: last === "inside" ? "#00e676" : last === "outside" ? "#EF4444" : "#8fa3b8" }}>
