@@ -1,13 +1,15 @@
 # Changelog
 
-## 2026-09-27 - budget.cbedge.net: Lists → Week is now a one-dinner-a-day planner with a meal library
+## 2026-09-27 - budget.cbedge.net: Lists gets a Meals tab; Week is now just the seven dinners
 
-- `budget-vite/src/pages/Lists.tsx`: the Week view (layout A from the mockups) shows Monday to Sunday with one dinner per day, and a collapsible Meal library sits beside it (under it on a phone). You can fill a day by dragging a meal onto it, by typing in the day's search box (arrows + Enter, and Enter on anything else uses it as a one-off), or by tapping a meal and then a day. Dragging a dinner onto another day moves it, and swaps if that day already has one. Tapping a dinner opens its ingredients (the same grocery-list rows as before). Category open state is remembered per browser.
-- The library is Cookbook recipes (grouped by main ingredient; desserts, cocktails, sauces and bread left out) plus quick meals you add with "+ New meal" (name + category).
-- `server-v2/_lib-household.cjs`: new `hh_meal_library` table (CREATE IF NOT EXISTS).
-- `server-v2/_lib-household-lists.cjs`: `getLibrary`, `addLibraryMeal`, `deleteLibraryMeal`, `setDinner` (replaces the day's first meal, and its ingredients stay on the grocery list unattached), `moveDinner` (move/swap, one transaction). `getWeek` now also returns `recipe_id`.
-- `server-v2/household-routes.cjs`: `GET /api/hh/lists?library=1`, plus POST actions `setDinner`, `moveDinner`, `addLibraryMeal`, `deleteLibraryMeal`.
-- `budget-vite/src/api.ts` / `hooks.ts`: matching client calls and hooks. Days that already had extra meals keep them, shown as "Also planned".
+- **Meals tab** (new, `budget-vite/src/pages/Lists.tsx`): paste a TikTok / Instagram / recipe link or type a name to add a meal. Links pull a title (TikTok via its oEmbed caption, otherwise the page's og:title) and guess the category, and you can edit both before saving. The list is grouped by category, and categories start collapsed (open state remembered per browser). There's search and an All / Not tried / Made filter. Tapping a meal opens: pick a day (Mon–Sun buttons for the week shown, with ‹ › to change week; a taken day shows its current dinner), Made it (+1 today, Undo last, with count and last date), recipe link (open / add / remove), category dropdown, Rename, Delete.
+- **Edit categories** sheet: add, rename, reorder ↑↓ and delete. Deleting a category moves its meals to Other, and Other can't be deleted or renamed. It starts with Chicken, Beef, Pork, Pasta, Seafood, Other.
+- **Week tab**: just the seven dinners (one per day). Tapping one opens a sheet with the link, Made it and its ingredients. An empty day shows "Plan from Meals ›". Today is marked in its label only, with no side accent.
+- Independent of the Cookbook app. The meal list starts empty.
+- `server-v2/_lib-household.cjs`: `hh_meal_library` (title, category, url, source, made_count, last_made), `hh_meal_categories`, and `hh_meals.library_id` (ON DELETE SET NULL). All are CREATE/ALTER IF NOT EXISTS.
+- `server-v2/_lib-household-lists.cjs`: getMeals, previewLink, add/update/deleteLibraryMeal, markMade, add/rename/move/deleteCategory, planLibraryMeal (one day per week per meal; replacing a day's dinner sends the old one's ingredients back to the grocery list unattached), setDinner, moveDinner. getWeek joins each dinner's link, category and made count.
+- `server-v2/household-routes.cjs`: `GET /api/hh/lists?meals=1`, plus POST actions previewLink, addLibraryMeal, updateLibraryMeal, deleteLibraryMeal, markMade, addCategory, renameCategory, moveCategory, deleteCategory, planMeal, setDinner, moveDinner.
+- `budget-vite/src/api.ts`, `hooks.ts`: matching calls and hooks.
 
 ## 2026-09-27 - Brand.tsx theme-check fix (VoltickWordmark)
 

@@ -1,18 +1,20 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useAuth } from '../auth'
 import {
   useLists, useToggleListItem, useAddListItem, useDeleteListItem,
   useClearChecked, useDeleteMeal,
-  useMealLibrary, useSetDinner, useMoveDinner, useAddLibraryMeal, useDeleteLibraryMeal,
+  useMeals, usePreviewLink, useAddLibraryMeal, useUpdateLibraryMeal, useDeleteLibraryMeal, useMarkMade,
+  useAddCategory, useRenameCategory, useMoveCategory, useDeleteCategory, usePlanMeal,
 } from '../hooks'
-import { ApiError, type Aisle, type ListItem, type Meal, type MealRef, type LibraryMeal } from '../api'
-import { T, SERIF, sectionTitle, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
+import { ApiError, type Aisle, type ListItem, type Meal, type MealRef, type LibraryMeal, type MealCategory } from '../api'
+import { T, SERIF, MONO, SANS, sectionTitle, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
 
 /**
- * Lists — three views over the SAME two tables.
+ * Lists — four views. Three are over the SAME two tables (meals, items):
  *
- *   Week — one dinner per day beside a meal library (Cookbook + quick
- *          meals); each dinner's ingredients open under it.
+ *   Week — the seven dinners; tap one for its link, made-it and ingredients.
+ *   Meals — your meal list (hh_meal_library): import links, categories,
+ *          pick a day, mark made. Planning writes the Week's hh_meals rows.
  *   Shop — every unchecked item, grouped in store-walk order.
  *   List — the plain grocery list plus anything not tied to a meal.
  *
@@ -21,7 +23,7 @@ import { T, SERIF, sectionTitle, label, body, hero, section, row, input, button,
  * views disagreeing about what you actually bought.
  */
 
-type View = 'week' | 'shop' | 'list'
+type View = 'week' | 'meals' | 'shop' | 'list'
 
 const AISLE_LABEL: Record<Aisle, string> = {
   produce: 'Produce', meat: 'Meat', dairy: 'Dairy', bakery: 'Bakery',
@@ -85,6 +87,7 @@ export default function Lists() {
             what the screen actually opens on. */}
         <button onClick={() => setView('list')} style={segment(view === 'list')}>List</button>
         <button onClick={() => setView('week')} style={segment(view === 'week')}>Week</button>
+        <button onClick={() => setView('meals')} style={segment(view === 'meals')}>Meals</button>
         <button onClick={() => setView('shop')} style={segment(view === 'shop')}>
           Shop{data.counts.open > 0 ? ` · ${data.counts.open}` : ''}
         </button>
@@ -92,8 +95,9 @@ export default function Lists() {
 
       {view === 'week' && (
         <Week data={data} onToggle={(id) => toggle.mutate(id)} onShift={shift}
-              openMeal={openMeal} setOpenMeal={setOpenMeal} />
+              openMeal={openMeal} setOpenMeal={setOpenMeal} onPlan={() => setView('meals')} />
       )}
+      {view === 'meals' && <Meals week={data} onShift={shift} />}
       {view === 'shop' && <Shop data={data} onToggle={(id) => toggle.mutate(id)} />}
       {view === 'list' && (
         <Plain
@@ -108,441 +112,189 @@ export default function Lists() {
   )
 }
 
-// ── Week board: the dinner planner ───────────────────────────────────────────
+// ── Week: the seven dinners ──────────────────────────────────────────────────
 //
-// One dinner per day, Monday to Sunday, with the meal library beside it (under
-// it on a phone). Three ways to fill a day:
-//
-//   1. Drag a meal from the library onto a day (desktop).
-//   2. Type in the day's search box and pick from the library — or press Enter
-//      on anything to use it as a one-off dinner.
-//   3. Tap a meal in the library, then tap the day (the phone path — HTML5
-//      drag and drop does nothing on touch screens).
-//
-// Dragging a planned dinner onto another day moves it, swapping if that day
-// already has one. Tapping a dinner opens its ingredients, which are the same
-// hh_list_items rows the grocery list shows.
-//
-// The library is the Cookbook's recipes (grouped by main ingredient) plus quick
-// meals kept in hh_meal_library. Categories fold; the open set is remembered
-// per browser.
+// Just the week. One dinner per day ("the dinner" is the day's first meal);
+// planning happens on the Meals tab. Tapping a dinner opens a sheet with its
+// link, "made it" and its ingredients (the same rows the grocery list shows).
+// Today is marked in its label only.
 
-type Drag = { kind: 'lib'; title: string; recipeId?: number } | { kind: 'day'; from: string }
-
-/** What's being dragged. dataTransfer can't be read during dragover, so the
- *  payload lives here and the transfer only carries a token. */
-let dragging: Drag | null = null
-
-const LIB_OPEN_KEY = 'budget.dinnerLibrary.open'
-
-function useWide(q = '(min-width: 860px)') {
-  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
-  useEffect(() => {
-    const m = window.matchMedia(q)
-    const on = () => setWide(m.matches)
-    m.addEventListener('change', on)
-    return () => m.removeEventListener('change', on)
-  }, [q])
-  return wide
+const dateOf = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d)
 }
+const shortDate = (iso: string) =>
+  dateOf(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
-function Week({ data, onToggle, onShift, openMeal, setOpenMeal }: {
+function Week({ data, onToggle, onShift, openMeal, setOpenMeal, onPlan }: {
   data: NonNullable<ReturnType<typeof useLists>['data']>
   onToggle: (id: number) => void
   onShift: (n: number) => void
   openMeal: number | null
   setOpenMeal: (id: number | null) => void
+  onPlan: () => void
 }) {
-  const wide = useWide()
-  const lib = useMealLibrary()
-  const setDinner = useSetDinner()
-  const moveDinner = useMoveDinner()
   const delMeal = useDeleteMeal()
-  // A library meal tapped on a phone, waiting for a day to be tapped.
-  const [armed, setArmed] = useState<LibraryMeal | null>(null)
-  const [over, setOver] = useState<string | null>(null)
-
-  const items = lib.data?.items ?? []
-  const planned = new Set(data.days.map((d) => d.meals[0]?.title).filter(Boolean) as string[])
   const filled = data.days.filter((d) => d.meals.length > 0).length
-  const busy = setDinner.isPending || moveDinner.isPending
-  const err = setDinner.error || moveDinner.error
+  const open = data.days.flatMap((d) => d.meals).find((m) => m.id === openMeal) ?? null
 
-  const pick = (day: string, m: { title: string; recipeId?: number }) => {
-    setDinner.mutate({ day, title: m.title, recipeId: m.recipeId })
-    setArmed(null)
-  }
-
-  const onDrop = (day: string) => {
-    const d = dragging
-    dragging = null
-    setOver(null)
-    if (!d) return
-    if (d.kind === 'lib') pick(day, d)
-    else if (d.from !== day) moveDinner.mutate({ from: d.from, to: day })
-  }
-
-  const week = (
-    <div style={section()}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-        <span style={sectionTitle()}>Dinners</span>
-        <span style={label()}>
-          {filled} of 7{filled < 7 && <span style={{ color: T.warn }}> · {7 - filled} open</span>}
-        </span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '10px 0 4px' }}>
-        <button onClick={() => onShift(-1)} style={nav} aria-label="Previous week">‹</button>
-        <span style={label()}>{dayLabel(data.weekStart)} – {dayLabel(data.weekEnd)}</span>
-        <button onClick={() => onShift(1)} style={nav} aria-label="Next week">›</button>
-      </div>
-
-      {armed && (
-        <div style={{ ...label({ color: T.accent, letterSpacing: '0.08em' }), padding: '8px 0' }}>
-          Tap a day for “{armed.title}” ·{' '}
-          <button onClick={() => setArmed(null)} style={{ ...label({ color: T.accent }), background: 'none', border: 0, padding: 0, cursor: 'pointer', textDecoration: 'underline' }}>
-            cancel
-          </button>
+  return (
+    <>
+      <div style={section()}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <span style={sectionTitle()}>Dinners</span>
+          <span style={label()}>
+            {filled} of 7{filled < 7 && <span style={{ color: T.warn }}> · {7 - filled} open</span>}
+          </span>
         </div>
-      )}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '10px 0 4px' }}>
+          <button onClick={() => onShift(-1)} style={nav} aria-label="Previous week">‹</button>
+          <span style={label()}>{dayLabel(data.weekStart)} – {dayLabel(data.weekEnd)}</span>
+          <button onClick={() => onShift(1)} style={nav} aria-label="Next week">›</button>
+        </div>
 
-      {data.days.map((d, idx) => {
-        const dinner = d.meals[0]
-        const extras = d.meals.slice(1)
-        const isOver = over === d.day
-        const dow = new Date(Number(d.day.slice(0, 4)), Number(d.day.slice(5, 7)) - 1, Number(d.day.slice(8, 10)))
-        return (
-          <div
-            key={d.day}
-            onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver(d.day) } }}
-            onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(null) }}
-            onDrop={(e) => { e.preventDefault(); onDrop(d.day) }}
-            onClick={armed ? () => pick(d.day, { title: armed.title, recipeId: armed.kind === 'recipe' ? armed.id : undefined }) : undefined}
-            style={{
-              borderTop: idx === 0 ? 'none' : `1px solid ${T.rule}`,
-              padding: '12px 8px',
-              borderRadius: 6,
-              background: isOver || armed ? 'rgba(142,202,230,0.06)' : 'transparent',
-              boxShadow: isOver ? `inset 0 0 0 1px ${T.accentSoft}` : d.isToday ? `inset 2px 0 0 ${T.accent}` : 'none',
-              cursor: armed ? 'pointer' : undefined,
-              transition: 'background 120ms',
-            }}
-          >
-            <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr auto', gap: 12, alignItems: 'center' }}>
-              <div>
-                <div style={label(d.isToday ? { color: T.accent } : {})}>
-                  {dow.toLocaleDateString('en-US', { weekday: 'short' })}
-                </div>
-                <div style={{ ...hero(22), marginTop: 4 }}>{dow.getDate()}</div>
-              </div>
-
-              {dinner ? (
-                <div
-                  draggable
-                  onDragStart={(e) => { dragging = { kind: 'day', from: d.day }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dinner.title) }}
-                  onDragEnd={() => { dragging = null; setOver(null) }}
-                  onClick={armed ? undefined : () => setOpenMeal(openMeal === dinner.id ? null : dinner.id)}
-                  style={{ minWidth: 0, cursor: armed ? 'pointer' : 'grab' }}
-                >
-                  <div style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1.2, wordBreak: 'break-word' }}>{dinner.title}</div>
-                  <div style={label({ marginTop: 4, letterSpacing: '0.1em' })}>
-                    {dinner.recipe_id ? 'Cookbook' : 'Meal'}
-                    {dinner.items.length > 0 && ` · ${dinner.items.filter((i) => !i.checked_at).length} of ${dinner.items.length} to get`}
-                    {' · '}<span style={{ color: T.accent }}>{openMeal === dinner.id ? 'Hide' : 'Ingredients'}</span>
+        {data.days.map((d, idx) => {
+          const dinner = d.meals[0]
+          const extras = d.meals.slice(1)
+          const dt = dateOf(d.day)
+          return (
+            <div key={d.day} style={{ borderTop: idx === 0 ? 'none' : `1px solid ${T.rule}`, padding: '12px 2px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr auto', gap: 12, alignItems: 'center' }}>
+                <div>
+                  <div style={label(d.isToday ? { color: T.accent } : {})}>
+                    {dt.toLocaleDateString('en-US', { weekday: 'short' })}{d.isToday ? ' · Today' : ''}
                   </div>
+                  <div style={{ ...hero(22), marginTop: 4 }}>{dt.getDate()}</div>
                 </div>
-              ) : armed ? (
-                <div style={{ ...body(14), color: T.accent }}>Put it here</div>
-              ) : (
-                <DinnerSearch items={items} onPick={(m) => pick(d.day, m)} />
-              )}
-
-              <div>
-                {dinner && !armed && (
-                  <button onClick={() => delMeal.mutate(dinner.id)} aria-label={`Remove ${dinner.title}`}
-                          style={{ background: 'none', border: 0, color: T.faint, fontSize: 18, cursor: 'pointer', padding: '4px 6px', minHeight: 36 }}>
-                    ×
+                {dinner ? (
+                  <button onClick={() => setOpenMeal(dinner.id)}
+                          style={{ background: 'none', border: 0, padding: 0, textAlign: 'left', color: T.ink, cursor: 'pointer', minWidth: 0 }}>
+                    <div style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1.2, wordBreak: 'break-word' }}>{dinner.title}</div>
+                    <div style={label({ marginTop: 4, letterSpacing: '0.1em' })}>
+                      {[dinner.category,
+                        dinner.library_id ? (dinner.made_count ? `Made ${dinner.made_count}×` : 'New') : null,
+                        dinner.items.length ? `${dinner.items.filter((i) => !i.checked_at).length} of ${dinner.items.length} to get` : null,
+                      ].filter(Boolean).join(' · ')}
+                      {dinner.url && <span style={{ color: T.accent }}>{' · '}Link ↗</span>}
+                    </div>
+                  </button>
+                ) : (
+                  <button onClick={onPlan} style={{ ...label({ color: T.accent }), background: 'none', border: 0, padding: '10px 0', textAlign: 'left', cursor: 'pointer' }}>
+                    Plan from Meals ›
                   </button>
                 )}
+                <div>
+                  {dinner && (
+                    <button onClick={() => delMeal.mutate(dinner.id)} aria-label={`Remove ${dinner.title}`}
+                            style={{ background: 'none', border: 0, color: T.faint, fontSize: 18, cursor: 'pointer', padding: '4px 8px', minHeight: 40 }}>
+                      ×
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-
-            {extras.length > 0 && (
-              <div style={label({ marginTop: 6, marginLeft: 68, letterSpacing: '0.06em' })}>
-                Also planned: {extras.map((m) => m.title).join(', ')}
-              </div>
-            )}
-
-            {dinner && openMeal === dinner.id && !armed && (
-              <div style={{ marginLeft: 68 }}>
-                <MealDetail meal={dinner} onToggle={onToggle} />
-              </div>
-            )}
-          </div>
-        )
-      })}
-
-      {busy && <div style={label({ marginTop: 8 })}>Saving…</div>}
-      {err && <div style={{ ...body(13), color: T.bad, marginTop: 8 }}>{(err as Error).message}</div>}
-    </div>
-  )
-
-  const library = (
-    <LibraryPanel
-      loading={lib.isLoading}
-      error={lib.error as Error | null}
-      items={items}
-      categories={lib.data?.categories ?? []}
-      planned={planned}
-      armed={armed}
-      onArm={(m) => setArmed(armed?.key === m.key ? null : m)}
-      onDragStart={(m) => { dragging = { kind: 'lib', title: m.title, recipeId: m.kind === 'recipe' ? m.id : undefined } }}
-      onDragEnd={() => { dragging = null; setOver(null) }}
-    />
-  )
-
-  return wide ? (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 340px', gap: 14, alignItems: 'start' }}>
-      {week}
-      <div style={{ position: 'sticky', top: 0 }}>{library}</div>
-    </div>
-  ) : (
-    <>{week}{library}</>
-  )
-}
-
-/**
- * The search box on an empty day. Filters the whole library as you type;
- * arrows + Enter pick, and Enter on text that matches nothing uses it as a
- * one-off dinner (not saved to the library).
- */
-function DinnerSearch({ items, onPick }: {
-  items: LibraryMeal[]
-  onPick: (m: { title: string; recipeId?: number }) => void
-}) {
-  const [q, setQ] = useState('')
-  const [open, setOpen] = useState(false)
-  const [hl, setHl] = useState(0)
-  const needle = q.trim().toLowerCase()
-  const hits = (needle ? items.filter((m) => m.title.toLowerCase().includes(needle)) : items).slice(0, 8)
-  const exact = hits.some((m) => m.title.toLowerCase() === needle)
-  const rows: { title: string; recipeId?: number; sub: string }[] = [
-    ...hits.map((m) => ({ title: m.title, recipeId: m.kind === 'recipe' ? m.id : undefined, sub: m.category })),
-    ...(needle && !exact ? [{ title: q.trim(), sub: 'One-off' }] : []),
-  ]
-  const choose = (r: { title: string; recipeId?: number }) => { onPick(r); setQ(''); setOpen(false) }
-
-  return (
-    <div style={{ position: 'relative', minWidth: 0 }}>
-      <input
-        style={{ ...input(), minHeight: 40, padding: '9px 11px' }}
-        placeholder="Search or drop a meal…"
-        value={q}
-        onChange={(e) => { setQ(e.target.value); setHl(0); setOpen(true) }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 120)}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowDown') { e.preventDefault(); setHl((h) => Math.min(h + 1, rows.length - 1)) }
-          else if (e.key === 'ArrowUp') { e.preventDefault(); setHl((h) => Math.max(h - 1, 0)) }
-          else if (e.key === 'Enter') { e.preventDefault(); if (rows[hl]) choose(rows[hl]) }
-          else if (e.key === 'Escape') { (e.target as HTMLInputElement).blur() }
-        }}
-      />
-      {open && rows.length > 0 && (
-        <div style={{
-          position: 'absolute', left: 0, right: 0, top: 'calc(100% + 4px)', zIndex: 20,
-          background: T.paperRaised, border: `1px solid ${T.ruleStrong}`, borderRadius: 6,
-          maxHeight: 260, overflowY: 'auto',
-        }}>
-          {rows.map((r, i) => (
-            <div key={`${r.sub}-${r.title}`}
-                 // mousedown, not click: click fires after the input's blur has
-                 // already closed the list.
-                 onMouseDown={(e) => { e.preventDefault(); choose(r) }}
-                 onMouseEnter={() => setHl(i)}
-                 style={{
-                   display: 'flex', justifyContent: 'space-between', gap: 10, padding: '10px 12px',
-                   borderTop: i === 0 ? 'none' : `1px solid ${T.rule}`, cursor: 'pointer',
-                   background: i === hl ? 'rgba(142,202,230,0.10)' : 'transparent',
-                 }}>
-              <span style={{ ...body(14), minWidth: 0, wordBreak: 'break-word' }}>
-                {r.sub === 'One-off' ? `Use “${r.title}”` : r.title}
-              </span>
-              <span style={label({ color: T.faint, whiteSpace: 'nowrap' })}>{r.sub}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function readOpen(): Record<string, boolean> | null {
-  try { const v = localStorage.getItem(LIB_OPEN_KEY); return v ? JSON.parse(v) : null } catch { return null }
-}
-function writeOpen(v: Record<string, boolean>) {
-  try { localStorage.setItem(LIB_OPEN_KEY, JSON.stringify(v)) } catch { /* private mode — fine */ }
-}
-
-function LibraryPanel({ loading, error, items, categories, planned, armed, onArm, onDragStart, onDragEnd }: {
-  loading: boolean
-  error: Error | null
-  items: LibraryMeal[]
-  categories: string[]
-  planned: Set<string>
-  armed: LibraryMeal | null
-  onArm: (m: LibraryMeal) => void
-  onDragStart: (m: LibraryMeal) => void
-  onDragEnd: () => void
-}) {
-  const [q, setQ] = useState('')
-  const [open, setOpenState] = useState<Record<string, boolean>>(() => readOpen() ?? {})
-  const [adding, setAdding] = useState(false)
-  const del = useDeleteLibraryMeal()
-  const [confirmDel, setConfirmDel] = useState<string | null>(null)
-
-  // First visit: open the first category so the panel isn't a wall of headers.
-  useEffect(() => {
-    if (categories.length && Object.keys(open).length === 0) setOpenState({ [categories[0]]: true })
-  }, [categories]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const setOpen = (v: Record<string, boolean>) => { setOpenState(v); writeOpen(v) }
-  const needle = q.trim().toLowerCase()
-  const groups = categories
-    .map((c) => ({ c, meals: items.filter((m) => m.category === c && (!needle || m.title.toLowerCase().includes(needle))) }))
-    .filter((g) => g.meals.length > 0)
-
-  const small = { ...label({ color: T.accent }), background: 'none', border: 0, padding: '6px 0', cursor: 'pointer' }
-
-  return (
-    <div style={section()}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <span style={sectionTitle()}>Meal library</span>
-        <span style={label()}>{items.length} meals</span>
-      </div>
-
-      <input style={{ ...input(), marginTop: 10, minHeight: 40, padding: '9px 11px' }}
-             placeholder="Search meals…" value={q} onChange={(e) => setQ(e.target.value)} />
-
-      <div style={{ display: 'flex', gap: 14, marginTop: 4 }}>
-        <button style={small} onClick={() => setOpen(Object.fromEntries(categories.map((c) => [c, true])))}>Expand all</button>
-        <button style={small} onClick={() => setOpen({})}>Collapse all</button>
-      </div>
-
-      {loading && <div style={{ ...body(14), color: T.faint, padding: '10px 0' }}>Loading…</div>}
-      {error && <div style={{ ...body(13), color: T.bad, padding: '10px 0' }}>{error.message}</div>}
-      {!loading && !error && groups.length === 0 && (
-        <div style={{ ...body(14), color: T.faint, padding: '10px 0' }}>
-          {needle ? 'No matches.' : 'No meals yet. Add one below, or import recipes in the Cookbook.'}
-        </div>
-      )}
-
-      <div style={{ maxHeight: 'min(62vh, 560px)', overflowY: 'auto', marginTop: 4 }}>
-        {groups.map(({ c, meals }, gi) => {
-          // Searching opens every category with a hit.
-          const isOpen = !!needle || !!open[c]
-          return (
-            <div key={c} style={{ borderTop: gi === 0 ? 'none' : `1px solid ${T.rule}`, padding: '10px 0' }}>
-              <button onClick={() => setOpen({ ...open, [c]: !open[c] })}
-                      style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center',
-                               background: 'none', border: 0, padding: '4px 0', cursor: 'pointer', color: T.ink }}>
-                <span style={sectionTitle({ fontSize: 15 })}>{c}</span>
-                <span style={label()}>{meals.length} <span style={{ color: T.accent, marginLeft: 6 }}>{isOpen ? '▾' : '▸'}</span></span>
-              </button>
-              {isOpen && meals.map((m) => {
-                const on = armed?.key === m.key
-                const used = planned.has(m.title)
-                return (
-                  <div key={m.key}
-                       draggable
-                       onDragStart={(e) => { onDragStart(m); e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', m.title) }}
-                       onDragEnd={onDragEnd}
-                       onClick={() => onArm(m)}
-                       style={row({
-                         padding: '9px 6px', cursor: 'grab', borderRadius: 4,
-                         background: on ? 'rgba(142,202,230,0.10)' : 'transparent',
-                         boxShadow: on ? `inset 0 0 0 1px ${T.accentSoft}` : 'none',
-                       })}>
-                    <span style={{ ...body(14), flex: 1, minWidth: 0, wordBreak: 'break-word', color: used ? T.faint : T.ink }}>
-                      {m.title}
-                      {used && <span style={label({ marginLeft: 8, fontSize: 9, color: T.faint })}>Planned</span>}
-                    </span>
-                    {m.kind === 'quick' ? (
-                      confirmDel === m.key ? (
-                        <button onClick={(e) => { e.stopPropagation(); del.mutate(m.id); setConfirmDel(null) }}
-                                style={{ ...label({ color: T.bad }), background: 'none', border: 0, cursor: 'pointer', padding: 4 }}>
-                          Delete?
-                        </button>
-                      ) : (
-                        <button onClick={(e) => { e.stopPropagation(); setConfirmDel(m.key) }} aria-label={`Delete ${m.title}`}
-                                style={{ background: 'none', border: 0, color: T.faint, cursor: 'pointer', padding: '0 4px', fontSize: 15 }}>
-                          ×
-                        </button>
-                      )
-                    ) : (
-                      <span style={label({ fontSize: 9, color: T.faint })}>Cookbook</span>
-                    )}
-                    <span aria-hidden style={{ color: T.faint, letterSpacing: '-2px', fontSize: 12 }}>⋮⋮</span>
-                  </div>
-                )
-              })}
+              {extras.length > 0 && (
+                <div style={label({ marginTop: 6, marginLeft: 68, letterSpacing: '0.06em' })}>
+                  Also planned: {extras.map((m) => m.title).join(', ')}
+                </div>
+              )}
             </div>
           )
         })}
       </div>
 
-      {adding ? (
-        <AddLibraryMeal categories={categories} onDone={() => setAdding(false)} />
-      ) : (
-        <button onClick={() => setAdding(true)} style={{ ...button('primary'), marginTop: 12 }}>+ New meal</button>
-      )}
+      {open && <DinnerSheet meal={open} onToggle={onToggle} onClose={() => setOpenMeal(null)} />}
+    </>
+  )
+}
+
+/** Bottom sheet over the week: link, made-it, ingredients. */
+function Sheet({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(0,0,0,0.6)',
+      display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: '100%', maxWidth: 560, maxHeight: '85dvh', overflowY: 'auto',
+        background: T.paperRaised, borderTop: `1px solid ${T.ruleStrong}`, borderRadius: '18px 18px 0 0',
+        padding: '10px 16px calc(20px + env(safe-area-inset-bottom))',
+      }}>
+        <div style={{ width: 40, height: 4, borderRadius: 2, background: T.ruleStrong, margin: '0 auto 12px' }} />
+        {children}
+      </div>
     </div>
   )
 }
 
-function AddLibraryMeal({ categories, onDone }: { categories: string[]; onDone: () => void }) {
-  const add = useAddLibraryMeal()
-  const [title, setTitle] = useState('')
-  const [category, setCategory] = useState('')
-  const ok = title.trim().length > 0
+function DinnerSheet({ meal, onToggle, onClose }: { meal: Meal; onToggle: (id: number) => void; onClose: () => void }) {
+  const made = useMarkMade()
   return (
-    <form onSubmit={(e: FormEvent) => {
-      e.preventDefault()
-      if (!ok) return
-      add.mutate({ title: title.trim(), category: category.trim() || 'Other' }, { onSuccess: onDone })
-    }} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-      <input style={input()} placeholder="Meal name" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
-      <input style={input()} placeholder="Category (e.g. Chicken)" value={category}
-             onChange={(e) => setCategory(e.target.value)} list="dinner-lib-cats" />
-      <datalist id="dinner-lib-cats">{categories.map((c) => <option key={c} value={c} />)}</datalist>
-      {add.error && <div style={{ ...body(13), color: T.bad }}>{(add.error as Error).message}</div>}
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button type="button" onClick={onDone} style={segment(false)}>Cancel</button>
-        <button type="submit" disabled={!ok || add.isPending} style={{ ...button(ok ? 'primary' : 'ghost'), flex: 1 }}>
-          {add.isPending ? 'Saving…' : 'Add to library'}
-        </button>
+    <Sheet onClose={onClose}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={label()}>{[meal.category, meal.source].filter(Boolean).join(' · ') || shortDate(meal.day)}</span>
+        <button onClick={onClose} aria-label="Close" style={xBtn}>×</button>
       </div>
-    </form>
+      <div style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1.2, margin: '4px 0' }}>{meal.title}</div>
+      <div style={label({ letterSpacing: '0.1em' })}>
+        {dateOf(meal.day).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+        {meal.library_id ? (meal.made_count ? ` · Made ${meal.made_count}×${meal.last_made ? `, last ${shortDate(meal.last_made)}` : ''}` : ' · New') : ''}
+      </div>
+
+      {meal.url && <LinkButton url={meal.url} source={meal.source} />}
+      {meal.library_id ? (
+        <MadeButton count={meal.made_count ?? 0} busy={made.isPending}
+                    onMade={() => made.mutate({ id: meal.library_id! })} />
+      ) : (
+        <div style={{ ...body(13), color: T.faint, marginTop: 12 }}>Typed-in dinner, so there's no link or made count.</div>
+      )}
+
+      <div style={label({ marginTop: 16 })}>Ingredients</div>
+      <MealDetail meal={meal} onToggle={onToggle} />
+    </Sheet>
   )
+}
+
+function LinkButton({ url, source }: { url: string; source: string | null | undefined }) {
+  return (
+    <a href={url} target="_blank" rel="noreferrer" style={{
+      display: 'flex', flexDirection: 'column', gap: 2, marginTop: 12, padding: '10px 12px', minHeight: 44,
+      border: `1px solid ${T.ruleStrong}`, borderRadius: 3, color: T.accent, textDecoration: 'none',
+    }}>
+      <span style={body(15)}><span style={{ color: T.accent }}>Open on {source || 'the web'} ↗</span></span>
+      <span style={{ fontFamily: MONO, fontSize: 11, color: T.faint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</span>
+    </a>
+  )
+}
+
+function MadeButton({ count, onMade, busy, sub }: { count: number; onMade: () => void; busy?: boolean; sub?: string }) {
+  return (
+    <button onClick={onMade} disabled={busy} style={{
+      display: 'flex', alignItems: 'center', gap: 10, width: '100%', marginTop: 10, minHeight: 44, padding: '0 12px',
+      background: 'none', border: `1px solid ${T.ruleStrong}`, borderRadius: 3, color: T.ink, cursor: 'pointer',
+    }}>
+      <span style={checkbox(count > 0, 20)}>{count > 0 ? '✓' : ''}</span>
+      <span style={{ ...body(14), flex: 1, textAlign: 'left' }}>{count > 0 ? `Made ${count}×${sub ? ` · ${sub}` : ''}` : 'Not made yet'}</span>
+      <span style={label({ color: T.accent })}>{count > 0 ? '+1 today' : 'Mark made'}</span>
+    </button>
+  )
+}
+
+const xBtn: React.CSSProperties = {
+  background: 'none', border: 0, color: T.faint, fontSize: 20, cursor: 'pointer', padding: '4px 8px', minHeight: 40,
 }
 
 /** A dinner's ingredients — the same rows the grocery list shows. */
 function MealDetail({ meal, onToggle }: { meal: Meal; onToggle: (id: number) => void }) {
   const addItem = useAddListItem()
   const [text, setText] = useState('')
-  const ref = useRef<HTMLDivElement | null>(null)
-
-  // Arriving from "from Taco night" on the plain list lands here with this
-  // dinner already open — useless if it's four days down the page. Only
-  // scrolls when it is actually off-screen.
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const r = el.getBoundingClientRect()
-    if (r.top < 0 || r.bottom > window.innerHeight) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [])
-
   return (
-    <div ref={ref} style={{ paddingTop: 6, paddingBottom: 4 }}>
+    <div style={{ paddingTop: 2 }}>
+      {meal.items.length === 0 && <div style={{ ...body(13), color: T.faint, padding: '6px 0' }}>None yet.</div>}
       {meal.items.map((i) => (
         <div key={i.id} style={row({ padding: '9px 0' })}>
           <button onClick={() => onToggle(i.id)} style={checkbox(!!i.checked_at, 17)}
@@ -560,10 +312,10 @@ function MealDetail({ meal, onToggle }: { meal: Meal; onToggle: (id: number) => 
         addItem.mutate({ text: text.trim(), mealId: meal.id })
         setText('')
       }} style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-        <input style={{ ...input(), flex: 1, minHeight: 38 }}
+        <input style={{ ...input(), flex: 1, minHeight: 40 }}
                placeholder="Ingredient…" value={text} onChange={(e) => setText(e.target.value)} />
         <button type="submit" disabled={!text.trim()}
-                style={{ ...button(text.trim() ? 'primary' : 'ghost'), minHeight: 38, padding: '8px 13px' }}>
+                style={{ ...button(text.trim() ? 'primary' : 'ghost'), minHeight: 40, padding: '8px 13px' }}>
           Add
         </button>
       </form>
@@ -571,6 +323,381 @@ function MealDetail({ meal, onToggle }: { meal: Meal; onToggle: (id: number) => 
         Ingredients go straight onto the shopping list
       </div>
     </div>
+  )
+}
+
+// ── Meals: import, the list, pick a day ──────────────────────────────────────
+//
+// Your own list of dinners, grouped by category, each collapsed until tapped.
+// Paste a link (usually TikTok) or type a name at the top; tap a meal to pick
+// its day for the week shown on the Week tab, mark it made, open its link,
+// move it to another category, rename or delete it. Categories are yours to
+// add, rename, reorder and delete ("Other" catches the rest).
+
+const OPEN_KEY = 'budget.meals.openCats'
+const readOpenCats = (): Record<string, boolean> => {
+  try { return JSON.parse(localStorage.getItem(OPEN_KEY) || '{}') || {} } catch { return {} }
+}
+const writeOpenCats = (v: Record<string, boolean>) => {
+  try { localStorage.setItem(OPEN_KEY, JSON.stringify(v)) } catch { /* private mode */ }
+}
+
+type Filter = 'all' | 'new' | 'made'
+
+function Meals({ week, onShift }: {
+  week: NonNullable<ReturnType<typeof useLists>['data']>
+  onShift: (n: number) => void
+}) {
+  const { data, isLoading, error } = useMeals()
+  const [q, setQ] = useState('')
+  const [filter, setFilter] = useState<Filter>('all')
+  const [openCats, setOpenCatsState] = useState<Record<string, boolean>>(readOpenCats)
+  const [openItem, setOpenItem] = useState<number | null>(null)
+  const [editCats, setEditCats] = useState(false)
+  const setOpenCats = (v: Record<string, boolean>) => { setOpenCatsState(v); writeOpenCats(v) }
+
+  if (isLoading) return <div style={{ ...body(14), color: T.faint }}>Loading…</div>
+  if (error || !data) return <div style={{ ...body(14), color: T.bad }}>{(error as Error)?.message || 'Could not load meals.'}</div>
+
+  const needle = q.trim().toLowerCase()
+  const pass = (m: LibraryMeal) =>
+    (!needle || m.title.toLowerCase().includes(needle)) &&
+    (filter === 'all' || (filter === 'new' ? m.made_count === 0 : m.made_count > 0))
+  const groups = data.categories
+    .map((c) => ({ c, meals: data.meals.filter((m) => m.category === c.name && pass(m)) }))
+    .filter((g) => g.meals.length > 0 || (!needle && filter === 'all'))
+
+  // Which day of the week on screen each meal sits on.
+  const planned = new Map<number, string[]>()
+  for (const d of week.days) {
+    const m = d.meals[0]
+    if (m?.library_id) planned.set(m.library_id, [...(planned.get(m.library_id) ?? []), d.day])
+  }
+
+  return (
+    <>
+      <Importer categories={data.categories.map((c) => c.name)}
+                onSaved={(m) => { setOpenCats({ ...openCats, [m.category]: true }); setOpenItem(m.id) }} />
+
+      <div style={section()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
+          <span style={sectionTitle()}>My meals</span>
+          <span style={label()}>
+            {data.meals.length} ·{' '}
+            <button onClick={() => setEditCats(true)} style={{ ...label({ color: T.accent }), background: 'none', border: 0, padding: 0, cursor: 'pointer' }}>
+              Edit categories
+            </button>
+          </span>
+        </div>
+
+        <input style={{ ...input(), marginTop: 10 }} placeholder="Search meals…" value={q} onChange={(e) => setQ(e.target.value)} />
+
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '10px 0 2px' }}>
+          {([['all', 'All'], ['new', 'Not tried'], ['made', 'Made']] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setFilter(k)} style={segment(filter === k)}>{l}</button>
+          ))}
+          <span style={{ flex: 1 }} />
+          <button onClick={() => { setOpenCats({}); setOpenItem(null) }}
+                  style={{ ...label({ color: T.accent }), background: 'none', border: 0, cursor: 'pointer', padding: '8px 0' }}>
+            Collapse all
+          </button>
+        </div>
+
+        {data.meals.length === 0 && (
+          <div style={{ ...body(14), color: T.faint, padding: '12px 0 4px' }}>No meals yet. Paste a link above to start.</div>
+        )}
+        {data.meals.length > 0 && groups.length === 0 && (
+          <div style={{ ...body(14), color: T.faint, padding: '12px 0 4px' }}>No matches.</div>
+        )}
+
+        {data.meals.length > 0 && groups.map(({ c, meals }, gi) => {
+          const isOpen = !!needle || filter !== 'all' || !!openCats[c.name]
+          return (
+            <div key={c.id} style={{ borderTop: gi === 0 ? 'none' : `1px solid ${T.rule}`, padding: '4px 0' }}>
+              <button onClick={() => setOpenCats({ ...openCats, [c.name]: !openCats[c.name] })}
+                      style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center',
+                               background: 'none', border: 0, color: T.ink, cursor: 'pointer', padding: '8px 0', minHeight: 44 }}>
+                <span style={sectionTitle({ fontSize: 15 })}>{c.name}</span>
+                <span style={label()}>{meals.length}<span style={{ color: T.accent, marginLeft: 8 }}>{isOpen ? '▾' : '▸'}</span></span>
+              </button>
+              {isOpen && meals.length === 0 && <div style={{ ...body(13), color: T.faint, padding: '0 0 8px' }}>Empty</div>}
+              {isOpen && meals.map((m) => (
+                <MealItem key={m.id} meal={m} week={week} categories={data.categories.map((x) => x.name)}
+                          days={planned.get(m.id) ?? []} open={openItem === m.id}
+                          onToggle={() => setOpenItem(openItem === m.id ? null : m.id)} onShift={onShift} />
+              ))}
+            </div>
+          )
+        })}
+      </div>
+
+      {editCats && <CategoryEditor categories={data.categories} onClose={() => setEditCats(false)} />}
+    </>
+  )
+}
+
+function Importer({ categories, onSaved }: { categories: string[]; onSaved: (m: LibraryMeal) => void }) {
+  const preview = usePreviewLink()
+  const add = useAddLibraryMeal()
+  const [q, setQ] = useState('')
+  const [draft, setDraft] = useState<{ title: string; category: string; url: string | null; source: string | null } | null>(null)
+  const isLink = (s: string) => /^https?:\/\//i.test(s.trim()) || /(tiktok|instagram|youtu)\S*\.\S+/i.test(s)
+
+  const start = (e: FormEvent) => {
+    e.preventDefault()
+    const v = q.trim()
+    if (!v) return
+    if (isLink(v)) {
+      const url = /^https?:\/\//i.test(v) ? v : `https://${v}`
+      setDraft(null)
+      preview.mutate(url, {
+        onSuccess: ({ preview: p }) => { setDraft({ title: p.title, category: p.category, url: p.url, source: p.source }); setQ('') },
+      })
+    } else {
+      setDraft({ title: v, category: categories.includes('Other') ? 'Other' : categories[0] ?? 'Other', url: null, source: null })
+      setQ('')
+    }
+  }
+
+  return (
+    <div style={section()}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+        <span style={sectionTitle()}>Add a meal</span>
+        <span style={label()}>TikTok · Insta · web</span>
+      </div>
+      <form onSubmit={start} style={{ display: 'flex', gap: 6 }}>
+        <input style={{ ...input(), flex: 1 }} placeholder="Paste a TikTok link or type a meal"
+               value={q} onChange={(e) => setQ(e.target.value)} autoComplete="off" />
+        <button type="submit" disabled={!q.trim() || preview.isPending} style={{ ...button(q.trim() ? 'primary' : 'ghost'), padding: '12px 14px' }}>
+          Add
+        </button>
+      </form>
+
+      {preview.isPending && <div style={{ ...body(14), color: T.faint, marginTop: 10 }}>Reading the link…</div>}
+      {preview.error && <div style={{ ...body(13), color: T.bad, marginTop: 10 }}>{(preview.error as Error).message}</div>}
+
+      {draft && (
+        <div style={{ marginTop: 12, padding: 12, border: `1px solid ${T.accentSoft}`, borderRadius: 10, background: 'rgba(142,202,230,0.05)' }}>
+          {draft.url && <div style={label({ marginBottom: 6 })}>{draft.source} · {draft.title ? 'check the name' : 'name it'}</div>}
+          <input style={{ ...input(), fontFamily: SERIF, fontSize: 18 }} placeholder="Meal name" value={draft.title}
+                 onChange={(e) => setDraft({ ...draft, title: e.target.value })} autoFocus={!draft.title} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, marginTop: 8 }}>
+            <select style={{ ...input(), appearance: 'auto' }} value={draft.category}
+                    onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <button disabled={!draft.title.trim() || add.isPending}
+                    onClick={() => add.mutate({ title: draft.title.trim(), category: draft.category, url: draft.url },
+                                              { onSuccess: ({ meal }) => { setDraft(null); onSaved(meal) } })}
+                    style={{ ...button(draft.title.trim() ? 'primary' : 'ghost'), padding: '12px 16px' }}>
+              {add.isPending ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          {add.error && <div style={{ ...body(13), color: T.bad, marginTop: 8 }}>{(add.error as Error).message}</div>}
+          <button onClick={() => setDraft(null)} style={{ ...label({ color: T.faint }), background: 'none', border: 0, cursor: 'pointer', padding: '10px 0 0' }}>
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MealItem({ meal, week, categories, days, open, onToggle, onShift }: {
+  meal: LibraryMeal
+  week: NonNullable<ReturnType<typeof useLists>['data']>
+  categories: string[]
+  days: string[]
+  open: boolean
+  onToggle: () => void
+  onShift: (n: number) => void
+}) {
+  const plan = usePlanMeal()
+  const made = useMarkMade()
+  const update = useUpdateLibraryMeal()
+  const del = useDeleteLibraryMeal()
+  const [renaming, setRenaming] = useState(false)
+  const [name, setName] = useState(meal.title)
+  const [link, setLink] = useState('')
+  const [confirm, setConfirm] = useState(false)
+  const err = plan.error || made.error || update.error || del.error
+
+  const badge = (text: string, tone: 'plan' | 'made' | 'plain'): ReactNode => (
+    <span style={{
+      fontFamily: MONO, fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', borderRadius: 3, padding: '2px 6px',
+      whiteSpace: 'nowrap',
+      ...(tone === 'plan' ? { color: T.accent, border: `1px solid ${T.accentSoft}` }
+        : tone === 'made' ? { color: T.ink, background: 'rgba(255,255,255,0.10)' }
+        : { color: T.faint, border: `1px solid ${T.rule}` }),
+    }}>{text}</span>
+  )
+
+  return (
+    <div style={{ borderTop: `1px solid ${T.rule}` }}>
+      <button onClick={onToggle} style={{
+        display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 0', minHeight: 52,
+        background: 'none', border: 0, color: T.ink, cursor: 'pointer', textAlign: 'left',
+      }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ ...body(15), wordBreak: 'break-word' }}>{meal.title}</div>
+          <div style={{ display: 'flex', gap: 5, marginTop: 5, flexWrap: 'wrap' }}>
+            {days.length > 0 && badge(days.map((d) => dateOf(d).toLocaleDateString('en-US', { weekday: 'short' })).join(', '), 'plan')}
+            {meal.made_count > 0 ? badge(`✓ Made ${meal.made_count}×`, 'made') : badge('New', 'plain')}
+            {meal.source && badge(meal.source, 'plain')}
+          </div>
+        </div>
+        <span style={{ color: T.accent, fontSize: 13 }}>{open ? '▾' : '▸'}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '2px 0 14px' }}>
+          {renaming ? (
+            <form onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; update.mutate({ id: meal.id, title: name.trim() }, { onSuccess: () => setRenaming(false) }) }}
+                  style={{ display: 'flex', gap: 6 }}>
+              <input style={{ ...input(), flex: 1 }} value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+              <button type="submit" style={{ ...button('primary'), padding: '12px 14px' }}>Save</button>
+            </form>
+          ) : (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '4px 0 6px' }}>
+                <span style={label()}>Pick a day</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button onClick={() => onShift(-1)} style={miniNav} aria-label="Previous week">‹</button>
+                  <span style={label()}>{dayLabel(week.weekStart)} – {dayLabel(week.weekEnd)}</span>
+                  <button onClick={() => onShift(1)} style={miniNav} aria-label="Next week">›</button>
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+                {week.days.map((d) => {
+                  const cur = d.meals[0]
+                  const on = cur?.library_id === meal.id
+                  const other = cur && !on ? cur.title : ''
+                  return (
+                    <button key={d.day} disabled={plan.isPending}
+                            onClick={() => plan.mutate({ id: meal.id, day: on ? null : d.day, week: week.weekStart })}
+                            style={{ ...chip(on), color: on ? T.paper : d.isToday ? T.accent : T.ink }}>
+                      {dateOf(d.day).toLocaleDateString('en-US', { weekday: 'short' })} {dateOf(d.day).getDate()}
+                      {other && <small style={chipSub(on)}>{other}</small>}
+                    </button>
+                  )
+                })}
+                <button disabled={plan.isPending || days.length === 0}
+                        onClick={() => plan.mutate({ id: meal.id, day: null, week: week.weekStart })}
+                        style={{ ...chip(false), opacity: days.length ? 1 : 0.4 }}>
+                  None
+                </button>
+              </div>
+
+              <div style={label({ margin: '14px 0 0' })}>Made it</div>
+              <MadeButton count={meal.made_count} busy={made.isPending}
+                          sub={meal.last_made ? `last ${shortDate(meal.last_made)}` : undefined}
+                          onMade={() => made.mutate({ id: meal.id })} />
+              {meal.made_count > 0 && (
+                <button onClick={() => made.mutate({ id: meal.id, undo: true })}
+                        style={{ ...label({ color: T.accent }), background: 'none', border: 0, cursor: 'pointer', padding: '8px 0 0' }}>
+                  Undo last
+                </button>
+              )}
+
+              <div style={label({ margin: '14px 0 0' })}>Recipe link</div>
+              {meal.url ? (
+                <>
+                  <LinkButton url={meal.url} source={meal.source} />
+                  <button onClick={() => update.mutate({ id: meal.id, url: null })}
+                          style={{ ...label({ color: T.faint }), background: 'none', border: 0, cursor: 'pointer', padding: '8px 0 0' }}>
+                    Remove link
+                  </button>
+                </>
+              ) : (
+                <form onSubmit={(e) => { e.preventDefault(); if (!link.trim()) return; update.mutate({ id: meal.id, url: link.trim() }, { onSuccess: () => setLink('') }) }}
+                      style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <input style={{ ...input(), flex: 1 }} placeholder="Paste a TikTok or recipe link" value={link} onChange={(e) => setLink(e.target.value)} />
+                  <button type="submit" disabled={!link.trim()} style={{ ...button(link.trim() ? 'primary' : 'ghost'), padding: '12px 14px' }}>Save</button>
+                </form>
+              )}
+
+              <div style={label({ margin: '14px 0 6px' })}>Category</div>
+              <select style={{ ...input(), appearance: 'auto' }} value={meal.category}
+                      onChange={(e) => update.mutate({ id: meal.id, category: e.target.value })}>
+                {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+
+              <div style={{ display: 'flex', gap: 18, marginTop: 10 }}>
+                <button onClick={() => { setName(meal.title); setRenaming(true) }}
+                        style={{ ...label({ color: T.accent }), background: 'none', border: 0, cursor: 'pointer', padding: '8px 0' }}>
+                  Rename
+                </button>
+                {confirm ? (
+                  <button onClick={() => del.mutate(meal.id)}
+                          style={{ ...label({ color: T.bad }), background: 'none', border: 0, cursor: 'pointer', padding: '8px 0' }}>
+                    Delete for good?
+                  </button>
+                ) : (
+                  <button onClick={() => setConfirm(true)}
+                          style={{ ...label({ color: T.faint }), background: 'none', border: 0, cursor: 'pointer', padding: '8px 0' }}>
+                    Delete
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+          {err && <div style={{ ...body(13), color: T.bad, marginTop: 8 }}>{(err as Error).message}</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const chip = (on: boolean): React.CSSProperties => ({
+  fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', lineHeight: 1.2,
+  minHeight: 44, padding: '4px 2px', borderRadius: 3, cursor: 'pointer', minWidth: 0,
+  background: on ? T.ink : 'transparent', color: on ? T.paper : T.ink,
+  border: `1px solid ${on ? T.ink : T.ruleStrong}`,
+})
+const chipSub = (on: boolean): React.CSSProperties => ({
+  display: 'block', fontFamily: SANS, fontSize: 9, letterSpacing: 0, textTransform: 'none',
+  color: on ? 'rgba(5,6,10,0.6)' : T.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 3px',
+})
+const miniNav: React.CSSProperties = {
+  background: 'none', border: 0, color: T.accent, fontSize: 16, cursor: 'pointer', padding: '2px 8px', minHeight: 32,
+}
+
+function CategoryEditor({ categories, onClose }: { categories: MealCategory[]; onClose: () => void }) {
+  const add = useAddCategory()
+  const rename = useRenameCategory()
+  const move = useMoveCategory()
+  const del = useDeleteCategory()
+  const [name, setName] = useState('')
+  const busy = add.isPending || rename.isPending || move.isPending || del.isPending
+  const err = add.error || rename.error || move.error || del.error
+  const ib: React.CSSProperties = {
+    minWidth: 40, minHeight: 40, background: 'none', border: `1px solid ${T.ruleStrong}`, borderRadius: 3, color: T.ink, cursor: 'pointer',
+  }
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <span style={sectionTitle()}>Edit categories</span>
+        <button onClick={onClose} aria-label="Close" style={xBtn}>×</button>
+      </div>
+      {categories.map((c, i) => (
+        <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: 6, alignItems: 'center', padding: '6px 0', borderTop: i ? `1px solid ${T.rule}` : 'none' }}>
+          <input style={{ ...input(), minHeight: 40, padding: '8px 10px' }} defaultValue={c.name} disabled={c.name === 'Other'}
+                 onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== c.name) rename.mutate({ id: c.id, name: v }); else e.target.value = c.name }}
+                 onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+          <button style={{ ...ib, opacity: i === 0 ? 0.3 : 1 }} disabled={busy || i === 0} onClick={() => move.mutate({ id: c.id, dir: -1 })} aria-label={`Move ${c.name} up`}>↑</button>
+          <button style={{ ...ib, opacity: i === categories.length - 1 ? 0.3 : 1 }} disabled={busy || i === categories.length - 1} onClick={() => move.mutate({ id: c.id, dir: 1 })} aria-label={`Move ${c.name} down`}>↓</button>
+          <button style={{ ...ib, opacity: c.name === 'Other' ? 0.3 : 1 }} disabled={busy || c.name === 'Other'} onClick={() => del.mutate(c.id)} aria-label={`Delete ${c.name}`}>×</button>
+        </div>
+      ))}
+      <form onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; add.mutate(name.trim(), { onSuccess: () => setName('') }) }}
+            style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+        <input style={{ ...input(), flex: 1, minHeight: 40 }} placeholder="New category" value={name} onChange={(e) => setName(e.target.value)} />
+        <button type="submit" disabled={!name.trim() || busy} style={{ ...button(name.trim() ? 'primary' : 'ghost'), padding: '10px 14px', minHeight: 40 }}>Add</button>
+      </form>
+      <div style={{ ...body(13), color: T.faint, marginTop: 8 }}>Deleting a category moves its meals to Other.</div>
+      {err && <div style={{ ...body(13), color: T.bad, marginTop: 8 }}>{(err as Error).message}</div>}
+      <button onClick={onClose} style={{ ...button('primary'), width: '100%', marginTop: 12 }}>Done</button>
+    </Sheet>
   )
 }
 

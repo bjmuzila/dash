@@ -422,12 +422,12 @@ async function ensureSchema() {
     await pool.query(`ALTER TABLE hh_meals ADD COLUMN IF NOT EXISTS recipe_id INTEGER REFERENCES hh_recipes(id) ON DELETE SET NULL`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_list_items_recipe_idx ON hh_list_items(recipe_id)`);
 
-    // Quick meals for the dinner planner's library (Lists → Week).
-    //
-    // The library is the Cookbook's recipes PLUS these. A quick meal is just a
-    // name and a category ("Pizza night", "Leftovers") for dinners that will
-    // never be a full recipe. Planning one writes an ordinary hh_meals row with
-    // recipe_id NULL, exactly like typing a title on the old week board did.
+    // ── Meals (Lists → Meals / Week) ─────────────────────────────────────
+    // The dinner planner's own meal list. Deliberately independent of the
+    // Cookbook (hh_recipes): a meal here is a title, an optional link (usually
+    // a TikTok), a category and a "made it" count. Planning one writes an
+    // ordinary hh_meals row carrying library_id, so the week board, Today's
+    // "tonight" and meal ingredients all keep working unchanged.
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hh_meal_library (
         id         SERIAL PRIMARY KEY,
@@ -437,7 +437,25 @@ async function ensureSchema() {
         category   TEXT NOT NULL DEFAULT 'Other',
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`);
+    await pool.query(`ALTER TABLE hh_meal_library ADD COLUMN IF NOT EXISTS url TEXT`);
+    // 'TikTok' | 'Instagram' | 'YouTube' | 'Web' | NULL (name only)
+    await pool.query(`ALTER TABLE hh_meal_library ADD COLUMN IF NOT EXISTS source TEXT`);
+    await pool.query(`ALTER TABLE hh_meal_library ADD COLUMN IF NOT EXISTS made_count INTEGER NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE hh_meal_library ADD COLUMN IF NOT EXISTS last_made DATE`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_meal_library_cat_idx ON hh_meal_library(category, lower(title))`);
+    // Categories are their own rows so their ORDER is yours. Meals reference a
+    // category by name; renaming one rewrites its meals in the same statement
+    // batch (see renameCategory). "Other" always exists and can't be deleted —
+    // deleting any other category moves its meals there.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_meal_categories (
+        id         SERIAL PRIMARY KEY,
+        name       TEXT NOT NULL UNIQUE,
+        sort_order INTEGER NOT NULL DEFAULT 0
+      )`);
+    // SET NULL: deleting a meal from the list must not blank out a day you
+    // already planned it on — the dinner keeps its title.
+    await pool.query(`ALTER TABLE hh_meals ADD COLUMN IF NOT EXISTS library_id INTEGER REFERENCES hh_meal_library(id) ON DELETE SET NULL`);
 
     // Recipe photos, as bytes.
     //

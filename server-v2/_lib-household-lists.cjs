@@ -113,9 +113,14 @@ async function getWeek(userId, tz = 'America/New_York', dateStr) {
 
   const [{ rows: meals }, { rows: items }] = await Promise.all([
     pool.query(
-      `SELECT id, owner_id, visibility, to_char(day,'YYYY-MM-DD') AS day, title, notes, recipe_id, sort_order
-         FROM hh_meals WHERE ${VISIBLE} AND day BETWEEN $2::date AND $3::date
-        ORDER BY day, sort_order, id`, [userId, start, end]),
+      // LEFT JOIN the meal list so the week can show a dinner's link, category
+      // and "made" count without a second request.
+      `SELECT m.id, m.owner_id, m.visibility, to_char(m.day,'YYYY-MM-DD') AS day, m.title, m.notes,
+              m.library_id, m.sort_order,
+              l.url, l.source, l.category, l.made_count, to_char(l.last_made,'YYYY-MM-DD') AS last_made
+         FROM hh_meals m LEFT JOIN hh_meal_library l ON l.id = m.library_id
+        WHERE (m.owner_id = $1 OR m.visibility = 'shared') AND m.day BETWEEN $2::date AND $3::date
+        ORDER BY m.day, m.sort_order, m.id`, [userId, start, end]),
     pool.query(
       `SELECT ${ITEM_COLS} FROM hh_list_items WHERE ${VISIBLE}
         ORDER BY sort_order, id`, [userId]),
@@ -328,80 +333,21 @@ async function deleteMeal(userId, id) {
 }
 
 // ---------------------------------------------------------------------------
-// Dinner planner — one dinner per day, picked from a library
+// Meals + the dinner week (Lists → Meals, Lists → Week)
 // ---------------------------------------------------------------------------
 //
-// The week board is ONE dinner per day. "The dinner" for a day is its first
-// hh_meals row (sort_order, id), the same row summary() calls "tonight".
-// Older days that carry more than one meal keep the extras; the board shows
-// them as a footnote rather than deleting anything.
+// Meals tab: your own list of dinners (hh_meal_library), grouped by category
+// (hh_meal_categories), each with an optional link — usually a TikTok — and a
+// "made it" count. Independent of the Cookbook on purpose.
+//
+// Week tab: ONE dinner per day. "The dinner" for a day is its first hh_meals
+// row (sort_order, id), the same row summary() calls "tonight". Days that
+// already carry more than one meal keep the extras.
 
-/** Cookbook categories that are never a dinner, left out of the library. */
-const NOT_DINNER = ['dessert', 'cocktails', 'sauces', 'bread'];
-
-const titleCase = (s) => String(s || '').trim().replace(/\b\w/g, (c) => c.toUpperCase());
-
-/**
- * The library: every Cookbook recipe that could be a dinner, plus quick meals.
- *
- * Recipes group by MAIN INGREDIENT (Chicken, Beef…) because that is how you
- * choose a dinner; the recipe `category` is mostly "dinner" and would put the
- * whole cookbook in one bucket. A recipe with no main ingredient falls back to
- * its category. Quick meals carry a category you typed. Names are title-cased
- * so a quick meal filed under "chicken" sits with the chicken recipes.
- */
-async function getLibrary(userId) {
-  const pool = libDb.getPool();
-  const [{ rows: recipes }, { rows: quick }] = await Promise.all([
-    // .catch: the cookbook tables are bootstrapped by the same module, but a
-    // library without recipes is still a working library.
-    pool.query(
-      `SELECT id, title, main_ingredient, category FROM hh_recipes
-        WHERE ${VISIBLE} AND NOT (category = ANY($2::text[]))
-        ORDER BY lower(title)`, [userId, NOT_DINNER]).catch(() => ({ rows: [] })),
-    pool.query(
-      `SELECT id, title, category FROM hh_meal_library WHERE ${VISIBLE}
-        ORDER BY lower(title)`, [userId]),
-  ]);
-  const items = [
-    ...recipes.map((r) => ({
-      key: `r${r.id}`, kind: 'recipe', id: r.id, title: r.title,
-      category: titleCase(r.main_ingredient || r.category || 'Other'),
-    })),
-    ...quick.map((q) => ({
-      key: `q${q.id}`, kind: 'quick', id: q.id, title: q.title,
-      category: titleCase(q.category || 'Other'),
-    })),
-  ].sort((a, b) => a.title.localeCompare(b.title));
-  const categories = [...new Set(items.map((i) => i.category))]
-    .sort((a, b) => (a === 'Other') - (b === 'Other') || a.localeCompare(b));
-  return { items, categories };
-}
-
-async function addLibraryMeal(userId, { title, category }) {
-  const t = str(title, 200);
-  if (!t) throw new Error('Name the meal.');
-  const { rows } = await libDb.getPool().query(
-    `INSERT INTO hh_meal_library (owner_id, visibility, title, category)
-     VALUES ($1,$2,$3,$4) RETURNING id, title, category`,
-    [userId, SHARED, t, titleCase(str(category, 60)) || 'Other']);
-  return rows[0];
-}
-
-/** Removes the library entry only — dinners already planned from it stay. */
-async function deleteLibraryMeal(userId, id) {
-  const { rowCount } = await libDb.getPool().query(
-    `DELETE FROM hh_meal_library WHERE id=$2 AND ${VISIBLE}`, [userId, id]);
-  if (!rowCount) throw new Error('Not found.');
-  return true;
-}
-
-async function dinnerOn(client, userId, day) {
-  const { rows } = await client.query(
-    `SELECT id, sort_order FROM hh_meals WHERE day=$2::date AND ${VISIBLE}
-      ORDER BY sort_order, id LIMIT 1`, [userId, day]);
-  return rows[0] || null;
-}
+const DEFAULT_CATEGORIES = ['Chicken', 'Beef', 'Pork', 'Pasta', 'Seafood', 'Other'];
+const OTHER = 'Other';
+const LIB_COLS = `id, title, category, url, source,
+  made_count, to_char(last_made,'YYYY-MM-DD') AS last_made`;
 
 async function inTx(fn) {
   const client = await libDb.getPool().connect();
@@ -418,42 +364,355 @@ async function inTx(fn) {
   }
 }
 
-/**
- * Set a day's dinner. REPLACES the existing dinner rather than renaming it:
- * the old dinner's ingredients belong to the old dish, so they drop back onto
- * the grocery list unattached (ON DELETE SET NULL) instead of silently turning
- * into the new dinner's ingredients.
- */
-async function setDinner(userId, { day, title, recipeId }) {
-  if (!isDate(day)) throw new Error('Pick a day.');
-  const pool = libDb.getPool();
-  let t = str(title, 200);
-  const rid = recipeId ? Number(recipeId) : null;
-  if (rid) {
-    const { rows } = await pool.query(
-      `SELECT id, title FROM hh_recipes WHERE id=$2 AND ${VISIBLE}`, [userId, rid]);
-    if (!rows[0]) throw new Error('Recipe not found.');
-    t = rows[0].title;
+/** First use seeds a starter set; after that "Other" is guaranteed to exist. */
+async function ensureCategories(pool) {
+  const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM hh_meal_categories`);
+  if (rows[0].n === 0) {
+    for (let i = 0; i < DEFAULT_CATEGORIES.length; i++) {
+      await pool.query(
+        `INSERT INTO hh_meal_categories (name, sort_order) VALUES ($1,$2) ON CONFLICT (name) DO NOTHING`,
+        [DEFAULT_CATEGORIES[i], (i + 1) * 10]);
+    }
+  } else {
+    await pool.query(
+      `INSERT INTO hh_meal_categories (name, sort_order)
+       VALUES ($1, (SELECT COALESCE(MAX(sort_order),0)+10 FROM hh_meal_categories))
+       ON CONFLICT (name) DO NOTHING`, [OTHER]);
   }
-  if (!t) throw new Error("What's for dinner?");
+}
 
-  return inTx(async (client) => {
-    const old = await dinnerOn(client, userId, day);
-    if (old) await client.query(`DELETE FROM hh_meals WHERE id=$1`, [old.id]);
-    const { rows } = await client.query(
-      `INSERT INTO hh_meals (owner_id, visibility, day, title, recipe_id, sort_order)
-       VALUES ($1,$2,$3::date,$4,$5,$6)
-       RETURNING id, owner_id, visibility, to_char(day,'YYYY-MM-DD') AS day, title, notes, recipe_id, sort_order`,
-      [userId, SHARED, day, t, rid, old ? old.sort_order : 10]);
-    return { ...rows[0], items: [] };
-  });
+/** Everything the Meals tab draws, in one round trip. */
+async function getMeals(userId) {
+  const pool = libDb.getPool();
+  await ensureCategories(pool);
+  const [{ rows: categories }, { rows: meals }] = await Promise.all([
+    pool.query(`SELECT id, name, sort_order FROM hh_meal_categories ORDER BY sort_order, id`),
+    pool.query(`SELECT ${LIB_COLS} FROM hh_meal_library WHERE ${VISIBLE} ORDER BY lower(title)`, [userId]),
+  ]);
+  // A meal whose category row went missing (renamed elsewhere, hand-edited)
+  // still has to show up somewhere.
+  const names = new Set(categories.map((c) => c.name));
+  for (const m of meals) if (!names.has(m.category)) m.category = OTHER;
+  return { categories, meals };
+}
+
+// ── Link preview ─────────────────────────────────────────────────────────────
+
+const sourceOf = (url) => {
+  const h = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
+  if (/tiktok/i.test(h)) return 'TikTok';
+  if (/instagram/i.test(h)) return 'Instagram';
+  if (/youtu/i.test(h)) return 'YouTube';
+  return 'Web';
+};
+
+function safeUrl(raw) {
+  let u;
+  try { u = new URL(String(raw || '').trim()); } catch { throw new Error("That doesn't look like a link."); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('Only http and https links.');
+  // A pasted link must not be able to probe the VPS's own network.
+  if (/^(localhost$|127\.|10\.|0\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1|\[?f[cd])/i.test(u.hostname)) {
+    throw new Error('That address is not reachable from here.');
+  }
+  return u;
+}
+
+async function fetchText(url, accept) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10_000);
+  try {
+    const res = await fetch(url, {
+      signal: ctl.signal, redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
+        Accept: accept, 'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    return { text: text.slice(0, 1_500_000), finalUrl: res.url || url };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const decode = (s) => String(s || '')
+  .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
+
+function meta(html, key) {
+  const k = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const res = [
+    new RegExp(`<meta[^>]+(?:property|name)=["']${k}["'][^>]+content=["']([^"']*)["']`, 'i'),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${k}["']`, 'i'),
+  ];
+  for (const re of res) { const m = html.match(re); if (m && m[1].trim()) return decode(m[1].trim()); }
+  return null;
 }
 
 /**
- * Drag a dinner onto another day. If that day already has a dinner the two
- * swap. Ingredients travel with their meal because they hang off meal_id, and
- * sort_order swaps too so each stays "the dinner" on its new day.
+ * A caption is not a title. Keep the first line / sentence, drop hashtags,
+ * @mentions and emoji, and cap it — you can edit it before saving anyway.
  */
+function tidyTitle(raw) {
+  let t = String(raw || '').split(/\n/)[0];
+  t = t.replace(/#[\wÀ-￿]+/g, ' ').replace(/@[\w.]+/g, ' ')
+       .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, ' ')
+       .replace(/\s+/g, ' ').trim();
+  const sentence = t.match(/^(.{12,}?[.!?])(\s|$)/);
+  if (sentence) t = sentence[1].replace(/[.!]+$/, '');
+  if (t.length > 80) t = t.slice(0, 80).replace(/\s+\S*$/, '') + '…';
+  return t;
+}
+
+/** Best category for a title: the first of YOUR categories named in it. */
+function guessCategory(text, categories) {
+  const hay = ` ${String(text || '').toLowerCase()} `;
+  const hit = categories.find((c) => c !== OTHER &&
+    new RegExp(`\\b${c.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?\\b`).test(hay));
+  return hit || OTHER;
+}
+
+/**
+ * Title + source for a pasted link. TikTok answers its public oEmbed endpoint
+ * with the caption, which is far more reliable than scraping its client-
+ * rendered page; everything else falls back to OpenGraph / <title>. Never
+ * throws for an unreadable page — you get the link with an empty title and
+ * type one yourself.
+ */
+async function previewLink(userId, rawUrl) {
+  const u = safeUrl(rawUrl);
+  let url = u.toString();
+  let title = '';
+
+  const oembed = async (link) => {
+    const o = await fetchText(`https://www.tiktok.com/oembed?url=${encodeURIComponent(link)}`, 'application/json');
+    try { return o ? (JSON.parse(o.text).title || '') : ''; } catch { return ''; }
+  };
+  if (/tiktok/i.test(u.hostname)) {
+    title = await oembed(url);
+    // Short share links (vm.tiktok.com/…) aren't accepted by oEmbed — follow
+    // the redirect to the canonical /@user/video/<id> URL and ask again.
+    if (!title) {
+      const page = await fetchText(url, 'text/html');
+      if (page && page.finalUrl && page.finalUrl !== url) {
+        url = page.finalUrl.split('?')[0];
+        title = await oembed(url);
+      }
+    }
+  }
+  if (!title) {
+    const page = await fetchText(url, 'text/html,application/xhtml+xml');
+    if (page) {
+      url = page.finalUrl || url;
+      const h = page.text;
+      title = meta(h, 'og:title') || meta(h, 'twitter:title') ||
+        decode((h.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '') || meta(h, 'og:description') || '';
+    }
+  }
+  // A site's own name is not a meal name ("TikTok - Make Your Day").
+  if (/^(tiktok|instagram|youtube)\b/i.test(title.trim())) title = '';
+  const { categories } = await getMeals(userId);
+  const clean = tidyTitle(title);
+  return {
+    url, source: sourceOf(url), title: clean,
+    category: guessCategory(`${clean} ${title}`, categories.map((c) => c.name)),
+  };
+}
+
+// ── Meals ────────────────────────────────────────────────────────────────────
+
+async function addLibraryMeal(userId, { title, category, url }) {
+  const t = str(title, 200);
+  if (!t) throw new Error('Name the meal.');
+  const link = url ? safeUrl(url).toString() : null;
+  const { rows } = await libDb.getPool().query(
+    `INSERT INTO hh_meal_library (owner_id, visibility, title, category, url, source)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${LIB_COLS}`,
+    [userId, SHARED, t, str(category, 60) || OTHER, link, link ? sourceOf(link) : null]);
+  return rows[0];
+}
+
+async function updateLibraryMeal(userId, id, patch) {
+  const sets = [];
+  const vals = [userId, id];
+  const put = (col, v) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
+  if (patch.title !== undefined) {
+    const t = str(patch.title, 200);
+    if (!t) throw new Error('Give it a name.');
+    put('title', t);
+  }
+  if (patch.category !== undefined) put('category', str(patch.category, 60) || OTHER);
+  if (patch.url !== undefined) {
+    const link = patch.url ? safeUrl(patch.url).toString() : null;
+    put('url', link);
+    put('source', link ? sourceOf(link) : null);
+  }
+  if (!sets.length) throw new Error('Nothing to update.');
+  const { rows } = await libDb.getPool().query(
+    `UPDATE hh_meal_library SET ${sets.join(', ')} WHERE id=$2 AND ${VISIBLE} RETURNING ${LIB_COLS}`, vals);
+  if (!rows[0]) throw new Error('Not found.');
+  // A planned dinner shows the meal's name — keep them in step on rename.
+  if (patch.title !== undefined) {
+    await libDb.getPool().query(`UPDATE hh_meals SET title=$2 WHERE library_id=$1`, [id, rows[0].title]);
+  }
+  return rows[0];
+}
+
+/** Removes the meal from the list only — days it was planned on keep it. */
+async function deleteLibraryMeal(userId, id) {
+  const { rowCount } = await libDb.getPool().query(
+    `DELETE FROM hh_meal_library WHERE id=$2 AND ${VISIBLE}`, [userId, id]);
+  if (!rowCount) throw new Error('Not found.');
+  return true;
+}
+
+/** "Made it" +1 (today), or undo the last one. */
+async function markMade(userId, id, { undo = false, tz = 'America/New_York' } = {}) {
+  const sql = undo
+    ? `UPDATE hh_meal_library SET made_count = GREATEST(made_count-1, 0),
+         last_made = CASE WHEN made_count <= 1 THEN NULL ELSE last_made END
+       WHERE id=$2 AND ${VISIBLE} RETURNING ${LIB_COLS}`
+    : `UPDATE hh_meal_library SET made_count = made_count+1, last_made = $3::date
+       WHERE id=$2 AND ${VISIBLE} RETURNING ${LIB_COLS}`;
+  const { rows } = await libDb.getPool().query(sql, undo ? [userId, id] : [userId, id, todayIn(tz)]);
+  if (!rows[0]) throw new Error('Not found.');
+  return rows[0];
+}
+
+// ── Categories ───────────────────────────────────────────────────────────────
+
+async function addCategory(name) {
+  const n = str(name, 60);
+  if (!n) throw new Error('Name the category.');
+  const pool = libDb.getPool();
+  // New categories go just above "Other", which stays last until you move it.
+  const { rows: [o] } = await pool.query(`SELECT sort_order FROM hh_meal_categories WHERE name=$1`, [OTHER]);
+  const at = o ? o.sort_order : 1000;
+  await pool.query(`UPDATE hh_meal_categories SET sort_order = sort_order + 10 WHERE sort_order >= $1`, [at]);
+  const { rows } = await pool.query(
+    `INSERT INTO hh_meal_categories (name, sort_order) VALUES ($1,$2)
+     ON CONFLICT (name) DO NOTHING RETURNING id, name, sort_order`, [n, at]);
+  if (!rows[0]) throw new Error('That category already exists.');
+  return rows[0];
+}
+
+async function renameCategory(id, name) {
+  const n = str(name, 60);
+  if (!n) throw new Error('Name the category.');
+  return inTx(async (c) => {
+    const { rows: [cur] } = await c.query(`SELECT name FROM hh_meal_categories WHERE id=$1`, [id]);
+    if (!cur) throw new Error('Not found.');
+    if (cur.name === OTHER) throw new Error('"Other" keeps its name.');
+    const { rows: [dupe] } = await c.query(`SELECT 1 FROM hh_meal_categories WHERE name=$1 AND id<>$2`, [n, id]);
+    if (dupe) throw new Error('That category already exists.');
+    await c.query(`UPDATE hh_meal_categories SET name=$2 WHERE id=$1`, [id, n]);
+    await c.query(`UPDATE hh_meal_library SET category=$2 WHERE category=$1`, [cur.name, n]);
+    return true;
+  });
+}
+
+/** Swap with the neighbour above (dir -1) or below (+1). */
+async function moveCategory(id, dir) {
+  return inTx(async (c) => {
+    const { rows } = await c.query(`SELECT id, sort_order FROM hh_meal_categories ORDER BY sort_order, id`);
+    const i = rows.findIndex((r) => r.id === id);
+    const j = i + (dir < 0 ? -1 : 1);
+    if (i < 0 || j < 0 || j >= rows.length) return true;
+    // Renumber the whole list so ties from old data can't make a swap a no-op.
+    const order = rows.map((r) => r.id);
+    [order[i], order[j]] = [order[j], order[i]];
+    for (let k = 0; k < order.length; k++) {
+      await c.query(`UPDATE hh_meal_categories SET sort_order=$2 WHERE id=$1`, [order[k], (k + 1) * 10]);
+    }
+    return true;
+  });
+}
+
+/** Its meals move to "Other" — nothing is lost. */
+async function deleteCategory(id) {
+  return inTx(async (c) => {
+    const { rows: [cur] } = await c.query(`SELECT name FROM hh_meal_categories WHERE id=$1`, [id]);
+    if (!cur) throw new Error('Not found.');
+    if (cur.name === OTHER) throw new Error('"Other" catches everything and can\'t be deleted.');
+    await c.query(`UPDATE hh_meal_library SET category=$2 WHERE category=$1`, [cur.name, OTHER]);
+    await c.query(`DELETE FROM hh_meal_categories WHERE id=$1`, [id]);
+    return true;
+  });
+}
+
+// ── Planning ─────────────────────────────────────────────────────────────────
+
+async function dinnerOn(client, userId, day) {
+  const { rows } = await client.query(
+    `SELECT id, sort_order FROM hh_meals WHERE day=$2::date AND ${VISIBLE}
+      ORDER BY sort_order, id LIMIT 1`, [userId, day]);
+  return rows[0] || null;
+}
+
+/**
+ * Set a day's dinner. REPLACES the existing dinner rather than renaming it:
+ * the old dinner's ingredients belong to the old dish, so they drop back onto
+ * the grocery list unattached (ON DELETE SET NULL).
+ */
+async function setDinnerIn(client, userId, { day, title, libraryId }) {
+  const old = await dinnerOn(client, userId, day);
+  if (old) await client.query(`DELETE FROM hh_meals WHERE id=$1`, [old.id]);
+  const { rows } = await client.query(
+    `INSERT INTO hh_meals (owner_id, visibility, day, title, library_id, sort_order)
+     VALUES ($1,$2,$3::date,$4,$5,$6)
+     RETURNING id, owner_id, visibility, to_char(day,'YYYY-MM-DD') AS day, title, notes, library_id, sort_order`,
+    [userId, SHARED, day, title, libraryId || null, old ? old.sort_order : 10]);
+  return { ...rows[0], items: [] };
+}
+
+async function setDinner(userId, { day, title, libraryId }) {
+  if (!isDate(day)) throw new Error('Pick a day.');
+  let t = str(title, 200);
+  const lid = libraryId ? Number(libraryId) : null;
+  if (lid) {
+    const { rows } = await libDb.getPool().query(
+      `SELECT title FROM hh_meal_library WHERE id=$2 AND ${VISIBLE}`, [userId, lid]);
+    if (!rows[0]) throw new Error('Meal not found.');
+    t = rows[0].title;
+  }
+  if (!t) throw new Error("What's for dinner?");
+  return inTx((c) => setDinnerIn(c, userId, { day, title: t, libraryId: lid }));
+}
+
+/**
+ * The Meals tab's day picker: put this meal on `day` for the week containing
+ * `week`, taking it off any other day of THAT week. `day` null = not planned
+ * this week. Other weeks are left alone — Tuesday's tacos last week are
+ * history, not a conflict.
+ */
+async function planLibraryMeal(userId, { libraryId, day, week }) {
+  const lid = Number(libraryId);
+  if (!lid) throw new Error('Meal not found.');
+  if (day && !isDate(day)) throw new Error('Pick a day.');
+  const anchor = day || (isDate(week) ? week : todayIn());
+  const start = weekStart(anchor);
+  const end = addDays(start, 6);
+  const { rows } = await libDb.getPool().query(
+    `SELECT title FROM hh_meal_library WHERE id=$2 AND ${VISIBLE}`, [userId, lid]);
+  if (!rows[0]) throw new Error('Meal not found.');
+  return inTx(async (c) => {
+    await c.query(
+      `DELETE FROM hh_meals WHERE library_id=$1 AND day BETWEEN $2::date AND $3::date
+         AND ($4::date IS NULL OR day <> $4::date)`, [lid, start, end, day || null]);
+    if (!day) return null;
+    const cur = await dinnerOn(c, userId, day);
+    if (cur) {
+      const { rows: [same] } = await c.query(`SELECT library_id FROM hh_meals WHERE id=$1`, [cur.id]);
+      if (same && same.library_id === lid) return true; // already there
+    }
+    return setDinnerIn(c, userId, { day, title: rows[0].title, libraryId: lid });
+  });
+}
+
+/** Move a dinner to another day, swapping if that day already has one. */
 async function moveDinner(userId, { from, to }) {
   if (!isDate(from) || !isDate(to)) throw new Error('Pick a day.');
   if (from === to) return true;
@@ -461,8 +720,6 @@ async function moveDinner(userId, { from, to }) {
     const a = await dinnerOn(client, userId, from);
     const b = await dinnerOn(client, userId, to);
     if (!a) throw new Error('Nothing to move.');
-    // Lowest sort on the target day, so a moved dinner is never demoted to a
-    // footnote under an older extra meal that already sits there.
     await client.query(`UPDATE hh_meals SET day=$2::date, sort_order=$3 WHERE id=$1`,
       [a.id, to, b ? b.sort_order : 0]);
     if (b) await client.query(`UPDATE hh_meals SET day=$2::date, sort_order=$3 WHERE id=$1`,
@@ -489,5 +746,7 @@ module.exports = {
   getWeek, summary,
   addItem, toggleItem, updateItem, deleteItem, clearChecked,
   addMeal, updateMeal, deleteMeal,
-  getLibrary, addLibraryMeal, deleteLibraryMeal, setDinner, moveDinner,
+  getMeals, previewLink, addLibraryMeal, updateLibraryMeal, deleteLibraryMeal, markMade,
+  addCategory, renameCategory, moveCategory, deleteCategory,
+  setDinner, planLibraryMeal, moveDinner,
 };

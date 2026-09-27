@@ -904,11 +904,10 @@ function registerHouseholdRoutes({ register, send, readJson }) {
         try {
           if (req.method === 'GET') {
             const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-            // ?library=1 — the dinner planner's meal library (cookbook recipes
-            // + quick meals). Separate from the week so ticking a grocery item
-            // doesn't re-send every recipe title.
-            if (sp.get('library')) {
-              send(res, 200, await hlists.getLibrary(u.id), nostore);
+            // ?meals=1 — the Meals tab: your meal list + categories. Separate
+            // from the week so ticking a grocery item doesn't resend the list.
+            if (sp.get('meals')) {
+              send(res, 200, await hlists.getMeals(u.id), nostore);
               return;
             }
             const d = sp.get('week');
@@ -949,22 +948,42 @@ function registerHouseholdRoutes({ register, send, readJson }) {
               return;
             case 'deleteMeal':
               await hlists.deleteMeal(u.id, id); send(res, 200, { ok: true }, nostore); return;
-            // Dinner planner (Lists → Week): one dinner per day.
+            // Meals tab + dinner week — see the Meals section of _lib-household-lists.cjs.
+            case 'previewLink':
+              send(res, 200, { ok: true, preview: await hlists.previewLink(u.id, body?.url) }, nostore); return;
+            case 'addLibraryMeal':
+              send(res, 200, { ok: true, meal: await hlists.addLibraryMeal(u.id, {
+                title: body?.title, category: body?.category, url: body?.url,
+              }) }, nostore);
+              return;
+            case 'updateLibraryMeal':
+              send(res, 200, { ok: true, meal: await hlists.updateLibraryMeal(u.id, id, {
+                title: body?.title, category: body?.category, url: body?.url,
+              }) }, nostore);
+              return;
+            case 'deleteLibraryMeal':
+              await hlists.deleteLibraryMeal(u.id, id); send(res, 200, { ok: true }, nostore); return;
+            case 'markMade':
+              send(res, 200, { ok: true, meal: await hlists.markMade(u.id, id, { undo: !!body?.undo, tz: u.tz }) }, nostore); return;
+            case 'addCategory':
+              send(res, 200, { ok: true, category: await hlists.addCategory(body?.name) }, nostore); return;
+            case 'renameCategory':
+              await hlists.renameCategory(id, body?.name); send(res, 200, { ok: true }, nostore); return;
+            case 'moveCategory':
+              await hlists.moveCategory(id, Number(body?.dir) || 0); send(res, 200, { ok: true }, nostore); return;
+            case 'deleteCategory':
+              await hlists.deleteCategory(id); send(res, 200, { ok: true }, nostore); return;
+            case 'planMeal':
+              await hlists.planLibraryMeal(u.id, { libraryId: id, day: body?.day || null, week: body?.week });
+              send(res, 200, { ok: true }, nostore); return;
             case 'setDinner':
               send(res, 200, { ok: true, meal: await hlists.setDinner(u.id, {
-                day: body?.day, title: body?.title, recipeId: body?.recipeId,
+                day: body?.day, title: body?.title, libraryId: body?.libraryId,
               }) }, nostore);
               return;
             case 'moveDinner':
               await hlists.moveDinner(u.id, { from: body?.from, to: body?.to });
               send(res, 200, { ok: true }, nostore); return;
-            case 'addLibraryMeal':
-              send(res, 200, { ok: true, meal: await hlists.addLibraryMeal(u.id, {
-                title: body?.title, category: body?.category,
-              }) }, nostore);
-              return;
-            case 'deleteLibraryMeal':
-              await hlists.deleteLibraryMeal(u.id, id); send(res, 200, { ok: true }, nostore); return;
             default:
               send(res, 400, { error: `Unknown action: ${action}` }, nostore);
           }

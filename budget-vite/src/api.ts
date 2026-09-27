@@ -557,16 +557,33 @@ export type Meal = {
   day: string
   title: string
   notes: string | null
-  /** Set when the dinner came from a Cookbook recipe. */
-  recipe_id?: number | null
+  /** Set when the dinner came from the Meals list; the fields below are
+   *  joined from it (all null for a free-typed dinner). */
+  library_id?: number | null
+  url?: string | null
+  source?: string | null
+  category?: string | null
+  made_count?: number | null
+  last_made?: string | null
   sort_order: number
   items: ListItem[]
 }
 
-/** One entry in the dinner planner's library. `recipe` = a Cookbook recipe
- *  (grouped by main ingredient); `quick` = a name-only meal from hh_meal_library. */
-export type LibraryMeal = { key: string; kind: 'recipe' | 'quick'; id: number; title: string; category: string }
-export type MealLibrary = { items: LibraryMeal[]; categories: string[] }
+/** A meal on the Meals tab (hh_meal_library). */
+export type LibraryMeal = {
+  id: number
+  title: string
+  category: string
+  url: string | null
+  /** 'TikTok' | 'Instagram' | 'YouTube' | 'Web', or null for a name-only meal. */
+  source: string | null
+  made_count: number
+  /** YYYY-MM-DD */
+  last_made: string | null
+}
+export type MealCategory = { id: number; name: string; sort_order: number }
+export type MealsPayload = { categories: MealCategory[]; meals: LibraryMeal[] }
+export type LinkPreview = { url: string; source: string; title: string; category: string }
 
 /** Just enough to name a meal an item came from, and to jump to it. Covers
  *  meals OUTSIDE the week on screen, which `days` by definition does not. */
@@ -743,15 +760,26 @@ export const lists = {
   updateMeal: (id: number, patch: { title?: string; notes?: string; day?: string }) =>
     api.post<{ meal: Meal }>('/api/hh/lists', { action: 'updateMeal', id, ...patch }),
   deleteMeal: (id: number) => api.post<{ ok: true }>('/api/hh/lists', { action: 'deleteMeal', id }),
-  // Dinner planner — one dinner per day, picked from the library.
-  library: () => api.get<MealLibrary>('/api/hh/lists?library=1'),
-  setDinner: (d: { day: string; title?: string; recipeId?: number }) =>
-    api.post<{ meal: Meal }>('/api/hh/lists', { action: 'setDinner', ...d }),
-  moveDinner: (m: { from: string; to: string }) =>
-    api.post<{ ok: true }>('/api/hh/lists', { action: 'moveDinner', ...m }),
-  addLibraryMeal: (m: { title: string; category: string }) =>
-    api.post<{ meal: { id: number; title: string; category: string } }>('/api/hh/lists', { action: 'addLibraryMeal', ...m }),
+  // Meals tab + dinner week.
+  meals: () => api.get<MealsPayload>('/api/hh/lists?meals=1'),
+  previewLink: (url: string) =>
+    api.post<{ preview: LinkPreview }>('/api/hh/lists', { action: 'previewLink', url }),
+  addLibraryMeal: (m: { title: string; category: string; url?: string | null }) =>
+    api.post<{ meal: LibraryMeal }>('/api/hh/lists', { action: 'addLibraryMeal', ...m }),
+  updateLibraryMeal: ({ id, ...patch }: { id: number; title?: string; category?: string; url?: string | null }) =>
+    api.post<{ meal: LibraryMeal }>('/api/hh/lists', { action: 'updateLibraryMeal', id, ...patch }),
   deleteLibraryMeal: (id: number) => api.post<{ ok: true }>('/api/hh/lists', { action: 'deleteLibraryMeal', id }),
+  markMade: ({ id, undo }: { id: number; undo?: boolean }) =>
+    api.post<{ meal: LibraryMeal }>('/api/hh/lists', { action: 'markMade', id, undo }),
+  addCategory: (name: string) => api.post<{ ok: true }>('/api/hh/lists', { action: 'addCategory', name }),
+  renameCategory: ({ id, name }: { id: number; name: string }) =>
+    api.post<{ ok: true }>('/api/hh/lists', { action: 'renameCategory', id, name }),
+  moveCategory: ({ id, dir }: { id: number; dir: -1 | 1 }) =>
+    api.post<{ ok: true }>('/api/hh/lists', { action: 'moveCategory', id, dir }),
+  deleteCategory: (id: number) => api.post<{ ok: true }>('/api/hh/lists', { action: 'deleteCategory', id }),
+  /** Put a meal on `day` for that week (off any other day of it); day null = unplan for `week`. */
+  planMeal: ({ id, day, week }: { id: number; day: string | null; week?: string }) =>
+    api.post<{ ok: true }>('/api/hh/lists', { action: 'planMeal', id, day, week }),
 }
 
 export const budget = {

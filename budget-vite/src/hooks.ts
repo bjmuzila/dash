@@ -284,22 +284,32 @@ export const useClearChecked = () => useListMutation(listsApi.clearChecked)
 export const useAddMeal = () => useListMutation(listsApi.addMeal)
 export const useDeleteMeal = () => useListMutation(listsApi.deleteMeal)
 
-// Dinner planner. Library writes invalidate the library; dinner writes go
-// through useListMutation so the week and Today's "tonight" both refresh.
-export function useMealLibrary() {
-  return useQuery({ queryKey: ['meal-library'], queryFn: listsApi.library, staleTime: 60_000 })
+// Meals tab. Every meal write refreshes BOTH the meal list and the week —
+// a rename, a "made it" or a delete shows on a planned dinner too.
+export function useMeals() {
+  return useQuery({ queryKey: ['meals'], queryFn: listsApi.meals })
 }
-export const useSetDinner = () => useListMutation(listsApi.setDinner)
-export const useMoveDinner = () => useListMutation(listsApi.moveDinner)
-function useLibraryMutation<T>(fn: (a: T) => Promise<unknown>) {
+function useMealsMutation<T, R>(fn: (a: T) => Promise<R>) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: fn,
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['meal-library'] }) },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['meals'] })
+      void qc.invalidateQueries({ queryKey: ['lists'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
   })
 }
-export const useAddLibraryMeal = () => useLibraryMutation(listsApi.addLibraryMeal)
-export const useDeleteLibraryMeal = () => useLibraryMutation(listsApi.deleteLibraryMeal)
+export const usePreviewLink = () => useMutation({ mutationFn: listsApi.previewLink })
+export const useAddLibraryMeal = () => useMealsMutation(listsApi.addLibraryMeal)
+export const useUpdateLibraryMeal = () => useMealsMutation(listsApi.updateLibraryMeal)
+export const useDeleteLibraryMeal = () => useMealsMutation(listsApi.deleteLibraryMeal)
+export const useMarkMade = () => useMealsMutation(listsApi.markMade)
+export const useAddCategory = () => useMealsMutation(listsApi.addCategory)
+export const useRenameCategory = () => useMealsMutation(listsApi.renameCategory)
+export const useMoveCategory = () => useMealsMutation(listsApi.moveCategory)
+export const useDeleteCategory = () => useMealsMutation(listsApi.deleteCategory)
+export const usePlanMeal = () => useMealsMutation(listsApi.planMeal)
 
 // ── Projects ─────────────────────────────────────────────────────────────────
 
