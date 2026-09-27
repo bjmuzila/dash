@@ -284,6 +284,23 @@ export const useClearChecked = () => useListMutation(listsApi.clearChecked)
 export const useAddMeal = () => useListMutation(listsApi.addMeal)
 export const useDeleteMeal = () => useListMutation(listsApi.deleteMeal)
 
+// Dinner planner. Library writes invalidate the library; dinner writes go
+// through useListMutation so the week and Today's "tonight" both refresh.
+export function useMealLibrary() {
+  return useQuery({ queryKey: ['meal-library'], queryFn: listsApi.library, staleTime: 60_000 })
+}
+export const useSetDinner = () => useListMutation(listsApi.setDinner)
+export const useMoveDinner = () => useListMutation(listsApi.moveDinner)
+function useLibraryMutation<T>(fn: (a: T) => Promise<unknown>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['meal-library'] }) },
+  })
+}
+export const useAddLibraryMeal = () => useLibraryMutation(listsApi.addLibraryMeal)
+export const useDeleteLibraryMeal = () => useLibraryMutation(listsApi.deleteLibraryMeal)
+
 // ── Projects ─────────────────────────────────────────────────────────────────
 
 export function useProjects(archived = false) {

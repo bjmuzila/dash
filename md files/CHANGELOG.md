@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-27 - budget.cbedge.net: Lists → Week is now a one-dinner-a-day planner with a meal library
+
+- `budget-vite/src/pages/Lists.tsx`: the Week view (layout A from the mockups) shows Monday to Sunday with one dinner per day, and a collapsible Meal library sits beside it (under it on a phone). You can fill a day by dragging a meal onto it, by typing in the day's search box (arrows + Enter, and Enter on anything else uses it as a one-off), or by tapping a meal and then a day. Dragging a dinner onto another day moves it, and swaps if that day already has one. Tapping a dinner opens its ingredients (the same grocery-list rows as before). Category open state is remembered per browser.
+- The library is Cookbook recipes (grouped by main ingredient; desserts, cocktails, sauces and bread left out) plus quick meals you add with "+ New meal" (name + category).
+- `server-v2/_lib-household.cjs`: new `hh_meal_library` table (CREATE IF NOT EXISTS).
+- `server-v2/_lib-household-lists.cjs`: `getLibrary`, `addLibraryMeal`, `deleteLibraryMeal`, `setDinner` (replaces the day's first meal, and its ingredients stay on the grocery list unattached), `moveDinner` (move/swap, one transaction). `getWeek` now also returns `recipe_id`.
+- `server-v2/household-routes.cjs`: `GET /api/hh/lists?library=1`, plus POST actions `setDinner`, `moveDinner`, `addLibraryMeal`, `deleteLibraryMeal`.
+- `budget-vite/src/api.ts` / `hooks.ts`: matching client calls and hooks. Days that already had extra meals keep them, shown as "Also planned".
+
 ## 2026-09-27 - Brand.tsx theme-check fix (VoltickWordmark)
 
 - `shell/Brand.tsx`: VOLTICK lettering now uses `var(--text-base)` and `var(--color-vt-wordmark)` instead of `15` / `#5289ff`.

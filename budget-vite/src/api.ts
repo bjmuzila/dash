@@ -557,9 +557,16 @@ export type Meal = {
   day: string
   title: string
   notes: string | null
+  /** Set when the dinner came from a Cookbook recipe. */
+  recipe_id?: number | null
   sort_order: number
   items: ListItem[]
 }
+
+/** One entry in the dinner planner's library. `recipe` = a Cookbook recipe
+ *  (grouped by main ingredient); `quick` = a name-only meal from hh_meal_library. */
+export type LibraryMeal = { key: string; kind: 'recipe' | 'quick'; id: number; title: string; category: string }
+export type MealLibrary = { items: LibraryMeal[]; categories: string[] }
 
 /** Just enough to name a meal an item came from, and to jump to it. Covers
  *  meals OUTSIDE the week on screen, which `days` by definition does not. */
@@ -736,6 +743,15 @@ export const lists = {
   updateMeal: (id: number, patch: { title?: string; notes?: string; day?: string }) =>
     api.post<{ meal: Meal }>('/api/hh/lists', { action: 'updateMeal', id, ...patch }),
   deleteMeal: (id: number) => api.post<{ ok: true }>('/api/hh/lists', { action: 'deleteMeal', id }),
+  // Dinner planner — one dinner per day, picked from the library.
+  library: () => api.get<MealLibrary>('/api/hh/lists?library=1'),
+  setDinner: (d: { day: string; title?: string; recipeId?: number }) =>
+    api.post<{ meal: Meal }>('/api/hh/lists', { action: 'setDinner', ...d }),
+  moveDinner: (m: { from: string; to: string }) =>
+    api.post<{ ok: true }>('/api/hh/lists', { action: 'moveDinner', ...m }),
+  addLibraryMeal: (m: { title: string; category: string }) =>
+    api.post<{ meal: { id: number; title: string; category: string } }>('/api/hh/lists', { action: 'addLibraryMeal', ...m }),
+  deleteLibraryMeal: (id: number) => api.post<{ ok: true }>('/api/hh/lists', { action: 'deleteLibraryMeal', id }),
 }
 
 export const budget = {

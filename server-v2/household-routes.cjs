@@ -903,7 +903,15 @@ function registerHouseholdRoutes({ register, send, readJson }) {
         const u = access.hhUser;
         try {
           if (req.method === 'GET') {
-            const d = new URL(req.url || '/', 'http://localhost').searchParams.get('week');
+            const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+            // ?library=1 — the dinner planner's meal library (cookbook recipes
+            // + quick meals). Separate from the week so ticking a grocery item
+            // doesn't re-send every recipe title.
+            if (sp.get('library')) {
+              send(res, 200, await hlists.getLibrary(u.id), nostore);
+              return;
+            }
+            const d = sp.get('week');
             send(res, 200, await hlists.getWeek(u.id, u.tz, d), nostore);
             return;
           }
@@ -941,6 +949,22 @@ function registerHouseholdRoutes({ register, send, readJson }) {
               return;
             case 'deleteMeal':
               await hlists.deleteMeal(u.id, id); send(res, 200, { ok: true }, nostore); return;
+            // Dinner planner (Lists → Week): one dinner per day.
+            case 'setDinner':
+              send(res, 200, { ok: true, meal: await hlists.setDinner(u.id, {
+                day: body?.day, title: body?.title, recipeId: body?.recipeId,
+              }) }, nostore);
+              return;
+            case 'moveDinner':
+              await hlists.moveDinner(u.id, { from: body?.from, to: body?.to });
+              send(res, 200, { ok: true }, nostore); return;
+            case 'addLibraryMeal':
+              send(res, 200, { ok: true, meal: await hlists.addLibraryMeal(u.id, {
+                title: body?.title, category: body?.category,
+              }) }, nostore);
+              return;
+            case 'deleteLibraryMeal':
+              await hlists.deleteLibraryMeal(u.id, id); send(res, 200, { ok: true }, nostore); return;
             default:
               send(res, 400, { error: `Unknown action: ${action}` }, nostore);
           }

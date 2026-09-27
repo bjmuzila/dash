@@ -113,7 +113,7 @@ async function getWeek(userId, tz = 'America/New_York', dateStr) {
 
   const [{ rows: meals }, { rows: items }] = await Promise.all([
     pool.query(
-      `SELECT id, owner_id, visibility, to_char(day,'YYYY-MM-DD') AS day, title, notes, sort_order
+      `SELECT id, owner_id, visibility, to_char(day,'YYYY-MM-DD') AS day, title, notes, recipe_id, sort_order
          FROM hh_meals WHERE ${VISIBLE} AND day BETWEEN $2::date AND $3::date
         ORDER BY day, sort_order, id`, [userId, start, end]),
     pool.query(
@@ -327,6 +327,150 @@ async function deleteMeal(userId, id) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Dinner planner — one dinner per day, picked from a library
+// ---------------------------------------------------------------------------
+//
+// The week board is ONE dinner per day. "The dinner" for a day is its first
+// hh_meals row (sort_order, id), the same row summary() calls "tonight".
+// Older days that carry more than one meal keep the extras; the board shows
+// them as a footnote rather than deleting anything.
+
+/** Cookbook categories that are never a dinner, left out of the library. */
+const NOT_DINNER = ['dessert', 'cocktails', 'sauces', 'bread'];
+
+const titleCase = (s) => String(s || '').trim().replace(/\b\w/g, (c) => c.toUpperCase());
+
+/**
+ * The library: every Cookbook recipe that could be a dinner, plus quick meals.
+ *
+ * Recipes group by MAIN INGREDIENT (Chicken, Beef…) because that is how you
+ * choose a dinner; the recipe `category` is mostly "dinner" and would put the
+ * whole cookbook in one bucket. A recipe with no main ingredient falls back to
+ * its category. Quick meals carry a category you typed. Names are title-cased
+ * so a quick meal filed under "chicken" sits with the chicken recipes.
+ */
+async function getLibrary(userId) {
+  const pool = libDb.getPool();
+  const [{ rows: recipes }, { rows: quick }] = await Promise.all([
+    // .catch: the cookbook tables are bootstrapped by the same module, but a
+    // library without recipes is still a working library.
+    pool.query(
+      `SELECT id, title, main_ingredient, category FROM hh_recipes
+        WHERE ${VISIBLE} AND NOT (category = ANY($2::text[]))
+        ORDER BY lower(title)`, [userId, NOT_DINNER]).catch(() => ({ rows: [] })),
+    pool.query(
+      `SELECT id, title, category FROM hh_meal_library WHERE ${VISIBLE}
+        ORDER BY lower(title)`, [userId]),
+  ]);
+  const items = [
+    ...recipes.map((r) => ({
+      key: `r${r.id}`, kind: 'recipe', id: r.id, title: r.title,
+      category: titleCase(r.main_ingredient || r.category || 'Other'),
+    })),
+    ...quick.map((q) => ({
+      key: `q${q.id}`, kind: 'quick', id: q.id, title: q.title,
+      category: titleCase(q.category || 'Other'),
+    })),
+  ].sort((a, b) => a.title.localeCompare(b.title));
+  const categories = [...new Set(items.map((i) => i.category))]
+    .sort((a, b) => (a === 'Other') - (b === 'Other') || a.localeCompare(b));
+  return { items, categories };
+}
+
+async function addLibraryMeal(userId, { title, category }) {
+  const t = str(title, 200);
+  if (!t) throw new Error('Name the meal.');
+  const { rows } = await libDb.getPool().query(
+    `INSERT INTO hh_meal_library (owner_id, visibility, title, category)
+     VALUES ($1,$2,$3,$4) RETURNING id, title, category`,
+    [userId, SHARED, t, titleCase(str(category, 60)) || 'Other']);
+  return rows[0];
+}
+
+/** Removes the library entry only — dinners already planned from it stay. */
+async function deleteLibraryMeal(userId, id) {
+  const { rowCount } = await libDb.getPool().query(
+    `DELETE FROM hh_meal_library WHERE id=$2 AND ${VISIBLE}`, [userId, id]);
+  if (!rowCount) throw new Error('Not found.');
+  return true;
+}
+
+async function dinnerOn(client, userId, day) {
+  const { rows } = await client.query(
+    `SELECT id, sort_order FROM hh_meals WHERE day=$2::date AND ${VISIBLE}
+      ORDER BY sort_order, id LIMIT 1`, [userId, day]);
+  return rows[0] || null;
+}
+
+async function inTx(fn) {
+  const client = await libDb.getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const out = await fn(client);
+    await client.query('COMMIT');
+    return out;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Set a day's dinner. REPLACES the existing dinner rather than renaming it:
+ * the old dinner's ingredients belong to the old dish, so they drop back onto
+ * the grocery list unattached (ON DELETE SET NULL) instead of silently turning
+ * into the new dinner's ingredients.
+ */
+async function setDinner(userId, { day, title, recipeId }) {
+  if (!isDate(day)) throw new Error('Pick a day.');
+  const pool = libDb.getPool();
+  let t = str(title, 200);
+  const rid = recipeId ? Number(recipeId) : null;
+  if (rid) {
+    const { rows } = await pool.query(
+      `SELECT id, title FROM hh_recipes WHERE id=$2 AND ${VISIBLE}`, [userId, rid]);
+    if (!rows[0]) throw new Error('Recipe not found.');
+    t = rows[0].title;
+  }
+  if (!t) throw new Error("What's for dinner?");
+
+  return inTx(async (client) => {
+    const old = await dinnerOn(client, userId, day);
+    if (old) await client.query(`DELETE FROM hh_meals WHERE id=$1`, [old.id]);
+    const { rows } = await client.query(
+      `INSERT INTO hh_meals (owner_id, visibility, day, title, recipe_id, sort_order)
+       VALUES ($1,$2,$3::date,$4,$5,$6)
+       RETURNING id, owner_id, visibility, to_char(day,'YYYY-MM-DD') AS day, title, notes, recipe_id, sort_order`,
+      [userId, SHARED, day, t, rid, old ? old.sort_order : 10]);
+    return { ...rows[0], items: [] };
+  });
+}
+
+/**
+ * Drag a dinner onto another day. If that day already has a dinner the two
+ * swap. Ingredients travel with their meal because they hang off meal_id, and
+ * sort_order swaps too so each stays "the dinner" on its new day.
+ */
+async function moveDinner(userId, { from, to }) {
+  if (!isDate(from) || !isDate(to)) throw new Error('Pick a day.');
+  if (from === to) return true;
+  return inTx(async (client) => {
+    const a = await dinnerOn(client, userId, from);
+    const b = await dinnerOn(client, userId, to);
+    if (!a) throw new Error('Nothing to move.');
+    // Lowest sort on the target day, so a moved dinner is never demoted to a
+    // footnote under an older extra meal that already sits there.
+    await client.query(`UPDATE hh_meals SET day=$2::date, sort_order=$3 WHERE id=$1`,
+      [a.id, to, b ? b.sort_order : 0]);
+    if (b) await client.query(`UPDATE hh_meals SET day=$2::date, sort_order=$3 WHERE id=$1`,
+      [b.id, from, a.sort_order]);
+    return true;
+  });
+}
+
 /** The one-line summary for Today. */
 async function summary(userId, tz = 'America/New_York') {
   const pool = libDb.getPool();
@@ -345,4 +489,5 @@ module.exports = {
   getWeek, summary,
   addItem, toggleItem, updateItem, deleteItem, clearChecked,
   addMeal, updateMeal, deleteMeal,
+  getLibrary, addLibraryMeal, deleteLibraryMeal, setDinner, moveDinner,
 };

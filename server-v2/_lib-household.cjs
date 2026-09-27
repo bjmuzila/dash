@@ -422,6 +422,23 @@ async function ensureSchema() {
     await pool.query(`ALTER TABLE hh_meals ADD COLUMN IF NOT EXISTS recipe_id INTEGER REFERENCES hh_recipes(id) ON DELETE SET NULL`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_list_items_recipe_idx ON hh_list_items(recipe_id)`);
 
+    // Quick meals for the dinner planner's library (Lists → Week).
+    //
+    // The library is the Cookbook's recipes PLUS these. A quick meal is just a
+    // name and a category ("Pizza night", "Leftovers") for dinners that will
+    // never be a full recipe. Planning one writes an ordinary hh_meals row with
+    // recipe_id NULL, exactly like typing a title on the old week board did.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_meal_library (
+        id         SERIAL PRIMARY KEY,
+        owner_id   INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
+        visibility TEXT NOT NULL DEFAULT 'shared',
+        title      TEXT NOT NULL,
+        category   TEXT NOT NULL DEFAULT 'Other',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_meal_library_cat_idx ON hh_meal_library(category, lower(title))`);
+
     // Recipe photos, as bytes.
     //
     // We COPY the image instead of keeping the source URL because a TikTok or
