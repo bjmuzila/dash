@@ -24528,3 +24528,10 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-26 — voltick-vite: left menu edited right in the rail (Settings mockup)
 - `MockupsProposed.tsx` Settings tab: the rail now sits on the left and edits in place. A small ✎ beside Search opens edit mode: every page gets ☆ favourite, ↑ ↓ and hide; every shelf gets ↑ ↓ and hide-shelf; favourites sit at the top and reorder; Done / ↺ Reset menu at the foot. Settings › Left menu keeps only Start with presets, Open Voltick on, and an "✎ Edit the menu" button that opens the same mode.
 - Spec: `md files/VOLTICK-LEFT-MENU-EDIT.md`. Screenshot: `generated/2026-09-26-left-menu-edit-mode.png`.
+
+## 2026-09-26 — Voltick mockup specs as markdown
+- `md files/VOLTICK-CHART-MENU.md`, `VOLTICK-FLOW-TOOLBAR.md`, `VOLTICK-ACCOUNT-MENU.md`, `VOLTICK-SETTINGS.md` (plus the existing `VOLTICK-LEFT-MENU-EDIT.md`): one spec per proposed surface, with old vs new counts, layout sketches, every control and dropdown, and what changed and why.
+
+## 2026-09-26 — voltick-vite: download the specs from /mockups
+- `Mockups.tsx`: two buttons beside Show changes. "⬇ This spec (.md)" downloads the current tab's spec (Settings bundles the left-menu edit spec with it); "⬇ All specs" downloads all five as one `VOLTICK-MENU-PROPOSAL.md`.
+- Specs bundled from `src/pages/mockup-specs/*.md` via Vite `?raw` imports (copies of the ones in `md files/`).

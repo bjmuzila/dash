@@ -16,6 +16,35 @@ import { PageShell } from "../components/PageCard";
 import { AccountProposed, ChartProposed, FlowProposed, SettingsProposed } from "./MockupsProposed";
 import { ACCENT, LINE, MONO, PANEL, PAPER, PAPER_QUIET, R_LG, R_MD, SANS, rgba } from "../theme";
 import { ChangesCtx, MARK_COLOR } from "./mockupsMark";
+// The written specs, bundled as text so each tab can hand its own out as a .md file.
+import specChart from "./mockup-specs/VOLTICK-CHART-MENU.md?raw";
+import specFlow from "./mockup-specs/VOLTICK-FLOW-TOOLBAR.md?raw";
+import specAccount from "./mockup-specs/VOLTICK-ACCOUNT-MENU.md?raw";
+import specSettings from "./mockup-specs/VOLTICK-SETTINGS.md?raw";
+import specLeftMenu from "./mockup-specs/VOLTICK-LEFT-MENU-EDIT.md?raw";
+
+const SPECS: Record<Tab, { file: string; text: string }> = {
+  chart: { file: "VOLTICK-CHART-MENU.md", text: specChart },
+  flow: { file: "VOLTICK-FLOW-TOOLBAR.md", text: specFlow },
+  account: { file: "VOLTICK-ACCOUNT-MENU.md", text: specAccount },
+  settings: { file: "VOLTICK-SETTINGS.md", text: `${specSettings}\n\n---\n\n${specLeftMenu}` },
+};
+const ALL_SPECS = { file: "VOLTICK-MENU-PROPOSAL.md", text: [specChart, specFlow, specAccount, specSettings, specLeftMenu].join("\n\n---\n\n") };
+
+function download({ file, text }: { file: string; text: string }) {
+  try {
+    const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch {
+    /* ignore */
+  }
+}
 
 type Tab = "chart" | "flow" | "account" | "settings";
 const TABS: [Tab, string][] = [
@@ -91,6 +120,24 @@ export default function Mockups() {
         >
           {show ? "✓ Showing changes" : "◎ Show changes"}
         </button>
+        <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+          {(
+            [
+              [SPECS[tab], "⬇ This spec (.md)"],
+              [ALL_SPECS, "⬇ All specs"],
+            ] as const
+          ).map(([spec, label]) => (
+            <button
+              key={label}
+              type="button"
+              title={`Download ${spec.file}`}
+              onClick={() => download(spec)}
+              style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, padding: "10px 14px", borderRadius: R_MD, cursor: "pointer", color: PAPER, border: `1px solid ${LINE}`, background: PANEL }}
+            >
+              {label}
+            </button>
+          ))}
+        </span>
         {show && (
           <span style={{ display: "inline-flex", gap: 14, flexWrap: "wrap", fontFamily: SANS, fontSize: 12, color: PAPER_QUIET }}>
             {(
