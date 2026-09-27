@@ -3,6 +3,7 @@ import { useRefreshButton } from "../hooks/useRefreshButton";
 import { OWNER_THEME as HOME_THEME, homeInputStyle } from "../lib/theme";
 import { PageShell, Card } from "../components/PageCard";
 import { DockButton, type SegOption } from "../components/DockToolbar";
+import { isSuppressed } from "../lib/suppressedEmails";
 
 type Audience = "all" | "subscribers" | "not_paying" | "waitlist" | "old_emails" | "old_emails2" | "custom";
 
@@ -35,6 +36,35 @@ const LEGACY: Audience[] = ["old_emails", "old_emails2"];
 // someone on two lists is kept under the more current one. The two must stay
 // identical or the count shown here won't match what the server sends.
 const UNION_ORDER: Audience[] = ["subscribers", "not_paying", "waitlist", "old_emails", "old_emails2"];
+
+// "Old emails 2" is also offered as numbered batches of BATCH_SIZE so the old
+// list can be worked through a slice at a time (small sends are gentler on
+// sender reputation). Batches are cut from the FULL list in its server order,
+// so #N always means the same addresses. Deleting a batch just marks its
+// addresses done in localStorage (this browser) — the Old emails 2 list itself
+// is never touched, and deleted batches can be restored.
+const BATCH_SIZE = 100;
+const BATCH_DONE_KEY = "owner.emails.oldEmails2.doneBatches";
+
+function readDoneEmails(): Set<string> {
+  try {
+    const raw = localStorage.getItem(BATCH_DONE_KEY);
+    const v = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeDoneEmails(s: Set<string>): void {
+  try {
+    localStorage.setItem(BATCH_DONE_KEY, JSON.stringify(Array.from(s)));
+  } catch {
+    /* storage unavailable — batch progress is best-effort */
+  }
+}
+
+interface Batch { n: number; emails: string[]; done: boolean }
 
 /** Drop repeats from a selection while keeping UNION_ORDER-independent order. */
 function dedupeAudiences(list: Audience[]): Audience[] {
@@ -191,6 +221,11 @@ export default function Emails() {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SendRecord[]>([]);
+  // Old emails 2 batches: which one (if any) is the send target, and which
+  // addresses have been marked done via the batch 🗑 button.
+  const [batchNo, setBatchNo] = useState<number | null>(null);
+  const [doneEmails, setDoneEmails] = useState<Set<string>>(() => readDoneEmails());
+  const [showDoneBatches, setShowDoneBatches] = useState(false);
 
   async function loadHistory(throwOnError = false) {
     try {
@@ -312,14 +347,62 @@ export default function Emails() {
   const livePresets = presets.filter((p) => !p.hidden);
   const deletedPresets = presets.filter((p) => p.hidden);
 
-  const isCustom = audiences.includes("custom");
-  const hasLegacy = !isCustom && audiences.some((a) => LEGACY.includes(a));
+  // Numbered 100-address slices of Old emails 2. A batch counts as done once
+  // every address in it has been marked done.
+  // Resend-suppressed addresses (bounced / complained) are left out before
+  // cutting, so no batch wastes a send on them.
+  const oldEmails2All = lists?.oldEmails2 ?? [];
+  const suppressedSkipped = oldEmails2All.filter(isSuppressed).length;
+  const batches: Batch[] = (() => {
+    const src = oldEmails2All.filter((e) => !isSuppressed(e));
+    const out: Batch[] = [];
+    for (let i = 0; i < src.length; i += BATCH_SIZE) {
+      const emails = src.slice(i, i + BATCH_SIZE);
+      out.push({
+        n: out.length + 1,
+        emails,
+        done: emails.every((e) => doneEmails.has(e.trim().toLowerCase())),
+      });
+    }
+    return out;
+  })();
+  const openBatches = batches.filter((b) => !b.done);
+  const doneBatches = batches.filter((b) => b.done);
+  const activeBatch = batchNo != null ? batches.find((b) => b.n === batchNo && !b.done) ?? null : null;
+  const isBatch = activeBatch != null;
+
+  const isCustom = !isBatch && audiences.includes("custom");
+  const hasLegacy = isBatch || (!isCustom && audiences.some((a) => LEGACY.includes(a)));
+
+  function pickBatch(n: number) {
+    setBatchNo((cur) => (cur === n ? null : n));
+    setShowList(false);
+  }
+
+  function deleteBatch(b: Batch) {
+    if (!window.confirm(`Delete batch #${b.n} (${b.emails.length} emails)?\n\nIt drops out of the batch list. Old emails 2 itself is unchanged, and the batch can be restored.`)) return;
+    const next = new Set(doneEmails);
+    for (const e of b.emails) next.add(e.trim().toLowerCase());
+    writeDoneEmails(next);
+    setDoneEmails(next);
+    if (batchNo === b.n) setBatchNo(null);
+    setResult(`Batch #${b.n} deleted.`);
+  }
+
+  function restoreBatch(b: Batch) {
+    const next = new Set(doneEmails);
+    for (const e of b.emails) next.delete(e.trim().toLowerCase());
+    writeDoneEmails(next);
+    setDoneEmails(next);
+    setResult(`Batch #${b.n} restored.`);
+  }
 
   // Tick / untick an audience. The two exclusive ones replace the selection;
   // everything else toggles within the multi-select group. The selection can
   // never go empty — unticking the last one is a no-op rather than a send to
-  // nobody.
+  // nobody. Touching the audience list drops any selected batch.
   function toggleAudience(v: Audience) {
+    setBatchNo(null);
     setAudiences((prev) => {
       if (EXCLUSIVE.includes(v)) return [v];
       const base = prev.filter((a) => !EXCLUSIVE.includes(a));
@@ -343,6 +426,7 @@ export default function Emails() {
   // then deduped — so an address on Subscribers AND Old emails 2 appears once.
   const unionList: string[] = (() => {
     if (!lists || isCustom) return [];
+    if (activeBatch) return dedupeEmails(activeBatch.emails);
     if (audiences.includes("all")) return lists.all;
     const merged: string[] = [];
     for (const a of UNION_ORDER) if (audiences.includes(a)) merged.push(...listFor(a));
@@ -351,7 +435,7 @@ export default function Emails() {
 
   // Sum of the selected lists BEFORE de-duping — the gap between this and
   // unionList.length is how many double-sends the merge just prevented.
-  const rawCount = isCustom || audiences.includes("all")
+  const rawCount = isCustom || isBatch || audiences.includes("all")
     ? 0
     : UNION_ORDER.reduce((n, a) => (audiences.includes(a) ? n + listFor(a).length : n), 0);
 
@@ -367,6 +451,7 @@ export default function Emails() {
     if (unionList.length === 0) return;
     setCustomTo(unionList.join(", "));
     setAudiences(["custom"]);
+    setBatchNo(null);
     setShowList(false);
   }
 
@@ -378,7 +463,11 @@ export default function Emails() {
     if (isCustom && recipientCount === 0) {
       setError("Add at least one recipient email."); return;
     }
+    if (isBatch && recipientCount === 0) {
+      setError("That batch is empty."); return;
+    }
     if (hasLegacy && !window.confirm(
+      (activeBatch ? `Sending Old emails 2 — batch #${activeBatch.n} (${recipientCount}).\n\n` : "") +
       "You're sending to an OLD email list.\n\n" +
       "Old addresses bounce, hit spam traps and get marked as spam, which can push " +
       "ALL your emails (subscribers included) into the spam folder.\n\nSend anyway?"
@@ -402,6 +491,11 @@ export default function Emails() {
       };
       if (isCustom) {
         payload.to = dedupeEmails(customTo.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean));
+      } else if (activeBatch) {
+        // A batch rides the existing Custom path: explicit `to`, nothing else.
+        payload.audiences = ["custom"];
+        payload.audience = "custom";
+        payload.to = dedupeEmails(activeBatch.emails);
       }
       const res = await fetch("/api/admin/send-email", {
         method: "POST",
@@ -570,7 +664,7 @@ export default function Emails() {
             >
               {AUDIENCE_OPTIONS.map((o) => {
                 const value = o.value as Audience;
-                const on = audiences.includes(value);
+                const on = !isBatch && audiences.includes(value);
                 const size = value === "all" ? counts?.all
                   : value === "subscribers" ? counts?.subscribers
                   : value === "not_paying" ? counts?.notPaying
@@ -624,8 +718,123 @@ export default function Emails() {
                 );
               })}
             </div>
+
+            {batches.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text, marginBottom: 4 }}>
+                  📇 Old emails 2 · batches of {BATCH_SIZE}
+                  <span style={{ fontWeight: 500, color: HOME_THEME.muted, marginLeft: 8 }}>
+                    {openBatches.length} left · {doneBatches.length} done
+                    {suppressedSkipped > 0 && ` · ${suppressedSkipped} bounced/complained skipped`}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.7, marginBottom: 8 }}>
+                  Click a number to send to just that batch. 🗑 when it's done — Old emails 2 stays whole.
+                </div>
+                {openBatches.length === 0 ? (
+                  <div style={{ fontSize: 14, color: HOME_THEME.green }}>All batches done ✅</div>
+                ) : (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))",
+                      gap: 6,
+                      maxHeight: 200,
+                      overflowY: "auto",
+                      padding: 8,
+                      background: "rgba(0,0,0,0.22)",
+                      borderRadius: 12,
+                      border: "1px solid rgba(255,255,255,0.04)",
+                    }}
+                  >
+                    {openBatches.map((b) => {
+                      const on = batchNo === b.n;
+                      return (
+                        <div key={b.n} style={{ display: "flex", alignItems: "stretch", gap: 4 }}>
+                          <button
+                            onClick={() => pickBatch(b.n)}
+                            title={`Batch #${b.n}: ${b.emails[0]} … ${b.emails[b.emails.length - 1]}`}
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              padding: "6px 8px",
+                              borderRadius: 8,
+                              cursor: "pointer",
+                              fontSize: 14,
+                              fontWeight: 800,
+                              textAlign: "left",
+                              color: on ? "#FFFFFF" : HOME_THEME.text,
+                              background: on ? HOME_THEME.cyan : "rgba(255,255,255,0.04)",
+                              border: `1px solid ${on ? HOME_THEME.cyan : "rgba(255,255,255,0.08)"}`,
+                            }}
+                          >
+                            #{b.n}
+                            <span style={{ fontSize: 11, fontWeight: 600, opacity: 0.6, marginLeft: 4 }}>{b.emails.length}</span>
+                          </button>
+                          <button
+                            onClick={() => deleteBatch(b)}
+                            title={`Delete batch #${b.n}`}
+                            aria-label={`Delete batch ${b.n}`}
+                            style={{
+                              flex: "0 0 auto",
+                              width: 28,
+                              borderRadius: 8,
+                              cursor: "pointer",
+                              fontSize: 12,
+                              color: HOME_THEME.red,
+                              background: `${HOME_THEME.red}14`,
+                              border: `1px solid ${HOME_THEME.red}44`,
+                            }}
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {doneBatches.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      onClick={() => setShowDoneBatches((v) => !v)}
+                      style={{ background: "none", border: "none", color: HOME_THEME.muted, fontSize: 13, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                    >
+                      {showDoneBatches ? "Hide" : "Show"} deleted batches ({doneBatches.length})
+                    </button>
+                    {showDoneBatches && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                        {doneBatches.map((b) => (
+                          <button
+                            key={b.n}
+                            onClick={() => restoreBatch(b)}
+                            title={`Restore batch #${b.n}`}
+                            style={{
+                              padding: "4px 10px",
+                              borderRadius: 8,
+                              cursor: "pointer",
+                              fontSize: 13,
+                              opacity: 0.7,
+                              color: HOME_THEME.green,
+                              background: `${HOME_THEME.green}14`,
+                              border: `1px solid ${HOME_THEME.green}44`,
+                            }}
+                          >
+                            #{b.n} ↩
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div style={{ fontSize: 14, color: HOME_THEME.muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span>
+                {activeBatch && (
+                  <span style={{ color: HOME_THEME.cyan, fontWeight: 700 }}>Batch #{activeBatch.n} · </span>
+                )}
                 {recipientCount} recipient{recipientCount === 1 ? "" : "s"}
                 {duplicatesRemoved > 0 && (
                   <span style={{ color: HOME_THEME.green }}>

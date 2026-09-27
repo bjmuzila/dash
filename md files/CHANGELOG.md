@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-27 - owner.cbedge.net Emails: Old emails 2 in numbered batches of 100
+
+- `owner-vite/src/pages/Emails.tsx`: under Audience, Old emails 2 is split into numbered batches of 100 (#1, #2, …), cut from the full list in order. Clicking a number sends to that batch only (goes out as a Custom `to` list; the old-list warning still applies). 🗑 deletes a batch when it's done, with a confirm first; "Show deleted batches" restores one. Done state is kept in localStorage (`owner.emails.oldEmails2.doneBatches`), so it is per browser. The whole Old emails 2 audience is unchanged.
+- `owner-vite/src/lib/suppressedEmails.ts` (new): the 58 addresses from the Resend suppressions export (51 bounces, 7 complaints). They're left out of the Old emails 2 batches, and the header shows how many were skipped. The full list-audience sends are still resolved on the server and aren't filtered by this.
+
 ## 2026-09-27 - budget.cbedge.net: Lists gets a Meals tab; Week is now just the seven dinners
 
 - **Meals tab** (new, `budget-vite/src/pages/Lists.tsx`): paste a TikTok / Instagram / recipe link or type a name to add a meal. Links pull a title (TikTok via its oEmbed caption, otherwise the page's og:title) and guess the category, and you can edit both before saving. The list is grouped by category, and categories start collapsed (open state remembered per browser). There's search and an All / Not tried / Made filter. Tapping a meal opens: pick a day (Mon–Sun buttons for the week shown, with ‹ › to change week; a taken day shows its current dinner), Made it (+1 today, Undo last, with count and last date), recipe link (open / add / remove), category dropdown, Rename, Delete.
