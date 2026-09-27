@@ -54,8 +54,7 @@ import {
 } from '../kit'
 import { Select } from '@/design/primitives/Controls'
 import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
-import { ReplayBrand } from '@/design/primitives/ReplayStamp'
-import { CbWordmark } from '@/shell/Brand'
+import { ReplayBrand, ReplayWordmark } from '@/design/primitives/ReplayStamp'
 import { cleanSymbol } from '../TickerPicker'
 import { accumulateChainGreeks } from '../greeks'
 import { TlLadder } from './Ladder'
@@ -863,7 +862,7 @@ export function TickerLookupCard({
               the horizontal lockup is the form for a wide slot like this one. It
               is a bundled, same-origin asset, so html2canvas exports bake it in
               without tainting the canvas and no crossOrigin is needed. */}
-          <CbWordmark className="ml-0.5 block h-7 w-auto shrink-0 opacity-95" />
+          <ReplayWordmark className="ml-0.5 block h-7 w-auto shrink-0 opacity-95" />
         </span>
       </Row>
 

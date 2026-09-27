@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-27 - Brand.tsx theme-check fix (VoltickWordmark)
+
+- `shell/Brand.tsx`: VOLTICK lettering now uses `var(--text-base)` and `var(--color-vt-wordmark)` instead of `15` / `#5289ff`.
+- `design/tokens.css`: new fixed token `--color-vt-wordmark: #5289ff` in the Voltick brand palette.
+
+## 2026-09-26 - Replay → Multi Greek: visible settings + Voltick theme parity with the home card
+
+- `pages/replay/MultiGreekReplay.tsx`: cog moved out of the far end of the replay dock to a visible "⚙ Settings" button over the panels' top-right.
+- Settings now match the home Multi Greek card and share its stored keys (columns, ex-0DTE, basis, NEAR CORE + threshold); NEAR CORE filter added.
+- Voltick theme: Volt / Surge / Reversal / Coil filled cells off the recorded frame (net = book, vol = volume book), no CB gold, fixed heat ramp, Intensity slider hidden, level chip relabelled — same as the live card.
+- CB/CW/PW chip now only hides labels (core gold stays), matching the home card.
+
+## 2026-09-26 - Replay hub (/v3/replay): Voltick branding instead of CB Edge
+
+- `shell/Brand.tsx`: new `<VoltickWordmark/>` (voltick-bolt.png + "VOLTICK").
+- `design/primitives/ReplayStamp.tsx`: `ReplayBrandProvider` / `ReplayWordmark` context; `<ReplayBrand/>` (bottom-right pane mark) draws Voltick inside the provider, CB Edge elsewhere.
+- `pages/Replay.tsx`: wraps the hub in `ReplayBrandProvider value="voltick"`; Voltick lockup at the top-right of the tab bar.
+- `pages/analysis/lookup/TickerLookup.tsx`: header logo (top-right) follows the replay brand — Voltick on /v3/replay, CB Edge on /analytics.
+
 ## 2026-09-25 - Budget: Flex gas now comes out of Tesla, not Sheetz (from 2026-09)
 
 - From **2026-09 onward** the Amazon Flex gas correction takes the Amazon tab's monthly gas out of every statement outflow whose merchant or description contains **"Tesla"**, from whatever category it was filed in, biggest first. It's capped at what each category holds and moved into the Flex gas category. Tesla rows already filed to Flex are skipped.

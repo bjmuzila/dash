@@ -12,7 +12,7 @@
 //
 // ── Two pieces, one layer ───────────────────────────────────────────────────
 //   <ReplayStamp>  ticker · expiry chip · +N · session date · frame clock
-//   <ReplayBrand>  the CB Edge wordmark
+//   <ReplayBrand>  the CB Edge wordmark (Voltick inside <ReplayBrandProvider value="voltick">)
 //   <ReplayStampLayer>  both, absolutely positioned over a `relative` parent
 //
 // `pointerEvents: none` throughout — the stamp sits over a scrubbable, hoverable
@@ -22,9 +22,24 @@
 // /v3/replay caption themselves identically instead of four times over.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { CSSProperties, ReactNode } from 'react'
+import { createContext, useContext, type CSSProperties, type ReactNode } from 'react'
 import { alpha, LIGHT_BLUE, T } from '@/design/theme'
-import { CbWordmark } from '@/shell/Brand'
+import { CbWordmark, VoltickWordmark } from '@/shell/Brand'
+
+/** Which brand the replay mark draws. /v3/replay provides 'voltick'; every
+ *  other replay surface keeps the CB Edge default. */
+export type ReplayBrandKind = 'cbedge' | 'voltick'
+const ReplayBrandCtx = createContext<ReplayBrandKind>('cbedge')
+export const ReplayBrandProvider = ReplayBrandCtx.Provider
+export function useReplayBrand(): ReplayBrandKind {
+  return useContext(ReplayBrandCtx)
+}
+
+/** The brand lockup for a wide slot, following the replay brand context. */
+export function ReplayWordmark({ className }: { className?: string }) {
+  const kind = useReplayBrand()
+  return kind === 'voltick' ? <VoltickWordmark className={className} /> : <CbWordmark className={className} />
+}
 
 export interface ReplayStampProps {
   /** The subject. Printed even when everything else is unknown. */
@@ -158,7 +173,7 @@ export function ReplayBrand({ right = 8, bottom = 6 }: { right?: number; bottom?
         opacity: 0.85,
       }}
     >
-      <CbWordmark className="block h-6 w-auto" />
+      <ReplayWordmark className="block h-6 w-auto" />
     </div>
   )
 }

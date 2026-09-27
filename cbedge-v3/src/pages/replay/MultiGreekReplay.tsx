@@ -32,7 +32,9 @@ import { query } from '@/data/api'
 import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { alpha, T } from '@/design/theme'
 import { Chip, PanelSection, Popover, SegGroup, Select } from '@/design/primitives/Controls'
-import { Slider } from '@/board/gexCandles/controls'
+import { Dropdown, Slider } from '@/board/gexCandles/controls'
+import { readUiTheme } from '@/design/uiTheme'
+import { voltickMarks, vtLevelsAt, type VoltickMarks, type VtLevelDef } from '@/data/voltickLevels'
 import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
 import { ReplayBrand, ReplayStamp } from '@/design/primitives/ReplayStamp'
 import {
@@ -40,9 +42,11 @@ import {
   EX0_KEY,
   MAX_COLS,
   MAX_EXP_COLS,
+  NEAR_CORE_PCTS,
   cellAlpha,
   columnStats,
   fmtGex,
+  isNearCore,
   type Basis,
   type Column,
 } from '@/board/multiGreek/mgMath'
@@ -71,9 +75,23 @@ import {
 const DEFAULT_TICKERS = ['SPX', 'SPY', 'QQQ', 'NDX'] as const
 
 const TICKERS_KEY = 'cb-v3-replay-mg-tickers'
-const COLS_KEY = 'cb-v3-replay-mg-col-count'
-const EX0_KEY_STORE = 'cb-v3-replay-mg-ex0'
-const BASIS_KEY = 'cb-v3-replay-mg-basis'
+// SETTINGS ARE THE HOME CARD'S. Same keys as board/multiGreek/MultiGreekCard.tsx,
+// so the replay opens on the columns / basis / near-core the live board is set
+// to, and a change here carries back to the board.
+const COLS_KEY = 'cb-v3-mg-col-count'
+const EX0_KEY_STORE = 'cb-v3-mg-ex0'
+const BASIS_KEY = 'cb-v3-mg-basis'
+const NEAR_CORE_KEY = 'cb-v3-mg-near-core'
+const NEAR_CORE_PCT_KEY = 'cb-v3-mg-near-core-pct'
+
+/**
+ * VOLTICK THEME — the live card's look, on the replay. No core gold, no wash:
+ * Volt / Surge / Reversal / Coil are FILLED cells in their reserved colours
+ * (data/voltickLevels.ts), and the heat ramp is fixed (no Intensity slider).
+ * Read once — the toolbar toggle reloads the page.
+ */
+const VOLTICK_THEME = readUiTheme() === 'voltick'
+const VT_FIXED_INTENSITY = 1.75
 
 /** Strike rail width, matching the live card so the two boards read alike. */
 const RAIL_PX = 76
@@ -171,6 +189,9 @@ interface PanelProps {
   basis: Basis
   intensity: number
   showLevels: boolean
+  /** NEAR CORE filter — the live card's: paint only strikes carrying this share of the core. */
+  nearCore: boolean
+  nearCorePct: number
   loading: boolean
   /**
    * 🔒 Axis — see ReplayLock in design/primitives/ReplayDock.tsx.
@@ -197,10 +218,13 @@ function ReplayPanel({
   basis,
   intensity,
   showLevels,
+  nearCore,
+  nearCorePct,
   loading,
   axisLock,
   onCommitTicker,
 }: PanelProps) {
+  const nearCoreThreshold = Math.min(Math.max((nearCorePct || 0) / 100, 0), 0.99)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const userScrolledRef = useRef(false)
   const anchorRef = useRef('')
@@ -247,6 +271,35 @@ function ReplayPanel({
     for (const col of display) out.set(col.key, columnStats(valuesByCol.get(col.key) ?? new Map(), spot))
     return out
   }, [display, valuesByCol, spot])
+
+  /**
+   * Voltick theme: Volt / Surge / Reversal / Coil per column, off the RECORDED
+   * frame — net as the book, volume as the volume-only book — whatever the basis
+   * control is on. Same definitions as the live card. null on CB Edge.
+   */
+  const vtByCol = useMemo(() => {
+    if (!VOLTICK_THEME || !frame) return null
+    const out = new Map<string, VoltickMarks>()
+    for (const col of display) {
+      const sources = col.key === EX0_KEY ? ex0Source.map((c) => c.expiration) : [col.expiration]
+      const acc = new Map<number, { book: number; vol: number }>()
+      for (const [k, cell] of frame.cells) {
+        const bar = k.indexOf('|')
+        if (bar < 0 || !sources.includes(k.slice(0, bar))) continue
+        const strike = Number(k.slice(bar + 1))
+        if (!Number.isFinite(strike)) continue
+        const cur = acc.get(strike) ?? { book: 0, vol: 0 }
+        cur.book += cell.net
+        cur.vol += cell.vol
+        acc.set(strike, cur)
+      }
+      out.set(col.key, voltickMarks([...acc].map(([strike, v]) => ({ strike, book: v.book, vol: v.vol }))))
+    }
+    return out
+  }, [frame, display, ex0Source])
+
+  const vtOf = (colKey: string, strike: number): VtLevelDef[] =>
+    vtByCol ? vtLevelsAt(vtByCol.get(colKey), strike) : []
 
   const atm = useMemo(() => {
     const first = rows[0]
@@ -480,13 +533,28 @@ function ReplayPanel({
                   const recorded = raw !== undefined
                   const v = raw ?? 0
                   const rank = s ? s.top3.indexOf(strike) : -1
-                  const a = s && recorded ? cellAlpha(v, s.maxAbs, rank, intensity) : 0
+                  // Voltick: Volt / Surge / Reversal / Coil as filled cells —
+                  // no CB / CW / PW, no gold. Same as the live card.
+                  const vtLevels = vtByCol && recorded ? vtOf(c.key, strike) : []
+                  const vtFill = vtLevels[0] ?? null
+                  const rawLevel = vtByCol || !recorded ? null : levelOf(c.key, strike)
+                  // NEAR CORE: which cells get the wash. Levels are exempt.
+                  const painted =
+                    !nearCore ||
+                    rawLevel != null ||
+                    vtLevels.length > 0 ||
+                    (s ? isNearCore(v, s.maxAbs, nearCoreThreshold) : false)
+                  const a =
+                    s && recorded && painted
+                      ? cellAlpha(v, s.maxAbs, rank, vtByCol ? VT_FIXED_INTENSITY : intensity)
+                      : 0
                   const hue = v >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
                   const heat =
                     a > 0 ? `color-mix(in srgb, ${hue} ${(a * 100).toFixed(1)}%, transparent)` : 'transparent'
-                  const level = showLevels && recorded ? levelOf(c.key, strike) : null
+                  const level = showLevels ? rawLevel : null
                   const isFront = front != null && c.key === front.key
-                  const isCb = level === 'cb'
+                  // The core keeps its gold with the labels off, like the live card.
+                  const isCb = rawLevel === 'cb'
                   const f = recorded ? fmtGex(v) : { sign: '' as const, text: '--' }
                   return (
                     <div
@@ -502,7 +570,9 @@ function ReplayPanel({
                         recorded ? '' : 'opacity-50',
                       ].join(' ')}
                       style={
-                        isCb
+                        vtFill
+                          ? { background: vtFill.fill, color: vtFill.ink, fontWeight: 800 }
+                          : isCb
                           ? {
                               // THE CORE. Gold washes in from the left edge and
                               // clears before the figure; past that the cell is
@@ -518,17 +588,21 @@ function ReplayPanel({
                             }
                           : {
                               background: a > 0 ? heat : undefined,
-                              outline: rank === 0 && recorded && v !== 0 ? `1px solid ${hue}` : undefined,
+                              outline: painted && rank === 0 && recorded && v !== 0 ? `1px solid ${hue}` : undefined,
                               outlineOffset: -1,
                             }
                       }
                     >
-                      <span className={f.sign === '+' ? 'text-up' : f.sign === '−' ? 'text-down' : 'text-muted'}>
+                      <span
+                        className={
+                          vtFill ? '' : f.sign === '+' ? 'text-up' : f.sign === '−' ? 'text-down' : 'text-muted'
+                        }
+                      >
                         {f.sign}
                       </span>
                       {f.text}
 
-                      {isCb && !isFront && (
+                      {showLevels && isCb && !isFront && (
                         <span
                           title="Core Bullseye"
                           className="pointer-events-none absolute left-0.5 top-px text-2xs leading-none"
@@ -587,6 +661,17 @@ export function MultiGreekReplay() {
   const [basis, setBasis] = useState<Basis>(() => (readStored(BASIS_KEY, 'oivol') === 'vol' ? 'vol' : 'oivol'))
   const [intensity, setIntensity] = useState(1.75)
   const [showLevels, setShowLevels] = useState(true)
+  const [nearCore, setNearCore] = useState(() => readStored(NEAR_CORE_KEY, '0') === '1')
+  const [nearCorePct, setNearCorePct] = useState(() => {
+    const n = Number(readStored(NEAR_CORE_PCT_KEY, '50'))
+    return Number.isFinite(n) && n > 0 && n < 100 ? n : 50
+  })
+  useEffect(() => {
+    write(NEAR_CORE_KEY, nearCore ? '1' : '0')
+  }, [nearCore])
+  useEffect(() => {
+    write(NEAR_CORE_PCT_KEY, String(nearCorePct))
+  }, [nearCorePct])
   const [cogOpen, setCogOpen] = useState(false)
   /** 🔒 Axis — one switch for all four panels, because they share one clock. */
   const [axisLock, setAxisLock] = useState(false)
@@ -923,17 +1008,22 @@ export function MultiGreekReplay() {
           </span>
         )}
 
-        <div style={{ flex: 1 }} />
+      </ReplayDock>
 
+      {/* ── Settings — the live Multi Greek card's cog, same sections, same
+          stored values (the keys are shared). Up here, over the panels' top-
+          right, rather than at the far end of the dock where it was easy to
+          miss. */}
+      <div className="flex shrink-0 items-center justify-end gap-1 pb-1">
         <div className="relative">
           <button
             type="button"
             onClick={() => setCogOpen((v) => !v)}
             title={`Board settings — ${BASIS_LABEL[basis]} · ${colCount + (showEx0 ? 1 : 0)} of ${MAX_COLS} col`}
             aria-label="Multi Greek replay settings"
-            style={{ ...btn(false), height: 22, padding: '0 8px' }}
+            className="rounded-sm border border-line px-1.5 py-0.5 text-2xs font-semibold text-muted hover:bg-raised hover:text-fg"
           >
-            ⚙
+            ⚙ Settings
           </button>
           <Popover open={cogOpen} onClose={() => setCogOpen(false)}>
             <div className="flex w-60 flex-col gap-2">
@@ -965,29 +1055,53 @@ export function MultiGreekReplay() {
                 />
               </PanelSection>
               <PanelSection title="Heat">
-                <Slider
-                  label="intensity"
-                  value={intensity}
-                  min={0.5}
-                  max={3}
-                  step={0.05}
-                  format={(v) => (v <= 0.51 ? 'flat' : `${v.toFixed(2)}×`)}
-                  onChange={setIntensity}
-                  title="How hard the wash ramps. The top three strikes in a column keep their fixed steps at every setting."
-                />
+                {/* Voltick theme: fixed ramp, no slider — the look is the spec. */}
+                {!VOLTICK_THEME && (
+                  <Slider
+                    label="intensity"
+                    value={intensity}
+                    min={0.5}
+                    max={3}
+                    step={0.05}
+                    format={(v) => (v <= 0.51 ? 'flat' : `${v.toFixed(2)}×`)}
+                    onChange={setIntensity}
+                    title="How hard the wash ramps. The top three strikes in a column keep their fixed steps at every setting."
+                  />
+                )}
+                <div className="flex items-center gap-1">
+                  <Chip
+                    label="NEAR CORE"
+                    on={nearCore}
+                    onClick={() => setNearCore((v) => !v)}
+                    title="Paint only the strikes carrying this share or more of their column's core. Levels always keep theirs."
+                  />
+                  <Dropdown
+                    value={String(nearCorePct)}
+                    options={NEAR_CORE_PCTS.map((n) => ({ label: `≥ ${n}% of core`, value: String(n) }))}
+                    onChange={(v) => {
+                      setNearCorePct(Number(v))
+                      setNearCore(true)
+                    }}
+                    title="The share of the column's core a strike has to carry to be painted"
+                  />
+                </div>
                 <div className="flex gap-1">
                   <Chip
-                    label="CB / CW / PW"
+                    label={VOLTICK_THEME ? 'Volt / Surge / Rev / Coil' : 'CB / CW / PW'}
                     on={showLevels}
                     onClick={() => setShowLevels((v) => !v)}
-                    title="Mark the Core Bullseye, Call Wall and Put Wall. The front expiry names them; later expiries star their own CB."
+                    title={
+                      VOLTICK_THEME
+                        ? 'Name the Volt ★, Surge ↯, Reversal ↘ and Coil ◆. The fills stay either way.'
+                        : "Name the Core Bullseye, Call Wall and Put Wall. The core's gold stays either way."
+                    }
                   />
                 </div>
               </PanelSection>
             </div>
           </Popover>
         </div>
-      </ReplayDock>
+      </div>
 
       {/* `relative` so the stamp and the brand mark pin to the PANEL ROW. Both
           are drawn into the surface rather than into the page chrome for the
@@ -1007,6 +1121,8 @@ export function MultiGreekReplay() {
             basis={basis}
             intensity={intensity}
             showLevels={showLevels}
+            nearCore={nearCore}
+            nearCorePct={nearCorePct}
             loading={loading}
             axisLock={axisLock}
             onCommitTicker={(next) => commitTicker(i, next)}

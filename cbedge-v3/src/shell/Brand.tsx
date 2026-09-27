@@ -1,5 +1,6 @@
 import markUrl from '@/assets/cbedge-mark.svg'
 import wordmarkUrl from '@/assets/cbedge-wordmark.png'
+import voltickBoltUrl from '@/assets/voltick-bolt.png'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE BRAND, in one file. Nothing else in v3 draws the logo.
@@ -44,4 +45,35 @@ export function CbWordmark({ className }: { className?: string }) {
   // width/height are the intrinsic pixels of the asset — stated so the toolbar
   // does not reflow between first paint and the image landing.
   return <img src={wordmarkUrl} width={374} height={96} alt="CB Edge" className={className} />
+}
+
+// ── VOLTICK ──────────────────────────────────────────────────────────────────
+// The Voltick lockup: the bolt badge + "VOLTICK" set beside it. Used where a
+// surface is branded Voltick instead of CB Edge (the /v3/replay hub). Same
+// wide-slot role as <CbWordmark/>; sized by height via className.
+export function VoltickWordmark({ className }: { className?: string }) {
+  return (
+    <span className={['inline-flex items-center gap-1.5', className ?? ''].join(' ')}>
+      <img
+        src={voltickBoltUrl}
+        width={96}
+        height={96}
+        alt=""
+        aria-hidden
+        className="block h-full w-auto rounded-[22%]"
+      />
+      <span
+        style={{
+          fontWeight: 900,
+          letterSpacing: '0.14em',
+          lineHeight: 1,
+          fontSize: 'var(--text-base)',
+          color: 'var(--color-vt-wordmark)',
+        }}
+      >
+        VOLTICK
+      </span>
+      <span className="sr-only">Voltick</span>
+    </span>
+  )
 }

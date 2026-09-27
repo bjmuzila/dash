@@ -55,6 +55,8 @@ import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { Card } from '@/design/primitives/Card'
 import { Page } from '@/design/primitives/Page'
 import { usePageSymbol } from '@/data/symbol'
+import { ReplayBrandProvider } from '@/design/primitives/ReplayStamp'
+import { VoltickWordmark } from '@/shell/Brand'
 
 const LadderReplay = lazy(() =>
   import('./optionsChain/LadderModal').then((m) => ({ default: m.LadderModal })),
@@ -206,10 +208,13 @@ export default function ReplayPage() {
           </button>
         )
       })}
+      {/* Voltick brand, top-right of the hub. */}
+      <VoltickWordmark className="ml-auto h-7 shrink-0" />
     </div>
   )
 
   return (
+    <ReplayBrandProvider value="voltick">
     <Page fill>
       {tabBar}
       {active.full ? (
@@ -258,5 +263,6 @@ export default function ReplayPage() {
         </div>
       )}
     </Page>
+    </ReplayBrandProvider>
   )
 }

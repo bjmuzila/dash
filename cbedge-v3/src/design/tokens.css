@@ -392,6 +392,8 @@
   --color-vt-accent: #2f6bff;
   --color-vt-accent-text: #6aa0ff;
   --color-vt-sky: #7fb0ff;
+  /* The "VOLTICK" lettering beside the bolt (shell/Brand.tsx). */
+  --color-vt-wordmark: #5289ff;
   --color-vt-good: #3ddc8e;
   --color-vt-bad: #ff6b7a;
 
