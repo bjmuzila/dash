@@ -135,10 +135,17 @@ export function buildRail(columns: GexColumn[], metric: GexMetric, voltick = fal
   // volume-only book for Surge — whatever the GEX basis control says, the same
   // way the owner-dash bot names them.
   const vt = voltick
-    ? voltickMarks(col.cells.map((c) => ({ strike: c.strike, book: c.net, vol: c.netVol })))
+    ? voltickMarks(
+        col.cells.map((c) => ({ strike: c.strike, book: c.net, vol: c.netVol })),
+        { always: true },
+      )
     : null
 
-  return { rows, levels: { cb, cw, pw, vt }, spot, maxAbs }
+  // Voltick theme: the rail is the four levels and nothing else.
+  const vtSet = vt ? new Set([vt.volt, vt.surge, vt.reversal, vt.coil].filter((k): k is number => k != null)) : null
+  const shown = vtSet ? rows.filter((r) => vtSet.has(r.strike)) : rows
+
+  return { rows: shown, levels: { cb, cw, pw, vt }, spot, maxAbs }
 }
 
 /**

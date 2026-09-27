@@ -376,6 +376,13 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     // The gradient's innermost stop. Read from a token rather than written as a
     // literal white so a light theme moves it with everything else.
     highlight: hexToRgb(cssVar(container, '--color-fg'), [255, 255, 255]),
+    // Voltick theme: level bubbles take their level's reserved colour.
+    vt: {
+      volt: hexToRgb(cssVar(container, '--color-vt-volt'), [255, 209, 102]),
+      surge: hexToRgb(cssVar(container, '--color-vt-surge'), [77, 140, 255]),
+      reversal: hexToRgb(cssVar(container, '--color-vt-reversal'), [255, 95, 162]),
+      coil: hexToRgb(cssVar(container, '--color-vt-coil'), [47, 107, 255]),
+    },
   }
 
   // The three level tokens, read once with everything else. The SAME variables

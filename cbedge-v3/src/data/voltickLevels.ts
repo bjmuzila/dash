@@ -52,7 +52,21 @@ export const EMPTY_VT: VoltickMarks = { volt: null, surge: null, reversal: null,
 
 const REV_WEIGHT = 0.18
 
-export function voltickMarks(input: VtBookRow[]): VoltickMarks {
+export interface VtOpts {
+  /**
+   * ALWAYS FOUR (GEX Candles, Voltick theme): every level resolves to a strike
+   * whenever the ladder has any. The bot's definitions run first, unchanged;
+   * these only fill a level the definition left empty:
+   *   Reversal  → the biggest opposite-sign strike, 5% floor dropped; with no
+   *               opposite-sign strike at all, the biggest strike that is not
+   *               the Volt.
+   *   Coil      → the heaviest strike that is not Volt / Reversal / Surge.
+   *   Surge     → the Volt, when nothing has traded yet (no volume GEX).
+   */
+  always?: boolean
+}
+
+export function voltickMarks(input: VtBookRow[], opts: VtOpts = {}): VoltickMarks {
   const rows = input
     .filter((r) => Number.isFinite(r.strike) && Number.isFinite(r.book) && Number.isFinite(r.vol))
     .slice()
@@ -113,6 +127,24 @@ export function voltickMarks(input: VtBookRow[]): VoltickMarks {
     if (a > surgeAbs) {
       surgeAbs = a
       surge = r
+    }
+  }
+
+  if (opts.always && volt) {
+    const byAbs = rows.slice().sort((a, b) => Math.abs(b.book) - Math.abs(a.book))
+    if (!reversal) {
+      reversal =
+        byAbs.find((r) => r !== volt && voltSign !== 0 && Math.sign(r.book) === -voltSign) ??
+        byAbs.find((r) => r !== volt && r.book !== 0) ??
+        null
+    }
+    if (!surge) surge = volt
+    // A fallback Reversal may have been counted as a Coil — it is the Reversal now.
+    const revStrike = reversal?.strike
+    for (let i = coils.length - 1; i >= 0; i--) if (coils[i] === revStrike) coils.splice(i, 1)
+    if (!coils.length) {
+      const c = byAbs.find((r) => r !== volt && r !== reversal && r !== surge && r.book !== 0)
+      if (c) coils.push(c.strike)
     }
   }
 

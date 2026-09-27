@@ -33,6 +33,7 @@
 
 import { BUBBLES, type GexMetric } from './settings'
 import { valueOf, type GexColumn } from './gexHistory'
+import type { VtKey } from '@/data/voltickLevels'
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
@@ -43,6 +44,8 @@ export interface BubbleMark {
   ratio: number
   /** True for the largest |netGex| in this bucket — the one that stands apart. */
   isTop: boolean
+  /** Voltick theme: which level this strike is. Painted in that level's colour. */
+  vt?: VtKey
 }
 
 export interface BubbleSnapshot {
@@ -84,6 +87,13 @@ export interface BuildOpts {
    * Null / 0 / absent = derive it from `columns`, which is the live path.
    */
   windowMax?: number | null
+  /**
+   * VOLTICK THEME: draw ONLY these strikes (Volt / Coil / Reversal / Surge,
+   * off the newest column), every bucket, each tagged with its level so the
+   * painter colours it by level rather than by sign. No gold leader.
+   * Absent = the ordinary ranked ladder.
+   */
+  vtStrikes?: Map<number, VtKey> | null
 }
 
 /**
@@ -212,7 +222,12 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
   const out: BubbleSnapshot[] = []
 
   for (const [ts, col] of buckets) {
-    const chosen = strikeMode === 'latest'
+    const chosen = opts.vtStrikes
+      ? col.cells
+          .filter((c) => opts.vtStrikes!.has(c.strike))
+          .map((c) => ({ strike: c.strike, value: valueOf(c, metric) }))
+          .filter((x) => x.value !== 0)
+      : strikeMode === 'latest'
       ? col.cells
           .filter((c) => latestSet.has(c.strike))
           .map((c) => ({ strike: c.strike, value: valueOf(c, metric) }))
@@ -227,9 +242,10 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
     const marks: BubbleMark[] = chosen
       .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
       .map((x) => {
-        const isTop = !taggedTop && Math.abs(x.value) === top
+        const vt = opts.vtStrikes?.get(x.strike)
+        const isTop = !vt && !taggedTop && Math.abs(x.value) === top
         if (isTop) taggedTop = true
-        return { strike: x.strike, value: x.value, ratio: clamp(Math.abs(x.value) / windowMax, 0, 1), isTop }
+        return { strike: x.strike, value: x.value, ratio: clamp(Math.abs(x.value) / windowMax, 0, 1), isTop, vt }
       })
 
     out.push({ ts, marks })
@@ -282,6 +298,8 @@ export interface BubblePalette {
    * move it with everything else.
    */
   highlight: [number, number, number]
+  /** Voltick theme: one reserved colour per level (tokens.css --color-vt-*). */
+  vt?: Record<VtKey, [number, number, number]>
 }
 
 export interface BubbleGeometry {
@@ -949,7 +967,8 @@ export function drawBubbles(
   for (const { m, x, y, rx, ry, alpha, age } of keep) {
       const positive = m.value >= 0
       // The SATURATED sign colour: the PEERS' fill, and the leader's ring+glow.
-      const base = positive ? palette.pos : palette.neg
+      // Voltick theme: a level's bubble is its level's colour, whatever the sign.
+      const base = m.vt && palette.vt ? palette.vt[m.vt] : positive ? palette.pos : palette.neg
       const cx = x
 
       if (m.isTop) {

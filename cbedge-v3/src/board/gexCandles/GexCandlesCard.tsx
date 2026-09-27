@@ -61,6 +61,7 @@ import { buildRail, GexRail } from './GexRail'
 import { mountEsChart, type EsChartHandle } from './chart'
 import { useDailyEm } from '@/data/dailyEm'
 import { readUiTheme } from '@/design/uiTheme'
+import type { VtKey } from '@/data/voltickLevels'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Candles — v2's ES chart rebuilt for v3, scoped to GEX BUBBLES ONLY.
@@ -162,6 +163,15 @@ import { readUiTheme } from '@/design/uiTheme'
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CARD_ID = 'gex-candles'
+
+/**
+ * Owner-only Voltick UI theme (design/uiTheme.ts), read once — the toggle
+ * reloads the page. On this theme the card draws EXACTLY four levels, always:
+ * Volt, Coil, Reversal, Surge — as the only bubble rows, the only rail rows
+ * and the only pane tags, each in its reserved colour. The Bubbles / Levels
+ * switches cannot hide them here.
+ */
+const VOLTICK_THEME = readUiTheme() === 'voltick'
 
 // ── Replay transport ─────────────────────────────────────────────────────────
 // The same numbers and the same key layout as every other v3 transport —
@@ -869,7 +879,7 @@ export function GexCandlesCard({
   // session, and that one is still being written.
   const replayDayIsToday = activeDay === ET_DATE.format(new Date())
   const gexUrl =
-    (settings.bubblesOn || railOn || settings.levelLabels) && expiry
+    (VOLTICK_THEME || settings.bubblesOn || railOn || settings.levelLabels) && expiry
       ? activeDay
         ? gexHistoryDayUrl(def.gexSymbol, expiry, activeDay, BUBBLE_LADDER_REQUEST)
         : gexHistoryUrl(def.gexSymbol, expiry, historyMinutes, BUBBLE_LADDER_REQUEST)
@@ -1128,25 +1138,41 @@ export function GexCandlesCard({
     [replayOn, sessionColumns, settings.gexMetric, bucketMs],
   )
 
+  // Voltick UI theme: the rail and the pane tag Volt / Surge / Reversal / Coil
+  // instead of CORE / CW / PW — always all four (see VOLTICK_THEME).
+  const voltickTheme = VOLTICK_THEME
+  const railModel = useMemo(
+    () => buildRail(columns, settings.gexMetric, voltickTheme),
+    [columns, settings.gexMetric, voltickTheme],
+  )
+
+  /** Voltick theme: the four level strikes, the only bubble rows drawn. */
+  const vtStrikes = useMemo(() => {
+    const vt = railModel.levels.vt
+    if (!vt) return null
+    const m = new Map<number, VtKey>()
+    // Priority order: a strike that is two levels (Volt = Surge) paints as the
+    // first — Volt before Surge before Reversal before Coil.
+    for (const k of ['coil', 'reversal', 'surge', 'volt'] as VtKey[]) {
+      const strike = vt[k]
+      if (strike != null) m.set(strike, k)
+    }
+    return m
+  }, [railModel])
+
   const snapshots = useMemo(
     () =>
       buildBubbleModel(columns, {
         metric: settings.gexMetric,
         bucketMs,
         windowMax: bubbleDenominator,
+        vtStrikes,
       }),
-    [columns, settings.gexMetric, bucketMs, bubbleDenominator],
+    [columns, settings.gexMetric, bucketMs, bubbleDenominator, vtStrikes],
   )
 
   // Same history, second view: the bubbles say how the ladder got here across
   // the session, the rail says where it stands right now. No extra request.
-  // Voltick UI theme: the rail and the pane tag Volt / Surge / Reversal / Coil
-  // instead of CORE / CW / PW. Read once — the theme toggle reloads the page.
-  const [voltickTheme] = useState(() => readUiTheme() === 'voltick')
-  const railModel = useMemo(
-    () => buildRail(columns, settings.gexMetric, voltickTheme),
-    [columns, settings.gexMetric, voltickTheme],
-  )
 
 
   // ── Chart ──────────────────────────────────────────────────────────────────
@@ -1238,7 +1264,7 @@ export function GexCandlesCard({
   // they cannot disagree — and on ES they are already through the basis, because
   // `columns` is shifted upstream of both consumers.
   useEffect(
-    () => apply((h) => h.setLevels(settings.levelLabels ? railModel.levels : null)),
+    () => apply((h) => h.setLevels(VOLTICK_THEME || settings.levelLabels ? railModel.levels : null)),
     [settings.levelLabels, railModel, apply],
   )
 
@@ -1442,7 +1468,7 @@ export function GexCandlesCard({
     () =>
       apply((h) =>
         h.setDrawOpts({
-          on: settings.bubblesOn,
+          on: VOLTICK_THEME || settings.bubblesOn,
           bucketMin: isAutoBucket(settings.bubbleBucket) ? null : settings.bubbleBucket,
           bubbleScale: settings.bubbleScale,
         }),

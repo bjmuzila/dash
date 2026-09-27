@@ -24535,3 +24535,9 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-26 — voltick-vite: download the specs from /mockups
 - `Mockups.tsx`: two buttons beside Show changes. "⬇ This spec (.md)" downloads the current tab's spec (Settings bundles the left-menu edit spec with it); "⬇ All specs" downloads all five as one `VOLTICK-MENU-PROPOSAL.md`.
 - Specs bundled from `src/pages/mockup-specs/*.md` via Vite `?raw` imports (copies of the ones in `md files/`).
+
+## 2026-09-27 — GEX Candles (Voltick theme): exactly four levels, always
+- `cbedge-v3/src/data/voltickLevels.ts`: `voltickMarks(rows, { always: true })` — fills any empty level: Reversal → biggest opposite-sign strike (5% floor dropped), else biggest non-Volt strike; Coil → heaviest strike not Volt/Reversal/Surge; Surge → Volt when no volume yet. Bot definitions otherwise unchanged.
+- `board/gexCandles/bubbles.ts` + `chart.ts`: `vtStrikes` option — Voltick theme draws bubbles ONLY at the four level strikes (newest column), each painted in its level colour (no gold leader).
+- `board/gexCandles/GexRail.tsx`: Voltick theme rail shows only the four level rows, using the always-four marks.
+- `board/gexCandles/GexCandlesCard.tsx`: Voltick theme forces the level tags and bubbles on (Levels/Bubbles switches can't hide them) and always fetches the ladder.
