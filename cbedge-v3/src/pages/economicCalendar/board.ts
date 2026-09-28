@@ -47,6 +47,24 @@ export const BOARD = {
   rule: alpha(T.text, 0.09),
 } as const
 
+// ── Voltick palette for the week board ──────────────────────────────────────
+// The earnings board is the Voltick-branded capture (voltick.io/bzila), so it
+// reads the FIXED --color-vt-* tokens rather than the app theme.
+export const VT = {
+  ink: 'var(--color-vt-ink)',
+  panel: 'var(--color-vt-panel)',
+  elev: 'var(--color-vt-elev)',
+  line: 'var(--color-vt-line)',
+  paper: 'var(--color-vt-paper)',
+  quiet: 'var(--color-vt-quiet)',
+  accent: 'var(--color-vt-accent)',
+  accentText: 'var(--color-vt-accent-text)',
+  premarket: 'var(--color-vt-premarket)',
+} as const
+
+/** Logo size in a data-table row of the week board. */
+export const ROW_LOGO = 28
+
 // ── Chip geometry ────────────────────────────────────────────────────────────
 
 /** Chip column width in the CALENDAR tab's woven earnings row. */

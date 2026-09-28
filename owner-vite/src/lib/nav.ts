@@ -16,11 +16,11 @@ import { OWNER_THEME, OWNER_LIGHT_BLUE } from "./theme";
  * So the test for a new page is "what am I DOING when I open this?", and it has
  * exactly one answer:
  *
- *   Info      — reading the numbers: who's paying, who signed up, who visited
- *   Content   — making something public, or sending it to someone
- *   Market    — market research and the trading tools behind the dashboard
+ *   Trading   — market research and the trading tools behind the dashboard
+ *   Voltick   — the live business
+ *   Personal  — not a business at all
  *   System    — the machine itself: infra, data, code
- *   Personal  — not CB Edge at all
+ *   CB Edge Archive — customer-facing CB Edge pages, folded away (2026-09-27)
  *
  * If a page seems to fit two, it belongs in the one matching why you'd go
  * looking for it, not what it's built on. Bzila Alerts is the worked example:
@@ -41,66 +41,35 @@ import { OWNER_THEME, OWNER_LIGHT_BLUE } from "./theme";
  */
 
 export type OwnerLink = { label: string; href: string; glyph: string; key: string };
-export type OwnerGroup = { label: string; accent: string; links: OwnerLink[] };
+export type OwnerGroup = {
+  label: string;
+  accent: string;
+  links: OwnerLink[];
+  /** Rendered folded shut in the rail and on the Hub until opened (or until
+   *  you're on one of its pages). Used for the CB Edge archive. */
+  collapsed?: boolean;
+};
 
 /** Rendered above the groups, in no group — the way home from anywhere. */
 export const OWNER_PINNED_LINKS: OwnerLink[] = [
   { label: "Hub", href: "/owner", glyph: "⌂", key: "Hub" },
 ];
 
+/**
+ * 2026-09-27 — CB Edge stopped taking customers and nobody is billed anymore,
+ * so the console is regrouped around what's still in use: Trading, Voltick,
+ * Personal, System. Every page that only existed to win, bill, serve or talk to
+ * CB Edge customers moved into the collapsed "CB Edge Archive" group at the
+ * bottom. Nothing was deleted and NO href changed — the archive is a sidebar
+ * move only, so bookmarks still work and a page comes back by moving its entry
+ * out of the archive.
+ */
 export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
   {
-    // Reading the numbers — THREE pages, one per job, since 2026-09-15:
-    //
-    //   Sales      the money   (Stripe, revenue, expenses, campaign links)
-    //   Customers  the people  (traffic, signups, activity, map, feedback)
-    //   Admin      the machine (system health, controls, checks, access)
-    //
-    // Overview (/owner/dev/owner) was folded into these: its traffic half
-    // went to Customers and its system half to Admin; the old href redirects
-    // (OWNER_REDIRECTS below) so bookmarks keep working. Visitors stays its
-    // own page: the d3 world map wants the whole viewport, and it dominated
-    // the Customers page's frame budget when it sat in the middle of it.
-    label: "Info",
-    accent: OWNER_THEME.cyan,
-    links: [
-      { label: "Sales", href: "/owner/dev/sales", glyph: "$", key: "Sales" },
-      { label: "Customers", href: "/owner/customers", glyph: "◍", key: "Customers" },
-      { label: "Visitors", href: "/owner/visitors", glyph: "🌐", key: "Visitors" },
-      { label: "Admin", href: "/owner/dev/admin", glyph: "⚿", key: "Admin" },
-    ],
-  },
-  {
-    // Making something public OR sending it to someone — one job, one group.
-    label: "Content",
-    accent: OWNER_THEME.orange,
-    links: [
-      // Customer support tickets — the other end of /feedback on cbedge.net.
-      // Content rather than Info: you open this to ANSWER someone, which is the
-      // same job as Emails, not to read a number.
-      { label: "Feedback", href: "/owner/feedback", glyph: "⚑", key: "Feedback" },
-      { label: "Social Media", href: "/social-media", glyph: "🗨︎", key: "SocialMedia" },
-      { label: "Post Studio", href: "/owner/post-studio", glyph: "✎", key: "PostStudio" },
-      { label: "Changelog", href: "/changelog", glyph: "↻", key: "Changelog" },
-      { label: "Affiliates", href: "/owner/affiliates", glyph: "⇉", key: "Affiliates" },
-      { label: "Emails", href: "/owner/admin/emails", glyph: "✉", key: "Emails" },
-      // sites.cbedge.net — password-protected website previews for clients:
-      // create a site, upload its page, set its logins. Content: you open it
-      // to hand something to someone, same job as Emails.
-      { label: "Client Sites", href: "/owner/client-sites", glyph: "◫", key: "ClientSites" },
-      // Was "Newsletter" (/owner/newsletter) — the weekly-letter idea log. The
-      // letter is gone; what survived is the shoebox: paste a screenshot, give
-      // it a caption, find it again when you want to mention it. New href, so
-      // the old bookmark 404s deliberately rather than opening a different page.
-      { label: "Media Dump", href: "/owner/media-dump", glyph: "🖼︎", key: "MediaDump" },
-      { label: "Bzila Alerts", href: "/owner/dev/bzila-alerts", glyph: "🔔", key: "BzilaAlerts" },
-      // Trade-alert composer for the two Discord bots. Content rather than
-      // System: you open it to SEND something, same job as Bzila Alerts.
-      { label: "BOT", href: "/owner/bot", glyph: "◉", key: "Bot" },
-    ],
-  },
-  {
-    label: "Market",
+    // Market research and the trading tools behind the dashboard. BOT (the
+    // Discord trade-alert composer) sits here now that the customer-facing
+    // broadcast pages are archived.
+    label: "Trading",
     accent: OWNER_THEME.gold,
     links: [
       { label: "Results", href: "/owner/dev/results", glyph: "▤", key: "Results" },
@@ -111,27 +80,17 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Daily Grades", href: "/owner/daily-grades", glyph: "◆", key: "DailyGrades" },
       { label: "Est. Moves BE", href: "/estimated-move", glyph: "⇄", key: "EstimatedMove" },
       { label: "Watchlists", href: "/owner/watchlists", glyph: "☰", key: "Watchlists" },
-      { label: "Chart Types", href: "/owner/charts-ui", glyph: "▦", key: "ChartsUI" },
       // London Strategic Edge vault browser — catalog, candles, chains, flow.
-      // Market rather than System: you open it to go looking for data on an
-      // instrument, not to service the machine.
       { label: "LSE Data", href: "/owner/lse-data", glyph: "⇩", key: "LseData" },
+      { label: "BOT", href: "/owner/bot", glyph: "◉", key: "Bot" },
     ],
   },
   {
-    // The old Business group folded in here; everything it held moved to Info
-    // or Content, so this is the merged group and it is just the machine.
-    // Tree (/owner/dev/tree) was removed — the page module and pages/tree/* are
-    // now unreferenced by the router.
-    label: "System",
+    // The live business. The voltick.cbedge.net link above the groups is the
+    // way out to the site itself; this is the work list for it.
+    label: "Voltick",
     accent: OWNER_LIGHT_BLUE,
     links: [
-      { label: "Dev", href: "/owner/dev", glyph: "⚙", key: "Dev" },
-      { label: "Database", href: "/database", glyph: "⛁", key: "Database" },
-      { label: "Postgres", href: "/owner/db-map", glyph: "⛃", key: "DbMap" },
-      // Voltick Audit — cards per Voltick page (notes + marked-up screenshots)
-      // of what to change or look at. System: you open it to work on the
-      // product's code/UI, not to read numbers or send anything.
       { label: "Voltick Audit", href: "/owner/voltick-audit", glyph: "⚡︎", key: "VoltickAudit" },
     ],
   },
@@ -142,6 +101,41 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Budget", href: "/owner/budget", glyph: "⚖", key: "Budget" },
       { label: "Reta", href: "/owner/reta", glyph: "⌀", key: "Reta" },
       { label: "To-Do", href: "/owner/personal/todo", glyph: "☑", key: "Todo" },
+    ],
+  },
+  {
+    // The machine (infra, data, code) plus the two utilities that aren't about
+    // CB Edge customers: the screenshot shoebox and the client-site previews.
+    label: "System",
+    accent: OWNER_THEME.cyan,
+    links: [
+      { label: "Dev", href: "/owner/dev", glyph: "⚙", key: "Dev" },
+      { label: "Admin", href: "/owner/dev/admin", glyph: "⚿", key: "Admin" },
+      { label: "Database", href: "/database", glyph: "⛁", key: "Database" },
+      { label: "Postgres", href: "/owner/db-map", glyph: "⛃", key: "DbMap" },
+      { label: "Media Dump", href: "/owner/media-dump", glyph: "🖼︎", key: "MediaDump" },
+      // sites.cbedge.net — password-protected website previews for clients.
+      { label: "Client Sites", href: "/owner/client-sites", glyph: "◫", key: "ClientSites" },
+    ],
+  },
+  {
+    // Customer-facing CB Edge pages — kept, routed and searchable (⌘K on the
+    // Hub still finds them), just folded away at the bottom of the rail.
+    label: "CB Edge Archive",
+    accent: OWNER_THEME.orange,
+    collapsed: true,
+    links: [
+      { label: "Sales", href: "/owner/dev/sales", glyph: "$", key: "Sales" },
+      { label: "Customers", href: "/owner/customers", glyph: "◍", key: "Customers" },
+      { label: "Visitors", href: "/owner/visitors", glyph: "🌐", key: "Visitors" },
+      { label: "Affiliates", href: "/owner/affiliates", glyph: "⇉", key: "Affiliates" },
+      { label: "Feedback", href: "/owner/feedback", glyph: "⚑", key: "Feedback" },
+      { label: "Emails", href: "/owner/admin/emails", glyph: "✉", key: "Emails" },
+      { label: "Bzila Alerts", href: "/owner/dev/bzila-alerts", glyph: "🔔", key: "BzilaAlerts" },
+      { label: "Social Media", href: "/social-media", glyph: "🗨︎", key: "SocialMedia" },
+      { label: "Post Studio", href: "/owner/post-studio", glyph: "✎", key: "PostStudio" },
+      { label: "Changelog", href: "/changelog", glyph: "↻", key: "Changelog" },
+      { label: "Chart Types", href: "/owner/charts-ui", glyph: "▦", key: "ChartsUI" },
     ],
   },
 ];

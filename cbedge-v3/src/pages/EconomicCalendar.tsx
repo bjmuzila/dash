@@ -84,12 +84,13 @@ import { Popover } from '@/design/primitives/Controls'
 import { Page } from '@/design/primitives/Page'
 import { CAL, SHADOW, T, V2, V2W, alpha } from '@/design/theme'
 import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
+import { VoltickWordmark } from '@/shell/Brand'
 import { ChipLogo } from './economicCalendar/ChipLogo'
 import {
   BOARD,
   CHIP_GAP,
-  CHIP_LOGO,
-  CHIP_MIN,
+  ROW_LOGO,
+  VT,
   CHIP_W,
   dayDate,
   dayFull,
@@ -1077,210 +1078,184 @@ function EarningsBoard({
   const first = sections[0]?.date ?? ''
   const last = sections[sections.length - 1]?.date ?? ''
 
-  return (
-    <div ref={boardRef} className="p-3" style={{ background: V2.bg }}>
-      {/* Board header — INSIDE the capture target, so the copied image carries
-          the mark and the week it covers without any app chrome.
+  // One scale for every cap bar on the board, so a bar on Monday and a bar on
+  // Thursday are comparable. sqrt, because a $3T name would otherwise flatten
+  // every other bar on the week to a sliver.
+  const maxCap = Math.max(1, ...sections.flatMap((s) => [...s.pre, ...s.after, ...s.tbd].map((r) => r.market_cap || 0)))
 
-          The right-hand side is ONE run of text. It used to carry a "N NAMES"
-          pill, an ANTICIPATED / ALL NAMES pill and a cap-floor pill, and every
-          one of them was telling the reader something the board already says —
-          each day column prints its own count, and the columns themselves ARE
-          the view. A signature does not need a legend. */}
+  return (
+    <div ref={boardRef} className="p-3" style={{ background: VT.ink }}>
+      {/* VOLTICK DATA-TABLE BOARD (2026-09-27).
+          Header carries the week and the AM/PM key only — the domain moved to
+          the signature bottom-right, beside the Voltick mark, so it is not
+          printed twice on one image. */}
       <div
-        className="mb-2.5 flex flex-wrap items-center gap-3 rounded-xl px-3 py-2.5"
-        style={{ border: `1px solid ${BOARD.edge}`, background: BOARD.header }}
+        className="mb-2.5 flex flex-wrap items-center gap-3 rounded-xl px-3.5 py-2.5"
+        style={{
+          border: `1px solid ${alpha(VT.accent, 0.22)}`,
+          background: `linear-gradient(90deg, ${alpha(VT.accent, 0.14)} 0%, ${VT.panel} 60%)`,
+        }}
       >
-        <div className="flex min-w-0 flex-col gap-0.5">
-          {/* The poster's accent, not plain white. Everything else on this board
-              is white or near it — twelve company names, five date strips, every
-              count — so a white title was one more white thing rather than the
-              thing you read first. Teal is the brand colour the econ template
-              already prints its own headings in. */}
-          <span
-            className="text-sm font-black tracking-[0.14em]"
-            style={{ color: CAL.accent }}
-          >
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-sm font-black tracking-[0.14em]" style={{ color: VT.accentText }}>
             {earnWeek === 0 ? 'EARNINGS THIS WEEK' : 'EARNINGS NEXT WEEK'}
           </span>
-          <span className="tabular font-mono text-xs leading-tight tracking-[0.04em] text-fg">
-            {dayDate(first)} – {dayDate(last)}
+          <span className="tabular font-mono text-2xs leading-tight tracking-[0.1em]" style={{ color: VT.quiet }}>
+            {dayDate(first)} – {dayDate(last)} · AM = BEFORE OPEN · PM = AFTER CLOSE · SORTED BY MARKET CAP
           </span>
         </div>
-        {/* The domain is the whole point of the picture once it has been pasted
-            into a Discord someone else reads. At 11px it was a footnote in the
-            corner; this is the size a watermark has to be to survive a
-            screenshot of a screenshot. */}
-        <span className="tabular ml-auto font-mono text-xl font-extrabold leading-none text-fg">
-          voltick.io/bzila
-        </span>
       </div>
 
       <div
         className="grid items-start gap-2.5"
-        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' }}
+        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}
       >
         {sections.map((s) => (
-          <DayColumn key={`earn-col-${s.date}`} section={s} isToday={s.date === today} />
+          <DayColumn key={`earn-col-${s.date}`} section={s} isToday={s.date === today} maxCap={maxCap} />
         ))}
       </div>
 
-      {/* Signature. Bottom-right, under the grid rather than beside the title:
-          the header's left edge is the week's own label and a mark there was
-          competing with it. Down here it reads as the SOURCE of the board,
-          which is what it is once the image is pasted somewhere else.
-
-          cbedge3.0.png is a 3.4:1 banner with a TRANSPARENT ground, so 56px tall
-          lands it at ~190px wide. The transparency matters: the .jpg carried a
-          baked-in black plate, and the board's ground is near-black but not
-          black, so the plate showed as a faintly different rectangle. Inside
-          boardRef, so the capture carries it. */}
-      {/* The deep link sits opposite the mark on the same baseline. Whoever the
-          image reaches sees the brand on the right and, on the left, exactly
-          where to go and see it live — a poster that says cbedge.net and nothing
-          else makes the reader guess which of thirty pages this was.
-
-          `items-end` rather than `items-center`: the mark is a 56px banner and
-          the URL is one line of 13px type, so centring them floated the text in
-          the middle of the mark's height instead of sitting it on the floor of
-          the picture. */}
-      <div className="flex items-end justify-between gap-3 pt-3">
-        <span
-          className="tabular min-w-0 truncate font-mono text-sm font-semibold leading-none"
-          style={{ color: CAL.accent }}
-        >
-          voltick.io/bzila
+      {/* Legend left, signature right — the Voltick mark then the deep link.
+          Inside boardRef, so the capture carries both. */}
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
+        <span className="flex flex-wrap items-center gap-4 font-mono text-2xs" style={{ color: VT.quiet }}>
+          {(['pre', 'after', 'tbd'] as const).map((k) => (
+            <span key={k} style={{ color: BOARD_KIND[k].color }}>
+              {BOARD_KIND[k].tag} · {BOARD_KIND[k].label}
+            </span>
+          ))}
+          <span>Bar = relative market cap</span>
+        </span>
+        <span className="flex items-center gap-2.5">
+          <VoltickWordmark className="h-7" />
+          <span className="h-4 w-px" style={{ background: VT.line }} />
+          <span className="tabular font-mono text-sm font-extrabold leading-none" style={{ color: VT.paper }}>
+            voltick.io/bzila
+          </span>
         </span>
       </div>
     </div>
   )
 }
 
-function DayColumn({ section, isToday }: { section: Section; isToday: boolean }) {
+/** Board-only session vocabulary: AM / PM / TBD. The calendar tab keeps EARN_KIND. */
+const BOARD_KIND: Record<EarnKind, { tag: string; label: string; time: string; color: string }> = {
+  pre: { tag: 'AM', label: 'Before open', time: '~7:00 AM ET', color: VT.premarket },
+  after: { tag: 'PM', label: 'After close', time: '~4:05 PM ET', color: VT.accentText },
+  tbd: { tag: 'TBD', label: 'Time unconfirmed', time: '', color: VT.quiet },
+}
+
+function DayColumn({ section, isToday, maxCap }: { section: Section; isToday: boolean; maxCap: number }) {
   const { date, pre, after, tbd } = section
   const n = pre.length + after.length + tbd.length
   return (
     <div
       className="flex min-w-0 flex-col overflow-hidden rounded-xl"
       style={{
-        border: `1px solid ${isToday ? BOARD.edgeToday : BOARD.edge}`,
-        background: isToday ? BOARD.cardToday : BOARD.card,
+        border: `1px solid ${isToday ? alpha(VT.accent, 0.55) : VT.line}`,
+        background: VT.panel,
       }}
     >
-      {/* THREE-COLUMN GRID, not a flex row, because the date has to sit in the
-          MIDDLE of the strip. A flex row with the count pushed right by
-          margin-left:auto centres nothing — the date lands wherever the count's
-          width leaves it, so a column showing "11" put its date a few px left of
-          one showing "1". Equal 1fr outer tracks make the middle track's centre
-          the strip's centre whatever either side holds.
-
-          ONE SIZE AND ONE FAMILY for every run in the strip. They used to be
-          10px mono and 13px sans, which the live page reconciles with
-          align-items:center and a capture does not; the contrast is carried by
-          weight and colour instead, which any renderer reproduces exactly. */}
       <div
-        className="grid items-center px-2.5 py-2.5"
-        style={{
-          gridTemplateColumns: '1fr auto 1fr',
-          background: isToday ? BOARD.headToday : BOARD.head,
-        }}
+        className="flex items-end justify-between gap-2 px-3.5 py-2.5"
+        style={{ background: VT.elev, borderBottom: `1px solid ${VT.line}` }}
       >
-        <span />
-        <span className="flex items-center justify-center gap-1.5">
-          <span
-            className="tabular font-mono text-xs font-black leading-none tracking-[0.1em]"
-            style={{ color: CAL.accent }}
-          >
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="tabular font-mono text-2xs leading-none tracking-[0.14em]" style={{ color: VT.quiet }}>
             {dayFull(date)}
+            {isToday && (
+              <span
+                className="ml-1.5 rounded-[3px] px-1.5 py-[2px] font-black"
+                style={{ background: VT.accent, color: VT.paper }}
+              >
+                TODAY
+              </span>
+            )}
           </span>
-          <span className="tabular font-mono text-xs font-extrabold leading-none tracking-[0.04em] text-fg">
+          <span className="tabular font-mono text-xl font-extrabold leading-none" style={{ color: VT.paper }}>
             {dayDate(date)}
           </span>
-          {isToday && (
-            <span
-              className="tabular rounded-[3px] px-1.5 py-[3px] font-mono text-2xs font-black leading-none tracking-[0.1em]"
-              style={{ background: CAL.accent, color: V2.badgeInk }}
-            >
-              TODAY
-            </span>
-          )}
-        </span>
-        <span className="tabular justify-self-end font-mono text-xs font-bold leading-none text-fg opacity-60">
-          {n}
-        </span>
+        </div>
+        <div className="flex flex-col items-end gap-1.5 font-mono text-2xs leading-none tracking-[0.12em]">
+          <span style={{ color: VT.quiet }}>{n} REPORTS</span>
+          <span>
+            <span style={{ color: BOARD_KIND.pre.color }}>AM {pre.length}</span>
+            <span style={{ color: VT.quiet }}> · </span>
+            <span style={{ color: BOARD_KIND.after.color }}>PM {after.length}</span>
+          </span>
+        </div>
       </div>
 
-      {pre.length > 0 && <SessionBlock kind="pre" rows={pre} />}
-      {after.length > 0 && <SessionBlock kind="after" rows={after} />}
-      {tbd.length > 0 && <SessionBlock kind="tbd" rows={tbd} />}
+      {pre.length > 0 && <SessionBlock kind="pre" rows={pre} maxCap={maxCap} />}
+      {after.length > 0 && <SessionBlock kind="after" rows={after} maxCap={maxCap} />}
+      {tbd.length > 0 && <SessionBlock kind="tbd" rows={tbd} maxCap={maxCap} />}
     </div>
   )
 }
 
-function SessionBlock({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
-  const k = EARN_KIND[kind]
+function SessionBlock({ kind, rows, maxCap }: { kind: EarnKind; rows: EarnRow[]; maxCap: number }) {
+  const k = BOARD_KIND[kind]
   return (
-    <div className="px-2.5 pb-2.5 pt-2" style={{ borderTop: `1px solid ${BOARD.rule}` }}>
-      <div className="mb-2 flex items-center">
-        {/* The dot lives INSIDE the label, not beside it. As a flex sibling it
-            centred on the ROW, whose height is set by the tallest line box, so
-            a 6px dot sat on the line's middle while the 9px all-caps label's
-            cap band sits above that. Nested in a line-height:1 inline-block it
-            is baseline-aligned and centres to within a third of a pixel. */}
-        <span
-          className="inline-block text-3xs font-black uppercase leading-none tracking-[0.12em]"
-          style={{ color: k.color }}
-        >
-          <span
-            className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full"
-            style={{ background: k.color }}
-          />
-          {k.board}
-        </span>
-        <span className="tabular ml-auto font-mono text-3xs font-bold leading-none text-fg opacity-60">
-          {rows.length}
-        </span>
-      </div>
+    <div>
       <div
-        className="grid gap-2"
-        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${CHIP_MIN}px, 1fr))` }}
+        className="flex items-center gap-1.5 px-3.5 py-1.5 font-mono text-2xs leading-none tracking-[0.14em]"
+        style={{ color: k.color, background: VT.ink, borderBottom: `1px solid ${VT.line}` }}
       >
-        {rows.map((r) => (
-          <EarnChip key={r.symbol} row={r} />
-        ))}
+        <span className="font-black">{k.tag}</span>
+        <span>· {k.label.toUpperCase()}</span>
+        <span className="ml-auto tracking-[0.04em]" style={{ color: VT.quiet }}>
+          {k.time}
+        </span>
       </div>
+      {rows.map((r) => (
+        <EarnTableRow key={r.symbol} row={r} kind={kind} maxCap={maxCap} />
+      ))}
     </div>
   )
 }
 
 /**
- * One ticker tile: LOGO, then TICKER. Nothing else.
- *
- * The market-cap line is gone. It was the same number three times over — the
- * board is already ordered by cap and the chips are already picked by it — and
- * it cost a third line on every tile, which is what made a nine-name Wednesday
- * taller than the fold. Cap and EPS estimate are one hover away in `title`.
- *
- * `width:100%` + `text-center` on the label is what actually centres it:
- * align-items only centres the SPAN, not the text inside a span that stretches
- * to the column.
+ * One table row: AM/PM badge · logo · ticker · company · cap bar · cap.
+ * The whole row links to the quote page; EPS estimate stays one hover away.
  */
-function EarnChip({ row }: { row: EarnRow }) {
+function EarnTableRow({ row, kind, maxCap }: { row: EarnRow; kind: EarnKind; maxCap: number }) {
+  const k = BOARD_KIND[kind]
+  const pct = row.market_cap > 0 ? Math.max(4, Math.sqrt(row.market_cap / maxCap) * 100) : 0
   return (
     <a
       href={quoteHref(row.symbol)}
       target="_blank"
       rel="noreferrer"
       title={chipTitle(row)}
-      className="flex min-w-0 flex-col items-center justify-start gap-1.5 rounded-[9px] px-1 py-2 no-underline"
-      style={{ background: BOARD.tile, border: `1px solid ${BOARD.rule}` }}
+      className="grid items-center gap-2 px-3.5 py-1.5 no-underline"
+      style={{
+        gridTemplateColumns: '34px 30px 56px minmax(0,1fr) 64px 44px',
+        borderBottom: `1px solid ${alpha(VT.line, 0.7)}`,
+      }}
     >
-      {/* lazy={false}: this board is the capture target, and any capture engine
-          clones the DOM as it stands — a chip the browser has not fetched yet
-          captures empty. */}
-      <ChipLogo sym={row.symbol} company={row.company} size={CHIP_LOGO} radius={10} lazy={false} />
-      <span className="tabular w-full overflow-hidden text-ellipsis whitespace-nowrap text-center font-mono text-xs font-extrabold leading-none tracking-[0.02em] text-fg">
+      <span
+        className="rounded-[4px] py-[2px] text-center font-mono text-3xs font-black leading-none"
+        style={{ color: k.color, border: `1px solid ${k.color}` }}
+      >
+        {k.tag}
+      </span>
+      {/* lazy={false}: this board is the capture target — a logo the browser
+          has not fetched yet captures empty. */}
+      <ChipLogo sym={row.symbol} company={row.company} size={ROW_LOGO} radius={8} lazy={false} />
+      <span
+        className="tabular overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-extrabold leading-none"
+        style={{ color: VT.paper }}
+      >
         {row.symbol}
+      </span>
+      <span className="overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-none" style={{ color: VT.quiet }}>
+        {row.company}
+      </span>
+      <span className="block h-1.5 overflow-hidden rounded-full" style={{ background: VT.elev }}>
+        <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: k.color }} />
+      </span>
+      <span className="tabular text-right font-mono text-2xs leading-none" style={{ color: VT.quiet }}>
+        {row.market_cap > 0 ? fmtMcap(row.market_cap) : '—'}
       </span>
     </a>
   )

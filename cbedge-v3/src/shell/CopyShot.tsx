@@ -832,6 +832,14 @@ export function CopyShotMenu() {
   // rather than leaving a panel with one row in it that says "All shots".
   const showAll = allOpen || pinnedRows.length === 0
 
+  // The full list below the pins: a pinned row is already up top, so it is not
+  // repeated in its group, and on the home page the "Pages" group is dropped.
+  const onHome = pathname === '/' || pathname === ''
+  const visibleGroups = groups
+    .filter((g) => !(onHome && g.name === 'Pages'))
+    .map((g) => ({ name: g.name, rows: g.rows.filter((t) => !pins.includes(t.id)) }))
+    .filter((g) => g.rows.length > 0)
+
   /**
    * One row, drawn the same whether it is pinned or down in the full list —
    * `where` only decides which saved order a drag rewrites.
@@ -974,7 +982,7 @@ export function CopyShotMenu() {
               </span>
             </button>
             {showAll &&
-              groups.map((g) => (
+              visibleGroups.map((g) => (
                 <div key={g.name} className="mt-1.5 flex flex-col gap-0.5">
                   <span className="px-1 text-3xs font-bold uppercase tracking-[0.12em] text-faint opacity-60">
                     {g.name}

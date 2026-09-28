@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-27 - v3 Earnings board: Voltick data-table layout with AM/PM
+
+- `cbedge-v3/src/pages/EconomicCalendar.tsx`: the Earnings tab week board is now a data table per day. Each day has AM (before open), PM (after close) and TBD groups; each row shows an AM/PM badge, the company logo, ticker, company name, a relative market-cap bar and the cap. Day header shows the report count and AM/PM counts. Voltick colours throughout. Top-right URL removed; bottom-right is now the Voltick mark followed by voltick.io/bzila. The calendar tab's woven earnings are unchanged.
+- `cbedge-v3/src/pages/economicCalendar/board.ts`: added `VT` (reads the fixed `--color-vt-*` tokens) and `ROW_LOGO`.
+
 ## 2026-09-27 - owner.cbedge.net Emails: Old emails 2 in numbered batches of 100
 
 - `owner-vite/src/pages/Emails.tsx`: under Audience, Old emails 2 is split into numbered batches of 100 (#1, #2, …), cut from the full list in order. Clicking a number sends to that batch only (goes out as a Custom `to` list; the old-list warning still applies). 🗑 deletes a batch when it's done, with a confirm first; "Show deleted batches" restores one. Done state is kept in localStorage (`owner.emails.oldEmails2.doneBatches`), so it is per browser. The whole Old emails 2 audience is unchanged.
@@ -24580,3 +24585,6 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-27 — Unsubscribe page: no toolbar, back-to-home, Voltick link
 - `components/shared/LayoutShell.tsx`: `/unsubscribe` added to `BARE_ROUTES` — the page renders full-bleed with no dashboard toolbar/docks.
 - `app/unsubscribe/page.tsx`: after a successful unsubscribe it redirects to the landing page (`/`) after 4s; footer now has "← Back to home" plus a "Visit voltick.io/bzila →" link.
+
+## 2026-09-27 — Screenshot menu: no Pages list on home, pinned rows de-duplicated
+- `cbedge-v3/src/shell/CopyShot.tsx`: on the home page (`/`) the "Pages" group is dropped from the camera menu's All shots list; a pinned shot is no longer repeated in its group (Home board etc.) — it only shows under Pinned. Empty groups are hidden.

@@ -30,6 +30,18 @@ import { CustomerCardHost } from "./components/CustomerCard";
 
 const FAV_KEY = "cbedge.ownerRail.favorites.v1";
 const FAV_EVENT = "cbedge:owner-favorites";
+/** Collapsed groups (lib/nav `collapsed: true`) the user has opened — per browser. */
+const OPEN_GROUPS_KEY = "cbedge.ownerRail.openGroups.v1";
+
+function readOpenGroups(): string[] {
+  try {
+    const raw = window.localStorage.getItem(OPEN_GROUPS_KEY);
+    const v = raw ? JSON.parse(raw) : [];
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 function readFavs(): string[] {
   if (typeof window === "undefined") return [];
@@ -77,6 +89,23 @@ export default function OwnerShell() {
   const [open, setOpen] = useState(false);
   const [favs, setFavs] = useState<string[]>([]);
   const [hovered, setHovered] = useState<string | null>(null);
+  const [openGroups, setOpenGroups] = useState<string[]>([]);
+
+  useEffect(() => {
+    setOpenGroups(readOpenGroups());
+  }, []);
+
+  const toggleGroup = useCallback((label: string) => {
+    setOpenGroups((prev) => {
+      const next = prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label];
+      try {
+        window.localStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(next));
+      } catch {
+        /* storage unavailable — the toggle still works for this session */
+      }
+      return next;
+    });
+  }, []);
 
   // Exact-match only: a link is active solely on its own page. Links that
   // carry ?tab= share one pathname → disambiguate on the tab (no current link
@@ -400,12 +429,49 @@ export default function OwnerShell() {
         </div>
       )}
 
-      {groups.map((group) => (
-        <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <div style={groupHeadStyle(group.accent)}>{group.label}</div>
-          {group.links.map((link) => navLink(link, group.accent))}
-        </div>
-      ))}
+      {groups.map((group) => {
+        if (!group.collapsed) {
+          return (
+            <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <div style={groupHeadStyle(group.accent)}>{group.label}</div>
+              {group.links.map((link) => navLink(link, group.accent))}
+            </div>
+          );
+        }
+        // Collapsed group (the CB Edge archive): a divider + toggle header at
+        // the bottom of the rail. Forced open while you're on one of its pages,
+        // so the active link is never hidden.
+        const holdsActive = group.links.some((l) => isActive(l.href));
+        const expanded = holdsActive || openGroups.includes(group.label);
+        return (
+          <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: "auto", paddingTop: 6 }}>
+            <div style={{ height: 1, margin: "0 7px 8px", background: OWNER_THEME.border }} />
+            <button
+              type="button"
+              aria-expanded={expanded}
+              onClick={() => toggleGroup(group.label)}
+              style={{
+                ...groupHeadStyle(group.accent),
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                textAlign: "left",
+                opacity: expanded ? 1 : 0.7,
+              }}
+            >
+              <span aria-hidden style={{ fontSize: 9, width: 10 }}>{expanded ? "▾" : "▸"}</span>
+              {group.label}
+              <span style={{ marginLeft: "auto", fontWeight: 700, opacity: 0.6, letterSpacing: "0.04em" }}>
+                {group.links.length}
+              </span>
+            </button>
+            {expanded && group.links.map((link) => navLink(link, group.accent))}
+          </div>
+        );
+      })}
     </aside>
   );
 

@@ -40,6 +40,8 @@ export default function Hub() {
   const [sel, setSel] = useState(0);
   const [pinned, setPinned] = useState<HubLink[]>([]);
   const [recent, setRecent] = useState<HubLink[]>([]);
+  // Collapsed nav groups (the CB Edge archive) opened on this visit.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -371,18 +373,34 @@ export default function Hub() {
               {OWNER_SIDEBAR_GROUPS.map((group) => {
                 const links = HUB_LINKS.filter((l) => l.group === group.label);
                 if (links.length === 0) return null;
+                const expanded = !group.collapsed || openGroups.has(group.label);
+                const toggle = () =>
+                  setOpenGroups((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(group.label)) next.delete(group.label);
+                    else next.add(group.label);
+                    return next;
+                  });
                 return (
-                  <div key={group.label}>
-                    <div style={{ ...railLabel, color: group.accent }}>
+                  <div key={group.label} style={group.collapsed ? { opacity: expanded ? 1 : 0.75 } : undefined}>
+                    <div
+                      style={{ ...railLabel, color: group.accent, cursor: group.collapsed ? "pointer" : undefined }}
+                      onClick={group.collapsed ? toggle : undefined}
+                      role={group.collapsed ? "button" : undefined}
+                      aria-expanded={group.collapsed ? expanded : undefined}
+                    >
+                      {group.collapsed && <span aria-hidden>{expanded ? "▾" : "▸"}</span>}
                       {group.label}
                       <span style={{ fontSize: TYPE.micro, fontWeight: 700, opacity: 0.55, letterSpacing: "0.06em" }}>
                         {links.length}
                       </span>
                       <span style={{ flex: 1, height: 1, background: OWNER_THEME.border }} />
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 8 }}>
-                      {links.map((l) => chip(l, group.accent, true))}
-                    </div>
+                    {expanded && (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 8 }}>
+                        {links.map((l) => chip(l, group.accent, true))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
