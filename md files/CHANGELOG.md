@@ -24605,3 +24605,7 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-28 — Owner Probe: reject non-existent expirations
 - `/owner/probe` SMCI 47C was saved with expiry 2026-10-04 (a Sunday); `/proxy/probe-rest` returned `found:false, status:no-expiry` on every poll, so the card stayed blank.
 - `server-v2/api-router.js` `/api/watch` add now pre-probes and returns 400 with the nearest listed expirations when the chain has no such date (manual adds only; transport failures still pass).
+
+## 2026-09-28 — v3 GEX Candles: Voltick levels historical + Levels toggle
+- `cbedge-v3/src/board/gexCandles/bubbles.ts`: Voltick theme now resolves Volt / Surge / Reversal / Coil per bubble bucket (`vtStrikesOf`) instead of pinning the newest column's strikes across the whole session — levels switch through the day and replay shows them as they stood, same as CB Edge.
+- `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`: passes `voltick` to the bubble model; pane level tags now only draw when the toolbar's Levels switch is on (Voltick theme no longer forces them).

@@ -61,7 +61,6 @@ import { buildRail, GexRail } from './GexRail'
 import { mountEsChart, type EsChartHandle } from './chart'
 import { useDailyEm } from '@/data/dailyEm'
 import { readUiTheme } from '@/design/uiTheme'
-import type { VtKey } from '@/data/voltickLevels'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Candles — v2's ES chart rebuilt for v3, scoped to GEX BUBBLES ONLY.
@@ -168,8 +167,8 @@ const CARD_ID = 'gex-candles'
  * Owner-only Voltick UI theme (design/uiTheme.ts), read once — the toggle
  * reloads the page. On this theme the card draws EXACTLY four levels, always:
  * Volt, Coil, Reversal, Surge — as the only bubble rows, the only rail rows
- * and the only pane tags, each in its reserved colour. The Bubbles / Levels
- * switches cannot hide them here.
+ * and the only pane tags, each in its reserved colour. The pane tags obey
+ * the toolbar's Levels switch, same as on the CB Edge theme.
  */
 const VOLTICK_THEME = readUiTheme() === 'voltick'
 
@@ -1146,29 +1145,18 @@ export function GexCandlesCard({
     [columns, settings.gexMetric, voltickTheme],
   )
 
-  /** Voltick theme: the four level strikes, the only bubble rows drawn. */
-  const vtStrikes = useMemo(() => {
-    const vt = railModel.levels.vt
-    if (!vt) return null
-    const m = new Map<number, VtKey>()
-    // Priority order: a strike that is two levels (Volt = Surge) paints as the
-    // first — Volt before Surge before Reversal before Coil.
-    for (const k of ['coil', 'reversal', 'surge', 'volt'] as VtKey[]) {
-      const strike = vt[k]
-      if (strike != null) m.set(strike, k)
-    }
-    return m
-  }, [railModel])
-
   const snapshots = useMemo(
     () =>
       buildBubbleModel(columns, {
         metric: settings.gexMetric,
         bucketMs,
         windowMax: bubbleDenominator,
-        vtStrikes,
+        // Voltick: each bucket resolves its OWN four levels (bubbles.ts
+        // vtStrikesOf), so they switch through the session and a rewound
+        // bucket shows the levels as they stood then — same as CB Edge.
+        voltick: voltickTheme,
       }),
-    [columns, settings.gexMetric, bucketMs, bubbleDenominator, vtStrikes],
+    [columns, settings.gexMetric, bucketMs, bubbleDenominator, voltickTheme],
   )
 
   // Same history, second view: the bubbles say how the ladder got here across
@@ -1264,7 +1252,7 @@ export function GexCandlesCard({
   // they cannot disagree — and on ES they are already through the basis, because
   // `columns` is shifted upstream of both consumers.
   useEffect(
-    () => apply((h) => h.setLevels(VOLTICK_THEME || settings.levelLabels ? railModel.levels : null)),
+    () => apply((h) => h.setLevels(settings.levelLabels ? railModel.levels : null)),
     [settings.levelLabels, railModel, apply],
   )
 

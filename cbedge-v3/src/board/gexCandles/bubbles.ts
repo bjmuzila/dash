@@ -33,7 +33,7 @@
 
 import { BUBBLES, type GexMetric } from './settings'
 import { valueOf, type GexColumn } from './gexHistory'
-import type { VtKey } from '@/data/voltickLevels'
+import { voltickMarks, type VtKey } from '@/data/voltickLevels'
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
@@ -88,12 +88,34 @@ export interface BuildOpts {
    */
   windowMax?: number | null
   /**
-   * VOLTICK THEME: draw ONLY these strikes (Volt / Coil / Reversal / Surge,
-   * off the newest column), every bucket, each tagged with its level so the
-   * painter colours it by level rather than by sign. No gold leader.
-   * Absent = the ordinary ranked ladder.
+   * VOLTICK THEME: each bucket draws ONLY its own Volt / Coil / Reversal /
+   * Surge — resolved from THAT bucket's column, not the newest one — so the
+   * levels switch across the session exactly like the CB Edge picks do and a
+   * rewound bucket shows the levels as they stood at that time. Each mark is
+   * tagged with its level so the painter colours it by level rather than by
+   * sign. No gold leader. false/absent = the ordinary ranked ladder.
    */
+  voltick?: boolean
+  /** Deprecated: one fixed strike set for every bucket. Ignored when `voltick`. */
   vtStrikes?: Map<number, VtKey> | null
+}
+
+/**
+ * Voltick levels for ONE column, as strike → level. Priority order: a strike
+ * that is two levels (Volt = Surge) paints as the first — Volt before Surge
+ * before Reversal before Coil. Same book inputs as the rail (GexRail.tsx).
+ */
+export function vtStrikesOf(col: GexColumn): Map<number, VtKey> {
+  const vt = voltickMarks(
+    col.cells.map((c) => ({ strike: c.strike, book: c.net, vol: c.netVol })),
+    { always: true },
+  )
+  const m = new Map<number, VtKey>()
+  for (const k of ['coil', 'reversal', 'surge', 'volt'] as VtKey[]) {
+    const strike = vt[k]
+    if (strike != null) m.set(strike, k)
+  }
+  return m
 }
 
 /**
@@ -222,9 +244,10 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
   const out: BubbleSnapshot[] = []
 
   for (const [ts, col] of buckets) {
-    const chosen = opts.vtStrikes
+    const vtStrikes = opts.voltick ? vtStrikesOf(col) : opts.vtStrikes ?? null
+    const chosen = vtStrikes
       ? col.cells
-          .filter((c) => opts.vtStrikes!.has(c.strike))
+          .filter((c) => vtStrikes.has(c.strike))
           .map((c) => ({ strike: c.strike, value: valueOf(c, metric) }))
           .filter((x) => x.value !== 0)
       : strikeMode === 'latest'
@@ -242,7 +265,7 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
     const marks: BubbleMark[] = chosen
       .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
       .map((x) => {
-        const vt = opts.vtStrikes?.get(x.strike)
+        const vt = vtStrikes?.get(x.strike)
         const isTop = !vt && !taggedTop && Math.abs(x.value) === top
         if (isTop) taggedTop = true
         return { strike: x.strike, value: x.value, ratio: clamp(Math.abs(x.value) / windowMax, 0, 1), isTop, vt }
