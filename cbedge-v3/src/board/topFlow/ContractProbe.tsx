@@ -553,12 +553,15 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo: alertInfoProp,
         <>
           {controls}
           <div ref={cardRef} data-capture-signed className="flex flex-col gap-3 bg-surface2 px-5 pb-5 pt-2">
-            <div className="flex items-center gap-2">
+            {/* PHONE (Brandon, 2026-09-28): the expiry used to squeeze onto three
+                lines between the strike and the badge. It never wraps now; the
+                row wraps instead and the badge drops under it when it has to. */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
               <span className="text-xl font-bold leading-none tracking-[0.02em] text-fg">{row.underlying ?? '—'}</span>
               <span className="tabular inline-flex h-5 items-center justify-center rounded-sm border border-warn/50 bg-warn/10 px-1.5 text-xs font-bold leading-none text-warn">
                 {fmtStrike(row.strike)}{row.type ?? ''}
               </span>
-              <span className="tabular text-sm text-fg">
+              <span className="tabular whitespace-nowrap text-sm text-fg">
                 {fmtDate(row.expiry)}{info.dteLabel ? ` · ${info.dteLabel}` : ''}
               </span>
               <span className="tabular ml-auto inline-flex h-5 shrink-0 items-center justify-center rounded-sm bg-accent/15 px-1.5 text-2xs font-bold leading-none tracking-[0.08em] text-accent">

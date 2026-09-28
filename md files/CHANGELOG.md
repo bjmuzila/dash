@@ -24632,3 +24632,9 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-09-28 — owner.cbedge.net Budget: statement import applies filing rules first
 - `server-v2/api-router.js` `/api/budget/parse-statement` (CSV, PDF and image): the staging table's categories are now decided rules → history → model. A filing rule always wins, then the merchant's most-used category from earlier months, and only then Claude's guess. Same precedence as Auto-categorize. Rules also apply when the API key/credits are unavailable. Response carries `filedBy: { rule, history, model }` and each row a `categorySource`.
+
+## 2026-09-28 — owner.cbedge.net Budget: Where It Went is pie-only
+- `owner-vite/src/pages/Budget.tsx` `CategoryDonutCard`: the side legend is gone and the pie fills the card (up to 320px, bigger radius). Hover/tap a wedge to see its category, amount, % of spend, typical month and ▲/▼ delta in the centre. Each wedge also has a native tooltip.
+
+## 2026-09-28 — v3 Repeated Flow snapshot: cleaner top on mobile
+- `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx` `alertInfoOf`: the trade card / snapshot no longer prints the date three times. Badge is now `REPEATED 7×` (no day), the headline drops "Repeated flow · N orders" and the date — just `$1.2M · 500 ct @ 3.10 · 10:02 AM → 10:40 AM`. The When tile keeps the date; a burst that crosses sessions still shows both days in the headline.

@@ -423,20 +423,24 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
   /**
    * The pop-out trade card + 📸 Snapshot — the same template the Tracked
    * contracts use (ContractProbe's `alertInfo`), dressed for a burst: the
-   * headline is the burst, the pill says how many orders and which day.
+   * headline is the burst, the pill says how many orders.
    */
   const alertInfoOf = (r: RepeatContract): ProbeAlertInfo => {
-    const bits = [`Repeated flow · ${num(r.n)} orders`, money(r.total)]
+    // PHONE CLEAN-UP (Brandon, 2026-09-28): the date used to print three
+    // times up top (badge, headline, tiles) and wrapped the header onto extra
+    // rows on a phone. The When tile carries the date now; the badge is just
+    // the count and the headline is just the burst. A burst that crossed
+    // sessions still names both days, since that is the story.
+    const bits = [money(r.total)]
     if (r.size > 0) bits.push(`${num(Math.round(r.size))} ct${r.avgPrice != null ? ` @ ${r.avgPrice.toFixed(2)}` : ''}`)
-    // Date FIRST, always — the picture cannot be hovered. The second stamp
-    // drops the date when the burst stayed inside one session.
-    const dFirst = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }).format(new Date(r.firstTs))
-    const dLast = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }).format(new Date(r.lastTs))
-    bits.push(`${dFirst} ${fmtTime(r.firstTs)} → ${dLast === dFirst ? '' : `${dLast} `}${fmtTime(r.lastTs)}`)
+    const et = (ts: number) => new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }).format(new Date(ts))
+    const dFirst = et(r.firstTs)
+    const dLast = et(r.lastTs)
+    bits.push(dLast === dFirst
+      ? `${fmtTime(r.firstTs)} → ${fmtTime(r.lastTs)}`
+      : `${dFirst} ${fmtTime(r.firstTs)} → ${dLast} ${fmtTime(r.lastTs)}`)
     const expMs = Date.parse(`${String(r.expiry).slice(0, 10)}T16:00:00-04:00`)
     const days = Number.isFinite(expMs) ? Math.max(0, Math.ceil((expMs - Date.now()) / 864e5)) : null
-    const day = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })
-      .format(new Date(r.firstTs)).toUpperCase()
     return {
       shotId: `repeat:${r.osi}`,
       shotLabel: 'Repeated flow',
@@ -444,7 +448,7 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
       headline: bits.join(' · '),
       dteLabel: days != null ? `${days}d` : null,
       trackedAt: r.firstTs,
-      badge: `REPEATED ${r.n}× · ${day}`,
+      badge: `REPEATED ${r.n}×`,
     }
   }
   const probe = (r: RepeatContract) => (
