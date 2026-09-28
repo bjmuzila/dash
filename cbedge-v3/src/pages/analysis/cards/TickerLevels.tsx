@@ -47,6 +47,7 @@ import {
 import { TickerPicker, cleanSymbol, loadList, saveList } from '../TickerPicker'
 import { useScannerTickers } from '@/data/useScannerTickers'
 import { V2 } from '@/design/theme'
+import { levelNamer } from '@/data/voltickLevels'
 
 interface WallsTickerRow {
   symbol: string
@@ -236,6 +237,9 @@ export function TickerLevelsCard() {
   const near = nearerCall ? distCall : distPut
   const crossed = near != null && near < 0
   const distCore = row.spot != null && row.core != null ? row.core - row.spot : null
+  // Voltick UI theme: CORE = Volt, the wall on the CORE's side of spot = Coil,
+  // the other = Reversal (data/voltickLevels.ts). Pass-through when off.
+  const vt = levelNamer(row.core, row.spot, row.call, row.put)
 
   const fmtLvl = (n: number | null) =>
     n == null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: 2 })
@@ -281,15 +285,15 @@ export function TickerLevelsCard() {
           >
             <Stat label="Spot" value={fmtLvl(row.spot)} size={FS.stat} />
             <Stat
-              label="Call Wall"
+              label={vt.name('cw', 'Call Wall')}
               value={fmtLvl(row.call)}
-              color={row.call == null ? V2.muted : V2.orange}
+              color={row.call == null ? V2.muted : vt.color('cw', V2.orange)}
               size={FS.stat}
             />
             <Stat
-              label="Put Wall"
+              label={vt.name('pw', 'Put Wall')}
               value={fmtLvl(row.put)}
-              color={row.put == null ? V2.muted : V2.pos}
+              color={row.put == null ? V2.muted : vt.color('pw', V2.pos)}
               size={FS.stat}
             />
           </div>
@@ -298,8 +302,8 @@ export function TickerLevelsCard() {
 
           <Row>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <Label>Core</Label>
-              <Value color={row.core == null ? V2.muted : V2.cyan} size={FS.lead}>
+              <Label>{vt.name('cb', 'Core')}</Label>
+              <Value color={row.core == null ? V2.muted : vt.color('cb', V2.cyan)} size={FS.lead}>
                 {fmtLvl(row.core)}
               </Value>
             </div>
@@ -314,7 +318,7 @@ export function TickerLevelsCard() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <Label>
-              Distance to nearer wall ({nearerCall ? 'Call' : 'Put'})
+              Distance to nearer {vt.key('cw') ? 'level' : 'wall'} ({nearerCall ? vt.name('cw', 'Call') : vt.name('pw', 'Put')})
               {crossed ? ' · through' : ''}
             </Label>
             <Row>

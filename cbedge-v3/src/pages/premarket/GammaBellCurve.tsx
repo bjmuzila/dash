@@ -48,6 +48,7 @@
  */
 
 import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { levelNamer } from "@/data/voltickLevels";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { ChainRow } from "@/data/calculations";
 import {
@@ -143,7 +144,7 @@ export const GAMMA_BELL_CSS = `
 `;
 
 export default function GammaBellCurve({
-  chain, spot, expiry, isZeroDte, flip, callWall, putWall, frozen, axisAnchor,
+  chain, spot, expiry, isZeroDte, flip, callWall, putWall, core, frozen, axisAnchor,
 }: {
   chain: ChainRow[];
   spot: number;
@@ -152,6 +153,9 @@ export default function GammaBellCurve({
   flip?: number | null;
   callWall?: number | null;
   putWall?: number | null;
+  /** The CORE strike — only used to name the walls on the Voltick UI theme
+   *  (the wall on the CORE's side of spot is the Coil, the other the Reversal). */
+  core?: number | null;
   /** A captured past session — the footer says so instead of implying live. */
   frozen?: boolean;
   /**
@@ -548,9 +552,10 @@ export default function GammaBellCurve({
   const massTicks = [maxMass, maxMass * 0.5];
   const netTicks = [maxP, -maxN].filter((v) => Math.abs(v) > 0);
 
+  const vt = levelNamer(core, spot, callWall, putWall);
   const levels = layoutLevels([
-    { k: putWall, label: `Put wall ${nfp(putWall ?? 0)}`, color: "var(--pw)", dash: "3 3" },
-    { k: callWall, label: `Call wall ${nfp(callWall ?? 0)}`, color: "var(--cw)", dash: "3 3" },
+    { k: putWall, label: `${vt.name("pw", "Put wall")} ${nfp(putWall ?? 0)}`, color: vt.color("pw", "var(--pw)"), dash: "3 3" },
+    { k: callWall, label: `${vt.name("cw", "Call wall")} ${nfp(callWall ?? 0)}`, color: vt.color("cw", "var(--cw)"), dash: "3 3" },
     { k: flip, label: `Flip ${nfp(flip ?? 0)}`, color: "var(--violet)", dash: "5 4" },
     { k: spot, label: `Spot ${nfp(spot)}`, color: "var(--txt)", dash: "6 4" },
   ], { k0, k1, spot, x, W, padL: PAD.l, padR: PAD.r });

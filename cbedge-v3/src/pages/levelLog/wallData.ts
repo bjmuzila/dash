@@ -19,6 +19,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from 'react'
+import { readUiTheme } from '@/design/uiTheme'
 
 /**
  * THE LIVE CADENCE — one minute, and only where a minute means something.
@@ -40,7 +41,54 @@ export const LIVE_POLL_MS = 60_000
 
 // ── The wire, as /proxy/walls serves it ──────────────────────────────────────
 
-export type WallLevel = 'call_wall' | 'put_wall' | 'cb'
+export type WallLevel = 'call_wall' | 'put_wall' | 'cb' | VtWallLevel
+
+/**
+ * VOLTICK THEME (2026-09-28) — the SAME recorded levels, named the Voltick way.
+ * Nothing new is recorded; the chart and the rail re-read the three rows:
+ *
+ *   Volt ★      = CORE (cb)
+ *   Coil ◆      = the wall on the SAME side of spot as the CORE
+ *                 (CORE above spot → the call wall; below → the put wall)
+ *   Reversal ↘  = the wall on the OTHER side
+ *
+ * Draw-only keys: no walls_log row ever carries one of these.
+ */
+export type VtWallLevel = 'volt' | 'reversal' | 'coil'
+
+/**
+ * Owner-only Voltick UI theme, read once — the toggle reloads the page, so a
+ * module constant is the whole of the wiring (same as GexCandlesCard).
+ */
+export const VOLTICK_UI = readUiTheme() === 'voltick'
+
+/**
+ * Which side of spot the CORE sits on → which recorded wall is the Coil.
+ * `null` when there is no core or no spot to judge it by.
+ */
+export function coreSideOf(core: number | null | undefined, spot: number | null | undefined): 'call' | 'put' | null {
+  if (core == null || spot == null || !(spot > 0)) return null
+  return core >= spot ? 'call' : 'put'
+}
+
+/**
+ * CB Edge levels → Voltick levels for one reading (see VtWallLevel).
+ * With no spot the Coil / Reversal split cannot be made, so both walls are
+ * left out rather than guessed.
+ */
+export function vtFromWalls(
+  cb: number | null | undefined,
+  callWall: number | null | undefined,
+  putWall: number | null | undefined,
+  spot: number | null | undefined,
+): Record<VtWallLevel, number | null> {
+  const side = coreSideOf(cb, spot)
+  return {
+    volt: cb ?? null,
+    coil: side === 'call' ? (callWall ?? null) : side === 'put' ? (putWall ?? null) : null,
+    reversal: side === 'call' ? (putWall ?? null) : side === 'put' ? (callWall ?? null) : null,
+  }
+}
 
 export type WallLogRow = {
   slot: number
@@ -90,16 +138,18 @@ export type DaySlice = {
  * (whichever is carrying more gamma), so a tag scored on the call wall and the
  * CORE tag at the same strike are the same event told twice.
  */
-export type LogView = 'walls' | 'core' | 'all'
+export type LogView = 'walls' | 'core' | 'all' | 'voltick'
 
 export const VIEW_LEVELS: Record<LogView, WallLevel[]> = {
   walls: ['call_wall', 'put_wall'],
   core: ['cb'],
   all: ['call_wall', 'put_wall', 'cb'],
+  // The SOURCE rows the Voltick view is re-read from — see VtWallLevel.
+  voltick: ['call_wall', 'put_wall', 'cb'],
 }
 
 /** Short scope word for headers and captions. */
-export const VIEW_SCOPE: Record<LogView, string> = { walls: 'wall', core: 'core', all: 'level' }
+export const VIEW_SCOPE: Record<LogView, string> = { walls: 'wall', core: 'core', all: 'level', voltick: 'Voltick level' }
 
 export const inView = (v: LogView, lt: WallLevel) => VIEW_LEVELS[v].includes(lt)
 

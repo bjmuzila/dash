@@ -64,6 +64,7 @@ import {
   slotClock,
   wallNum,
   wallStrike,
+  coreSideOf,
 } from '@/pages/levelLog/wallData'
 
 /**
@@ -110,6 +111,9 @@ const LEVEL_LABEL: Record<WallLevel, string> = {
   call_wall: 'Call Wall',
   put_wall: 'Put Wall',
   cb: 'CORE',
+  volt: '★ Volt',
+  coil: '◆ Coil',
+  reversal: '↘ Reversal',
 }
 
 /**
@@ -122,7 +126,15 @@ const LEVEL_COLOR: Record<WallLevel, string> = {
   call_wall: ES_CANDLE_UP,
   put_wall: LEVEL_COLORS.pw,
   cb: LEVEL_COLORS.cb,
+  // Voltick theme: each level's one reserved token (tokens.css --color-vt-*),
+  // the same fills the GEX Candles card paints them in.
+  volt: 'var(--color-vt-volt)',
+  coil: 'var(--color-vt-coil)',
+  reversal: 'var(--color-vt-reversal)',
 }
+
+/** The Voltick view's drawn keys, in legend order (wallData VtWallLevel). */
+const VT_KEYS: WallLevel[] = ['volt', 'coil', 'reversal']
 
 /** Which wall a role-model line IS at a given slot. */
 type WallSide = 'call' | 'put'
@@ -386,8 +398,62 @@ export function WallMigrationChart({
       const dense = tape.length >= DENSE_MIN_SAMPLES
       const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }))
 
-      if (!series.size && !spotDrawn.length) continue
-      segs.push({ date: day.date, series, roles, spotPts, spotDrawn, dense, lastSlot, lastWrite })
+      /**
+       * VOLTICK VIEW — the same three recorded levels, renamed per slot:
+       * CORE → Volt; the wall on the CORE's side of spot → Coil; the wall on
+       * the other side → Reversal (wallData VtWallLevel). Spot is the slot's
+       * own capture carried forward, else the tape at that slot. No role model:
+       * three plain lines, each in its reserved colour.
+       */
+      let drawSeries = series
+      let drawRoles = roles
+      if (view === 'voltick') {
+        const cbA = series.get('cb')
+        const cwA = series.get('call_wall')
+        const pwA = series.get('put_wall')
+        const volt: (number | null)[] = new Array(WALL_SLOTS).fill(null)
+        const coil: (number | null)[] = new Array(WALL_SLOTS).fill(null)
+        const rev: (number | null)[] = new Array(WALL_SLOTS).fill(null)
+        let px: number | null = null
+        let ti = 0
+        for (let s = 0; s <= lastSlot; s++) {
+          if (spot[s] != null) px = spot[s] as number
+          // The tape, when there is one, is the finer read of where price was.
+          while (ti < tape.length && (tape[ti] as { s: number }).s <= s) {
+            px = (tape[ti] as { v: number }).v
+            ti++
+          }
+          const c = cbA?.[s] ?? null
+          const a = cwA?.[s] ?? null
+          const b = pwA?.[s] ?? null
+          volt[s] = c
+          const sd = coreSideOf(c, px)
+          if (sd === 'call') {
+            coil[s] = a
+            rev[s] = b
+          } else if (sd === 'put') {
+            coil[s] = b
+            rev[s] = a
+          }
+        }
+        drawSeries = new Map<WallLevel, (number | null)[]>()
+        if (volt.some((v) => v != null)) drawSeries.set('volt', volt)
+        if (coil.some((v) => v != null)) drawSeries.set('coil', coil)
+        if (rev.some((v) => v != null)) drawSeries.set('reversal', rev)
+        drawRoles = null
+      }
+
+      if (!drawSeries.size && !spotDrawn.length) continue
+      segs.push({
+        date: day.date,
+        series: drawSeries,
+        roles: drawRoles,
+        spotPts,
+        spotDrawn,
+        dense,
+        lastSlot,
+        lastWrite,
+      })
     }
     if (!segs.length) return null
 
@@ -417,7 +483,7 @@ export function WallMigrationChart({
     // already on screen in gold and must not also take a chip that toggles
     // nothing.
     const roled = segs.some((seg) => seg.roles)
-    const kept = levels.filter((lt) => {
+    const kept = (view === 'voltick' ? VT_KEYS : levels).filter((lt) => {
       if (!roled) return segs.some((seg) => seg.series.has(lt))
       if (lt === 'cb') return true
       const want: WallSide = lt === 'call_wall' ? 'call' : 'put'
@@ -526,7 +592,8 @@ export function WallMigrationChart({
    * double, so there is nothing left to suppress: both walls go back to their
    * own recorded series and each runs the full span.
    */
-  const drawOrder: WallLevel[] = ['put_wall', 'call_wall', 'cb']
+  // Voltick keys last-to-first so the Volt draws on top of a shared strike.
+  const drawOrder: WallLevel[] = ['put_wall', 'call_wall', 'cb', 'reversal', 'coil', 'volt']
   const drawn = drawOrder.filter((lt) => levels.includes(lt))
   const paths: { key: string; d: string; color: string; w: number }[] = []
   if (roled && !off.has('cb')) {
@@ -575,7 +642,7 @@ export function WallMigrationChart({
             key: `${lt}-${i}-${k}`,
             d,
             color: LEVEL_COLOR[lt],
-            w: lt === 'cb' ? 2.2 : 1.8,
+            w: lt === 'cb' || lt === 'volt' ? 2.2 : 1.8,
           })
         })
       })
@@ -862,7 +929,7 @@ export function WallMigrationChart({
                   left: 2,
                   top: yPct(o.v),
                   transform: 'translateY(-50%)',
-                  marginTop: o.lt === 'cb' ? -9 : 9,
+                  marginTop: o.lt === 'cb' || o.lt === 'volt' ? -9 : 9,
                   letterSpacing: '0.6px',
                   color: LEVEL_COLOR[o.lt],
                 }}

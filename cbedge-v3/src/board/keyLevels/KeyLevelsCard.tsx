@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { LevelsAxis, type AxisMark } from './LevelsAxis'
+import { VOLTICK_UI, VT_CODE, VT_NAME, vtDef, vtKeyOf, type CbLevelKey } from '@/data/voltickLevels'
 import { useField } from '@/data/hooks'
 import { useQuery } from '@/data/api'
 import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
@@ -242,19 +243,32 @@ function LevelsBody({
       out.push({ key, code, name, price, text: fmtPx(price, dp), colourVar, note, sub })
     }
 
-    add('pw', 'PW', 'Put Wall', putWall, '--color-level-pw', fmtPts(distPut))
+    // Voltick UI theme: the same three strikes under Voltick names — CORE is
+    // the Volt, the wall on the CORE's side of spot the Coil, the other the
+    // Reversal (data/voltickLevels.ts vtKeyOf) — each in its reserved colour.
+    const cs = core?.strike ?? null
+    const nm = (k: CbLevelKey, code: string, name: string, colourVar: string) => {
+      if (!VOLTICK_UI) return { code, name, colourVar }
+      const vk = vtKeyOf(k, cs, spot, { cw: callWall, pw: putWall })
+      return { code: VT_CODE[vk], name: VT_NAME[vk], colourVar: vtDef(vk).fillVar }
+    }
+    const pwN = nm('pw', 'PW', 'Put Wall', '--color-level-pw')
+    const cbN = nm('cb', 'CORE', 'Max γ Strike', '--color-level-cb')
+    const cwN = nm('cw', 'CW', 'Call Wall', '--color-level-cw')
+
+    add('pw', pwN.code, pwN.name, putWall, pwN.colourVar, fmtPts(distPut))
     add('flip', 'FLIP', 'Gamma Flip', flipShown, '--color-accent', fmtPts(distFlip))
     add('pain', 'PAIN', 'Max Pain', maxPain, '--color-muted', maxPain != null && spot ? fmtPts(maxPain - spot) : '')
     add(
       'core',
-      'CORE',
-      'Max γ Strike',
+      cbN.code,
+      cbN.name,
       core?.strike ?? null,
-      '--color-level-cb',
+      cbN.colourVar,
       core && spot ? fmtPts(core.strike - spot) : '',
     )
     add('spot', 'SPOT', 'Spot', spot || null, '--color-fg', 'live', undefined, pDp)
-    add('cw', 'CW', 'Call Wall', callWall, '--color-level-cw', fmtPts(distCall))
+    add('cw', cwN.code, cwN.name, callWall, cwN.colourVar, fmtPts(distCall))
 
     // ── The EM band, and only when it is close enough to be worth an axis ─────
     // The gamma levels set the scale. A weekly band on a quiet week sits inside

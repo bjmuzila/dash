@@ -200,6 +200,7 @@
  */
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { levelNamer } from "@/data/voltickLevels";
 import { useMobileGex } from "@/data/liveGex";
 import { useEsCandles } from "@/data/esCandles";
 import { useEtfCandles } from "@/data/esCandles";
@@ -2144,8 +2145,8 @@ export default function Premarket() {
   const flipStrike = flip ? nearestStrike(perStrike.map((b) => b.strike), flip) : null;
 
   const tagFor = (strike: number): { text: string; color: string } | null => {
-    if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--cw)" };
-    if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pw)" };
+    if (callWall != null && strike === callWall) return { text: vt.upper("cw", "CALL WALL"), color: vt.color("cw", "var(--cw)") };
+    if (putWall != null && strike === putWall) return { text: vt.upper("pw", "PUT WALL"), color: vt.color("pw", "var(--pw)") };
     if (magnet && strike === magnet.strike) return { text: "0DTE MAGNET", color: "var(--violet)" };
     if (maxPain != null && strike === maxPain) return { text: "MAX PAIN", color: "var(--blue)" };
     if (flipStrike != null && strike === flipStrike) return { text: "GAMMA FLIP", color: "var(--amber)" };
@@ -2238,17 +2239,22 @@ export default function Premarket() {
     return perStrike.reduce((b, r) => (Math.abs(r.net) > Math.abs(b.net) ? r : b), perStrike[0]!);
   }, [feedCore, perStrike]);
 
+  /** Voltick UI theme: CORE / walls under Voltick names — CORE = Volt, the wall
+   *  on the CORE's side of spot = Coil, the other = Reversal. Passes the CB Edge
+   *  text straight through when the theme is off (data/voltickLevels.ts). */
+  const vt = levelNamer(coreBullseye?.strike, spot, callWall, putWall);
+
   /** Everything the rail needs: the five levels on ONE shared price domain. */
   const rail = useMemo(() => {
     const marks: { code: string; name: string; px: number; color: string }[] = [];
     const add = (code: string, name: string, px: number | null | undefined, color: string) => {
       if (px != null && Number.isFinite(px) && px > 0) marks.push({ code, name, px, color });
     };
-    add("PW", "Put Wall", putWall, "var(--pw)");
+    add(vt.code("pw", "PW"), vt.name("pw", "Put Wall"), putWall, vt.color("pw", "var(--pw)"));
     add("FLIP", "Gamma Flip", flip, "var(--amber)");
-    add("CORE", "max γ strike", coreBullseye?.strike, "var(--violet)");
+    add(vt.code("cb", "CORE"), vt.name("cb", "max γ strike"), coreBullseye?.strike, vt.color("cb", "var(--violet)"));
     add("SPOT", "Spot", spot > 0 ? spot : null, T.text);
-    add("CW", "Call Wall", callWall, "var(--cw)");
+    add(vt.code("cw", "CW"), vt.name("cw", "Call Wall"), callWall, vt.color("cw", "var(--cw)"));
     if (marks.length < 2) return null;
 
     const lo = Math.min(...marks.map((m) => m.px));
@@ -2642,8 +2648,8 @@ export default function Premarket() {
 
           <div className="levels">
             <div className="lvl call">
-              <div className="name">Call Wall <em>resistance</em></div>
-              <div className="px mono">{fmtPx(callWall, kDp)}</div>
+              <div className="name">{vt.name("cw", "Call Wall")} <em>resistance</em></div>
+              <div className="px mono" style={vt.key("cw") ? { color: vt.color("cw", "") } : undefined}>{fmtPx(callWall, kDp)}</div>
               <div className="es mono">
                 {es(callWall) != null ? `ES ${fmtPx(es(callWall), 0)} · ` : ""}{fmtUsd(wallGex.call, false)}
               </div>
@@ -2776,8 +2782,8 @@ export default function Premarket() {
             </div>
 
             <div className="lvl put">
-              <div className="name">Put Wall <em>support</em></div>
-              <div className="px mono">{fmtPx(putWall, kDp)}</div>
+              <div className="name">{vt.name("pw", "Put Wall")} <em>support</em></div>
+              <div className="px mono" style={vt.key("pw") ? { color: vt.color("pw", "") } : undefined}>{fmtPx(putWall, kDp)}</div>
               <div className="es mono">
                 {es(putWall) != null ? `ES ${fmtPx(es(putWall), 0)} · ` : ""}{fmtUsd(wallGex.put, false)}
               </div>
@@ -3132,14 +3138,14 @@ export default function Premarket() {
                     </div>
                     {emPos(putWall) != null && (
                       <>
-                        <div className="mk" style={{ left: `${emPos(putWall)}%`, background: "var(--pw)", top: 18, height: 24 }} />
-                        <div className="cap bot" style={{ left: `${emPos(putWall)}%`, top: 46, color: "var(--pw)" }}>Put Wall</div>
+                        <div className="mk" style={{ left: `${emPos(putWall)}%`, background: vt.color("pw", "var(--pw)"), top: 18, height: 24 }} />
+                        <div className="cap bot" style={{ left: `${emPos(putWall)}%`, top: 46, color: vt.color("pw", "var(--pw)") }}>{vt.name("pw", "Put Wall")}</div>
                       </>
                     )}
                     {emPos(callWall) != null && (
                       <>
-                        <div className="mk" style={{ left: `${emPos(callWall)}%`, background: "var(--cw)", top: 18, height: 24 }} />
-                        <div className="cap bot" style={{ left: `${emPos(callWall)}%`, top: 46, color: "var(--cw)" }}>Call Wall</div>
+                        <div className="mk" style={{ left: `${emPos(callWall)}%`, background: vt.color("cw", "var(--cw)"), top: 18, height: 24 }} />
+                        <div className="cap bot" style={{ left: `${emPos(callWall)}%`, top: 46, color: vt.color("cw", "var(--cw)") }}>{vt.name("cw", "Call Wall")}</div>
                       </>
                     )}
                     {emPos(spot) != null && (
@@ -3189,8 +3195,8 @@ export default function Premarket() {
                       {posGamma ? "Positive gamma" : "Negative gamma"}, flip{" "}
                       <span className="k">
                         {distFlip == null ? "n/a" : `${nf(Math.abs(distFlip), pxDp)} pts ${distFlip >= 0 ? "below" : "above"}`}
-                      </span>, Call Wall <span className="r">{distCall == null ? "n/a" : `${nf(Math.abs(distCall), pxDp)} ${distCall >= 0 ? "above" : "below"}`}</span>,
-                      {" "}Put Wall <span className="g">{distPut == null ? "n/a" : `${nf(Math.abs(distPut), pxDp)} ${distPut >= 0 ? "above" : "below"}`}</span> —{" "}
+                      </span>, {vt.name("cw", "Call Wall")} <span className="r">{distCall == null ? "n/a" : `${nf(Math.abs(distCall), pxDp)} ${distCall >= 0 ? "above" : "below"}`}</span>,
+                      {" "}{vt.name("pw", "Put Wall")} <span className="g">{distPut == null ? "n/a" : `${nf(Math.abs(distPut), pxDp)} ${distPut >= 0 ? "above" : "below"}`}</span> —{" "}
                       <b>
                         {posGamma
                           ? `fade extremes, scalp toward the ${magnet ? nf(magnet.strike, kDp) : "magnet"} magnet.`
@@ -3266,6 +3272,7 @@ export default function Premarket() {
             flip={flip}
             callWall={callWall}
             putWall={putWall}
+            core={coreBullseye?.strike ?? null}
             /* Says "captured session, not live" in the card footer — true of a
                replayed frame for exactly the same reason. */
             frozen={frozen || replay}

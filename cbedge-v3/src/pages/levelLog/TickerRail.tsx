@@ -56,7 +56,10 @@ import {
   type GexBasis,
   type LogView,
   type WallLevel,
+  VOLTICK_UI,
+  coreSideOf,
   inView,
+  vtFromWalls,
   wallNum,
   wallStrike,
 } from '@/pages/levelLog/wallData'
@@ -78,10 +81,16 @@ const MINI_H = 124
 /** Price order, filtered by the view switch. Parity E11. */
 const LEVEL_ORDER: WallLevel[] = ['put_wall', 'call_wall', 'cb']
 
+/** Voltick theme's card row: the same three readings, renamed (wallData VtWallLevel). */
+const VT_ORDER: WallLevel[] = ['volt', 'coil', 'reversal']
+
 const LEVEL_LABEL: Record<WallLevel, string> = {
   put_wall: 'PUT',
   call_wall: 'CALL',
   cb: 'CORE',
+  volt: 'VOLT',
+  coil: 'COIL',
+  reversal: 'REV',
 }
 
 /** wallData's level ids → the theme's three-letter wall colours. */
@@ -89,6 +98,10 @@ const LEVEL_TOKEN: Record<WallLevel, string> = {
   put_wall: LEVEL_COLORS.pw,
   call_wall: LEVEL_COLORS.cw,
   cb: LEVEL_COLORS.cb,
+  // Voltick theme: each level's one reserved token (tokens.css --color-vt-*).
+  volt: 'var(--color-vt-volt)',
+  coil: 'var(--color-vt-coil)',
+  reversal: 'var(--color-vt-reversal)',
 }
 
 /**
@@ -139,7 +152,25 @@ function RailCard({
   onRemove: (s: string) => void
 }) {
   const pinned = isRailPinned(sym)
-  const cols = LEVEL_ORDER.filter((lt) => inView(view, lt))
+  const cols = VOLTICK_UI ? VT_ORDER : LEVEL_ORDER.filter((lt) => inView(view, lt))
+  /**
+   * Voltick: now and at the open, renamed by which side of spot the CORE is on.
+   * The open uses the CURRENT side, so a delta compares like with like — the
+   * Coil's strike then vs now, not the call wall's vs the put wall's.
+   */
+  const vtNow = row ? vtFromWalls(row.cb, row.call_wall, row.put_wall, row.spot) : null
+  const vtSide = row ? coreSideOf(row.cb, row.spot) : null
+  const vtOpen: Partial<Record<WallLevel, number>> = row
+    ? {
+        volt: row.open.cb,
+        coil: vtSide === 'call' ? row.open.call_wall : vtSide === 'put' ? row.open.put_wall : undefined,
+        reversal: vtSide === 'call' ? row.open.put_wall : vtSide === 'put' ? row.open.call_wall : undefined,
+      }
+    : {}
+  const valOf = (lt: WallLevel): number | null =>
+    lt === 'volt' || lt === 'coil' || lt === 'reversal' ? (vtNow?.[lt] ?? null) : (row?.[lt] ?? null)
+  const openOf = (lt: WallLevel): number | undefined =>
+    lt === 'volt' || lt === 'coil' || lt === 'reversal' ? vtOpen[lt] : row?.open?.[lt]
 
   return (
     <Card
@@ -196,9 +227,9 @@ function RailCard({
                 {LEVEL_LABEL[lt]}
               </span>
               <span className="tabular font-mono text-2xs" style={{ color: LEVEL_TOKEN[lt] }}>
-                {wallStrike(row?.[lt] ?? null)}
+                {wallStrike(valOf(lt))}
               </span>
-              <Delta now={row?.[lt] ?? null} open={row?.open?.[lt]} />
+              <Delta now={valOf(lt)} open={openOf(lt)} />
             </span>
           ))}
         </span>

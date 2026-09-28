@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { GexRow } from '@/contract/frames'
+import { VOLTICK_UI, VT_NAME, vtKeyOf } from '@/data/voltickLevels'
 import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import { dexOf, levelsOf, netGexOf } from '../gexChart/values'
 import { strikeDp } from './levelsMath'
@@ -58,8 +59,18 @@ export function keyLevelsStatsText(symbol: string, rows: GexRow[], spot: number)
   return [
     `Ticker: ${symbol}`,
     `Volt: ${level(volLevels.core?.strike)}`,
-    `Call Wall: ${level(volLevels.callWall)}`,
-    `Put Wall: ${level(volLevels.putWall)}`,
+    // Voltick UI theme: the walls go out under their Voltick names (Coil = the
+    // wall on the core's side of spot, Reversal = the other).
+    ...(VOLTICK_UI
+      ? (['cw', 'pw'] as const)
+          .map((k) => ({ k, v: k === 'cw' ? volLevels.callWall : volLevels.putWall }))
+          .map(({ k, v }) => ({
+            name: VT_NAME[vtKeyOf(k, volLevels.core?.strike, spot, { cw: volLevels.callWall, pw: volLevels.putWall })],
+            v,
+          }))
+          .sort((a, b) => (a.name === 'Coil' ? -1 : b.name === 'Coil' ? 1 : 0))
+          .map(({ name, v }) => `${name}: ${level(v)}`)
+      : [`Call Wall: ${level(volLevels.callWall)}`, `Put Wall: ${level(volLevels.putWall)}`]),
     `Net Gex: ${money(gex)}`,
     `Net Dex: ${money(dex)}`,
   ].join('\n')

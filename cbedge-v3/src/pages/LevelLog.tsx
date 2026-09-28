@@ -72,6 +72,7 @@ import {
   type GexBasis,
   type LogView,
   VIEW_SCOPE,
+  VOLTICK_UI,
   todayETStr,
   useMinuteTick,
   useWallDays,
@@ -185,7 +186,10 @@ export default function LevelLog() {
   const [params, setParams] = useSearchParams()
   const date = (params.get('date') || '').trim() || todayETStr()
 
-  const [view, setView] = useState<LogView>('all')
+  // Voltick UI theme: the log reads as Volt / Coil / Reversal (the same
+  // recorded CORE / walls, renamed by side — wallData VtWallLevel), so the CB
+  // Edge Walls / Core / All switch has nothing to switch and is hidden.
+  const [view, setView] = useState<LogView>(VOLTICK_UI ? 'voltick' : 'all')
   const [scope, setScope] = useState<ExpScope>('0dte')
   const [basis, setBasis] = useState<GexBasis>('oivol')
   const [range, setRange] = useState<RangeKey>('1')
@@ -309,7 +313,9 @@ export default function LevelLog() {
               label={(v) => v}
               className="shrink-0"
             />
-            <SegGroup options={VIEW_OPTIONS} value={view} onChange={setView} title="Which levels" />
+            {VOLTICK_UI ? null : (
+              <SegGroup options={VIEW_OPTIONS} value={view} onChange={setView} title="Which levels" />
+            )}
             <SegGroup
               options={SCOPE_OPTIONS}
               value={scope}

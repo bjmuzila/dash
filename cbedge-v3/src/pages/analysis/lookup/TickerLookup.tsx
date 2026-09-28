@@ -82,6 +82,7 @@ import {
 } from './replay'
 import { usePageSymbol } from '@/data/symbol'
 import { LEVEL_COLORS, V2, V2W } from '@/design/theme'
+import { levelNamer } from '@/data/voltickLevels'
 
 const LOOKUP_KEY = 'analytics.tickerLookup.recent'
 const QUICK: readonly string[] = ['SPX', 'SPY', 'QQQ', 'NVDA', 'TSLA']
@@ -744,6 +745,10 @@ export function TickerLookupCard({
   // Both panes compute their levels the same way, off ladders built by the same
   // function — no second opinion from a second data source to reconcile.
   const rightLevels = tlLevelsFrom(viewRightRows, viewSpot)
+  // Voltick UI theme: CORE = Volt, the wall on the CORE's side of spot = Coil,
+  // the other = Reversal (data/voltickLevels.ts). Pass-through when off.
+  const vtL = levelNamer(leftLevels.core, viewSpot, leftLevels.callWall, leftLevels.putWall)
+  const vtR = levelNamer(rightLevels.core, viewSpot, rightLevels.callWall, rightLevels.putWall)
   // ± Move and ATM IV are priced off live marks; nothing in the recording can
   // reconstruct them, so they read "—" while rewound instead of putting today's
   // premium on a three-day-old ladder.
@@ -1270,24 +1275,24 @@ export function TickerLookupCard({
 
               <div style={CHIP_ROW}>
                 <LevelChip
-                  name="Core (CB)"
+                  name={vtL.name('cb', 'Core (CB)')}
                   value={leftLevels.core}
                   spot={viewSpot}
-                  color={LEVEL_COLORS.cb}
+                  color={vtL.color('cb', LEVEL_COLORS.cb)}
                   note="biggest magnet"
                 />
                 <LevelChip
-                  name="Call wall"
+                  name={vtL.name('cw', 'Call wall')}
                   value={leftLevels.callWall}
                   spot={viewSpot}
-                  color={LEVEL_COLORS.cw}
+                  color={vtL.color('cw', LEVEL_COLORS.cw)}
                   note="ceiling"
                 />
                 <LevelChip
-                  name="Put wall"
+                  name={vtL.name('pw', 'Put wall')}
                   value={leftLevels.putWall}
                   spot={viewSpot}
-                  color={LEVEL_COLORS.pw}
+                  color={vtL.color('pw', LEVEL_COLORS.pw)}
                   note="floor"
                 />
               </div>
@@ -1392,24 +1397,24 @@ export function TickerLookupCard({
 
               <div style={CHIP_ROW}>
                 <LevelChip
-                  name="Core (CB)"
+                  name={vtR.name('cb', 'Core (CB)')}
                   value={rightLevels.core}
                   spot={viewSpot}
-                  color={LEVEL_COLORS.cb}
+                  color={vtR.color('cb', LEVEL_COLORS.cb)}
                   note="biggest magnet"
                 />
                 <LevelChip
-                  name="Call wall"
+                  name={vtR.name('cw', 'Call wall')}
                   value={rightLevels.callWall}
                   spot={viewSpot}
-                  color={LEVEL_COLORS.cw}
+                  color={vtR.color('cw', LEVEL_COLORS.cw)}
                   note="ceiling"
                 />
                 <LevelChip
-                  name="Put wall"
+                  name={vtR.name('pw', 'Put wall')}
                   value={rightLevels.putWall}
                   spot={viewSpot}
-                  color={LEVEL_COLORS.pw}
+                  color={vtR.color('pw', LEVEL_COLORS.pw)}
                   note="floor"
                 />
               </div>
@@ -1433,9 +1438,9 @@ export function TickerLookupCard({
             {positiveGamma
               ? 'Net positive gamma across the board — dealers sell rallies and buy dips, so price tends to pin and mean-revert. '
               : 'Net negative gamma across the board — dealers chase in both directions, so moves extend and volatility feeds itself. '}
-            {rightLevels.core != null && `Core magnet ${rightLevels.core.toLocaleString()}. `}
-            {rightLevels.callWall != null && `Call wall ${rightLevels.callWall.toLocaleString()}. `}
-            {rightLevels.putWall != null && `Put wall ${rightLevels.putWall.toLocaleString()}. `}
+            {rightLevels.core != null && `${vtR.name('cb', 'Core magnet')} ${rightLevels.core.toLocaleString()}. `}
+            {rightLevels.callWall != null && `${vtR.name('cw', 'Call wall')} ${rightLevels.callWall.toLocaleString()}. `}
+            {rightLevels.putWall != null && `${vtR.name('pw', 'Put wall')} ${rightLevels.putWall.toLocaleString()}. `}
             {/* The flip is NOT a chip — it lives only here. */}
             {rightLevels.flip != null &&
               `Gamma flip ${rightLevels.flip.toLocaleString('en-US', { maximumFractionDigits: 2 })} — pinning above, trending below.`}

@@ -1,5 +1,6 @@
 import type { GexRow } from '@/contract/frames'
 import type { GexBasis, GexSeries, GexSplit } from './settings'
+import { VOLTICK_UI } from '@/data/voltickLevels'
 import { metricOfSeries } from './settings'
 import {
   BASIS_LABEL,
@@ -276,7 +277,8 @@ function readPalette(el: HTMLElement): Palette {
     fg: hexToRgb(cssVar(el, '--color-fg'), [255, 255, 255]),
     line: hexToRgb(cssVar(el, '--color-line'), [35, 39, 46]),
     dex: hexToRgb(cssVar(el, '--color-dex'), [31, 141, 173]),
-    core: hexToRgb(cssVar(el, '--color-level-cb'), [255, 214, 0]),
+    // Voltick UI theme: the core IS the Volt, so it takes the Volt's token.
+    core: hexToRgb(cssVar(el, VOLTICK_UI ? '--color-vt-volt' : '--color-level-cb'), [255, 214, 0]),
     surface: hexToRgb(cssVar(el, '--color-surface'), [15, 17, 23]),
     warn: hexToRgb(cssVar(el, '--color-warn'), [251, 133, 1]),
   }
@@ -707,10 +709,10 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     if (coreRow) {
       const cv = getNet(coreRow)
       const cy = clamp(yFor(cv), PAD_T + 2, PAD_T + cH - 2)
-      const col = cv >= 0 ? p.pos : p.neg
+      const col = VOLTICK_UI ? p.core : cv >= 0 ? p.pos : p.neg
       ctx.save()
       ctx.font = 'bold 10px ui-monospace, monospace'
-      const tag = `CB·${LEVEL_BASIS_LABEL[model.basis]}`
+      const tag = `${VOLTICK_UI ? '★ VOLT' : 'CB'}·${LEVEL_BASIS_LABEL[model.basis]}`
       const lbl = `${tag} ${coreRow.strike.toLocaleString('en-US')}`
       const bw = ctx.measureText(lbl).width + 10
       const bh = 15

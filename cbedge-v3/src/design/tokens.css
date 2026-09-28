@@ -494,6 +494,66 @@
   --color-gex-pos: #4d8cff;
   --color-gex-neg: #ff6b7a;
 
+  /* ── EVERYTHING ELSE (2026-09-28) ─────────────────────────────────────────
+     Every token the CB Edge :root defines that this block did not, so no v3
+     surface keeps a CB Edge hue on the Voltick theme. Drawn only from the
+     Voltick palette above (--color-vt-*): one blue family, mint up, rose down,
+     sun for the level / warning, lilac for the odd one out. */
+  --color-flat: #9aa3a0;
+  --color-gex-lead: #ffd166;
+  --color-gex-lead-hi: #ffe39a;
+  --color-gexbar-pos: #4d8cff;
+  --color-gexbar-neg: #ff6b7a;
+  --color-netdrift-call: #3ddc8e;
+  --color-netdrift-put: #ff6b7a;
+  --color-dex: #7fb0ff;
+  --color-violet: #b48cff;
+  --color-clay: #ff9f6b;
+
+  /* CB Edge level tokens. Surfaces that NAME a level rename it (Volt / Coil /
+     Reversal — data/voltickLevels.ts) and paint it with --color-vt-*; these
+     are only the fallback for a mark that has no name to swap. */
+  --color-level-cb: #ffd166;
+  --color-level-cw: #3ddc8e;
+  --color-level-pw: #ff6b7a;
+  --color-level-em: #b48cff;
+
+  --color-impact-high: #ff6b7a;
+  --color-impact-medium: #ffd166;
+  --color-impact-low: #3a4654;
+  --color-impact-holiday: #9aa3a0;
+  --color-impact-president: #b48cff;
+  --color-impact-faded: #141a21;
+  --color-cal-accent: #6aa0ff;
+  --color-cal-actual: #3ddc8e;
+  --color-cal-forecast: #ffd166;
+  --color-cal-previous: #c0c5c3;
+
+  --color-sea-overlay-1: #b48cff;
+  --color-sea-overlay-2: #3ddc8e;
+  --color-sea-overlay-3: #ff5fa2;
+  --color-sea-overlay-4: #4d8cff;
+  --color-sea-heat-base: #141a21;
+  --color-sea-on-accent: #0a0d10;
+
+  /* v2-parity palette (scanner tabs, Ticker Lookup, Analysis cards). */
+  --color-v2-cyan: #6aa0ff;
+  --color-v2-orange: #ffd166;
+  --color-v2-red: #ff6b7a;
+  --color-v2-green: #7fb0ff;
+  --color-v2-pos: #3ddc8e;
+  --color-v2-purple: #2f6bff;
+  --color-v2-bg: #0a0d10;
+  --color-v2-panel: #0e1216;
+  --color-v2-ink: #0a0d10;
+  --color-v2-refresh: #3ddc8e;
+  --color-v2-badge-ink: #0a0d10;
+  --color-v2-lightblue: #7fb0ff;
+  --color-v2-accent: #7fb0ff;
+  --color-v2-neg: #ff6b7a;
+  --color-v2-chip: #7fb0ff;
+  --color-v2-neutral: #9aa3a0;
+
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
 

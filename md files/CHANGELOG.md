@@ -24609,3 +24609,23 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-09-28 — v3 GEX Candles: Voltick levels historical + Levels toggle
 - `cbedge-v3/src/board/gexCandles/bubbles.ts`: Voltick theme now resolves Volt / Surge / Reversal / Coil per bubble bucket (`vtStrikesOf`) instead of pinning the newest column's strikes across the whole session — levels switch through the day and replay shows them as they stood, same as CB Edge.
 - `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`: passes `voltick` to the bubble model; pane level tags now only draw when the toolbar's Levels switch is on (Voltick theme no longer forces them).
+
+## 2026-09-28 — v3 Level Log: Voltick theme records + draws Volt / Surge / Reversal / Coil
+- NEW `server-v2/voltick-levels.js`: CJS port of `cbedge-v3/src/data/voltickLevels.ts` `voltickMarks()` (always-four rule).
+- `server-v2/scanner-recorder.js`: every sweep now also computes Volt/Surge/Reversal/Coil (+ each level's GEX) per variant off the same per-strike rows; new REAL columns `volt, surge, reversal, coil, *_gex` on `scanner_snapshots` and `scanner_variants` (auto-added, forward-only).
+- `server-v2/walls-recorder.js`: logs the four Voltick levels change-only into `walls_log` (log only — no touch events); `getWalls()` takes `levels` ('cbedge' default | 'voltick') and filters every query to that set, so existing readers are unchanged.
+- `server-v2/server-with-proxy.js` `/proxy/walls` and `server-v2/api-router.js` `/api/walls-range`: accept `levels=voltick`; default stays CB/CW/PW.
+- `cbedge-v3/src/pages/levelLog/*` + `pages/LevelLog.tsx`: on the Voltick UI theme every walls read carries `levels=voltick`, the view is Volt/Surge/Reversal/Coil (Walls/Core/All switch hidden), and the chart, legend, rail cards and open labels use the reserved `--color-vt-*` tokens. History starts from deploy.
+
+## 2026-09-28 — v3 Level Log Voltick theme: REPLACED with a rename of the recorded levels
+- Supersedes the entry above. Backend reverted: `server-v2/scanner-recorder.js`, `walls-recorder.js`, `api-router.js`, `server-with-proxy.js` are back to their prior state (no new columns, no `levels=voltick`). `server-v2/voltick-levels.js` is now unused and can be deleted.
+- Voltick theme now re-reads the SAME recorded CB Edge levels: CORE → Volt; the wall on the CORE's side of spot → Coil; the wall on the other side → Reversal. Works on all history immediately.
+- `cbedge-v3/src/pages/levelLog/wallData.ts`: `VtWallLevel`, `VOLTICK_UI`, `coreSideOf()`, `vtFromWalls()`; `WallMigrationChart.tsx` draws Volt/Coil/Reversal per slot in `--color-vt-*`; `TickerRail.tsx` cards show VOLT/COIL/REV; `LevelLog.tsx` hides the Walls/Core/All switch on Voltick. `railStore.ts` reverted.
+
+## 2026-09-28 — v3 Voltick theme: levels renamed + recoloured on every page
+- Rule (Brandon): CORE → Volt; the wall on the CORE's side of spot → Coil; the other wall → Reversal. Same strikes, only names/colours change. Shared helper `levelNamer()` / `vtKeyOf()` / `VOLTICK_UI` in `cbedge-v3/src/data/voltickLevels.ts`.
+- Home board: Key Levels axis + Stats text (`board/keyLevels/KeyLevelsCard.tsx`, `statsShot.ts`); GEX Chart stat tiles and core badge (`board/gexChart/StatCards.tsx`, `gexChartRender.ts`).
+- Premarket: level rail, wall cards, strike tags, EM band caps, one-liner (`pages/Premarket.tsx`); `premarket/TickerBoard.tsx`, `PostMarketTab.tsx` (scorecard, verdict, range bar, tomorrow's rail, move log, wall chart), `HistoricalRecap.tsx`, `GammaBellCurve.tsx` (new `core` prop).
+- Analysis: Ticker Lookup chips + read, ladder tags + core glow (`pages/analysis/lookup/TickerLookup.tsx`, `Ladder.tsx`); Ticker Levels card (`pages/analysis/cards/TickerLevels.tsx`).
+- Alerts: Core-touch alert shows as Volt (`shell/alertTypes.ts`).
+- `design/tokens.css`: the Voltick block now overrides every remaining CB Edge colour token (v2 palette used by the Scanner / Analysis, level-*, gex lead/bars, net drift, dex, violet, impact/calendar, seasonality) with Voltick palette values.

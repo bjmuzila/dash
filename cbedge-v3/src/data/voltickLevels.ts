@@ -29,6 +29,8 @@
 // level's fill with the level's own `-ink` on it — never a near-miss hex.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { readUiTheme } from '@/design/uiTheme'
+
 export type VtKey = 'volt' | 'surge' | 'reversal' | 'coil'
 
 export interface VtBookRow {
@@ -219,4 +221,127 @@ export const VT_LEVELS: VtLevelDef[] = [
 export function vtLevelsAt(marks: VoltickMarks | null | undefined, strike: number): VtLevelDef[] {
   if (!marks) return []
   return VT_LEVELS.filter((d) => marks[d.key] === strike)
+}
+
+// ── CB Edge levels, renamed for the Voltick UI theme ─────────────────────────
+//
+// Everywhere a v3 surface shows the CB Edge trio, the Voltick theme shows the
+// SAME strikes under Voltick names (Brandon, 2026-09-28):
+//
+//   CORE (cb)                 → Volt ★
+//   the wall on the CORE's side of spot  → Coil ◆
+//     (CORE above spot → the call wall; CORE below spot → the put wall)
+//   the wall on the other side           → Reversal ↘
+//
+// No new maths and no new data: the strike is whatever the surface already
+// had. Only the name and the colour change. Surge has no CB Edge counterpart,
+// so a renamed surface simply does not carry one.
+
+/** Owner-only Voltick UI theme, read once — the toggle reloads the page. */
+export const VOLTICK_UI = readUiTheme() === 'voltick'
+
+export type CbLevelKey = 'cb' | 'cw' | 'pw'
+
+/** Which side of spot the CORE sits on. null without a core or a spot. */
+export function coreSide(core: number | null | undefined, spot: number | null | undefined): 'call' | 'put' | null {
+  if (core == null || !Number.isFinite(core) || spot == null || !(spot > 0)) return null
+  return core >= spot ? 'call' : 'put'
+}
+
+/**
+ * The Voltick level a CB Edge level is shown as. `cb` is always the Volt; a
+ * wall is the Coil on the CORE's side of spot and the Reversal on the other.
+ * With no spot, the wall NEARER the CORE is taken as the Coil (pass `walls`);
+ * with neither, the call wall is the Coil.
+ */
+export function vtKeyOf(
+  key: CbLevelKey,
+  core: number | null | undefined,
+  spot: number | null | undefined,
+  walls?: { cw?: number | null; pw?: number | null },
+): VtKey {
+  if (key === 'cb') return 'volt'
+  let side = coreSide(core, spot)
+  if (!side && core != null && walls?.cw != null && walls?.pw != null) {
+    side = Math.abs(core - walls.cw) <= Math.abs(core - walls.pw) ? 'call' : 'put'
+  }
+  if (key === 'cw') return side === 'put' ? 'reversal' : 'coil'
+  return side === 'put' ? 'coil' : 'reversal'
+}
+
+/** The level definition (label, mark, colours) for a key. */
+export function vtDef(key: VtKey): VtLevelDef {
+  return VT_LEVELS.find((d) => d.key === key) as VtLevelDef
+}
+
+/** Title-case display name, e.g. "Volt", "Reversal". */
+export const VT_NAME: Record<VtKey, string> = {
+  volt: 'Volt',
+  surge: 'Surge',
+  reversal: 'Reversal',
+  coil: 'Coil',
+}
+
+/** Short code for tight chips — same as VT_LEVELS label. */
+export const VT_CODE: Record<VtKey, string> = {
+  volt: 'VOLT',
+  surge: 'SURGE',
+  reversal: 'REV',
+  coil: 'COIL',
+}
+
+/**
+ * One call site's renamer. Build it with the reading's own CORE, spot and
+ * walls; every method returns the CB Edge text/colour it is handed unchanged
+ * when the Voltick theme is off, so a call site reads the same either way:
+ *
+ *   const vt = levelNamer(core, spot, callWall, putWall)
+ *   vt.name('cw', 'Call Wall')   // 'Coil' / 'Reversal' on Voltick
+ *   vt.color('cw', 'var(--cw)')  // 'var(--color-vt-coil)' …
+ */
+export interface LevelNamer {
+  /** Title case: "Volt", "Coil", "Reversal". */
+  name: (k: CbLevelKey, cbedge: string) => string
+  /** Upper case: "VOLT", "COIL", "REVERSAL". */
+  upper: (k: CbLevelKey, cbedge: string) => string
+  /** Chip code: "VOLT", "COIL", "REV". */
+  code: (k: CbLevelKey, cbedge: string) => string
+  /** A `var(--color-vt-…)` string. */
+  color: (k: CbLevelKey, cbedge: string) => string
+  /** The Voltick key, or null when the theme is off. */
+  key: (k: CbLevelKey) => VtKey | null
+}
+
+export function levelNamer(
+  core: number | null | undefined,
+  spot: number | null | undefined,
+  callWall?: number | null,
+  putWall?: number | null,
+): LevelNamer {
+  const key = (k: CbLevelKey): VtKey | null =>
+    VOLTICK_UI ? vtKeyOf(k, core, spot, { cw: callWall ?? null, pw: putWall ?? null }) : null
+  return {
+    key,
+    name: (k, cb) => {
+      const v = key(k)
+      return v ? VT_NAME[v] : cb
+    },
+    upper: (k, cb) => {
+      const v = key(k)
+      return v ? VT_NAME[v].toUpperCase() : cb
+    },
+    code: (k, cb) => {
+      const v = key(k)
+      return v ? VT_CODE[v] : cb
+    },
+    color: (k, cb) => {
+      const v = key(k)
+      return v ? vtDef(v).fill : cb
+    },
+  }
+}
+
+/** walls_log / API level_type → CbLevelKey. */
+export function cbKeyOfLevelType(lt: string): CbLevelKey {
+  return lt === 'call_wall' ? 'cw' : lt === 'put_wall' ? 'pw' : 'cb'
 }

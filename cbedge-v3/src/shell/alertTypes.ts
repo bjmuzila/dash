@@ -1,4 +1,5 @@
 import { LEVEL_COLORS, LIGHT_BLUE, T, VIOLET } from '@/design/theme'
+import { VOLTICK_UI } from '@/data/voltickLevels'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE SIGNAL CATALOGUE — one row per alert type, shared by the toolbar pill,
@@ -80,11 +81,12 @@ export const ALERT_TYPES: AlertType[] = [
   },
   {
     id: 'coreTouch',
-    short: 'Core',
-    name: 'Core level touch',
-    hint: 'price reached the core — one alert per visit',
-    tag: 'CORE',
-    color: LEVEL_COLORS.cb,
+    // Voltick UI theme: the core IS the Volt (data/voltickLevels.ts).
+    short: VOLTICK_UI ? 'Volt' : 'Core',
+    name: VOLTICK_UI ? 'Volt level touch' : 'Core level touch',
+    hint: VOLTICK_UI ? 'price reached the Volt — one alert per visit' : 'price reached the core — one alert per visit',
+    tag: VOLTICK_UI ? 'VOLT' : 'CORE',
+    color: VOLTICK_UI ? 'var(--color-vt-volt)' : LEVEL_COLORS.cb,
     serverKey: 'core_touch',
   },
   {

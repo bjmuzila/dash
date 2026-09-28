@@ -51,6 +51,7 @@
  */
 
 import { HISTORICAL_CSS } from "@/pages/premarket/historicalRecap.css";
+import { cbKeyOfLevelType, levelNamer, type LevelNamer } from "@/data/voltickLevels";
 // Re-exported so the old import path still resolves; Premarket.tsx takes the
 // stylesheet from the .css module so it can lazy() this file.
 export { HISTORICAL_CSS };
@@ -100,7 +101,7 @@ const LEVEL_COLOR: Record<WallLevel, string> = {
  *
  * Pure SVG, no chart library, no state. It is a static picture of a settled day.
  */
-function CurveChart({ curve, day }: { curve: CurvePt[]; day: GexLevelDay }) {
+function CurveChart({ curve, day, vt }: { curve: CurvePt[]; day: GexLevelDay; vt: LevelNamer }) {
   const W = 1000, H = 132, PAD_T = 10, PAD_B = 16;
   const ks = curve.map((p) => p.k);
   const cs = curve.map((p) => p.c);
@@ -115,10 +116,10 @@ function CurveChart({ curve, day }: { curve: CurvePt[]; day: GexLevelDay }) {
   const zeroY = y(0);
 
   const marks: { k: number | null; color: string; label: string }[] = [
-    { k: day.support, color: "var(--pw)", label: "Put wall" },
+    { k: day.support, color: vt.color("pw", "var(--pw)"), label: vt.name("pw", "Put wall") },
     { k: day.neutral, color: "var(--amber)", label: "Flip" },
     { k: day.spot, color: "var(--blue)", label: "Close" },
-    { k: day.resistance, color: "var(--cw)", label: "Call wall" },
+    { k: day.resistance, color: vt.color("cw", "var(--cw)"), label: vt.name("cw", "Call wall") },
   ];
   const drawn = marks.filter((m) => m.k != null && m.k >= kMin && m.k <= kMax);
 
@@ -172,6 +173,9 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
   const { row: eod } = useEodGex(date);
   const { rth: bars, state: barState } = useSessionEsBars(date);
   const { log, byLevel, state: wallState } = useRecordedWalls(date, symbol);
+  // Voltick UI theme: the session's CORE / walls under Voltick names — CORE =
+  // Volt, the wall on the CORE's side of the close = Coil, the other = Reversal.
+  const vt = levelNamer(byLevel.get("cb")?.last ?? null, day?.spot, day?.resistance, day?.support);
 
   // The 0DTE contract of a past session IS that session's date — the ladder is
   // written under the front expiry of the day it was recorded, so asking for
@@ -333,13 +337,13 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
 
             <div className="hlev">
               <div className="l">
-                <div className="n2">Call wall</div>
-                <div className="v2 mono" style={{ color: "var(--cw)" }}>{fmtPx(day.resistance)}</div>
+                <div className="n2">{vt.name("cw", "Call wall")}</div>
+                <div className="v2 mono" style={{ color: vt.color("cw", "var(--cw)") }}>{fmtPx(day.resistance)}</div>
                 <div className="m2">R2 {fmtPx(day.r2)}</div>
               </div>
               <div className="l">
-                <div className="n2">Put wall</div>
-                <div className="v2 mono" style={{ color: "var(--pw)" }}>{fmtPx(day.support)}</div>
+                <div className="n2">{vt.name("pw", "Put wall")}</div>
+                <div className="v2 mono" style={{ color: vt.color("pw", "var(--pw)") }}>{fmtPx(day.support)}</div>
                 <div className="m2">S2 {fmtPx(day.s2)}</div>
               </div>
               <div className="l">
@@ -371,7 +375,7 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
               </div>
             )}
 
-            {day.curve && day.curve.length > 2 && <CurveChart curve={day.curve} day={day} />}
+            {day.curve && day.curve.length > 2 && <CurveChart curve={day.curve} day={day} vt={vt} />}
           </>
         )}
       </div>
@@ -439,7 +443,7 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
               if (!rec) {
                 return (
                   <div className="sc" key={lvl}>
-                    <div className="nm"><span style={{ color: LEVEL_COLOR[lvl] }}>{LEVEL_LABEL[lvl]}</span></div>
+                    <div className="nm"><span style={{ color: vt.color(cbKeyOfLevelType(lvl), LEVEL_COLOR[lvl]) }}>{vt.name(cbKeyOfLevelType(lvl), LEVEL_LABEL[lvl])}</span></div>
                     <div className="px mono">—</div>
                     <div className="sub">Not recorded on this session.</div>
                   </div>
@@ -449,7 +453,7 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
               return (
                 <div className="sc" key={lvl}>
                   <div className="nm">
-                    <span style={{ color: LEVEL_COLOR[lvl] }}>{LEVEL_LABEL[lvl]}</span>
+                    <span style={{ color: vt.color(cbKeyOfLevelType(lvl), LEVEL_COLOR[lvl]) }}>{vt.name(cbKeyOfLevelType(lvl), LEVEL_LABEL[lvl])}</span>
                     <span className="pill">{rec.moves} {rec.moves === 1 ? "move" : "moves"}</span>
                   </div>
                   <div className="px mono">{fmtPx(rec.last)}</div>
@@ -488,7 +492,7 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
               {moves.map((r, i) => (
                 <div className="mv" key={`${r.level_type}-${r.slot}-${i}`}>
                   <span className="mono">{String(r.at ?? "").slice(0, 5) || `slot ${r.slot}`}</span>
-                  <span style={{ color: LEVEL_COLOR[r.level_type] }}>{LEVEL_LABEL[r.level_type]}</span>
+                  <span style={{ color: vt.color(cbKeyOfLevelType(r.level_type), LEVEL_COLOR[r.level_type]) }}>{vt.name(cbKeyOfLevelType(r.level_type), LEVEL_LABEL[r.level_type])}</span>
                   <span className="mono">
                     {r.prev_strike != null ? `${nf(r.prev_strike, 0)} → ` : ""}{nf(r.strike, 0)}
                     {r.delta != null ? <span className={r.delta >= 0 ? "chg-pos" : "chg-neg"}>{"  "}{fmtPts(r.delta)}</span> : null}

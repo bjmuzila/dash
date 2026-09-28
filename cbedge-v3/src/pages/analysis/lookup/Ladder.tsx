@@ -18,6 +18,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { FS, Label, fmtBig } from '../kit'
 import type { TlLevels, TlRow } from './levels'
 import { LEVEL_COLORS, V2, V2W } from '@/design/theme'
+import { VOLTICK_UI, levelNamer, vtDef } from '@/data/voltickLevels'
 
 /**
  * ── THE CORE BULLSEYE WASH ───────────────────────────────────────────────────
@@ -38,10 +39,12 @@ import { LEVEL_COLORS, V2, V2W } from '@/design/theme'
  * side because the two bars grow AWAY from a shared rail: the positive bar's
  * root is its left edge, the negative bar's root is its right.
  */
-const CB_GOLD = 'var(--color-level-cb)'
-const CB_FILL = 'color-mix(in srgb, var(--color-level-cb) 85%, transparent)'
+// Voltick UI theme: the core IS the Volt, so its row glow takes the Volt token.
+const CB_TOKEN = VOLTICK_UI ? 'var(--color-vt-volt)' : 'var(--color-level-cb)'
+const CB_GOLD = CB_TOKEN
+const CB_FILL = `color-mix(in srgb, ${CB_TOKEN} 85%, transparent)`
 /** Fades to gold-at-zero, not `transparent`: a ramp through grey reads dirty. */
-const CB_FADE = 'color-mix(in srgb, var(--color-level-cb) 0%, transparent)'
+const CB_FADE = `color-mix(in srgb, ${CB_TOKEN} 0%, transparent)`
 const CB_STOPS = `${CB_GOLD} 0%,${CB_FILL} 55%,${CB_FADE} 82%`
 /** +GEX grows right from the rail — gold starts at the left edge. */
 const CB_WASH_POS = `linear-gradient(90deg,${CB_STOPS})`
@@ -84,6 +87,14 @@ export function TlLadder({
 }) {
   const ownMax = rows.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1
   const maxAbs = scaleMax && scaleMax > 0 ? scaleMax : ownMax
+  // Voltick UI theme: CORE = Volt, the wall on the CORE's side of spot = Coil,
+  // the other = Reversal. Pass-through when off.
+  const vt = levelNamer(levels.core, spot, levels.callWall, levels.putWall)
+  /** The Voltick level's own ink on its fill; undefined off-theme. */
+  const vtInk = (k: 'cb' | 'cw' | 'pw') => {
+    const key = vt.key(k)
+    return key ? vtDef(key).ink : undefined
+  }
   const spotRow =
     spot == null
       ? null
@@ -288,14 +299,14 @@ export function TlLadder({
 
           // A strike can BE more than one level — core and call wall coincide
           // often — so every match gets its own tag.
-          const marks: { key: string; label: string; color: string; title: string }[] = []
+          const marks: { key: string; label: string; color: string; title: string; ink?: string }[] = []
           const isCore = levels.core === r.strike
           if (isCore)
-            marks.push({ key: 'cb', label: 'CB', color: LEVEL_COLORS.cb, title: 'Core — biggest magnet' })
+            marks.push({ key: 'cb', label: vt.code('cb', 'CB'), color: vt.color('cb', LEVEL_COLORS.cb), title: `${vt.name('cb', 'Core')} — biggest magnet`, ink: vtInk('cb') })
           if (levels.callWall === r.strike)
-            marks.push({ key: 'cw', label: 'CW', color: LEVEL_COLORS.cw, title: 'Call wall — ceiling' })
+            marks.push({ key: 'cw', label: vt.code('cw', 'CW'), color: vt.color('cw', LEVEL_COLORS.cw), title: `${vt.name('cw', 'Call wall')} — ceiling`, ink: vtInk('cw') })
           if (levels.putWall === r.strike)
-            marks.push({ key: 'pw', label: 'PW', color: LEVEL_COLORS.pw, title: 'Put wall — floor' })
+            marks.push({ key: 'pw', label: vt.code('pw', 'PW'), color: vt.color('pw', LEVEL_COLORS.pw), title: `${vt.name('pw', 'Put wall')} — floor`, ink: vtInk('pw') })
 
           return (
             <div
@@ -351,7 +362,7 @@ export function TlLadder({
                       borderRadius: 3,
                       flexShrink: 0,
                       background: m.color,
-                      color: V2.ink,
+                      color: m.ink ?? V2.ink,
                     }}
                   >
                     {m.label}

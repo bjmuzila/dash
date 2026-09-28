@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useQuery } from '@/data/api'
+import { VOLTICK_UI, VT_NAME, vtDef, vtKeyOf, type CbLevelKey } from '@/data/voltickLevels'
 import { isSocketSymbol } from '@/data/symbol'
 import type { GexRow } from '@/contract/frames'
 import { computeMaxPain, fmtPx, strikeDp } from '../keyLevels/levelsMath'
@@ -149,6 +150,17 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
 
     const px = (v: number | null) => (v == null ? '—' : fmtPx(v, kDp))
 
+    // Voltick UI theme: same strikes, Voltick names and colours — CB → Volt,
+    // the wall on the CB's side of spot → Coil, the other → Reversal.
+    const vn = (k: CbLevelKey, label: string, colour: string) => {
+      if (!VOLTICK_UI) return { label, colour }
+      const vk = vtKeyOf(k, levels.core?.strike, spot, { cw: levels.callWall, pw: levels.putWall })
+      return { label: VT_NAME[vk], colour: vtDef(vk).fillVar }
+    }
+    const cwN = vn('cw', 'Call Wall', '--color-level-cw')
+    const pwN = vn('pw', 'Put Wall', '--color-level-pw')
+    const cbN = vn('cb', 'CB', '--color-level-cb')
+
     const all: Tile[] = [
       {
         key: 'netGex',
@@ -159,16 +171,16 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
       },
       {
         key: 'callWall',
-        label: 'Call Wall',
+        label: cwN.label,
         value: px(levels.callWall),
-        colour: '--color-level-cw',
+        colour: cwN.colour,
         title: `Largest positive net gamma strictly above spot.${lvlNote} Same derivation the Key Levels card draws`,
       },
       {
         key: 'putWall',
-        label: 'Put Wall',
+        label: pwN.label,
         value: px(levels.putWall),
-        colour: '--color-level-pw',
+        colour: pwN.colour,
         title: `Most negative net gamma strictly below spot.${lvlNote} Same derivation the Key Levels card draws`,
       },
       {
@@ -180,9 +192,9 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
       },
       {
         key: 'cb',
-        label: 'CB',
+        label: cbN.label,
         value: px(levels.core?.strike ?? null),
-        colour: '--color-level-cb',
+        colour: cbN.colour,
         title: `Core Bullseye — the strike carrying the biggest absolute net gamma on the whole ladder.${lvlNote} The badge on the chart marks the same strike`,
       },
       {

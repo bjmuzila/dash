@@ -120,6 +120,7 @@ export { POSTMARKET_CSS };
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { T } from "@/design/theme";
+import { VOLTICK_UI, cbKeyOfLevelType, levelNamer } from "@/data/voltickLevels";
 import { etMinOfDay, fmtPct, fmtPts, fmtPx, fmtUsd, nf, pillClass } from "@/pages/premarket/format";
 import { findGEXFlip, netGEXOf, type ChainRow } from "@/data/calculations";
 import {
@@ -936,6 +937,12 @@ export default function PostMarketTab(p: PostMarketProps) {
   }, [chain, spot]);
 
 
+  // Voltick UI theme: the session's CORE / walls under Voltick names — CORE
+  // = Volt, the wall on the CORE's side of spot = Coil, the other = Reversal
+  // (data/voltickLevels.ts). Every method passes the CB Edge text straight
+  // through when the theme is off.
+  const vt = levelNamer(coreBullseye?.strike, spot, callWall, putWall);
+
   // ── level scorecard ────────────────────────────────────────────────────────
   const grades = useMemo<Grade[]>(() => {
     // Was Math.max(3, spot * 0.0005) — the 3 was an absolute SPX-points floor
@@ -1069,10 +1076,10 @@ export default function PostMarketTab(p: PostMarketProps) {
     };
 
     return [
-      withRecorded(build("CW", "Call Wall", "resistance", callWall, "var(--cw)", "above"), "call_wall"),
-      withRecorded(build("PW", "Put Wall", "support", putWall, "var(--pw)", "below"), "put_wall"),
+      withRecorded(build("CW", vt.name("cw", "Call Wall"), "resistance", callWall, vt.color("cw", "var(--cw)"), "above"), "call_wall"),
+      withRecorded(build("PW", vt.name("pw", "Put Wall"), "support", putWall, vt.color("pw", "var(--pw)"), "below"), "put_wall"),
       build("FLIP", "Gamma Flip", "regime", flip, "var(--amber)", "cross"),
-      withRecorded(build("CORE", "CORE", "max γ", coreBullseye?.strike ?? null, "var(--violet)", "near"), "cb"),
+      withRecorded(build("CORE", vt.upper("cb", "CORE"), "max γ", coreBullseye?.strike ?? null, vt.color("cb", "var(--violet)"), "near"), "cb"),
       build("MP", "Max Pain", "OI", maxPain, "var(--blue)", "near"),
     ];
   }, [callWall, putWall, flip, coreBullseye, maxPain, path, spot, closePx, recorded]);
@@ -1094,13 +1101,13 @@ export default function PostMarketTab(p: PostMarketProps) {
       return { t: "BOTH WALLS GAVE", d: `Range ${fmtPx(rthLo, pxDp)}–${fmtPx(rthHi, pxDp)} ran through both sides. The map was too narrow for the tape.`, neg: true };
     }
     if (brokeCall) {
-      return { t: "BROKE THE CALL WALL", d: `High ${fmtPx(rthHi, pxDp)} cleared ${fmtPx(callWall, kDp)}. Fading resistance was the wrong trade.`, neg: true };
+      return { t: `BROKE THE ${vt.upper("cw", "CALL WALL")}`, d: `High ${fmtPx(rthHi, pxDp)} cleared ${fmtPx(callWall, kDp)}. Fading resistance was the wrong trade.`, neg: true };
     }
     if (brokePut) {
-      return { t: "BROKE THE PUT WALL", d: `Low ${fmtPx(rthLo, pxDp)} lost ${fmtPx(putWall, kDp)}. Support was not support.`, neg: true };
+      return { t: `BROKE THE ${vt.upper("pw", "PUT WALL")}`, d: `Low ${fmtPx(rthLo, pxDp)} lost ${fmtPx(putWall, kDp)}. Support was not support.`, neg: true };
     }
     if (pinned) {
-      return { t: "PINNED", d: `Closed ${fmtPts(cb != null ? closePx - cb : null)} from CORE at ${fmtPx(cb, kDp)}, inside the wall band all day.`, neg: false };
+      return { t: "PINNED", d: `Closed ${fmtPts(cb != null ? closePx - cb : null)} from ${vt.upper("cb", "CORE")} at ${fmtPx(cb, kDp)}, inside the wall band all day.`, neg: false };
     }
     if (inside) {
       return { t: "HELD THE RANGE", d: `Whole session between ${fmtPx(putWall, kDp)} and ${fmtPx(callWall, kDp)}. The morning map was the day.`, neg: false };
@@ -1129,11 +1136,13 @@ export default function PostMarketTab(p: PostMarketProps) {
     const add = (code: string, name: string, px: number | null | undefined, color: string) => {
       if (px != null && Number.isFinite(px) && px > 0) marks.push({ code, name, px, color });
     };
-    add("PW", "Put Wall", next.putWall, "var(--pw)");
+    // Tomorrow's map, renamed off tomorrow's own CORE against today's close.
+    const nv = levelNamer(next.cb, closePx, next.callWall, next.putWall);
+    add(nv.code("pw", "PW"), nv.name("pw", "Put Wall"), next.putWall, nv.color("pw", "var(--pw)"));
     add("FLIP", "Gamma Flip", next.flip, "var(--amber)");
-    add("CORE", "max γ strike", next.cb, "var(--violet)");
+    add(nv.code("cb", "CORE"), nv.name("cb", "max γ strike"), next.cb, nv.color("cb", "var(--violet)"));
     add("CLOSE", `${sym} Close`, closePx > 0 ? closePx : null, T.text);
-    add("CW", "Call Wall", next.callWall, "var(--cw)");
+    add(nv.code("cw", "CW"), nv.name("cw", "Call Wall"), next.callWall, nv.color("cw", "var(--cw)"));
     if (marks.length < 2) return null;
     const lo = Math.min(...marks.map((m) => m.px)), hi = Math.max(...marks.map((m) => m.px));
     const span = hi - lo;
@@ -1287,9 +1296,9 @@ export default function PostMarketTab(p: PostMarketProps) {
   const maxPmAbs = Math.max(0.05, ...evRows.map((r) => Math.abs(r.pmShare ?? 0)));
   const hasPm = evRows.some((r) => r.pmShare != null);
   const openTag = (strike: number): { text: string; color: string } | null => {
-    if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--cw)" };
-    if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pw)" };
-    if (coreBullseye && strike === coreBullseye.strike) return { text: "CORE", color: "var(--violet)" };
+    if (callWall != null && strike === callWall) return { text: vt.upper("cw", "CALL WALL"), color: vt.color("cw", "var(--cw)") };
+    if (putWall != null && strike === putWall) return { text: vt.upper("pw", "PUT WALL"), color: vt.color("pw", "var(--pw)") };
+    if (coreBullseye && strike === coreBullseye.strike) return { text: vt.upper("cb", "CORE"), color: vt.color("cb", "var(--violet)") };
     if (maxPain != null && strike === maxPain) return { text: "MAX PAIN", color: "var(--blue)" };
     return null;
   };
@@ -1452,17 +1461,17 @@ export default function PostMarketTab(p: PostMarketProps) {
               {rPos(rthLo) != null && rPos(rthHi) != null && (
                 <div className="act" style={{ left: `${rPos(rthLo)}%`, width: `${(rPos(rthHi) as number) - (rPos(rthLo) as number)}%` }} />
               )}
-              {rPos(putWall) != null && <div className="mk3" style={{ left: `${rPos(putWall)}%`, background: "var(--pw)" }} />}
-              {rPos(callWall) != null && <div className="mk3" style={{ left: `${rPos(callWall)}%`, background: "var(--cw)" }} />}
+              {rPos(putWall) != null && <div className="mk3" style={{ left: `${rPos(putWall)}%`, background: vt.color("pw", "var(--pw)") }} />}
+              {rPos(callWall) != null && <div className="mk3" style={{ left: `${rPos(callWall)}%`, background: vt.color("cw", "var(--cw)") }} />}
               {rPos(closePx) != null && <div className="mk3" style={{ left: `${rPos(closePx)}%`, background: T.text }} />}
               {rPos(putWall) != null && (
-                <div className="cp3" style={{ left: `${Math.max(9, rPos(putWall) as number)}%`, color: "var(--pw)" }}>PW {fmtPx(putWall, kDp)}</div>
+                <div className="cp3" style={{ left: `${Math.max(9, rPos(putWall) as number)}%`, color: vt.color("pw", "var(--pw)") }}>{vt.code("pw", "PW")} {fmtPx(putWall, kDp)}</div>
               )}
               {rPos(closePx) != null && (
                 <div className="cp3" style={{ left: `${Math.min(82, Math.max(28, rPos(closePx) as number))}%` }}>close {fmtPx(closePx, pxDp)}</div>
               )}
               {rPos(callWall) != null && (
-                <div className="cp3" style={{ left: `${Math.min(91, rPos(callWall) as number)}%`, color: "var(--cw)" }}>CW {fmtPx(callWall, kDp)}</div>
+                <div className="cp3" style={{ left: `${Math.min(91, rPos(callWall) as number)}%`, color: vt.color("cw", "var(--cw)") }}>{vt.code("cw", "CW")} {fmtPx(callWall, kDp)}</div>
               )}
             </div>
             <div className="rangelabs">
@@ -1552,8 +1561,8 @@ export default function PostMarketTab(p: PostMarketProps) {
                 {moves.map((r, i) => (
                   <div className="mv" key={`${r.level_type}-${r.slot}-${i}`}>
                     <span className="mono">{String(r.at ?? "").slice(0, 5) || `slot ${r.slot}`}</span>
-                    <span style={{ color: r.level_type === "call_wall" ? "var(--cw)" : r.level_type === "put_wall" ? "var(--pw)" : "var(--violet)" }}>
-                      {LEVEL_LABEL[r.level_type]}
+                    <span style={{ color: vt.color(cbKeyOfLevelType(r.level_type), r.level_type === "call_wall" ? "var(--cw)" : r.level_type === "put_wall" ? "var(--pw)" : "var(--violet)") }}>
+                      {vt.name(cbKeyOfLevelType(r.level_type), LEVEL_LABEL[r.level_type])}
                     </span>
                     <span className="mono">
                       {r.prev_strike != null ? `${nf(r.prev_strike, kDp)} → ` : ""}{nf(r.strike, kDp)}
@@ -1847,7 +1856,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                 says nothing about these four series — which is exactly how a
                 violet CORE line reads as an unexplained squiggle. */}
             <div className="evlegend" style={{ marginBottom: 6 }}>
-              <span><i style={{ background: "var(--violet)" }} />CORE — the heavier wall</span>
+              <span><i style={{ background: vt.color("cb", "var(--violet)") }} />{vt.name("cb", "CORE")} — the heavier wall</span>
               <span><i style={{ background: "color-mix(in srgb, var(--color-fg) 42%, transparent)" }} />the other wall</span>
               <span><i style={{ background: T.text }} />spot</span>
             </div>
@@ -2132,7 +2141,7 @@ export default function PostMarketTab(p: PostMarketProps) {
             <div className="stat">
               <span className="l">Auto-read</span>
               <span className="r" style={{ fontWeight: 500, fontSize: 11.5, textAlign: "right" }}>
-                {gradeOf("CW")?.status ?? "—"} call wall · {gradeOf("PW")?.status ?? "—"} put wall · flip {gradeOf("FLIP")?.status?.toLowerCase() ?? "—"}
+                {gradeOf("CW")?.status ?? "—"} {vt.name("cw", "call wall").toLowerCase()} · {gradeOf("PW")?.status ?? "—"} {vt.name("pw", "put wall").toLowerCase()} · flip {gradeOf("FLIP")?.status?.toLowerCase() ?? "—"}
               </span>
             </div>
             <textarea
@@ -2293,7 +2302,7 @@ function WallChart({
       )}
       {other && <polyline points={other} fill="none" stroke="color-mix(in srgb, var(--color-fg) 42%, transparent)" strokeWidth={1.4}
         vectorEffect="non-scaling-stroke" />}
-      {core && <polyline points={core} fill="none" stroke="var(--violet)" strokeWidth={2}
+      {core && <polyline points={core} fill="none" stroke={VOLTICK_UI ? "var(--color-vt-volt)" : "var(--violet)"} strokeWidth={2}
         vectorEffect="non-scaling-stroke" />}
       {sp && <polyline points={sp} fill="none" stroke={T.text} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
     </svg>

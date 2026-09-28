@@ -56,6 +56,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { T } from "@/design/theme";
+import { cbKeyOfLevelType, levelNamer, type LevelNamer } from "@/data/voltickLevels";
 import type { CSSProperties } from "react";
 import {
   useNextExpiryStructure,
@@ -130,6 +131,9 @@ export default function TickerBoard({
   const dp = board ? strikeDp(board.rows) : 0;
   const posGamma = (board?.netGex ?? 0) >= 0;
   const distFlip = spot > 0 && board?.flip ? spot - board.flip : null;
+  // Voltick UI theme: CORE = Volt, the wall on the CORE's side of spot = Coil,
+  // the other = Reversal. CB Edge text passes straight through when it is off.
+  const vt = levelNamer(board?.cb, spot, board?.callWall, board?.putWall);
 
   /** ±12 strikes for the bar scale, ±60 rendered — same rule as the SPX profile. */
   const nearBars = useMemo(() => windowAround(board?.rows ?? [], spot, 12), [board, spot]);
@@ -143,11 +147,11 @@ export default function TickerBoard({
     const add = (code: string, name: string, px: number | null | undefined, color: string) => {
       if (px != null && Number.isFinite(px) && px > 0) marks.push({ code, name, px, color });
     };
-    add("PW", "Put Wall", board.putWall, "var(--pw)");
+    add(vt.code("pw", "PW"), vt.name("pw", "Put Wall"), board.putWall, vt.color("pw", "var(--pw)"));
     add("FLIP", "Gamma Flip", board.flip, "var(--amber)");
-    add("CORE", "max γ strike", board.cb, "var(--violet)");
+    add(vt.code("cb", "CORE"), vt.name("cb", "max γ strike"), board.cb, vt.color("cb", "var(--violet)"));
     add("SPOT", "Spot", spot > 0 ? spot : null, T.text);
-    add("CW", "Call Wall", board.callWall, "var(--cw)");
+    add(vt.code("cw", "CW"), vt.name("cw", "Call Wall"), board.callWall, vt.color("cw", "var(--cw)"));
     if (marks.length < 2) return null;
     const lo = Math.min(...marks.map((m) => m.px));
     const hi = Math.max(...marks.map((m) => m.px));
@@ -304,8 +308,8 @@ export default function TickerBoard({
       {/* ── KEY LEVELS ────────────────────────────────────────────────────── */}
       <div className="levels" style={{ gridTemplateColumns: "repeat(5, 1fr)" } as CSSProperties}>
         <div className="lvl call">
-          <div className="name">Call Wall <em>resistance</em></div>
-          <div className="px mono">{fmtPx(board.callWall, dp)}</div>
+          <div className="name">{vt.name("cw", "Call Wall")} <em>resistance</em></div>
+          <div className="px mono" style={vt.key("cw") ? { color: vt.color("cw", "") } : undefined}>{fmtPx(board.callWall, dp)}</div>
           <div className="es mono">{fmtUsd(gexAt(board.rows, board.callWall, "call"), false)}</div>
           <div className="dist">
             <span className={`mono ${board.callWall != null && board.callWall >= spot ? "chg-pos" : "chg-neg"}`}>
@@ -316,8 +320,8 @@ export default function TickerBoard({
         </div>
 
         <div className="lvl magnet">
-          <div className="name">CORE <em>max γ</em></div>
-          <div className="px mono">{fmtPx(board.cb, dp)}</div>
+          <div className="name">{vt.upper("cb", "CORE")} <em>max γ</em></div>
+          <div className="px mono" style={vt.key("cb") ? { color: vt.color("cb", "") } : undefined}>{fmtPx(board.cb, dp)}</div>
           <div className="es mono">{fmtUsd(gexAt(board.rows, board.cb, "net"), false)}</div>
           <div className="dist">
             <span className="mono">{board.cb != null ? fmtPts(board.cb - spot) : "—"}</span>
@@ -345,8 +349,8 @@ export default function TickerBoard({
         </div>
 
         <div className="lvl put">
-          <div className="name">Put Wall <em>support</em></div>
-          <div className="px mono">{fmtPx(board.putWall, dp)}</div>
+          <div className="name">{vt.name("pw", "Put Wall")} <em>support</em></div>
+          <div className="px mono" style={vt.key("pw") ? { color: vt.color("pw", "") } : undefined}>{fmtPx(board.putWall, dp)}</div>
           <div className="es mono">{fmtUsd(gexAt(board.rows, board.putWall, "put"), false)}</div>
           <div className="dist">
             <span className={`mono ${board.putWall != null && board.putWall <= spot ? "chg-pos" : "chg-neg"}`}>
@@ -369,7 +373,7 @@ export default function TickerBoard({
             {bars.map((b) => {
               const pos = b.net >= 0;
               const w = (Math.abs(b.net) / (pos ? maxP : maxN)) * 50;
-              const tag = tagFor(board, b.strike);
+              const tag = tagFor(board, b.strike, vt);
               return (
                 <div className={`row${tag ? " key" : ""}`} key={b.strike}>
                   <div className="k mono">{nf(b.strike, dp)}</div>
@@ -472,11 +476,11 @@ export default function TickerBoard({
                     const last = rec?.events.length ? rec.events[rec.events.length - 1] : null;
                     const rx = last?.reaction ?? null;
                     const tone = rx ? REACTION_TONE[rx] : null;
-                    const color = lvl === "call_wall" ? "var(--cw)" : lvl === "put_wall" ? "var(--pw)" : "var(--violet)";
+                    const color = vt.color(cbKeyOfLevelType(lvl), lvl === "call_wall" ? "var(--cw)" : lvl === "put_wall" ? "var(--pw)" : "var(--violet)");
                     return (
                       <div className="sc" key={lvl}>
                         <div className="nm">
-                          <span style={{ color }}>{LEVEL_LABEL[lvl]}</span>
+                          <span style={{ color }}>{vt.name(cbKeyOfLevelType(lvl), LEVEL_LABEL[lvl])}</span>
                           <span className={`pill${tone === "ok" ? " cool" : tone === "bad" ? " hot" : tone === "warn" ? " warn" : ""}`}>
                             {rx ? REACTION_LABEL[rx] : rec ? "UNTESTED" : "—"}
                           </span>
@@ -505,8 +509,16 @@ export default function TickerBoard({
               </div>
               {nextState === "ok" && next ? (
                 <>
-                  <div className="stat"><span className="l">Call wall</span><span className="r mono" style={{ color: "var(--cw)" }}>{fmtPx(next.callWall, dp)}</span></div>
-                  <div className="stat"><span className="l">Put wall</span><span className="r mono" style={{ color: "var(--pw)" }}>{fmtPx(next.putWall, dp)}</span></div>
+                  {(() => {
+                    // Tomorrow's walls, renamed off tomorrow's own CORE vs spot.
+                    const nv = levelNamer(next.cb, spot, next.callWall, next.putWall);
+                    return (
+                      <>
+                        <div className="stat"><span className="l">{nv.name("cw", "Call wall")}</span><span className="r mono" style={{ color: nv.color("cw", "var(--cw)") }}>{fmtPx(next.callWall, dp)}</span></div>
+                        <div className="stat"><span className="l">{nv.name("pw", "Put wall")}</span><span className="r mono" style={{ color: nv.color("pw", "var(--pw)") }}>{fmtPx(next.putWall, dp)}</span></div>
+                      </>
+                    );
+                  })()}
                   <div className="stat"><span className="l">Flip</span><span className="r mono">{fmtPx(next.flip, dp)}</span></div>
                   <div className="stat"><span className="l">Net GEX rolls to</span><span className="r mono">{fmtUsd(next.netGex)}</span></div>
                 </>
@@ -522,8 +534,8 @@ export default function TickerBoard({
                   {wallLog.filter((r) => r.reason === "change").sort((a, b) => a.slot - b.slot).slice(-6).map((r, i) => (
                     <div className="mv" key={`${r.level_type}-${r.slot}-${i}`}>
                       <span className="mono">{String(r.at ?? "").slice(0, 5) || `#${r.slot}`}</span>
-                      <span style={{ color: r.level_type === "call_wall" ? "var(--cw)" : r.level_type === "put_wall" ? "var(--pw)" : "var(--violet)" }}>
-                        {LEVEL_LABEL[r.level_type]}
+                      <span style={{ color: vt.color(cbKeyOfLevelType(r.level_type), r.level_type === "call_wall" ? "var(--cw)" : r.level_type === "put_wall" ? "var(--pw)" : "var(--violet)") }}>
+                        {vt.name(cbKeyOfLevelType(r.level_type), LEVEL_LABEL[r.level_type])}
                       </span>
                       <span className="mono">
                         {r.prev_strike != null ? `${nf(r.prev_strike, dp)} → ` : ""}{nf(r.strike, dp)}
@@ -571,10 +583,11 @@ function gexAt(rows: TickerRow[], strike: number | null, side: "call" | "put" | 
 function tagFor(
   board: { callWall: number | null; putWall: number | null; cb: number | null; maxPain: number | null; flip: number | null },
   strike: number,
+  vt: LevelNamer,
 ): { text: string; color: string } | null {
-  if (board.callWall != null && strike === board.callWall) return { text: "CALL WALL", color: "var(--cw)" };
-  if (board.putWall != null && strike === board.putWall) return { text: "PUT WALL", color: "var(--pw)" };
-  if (board.cb != null && strike === board.cb) return { text: "CORE", color: "var(--violet)" };
+  if (board.callWall != null && strike === board.callWall) return { text: vt.upper("cw", "CALL WALL"), color: vt.color("cw", "var(--cw)") };
+  if (board.putWall != null && strike === board.putWall) return { text: vt.upper("pw", "PUT WALL"), color: vt.color("pw", "var(--pw)") };
+  if (board.cb != null && strike === board.cb) return { text: vt.upper("cb", "CORE"), color: vt.color("cb", "var(--violet)") };
   if (board.maxPain != null && strike === board.maxPain) return { text: "MAX PAIN", color: "var(--blue)" };
   return null;
 }
