@@ -3641,6 +3641,49 @@ register('/api/budget/parse-statement', {
         ? cats.map((c) => `- ${c.name} (id ${c.id})`).join('\n')
         : '(none defined yet — leave categoryId null and put your best guess in categoryGuess)';
 
+      // Filing order for the staging table: YOUR RULES first, then how the
+      // same merchant was filed in earlier months, and only then the model's
+      // guess. The model still names the merchant, but it never gets to beat a
+      // rule or a decision already made — same precedence as Auto-categorize,
+      // so what the preview shows is what the reviewer would have got anyway.
+      const applyFiling = async (rowsIn) => {
+        const out = { rule: 0, history: 0, model: 0 };
+        let ruleList = [];
+        const learned = new Map();
+        try {
+          if (libDb) {
+            await libDb.adoptDefaultBudgetProfile('owner');
+            const profile = await libDb.getOrCreateBudgetProfile('owner');
+            const [rules, history] = await Promise.all([
+              libDb.listCategoryRules(profile.id).catch(() => []),
+              libDb.listMerchantCategoryHistory(profile.id, '9999-12').catch(() => []),
+            ]);
+            // Already in precedence order (priority, longest pattern, oldest).
+            ruleList = (rules || [])
+              .map((r) => ({ ...r, needle: String(r.pattern || '').trim().toLowerCase() }))
+              .filter((r) => r.needle && r.category_id != null);
+            // Most-used filing per (direction, merchant) wins — the query is
+            // ordered by count desc, so the first seen is the habit.
+            for (const h of history || []) {
+              const k = `${h.direction}|${h.merchant_key}`;
+              if (!learned.has(k)) learned.set(k, Number(h.category_id));
+            }
+          }
+        } catch { /* filing memory is an optimisation — never block a parse on it */ }
+        const mKey = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 60);
+        for (const row of rowsIn) {
+          const d = row.direction === 'in' ? 'in' : 'out';
+          const hay = `${row.merchant || ''} ${row.description || ''}`.toLowerCase();
+          const hit = ruleList.find((r) => (!r.direction || r.direction === d) && hay.includes(r.needle));
+          if (hit) { row.categoryId = Number(hit.category_id); row.categorySource = 'rule'; out.rule++; continue; }
+          const h = learned.get(`${d}|${mKey(row.merchant || row.description)}`);
+          if (h != null && Number.isFinite(h)) { row.categoryId = h; row.categorySource = 'history'; out.history++; continue; }
+          if (row.categoryId != null) { row.categorySource = 'model'; out.model++; }
+          else row.categorySource = null;
+        }
+        return out;
+      };
+
       // ── CSV ────────────────────────────────────────────────────────────
       // A CSV export already HAS the numbers, so they are parsed here rather
       // than by the model: it is instant, free, and cannot hallucinate a digit
@@ -3917,11 +3960,13 @@ ${catList}`;
             recurring: e?.recurring === true,
           };
         });
+        const filedBy = await applyFiling(csvRows);
 
         send(res, 200, {
           rows: csvRows,
           count: csvRows.length,
           source: 'csv',
+          filedBy,
           warning,
           model: enrich.size ? CSV_MODEL : null,
           columns: {
@@ -4004,7 +4049,8 @@ ${catList}`;
         };
       }).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.date) && x.description && Number.isFinite(x.amount) && x.amount > 0);
 
-      send(res, 200, { rows, count: rows.length, model: MODEL });
+      const filedBy = await applyFiling(rows);
+      send(res, 200, { rows, count: rows.length, model: MODEL, filedBy });
     } catch (err) {
       const msg = String(err?.message || err);
       if (msg.includes('body too large')) { send(res, 413, { error: 'That file is too large. Split the statement or export fewer pages.' }); return; }

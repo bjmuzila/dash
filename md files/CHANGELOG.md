@@ -24629,3 +24629,6 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - Analysis: Ticker Lookup chips + read, ladder tags + core glow (`pages/analysis/lookup/TickerLookup.tsx`, `Ladder.tsx`); Ticker Levels card (`pages/analysis/cards/TickerLevels.tsx`).
 - Alerts: Core-touch alert shows as Volt (`shell/alertTypes.ts`).
 - `design/tokens.css`: the Voltick block now overrides every remaining CB Edge colour token (v2 palette used by the Scanner / Analysis, level-*, gex lead/bars, net drift, dex, violet, impact/calendar, seasonality) with Voltick palette values.
+
+## 2026-09-28 — owner.cbedge.net Budget: statement import applies filing rules first
+- `server-v2/api-router.js` `/api/budget/parse-statement` (CSV, PDF and image): the staging table's categories are now decided rules → history → model. A filing rule always wins, then the merchant's most-used category from earlier months, and only then Claude's guess. Same precedence as Auto-categorize. Rules also apply when the API key/credits are unavailable. Response carries `filedBy: { rule, history, model }` and each row a `categorySource`.
