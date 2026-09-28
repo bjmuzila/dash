@@ -17,16 +17,12 @@ import { useAuth } from '@/data/auth'
 // top-level Next routes OUTSIDE the SPA, so they need a real navigation. This is
 // the exact bug v2's UserMenu carries three separate comments about.
 //
-// THE TWO EXCEPTIONS ARE FEEDBACK. /feedback was ported into v3 on 2026-09-09
-// (src/pages/Feedback.tsx), so it is now an in-app route and the rule inverts
-// for it: a native <a href="/v3/feedback"> would be a full document load that
-// reboots the whole SPA to reach a page that is already in the bundle. Those two
-// rows navigate. Everything else in this file still leaves.
+// Feedback, My Tickets, Help & Docs, Site Guide, What's New and the legal
+// links were removed from this menu on 2026-09-27.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STRIPE_PORTAL = 'https://billing.stripe.com/p/login/dR6cNfd9J3zE84U4gg'
 const OWNER_HUB = 'https://owner.cbedge.net'
-
 
 interface DiscordStatus {
   connected: boolean

@@ -24588,3 +24588,6 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-09-27 — Screenshot menu: no Pages list on home, pinned rows de-duplicated
 - `cbedge-v3/src/shell/CopyShot.tsx`: on the home page (`/`) the "Pages" group is dropped from the camera menu's All shots list; a pinned shot is no longer repeated in its group (Home board etc.) — it only shows under Pinned. Empty groups are hidden.
+
+## 2026-09-27 — Account menu: removed Feedback & Support and Help & Docs
+- `cbedge-v3/src/shell/UserMenu.tsx`: dropped the "Feedback & Support" and "Help & Docs" rows (and the unused `FEEDBACK_PATH` const). My Tickets still opens the Feedback page's ticket list.
