@@ -893,23 +893,6 @@ function TickerPanel({
                     </span>
                     {f.text}
 
-                    {/* Later expiries mark their own CB with a star. Same
-                        strike, quieter mark — the front expiry is the one being
-                        traded, so it gets the named badge. Drawn in the app
-                        ground, not gold: the corner it sits in is where CB_WASH
-                        holds FULL gold, and a gold star on gold is an invisible
-                        star. No halo either — solid gold is already its ground,
-                        and the glow only softened the glyph's edge. */}
-                    {showLevels && isCb && !isFront && (
-                      <span
-                        title="Core Bullseye"
-                        className="pointer-events-none absolute left-0.5 top-px text-2xs leading-none"
-                        style={{ color: 'var(--color-app)' }}
-                      >
-                        ★
-                      </span>
-                    )}
-
                     {/* Front expiry names the level, ringed in its own colour. */}
                     {showLevels && level && isFront && (
                       <span
@@ -1302,7 +1285,7 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
                   title={
                     VOLTICK_THEME
                       ? "Name the Volt ★, Surge ↯, Reversal ↘ and Coil ◆ — the marks and names inside each filled cell. The fills stay either way."
-                      : "Name the Core Bullseye, Call Wall and Put Wall — the front expiry's badges and the ★ on later expiries. The core's gold stays either way."
+                      : "Name the Core Bullseye, Call Wall and Put Wall — the front expiry's badges. The core's gold stays either way."
                   }
                 />
               </div>

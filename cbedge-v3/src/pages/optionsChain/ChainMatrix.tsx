@@ -29,7 +29,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { memo, type CSSProperties } from 'react'
-import { alpha, CHAIN, LEVEL_COLORS, LEVEL_ON_SOLID, SHADOW, T } from '@/design/theme'
+import { alpha, CHAIN, SHADOW, T } from '@/design/theme'
 import {
   columnWalls,
   isNearCore,
@@ -93,20 +93,6 @@ const HDR_BG = T.panel
 const STRIKE_COL = 56
 /** Every strike row is at least this tall, floored on the sticky strike cell. */
 const ROW_MIN_H = 17
-
-/**
- * The ★ (CB) and ✕ (volume-GEX peak) sit on top of the heat fill, which at full
- * intensity is a saturated positive or negative tile. Gold-on-blue and red-on-red
- * both wash out at 10px, so both glyphs get a hard dark edge (paint-order:
- * stroke, so the stroke sits OUTSIDE the fill and does not eat the glyph) plus a
- * light halo. That pairing reads on every background the scale can produce.
- */
-const MARKER_EDGE: CSSProperties = {
-  WebkitTextStrokeWidth: '1px',
-  WebkitTextStrokeColor: SHADOW,
-  paintOrder: 'stroke fill' as unknown as CSSProperties['paintOrder'],
-  textShadow: `0 0 3px ${alpha(T.text, 0.9)}, 0 0 1px ${SHADOW}`,
-}
 
 /**
  * Soft cell value with a coloured leading sign — the CLASSIC skin's format,
@@ -234,14 +220,12 @@ export const ChainMatrix = memo(function ChainMatrix({
   nearestStrike,
   spot,
   greekMode,
-  dataMode,
   intensity,
   heatSkin,
   levelsOnly,
   nearCore,
   nearCorePct,
   colScales,
-  volMvcByCol,
   mvcByCol,
   coreAbsByCol,
   valueAt,
@@ -268,10 +252,6 @@ export const ChainMatrix = memo(function ChainMatrix({
   const isCountMode = isOiMode || isVolMode
   const fmtVal = isOiMode ? fmtChg : isVolMode ? fmtCount : fmtMoney
 
-  // The ★ marks the core of whatever tab is on, so its tooltip has to name that
-  // tab — "highest |net GEX|" on the PREM tab is simply wrong.
-  const coreTip = `CB - Core Bullseye — highest |${greekMode === 'oi' ? 'ΔOI' : greekMode.toUpperCase()}|`
-  const coreTotalTip = `CB - Core Bullseye — highest |⅀ ${greekMode === 'oi' ? 'ΔOI' : greekMode.toUpperCase()}|`
 
   const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.classic
   const CELL = CHAIN_CELL[heatSkin] ?? CHAIN_CELL.classic
@@ -704,17 +684,6 @@ export const ChainMatrix = memo(function ChainMatrix({
               const isMvc = !VOLTICK_THEME && col != null && mvcByCol[colIdx] === strike
               const vtHere: VtLevelDef[] = vtOn ? vtLevelsAt(vtByCol[colIdx], strike) : []
               const vtFill = vtHere[0] ?? null
-              // ✕ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
-              const isVolMvc =
-                !VOLTICK_THEME &&
-                greekMode === 'gex' &&
-                dataMode === 'oi-vol' &&
-                col != null &&
-                volMvcByCol[colIdx] === strike
-              // …coloured by the SIGN of that volume-only GEX. A fixed-red ✕ said
-              // "negative" on every strike it landed on.
-              const volMvcVal = isVolMvc && col ? (col.cells.get(strike)?.volGex ?? null) : null
-              const volMvcPos = (volMvcVal ?? value ?? 0) >= 0
               const isFirst = posInRow === 0
               // ATM box: box-shadow so it overlays without shifting layout. Top
               // and bottom on every cell, left edge on the first column; the
@@ -831,57 +800,7 @@ export const ChainMatrix = memo(function ChainMatrix({
                       : {}),
                   }}
                 >
-                  {isMvc &&
-                    (SK.levelFill ? (
-                      // Pinned to the cell's top-left corner — which is exactly
-                      // where levelFillBg holds the CB wash at FULL gold — and
-                      // drawn in the ink that colour was chosen to carry. A gold
-                      // star on a gold tile is an invisible star.
-                      //
-                      // No halo: the corner is solid gold under the glyph (the
-                      // wash only fades further along the diagonal), so the ★
-                      // already has its own ground and a glow just softens it.
-                      <span
-                        title={coreTip}
-                        style={{
-                          position: 'absolute',
-                          top: 1,
-                          left: 2,
-                          fontSize: 10,
-                          lineHeight: 1,
-                          color: LEVEL_ON_SOLID,
-                          pointerEvents: 'none',
-                        }}
-                      >
-                        ★
-                      </span>
-                    ) : (
-                      <span
-                        title={coreTip}
-                        style={{ color: LEVEL_COLORS.cb, lineHeight: 1, ...MARKER_EDGE }}
-                      >
-                        ★
-                      </span>
-                    ))}
-
                   {/* Voltick: no tag — the reserved fill IS the level. */}
-
-                  {isVolMvc && (
-                    <span
-                      title={`Highest volume GEX${volMvcVal == null ? '' : ` (${fmtMoney(volMvcVal)})`} — ${
-                        volMvcPos ? 'positive' : 'negative'
-                      } gamma`}
-                      style={{
-                        fontSize: 11,
-                        lineHeight: 1,
-                        fontWeight: 900,
-                        color: volMvcPos ? CHAIN.signUp : CHAIN.signDown,
-                        ...MARKER_EDGE,
-                      }}
-                    >
-                      ✕
-                    </span>
-                  )}
 
                   {isOiMode ? (
                     !oiHasAny ? (
@@ -991,30 +910,6 @@ export const ChainMatrix = memo(function ChainMatrix({
                       justifyContent: 'flex-end',
                     }}
                   >
-                    {isTotMvc &&
-                      (SK.levelFill ? (
-                        <span
-                          title={coreTotalTip}
-                          style={{
-                            position: 'absolute',
-                            top: 1,
-                            left: 4,
-                            fontSize: 'var(--text-2xs)',
-                            lineHeight: 1,
-                            color: LEVEL_ON_SOLID,
-                            pointerEvents: 'none',
-                          }}
-                        >
-                          ★
-                        </span>
-                      ) : (
-                        <span
-                          title={coreTotalTip}
-                          style={{ color: LEVEL_COLORS.cb, lineHeight: 1, marginRight: 'auto', ...MARKER_EDGE }}
-                        >
-                          ★
-                        </span>
-                      ))}
                     {vtTotFill ? (
                       <span>{fmtVal(tot)}</span>
                     ) : isCountMode || !CELL.signColors ? (

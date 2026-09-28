@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-28 - v3 Options Chain + Multi Greek: removed ★ and ✕ markers
+
+- `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`: the ★ (CB, Core Bullseye) is gone from the expiry cells and the ⅀ Total column, and so is the ✕ (volume-only GEX peak, OI+Vol / GEX). The CB gold fill and the CLASSIC ring are unchanged. Also removed the unused `MARKER_EDGE`, `coreTip`, `coreTotalTip` and the volume-peak locals.
+- `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`: the ★ on later expiries' CB cell is gone. The front expiry's CB/CW/PW badges and the gold fill are unchanged. The Levels toggle tooltip was updated to match.
+
+## 2026-09-28 - v3 Key Levels Stats snapshot: Core renamed to Volt
+
+- `cbedge-v3/src/board/keyLevels/statsShot.ts`: the 📋 Stats text copy now reads `Volt: <strike>` instead of `Core: <strike>` (hint text updated too). Same level, label only.
+
 ## 2026-09-27 - v3 Earnings board: Voltick data-table layout with AM/PM
 
 - `cbedge-v3/src/pages/EconomicCalendar.tsx`: the Earnings tab week board is now a data table per day. Each day has AM (before open), PM (after close) and TBD groups; each row shows an AM/PM badge, the company logo, ticker, company name, a relative market-cap bar and the cap. Day header shows the report count and AM/PM counts. Voltick colours throughout. Top-right URL removed; bottom-right is now the Voltick mark followed by voltick.io/bzila. The calendar tab's woven earnings are unchanged.
@@ -24591,3 +24600,8 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-09-27 — Account menu: removed Feedback & Support and Help & Docs
 - `cbedge-v3/src/shell/UserMenu.tsx`: dropped the "Feedback & Support" and "Help & Docs" rows (and the unused `FEEDBACK_PATH` const). My Tickets still opens the Feedback page's ticket list.
+
+
+## 2026-09-28 — Owner Probe: reject non-existent expirations
+- `/owner/probe` SMCI 47C was saved with expiry 2026-10-04 (a Sunday); `/proxy/probe-rest` returned `found:false, status:no-expiry` on every poll, so the card stayed blank.
+- `server-v2/api-router.js` `/api/watch` add now pre-probes and returns 400 with the nearest listed expirations when the chain has no such date (manual adds only; transport failures still pass).

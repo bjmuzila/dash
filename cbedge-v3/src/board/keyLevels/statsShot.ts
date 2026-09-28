@@ -8,7 +8,7 @@ import { strikeDp } from './levelsMath'
 // THE STATS SHOT — six lines of text, not a picture.
 //
 //   Ticker: SPX
-//   Core: 6650
+//   Volt: 6650
 //   Call Wall: 6700
 //   Put Wall: 6600
 //   Net Gex: +$1.24B
@@ -57,7 +57,7 @@ export function keyLevelsStatsText(symbol: string, rows: GexRow[], spot: number)
   const level = (v: number | null | undefined) => (v == null ? '—' : v.toFixed(kDp))
   return [
     `Ticker: ${symbol}`,
-    `Core: ${level(volLevels.core?.strike)}`,
+    `Volt: ${level(volLevels.core?.strike)}`,
     `Call Wall: ${level(volLevels.callWall)}`,
     `Put Wall: ${level(volLevels.putWall)}`,
     `Net Gex: ${money(gex)}`,
@@ -75,7 +75,7 @@ export function useKeyLevelsStatsTarget(symbol: string, rows: GexRow[], spot: nu
         id: 'key-levels-stats',
         icon: '📋',
         label: 'Stats',
-        hint: 'Copy the VOL-only levels as TEXT — ticker, core, both walls, net GEX and net DEX',
+        hint: 'Copy the VOL-only levels as TEXT — ticker, volt, both walls, net GEX and net DEX',
         group: 'Home board',
         capture: async () => {
           const { copyText } = await import('@/shell/snapshot')

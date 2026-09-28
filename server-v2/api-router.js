@@ -10796,6 +10796,22 @@ Return exactly one element per input key, in the same order. Never merge, split,
             const entryPrice = Number(body.addedPrice ?? body.entryPrice);
             const hasEntry = Number.isFinite(entryPrice) && entryPrice > 0;
             if (!ticker || !expiration || !Number.isFinite(strike)) { send(res, 400, { error: 'ticker, expiry and strike required' }); return; }
+            // Reject an expiry the chain doesn't list (e.g. a weekend date). Without
+            // this the row saves, every probe returns found:false, and the card sits
+            // on "—" forever with no hint why. Only a definite 'no-expiry' against a
+            // non-empty chain blocks — a transport failure still lets the add through.
+            if (access?.who !== 'internal') {
+              const pre = await fetchProbe(ctx, ticker, expiration, side, strike);
+              const avail = Array.isArray(pre?.availableExpirations) ? pre.availableExpirations : [];
+              if (pre && pre.found === false && pre.status === 'no-expiry' && avail.length) {
+                const target = Date.parse(expiration + 'T00:00:00Z');
+                const near = Number.isFinite(target)
+                  ? [...avail].sort((a, b) => Math.abs(Date.parse(a + 'T00:00:00Z') - target) - Math.abs(Date.parse(b + 'T00:00:00Z') - target)).slice(0, 2).sort()
+                  : avail.slice(0, 2);
+                send(res, 400, { error: `${ticker} has no ${expiration} expiration — nearest: ${near.join(', ')}`, availableExpirations: avail });
+                return;
+              }
+            }
             const created = await libDb.insertWatchOption({ ticker, expiration, strike, side, note });
             // A MANUAL add claims the row. The GEX-change-top recorder auto-probes
             // through this same route (x-internal-token) and tags its rows
