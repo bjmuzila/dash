@@ -17,7 +17,7 @@ import { GexPanelProvider } from "./GexPanelContext";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 
 // Routes that render full-bleed without the dashboard chrome.
-const BARE_ROUTES = ["/", "/sign-in", "/sign-up", "/explore", "/pricing", "/terms", "/risk-disclosure", "/privacy", "/disclaimer"];
+const BARE_ROUTES = ["/", "/sign-in", "/sign-up", "/explore", "/pricing", "/terms", "/risk-disclosure", "/privacy", "/disclaimer", "/unsubscribe"];
 
 // Next routes that wear V3LegacyToolbar instead of GlobalToolbar.
 //

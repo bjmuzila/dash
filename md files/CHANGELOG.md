@@ -24576,3 +24576,7 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `board/gexCandles/bubbles.ts` + `chart.ts`: `vtStrikes` option — Voltick theme draws bubbles ONLY at the four level strikes (newest column), each painted in its level colour (no gold leader).
 - `board/gexCandles/GexRail.tsx`: Voltick theme rail shows only the four level rows, using the always-four marks.
 - `board/gexCandles/GexCandlesCard.tsx`: Voltick theme forces the level tags and bubbles on (Levels/Bubbles switches can't hide them) and always fetches the ladder.
+
+## 2026-09-27 — Unsubscribe page: no toolbar, back-to-home, Voltick link
+- `components/shared/LayoutShell.tsx`: `/unsubscribe` added to `BARE_ROUTES` — the page renders full-bleed with no dashboard toolbar/docks.
+- `app/unsubscribe/page.tsx`: after a successful unsubscribe it redirects to the landing page (`/`) after 4s; footer now has "← Back to home" plus a "Visit voltick.io/bzila →" link.

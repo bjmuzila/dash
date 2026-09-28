@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
@@ -16,6 +16,14 @@ function UnsubscribeInner() {
 
   const [state, setState] = useState<State>("idle");
   const [msg, setMsg] = useState("");
+  const router = useRouter();
+
+  // After a successful unsubscribe, send them back to the landing page.
+  useEffect(() => {
+    if (state !== "done") return;
+    const id = window.setTimeout(() => router.push("/"), 4000);
+    return () => window.clearTimeout(id);
+  }, [state, router]);
 
   async function run() {
     setState("working");
@@ -74,6 +82,7 @@ function UnsubscribeInner() {
           <>
             <h1 style={{ fontSize: 22, fontWeight: 800, margin: "18px 0 8px" }}>You're unsubscribed</h1>
             <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 14, lineHeight: 1.5, margin: 0 }}>{msg}</p>
+            <p style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, margin: "10px 0 0" }}>Taking you back to the home page…</p>
           </>
         ) : (
           <>
@@ -110,10 +119,18 @@ function UnsubscribeInner() {
           </>
         )}
 
-        <div style={{ marginTop: 22, fontSize: 12 }}>
+        <div style={{ marginTop: 22, fontSize: 12, display: "flex", justifyContent: "center", gap: 18, flexWrap: "wrap" }}>
           <Link href="/" style={{ color: "rgba(255,255,255,0.55)", textDecoration: "none" }}>
-            ← Back to cbedge.net
+            ← Back to home
           </Link>
+          <a
+            href="https://voltick.io/bzila"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: T.cyan, textDecoration: "none", fontWeight: 700 }}
+          >
+            Visit voltick.io/bzila →
+          </a>
         </div>
       </div>
     </div>
