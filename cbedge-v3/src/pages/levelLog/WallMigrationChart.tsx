@@ -807,10 +807,10 @@ export function WallMigrationChart({
     <div className={fill ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-col'}>
       {compact ? null : (
       <div className="mb-1.5 flex flex-wrap items-baseline gap-3">
-        <span className="text-xs font-extrabold uppercase tracking-widest text-fg">
+        <span className="whitespace-nowrap text-xs font-extrabold uppercase tracking-widest text-fg">
           Wall migration
         </span>
-        <span className="tabular font-mono text-xs text-muted">
+        <span className="tabular whitespace-nowrap font-mono text-xs text-muted">
           {N > 1 ? `${N} sessions · ` : ''}recorded levels ·{' '}
           {anyDense
             ? cadenceMin

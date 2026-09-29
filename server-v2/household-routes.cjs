@@ -914,11 +914,18 @@ function registerHouseholdRoutes({ register, send, readJson }) {
             send(res, 200, await hlists.getWeek(u.id, u.tz, d), nostore);
             return;
           }
-          const body = await readJson(req, 64_000);
+          // 1MB, not 64KB: a bulk import of a few hundred meals with their
+          // TikTok links is well past 64KB. Everything else here is tiny.
+          const body = await readJson(req, 1_000_000);
           const action = str(body?.action, 40);
           const id = Number(body?.id ?? 0);
 
           switch (action) {
+            // Paste-box imports — one request, one INSERT, duplicates skipped.
+            case 'importItems':
+              send(res, 200, { ok: true, ...(await hlists.importItems(u.id, body?.items)) }, nostore); return;
+            case 'importLibraryMeals':
+              send(res, 200, { ok: true, ...(await hlists.importLibraryMeals(u.id, body?.meals)) }, nostore); return;
             case 'addItem':
               send(res, 200, { ok: true, item: await hlists.addItem(u.id, {
                 text: body?.text, qty: body?.qty, aisle: body?.aisle,

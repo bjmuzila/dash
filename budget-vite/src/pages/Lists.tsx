@@ -5,6 +5,7 @@ import {
   useClearChecked, useDeleteMeal,
   useMeals, usePreviewLink, useAddLibraryMeal, useUpdateLibraryMeal, useDeleteLibraryMeal, useMarkMade,
   useAddCategory, useRenameCategory, useMoveCategory, useDeleteCategory, usePlanMeal,
+  useImportItems, useImportMeals,
 } from '../hooks'
 import { ApiError, type Aisle, type ListItem, type Meal, type MealRef, type LibraryMeal, type MealCategory } from '../api'
 import { T, SERIF, MONO, SANS, sectionTitle, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
@@ -376,8 +377,9 @@ function Meals({ week, onShift }: {
 
   return (
     <>
-      <Importer categories={data.categories.map((c) => c.name)}
-                onSaved={(m) => { setOpenCats({ ...openCats, [m.category]: true }); setOpenItem(m.id) }} />
+      <Importer categories={data.categories.map((c) => c.name)} titles={data.meals.map((m) => m.title)}
+                onSaved={(m) => { setOpenCats({ ...openCats, [m.category]: true }); setOpenItem(m.id) }}
+                onImported={(cats) => setOpenCats({ ...openCats, ...Object.fromEntries(cats.map((c) => [c, true])) })} />
 
       <div style={section()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
@@ -436,9 +438,15 @@ function Meals({ week, onShift }: {
   )
 }
 
-function Importer({ categories, onSaved }: { categories: string[]; onSaved: (m: LibraryMeal) => void }) {
+function Importer({ categories, titles, onSaved, onImported }: {
+  categories: string[]
+  titles: string[]
+  onSaved: (m: LibraryMeal) => void
+  onImported: (categories: string[]) => void
+}) {
   const preview = usePreviewLink()
   const add = useAddLibraryMeal()
+  const [bulk, setBulk] = useState(false)
   const [q, setQ] = useState('')
   const [draft, setDraft] = useState<{ title: string; category: string; url: string | null; source: string | null } | null>(null)
   const isLink = (s: string) => /^https?:\/\//i.test(s.trim()) || /(tiktok|instagram|youtu)\S*\.\S+/i.test(s)
@@ -471,7 +479,14 @@ function Importer({ categories, onSaved }: { categories: string[]; onSaved: (m: 
         <button type="submit" disabled={!q.trim() || preview.isPending} style={{ ...button(q.trim() ? 'primary' : 'ghost'), padding: '12px 14px' }}>
           Add
         </button>
+        <button type="button" onClick={() => setBulk(true)} style={{ ...button('ghost'), padding: '12px 12px' }}>
+          Import
+        </button>
       </form>
+      {bulk && (
+        <BulkImport mode="meals" existing={titles} categories={categories}
+                    onDone={onImported} onClose={() => setBulk(false)} />
+      )}
 
       {preview.isPending && <div style={{ ...body(14), color: T.faint, marginTop: 10 }}>Reading the link…</div>}
       {preview.error && <div style={{ ...body(13), color: T.bad, marginTop: 10 }}>{(preview.error as Error).message}</div>}
@@ -701,6 +716,254 @@ function CategoryEditor({ categories, onClose }: { categories: MealCategory[]; o
   )
 }
 
+// ── Bulk import: the paste box ───────────────────────────────────────────────
+//
+// One name per line. `# Header` lines set the category (meals) or aisle (list)
+// for the lines under them. `Name | link` (meals) or `Name | qty` (list) carry
+// the extra; a tab works too, so a copied spreadsheet column pastes cleanly.
+// Leading bullets / numbers / checkboxes from Notes are stripped. Anything
+// already there, or repeated in the paste, is shown and skipped — the server
+// checks again, so re-pasting the same list never duplicates.
+
+type BulkMode = 'items' | 'meals'
+type BulkRow = {
+  name: string
+  key: string
+  group: string          // category (meals) or aisle label (items)
+  groupIsNew?: boolean   // meals: a category that will be created
+  aisle?: Aisle | null   // items: null = guessed on the server
+  qty?: string | null
+  url?: string | null
+  status: 'new' | 'exists' | 'repeat'
+}
+
+const nameKey = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase()
+const isUrl = (s: string) => /^https?:\/\/\S+$/i.test(s.trim())
+
+function aisleOf(header: string): Aisle | null {
+  const k = nameKey(header).replace(/s$/, '')
+  const hit = (Object.keys(AISLE_LABEL) as Aisle[]).find((a) => a === k || nameKey(AISLE_LABEL[a]).replace(/s$/, '') === k)
+  return hit ?? null
+}
+
+/** First of your categories named in the title ("Honey garlic chicken" → Chicken). */
+function guessCat(title: string, categories: string[]): string | null {
+  const hay = ` ${title.toLowerCase()} `
+  return categories.find((c) => c !== 'Other' &&
+    new RegExp(`\\b${c.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?\\b`).test(hay)) ?? null
+}
+
+function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: string[]) {
+  const have = new Set(existing.map(nameKey))
+  const seen = new Set<string>()
+  const catByKey = new Map(categories.map((c) => [nameKey(c), c]))
+  const rows: BulkRow[] = []
+  const notAisles = new Set<string>()
+  let header: string | null = null
+  let noName = 0
+
+  for (const src of raw.split(/\r?\n/)) {
+    let s = src.trim()
+    if (!s) continue
+    const h = s.match(/^#+\s*(.*?):?\s*$/)
+    if (h) { header = h[1] || null; continue }
+    s = s.replace(/^(?:[-*•·–]|\d+[.)]|\[[ xX]?\])\s*/, '').trim()
+    if (!s) continue
+
+    const parts = s.split(/\s*\|\s*|\t+/).map((p) => p.trim()).filter(Boolean)
+    let name = parts[0] ?? ''
+    const rest = parts.slice(1)
+    let url: string | null = null
+    let qty: string | null = null
+    let col: string | null = null   // meals: a non-link second column = category
+
+    if (mode === 'meals') {
+      url = rest.find(isUrl) ?? null
+      col = rest.find((p) => !isUrl(p)) ?? null
+      // "link | name" — the other way round.
+      if (isUrl(name) && col) { url = name; name = col; col = rest.filter((p) => !isUrl(p))[1] ?? null }
+      // "Name https://…" with no separator.
+      if (!url) {
+        const m = name.match(/^(.*\S)\s+(https?:\/\/\S+)$/)
+        if (m) { name = m[1]; url = m[2] }
+      }
+      if (isUrl(name)) { noName++; continue }
+    } else {
+      qty = rest.join(' ') || null
+    }
+
+    name = name.slice(0, 200).trim()
+    if (!name) continue
+    const key = nameKey(name)
+    const status: BulkRow['status'] = have.has(key) ? 'exists' : seen.has(key) ? 'repeat' : 'new'
+    seen.add(key)
+
+    if (mode === 'meals') {
+      const wanted = col || header || guessCat(name, categories) || 'Other'
+      const known = catByKey.get(nameKey(wanted))
+      rows.push({ name, key, url, status, group: known ?? wanted.slice(0, 60), groupIsNew: !known })
+    } else {
+      const aisle = header ? aisleOf(header) : null
+      if (header && !aisle) notAisles.add(header)
+      rows.push({ name, key, qty, aisle, status, group: aisle ? AISLE_LABEL[aisle] : 'Auto' })
+    }
+  }
+
+  const fresh = rows.filter((r) => r.status === 'new')
+  const groups: { name: string; isNew: boolean; rows: BulkRow[] }[] = []
+  for (const r of rows) {
+    let g = groups.find((x) => x.name === r.group)
+    if (!g) { g = { name: r.group, isNew: !!r.groupIsNew, rows: [] }; groups.push(g) }
+    g.rows.push(r)
+  }
+  return {
+    rows, fresh, groups, noName,
+    exists: rows.filter((r) => r.status === 'exists').length,
+    repeats: rows.filter((r) => r.status === 'repeat').length,
+    newCats: groups.filter((g) => g.isNew && g.rows.some((r) => r.status === 'new')).map((g) => g.name),
+    notAisles: [...notAisles],
+  }
+}
+
+const BULK_EXAMPLE: Record<BulkMode, string> = {
+  meals: '# Chicken\nHoney garlic chicken\nBuffalo chicken wraps | https://www.tiktok.com/@…\n# Pasta\nMarry me pasta\nCajun shrimp alfredo',
+  items: '# Produce\nAvocados | 3\nLimes\n# Dairy\nMilk\nShredded cheese\n# Household\nPaper towels',
+}
+
+function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
+  mode: BulkMode
+  existing: string[]
+  categories?: string[]
+  onDone?: (touchedGroups: string[]) => void
+  onClose: () => void
+}) {
+  const importItems = useImportItems()
+  const importMeals = useImportMeals()
+  const [text, setText] = useState('')
+  const [result, setResult] = useState<string | null>(null)
+  const busy = importItems.isPending || importMeals.isPending
+  const err = importItems.error || importMeals.error
+  const p = parseBulk(text, mode, existing, categories)
+  const noun = mode === 'meals' ? (p.fresh.length === 1 ? 'meal' : 'meals') : (p.fresh.length === 1 ? 'item' : 'items')
+  const SHOW = 300
+  let shown = 0
+
+  const save = async () => {
+    if (!p.fresh.length || busy) return
+    try {
+      if (mode === 'meals') {
+        const r = await importMeals.mutateAsync(p.fresh.map((x) => ({ title: x.name, category: x.group, url: x.url ?? null })))
+        onDone?.([...new Set(p.fresh.map((x) => x.group))])
+        setResult([
+          `Added ${r.added} ${r.added === 1 ? 'meal' : 'meals'}.`,
+          r.skipped ? `${r.skipped} already there.` : '',
+          r.categoriesAdded.length ? `New ${r.categoriesAdded.length === 1 ? 'category' : 'categories'}: ${r.categoriesAdded.join(', ')}.` : '',
+          r.badLinks ? `${r.badLinks} ${r.badLinks === 1 ? 'link' : 'links'} didn't look right, so those meals were saved without one.` : '',
+        ].filter(Boolean).join(' '))
+      } else {
+        const r = await importItems.mutateAsync(p.fresh.map((x) => ({ text: x.name, qty: x.qty ?? null, aisle: x.aisle ?? null })))
+        onDone?.([])
+        setResult([
+          `Added ${r.added} ${r.added === 1 ? 'item' : 'items'} to the list.`,
+          r.skipped ? `${r.skipped} already on it.` : '',
+        ].filter(Boolean).join(' '))
+      }
+      setText('')
+    } catch { /* shown below via err */ }
+  }
+
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={sectionTitle()}>{mode === 'meals' ? 'Import meals' : 'Import to the list'}</span>
+        <button onClick={onClose} aria-label="Close" style={xBtn}>×</button>
+      </div>
+
+      {result ? (
+        <>
+          <div style={{ ...body(15), marginTop: 10 }}>{result}</div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+            <button onClick={() => setResult(null)} style={{ ...button('ghost'), flex: 1 }}>Import more</button>
+            <button onClick={onClose} style={{ ...button('primary'), flex: 1 }}>Done</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ ...body(13), color: T.faint, margin: '6px 0 10px' }}>
+            One per line. <span style={{ fontFamily: MONO }}># Header</span> lines set the {mode === 'meals' ? 'category' : 'aisle'} for
+            the lines below. Add {mode === 'meals' ? 'a link' : 'a quantity'} with <span style={{ fontFamily: MONO }}>Name | {mode === 'meals' ? 'link' : 'qty'}</span>.
+            Anything already there is skipped.
+          </div>
+          <textarea
+            value={text} onChange={(e) => setText(e.target.value)} placeholder={BULK_EXAMPLE[mode]}
+            rows={9} autoFocus spellCheck={false}
+            style={{ ...input(), width: '100%', boxSizing: 'border-box', fontSize: 16, lineHeight: 1.45,
+                     minHeight: 180, resize: 'vertical', fontFamily: SANS }}
+          />
+
+          {text.trim() && (
+            <>
+              <div style={label({ marginTop: 10, letterSpacing: '0.08em' })}>
+                {[
+                  `${p.fresh.length} new`,
+                  p.groups.length > 1 || mode === 'meals'
+                    ? `${p.groups.length} ${mode === 'meals' ? (p.groups.length === 1 ? 'category' : 'categories') : (p.groups.length === 1 ? 'aisle' : 'aisles')}${p.newCats.length ? ` (${p.newCats.length} new)` : ''}`
+                    : null,
+                  p.exists ? `${p.exists} already there` : null,
+                  p.repeats ? `${p.repeats} repeated` : null,
+                  p.noName ? `${p.noName} link${p.noName === 1 ? '' : 's'} with no name` : null,
+                ].filter(Boolean).join(' · ')}
+              </div>
+              {p.notAisles.length > 0 && (
+                <div style={{ ...body(12), color: T.faint, marginTop: 4 }}>
+                  {p.notAisles.map((h) => `“${h}”`).join(', ')} {p.notAisles.length === 1 ? "isn't an aisle" : "aren't aisles"}, so
+                  those are sorted automatically.
+                </div>
+              )}
+
+              <div style={{ marginTop: 8, maxHeight: '32dvh', overflowY: 'auto', borderTop: `1px solid ${T.rule}` }}>
+                {p.groups.map((g) => {
+                  if (shown >= SHOW) return null
+                  const rows = g.rows.slice(0, SHOW - shown)
+                  shown += rows.length
+                  return (
+                    <div key={g.name} style={{ padding: '6px 0' }}>
+                      <div style={label(g.isNew ? { color: T.accent } : {})}>
+                        {g.name}{g.isNew ? ' · new' : ''} · {g.rows.filter((r) => r.status === 'new').length}
+                      </div>
+                      {rows.map((r, i) => (
+                        <div key={`${r.key}-${i}`} style={{ ...body(14), padding: '3px 0', display: 'flex', gap: 8,
+                                                             color: r.status === 'new' ? T.ink : T.faint }}>
+                          <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word',
+                                         textDecoration: r.status === 'new' ? 'none' : 'line-through' }}>
+                            {r.name}{r.qty ? ` · ${r.qty}` : ''}
+                          </span>
+                          {r.url && r.status === 'new' && <span style={label({ color: T.accent })}>link</span>}
+                          {r.status === 'exists' && <span style={label()}>already there</span>}
+                          {r.status === 'repeat' && <span style={label()}>repeat</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
+                {p.rows.length > SHOW && (
+                  <div style={label({ padding: '6px 0' })}>+ {p.rows.length - SHOW} more</div>
+                )}
+              </div>
+            </>
+          )}
+
+          {err && <div style={{ ...body(13), color: T.bad, marginTop: 8 }}>{(err as Error).message}</div>}
+          <button onClick={() => void save()} disabled={!p.fresh.length || busy}
+                  style={{ ...button(p.fresh.length ? 'primary' : 'ghost'), width: '100%', marginTop: 12 }}>
+            {busy ? 'Adding…' : p.fresh.length ? `Add ${p.fresh.length} ${noun}` : 'Nothing new to add'}
+          </button>
+        </>
+      )}
+    </Sheet>
+  )
+}
+
 // ── Shop mode ────────────────────────────────────────────────────────────────
 
 /**
@@ -790,6 +1053,7 @@ function Plain({ data, me, onToggle, onGoToMeal }: {
   const [text, setText] = useState('')
   const [aisle, setAisle] = useState<Aisle | ''>('')
   const [error, setError] = useState<string | null>(null)
+  const [bulk, setBulk] = useState(false)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -813,6 +1077,8 @@ function Plain({ data, me, onToggle, onGoToMeal }: {
                  onChange={(e) => setText(e.target.value)} enterKeyHint="done" />
           <button type="submit" disabled={!text.trim()}
                   style={{ ...button(text.trim() ? 'primary' : 'ghost'), padding: '12px 15px' }}>Add</button>
+          <button type="button" onClick={() => setBulk(true)}
+                  style={{ ...button('ghost'), padding: '12px 12px' }}>Import</button>
         </div>
         <div style={{ display: 'flex', gap: 5, marginTop: 9, flexWrap: 'wrap' }}>
           {/* Left blank, the aisle is guessed from the name. These are for
@@ -826,6 +1092,10 @@ function Plain({ data, me, onToggle, onGoToMeal }: {
         </div>
         {error && <div style={label({ color: T.bad, marginTop: 9, letterSpacing: '0.06em' })}>{error}</div>}
       </form>
+      {bulk && (
+        <BulkImport mode="items" existing={data.aisles.flatMap((g) => g.items.map((i) => i.text))}
+                    onClose={() => setBulk(false)} />
+      )}
 
       <div style={section()}>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>

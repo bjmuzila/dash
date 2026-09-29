@@ -728,6 +728,120 @@ async function moveDinner(userId, { from, to }) {
   });
 }
 
+// ── Bulk import (paste box) ──────────────────────────────────────────────────
+//
+// One request, one INSERT, however many lines were pasted. Duplicates are
+// skipped, never errors: re-pasting the same list is a no-op, not a mess.
+// "Same" is case- and whitespace-insensitive ("Marry Me  Pasta" = "marry me
+// pasta"), checked against what is already there AND within the paste itself.
+// Deduped in code rather than by a unique index so existing rows (which may
+// already hold near-duplicates) never block a deploy.
+
+const IMPORT_MAX = 2000;
+const nameKey = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+/**
+ * Grocery items. Only OPEN items count as "already on the list" — milk you
+ * bought last week and ticked off is not a reason to refuse milk today.
+ */
+async function importItems(userId, rawItems) {
+  const input = Array.isArray(rawItems) ? rawItems.slice(0, IMPORT_MAX) : [];
+  const pool = libDb.getPool();
+  const { rows: existing } = await pool.query(
+    `SELECT text FROM hh_list_items
+      WHERE list='grocery' AND checked_at IS NULL AND ${VISIBLE}`, [userId]);
+  const seen = new Set(existing.map((r) => nameKey(r.text)));
+
+  const texts = []; const qtys = []; const aisles = [];
+  let skipped = 0;
+  for (const it of input) {
+    const t = str(it && it.text, 200);
+    if (!t) continue;
+    const k = nameKey(t);
+    if (seen.has(k)) { skipped++; continue; }
+    seen.add(k);
+    texts.push(t);
+    qtys.push(str(it.qty, 40) || null);
+    aisles.push(it.aisle ? normAisle(it.aisle) : guessAisle(t));
+  }
+  if (!texts.length) return { added: 0, skipped };
+
+  const { rows: [max] } = await pool.query(
+    `SELECT COALESCE(MAX(sort_order),0) AS m FROM hh_list_items WHERE list='grocery'`);
+  const { rowCount } = await pool.query(
+    `INSERT INTO hh_list_items (owner_id, visibility, list, text, qty, aisle, sort_order)
+     SELECT $1, $2, 'grocery', x.t, x.q, x.a, $6::int + (x.n::int * 10)
+       FROM unnest($3::text[], $4::text[], $5::text[]) WITH ORDINALITY AS x(t, q, a, n)`,
+    [userId, SHARED, texts, qtys, aisles, Number(max.m)]);
+  return { added: rowCount, skipped };
+}
+
+/**
+ * Meal library. A category that doesn't exist yet is created (just above
+ * "Other", like addCategory); one that differs only in case maps onto the
+ * existing name. A bad link keeps the meal and drops the link — the name is
+ * what was asked for.
+ */
+async function importLibraryMeals(userId, rawMeals) {
+  const input = Array.isArray(rawMeals) ? rawMeals.slice(0, IMPORT_MAX) : [];
+  await ensureCategories(libDb.getPool());
+
+  return inTx(async (c) => {
+    const { rows: cats } = await c.query(
+      `SELECT name, sort_order FROM hh_meal_categories ORDER BY sort_order, id`);
+    const { rows: existing } = await c.query(
+      `SELECT title FROM hh_meal_library WHERE ${VISIBLE}`, [userId]);
+    const catByKey = new Map(cats.map((r) => [nameKey(r.name), r.name]));
+    const seen = new Set(existing.map((r) => nameKey(r.title)));
+
+    const titles = []; const categories = []; const urls = []; const sources = [];
+    const newCats = [];
+    let skipped = 0; let badLinks = 0;
+    for (const m of input) {
+      const t = str(m && m.title, 200);
+      if (!t) continue;
+      const k = nameKey(t);
+      if (seen.has(k)) { skipped++; continue; }
+      seen.add(k);
+
+      let cat = str(m.category, 60) || OTHER;
+      const ck = nameKey(cat);
+      if (catByKey.has(ck)) cat = catByKey.get(ck);
+      else { catByKey.set(ck, cat); newCats.push(cat); }
+
+      let link = null;
+      if (m.url) {
+        try { link = safeUrl(m.url).toString(); } catch { badLinks++; }
+      }
+      titles.push(t); categories.push(cat); urls.push(link); sources.push(link ? sourceOf(link) : null);
+    }
+
+    if (newCats.length) {
+      const o = cats.find((r) => r.name === OTHER);
+      const at = o ? o.sort_order : 1000;
+      await c.query(
+        `UPDATE hh_meal_categories SET sort_order = sort_order + $2 WHERE sort_order >= $1`,
+        [at, newCats.length * 10]);
+      for (let i = 0; i < newCats.length; i++) {
+        await c.query(
+          `INSERT INTO hh_meal_categories (name, sort_order) VALUES ($1,$2) ON CONFLICT (name) DO NOTHING`,
+          [newCats[i], at + i * 10]);
+      }
+    }
+
+    let added = 0;
+    if (titles.length) {
+      const { rowCount } = await c.query(
+        `INSERT INTO hh_meal_library (owner_id, visibility, title, category, url, source)
+         SELECT $1, $2, x.t, x.c, x.u, x.s
+           FROM unnest($3::text[], $4::text[], $5::text[], $6::text[]) AS x(t, c, u, s)`,
+        [userId, SHARED, titles, categories, urls, sources]);
+      added = rowCount;
+    }
+    return { added, skipped, badLinks, categoriesAdded: newCats };
+  });
+}
+
 /** The one-line summary for Today. */
 async function summary(userId, tz = 'America/New_York') {
   const pool = libDb.getPool();
@@ -749,4 +863,5 @@ module.exports = {
   getMeals, previewLink, addLibraryMeal, updateLibraryMeal, deleteLibraryMeal, markMade,
   addCategory, renameCategory, moveCategory, deleteCategory,
   setDinner, planLibraryMeal, moveDinner,
+  importItems, importLibraryMeals,
 };

@@ -267,7 +267,7 @@ export function useToggleListItem(week?: string) {
   })
 }
 
-function useListMutation<T>(fn: (a: T) => Promise<unknown>) {
+function useListMutation<T, R = unknown>(fn: (a: T) => Promise<R>) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: fn,
@@ -310,6 +310,8 @@ export const useRenameCategory = () => useMealsMutation(listsApi.renameCategory)
 export const useMoveCategory = () => useMealsMutation(listsApi.moveCategory)
 export const useDeleteCategory = () => useMealsMutation(listsApi.deleteCategory)
 export const usePlanMeal = () => useMealsMutation(listsApi.planMeal)
+export const useImportItems = () => useListMutation(listsApi.importItems)
+export const useImportMeals = () => useMealsMutation(listsApi.importLibraryMeals)
 
 // ── Projects ─────────────────────────────────────────────────────────────────
 

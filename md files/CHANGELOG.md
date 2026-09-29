@@ -24659,3 +24659,13 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `server-v2/_lib-ibstats.cjs` (new, generated): `lib/ibStats.ts` compiled to CommonJS so the server runs the same IB engine.
 - `server-v2/api-router.js`: `GET /api/ib-dataset?symbol=ES|NQ` (subscriber). Same shape as the static file, plus `baselineTo`. It also starts the poller.
 - `components/scanner/StatPrompterTab.tsx` (v2): the two dataset fetches now use `/api/ib-dataset` and fall back to the static file. No other UI change. The IB Stats tab and Bar Stats (`bars-*.json`) are unchanged.
+
+## 2026-09-29 — v3 Wall Migration chart: header text no longer overlaps in copied shots
+- `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`: the "Wall migration" title and the "recorded levels · N × 1m price" subtitle are now `whitespace-nowrap`. The snapshot fixes each box at its exact on-screen width and height, so small font-measurement differences made both lines wrap to two rows and spill onto the legend underneath (top-left of the Voltick-theme shot). No other change.
+
+## 2026-09-29 — budget.cbedge.net Lists: bulk paste import for the grocery list and the meal list
+- `budget-vite/src/pages/Lists.tsx`: new **Import** button next to Add on the List tab and on the Meals tab's "Add a meal" box. It opens a paste sheet: one name per line, `# Header` lines set the aisle (list) or category (meals) for the lines below, `Name | qty` / `Name | link` carry the extra (tabs work too, so a spreadsheet column pastes cleanly), and Notes bullets/numbers/checkboxes are stripped. A live preview shows the count per aisle/category, new categories, and which lines are already there or repeated. Meals with no header get a category guessed from the name (e.g. "chicken" → Chicken), else Other. Non-aisle headers fall back to the automatic aisle guess.
+- `server-v2/_lib-household-lists.cjs`: `importItems()` and `importLibraryMeals()` — one INSERT per import (`unnest`), up to 2000 lines. Duplicates are skipped case/whitespace-insensitively against existing rows and within the paste (grocery: only open items count). Unknown meal categories are created just above Other; a bad link keeps the meal without the link.
+- `server-v2/household-routes.cjs`: `/api/hh/lists` actions `importItems` and `importLibraryMeals`; the route's JSON body cap is now 1MB (was 64KB) so a few hundred meals with links fit.
+- `budget-vite/src/api.ts` + `hooks.ts`: `lists.importItems` / `lists.importLibraryMeals`, `useImportItems` / `useImportMeals`.
+- No schema change. Deploy rebuilds `household` and `budget`.

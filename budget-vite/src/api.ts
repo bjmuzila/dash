@@ -780,6 +780,13 @@ export const lists = {
   /** Put a meal on `day` for that week (off any other day of it); day null = unplan for `week`. */
   planMeal: ({ id, day, week }: { id: number; day: string | null; week?: string }) =>
     api.post<{ ok: true }>('/api/hh/lists', { action: 'planMeal', id, day, week }),
+  /** Paste-box import onto the grocery list. Duplicates of open items are skipped. */
+  importItems: (items: { text: string; qty?: string | null; aisle?: Aisle | null }[]) =>
+    api.post<{ ok: true; added: number; skipped: number }>('/api/hh/lists', { action: 'importItems', items }),
+  /** Paste-box import into the meal list. Unknown categories are created. */
+  importLibraryMeals: (meals: { title: string; category: string; url?: string | null }[]) =>
+    api.post<{ ok: true; added: number; skipped: number; badLinks: number; categoriesAdded: string[] }>(
+      '/api/hh/lists', { action: 'importLibraryMeals', meals }),
 }
 
 export const budget = {
