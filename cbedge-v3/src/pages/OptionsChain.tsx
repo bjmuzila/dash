@@ -55,6 +55,7 @@ import { StrikeHoverCard } from './optionsChain/StrikeHoverCard'
 import { HEAT_SKINS, type HeatSkin } from './optionsChain/heatSkins'
 import { INTENSITY_MIN } from './optionsChain/chainMath'
 import { readUiTheme } from '@/design/uiTheme'
+import { VoltickLegend } from '@/design/primitives/VoltickLegend'
 
 /** Owner-only Voltick UI theme: fixed heat, no Intensity/Skin controls, no
  *  levels-only mode — the look is the Voltick colour vocabulary, not a dial. */
@@ -458,6 +459,10 @@ export default function OptionsChain({
               </span>
             )}
           </div>
+
+          {/* Voltick theme: the level cells carry no tag, so the toolbar says
+              what the colours mean. GEX tab only — the only tab that draws them. */}
+          {VOLTICK_THEME && c.greekMode === 'gex' && <VoltickLegend heat />}
 
           {/* Refresh is an ACTION, not a setting — it stands on its own rather
               than hiding a click deep in the cog. */}

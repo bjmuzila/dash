@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-28 - v3 Voltick theme: color key in the Options Chain toolbar and Multi Greek header
+
+- `cbedge-v3/src/design/primitives/VoltickLegend.tsx` (new): the four level chips (★ VOLT, ↯ SURGE, ↘ REV, ◆ COIL), each drawn in the level's own fill and ink from `VT_LEVELS`, with the definition on hover. An optional `heat` prop adds the +GEX / −GEX tint swatches (`GEX_POS` / `GEX_NEG`). No color literals.
+- `cbedge-v3/src/pages/OptionsChain.tsx`: the key (with the heat swatches) sits in the toolbar just before Refresh. It shows only on the Voltick theme and only on the GEX tab.
+- `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`: the key (chips only) is the first item in the card header toolbar. It shows only on the Voltick theme.
+- Nothing changes on the CB Edge theme.
+
 ## 2026-09-28 - v3 Options Chain + Multi Greek: removed ★ and ✕ markers
 
 - `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx`: the ★ (CB, Core Bullseye) is gone from the expiry cells and the ⅀ Total column, and so is the ✕ (volume-only GEX peak, OI+Vol / GEX). The CB gold fill and the CLASSIC ring are unchanged. Also removed the unused `MARKER_EDGE`, `coreTip`, `coreTotalTip` and the volume-peak locals.

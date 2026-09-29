@@ -6,6 +6,7 @@ import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { SegGroup, Slider, Dropdown, Popover, PanelSection, Chip } from '../gexCandles/controls'
 import { CellCard } from './CellCard'
 import { readUiTheme } from '@/design/uiTheme'
+import { VoltickLegend } from '@/design/primitives/VoltickLegend'
 import { voltickMarks, vtLevelsAt, type VoltickMarks, type VtLevelDef } from '@/data/voltickLevels'
 import {
   BASIS_LABEL,
@@ -1138,6 +1139,9 @@ export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreek
           only thing the toolbar needs to carry is the way in to the settings,
           and it goes in the Card's header rather than in a second bar under it. */}
       <CardToolbar>
+        {/* Voltick theme: the filled level cells carry no tag, so the header
+            says what the four colours mean. */}
+        {VOLTICK_THEME && <VoltickLegend />}
         {/* Add a panel. Capped at three beyond the board's own ticker: a fifth
             ladder on a 12-column card is narrower than the numbers in it. */}
         <div className="relative">
