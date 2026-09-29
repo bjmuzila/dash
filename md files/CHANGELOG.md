@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-09-28 - v3 Options Chain: VIVID heat now uses Multi Greek's curve
+
+- `cbedge-v3/src/pages/optionsChain/heatSkins.ts`: the VIVID skin now uses the same ramp and rank strengths as the home Multi Greek card (`mgMath.ts`): ramp base .04, span .55, max .62, ease 1.6; ranks .9/.45/.25. The Intensity slider now defaults to 1.75 with a max of 3 (it was 3 and 4). Small strikes stay close to dark and only the big ones go bright, so positive blue stands out the way it does on Multi Greek. Same colors (`--color-gex-pos/neg`). CLASSIC is unchanged.
+
 ## 2026-09-28 - v3 Voltick theme: color key in the Options Chain toolbar and Multi Greek header
 
 - `cbedge-v3/src/design/primitives/VoltickLegend.tsx` (new): the four level chips (★ VOLT, ↯ SURGE, ↘ REV, ◆ COIL), each drawn in the level's own fill and ink from `VT_LEVELS`, with the definition on hover. An optional `heat` prop adds the +GEX / −GEX tint swatches (`GEX_POS` / `GEX_NEG`). No color literals.

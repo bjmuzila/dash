@@ -75,16 +75,19 @@ export const HEAT_SKINS: Record<HeatSkin, SkinDef> = {
   },
   vivid: {
     label: 'VIVID',
-    // A LOW ease (0.4) with a modest span is what separates this from "turn the
-    // alpha up": the curve rises steeply out of zero, so the quiet two-thirds of
-    // a column still differentiate instead of all sitting on the floor, and only
-    // the genuinely large strikes approach the cap.
-    ramp: { base: 0.05, span: 0.25, max: 1, ease: 0.4 },
-    rank: [0.95, 0.62, 0.4],
+    // Multi Greek's curve (board/multiGreek/mgMath.ts RAMP / RANK_ALPHA), so the
+    // chain reads like the home card (Brandon, 2026-09-28). A HIGH ease (1.6)
+    // keeps the quiet strikes near the ground and lets only the large ones
+    // climb to the .62 cap — the blue pops against a dark grid instead of the
+    // whole grid sitting tinted. Was ease 0.4 / span 0.25 / max 1, rank
+    // .95/.62/.4, def 3x / max 4x.
+    ramp: { base: 0.04, span: 0.55, max: 0.62, ease: 1.6 },
+    rank: [0.9, 0.45, 0.25],
     // CW and PW at full strength (the wall IS the colour), CB pulled back to
     // .85 because gold at 1.0 swamps the row. The heat still shows through CB.
     levelFill: { mode: 'blend', alpha: { cb: 0.85, cw: 1, pw: 1 } },
-    intensity: { def: 3, max: 4 },
+    // Multi Greek's slider: 1.75 default, 3 ceiling.
+    intensity: { def: 1.75, max: 3 },
   },
 }
 
