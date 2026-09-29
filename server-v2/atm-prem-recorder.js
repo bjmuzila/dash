@@ -39,8 +39,9 @@
  *                 u_low, u_close, call_prem, put_prem, call_vol, put_vol,
  *                 strikes, src, ts)
  *   PK (date, symbol, slot, band_pct) — upsert, so a manual re-run overwrites
- *   the day cleanly instead of duplicating it. `src` is 'live' for rows this
- *   recorder wrote off the live chain and 'dxlink' for rows atm-prem-backfill.js
+ *   the day cleanly instead of duplicating it. `src` is 'lse' for rows this
+ *   recorder wrote off the LSE vault chain, 'live' for rows it wrote off the
+ *   TastyTrade chain, and 'dxlink' for rows atm-prem-backfill.js
  *   reconstructed from daily candles; they are NOT identical measurements (see
  *   the header of that file) and the UI labels backfilled bars.
  *
@@ -49,9 +50,27 @@
  *   the 16:00 print is in. Earlier and the last five minutes of tape are
  *   missing; much later and the quotes start rolling to the next session.
  *
- * SOURCE: fetchExpirations / fetchChainFull from proxy-tastytrade — the same
- * REST pair oi-daily-recorder.js and etf-gex-recorder.js use. No new upstream
- * dependency, no change to any proxy file.
+ * SOURCE (2026-09-28): the LSE vault's /options/chain FIRST (src='lse'), the
+ * TastyTrade chain as the fallback (src='live').
+ *
+ *   LSE hands back `volume_today` and `premium_today` per contract, and the
+ *   premium is DOLLARS ACTUALLY TRADED (verified: 93 lots × ~$107 × 100 =
+ *   $995,819 on SPY261016C660) — every print at its own price, not the whole
+ *   day's volume re-priced at one 16:05 mark. Probed the same session against
+ *   this recorder's TT row: SPY front ±5% volume agreed within ~1–4%; the
+ *   dollar legs differ by the mark-vs-traded-price gap, which is the point.
+ *
+ *   LSE is only used for TODAY — its chain is a snapshot, so a manual re-run
+ *   for a past date goes straight to TastyTrade. It also falls back when the
+ *   key is missing, the call fails, the chain is empty, or the chain's newest
+ *   `updated_at` is not today's ET session (a stale vault must not write
+ *   yesterday's tape under today's date). LSE carries no SPX/SPXW options.
+ *
+ *   Disable with ATM_PREM_SOURCE=tt (TastyTrade only).
+ *
+ *   TastyTrade path: fetchExpirations / fetchChainFull from proxy-tastytrade —
+ *   the same REST pair oi-daily-recorder.js and etf-gex-recorder.js use. No
+ *   change to any proxy file.
  *
  * Wiring: startAtmPremRecorder() from server-with-proxy.js.
  * Disable with ATM_PREM_RECORDER=0. Manual fire: runSweep({ date }).
@@ -79,6 +98,9 @@ const BANDS = [1, 2, 5];
 const FETCH_DELAY_MS = Number(process.env.ATM_PREM_FETCH_DELAY_MS || 400);
 
 const CONTRACT_MULTIPLIER = 100;
+
+/** 'lse' (default) = LSE vault first, TastyTrade fallback. 'tt' = TastyTrade only. */
+const SOURCE = String(process.env.ATM_PREM_SOURCE || 'lse').trim().toLowerCase();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -345,6 +367,105 @@ function reduceChain(items, underlyingPrice, expiry, bands = BANDS) {
   return { spot, bands: out };
 }
 
+// ── LSE chain → premium ──────────────────────────────────────────────────────
+
+/** _lib-lse.cjs, loaded lazily so a missing/broken module only disables LSE. */
+let _lse;
+function lseLib() {
+  if (_lse !== undefined) return _lse;
+  try { _lse = require('./_lib-lse.cjs'); } catch (e) {
+    console.warn('[atm-prem] _lib-lse.cjs not loaded — TastyTrade only:', e.message);
+    _lse = null;
+  }
+  return _lse;
+}
+
+/**
+ * Pull one expiry's chain from the LSE vault. Returns the raw contract rows, or
+ * null when LSE cannot be used for `day` (see the SOURCE note in the header).
+ */
+async function fetchLseChain(symbol, expiry, day) {
+  if (SOURCE === 'tt') return null;
+  if (day !== todayYmdET()) return null;
+  const lse = lseLib();
+  if (!lse || !lse.hasKey()) return null;
+  try {
+    const res = await lse.optionsChain({ underlying: symbol, expiry, limit: 5000 });
+    const rows = (Array.isArray(res) ? res : res?.rows || [])
+      .filter((r) => String(r.expiry || '').slice(0, 10) === expiry);
+    if (!rows.length) return null;
+    if (rows.length >= 5000) {
+      console.warn(`[atm-prem] ${symbol} ${expiry}: LSE chain hit the 5000-row cap — using TastyTrade`);
+      return null;
+    }
+    const newest = rows.map((r) => String(r.updated_at || '')).sort().pop();
+    const newestDay = newest
+      ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(newest))
+      : null;
+    if (newestDay !== day) {
+      console.warn(`[atm-prem] ${symbol} ${expiry}: LSE chain is stale (${newest || 'no updated_at'}) — using TastyTrade`);
+      return null;
+    }
+    return rows;
+  } catch (e) {
+    console.warn(`[atm-prem] ${symbol} ${expiry}: LSE chain failed (${e.message}) — using TastyTrade`);
+    return null;
+  }
+}
+
+/**
+ * Spot for the band when the chain is LSE's. LSE stamps `underlying_price` on
+ * each contract AT ITS LAST TRADE, so it varies row to row (767.77 vs 762.55
+ * on the same SPY sweep). One number has to define the band: the session's
+ * daily close when we have it, else the price on the most recently traded row.
+ */
+function lseSpot(rows, bar) {
+  if (bar?.close > 0) return bar.close;
+  let best = null;
+  for (const r of rows) {
+    const px = Number(r.underlying_price);
+    if (!(px > 0)) continue;
+    const t = String(r.last_trade_at || r.updated_at || '');
+    if (!best || t > best.t) best = { t, px };
+  }
+  return best ? best.px : 0;
+}
+
+/**
+ * Same output shape as reduceChain(), from LSE rows. Premium is the vault's
+ * `premium_today` (dollars traded) — NOT recomputed from a price × volume.
+ * `strikes` counts distinct strikes in the band, matching the TT path.
+ */
+function reduceLseChain(rows, spot, bands = BANDS) {
+  const out = {};
+  for (const b of bands) out[b] = { callPrem: 0, putPrem: 0, callVol: 0, putVol: 0, strikes: 0 };
+  if (!(spot > 0) || !Array.isArray(rows) || !rows.length) return { spot, bands: out };
+  const widest = Math.max(...bands);
+  const seen = {};
+  for (const b of bands) seen[b] = new Set();
+
+  for (const r of rows) {
+    const strike = Math.round(Number(r.strike) * 1000) / 1000;
+    if (!(strike > 0)) continue;
+    const distPct = Math.abs(strike - spot) / spot * 100;
+    if (distPct > widest) continue;
+    const type = String(r.contract_type || r.type || '').toLowerCase();
+    const isCall = type === 'call' || type === 'c';
+    const isPut = type === 'put' || type === 'p';
+    if (!isCall && !isPut) continue;
+    const vol = Number(r.volume_today) || 0;
+    const prem = Number(r.premium_today) || 0;
+    for (const b of bands) {
+      if (distPct > b) continue;
+      const acc = out[b];
+      if (isCall) { acc.callPrem += prem; acc.callVol += vol; } else { acc.putPrem += prem; acc.putVol += vol; }
+      seen[b].add(strike);
+    }
+  }
+  for (const b of bands) out[b].strikes = seen[b].size;
+  return { spot, bands: out };
+}
+
 /**
  * Underlying daily OHLC for the session, best-effort.
  *
@@ -442,10 +563,23 @@ async function runSweep({ date, symbols } = {}) {
           if (!expiry) continue;
           // eslint-disable-next-line no-await-in-loop
           await sleep(FETCH_DELAY_MS);
+
+          // LSE first (today only), TastyTrade as the fallback.
+          let spot = 0;
+          let bands = null;
+          let src = 'live';
           // eslint-disable-next-line no-await-in-loop
-          const chain = await fetchChainFull(symbol, expiry).catch(() => null);
-          if (!chain) { errors[`${symbol}:${slot}`] = 'chain fetch failed'; continue; }
-          const { spot, bands } = reduceChain(chain.items, chain.underlyingPrice, expiry);
+          const lseRows = await fetchLseChain(symbol, expiry, day);
+          if (lseRows) {
+            const r = reduceLseChain(lseRows, lseSpot(lseRows, bar));
+            if (r.spot > 0) { spot = r.spot; bands = r.bands; src = 'lse'; }
+          }
+          if (!bands) {
+            // eslint-disable-next-line no-await-in-loop
+            const chain = await fetchChainFull(symbol, expiry).catch(() => null);
+            if (!chain) { errors[`${symbol}:${slot}`] = 'chain fetch failed'; continue; }
+            ({ spot, bands } = reduceChain(chain.items, chain.underlyingPrice, expiry));
+          }
           if (!(spot > 0)) { errors[`${symbol}:${slot}`] = 'no spot'; continue; }
 
           for (const b of BANDS) {
@@ -456,7 +590,7 @@ async function runSweep({ date, symbols } = {}) {
               uLow: bar?.low ?? null, uClose: bar?.close ?? spot,
               callPrem: acc.callPrem, putPrem: acc.putPrem,
               callVol: acc.callVol, putVol: acc.putVol,
-              strikes: acc.strikes, src: 'live',
+              strikes: acc.strikes, src,
             });
           }
         }
@@ -614,6 +748,7 @@ module.exports = {
   getPool,
   upsertRows,
   reduceChain,
+  reduceLseChain,
   resolveMonthlies,
   thirdFriday,
   monthlyTarget,

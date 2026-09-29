@@ -13729,6 +13729,33 @@ if barstate.islast
       },
     });
 
+    // ── /api/ib-dataset ──────────────────────────────────────────────────────
+    // The Stat Prompter's IB datasets (Test Lab → Stat Prompter), kept current.
+    // public/data/ib-<SYM>.json is the frozen baseline (hand-exported, ends
+    // 2026-08-24); server-v2/ib-dataset-builder.cjs appends every later session
+    // from es_candles / nq_candles once it is final (17:10 ET), persists each
+    // one in ib_dataset_days, and this route serves baseline + appended in the
+    // exact shape of the static file. ?symbol=ES|NQ.
+    //
+    // Required lazily so a problem in the builder fails THIS route, not the
+    // router import. The poller is best-effort for the same reason.
+    try { require('./ib-dataset-builder.cjs').startPoller(libDb); }
+    catch (e) { console.warn('[api-router] ib-dataset poller not started:', e.message); }
+
+    register('/api/ib-dataset', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const { getDataset } = require('./ib-dataset-builder.cjs');
+          const data = await getDataset(libDb, sp.get('symbol') || 'ES');
+          return send(res, 200, data, { 'Cache-Control': 'private, max-age=300' });
+        } catch (e) {
+          return send(res, 500, { error: e.message, days: [] }, { 'Cache-Control': 'no-store' });
+        }
+      },
+    });
+
     register('/api/gex-map', {
       auth: 'subscriber', methods: ['GET'],
       async handler(req, res) {

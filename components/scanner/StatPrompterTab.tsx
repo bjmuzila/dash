@@ -1912,10 +1912,16 @@ export default function StatPrompterTab() {
 
   useEffect(() => {
     let alive = true;
-    Promise.all([
-      fetch("/data/ib-ES.json").then((r) => (r.ok ? r.json() : Promise.reject(new Error(`ib-ES.json ${r.status}`)))),
-      fetch("/data/ib-NQ.json").then((r) => (r.ok ? r.json() : Promise.reject(new Error(`ib-NQ.json ${r.status}`)))),
-    ])
+    // /api/ib-dataset = the static export + every session since, appended daily
+    // by server-v2/ib-dataset-builder.cjs. Falls back to the static file.
+    const loadIb = (sym: "ES" | "NQ") =>
+      fetch(`/api/ib-dataset?symbol=${sym}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`ib-dataset ${sym} ${r.status}`))))
+        .then((j: IbDataset) => (Array.isArray(j?.days) && j.days.length ? j : Promise.reject(new Error("empty"))))
+        .catch(() =>
+          fetch(`/data/ib-${sym}.json`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`ib-${sym}.json ${r.status}`))))
+        );
+    Promise.all([loadIb("ES"), loadIb("NQ")])
       .then(([a, b]: [IbDataset, IbDataset]) => {
         if (!alive) return;
         setEs(backfillWidthBuckets(a));

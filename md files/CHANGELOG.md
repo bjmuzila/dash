@@ -24649,3 +24649,13 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-09-28 — v3 Repeated Flow snapshot: cleaner top on mobile
 - `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx` `alertInfoOf`: the trade card / snapshot no longer prints the date three times. Badge is now `REPEATED 7×` (no day), the headline drops "Repeated flow · N orders" and the date — just `$1.2M · 500 ct @ 3.10 · 10:02 AM → 10:40 AM`. The When tile keeps the date; a burst that crosses sessions still shows both days in the headline.
+
+## 2026-09-28 — Prem Diff (/test?tab=premdiff): daily recorder reads the LSE vault first
+- `server-v2/atm-prem-recorder.js`: the 16:05 ET sweep now pulls each monthly expiry from the LSE vault `/options/chain` and sums `premium_today` (dollars actually traded) and `volume_today` inside the ±1/2/5% bands. Rows are written with `src='lse'`. It falls back to the TastyTrade chain (`src='live'`, unchanged) when LSE has no key, fails, returns nothing, hits the 5000-row cap, has a chain not updated today, or the sweep is for a past date. The band uses one spot: the daily close, or else the underlying price on the most recently traded LSE contract. `ATM_PREM_SOURCE=tt` goes back to TastyTrade only. Only the Prem Diff page reads this table. No UI, proxy or other recorder changes. LSE has no SPX options.
+
+## 2026-09-28 — Stat Prompter (/test?tab=statprompter): IB datasets now update every day
+- The page read `public/data/ib-ES.json` / `ib-NQ.json`. Those are hand-exported files that stopped at 2026-08-24, and nothing ever added to them.
+- `server-v2/ib-dataset-builder.cjs` (new): keeps the static file as the frozen baseline and adds every later session. Each session is computed from `es_candles` / `nq_candles` (5m, 09:30–17:00 ET, the day's front contract) once it is final at 17:10 ET, and saved in a new table `ib_dataset_days`. A poller runs every 15 min and fills any missed days automatically. atr/avgIB use the merged series; openType uses the prior session on the same contract. Checked against the export on every session the DB still holds (ES 49, NQ 39): all fields match apart from 3 small data differences. Rebuilding 08-17 → 08-24 from scratch matched the export exactly. Result through 2026-09-28: +25 sessions each.
+- `server-v2/_lib-ibstats.cjs` (new, generated): `lib/ibStats.ts` compiled to CommonJS so the server runs the same IB engine.
+- `server-v2/api-router.js`: `GET /api/ib-dataset?symbol=ES|NQ` (subscriber). Same shape as the static file, plus `baselineTo`. It also starts the poller.
+- `components/scanner/StatPrompterTab.tsx` (v2): the two dataset fetches now use `/api/ib-dataset` and fall back to the static file. No other UI change. The IB Stats tab and Bar Stats (`bars-*.json`) are unchanged.
