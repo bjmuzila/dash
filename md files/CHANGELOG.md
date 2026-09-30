@@ -24690,3 +24690,9 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `WallMigrationChart.tsx`: the tape draws as soon as it has more points than the 15-minute log captures (was: only after 20 samples, so the first ~20 min of a session drew a 4-point staircase).
 - `TickerRail.tsx`: `TO CORE` pts and % are red when negative, green when positive.
 - `cbedge-v3/src/pages/Flow.tsx`: Net Drift chart gets `idleResetMs={60_000}` — scroll/zoom with 1-minute spring-back, same as the home card.
+
+## 2026-09-30 — /proxy/xcheck: CB Edge feed for the Voltick probe's level cross-check
+- `server-v2/server-with-proxy.js`: new read-only `GET /proxy/xcheck?ticker=SPX&expiry=YYYY-MM-DD` → one expiry's per-strike call/put OI, day volume, gamma and IV plus spot, built off the same path as `/proxy/api/tt/chains/:ticker` (live subscriber, else REST with the live-tape volume merged over it and the board's effective spot). admin.voltick.io's Probe rebuilds CB Edge's OI and volume GEX from it and holds them, plus the Volt / call wall / put wall / net, against Voltick's streamed columns.
+- Auth is its own and it skips `checkProxyAccess` (the caller is cross-site, so `cbe_session` never rides): header `x-xcheck-key` must equal env `XCHECK_KEY` (timing-safe compare). Unset = 503, never open. OPTIONS preflight answered for allowlisted origins only.
+- Setup on the VPS `.env.local`: `XCHECK_KEY=<long random secret>` and add `https://admin.voltick.io` to `PROXY_CORS_ORIGINS`, then restart. Paste the same secret into the Probe's CB Edge key field.
+- Voltick side (bjmuzila/Voltick fork, PR): `admin-site/admin.js` Probe gets the "Voltick vs CB Edge" card and checks (the socket now always asks for the volume twin); `render.yaml` voltick-admin CSP `connect-src` adds `https://cbedge.net`; README + ADMIN-SETUP updated.

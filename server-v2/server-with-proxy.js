@@ -78,6 +78,90 @@ function mergeLiveVolume(data, overlay) {
   }
 }
 
+/**
+ * GET /proxy/xcheck?ticker=SPX&expiry=YYYY-MM-DD — the Voltick cross-check feed.
+ *
+ * admin.voltick.io's Probe page holds Voltick's streamed GEX / volume columns
+ * against CB Edge's own TastyTrade chain, strike by strike, and names the same
+ * levels off both. This is CB Edge's half: per-strike call/put OI, day volume,
+ * gamma and IV for ONE expiry, plus the spot those greeks were read at. Built
+ * off the exact path /proxy/api/tt/chains/:ticker serves (live subscriber when
+ * it covers the expiry, REST otherwise, the live tape's volume merged over REST,
+ * the board's effective spot), so the numbers are the ones the probe page shows.
+ *
+ * AUTH IS ITS OWN, and it is why this sits outside checkProxyAccess: the caller
+ * is another site, so the cbe_session cookie never rides along. A shared secret
+ * in the `x-xcheck-key` header (env XCHECK_KEY) gates it. Unset = 503, never
+ * open. Read-only · it changes nothing.
+ *
+ * CORS: the origin has to be in PROXY_CORS_ORIGINS (https://admin.voltick.io).
+ * The custom header makes the browser send an OPTIONS preflight first, answered
+ * here with no key needed (a preflight carries no data and cannot carry one).
+ */
+async function handleXcheck(req, res, proxy) {
+  const origin = req.headers.origin;
+  const corsOk = !!origin && CORS_ALLOWLIST.has(origin);
+  if (req.method === 'OPTIONS') {
+    const h = { 'Cache-Control': 'no-store', Vary: 'Origin' };
+    if (corsOk) {
+      h['Access-Control-Allow-Origin'] = origin;
+      h['Access-Control-Allow-Methods'] = 'GET, OPTIONS';
+      h['Access-Control-Allow-Headers'] = 'x-xcheck-key';
+      h['Access-Control-Max-Age'] = '600';
+    }
+    res.writeHead(corsOk ? 204 : 403, h);
+    res.end();
+    return;
+  }
+  if (req.method !== 'GET') { sendJson(res, 405, { ok: false, error: 'GET only' }, req); return; }
+  const want = String(process.env.XCHECK_KEY || '').trim();
+  if (!want) { sendJson(res, 503, { ok: false, error: 'XCHECK_KEY is not set on the CB Edge server' }, req); return; }
+  const got = String(req.headers['x-xcheck-key'] || '');
+  const a = Buffer.from(got), b = Buffer.from(want);
+  if (a.length !== b.length || !require('crypto').timingSafeEqual(a, b)) {
+    sendJson(res, 401, { ok: false, error: 'bad key' }, req);
+    return;
+  }
+  const u = new URL(req.url || '/', 'http://localhost');
+  const ticker = String(u.searchParams.get('ticker') || 'SPX').trim().toUpperCase().replace(/[^A-Z.$^]/g, '').slice(0, 10);
+  const expiry = String(u.searchParams.get('expiry') || '').trim();
+  if (!ticker) { sendJson(res, 400, { ok: false, error: 'ticker required' }, req); return; }
+  if (expiry && !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) { sendJson(res, 400, { ok: false, error: 'expiry must be YYYY-MM-DD' }, req); return; }
+  try {
+    const live = proxy?.serveChainFromLive?.(ticker, expiry) || null;
+    const data = live || await fetchChainFull(ticker, expiry);
+    const volOverlay = live ? null : (proxy?.liveVolumeMap?.(ticker) || null);
+    if (volOverlay) mergeLiveVolume(data, volOverlay);
+    if (!live && data) {
+      const eff = proxy?.liveSpot?.(ticker) || 0;
+      if (eff > 0) data.underlyingPrice = eff;
+    }
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const item = (expiry ? items.find((it) => String(it?.['expiration-date']) === expiry) : null) || items[0] || null;
+    const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
+    const rows = [];
+    for (const s of (Array.isArray(item?.strikes) ? item.strikes : [])) {
+      const strike = parseFloat(s?.['strike-price']);
+      if (!Number.isFinite(strike)) continue;
+      const c = s.call || {}, p = s.put || {};
+      rows.push({
+        strike,
+        callOI: n(c.openInterest ?? c['open-interest']), putOI: n(p.openInterest ?? p['open-interest']),
+        callVol: n(c.volume), putVol: n(p.volume),
+        callGamma: Math.abs(n(c.gamma)), putGamma: Math.abs(n(p.gamma)),
+        callIV: n(c['implied-volatility']), putIV: n(p['implied-volatility']),
+      });
+    }
+    sendJson(res, 200, {
+      ok: true, ticker, expiry: item ? String(item['expiration-date']) : (expiry || null),
+      expirations: items.map((it) => String(it?.['expiration-date'] || '')).filter(Boolean),
+      spot: n(data?.underlyingPrice) || null, source: live ? 'live' : 'rest', at: Date.now(), rows,
+    }, req);
+  } catch (e) {
+    sendJson(res, 502, { ok: false, error: String(e?.message || e), ticker }, req);
+  }
+}
+
 // Optional feature modules — loaded defensively so a missing or broken file can
 // NEVER take down the whole origin on boot. A hard `require` that throws here
 // crash-loops the container → Cloudflare 502 for the entire site. (This bit us
@@ -1621,12 +1705,18 @@ async function main() {
       // place these routes get authenticated. Reads → subscriber, writes → owner,
       // a tiny allowlist → public, cron → x-internal-token. No-op unless
       // PROXY_AUTH_REQUIRED=1. Must run before any /proxy/* handling below.
-      if (pathname.startsWith('/proxy/')) {
+      // /proxy/xcheck carries its own key gate (below) · the Voltick admin page calls it
+      // cross-site, where the cbe_session cookie never rides along.
+      if (pathname.startsWith('/proxy/') && pathname !== '/proxy/xcheck') {
         const verdict = await checkProxyAccess(req, pathname, req.method || 'GET');
         if (!verdict.ok) {
           sendJson(res, verdict.code, { error: verdict.reason });
           return;
         }
+      }
+      if (pathname === '/proxy/xcheck') {
+        await handleXcheck(req, res, proxy);
+        return;
       }
       if (pathname === '/proxy/idle' && req.method === 'POST') {
         let body = '';
