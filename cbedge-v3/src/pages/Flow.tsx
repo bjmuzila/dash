@@ -352,7 +352,14 @@ export default function Flow() {
             to a sliver and the drift lines render as a flat smear at the top of
             the card. */}
         <div className="flex h-[420px] min-h-[420px] w-full flex-col">
-          <NetDriftChart series={netSeries} ordersByMin={ordersByMin} spotPts={spotSeries.pts} />
+          {/* Drag / wheel / axis-stretch, springing back to the session window
+              after a minute untouched — same as the board's Net Premium card. */}
+          <NetDriftChart
+            series={netSeries}
+            ordersByMin={ordersByMin}
+            spotPts={spotSeries.pts}
+            idleResetMs={60_000}
+          />
         </div>
         {!netSeries.hasData && (
           <p className="px-3 pb-3 text-center text-xs text-muted">

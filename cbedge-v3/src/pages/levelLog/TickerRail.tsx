@@ -141,7 +141,9 @@ function CoreDistance({ spot, core }: { spot: number | null | undefined; core: n
   const pts = spot - core
   const pct = (pts / core) * 100
   const sign = pts > 0 ? '+' : pts < 0 ? '−' : ''
-  const color = pts > 0 ? T.green : pts < 0 ? T.orange : T.faint
+  // Red below, green above (2026-09-30 — Brandon's call for this line only;
+  // the level Delta chips keep their amber).
+  const color = pts > 0 ? T.green : pts < 0 ? T.red : T.faint
   const label = VOLTICK_UI ? 'VOLT' : 'CORE'
   return (
     <span

@@ -395,7 +395,11 @@ export function WallMigrationChart({
        * missing its tape does not downgrade the other four.
        */
       const tape = tapeAll.filter((p) => p.s <= lastSlot)
-      const dense = tape.length >= DENSE_MIN_SAMPLES
+      // Early in a session the 1-minute tape is short of DENSE_MIN_SAMPLES but
+      // still far finer than the 15-minute captures — draw it once it has more
+      // points than they do, rather than waiting twenty minutes for it.
+      const dense =
+        tape.length >= DENSE_MIN_SAMPLES || (tape.length >= 2 && tape.length > spotPts.length)
       const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }))
 
       /**

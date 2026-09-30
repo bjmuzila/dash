@@ -426,6 +426,48 @@ export async function fetchTape(symbol: string, date: string): Promise<SpotSampl
   const from = etMsOn(date, 9, 30)
   const to = etMsOn(date, 16, 0)
   if (!Number.isFinite(from) || !Number.isFinite(to)) return []
+  // THE RECORDER'S 1-MINUTE BARS FIRST (2026-09-30). The same route the GEX
+  // Candles card draws from — a database read, ~100ms, and current to the last
+  // closed minute. The dxLink `candles-intraday` subscription below routinely
+  // hung or came back empty, which left the chart on the 15-minute log
+  // captures. It stays as the fallback for a symbol the recorder does not have.
+  const recorded = await fetchRecordedTape(symbol, from, to)
+  if (recorded.length) return recorded
+  return fetchDxTape(symbol, from, to)
+}
+
+/** 1-minute closes from /api/snapshots/etf-candles, clipped to 09:30–16:00 ET. */
+async function fetchRecordedTape(symbol: string, from: number, to: number): Promise<SpotSample[]> {
+  // `days` counts back from TODAY, so a past session needs enough of them.
+  const days = Math.min(30, Math.max(1, Math.ceil((Date.now() - from) / 86_400_000) + 1))
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), TAPE_TIMEOUT_MS)
+  try {
+    const r = await fetch(
+      `/api/snapshots/etf-candles?symbol=${encodeURIComponent(symbol)}&days=${days}&interval=1`,
+      { cache: 'no-store', credentials: 'same-origin', signal: ctl.signal },
+    )
+    if (!r.ok) return []
+    const j = await r.json()
+    const rows: unknown[] = Array.isArray(j?.rows) ? j.rows : []
+    const byMin = new Map<number, number>()
+    for (const row of rows) {
+      const b = row as { timestamp?: unknown; close?: unknown }
+      const t = Number(b?.timestamp)
+      const px = Number(b?.close)
+      if (!Number.isFinite(t) || !(px > 0) || t < from || t > to) continue
+      byMin.set(570 + (t - from) / 60_000, px)
+    }
+    return [...byMin.entries()].map(([mins, px]) => ({ mins, px })).sort((a, b) => a.mins - b.mins)
+  } catch {
+    return []
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** The dxLink 1-minute candle subscription — the fallback source. */
+async function fetchDxTape(symbol: string, from: number, to: number): Promise<SpotSample[]> {
   // HARD CAP. The dxLink candle subscription can hang with the request left
   // pending forever; without a cap the Promise.all in useWallDays never settles
   // and the card sits on "Loading sessions…" with the log already in hand.

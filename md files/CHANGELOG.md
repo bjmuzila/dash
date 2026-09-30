@@ -24680,3 +24680,13 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `server-v2/server-with-proxy.js` `getNetPremBins`: the incremental re-scan started at `now − 15m` (not minute-aligned), so each 4s refresh appended another PARTIAL copy of the boundary minute to the per-key cache (live SPX 0DTE OTM key: 960 bins for 623 minutes) and the cumulative call/put lines went wrong. Re-scan start is now floored to the bin, and bins merge by minute (replace, never append).
 - `cbedge-v3/src/data/flowData.ts` `useNetPremBins`: same bin-floor on `since` and a by-minute merge. `flowMath.ts`: `NETBINS_CACHE_KEY` bumped to `-v2` so browsers drop the corrupted warm start.
 - Server restart (deploy) clears the in-memory corrupted cache.
+
+## 2026-09-30 — Net Premium card: scroll / zoom with 1-minute spring-back
+- `cbedge-v3/src/pages/flow/NetDriftChart.tsx`: optional `idleResetMs` — polls stop re-pinning while the user pans/zooms; after the idle time the axes auto-scale and the session window is re-pinned. Double-click resets.
+- `cbedge-v3/src/board/netPremium/NetPremiumCard.tsx`: unlocked on desktop (`locked={isPhone}`), `idleResetMs={60_000}`.
+
+## 2026-09-30 — Level Log: 1-minute price line, red/green TO CORE; /flow Net Drift scroll
+- `cbedge-v3/src/pages/levelLog/wallData.ts` `fetchTape`: price tape now reads the recorder's 1-minute bars from `/api/snapshots/etf-candles` (same source as GEX Candles) first; the dxLink `/proxy/candles-intraday` subscription (hung/empty) is only the fallback. Live tick still re-reads every minute.
+- `WallMigrationChart.tsx`: the tape draws as soon as it has more points than the 15-minute log captures (was: only after 20 samples, so the first ~20 min of a session drew a 4-point staircase).
+- `TickerRail.tsx`: `TO CORE` pts and % are red when negative, green when positive.
+- `cbedge-v3/src/pages/Flow.tsx`: Net Drift chart gets `idleResetMs={60_000}` — scroll/zoom with 1-minute spring-back, same as the home card.
