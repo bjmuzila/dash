@@ -24669,3 +24669,6 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `server-v2/household-routes.cjs`: `/api/hh/lists` actions `importItems` and `importLibraryMeals`; the route's JSON body cap is now 1MB (was 64KB) so a few hundred meals with links fit.
 - `budget-vite/src/api.ts` + `hooks.ts`: `lists.importItems` / `lists.importLibraryMeals`, `useImportItems` / `useImportMeals`.
 - No schema change. Deploy rebuilds `household` and `budget`.
+
+## 2026-09-30 — v3 Level Log stuck on "Loading sessions…"
+- `cbedge-v3/src/pages/levelLog/wallData.ts`: `/proxy/candles-intraday` (1m tape) could hang pending forever, and `useWallDays` awaited it in a `Promise.all` with the walls log — so the card never left loading even with the log in hand. `fetchTape` now aborts after 8s (also unblocks the rail's per-symbol fallback), and the single-session path draws the log as soon as it lands, then fills the tape. Live minute re-reads hold the previous tape so the price line doesn't blink.

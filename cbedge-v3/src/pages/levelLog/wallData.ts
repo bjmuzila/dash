@@ -18,7 +18,7 @@
 // WHICH days exist, and a bank holiday must not cost a 1-minute candle fetch.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { readUiTheme } from '@/design/uiTheme'
 
 /**
@@ -426,10 +426,15 @@ export async function fetchTape(symbol: string, date: string): Promise<SpotSampl
   const from = etMsOn(date, 9, 30)
   const to = etMsOn(date, 16, 0)
   if (!Number.isFinite(from) || !Number.isFinite(to)) return []
+  // HARD CAP. The dxLink candle subscription can hang with the request left
+  // pending forever; without a cap the Promise.all in useWallDays never settles
+  // and the card sits on "Loading sessions…" with the log already in hand.
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), TAPE_TIMEOUT_MS)
   try {
     const r = await fetch(
       `/proxy/candles-intraday?symbol=${encodeURIComponent(symbol)}&interval=1m&fromMs=${Math.round(from)}`,
-      { cache: 'no-store', credentials: 'same-origin' },
+      { cache: 'no-store', credentials: 'same-origin', signal: ctl.signal },
     )
     const j = await r.json()
     const cs: unknown[] = Array.isArray(j?.candles) ? j.candles : []
@@ -447,8 +452,13 @@ export async function fetchTape(symbol: string, date: string): Promise<SpotSampl
     return out
   } catch {
     return []
+  } finally {
+    clearTimeout(timer)
   }
 }
+
+/** How long the 1-minute tape may take before the chart draws without it. */
+const TAPE_TIMEOUT_MS = 8_000
 
 /**
  * A counter that steps once a minute while `enabled` AND the tab is visible.
@@ -535,6 +545,9 @@ export function useWallDays(
   basis: GexBasis,
 ): WallDays {
   const [state, setState] = useState<WallDays>(NO_DAYS)
+  // The last single-session tape that landed, and which session it was for.
+  const keyRef = useRef('')
+  const priceRef = useRef<SpotSample[]>([])
 
   useEffect(() => {
     if (!symbol || count < 1) {
@@ -545,10 +558,22 @@ export function useWallDays(
     setState((prev) => ({ days: prev.days, loading: true }))
     ;(async () => {
       if (count === 1) {
-        const [day, tape] = await Promise.all([
-          fetchLog(symbol, endDate, scope, basis),
-          fetchTape(symbol, endDate),
-        ])
+        // Both go out together (no waterfall), but the LOG draws the moment it
+        // lands — the tape only refines the price line and must never hold the
+        // levels hostage.
+        const tapeP = fetchTape(symbol, endDate)
+        const day = await fetchLog(symbol, endDate, scope, basis)
+        if (!alive) return
+        if (!day) {
+          setState({ days: [], loading: false })
+          return
+        }
+        // A live re-read of the SAME session keeps the tape already on screen
+        // until the new one lands, so the price line never blinks each minute.
+        const key = `${symbol}|${endDate}|${scope}|${basis}`
+        const held = keyRef.current === key ? priceRef.current : []
+        setState({ days: [{ ...day, price: held }], loading: true })
+        const tape = await tapeP
         if (!alive) return
 
         /**
@@ -581,7 +606,9 @@ export function useWallDays(
           const same = ranged?.find((d) => d.date === endDate)
           if (same && same.price.length > price.length) price = same.price
         }
-        setState({ days: day ? [{ ...day, price }] : [], loading: false })
+        keyRef.current = key
+        priceRef.current = price
+        setState({ days: [{ ...day, price }], loading: false })
         return
       }
 
