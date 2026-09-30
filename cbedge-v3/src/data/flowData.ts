@@ -403,16 +403,24 @@ export function useNetPremBins(
       const prev = keyRef.current === key ? binsRef.current : []
       const nowSec = Math.floor(Date.now() / 1000)
       const last = prev[prev.length - 1]
+      // Floored to a bin boundary — a mid-minute `since` is how the server's
+      // cache grew duplicate partial minutes (2026-09-30).
       const since =
-        isToday && last ? Math.min(last.sec - 2 * BIN_SEC, nowSec - NET_LATE_SEC) : null
+        isToday && last
+          ? Math.floor(Math.min(last.sec - 2 * BIN_SEC, nowSec - NET_LATE_SEC) / BIN_SEC) * BIN_SEC
+          : null
 
       fetchT(`/proxy/flow-netprem?${key}${since != null ? `&since=${since}` : ''}`)
         .then((r) => (r.ok ? (r.json() as Promise<NetPremResponse>) : null))
         .then((j) => {
           if (cancelled) return
           if (j && Array.isArray(j.bins)) {
-            const merged =
-              since != null ? [...prev.filter((b) => b.sec < since), ...j.bins] : j.bins
+            // Merged BY MINUTE, one bin per sec, so a duplicate can never
+            // survive into the cumulative sum.
+            const bySec = new Map<number, NetBin>()
+            if (since != null) for (const b of prev) if (b.sec < since) bySec.set(b.sec, b)
+            for (const b of j.bins) bySec.set(b.sec, b)
+            const merged = [...bySec.values()].sort((a, b) => a.sec - b.sec)
             keyRef.current = key
             binsRef.current = merged
             setBins(merged)

@@ -131,6 +131,35 @@ function Delta({ now, open }: { now: number | null; open: number | undefined }) 
   )
 }
 
+/**
+ * HOW FAR SPOT IS FROM THE CORE — points and percent, signed from spot's side:
+ * + means price is above the CORE, − below. Same up-green / down-amber pairing
+ * as Delta, for the same reason (red on this page means "put wall").
+ */
+function CoreDistance({ spot, core }: { spot: number | null | undefined; core: number | null | undefined }) {
+  if (spot == null || core == null || !(spot > 0) || !(core > 0)) return null
+  const pts = spot - core
+  const pct = (pts / core) * 100
+  const sign = pts > 0 ? '+' : pts < 0 ? '−' : ''
+  const color = pts > 0 ? T.green : pts < 0 ? T.orange : T.faint
+  const label = VOLTICK_UI ? 'VOLT' : 'CORE'
+  return (
+    <span
+      className="flex items-baseline gap-1"
+      title={`Spot ${wallNum(spot)} vs ${label} ${wallStrike(core)}`}
+    >
+      <span className="shrink-0 text-3xs font-semibold uppercase tracking-wide text-faint">
+        to {label}
+      </span>
+      <span className="tabular font-mono text-2xs" style={{ color }}>
+        {sign}
+        {wallNum(Math.abs(pts))} pts · {sign}
+        {Math.abs(pct).toFixed(2)}%
+      </span>
+    </span>
+  )
+}
+
 function RailCard({
   sym,
   row,
@@ -233,6 +262,9 @@ function RailCard({
             </span>
           ))}
         </span>
+
+        {/* Distance from spot to the CORE, on its own line under the levels. */}
+        <CoreDistance spot={row?.spot} core={row?.cb} />
       </button>
 
       {!pinned && (

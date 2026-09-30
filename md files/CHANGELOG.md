@@ -24672,3 +24672,6 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-09-30 — v3 Level Log stuck on "Loading sessions…"
 - `cbedge-v3/src/pages/levelLog/wallData.ts`: `/proxy/candles-intraday` (1m tape) could hang pending forever, and `useWallDays` awaited it in a `Promise.all` with the walls log — so the card never left loading even with the log in hand. `fetchTape` now aborts after 8s (also unblocks the rail's per-symbol fallback), and the single-session path draws the log as soon as it lands, then fills the tape. Live minute re-reads hold the previous tape so the price line doesn't blink.
+
+## 2026-09-30 — v3 Level Log rail cards: distance to CORE
+- `cbedge-v3/src/pages/levelLog/TickerRail.tsx`: each ticker card now shows a bottom line `TO CORE ±pts · ±%` (spot − CORE, % of CORE; green above, amber below; reads `TO VOLT` under the Voltick theme).

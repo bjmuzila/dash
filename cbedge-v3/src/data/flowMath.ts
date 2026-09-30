@@ -66,7 +66,9 @@ export const DEFAULT_TICKERS = [
 
 export const RECENT_TICKERS_KEY = 'cb-v3-flow-recent-tickers'
 export const RECENT_TICKERS_MAX = 7
-export const NETBINS_CACHE_KEY = 'cb-v3-flow-netbins'
+// v2 (2026-09-30): drops warm starts saved while /proxy/flow-netprem was
+// serving duplicate partial minutes — see getNetPremBins in server-with-proxy.js.
+export const NETBINS_CACHE_KEY = 'cb-v3-flow-netbins-v2'
 
 /** Streamer roots carry suffixes a chip does not (SPX streams as "SPXW"). */
 const ROOT_TO_TICKER: Record<string, string> = { SPXW: 'SPX', NDXP: 'NDX', RUTW: 'RUT', XSPW: 'XSP' }

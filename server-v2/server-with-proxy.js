@@ -1159,10 +1159,20 @@ async function getNetPremBins(f, binMs) {
     // exchange times are picked up (see the constant's comment).
     const lastSec = hit.bins[hit.bins.length - 1].sec;
     const overlapMs = (lastSec - (NETPREM_OVERLAP_BINS - 1) * Math.floor(binMs / 1000)) * 1000;
-    const sinceMs = Math.min(overlapMs, now - NETPREM_LATE_MS);
+    // FLOORED TO A BIN BOUNDARY (2026-09-30). `now − NETPREM_LATE_MS` is not
+    // minute-aligned, so the re-scan used to start mid-minute: that minute came
+    // back from SQL as a PARTIAL sum while the full copy (sec < sinceSec) was
+    // kept too — every poll appended another partial duplicate and the Net
+    // Premium lines drifted off the real session (960 bins for 623 minutes).
+    const sinceMs = Math.floor(Math.min(overlapMs, now - NETPREM_LATE_MS) / binMs) * binMs;
     const fresh = await queryNetPremBins(pool, f, binMs, sinceMs);
     const sinceSec = Math.floor(sinceMs / 1000);
-    const bins = hit.bins.filter((b) => b.sec < sinceSec).concat(fresh);
+    // Merge BY MINUTE: a re-scanned bin replaces its cached copy, never sits
+    // beside it. Belt-and-braces over the alignment above.
+    const bySec = new Map();
+    for (const b of hit.bins) if (b.sec < sinceSec) bySec.set(b.sec, b);
+    for (const b of fresh) bySec.set(b.sec, b);
+    const bins = [...bySec.values()].sort((a, b) => a.sec - b.sec);
     _netPremCache.set(key, { at: Date.now(), date: f.date, binMs, bins });
     return bins;
   }
