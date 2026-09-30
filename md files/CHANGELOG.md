@@ -24675,3 +24675,8 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-09-30 — v3 Level Log rail cards: distance to CORE
 - `cbedge-v3/src/pages/levelLog/TickerRail.tsx`: each ticker card now shows a bottom line `TO CORE ±pts · ±%` (spot − CORE, % of CORE; green above, amber below; reads `TO VOLT` under the Voltick theme).
+
+## 2026-09-30 — Net Premium card: duplicate partial minutes (lines/values wrong)
+- `server-v2/server-with-proxy.js` `getNetPremBins`: the incremental re-scan started at `now − 15m` (not minute-aligned), so each 4s refresh appended another PARTIAL copy of the boundary minute to the per-key cache (live SPX 0DTE OTM key: 960 bins for 623 minutes) and the cumulative call/put lines went wrong. Re-scan start is now floored to the bin, and bins merge by minute (replace, never append).
+- `cbedge-v3/src/data/flowData.ts` `useNetPremBins`: same bin-floor on `since` and a by-minute merge. `flowMath.ts`: `NETBINS_CACHE_KEY` bumped to `-v2` so browsers drop the corrupted warm start.
+- Server restart (deploy) clears the in-memory corrupted cache.

@@ -23,6 +23,7 @@ import {
 } from '@/data/flowMath'
 import { NET_DRIFT_CALL, NET_DRIFT_PUT } from '@/design/theme'
 import { NetDriftChart } from '@/pages/flow/NetDriftChart'
+import { useIsPhone } from '@/design/useIsPhone'
 import { fmtContractDate } from '../cardTitle'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,6 +96,7 @@ function readStoredSpan(): ChartSpan {
 
 export function NetPremiumCard() {
   const { symbol } = usePageSymbol()
+  const isPhone = useIsPhone()
   const active = normTicker(symbol)
   const date = todayYmdET()
 
@@ -319,10 +321,12 @@ export function NetPremiumCard() {
               // What closes the gate above. The chart owns the ChartFrame, so it
               // is the only thing here that knows whether the card is on screen.
               onVisibility={setChartVisible}
-              // The session is the window (2026-09-22): 9:30 on the left edge,
-              // 4:00 on the right, no drag-pan or zoom. Unlocked, a resize or a
-              // stray drag left the day crammed against the right axis.
-              locked
+              // Drag / wheel / axis-stretch like GEX Candles (2026-09-30), and
+              // after a minute untouched it springs back to the session window
+              // (9:30 left edge, 4:00 right) — the reason it used to be locked.
+              // Double-click resets at once. Phones stay locked.
+              locked={isPhone}
+              idleResetMs={60_000}
             />
           </div>
           {!series.hasData && (

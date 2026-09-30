@@ -78,9 +78,25 @@ export interface NetDriftChartProps {
    * opened on the last few hours (mostly future whitespace) and read as empty.
    */
   locked?: boolean
+  /**
+   * Scroll / zoom that springs back (2026-09-30). When set, the chart can be
+   * dragged, wheel-zoomed and axis-stretched like the GEX Candles card, and the
+   * live polls STOP re-pinning the window while you are looking around. After
+   * this many ms with no pointer, wheel or touch on the chart it returns to the
+   * pinned session window with auto-scaled axes. Double-click resets at once.
+   * Omitted = the old behaviour: every data push re-pins the window.
+   */
+  idleResetMs?: number
 }
 
-export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, locked = false }: NetDriftChartProps) {
+export function NetDriftChart({
+  series,
+  ordersByMin,
+  spotPts,
+  onVisibility,
+  locked = false,
+  idleResetMs,
+}: NetDriftChartProps) {
   const chartRef = useRef<IChartApi | null>(null)
   const callRef = useRef<ISeriesApi<'Line'> | null>(null)
   const putRef = useRef<ISeriesApi<'Line'> | null>(null)
@@ -108,6 +124,14 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, lock
   /** Set while hidden; applied on the way back in. */
   const pendingRef = useRef<NetSeries | null>(null)
   const pendingSpotRef = useRef<readonly NetPoint[] | null>(null)
+
+  /** True while the user has panned/zoomed and the idle reset has not fired. */
+  const userViewRef = useRef(false)
+  const idleTimerRef = useRef<number | null>(null)
+  const idleMsRef = useRef(idleResetMs)
+  idleMsRef.current = idleResetMs
+  const lockedRef = useRef(locked)
+  lockedRef.current = locked
 
   const [tip, setTip] = useState<TipState | null>(null)
   const tipElRef = useRef<HTMLDivElement | null>(null)
@@ -181,6 +205,9 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, lock
   const pin = (s: NetSeries) => {
     const chart = chartRef.current
     if (!chart) return
+    // The user is looking around — leave their window alone until the idle
+    // reset hands the chart back.
+    if (userViewRef.current) return
     try {
       chart.timeScale().setVisibleRange({
         from: s.openSec as UTCTimestamp,
@@ -196,6 +223,30 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, lock
     }
   }
 
+  /** Back to the pinned session window, every axis auto-scaled. */
+  const resetView = () => {
+    if (idleTimerRef.current != null) {
+      window.clearTimeout(idleTimerRef.current)
+      idleTimerRef.current = null
+    }
+    userViewRef.current = false
+    const chart = chartRef.current
+    if (!chart) return
+    for (const id of ['right', 'vol', 'spot']) {
+      try { chart.priceScale(id).applyOptions({ autoScale: true }) } catch { /* scale not there yet */ }
+    }
+    pin(seriesRef.current)
+  }
+
+  /** Any pan / zoom gesture: hold the user's view and restart the idle clock. */
+  const noteInteraction = () => {
+    const ms = idleMsRef.current
+    if (!ms || lockedRef.current) return
+    userViewRef.current = true
+    if (idleTimerRef.current != null) window.clearTimeout(idleTimerRef.current)
+    idleTimerRef.current = window.setTimeout(resetView, ms)
+  }
+
   const onMount = (handle: ChartHandle) => {
     hostRef.current = handle.el
     visibleRef.current = handle.visible()
@@ -204,6 +255,7 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, lock
     onVisibilityRef.current?.(visibleRef.current)
     let disposed = false
     let chart: IChartApi | null = null
+    let detachInput: (() => void) | null = null
 
     void (async () => {
       const { ColorType, CrosshairMode, HistogramSeries, LineSeries, createChart } = await import(
@@ -360,12 +412,41 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, lock
 
       chart.timeScale().subscribeSizeChange(() => pin(seriesRef.current))
 
+      // Scroll/zoom like GEX Candles, springing back after idleResetMs. DOM
+      // events rather than the library's range callbacks, because those also
+      // fire for our own pin() and could not tell the user from a poll.
+      const el = handle.el
+      const onDown = () => noteInteraction()
+      const onWheel = () => noteInteraction()
+      const onMove = (e: PointerEvent) => {
+        if (e.buttons) noteInteraction()
+      }
+      const onDbl = () => resetView()
+      el.addEventListener('pointerdown', onDown, { passive: true })
+      el.addEventListener('pointermove', onMove, { passive: true })
+      el.addEventListener('wheel', onWheel, { passive: true })
+      el.addEventListener('touchstart', onDown, { passive: true })
+      el.addEventListener('dblclick', onDbl)
+      detachInput = () => {
+        el.removeEventListener('pointerdown', onDown)
+        el.removeEventListener('pointermove', onMove)
+        el.removeEventListener('wheel', onWheel)
+        el.removeEventListener('touchstart', onDown)
+        el.removeEventListener('dblclick', onDbl)
+      }
+
       apply(seriesRef.current)
       applySpot(spotDataRef.current)
     })()
 
     return () => {
       disposed = true
+      detachInput?.()
+      if (idleTimerRef.current != null) {
+        window.clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = null
+      }
+      userViewRef.current = false
       chartRef.current = null
       callRef.current = null
       putRef.current = null
@@ -375,6 +456,16 @@ export function NetDriftChart({ series, ordersByMin, spotPts, onVisibility, lock
       chart?.remove()
     }
   }
+
+  // Lock can change after mount (a window crossing the phone width), and the
+  // chart is created once — so the gesture switches follow it here.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    chart.applyOptions({ handleScroll: !locked, handleScale: !locked })
+    if (locked) resetView()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locked])
 
   // Data pushes. Queued while the card is off screen and flushed on return —
   // the gate, not a throttle: an invisible chart does no work at all.
