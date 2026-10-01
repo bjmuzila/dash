@@ -109,6 +109,11 @@ export interface BtEvent {
   r: number
   /** Minutes from touch to resolution; null for OPEN. */
   resolveMin: number | null
+  /** Where it was scored: ET minute and price of the bounce / break, or of the last sample for an OPEN one. */
+  exitMins: number
+  exitPx: number
+  /** The break level as a price. */
+  stopPx: number
   /** 1 = the first counted touch of this CORE strike this session. */
   touchNo: number
   /** Minutes the CORE had sat on this strike when it was touched. */
@@ -248,6 +253,8 @@ function pickWall(lv: SessionLevels, t: Touch, p: BtParams): Wall | null {
 
 type Resolved = {
   endIdx: number
+  endMins: number
+  endPx: number
   result: Outcome
   exit: number
   mfe: number
@@ -296,7 +303,13 @@ function resolve(day: DaySlice, lv: SessionLevels, t: Touch, p: BtParams): Resol
     }
     exit = fav
   }
-  return { endIdx, result, exit, mfe, mae, rolled, resolveMin, stop, wall, targetPts: target }
+  const endSample = P[endIdx]!
+  // A bounce is scored AT the target and a break AT the break level — the
+  // levels a resting order would have filled at, not wherever the 5-minute
+  // sample happened to print past them.
+  const endPx =
+    result === 'bounce' ? t.core + t.dir * target : result === 'break' ? t.core - t.dir * stop : endSample.px
+  return { endIdx, endMins: endSample.mins, endPx, result, exit, mfe, mae, rolled, resolveMin, stop, wall, targetPts: target }
 }
 
 /** Every touch in a session, numbered per CORE strike, re-armed between them, resolved. */
@@ -390,6 +403,9 @@ export function runBacktest(days: DaySlice[], p: BtParams): BtRun {
         exit: r.exit,
         r: r.stop > 0 ? r.exit / r.stop : 0,
         resolveMin: r.resolveMin,
+        exitMins: r.endMins,
+        exitPx: r.endPx,
+        stopPx: t.core - t.dir * r.stop,
         touchNo: t.touchNo,
         heldMin: Math.max(0, q.mins - slotStartMins(lv.since[t.slot] ?? 0)),
         rolled: r.rolled,

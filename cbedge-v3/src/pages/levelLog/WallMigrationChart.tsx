@@ -187,7 +187,43 @@ export interface WallMigrationChartProps {
   compact?: boolean
   /** An escape hatch for a host that wants its own full-size control. */
   onExpand?: () => void
+  /**
+   * ANNOTATIONS a host lays over the plot (2026-10-01, for the Core backtest's
+   * entries and exits). Generic on purpose: the chart knows where a session /
+   * minute / price lands, the host knows what it means. `marks` are glyphs,
+   * drawn as HTML so the squash never stretches them; `spans` are horizontal
+   * dashed segments (a target, a break level) drawn in the SVG. Their prices
+   * join the y range so nothing a host asks for falls off the plot. A mark on
+   * a session the chart is not drawing is ignored.
+   */
+  marks?: MigMark[]
+  spans?: MigSpan[]
 }
+
+/** A glyph at a session / ET minute / price. `glyph` is text — ▲ ▼ ● ✕ ○. */
+export type MigMark = {
+  key: string
+  date: string
+  mins: number
+  price: number
+  glyph: string
+  color: string
+  title?: string
+}
+
+/** A horizontal segment at `price` from one ET minute to another, on one session. */
+export type MigSpan = {
+  key: string
+  date: string
+  fromMins: number
+  toMins: number
+  price: number
+  color: string
+  dash?: string
+}
+
+const NO_MARKS: MigMark[] = []
+const NO_SPANS: MigSpan[] = []
 
 export function WallMigrationChart({
   days,
@@ -196,6 +232,8 @@ export function WallMigrationChart({
   fill = false,
   compact = false,
   onExpand,
+  marks = NO_MARKS,
+  spans = NO_SPANS,
 }: WallMigrationChartProps) {
   /**
    * Legend switches. Click a chip to drop that series out of the plot; click it
@@ -469,6 +507,10 @@ export function WallMigrationChart({
       for (const arr of seg.series.values()) for (const v of arr) if (v != null) vals.push(v)
       for (const p of seg.spotDrawn) vals.push(p.v)
     }
+    // A host's annotations are part of the picture — see MigMark / MigSpan.
+    const drawnDates = new Set(segs.map((seg) => seg.date))
+    for (const m of marks) if (drawnDates.has(m.date) && m.price > 0) vals.push(m.price)
+    for (const sp of spans) if (drawnDates.has(sp.date) && sp.price > 0) vals.push(sp.price)
     if (vals.length < 2) return null
 
     let lo = Math.min(...vals)
@@ -496,7 +538,7 @@ export function WallMigrationChart({
     if (!kept.length) return null
 
     return { levels: kept, segs, lo, hi, roled }
-  }, [days, view])
+  }, [days, view, marks, spans])
 
   if (!model) return null
   const { levels, segs, lo, hi, roled } = model
@@ -737,6 +779,14 @@ export function WallMigrationChart({
   /** Fraction of the plot HEIGHT a price sits at — the axis is HTML, not SVG. */
   const yPct = (v: number) => `${(y(v) / height) * 100}%`
 
+  /** viewBox x of an annotation's session + ET minute; null when that session is not drawn. */
+  const annoX = (date: string, mins: number): number | null => {
+    const i = segs.findIndex((seg) => seg.date === date)
+    const seg = segs[i]
+    if (!seg) return null
+    return x(i, Math.max(0, Math.min(seg.lastSlot, slotAtMins(mins))))
+  }
+
   /**
    * WHERE EACH LEVEL OPENED. The first strike the span wrote, marked on the
    * left rail in the probe's ENTRY vocabulary — bare type, no plate, in the
@@ -918,7 +968,49 @@ export function WallMigrationChart({
               vectorEffect="non-scaling-stroke"
             />
           ))}
+          {/* A host's spans ride over everything — they are the question being
+              asked of the picture underneath. */}
+          {spans.map((sp) => {
+            const at = annoX(sp.date, sp.fromMins)
+            const to = annoX(sp.date, sp.toMins)
+            if (at == null || to == null) return null
+            return (
+              <line
+                key={sp.key}
+                x1={at}
+                x2={Math.max(to, at + 0.15)}
+                y1={y(sp.price)}
+                y2={y(sp.price)}
+                stroke={sp.color}
+                strokeWidth={1.4}
+                strokeDasharray={sp.dash ?? '4 3'}
+                vectorEffect="non-scaling-stroke"
+              />
+            )
+          })}
         </svg>
+
+        {/* A host's marks. HTML for the same reason the axis is: a glyph inside
+            the squashed viewBox would come out stretched. Placed inside the plot
+            width (the axis gutter excluded), centred on their point. */}
+        {marks.length ? (
+          <div className="pointer-events-none absolute inset-y-0 left-0" style={{ right: compact ? 0 : AXIS_W }}>
+            {marks.map((m) => {
+              const mx = annoX(m.date, m.mins)
+              if (mx == null) return null
+              return (
+                <span
+                  key={m.key}
+                  title={m.title}
+                  className="pointer-events-auto absolute cursor-default select-none text-sm font-extrabold leading-none"
+                  style={{ left: `${mx}%`, top: yPct(m.price), transform: 'translate(-50%, -50%)', color: m.color }}
+                >
+                  {m.glyph}
+                </span>
+              )
+            })}
+          </div>
+        ) : null}
 
         {/* THE OPENS, on the left rail. Everything else the chart says is on
             one of the two axes; this is the one number that belongs beside the

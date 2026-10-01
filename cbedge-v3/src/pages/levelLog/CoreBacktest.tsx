@@ -18,13 +18,21 @@
 // is read (symbol, end date, sessions, variant), which re-fetch. Settings are
 // remembered per browser; the end date is not, so the page opens on today.
 //
-// Clicking a touch's date opens that session on the Log tab, where the CORE,
-// the walls and the price it was scored from are drawn.
+// THE SESSION CHART (2026-10-01): the wall migration chart for one session,
+// drawn from the same 5-minute series the backtest scored, with every hit's
+// ENTRY (▲ support / ▼ resistance, where price was) and EXIT (● bounce at the
+// target, ✕ break at the break level, ○ open where the hold ran out) and the
+// target / break levels dashed across each hit's window. Prev / next step
+// through the sessions that had hits; clicking a hit's date in the table loads
+// its session here. ↗ beside it still opens that session on the Log tab.
+//
+// The target sweep and the hit table are folded by default — the page leads
+// with the numbers and the picture.
 //
 // Its own chunk, loaded only when the tab is opened.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardToolbar } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
@@ -53,7 +61,8 @@ import {
   summarize,
   sweepFractions,
 } from '@/pages/levelLog/bounceEngine'
-import { type DaySlice, type ExpScope, type GexBasis, todayETStr, variantTag, wallNum, wallStrike } from '@/pages/levelLog/wallData'
+import { type MigMark, type MigSpan, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
+import { type DaySlice, type ExpScope, type GexBasis, VOLTICK_UI, todayETStr, variantTag, wallNum, wallStrike } from '@/pages/levelLog/wallData'
 
 // ── controls ────────────────────────────────────────────────────────────────
 
@@ -166,7 +175,7 @@ const tone = (v: number | null) => (v == null || v === 0 ? 'text-fg' : v > 0 ? '
 const pts = (v: number) => (Number.isInteger(v) ? String(v) : wallNum(v))
 
 /** The label in front of a control group — the row is too dense to go unlabelled. */
-function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
+function Labeled({ label, children }: { label: string; children: ReactNode }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="text-3xs font-extrabold uppercase tracking-widest text-muted">{label}</span>
@@ -253,6 +262,25 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
   const stopPts = Number(stop) * strike
   const fracText = fracLabel(params.wallFrac)
   const range = days.length ? `${days[0]!.date} → ${days[days.length - 1]!.date}` : ''
+
+  // ── the session chart ───────────────────────────────────────────────────
+  /** Sessions that had at least one hit under the current filters, oldest first. */
+  const hitDates = useMemo(() => [...new Set(events.map((e) => e.date))].sort(), [events])
+  const [pickedDate, setPickedDate] = useState<string | null>(null)
+  // The pick survives a settings change only while it still has hits; otherwise
+  // the newest session that does.
+  const chartDate = pickedDate && hitDates.includes(pickedDate) ? pickedDate : (hitDates[hitDates.length - 1] ?? null)
+  const chartDay = useMemo(() => days.find((d) => d.date === chartDate) ?? null, [days, chartDate])
+  const chartEvents = useMemo(() => events.filter((e) => e.date === chartDate), [events, chartDate])
+  const chartIdx = chartDate ? hitDates.indexOf(chartDate) : -1
+  const chartRef = useRef<HTMLDivElement | null>(null)
+  const pickSession = (date: string) => {
+    setPickedDate(date)
+    chartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  const { marks, spans } = useMemo(() => annotate(chartEvents), [chartEvents])
+  const [sweepOpen, setSweepOpen] = useState(false)
+  const [hitsOpen, setHitsOpen] = useState(false)
 
   return (
     // shrink-0: the page column scrolls; without it the flex column squeezes
@@ -376,6 +404,71 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
 
       {days.length && !data.error ? (
         <>
+          <div ref={chartRef} className="scroll-mt-3">
+            <Card
+              title={chartDate ? `Session · ${chartDate} · ${chartEvents.length} hit${chartEvents.length === 1 ? '' : 's'}` : 'Session'}
+              expandId="level-log-core-backtest-session"
+              actions={
+                chartDate ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenSession(chartDate)}
+                    title="Open this session on the Log tab (1-minute tape)"
+                    className="rounded-sm px-1 text-xs text-faint transition-colors hover:bg-raised hover:text-fg"
+                  >
+                    <span aria-hidden>↗</span>
+                  </button>
+                ) : null
+              }
+            >
+              <CardToolbar>
+                <button
+                  type="button"
+                  disabled={chartIdx <= 0}
+                  onClick={() => setPickedDate(hitDates[chartIdx - 1] ?? null)}
+                  title="Previous session with a hit"
+                  className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold text-fg transition-colors hover:bg-raised disabled:opacity-30"
+                >
+                  ◀ Prev
+                </button>
+                <span className="tabular font-mono text-2xs text-muted">
+                  {chartIdx >= 0 ? `${chartIdx + 1} / ${hitDates.length}` : '—'}
+                </span>
+                <button
+                  type="button"
+                  disabled={chartIdx < 0 || chartIdx >= hitDates.length - 1}
+                  onClick={() => setPickedDate(hitDates[chartIdx + 1] ?? null)}
+                  title="Next session with a hit"
+                  className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold text-fg transition-colors hover:bg-raised disabled:opacity-30"
+                >
+                  Next ▶
+                </button>
+              </CardToolbar>
+              <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-muted">
+                <span>
+                  <span style={{ color: T.cyan }}>▲ ▼</span> entry — support / resistance hit, at the price it printed
+                </span>
+                <span>
+                  <span style={{ color: T.green }}>●</span> bounce, at the target
+                </span>
+                <span>
+                  <span style={{ color: T.red }}>✕</span> break, at the break level
+                </span>
+                <span>
+                  <span style={{ color: T.faint }}>○</span> open, where the hold ran out
+                </span>
+                <span>
+                  dashed <span style={{ color: T.green }}>target</span> / <span style={{ color: T.red }}>break</span> over each hit&apos;s window
+                </span>
+              </div>
+              {chartDay ? (
+                <WallMigrationChart days={[chartDay]} view={VOLTICK_UI ? 'voltick' : 'all'} height={300} marks={marks} spans={spans} />
+              ) : (
+                <div className="py-8 text-center text-sm text-muted">No hits with these settings, so no session to draw.</div>
+              )}
+            </Card>
+          </div>
+
           <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-2">
             <Card title="Cumulative points" expandId="level-log-core-backtest-curve">
               <p className="mb-2 text-2xs text-muted">
@@ -396,9 +489,9 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
             </Card>
           </div>
 
-          <Card title="Target sweep" expandId="level-log-core-backtest-sweep">
+          <Fold title="Target sweep" open={sweepOpen} onToggle={() => setSweepOpen((o) => !o)} expandId="level-log-core-backtest-sweep">
             <p className="mb-2 text-2xs text-muted">
-              The same session re-scored with the bounce at each fraction of the way to the wall — break at {pts(stopPts)} pts,
+              The same sessions re-scored with the bounce at each fraction of the way to the wall — break at {pts(stopPts)} pts,
               everything else held. The highlighted row is the target set above.
             </p>
             <Table
@@ -408,12 +501,17 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
               rowClassName={(r) => (Math.abs(r.frac - params.wallFrac) < 1e-6 ? 'bg-surface2' : undefined)}
               empty="Nothing to sweep."
             />
-          </Card>
+          </Fold>
 
-          <Card title={`Every hit · ${events.length.toLocaleString()}`} expandId="level-log-core-backtest-touches">
+          <Fold
+            title={`Every hit · ${events.length.toLocaleString()}`}
+            open={hitsOpen}
+            onToggle={() => setHitsOpen((o) => !o)}
+            expandId="level-log-core-backtest-touches"
+          >
             <div className="max-h-[560px] min-h-0 overflow-auto">
               <Table
-                columns={eventColumns(onOpenSession)}
+                columns={eventColumns(pickSession, onOpenSession)}
                 rows={events.slice().reverse().slice(0, EVENT_CAP)}
                 rowKey={(r) => r.id}
                 empty="No hits with these settings."
@@ -424,7 +522,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
                 Newest {EVENT_CAP} of {events.length.toLocaleString()} shown — every one is in the numbers above.
               </p>
             ) : null}
-          </Card>
+          </Fold>
         </>
       ) : null}
     </div>
@@ -433,6 +531,79 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
 
 /** Rows the hit table renders. The stats always use all of them. */
 const EVENT_CAP = 400
+
+/**
+ * A card that folds to its header. The header is the switch; folded, the body
+ * renders nothing and the card is one row. Folded cards cannot be expanded —
+ * there is nothing in them to fill the page with.
+ */
+function Fold({
+  title,
+  open,
+  onToggle,
+  expandId,
+  children,
+}: {
+  title: string
+  open: boolean
+  onToggle: () => void
+  expandId: string
+  children: ReactNode
+}) {
+  return (
+    <Card
+      title={
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          title={open ? `Fold ${title}` : `Show ${title}`}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-muted transition-colors hover:text-fg"
+        >
+          <span aria-hidden className="text-2xs">
+            {open ? '▾' : '▸'}
+          </span>
+          {title}
+        </button>
+      }
+      expandId={expandId}
+      expandable={open}
+      flush={!open}
+    >
+      {open ? children : null}
+    </Card>
+  )
+}
+
+/** One session's hits as chart annotations — the legend above the chart says what each glyph is. */
+function annotate(evs: BtEvent[]): { marks: MigMark[]; spans: MigSpan[] } {
+  const marks: MigMark[] = []
+  const spans: MigSpan[] = []
+  for (const e of evs) {
+    const what = e.side === 'support' ? 'support' : 'resistance'
+    spans.push({ key: `tgt-${e.id}`, date: e.date, fromMins: e.mins, toMins: e.exitMins, price: e.target, color: T.green })
+    spans.push({ key: `stp-${e.id}`, date: e.date, fromMins: e.mins, toMins: e.exitMins, price: e.stopPx, color: T.red })
+    marks.push({
+      key: `in-${e.id}`,
+      date: e.date,
+      mins: e.mins,
+      price: e.spot,
+      glyph: e.side === 'support' ? '▲' : '▼',
+      color: T.cyan,
+      title: `${hhmm(e.mins)} ${what} hit · CORE ${wallStrike(e.core)} · spot ${wallNum(e.spot)} · target ${wallNum(e.target)} (${fracLabel(e.targetPts / Math.max(1e-9, Math.abs(e.wall - e.core)))} to ${e.wallKind === 'call' ? 'CW' : 'PW'} ${wallStrike(e.wall)}) · break ${wallNum(e.stopPx)}`,
+    })
+    marks.push({
+      key: `out-${e.id}`,
+      date: e.date,
+      mins: e.exitMins,
+      price: e.exitPx,
+      glyph: e.result === 'bounce' ? '●' : e.result === 'break' ? '✕' : '○',
+      color: e.result === 'bounce' ? T.green : e.result === 'break' ? T.red : T.faint,
+      title: `${hhmm(e.exitMins)} ${e.result.toUpperCase()} · ${signed(e.exit)} pts${e.resolveMin != null ? ` after ${Math.round(e.resolveMin)}m` : ''}`,
+    })
+  }
+  return { marks, spans }
+}
 
 // ── tables ──────────────────────────────────────────────────────────────────
 
@@ -480,20 +651,30 @@ const SWEEP_COLUMNS: Column<{ frac: number; summary: BtSummary }>[] = [
 const RESULT_LABEL = { bounce: 'BOUNCE', break: 'BREAK', open: 'OPEN' } as const
 const RESULT_CLASS = { bounce: 'text-up', break: 'text-down', open: 'text-muted' } as const
 
-function eventColumns(onOpenSession: (date: string) => void): Column<BtEvent>[] {
+function eventColumns(onPick: (date: string) => void, onOpenSession: (date: string) => void): Column<BtEvent>[] {
   return [
     {
       key: 'date',
       header: 'Session',
       cell: (e) => (
-        <button
-          type="button"
-          onClick={() => onOpenSession(e.date)}
-          title="Open this session on the Log tab"
-          className="tabular font-mono text-xs text-fg underline decoration-line underline-offset-2 hover:decoration-fg"
-        >
-          {e.date}
-        </button>
+        <span className="inline-flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onPick(e.date)}
+            title="Draw this session on the chart above, with its entries and exits"
+            className="tabular font-mono text-xs text-fg underline decoration-line underline-offset-2 hover:decoration-fg"
+          >
+            {e.date}
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenSession(e.date)}
+            title="Open this session on the Log tab"
+            className="text-2xs text-faint hover:text-fg"
+          >
+            <span aria-hidden>↗</span>
+          </button>
+        </span>
       ),
     },
     { key: 'time', header: 'Time', cell: (e) => <span className="tabular font-mono text-xs">{hhmm(e.mins)}</span> },
