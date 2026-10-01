@@ -22,11 +22,15 @@
 //     at that slot's clock time, so a 10:07 sample is judged against the levels
 //     as of 10:00. No look-ahead.
 //
-//   SIDE. Price's last reading OUTSIDE the entry says where it came from:
-//     above → a SUPPORT test (a bounce goes UP), below → a RESISTANCE test (a
-//     bounce goes DOWN). A CORE that has just rolled starts with no side, so a
-//     level that rolls onto price is not a fill until price has left it and
-//     come back.
+//   SIDE (2026-10-01). Where the CORE sits against price going into the bar
+//     — the previous close. CORE ABOVE price → price can only touch it from
+//     BELOW: a RESISTANCE test, short, a bounce goes DOWN toward the put wall.
+//     CORE BELOW price → touched from ABOVE: SUPPORT, long, a bounce goes UP
+//     toward the call wall. Read fresh on every bar, never carried over from
+//     an earlier touch, so a re-armed level can never be scored from the side
+//     price is no longer on. Price already inside the entry zone has no side,
+//     so a level that rolls onto price is not a fill until price has left it
+//     and come back.
 //
 //   ENTRY (2026-10-01). A resting limit `entryPts` points BEFORE the CORE on
 //     the side price comes from — 0 = on the CORE itself; on SPX 1–5 points,
@@ -57,11 +61,22 @@
 //     sitting in a chop zone would score a dozen fills out of one event.
 //
 // ── WHAT A 5-MINUTE SERIES CANNOT SEE ───────────────────────────────────────
-// These are 5-minute samples, not highs and lows. A wick to the entry and back
-// between two samples is invisible (a fill that would have happened is missed),
-// and so is a target or break reached and given back inside one bar. The page says so. It errs the same way for bounces and
-// breaks, so the comparison between settings is fair even where the absolute
-// rate is approximate.
+// ── BARS, NOT SAMPLES (2026-10-01) ──────────────────────────────────────────
+// The scan walks OHLC BARS. Where the recorder has 1-minute bars (etf_candles,
+// ~30 days) it uses their highs and lows; elsewhere each 5-minute spot sample
+// becomes a flat bar (o = h = l = c).
+//
+// That matters more than it looks. A limit at the CORE fills on the first TICK
+// that reaches it — and the best trades are exactly the ones that tag the level
+// and leave inside a minute or two. A 5-minute close almost never prints there,
+// so on flat bars those fills are missed while the ones that sit at or through
+// the level are kept: the sample is tilted toward the losers. Highs and lows
+// remove that tilt, and the page defaults to 1-minute bars for it.
+//
+// Inside one bar the order of the high and the low is unknown, so the scan is
+// CONSERVATIVE: on the fill bar a target only counts if the bar CLOSED past it
+// (the high may have come before the fill), and when a later bar's range holds
+// both the target and the break, it is scored a BREAK.
 //
 // Every touch is kept and numbered by the scan; the APPROACH and FIRST-ONLY
 // switches are filters applied AFTER it, so flipping them never changes which
@@ -70,6 +85,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { type DaySlice, type ExpScope, type GexBasis, WALL_SLOTS, rangeDayToSlice, slotAtMins } from '@/pages/levelLog/wallData'
+
+/** One price bar: ET minutes since midnight of its open, and OHLC. */
+export type Bar = { mins: number; o: number; h: number; l: number; c: number }
+
+/** A session the backtest reads: the recorder's levels + 5-minute spot, and 1-minute bars when there are any. */
+export type BtDay = DaySlice & { bars?: Bar[] | null }
+
+/** The bars a session is scanned on — its 1-minute bars, else its 5-minute samples as flat bars. */
+function barsOf(day: BtDay): Bar[] {
+  if (day.bars && day.bars.length >= 2) return day.bars
+  return day.price.map((p) => ({ mins: p.mins, o: p.px, h: p.px, l: p.px, c: p.px }))
+}
 
 export type Approach = 'both' | 'support' | 'resistance'
 export type TouchMode = 'first' | 'every'
@@ -204,6 +231,46 @@ export async function fetchBacktestDays(
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
 }
 
+/**
+ * The recorder's 1-minute bars for `symbol`, by ET session date, 09:30–16:00.
+ * /api/snapshots/etf-candles keeps about 30 days; `days` (calendar, default and
+ * cap 30) counts back from today — the forward test asks for only what it needs.
+ * Best-effort: a failure or an unrecorded symbol is an empty map, and the
+ * backtest falls back to 5-minute samples.
+ */
+export async function fetchMinuteBars(symbol: string, signal?: AbortSignal, days = 30): Promise<Map<string, Bar[]>> {
+  const out = new Map<string, Bar[]>()
+  try {
+    const r = await fetch(
+      `/api/snapshots/etf-candles?symbol=${encodeURIComponent(symbol)}&days=${Math.max(1, Math.min(30, Math.round(days)))}&interval=1&limit=50000`,
+      { cache: 'no-store', credentials: 'same-origin', signal },
+    )
+    if (!r.ok) return out
+    const j = await r.json()
+    const rows: unknown[] = Array.isArray(j?.rows) ? j.rows : []
+    for (const raw of rows) {
+      const b = raw as { date?: unknown; time?: unknown; open?: unknown; high?: unknown; low?: unknown; close?: unknown }
+      const date = String(b.date ?? '')
+      const m = /^(\d{2}):(\d{2})/.exec(String(b.time ?? ''))
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !m) continue
+      const mins = Number(m[1]) * 60 + Number(m[2])
+      if (mins < 9 * 60 + 30 || mins >= 16 * 60) continue
+      const c = Number(b.close)
+      if (!(c > 0)) continue
+      const o = Number(b.open) > 0 ? Number(b.open) : c
+      const h = Math.max(Number(b.high) > 0 ? Number(b.high) : c, o, c)
+      const l = Math.min(Number(b.low) > 0 ? Number(b.low) : c, o, c)
+      const list = out.get(date) ?? []
+      list.push({ mins, o, h, l, c })
+      out.set(date, list)
+    }
+    for (const list of out.values()) list.sort((a, b) => a.mins - b.mins)
+  } catch {
+    /* best-effort — see above */
+  }
+  return out
+}
+
 // ── one session ─────────────────────────────────────────────────────────────
 
 /** Clock minutes a slot's row was written at. Slot 0 = the 09:29 baseline. */
@@ -247,20 +314,35 @@ const slotOf = (mins: number) => Math.max(0, Math.min(WALL_SLOTS - 1, Math.floor
 /** A touch found by the scan, before it is resolved. */
 type Touch = { i: number; core: number; dir: 1 | -1; slot: number; touchNo: number; gapped: boolean }
 
-type Wall = { v: number; kind: 'call' | 'put' }
+export type Wall = { v: number; kind: 'call' | 'put' }
 
-/** The wall a touch's bounce is measured to — see TARGET in the header. */
-function pickWall(lv: SessionLevels, t: Touch, p: BtParams): Wall | null {
+/**
+ * The wall a bounce off `core` in direction `dir` is measured to — see TARGET
+ * in the header. Exported so the forward test's order ticket names the same
+ * wall the scan would.
+ */
+export function targetWall(core: number, dir: 1 | -1, cw: number | null, pw: number | null, p: BtParams): Wall | null {
   // The target has to sit at least half a strike past the ENTRY to be a trade.
   const floor = p.entryPts + p.strike / 2
   const raw: Array<{ v: number | null; kind: 'call' | 'put' }> = [
-    { v: lv.cw[t.slot] ?? null, kind: 'call' },
-    { v: lv.pw[t.slot] ?? null, kind: 'put' },
+    { v: cw, kind: 'call' },
+    { v: pw, kind: 'put' },
   ]
   const cands = raw
-    .filter((c): c is Wall => c.v != null && t.dir * (c.v - t.core) > 0)
-    .sort((a, b) => Math.abs(a.v - t.core) - Math.abs(b.v - t.core))
-  return cands.find((c) => Math.abs(c.v - t.core) * p.wallFrac >= floor) ?? null
+    .filter((c): c is Wall => c.v != null && dir * (c.v - core) > 0)
+    .sort((a, b) => Math.abs(a.v - core) - Math.abs(b.v - core))
+  return cands.find((c) => Math.abs(c.v - core) * p.wallFrac >= floor) ?? null
+}
+
+function pickWall(lv: SessionLevels, t: Touch, p: BtParams): Wall | null {
+  return targetWall(t.core, t.dir, lv.cw[t.slot] ?? null, lv.pw[t.slot] ?? null, p)
+}
+
+/** CORE, call wall and put wall as the scan would read them at `mins` ET. */
+export function levelsAt(day: DaySlice, mins: number): { core: number | null; cw: number | null; pw: number | null } {
+  const lv = sessionLevels(day)
+  const s = slotOf(mins)
+  return { core: lv.cb[s] ?? null, cw: lv.cw[s] ?? null, pw: lv.pw[s] ?? null }
 }
 
 type Resolved = {
@@ -281,17 +363,19 @@ type Resolved = {
   riskPts: number
 }
 
-/** Walk forward from a touch until target, stop, the hold window or the close. */
-function resolve(day: DaySlice, lv: SessionLevels, t: Touch, p: BtParams): Resolved | null {
+/** Walk forward from a fill until target, break, the hold window or the close — bar by bar, see BARS in the header. */
+function resolve(B: Bar[], lv: SessionLevels, t: Touch, p: BtParams): Resolved | null {
   const wall = pickWall(lv, t, p)
   if (!wall) return null
-  const P = day.price
-  const t0 = P[t.i]!.mins
+  const t0 = B[t.i]!.mins
   const target = Math.abs(wall.v - t.core) * p.wallFrac
   const stop = p.stopStrikes * p.strike
   const entryPx = t.core + t.dir * p.entryPts
+  const targetPx = t.core + t.dir * target
+  const stopPx = t.core - t.dir * stop
   const reward = target - p.entryPts
   const risk = stop + p.entryPts
+  const up = t.dir > 0
   let mfe = 0
   let mae = 0
   let rolled = false
@@ -299,39 +383,43 @@ function resolve(day: DaySlice, lv: SessionLevels, t: Touch, p: BtParams): Resol
   let result: Outcome = 'open'
   let exit = 0
   let resolveMin: number | null = null
-  for (let j = t.i; j < P.length; j++) {
-    const q = P[j]!
-    if (p.holdMin != null && q.mins - t0 > p.holdMin) break
+  for (let j = t.i; j < B.length; j++) {
+    const b = B[j]!
+    if (p.holdMin != null && b.mins - t0 > p.holdMin) break
     endIdx = j
-    if ((lv.cb[slotOf(q.mins)] ?? t.core) !== t.core) rolled = true
-    // Levels are judged off the CORE, P&L off the entry.
-    const fromCore = t.dir * (q.px - t.core)
-    const fav = t.dir * (q.px - entryPx)
-    if (fav > mfe) mfe = fav
-    if (-fav > mae) mae = -fav
-    if (-fromCore >= stop) {
+    if ((lv.cb[slotOf(b.mins)] ?? t.core) !== t.core) rolled = true
+    const first = j === t.i
+    // Best and worst from the entry inside this bar. On the fill bar the
+    // favourable extreme may have printed BEFORE the fill, so only the close
+    // counts for it; the adverse extreme is kept (it may have come after).
+    const best = first ? t.dir * (b.c - entryPx) : up ? b.h - entryPx : entryPx - b.l
+    const worst = up ? entryPx - b.l : b.h - entryPx
+    if (best > mfe) mfe = best
+    if (worst > mae) mae = worst
+    const hitStop = up ? b.l <= stopPx : b.h >= stopPx
+    const hitTarget = first ? (up ? b.c >= targetPx : b.c <= targetPx) : up ? b.h >= targetPx : b.l <= targetPx
+    if (hitStop) {
+      // Both in one bar → the break, by the conservative rule in the header.
       result = 'break'
       exit = -risk
-      resolveMin = q.mins - t0
+      resolveMin = b.mins - t0
       break
     }
-    if (fromCore >= target) {
+    if (hitTarget) {
       result = 'bounce'
       exit = reward
-      resolveMin = q.mins - t0
+      resolveMin = b.mins - t0
       break
     }
-    exit = fav
+    exit = t.dir * (b.c - entryPx)
   }
-  const endSample = P[endIdx]!
-  // A bounce is scored AT the target and a break AT the break level — the
-  // levels a resting order would have filled at, not wherever the 5-minute
-  // sample happened to print past them.
-  const endPx =
-    result === 'bounce' ? t.core + t.dir * target : result === 'break' ? t.core - t.dir * stop : endSample.px
+  const endBar = B[endIdx]!
+  // A bounce is scored AT the target and a break AT the break level — where
+  // the resting orders would have filled, not wherever the bar closed.
+  const endPx = result === 'bounce' ? targetPx : result === 'break' ? stopPx : endBar.c
   return {
     endIdx,
-    endMins: endSample.mins,
+    endMins: endBar.mins,
     endPx,
     result,
     exit,
@@ -348,21 +436,19 @@ function resolve(day: DaySlice, lv: SessionLevels, t: Touch, p: BtParams): Resol
   }
 }
 
-/** Every touch in a session, numbered per CORE strike, re-armed between them, resolved. */
-function scanSession(day: DaySlice, lv: SessionLevels, p: BtParams): { scored: Array<{ t: Touch; r: Resolved }>; noWall: number } {
-  const P = day.price
+/** Every fill in a session, numbered per CORE strike, re-armed between them, resolved. */
+function scanSession(B: Bar[], lv: SessionLevels, p: BtParams): { scored: Array<{ t: Touch; r: Resolved }>; noWall: number } {
   const zone = p.entryPts
   const rearm = Math.max(zone * 2, p.strike)
   const scored: Array<{ t: Touch; r: Resolved }> = []
   let noWall = 0
   const count = new Map<number, number>()
   let prevCore: number | null = null
-  let lastSide: 1 | -1 | 0 = 0
   let armed = true
   let i = 0
-  while (i < P.length) {
-    const s = P[i]!
-    const slot = slotOf(s.mins)
+  while (i < B.length) {
+    const b = B[i]!
+    const slot = slotOf(b.mins)
     const c = lv.cb[slot] ?? null
     if (c == null) {
       i++
@@ -370,67 +456,63 @@ function scanSession(day: DaySlice, lv: SessionLevels, p: BtParams): { scored: A
     }
     if (c !== prevCore) {
       prevCore = c
-      lastSide = 0
       armed = true
     }
-    const d = s.px - c
-    // At 0 the entry IS the CORE: only a sample on it or through it fills.
-    const outside = Math.abs(d) > zone
-    const sideNow: 1 | -1 = d > 0 ? 1 : -1
-    let touch = false
-    let gapped = false
-    if (!outside) {
-      touch = armed && lastSide !== 0
-    } else if (armed && lastSide !== 0 && sideNow !== lastSide) {
-      touch = true
-      gapped = true
-    }
-    if (!touch) {
-      if (outside) {
-        lastSide = sideNow
-        if (!armed && Math.abs(d) >= rearm) armed = true
-      }
+    // SIDE (2026-10-01): where the CORE sits against price going INTO this bar
+    // — the last close, or the open on the session's first bar. CORE above
+    // price → price can only reach it from BELOW: a resistance test, short, a
+    // bounce goes down. CORE below price → from ABOVE: support, long, up. Price
+    // already inside the entry zone is not approaching anything — no side.
+    const ref = i > 0 ? B[i - 1]!.c : b.o
+    const dir: 1 | -1 | 0 = ref > c + zone ? 1 : ref < c - zone ? -1 : 0
+    // A fill: armed, a side, and this bar reached that side's entry.
+    const fills = armed && dir !== 0 && (dir > 0 ? b.l <= c + zone : b.h >= c - zone)
+    if (!fills) {
+      if (!armed && Math.abs(b.c - c) >= rearm) armed = true
       i++
       continue
     }
     const n = (count.get(c) ?? 0) + 1
     count.set(c, n)
-    const t: Touch = { i, core: c, dir: lastSide as 1 | -1, slot, touchNo: n, gapped }
-    const r = resolve(day, lv, t, p)
+    // A bar that OPENED already through the CORE stepped over it (every
+    // 5-minute flat bar that crossed does; a 1-minute bar only on a gap).
+    const gapped = dir * (b.o - c) < 0
+    const t: Touch = { i, core: c, dir, slot, touchNo: n, gapped }
+    const r = resolve(B, lv, t, p)
     armed = false
     if (!r) {
-      // Nothing to bounce TO. Counted, not scored; re-arms like any other touch.
+      // Nothing to bounce TO. Counted, not scored; re-arms like any other fill.
       noWall++
       i++
       continue
     }
     scored.push({ t, r })
-    // Resume after this touch resolves, disarmed, with the side where it ended.
-    const last = P[r.endIdx]
-    lastSide = last ? (last.px - c > 0 ? 1 : -1) : lastSide
+    // Resume after this fill resolves, disarmed. The next side is read fresh
+    // from where price stands then — never carried over from this one.
     i = r.endIdx + 1
   }
   return { scored, noWall }
 }
 
 /** Every touch in every session, resolved under `p`. */
-export function runBacktest(days: DaySlice[], p: BtParams): BtRun {
+export function runBacktest(days: BtDay[], p: BtParams): BtRun {
   const events: BtEvent[] = []
   let noWall = 0
   for (const day of days) {
-    if (day.price.length < 2) continue
+    const B = barsOf(day)
+    if (B.length < 2) continue
     const lv = sessionLevels(day)
-    const res = scanSession(day, lv, p)
+    const res = scanSession(B, lv, p)
     noWall += res.noWall
     for (const { t, r } of res.scored) {
-      const q = day.price[t.i]!
+      const q = B[t.i]!
       events.push({
         id: `${day.date}-${q.mins}-${t.core}`,
         date: day.date,
         mins: q.mins,
         core: t.core,
         side: t.dir > 0 ? 'support' : 'resistance',
-        spot: q.px,
+        spot: q.c,
         wall: r.wall.v,
         wallKind: r.wall.kind,
         entryPx: r.entryPx,
@@ -553,8 +635,8 @@ function bucketize(events: BtEvent[], defs: Array<{ key: string; label: string; 
 
 export const bySide = (ev: BtEvent[]) =>
   bucketize(ev, [
-    { key: 'support', label: '▲ Support (from above)', test: (e) => e.side === 'support' },
-    { key: 'resistance', label: '▼ Resistance (from below)', test: (e) => e.side === 'resistance' },
+    { key: 'support', label: '▲ CORE below · long (from above)', test: (e) => e.side === 'support' },
+    { key: 'resistance', label: '▼ CORE above · short (from below)', test: (e) => e.side === 'resistance' },
   ])
 
 export const byTime = (ev: BtEvent[]) =>
@@ -606,7 +688,7 @@ export function fracLabel(f: number): string {
 
 /** Re-run the whole scan at each fraction of the way to the wall, everything else held. */
 export function sweepFractions(
-  days: DaySlice[],
+  days: BtDay[],
   p: BtParams,
   approach: Approach,
   touches: TouchMode,

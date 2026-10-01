@@ -24787,17 +24787,22 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-10-01 — v3 Level Log › Core backtest: session chart with entries/exits; folded sweep + hit table
 
-- `cbedge-v3/src/pages/levelLog/CoreBacktest.tsx`: new **Session** card under the stats — the wall migration chart for one session (the same 5-minute series the backtest scored) with every fill marked. ◀ Prev / Next ▶ step through the sessions that had fills (defaults to the newest); clicking a date in the hit table loads that session and scrolls to it; ↗ still opens it on the Log tab. **Target sweep** and **Every hit** fold to their header and start folded.
-- `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`: optional host annotation props — `boxes` (shaded price bands over a window, under the levels), `spans` (segments, level or between two prices), `marks` (a dot plus an optional filled tag placed left/right/above/below; a side tag that would run off the plot flips sides). Only the backtest passes them; the Log tab and the rail draw as before.
+(Re-added — lost when another edit saved over this file at the same time.)
+
+- `cbedge-v3/src/pages/levelLog/CoreBacktest.tsx`: new **Session** card under the stats — the wall migration chart for one session (the same 5-minute series the backtest scored) with every hit marked. ◀ Prev / Next ▶ step through the sessions that had hits (defaults to the newest); clicking a date in the hit table loads that session here and scrolls to it; ↗ still opens it on the Log tab. **Target sweep** and **Every hit** fold to their header and start folded.
+- `cbedge-v3/src/pages/levelLog/bounceEngine.ts`: each hit also carries `exitMins`, `exitPx` (bounce scored at the target, break at the break level, open at the last sample) and `stopPx`.
+- `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`: optional host annotation props (see the next entry). Nothing passes them except the backtest, so the Log tab and the rail draw exactly as before.
 
 ## 2026-10-01 — v3 Level Log › Core backtest: entries/exits drawn like a position tool
 
-- Each fill on the Session chart: an **IN n ▲/▼** tag at the entry, a **green box** entry → target and a **red box** entry → break across the window, a dashed path to the **OUT n BOUNCE/BREAK/OPEN ±pts** tag where it resolved; numbered in time order; hover for the full numbers.
+- `cbedge-v3/src/pages/levelLog/CoreBacktest.tsx`: each hit on the Session chart is drawn like a position: an **IN n ▲/▼** tag (filled, accent) on the CORE where it was hit; a **green box** from the CORE to the target and a **red box** from the CORE to the break across the hit's window; a dashed path to the **OUT n BOUNCE/BREAK/OPEN ±pts** tag (green / red / grey) where it resolved. IN/OUT are numbered in time order so pairs read when hits sit close together. Hover a tag for the full numbers (time, CORE, spot, target and which wall, break, result, minutes, best/worst). Legend above the chart shows the same tags and boxes.
+- `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`: annotation props — `boxes` (shaded price bands over a window, under the levels), `spans` (segments, level or between two prices), `marks` (a dot plus an optional filled tag placed left/right/above/below; a side tag that would run off the plot flips sides).
+- Checks: `tsc --noEmit` clean, check-theme clean, rendered in the harness.
 
 ## 2026-10-01 — v3 Level Log › Core backtest: Entry 0–5 pts before the CORE (realistic fills)
 
 - `cbedge-v3/src/pages/levelLog/bounceEngine.ts`: "Hit within N strikes" is replaced by **Entry** — a resting limit 0 / 1 / 2 / 3 / 4 / 5 pts before the CORE on the side price comes from (0 = on the CORE; the buttons are fifths of a strike, so 0–5 pts on SPX/ES and 0–1 on SPY/QQQ). It fills only when a 5-minute sample reaches it; price that turns before the entry is no trade. **All P&L is now from the entry price**: bounce = +(target − entry), break = −(entry − break level), open = where it stood; MFE/MAE from the entry; R = exit ÷ (entry → break). Target is still a fraction of the way from the CORE to the next wall, and is only taken if it sits at least half a strike past the entry. Re-arm = price ≥ max(2 × entry, 1 strike) from the CORE. Checked by hand: price turning 3 pts above the CORE → no fill at 0 or 2, fills at 3 and 5 with reward/risk 22/8 and 20/10.
-- `cbedge-v3/src/pages/levelLog/CoreBacktest.tsx`: Entry control (At CORE · 1–5 pts), method note rewritten around the order, **Fills** tile, **Avg reward** tile (with average risk), MFE/MAE "from the entry", breakdown/sweep columns show reward, hit table gains an **Entry** column, the session chart's IN tag and boxes sit at the entry price. Default entry 2 pts.
+- `cbedge-v3/src/pages/levelLog/CoreBacktest.tsx`: Entry control (At CORE · 1–5 pts, default 2), method note rewritten around the order, **Fills** tile, **Avg reward** tile (with average risk), MFE/MAE "from the entry", breakdown/sweep columns show reward, hit table gains an **Entry** column, the session chart's IN tag and boxes sit at the entry price.
 - Fixes the optimism in the earlier version, which scored every hit as if filled exactly at the CORE — even when price turned up to 10 pts away.
 
 ## 2026-10-01 — ChatGPT connector: CB Edge as a remote MCP server, signed in with the CB Edge login
@@ -24824,3 +24829,80 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   3. Sign in to CB Edge and click **Allow**.
 - Kill switch: `MCP_CONNECTOR=0`. Optional: `MCP_PUBLIC_ORIGIN=https://cbedge.net` pins the issuer.
 - If ChatGPT can't connect, check Cloudflare: Bot Fight Mode or WAF challenges on `/mcp`, `/oauth/*` and `/.well-known/oauth-*` will block OpenAI's server-side calls. Add a skip rule for those paths.
+
+## 2026-10-01 — Voltick Path bubbles: full test run + real render; one export fixed
+
+- Ran everything that runs off the laptop on full copies of the Voltick repo, comparing before against after:
+  - Server `npm test`, every file: 11,331 tests before and 11,338 after. 271 failures are identical in both trees; they come from the container (no database driver, no network, clock gates).
+  - Web: `npm run build`, `check:undef`, `check:jsx` and `check:props` are all clean.
+  - theta-proxy `run-tests.sh`: 87 passed. Two files fail on Flask request context; that code is not touched.
+- **Fixed:** `no-orphan-exports` caught `PATH_RANK` exported from `web/src/trailruns.js` with no other file using it. It is now a plain `const`. The fix is written to `Desktop\Voltick\web\src\trailruns.js`, and `generated/2026-10-01-voltick-path-zoom-proof.patch` and `…-prompt.md` are updated to match. After the fix the suite has no new failures.
+- Real render: the shipped `NodeTrails` was bundled from `HeatChart.jsx` and drawn on SPX 10-01, with 0 page errors.
+  - 1m at 2px: 775 → 339 bubbles, median overlap along a row 0.50 → 0.26.
+  - 6px and 12px: unchanged.
+  - Bubbles at different strikes never overlap past 60%.
+- `generated/2026-10-01-voltick-path-real-render.png` (new): before vs after at 2, 3.5, 6 and 12px.
+- `generated/2026-10-01-voltick-test-report.md` (new): the full numbers for both changes.
+
+## 2026-10-01 — Voltick Path Ribbon B2 "Quick Swap": built, tested, ready as the second PR
+
+- Implements `PATH-RIBBON-B2-QUICK-SWAP.md` on top of the zoom-proof bubbles change:
+  - `web/src/trailruns.js`: `runFollows`, `fadeBand`, `ribbonHops` and `ribbonSizeScale` (heatT size law, cap at the pre-3 pm max per NY day, 0.5 for no size).
+  - `web/src/HeatChart.jsx`: the `pathband` branch fades in and out at hops (B2_OV 1.2 bars, bank lead fw^2.8) with no pinch and no connector. Height comes from the shared scale (hMax 0.42 × px per strike), smoothing stays within each stretch, and true ends and gold cuts keep the `bandPath` taper.
+  - Tests: new `server/test/path-ribbon-quick-swap.test.js` (9/9, spec §7 items 1–7). `the-boldness-sliders-reach`, `the-gold-volt-wins-its-strike-on-the-path` and `path-bubbles-grow-and-shrink-again` are updated.
+- Full `npm test`: no failures beyond the baseline. One archive test failed once under full-suite load; it passes 3/3 on its own in every tree. Web build and checks are clean.
+- Real render: 0 page errors at 2, 3.5, 6, 11, 12 and 20px, on 1m and 5m, in normal and quiet mode. On SPX 09-29 the Volt band no longer fattens after 3 pm.
+- **Not written into `Desktop\Voltick` yet**, so the bubbles PR stays clean. Once the bubbles change is committed, run from the Voltick root: `git apply ..\spx-gex-dashboard-tt-fixed\generated\2026-10-01-voltick-ribbon-b2.patch`. The patch was checked against the laptop's current files. The same six files are also in `generated/2026-10-01-voltick-ribbon-b2/` at their repo paths, for copying over by hand.
+- `generated/2026-10-01-voltick-ribbon-b2-real-render.png` (new): before vs after on 10-01, and 09-29 into the close.
+- Still to check, per spec §8: SPY and QQQ, and a live board in `npm run dev`.
+
+## 2026-10-01 — Voltick PR: Path bubbles + Path Ribbon B2 in one PR (bzilabranch)
+
+- Brandon recut `bzilabranch` from `master/main` and pushed two commits to his fork: `441f451e` (Path bubbles zoom-proof, 4 files) and `c4345d36` (Path Ribbon B2 Quick Swap, 6 files, applied from `generated/2026-10-01-voltick-ribbon-b2.patch`).
+- `git diff --stat master/main...bzilabranch`: 8 files, +691 / −52, all Path code and tests. The line counts match the tested patches.
+- Sent as one PR to Gnotz617/Voltick instead of two. Local `admin-site` edits and stray `.txt` files were left out.
+
+## 2026-10-01 — v3 Level Log → Core backtest: the side follows where the CORE sits
+
+- Brandon: "if core is above price, it should touch it from below." The scan now reads the side fresh on every bar from where the CORE sits against the previous close. A CORE above price is a resistance test touched from below: short at `CORE − entry`, bounce down toward the put wall. A CORE below price is support touched from above: long, bounce up toward the call wall.
+- Fixed bug: the old scan carried the approach side over from the last bar that sat fully clear of the zone. A bar that straddled the CORE but closed far enough away could re-arm the level while the side stayed stale. The next poke up into a CORE above price was then scored as a LONG support fill. The side is no longer carried over from an earlier touch.
+- `gapped` now means the fill bar opened through the CORE. Flat 5-minute bars that cross are unchanged; on 1-minute bars it only applies on a gap.
+- Labels say it plainly. IN tags read `IN n LONG ▲` or `IN n SHORT ▼`, and the tooltip says "CORE above price, touched from below". The Approach toggle is now Both / ▲ CORE below / ▼ CORE above. The table and the By-approach breakdown say "long · from above" and "short · from below". The method note states the rule.
+- Files: `cbedge-v3/src/pages/levelLog/bounceEngine.ts`, `cbedge-v3/src/pages/levelLog/CoreBacktest.tsx`. tsc is clean. New unit cases: CORE above → SHORT at 7618, CORE below → LONG at 7622, and the straddle re-arm case now scores the second touch as SHORT. Earlier unit outputs are unchanged.
+
+## 2026-10-01 — v3 Level Log → Core backtest: Forward test card (SPX → MES)
+
+- New card under the backtest. **🔒 Lock these rules** captures the backtest's current settings and its result at that moment, which becomes the baseline to beat. From that minute on, every SPX fill the same engine finds is logged under exactly those rules. Nothing from before the lock counts, and the rules can't be changed mid-test; Reset (two clicks) ends it. SPX only.
+- **MES view**: contracts, fees ($/contract round trip, default $2, set it to your broker's) and slippage ticks on market exits (break or hold-expiry). Each trade shows MES entry, target and stop, computed as SPX + that session's ES−SPX basis from `/proxy/es-spx-basis` (the ES 16:00 close − ^GSPC basis) and rounded to the 0.25 tick. Today's basis is the last close before today. Each trade also shows points, net $, and a "Took it" toggle.
+- Stats: trades, bounce of resolved, points per fill, net $, $ per trade, max drawdown, and taken count with its $. The first four are shown against the backtest baseline. A $ equity curve and the trade log (newest first, LIVE while running) sit below them.
+- **Order ticket** during the session, under the locked rules. It shows BUY LIMIT or SELL LIMIT (a CORE above price is a SELL, since it can only be touched from below) with the MES price, TP (named wall), SL, and $ reward/risk. Otherwise it shows why there is no order: IN LONG/SHORT with open $, AT CORE, RE-ARMING, NO TRADE (side or 1st-only filter, or no wall), SKIP, or CLOSED.
+- **Record**: completed sessions are frozen into the record, because the 1m bars expire after about 30 days. Today is re-scored every minute in RTH. The record is stored in localStorage plus a per-account copy at the new `/api/level-log-forward` (GET/POST, one JSONB row per user in `level_log_forward`, table created lazily like `level_log_ticker_prefs`, 900KB cap). For the same lock, the two copies merge by union of frozen sessions, and the newer copy wins everything else.
+- Engine: `targetWall()` and `levelsAt()` are now exported, so the ticket names the same wall the scan would. `fetchMinuteBars()` takes a `days` argument.
+- Files: `cbedge-v3/src/pages/levelLog/ForwardTest.tsx` (new, its own lazy chunk), `cbedge-v3/src/pages/levelLog/forwardStore.ts` (new), `CoreBacktest.tsx`, `bounceEngine.ts`, `server-v2/api-router.js` (new route only).
+- Checks: tsc clean and the theme check is clean for these files. Store unit tests (MES $, tick rounding, normalize, merge, basis) pass, and the route handler was tested in isolation (stored/unstored, 400, 413, 401). A harness render with synthetic data showed sessions freezing, the account copy syncing, and the ticket states across the day, with 0 page errors.
+- **Deploy needs the server restart** (`push.ps1` → VPS rebuild) for the account copy. Until then the record stays in the browser, and the card says "Saved in this browser".
+- `generated/2026-10-01-forward-test-card.png`: harness render (synthetic data).
+
+## 2026-10-01 — v3 alerts pill: a new signal now "blooms" out of the pill, plus an unread badge
+
+- `cbedge-v3/src/shell/AlertsBloom.tsx` + `alertsBloom.css` (new, lazy chunk). When a new signal lands, the toolbar pill grows in place into a 26rem two-line chip for 6 seconds, then shrinks back into the pill.
+  - Line one is the tag, the ticker and the headline. Line two is the detector's sentence and its meta.
+  - The chip is tinted and glowing in the alert type's colour, and a light sweep runs across it twice.
+  - Whale prints keep the ▲/▼ side colour.
+  - Hovering or focusing holds it open; leaving gives it 2 more seconds. Clicking it opens the alert list.
+  - A newer alert restarts it. It never takes layout space: it sits absolutely over the pill and hangs about 40px over the board.
+- `cbedge-v3/src/shell/AlertsFeed.tsx`:
+  - The 1px three-beat ring (`.alert-flash`) is replaced by the bloom.
+  - New unread badge: a solid count in the type's colour. It shows how many alerts are newer than the last time you opened the list (`localStorage` `alerts:seen`, synced across tabs). It takes the `+N` slot until the list is opened.
+  - The first visit in a browser seeds the seen mark silently, the same rule as the Bzila logo.
+  - The first load never blooms, and only a higher id blooms. An alert that lands while the list is open doesn't bloom.
+  - The bloom chunk is preloaded after the feed's first load.
+- `cbedge-v3/src/design/tokens.css`: removed the now-unused `alert-flash` keyframes and left a pointer to the bloom files.
+- Size (brotli): entry +0.2kb, entry CSS −0.03kb. The bloom chunk is 0.9kb JS + 0.4kb CSS, lazy.
+- Checks: `tsc` adds no new errors (the 5 errors already in `chart.ts`, `EconomicCalendar.tsx`, `WallMigrationChart-1.tsx` and `AlertsPanel.tsx` are unchanged), `check:theme` is clean, and `vite build` passes.
+- Driven in a browser against the mock server with a pushed feed. Behaviour checked:
+  - it blooms, then closes on its own, and hover holds it open
+  - the badge counts 1 → 2 and survives a reload, with no bloom on reload
+  - clicking the bloom opens the list, and that clears the badge
+  - nothing blooms after an alert that landed while the list was open
+- Screenshots: `generated/2026-10-01-alert-bloom-*.png`.

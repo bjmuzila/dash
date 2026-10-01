@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { alpha } from '@/design/theme'
 import type { AlertItem } from '@/shell/alertTypes'
@@ -37,6 +36,8 @@ import { ALERT_TYPES, TYPE_BY_ID } from '@/shell/alertTypes'
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AlertsPanel = lazy(() => import('@/shell/AlertsPanel'))
+const loadBloom = () => import('@/shell/AlertsBloom')
+const AlertsBloom = lazy(loadBloom)
 
 // ── Mapping a trade_signals row onto a feed item ────────────────────────────
 
@@ -245,12 +246,31 @@ function toItem(row: SignalRow): AlertItem | null {
 const FEED_POLL_MS = 20_000
 const FEED_LIMIT = 50
 
-// ── The arrival flash ───────────────────────────────────────────────────────
-// Three beats of 800ms (see `.alert-flash`, design/tokens.css) and then the
-// pill is quiet again. Bounded on purpose: the dot already marks "recent" for
-// the next hour, so the flash only has to answer "did one just land while I was
-// looking at the chart", and a ring that keeps going stops being read.
-const FLASH_MS = 2400
+// ── Seen / unread ───────────────────────────────────────────────────────────
+// The id of the newest signal this browser has looked at, i.e. had the list
+// open for. Everything newer is UNREAD and counted on the pill's badge, so an
+// alert that bloomed while you were away from the screen is still waiting when
+// you come back — across reloads, and across tabs (the storage listener below).
+// Same shape as BzilaAlerts' `bzila:alerts:seen`; `alerts:` is the prefix the
+// list's own filter (`alerts:shown`, alertTypes.ts) already uses.
+const SEEN_KEY = 'alerts:seen'
+
+function readSeen(): number {
+  try {
+    const v = Number(window.localStorage.getItem(SEEN_KEY))
+    return Number.isFinite(v) ? v : 0
+  } catch {
+    return 0
+  }
+}
+
+function writeSeen(id: number) {
+  try {
+    window.localStorage.setItem(SEEN_KEY, String(id))
+  } catch {
+    /* private mode — the badge just resets with the session */
+  }
+}
 
 export function useAlertsFeed(): AlertItem[] {
   const [items, setItems] = useState<AlertItem[]>([])
@@ -348,36 +368,76 @@ export function AlertsPill() {
   // anything, which is the failure mode of every notification badge.
   const fresh = useMemo(() => !!latest && !age(latest.at).endsWith('h'), [latest])
 
-  // FLASH ON ARRIVAL. `latest.id` is the row's primary key, so a poll that
-  // changed nothing cannot fire this — that was the old flashing bug, and the
-  // signature check in `useAlertsFeed` plus this id compare are the two halves
-  // of not repeating it.
-  //
-  // The first load never flashes: opening the dashboard at 2pm should not
-  // announce a signal from 9:40 as if it just happened. `seenRef` starting at
-  // null is what distinguishes "first list I have seen" from "a new top row".
-  const [flash, setFlash] = useState(false)
-  const seenRef = useRef<number | null>(null)
+  // ── UNREAD ───────────────────────────────────────────────────────────────
+  // 0 = this browser has never seen the feed. The first list it loads is then
+  // acknowledged silently, so a first visit shows a clean pill rather than the
+  // whole day's history as "new" — the rule BzilaAlerts uses for its logo.
   const latestId = latest?.id ?? null
+  const [bloomId, setBloomId] = useState<number | null>(null)
+  const [seen, setSeen] = useState<number>(() => readSeen())
+  const markSeen = (id: number | null) => {
+    if (id == null) return
+    writeSeen(id)
+    setSeen(id)
+  }
+
+  useEffect(() => {
+    if (latestId != null && seen === 0) markSeen(latestId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestId, seen])
+
+  // The list open = the user is looking at it, including at anything that
+  // lands while it is open — and a bloom in progress has done its job.
+  const openRef = useRef(open)
+  openRef.current = open
+  useEffect(() => {
+    if (!open) return
+    markSeen(latestId)
+    setBloomId(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, latestId])
+
+  // Another tab opened the list → this tab's badge clears too.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === SEEN_KEY) setSeen(readSeen())
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  const unread = seen > 0 ? items.filter((a) => a.id > seen).length : 0
+
+  // ── THE BLOOM ON ARRIVAL ─────────────────────────────────────────────────
+  // A NEW top row grows the pill into a two-line chip for a few seconds (see
+  // AlertsBloom.tsx). It replaced a 1px ring that flashed three times in 2.4s
+  // and was easy to miss while watching a chart.
+  //
+  // `latest.id` is the row's primary key, so a poll that changed nothing cannot
+  // fire this — the old flashing bug — and only a HIGHER id blooms, so a row
+  // that drops out of the window can never resurface an older alert as news.
+  //
+  // The first load never blooms: opening the dashboard at 2pm should not
+  // announce a signal from 9:40 as if it just happened. `arrivedRef` starting
+  // at null is what tells "first list I have seen" from "a new top row". That
+  // first load is also when the bloom's chunk is fetched, so the first real
+  // alert of the day does not wait on the network.
+  const arrivedRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (latestId == null) return
-    if (seenRef.current === null) {
-      seenRef.current = latestId
+    if (arrivedRef.current === null) {
+      arrivedRef.current = latestId
+      void loadBloom().catch(() => {})
       return
     }
-    if (latestId === seenRef.current) return
-    seenRef.current = latestId
-    // Off for one frame first: re-applying a class that is already on does not
-    // restart a CSS animation, so back-to-back alerts would flash once.
-    setFlash(false)
-    const raf = requestAnimationFrame(() => setFlash(true))
-    const t = window.setTimeout(() => setFlash(false), FLASH_MS)
-    return () => {
-      cancelAnimationFrame(raf)
-      window.clearTimeout(t)
-    }
+    if (latestId <= arrivedRef.current) return
+    arrivedRef.current = latestId
+    // Landed while the list is open: it is already on screen, in the list.
+    if (!openRef.current) setBloomId(latestId)
   }, [latestId])
+
+  const bloomItem = bloomId != null && !open && latest?.id === bloomId ? latest : null
 
   return (
     /* `min-w-0` + `shrink` is what lets this yield: without min-w-0 a flex item
@@ -392,7 +452,6 @@ export function AlertsPill() {
         aria-haspopup="menu"
         aria-expanded={open}
         title={latest ? `${TYPE_BY_ID[latest.kind].name} — ${latest.text}` : 'Signal alerts'}
-        style={{ '--alert-flash': type?.color ?? 'var(--color-warn)' } as CSSProperties}
         className={[
           // NO BOX. The coloured tag is the only edge in here: a bordered pill
           // beside the wordmark read as a second button competing with the
@@ -408,8 +467,6 @@ export function AlertsPill() {
           'flex h-6 max-w-[7rem] items-center gap-1.5 overflow-hidden rounded-sm px-1.5 transition-colors lg:max-w-[13rem] xl:max-w-[16rem]',
           open ? 'bg-raised' : 'hover:bg-raised',
           fresh ? '' : 'opacity-90',
-          // The arrival flash — the type's colour, three beats, then gone.
-          flash ? 'alert-flash' : '',
         ].join(' ')}
       >
         {latest && type ? (
@@ -434,8 +491,20 @@ export function AlertsPill() {
                 `lg` even this goes, leaving dot + tag + age + count. */}
             <span className="hidden truncate text-2xs text-fg lg:inline">{latest.short}</span>
             <span className="shrink-0 text-3xs tabular-nums text-fg">{age(latest.at)}</span>
-            {rest > 0 && (
-              <span className="ml-0.5 shrink-0 pl-1 text-3xs font-bold text-warn">+{rest}</span>
+            {/* UNREAD wins the slot: "+11" is how long the list is, the badge is
+                how much of it you have not looked at, and two bare numbers side
+                by side read as one. The badge is solid, in the type's colour,
+                until the list is opened. */}
+            {unread > 0 ? (
+              <span
+                className="ml-0.5 shrink-0 rounded-full px-1 text-3xs font-bold leading-[13px] text-bg"
+                style={{ background: type.color }}
+                title={`${unread} new since you last opened the list`}
+              >
+                {unread}
+              </span>
+            ) : (
+              rest > 0 && <span className="ml-0.5 shrink-0 pl-1 text-3xs font-bold text-warn">+{rest}</span>
             )}
           </>
         ) : (
@@ -450,6 +519,20 @@ export function AlertsPill() {
           {open ? '▲' : '▾'}
         </span>
       </button>
+
+      {bloomItem && (
+        <Suspense fallback={null}>
+          <AlertsBloom
+            key={bloomItem.id}
+            item={bloomItem}
+            onOpen={() => {
+              setBloomId(null)
+              setOpen(true)
+            }}
+            onDone={() => setBloomId(null)}
+          />
+        </Suspense>
+      )}
 
       {open && (
         <Suspense fallback={null}>

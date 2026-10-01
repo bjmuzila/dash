@@ -32,10 +32,17 @@
 // The target sweep and the hit table are folded by default — the page leads
 // with the numbers and the picture.
 //
+// THE FORWARD TEST (2026-10-01): the card under the backtest locks the rules
+// set here and logs every SPX fill from that minute on, in MES and dollars,
+// against what this backtest said at the lock — plus the MES order to have
+// resting right now. Its own chunk (levelLog/ForwardTest.tsx), its own record
+// (levelLog/forwardStore.ts); this page only hands it the current settings
+// and result, and takes the locked rules back when asked.
+//
 // Its own chunk, loaded only when the tab is opened.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardToolbar } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
@@ -56,6 +63,8 @@ import {
   byTouchNo,
   byWallDistance,
   fetchBacktestDays,
+  fetchMinuteBars,
+  type BtDay,
   filterEvents,
   fracLabel,
   hhmm,
@@ -65,11 +74,29 @@ import {
   sweepFractions,
 } from '@/pages/levelLog/bounceEngine'
 import { type MigBox, type MigMark, type MigSpan, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
-import { type DaySlice, type ExpScope, type GexBasis, VOLTICK_UI, todayETStr, variantTag, wallNum, wallStrike } from '@/pages/levelLog/wallData'
+import type { FwdBaseline, FwdRules } from '@/pages/levelLog/forwardStore'
+import { type ExpScope, type GexBasis, VOLTICK_UI, todayETStr, variantTag, wallNum, wallStrike } from '@/pages/levelLog/wallData'
+
+/** The forward-test card — its own chunk, so the backtest paints without it. */
+const ForwardTest = lazy(() => import('@/pages/levelLog/ForwardTest'))
 
 // ── controls ────────────────────────────────────────────────────────────────
 
 type SessionsKey = '21' | '63' | '126' | '260'
+type BarsKey = '1m' | '5m'
+
+const BARS_OPTIONS: Array<{ label: string; value: BarsKey; title: string }> = [
+  {
+    label: '1m bars',
+    value: '1m',
+    title: '1-minute highs and lows — a fill, a target or a break on any tick counts. The recorder keeps about 30 days, so only those sessions are tested',
+  },
+  {
+    label: '5m samples',
+    value: '5m',
+    title: 'Every recorded session, but only one price every 5 minutes — misses quick tags of the entry, which tilts the result toward losers',
+  },
+]
 type HoldKey = '30' | '60' | '120' | 'close'
 type EntryKey = '0' | '1' | '2' | '3' | '4' | '5'
 type FracKey = '0.333' | '0.5' | '0.75' | '1'
@@ -104,8 +131,8 @@ const HOLD_OPTIONS: Array<{ label: string; value: HoldKey; title: string }> = [
 
 const APPROACH_OPTIONS: Array<{ label: string; value: Approach; title: string }> = [
   { label: 'Both', value: 'both', title: 'Every touch, from either side' },
-  { label: '▲ Support', value: 'support', title: 'Price came DOWN to the CORE — does it bounce back up toward the wall above?' },
-  { label: '▼ Resistance', value: 'resistance', title: 'Price came UP to the CORE — does it turn back down toward the wall below?' },
+  { label: '▲ CORE below', value: 'support', title: 'CORE below price — touched from ABOVE (support, long): does it bounce back up toward the call wall?' },
+  { label: '▼ CORE above', value: 'resistance', title: 'CORE above price — touched from BELOW (resistance, short): does it turn back down toward the put wall?' },
 ]
 
 const TOUCH_OPTIONS: Array<{ label: string; value: TouchMode; title: string }> = [
@@ -131,6 +158,7 @@ const QUICK = ['SPX', 'SPY', 'QQQ'] as const
 const SETTINGS_KEY = 'cb-v3-level-log:backtest:v2'
 
 interface Saved {
+  bars: BarsKey
   sessions: SessionsKey
   scope: ExpScope
   basis: GexBasis
@@ -143,6 +171,7 @@ interface Saved {
 }
 
 const DEFAULTS: Saved = {
+  bars: '1m',
   sessions: '63',
   scope: '0dte',
   basis: 'oivol',
@@ -162,6 +191,7 @@ function loadSaved(): Saved {
     const j = JSON.parse(raw) as Partial<Saved>
     const pick = <V extends string>(v: unknown, ok: readonly V[], d: V): V => (ok.includes(v as V) ? (v as V) : d)
     return {
+      bars: pick(j.bars, ['1m', '5m'], DEFAULTS.bars),
       sessions: pick(j.sessions, ['21', '63', '126', '260'], DEFAULTS.sessions),
       scope: pick(j.scope, ['0dte', 'agg'], DEFAULTS.scope),
       basis: pick(j.basis, ['oivol', 'vol'], DEFAULTS.basis),
@@ -202,6 +232,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
   const [sessions, setSessions] = useState(saved.sessions)
   const [scope, setScope] = useState(saved.scope)
   const [basis, setBasis] = useState(saved.basis)
+  const [bars, setBars] = useState(saved.bars)
   const [entry, setEntry] = useState(saved.entry)
   const [frac, setFrac] = useState(saved.frac)
   const [stop, setStop] = useState(saved.stop)
@@ -215,30 +246,46 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
     try {
       localStorage.setItem(
         SETTINGS_KEY,
-        JSON.stringify({ sessions, scope, basis, entry, frac, stop, hold, approach, touches } satisfies Saved),
+        JSON.stringify({ bars, sessions, scope, basis, entry, frac, stop, hold, approach, touches } satisfies Saved),
       )
     } catch {
       /* best-effort */
     }
-  }, [sessions, scope, basis, entry, frac, stop, hold, approach, touches])
+  }, [bars, sessions, scope, basis, entry, frac, stop, hold, approach, touches])
 
   // ── the one read ────────────────────────────────────────────────────────
-  const [data, setData] = useState<{ days: DaySlice[]; loading: boolean; error: string | null }>({
+  // Levels + 5-minute spot, and the 1-minute bars beside them — fired
+  // together (non-negotiable 3). On 1m, only sessions that HAVE bars are
+  // tested, and their price line becomes the 1-minute closes, so the session
+  // chart draws the same series that was scored.
+  const [data, setData] = useState<{ days: BtDay[]; loaded: number; loading: boolean; error: string | null }>({
     days: [],
+    loaded: 0,
     loading: true,
     error: null,
   })
   useEffect(() => {
     const ctl = new AbortController()
     setData((d) => ({ ...d, loading: true, error: null }))
-    fetchBacktestDays(symbol, end, Number(sessions), scope, basis, ctl.signal)
-      .then((days) => setData({ days, loading: false, error: null }))
+    Promise.all([
+      fetchBacktestDays(symbol, end, Number(sessions), scope, basis, ctl.signal),
+      bars === '1m' ? fetchMinuteBars(symbol, ctl.signal) : Promise.resolve(null),
+    ])
+      .then(([raw, minute]) => {
+        const days: BtDay[] = minute
+          ? raw.flatMap((d) => {
+              const b = minute.get(d.date)
+              return b && b.length >= 30 ? [{ ...d, bars: b, price: b.map((x) => ({ mins: x.mins, px: x.c })) }] : []
+            })
+          : raw
+        setData({ days, loaded: raw.length, loading: false, error: null })
+      })
       .catch((e: unknown) => {
         if (ctl.signal.aborted) return
-        setData({ days: [], loading: false, error: e instanceof Error ? e.message : String(e) })
+        setData({ days: [], loaded: 0, loading: false, error: e instanceof Error ? e.message : String(e) })
       })
     return () => ctl.abort()
-  }, [symbol, end, sessions, scope, basis, nonce])
+  }, [symbol, end, sessions, scope, basis, bars, nonce])
 
   // ── the backtest ────────────────────────────────────────────────────────
   const days = data.days
@@ -266,6 +313,47 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
       { title: 'By CORE age', rows: byAge(events) },
     ],
     [events, strike],
+  )
+
+  // ── what the forward test would lock ────────────────────────────────────
+  const fwdCurrent = useMemo<FwdRules>(
+    () => ({ symbol, scope, basis, entry, frac, stop, hold, approach, touches, params }),
+    [symbol, scope, basis, entry, frac, stop, hold, approach, touches, params],
+  )
+  const fwdBaseline = useMemo<FwdBaseline | null>(
+    () =>
+      data.loading || data.error || !days.length
+        ? null
+        : {
+            sessions: days.length,
+            from: days[0]!.date,
+            to: days[days.length - 1]!.date,
+            bars,
+            n: sum.n,
+            ptsPerFill: sum.ptsPerTouch,
+            winOfResolved: sum.winOfResolved,
+            bouncePct: sum.bouncePct,
+            avgReward: sum.avgReward,
+            avgRisk: sum.avgRisk,
+          },
+    [data.loading, data.error, days, bars, sum],
+  )
+  const applyRules = useCallback(
+    (r: FwdRules) => {
+      const pick = <V extends string>(v: string, ok: readonly V[], set: (x: V) => void) => {
+        if (ok.includes(v as V)) set(v as V)
+      }
+      setSymbol(r.symbol)
+      setScope(r.scope)
+      setBasis(r.basis)
+      pick(r.entry, ENTRY_KEYS, setEntry)
+      pick(r.frac, FRAC_KEYS, setFrac)
+      pick(r.stop, STOP_KEYS, setStop)
+      pick(r.hold, ['30', '60', '120', 'close'] as const, setHold)
+      setApproach(r.approach)
+      setTouches(r.touches)
+    },
+    [setSymbol],
   )
 
   const entryPts = entryPtsOf(entry, strike)
@@ -327,6 +415,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
           <SegGroup options={SESSIONS_OPTIONS} value={sessions} onChange={setSessions} title="How many recorded sessions" />
           <SegGroup options={SCOPE_OPTIONS} value={scope} onChange={setScope} title="Which contracts the levels are from" />
           <SegGroup options={BASIS_OPTIONS} value={basis} onChange={setBasis} title="Which GEX the levels are from" />
+          <SegGroup options={BARS_OPTIONS} value={bars} onChange={setBars} title="Which price series the trades are scored on" />
         </CardToolbar>
 
         <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
@@ -368,7 +457,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
             <SegGroup options={HOLD_OPTIONS} value={hold} onChange={setHold} title="How long a hit has to resolve" />
           </Labeled>
           <Labeled label="Approach">
-            <SegGroup options={APPROACH_OPTIONS} value={approach} onChange={setApproach} title="Which side price came from" />
+            <SegGroup options={APPROACH_OPTIONS} value={approach} onChange={setApproach} title="Where the CORE sat against price at the touch" />
           </Labeled>
           <Labeled label="Hits">
             <SegGroup options={TOUCH_OPTIONS} value={touches} onChange={setTouches} title="Every hit, or the first per CORE strike" />
@@ -376,15 +465,27 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
         </div>
 
         <p className="mb-3 text-2xs leading-relaxed text-muted">
-          <b className="text-fg">Entry</b> = a limit {entryPts === 0 ? 'on the CORE' : `${ptLabel(entryPts)} before the CORE`} on the side
-          price comes from, filled when a 5-minute sample reaches it — price that turns first is no trade.{' '}
+          <b className="text-fg">Entry</b> = a limit {entryPts === 0 ? 'on the CORE' : `${ptLabel(entryPts)} before the CORE`} on price's
+          side of it (a CORE above price is touched from below, short; a CORE below price from above, long), filled when {bars === '1m' ? 'a 1-minute bar' : 'a 5-minute sample'} reaches it — price that turns first is no trade.{' '}
           <b className="text-up">Bounce</b> = price gets {fracText === 'All the way' ? 'all the way' : `${fracText} of the way`} from the CORE to
           the next wall on that side (the call wall above on a support fill, the put wall below on a resistance fill), as
           the walls stood at the fill. <b className="text-down">Break</b> = {strikesLabel(stop)} through the CORE ({pts(stopPts)} pts), so the
           risk is {pts(entryPts + stopPts)} pts from the entry. Neither within{' '}
           {hold === 'close' ? 'the session' : HOLD_OPTIONS.find((h) => h.value === hold)?.label} = open. Every point is counted
-          from the entry. Levels are the {variantTag(scope, basis)} recorder as of the fill — no look-ahead. 5-minute samples,
-          not highs and lows: a wick to the entry, the target or the break between samples is not seen.
+          from the entry. Levels are the {variantTag(scope, basis)} recorder as of the fill — no look-ahead.{' '}
+          {bars === '1m' ? (
+            <>
+              <b className="text-fg">1-minute highs and lows</b>, scored conservatively: on the fill bar a target only counts if
+              the bar closed past it, and a bar that holds both the target and the break is a break. The recorder keeps about
+              30 days of bars, so {data.days.length} of the {data.loaded} sessions read are tested.
+            </>
+          ) : (
+            <>
+              <b className="text-warn">5-minute samples</b>, not highs and lows: a quick tag of the entry between samples is not
+              seen, which drops the cleanest bounces and keeps the trades that sat on or through the level — expect this mode to
+              read worse than the market did.
+            </>
+          )}
         </p>
 
         {data.error ? (
@@ -395,7 +496,9 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
           <div className="py-8 text-center text-sm text-muted">Reading {sessions} sessions of {symbol}…</div>
         ) : !days.length ? (
           <div className="py-8 text-center text-sm text-muted">
-            No recorded sessions for {symbol} on {variantTag(scope, basis)} up to {end}.
+            {bars === '1m' && data.loaded > 0
+              ? `No 1-minute bars recorded for ${symbol} in these sessions (the recorder keeps about 30 days). Switch to 5m samples to test the older ones.`
+              : `No recorded sessions for ${symbol} on ${variantTag(scope, basis)} up to ${end}.`}
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9">
@@ -424,6 +527,10 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
           </div>
         )}
       </Card>
+
+      <Suspense fallback={null}>
+        <ForwardTest current={fwdCurrent} baseline={fwdBaseline} onApplyRules={applyRules} onOpenSession={onOpenSession} />
+      </Suspense>
 
       {days.length && !data.error ? (
         <>
@@ -469,7 +576,8 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
               </CardToolbar>
               <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-2xs text-muted">
                 <span className="inline-flex items-center gap-1.5">
-                  <Pill bg={T.cyan}>IN 1 ▲</Pill> the fill, at the entry (▲ support · ▼ resistance)
+                  <Pill bg={T.cyan}>IN 1 LONG ▲</Pill>
+                  <Pill bg={T.cyan}>IN 1 SHORT ▼</Pill> the fill, at the entry (LONG = CORE below price, touched from above · SHORT = CORE above price, touched from below)
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <Pill bg={T.green}>OUT 1 BOUNCE</Pill>
@@ -667,11 +775,11 @@ function annotate(evs: BtEvent[]): { marks: MigMark[]; spans: MigSpan[]; boxes: 
       price: e.entryPx,
       color: T.cyan,
       dot: 9,
-      label: `IN ${n} ${up ? '▲' : '▼'}`,
+      label: `IN ${n} ${up ? 'LONG ▲' : 'SHORT ▼'}`,
       place: 'left',
       bg: T.cyan,
       title:
-        `IN ${n} · ${hhmm(e.mins)} · ${up ? 'support' : 'resistance'} fill at ${wallNum(e.entryPx)}` +
+        `IN ${n} · ${hhmm(e.mins)} · ${up ? 'LONG — CORE below price, touched from above' : 'SHORT — CORE above price, touched from below'} · fill at ${wallNum(e.entryPx)}` +
         `${e.entryPts > 0 ? ` (${ptLabel(e.entryPts)} before CORE ${wallStrike(e.core)})` : ` (on CORE ${wallStrike(e.core)})`}\n` +
         `Target ${wallNum(e.target)} — ${frac} of the way to the ${e.wallKind === 'call' ? 'call' : 'put'} wall ${wallStrike(e.wall)} · reward ${wallNum(e.rewardPts)}\n` +
         `Break ${wallNum(e.stopPx)} · risk ${wallNum(e.riskPts)}`,
@@ -773,7 +881,7 @@ function eventColumns(onPick: (date: string) => void, onOpenSession: (date: stri
     {
       key: 'side',
       header: 'Approach',
-      cell: (e) => (e.side === 'support' ? '▲ support' : '▼ resistance'),
+      cell: (e) => (e.side === 'support' ? '▲ long · from above' : '▼ short · from below'),
     },
     { key: 'spot', header: 'Spot', numeric: true, cell: (e) => wallNum(e.spot) },
     {
@@ -794,7 +902,7 @@ function eventColumns(onPick: (date: string) => void, onOpenSession: (date: stri
       cell: (e) => (
         <span className={`text-xs font-extrabold tracking-wide ${RESULT_CLASS[e.result]}`}>
           {RESULT_LABEL[e.result]}
-          {e.gapped ? <span className="font-normal text-muted" title="Price stepped over the level between two 5-minute samples"> · gap</span> : null}
+          {e.gapped ? <span className="font-normal text-muted" title="Price stepped over the CORE between two 5-minute samples"> · gap</span> : null}
         </span>
       ),
     },

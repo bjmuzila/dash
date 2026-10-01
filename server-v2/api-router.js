@@ -5029,6 +5029,77 @@ if (libDb) {
     },
   });
 
+  // /api/level-log-forward — the /v3/level-log Backtest tab's FORWARD TEST, per user.
+  //
+  // One JSON document per login: the locked rules, the MES settings, every
+  // completed session's trades frozen as they were scored (the 1-minute bars
+  // they are scored on only live ~30 days, so a forward record has to be KEPT,
+  // not recomputed), and the trades marked as taken. The client keeps the same
+  // document in localStorage and merges the two on load — see
+  // cbedge-v3/src/pages/levelLog/forwardStore.ts. The server stores it opaque;
+  // the client normalizes whatever comes back.
+  //
+  //   GET          → { stored: false } | { stored: true, doc }
+  //   POST {doc}   → { ok: true, stored: true }    (≤ LEVEL_LOG_FWD_MAX bytes)
+  //
+  // Same lazy-CREATE pattern as level_log_ticker_prefs above, for the same
+  // reason: no _lib-db.cjs rebuild.
+  const LEVEL_LOG_FWD_MAX = 900_000;
+  let levelLogFwdSchema = null;
+  function ensureLevelLogFwdSchema() {
+    if (!levelLogFwdSchema) {
+      levelLogFwdSchema = libDb.queryAll(
+        `CREATE TABLE IF NOT EXISTS level_log_forward (
+           clerk_user_id TEXT PRIMARY KEY,
+           doc           JSONB NOT NULL,
+           updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+         )`,
+        [],
+      ).catch((e) => { levelLogFwdSchema = null; throw e; });
+    }
+    return levelLogFwdSchema;
+  }
+
+  register('/api/level-log-forward', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+      try {
+        await ensureLevelLogFwdSchema();
+        if (req.method === 'POST') {
+          let body;
+          try { body = await readJson(req, LEVEL_LOG_FWD_MAX + 64); } catch (e) {
+            const big = /too large/.test(String(e?.message || ''));
+            return send(res, big ? 413 : 400, { error: big ? 'forward-test record too large' : 'invalid JSON' });
+          }
+          const doc = body && typeof body.doc === 'object' && body.doc && !Array.isArray(body.doc) ? body.doc : null;
+          if (!doc) return send(res, 400, { error: 'doc (object) required' });
+          const json = JSON.stringify(doc);
+          if (json.length > LEVEL_LOG_FWD_MAX) return send(res, 413, { error: 'forward-test record too large' });
+          await libDb.queryAll(
+            `INSERT INTO level_log_forward (clerk_user_id, doc, updated_at)
+             VALUES (?, ?::jsonb, CURRENT_TIMESTAMP)
+             ON CONFLICT (clerk_user_id) DO UPDATE SET
+               doc = EXCLUDED.doc, updated_at = CURRENT_TIMESTAMP`,
+            [userId, json],
+          );
+          return send(res, 200, { ok: true, stored: true });
+        }
+        const rows = await libDb.queryAll(
+          'SELECT doc FROM level_log_forward WHERE clerk_user_id = ?',
+          [userId],
+        );
+        const raw = rows?.[0]?.doc;
+        if (raw == null) return send(res, 200, { stored: false });
+        const doc = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return send(res, 200, { stored: true, doc }, { 'Cache-Control': 'private, no-store' });
+      } catch (err) {
+        return send(res, 500, { error: 'Level-log forward test failed', detail: String(err) });
+      }
+    },
+  });
+
   // ───────────────────────────────────────────────────────────────────────────
   // /api/whale-alerts — TRACKED CONTRACTS, per login.
   //

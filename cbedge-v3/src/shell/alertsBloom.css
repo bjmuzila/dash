@@ -1,0 +1,85 @@
+/* THE ALERTS BLOOM (shell/AlertsBloom.tsx) — the newest signal, grown out of
+   the toolbar pill for a few seconds when it lands.
+
+   It starts the exact size of the pill (`width: 100%` of the pill's wrapper)
+   and grows to a two-line chip, tinted and glowing in the alert type's own
+   colour, then shrinks back into the pill. The colour arrives as
+   `--alert-bloom`, set inline from ALERT_TYPES, because the tint has to be the
+   kind's colour and a stylesheet cannot take an argument.
+
+   Width and height transition rather than a transform: a scaled chip would
+   squash its text on the way in. The text itself fades in only once the chip
+   is most of the way open (`transition-delay`), so nothing reflows on screen.
+
+   This file is imported by AlertsBloom.tsx, which is a lazy chunk — so these
+   rules ride in that chunk's CSS rather than in tokens.css, keeping the entry
+   stylesheet out of the budget. No colour literals: everything is a token.
+
+   The global reduced-motion rule in tokens.css collapses every transition and
+   the sweep to nothing. The chip then simply appears and disappears, and the
+   unread badge on the pill still says what landed. */
+
+.alert-bloom {
+  width: 100%;
+  height: 1.75rem;
+  opacity: 0;
+  border: 1px solid var(--alert-bloom);
+  background: color-mix(in srgb, var(--alert-bloom) 14%, var(--color-surface));
+  /* CLOSING (this is the state being transitioned TO): text out first, then
+     the chip shrinks back to the pill, and only then does it fade — so the
+     shrink is seen going back INTO the pill rather than vanishing in place. */
+  transition:
+    width 400ms cubic-bezier(0.4, 0, 0.2, 1),
+    height 400ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 200ms ease 300ms,
+    box-shadow 400ms ease;
+}
+
+.alert-bloom[data-open='true'] {
+  width: 26rem;
+  height: 3.75rem;
+  opacity: 1;
+  box-shadow:
+    0 1rem 2.25rem -0.875rem var(--color-shadow),
+    0 0 1.75rem -0.125rem color-mix(in srgb, var(--alert-bloom) 55%, transparent);
+  /* OPENING: a little overshoot on the grow, the fade immediately. */
+  transition:
+    width 450ms cubic-bezier(0.2, 0.9, 0.25, 1.15),
+    height 450ms cubic-bezier(0.2, 0.9, 0.25, 1.15),
+    opacity 180ms ease,
+    box-shadow 600ms ease;
+}
+
+.alert-bloom-body {
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.alert-bloom[data-open='true'] .alert-bloom-body {
+  opacity: 1;
+  transition-delay: 200ms;
+}
+
+/* One light sweep across the chip, twice, as it opens. */
+.alert-bloom-sweep {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in srgb, var(--alert-bloom) 35%, transparent) 50%,
+    transparent 70%
+  );
+  transform: translateX(-100%);
+}
+
+.alert-bloom[data-open='true'] .alert-bloom-sweep {
+  animation: alert-bloom-sweep 1100ms 250ms ease-out 2;
+}
+
+@keyframes alert-bloom-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
