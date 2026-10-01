@@ -24708,3 +24708,10 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-10-01 — v3 Whales: removed the amber "asked for $500K, archive floor is $1M" note
 
 - `cbedge-v3/src/pages/Whales.tsx`: the FLOOR menu (desktop and the phone filter sheet) now only offers stops at or above the archive floor the server reports (`whaleFloor`, $1M today), so ≥$500K is gone until LSE_WHALE_FLOOR is lowered on the VPS. A saved pick under the floor is raised to the first stop at or above it and re-saved. Both copies of the amber header note (desktop subtitle and phone strip) are removed — it showed on every visit for anyone with ≥$500K saved and read as an error. The "unreadable hidden" note is unchanged. No server change.
+
+## 2026-10-01 — Voltick Path Lab (bubble tuning HTML, today's SPX)
+
+- `generated/2026-10-01-voltick-path-lab.html` (new, git-ignored): a standalone lab that redraws Voltick's chart **Path** style (HeatChart.jsx NodeTrails path branch + trailruns.js pathFill / holdSizes / pathSizes / pathRadius, v6 + sizes as of 2026-09-30) on SPX 1m and 5m candles. Levels are recomputed per snapshot with Voltick's own rules (Volt = king, shelf-weighted Reversal, Coils ≥ half the king, Surge = biggest |vol GEX| on 0DTE).
+- Data: today's `option_strike_gex_history` 0DTE rows ($SPX, 09:20–14:00 ET) and dxLink `SPX{=1m}` candles from `/proxy/candles-intraday`, pulled to `generated/vpath-2026-10-01/`. "Load day…" takes any other osgh CSV(.gz) dump + candles JSON.
+- Sliders for every Path constant (boldness, peer/Volt radius, spread, curve, smoothing, flat span, rim, halo, coil size) with the live values marked, plus lab-only controls: same-row overlap (scale / clamp / stride), cross-level overlap on neighbouring strikes (fit / yield / hide), min stint (v5 dwell floor), carry, book (OI vs OI+vol), reading cadence. Separate 1m / 5m settings (linkable); "Copy settings" exports only the changes from live.
+- Lab only: no Voltick or CB Edge code changed.

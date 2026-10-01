@@ -230,7 +230,8 @@ const RANGE_OPTIONS: Array<{ label: string; value: RangeKey; title: string }> = 
   },
 ]
 
-export default function LevelLog() {
+/** THE LOG TAB — the rail and the Level Log card, exactly as the page was before tabs. */
+function LogTab() {
   // The ticker follows the app toolbar; only the date is this page's own, and
   // it lives in the query string so /v3/level-log?date=2026-09-02 is a
   // shareable link — which is also why app/v3/level-log/route.ts has to answer
@@ -331,16 +332,9 @@ export default function LevelLog() {
   }
 
   return (
-    /**
-     * `fill` — the page owns the viewport and the log card takes what the rail
-     * leaves, rather than both sitting at the top of a mostly empty scroll
-     * page. The column supplies its own gutter, which is what Page's fill
-     * variant expects of a route (see Replay.tsx, same shape), and it keeps
-     * `overflow-y-auto` so a short window scrolls instead of crushing the plot
-     * below CARD_MIN_H.
-     */
-    <Page fill>
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+    // The page frame and its scrolling column are LevelLog's (below), shared
+    // with the Backtest tab; this returns the two things that sit in it.
+    <>
         {/* Above the log, and driving it: the card whose symbol is lit is the
             session drawn underneath. Same date and same variant switches, so the
             rail's numbers and the chart's are one reading of one recorder. */}
@@ -477,6 +471,94 @@ export default function LevelLog() {
             </div>
           )}
         </Card>
+    </>
+  )
+}
+
+// ── THE TABS ─────────────────────────────────────────────────────────────────
+//
+// ?tab=backtest opens the CORE bounce backtest; no `tab` is the Log. Same
+// pattern as /v3/scanner: the tab is in the query string so a link opens on it,
+// and each tab past the first is its own lazy chunk. The Log tab unmounts when
+// you leave it, which also stops its once-a-minute live tick.
+//
+// A touch's date in the backtest opens that session HERE, on the Log tab — the
+// one place the CORE and the price it was scored from are drawn.
+
+type LevelLogTab = 'log' | 'backtest'
+
+const LEVEL_TABS: Array<{ id: LevelLogTab; icon: string; label: string; title: string }> = [
+  { id: 'log', icon: '🧱', label: 'Log', title: 'The recorded levels, session by session' },
+  { id: 'backtest', icon: '🎯', label: 'Core backtest', title: 'How often price bounced off the CORE, and how often it went through' },
+]
+
+const CoreBacktest = lazy(() => import('@/pages/levelLog/CoreBacktest'))
+
+export default function LevelLog() {
+  const [params, setParams] = useSearchParams()
+  const tab: LevelLogTab = params.get('tab') === 'backtest' ? 'backtest' : 'log'
+
+  const selectTab = (id: LevelLogTab) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (id === 'log') next.delete('tab')
+        else next.set('tab', id)
+        return next
+      },
+      { replace: true },
+    )
+
+  /** From a backtest row: that session, on the Log tab. A real history entry, so Back returns to the backtest. */
+  const openSession = (date: string) =>
+    setParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.delete('tab')
+      next.set('date', date)
+      return next
+    })
+
+  return (
+    /**
+     * `fill` — the page owns the viewport and the log card takes what the rail
+     * leaves, rather than both sitting at the top of a mostly empty scroll
+     * page. The column supplies its own gutter, which is what Page's fill
+     * variant expects of a route (see Replay.tsx, same shape), and it keeps
+     * `overflow-y-auto` so a short window scrolls instead of crushing the plot
+     * below CARD_MIN_H.
+     */
+    <Page fill>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        <nav className="flex shrink-0 flex-wrap items-center gap-1 border-b border-line pb-2">
+          {LEVEL_TABS.map((t) => {
+            const on = t.id === tab
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => selectTab(t.id)}
+                aria-current={on ? 'page' : undefined}
+                title={t.title}
+                className={[
+                  'flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm',
+                  on ? 'border-line bg-surface2 text-fg' : 'border-transparent text-muted',
+                ].join(' ')}
+              >
+                <span aria-hidden>{t.icon}</span>
+                <span>{t.label}</span>
+              </button>
+            )
+          })}
+        </nav>
+        {tab === 'backtest' ? (
+          <Suspense
+            fallback={<div className="py-8 text-center text-sm text-muted">Loading the backtest…</div>}
+          >
+            <CoreBacktest onOpenSession={openSession} />
+          </Suspense>
+        ) : (
+          <LogTab />
+        )}
       </div>
     </Page>
   )
