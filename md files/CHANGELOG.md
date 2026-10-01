@@ -24739,3 +24739,88 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 ## 2026-10-01 — v3 Level Log › Index CORE: Lanes as three columns
 
 - `cbedge-v3/src/pages/levelLog/MergedCoreChart.tsx`: the **Lanes** view is now three side-by-side columns — SPX | SPY | QQQ — instead of three stacked rows. Each column has its own header (ticker, CORE, last price), its own price axis in native strikes, CORE + price, dashed lines at that ticker's rolls, and its own time rail (every two hours on one session so the stamps don't collide; ~4 date stamps on multi-session ranges). Legend chips still hide a ticker (its column goes) or the price line. The plot and rail are now shared functions, so the other three views render as before.
+
+## 2026-10-01 — Sign-in: up to 3 devices per account (was 1)
+- `lib/db.ts`: new `MAX_SESSIONS_PER_USER = 3`. `enforceSingleSession` (name kept) now keeps the user's 3 newest live sessions, the new one always included, and deletes the rest. A 4th sign-in signs out the oldest device. Expired rows don't count toward the cap and are swept at the same time. The owner is still exempt.
+- `lib/auth/session.ts`: `createSession` comment updated. No logic change; the kicked hashes are still evicted from the 8s validation cache, and the `/ws/gex` once-a-minute sweep still closes a kicked device's socket.
+
+## 2026-10-01 — Voltick Path Lab: separate 1m and 5m settings
+
+- `generated/2026-10-01-voltick-path-lab.html`: 1m and 5m now keep their own settings by default (the link is off). Switching the candle size at the top (1m / 5m) switches the panel to that timeframe's settings. On 1m + 5m, clicking a chart selects its settings and marks that pane "editing". Each set is saved in the browser separately.
+- Min stint, Carry · candles and Carry · floor moved into a per-timeframe "Path rows" group, so 1m and 5m can use different values. Book, Surge size and Level readings stay shared.
+- Ticking "link 1m + 5m" copies the settings you're on to the other timeframe, and after that every change applies to both. Reset only resets the timeframe you're on (both when linked). "Copy settings" now includes whether the two are linked.
+
+## 2026-10-01 — Voltick Path Lab: zoom test + zoom-proof bubbles
+
+- `generated/2026-10-01-voltick-path-lab.html`: new **Zoom test** view. It draws the timeframe you're editing at 2, 3.5, 6 and 12px bars at once, each pane showing bar width, bubble radius, row overlap, level collisions and how many candles it skips.
+- New per-timeframe **Zoom** group. "Bubble size follows" can be the bars (live: clamp(bar × k, min, max)) or **Zoom-locked**: a fixed pixel radius for peers and the Volt, a "Grow with zoom" amount (0% means the same pixels at every zoom), and never-smaller / never-bigger limits.
+- The Thin mode (it was Stride) now picks N by candle number instead of screen position. Kept bubbles stay put when you pan, N only changes with the zoom, and N snaps to 1·2·3·5·10·15·30 on 1m (1·2·3·6·12 on 5m), so kept bubbles land on round times. Strike changes always draw. N is sized from the largest bubble a row can have, so the row never overlaps more than the allowed amount.
+- **Make zoom-proof** sets the edited timeframe to Zoom-locked, 25% grow, Thin at 10% overlap, and fit-to-strike-gap at 35%. The bar-spacing slider now runs 0.5–40px.
+- Lab only: no Voltick or CB Edge code changed.
+
+## 2026-10-01 — Voltick Path Lab: Thin mode works per strike row (no more overlapping bubbles)
+
+- `generated/2026-10-01-voltick-path-lab.html`: Thin now treats each strike as one lane, whichever level the bubbles belong to. Before, each level was thinned on its own, so where the Volt and the Coil (or the Reversal) took turns on one strike their bubbles interleaved and overlapped. Every short stint also drew its first and last bubble a candle apart.
+- In a lane, no two bubbles sit closer than the grid step or overlap past the allowed amount. When two clash, the more important one stays: a level arriving at a strike › a level leaving one (only after a stint of at least 2N candles) › a grid bubble. Ties go Volt › Reversal › Coil › Surge, and between two grid bubbles the earlier one stays. A level flapping on and off a strike now draws once.
+- This is decided by candle number across the whole day, so panning never changes which candles get a bubble.
+- The pane stats measure overlap per lane across all levels and add an "over limit" count (bubble pairs past the allowed overlap). Zoom-proof settings on today's SPX show 0 over the limit at 2, 3.5, 6 and 12px bars on 1m and 5m.
+- Lab only: no Voltick or CB Edge code changed.
+
+## 2026-10-01 — Voltick Path bubbles: zoom-proof handoff prompt + render
+
+- `generated/2026-10-01-voltick-path-zoom-proof-prompt.md` (new): a ready-to-paste prompt for Voltick's Claude that makes the chart's Path bubbles hold up when zoomed out. It covers three things in `web/src/trailruns.js`: `pathZoomRadius` (pixel radius at the 6px default, barely following the zoom), `thinPathLanes` (thins by strike lane and candle number once bubbles would overlap past `PATH_ZOOM.maxOverlap`; arrivals win, Volt › Reversal › Coil › Surge) and `pathGapFit` (scales radii when neighbouring strikes crowd). It also includes the `HeatChart.jsx` Path branch replacement, an update to `a-level-that-moved-left-no-trace.test.js` and a new `path-bubbles-hold-up-when-you-zoom-out.test.js`.
+- Checked against a copy of the Voltick source: applying the prompt's blocks reproduces the tested files exactly. The new test passes 7/7, and the existing Path tests pass unchanged (`a-level-that-moved-left-no-trace` 30/30, `one-bubble-per-strike-per-candle` 8/8, `path-bubbles-grow-and-shrink-again` 8/8, `the-gold-volt-wins-its-strike-on-the-path` 14/14, `the-path-could-not-follow-the-switch` 6/6).
+- Measured on SPX 2026-10-01 with maxOverlap 0.6: the same as today at 6px and 12px (every candle), 0 bubble pairs past the limit at 2px and 3.5px on 1m and 5m. Today's Path has 338 pairs past 60% at 2px.
+- `generated/2026-10-01-voltick-path-zoom-proof.png` (new): today vs zoom-proof at 2, 3.5, 6 and 12px bars on SPX 1m.
+- No Voltick or CB Edge code changed here; the change is for the Voltick repo owner to apply.
+
+## 2026-10-01 — Voltick (fork, bzilabranch): Path bubbles zoom-proof, ready for a PR
+
+- Edited in the local Voltick clone (`Desktop\Voltick`, branch `bzilabranch`, which matches Gnotz617 `main` after PR #26), uncommitted:
+  - `web/src/trailruns.js`: new `PATH_ZOOM`, `pathZoomRadius`, `pathGrowthMax`, `pathGapFit`, `pathStepOf`, `PATH_RANK` and `thinPathLanes`.
+  - `web/src/HeatChart.jsx`: the Path branch uses the zoom-locked radius, fits to the strike gap and thins by strike lane. One line was added to the v6 note.
+  - `server/test/a-level-that-moved-left-no-trace.test.js`: the radius rule is now driven against `pathZoomRadius`.
+  - `server/test/path-bubbles-hold-up-when-you-zoom-out.test.js`: new, 7 tests.
+- Checked on a copy of the files: the new test passes 7/7, the existing Path suites are unchanged and passing, and `HeatChart.jsx` parses (esbuild). The same 7 test files were run before and after with identical results (plus the new file). The full `npm test` suite and `npm run dev` have not been run on the laptop yet.
+- Backup: `generated/2026-10-01-voltick-path-zoom-proof.patch` (git-style, LF). It applies cleanly with `git apply` to the pre-change files, in case a branch reset wipes the working tree.
+- Path Ribbon is not touched yet; that comes as the next change.
+
+## 2026-10-01 — v3 Level Log › Core backtest: session chart with entries/exits; folded sweep + hit table
+
+- `cbedge-v3/src/pages/levelLog/CoreBacktest.tsx`: new **Session** card under the stats — the wall migration chart for one session (the same 5-minute series the backtest scored) with every fill marked. ◀ Prev / Next ▶ step through the sessions that had fills (defaults to the newest); clicking a date in the hit table loads that session and scrolls to it; ↗ still opens it on the Log tab. **Target sweep** and **Every hit** fold to their header and start folded.
+- `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx`: optional host annotation props — `boxes` (shaded price bands over a window, under the levels), `spans` (segments, level or between two prices), `marks` (a dot plus an optional filled tag placed left/right/above/below; a side tag that would run off the plot flips sides). Only the backtest passes them; the Log tab and the rail draw as before.
+
+## 2026-10-01 — v3 Level Log › Core backtest: entries/exits drawn like a position tool
+
+- Each fill on the Session chart: an **IN n ▲/▼** tag at the entry, a **green box** entry → target and a **red box** entry → break across the window, a dashed path to the **OUT n BOUNCE/BREAK/OPEN ±pts** tag where it resolved; numbered in time order; hover for the full numbers.
+
+## 2026-10-01 — v3 Level Log › Core backtest: Entry 0–5 pts before the CORE (realistic fills)
+
+- `cbedge-v3/src/pages/levelLog/bounceEngine.ts`: "Hit within N strikes" is replaced by **Entry** — a resting limit 0 / 1 / 2 / 3 / 4 / 5 pts before the CORE on the side price comes from (0 = on the CORE; the buttons are fifths of a strike, so 0–5 pts on SPX/ES and 0–1 on SPY/QQQ). It fills only when a 5-minute sample reaches it; price that turns before the entry is no trade. **All P&L is now from the entry price**: bounce = +(target − entry), break = −(entry − break level), open = where it stood; MFE/MAE from the entry; R = exit ÷ (entry → break). Target is still a fraction of the way from the CORE to the next wall, and is only taken if it sits at least half a strike past the entry. Re-arm = price ≥ max(2 × entry, 1 strike) from the CORE. Checked by hand: price turning 3 pts above the CORE → no fill at 0 or 2, fills at 3 and 5 with reward/risk 22/8 and 20/10.
+- `cbedge-v3/src/pages/levelLog/CoreBacktest.tsx`: Entry control (At CORE · 1–5 pts), method note rewritten around the order, **Fills** tile, **Avg reward** tile (with average risk), MFE/MAE "from the entry", breakdown/sweep columns show reward, hit table gains an **Entry** column, the session chart's IN tag and boxes sit at the entry price. Default entry 2 pts.
+- Fixes the optimism in the earlier version, which scored every hit as if filled exactly at the CORE — even when price turned up to 10 pts away.
+
+## 2026-10-01 — ChatGPT connector: CB Edge as a remote MCP server, signed in with the CB Edge login
+
+- `server-v2/mcp-server.js` (new): the MCP endpoint at **https://cbedge.net/mcp**. It is stateless Streamable HTTP with JSON-RPC (`initialize`, `ping`, `tools/list`, `tools/call`) and has no SDK dependency. Six read-only tools sit on data the board already serves:
+  - `spx_gamma_levels` reads `/proxy/gex` plus today's `daily_em` row.
+  - `spx_gex_by_strike` reads the strike ladder from `/proxy/gex`.
+  - `expected_move` reads `daily_em` and never records it, so a 2pm chat cannot freeze a decayed band.
+  - `weekly_levels` reads `/api/levels`.
+  - `economic_calendar` reads `/api/calendar`.
+  - `earnings_today` reads `/api/earnings-today`, cached for 15 minutes.
+  - Each tool call checks the membership again (60s cache) and is limited to 60 calls/min per user.
+- `server-v2/mcp-oauth.js` (new): an OAuth 2.1 server on the existing `cbe_session` login, with the paid check from `ws-auth.js` (owner, subscribed or comped). No Supabase.
+  - Endpoints: `/.well-known/oauth-protected-resource[/mcp]`, `/.well-known/oauth-authorization-server`, `/oauth/register` (DCR), `/oauth/authorize`, `/oauth/token` and `/oauth/revoke`.
+  - Sign-in: a visitor who is not signed in goes to `/sign-in?next=` and comes back. An unpaid member gets a "Membership required" page. A paid member gets an Allow/Cancel consent page.
+  - Credentials: PKCE S256 is required. Codes are single-use, and a replayed code revokes its grant. Refresh tokens rotate, with a 60s retry window. Tokens are stored as sha256 hashes only. A member can hold at most 2 live connections (`MCP_MAX_GRANTS`).
+  - Redirect URIs must be https on chatgpt.com, claude.ai or claude.com.
+  - Tables `mcp_oauth_clients`, `mcp_oauth_codes` and `mcp_oauth_tokens` are created on first use. Codes and tokens cascade on `users(id)`.
+- `server-v2/api-router.js`: loads the connector defensively. The dispatcher now also answers **exact registered** non-`/api` paths (`/mcp`, `/oauth/*`, `/.well-known/oauth-*`). Every other path still falls through to Next unchanged. Needs `API_ROUTER=1`, which is already on.
+- `server-v2/mcp-server.selftest.js` (new, offline): run `node server-v2/mcp-server.selftest.js`. Before shipping, the full flow was also run end to end against Postgres: register, sign-in, consent, token, MCP calls, refresh, replay, revoke and cancellation (42 checks).
+- To connect (paid ChatGPT plan):
+  1. Settings → turn on **Developer mode**.
+  2. Add a new app/connector with URL `https://cbedge.net/mcp` and Authentication **OAuth**.
+  3. Sign in to CB Edge and click **Allow**.
+- Kill switch: `MCP_CONNECTOR=0`. Optional: `MCP_PUBLIC_ORIGIN=https://cbedge.net` pins the issuer.
+- If ChatGPT can't connect, check Cloudflare: Bot Fight Mode or WAF challenges on `/mcp`, `/oauth/*` and `/.well-known/oauth-*` will block OpenAI's server-side calls. Add a skip rule for those paths.

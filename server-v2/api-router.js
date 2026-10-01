@@ -1188,7 +1188,13 @@ async function handleApiRoute(req, res, ctx) {
   let pathname;
   try { ({ pathname } = new URL(req.url || '/', 'http://localhost')); }
   catch { return false; }
-  if (!pathname || !pathname.startsWith('/api/')) return false;
+  if (!pathname) return false;
+  // Outside /api/ only an EXACT registered path is handled — today that is just
+  // the ChatGPT connector's /mcp, /oauth/* and /.well-known/oauth-* (see
+  // mcp-server.js), which OAuth clients look for at fixed root paths. Every
+  // other non-/api path still goes straight to Next, and dynamic routes stay
+  // /api/-only.
+  if (!pathname.startsWith('/api/') && !ROUTES.has(pathname)) return false;
 
   let def = ROUTES.get(pathname);
   let params = null;
@@ -1220,6 +1226,20 @@ async function handleApiRoute(req, res, ctx) {
     ctx.sendJson(res, 500, { error: String(err?.message || err) }, req);
   }
   return true;
+}
+
+// ── ChatGPT connector (remote MCP server + OAuth on CB Edge's own login) ─────
+// /mcp, /oauth/{register,authorize,token,revoke}, /.well-known/oauth-*. All
+// registered 'public' here because each handler does its own auth (bearer token,
+// session cookie, client credentials). Loaded defensively like every other
+// optional module in this file: if it fails to load, none of those paths are
+// registered and they fall through to Next (404). MCP_CONNECTOR=0 disables it.
+let mcpServer = null;
+try { mcpServer = require('./mcp-server'); }
+catch (e) { console.warn('[api-router] mcp-server not loaded — ChatGPT connector off:', e.message); }
+if (mcpServer) {
+  try { mcpServer.registerRoutes(register); }
+  catch (e) { console.warn('[api-router] ChatGPT connector routes not registered:', e.message); }
 }
 
 // /api/market-scanner — multi-ticker regime/scoring scan (Yahoo series + live

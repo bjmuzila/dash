@@ -7,13 +7,13 @@
 // (CORE, call wall, put wall) plus its 5-minute `scanner_snapshots.spot` — in
 // ONE request for up to 260 sessions.
 //
-// ── EVERYTHING IS IN STRIKES (2026-10-01) ───────────────────────────────────
-// A trader reads "within a strike" and "two strikes through", not "0.03%". So
-// the touch zone and the break are counted in the symbol's STRIKE WIDTH — 5
-// points on SPX (the same 5 points on ES), 1 on SPY and QQQ — and the bounce
-// target is a FRACTION OF THE WAY TO THE NEXT WALL, read off the recorder at
-// the moment of the touch. One set of settings means the same thing on every
-// symbol.
+// ── UNITS (2026-10-01) ──────────────────────────────────────────────────────
+// A trader reads "a strike through" and "half way to the wall", not "0.03%".
+// The break is counted in the symbol's STRIKE WIDTH (5 points on SPX — the same
+// 5 on ES — 1 on SPY and QQQ), the bounce target is a FRACTION OF THE WAY TO
+// THE NEXT WALL read off the recorder at the fill, and the entry is a number of
+// POINTS before the CORE (the page scales 0–5 to a fifth of a strike each, so
+// it is 0–5 points on SPX and 0–1 on SPY and QQQ).
 //
 // ── THE RULES, in the order the scan applies them ───────────────────────────
 //
@@ -22,39 +22,44 @@
 //     at that slot's clock time, so a 10:07 sample is judged against the levels
 //     as of 10:00. No look-ahead.
 //
-//   SIDE. Price's last reading OUTSIDE the touch zone says where it came from:
+//   SIDE. Price's last reading OUTSIDE the entry says where it came from:
 //     above → a SUPPORT test (a bounce goes UP), below → a RESISTANCE test (a
 //     bounce goes DOWN). A CORE that has just rolled starts with no side, so a
-//     level that rolls onto price is not a touch until price has left it and
+//     level that rolls onto price is not a fill until price has left it and
 //     come back.
 //
-//   HIT. Spot within `zone` strikes of the CORE — it does not have to tag the
-//     level head-on — or already through to the OTHER side, because a 5-minute
+//   ENTRY (2026-10-01). A resting limit `entryPts` points BEFORE the CORE on
+//     the side price comes from — 0 = on the CORE itself; on SPX 1–5 points,
+//     the same 1–5 on ES. It fills when a sample reaches it: spot within
+//     `entryPts` of the CORE, or already through to the OTHER side (a 5-minute
 //     series can step straight over a level, and dropping those would delete
-//     every clean break from the sample and flatter the bounce rate.
+//     every clean break and flatter the bounce rate). Price that turns short of
+//     the entry is NO TRADE — the whole point of the setting. Every point and
+//     every R below is measured from the ENTRY PRICE, not from the CORE.
 //
 //   TARGET. The nearest wall beyond the CORE on the bounce side (above it for
-//     support, below it for resistance), and `wallFrac` of the way there —
-//     ½ by default: CORE 7620, call wall 7670 → the bounce is 7645. Fixed at
-//     the touch; walls that move afterwards do not move the goalposts. A wall
-//     so close that the target would sit inside the touch zone is passed over
-//     for the next one. No wall at all on the bounce side → the touch is not
-//     scored, and the page counts how many.
+//     support, below it for resistance), and `wallFrac` of the way there FROM
+//     THE CORE — ½ by default: CORE 7620, call wall 7670 → the bounce is 7645.
+//     Fixed at the fill; walls that move afterwards do not move the goalposts.
+//     A wall so close that the target would sit less than half a strike past
+//     the entry is passed over for the next one. No wall at all on the bounce
+//     side → the fill is not scored, and the page counts how many.
 //
-//   RESOLUTION, measured from the CORE:
-//     BOUNCE  price reaches the target
-//     BREAK   price gets `stop` strikes through the CORE
-//     OPEN    neither inside the hold window (or the session ended)
-//     MFE / MAE are the best / worst excursion up to resolution.
+//   RESOLUTION:
+//     BOUNCE  price reaches the target      → + (target − entry)
+//     BREAK   price gets `stop` strikes through the CORE → − (entry − break)
+//     OPEN    neither inside the hold window (or the session ended) → where it stood
+//     MFE / MAE are the best / worst excursion from the ENTRY up to resolution;
+//     risk (R) is entry → break, so a deeper entry buys a smaller risk.
 //
-//   RE-ARM. After a touch, the next one only counts once price has been at
-//     least 2 × zone away from the CORE. Without it one level sitting in a chop
-//     zone would score a dozen "touches" out of one event.
+//   RE-ARM. After a fill, the next one only counts once price has been at
+//     least max(2 × entry, 1 strike) away from the CORE. Without it one level
+//     sitting in a chop zone would score a dozen fills out of one event.
 //
 // ── WHAT A 5-MINUTE SERIES CANNOT SEE ───────────────────────────────────────
-// These are 5-minute samples, not highs and lows. A wick into the zone and back
-// between two samples is invisible, and so is a target reached and given back
-// inside one bar. The page says so. It errs the same way for bounces and
+// These are 5-minute samples, not highs and lows. A wick to the entry and back
+// between two samples is invisible (a fill that would have happened is missed),
+// and so is a target or break reached and given back inside one bar. The page says so. It errs the same way for bounces and
 // breaks, so the comparison between settings is fair even where the absolute
 // rate is approximate.
 //
@@ -72,10 +77,10 @@ export type Outcome = 'bounce' | 'break' | 'open'
 export type Side = 'support' | 'resistance'
 
 export interface BtParams {
-  /** The symbol's strike width, in points — the unit zone and stop are counted in. */
+  /** The symbol's strike width, in points — the unit the break is counted in. */
   strike: number
-  /** Touch zone, in strikes either side of the CORE. */
-  zoneStrikes: number
+  /** Entry: a limit this many POINTS before the CORE, on the side price comes from. 0 = on the CORE. */
+  entryPts: number
   /** Bounce target: this fraction of the way from the CORE to the next wall on the bounce side. */
   wallFrac: number
   /** Break: this many strikes through the CORE. */
@@ -96,16 +101,22 @@ export interface BtEvent {
   /** The wall the target was measured to, and which one it was. */
   wall: number
   wallKind: 'call' | 'put'
+  /** The fill: `entryPts` before the CORE on the approach side. */
+  entryPx: number
+  entryPts: number
   /** The bounce target as a price, and its distance from the CORE in points. */
   target: number
   targetPts: number
+  /** What the trade stood to make and to lose, from the entry: target − entry, entry − break. */
+  rewardPts: number
+  riskPts: number
   result: Outcome
-  /** Best / worst excursion from the CORE up to resolution, points, ≥ 0. */
+  /** Best / worst excursion from the ENTRY up to resolution, points, ≥ 0. */
   mfe: number
   mae: number
-  /** Points banked by "lean on the CORE with this target / stop": +target, −stop, or where an OPEN one ended. */
+  /** Points from the entry: +reward on a bounce, −risk on a break, where an OPEN one ended. */
   exit: number
-  /** exit ÷ stop — the same number in units of risk, comparable across symbols. */
+  /** exit ÷ risk — the same number in units of risk, comparable across symbols and entries. */
   r: number
   /** Minutes from touch to resolution; null for OPEN. */
   resolveMin: number | null
@@ -120,13 +131,13 @@ export interface BtEvent {
   heldMin: number
   /** The CORE rolled to another strike while this touch was open. */
   rolled: boolean
-  /** Price crossed the level between two samples rather than sampling inside the zone. */
+  /** Price stepped over the CORE between two samples rather than sampling between the entry and the CORE. */
   gapped: boolean
 }
 
 export interface BtRun {
   events: BtEvent[]
-  /** Touches with no wall on the bounce side — not scored, but not hidden either. */
+  /** Fills with no wall on the bounce side — not scored, but not hidden either. */
   noWall: number
 }
 
@@ -240,7 +251,8 @@ type Wall = { v: number; kind: 'call' | 'put' }
 
 /** The wall a touch's bounce is measured to — see TARGET in the header. */
 function pickWall(lv: SessionLevels, t: Touch, p: BtParams): Wall | null {
-  const zone = p.zoneStrikes * p.strike
+  // The target has to sit at least half a strike past the ENTRY to be a trade.
+  const floor = p.entryPts + p.strike / 2
   const raw: Array<{ v: number | null; kind: 'call' | 'put' }> = [
     { v: lv.cw[t.slot] ?? null, kind: 'call' },
     { v: lv.pw[t.slot] ?? null, kind: 'put' },
@@ -248,7 +260,7 @@ function pickWall(lv: SessionLevels, t: Touch, p: BtParams): Wall | null {
   const cands = raw
     .filter((c): c is Wall => c.v != null && t.dir * (c.v - t.core) > 0)
     .sort((a, b) => Math.abs(a.v - t.core) - Math.abs(b.v - t.core))
-  return cands.find((c) => Math.abs(c.v - t.core) * p.wallFrac > zone) ?? null
+  return cands.find((c) => Math.abs(c.v - t.core) * p.wallFrac >= floor) ?? null
 }
 
 type Resolved = {
@@ -264,6 +276,9 @@ type Resolved = {
   stop: number
   wall: Wall
   targetPts: number
+  entryPx: number
+  rewardPts: number
+  riskPts: number
 }
 
 /** Walk forward from a touch until target, stop, the hold window or the close. */
@@ -274,6 +289,9 @@ function resolve(day: DaySlice, lv: SessionLevels, t: Touch, p: BtParams): Resol
   const t0 = P[t.i]!.mins
   const target = Math.abs(wall.v - t.core) * p.wallFrac
   const stop = p.stopStrikes * p.strike
+  const entryPx = t.core + t.dir * p.entryPts
+  const reward = target - p.entryPts
+  const risk = stop + p.entryPts
   let mfe = 0
   let mae = 0
   let rolled = false
@@ -286,18 +304,20 @@ function resolve(day: DaySlice, lv: SessionLevels, t: Touch, p: BtParams): Resol
     if (p.holdMin != null && q.mins - t0 > p.holdMin) break
     endIdx = j
     if ((lv.cb[slotOf(q.mins)] ?? t.core) !== t.core) rolled = true
-    const fav = t.dir * (q.px - t.core)
+    // Levels are judged off the CORE, P&L off the entry.
+    const fromCore = t.dir * (q.px - t.core)
+    const fav = t.dir * (q.px - entryPx)
     if (fav > mfe) mfe = fav
     if (-fav > mae) mae = -fav
-    if (-fav >= stop) {
+    if (-fromCore >= stop) {
       result = 'break'
-      exit = -stop
+      exit = -risk
       resolveMin = q.mins - t0
       break
     }
-    if (fav >= target) {
+    if (fromCore >= target) {
       result = 'bounce'
-      exit = target
+      exit = reward
       resolveMin = q.mins - t0
       break
     }
@@ -309,13 +329,30 @@ function resolve(day: DaySlice, lv: SessionLevels, t: Touch, p: BtParams): Resol
   // sample happened to print past them.
   const endPx =
     result === 'bounce' ? t.core + t.dir * target : result === 'break' ? t.core - t.dir * stop : endSample.px
-  return { endIdx, endMins: endSample.mins, endPx, result, exit, mfe, mae, rolled, resolveMin, stop, wall, targetPts: target }
+  return {
+    endIdx,
+    endMins: endSample.mins,
+    endPx,
+    result,
+    exit,
+    mfe,
+    mae,
+    rolled,
+    resolveMin,
+    stop,
+    wall,
+    targetPts: target,
+    entryPx,
+    rewardPts: reward,
+    riskPts: risk,
+  }
 }
 
 /** Every touch in a session, numbered per CORE strike, re-armed between them, resolved. */
 function scanSession(day: DaySlice, lv: SessionLevels, p: BtParams): { scored: Array<{ t: Touch; r: Resolved }>; noWall: number } {
   const P = day.price
-  const zone = p.zoneStrikes * p.strike
+  const zone = p.entryPts
+  const rearm = Math.max(zone * 2, p.strike)
   const scored: Array<{ t: Touch; r: Resolved }> = []
   let noWall = 0
   const count = new Map<number, number>()
@@ -337,6 +374,7 @@ function scanSession(day: DaySlice, lv: SessionLevels, p: BtParams): { scored: A
       armed = true
     }
     const d = s.px - c
+    // At 0 the entry IS the CORE: only a sample on it or through it fills.
     const outside = Math.abs(d) > zone
     const sideNow: 1 | -1 = d > 0 ? 1 : -1
     let touch = false
@@ -350,7 +388,7 @@ function scanSession(day: DaySlice, lv: SessionLevels, p: BtParams): { scored: A
     if (!touch) {
       if (outside) {
         lastSide = sideNow
-        if (!armed && Math.abs(d) >= zone * 2) armed = true
+        if (!armed && Math.abs(d) >= rearm) armed = true
       }
       i++
       continue
@@ -395,13 +433,17 @@ export function runBacktest(days: DaySlice[], p: BtParams): BtRun {
         spot: q.px,
         wall: r.wall.v,
         wallKind: r.wall.kind,
+        entryPx: r.entryPx,
+        entryPts: p.entryPts,
         target: t.core + t.dir * r.targetPts,
         targetPts: r.targetPts,
+        rewardPts: r.rewardPts,
+        riskPts: r.riskPts,
         result: r.result,
         mfe: r.mfe,
         mae: r.mae,
         exit: r.exit,
-        r: r.stop > 0 ? r.exit / r.stop : 0,
+        r: r.riskPts > 0 ? r.exit / r.riskPts : 0,
         resolveMin: r.resolveMin,
         exitMins: r.endMins,
         exitPx: r.endPx,
@@ -437,8 +479,9 @@ export interface BtSummary {
   winOfResolved: number | null
   avgMfe: number | null
   avgMae: number | null
-  /** Mean distance to the target, points. */
-  avgTarget: number | null
+  /** Mean reward (target − entry) and risk (entry − break), points. */
+  avgReward: number | null
+  avgRisk: number | null
   medBounceMin: number | null
   /** Mean points per touch, and the same in units of the stop. */
   ptsPerTouch: number | null
@@ -460,7 +503,8 @@ export function summarize(events: BtEvent[]): BtSummary {
   let open = 0
   let mfe = 0
   let mae = 0
-  let tgt = 0
+  let rew = 0
+  let rsk = 0
   let pts = 0
   let r = 0
   const bounceMins: number[] = []
@@ -474,7 +518,8 @@ export function summarize(events: BtEvent[]): BtSummary {
     else open++
     mfe += e.mfe
     mae += e.mae
-    tgt += e.targetPts
+    rew += e.rewardPts
+    rsk += e.riskPts
     pts += e.exit
     r += e.r
   }
@@ -490,7 +535,8 @@ export function summarize(events: BtEvent[]): BtSummary {
     winOfResolved: bounce + brk ? (bounce / (bounce + brk)) * 100 : null,
     avgMfe: n ? mfe / n : null,
     avgMae: n ? mae / n : null,
-    avgTarget: n ? tgt / n : null,
+    avgReward: n ? rew / n : null,
+    avgRisk: n ? rsk / n : null,
     medBounceMin: median(bounceMins),
     ptsPerTouch: n ? pts / n : null,
     rPerTouch: n ? r / n : null,

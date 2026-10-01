@@ -8,21 +8,24 @@
 // live in levelLog/bounceEngine.ts and are stated on the page, because a hit
 // rate whose definition you cannot see is not a number you can use.
 //
-// THE TRADE IT SCORES (2026-10-01, Brandon's definition): price comes within a
-// strike of the CORE — 5 points on SPX / ES, it does not have to tag it — and
-// the bounce is HALF WAY TO THE OTHER WALL. Zone and break are counted in
-// strikes and the target in fractions of the way to the wall, so the same
-// settings read the same on SPX, SPY and QQQ.
+// THE TRADE IT SCORES (2026-10-01, Brandon's definition): a resting ENTRY 0–5
+// points before the CORE on the side price comes from (5 points on SPX = 5 on
+// ES; it does not have to tag the CORE), out at HALF WAY TO THE OTHER WALL or
+// a strike or more through the CORE. Price that turns before the entry is no
+// trade, and every point is counted from the entry, not the CORE — so the
+// result is what the order would actually have made.
 //
 // Every control re-runs the backtest locally except the four that change WHAT
 // is read (symbol, end date, sessions, variant), which re-fetch. Settings are
 // remembered per browser; the end date is not, so the page opens on today.
 //
 // THE SESSION CHART (2026-10-01): the wall migration chart for one session,
-// drawn from the same 5-minute series the backtest scored, with every hit's
-// ENTRY (▲ support / ▼ resistance, where price was) and EXIT (● bounce at the
-// target, ✕ break at the break level, ○ open where the hold ran out) and the
-// target / break levels dashed across each hit's window. Prev / next step
+// drawn from the same 5-minute series the backtest scored, with every hit drawn
+// like a position tool: an IN tag on the CORE where it was hit, a green box
+// from the CORE to the target and a red box from the CORE to the break across
+// the hit's window, a dashed path to the OUT tag where it resolved (BOUNCE at
+// the target, BREAK at the break level, OPEN where the hold ran out), each
+// numbered so IN 2 pairs with OUT 2. Prev / next step
 // through the sessions that had hits; clicking a hit's date in the table loads
 // its session here. ↗ beside it still opens that session on the Log tab.
 //
@@ -61,14 +64,14 @@ import {
   summarize,
   sweepFractions,
 } from '@/pages/levelLog/bounceEngine'
-import { type MigMark, type MigSpan, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
+import { type MigBox, type MigMark, type MigSpan, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
 import { type DaySlice, type ExpScope, type GexBasis, VOLTICK_UI, todayETStr, variantTag, wallNum, wallStrike } from '@/pages/levelLog/wallData'
 
 // ── controls ────────────────────────────────────────────────────────────────
 
 type SessionsKey = '21' | '63' | '126' | '260'
 type HoldKey = '30' | '60' | '120' | 'close'
-type ZoneKey = '0.5' | '1' | '2'
+type EntryKey = '0' | '1' | '2' | '3' | '4' | '5'
 type FracKey = '0.333' | '0.5' | '0.75' | '1'
 type StopKey = '1' | '2' | '3' | '4'
 
@@ -79,11 +82,18 @@ const SESSIONS_OPTIONS: Array<{ label: string; value: SessionsKey; title: string
   { label: 'All', value: '260', title: 'Every recorded session, up to 260' },
 ]
 
-const ZONE_KEYS: readonly ZoneKey[] = ['0.5', '1', '2']
+const ENTRY_KEYS: readonly EntryKey[] = ['0', '1', '2', '3', '4', '5']
 const FRAC_KEYS: readonly FracKey[] = ['0.333', '0.5', '0.75', '1']
 const STOP_KEYS: readonly StopKey[] = ['1', '2', '3', '4']
 
-const strikesLabel = (k: string) => (k === '0.5' ? '½ strike' : k === '1' ? '1 strike' : `${k} strikes`)
+const strikesLabel = (k: string) => (k === '1' ? '1 strike' : `${k} strikes`)
+
+/**
+ * Entry keys are FIFTHS OF A STRIKE: 0–5 points on SPX (and ES), 0–1 on SPY
+ * and QQQ, so the six buttons mean the same distance on every symbol.
+ */
+const entryPtsOf = (k: string, strike: number) => (Number(k) * strike) / 5
+const ptLabel = (v: number) => `${Number.isInteger(v) ? v : v.toFixed(1)} pt${v === 1 ? '' : 's'}`
 
 const HOLD_OPTIONS: Array<{ label: string; value: HoldKey; title: string }> = [
   { label: '30m', value: '30', title: 'Resolve within 30 minutes or it is OPEN' },
@@ -99,7 +109,7 @@ const APPROACH_OPTIONS: Array<{ label: string; value: Approach; title: string }>
 ]
 
 const TOUCH_OPTIONS: Array<{ label: string; value: TouchMode; title: string }> = [
-  { label: 'Every', value: 'every', title: 'Every touch, re-armed after price leaves the zone by 2× its width' },
+  { label: 'Every', value: 'every', title: 'Every fill, re-armed once price has been a strike (or 2× the entry) away from the CORE' },
   { label: '1st only', value: 'first', title: 'Only the first touch of each CORE strike in a session' },
 ]
 
@@ -124,7 +134,7 @@ interface Saved {
   sessions: SessionsKey
   scope: ExpScope
   basis: GexBasis
-  zone: ZoneKey
+  entry: EntryKey
   frac: FracKey
   stop: StopKey
   hold: HoldKey
@@ -136,7 +146,7 @@ const DEFAULTS: Saved = {
   sessions: '63',
   scope: '0dte',
   basis: 'oivol',
-  zone: '1',
+  entry: '2',
   frac: '0.5',
   stop: '2',
   hold: '60',
@@ -155,7 +165,7 @@ function loadSaved(): Saved {
       sessions: pick(j.sessions, ['21', '63', '126', '260'], DEFAULTS.sessions),
       scope: pick(j.scope, ['0dte', 'agg'], DEFAULTS.scope),
       basis: pick(j.basis, ['oivol', 'vol'], DEFAULTS.basis),
-      zone: pick(j.zone, ZONE_KEYS, DEFAULTS.zone),
+      entry: pick(j.entry, ENTRY_KEYS, DEFAULTS.entry),
       frac: pick(j.frac, FRAC_KEYS, DEFAULTS.frac),
       stop: pick(j.stop, STOP_KEYS, DEFAULTS.stop),
       hold: pick(j.hold, ['30', '60', '120', 'close'], DEFAULTS.hold),
@@ -192,7 +202,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
   const [sessions, setSessions] = useState(saved.sessions)
   const [scope, setScope] = useState(saved.scope)
   const [basis, setBasis] = useState(saved.basis)
-  const [zone, setZone] = useState(saved.zone)
+  const [entry, setEntry] = useState(saved.entry)
   const [frac, setFrac] = useState(saved.frac)
   const [stop, setStop] = useState(saved.stop)
   const [hold, setHold] = useState(saved.hold)
@@ -205,12 +215,12 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
     try {
       localStorage.setItem(
         SETTINGS_KEY,
-        JSON.stringify({ sessions, scope, basis, zone, frac, stop, hold, approach, touches } satisfies Saved),
+        JSON.stringify({ sessions, scope, basis, entry, frac, stop, hold, approach, touches } satisfies Saved),
       )
     } catch {
       /* best-effort */
     }
-  }, [sessions, scope, basis, zone, frac, stop, hold, approach, touches])
+  }, [sessions, scope, basis, entry, frac, stop, hold, approach, touches])
 
   // ── the one read ────────────────────────────────────────────────────────
   const [data, setData] = useState<{ days: DaySlice[]; loading: boolean; error: string | null }>({
@@ -236,12 +246,12 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
   const params = useMemo<BtParams>(
     () => ({
       strike,
-      zoneStrikes: Number(zone),
+      entryPts: entryPtsOf(entry, strike),
       wallFrac: frac === '0.333' ? 1 / 3 : Number(frac),
       stopStrikes: Number(stop),
       holdMin: hold === 'close' ? null : Number(hold),
     }),
-    [strike, zone, frac, stop, hold],
+    [strike, entry, frac, stop, hold],
   )
   const run = useMemo(() => runBacktest(days, params), [days, params])
   const events = useMemo(() => filterEvents(run.events, approach, touches), [run, approach, touches])
@@ -258,7 +268,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
     [events, strike],
   )
 
-  const zonePts = Number(zone) * strike
+  const entryPts = entryPtsOf(entry, strike)
   const stopPts = Number(stop) * strike
   const fracText = fracLabel(params.wallFrac)
   const range = days.length ? `${days[0]!.date} → ${days[days.length - 1]!.date}` : ''
@@ -278,7 +288,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
     setPickedDate(date)
     chartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
-  const { marks, spans } = useMemo(() => annotate(chartEvents), [chartEvents])
+  const { marks, spans, boxes } = useMemo(() => annotate(chartEvents), [chartEvents])
   const [sweepOpen, setSweepOpen] = useState(false)
   const [hitsOpen, setHitsOpen] = useState(false)
 
@@ -320,12 +330,19 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
         </CardToolbar>
 
         <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
-          <Labeled label="Hit within">
+          <Labeled label="Entry">
             <SegGroup
-              options={ZONE_KEYS.map((k) => ({ label: strikesLabel(k), value: k, title: `A hit is price within ${pts(Number(k) * strike)} pts of the CORE` }))}
-              value={zone}
-              onChange={setZone}
-              title="How close counts as a hit"
+              options={ENTRY_KEYS.map((k) => {
+                const v = entryPtsOf(k, strike)
+                return {
+                  label: k === '0' ? 'At CORE' : ptLabel(v),
+                  value: k,
+                  title: k === '0' ? 'A limit ON the CORE — filled only if price gets to it' : `A limit ${ptLabel(v)} before the CORE on the side price comes from`,
+                }
+              })}
+              value={entry}
+              onChange={setEntry}
+              title="Where the order rests — points before the CORE"
             />
           </Labeled>
           <Labeled label="Bounce to">
@@ -359,13 +376,15 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
         </div>
 
         <p className="mb-3 text-2xs leading-relaxed text-muted">
-          A <b className="text-fg">hit</b> is 5-minute spot within {strikesLabel(zone)} of the CORE ({pts(zonePts)} pts — it does not
-          have to tag it), after coming from one side. <b className="text-up">Bounce</b> = price gets {fracText === 'All the way' ? 'all the way' : `${fracText} of the way`} from
-          the CORE to the next wall on the side it came from (the call wall above on a support hit, the put wall below on a
-          resistance hit), as the walls stood at the hit. <b className="text-down">Break</b> = {strikesLabel(stop)} through the CORE ({pts(stopPts)} pts).
-          Neither within {hold === 'close' ? 'the session' : HOLD_OPTIONS.find((h) => h.value === hold)?.label} = open. Levels are
-          the {variantTag(scope, basis)} recorder as of the hit — no look-ahead. 5-minute samples, not highs and lows: a wick
-          between samples is not seen.
+          <b className="text-fg">Entry</b> = a limit {entryPts === 0 ? 'on the CORE' : `${ptLabel(entryPts)} before the CORE`} on the side
+          price comes from, filled when a 5-minute sample reaches it — price that turns first is no trade.{' '}
+          <b className="text-up">Bounce</b> = price gets {fracText === 'All the way' ? 'all the way' : `${fracText} of the way`} from the CORE to
+          the next wall on that side (the call wall above on a support fill, the put wall below on a resistance fill), as
+          the walls stood at the fill. <b className="text-down">Break</b> = {strikesLabel(stop)} through the CORE ({pts(stopPts)} pts), so the
+          risk is {pts(entryPts + stopPts)} pts from the entry. Neither within{' '}
+          {hold === 'close' ? 'the session' : HOLD_OPTIONS.find((h) => h.value === hold)?.label} = open. Every point is counted
+          from the entry. Levels are the {variantTag(scope, basis)} recorder as of the fill — no look-ahead. 5-minute samples,
+          not highs and lows: a wick to the entry, the target or the break between samples is not seen.
         </p>
 
         {data.error ? (
@@ -381,7 +400,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
         ) : (
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9">
             <Stat
-              label="Hits"
+              label="Fills"
               value={sum.n.toLocaleString()}
               sub={`${sum.sessions} of ${days.length} sessions · ${range}${run.noWall ? ` · ${run.noWall} with no wall to bounce to, not scored` : ''}`}
             />
@@ -389,11 +408,15 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
             <Stat label="Broke" value={pct0(sum.breakPct)} sub={`${sum.brk} hits`} direction="down" />
             <Stat label="Open" value={pct0(sum.openPct)} sub={`${sum.open} unresolved`} />
             <Stat label="Bounce of resolved" value={pct0(sum.winOfResolved)} sub="share of the ones that resolved" />
-            <Stat label="Avg target" value={sum.avgTarget == null ? '—' : `${wallNum(sum.avgTarget)}`} sub={`pts from the CORE · break ${pts(stopPts)}`} />
-            <Stat label="Avg MFE / MAE" value={`${wallNum(sum.avgMfe)} / ${wallNum(sum.avgMae)}`} sub="points from the CORE" />
+            <Stat
+              label="Avg reward"
+              value={sum.avgReward == null ? '—' : wallNum(sum.avgReward)}
+              sub={`risk ${wallNum(sum.avgRisk)} · pts from the entry`}
+            />
+            <Stat label="Avg MFE / MAE" value={`${wallNum(sum.avgMfe)} / ${wallNum(sum.avgMae)}`} sub="points from the entry" />
             <Stat label="Time to bounce" value={sum.medBounceMin == null ? '—' : `${Math.round(sum.medBounceMin)}m`} sub="median" />
             <Stat
-              label="Points per hit"
+              label="Points per fill"
               value={signed(sum.ptsPerTouch)}
               sub={`${signed(sum.rPerTouch)} R`}
               direction={sum.ptsPerTouch == null || sum.ptsPerTouch === 0 ? undefined : sum.ptsPerTouch > 0 ? 'up' : 'down'}
@@ -444,25 +467,27 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
                   Next ▶
                 </button>
               </CardToolbar>
-              <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-muted">
-                <span>
-                  <span style={{ color: T.cyan }}>▲ ▼</span> entry — support / resistance hit, at the price it printed
+              <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-2xs text-muted">
+                <span className="inline-flex items-center gap-1.5">
+                  <Pill bg={T.cyan}>IN 1 ▲</Pill> the fill, at the entry (▲ support · ▼ resistance)
                 </span>
-                <span>
-                  <span style={{ color: T.green }}>●</span> bounce, at the target
+                <span className="inline-flex items-center gap-1.5">
+                  <Pill bg={T.green}>OUT 1 BOUNCE</Pill>
+                  <Pill bg={T.red}>OUT 1 BREAK</Pill>
+                  <Pill bg={T.raised} fg={T.text}>OUT 1 OPEN</Pill> where it resolved
                 </span>
-                <span>
-                  <span style={{ color: T.red }}>✕</span> break, at the break level
+                <span className="inline-flex items-center gap-1.5">
+                  <span aria-hidden className="inline-block h-2.5 w-4 rounded-sm" style={{ background: alpha(T.green, 0.25), boxShadow: `inset 0 0 0 1px ${alpha(T.green, 0.6)}` }} />
+                  room to the target
                 </span>
-                <span>
-                  <span style={{ color: T.faint }}>○</span> open, where the hold ran out
+                <span className="inline-flex items-center gap-1.5">
+                  <span aria-hidden className="inline-block h-2.5 w-4 rounded-sm" style={{ background: alpha(T.red, 0.22), boxShadow: `inset 0 0 0 1px ${alpha(T.red, 0.6)}` }} />
+                  room to the break
                 </span>
-                <span>
-                  dashed <span style={{ color: T.green }}>target</span> / <span style={{ color: T.red }}>break</span> over each hit&apos;s window
-                </span>
+                <span>hover a tag for its numbers</span>
               </div>
               {chartDay ? (
-                <WallMigrationChart days={[chartDay]} view={VOLTICK_UI ? 'voltick' : 'all'} height={300} marks={marks} spans={spans} />
+                <WallMigrationChart days={[chartDay]} view={VOLTICK_UI ? 'voltick' : 'all'} height={340} marks={marks} spans={spans} boxes={boxes} />
               ) : (
                 <div className="py-8 text-center text-sm text-muted">No hits with these settings, so no session to draw.</div>
               )}
@@ -472,7 +497,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
           <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-2">
             <Card title="Cumulative points" expandId="level-log-core-backtest-curve">
               <p className="mb-2 text-2xs text-muted">
-                Every hit in order: + the target on a bounce, −{pts(stopPts)} on a break, where it stood on an open one. In points
+                Every fill in order, from the entry: + the reward on a bounce, − the risk on a break, where it stood on an open one. In points
                 of {symbol}.
               </p>
               <CumulativeCurve events={events} />
@@ -575,34 +600,100 @@ function Fold({
   )
 }
 
-/** One session's hits as chart annotations — the legend above the chart says what each glyph is. */
-function annotate(evs: BtEvent[]): { marks: MigMark[]; spans: MigSpan[] } {
+/** A filled tag, as the chart draws them — for the legend. */
+function Pill({ bg, fg, children }: { bg: string; fg?: string; children: ReactNode }) {
+  return (
+    <span
+      className="tabular inline-block whitespace-nowrap rounded-sm px-1 py-0.5 font-mono text-2xs font-extrabold leading-none"
+      style={{ background: bg, color: fg ?? T.bg }}
+    >
+      {children}
+    </span>
+  )
+}
+
+const OUT_BG = { bounce: T.green, break: T.red, open: T.raised } as const
+const OUT_DOT = { bounce: T.green, break: T.red, open: T.text } as const
+
+/**
+ * One session's hits as chart annotations, drawn like a position tool — see
+ * THE SESSION CHART in the header. Numbered in time order within the session,
+ * so IN 2 pairs with OUT 2 when hits sit close together.
+ */
+function annotate(evs: BtEvent[]): { marks: MigMark[]; spans: MigSpan[]; boxes: MigBox[] } {
   const marks: MigMark[] = []
   const spans: MigSpan[] = []
-  for (const e of evs) {
-    const what = e.side === 'support' ? 'support' : 'resistance'
-    spans.push({ key: `tgt-${e.id}`, date: e.date, fromMins: e.mins, toMins: e.exitMins, price: e.target, color: T.green })
-    spans.push({ key: `stp-${e.id}`, date: e.date, fromMins: e.mins, toMins: e.exitMins, price: e.stopPx, color: T.red })
+  const boxes: MigBox[] = []
+  const ordered = evs.slice().sort((a, b) => a.mins - b.mins)
+  ordered.forEach((e, k) => {
+    const n = k + 1
+    const up = e.side === 'support'
+    const frac = fracLabel(e.targetPts / Math.max(1e-9, Math.abs(e.wall - e.core)))
+    boxes.push({
+      key: `rw-${e.id}`,
+      date: e.date,
+      fromMins: e.mins,
+      toMins: e.exitMins,
+      lo: e.entryPx,
+      hi: e.target,
+      fill: alpha(T.green, 0.14),
+      stroke: alpha(T.green, 0.55),
+    })
+    boxes.push({
+      key: `rk-${e.id}`,
+      date: e.date,
+      fromMins: e.mins,
+      toMins: e.exitMins,
+      lo: e.entryPx,
+      hi: e.stopPx,
+      fill: alpha(T.red, 0.12),
+      stroke: alpha(T.red, 0.5),
+    })
+    spans.push({
+      key: `path-${e.id}`,
+      date: e.date,
+      fromMins: e.mins,
+      toMins: e.exitMins,
+      price: e.entryPx,
+      toPrice: e.exitPx,
+      color: OUT_DOT[e.result],
+      dash: '3 2',
+      width: 1.6,
+    })
     marks.push({
       key: `in-${e.id}`,
       date: e.date,
       mins: e.mins,
-      price: e.spot,
-      glyph: e.side === 'support' ? '▲' : '▼',
+      price: e.entryPx,
       color: T.cyan,
-      title: `${hhmm(e.mins)} ${what} hit · CORE ${wallStrike(e.core)} · spot ${wallNum(e.spot)} · target ${wallNum(e.target)} (${fracLabel(e.targetPts / Math.max(1e-9, Math.abs(e.wall - e.core)))} to ${e.wallKind === 'call' ? 'CW' : 'PW'} ${wallStrike(e.wall)}) · break ${wallNum(e.stopPx)}`,
+      dot: 9,
+      label: `IN ${n} ${up ? '▲' : '▼'}`,
+      place: 'left',
+      bg: T.cyan,
+      title:
+        `IN ${n} · ${hhmm(e.mins)} · ${up ? 'support' : 'resistance'} fill at ${wallNum(e.entryPx)}` +
+        `${e.entryPts > 0 ? ` (${ptLabel(e.entryPts)} before CORE ${wallStrike(e.core)})` : ` (on CORE ${wallStrike(e.core)})`}\n` +
+        `Target ${wallNum(e.target)} — ${frac} of the way to the ${e.wallKind === 'call' ? 'call' : 'put'} wall ${wallStrike(e.wall)} · reward ${wallNum(e.rewardPts)}\n` +
+        `Break ${wallNum(e.stopPx)} · risk ${wallNum(e.riskPts)}`,
     })
     marks.push({
       key: `out-${e.id}`,
       date: e.date,
       mins: e.exitMins,
       price: e.exitPx,
-      glyph: e.result === 'bounce' ? '●' : e.result === 'break' ? '✕' : '○',
-      color: e.result === 'bounce' ? T.green : e.result === 'break' ? T.red : T.faint,
-      title: `${hhmm(e.exitMins)} ${e.result.toUpperCase()} · ${signed(e.exit)} pts${e.resolveMin != null ? ` after ${Math.round(e.resolveMin)}m` : ''}`,
+      color: OUT_DOT[e.result],
+      dot: 9,
+      label: `OUT ${n} ${e.result.toUpperCase()} ${signed(e.exit, 1)}`,
+      place: 'right',
+      bg: OUT_BG[e.result],
+      fg: e.result === 'open' ? T.text : undefined,
+      title:
+        `OUT ${n} · ${hhmm(e.exitMins)} · ${e.result.toUpperCase()} ${signed(e.exit)} pts` +
+        `${e.resolveMin != null ? ` after ${Math.round(e.resolveMin)}m` : ' — hold ran out'}\n` +
+        `Best ${wallNum(e.mfe)} · worst ${wallNum(e.mae)} from the CORE`,
     })
-  }
-  return { marks, spans }
+  })
+  return { marks, spans, boxes }
 }
 
 // ── tables ──────────────────────────────────────────────────────────────────
@@ -613,7 +704,7 @@ const BUCKET_COLUMNS: Column<Bucket>[] = [
   { key: 'b', header: 'Bounce', numeric: true, width: '60px', cell: (r) => <span className="text-up">{pct0(r.summary.bouncePct)}</span> },
   { key: 'k', header: 'Break', numeric: true, width: '56px', cell: (r) => <span className="text-down">{pct0(r.summary.breakPct)}</span> },
   { key: 'o', header: 'Open', numeric: true, width: '52px', cell: (r) => pct0(r.summary.openPct) },
-  { key: 't', header: 'Target', numeric: true, width: '60px', cell: (r) => wallNum(r.summary.avgTarget) },
+  { key: 't', header: 'Reward', numeric: true, width: '60px', cell: (r) => wallNum(r.summary.avgReward) },
   { key: 'mfe', header: 'MFE', numeric: true, width: '56px', cell: (r) => wallNum(r.summary.avgMfe) },
   { key: 'mae', header: 'MAE', numeric: true, width: '56px', cell: (r) => wallNum(r.summary.avgMae) },
   {
@@ -628,7 +719,7 @@ const BUCKET_COLUMNS: Column<Bucket>[] = [
 const SWEEP_COLUMNS: Column<{ frac: number; summary: BtSummary }>[] = [
   { key: 'f', header: 'Bounce to', cell: (r) => (r.frac === 1 ? 'The wall' : `${fracLabel(r.frac)} of the way`) },
   { key: 'n', header: 'Hits', numeric: true, cell: (r) => r.summary.n.toLocaleString() },
-  { key: 't', header: 'Avg target', numeric: true, cell: (r) => wallNum(r.summary.avgTarget) },
+  { key: 't', header: 'Avg reward', numeric: true, cell: (r) => wallNum(r.summary.avgReward) },
   { key: 'b', header: 'Bounce', numeric: true, cell: (r) => <span className="text-up">{pct0(r.summary.bouncePct)}</span> },
   { key: 'k', header: 'Break', numeric: true, cell: (r) => <span className="text-down">{pct0(r.summary.breakPct)}</span> },
   { key: 'o', header: 'Open', numeric: true, cell: (r) => pct0(r.summary.openPct) },
@@ -695,6 +786,7 @@ function eventColumns(onPick: (date: string) => void, onOpenSession: (date: stri
         </span>
       ),
     },
+    { key: 'in', header: 'Entry', numeric: true, cell: (e) => wallNum(e.entryPx) },
     { key: 'tgt', header: 'Target', numeric: true, cell: (e) => wallNum(e.target) },
     {
       key: 'res',

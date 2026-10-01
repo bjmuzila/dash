@@ -190,40 +190,80 @@ export interface WallMigrationChartProps {
   /**
    * ANNOTATIONS a host lays over the plot (2026-10-01, for the Core backtest's
    * entries and exits). Generic on purpose: the chart knows where a session /
-   * minute / price lands, the host knows what it means. `marks` are glyphs,
-   * drawn as HTML so the squash never stretches them; `spans` are horizontal
-   * dashed segments (a target, a break level) drawn in the SVG. Their prices
-   * join the y range so nothing a host asks for falls off the plot. A mark on
-   * a session the chart is not drawing is ignored.
+   * minute / price lands, the host knows what it means.
+   *
+   *   boxes  shaded price bands over a time window (a position's reward and
+   *          risk zones), drawn in the SVG UNDER the levels and price
+   *   spans  straight segments between two (minute, price) points — a level
+   *          held across a window, or a connector from an entry to its exit —
+   *          drawn in the SVG OVER everything
+   *   marks  a dot on the exact point plus an optional tag beside it, in HTML
+   *          so the squash never stretches them
+   *
+   * Their prices join the y range so nothing a host asks for falls off the
+   * plot. Anything on a session the chart is not drawing is ignored.
    */
   marks?: MigMark[]
   spans?: MigSpan[]
+  boxes?: MigBox[]
 }
 
-/** A glyph at a session / ET minute / price. `glyph` is text — ▲ ▼ ● ✕ ○. */
+/**
+ * A point, and the tag that names it. `place` puts the tag beside the dot —
+ * left / right of it, or above / below. `bg` makes it a filled pill (with `fg`
+ * as its ink); without it the tag is bare text in `color`.
+ */
 export type MigMark = {
   key: string
   date: string
   mins: number
   price: number
-  glyph: string
   color: string
+  label?: string
+  place?: 'left' | 'right' | 'above' | 'below'
+  bg?: string
+  fg?: string
+  /** Dot diameter in px; 0 = no dot. Default 7. */
+  dot?: number
   title?: string
 }
 
-/** A horizontal segment at `price` from one ET minute to another, on one session. */
+/** A segment from (fromMins, price) to (toMins, toPrice ?? price), on one session. */
 export type MigSpan = {
   key: string
   date: string
   fromMins: number
   toMins: number
   price: number
+  toPrice?: number
   color: string
   dash?: string
+  width?: number
+}
+
+/** A shaded band between two prices across a window, on one session. */
+export type MigBox = {
+  key: string
+  date: string
+  fromMins: number
+  toMins: number
+  lo: number
+  hi: number
+  fill: string
+  stroke?: string
 }
 
 const NO_MARKS: MigMark[] = []
 const NO_SPANS: MigSpan[] = []
+const NO_BOXES: MigBox[] = []
+
+/** Where a mark's tag sits relative to its dot. */
+const PLACE: Record<NonNullable<MigMark['place']>, string> = {
+  left: 'translate(calc(-100% - 7px), -50%)',
+  right: 'translate(7px, -50%)',
+  above: 'translate(-50%, calc(-100% - 7px))',
+  below: 'translate(-50%, 7px)',
+}
 
 export function WallMigrationChart({
   days,
@@ -234,6 +274,7 @@ export function WallMigrationChart({
   onExpand,
   marks = NO_MARKS,
   spans = NO_SPANS,
+  boxes = NO_BOXES,
 }: WallMigrationChartProps) {
   /**
    * Legend switches. Click a chip to drop that series out of the plot; click it
@@ -507,10 +548,15 @@ export function WallMigrationChart({
       for (const arr of seg.series.values()) for (const v of arr) if (v != null) vals.push(v)
       for (const p of seg.spotDrawn) vals.push(p.v)
     }
-    // A host's annotations are part of the picture — see MigMark / MigSpan.
+    // A host's annotations are part of the picture — see MigMark / MigSpan / MigBox.
     const drawnDates = new Set(segs.map((seg) => seg.date))
     for (const m of marks) if (drawnDates.has(m.date) && m.price > 0) vals.push(m.price)
-    for (const sp of spans) if (drawnDates.has(sp.date) && sp.price > 0) vals.push(sp.price)
+    for (const sp of spans) {
+      if (!drawnDates.has(sp.date)) continue
+      if (sp.price > 0) vals.push(sp.price)
+      if (sp.toPrice != null && sp.toPrice > 0) vals.push(sp.toPrice)
+    }
+    for (const b of boxes) if (drawnDates.has(b.date) && b.lo > 0 && b.hi > 0) vals.push(b.lo, b.hi)
     if (vals.length < 2) return null
 
     let lo = Math.min(...vals)
@@ -538,7 +584,7 @@ export function WallMigrationChart({
     if (!kept.length) return null
 
     return { levels: kept, segs, lo, hi, roled }
-  }, [days, view, marks, spans])
+  }, [days, view, marks, spans, boxes])
 
   if (!model) return null
   const { levels, segs, lo, hi, roled } = model
@@ -946,6 +992,27 @@ export function WallMigrationChart({
               vectorEffect="non-scaling-stroke"
             />
           ) : null}
+          {/* A host's boxes sit UNDER the levels and price they frame. */}
+          {boxes.map((b) => {
+            const at = annoX(b.date, b.fromMins)
+            const to = annoX(b.date, b.toMins)
+            if (at == null || to == null) return null
+            const top = y(Math.max(b.lo, b.hi))
+            const bottom = y(Math.min(b.lo, b.hi))
+            return (
+              <rect
+                key={b.key}
+                x={at}
+                y={top}
+                width={Math.max(to - at, 0.2)}
+                height={Math.max(bottom - top, 0.5)}
+                fill={b.fill}
+                stroke={b.stroke ?? 'none'}
+                strokeWidth={b.stroke ? 1 : 0}
+                vectorEffect="non-scaling-stroke"
+              />
+            )
+          })}
           {paths.map((p) => (
             <polyline
               key={p.key}
@@ -978,34 +1045,69 @@ export function WallMigrationChart({
               <line
                 key={sp.key}
                 x1={at}
-                x2={Math.max(to, at + 0.15)}
+                x2={sp.toPrice == null ? Math.max(to, at + 0.15) : to}
                 y1={y(sp.price)}
-                y2={y(sp.price)}
+                y2={y(sp.toPrice ?? sp.price)}
                 stroke={sp.color}
-                strokeWidth={1.4}
-                strokeDasharray={sp.dash ?? '4 3'}
+                strokeWidth={sp.width ?? 1.4}
+                strokeDasharray={sp.dash}
                 vectorEffect="non-scaling-stroke"
               />
             )
           })}
         </svg>
 
-        {/* A host's marks. HTML for the same reason the axis is: a glyph inside
-            the squashed viewBox would come out stretched. Placed inside the plot
-            width (the axis gutter excluded), centred on their point. */}
+        {/* A host's marks. HTML for the same reason the axis is: a dot or a tag
+            inside the squashed viewBox would come out stretched. Placed inside
+            the plot width (the axis gutter excluded): the dot centred on its
+            point, the tag beside it per `place`. */}
         {marks.length ? (
           <div className="pointer-events-none absolute inset-y-0 left-0" style={{ right: compact ? 0 : AXIS_W }}>
             {marks.map((m) => {
               const mx = annoX(m.date, m.mins)
               if (mx == null) return null
+              const d = m.dot ?? 7
+              // A side tag that would run off the plot flips to the other side
+              // of its dot — an OUT at 15:55 reads leftward, an IN at 09:35 rightward.
+              const want = m.place ?? 'right'
+              const place = want === 'right' && mx > 82 ? 'left' : want === 'left' && mx < 14 ? 'right' : want
               return (
                 <span
                   key={m.key}
                   title={m.title}
-                  className="pointer-events-auto absolute cursor-default select-none text-sm font-extrabold leading-none"
-                  style={{ left: `${mx}%`, top: yPct(m.price), transform: 'translate(-50%, -50%)', color: m.color }}
+                  className="pointer-events-auto absolute cursor-default select-none"
+                  style={{ left: `${mx}%`, top: yPct(m.price), width: 0, height: 0 }}
                 >
-                  {m.glyph}
+                  {d > 0 ? (
+                    <span
+                      aria-hidden
+                      className="absolute block rounded-full"
+                      style={{
+                        width: d,
+                        height: d,
+                        left: -d / 2,
+                        top: -d / 2,
+                        background: m.color,
+                        boxShadow: `0 0 0 1.5px ${T.bg}`,
+                      }}
+                    />
+                  ) : null}
+                  {m.label ? (
+                    <span
+                      className={[
+                        'tabular absolute left-0 top-0 whitespace-nowrap font-mono text-2xs font-extrabold leading-none',
+                        m.bg ? 'rounded-sm px-1 py-0.5' : '',
+                      ].join(' ')}
+                      style={{
+                        transform: PLACE[place],
+                        background: m.bg,
+                        color: m.bg ? (m.fg ?? T.bg) : m.color,
+                        boxShadow: m.bg ? `0 0 0 1px ${T.bg}` : undefined,
+                      }}
+                    >
+                      {m.label}
+                    </span>
+                  ) : null}
                 </span>
               )
             })}
