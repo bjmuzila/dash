@@ -94,14 +94,17 @@ const DTE_STOPS: Array<{ label: string; value: number | null; title: string }> =
   { label: '≤90', value: 90, title: 'Expiring within a quarter' },
 ]
 
-// The ≥$500K stop is offered even though the API clamps `min_premium` UP to its
-// own floor (TF_WHALE_FLOOR, from LSE_WHALE_FLOOR, $1M by default): below that
-// line the table keeps only the last seven days, so a lower ask would hand back
-// a week dressed as an archive. Until that env var is lowered on the VPS,
-// picking $500K returns the $1M list — and rather than let the control look
-// broken, the header says so (see the clamp note there). Lower LSE_WHALE_FLOOR
-// and both the note and the clamp go away on their own: the page reads the floor
-// off the response, it is not hardcoded here.
+// The API clamps `min_premium` UP to its own floor (TF_WHALE_FLOOR, from
+// LSE_WHALE_FLOOR, $1M by default): below that line the table keeps only the
+// last seven days, so a lower ask would hand back a week dressed as an archive.
+//
+// (2026-10-01) Stops under that floor are no longer OFFERED, and a saved pick
+// under it is raised to the first stop at or above it. The old behaviour kept
+// ≥$500K in the menu and printed an amber "asked for $500K, archive floor is
+// $1M" note in the header every visit — which read as an error on a page that
+// was working. The page still reads the floor off the response (`archiveFloor`
+// in the component), so lowering LSE_WHALE_FLOOR on the VPS brings the ≥$500K
+// stop back with no code change.
 /** MAX CONTRACT PRICE (2026-09-22) — the per-contract fill, not the premium.
  *  null = no cap. "Whales in cheap contracts": a $2M print at 3.10 is a very
  *  different bet from a $2M print at 48.00. */
@@ -677,6 +680,32 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   const q = useQuery<WhalesResponse>(url, { staleMs: 30_000, pollMs: 60_000 })
   const d = q.data
 
+  // ── ARCHIVE FLOOR ──────────────────────────────────────────────────────────
+  // The server's floor, as last reported. Sticky rather than read straight off
+  // `d`, because `d` is undefined for the length of every range change — and
+  // the FLOOR menu growing a ≥$500K stop for half a second each time would be
+  // a flicker with nothing behind it.
+  const [archiveFloor, setArchiveFloor] = useState(0)
+  useEffect(() => {
+    const f = Number(d?.whaleFloor)
+    if (Number.isFinite(f) && f > 0) setArchiveFloor(f)
+  }, [d?.whaleFloor])
+  // A pick the API would clamp anyway is neither shown nor kept. Raised to the
+  // first stop at or above the floor (persisted by the settings effect above),
+  // so a ≥$500K saved before the floor was $1M stops asking for $500K forever.
+  useEffect(() => {
+    if (archiveFloor > 0 && floor < archiveFloor) {
+      setFloor(FLOORS.find((f) => f.value >= archiveFloor)?.value ?? archiveFloor)
+    }
+  }, [archiveFloor, floor])
+  const floorOptions = useMemo(() => {
+    const open = FLOORS.filter((f) => f.value >= archiveFloor)
+    // A floor above every stop (an env set to $10M, say) still needs one option
+    // that matches the clamped value, or the menu would show nothing selected.
+    const list = open.length ? open : [{ label: `≥${money(archiveFloor)}`, value: archiveFloor }]
+    return list.map((f) => ({ label: f.label, value: String(f.value) }))
+  }, [archiveFloor])
+
   const rows = useMemo(
     () => (d?.rows ?? []).filter((r) => !day || r.sessionDate === day),
     [d, day],
@@ -1213,14 +1242,9 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          {(d && floor < (d.whaleFloor ?? 0)) || (d && !showUnreadable && (d.unreadable?.n ?? 0) > 0) ? (
+          {d && !showUnreadable && (d.unreadable?.n ?? 0) > 0 ? (
             <div className="px-3 pt-2 text-2xs leading-relaxed text-fg">
-              {d && floor < (d.whaleFloor ?? 0) ? (
-                <span className="text-warn">Asked for {money(floor)}, archive floor is {money(d.whaleFloor)}. </span>
-              ) : null}
-              {d && !showUnreadable && (d.unreadable?.n ?? 0) > 0
-                ? `${num(d.unreadable?.n)} unreadable hidden (${money(d.unreadable?.premium)}).`
-                : null}
+              {`${num(d.unreadable?.n)} unreadable hidden (${money(d.unreadable?.premium)}).`}
             </div>
           ) : null}
 
@@ -1384,7 +1408,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
               <div className="mx-auto mb-3 mt-1 h-1 w-9 rounded-full bg-line" />
               <PhoneSeg
                 label="Floor"
-                options={FLOORS.map((f) => ({ label: f.label, value: String(f.value) }))}
+                options={floorOptions}
                 value={String(floor)}
                 onChange={(v) => setFloor(Number(v))}
               />
@@ -1491,20 +1515,10 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         {maxDte !== null ? (
           <span className="text-fg">{maxDte === 0 ? ' · 0DTE only' : ` · ≤${maxDte} DTE`}</span>
         ) : null}
-        {/* The FLOOR pick can be BELOW what the server will serve: /api/lse/whales
-            clamps min_premium up to its own floor because under that line the
-            table is a rolling 7-day mirror, not the archive. Saying so is the
-            difference between a control that looks broken and one that explains
-            itself. Read off the response, so lowering LSE_WHALE_FLOOR on the VPS
-            retires this note with no code change. */}
-        {d && floor < (d.whaleFloor ?? 0) ? (
-          <span
-            className="text-warn"
-            title="Prints below the archive floor are only kept for seven days, so the API raises a lower ask rather than return a week of data dressed as the archive. Lowering LSE_WHALE_FLOOR on the server is what opens this up."
-          >
-            {' '}· asked for {money(floor)}, archive floor is {money(d.whaleFloor)}
-          </span>
-        ) : null}
+        {/* No "asked for $X, archive floor is $Y" note any more: a FLOOR pick
+            under the server's floor can no longer be made or kept (see the
+            ARCHIVE FLOOR block in the component), so there is nothing for it to
+            explain — and in amber, every visit, it read as an error. */}
         {/* An archive that is quietly showing you less than it holds has to say
             so. Only when something is actually hidden — a permanent parenthetical
             about a filter that is removing nothing is noise. */}
@@ -1550,8 +1564,8 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
         <SegMenu<string>
           label="FLOOR"
-          title="Hide prints below this dollar premium. The archive's own floor is the server's — a pick under it is clamped up, and the header says so when that happens"
-          options={FLOORS.map((f) => ({ label: f.label, value: String(f.value) }))}
+          title="Hide prints below this dollar premium. Stops start at the archive's own floor — the server keeps nothing smaller permanently"
+          options={floorOptions}
           value={String(floor)}
           defaultValue={String(DEFAULTS.floor)}
           onChange={(v) => setFloor(Number(v))}
