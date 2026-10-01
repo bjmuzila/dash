@@ -22,10 +22,10 @@
 //   dist   DISTANCE FROM SPOT. Each core as % above / below ITS OWN price. No
 //          ratio at all; the zero line is price for all three. Tinted where all
 //          three pull the same way.
-//   lanes  THREE LANES, ONE CLOCK. Native strikes, each lane its own y range,
-//          one time axis. A dashed line drops through the whole plot at every
-//          roll, in the colour of the ticker that rolled — lead/lag is a
-//          left-to-right read.
+//   lanes  THREE COLUMNS — SPX | SPY | QQQ side by side (2026-10-01; they
+//          were stacked rows). Native strikes, each column its own y range and
+//          the same clock, CORE + price, a dashed line at each of that
+//          ticker's rolls. Three small charts read the way the rail does.
 //   band   CONSENSUS. The SPX-equivalent cores as one band (narrow = agree) with
 //          their average as the line, over a strip of which side of price each
 //          core sits on, and an ALL row that lights only when they line up.
@@ -82,8 +82,8 @@ const AXIS_W = 46
 const STRIP_ROW = 9
 const STRIP_GAP = 3
 
-/** Gap between lanes, in viewBox units. */
-const LANE_GAP = 6
+/** Each lane column's own price gutter, px — narrower than the full chart's. */
+const LANE_AXIS_W = 40
 
 const LEGEND_SWATCH = 11
 
@@ -345,6 +345,8 @@ export default function MergedCoreChart({ days, mode, height = PLOT_H, fill = fa
   const axis: Label[] = []
   const inPlot: Label[] = []
   let strip: { rects: Rect[]; rows: Label[]; h: number } | null = null
+  /** Lanes mode only: one self-contained column per ticker. */
+  const lanes: Array<{ t: MergedTicker; paths: Path[]; axis: Label[]; core: number | null; spot: number | null }> = []
   let legend: Array<{ key: MergedTicker | 'spot' | 'x'; color: string; label: string; value: string; toggle: boolean }> = []
   let caption = ''
 
@@ -611,12 +613,9 @@ export default function MergedCoreChart({ days, mode, height = PLOT_H, fill = fa
     }))
     legend.push({ key: 'x', color: alpha(T.green, 0.4), label: 'all same side', value: '', toggle: false })
   } else {
-    // ── THREE LANES, ONE CLOCK ──────────────────────────────────────────────
-    const n = shown.length
-    if (!n) return null
-    const laneH = (H - LANE_GAP * (n - 1)) / n
-    shown.forEach((t, li) => {
-      const top = li * (laneH + LANE_GAP)
+    // ── THREE COLUMNS, ONE CLOCK ────────────────────────────────────────────
+    if (!shown.length) return null
+    for (const t of shown) {
       const vals: number[] = []
       for (const seg of segs) {
         const d = seg.tk[t]
@@ -624,64 +623,64 @@ export default function MergedCoreChart({ days, mode, height = PLOT_H, fill = fa
         for (const v of d.core) if (v != null) vals.push(v)
         if (showSpot) for (const p of d.price) vals.push(p.v)
       }
-      const rng = padRange(vals, 0.12)
-      if (!rng) return
+      const rng = padRange(vals, 0.1)
+      if (!rng) continue
       const [lo, hi] = rng
-      const y = yIn(lo, hi, top + 3, laneH - 6)
-      rects.push({ key: `lane-${t}`, x: 0, y: top, w: 100, h: laneH, fill: alpha(T.text, 0.02) })
+      const y = yIn(lo, hi, PAD, H - PAD * 2)
+      const lp: Path[] = []
+      const la: Label[] = []
       segs.forEach((seg, i) => {
         const d = seg.tk[t]
         if (!d) return
-        stepRuns(i, d.core, y).forEach((pp, k) =>
-          paths.push({ key: `${t}-${i}-${k}`, d: pp, color: TK_COLOR[t], w: 2.2 }),
-        )
-        if (showSpot) {
-          const pp = linePts(i, d.price, y)
-          if (pp) paths.push({ key: `${t}-spot-${i}`, d: pp, color: T.text, w: 1.2 })
-        }
-      })
-      inPlot.push({ key: `lab-${t}`, top: `${((top + 9) / H) * 100}%`, text: t, color: TK_COLOR[t], left: true })
-      const lc = lastCore(t)
-      if (lc) axis.push({ key: `lc-${t}`, top: `${(y(lc.v) / H) * 100}%`, text: wallStrike(lc.v), color: TK_COLOR[t] })
-    })
-    // A roll is where the CORE changed strike; the line runs through every lane.
-    if (N <= 21) {
-      segs.forEach((seg, i) => {
-        for (const t of shown) {
-          const d = seg.tk[t]
-          if (!d) continue
+        // Rolls first, so the CORE and price draw over them.
+        if (N <= 21) {
           for (let s = 1; s <= d.lastSlot; s++) {
             const a = d.core[s - 1]
             const b = d.core[s]
             if (a == null || b == null || a === b) continue
             const xx = x(i, s)
-            paths.push({ key: `roll-${t}-${i}-${s}`, d: `${xx},0 ${xx},${H}`, color: alpha(TK_COLOR[t], 0.4), w: 1, dash: '2 3' })
+            lp.push({ key: `roll-${i}-${s}`, d: `${xx},0 ${xx},${H}`, color: alpha(TK_COLOR[t], 0.35), w: 1, dash: '2 3' })
           }
         }
+        stepRuns(i, d.core, y).forEach((pp, k) => lp.push({ key: `core-${i}-${k}`, d: pp, color: TK_COLOR[t], w: 2.2 }))
+        if (showSpot) {
+          const pp = linePts(i, d.price, y)
+          if (pp) lp.push({ key: `spot-${i}`, d: pp, color: T.text, w: 1.3 })
+        }
       })
+      for (const v of niceTicks(lo, hi, 6)) la.push({ key: `t-${v}`, top: `${(y(v) / H) * 100}%`, text: wallStrike(v), color: T.faint })
+      const lc = lastCore(t)
+      lanes.push({ t, paths: lp, axis: la, core: lc?.v ?? null, spot: lastPx(t) })
     }
-    caption = `native strikes${N <= 21 ? ' · dashed = a roll' : ''}`
+    if (!lanes.length) return null
+    caption = `native strikes, each its own scale${N <= 21 ? ' · dashed = a roll' : ''}`
     legend = MERGED_TICKERS.filter((t) => segs.some((g) => g.tk[t])).map((t) => ({
       key: t,
       color: TK_COLOR[t],
-      label: `${t} CORE`,
-      value: wallStrike(lastCore(t)?.v),
+      label: t,
+      value: '',
       toggle: true,
     }))
     legend.push({ key: 'spot', color: T.text, label: 'price', value: '', toggle: true })
   }
 
   // ── chrome ────────────────────────────────────────────────────────────────
-  const clockStamps = (() => {
+  /**
+   * Clock stamps for a single session: the open, then every `every` slots on the
+   * hour. Hourly starts at 10:00 (slot 2); the narrow lane columns stamp every
+   * two hours from 12:00 (slot 10), since 10:00 would sit on top of 09:29.
+   */
+  const clockStampsAt = (every: number) => {
     if (N !== 1) return []
     const out: number[] = [0]
-    for (let sl = 2; sl <= last.lastSlot; sl += 4) out.push(sl)
+    for (let sl = every >= 8 ? 10 : 2; sl <= last.lastSlot; sl += every) out.push(sl)
     const tail = out[out.length - 1]
-    if (tail != null && last.lastSlot - tail >= 2) out.push(last.lastSlot)
+    if (tail != null && last.lastSlot - tail >= every / 2) out.push(last.lastSlot)
     return out
-  })()
-  const stampEvery = Math.max(1, Math.ceil(N / 10))
-  const isStamped = (i: number) => (N - 1 - i) % stampEvery === 0
+  }
+  const stampEveryFor = (maxStamps: number) => Math.max(1, Math.ceil(N / maxStamps))
+  const stampEvery = stampEveryFor(10)
+  const isStamped = (i: number, every = stampEvery) => (N - 1 - i) % every === 0
   const showDow = N <= 6
   const thinDividers = N > 40
 
@@ -737,6 +736,107 @@ export default function MergedCoreChart({ days, mode, height = PLOT_H, fill = fa
 
   const svgStyle = fill ? { width: '100%', height: '100%', display: 'block' } : { width: '100%', display: 'block' }
 
+  /** One plot: session dividers, rects, polylines, then the words as HTML on top. */
+  const plot = (pp: Path[], rr: Rect[], ax: Label[], words: Label[], axisW: number) => (
+    <div className={fill ? 'relative min-h-0 flex-1' : 'relative'} style={{ paddingRight: axisW }}>
+      <svg viewBox={`0 0 100 ${H}`} height={fill ? undefined : H} preserveAspectRatio="none" style={svgStyle}>
+        {segs.slice(1).map((seg, k) =>
+          thinDividers && !isStamped(k + 1) ? null : (
+            <line
+              key={`div-${seg.date}`}
+              x1={(k + 1) * segW}
+              x2={(k + 1) * segW}
+              y1={0}
+              y2={H}
+              stroke={alpha(T.text, 0.22)}
+              strokeWidth={1}
+              vectorEffect="non-scaling-stroke"
+            />
+          ),
+        )}
+        {rr.map((r) => (
+          <rect key={r.key} x={r.x} y={r.y} width={r.w} height={r.h} fill={r.fill} />
+        ))}
+        {pp.map((p) => (
+          <polyline
+            key={p.key}
+            points={p.d}
+            fill="none"
+            stroke={p.color}
+            strokeWidth={p.w}
+            strokeDasharray={p.dash}
+            vectorEffect="non-scaling-stroke"
+            strokeLinejoin="miter"
+          />
+        ))}
+      </svg>
+
+      {/* Words ride on top as HTML so `fill` never stretches them. */}
+      <div className="pointer-events-none absolute inset-0" style={{ right: axisW }} aria-hidden>
+        {words.map((l) => (
+          <span
+            key={l.key}
+            className="tabular absolute whitespace-nowrap font-mono text-2xs font-extrabold"
+            style={{ left: 4, top: l.top, transform: 'translateY(-100%)', color: l.color }}
+          >
+            {l.text}
+          </span>
+        ))}
+      </div>
+      <div className="pointer-events-none absolute inset-y-0 right-0" style={{ width: axisW }} aria-hidden>
+        {ax.map((t) => (
+          <span
+            key={t.key}
+            className="tabular absolute whitespace-nowrap font-mono text-2xs"
+            style={{ left: 6, top: t.top, transform: 'translateY(-50%)', color: t.color }}
+          >
+            {t.text}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+
+  /** The time rail under a plot: clock stamps for one session, date stamps for many. */
+  const rail = (axisW: number, clockEvery: number, maxDates: number) => {
+    const stamps = clockStampsAt(clockEvery)
+    const every = stampEveryFor(maxDates)
+    return N === 1 ? (
+      <div className="tabular relative mt-1 h-3 shrink-0 font-mono text-2xs text-muted" style={{ paddingRight: axisW }} aria-hidden>
+        <div className="absolute inset-y-0 left-0" style={{ right: axisW }}>
+          {stamps.map((sl, k) => {
+            const first = k === 0
+            const lastOne = k === stamps.length - 1
+            return (
+              <span
+                key={`cs-${sl}`}
+                className="absolute whitespace-nowrap"
+                style={{ left: `${x(0, sl)}%`, transform: `translateX(${first ? '0' : lastOne ? '-100%' : '-50%'})` }}
+              >
+                {slotClock(sl)}
+              </span>
+            )
+          })}
+        </div>
+      </div>
+    ) : (
+      <div className="mt-1 flex shrink-0 text-muted" style={{ paddingRight: axisW }} aria-hidden>
+        {segs.map((seg, i) => (
+          <span key={seg.date} className="block overflow-visible whitespace-nowrap text-center" style={{ flex: `0 0 ${segW}%` }}>
+            {isStamped(i, every) ? (
+              <>
+                {showDow && maxDates >= 6 ? (
+                  <span className="block text-2xs font-extrabold uppercase tracking-widest text-fg">{dowName(seg.date)}</span>
+                ) : null}
+                <span className="tabular block font-mono text-2xs">{mdShort(seg.date)}</span>
+              </>
+            ) : null}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
   return (
     <div className={fill ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-col'}>
       <div className="mb-1.5 flex flex-wrap items-baseline gap-3">
@@ -753,118 +853,58 @@ export default function MergedCoreChart({ days, mode, height = PLOT_H, fill = fa
         {legend.map((l, idx) => chip(l.key, l.color, l.label, l.value, l.toggle, idx))}
       </div>
 
-      <div className={fill ? 'relative min-h-0 flex-1' : 'relative'} style={{ paddingRight: AXIS_W }}>
-        <svg viewBox={`0 0 100 ${H}`} height={fill ? undefined : H} preserveAspectRatio="none" style={svgStyle}>
-          {segs.slice(1).map((seg, k) =>
-            thinDividers && !isStamped(k + 1) ? null : (
-              <line
-                key={`div-${seg.date}`}
-                x1={(k + 1) * segW}
-                x2={(k + 1) * segW}
-                y1={0}
-                y2={H}
-                stroke={alpha(T.text, 0.22)}
-                strokeWidth={1}
-                vectorEffect="non-scaling-stroke"
-              />
-            ),
-          )}
-          {rects.map((r) => (
-            <rect key={r.key} x={r.x} y={r.y} width={r.w} height={r.h} fill={r.fill} />
-          ))}
-          {paths.map((p) => (
-            <polyline
-              key={p.key}
-              points={p.d}
-              fill="none"
-              stroke={p.color}
-              strokeWidth={p.w}
-              strokeDasharray={p.dash}
-              vectorEffect="non-scaling-stroke"
-              strokeLinejoin="miter"
-            />
-          ))}
-        </svg>
-
-        {/* Words ride on top as HTML so `fill` never stretches them. */}
-        <div className="pointer-events-none absolute inset-0" style={{ right: AXIS_W }} aria-hidden>
-          {inPlot.map((l) => (
-            <span
-              key={l.key}
-              className="tabular absolute whitespace-nowrap font-mono text-2xs font-extrabold"
-              style={{ left: 4, top: l.top, transform: 'translateY(-100%)', color: l.color }}
-            >
-              {l.text}
-            </span>
-          ))}
-        </div>
-        <div className="pointer-events-none absolute inset-y-0 right-0" style={{ width: AXIS_W }} aria-hidden>
-          {axis.map((t) => (
-            <span
-              key={t.key}
-              className="tabular absolute whitespace-nowrap font-mono text-2xs"
-              style={{ left: 8, top: t.top, transform: 'translateY(-50%)', color: t.color }}
-            >
-              {t.text}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      {strip ? (
-        <div className="relative mt-1.5 shrink-0" style={{ paddingRight: AXIS_W, height: strip.h }}>
-          <svg viewBox={`0 0 100 ${strip.h}`} height={strip.h} preserveAspectRatio="none" style={{ width: '100%', display: 'block' }}>
-            {strip.rects.map((r) => (
-              <rect key={r.key} x={r.x} y={r.y} width={r.w} height={r.h} rx={0} fill={r.fill} />
-            ))}
-          </svg>
-          <div className="pointer-events-none absolute inset-y-0 right-0" style={{ width: AXIS_W }} aria-hidden>
-            {strip.rows.map((r) => (
-              <span
-                key={r.key}
-                className="absolute whitespace-nowrap text-3xs font-extrabold"
-                style={{ left: 8, top: r.top, transform: 'translateY(-50%)', color: r.color }}
-              >
-                {r.text}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {N === 1 ? (
-        <div className="tabular relative mt-1 h-3 font-mono text-2xs text-muted" style={{ paddingRight: AXIS_W }} aria-hidden>
-          <div className="absolute inset-y-0 left-0" style={{ right: AXIS_W }}>
-            {clockStamps.map((sl, k) => {
-              const first = k === 0
-              const lastOne = k === clockStamps.length - 1
-              return (
-                <span
-                  key={`cs-${sl}`}
-                  className="absolute whitespace-nowrap"
-                  style={{ left: `${x(0, sl)}%`, transform: `translateX(${first ? '0' : lastOne ? '-100%' : '-50%'})` }}
-                >
-                  {slotClock(sl)}
+      {mode === 'lanes' ? (
+        // THREE COLUMNS. Separated by a hairline, not plated — a column is part
+        // of this chart, not a card of its own.
+        <div
+          className={fill ? 'grid min-h-0 flex-1' : 'grid'}
+          style={{ gridTemplateColumns: `repeat(${lanes.length}, minmax(0, 1fr))` }}
+        >
+          {lanes.map((l, li) => (
+            <div key={l.t} className={['flex min-h-0 min-w-0 flex-col', li > 0 ? 'border-l border-line pl-3' : '', li < lanes.length - 1 ? 'pr-3' : ''].join(' ')}>
+              <div className="mb-1 flex shrink-0 items-baseline gap-2">
+                <span className="text-sm font-extrabold tracking-wide" style={{ color: TK_COLOR[l.t] }}>
+                  {l.t}
                 </span>
-              )
-            })}
-          </div>
+                <span className="tabular font-mono text-xs text-fg">
+                  CORE <span style={{ color: TK_COLOR[l.t] }}>{wallStrike(l.core)}</span>
+                </span>
+                {showSpot && l.spot != null ? (
+                  <span className="tabular ml-auto font-mono text-xs text-muted">{wallNum(l.spot)}</span>
+                ) : null}
+              </div>
+              {plot(l.paths, [], l.axis, [], LANE_AXIS_W)}
+              {rail(LANE_AXIS_W, 8, 4)}
+            </div>
+          ))}
         </div>
       ) : (
-        <div className="mt-1 flex text-muted" style={{ paddingRight: AXIS_W }} aria-hidden>
-          {segs.map((seg, i) => (
-            <span key={seg.date} className="block overflow-visible whitespace-nowrap text-center" style={{ flex: `0 0 ${segW}%` }}>
-              {isStamped(i) ? (
-                <>
-                  {showDow ? (
-                    <span className="block text-2xs font-extrabold uppercase tracking-widest text-fg">{dowName(seg.date)}</span>
-                  ) : null}
-                  <span className="tabular block font-mono text-2xs">{mdShort(seg.date)}</span>
-                </>
-              ) : null}
-            </span>
-          ))}
-        </div>
+        <>
+          {plot(paths, rects, axis, inPlot, AXIS_W)}
+
+          {strip ? (
+            <div className="relative mt-1.5 shrink-0" style={{ paddingRight: AXIS_W, height: strip.h }}>
+              <svg viewBox={`0 0 100 ${strip.h}`} height={strip.h} preserveAspectRatio="none" style={{ width: '100%', display: 'block' }}>
+                {strip.rects.map((r) => (
+                  <rect key={r.key} x={r.x} y={r.y} width={r.w} height={r.h} rx={0} fill={r.fill} />
+                ))}
+              </svg>
+              <div className="pointer-events-none absolute inset-y-0 right-0" style={{ width: AXIS_W }} aria-hidden>
+                {strip.rows.map((r) => (
+                  <span
+                    key={r.key}
+                    className="absolute whitespace-nowrap text-3xs font-extrabold"
+                    style={{ left: 8, top: r.top, transform: 'translateY(-50%)', color: r.color }}
+                  >
+                    {r.text}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {rail(AXIS_W, 4, 10)}
+        </>
       )}
     </div>
   )
