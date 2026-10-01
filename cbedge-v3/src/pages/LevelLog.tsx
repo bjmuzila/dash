@@ -53,11 +53,21 @@
 // through `[data-card-instance]` at click time rather than a ref, so the shot
 // still finds the card while it is expanded and living outside its tile.
 //
+// INDEX CORE (2026-10-01). When SPX is the page symbol the card grows a
+// five-way switch — SPX (the migration chart, unchanged) plus four views that
+// put SPX, SPY and QQQ's CORE on one chart: SPX-equivalent, % from spot, lanes
+// and consensus (levelLog/MergedCoreChart.tsx says what each one is). Same date,
+// variant and range controls; SPY and QQQ are two more `useWallDays` reads that
+// only fire while a merged view is showing, in parallel with SPX's. The switch is
+// SPX-only because the merged chart is anchored on SPX's sessions — on any other
+// symbol it would be a chart of three tickers that are not the one you picked.
+// The chart is its own chunk, preloaded the moment SPX is the symbol.
+//
 // REST-only: no socket, no canvas. Non-negotiables 2, 4, 5 and 6 have nothing
 // to bite on.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Card, CardToolbar } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
@@ -79,6 +89,49 @@ import {
   variantTag,
 } from '@/pages/levelLog/wallData'
 import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
+import type { MergedMode } from '@/pages/levelLog/MergedCoreChart'
+
+/** The merged chart's chunk — loaded on first use, preloaded once SPX is picked. */
+const loadMergedCore = () => import('@/pages/levelLog/MergedCoreChart')
+const MergedCoreChart = lazy(loadMergedCore)
+
+/** The card's CORE switch on SPX: the migration chart, or one of the merged views. */
+type CoreMode = 'single' | MergedMode
+
+const CORE_OPTIONS: Array<{ label: string; value: CoreMode; title: string }> = [
+  { label: 'SPX', value: 'single', title: 'SPX on its own — the wall migration chart' },
+  {
+    label: 'SPX-eq',
+    value: 'eq',
+    title: 'SPX, SPY and QQQ CORE in SPX points — SPY and QQQ scaled by their price ratio at the open',
+  },
+  {
+    label: '% from spot',
+    value: 'dist',
+    title: 'Each CORE as % above / below its own price — zero is price for all three',
+  },
+  { label: 'Lanes', value: 'lanes', title: 'Three lanes in native strikes on one clock — dashed lines mark each roll' },
+  {
+    label: 'Consensus',
+    value: 'band',
+    title: 'One band spanning the three CORE levels with their average, over a strip of which side of price each sits',
+  },
+]
+
+/** Per browser — the view you last read SPX in. A convenience, so best-effort. */
+const CORE_MODE_KEY = 'cb-v3-level-log:core-mode'
+
+function loadCoreMode(): CoreMode {
+  try {
+    const v = localStorage.getItem(CORE_MODE_KEY)
+    return CORE_OPTIONS.some((o) => o.value === v) ? (v as CoreMode) : 'single'
+  } catch {
+    return 'single'
+  }
+}
+
+/** Snapshot filename words for each merged view. */
+const CORE_FILE: Record<MergedMode, string> = { eq: 'spx-eq', dist: 'pct-from-spot', lanes: 'lanes', band: 'consensus' }
 
 /**
  * THE RANGE SWITCH — how many recorded sessions the chart is drawn from.
@@ -211,6 +264,32 @@ export default function LevelLog() {
     basis,
   )
 
+  // ── INDEX CORE — SPX only ────────────────────────────────────────────────
+  const isSpx = symbol.trim().toUpperCase() === 'SPX'
+  const [coreMode, setCoreMode] = useState<CoreMode>(loadCoreMode)
+  useEffect(() => {
+    try {
+      localStorage.setItem(CORE_MODE_KEY, coreMode)
+    } catch {
+      /* best-effort — the in-memory choice still drives this session */
+    }
+  }, [coreMode])
+  // Kept while you look at another symbol, so coming back to SPX restores it.
+  const merged: MergedMode | null = isSpx && coreMode !== 'single' ? coreMode : null
+  // Preload on intent: SPX being the symbol is when the switch appears.
+  useEffect(() => {
+    if (isSpx) void loadMergedCore()
+  }, [isSpx])
+  // Two more reads of the same recorder, only while a merged view is showing.
+  // A null symbol is useWallDays' "nothing" — no request goes out.
+  const spy = useWallDays(merged ? 'SPY' : null, date, RANGE_SESSIONS[range], nonce + tick, scope, basis)
+  const qqq = useWallDays(merged ? 'QQQ' : null, date, RANGE_SESSIONS[range], nonce + tick, scope, basis)
+  const mergedDays = useMemo(
+    () => ({ SPX: days, SPY: spy.days, QQQ: qqq.days }),
+    [days, spy.days, qqq.days],
+  )
+  const anyLoading = loading || (merged != null && (spy.loading || qqq.loading))
+
   /**
    * The toolbar camera's row for this page. Published only once a session has
    * actually landed, so the menu never offers a shot of the empty state, and
@@ -223,9 +302,9 @@ export default function LevelLog() {
             {
               id: 'level-log:wall-migration',
               icon: '🧱',
-              label: 'Wall migration',
+              label: merged ? 'Index CORE' : 'Wall migration',
               group: 'This page',
-              meta: `${symbol} · ${RANGE_TAG[range] ? `${RANGE_TAG[range]} to ${date}` : date} · ${variantTag(scope, basis)}`,
+              meta: `${merged ? 'SPX · SPY · QQQ' : symbol} · ${RANGE_TAG[range] ? `${RANGE_TAG[range]} to ${date}` : date} · ${variantTag(scope, basis)}`,
               /**
                * The company mark at the head of the caption. The card's header
                * is dropped from every shot (shell/snapshot.ts) and the header is
@@ -233,13 +312,15 @@ export default function LevelLog() {
                * in small grey type and nowhere else.
                */
               badge: tickerLogoUrls(symbol),
-              file: `${symbol.toLowerCase()}-wall-migration-${view}-${scope}-${basis}-${date}${RANGE_FILE[range]}`,
+              file: merged
+                ? `index-core-${CORE_FILE[merged]}-${scope}-${basis}-${date}${RANGE_FILE[range]}`
+                : `${symbol.toLowerCase()}-wall-migration-${view}-${scope}-${basis}-${date}${RANGE_FILE[range]}`,
               resolve: () =>
                 document.querySelector<HTMLElement>(`[data-card-instance="${CARD_ID}"]`),
             },
           ]
         : NO_TARGETS,
-    [days.length, symbol, date, range, scope, basis, view],
+    [days.length, symbol, date, range, scope, basis, view, merged],
   )
   useCopyShotTargets(shotTargets)
 
@@ -313,7 +394,8 @@ export default function LevelLog() {
               label={(v) => v}
               className="shrink-0"
             />
-            {VOLTICK_UI ? null : (
+            {/* CORE-only in a merged view, so the levels switch has nothing to switch. */}
+            {VOLTICK_UI || merged ? null : (
               <SegGroup options={VIEW_OPTIONS} value={view} onChange={setView} title="Which levels" />
             )}
             <SegGroup
@@ -329,6 +411,14 @@ export default function LevelLog() {
               onChange={setRange}
               title="One session, or the last five, twenty-one, or every recorded one"
             />
+            {isSpx ? (
+              <SegGroup
+                options={CORE_OPTIONS}
+                value={coreMode}
+                onChange={setCoreMode}
+                title="SPX alone, or SPX · SPY · QQQ CORE on one chart"
+              />
+            ) : null}
           </CardToolbar>
 
           {/**
@@ -346,7 +436,7 @@ export default function LevelLog() {
            */}
           <div className="mb-1.5 flex flex-wrap items-baseline gap-2" data-capture-hide>
             <span className="tabular font-mono text-2xs text-muted">
-              {variantTag(scope, basis)} · {VIEW_SCOPE[view]} view · 09:29 open + every 15m to 16:00
+              {variantTag(scope, basis)} · {merged ? 'SPX · SPY · QQQ CORE' : `${VIEW_SCOPE[view]} view`} · 09:29 open + every 15m to 16:00
               ET, change-only
             </span>
             {live ? (
@@ -359,9 +449,21 @@ export default function LevelLog() {
             {loading && !days.length ? (
               <span className="text-2xs text-faint">loading…</span>
             ) : null}
+            {/* SPX draws first; say so while SPY / QQQ are still on their way. */}
+            {merged && days.length > 0 && anyLoading && !(spy.days.length > 0 && qqq.days.length > 0) ? (
+              <span className="text-2xs text-faint">loading SPY · QQQ…</span>
+            ) : null}
           </div>
 
-          {days.length ? (
+          {days.length && merged ? (
+            <Suspense
+              fallback={
+                <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted">Loading…</div>
+              }
+            >
+              <MergedCoreChart days={mergedDays} mode={merged} fill />
+            </Suspense>
+          ) : days.length ? (
             <WallMigrationChart days={days} view={view} fill />
           ) : (
             <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm text-muted">

@@ -4433,11 +4433,16 @@ export async function deleteAllSessionsForUser(userId: string): Promise<void> {
   await pgQuery(`DELETE FROM sessions WHERE user_id = $1`, [userId]);
 }
 
+/** Live sessions (signed-in devices/browsers) a non-owner account may hold at
+ *  once. The session just minted always counts as one of them. */
+export const MAX_SESSIONS_PER_USER = 3;
+
 /**
- * ONE DEVICE PER ACCOUNT. Drops every session for this user EXCEPT the one just
- * created, so the newest sign-in wins and whoever was signed in before is
- * signed out. Added 2026-09-14 (Brandon): a subscription is for a person, and
- * an account that works on four devices at once is a shared account.
+ * SESSION CAP PER ACCOUNT. Keeps the MAX_SESSIONS_PER_USER newest live sessions
+ * for this user (the one just created always among them) and drops the rest,
+ * so the newest sign-in wins and the oldest device beyond the cap is signed
+ * out. Added 2026-09-14 (Brandon) as one device per account; raised to 3 on
+ * 2026-10-01. The name is kept so existing callers don't change.
  *
  * THE OWNER IS EXEMPT, and the exemption is a join in this statement rather
  * than an `if (isOwner)` at the call site. Owner work runs the dashboard,
@@ -4458,15 +4463,24 @@ export async function enforceSingleSession(
   userId: string,
   keepTokenHash: string
 ): Promise<string[]> {
+  // Expired rows never count toward the cap; they fall outside the keep-list
+  // and are swept here too.
   const res = await pgQuery(
     `DELETE FROM sessions s
        USING users u
       WHERE u.id = s.user_id
         AND s.user_id = $1
-        AND s.token_hash <> $2
         AND u.is_owner = FALSE
+        AND s.token_hash NOT IN (
+              SELECT k.token_hash
+                FROM sessions k
+               WHERE k.user_id = $1
+                 AND k.expires_at > NOW()
+               ORDER BY (k.token_hash = $2) DESC, k.created_at DESC
+               LIMIT $3
+            )
       RETURNING s.token_hash`,
-    [userId, keepTokenHash]
+    [userId, keepTokenHash, MAX_SESSIONS_PER_USER]
   );
   return (res.rows ?? []).map((r: { token_hash: string }) => r.token_hash);
 }

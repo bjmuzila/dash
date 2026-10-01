@@ -24704,3 +24704,7 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - Duplicates removed: who's online (was in 5 places), paying members, MRR tiles, signups, the Payments and Retention charts that repeated Revenue, health checks on both Home and System, the Email lists that repeated the Members filter, partner clicks, Bzila Performance's repeated charts. Copy emails was added to Members › Accounts, Gone quiet and Leaving.
 - Deleted the parked Admin, Visitors, Sales and Brain pages. The Brain section heading stays as the Probe section's end marker for `server/test/the-live-console-reads-only-routes-that-exist.test.js`.
 - Checks: the server route test passes 5/5, escape-check passes both passes with 0 leaks (it now walks every tab), and a live-mode smoke test with stubbed routes shows every page and tab with 0 page errors. CRLF line endings kept.
+
+## 2026-10-01 — v3 Whales: removed the amber "asked for $500K, archive floor is $1M" note
+
+- `cbedge-v3/src/pages/Whales.tsx`: the FLOOR menu (desktop and the phone filter sheet) now only offers stops at or above the archive floor the server reports (`whaleFloor`, $1M today), so ≥$500K is gone until LSE_WHALE_FLOOR is lowered on the VPS. A saved pick under the floor is raised to the first stop at or above it and re-saved. Both copies of the amber header note (desktop subtitle and phone strip) are removed — it showed on every visit for anyone with ≥$500K saved and read as an error. The "unreadable hidden" note is unchanged. No server change.

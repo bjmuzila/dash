@@ -87,8 +87,9 @@ function hashToken(token: string): string {
 /** Creates a session row and returns the raw token to set as the cookie value.
  *  The raw token is never persisted -- only its hash.
  *
- *  ONE DEVICE PER ACCOUNT (2026-09-14). Every other session for this user is
- *  dropped here, so signing in anywhere signs you out everywhere else. This is
+ *  SESSION CAP PER ACCOUNT (2026-09-14 as one device; 3 since 2026-10-01, see
+ *  MAX_SESSIONS_PER_USER in lib/db.ts). Sessions beyond the newest 3 for this
+ *  user are dropped here, so a 4th sign-in signs out the oldest device. This is
  *  the ONLY place sessions are minted -- password login, signup and the Google
  *  callback all come through it -- which is why the rule lives here rather than
  *  in three route handlers that would drift apart.
