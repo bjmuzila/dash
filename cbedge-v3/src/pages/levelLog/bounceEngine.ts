@@ -2,48 +2,66 @@
 // CORE BOUNCE BACKTEST — the engine under the Level Log's Backtest tab.
 //
 // Question: when price comes back to the recorded CORE, does it bounce off it
-// or go through it? Pure functions over the same recorder the Log tab draws:
-// /api/walls-range — every session's change-only `walls_log` plus its 5-minute
-// `scanner_snapshots.spot` — in ONE request for up to 260 sessions.
+// toward the next wall, or go through it? Pure functions over the same recorder
+// the Log tab draws: /api/walls-range — every session's change-only `walls_log`
+// (CORE, call wall, put wall) plus its 5-minute `scanner_snapshots.spot` — in
+// ONE request for up to 260 sessions.
+//
+// ── EVERYTHING IS IN STRIKES (2026-10-01) ───────────────────────────────────
+// A trader reads "within a strike" and "two strikes through", not "0.03%". So
+// the touch zone and the break are counted in the symbol's STRIKE WIDTH — 5
+// points on SPX (the same 5 points on ES), 1 on SPY and QQQ — and the bounce
+// target is a FRACTION OF THE WAY TO THE NEXT WALL, read off the recorder at
+// the moment of the touch. One set of settings means the same thing on every
+// symbol.
 //
 // ── THE RULES, in the order the scan applies them ───────────────────────────
 //
-//   CORE AT A MOMENT. The `cb` strike forward-filled slot by slot, read at the
-//     slot the sample falls in. A slot's row is written at that slot's clock
-//     time, so a 10:07 sample is judged against the CORE as of 10:00 — never a
-//     level that had not been recorded yet. No look-ahead.
+//   LEVELS AT A MOMENT. CORE, call wall and put wall forward-filled slot by
+//     slot and read at the slot the sample falls in. A slot's rows are written
+//     at that slot's clock time, so a 10:07 sample is judged against the levels
+//     as of 10:00. No look-ahead.
 //
 //   SIDE. Price's last reading OUTSIDE the touch zone says where it came from:
-//     above → a SUPPORT test, below → a RESISTANCE test. A CORE that has just
-//     rolled starts with no side, so a level that rolls onto price is not a
-//     touch until price has left it and come back.
+//     above → a SUPPORT test (a bounce goes UP), below → a RESISTANCE test (a
+//     bounce goes DOWN). A CORE that has just rolled starts with no side, so a
+//     level that rolls onto price is not a touch until price has left it and
+//     come back.
 //
-//   TOUCH. A sample inside the zone (|spot − CORE| ≤ zone), or a sample that is
-//     already through to the OTHER side — a 5-minute series can step straight
-//     over a level, and dropping those would delete every clean break from the
-//     sample and flatter the bounce rate.
+//   HIT. Spot within `zone` strikes of the CORE — it does not have to tag the
+//     level head-on — or already through to the OTHER side, because a 5-minute
+//     series can step straight over a level, and dropping those would delete
+//     every clean break from the sample and flatter the bounce rate.
 //
-//   RESOLUTION, measured from the CORE (not from the sample's price):
-//     BOUNCE  price gets `target` away from it on the side it came from
-//     BREAK   price gets `stop` through it
+//   TARGET. The nearest wall beyond the CORE on the bounce side (above it for
+//     support, below it for resistance), and `wallFrac` of the way there —
+//     ½ by default: CORE 7620, call wall 7670 → the bounce is 7645. Fixed at
+//     the touch; walls that move afterwards do not move the goalposts. A wall
+//     so close that the target would sit inside the touch zone is passed over
+//     for the next one. No wall at all on the bounce side → the touch is not
+//     scored, and the page counts how many.
+//
+//   RESOLUTION, measured from the CORE:
+//     BOUNCE  price reaches the target
+//     BREAK   price gets `stop` strikes through the CORE
 //     OPEN    neither inside the hold window (or the session ended)
 //     MFE / MAE are the best / worst excursion up to resolution.
 //
-//   RE-ARM. After a touch resolves, the next one only counts once price has
-//     been at least 2 × zone away from the CORE. Without it one level sitting
-//     in a chop zone would score a dozen "touches" out of one event.
+//   RE-ARM. After a touch, the next one only counts once price has been at
+//     least 2 × zone away from the CORE. Without it one level sitting in a chop
+//     zone would score a dozen "touches" out of one event.
 //
 // ── WHAT A 5-MINUTE SERIES CANNOT SEE ───────────────────────────────────────
-// These are 5-minute samples, not highs and lows. A wick through the level and
-// back between two samples is invisible, and so is a target reached and given
-// back inside one bar. The page says so. It errs the same way for bounces and
+// These are 5-minute samples, not highs and lows. A wick into the zone and back
+// between two samples is invisible, and so is a target reached and given back
+// inside one bar. The page says so. It errs the same way for bounces and
 // breaks, so the comparison between settings is fair even where the absolute
 // rate is approximate.
 //
 // Every touch is kept and numbered by the scan; the APPROACH and FIRST-ONLY
 // switches are filters applied AFTER it, so flipping them never changes which
 // touches exist. Target, stop and hold DO — the scan resumes where a touch
-// resolved — which is why the target sweep re-runs the whole scan per target.
+// resolved — which is why the target sweep re-runs the whole scan per fraction.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { type DaySlice, type ExpScope, type GexBasis, WALL_SLOTS, rangeDayToSlice, slotAtMins } from '@/pages/levelLog/wallData'
@@ -54,12 +72,14 @@ export type Outcome = 'bounce' | 'break' | 'open'
 export type Side = 'support' | 'resistance'
 
 export interface BtParams {
-  /** Touch zone, % of the CORE. */
-  zonePct: number
-  /** Bounce target, % of the CORE, away from it on the approach side. */
-  targetPct: number
-  /** Break stop, % of the CORE, through it. */
-  stopPct: number
+  /** The symbol's strike width, in points — the unit zone and stop are counted in. */
+  strike: number
+  /** Touch zone, in strikes either side of the CORE. */
+  zoneStrikes: number
+  /** Bounce target: this fraction of the way from the CORE to the next wall on the bounce side. */
+  wallFrac: number
+  /** Break: this many strikes through the CORE. */
+  stopStrikes: number
   /** Minutes to wait for a resolution. null = to the close. */
   holdMin: number | null
 }
@@ -73,6 +93,12 @@ export interface BtEvent {
   side: Side
   /** Spot on the touch sample. */
   spot: number
+  /** The wall the target was measured to, and which one it was. */
+  wall: number
+  wallKind: 'call' | 'put'
+  /** The bounce target as a price, and its distance from the CORE in points. */
+  target: number
+  targetPts: number
   result: Outcome
   /** Best / worst excursion from the CORE up to resolution, points, ≥ 0. */
   mfe: number
@@ -91,6 +117,51 @@ export interface BtEvent {
   rolled: boolean
   /** Price crossed the level between two samples rather than sampling inside the zone. */
   gapped: boolean
+}
+
+export interface BtRun {
+  events: BtEvent[]
+  /** Touches with no wall on the bounce side — not scored, but not hidden either. */
+  noWall: number
+}
+
+// ── strike width ────────────────────────────────────────────────────────────
+
+/** The chains this page is mostly read on, whose strike grid near the money is known. */
+const KNOWN_STRIKE: Record<string, number> = {
+  SPX: 5,
+  SPXW: 5,
+  NDX: 10,
+  RUT: 5,
+  XSP: 1,
+  SPY: 1,
+  QQQ: 1,
+  IWM: 1,
+  DIA: 1,
+}
+
+/**
+ * Points per strike for `symbol`. Known roots first; otherwise the smallest gap
+ * between any two levels the recorder wrote for it, snapped to a standard
+ * increment — a level can only ever sit ON a strike, so that gap is a multiple
+ * of the width. Falls back on price.
+ */
+export function strikeWidth(symbol: string, days: DaySlice[]): number {
+  const known = KNOWN_STRIKE[symbol.toUpperCase()]
+  if (known) return known
+  const vals = new Set<number>()
+  for (const d of days) for (const r of d.log) if (Number(r.strike) > 0) vals.add(Math.round(Number(r.strike) * 100) / 100)
+  const sorted = [...vals].sort((a, b) => a - b)
+  let gap = Infinity
+  for (let i = 1; i < sorted.length; i++) {
+    const g = sorted[i]! - sorted[i - 1]!
+    if (g > 0.001 && g < gap) gap = g
+  }
+  const steps = [0.5, 1, 2.5, 5, 10, 25]
+  if (Number.isFinite(gap)) return steps.filter((s) => s <= gap + 1e-9).pop() ?? 0.5
+  const lastDay = days[days.length - 1]
+  const px = lastDay?.price[lastDay.price.length - 1]?.px ?? 0
+  return px >= 1000 ? 5 : 1
 }
 
 // ── the recorder read ───────────────────────────────────────────────────────
@@ -122,32 +193,37 @@ export async function fetchBacktestDays(
 /** Clock minutes a slot's row was written at. Slot 0 = the 09:29 baseline. */
 const slotStartMins = (slot: number) => (slot <= 0 ? 9 * 60 + 29 : 9 * 60 + 45 + (slot - 1) * 15)
 
-type SessionCore = { strike: (number | null)[]; since: number[] }
+type Series = (number | null)[]
+type SessionLevels = { cb: Series; cw: Series; pw: Series; since: number[] }
 
-function sessionCore(day: DaySlice): SessionCore {
-  const rows = day.log
-    .filter((r) => r.level_type === 'cb' && Number.isFinite(r.slot) && r.slot >= 0 && r.slot < WALL_SLOTS && Number(r.strike) > 0)
-    .sort((a, b) => a.slot - b.slot)
-  const strike: (number | null)[] = new Array(WALL_SLOTS).fill(null)
-  const since: number[] = new Array(WALL_SLOTS).fill(0)
-  let cur: number | null = null
-  let start = 0
-  let i = 0
-  for (let s = 0; s < WALL_SLOTS; s++) {
-    for (;;) {
-      const row = rows[i]
-      if (!row || row.slot > s) break
-      const v = Number(row.strike)
-      if (v !== cur) {
-        cur = v
-        start = s
+/** CORE, call wall and put wall, forward-filled per slot; `since` = slot the CORE's current strike began. */
+function sessionLevels(day: DaySlice): SessionLevels {
+  const fill = (lt: 'cb' | 'call_wall' | 'put_wall') => {
+    const rows = day.log
+      .filter((r) => r.level_type === lt && Number.isFinite(r.slot) && r.slot >= 0 && r.slot < WALL_SLOTS && Number(r.strike) > 0)
+      .sort((a, b) => a.slot - b.slot)
+    const out: Series = new Array(WALL_SLOTS).fill(null)
+    let cur: number | null = null
+    let i = 0
+    for (let s = 0; s < WALL_SLOTS; s++) {
+      for (;;) {
+        const row = rows[i]
+        if (!row || row.slot > s) break
+        cur = Number(row.strike)
+        i++
       }
-      i++
+      out[s] = cur
     }
-    strike[s] = cur
+    return out
+  }
+  const cb = fill('cb')
+  const since: number[] = new Array(WALL_SLOTS).fill(0)
+  let start = 0
+  for (let s = 1; s < WALL_SLOTS; s++) {
+    if (cb[s] !== cb[s - 1]) start = s
     since[s] = start
   }
-  return { strike, since }
+  return { cb, cw: fill('call_wall'), pw: fill('put_wall'), since }
 }
 
 const slotOf = (mins: number) => Math.max(0, Math.min(WALL_SLOTS - 1, Math.floor(slotAtMins(mins))))
@@ -155,26 +231,89 @@ const slotOf = (mins: number) => Math.max(0, Math.min(WALL_SLOTS - 1, Math.floor
 /** A touch found by the scan, before it is resolved. */
 type Touch = { i: number; core: number; dir: 1 | -1; slot: number; touchNo: number; gapped: boolean }
 
-type Resolved = ReturnType<typeof resolve>
+type Wall = { v: number; kind: 'call' | 'put' }
+
+/** The wall a touch's bounce is measured to — see TARGET in the header. */
+function pickWall(lv: SessionLevels, t: Touch, p: BtParams): Wall | null {
+  const zone = p.zoneStrikes * p.strike
+  const raw: Array<{ v: number | null; kind: 'call' | 'put' }> = [
+    { v: lv.cw[t.slot] ?? null, kind: 'call' },
+    { v: lv.pw[t.slot] ?? null, kind: 'put' },
+  ]
+  const cands = raw
+    .filter((c): c is Wall => c.v != null && t.dir * (c.v - t.core) > 0)
+    .sort((a, b) => Math.abs(a.v - t.core) - Math.abs(b.v - t.core))
+  return cands.find((c) => Math.abs(c.v - t.core) * p.wallFrac > zone) ?? null
+}
+
+type Resolved = {
+  endIdx: number
+  result: Outcome
+  exit: number
+  mfe: number
+  mae: number
+  rolled: boolean
+  resolveMin: number | null
+  stop: number
+  wall: Wall
+  targetPts: number
+}
+
+/** Walk forward from a touch until target, stop, the hold window or the close. */
+function resolve(day: DaySlice, lv: SessionLevels, t: Touch, p: BtParams): Resolved | null {
+  const wall = pickWall(lv, t, p)
+  if (!wall) return null
+  const P = day.price
+  const t0 = P[t.i]!.mins
+  const target = Math.abs(wall.v - t.core) * p.wallFrac
+  const stop = p.stopStrikes * p.strike
+  let mfe = 0
+  let mae = 0
+  let rolled = false
+  let endIdx = t.i
+  let result: Outcome = 'open'
+  let exit = 0
+  let resolveMin: number | null = null
+  for (let j = t.i; j < P.length; j++) {
+    const q = P[j]!
+    if (p.holdMin != null && q.mins - t0 > p.holdMin) break
+    endIdx = j
+    if ((lv.cb[slotOf(q.mins)] ?? t.core) !== t.core) rolled = true
+    const fav = t.dir * (q.px - t.core)
+    if (fav > mfe) mfe = fav
+    if (-fav > mae) mae = -fav
+    if (-fav >= stop) {
+      result = 'break'
+      exit = -stop
+      resolveMin = q.mins - t0
+      break
+    }
+    if (fav >= target) {
+      result = 'bounce'
+      exit = target
+      resolveMin = q.mins - t0
+      break
+    }
+    exit = fav
+  }
+  return { endIdx, result, exit, mfe, mae, rolled, resolveMin, stop, wall, targetPts: target }
+}
 
 /** Every touch in a session, numbered per CORE strike, re-armed between them, resolved. */
-function findTouches(
-  day: DaySlice,
-  strike: (number | null)[],
-  zonePct: number,
-  resolver: (t: Touch) => Resolved,
-): Array<{ t: Touch; r: Resolved }> {
+function scanSession(day: DaySlice, lv: SessionLevels, p: BtParams): { scored: Array<{ t: Touch; r: Resolved }>; noWall: number } {
   const P = day.price
-  const out: Array<{ t: Touch; r: Resolved }> = []
+  const zone = p.zoneStrikes * p.strike
+  const scored: Array<{ t: Touch; r: Resolved }> = []
+  let noWall = 0
   const count = new Map<number, number>()
   let prevCore: number | null = null
   let lastSide: 1 | -1 | 0 = 0
   let armed = true
   let i = 0
   while (i < P.length) {
-    const p = P[i]!
-    const slot = slotOf(p.mins)
-    const c = strike[slot] ?? null
+    const s = P[i]!
+    const slot = slotOf(s.mins)
+    const c = lv.cb[slot] ?? null
     if (c == null) {
       i++
       continue
@@ -184,8 +323,7 @@ function findTouches(
       lastSide = 0
       armed = true
     }
-    const zone = (c * zonePct) / 100
-    const d = p.px - c
+    const d = s.px - c
     const outside = Math.abs(d) > zone
     const sideNow: 1 | -1 = d > 0 ? 1 : -1
     let touch = false
@@ -207,72 +345,45 @@ function findTouches(
     const n = (count.get(c) ?? 0) + 1
     count.set(c, n)
     const t: Touch = { i, core: c, dir: lastSide as 1 | -1, slot, touchNo: n, gapped }
-    const r = resolver(t)
-    out.push({ t, r })
-    // Resume after this touch resolves, disarmed, with the side where it ended.
-    const end = r.endIdx
-    const last = P[end]
-    lastSide = last ? (last.px - c > 0 ? 1 : -1) : lastSide
+    const r = resolve(day, lv, t, p)
     armed = false
-    i = end + 1
-  }
-  return out
-}
-
-/** Walk forward from a touch until target, stop, the hold window or the close. */
-function resolve(day: DaySlice, t: Touch, p: BtParams, strikes: (number | null)[]) {
-  const P = day.price
-  const t0 = P[t.i]!.mins
-  const target = (t.core * p.targetPct) / 100
-  const stop = (t.core * p.stopPct) / 100
-  let mfe = 0
-  let mae = 0
-  let rolled = false
-  let endIdx = t.i
-  let result: Outcome = 'open'
-  let exit = 0
-  let resolveMin: number | null = null
-  for (let j = t.i; j < P.length; j++) {
-    const q = P[j]!
-    if (p.holdMin != null && q.mins - t0 > p.holdMin) break
-    endIdx = j
-    if ((strikes[slotOf(q.mins)] ?? t.core) !== t.core) rolled = true
-    const fav = t.dir * (q.px - t.core)
-    if (fav > mfe) mfe = fav
-    if (-fav > mae) mae = -fav
-    if (-fav >= stop) {
-      result = 'break'
-      exit = -stop
-      resolveMin = q.mins - t0
-      break
+    if (!r) {
+      // Nothing to bounce TO. Counted, not scored; re-arms like any other touch.
+      noWall++
+      i++
+      continue
     }
-    if (fav >= target) {
-      result = 'bounce'
-      exit = target
-      resolveMin = q.mins - t0
-      break
-    }
-    exit = fav
+    scored.push({ t, r })
+    // Resume after this touch resolves, disarmed, with the side where it ended.
+    const last = P[r.endIdx]
+    lastSide = last ? (last.px - c > 0 ? 1 : -1) : lastSide
+    i = r.endIdx + 1
   }
-  return { endIdx, result, exit, mfe, mae, rolled, resolveMin, stop }
+  return { scored, noWall }
 }
 
 /** Every touch in every session, resolved under `p`. */
-export function runBacktest(days: DaySlice[], p: BtParams): BtEvent[] {
-  const out: BtEvent[] = []
+export function runBacktest(days: DaySlice[], p: BtParams): BtRun {
+  const events: BtEvent[] = []
+  let noWall = 0
   for (const day of days) {
     if (day.price.length < 2) continue
-    const sc = sessionCore(day)
-    const touches = findTouches(day, sc.strike, p.zonePct, (t) => resolve(day, t, p, sc.strike))
-    for (const { t, r } of touches) {
+    const lv = sessionLevels(day)
+    const res = scanSession(day, lv, p)
+    noWall += res.noWall
+    for (const { t, r } of res.scored) {
       const q = day.price[t.i]!
-      out.push({
+      events.push({
         id: `${day.date}-${q.mins}-${t.core}`,
         date: day.date,
         mins: q.mins,
         core: t.core,
         side: t.dir > 0 ? 'support' : 'resistance',
         spot: q.px,
+        wall: r.wall.v,
+        wallKind: r.wall.kind,
+        target: t.core + t.dir * r.targetPts,
+        targetPts: r.targetPts,
         result: r.result,
         mfe: r.mfe,
         mae: r.mae,
@@ -280,13 +391,13 @@ export function runBacktest(days: DaySlice[], p: BtParams): BtEvent[] {
         r: r.stop > 0 ? r.exit / r.stop : 0,
         resolveMin: r.resolveMin,
         touchNo: t.touchNo,
-        heldMin: Math.max(0, q.mins - slotStartMins(sc.since[t.slot] ?? 0)),
+        heldMin: Math.max(0, q.mins - slotStartMins(lv.since[t.slot] ?? 0)),
         rolled: r.rolled,
         gapped: t.gapped,
       })
     }
   }
-  return out
+  return { events, noWall }
 }
 
 /** The Approach and First-only switches — applied after detection, see the header. */
@@ -310,6 +421,8 @@ export interface BtSummary {
   winOfResolved: number | null
   avgMfe: number | null
   avgMae: number | null
+  /** Mean distance to the target, points. */
+  avgTarget: number | null
   medBounceMin: number | null
   /** Mean points per touch, and the same in units of the stop. */
   ptsPerTouch: number | null
@@ -331,6 +444,7 @@ export function summarize(events: BtEvent[]): BtSummary {
   let open = 0
   let mfe = 0
   let mae = 0
+  let tgt = 0
   let pts = 0
   let r = 0
   const bounceMins: number[] = []
@@ -344,6 +458,7 @@ export function summarize(events: BtEvent[]): BtSummary {
     else open++
     mfe += e.mfe
     mae += e.mae
+    tgt += e.targetPts
     pts += e.exit
     r += e.r
   }
@@ -359,6 +474,7 @@ export function summarize(events: BtEvent[]): BtSummary {
     winOfResolved: bounce + brk ? (bounce / (bounce + brk)) * 100 : null,
     avgMfe: n ? mfe / n : null,
     avgMae: n ? mae / n : null,
+    avgTarget: n ? tgt / n : null,
     medBounceMin: median(bounceMins),
     ptsPerTouch: n ? pts / n : null,
     rPerTouch: n ? r / n : null,
@@ -401,19 +517,41 @@ export const byAge = (ev: BtEvent[]) =>
     { key: 'old', label: 'CORE held 2h +', test: (e) => e.heldMin >= 120 },
   ])
 
-/** Targets the sweep tries, in % of the CORE. */
-export const SWEEP_TARGETS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5]
+/** How far the wall was — a near wall is a small target, a far one a big ask. */
+export const byWallDistance = (ev: BtEvent[], strike: number) => {
+  const dist = (e: BtEvent) => Math.abs(e.wall - e.core) / strike
+  return bucketize(ev, [
+    { key: 'near', label: 'Wall ≤ 4 strikes away', test: (e) => dist(e) <= 4 + 1e-9 },
+    { key: 'mid', label: 'Wall 5 – 10 strikes', test: (e) => dist(e) > 4 + 1e-9 && dist(e) <= 10 + 1e-9 },
+    { key: 'far', label: 'Wall over 10 strikes', test: (e) => dist(e) > 10 + 1e-9 },
+  ])
+}
 
-/** Re-run the resolution at each target, everything else held. */
-export function sweepTargets(
+/** Fractions of the way to the wall the sweep tries. */
+export const SWEEP_FRACS = [0.25, 1 / 3, 0.5, 2 / 3, 0.75, 1]
+
+/** "½", "⅓", … for a fraction of the way to the wall. */
+export function fracLabel(f: number): string {
+  const near = (x: number) => Math.abs(f - x) < 1e-6
+  if (near(0.25)) return '¼'
+  if (near(1 / 3)) return '⅓'
+  if (near(0.5)) return '½'
+  if (near(2 / 3)) return '⅔'
+  if (near(0.75)) return '¾'
+  if (near(1)) return 'All the way'
+  return `${Math.round(f * 100)}%`
+}
+
+/** Re-run the whole scan at each fraction of the way to the wall, everything else held. */
+export function sweepFractions(
   days: DaySlice[],
   p: BtParams,
   approach: Approach,
   touches: TouchMode,
-): Array<{ targetPct: number; summary: BtSummary }> {
-  return SWEEP_TARGETS.filter((t) => t > p.zonePct).map((targetPct) => ({
-    targetPct,
-    summary: summarize(filterEvents(runBacktest(days, { ...p, targetPct }), approach, touches)),
+): Array<{ frac: number; summary: BtSummary }> {
+  return SWEEP_FRACS.map((frac) => ({
+    frac,
+    summary: summarize(filterEvents(runBacktest(days, { ...p, wallFrac: frac }).events, approach, touches)),
   }))
 }
 

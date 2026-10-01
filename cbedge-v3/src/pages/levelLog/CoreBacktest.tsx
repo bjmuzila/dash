@@ -8,12 +8,18 @@
 // live in levelLog/bounceEngine.ts and are stated on the page, because a hit
 // rate whose definition you cannot see is not a number you can use.
 //
+// THE TRADE IT SCORES (2026-10-01, Brandon's definition): price comes within a
+// strike of the CORE — 5 points on SPX / ES, it does not have to tag it — and
+// the bounce is HALF WAY TO THE OTHER WALL. Zone and break are counted in
+// strikes and the target in fractions of the way to the wall, so the same
+// settings read the same on SPX, SPY and QQQ.
+//
 // Every control re-runs the backtest locally except the four that change WHAT
 // is read (symbol, end date, sessions, variant), which re-fetch. Settings are
 // remembered per browser; the end date is not, so the page opens on today.
 //
-// Clicking a touch's date opens that session on the Log tab, where the CORE and
-// price it was scored from are drawn.
+// Clicking a touch's date opens that session on the Log tab, where the CORE,
+// the walls and the price it was scored from are drawn.
 //
 // Its own chunk, loaded only when the tab is opened.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,12 +43,15 @@ import {
   bySide,
   byTime,
   byTouchNo,
+  byWallDistance,
   fetchBacktestDays,
   filterEvents,
+  fracLabel,
   hhmm,
   runBacktest,
+  strikeWidth,
   summarize,
-  sweepTargets,
+  sweepFractions,
 } from '@/pages/levelLog/bounceEngine'
 import { type DaySlice, type ExpScope, type GexBasis, todayETStr, variantTag, wallNum, wallStrike } from '@/pages/levelLog/wallData'
 
@@ -50,6 +59,9 @@ import { type DaySlice, type ExpScope, type GexBasis, todayETStr, variantTag, wa
 
 type SessionsKey = '21' | '63' | '126' | '260'
 type HoldKey = '30' | '60' | '120' | 'close'
+type ZoneKey = '0.5' | '1' | '2'
+type FracKey = '0.333' | '0.5' | '0.75' | '1'
+type StopKey = '1' | '2' | '3' | '4'
 
 const SESSIONS_OPTIONS: Array<{ label: string; value: SessionsKey; title: string }> = [
   { label: '1M', value: '21', title: 'The last 21 recorded sessions' },
@@ -58,12 +70,11 @@ const SESSIONS_OPTIONS: Array<{ label: string; value: SessionsKey; title: string
   { label: 'All', value: '260', title: 'Every recorded session, up to 260' },
 ]
 
-const ZONE_OPTIONS = ['0.02', '0.03', '0.05', '0.08'] as const
-const TARGET_OPTIONS = ['0.10', '0.15', '0.20', '0.25', '0.30', '0.40'] as const
-const STOP_OPTIONS = ['0.10', '0.15', '0.20', '0.25', '0.30', '0.40'] as const
-type ZoneKey = (typeof ZONE_OPTIONS)[number]
-type TargetKey = (typeof TARGET_OPTIONS)[number]
-type StopKey = (typeof STOP_OPTIONS)[number]
+const ZONE_KEYS: readonly ZoneKey[] = ['0.5', '1', '2']
+const FRAC_KEYS: readonly FracKey[] = ['0.333', '0.5', '0.75', '1']
+const STOP_KEYS: readonly StopKey[] = ['1', '2', '3', '4']
+
+const strikesLabel = (k: string) => (k === '0.5' ? '½ strike' : k === '1' ? '1 strike' : `${k} strikes`)
 
 const HOLD_OPTIONS: Array<{ label: string; value: HoldKey; title: string }> = [
   { label: '30m', value: '30', title: 'Resolve within 30 minutes or it is OPEN' },
@@ -74,8 +85,8 @@ const HOLD_OPTIONS: Array<{ label: string; value: HoldKey; title: string }> = [
 
 const APPROACH_OPTIONS: Array<{ label: string; value: Approach; title: string }> = [
   { label: 'Both', value: 'both', title: 'Every touch, from either side' },
-  { label: '▲ Support', value: 'support', title: 'Price came DOWN to the CORE — does it hold as support?' },
-  { label: '▼ Resistance', value: 'resistance', title: 'Price came UP to the CORE — does it hold as resistance?' },
+  { label: '▲ Support', value: 'support', title: 'Price came DOWN to the CORE — does it bounce back up toward the wall above?' },
+  { label: '▼ Resistance', value: 'resistance', title: 'Price came UP to the CORE — does it turn back down toward the wall below?' },
 ]
 
 const TOUCH_OPTIONS: Array<{ label: string; value: TouchMode; title: string }> = [
@@ -84,8 +95,8 @@ const TOUCH_OPTIONS: Array<{ label: string; value: TouchMode; title: string }> =
 ]
 
 const SCOPE_OPTIONS: Array<{ label: string; value: ExpScope; title: string }> = [
-  { label: '0DTE', value: '0dte', title: 'CORE from the nearest listed contract only' },
-  { label: 'Non-0DTE', value: 'agg', title: 'CORE from every other listed expiration, summed per strike' },
+  { label: '0DTE', value: '0dte', title: 'Levels from the nearest listed contract only' },
+  { label: 'Non-0DTE', value: 'agg', title: 'Levels from every other listed expiration, summed per strike' },
 ]
 
 const BASIS_OPTIONS: Array<{ label: string; value: GexBasis; title: string }> = [
@@ -95,19 +106,17 @@ const BASIS_OPTIONS: Array<{ label: string; value: GexBasis; title: string }> = 
 
 const QUICK = ['SPX', 'SPY', 'QQQ'] as const
 
-const pctOpts = <K extends string>(keys: readonly K[], what: string) =>
-  keys.map((k) => ({ label: `${Number(k).toFixed(2)}%`, value: k, title: `${what} ${Number(k).toFixed(2)}% of the CORE` }))
-
 // ── saved settings ──────────────────────────────────────────────────────────
 
-const SETTINGS_KEY = 'cb-v3-level-log:backtest'
+/** v2: the units changed from % of the CORE to strikes and wall fractions. */
+const SETTINGS_KEY = 'cb-v3-level-log:backtest:v2'
 
 interface Saved {
   sessions: SessionsKey
   scope: ExpScope
   basis: GexBasis
   zone: ZoneKey
-  target: TargetKey
+  frac: FracKey
   stop: StopKey
   hold: HoldKey
   approach: Approach
@@ -118,9 +127,9 @@ const DEFAULTS: Saved = {
   sessions: '63',
   scope: '0dte',
   basis: 'oivol',
-  zone: '0.03',
-  target: '0.15',
-  stop: '0.15',
+  zone: '1',
+  frac: '0.5',
+  stop: '2',
   hold: '60',
   approach: 'both',
   touches: 'every',
@@ -137,9 +146,9 @@ function loadSaved(): Saved {
       sessions: pick(j.sessions, ['21', '63', '126', '260'], DEFAULTS.sessions),
       scope: pick(j.scope, ['0dte', 'agg'], DEFAULTS.scope),
       basis: pick(j.basis, ['oivol', 'vol'], DEFAULTS.basis),
-      zone: pick(j.zone, ZONE_OPTIONS, DEFAULTS.zone),
-      target: pick(j.target, TARGET_OPTIONS, DEFAULTS.target),
-      stop: pick(j.stop, STOP_OPTIONS, DEFAULTS.stop),
+      zone: pick(j.zone, ZONE_KEYS, DEFAULTS.zone),
+      frac: pick(j.frac, FRAC_KEYS, DEFAULTS.frac),
+      stop: pick(j.stop, STOP_KEYS, DEFAULTS.stop),
       hold: pick(j.hold, ['30', '60', '120', 'close'], DEFAULTS.hold),
       approach: pick(j.approach, ['both', 'support', 'resistance'], DEFAULTS.approach),
       touches: pick(j.touches, ['every', 'first'], DEFAULTS.touches),
@@ -154,6 +163,7 @@ function loadSaved(): Saved {
 const pct0 = (v: number | null) => (v == null ? '—' : `${Math.round(v)}%`)
 const signed = (v: number | null, dp = 2) => (v == null ? '—' : `${v > 0 ? '+' : ''}${wallNum(v, dp)}`)
 const tone = (v: number | null) => (v == null || v === 0 ? 'text-fg' : v > 0 ? 'text-up' : 'text-down')
+const pts = (v: number) => (Number.isInteger(v) ? String(v) : wallNum(v))
 
 /** The label in front of a control group — the row is too dense to go unlabelled. */
 function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
@@ -174,7 +184,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
   const [scope, setScope] = useState(saved.scope)
   const [basis, setBasis] = useState(saved.basis)
   const [zone, setZone] = useState(saved.zone)
-  const [target, setTarget] = useState(saved.target)
+  const [frac, setFrac] = useState(saved.frac)
   const [stop, setStop] = useState(saved.stop)
   const [hold, setHold] = useState(saved.hold)
   const [approach, setApproach] = useState(saved.approach)
@@ -186,12 +196,12 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
     try {
       localStorage.setItem(
         SETTINGS_KEY,
-        JSON.stringify({ sessions, scope, basis, zone, target, stop, hold, approach, touches } satisfies Saved),
+        JSON.stringify({ sessions, scope, basis, zone, frac, stop, hold, approach, touches } satisfies Saved),
       )
     } catch {
       /* best-effort */
     }
-  }, [sessions, scope, basis, zone, target, stop, hold, approach, touches])
+  }, [sessions, scope, basis, zone, frac, stop, hold, approach, touches])
 
   // ── the one read ────────────────────────────────────────────────────────
   const [data, setData] = useState<{ days: DaySlice[]; loading: boolean; error: string | null }>({
@@ -212,41 +222,36 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
   }, [symbol, end, sessions, scope, basis, nonce])
 
   // ── the backtest ────────────────────────────────────────────────────────
+  const days = data.days
+  const strike = useMemo(() => strikeWidth(symbol, days), [symbol, days])
   const params = useMemo<BtParams>(
     () => ({
-      zonePct: Number(zone),
-      targetPct: Number(target),
-      stopPct: Number(stop),
+      strike,
+      zoneStrikes: Number(zone),
+      wallFrac: frac === '0.333' ? 1 / 3 : Number(frac),
+      stopStrikes: Number(stop),
       holdMin: hold === 'close' ? null : Number(hold),
     }),
-    [zone, target, stop, hold],
+    [strike, zone, frac, stop, hold],
   )
-  const days = data.days
-  const all = useMemo(() => runBacktest(days, params), [days, params])
-  const events = useMemo(() => filterEvents(all, approach, touches), [all, approach, touches])
+  const run = useMemo(() => runBacktest(days, params), [days, params])
+  const events = useMemo(() => filterEvents(run.events, approach, touches), [run, approach, touches])
   const sum = useMemo(() => summarize(events), [events])
-  const sweep = useMemo(() => sweepTargets(days, params, approach, touches), [days, params, approach, touches])
+  const sweep = useMemo(() => sweepFractions(days, params, approach, touches), [days, params, approach, touches])
   const groups = useMemo(
     () => [
       { title: 'By approach', rows: bySide(events) },
       { title: 'By time of day', rows: byTime(events) },
+      { title: 'By distance to the wall', rows: byWallDistance(events, strike) },
       { title: 'By touch number', rows: byTouchNo(events) },
       { title: 'By CORE age', rows: byAge(events) },
     ],
-    [events],
+    [events, strike],
   )
 
-  /** A recent price, to say what each % means in points of THIS symbol. */
-  const refPx = useMemo(() => {
-    for (let i = days.length - 1; i >= 0; i--) {
-      const p = days[i]?.price
-      const last = p?.[p.length - 1]
-      if (last) return last.px
-    }
-    return null
-  }, [days])
-  const ptsOf = (pctStr: string) => (refPx ? `≈ ${wallNum((refPx * Number(pctStr)) / 100)} pts` : '')
-
+  const zonePts = Number(zone) * strike
+  const stopPts = Number(stop) * strike
+  const fracText = fracLabel(params.wallFrac)
   const range = days.length ? `${days[0]!.date} → ${days[days.length - 1]!.date}` : ''
 
   return (
@@ -272,7 +277,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
             title="The ticker under test — set on the app toolbar, or with the quick picks beside it"
             className="tabular shrink-0 rounded-sm border border-line bg-surface2 px-1.5 py-0.5 font-mono text-2xs font-semibold uppercase tracking-wide text-fg"
           >
-            {symbol}
+            {symbol} · 1 strike = {pts(strike)} pts
           </span>
           <SegGroup
             options={QUICK.map((q) => ({ label: q, value: q, title: `Backtest ${q}` }))}
@@ -282,37 +287,56 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
           />
           <DatePicker size="sm" value={end} max={todayETStr()} onChange={(v) => setEnd(v || todayETStr())} title="Last session in the test, ET" label={(v) => `to ${v}`} className="shrink-0" />
           <SegGroup options={SESSIONS_OPTIONS} value={sessions} onChange={setSessions} title="How many recorded sessions" />
-          <SegGroup options={SCOPE_OPTIONS} value={scope} onChange={setScope} title="Which contracts the CORE is from" />
-          <SegGroup options={BASIS_OPTIONS} value={basis} onChange={setBasis} title="Which GEX the CORE is from" />
+          <SegGroup options={SCOPE_OPTIONS} value={scope} onChange={setScope} title="Which contracts the levels are from" />
+          <SegGroup options={BASIS_OPTIONS} value={basis} onChange={setBasis} title="Which GEX the levels are from" />
         </CardToolbar>
 
         <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
-          <Labeled label="Zone">
-            <SegGroup options={pctOpts(ZONE_OPTIONS, 'A touch is spot within')} value={zone} onChange={setZone} title="Touch zone" />
+          <Labeled label="Hit within">
+            <SegGroup
+              options={ZONE_KEYS.map((k) => ({ label: strikesLabel(k), value: k, title: `A hit is price within ${pts(Number(k) * strike)} pts of the CORE` }))}
+              value={zone}
+              onChange={setZone}
+              title="How close counts as a hit"
+            />
           </Labeled>
-          <Labeled label="Bounce">
-            <SegGroup options={pctOpts(TARGET_OPTIONS, 'A bounce is price getting')} value={target} onChange={setTarget} title="Bounce target" />
+          <Labeled label="Bounce to">
+            <SegGroup
+              options={FRAC_KEYS.map((k) => {
+                const f = k === '0.333' ? 1 / 3 : Number(k)
+                return { label: f === 1 ? 'The wall' : `${fracLabel(f)} way`, value: k, title: `A bounce is price getting ${fracLabel(f)} of the way from the CORE to the next wall` }
+              })}
+              value={frac}
+              onChange={setFrac}
+              title="How far toward the next wall a bounce has to get"
+            />
           </Labeled>
           <Labeled label="Break">
-            <SegGroup options={pctOpts(STOP_OPTIONS, 'A break is price getting through by')} value={stop} onChange={setStop} title="Break stop" />
+            <SegGroup
+              options={STOP_KEYS.map((k) => ({ label: strikesLabel(k), value: k, title: `A break is price ${pts(Number(k) * strike)} pts through the CORE` }))}
+              value={stop}
+              onChange={setStop}
+              title="How far through the CORE counts as a break"
+            />
           </Labeled>
           <Labeled label="Hold">
-            <SegGroup options={HOLD_OPTIONS} value={hold} onChange={setHold} title="How long a touch has to resolve" />
+            <SegGroup options={HOLD_OPTIONS} value={hold} onChange={setHold} title="How long a hit has to resolve" />
           </Labeled>
           <Labeled label="Approach">
             <SegGroup options={APPROACH_OPTIONS} value={approach} onChange={setApproach} title="Which side price came from" />
           </Labeled>
-          <Labeled label="Touches">
-            <SegGroup options={TOUCH_OPTIONS} value={touches} onChange={setTouches} title="Every touch, or the first per CORE strike" />
+          <Labeled label="Hits">
+            <SegGroup options={TOUCH_OPTIONS} value={touches} onChange={setTouches} title="Every hit, or the first per CORE strike" />
           </Labeled>
         </div>
 
         <p className="mb-3 text-2xs leading-relaxed text-muted">
-          A <b className="text-fg">touch</b> is 5-minute spot within {Number(zone).toFixed(2)}% of the CORE ({ptsOf(zone)}) or stepping
-          straight through it, after coming from one side. <b className="text-up">Bounce</b> = {Number(target).toFixed(2)}% back
-          the way it came ({ptsOf(target)}); <b className="text-down">break</b> = {Number(stop).toFixed(2)}% through ({ptsOf(stop)});
-          neither within {hold === 'close' ? 'the session' : HOLD_OPTIONS.find((h) => h.value === hold)?.label} = open. The CORE is
-          the {variantTag(scope, basis)} level as recorded at the time — no look-ahead. 5-minute samples, not highs and lows: a wick
+          A <b className="text-fg">hit</b> is 5-minute spot within {strikesLabel(zone)} of the CORE ({pts(zonePts)} pts — it does not
+          have to tag it), after coming from one side. <b className="text-up">Bounce</b> = price gets {fracText === 'All the way' ? 'all the way' : `${fracText} of the way`} from
+          the CORE to the next wall on the side it came from (the call wall above on a support hit, the put wall below on a
+          resistance hit), as the walls stood at the hit. <b className="text-down">Break</b> = {strikesLabel(stop)} through the CORE ({pts(stopPts)} pts).
+          Neither within {hold === 'close' ? 'the session' : HOLD_OPTIONS.find((h) => h.value === hold)?.label} = open. Levels are
+          the {variantTag(scope, basis)} recorder as of the hit — no look-ahead. 5-minute samples, not highs and lows: a wick
           between samples is not seen.
         </p>
 
@@ -327,20 +351,21 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
             No recorded sessions for {symbol} on {variantTag(scope, basis)} up to {end}.
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4 xl:grid-cols-8">
-            <Stat label="Touches" value={sum.n.toLocaleString()} sub={`${sum.sessions} of ${days.length} sessions · ${range}`} />
-            <Stat label="Bounced" value={pct0(sum.bouncePct)} sub={`${sum.bounce} touches`} direction="up" />
-            <Stat label="Broke" value={pct0(sum.breakPct)} sub={`${sum.brk} touches`} direction="down" />
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9">
+            <Stat
+              label="Hits"
+              value={sum.n.toLocaleString()}
+              sub={`${sum.sessions} of ${days.length} sessions · ${range}${run.noWall ? ` · ${run.noWall} with no wall to bounce to, not scored` : ''}`}
+            />
+            <Stat label="Bounced" value={pct0(sum.bouncePct)} sub={`${sum.bounce} hits`} direction="up" />
+            <Stat label="Broke" value={pct0(sum.breakPct)} sub={`${sum.brk} hits`} direction="down" />
             <Stat label="Open" value={pct0(sum.openPct)} sub={`${sum.open} unresolved`} />
             <Stat label="Bounce of resolved" value={pct0(sum.winOfResolved)} sub="share of the ones that resolved" />
+            <Stat label="Avg target" value={sum.avgTarget == null ? '—' : `${wallNum(sum.avgTarget)}`} sub={`pts from the CORE · break ${pts(stopPts)}`} />
             <Stat label="Avg MFE / MAE" value={`${wallNum(sum.avgMfe)} / ${wallNum(sum.avgMae)}`} sub="points from the CORE" />
+            <Stat label="Time to bounce" value={sum.medBounceMin == null ? '—' : `${Math.round(sum.medBounceMin)}m`} sub="median" />
             <Stat
-              label="Time to bounce"
-              value={sum.medBounceMin == null ? '—' : `${Math.round(sum.medBounceMin)}m`}
-              sub="median"
-            />
-            <Stat
-              label="Points per touch"
+              label="Points per hit"
               value={signed(sum.ptsPerTouch)}
               sub={`${signed(sum.rPerTouch)} R`}
               direction={sum.ptsPerTouch == null || sum.ptsPerTouch === 0 ? undefined : sum.ptsPerTouch > 0 ? 'up' : 'down'}
@@ -354,8 +379,8 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
           <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-2">
             <Card title="Cumulative points" expandId="level-log-core-backtest-curve">
               <p className="mb-2 text-2xs text-muted">
-                Every touch in order: +{Number(target).toFixed(2)}% on a bounce, −{Number(stop).toFixed(2)}% on a break, where it
-                stood on an open one. In points of {symbol}.
+                Every hit in order: + the target on a bounce, −{pts(stopPts)} on a break, where it stood on an open one. In points
+                of {symbol}.
               </p>
               <CumulativeCurve events={events} />
             </Card>
@@ -364,7 +389,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
                 {groups.map((g) => (
                   <div key={g.title}>
                     <div className="mb-1 text-2xs font-extrabold uppercase tracking-widest text-muted">{g.title}</div>
-                    <Table columns={BUCKET_COLUMNS} rows={g.rows} rowKey={(r) => r.key} empty="No touches." />
+                    <Table columns={BUCKET_COLUMNS} rows={g.rows} rowKey={(r) => r.key} empty="No hits." />
                   </div>
                 ))}
               </div>
@@ -373,25 +398,25 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
 
           <Card title="Target sweep" expandId="level-log-core-backtest-sweep">
             <p className="mb-2 text-2xs text-muted">
-              The same touches resolved at each bounce target, with the break at {Number(stop).toFixed(2)}% and everything else held.
-              The highlighted row is the target set above.
+              The same session re-scored with the bounce at each fraction of the way to the wall — break at {pts(stopPts)} pts,
+              everything else held. The highlighted row is the target set above.
             </p>
             <Table
-              columns={sweepColumns(refPx)}
+              columns={SWEEP_COLUMNS}
               rows={sweep}
-              rowKey={(r) => String(r.targetPct)}
-              rowClassName={(r) => (Math.abs(r.targetPct - Number(target)) < 1e-9 ? 'bg-surface2' : undefined)}
-              empty="No targets above the touch zone."
+              rowKey={(r) => String(r.frac)}
+              rowClassName={(r) => (Math.abs(r.frac - params.wallFrac) < 1e-6 ? 'bg-surface2' : undefined)}
+              empty="Nothing to sweep."
             />
           </Card>
 
-          <Card title={`Every touch · ${events.length.toLocaleString()}`} expandId="level-log-core-backtest-touches">
+          <Card title={`Every hit · ${events.length.toLocaleString()}`} expandId="level-log-core-backtest-touches">
             <div className="max-h-[560px] min-h-0 overflow-auto">
               <Table
                 columns={eventColumns(onOpenSession)}
                 rows={events.slice().reverse().slice(0, EVENT_CAP)}
                 rowKey={(r) => r.id}
-                empty="No touches with these settings."
+                empty="No hits with these settings."
               />
             </div>
             {events.length > EVENT_CAP ? (
@@ -406,59 +431,51 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
   )
 }
 
-/** Rows the touch table renders. The stats always use all of them. */
+/** Rows the hit table renders. The stats always use all of them. */
 const EVENT_CAP = 400
 
 // ── tables ──────────────────────────────────────────────────────────────────
 
 const BUCKET_COLUMNS: Column<Bucket>[] = [
   { key: 'label', header: '', cell: (r) => r.label },
-  { key: 'n', header: 'Touches', numeric: true, width: '70px', cell: (r) => r.summary.n.toLocaleString() },
-  { key: 'b', header: 'Bounce', numeric: true, width: '64px', cell: (r) => <span className="text-up">{pct0(r.summary.bouncePct)}</span> },
-  { key: 'k', header: 'Break', numeric: true, width: '64px', cell: (r) => <span className="text-down">{pct0(r.summary.breakPct)}</span> },
-  { key: 'o', header: 'Open', numeric: true, width: '56px', cell: (r) => pct0(r.summary.openPct) },
-  { key: 'mfe', header: 'MFE', numeric: true, width: '64px', cell: (r) => wallNum(r.summary.avgMfe) },
-  { key: 'mae', header: 'MAE', numeric: true, width: '64px', cell: (r) => wallNum(r.summary.avgMae) },
+  { key: 'n', header: 'Hits', numeric: true, width: '56px', cell: (r) => r.summary.n.toLocaleString() },
+  { key: 'b', header: 'Bounce', numeric: true, width: '60px', cell: (r) => <span className="text-up">{pct0(r.summary.bouncePct)}</span> },
+  { key: 'k', header: 'Break', numeric: true, width: '56px', cell: (r) => <span className="text-down">{pct0(r.summary.breakPct)}</span> },
+  { key: 'o', header: 'Open', numeric: true, width: '52px', cell: (r) => pct0(r.summary.openPct) },
+  { key: 't', header: 'Target', numeric: true, width: '60px', cell: (r) => wallNum(r.summary.avgTarget) },
+  { key: 'mfe', header: 'MFE', numeric: true, width: '56px', cell: (r) => wallNum(r.summary.avgMfe) },
+  { key: 'mae', header: 'MAE', numeric: true, width: '56px', cell: (r) => wallNum(r.summary.avgMae) },
   {
     key: 'pts',
-    header: 'Pts / touch',
+    header: 'Pts / hit',
     numeric: true,
-    width: '84px',
+    width: '72px',
     cell: (r) => <span className={tone(r.summary.ptsPerTouch)}>{signed(r.summary.ptsPerTouch)}</span>,
   },
 ]
 
-function sweepColumns(refPx: number | null): Column<{ targetPct: number; summary: BtSummary }>[] {
-  return [
-    {
-      key: 't',
-      header: 'Bounce target',
-      cell: (r) => (
-        <span className="tabular">
-          {r.targetPct.toFixed(2)}%
-          {refPx ? <span className="text-muted"> · ≈ {wallNum((refPx * r.targetPct) / 100)} pts</span> : null}
-        </span>
-      ),
-    },
-    { key: 'n', header: 'Touches', numeric: true, cell: (r) => r.summary.n.toLocaleString() },
-    { key: 'b', header: 'Bounce', numeric: true, cell: (r) => <span className="text-up">{pct0(r.summary.bouncePct)}</span> },
-    { key: 'k', header: 'Break', numeric: true, cell: (r) => <span className="text-down">{pct0(r.summary.breakPct)}</span> },
-    { key: 'o', header: 'Open', numeric: true, cell: (r) => pct0(r.summary.openPct) },
-    { key: 'w', header: 'Bounce of resolved', numeric: true, cell: (r) => pct0(r.summary.winOfResolved) },
-    {
-      key: 'p',
-      header: 'Pts / touch',
-      numeric: true,
-      cell: (r) => <span className={tone(r.summary.ptsPerTouch)}>{signed(r.summary.ptsPerTouch)}</span>,
-    },
-    {
-      key: 'r',
-      header: 'R / touch',
-      numeric: true,
-      cell: (r) => <span className={tone(r.summary.rPerTouch)}>{signed(r.summary.rPerTouch)}</span>,
-    },
-  ]
-}
+const SWEEP_COLUMNS: Column<{ frac: number; summary: BtSummary }>[] = [
+  { key: 'f', header: 'Bounce to', cell: (r) => (r.frac === 1 ? 'The wall' : `${fracLabel(r.frac)} of the way`) },
+  { key: 'n', header: 'Hits', numeric: true, cell: (r) => r.summary.n.toLocaleString() },
+  { key: 't', header: 'Avg target', numeric: true, cell: (r) => wallNum(r.summary.avgTarget) },
+  { key: 'b', header: 'Bounce', numeric: true, cell: (r) => <span className="text-up">{pct0(r.summary.bouncePct)}</span> },
+  { key: 'k', header: 'Break', numeric: true, cell: (r) => <span className="text-down">{pct0(r.summary.breakPct)}</span> },
+  { key: 'o', header: 'Open', numeric: true, cell: (r) => pct0(r.summary.openPct) },
+  { key: 'w', header: 'Bounce of resolved', numeric: true, cell: (r) => pct0(r.summary.winOfResolved) },
+  { key: 'm', header: 'Time to bounce', numeric: true, cell: (r) => (r.summary.medBounceMin == null ? '—' : `${Math.round(r.summary.medBounceMin)}m`) },
+  {
+    key: 'p',
+    header: 'Pts / hit',
+    numeric: true,
+    cell: (r) => <span className={tone(r.summary.ptsPerTouch)}>{signed(r.summary.ptsPerTouch)}</span>,
+  },
+  {
+    key: 'r',
+    header: 'R / hit',
+    numeric: true,
+    cell: (r) => <span className={tone(r.summary.rPerTouch)}>{signed(r.summary.rPerTouch)}</span>,
+  },
+]
 
 const RESULT_LABEL = { bounce: 'BOUNCE', break: 'BREAK', open: 'OPEN' } as const
 const RESULT_CLASS = { bounce: 'text-up', break: 'text-down', open: 'text-muted' } as const
@@ -488,6 +505,17 @@ function eventColumns(onOpenSession: (date: string) => void): Column<BtEvent>[] 
     },
     { key: 'spot', header: 'Spot', numeric: true, cell: (e) => wallNum(e.spot) },
     {
+      key: 'wall',
+      header: 'Wall',
+      numeric: true,
+      cell: (e) => (
+        <span title={e.wallKind === 'call' ? 'Call wall' : 'Put wall'} style={{ color: e.wallKind === 'call' ? T.green : T.red }}>
+          {e.wallKind === 'call' ? 'CW' : 'PW'} {wallStrike(e.wall)}
+        </span>
+      ),
+    },
+    { key: 'tgt', header: 'Target', numeric: true, cell: (e) => wallNum(e.target) },
+    {
       key: 'res',
       header: 'Result',
       cell: (e) => (
@@ -501,13 +529,13 @@ function eventColumns(onOpenSession: (date: string) => void): Column<BtEvent>[] 
     { key: 'mae', header: 'MAE', numeric: true, cell: (e) => wallNum(e.mae) },
     { key: 'pts', header: 'Pts', numeric: true, cell: (e) => <span className={tone(e.exit)}>{signed(e.exit)}</span> },
     { key: 'min', header: 'Min', numeric: true, cell: (e) => (e.resolveMin == null ? '—' : String(Math.round(e.resolveMin))) },
-    { key: 'n', header: 'Touch', numeric: true, cell: (e) => `#${e.touchNo}` },
+    { key: 'n', header: 'Hit', numeric: true, cell: (e) => `#${e.touchNo}` },
     { key: 'age', header: 'CORE age', numeric: true, cell: (e) => `${Math.round(e.heldMin)}m` },
     {
       key: 'roll',
       header: 'Rolled',
       align: 'center',
-      cell: (e) => (e.rolled ? <span title="The CORE moved to another strike while this touch was open">↻</span> : ''),
+      cell: (e) => (e.rolled ? <span title="The CORE moved to another strike while this hit was open">↻</span> : ''),
     },
   ]
 }
