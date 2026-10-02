@@ -1,14 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// /scanner — the scanner page. Six tabs over one route.
+// /scanner — the scanner page. Seven tabs over one route.
 //
-// (Seven until 2026-09-03, when TPO Structures was dropped. See the dated note
+// (Seven until 2026-09-03, when TPO Structures was dropped, and seven again
+// from 2026-10-02, when Kalman Filter was added. See the dated notes
 // in `pages/scanner/scannerNav.ts` — the registry is where a tab exists or
 // stops existing; this file only mounts what the registry's union allows, which
 // is why `TAB_COMPONENT` is a `Record<ScannerTabId, …>` and not a partial map.)
 //
 // Ported from v2's `components/pages/Scanner.tsx` against the checklist in
 // docs/parity/scanner.md Part A. This file is the FRAME only: tab state, the
-// owner gate, and the six mount points. Every value on screen belongs to a
+// owner gate, and the seven mount points. Every value on screen belongs to a
 // tab component, and every threshold behind those values belongs to a module
 // under `@/pages/scanner/`.
 //
@@ -72,7 +73,7 @@ import {
   type ScannerTabId,
 } from '@/pages/scanner/scannerNav'
 
-// Six chunks, one per tab. See note 2 above — this is the fix for v2 shipping
+// Seven chunks, one per tab. See note 2 above — this is the fix for v2 shipping
 // all of them to everyone. The chunk names fall out of the file names, which is
 // what makes an over-budget tab legible in check-budgets.mjs output.
 const GexLevelsTab = lazy(() => import('@/pages/scanner/GexLevelsTab'))
@@ -81,6 +82,7 @@ const PickStudyTab = lazy(() => import('@/pages/scanner/PickStudyTab'))
 const StrikeQueryTab = lazy(() => import('@/pages/scanner/StrikeQueryTab'))
 const IbStatsTab = lazy(() => import('@/pages/scanner/IbStatsTab'))
 const WatchThisTab = lazy(() => import('@/pages/scanner/WatchThisTab'))
+const KalmanTab = lazy(() => import('@/pages/scanner/KalmanTab'))
 
 const TAB_COMPONENT: Record<ScannerTabId, React.LazyExoticComponent<() => React.JSX.Element>> = {
   gexlevels: GexLevelsTab,
@@ -89,6 +91,7 @@ const TAB_COMPONENT: Record<ScannerTabId, React.LazyExoticComponent<() => React.
   strike: StrikeQueryTab,
   ibstats: IbStatsTab,
   watch: WatchThisTab,
+  kalman: KalmanTab,
 }
 
 /** The query-string key the tab lives under. One spelling. */

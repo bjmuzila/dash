@@ -76,6 +76,7 @@ export type ScannerTabId =
   | 'strike'
   | 'ibstats'
   | 'watch'
+  | 'kalman'
 
 export interface ScannerTabDef {
   id: ScannerTabId
@@ -146,6 +147,11 @@ export const SCANNER_TABS: readonly ScannerTabDef[] = [
     ownerOnly: true,
   },
   { id: 'strike', label: 'Strike Query', short: 'Strike', accent: V2.cyan, icon: '🎯' },
+  // 2026-10-02: a level + trend Kalman filter over the session's recorded SPX
+  // GEX — the flip, net GEX or spot, one print per minute. Model in
+  // pages/scanner/kalman.ts. Last in the gamma cluster: it reads the same
+  // ladders the tabs before it rank, and smooths them over time.
+  { id: 'kalman', label: 'Kalman Filter', short: 'Kalman', accent: V2.purple, icon: '〰️' },
   { id: 'ibstats', label: 'IB Stats', short: 'IB Stats', accent: V2.accent, icon: '📐' },
   { id: 'watch', label: 'Watch This', short: 'Watch', accent: V2.accent, icon: '👁️' },
 ]
@@ -165,7 +171,7 @@ export const DEFAULT_TAB: ScannerTabId = 'gexchangetop'
  * nothing left to do.
  */
 export const SCANNER_GROUPS: readonly { key: string; tabs: readonly ScannerTabId[] }[] = [
-  { key: 'gamma', tabs: ['gexlevels', 'gexchangetop', 'pickstudy', 'strike'] },
+  { key: 'gamma', tabs: ['gexlevels', 'gexchangetop', 'pickstudy', 'strike', 'kalman'] },
   // One tab since 2026-09-03 — TPO left. Kept as its own cluster rather than
   // folded into 'gamma': IB Stats is a structure read, not a gamma read, and the
   // divider is what says so.

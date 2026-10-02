@@ -24906,3 +24906,157 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - clicking the bloom opens the list, and that clears the badge
   - nothing blooms after an alert that landed while the list was open
 - Screenshots: `generated/2026-10-01-alert-bloom-*.png`.
+
+## 2026-10-01 — Voltick Path Ribbon: four new looks rendered (ideas only)
+
+- `generated/2026-10-01-voltick-path-ribbon-ideas.png` (new) shows six versions side by side on real SPX data: the live Path Ribbon, B2 Quick Swap (still waiting in PR #27, which has no conflicts), and four new looks.
+  - **1 · Rail:** one constant-height pill per stretch with a bright core line. Bigger size means a brighter core. Stretches under 3 readings are dropped.
+  - **2 · Heat strip:** constant height, no outline. Opacity shows size, smoothed candle by candle, with soft ends.
+  - **3 · Glow line:** a 2px line at the strike with a glow as wide as the size. A faint dashed step marks each hop of up to 3 strikes.
+  - **4 · Fading trail:** thickness shows size, history fades with age (about 50 min), and a dot marks where each level is now.
+- All four use the same inputs as the live chart: `pathRows`, `strikeRuns` and `absorbRuns` (DWELL 3), the Volt winning a shared strike, holes in the record breaking a stretch, and size capped at the pre-3pm max. Both panels are 1m at 6px bars: 10-01 at the chart's normal scale, and 09-29 zoomed to price into the close.
+- Status: lab render only. Nothing changed in Voltick.
+- Also checked today: voltick.io serves PR #27's bubbles commit, plus Nick's follow-up `7a4c926` (VERSION 2026.10.01.11), which puts back the old radius at 6px and closer. The ribbon commit `c4345d3` is not live yet.
+
+## 2026-10-01 — Voltick Path Ribbon ideas: sized by volume GEX, with visible change
+
+- `generated/2026-10-01-voltick-path-ribbon-ideas-volume.png` (new): the four looks again, now sized by **volume GEX** at the strike each level holds, at Brandon's ask ("needs to be volume only"). Which strike each level holds is unchanged.
+- Each level is scaled against its own day (pre-3pm max, linear). With one shared scale, the biggest level hid everyone else's growth.
+- A ▲/▼ label at the end of each stretch (8+ readings) shows that stretch's change in volume GEX. Changes over 200% show as ×N.
+- Idea 1 is now a **Tube**: a faint pill whose solid core is as thick as the volume GEX, candle by candle. Heat strip, Glow line and Fading trail use wider ranges.
+- Lab render only. Nothing changed in Voltick.
+
+## 2026-10-01 — Voltick Path bubbles: zoomed out, a row is beads, not a chain (patch ready for a PR)
+
+- **The problem on live Voltick:** zooming out still overlapped the bubbles. PR #27's `PATH_ZOOM.maxOverlap` of 0.6 applied at every zoom below 6px, which let two bubbles in one strike row sit 0.8 of a radius apart. The 1m day framing (about 4.5px) drew every Coil, Surge and Reversal candle as a chain, and zooming out stayed a chain. Checked on voltick.io's SPY chart.
+- **The fix**, in `web/src/trailruns.js` only:
+  - New `pathOverlapAt(bs)`: the overlap limit is 0.6 at 6px and closer (today's chart, every candle, as Nick's `7a4c926` pins) and eases to `zoomOverlap` 0.15 at `tightBar` 4px and below.
+  - `pathStepOf` and `thinPathLanes` use it.
+- **Test:** `path-bubbles-hold-up-when-you-zoom-out.test.js` gets a new beads-not-chain test, and the lane test now checks against the per-zoom limit. Three mutations fail it, including today's 0.6.
+- **Measured on SPX 10-01 1m** with the real NodeTrails: neighbouring bubbles in a row overlap 23–33% (median) and 37–44% (90th percentile) live at 4.5, 3, 2 and 1px. With the fix it is 0–4% and 0–6%. 6px is unchanged.
+- **Checks:** full `npm test` shows no new failures vs baseline (11,348 tests, the same 271 environment failures). Web build, check:undef, check:jsx and check:props are clean.
+- **Built against Gnotz617 main at `8d1b87b`.** Both files match GitHub byte for byte before the change.
+- Files:
+  - `generated/2026-10-01-voltick-path-zoomout-beads.patch` (CRLF, for the Windows working tree; `--ignore-whitespace` for LF)
+  - the two full files in `generated/2026-10-01-voltick-path-zoomout-beads/`
+  - `generated/2026-10-01-voltick-path-bubbles-zoomout-fix.png` (live vs fix at 6, 4.5, 3, 2, 1 and 0.6px)
+- **Also confirmed:** voltick.io now serves PR #27 in full, including the Path Ribbon B2 Quick Swap.
+
+## 2026-10-01 — Voltick Path Ribbon: #4 Fading trail, four styles (ideas only)
+
+- `generated/2026-10-01-voltick-path-ribbon-fading-trail-4-ways.png` (new): four versions of the Fading trail. All four size the ribbon by volume GEX (each level on its own day scale), fade history with age, put a dot where the level is now, and have a slight 1px border that fades with the ribbon.
+  - **4A · Soft:** symmetric, gentle fade.
+  - **4B · Comet:** strong fade, with the last 10 minutes brighter and a glow on the current spot.
+  - **4C · Ridge:** one-sided, standing on the strike with the border on the top edge, so growth reads as height.
+  - **4D · Segmented:** 5-minute capsules, wider when zoomed out, each as thick as that block's volume GEX and each with its own border.
+- Rendered with real SPX data through the same rows and rules as the live chart: 10-01 at the normal scale, and 09-29 zoomed to price into the close.
+- Lab render only. Nothing changed in Voltick.
+
+## 2026-10-01 — Voltick Path Ribbon: 4A picked, three new takes on it (ideas only)
+
+- Brandon picked **4A · Soft** from the four Fading trail styles: a symmetric band with a gentle fade, a slight border, a dot where the level is now, and thickness set by volume GEX.
+- `generated/2026-10-01-voltick-path-ribbon-4a-three-new.png` (new) shows 4A next to three variations on it:
+  - **5 · Spine:** adds a hairline on the strike through the middle.
+  - **6 · Core & halo:** adds a denser inner band at about 45% of the height.
+  - **7 · Growth glow:** the fill and border brighten while volume GEX is rising (against about 10 readings earlier) and dim while it fades.
+- Lab render only. Nothing changed in Voltick.
+
+## 2026-10-01 — Voltick Path Ribbon: 4A without the Surge, one shared scale (ideas only)
+
+- Brandon asked why the blue ribbon was bigger than the gold one. There were two causes:
+  - The thickness was volume GEX, and the Surge (blue) is by definition the strike with the biggest volume GEX.
+  - Each level was scaled against its own day, so thickness didn't compare across levels.
+- `generated/2026-10-01-voltick-path-ribbon-4a-no-surge.png` (new): 4A with the Volt and Reversal only ("do it without surge"). Thickness is volume GEX on one shared scale (the pre-3pm max of both levels, per NY day), so a thicker ribbon is a bigger level.
+- On this data the Volt's volume GEX was at or above the Reversal's 81% of the time on 10-01 (median 2.7×) and 93% on 09-29 (median 2.0×). Late on 10-01 the Reversal at 7700 really did carry more volume GEX than the Volt at 7650.
+- The labels that covered ribbons are removed: a ▲/▼ label is drawn only where it clears every ribbon and every other label (also in `…-4a-three-new.png`).
+- Lab render only. Nothing changed in Voltick.
+
+## 2026-10-01 — Voltick Path Ribbon: 7 Growth glow without the Surge (ideas only)
+
+- `generated/2026-10-01-voltick-path-ribbon-7-no-surge.png` (new): idea 7, Growth glow, with the Volt and Reversal only.
+  - Thickness is volume GEX on one shared scale.
+  - The fill and border brighten while volume GEX rises and dim while it fades.
+  - It keeps the slight border, gentle fade, dot where the level is now, and ▲/▼ labels only where they clear the ribbons.
+- Lab render only. Nothing changed in Voltick.
+
+## 2026-10-01 — Voltick Path Ribbon: 7 Growth glow follows the OI / VOLUME toggle (ideas only)
+
+- Brandon clarified that net GEX comes in two flavours, net OI GEX and net volume-only GEX, and a board toggle switches between them.
+- That explains the blue-over-gold mismatch: the mockups picked the levels off net OI GEX but sized them by volume GEX.
+- `generated/2026-10-01-voltick-path-ribbon-7-oi-vs-volume.png` (new): Growth glow with no Surge, where the ribbon follows the toggle.
+  - **OI:** the levels are picked off, and sized by, net OI GEX.
+  - **VOLUME:** both come from net volume-only GEX.
+  - Both use one shared scale, so the gold Volt is the fattest in either mode.
+- Lab render only. Nothing changed in Voltick.
+
+## 2026-10-01 — Voltick Path Ribbon: 7 Growth glow on today's full session, SPX and SPY (ideas only)
+
+- Brandon pulled today's full 0DTE GEX and 1m candles off the VPS into `generated/vpath-2026-10-01-full/`:
+  - `osgh_SPX_2026-10-01.csv.gz`: 835 RTH snapshots.
+  - `osgh_SPY_2026-10-01.csv.gz`: 388 snapshots.
+  - `spx_1m_2026-10-01.json` and `spy_1m_2026-10-01.json`.
+- The pull is a read-only `\copy` of `option_strike_gex_history` (symbol, expiry and today's ET window) plus `/proxy/candles-intraday` over SSH. The trailing `ls` in the pulled script errored harmlessly.
+- `generated/2026-10-01-voltick-path-ribbon-7-today-spx-spy.png` (new): Growth glow with no Surge on today's whole session, with SPX and SPY side by side.
+  - Toggle on OI: levels and sizes from net OI GEX.
+  - Toggle on VOLUME: levels and sizes from net volume-only GEX.
+  - Both use one shared scale, so the gold Volt is the fattest.
+- The lab packer (`pack.py`) now picks its integer scale from the data, since SPY's GEX values are far smaller than SPX's.
+- Lab render only. Nothing changed in Voltick.
+
+## 2026-10-01 — Voltick Path Ribbon: 7 Growth glow, thickness swings harder with net GEX (ideas only)
+
+- `generated/2026-10-01-voltick-path-ribbon-7-today-wider.png` (new): today's SPX and SPY with the ribbon growing and shrinking much more with net GEX.
+  - The scale is stretched. The day's quietest 10% of readings (both levels together) draw as a hairline and the pre-3pm max as a full strike gap, with a slight curve (^1.25) so a level that is really building swells.
+  - It is still one scale for the Volt and Reversal, so the gold stays the fattest, and it still follows the OI / VOLUME toggle.
+- Lab render only. Nothing changed in Voltick.
+
+## 2026-10-01 — Voltick Path Ribbon: transitions for back-and-forth swaps (ideas only)
+
+- On SPY 0DTE today (toggle on OI), the Volt and Reversal swapped 762 and 768 five times between 1:20pm and the close. Today's ribbon ends both at every swap in a pinched tip, which leaves a row of separate capsules.
+- `generated/2026-10-01-voltick-path-ribbon-transitions.png` (new): three transition treatments on 7 Growth glow (no Surge, shared net GEX scale with the wider swing). Each is shown over the whole day and zoomed to 1:20pm to the close.
+  - **A · Crossfade:** no tips at a hop. The leaving ribbon keeps its height and fades out over about a bar and a half while the arriving one fades in. Where the Volt takes a strike from the Reversal, the pink is cut and hands over to the gold, so each strike reads as one lane whose colour changes.
+  - **B · Sticky:** Crossfade, plus a level only moves when it stays about 12 minutes at the new strike. Shorter visits fold back (the 5-minute swap at 3:04 disappears) and draw as a faint dashed ghost on the strike visited.
+  - **C · Braid:** Crossfade, plus a thin S-curve in the level's colour from the old strike to the new one, so two levels swapping strikes cross like an X.
+- Lab render only. Nothing changed in Voltick.
+
+## 2026-10-01 — Voltick Path Ribbon: Growth glow with Crossfade, built (PR ready)
+
+- Built the chosen design into the real Voltick code, on a copy of Gnotz617 `main` at 6645bf7:
+  - **7 Growth glow on 4A.** The band glows brighter while a level is gaining net GEX, fades with age (about 2 hours), keeps a slight border, and puts a dot where the level is now.
+  - **No Surge.** The Ribbon draws only the Volt and the Reversal.
+  - **One shared net GEX scale** that follows the board's OI / VOLUME toggle, stretched so the day's quietest 10% of readings draw as a hairline and the pre-3pm max as a full strike gap. The gold Volt stays the fattest.
+  - **A · Crossfade.** At a gold hand-over there is no pinched tip. One ribbon fades out while the other fades in.
+  - **▲/▼ change labels** are drawn only where they clear the ribbons.
+- `web/src/trailruns.js` adds `RIBBON_GLOW`, `ribbonGrowth`, `ribbonInk`, `ribbonChange` and `placeRibbonLabels`, plus a stretched law in `ribbonSizeScale`. `web/src/HeatChart.jsx` updates the pathband branch.
+- New test `server/test/path-ribbon-growth-glow.test.js` (9/9). Four Path tests were updated to match.
+- Full `npm test` shows no new failures against `main`. One timing test, `loop-breathes-between-sweeps` 5b, failed once in the full run and passed 3 of 3 runs on its own. The web build, `check:undef`, `check:jsx` and `check:props` are clean.
+- Files in `generated/`:
+  - `2026-10-01-voltick-path-ribbon-glow.patch`. Apply it after `…-path-zoomout-beads.patch`, or on its own.
+  - `2026-10-01-voltick-path-ribbon-glow/`: the full final files, which include the zoom-out fix.
+  - `2026-10-01-voltick-path-ribbon-glow-built.png`: a real render, today's B2 vs the new ribbon, SPX and SPY.
+
+
+## 2026-10-02 · Voltick admin console (admin-site/admin.js, admin.css)
+- Bzila › To-do: removed due date and priority (MED) marker; tasks are just Open / Done. KPIs now Open · Added 7d · Done 7d.
+- Bzila › Ideas: paste (Ctrl+V) or pick a picture on a new idea, or 📋 Pic onto an existing one; shrunk in-browser to ≤60 KB WebP/JPEG so it fits the 256 KB workspace; click to view full size.
+- System › Health checks: 4 per row (2 under 1100px, 1 on phone).
+- System › Restarts: each row shows deploy-vs-killed-in-place and the build commit, linked to GitHub (author shown there).
+- Home priority list: 4 layout mockups rendered (generated/2026-10-02-home-priority-list-ideas.png), not built yet.
+
+- Voltick admin Home: Priorities card (idea A) under the 12 page tiles · ranked, 2 lines (priority / added time · lead), drag or ▲▼ to re-rank, Edit, ✓ done. Stored in the admin workspace (key "prio"), so only the writing admin sees it for now.
+
+- Voltick: Home priority list is now SHARED by every admin. Engine: table admin_shared (db.js), readPriorities/savePriorities with 409-on-stale-version (adminrecords.js), GET/PUT /api/admin/priorities (server.js), audit entry with item count only (adminaudit.js), test/the-priority-list-is-shared-by-every-admin.test.js. Console reads/writes it live; Bzila stays each admin's own workspace. Needs Gnotz to merge + deploy.
+
+## 2026-10-02 — v3 Scanner: new Kalman Filter tab (/v3/scanner?tab=kalman)
+- `cbedge-v3/src/pages/scanner/kalman.ts` (new): level + trend Kalman filter over the session's recorded SPX GEX, one print per minute. Series: FLIP (cumulative OI+VOL crossing nearest spot), NET GEX (Σ ladder net), SPOT. R is measured from the session's own prints (robust 2nd differences); Q = R × preset (FAST 0.1 / MED 0.003 / SLOW 0.0001 → K ≈ .55/.28/.13). R ×3 for 09:30–09:44 ET. Missing prints are predict-only. Band and surprise rings are calibrated to how far the model actually missed today.
+- `cbedge-v3/src/pages/scanner/KalmanTab.tsx` (new): canvas chart (raw prints, filtered line, ±2σ band, spot under the flip, >2.5σ surprise rings, trend/hr pane, hover readout) + stats (filtered, trend/hr, K, band, live spot − flip / regime / stretch, surprises). Reuses the candles card's exact history + expirations URLs, so no new request when both are open; replayed from the first column on every 60s poll, so reloads and devices draw the same line.
+- `cbedge-v3/src/pages/scanner/scannerNav.ts`: `kalman` added to the union, the tab list (〰️ Kalman, last in the gamma cluster) and SCANNER_GROUPS. `cbedge-v3/src/pages/Scanner.tsx`: lazy chunk + TAB_COMPONENT entry.
+- Frontend only; no server-v2 or proxy change. Typecheck adds no new errors; theme check clean; new chunk 6.3kb brotli. Preview (synthetic data): `generated/2026-10-02-kalman-tab-preview-synthetic.png`.
+
+## 2026-10-02 — Voltick board: OI+VOL source, DEX and PREM lenses (Voltick repo, PR pending)
+- Toolbar on the Single board is now GEX · VEX · DEX · PREM | OI · OI+VOL · VOLUME. Each new view replaces the heat grid only, the same way VOLUME does; stat cards, the read and the recorders stay on the OI board.
+- `server/engine.js`: builds GEXOV/VEXOV (OI + volume, cell for cell), DEX/DEXV/DEXOV (delta exposure per strike, regime-DEX convention) and PREM (net premium per strike) only for boards someone has open (`extras`).
+- `server/flowtape.js`: the live tally keeps net premium per expiry/strike ((calls bought − sold) − (puts bought − sold), mid fills out, deep ITM in); `flowPremFor()` feeds PREM. Matches `flowGrid().dir` exactly.
+- `server/server.js` + `voltwins.js`: the extra grids ride the volume road non-enumerably; a socket gets at most the ONE it picked (`focus.view`, joins the view key after V).
+- `web/src/Voltick.jsx`: new lens/source pills (desktop + phone), plain-English tips and band copy per view; OI+VOL opens on 0DTE for SPY/QQQ/SPX like VOLUME.
+- Cross-tested against CB Edge on real data before building: 497-strike SPX chain (identical to 1e-16 with the same greeks) and the 2026-10-01 SPX tape (1,183 prints, $0 apart per strike). New `server/test/board-extra-views.test.js` (11 pass); 244 existing tests across 25 related files pass.

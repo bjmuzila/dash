@@ -25,7 +25,8 @@
 // from the CORE to the target and a red box from the CORE to the break across
 // the hit's window, a dashed path to the OUT tag where it resolved (BOUNCE at
 // the target, BREAK at the break level, OPEN where the hold ran out), each
-// numbered so IN 2 pairs with OUT 2. Prev / next step
+// numbered so IN 2 pairs with OUT 2. Expanded (⤢), the chart fills the
+// stage instead of its 340px. Prev / next step
 // through the sessions that had hits; clicking a hit's date in the table loads
 // its session here. ↗ beside it still opens that session on the Log tab.
 //
@@ -44,6 +45,7 @@
 
 import { type ReactNode, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardToolbar } from '@/design/primitives/Card'
+import { useExpandStage } from '@/design/primitives/Expand'
 import { SegGroup } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
 import { Stat } from '@/design/primitives/Stat'
@@ -377,6 +379,8 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
     chartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   const { marks, spans, boxes } = useMemo(() => annotate(chartEvents), [chartEvents])
+  // Expanded (⤢), the price chart takes the whole stage instead of its 340px.
+  const sessionExpanded = useExpandStage()?.expandedId === SESSION_CARD_ID
   const [sweepOpen, setSweepOpen] = useState(false)
   const [hitsOpen, setHitsOpen] = useState(false)
 
@@ -537,7 +541,7 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
           <div ref={chartRef} className="scroll-mt-3">
             <Card
               title={chartDate ? `Session · ${chartDate} · ${chartEvents.length} hit${chartEvents.length === 1 ? '' : 's'}` : 'Session'}
-              expandId="level-log-core-backtest-session"
+              expandId={SESSION_CARD_ID}
               actions={
                 chartDate ? (
                   <button
@@ -595,7 +599,15 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
                 <span>hover a tag for its numbers</span>
               </div>
               {chartDay ? (
-                <WallMigrationChart days={[chartDay]} view={VOLTICK_UI ? 'voltick' : 'all'} height={340} marks={marks} spans={spans} boxes={boxes} />
+                <WallMigrationChart
+                  days={[chartDay]}
+                  view={VOLTICK_UI ? 'voltick' : 'all'}
+                  height={340}
+                  fill={sessionExpanded}
+                  marks={marks}
+                  spans={spans}
+                  boxes={boxes}
+                />
               ) : (
                 <div className="py-8 text-center text-sm text-muted">No hits with these settings, so no session to draw.</div>
               )}
@@ -661,6 +673,9 @@ export default function CoreBacktest({ onOpenSession }: { onOpenSession: (date: 
     </div>
   )
 }
+
+/** The session card's expand key — read back to stretch its chart when expanded. */
+const SESSION_CARD_ID = 'level-log-core-backtest-session'
 
 /** Rows the hit table renders. The stats always use all of them. */
 const EVENT_CAP = 400
