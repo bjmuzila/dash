@@ -20,7 +20,8 @@ import { VOLTICK_UI } from '@/data/voltickLevels'
 // from owner.cbedge.net → Admin → Signal Alerts and read by the dashboard from
 // GET /proxy/signal-alerts. That switch is owner-only at the server, so the
 // toolbar has no switches of its own — only the filter chips, which hide a type
-// from the list in THIS browser (`alerts:shown`) and change nothing else.
+// in THIS browser (`alerts:shown`): from the list, the toolbar pill, its bloom
+// and its unread badge. They change nothing server-side.
 //
 // The feed ROWS are still placeholder (`SAMPLE` in AlertsPanel.tsx); only the
 // master state is live. Wiring the feed means replacing `useAlertsFeed`.
@@ -206,8 +207,44 @@ function writeSet(key: string, ids: AlertKind[]) {
 
 const ALL_IDS = ALERT_TYPES.map((t) => t.id)
 
-export const readShown = (): AlertKind[] => readSet(SHOWN_KEY) ?? ALL_IDS
-export const writeShown = (ids: AlertKind[]) => writeSet(SHOWN_KEY, ids)
+// ── THE CHIPS GOVERN THE PILL TOO (2026-10-02) ──────────────────────────────
+// The chip set used to be read only by the list, so a type switched off there
+// still led the toolbar pill, bloomed on arrival and counted on the unread
+// badge — "Flip is off but the alert still comes through". The pill now reads
+// the same set, and follows it live: `writeShown` announces the change on
+// `window` (a same-tab localStorage write fires no `storage` event), and
+// `onShownChange` also hears other tabs. `shownCache` keeps the choice for the
+// session when localStorage refuses the write (private mode), so the pill and
+// the list can never disagree about what is hidden.
+const SHOWN_EVENT = 'alerts:shown-change'
+let shownCache: AlertKind[] | null = null
+
+export const readShown = (): AlertKind[] => shownCache ?? readSet(SHOWN_KEY) ?? ALL_IDS
+
+export const writeShown = (ids: AlertKind[]) => {
+  shownCache = ids
+  writeSet(SHOWN_KEY, ids)
+  try {
+    window.dispatchEvent(new Event(SHOWN_EVENT))
+  } catch {
+    /* no window — nothing is listening */
+  }
+}
+
+/** Calls `cb` whenever the chip set changes, in this tab or another. Returns the unsubscribe. */
+export function onShownChange(cb: () => void): () => void {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key !== SHOWN_KEY) return
+    shownCache = null // another tab wrote it — storage is the truth now
+    cb()
+  }
+  window.addEventListener(SHOWN_EVENT, cb)
+  window.addEventListener('storage', onStorage)
+  return () => {
+    window.removeEventListener(SHOWN_EVENT, cb)
+    window.removeEventListener('storage', onStorage)
+  }
+}
 
 // ── The master switchboard ──────────────────────────────────────────────────
 // GET /proxy/signal-alerts → { alerts: [{ key, label, group, enabled }] }.

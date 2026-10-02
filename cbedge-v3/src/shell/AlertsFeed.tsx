@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { alpha } from '@/design/theme'
 import type { AlertItem } from '@/shell/alertTypes'
 import type { AlertKind } from '@/shell/alertTypes'
-import { ALERT_TYPES, TYPE_BY_ID } from '@/shell/alertTypes'
+import { ALERT_TYPES, TYPE_BY_ID, onShownChange, readShown } from '@/shell/alertTypes'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE ALERTS PILL — the newest signal, in the toolbar, all the time.
@@ -337,7 +337,15 @@ function age(at: string): string {
 }
 
 export function AlertsPill() {
-  const items = useAlertsFeed()
+  // `feed` is every row the poll returned; `items` is what the filter chips
+  // leave showing. The pill, its bloom and its unread badge all read `items`,
+  // so a type switched off in the list stays off up here too — it used to keep
+  // leading the toolbar and blooming on arrival. The panel still gets the whole
+  // `feed`: it filters for itself and needs it to say WHY its list is empty.
+  const feed = useAlertsFeed()
+  const [shown, setShown] = useState<AlertKind[]>(() => readShown())
+  useEffect(() => onShownChange(() => setShown(readShown())), [])
+  const items = useMemo(() => feed.filter((a) => shown.includes(a.kind)), [feed, shown])
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
 
@@ -372,7 +380,11 @@ export function AlertsPill() {
   // 0 = this browser has never seen the feed. The first list it loads is then
   // acknowledged silently, so a first visit shows a clean pill rather than the
   // whole day's history as "new" — the rule BzilaAlerts uses for its logo.
-  const latestId = latest?.id ?? null
+  // The newest row of the WHOLE feed, filtered or not. Seen-marking and arrival
+  // detection run on this, so a hidden type is acknowledged along with the rest
+  // when the list is opened, and switching a chip back on never resurfaces an
+  // old row as unread or as a fresh bloom.
+  const feedLatestId = feed[0]?.id ?? null
   const [bloomId, setBloomId] = useState<number | null>(null)
   const [seen, setSeen] = useState<number>(() => readSeen())
   const markSeen = (id: number | null) => {
@@ -382,9 +394,9 @@ export function AlertsPill() {
   }
 
   useEffect(() => {
-    if (latestId != null && seen === 0) markSeen(latestId)
+    if (feedLatestId != null && seen === 0) markSeen(feedLatestId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latestId, seen])
+  }, [feedLatestId, seen])
 
   // The list open = the user is looking at it, including at anything that
   // lands while it is open — and a bloom in progress has done its job.
@@ -392,10 +404,10 @@ export function AlertsPill() {
   openRef.current = open
   useEffect(() => {
     if (!open) return
-    markSeen(latestId)
+    markSeen(feedLatestId)
     setBloomId(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, latestId])
+  }, [open, feedLatestId])
 
   // Another tab opened the list → this tab's badge clears too.
   useEffect(() => {
@@ -422,20 +434,29 @@ export function AlertsPill() {
   // at null is what tells "first list I have seen" from "a new top row". That
   // first load is also when the bloom's chunk is fetched, so the first real
   // alert of the day does not wait on the network.
+  //
+  // Arrival is tracked on the whole feed, and only a newly-landed row of a
+  // SHOWN type blooms. A hidden type landing moves the marker silently, so it
+  // cannot bloom now, and cannot bloom later when its chip is switched back on.
   const arrivedRef = useRef<number | null>(null)
+  const itemsRef = useRef(items)
+  itemsRef.current = items
 
   useEffect(() => {
-    if (latestId == null) return
+    if (feedLatestId == null) return
     if (arrivedRef.current === null) {
-      arrivedRef.current = latestId
+      arrivedRef.current = feedLatestId
       void loadBloom().catch(() => {})
       return
     }
-    if (latestId <= arrivedRef.current) return
-    arrivedRef.current = latestId
+    if (feedLatestId <= arrivedRef.current) return
+    const prev = arrivedRef.current
+    arrivedRef.current = feedLatestId
+    // Newest-first, so the first shown row past the marker is the newest one.
+    const landed = itemsRef.current.find((a) => a.id > prev)
     // Landed while the list is open: it is already on screen, in the list.
-    if (!openRef.current) setBloomId(latestId)
-  }, [latestId])
+    if (landed && !openRef.current) setBloomId(landed.id)
+  }, [feedLatestId])
 
   const bloomItem = bloomId != null && !open && latest?.id === bloomId ? latest : null
 
@@ -512,7 +533,9 @@ export function AlertsPill() {
             <span className="shrink-0 text-3xs font-bold uppercase leading-[13px] tracking-wide text-fg">
               Alerts
             </span>
-            <span className="hidden truncate text-2xs text-fg lg:inline">No signals yet</span>
+            <span className="hidden truncate text-2xs text-fg lg:inline">
+              {feed.length > 0 ? 'All filtered out' : 'No signals yet'}
+            </span>
           </>
         )}
         <span aria-hidden className="shrink-0 text-3xs text-fg">
@@ -536,7 +559,7 @@ export function AlertsPill() {
 
       {open && (
         <Suspense fallback={null}>
-          <AlertsPanel items={items} close={() => setOpen(false)} />
+          <AlertsPanel items={feed} close={() => setOpen(false)} />
         </Suspense>
       )}
     </div>
