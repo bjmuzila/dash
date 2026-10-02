@@ -483,23 +483,51 @@ function guessCategory(text, categories) {
  * type one yourself.
  */
 async function previewLink(userId, rawUrl) {
+  const { categories } = await getMeals(userId);
+  const { caption, ...rest } = await resolveOne(rawUrl, categories.map((c) => c.name));
+  return rest;
+}
+
+/** The numeric TikTok video id in any of its URL shapes, or null. */
+const videoId = (u) => (String(u || '').match(/\/(?:video|v)\/(\d{8,})/) || [])[1] || null;
+
+/**
+ * One link → { url, source, title, category, caption }. The engine behind
+ * previewLink and resolveLinks. Never throws for an unreadable page.
+ *
+ * Data-export links (www.tiktokv.com/share/video/<id>/) aren't accepted by
+ * oEmbed as-is, so a TikTok id is first asked about in the canonical
+ * www.tiktok.com/@/video/<id> form; the answer carries the author, which
+ * gives back a proper /@user/video/<id> link to store.
+ */
+async function resolveOne(rawUrl, categoryNames) {
   const u = safeUrl(rawUrl);
   let url = u.toString();
   let title = '';
 
   const oembed = async (link) => {
     const o = await fetchText(`https://www.tiktok.com/oembed?url=${encodeURIComponent(link)}`, 'application/json');
-    try { return o ? (JSON.parse(o.text).title || '') : ''; } catch { return ''; }
+    try { return o ? JSON.parse(o.text) : null; } catch { return null; }
   };
   if (/tiktok/i.test(u.hostname)) {
-    title = await oembed(url);
+    const id = videoId(url);
+    const tries = id ? [`https://www.tiktok.com/@/video/${id}`, url] : [url];
+    for (const link of tries) {
+      const o = await oembed(link);
+      if (o && o.title) {
+        title = o.title;
+        if (id && o.author_unique_id) url = `https://www.tiktok.com/@${o.author_unique_id}/video/${id}`;
+        break;
+      }
+    }
     // Short share links (vm.tiktok.com/…) aren't accepted by oEmbed — follow
     // the redirect to the canonical /@user/video/<id> URL and ask again.
     if (!title) {
       const page = await fetchText(url, 'text/html');
       if (page && page.finalUrl && page.finalUrl !== url) {
         url = page.finalUrl.split('?')[0];
-        title = await oembed(url);
+        const o = await oembed(url);
+        title = (o && o.title) || '';
       }
     }
   }
@@ -514,12 +542,65 @@ async function previewLink(userId, rawUrl) {
   }
   // A site's own name is not a meal name ("TikTok - Make Your Day").
   if (/^(tiktok|instagram|youtube)\b/i.test(title.trim())) title = '';
-  const { categories } = await getMeals(userId);
   const clean = tidyTitle(title);
   return {
     url, source: sourceOf(url), title: clean,
-    category: guessCategory(`${clean} ${title}`, categories.map((c) => c.name)),
+    category: guessCategory(`${clean} ${title}`, categoryNames),
+    caption: String(title).slice(0, 500),
   };
+}
+
+/**
+ * Is this caption about food? Liked videos are everything you liked, not just
+ * recipes, so a bulk import of bare links flags the rest. Hashtags count —
+ * "#recipe" / "#dinnerideas" are the strongest signal a caption has.
+ */
+const FOOD = new RegExp('\\b(' + [
+  'recipes?', 'dinner', 'lunch', 'breakfast', 'brunch', 'meal', 'mealprep', 'cook', 'cooking', 'bake', 'baked', 'baking',
+  'grill', 'grilled', 'fry', 'fried', 'air ?fryer', 'airfryer', 'crock ?pot', 'crockpot', 'slow ?cooker', 'instant ?pot',
+  'one ?pot', 'sheet ?pan', 'skillet', 'oven', 'chicken', 'beef', 'steak', 'pork', 'bacon', 'sausage', 'turkey', 'lamb',
+  'shrimp', 'salmon', 'fish', 'tuna', 'crab', 'lobster', 'seafood', 'pasta', 'noodles?', 'spaghetti', 'lasagna',
+  'alfredo', 'mac and cheese', 'rice', 'tacos?', 'burritos?', 'quesadillas?', 'enchiladas?', 'soup', 'stew', 'chili',
+  'salad', 'sandwich', 'burgers?', 'pizza', 'wraps?', 'bowls?', 'casserole', 'curry', 'stir ?fry', 'dip', 'sauce',
+  'potato(es)?', 'eggs?', 'cheese', 'bread', 'cake', 'cookies?', 'dessert', 'brownies?', 'pie', 'marinade',
+  'seasoning', 'veggies?', 'vegetables?', 'tofu', 'meatballs?', 'wings', 'ribs', 'brisket', 'smoked', 'bbq',
+  'foodie', 'foodtok', 'easyrecipe', 'dinnerideas', 'whatsfordinner', 'yum', 'delicious', 'tasty',
+].join('|') + ')', 'i');
+
+const RESOLVE_MAX = 60;
+
+/**
+ * Bare links → names, for the paste box. Up to RESOLVE_MAX per call (the
+ * client sends chunks and shows progress), four at a time so TikTok isn't
+ * hammered. `exists` = that video is already in your meals (matched by video
+ * id, so a share link and a canonical link of the same video match).
+ */
+async function resolveLinks(userId, rawUrls) {
+  const urls = (Array.isArray(rawUrls) ? rawUrls : []).slice(0, RESOLVE_MAX).map((x) => String(x || '').trim());
+  const { categories, meals } = await getMeals(userId);
+  const cats = categories.map((c) => c.name);
+  const haveIds = new Set(meals.map((m) => videoId(m.url)).filter(Boolean));
+  const out = new Array(urls.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < urls.length) {
+      const k = next++;
+      const input = urls[k];
+      try {
+        const r = await resolveOne(input, cats);
+        const id = videoId(r.url) || videoId(input);
+        out[k] = {
+          input, url: r.url, source: r.source, title: r.title, category: r.category,
+          food: FOOD.test(r.caption), exists: !!(id && haveIds.has(id)),
+        };
+      } catch (e) {
+        out[k] = { input, url: null, source: null, title: '', category: OTHER, food: false, exists: false,
+                   error: String(e && e.message || e) };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
+  return out;
 }
 
 // ── Meals ────────────────────────────────────────────────────────────────────
@@ -790,9 +871,11 @@ async function importLibraryMeals(userId, rawMeals) {
     const { rows: cats } = await c.query(
       `SELECT name, sort_order FROM hh_meal_categories ORDER BY sort_order, id`);
     const { rows: existing } = await c.query(
-      `SELECT title FROM hh_meal_library WHERE ${VISIBLE}`, [userId]);
+      `SELECT title, url FROM hh_meal_library WHERE ${VISIBLE}`, [userId]);
     const catByKey = new Map(cats.map((r) => [nameKey(r.name), r.name]));
     const seen = new Set(existing.map((r) => nameKey(r.title)));
+    // Same video under a different caption is still the same meal.
+    const seenVideo = new Set(existing.map((r) => videoId(r.url)).filter(Boolean));
 
     const titles = []; const categories = []; const urls = []; const sources = [];
     const newCats = [];
@@ -801,8 +884,10 @@ async function importLibraryMeals(userId, rawMeals) {
       const t = str(m && m.title, 200);
       if (!t) continue;
       const k = nameKey(t);
-      if (seen.has(k)) { skipped++; continue; }
+      const vid = videoId(m.url);
+      if (seen.has(k) || (vid && seenVideo.has(vid))) { skipped++; continue; }
       seen.add(k);
+      if (vid) seenVideo.add(vid);
 
       let cat = str(m.category, 60) || OTHER;
       const ck = nameKey(cat);
@@ -863,5 +948,5 @@ module.exports = {
   getMeals, previewLink, addLibraryMeal, updateLibraryMeal, deleteLibraryMeal, markMade,
   addCategory, renameCategory, moveCategory, deleteCategory,
   setDinner, planLibraryMeal, moveDinner,
-  importItems, importLibraryMeals,
+  importItems, importLibraryMeals, resolveLinks,
 };

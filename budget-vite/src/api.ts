@@ -582,6 +582,17 @@ export type LibraryMeal = {
   last_made: string | null
 }
 export type MealCategory = { id: number; name: string; sort_order: number }
+/** One bare link from the paste box, looked up. `food` = the caption reads like food. */
+export type ResolvedLink = {
+  input: string
+  url: string | null
+  source: string | null
+  title: string
+  category: string
+  food: boolean
+  exists: boolean
+  error?: string
+}
 export type MealsPayload = { categories: MealCategory[]; meals: LibraryMeal[] }
 export type LinkPreview = { url: string; source: string; title: string; category: string }
 
@@ -783,6 +794,9 @@ export const lists = {
   /** Paste-box import onto the grocery list. Duplicates of open items are skipped. */
   importItems: (items: { text: string; qty?: string | null; aisle?: Aisle | null }[]) =>
     api.post<{ ok: true; added: number; skipped: number }>('/api/hh/lists', { action: 'importItems', items }),
+  /** Bare links → names + guessed category, ≤60 per call (the paste box chunks). */
+  resolveLinks: (urls: string[]) =>
+    api.post<{ ok: true; links: ResolvedLink[] }>('/api/hh/lists', { action: 'resolveLinks', urls }),
   /** Paste-box import into the meal list. Unknown categories are created. */
   importLibraryMeals: (meals: { title: string; category: string; url?: string | null }[]) =>
     api.post<{ ok: true; added: number; skipped: number; badLinks: number; categoriesAdded: string[] }>(

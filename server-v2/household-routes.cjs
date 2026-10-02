@@ -924,6 +924,8 @@ function registerHouseholdRoutes({ register, send, readJson }) {
             // Paste-box imports — one request, one INSERT, duplicates skipped.
             case 'importItems':
               send(res, 200, { ok: true, ...(await hlists.importItems(u.id, body?.items)) }, nostore); return;
+            case 'resolveLinks':
+              send(res, 200, { ok: true, links: await hlists.resolveLinks(u.id, body?.urls) }, nostore); return;
             case 'importLibraryMeals':
               send(res, 200, { ok: true, ...(await hlists.importLibraryMeals(u.id, body?.meals)) }, nostore); return;
             case 'addItem':

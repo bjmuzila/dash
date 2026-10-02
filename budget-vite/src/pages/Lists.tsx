@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useAuth } from '../auth'
 import {
   useLists, useToggleListItem, useAddListItem, useDeleteListItem,
@@ -7,7 +7,7 @@ import {
   useAddCategory, useRenameCategory, useMoveCategory, useDeleteCategory, usePlanMeal,
   useImportItems, useImportMeals,
 } from '../hooks'
-import { ApiError, type Aisle, type ListItem, type Meal, type MealRef, type LibraryMeal, type MealCategory } from '../api'
+import { ApiError, lists as listsApi, type Aisle, type ListItem, type Meal, type MealRef, type LibraryMeal, type MealCategory, type ResolvedLink } from '../api'
 import { T, SERIF, MONO, SANS, sectionTitle, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
 
 /**
@@ -724,6 +724,12 @@ function CategoryEditor({ categories, onClose }: { categories: MealCategory[]; o
 // Leading bullets / numbers / checkboxes from Notes are stripped. Anything
 // already there, or repeated in the paste, is shown and skipped — the server
 // checks again, so re-pasting the same list never duplicates.
+//
+// Meals only: a line that is JUST a link (a TikTok data export is nothing but
+// links) waits for "Look up names", which asks the server for each video's
+// caption in chunks, turns it into a name and guesses the category. Liked
+// videos aren't all food, so captions that don't read like food are held back
+// unless you tick them in.
 
 type BulkMode = 'items' | 'meals'
 type BulkRow = {
@@ -734,7 +740,8 @@ type BulkRow = {
   aisle?: Aisle | null   // items: null = guessed on the server
   qty?: string | null
   url?: string | null
-  status: 'new' | 'exists' | 'repeat'
+  status: 'new' | 'exists' | 'repeat' | 'notfood'
+  nf?: boolean           // meals: a looked-up caption that doesn't read like food
 }
 
 const nameKey = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase()
@@ -753,14 +760,16 @@ function guessCat(title: string, categories: string[]): string | null {
     new RegExp(`\\b${c.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?\\b`).test(hay)) ?? null
 }
 
-function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: string[]) {
+function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: string[],
+                   resolved: Map<string, ResolvedLink> = new Map(), includeNonFood = false) {
   const have = new Set(existing.map(nameKey))
   const seen = new Set<string>()
   const catByKey = new Map(categories.map((c) => [nameKey(c), c]))
   const rows: BulkRow[] = []
   const notAisles = new Set<string>()
   let header: string | null = null
-  let noName = 0
+  const pending = new Set<string>()   // bare links not looked up yet
+  let unreadable = 0
 
   for (const src of raw.split(/\r?\n/)) {
     let s = src.trim()
@@ -787,21 +796,36 @@ function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: 
         const m = name.match(/^(.*\S)\s+(https?:\/\/\S+)$/)
         if (m) { name = m[1]; url = m[2] }
       }
-      if (isUrl(name)) { noName++; continue }
     } else {
       qty = rest.join(' ') || null
+    }
+
+    // A bare link: its name comes from the lookup.
+    let looked: ResolvedLink | null = null
+    if (mode === 'meals' && isUrl(name)) {
+      const r = resolved.get(name)
+      if (!r) { pending.add(name); continue }
+      if (!r.title) { unreadable++; continue }
+      looked = r
+      url = r.url ?? name
+      name = r.title
     }
 
     name = name.slice(0, 200).trim()
     if (!name) continue
     const key = nameKey(name)
-    const status: BulkRow['status'] = have.has(key) ? 'exists' : seen.has(key) ? 'repeat' : 'new'
+    const status: BulkRow['status'] =
+      have.has(key) || looked?.exists ? 'exists'
+        : seen.has(key) ? 'repeat'
+        : looked && !looked.food && !includeNonFood ? 'notfood'
+        : 'new'
     seen.add(key)
 
     if (mode === 'meals') {
-      const wanted = col || header || guessCat(name, categories) || 'Other'
+      const lookedCat = looked && looked.category !== 'Other' ? looked.category : null
+      const wanted = col || header || lookedCat || guessCat(name, categories) || 'Other'
       const known = catByKey.get(nameKey(wanted))
-      rows.push({ name, key, url, status, group: known ?? wanted.slice(0, 60), groupIsNew: !known })
+      rows.push({ name, key, url, status, group: known ?? wanted.slice(0, 60), groupIsNew: !known, nf: !!looked && !looked.food })
     } else {
       const aisle = header ? aisleOf(header) : null
       if (header && !aisle) notAisles.add(header)
@@ -817,7 +841,10 @@ function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: 
     g.rows.push(r)
   }
   return {
-    rows, fresh, groups, noName,
+    rows, fresh, groups, pending: [...pending], unreadable,
+    notFood: rows.filter((r) => r.status === 'notfood').length,
+    // Counted whether or not they're ticked in, so the toggle can't vanish.
+    looksNotFood: rows.filter((r) => r.nf).length,
     exists: rows.filter((r) => r.status === 'exists').length,
     repeats: rows.filter((r) => r.status === 'repeat').length,
     newCats: groups.filter((g) => g.isNew && g.rows.some((r) => r.status === 'new')).map((g) => g.name),
@@ -825,8 +852,10 @@ function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: 
   }
 }
 
+const LOOKUP_CHUNK = 50
+
 const BULK_EXAMPLE: Record<BulkMode, string> = {
-  meals: '# Chicken\nHoney garlic chicken\nBuffalo chicken wraps | https://www.tiktok.com/@…\n# Pasta\nMarry me pasta\nCajun shrimp alfredo',
+  meals: '# Chicken\nHoney garlic chicken\nBuffalo chicken wraps | https://www.tiktok.com/@…\n# Pasta\nMarry me pasta\n\nOr just links, one per line:\nhttps://www.tiktok.com/@…/video/…',
   items: '# Produce\nAvocados | 3\nLimes\n# Dairy\nMilk\nShredded cheese\n# Household\nPaper towels',
 }
 
@@ -841,9 +870,38 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
   const importMeals = useImportMeals()
   const [text, setText] = useState('')
   const [result, setResult] = useState<string | null>(null)
-  const busy = importItems.isPending || importMeals.isPending
+  const [resolved, setResolved] = useState<Map<string, ResolvedLink>>(() => new Map())
+  const [lookup, setLookup] = useState<{ done: number; total: number } | null>(null)
+  const [lookupErr, setLookupErr] = useState<string | null>(null)
+  const [includeNonFood, setIncludeNonFood] = useState(false)
+  const alive = useRef(true)
+  useEffect(() => () => { alive.current = false }, [])
+  const busy = importItems.isPending || importMeals.isPending || !!lookup
   const err = importItems.error || importMeals.error
-  const p = parseBulk(text, mode, existing, categories)
+  const p = parseBulk(text, mode, existing, categories, resolved, includeNonFood)
+
+  // Chunked so a few hundred links show progress instead of one long wait,
+  // and a failure part-way keeps everything already looked up.
+  const lookUp = async () => {
+    const todo = p.pending
+    if (!todo.length || lookup) return
+    setLookupErr(null)
+    setLookup({ done: 0, total: todo.length })
+    const next = new Map(resolved)
+    for (let i = 0; i < todo.length && alive.current; i += LOOKUP_CHUNK) {
+      try {
+        const { links } = await listsApi.resolveLinks(todo.slice(i, i + LOOKUP_CHUNK))
+        for (const l of links) next.set(l.input, l)
+      } catch (e) {
+        if (alive.current) setLookupErr(e instanceof ApiError ? e.message : 'Lookup stopped part-way — tap again to continue.')
+        break
+      }
+      if (!alive.current) return
+      setResolved(new Map(next))
+      setLookup({ done: Math.min(i + LOOKUP_CHUNK, todo.length), total: todo.length })
+    }
+    if (alive.current) setLookup(null)
+  }
   const noun = mode === 'meals' ? (p.fresh.length === 1 ? 'meal' : 'meals') : (p.fresh.length === 1 ? 'item' : 'items')
   const SHOW = 300
   let shown = 0
@@ -892,7 +950,7 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
           <div style={{ ...body(13), color: T.faint, margin: '6px 0 10px' }}>
             One per line. <span style={{ fontFamily: MONO }}># Header</span> lines set the {mode === 'meals' ? 'category' : 'aisle'} for
             the lines below. Add {mode === 'meals' ? 'a link' : 'a quantity'} with <span style={{ fontFamily: MONO }}>Name | {mode === 'meals' ? 'link' : 'qty'}</span>.
-            Anything already there is skipped.
+            {mode === 'meals' && ' Or paste bare TikTok links and look up their names.'} Anything already there is skipped.
           </div>
           <textarea
             value={text} onChange={(e) => setText(e.target.value)} placeholder={BULK_EXAMPLE[mode]}
@@ -911,9 +969,42 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
                     : null,
                   p.exists ? `${p.exists} already there` : null,
                   p.repeats ? `${p.repeats} repeated` : null,
-                  p.noName ? `${p.noName} link${p.noName === 1 ? '' : 's'} with no name` : null,
+                  p.notFood ? `${p.notFood} not food` : null,
+                  p.unreadable ? `${p.unreadable} couldn't be read` : null,
                 ].filter(Boolean).join(' · ')}
               </div>
+
+              {mode === 'meals' && (p.pending.length > 0 || lookup) && (
+                <div style={{ marginTop: 10, padding: 12, border: `1px solid ${T.accentSoft}`, borderRadius: 10 }}>
+                  <div style={body(14)}>
+                    {lookup
+                      ? `Looking up names… ${lookup.done} of ${lookup.total}`
+                      : `${p.pending.length} ${p.pending.length === 1 ? 'link needs' : 'links need'} a name`}
+                  </div>
+                  {lookup ? (
+                    <div style={{ height: 3, background: T.paperSunk, marginTop: 10 }}>
+                      <div style={{ width: `${lookup.total ? (lookup.done / lookup.total) * 100 : 0}%`, height: '100%', background: T.accent, transition: 'width 160ms' }} />
+                    </div>
+                  ) : (
+                    <button onClick={() => void lookUp()} style={{ ...button('primary'), width: '100%', marginTop: 10 }}>
+                      Look up names
+                    </button>
+                  )}
+                  <div style={label({ marginTop: 8, letterSpacing: '0.06em' })}>
+                    About a second per link. Keep this open until it finishes.
+                  </div>
+                  {lookupErr && <div style={{ ...body(13), color: T.bad, marginTop: 8 }}>{lookupErr}</div>}
+                </div>
+              )}
+
+              {mode === 'meals' && p.looksNotFood > 0 && (
+                <button onClick={() => setIncludeNonFood(!includeNonFood)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', marginTop: 10, minHeight: 44,
+                                 padding: '0 2px', background: 'none', border: 0, color: T.ink, cursor: 'pointer', textAlign: 'left' }}>
+                  <span style={checkbox(includeNonFood, 18)}>{includeNonFood ? '✓' : ''}</span>
+                  <span style={body(14)}>Include {p.looksNotFood} that {p.looksNotFood === 1 ? "doesn't" : "don't"} look like food</span>
+                </button>
+              )}
               {p.notAisles.length > 0 && (
                 <div style={{ ...body(12), color: T.faint, marginTop: 4 }}>
                   {p.notAisles.map((h) => `“${h}”`).join(', ')} {p.notAisles.length === 1 ? "isn't an aisle" : "aren't aisles"}, so
@@ -941,6 +1032,7 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
                           {r.url && r.status === 'new' && <span style={label({ color: T.accent })}>link</span>}
                           {r.status === 'exists' && <span style={label()}>already there</span>}
                           {r.status === 'repeat' && <span style={label()}>repeat</span>}
+                          {r.status === 'notfood' && <span style={label()}>not food?</span>}
                         </div>
                       ))}
                     </div>
