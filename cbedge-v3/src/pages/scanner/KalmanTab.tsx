@@ -5,7 +5,7 @@
 // recorded minute. The model, its definitions and the reasons behind every
 // constant live in `kalman.ts`; this file fetches, wires and paints.
 //
-// FOUR THINGS ABOUT THIS FILE THAT ARE NOT OBVIOUS FROM READING IT
+// SIX THINGS ABOUT THIS FILE THAT ARE NOT OBVIOUS FROM READING IT
 //
 //   1. THE FILTER IS REPLAYED, NOT ACCUMULATED. Every poll re-runs it from the
 //      first column of the session. ~390 RTH columns × two 2×2 updates is
@@ -28,14 +28,30 @@
 //      (non-negotiables 5, 6). They share ONE hover index through a tiny bus
 //      held in a ref: moving over any of them repaints all three at the same
 //      minute, and nothing about the hover ever goes through React state.
+//   5. ZOOM AND PAN WORK LIKE THE GEX CANDLES CARD (lightweight-charts'
+//      defaults), on the same bus: wheel zooms the time axis around the
+//      cursor, shift+wheel or a sideways swipe pans, click-drag pans, dragging
+//      the right-hand price axis stretches it, double-click on the axis puts it
+//      back on autoscale and double-click in the plot fits everything. The x
+//      axis is LOGICAL (one slot per column), as it is on that card, so a night
+//      between two sessions costs no width. All three canvases share the view.
+//      While the view sits on the live edge a new column scrolls it along.
+//   6. HISTORY. The per-minute ladder is pruned to ~2 sessions, so earlier
+//      sessions come from the premarket replay store (5-minute frames, ~60
+//      sessions kept) — see HISTORY in kalman.ts. The date picker sets the
+//      LAST session shown and DAYS how many; ending on today keeps today live
+//      (1-minute, polled) and stitches the earlier ones in front of it. Every
+//      session runs its own filter (SESSIONS in kalman.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { DatePicker } from '@/design/primitives/DatePicker'
 import { Card, CardToolbar } from '@/design/primitives/Card'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { SegGroup } from '@/design/primitives/Controls'
 import { Stat, type Direction } from '@/design/primitives/Stat'
-import { T, VIOLET, alpha, tokenHex, tokenHexAlpha } from '@/design/theme'
+import { LEVEL_COLORS, T, VIOLET, alpha, tokenHex, tokenHexAlpha } from '@/design/theme'
+import { VOLTICK_UI } from '@/data/voltickLevels'
 import { readableError, useQuery } from '@/data/api'
 import { useField } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
@@ -52,11 +68,14 @@ import {
   calibratedZ,
   columnsToObs,
   etClock,
+  etDayKey,
   forecast,
   lastUpdated,
+  replayFramesToObs,
   runKalman,
   sessionObs,
   type KfForecastPoint,
+  type KfObs,
   type KfPoint,
   type KfRun,
   type KfSeries,
@@ -69,6 +88,20 @@ import {
 /** The history table's key for SPX gamma. See board/gexCandles/symbols.ts. */
 const GEX_SYMBOL = '$SPX'
 const EXPIRATIONS_URL = '/api/expirations?ticker=SPX'
+
+/** Which sessions the replay store holds. Same URL /premarket's picker asks for. */
+const REPLAY_DATES_URL = '/proxy/premarket-replay?dates=1&limit=120&symbol=SPX'
+const replayUrl = (date: string) => `/proxy/premarket-replay?date=${encodeURIComponent(date)}&symbol=SPX`
+
+/** Most sessions one view stitches. Fixed, because each is a hook slot. */
+const MAX_DAYS = 5
+type KfDays = '1' | '2' | '3' | '5'
+const DAYS_OPTIONS: Array<{ value: KfDays; label: string; title: string }> = [
+  { value: '1', label: '1D', title: 'One session' },
+  { value: '2', label: '2D', title: 'Two sessions, ending on the picked date' },
+  { value: '3', label: '3D', title: 'Three sessions, ending on the picked date' },
+  { value: '5', label: '5D', title: 'Five sessions, ending on the picked date' },
+]
 
 interface ExpirationsResponse {
   data?: { items?: Array<{ 'expiration-date'?: string }> }
@@ -106,7 +139,15 @@ function historyMinutesFor(weekendDay: string): number {
 
 // ── Controls ─────────────────────────────────────────────────────────────────
 
+/** The CORE is called VOLT on the Voltick theme — same strike, same rule. */
+const CORE_NAME = VOLTICK_UI ? 'Volt' : 'Core'
+
 const SERIES_OPTIONS: Array<{ value: KfSeries; label: string; title: string }> = [
+  {
+    value: 'core',
+    label: CORE_NAME.toUpperCase(),
+    title: `${CORE_NAME}: the biggest |OI+VOL| gamma node. Filtered as its gamma-weighted centre (the node and its same-sign neighbours within ±25 pts)`,
+  },
   { value: 'flip', label: 'FLIP', title: 'Zero-gamma flip (cumulative OI+VOL crossing nearest spot)' },
   { value: 'netgex', label: 'NET GEX', title: 'Σ OI+VOL net GEX across the recorded ladder' },
   { value: 'spot', label: 'SPOT', title: 'SPX spot as the recorder stamped it each minute' },
@@ -123,16 +164,21 @@ const SESSION_OPTIONS: Array<{ value: KfSession; label: string; title: string }>
   { value: 'all', label: 'ALL', title: 'Every column the recorder wrote for this session, pre-market included' },
 ]
 
-const SERIES_NAME: Record<KfSeries, string> = { flip: 'Flip', netgex: 'Net GEX', spot: 'Spot' }
+const SERIES_NAME: Record<KfSeries, string> = { core: CORE_NAME, flip: 'Flip', netgex: 'Net GEX', spot: 'Spot' }
 
 /** The token each series' filtered line is drawn in. The flip is VIOLET everywhere. */
 const SERIES_TOKEN: Record<KfSeries, string> = {
+  // The core is GOLD everywhere — the CB tag, the GEX rail, the bubble leader.
+  core: '--color-level-cb',
   flip: '--color-violet',
   netgex: '--color-accent',
   spot: '--color-accent',
 }
 /** The same, as the var() string the DOM legend paints with. */
-const SERIES_VAR: Record<KfSeries, string> = { flip: VIOLET, netgex: T.cyan, spot: T.cyan }
+const SERIES_VAR: Record<KfSeries, string> = { core: LEVEL_COLORS.cb, flip: VIOLET, netgex: T.cyan, spot: T.cyan }
+
+/** Series measured in index points, read against spot. */
+const ON_PRICE = (s: KfSeries) => s === 'core' || s === 'flip'
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
@@ -175,43 +221,69 @@ interface Model {
   run: KfRun
   /** Spot per point, for the flip overlay. Same index as run.points. */
   spots: Array<number | null>
+  /** The raw core strike and its signed node, per point. Same index. */
+  coreStrikes: Array<number | null>
+  coreNets: Array<number | null>
   surprises: KfPoint[]
   /** Points where the state restarted on a confirmed level break. */
   breaks: KfPoint[]
-  /** The cone, from the last column forward. */
+  /** True when the last session is today's live feed — the cone only exists then. */
+  live: boolean
+  /** The cone, from the last column forward. Empty when not live. */
   fc: KfForecastPoint[]
   horizonMin: number
+  /** Index of the first point of each session after the first. */
+  dayStarts: number[]
+  /** Sessions in the view, oldest first. */
+  days: string[]
 }
 
-/** How far the cone reaches: a tenth of the session on screen, 10–45 minutes. */
+/** How far the cone reaches: a tenth of the LAST session, 10–45 minutes. */
 function horizonFor(run: KfRun): number {
   const pts = run.points
-  if (pts.length < 2) return 0
-  const spanMin = ((pts[pts.length - 1] as KfPoint).t - (pts[0] as KfPoint).t) / 60_000
+  const last = pts[pts.length - 1]
+  if (!last) return 0
+  const first = pts.find((p) => p.day === last.day) ?? last
+  const spanMin = (last.t - first.t) / 60_000
   return Math.max(10, Math.min(45, Math.round(spanMin * 0.1)))
 }
 
-// ── The shared hover ─────────────────────────────────────────────────────────
-// One index, three canvases. A plain subscribe/notify in a ref rather than
-// React state, so a mouse move repaints canvases and renders nothing.
+// ── The shared bus: hover, the x view and the manual price range ─────────────
+// Plain mutable state plus subscribe/notify, held in a ref. A mouse move, a
+// wheel tick or a drag repaints canvases and renders nothing.
 
-interface HoverBus {
-  get(): number | null
-  set(i: number | null): void
+interface XView {
+  /** Logical index at the plot's left edge. Fractional. */
+  from: number
+  /** …and at its right edge. */
+  to: number
+}
+
+interface ChartBus {
+  hover: number | null
+  /** null = fit everything (the default, and what double-click returns to). */
+  view: XView | null
+  /** Main pane's price range while the axis has been dragged; null = autoscale. */
+  yMain: { lo: number; hi: number } | null
+  /** The main pane's last AUTOSCALED range — where an axis drag starts from. */
+  autoY: { lo: number; hi: number } | null
+  dragging: boolean
+  notify(): void
   sub(fn: () => void): () => void
 }
 
-function makeHoverBus(): HoverBus {
-  let cur: number | null = null
+function makeBus(): ChartBus {
   const subs = new Set<() => void>()
   return {
-    get: () => cur,
-    set: (i) => {
-      if (i === cur) return
-      cur = i
+    hover: null,
+    view: null,
+    yMain: null,
+    autoY: null,
+    dragging: false,
+    notify() {
       for (const fn of Array.from(subs)) fn()
     },
-    sub: (fn) => {
+    sub(fn) {
       subs.add(fn)
       return () => {
         subs.delete(fn)
@@ -220,53 +292,207 @@ function makeHoverBus(): HoverBus {
   }
 }
 
+/** Slots the cone occupies to the right of the last column (one a minute). */
+function horizonSlots(m: Model): number {
+  return m.live ? m.fc.length - 1 : 0
+}
+
+/** Everything, with a couple of slots of air either side. */
+function fitView(m: Model): XView {
+  const n = m.run.points.length
+  return { from: -1, to: n - 1 + horizonSlots(m) + 2 }
+}
+
+function viewOf(m: Model, bus: ChartBus): XView {
+  return bus.view ?? fitView(m)
+}
+
+/** Keep some data on screen and the zoom inside sane limits. */
+function clampView(v: XView, m: Model): XView {
+  const fit = fitView(m)
+  const fitW = fit.to - fit.from
+  const w = Math.max(MIN_VIEW_SLOTS, Math.min(fitW * 1.5, v.to - v.from))
+  let from = v.from
+  let to = from + w
+  const lastIdx = m.run.points.length - 1 + horizonSlots(m)
+  // At least a quarter of the window must hold data on each side.
+  if (to < w * 0.25) {
+    to = w * 0.25
+    from = to - w
+  }
+  if (from > lastIdx - w * 0.25) {
+    from = lastIdx - w * 0.25
+    to = from + w
+  }
+  return { from, to }
+}
+
 // ── The tab ──────────────────────────────────────────────────────────────────
 
 export default function KalmanTab() {
-  const [series, setSeries] = useState<KfSeries>('flip')
+  const [series, setSeries] = useState<KfSeries>('core')
   const [smooth, setSmooth] = useState<KfSmooth>('med')
   const [session, setSession] = useState<KfSession>('rth')
-  const bus = useMemo(makeHoverBus, [])
+  const today = useMemo(() => ET_DATE.format(new Date()), [])
+  const [endDate, setEndDate] = useState(today)
+  const [daysOpt, setDaysOpt] = useState<KfDays>('1')
+  const nDays = Number(daysOpt)
+  const bus = useMemo(makeBus, [])
 
+  const liveEnd = endDate >= today
+
+  // ── Live (today, 1-minute) ─────────────────────────────────────────────────
   const expiryQ = useQuery<ExpirationsResponse>(EXPIRATIONS_URL, { staleMs: 300_000 })
   const weekendDay = useMemo(() => weekendSessionDay(), [])
   const listed = expiryQ.data?.data?.items?.[0]?.['expiration-date'] ?? ''
   // Guess today's 0DTE while the list is in flight, exactly as the candles card
   // does — on a trading day the guess IS the answer, so nothing refetches.
-  const expiry = weekendDay || listed || (expiryQ.data ? '' : ET_DATE.format(new Date()))
+  const expiry = weekendDay || listed || (expiryQ.data ? '' : today)
   const minutes = useMemo(() => historyMinutesFor(weekendDay), [weekendDay])
 
-  const url = expiry ? gexHistoryUrl(GEX_SYMBOL, expiry, minutes, BUBBLE_LADDER_REQUEST) : null
-  const histQ = useQuery<unknown>(url, { staleMs: 30_000, pollMs: 60_000 })
+  const liveUrl = liveEnd && expiry ? gexHistoryUrl(GEX_SYMBOL, expiry, minutes, BUBBLE_LADDER_REQUEST) : null
+  const histQ = useQuery<unknown>(liveUrl, { staleMs: 30_000, pollMs: 60_000 })
+  const liveColumns = useMemo(
+    () => (liveEnd ? latestSession(parseGexHistory(histQ.data)) : []),
+    [liveEnd, histQ.data],
+  )
+  const liveDay = liveColumns[0] ? etDayKey(liveColumns[0].slotTs) : ''
 
-  const columns = useMemo(() => latestSession(parseGexHistory(histQ.data)), [histQ.data])
-  const allObs = useMemo(() => columnsToObs(columns), [columns])
+  // ── History (earlier sessions, 5-minute replay frames) ─────────────────────
+  // The date list is one small request and always fetched: it bounds the
+  // picker. The sessions themselves are only asked for when the view needs
+  // them — five fixed hook slots, every one fired in parallel.
+  const datesQ = useQuery<unknown>(REPLAY_DATES_URL, { staleMs: 600_000 })
+  const replayDates = useMemo(() => {
+    const rows = (datesQ.data as { rows?: unknown })?.rows
+    if (!Array.isArray(rows)) return [] as string[]
+    return (rows as Array<{ date?: unknown; frames?: unknown }>)
+      .filter((r) => Number(r.frames) > 0)
+      .map((r) => String(r.date ?? '').slice(0, 10))
+      .filter(Boolean)
+      .sort()
+  }, [datesQ.data])
+
+  const histDates = useMemo(() => {
+    if (liveEnd) {
+      // Today is the live feed; never also pull its replay. On a weekend the
+      // live feed IS Friday, so Friday is excluded the same way.
+      const cut = liveDay || today
+      return nDays > 1 ? replayDates.filter((d) => d < cut).slice(-(nDays - 1)) : []
+    }
+    return replayDates.filter((d) => d <= endDate).slice(-nDays)
+  }, [liveEnd, liveDay, today, replayDates, endDate, nDays])
+
+  const slot = (i: number) => (histDates[i] ? replayUrl(histDates[i] as string) : null)
+  const REPLAY_OPTS = { staleMs: 1_800_000 }
+  const r0 = useQuery<unknown>(slot(0), REPLAY_OPTS)
+  const r1 = useQuery<unknown>(slot(1), REPLAY_OPTS)
+  const r2 = useQuery<unknown>(slot(2), REPLAY_OPTS)
+  const r3 = useQuery<unknown>(slot(3), REPLAY_OPTS)
+  const r4 = useQuery<unknown>(slot(4), REPLAY_OPTS)
+  const replaySlots = [r0, r1, r2, r3, r4].slice(0, Math.min(MAX_DAYS, histDates.length))
+  const replayLoading = replaySlots.some((q) => q.loading)
+  const replayError = replaySlots.find((q) => q.error)?.error ?? null
+
+  const allObs = useMemo<KfObs[]>(() => {
+    const out: KfObs[] = []
+    for (const q of [r0, r1, r2, r3, r4].slice(0, histDates.length)) out.push(...replayFramesToObs(q.data))
+    out.push(...columnsToObs(liveColumns))
+    out.sort((a, b) => a.t - b.t)
+    return out
+    // The five slot PAYLOADS are the inputs — the hook results around them are
+    // new objects every render.
+  }, [r0.data, r1.data, r2.data, r3.data, r4.data, histDates.length, liveColumns])
   const { obs, fellBack } = useMemo(() => sessionObs(allObs, session), [allObs, session])
 
   const model = useMemo<Model | null>(() => {
     if (!obs.length) return null
     const run = runKalman(obs, series, smooth)
-    // runKalman drops columns before the first print; line the spots up with
-    // the points it kept by timestamp, not by index.
-    const spotAt = new Map(obs.map((o) => [o.t, o.spot]))
-    const spots = run.points.map((p) => spotAt.get(p.t) ?? null)
+    // runKalman drops columns before each session's first print; line the
+    // spots up with the points it kept by timestamp, not by index.
+    const obsAt = new Map(obs.map((o) => [o.t, o]))
+    const spots = run.points.map((p) => obsAt.get(p.t)?.spot ?? null)
+    const coreStrikes = run.points.map((p) => obsAt.get(p.t)?.coreStrike ?? null)
+    const coreNets = run.points.map((p) => obsAt.get(p.t)?.coreNet ?? null)
     const surprises = run.points.filter((p) => Math.abs(calibratedZ(p, run.calib) ?? 0) > KF_SURPRISE_SIGMA)
     const breaks = run.points.filter((p) => p.kind === 'break')
-    const horizonMin = horizonFor(run)
-    return { series, run, spots, surprises, breaks, fc: forecast(run, horizonMin), horizonMin }
-  }, [obs, series, smooth])
+    const lastPt = run.points[run.points.length - 1]
+    const live = liveEnd && !!lastPt && lastPt.src === 'live'
+    const horizonMin = live ? horizonFor(run) : 0
+    const dayStarts: number[] = []
+    const days: string[] = []
+    run.points.forEach((p, i) => {
+      if (i === 0 || p.day !== (run.points[i - 1] as KfPoint).day) {
+        if (i > 0) dayStarts.push(i)
+        days.push(p.day)
+      }
+    })
+    return {
+      series,
+      run,
+      spots,
+      coreStrikes,
+      coreNets,
+      surprises,
+      breaks,
+      live,
+      fc: live ? forecast(run, horizonMin) : [],
+      horizonMin,
+      dayStarts,
+      days,
+    }
+  }, [obs, series, smooth, liveEnd])
 
-  // A new model can be shorter than the index under the mouse.
+  // ── The view across data changes ───────────────────────────────────────────
+  // A different QUESTION (series, session, dates) starts from "fit all". A poll
+  // that adds a column keeps the window where it is — and, if it was parked on
+  // the live edge, slides it along with the new column, as the candles card does.
   useEffect(() => {
-    bus.set(null)
+    bus.view = null
+    bus.yMain = null
+    bus.hover = null
+    bus.notify()
+  }, [bus, series, session, endDate, nDays])
+
+  const prevRef = useRef<{ n: number; slots: number } | null>(null)
+  useEffect(() => {
+    if (!model) {
+      prevRef.current = null
+      return
+    }
+    const n = model.run.points.length
+    const slots = horizonSlots(model)
+    const prev = prevRef.current
+    prevRef.current = { n, slots }
+    if (prev && bus.view && n > prev.n) {
+      const prevEdge = prev.n - 1 + prev.slots
+      if (bus.view.to >= prevEdge - 1) {
+        const d = n - prev.n
+        bus.view = { from: bus.view.from + d, to: bus.view.to + d }
+      }
+    }
+    if (bus.hover != null && bus.hover >= n) bus.hover = null
+    bus.notify()
   }, [model, bus])
 
   const last = model?.run.points[model.run.points.length - 1] ?? null
   const upd = model ? lastUpdated(model.run.points) : null
-  const lastTs = columns[columns.length - 1]?.slotTs ?? null
+  const lastTs = last?.t ?? null
 
-  const loading = histQ.loading || (expiryQ.loading && !expiry)
-  const err = histQ.error ? readableError(histQ.error) : null
+  const loading = histQ.loading || (expiryQ.loading && liveEnd && !expiry) || replayLoading
+  const errRaw = histQ.error ?? replayError
+  const err = errRaw ? readableError(errRaw) : null
+  const oldest = replayDates[0] ?? ''
+
+  const sourceText = model
+    ? [
+        model.days.length > 1 ? `${model.days.length} sessions ${model.days[0]} → ${model.days[model.days.length - 1]}` : `session ${model.days[0]}`,
+        histDates.length ? '5m replay' : null,
+        model.live ? '1m live' : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : null
 
   return (
     <Card title="Kalman · SPX GEX">
@@ -276,18 +502,45 @@ export default function KalmanTab() {
         <SegGroup<KfSession> options={SESSION_OPTIONS} value={session} onChange={setSession} title="Session" />
       </CardToolbar>
 
-      <div className="mb-3 text-xs text-muted">
-        {[
-          'SPX',
-          expiry ? `front expiry ${expiry}` : null,
-          `${columns.length} columns`,
-          lastTs ? `last ${etClock(lastTs)} ET` : null,
-          `ladder top ${BUBBLE_LADDER_REQUEST}`,
-          fellBack ? 'no RTH yet — showing all' : null,
-          loading ? 'loading…' : null,
-        ]
-          .filter(Boolean)
-          .join(' · ')}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+        <DatePicker
+          size="sm"
+          value={endDate}
+          max={today}
+          min={oldest || undefined}
+          onChange={(v) => setEndDate(v || today)}
+          title="Last session shown. Today = live; earlier dates come from the 5-minute replay recorder (≈60 sessions kept)."
+          label={(v) => (v >= today ? 'Today · live' : v)}
+          className="shrink-0"
+        />
+        <SegGroup<KfDays>
+          options={DAYS_OPTIONS}
+          value={daysOpt}
+          onChange={setDaysOpt}
+          title="How many sessions to stitch, ending on the picked date"
+        />
+        {!liveEnd && (
+          <button
+            type="button"
+            onClick={() => setEndDate(today)}
+            className="rounded-sm border border-line px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg"
+          >
+            BACK TO LIVE
+          </button>
+        )}
+        <span>
+          {[
+            'SPX',
+            sourceText,
+            model?.live && expiry ? `front expiry ${expiry}` : null,
+            `${model?.run.points.length ?? 0} columns`,
+            lastTs ? `last ${etClock(lastTs)} ET` : null,
+            fellBack ? 'no RTH yet — showing all' : null,
+            loading ? 'loading…' : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </span>
       </div>
 
       {err && <div className="mb-3 text-xs text-down">{err}</div>}
@@ -295,24 +548,31 @@ export default function KalmanTab() {
       <StatRow model={model} last={last} upd={upd} smooth={smooth} />
 
       <div className="relative mt-3 flex flex-col" style={{ height: 420 }}>
-        <Panel model={model} bus={bus} paint={paintMain} axisW={AXIS_W} horizon />
-        <EmptyNote model={model} loading={loading} expiry={expiry} hasColumns={columns.length > 0} />
+        <Panel model={model} bus={bus} paint={paintMain} axisW={AXIS_W} main />
+        <EmptyNote
+          model={model}
+          loading={loading}
+          liveEnd={liveEnd}
+          endDate={endDate}
+          expiry={expiry}
+          hasData={allObs.length > 0}
+        />
       </div>
 
-      <Legend series={series} horizonMin={model?.horizonMin ?? 0} />
+      <Legend series={series} horizonMin={model?.live ? model.horizonMin : 0} />
 
       <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <SubPanel
           title="Innovation residuals"
-          note={`Print − forecast, in calibrated σ. Should scatter inside ±2σ around zero. A run on one side = the model is lagging (go FAST); markers at the edge = held prints and breaks.`}
+          note="Print − forecast, in calibrated σ. Should scatter inside ±2σ around zero. A run on one side = the model is lagging (go FAST); markers at the edge = held prints and breaks."
         >
-          <Panel model={model} bus={bus} paint={paintResiduals} axisW={SUB_AXIS_W} horizon={false} />
+          <Panel model={model} bus={bus} paint={paintResiduals} axisW={SUB_AXIS_W} main={false} />
         </SubPanel>
         <SubPanel
           title="Variance · predict → update"
-          note="√P of the level. Each predict step adds Q and σ rises; each print folds in and σ drops. Even teeth = settled; a spike = a held print or a break restarting the state."
+          note="√P of the level. Each predict step adds Q and σ rises; each print folds in and σ drops. Even teeth = settled; a spike = a held print, a break or a new session restarting the state."
         >
-          <Panel model={model} bus={bus} paint={paintVariance} axisW={SUB_AXIS_W} horizon={false} />
+          <Panel model={model} bus={bus} paint={paintVariance} axisW={SUB_AXIS_W} main={false} />
         </SubPanel>
       </div>
 
@@ -327,6 +587,15 @@ function dirOf(v: number, eps = 0): Direction {
   return v > eps ? 'up' : v < -eps ? 'down' : 'flat'
 }
 
+/** The CORE tile's second line: the strike the node is on now, and its size. */
+function coreSub(m: Model): string {
+  const k = [...m.coreStrikes].reverse().find((v) => v != null)
+  const n = [...m.coreNets].reverse().find((v) => v != null)
+  if (k == null) return 'no node'
+  const side = n == null ? '' : n >= 0 ? ' · call node' : ' · put node'
+  return `strike ${k}${n != null ? ` ${fmtB(n)}` : ''}${side}`
+}
+
 function StatRow({
   model,
   last,
@@ -338,14 +607,19 @@ function StatRow({
   upd: KfPoint | null
   smooth: KfSmooth
 }) {
-  const s = model?.series ?? 'flip'
+  const s = model?.series ?? 'core'
   const lastSurprise = model?.surprises[model.surprises.length - 1] ?? null
+  const lastSpot = model ? ([...model.spots].reverse().find((v) => v != null) ?? null) : null
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
       <Stat
         label={`Filtered ${SERIES_NAME[s].toLowerCase()}`}
         value={fmtVal(s, last?.level)}
-        sub={`raw ${fmtVal(s, last?.z ?? upd?.z ?? null)}`}
+        sub={
+          s === 'core' && model
+            ? coreSub(model)
+            : `raw ${fmtVal(s, last?.z ?? upd?.z ?? null)}`
+        }
       />
       <Stat
         label="Trend"
@@ -374,9 +648,16 @@ function StatRow({
           direction={last ? dirOf(last.level) : undefined}
           sub={last ? (last.level >= 0 ? 'dealers long gamma · pinning' : 'dealers short gamma · trending') : undefined}
         />
-      ) : (
+      ) : model?.live ? (
         <LiveSpotStat
           series={s}
+          level={last?.level ?? null}
+          obsSd={last && model ? last.obsSd * model.run.calib : null}
+        />
+      ) : (
+        <RecordedSpotStat
+          series={s}
+          spot={lastSpot}
           level={last?.level ?? null}
           obsSd={last && model ? last.obsSd * model.run.calib : null}
         />
@@ -394,23 +675,20 @@ function StatRow({
   )
 }
 
-/**
- * The one live number. Isolated so the socket's spot rate re-renders this
- * tile and nothing else — see note 3 at the top.
- */
-function LiveSpotStat({
+/** The spot tile's two readings, shared by the live and the recorded variant. */
+function SpotTile({
   series,
+  spot,
   level,
   obsSd,
+  liveWord,
 }: {
   series: KfSeries
+  spot: number
   level: number | null
   obsSd: number | null
+  liveWord: string
 }) {
-  const spot = useField<SpotFrame, number>('spot', (f) => {
-    const v = Number(f?.data?.spot)
-    return Number.isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : 0
-  })
   if (series === 'flip') {
     const d = spot > 0 && level != null ? spot - level : null
     return (
@@ -418,20 +696,68 @@ function LiveSpotStat({
         label="Spot − flip"
         value={d != null ? fmtDelta('flip', d) : EM_DASH}
         direction={d != null ? dirOf(d) : undefined}
-        sub={d == null ? 'live spot' : d >= 0 ? `above flip · +γ · spot ${spot.toFixed(2)}` : `below flip · −γ · spot ${spot.toFixed(2)}`}
+        sub={
+          d == null
+            ? `${liveWord} spot`
+            : `${d >= 0 ? 'above flip · +γ' : 'below flip · −γ'} · ${liveWord} ${spot.toFixed(2)}`
+        }
       />
     )
   }
-  // Spot series: how stretched live price is from its own filtered level.
+  if (series === 'core') {
+    // Distance to the magnet. Price ABOVE the core is being pulled down toward
+    // it, BELOW is being pulled up — the arrow says which way the pull runs.
+    const d = spot > 0 && level != null ? spot - level : null
+    return (
+      <Stat
+        label={`Spot − ${CORE_NAME.toLowerCase()}`}
+        value={d != null ? fmtDelta('core', d) : EM_DASH}
+        direction={d != null ? dirOf(d) : undefined}
+        sub={
+          d == null
+            ? `${liveWord} spot`
+            : `${CORE_NAME.toLowerCase()} ${d >= 0 ? 'below ↓' : 'above ↑'} · ${liveWord} ${spot.toFixed(2)}`
+        }
+      />
+    )
+  }
+  // Spot series: how stretched price is from its own filtered level.
   const z = spot > 0 && level != null && obsSd != null && obsSd > 0 ? (spot - level) / obsSd : null
   return (
     <Stat
       label="Stretch"
       value={z != null ? `${z >= 0 ? '+' : '-'}${Math.abs(z).toFixed(1)}σ` : EM_DASH}
       direction={z != null ? dirOf(z, 0.5) : undefined}
-      sub={spot > 0 ? `live ${spot.toFixed(2)} vs filtered` : 'live spot'}
+      sub={spot > 0 ? `${liveWord} ${spot.toFixed(2)} vs filtered` : `${liveWord} spot`}
     />
   )
+}
+
+/**
+ * The one live number. Isolated so the socket's spot rate re-renders this
+ * tile and nothing else — see note 3 at the top.
+ */
+function LiveSpotStat({ series, level, obsSd }: { series: KfSeries; level: number | null; obsSd: number | null }) {
+  const spot = useField<SpotFrame, number>('spot', (f) => {
+    const v = Number(f?.data?.spot)
+    return Number.isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : 0
+  })
+  return <SpotTile series={series} spot={spot} level={level} obsSd={obsSd} liveWord="live" />
+}
+
+/** A past session: the last spot the recorder stamped, never today's quote. */
+function RecordedSpotStat({
+  series,
+  spot,
+  level,
+  obsSd,
+}: {
+  series: KfSeries
+  spot: number | null
+  level: number | null
+  obsSd: number | null
+}) {
+  return <SpotTile series={series} spot={spot ?? 0} level={level} obsSd={obsSd} liveWord="last" />
 }
 
 // ── Empty states, legend, sub-panel frame ────────────────────────────────────
@@ -439,20 +765,27 @@ function LiveSpotStat({
 function EmptyNote({
   model,
   loading,
+  liveEnd,
+  endDate,
   expiry,
-  hasColumns,
+  hasData,
 }: {
   model: Model | null
   loading: boolean
+  liveEnd: boolean
+  endDate: string
   expiry: string
-  hasColumns: boolean
+  hasData: boolean
 }) {
   let text: string | null = null
-  if (!hasColumns) text = loading ? 'Loading the session’s GEX ladders…' : `No GEX history recorded for ${expiry || 'this expiry'} yet.`
-  else if (model && model.run.observed < 3) {
+  if (!hasData) {
+    if (loading) text = 'Loading the session’s GEX ladders…'
+    else if (liveEnd) text = `No GEX history recorded for ${expiry || 'this expiry'} yet.`
+    else text = `No replay frames recorded on or before ${endDate}. The replay recorder keeps about 60 sessions.`
+  } else if (model && model.run.observed < 3) {
     text =
       model.series === 'flip'
-        ? 'No zero-gamma crossing in the ladder for most of this session — the board stayed one-signed, so there is no flip to filter. Try NET GEX.'
+        ? 'No zero-gamma crossing in the ladder for most of this view — the board stayed one-signed, so there is no flip to filter. Try NET GEX.'
         : 'Not enough prints to filter yet.'
   }
   if (!text) return null
@@ -486,11 +819,14 @@ function Legend({ series, horizonMin }: { series: KfSeries; horizonMin: number }
     { label: 'Print', color: alpha(T.text, 0.55), shape: 'dot' },
     { label: `Filtered ${SERIES_NAME[series].toLowerCase()}`, color: SERIES_VAR[series], shape: 'line' },
     { label: '±2σ next print', color: alpha(SERIES_VAR[series], 0.25), shape: 'block' },
-    { label: horizonMin ? `Forecast +${horizonMin}m` : 'Forecast', color: T.orange, shape: 'dash' },
+  ]
+  if (horizonMin) items.push({ label: `Forecast +${horizonMin}m`, color: T.orange, shape: 'dash' })
+  items.push(
     { label: `Surprise >${KF_SURPRISE_SIGMA}σ`, color: T.orange, shape: 'ring' },
     { label: 'Level break', color: T.orange, shape: 'diamond' },
-  ]
-  if (series === 'flip') items.push({ label: 'Spot', color: alpha(T.text, 0.4), shape: 'line' })
+  )
+  if (series === 'core') items.push({ label: `${CORE_NAME} strike`, color: alpha(LEVEL_COLORS.cb, 0.45), shape: 'dash' })
+  if (ON_PRICE(series)) items.push({ label: 'Spot', color: alpha(T.text, 0.4), shape: 'line' })
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-muted">
       {items.map((it) => (
@@ -499,6 +835,9 @@ function Legend({ series, horizonMin }: { series: KfSeries; horizonMin: number }
           {it.label}
         </span>
       ))}
+      <span className="ml-auto opacity-70">
+        wheel zoom · drag pan · drag price axis to stretch · double-click to reset
+      </span>
     </div>
   )
 }
@@ -515,19 +854,33 @@ function SubPanel({ title, note, children }: { title: string; note: string; chil
   )
 }
 
+const SERIES_DEF: Record<KfSeries, string> = {
+  core: `${CORE_NAME} = the strike carrying the most |OI+VOL| gamma — the biggest node, the magnet price is pulled toward. A strike only jumps, so the filter runs on its centre of mass: the node and its same-sign neighbours within ±25 pts, weighted by gamma². It leans before the ${CORE_NAME.toLowerCase()} hops; a far jump is a level break. The dashed gold steps are the raw ${CORE_NAME.toLowerCase()} strike.`,
+  flip: 'Flip = where cumulative OI+VOL gamma, summed up the strikes, crosses from negative to positive nearest spot. Above it dealers are net long gamma (they fade moves — pinning); below it net short (they chase — trending).',
+  netgex: 'Net GEX = Σ OI+VOL net gamma across the ladder. Positive = dealers long gamma overall (dampening); negative = short gamma (amplifying).',
+  spot: 'Spot = SPX as the recorder stamped it each column.',
+}
+
 function HowItWorks({ smooth, model }: { smooth: KfSmooth; model: Model | null }) {
   return (
     <div className="mt-3 border-t border-line pt-2 text-xs leading-relaxed text-muted">
-      <span className="text-fg">How it works.</span> Every recorded minute the filter predicts the next value from
+      {model && (
+        <>
+          <span className="text-fg">{SERIES_NAME[model.series]}.</span> {SERIES_DEF[model.series]}{' '}
+        </>
+      )}
+      <span className="text-fg">How it works.</span> Every recorded column the filter predicts the next value from
       its state (level + trend), then folds in the new print weighted by the Kalman gain K. K balances Q, how fast
-      the true level can move, against R, how noisy a single print is. R is measured from this session’s own prints
-      {model ? ` (σ ${fmtDelta(model.series, Math.sqrt(model.run.r)).replace(/^\+/, '')})` : ''}, never below{' '}
-      {Math.round(KF_R_FLOOR_FRAC * 100)}% of the session’s range; Q is R × {KF_RATIO[smooth]} on {smooth.toUpperCase()}.
-      Small K = the model is trusted and one print barely moves it; large K = it snaps onto the print. R is ×
-      {KF_OPEN_BOOST} for the first 15 minutes of RTH. A print more than {KF_BREAK_SIGMA}σ off is held; a second one
-      on the same side is a level break and the filter restarts on it, so a step (the morning OI update, say) is drawn
-      as a step instead of an overshoot. The band is where the next print is expected (±2σ, widened by how far this
-      model has actually been missing today); the cone carries the last level and trend forward with no new prints.
+      the true level can move, against R, how noisy a single print is. R is measured from each session’s own prints
+      {model ? ` (σ ${fmtDelta(model.series, Math.sqrt(model.run.r)).replace(/^\+/, '')} on the last)` : ''}, never
+      below {Math.round(KF_R_FLOOR_FRAC * 100)}% of that session’s range; Q is R × {KF_RATIO[smooth]} on{' '}
+      {smooth.toUpperCase()}. Small K = the model is trusted and one print barely moves it; large K = it snaps onto
+      the print. R is ×{KF_OPEN_BOOST} for the first 15 minutes of RTH. A print more than {KF_BREAK_SIGMA}σ off is
+      held; a second one on the same side is a level break and the filter restarts on it, so a step (the morning OI
+      update, say) is drawn as a step instead of an overshoot. Every session starts its own filter. The band is where
+      the next print is expected (±2σ, widened by how far this model has actually been missing); the cone carries the
+      last level and trend forward with no new prints. Past sessions are the 5-minute replay recorder’s frames (±20
+      strikes around spot); today is the 1-minute ladder (top {BUBBLE_LADDER_REQUEST} strikes).
     </div>
   )
 }
@@ -544,53 +897,53 @@ const PAD_T = 8
 const X_AXIS_H = 18
 const PANE_GAP = 10
 const TREND_FRACTION = 0.24
+/** Narrowest zoom, in columns. */
+const MIN_VIEW_SLOTS = 12
+/** Wheel sensitivity: the window scales by e^(deltaY · this). */
+const WHEEL_ZOOM = 0.0015
+/** Price-axis drag sensitivity: the range scales by e^(dy · this). */
+const AXIS_STRETCH = 0.006
 
-type Painter = (canvas: HTMLCanvasElement, w: number, h: number, m: Model | null, hover: number | null, axisW: number) => void
+type Painter = (
+  canvas: HTMLCanvasElement,
+  w: number,
+  h: number,
+  m: Model | null,
+  bus: ChartBus,
+  axisW: number,
+) => void
 
 interface Geom {
   plotR: number
   plotW: number
-  t0: number
-  t1: number
-  tEnd: number
-  x: (t: number) => number
-  tAt: (px: number) => number
+  from: number
+  to: number
+  /** Logical index → x. */
+  x: (i: number) => number
+  /** x → logical index (fractional). */
+  iAt: (px: number) => number
+  /** First and last DATA index inside the window. */
+  i0: number
+  i1: number
 }
 
-/**
- * The x mapping, ONE definition for painting and hit-testing. `horizon` adds
- * the forecast reach to the right of the last column.
- */
-function geom(w: number, m: Model, axisW: number, horizon: boolean): Geom {
-  const pts = m.run.points
+/** The x mapping, ONE definition for painting and for hit-testing. */
+function geom(w: number, m: Model, axisW: number, view: XView): Geom {
+  const n = m.run.points.length
   const plotR = w - axisW
   const plotW = Math.max(1, plotR - PAD_L)
-  const t0 = (pts[0] as KfPoint).t
-  const t1 = (pts[pts.length - 1] as KfPoint).t
-  const tEnd = horizon ? t1 + m.horizonMin * 60_000 : t1
-  const span = Math.max(60_000, tEnd - t0)
+  const { from, to } = view
+  const span = Math.max(1e-6, to - from)
   return {
     plotR,
     plotW,
-    t0,
-    t1,
-    tEnd,
-    x: (t) => PAD_L + ((t - t0) / span) * plotW,
-    tAt: (px) => t0 + ((px - PAD_L) / plotW) * span,
+    from,
+    to,
+    x: (i) => PAD_L + ((i - from) / span) * plotW,
+    iAt: (px) => from + ((px - PAD_L) / plotW) * span,
+    i0: Math.max(0, Math.floor(from)),
+    i1: Math.min(n - 1, Math.ceil(to)),
   }
-}
-
-/** Nearest point by time. Points are in time order. */
-function nearestIndex(pts: KfPoint[], t: number): number {
-  let lo = 0
-  let hi = pts.length - 1
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1
-    if ((pts[mid] as KfPoint).t < t) lo = mid + 1
-    else hi = mid
-  }
-  if (lo > 0 && Math.abs((pts[lo - 1] as KfPoint).t - t) < Math.abs((pts[lo] as KfPoint).t - t)) return lo - 1
-  return lo
 }
 
 function niceStep(range: number, target: number): number {
@@ -610,35 +963,74 @@ function fontMono(): string {
   }
 }
 
+const ET_SHORT_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'numeric', day: 'numeric' })
+
+/**
+ * Time labels for the visible window: a label wherever the ET clock crosses a
+ * round step, the step picked so labels sit ≥ 64px apart. Day starts are
+ * labelled with the date instead.
+ */
+function timeTicks(m: Model, g: Geom): Array<{ i: number; text: string; day: boolean }> {
+  const pts = m.run.points
+  if (g.i1 < g.i0) return []
+  const pxPerSlot = g.plotW / Math.max(1e-6, g.to - g.from)
+  // Median minutes per slot inside the window: 1 on the live ladder, 5 on replay.
+  const steps: number[] = []
+  for (let i = Math.max(g.i0, 1); i <= g.i1 && steps.length < 200; i++) {
+    steps.push(((pts[i] as KfPoint).t - (pts[i - 1] as KfPoint).t) / 60_000)
+  }
+  steps.sort((a, b) => a - b)
+  const minPerSlot = Math.max(1, Math.min(5, steps[steps.length >> 1] ?? 1))
+  const every = [5, 15, 30, 60, 120, 240].find((e) => (e / minPerSlot) * pxPerSlot >= 64) ?? 480
+  const out: Array<{ i: number; text: string; day: boolean }> = []
+  let lastX = -Infinity
+  for (let i = g.i0; i <= g.i1; i++) {
+    const p = pts[i] as KfPoint
+    const prev = pts[i - 1]
+    const newDay = !prev || prev.day !== p.day
+    const bucket = Math.floor(p.t / (every * 60_000))
+    const crossed = !prev || Math.floor(prev.t / (every * 60_000)) !== bucket
+    if (!newDay && !crossed) continue
+    const x = g.x(i)
+    if (x - lastX < 56) continue
+    out.push({ i, text: newDay ? ET_SHORT_DATE.format(new Date(p.t)) : etClock(p.t), day: newDay })
+    lastX = x
+  }
+  return out
+}
+
+/**
+ * One canvas on the shared bus. Paints through `useCanvasRenderer` (visibility
+ * gate, data-cb-layer) and turns pointer + wheel input into bus updates.
+ */
 function Panel({
   model,
   bus,
   paint,
   axisW,
-  horizon,
+  main,
 }: {
   model: Model | null
-  bus: HoverBus
+  bus: ChartBus
   paint: Painter
   axisW: number
-  horizon: boolean
+  /** The main chart owns the price axis drag; the sub-panes only zoom and pan. */
+  main: boolean
 }) {
   const { onMount: mountCanvas, onResize, onVisibility, setDraw } = useCanvasRenderer()
   const modelRef = useRef<Model | null>(model)
   modelRef.current = model
 
   const draw = useCallback(
-    (canvas: HTMLCanvasElement, w: number, h: number) => paint(canvas, w, h, modelRef.current, bus.get(), axisW),
+    (canvas: HTMLCanvasElement, w: number, h: number) => paint(canvas, w, h, modelRef.current, bus, axisW),
     [paint, bus, axisW],
   )
 
-  // A new model (poll, series, smoothing) → one repaint. setDraw paints, and
-  // defers the paint while the frame is off screen.
   useEffect(() => {
     setDraw(draw)
   }, [model, draw, setDraw])
 
-  // The shared hover → one repaint per animation frame at most.
+  // Any bus change → one repaint per animation frame at most.
   useEffect(() => {
     let raf = 0
     const off = bus.sub(() => {
@@ -658,26 +1050,173 @@ function Panel({
     (handle: ChartHandle) => {
       const cleanup = mountCanvas(handle)
       const el = handle.el
-      const onMove = (e: MouseEvent) => {
+      el.style.touchAction = 'pan-y'
+
+      const ctxOf = () => {
         const m = modelRef.current
-        if (!m || m.run.points.length < 2) return
+        if (!m || m.run.points.length < 2) return null
         const rect = el.getBoundingClientRect()
-        const g = geom(rect.width, m, axisW, horizon)
-        bus.set(nearestIndex(m.run.points, g.tAt(e.clientX - rect.left)))
+        const g = geom(rect.width, m, axisW, viewOf(m, bus))
+        return { m, rect, g }
       }
-      const onLeave = () => bus.set(null)
-      el.addEventListener('mousemove', onMove)
-      el.addEventListener('mouseleave', onLeave)
+      /** Is this point over the main pane's price axis? */
+      const onAxis = (px: number, py: number, rect: DOMRect, g: Geom) => {
+        if (!main || px <= g.plotR) return false
+        const usableH = Math.max(40, rect.height - PAD_T - X_AXIS_H - PANE_GAP)
+        return py >= PAD_T && py <= PAD_T + usableH * (1 - TREND_FRACTION)
+      }
+
+      // ── wheel: zoom around the cursor; sideways / shift pans ────────────────
+      const onWheel = (e: WheelEvent) => {
+        const c = ctxOf()
+        if (!c) return
+        e.preventDefault()
+        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? c.rect.height : 1
+        const dx = e.deltaX * unit
+        const dy = e.deltaY * unit
+        const v = viewOf(c.m, bus)
+        const w = v.to - v.from
+        let next: XView
+        if (e.shiftKey || Math.abs(dx) > Math.abs(dy)) {
+          const d = ((e.shiftKey ? dy : dx) / c.g.plotW) * w
+          next = { from: v.from + d, to: v.to + d }
+        } else {
+          const px = Math.max(PAD_L, Math.min(c.g.plotR, e.clientX - c.rect.left))
+          const anchor = c.g.iAt(px)
+          const nw = w * Math.exp(dy * WHEEL_ZOOM)
+          const k = nw / w
+          next = { from: anchor - (anchor - v.from) * k, to: anchor + (v.to - anchor) * k }
+        }
+        bus.view = clampView(next, c.m)
+        bus.notify()
+      }
+
+      // ── drag: pan the time axis (and the price axis once it is manual), or
+      // stretch the price axis when the press lands on it ──────────────────────
+      let drag: {
+        x: number
+        y: number
+        view: XView
+        axis: boolean
+        y0: { lo: number; hi: number } | null
+        mainH: number
+        moved: boolean
+      } | null = null
+
+      const onDown = (e: PointerEvent) => {
+        if (e.button !== 0) return
+        const c = ctxOf()
+        if (!c) return
+        const px = e.clientX - c.rect.left
+        const py = e.clientY - c.rect.top
+        const usableH = Math.max(40, c.rect.height - PAD_T - X_AXIS_H - PANE_GAP)
+        drag = {
+          x: e.clientX,
+          y: e.clientY,
+          view: viewOf(c.m, bus),
+          axis: onAxis(px, py, c.rect, c.g),
+          y0: bus.yMain ?? bus.autoY,
+          mainH: usableH * (1 - TREND_FRACTION),
+          moved: false,
+        }
+        el.setPointerCapture(e.pointerId)
+      }
+
+      const onMove = (e: PointerEvent) => {
+        const c = ctxOf()
+        if (!c) return
+        const px = e.clientX - c.rect.left
+        const py = e.clientY - c.rect.top
+        if (!drag) {
+          el.style.cursor = onAxis(px, py, c.rect, c.g) ? 'ns-resize' : 'crosshair'
+          const i = Math.round(c.g.iAt(px))
+          const hover = i >= 0 && i < c.m.run.points.length && px <= c.g.plotR ? i : null
+          if (hover !== bus.hover) {
+            bus.hover = hover
+            bus.notify()
+          }
+          return
+        }
+        const dx = e.clientX - drag.x
+        const dy = e.clientY - drag.y
+        if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 3) return
+        if (!drag.moved) {
+          drag.moved = true
+          bus.dragging = true
+          bus.hover = null
+          el.style.cursor = drag.axis ? 'ns-resize' : 'grabbing'
+        }
+        if (drag.axis) {
+          if (!drag.y0) return
+          const mid = (drag.y0.lo + drag.y0.hi) / 2
+          const half = ((drag.y0.hi - drag.y0.lo) / 2) * Math.exp(dy * AXIS_STRETCH)
+          bus.yMain = { lo: mid - half, hi: mid + half }
+        } else {
+          const w = drag.view.to - drag.view.from
+          const d = (-dx / c.g.plotW) * w
+          bus.view = clampView({ from: drag.view.from + d, to: drag.view.to + d }, c.m)
+          // Once the price axis is manual, a drag moves it too — as the candles
+          // card does after its axis has been stretched.
+          if (main && bus.yMain && drag.y0) {
+            const per = (drag.y0.hi - drag.y0.lo) / Math.max(1, drag.mainH)
+            bus.yMain = { lo: drag.y0.lo + dy * per, hi: drag.y0.hi + dy * per }
+          }
+        }
+        bus.notify()
+      }
+
+      const onUp = (e: PointerEvent) => {
+        if (!drag) return
+        drag = null
+        bus.dragging = false
+        el.style.cursor = 'crosshair'
+        if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId)
+        bus.notify()
+      }
+
+      const onLeave = () => {
+        if (drag || bus.hover == null) return
+        bus.hover = null
+        bus.notify()
+      }
+
+      // ── double-click: on the price axis → autoscale; in the plot → fit all ──
+      const onDbl = (e: MouseEvent) => {
+        const c = ctxOf()
+        if (!c) return
+        const px = e.clientX - c.rect.left
+        const py = e.clientY - c.rect.top
+        if (onAxis(px, py, c.rect, c.g)) bus.yMain = null
+        else {
+          bus.view = null
+          bus.yMain = null
+        }
+        bus.notify()
+      }
+
+      el.addEventListener('wheel', onWheel, { passive: false })
+      el.addEventListener('pointerdown', onDown)
+      el.addEventListener('pointermove', onMove)
+      el.addEventListener('pointerup', onUp)
+      el.addEventListener('pointercancel', onUp)
+      el.addEventListener('pointerleave', onLeave)
+      el.addEventListener('dblclick', onDbl)
+      el.style.cursor = 'crosshair'
       return () => {
-        el.removeEventListener('mousemove', onMove)
-        el.removeEventListener('mouseleave', onLeave)
+        el.removeEventListener('wheel', onWheel)
+        el.removeEventListener('pointerdown', onDown)
+        el.removeEventListener('pointermove', onMove)
+        el.removeEventListener('pointerup', onUp)
+        el.removeEventListener('pointercancel', onUp)
+        el.removeEventListener('pointerleave', onLeave)
+        el.removeEventListener('dblclick', onDbl)
         cleanup?.()
       }
     },
-    [mountCanvas, bus, axisW, horizon],
+    [mountCanvas, bus, axisW, main],
   )
 
-  return <ChartFrame className="cursor-crosshair" onMount={onMount} onResize={onResize} onVisibility={onVisibility} />
+  return <ChartFrame className="select-none" onMount={onMount} onResize={onResize} onVisibility={onVisibility} />
 }
 
 function ready(m: Model | null): m is Model {
@@ -696,6 +1235,22 @@ function crosshair(ctx: CanvasRenderingContext2D, hx: number, top: number, botto
   ctx.setLineDash([])
 }
 
+/** Dashed rules where a new session starts. */
+function sessionRules(ctx: CanvasRenderingContext2D, m: Model, g: Geom, top: number, bottom: number, color: string) {
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1
+  ctx.setLineDash([6, 4])
+  for (const i of m.dayStarts) {
+    const sx = Math.round(g.x(i - 0.5)) + 0.5
+    if (sx < PAD_L || sx > g.plotR) continue
+    ctx.beginPath()
+    ctx.moveTo(sx, top)
+    ctx.lineTo(sx, bottom)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+}
+
 function diamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
   ctx.beginPath()
   ctx.moveTo(x, y - r)
@@ -706,19 +1261,22 @@ function diamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: number)
   ctx.fill()
 }
 
-const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
+const paintMain: Painter = (canvas, w, h, m, bus, axisW) => {
   const ctx = sizeCanvas(canvas, w, h)
   if (!ctx) return
   ctx.clearRect(0, 0, w, h)
   if (!ready(m)) return
   const pts = m.run.points
+  const n = pts.length
   const calib = m.run.calib
+  const hover = bus.dragging ? null : bus.hover
 
   const s = m.series
   const mono = fontMono()
   const ink = tokenHex('--color-fg')
   const dim = tokenHexAlpha('--color-fg', 0.5)
   const grid = tokenHexAlpha('--color-line', 0.9)
+  const ruleC = tokenHexAlpha('--color-fg', 0.22)
   const lineC = tokenHex(SERIES_TOKEN[s])
   const bandC = tokenHexAlpha(SERIES_TOKEN[s], 0.14)
   const dotC = tokenHexAlpha('--color-fg', 0.55)
@@ -730,17 +1288,21 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
   const downC = tokenHexAlpha('--color-down', 0.75)
   const tagInk = tokenHex('--color-app')
 
-  const g = geom(w, m, axisW, true)
-  const { plotR, plotW, x, t0, t1, tEnd } = g
+  const g = geom(w, m, axisW, viewOf(m, bus))
+  const { plotR, plotW, x, i0, i1 } = g
   const usableH = Math.max(40, h - PAD_T - X_AXIS_H - PANE_GAP)
   const mainH = usableH * (1 - TREND_FRACTION)
   const trendTop = PAD_T + mainH + PANE_GAP
   const trendH = usableH * TREND_FRACTION
+  // Draw one slot past each edge so a line leaves the pane instead of stopping short.
+  const d0 = Math.max(0, i0 - 1)
+  const d1 = Math.min(n - 1, i1 + 1)
+  // Forecast slots are indices n-1 … n-1+H.
+  const fcIdx = (k: number) => n - 1 + k
 
-  // ── Main pane range: prints, the filtered line, spot (flip) and the cone's
-  // centre line. The band and the cone are drawn clipped rather than allowed
-  // to set the scale — the seed step's band is deliberately wide and the cone
-  // grows as h³, and either would flatten the rest of the day.
+  // ── Main pane range: autoscale over what is VISIBLE — prints, the filtered
+  // line, spot (flip) and the cone's centre line — unless the axis has been
+  // dragged. The band and the cone are clipped, never allowed to set the scale.
   let lo = Infinity
   let hi = -Infinity
   const take = (v: number | null | undefined) => {
@@ -748,21 +1310,30 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
     if (v < lo) lo = v
     if (v > hi) hi = v
   }
-  for (let i = 0; i < pts.length; i++) {
+  for (let i = i0; i <= i1; i++) {
     const p = pts[i] as KfPoint
     take(p.z)
     take(p.level)
-    if (s === 'flip') take(m.spots[i])
+    if (ON_PRICE(s)) take(m.spots[i])
+    if (s === 'core') take(m.coreStrikes[i])
   }
-  for (const f of m.fc) take(f.level)
+  m.fc.forEach((f, k) => {
+    const fi = fcIdx(k)
+    if (fi >= g.from && fi <= g.to) take(f.level)
+  })
   if (!(hi > lo)) {
-    const c = Number.isFinite(lo) ? lo : 0
+    const c = Number.isFinite(lo) ? lo : (pts[n - 1] as KfPoint).level
     lo = c - 1
     hi = c + 1
   }
   const padY = (hi - lo) * 0.08
   lo -= padY
   hi += padY
+  bus.autoY = { lo, hi }
+  if (bus.yMain) {
+    lo = bus.yMain.lo
+    hi = bus.yMain.hi
+  }
   const y = (v: number) => PAD_T + (1 - (v - lo) / (hi - lo)) * mainH
 
   ctx.font = `${AXIS_PX}px ${mono}`
@@ -782,6 +1353,20 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
     ctx.textAlign = 'left'
     ctx.fillText(fmtAxis(s, v, step), plotR + 6, gy)
   }
+  if (bus.yMain) {
+    // Say that the axis is manual, and how to give it back.
+    ctx.fillStyle = dim
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'top'
+    ctx.fillText('axis manual · dbl-click axis', plotR - 4, PAD_T + 2)
+    ctx.textBaseline = 'middle'
+  }
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(PAD_L, PAD_T, plotW, mainH)
+  ctx.clip()
+
   // Zero line for net GEX: the regime boundary.
   if (s === 'netgex' && lo < 0 && hi > 0) {
     ctx.strokeStyle = dim
@@ -793,62 +1378,64 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
     ctx.setLineDash([])
   }
 
-  ctx.save()
-  ctx.beginPath()
-  ctx.rect(PAD_L, PAD_T, plotW, mainH)
-  ctx.clip()
+  sessionRules(ctx, m, g, PAD_T, PAD_T + mainH, ruleC)
 
-  // ±2σ next-print band. Split at breaks: the state restarted there, and a
-  // band bridging the two levels would describe nobody's forecast.
+  // ±2σ next-print band. Split at breaks and session starts: the state
+  // restarted there, and a band bridging two levels describes nobody's forecast.
   const bandSeg = (from: number, to: number) => {
     if (to - from < 1) return
     ctx.beginPath()
     for (let i = from; i <= to; i++) {
       const p = pts[i] as KfPoint
       const py = y(p.level + 2 * p.obsSd * calib)
-      if (i === from) ctx.moveTo(x(p.t), py)
-      else ctx.lineTo(x(p.t), py)
+      if (i === from) ctx.moveTo(x(i), py)
+      else ctx.lineTo(x(i), py)
     }
     for (let i = to; i >= from; i--) {
       const p = pts[i] as KfPoint
-      ctx.lineTo(x(p.t), y(p.level - 2 * p.obsSd * calib))
+      ctx.lineTo(x(i), y(p.level - 2 * p.obsSd * calib))
     }
     ctx.closePath()
     ctx.fill()
   }
+  const restarts = (i: number) => {
+    const p = pts[i] as KfPoint
+    return p.kind === 'break' || p.kind === 'seed'
+  }
   ctx.fillStyle = bandC
-  let segFrom = 0
-  for (let i = 1; i < pts.length; i++) {
-    if ((pts[i] as KfPoint).kind === 'break') {
+  let segFrom = d0
+  for (let i = d0 + 1; i <= d1; i++) {
+    if (restarts(i)) {
       bandSeg(segFrom, i - 1)
       segFrom = i
     }
   }
-  bandSeg(segFrom, pts.length - 1)
+  bandSeg(segFrom, d1)
 
   // The forecast cone.
   if (m.fc.length > 1) {
     ctx.fillStyle = coneC
     ctx.beginPath()
-    m.fc.forEach((f, i) => {
+    m.fc.forEach((f, k) => {
       const py = y(f.level + 2 * f.sd)
-      if (i === 0) ctx.moveTo(x(f.t), py)
-      else ctx.lineTo(x(f.t), py)
+      if (k === 0) ctx.moveTo(x(fcIdx(k)), py)
+      else ctx.lineTo(x(fcIdx(k)), py)
     })
-    for (let i = m.fc.length - 1; i >= 0; i--) {
-      const f = m.fc[i] as KfForecastPoint
-      ctx.lineTo(x(f.t), y(f.level - 2 * f.sd))
+    for (let k = m.fc.length - 1; k >= 0; k--) {
+      const f = m.fc[k] as KfForecastPoint
+      ctx.lineTo(x(fcIdx(k)), y(f.level - 2 * f.sd))
     }
     ctx.closePath()
     ctx.fill()
   }
 
-  // Breaks: a dashed rule through the pane where the state restarted.
+  // Breaks: a dotted rule through the pane where the state restarted.
   ctx.strokeStyle = heldC
   ctx.lineWidth = 1
   ctx.setLineDash([2, 4])
-  for (const b of m.breaks) {
-    const bx = Math.round(x(b.t)) + 0.5
+  for (let i = d0; i <= d1; i++) {
+    if ((pts[i] as KfPoint).kind !== 'break') continue
+    const bx = Math.round(x(i)) + 0.5
     ctx.beginPath()
     ctx.moveTo(bx, PAD_T)
     ctx.lineTo(bx, PAD_T + mainH)
@@ -856,62 +1443,95 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
   }
   ctx.setLineDash([])
 
-  // Spot under the flip — which side of it price sits on is the regime read.
-  if (s === 'flip') {
+  // The raw core strike, as steps: where the node actually IS, under the
+  // centre of mass the filter tracks. Lifted between sessions.
+  if (s === 'core') {
+    ctx.strokeStyle = tokenHexAlpha('--color-level-cb', 0.45)
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 3])
+    ctx.beginPath()
+    let pen = false
+    let prev = 0
+    for (let i = d0; i <= d1; i++) {
+      const v = m.coreStrikes[i]
+      if (v == null || (pen && (pts[i] as KfPoint).kind === 'seed')) {
+        pen = false
+        if (v == null) continue
+      }
+      if (!pen) ctx.moveTo(x(i), y(v))
+      else {
+        ctx.lineTo(x(i), y(prev))
+        ctx.lineTo(x(i), y(v))
+      }
+      prev = v
+      pen = true
+    }
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
+
+  // Spot under the flip / core — which side of it price sits on is the read.
+  // Lifted between sessions.
+  if (ON_PRICE(s)) {
     ctx.strokeStyle = spotC
     ctx.lineWidth = 1
     ctx.beginPath()
     let pen = false
-    m.spots.forEach((v, i) => {
-      if (v == null) {
+    for (let i = d0; i <= d1; i++) {
+      const v = m.spots[i]
+      if (v == null || (pen && (pts[i] as KfPoint).kind === 'seed')) {
         pen = false
-        return
+        if (v == null) continue
       }
-      const px = x((pts[i] as KfPoint).t)
-      if (!pen) ctx.moveTo(px, y(v))
-      else ctx.lineTo(px, y(v))
+      if (!pen) ctx.moveTo(x(i), y(v))
+      else ctx.lineTo(x(i), y(v))
       pen = true
-    })
+    }
     ctx.stroke()
   }
 
   // Raw prints. Held ones in the warning hue — the filter did not take them.
-  for (const p of pts) {
+  for (let i = d0; i <= d1; i++) {
+    const p = pts[i] as KfPoint
     if (p.z == null) continue
     ctx.fillStyle = p.kind === 'held' ? heldC : dotC
     ctx.beginPath()
-    ctx.arc(x(p.t), y(p.z), p.kind === 'held' ? 2.4 : 1.6, 0, Math.PI * 2)
+    ctx.arc(x(i), y(p.z), p.kind === 'held' ? 2.4 : 1.6, 0, Math.PI * 2)
     ctx.fill()
   }
 
   // Surprises.
   ctx.strokeStyle = warnC
   ctx.lineWidth = 1.5
-  for (const p of m.surprises) {
-    if (p.z == null) continue
+  for (let i = d0; i <= d1; i++) {
+    const p = pts[i] as KfPoint
+    if (p.z == null || Math.abs(calibratedZ(p, calib) ?? 0) <= KF_SURPRISE_SIGMA) continue
     ctx.beginPath()
-    ctx.arc(x(p.t), y(p.z), 4.5, 0, Math.PI * 2)
+    ctx.arc(x(i), y(p.z), 4.5, 0, Math.PI * 2)
     ctx.stroke()
   }
 
-  // The filtered level — a vertical step at each break, never a slope.
+  // The filtered level — a vertical step at each break, lifted between sessions.
   ctx.strokeStyle = lineC
   ctx.lineWidth = 2
   ctx.lineJoin = 'round'
   ctx.beginPath()
-  pts.forEach((p, i) => {
-    const px = x(p.t)
-    if (i === 0) ctx.moveTo(px, y(p.level))
+  for (let i = d0; i <= d1; i++) {
+    const p = pts[i] as KfPoint
+    if (i === d0 || p.kind === 'seed') ctx.moveTo(x(i), y(p.level))
     else if (p.kind === 'break') {
-      ctx.lineTo(px, y((pts[i - 1] as KfPoint).level))
-      ctx.lineTo(px, y(p.level))
-    } else ctx.lineTo(px, y(p.level))
-  })
+      ctx.lineTo(x(i), y((pts[i - 1] as KfPoint).level))
+      ctx.lineTo(x(i), y(p.level))
+    } else ctx.lineTo(x(i), y(p.level))
+  }
   ctx.stroke()
 
   // Break markers on the line.
   ctx.fillStyle = warnC
-  for (const b of m.breaks) diamond(ctx, x(b.t), y(b.level), 4)
+  for (let i = d0; i <= d1; i++) {
+    const p = pts[i] as KfPoint
+    if (p.kind === 'break') diamond(ctx, x(i), y(p.level), 4)
+  }
 
   // The forecast centre line.
   if (m.fc.length > 1) {
@@ -919,32 +1539,56 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
     ctx.lineWidth = 1.5
     ctx.setLineDash([5, 4])
     ctx.beginPath()
-    m.fc.forEach((f, i) => {
-      if (i === 0) ctx.moveTo(x(f.t), y(f.level))
-      else ctx.lineTo(x(f.t), y(f.level))
+    m.fc.forEach((f, k) => {
+      if (k === 0) ctx.moveTo(x(fcIdx(k)), y(f.level))
+      else ctx.lineTo(x(fcIdx(k)), y(f.level))
     })
     ctx.stroke()
     ctx.setLineDash([])
   }
-  ctx.restore()
 
-  // "Now" — where the prints stop and the cone starts.
-  const nowX = Math.round(x(t1)) + 0.5
-  ctx.strokeStyle = dim
-  ctx.lineWidth = 1
-  ctx.setLineDash([2, 3])
-  ctx.beginPath()
-  ctx.moveTo(nowX, PAD_T)
-  ctx.lineTo(nowX, PAD_T + mainH)
-  ctx.stroke()
-  ctx.setLineDash([])
+  // "Now" — where the prints stop and the cone starts. Live only.
+  const nowX = Math.round(x(n - 1)) + 0.5
+  if (m.live) {
+    ctx.strokeStyle = dim
+    ctx.lineWidth = 1
+    ctx.setLineDash([2, 3])
+    ctx.beginPath()
+    ctx.moveTo(nowX, PAD_T)
+    ctx.lineTo(nowX, PAD_T + mainH)
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
   ctx.fillStyle = lineC
   ctx.beginPath()
-  ctx.arc(x(t1), y((pts[pts.length - 1] as KfPoint).level), 3.5, 0, Math.PI * 2)
+  ctx.arc(x(n - 1), y((pts[n - 1] as KfPoint).level), 3.5, 0, Math.PI * 2)
   ctx.fill()
+
+  // Session date labels, top-left of each session. A session whose start has
+  // scrolled off the left keeps its label pinned to the edge — but only the
+  // newest such one, and only until the next session's own label reaches it.
+  ctx.font = `${AXIS_PX}px ${mono}`
+  ctx.fillStyle = dim
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'top'
+  if (m.days.length > 1) {
+    const labels: Array<{ x: number; text: string }> = []
+    let pinned: string | null = null
+    for (const si of [0, ...m.dayStarts]) {
+      const text = ET_SHORT_DATE.format(new Date((pts[si] as KfPoint).t))
+      const sx = x(si - 0.5) + 4
+      if (sx < PAD_L + 2) pinned = text
+      else if (sx < plotR - 40) labels.push({ x: sx, text })
+    }
+    const firstX = labels[0]?.x ?? Infinity
+    if (pinned && firstX - (PAD_L + 2) > 72) labels.unshift({ x: PAD_L + 2, text: pinned })
+    for (const l of labels) ctx.fillText(l.text, l.x, PAD_T + 2)
+  }
+  ctx.restore()
 
   // Last-value tags on the axis: filtered (solid), the cone's end, and spot.
   ctx.font = `${TIP_PX}px ${mono}`
+  ctx.textBaseline = 'middle'
   const tag = (v: number, fill: string, text: string) => {
     const ty = Math.max(PAD_T + 7, Math.min(PAD_T + mainH - 7, y(v)))
     ctx.fillStyle = fill
@@ -954,8 +1598,8 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
     ctx.fillText(text, plotR + 5, ty)
   }
   const fmtTag = (v: number) => (s === 'netgex' ? fmtB(v) : v.toFixed(1))
-  const lastP = pts[pts.length - 1] as KfPoint
-  if (s === 'flip') {
+  const lastP = pts[n - 1] as KfPoint
+  if (ON_PRICE(s)) {
     const lastSpot = [...m.spots].reverse().find((v) => v != null)
     if (lastSpot != null) tag(lastSpot, ink, fmtTag(lastSpot))
   }
@@ -965,22 +1609,29 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
 
   // ── Trend pane ─────────────────────────────────────────────────────────────
   let tMax = 0
-  for (const p of pts) tMax = Math.max(tMax, Math.abs(p.trend))
+  for (let i = i0; i <= i1; i++) tMax = Math.max(tMax, Math.abs((pts[i] as KfPoint).trend))
   if (!(tMax > 0)) tMax = 1
   const mid = trendTop + trendH / 2
   const ty = (v: number) => mid - (v / tMax) * (trendH / 2 - 2)
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(PAD_L, trendTop, plotW, trendH)
+  ctx.clip()
   ctx.strokeStyle = grid
   ctx.lineWidth = 1
   ctx.beginPath()
   ctx.moveTo(PAD_L, Math.round(mid) + 0.5)
   ctx.lineTo(plotR, Math.round(mid) + 0.5)
   ctx.stroke()
-  const barW = Math.max(1, (plotW / Math.max(1, (tEnd - t0) / 60_000)) * 0.8)
-  for (const p of pts) {
+  sessionRules(ctx, m, g, trendTop, trendTop + trendH, ruleC)
+  const barW = Math.max(1, (plotW / Math.max(1, g.to - g.from)) * 0.8)
+  for (let i = d0; i <= d1; i++) {
+    const p = pts[i] as KfPoint
     const top = ty(p.trend)
     ctx.fillStyle = p.trend >= 0 ? upC : downC
-    ctx.fillRect(x(p.t) - barW / 2, Math.min(top, mid), barW, Math.max(1, Math.abs(top - mid)))
+    ctx.fillRect(x(i) - barW / 2, Math.min(top, mid), barW, Math.max(1, Math.abs(top - mid)))
   }
+  ctx.restore()
   ctx.font = `${AXIS_PX}px ${mono}`
   ctx.fillStyle = dim
   ctx.textAlign = 'left'
@@ -995,31 +1646,31 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
   ctx.fillText(trendTick(-tMax), plotR + 6, trendTop + trendH - 6)
 
   // ── Time axis ──────────────────────────────────────────────────────────────
-  const spanMin = (tEnd - t0) / 60_000
-  const every = spanMin > 600 ? 120 : spanMin > 240 ? 60 : spanMin > 90 ? 30 : 15
   const axisY = h - X_AXIS_H / 2
-  ctx.fillStyle = dim
   ctx.textAlign = 'center'
-  const firstTick = Math.ceil(t0 / (every * 60_000)) * every * 60_000
-  for (let t = firstTick; t <= tEnd; t += every * 60_000) {
-    const tx = x(t)
+  for (const tk of timeTicks(m, g)) {
+    const tx = x(tk.i)
     if (tx < PAD_L + 14 || tx > plotR - 14) continue
-    if (Math.abs(tx - nowX) < 36) continue
+    if (m.live && Math.abs(tx - nowX) < 36) continue
     ctx.strokeStyle = grid
     ctx.beginPath()
     ctx.moveTo(Math.round(tx) + 0.5, PAD_T + mainH)
     ctx.lineTo(Math.round(tx) + 0.5, PAD_T + mainH + 3)
     ctx.stroke()
-    ctx.fillText(etClock(t), tx, axisY)
+    ctx.fillStyle = tk.day ? ink : dim
+    ctx.fillText(tk.text, tx, axisY)
   }
-  ctx.fillStyle = ink
-  ctx.fillText('now', nowX, axisY)
+  if (m.live && nowX >= PAD_L && nowX <= plotR) {
+    ctx.fillStyle = ink
+    ctx.fillText('now', nowX, axisY)
+  }
 
   // ── Hover ──────────────────────────────────────────────────────────────────
   if (hover == null) return
   const hp = pts[hover]
   if (!hp) return
-  const hx = Math.round(x(hp.t)) + 0.5
+  const hx = Math.round(x(hover)) + 0.5
+  if (hx < PAD_L || hx > plotR) return
   crosshair(ctx, hx, PAD_T, trendTop + trendH, dim)
   ctx.fillStyle = lineC
   ctx.beginPath()
@@ -1028,14 +1679,14 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
 
   const cz = calibratedZ(hp, calib)
   const kindLine: Record<KfPoint['kind'], string> = {
-    seed: 'SEED — first print',
+    seed: 'SEED — session’s first print',
     update: '',
     predict: 'no print — predicted only',
     held: `HELD — >${KF_BREAK_SIGMA}σ off, not folded in`,
     break: 'BREAK — restarted on this print',
   }
   const lines = [
-    `${etClock(hp.t)} ET`,
+    `${m.days.length > 1 ? `${ET_SHORT_DATE.format(new Date(hp.t))} ` : ''}${etClock(hp.t)} ET · ${hp.src === 'live' ? '1m' : '5m'}`,
     `raw      ${fmtVal(s, hp.z)}`,
     `filtered ${fmtVal(s, hp.level)}`,
     `trend    ${fmtTrendHr(s, hp.trend)}`,
@@ -1043,7 +1694,12 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
     `resid    ${cz != null ? `${cz >= 0 ? '+' : '-'}${Math.abs(cz).toFixed(1)}σ` : EM_DASH}`,
   ]
   const spotH = m.spots[hover]
-  if (s === 'flip' && spotH != null) lines.push(`spot     ${spotH.toFixed(2)}`)
+  if (s === 'core') {
+    const ck = m.coreStrikes[hover]
+    const cn = m.coreNets[hover]
+    if (ck != null) lines.push(`strike   ${ck}${cn != null ? ` (${fmtB(cn)})` : ''}`)
+  }
+  if (ON_PRICE(s) && spotH != null) lines.push(`spot     ${spotH.toFixed(2)}`)
   if (kindLine[hp.kind]) lines.push(kindLine[hp.kind])
   ctx.font = `${TIP_PX}px ${mono}`
   let boxW = 0
@@ -1065,47 +1721,55 @@ const paintMain: Painter = (canvas, w, h, m, hover, axisW) => {
   })
 }
 
-/** Shared sub-pane time axis: first, middle and last column. */
-function subAxis(ctx: CanvasRenderingContext2D, g: Geom, h: number, color: string) {
-  ctx.fillStyle = color
+/** Shared sub-pane time axis — the same ticks the main chart picks. */
+function subAxis(ctx: CanvasRenderingContext2D, m: Model, g: Geom, h: number, color: string, ink: string) {
   ctx.textBaseline = 'middle'
+  ctx.textAlign = 'center'
   const ay = h - X_AXIS_H / 2
-  const ticks: Array<[number, CanvasTextAlign]> = [
-    [g.t0, 'left'],
-    [(g.t0 + g.t1) / 2, 'center'],
-    [g.t1, 'right'],
-  ]
-  for (const [t, align] of ticks) {
-    ctx.textAlign = align
-    ctx.fillText(etClock(t), g.x(t), ay)
+  for (const tk of timeTicks(m, g)) {
+    const tx = g.x(tk.i)
+    if (tx < PAD_L + 14 || tx > g.plotR - 14) continue
+    ctx.fillStyle = tk.day ? ink : color
+    ctx.fillText(tk.text, tx, ay)
   }
 }
 
-const paintResiduals: Painter = (canvas, w, h, m, hover, axisW) => {
+const paintResiduals: Painter = (canvas, w, h, m, bus, axisW) => {
   const ctx = sizeCanvas(canvas, w, h)
   if (!ctx) return
   ctx.clearRect(0, 0, w, h)
   if (!ready(m)) return
   const pts = m.run.points
+  const n = pts.length
   const calib = m.run.calib
+  const hover = bus.dragging ? null : bus.hover
   const mono = fontMono()
+  const ink = tokenHex('--color-fg')
   const dim = tokenHexAlpha('--color-fg', 0.5)
   const barC = tokenHexAlpha('--color-fg', 0.45)
   const warnC = tokenHex('--color-warn')
   const grid = tokenHexAlpha('--color-line', 0.9)
+  const ruleC = tokenHexAlpha('--color-fg', 0.22)
   const wash = tokenHexAlpha('--color-fg', 0.05)
 
-  const g = geom(w, m, axisW, false)
+  const g = geom(w, m, axisW, viewOf(m, bus))
   const top = PAD_T
   const paneH = Math.max(20, h - PAD_T - X_AXIS_H)
+  const d0 = Math.max(0, g.i0 - 1)
+  const d1 = Math.min(n - 1, g.i1 + 1)
   let lim = 3
-  for (const p of pts) {
-    const z = calibratedZ(p, calib)
+  for (let i = g.i0; i <= g.i1; i++) {
+    const z = calibratedZ(pts[i] as KfPoint, calib)
     if (z != null) lim = Math.max(lim, Math.abs(z))
   }
   lim = Math.min(6, Math.ceil(lim))
   const mid = top + paneH / 2
   const yz = (z: number) => mid - (Math.max(-lim, Math.min(lim, z)) / lim) * (paneH / 2)
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(PAD_L, top - 1, g.plotW, paneH + 2)
+  ctx.clip()
 
   // The ±2σ corridor.
   ctx.fillStyle = wash
@@ -1124,16 +1788,18 @@ const paintResiduals: Painter = (canvas, w, h, m, hover, axisW) => {
   ctx.moveTo(PAD_L, Math.round(mid) + 0.5)
   ctx.lineTo(g.plotR, Math.round(mid) + 0.5)
   ctx.stroke()
+  sessionRules(ctx, m, g, top, top + paneH, ruleC)
 
-  const barW = Math.max(1, (g.plotW / Math.max(1, pts.length)) * 0.6)
-  for (const p of pts) {
-    const px = g.x(p.t)
+  const barW = Math.max(1, (g.plotW / Math.max(1, g.to - g.from)) * 0.6)
+  for (let i = d0; i <= d1; i++) {
+    const p = pts[i] as KfPoint
+    const px = g.x(i)
     if (p.kind === 'held' || p.kind === 'break') {
       // Off the scale by definition: a tick at the edge on the miss's side.
       const up = (p.nz ?? 0) >= 0
+      const ey = up ? top + 1 : top + paneH - 1
       ctx.fillStyle = warnC
       ctx.beginPath()
-      const ey = up ? top + 1 : top + paneH - 1
       ctx.moveTo(px - 3, ey)
       ctx.lineTo(px + 3, ey)
       ctx.lineTo(px, ey + (up ? 5 : -5))
@@ -1147,6 +1813,7 @@ const paintResiduals: Painter = (canvas, w, h, m, hover, axisW) => {
     ctx.fillStyle = Math.abs(z) > KF_SURPRISE_SIGMA ? warnC : barC
     ctx.fillRect(px - barW / 2, Math.min(yt, mid), barW, Math.max(1, Math.abs(yt - mid)))
   }
+  ctx.restore()
 
   ctx.font = `${AXIS_PX}px ${mono}`
   ctx.fillStyle = dim
@@ -1155,34 +1822,45 @@ const paintResiduals: Painter = (canvas, w, h, m, hover, axisW) => {
   ctx.fillText(`+${lim}σ`, g.plotR + 4, top + 5)
   ctx.fillText('±2σ', g.plotR + 4, yz(2))
   ctx.fillText(`-${lim}σ`, g.plotR + 4, top + paneH - 5)
-  subAxis(ctx, g, h, dim)
+  subAxis(ctx, m, g, h, dim, ink)
 
   if (hover == null) return
-  const hp = pts[hover]
-  if (!hp) return
-  crosshair(ctx, Math.round(g.x(hp.t)) + 0.5, top, top + paneH, dim)
+  const hx = Math.round(g.x(hover)) + 0.5
+  if (hx < PAD_L || hx > g.plotR) return
+  crosshair(ctx, hx, top, top + paneH, dim)
 }
 
-const paintVariance: Painter = (canvas, w, h, m, hover, axisW) => {
+const paintVariance: Painter = (canvas, w, h, m, bus, axisW) => {
   const ctx = sizeCanvas(canvas, w, h)
   if (!ctx) return
   ctx.clearRect(0, 0, w, h)
   if (!ready(m)) return
   const pts = m.run.points
+  const n = pts.length
   const s = m.series
+  const hover = bus.dragging ? null : bus.hover
   const mono = fontMono()
+  const ink = tokenHex('--color-fg')
   const dim = tokenHexAlpha('--color-fg', 0.5)
   const lineC = tokenHex(SERIES_TOKEN[s])
   const warnC = tokenHexAlpha('--color-warn', 0.6)
   const grid = tokenHexAlpha('--color-line', 0.9)
+  const ruleC = tokenHexAlpha('--color-fg', 0.22)
 
-  const g = geom(w, m, axisW, false)
+  const g = geom(w, m, axisW, viewOf(m, bus))
   const top = PAD_T
   const paneH = Math.max(20, h - PAD_T - X_AXIS_H)
-  // Scale to the settled teeth, not the seed or a restart: the 98th percentile
-  // of the prior σ after the first few columns. Spikes above it clip.
-  const tops = pts.slice(3).map((p) => p.priorSd).sort((a, b) => a - b)
-  let yMax = tops.length ? (tops[Math.floor(0.98 * (tops.length - 1))] as number) : (pts[0] as KfPoint).priorSd
+  const d0 = Math.max(0, g.i0 - 1)
+  const d1 = Math.min(n - 1, g.i1 + 1)
+  // Scale to the settled teeth inside the window, not a seed or a restart: the
+  // 98th percentile of the prior σ over updates. Spikes above it clip.
+  const tops: number[] = []
+  for (let i = g.i0; i <= g.i1; i++) {
+    const p = pts[i] as KfPoint
+    if (p.kind === 'update') tops.push(p.priorSd)
+  }
+  tops.sort((a, b) => a - b)
+  let yMax = tops.length ? (tops[Math.floor(0.98 * (tops.length - 1))] as number) : (pts[n - 1] as KfPoint).priorSd
   if (!(yMax > 0)) yMax = 1
   yMax *= 1.15
   const ys = (v: number) => top + (1 - Math.min(v, yMax) / yMax) * paneH
@@ -1194,12 +1872,19 @@ const paintVariance: Painter = (canvas, w, h, m, hover, axisW) => {
   ctx.lineTo(g.plotR, Math.round(top + paneH) + 0.5)
   ctx.stroke()
 
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(PAD_L, top - 1, g.plotW, paneH + 2)
+  ctx.clip()
+  sessionRules(ctx, m, g, top, top + paneH, ruleC)
+
   // Breaks and held prints: where the sawtooth is interrupted.
   ctx.strokeStyle = warnC
   ctx.setLineDash([2, 4])
-  for (const p of pts) {
+  for (let i = d0; i <= d1; i++) {
+    const p = pts[i] as KfPoint
     if (p.kind !== 'break' && p.kind !== 'held') continue
-    const bx = Math.round(g.x(p.t)) + 0.5
+    const bx = Math.round(g.x(i)) + 0.5
     ctx.beginPath()
     ctx.moveTo(bx, top)
     ctx.lineTo(bx, top + paneH)
@@ -1208,21 +1893,18 @@ const paintVariance: Painter = (canvas, w, h, m, hover, axisW) => {
   ctx.setLineDash([])
 
   // The sawtooth: up to the predicted σ, down to the updated σ, every column.
-  ctx.save()
-  ctx.beginPath()
-  ctx.rect(PAD_L, top - 1, g.plotW, paneH + 2)
-  ctx.clip()
   ctx.strokeStyle = lineC
   ctx.lineWidth = 1
   ctx.beginPath()
-  pts.forEach((p, i) => {
-    const px = g.x(p.t)
-    if (i === 0) ctx.moveTo(px, ys(p.sd))
+  for (let i = d0; i <= d1; i++) {
+    const p = pts[i] as KfPoint
+    const px = g.x(i)
+    if (i === d0 || p.kind === 'seed') ctx.moveTo(px, ys(p.sd))
     else {
       ctx.lineTo(px, ys(p.priorSd))
       ctx.lineTo(px, ys(p.sd))
     }
-  })
+  }
   ctx.stroke()
   ctx.restore()
 
@@ -1232,10 +1914,10 @@ const paintVariance: Painter = (canvas, w, h, m, hover, axisW) => {
   ctx.textBaseline = 'middle'
   ctx.fillText(s === 'netgex' ? fmtB(yMax).replace(/^\+/, '') : yMax.toFixed(2), g.plotR + 4, top + 5)
   ctx.fillText('0', g.plotR + 4, top + paneH - 4)
-  subAxis(ctx, g, h, dim)
+  subAxis(ctx, m, g, h, dim, ink)
 
   if (hover == null) return
-  const hp = pts[hover]
-  if (!hp) return
-  crosshair(ctx, Math.round(g.x(hp.t)) + 0.5, top, top + paneH, dim)
+  const hx = Math.round(g.x(hover)) + 0.5
+  if (hx < PAD_L || hx > g.plotR) return
+  crosshair(ctx, hx, top, top + paneH, dim)
 }

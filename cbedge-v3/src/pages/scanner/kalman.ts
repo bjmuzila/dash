@@ -6,7 +6,21 @@
 // The GEX recorder writes one ladder per minute for the front SPX expiry
 // (server-v2/gex-history-writer.js), served by
 // /api/snapshots/option-strike-gex-history. Every column becomes ONE
-// observation of three series:
+// observation of four series:
+//
+//   core     the CORE — the strike carrying the most ABSOLUTE OI+VOL gamma on
+//            the ladder (`findCore`, data/levels.ts: the one definition every
+//            surface draws). A strike is DISCRETE: it sits still, then jumps to
+//            another strike, and a filter fed raw jumps either draws stairs or
+//            invents prices between strikes that no node sits on. So what is
+//            filtered is the core's CENTRE OF MASS: the gamma²-weighted mean
+//            strike of the core and its same-sign neighbours within
+//            ±KF_CORE_SPAN points. One dominant node → it sits on the core
+//            strike; a neighbour building → it leans toward it, smoothly, the
+//            minutes BEFORE the core strike itself hops; a different node
+//            taking over far away → a step, which LEVEL BREAKS below handles.
+//            The raw core strike rides along (`coreStrike`) and is drawn under
+//            the line.
 //
 //   flip     the cumulative OI+VOL zero crossing nearest that column's spot —
 //            `findCumulativeFlip` from data/levels.ts, the same rung every
@@ -16,6 +30,17 @@
 //            seam would draw a step that is a definition change, not a move.
 //   netgex   Σ net over the column's strikes (OI + today's volume).
 //   spot     the underlying the recorder stamped on the column.
+//
+// ── HISTORY ──────────────────────────────────────────────────────────────────
+// The per-minute ladder above is pruned to about two sessions, so PAST sessions
+// come from the premarket REPLAY store instead (server-v2/
+// premarket-replay-recorder.js): a frame every 5 minutes, 04:00–16:25 ET, kept
+// ~60 sessions, each frame's chain trimmed to ±20 strikes around its spot.
+// `replayFramesToObs` reads the same three series off a frame by the same
+// rules — the cumulative OI+VOL crossing nearest spot, and Σ OI+VOL — so a
+// stitched view is one definition at two resolutions. The trims differ (top 30
+// by size vs ±20 around spot), which is one more reason every session starts
+// its own filter: see SESSIONS below.
 //
 // ⚠ The ladder request is the candles card's own — top 30 strikes by size
 // (`BUBBLE_LADDER_REQUEST`), so the URL is byte-identical and `query()` serves
@@ -87,6 +112,12 @@
 // how big this model's misses normally are, not against √S alone — otherwise a
 // stiff preset on a trending tape would call a break every few minutes.
 //
+// SESSIONS. Each ET day is filtered on its own: the state restarts on the
+// day's first print, and R (and so q) is measured from THAT day's prints. A
+// night's gap is not a minute of drift, the replay store's 5-minute frames do
+// not wiggle like 1-minute ones, and one quiet day must not set the band for a
+// loud one. The running miss size and the calibration are shared.
+//
 // CALIBRATION. A filter whose model is too stiff for the day (SLOW on a
 // trending spot, say) misses by more than its own √S says it should, and a
 // band drawn from √S alone would ring half the session as "surprises". So after
@@ -104,10 +135,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { GexRow } from '@/contract/frames'
-import { findCumulativeFlip } from '@/data/levels'
+import { findCumulativeFlip, oiVolNet } from '@/data/levels'
 import type { GexCell, GexColumn } from '@/board/gexCandles/gexHistory'
 
-export type KfSeries = 'flip' | 'netgex' | 'spot'
+export type KfSeries = 'core' | 'flip' | 'netgex' | 'spot'
 export type KfSmooth = 'fast' | 'med' | 'slow'
 export type KfSession = 'rth' | 'all'
 
@@ -136,6 +167,12 @@ const MAX_DT_MIN = 15
 /** |innovation| beyond this many σ of S is flagged a surprise on the chart. */
 export const KF_SURPRISE_SIGMA = 2.5
 
+/**
+ * Half-width of the core's centre of mass, in index points: same-sign nodes
+ * within this distance of the core strike pull on it. ±25 is five SPX strikes.
+ */
+export const KF_CORE_SPAN = 25
+
 /** A miss this many (running) σ off is held; two in a row, same side, is a break. */
 export const KF_BREAK_SIGMA = 4
 
@@ -152,6 +189,13 @@ export interface KfObs {
   spot: number | null
   flip: number | null
   netGex: number | null
+  /** The core's centre of mass — what the CORE series filters. See the header. */
+  core: number | null
+  /** The core strike itself, and its signed OI+VOL net. */
+  coreStrike: number | null
+  coreNet: number | null
+  /** Where the print came from: the 1-minute live ladder or a 5-minute replay frame. */
+  src: 'live' | 'replay'
 }
 
 /**
@@ -166,6 +210,9 @@ export type KfKind = 'seed' | 'update' | 'predict' | 'held' | 'break'
 
 export interface KfPoint {
   t: number
+  /** ET calendar date of the column — the session it belongs to. */
+  day: string
+  src: KfObs['src']
   kind: KfKind
   /** The observation fed in, or null when this column had none. */
   z: number | null
@@ -201,9 +248,9 @@ export interface KfFinal {
 
 export interface KfRun {
   points: KfPoint[]
-  /** Measured observation noise (variance). */
+  /** Measured observation noise (variance) — the last session's. */
   r: number
-  /** Process noise intensity actually used. */
+  /** Process noise intensity — the last session's. */
   q: number
   /** How many columns carried an observation. */
   observed: number
@@ -244,6 +291,18 @@ export function etMinuteOfDay(ts: number): number {
   return h * 60 + m
 }
 
+const ET_DAY = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+/** `YYYY-MM-DD` in New York. */
+export function etDayKey(ts: number): string {
+  return ET_DAY.format(new Date(ts))
+}
+
 /** "HH:MM" ET. */
 export function etClock(ts: number): string {
   return ET_HM.format(new Date(ts))
@@ -260,6 +319,42 @@ function inOpen(ts: number): boolean {
 }
 
 // ── Columns → observations ───────────────────────────────────────────────────
+
+interface Core {
+  core: number | null
+  coreStrike: number | null
+  coreNet: number | null
+}
+
+/**
+ * The CORE of one ladder and its centre of mass — see `core` in the header.
+ * `nodes` is (strike, OI+VOL net) for every strike the column carries.
+ */
+function coreOf(nodes: Array<{ strike: number; net: number }>): Core {
+  // findCore's rule, inline because the nodes here are not GexRows: the one
+  // strike with the largest |net|.
+  let best: { strike: number; net: number } | null = null
+  for (const n of nodes) {
+    if (!(n.strike > 0) || !Number.isFinite(n.net)) continue
+    if (!best || Math.abs(n.net) > Math.abs(best.net)) best = n
+  }
+  if (!best || best.net === 0) return { core: null, coreStrike: null, coreNet: null }
+  const sign = Math.sign(best.net)
+  let wSum = 0
+  let kSum = 0
+  for (const n of nodes) {
+    if (Math.abs(n.strike - best.strike) > KF_CORE_SPAN) continue
+    if (Math.sign(n.net) !== sign) continue
+    const w = n.net * n.net
+    wSum += w
+    kSum += w * n.strike
+  }
+  return {
+    core: wSum > 0 ? kSum / wSum : best.strike,
+    coreStrike: best.strike,
+    coreNet: best.net,
+  }
+}
 
 /** A heatmap cell's `net` IS the OI+VOL sum — see gexHistory.ts. */
 const cellNet = (r: GexRow): number => (r as unknown as GexCell).net
@@ -278,13 +373,46 @@ export function columnsToObs(columns: GexColumn[]): KfObs[] {
       spot,
       flip: flip != null && Number.isFinite(flip) && flip > 0 ? flip : null,
       netGex: c.cells.length ? net : null,
+      ...coreOf(c.cells),
+      src: 'live',
     })
   }
   return out
 }
 
+/**
+ * One replay session (GET /proxy/premarket-replay?date=&symbol=SPX) → the same
+ * observations. See HISTORY in the header. A frame with no chain or no spot is
+ * a hole, not a zero.
+ */
+export function replayFramesToObs(json: unknown): KfObs[] {
+  const frames = (json as { frames?: unknown })?.frames
+  if (!Array.isArray(frames)) return []
+  const out: KfObs[] = []
+  for (const f of frames as Array<{ ts?: unknown; payload?: { spot?: unknown; gexRows?: unknown } }>) {
+    const t = Number(f?.ts)
+    const spot = Number(f?.payload?.spot)
+    const rows = f?.payload?.gexRows
+    if (!(t > 0) || !(spot > 0) || !Array.isArray(rows) || rows.length === 0) continue
+    const ladder = rows as GexRow[]
+    let net = 0
+    for (const r of ladder) net += oiVolNet(r)
+    const flip = findCumulativeFlip(ladder, spot)
+    out.push({
+      t,
+      spot,
+      flip: flip != null && Number.isFinite(flip) && flip > 0 ? flip : null,
+      netGex: Number.isFinite(net) ? net : null,
+      ...coreOf(ladder.map((r) => ({ strike: Number(r.strike), net: oiVolNet(r) }))),
+      src: 'replay',
+    })
+  }
+  out.sort((a, b) => a.t - b.t)
+  return out
+}
+
 export function seriesValue(o: KfObs, s: KfSeries): number | null {
-  return s === 'flip' ? o.flip : s === 'spot' ? o.spot : o.netGex
+  return s === 'core' ? o.core : s === 'flip' ? o.flip : s === 'spot' ? o.spot : o.netGex
 }
 
 /**
@@ -293,9 +421,13 @@ export function seriesValue(o: KfObs, s: KfSeries): number | null {
  * at 08:00 is less useful than the overnight one.
  */
 export function sessionObs(obs: KfObs[], session: KfSession): { obs: KfObs[]; fellBack: boolean } {
-  if (session === 'all') return { obs, fellBack: false }
-  const rth = obs.filter((o) => isRth(o.t))
-  return rth.length ? { obs: rth, fellBack: false } : { obs, fellBack: obs.length > 0 }
+  if (session === 'all' || !obs.length) return { obs, fellBack: false }
+  // Per day: a past session is cut to RTH, but the LAST day keeps everything
+  // while it has no RTH yet — pre-market on a trading day.
+  const lastDay = etDayKey((obs[obs.length - 1] as KfObs).t)
+  const lastHasRth = obs.some((o) => isRth(o.t) && etDayKey(o.t) === lastDay)
+  const out = obs.filter((o) => isRth(o.t) || (!lastHasRth && etDayKey(o.t) === lastDay))
+  return { obs: out, fellBack: !lastHasRth }
 }
 
 // ── Noise ────────────────────────────────────────────────────────────────────
@@ -348,13 +480,24 @@ export function estimateR(zs: number[]): number {
 // ── The filter ───────────────────────────────────────────────────────────────
 
 export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfRun {
-  const zs: number[] = []
-  for (const o of obs) {
+  // SESSIONS — R per ET day, from that day's own prints.
+  const days = obs.map((o) => etDayKey(o.t))
+  const zsByDay = new Map<string, number[]>()
+  let observed = 0
+  obs.forEach((o, i) => {
     const z = seriesValue(o, series)
-    if (z != null) zs.push(z)
-  }
-  const r = estimateR(zs)
-  const q = r * KF_RATIO[smooth]
+    if (z == null) return
+    observed++
+    const d = days[i] as string
+    const list = zsByDay.get(d)
+    if (list) list.push(z)
+    else zsByDay.set(d, [z])
+  })
+  const rByDay = new Map<string, number>()
+  for (const [d, zs] of zsByDay) rByDay.set(d, estimateR(zs))
+  let r = 0
+  let q = 0
+  let curDay = ''
 
   const points: KfPoint[] = []
   let level = 0
@@ -384,21 +527,31 @@ export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfR
     p11 = rEff
   }
 
-  for (const o of obs) {
+  obs.forEach((o, i) => {
+    const day = days[i] as string
+    const src = o.src
+    if (day !== curDay) {
+      // A new session: its own R, and the state starts again on its first print.
+      curDay = day
+      r = rByDay.get(day) ?? r
+      q = r * KF_RATIO[smooth]
+      started = false
+      pending = 0
+    }
     const z = seriesValue(o, series)
     const rEff = inOpen(o.t) ? r * KF_OPEN_BOOST : r
 
     if (!started) {
-      if (z == null) continue
+      if (z == null) return
       restart(z, rEff)
       started = true
       tPrev = o.t
       const sd = Math.sqrt(p00)
       points.push({
-        t: o.t, kind: 'seed', z, level, trend, priorSd: sd, sd, obsSd: Math.sqrt(p00 + rEff),
+        t: o.t, day, src, kind: 'seed', z, level, trend, priorSd: sd, sd, obsSd: Math.sqrt(p00 + rEff),
         k: 1, innov: 0, nz: 0, innovZ: 0,
       })
-      continue
+      return
     }
 
     // ── predict ──────────────────────────────────────────────────────────────
@@ -420,10 +573,10 @@ export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfR
 
     if (z == null) {
       points.push({
-        t: o.t, kind: 'predict', z: null, level, trend, priorSd, sd: priorSd, obsSd: Math.sqrt(p00 + rEff),
+        t: o.t, day, src, kind: 'predict', z: null, level, trend, priorSd, sd: priorSd, obsSd: Math.sqrt(p00 + rEff),
         k: null, innov: null, nz: null, innovZ: null,
       })
-      continue
+      return
     }
 
     const s = p00 + rEff
@@ -442,19 +595,19 @@ export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfR
         breaks++
         const sd = Math.sqrt(p00)
         points.push({
-          t: o.t, kind: 'break', z, level, trend, priorSd, sd, obsSd: Math.sqrt(p00 + rEff),
+          t: o.t, day, src, kind: 'break', z, level, trend, priorSd, sd, obsSd: Math.sqrt(p00 + rEff),
           k: 1, innov: y, nz, innovZ: Math.abs(nz),
         })
-        continue
+        return
       }
       // First one this far off: hold it. If it was noise, the next print says
       // so and the state never saw it.
       pending = side
       points.push({
-        t: o.t, kind: 'held', z, level, trend, priorSd, sd: priorSd, obsSd: Math.sqrt(p00 + rEff),
+        t: o.t, day, src, kind: 'held', z, level, trend, priorSd, sd: priorSd, obsSd: Math.sqrt(p00 + rEff),
         k: null, innov: y, nz, innovZ: Math.abs(nz),
       })
-      continue
+      return
     }
     pending = 0
 
@@ -474,10 +627,10 @@ export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfR
     meanAbs = (1 - MISS_EW) * meanAbs + MISS_EW * Math.min(Math.abs(nz), 4 * meanAbs)
 
     points.push({
-      t: o.t, kind: 'update', z, level, trend, priorSd, sd: Math.sqrt(p00), obsSd: Math.sqrt(p00 + rEff),
+      t: o.t, day, src, kind: 'update', z, level, trend, priorSd, sd: Math.sqrt(p00), obsSd: Math.sqrt(p00 + rEff),
       k: k0, innov: y, nz, innovZ: Math.abs(nz),
     })
-  }
+  })
 
   // CALIBRATION — the robust σ of the ordinary misses. Seeds, held prints and
   // breaks are out: they are exactly the misses the model has already set aside.
@@ -490,7 +643,8 @@ export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfR
     ? { t: last.t, level, trend, p00, p01, p11 }
     : null
 
-  return { points, r, q, observed: zs.length, calib, breaks, final }
+  // `r` / `q` are the LAST session's — the ones the forecast carries forward.
+  return { points, r, q, observed, calib, breaks, final }
 }
 
 /** A point's SIGNED miss in calibrated σ — ordinary updates only, else null. */
