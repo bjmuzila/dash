@@ -25088,3 +25088,34 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - New `server-v2/futures-basis-sync.js`: per ET session, pairs Yahoo index 5m bars with our own futures 5m bars (newest contract, same pin as before) at the same bar time over the last hour of the cash session (last 12 index bars before 16:00 — handles half-days), takes the MEDIAN of future − index. Skips the 16:00 auction stub and any still-forming bar; a session with < 6 matched pairs is skipped. Checked against Yahoo ES=F/^GSPC and NQ=F/^NDX: ES−SPX now decays smoothly 72.0 (09-14) → 56.0 (10-01).
 - `server-v2/es-spx-basis.js`, `server-v2/nq-ndx-basis.js`: rewritten on the shared core. Response shape unchanged (`basis`, `esClose`/`spxClose` or `nqClose`/`ndxClose`, `date`, `days`) plus `samples`, `window`, `method`. Plausibility gates (250 / 600) and the hold-last-good-value-on-failure behaviour kept.
 - `cbedge-v3/src/board/gexCandles/basis.ts`: header comment only. No client logic change — the card reads `basis` and `days` exactly as before.
+
+## 2026-10-02 — Voltick ⚙ Chart: Since labels on/off, and Level lines on/off (PR ready)
+
+- **Since labels.** Picking Path Ribbon under Layers → Level trails now shows a "Since labels: On | Off" row. Off hides the "▲38% since 9:55 am" tags. The bands, the glow and the dots stay the same.
+- **Level lines.** A new first row under Look → LEVELS turns the level lines off. Off hides the named and gamma lines, their price tags and end caps, and a hidden line no longer opens its card on click. The bubbles, Path and Path Ribbon trails stay, and so do the dark-pool prints. Line length dims while the lines are off.
+- Both default to on. Each choice is saved on the device, carries across Multi and Terminal panes, and goes back to on with ↺ Reset.
+- Code: `web/src/HeatChart.jsx` (NodeTrails `setLabels`, LevelDots `setLinesOff`, two state keys `gg-chart-ribbonlabels` and `gg-chart-levellines`, and the two menu rows).
+- New test `server/test/path-ribbon-since-labels-and-level-lines-turn-off.test.js` (7/7, catches 10 of 10 mutations).
+- Full `npm test` shows no new failures against the same tree without the change. A first run flagged two new tooltips over 28 words, and both were shortened. The web build and checks are clean.
+- Built on Gnotz617 `main` at 9538833. The PR goes on a new branch `path-switches`, because PR #32 is still open on `bzilabranch`.
+- Files in `generated/`:
+  - `2026-10-02-voltick-since-labels-and-level-lines.patch`
+  - the `2026-10-02-voltick-since-labels-and-level-lines/` folder (full files)
+  - `2026-10-02-voltick-since-labels-and-level-lines.png`: a real render on SPY and SPX 10-01, showing all four states.
+
+## 2026-10-02 — CB Edge connector now works in Google Gemini too
+
+- `server-v2/mcp-oauth.js`: the `/mcp` connector now accepts Gemini's custom apps as well as ChatGPT.
+  - **Where users add it:** gemini.google.com → Settings → Connected Apps → Add a custom app, with URL `https://cbedge.net/mcp`. Google requires a personal account, US, 18+ and Keep Activity on.
+  - **How Gemini signs in:** it registers itself by DCR, the same way ChatGPT does. Its callback is Google's shared OAuth relay (`https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-…`).
+  - **What the allowlist accepts:** only that `/r/user_bound_custom-mcp-` path on the relay hosts. Any Google Cloud project can be reached at `/r/<project-id>`, but project ids can't contain an underscore, so no project can claim this path. Kill switch: `MCP_ALLOW_GEMINI=0`.
+- **Consent page:** it now names the verified destination from the redirect URI ("Google Gemini", "ChatGPT · chatgpt.com"), not just the name the client registered with.
+- **Approval no longer ends in a 303 redirect.** Allow and Cancel now answer with a short "Connected — taking you back…" page that uses a meta refresh plus a Continue link.
+  - **Why:** Chrome checks the consent page's CSP `form-action` at every redirect hop after a form POST. Gemini's callback bounces through Google's relay into Google, so a 303 could have been blocked partway.
+  - The consent page's `form-action` is back to `'self'` only.
+- `server-v2/mcp-server.js`: the header now lists both apps' setup steps.
+- `server-v2/mcp-server.selftest.js`: added the Gemini allowlist cases.
+- **Tests:** the selftest passes (11/11) under both dev and production `NODE_ENV`. The end-to-end run against Postgres passes 43/43. The new Gemini case covers registration, consent, the hand-back, the token and a tool call; foreign relay paths are rejected.
+- **Browser check:** clicking Allow navigated through the relay hop with no CSP errors.
+- **Deploy:** needs `push.ps1` → VPS rebuild. No new env is required.
+- Screenshot: `generated/2026-10-02-gemini-consent.png`.

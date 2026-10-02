@@ -153,6 +153,11 @@ async function check(name, fn) {
     assert.ok(!ok('https://chatgpt.com.evil.io/x'));
     assert.ok(!ok('http://chatgpt.com/x'));
     assert.ok(!ok('https://evil.example/cb'));
+    // Gemini: Google's relay, but only on the path no Cloud project can own.
+    assert.ok(ok('https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-7f3a9c-cbedge.net'));
+    assert.ok(!ok('https://oauth-redirect.googleusercontent.com/r/some-cloud-project'));
+    assert.ok(!ok('https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-x/../evil'));
+    assert.ok(!ok('http://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-x'));
   });
 
   await check('MCP_CONNECTOR=0 registers nothing; default registers all 9 paths', () => {

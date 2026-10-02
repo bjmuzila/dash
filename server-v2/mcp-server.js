@@ -4,10 +4,17 @@
  *
  * ── What it does ─────────────────────────────────────────────────────────────
  * Serves the Model Context Protocol at https://cbedge.net/mcp so a CB Edge
- * member can add CB Edge to ChatGPT (Settings → Apps & Connectors → Create, URL
- * https://cbedge.net/mcp, auth OAuth) and ask things like "where are the SPX
- * walls?" or "what's on the calendar today?". ChatGPT signs the member in with
- * their normal cbedge.net login — see server-v2/mcp-oauth.js for that half.
+ * member can add CB Edge to an AI app and ask things like "where are the SPX
+ * walls?" or "what's on the calendar today?":
+ *
+ *   ChatGPT  Settings → Developer mode on → Apps → create, URL
+ *            https://cbedge.net/mcp, auth OAuth (Pro, or Business/Enterprise)
+ *   Gemini   gemini.google.com → Settings → Connected Apps → Add a custom app,
+ *            URL https://cbedge.net/mcp (personal Google account, US, 18+,
+ *            Keep Activity on)
+ *
+ * Either one signs the member in with their normal cbedge.net login — see
+ * server-v2/mcp-oauth.js for that half.
  *
  * Every tool is READ-ONLY and is a thin adapter over data the dashboard already
  * serves. Nothing here computes a level of its own:

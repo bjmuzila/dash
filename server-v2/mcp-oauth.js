@@ -47,7 +47,8 @@
  *    one, so a membership cannot be fanned out to a group of friends' ChatGPTs.
  *  - Redirect URIs are restricted to https on an exact allowlisted AI-client
  *    host (MCP_REDIRECT_HOSTS — no subdomains), so a stranger cannot register a
- *    "client" that ships a customer's code to their own server.
+ *    "client" that ships a customer's code to their own server. Gemini is the
+ *    one path-restricted entry: see GEMINI_RELAY below.
  *  - It never writes the `sessions` table. A ChatGPT connection is not a device:
  *    it does not count toward the session cap in lib/db.ts and cannot kick
  *    anyone's browser.
@@ -65,6 +66,7 @@
  *                       request's Host, but only if it is in MCP_ALLOWED_HOSTS.
  *   MCP_ALLOWED_HOSTS   default "cbedge.net,www.cbedge.net".
  *   MCP_REDIRECT_HOSTS  default "chatgpt.com,claude.ai,claude.com".
+ *   MCP_ALLOW_GEMINI    "0" refuses Gemini's custom-app callback (default on).
  *   MCP_ALLOW_LOOPBACK  "1" accepts http://localhost redirect URIs in production
  *                       (MCP Inspector testing). Always on off-production.
  *   MCP_MAX_GRANTS      live connections per member, default 2.
@@ -154,16 +156,50 @@ function resourceOk(resource, origin) {
   return r === resourceUrl(origin) || r === origin;
 }
 
+// ── GEMINI (gemini.google.com → Settings → Connected Apps → Add a custom app)
+// Gemini registers by DCR like ChatGPT, but its callback is Google's shared
+// OAuth relay, not a gemini.google.com URL:
+//
+//   https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-<id>-<our host>
+//
+// That relay serves EVERY Google Cloud project at /r/<project-id>, so allowing
+// the host alone would let any project on Earth register as a "client" and
+// collect a customer's code. The PATH is what makes it Gemini's: a Cloud
+// project id cannot contain an underscore, so no project can own
+// /r/user_bound_… . The sandbox/test relays are Google's own staging copies of
+// the same thing, held to the same path rule.
+const GEMINI_RELAY_HOSTS = new Set([
+  'oauth-redirect.googleusercontent.com',
+  'oauth-redirect-sandbox.googleusercontent.com',
+  'oauth-redirect-test.googleusercontent.com',
+]);
+const GEMINI_RELAY_PATH = /^\/r\/user_bound_custom-mcp-[A-Za-z0-9._-]+$/;
+const isGeminiRelay = (u) => process.env.MCP_ALLOW_GEMINI !== '0'
+  && u.protocol === 'https:' && GEMINI_RELAY_HOSTS.has(u.hostname.toLowerCase()) && GEMINI_RELAY_PATH.test(u.pathname);
+
 /** Registered redirect URIs: https on an EXACT allowlisted AI-client host
  *  (ChatGPT: /connector_platform_oauth_redirect or /connector/oauth/{id};
- *  Claude: /api/mcp/auth_callback), or loopback where allowed. */
+ *  Claude: /api/mcp/auth_callback), Gemini's relay path, or loopback where allowed. */
 function redirectAllowed(uri) {
   let u;
   try { u = new URL(String(uri)); } catch { return false; }
   if (u.hash || u.username || u.password) return false;
   const h = u.hostname.toLowerCase();
   if (u.protocol === 'http:') return ALLOW_LOOPBACK && (h === 'localhost' || h === '127.0.0.1' || h === '[::1]');
+  if (isGeminiRelay(u)) return true;
   return u.protocol === 'https:' && REDIRECT_HOSTS.has(h);
+}
+
+/** What the consent page says the code is going back to. `client_name` is
+ *  whatever the registering client typed; this is read off the redirect URI,
+ *  which the allowlist above has already vouched for. */
+function destinationLabel(uri) {
+  const u = new URL(uri);
+  const h = u.hostname.toLowerCase();
+  if (isGeminiRelay(u)) return 'Google Gemini';
+  if (h === 'chatgpt.com') return 'ChatGPT · chatgpt.com';
+  if (h === 'claude.ai' || h === 'claude.com') return `Claude · ${h}`;
+  return u.host;
 }
 
 /** Caller's IP for rate limits. Behind Cloudflare that is cf-connecting-ip;
@@ -527,15 +563,40 @@ function csrfOk(token, sessionHash, p) {
   return safeEqual(token, csrfFor(sessionHash, p, ts));
 }
 
-/** Redirect back to the client (only once client_id + redirect_uri are trusted). */
-function redirectWith(res, redirectUri, params, origin) {
+/** The client's redirect_uri with the response parameters and `iss` on it. */
+function clientReturnUrl(redirectUri, params, origin) {
   const u = new URL(redirectUri);
   for (const [k, v] of Object.entries(params)) if (v != null && v !== '') u.searchParams.set(k, v);
   u.searchParams.set('iss', origin);
+  return u.toString();
+}
+
+/** Redirect back to the client (only once client_id + redirect_uri are trusted). */
+function redirectWith(res, redirectUri, params, origin) {
   res.statusCode = 303;
-  res.setHeader('Location', u.toString());
+  res.setHeader('Location', clientReturnUrl(redirectUri, params, origin));
   res.setHeader('Cache-Control', 'no-store');
   res.end();
+}
+
+/**
+ * The answer to the consent FORM: a page of ours that sends the browser on,
+ * rather than a 303. A redirect that follows a form POST is checked against the
+ * consent page's CSP `form-action` at EVERY hop, and the client's callback is
+ * rarely the last hop — Gemini's goes to Google's OAuth relay and then on into
+ * Google. A meta refresh is an ordinary navigation, outside `form-action`, so
+ * the whole chain belongs to the client from here. The link is the fallback
+ * for a browser that ignores refresh.
+ */
+function handBack(res, redirectUri, params, origin, appName, approved) {
+  const to = clientReturnUrl(redirectUri, params, origin);
+  renderPage(res, 200, {
+    title: approved ? 'Connected' : 'Cancelled',
+    refreshTo: to,
+    body: `<h1>${approved ? 'Connected' : 'Not connected'}</h1>
+<p>Taking you back to ${escapeHtml(appName)}…</p>
+<div class="row"><a class="btn primary" href="${escapeHtml(to)}">Continue</a></div>`,
+  });
 }
 
 // The page mirrors the v3 landing palette (components/landing/v3Theme.ts V3.*).
@@ -543,23 +604,23 @@ function redirectWith(res, redirectUri, params, origin) {
 // handful of values it needs are restated here — keep them in step with it.
 const C = { bg: '#07080b', surface: '#0f1117', raised: '#191b22', line: '#23272e', fg: '#ffffff', cyan: '#219ebc', warn: '#e0a44a' };
 
-function renderPage(res, status, { title, body, formTargets = [] }) {
-  const formAction = ["'self'", ...formTargets].join(' ');
+function renderPage(res, status, { title, body, refreshTo = null }) {
   res.statusCode = status;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Frame-Options', 'DENY');
-  // Replaces the site-wide CSP for this one response. form-action MUST include
-  // the client's redirect origin: Chrome enforces form-action on the redirect
-  // that follows a form POST, so 'self' alone would block the 303 to chatgpt.com.
+  // Replaces the site-wide CSP for this one response. form-action stays 'self':
+  // the consent form posts here and is answered with handBack()'s page, never
+  // with a cross-origin redirect.
   res.removeHeader('Content-Security-Policy-Report-Only');
   res.setHeader('Content-Security-Policy',
-    `default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action ${formAction}; ` +
+    "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'; " +
     "frame-ancestors 'none'; base-uri 'none'");
   res.end(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
+<meta name="robots" content="noindex">${refreshTo ? `
+<meta http-equiv="refresh" content="0;url=${escapeHtml(refreshTo)}">` : ''}
 <title>${escapeHtml(title)} · CB Edge</title>
 <style>
   *{box-sizing:border-box}
@@ -664,8 +725,7 @@ async function handleAuthorize(req, res) {
   }
 
   const appName = client.client_name || 'An AI app';
-  const appHost = new URL(p.redirect_uri).host;
-  const redirectOrigin = new URL(p.redirect_uri).origin;
+  const appHost = destinationLabel(p.redirect_uri);
   const email = await emailFor(sess.userId);
   // email_off: Cloudflare's email obfuscation would otherwise swap the address
   // for "[email protected]" and this page's CSP blocks the script that decodes it.
@@ -696,7 +756,6 @@ ${whoLine}
       .map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('\n');
     return renderPage(res, 200, {
       title: 'Connect',
-      formTargets: [redirectOrigin],
       body: `<h1>Connect ${escapeHtml(appName)} to CB Edge?</h1>
 <p><strong>${escapeHtml(appName)}</strong> <span style="font-size:13px">(${escapeHtml(appHost)})</span> is asking to read your CB Edge market data:</p>
 <ul><li>Live SPX gamma levels — walls, gamma flip, strike ladder</li>
@@ -717,7 +776,9 @@ ${hidden}
   if (!csrfOk(src.csrf, sessionHash, p)) {
     return renderError(res, 400, 'This approval page expired. Go back to the app and connect again.');
   }
-  if (src.decision !== 'allow') return back({ error: 'access_denied' });
+  if (src.decision !== 'allow') {
+    return handBack(res, p.redirect_uri, { error: 'access_denied', state: p.state }, origin, appName, false);
+  }
 
   const code = randomToken(PREFIX.code);
   await q(
@@ -728,7 +789,7 @@ ${hidden}
       p.resource ? normResource(p.resource) : resourceUrl(origin), crypto.randomUUID(), CODE_TTL_SEC],
   );
   console.log(`[mcp-oauth] user ${sess.userId} approved "${appName}" (${appHost})`);
-  return back({ code });
+  return handBack(res, p.redirect_uri, { code, state: p.state }, origin, appName, true);
 }
 
 const handleAuthorizeGuarded = async (req, res, ctx) => {
