@@ -25119,3 +25119,22 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - **Browser check:** clicking Allow navigated through the relay hop with no CSP errors.
 - **Deploy:** needs `push.ps1` → VPS rebuild. No new env is required.
 - Screenshot: `generated/2026-10-02-gemini-consent.png`.
+
+## 2026-10-02 - Voltick PR #32: review fixes for OI+VOL, DEX and PREM (Voltick repo, not CB Edge)
+
+- **Own words for each view:** `web/src/boardviews.js` holds one table that the grid, the strike card, the band and the legend all read. DEX and PREM no longer say "by today's traded volume", sticky or slippery. They also no longer draw ★ Volt, walls, ↘, ◆ or ⚡︎. The grid header no longer reads "Net Net premium".
+- **Toolbar fits again:** on a phone the lens is one picker. On a desktop board under 1500px, both the lens and the source are pickers.
+  - At 1280px the rail is 349px and stays on the first row.
+  - At 375px the phone row is 355 of 355.
+- **Server:**
+  - The extra grids are built only for boards where someone picked a view (`viewWantedSymbols`), and PREM reads the tape only when it is picked. The delay shelf drops them.
+  - PREM now mutes deep ITM, so the strikes add up to Net Drift.
+  - After a restart, a name with no per-strike premium reads "no data".
+- **Client:**
+  - PREM no longer overwrites the saved source, and the lens is remembered.
+  - `?lens=PREM&src=OI` lights VOLUME. A delayed visitor's lens link lights nothing.
+  - The focus message is resent only when the request changes.
+- **Tests:** four new test files. The full suite passes 11,694 of 11,708, with 1 env-only SQLite planner failure and 13 skipped.
+- Screenshot: `generated/2026-10-02-voltick-pr32-review-fixes.png`.
+
+---
