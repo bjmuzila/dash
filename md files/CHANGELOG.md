@@ -25245,36 +25245,52 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - **How it ships.** Commit it on `bzilabranch`. After Nick's 4pm push, rebase onto main, re-run the suite, then push.
 - **File in `generated/`:** `2026-10-02-voltick-pr32-review-round-two.patch`
 
-## 2026-10-02 - v3 Tracked contracts: Entry / Now / High, each with its $
+---
 
-- `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`: the Mark and Move columns are replaced by **Now** and **High**. Entry, Now and High each show the price on top and the dollar value under it (price × print contracts × 100). Now and High also show the % move off the entry and the $ P/L, colored up/down. A lookup has no print size, so its dollars are per one contract and marked "/ct". The pop-out trade card tiles follow: Entry ($ cost), Now, High, Move, Size, Tracked (Premium tile dropped, since Entry's $ is the same number).
-- `cbedge-v3/src/pages/whales/alertsStore.ts`: new `highs` map. It comes from the same bars the mark already reads, so there are no extra requests. The high is the best bar high from the bar containing the print (or the moment you tracked it, for a lookup) to the last bar, the same slicing as the prints table's HIGH column. Lookups now read bars from their tracked day instead of only today, so their high covers the whole time they've been tracked.
+## 2026-10-02 — AI connector: historical GEX levels at the open and close, with multi-session averages (`gex_levels_history`)
 
-## 2026-10-02 - v3 new page: VELA (LuxAlgo's open-source chart workspace on CB Edge data)
+- **What it does.** The ChatGPT / Gemini / Claude connector has a 7th tool for past sessions. It works for SPX or any ticker in the scanner universe (about 170 names). For each session it returns:
+  - call wall, put wall, CORE and gamma flip **at the open** (09:29 ET, captured just before the bell) and **at the close** (16:00 ET), plus spot, total net GEX and the GEX at each level;
+  - the open→close change for each level;
+  - the sampled close, high and low, and whether the close landed inside, above or below the opening walls;
+  - each wall move (time, from → to);
+  - for a single session, each touch of a level with its reaction and the recorder's note.
+- **Averages over time.** Ask for several sessions (up to 60, about three months) and a **summary is computed on the server**, so the AI quotes numbers instead of doing the arithmetic. For each end of the day (open, close) it gives:
+  - average / median / min / max of every level and of spot;
+  - **points from spot** for each level (level minus price at that moment). This is the comparable number when price drifts, e.g. "the call wall opened on average 38 pts above spot";
+  - wall width;
+  - how often spot was above the flip;
+  - how often the CORE was above spot.
+- **Across the run** the summary also gives:
+  - the average and average-absolute open→close change per level, and how many sessions it rose, fell or stayed;
+  - how often the close finished inside / above / below the opening walls (with %);
+  - the average session range;
+  - wall moves per session.
+  - Today's unfinished session counts toward the open figures only.
+- **Inputs:**
+  - `ticker` (default SPX)
+  - `date` (the last session of the run; a day with nothing recorded falls back to the session before it, with a note)
+  - `sessions` (1–60)
+  - `at` (open / close / both)
+  - `scope` (nearest expiry, the board default, or all other expiries summed)
+  - `include_moves`
+  - `summary_only`
+  - Over 10 sessions, the per-session rows come back compact (levels + spot).
+- **No new computation of levels.** The tool reads the dashboard's own history routes:
+  - `/api/walls-range`, from `walls_log`: the open baseline, the 15-minute changes, and the spot path;
+  - `/proxy/walls?…&series=1`, from `scanner_snapshots`: the flip and net GEX at 09:29 and 16:00, fetched 6 at a time;
+  - `/proxy/walls?date=&symbol=`: the touch events.
+  - Past sessions are cached for 30 minutes and today's for 60 seconds. Wall strikes match the Walls and Level Log pages.
+- Checked against Brandon's live `walls_log` query for 2026-10-01 SPX: open call/put/core 7700 / 7640 / 7650, close 7675 / 7650 / 7670.
+- **Files.** `server-v2/mcp-server.js` (the tool, history readers, summary, server instructions, header list).
+- **Tests.**
+  - The offline selftest passes 12/12. The Postgres end-to-end test passes 47/47, running against the current `api-router.js` and the real `walls-recorder.js` `getWalls()`.
+  - The history check seeds two sessions and verifies:
+    - open/close walls, the flip and the open→close change, ignoring a post-close sample;
+    - the moves and the touch reaction;
+    - the summary averages, distances from spot, drift counts and inside/above/below counts;
+    - summary-only, compact rows past 10 sessions, and rollback when the date has nothing recorded;
+    - unknown ticker, future date, and a malformed ticker.
+- Note: an earlier entry for this tool written today did not survive a concurrent CHANGELOG rewrite; this entry replaces it.
 
-- **What it is.** `/v3/vela` mounts [LuxAlgo/Vela](https://github.com/LuxAlgo/Vela) (Apache-2.0, npm `@luxalgo/vela` 0.8.1): a full chart app with symbol search, timeframes, chart styles, 70+ built-in indicators, drawing tools, object tree, data window, bar replay, and a layout picker for a synced grid of up to 16 charts. Rail icon 🕯️ "Vela", just before v2 Legacy.
-- `cbedge-v3/src/pages/vela/cbedgeProvider.ts` (new): Vela's `DataProvider` port over the routes the GEX Candles card already reads. No new backend route.
-  - History: `/api/snapshots/etf-candles` for every cash symbol (SPX, SPY, QQQ, NVDA…, plus the `/api/es-candles/tickers` roster in the search) and `/api/snapshots/candles` for ES and NQ futures (typed as `ES` / `NQ`). Shared through `api.ts` `query`.
-  - Timeframes 1/2/3/5/10/15/30/60/120/240/D. Native 1m (5 days) or 5m (30 days); coarser rolled up client-side, anchored to 09:30 ET. D is rolled from the 5m tape, so it shows about 30 sessions. The cut-off first bucket is dropped.
-  - Live: cash symbols ride the `/etf-candles/live/stream` SSE with the 3s `/live` probe as the quiet-stream fallback (same two-transport shape as GexCandlesCard; dropped while the tab is hidden, history re-read on return after 30s). ES/NQ ride the socket's `es1mCandles` / `nq1mCandles` frames via `watchFrame`. Any timeframe's forming bar is built from those 1m bars without double counting the history bar's volume.
-  - RTH/ETH: every symbol declares `session` 0930-1600 (`session_extended` 0400-2000 cash, 1800-1700 futures), which turns on Vela's RTH/ETH switch and session shading. RTH is the default. The market-status calendar is weekdays only (no holiday data on any route).
-  - Logos: same-origin `/logos/<SYM>.png` mirror (ChipLogo stage 1) so the chart PNG export never taints.
-- `cbedge-v3/src/pages/Vela.tsx` (new): the page. Workspace created in `ChartFrame` onMount, destroyed in cleanup; palette from tokens via `tokenHex` (bg, muted text, surface2 grid, line border, candle up/down, `--font-sans`); timezone America/New_York; layout starts at one chart; state persists per browser under `cb-v3-vela`. The app toolbar's ticker picker drives the active chart, and the active chart's symbol is written back to it (futures excluded). Vela's attribution logomark is left on, as its NOTICE requires.
-- `cbedge-v3/src/App.tsx` (lazy route), `src/shell/Shell.tsx` (NAV entry with SPX 5m history prefetch), `src/pages/TradersDashboard.tsx` (Quick Links: ALL_PAGES + LIVE_ROUTES).
-- `cbedge-v3/package.json`: `@luxalgo/vela ^0.8.1`. **Run `npm install` in `cbedge-v3/` on the laptop before `npm run dev`.** The Docker build installs it on its own.
-- `cbedge-v3/vite.config.ts`: `lib-vela` manualChunk for `@luxalgo/vela` + `@zag-js`. `scripts/check-budgets.mjs` + `budgets.json`: new `lib` kind for one-library-one-route chunks, budget 286500 (lib-vela is 274.3kb brotli). The `/vela` route chunk itself is 4.1kb. Nothing joins the initial load.
-- `app/v3/vela/route.ts` (new, approved): the `serveSpaShell("v3")` shim so a hard refresh on `/v3/vela` doesn't 404.
-- **Checks.** No new `tsc` errors (the 5 existing ones are unchanged), `check:theme` clean, `check:casing` clean. On the budget check, `lib-vela` and the route pass. The entry/css/react/initial overages were already there before this change (same numbers on an untouched build). Tested in headless Chromium against a mock backend: SPX/QQQ/NDX/ES load, 1h and D roll-ups, ETH shading on ES, live SSE moves the forming bar, the toolbar↔chart symbol sync works both ways, a saved layout survives reload, a 2×2 grid renders, and leaving and coming back leaves one workspace. Not yet tested against live server data.
-- **File in `generated/`:** `2026-10-02-vela-page.png` (mock data)
-
-## 2026-10-02 — budget.cbedge.net Import meals: no categories, no food filter
-- `budget-vite/src/pages/Lists.tsx` (Import meals sheet): imported meals are no longer sorted into categories — every meal goes to Other. `# Header` lines and second columns are ignored for meals, the preview is one flat list, and no new categories are created. The "doesn't look like food" hold-back is gone, since the import is now used for saved videos, which are all recipes. The grocery-list import still uses aisles. No server change.
-
-## 2026-10-02 — budget.cbedge.net Import sheet: pick what gets added
-- `budget-vite/src/pages/Lists.tsx` (Import meals + Import to the list): every new line in the preview now has a checkbox, ticked by default. Untick anything you don't want; All / None at the top. Meals with a link get a "Watch ↗" that opens the video in a new tab so you can check it first. The summary shows "N of M new picked" and the button adds only the picked ones. New lines are listed before "already there" ones, and the preview now shows every line (up to 2,500) in a taller scroll area. No server change.
-
-## 2026-10-02 — budget.cbedge.net: import ALL saved TikTok recipes (script) + steadier link lookup
-- Why: the Import box got only 291 of Brandon's 1,628 saved TikToks in. Checked on the VPS: TikTok oEmbed answers every sampled saved video (2020→2026) in the `www.tiktok.com/@/video/<id>` form, so the losses were TikTok refusing parallel bursts, plus same-caption recipes being dropped as "duplicates".
-- NEW `server-v2/scripts/import-tiktok-saved.cjs` (one-off, not in the image): all 1,628 saved video ids from the TikTok export → My meals (category Other). One lookup at a time with a pause and up to 5 retries, saves every 25, logs progress, dedupes by video id only, safe to re-run. Run on the VPS: `cd /opt/dashboard && nohup sh -c 'docker exec -i household-api node - < server-v2/scripts/import-tiktok-saved.cjs' > /root/tiktok-import.log 2>&1 &` then `tail -f /root/tiktok-import.log`.
-- `server-v2/_lib-household-lists.cjs`: `resolveLinks()` runs 2 at a time (was 4) and retries a link twice (1.5s, 4s) before calling it unreadable. `importLibraryMeals()` dedupes a meal with a video link by video id only; name matching is only for typed-in meals.
-- `budget-vite/src/pages/Lists.tsx`: looked-up videos are keyed by link, so two recipes with the same caption both show and both import.
+---

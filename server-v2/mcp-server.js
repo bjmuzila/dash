@@ -26,6 +26,10 @@
  *   spx_gamma_levels    /proxy/gex (the live 0DTE board) + today's daily_em row
  *   spx_gex_by_strike   /proxy/gex, strike ladder around spot
  *   expected_move       daily_em rows (READ only — see note below)
+ *   gex_levels_history  /api/walls-range + /proxy/walls (walls_log, scanner
+ *                       series, touch events): open (09:29) and close (16:00)
+ *                       call wall / put wall / CORE / flip for past sessions,
+ *                       plus a multi-session summary computed here from them
  *   weekly_levels       /api/levels?ticker=
  *   economic_calendar   /api/calendar
  *   earnings_today      /api/earnings-today
@@ -73,6 +77,8 @@ const INSTRUCTIONS = [
   'CB Edge is an options-analytics platform focused on SPX 0DTE dealer gamma exposure (GEX).',
   'Use spx_gamma_levels first for any question about SPX levels, walls, the gamma flip or the gamma regime;',
   'spx_gex_by_strike for the strike-by-strike ladder; expected_move and weekly_levels for EM bands and weekly zones;',
+  'gex_levels_history for PAST sessions — walls, CORE and flip at the open and at the close, how they moved, touches,',
+  'and for several sessions a computed summary (averages, distance from spot, how often price closed inside the opening walls) — quote it rather than averaging rows yourself;',
   'economic_calendar and earnings_today for scheduled events.',
   'All times are US/Eastern. GEX values are dealer gamma exposure as shown on the CB Edge board (calls +, puts −).',
   'Data is for educational market analysis only and is not investment advice; say so if the user asks what to trade.',
@@ -183,6 +189,319 @@ async function readDailyEm(ticker, date) {
     if (!/does not exist/i.test(e?.message || '')) console.warn('[mcp] daily_em read failed:', e.message);
     return null;
   }
+}
+
+// ── Historical levels ───────────────────────────────────────────────────────
+// Read through the dashboard's own history routes, the ones the Walls and Level
+// Log pages draw from — nothing is recomputed here:
+//   /api/walls-range   walls_log: call wall / put wall / CORE, the 09:29 open
+//                      baseline plus every change on the 15-minute grid, and
+//                      the session's sampled spot path
+//   /proxy/walls?…&series=1   scanner_snapshots: the full board sample (flip,
+//                      net GEX, GEX at each level) every 1–5 minutes
+//   /proxy/walls?date=&symbol=   that day's touch events and how they resolved
+
+const HIST_LEVELS = { call_wall: 'callWall', put_wall: 'putWall', cb: 'core' };
+const OPEN_BASELINE_MINS = 9 * 60 + 29; // walls-recorder slot 0, captured before the bell
+const BELL_MINS = 9 * 60 + 30;
+const CLOSE_MINS = 16 * 60;
+const HIST_SCOPES = { nearest: '0dte', all_other: 'agg' };
+const MAX_SESSIONS = 60;
+// Past this many sessions each row comes back compact (levels + spot only) —
+// the summary carries the read, and 60 full rows would bury it.
+const FULL_ROWS_MAX = 10;
+const SERIES_CONCURRENCY = 6;
+const MAX_MOVES = 40;
+
+const REACTION_TEXT = {
+  reject: 'rejected — price tagged it and turned back',
+  break_lt5: 'broke through, by under 5 points',
+  break_5: 'broke through, by 5+ points',
+  consolidated: 'broke through and held beyond it',
+  new_wall: 'the wall itself moved to a new strike after the touch',
+  pin: 'pinned — price sat on the level',
+  rolled_over: 'approached without touching, then reversed away',
+};
+
+const _etHm = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit',
+});
+/** ET minutes since midnight for a timestamp, or null. */
+function etMins(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = _etHm.formatToParts(d);
+  const h = Number(parts.find((x) => x.type === 'hour')?.value);
+  const m = Number(parts.find((x) => x.type === 'minute')?.value);
+  return Number.isFinite(h) && Number.isFinite(m) ? (h % 24) * 60 + m : null;
+}
+const hhmm = (mins) => (mins == null ? null
+  : `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`);
+
+/** A past session never changes again; today's is still being written. */
+const histTtl = (date) => (date < etDate() ? 30 * 60_000 : 60_000);
+
+/** Like round(), but a NULL column stays null instead of becoming 0. */
+const nn = (v, dp = 2) => (v == null || v === '' ? null : round(v, dp));
+
+/** One full board sample (scanner_snapshots / scanner_variants row). */
+function boardSample(row) {
+  if (!row) return null;
+  return {
+    time: hhmm(etMins(row.ts)),
+    spot: nn(row.spot),
+    callWall: nn(row.call_wall),
+    putWall: nn(row.put_wall),
+    core: nn(row.cb),
+    gammaFlip: nn(row.gex_flip),
+    totalNetGex: nn(row.total_net_gex, 0),
+    // Recorded from late August 2026 on; null on older sessions.
+    callWallGex: nn(row.call_wall_gex, 0),
+    putWallGex: nn(row.put_wall_gex, 0),
+    coreGex: nn(row.cb_gex, 0),
+    expiry: row.expiry || null,
+  };
+}
+
+/** Where a price sat against a put-wall / call-wall bracket. */
+function sideOf(px, put, call) {
+  if (px == null || put == null || call == null) return null;
+  const lo = Math.min(put, call);
+  const hi = Math.max(put, call);
+  if (px > hi) return 'above the call wall';
+  if (px < lo) return 'below the put wall';
+  return 'inside the walls';
+}
+
+/**
+ * One session: the levels at the open and at the close, how they moved in
+ * between, and (optionally) what price did at them.
+ */
+async function buildSession(ctx, ticker, day, scope, opts) {
+  const { at, withMoves, withTouches, compact } = opts;
+  const log = Array.isArray(day.log) ? day.log : [];
+  const open = {};
+  const close = {};
+  let openSpot = null;
+  for (const r of log) {
+    const name = HIST_LEVELS[r.level_type];
+    if (!name) continue;
+    if (Number(r.slot) === 0) {
+      open[name] = nn(r.strike);
+      if (openSpot == null) openSpot = nn(r.spot);
+    }
+    close[name] = nn(r.strike); // ordered by slot, so the last write is the 16:00 state
+  }
+
+  // The fuller board sample (flip, net GEX) sits in the scanner series.
+  let series = [];
+  try {
+    const s = await cached(`hist:series:${ticker}:${day.date}:${scope}`, histTtl(day.date),
+      () => fetchJson(ctx, `/proxy/walls?date=${day.date}&symbol=${encodeURIComponent(ticker)}&series=1&scope=${scope}&basis=oivol`));
+    series = Array.isArray(s?.series) ? s.series : [];
+  } catch { /* walls alone still answer the question */ }
+  const timed = series.map((r) => ({ r, m: etMins(r.ts) })).filter((x) => x.m != null);
+  const lastAtOrBefore = (mins) => {
+    let hit = null;
+    for (const x of timed) if (x.m <= mins) hit = x.r;
+    return hit;
+  };
+  const openRow = lastAtOrBefore(OPEN_BASELINE_MINS) || timed[0]?.r || null;
+  const closeRow = lastAtOrBefore(CLOSE_MINS) || timed[timed.length - 1]?.r || null;
+
+  const today = etDate();
+  const nowMins = etMins(Date.now());
+  const inProgress = day.date === today && nowMins != null && nowMins < CLOSE_MINS;
+
+  // Price path: the sampled spot the Level Log draws, inside the session.
+  const path = (Array.isArray(day.spot) ? day.spot : [])
+    .filter((p) => Array.isArray(p) && p[0] >= BELL_MINS && p[0] <= CLOSE_MINS && nn(p[1]) != null);
+  const firstPx = path.length ? num(path[0][1]) : null;
+  const lastPx = path.length ? num(path[path.length - 1][1]) : null;
+  const pxs = path.map((p) => Number(p[1]));
+
+  const openSnap = {
+    ...(boardSample(openRow) || {}),
+    time: '09:29',
+    callWall: open.callWall ?? nn(openRow?.call_wall),
+    putWall: open.putWall ?? nn(openRow?.put_wall),
+    core: open.core ?? nn(openRow?.cb),
+    spot: openSpot ?? nn(openRow?.spot),
+  };
+  const closeSnap = {
+    ...(boardSample(closeRow) || {}),
+    callWall: close.callWall ?? nn(closeRow?.call_wall),
+    putWall: close.putWall ?? nn(closeRow?.put_wall),
+    core: close.core ?? nn(closeRow?.cb),
+  };
+  if (!inProgress) closeSnap.time = '16:00';
+
+  const diff = (a, b) => (a == null || b == null ? null : round(b - a));
+  const out = {
+    date: day.date,
+    sessionComplete: !inProgress,
+  };
+  const slim = (snap) => (compact
+    ? { time: snap.time, spot: snap.spot, callWall: snap.callWall, putWall: snap.putWall, core: snap.core, gammaFlip: snap.gammaFlip ?? null }
+    : snap);
+  if (at !== 'close') out.open = slim(openSnap);
+  if (at !== 'open') out[inProgress ? 'latest' : 'close'] = slim(closeSnap);
+  if (at === 'both') {
+    out.openToClose = {
+      callWall: diff(openSnap.callWall, closeSnap.callWall),
+      putWall: diff(openSnap.putWall, closeSnap.putWall),
+      core: diff(openSnap.core, closeSnap.core),
+      gammaFlip: diff(openSnap.gammaFlip, closeSnap.gammaFlip),
+    };
+  }
+  const high = pxs.length ? round(Math.max(...pxs)) : null;
+  const low = pxs.length ? round(Math.min(...pxs)) : null;
+  const closeSide = sideOf(lastPx, openSnap.putWall, openSnap.callWall);
+  out.price = compact
+    ? { [inProgress ? 'last' : 'close']: round(lastPx), high, low, closeVsOpeningWalls: closeSide }
+    : {
+      firstPrint: round(firstPx),
+      [inProgress ? 'last' : 'close']: round(lastPx),
+      high,
+      low,
+      closeVsOpeningWalls: closeSide,
+      samples: pxs.length,
+    };
+
+  const moves = log.filter((r) => Number(r.slot) > 0 && r.reason === 'change' && HIST_LEVELS[r.level_type]);
+  out.wallMoves = moves.length;
+  // Everything the multi-session summary needs, whatever `at` trimmed above.
+  const raw = {
+    date: day.date, inProgress, open: openSnap, close: closeSnap,
+    closeSpot: round(lastPx), high, low, closeSide, wallMoves: moves.length,
+  };
+  if (withMoves) {
+    out.moves = moves.slice(0, MAX_MOVES).map((r) => ({
+      at: r.at || null,
+      level: HIST_LEVELS[r.level_type],
+      from: nn(r.prev_strike),
+      to: nn(r.strike),
+      spot: nn(r.spot),
+    }));
+    if (moves.length > MAX_MOVES) out.movesTruncated = moves.length - MAX_MOVES;
+  }
+
+  if (withTouches) {
+    try {
+      const d = await cached(`hist:events:${ticker}:${day.date}:${scope}`, histTtl(day.date),
+        () => fetchJson(ctx, `/proxy/walls?date=${day.date}&symbol=${encodeURIComponent(ticker)}&scope=${scope}&basis=oivol`));
+      const evs = (Array.isArray(d?.events) ? d.events : [])
+        .filter((e) => e.kind === 'touch' || e.reaction === 'rolled_over');
+      out.touches = evs.slice(0, MAX_MOVES).map((e) => ({
+        at: e.at || null,
+        level: HIST_LEVELS[e.level_type] || e.level_type,
+        strike: nn(e.strike),
+        kind: e.kind || 'touch',
+        reaction: e.reaction || 'unresolved',
+        meaning: REACTION_TEXT[e.reaction] || (e.reaction ? e.reaction : 'still being scored'),
+        note: e.note || null,
+        attemptsAtThisLevel: nn(e.attempts, 0),
+      }));
+    } catch { out.touches = null; }
+  }
+  return { out, raw };
+}
+
+/** Promise.all with at most `limit` in flight, results in input order. */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i); // eslint-disable-line no-await-in-loop
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+/** avg / median / min / max over the non-null values, or null if there are none. */
+function stats(values, dp = 2) {
+  const v = values.filter((x) => x != null && Number.isFinite(x)).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const mid = Math.floor(v.length / 2);
+  return {
+    avg: round(v.reduce((a, b) => a + b, 0) / v.length, dp),
+    median: round(v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2, dp),
+    min: round(v[0], dp),
+    max: round(v[v.length - 1], dp),
+    n: v.length,
+  };
+}
+
+const HIST_FIELDS = ['callWall', 'putWall', 'core', 'gammaFlip'];
+
+/** The levels at one end of the session, across sessions: where they sat, and
+ *  where they sat RELATIVE TO SPOT — the comparable number when price drifts. */
+function endStats(snaps, spotOf) {
+  const level = {};
+  const fromSpot = {};
+  for (const f of HIST_FIELDS) {
+    level[f] = stats(snaps.map((s) => s.snap[f]));
+    fromSpot[f] = stats(snaps.map((s) => {
+      const px = spotOf(s);
+      return s.snap[f] == null || px == null ? null : s.snap[f] - px;
+    }));
+  }
+  const count = (pred) => snaps.filter(pred).length;
+  const withFlip = snaps.filter((s) => s.snap.gammaFlip != null && spotOf(s) != null);
+  return {
+    sessions: snaps.length,
+    spot: stats(snaps.map(spotOf)),
+    levels: level,
+    pointsFromSpot: fromSpot,
+    wallWidth: stats(snaps.map((s) => (s.snap.callWall == null || s.snap.putWall == null ? null : s.snap.callWall - s.snap.putWall))),
+    spotAboveFlip: withFlip.length ? { sessions: count((s) => withFlip.includes(s) && spotOf(s) > s.snap.gammaFlip), of: withFlip.length } : null,
+    coreAboveSpot: { sessions: count((s) => s.snap.core != null && spotOf(s) != null && s.snap.core > spotOf(s)), of: count((s) => s.snap.core != null && spotOf(s) != null) },
+  };
+}
+
+/** The multi-session read: averages, distances from spot, open→close drift, and
+ *  how the close sat against the opening walls. Computed here, not by the model. */
+function summarize(raws, at) {
+  const done = raws.filter((r) => !r.inProgress);
+  const out = {
+    sessions: raws.length,
+    from: raws[raws.length - 1]?.date ?? null,
+    to: raws[0]?.date ?? null,
+  };
+  if (at !== 'close') out.open = endStats(raws.map((r) => ({ snap: r.open })), (s) => s.snap.spot ?? null);
+  if (at !== 'open') {
+    out.close = endStats(done.map((r) => ({ snap: r.close, px: r.closeSpot ?? r.close.spot })), (s) => s.px ?? null);
+  }
+  if (at === 'both') {
+    const drift = {};
+    for (const f of HIST_FIELDS) {
+      const d = done.map((r) => (r.open[f] == null || r.close[f] == null ? null : r.close[f] - r.open[f])).filter((x) => x != null);
+      drift[f] = d.length ? {
+        avgChange: round(d.reduce((a, b) => a + b, 0) / d.length),
+        avgAbsChange: round(d.reduce((a, b) => a + Math.abs(b), 0) / d.length),
+        rose: d.filter((x) => x > 0).length,
+        fell: d.filter((x) => x < 0).length,
+        unchanged: d.filter((x) => x === 0).length,
+      } : null;
+    }
+    out.openToClose = drift;
+    const sides = done.map((r) => r.closeSide).filter(Boolean);
+    const inside = sides.filter((x) => x === 'inside the walls').length;
+    out.closeVsOpeningWalls = sides.length ? {
+      inside,
+      aboveCallWall: sides.filter((x) => x === 'above the call wall').length,
+      belowPutWall: sides.filter((x) => x === 'below the put wall').length,
+      insidePct: round((inside / sides.length) * 100, 1),
+      of: sides.length,
+    } : null;
+    out.sessionRange = stats(done.map((r) => (r.high == null || r.low == null ? null : r.high - r.low)));
+  }
+  out.wallMovesPerSession = stats(raws.map((r) => r.wallMoves), 1);
+  if (raws.length !== done.length) out.note = 'Today is still trading: it counts toward the open figures only.';
+  return out;
 }
 
 // ── Tools ───────────────────────────────────────────────────────────────────
@@ -346,6 +665,109 @@ const TOOLS = [
         note: band.sessionDate === date
           ? 'Previous close ± the front-expiry ATM straddle, frozen at the first read of the session.'
           : `Nothing recorded for ${date} yet; this is the most recent earlier session (${band.sessionDate}).`,
+      };
+    },
+  },
+  {
+    name: 'gex_levels_history',
+    title: 'Historical GEX levels (open & close)',
+    description:
+      'Past sessions\' gamma levels for SPX or any ticker in the CB Edge scanner (~170 names): call wall, '
+      + 'put wall, CORE (the strike with the largest absolute net GEX) and gamma flip AT THE OPEN (09:29 ET, '
+      + 'captured just before the bell) and AT THE CLOSE (16:00 ET), with spot, the session high/low, '
+      + 'where the close landed against the opening walls, how the walls moved during the day, and — for a '
+      + 'single session — every touch of a level and whether it rejected or broke. Over several sessions (up to '
+      + `${MAX_SESSIONS}) it also returns a computed SUMMARY: average / median / min / max of each opening and `
+      + 'closing level, how far each sat from spot on average (the comparable number when price drifts), the '
+      + 'average open→close change, how often the close finished inside / above / below the opening walls, '
+      + 'how often spot opened above the flip, and wall moves per session. Quote the summary\'s numbers rather '
+      + 'than averaging the rows yourself. Use for "where were the SPX walls at the open on Sept 12?", '
+      + '"average opening levels over the last 5 days", "how often did SPX close inside the opening walls this '
+      + 'month?". For TODAY\'s live levels use spx_gamma_levels instead.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticker: { type: 'string', default: 'SPX', description: 'Ticker symbol, e.g. SPX, SPY, QQQ, NVDA.' },
+        date: {
+          type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+          description: 'Session date (YYYY-MM-DD, ET). With sessions > 1 this is the LAST session of the run. '
+            + 'Defaults to the most recent session. A weekend or holiday returns the session before it.',
+        },
+        sessions: {
+          type: 'integer', minimum: 1, maximum: MAX_SESSIONS, default: 1,
+          description: `How many recorded sessions, ending at date (1–${MAX_SESSIONS}; about 21 is a month). `
+            + `Over ${FULL_ROWS_MAX} the per-session rows come back compact.`,
+        },
+        at: {
+          type: 'string', enum: ['open', 'close', 'both'], default: 'both',
+          description: 'Opening levels, closing levels, or both (with the open→close change).',
+        },
+        scope: {
+          type: 'string', enum: ['nearest', 'all_other'], default: 'nearest',
+          description: 'nearest = the nearest expiry (0DTE for SPX; the board default). '
+            + 'all_other = every other listed expiry summed, the structural levels behind the day\'s.',
+        },
+        include_moves: {
+          type: 'boolean',
+          description: 'List each wall move (time, from → to). Default: on for one session, off for several.',
+        },
+        summary_only: {
+          type: 'boolean',
+          description: 'Return just the multi-session summary, without the per-session rows. Default false.',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(ctx, args) {
+      const ticker = cleanTicker(args.ticker, 'SPX');
+      if (!ticker) throw new ToolError('That ticker does not look valid.');
+      const today = etDate();
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(String(args.date || '')) ? args.date : today;
+      if (date > today) throw new ToolError(`${date} has not happened yet — history runs up to today (${today}).`);
+      const sessions = Math.max(1, Math.min(MAX_SESSIONS, Math.floor(num(args.sessions) || 1)));
+      const at = ['open', 'close', 'both'].includes(args.at) ? args.at : 'both';
+      const scopeName = args.scope === 'all_other' ? 'all_other' : 'nearest';
+      const scope = HIST_SCOPES[scopeName];
+      const compact = sessions > FULL_ROWS_MAX;
+      const withMoves = !compact && (typeof args.include_moves === 'boolean' ? args.include_moves : sessions === 1);
+      const summaryOnly = args.summary_only === true;
+
+      const range = await cached(`hist:range:${ticker}:${date}:${sessions}:${scope}`, histTtl(date),
+        () => fetchJson(ctx, `/api/walls-range?symbol=${encodeURIComponent(ticker)}&days=${sessions}&end=${date}&scope=${scope}&basis=oivol`));
+      // walls-range falls back to SPX for a symbol it cannot parse — never pass that off as the ticker asked for.
+      const days = range?.symbol === ticker && Array.isArray(range?.days) ? range.days : [];
+      if (!days.length) {
+        return {
+          ticker, requestedDate: date, available: false,
+          note: `CB Edge has no recorded levels for ${ticker} on or before ${date}. `
+            + 'History covers the scanner universe (SPX, SPY, QQQ, NDX and ~165 stocks/ETFs) from when each was added.',
+        };
+      }
+      const ordered = [...days].sort((a, b) => (a.date < b.date ? 1 : -1)); // newest first
+      const built = await mapLimit(ordered, SERIES_CONCURRENCY, (day) => buildSession(ctx, ticker, day, scope, {
+        at, withMoves, withTouches: sessions === 1, compact,
+      }));
+      const newest = ordered[0].date;
+      const multi = built.length > 1;
+      return {
+        ticker,
+        scope: scopeName === 'nearest' ? 'nearest expiry (0DTE for SPX)' : 'all other expiries summed',
+        basis: 'net GEX on open interest + that session\'s volume (calls +, puts −)',
+        requestedDate: date,
+        available: true,
+        isRequestedSession: newest === date,
+        sessionsRequested: sessions,
+        sessionsFound: built.length,
+        ...(multi ? { summary: summarize(built.map((b) => b.raw), at) } : {}),
+        ...(summaryOnly && multi ? {} : { sessions: built.map((b) => b.out) }),
+        notes: [
+          newest === date ? null : `No recorded session on ${date} (weekend, holiday, or not recorded); the most recent earlier session is ${newest}.`,
+          built.length < sessions ? `Only ${built.length} recorded session${built.length === 1 ? '' : 's'} on or before ${date} for ${ticker}.` : null,
+          multi ? 'summary.*.pointsFromSpot = level minus spot at that moment (positive = above price), averaged across sessions.' : null,
+          'Open = the levels captured at 09:29 ET, before the bell (open interest settled overnight, no volume yet). '
+            + 'Close = the levels standing at 16:00 ET. Times are ET.',
+          'High/low and prices come from the 1–5 minute samples the levels were taken from, not tick data.',
+        ].filter(Boolean),
       };
     },
   },
