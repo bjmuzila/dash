@@ -78,8 +78,51 @@ const fmtTime = (ms: number) =>
   new Intl.DateTimeFormat('en-US', { timeZone: ET, hour: 'numeric', minute: '2-digit', hour12: true })
     .format(new Date(ms))
 
+const fmtPct = (p: number) => `${p >= 0 ? '+' : '−'}${Math.abs(p).toFixed(1)}%`
+const fmtSignedUsd = (v: number) => `${v >= 0 ? '+' : '−'}${fmtPremium(Math.abs(v))}`
+const inkOf = (p: number | null) => (p == null ? 'text-fg' : p > 0 ? 'text-up' : p < 0 ? 'text-down' : 'text-fg')
+
+// ── ENTRY / NOW / HIGH (2026-10-02, Brandon) ─────────────────────────────────
+// Three prices, each with what it is worth in dollars underneath: the price ×
+// the print's contracts × 100. A lookup has no print size, so its dollars are
+// per ONE contract and say so with "/ct" — a bare "$247" beside a "$2.70M"
+// would read as a position nobody holds. NOW and HIGH also carry their move off
+// the entry, % up top and $ P/L beside the value, which is what the old MOVE
+// column said on its own.
+
+/** Price on top; its dollar value (and P/L off the entry) underneath. */
+function PriceCell({ price, pct, value, pl, unit, title }: {
+  /** undefined = bars still loading; null = loaded, nothing there. */
+  price: number | null | undefined
+  pct?: number | null
+  value: number | null
+  pl?: number | null
+  unit: string
+  title?: string
+}) {
+  const ink = inkOf(pct ?? null)
+  return (
+    <td className="tabular whitespace-nowrap px-2 py-1.5 text-right" title={title}>
+      <div>
+        <span className="font-semibold text-fg">
+          {price === undefined ? '…' : price == null ? '—' : price.toFixed(2)}
+        </span>
+        {pct != null && (
+          <span className={['ml-1.5 text-2xs font-semibold', ink].join(' ')}>{fmtPct(pct)}</span>
+        )}
+      </div>
+      {value != null && (
+        <div className="text-3xs text-fg">
+          {fmtPremium(value)}{unit}
+          {pl != null && <span className={['ml-1', ink].join(' ')}>{fmtSignedUsd(pl)}</span>}
+        </div>
+      )}
+    </td>
+  )
+}
+
 export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
-  const { alerts, marks, loading, ready, unavailable, error } = store
+  const { alerts, marks, highs, loading, ready, unavailable, error } = store
   const [groupBy, setGroupBy] = useState<GroupBy>('tracked')
   const [openId, setOpenId] = useState<number | null>(null)
 
@@ -164,9 +207,9 @@ export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
                 <th className="w-6 px-1 py-2" />
                 <th className="px-2 py-2 text-left font-bold">Contract</th>
                 <th className="px-2 py-2 text-left font-bold">Expiry</th>
-                <th className="px-2 py-2 text-right font-bold">Entry</th>
-                <th className="px-2 py-2 text-right font-bold">Mark</th>
-                <th className="px-2 py-2 text-right font-bold">Move</th>
+                <th className="px-2 py-2 text-right font-bold" title="The fill, and what it cost — price × contracts × 100">Entry</th>
+                <th className="px-2 py-2 text-right font-bold" title="The last mark, what the position is worth at it, and the P/L off the entry">Now</th>
+                <th className="px-2 py-2 text-right font-bold" title="The best mark since the print (since tracking, for a lookup), what it was worth there, and the P/L off the entry">High</th>
                 <th className="min-w-[180px] px-2 py-2 text-left font-bold">Note</th>
                 <th className="px-2 py-2 text-right font-bold">Tracked</th>
                 <th className="w-7 px-1 py-2" />
@@ -189,6 +232,7 @@ export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
                       key={a.id}
                       a={a}
                       mark={marks.get(a.id)}
+                      high={highs.get(a.id)}
                       open={openId === a.id}
                       onToggle={() => setOpenId((id) => (id === a.id ? null : a.id))}
                       store={store}
@@ -204,10 +248,12 @@ export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
   )
 }
 
-function AlertRow({ a, mark, open, onToggle, store }: {
+function AlertRow({ a, mark, high, open, onToggle, store }: {
   a: WhaleAlert
   /** undefined = not fetched yet, null = fetched and the contract has no bars. */
   mark: number | null | undefined
+  /** Best mark since the print / since tracking. Same undefined/null rules as `mark`. */
+  high: number | null | undefined
   open: boolean
   onToggle: () => void
   store: AlertsStore
@@ -217,11 +263,20 @@ function AlertRow({ a, mark, open, onToggle, store }: {
   const days = dte(a.expiry)
 
   const entry = a.entryPrice
-  const pct = entry != null && entry > 0 && mark != null ? ((mark - entry) / entry) * 100 : null
-  const dollars = entry != null && mark != null && a.printSize
-    ? (mark - entry) * a.printSize * 100
-    : null
-  const ink = pct == null ? 'text-fg' : pct > 0 ? 'text-up' : pct < 0 ? 'text-down' : 'text-fg'
+  // Contracts behind the dollars: the print's size, or ONE for a lookup.
+  const size = a.printSize && a.printSize > 0 ? a.printSize : null
+  const qty = size ?? 1
+  const unit = size == null ? '/ct' : ''
+  const usd = (p: number | null | undefined) => (p == null ? null : p * qty * 100)
+  const pctOf = (p: number | null | undefined) =>
+    entry != null && entry > 0 && p != null ? ((p - entry) / entry) * 100 : null
+  const plOf = (p: number | null | undefined) => (entry != null && p != null ? (p - entry) * qty * 100 : null)
+
+  const pct = pctOf(mark)
+  const dollars = plOf(mark)
+  const hiPct = pctOf(high)
+  const hiDollars = plOf(high)
+  const ink = inkOf(pct)
 
   // What the pop-out's trade card says about this row — see ProbeAlertInfo.
   const alertInfo = useMemo<ProbeAlertInfo>(() => {
@@ -249,20 +304,35 @@ function AlertRow({ a, mark, open, onToggle, store }: {
       items: [
         { k: 'Contract', v: `${a.underlying} ${fmtStrike(a.strike)}${a.optType}`, sub: a.source === 'whale' ? 'from print' : 'from lookup' },
         { k: 'Expiry', v: fmtExpiry(a.expiry), sub: days != null ? `${days}d to expiry` : undefined, ink: days != null && days <= 2 ? 'text-warn' : undefined },
-        { k: 'Entry', v: entry?.toFixed(2) ?? '—', sub: a.printTs ? `printed ${fmtWhen(a.printTs)}` : undefined },
-        { k: 'Mark', v: mark == null ? '—' : mark.toFixed(2) },
+        {
+          k: 'Entry',
+          v: entry?.toFixed(2) ?? '—',
+          sub: entry != null ? `${fmtPremium(usd(entry)!)}${unit}` : a.printTs ? `printed ${fmtWhen(a.printTs)}` : undefined,
+        },
+        {
+          k: 'Now',
+          v: mark == null ? '—' : mark.toFixed(2),
+          sub: mark != null ? `${fmtPremium(usd(mark)!)}${unit}${pct != null ? ` · ${fmtPct(pct)}` : ''}` : undefined,
+          ink,
+        },
+        {
+          k: 'High',
+          v: high == null ? '—' : high.toFixed(2),
+          sub: high != null ? `${fmtPremium(usd(high)!)}${unit}${hiPct != null ? ` · ${fmtPct(hiPct)}` : ''}` : undefined,
+          ink: inkOf(hiPct),
+        },
         {
           k: 'Move',
-          v: pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`,
-          sub: dollars != null ? `${dollars >= 0 ? '+' : '−'}${fmtPremium(Math.abs(dollars))}` : undefined,
+          v: pct == null ? '—' : fmtPct(pct),
+          sub: dollars != null ? `${fmtSignedUsd(dollars)}${unit}` : undefined,
           ink,
         },
         { k: 'Size', v: a.printSize ? `${a.printSize.toLocaleString()} ct` : '—' },
-        { k: 'Premium', v: a.printPremium ? fmtPremium(a.printPremium) : '—' },
         { k: 'Tracked', v: fmtWhen(a.createdAt) },
       ],
     }
-  }, [a, days, entry, mark, pct, dollars, ink])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [a, days, entry, mark, high, pct, hiPct, dollars, ink, unit, qty])
 
   const commitNote = () => {
     if (draft == null) return
@@ -309,18 +379,21 @@ function AlertRow({ a, mark, open, onToggle, store }: {
             {days != null ? ` ${days}d` : ''}
           </span>
         </td>
-        <td className="tabular px-2 py-1.5 text-right text-fg">{entry?.toFixed(2) ?? '—'}</td>
-        <td className="tabular px-2 py-1.5 text-right text-fg">
-          {mark === undefined ? <span className="text-fg">…</span> : mark?.toFixed(2) ?? '—'}
-        </td>
-        <td className={['tabular px-2 py-1.5 text-right font-semibold', ink].join(' ')}>
-          {pct == null ? '—' : `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`}
-          {dollars != null && (
-            <div className="text-3xs font-normal">
-              {dollars >= 0 ? '+' : '−'}{fmtPremium(Math.abs(dollars))}
-            </div>
-          )}
-        </td>
+        <PriceCell
+          price={entry}
+          value={usd(entry)}
+          unit={unit}
+          title={size == null ? 'Per one contract — a lookup has no print size' : `${size.toLocaleString()} ct × ${entry?.toFixed(2) ?? '—'} × 100`}
+        />
+        <PriceCell price={mark} pct={pct} value={usd(mark)} pl={dollars} unit={unit} />
+        <PriceCell
+          price={high}
+          pct={hiPct}
+          value={usd(high)}
+          pl={hiDollars}
+          unit={unit}
+          title={a.printTs ? 'Best mark since the print' : 'Best mark since you tracked it'}
+        />
         <td className="px-2 py-1.5">
           {/* An input that is always an input reads as a form. This is a note
               you write once and glance at for weeks, so it renders as text and

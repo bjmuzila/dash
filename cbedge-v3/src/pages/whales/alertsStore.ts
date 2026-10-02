@@ -113,6 +113,31 @@ function keyOf(a: WhaleAlert): ProbeKey {
   }
 }
 
+/**
+ * The moment the HIGH is measured from: the print for a whale row, the minute
+ * you pressed TRACK for a lookup (a lookup has a cost basis but no fill time,
+ * and "since I flagged it" is the only since it has).
+ */
+const sinceOf = (a: WhaleAlert) => a.printTs ?? a.createdAt
+
+/**
+ * The best mark from the bar that CONTAINS `since` to the last bar — same
+ * slicing the prints table's HIGH column does, so the two never disagree.
+ */
+function highSince(bars: Bar[], since: number): number | null {
+  let first = 0
+  for (let j = 0; j < bars.length; j++) {
+    if (bars[j]!.time <= since) first = j
+    else break
+  }
+  let hi = 0
+  for (let j = first; j < bars.length; j++) {
+    const h = bars[j]!.high
+    if (Number.isFinite(h) && h > hi) hi = h
+  }
+  return hi > 0 ? hi : null
+}
+
 /** Identity for de-duping in the UI — the same four fields the table is unique on. */
 export const contractKey = (a: Pick<WhaleAlert, 'underlying' | 'strike' | 'optType' | 'expiry'>) =>
   `${a.underlying}|${a.strike}|${a.optType}|${a.expiry}`
@@ -121,6 +146,8 @@ export interface AlertsStore {
   alerts: WhaleAlert[]
   /** Last mark per alert id. Absent = not fetched yet; null = fetched, nothing there. */
   marks: Map<number, number | null>
+  /** Best mark since the print (or since tracking, for a lookup). Same absent/null rules as `marks`. */
+  highs: Map<number, number | null>
   loading: boolean
   /** Set when the list itself could not be read. A failed WRITE surfaces on the row. */
   error: string | null
@@ -138,6 +165,7 @@ export interface AlertsStore {
 export function useWhaleAlerts(): AlertsStore {
   const [alerts, setAlerts] = useState<WhaleAlert[]>([])
   const [marks, setMarks] = useState<Map<number, number | null>>(new Map())
+  const [highs, setHighs] = useState<Map<number, number | null>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
@@ -187,11 +215,26 @@ export function useWhaleAlerts(): AlertsStore {
       while (on && i < todo.length) {
         const a = todo[i++]!
         try {
-          const bars = await loadProbeBars(keyOf(a), 0, ctrl.signal)
+          // Read from the HIGH's own start, so a lookup tracked last week has
+          // last week's bars to find its high in — `keyOf` anchors a lookup to
+          // now, which would only ever see today. The last close is the mark
+          // either way.
+          const since = sinceOf(a)
+          const bars = await loadProbeBars({ ...keyOf(a), ts: since }, 0, ctrl.signal)
           const last = bars.length ? bars[bars.length - 1]!.close : null
-          if (on) setMarks((m) => new Map(m).set(a.id, last))
+          const hiBars = highSince(bars, since)
+          // A last close above every recorded bar high is a feed seam, not a
+          // new high nobody saw — but it IS the best mark, so it wins.
+          const hi = hiBars == null ? last : last == null ? hiBars : Math.max(hiBars, last)
+          if (on) {
+            setHighs((m) => new Map(m).set(a.id, hi))
+            setMarks((m) => new Map(m).set(a.id, last))
+          }
         } catch {
-          if (on) setMarks((m) => new Map(m).set(a.id, null))
+          if (on) {
+            setHighs((m) => new Map(m).set(a.id, null))
+            setMarks((m) => new Map(m).set(a.id, null))
+          }
         }
       }
     }
@@ -285,7 +328,7 @@ export function useWhaleAlerts(): AlertsStore {
   }, [alerts, patch])
 
   return {
-    alerts, marks, loading, error, ready, unavailable,
+    alerts, marks, highs, loading, error, ready, unavailable,
     track, remove, setNote, resnapshot,
     reload: () => setNonce((n) => n + 1),
   }

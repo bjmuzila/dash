@@ -25217,3 +25217,35 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `budget-vite/src/pages/Lists.tsx` (Import meals sheet): a line that is only a link no longer gets dropped. Those lines wait under "N links need a name → Look up names", which asks the server in chunks of 50 with a progress bar; each video's caption becomes the meal name and its category is guessed. Liked videos aren't all food, so captions that don't read like food are held back ("not food?") unless "Include N that don't look like food" is ticked. Videos already in My meals show as "already there".
 - `server-v2/_lib-household-lists.cjs`: `previewLink` now runs on a shared `resolveOne()`. It understands TikTok data-export links (`www.tiktokv.com/share/video/<id>/`): it asks oEmbed for `www.tiktok.com/@/video/<id>` first and stores the canonical `/@user/video/<id>` link. New `resolveLinks()` (≤60 links per call, 4 at a time) returns name, category, a caption-based `food` flag and `exists` (matched by video id). `importLibraryMeals()` now also skips a video already in the list under a different name.
 - `server-v2/household-routes.cjs`: `/api/hh/lists` action `resolveLinks`. `budget-vite/src/api.ts`: `lists.resolveLinks`, `ResolvedLink`.
+
+## 2026-10-02 - Voltick PR #33: Path's newest bubble stays in front of the live candle
+
+- Nick asked whether it was intended that the Ribbon's newest dot stays in front of the live candle while Path's newest bubble goes behind it. Brandon's answer was "both in front".
+- **What changed.** In `web/src/HeatChart.jsx`, the Path branch of `NodeTrails` takes the newest bubble out of each row and paints it in the `_front` pass, which runs after the candles. It uses the same `paintRow` code, so the glow, fill, stroke and highlight are unchanged. The older bubbles still paint behind the candles.
+- **Tests.** `server/test/path-and-path-ribbon-sit-behind-the-candles.test.js` gains 3 tests and now passes 7/7. All 4 mutations were caught. The Path test set has no new failures.
+- **How it ships.** Commit it on top of `path-behind-candles` so it updates PR #33, before Nick merges.
+- **File in `generated/`:** `2026-10-02-voltick-pr33-newest-bubble-in-front.patch`
+
+## 2026-10-02 - Voltick PR #32 (OI+VOL, DEX, PREM): Nick's second review
+
+- **Blocker 1: tapping DEX reset the picked date.** In `web/src/Voltick.jsx`, the scope-default effect's deps changed from `effLens` to `effLens === "PREM"`. Only PREM changes what that effect decides.
+- **Blocker 2: captures said "weighted by today's volume" on every view.** The new `captureBasis()` in `web/src/boardviews.js` gives OI+VOL, DEX and PREM each their own line. VOLUME keeps its old sentence.
+- **Small items:**
+  - The desktop rail's lens and source pickers now hold until a board width of 1800px (`slimRail`). The pills had wrapped between about 1650 and 1705px.
+  - The FAQ's phone sentence is corrected. On a phone the lens is one picker, but the sources are still pills.
+  - Two stale comments are fixed.
+  - The public `admin-site/admin.js` no longer has a teammate's name in `PRIO_LEADS`, and its comment no longer quotes internal work.
+- **Tests.** The new `server/test/a-lens-tap-keeps-the-date-and-a-capture-names-its-own-map.test.js` passes 9/9.
+  - It lifts the real effect and runs it under a small hooks stand-in.
+  - It catches 6 of 6 mutations.
+  - `volume-index-0dte.test.js` pinned the old deps, so it now points at the new ones.
+  - Full `npm test` (11,564 tests) fails the same set of tests as the PR #32 baseline, with nothing new.
+  - The web build, `check:undef`, `check:jsx` and `check:props` are clean.
+- **Not done yet.** The "four lines covered only by source pins" are in Nick's note, and the note link isn't shared with Brandon's account.
+- **How it ships.** Commit it on `bzilabranch`. After Nick's 4pm push, rebase onto main, re-run the suite, then push.
+- **File in `generated/`:** `2026-10-02-voltick-pr32-review-round-two.patch`
+
+## 2026-10-02 - v3 Tracked contracts: Entry / Now / High, each with its $
+
+- `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`: the Mark and Move columns are replaced by **Now** and **High**. Entry, Now and High each show the price on top and the dollar value under it (price × print contracts × 100). Now and High also show the % move off the entry and the $ P/L, colored up/down. A lookup has no print size, so its dollars are per one contract and marked "/ct". The pop-out trade card tiles follow: Entry ($ cost), Now, High, Move, Size, Tracked (Premium tile dropped, since Entry's $ is the same number).
+- `cbedge-v3/src/pages/whales/alertsStore.ts`: new `highs` map. It comes from the same bars the mark already reads, so there are no extra requests. The high is the best bar high from the bar containing the print (or the moment you tracked it, for a lookup) to the last bar, the same slicing as the prints table's HIGH column. Lookups now read bars from their tracked day instead of only today, so their high covers the whole time they've been tracked.
