@@ -160,22 +160,27 @@ function resourceOk(resource, origin) {
 // Gemini registers by DCR like ChatGPT, but its callback is Google's shared
 // OAuth relay, not a gemini.google.com URL:
 //
-//   https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-<id>-<our host>
+//   https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-<id>-<our host, dots → _>
+//   e.g. …/r/user_bound_custom-mcp-116109532806053202916-www_cbedge_net
+//
+// One DCR request carries SIX of these, spread over Google's relay hosts
+// (oauth-redirect, oauth-redirect-sandbox, … — all oauth-redirect*.google
+// usercontent.com), and Gemini gives up on the whole connection — "The Google
+// redirect URL was rejected by the server" — if the registration is refused.
+// So every oauth-redirect*.googleusercontent.com host is accepted rather than
+// a hand-picked list, and handleRegister keeps the callbacks it accepts
+// instead of failing the lot over one it does not.
 //
 // That relay serves EVERY Google Cloud project at /r/<project-id>, so allowing
 // the host alone would let any project on Earth register as a "client" and
 // collect a customer's code. The PATH is what makes it Gemini's: a Cloud
 // project id cannot contain an underscore, so no project can own
-// /r/user_bound_… . The sandbox/test relays are Google's own staging copies of
-// the same thing, held to the same path rule.
-const GEMINI_RELAY_HOSTS = new Set([
-  'oauth-redirect.googleusercontent.com',
-  'oauth-redirect-sandbox.googleusercontent.com',
-  'oauth-redirect-test.googleusercontent.com',
-]);
-const GEMINI_RELAY_PATH = /^\/r\/user_bound_custom-mcp-[A-Za-z0-9._-]+$/;
+// /r/user_bound_… . Every relay host is held to that same path rule.
+const GEMINI_RELAY_HOST = /^oauth-redirect(?:-[a-z0-9]+)*\.googleusercontent\.com$/;
+const GEMINI_RELAY_PATH = /^\/r\/user_bound_[A-Za-z0-9._~-]+$/;
 const isGeminiRelay = (u) => process.env.MCP_ALLOW_GEMINI !== '0'
-  && u.protocol === 'https:' && GEMINI_RELAY_HOSTS.has(u.hostname.toLowerCase()) && GEMINI_RELAY_PATH.test(u.pathname);
+  && u.protocol === 'https:' && !u.port && GEMINI_RELAY_HOST.test(u.hostname.toLowerCase())
+  && GEMINI_RELAY_PATH.test(u.pathname);
 
 /** Registered redirect URIs: https on an EXACT allowlisted AI-client host
  *  (ChatGPT: /connector_platform_oauth_redirect or /connector/oauth/{id};
@@ -436,6 +441,17 @@ async function authenticateClient(req, body) {
   return client;
 }
 
+/** What a registration asked for, for the refusal log: the standard fields
+ *  verbatim, anything else (software statements, jwks, …) by key name only. */
+const SHAPE_FIELDS = ['redirect_uris', 'token_endpoint_auth_method', 'grant_types', 'response_types', 'scope', 'application_type'];
+function registrationShape(body) {
+  const out = {};
+  for (const k of SHAPE_FIELDS) if (k in body) out[k] = body[k];
+  const other = Object.keys(body).filter((k) => !SHAPE_FIELDS.includes(k) && k !== 'client_name');
+  if (other.length) out.other_keys = other.slice(0, 30);
+  return out;
+}
+
 async function handleRegister(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return; }
@@ -449,39 +465,57 @@ async function handleRegister(req, res) {
     return oauthError(res, 400, 'invalid_client_metadata', 'Body must be a JSON object.');
   }
 
-  const uris = body.redirect_uris;
-  if (!Array.isArray(uris) || !uris.length || uris.length > 10 || !uris.every((u) => typeof u === 'string' && u.length <= 500)) {
-    return oauthError(res, 400, 'invalid_redirect_uri', 'redirect_uris must be a non-empty array of URLs.');
+  const name = String(body.client_name || '').replace(/[\u0000-\u001f]/g, '').slice(0, 100) || null;
+  // Every refusal is logged with what the client actually sent, so the next
+  // "the server rejected it" from some AI app is one `docker logs` away from a
+  // fix. Redirect URIs and metadata are not secrets; nothing else is logged.
+  const reject = (code, message) => {
+    console.warn(`[mcp-oauth] registration refused (${code}: ${message}) client="${name || '(unnamed)'}" ip=${key}`
+      + ` meta=${JSON.stringify(registrationShape(body)).slice(0, 4000)}`);
+    return oauthError(res, 400, code, message);
+  };
+
+  const sent = body.redirect_uris;
+  if (!Array.isArray(sent) || !sent.length || sent.length > 20 || !sent.every((u) => typeof u === 'string' && u.length <= 500)) {
+    return reject('invalid_redirect_uri', 'redirect_uris must be a non-empty array of URLs.');
   }
-  const bad = uris.find((u) => !redirectAllowed(u));
-  if (bad) return oauthError(res, 400, 'invalid_redirect_uri', `Redirect URI not allowed: ${bad.slice(0, 200)}`);
+  // RFC 7591 §2 lets the server trim what a client asks for. A client that
+  // registers several callbacks gets the ones on the allowlist; any it
+  // listed that are not, it simply cannot use. Only a request with no
+  // acceptable callback at all is refused.
+  const uris = [...new Set(sent.filter((u) => redirectAllowed(u)))];
+  const dropped = sent.filter((u) => !redirectAllowed(u));
+  if (!uris.length) return reject('invalid_redirect_uri', `Redirect URI not allowed: ${String(sent[0]).slice(0, 200)}`);
 
   // RFC 7591's default is client_secret_basic, but MCP clients are public PKCE
   // clients and nearly always send 'none' explicitly. Omitted → 'none', and the
-  // response says so, so the client knows not to expect a secret.
+  // response says so, so the client knows not to expect a secret. Gemini sends
+  // client_secret_basic and gets a secret.
   const method = body.token_endpoint_auth_method || 'none';
   if (!['none', 'client_secret_post', 'client_secret_basic'].includes(method)) {
-    return oauthError(res, 400, 'invalid_client_metadata', 'Unsupported token_endpoint_auth_method.');
+    return reject('invalid_client_metadata', 'Unsupported token_endpoint_auth_method.');
   }
+  // Grant and response types are likewise trimmed to what this server does,
+  // as long as the authorization-code flow is among what was asked for.
   const gt = body.grant_types;
-  if (gt != null && (!Array.isArray(gt) || gt.some((g) => !['authorization_code', 'refresh_token'].includes(g)))) {
-    return oauthError(res, 400, 'invalid_client_metadata', 'Only authorization_code and refresh_token grants are supported.');
+  if (gt != null && (!Array.isArray(gt) || !gt.includes('authorization_code'))) {
+    return reject('invalid_client_metadata', 'The authorization_code grant is required.');
   }
   const rt = body.response_types;
-  if (rt != null && (!Array.isArray(rt) || rt.some((t) => t !== 'code'))) {
-    return oauthError(res, 400, 'invalid_client_metadata', 'Only the "code" response type is supported.');
+  if (rt != null && (!Array.isArray(rt) || !rt.includes('code'))) {
+    return reject('invalid_client_metadata', 'The "code" response type is required.');
   }
 
   const clientId = randomToken(PREFIX.client);
   const secret = method === 'none' ? null : randomToken(PREFIX.secret);
-  const name = String(body.client_name || '').replace(/[\u0000-\u001f]/g, '').slice(0, 100) || null;
   await q(
     `INSERT INTO mcp_oauth_clients
        (client_id, client_secret_hash, client_name, redirect_uris, token_endpoint_auth_method, created_ip)
      VALUES ($1, $2, $3, $4::jsonb, $5, $6)`,
     [clientId, secret ? sha256(secret) : null, name, JSON.stringify(uris), method, key],
   );
-  console.log(`[mcp-oauth] registered client "${name || '(unnamed)'}" → ${uris.map((u) => new URL(u).host).join(', ')}`);
+  console.log(`[mcp-oauth] registered client "${name || '(unnamed)'}" (${method}) → ${uris.map((u) => u.slice(0, 200)).join(' , ')}`
+    + (dropped.length ? ` | dropped: ${dropped.map((u) => String(u).slice(0, 200)).join(' , ')}` : ''));
 
   const out = {
     client_id: clientId,
@@ -687,7 +721,9 @@ async function handleAuthorize(req, res) {
     src = Object.fromEntries(new URL(req.url || '/', 'http://localhost').searchParams);
   }
   const p = {};
-  for (const k of AUTH_PARAMS) if (typeof src[k] === 'string' && src[k] !== '' && src[k].length <= 2000) p[k] = src[k];
+  // 4096: Gemini's `state` alone runs ~1.4k characters, and a dropped state
+  // fails the client's own CSRF check after the user has already approved.
+  for (const k of AUTH_PARAMS) if (typeof src[k] === 'string' && src[k] !== '' && src[k].length <= 4096) p[k] = src[k];
 
   // 1) Client + redirect_uri. Until these check out, errors render here and
   //    are NEVER redirected — a bad redirect_uri is exactly the thing an

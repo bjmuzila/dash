@@ -3,15 +3,19 @@
  * server-v2/mcp-server.js — CB Edge as a ChatGPT connector (remote MCP server).
  *
  * ── What it does ─────────────────────────────────────────────────────────────
- * Serves the Model Context Protocol at https://cbedge.net/mcp so a CB Edge
+ * Serves the Model Context Protocol at https://www.cbedge.net/mcp so a CB Edge
  * member can add CB Edge to an AI app and ask things like "where are the SPX
  * walls?" or "what's on the calendar today?":
  *
  *   ChatGPT  Settings → Developer mode on → Apps → create, URL
- *            https://cbedge.net/mcp, auth OAuth (Pro, or Business/Enterprise)
+ *            https://www.cbedge.net/mcp, auth OAuth (Pro, or Business/Enterprise)
  *   Gemini   gemini.google.com → Settings → Connected Apps → Add a custom app,
- *            URL https://cbedge.net/mcp (personal Google account, US, 18+,
- *            Keep Activity on)
+ *            URL https://www.cbedge.net/mcp, Advanced settings left blank
+ *            (personal Google account, US, 18+, Keep Activity on)
+ *
+ * Use the www URL. Cloudflare redirects cbedge.net → www.cbedge.net, the issuer
+ * is www, and an app that starts on the bare domain ends up holding metadata
+ * for one host and a client registered on the other ("unknown client_id").
  *
  * Either one signs the member in with their normal cbedge.net login — see
  * server-v2/mcp-oauth.js for that half.

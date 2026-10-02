@@ -25138,3 +25138,30 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - Screenshot: `generated/2026-10-02-voltick-pr32-review-fixes.png`.
 
 ---
+
+## 2026-10-02 — Voltick Path on VOLUME follows the Volt (PR ready)
+
+- **The report.** On SPX the Volt was 7750, on the chart line and on CB Edge, but the Path's gold bubbles stayed on 7760.
+- **The cause.** The board was on VOLUME. Today's live Path record for SPX shows the nearest-date volume levels only come from the full volume snapshot, which is saved every 5 minutes (`REPLAY_VOL_MIN: "5"`). The minutes in between repeated the last one. The 9:31, 9:37, 9:42 and 9:48 snapshots had the Volt at 7760 and the 9:53 one at 7750, so the bubbles stayed on 7760 for minutes after the line moved. On OI the Path was right every minute.
+- **Fix, server (`server/history.js`).** On a board somebody has open, the light per-minute volume record now also saves the nearest-date Volt, Reversal, walls and Coils plus their sizes. These are worked out with the chart's own `aggregateFromCells` (`nearMarkOf`), about 170 bytes per minute. `levelsOfDay` reads them as real readings (`leanNearOf`). Older minutes carry over exactly as before.
+- **Fix, chart (`web/src/HeatChart.jsx`).** On the live chart, the newest candle's Path reading now uses the chart's own live levels and sizes, so the newest bubble or ribbon end sits on the line. This is skipped in replay, on past sessions, and when no levels are passed in.
+- New test `server/test/the-path-on-volume-reads-the-nearest-date-every-minute.test.js` (7/7). It runs the real recorder, the real reader and the lifted chart block, and catches 12 of 12 mutations.
+- Full `npm test` (11,529 tests): the same failures as the baseline, with nothing new. The web build and checks are clean.
+- This is a separate PR on branch `path-volume-volt`, cut from main. It applies on its own or together with the switches patch.
+- Files in `generated/`:
+  - `2026-10-02-voltick-path-volume-follows-the-volt.patch`
+  - the `2026-10-02-voltick-path-volume-follows-the-volt/` folder (full files)
+
+## 2026-10-02 — Gemini connector: Google's redirect URLs no longer rejected
+
+- **The report.** Adding CB Edge as a Gemini custom app stopped with "The Google redirect URL was rejected by the server. Enter your OAuth client ID and client secret to connect."
+- **The cause.** One Gemini registration lists six callback URLs spread over Google's `oauth-redirect*.googleusercontent.com` relay hosts. `server-v2/mcp-oauth.js` only knew three of those hosts and refused the whole registration if any one URL failed.
+- **Fix (`server-v2/mcp-oauth.js`).**
+  - Every `oauth-redirect*.googleusercontent.com` host is accepted. The path must still be `/r/user_bound_…`, which no Google Cloud project can own, so random projects still cannot register.
+  - A registration keeps the callback URLs that pass and drops the rest. It is refused only when none pass. Unknown extra grant or response types are trimmed instead of refused, as long as the code flow is included.
+  - Every refused registration is now logged with what the app sent (`[mcp-oauth] registration refused …`), and every accepted one logs its full callback list.
+  - `state` may be up to 4,096 characters (Gemini's is about 1,400).
+- **Docs.** `server-v2/mcp-server.js` now gives the connector URL as `https://www.cbedge.net/mcp` (the www host).
+- **Tests.** The offline selftest passes 12/12 and the Postgres end-to-end test passes 44/44. A new check runs the full Gemini-shaped flow: six relay URLs, `client_secret_basic`, a 1.4k state, code → token → refresh.
+
+---

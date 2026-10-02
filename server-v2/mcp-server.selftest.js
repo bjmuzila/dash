@@ -13,6 +13,10 @@ const path = require('path');
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const GOOD = `cbe_mcp_at_${'s'.repeat(43)}`; // real tokens are prefix + 43 base64url chars
 const PAID = new Set(['u_paid']);
+// Stand-ins for the six oauth-redirect*.googleusercontent.com callbacks one
+// Gemini DCR request lists (the exact host names are Google's to change).
+const GEMINI_HOSTS = ['oauth-redirect', 'oauth-redirect-sandbox', 'oauth-redirect-test', 'oauth-redirect-dev',
+  'oauth-redirect-staging', 'oauth-redirect-autopush'].map((h) => `${h}.googleusercontent.com`);
 
 const stubModule = (file, exports) => {
   const f = path.join(__dirname, file);
@@ -153,11 +157,54 @@ async function check(name, fn) {
     assert.ok(!ok('https://chatgpt.com.evil.io/x'));
     assert.ok(!ok('http://chatgpt.com/x'));
     assert.ok(!ok('https://evil.example/cb'));
-    // Gemini: Google's relay, but only on the path no Cloud project can own.
+    // Gemini: Google's relay, any of its environments, but only on the path no
+    // Cloud project can own.
+    for (const h of GEMINI_HOSTS) assert.ok(ok(`https://${h}/r/user_bound_custom-mcp-116109532806053202916-www_cbedge_net`), h);
     assert.ok(ok('https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-7f3a9c-cbedge.net'));
     assert.ok(!ok('https://oauth-redirect.googleusercontent.com/r/some-cloud-project'));
     assert.ok(!ok('https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-x/../evil'));
+    assert.ok(!ok('https://oauth-redirect.googleusercontent.com/r/user_bound_x%2F..%2Fevil'));
     assert.ok(!ok('http://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-x'));
+    assert.ok(!ok('https://oauth-redirect.googleusercontent.com:8443/r/user_bound_custom-mcp-x'));
+    assert.ok(!ok('https://evil-oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-x'));
+    assert.ok(!ok('https://oauth-redirect.googleusercontent.com.evil.io/r/user_bound_custom-mcp-x'));
+    assert.ok(!ok('https://googleusercontent.com/r/user_bound_custom-mcp-x'));
+  });
+
+  await check('Gemini registration: all six relay callbacks accepted; strays dropped, not fatal', async () => {
+    const reg = http.createServer((req, res) => oauth.handleRegister(req, res));
+    await new Promise((r) => reg.listen(0, '127.0.0.1', r));
+    const post = (body) => fetch(`http://127.0.0.1:${reg.address().port}/oauth/register`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const gemini = GEMINI_HOSTS.map((h) => `https://${h}/r/user_bound_custom-mcp-116109532806053202916-www_cbedge_net`);
+    const warn = console.warn; const logged = []; console.warn = (m) => logged.push(String(m));
+    const log = console.log; console.log = (m) => logged.push(String(m));
+    try {
+      let r = await post({ client_name: 'Gemini', redirect_uris: gemini, token_endpoint_auth_method: 'client_secret_basic',
+        grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], scope: 'cbedge.read offline_access' });
+      assert.strictEqual(r.status, 201);
+      let j = await r.json();
+      assert.deepStrictEqual(j.redirect_uris, gemini);
+      assert.match(j.client_secret, /^cbe_mcp_cs_/);
+
+      r = await post({ client_name: 'Mixed', redirect_uris: [...gemini, 'https://evil.example/cb'] });
+      assert.strictEqual(r.status, 201);
+      j = await r.json();
+      assert.deepStrictEqual(j.redirect_uris, gemini);
+      assert.ok(logged.some((l) => l.includes('dropped: https://evil.example/cb')));
+
+      r = await post({ client_name: 'Evil', redirect_uris: ['https://evil.example/cb'] });
+      assert.strictEqual(r.status, 400);
+      assert.strictEqual((await r.json()).error, 'invalid_redirect_uri');
+      assert.ok(logged.some((l) => l.includes('registration refused') && l.includes('https://evil.example/cb')));
+
+      r = await post({ redirect_uris: gemini, grant_types: ['client_credentials'] });
+      assert.strictEqual(r.status, 400);
+    } finally {
+      console.warn = warn; console.log = log;
+      reg.close();
+    }
   });
 
   await check('MCP_CONNECTOR=0 registers nothing; default registers all 9 paths', () => {
