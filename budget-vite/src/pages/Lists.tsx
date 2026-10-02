@@ -484,7 +484,7 @@ function Importer({ categories, titles, onSaved, onImported }: {
         </button>
       </form>
       {bulk && (
-        <BulkImport mode="meals" existing={titles} categories={categories}
+        <BulkImport mode="meals" existing={titles}
                     onDone={onImported} onClose={() => setBulk(false)} />
       )}
 
@@ -727,21 +727,19 @@ function CategoryEditor({ categories, onClose }: { categories: MealCategory[]; o
 //
 // Meals only: a line that is JUST a link (a TikTok data export is nothing but
 // links) waits for "Look up names", which asks the server for each video's
-// caption in chunks, turns it into a name and guesses the category. Liked
-// videos aren't all food, so captions that don't read like food are held back
-// unless you tick them in.
+// caption in chunks and turns it into a name. Imported meals are not sorted
+// into categories (Brandon: "no need to have categories") — they all land in
+// Other; headers and second columns are ignored for meals.
 
 type BulkMode = 'items' | 'meals'
 type BulkRow = {
   name: string
   key: string
-  group: string          // category (meals) or aisle label (items)
-  groupIsNew?: boolean   // meals: a category that will be created
+  group: string          // aisle label (items); always 'Other' for meals
   aisle?: Aisle | null   // items: null = guessed on the server
   qty?: string | null
   url?: string | null
-  status: 'new' | 'exists' | 'repeat' | 'notfood'
-  nf?: boolean           // meals: a looked-up caption that doesn't read like food
+  status: 'new' | 'exists' | 'repeat'
 }
 
 const nameKey = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase()
@@ -753,18 +751,10 @@ function aisleOf(header: string): Aisle | null {
   return hit ?? null
 }
 
-/** First of your categories named in the title ("Honey garlic chicken" → Chicken). */
-function guessCat(title: string, categories: string[]): string | null {
-  const hay = ` ${title.toLowerCase()} `
-  return categories.find((c) => c !== 'Other' &&
-    new RegExp(`\\b${c.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?\\b`).test(hay)) ?? null
-}
-
-function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: string[],
-                   resolved: Map<string, ResolvedLink> = new Map(), includeNonFood = false) {
+function parseBulk(raw: string, mode: BulkMode, existing: string[],
+                   resolved: Map<string, ResolvedLink> = new Map()) {
   const have = new Set(existing.map(nameKey))
   const seen = new Set<string>()
-  const catByKey = new Map(categories.map((c) => [nameKey(c), c]))
   const rows: BulkRow[] = []
   const notAisles = new Set<string>()
   let header: string | null = null
@@ -784,13 +774,12 @@ function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: 
     const rest = parts.slice(1)
     let url: string | null = null
     let qty: string | null = null
-    let col: string | null = null   // meals: a non-link second column = category
 
     if (mode === 'meals') {
       url = rest.find(isUrl) ?? null
-      col = rest.find((p) => !isUrl(p)) ?? null
+      const other = rest.find((p) => !isUrl(p)) ?? null
       // "link | name" — the other way round.
-      if (isUrl(name) && col) { url = name; name = col; col = rest.filter((p) => !isUrl(p))[1] ?? null }
+      if (isUrl(name) && other) { url = name; name = other }
       // "Name https://…" with no separator.
       if (!url) {
         const m = name.match(/^(.*\S)\s+(https?:\/\/\S+)$/)
@@ -817,15 +806,11 @@ function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: 
     const status: BulkRow['status'] =
       have.has(key) || looked?.exists ? 'exists'
         : seen.has(key) ? 'repeat'
-        : looked && !looked.food && !includeNonFood ? 'notfood'
         : 'new'
     seen.add(key)
 
     if (mode === 'meals') {
-      const lookedCat = looked && looked.category !== 'Other' ? looked.category : null
-      const wanted = col || header || lookedCat || guessCat(name, categories) || 'Other'
-      const known = catByKey.get(nameKey(wanted))
-      rows.push({ name, key, url, status, group: known ?? wanted.slice(0, 60), groupIsNew: !known, nf: !!looked && !looked.food })
+      rows.push({ name, key, url, status, group: 'Other' })
     } else {
       const aisle = header ? aisleOf(header) : null
       if (header && !aisle) notAisles.add(header)
@@ -834,20 +819,16 @@ function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: 
   }
 
   const fresh = rows.filter((r) => r.status === 'new')
-  const groups: { name: string; isNew: boolean; rows: BulkRow[] }[] = []
+  const groups: { name: string; rows: BulkRow[] }[] = []
   for (const r of rows) {
     let g = groups.find((x) => x.name === r.group)
-    if (!g) { g = { name: r.group, isNew: !!r.groupIsNew, rows: [] }; groups.push(g) }
+    if (!g) { g = { name: r.group, rows: [] }; groups.push(g) }
     g.rows.push(r)
   }
   return {
     rows, fresh, groups, pending: [...pending], unreadable,
-    notFood: rows.filter((r) => r.status === 'notfood').length,
-    // Counted whether or not they're ticked in, so the toggle can't vanish.
-    looksNotFood: rows.filter((r) => r.nf).length,
     exists: rows.filter((r) => r.status === 'exists').length,
     repeats: rows.filter((r) => r.status === 'repeat').length,
-    newCats: groups.filter((g) => g.isNew && g.rows.some((r) => r.status === 'new')).map((g) => g.name),
     notAisles: [...notAisles],
   }
 }
@@ -855,14 +836,13 @@ function parseBulk(raw: string, mode: BulkMode, existing: string[], categories: 
 const LOOKUP_CHUNK = 50
 
 const BULK_EXAMPLE: Record<BulkMode, string> = {
-  meals: '# Chicken\nHoney garlic chicken\nBuffalo chicken wraps | https://www.tiktok.com/@…\n# Pasta\nMarry me pasta\n\nOr just links, one per line:\nhttps://www.tiktok.com/@…/video/…',
+  meals: 'Honey garlic chicken\nBuffalo chicken wraps | https://www.tiktok.com/@…\nMarry me pasta\n\nOr just TikTok links, one per line:\nhttps://www.tiktok.com/@…/video/…',
   items: '# Produce\nAvocados | 3\nLimes\n# Dairy\nMilk\nShredded cheese\n# Household\nPaper towels',
 }
 
-function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
+function BulkImport({ mode, existing, onDone, onClose }: {
   mode: BulkMode
   existing: string[]
-  categories?: string[]
   onDone?: (touchedGroups: string[]) => void
   onClose: () => void
 }) {
@@ -873,12 +853,11 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
   const [resolved, setResolved] = useState<Map<string, ResolvedLink>>(() => new Map())
   const [lookup, setLookup] = useState<{ done: number; total: number } | null>(null)
   const [lookupErr, setLookupErr] = useState<string | null>(null)
-  const [includeNonFood, setIncludeNonFood] = useState(false)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
   const busy = importItems.isPending || importMeals.isPending || !!lookup
   const err = importItems.error || importMeals.error
-  const p = parseBulk(text, mode, existing, categories, resolved, includeNonFood)
+  const p = parseBulk(text, mode, existing, resolved)
 
   // Chunked so a few hundred links show progress instead of one long wait,
   // and a failure part-way keeps everything already looked up.
@@ -915,7 +894,6 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
         setResult([
           `Added ${r.added} ${r.added === 1 ? 'meal' : 'meals'}.`,
           r.skipped ? `${r.skipped} already there.` : '',
-          r.categoriesAdded.length ? `New ${r.categoriesAdded.length === 1 ? 'category' : 'categories'}: ${r.categoriesAdded.join(', ')}.` : '',
           r.badLinks ? `${r.badLinks} ${r.badLinks === 1 ? 'link' : 'links'} didn't look right, so those meals were saved without one.` : '',
         ].filter(Boolean).join(' '))
       } else {
@@ -948,9 +926,13 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
       ) : (
         <>
           <div style={{ ...body(13), color: T.faint, margin: '6px 0 10px' }}>
-            One per line. <span style={{ fontFamily: MONO }}># Header</span> lines set the {mode === 'meals' ? 'category' : 'aisle'} for
-            the lines below. Add {mode === 'meals' ? 'a link' : 'a quantity'} with <span style={{ fontFamily: MONO }}>Name | {mode === 'meals' ? 'link' : 'qty'}</span>.
-            {mode === 'meals' && ' Or paste bare TikTok links and look up their names.'} Anything already there is skipped.
+            {mode === 'meals' ? (
+              <>One meal per line. Add a link with <span style={{ fontFamily: MONO }}>Name | link</span>, or paste
+                bare TikTok links and look up their names. Anything already there is skipped.</>
+            ) : (
+              <>One per line. <span style={{ fontFamily: MONO }}># Header</span> lines set the aisle for the lines
+                below. Add a quantity with <span style={{ fontFamily: MONO }}>Name | qty</span>. Anything already there is skipped.</>
+            )}
           </div>
           <textarea
             value={text} onChange={(e) => setText(e.target.value)} placeholder={BULK_EXAMPLE[mode]}
@@ -964,12 +946,9 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
               <div style={label({ marginTop: 10, letterSpacing: '0.08em' })}>
                 {[
                   `${p.fresh.length} new`,
-                  p.groups.length > 1 || mode === 'meals'
-                    ? `${p.groups.length} ${mode === 'meals' ? (p.groups.length === 1 ? 'category' : 'categories') : (p.groups.length === 1 ? 'aisle' : 'aisles')}${p.newCats.length ? ` (${p.newCats.length} new)` : ''}`
-                    : null,
+                  mode === 'items' && p.groups.length > 1 ? `${p.groups.length} aisles` : null,
                   p.exists ? `${p.exists} already there` : null,
                   p.repeats ? `${p.repeats} repeated` : null,
-                  p.notFood ? `${p.notFood} not food` : null,
                   p.unreadable ? `${p.unreadable} couldn't be read` : null,
                 ].filter(Boolean).join(' · ')}
               </div>
@@ -997,14 +976,6 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
                 </div>
               )}
 
-              {mode === 'meals' && p.looksNotFood > 0 && (
-                <button onClick={() => setIncludeNonFood(!includeNonFood)}
-                        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', marginTop: 10, minHeight: 44,
-                                 padding: '0 2px', background: 'none', border: 0, color: T.ink, cursor: 'pointer', textAlign: 'left' }}>
-                  <span style={checkbox(includeNonFood, 18)}>{includeNonFood ? '✓' : ''}</span>
-                  <span style={body(14)}>Include {p.looksNotFood} that {p.looksNotFood === 1 ? "doesn't" : "don't"} look like food</span>
-                </button>
-              )}
               {p.notAisles.length > 0 && (
                 <div style={{ ...body(12), color: T.faint, marginTop: 4 }}>
                   {p.notAisles.map((h) => `“${h}”`).join(', ')} {p.notAisles.length === 1 ? "isn't an aisle" : "aren't aisles"}, so
@@ -1019,9 +990,9 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
                   shown += rows.length
                   return (
                     <div key={g.name} style={{ padding: '6px 0' }}>
-                      <div style={label(g.isNew ? { color: T.accent } : {})}>
-                        {g.name}{g.isNew ? ' · new' : ''} · {g.rows.filter((r) => r.status === 'new').length}
-                      </div>
+                      {mode === 'items' && (
+                        <div style={label()}>{g.name} · {g.rows.filter((r) => r.status === 'new').length}</div>
+                      )}
                       {rows.map((r, i) => (
                         <div key={`${r.key}-${i}`} style={{ ...body(14), padding: '3px 0', display: 'flex', gap: 8,
                                                              color: r.status === 'new' ? T.ink : T.faint }}>
@@ -1032,7 +1003,6 @@ function BulkImport({ mode, existing, categories = [], onDone, onClose }: {
                           {r.url && r.status === 'new' && <span style={label({ color: T.accent })}>link</span>}
                           {r.status === 'exists' && <span style={label()}>already there</span>}
                           {r.status === 'repeat' && <span style={label()}>repeat</span>}
-                          {r.status === 'notfood' && <span style={label()}>not food?</span>}
                         </div>
                       ))}
                     </div>

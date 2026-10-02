@@ -165,6 +165,7 @@ const ALL_PAGES: { label: string; href: string }[] = [
   // than a dead end, so a free account that saved the link before its trial
   // ended lands on the offer instead of a broken tile.
   { label: 'Almanac', href: '/seasonality' },
+  { label: 'Vela', href: '/vela' },
   // Not a dashboard page — the v2 door (src/pages/Legacy.tsx). Worth a Quick
   // Link slot for anyone whose day still runs through a page v3 has not ported.
   { label: 'v2 Legacy', href: '/legacy' },
@@ -188,6 +189,7 @@ const LIVE_ROUTES = new Set([
   '/scanner',
   '/level-log',
   '/seasonality',
+  '/vela',
   '/legacy',
   '/trading',
   '/test',

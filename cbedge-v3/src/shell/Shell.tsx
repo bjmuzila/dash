@@ -139,6 +139,17 @@ export const NAV: NavItem[] = [
   // (/api/public-seasonality) is fired by useLiveYear after mount and does not
   // read the api.ts cache, so warming it on hover would be a wasted request.
   { to: '/seasonality', label: 'Almanac', icon: '📜', paidOnly: true },
+  // VELA — LuxAlgo's open-source chart workspace on our own tape (2026-10-02).
+  // Prefetches the default chart's history (SPX 5m) on hover. The string MUST
+  // equal DEFAULT_HISTORY_URL in pages/vela/cbedgeProvider.ts, or the warm
+  // response lands under a key nothing reads. Not imported from there: that
+  // module would drag the provider into this entry chunk.
+  {
+    to: '/vela',
+    label: 'Vela',
+    icon: '🕯️',
+    prefetch: ['/api/snapshots/etf-candles?symbol=SPX&days=30&interval=5&limit=8000'],
+  },
   // Last in the rail on purpose — it is the way OUT of v3, not a place to work.
   // Lists the v2 pages that have no v3 route and links to each one at /app/*.
   // It is the honest version of the dimmed "coming soon" icons that came out of

@@ -43,7 +43,7 @@ const WRITE_RATCHET = process.argv.includes('--ratchet')
  * The order matters: --ratchet rewrites that file key by key from this list, and
  * a reordered file turns a two-number diff into a whole-file diff.
  */
-const KINDS = ['entry', 'react', 'route', 'data', 'css', 'html']
+const KINDS = ['entry', 'react', 'route', 'data', 'lib', 'css', 'html']
 
 const failures = []
 const slackNotes = []
@@ -106,6 +106,13 @@ function classify(name) {
   // enforcing anything for the twelve pages that carry no data file at all.
   // Same lazy() load path, same download, just measured on its own line.
   if (name.startsWith('data-')) return 'data'
+  // A `lib-*` chunk is ONE THIRD-PARTY LIBRARY that ONE route imports — a
+  // manualChunk in vite.config.ts (today: lib-vela, LuxAlgo's chart workspace
+  // behind /vela). Same reasoning as `data`: it is lazy() like any route, but a
+  // whole chart app weighs several routes' worth, and folding it into `route`
+  // would raise that ceiling for every page that does not carry it. NOT a
+  // shared vendor chunk — each lib-* belongs to exactly one route.
+  if (name.startsWith('lib-')) return 'lib'
   return 'route'
 }
 
@@ -136,9 +143,9 @@ function bundles() {
     } else if (ext === '.js') {
       kind = classify(name)
       budget = budgets[kind]
-      // `route` and `data` are both lazy() — nothing on first paint downloads
-      // them, so neither counts toward totalInitial.
-      if (kind !== 'route' && kind !== 'data') initial += size
+      // `route`, `data` and `lib` are all lazy() — nothing on first paint
+      // downloads them, so none counts toward totalInitial.
+      if (kind !== 'route' && kind !== 'data' && kind !== 'lib') initial += size
     } else {
       continue
     }

@@ -111,6 +111,19 @@ export default defineConfig(({ mode }) => {
             if (/[\\/]src[\\/]pages[\\/]seasonality[\\/](seasonalityData|eventDates)\.ts$/.test(id)) {
               return 'data-seasonality'
             }
+            // ── ONE-ROUTE LIBRARIES ───────────────────────────────────────
+            // Vela (/vela — LuxAlgo's chart workspace, ~1.2MB minified) is a
+            // whole chart APP: renderer, indicator engine, drawing tools, UI
+            // kit. Only /vela imports it, so Rollup would fold it into that
+            // route's chunk anyway; naming it `lib-*` changes nothing about
+            // what downloads when, it only lets check-budgets.mjs measure it on
+            // its own `lib` line instead of raising `route` for every page.
+            // This is NOT the shared vendor grouping warned off above: it is
+            // one library for one route, and a change elsewhere never
+            // invalidates it. Its Zag.js overlay machinery rides with it.
+            if (/node_modules[\\/](@luxalgo[\\/]vela|@zag-js)[\\/]/.test(id)) {
+              return 'lib-vela'
+            }
             return undefined
           },
         },

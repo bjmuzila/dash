@@ -38,6 +38,7 @@
     "preview": "vite preview --port 4173"
   },
   "dependencies": {
+    "@luxalgo/vela": "^0.8.1",
     "lightweight-charts": "^5.0.9",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

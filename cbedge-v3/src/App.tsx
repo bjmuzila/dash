@@ -103,6 +103,11 @@ const Seasonality = lazy(() => import('@/pages/Seasonality'))
 // /whales — the $1M+ print archive. Its own chunk: the page pulls the Top Flow
 // probe drawer with it, and nobody on any other route should pay for that.
 const Whales = lazy(() => import('@/pages/Whales'))
+// /vela — LuxAlgo's open-source chart workspace (github.com/LuxAlgo/Vela,
+// Apache-2.0) on CB Edge's own candle routes. The library is ~all of this
+// route's weight, so vite.config.ts gives it a `lib-vela` chunk of its own and
+// check-budgets.mjs measures it on its own `lib` line — see pages/Vela.tsx.
+const Vela = lazy(() => import('@/pages/Vela'))
 
 // ── THE PHONE BUILD — /v3/m/* ────────────────────────────────────────────────
 // Six screens, registered in src/mobile/mobileNav.ts, each one a HOME-BOARD CARD
@@ -177,6 +182,7 @@ export default function App() {
             <Route path="/level-log" element={<LevelLog />} />
             <Route path="/seasonality" element={<Seasonality />} />
             <Route path="/whales" element={<Whales />} />
+            <Route path="/vela" element={<Vela />} />
             <Route path="/legacy" element={<Legacy />} />
             {/* Support. The tab and the open ticket live in the query string, so
                 /v3/feedback?tab=mine&ticket=12 is a real link — which is what
