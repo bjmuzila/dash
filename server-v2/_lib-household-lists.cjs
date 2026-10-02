@@ -571,8 +571,8 @@ const RESOLVE_MAX = 60;
 
 /**
  * Bare links → names, for the paste box. Up to RESOLVE_MAX per call (the
- * client sends chunks and shows progress), four at a time so TikTok isn't
- * hammered. `exists` = that video is already in your meals (matched by video
+ * client sends chunks and shows progress), two at a time with retries —
+ * four at a time got about a third refused. `exists` = that video is already in your meals (matched by video
  * id, so a share link and a canonical link of the same video match).
  */
 async function resolveLinks(userId, rawUrls) {
@@ -587,7 +587,13 @@ async function resolveLinks(userId, rawUrls) {
       const k = next++;
       const input = urls[k];
       try {
-        const r = await resolveOne(input, cats);
+        // TikTok refuses bursts; a short pause and a second ask usually works.
+        let r = await resolveOne(input, cats);
+        for (const wait of [1500, 4000]) {
+          if (r.title) break;
+          await new Promise((ok) => setTimeout(ok, wait));
+          r = await resolveOne(input, cats);
+        }
         const id = videoId(r.url) || videoId(input);
         out[k] = {
           input, url: r.url, source: r.source, title: r.title, category: r.category,
@@ -599,7 +605,7 @@ async function resolveLinks(userId, rawUrls) {
       }
     }
   };
-  await Promise.all(Array.from({ length: 4 }, worker));
+  await Promise.all(Array.from({ length: 2 }, worker));
   return out;
 }
 
@@ -885,7 +891,9 @@ async function importLibraryMeals(userId, rawMeals) {
       if (!t) continue;
       const k = nameKey(t);
       const vid = videoId(m.url);
-      if (seen.has(k) || (vid && seenVideo.has(vid))) { skipped++; continue; }
+      // A video is matched by its id only: two different recipes captioned
+      // "Easy dinner" are both real. Name matching is for typed-in meals.
+      if (vid ? seenVideo.has(vid) : seen.has(k)) { skipped++; continue; }
       seen.add(k);
       if (vid) seenVideo.add(vid);
 

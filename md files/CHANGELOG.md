@@ -25269,3 +25269,12 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 
 ## 2026-10-02 — budget.cbedge.net Import meals: no categories, no food filter
 - `budget-vite/src/pages/Lists.tsx` (Import meals sheet): imported meals are no longer sorted into categories — every meal goes to Other. `# Header` lines and second columns are ignored for meals, the preview is one flat list, and no new categories are created. The "doesn't look like food" hold-back is gone, since the import is now used for saved videos, which are all recipes. The grocery-list import still uses aisles. No server change.
+
+## 2026-10-02 — budget.cbedge.net Import sheet: pick what gets added
+- `budget-vite/src/pages/Lists.tsx` (Import meals + Import to the list): every new line in the preview now has a checkbox, ticked by default. Untick anything you don't want; All / None at the top. Meals with a link get a "Watch ↗" that opens the video in a new tab so you can check it first. The summary shows "N of M new picked" and the button adds only the picked ones. New lines are listed before "already there" ones, and the preview now shows every line (up to 2,500) in a taller scroll area. No server change.
+
+## 2026-10-02 — budget.cbedge.net: import ALL saved TikTok recipes (script) + steadier link lookup
+- Why: the Import box got only 291 of Brandon's 1,628 saved TikToks in. Checked on the VPS: TikTok oEmbed answers every sampled saved video (2020→2026) in the `www.tiktok.com/@/video/<id>` form, so the losses were TikTok refusing parallel bursts, plus same-caption recipes being dropped as "duplicates".
+- NEW `server-v2/scripts/import-tiktok-saved.cjs` (one-off, not in the image): all 1,628 saved video ids from the TikTok export → My meals (category Other). One lookup at a time with a pause and up to 5 retries, saves every 25, logs progress, dedupes by video id only, safe to re-run. Run on the VPS: `cd /opt/dashboard && nohup sh -c 'docker exec -i household-api node - < server-v2/scripts/import-tiktok-saved.cjs' > /root/tiktok-import.log 2>&1 &` then `tail -f /root/tiktok-import.log`.
+- `server-v2/_lib-household-lists.cjs`: `resolveLinks()` runs 2 at a time (was 4) and retries a link twice (1.5s, 4s) before calling it unreadable. `importLibraryMeals()` dedupes a meal with a video link by video id only; name matching is only for typed-in meals.
+- `budget-vite/src/pages/Lists.tsx`: looked-up videos are keyed by link, so two recipes with the same caption both show and both import.

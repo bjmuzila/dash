@@ -802,9 +802,11 @@ function parseBulk(raw: string, mode: BulkMode, existing: string[],
 
     name = name.slice(0, 200).trim()
     if (!name) continue
-    const key = nameKey(name)
+    // A looked-up video is its own thing even when its caption matches another
+    // meal's name, so it's keyed (and deduped) by link, not by name.
+    const key = looked ? `link:${url}` : nameKey(name)
     const status: BulkRow['status'] =
-      have.has(key) || looked?.exists ? 'exists'
+      looked?.exists || (!looked && have.has(key)) ? 'exists'
         : seen.has(key) ? 'repeat'
         : 'new'
     seen.add(key)
