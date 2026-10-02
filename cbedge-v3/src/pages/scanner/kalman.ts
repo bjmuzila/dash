@@ -44,6 +44,16 @@
 // read its own trend as noise. That makes the model scale-free — the same
 // presets work on a flip in index points and a net GEX in dollars.
 //
+// THE FLOOR. Second differences measure the minute-to-minute wiggle, and on a
+// series that does not wiggle — net GEX overnight, when the cash index is shut
+// and the ladder only changes in steps — that is close to zero. R then says
+// every print is near-exact, the ±2σ band collapses under the line, and every
+// step reads as a 50σ event. So R's σ is floored at KF_R_FLOOR_FRAC of the
+// session's own p5–p95 spread: a series that moved 5B across the session is
+// never treated as measured to the nearest 3M. On a series that does wiggle
+// (spot, the flip in RTH) the floor sits under the measured value and does
+// nothing.
+//
 // q is then R × the preset's ratio. The ratio is the only knob, and the
 // steady-state gains it produces (dt = 1) are:
 //
@@ -60,6 +70,23 @@
 // with no spot) skips the update: the state is only PREDICTED through it and
 // its band widens. Nothing is invented to fill the gap.
 //
+// LEVEL BREAKS. A level + trend model meets a STEP — the morning OI update
+// landing, the ladder re-keying — by bending toward it: the trend term winds
+// up while it catches the step, then carries the line past it and decays back.
+// That overshoot, and the train of "surprises" while it catches up, is the
+// model being wrong about the world, not the world being surprising. So:
+//
+//   • a print more than KF_BREAK_SIGMA off the forecast is HELD — not folded
+//     in, the state is only predicted through it. One wild print on its own is
+//     an outlier and is simply ignored.
+//   • a SECOND consecutive print that far off on the SAME side confirms a
+//     break: the state restarts on that print (level = print, trend = 0, P
+//     reset to the seed), so the line steps instead of overshooting.
+//
+// "That far off" is measured against a running, outlier-clipped estimate of
+// how big this model's misses normally are, not against √S alone — otherwise a
+// stiff preset on a trending tape would call a break every few minutes.
+//
 // CALIBRATION. A filter whose model is too stiff for the day (SLOW on a
 // trending spot, say) misses by more than its own √S says it should, and a
 // band drawn from √S alone would ring half the session as "surprises". So after
@@ -68,7 +95,12 @@
 // band and the surprise test both use σ × calib, so a ring means "unusual for
 // how THIS model has been missing today", and the band holds ~95% of prints
 // whichever preset is on. Never below 1 — a model that misses LESS than it
-// expects keeps its own band.
+// expects keeps its own band. Held prints and breaks are left out of it.
+//
+// THE FORECAST. `forecast()` projects the last state forward with no prints:
+// level + trend·h, and P propagated by the same predict step, so the cone
+// widens as h³ — the honest shape of "where could it be" for a level whose
+// trend is itself uncertain.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { GexRow } from '@/contract/frames'
@@ -104,6 +136,17 @@ const MAX_DT_MIN = 15
 /** |innovation| beyond this many σ of S is flagged a surprise on the chart. */
 export const KF_SURPRISE_SIGMA = 2.5
 
+/** A miss this many (running) σ off is held; two in a row, same side, is a break. */
+export const KF_BREAK_SIGMA = 4
+
+/** R's σ is never below this fraction of the session's p5–p95 spread. */
+export const KF_R_FLOOR_FRAC = 0.01
+
+/** E|N(0,1)| — what the running mean |miss| settles at for a calibrated model. */
+const MEAN_ABS_N = 0.7979
+/** Weight of the newest miss in the running mean |miss|. */
+const MISS_EW = 0.05
+
 export interface KfObs {
   t: number
   spot: number | null
@@ -111,24 +154,49 @@ export interface KfObs {
   netGex: number | null
 }
 
+/**
+ * What happened at a column:
+ *   seed     the first print — the state starts here
+ *   update   an ordinary predict + update
+ *   predict  no print this column; predicted only
+ *   held     a print ≥ KF_BREAK_SIGMA off, not folded in (a possible break)
+ *   break    the second such print, same side — the state restarted on it
+ */
+export type KfKind = 'seed' | 'update' | 'predict' | 'held' | 'break'
+
 export interface KfPoint {
   t: number
+  kind: KfKind
   /** The observation fed in, or null when this column had none. */
   z: number | null
   /** Posterior level. */
   level: number
   /** Posterior trend, units per minute. */
   trend: number
-  /** √P₀₀ — the filter's own uncertainty about the level. */
+  /** √P₀₀ BEFORE this column's print — the top of the variance sawtooth. */
+  priorSd: number
+  /** √P₀₀ after it — the filter's own uncertainty about the level. */
   sd: number
   /** √(P₀₀ + R) — where the NEXT print is expected to land, 1σ. */
   obsSd: number
-  /** Level gain applied this step. Null when there was no update. */
+  /** Level gain applied this step. 1 on a seed or a break; null when nothing was folded in. */
   k: number | null
-  /** z − predicted level. Null when there was no update. */
+  /** z − predicted level, whenever there was a print. */
   innov: number | null
-  /** |innov| / √S. Null when there was no update. */
+  /** Signed innov / √S, whenever there was a print. */
+  nz: number | null
+  /** |nz|. Kept for callers that only want the size. */
   innovZ: number | null
+}
+
+/** The state at the last column, for `forecast()`. */
+export interface KfFinal {
+  t: number
+  level: number
+  trend: number
+  p00: number
+  p01: number
+  p11: number
 }
 
 export interface KfRun {
@@ -144,6 +212,16 @@ export interface KfRun {
    * CALIBRATION in the header. Multiply `obsSd` and divide `innovZ` by it.
    */
   calib: number
+  /** How many level breaks the run took. */
+  breaks: number
+  final: KfFinal | null
+}
+
+export interface KfForecastPoint {
+  t: number
+  level: number
+  /** √(P₀₀(h) + R) × calib — the 1σ of a print at that horizon. */
+  sd: number
 }
 
 // ── ET clock ─────────────────────────────────────────────────────────────────
@@ -234,6 +312,12 @@ function median(xs: number[]): number {
  * for why second differences. Floors so a flat series (the pre-open, when the
  * cash index does not print) still yields a usable, non-zero R.
  */
+function quantile(sorted: number[], f: number): number {
+  if (!sorted.length) return 0
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.round(f * (sorted.length - 1))))
+  return sorted[i] as number
+}
+
 export function estimateR(zs: number[]): number {
   const d2: number[] = []
   for (let i = 2; i < zs.length; i++) {
@@ -249,6 +333,11 @@ export function estimateR(zs: number[]): number {
     const mean = d2.length ? d2.reduce((s, v) => s + v, 0) / d2.length : 0
     sd = mean / Math.sqrt(6)
   }
+  // THE FLOOR — see the header. p5–p95 rather than min–max so one bad column
+  // cannot set it.
+  const sorted = [...zs].sort((a, b) => a - b)
+  const spread = quantile(sorted, 0.95) - quantile(sorted, 0.05)
+  sd = Math.max(sd, spread * KF_R_FLOOR_FRAC)
   if (!(sd > 0)) {
     const scale = zs.length ? Math.abs(zs.reduce((s, v) => s + v, 0) / zs.length) : 1
     sd = Math.max(scale * 1e-6, 1e-9)
@@ -276,6 +365,24 @@ export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfR
   let p11 = 0
   let started = false
   let tPrev = 0
+  // Running mean |normalised miss|, outlier-clipped. Starts where a calibrated
+  // model would sit. See LEVEL BREAKS.
+  let meanAbs = MEAN_ABS_N
+  // Side (+1 / −1) of a held print awaiting confirmation; 0 when none.
+  let pending = 0
+  let breaks = 0
+
+  /** (Re)start the state on a print — the seed, and every confirmed break. */
+  const restart = (z: number, rEff: number) => {
+    // Level at the print, trend unknown. The trend variance starts at R per
+    // minute² — wide enough that the next few columns set it, not this guess.
+    level = z
+    trend = 0
+    p00 = rEff
+    p01 = 0
+    p10 = 0
+    p11 = rEff
+  }
 
   for (const o of obs) {
     const z = seriesValue(o, series)
@@ -283,18 +390,14 @@ export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfR
 
     if (!started) {
       if (z == null) continue
-      // Seed on the first print: level at the print, trend unknown. The trend
-      // variance starts at R per minute² — wide enough that the first few
-      // columns set it, not this guess.
-      level = z
-      trend = 0
-      p00 = rEff
-      p01 = 0
-      p10 = 0
-      p11 = rEff
+      restart(z, rEff)
       started = true
       tPrev = o.t
-      points.push({ t: o.t, z, level, trend, sd: Math.sqrt(p00), obsSd: Math.sqrt(p00 + rEff), k: 1, innov: 0, innovZ: 0 })
+      const sd = Math.sqrt(p00)
+      points.push({
+        t: o.t, kind: 'seed', z, level, trend, priorSd: sd, sd, obsSd: Math.sqrt(p00 + rEff),
+        k: 1, innov: 0, nz: 0, innovZ: 0,
+      })
       continue
     }
 
@@ -313,18 +416,51 @@ export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfR
     p01 = n01
     p10 = n10
     p11 = n11
+    const priorSd = Math.sqrt(p00)
 
     if (z == null) {
-      points.push({ t: o.t, z: null, level, trend, sd: Math.sqrt(p00), obsSd: Math.sqrt(p00 + rEff), k: null, innov: null, innovZ: null })
+      points.push({
+        t: o.t, kind: 'predict', z: null, level, trend, priorSd, sd: priorSd, obsSd: Math.sqrt(p00 + rEff),
+        k: null, innov: null, nz: null, innovZ: null,
+      })
       continue
     }
 
-    // ── update ───────────────────────────────────────────────────────────────
     const s = p00 + rEff
+    const y = z - level
+    const nz = y / Math.sqrt(s)
+    const side = y >= 0 ? 1 : -1
+    // The miss in RUNNING σ — how unusual it is for how this model has been
+    // missing, not for what its own √S claims.
+    const zRun = Math.abs(nz) / Math.max(1, meanAbs / MEAN_ABS_N)
+
+    // ── level break? ─────────────────────────────────────────────────────────
+    if (zRun > KF_BREAK_SIGMA) {
+      if (pending === side) {
+        restart(z, rEff)
+        pending = 0
+        breaks++
+        const sd = Math.sqrt(p00)
+        points.push({
+          t: o.t, kind: 'break', z, level, trend, priorSd, sd, obsSd: Math.sqrt(p00 + rEff),
+          k: 1, innov: y, nz, innovZ: Math.abs(nz),
+        })
+        continue
+      }
+      // First one this far off: hold it. If it was noise, the next print says
+      // so and the state never saw it.
+      pending = side
+      points.push({
+        t: o.t, kind: 'held', z, level, trend, priorSd, sd: priorSd, obsSd: Math.sqrt(p00 + rEff),
+        k: null, innov: y, nz, innovZ: Math.abs(nz),
+      })
+      continue
+    }
+    pending = 0
+
+    // ── update ───────────────────────────────────────────────────────────────
     const k0 = p00 / s
     const k1 = p10 / s
-    const y = z - level
-    const innovZ = Math.abs(y) / Math.sqrt(s)
     level += k0 * y
     trend += k1 * y
     const u00 = (1 - k0) * p00
@@ -335,28 +471,58 @@ export function runKalman(obs: KfObs[], series: KfSeries, smooth: KfSmooth): KfR
     p01 = u01
     p10 = u10
     p11 = u11
+    meanAbs = (1 - MISS_EW) * meanAbs + MISS_EW * Math.min(Math.abs(nz), 4 * meanAbs)
 
-    points.push({ t: o.t, z, level, trend, sd: Math.sqrt(p00), obsSd: Math.sqrt(p00 + rEff), k: k0, innov: y, innovZ })
+    points.push({
+      t: o.t, kind: 'update', z, level, trend, priorSd, sd: Math.sqrt(p00), obsSd: Math.sqrt(p00 + rEff),
+      k: k0, innov: y, nz, innovZ: Math.abs(nz),
+    })
   }
 
-  // CALIBRATION — the robust σ of the normalised misses, seed step excluded.
-  const nz: number[] = []
-  for (const p of points) if (p.innovZ != null && p.k !== 1) nz.push(p.innovZ)
-  const calib = nz.length >= 10 ? Math.max(1, median(nz) / 0.6745) : 1
+  // CALIBRATION — the robust σ of the ordinary misses. Seeds, held prints and
+  // breaks are out: they are exactly the misses the model has already set aside.
+  const abs: number[] = []
+  for (const p of points) if (p.kind === 'update' && p.innovZ != null) abs.push(p.innovZ)
+  const calib = abs.length >= 10 ? Math.max(1, median(abs) / 0.6745) : 1
 
-  return { points, r, q, observed: zs.length, calib }
+  const last = points[points.length - 1]
+  const final: KfFinal | null = last
+    ? { t: last.t, level, trend, p00, p01, p11 }
+    : null
+
+  return { points, r, q, observed: zs.length, calib, breaks, final }
 }
 
-/** A point's miss in CALIBRATED σ, or null when it took no update. */
+/** A point's SIGNED miss in calibrated σ — ordinary updates only, else null. */
 export function calibratedZ(p: KfPoint, calib: number): number | null {
-  return p.innovZ == null || p.k === 1 ? null : p.innovZ / calib
+  return p.kind === 'update' && p.nz != null ? p.nz / calib : null
 }
 
-/** The newest point that took an update — the gain and residual worth quoting. */
+/** The newest ordinary update — the gain and residual worth quoting. */
 export function lastUpdated(points: KfPoint[]): KfPoint | null {
   for (let i = points.length - 1; i >= 0; i--) {
     const p = points[i] as KfPoint
-    if (p.k != null) return p
+    if (p.kind === 'update') return p
   }
   return null
+}
+
+/**
+ * The cone: the last state carried `minutes` forward with no prints, one point
+ * a minute. See THE FORECAST in the header.
+ */
+export function forecast(run: KfRun, minutes: number): KfForecastPoint[] {
+  const f = run.final
+  if (!f || !(minutes > 0)) return []
+  const out: KfForecastPoint[] = []
+  for (let h = 0; h <= minutes; h++) {
+    const p00 =
+      f.p00 + 2 * h * f.p01 + h * h * f.p11 + (run.q * h * h * h) / 3
+    out.push({
+      t: f.t + h * 60_000,
+      level: f.level + f.trend * h,
+      sd: Math.sqrt(Math.max(0, p00) + run.r) * run.calib,
+    })
+  }
+  return out
 }
