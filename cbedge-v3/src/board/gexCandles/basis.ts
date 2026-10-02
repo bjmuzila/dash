@@ -9,9 +9,15 @@
 //
 // ONE SOURCE, deliberately: /proxy/es-spx-basis (server-v2/es-spx-basis.js).
 //
-//   ES  ← our own es_candles 16:00 ET close — the very contract the chart
-//         plots, so it is roll-correct by construction.
-//   SPX ← Yahoo ^GSPC daily close — independent of the broker feed.
+//   ES  ← our own es_candles 5m bars — the very contract the chart plots, so
+//         it is roll-correct by construction.
+//   SPX ← Yahoo ^GSPC 5m bars — independent of the broker feed.
+//
+// Each session's basis is the MEDIAN of (ES − SPX) over bars matched at the
+// same time in the last hour of the cash session (2026-10-02). It used to be
+// ES's 16:00 bar close minus SPX's auction close — two prints that are not
+// simultaneous — which left the basis 4–9pt off on a given day (62.05 vs a
+// true ~56 on 2026-10-01). See server-v2/futures-basis-sync.js.
 //
 // NOT the socket's `spot.basis` / `aux.basis`. src/contract/frames.ts says why:
 // the broker's "SPX" quote really tracks ES, so that value collapses toward
@@ -21,7 +27,8 @@
 // basis decays about a point a day, so a daily anchor is not a compromise —
 // a live one was the mistake.
 //
-//   { basis, esClose, spxClose, date, days: { 'YYYY-MM-DD': basis, … } }
+//   { basis, esClose, spxClose, date, samples, window, method,
+//     days: { 'YYYY-MM-DD': basis, … } }
 //
 // `basis` is the newest session's and is what the live rail uses; `days` is
 // one value per ET session and is what each HISTORY column is shifted by, so a

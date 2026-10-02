@@ -18,70 +18,49 @@
  *   • the eod_gex anchor          (stores that broker spot in its `spot` column)
  *
  * So this module never touches the broker spot:
- *   ES  ← our own es_candles 16:00 ET bar — the exact contract the chart plots, so
- *         the basis is ROLL-CORRECT by construction (the ESM→ESU roll is what put
+ *   ES  ← our own es_candles 5m bars — the exact contract the chart plots, so the
+ *         basis is ROLL-CORRECT by construction (the ESM→ESU roll is what put
  *         every level ~50pt out in the first place).
- *   SPX ← Yahoo ^GSPC daily close — wholly independent of the broker feed.
- *
- * A DAILY anchor is sufficient. The true basis is a slow carry/dividend function
- * that decays about a point a day toward expiry; it does not need to be live. That
- * is precisely why depending on a live (and broken) spot was the wrong design.
+ *   SPX ← Yahoo ^GSPC 5m bars — wholly independent of the broker feed.
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * 2026-10-02 — SYNCHRONOUS PAIRS, NOT CLOSE-VS-CLOSE
+ *
+ * Until today this was (ES 16:00 bar close) − (^GSPC daily close). Those two are
+ * not simultaneous — the 16:00 ES bar closes at 16:01/16:05, after the bell, and
+ * the index's close is the auction print — so the published basis wandered 4–9pt
+ * day to day around a carry that actually decays smoothly. On 2026-10-01 it was
+ * 62.05 against a true ~56.0, so every SPX level on the ES chart sat ~6pt high.
+ *
+ * Now each session's basis is the MEDIAN of (ES − SPX) over matched 5m bars in
+ * the last hour of the cash session. The pairing, the window and the reasoning
+ * live in ./futures-basis-sync.js, shared with the NQ − NDX route.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
  * 2026-09-02 — WHY THIS ROUTE HAD ALWAYS ANSWERED `{ basis: null }`
  *
  * This module used to open its OWN `pg.Pool` with nothing but a connectionString.
  * DATABASE_URL points at Render's EXTERNAL Postgres host and carries no
  * `?sslmode=require`, so a bare pool negotiates no TLS, Render refuses the
- * connection, the `es_candles` query throws, the catch below swallows it, and the
- * route returns null — every time, since the day it was written. `_lib-db.cjs` has
- * always had the right pool (`ssl: { rejectUnauthorized: false }` for any
- * non-localhost URL, transient-reconnect retry, `max: 5` because Render Postgres
- * is connection-limited), which is why every OTHER db-backed route works.
+ * connection, the `es_candles` query throws, the catch swallows it, and the
+ * route returns null. `_lib-db.cjs` has always had the right pool, so: no
+ * private pool — go through it (./futures-basis-sync.js does) like everything else.
  *
- * So: no private pool. Go through `_lib-db.cjs` like everything else. A second
- * pool was never worth its own connection budget, let alone its own SSL bug.
- * ─────────────────────────────────────────────────────────────────────────────
+ * 2026-09-14 — ONE CONTRACT, THE ONE THE CHART IS PLOTTING
+ *
+ * es_candles holds every contract it has recorded, and ESU6 / ESZ6 sit ~70pt
+ * apart, so an unfiltered read mixes them. The futures side is pinned to the
+ * contract of the newest bar overall — the rule /api/snapshots/candles?
+ * contract=latest uses — so both sides agree by construction. Historical sessions
+ * use that contract too: the chart shows it for the backfilled days, so those
+ * columns must convert with its basis. A day with no bars for it drops out of
+ * `days` and the card falls back to the newest basis.
  */
 
-const { queryAll } = require('./_lib-db.cjs');
+const { yahooFiveMin, futuresFiveMin, syncBasisDays, METHOD } = require('./futures-basis-sync');
 
 const CACHE_MS = 60 * 60 * 1000; // basis moves ~1pt/day — an hour of cache costs nothing
 let cache = { at: 0, value: null };
-
-const ET_DATE = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
-});
-
-/**
- * The headers every WORKING ^GSPC caller in api-router.js sends. A bare
- * User-Agent gets 401/429'd by Yahoo often enough to matter, and a silent Yahoo
- * failure here reads identically to a missing basis.
- */
-const YAHOO_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  Accept: 'application/json',
-  'Accept-Language': 'en-US,en;q=0.9',
-  Origin: 'https://finance.yahoo.com',
-  Referer: 'https://finance.yahoo.com/',
-};
-
-/** Yahoo daily closes → Map<'YYYY-MM-DD' (ET), close>. */
-async function yahooDailyCloses(sym) {
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1mo&_=${Date.now()}`;
-  const res = await fetch(url, { headers: YAHOO_HEADERS, cache: 'no-store' });
-  if (!res.ok) throw new Error(`yahoo ${sym} HTTP ${res.status}`);
-  const json = await res.json();
-  const r = json?.chart?.result?.[0];
-  const ts = r?.timestamp || [];
-  const closes = r?.indicators?.quote?.[0]?.close || [];
-  const out = new Map();
-  for (let i = 0; i < ts.length; i++) {
-    const c = Number(closes[i]);
-    if (c > 0) out.set(ET_DATE.format(new Date(ts[i] * 1000)), c);
-  }
-  return out;
-}
 
 /** ES carries a POSITIVE basis to SPX (rates − dividends). Anything else is a data fault. */
 function isPlausible(b) {
@@ -96,137 +75,62 @@ function isPlausible(b) {
 let lastReason = null;
 
 /**
- * @returns {Promise<{basis:number,esClose:number,spxClose:number,date:string,days:Object}|null>}
+ * @returns {Promise<{basis:number,esClose:number,spxClose:number,date:string,
+ *   samples:number,window:string,method:string,days:Object}|null>}
  *   null when either side is missing. Callers MUST treat null as "no basis" and not
  *   as zero — a wrong basis silently bends every SPX→ES level on the chart, which is
  *   strictly worse than a visibly missing one.
+ *
+ *   `esClose` / `spxClose` are kept for compatibility: they are now the LAST
+ *   matched 5m pair of the newest session, not the 16:00 closes.
  */
 async function getEsSpxBasis() {
   if (cache.value && Date.now() - cache.at < CACHE_MS) return cache.value;
 
-  let spxByDate;
+  let spx;
   try {
-    spxByDate = await yahooDailyCloses('^GSPC');
+    spx = await yahooFiveMin('^GSPC');
   } catch (e) {
-    console.warn('[es-spx-basis] ^GSPC fetch failed:', e?.message);
+    console.warn('[es-spx-basis] ^GSPC 5m fetch failed:', e?.message);
     lastReason = `yahoo: ${e?.message || 'fetch failed'}`;
     return cache.value; // hold the last good value rather than publish junk
   }
-  if (!spxByDate.size) {
-    lastReason = 'yahoo: no ^GSPC closes in range';
+  if (!spx.size) {
+    lastReason = 'yahoo: no ^GSPC 5m bars in range';
     return cache.value;
   }
 
-  // ── ONE CONTRACT, THE ONE THE CHART IS PLOTTING (2026-09-14) ───────────────
-  //
-  // The header above calls this basis "roll-correct by construction" because it
-  // reads the same es_candles the chart plots. That held only while the table
-  // held ONE future. It now holds every contract it has recorded, and ESU6 and
-  // ESZ6 sit ~70pt apart, so an unfiltered read mixes them: the newest 16:00
-  // close can be September's while the chart draws December's, and every SPX
-  // strike then lands one calendar spread below the candle it belongs to. Same
-  // class of bug as the ESM->ESU roll named in the header — the one this file
-  // exists to prevent.
-  //
-  // So pin to the newest contract present, which is exactly what
-  // /api/snapshots/candles?contract=latest serves the chart. Same contract on
-  // both sides, and the construction argument holds again.
-  //
-  // Historical sessions use that contract too, deliberately: the chart shows
-  // ESZ6 candles for the backfilled days, so those columns must convert with an
-  // ESZ6 basis. A day with no close for this contract drops out of `days` and
-  // the card falls back to the newest basis — a small error. Converting it with
-  // the outgoing contract's basis would be a ~70pt one.
-  const CLOSE_WHERE = `time LIKE '16:00%' AND close > 0`;
-  let rows;
+  let es;
   try {
-    // The 16:00 ET bar = the RTH close. `time` is already ET, so this is the close,
-    // not a UTC-shifted midday bar. Shared pool via _lib-db.cjs — see the header.
-    rows = await queryAll(
-      // THE CONTRACT COMES FROM THE NEWEST BAR, NOT THE NEWEST 16:00 BAR.
-      //
-      // Scoping the subquery to 16:00 rows (the first version of this, same
-      // day) does not work: every contract's 16:00 bar for a given session
-      // shares one bar instant, so they share a `timestamp`, and
-      // ORDER BY timestamp DESC LIMIT 1 is a TIE that Postgres breaks however
-      // it likes. On 2026-09-11 it picked the legacy row and the basis stayed
-      // September's — 67.75pt short — while the chart drew December.
-      //
-      // The newest bar overall has no such tie (ESZ6 was live at 14:22 while
-      // the legacy rows stopped at 12:38) and is the same rule
-      // getEsCandles(contract:'latest') uses, so both sides agree by
-      // construction rather than by coincidence. The secondary sort is a
-      // belt-and-braces tie-break toward a real contract code: '' means
-      // "some pre-2026-09-14 contract, unknowable", which is never the better
-      // answer when a named one is available at the same instant.
-      `SELECT date, close, contract FROM es_candles
-        WHERE ${CLOSE_WHERE}
-          AND contract = (SELECT contract FROM es_candles
-                           ORDER BY timestamp DESC, (contract <> '') DESC
-                           LIMIT 1)
-        ORDER BY date DESC LIMIT 30`
-    );
+    es = await futuresFiveMin('es_candles');
   } catch (e) {
-    // A DB that has not picked up the contract column yet (Postgres 42703).
-    // Fall back to the unfiltered read rather than losing the basis outright:
-    // pre-roll that answer is correct, and it is what this file did for its
-    // whole life before today.
-    const missingCol = e?.code === '42703'
-      || /column .*contract.* does not exist/i.test(String(e?.message || ''));
-    if (!missingCol) {
-      console.warn('[es-spx-basis] es_candles query failed:', e?.message);
-      lastReason = `db: ${e?.message || 'query failed'}`;
-      return cache.value;
-    }
-    console.warn('[es-spx-basis] es_candles has no contract column yet - basis may straddle a roll');
-    try {
-      rows = await queryAll(
-        `SELECT date, close FROM es_candles
-          WHERE ${CLOSE_WHERE}
-          ORDER BY date DESC LIMIT 30`
-      );
-    } catch (e2) {
-      console.warn('[es-spx-basis] es_candles query failed:', e2?.message);
-      lastReason = `db: ${e2?.message || 'query failed'}`;
-      return cache.value;
-    }
-  }
-
-  // One basis PER ET SESSION, for every date where both closes exist. Both are 16:00
-  // ET prints, i.e. simultaneous — the only condition under which a basis is actually
-  // measurable. `days` drives the historical heatmap's per-column SPX→ES conversion;
-  // `basis` (the newest day) is the current anchor.
-  //
-  // LIMIT 30, not 15: es_candles holds BOTH a 1m and a 5m 16:00 row per session, so
-  // 15 rows was only ~7 sessions of `days` — and the card shifts each history column
-  // by ITS OWN session's basis. A date seen twice resolves to the same basis, so the
-  // duplicate is harmless; the short window was not.
-  const days = {};
-  let latest = null;
-  for (const r of rows) {
-    const date = String(r.date).slice(0, 10);
-    if (days[date] != null) continue; // same session, other interval — already priced
-    const esClose = Number(r.close);
-    const spxClose = Number(spxByDate.get(date) ?? 0);
-    if (!(esClose > 0) || !(spxClose > 0)) continue;
-    const basis = Math.round((esClose - spxClose) * 100) / 100;
-    if (!isPlausible(basis)) {
-      console.warn(`[es-spx-basis] REJECTED ${basis} on ${date} (es=${esClose} spx=${spxClose})`);
-      continue;
-    }
-    days[date] = basis;
-    // rows are DESC, so the first survivor is the newest.
-    if (!latest) latest = { basis, esClose, spxClose, date };
-  }
-
-  if (!latest) {
-    console.warn('[es-spx-basis] no date has both an ES 16:00 close and a ^GSPC close');
-    lastReason = 'no-match: no session has both an ES 16:00 close and a ^GSPC close';
+    console.warn('[es-spx-basis] es_candles query failed:', e?.message);
+    lastReason = `db: ${e?.message || 'query failed'}`;
     return cache.value;
   }
+
+  const { days, latest } = syncBasisDays(es.byDate, spx, { isPlausible, label: 'es-spx-basis' });
+  if (!latest) {
+    lastReason = 'no-match: no session has enough matched ES / ^GSPC 5m bars in its last hour';
+    console.warn(`[es-spx-basis] ${lastReason}`);
+    return cache.value;
+  }
+
   lastReason = null;
-  cache = { at: Date.now(), value: { ...latest, days } };
-  console.log(`[es-spx-basis] ${latest.date} basis=${latest.basis} (ES ${latest.esClose} − ^GSPC ${latest.spxClose}), ${Object.keys(days).length} days, contract=${rows[0]?.contract ?? '(unfiltered)'}`);
+  cache = {
+    at: Date.now(),
+    value: {
+      basis: latest.basis,
+      esClose: latest.futClose,
+      spxClose: latest.idxClose,
+      date: latest.date,
+      samples: latest.samples,
+      window: latest.window,
+      method: METHOD,
+      days,
+    },
+  };
+  console.log(`[es-spx-basis] ${latest.date} basis=${latest.basis} (median of ${latest.samples} 5m pairs, ${latest.window}), ${Object.keys(days).length} days, contract=${es.contract}`);
   return cache.value;
 }
 
