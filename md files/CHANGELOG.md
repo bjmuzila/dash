@@ -25217,3 +25217,55 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `budget-vite/src/pages/Lists.tsx` (Import meals sheet): a line that is only a link no longer gets dropped. Those lines wait under "N links need a name → Look up names", which asks the server in chunks of 50 with a progress bar; each video's caption becomes the meal name and its category is guessed. Liked videos aren't all food, so captions that don't read like food are held back ("not food?") unless "Include N that don't look like food" is ticked. Videos already in My meals show as "already there".
 - `server-v2/_lib-household-lists.cjs`: `previewLink` now runs on a shared `resolveOne()`. It understands TikTok data-export links (`www.tiktokv.com/share/video/<id>/`): it asks oEmbed for `www.tiktok.com/@/video/<id>` first and stores the canonical `/@user/video/<id>` link. New `resolveLinks()` (≤60 links per call, 4 at a time) returns name, category, a caption-based `food` flag and `exists` (matched by video id). `importLibraryMeals()` now also skips a video already in the list under a different name.
 - `server-v2/household-routes.cjs`: `/api/hh/lists` action `resolveLinks`. `budget-vite/src/api.ts`: `lists.resolveLinks`, `ResolvedLink`.
+
+## 2026-10-02 - Voltick PR #33: Path's newest bubble stays in front of the live candle
+
+- Nick asked whether it was intended that the Ribbon's newest dot stays in front of the live candle while Path's newest bubble goes behind it. Brandon's answer was "both in front".
+- **What changed.** In `web/src/HeatChart.jsx`, the Path branch of `NodeTrails` takes the newest bubble out of each row and paints it in the `_front` pass, which runs after the candles. It uses the same `paintRow` code, so the glow, fill, stroke and highlight are unchanged. The older bubbles still paint behind the candles.
+- **Tests.** `server/test/path-and-path-ribbon-sit-behind-the-candles.test.js` gains 3 tests and now passes 7/7. All 4 mutations were caught. The Path test set has no new failures.
+- **How it ships.** Commit it on top of `path-behind-candles` so it updates PR #33, before Nick merges.
+- **File in `generated/`:** `2026-10-02-voltick-pr33-newest-bubble-in-front.patch`
+
+## 2026-10-02 - Voltick PR #32 (OI+VOL, DEX, PREM): Nick's second review
+
+- **Blocker 1: tapping DEX reset the picked date.** In `web/src/Voltick.jsx`, the scope-default effect's deps changed from `effLens` to `effLens === "PREM"`. Only PREM changes what that effect decides.
+- **Blocker 2: captures said "weighted by today's volume" on every view.** The new `captureBasis()` in `web/src/boardviews.js` gives OI+VOL, DEX and PREM each their own line. VOLUME keeps its old sentence.
+- **Small items:**
+  - The desktop rail's lens and source pickers now hold until a board width of 1800px (`slimRail`). The pills had wrapped between about 1650 and 1705px.
+  - The FAQ's phone sentence is corrected. On a phone the lens is one picker, but the sources are still pills.
+  - Two stale comments are fixed.
+  - The public `admin-site/admin.js` no longer has a teammate's name in `PRIO_LEADS`, and its comment no longer quotes internal work.
+- **Tests.** The new `server/test/a-lens-tap-keeps-the-date-and-a-capture-names-its-own-map.test.js` passes 9/9.
+  - It lifts the real effect and runs it under a small hooks stand-in.
+  - It catches 6 of 6 mutations.
+  - `volume-index-0dte.test.js` pinned the old deps, so it now points at the new ones.
+  - Full `npm test` (11,564 tests) fails the same set of tests as the PR #32 baseline, with nothing new.
+  - The web build, `check:undef`, `check:jsx` and `check:props` are clean.
+- **Not done yet.** The "four lines covered only by source pins" are in Nick's note, and the note link isn't shared with Brandon's account.
+- **How it ships.** Commit it on `bzilabranch`. After Nick's 4pm push, rebase onto main, re-run the suite, then push.
+- **File in `generated/`:** `2026-10-02-voltick-pr32-review-round-two.patch`
+
+## 2026-10-02 - v3 Tracked contracts: Entry / Now / High, each with its $
+
+- `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`: the Mark and Move columns are replaced by **Now** and **High**. Entry, Now and High each show the price on top and the dollar value under it (price × print contracts × 100). Now and High also show the % move off the entry and the $ P/L, colored up/down. A lookup has no print size, so its dollars are per one contract and marked "/ct". The pop-out trade card tiles follow: Entry ($ cost), Now, High, Move, Size, Tracked (Premium tile dropped, since Entry's $ is the same number).
+- `cbedge-v3/src/pages/whales/alertsStore.ts`: new `highs` map. It comes from the same bars the mark already reads, so there are no extra requests. The high is the best bar high from the bar containing the print (or the moment you tracked it, for a lookup) to the last bar, the same slicing as the prints table's HIGH column. Lookups now read bars from their tracked day instead of only today, so their high covers the whole time they've been tracked.
+
+## 2026-10-02 - v3 new page: VELA (LuxAlgo's open-source chart workspace on CB Edge data)
+
+- **What it is.** `/v3/vela` mounts [LuxAlgo/Vela](https://github.com/LuxAlgo/Vela) (Apache-2.0, npm `@luxalgo/vela` 0.8.1): a full chart app with symbol search, timeframes, chart styles, 70+ built-in indicators, drawing tools, object tree, data window, bar replay, and a layout picker for a synced grid of up to 16 charts. Rail icon 🕯️ "Vela", just before v2 Legacy.
+- `cbedge-v3/src/pages/vela/cbedgeProvider.ts` (new): Vela's `DataProvider` port over the routes the GEX Candles card already reads. No new backend route.
+  - History: `/api/snapshots/etf-candles` for every cash symbol (SPX, SPY, QQQ, NVDA…, plus the `/api/es-candles/tickers` roster in the search) and `/api/snapshots/candles` for ES and NQ futures (typed as `ES` / `NQ`). Shared through `api.ts` `query`.
+  - Timeframes 1/2/3/5/10/15/30/60/120/240/D. Native 1m (5 days) or 5m (30 days); coarser rolled up client-side, anchored to 09:30 ET. D is rolled from the 5m tape, so it shows about 30 sessions. The cut-off first bucket is dropped.
+  - Live: cash symbols ride the `/etf-candles/live/stream` SSE with the 3s `/live` probe as the quiet-stream fallback (same two-transport shape as GexCandlesCard; dropped while the tab is hidden, history re-read on return after 30s). ES/NQ ride the socket's `es1mCandles` / `nq1mCandles` frames via `watchFrame`. Any timeframe's forming bar is built from those 1m bars without double counting the history bar's volume.
+  - RTH/ETH: every symbol declares `session` 0930-1600 (`session_extended` 0400-2000 cash, 1800-1700 futures), which turns on Vela's RTH/ETH switch and session shading. RTH is the default. The market-status calendar is weekdays only (no holiday data on any route).
+  - Logos: same-origin `/logos/<SYM>.png` mirror (ChipLogo stage 1) so the chart PNG export never taints.
+- `cbedge-v3/src/pages/Vela.tsx` (new): the page. Workspace created in `ChartFrame` onMount, destroyed in cleanup; palette from tokens via `tokenHex` (bg, muted text, surface2 grid, line border, candle up/down, `--font-sans`); timezone America/New_York; layout starts at one chart; state persists per browser under `cb-v3-vela`. The app toolbar's ticker picker drives the active chart, and the active chart's symbol is written back to it (futures excluded). Vela's attribution logomark is left on, as its NOTICE requires.
+- `cbedge-v3/src/App.tsx` (lazy route), `src/shell/Shell.tsx` (NAV entry with SPX 5m history prefetch), `src/pages/TradersDashboard.tsx` (Quick Links: ALL_PAGES + LIVE_ROUTES).
+- `cbedge-v3/package.json`: `@luxalgo/vela ^0.8.1`. **Run `npm install` in `cbedge-v3/` on the laptop before `npm run dev`.** The Docker build installs it on its own.
+- `cbedge-v3/vite.config.ts`: `lib-vela` manualChunk for `@luxalgo/vela` + `@zag-js`. `scripts/check-budgets.mjs` + `budgets.json`: new `lib` kind for one-library-one-route chunks, budget 286500 (lib-vela is 274.3kb brotli). The `/vela` route chunk itself is 4.1kb. Nothing joins the initial load.
+- `app/v3/vela/route.ts` (new, approved): the `serveSpaShell("v3")` shim so a hard refresh on `/v3/vela` doesn't 404.
+- **Checks.** No new `tsc` errors (the 5 existing ones are unchanged), `check:theme` clean, `check:casing` clean. On the budget check, `lib-vela` and the route pass. The entry/css/react/initial overages were already there before this change (same numbers on an untouched build). Tested in headless Chromium against a mock backend: SPX/QQQ/NDX/ES load, 1h and D roll-ups, ETH shading on ES, live SSE moves the forming bar, the toolbar↔chart symbol sync works both ways, a saved layout survives reload, a 2×2 grid renders, and leaving and coming back leaves one workspace. Not yet tested against live server data.
+- **File in `generated/`:** `2026-10-02-vela-page.png` (mock data)
+
+## 2026-10-02 — budget.cbedge.net Import meals: no categories, no food filter
+- `budget-vite/src/pages/Lists.tsx` (Import meals sheet): imported meals are no longer sorted into categories — every meal goes to Other. `# Header` lines and second columns are ignored for meals, the preview is one flat list, and no new categories are created. The "doesn't look like food" hold-back is gone, since the import is now used for saved videos, which are all recipes. The grocery-list import still uses aisles. No server change.

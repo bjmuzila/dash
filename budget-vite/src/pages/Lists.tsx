@@ -881,23 +881,32 @@ function BulkImport({ mode, existing, onDone, onClose }: {
     }
     if (alive.current) setLookup(null)
   }
-  const noun = mode === 'meals' ? (p.fresh.length === 1 ? 'meal' : 'meals') : (p.fresh.length === 1 ? 'item' : 'items')
-  const SHOW = 300
+  // Untick to leave something out. Keyed by name, so it survives the list
+  // re-parsing as names come back from the lookup.
+  const [skip, setSkip] = useState<Set<string>>(() => new Set())
+  const picked = p.fresh.filter((r) => !skip.has(r.key))
+  const toggle = (key: string) => {
+    const next = new Set(skip)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    setSkip(next)
+  }
+  const noun = mode === 'meals' ? (picked.length === 1 ? 'meal' : 'meals') : (picked.length === 1 ? 'item' : 'items')
+  const SHOW = 2500
   let shown = 0
 
   const save = async () => {
-    if (!p.fresh.length || busy) return
+    if (!picked.length || busy) return
     try {
       if (mode === 'meals') {
-        const r = await importMeals.mutateAsync(p.fresh.map((x) => ({ title: x.name, category: x.group, url: x.url ?? null })))
-        onDone?.([...new Set(p.fresh.map((x) => x.group))])
+        const r = await importMeals.mutateAsync(picked.map((x) => ({ title: x.name, category: x.group, url: x.url ?? null })))
+        onDone?.([...new Set(picked.map((x) => x.group))])
         setResult([
           `Added ${r.added} ${r.added === 1 ? 'meal' : 'meals'}.`,
           r.skipped ? `${r.skipped} already there.` : '',
           r.badLinks ? `${r.badLinks} ${r.badLinks === 1 ? 'link' : 'links'} didn't look right, so those meals were saved without one.` : '',
         ].filter(Boolean).join(' '))
       } else {
-        const r = await importItems.mutateAsync(p.fresh.map((x) => ({ text: x.name, qty: x.qty ?? null, aisle: x.aisle ?? null })))
+        const r = await importItems.mutateAsync(picked.map((x) => ({ text: x.name, qty: x.qty ?? null, aisle: x.aisle ?? null })))
         onDone?.([])
         setResult([
           `Added ${r.added} ${r.added === 1 ? 'item' : 'items'} to the list.`,
@@ -905,6 +914,7 @@ function BulkImport({ mode, existing, onDone, onClose }: {
         ].filter(Boolean).join(' '))
       }
       setText('')
+      setSkip(new Set())
     } catch { /* shown below via err */ }
   }
 
@@ -945,7 +955,7 @@ function BulkImport({ mode, existing, onDone, onClose }: {
             <>
               <div style={label({ marginTop: 10, letterSpacing: '0.08em' })}>
                 {[
-                  `${p.fresh.length} new`,
+                  p.fresh.length && picked.length < p.fresh.length ? `${picked.length} of ${p.fresh.length} new picked` : `${p.fresh.length} new`,
                   mode === 'items' && p.groups.length > 1 ? `${p.groups.length} aisles` : null,
                   p.exists ? `${p.exists} already there` : null,
                   p.repeats ? `${p.repeats} repeated` : null,
@@ -983,28 +993,59 @@ function BulkImport({ mode, existing, onDone, onClose }: {
                 </div>
               )}
 
-              <div style={{ marginTop: 8, maxHeight: '32dvh', overflowY: 'auto', borderTop: `1px solid ${T.rule}` }}>
+              {p.fresh.length > 1 && (
+                <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 10 }}>
+                  <span style={{ ...body(12), color: T.faint, flex: 1 }}>Untick anything you don't want.</span>
+                  <button onClick={() => setSkip(new Set())} style={linkBtn}>All</button>
+                  <button onClick={() => setSkip(new Set(p.fresh.map((r) => r.key)))} style={linkBtn}>None</button>
+                </div>
+              )}
+
+              <div style={{ marginTop: 8, maxHeight: '45dvh', overflowY: 'auto', borderTop: `1px solid ${T.rule}` }}>
                 {p.groups.map((g) => {
                   if (shown >= SHOW) return null
-                  const rows = g.rows.slice(0, SHOW - shown)
+                  // New ones first — they're the ones to decide on.
+                  const ordered = [...g.rows.filter((r) => r.status === 'new'), ...g.rows.filter((r) => r.status !== 'new')]
+                  const rows = ordered.slice(0, SHOW - shown)
                   shown += rows.length
                   return (
                     <div key={g.name} style={{ padding: '6px 0' }}>
                       {mode === 'items' && (
                         <div style={label()}>{g.name} · {g.rows.filter((r) => r.status === 'new').length}</div>
                       )}
-                      {rows.map((r, i) => (
-                        <div key={`${r.key}-${i}`} style={{ ...body(14), padding: '3px 0', display: 'flex', gap: 8,
-                                                             color: r.status === 'new' ? T.ink : T.faint }}>
-                          <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word',
-                                         textDecoration: r.status === 'new' ? 'none' : 'line-through' }}>
-                            {r.name}{r.qty ? ` · ${r.qty}` : ''}
-                          </span>
-                          {r.url && r.status === 'new' && <span style={label({ color: T.accent })}>link</span>}
-                          {r.status === 'exists' && <span style={label()}>already there</span>}
-                          {r.status === 'repeat' && <span style={label()}>repeat</span>}
-                        </div>
-                      ))}
+                      {rows.map((r, i) => {
+                        const isNew = r.status === 'new'
+                        const on = isNew && !skip.has(r.key)
+                        return (
+                          <div key={`${r.key}-${i}`} style={{ ...body(14), display: 'flex', alignItems: 'center', gap: 10,
+                                                               minHeight: isNew ? 44 : 30, borderTop: i ? `1px solid ${T.rule}` : 'none',
+                                                               color: on ? T.ink : T.faint }}>
+                            {isNew ? (
+                              <button onClick={() => toggle(r.key)} aria-label={on ? `Leave out ${r.name}` : `Add ${r.name}`}
+                                      style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, minHeight: 44,
+                                               background: 'none', border: 0, padding: 0, color: 'inherit', textAlign: 'left', cursor: 'pointer' }}>
+                                <span style={checkbox(on, 18)}>{on ? '✓' : ''}</span>
+                                <span style={{ ...body(14), color: 'inherit', flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
+                                  {r.name}{r.qty ? ` · ${r.qty}` : ''}
+                                </span>
+                              </button>
+                            ) : (
+                              <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word', textDecoration: 'line-through', paddingLeft: 28 }}>
+                                {r.name}{r.qty ? ` · ${r.qty}` : ''}
+                              </span>
+                            )}
+                            {/* Watch it before deciding. */}
+                            {r.url && isNew && (
+                              <a href={r.url} target="_blank" rel="noreferrer"
+                                 style={{ ...label({ color: T.accent }), textDecoration: 'none', padding: '12px 4px' }}>
+                                Watch ↗
+                              </a>
+                            )}
+                            {r.status === 'exists' && <span style={label()}>already there</span>}
+                            {r.status === 'repeat' && <span style={label()}>repeat</span>}
+                          </div>
+                        )
+                      })}
                     </div>
                   )
                 })}
@@ -1016,14 +1057,18 @@ function BulkImport({ mode, existing, onDone, onClose }: {
           )}
 
           {err && <div style={{ ...body(13), color: T.bad, marginTop: 8 }}>{(err as Error).message}</div>}
-          <button onClick={() => void save()} disabled={!p.fresh.length || busy}
-                  style={{ ...button(p.fresh.length ? 'primary' : 'ghost'), width: '100%', marginTop: 12 }}>
-            {busy ? 'Adding…' : p.fresh.length ? `Add ${p.fresh.length} ${noun}` : 'Nothing new to add'}
+          <button onClick={() => void save()} disabled={!picked.length || busy}
+                  style={{ ...button(picked.length ? 'primary' : 'ghost'), width: '100%', marginTop: 12 }}>
+            {busy ? 'Adding…' : picked.length ? `Add ${picked.length} ${noun}` : p.fresh.length ? 'Nothing picked' : 'Nothing new to add'}
           </button>
         </>
       )}
     </Sheet>
   )
+}
+
+const linkBtn: React.CSSProperties = {
+  ...label({ color: T.accent }), background: 'none', border: 0, cursor: 'pointer', padding: '8px 0',
 }
 
 // ── Shop mode ────────────────────────────────────────────────────────────────
