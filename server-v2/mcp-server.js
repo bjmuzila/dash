@@ -29,7 +29,9 @@
  *   gex_levels_history  /api/walls-range + /proxy/walls (walls_log, scanner
  *                       series, touch events): open (09:29) and close (16:00)
  *                       call wall / put wall / CORE / flip for past sessions,
- *                       plus a multi-session summary computed here from them
+ *                       plus a multi-session summary computed here from them,
+ *                       any of the Open bracket anchors (09:29 / 09:35 /
+ *                       09:45 / 10:00), and /api/core-hold's own verdicts
  *   weekly_levels       /api/levels?ticker=
  *   economic_calendar   /api/calendar
  *   earnings_today      /api/earnings-today
@@ -206,6 +208,24 @@ const OPEN_BASELINE_MINS = 9 * 60 + 29; // walls-recorder slot 0, captured befor
 const BELL_MINS = 9 * 60 + 30;
 const CLOSE_MINS = 16 * 60;
 const HIST_SCOPES = { nearest: '0dte', all_other: 'agg' };
+// WHEN THE OPENING LEVELS ARE TAKEN — the same four anchors as owner.cbedge.net
+// → Results → Open bracket (server-v2/core-hold.js ANCHORS). 09:29 is the
+// recorder's own pre-bell capture; a later anchor is the first sweep at or after
+// that clock time, within ANCHOR_GRACE_MINS, exactly as core-hold takes it.
+const HIST_ANCHORS = {
+  open: { key: 'open', label: '09:29', mins: 9 * 60 + 29 },
+  '09:35': { key: '0935', label: '09:35', mins: 9 * 60 + 35 },
+  '09:45': { key: '0945', label: '09:45', mins: 9 * 60 + 45 },
+  '10:00': { key: '1000', label: '10:00', mins: 10 * 60 },
+};
+const ANCHOR_GRACE_MINS = 10;
+const CORE_POS_TEXT = {
+  cw: 'the CORE is the call wall',
+  pw: 'the CORE is the put wall',
+  interior: 'the CORE sits between the walls',
+  outside: 'the CORE sits outside the walls',
+};
+const pctOf = (r) => (r == null ? null : round(r * 100, 1));
 const MAX_SESSIONS = 60;
 // Past this many sessions each row comes back compact (levels + spot only) —
 // the summary carries the read, and 60 full rows would bury it.
@@ -278,7 +298,8 @@ function sideOf(px, put, call) {
  * between, and (optionally) what price did at them.
  */
 async function buildSession(ctx, ticker, day, scope, opts) {
-  const { at, withMoves, withTouches, compact } = opts;
+  const { at, withMoves, withTouches, compact, anchor, bracket } = opts;
+  const atOpen = anchor.key === 'open';
   const log = Array.isArray(day.log) ? day.log : [];
   const open = {};
   const close = {};
@@ -306,7 +327,12 @@ async function buildSession(ctx, ticker, day, scope, opts) {
     for (const x of timed) if (x.m <= mins) hit = x.r;
     return hit;
   };
-  const openRow = lastAtOrBefore(OPEN_BASELINE_MINS) || timed[0]?.r || null;
+  // The open: the last sample at or before 09:29. A later anchor: the FIRST
+  // sample at or after its clock time, inside the grace window — core-hold's rule.
+  const firstWithin = (from, to) => timed.find((x) => x.m >= from && x.m <= to)?.r || null;
+  const openRow = atOpen
+    ? (lastAtOrBefore(OPEN_BASELINE_MINS) || timed[0]?.r || null)
+    : firstWithin(anchor.mins, anchor.mins + ANCHOR_GRACE_MINS);
   const closeRow = lastAtOrBefore(CLOSE_MINS) || timed[timed.length - 1]?.r || null;
 
   const today = etDate();
@@ -317,16 +343,24 @@ async function buildSession(ctx, ticker, day, scope, opts) {
   const path = (Array.isArray(day.spot) ? day.spot : [])
     .filter((p) => Array.isArray(p) && p[0] >= BELL_MINS && p[0] <= CLOSE_MINS && nn(p[1]) != null);
   const firstPx = path.length ? num(path[0][1]) : null;
-  const lastPx = path.length ? num(path[path.length - 1][1]) : null;
+  // The close the Open bracket page scores against: the true daily close where
+  // the daily-bar backfill has it, else the last sweep sample.
+  const lastPx = !inProgress && nn(bracket?.close) != null ? nn(bracket.close)
+    : (path.length ? num(path[path.length - 1][1]) : null);
+  const closeSource = !inProgress && nn(bracket?.close) != null ? (bracket.close_src === 'daily' ? 'daily bar' : 'sweep sample')
+    : (path.length ? 'sweep sample' : null);
   const pxs = path.map((p) => Number(p[1]));
 
+  // Walls at the anchor: the Open bracket page's own reading first, then the
+  // 09:29 log (open anchor only), then the sweep sample.
+  const pick = (...v) => v.find((x) => x != null) ?? null;
   const openSnap = {
     ...(boardSample(openRow) || {}),
-    time: '09:29',
-    callWall: open.callWall ?? nn(openRow?.call_wall),
-    putWall: open.putWall ?? nn(openRow?.put_wall),
-    core: open.core ?? nn(openRow?.cb),
-    spot: openSpot ?? nn(openRow?.spot),
+    time: anchor.label,
+    callWall: pick(nn(bracket?.call_wall), atOpen ? open.callWall : null, nn(openRow?.call_wall)),
+    putWall: pick(nn(bracket?.put_wall), atOpen ? open.putWall : null, nn(openRow?.put_wall)),
+    core: pick(nn(bracket?.core), atOpen ? open.core : null, nn(openRow?.cb)),
+    spot: pick(nn(bracket?.spot), atOpen ? openSpot : null, nn(openRow?.spot)),
   };
   const closeSnap = {
     ...(boardSample(closeRow) || {}),
@@ -362,11 +396,27 @@ async function buildSession(ctx, ticker, day, scope, opts) {
     : {
       firstPrint: round(firstPx),
       [inProgress ? 'last' : 'close']: round(lastPx),
+      closeSource,
       high,
       low,
       closeVsOpeningWalls: closeSide,
       samples: pxs.length,
     };
+  // The Open bracket page's verdict on this session, field for field.
+  if (bracket) {
+    out.openBracket = compact
+      ? { status: bracket.status, insideAtClose: bracket.inside ?? null, neverLeft: bracket.never_left ?? null }
+      : {
+        anchor: anchor.label,
+        status: bracket.status,
+        insideAtClose: bracket.inside ?? null,
+        neverLeft: bracket.never_left ?? null,
+        widthPctOfSpot: nn(bracket.width_pct),
+        corePosition: CORE_POS_TEXT[bracket.core_pos] || null,
+        closeVsCore: bracket.core_side || null,
+        wallRollsAfterAnchor: nn(bracket.rolled, 0),
+      };
+  }
 
   const moves = log.filter((r) => Number(r.slot) > 0 && r.reason === 'change' && HIST_LEVELS[r.level_type]);
   out.wallMoves = moves.length;
@@ -464,7 +514,7 @@ function endStats(snaps, spotOf) {
 
 /** The multi-session read: averages, distances from spot, open→close drift, and
  *  how the close sat against the opening walls. Computed here, not by the model. */
-function summarize(raws, at) {
+function summarize(raws, at, page, anchor) {
   const done = raws.filter((r) => !r.inProgress);
   const out = {
     sessions: raws.length,
@@ -490,7 +540,9 @@ function summarize(raws, at) {
     out.openToClose = drift;
     const sides = done.map((r) => r.closeSide).filter(Boolean);
     const inside = sides.filter((x) => x === 'inside the walls').length;
-    out.closeVsOpeningWalls = sides.length ? {
+    // When the Open bracket page's own numbers are here (below), they ARE the
+    // containment answer — a second, differently-counted one would only conflict.
+    if (!page) out.closeVsOpeningWalls = sides.length ? {
       inside,
       aboveCallWall: sides.filter((x) => x === 'above the call wall').length,
       belowPutWall: sides.filter((x) => x === 'below the put wall').length,
@@ -498,6 +550,26 @@ function summarize(raws, at) {
       of: sides.length,
     } : null;
     out.sessionRange = stats(done.map((r) => (r.high == null || r.low == null ? null : r.high - r.low)));
+  }
+  if (page && at !== 'open') {
+    // owner.cbedge.net → Results → Open bracket, this ticker's row, same window
+    // and anchor — the page's arithmetic (server-v2/core-hold.js), not a re-count.
+    out.openBracket = {
+      anchor: anchor.label,
+      sessions: page.sessions,
+      scored: page.scored,
+      closedInside: page.inside,
+      insidePct: pctOf(page.inside_rate),
+      neverLeftPct: pctOf(page.never_left_rate),
+      neverLeftOf: page.path_sessions,
+      closedAboveCorePct: pctOf(page.above_core_rate),
+      coreBetweenWallsPct: pctOf(page.core_interior_rate),
+      medianWidthPctOfSpot: nn(page.width_pct),
+      openedOutside: page.opened_outside,
+      wallsRolledPct: pctOf(page.rolled_rate),
+      closesFromSweepNotDailyBar: page.scanner_closes,
+      readFirst: 'Read medianWidthPctOfSpot before insidePct: a wide bracket that contains the close says little.',
+    };
   }
   out.wallMovesPerSession = stats(raws.map((r) => r.wallMoves), 1);
   if (raws.length !== done.length) out.note = 'Today is still trading: it counts toward the open figures only.';
@@ -680,8 +752,11 @@ const TOOLS = [
       + `${MAX_SESSIONS}) it also returns a computed SUMMARY: average / median / min / max of each opening and `
       + 'closing level, how far each sat from spot on average (the comparable number when price drifts), the '
       + 'average open→close change, how often the close finished inside / above / below the opening walls, '
-      + 'how often spot opened above the flip, and wall moves per session. Quote the summary\'s numbers rather '
-      + 'than averaging the rows yourself. Use for "where were the SPX walls at the open on Sept 12?", '
+      + 'how often spot opened above the flip, and wall moves per session — plus, in summary.openBracket, the '
+      + 'owner Open bracket page\'s own figures (close inside the opening walls %, never-left %, median bracket '
+      + 'width). The opening levels can be taken at 09:29 (default) or at 09:35, 09:45 or 10:00 via `anchor`. '
+      + 'Quote the summary\'s numbers rather than averaging the rows yourself. '
+      + 'Use for "where were the SPX walls at the open on Sept 12?", "average 9:45 levels this week", '
       + '"average opening levels over the last 5 days", "how often did SPX close inside the opening walls this '
       + 'month?". For TODAY\'s live levels use spx_gamma_levels instead.',
     inputSchema: {
@@ -701,6 +776,12 @@ const TOOLS = [
         at: {
           type: 'string', enum: ['open', 'close', 'both'], default: 'both',
           description: 'Opening levels, closing levels, or both (with the open→close change).',
+        },
+        anchor: {
+          type: 'string', enum: ['open', '09:35', '09:45', '10:00'], default: 'open',
+          description: 'WHEN the opening levels are taken: open = 09:29 ET, before the bell (default); or the first '
+            + 'reading at/after 09:35, 09:45 or 10:00. The same anchors as the Open bracket page. A later anchor '
+            + 'has full history for SPX, SPY, QQQ, NDX, VIX and the big tech names, about 10 sessions for the rest.',
         },
         scope: {
           type: 'string', enum: ['nearest', 'all_other'], default: 'nearest',
@@ -728,6 +809,8 @@ const TOOLS = [
       const at = ['open', 'close', 'both'].includes(args.at) ? args.at : 'both';
       const scopeName = args.scope === 'all_other' ? 'all_other' : 'nearest';
       const scope = HIST_SCOPES[scopeName];
+      const anchorIn = String(args.anchor || 'open').replace(/^(\d{2})(\d{2})$/, '$1:$2');
+      const anchor = HIST_ANCHORS[anchorIn] || HIST_ANCHORS.open;
       const compact = sessions > FULL_ROWS_MAX;
       const withMoves = !compact && (typeof args.include_moves === 'boolean' ? args.include_moves : sessions === 1);
       const summaryOnly = args.summary_only === true;
@@ -744,8 +827,24 @@ const TOOLS = [
         };
       }
       const ordered = [...days].sort((a, b) => (a.date < b.date ? 1 : -1)); // newest first
+
+      // The Open bracket page's study for this ticker, same window, scope and
+      // anchor — its per-session verdicts and its row. Optional: without it the
+      // levels still come from walls_log and the sweep series.
+      let page = null;
+      const brackets = new Map();
+      try {
+        const ch = await cached(`hist:bracket:${ticker}:${date}:${sessions}:${scope}:${anchor.key}`, histTtl(date),
+          () => fetchJson(ctx, `/api/core-hold?symbols=${encodeURIComponent(ticker)}&days=${sessions}&end=${date}`
+            + `&anchor=${anchor.key}&scope=${scope}&basis=oivol&detail=1`));
+        if (ch?.ok) {
+          page = (Array.isArray(ch.rows) ? ch.rows : []).find((r) => r.symbol === ticker) || null;
+          for (const d of Array.isArray(ch.detail) ? ch.detail : []) if (d.symbol === ticker) brackets.set(d.date, d);
+        }
+      } catch { /* degrade to the walls log + series */ }
+
       const built = await mapLimit(ordered, SERIES_CONCURRENCY, (day) => buildSession(ctx, ticker, day, scope, {
-        at, withMoves, withTouches: sessions === 1, compact,
+        at, withMoves, withTouches: sessions === 1, compact, anchor, bracket: brackets.get(day.date) || null,
       }));
       const newest = ordered[0].date;
       const multi = built.length > 1;
@@ -758,14 +857,19 @@ const TOOLS = [
         isRequestedSession: newest === date,
         sessionsRequested: sessions,
         sessionsFound: built.length,
-        ...(multi ? { summary: summarize(built.map((b) => b.raw), at) } : {}),
+        anchor: anchor.label,
+        ...(multi ? { summary: summarize(built.map((b) => b.raw), at, page, anchor) } : {}),
         ...(summaryOnly && multi ? {} : { sessions: built.map((b) => b.out) }),
         notes: [
           newest === date ? null : `No recorded session on ${date} (weekend, holiday, or not recorded); the most recent earlier session is ${newest}.`,
           built.length < sessions ? `Only ${built.length} recorded session${built.length === 1 ? '' : 's'} on or before ${date} for ${ticker}.` : null,
           multi ? 'summary.*.pointsFromSpot = level minus spot at that moment (positive = above price), averaged across sessions.' : null,
-          'Open = the levels captured at 09:29 ET, before the bell (open interest settled overnight, no volume yet). '
-            + 'Close = the levels standing at 16:00 ET. Times are ET.',
+          anchor.key === 'open'
+            ? 'Open = the levels captured at 09:29 ET, before the bell (open interest settled overnight, no volume yet). '
+              + 'Close = the levels standing at 16:00 ET. Times are ET.'
+            : `"open" here = the first reading at or after ${anchor.label} ET (within ${ANCHOR_GRACE_MINS} min), as the Open bracket page takes it. `
+              + 'Close = the levels standing at 16:00 ET. Times are ET.',
+          page ? 'openBracket fields are the owner Open bracket page\'s own numbers for this ticker, window and anchor.' : null,
           'High/low and prices come from the 1–5 minute samples the levels were taken from, not tick data.',
         ].filter(Boolean),
       };

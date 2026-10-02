@@ -25294,3 +25294,25 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - Note: an earlier entry for this tool written today did not survive a concurrent CHANGELOG rewrite; this entry replaces it.
 
 ---
+
+## 2026-10-02 — AI connector history: 09:35 / 09:45 / 10:00 anchors and the Open bracket page's own numbers
+
+- **Why.** Asked for SPX levels "at 9:45", Gemini could only say the logs capture 09:29 and 16:00. Every level it needed is already tracked by owner.cbedge.net → Results → **Open bracket** (`/api/core-hold`, `server-v2/core-hold.js`).
+- **`gex_levels_history` changes.**
+  - **New `anchor` input:** `open` (09:29, the default), `09:35`, `09:45` or `10:00`. These are the same four anchors as the Open bracket page, taken by its rule: the first sweep at or after the clock time, within 10 minutes. The "open" levels (call wall, put wall, CORE, spot, flip, net GEX) and the summary's opening averages follow the anchor.
+  - **Each session gains `openBracket`, the page's verdict for that session:**
+    - status (inside / outside / opened_outside / …), whether it closed inside, never left;
+    - bracket width as a % of spot;
+    - where the CORE sat (call wall / put wall / between), and which side of the CORE the close landed;
+    - wall rolls after the anchor.
+  - **The close is now the page's close:** the true daily-bar close where the backfill has it, otherwise the last sweep sample. `closeSource` says which.
+  - **`summary.openBracket` is the page's own row** for that ticker, window and anchor: closed-inside %, never-left %, closed-above-CORE %, CORE-between-walls %, median width % of spot, opened outside, walls rolled %, and closes taken from the sweep. It replaces the tool's own inside/above/below count, so the AI and the page can't disagree.
+  - Later anchors have full history for the 14 MAIN tickers (SPX, SPY, QQQ, NDX, VIX, big tech) and about 10 sessions for the rest, the same as the page. If `/api/core-hold` can't be read, the tool falls back to `walls_log` and the sweep series.
+- **Files.** `server-v2/mcp-server.js`.
+- **Tests.**
+  - The offline selftest passes 12/12. The Postgres end-to-end test passes 47/47 against the real `api-router.js`, `walls-recorder.js` and `core-hold.js`.
+  - New assertions check:
+    - the page row (sessions, scored, inside 0%, never-left 0%, median width 1.5%, rolled 50%) and the per-session verdict;
+    - the 09:45 anchor: walls, CORE, flip and spot from the first reading at or after 09:45, averages over two sessions, and rolls counted only after the anchor.
+
+---
