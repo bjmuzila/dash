@@ -111,6 +111,9 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     links: [
       { label: "Dev", href: "/owner/dev", glyph: "⚙", key: "Dev" },
       { label: "Admin", href: "/owner/dev/admin", glyph: "⚿", key: "Admin" },
+      // The AI-app connector (www.cbedge.net/mcp): who is connected through
+      // Gemini / ChatGPT / Claude, tool usage, refusals, and a disconnect button.
+      { label: "AI Connections", href: "/owner/ai-connections", glyph: "✦", key: "AiConnections" },
       { label: "Database", href: "/database", glyph: "⛁", key: "Database" },
       { label: "Postgres", href: "/owner/db-map", glyph: "⛃", key: "DbMap" },
       { label: "Media Dump", href: "/owner/media-dump", glyph: "🖼︎", key: "MediaDump" },

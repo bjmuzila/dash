@@ -207,18 +207,24 @@ async function check(name, fn) {
     }
   });
 
-  await check('MCP_CONNECTOR=0 registers nothing; default registers all 9 paths', () => {
+  await check('MCP_CONNECTOR=0 leaves only the owner tracker; default adds the 9 public connector paths', () => {
+    const ADMIN = ['/api/admin/mcp-connections', '/api/admin/mcp-connections/revoke'];
     const seen = [];
+    const reg = (p, def) => {
+      assert.strictEqual(def.auth, ADMIN.includes(p) ? 'owner' : 'public', p);
+      seen.push(p);
+    };
     process.env.MCP_CONNECTOR = '0';
-    assert.strictEqual(mcp.registerRoutes((p) => seen.push(p)), false);
-    assert.strictEqual(seen.length, 0);
+    assert.strictEqual(mcp.registerRoutes(reg), false);
+    assert.deepStrictEqual(seen.sort(), ADMIN);
     delete process.env.MCP_CONNECTOR;
-    mcp.registerRoutes((p, def) => { assert.strictEqual(def.auth, 'public'); seen.push(p); });
+    seen.length = 0;
+    mcp.registerRoutes(reg);
     assert.deepStrictEqual(seen.sort(), [
       '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource',
-      '/.well-known/oauth-protected-resource/mcp', '/mcp', '/mcp/', '/oauth/authorize', '/oauth/register',
+      '/.well-known/oauth-protected-resource/mcp', ...ADMIN, '/mcp', '/mcp/', '/oauth/authorize', '/oauth/register',
       '/oauth/revoke', '/oauth/token',
-    ]);
+    ].sort());
   });
 
   srv.close();

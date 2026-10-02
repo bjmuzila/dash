@@ -25165,3 +25165,50 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - **Tests.** The offline selftest passes 12/12 and the Postgres end-to-end test passes 44/44. A new check runs the full Gemini-shaped flow: six relay URLs, `client_secret_basic`, a 1.4k state, code → token → refresh.
 
 ---
+
+## 2026-10-02 — Owner tracker for AI connections (owner.cbedge.net → System → AI Connections)
+
+- **What it is.** A new owner page that shows who has CB Edge connected to Gemini, ChatGPT or Claude through `https://www.cbedge.net/mcp`.
+  - **Headline numbers:** live connections and members, tool calls (and in the last 24h), failed calls, new app registrations, refusals, and approvals the app never collected.
+  - **Connections:** one row per approval, with the member's email, the app, status (Live / Revoked + reason / Expired / Pending / Unclaimed), when it connected, when it was last used, calls in the window and the last tool. Each live row has a **Disconnect** button (click twice). The member's app then asks them to reconnect.
+  - **Tool calls per day** (New York time) and a **Tools** table (calls, failed, average time, members).
+  - **Activity:** approvals, disconnects and every refusal, with what the app actually sent (callback URLs, grant type, error). A Problems filter is included. When an AI app says "the server rejected it", the reason is here.
+  - **Registered apps:** each automatic app registration, its auth method and callback hosts, and whether it ever connected.
+  - The range picker offers Today / 7d / 30d / 90d. The page refreshes every minute while the tab is visible, and phones get a stacked layout.
+- **Server.**
+  - New `server-v2/mcp-admin.js` serves `GET /api/admin/mcp-connections?days=` and `POST /api/admin/mcp-connections/revoke`. Both are owner-only, enforced by api-router. The disconnect route takes a JSON body only.
+  - The routes mount from `mcp-server.registerRoutes`, even when `MCP_CONNECTOR=0`.
+  - Tokens are never returned.
+- **New tables** (created automatically, pruned after 90 days):
+  - `mcp_tool_calls`: one row per tool call, recording ok / error / rate_limited / no_membership and the time taken.
+  - `mcp_oauth_events`: approved, consent_denied, no_membership, revoked, register_refused, authorize_refused, token_refused.
+  - Writes are fire-and-forget, so a failed log line never fails a request. Events are capped at 600 an hour because refusals can be triggered by anyone.
+- **Files.** `server-v2/mcp-oauth.js` (logging, `admin` exports), `server-v2/mcp-server.js` (call logging, admin mount), `server-v2/mcp-admin.js` (new), `owner-vite/src/pages/AiConnections.tsx` (new), `owner-vite/src/pages/registry.ts`, `owner-vite/src/lib/nav.ts`.
+- **Tests.**
+  - The offline selftest passes 12/12, and the Postgres end-to-end test passes 46/46. New checks cover the report contents, owner-only access, disconnect (JSON only, 404 on an unknown id), and an approved-but-uncollected code showing as Pending.
+  - `check-owner-pages.mjs` is OK with 33 nav entries and 33 pages, and `tsc --noEmit` is clean under owner-vite's strict config.
+- Screenshots: `generated/2026-10-02-ai-connections-tracker.png`, `generated/2026-10-02-ai-connections-tracker-mobile.png`.
+
+---
+
+## 2026-10-02 — Voltick Path and Path Ribbon: candles in front (PR ready)
+
+- **The ask:** "for both version the candlestick need to go in front of the bubbles or ribbon".
+- **Bubbles and bands go behind the candles.** For Path and Path Ribbon, the trails' layer (`NodeTrails._view`) now paints at zOrder "bottom", under the candles. The other trail shapes keep "normal": the 07-26 reason (a level at one price losing its whole trail under the candle bodies) still applies to them.
+- **Labels and dots stay on top.** The Path Ribbon ▲/▼ "since" chips and the dots stay in front, through a second view (`_front`) that lightweight-charts paints after the candles in the same frame. The layer is read on every paint, so switching trail styles moves it on the next frame.
+- **Code and tests.**
+  - `web/src/HeatChart.jsx`
+  - New test `server/test/path-and-path-ribbon-sit-behind-the-candles.test.js` (4/4, catches 6 of 6 mutations).
+- **Results.**
+  - Full `npm test` with all three of today's patches applied (11,533 tests) shows the same failures as the baseline and nothing new.
+  - This patch on its own: the chart tests show no new failures, and the web build and checks are clean.
+  - Real render on SPY and SPX 10-01: about 6% to 15% more of the candle bodies show unobscured (the "pure candle pixel" count), with 0 page errors.
+- **Branch.** It goes on a new branch, `path-behind-candles`, and applies in any order with the since-labels and path-volume patches.
+- **Files in `generated/`:**
+  - `2026-10-02-voltick-candles-in-front.patch`
+  - `2026-10-02-voltick-candles-in-front/` (the full files)
+  - `2026-10-02-voltick-candles-in-front.png` (before and after)
+
+## 2026-10-02 - v3 Level Log Backtest: the bounce target is always the opposite wall
+
+- `cbedge-v3/src/pages/levelLog/bounceEngine.ts` → `targetWall()`: a long (CORE below price) now always targets the CALL wall and a short (CORE above price) always targets the PUT wall, `wallFrac` of the way from the CORE. Before, it took whichever wall sat nearest beyond the CORE on the bounce side, so a put wall that had rolled above a support CORE became the target. Example: on 10-02, hit 3 was a long off CORE 7700, which sat on the put wall, and it was cut short at 7710 (+8). It now goes halfway to the call wall at 7750, which is 7725. If the opposite wall is missing, on the wrong side, or too close (under ½ strike past the entry), the fill isn't scored and counts as "no wall." The Forward Test's order ticket uses the same function, so it follows the same rule. The header and the `wallFrac` doc are updated to match.

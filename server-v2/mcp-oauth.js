@@ -58,6 +58,9 @@
  *   mcp_oauth_codes     authorization codes, 5-minute life, single use
  *   mcp_oauth_tokens    access (1h) + refresh (30d) tokens, grouped by family_id
  *                       (one family = one approval = one "connection")
+ *   mcp_tool_calls      one row per tools/call (owner tracker, kept 90 days)
+ *   mcp_oauth_events    approvals, refusals, revocations (owner tracker, 90 days)
+ *   The last two only feed owner.cbedge.net → AI Connections (mcp-admin.js).
  *   Codes and tokens cascade on users(id): deleting an account deletes its
  *   ChatGPT grants with it.
  *
@@ -207,6 +210,21 @@ function destinationLabel(uri) {
   return u.host;
 }
 
+/** Which AI app a client is, read off its (allowlisted) redirect URIs — for
+ *  the owner tracker. The client_name is whatever the app chose to send. */
+function appOf(uris) {
+  for (const uri of Array.isArray(uris) ? uris : [uris]) {
+    let u;
+    try { u = new URL(String(uri)); } catch { continue; }
+    const h = u.hostname.toLowerCase();
+    if (isGeminiRelay(u)) return 'gemini';
+    if (h === 'chatgpt.com') return 'chatgpt';
+    if (h === 'claude.ai' || h === 'claude.com') return 'claude';
+    if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]') return 'local';
+  }
+  return 'other';
+}
+
 /** Caller's IP for rate limits. Behind Cloudflare that is cf-connecting-ip;
  *  IPv6 is keyed by /64 so one host cannot rotate its way past a limit. */
 function clientKey(req) {
@@ -259,8 +277,11 @@ function sendJson(res, status, body, extra = {}) {
   res.end(JSON.stringify(body));
 }
 
-const oauthError = (res, status, error, description, extra) =>
-  sendJson(res, status, description ? { error, error_description: description } : { error }, extra);
+const oauthError = (res, status, error, description, extra) => {
+  // Remembered on the response so handleToken can log the refusal it sent.
+  res._oauthError = { status, error, description: description || null };
+  return sendJson(res, status, description ? { error, error_description: description } : { error }, extra);
+};
 
 function readBody(req, maxBytes = 64 * 1024) {
   return new Promise((resolve, reject) => {
@@ -355,6 +376,35 @@ function ensureTables() {
       await _query('CREATE INDEX IF NOT EXISTS mcp_oauth_tokens_family_idx ON mcp_oauth_tokens (family_id)', []);
       await _query('CREATE INDEX IF NOT EXISTS mcp_oauth_tokens_user_idx ON mcp_oauth_tokens (user_id)', []);
       await _query('CREATE INDEX IF NOT EXISTS mcp_oauth_tokens_parent_idx ON mcp_oauth_tokens (rotated_from)', []);
+      // The owner tracker's history (owner.cbedge.net → AI Connections, read by
+      // server-v2/mcp-admin.js). Written fire-and-forget: a failed log line
+      // never fails the request it describes.
+      //   mcp_tool_calls    one row per tools/call, with how it ended
+      //   mcp_oauth_events  the connection story: approvals, refusals, revocations
+      await _query(`
+        CREATE TABLE IF NOT EXISTS mcp_tool_calls (
+          id         BIGSERIAL PRIMARY KEY,
+          at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          client_id  TEXT,
+          family_id  TEXT,
+          tool       TEXT NOT NULL,
+          outcome    TEXT NOT NULL,
+          ms         INTEGER
+        )`, []);
+      await _query('CREATE INDEX IF NOT EXISTS mcp_tool_calls_at_idx ON mcp_tool_calls (at)', []);
+      await _query('CREATE INDEX IF NOT EXISTS mcp_tool_calls_family_idx ON mcp_tool_calls (family_id)', []);
+      await _query(`
+        CREATE TABLE IF NOT EXISTS mcp_oauth_events (
+          id         BIGSERIAL PRIMARY KEY,
+          at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          kind       TEXT NOT NULL,
+          client_id  TEXT,
+          user_id    TEXT REFERENCES users(id) ON DELETE CASCADE,
+          ip         TEXT,
+          detail     JSONB
+        )`, []);
+      await _query('CREATE INDEX IF NOT EXISTS mcp_oauth_events_at_idx ON mcp_oauth_events (at)', []);
     })().catch((err) => { ensured = null; throw err; });
   }
   return ensured;
@@ -376,7 +426,33 @@ function maybePrune() {
     q(`DELETE FROM mcp_oauth_codes WHERE expires_at < NOW() - INTERVAL '1 day'`),
     q(`DELETE FROM mcp_oauth_tokens WHERE expires_at < NOW() - INTERVAL '7 days'`),
     q(`DELETE FROM mcp_oauth_clients WHERE first_used_at IS NULL AND created_at < NOW() - INTERVAL '7 days'`),
+    q(`DELETE FROM mcp_tool_calls WHERE at < NOW() - INTERVAL '90 days'`),
+    q(`DELETE FROM mcp_oauth_events WHERE at < NOW() - INTERVAL '90 days'`),
   ]).catch((e) => console.warn('[mcp-oauth] prune failed:', e.message));
+}
+
+// ── Tracker log (owner.cbedge.net → AI Connections) ─────────────────────────
+// Both writers are fire-and-forget and never throw. Events can be triggered by
+// anyone on the internet (a refused registration, a bad authorize link), so
+// they are capped globally; past the cap the console line is the record.
+const eventLimit = makeLimiter(600, 60 * 60 * 1000, 10);
+
+/** kind: approved | consent_denied | no_membership | revoked |
+ *        register_refused | authorize_refused | token_refused */
+function recordEvent(kind, { clientId = null, userId = null, ip = null, detail = null } = {}) {
+  if (!eventLimit.hit('all')) return;
+  let json = detail == null ? null : JSON.stringify(detail);
+  if (json && json.length > 8000) json = JSON.stringify({ truncated: true, head: json.slice(0, 4000) });
+  q(`INSERT INTO mcp_oauth_events (kind, client_id, user_id, ip, detail) VALUES ($1, $2, $3, $4, $5::jsonb)`,
+    [kind, clientId ? String(clientId).slice(0, 100) : null, userId, ip, json])
+    .catch((e) => console.warn('[mcp-oauth] event log failed:', e.message));
+}
+
+/** outcome: ok | error | rate_limited | no_membership */
+function recordToolCall({ userId, clientId, familyId, tool, outcome, ms }) {
+  q(`INSERT INTO mcp_tool_calls (user_id, client_id, family_id, tool, outcome, ms) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [userId, clientId || null, familyId || null, String(tool).slice(0, 60), outcome, Number.isFinite(ms) ? Math.round(ms) : null])
+    .catch((e) => console.warn('[mcp] call log failed:', e.message));
 }
 
 // ── Caches ──────────────────────────────────────────────────────────────────
@@ -470,8 +546,10 @@ async function handleRegister(req, res) {
   // "the server rejected it" from some AI app is one `docker logs` away from a
   // fix. Redirect URIs and metadata are not secrets; nothing else is logged.
   const reject = (code, message) => {
+    const shape = registrationShape(body);
     console.warn(`[mcp-oauth] registration refused (${code}: ${message}) client="${name || '(unnamed)'}" ip=${key}`
-      + ` meta=${JSON.stringify(registrationShape(body)).slice(0, 4000)}`);
+      + ` meta=${JSON.stringify(shape).slice(0, 4000)}`);
+    recordEvent('register_refused', { ip: key, detail: { error: code, message, client_name: name, ...shape } });
     return oauthError(res, 400, code, message);
   };
 
@@ -729,12 +807,24 @@ async function handleAuthorize(req, res) {
   //    are NEVER redirected — a bad redirect_uri is exactly the thing an
   //    attacker would want us to send the user to.
   const client = await getClient(p.client_id);
-  if (!client) return renderError(res, 400, 'This app is not registered with CB Edge (unknown client_id).');
+  const refused = (why, extra = {}) => recordEvent('authorize_refused', {
+    clientId: client ? client.client_id : null,
+    ip: clientKey(req),
+    detail: { why, host: String(req.headers.host || '').slice(0, 100), ...extra },
+  });
+  if (!client) {
+    refused('unknown client_id', { client_id: String(p.client_id || '').slice(0, 100) || null });
+    return renderError(res, 400, 'This app is not registered with CB Edge (unknown client_id).');
+  }
   if (!p.redirect_uri && client.redirect_uris.length === 1) p.redirect_uri = client.redirect_uris[0];
   if (!p.redirect_uri || !client.redirect_uris.includes(p.redirect_uri)) {
+    refused('redirect_uri mismatch', { redirect_uri: String(p.redirect_uri || '').slice(0, 300) || null });
     return renderError(res, 400, 'The app sent a return address CB Edge does not recognise (redirect_uri mismatch).');
   }
-  const back = (params) => redirectWith(res, p.redirect_uri, { ...params, state: p.state }, origin);
+  const back = (params) => {
+    refused(params.error, { description: params.error_description || null });
+    return redirectWith(res, p.redirect_uri, { ...params, state: p.state }, origin);
+  };
 
   // 2) Protocol checks — from here on, errors go back to the client.
   if (p.response_type !== 'code') return back({ error: 'unsupported_response_type' });
@@ -769,6 +859,7 @@ async function handleAuthorize(req, res) {
 
   if (!sess.ok) {
     // Valid login, no live membership. Nothing to authorize.
+    if (!isPost) recordEvent('no_membership', { clientId: client.client_id, userId: sess.userId });
     const denyUrl = new URL(p.redirect_uri);
     denyUrl.searchParams.set('error', 'access_denied');
     denyUrl.searchParams.set('error_description', 'CB Edge membership is not active');
@@ -813,6 +904,7 @@ ${hidden}
     return renderError(res, 400, 'This approval page expired. Go back to the app and connect again.');
   }
   if (src.decision !== 'allow') {
+    recordEvent('consent_denied', { clientId: client.client_id, userId: sess.userId });
     return handBack(res, p.redirect_uri, { error: 'access_denied', state: p.state }, origin, appName, false);
   }
 
@@ -825,6 +917,7 @@ ${hidden}
       p.resource ? normResource(p.resource) : resourceUrl(origin), crypto.randomUUID(), CODE_TTL_SEC],
   );
   console.log(`[mcp-oauth] user ${sess.userId} approved "${appName}" (${appHost})`);
+  recordEvent('approved', { clientId: client.client_id, userId: sess.userId });
   return handBack(res, p.redirect_uri, { code, state: p.state }, origin, appName, true);
 }
 
@@ -899,13 +992,17 @@ async function revokeFamily(familyId, why) {
   // Overwrites revoked_reason on EVERY row of the family, including rows that
   // merely rotated — that is what stops the grace-window path from resurrecting
   // a grant that was killed on purpose.
-  await q(
+  const r = await q(
     `UPDATE mcp_oauth_tokens SET revoked_at = COALESCE(revoked_at, NOW()), revoked_reason = $2
-      WHERE family_id = $1`,
+      WHERE family_id = $1
+      RETURNING user_id, client_id`,
     [familyId, String(why).slice(0, 60)],
   );
   forgetFamily(familyId);
   console.warn(`[mcp-oauth] revoked grant ${familyId}: ${why}`);
+  const row = r.rows[0];
+  if (row) recordEvent('revoked', { clientId: row.client_id, userId: row.user_id, detail: { family_id: familyId, reason: String(why).slice(0, 60) } });
+  return r.rows.length;
 }
 
 /** Keep the member's maxGrants() most recently active connections; revoke the rest. */
@@ -1022,12 +1119,29 @@ async function handleToken(req, res) {
   const client = await authenticateClient(req, body);
   if (!client) {
     authFailures.hit(key);
+    recordEvent('token_refused', {
+      ip: key,
+      detail: {
+        error: 'invalid_client',
+        client_id: typeof body.client_id === 'string' ? body.client_id.slice(0, 100) : null,
+        basic_auth: /^Basic\s/i.test(String(req.headers.authorization || '')),
+        grant_type: String(body.grant_type || '').slice(0, 40) || null,
+      },
+    });
     return oauthError(res, 401, 'invalid_client', 'Unknown client or bad client credentials.',
       { 'WWW-Authenticate': 'Basic realm="cbedge"' });
   }
-  if (body.grant_type === 'authorization_code') return grantFromCode(res, client, body, publicOrigin(req));
-  if (body.grant_type === 'refresh_token') return grantFromRefresh(res, client, body);
-  return oauthError(res, 400, 'unsupported_grant_type');
+  if (body.grant_type === 'authorization_code') await grantFromCode(res, client, body, publicOrigin(req));
+  else if (body.grant_type === 'refresh_token') await grantFromRefresh(res, client, body);
+  else oauthError(res, 400, 'unsupported_grant_type');
+  const err = res._oauthError;
+  if (err && err.error !== 'temporarily_unavailable') {
+    recordEvent('token_refused', {
+      clientId: client.client_id,
+      ip: key,
+      detail: { grant_type: String(body.grant_type || '').slice(0, 40) || null, error: err.error, description: err.description },
+    });
+  }
 }
 
 // RFC 7009. 200 whether or not the token existed.
@@ -1126,12 +1240,15 @@ module.exports = {
   handleAuthorize: handleAuthorizeGuarded,
   handleToken: jsonGuard(handleToken),
   handleRevoke: jsonGuard(handleRevoke),
+  recordToolCall,
+  /** For server-v2/mcp-admin.js (the owner tracker) only. */
+  admin: { query: q, revokeFamily, appOf },
   /** Selftest hooks only. */
   _test: {
     setQuery(fn) { _query = fn; ensured = null; },
     reset() {
       _tokenCache.clear(); _entCache.clear(); _entInFlight.clear(); _clientCache.clear();
-      regPerIp.reset(); regGlobal.reset(); authFailures.reset();
+      regPerIp.reset(); regGlobal.reset(); authFailures.reset(); eventLimit.reset();
     },
     redirectAllowed,
     csrfFor,

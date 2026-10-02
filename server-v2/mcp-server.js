@@ -521,8 +521,12 @@ async function callTool(params, ctx, who) {
   if (!tool) return { error: [-32602, `Unknown tool: ${name}`] };
   const args = params?.arguments && typeof params.arguments === 'object' ? params.arguments : {};
 
+  const log = (outcome, ms) => oauth.recordToolCall({
+    userId: who.userId, clientId: who.clientId, familyId: who.familyId, tool: name, outcome, ms,
+  });
   const ent = await oauth.checkEntitlement(who.userId);
   if (!ent.ok) {
+    if (!ent.transient) log('no_membership', 0);
     return {
       result: textResult(ent.transient
         ? 'CB Edge could not verify your membership just now. Try again in a minute.'
@@ -530,6 +534,7 @@ async function callTool(params, ctx, who) {
     };
   }
   if (!rateOk(who.userId)) {
+    log('rate_limited', 0);
     return { result: textResult('Too many CB Edge requests in the last minute. Wait a moment and try again.', true) };
   }
 
@@ -537,10 +542,12 @@ async function callTool(params, ctx, who) {
   try {
     const out = await tool.run(ctx, args);
     console.log(`[mcp] ${name} user=${who.userId} ${Date.now() - t0}ms`);
+    log('ok', Date.now() - t0);
     return { result: textResult(out) };
   } catch (e) {
     const msg = e instanceof ToolError ? e.message : 'CB Edge hit an internal error reading that data.';
     console.warn(`[mcp] ${name} user=${who.userId} failed after ${Date.now() - t0}ms:`, e?.message || e);
+    log('error', Date.now() - t0);
     return { result: textResult(msg, true) };
   }
 }
@@ -674,11 +681,16 @@ async function guardedMcp(req, res, ctx) {
 // ── Mount ───────────────────────────────────────────────────────────────────
 
 /**
- * Called once by api-router.js with its `register`. Every route is 'public' to
- * the router — each handler does its own auth (cookie for /oauth/authorize,
- * bearer for /mcp, client credentials for /oauth/token).
+ * Called once by api-router.js with its `register`. Every connector route is
+ * 'public' to the router — each handler does its own auth (cookie for
+ * /oauth/authorize, bearer for /mcp, client credentials for /oauth/token). The
+ * two /api/admin/mcp-connections routes are 'owner', enforced by the router.
  */
 function registerRoutes(register) {
+  // The owner tracker (owner.cbedge.net → AI Connections) mounts even with the
+  // connector switched off, so the history and the switch's effect stay visible.
+  try { require('./mcp-admin').registerAdminRoutes(register); }
+  catch (e) { console.warn('[mcp] owner tracker routes not loaded:', e?.message || e); }
   if (process.env.MCP_CONNECTOR === '0') {
     console.log('[mcp] ChatGPT connector disabled (MCP_CONNECTOR=0)');
     return false;

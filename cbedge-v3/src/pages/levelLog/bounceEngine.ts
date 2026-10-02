@@ -41,13 +41,18 @@
 //     the entry is NO TRADE — the whole point of the setting. Every point and
 //     every R below is measured from the ENTRY PRICE, not from the CORE.
 //
-//   TARGET. The nearest wall beyond the CORE on the bounce side (above it for
-//     support, below it for resistance), and `wallFrac` of the way there FROM
-//     THE CORE — ½ by default: CORE 7620, call wall 7670 → the bounce is 7645.
-//     Fixed at the fill; walls that move afterwards do not move the goalposts.
-//     A wall so close that the target would sit less than half a strike past
-//     the entry is passed over for the next one. No wall at all on the bounce
-//     side → the fill is not scored, and the page counts how many.
+//   TARGET (2026-10-02). The OPPOSITE wall — the CALL wall for support (long),
+//     the PUT wall for resistance (short) — and `wallFrac` of the way there
+//     FROM THE CORE — ½ by default: CORE 7620, call wall 7670 → the bounce is
+//     7645. CORE sitting on the put wall at 7700 with the call wall at 7750 →
+//     a long's bounce is 7725. Never the same-side wall: a put wall that has
+//     rolled above a support CORE (or a call wall below a resistance CORE) is
+//     NOT a target, which is what used to cut a long off the put wall at 7700
+//     short at a put wall parked 20 points overhead. Fixed at the fill; walls
+//     that move afterwards do not move the goalposts. The opposite wall not on
+//     the bounce side, or so close that the target would sit less than half a
+//     strike past the entry → the fill is not scored, and the page counts how
+//     many.
 //
 //   RESOLUTION:
 //     BOUNCE  price reaches the target      → + (target − entry)
@@ -108,7 +113,7 @@ export interface BtParams {
   strike: number
   /** Entry: a limit this many POINTS before the CORE, on the side price comes from. 0 = on the CORE. */
   entryPts: number
-  /** Bounce target: this fraction of the way from the CORE to the next wall on the bounce side. */
+  /** Bounce target: this fraction of the way from the CORE to the opposite wall — call wall for a long, put wall for a short. */
   wallFrac: number
   /** Break: this many strikes through the CORE. */
   stopStrikes: number
@@ -322,16 +327,14 @@ export type Wall = { v: number; kind: 'call' | 'put' }
  * wall the scan would.
  */
 export function targetWall(core: number, dir: 1 | -1, cw: number | null, pw: number | null, p: BtParams): Wall | null {
+  // The OPPOSITE wall only: a long bounces toward the call wall, a short toward
+  // the put wall. The same-side wall is never a target, wherever it has rolled.
+  const v = dir > 0 ? cw : pw
+  if (v == null || dir * (v - core) <= 0) return null
   // The target has to sit at least half a strike past the ENTRY to be a trade.
   const floor = p.entryPts + p.strike / 2
-  const raw: Array<{ v: number | null; kind: 'call' | 'put' }> = [
-    { v: cw, kind: 'call' },
-    { v: pw, kind: 'put' },
-  ]
-  const cands = raw
-    .filter((c): c is Wall => c.v != null && dir * (c.v - core) > 0)
-    .sort((a, b) => Math.abs(a.v - core) - Math.abs(b.v - core))
-  return cands.find((c) => Math.abs(c.v - core) * p.wallFrac >= floor) ?? null
+  if (Math.abs(v - core) * p.wallFrac < floor) return null
+  return { v, kind: dir > 0 ? 'call' : 'put' }
 }
 
 function pickWall(lv: SessionLevels, t: Touch, p: BtParams): Wall | null {

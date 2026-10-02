@@ -11,6 +11,8 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   // ControlPanel (Overview) was retired 2026-09-15 — folded into Customers +
   // Admin. Its href redirects; see OWNER_REDIRECTS in nav.
   Admin: lazy(() => import("./Admin")),
+  // Who has CB Edge connected to Gemini / ChatGPT / Claude (server-v2/mcp-admin.js).
+  AiConnections: lazy(() => import("./AiConnections")),
   Sales: lazy(() => import("./Sales")),
   Customers: lazy(() => import("./Customers")),
   Visitors: lazy(() => import("./Visitors")),
