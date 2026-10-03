@@ -25316,3 +25316,17 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
     - the 09:45 anchor: walls, CORE, flip and spot from the first reading at or after 09:45, averages over two sessions, and rolls counted only after the anchor.
 
 ---
+
+## 2026-10-02 - Voltick PR #34: Nick's second review
+
+- **The Settings page presets know about Level lines.** In `web/src/chartprefs.js`, `readChartDensity` returns "custom" while the lines are off, and `writeChartDensity` writes `gg-chart-levellines = "1"`. Settings and the chart panel now agree, and Settings › Full brings the lines back. The "each preset written from Settings reads back as itself" test covers both.
+- **With the lines off, only a level that has a bubble row can be tapped.** The tap list is filtered on `trailEnd.get(price) != null` through a new `trailEndRef`, so a tap at the Coil's price on Path Ribbon no longer opens a card over nothing. The test runs the tap list from the source over 6 cases.
+- **Copy.**
+  - The Level lines tip only mentions the bubbles and ribbons when the trails are on, and it says Prior levels and Session ranges keep their own switches.
+  - The LEVELS comment now says How many sets the lines alone.
+  - Two stale "end caps" comments are fixed.
+- **Results.**
+  - 5 of 5 mutations are caught.
+  - The full suite fails the same tests as the baseline, compared by name and by message.
+  - The web build and checks are clean.
+- **File in `generated/`:** `2026-10-02-voltick-pr34-review-round-three.patch`. It goes on top of `path-switches` at 7fcd73ac.
