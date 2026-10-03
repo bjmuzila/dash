@@ -81,7 +81,7 @@ export const WALLS_TYPE = 'cbedge-walls'
 const MIN_MS = 60_000
 const DAY_MS = 86_400_000
 /** The open capture is slot 0 at 09:29 ET — a level exists from there. */
-const SESSION_FROM_MIN = 9 * 60 + 29
+export const SESSION_FROM_MIN = 9 * 60 + 29
 /** Re-read cadence while a live chart sits in session. */
 const REFRESH_MS = 60_000
 /** A shared read younger than this is reused rather than refetched. */
@@ -182,6 +182,19 @@ function loadWalls(symbol: string, s: Settings, fresh: boolean): Promise<DaySlic
   return p
 }
 
+/**
+ * The recorded walls for a symbol, for another reader of the same log
+ * (pages/vela/vtPath — the Voltick levels are these walls renamed). Same URL,
+ * same shared cache, so a chart carrying both studies reads the log once.
+ */
+export function loadWallSlices(
+  symbol: string,
+  o: { scope: '0dte' | 'agg'; basis: 'oivol' | 'vol'; sessions: number },
+  fresh: boolean,
+): Promise<DaySlice[]> {
+  return loadWalls(symbol, { view: 'all', ...o }, fresh)
+}
+
 /** The futures pair's basis model (shared with pages/vela/vtPath). */
 export async function loadBasis(fut: 'ES' | 'NQ'): Promise<BasisModel> {
   const pair = futuresPairFor(fut === 'NQ' ? 'NDX' : '$SPX')
@@ -200,10 +213,10 @@ const SOURCE_LEVELS = ['call_wall', 'put_wall', 'cb'] as const
 type SourceLevel = (typeof SOURCE_LEVELS)[number]
 
 /** One level's writes for one session, in time order. `gex` rides on CORE rows. */
-type Write = { t: number; strike: number; gex: number | null }
+export type Write = { t: number; strike: number; gex: number | null }
 type Writes = Write[]
 
-interface DayModel {
+export interface DayModel {
   date: string
   /** Epoch ms of 16:00 ET that day — the session's end. */
   close: number
@@ -234,7 +247,7 @@ function rowTime(date: string, slot: number, ts: unknown): number {
   return etWallMs(date, mins)
 }
 
-function buildDays(days: DaySlice[], basis: BasisModel | null): DayModel[] {
+export function buildDays(days: DaySlice[], basis: BasisModel | null): DayModel[] {
   const out: DayModel[] = []
   for (const day of days) {
     let shift = 0
@@ -265,7 +278,7 @@ function buildDays(days: DaySlice[], basis: BasisModel | null): DayModel[] {
 }
 
 /** The last write strictly before `before`, or null. */
-function heldAt(writes: Writes | undefined, before: number): Write | null {
+export function heldAt(writes: Writes | undefined, before: number): Write | null {
   if (!writes) return null
   let v: Write | null = null
   for (const w of writes) {

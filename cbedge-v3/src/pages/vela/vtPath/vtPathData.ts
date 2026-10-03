@@ -1,56 +1,60 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // VOLTICK PATH — THE DATA. Where each Voltick level was, candle by candle.
 //
-// Voltick's Path reads /api/history?levels=1 — its recorder's frames, each one
-// { t, volt, surge, rev, gates[], sz } — and folds them onto the chart's candles
-// (HeatChart.jsx `pathRows`). CB Edge has no such route, but it has the thing
-// those frames are made OF: the per-minute GEX ladder the GEX Candles card
-// draws its bubbles from (/api/snapshots/option-strike-gex-history, front
-// expiry, one column a minute). So each column becomes one frame here:
+// ── The levels ARE the walls migration, renamed (2026-10-03, Brandon) ────────
+// The same recorded walls_log the Level Log's Wall Migration chart and CB Walls
+// read (/api/walls-range — 15-minute slots, kept for months), named the Voltick
+// way. This is the wall migration's own Voltick view, vtFromWalls() in
+// pages/levelLog/wallData.ts:
 //
-//   volt / surge / rev / gates   voltickMarks() — the CB Edge port of Voltick's
-//                                marksOf(), the same one GEX Candles' Voltick
-//                                theme and the ladder use, `always` on (one
-//                                bubble per level per candle, which is what the
-//                                founder asked Path for on 2026-09-28)
-//   sz                           |GEX| at that level's strike on the chosen map —
-//                                Voltick's history.js sizesOf(), same rule
+//   Volt ★      = CORE
+//   Coil ◆      = the wall on the SAME side of spot as the CORE
+//                 (CORE above spot → the call wall; below → the put wall)
+//   Reversal ↘  = the wall on the OTHER side
+//   Surge ↯     = the CORE of the VOLUME-ONLY walls (basis=vol) — Voltick's Surge
+//                 is the biggest volume-GEX strike, and that is exactly what the
+//                 volume book's CORE is. With the GEX map already on Vol only,
+//                 Surge and Volt are the same strike and the Volt draws.
 //
-// The fold onto the candles is Voltick's pathRows, transcribed: the last frame
-// in a candle wins (keeping the latest sizes recorded in it), a frame more than
-// two bars past its candle belongs to nobody, Volt / Surge / Reversal rows plus
-// the Coil on Path only (the coil nearest that candle's close), sizes held
-// across unsized readings, then pathFill — one point per level per candle, one
-// level per strike.
+// Spot is each candle's close, as on the migration chart's Voltick view. Size =
+// |level_gex| on the row the level was last written with (where the recorder
+// carries one; a level without it draws at the flat middle size).
 //
-// ── Sessions ─────────────────────────────────────────────────────────────────
-// One request per session DATE on the route's date branch (`minutes=0&date=`
-// with `expiryFallback=1`, the replay URL — it resolves that day's own front
-// expiry). The dates are the newest weekdays the chart's own candles cover, so a
-// weekend or a holiday never costs a request. A settled day is read once; today
-// is re-read once a minute while a live chart is open in session and visible.
+// Why not the per-minute GEX ladder (the first version of this file): the
+// server keeps that table for 5 sessions only (GEX_HISTORY_KEEP_SESSIONS in
+// server-v2/_lib-db.cjs); walls_log goes back months.
 //
-// ── Futures ──────────────────────────────────────────────────────────────────
-// ES / NQ draw SPX's / NDX's levels pushed into futures prices by that session's
-// basis (board/gexCandles/basis.ts), like the walls. A column with no plausible
-// basis is dropped — an unshifted index strike on a futures chart is a level one
-// basis below where it belongs.
+// ── The fold onto the candles ────────────────────────────────────────────────
+// walls_log is CHANGE-ONLY, so each level is FORWARD-FILLED: every candle that
+// starts inside 09:29–16:00 ET on a recorded session gets one frame — the
+// levels in force at the candle's end (CB Walls' rule). Daily and coarser
+// candles take the levels that session closed on. Then Voltick's pathRows,
+// transcribed: Volt / Surge / Reversal / Coil rows, sizes held across unsized
+// readings, and pathFill — one point per level per candle, one level per strike
+// (Volt, Reversal, Coil, Surge).
+//
+// ES / NQ draw SPX's / NDX's walls shifted by the session basis (buildDays,
+// shared with CB Walls); a session with no plausible basis draws nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { gexHistoryDayUrl, parseGexHistory, type GexColumn } from '@/board/gexCandles/gexHistory'
-import { BUBBLE_LADDER_REQUEST } from '@/board/gexCandles/settings'
-import { symbolDef } from '@/board/gexCandles/symbols'
-import { basisFor, isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
-import { etDateKey } from '@/board/gexCandles/candles'
-import { voltickMarks } from '@/data/voltickLevels'
+import type { OHLCV } from '@luxalgo/vela'
+import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
+import { vtFromWalls } from '@/pages/levelLog/wallData'
 import { resolveSym } from '@/pages/vela/cbedgeProvider'
-import { loadBasis } from '@/pages/vela/wallsIndicator'
+import {
+  SESSION_FROM_MIN,
+  buildDays,
+  heldAt,
+  loadBasis,
+  loadWallSlices,
+  type DayModel,
+  type Write,
+} from '@/pages/vela/wallsIndicator'
 import { holdSizes, pathFill, type FillPt, type PathPt, type PathRole } from './trailruns'
 
-/** Which GEX the levels and sizes are read off. */
-export type VtMap = 'book' | 'vol'
+const DAY_MS = 86_400_000
 
-/** One recorded reading — Voltick's level frame. Times in SECONDS. */
+/** One reading — Voltick's level frame shape. Times in SECONDS. */
 export interface VtFrame {
   t: number
   volt: number | null
@@ -70,101 +74,88 @@ export interface PathRow {
   fill: FillPt[]
 }
 
-// ── Reads (shared by every chart and both shapes) ───────────────────────────
+// ── Reads ────────────────────────────────────────────────────────────────────
 
-const SHARED_MS = 55_000
-interface Read {
-  at: number
-  p: Promise<GexColumn[]>
-}
-const reads = new Map<string, Read>()
-
-function readDay(gexSymbol: string, date: string, today: boolean, fresh: boolean): Promise<GexColumn[]> {
-  // The date doubles as the expiry guess (0DTE); expiryFallback=1 corrects it
-  // to whatever that session actually recorded under.
-  const url = gexHistoryDayUrl(gexSymbol, date, date, BUBBLE_LADDER_REQUEST)
-  const hit = reads.get(url)
-  if (hit && (!today || !fresh || Date.now() - hit.at < SHARED_MS)) return hit.p
-  const p = fetch(url, { cache: 'no-store', credentials: 'same-origin' })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((j) => parseGexHistory(j))
-    .catch(() => [] as GexColumn[])
-  reads.set(url, { at: Date.now(), p })
-  return p
+export interface WallRead {
+  scope: '0dte' | 'agg'
+  basis: 'oivol' | 'vol'
+  sessions: number
 }
 
-const ET_WEEKDAY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' })
-
-/** The newest `n` weekday ET dates the bars cover (bars in ms). */
-export function sessionDates(barsMs: readonly number[], n: number): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (let i = barsMs.length - 1; i >= 0 && out.length < n; i--) {
-    const t = barsMs[i]!
-    const d = etDateKey(t)
-    if (seen.has(d)) continue
-    seen.add(d)
-    const wd = ET_WEEKDAY.format(new Date(`${d}T12:00:00Z`))
-    if (wd === 'Sat' || wd === 'Sun') continue
-    out.push(d)
-  }
-  return out
-}
-
-export interface LoadResult {
-  frames: VtFrame[]
-  /** True when the newest date asked for is today — the read that keeps moving. */
+export interface WallModels {
+  /** The walls on the chosen GEX map — Volt, Coil, Reversal. */
+  main: DayModel[]
+  /** The volume-only walls — their CORE is the Surge. */
+  vol: DayModel[]
+  /** The newest session is today's — the read that keeps moving. */
   hasToday: boolean
 }
 
-/** Frames for the chart symbol over `dates`. [] when the symbol has no recorded ladder. */
-export async function loadFrames(chartSymbol: string, dates: string[], map: VtMap, fresh: boolean): Promise<LoadResult> {
+export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: boolean): Promise<WallModels> {
   const sym = resolveSym(chartSymbol.replace(/^[^:]*:/, ''))
-  const gexSymbol = symbolDef(sym.fut === 'NQ' ? 'NDX' : sym.fut === 'ES' ? 'SPX' : sym.key).gexSymbol
-  const today = etDateKey(Date.now())
-  const [cols, basis] = await Promise.all([
-    Promise.all(dates.map((d) => readDay(gexSymbol, d, d === today, fresh))),
+  const wallsSymbol = sym.fut === 'NQ' ? 'NDX' : sym.fut === 'ES' ? 'SPX' : sym.key
+  const [main, vol, basis] = await Promise.all([
+    loadWallSlices(wallsSymbol, s, fresh),
+    s.basis === 'vol' ? Promise.resolve(null) : loadWallSlices(wallsSymbol, { ...s, basis: 'vol' }, fresh),
     sym.fut ? loadBasis(sym.fut) : Promise.resolve(null),
   ])
-  const all = cols.flat().sort((a, b) => a.slotTs - b.slotTs)
-  return { frames: framesOf(basis ? shifted(all, basis) : all, map), hasToday: dates.includes(today) }
+  const mainDays = buildDays(main, basis)
+  const volDays = vol ? buildDays(vol, basis) : mainDays
+  const today = etDateKey(Date.now())
+  return { main: mainDays, vol: volDays, hasToday: mainDays.some((d) => d.date === today) }
 }
 
-/** Futures price space; a column with no plausible basis for its session is dropped. */
-function shifted(cols: GexColumn[], basis: BasisModel): GexColumn[] {
-  const out: GexColumn[] = []
-  for (const c of cols) {
-    const b = basisFor(basis, c.slotTs)
-    if (!isPlausibleBasis(b, basis.max)) continue
-    out.push({
-      slotTs: c.slotTs,
-      spot: c.spot > 0 ? c.spot + b : c.spot,
-      cells: c.cells.map((x) => ({ strike: x.strike + b, net: x.net, netVol: x.netVol })),
-    })
-  }
-  return out
-}
+// ── One frame per candle ─────────────────────────────────────────────────────
 
-/** One frame per column: the four levels, and how big each was. */
-function framesOf(cols: GexColumn[], map: VtMap): VtFrame[] {
+const abs = (w: Write | null | undefined) => (w?.gex != null && Number.isFinite(w.gex) ? Math.abs(w.gex) : null)
+
+/** The walls in force for each candle, as Voltick frames (one per candle). */
+export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallModels): VtFrame[] {
+  const byDate = new Map(m.main.map((d) => [d.date, d]))
+  const volByDate = new Map(m.vol.map((d) => [d.date, d]))
+  const coarse = tfMs >= DAY_MS
   const out: VtFrame[] = []
-  for (const c of cols) {
-    const rows = c.cells.map((x) => ({ strike: x.strike, book: map === 'vol' ? x.netVol : x.net, vol: x.netVol }))
-    const vt = voltickMarks(rows, { always: true })
-    if (vt.volt == null) continue
-    const size = new Map(rows.map((r) => [r.strike, Math.abs(r.book)]))
-    const at = (k: number | null) => {
-      if (k == null) return null
-      const v = size.get(k)
-      return v == null || !Number.isFinite(v) ? null : v
+  for (const bar of bars) {
+    let day: DayModel | undefined
+    let end: number
+    if (coarse) {
+      // the newest recorded session inside this bar, at its close
+      for (let t = bar.time; t < bar.time + tfMs; t += DAY_MS) {
+        const d = byDate.get(etDateKey(t + 12 * 3_600_000))
+        if (d) day = d
+      }
+      if (!day) continue
+      end = day.close + 1
+    } else {
+      const mins = etMinutesOfDay(bar.time)
+      if (mins < SESSION_FROM_MIN || mins >= RTH_CLOSE_MIN) continue
+      day = byDate.get(etDateKey(bar.time))
+      if (!day) continue
+      end = Math.min(bar.time + tfMs, day.close + 1)
     }
+    const cb = heldAt(day.levels.get('cb'), end)
+    if (!cb) continue
+    const cw = heldAt(day.levels.get('call_wall'), end)
+    const pw = heldAt(day.levels.get('put_wall'), end)
+    const vt = vtFromWalls(cb.strike, cw?.strike, pw?.strike, bar.close)
+    // which recorded rows the Coil and the Reversal are (for their sizes)
+    const coreAbove = cb.strike >= bar.close
+    const coilW = vt.coil == null ? null : coreAbove ? cw : pw
+    const revW = vt.reversal == null ? null : coreAbove ? pw : cw
+    const volDay = volByDate.get(day.date)
+    const surgeW = volDay ? heldAt(volDay.levels.get('cb'), end) : null
     out.push({
-      t: Math.floor(c.slotTs / 1000),
-      volt: vt.volt,
-      surge: vt.surge,
+      t: Math.floor(bar.time / 1000),
+      volt: cb.strike,
+      surge: surgeW?.strike ?? null,
       rev: vt.reversal,
-      gates: vt.coils.slice(),
-      sz: { volt: at(vt.volt), surge: at(vt.surge), rev: at(vt.reversal), gates: vt.coils.map(at) },
+      gates: vt.coil != null ? [vt.coil] : [],
+      sz: {
+        volt: abs(cb),
+        surge: abs(surgeW),
+        rev: abs(revW),
+        gates: vt.coil != null ? [abs(coilW)] : [],
+      },
     })
   }
   return out
@@ -222,7 +213,8 @@ export function buildPathRows(frames: readonly VtFrame[], bars: readonly SecBar[
     {
       role: 'coil',
       lead: false,
-      pathOnly: true,
+      // CB Edge: the Coil rides the Ribbon too (Voltick keeps it to Path only)
+      pathOnly: false,
       of: (f, t) => {
         const i = coilAt(f, t)
         return i < 0 ? null : f.gates[i]

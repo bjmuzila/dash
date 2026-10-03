@@ -79,8 +79,10 @@ import '@/pages/vela/vela.css'
 // pages/vela/vtPath/ — Voltick's two trail shapes, transcribed from its
 // HeatChart.jsx / trailruns.js: one bubble per level per candle (★ Volt,
 // ↘ Reversal, ◆ Coil, ↯ Surge) at the strike that level held, sized by how big
-// it was; and the Ribbon, the same rows as bands. Read off the per-minute GEX
-// ladder (the GEX Candles history). Two studies on Vela's Indicators list
+// it was; and the Ribbon, the same rows as bands. The levels are the walls
+// migration renamed (Volt = CORE, Coil = the wall on CORE's side of spot,
+// Reversal = the other wall, Surge = the volume-only CORE), so they reach back
+// as far as walls_log does. Two studies on Vela's Indicators list
 // (Built-in → "Voltick Path…", "Voltick Path Ribbon…"); Voltick Path is put on
 // every chart once, exactly like CB Walls (`<key>-vtpath`), and the legend ✕
 // takes it off for good.

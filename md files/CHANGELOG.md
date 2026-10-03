@@ -25444,3 +25444,31 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `vtPathIndicator.ts`: a new setting on each study, **Bubble size %** (Path) and **Ribbon thickness %** (Ribbon), from 50 to 300 in steps of 10, default 100. It multiplies every radius / band height after the floors. The schema is now per shape; payload `size`.
 - **Checks.** No new `tsc` errors, and `check:theme` is clean. Headless Chromium zoomed out about 5 steps: Path and Ribbon are visibly thicker at 100%, and doubled at 200%. The settings dialog lists "Ribbon thickness %". No console errors.
 - **Files in `generated/`:** `2026-10-03-vela-path-size.png`, `2026-10-03-vela-ribbon-thickness.png` (mock data, zoomed out, 200%)
+
+## 2026-10-03 - v3 Vela: Voltick Path / Ribbon read the walls migration (months back), Coil + Surge on the Ribbon
+
+- **Why it stopped at 5 days:** the per-minute GEX ladder the studies read (`option_strike_gex_history`) is kept for only 5 trading sessions (`GEX_HISTORY_KEEP_SESSIONS = 5` in `server-v2/_lib-db.cjs`, plus the nightly retention job).
+- **Why the Ribbon had no blue:**
+  - Voltick's Path Ribbon leaves out the Coil.
+  - The ladder's Surge mostly sat on the Volt's strike, or fell back to the Volt when there was no volume GEX, and every peer band is cut where it runs onto the Volt's strike.
+- **Now the levels are the walls migration renamed** (Brandon's definition, which is the migration chart's existing `vtFromWalls()` Voltick view). They read the same `walls_log` as CB Walls (`/api/walls-range`, shared cache), so the history reaches as far as the walls do:
+  - Volt ★ = CORE
+  - Coil ◆ = the wall on the same side of spot as CORE (CORE above spot → call wall; below → put wall)
+  - Reversal ↘ = the wall on the other side
+  - **Surge ↯ = the CORE of the volume-only walls (`basis=vol`).** This was my mapping, not part of the spec: Voltick's Surge is the biggest volume-GEX strike, which is what the volume book's CORE is. On "Vol only", Surge equals Volt and the Volt draws.
+  - Spot is each candle's close. Size is |level_gex| from the row the level was last written with.
+- **How the data is folded:** walls_log is change-only, so each level is forward-filled. Each candle that starts inside 09:29–16:00 ET on a recorded session gets one frame (the levels in force at the candle's end, CB Walls' rule). D/W candles take the session close. After that it is Voltick's `pathRows` / `pathFill` as before. ES/NQ use SPX/NDX walls shifted by the basis.
+- **The Coil now bands on the Ribbon too** (it is no longer `pathOnly`). Peers are still cut where they run onto the Volt's strike, so a Coil on CORE's own wall stays hidden under the gold.
+- **Inputs:**
+  - GEX (OI + Vol / Vol only) now picks the walls basis.
+  - New: Contracts (0DTE / Non-0DTE).
+  - **Sessions: 1–60, default 10** (it was 1–5, default 1).
+  - Node levels, Calm chart and Bubble size / Ribbon thickness are unchanged.
+- **Files:**
+  - `vtPathData.ts`: rewritten. `loadWallModels`, `framesFromWalls`, `buildPathRows` with the Coil not `pathOnly`. The ladder reads are gone.
+  - `vtPathIndicator.ts`: new inputs, reads the walls, frames rebuilt per new bar, 60s refresh while live and in session.
+  - `vtPathLayer.ts`: header updated.
+  - `wallsIndicator.ts`: exports `loadWallSlices`, `buildDays`, `heldAt`, `DayModel`, `Write`, `SESSION_FROM_MIN`.
+  - `pages/Vela.tsx`: comment updated.
+- **Checks.** No new `tsc` errors, and `check:theme` is clean. Headless Chromium on a mock walls log (the vol basis puts CORE at the strike nearest price) shows Path across 10 sessions with gold Volt, pink Reversal and blue Surge, and Ribbon bands across the same range. No console errors. In the mock CORE always equals one wall, so the Coil sits under the gold. Not yet checked against the live walls_log.
+- **Files in `generated/`:** `2026-10-03-vela-path-walls.png`, `2026-10-03-vela-ribbon-walls.png` (mock data)

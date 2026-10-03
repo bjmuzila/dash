@@ -29,6 +29,14 @@
 //     thinnest never under RIBBON_MIN_FLOOR.
 //   · A SIZE SETTING: `size` (the studies' Bubble size % / Ribbon thickness %)
 //     multiplies every radius / band height after all of the above.
+//   · THE COIL ON THE RIBBON TOO (2026-10-03, "why do ribbons not have any blue
+//     or surge/coil"): Voltick's Path Ribbon draws Volt / Surge / Reversal only;
+//     here the Coil row is not `pathOnly` (vtPathData.ts), so it bands as well.
+//     Like every peer it is cut where it runs onto the Volt's strike — the gold
+//     owns that stretch — which is also why a Surge sitting on the Volt's strike
+//     shows no blue.
+//   · THE LEVELS ARE THE WALLS MIGRATION RENAMED (vtPathData.ts), not Voltick's
+//     own recorder — the drawing does not care, the rows have the same shape.
 //
 // Each shape is a Vela RENDERER LAYER (registerRendererLayer) owned by the
 // native indicator of the same type id (vtPathIndicator.ts), which pushes the
