@@ -90,9 +90,9 @@ const FUT_OPEN_MIN = 18 * 60
 
 // The values are Vela's symbol-search tab vocabulary: 'stock', 'etf' and
 // 'futures' land under their tabs; 'index' shows under All.
-type SymKind = 'index' | 'etf' | 'stock' | 'futures'
+export type SymKind = 'index' | 'etf' | 'stock' | 'futures'
 
-interface ResolvedSym {
+export interface ResolvedSym {
   /** The ticker as the routes want it. */
   key: string
   kind: SymKind
@@ -136,7 +136,7 @@ function kindOf(key: string): SymKind {
  * Candles card charts the futures through its switch, not as symbols). Here a
  * futures contract is a symbol in its own right.
  */
-function resolveSym(ticker: string): ResolvedSym {
+export function resolveSym(ticker: string): ResolvedSym {
   const raw = ticker.trim().toUpperCase().replace(/!$/, '')
   const fut = FUTURES[raw]
   if (fut) return { key: fut, kind: 'futures', fut }

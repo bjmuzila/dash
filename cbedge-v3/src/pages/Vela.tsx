@@ -7,6 +7,7 @@ import { tokenHex } from '@/design/theme'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { Page } from '@/design/primitives/Page'
 import { CbEdgeProvider, DEFAULT_HISTORY_URL, PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
+import { WALLS_TYPE, registerCbWalls } from '@/pages/vela/wallsIndicator'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /vela — VELA, LuxAlgo's open-source chart workspace, on CB Edge's own tape.
@@ -54,9 +55,56 @@ import { CbEdgeProvider, DEFAULT_HISTORY_URL, PROVIDER_NAME } from '@/pages/vela
 // State persists per browser under `cb-v3-vela` (layout, cells, indicators,
 // drawings) through Vela's own document, the namespacing every key v3 invents
 // carries.
+//
+// ── CB Walls on every chart ──────────────────────────────────────────────────
+// pages/vela/wallsIndicator.ts — the Level Log's wall migration (call wall, put
+// wall, CORE as forward-filled steps, per session, in the migration chart's
+// colours) registered as a Vela native study. Every chart gets one the FIRST
+// time it exists — the boot cell, and any cell a bigger layout adds — and the
+// cell is remembered under `cb-v3-vela-walls`, so a user who takes it off with
+// the legend ✕ has taken it off: it is not put back on the next load. After
+// that it lives in Vela's saved document like any study (inputs, visibility).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'cb-v3-vela'
+/** Cell ids that have already been given CB Walls once (see the header). */
+const WALLS_SEEDED_KEY = 'cb-v3-vela-walls'
+
+// Before any workspace exists: Vela reads its native-indicator registry live,
+// so every chart built after this line can carry the study.
+registerCbWalls()
+
+function readSeeded(): Set<string> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(WALLS_SEEDED_KEY) ?? '[]')
+    return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function writeSeeded(ids: Set<string>): void {
+  try {
+    localStorage.setItem(WALLS_SEEDED_KEY, JSON.stringify([...ids]))
+  } catch {
+    /* private mode: the study is still added; it may be offered again next load */
+  }
+}
+
+/** Give each cell that has never had it the walls study, once. */
+function seedWalls(ws: VelaWorkspace, ids: string[]): void {
+  const seeded = readSeeded()
+  let changed = false
+  for (const id of ids) {
+    if (seeded.has(id)) continue
+    const cell = ws.cell(id)
+    if (!cell) continue
+    cell.addNative(WALLS_TYPE)
+    seeded.add(id)
+    changed = true
+  }
+  if (changed) writeSeeded(seeded)
+}
 
 // Warm the default chart's history the moment this route's chunk evaluates, in
 // parallel with the library itself (non-negotiable 3). The provider asks for the
@@ -130,9 +178,14 @@ export default function Vela() {
     const offState = ws.on('state:changed', reflect)
     const offActive = ws.on('cell:active', reflect)
 
+    // CB Walls: the cells that exist now, and every cell a layout change mints.
+    seedWalls(ws, ws.cells().map((c) => c.id))
+    const offCreated = ws.on('cell:created', ({ id }) => seedWalls(ws, [id]))
+
     return () => {
       offState()
       offActive()
+      offCreated()
       wsRef.current = null
       ws.destroy()
       host.remove()

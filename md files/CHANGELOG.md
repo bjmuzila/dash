@@ -25330,3 +25330,17 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - The full suite fails the same tests as the baseline, compared by name and by message.
   - The web build and checks are clean.
 - **File in `generated/`:** `2026-10-02-voltick-pr34-review-round-three.patch`. It goes on top of `path-switches` at 7fcd73ac.
+
+## 2026-10-03 - v3 Vela: CB Walls on every chart, drawn exactly like the Wall Migration chart
+
+- `cbedge-v3/src/pages/vela/wallsIndicator.ts` (new): the Level Log's wall migration as a Vela native study, "CB Walls". It reads `/api/walls-range` (the same walls_log rows the WALL MIGRATION chart reads) and draws **lines only**: no tags and no price-axis chips.
+  - The migration chart's model, carried over as-is: change-only rows forward-filled as STEPS, per session (09:29 open capture → 16:00 ET, nothing in pre-market or over the weekend), and the two-role drawing. CORE is gold, 2.2px, for the whole session. OTHER (the lighter wall) is 1.8px in the colour of the wall it currently is (green call wall `--color-candle-up`, red put wall `--color-level-pw`), so a dominance flip shows as a colour change at a step. Which wall CORE is comes from the strike it sits on, then its recorded gamma sign, then the nearer wall.
+  - "Walls only" draws both walls on their own lines, put then call. "Core only" draws CORE alone. On D/W bars each bar shows that session's closing level.
+  - Settings: Levels, Contracts (0DTE / Non-0DTE), GEX (OI + Vol / Vol only), Sessions (default 10). No styling knobs, because the colours and widths are the migration chart's.
+  - ES/NQ draw SPX/NDX walls shifted by that session's basis (`board/gexCandles/basis.ts`). With no usable basis, nothing is drawn.
+  - Voltick theme (owner): ★ Volt / ◆ Coil / ↘ Reversal through `vtFromWalls()`, with Volt drawn last.
+  - One shared request per symbol + variant, refreshed once a minute while live, in session and visible. It recomputes on a new bar, not on every tick.
+- `cbedge-v3/src/pages/Vela.tsx`: registers the study and adds it to each chart the first time that chart exists (the boot cell, and any cell a bigger layout adds). Cells are remembered under `cb-v3-vela-walls`, so removing the study with ✕ sticks.
+- `cbedge-v3/src/pages/vela/cbedgeProvider.ts`: `resolveSym` / `ResolvedSym` / `SymKind` are now exported (no behaviour change).
+- **Checks.** No new `tsc` errors (the same 5 existing ones), and `check:theme` is clean. The `/vela` route chunk is 6.9kb brotli and `lib-vela` is unchanged. Tested in headless Chromium against a mock walls/basis backend: SPX 5m/1h/D, ES shifted by basis, a ticker with no walls showing a quiet legend row, a 2×2 grid with the study on all four cells, a reload keeping one per cell, and the Voltick naming. Not yet tested against live walls_log data.
+- **File in `generated/`:** `2026-10-03-vela-cb-walls.png` (mock data)
