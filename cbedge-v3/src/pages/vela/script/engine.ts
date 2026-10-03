@@ -5,7 +5,7 @@
 // registered under a language id (the workspace's `engines` option, see
 // pages/Vela.tsx). This is ours, language 'cbscript':
 //
-//   prepare(source)    parse (lang.ts) + one run over zero bars (runtime.ts) — a
+//   prepare(source)    parse (lang.ts) + a dry run over one bar (runtime.ts) — a
 //                      typo or an unknown function fails HERE, before anything
 //                      lands on a chart — and hand back the inputs schema
 //                      (Vela builds the settings dialog from it) and the
@@ -14,12 +14,15 @@
 //                      it to `h.onModel`; the session re-runs on new bars
 //                      (throttled to ~6 a second) and on input changes
 //
-// Plots become line-like series, hline() price lines, fill() fills between two
-// plots, bgcolor() backgrounds — every id minted with Vela's stableSeriesId, so
-// a re-run patches values instead of rebuilding. marker() becomes LABELS (the
-// model's Pine label.new channel, anchored abovebar / belowbar on the price
-// pane): Vela's renderer has no painter for a `markers` series kind, it would
-// be accepted and never drawn.
+// Plots become line-like series (per-bar colours as point colours; a plot whose
+// colour is na throughout stays as a hidden fill anchor), hline() price lines,
+// fill() fills between two plots or hlines (per-bar colours too), bgcolor()
+// backgrounds, barcolor() candle colours — every id minted with Vela's
+// stableSeriesId, so a re-run patches values instead of rebuilding.
+// plotshape / plotchar / plotarrow / marker become LABELS (the model's Pine
+// label.new channel, anchored abovebar / belowbar on the price pane): Vela's
+// renderer has no painter for a `markers` series kind, it would be accepted and
+// never drawn.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type {
@@ -39,20 +42,24 @@ import type {
   SeriesSpec,
 } from '@luxalgo/vela'
 import { stableSeriesId } from '@luxalgo/vela/plugin'
-import { parse, type Stmt } from './lang'
-import { run, type RunResult } from './runtime'
+import { tokenHexAlpha } from '@/design/theme'
+import { parse, type Program } from './lang'
+import { run, type FillEnd, type RunOpts, type RunResult } from './runtime'
 
 export const CBSCRIPT = 'cbscript'
 
 interface Token {
-  prog: Stmt[]
+  prog: Program
   id: string
 }
 
+/** One bar to dry-run a script on: enough for every declaration and input to register. */
+const DRY_BAR: OHLCV = { time: Date.UTC(2026, 0, 5, 15, 0), open: 100, high: 101, low: 99, close: 100, volume: 1000 }
+
 /** Parse + check a script without a chart. Throws a ScriptError (with its line) on any fault. */
-export function compile(source: string): { prog: Stmt[]; result: RunResult } {
+export function compile(source: string): { prog: Program; result: RunResult } {
   const prog = parse(source)
-  return { prog, result: run(prog, []) }
+  return { prog, result: run(prog, [DRY_BAR]) }
 }
 
 function valuesOf(schema: readonly InputSchema[], given: Record<string, InputValue> | undefined): Record<string, InputValue> {
@@ -61,67 +68,130 @@ function valuesOf(schema: readonly InputSchema[], given: Record<string, InputVal
   return out
 }
 
+/** One distinct value, or null when the array varies. */
+function constant<T>(xs: readonly T[]): { v: T } | null {
+  if (!xs.length) return null
+  const v = xs[0]!
+  for (let i = 1; i < xs.length; i++) if (xs[i] !== v) return null
+  return { v }
+}
+
 export function toModel(id: string, res: RunResult, bars: readonly OHLCV[], inputValues: Record<string, InputValue>): IndicatorModel {
-  const series: SeriesSpec[] = res.plots.map((p, ordinal) => ({
-    id: stableSeriesId({ instanceId: id, kind: p.style, title: p.title, ordinal }),
-    title: p.title,
-    paneId: '',
-    kind: p.style,
-    points: bars.map((b, i) => {
-      const v = p.values[i]
-      const value = v == null || Number.isNaN(v) ? null : v
-      const color = p.colors?.[i]
-      return color ? { time: b.time, value, color } : { time: b.time, value }
-    }),
-    style: { color: p.color, width: p.width, lineStyle: p.dashed ? ('dashed' as const) : ('solid' as const) },
-  }))
+  const clear = tokenHexAlpha('--color-bg', 0)
+  const hiddenDisplay = { pane: false, legend: false, dataWindow: false }
+  const series: SeriesSpec[] = res.plots.map((p, ordinal) => {
+    const same = constant(p.colors)
+    const color = (same ? same.v : p.colors.find((c) => c !== null)) ?? clear
+    return {
+      id: stableSeriesId({ instanceId: id, kind: p.style, title: p.title, ordinal }),
+      title: p.title,
+      paneId: '',
+      kind: p.style,
+      points: bars.map((b, i) => {
+        const v = p.values[i]
+        const value = v == null || Number.isNaN(v) ? null : v
+        return same ? { time: b.time, value } : { time: b.time, value, color: p.colors[i] ?? clear }
+      }),
+      style: {
+        color,
+        width: p.width,
+        lineStyle: p.dashed ? ('dashed' as const) : ('solid' as const),
+        ...(p.base != null ? { base: p.base } : {}),
+      },
+      ...(p.hidden || (same && same.v === null) ? { display: hiddenDisplay } : {}),
+    }
+  })
   const plotIds = series.map((s) => s.id)
-  const labels: DrawingLabel[] = res.markers
-    .filter((m) => bars[m.i])
-    .map((m, k) => ({
-      id: `${id}-mk${k}`,
+  // an hline a fill names becomes a hidden flat series the fill can anchor to
+  const hlineIds = new Map<number, string>()
+  const endId = (e: FillEnd): string | null => {
+    if ('plot' in e) return plotIds[e.plot] ?? null
+    const h = res.hlines[e.hline]
+    if (!h) return null
+    let sid = hlineIds.get(e.hline)
+    if (!sid) {
+      sid = stableSeriesId({ instanceId: id, kind: 'line', title: `hline ${e.hline}`, ordinal: 1000 + e.hline })
+      hlineIds.set(e.hline, sid)
+      series.push({
+        id: sid,
+        title: h.title || `hline ${e.hline + 1}`,
+        paneId: '',
+        kind: 'line',
+        points: bars.map((b) => ({ time: b.time, value: h.price })),
+        style: { color: clear, width: 1, lineStyle: 'solid' },
+        display: hiddenDisplay,
+      })
+    }
+    return sid
+  }
+  const fills: Fill[] = []
+  res.fills.forEach((f, k) => {
+    const from = endId(f.a)
+    const to = endId(f.b)
+    if (!from || !to) return
+    const fid = stableSeriesId({ instanceId: id, kind: 'fill', title: f.title || `fill ${k}`, ordinal: k })
+    if (f.gradient) {
+      fills.push({ id: fid, paneId: '', fromSeriesId: from, toSeriesId: to, color: clear, gradient: f.gradient.slice(0, bars.length) })
+      return
+    }
+    const same = constant(f.colors)
+    if (same && same.v === null) return
+    fills.push({ id: fid, paneId: '', fromSeriesId: from, toSeriesId: to, ...(same ? { color: same.v! } : { colors: f.colors.slice(0, bars.length) }) })
+  })
+  const priceLines: PriceLine[] = []
+  res.hlines.forEach((h, k) => {
+    if (h.color === null) return
+    priceLines.push({
+      id: stableSeriesId({ instanceId: id, kind: 'hline', title: h.title || `hline ${k}`, ordinal: k }),
       paneId: '',
-      xloc: 'bar_time' as const,
-      x: bars[m.i]!.time,
-      y: m.position === 'aboveBar' ? bars[m.i]!.high : bars[m.i]!.low,
-      yloc: m.position === 'aboveBar' ? ('abovebar' as const) : ('belowbar' as const),
-      ...(m.text ? { text: m.text } : {}),
-      style: m.shape,
-      color: m.color,
-      textColor: m.color,
-      size: m.size,
-      textAlign: 'center' as const,
-      fontFamily: 'default' as const,
-      // above / below a BAR means the price pane, whichever pane the plots are in
-      overlay: true,
-    }))
-  const fills: Fill[] = res.fills
-    .filter((f) => plotIds[f.a] && plotIds[f.b])
-    .map((f, k) => ({
-      id: stableSeriesId({ instanceId: id, kind: 'fill', title: `fill ${k}`, ordinal: k }),
-      paneId: '',
-      fromSeriesId: plotIds[f.a]!,
-      toSeriesId: plotIds[f.b]!,
-      color: f.color,
-    }))
-  const priceLines: PriceLine[] = res.hlines.map((h, k) => ({
-    id: stableSeriesId({ instanceId: id, kind: 'hline', title: h.title || `hline ${k}`, ordinal: k }),
-    paneId: '',
-    price: h.price,
-    color: h.color,
-    lineStyle: h.style,
-    width: h.width,
-    ...(h.title ? { title: h.title } : {}),
-  }))
+      price: h.price,
+      color: h.color,
+      lineStyle: h.style,
+      width: h.width,
+      ...(h.title ? { title: h.title } : {}),
+    })
+  })
+  const step = bars.length > 1 ? bars[bars.length - 1]!.time - bars[bars.length - 2]!.time : 300_000
   const backgrounds: Background[] = res.backgrounds
     .filter((b) => bars[b.from] && bars[b.to])
     .map((b, k) => ({
       id: stableSeriesId({ instanceId: id, kind: 'background', title: `bg ${k}`, ordinal: k }),
       paneId: '',
       from: bars[b.from]!.time,
-      to: bars[b.to]!.time,
+      // exclusive end: the next bar's open (or one bar on, at the right edge)
+      to: bars[b.to + 1]?.time ?? bars[b.to]!.time + step,
       color: b.color,
     }))
+  const labels: DrawingLabel[] = res.markers
+    .filter((m) => bars[m.i])
+    .map((m, k) => {
+      const b = bars[m.i]!
+      const yloc =
+        m.position === 'aboveBar' ? ('abovebar' as const) : m.position === 'belowBar' ? ('belowbar' as const) : m.position === 'absolute' ? ('price' as const) : m.position
+      return {
+        id: `${id}-mk${k}`,
+        paneId: '',
+        xloc: 'bar_time' as const,
+        x: b.time,
+        y: m.position === 'absolute' ? m.y : m.position === 'aboveBar' ? b.high : b.low,
+        yloc,
+        ...(m.text ? { text: m.text } : {}),
+        style: m.shape,
+        color: m.color,
+        textColor: m.textColor,
+        size: m.size,
+        textAlign: 'center' as const,
+        fontFamily: 'default' as const,
+        // above / below a BAR means the price pane, whichever pane the plots are in
+        ...(m.position === 'aboveBar' || m.position === 'belowBar' ? { overlay: true } : {}),
+      }
+    })
+  const barColors = res.barColors
+    ? bars.flatMap((b, i) => {
+        const c = res.barColors![i]
+        return c ? [{ time: b.time, color: c }] : []
+      })
+    : []
   return {
     id,
     title: res.meta.title,
@@ -133,13 +203,14 @@ export function toModel(id: string, res: RunResult, bars: readonly OHLCV[], inpu
     backgrounds,
     priceLines,
     ...(labels.length ? { labels } : {}),
+    ...(barColors.length ? { barColors } : {}),
     inputs: res.inputs,
     inputValues,
   }
 }
 
-/** Live re-runs coalesce to at most one per this many ms. */
-const THROTTLE_MS = 160
+/** Live re-runs coalesce to at most one per this many ms — or twice the last run's cost, whichever is longer. */
+const THROTTLE_MS = 200
 
 export class CbScriptEngine implements ScriptingEngine {
   readonly language = CBSCRIPT
@@ -168,17 +239,21 @@ export class CbScriptEngine implements ScriptingEngine {
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | null = null
     let last = 0
+    let cost = 0
     let first = true
+    const market: RunOpts = { symbol: req.market.symbol.replace(/^[^:]*:/, ''), timeframe: req.market.timeframe }
     const compute = () => {
       timer = null
       if (stopped) return
       last = Date.now()
       const bars = req.getBars?.() ?? req.bars
       try {
-        const res = run(token.prog, bars, { inputs })
+        const res = run(token.prog, bars, { ...market, inputs })
         h.onModel(toModel(token.id, res, bars, valuesOf(res.inputs, inputs)))
+        cost = Date.now() - last
         if (first) {
           first = false
+          for (const message of res.warnings) h.onWarning?.({ message, bar: 0 })
           h.onDone?.()
         }
       } catch (e) {
@@ -200,7 +275,7 @@ export class CbScriptEngine implements ScriptingEngine {
       setVisibleRange() {},
       notifyBars() {
         if (stopped || timer) return
-        timer = setTimeout(compute, Math.max(0, THROTTLE_MS - (Date.now() - last)))
+        timer = setTimeout(compute, Math.max(0, Math.max(THROTTLE_MS, 2 * cost) - (Date.now() - last)))
       },
     }
   }

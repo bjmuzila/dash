@@ -95,16 +95,19 @@ import '@/pages/vela/vela.css'
 // copy the active chart's studies, settings included, onto every other chart in
 // the layout. Additive: nothing a chart already has is taken off.
 //
-// ── CB Script — our own scripting engine ─────────────────────────────────────
+// ── CB Script — our own scripting engine (runs pasted Pine) ──────────────────
 // pages/vela/script/ — Vela runs scripts through whatever engine is registered
-// under a language id (`engines` below); this one is CB Edge's own small
-// indicator language, 'cbscript', PARSED and INTERPRETED (lang.ts, runtime.ts),
-// never eval'd: production's CSP has no 'unsafe-eval', so a JavaScript engine
-// would not run on cbedge.net at all. A "Scripts" side panel (topbar on
-// desktop, ⋮ on a phone — script/panel.ts) is the editor: write, Save (checked
-// first, errors with their line), Add to chart. Saved scripts live in this
-// browser (`cb-v3-vela-scripts`); a script on a chart is kept in that chart's
-// saved state, and an edit saved in the panel updates every chart running it.
+// under a language id (`engines` below); this one is CB Edge's own, 'cbscript',
+// PARSED and INTERPRETED (lang.ts, runtime.ts), never eval'd: production's CSP
+// has no 'unsafe-eval', so a JavaScript engine would not run on cbedge.net at
+// all. Its grammar is TradingView's Pine and it executes per bar like Pine, so
+// an indicator copied off TradingView (v4 / v5 / v6) pastes in and runs; CB
+// Script's own spellings (input("Fast", 9), marker(), named app colours) still
+// work. A "Scripts" side panel (topbar on desktop, ⋮ on a phone —
+// script/panel.ts) is the editor: write or paste, Save (checked first, errors
+// with their line), Add to chart. Saved scripts live in this browser
+// (`cb-v3-vela-scripts`); a script on a chart is kept in that chart's saved
+// state, and an edit saved in the panel updates every chart running it.
 //
 // ── Our CSS over Vela's ──────────────────────────────────────────────────────
 // pages/vela/vela.css: the active chart in a grid gets a faint 1px grey ring

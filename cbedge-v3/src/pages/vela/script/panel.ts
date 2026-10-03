@@ -15,7 +15,12 @@
 //   Save          checks the script (engine.compile — parse + a dry run, so a
 //                 typo is caught here, not on a chart), stores it in the library,
 //                 and updates every chart already running it, in place
-//                 (IndicatorHandle.updateCode — same row, inputs kept)
+//                 (IndicatorHandle.updateCode — same row, inputs kept). Anything
+//                 the script does that is skipped (drawings, strategy orders) is
+//                 said on the status line.
+//   Paste         a TradingView Pine script pasted over the whole editor becomes a
+//                 NEW script named after its indicator() title — the one that was
+//                 showing is not overwritten.
 //   Add to chart  saves, then adds it to the ACTIVE chart through the shell
 //                 (WidgetContext.addIndicator — on the undo timeline, counted on
 //                 the topbar) with the id `cbs-<library id>-<n>`
@@ -39,34 +44,36 @@ import { instanceIdFor, libIdOf, loadLibrary, newScriptId, saveLibrary, TEMPLATE
 const PANEL_ID = 'cbedge-scripts'
 const PERSIST_KEY = 'cbedge.scripts'
 
-const REFERENCE = `SERIES   open high low close volume hl2 hlc3 ohlc4 time bar_index
-AVERAGE  sma ema rma wma vwma hma (src, length)
-BANDS    bb_upper bb_lower (src, length, mult)   stdev (src, length)
-RANGE    highest lowest sum (src, length)   change roc (src, length=1)
-MOMENTUM rsi (src, len)  macd (src, fast, slow)  cci (src, len)
-         stoch (len)  atr (len)  tr()  obv()  vwap()  cum (src)
-SIGNALS  crossover crossunder cross (a, b)   rising falling (src, len)
-         barssince (cond)   valuewhen (cond, src)
-MATH     abs sqrt log exp sign floor ceil round pow min max avg
-         nz (x, 0)  na (x)  fixnan (x)
-HISTORY  close[1] = the bar before
-LOGIC    and or not   == != < <= > >=   cond ? a : b
+const REFERENCE = `PINE SCRIPT  paste a TradingView indicator as is (v4, v5, v6)
+  Runs per bar the way TradingView does: var, x[1], if / for / while /
+  switch, your own functions f(x) =>, tuples [a, b] = …, ta.* math.*
+  str.* color.* input.*, plot plotshape plotchar plotarrow hline fill
+  bgcolor barcolor.
+  Not yet: request.security, arrays / maps, drawings (label.new,
+  line.new, box.new are skipped), strategy orders (plots only).
 
-indicator("Title", overlay=true)
-x = input("Length", 20, min=1, max=200, step=1)
-src = input("Source", close)          mode = input("Mode", "EMA", options=["EMA", "SMA"])
-p = plot(series, "Title", color=gold, width=2, style="line", dashed=false)
-     style: line step histogram area columns circles cross
-hline(70, "Level", color=red, style="dashed")
-fill(p1, p2, color=blue, opacity=0.1)
-marker(cond, "text", position="below", color=green, shape="triangleup", size="small")
-     shape: triangleup triangledown arrowup arrowdown circle square diamond
-            flag cross xcross none (text only)
-bgcolor(cond, color=red, opacity=0.1)
+CB SCRIPT  the same language, plus
+  input("Length", 20, min=1)                      title first
+  plot(x, "EMA", color=gold, width=2, dashed=true)
+  marker(cond, "text", position="below", color=green, shape="triangleup")
+  bgcolor(cond, color=red, opacity=0.1)
+  fill(p1, p2, color=blue, opacity=0.15)
+  bb_upper / bb_lower (src, len, mult)    alpha(color, 0.5)
 
-COLORS   green red blue gold yellow orange purple pink teal gray white
-         call put core volt surge reversal coil   or "#rrggbb"
-         close > open ? green : red   (per bar)`
+SERIES   open high low close volume hl2 hlc3 ohlc4 time bar_index
+TA       sma ema rma wma vwma hma alma · rsi macd stoch cci atr mfi wpr
+         bb kc dmi supertrend sar · highest lowest sum change roc mom
+         stdev linreg pivothigh pivotlow vwap obv · crossover crossunder
+         cross barssince valuewhen rising falling
+COLORS   color.red … · "#rrggbb" · color.new  color.rgb  color.from_gradient
+         CB names: green red blue gold orange purple pink teal gray
+         white call put core volt surge reversal coil`
+
+/** The title a pasted script declares — indicator("…") / study("…") / strategy("…"). */
+function declaredTitle(src: string): string | null {
+  const m = /\b(?:indicator|study|strategy)\s*\(\s*(?:title\s*=\s*)?(["'])(.*?)\1/.exec(src)
+  return m ? m[2]!.trim() || null : null
+}
 
 /** The cells a context can see (the workspace context lists them all). */
 function chartsOf(ctx: WidgetContext) {
@@ -124,6 +131,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   code.setAttribute('autocapitalize', 'off')
   code.setAttribute('autocomplete', 'off')
   code.setAttribute('aria-label', 'Script')
+  code.placeholder = 'Paste a TradingView Pine script, or write CB Script'
 
   const actRow = el(doc, 'div', 'cb-scr-row')
   const btnSave = el(doc, 'button', 'cb-scr-btn cb-scr-primary', 'Save')
@@ -168,9 +176,14 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   /** Check + store. Returns the saved script, or null (and says why). */
   const save = (): Script | null => {
     const s = read()
+    let warnings: string[] = []
     try {
       const { result } = compile(s.source)
-      if (!name.value.trim() && result.meta.title) s.name = result.meta.title
+      warnings = result.warnings
+      const saved = lib.find((x) => x.id === s.id)
+      const was = saved ? declaredTitle(saved.source) : null
+      // a name that was just the old title follows the new one
+      if (result.meta.title && (!name.value.trim() || name.value.trim() === 'Pasted script' || (was && name.value.trim() === was))) s.name = result.meta.title
     } catch (e) {
       say(e instanceof Error ? e.message : String(e), 'err')
       return null
@@ -183,7 +196,8 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     dirty = false
     fillPick()
     const n = updateRunning(ctx, s)
-    say(n ? `Saved — updated on ${n} chart${n === 1 ? '' : 's'}` : 'Saved', 'ok')
+    const note = warnings.length ? `\nNote: ${warnings.join('; ')}` : ''
+    say((n ? `Saved — updated on ${n} chart${n === 1 ? '' : 's'}` : 'Saved') + note, 'ok')
     return s
   }
 
@@ -192,7 +206,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     const s = save()
     if (!s) return
     ctx.addIndicator({ name: s.name, script: s.source, language: CBSCRIPT, id: instanceIdFor(s.id) })
-    say(`Added “${s.name}” to the chart`, 'ok')
+    say(`Added “${s.name}” to the chart${status.textContent?.includes('\nNote:') ? status.textContent.slice(status.textContent.indexOf('\nNote:')) : ''}`, 'ok')
   })
   btnNew.addEventListener('click', () => {
     show({ id: newScriptId(), name: 'My script', source: TEMPLATE })
@@ -230,12 +244,29 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   }
   name.addEventListener('input', touched)
   code.addEventListener('input', touched)
+  code.addEventListener('paste', (e) => {
+    const text = e.clipboardData?.getData('text/plain') ?? ''
+    const whole = code.selectionStart === 0 && code.selectionEnd === code.value.length
+    if (!text.trim() || !(whole || !code.value.trim())) return
+    // the whole editor replaced: a new script, not an edit of the one showing
+    e.preventDefault()
+    const source = text.replace(/\r\n?/g, '\n')
+    let t = declaredTitle(source)
+    try {
+      t = compile(source).result.meta.title || t // the declared title, however its arguments are spelled
+    } catch {
+      /* Save will say what is wrong */
+    }
+    show({ id: newScriptId(), name: t ?? 'Pasted script', source })
+    dirty = true
+    say('Pasted as a new script — Save to keep it, or Add to chart', 'info')
+  })
   code.addEventListener('keydown', (e) => {
     if (e.key === 'Tab' && !e.shiftKey) {
       e.preventDefault()
       const a = code.selectionStart
       const b = code.selectionEnd
-      code.setRangeText('  ', a, b, 'end')
+      code.setRangeText('    ', a, b, 'end') // Pine blocks are 4 spaces
       touched()
     } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
@@ -244,7 +275,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   })
 
   show(cur)
-  say('Write a script, Save, then Add to chart', 'info')
+  say('Write a script or paste a TradingView one, Save, then Add to chart', 'info')
   return {
     onOpen() {
       // another tab or chart may have saved meanwhile

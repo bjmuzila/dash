@@ -120,7 +120,7 @@
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.55;
-  tab-size: 2;
+  tab-size: 4;
   white-space: pre;
   overflow: auto;
 }

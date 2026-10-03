@@ -1,107 +1,131 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // CB SCRIPT — the runtime: what every name and function means.
 //
-// VECTORISED. A script runs ONCE over the whole bar array, not once per bar:
-// every series is a Float64Array the length of the chart (NaN = na), every
-// operator works element-wise, a plain number broadcasts. `close > open ? green
-// : red` is a per-bar colour; `close[1]` is close shifted one bar right. A run
-// over 8,000 bars is a few milliseconds, so a live tick simply re-runs it.
+// PER BAR, like Pine. The script is compiled once to closures (no eval) and then
+// run once for every bar, oldest first, exactly the way TradingView executes a
+// Pine indicator: `x[1]` is x's value on the bar before, `var` keeps a value
+// from bar to bar, `x := nz(x[1]) + 1` counts, `if` / `for` / `while` /
+// `switch` run per bar, and every built-in like ta.ema() keeps its own state
+// per call (and per call of the user function it sits in). So a script pasted
+// from TradingView computes what it computes there.
 //
-// ── Built-in series ──────────────────────────────────────────────────────────
-//   open high low close volume hl2 hlc3 ohlc4 time bar_index
-// ── Functions (ta. / math. prefixes are accepted and ignored) ────────────────
-//   averages   sma ema rma wma vwma hma          (src, length)
-//   bands      bb_upper bb_lower (src, length, mult=2) · stdev (src, length)
-//   ranges     highest lowest sum (src, length) · change roc (src, length=1)
-//   momentum   rsi (src, length) · macd (src, fast=12, slow=26) · cci (src, length)
-//              stoch (length) · atr (length) · tr() · obv() · vwap() · cum (src)
-//   signals    crossover crossunder cross (a, b) · rising falling (src, length)
-//              barssince (cond) · valuewhen (cond, src)
-//   math       abs sqrt log exp sign floor ceil round(x, digits=0) pow(x, y)
-//              min max avg (a, b, …) · nz (x, replacement=0) · na (x) · fixnan (x)
-//   colours    alpha (color, opacity 0–1)
-// ── Declarations and outputs ─────────────────────────────────────────────────
-//   indicator(title, overlay=true, shorttitle=, precision=)
-//   input(title, default, min=, max=, step=, options=[…], tooltip=)
-//   plot(series, title, color=, width=1, style="line"|"step"|"histogram"|"area"|
-//        "columns"|"circles"|"cross", dashed=false)          → a plot, for fill()
-//   hline(price, title, color=, width=1, style="dashed"|"solid"|"dotted")
-//   fill(plotA, plotB, color=, opacity=0.15)
-//   marker(cond, text="", color=, position="above"|"below", shape=, size=)
-//        shape: triangleup triangledown arrowup arrowdown circle square diamond
-//        flag cross xcross, or "none" for the text alone; size: tiny small
-//        normal large huge
-//   bgcolor(cond, color=, opacity=0.12)
+// ── What is here ─────────────────────────────────────────────────────────────
+//   series     open high low close volume time hl2 hlc3 ohlc4 hlcc4 bar_index
+//              last_bar_index, barstate.*, syminfo.*, timeframe.*, hour minute
+//              dayofweek dayofmonth month year (New York time), vwap obv
+//              accdist tr (+ ta.* spellings)
+//   ta.        sma ema rma wma vwma hma alma swma · stdev variance dev median
+//              percentrank · highest lowest highestbars lowestbars sum range
+//              change mom roc cum · rsi macd stoch cci atr tr mfi wpr cmo tsi
+//              bb kc dmi supertrend sar linreg correlation · crossover
+//              crossunder cross rising falling barssince valuewhen pivothigh
+//              pivotlow vwap obv
+//   math.      abs sqrt log log10 exp pow sign floor ceil round min max avg sum
+//              sin cos tan asin acos atan todegrees toradians round_to_mintick
+//   misc       nz na fixnan iff time() timestamp() hour() … str.tostring
+//              str.format, color.new / color.rgb / color.from_gradient
+//   inputs     input() (v4: any order, type=input.*), input.int float bool
+//              string source color timeframe session symbol price time
+//   outputs    indicator() / study() / strategy(), plot plotshape plotchar
+//              plotarrow hline fill bgcolor barcolor, alertcondition (ignored)
+//   CB extras  input("Title", default), marker(cond, text, position=, shape=),
+//              bgcolor(cond, color=, opacity=), bb_upper / bb_lower, alpha(),
+//              plot(width=, dashed=), named colours (gold call put core volt …)
+// Not yet: request.security (other symbols / timeframes), arrays / matrices /
+// maps, and drawings (label.new / line.new / box.new / table.new — skipped
+// with a note so the rest of a script still draws). strategy() scripts draw
+// their plots; their orders are not simulated.
+//
 // ── Colours ──────────────────────────────────────────────────────────────────
-//   names resolve to this app's tokens (tokens.css): green red blue gold yellow
-//   orange purple pink teal gray white call put core volt surge reversal coil;
-//   a "#rrggbb" / "#rrggbbaa" string in a script is passed through as written.
+// Pine's palette (color.red …) is tokens.css's --color-pine-*, TradingView's own
+// values; CB names (green red blue gold … call put core volt surge reversal
+// coil) are this app's tokens; a "#rrggbb" / "#rrggbbaa" in a script is used as
+// written. na as a colour draws nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { InputSchema, InputValue, OHLCV } from '@luxalgo/vela'
-import { tokenHex, tokenHexAlpha } from '@/design/theme'
-import { ScriptError, type Node, type Stmt } from './lang'
+import { tokenHex } from '@/design/theme'
+import { ScriptError, type FuncDef, type Node, type Program, type Stmt } from './lang'
 
 // ── Values ───────────────────────────────────────────────────────────────────
 
-/** A plotted line, so fill() can name it. */
+/** A plot, so fill() can name it. */
 export interface PlotRef {
   plot: number
 }
-type Val = number | Float64Array | string | string[] | Val[] | PlotRef
+/** An hline, so fill() can name it. */
+export interface HlineRef {
+  hline: number
+}
+type Val = number | string | Val[] | PlotRef | HlineRef
 
-const isSeries = (v: Val | undefined): v is Float64Array => v instanceof Float64Array
-const isPlot = (v: Val): v is PlotRef => typeof v === 'object' && v !== null && !Array.isArray(v) && !isSeries(v) && 'plot' in v
-const isStrSeries = (v: Val): v is string[] => Array.isArray(v) && (v.length === 0 || typeof v[0] === 'string' || v[0] == null)
+const isPlot = (v: Val | undefined): v is PlotRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'plot' in v
+const isHline = (v: Val | undefined): v is HlineRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'hline' in v
 
 // ── What a run produces ──────────────────────────────────────────────────────
 
+export type PlotStyle = 'line' | 'step' | 'histogram' | 'area' | 'columns' | 'circles' | 'cross'
 export interface PlotOut {
   title: string
   values: Float64Array
-  color: string
-  colors: string[] | null
+  /** Per bar; null = na (nothing drawn on that bar). */
+  colors: (string | null)[]
   width: number
-  style: 'line' | 'step' | 'histogram' | 'area' | 'columns' | 'circles' | 'cross'
+  style: PlotStyle
   dashed: boolean
+  base: number | null
+  /** display=display.none, or a colour that is na on every bar — a fill anchor only. */
+  hidden: boolean
 }
 export interface HlineOut {
   price: number
   title: string
-  color: string
+  color: string | null
   width: number
   style: 'solid' | 'dashed' | 'dotted'
 }
-export interface FillOut {
-  a: number
-  b: number
-  color: string
+export type FillEnd = PlotRef | HlineRef
+export interface GradientStop {
+  topValue: number
+  bottomValue: number
+  topColor: string
+  bottomColor: string
 }
+export interface FillOut {
+  a: FillEnd
+  b: FillEnd
+  colors: (string | null)[]
+  /** The gradient overload, fill(p1, p2, top_value, bottom_value, top_color, bottom_color): per bar. */
+  gradient: (GradientStop | null)[] | null
+  title: string
+}
+export const MARKER_SHAPES = ['triangleup', 'triangledown', 'arrowup', 'arrowdown', 'circle', 'square', 'diamond', 'flag', 'cross', 'xcross', 'label_up', 'label_down', 'none'] as const
+export type MarkerShape = (typeof MARKER_SHAPES)[number]
+const MARKER_SIZES = ['tiny', 'small', 'normal', 'large', 'huge'] as const
+export type MarkerSize = (typeof MARKER_SIZES)[number]
 export interface MarkerOut {
   i: number
   text: string
   color: string
-  position: 'aboveBar' | 'belowBar'
+  textColor: string
+  position: 'aboveBar' | 'belowBar' | 'top' | 'bottom' | 'absolute'
+  /** The price, for position 'absolute'. */
+  y: number
   shape: MarkerShape
   size: MarkerSize
 }
-const MARKER_SHAPES = ['triangleup', 'triangledown', 'arrowup', 'arrowdown', 'circle', 'square', 'diamond', 'flag', 'cross', 'xcross', 'none'] as const
-export type MarkerShape = (typeof MARKER_SHAPES)[number]
-const MARKER_SIZES = ['tiny', 'small', 'normal', 'large', 'huge'] as const
-export type MarkerSize = (typeof MARKER_SIZES)[number]
 export interface BgOut {
+  /** Bar indexes, inclusive. */
   from: number
   to: number
   color: string
 }
-
 export interface Meta {
   title: string
   shorttitle?: string
   overlay: boolean
   precision?: number
 }
-
 export interface RunResult {
   meta: Meta
   inputs: InputSchema[]
@@ -110,11 +134,15 @@ export interface RunResult {
   fills: FillOut[]
   markers: MarkerOut[]
   backgrounds: BgOut[]
+  /** Per bar candle recolour (barcolor), or null when the script never calls it. */
+  barColors: (string | null)[] | null
+  /** Things skipped (drawings, strategy orders), said once each. */
+  warnings: string[]
 }
 
 // ── Colours ──────────────────────────────────────────────────────────────────
 
-const COLOR_TOKENS: Record<string, string> = {
+const CB_COLORS: Record<string, string> = {
   green: '--color-up',
   red: '--color-down',
   blue: '--color-series-1',
@@ -137,172 +165,525 @@ const COLOR_TOKENS: Record<string, string> = {
   reversal: '--color-vt-reversal',
   coil: '--color-vt-coil',
 }
-/** The colours a plot takes when the script names none, in order. */
+const PINE_COLORS = ['aqua', 'black', 'blue', 'fuchsia', 'gray', 'green', 'lime', 'maroon', 'navy', 'olive', 'orange', 'purple', 'red', 'silver', 'teal', 'white', 'yellow']
+/** The colours a CB plot takes when the script names none, in order. */
 const AUTO_COLORS = ['--color-series-1', '--color-series-3', '--color-series-2', '--color-series-4', '--color-series-5', '--color-series-6']
 
-const HEX_RE = /^#[0-9a-f]{3,8}$/i
-
-function colorOf(v: Val | undefined, line: number, fallback: string): string {
-  if (v == null) return fallback
-  if (typeof v !== 'string') throw new ScriptError('a colour is a name like gold or a "#…" string', line)
-  if (HEX_RE.test(v)) return v
-  const token = COLOR_TOKENS[v.toLowerCase()]
-  if (!token) throw new ScriptError(`unknown colour "${v}" — try ${Object.keys(COLOR_TOKENS).slice(0, 8).join(', ')}`, line)
-  return tokenHex(token)
+const pineMemo = new Map<string, string>()
+const pineColor = (name: string): string => {
+  let c = pineMemo.get(name)
+  if (c === undefined || c === 'transparent') pineMemo.set(name, (c = tokenHex(`--color-pine-${name}`)))
+  return c
+}
+const tokMemo = new Map<string, string>()
+/** tokenHex, held (it formats a fresh string per call). */
+const tok = (name: string): string => {
+  let c = tokMemo.get(name)
+  if (c === undefined || c === 'transparent') tokMemo.set(name, (c = tokenHex(name)))
+  return c
 }
 
-/** `#rrggbb` at an alpha (a name resolves through its token first). */
-function withAlpha(color: string, a: number): string {
-  const lower = color.toLowerCase()
-  const token = COLOR_TOKENS[lower]
-  if (token) return tokenHexAlpha(token, a)
-  const m = /^#([0-9a-f]{6})/i.exec(color)
-  if (!m) return color
-  const h = Math.round(Math.max(0, Math.min(1, a)) * 255)
+const hexMemo = new Map<string, [number, number, number, number] | null>()
+/** `#rgb` / `#rrggbb` / `#rrggbbaa` → channels (memoised — a script repaints a handful of colours every bar). */
+function parseHex(c: string): [number, number, number, number] | null {
+  let hit = hexMemo.get(c)
+  if (hit !== undefined) return hit
+  hit = parseHexRaw(c)
+  if (hexMemo.size > 4096) hexMemo.clear()
+  hexMemo.set(c, hit)
+  return hit
+}
+function parseHexRaw(c: string): [number, number, number, number] | null {
+  const m = /^#([0-9a-f]{3,8})$/i.exec(c)
+  if (!m) return null
+  let h = m[1]!
+  if (h.length === 3 || h.length === 4) h = [...h].map((x) => x + x).join('')
+  if (h.length !== 6 && h.length !== 8) return null
+  const n = (k: number) => parseInt(h.slice(k, k + 2), 16)
+  return [n(0), n(2), n(4), h.length === 8 ? n(6) / 255 : 1]
+}
+const byte = (v: number) =>
+  Math.max(0, Math.min(255, Math.round(v)))
     .toString(16)
     .padStart(2, '0')
-  return `#${m[1]}${h}`
+function hexOf(r: number, g: number, b: number, a: number): string {
+  return a >= 1 ? `#${byte(r)}${byte(g)}${byte(b)}` : `#${byte(r)}${byte(g)}${byte(b)}${byte(a * 255)}`
+}
+const alphaMemo = new Map<string, Map<number, string>>()
+/** `c` at alpha `a` (replacing its own). Non-hex colours pass through. */
+function withAlpha(c: string, a: number): string {
+  let byA = alphaMemo.get(c)
+  if (!byA) {
+    if (alphaMemo.size > 2048) alphaMemo.clear()
+    alphaMemo.set(c, (byA = new Map()))
+  }
+  let hit = byA.get(a)
+  if (hit === undefined) {
+    const p = parseHex(c)
+    hit = p ? hexOf(p[0], p[1], p[2], Math.max(0, Math.min(1, a))) : c
+    byA.set(a, hit)
+  }
+  return hit
+}
+const alphaOf = (c: string) => parseHex(c)?.[3] ?? 1
+
+// ── Per-call state ───────────────────────────────────────────────────────────
+
+/** A growing history of numbers, newest last. */
+class Hist {
+  a = new Float64Array(256)
+  n = 0
+  push(v: number) {
+    if (this.n === this.a.length) {
+      const b = new Float64Array(this.a.length * 2)
+      b.set(this.a)
+      this.a = b
+    }
+    this.a[this.n++] = v
+  }
+  /** k bars back (0 = newest); NaN before the start. */
+  back(k: number): number {
+    const j = this.n - 1 - k
+    return j >= 0 ? this.a[j]! : NaN
+  }
 }
 
-// ── Series helpers ───────────────────────────────────────────────────────────
-
-const nanArr = (n: number) => new Float64Array(n).fill(NaN)
-
-function shift(x: Float64Array, k: number): Float64Array {
-  const n = x.length
-  const out = nanArr(n)
-  if (k < 0) return out
-  for (let i = k; i < n; i++) out[i] = x[i - k]!
-  return out
+/** The state one built-in call keeps between bars. */
+class St {
+  h: Hist | null = null
+  x = NaN
+  y = NaN
+  z = NaN
+  w = NaN
+  n = 0
+  done = false
+  kids: St[] | null = null
+  list: number[] | null = null
+  any: unknown = null
+  k(i: number): St {
+    const ks = (this.kids ??= [])
+    return (ks[i] ??= new St())
+  }
+  hist(): Hist {
+    return (this.h ??= new Hist())
+  }
 }
 
-function sma(x: Float64Array, len: number): Float64Array {
-  const n = x.length
-  const out = nanArr(n)
+const isNa = (v: number) => v !== v
+
+function smaStep(s: St, v: number, len: number): number {
+  const h = s.hist()
+  h.push(v)
+  if (s.n !== len || h.n % 4096 === 0) {
+    s.n = len
+    s.x = 0
+    s.y = 0
+    for (let k = 0; k < len; k++) {
+      const u = h.back(k)
+      if (isNa(u)) s.y++
+      else s.x += u
+    }
+  } else {
+    if (isNa(v)) s.y++
+    else s.x += v
+    if (h.n > len) {
+      const old = h.back(len)
+      if (isNa(old)) s.y--
+      else s.x -= old
+    } else s.y-- // a slot before the first bar filled
+  }
+  return s.y === 0 ? s.x / len : NaN
+}
+
+/** EMA family: seeded with the simple average of the first `seed` values (Pine). */
+function emaStep(s: St, v: number, alpha: number, seed: number): number {
+  if (isNa(v)) return NaN
+  if (!s.done) {
+    s.n++
+    s.y = (s.n === 1 ? 0 : s.y) + v
+    if (s.n < seed) return NaN
+    s.done = true
+    s.x = s.y / s.n
+    return s.x
+  }
+  s.x = alpha * v + (1 - alpha) * s.x
+  return s.x
+}
+const ema = (s: St, v: number, len: number) => emaStep(s, v, 2 / (len + 1), len)
+const rma = (s: St, v: number, len: number) => emaStep(s, v, 1 / len, len)
+
+/** The last `len` values, or null while any is na / before the first bar. */
+function windowOf(s: St, v: number, len: number): number[] | null {
+  const h = s.hist()
+  h.push(v)
+  if (h.n < len) return null
+  const w: number[] = new Array(len)
+  for (let k = 0; k < len; k++) {
+    const u = h.back(len - 1 - k)
+    if (isNa(u)) return null
+    w[k] = u
+  }
+  return w
+}
+function wmaStep(s: St, v: number, len: number): number {
+  const w = windowOf(s, v, len)
+  if (!w) return NaN
   let sum = 0
-  let cnt = 0
-  for (let i = 0; i < n; i++) {
-    const v = x[i]!
-    if (!Number.isNaN(v)) {
-      sum += v
-      cnt++
-    }
-    if (i >= len) {
-      const o = x[i - len]!
-      if (!Number.isNaN(o)) {
-        sum -= o
-        cnt--
-      }
-    }
-    if (i >= len - 1 && cnt === len) out[i] = sum / len
-  }
-  return out
+  for (let k = 0; k < len; k++) sum += w[k]! * (k + 1)
+  return sum / ((len * (len + 1)) / 2)
+}
+const mean = (w: number[]) => w.reduce((a, b) => a + b, 0) / w.length
+function stdevOf(w: number[], biased = true): number {
+  const m = mean(w)
+  const ss = w.reduce((a, b) => a + (b - m) * (b - m), 0)
+  return Math.sqrt(ss / (biased ? w.length : Math.max(1, w.length - 1)))
 }
 
-function emaLike(x: Float64Array, alpha: number, seedLen: number): Float64Array {
-  const n = x.length
-  const out = nanArr(n)
-  let prev = NaN
-  let seedSum = 0
-  let seedCnt = 0
-  for (let i = 0; i < n; i++) {
-    const v = x[i]!
-    if (Number.isNaN(v)) {
-      out[i] = prev
-      continue
-    }
-    if (Number.isNaN(prev)) {
-      seedSum += v
-      seedCnt++
-      if (seedCnt >= seedLen) {
-        prev = seedSum / seedCnt
-        out[i] = prev
-      }
-      continue
-    }
-    prev = alpha * v + (1 - alpha) * prev
-    out[i] = prev
-  }
-  return out
-}
-const ema = (x: Float64Array, len: number) => emaLike(x, 2 / (len + 1), len)
-const rma = (x: Float64Array, len: number) => emaLike(x, 1 / len, len)
+// ── New York time ────────────────────────────────────────────────────────────
 
-function wma(x: Float64Array, len: number): Float64Array {
-  const n = x.length
-  const out = nanArr(n)
-  const denom = (len * (len + 1)) / 2
-  for (let i = len - 1; i < n; i++) {
-    let s = 0
-    let ok = true
-    for (let j = 0; j < len; j++) {
-      const v = x[i - j]!
-      if (Number.isNaN(v)) {
-        ok = false
-        break
-      }
-      s += v * (len - j)
-    }
-    if (ok) out[i] = s / denom
+const NY_PARTS = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  hour: 'numeric',
+  weekday: 'short',
+})
+const DOW: Record<string, number> = { Sun: 1, Mon: 2, Tue: 3, Wed: 4, Thu: 5, Fri: 6, Sat: 7 }
+interface NyTime {
+  year: number
+  month: number
+  day: number
+  hour: number
+  minute: number
+  second: number
+  dow: number
+}
+const hourCache = new Map<number, Omit<NyTime, 'minute' | 'second'>>()
+/** Wall-clock parts in New York (offsets are whole hours, so minutes are UTC's). */
+function nyTime(t: number): NyTime {
+  const hk = Math.floor(t / 3_600_000)
+  let hp = hourCache.get(hk)
+  if (!hp) {
+    const parts: Record<string, string> = {}
+    for (const p of NY_PARTS.formatToParts(new Date(hk * 3_600_000))) parts[p.type] = p.value
+    hp = { year: +parts.year!, month: +parts.month!, day: +parts.day!, hour: +parts.hour!, dow: DOW[parts.weekday!] ?? 1 }
+    if (hourCache.size > 20000) hourCache.clear()
+    hourCache.set(hk, hp)
   }
-  return out
+  const d = new Date(t)
+  return { ...hp, minute: d.getUTCMinutes(), second: d.getUTCSeconds() }
+}
+/** Epoch ms of a New York wall-clock time. */
+function nyToUtc(y: number, mo: number, d: number, h: number, mi: number, s: number): number {
+  let guess = Date.UTC(y, mo - 1, d, h, mi, s) + 5 * 3_600_000
+  for (let k = 0; k < 2; k++) {
+    const p = nyTime(guess)
+    const shown = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second)
+    guess += Date.UTC(y, mo - 1, d, h, mi, s) - shown
+  }
+  return guess
+}
+/** Open time of the higher-timeframe bucket holding t ("D", "W", "M", "60", "240" …), New York days. */
+function bucketStart(t: number, tf: string): number {
+  const m = /^(\d*)([DWM]?)$/i.exec(tf.trim())
+  if (!m) return t
+  const n = m[1] ? parseInt(m[1], 10) : 1
+  const unit = m[2]!.toUpperCase()
+  const p = nyTime(t)
+  const midnight = nyToUtc(p.year, p.month, p.day, 0, 0, 0)
+  if (unit === 'D') return n === 1 ? midnight : midnight - (((p.dow - 1) % n) * 86_400_000)
+  if (unit === 'W') return midnight - ((p.dow + 5) % 7) * 86_400_000
+  if (unit === 'M') return nyToUtc(p.year, p.month, 1, 0, 0, 0)
+  if (!m[1]) return t
+  const step = n * 60_000
+  return midnight + Math.floor((t - midnight) / step) * step
+}
+const dayKey = (t: number) => {
+  const p = nyTime(t)
+  return p.year * 10000 + p.month * 100 + p.day
+}
+/** Is New York minute-of-day `m` (and weekday) inside a Pine session string like "0930-1600:23456"? */
+function inSession(t: number, session: string): boolean {
+  const p = nyTime(t)
+  const m = p.hour * 60 + p.minute
+  for (const part of session.split(',')) {
+    const mm = /^\s*(\d{2})(\d{2})-(\d{2})(\d{2})(?::(\d+))?\s*$/.exec(part)
+    if (!mm) continue
+    if (mm[5] && !mm[5].includes(String(p.dow))) continue
+    const a = +mm[1]! * 60 + +mm[2]!
+    const b = +mm[3]! * 60 + +mm[4]!
+    if (a <= b ? m >= a && m < b : m >= a || m < b) return true
+  }
+  return false
 }
 
-function rolling(x: Float64Array, len: number, f: (win: number[]) => number): Float64Array {
-  const n = x.length
-  const out = nanArr(n)
-  for (let i = len - 1; i < n; i++) {
-    const win: number[] = []
-    for (let j = i - len + 1; j <= i; j++) {
-      const v = x[j]!
-      if (!Number.isNaN(v)) win.push(v)
-    }
-    if (win.length === len) out[i] = f(win)
-  }
-  return out
-}
-const stdev = (x: Float64Array, len: number) =>
-  rolling(x, len, (w) => {
-    const m = w.reduce((a, b) => a + b, 0) / w.length
-    return Math.sqrt(w.reduce((a, b) => a + (b - m) * (b - m), 0) / w.length)
-  })
+// ── Constants (namespaced names) ─────────────────────────────────────────────
 
-function map2(a: Float64Array, b: Float64Array, f: (x: number, y: number) => number): Float64Array {
-  const n = a.length
-  const out = new Float64Array(n)
-  for (let i = 0; i < n; i++) {
-    const x = a[i]!
-    const y = b[i]!
-    out[i] = Number.isNaN(x) || Number.isNaN(y) ? NaN : f(x, y)
-  }
-  return out
+const CONSTS: Record<string, Val> = {
+  'plot.style_line': 'line',
+  'plot.style_linebr': 'line',
+  'plot.style_stepline': 'step',
+  'plot.style_stepline_diamond': 'step',
+  'plot.style_steplinebr': 'step',
+  'plot.style_histogram': 'histogram',
+  'plot.style_cross': 'cross',
+  'plot.style_area': 'area',
+  'plot.style_areabr': 'area',
+  'plot.style_columns': 'columns',
+  'plot.style_circles': 'circles',
+  'hline.style_solid': 'solid',
+  'hline.style_dashed': 'dashed',
+  'hline.style_dotted': 'dotted',
+  'shape.xcross': 'xcross',
+  'shape.cross': 'cross',
+  'shape.circle': 'circle',
+  'shape.triangleup': 'triangleup',
+  'shape.triangledown': 'triangledown',
+  'shape.flag': 'flag',
+  'shape.arrowup': 'arrowup',
+  'shape.arrowdown': 'arrowdown',
+  'shape.square': 'square',
+  'shape.diamond': 'diamond',
+  'shape.labelup': 'label_up',
+  'shape.labeldown': 'label_down',
+  'location.abovebar': 'abovebar',
+  'location.belowbar': 'belowbar',
+  'location.top': 'top',
+  'location.bottom': 'bottom',
+  'location.absolute': 'absolute',
+  'size.auto': 'auto',
+  'size.tiny': 'tiny',
+  'size.small': 'small',
+  'size.normal': 'normal',
+  'size.large': 'large',
+  'size.huge': 'huge',
+  'display.all': 'all',
+  'display.none': 'none',
+  'display.pane': 'pane',
+  'display.data_window': 'data_window',
+  'display.status_line': 'status_line',
+  'display.price_scale': 'price_scale',
+  'format.price': 'price',
+  'format.volume': 'volume',
+  'format.percent': 'percent',
+  'format.inherit': 'inherit',
+  'format.mintick': 'mintick',
+  'scale.right': 'right',
+  'scale.left': 'left',
+  'scale.none': 'none',
+  'input.integer': 'integer',
+  'input.int': 'integer',
+  'input.float': 'float',
+  'input.bool': 'bool',
+  'input.string': 'string',
+  'input.source': 'source',
+  'input.resolution': 'timeframe',
+  'input.timeframe': 'timeframe',
+  'input.session': 'session',
+  'input.symbol': 'symbol',
+  'input.color': 'color',
+  'input.time': 'time',
+  'input.price': 'price',
+  'session.regular': '0930-1600',
+  'session.extended': '0400-2000',
+  'barmerge.gaps_on': 1,
+  'barmerge.gaps_off': 0,
+  'barmerge.lookahead_on': 1,
+  'barmerge.lookahead_off': 0,
+  'math.pi': Math.PI,
+  'math.e': Math.E,
+  'math.phi': 1.618033988749895,
+  'math.rphi': 0.6180339887498948,
+  'dayofweek.sunday': 1,
+  'dayofweek.monday': 2,
+  'dayofweek.tuesday': 3,
+  'dayofweek.wednesday': 4,
+  'dayofweek.thursday': 5,
+  'dayofweek.friday': 6,
+  'dayofweek.saturday': 7,
+  'strategy.long': 'long',
+  'strategy.short': 'short',
+  'strategy.position_size': 0,
+  'strategy.position_avg_price': NaN,
+  'strategy.equity': 0,
+  'strategy.netprofit': 0,
+  'strategy.openprofit': 0,
+  'strategy.opentrades': 0,
+  'strategy.closedtrades': 0,
+  'currency.USD': 'USD',
+  'xloc.bar_index': 'bar_index',
+  'xloc.bar_time': 'bar_time',
+  'yloc.price': 'price',
+  'yloc.abovebar': 'abovebar',
+  'yloc.belowbar': 'belowbar',
+  'extend.none': 'none',
+  'extend.left': 'left',
+  'extend.right': 'right',
+  'extend.both': 'both',
+  'position.top_left': 'top_left',
+  'position.top_center': 'top_center',
+  'position.top_right': 'top_right',
+  'position.middle_left': 'middle_left',
+  'position.middle_center': 'middle_center',
+  'position.middle_right': 'middle_right',
+  'position.bottom_left': 'bottom_left',
+  'position.bottom_center': 'bottom_center',
+  'position.bottom_right': 'bottom_right',
+  'text.align_left': 'left',
+  'text.align_center': 'center',
+  'text.align_right': 'right',
+  'alert.freq_once_per_bar': 'once_per_bar',
+  'alert.freq_once_per_bar_close': 'once_per_bar_close',
+  'alert.freq_all': 'all',
 }
-function map1(a: Float64Array, f: (x: number) => number): Float64Array {
-  const out = new Float64Array(a.length)
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i]!
-    out[i] = Number.isNaN(x) ? NaN : f(x)
-  }
-  return out
+// Pine v2/v3 spelled these bare (style=histogram, linestyle=dashed, type=bool)
+for (const [k, v] of Object.entries({ line: 'line', stepline: 'step', histogram: 'histogram', cross: 'cross', area: 'area', columns: 'columns', circles: 'circles', solid: 'solid', dashed: 'dashed', dotted: 'dotted', integer: 'integer', float: 'float', bool: 'bool', string: 'string', source: 'source', resolution: 'timeframe', session: 'session', symbol: 'symbol' }))
+  CONSTS[k] = v
+const DRAWING_NS = /^(label|line|box|table|linefill|polyline|chart\.point)\./
+for (const k of ['label', 'line', 'box', 'table']) {
+  for (const s of ['style_none', 'style_solid', 'style_dashed', 'style_dotted', 'style_arrow_left', 'style_arrow_right', 'style_arrow_both', 'style_label_up', 'style_label_down', 'style_label_left', 'style_label_right', 'style_label_center', 'style_circle', 'style_square', 'style_diamond', 'style_cross', 'style_xcross', 'style_triangleup', 'style_triangledown', 'style_flag', 'style_arrowup', 'style_arrowdown', 'style_text_outline', 'style_label_lower_left', 'style_label_lower_right', 'style_label_upper_left', 'style_label_upper_right'])
+    CONSTS[`${k}.${s}`] = s
+  CONSTS[`${k}.all`] = NaN
 }
-const truthy = (v: number) => !Number.isNaN(v) && v !== 0
 
 // ── The interpreter ──────────────────────────────────────────────────────────
 
-const STRIP_NS = /^(ta|math|color|str)\./
+/** A variable: its value now and on every bar so far (for `x[1]`). */
+interface Slot {
+  cur: Val
+  /** Every bar's value — kept only for names the script reads back with `name[k]`. */
+  hist: Float64Array | Val[] | null
+  init: boolean
+}
+/** Record bar i's value (a Float64Array until a non-number arrives). */
+function keep(s: Slot, i: number, v: Val): void {
+  const h = s.hist
+  if (!h) return
+  if (h instanceof Float64Array) {
+    if (typeof v === 'number') {
+      h[i] = v
+      return
+    }
+    s.hist = Array.from(h)
+    s.hist[i] = v
+    return
+  }
+  h[i] = v
+}
+const histAt = (s: Slot, j: number): Val => (s.hist ? (s.hist[j] ?? NaN) : NaN)
+/** One call site of a user function: its locals and its built-in calls' state, by index. */
+class Inst {
+  readonly L: Slot[] = []
+  readonly S: (St | Inst)[] = []
+  fr: Frame | null = null
+}
+interface Frame {
+  i: number
+  /** The running function instance's locals / call states (top-level code holds its own directly). */
+  L: Slot[]
+  S: (St | Inst)[]
+  /** 1 = break, 2 = continue. */
+  ctl: number
+}
+type Ev = (f: Frame) => Val
 
-const SOURCES = ['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4', 'volume']
+// Names and call sites are resolved when the script is COMPILED, not looked up
+// per bar: a top-level variable or call owns its Slot / St outright; one inside
+// a user function gets an index into the instance (each call site of the
+// function is an instance, as in Pine).
+type Ref = { slot: Slot } | { idx: number; h: boolean }
+interface CScope {
+  names: Map<string, Ref>
+  up: CScope | null
+}
+interface Cx {
+  scope: CScope
+  fn: { locals: number; sites: number } | null
+}
+
+interface Call {
+  A: Val[]
+  N: Record<string, Val>
+  node: Extract<Node, { k: 'call' }>
+  line: number
+  i: number
+  f: Frame
+  site: () => St
+}
+
+const SOURCES = ['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4', 'hlcc4', 'volume']
+const MAX_LEN = 5000
+const MAX_LOOP_PER_BAR = 100_000
 
 export interface RunOpts {
   /** Input values by key (missing keys take the declaration default). */
   inputs?: Record<string, InputValue>
+  symbol?: string
+  timeframe?: string
 }
 
-export function run(prog: Stmt[], bars: readonly OHLCV[], opts: RunOpts = {}): RunResult {
-  const n = bars.length
+function walk(stmts: Stmt[], visit: (s: Stmt) => void, node?: (n: Node) => void): void {
+  const ws = (ss: Stmt[]) => ss.forEach(w)
+  const wn = (n: Node | null | undefined): void => {
+    if (!n) return
+    node?.(n)
+    switch (n.k) {
+      case 'unary':
+        return wn(n.x)
+      case 'bin':
+        wn(n.a)
+        return wn(n.b)
+      case 'tern':
+        wn(n.c)
+        wn(n.a)
+        return wn(n.b)
+      case 'call':
+        n.args.forEach(wn)
+        return Object.values(n.named).forEach(wn)
+      case 'index':
+        wn(n.x)
+        return wn(n.at)
+      case 'list':
+        return n.items.forEach(wn)
+      case 'if':
+        return n.branches.forEach((b) => {
+          wn(b.c)
+          ws(b.body)
+        })
+      case 'switch':
+        wn(n.subject)
+        return n.cases.forEach((c) => {
+          wn(c.m)
+          ws(c.body)
+        })
+      case 'for':
+        wn(n.from)
+        wn(n.to)
+        wn(n.by)
+        return ws(n.body)
+      case 'while':
+        wn(n.c)
+        return ws(n.body)
+    }
+  }
+  function w(s: Stmt) {
+    visit(s)
+    if (s.k === 'func') {
+      s.defaults.forEach(wn)
+      return ws(s.body)
+    }
+    if (s.k === 'decl' || s.k === 'reassign' || s.k === 'tuple' || s.k === 'expr') wn(s.x)
+  }
+  ws(stmts)
+}
+
+export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): RunResult {
+  const N = bars.length
   const col = (f: (b: OHLCV) => number) => {
-    const a = new Float64Array(n)
-    for (let i = 0; i < n; i++) {
+    const a = new Float64Array(N)
+    for (let i = 0; i < N; i++) {
       const v = f(bars[i]!)
       a[i] = Number.isFinite(v) ? v : NaN
     }
@@ -314,546 +695,1797 @@ export function run(prog: Stmt[], bars: readonly OHLCV[], opts: RunOpts = {}): R
   const C = col((b) => b.close)
   const V = col((b) => b.volume ?? NaN)
   const T = col((b) => b.time)
-  const builtins: Record<string, () => Val> = {
-    open: () => O,
-    high: () => H,
-    low: () => L,
-    close: () => C,
-    volume: () => V,
-    time: () => T,
-    hl2: () => map2(H, L, (h, l) => (h + l) / 2),
-    hlc3: () => col((b) => (b.high + b.low + b.close) / 3),
-    ohlc4: () => col((b) => (b.open + b.high + b.low + b.close) / 4),
-    bar_index: () => col((_b) => 0).map((_, i) => i),
-  }
-  const memo = new Map<string, Val>()
+  const tfMs = N > 1 ? Math.max(1, T[N - 1]! - T[N - 2]!) : 300_000
+  const symbol = opts.symbol ?? 'SPX'
+  const tf = opts.timeframe ?? '5'
+
+  // ── what kind of script ──
+  let pineCalls = false
+  const funcs = new Map<string, FuncDef>()
+  const inputNames = new Map<Node, string>()
+  /** Names read back with `name[k]` — only those keep a per-bar history. */
+  const indexed = new Set<string>()
+  walk(
+    prog.stmts,
+    (s) => {
+      if (s.k === 'decl' && s.x.k === 'call' && /^input(\.|$)/.test(s.x.name)) inputNames.set(s.x, s.name)
+    },
+    (n) => {
+      if (n.k === 'index' && n.x.k === 'id') indexed.add(n.x.name)
+      if (n.k === 'call' && (n.name === 'study' || n.name === 'strategy' || n.name.startsWith('ta.') || n.name.startsWith('input.'))) pineCalls = true
+    },
+  )
+  for (const s of prog.stmts) if (s.k === 'func') funcs.set(s.name, s)
+  const pine = prog.version != null || pineCalls
+  /** Pine version for its version-dependent defaults (fill / bgcolor transparency). */
+  const ver = prog.version ?? (pine ? 4 : 0)
 
   const res: RunResult = {
-    meta: { title: 'CB Script', overlay: true },
+    meta: { title: 'CB Script', overlay: !pine },
     inputs: [],
     plots: [],
     hlines: [],
     fills: [],
     markers: [],
     backgrounds: [],
+    barColors: null,
+    warnings: [],
   }
-  const env = new Map<string, Val>()
+  const warn = (m: string) => {
+    if (!res.warnings.includes(m)) res.warnings.push(m)
+  }
   const inputKeys = new Set<string>()
+  const bgSites: { colors: (string | null)[]; offset: number }[] = []
+  const plotOffsets: number[] = []
+  const plotColorGiven: boolean[] = []
 
-  const S = (v: Val, line: number): Float64Array => {
-    if (isSeries(v)) return v
-    if (typeof v === 'number') return new Float64Array(n).fill(v)
-    throw new ScriptError('expected a number or a series here', line)
-  }
-  const num = (v: Val | undefined, line: number, what: string): number => {
+  // ── values ──
+  const num = (v: Val | undefined, line: number, what = 'a number'): number => {
     if (typeof v === 'number') return v
     if (v === undefined) throw new ScriptError(`${what} is missing`, line)
-    throw new ScriptError(`${what} must be a plain number`, line)
+    throw new ScriptError(`${what} must be a number${typeof v === 'string' ? ', not text' : ''}`, line)
   }
-  const len = (v: Val | undefined, line: number): number => {
-    const x = Math.round(num(v, line, 'a length'))
-    if (!(x >= 1) || x > 5000) throw new ScriptError('a length must be between 1 and 5000', line)
-    return x
+  const truthy = (v: Val): boolean => (typeof v === 'number' ? v === v && v !== 0 : typeof v === 'string' ? v.length > 0 : true)
+  const text = (v: Val): string =>
+    typeof v === 'string' ? v : typeof v === 'number' ? (isNa(v) ? 'NaN' : String(Math.round(v * 1e6) / 1e6)) : Array.isArray(v) ? `[${v.map(text).join(', ')}]` : ''
+  const colorOf = (v: Val | undefined, line: number): string | null => {
+    if (v === undefined) return null
+    if (typeof v === 'number') {
+      if (isNa(v)) return null
+      throw new ScriptError('expected a colour, got a number', line)
+    }
+    if (typeof v !== 'string') throw new ScriptError('expected a colour', line)
+    if (v.startsWith('#')) {
+      if (!parseHex(v)) throw new ScriptError(`"${v}" is not a colour — write #rrggbb`, line)
+      return v.toLowerCase()
+    }
+    const token = CB_COLORS[v.toLowerCase()]
+    if (token) return tok(token)
+    if (v === 'transparent') return null
+    throw new ScriptError(`unknown colour "${v}"`, line)
   }
-  const str = (v: Val | undefined, line: number, what: string): string => {
-    if (typeof v === 'string') return v
-    throw new ScriptError(`${what} must be "text"`, line)
+
+  // ── built-in variables ──
+  const memo = new Map<string, Float64Array>()
+  const lazy = (key: string, make: () => Float64Array) => () => {
+    let a = memo.get(key)
+    if (!a) memo.set(key, (a = make()))
+    return a
   }
+  const trAt = (i: number, handleNa: boolean): number => {
+    const pc = i > 0 ? C[i - 1]! : NaN
+    if (isNa(pc)) return handleNa ? H[i]! - L[i]! : NaN
+    return Math.max(H[i]! - L[i]!, Math.abs(H[i]! - pc), Math.abs(L[i]! - pc))
+  }
+  const hl2 = lazy('hl2', () => col((b) => (b.high + b.low) / 2))
+  const hlc3 = lazy('hlc3', () => col((b) => (b.high + b.low + b.close) / 3))
+  const ohlc4 = lazy('ohlc4', () => col((b) => (b.open + b.high + b.low + b.close) / 4))
+  const hlcc4 = lazy('hlcc4', () => col((b) => (b.high + b.low + 2 * b.close) / 4))
+  const days = lazy('days', () => Float64Array.from(T, (t) => dayKey(t)))
+  const vwapOf = (src: Float64Array) => {
+    const out = new Float64Array(N)
+    const dk = days()
+    let pv = 0
+    let vv = 0
+    for (let i = 0; i < N; i++) {
+      if (i === 0 || dk[i] !== dk[i - 1]) {
+        pv = 0
+        vv = 0
+      }
+      const vol = isNa(V[i]!) ? 0 : V[i]!
+      pv += src[i]! * vol
+      vv += vol
+      out[i] = vv > 0 ? pv / vv : src[i]!
+    }
+    return out
+  }
+  const vwapArr = lazy('vwap', () => vwapOf(hlc3()))
+  const obvArr = lazy('obv', () => {
+    const out = new Float64Array(N)
+    let acc = 0
+    for (let i = 0; i < N; i++) {
+      if (i > 0 && !isNa(V[i]!)) acc += C[i]! > C[i - 1]! ? V[i]! : C[i]! < C[i - 1]! ? -V[i]! : 0
+      out[i] = acc
+    }
+    return out
+  })
+  const adArr = lazy('accdist', () => {
+    const out = new Float64Array(N)
+    let acc = 0
+    for (let i = 0; i < N; i++) {
+      const r = H[i]! - L[i]!
+      const mfm = r === 0 ? 0 : (C[i]! - L[i]! - (H[i]! - C[i]!)) / r
+      acc += mfm * (isNa(V[i]!) ? 0 : V[i]!)
+      out[i] = acc
+    }
+    return out
+  })
+  const tfIntra = /^\d+$/.test(tf) || /^\d+S$/i.test(tf)
+  const VARS: Record<string, (i: number) => Val> = {
+    open: (i) => O[i]!,
+    high: (i) => H[i]!,
+    low: (i) => L[i]!,
+    close: (i) => C[i]!,
+    volume: (i) => V[i]!,
+    time: (i) => T[i]!,
+    time_close: (i) => T[i]! + tfMs,
+    hl2: (i) => hl2()[i]!,
+    hlc3: (i) => hlc3()[i]!,
+    ohlc4: (i) => ohlc4()[i]!,
+    hlcc4: (i) => hlcc4()[i]!,
+    bar_index: (i) => i,
+    last_bar_index: () => N - 1,
+    last_bar_time: () => T[N - 1] ?? NaN,
+    'barstate.isfirst': (i) => (i === 0 ? 1 : 0),
+    'barstate.islast': (i) => (i === N - 1 ? 1 : 0),
+    'barstate.ishistory': (i) => (i < N - 1 ? 1 : 0),
+    'barstate.isrealtime': (i) => (i === N - 1 ? 1 : 0),
+    'barstate.isnew': () => 1,
+    'barstate.isconfirmed': (i) => (i < N - 1 ? 1 : 0),
+    'barstate.islastconfirmedhistory': (i) => (i === N - 2 ? 1 : 0),
+    'syminfo.ticker': () => symbol,
+    'syminfo.tickerid': () => symbol,
+    'syminfo.root': () => symbol,
+    'syminfo.description': () => symbol,
+    'syminfo.prefix': () => 'CBEDGE',
+    'syminfo.mintick': () => 0.01,
+    'syminfo.pointvalue': () => 1,
+    'syminfo.currency': () => 'USD',
+    'syminfo.type': () => 'index',
+    'syminfo.timezone': () => 'America/New_York',
+    'syminfo.session': () => 'regular',
+    'timeframe.period': () => tf,
+    'timeframe.main_period': () => tf,
+    'timeframe.multiplier': () => (tfIntra ? parseInt(tf, 10) || 1 : 1),
+    'timeframe.isintraday': () => (tfIntra ? 1 : 0),
+    'timeframe.isminutes': () => (/^\d+$/.test(tf) ? 1 : 0),
+    'timeframe.isseconds': () => (/S$/i.test(tf) ? 1 : 0),
+    'timeframe.isdaily': () => (/D$/i.test(tf) ? 1 : 0),
+    'timeframe.isweekly': () => (/W$/i.test(tf) ? 1 : 0),
+    'timeframe.ismonthly': () => (/M$/.test(tf) ? 1 : 0),
+    'timeframe.isdwm': () => (tfIntra ? 0 : 1),
+    year: (i) => nyTime(T[i]!).year,
+    month: (i) => nyTime(T[i]!).month,
+    dayofmonth: (i) => nyTime(T[i]!).day,
+    dayofweek: (i) => nyTime(T[i]!).dow,
+    hour: (i) => nyTime(T[i]!).hour,
+    minute: (i) => nyTime(T[i]!).minute,
+    second: (i) => nyTime(T[i]!).second,
+    vwap: (i) => vwapArr()[i]!,
+    'ta.vwap': (i) => vwapArr()[i]!,
+    obv: (i) => obvArr()[i]!,
+    'ta.obv': (i) => obvArr()[i]!,
+    accdist: (i) => adArr()[i]!,
+    'ta.accdist': (i) => adArr()[i]!,
+    tr: (i) => trAt(i, false),
+    'ta.tr': (i) => trAt(i, false),
+  }
+  for (const c of PINE_COLORS) VARS[`color.${c}`] = () => pineColor(c)
+  /** A name's built-in value at bar i, or null if it is not one. */
+  const builtinVar = (name: string): ((i: number) => Val) | null => {
+    const v = VARS[name]
+    if (v) return v
+    if (name in CONSTS) {
+      const c = CONSTS[name]!
+      return () => c
+    }
+    // a bare colour name: Pine's palette in a Pine script (v2/v3 wrote `lime`), the app's in CB Script
+    if (pine && PINE_COLORS.includes(name)) return () => pineColor(name)
+    const cb = CB_COLORS[name.toLowerCase()]
+    if (cb) return () => tok(cb)
+    return null
+  }
+  const seriesAt = (name: string, i: number): number => {
+    const g = VARS[name]
+    const v = g ? g(i) : NaN
+    return typeof v === 'number' ? v : NaN
+  }
+
+  // ── compiling ──
+  let loopBudget = 0
+  let depth = 0
+  const newSlot = (withHist: boolean): Slot => ({ cur: NaN, hist: withHist ? new Float64Array(N).fill(NaN) : null, init: false })
+  const gscope: CScope = { names: new Map(), up: null }
+  const declare = (cx: Cx, name: string): Ref => {
+    const h = indexed.has(name)
+    const ref: Ref = cx.fn ? { idx: cx.fn.locals++, h } : { slot: newSlot(h) }
+    cx.scope.names.set(name, ref)
+    return ref
+  }
+  const resolve = (cx: Cx, name: string): Ref | undefined => {
+    for (let sc: CScope | null = cx.scope; sc; sc = sc.up) {
+      const r = sc.names.get(name)
+      if (r) return r
+    }
+    return undefined
+  }
+  const slotFn = (ref: Ref): ((f: Frame) => Slot) => {
+    if ('slot' in ref) {
+      const s = ref.slot
+      return () => s
+    }
+    const idx = ref.idx
+    const h = ref.h
+    return (f) => f.L[idx] ?? (f.L[idx] = newSlot(h))
+  }
+  const siteFn = (cx: Cx): ((f: Frame) => St) => {
+    if (!cx.fn) {
+      const st = new St()
+      return () => st
+    }
+    const idx = cx.fn.sites++
+    return (f) => (f.S[idx] as St | undefined) ?? (f.S[idx] = new St())
+  }
+  const instFn = (cx: Cx): ((f: Frame) => Inst) => {
+    if (!cx.fn) {
+      const inst = new Inst()
+      return () => inst
+    }
+    const idx = cx.fn.sites++
+    return (f) => (f.S[idx] as Inst | undefined) ?? (f.S[idx] = new Inst())
+  }
+  const child = (cx: Cx): Cx => ({ scope: { names: new Map(), up: cx.scope }, fn: cx.fn })
 
   const bin = (op: string, a: Val, b: Val, line: number): Val => {
-    if (op === 'and' || op === 'or') {
-      if (typeof a === 'number' && typeof b === 'number')
-        return (op === 'and' ? truthy(a) && truthy(b) : truthy(a) || truthy(b)) ? 1 : 0
-      const x = S(a, line)
-      const y = S(b, line)
-      const out = new Float64Array(n)
-      for (let i = 0; i < n; i++)
-        out[i] = (op === 'and' ? truthy(x[i]!) && truthy(y[i]!) : truthy(x[i]!) || truthy(y[i]!)) ? 1 : 0
-      return out
+    if (op === 'and') return truthy(a) && truthy(b) ? 1 : 0
+    if (op === 'or') return truthy(a) || truthy(b) ? 1 : 0
+    if (typeof a === 'number' && typeof b === 'number') {
+      switch (op) {
+        case '+':
+          return a + b
+        case '-':
+          return a - b
+        case '*':
+          return a * b
+        case '/':
+          return b === 0 ? NaN : a / b
+        case '%':
+          return b === 0 ? NaN : a % b
+        case '^':
+          return Math.pow(a, b)
+      }
+      if (isNa(a) || isNa(b)) return 0
+      switch (op) {
+        case '<':
+          return a < b ? 1 : 0
+        case '<=':
+          return a <= b ? 1 : 0
+        case '>':
+          return a > b ? 1 : 0
+        case '>=':
+          return a >= b ? 1 : 0
+        case '==':
+          return a === b ? 1 : 0
+        case '!=':
+          return a !== b ? 1 : 0
+      }
     }
-    if ((op === '==' || op === '!=') && typeof a === 'string' && typeof b === 'string')
-      return (a === b) === (op === '==') ? 1 : 0
-    const f: ((x: number, y: number) => number) | undefined = {
-      '+': (x: number, y: number) => x + y,
-      '-': (x: number, y: number) => x - y,
-      '*': (x: number, y: number) => x * y,
-      '/': (x: number, y: number) => (y === 0 ? NaN : x / y),
-      '%': (x: number, y: number) => (y === 0 ? NaN : x % y),
-      '^': (x: number, y: number) => Math.pow(x, y),
-      '<': (x: number, y: number) => (x < y ? 1 : 0),
-      '<=': (x: number, y: number) => (x <= y ? 1 : 0),
-      '>': (x: number, y: number) => (x > y ? 1 : 0),
-      '>=': (x: number, y: number) => (x >= y ? 1 : 0),
-      '==': (x: number, y: number) => (x === y ? 1 : 0),
-      '!=': (x: number, y: number) => (x !== y ? 1 : 0),
-    }[op]
-    if (!f) throw new ScriptError(`unknown operator "${op}"`, line)
-    if (typeof a === 'number' && typeof b === 'number') return Number.isNaN(a) || Number.isNaN(b) ? NaN : f(a, b)
-    return map2(S(a, line), S(b, line), f)
+    if (op === '+' && (typeof a === 'string' || typeof b === 'string')) return text(a) + text(b)
+    if (op === '==' || op === '!=') return (a === b) === (op === '==') ? 1 : 0
+    throw new ScriptError(`"${op}" can't be used on ${typeof a === 'string' || typeof b === 'string' ? 'text' : 'that value'}`, line)
   }
 
-  const evalNode = (node: Node): Val => {
+  /** A user function's body, compiled once (on its first call) against the finished top level. */
+  const fnCache = new Map<FuncDef, Ev>()
+  const fnBody = (def: FuncDef): Ev => {
+    let ev = fnCache.get(def)
+    if (ev) return ev
+    fnCache.set(def, () => NaN) // a call to itself inside its own body compiles against this
+    const cx: Cx = { scope: { names: new Map(), up: gscope }, fn: { locals: 0, sites: 0 } }
+    for (const p of def.params) declare(cx, p) // params are locals 0…n-1
+    ev = compileBlock(cx, def.body, false)
+    fnCache.set(def, ev)
+    return ev
+  }
+
+  function compileExpr(cx: Cx, node: Node): Ev {
+    const line = node.line
     switch (node.k) {
-      case 'num':
-        return node.v
+      case 'num': {
+        const v = node.v
+        return () => v
+      }
       case 'str':
-        return node.v
-      case 'bool':
-        return node.v ? 1 : 0
+      case 'color': {
+        const v = node.v
+        return () => v
+      }
+      case 'bool': {
+        const v = node.v ? 1 : 0
+        return () => v
+      }
       case 'na':
-        return NaN
-      case 'list':
-        return node.items.map(evalNode)
+        return () => NaN
+      case 'list': {
+        const items = node.items.map((x) => compileExpr(cx, x))
+        return (f) => items.map((e) => e(f))
+      }
       case 'id': {
-        if (env.has(node.name)) return env.get(node.name)!
-        const b = builtins[node.name]
-        if (b) {
-          let v = memo.get(node.name)
-          if (!v) memo.set(node.name, (v = b()))
-          return v
+        const name = node.name
+        const ref = resolve(cx, name)
+        if (ref) {
+          if ('slot' in ref) {
+            const s = ref.slot
+            return () => s.cur
+          }
+          const get = slotFn(ref)
+          return (f) => get(f).cur
         }
-        if (COLOR_TOKENS[node.name.toLowerCase()]) return node.name
-        throw new ScriptError(`"${node.name}" is not defined`, node.line)
+        const fb = builtinVar(name)
+        if (!fb) {
+          if (funcs.has(name)) throw new ScriptError(`"${name}" is a function — call it: ${name}(…)`, line)
+          throw new ScriptError(`"${name}" is not defined`, line)
+        }
+        return (f) => fb(f.i)
       }
       case 'unary': {
-        const x = evalNode(node.x)
-        if (node.op === 'not') {
-          if (typeof x === 'number') return truthy(x) ? 0 : 1
-          return map1(S(x, node.line), (v) => (truthy(v) ? 0 : 1))
-        }
+        const x = compileExpr(cx, node.x)
+        if (node.op === 'not') return (f) => (truthy(x(f)) ? 0 : 1)
         if (node.op === '+') return x
-        if (typeof x === 'number') return -x
-        return map1(S(x, node.line), (v) => -v)
+        return (f) => -num(x(f), line, 'the value after "-"')
       }
-      case 'bin':
-        return bin(node.op, evalNode(node.a), evalNode(node.b), node.line)
-      case 'tern': {
-        const c = evalNode(node.c)
-        const a = evalNode(node.a)
-        const b = evalNode(node.b)
-        if (typeof c === 'number') return truthy(c) ? a : b
-        const cs = S(c, node.line)
-        if (typeof a === 'string' || typeof b === 'string' || isStrSeries(a) || isStrSeries(b)) {
-          const pick = (v: Val, i: number): string => (typeof v === 'string' ? v : isStrSeries(v) ? v[i] ?? '' : '')
-          return Array.from({ length: n }, (_, i) => (truthy(cs[i]!) ? pick(a, i) : pick(b, i)))
+      case 'bin': {
+        const a = compileExpr(cx, node.a)
+        const b = compileExpr(cx, node.b)
+        const op = node.op
+        // the common numeric cases inline; anything else (text, na compares) goes through bin()
+        switch (op) {
+          case '+':
+            return (f) => {
+              const x = a(f)
+              const y = b(f)
+              return typeof x === 'number' && typeof y === 'number' ? x + y : bin(op, x, y, line)
+            }
+          case '-':
+            return (f) => {
+              const x = a(f)
+              const y = b(f)
+              return typeof x === 'number' && typeof y === 'number' ? x - y : bin(op, x, y, line)
+            }
+          case '*':
+            return (f) => {
+              const x = a(f)
+              const y = b(f)
+              return typeof x === 'number' && typeof y === 'number' ? x * y : bin(op, x, y, line)
+            }
+          case '>':
+            return (f) => {
+              const x = a(f)
+              const y = b(f)
+              return typeof x === 'number' && typeof y === 'number' ? (x > y ? 1 : 0) : bin(op, x, y, line)
+            }
+          case '<':
+            return (f) => {
+              const x = a(f)
+              const y = b(f)
+              return typeof x === 'number' && typeof y === 'number' ? (x < y ? 1 : 0) : bin(op, x, y, line)
+            }
+          case '>=':
+            return (f) => {
+              const x = a(f)
+              const y = b(f)
+              return typeof x === 'number' && typeof y === 'number' ? (x >= y ? 1 : 0) : bin(op, x, y, line)
+            }
+          case '<=':
+            return (f) => {
+              const x = a(f)
+              const y = b(f)
+              return typeof x === 'number' && typeof y === 'number' ? (x <= y ? 1 : 0) : bin(op, x, y, line)
+            }
+          case 'and':
+            return (f) => {
+              const x = a(f)
+              const y = b(f)
+              return truthy(x) && truthy(y) ? 1 : 0
+            }
+          case 'or':
+            return (f) => {
+              const x = a(f)
+              const y = b(f)
+              return truthy(x) || truthy(y) ? 1 : 0
+            }
         }
-        const as = S(a, node.line)
-        const bs = S(b, node.line)
-        const out = new Float64Array(n)
-        for (let i = 0; i < n; i++) out[i] = Number.isNaN(cs[i]!) ? NaN : truthy(cs[i]!) ? as[i]! : bs[i]!
-        return out
+        return (f) => bin(op, a(f), b(f), line)
+      }
+      case 'tern': {
+        const c = compileExpr(cx, node.c)
+        const a = compileExpr(cx, node.a)
+        const b = compileExpr(cx, node.b)
+        return (f) => (truthy(c(f)) ? a(f) : b(f))
       }
       case 'index': {
-        const k = Math.round(num(evalNode(node.at), node.line, 'a history offset'))
-        const x = evalNode(node.x)
-        if (typeof x === 'number') return x
-        return shift(S(x, node.line), k)
+        const at = compileExpr(cx, node.at)
+        const offset = (f: Frame): number => {
+          const k = num(at(f), line, 'a history offset')
+          if (isNa(k)) return -1
+          const r = Math.round(k)
+          if (r < 0) throw new ScriptError('a history offset can\'t be negative', line)
+          return r
+        }
+        if (node.x.k === 'id') {
+          const name = node.x.name
+          const ref = resolve(cx, name)
+          if (ref) {
+            const get = slotFn(ref)
+            return (f) => {
+              const k = offset(f)
+              if (k < 0) return NaN
+              const s = get(f)
+              if (k === 0) return s.cur
+              const j = f.i - k
+              return j >= 0 ? histAt(s, j) : NaN
+            }
+          }
+          const fb = builtinVar(name)
+          if (!fb) throw new ScriptError(`"${name}" is not defined`, line)
+          return (f) => {
+            const k = offset(f)
+            const j = f.i - k
+            return k < 0 || j < 0 ? NaN : fb(j)
+          }
+        }
+        const inner = compileExpr(cx, node.x)
+        const site = siteFn(cx)
+        return (f) => {
+          const v = inner(f)
+          const st = site(f)
+          let h = st.any as Val[] | null
+          if (!h) st.any = h = new Array(N)
+          h[f.i] = v
+          const k = offset(f)
+          if (k < 0) return NaN
+          if (k === 0) return v
+          const j = f.i - k
+          return j >= 0 ? (h[j] ?? NaN) : NaN
+        }
       }
       case 'call':
-        return call(node)
+        return compileCall(cx, node)
+      case 'if': {
+        const bs = node.branches.map((b) => ({ c: b.c ? compileExpr(cx, b.c) : null, body: compileBlock(cx, b.body) }))
+        return (f) => {
+          for (const b of bs) if (b.c === null || truthy(b.c(f))) return b.body(f)
+          return NaN
+        }
+      }
+      case 'switch': {
+        const subject = node.subject ? compileExpr(cx, node.subject) : null
+        const cs = node.cases.map((c) => ({ m: c.m ? compileExpr(cx, c.m) : null, body: compileBlock(cx, c.body) }))
+        return (f) => {
+          const sv = subject ? subject(f) : NaN
+          for (const c of cs) {
+            if (c.m === null || (subject ? c.m(f) === sv : truthy(c.m(f)))) return c.body(f)
+          }
+          return NaN
+        }
+      }
+      case 'for': {
+        const from = compileExpr(cx, node.from)
+        const to = compileExpr(cx, node.to)
+        const by = node.by ? compileExpr(cx, node.by) : null
+        const inner = child(cx)
+        const loopVar = slotFn(declare(inner, node.v))
+        const body = compileBlock(inner, node.body, false)
+        return (f) => {
+          const a = num(from(f), line, 'the loop start')
+          const b = num(to(f), line, 'the loop end')
+          if (isNa(a) || isNa(b)) return NaN
+          const dir = b >= a ? 1 : -1
+          const step = (by ? Math.abs(num(by(f), line, 'the loop step')) || 1 : 1) * dir
+          const slot = loopVar(f)
+          let v: Val = NaN
+          for (let x = a; dir > 0 ? x <= b : x >= b; x += step) {
+            if (++loopBudget > MAX_LOOP_PER_BAR) throw new ScriptError('this loop runs too many times per bar', line)
+            slot.cur = x
+            keep(slot, f.i, x)
+            v = body(f)
+            if (f.ctl === 1) {
+              f.ctl = 0
+              break
+            }
+            f.ctl = 0
+          }
+          return v
+        }
+      }
+      case 'while': {
+        const c = compileExpr(cx, node.c)
+        const body = compileBlock(cx, node.body)
+        return (f) => {
+          let v: Val = NaN
+          while (truthy(c(f))) {
+            if (++loopBudget > MAX_LOOP_PER_BAR) throw new ScriptError('this loop runs too many times per bar', line)
+            v = body(f)
+            if (f.ctl === 1) {
+              f.ctl = 0
+              break
+            }
+            f.ctl = 0
+          }
+          return v
+        }
+      }
     }
   }
 
-  const call = (node: Extract<Node, { k: 'call' }>): Val => {
-    const name = node.name.replace(STRIP_NS, '')
-    const line = node.line
-    const A = node.args.map(evalNode)
-    const N: Record<string, Val> = {}
-    for (const [k, v] of Object.entries(node.named)) N[k] = evalNode(v)
-    const arg = (i: number, key: string): Val | undefined => A[i] ?? N[key]
-    const src = (i = 0) => S(arg(i, 'source') ?? arg(i, 'src') ?? C, line)
-    const L1 = (i = 1) => len(arg(i, 'length'), line)
+  function compileStmt(cx: Cx, s: Stmt): Ev {
+    switch (s.k) {
+      case 'decl': {
+        const ev = compileExpr(cx, s.x) // before the name exists: `x = x + 1` reads the outer x
+        const get = slotFn(declare(cx, s.name))
+        const isVar = s.isVar
+        return (f) => {
+          const slot = get(f)
+          if (!isVar || !slot.init) {
+            slot.cur = ev(f)
+            slot.init = true
+          }
+          keep(slot, f.i, slot.cur)
+          return slot.cur
+        }
+      }
+      case 'reassign': {
+        const ev = compileExpr(cx, s.x)
+        // CB Script allows := for a first assignment
+        const get = slotFn(resolve(cx, s.name) ?? declare(cx, s.name))
+        const op = s.op === ':=' ? null : s.op[0]!
+        return (f) => {
+          const slot = get(f)
+          let v = ev(f)
+          if (op) v = bin(op, slot.cur, v, s.line)
+          slot.cur = v
+          keep(slot, f.i, v)
+          return v
+        }
+      }
+      case 'tuple': {
+        const ev = compileExpr(cx, s.x)
+        const gets = s.names.map((nm) => slotFn(declare(cx, nm)))
+        const n = s.names.length
+        return (f) => {
+          const v = ev(f)
+          if (!Array.isArray(v)) throw new ScriptError(`expected ${n} values in [ ] on the right`, s.line)
+          for (let k = 0; k < n; k++) {
+            const slot = gets[k]!(f)
+            slot.cur = v[k] ?? NaN
+            keep(slot, f.i, slot.cur)
+          }
+          return v
+        }
+      }
+      case 'expr':
+        return compileExpr(cx, s.x)
+      case 'break':
+        return (f) => {
+          f.ctl = 1
+          return NaN
+        }
+      case 'continue':
+        return (f) => {
+          f.ctl = 2
+          return NaN
+        }
+      case 'func':
+        throw new ScriptError('functions are declared at the top level of a script, not inside a block', s.line)
+    }
+  }
 
-    switch (name) {
-      // ── declarations ──
-      case 'indicator': {
-        res.meta.title = str(arg(0, 'title'), line, 'the title')
-        const ov = N.overlay
-        if (ov != null) res.meta.overlay = truthy(num(ov, line, 'overlay'))
-        if (N.shorttitle != null) res.meta.shorttitle = str(N.shorttitle, line, 'shorttitle')
-        if (N.precision != null) res.meta.precision = Math.round(num(N.precision, line, 'precision'))
-        return 0
+  function compileBlock(cx: Cx, stmts: Stmt[], scoped = true, top = false): Ev {
+    const inner = scoped ? child(cx) : cx
+    const evs = stmts.filter((s) => !(top && s.k === 'func')).map((s) => compileStmt(inner, s))
+    if (evs.length === 1) {
+      const only = evs[0]!
+      return only
+    }
+    return (f) => {
+      let v: Val = NaN
+      for (let k = 0; k < evs.length; k++) {
+        v = evs[k]!(f)
+        if (f.ctl) break
       }
-      case 'input': {
-        const title = str(arg(0, 'title'), line, 'an input title')
-        const defval = arg(1, 'default') ?? arg(1, 'defval')
-        let key = title
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '_')
-          .replace(/^_|_$/g, '') || 'input'
-        for (let j = 2; inputKeys.has(key); j++) key = `${key}_${j}`
-        inputKeys.add(key)
-        const given = opts.inputs?.[key]
-        const tooltip = typeof N.tooltip === 'string' ? N.tooltip : undefined
-        if (Array.isArray(N.options) || (typeof defval === 'string' && !SOURCES.includes(defval))) {
-          const options = (Array.isArray(N.options) ? N.options : [defval]).map((o) => String(o))
-          const dv = typeof defval === 'string' ? defval : options[0] ?? ''
-          res.inputs.push({ key, title, type: 'string', defval: dv, options, ...(tooltip ? { tooltip } : {}) })
-          return typeof given === 'string' && options.includes(given) ? given : dv
+      return v
+    }
+  }
+
+  function compileCall(cx: Cx, node: Extract<Node, { k: 'call' }>): Ev {
+    const line = node.line
+    const args = node.args.map((x) => compileExpr(cx, x))
+    const namedKeys = Object.keys(node.named)
+    const namedEvs = namedKeys.map((k) => compileExpr(cx, node.named[k]!))
+    const def = funcs.get(node.name)
+    if (def) {
+      const np = def.params.length
+      if (args.length > np) throw new ScriptError(`${def.name}() takes ${np} argument${np === 1 ? '' : 's'}`, line)
+      for (const k of namedKeys) if (!def.params.includes(k)) throw new ScriptError(`${def.name}() has no parameter "${k}"`, line)
+      const defaults = def.defaults.map((d) => (d ? compileExpr(cx, d) : null))
+      const namedIdx = namedKeys.map((k) => def.params.indexOf(k))
+      const paramHist = def.params.map((p) => indexed.has(p))
+      const inst = instFn(cx)
+      const vals: Val[] = new Array(np) // reused: a call site never re-enters itself (no recursion)
+      return (f) => {
+        const body = fnBody(def)
+        vals.fill(undefined as unknown as Val)
+        for (let k = 0; k < args.length; k++) vals[k] = args[k]!(f)
+        for (let k = 0; k < namedKeys.length; k++) vals[namedIdx[k]!] = namedEvs[k]!(f)
+        for (let k = 0; k < np; k++) {
+          if (vals[k] !== undefined) continue
+          const d = defaults[k]
+          if (!d) throw new ScriptError(`${def.name}() is missing "${def.params[k]}"`, line)
+          vals[k] = d(f)
         }
-        if (isSeries(defval) || (typeof defval === 'string' && SOURCES.includes(defval))) {
-          // a source input: input("Source", close)
-          const a1 = node.args[1]
-          const dvName = typeof defval === 'string' ? defval : a1 && a1.k === 'id' ? a1.name : 'close'
-          res.inputs.push({ key, title, type: 'string', defval: dvName, options: SOURCES, ...(tooltip ? { tooltip } : {}) })
-          const pickName = typeof given === 'string' && SOURCES.includes(given) ? given : dvName
-          return builtins[pickName]?.() ?? C
+        if (++depth > 64) throw new ScriptError(`${def.name}() calls itself — recursion isn't allowed`, line)
+        const it = inst(f)
+        const fr = (it.fr ??= { i: 0, L: it.L, S: it.S, ctl: 0 })
+        fr.i = f.i
+        fr.ctl = 0
+        for (let k = 0; k < np; k++) {
+          const slot = it.L[k] ?? (it.L[k] = newSlot(paramHist[k]!))
+          slot.cur = vals[k]!
+          keep(slot, f.i, slot.cur)
         }
-        const isBool = node.args[1]?.k === 'bool' || node.named.default?.k === 'bool'
-        if (isBool) {
-          const dv = truthy(num(defval, line, 'the default'))
-          res.inputs.push({ key, title, type: 'bool', defval: dv, ...(tooltip ? { tooltip } : {}) })
-          return (typeof given === 'boolean' ? given : dv) ? 1 : 0
-        }
-        const dv = num(defval, line, 'the default')
-        const isInt = Number.isInteger(dv) && (N.step == null || Number.isInteger(N.step as number))
-        const schema: InputSchema = { key, title, type: isInt ? 'int' : 'float', defval: dv, ...(tooltip ? { tooltip } : {}) }
-        if (typeof N.min === 'number') schema.min = N.min
-        if (typeof N.max === 'number') schema.max = N.max
-        if (typeof N.step === 'number') schema.step = N.step
-        res.inputs.push(schema)
-        let v = typeof given === 'number' && Number.isFinite(given) ? given : dv
-        if (schema.min != null) v = Math.max(schema.min, v)
-        if (schema.max != null) v = Math.min(schema.max, v)
-        return v
+        const r = body(fr)
+        depth--
+        return r
       }
-      // ── outputs ──
-      case 'plot': {
-        const v = arg(0, 'series')
-        if (v == null) throw new ScriptError('plot() needs a series', line)
-        const idx = res.plots.length
-        const title = typeof arg(1, 'title') === 'string' ? (arg(1, 'title') as string) : `Plot ${idx + 1}`
-        const auto = tokenHex(AUTO_COLORS[idx % AUTO_COLORS.length]!)
-        const cv = N.color
-        const colors = cv != null && isStrSeries(cv) ? cv.map((c) => (c ? colorOf(c, line, auto) : auto)) : null
-        const style = (typeof N.style === 'string' ? N.style : 'line') as PlotOut['style']
-        if (!['line', 'step', 'histogram', 'area', 'columns', 'circles', 'cross'].includes(style))
-          throw new ScriptError(`unknown plot style "${style}"`, line)
-        res.plots.push({
-          title,
-          values: S(v, line),
-          color: colors ? (colors[colors.length - 1] ?? auto) : colorOf(cv, line, auto),
-          colors,
-          width: Math.max(1, Math.min(6, typeof N.width === 'number' ? N.width : 1)),
-          style,
-          dashed: N.dashed != null && truthy(num(N.dashed, line, 'dashed')),
-        })
-        return { plot: idx }
+    }
+    const name = node.name
+    const key = name.replace(/^(ta|math|str)\./, '')
+    const fn = BUILTINS[key] ?? BUILTINS[name]
+    if (!fn) {
+      if (/^(array|matrix|map)\./.test(name)) throw new ScriptError(`${name.split('.')[0]}s aren't supported yet (${name})`, line)
+      if (name === 'request.security' || name === 'security' || name.startsWith('request.'))
+        throw new ScriptError(`${name} (data from another symbol or timeframe) isn't supported yet`, line)
+      if (DRAWING_NS.test(name)) {
+        return () => {
+          warn(`${name.split('.')[0]}.* drawings aren't drawn yet — skipped`)
+          return NaN
+        }
       }
-      case 'hline': {
-        const price = num(arg(0, 'price'), line, 'the hline price')
-        const st = typeof N.style === 'string' ? N.style : 'dashed'
-        if (st !== 'solid' && st !== 'dashed' && st !== 'dotted') throw new ScriptError(`unknown line style "${st}"`, line)
+      if (name.startsWith('strategy.')) {
+        return () => {
+          warn('strategy orders aren\'t simulated — only the plots are drawn')
+          return NaN
+        }
+      }
+      throw new ScriptError(`unknown function "${name}"`, line)
+    }
+    const site = siteFn(cx)
+    const fast = FAST[key] ?? FAST[name]
+    const na = args.length
+    const nn = namedKeys.length
+    const c: Call = { A: new Array<Val>(na), N: {}, node, line, i: 0, f: null as unknown as Frame, site: () => site(c.f) }
+    return (f) => {
+      if (fast) {
+        // inputs / declarations / hlines: settled on the first bar, so skip their arguments after
+        const held = fast(site(f), f.i)
+        if (held !== undefined) return held
+      }
+      const A = c.A
+      for (let k = 0; k < na; k++) A[k] = args[k]!(f)
+      const Nm = c.N
+      for (let k = 0; k < nn; k++) Nm[namedKeys[k]!] = namedEvs[k]!(f)
+      c.i = f.i
+      c.f = f
+      return fn(c)
+    }
+  }
+
+  // ── built-in functions ──
+  // Fixed parameters, not ...rest: these run several times per call per bar.
+  const arg = (c: Call, i: number, a?: string, b?: string, d?: string, e?: string, g?: string): Val | undefined => {
+    const v = c.A[i]
+    if (v !== undefined) return v
+    const nm = c.N
+    if (a === undefined) return undefined
+    if (a in nm) return nm[a]
+    if (b !== undefined && b in nm) return nm[b]
+    if (d !== undefined && d in nm) return nm[d]
+    if (e !== undefined && e in nm) return nm[e]
+    if (g !== undefined && g in nm) return nm[g]
+    return undefined
+  }
+  const has = (c: Call, i: number, a?: string, b?: string, d?: string) => arg(c, i, a, b, d) !== undefined
+  const src = (c: Call, i = 0): number => num(arg(c, i, 'source', 'src', 'series', 'x') ?? C[c.i]!, c.line, 'the source')
+  const lenArg = (c: Call, i: number, def?: number, a?: string, b?: string, d?: string): number => {
+    const v = arg(c, i, 'length', 'len', a, b, d)
+    if (v === undefined) {
+      if (def != null) return def
+      throw new ScriptError('the length is missing', c.line)
+    }
+    const x = Math.round(num(v, c.line, 'the length'))
+    if (!(x >= 1) || x > MAX_LEN) throw new ScriptError(`a length must be between 1 and ${MAX_LEN}`, c.line)
+    return x
+  }
+  const optNum = (c: Call, i: number, def: number, a?: string, b?: string, d?: string): number => {
+    const v = arg(c, i, a, b, d)
+    return v === undefined ? def : num(v, c.line)
+  }
+  const optStr = (c: Call, i: number, a?: string, b?: string): string | undefined => {
+    const v = arg(c, i, a, b)
+    return typeof v === 'string' ? v : undefined
+  }
+  const math1 =
+    (f: (x: number) => number) =>
+    (c: Call): Val =>
+      f(num(arg(c, 0, 'number', 'x', 'angle', 'radians', 'degrees'), c.line))
+  const nary = (pick: (xs: number[]) => number) => (c: Call): Val => {
+    const xs = c.A.map((v) => num(v, c.line))
+    if (!xs.length) throw new ScriptError('needs at least one value', c.line)
+    return xs.some(isNa) ? NaN : pick(xs)
+  }
+  const fromTime = (c: Call, part: keyof NyTime): Val => {
+    const t = num(arg(c, 0, 'time') ?? T[c.i]!, c.line, 'the time')
+    return isNa(t) ? NaN : nyTime(t)[part]
+  }
+
+  /** Window helper on the call's own state. */
+  const win = (c: Call, v: number, len: number, slot = 0) => windowOf(c.site().k(slot), v, len)
+
+  const inputCall = (c: Call, kind: string | null): Val => {
+    const site = c.site()
+    const held = site.any as { v: Val } | { src: string } | null
+    if (held) return 'src' in held ? seriesAt(held.src, c.i) : held.v
+    const { A, N: Nm, node } = c
+    let defVal: Val | undefined
+    let defNode: Node | undefined
+    let title: Val | undefined
+    let typeName = kind
+    if (kind) {
+      defVal = arg(c, 0, 'defval')
+      defNode = node.args[0] ?? node.named.defval
+      title = arg(c, 1, 'title')
+    } else if ('defval' in Nm || 'title' in Nm) {
+      defVal = 'defval' in Nm ? Nm.defval : A[0]
+      defNode = node.named.defval ?? node.args[0]
+      title = 'title' in Nm ? Nm.title : 'defval' in Nm ? A[0] : A[1]
+    } else {
+      const a0 = A[0]
+      const a1 = A[1]
+      const opts = Array.isArray(Nm.options) ? Nm.options.map(String) : null
+      let cbOrder = false
+      if (typeof a0 === 'string' && a1 !== undefined && typeof a1 !== 'string') cbOrder = true
+      else if (typeof a0 === 'string' && typeof a1 === 'string') {
+        if (opts?.includes(a1) && !opts.includes(a0)) cbOrder = true
+        else if (opts?.includes(a0)) cbOrder = false
+        else cbOrder = !pine
+      }
+      if (cbOrder) {
+        title = a0
+        defVal = a1 ?? Nm.default
+        defNode = node.args[1] ?? node.named.default
+      } else {
+        defVal = a0
+        defNode = node.args[0]
+        title = a1
+      }
+    }
+    if (!typeName && typeof Nm.type === 'string') typeName = Nm.type
+    if (!kind && !typeName && pine && typeof A[2] === 'string' && Object.values(CONSTS).includes(A[2])) typeName = A[2] as string
+    const varName = inputNames.get(node)
+    const titleStr = typeof title === 'string' && title ? title : varName ?? `Input ${res.inputs.length + 1}`
+    let key = titleStr
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_|_$/g, '') || 'input'
+    for (let j = 2; inputKeys.has(key); j++) key = `${key.replace(/_\d+$/, '')}_${j}`
+    inputKeys.add(key)
+    const given = opts.inputs?.[key]
+    const extra: Partial<InputSchema> = {}
+    for (const k of ['tooltip', 'group', 'inline'] as const) if (typeof Nm[k] === 'string') extra[k] = Nm[k] as string
+    const numPos = kind ? 2 : 3
+    const minval = Nm.minval ?? Nm.min ?? (kind === 'integer' || kind === 'float' || !kind ? A[numPos] : undefined)
+    const maxval = Nm.maxval ?? Nm.max ?? (kind === 'integer' || kind === 'float' || !kind ? A[numPos + 1] : undefined)
+    const step = Nm.step ?? (kind === 'integer' || kind === 'float' ? A[4] : undefined)
+    const optList = Array.isArray(Nm.options) ? Nm.options : kind === 'string' && Array.isArray(A[2]) ? (A[2] as Val[]) : null
+    const done = (v: Val, schema: InputSchema) => {
+      res.inputs.push({ ...schema, ...extra })
+      site.any = { v }
+      return v
+    }
+    // a source: input(close), input.source(hl2), type=input.source
+    const srcName = defNode && defNode.k === 'id' && SOURCES.includes(defNode.name) ? defNode.name : null
+    if (typeName === 'source' || (srcName && !typeName)) {
+      const dv = srcName ?? 'close'
+      const pick = typeof given === 'string' && SOURCES.includes(given) ? given : dv
+      res.inputs.push({ key, title: titleStr, type: 'source', defval: dv, options: SOURCES, ...extra })
+      site.any = { src: pick }
+      return seriesAt(pick, c.i)
+    }
+    if (typeName === 'bool' || (!typeName && defNode?.k === 'bool')) {
+      const dv = truthy(defVal ?? 0)
+      return done((typeof given === 'boolean' ? given : dv) ? 1 : 0, { key, title: titleStr, type: 'bool', defval: dv })
+    }
+    if (typeName === 'color' || (!typeName && typeof defVal === 'string' && defVal.startsWith('#'))) {
+      const dv = colorOf(defVal, c.line) ?? tok('--color-fg')
+      return done(typeof given === 'string' && parseHex(given) ? given : dv, { key, title: titleStr, type: 'color', defval: dv })
+    }
+    if (optList && optList.length && optList.every((o) => typeof o === 'number')) {
+      const strs = optList.map(String)
+      const dv = String(defVal ?? strs[0])
+      const pick = typeof given === 'string' && strs.includes(given) ? given : typeof given === 'number' && strs.includes(String(given)) ? String(given) : dv
+      return done(Number(pick), { key, title: titleStr, type: 'string', defval: dv, options: strs })
+    }
+    if (optList || typeof defVal === 'string' || typeName === 'string' || typeName === 'timeframe' || typeName === 'session' || typeName === 'symbol' || typeName === 'text_area') {
+      const options = optList ? optList.map(String) : undefined
+      const dv = typeof defVal === 'string' ? defVal : options?.[0] ?? ''
+      const t: InputSchema['type'] = typeName === 'timeframe' || typeName === 'session' || typeName === 'symbol' ? typeName : 'string'
+      const v = typeof given === 'string' && (!options || options.includes(given)) ? given : dv
+      return done(v, { key, title: titleStr, type: t, defval: dv, ...(options ? { options } : {}) })
+    }
+    const dv = num(defVal, c.line, 'the input default')
+    const isInt =
+      typeName === 'integer' || (typeName !== 'float' && typeName !== 'price' && typeName !== 'time' && defNode?.k === 'num' && !defNode.float && (step === undefined || Number.isInteger(step)))
+    const schema: InputSchema = { key, title: titleStr, type: typeName === 'price' ? 'price' : typeName === 'time' ? 'time' : isInt ? 'int' : 'float', defval: dv }
+    if (typeof minval === 'number' && !isNa(minval)) schema.min = minval
+    if (typeof maxval === 'number' && !isNa(maxval)) schema.max = maxval
+    if (typeof step === 'number' && !isNa(step)) schema.step = step
+    let v = typeof given === 'number' && Number.isFinite(given) ? given : dv
+    if (schema.min != null) v = Math.max(schema.min, v)
+    if (schema.max != null) v = Math.min(schema.max, v)
+    return done(v, schema)
+  }
+
+  const declareScript = (c: Call, isStrategy: boolean): Val => {
+    const site = c.site()
+    if (site.done) return NaN
+    site.done = true
+    const t = arg(c, 0, 'title')
+    if (typeof t === 'string') res.meta.title = t
+    const st = arg(c, 1, 'shorttitle')
+    if (typeof st === 'string' && st) res.meta.shorttitle = st
+    const ov = arg(c, 2, 'overlay')
+    if (ov !== undefined) res.meta.overlay = truthy(ov)
+    const pr = c.N.precision
+    if (typeof pr === 'number' && !isNa(pr)) res.meta.precision = Math.round(pr)
+    if (isStrategy) warn('strategy orders aren\'t simulated — only the plots are drawn')
+    return NaN
+  }
+
+  /** A colour argument with Pine `transp` (0–100) / CB `opacity` (0–1) applied. */
+  const paint = (c: Call, v: Val | undefined, fallback: string | null, defAlpha: number | null, transpPos = -1): string | null => {
+    let col = v === undefined ? fallback : colorOf(v, c.line)
+    if (col === null) return null
+    const op = c.N.opacity
+    const tr = c.N.transp ?? (transpPos >= 0 ? c.A[transpPos] : undefined)
+    if (typeof op === 'number' && !isNa(op)) col = withAlpha(col, op)
+    else if (typeof tr === 'number' && !isNa(tr)) col = withAlpha(col, alphaOf(col) * (1 - tr / 100))
+    else if (defAlpha != null && alphaOf(col) >= 1) col = withAlpha(col, defAlpha)
+    return col
+  }
+
+  const plotCall = (c: Call): Val => {
+    const site = c.site()
+    let ref = site.any as PlotRef | null
+    const i = c.i
+    if (!ref) {
+      const idx = res.plots.length
+      const t = arg(c, 1, 'title')
+      const styleV = arg(c, 4, 'style')
+      const style = (typeof styleV === 'string' ? styleV : 'line') as PlotStyle
+      if (!['line', 'step', 'histogram', 'area', 'columns', 'circles', 'cross'].includes(style)) throw new ScriptError(`unknown plot style "${style}"`, c.line)
+      const disp = c.N.display
+      const width = optNum(c, 3, 1, 'linewidth', 'width')
+      const zeroWidth = !isNa(width) && width <= 0
+      const hb = c.N.histbase
+      res.plots.push({
+        title: typeof t === 'string' && t ? t : `Plot ${idx + 1}`,
+        values: new Float64Array(N).fill(NaN),
+        colors: new Array(N).fill(null),
+        width: Math.max(1, Math.min(8, isNa(width) ? 1 : width)),
+        style,
+        dashed: c.N.dashed !== undefined && truthy(c.N.dashed),
+        base: typeof hb === 'number' && !isNa(hb) ? hb : null,
+        hidden: zeroWidth || (typeof disp === 'string' && !(disp.includes('all') || disp.includes('pane'))),
+      })
+      plotOffsets[idx] = Math.round(optNum(c, -1, 0, 'offset')) || 0
+      plotColorGiven[idx] = has(c, 2, 'color')
+      site.any = ref = { plot: idx }
+    }
+    const out = res.plots[ref.plot]!
+    const v = arg(c, 0, 'series')
+    out.values[i] = v === undefined ? NaN : num(v, c.line, 'the plotted value')
+    const cv = arg(c, 2, 'color')
+    out.colors[i] =
+      cv === undefined && c.N.transp === undefined ? (pine ? pineColor('blue') : tok(AUTO_COLORS[ref.plot % AUTO_COLORS.length]!)) : paint(c, cv, pine ? pineColor('blue') : tok(AUTO_COLORS[ref.plot % AUTO_COLORS.length]!), null)
+    return ref
+  }
+
+  const markerAt = (c: Call, i: number, m: Omit<MarkerOut, 'i'>) => {
+    const off = Math.round(optNum(c, -1, 0, 'offset')) || 0
+    const j = i + off
+    if (j >= 0 && j < N) res.markers.push({ i: j, ...m })
+  }
+  const sizeOf = (v: Val | undefined): MarkerSize => {
+    const s = typeof v === 'string' ? v.toLowerCase() : 'small'
+    return (MARKER_SIZES as readonly string[]).includes(s) ? (s as MarkerSize) : 'small'
+  }
+  const posOf = (v: Val | undefined, def: string): MarkerOut['position'] => {
+    const s = typeof v === 'string' ? v.toLowerCase() : def
+    if (s === 'above' || s === 'abovebar') return 'aboveBar'
+    if (s === 'below' || s === 'belowbar') return 'belowBar'
+    if (s === 'top' || s === 'bottom' || s === 'absolute') return s
+    return 'aboveBar'
+  }
+
+  const fillCall = (c: Call): Val => {
+    const site = c.site()
+    let idx = site.n - 1
+    if (!site.done) {
+      const a = arg(c, 0, 'plot1', 'hline1')
+      const b = arg(c, 1, 'plot2', 'hline2')
+      const ok = (v: Val | undefined): v is FillEnd => isPlot(v) || isHline(v)
+      if (!ok(a) || !ok(b)) throw new ScriptError('fill() takes two plots or two hlines: p1 = plot(…), then fill(p1, p2)', c.line)
+      const grad = typeof c.A[2] === 'number' || 'top_value' in c.N
+      const t = grad ? (c.A[6] ?? c.N.title) : c.A[3] !== undefined && typeof c.A[3] === 'string' ? c.A[3] : c.N.title
+      res.fills.push({ a, b, colors: new Array(N).fill(null), gradient: grad ? new Array(N).fill(null) : null, title: typeof t === 'string' ? t : '' })
+      site.done = true
+      site.n = res.fills.length
+      idx = site.n - 1
+    }
+    const out = res.fills[idx]!
+    if (out.gradient) {
+      const tv = num(arg(c, 2, 'top_value'), c.line, 'top_value')
+      const bv = num(arg(c, 3, 'bottom_value'), c.line, 'bottom_value')
+      const tc = colorOf(arg(c, 4, 'top_color'), c.line)
+      const bc = colorOf(arg(c, 5, 'bottom_color'), c.line)
+      out.gradient[c.i] = isNa(tv) || isNa(bv) || (!tc && !bc) ? null : { topValue: tv, bottomValue: bv, topColor: tc ?? withAlpha(bc!, 0), bottomColor: bc ?? withAlpha(tc!, 0) }
+      return NaN
+    }
+    const defAlpha = ver === 0 ? 0.15 : ver <= 4 ? 0.2 : null
+    const fallback = pine ? pineColor('blue') : tok('--color-series-1')
+    out.colors[c.i] = paint(c, arg(c, 2, 'color'), fallback, defAlpha, ver > 0 && ver <= 4 && typeof c.A[3] === 'number' ? 3 : -1)
+    return NaN
+  }
+
+  const bgcolorCall = (c: Call): Val => {
+    const site = c.site()
+    let colors = site.any as (string | null)[] | null
+    if (!colors) {
+      colors = new Array(N).fill(null)
+      site.any = colors
+      bgSites.push({ colors, offset: Math.round(optNum(c, ver >= 5 ? 1 : -1, 0, 'offset')) || 0 })
+    }
+    const a0 = arg(c, 0, 'color', 'condition')
+    // CB: bgcolor(cond, color=, opacity=) — a number first is a condition
+    if (typeof a0 === 'number' && !isNa(a0) && (c.N.color !== undefined || typeof c.A[1] === 'string')) {
+      colors[c.i] = truthy(a0) ? paint(c, c.N.color ?? c.A[1], tok('--color-series-1'), 0.12) : null
+      return NaN
+    }
+    if (typeof a0 === 'number' && !isNa(a0) && !pine) {
+      colors[c.i] = truthy(a0) ? paint(c, undefined, tok('--color-series-1'), 0.12) : null
+      return NaN
+    }
+    const defAlpha = ver === 0 ? 0.12 : ver <= 4 ? 0.1 : null
+    colors[c.i] = paint(c, a0, null, defAlpha, ver > 0 && ver <= 4 ? 1 : -1)
+    return NaN
+  }
+
+  const BUILTINS: Record<string, (c: Call) => Val> = {
+    // ── declarations ──
+    indicator: (c) => declareScript(c, false),
+    study: (c) => declareScript(c, false),
+    strategy: (c) => declareScript(c, true),
+    input: (c) => inputCall(c, null),
+    'input.int': (c) => inputCall(c, 'integer'),
+    'input.integer': (c) => inputCall(c, 'integer'),
+    'input.float': (c) => inputCall(c, 'float'),
+    'input.bool': (c) => inputCall(c, 'bool'),
+    'input.string': (c) => inputCall(c, 'string'),
+    'input.text_area': (c) => inputCall(c, 'text_area'),
+    'input.source': (c) => inputCall(c, 'source'),
+    'input.color': (c) => inputCall(c, 'color'),
+    'input.timeframe': (c) => inputCall(c, 'timeframe'),
+    'input.resolution': (c) => inputCall(c, 'timeframe'),
+    'input.session': (c) => inputCall(c, 'session'),
+    'input.symbol': (c) => inputCall(c, 'symbol'),
+    'input.price': (c) => inputCall(c, 'price'),
+    'input.time': (c) => inputCall(c, 'time'),
+    // ── outputs ──
+    plot: plotCall,
+    hline: (c) => {
+      const site = c.site()
+      if (!site.done) {
+        const price = num(arg(c, 0, 'price'), c.line, 'the hline price')
+        const t = arg(c, 1, 'title')
+        const st = arg(c, 3, 'linestyle', 'style')
+        const style = st === 'solid' || st === 'dotted' ? st : 'dashed'
+        const fallback = pine ? pineColor('gray') : tok('--color-flat')
         res.hlines.push({
           price,
-          title: typeof arg(1, 'title') === 'string' ? (arg(1, 'title') as string) : '',
-          color: colorOf(N.color, line, tokenHex('--color-flat')),
-          width: Math.max(1, Math.min(4, typeof N.width === 'number' ? N.width : 1)),
-          style: st,
+          title: typeof t === 'string' ? t : '',
+          color: arg(c, 2, 'color') === undefined ? fallback : paint(c, arg(c, 2, 'color'), fallback, null),
+          width: Math.max(1, Math.min(4, optNum(c, 4, 1, 'linewidth', 'width') || 1)),
+          style,
         })
-        return price
+        site.done = true
+        site.any = { hline: res.hlines.length - 1 }
       }
-      case 'fill': {
-        const a = arg(0, 'plot1')
-        const b = arg(1, 'plot2')
-        if (!a || !b || !isPlot(a) || !isPlot(b)) throw new ScriptError('fill() takes two plots: p1 = plot(…), then fill(p1, p2)', line)
-        const op = typeof N.opacity === 'number' ? N.opacity : 0.15
-        res.fills.push({ a: a.plot, b: b.plot, color: withAlpha(colorOf(N.color ?? arg(2, 'color'), line, tokenHex('--color-series-1')), op) })
+      return site.any as HlineRef
+    },
+    fill: fillCall,
+    bgcolor: bgcolorCall,
+    barcolor: (c) => {
+      const bc = (res.barColors ??= new Array(N).fill(null))
+      const col = paint(c, arg(c, 0, 'color'), null, null)
+      const off = Math.round(optNum(c, 1, 0, 'offset')) || 0
+      const j = c.i + off
+      if (col && j >= 0 && j < N) bc[j] = col
+      return NaN
+    },
+    plotshape: (c) => {
+      const v = arg(c, 0, 'series')
+      const loc = posOf(arg(c, 3, 'location'), 'abovebar')
+      const show = loc === 'absolute' ? typeof v === 'number' && !isNa(v) : v !== undefined && truthy(v)
+      if (!show) return NaN
+      const styleV = arg(c, 2, 'style')
+      const shape = (typeof styleV === 'string' && (MARKER_SHAPES as readonly string[]).includes(styleV) ? styleV : 'xcross') as MarkerShape
+      const color = paint(c, arg(c, 4, 'color'), pineColor('blue'), null, ver > 0 && ver <= 4 ? 5 : -1)
+      if (!color) return NaN
+      const txt = optStr(c, ver > 0 && ver <= 4 ? 7 : 6, 'text') ?? ''
+      const tc = colorOf(c.N.textcolor, c.line) ?? color
+      markerAt(c, c.i, { text: txt, color, textColor: tc, position: loc, y: typeof v === 'number' ? v : NaN, shape, size: sizeOf(c.N.size) })
+      return NaN
+    },
+    plotchar: (c) => {
+      const v = arg(c, 0, 'series')
+      const loc = posOf(arg(c, 3, 'location'), 'abovebar')
+      const show = loc === 'absolute' ? typeof v === 'number' && !isNa(v) : v !== undefined && truthy(v)
+      if (!show) return NaN
+      const ch = optStr(c, 2, 'char') ?? '★'
+      const color = paint(c, arg(c, 4, 'color'), pineColor('blue'), null)
+      if (!color) return NaN
+      const txt = optStr(c, -1, 'text')
+      markerAt(c, c.i, {
+        text: txt ? `${ch}\n${txt}` : ch,
+        color,
+        textColor: colorOf(c.N.textcolor, c.line) ?? color,
+        position: loc,
+        y: typeof v === 'number' ? v : NaN,
+        shape: 'none',
+        size: sizeOf(c.N.size),
+      })
+      return NaN
+    },
+    plotarrow: (c) => {
+      const v = num(arg(c, 0, 'series') ?? NaN, c.line)
+      if (isNa(v) || v === 0) return NaN
+      const up = v > 0
+      const color = paint(c, arg(c, up ? 2 : 3, up ? 'colorup' : 'colordown'), pineColor(up ? 'green' : 'red'), null)
+      if (!color) return NaN
+      markerAt(c, c.i, { text: '', color, textColor: color, position: up ? 'belowBar' : 'aboveBar', y: NaN, shape: up ? 'arrowup' : 'arrowdown', size: 'small' })
+      return NaN
+    },
+    marker: (c) => {
+      const cond = arg(c, 0, 'condition')
+      if (cond === undefined || !truthy(cond)) return NaN
+      const pos = posOf(c.N.position, 'below')
+      const txt = optStr(c, 1, 'text') ?? ''
+      const color = colorOf(c.N.color, c.line) ?? tok(pos === 'aboveBar' ? '--color-down' : '--color-up')
+      const shapeIn = typeof c.N.shape === 'string' ? c.N.shape.toLowerCase() : pos === 'aboveBar' ? 'triangledown' : 'triangleup'
+      if (!(MARKER_SHAPES as readonly string[]).includes(shapeIn)) throw new ScriptError(`unknown marker shape "${shapeIn}"`, c.line)
+      const sz = typeof c.N.size === 'string' ? c.N.size.toLowerCase() : 'small'
+      if (!(MARKER_SIZES as readonly string[]).includes(sz)) throw new ScriptError(`unknown marker size "${sz}"`, c.line)
+      markerAt(c, c.i, { text: txt, color, textColor: color, position: pos, y: NaN, shape: shapeIn as MarkerShape, size: sz as MarkerSize })
+      return NaN
+    },
+    alertcondition: () => NaN,
+    alert: () => NaN,
+    'log.info': () => NaN,
+    'log.warning': () => NaN,
+    'log.error': () => NaN,
+    max_bars_back: () => NaN,
+    'runtime.error': (c) => {
+      throw new ScriptError(text(arg(c, 0, 'message') ?? 'runtime.error'), c.line)
+    },
+    // ── colours ──
+    'color.new': (c) => {
+      const col = colorOf(arg(c, 0, 'color'), c.line)
+      const tr = num(arg(c, 1, 'transp') ?? 0, c.line, 'the transparency')
+      return col === null || isNa(tr) ? NaN : withAlpha(col, 1 - tr / 100)
+    },
+    'color.rgb': (c) => {
+      const [r, g, b] = [0, 1, 2].map((k) => num(arg(c, k, ['red', 'green', 'blue'][k]!), c.line))
+      const tr = optNum(c, 3, 0, 'transp')
+      return [r, g, b, tr].some((x) => isNa(x!)) ? NaN : hexOf(r!, g!, b!, 1 - tr / 100)
+    },
+    'color.from_gradient': (c) => {
+      const v = num(arg(c, 0, 'value'), c.line)
+      const lo = num(arg(c, 1, 'bottom_value'), c.line)
+      const hi = num(arg(c, 2, 'top_value'), c.line)
+      const a = parseHex(colorOf(arg(c, 3, 'bottom_color'), c.line) ?? '')
+      const b = parseHex(colorOf(arg(c, 4, 'top_color'), c.line) ?? '')
+      if (!a || !b || isNa(v) || isNa(lo) || isNa(hi)) return NaN
+      const t = hi === lo ? 1 : Math.max(0, Math.min(1, (v - lo) / (hi - lo)))
+      return hexOf(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t)
+    },
+    'color.r': (c) => parseHex(colorOf(arg(c, 0, 'color'), c.line) ?? '')?.[0] ?? NaN,
+    'color.g': (c) => parseHex(colorOf(arg(c, 0, 'color'), c.line) ?? '')?.[1] ?? NaN,
+    'color.b': (c) => parseHex(colorOf(arg(c, 0, 'color'), c.line) ?? '')?.[2] ?? NaN,
+    'color.t': (c) => {
+      const p = parseHex(colorOf(arg(c, 0, 'color'), c.line) ?? '')
+      return p ? Math.round((1 - p[3]) * 100) : NaN
+    },
+    alpha: (c) => {
+      const col = colorOf(arg(c, 0, 'color'), c.line)
+      return col === null ? NaN : withAlpha(col, num(arg(c, 1, 'opacity'), c.line, 'the opacity'))
+    },
+    // ── na handling ──
+    nz: (c) => {
+      const x = arg(c, 0, 'source', 'x')
+      const r = arg(c, 1, 'replacement') ?? 0
+      return typeof x === 'number' && isNa(x) ? r : x === undefined ? r : x
+    },
+    na: (c) => {
+      const x = arg(c, 0, 'x')
+      return typeof x === 'number' && isNa(x) ? 1 : 0
+    },
+    fixnan: (c) => {
+      const s = c.site()
+      const v = num(arg(c, 0, 'source'), c.line)
+      if (!isNa(v)) s.x = v
+      return s.x
+    },
+    iff: (c) => (truthy(arg(c, 0, 'condition') ?? 0) ? (arg(c, 1, 'then') ?? NaN) : (arg(c, 2, '_else') ?? NaN)),
+    // ── math ──
+    abs: math1(Math.abs),
+    sqrt: math1(Math.sqrt),
+    log: math1(Math.log),
+    log10: math1(Math.log10),
+    exp: math1(Math.exp),
+    sign: math1(Math.sign),
+    floor: math1(Math.floor),
+    ceil: math1(Math.ceil),
+    sin: math1(Math.sin),
+    cos: math1(Math.cos),
+    tan: math1(Math.tan),
+    asin: math1(Math.asin),
+    acos: math1(Math.acos),
+    atan: math1(Math.atan),
+    todegrees: math1((x) => (x * 180) / Math.PI),
+    toradians: math1((x) => (x * Math.PI) / 180),
+    round_to_mintick: math1((x) => Math.round(x * 100) / 100),
+    round: (c) => {
+      const x = num(arg(c, 0, 'number', 'x'), c.line)
+      const d = optNum(c, 1, 0, 'precision')
+      const p = Math.pow(10, Math.max(0, Math.round(d)))
+      return Math.round(x * p) / p
+    },
+    pow: (c) => Math.pow(num(arg(c, 0, 'base'), c.line), num(arg(c, 1, 'exponent'), c.line)),
+    min: nary((xs) => Math.min(...xs)),
+    max: nary((xs) => Math.max(...xs)),
+    avg: nary(mean),
+    // ── text ──
+    tostring: (c) => {
+      const v = arg(c, 0, 'value', 'x')
+      const fmt = optStr(c, 1, 'format')
+      if (typeof v === 'number' && fmt) {
+        const m = /\.(#+|0+)/.exec(fmt)
+        if (fmt === 'mintick' || fmt === 'price') return isNa(v) ? 'NaN' : v.toFixed(2)
+        if (fmt === 'percent') return isNa(v) ? 'NaN' : `${v.toFixed(2)}%`
+        if (m) return isNa(v) ? 'NaN' : String(Number(v.toFixed(m[1]!.length)))
+      }
+      return v === undefined ? '' : text(v)
+    },
+    format: (c) => {
+      const f = optStr(c, 0, 'formatString') ?? ''
+      return f.replace(/\{(\d+)(?:,[^}]*)?\}/g, (_, k: string) => text(c.A[Number(k) + 1] ?? ''))
+    },
+    length: (c) => (optStr(c, 0, 'string') ?? '').length,
+    upper: (c) => (optStr(c, 0, 'source') ?? '').toUpperCase(),
+    lower: (c) => (optStr(c, 0, 'source') ?? '').toLowerCase(),
+    contains: (c) => ((optStr(c, 0, 'source') ?? '').includes(optStr(c, 1, 'str') ?? '') ? 1 : 0),
+    tonumber: (c) => {
+      const n = Number(optStr(c, 0, 'string'))
+      return Number.isFinite(n) ? n : NaN
+    },
+    // ── time ──
+    time: (c) => {
+      const t = T[c.i]!
+      const sess = optStr(c, 1, 'session')
+      if (sess && !inSession(t, sess)) return NaN
+      const htf = optStr(c, 0, 'timeframe')
+      return htf && htf !== tf ? bucketStart(t, htf) : t
+    },
+    time_close: (c) => {
+      const t = T[c.i]!
+      const sess = optStr(c, 1, 'session')
+      if (sess && !inSession(t, sess)) return NaN
+      return t + tfMs
+    },
+    timestamp: (c) => {
+      const xs = c.A.filter((v) => typeof v === 'number') as number[]
+      if (xs.length < 3) {
+        const s = optStr(c, 0, 'dateString')
+        const t = s ? Date.parse(s) : NaN
+        return Number.isFinite(t) ? t : NaN
+      }
+      const [y, mo, d, h = 0, mi = 0, s = 0] = xs
+      return nyToUtc(y!, mo!, d!, h, mi, s)
+    },
+    year: (c) => fromTime(c, 'year'),
+    month: (c) => fromTime(c, 'month'),
+    dayofmonth: (c) => fromTime(c, 'day'),
+    dayofweek: (c) => fromTime(c, 'dow'),
+    hour: (c) => fromTime(c, 'hour'),
+    minute: (c) => fromTime(c, 'minute'),
+    second: (c) => fromTime(c, 'second'),
+    // ── moving averages ──
+    sma: (c) => smaStep(c.site(), src(c), lenArg(c, 1)),
+    ema: (c) => ema(c.site(), src(c), lenArg(c, 1)),
+    rma: (c) => rma(c.site(), src(c), lenArg(c, 1)),
+    wma: (c) => wmaStep(c.site(), src(c), lenArg(c, 1)),
+    vwma: (c) => {
+      const s = c.site()
+      const l = lenArg(c, 1)
+      const v = src(c)
+      const a = smaStep(s.k(0), v * V[c.i]!, l)
+      const b = smaStep(s.k(1), V[c.i]!, l)
+      return b === 0 ? NaN : a / b
+    },
+    hma: (c) => {
+      const s = c.site()
+      const l = lenArg(c, 1)
+      const v = src(c)
+      const half = wmaStep(s.k(0), v, Math.max(1, Math.floor(l / 2)))
+      const full = wmaStep(s.k(1), v, l)
+      return wmaStep(s.k(2), 2 * half - full, Math.max(1, Math.round(Math.sqrt(l))))
+    },
+    alma: (c) => {
+      const l = lenArg(c, 1)
+      const off = optNum(c, 2, 0.85, 'offset')
+      const sigma = optNum(c, 3, 6, 'sigma')
+      const w = win(c, src(c), l)
+      if (!w) return NaN
+      const m = off * (l - 1)
+      const sd = l / sigma
+      let norm = 0
+      let sum = 0
+      for (let k = 0; k < l; k++) {
+        const wt = Math.exp(-((k - m) * (k - m)) / (2 * sd * sd))
+        norm += wt
+        sum += wt * w[k]!
+      }
+      return sum / norm
+    },
+    swma: (c) => {
+      const w = win(c, src(c), 4)
+      return w ? (w[0]! + 2 * w[1]! + 2 * w[2]! + w[3]!) / 6 : NaN
+    },
+    // ── statistics ──
+    stdev: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      return w ? stdevOf(w, c.N.biased === undefined ? true : truthy(c.N.biased)) : NaN
+    },
+    variance: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      return w ? Math.pow(stdevOf(w, c.N.biased === undefined ? true : truthy(c.N.biased)), 2) : NaN
+    },
+    dev: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      if (!w) return NaN
+      const m = mean(w)
+      return mean(w.map((x) => Math.abs(x - m)))
+    },
+    median: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      if (!w) return NaN
+      const s = w.slice().sort((a, b) => a - b)
+      const k = s.length >> 1
+      return s.length % 2 ? s[k]! : (s[k - 1]! + s[k]!) / 2
+    },
+    percentrank: (c) => {
+      const l = lenArg(c, 1)
+      const w = win(c, src(c), l + 1)
+      if (!w) return NaN
+      const cur = w[l]!
+      let n = 0
+      for (let k = 0; k < l; k++) if (w[k]! <= cur) n++
+      return (n / l) * 100
+    },
+    correlation: (c) => {
+      const l = lenArg(c, 2)
+      const a = win(c, num(arg(c, 0, 'source1'), c.line), l, 0)
+      const b = win(c, num(arg(c, 1, 'source2'), c.line), l, 1)
+      if (!a || !b) return NaN
+      const ma = mean(a)
+      const mb = mean(b)
+      let sab = 0
+      let saa = 0
+      let sbb = 0
+      for (let k = 0; k < l; k++) {
+        sab += (a[k]! - ma) * (b[k]! - mb)
+        saa += (a[k]! - ma) ** 2
+        sbb += (b[k]! - mb) ** 2
+      }
+      return saa === 0 || sbb === 0 ? NaN : sab / Math.sqrt(saa * sbb)
+    },
+    linreg: (c) => {
+      const l = lenArg(c, 1)
+      const off = optNum(c, 2, 0, 'offset')
+      const w = win(c, src(c), l)
+      if (!w) return NaN
+      let sx = 0
+      let sy = 0
+      let sxy = 0
+      let sxx = 0
+      for (let k = 0; k < l; k++) {
+        sx += k
+        sy += w[k]!
+        sxy += k * w[k]!
+        sxx += k * k
+      }
+      const slope = (l * sxy - sx * sy) / (l * sxx - sx * sx || 1)
+      const icpt = (sy - slope * sx) / l
+      return icpt + slope * (l - 1 - off)
+    },
+    // ── ranges ──
+    highest: (c) => {
+      if (c.A.length === 1 && !('length' in c.N)) return (win(c, H[c.i]!, lenArg(c, 0)) ?? [NaN]).reduce((a, b) => Math.max(a, b), -Infinity)
+      const w = win(c, src(c), lenArg(c, 1))
+      return w ? Math.max(...w) : NaN
+    },
+    lowest: (c) => {
+      if (c.A.length === 1 && !('length' in c.N)) return (win(c, L[c.i]!, lenArg(c, 0)) ?? [NaN]).reduce((a, b) => Math.min(a, b), Infinity)
+      const w = win(c, src(c), lenArg(c, 1))
+      return w ? Math.min(...w) : NaN
+    },
+    highestbars: (c) => {
+      const one = c.A.length === 1 && !('length' in c.N)
+      const l = one ? lenArg(c, 0) : lenArg(c, 1)
+      const w = win(c, one ? H[c.i]! : src(c), l)
+      if (!w) return NaN
+      let b = 0
+      for (let k = 1; k < l; k++) if (w[k]! >= w[b]!) b = k
+      return b - (l - 1)
+    },
+    lowestbars: (c) => {
+      const one = c.A.length === 1 && !('length' in c.N)
+      const l = one ? lenArg(c, 0) : lenArg(c, 1)
+      const w = win(c, one ? L[c.i]! : src(c), l)
+      if (!w) return NaN
+      let b = 0
+      for (let k = 1; k < l; k++) if (w[k]! <= w[b]!) b = k
+      return b - (l - 1)
+    },
+    range: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      return w ? Math.max(...w) - Math.min(...w) : NaN
+    },
+    sum: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      return w ? w.reduce((a, b) => a + b, 0) : NaN
+    },
+    cum: (c) => {
+      const s = c.site()
+      const v = src(c)
+      if (!s.done) {
+        s.done = true
+        s.x = 0
+      }
+      if (!isNa(v)) s.x += v
+      return s.x
+    },
+    change: (c) => {
+      const s = c.site()
+      const v = src(c)
+      const l = lenArg(c, 1, 1)
+      s.hist().push(v)
+      return v - s.hist().back(l)
+    },
+    mom: (c) => {
+      const s = c.site()
+      const v = src(c)
+      const l = lenArg(c, 1)
+      s.hist().push(v)
+      return v - s.hist().back(l)
+    },
+    roc: (c) => {
+      const s = c.site()
+      const v = src(c)
+      const l = lenArg(c, 1, 1)
+      s.hist().push(v)
+      const o = s.hist().back(l)
+      return o === 0 ? NaN : (100 * (v - o)) / o
+    },
+    // ── oscillators ──
+    rsi: (c) => {
+      const s = c.site()
+      const v = src(c)
+      const l = lenArg(c, 1)
+      const d = v - s.x
+      s.x = v
+      const up = rma(s.k(0), isNa(d) ? NaN : Math.max(d, 0), l)
+      const dn = rma(s.k(1), isNa(d) ? NaN : Math.max(-d, 0), l)
+      if (isNa(up) || isNa(dn)) return NaN
+      return dn === 0 ? 100 : up === 0 ? 0 : 100 - 100 / (1 + up / dn)
+    },
+    macd: (c) => {
+      const s = c.site()
+      const v = src(c)
+      const f = lenArg(c, 1, 12, 'fastlen', 'fastLength', 'fast')
+      const sl = lenArg(c, 2, 26, 'slowlen', 'slowLength', 'slow')
+      const m = ema(s.k(0), v, f) - ema(s.k(1), v, sl)
+      if (!has(c, 3, 'siglen', 'signalLength', 'signal')) return m // CB: the line alone
+      const sig = ema(s.k(2), m, lenArg(c, 3, 9, 'siglen', 'signalLength', 'signal'))
+      return [m, sig, m - sig]
+    },
+    tr: (c) => trAt(c.i, truthy(arg(c, 0, 'handle_na') ?? 0)),
+    atr: (c) => rma(c.site(), trAt(c.i, true), lenArg(c, 0, 14)),
+    cci: (c) => {
+      const l = lenArg(c, 1)
+      const v = src(c)
+      const w = win(c, v, l)
+      if (!w) return NaN
+      const m = mean(w)
+      const md = mean(w.map((x) => Math.abs(x - m)))
+      return md === 0 ? NaN : (v - m) / (0.015 * md)
+    },
+    stoch: (c) => {
+      const s = c.site()
+      if (c.A.length >= 4 || 'high' in c.N) {
+        const l = lenArg(c, 3)
+        const hh = windowOf(s.k(0), num(arg(c, 1, 'high'), c.line), l)
+        const ll = windowOf(s.k(1), num(arg(c, 2, 'low'), c.line), l)
+        const v = src(c)
+        if (!hh || !ll) return NaN
+        const hi = Math.max(...hh)
+        const lo = Math.min(...ll)
+        return hi === lo ? NaN : (100 * (v - lo)) / (hi - lo)
+      }
+      const l = lenArg(c, 0, 14)
+      const hh = windowOf(s.k(0), H[c.i]!, l)
+      const ll = windowOf(s.k(1), L[c.i]!, l)
+      if (!hh || !ll) return NaN
+      const hi = Math.max(...hh)
+      const lo = Math.min(...ll)
+      return hi === lo ? NaN : (100 * (C[c.i]! - lo)) / (hi - lo)
+    },
+    wpr: (c) => {
+      const s = c.site()
+      const l = lenArg(c, 0)
+      const hh = windowOf(s.k(0), H[c.i]!, l)
+      const ll = windowOf(s.k(1), L[c.i]!, l)
+      if (!hh || !ll) return NaN
+      const hi = Math.max(...hh)
+      const lo = Math.min(...ll)
+      return hi === lo ? NaN : (100 * (C[c.i]! - hi)) / (hi - lo)
+    },
+    mfi: (c) => {
+      const s = c.site()
+      const v = src(c)
+      const l = lenArg(c, 1)
+      const ch = v - s.x
+      s.x = v
+      const vol = V[c.i]!
+      const up = windowOf(s.k(0), isNa(ch) ? NaN : ch <= 0 ? 0 : v * vol, l)
+      const dn = windowOf(s.k(1), isNa(ch) ? NaN : ch >= 0 ? 0 : v * vol, l)
+      if (!up || !dn) return NaN
+      const u = up.reduce((a, b) => a + b, 0)
+      const d = dn.reduce((a, b) => a + b, 0)
+      return d === 0 ? 100 : 100 - 100 / (1 + u / d)
+    },
+    cmo: (c) => {
+      const s = c.site()
+      const v = src(c)
+      const l = lenArg(c, 1)
+      const m = v - s.x
+      s.x = v
+      const up = windowOf(s.k(0), isNa(m) ? NaN : Math.max(m, 0), l)
+      const dn = windowOf(s.k(1), isNa(m) ? NaN : Math.max(-m, 0), l)
+      if (!up || !dn) return NaN
+      const su = up.reduce((a, b) => a + b, 0)
+      const sd = dn.reduce((a, b) => a + b, 0)
+      return su + sd === 0 ? 0 : (100 * (su - sd)) / (su + sd)
+    },
+    tsi: (c) => {
+      const s = c.site()
+      const v = src(c)
+      const sh = lenArg(c, 1, 13, 'short_length')
+      const lo = lenArg(c, 2, 25, 'long_length')
+      const m = v - s.x
+      s.x = v
+      const a = ema(s.k(1), ema(s.k(0), m, lo), sh)
+      const b = ema(s.k(3), ema(s.k(2), Math.abs(m), lo), sh)
+      return b === 0 ? NaN : a / b
+    },
+    bb: (c) => {
+      const l = lenArg(c, 1)
+      const mult = optNum(c, 2, 2, 'mult')
+      const w = win(c, src(c), l)
+      if (!w) return [NaN, NaN, NaN]
+      const m = mean(w)
+      const d = stdevOf(w) * mult
+      return [m, m + d, m - d]
+    },
+    bbw: (c) => {
+      const l = lenArg(c, 1)
+      const mult = optNum(c, 2, 2, 'mult')
+      const w = win(c, src(c), l)
+      if (!w) return NaN
+      const m = mean(w)
+      return m === 0 ? NaN : (2 * stdevOf(w) * mult) / m
+    },
+    bb_upper: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      return w ? mean(w) + optNum(c, 2, 2, 'mult') * stdevOf(w) : NaN
+    },
+    bb_lower: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      return w ? mean(w) - optNum(c, 2, 2, 'mult') * stdevOf(w) : NaN
+    },
+    kc: (c) => {
+      const s = c.site()
+      const l = lenArg(c, 1)
+      const mult = optNum(c, 2, 1.5, 'mult')
+      const useTr = arg(c, 3, 'useTrueRange') === undefined ? true : truthy(arg(c, 3, 'useTrueRange')!)
+      const mid = ema(s.k(0), src(c), l)
+      const r = ema(s.k(1), useTr ? trAt(c.i, true) : H[c.i]! - L[c.i]!, l)
+      return [mid, mid + r * mult, mid - r * mult]
+    },
+    dmi: (c) => {
+      const s = c.site()
+      const l = lenArg(c, 0, 14, 'diLength')
+      const sm = lenArg(c, 1, 14, 'adxSmoothing')
+      const i = c.i
+      const up = i > 0 ? H[i]! - H[i - 1]! : NaN
+      const down = i > 0 ? L[i - 1]! - L[i]! : NaN
+      const pdm = isNa(up) ? NaN : up > down && up > 0 ? up : 0
+      const mdm = isNa(down) ? NaN : down > up && down > 0 ? down : 0
+      const tru = rma(s.k(0), trAt(i, true), l)
+      let plus = (100 * rma(s.k(1), pdm, l)) / tru
+      let minus = (100 * rma(s.k(2), mdm, l)) / tru
+      if (isNa(plus)) plus = s.x
+      else s.x = plus
+      if (isNa(minus)) minus = s.y
+      else s.y = minus
+      const sum = plus + minus
+      const adx = 100 * rma(s.k(3), Math.abs(plus - minus) / (sum === 0 ? 1 : sum), sm)
+      return [plus, minus, adx]
+    },
+    supertrend: (c) => {
+      const s = c.site()
+      const factor = num(arg(c, 0, 'factor'), c.line)
+      const l = lenArg(c, 1, 10, 'atrPeriod')
+      const i = c.i
+      const atrV = rma(s.k(0), trAt(i, true), l)
+      if (isNa(atrV)) return [NaN, 1]
+      const mid = (H[i]! + L[i]!) / 2
+      let up = mid + factor * atrV
+      let lo = mid - factor * atrV
+      const pLo = isNa(s.y) ? 0 : s.y
+      const pUp = isNa(s.x) ? 0 : s.x
+      const pc = i > 0 ? C[i - 1]! : NaN
+      lo = lo > pLo || pc < pLo ? lo : pLo
+      up = up < pUp || pc > pUp ? up : pUp
+      let dir: number
+      if (isNa(s.w)) dir = 1
+      else if (s.z === pUp) dir = C[i]! > up ? -1 : 1
+      else dir = C[i]! < lo ? 1 : -1
+      const st = dir === -1 ? lo : up
+      s.w = atrV // prior bar's atr (na until it exists)
+      s.x = up
+      s.y = lo
+      s.z = st
+      return [st, dir]
+    },
+    sar: (c) => {
+      const s = c.site()
+      const start = optNum(c, 0, 0.02, 'start')
+      const inc = optNum(c, 1, 0.02, 'inc')
+      const max = optNum(c, 2, 0.2, 'max')
+      const i = c.i
+      if (i === 0) return NaN
+      // s.x = sar, s.y = extreme, s.z = af, s.n = 1 long / -1 short
+      if (s.n === 0) {
+        s.n = C[i]! > C[i - 1]! ? 1 : -1
+        s.x = s.n > 0 ? L[i - 1]! : H[i - 1]!
+        s.y = s.n > 0 ? H[i]! : L[i]!
+        s.z = start
+        return s.x
+      }
+      let sar = s.x + s.z * (s.y - s.x)
+      if (s.n > 0) {
+        sar = Math.min(sar, L[i - 1]!, i > 1 ? L[i - 2]! : L[i - 1]!)
+        if (L[i]! < sar) {
+          s.n = -1
+          sar = s.y
+          s.y = L[i]!
+          s.z = start
+        } else if (H[i]! > s.y) {
+          s.y = H[i]!
+          s.z = Math.min(max, s.z + inc)
+        }
+      } else {
+        sar = Math.max(sar, H[i - 1]!, i > 1 ? H[i - 2]! : H[i - 1]!)
+        if (H[i]! > sar) {
+          s.n = 1
+          sar = s.y
+          s.y = H[i]!
+          s.z = start
+        } else if (L[i]! < s.y) {
+          s.y = L[i]!
+          s.z = Math.min(max, s.z + inc)
+        }
+      }
+      s.x = sar
+      return sar
+    },
+    // ── signals ──
+    crossover: (c) => {
+      const s = c.site()
+      const a = num(arg(c, 0, 'source1', 'a'), c.line)
+      const b = num(arg(c, 1, 'source2', 'b'), c.line)
+      const r = a > b && s.x <= s.y ? 1 : 0
+      s.x = a
+      s.y = b
+      return r
+    },
+    crossunder: (c) => {
+      const s = c.site()
+      const a = num(arg(c, 0, 'source1', 'a'), c.line)
+      const b = num(arg(c, 1, 'source2', 'b'), c.line)
+      const r = a < b && s.x >= s.y ? 1 : 0
+      s.x = a
+      s.y = b
+      return r
+    },
+    cross: (c) => {
+      const s = c.site()
+      const a = num(arg(c, 0, 'source1', 'a'), c.line)
+      const b = num(arg(c, 1, 'source2', 'b'), c.line)
+      const r = (a > b && s.x <= s.y) || (a < b && s.x >= s.y) ? 1 : 0
+      s.x = a
+      s.y = b
+      return r
+    },
+    rising: (c) => {
+      const l = lenArg(c, 1)
+      const w = win(c, src(c), l + 1)
+      if (!w) return 0
+      const cur = w[l]!
+      for (let k = 0; k < l; k++) if (!(cur > w[k]!)) return 0
+      return 1
+    },
+    falling: (c) => {
+      const l = lenArg(c, 1)
+      const w = win(c, src(c), l + 1)
+      if (!w) return 0
+      const cur = w[l]!
+      for (let k = 0; k < l; k++) if (!(cur < w[k]!)) return 0
+      return 1
+    },
+    barssince: (c) => {
+      const s = c.site()
+      if (truthy(arg(c, 0, 'condition') ?? 0)) {
+        s.done = true
+        s.n = 0
         return 0
       }
-      case 'marker': {
-        const cond = S(arg(0, 'condition') ?? 0, line)
-        const pos = N.position === 'above' ? 'aboveBar' : 'belowBar'
-        const text = typeof arg(1, 'text') === 'string' ? (arg(1, 'text') as string) : ''
-        const color = colorOf(N.color, line, tokenHex(pos === 'aboveBar' ? '--color-down' : '--color-up'))
-        const shapeIn = typeof N.shape === 'string' ? N.shape.toLowerCase() : pos === 'aboveBar' ? 'triangledown' : 'triangleup'
-        const shape = MARKER_SHAPES.find((x) => x === shapeIn)
-        if (!shape) throw new ScriptError(`unknown marker shape "${shapeIn}" — try ${MARKER_SHAPES.join(', ')}`, line)
-        const sizeIn = typeof N.size === 'string' ? N.size.toLowerCase() : 'small'
-        const size = MARKER_SIZES.find((x) => x === sizeIn)
-        if (!size) throw new ScriptError(`unknown marker size "${sizeIn}" — try ${MARKER_SIZES.join(', ')}`, line)
-        for (let i = 0; i < n; i++) if (truthy(cond[i]!)) res.markers.push({ i, text, color, position: pos, shape, size })
-        return 0
+      if (!s.done) return NaN
+      return ++s.n
+    },
+    valuewhen: (c) => {
+      const s = c.site()
+      const list = (s.list ??= [])
+      if (truthy(arg(c, 0, 'condition') ?? 0)) {
+        list.push(num(arg(c, 1, 'source') ?? NaN, c.line))
+        if (list.length > 1000) list.shift()
       }
-      case 'bgcolor': {
-        const cond = S(arg(0, 'condition') ?? 0, line)
-        const op = typeof N.opacity === 'number' ? N.opacity : 0.12
-        const color = withAlpha(colorOf(N.color ?? arg(1, 'color'), line, tokenHex('--color-series-1')), op)
-        let start = -1
-        for (let i = 0; i <= n; i++) {
-          const on = i < n && truthy(cond[i]!)
-          if (on && start < 0) start = i
-          if (!on && start >= 0) {
-            res.backgrounds.push({ from: start, to: i - 1, color })
-            start = -1
-          }
-        }
-        return 0
+      const occ = Math.round(optNum(c, 2, 0, 'occurrence'))
+      return list[list.length - 1 - occ] ?? NaN
+    },
+    pivothigh: (c) => {
+      const three = c.A.length >= 3 || 'source' in c.N
+      const v = three ? src(c) : H[c.i]!
+      const left = Math.round(num(arg(c, three ? 1 : 0, 'leftbars'), c.line))
+      const right = Math.round(num(arg(c, three ? 2 : 1, 'rightbars'), c.line))
+      const w = win(c, v, left + right + 1)
+      if (!w) return NaN
+      const p = w[left]!
+      for (let k = 0; k < w.length; k++) if (k !== left && (k < left ? w[k]! > p : w[k]! >= p)) return NaN
+      return p
+    },
+    pivotlow: (c) => {
+      const three = c.A.length >= 3 || 'source' in c.N
+      const v = three ? src(c) : L[c.i]!
+      const left = Math.round(num(arg(c, three ? 1 : 0, 'leftbars'), c.line))
+      const right = Math.round(num(arg(c, three ? 2 : 1, 'rightbars'), c.line))
+      const w = win(c, v, left + right + 1)
+      if (!w) return NaN
+      const p = w[left]!
+      for (let k = 0; k < w.length; k++) if (k !== left && (k < left ? w[k]! < p : w[k]! <= p)) return NaN
+      return p
+    },
+    vwap: (c) => {
+      if (!c.A.length && !('source' in c.N)) return vwapArr()[c.i]!
+      const s = c.site()
+      const v = src(c)
+      const dk = days()
+      if (!s.done || dk[c.i] !== s.z) {
+        s.done = true
+        s.z = dk[c.i]!
+        s.x = 0
+        s.y = 0
       }
-      case 'alpha':
-        return withAlpha(colorOf(arg(0, 'color'), line, tokenHex('--color-fg')), num(arg(1, 'opacity'), line, 'the opacity'))
-    }
-
-    switch (name) {
-      // ── averages ──
-      case 'sma':
-        return sma(src(), L1())
-      case 'ema':
-        return ema(src(), L1())
-      case 'rma':
-        return rma(src(), L1())
-      case 'wma':
-        return wma(src(), L1())
-      case 'vwma': {
-        const l = L1()
-        const s = src()
-        return map2(sma(map2(s, V, (a, b) => a * b), l), sma(V, l), (a, b) => (b === 0 ? NaN : a / b))
-      }
-      case 'hma': {
-        const l = L1()
-        const s = src()
-        return wma(
-          map2(wma(s, Math.max(1, Math.floor(l / 2))), wma(s, l), (a, b) => 2 * a - b),
-          Math.max(1, Math.round(Math.sqrt(l))),
-        )
-      }
-      // ── bands / ranges ──
-      case 'stdev':
-        return stdev(src(), L1())
-      case 'bb_upper':
-      case 'bb_lower': {
-        const l = L1()
-        const m = typeof arg(2, 'mult') === 'number' ? (arg(2, 'mult') as number) : 2
-        const s = src()
-        const sign = name === 'bb_upper' ? 1 : -1
-        return map2(sma(s, l), stdev(s, l), (a, b) => a + sign * m * b)
-      }
-      case 'highest':
-        return rolling(src(), L1(), (w) => Math.max(...w))
-      case 'lowest':
-        return rolling(src(), L1(), (w) => Math.min(...w))
-      case 'sum':
-        return rolling(src(), L1(), (w) => w.reduce((a, b) => a + b, 0))
-      case 'change': {
-        const k = arg(1, 'length') == null ? 1 : len(arg(1, 'length'), line)
-        const s = src()
-        return map2(s, shift(s, k), (a, b) => a - b)
-      }
-      case 'roc': {
-        const k = arg(1, 'length') == null ? 1 : len(arg(1, 'length'), line)
-        const s = src()
-        return map2(s, shift(s, k), (a, b) => (b === 0 ? NaN : ((a - b) / b) * 100))
-      }
-      case 'cum': {
-        const s = src()
-        const out = new Float64Array(n)
-        let acc = 0
-        for (let i = 0; i < n; i++) {
-          if (!Number.isNaN(s[i]!)) acc += s[i]!
-          out[i] = acc
-        }
-        return out
-      }
-      // ── momentum ──
-      case 'rsi': {
-        const l = L1()
-        const s = src()
-        const d = map2(s, shift(s, 1), (a, b) => a - b)
-        const up = rma(map1(d, (x) => Math.max(0, x)), l)
-        const dn = rma(map1(d, (x) => Math.max(0, -x)), l)
-        return map2(up, dn, (u, w) => (w === 0 ? 100 : 100 - 100 / (1 + u / w)))
-      }
-      case 'macd': {
-        const s = src()
-        const f = arg(1, 'fast') == null ? 12 : len(arg(1, 'fast'), line)
-        const sl = arg(2, 'slow') == null ? 26 : len(arg(2, 'slow'), line)
-        return map2(ema(s, f), ema(s, sl), (a, b) => a - b)
-      }
-      case 'tr':
-      case 'atr': {
-        const prevC = shift(C, 1)
-        const tr = new Float64Array(n)
-        for (let i = 0; i < n; i++) {
-          const pc = prevC[i]!
-          tr[i] = Number.isNaN(pc) ? H[i]! - L[i]! : Math.max(H[i]! - L[i]!, Math.abs(H[i]! - pc), Math.abs(L[i]! - pc))
-        }
-        return name === 'tr' ? tr : rma(tr, len(arg(0, 'length') ?? 14, line))
-      }
-      case 'cci': {
-        const l = L1()
-        const s = src()
-        const m = sma(s, l)
-        const md = rolling(s, l, (w) => {
-          const mean = w.reduce((a, b) => a + b, 0) / w.length
-          return w.reduce((a, b) => a + Math.abs(b - mean), 0) / w.length
-        })
-        const out = new Float64Array(n)
-        for (let i = 0; i < n; i++) out[i] = md[i] === 0 || Number.isNaN(md[i]!) ? NaN : (s[i]! - m[i]!) / (0.015 * md[i]!)
-        return out
-      }
-      case 'stoch': {
-        const l = len(arg(0, 'length') ?? 14, line)
-        const hh = rolling(H, l, (w) => Math.max(...w))
-        const ll = rolling(L, l, (w) => Math.min(...w))
-        const out = new Float64Array(n)
-        for (let i = 0; i < n; i++) {
-          const r = hh[i]! - ll[i]!
-          out[i] = Number.isNaN(r) || r === 0 ? NaN : ((C[i]! - ll[i]!) / r) * 100
-        }
-        return out
-      }
-      case 'obv': {
-        const out = new Float64Array(n)
-        let acc = 0
-        for (let i = 0; i < n; i++) {
-          if (i > 0 && !Number.isNaN(V[i]!)) acc += C[i]! > C[i - 1]! ? V[i]! : C[i]! < C[i - 1]! ? -V[i]! : 0
-          out[i] = acc
-        }
-        return out
-      }
-      case 'vwap': {
-        // anchored to each New York session day
-        const out = nanArr(n)
-        let day = ''
-        let pv = 0
-        let vv = 0
-        for (let i = 0; i < n; i++) {
-          const d = ET_DAY.format(new Date(T[i]!))
-          if (d !== day) {
-            day = d
-            pv = 0
-            vv = 0
-          }
-          const tp = (H[i]! + L[i]! + C[i]!) / 3
-          const vol = Number.isNaN(V[i]!) ? 0 : V[i]!
-          pv += tp * vol
-          vv += vol
-          out[i] = vv > 0 ? pv / vv : tp
-        }
-        return out
-      }
-      // ── signals ──
-      case 'crossover':
-      case 'crossunder':
-      case 'cross': {
-        const a = S(arg(0, 'a') ?? NaN, line)
-        const b = S(arg(1, 'b') ?? NaN, line)
-        const out = new Float64Array(n)
-        for (let i = 1; i < n; i++) {
-          const up = a[i - 1]! <= b[i - 1]! && a[i]! > b[i]!
-          const dn = a[i - 1]! >= b[i - 1]! && a[i]! < b[i]!
-          out[i] = (name === 'crossover' ? up : name === 'crossunder' ? dn : up || dn) ? 1 : 0
-        }
-        return out
-      }
-      case 'rising':
-      case 'falling': {
-        const l = L1()
-        const s = src()
-        const out = new Float64Array(n)
-        for (let i = l; i < n; i++) {
-          let ok = true
-          for (let j = 0; j < l && ok; j++) ok = name === 'rising' ? s[i - j]! > s[i - j - 1]! : s[i - j]! < s[i - j - 1]!
-          out[i] = ok ? 1 : 0
-        }
-        return out
-      }
-      case 'barssince': {
-        const c = S(arg(0, 'condition') ?? 0, line)
-        const out = nanArr(n)
-        let last = -1
-        for (let i = 0; i < n; i++) {
-          if (truthy(c[i]!)) last = i
-          if (last >= 0) out[i] = i - last
-        }
-        return out
-      }
-      case 'valuewhen': {
-        const c = S(arg(0, 'condition') ?? 0, line)
-        const s = S(arg(1, 'source') ?? C, line)
-        const out = nanArr(n)
-        let held = NaN
-        for (let i = 0; i < n; i++) {
-          if (truthy(c[i]!)) held = s[i]!
-          out[i] = held
-        }
-        return out
-      }
-      // ── math ──
-      case 'abs':
-      case 'sqrt':
-      case 'log':
-      case 'exp':
-      case 'sign':
-      case 'floor':
-      case 'ceil': {
-        const f = Math[name]
-        const x = A[0]
-        if (typeof x === 'number') return f(x)
-        return map1(S(x ?? NaN, line), f)
-      }
-      case 'round': {
-        const d = typeof A[1] === 'number' ? Math.max(0, Math.round(A[1])) : 0
-        const p = Math.pow(10, d)
-        const x = A[0]
-        if (typeof x === 'number') return Math.round(x * p) / p
-        return map1(S(x ?? NaN, line), (v) => Math.round(v * p) / p)
-      }
-      case 'pow':
-        return bin('^', A[0] ?? NaN, A[1] ?? NaN, line)
-      case 'min':
-      case 'max':
-      case 'avg': {
-        if (A.length < 2) throw new ScriptError(`${name}() needs at least two values`, line)
-        if (A.every((x) => typeof x === 'number')) {
-          const xs = A as number[]
-          return name === 'min' ? Math.min(...xs) : name === 'max' ? Math.max(...xs) : xs.reduce((a, b) => a + b, 0) / xs.length
-        }
-        const ss = A.map((x) => S(x, line))
-        const out = new Float64Array(n)
-        for (let i = 0; i < n; i++) {
-          const xs = ss.map((s) => s[i]!)
-          out[i] = xs.some(Number.isNaN)
-            ? NaN
-            : name === 'min'
-              ? Math.min(...xs)
-              : name === 'max'
-                ? Math.max(...xs)
-                : xs.reduce((a, b) => a + b, 0) / xs.length
-        }
-        return out
-      }
-      case 'nz': {
-        const r = typeof A[1] === 'number' ? A[1] : 0
-        const x = A[0]
-        if (typeof x === 'number') return Number.isNaN(x) ? r : x
-        const s = S(x ?? NaN, line)
-        return Float64Array.from(s, (v) => (Number.isNaN(v) ? r : v))
-      }
-      case 'na': {
-        const x = A[0]
-        if (typeof x === 'number') return Number.isNaN(x) ? 1 : 0
-        return Float64Array.from(S(x ?? NaN, line), (v) => (Number.isNaN(v) ? 1 : 0))
-      }
-      case 'fixnan': {
-        const s = S(A[0] ?? NaN, line)
-        const out = new Float64Array(n)
-        let held = NaN
-        for (let i = 0; i < n; i++) {
-          if (!Number.isNaN(s[i]!)) held = s[i]!
-          out[i] = held
-        }
-        return out
-      }
-    }
-    throw new ScriptError(`unknown function "${node.name}"`, line)
+      const vol = isNa(V[c.i]!) ? 0 : V[c.i]!
+      s.x += v * vol
+      s.y += vol
+      return s.y > 0 ? s.x / s.y : v
+    },
+    obv: (c) => obvArr()[c.i]!,
   }
 
-  for (const st of prog) {
-    const v = evalNode(st.x)
-    if (st.k === 'assign') env.set(st.name, v)
+  /** Settled-call shortcuts: the held value, or undefined before the first evaluation. */
+  const FAST: Record<string, (s: St, i: number) => Val | undefined> = {}
+  const heldInput = (s: St, i: number): Val | undefined => {
+    const held = s.any as { v: Val } | { src: string } | null
+    return held ? ('src' in held ? seriesAt(held.src, i) : held.v) : undefined
+  }
+  for (const k of Object.keys(BUILTINS)) if (k === 'input' || k.startsWith('input.')) FAST[k] = heldInput
+  FAST.indicator = FAST.study = FAST.strategy = (s) => (s.done ? NaN : undefined)
+  FAST.hline = (s) => (s.done ? (s.any as HlineRef) : undefined)
+
+  // ── run ──
+  const top = compileBlock({ scope: gscope, fn: null }, prog.stmts, false, true)
+  const frame: Frame = { i: 0, L: [], S: [], ctl: 0 }
+  for (let i = 0; i < N; i++) {
+    loopBudget = 0
+    depth = 0
+    frame.i = i
+    frame.ctl = 0
+    top(frame)
+  }
+
+  // ── finish ──
+  res.plots.forEach((p, k) => {
+    const off = plotOffsets[k] ?? 0
+    if (off) {
+      const vs = new Float64Array(N).fill(NaN)
+      const cs: (string | null)[] = new Array(N).fill(null)
+      for (let i = 0; i < N; i++) {
+        const j = i + off
+        if (j >= 0 && j < N) {
+          vs[j] = p.values[i]!
+          cs[j] = p.colors[i]!
+        }
+      }
+      p.values = vs
+      p.colors = cs
+    }
+    if (plotColorGiven[k] && N > 0 && p.colors.every((x) => x === null)) p.hidden = true
+  })
+  for (const b of bgSites) {
+    let start = -1
+    let cur: string | null = null
+    for (let i = 0; i <= N; i++) {
+      const j = i - b.offset
+      const col = i < N && j >= 0 && j < N ? b.colors[j]! : null
+      if (col !== cur) {
+        if (cur && start >= 0) res.backgrounds.push({ from: start, to: i - 1, color: cur })
+        cur = col
+        start = i
+      }
+    }
   }
   return res
 }
-
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' })

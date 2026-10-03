@@ -419,6 +419,26 @@
   --color-vt-path-gold: #ffc933;
   --color-vt-path-shine: #fff8dc;
   --color-vt-path-rim: #05070b;
+  /* PINE SCRIPT's named colours (pages/vela/script — CB Script runs pasted
+     TradingView scripts): color.aqua … color.yellow, TradingView's own values,
+     so a pasted script draws in the colours its author picked. Not for UI. */
+  --color-pine-aqua: #00bcd4;
+  --color-pine-black: #363a45;
+  --color-pine-blue: #2196f3;
+  --color-pine-fuchsia: #e040fb;
+  --color-pine-gray: #787b86;
+  --color-pine-green: #4caf50;
+  --color-pine-lime: #00e676;
+  --color-pine-maroon: #880e4f;
+  --color-pine-navy: #311b92;
+  --color-pine-olive: #808000;
+  --color-pine-orange: #ff9800;
+  --color-pine-purple: #9c27b0;
+  --color-pine-red: #f23645;
+  --color-pine-silver: #b2b5be;
+  --color-pine-teal: #089981;
+  --color-pine-white: #ffffff;
+  --color-pine-yellow: #fdd835;
 
   /* Voltick poster display sizes — the econ-calendar Discord poster is a fixed
      1280×720 canvas, and these three are off the app scale on purpose. */

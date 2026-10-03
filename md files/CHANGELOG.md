@@ -25503,3 +25503,43 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
     - Phone: ⋮ → Scripts opens the panel, and Add to chart works.
   - No console errors.
 - **Files in `generated/`:** `2026-10-03-vela-cb-script.png`, `2026-10-03-vela-cb-script-error.png` (mock data)
+
+## 2026-10-03 - v3 Vela: CB Script runs pasted TradingView Pine scripts
+- **Why:** pasting TradingView indicators into the Scripts panel failed (the Ripster EMA Clouds v4 script and one other). CB Script only had its own small syntax, and it ran every bar at once, which can't support Pine's `var`, recursive `x := nz(x[1]) …` or `if` blocks.
+- **What changed:**
+  - The language now uses Pine's grammar: v4 / v5 / v6 indicators paste in unchanged. The CB Script spellings from the first version still work.
+  - The runtime executes **per bar, the way Pine does**: `var`, history `x[1]`, `if` / `else if`, `for … to … by`, `while`, `switch`, user functions `f(x) =>`, `[a, b] = …` tuples, and per-call state for every `ta.*` built-in.
+  - It is still a parsed interpreter (compiled to closures, no `eval`), so the production CSP is unchanged.
+- **Supported:**
+  - Inputs: `input()` in v4 form (any argument order, `type=input.*`) and `input.int / float / bool / string / source / color / timeframe / session / symbol / price / time`. Groups, inline rows and tooltips go to Vela's settings dialog.
+  - Declarations: `indicator / study / strategy`.
+  - Outputs:
+    - `plot`, with per-bar colours, `offset`, `display.none`, and `linewidth=0` hiding the plot.
+    - `plotshape / plotchar / plotarrow`, `hline`.
+    - `fill` between plots or hlines, with per-bar colours and the gradient overload.
+    - `bgcolor`, `barcolor`.
+  - `ta.*`: sma ema rma wma vwma hma alma swma, rsi macd stoch cci atr tr mfi wpr cmo tsi, bb kc dmi supertrend sar, highest lowest (+bars) sum range change mom roc cum, stdev variance dev median percentrank linreg correlation, crossover crossunder cross rising falling barssince valuewhen pivothigh pivotlow, vwap obv accdist.
+  - Also: `math.*`, `str.tostring / str.format`, `color.new / color.rgb / color.from_gradient`, `time(tf, session)`, `timestamp`, New York `hour / minute / dayofweek …`, `barstate.* / syminfo.* / timeframe.*`, and Pine v2/v3 bare names (`lime`, `style=histogram`, `type=bool`).
+- **Not yet:**
+  - These stop the script with a clear message: `request.security`, arrays / maps / matrices, libraries.
+  - These are skipped with a note on the status line, so the rest still draws: drawings (`label.new / line.new / box.new / table.new`) and strategy orders.
+- **Colours:** Pine's palette was added to `tokens.css` as `--color-pine-*`, using TradingView's values. Bare colour names map to Pine's palette in a Pine script and to the app's tokens in CB Script.
+- **Panel:**
+  - Pasting over the whole editor creates a **new** script named from its `indicator()` / `study()` title, so the script that was showing is not overwritten.
+  - Tab inserts 4 spaces (Pine's indent).
+  - The Reference section was rewritten.
+  - Skipped features are listed after Save / Add.
+- **Engine:**
+  - The dry run at prepare now uses one bar, so inputs and the title register.
+  - Live re-runs are throttled to at least 200ms, or twice the last run's cost if that is longer.
+  - Engine warnings now go to Vela as well.
+  - Background spans now end at the next bar, so the last bar is tinted too.
+- **Speed (node, 5,000 bars):** MACD 12ms, Supertrend 31ms, RSI 55ms, Ripster EMA Clouds 68ms per full run.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/script/`: `lang.ts` and `runtime.ts` rewritten; `engine.ts` and `panel.ts` updated.
+  - Also changed: `design/tokens.css`, `pages/vela/vela.css` (tab size) and `pages/Vela.tsx` (comment).
+- **Checks:**
+  - No new `tsc` errors. `check:theme` is clean. The build passes; the Vela route is 38.6kb brotli against a 57.7kb budget. The index css was already over budget and the Pine tokens add 0.2kb to it.
+  - Node bench, all running: Ripster EMA Clouds (v4), KivancOzbilgic Supertrend (v4), TradingView's MACD and RSI (v5, including switch, gradient fills and divergence pivots), LazyBear Squeeze Momentum (v3 style), a previous-day-levels script (var / time("D") / session / switch), and the three CB examples.
+  - Headless Chromium against the mock data: all of those pasted, added and drawn, and the settings dialog shows source / colour / grouped inputs. No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-pine-ripster.png`, `2026-10-03-vela-pine-scripts.png`, `2026-10-03-vela-pine-settings.png` (mock data)
