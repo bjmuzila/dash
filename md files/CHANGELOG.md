@@ -25388,3 +25388,28 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - Desktop 2×2: no topbar button. Hovering the CB Walls row shows the drop icon, which toggles the strip.
   - No console errors.
 - **File in `generated/`:** `2026-10-03-vela-walls-opacity.png` (mock data)
+
+## 2026-10-03 - v3 Vela: Voltick Path (bubbles) + Path Ribbon
+
+- **Two new studies on Vela's Indicators list** (Built-in): **Voltick Path** and **Voltick Path Ribbon**. Both are Voltick's trail shapes, transcribed from the Voltick repo at 2026.10.02.5 (`web/src/HeatChart.jsx` NodeTrails "path" / "pathband" branches, `web/src/trailruns.js`, `trailheat.js`, `heatscale.js`). Every constant and rule is Voltick's.
+  - **Path:** one bubble per level per candle, at the strike that level held then. The order is ★ Volt (hotter gold, soft halo, lit highlight, a size up), ↘ Reversal, ◆ Coil (a diamond, the one nearest that candle's close), then ↯ Surge, with one level per strike.
+  - Path bubble size is the level's size against its own day's range. Zoomed out, `thinPathLanes` picks which candles draw, and strikes that are too close shrink together (`pathGapFit`).
+  - **Path Ribbon:** the same rows as bands broken at every strike change. Thickness is size, brightness is growth, and each stretch gets a "▲32% since 10:45 am" chip and a dot on the live end. It draws Volt / Surge / Reversal only (no Coil, as on Voltick), and a peer level is cut where it runs onto the Volt's strike.
+  - Inputs: GEX map (OI + Vol / Vol only), Node levels (boldness 0–100%, default 15, where 0 hides), Calm chart, and Sessions (1–5, default 1).
+  - **Voltick Path is put on every chart once** (desktop and phone, own seeded key `<doc>-vtpath`), like CB Walls. The legend ✕ removes it for good. Path Ribbon is added from Indicators.
+- **Data:** CB Edge has no Voltick history route, so each per-minute GEX ladder column is turned into one Voltick frame.
+  - Source: `/api/snapshots/option-strike-gex-history`, the date branch with `expiryFallback=1`, one request per session date (the chart's newest weekdays), `top=30`.
+  - Each frame takes its levels from `voltickMarks()` (the CB Edge port of Voltick `marksOf`, `always` on), with `sz` = |GEX| at the level's strike on the chosen map (Voltick history.js `sizesOf`).
+  - The fold onto candles is Voltick's `pathRows` (last frame per candle, size hold, `pathFill`).
+  - Today is re-read every 60s while live, in session and visible; settled days are read once.
+  - ES/NQ use SPX/NDX shifted by the session basis, and columns without a plausible basis are dropped.
+- **Rendering:** each study is a native indicator whose type id equals a Vela **renderer layer** (`registerRendererLayer`). The rows go through `ctx.pushData`, and the layer repaints each frame, clipped to the plot. Sizes, the ribbon size law, growth facts and lane thinning are memoised on the rows, as on Voltick.
+- New files: `cbedge-v3/src/pages/vela/vtPath/trailruns.ts`, `vtPathData.ts`, `vtPathLayer.ts`, `vtPathIndicator.ts`.
+  - `pages/Vela.tsx`: registers both studies and seeds Voltick Path; `seedWalls` became `seedOnce(type)`.
+  - `pages/vela/wallsIndicator.ts`: exports `loadBasis`.
+  - `design/tokens.css`: adds `--color-vt-path-gold` (#ffc933), `--color-vt-path-shine` (#fff8dc) and `--color-vt-path-rim` (#05070b), Voltick's VOLT_GOLD / highlight / RIM. The level colours were already tokens and match Voltick exactly.
+- **Checks.**
+  - Code: no new `tsc` errors (the same 5 existing ones), and `check:theme` is clean. The Vela route chunk is 17.1kb brotli, under its 57.7kb budget. The entry/css/react/initial overages were already there.
+  - Headless Chromium on a mock ladder: desktop SPX 5m shows Path bubbles (gold Volt with halo, pink Reversal, blue Coil diamonds, Surge circles); swapping to Path Ribbon draws bands, ▲/▼ chips and live dots; the phone three-stack has Path on all three charts; no console errors.
+  - Not yet checked against the live recorder or on a real phone.
+- **Files in `generated/`:** `2026-10-03-vela-voltick-path.png`, `2026-10-03-vela-voltick-path-ribbon.png` (mock data)

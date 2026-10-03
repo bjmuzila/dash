@@ -413,6 +413,12 @@
   --color-vt-coil: #2f6bff;
   --color-vt-coil-ink: #e7ece9;
   --color-vt-premarket: #8adb57;
+  /* Voltick PATH (pages/vela/vtPath — Voltick HeatChart.jsx, the Path shape):
+     the Volt bead's hotter gold and its halo, the lit highlight on it, and the
+     dark rim every bead wears so it separates from the candles. */
+  --color-vt-path-gold: #ffc933;
+  --color-vt-path-shine: #fff8dc;
+  --color-vt-path-rim: #05070b;
 
   /* Voltick poster display sizes — the econ-calendar Discord poster is a fixed
      1280×720 canvas, and these three are off the app scale on purpose. */

@@ -182,7 +182,8 @@ function loadWalls(symbol: string, s: Settings, fresh: boolean): Promise<DaySlic
   return p
 }
 
-async function loadBasis(fut: 'ES' | 'NQ'): Promise<BasisModel> {
+/** The futures pair's basis model (shared with pages/vela/vtPath). */
+export async function loadBasis(fut: 'ES' | 'NQ'): Promise<BasisModel> {
   const pair = futuresPairFor(fut === 'NQ' ? 'NDX' : '$SPX')
   const url = pair?.basisUrl ?? BASIS_URL
   const max = pair?.maxBasis ?? ES_MAX_BASIS

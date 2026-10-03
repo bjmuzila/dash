@@ -10,6 +10,7 @@ import { CbEdgeProvider, DEFAULT_HISTORY_URL, PROVIDER_NAME } from '@/pages/vela
 import { WALLS_TYPE, registerCbWalls } from '@/pages/vela/wallsIndicator'
 import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot'
 import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
+import { PATH_TYPE, registerVtPath } from '@/pages/vela/vtPath/vtPathIndicator'
 import '@/pages/vela/vela.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,6 +74,16 @@ import '@/pages/vela/vela.css'
 // pages/vela/wallsOpacity.ts. It docks a strip above the bottom bar; one value
 // for every chart, desktop and phone.
 //
+// ── Voltick Path + Path Ribbon ───────────────────────────────────────────────
+// pages/vela/vtPath/ — Voltick's two trail shapes, transcribed from its
+// HeatChart.jsx / trailruns.js: one bubble per level per candle (★ Volt,
+// ↘ Reversal, ◆ Coil, ↯ Surge) at the strike that level held, sized by how big
+// it was; and the Ribbon, the same rows as bands. Read off the per-minute GEX
+// ladder (the GEX Candles history). Two studies on Vela's Indicators list
+// (Built-in → "Voltick Path…", "Voltick Path Ribbon…"); Voltick Path is put on
+// every chart once, exactly like CB Walls (`<key>-vtpath`), and the legend ✕
+// takes it off for good.
+//
 // ── Our CSS over Vela's ──────────────────────────────────────────────────────
 // pages/vela/vela.css: the active chart in a grid gets a faint 1px grey ring
 // instead of Vela's 2px bright one, and the opacity strip's look.
@@ -104,6 +115,8 @@ const DESKTOP_KEY = 'cb-v3-vela'
 const PHONE_KEY = 'cb-v3-vela-m'
 /** Cell ids that have already been given CB Walls once, per saved document. */
 const seededKey = (storageKey: string) => `${storageKey}-walls`
+/** …and Voltick Path. */
+const pathSeededKey = (storageKey: string) => `${storageKey}-vtpath`
 /** The phone's default grid: 3 rows × 1 column — three charts stacked. */
 const PHONE_LAYOUT = 'g3x1'
 /** Set once the phone document has been moved off the old single-chart pin. */
@@ -112,6 +125,7 @@ const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
 // Before any workspace exists: Vela reads its native-indicator and widget-action
 // registries when a workspace is BUILT, so both registrations go here.
 registerCbWalls()
+registerVtPath()
 registerCopyScreenshot()
 registerWallsOpacity()
 
@@ -132,15 +146,15 @@ function writeSeeded(key: string, ids: Set<string>): void {
   }
 }
 
-/** Give each cell that has never had it the walls study, once. */
-function seedWalls(ws: VelaWorkspace, ids: string[], key: string): void {
+/** Give each cell that has never had it this study (`type`), once. */
+function seedOnce(ws: VelaWorkspace, ids: string[], key: string, type: string): void {
   const seeded = readSeeded(key)
   let changed = false
   for (const id of ids) {
     if (seeded.has(id)) continue
     const cell = ws.cell(id)
     if (!cell) continue
-    cell.addNative(WALLS_TYPE)
+    cell.addNative(type)
     seeded.add(id)
     changed = true
   }
@@ -249,10 +263,16 @@ export default function Vela({ phone = false }: VelaProps) {
     // seeding below, so the charts it adds are among the cells that get them.
     if (onPhone) upgradePhoneLayout(ws)
 
-    // CB Walls: the cells that exist now, and every cell a layout change mints.
+    // CB Walls and Voltick Path: the cells that exist now, and every cell a
+    // layout change mints.
     const walls = seededKey(storageKey)
-    seedWalls(ws, ws.cells().map((c) => c.id), walls)
-    const offCreated = ws.on('cell:created', ({ id }) => seedWalls(ws, [id], walls))
+    const vtPath = pathSeededKey(storageKey)
+    const seed = (ids: string[]) => {
+      seedOnce(ws, ids, walls, WALLS_TYPE)
+      seedOnce(ws, ids, vtPath, PATH_TYPE)
+    }
+    seed(ws.cells().map((c) => c.id))
+    const offCreated = ws.on('cell:created', ({ id }) => seed([id]))
 
     return () => {
       offState()
