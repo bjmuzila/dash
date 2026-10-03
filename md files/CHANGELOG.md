@@ -25359,3 +25359,17 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - On the phone, ⋮ → Screenshot puts `image/png` on the clipboard.
   - Not yet tried on a real iPhone/Android.
 - **File in `generated/`:** `2026-10-03-vela-mobile.png` (mock data)
+
+## 2026-10-03 - v3 Vela: three stacked charts on the phone (/m/vela)
+
+- **Three charts by default.** `cbedge-v3/src/pages/Vela.tsx`: phone mode now opens with `layout: 'g3x1'` (3 rows × 1 column) instead of the single-chart pin (`layout: false`). Tap a chart to make it active; the bottom bar's symbol, timeframe and indicators then act on that chart. ⋮ → Layout is back in Vela's phone drawer: its grid picker (any rows × cols up to 4×4) plus the sync switches.
+- **Existing phone documents.** A `cb-v3-vela-m` document saved while the tab was pinned to one chart would otherwise boot as one chart, because Vela's saved layout wins over the option. `upgradePhoneLayout()` moves it to the three-stack once, and the `cb-v3-vela-m-grid` flag marks that as done. Any layout picked after that is kept. The upgrade runs before the CB Walls seeding, so the two new charts get the walls like any other cell.
+- Comment and doc updates: `src/mobile/pages/MVela.tsx`, `src/mobile/mobileNav.ts`, and the `/m/vela` row in `cbedge-v3/AGENTS.md`.
+- **Checks.** No new `tsc` errors (the same 5 existing ones), and `check:theme` is clean. Headless Chromium, iPhone emulation at 390×844:
+  - A fresh document gets 3 charts at 230px each, each with `cbedge-walls` and no duplicates.
+  - ⋮ shows "Layout 1 × 3".
+  - A saved single-chart document is upgraded to 3 once.
+  - Picking a single chart afterwards survives a reload.
+  - No console errors.
+  - Not yet tried on a real phone.
+- **File in `generated/`:** `2026-10-03-vela-mobile-3-charts.png` (mock data)

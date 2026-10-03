@@ -72,7 +72,7 @@ export const MOBILE_TABS: MobileTab[] = [
   // filters and the tracked store. See src/mobile/pages/MWhales.tsx.
   { id: 'whales', path: '/m/whales', label: 'Whale', title: 'Whale Archive', icon: '🐋' },
   // Vela (2026-10-03) — LuxAlgo's chart workspace on our tape, with CB Walls.
-  // NOT a second page: pages/Vela.tsx with `phone` (one chart, Vela's own touch
+  // NOT a second page: pages/Vela.tsx with `phone` (3 stacked charts, Vela's own touch
   // chrome, its own saved document). See src/mobile/pages/MVela.tsx. ⛵ rather
   // than the rail's old 🕯️, which the SPX tab above already wears.
   { id: 'vela', path: '/m/vela', label: 'Vela', title: 'Vela Charts', icon: '⛵' },

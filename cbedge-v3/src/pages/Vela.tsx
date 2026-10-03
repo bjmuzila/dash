@@ -74,18 +74,29 @@ import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot
 //
 // ── The phone build — /m/vela ────────────────────────────────────────────────
 // mobile/pages/MVela.tsx renders THIS page with `phone`: Vela's own touch
-// chrome (bottom bar, full-screen pickers, pinch/drag), ONE chart (no layout
-// picker on 390px), and its OWN saved document under `cb-v3-vela-m` — so a
-// four-chart desktop grid never lands on a phone, and the phone never collapses
-// the desktop's grid back to one. The page-symbol sync is desktop-only: the app
-// toolbar draws no ticker picker on /m/*, and a symbol picked on the phone
-// should not move the board's.
+// chrome (bottom bar, full-screen pickers, pinch/drag), and its OWN saved
+// document under `cb-v3-vela-m` — so a desktop grid never lands on a phone, and
+// the phone never rearranges the desktop's. The page-symbol sync is
+// desktop-only: the app toolbar draws no ticker picker on /m/*, and a symbol
+// picked on the phone should not move the board's.
+//
+// Layout on the phone: THREE charts stacked (`g3x1`) by default. Tap a chart to
+// make it the active one — the bottom bar's symbol / timeframe / indicators act
+// on that chart. ⋮ → Layout is Vela's grid picker (any rows × cols up to 4×4,
+// plus the sync switches) for one, two, or anything else. A phone document
+// saved back when this tab was pinned to one chart is moved to the three-stack
+// ONCE (`cb-v3-vela-m-grid` marks it done); a layout picked after that is the
+// user's and is left alone.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DESKTOP_KEY = 'cb-v3-vela'
 const PHONE_KEY = 'cb-v3-vela-m'
 /** Cell ids that have already been given CB Walls once, per saved document. */
 const seededKey = (storageKey: string) => `${storageKey}-walls`
+/** The phone's default grid: 3 rows × 1 column — three charts stacked. */
+const PHONE_LAYOUT = 'g3x1'
+/** Set once the phone document has been moved off the old single-chart pin. */
+const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
 
 // Before any workspace exists: Vela reads its native-indicator and widget-action
 // registries when a workspace is BUILT, so both registrations go here.
@@ -124,6 +135,19 @@ function seedWalls(ws: VelaWorkspace, ids: string[], key: string): void {
   if (changed) writeSeeded(key, seeded)
 }
 
+/** A phone document saved while /m/vela was pinned to one chart boots as one
+ *  chart (Vela's saved layout beats the option). Move it to the three-stack the
+ *  first time only; after that the layout is whatever ⋮ → Layout last picked. */
+function upgradePhoneLayout(ws: VelaWorkspace): void {
+  try {
+    if (localStorage.getItem(PHONE_GRID_KEY)) return
+    localStorage.setItem(PHONE_GRID_KEY, '1')
+  } catch {
+    return // no storage: no saved document to upgrade either
+  }
+  if (ws.layout.id === '1') ws.setLayout(PHONE_LAYOUT)
+}
+
 // Warm the default chart's history the moment this route's chunk evaluates, in
 // parallel with the library itself (non-negotiable 3). The provider asks for the
 // identical URL, so api.ts hands it the response already in flight.
@@ -152,7 +176,7 @@ function bareTicker(symbol: string | undefined): string {
 const FUTURES_TICKERS = new Set(['ES', 'NQ', '/ES', '/NQ', 'ES1!', 'NQ1!'])
 
 export interface VelaProps {
-  /** The phone build (/m/vela): touch chrome, one chart, its own saved document. */
+  /** The phone build (/m/vela): touch chrome, three stacked charts, its own saved document. */
   phone?: boolean
 }
 
@@ -181,9 +205,9 @@ export default function Vela({ phone = false }: VelaProps) {
     const onPhone = phoneRef.current
     const storageKey = onPhone ? PHONE_KEY : DESKTOP_KEY
     const ws = new VelaWorkspace(host, {
-      // Phone: single-chart mode and Vela's touch chrome, whatever the width
+      // Phone: three stacked charts and Vela's touch chrome, whatever the width
       // says — the tab can be opened on a laptop and should still be the phone.
-      ...(onPhone ? { layout: false as const, layoutMode: 'mobile' as const } : { layout: '1' }),
+      ...(onPhone ? { layout: PHONE_LAYOUT, layoutMode: 'mobile' as const } : { layout: '1' }),
       symbol: `${PROVIDER_NAME}:${seedSymbol.current}`,
       timeframe: '5',
       live: true,
@@ -208,6 +232,10 @@ export default function Vela({ phone = false }: VelaProps) {
     }
     const offState = ws.on('state:changed', reflect)
     const offActive = ws.on('cell:active', reflect)
+
+    // The phone's one-time move off the old single-chart pin — BEFORE the walls
+    // seeding below, so the charts it adds are among the cells that get them.
+    if (onPhone) upgradePhoneLayout(ws)
 
     // CB Walls: the cells that exist now, and every cell a layout change mints.
     const walls = seededKey(storageKey)

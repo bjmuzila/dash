@@ -5,7 +5,8 @@ import { MobileShell } from '../MobileShell'
 //
 // It IS pages/Vela.tsx, rendered with `phone`. That prop pins Vela to its own
 // touch chrome (one bottom bar, full-screen symbol / timeframe pickers, pinch
-// and drag on the plot), to ONE chart, and to its own saved document
+// and drag on the plot), to three stacked charts by default (⋮ → Layout for
+// any other grid), and to its own saved document
 // (`cb-v3-vela-m`), while the data provider, the CB Walls study and the
 // clipboard camera stay the page's own. A fix to the page is a fix to the phone.
 //

@@ -189,7 +189,7 @@ and the reason is below the table:
 | `/m/econ` | `board/econCalendar/EconCalendarCard` |
 | `/m/alerts` | *(no card — see below)* `src/mobile/pages/MAlerts.tsx` |
 | `/m/whales` | `pages/Whales` with its `phone` prop (filter sheet, two-line rows, sub-tabs, probe sheet) |
-| `/m/vela` | `pages/Vela` with its `phone` prop (Vela's touch chrome, one chart, its own saved document `cb-v3-vela-m`) |
+| `/m/vela` | `pages/Vela` with its `phone` prop (Vela's touch chrome, three stacked charts by default — ⋮ → Layout for any other grid — its own saved document `cb-v3-vela-m`) |
 
 **`/m/alerts` is the one exception, and it is not a loophole.** The signal feed
 has no board card: on the desktop it is TOOLBAR CHROME — the pill in
