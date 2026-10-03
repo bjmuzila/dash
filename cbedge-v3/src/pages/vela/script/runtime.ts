@@ -57,10 +57,25 @@ export interface PlotRef {
 export interface HlineRef {
   hline: number
 }
-type Val = number | string | Val[] | PlotRef | HlineRef
+/** A Pine array (array.new_float() …): a mutable list held by reference. Plain Val[] is a tuple. */
+class PArr {
+  constructor(public a: Val[]) {}
+}
+type Val = number | string | Val[] | PlotRef | HlineRef | PArr
 
 const isPlot = (v: Val | undefined): v is PlotRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'plot' in v
 const isHline = (v: Val | undefined): v is HlineRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'hline' in v
+
+/** request.security wants another symbol's bars: the engine fetches them and runs again. */
+export class NeedSeries extends Error {
+  constructor(
+    readonly symbol: string,
+    readonly timeframe: string,
+  ) {
+    super(`needs ${symbol} ${timeframe} bars`)
+    this.name = 'NeedSeries'
+  }
+}
 
 // ── What a run produces ──────────────────────────────────────────────────────
 
@@ -376,6 +391,13 @@ function nyTime(t: number): NyTime {
   return { ...hp, minute: d.getUTCMinutes(), second: d.getUTCSeconds() }
 }
 /** Epoch ms of a New York wall-clock time. */
+/** ISO-ish week of the year of t (New York). */
+function weekOf(t: number): number {
+  const p = nyTime(t)
+  const d = Date.UTC(p.year, p.month - 1, p.day)
+  const jan1 = Date.UTC(p.year, 0, 1)
+  return Math.floor((d - jan1) / 86_400_000 / 7) + 1
+}
 function nyToUtc(y: number, mo: number, d: number, h: number, mi: number, s: number): number {
   let guess = Date.UTC(y, mo - 1, d, h, mi, s) + 5 * 3_600_000
   for (let k = 0; k < 2; k++) {
@@ -386,11 +408,13 @@ function nyToUtc(y: number, mo: number, d: number, h: number, mi: number, s: num
   return guess
 }
 /** Open time of the higher-timeframe bucket holding t ("D", "W", "M", "60", "240" …), New York days. */
-function bucketStart(t: number, tf: string): number {
+function bucketStart(t0: number, tf: string, shift = 0): number {
   const m = /^(\d*)([DWM]?)$/i.exec(tf.trim())
-  if (!m) return t
+  if (!m) return t0
   const n = m[1] ? parseInt(m[1], 10) : 1
   const unit = m[2]!.toUpperCase()
+  if (unit && shift) return bucketStart(t0 + shift, tf) - shift // a futures day opens 18:00 the evening before
+  const t = t0
   const p = nyTime(t)
   const midnight = nyToUtc(p.year, p.month, p.day, 0, 0, 0)
   if (unit === 'D') return n === 1 ? midnight : midnight - (((p.dow - 1) % n) * 86_400_000)
@@ -400,8 +424,8 @@ function bucketStart(t: number, tf: string): number {
   const step = n * 60_000
   return midnight + Math.floor((t - midnight) / step) * step
 }
-const dayKey = (t: number) => {
-  const p = nyTime(t)
+const dayKey = (t: number, shift = 0) => {
+  const p = nyTime(t + shift)
   return p.year * 10000 + p.month * 100 + p.day
 }
 /** Is New York minute-of-day `m` (and weekday) inside a Pine session string like "0930-1600:23456"? */
@@ -537,6 +561,12 @@ const CONSTS: Record<string, Val> = {
   'alert.freq_once_per_bar': 'once_per_bar',
   'alert.freq_once_per_bar_close': 'once_per_bar_close',
   'alert.freq_all': 'all',
+  'order.ascending': 1,
+  'order.descending': -1,
+  'adjustment.none': 'none',
+  'adjustment.splits': 'splits',
+  'adjustment.dividends': 'dividends',
+  'session.regular_hours': '0930-1600',
 }
 // Pine v2/v3 spelled these bare (style=histogram, linestyle=dashed, type=bool)
 for (const [k, v] of Object.entries({ line: 'line', stepline: 'step', histogram: 'histogram', cross: 'cross', area: 'area', columns: 'columns', circles: 'circles', solid: 'solid', dashed: 'dashed', dotted: 'dotted', integer: 'integer', float: 'float', bool: 'bool', string: 'string', source: 'source', resolution: 'timeframe', session: 'session', symbol: 'symbol' }))
@@ -622,6 +652,12 @@ export interface RunOpts {
   inputs?: Record<string, InputValue>
   symbol?: string
   timeframe?: string
+  /** Other symbols' bars at the chart timeframe, by "SYMBOL|tf" — fetched by the engine on a NeedSeries. */
+  series?: ReadonlyMap<string, readonly OHLCV[]>
+  /** A dry run (prepare): request.security for another symbol passes its expression through. */
+  dry?: boolean
+  /** Inside request.security's run on other bars: every security call's expression value, per bar. */
+  capture?: Map<object, unknown[]>
 }
 
 function walk(stmts: Stmt[], visit: (s: Stmt) => void, node?: (n: Node) => void): void {
@@ -666,6 +702,9 @@ function walk(stmts: Stmt[], visit: (s: Stmt) => void, node?: (n: Node) => void)
       case 'while':
         wn(n.c)
         return ws(n.body)
+      case 'forin':
+        wn(n.of)
+        return ws(n.body)
     }
   }
   function w(s: Stmt) {
@@ -698,6 +737,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   const tfMs = N > 1 ? Math.max(1, T[N - 1]! - T[N - 2]!) : 300_000
   const symbol = opts.symbol ?? 'SPX'
   const tf = opts.timeframe ?? '5'
+  /** A futures session day opens at 18:00 New York the evening before. */
+  const dayShift = /^(ES|NQ|MES|MNQ|YM|MYM|RTY|M2K|CL|GC)$/i.test(symbol) ? 6 * 3_600_000 : 0
 
   // ── what kind of script ──
   let pineCalls = false
@@ -781,7 +822,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   const hlc3 = lazy('hlc3', () => col((b) => (b.high + b.low + b.close) / 3))
   const ohlc4 = lazy('ohlc4', () => col((b) => (b.open + b.high + b.low + b.close) / 4))
   const hlcc4 = lazy('hlcc4', () => col((b) => (b.high + b.low + 2 * b.close) / 4))
-  const days = lazy('days', () => Float64Array.from(T, (t) => dayKey(t)))
+  const days = lazy('days', () => Float64Array.from(T, (t) => dayKey(t, dayShift)))
   const vwapOf = (src: Float64Array) => {
     const out = new Float64Array(N)
     const dk = days()
@@ -879,6 +920,37 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'ta.accdist': (i) => adArr()[i]!,
     tr: (i) => trAt(i, false),
     'ta.tr': (i) => trAt(i, false),
+    // Pine v2/v3 bare spellings
+    tickerid: () => symbol,
+    ticker: () => symbol,
+    period: () => tf,
+    interval: () => (tfIntra ? parseInt(tf, 10) || 1 : 1),
+    isintraday: () => (tfIntra ? 1 : 0),
+    isdaily: () => (/D$/i.test(tf) ? 1 : 0),
+    isweekly: () => (/W$/i.test(tf) ? 1 : 0),
+    ismonthly: () => (/M$/.test(tf) ? 1 : 0),
+    isdwm: () => (tfIntra ? 0 : 1),
+    n: (i) => i,
+    weekofyear: (i) => weekOf(T[i]!),
+    timenow: () => Date.now(),
+    time_tradingday: (i) => bucketStart(T[i]!, 'D', dayShift),
+    'syminfo.basecurrency': () => 'USD',
+    'syminfo.volumetype': () => 'base',
+    'syminfo.main_tickerid': () => symbol,
+    'chart.bg_color': () => tok('--color-bg'),
+    'chart.fg_color': () => tok('--color-fg'),
+    'chart.left_visible_bar_time': () => T[0] ?? NaN,
+    'chart.right_visible_bar_time': () => T[N - 1] ?? NaN,
+    'chart.is_standard': () => 1,
+    'chart.is_heikinashi': () => 0,
+    // the regular session: 09:30–16:00 New York
+    'session.ismarket': (i) => (inSession(T[i]!, '0930-1600') ? 1 : 0),
+    'session.ispremarket': (i) => (inSession(T[i]!, '0400-0930') ? 1 : 0),
+    'session.ispostmarket': (i) => (inSession(T[i]!, '1600-2000') ? 1 : 0),
+    'session.isfirstbar': (i) => (i === 0 || days()[i] !== days()[i - 1] ? 1 : 0),
+    'session.islastbar': (i) => (i === N - 1 || days()[i] !== days()[i + 1] ? 1 : 0),
+    'session.isfirstbar_regular': (i) => (inSession(T[i]!, '0930-1600') && (i === 0 || !inSession(T[i - 1]!, '0930-1600') || days()[i] !== days()[i - 1]) ? 1 : 0),
+    'session.islastbar_regular': (i) => (inSession(T[i]!, '0930-1600') && (i === N - 1 || !inSession(T[i + 1]!, '0930-1600')) ? 1 : 0),
   }
   for (const c of PINE_COLORS) VARS[`color.${c}`] = () => pineColor(c)
   /** A name's built-in value at bar i, or null if it is not one. */
@@ -945,6 +1017,14 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     return (f) => (f.S[idx] as Inst | undefined) ?? (f.S[idx] = new Inst())
   }
   const child = (cx: Cx): Cx => ({ scope: { names: new Map(), up: cx.scope }, fn: cx.fn })
+  /** Does expression `n` read variable `name`? */
+  const mentions = (n: Node, name: string): boolean => {
+    let hit = false
+    walk([{ k: 'expr', x: n, line: 0 }], () => {}, (m) => {
+      if (m.k === 'id' && m.name === name) hit = true
+    })
+    return hit
+  }
 
   const bin = (op: string, a: Val, b: Val, line: number): Val => {
     if (op === 'and') return truthy(a) && truthy(b) ? 1 : 0
@@ -1208,6 +1288,30 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
           return v
         }
       }
+      case 'forin': {
+        const of = compileExpr(cx, node.of)
+        const inner = child(cx)
+        const idxVar = node.idx ? slotFn(declare(inner, node.idx)) : null
+        const itemVar = slotFn(declare(inner, node.v))
+        const body = compileBlock(inner, node.body, false)
+        return (f) => {
+          const src = of(f)
+          const items = src instanceof PArr ? src.a.slice() : Array.isArray(src) ? src : []
+          let v: Val = NaN
+          for (let k = 0; k < items.length; k++) {
+            if (++loopBudget > MAX_LOOP_PER_BAR) throw new ScriptError('this loop runs too many times per bar', line)
+            if (idxVar) idxVar(f).cur = k
+            itemVar(f).cur = items[k]!
+            v = body(f)
+            if (f.ctl === 1) {
+              f.ctl = 0
+              break
+            }
+            f.ctl = 0
+          }
+          return v
+        }
+      }
       case 'while': {
         const c = compileExpr(cx, node.c)
         const body = compileBlock(cx, node.body)
@@ -1231,8 +1335,12 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   function compileStmt(cx: Cx, s: Stmt): Ev {
     switch (s.k) {
       case 'decl': {
-        const ev = compileExpr(cx, s.x) // before the name exists: `x = x + 1` reads the outer x
-        const get = slotFn(declare(cx, s.name))
+        // `x = x + 1` reads an outer x — but Pine (v2 especially) lets a declaration read its
+        // OWN history, `sum = nz(sum[1]) + v`, so a name with no outer meaning is declared first
+        let get: ((f: Frame) => Slot) | null = null
+        if (!resolve(cx, s.name) && !builtinVar(s.name) && mentions(s.x, s.name)) get = slotFn(declare(cx, s.name))
+        const ev = compileExpr(cx, s.x)
+        get ??= slotFn(declare(cx, s.name))
         const isVar = s.isVar
         return (f) => {
           const slot = get(f)
@@ -1307,8 +1415,185 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     }
   }
 
+  function compileMethod(cx: Cx, node: Extract<Node, { k: 'call' }>, recv: string, method: string): Ev {
+    const line = node.line
+    const self = compileExpr(cx, { k: 'id', name: recv, line })
+    const args = node.args.map((x) => compileExpr(cx, x))
+    const namedKeys = Object.keys(node.named)
+    const namedEvs = namedKeys.map((k) => compileExpr(cx, node.named[k]!))
+    const onArray = BUILTINS[`array.${method}`]
+    const onText = BUILTINS[method]
+    const site = siteFn(cx)
+    const c: Call = { A: [], N: {}, node, line, i: 0, f: null as unknown as Frame, site: () => site(c.f) }
+    return (f) => {
+      const r = self(f)
+      const A: Val[] = [r]
+      for (let k = 0; k < args.length; k++) A.push(args[k]!(f))
+      const Nm: Record<string, Val> = {}
+      for (let k = 0; k < namedKeys.length; k++) Nm[namedKeys[k]!] = namedEvs[k]!(f)
+      c.A = A
+      c.N = Nm
+      c.i = f.i
+      c.f = f
+      if (r instanceof PArr) {
+        if (!onArray) throw new ScriptError(`arrays have no method "${method}"`, line)
+        return onArray(c)
+      }
+      if (typeof r === 'string' && onText) return onText(c)
+      if (typeof r === 'number' && isNa(r)) return NaN // a drawing handle (label / line / box) — drawings are skipped
+      throw new ScriptError(`"${recv}" has no method "${method}"`, line)
+    }
+  }
+
+  // ── request.security ──
+  // Same symbol, higher timeframe: the chart's bars are folded into that timeframe and
+  // the WHOLE script is run again over them (Pine's model), recording what each security
+  // call's expression gives per HTF bar; those values are then mapped back onto the chart
+  // bars. Another symbol: the same, over that symbol's bars (the engine fetches them on a
+  // NeedSeries and runs again). Lookahead: v1/v2 scripts saw the HTF bar's final value on
+  // every bar inside it (lookahead on); v3+ default off — the value lands on the bar that
+  // closes the HTF bar, the bars before it see the previous HTF bar's.
+  const tfMinutes = (x: string): number => {
+    const m = /^(\d*)([SDWM]?)$/i.exec(x.trim())
+    if (!m || (!m[1] && !m[2])) return NaN
+    const n = m[1] ? parseInt(m[1], 10) : 1
+    const u = m[2]!.toUpperCase()
+    return u === 'S' ? n / 60 : u === 'D' ? n * 1440 : u === 'W' ? n * 10080 : u === 'M' ? n * 43200 : n
+  }
+  const bareSym = (x: string) =>
+    x
+      .replace(/^[^:]*:/, '')
+      .replace(/;.*$/, '')
+      .replace(/1!$/, '')
+      .trim()
+      .toUpperCase()
+  const secRuns = new Map<string, { X: OHLCV[]; cap: Map<object, unknown[]> }>()
+  const secRun = (srcBars: readonly OHLCV[], sym: string, reqTf: string, htf: boolean): { X: OHLCV[]; cap: Map<object, unknown[]> } => {
+    const key = `${sym}|${reqTf}|${htf ? 1 : 0}`
+    let r = secRuns.get(key)
+    if (r) return r
+    let X: OHLCV[]
+    if (htf) {
+      X = []
+      let last = NaN
+      const sh = /^(ES|NQ|MES|MNQ|YM|MYM|RTY|M2K|CL|GC)$/i.test(sym) ? 6 * 3_600_000 : 0
+      for (const b of srcBars) {
+        const t = bucketStart(b.time, reqTf, sh)
+        const vol = b.volume ?? 0
+        if (t !== last) {
+          X.push({ time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: Number.isFinite(vol) ? vol : 0 })
+          last = t
+        } else {
+          const x = X[X.length - 1]!
+          x.high = Math.max(x.high, b.high)
+          x.low = Math.min(x.low, b.low)
+          x.close = b.close
+          x.volume = (x.volume ?? 0) + (Number.isFinite(vol) ? vol : 0)
+        }
+      }
+    } else X = srcBars.slice()
+    const cap = new Map<object, unknown[]>()
+    run(prog, X, { inputs: opts.inputs, symbol: sym, timeframe: htf ? reqTf : tf, capture: cap, series: opts.series, dry: opts.dry })
+    r = { X, cap }
+    secRuns.set(key, r)
+    return r
+  }
+  /** The security call's values on the chart's bars. */
+  const secMap = (node: object, run1: { X: OHLCV[]; cap: Map<object, unknown[]> }, htf: boolean, lookahead: boolean, gaps: boolean): Val[] => {
+    const { X, cap } = run1
+    const vals = (cap.get(node) ?? []) as Val[]
+    const out: Val[] = new Array(N).fill(NaN)
+    const owner = new Int32Array(N).fill(-1)
+    let j = -1
+    for (let i = 0; i < N; i++) {
+      while (j + 1 < X.length && X[j + 1]!.time <= T[i]!) j++
+      owner[i] = j
+    }
+    for (let i = 0; i < N; i++) {
+      const b = owner[i]!
+      if (b < 0) continue
+      if (!htf) {
+        out[i] = gaps && X[b]!.time !== T[i] ? NaN : (vals[b] ?? NaN)
+        continue
+      }
+      const first = i === 0 || owner[i - 1] !== b
+      const closes = i === N - 1 || owner[i + 1] !== b
+      if (lookahead) out[i] = gaps && !first ? NaN : (vals[b] ?? NaN)
+      else out[i] = closes ? (vals[b] ?? NaN) : gaps ? NaN : b > 0 ? (vals[b - 1] ?? NaN) : NaN
+    }
+    return out
+  }
+  function compileSecurity(cx: Cx, node: Extract<Node, { k: 'call' }>): Ev {
+    const line = node.line
+    const nm = node.named
+    const symNode = node.args[0] ?? nm.symbol
+    const tfNode = node.args[1] ?? nm.timeframe ?? nm.resolution
+    const exprNode = node.args[2] ?? nm.expression
+    if (!symNode || !tfNode || !exprNode) throw new ScriptError(`${node.name}(symbol, timeframe, expression) needs all three`, line)
+    const symEv = compileExpr(cx, symNode)
+    const tfEv = compileExpr(cx, tfNode)
+    const exprEv = compileExpr(cx, exprNode)
+    const gapsNode = node.args[3] ?? nm.gaps
+    const laNode = node.args[4] ?? nm.lookahead
+    const gapsEv = gapsNode ? compileExpr(cx, gapsNode) : null
+    const laEv = laNode ? compileExpr(cx, laNode) : null
+    const site = siteFn(cx)
+    return (f) => {
+      const capture = opts.capture
+      if (capture) {
+        // running for another security call: this one is evaluated here, as is
+        const v = exprEv(f)
+        let arr = capture.get(node)
+        if (!arr) capture.set(node, (arr = new Array(N)))
+        arr[f.i] = v
+        return v
+      }
+      const st = site(f)
+      if (st.any === null) {
+        const symV = symEv(f)
+        const tfV = tfEv(f)
+        const sym = typeof symV === 'string' ? bareSym(symV) : bareSym(symbol)
+        const reqTf = typeof tfV === 'string' && tfV.trim() ? tfV.trim() : tf
+        const same = !sym || sym === bareSym(symbol)
+        const reqMin = tfMinutes(reqTf)
+        const chartMin = tfMinutes(tf)
+        const htf = !isNa(reqMin) && !isNa(chartMin) && reqMin > chartMin
+        if (!isNa(reqMin) && !isNa(chartMin) && reqMin < chartMin) warn(`${node.name}: lower timeframes than the chart's aren't available — used ${tf}`)
+        if (same && !htf) st.any = 'pass'
+        else {
+          let srcBars: readonly OHLCV[] = bars
+          if (!same) {
+            const got = opts.series?.get(`${sym}|${tf}`)
+            if (!got) {
+              if (opts.dry) {
+                st.any = 'pass'
+                return exprEv(f)
+              }
+              throw new NeedSeries(sym, tf)
+            }
+            if (!got.length) throw new ScriptError(`${node.name}: no data for ${sym}`, line)
+            srcBars = got
+          }
+          const lookahead = laEv ? truthy(laEv(f)) : prog.version === null || prog.version <= 2
+          const gaps = gapsEv ? truthy(gapsEv(f)) : false
+          st.any = secMap(node, secRun(srcBars, same ? bareSym(symbol) : sym, reqTf, htf), htf, lookahead, gaps)
+        }
+      }
+      if (st.any === 'pass') return exprEv(f)
+      return (st.any as Val[])[f.i] ?? NaN
+    }
+  }
+
   function compileCall(cx: Cx, node: Extract<Node, { k: 'call' }>): Ev {
     const line = node.line
+    // a method call on a variable: xs.push(1), s.length() → array.push(xs, 1), str.length(s)
+    const dot = node.name.indexOf('.')
+    if (dot > 0 && !funcs.has(node.name)) {
+      const recv = node.name.slice(0, dot)
+      const method = node.name.slice(dot + 1)
+      if (!method.includes('.') && resolve(cx, recv)) return compileMethod(cx, node, recv, method)
+    }
+    if (node.name === 'security' || node.name === 'request.security') return compileSecurity(cx, node)
     const args = node.args.map((x) => compileExpr(cx, x))
     const namedKeys = Object.keys(node.named)
     const namedEvs = namedKeys.map((k) => compileExpr(cx, node.named[k]!))
@@ -1349,12 +1634,18 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       }
     }
     const name = node.name
-    const key = name.replace(/^(ta|math|str)\./, '')
+    const key = name === 'ta.max' ? 'max_all' : name === 'ta.min' ? 'min_all' : name.replace(/^(ta|math|str)\./, '')
     const fn = BUILTINS[key] ?? BUILTINS[name]
     if (!fn) {
-      if (/^(array|matrix|map)\./.test(name)) throw new ScriptError(`${name.split('.')[0]}s aren't supported yet (${name})`, line)
-      if (name === 'request.security' || name === 'security' || name.startsWith('request.'))
-        throw new ScriptError(`${name} (data from another symbol or timeframe) isn't supported yet`, line)
+      if (/^(matrix|map)\./.test(name)) throw new ScriptError(`${name.split('.')[0]}s aren't supported yet (${name})`, line)
+      if (name.startsWith('array.')) throw new ScriptError(`${name} isn't supported yet`, line)
+      if (name.startsWith('request.')) throw new ScriptError(`${name} isn't supported yet`, line)
+      if (name === 'plotcandle' || name === 'plotbar') {
+        return () => {
+          warn(`${name} isn't drawn yet — skipped`)
+          return NaN
+        }
+      }
       if (DRAWING_NS.test(name)) {
         return () => {
           warn(`${name.split('.')[0]}.* drawings aren't drawn yet — skipped`)
@@ -1678,6 +1969,138 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const defAlpha = ver === 0 ? 0.12 : ver <= 4 ? 0.1 : null
     colors[c.i] = paint(c, a0, null, defAlpha, ver > 0 && ver <= 4 ? 1 : -1)
     return NaN
+  }
+
+  // ── Pine arrays ──
+  const arrOf = (c: Call, i = 0): PArr => {
+    const v = arg(c, i, 'id')
+    if (!(v instanceof PArr)) throw new ScriptError('expected an array', c.line)
+    return v
+  }
+  const at = (a: PArr, k: number): number => {
+    const j = Math.trunc(k)
+    return j < 0 ? a.a.length + j : j
+  }
+  const nums = (a: PArr) => a.a.filter((x): x is number => typeof x === 'number' && !isNa(x))
+  const newArr = (c: Call): Val => {
+    const size = Math.max(0, Math.trunc(optNum(c, 0, 0, 'size')))
+    const init = arg(c, 1, 'initial_value') ?? NaN
+    return new PArr(new Array(size).fill(init))
+  }
+  const ARRAY_FNS: Record<string, (c: Call) => Val> = {
+    'array.new': newArr,
+    'array.new_float': newArr,
+    'array.new_int': newArr,
+    'array.new_bool': newArr,
+    'array.new_string': newArr,
+    'array.new_color': newArr,
+    'array.new_line': newArr,
+    'array.new_label': newArr,
+    'array.new_box': newArr,
+    'array.new_table': newArr,
+    'array.new_linefill': newArr,
+    'array.from': (c) => new PArr(c.A.slice()),
+    'array.size': (c) => arrOf(c).a.length,
+    'array.get': (c) => {
+      const a = arrOf(c)
+      return a.a[at(a, num(arg(c, 1, 'index'), c.line, 'the index'))] ?? NaN
+    },
+    'array.set': (c) => {
+      const a = arrOf(c)
+      const j = at(a, num(arg(c, 1, 'index'), c.line, 'the index'))
+      if (j >= 0 && j < a.a.length) a.a[j] = arg(c, 2, 'value') ?? NaN
+      return NaN
+    },
+    'array.push': (c) => {
+      arrOf(c).a.push(arg(c, 1, 'value') ?? NaN)
+      return NaN
+    },
+    'array.unshift': (c) => {
+      arrOf(c).a.unshift(arg(c, 1, 'value') ?? NaN)
+      return NaN
+    },
+    'array.pop': (c) => arrOf(c).a.pop() ?? NaN,
+    'array.shift': (c) => arrOf(c).a.shift() ?? NaN,
+    'array.insert': (c) => {
+      const a = arrOf(c)
+      a.a.splice(at(a, num(arg(c, 1, 'index'), c.line)), 0, arg(c, 2, 'value') ?? NaN)
+      return NaN
+    },
+    'array.remove': (c) => {
+      const a = arrOf(c)
+      const j = at(a, num(arg(c, 1, 'index'), c.line))
+      return j >= 0 && j < a.a.length ? a.a.splice(j, 1)[0]! : NaN
+    },
+    'array.clear': (c) => {
+      arrOf(c).a.length = 0
+      return NaN
+    },
+    'array.fill': (c) => {
+      const a = arrOf(c)
+      a.a.fill(arg(c, 1, 'value') ?? NaN, optNum(c, 2, 0, 'index_from'), optNum(c, 3, a.a.length, 'index_to'))
+      return NaN
+    },
+    'array.concat': (c) => {
+      const a = arrOf(c)
+      a.a.push(...arrOf(c, 1).a)
+      return a
+    },
+    'array.copy': (c) => new PArr(arrOf(c).a.slice()),
+    'array.slice': (c) => {
+      const a = arrOf(c)
+      return new PArr(a.a.slice(optNum(c, 1, 0, 'index_from'), optNum(c, 2, a.a.length, 'index_to')))
+    },
+    'array.reverse': (c) => {
+      arrOf(c).a.reverse()
+      return NaN
+    },
+    'array.sort': (c) => {
+      const a = arrOf(c)
+      const dir = optNum(c, 1, 1, 'order')
+      a.a.sort((x, y) => (typeof x === 'number' && typeof y === 'number' ? (x - y) * dir : String(x) < String(y) ? -dir : String(x) > String(y) ? dir : 0))
+      return NaN
+    },
+    'array.includes': (c) => (arrOf(c).a.includes(arg(c, 1, 'value') ?? NaN) ? 1 : 0),
+    'array.indexof': (c) => arrOf(c).a.indexOf(arg(c, 1, 'value') ?? NaN),
+    'array.lastindexof': (c) => arrOf(c).a.lastIndexOf(arg(c, 1, 'value') ?? NaN),
+    'array.first': (c) => arrOf(c).a[0] ?? NaN,
+    'array.last': (c) => {
+      const a = arrOf(c).a
+      return a[a.length - 1] ?? NaN
+    },
+    'array.sum': (c) => nums(arrOf(c)).reduce((x, y) => x + y, 0),
+    'array.avg': (c) => {
+      const xs = nums(arrOf(c))
+      return xs.length ? mean(xs) : NaN
+    },
+    'array.max': (c) => {
+      const xs = nums(arrOf(c)).sort((a, b) => b - a)
+      return xs[Math.trunc(optNum(c, 1, 0, 'nth'))] ?? NaN
+    },
+    'array.min': (c) => {
+      const xs = nums(arrOf(c)).sort((a, b) => a - b)
+      return xs[Math.trunc(optNum(c, 1, 0, 'nth'))] ?? NaN
+    },
+    'array.range': (c) => {
+      const xs = nums(arrOf(c))
+      return xs.length ? Math.max(...xs) - Math.min(...xs) : NaN
+    },
+    'array.median': (c) => {
+      const xs = nums(arrOf(c)).sort((a, b) => a - b)
+      if (!xs.length) return NaN
+      const k = xs.length >> 1
+      return xs.length % 2 ? xs[k]! : (xs[k - 1]! + xs[k]!) / 2
+    },
+    'array.stdev': (c) => {
+      const xs = nums(arrOf(c))
+      return xs.length ? stdevOf(xs, arg(c, 1, 'biased') === undefined ? true : truthy(arg(c, 1, 'biased')!)) : NaN
+    },
+    'array.variance': (c) => {
+      const xs = nums(arrOf(c))
+      return xs.length ? Math.pow(stdevOf(xs, arg(c, 1, 'biased') === undefined ? true : truthy(arg(c, 1, 'biased')!)), 2) : NaN
+    },
+    'array.join': (c) => arrOf(c).a.map(text).join(optStr(c, 1, 'separator') ?? ','),
+    'array.abs': (c) => new PArr(arrOf(c).a.map((x) => (typeof x === 'number' ? Math.abs(x) : x))),
   }
 
   const BUILTINS: Record<string, (c: Call) => Val> = {
@@ -2420,19 +2843,111 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       if (!c.A.length && !('source' in c.N)) return vwapArr()[c.i]!
       const s = c.site()
       const v = src(c)
+      const anchorV = arg(c, 1, 'anchor')
       const dk = days()
-      if (!s.done || dk[c.i] !== s.z) {
+      // a new period: the anchor condition (v5), else a new session day
+      const fresh = anchorV !== undefined ? truthy(anchorV) : !s.done || dk[c.i] !== s.z
+      if (fresh || !s.done) {
         s.done = true
         s.z = dk[c.i]!
         s.x = 0
         s.y = 0
+        s.w = 0
       }
       const vol = isNa(V[c.i]!) ? 0 : V[c.i]!
       s.x += v * vol
       s.y += vol
-      return s.y > 0 ? s.x / s.y : v
+      s.w += v * v * vol
+      const vw = s.y > 0 ? s.x / s.y : v
+      const mult = arg(c, 2, 'stdev_mult')
+      if (mult === undefined) return vw
+      const sd = s.y > 0 ? Math.sqrt(Math.max(s.w / s.y - vw * vw, 0)) : 0
+      const m = num(mult, c.line, 'stdev_mult')
+      return [vw, vw + m * sd, vw - m * sd]
     },
     obv: (c) => obvArr()[c.i]!,
+    max_all: (c) => {
+      const s = c.site()
+      const v = src(c)
+      if (!isNa(v) && (isNa(s.x) || v > s.x)) s.x = v
+      return s.x
+    },
+    min_all: (c) => {
+      const s = c.site()
+      const v = src(c)
+      if (!isNa(v) && (isNa(s.x) || v < s.x)) s.x = v
+      return s.x
+    },
+    percentile_linear_interpolation: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      if (!w) return NaN
+      const pct = optNum(c, 2, 50, 'percentage')
+      const xs = w.slice().sort((a, b) => a - b)
+      const r = (pct / 100) * (xs.length - 1)
+      const lo = Math.floor(r)
+      return xs[lo]! + (xs[Math.min(lo + 1, xs.length - 1)]! - xs[lo]!) * (r - lo)
+    },
+    percentile_nearest_rank: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      if (!w) return NaN
+      const pct = optNum(c, 2, 50, 'percentage')
+      const xs = w.slice().sort((a, b) => a - b)
+      return xs[Math.max(0, Math.ceil((pct / 100) * xs.length) - 1)]!
+    },
+    // ── type casts (Pine v5: float(na), int(x) …) ──
+    float: (c) => {
+      const v = arg(c, 0, 'x')
+      return typeof v === 'number' ? v : NaN
+    },
+    int: (c) => {
+      const v = arg(c, 0, 'x')
+      return typeof v === 'number' ? (isNa(v) ? NaN : Math.trunc(v)) : NaN
+    },
+    bool: (c) => (truthy(arg(c, 0, 'x') ?? 0) ? 1 : 0),
+    string: (c) => {
+      const v = arg(c, 0, 'x')
+      return typeof v === 'string' ? v : NaN
+    },
+    color: (c) => {
+      const v = arg(c, 0, 'x')
+      return typeof v === 'string' ? v : NaN
+    },
+    // ── more text ──
+    replace_all: (c) => (optStr(c, 0, 'source') ?? '').split(optStr(c, 1, 'target') ?? '').join(optStr(c, 2, 'replacement') ?? ''),
+    replace: (c) => (optStr(c, 0, 'source') ?? '').replace(optStr(c, 1, 'target') ?? '', optStr(c, 2, 'replacement') ?? ''),
+    substring: (c) => {
+      const t = optStr(c, 0, 'source') ?? ''
+      const a = optNum(c, 1, 0, 'begin_pos')
+      const b = arg(c, 2, 'end_pos')
+      return t.substring(a, typeof b === 'number' ? b : undefined)
+    },
+    startswith: (c) => ((optStr(c, 0, 'source') ?? '').startsWith(optStr(c, 1, 'str') ?? '') ? 1 : 0),
+    endswith: (c) => ((optStr(c, 0, 'source') ?? '').endsWith(optStr(c, 1, 'str') ?? '') ? 1 : 0),
+    pos: (c) => {
+      const k = (optStr(c, 0, 'source') ?? '').indexOf(optStr(c, 1, 'str') ?? '')
+      return k < 0 ? NaN : k
+    },
+    trim: (c) => (optStr(c, 0, 'source') ?? '').trim(),
+    repeat: (c) => (optStr(c, 0, 'source') ?? '').repeat(Math.max(0, optNum(c, 1, 0, 'repeat'))),
+    split: (c) => new PArr((optStr(c, 0, 'string') ?? '').split(optStr(c, 1, 'separator') ?? '')),
+    // ── timeframes ──
+    'timeframe.change': (c) => {
+      const s = c.site()
+      const t = bucketStart(T[c.i]!, optStr(c, 0, 'timeframe') ?? tf, dayShift)
+      const r = !isNa(s.x) && t !== s.x ? 1 : 0
+      s.x = t
+      return r
+    },
+    'timeframe.in_seconds': (c) => {
+      const t = optStr(c, 0, 'timeframe') ?? tf
+      const m = /^(\d*)([SDWM]?)$/i.exec(t.trim())
+      if (!m) return NaN
+      const n = m[1] ? parseInt(m[1], 10) : 1
+      const u = m[2]!.toUpperCase()
+      return n * (u === 'S' ? 1 : u === 'D' ? 86400 : u === 'W' ? 604800 : u === 'M' ? 2628003 : 60)
+    },
+    // ── arrays ──
+    ...ARRAY_FNS,
   }
 
   /** Settled-call shortcuts: the held value, or undefined before the first evaluation. */

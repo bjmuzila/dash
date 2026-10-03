@@ -66,7 +66,8 @@ import { SYMBOLS, TICKER_RE, loadRoster, symbolDef } from '@/board/gexCandles/sy
 import { tickerLogoUrls } from '@/pages/economicCalendar/ChipLogo'
 
 /** The registration name. A symbol typed as `cbedge:XYZ` routes here directly. */
-export const PROVIDER_NAME = 'cbedge'
+import { PROVIDER_NAME } from './providerName'
+export { PROVIDER_NAME }
 
 const MIN_MS = 60_000
 const DAY_MS = 86_400_000
@@ -144,9 +145,17 @@ export function resolveSym(ticker: string): ResolvedSym {
   return { key, kind: kindOf(key) }
 }
 
+/**
+ * The venue the charts NAME — the legend's "SPX · VOLTICK.IO · 5m", the picker's badge.
+ * Vela shows a descriptor's `prefix` there instead of the provider name. Display only:
+ * `cbedge:SPX` (the provider name) still routes here, so saved layouts load unchanged,
+ * and `VOLTICK.IO:SPX` resolves too, through this prefix.
+ */
+export const VENUE = 'VOLTICK.IO'
+
 function descriptor(key: string): SymbolDescriptor {
   const kind = kindOf(key)
-  return { ticker: key, description: DESCRIPTIONS[key], type: kind }
+  return { ticker: key, description: DESCRIPTIONS[key], type: kind, prefix: VENUE }
 }
 
 // ── ET time helpers ──────────────────────────────────────────────────────────
@@ -515,7 +524,7 @@ export class CbEdgeProvider implements DataProvider {
   info(): ProviderInfo {
     return {
       name: PROVIDER_NAME,
-      displayName: 'CB Edge',
+      displayName: 'Voltick.io',
       supportedTimeframes: TIMEFRAMES,
       capabilities: { enumerate: true, stream: true, symbolInfo: true },
     }

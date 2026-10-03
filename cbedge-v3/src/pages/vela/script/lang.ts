@@ -44,6 +44,7 @@ export type Node =
   | { k: 'switch'; subject: Node | null; cases: { m: Node | null; body: Stmt[] }[]; line: number }
   | { k: 'for'; v: string; from: Node; to: Node; by: Node | null; body: Stmt[]; line: number }
   | { k: 'while'; c: Node; body: Stmt[]; line: number }
+  | { k: 'forin'; idx: string | null; v: string; of: Node; body: Stmt[]; line: number }
 
 export interface FuncDef {
   k: 'func'
@@ -245,7 +246,7 @@ function lex(src: string): LLine[] {
 
 // ── Parser ───────────────────────────────────────────────────────────────────
 
-const TYPE_WORDS = new Set(['int', 'float', 'bool', 'color', 'string', 'line', 'label', 'box', 'table', 'linefill', 'polyline', 'series', 'simple', 'const', 'chart.point'])
+const TYPE_WORDS = new Set(['int', 'float', 'bool', 'color', 'string', 'line', 'label', 'box', 'table', 'linefill', 'polyline', 'series', 'simple', 'const', 'chart.point', 'array', 'matrix', 'map'])
 const ASSIGN_OPS = new Set(['=', ':=', '+=', '-=', '*=', '/=', '%='])
 const RESERVED = new Set(['if', 'else', 'for', 'while', 'switch', 'var', 'varip', 'and', 'or', 'not', 'true', 'false', 'na', 'break', 'continue', 'import', 'export'])
 
@@ -302,6 +303,19 @@ export function parse(src: string): Program {
       }
     }
     return -1
+  }
+  /** `<float>` / `<string, float>` / `<chart.point>` at p+o — the token count to skip, or 0. */
+  const genericLen = (o: number): number => {
+    const t0 = peek(o)
+    if (t0.t !== 'op' || t0.v !== '<') return 0
+    let k = o + 1
+    for (;;) {
+      const t = peek(k)
+      if (t.t === 'id') k++
+      else if (t.t === 'op' && t.v === ',') k++
+      else if (t.t === 'op' && t.v === '>') return k - o + 1
+      else return 0
+    }
   }
   const firstWord = (k: number) => {
     const t = lines[k]?.toks[0]
@@ -393,9 +407,18 @@ export function parse(src: string): Program {
       next()
       isVar = true
     }
-    // type words in front of a declaration: `float x = …`, `series int n = …`
+    // type words in front of a declaration: `float x = …`, `series int n = …`,
+    // `float[] xs = …`, `array<float> xs = …`, `map<string, float> m = …`
     while (peek().t === 'id' && TYPE_WORDS.has((peek() as { v: string }).v)) {
-      if (isOp('[', 1)) throw new ScriptError('arrays aren\'t supported', line)
+      if (isOp('[', 1) && isOp(']', 2) && peek(3).t === 'id') {
+        p += 3
+        continue
+      }
+      const g = genericLen(1)
+      if (g && peek(1 + g).t === 'id') {
+        p += 1 + g
+        continue
+      }
       if (peek(1).t === 'id') next()
       else break
     }
@@ -475,7 +498,24 @@ export function parse(src: string): Program {
     const line = curLine
     const indent = stmtIndent
     next() // for
-    if (isOp('[') || isWord('in', 1)) throw new ScriptError('for…in loops (over arrays) aren\'t supported', line)
+    if (isOp('[') || isWord('in', 1)) {
+      // for x in arr / for [i, x] in arr
+      let idx: string | null = null
+      let v: string
+      if (isOp('[')) {
+        next()
+        idx = expectId()
+        expectOp(',')
+        v = expectId()
+        expectOp(']')
+      } else v = expectId()
+      if (!isWord('in')) throw new ScriptError('expected "in"', curLine)
+      next()
+      const of = expr()
+      expectEol()
+      const body = block(indent)
+      return { k: 'forin', idx, v, of, body, line }
+    }
     const v = expectId()
     expectOp('=')
     const from = expr()
@@ -537,7 +577,9 @@ export function parse(src: string): Program {
         if (t.v === 'true' || t.v === 'false') return { k: 'bool', v: t.v === 'true', line: t.line }
         if (t.v === 'na') return { k: 'na', line: t.line }
       }
-      if (isOp('<') && /^(array|matrix|map)\./.test(t.v)) throw new ScriptError(`${t.v.split('.')[0]}s aren't supported`, t.line)
+      // generic type arguments — array.new<float>(…), map.new<string, float>() — are read and dropped
+      const g = genericLen(0)
+      if (g && isOp('(', g)) p += g
       if (isOp('(')) {
         next()
         const args: Node[] = []

@@ -25543,3 +25543,45 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - Node bench, all running: Ripster EMA Clouds (v4), KivancOzbilgic Supertrend (v4), TradingView's MACD and RSI (v5, including switch, gradient fills and divergence pivots), LazyBear Squeeze Momentum (v3 style), a previous-day-levels script (var / time("D") / session / switch), and the three CB examples.
   - Headless Chromium against the mock data: all of those pasted, added and drawn, and the settings dialog shows source / colour / grouped inputs. No console errors.
 - **Files in `generated/`:** `2026-10-03-vela-pine-ripster.png`, `2026-10-03-vela-pine-scripts.png`, `2026-10-03-vela-pine-settings.png` (mock data)
+
+## 2026-10-03 - v3 Vela: VOLTICK.IO on the charts, request.security, arrays, copyable script errors
+- **Chart venue now reads VOLTICK.IO.** The legend shows "SPX · VOLTICK.IO · 5m" and the symbol picker uses the same badge (it was CBEDGE). This uses Vela's descriptor `prefix` (`VENUE` in `cbedgeProvider.ts`) and is display only: `cbedge:SPX` still routes to the provider, so saved layouts load unchanged. The provider's display name is now "Voltick.io". `PROVIDER_NAME` moved to the new `pages/vela/providerName.ts` so the script engine can use it without importing the provider.
+- **Fixed errors from pasted scripts:**
+  - `"tickerid" is not defined` (VWAP Stdev Bands v2). The Pine v2/v3 bare names now work: `tickerid ticker period interval isintraday isdaily isweekly ismonthly isdwm n`.
+  - `unknown function "float"` (ORB). The v5 casts `float() int() bool() string() color()` now work.
+  - A declaration that reads its own history (`vwapsum = iff(newSession, hl2*volume, vwapsum[1] + hl2*volume)`, v2 style) now compiles.
+- **`request.security` / `security`:**
+  - This symbol on a higher timeframe (D / W / M / 60 / 240 …): the chart's bars are folded into that timeframe, the whole script runs again over them (Pine's model), and the expression's values are mapped back onto the chart bars.
+  - Lookahead follows Pine. v1/v2 scripts get lookahead on: every bar inside a daily bar sees that day's value, which is what the VWAP-bands `security(tickerid, "D", time)` session reset relies on. v3+ default to off: the value lands on the bar that closes the HTF bar. Both `lookahead` and `gaps` are honoured.
+  - Another symbol: the engine fetches its bars through Vela's `fetchSeries` (at the chart timeframe, `cbedge:<SYM>`; "CME_MINI:ES1!" becomes ES), then runs again. If there's no data, the error says so.
+  - Lower timeframes than the chart's use the chart's timeframe, with a note.
+  - Futures days open at 18:00 New York for daily buckets and the VWAP reset.
+- **Arrays:**
+  - `array.new_* / new<T> / from` and `size get set push pop shift unshift insert remove clear fill concat copy slice reverse sort includes indexof lastindexof first last sum avg min max range median stdev variance join abs`. Negative indexes count from the end; an out-of-range get returns na.
+  - Method calls such as `xs.push(1)` / `s.length()`, generic types (`array.new<float>()`, `float[] xs`, `array<float> xs`), and `for x in xs` / `for [i, x] in xs`.
+- **More built-ins:**
+  - `ta.vwap(src, anchor, stdev_mult)` returning [vwap, upper, lower], `ta.max / ta.min`, `ta.percentile_*`.
+  - `timeframe.change / in_seconds`, `session.ismarket / ispremarket / ispostmarket / isfirstbar / islastbar / isfirstbar_regular / islastbar_regular`, `time(tf)` returning the HTF bar's open.
+  - `str.split / replace / replace_all / substring / startswith / endswith / pos / trim / repeat`, `chart.bg_color / fg_color`, `weekofyear`, `time_tradingday`, `timenow`, `order.*`.
+  - `plotcandle / plotbar` are skipped with a note instead of stopping the script.
+- **Copyable errors in the Scripts panel:**
+  - The status line text can be selected.
+  - An error shows **Copy error** and **Copy error + script**. The second copies the error, the script name and the full source in one block, ready to send for a fix.
+  - Errors a script hits only on a chart (data-dependent, after Add) now reach the panel as "On the chart — Line N: …", with the same buttons. The engine reports them through `onScriptError`.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/script/lang.ts` (for…in, generics, array types)
+  - `script/runtime.ts` (security, arrays, methods, casts, v2 names, self-history declarations, built-ins)
+  - `script/engine.ts` (`fetchSeries` for other symbols, dry run, chart-error events)
+  - `script/panel.ts` (copy buttons, chart errors, Reference)
+  - `pages/vela/vela.css`
+  - `pages/vela/cbedgeProvider.ts`
+  - new `pages/vela/providerName.ts`
+- **Checks:**
+  - No new `tsc` errors. `check:theme` is clean. The build passes.
+  - Node bench: the VWAP Stdev Bands v2 script and the ORB script (the corrected 0930 version of the pasted one) both run. So does a v5 test covering arrays, method calls, HTF security with lookahead, anchored `ta.vwap`, `str.split` and session variables. An ES-vs-SPX `request.security` maps onto the chart bars. Every earlier script still runs.
+  - Headless Chromium against the mock data:
+    - The legend reads VOLTICK.IO, and an old `cbedge:` layout still loads.
+    - VWAP bands, ORB and ES-vs-SPX all draw; ES is fetched through `fetchSeries`.
+    - A compile error and an on-chart `runtime.error` both show the copy buttons, and the clipboard gets the expected text.
+    - No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-voltick-venue-vwap.png`, `2026-10-03-vela-script-error-copy.png` (mock data)

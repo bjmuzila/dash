@@ -38,7 +38,7 @@
 import { registerSidePanel, registerStatePersistence, type WidgetContext } from '@luxalgo/vela'
 import type { WorkspaceWidgetContext } from '@luxalgo/vela/workspace'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
-import { CBSCRIPT, compile } from './engine'
+import { CBSCRIPT, compile, onScriptError, scriptErrors } from './engine'
 import { instanceIdFor, libIdOf, loadLibrary, newScriptId, saveLibrary, TEMPLATE, type Script } from './library'
 
 const PANEL_ID = 'cbedge-scripts'
@@ -49,8 +49,11 @@ const REFERENCE = `PINE SCRIPT  paste a TradingView indicator as is (v4, v5, v6)
   switch, your own functions f(x) =>, tuples [a, b] = …, ta.* math.*
   str.* color.* input.*, plot plotshape plotchar plotarrow hline fill
   bgcolor barcolor.
-  Not yet: request.security, arrays / maps, drawings (label.new,
-  line.new, box.new are skipped), strategy orders (plots only).
+  request.security: this symbol on higher timeframes, other symbols
+  this app charts (ES, NQ, SPY, QQQ …). Arrays and for…in loops.
+  Not yet: maps / matrices, drawings (label.new, line.new, box.new
+  are skipped), strategy orders (plots only).
+  A script that stops: Copy error + script, and send it over.
 
 CB SCRIPT  the same language, plus
   input("Length", 20, min=1)                      title first
@@ -139,17 +142,57 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   actRow.append(btnSave, btnAdd)
   const status = el(doc, 'div', 'cb-scr-status')
   status.setAttribute('role', 'status')
+  // an error can be selected, and copied in one tap — alone, or with the script for a bug report
+  const copyRow = el(doc, 'div', 'cb-scr-row')
+  const btnCopy = el(doc, 'button', 'cb-scr-btn cb-scr-small', 'Copy error')
+  const btnCopyAll = el(doc, 'button', 'cb-scr-btn cb-scr-small', 'Copy error + script')
+  copyRow.append(btnCopy, btnCopyAll)
+  copyRow.hidden = true
 
   const ref = el(doc, 'details', 'cb-scr-ref')
   const sum = el(doc, 'summary', '', 'Reference')
   const pre = el(doc, 'pre', 'cb-scr-pre', REFERENCE)
   ref.append(sum, pre)
 
-  body.append(pickRow, name, code, actRow, status, ref)
+  body.append(pickRow, name, code, actRow, status, copyRow, ref)
 
-  const say = (text: string, kind: 'ok' | 'err' | 'info' = 'info') => {
+  const say = (text: string, kind: 'ok' | 'err' | 'info' = 'info', fromChart = false) => {
     status.textContent = text
     status.dataset.kind = kind
+    status.dataset.chart = fromChart ? '1' : ''
+    copyRow.hidden = kind !== 'err'
+  }
+  const copyText = (t: string, btn: HTMLButtonElement) => {
+    const label = btn.textContent
+    const done = (ok: boolean) => {
+      btn.textContent = ok ? 'Copied' : 'Select and copy it'
+      setTimeout(() => (btn.textContent = label), 1400)
+    }
+    const fallback = () => {
+      const ta = doc.createElement('textarea')
+      ta.value = t
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      doc.body.append(ta)
+      ta.select()
+      let ok = false
+      try {
+        ok = doc.execCommand('copy')
+      } catch {
+        ok = false
+      }
+      ta.remove()
+      done(ok)
+    }
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t).then(() => done(true), fallback)
+    else fallback()
+  }
+  btnCopy.addEventListener('click', () => copyText(status.textContent ?? '', btnCopy))
+  btnCopyAll.addEventListener('click', () => copyText(`${status.textContent ?? ''}\n\n--- script: ${name.value.trim() || 'Untitled'} ---\n${code.value}`, btnCopyAll))
+  /** An error one of this script's chart copies has (data-dependent, so Save's dry run missed it). */
+  const chartError = (): string | null => {
+    for (const [id, msg] of scriptErrors()) if (libIdOf(id) === cur.id) return msg
+    return null
   }
   const fillPick = () => {
     pick.replaceChildren()
@@ -232,7 +275,9 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     const s = lib.find((x) => x.id === pick.value)
     if (s) {
       show(s)
-      say('', 'info')
+      const e = chartError()
+      if (e) say(`On the chart — ${e}`, 'err', true)
+      else say('', 'info')
     }
   })
   const touched = () => {
@@ -276,6 +321,11 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
 
   show(cur)
   say('Write a script or paste a TradingView one, Save, then Add to chart', 'info')
+  const offErrors = onScriptError((id, msg) => {
+    if (libIdOf(id) !== cur.id) return
+    if (msg) say(`On the chart — ${msg}`, 'err', true)
+    else if (status.dataset.chart === '1') say('Running on the chart', 'ok')
+  })
   return {
     onOpen() {
       // another tab or chart may have saved meanwhile
@@ -285,6 +335,11 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
         if (s) show(s)
         else fillPick()
       }
+      const e = chartError()
+      if (e) say(`On the chart — ${e}`, 'err', true)
+    },
+    destroy() {
+      offErrors()
     },
   }
 }

@@ -134,6 +134,17 @@
   min-height: 1.4em;
   line-height: 1.4;
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+.cb-scr .cb-scr-row[hidden] {
+  display: none;
+}
+.cb-scr .cb-scr-small {
+  height: 26px;
+  padding: 0 8px;
+  font-size: var(--text-2xs);
 }
 .cb-scr .cb-scr-status[data-kind='ok'] {
   color: var(--color-up);

@@ -43,8 +43,9 @@ import type {
 } from '@luxalgo/vela'
 import { stableSeriesId } from '@luxalgo/vela/plugin'
 import { tokenHexAlpha } from '@/design/theme'
+import { PROVIDER_NAME } from '../providerName'
 import { parse, type Program } from './lang'
-import { run, type FillEnd, type RunOpts, type RunResult } from './runtime'
+import { NeedSeries, run, type FillEnd, type RunOpts, type RunResult } from './runtime'
 
 export const CBSCRIPT = 'cbscript'
 
@@ -59,7 +60,27 @@ const DRY_BAR: OHLCV = { time: Date.UTC(2026, 0, 5, 15, 0), open: 100, high: 101
 /** Parse + check a script without a chart. Throws a ScriptError (with its line) on any fault. */
 export function compile(source: string): { prog: Program; result: RunResult } {
   const prog = parse(source)
-  return { prog, result: run(prog, [DRY_BAR]) }
+  return { prog, result: run(prog, [DRY_BAR], { dry: true }) }
+}
+
+// ── Errors a script hits ON A CHART (data-dependent ones the dry run can't see),
+// told to the Scripts panel so it can show them where they can be read and copied.
+type ErrorListener = (instanceId: string, message: string | null) => void
+const errorListeners = new Set<ErrorListener>()
+export function onScriptError(fn: ErrorListener): () => void {
+  errorListeners.add(fn)
+  return () => errorListeners.delete(fn)
+}
+const lastError = new Map<string, string>()
+function tellError(id: string, message: string | null) {
+  if ((lastError.get(id) ?? null) === message) return
+  if (message) lastError.set(id, message)
+  else lastError.delete(id)
+  for (const fn of errorListeners) fn(id, message)
+}
+/** The errors scripts on charts have right now, by instance id. */
+export function scriptErrors(): ReadonlyMap<string, string> {
+  return lastError
 }
 
 function valuesOf(schema: readonly InputSchema[], given: Record<string, InputValue> | undefined): Record<string, InputValue> {
@@ -242,28 +263,59 @@ export class CbScriptEngine implements ScriptingEngine {
     let cost = 0
     let first = true
     const market: RunOpts = { symbol: req.market.symbol.replace(/^[^:]*:/, ''), timeframe: req.market.timeframe }
+    // request.security on another symbol: its bars, fetched once per session (at the chart's timeframe)
+    const series = new Map<string, OHLCV[]>()
+    const fetching = new Set<string>()
+    const fetchFor = (need: NeedSeries, bars: readonly OHLCV[]) => {
+      const key = `${need.symbol}|${need.timeframe}`
+      if (fetching.has(key) || series.has(key)) return
+      if (!req.fetchSeries || series.size >= 8) {
+        series.set(key, [])
+        queueMicrotask(compute)
+        return
+      }
+      fetching.add(key)
+      const from = bars[0]?.time
+      const to = bars[bars.length - 1]?.time
+      req
+        .fetchSeries(`${PROVIDER_NAME}:${need.symbol}`, need.timeframe, { ...(from != null ? { from } : {}), ...(to != null ? { to: to + 86_400_000 } : {}) })
+        .then((got) => series.set(key, got ?? []))
+        .catch(() => series.set(key, []))
+        .finally(() => {
+          fetching.delete(key)
+          if (!stopped) compute()
+        })
+    }
     const compute = () => {
       timer = null
       if (stopped) return
       last = Date.now()
       const bars = req.getBars?.() ?? req.bars
       try {
-        const res = run(token.prog, bars, { ...market, inputs })
+        const res = run(token.prog, bars, { ...market, inputs, series })
         h.onModel(toModel(token.id, res, bars, valuesOf(res.inputs, inputs)))
         cost = Date.now() - last
+        tellError(token.id, null)
         if (first) {
           first = false
           for (const message of res.warnings) h.onWarning?.({ message, bar: 0 })
           h.onDone?.()
         }
       } catch (e) {
-        h.onError?.(e instanceof Error ? e : new Error(String(e)))
+        if (e instanceof NeedSeries) {
+          fetchFor(e, bars)
+          return
+        }
+        const err = e instanceof Error ? e : new Error(String(e))
+        tellError(token.id, err.message)
+        h.onError?.(err)
       }
     }
     queueMicrotask(compute)
     return {
       stop() {
         stopped = true
+        tellError(token.id, null)
         if (timer) clearTimeout(timer)
         timer = null
       },
