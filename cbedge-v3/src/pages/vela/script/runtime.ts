@@ -461,7 +461,14 @@ function nyToUtc(y: number, mo: number, d: number, h: number, mi: number, s: num
   return guess
 }
 /** Open time of the higher-timeframe bucket holding t ("D", "W", "M", "60", "240" …), New York days. */
-function bucketStart(t0: number, tf: string, shift = 0): number {
+/**
+ * Open time of the higher-timeframe bucket holding t. Days / weeks / months are New York
+ * calendar periods (a futures day opening 18:00 the evening before, via `shift`).
+ * Minute buckets ("60", "240", "720") count from the SESSION's first bar — `anchorOf` —
+ * the way TradingView builds intraday higher-timeframe bars: SPX 1h bars open 09:30,
+ * 10:30 …, a 12h bar is the whole cash session, ES 4h bars open 18:00, 22:00 …
+ */
+function bucketStart(t0: number, tf: string, shift = 0, anchorOf?: (t: number) => number): number {
   const m = /^(\d*)([DWM]?)$/i.exec(tf.trim())
   if (!m) return t0
   const n = m[1] ? parseInt(m[1], 10) : 1
@@ -472,12 +479,25 @@ function bucketStart(t0: number, tf: string, shift = 0): number {
   const midnight = nyToUtc(p.year, p.month, p.day, 0, 0, 0)
   if (unit === 'D') return n === 1 ? midnight : midnight - (((p.dow - 1) % n) * 86_400_000)
   if (unit === 'W') return midnight - ((p.dow + 5) % 7) * 86_400_000
-  if (unit === 'M') return nyToUtc(p.year, p.month, 1, 0, 0, 0)
+  if (unit === 'M') return nyToUtc(p.year, Math.floor((p.month - 1) / n) * n + 1, 1, 0, 0, 0)
   if (!m[1]) return t
   const step = n * 60_000
-  return midnight + Math.floor((t - midnight) / step) * step
+  const a = anchorOf?.(t)
+  const base = a != null && !isNa(a) && a <= t ? a : midnight
+  return base + Math.floor((t - base) / step) * step
 }
-const dayKey = (t: number, shift = 0) => {
+/** Each session day's first bar time, for anchoring intraday buckets (see bucketStart). */
+function sessionAnchors(times: ArrayLike<number>, shift: number): (t: number) => number {
+  const first = new Map<number, number>()
+  for (let i = 0; i < times.length; i++) {
+    const t = times[i]!
+    const k = dayKey(t, shift)
+    const was = first.get(k)
+    if (was === undefined || t < was) first.set(k, t)
+  }
+  return (t) => first.get(dayKey(t, shift)) ?? NaN
+}
+function dayKey(t: number, shift = 0): number {
   const p = nyTime(t + shift)
   return p.year * 10000 + p.month * 100 + p.day
 }
@@ -887,6 +907,9 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   const ohlc4 = lazy('ohlc4', () => col((b) => (b.open + b.high + b.low + b.close) / 4))
   const hlcc4 = lazy('hlcc4', () => col((b) => (b.high + b.low + 2 * b.close) / 4))
   const days = lazy('days', () => Float64Array.from(T, (t) => dayKey(t, dayShift)))
+  let chartAnch: ((t: number) => number) | null = null
+  /** The chart's session-day first bars (intraday higher-timeframe buckets count from them). */
+  const chartAnchors = () => (chartAnch ??= sessionAnchors(T, dayShift))
   const vwapOf = (src: Float64Array) => {
     const out = new Float64Array(N)
     const dk = days()
@@ -952,7 +975,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'syminfo.tickerid': () => symbol,
     'syminfo.root': () => symbol,
     'syminfo.description': () => symbol,
-    'syminfo.prefix': () => 'CBEDGE',
+    'syminfo.prefix': () => 'VOLTICK.IO',
     'syminfo.mintick': () => 0.01,
     'syminfo.pointvalue': () => 1,
     'syminfo.currency': () => 'USD',
@@ -1449,10 +1472,11 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         const n = s.names.length
         return (f) => {
           const v = ev(f)
-          if (!Array.isArray(v)) throw new ScriptError(`expected ${n} values in [ ] on the right`, s.line)
+          // na in place of a tuple (a request.security bar before its first value): all na
+          if (!Array.isArray(v) && !(typeof v === 'number' && isNa(v))) throw new ScriptError(`expected ${n} values in [ ] on the right`, s.line)
           for (let k = 0; k < n; k++) {
             const slot = gets[k]!(f)
-            slot.cur = v[k] ?? NaN
+            slot.cur = Array.isArray(v) ? (v[k] ?? NaN) : NaN
             keep(slot, f.i, slot.cur)
           }
           return v
@@ -1563,8 +1587,12 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       X = []
       let last = NaN
       const sh = /^(ES|NQ|MES|MNQ|YM|MYM|RTY|M2K|CL|GC)$/i.test(sym) ? 6 * 3_600_000 : 0
+      const anchors = sessionAnchors(
+        srcBars.map((b) => b.time),
+        sh,
+      )
       for (const b of srcBars) {
-        const t = bucketStart(b.time, reqTf, sh)
+        const t = bucketStart(b.time, reqTf, sh, anchors)
         const vol = b.volume ?? 0
         if (t !== last) {
           X.push({ time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: Number.isFinite(vol) ? vol : 0 })
@@ -1578,6 +1606,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         }
       }
     } else X = srcBars.slice()
+    if (htf && X.length < 20 && !opts.dry)
+      warn(`only ${X.length} ${reqTf} bars of history here (the intraday tape is about 30 days deep) — ${reqTf} values that need a longer lookback stay empty`)
     const cap = new Map<object, unknown[]>()
     run(prog, X, { inputs: opts.inputs, symbol: sym, timeframe: htf ? reqTf : tf, capture: cap, series: opts.series, dry: opts.dry })
     r = { X, cap }
@@ -1648,6 +1678,12 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         if (same && !htf) st.any = 'pass'
         else {
           let srcBars: readonly OHLCV[] = bars
+          if (same && htf && chartMin < 5 && reqMin >= 60 && !opts.dry) {
+            // a 1m chart holds a few days; hourly-and-up levels want the 5m tape's 30
+            const deeper = opts.series?.get(`${sym || bareSym(symbol)}|5`)
+            if (!deeper) throw new NeedSeries(sym || bareSym(symbol), '5')
+            if (deeper.length > bars.length / 5) srcBars = deeper
+          }
           if (!same) {
             const got = opts.series?.get(`${sym}|${tf}`)
             if (!got) {
@@ -1755,7 +1791,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const line = node.line
     // a method call on a variable: xs.push(1), s.length() → array.push(xs, 1), str.length(s)
     const dot = node.name.indexOf('.')
-    if (dot > 0 && !funcs.has(node.name)) {
+    if (dot > 0 && !funcs.has(node.name) && !BUILTINS[node.name] && node.name !== 'request.security' && node.name !== 'request.security_lower_tf') {
       const recv = node.name.slice(0, dot)
       const method = node.name.slice(dot + 1)
       if (!method.includes('.') && resolve(cx, recv)) return compileMethod(cx, node, recv, method)
@@ -3070,7 +3106,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       const sess = optStr(c, 1, 'session')
       if (sess && !inSession(t, sess)) return NaN
       const htf = optStr(c, 0, 'timeframe')
-      return htf && htf !== tf ? bucketStart(t, htf) : t
+      return htf && htf !== tf ? bucketStart(t, htf, dayShift, chartAnchors()) : t
     },
     time_close: (c) => {
       const t = T[c.i]!
@@ -3676,7 +3712,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     // ── timeframes ──
     'timeframe.change': (c) => {
       const s = c.site()
-      const t = bucketStart(T[c.i]!, optStr(c, 0, 'timeframe') ?? tf, dayShift)
+      const t = bucketStart(T[c.i]!, optStr(c, 0, 'timeframe') ?? tf, dayShift, chartAnchors())
       const r = !isNa(s.x) && t !== s.x ? 1 : 0
       s.x = t
       return r
@@ -3688,6 +3724,35 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       const n = m[1] ? parseInt(m[1], 10) : 1
       const u = m[2]!.toUpperCase()
       return n * (u === 'S' ? 1 : u === 'D' ? 86400 : u === 'W' ? 604800 : u === 'M' ? 2628003 : 60)
+    },
+    // ── ticker ids: request.security reads only the symbol, so these return it ──
+    'ticker.new': (c) => {
+      const pre = optStr(c, 0, 'prefix') ?? ''
+      const t = optStr(c, 1, 'ticker') ?? symbol
+      return pre ? `${pre}:${t}` : t
+    },
+    'ticker.modify': (c) => optStr(c, 0, 'tickerid') ?? symbol,
+    'ticker.standard': (c) => optStr(c, 0, 'symbol') ?? symbol,
+    'ticker.inherit': (c) => optStr(c, 1, 'symbol') ?? symbol,
+    'ticker.heikinashi': (c) => {
+      warn('Heikin Ashi data isn\'t available — used the standard candles')
+      return optStr(c, 0, 'symbol') ?? symbol
+    },
+    'ticker.renko': (c) => {
+      warn('Renko data isn\'t available — used the standard candles')
+      return optStr(c, 0, 'symbol') ?? symbol
+    },
+    'ticker.linebreak': (c) => {
+      warn('Line break data isn\'t available — used the standard candles')
+      return optStr(c, 0, 'symbol') ?? symbol
+    },
+    'ticker.kagi': (c) => {
+      warn('Kagi data isn\'t available — used the standard candles')
+      return optStr(c, 0, 'symbol') ?? symbol
+    },
+    'ticker.pointfigure': (c) => {
+      warn('Point & figure data isn\'t available — used the standard candles')
+      return optStr(c, 0, 'symbol') ?? symbol
     },
     // ── arrays ──
     ...ARRAY_FNS,

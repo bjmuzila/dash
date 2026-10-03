@@ -25617,3 +25617,36 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - Node bench: Liquidity Swings draws 59 labels, 59 lines and 61 boxes over 3,000 mock bars. Intrabar precision on and off give different volumes. Every earlier script still runs, and the label warnings from earlier scripts are gone now that labels draw.
   - Headless Chromium against the mock data: the pasted script draws its zones, solid and dashed levels, and K-volume labels. CB examples, the copy-error flow and on-chart errors still work. No console errors.
 - **Files in `generated/`:** `2026-10-03-vela-pine-liquidity-swings.png` (mock data)
+
+## 2026-10-03 - v3 Vela: CB Script ticker.* (Saty ATR Levels runs)
+- **Why:** "Saty ATR Levels" stopped at `unknown function "ticker.new"`.
+- **The `ticker.*` functions now exist:** `ticker.new / modify / standard / inherit` return the symbol id (`ticker.new(syminfo.prefix, syminfo.ticker, session=…)` gives `VOLTICK.IO:SPX`), which `request.security` reads as this symbol. `ticker.heikinashi / renko / linebreak / kagi / pointfigure` fall back to standard candles, with a note.
+- **Related fixes:**
+  - A local variable named like a built-in namespace no longer turns that namespace's calls into method calls on the variable. Saty names one `ticker`, then calls `ticker.new`; a local `timeframe` would have hit `timeframe.change(…)` the same way.
+  - Multi-month buckets (`3M`, `6M`, `12M`) start on the right month.
+  - `syminfo.prefix` is now `VOLTICK.IO`.
+- **History limits:**
+  - On a 1–4 minute chart, hourly-and-up `request.security` folds the 5m tape (~30 days) instead of the 1m tape (a few days).
+  - When a higher timeframe has fewer than 20 bars of history, a note says longer lookbacks stay empty. Saty's Multiday / Swing / Position modes need weekly and monthly ATR, which ~30 days of intraday data can't supply. Day mode (the default) works: daily ATR(14) needs 15 sessions, so the last ~6–7 sessions carry levels.
+- **Files:** `cbedge-v3/src/pages/vela/script/runtime.ts`.
+- **Checks:**
+  - No new `tsc` errors. `check:theme` is clean. The build passes.
+  - Node bench with 21 RTH sessions: Day-mode levels start on session 15. The table reads "Day Range ($54.97) is 94.2% of ATR ($58.37)" with the Calls / Puts triggers filled in. Every earlier script still runs.
+  - Headless Chromium against the mock data (only a few days deep, so ATR shows NaN there): the table draws top-right and the previous-close step line draws. No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-pine-saty-atr.png` (mock data)
+
+## 2026-10-03 - v3 Vela: CB Script tuple requests + session-anchored intraday timeframes ("1H RSI & 12H Strat" runs)
+- **Why:** "1H RSI & 12H Strat" stopped on the chart with `Line 20: expected 3 values in [ ] on the right`.
+  - `[h, l, c] = request.security(…, "720", [high, low, close])` gets `na`, not a tuple, on the bars before the first 12H bar closes. On TradingView every name is then `na`; here that was an error.
+- **Fix:** a tuple declaration given `na` now sets every name to `na`. Anything else that isn't a tuple still errors.
+- **Intraday higher timeframes now count from the session open, as on TradingView:**
+  - Covers `request.security` buckets, `time(tf)` and `timeframe.change(tf)` for "60", "240", "720" ….
+  - SPX 1h bars open 09:30, 10:30 … 15:30. A 12H bar is the whole cash session, so Prev/Curr 12H compare whole sessions.
+  - ES 4h / 12h bars count from the 18:00 open.
+  - These buckets used to start at midnight New York, which split SPX at 12:00 and shifted every hourly bar half an hour. `sessionAnchors()` takes each session day's first bar from the bars being folded.
+- **Files:** `cbedge-v3/src/pages/vela/script/runtime.ts`.
+- **Checks:**
+  - No new `tsc` errors. `check:theme` is clean. The build passes.
+  - Node bench: `time("60")` gives 09:30 … 15:30, `time("720")` gives one bucket per session, and a lookahead-off 60m request trails by a bar as expected. The script fills its table on 30 RTH sessions of SPX and on ETH ES. Every earlier script still runs, and Saty Day mode is unchanged.
+  - Headless Chromium against the mock data: the table draws top-right with its border and translucent background ("@bzilatrades", 1H RSI, Prev/Curr 12H). No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-pine-rsi-12h-strat.png` (mock data)
