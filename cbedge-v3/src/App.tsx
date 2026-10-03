@@ -138,6 +138,8 @@ const MEcon = lazy(() => import('@/mobile/pages/MEcon'))
 const MAlerts = lazy(() => import('@/mobile/pages/MAlerts'))
 // /m/whales — pages/Whales.tsx with its `phone` layout. See MWhales.tsx.
 const MWhales = lazy(() => import('@/mobile/pages/MWhales'))
+// /m/vela — pages/Vela.tsx with its `phone` layout. See MVela.tsx.
+const MVela = lazy(() => import('@/mobile/pages/MVela'))
 
 // STILL RETIRED 2026-08-30 — Test Lab (/test) and Journal (/trading) are gone
 // from v3, along with the ICT, ES Candles, Board and Multi Greek rail slots
@@ -201,6 +203,7 @@ export default function App() {
             <Route path="/m/econ" element={<MEcon />} />
             <Route path="/m/alerts" element={<MAlerts />} />
             <Route path="/m/whales" element={<MWhales />} />
+            <Route path="/m/vela" element={<MVela />} />
 
             <Route path="*" element={<NotFound />} />
           </Routes>

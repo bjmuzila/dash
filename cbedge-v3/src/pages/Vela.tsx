@@ -8,6 +8,7 @@ import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { Page } from '@/design/primitives/Page'
 import { CbEdgeProvider, DEFAULT_HISTORY_URL, PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
 import { WALLS_TYPE, registerCbWalls } from '@/pages/vela/wallsIndicator'
+import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /vela — VELA, LuxAlgo's open-source chart workspace, on CB Edge's own tape.
@@ -64,36 +65,53 @@ import { WALLS_TYPE, registerCbWalls } from '@/pages/vela/wallsIndicator'
 // cell is remembered under `cb-v3-vela-walls`, so a user who takes it off with
 // the legend ✕ has taken it off: it is not put back on the next load. After
 // that it lives in Vela's saved document like any study (inputs, visibility).
+//
+// ── The camera copies ────────────────────────────────────────────────────────
+// Vela's screenshot button (and its phone row, and Ctrl/Cmd+Alt+S) puts the
+// PNG on the CLIPBOARD instead of downloading it — pages/vela/copyShot.ts. It
+// falls back to the download, and says so, where a browser will not take an
+// image on the clipboard.
+//
+// ── The phone build — /m/vela ────────────────────────────────────────────────
+// mobile/pages/MVela.tsx renders THIS page with `phone`: Vela's own touch
+// chrome (bottom bar, full-screen pickers, pinch/drag), ONE chart (no layout
+// picker on 390px), and its OWN saved document under `cb-v3-vela-m` — so a
+// four-chart desktop grid never lands on a phone, and the phone never collapses
+// the desktop's grid back to one. The page-symbol sync is desktop-only: the app
+// toolbar draws no ticker picker on /m/*, and a symbol picked on the phone
+// should not move the board's.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = 'cb-v3-vela'
-/** Cell ids that have already been given CB Walls once (see the header). */
-const WALLS_SEEDED_KEY = 'cb-v3-vela-walls'
+const DESKTOP_KEY = 'cb-v3-vela'
+const PHONE_KEY = 'cb-v3-vela-m'
+/** Cell ids that have already been given CB Walls once, per saved document. */
+const seededKey = (storageKey: string) => `${storageKey}-walls`
 
-// Before any workspace exists: Vela reads its native-indicator registry live,
-// so every chart built after this line can carry the study.
+// Before any workspace exists: Vela reads its native-indicator and widget-action
+// registries when a workspace is BUILT, so both registrations go here.
 registerCbWalls()
+registerCopyScreenshot()
 
-function readSeeded(): Set<string> {
+function readSeeded(key: string): Set<string> {
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(WALLS_SEEDED_KEY) ?? '[]')
+    const raw: unknown = JSON.parse(localStorage.getItem(key) ?? '[]')
     return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
   } catch {
     return new Set()
   }
 }
 
-function writeSeeded(ids: Set<string>): void {
+function writeSeeded(key: string, ids: Set<string>): void {
   try {
-    localStorage.setItem(WALLS_SEEDED_KEY, JSON.stringify([...ids]))
+    localStorage.setItem(key, JSON.stringify([...ids]))
   } catch {
     /* private mode: the study is still added; it may be offered again next load */
   }
 }
 
 /** Give each cell that has never had it the walls study, once. */
-function seedWalls(ws: VelaWorkspace, ids: string[]): void {
-  const seeded = readSeeded()
+function seedWalls(ws: VelaWorkspace, ids: string[], key: string): void {
+  const seeded = readSeeded(key)
   let changed = false
   for (const id of ids) {
     if (seeded.has(id)) continue
@@ -103,7 +121,7 @@ function seedWalls(ws: VelaWorkspace, ids: string[]): void {
     seeded.add(id)
     changed = true
   }
-  if (changed) writeSeeded(seeded)
+  if (changed) writeSeeded(key, seeded)
 }
 
 // Warm the default chart's history the moment this route's chunk evaluates, in
@@ -133,8 +151,15 @@ function bareTicker(symbol: string | undefined): string {
 
 const FUTURES_TICKERS = new Set(['ES', 'NQ', '/ES', '/NQ', 'ES1!', 'NQ1!'])
 
-export default function Vela() {
+export interface VelaProps {
+  /** The phone build (/m/vela): touch chrome, one chart, its own saved document. */
+  phone?: boolean
+}
+
+export default function Vela({ phone = false }: VelaProps) {
   const { symbol: pageSymbol, setSymbol: setPageSymbol } = usePageSymbol()
+  // Fixed for the life of the mount — onMount reads it once, like everything else.
+  const phoneRef = useRef(phone)
   const wsRef = useRef<VelaWorkspace | null>(null)
   // The page symbol at mount seeds a FIRST visit; a saved workspace overrides it.
   const seedSymbol = useRef(pageSymbol)
@@ -153,8 +178,12 @@ export default function Vela() {
     // candles themselves take the separate upColor/downColor chart options and
     // otherwise keep Vela's own green/red. Same two tokens for both.
     const theme = cbTheme()
+    const onPhone = phoneRef.current
+    const storageKey = onPhone ? PHONE_KEY : DESKTOP_KEY
     const ws = new VelaWorkspace(host, {
-      layout: '1',
+      // Phone: single-chart mode and Vela's touch chrome, whatever the width
+      // says — the tab can be opened on a laptop and should still be the phone.
+      ...(onPhone ? { layout: false as const, layoutMode: 'mobile' as const } : { layout: '1' }),
       symbol: `${PROVIDER_NAME}:${seedSymbol.current}`,
       timeframe: '5',
       live: true,
@@ -164,14 +193,16 @@ export default function Vela() {
       timezone: 'America/New_York',
       timeframes: ['1', '5', '15', '30', '60', '240', 'D'],
       providers: { [PROVIDER_NAME]: () => new CbEdgeProvider() },
-      persist: STORAGE_KEY,
+      persist: storageKey,
     })
     wsRef.current = ws
+    const unbindShot = bindShotWorkspace(ws)
 
     // Chart → toolbar. `state:changed` is Vela's debounced "something worth
     // saving moved" signal, and it covers a symbol switch AND a different cell
     // becoming active; `cell:active` is the immediate half of the latter.
     const reflect = () => {
+      if (onPhone) return
       const t = bareTicker(ws.chart.market.symbol)
       if (t && !FUTURES_TICKERS.has(t) && PAGE_TICKER_RE.test(t)) setPageSymbolRef.current(t)
     }
@@ -179,13 +210,15 @@ export default function Vela() {
     const offActive = ws.on('cell:active', reflect)
 
     // CB Walls: the cells that exist now, and every cell a layout change mints.
-    seedWalls(ws, ws.cells().map((c) => c.id))
-    const offCreated = ws.on('cell:created', ({ id }) => seedWalls(ws, [id]))
+    const walls = seededKey(storageKey)
+    seedWalls(ws, ws.cells().map((c) => c.id), walls)
+    const offCreated = ws.on('cell:created', ({ id }) => seedWalls(ws, [id], walls))
 
     return () => {
       offState()
       offActive()
       offCreated()
+      unbindShot()
       wsRef.current = null
       ws.destroy()
       host.remove()
@@ -199,6 +232,7 @@ export default function Vela() {
   useEffect(() => {
     if (lastPageSymbol.current === pageSymbol) return
     lastPageSymbol.current = pageSymbol
+    if (phoneRef.current) return
     const ws = wsRef.current
     if (!ws) return
     const next = pageSymbol.trim().toUpperCase()

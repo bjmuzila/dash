@@ -71,6 +71,11 @@ export const MOBILE_TABS: MobileTab[] = [
   // rows, sub-tabs, probe as a sheet) and keeps the one fetch, the saved
   // filters and the tracked store. See src/mobile/pages/MWhales.tsx.
   { id: 'whales', path: '/m/whales', label: 'Whale', title: 'Whale Archive', icon: '🐋' },
+  // Vela (2026-10-03) — LuxAlgo's chart workspace on our tape, with CB Walls.
+  // NOT a second page: pages/Vela.tsx with `phone` (one chart, Vela's own touch
+  // chrome, its own saved document). See src/mobile/pages/MVela.tsx. ⛵ rather
+  // than the rail's old 🕯️, which the SPX tab above already wears.
+  { id: 'vela', path: '/m/vela', label: 'Vela', title: 'Vela Charts', icon: '⛵' },
 ]
 
 export const MOBILE_ROOT = '/m'
@@ -87,6 +92,7 @@ export const DESKTOP_TO_MOBILE: Record<string, string> = {
   '/traders-dashboard': '/m/gex',
   '/em': '/m/em',
   '/whales': '/m/whales',
+  '/vela': '/m/vela',
 }
 
 /** Phone route → the desktop page it stands in for (the "Desktop site" action). */
@@ -100,6 +106,7 @@ export const MOBILE_TO_DESKTOP: Record<string, string> = {
   // every desktop route, so the board is the honest landing.
   '/m/alerts': '/',
   '/m/whales': '/whales',
+  '/m/vela': '/vela',
 }
 
 export function isMobilePath(pathname: string | null | undefined): boolean {

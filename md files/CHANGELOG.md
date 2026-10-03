@@ -25344,3 +25344,18 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `cbedge-v3/src/pages/vela/cbedgeProvider.ts`: `resolveSym` / `ResolvedSym` / `SymKind` are now exported (no behaviour change).
 - **Checks.** No new `tsc` errors (the same 5 existing ones), and `check:theme` is clean. The `/vela` route chunk is 6.9kb brotli and `lib-vela` is unchanged. Tested in headless Chromium against a mock walls/basis backend: SPX 5m/1h/D, ES shifted by basis, a ticker with no walls showing a quiet legend row, a 2×2 grid with the study on all four cells, a reload keeping one per cell, and the Voltick naming. Not yet tested against live walls_log data.
 - **File in `generated/`:** `2026-10-03-vela-cb-walls.png` (mock data)
+
+## 2026-10-03 - v3 Vela: phone tab (/m/vela) + the camera copies to the clipboard
+
+- **Phone build.** `cbedge-v3/src/mobile/pages/MVela.tsx` (new) renders `pages/Vela.tsx` with a new `phone` prop inside `MobileShell` (`bare`, `fill`). It uses Vela's own touch chrome (`layoutMode: 'mobile'`): a bottom bar, full-screen symbol/timeframe pickers, and pinch/drag on the plot. It shows one chart (`layout: false`) and keeps its own saved document, `cb-v3-vela-m`, with its own walls-seeded list `cb-v3-vela-m-walls`, so a desktop grid never lands on the phone and the phone never collapses the desktop grid. The page-symbol sync is desktop-only. CB Walls and the data provider are shared with desktop.
+  - `src/mobile/mobileNav.ts`: new 8th tab `{ id: 'vela', label: 'Vela', icon: '⛵' }`, plus `/vela ↔ /m/vela` in both redirect maps, so phones opening `/v3/vela` land on the tab. Holding the tab goes to the desktop page.
+  - `src/App.tsx`: lazy `<Route path="/m/vela">`. A hard refresh is already handled by `app/v3/m/[tab]/route.ts`.
+  - `src/shell/Shell.tsx`: the desktop rail icon for Vela changes from 🕯️ to ⛵ (the phone bar's SPX tab already uses 🕯️).
+  - `cbedge-v3/AGENTS.md`: added a `/m/vela` row to the phone-build table.
+- **Camera → clipboard.** `cbedge-v3/src/pages/vela/copyShot.ts` (new) takes over Vela's `'screenshot'` topbar slot by registering a widget action under that id. The camera button (same spot, same icon), the phone ⋮ → Screenshot row and Ctrl/Cmd+Alt+S now copy the PNG (`ws.screenshot()`: the whole visible layout, the same pixels as before) to the clipboard and show "Screenshot copied to clipboard". The write happens synchronously inside the tap so Safari allows it. If the browser won't accept an image on the clipboard, it falls back to the old download and says so. Registered at module scope in `Vela.tsx`, before any workspace is built.
+- **Checks.** No new `tsc` errors (the same 5 existing ones), and `check:theme` is clean. Chunks: `MVela` 0.4kb and `Vela` 7.4kb brotli. The entry/css/react/initial overages were already there. Headless Chromium (iPhone 13 emulation + desktop):
+  - `/v3/vela` on a phone redirects to `/v3/m/vela`, with no rail, Vela in mobile layout, an 8-tab bar with Vela lit, and CB Walls on the chart under `cb-v3-vela-m`.
+  - On desktop, the camera puts `image/png` on the clipboard with no download, and so does the chord.
+  - On the phone, ⋮ → Screenshot puts `image/png` on the clipboard.
+  - Not yet tried on a real iPhone/Android.
+- **File in `generated/`:** `2026-10-03-vela-mobile.png` (mock data)

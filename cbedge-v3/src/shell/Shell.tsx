@@ -147,7 +147,8 @@ export const NAV: NavItem[] = [
   {
     to: '/vela',
     label: 'Vela',
-    icon: '🕯️',
+    // ⛵ — "vela" is also a sail, and the phone bar's SPX tab already wears 🕯️.
+    icon: '⛵',
     prefetch: ['/api/snapshots/etf-candles?symbol=SPX&days=30&interval=5&limit=8000'],
   },
   // Last in the rail on purpose — it is the way OUT of v3, not a place to work.
