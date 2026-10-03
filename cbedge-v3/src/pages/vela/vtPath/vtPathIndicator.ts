@@ -9,10 +9,10 @@
 //                        level held then and the size it was there: ★ Volt (gold,
 //                        lit, a size up), ↘ Reversal, ◆ Coil, ↯ Surge
 //   Voltick Path Ribbon  the same rows as bands broken at every strike change —
-//                        thickness = size, brightness = growth, a ▲/▼ chip on how
-//                        much each stretch grew or shrank, a dot on the live end.
-//                        Volt, Surge and Reversal only (Path Ribbon leaves out
-//                        the Coil, as on Voltick)
+//                        thickness = size, brightness = growth, a dot on the live
+//                        end. Volt, Surge and Reversal only (Path Ribbon leaves
+//                        out the Coil, as on Voltick). No ▲/▼ "since" text on the
+//                        bands — CB Edge only; Voltick keeps it (vtPathLayer.ts)
 //
 // Each study is a native indicator whose type id IS its renderer layer's id
 // (vtPathLayer.ts): it resolves the rows (vtPathData.ts) and hands them to the

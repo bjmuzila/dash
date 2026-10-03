@@ -25413,3 +25413,13 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - Headless Chromium on a mock ladder: desktop SPX 5m shows Path bubbles (gold Volt with halo, pink Reversal, blue Coil diamonds, Surge circles); swapping to Path Ribbon draws bands, ▲/▼ chips and live dots; the phone three-stack has Path on all three charts; no console errors.
   - Not yet checked against the live recorder or on a real phone.
 - **Files in `generated/`:** `2026-10-03-vela-voltick-path.png`, `2026-10-03-vela-voltick-path-ribbon.png` (mock data)
+
+## 2026-10-03 - v3 Vela: Path Ribbon without the text (CB Edge only)
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts`: the Path Ribbon no longer draws the ▲/▼ "… since 10:45 am" chips on its bands.
+  - Removed: the label candidates, the placement pass, the chip draw and its now-unused helpers (MONO font, the clock and day formatters, `roundRect`).
+  - Unchanged: the bands, growth glow, edges and the live-end dot.
+  - The header marks this as a deliberate CB Edge-only difference; Voltick keeps its chips.
+- `vtPathIndicator.ts`: the header comment was updated to match.
+- **Checks.** No new `tsc` errors, and `check:theme` is clean. Headless Chromium on the mock ladder shows Ribbon bands and dots with no text, and no console errors.
+- **File in `generated/`:** `2026-10-03-vela-path-ribbon-no-text.png` (mock data)

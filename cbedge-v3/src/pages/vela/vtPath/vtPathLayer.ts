@@ -13,6 +13,11 @@
 //   hex / rgba literals                 →    tokens.css (--color-vt-*), with the
 //                                            alpha applied here
 //
+// ONE DELIBERATE DIFFERENCE, CB Edge only (2026-10-03, Brandon: "for path
+// ribbons, remove the text on the ribbons — for cbedge only"): the Ribbon draws
+// no ▲/▼ "… since 10:45 am" chips. Bands, growth glow and the live dot are
+// Voltick's, unchanged. Voltick itself keeps its chips; do not carry this back.
+//
 // Each shape is a Vela RENDERER LAYER (registerRendererLayer) owned by the
 // native indicator of the same type id (vtPathIndicator.ts), which pushes the
 // resolved rows through `ctx.pushData`. The layer repaints on every pan / zoom /
@@ -39,7 +44,6 @@ import {
   pathRadius,
   pathSizes,
   pathZoomRadius,
-  placeRibbonLabels,
   ribbonHops,
   ribbonInk,
   ribbonRowFacts,
@@ -77,8 +81,6 @@ const ROLE_TOKEN: Record<PathRole, string> = {
   coil: '--color-vt-coil',
 }
 
-/** Voltick's MONO stack (theme.jsx) — the ribbon's ▲/▼ chips. */
-const MONO = "'JetBrains Mono',ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace"
 const FLAT_SPAN = 0.03
 const REF_MOVE = 1.6
 
@@ -86,7 +88,7 @@ const hb = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16)
 /** A token's channels at an alpha, as `#rrggbbaa` (what every canvas accepts). */
 const hexA = (c: RGB, a: number) => `#${hb(c[0])}${hb(c[1])}${hb(c[2])}${hb(Math.max(0, Math.min(1, a)) * 255)}`
 
-// ── New York clock (Voltick nyParts / the ribbon's "since" words) ───────────
+// ── New York clock (Voltick nyParts — the ribbon's per-session size law) ────
 
 const NY_PARTS = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York',
@@ -102,18 +104,6 @@ function nyParts(ms: number): { day: string; mins: number } {
   for (const x of NY_PARTS.formatToParts(ms)) p[x.type] = x.value
   const h = Number(p.hour) % 24
   return { day: `${p.year}-${p.month}-${p.day}`, mins: h * 60 + Number(p.minute) }
-}
-const CLOCK_OF = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true })
-const DAY_OF = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.arcTo(x + w, y, x + w, y + h, r)
-  ctx.arcTo(x + w, y + h, x, y + h, r)
-  ctx.arcTo(x, y + h, x, y, r)
-  ctx.arcTo(x, y, x + w, y, r)
-  ctx.closePath()
 }
 
 /** Voltick's boldness curve, pinned at 15% (the shipped default). */
@@ -270,7 +260,7 @@ class RibbonDraw {
   private factsOf = new WeakMap<PathRow[], Map<PathRow, RowFacts>>()
 
   draw(g: Geo, d: PathPayload): void {
-    const { ctx, X, Y, width, height } = g
+    const { ctx, X, Y, width } = g
     const rows = d.rows
     const quiet = d.quiet
     const { bold, up } = boldOf(d.ci)
@@ -304,12 +294,6 @@ class RibbonDraw {
     }
     let nowT = -Infinity
     for (const r of rows) if (!r.pathOnly && r.pts.length) nowT = Math.max(nowT, r.pts[r.pts.length - 1]!.t)
-    const nowDay = Number.isFinite(nowT) ? nyParts(nowT * 1000).day : null
-    const sinceWords = (tSec: number) => {
-      const dt = new Date(tSec * 1000)
-      const hm = CLOCK_OF.format(dt).toLowerCase()
-      return nyParts(tSec * 1000).day === nowDay ? hm : `${DAY_OF.format(dt)}, ${hm}`
-    }
     let pxPerStrike = Infinity
     {
       const ks = [...new Set(rows.filter((r) => !r.pathOnly).flatMap((r) => r.pts.map((p) => p.p)))].sort((a, b) => a - b)
@@ -395,10 +379,8 @@ class RibbonDraw {
       S.forEach((q, j) => (j ? ctx.lineTo(q.x, q[key]) : ctx.moveTo(q.x, q[key])))
       ctx.stroke()
     }
-    const boxes: number[][] = []
-    const cands: Array<{ right: number; above: number; below: number; text: string; rgb: RGB; pri: number; t: number }> = []
     const dots: Array<{ x: number; y: number; rgb: RGB }> = []
-    for (const { r, runs: whole, amp, holeSec, F } of bands) {
+    for (const { r, runs: whole, amp, holeSec } of bands) {
       const cut = r.lead
         ? { runs: whole, toGold: null as Map<BandQ[], number> | null, fromGold: null as Map<BandQ, number> | null }
         : cutAtGold(whole, voltSpans, holeSec)
@@ -436,29 +418,14 @@ class RibbonDraw {
           : Math.min(1, (bold(0.12, 0.4575, 0.95) + 0.3 * last.lit) * EDGE)
         const gF = ctx.createLinearGradient(x0, 0, x1, 0)
         const gB = ctx.createLinearGradient(x0, 0, x1, 0)
-        let yTop = Infinity
-        let yBot = -Infinity
         for (const q of S) {
           const u = Math.min(1, Math.max(0, (q.x - x0) / L))
           const ink = ribbonInk(nowT - q.q.t)
           const gg = Number.isFinite(q.q.g) ? q.q.g : 1
           gF.addColorStop(u, hexA(rgb, Math.min(RIBBON_GLOW.ceiling, fillA * q.w * ink.fill * gg)))
           gB.addColorStop(u, hexA(rgb, Math.min(1, bankA * Math.pow(q.w, 1 + 3 * B2_BANK_LEAD) * ink.bank * Math.sqrt(gg))))
-          if (q.top < yTop) yTop = q.top
-          if (q.bot > yBot) yBot = q.bot
         }
-        boxes.push([x0, yTop - 1.5, x1, yBot + 1.5])
-        const ch = F?.end.get(last.t)
-        if (ch)
-          cands.push({
-            right: last.x - 8,
-            above: yTop - 9.5,
-            below: yBot + 9.5,
-            text: `${ch.text} since ${sinceWords(ch.since)}`,
-            rgb,
-            pri: r.lead ? 0 : 1,
-            t: last.t,
-          })
+        // (Voltick places a ▲/▼ "since" chip here — left out on CB Edge, see the header.)
         ctx.globalAlpha = 1
         ctx.fillStyle = gF
         ctx.fill()
@@ -468,30 +435,8 @@ class RibbonDraw {
         edgeOf(S, 'bot')
       }
     }
-    ctx.font = `600 10px ${MONO}`
-    ctx.textBaseline = 'middle'
-    for (const dt of dots) boxes.push([dt.x - 6, dt.y - 6, dt.x + 6, dt.y + 6])
-    const order = cands.slice().sort((a, b) => a.pri - b.pri || b.t - a.t)
-    const placed = placeRibbonLabels(
-      order.map((c) => {
-        const w = ctx.measureText(c.text).width
-        const x = c.right - w
-        return { ...c, w, h: 14, at: [{ x, y: c.above }, { x, y: c.below }] }
-      }),
-      boxes,
-      width,
-      height,
-    )
-    const panel = tokenRgb('--color-vt-panel')
     const rim = hexA(tokenRgb('--color-vt-path-rim'), 0.9)
     ctx.globalAlpha = 1
-    for (const c of placed) {
-      ctx.fillStyle = hexA(panel, quiet ? 0.5 : 0.8)
-      roundRect(ctx, c.x - 1, c.y - 7, c.w + 2, 14, 3)
-      ctx.fill()
-      ctx.fillStyle = hexA(c.rgb, quiet ? 0.6 : 0.95)
-      ctx.fillText(c.text, c.x, c.y)
-    }
     for (const dt of dots) {
       ctx.beginPath()
       ctx.arc(dt.x, dt.y, 5.5, 0, Math.PI * 2)
