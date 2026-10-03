@@ -25373,3 +25373,18 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - No console errors.
   - Not yet tried on a real phone.
 - **File in `generated/`:** `2026-10-03-vela-mobile-3-charts.png` (mock data)
+
+## 2026-10-03 - v3 Vela: faint active-chart ring + CB Walls opacity slider
+
+- **Active chart ring.** `cbedge-v3/src/pages/vela/vela.css` (new, imported by `pages/Vela.tsx`): in a multi-chart grid, the selected chart gets a faint 1px grey ring (`color-mix` of `--color-fg` at 16%) instead of Vela's 2px bright-white one. The selector is prefixed with `.vela-workspace` so it beats the library's rule regardless of stylesheet order.
+- **Walls opacity.** `cbedge-v3/src/pages/vela/wallsOpacity.ts` (new): one shared opacity (10–100%, default **60%**) for every CB Walls line on every chart, desktop and phone, saved per browser under `cb-v3-vela-walls-opacity`.
+  - The slider is a strip docked above Vela's bottom bar (`WidgetContext.dockStrip`), with a range input in CORE gold, a % readout and a ✕. Dragging repaints live (one repaint per frame, re-emitting lines already computed, no refetch) and saves on release.
+  - Desktop: a drop-icon legend action on the CB Walls row, next to eye/gear/✕.
+  - Phone: ⋮ → "Walls opacity". Vela's phone legend chip opens the object tree, so a legend-row button can't be reached there. That menu row is gated to the mobile layout, so the desktop topbar gets no extra button.
+  - Vela's settings dialog has no slider control, which is why this is a strip and not a study input.
+- `wallsIndicator.ts`: line and per-bar colours now use `tokenHexAlpha(token, opacity)`, and Voltick's lines do too. Each study subscribes to opacity changes and repaints unless it is hidden; it unsubscribes on stop.
+- **Checks.** No new `tsc` errors (the same 5 existing ones), and `check:theme` is clean. Headless Chromium:
+  - Phone 390×844: the ring is 1px at 16% alpha. ⋮ shows "Walls opacity", which opens the 44px strip; setting 30% fades all three charts and survives a reload; ✕ closes the strip.
+  - Desktop 2×2: no topbar button. Hovering the CB Walls row shows the drop icon, which toggles the strip.
+  - No console errors.
+- **File in `generated/`:** `2026-10-03-vela-walls-opacity.png` (mock data)

@@ -35,6 +35,11 @@
 // usable basis nothing is drawn, because an unshifted SPX strike on an ES chart
 // is a level one basis below where it belongs.
 //
+// ── Opacity ──────────────────────────────────────────────────────────────────
+// Every line (and every per-bar colour) is drawn at the shared walls opacity —
+// pages/vela/wallsOpacity.ts (legend-row drop icon; ⋮ → Walls opacity on a phone). A change
+// repaints the lines already computed; it never refetches.
+//
 // ── Reads ────────────────────────────────────────────────────────────────────
 // One /api/walls-range request per symbol + variant + depth, shared by every
 // chart showing that symbol, refreshed once a minute while a live chart is open
@@ -55,7 +60,7 @@ import {
 } from '@luxalgo/vela'
 import { stableSeriesId } from '@luxalgo/vela/plugin'
 import { query } from '@/data/api'
-import { tokenHex } from '@/design/theme'
+import { tokenHexAlpha } from '@/design/theme'
 import { BASIS_URL, ES_MAX_BASIS, isPlausibleBasis, parseBasis, type BasisModel } from '@/board/gexCandles/basis'
 import { futuresPairFor } from '@/board/gexCandles/futures'
 import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
@@ -68,6 +73,7 @@ import {
   type WallLevel,
 } from '@/pages/levelLog/wallData'
 import { resolveSym } from '@/pages/vela/cbedgeProvider'
+import { onWallsOpacity, wallsOpacity } from '@/pages/vela/wallsOpacity'
 
 /** The native-indicator type id — also what the saved workspace records. */
 export const WALLS_TYPE = 'cbedge-walls'
@@ -332,13 +338,15 @@ interface Line {
   colors?: (string | null)[]
 }
 
-function linesFor(bars: readonly OHLCV[], a: Aligned, s: Settings): Line[] {
-  const cw = a.levels.get('call_wall') ?? []
-  const pw = a.levels.get('put_wall') ?? []
-  const cb = a.levels.get('cb') ?? []
-  const callC = tokenHex('--color-candle-up')
-  const putC = tokenHex('--color-level-pw')
-  const coreC = tokenHex('--color-level-cb')
+function linesFor(bars: readonly OHLCV[], al: Aligned, s: Settings): Line[] {
+  const cw = al.levels.get('call_wall') ?? []
+  const pw = al.levels.get('put_wall') ?? []
+  const cb = al.levels.get('cb') ?? []
+  // At the slider's opacity — the per-bar colours below are these same strings.
+  const a = wallsOpacity()
+  const callC = tokenHexAlpha('--color-candle-up', a)
+  const putC = tokenHexAlpha('--color-level-pw', a)
+  const coreC = tokenHexAlpha('--color-level-cb', a)
 
   if (VOLTICK_UI) {
     const volt: (number | null)[] = []
@@ -353,10 +361,10 @@ function linesFor(bars: readonly OHLCV[], a: Aligned, s: Settings): Line[] {
     // The migration chart's Voltick draw order: reversal, coil, then volt on top.
     const out: Line[] = []
     if (s.view !== 'core') {
-      out.push({ key: 'reversal', title: '↘ Reversal', color: tokenHex('--color-vt-reversal'), width: WALL_W, values: rev })
-      out.push({ key: 'coil', title: '◆ Coil', color: tokenHex('--color-vt-coil'), width: WALL_W, values: coil })
+      out.push({ key: 'reversal', title: '↘ Reversal', color: tokenHexAlpha('--color-vt-reversal', a), width: WALL_W, values: rev })
+      out.push({ key: 'coil', title: '◆ Coil', color: tokenHexAlpha('--color-vt-coil', a), width: WALL_W, values: coil })
     }
-    if (s.view !== 'walls') out.push({ key: 'volt', title: '★ Volt', color: tokenHex('--color-vt-volt'), width: CORE_W, values: volt })
+    if (s.view !== 'walls') out.push({ key: 'volt', title: '★ Volt', color: tokenHexAlpha('--color-vt-volt', a), width: CORE_W, values: volt })
     return out
   }
 
@@ -393,7 +401,7 @@ function linesFor(bars: readonly OHLCV[], a: Aligned, s: Settings): Line[] {
     if (cwv != null && c === cwv) side = 'call'
     else if (pwv != null && c === pwv) side = 'put'
     else {
-      const g = a.coreGex[i]
+      const g = al.coreGex[i]
       if (g != null && g !== 0) side = g > 0 ? 'call' : 'put'
       else if (cwv != null && pwv != null) side = Math.abs(c - cwv) <= Math.abs(c - pwv) ? 'call' : 'put'
       else side = cwv != null ? 'call' : 'put'
@@ -429,10 +437,17 @@ class WallsIndicator implements NativeIndicator {
   private epoch = 0
   private lastKey = ''
   private stopped = false
+  private suspended = false
+  private offOpacity: (() => void) | null = null
 
   start(ctx: NativeIndicatorContext, inputs: Record<string, InputValue>): void {
     this.ctx = ctx
     this.inputs = inputs
+    // The opacity slider: repaint what is already computed (a hidden study waits
+    // for resume, which reloads and paints at whatever the slider says then).
+    this.offOpacity = onWallsOpacity(() => {
+      if (!this.suspended && this.days.length) this.render(true)
+    })
     void this.load(false)
     this.arm()
   }
@@ -460,10 +475,12 @@ class WallsIndicator implements NativeIndicator {
   }
 
   suspend(): void {
+    this.suspended = true
     this.disarm()
   }
 
   resume(): void {
+    this.suspended = false
     void this.load(false)
     this.arm()
   }
@@ -471,6 +488,8 @@ class WallsIndicator implements NativeIndicator {
   stop(): void {
     this.stopped = true
     this.disarm()
+    this.offOpacity?.()
+    this.offOpacity = null
     this.ctx = null
   }
 

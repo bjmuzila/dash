@@ -9,6 +9,8 @@ import { Page } from '@/design/primitives/Page'
 import { CbEdgeProvider, DEFAULT_HISTORY_URL, PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
 import { WALLS_TYPE, registerCbWalls } from '@/pages/vela/wallsIndicator'
 import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot'
+import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
+import '@/pages/vela/vela.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /vela — VELA, LuxAlgo's open-source chart workspace, on CB Edge's own tape.
@@ -66,6 +68,15 @@ import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot
 // the legend ✕ has taken it off: it is not put back on the next load. After
 // that it lives in Vela's saved document like any study (inputs, visibility).
 //
+// The walls draw at a shared OPACITY (default 60%) with a slider behind the
+// drop icon on the study's legend row (desktop) or ⋮ → Walls opacity (phone) —
+// pages/vela/wallsOpacity.ts. It docks a strip above the bottom bar; one value
+// for every chart, desktop and phone.
+//
+// ── Our CSS over Vela's ──────────────────────────────────────────────────────
+// pages/vela/vela.css: the active chart in a grid gets a faint 1px grey ring
+// instead of Vela's 2px bright one, and the opacity strip's look.
+//
 // ── The camera copies ────────────────────────────────────────────────────────
 // Vela's screenshot button (and its phone row, and Ctrl/Cmd+Alt+S) puts the
 // PNG on the CLIPBOARD instead of downloading it — pages/vela/copyShot.ts. It
@@ -102,6 +113,7 @@ const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
 // registries when a workspace is BUILT, so both registrations go here.
 registerCbWalls()
 registerCopyScreenshot()
+registerWallsOpacity()
 
 function readSeeded(key: string): Set<string> {
   try {
