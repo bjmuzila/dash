@@ -23,6 +23,9 @@
 //   Node levels  boldness, 0–100%, default 15 — Voltick's Node levels slider; 0 hides
 //   Calm chart   Voltick's Calm chart: smaller, quieter marks
 //   Sessions     how many recorded sessions to draw, newest first (Voltick draws one)
+//   Bubble size / Ribbon thickness   CB Edge only: 50–300%, default 100 — scales
+//                every bubble (Path) or band (Ribbon). See vtPathLayer.ts for the
+//                zoomed-out floors that keep both readable at default size.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
@@ -42,7 +45,9 @@ const MAP_OPTS = ['OI + Vol', 'Vol only'] as const
 const REFRESH_MS = 60_000
 const SESSION_FROM_MIN = 8 * 60
 
-function inputsSchema(): InputSchema[] {
+type Shape = 'path' | 'ribbon'
+
+function inputsSchema(shape: Shape): InputSchema[] {
   return [
     {
       key: 'map',
@@ -73,11 +78,24 @@ function inputsSchema(): InputSchema[] {
       step: 1,
       tooltip: 'How many recorded sessions to draw, newest first.',
     },
+    {
+      key: 'size',
+      title: shape === 'path' ? 'Bubble size %' : 'Ribbon thickness %',
+      type: 'int',
+      defval: 100,
+      min: 50,
+      max: 300,
+      step: 10,
+      tooltip:
+        shape === 'path'
+          ? 'Scales every bubble — 100 is the default, 200 doubles them.'
+          : 'Scales every band — 100 is the default, 200 doubles their thickness.',
+    },
   ]
 }
 
-function defaultInputs(): Record<string, InputValue> {
-  return Object.fromEntries(inputsSchema().map((i) => [i.key, i.defval]))
+function defaultInputs(shape: Shape): Record<string, InputValue> {
+  return Object.fromEntries(inputsSchema(shape).map((i) => [i.key, i.defval]))
 }
 
 interface Settings {
@@ -85,6 +103,8 @@ interface Settings {
   ci: number
   quiet: boolean
   sessions: number
+  /** Bubble size / band thickness multiplier, 0.5..3. */
+  size: number
 }
 
 function settingsOf(inputs: Record<string, InputValue>): Settings {
@@ -95,6 +115,7 @@ function settingsOf(inputs: Record<string, InputValue>): Settings {
     ci: n(inputs.boldness, 15, 0, 100) / 100,
     quiet: inputs.calm === true,
     sessions: n(inputs.sessions, 1, 1, 5),
+    size: n(inputs.size, 100, 50, 300) / 100,
   }
 }
 
@@ -209,7 +230,7 @@ class VtPathIndicator implements NativeIndicator {
       this.frames,
       bars.map((b) => ({ time: Math.floor(b.time / 1000), close: b.close })),
     )
-    const payload: PathPayload | null = rows ? { rows, ci: s.ci, quiet: s.quiet } : null
+    const payload: PathPayload | null = rows ? { rows, ci: s.ci, quiet: s.quiet, size: s.size } : null
     ctx.pushData(payload)
   }
 
@@ -242,8 +263,8 @@ export function registerVtPath(): void {
     shortTitle: 'Voltick Path',
     paneHint: 'price',
     overlay: true,
-    inputsSchema,
-    defaultInputs,
+    inputsSchema: () => inputsSchema('path'),
+    defaultInputs: () => defaultInputs('path'),
     create: () => new VtPathIndicator(),
   })
   registerNativeIndicator({
@@ -252,8 +273,8 @@ export function registerVtPath(): void {
     shortTitle: 'Voltick Path Ribbon',
     paneHint: 'price',
     overlay: true,
-    inputsSchema,
-    defaultInputs,
+    inputsSchema: () => inputsSchema('ribbon'),
+    defaultInputs: () => defaultInputs('ribbon'),
     create: () => new VtPathIndicator(),
   })
 }

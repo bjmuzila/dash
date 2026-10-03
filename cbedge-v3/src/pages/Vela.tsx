@@ -9,6 +9,7 @@ import { Page } from '@/design/primitives/Page'
 import { CbEdgeProvider, DEFAULT_HISTORY_URL, PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
 import { WALLS_TYPE, registerCbWalls } from '@/pages/vela/wallsIndicator'
 import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot'
+import { bindIndicatorsWorkspace, registerCopyIndicators } from '@/pages/vela/copyIndicators'
 import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
 import { PATH_TYPE, registerVtPath } from '@/pages/vela/vtPath/vtPathIndicator'
 import '@/pages/vela/vela.css'
@@ -84,6 +85,12 @@ import '@/pages/vela/vela.css'
 // every chart once, exactly like CB Walls (`<key>-vtpath`), and the legend ✕
 // takes it off for good.
 //
+// ── Copy indicators to all charts ────────────────────────────────────────────
+// pages/vela/copyIndicators.ts — Vela keeps studies per chart and has no "apply
+// to all", so a topbar button (desktop, beside the camera) and a ⋮ row (phone)
+// copy the active chart's studies, settings included, onto every other chart in
+// the layout. Additive: nothing a chart already has is taken off.
+//
 // ── Our CSS over Vela's ──────────────────────────────────────────────────────
 // pages/vela/vela.css: the active chart in a grid gets a faint 1px grey ring
 // instead of Vela's 2px bright one, and the opacity strip's look.
@@ -127,6 +134,7 @@ const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
 registerCbWalls()
 registerVtPath()
 registerCopyScreenshot()
+registerCopyIndicators()
 registerWallsOpacity()
 
 function readSeeded(key: string): Set<string> {
@@ -247,6 +255,7 @@ export default function Vela({ phone = false }: VelaProps) {
     })
     wsRef.current = ws
     const unbindShot = bindShotWorkspace(ws)
+    const unbindIndicators = bindIndicatorsWorkspace(ws)
 
     // Chart → toolbar. `state:changed` is Vela's debounced "something worth
     // saving moved" signal, and it covers a symbol switch AND a different cell
@@ -279,6 +288,7 @@ export default function Vela({ phone = false }: VelaProps) {
       offActive()
       offCreated()
       unbindShot()
+      unbindIndicators()
       wsRef.current = null
       ws.destroy()
       host.remove()

@@ -25423,3 +25423,24 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `vtPathIndicator.ts`: the header comment was updated to match.
 - **Checks.** No new `tsc` errors, and `check:theme` is clean. Headless Chromium on the mock ladder shows Ribbon bands and dots with no text, and no console errors.
 - **File in `generated/`:** `2026-10-03-vela-path-ribbon-no-text.png` (mock data)
+
+## 2026-10-03 - v3 Vela: copy indicators to all charts
+
+- **New:** `cbedge-v3/src/pages/vela/copyIndicators.ts`. Vela keeps studies per chart and has no "apply to all" (its Style sync copies colours and chart type only), so this adds a widget action, **Copy indicators to all charts**:
+  - On desktop it is an icon button in the topbar's right cluster, beside the camera. On the phone it is a row in ⋮.
+  - It copies the active chart's studies, including inputs and visibility, onto every other chart in the layout.
+  - **Additive.** A native study another chart already has (same type) takes the active chart's settings; one it lacks is added. A script study is added unless that chart already has one with identical settings. Nothing is removed, and pressing twice changes nothing.
+  - How it works: the active chart's ledger comes from `ChartCell.dehydrate()`, is merged into each other chart's ledger, and is applied with `rehydrate({ indicators, session, ext })` in place. Charts, data and other study handles survive. It is not on the undo timeline.
+  - Toast: "Indicators copied to N charts" / "Every chart already has these indicators" / "Only one chart in this layout".
+- `pages/Vela.tsx`: registers the action and binds the workspace (`bindIndicatorsWorkspace`).
+- **Checks.** No new `tsc` errors, and `check:theme` is clean. Headless Chromium, desktop 2×2: c1 had CB Walls on 20 sessions plus Path Ribbon. After the button, all four charts carry Walls(20) + Path + Volume + Ribbon. A second press reports "already". No console errors.
+- **File in `generated/`:** `2026-10-03-vela-copy-indicators.png` (mock data)
+
+## 2026-10-03 - v3 Vela: Voltick Path / Path Ribbon — thicker zoomed out + size setting
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts` (CB Edge-only differences, listed in the file header):
+  - **Path:** below Voltick's default bar spacing (6px), the bubble radius holds at the default-bar radius instead of shrinking with the zoom. Crowded strikes (`pathGapFit`) shrink bubbles to 80% at most (`PATH_FIT_FLOOR`) instead of down to 1.8px.
+  - **Ribbon:** the strike-gap cap (0.42 × px per strike) never takes a band at its fullest under a 3px half-height (`RIBBON_FULL_FLOOR`). The thinnest band is never under a 1.3px half-height (`RIBBON_MIN_FLOOR`).
+- `vtPathIndicator.ts`: a new setting on each study, **Bubble size %** (Path) and **Ribbon thickness %** (Ribbon), from 50 to 300 in steps of 10, default 100. It multiplies every radius / band height after the floors. The schema is now per shape; payload `size`.
+- **Checks.** No new `tsc` errors, and `check:theme` is clean. Headless Chromium zoomed out about 5 steps: Path and Ribbon are visibly thicker at 100%, and doubled at 200%. The settings dialog lists "Ribbon thickness %". No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-path-size.png`, `2026-10-03-vela-ribbon-thickness.png` (mock data, zoomed out, 200%)

@@ -13,10 +13,22 @@
 //   hex / rgba literals                 →    tokens.css (--color-vt-*), with the
 //                                            alpha applied here
 //
-// ONE DELIBERATE DIFFERENCE, CB Edge only (2026-10-03, Brandon: "for path
-// ribbons, remove the text on the ribbons — for cbedge only"): the Ribbon draws
-// no ▲/▼ "… since 10:45 am" chips. Bands, growth glow and the live dot are
-// Voltick's, unchanged. Voltick itself keeps its chips; do not carry this back.
+// DELIBERATE DIFFERENCES, CB Edge only — Voltick keeps its own; do not carry
+// these back:
+//   · NO RIBBON TEXT (2026-10-03, Brandon: "for path ribbons, remove the text on
+//     the ribbons — for cbedge only"): the Ribbon draws no ▲/▼ "… since 10:45 am"
+//     chips. Bands, growth glow and the live dot are Voltick's, unchanged.
+//   · THICKER ZOOMED OUT (2026-10-03: "path ribbon and bubbles need more
+//     thickness when zoomed out"). Voltick shrinks both as the chart zooms out:
+//     a Path bubble follows the bar spacing down below the default bar and then
+//     shrinks again when neighbouring strikes crowd (pathGapFit, to 1.8px); a
+//     band is capped at 0.42 of the pixel gap between strikes, which on a wide
+//     view is a hairline. Here a bubble keeps its default-bar radius at any zoom
+//     and crowding takes it down to PATH_FIT_FLOOR at most; a band at its
+//     fullest never draws thinner than RIBBON_FULL_FLOOR half-height, and its
+//     thinnest never under RIBBON_MIN_FLOOR.
+//   · A SIZE SETTING: `size` (the studies' Bubble size % / Ribbon thickness %)
+//     multiplies every radius / band height after all of the above.
 //
 // Each shape is a Vela RENDERER LAYER (registerRendererLayer) owned by the
 // native indicator of the same type id (vtPathIndicator.ts), which pushes the
@@ -44,6 +56,7 @@ import {
   pathRadius,
   pathSizes,
   pathZoomRadius,
+  PATH_ZOOM,
   ribbonHops,
   ribbonInk,
   ribbonRowFacts,
@@ -72,6 +85,8 @@ export interface PathPayload {
   ci: number
   /** Voltick's Calm chart. */
   quiet: boolean
+  /** CB Edge: bubble size / band thickness multiplier (1 = default). */
+  size: number
 }
 
 const ROLE_TOKEN: Record<PathRole, string> = {
@@ -83,6 +98,11 @@ const ROLE_TOKEN: Record<PathRole, string> = {
 
 const FLAT_SPAN = 0.03
 const REF_MOVE = 1.6
+
+/** CB Edge zoomed-out floors (see the header). */
+const PATH_FIT_FLOOR = 0.8
+const RIBBON_FULL_FLOOR = 3
+const RIBBON_MIN_FLOOR = 1.3
 
 const hb = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0')
 /** A token's channels at an alpha, as `#rrggbbaa` (what every canvas accepts). */
@@ -137,8 +157,11 @@ class PathDraw {
     const SHINE = tokenRgb('--color-vt-path-shine')
     const RIM = hexA(tokenRgb('--color-vt-path-rim'), 0.9)
     const bsNow = g.bs || 6
-    const rPeer0 = pathZoomRadius(bsNow, false) * (quiet ? 0.8 : 1)
-    const rVolt0 = pathZoomRadius(bsNow, true) * (quiet ? 0.8 : 1)
+    const size = Number.isFinite(d.size) && d.size > 0 ? d.size : 1
+    // CB Edge: below the default bar the radius holds at the default bar's (Voltick follows the zoom down)
+    const bsRad = Math.max(bsNow, PATH_ZOOM.refBar)
+    const rPeer0 = pathZoomRadius(bsRad, false) * (quiet ? 0.8 : 1)
+    const rVolt0 = pathZoomRadius(bsRad, true) * (quiet ? 0.8 : 1)
     const alpha = quiet ? bold(0.3, 0.7, 0.9) : bold(0.4, 0.92, 1)
     // lowest priority first, so the Volt's bead and halo sit on top
     const DRAW_ORDER: Record<PathRole, number> = { surge: 0, coil: 1, reversal: 2, volt: 3 }
@@ -161,8 +184,9 @@ class PathDraw {
       Math.max(rPeer0, rVolt0) * pathGrowthMax(),
       Math.min(rPeer0, rVolt0),
     )
-    const rPeer = rPeer0 * fit
-    const rVolt = rVolt0 * fit
+    // CB Edge: crowding shrinks at most to PATH_FIT_FLOOR; then the Size setting
+    const rPeer = rPeer0 * Math.max(fit, PATH_FIT_FLOOR) * size
+    const rVolt = rVolt0 * Math.max(fit, PATH_FIT_FLOOR) * size
     // the size of every bubble (once per data change), then which candles draw (once per zoom)
     const thin: Array<ThinRow & { ks: number[] }> = []
     for (const r of list) {
@@ -304,8 +328,14 @@ class RibbonDraw {
         if (dd > 0 && dd < pxPerStrike) pxPerStrike = dd
       }
     }
-    const hMaxB2 = Number.isFinite(pxPerStrike) ? Math.max(hMin, Math.min(hMax, 0.42 * pxPerStrike)) : hMax
-    const hOf = (k: number) => hMin + (hMaxB2 - hMin) * k
+    // CB Edge: the strike-gap cap never takes a full band under RIBBON_FULL_FLOOR,
+    // the thinnest band never under RIBBON_MIN_FLOOR, then the Thickness setting.
+    const size = Number.isFinite(d.size) && d.size > 0 ? d.size : 1
+    const hMaxB2 =
+      (Number.isFinite(pxPerStrike) ? Math.max(hMin, Math.min(hMax, Math.max(RIBBON_FULL_FLOOR, 0.42 * pxPerStrike))) : hMax) *
+      size
+    const hMinS = Math.max(hMin, RIBBON_MIN_FLOOR) * size
+    const hOf = (k: number) => hMinS + (hMaxB2 - hMinS) * k
     const bands: Band[] = []
     let voltSpans: GoldSpan[] | null = null
     for (const r of rows.slice().sort((a, b) => (a.lead ? 1 : 0) - (b.lead ? 1 : 0))) {
