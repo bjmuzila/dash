@@ -213,6 +213,15 @@ export function toModel(id: string, res: RunResult, bars: readonly OHLCV[], inpu
         return c ? [{ time: b.time, color: c }] : []
       })
     : []
+  // drawings: ids made unique to this instance (a linefill carries its two lines whole)
+  const dr = res.drawings
+  const pre = <T extends { id: string }>(d: T): T => ({ ...d, id: `${id}-${d.id}` })
+  const lines = dr.lines.map(pre)
+  const boxes = dr.boxes.map(pre)
+  const linefills = dr.linefills.map((f) => ({ ...pre(f), line1: pre(f.line1), line2: pre(f.line2) }))
+  const polylines = dr.polylines.map(pre)
+  const tables = dr.tables.map(pre)
+  labels.push(...dr.labels.map(pre))
   return {
     id,
     title: res.meta.title,
@@ -224,6 +233,11 @@ export function toModel(id: string, res: RunResult, bars: readonly OHLCV[], inpu
     backgrounds,
     priceLines,
     ...(labels.length ? { labels } : {}),
+    ...(lines.length ? { lines } : {}),
+    ...(boxes.length ? { boxes } : {}),
+    ...(linefills.length ? { linefills } : {}),
+    ...(polylines.length ? { polylines } : {}),
+    ...(tables.length ? { tables } : {}),
     ...(barColors.length ? { barColors } : {}),
     inputs: res.inputs,
     inputValues,

@@ -31,10 +31,14 @@
 //   CB extras  input("Title", default), marker(cond, text, position=, shape=),
 //              bgcolor(cond, color=, opacity=), bb_upper / bb_lower, alpha(),
 //              plot(width=, dashed=), named colours (gold call put core volt …)
-// Not yet: request.security (other symbols / timeframes), arrays / matrices /
-// maps, and drawings (label.new / line.new / box.new / table.new — skipped
-// with a note so the rest of a script still draws). strategy() scripts draw
-// their plots; their orders are not simulated.
+//   other data request.security (higher timeframes; other symbols the engine
+//              fetches) and request.security_lower_tf (arrays of intrabar values)
+//   arrays     array.* + method calls (xs.push(1)) + for … in
+//   drawings   label / line / box / linefill / polyline / table / chart.point —
+//              new, set_*, get_*, delete, copy, *.all, max_*_count; what is alive
+//              after the last bar is drawn (RunResult.drawings)
+// Not yet: maps / matrices, user-defined types and methods. strategy() scripts
+// draw their plots; their orders are not simulated.
 //
 // ── Colours ──────────────────────────────────────────────────────────────────
 // Pine's palette (color.red …) is tokens.css's --color-pine-*, TradingView's own
@@ -43,7 +47,27 @@
 // written. na as a colour draws nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { InputSchema, InputValue, OHLCV } from '@luxalgo/vela'
+import type {
+  BoxHAlign,
+  BoxTextSize,
+  BoxVAlign,
+  DrawingBox,
+  DrawingExtend,
+  DrawingLabel,
+  DrawingLine,
+  DrawingLinefill,
+  DrawingPolyline,
+  DrawingTable,
+  DrawingXLoc,
+  InputSchema,
+  InputValue,
+  LabelStyle,
+  LabelYLoc,
+  LineStyle,
+  OHLCV,
+  TableCell,
+  TablePosition,
+} from '@luxalgo/vela'
 import { tokenHex } from '@/design/theme'
 import { ScriptError, type FuncDef, type Node, type Program, type Stmt } from './lang'
 
@@ -61,7 +85,25 @@ export interface HlineRef {
 class PArr {
   constructor(public a: Val[]) {}
 }
-type Val = number | string | Val[] | PlotRef | HlineRef | PArr
+/** A Pine `chart.point`. */
+class CPoint {
+  constructor(
+    public time: number,
+    public index: number,
+    public price: number,
+  ) {}
+}
+type DrawKind = 'label' | 'line' | 'box' | 'linefill' | 'polyline' | 'table'
+/** A drawing's handle (label.new … returns one). Its props are the drawing's current state. */
+class Draw {
+  alive = true
+  constructor(
+    readonly kind: DrawKind,
+    readonly seq: number,
+    public p: Record<string, unknown>,
+  ) {}
+}
+type Val = number | string | Val[] | PlotRef | HlineRef | PArr | Draw | CPoint
 
 const isPlot = (v: Val | undefined): v is PlotRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'plot' in v
 const isHline = (v: Val | undefined): v is HlineRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'hline' in v
@@ -141,6 +183,15 @@ export interface Meta {
   overlay: boolean
   precision?: number
 }
+/** The drawings alive at the end of the run, in Vela's shapes (ids local to the run). */
+export interface RunDrawings {
+  labels: DrawingLabel[]
+  lines: DrawingLine[]
+  boxes: DrawingBox[]
+  linefills: DrawingLinefill[]
+  polylines: DrawingPolyline[]
+  tables: DrawingTable[]
+}
 export interface RunResult {
   meta: Meta
   inputs: InputSchema[]
@@ -151,7 +202,9 @@ export interface RunResult {
   backgrounds: BgOut[]
   /** Per bar candle recolour (barcolor), or null when the script never calls it. */
   barColors: (string | null)[] | null
-  /** Things skipped (drawings, strategy orders), said once each. */
+  /** label.new / line.new / box.new / linefill / polyline / table — what is left at the end. */
+  drawings: RunDrawings
+  /** Things skipped (strategy orders, …), said once each. */
   warnings: string[]
 }
 
@@ -574,9 +627,19 @@ for (const [k, v] of Object.entries({ line: 'line', stepline: 'step', histogram:
 const DRAWING_NS = /^(label|line|box|table|linefill|polyline|chart\.point)\./
 for (const k of ['label', 'line', 'box', 'table']) {
   for (const s of ['style_none', 'style_solid', 'style_dashed', 'style_dotted', 'style_arrow_left', 'style_arrow_right', 'style_arrow_both', 'style_label_up', 'style_label_down', 'style_label_left', 'style_label_right', 'style_label_center', 'style_circle', 'style_square', 'style_diamond', 'style_cross', 'style_xcross', 'style_triangleup', 'style_triangledown', 'style_flag', 'style_arrowup', 'style_arrowdown', 'style_text_outline', 'style_label_lower_left', 'style_label_lower_right', 'style_label_upper_left', 'style_label_upper_right'])
-    CONSTS[`${k}.${s}`] = s
-  CONSTS[`${k}.all`] = NaN
+    CONSTS[`${k}.${s}`] = s.replace(/^style_/, '')
 }
+Object.assign(CONSTS, {
+  'text.align_top': 'top',
+  'text.align_bottom': 'bottom',
+  'text.wrap_auto': 'auto',
+  'text.wrap_none': 'none',
+  'text.format_none': 0,
+  'text.format_bold': 1,
+  'text.format_italic': 2,
+  'font.family_default': 'default',
+  'font.family_monospace': 'monospace',
+})
 
 // ── The interpreter ──────────────────────────────────────────────────────────
 
@@ -770,6 +833,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     markers: [],
     backgrounds: [],
     barColors: null,
+    drawings: { labels: [], lines: [], boxes: [], linefills: [], polylines: [], tables: [] },
     warnings: [],
   }
   const warn = (m: string) => {
@@ -1113,6 +1177,19 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         }
         const fb = builtinVar(name)
         if (!fb) {
+          // a field of a variable: pt.price / pt.index / pt.time on a chart.point
+          const dot = name.indexOf('.')
+          const recv = dot > 0 ? resolve(cx, name.slice(0, dot)) : undefined
+          if (recv) {
+            const get = slotFn(recv)
+            const field = name.slice(dot + 1)
+            return (f) => {
+              const r = get(f).cur
+              if (r instanceof CPoint && (field === 'price' || field === 'index' || field === 'time')) return r[field]
+              if (typeof r === 'number' && isNa(r)) return NaN
+              throw new ScriptError(`"${name.slice(0, dot)}" has no field "${field}"`, line)
+            }
+          }
           if (funcs.has(name)) throw new ScriptError(`"${name}" is a function — call it: ${name}(…)`, line)
           throw new ScriptError(`"${name}" is not defined`, line)
         }
@@ -1439,6 +1516,15 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         if (!onArray) throw new ScriptError(`arrays have no method "${method}"`, line)
         return onArray(c)
       }
+      if (r instanceof Draw) {
+        const fn = BUILTINS[`${r.kind}.${method}`]
+        if (!fn) throw new ScriptError(`${r.kind}s have no method "${method}"`, line)
+        return fn(c)
+      }
+      if (r instanceof CPoint) {
+        if (method === 'copy') return new CPoint(r.time, r.index, r.price)
+        throw new ScriptError(`chart points have no method "${method}"`, line)
+      }
       if (typeof r === 'string' && onText) return onText(c)
       if (typeof r === 'number' && isNa(r)) return NaN // a drawing handle (label / line / box) — drawings are skipped
       throw new ScriptError(`"${recv}" has no method "${method}"`, line)
@@ -1584,6 +1670,87 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     }
   }
 
+  // ── request.security_lower_tf ──
+  // Every chart bar gets an ARRAY: the expression's value on each lower-timeframe bar
+  // inside it (a tuple expression gives a tuple of arrays). The lower-timeframe bars
+  // come from the engine (a NeedSeries fetch); where they don't reach — the 1m tape is
+  // only a few days deep — the arrays are empty, as on TradingView past its intrabar
+  // history. A timeframe not below the chart's gives one-element arrays.
+  function compileSecurityLower(cx: Cx, node: Extract<Node, { k: 'call' }>): Ev {
+    const line = node.line
+    const nm = node.named
+    const symNode = node.args[0] ?? nm.symbol
+    const tfNode = node.args[1] ?? nm.timeframe
+    const exprNode = node.args[2] ?? nm.expression
+    if (!symNode || !tfNode || !exprNode) throw new ScriptError('request.security_lower_tf(symbol, timeframe, expression) needs all three', line)
+    const symEv = compileExpr(cx, symNode)
+    const tfEv = compileExpr(cx, tfNode)
+    const exprEv = compileExpr(cx, exprNode)
+    const site = siteFn(cx)
+    // how many arrays a tuple expression gives, for bars with no intrabars at all
+    const width = (): number => {
+      if (exprNode.k === 'list') return exprNode.items.length
+      if (exprNode.k === 'call') {
+        const def = funcs.get(exprNode.name)
+        const last = def?.body[def.body.length - 1]
+        if (last && last.k === 'expr' && last.x.k === 'list') return last.x.items.length
+      }
+      return 0
+    }
+    const wrap = (vals: Val[], tuple: number): Val => {
+      if (!tuple) return new PArr(vals)
+      const cols: Val[][] = Array.from({ length: tuple }, () => [])
+      for (const v of vals) for (let k = 0; k < tuple; k++) cols[k]!.push(Array.isArray(v) ? (v[k] ?? NaN) : NaN)
+      return cols.map((col) => new PArr(col))
+    }
+    return (f) => {
+      const capture = opts.capture
+      if (capture) {
+        const v = exprEv(f)
+        let arr = capture.get(node)
+        if (!arr) capture.set(node, (arr = new Array(N)))
+        arr[f.i] = v
+        return wrap([v], Array.isArray(v) ? v.length : 0)
+      }
+      const st = site(f)
+      if (st.any === null) {
+        const symV = symEv(f)
+        const tfV = tfEv(f)
+        const sym = typeof symV === 'string' && bareSym(symV) ? bareSym(symV) : bareSym(symbol)
+        const reqTf = typeof tfV === 'string' && tfV.trim() ? tfV.trim() : tf
+        const reqMin = tfMinutes(reqTf)
+        const chartMin = tfMinutes(tf)
+        const lower = !isNa(reqMin) && !isNa(chartMin) && reqMin < chartMin
+        if (!lower || opts.dry) st.any = 'single'
+        else {
+          const got = opts.series?.get(`${sym}|${reqTf}`)
+          if (!got) throw new NeedSeries(sym, reqTf)
+          const cap = new Map<object, unknown[]>()
+          if (got.length) run(prog, got, { inputs: opts.inputs, symbol: sym, timeframe: reqTf, capture: cap, series: opts.series })
+          const vals = (cap.get(node) ?? []) as Val[]
+          let tuple = width()
+          for (const v of vals) if (Array.isArray(v)) tuple = Math.max(tuple, v.length)
+          // each chart bar: the intrabars from its open to the next bar's
+          const out: Val[] = new Array(N)
+          let j = 0
+          for (let i = 0; i < N; i++) {
+            const end = i + 1 < N ? T[i + 1]! : Infinity
+            while (j < got.length && got[j]!.time < T[i]!) j++
+            const inside: Val[] = []
+            while (j < got.length && got[j]!.time < end) inside.push(vals[j++] ?? NaN)
+            out[i] = wrap(inside, tuple)
+          }
+          st.any = out
+        }
+      }
+      if (st.any === 'single') {
+        const v = exprEv(f)
+        return wrap([v], Array.isArray(v) ? v.length : width())
+      }
+      return (st.any as Val[])[f.i] ?? wrap([], width())
+    }
+  }
+
   function compileCall(cx: Cx, node: Extract<Node, { k: 'call' }>): Ev {
     const line = node.line
     // a method call on a variable: xs.push(1), s.length() → array.push(xs, 1), str.length(s)
@@ -1594,6 +1761,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       if (!method.includes('.') && resolve(cx, recv)) return compileMethod(cx, node, recv, method)
     }
     if (node.name === 'security' || node.name === 'request.security') return compileSecurity(cx, node)
+    if (node.name === 'request.security_lower_tf') return compileSecurityLower(cx, node)
     const args = node.args.map((x) => compileExpr(cx, x))
     const namedKeys = Object.keys(node.named)
     const namedEvs = namedKeys.map((k) => compileExpr(cx, node.named[k]!))
@@ -1648,7 +1816,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       }
       if (DRAWING_NS.test(name)) {
         return () => {
-          warn(`${name.split('.')[0]}.* drawings aren't drawn yet — skipped`)
+          warn(`${name} isn't supported — skipped`)
           return NaN
         }
       }
@@ -1780,6 +1948,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       .replace(/^_|_$/g, '') || 'input'
     for (let j = 2; inputKeys.has(key); j++) key = `${key.replace(/_\d+$/, '')}_${j}`
     inputKeys.add(key)
+    // an untitled input on an inline row (TradingView draws no label there) stays untitled
+    const shown = title === '' && typeof Nm.inline === 'string' ? '' : titleStr
     const given = opts.inputs?.[key]
     const extra: Partial<InputSchema> = {}
     for (const k of ['tooltip', 'group', 'inline'] as const) if (typeof Nm[k] === 'string') extra[k] = Nm[k] as string
@@ -1798,35 +1968,35 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     if (typeName === 'source' || (srcName && !typeName)) {
       const dv = srcName ?? 'close'
       const pick = typeof given === 'string' && SOURCES.includes(given) ? given : dv
-      res.inputs.push({ key, title: titleStr, type: 'source', defval: dv, options: SOURCES, ...extra })
+      res.inputs.push({ key, title: shown, type: 'source', defval: dv, options: SOURCES, ...extra })
       site.any = { src: pick }
       return seriesAt(pick, c.i)
     }
     if (typeName === 'bool' || (!typeName && defNode?.k === 'bool')) {
       const dv = truthy(defVal ?? 0)
-      return done((typeof given === 'boolean' ? given : dv) ? 1 : 0, { key, title: titleStr, type: 'bool', defval: dv })
+      return done((typeof given === 'boolean' ? given : dv) ? 1 : 0, { key, title: shown, type: 'bool', defval: dv })
     }
     if (typeName === 'color' || (!typeName && typeof defVal === 'string' && defVal.startsWith('#'))) {
       const dv = colorOf(defVal, c.line) ?? tok('--color-fg')
-      return done(typeof given === 'string' && parseHex(given) ? given : dv, { key, title: titleStr, type: 'color', defval: dv })
+      return done(typeof given === 'string' && parseHex(given) ? given : dv, { key, title: shown, type: 'color', defval: dv })
     }
     if (optList && optList.length && optList.every((o) => typeof o === 'number')) {
       const strs = optList.map(String)
       const dv = String(defVal ?? strs[0])
       const pick = typeof given === 'string' && strs.includes(given) ? given : typeof given === 'number' && strs.includes(String(given)) ? String(given) : dv
-      return done(Number(pick), { key, title: titleStr, type: 'string', defval: dv, options: strs })
+      return done(Number(pick), { key, title: shown, type: 'string', defval: dv, options: strs })
     }
     if (optList || typeof defVal === 'string' || typeName === 'string' || typeName === 'timeframe' || typeName === 'session' || typeName === 'symbol' || typeName === 'text_area') {
       const options = optList ? optList.map(String) : undefined
       const dv = typeof defVal === 'string' ? defVal : options?.[0] ?? ''
       const t: InputSchema['type'] = typeName === 'timeframe' || typeName === 'session' || typeName === 'symbol' ? typeName : 'string'
       const v = typeof given === 'string' && (!options || options.includes(given)) ? given : dv
-      return done(v, { key, title: titleStr, type: t, defval: dv, ...(options ? { options } : {}) })
+      return done(v, { key, title: shown, type: t, defval: dv, ...(options ? { options } : {}) })
     }
     const dv = num(defVal, c.line, 'the input default')
     const isInt =
       typeName === 'integer' || (typeName !== 'float' && typeName !== 'price' && typeName !== 'time' && defNode?.k === 'num' && !defNode.float && (step === undefined || Number.isInteger(step)))
-    const schema: InputSchema = { key, title: titleStr, type: typeName === 'price' ? 'price' : typeName === 'time' ? 'time' : isInt ? 'int' : 'float', defval: dv }
+    const schema: InputSchema = { key, title: shown, type: typeName === 'price' ? 'price' : typeName === 'time' ? 'time' : isInt ? 'int' : 'float', defval: dv }
     if (typeof minval === 'number' && !isNa(minval)) schema.min = minval
     if (typeof maxval === 'number' && !isNa(maxval)) schema.max = maxval
     if (typeof step === 'number' && !isNa(step)) schema.step = step
@@ -1848,6 +2018,15 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     if (ov !== undefined) res.meta.overlay = truthy(ov)
     const pr = c.N.precision
     if (typeof pr === 'number' && !isNa(pr)) res.meta.precision = Math.round(pr)
+    for (const [k, kind] of [
+      ['max_labels_count', 'label'],
+      ['max_lines_count', 'line'],
+      ['max_boxes_count', 'box'],
+      ['max_polylines_count', 'polyline'],
+    ] as const) {
+      const v = c.N[k]
+      if (typeof v === 'number' && v > 0) drawMax[kind] = Math.min(500, Math.round(v))
+    }
     if (isStrategy) warn('strategy orders aren\'t simulated — only the plots are drawn')
     return NaN
   }
@@ -1969,6 +2148,564 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const defAlpha = ver === 0 ? 0.12 : ver <= 4 ? 0.1 : null
     colors[c.i] = paint(c, a0, null, defAlpha, ver > 0 && ver <= 4 ? 1 : -1)
     return NaN
+  }
+
+  // ── Drawings: label / line / box / linefill / polyline / table ──
+  // Pine's object model: each .new returns a handle; set_* change it, delete removes it,
+  // and past max_*_count (indicator(), default 50) the OLDEST of that kind goes. Only
+  // what is alive when the last bar has run is drawn — exactly as on TradingView.
+  const draws: Record<DrawKind, Draw[]> = { label: [], line: [], box: [], linefill: [], polyline: [], table: [] }
+  const drawMax: Record<DrawKind, number> = { label: 50, line: 50, box: 50, linefill: 50, polyline: 50, table: 50 }
+  let drawSeq = 0
+  const spawn = (kind: DrawKind, p: Record<string, unknown>): Draw => {
+    const d = new Draw(kind, drawSeq++, p)
+    const list = draws[kind]
+    list.push(d)
+    while (list.length > drawMax[kind]) list.shift()!.alive = false
+    return d
+  }
+  const kill = (d: Draw) => {
+    if (!d.alive) return
+    d.alive = false
+    const list = draws[d.kind]
+    const k = list.indexOf(d)
+    if (k >= 0) list.splice(k, 1)
+  }
+  /** The live handle of `kind` in argument i, or null (na, deleted, another kind). */
+  const handle = (c: Call, kind: DrawKind, i = 0): Draw | null => {
+    const v = arg(c, i, 'id')
+    return v instanceof Draw && v.kind === kind && v.alive ? v : null
+  }
+  const colArg = (c: Call, i: number, name: string, def: string | null): string | null => {
+    const v = arg(c, i, name)
+    return v === undefined ? def : colorOf(v, c.line)
+  }
+  const strArg = (c: Call, i: number, name: string, def: string): string => {
+    const v = arg(c, i, name)
+    return typeof v === 'string' ? v : def
+  }
+  const numArg = (c: Call, i: number, name: string, def: number): number => {
+    const v = arg(c, i, name)
+    return typeof v === 'number' ? v : def
+  }
+  const pointX = (pt: CPoint, xloc: string) => (xloc === 'bar_time' ? pt.time : pt.index)
+  /** A setter: `kind.set_x(id, value)` writes prop `key` from argument 1 (colours resolved). */
+  const setter =
+    (kind: DrawKind, key: string, isColor = false) =>
+    (c: Call): Val => {
+      const d = handle(c, kind)
+      if (d) d.p[key] = isColor ? colorOf(arg(c, 1, key) ?? NaN, c.line) : arg(c, 1, key)
+      return NaN
+    }
+  const getter =
+    (kind: DrawKind, key: string) =>
+    (c: Call): Val => {
+      const d = handle(c, kind)
+      return d ? ((d.p[key] as Val) ?? NaN) : NaN
+    }
+  const deleter = (kind: DrawKind) => (c: Call): Val => {
+    const d = handle(c, kind)
+    if (d) kill(d)
+    return NaN
+  }
+  const copier = (kind: DrawKind) => (c: Call): Val => {
+    const d = handle(c, kind)
+    return d ? spawn(kind, { ...d.p }) : NaN
+  }
+  const allOf = (kind: DrawKind) => () => new PArr(draws[kind].slice())
+  VARS['label.all'] = allOf('label')
+  VARS['line.all'] = allOf('line')
+  VARS['box.all'] = allOf('box')
+  VARS['linefill.all'] = allOf('linefill')
+  VARS['polyline.all'] = allOf('polyline')
+  VARS['table.all'] = allOf('table')
+
+  const DRAW_FNS: Record<string, (c: Call) => Val> = {
+    // chart.point
+    'chart.point.new': (c) => new CPoint(numArg(c, 0, 'time', NaN), numArg(c, 1, 'index', NaN), numArg(c, 2, 'price', NaN)),
+    'chart.point.from_index': (c) => new CPoint(NaN, numArg(c, 0, 'index', NaN), numArg(c, 1, 'price', NaN)),
+    'chart.point.from_time': (c) => new CPoint(numArg(c, 0, 'time', NaN), NaN, numArg(c, 1, 'price', NaN)),
+    'chart.point.now': (c) => new CPoint(T[c.i]!, c.i, numArg(c, 0, 'price', C[c.i]!)),
+    'chart.point.copy': (c) => {
+      const pt = arg(c, 0, 'id')
+      return pt instanceof CPoint ? new CPoint(pt.time, pt.index, pt.price) : NaN
+    },
+    // label
+    'label.new': (c) => {
+      const pt = c.A[0] instanceof CPoint ? (c.A[0] as CPoint) : null
+      const o = pt ? -1 : 0 // the point overload has one argument fewer
+      const xloc = strArg(c, 3 + o, 'xloc', 'bar_index')
+      return spawn('label', {
+        x: pt ? pointX(pt, xloc) : numArg(c, 0, 'x', NaN),
+        y: pt ? pt.price : numArg(c, 1, 'y', NaN),
+        text: strArg(c, 2 + o, 'text', ''),
+        xloc,
+        yloc: strArg(c, 4 + o, 'yloc', 'price'),
+        color: colArg(c, 5 + o, 'color', pineColor('blue')),
+        style: strArg(c, 6 + o, 'style', 'label_down'),
+        textcolor: colArg(c, 7 + o, 'textcolor', pineColor('black')),
+        size: strArg(c, 8 + o, 'size', 'normal'),
+        textalign: strArg(c, 9 + o, 'textalign', 'center'),
+        tooltip: strArg(c, 10 + o, 'tooltip', ''),
+        font: strArg(c, 11 + o, 'text_font_family', 'default'),
+      })
+    },
+    'label.set_x': setter('label', 'x'),
+    'label.set_y': setter('label', 'y'),
+    'label.set_xy': (c) => {
+      const d = handle(c, 'label')
+      if (d) {
+        d.p.x = arg(c, 1, 'x')
+        d.p.y = arg(c, 2, 'y')
+      }
+      return NaN
+    },
+    'label.set_point': (c) => {
+      const d = handle(c, 'label')
+      const pt = arg(c, 1, 'point')
+      if (d && pt instanceof CPoint) {
+        d.p.x = pointX(pt, String(d.p.xloc))
+        d.p.y = pt.price
+      }
+      return NaN
+    },
+    'label.set_text': setter('label', 'text'),
+    'label.set_color': setter('label', 'color', true),
+    'label.set_textcolor': setter('label', 'textcolor', true),
+    'label.set_style': setter('label', 'style'),
+    'label.set_size': setter('label', 'size'),
+    'label.set_textalign': setter('label', 'textalign'),
+    'label.set_tooltip': setter('label', 'tooltip'),
+    'label.set_xloc': (c) => {
+      const d = handle(c, 'label')
+      if (d) {
+        d.p.x = arg(c, 1, 'x')
+        d.p.xloc = arg(c, 2, 'xloc')
+      }
+      return NaN
+    },
+    'label.set_yloc': setter('label', 'yloc'),
+    'label.set_text_font_family': setter('label', 'font'),
+    'label.get_x': getter('label', 'x'),
+    'label.get_y': getter('label', 'y'),
+    'label.get_text': getter('label', 'text'),
+    'label.delete': deleter('label'),
+    'label.copy': copier('label'),
+    // line
+    'line.new': (c) => {
+      const p1 = c.A[0] instanceof CPoint ? (c.A[0] as CPoint) : null
+      const p2 = c.A[1] instanceof CPoint ? (c.A[1] as CPoint) : null
+      const o = p1 && p2 ? -2 : 0
+      const xloc = strArg(c, 4 + o, 'xloc', 'bar_index')
+      return spawn('line', {
+        x1: p1 ? pointX(p1, xloc) : numArg(c, 0, 'x1', NaN),
+        y1: p1 ? p1.price : numArg(c, 1, 'y1', NaN),
+        x2: p2 ? pointX(p2, xloc) : numArg(c, 2, 'x2', NaN),
+        y2: p2 ? p2.price : numArg(c, 3, 'y2', NaN),
+        xloc,
+        extend: strArg(c, 5 + o, 'extend', 'none'),
+        color: colArg(c, 6 + o, 'color', pineColor('blue')),
+        style: strArg(c, 7 + o, 'style', 'solid'),
+        width: numArg(c, 8 + o, 'width', 1),
+      })
+    },
+    'line.set_x1': setter('line', 'x1'),
+    'line.set_y1': setter('line', 'y1'),
+    'line.set_x2': setter('line', 'x2'),
+    'line.set_y2': setter('line', 'y2'),
+    'line.set_xy1': (c) => {
+      const d = handle(c, 'line')
+      if (d) {
+        d.p.x1 = arg(c, 1, 'x')
+        d.p.y1 = arg(c, 2, 'y')
+      }
+      return NaN
+    },
+    'line.set_xy2': (c) => {
+      const d = handle(c, 'line')
+      if (d) {
+        d.p.x2 = arg(c, 1, 'x')
+        d.p.y2 = arg(c, 2, 'y')
+      }
+      return NaN
+    },
+    'line.set_first_point': (c) => {
+      const d = handle(c, 'line')
+      const pt = arg(c, 1, 'point')
+      if (d && pt instanceof CPoint) {
+        d.p.x1 = pointX(pt, String(d.p.xloc))
+        d.p.y1 = pt.price
+      }
+      return NaN
+    },
+    'line.set_second_point': (c) => {
+      const d = handle(c, 'line')
+      const pt = arg(c, 1, 'point')
+      if (d && pt instanceof CPoint) {
+        d.p.x2 = pointX(pt, String(d.p.xloc))
+        d.p.y2 = pt.price
+      }
+      return NaN
+    },
+    'line.set_color': setter('line', 'color', true),
+    'line.set_width': setter('line', 'width'),
+    'line.set_style': setter('line', 'style'),
+    'line.set_extend': setter('line', 'extend'),
+    'line.set_xloc': (c) => {
+      const d = handle(c, 'line')
+      if (d) {
+        d.p.x1 = arg(c, 1, 'x1')
+        d.p.x2 = arg(c, 2, 'x2')
+        d.p.xloc = arg(c, 3, 'xloc')
+      }
+      return NaN
+    },
+    'line.get_x1': getter('line', 'x1'),
+    'line.get_y1': getter('line', 'y1'),
+    'line.get_x2': getter('line', 'x2'),
+    'line.get_y2': getter('line', 'y2'),
+    'line.get_price': (c) => {
+      const d = handle(c, 'line')
+      if (!d) return NaN
+      const x = num(arg(c, 1, 'x'), c.line)
+      const [x1, y1, x2, y2] = [d.p.x1, d.p.y1, d.p.x2, d.p.y2] as number[]
+      return x2 === x1 ? y1! : y1! + ((y2! - y1!) * (x - x1!)) / (x2! - x1!)
+    },
+    'line.delete': deleter('line'),
+    'line.copy': copier('line'),
+    // box
+    'box.new': (c) => {
+      const p1 = c.A[0] instanceof CPoint ? (c.A[0] as CPoint) : null
+      const p2 = c.A[1] instanceof CPoint ? (c.A[1] as CPoint) : null
+      const o = p1 && p2 ? -2 : 0
+      const xloc = strArg(c, 8 + o, 'xloc', 'bar_index')
+      return spawn('box', {
+        left: p1 ? pointX(p1, xloc) : numArg(c, 0, 'left', NaN),
+        top: p1 ? p1.price : numArg(c, 1, 'top', NaN),
+        right: p2 ? pointX(p2, xloc) : numArg(c, 2, 'right', NaN),
+        bottom: p2 ? p2.price : numArg(c, 3, 'bottom', NaN),
+        border_color: colArg(c, 4 + o, 'border_color', pineColor('blue')),
+        border_width: numArg(c, 5 + o, 'border_width', 1),
+        border_style: strArg(c, 6 + o, 'border_style', 'solid'),
+        extend: strArg(c, 7 + o, 'extend', 'none'),
+        xloc,
+        bgcolor: colArg(c, 9 + o, 'bgcolor', pineColor('blue')),
+        text: strArg(c, 10 + o, 'text', ''),
+        text_size: strArg(c, 11 + o, 'text_size', 'auto'),
+        text_color: colArg(c, 12 + o, 'text_color', pineColor('black')),
+        text_halign: strArg(c, 13 + o, 'text_halign', 'center'),
+        text_valign: strArg(c, 14 + o, 'text_valign', 'center'),
+        text_wrap: strArg(c, 15 + o, 'text_wrap', 'none'),
+        font: strArg(c, 16 + o, 'text_font_family', 'default'),
+      })
+    },
+    'box.set_left': setter('box', 'left'),
+    'box.set_top': setter('box', 'top'),
+    'box.set_right': setter('box', 'right'),
+    'box.set_bottom': setter('box', 'bottom'),
+    'box.set_lefttop': (c) => {
+      const d = handle(c, 'box')
+      if (d) {
+        d.p.left = arg(c, 1, 'left')
+        d.p.top = arg(c, 2, 'top')
+      }
+      return NaN
+    },
+    'box.set_rightbottom': (c) => {
+      const d = handle(c, 'box')
+      if (d) {
+        d.p.right = arg(c, 1, 'right')
+        d.p.bottom = arg(c, 2, 'bottom')
+      }
+      return NaN
+    },
+    'box.set_top_left_point': (c) => {
+      const d = handle(c, 'box')
+      const pt = arg(c, 1, 'point')
+      if (d && pt instanceof CPoint) {
+        d.p.left = pointX(pt, String(d.p.xloc))
+        d.p.top = pt.price
+      }
+      return NaN
+    },
+    'box.set_bottom_right_point': (c) => {
+      const d = handle(c, 'box')
+      const pt = arg(c, 1, 'point')
+      if (d && pt instanceof CPoint) {
+        d.p.right = pointX(pt, String(d.p.xloc))
+        d.p.bottom = pt.price
+      }
+      return NaN
+    },
+    'box.set_bgcolor': setter('box', 'bgcolor', true),
+    'box.set_border_color': setter('box', 'border_color', true),
+    'box.set_border_width': setter('box', 'border_width'),
+    'box.set_border_style': setter('box', 'border_style'),
+    'box.set_extend': setter('box', 'extend'),
+    'box.set_text': setter('box', 'text'),
+    'box.set_text_color': setter('box', 'text_color', true),
+    'box.set_text_size': setter('box', 'text_size'),
+    'box.set_text_halign': setter('box', 'text_halign'),
+    'box.set_text_valign': setter('box', 'text_valign'),
+    'box.set_text_wrap': setter('box', 'text_wrap'),
+    'box.set_text_font_family': setter('box', 'font'),
+    'box.get_left': getter('box', 'left'),
+    'box.get_top': getter('box', 'top'),
+    'box.get_right': getter('box', 'right'),
+    'box.get_bottom': getter('box', 'bottom'),
+    'box.delete': deleter('box'),
+    'box.copy': copier('box'),
+    // linefill
+    'linefill.new': (c) => {
+      const l1 = handle(c, 'line', 0)
+      const l2 = handle(c, 'line', 1)
+      return l1 && l2 ? spawn('linefill', { l1, l2, color: colArg(c, 2, 'color', null) }) : NaN
+    },
+    'linefill.set_color': setter('linefill', 'color', true),
+    'linefill.get_line1': getter('linefill', 'l1'),
+    'linefill.get_line2': getter('linefill', 'l2'),
+    'linefill.delete': deleter('linefill'),
+    // polyline
+    'polyline.new': (c) => {
+      const pts = arg(c, 0, 'points')
+      const xloc = strArg(c, 3, 'xloc', 'bar_index')
+      const points = pts instanceof PArr ? pts.a.filter((x): x is CPoint => x instanceof CPoint).map((pt) => ({ x: pointX(pt, xloc), price: pt.price })) : []
+      return spawn('polyline', {
+        points,
+        xloc,
+        curved: truthy(arg(c, 1, 'curved') ?? 0),
+        closed: truthy(arg(c, 2, 'closed') ?? 0),
+        line_color: colArg(c, 4, 'line_color', pineColor('blue')),
+        fill_color: colArg(c, 5, 'fill_color', null),
+        line_style: strArg(c, 6, 'line_style', 'solid'),
+        line_width: numArg(c, 7, 'line_width', 1),
+      })
+    },
+    'polyline.delete': deleter('polyline'),
+    // table
+    'table.new': (c) =>
+      spawn('table', {
+        position: strArg(c, 0, 'position', 'top_right'),
+        columns: Math.max(1, Math.round(numArg(c, 1, 'columns', 1))),
+        rows: Math.max(1, Math.round(numArg(c, 2, 'rows', 1))),
+        bgcolor: colArg(c, 3, 'bgcolor', null),
+        frame_color: colArg(c, 4, 'frame_color', null),
+        frame_width: numArg(c, 5, 'frame_width', 0),
+        border_color: colArg(c, 6, 'border_color', null),
+        border_width: numArg(c, 7, 'border_width', 0),
+        cells: new Map<string, TableCell>(),
+        merges: [] as { startCol: number; startRow: number; endCol: number; endRow: number }[],
+      }),
+    'table.cell': (c) => {
+      const d = handle(c, 'table')
+      if (!d) return NaN
+      const col = Math.round(num(arg(c, 1, 'column'), c.line))
+      const row = Math.round(num(arg(c, 2, 'row'), c.line))
+      const w = numArg(c, 4, 'width', 0)
+      const h = numArg(c, 5, 'height', 0)
+      const cell: TableCell = {
+        text: strArg(c, 3, 'text', ''),
+        textColor: colArg(c, 6, 'text_color', pineColor('black')) ?? undefined,
+        hAlign: strArg(c, 7, 'text_halign', 'center') as BoxHAlign,
+        vAlign: strArg(c, 8, 'text_valign', 'center') as BoxVAlign,
+        textSize: (typeof arg(c, 9, 'text_size') === 'number' ? arg(c, 9, 'text_size') : strArg(c, 9, 'text_size', 'normal')) as BoxTextSize | number,
+        bgColor: colArg(c, 10, 'bgcolor', null) ?? undefined,
+        fontFamily: strArg(c, 12, 'text_font_family', 'default') as 'default' | 'monospace',
+        bold: false,
+        italic: false,
+        ...(w ? { width: w } : {}),
+        ...(h ? { height: h } : {}),
+      }
+      const tip = strArg(c, 11, 'tooltip', '')
+      if (tip) cell.tooltip = tip
+      ;(d.p.cells as Map<string, TableCell>).set(`${col},${row}`, cell)
+      return NaN
+    },
+    'table.clear': (c) => {
+      const d = handle(c, 'table')
+      if (!d) return NaN
+      const cells = d.p.cells as Map<string, TableCell>
+      const c0 = numArg(c, 1, 'start_column', 0)
+      const r0 = numArg(c, 2, 'start_row', 0)
+      const c1 = numArg(c, 3, 'end_column', c0)
+      const r1 = numArg(c, 4, 'end_row', r0)
+      for (let x = c0; x <= c1; x++) for (let y = r0; y <= r1; y++) cells.delete(`${x},${y}`)
+      return NaN
+    },
+    'table.merge_cells': (c) => {
+      const d = handle(c, 'table')
+      if (d)
+        (d.p.merges as unknown[]).push({
+          startCol: numArg(c, 1, 'start_column', 0),
+          startRow: numArg(c, 2, 'start_row', 0),
+          endCol: numArg(c, 3, 'end_column', 0),
+          endRow: numArg(c, 4, 'end_row', 0),
+        })
+      return NaN
+    },
+    'table.delete': deleter('table'),
+    'table.set_position': setter('table', 'position'),
+    'table.set_bgcolor': setter('table', 'bgcolor', true),
+    'table.set_frame_color': setter('table', 'frame_color', true),
+    'table.set_frame_width': setter('table', 'frame_width'),
+    'table.set_border_color': setter('table', 'border_color', true),
+    'table.set_border_width': setter('table', 'border_width'),
+  }
+  /** table.cell_set_text(id, col, row, value) and friends. */
+  for (const [k, key, isColor] of [
+    ['text', 'text', false],
+    ['bgcolor', 'bgColor', true],
+    ['text_color', 'textColor', true],
+    ['text_size', 'textSize', false],
+    ['text_halign', 'hAlign', false],
+    ['text_valign', 'vAlign', false],
+    ['width', 'width', false],
+    ['height', 'height', false],
+    ['tooltip', 'tooltip', false],
+    ['text_font_family', 'fontFamily', false],
+  ] as const) {
+    DRAW_FNS[`table.cell_set_${k}`] = (c) => {
+      const d = handle(c, 'table')
+      if (!d) return NaN
+      const at = `${Math.round(num(arg(c, 1, 'column'), c.line))},${Math.round(num(arg(c, 2, 'row'), c.line))}`
+      const cells = d.p.cells as Map<string, TableCell>
+      const cell = cells.get(at) ?? { text: '', hAlign: 'center', vAlign: 'center', textSize: 'normal', fontFamily: 'default', bold: false, italic: false }
+      const v = arg(c, 3, k)
+      ;(cell as unknown as Record<string, unknown>)[key] = isColor ? (colorOf(v ?? NaN, c.line) ?? undefined) : v
+      cells.set(at, cell)
+      return NaN
+    }
+  }
+
+  /** The live drawings, as Vela draws them. */
+  const finishDrawings = (): RunDrawings => {
+    const n = (v: unknown) => (typeof v === 'number' ? v : NaN)
+    const xl = (v: unknown): DrawingXLoc => (v === 'bar_time' ? 'bar_time' : 'bar_index')
+    const ls = (v: unknown): LineStyle => (v === 'dashed' || v === 'dotted' ? v : 'solid')
+    const ext = (v: unknown): DrawingExtend => (v === 'left' || v === 'right' || v === 'both' ? v : 'none')
+    const size = (v: unknown): BoxTextSize => (['auto', 'tiny', 'small', 'normal', 'large', 'huge'].includes(String(v)) ? (v as BoxTextSize) : 'normal')
+    const ha = (v: unknown): BoxHAlign => (v === 'left' || v === 'right' ? v : 'center')
+    const va = (v: unknown): BoxVAlign => (v === 'top' || v === 'bottom' ? v : 'center')
+    const col = (v: unknown) => (typeof v === 'string' ? v : undefined)
+    const lineOf = (d: Draw): DrawingLine => ({
+      id: `l${d.seq}`,
+      paneId: '',
+      xloc: xl(d.p.xloc),
+      x1: n(d.p.x1),
+      y1: n(d.p.y1),
+      x2: n(d.p.x2),
+      y2: n(d.p.y2),
+      extend: ext(d.p.extend),
+      ...(col(d.p.color) ? { color: col(d.p.color)! } : {}),
+      invisible: typeof d.p.color !== 'string',
+      width: Math.max(1, n(d.p.width) || 1),
+      style: ls(d.p.style),
+      arrowLeft: d.p.style === 'arrow_left' || d.p.style === 'arrow_both',
+      arrowRight: d.p.style === 'arrow_right' || d.p.style === 'arrow_both',
+    })
+    const ok = (...xs: number[]) => xs.every((x) => !isNa(x))
+    const out: RunDrawings = { labels: [], lines: [], boxes: [], linefills: [], polylines: [], tables: [] }
+    for (const d of draws.label) {
+      const yloc = String(d.p.yloc) as LabelYLoc
+      if (!ok(n(d.p.x)) || (yloc === 'price' && !ok(n(d.p.y)))) continue
+      const c = col(d.p.color)
+      out.labels.push({
+        id: `t${d.seq}`,
+        paneId: '',
+        xloc: xl(d.p.xloc),
+        x: n(d.p.x),
+        y: n(d.p.y),
+        yloc: ['price', 'abovebar', 'belowbar'].includes(yloc) ? yloc : 'price',
+        ...(d.p.text ? { text: String(d.p.text) } : {}),
+        style: String(d.p.style || 'label_down') as LabelStyle,
+        ...(c ? { color: c } : { noFill: true }),
+        ...(col(d.p.textcolor) ? { textColor: col(d.p.textcolor)! } : {}),
+        size: size(d.p.size),
+        textAlign: ha(d.p.textalign),
+        ...(d.p.tooltip ? { tooltip: String(d.p.tooltip) } : {}),
+        fontFamily: d.p.font === 'monospace' ? 'monospace' : 'default',
+      })
+    }
+    for (const d of draws.line) {
+      const l = lineOf(d)
+      if (ok(l.x1, l.y1, l.x2, l.y2)) out.lines.push(l)
+    }
+    for (const d of draws.box) {
+      const [left, top, right, bottom] = [n(d.p.left), n(d.p.top), n(d.p.right), n(d.p.bottom)]
+      if (!ok(left, top, right, bottom)) continue
+      out.boxes.push({
+        id: `b${d.seq}`,
+        paneId: '',
+        xloc: xl(d.p.xloc),
+        left,
+        top,
+        right,
+        bottom,
+        extend: ext(d.p.extend),
+        ...(col(d.p.bgcolor) ? { bgColor: col(d.p.bgcolor)! } : {}),
+        ...(col(d.p.border_color) ? { borderColor: col(d.p.border_color)! } : {}),
+        borderWidth: n(d.p.border_width) || 1,
+        borderStyle: ls(d.p.border_style),
+        ...(d.p.text ? { text: String(d.p.text) } : {}),
+        ...(col(d.p.text_color) ? { textColor: col(d.p.text_color)! } : {}),
+        textSize: size(d.p.text_size),
+        hAlign: ha(d.p.text_halign),
+        vAlign: va(d.p.text_valign),
+        wrap: d.p.text_wrap === 'auto',
+        fontFamily: d.p.font === 'monospace' ? 'monospace' : 'default',
+        bold: false,
+        italic: false,
+      })
+    }
+    for (const d of draws.linefill) {
+      const l1 = d.p.l1 as Draw
+      const l2 = d.p.l2 as Draw
+      if (!l1.alive || !l2.alive || !col(d.p.color)) continue
+      out.linefills.push({ id: `f${d.seq}`, paneId: '', line1: lineOf(l1), line2: lineOf(l2), color: col(d.p.color)! })
+    }
+    for (const d of draws.polyline) {
+      const pts = d.p.points as { x: number; price: number }[]
+      if (pts.length < 2) continue
+      out.polylines.push({
+        id: `p${d.seq}`,
+        paneId: '',
+        points: pts.map((pt) => ({ xloc: xl(d.p.xloc), x: pt.x, price: pt.price })),
+        curved: !!d.p.curved,
+        closed: !!d.p.closed,
+        ...(col(d.p.line_color) ? { lineColor: col(d.p.line_color)! } : {}),
+        ...(col(d.p.fill_color) ? { fillColor: col(d.p.fill_color)! } : {}),
+        lineWidth: n(d.p.line_width) || 1,
+        lineStyle: ls(d.p.line_style),
+        arrowLeft: false,
+        arrowRight: false,
+      })
+    }
+    for (const d of draws.table) {
+      const rows = n(d.p.rows)
+      const cols = n(d.p.columns)
+      const cells: (TableCell | null)[][] = []
+      const map = d.p.cells as Map<string, TableCell>
+      for (let r = 0; r < rows; r++) {
+        const row: (TableCell | null)[] = []
+        for (let k = 0; k < cols; k++) row.push(map.get(`${k},${r}`) ?? null)
+        cells.push(row)
+      }
+      out.tables.push({
+        id: `g${d.seq}`,
+        paneId: '',
+        position: String(d.p.position) as TablePosition,
+        columns: cols,
+        rows,
+        ...(col(d.p.bgcolor) ? { bgColor: col(d.p.bgcolor)! } : {}),
+        ...(col(d.p.frame_color) ? { frameColor: col(d.p.frame_color)! } : {}),
+        frameWidth: n(d.p.frame_width) || 0,
+        ...(col(d.p.border_color) ? { borderColor: col(d.p.border_color)! } : {}),
+        borderWidth: n(d.p.border_width) || 0,
+        cells,
+        merges: d.p.merges as DrawingTable['merges'],
+      })
+    }
+    return out
   }
 
   // ── Pine arrays ──
@@ -2305,6 +3042,12 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         const m = /\.(#+|0+)/.exec(fmt)
         if (fmt === 'mintick' || fmt === 'price') return isNa(v) ? 'NaN' : v.toFixed(2)
         if (fmt === 'percent') return isNa(v) ? 'NaN' : `${v.toFixed(2)}%`
+        if (fmt === 'volume') {
+          if (isNa(v)) return 'NaN'
+          const a = Math.abs(v)
+          const [d, u] = a >= 1e9 ? [1e9, 'B'] : a >= 1e6 ? [1e6, 'M'] : a >= 1e3 ? [1e3, 'K'] : [1, '']
+          return `${Number((v / d).toFixed(3))}${u}`
+        }
         if (m) return isNa(v) ? 'NaN' : String(Number(v.toFixed(m[1]!.length)))
       }
       return v === undefined ? '' : text(v)
@@ -2948,6 +3691,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     },
     // ── arrays ──
     ...ARRAY_FNS,
+    // ── drawings ──
+    ...DRAW_FNS,
   }
 
   /** Settled-call shortcuts: the held value, or undefined before the first evaluation. */
@@ -2972,6 +3717,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   }
 
   // ── finish ──
+  res.drawings = finishDrawings()
   res.plots.forEach((p, k) => {
     const off = plotOffsets[k] ?? 0
     if (off) {

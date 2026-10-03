@@ -25585,3 +25585,35 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
     - A compile error and an on-chart `runtime.error` both show the copy buttons, and the clipboard gets the expected text.
     - No console errors.
 - **Files in `generated/`:** `2026-10-03-vela-voltick-venue-vwap.png`, `2026-10-03-vela-script-error-copy.png` (mock data)
+
+## 2026-10-03 - v3 Vela: CB Script draws Pine drawings + request.security_lower_tf (LuxAlgo Liquidity Swings runs)
+- **Why:** pasting "Liquidity Swings [LuxAlgo]" stopped at `request.security_lower_tf isn't supported yet`. Fixing that call alone would have shown nothing, because everything that script shows is drawings (zone boxes, level lines, volume labels), and drawings were being skipped.
+- **`request.security_lower_tf(symbol, tf, expression)`:**
+  - Each chart bar gets an array of the expression's values on the lower-timeframe bars inside it. A tuple expression (`get_data() => [high, low, volume]`) returns a tuple of arrays.
+  - The intrabars come from a NeedSeries fetch, e.g. `cbedge:SPX` at "1", and the whole script runs over them to record the expression (Pine's model).
+  - Chart bars older than the 1m history get empty arrays, as on TradingView. A timeframe that isn't lower than the chart's gives one-element arrays.
+- **Drawings are now drawn**, sent through Vela's own Pine drawing channels on the model (`labels / lines / boxes / linefills / polylines / tables`):
+  - `label.new` (also the chart.point form), with `set_x / y / xy / point / text / color / textcolor / style / size / textalign / tooltip / xloc / yloc`, `get_x / y / text`, `delete`, `copy`.
+  - `line.new` (also the point form), with `set_x1 / y1 / x2 / y2 / xy1 / xy2 / first_point / second_point / color / width / style / extend / xloc`, `get_x1 … get_price`, `delete`, `copy`.
+  - `box.new` (also the point form), with `set_left / top / right / bottom / lefttop / rightbottom / bgcolor / border_* / extend / text*`, `get_*`, `delete`, `copy`.
+  - `linefill.new / set_color / delete`, and `polyline.new` from an array of chart points.
+  - `table.new / cell / cell_set_* / clear / merge_cells / set_* / delete`.
+  - `chart.point.new / from_index / from_time / now / copy` and `.price / .index / .time`; `label.all / line.all / box.all …`.
+  - Method spelling works on handles (`lbl.set_text(…)`).
+- **How drawings behave (Pine's object model):**
+  - A handle starts as `na`; set_* on `na` or on a deleted handle does nothing. `line.delete(lvl[1])` works through history.
+  - Past `max_labels_count / max_lines_count / max_boxes_count` (from `indicator()`, default 50, cap 500) the oldest drawing of that kind is removed.
+  - What is alive after the last bar is what gets drawn.
+  - An `na` colour means no fill or stroke: a text-only label, an invisible line, an unfilled box.
+  - Label/line/box styles use Vela's names (`label.style_label_down` → `label_down`, `line.style_dashed` → `dashed`).
+- **Also:**
+  - `str.tostring(x, format.volume)` gives 1.948K / 2.4M.
+  - Untitled inputs on an `inline` row stay untitled, as on TradingView.
+  - New constants: `text.align_top/bottom`, `text.wrap_*`, `font.family_*`.
+  - The Scripts panel Reference was updated.
+- **Files:** `cbedge-v3/src/pages/vela/script/runtime.ts`, `script/engine.ts` (drawings into the model, instance-unique ids), `script/panel.ts` (Reference).
+- **Checks:**
+  - No new `tsc` errors. `check:theme` is clean. The build passes; the Vela route is now 46.7kb brotli against a 57.7kb budget.
+  - Node bench: Liquidity Swings draws 59 labels, 59 lines and 61 boxes over 3,000 mock bars. Intrabar precision on and off give different volumes. Every earlier script still runs, and the label warnings from earlier scripts are gone now that labels draw.
+  - Headless Chromium against the mock data: the pasted script draws its zones, solid and dashed levels, and K-volume labels. CB examples, the copy-error flow and on-chart errors still work. No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-pine-liquidity-swings.png` (mock data)

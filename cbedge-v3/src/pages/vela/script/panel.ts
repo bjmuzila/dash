@@ -49,10 +49,11 @@ const REFERENCE = `PINE SCRIPT  paste a TradingView indicator as is (v4, v5, v6)
   switch, your own functions f(x) =>, tuples [a, b] = …, ta.* math.*
   str.* color.* input.*, plot plotshape plotchar plotarrow hline fill
   bgcolor barcolor.
-  request.security: this symbol on higher timeframes, other symbols
-  this app charts (ES, NQ, SPY, QQQ …). Arrays and for…in loops.
-  Not yet: maps / matrices, drawings (label.new, line.new, box.new
-  are skipped), strategy orders (plots only).
+  request.security (higher timeframes, other symbols this app charts:
+  ES, NQ, SPY, QQQ …) and request.security_lower_tf. Arrays, for…in.
+  Drawings: label / line / box / linefill / polyline / table, with
+  their set_* / get_* / delete and the max_*_count limits.
+  Not yet: maps / matrices, user types, strategy orders (plots only).
   A script that stops: Copy error + script, and send it over.
 
 CB SCRIPT  the same language, plus
