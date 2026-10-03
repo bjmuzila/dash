@@ -12,6 +12,8 @@ import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot
 import { bindIndicatorsWorkspace, registerCopyIndicators } from '@/pages/vela/copyIndicators'
 import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
 import { PATH_TYPE, registerVtPath } from '@/pages/vela/vtPath/vtPathIndicator'
+import { CBSCRIPT, CbScriptEngine } from '@/pages/vela/script/engine'
+import { registerScripts } from '@/pages/vela/script/panel'
 import '@/pages/vela/vela.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,9 +95,21 @@ import '@/pages/vela/vela.css'
 // copy the active chart's studies, settings included, onto every other chart in
 // the layout. Additive: nothing a chart already has is taken off.
 //
+// ── CB Script — our own scripting engine ─────────────────────────────────────
+// pages/vela/script/ — Vela runs scripts through whatever engine is registered
+// under a language id (`engines` below); this one is CB Edge's own small
+// indicator language, 'cbscript', PARSED and INTERPRETED (lang.ts, runtime.ts),
+// never eval'd: production's CSP has no 'unsafe-eval', so a JavaScript engine
+// would not run on cbedge.net at all. A "Scripts" side panel (topbar on
+// desktop, ⋮ on a phone — script/panel.ts) is the editor: write, Save (checked
+// first, errors with their line), Add to chart. Saved scripts live in this
+// browser (`cb-v3-vela-scripts`); a script on a chart is kept in that chart's
+// saved state, and an edit saved in the panel updates every chart running it.
+//
 // ── Our CSS over Vela's ──────────────────────────────────────────────────────
 // pages/vela/vela.css: the active chart in a grid gets a faint 1px grey ring
-// instead of Vela's 2px bright one, and the opacity strip's look.
+// instead of Vela's 2px bright one, the opacity strip's look, and the Scripts
+// panel's.
 //
 // ── The camera copies ────────────────────────────────────────────────────────
 // Vela's screenshot button (and its phone row, and Ctrl/Cmd+Alt+S) puts the
@@ -138,6 +152,7 @@ registerVtPath()
 registerCopyScreenshot()
 registerCopyIndicators()
 registerWallsOpacity()
+registerScripts()
 
 function readSeeded(key: string): Set<string> {
   try {
@@ -253,6 +268,7 @@ export default function Vela({ phone = false }: VelaProps) {
       timezone: 'America/New_York',
       timeframes: ['1', '5', '15', '30', '60', '240', 'D'],
       providers: { [PROVIDER_NAME]: () => new CbEdgeProvider() },
+      engines: { [CBSCRIPT]: () => new CbScriptEngine() },
       persist: storageKey,
     })
     wsRef.current = ws

@@ -55,3 +55,106 @@
 .vela-workspace .cb-vela-opacity-close:hover {
   background: var(--color-raised);
 }
+
+/* The CB Script panel (pages/vela/script/panel.ts) — a Vela side panel: docked
+   column on desktop, a sheet from ⋮ on a phone. Not prefixed with
+   .vela-workspace: the phone sheet can mount outside it. */
+.cb-scr {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 16px;
+  color: var(--color-fg);
+  font-size: var(--text-xs);
+}
+.cb-scr .cb-scr-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cb-scr .cb-scr-pick,
+.cb-scr .cb-scr-name {
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font: inherit;
+}
+.cb-scr .cb-scr-pick {
+  flex: 1 1 auto;
+}
+.cb-scr .cb-scr-btn {
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-surface2);
+  color: var(--color-fg);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cb-scr .cb-scr-btn:hover {
+  background: var(--color-raised);
+}
+.cb-scr .cb-scr-primary {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+.cb-scr .cb-scr-primary:hover {
+  background: color-mix(in srgb, var(--color-accent) 34%, transparent);
+}
+.cb-scr .cb-scr-code {
+  min-height: 300px;
+  height: 46vh;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+}
+.cb-scr .cb-scr-code:focus,
+.cb-scr .cb-scr-name:focus,
+.cb-scr .cb-scr-pick:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+.cb-scr .cb-scr-status {
+  min-height: 1.4em;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.cb-scr .cb-scr-status[data-kind='ok'] {
+  color: var(--color-up);
+}
+.cb-scr .cb-scr-status[data-kind='err'] {
+  color: var(--color-down);
+  font-family: var(--font-mono);
+}
+.cb-scr .cb-scr-ref summary {
+  cursor: pointer;
+  user-select: none;
+}
+.cb-scr .cb-scr-pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-surface2);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+}

@@ -18,6 +18,9 @@
 //   · a script study (RSI, EMA …) is added unless that chart already has one
 //     with identical settings, so pressing twice never doubles anything, and an
 //     EMA 20 beside an EMA 50 copies as both
+//   · a CB Script (pages/vela/script/ — ids `cbs-…`) the same way: added, with
+//     its inputs and hidden flag, unless that chart already runs the same saved
+//     script on the same inputs
 //
 // ── How ──────────────────────────────────────────────────────────────────────
 // Through each cell's own state seam: `dehydrate()` gives the active chart's
@@ -28,11 +31,19 @@
 // own session and `ext` bag so neither is reset by the partial state. Not on the
 // undo timeline (a ledger convergence is state application in Vela's terms);
 // the legend ✕ takes off anything copied.
+//
+// CB Scripts are not in that ledger (Vela leaves a plugin's scripts to the
+// plugin — they ride the cell's `ext` bag, script/panel.ts), so each one goes on
+// through the cell's own seam, `addExternalIndicator`, AFTER the ledger lands,
+// under a fresh `cbs-<library id>-<n>` id so an edit saved in the Scripts panel
+// reaches the copies too.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import type { CellState, VelaWorkspace } from '@luxalgo/vela/workspace'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
+import { CBSCRIPT } from './script/engine'
+import { instanceIdFor, libIdOf } from './script/library'
 
 type Ledger = NonNullable<CellState['indicators']>
 type NativeEntry = Ledger['natives'][number]
@@ -78,6 +89,40 @@ export function bindIndicatorsWorkspace(ws: VelaWorkspace): () => void {
   }
 }
 
+type Cell = ReturnType<VelaWorkspace['cells']>[number]
+
+/** The CB Script instances on a chart: what to copy, and what a target already runs. */
+function scriptsOn(cell: Cell) {
+  return cell.chart
+    .indicators()
+    .filter((h) => !!h.source && libIdOf(h.id) != null)
+    .map((h) => ({ lib: libIdOf(h.id)!, name: h.title, source: h.source!, inputs: h.inputValues(), hidden: !h.visible }))
+}
+
+/** Put the source chart's CB Scripts on `cell` — the ones it does not already run. Returns how many went on. */
+function copyScripts(cell: Cell, from: ReturnType<typeof scriptsOn>): number {
+  if (!from.length) return 0
+  const have = scriptsOn(cell)
+  let n = 0
+  for (const s of from) {
+    const i = have.findIndex((h) => h.lib === s.lib && same(h.inputs, s.inputs))
+    if (i >= 0) {
+      have.splice(i, 1)
+      continue
+    }
+    cell.addExternalIndicator({
+      name: s.name,
+      script: s.source,
+      language: CBSCRIPT,
+      id: instanceIdFor(s.lib),
+      inputs: s.inputs,
+      ...(s.hidden ? { hidden: true } : {}),
+    })
+    n++
+  }
+  return n
+}
+
 function copyToAll(ctx: WidgetContext): void {
   const ws = current
   if (!ws) return
@@ -87,8 +132,9 @@ function copyToAll(ctx: WidgetContext): void {
     ctx.toast('Only one chart in this layout', 'info')
     return
   }
-  const from = source.dehydrate().indicators
-  if (!from || (!from.natives.length && !from.manifest.length)) {
+  const from = source.dehydrate().indicators ?? { natives: [], manifest: [] }
+  const scripts = scriptsOn(source)
+  if (!from.natives.length && !from.manifest.length && !scripts.length) {
     ctx.toast('This chart has no indicators to copy', 'info')
     return
   }
@@ -99,14 +145,18 @@ function copyToAll(ctx: WidgetContext): void {
     const had = cur.indicators ?? { natives: [], manifest: [] }
     const next = mergeLedger(had, from)
     // field by field: a saved ledger's key order is not ours
-    if (same(next.natives, had.natives) && same(next.manifest, had.manifest)) continue
-    cell.rehydrate({
-      indicators: next,
-      // a partial state would otherwise reset these two (see the header)
-      ...(cur.session ? { session: cur.session } : {}),
-      ...(cur.ext ? { ext: cur.ext } : {}),
-    })
-    changed++
+    let moved = false
+    if (!same(next.natives, had.natives) || !same(next.manifest, had.manifest)) {
+      cell.rehydrate({
+        indicators: next,
+        // a partial state would otherwise reset these two (see the header)
+        ...(cur.session ? { session: cur.session } : {}),
+        ...(cur.ext ? { ext: cur.ext } : {}),
+      })
+      moved = true
+    }
+    if (copyScripts(cell, scripts)) moved = true
+    if (moved) changed++
   }
   ctx.stateChanged()
   ctx.toast(

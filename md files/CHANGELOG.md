@@ -25472,3 +25472,34 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - `pages/Vela.tsx`: comment updated.
 - **Checks.** No new `tsc` errors, and `check:theme` is clean. Headless Chromium on a mock walls log (the vol basis puts CORE at the strike nearest price) shows Path across 10 sessions with gold Volt, pink Reversal and blue Surge, and Ribbon bands across the same range. No console errors. In the mock CORE always equals one wall, so the Coil sits under the gold. Not yet checked against the live walls_log.
 - **Files in `generated/`:** `2026-10-03-vela-path-walls.png`, `2026-10-03-vela-ribbon-walls.png` (mock data)
+
+## 2026-10-03 - v3 Vela: CB Script, our own scripting engine + Scripts panel
+- **What:** Vela runs scripts through whatever engine is registered under a language id, and it ships none. This adds CB Edge's own, language `cbscript`, registered through the workspace's `engines` option in `pages/Vela.tsx`. There is also a **Scripts** side panel to write and manage scripts: the `</>` button in the topbar on desktop, or ⋮ → Scripts on a phone.
+- **Why a language and not JavaScript:** production's CSP has no `'unsafe-eval'` (`server-v2/server-with-proxy.js`, `applySecurityHeaders`), so `eval` / `new Function` would not run on cbedge.net. CB Script is parsed and interpreted instead, so the CSP was not changed and no proxy files were touched. A script can only use the built-ins: read the chart's bars, compute, draw.
+- **The language** (Pine-like, vectorised so one run covers every bar):
+  - Statements are `name = expr` or a bare call, one per line. Comments use `//`. History is `close[1]`. Also supported: `cond ? a : b`, `and or not`, and the usual comparison and arithmetic operators.
+  - Series: open high low close volume hl2 hlc3 ohlc4 time bar_index.
+  - Functions: sma ema rma wma vwma hma, bb_upper / bb_lower / stdev, highest lowest sum change roc, rsi macd cci stoch atr tr obv vwap cum, crossover / crossunder / cross, rising / falling, barssince / valuewhen, and the math helpers.
+  - Outputs: `indicator()`, `input()` (number / bool / options / source, which feeds Vela's settings dialog), `plot()` (7 styles, per-bar colour), `hline()`, `fill()`, `marker()` and `bgcolor()`.
+  - Colours are names mapped to tokens (green red blue gold … call put core volt surge reversal coil), or `"#hex"`.
+  - Errors give the line number ("Line 3: unknown function "foo"").
+- **The panel:**
+  - Controls: saved-script picker, New / Delete (Delete asks to confirm), name, a monospace editor (Tab indents, Ctrl/⌘+Enter saves), Save, Add to chart, a status line and a Reference section.
+  - **Save** checks the script first (parse plus a dry run), stores it, and updates every chart already running it in place.
+  - **Add to chart** adds the script to the active chart through the shell, so it is on undo/redo and in the topbar count.
+  - It starts with three examples: EMA cross, RSI and Bands + VWAP.
+- **Persistence:**
+  - The script library is per browser (`cb-v3-vela-scripts`).
+  - A script on a chart is saved in that chart's state (`registerStatePersistence`, key `cbedge.scripts`): source, inputs and hidden flag. On reload it uses the library's latest source, or the chart's own copy if the script was deleted from the library.
+- **Copy indicators to all charts** now also copies CB Scripts. It adds each script with its inputs and hidden flag, and skips any chart that already runs the same script with the same inputs.
+- **Markers draw as labels:** Vela's native renderer has no painter for a `markers` series kind (it accepts one and draws nothing). `marker()` therefore goes out as Pine-style labels anchored above or below the bar on the price pane.
+- **Files:**
+  - New `cbedge-v3/src/pages/vela/script/`: `lang.ts` (lexer and parser), `runtime.ts` (interpreter and built-ins), `engine.ts` (`CbScriptEngine`, the ScriptingEngine port), `library.ts` (saved scripts and examples), `panel.ts` (side panel and persistence).
+  - Changed: `pages/Vela.tsx` (`engines`, `registerScripts()`, header comment), `pages/vela/copyIndicators.ts` (copies scripts), `pages/vela/vela.css` (panel styles, tokens only).
+- **Checks:**
+  - No new `tsc` errors. `check:theme` is clean. The build passes; the Vela route chunk is 26.5kb brotli against a 57.7kb budget, and the entry / css / react / initial-load overages were already there.
+  - Headless Chromium against the mock data:
+    - Desktop: open the panel, add EMA cross (lines, fill and cross markers draw), add RSI (own pane, 70/30 lines, tint). A bad script shows its line error. Saving an edit updates the running chart. Both scripts come back after a reload. Copy to all puts the script on the second chart, and a second press changes nothing.
+    - Phone: ⋮ → Scripts opens the panel, and Add to chart works.
+  - No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-cb-script.png`, `2026-10-03-vela-cb-script-error.png` (mock data)
