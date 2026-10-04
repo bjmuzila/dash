@@ -149,6 +149,34 @@ services:
   # owner console can still see the ledger and pay out existing balances.
   # affiliate-vite/ is kept in the tree but is not built or served.
 
+  # affiliates.cbedge.net (+ affiliate.cbedge.net) → https://voltick.io/Bzila
+  # (added 2026-10-04). A bare nginx that answers every path with a 302 to
+  # Bzila's Voltick join link — no SPA, no backend, nothing proxied. Config is
+  # deploy/affiliates/nginx.conf; changing it needs
+  # `docker compose restart affiliates-redirect`, not a build.
+  #
+  # Listens on 8085, the retired affiliate-web's port, so an ingress line left
+  # over from that service works again without touching cloudflared.
+  #
+  # Reached only via the Cloudflare Tunnel — in /etc/cloudflared/config.yml,
+  # ABOVE the catch-all 404 rule:
+  #     - hostname: affiliates.cbedge.net
+  #       service: http://127.0.0.1:8085
+  #     - hostname: affiliate.cbedge.net
+  #       service: http://127.0.0.1:8085
+  # then `cloudflared tunnel route dns <tunnel> affiliates.cbedge.net` (and the
+  # same for affiliate.cbedge.net if its DNS record is gone) and
+  # `systemctl restart cloudflared`.
+  affiliates-redirect:
+    image: nginx:alpine
+    container_name: affiliates-redirect
+    restart: unless-stopped
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8085:8085"
+    volumes:
+      - ./deploy/affiliates/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
   # The household backend — /api/hh/* for budget.cbedge.net and
   # recipe.cbedge.net, in its own process (server-v2/household-server.js).
   #
