@@ -21,9 +21,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { registerSidePanel, type WidgetContext } from '@luxalgo/vela'
+import type { WorkspaceWidgetContext } from '@luxalgo/vela/workspace'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
-import { compile, loadRuntime, onScriptResult, scriptResults, type ScriptRunInfo } from './engine'
-import { libIdOf, loadLibrary } from './library'
+import { CBSCRIPT, compile, loadRuntime, onScriptError, onScriptResult, scriptErrors, scriptResults, type ScriptRunInfo } from './engine'
+import { instanceIdFor, libIdOf, loadLibrary, saveLibrary, type Script } from './library'
 import { ThemedSelect } from '../themedSelect'
 import { alertsArmed, enableNotify, firedAlerts, notifyWanted, onScriptAlertFired, setAlertsArmed, tfLabel } from './alerts'
 
@@ -64,6 +65,33 @@ function emptyState(doc: Document, ctx: WidgetContext, text: string): HTMLElemen
 // ═════════════════════════════════════════════════════════════════════════════
 // Strategy Tester
 // ═════════════════════════════════════════════════════════════════════════════
+
+/** A strategy anyone can put on a chart from the empty Tester, to see what it does. */
+const EXAMPLE_STRATEGY: Script = {
+  id: 'ex-strategy',
+  name: 'Example — EMA cross strategy',
+  source: `//@version=5
+strategy("Example — EMA cross strategy", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1)
+fastLen = input.int(9, "Fast EMA")
+slowLen = input.int(21, "Slow EMA")
+fast = ta.ema(close, fastLen)
+slow = ta.ema(close, slowLen)
+plot(fast, "Fast", color=color.orange)
+plot(slow, "Slow", color=color.blue)
+// long on a cross up, short on a cross down — always in the market
+if ta.crossover(fast, slow)
+    strategy.entry("Long", strategy.long)
+if ta.crossunder(fast, slow)
+    strategy.entry("Short", strategy.short)
+`,
+}
+
+/** Every chart the context can see (a workspace lists them all). */
+function chartsOf(ctx: WidgetContext) {
+  const cells = (ctx as Partial<WorkspaceWidgetContext>).cells
+  return cells ? cells.map((c) => c.chart) : [ctx.chart]
+}
+const IS_STRATEGY = /(^|\n)\s*strategy\s*\(/
 
 function mountTester(ctx: WidgetContext, body: HTMLElement) {
   const doc = body.ownerDocument
@@ -109,18 +137,57 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     render()
   }
 
+  /** Strategy scripts on the charts that have no result: still running, or stopped on an error. */
+  function waiting(): HTMLElement[] {
+    const have = new Set(scriptResults().keys())
+    const out: HTMLElement[] = []
+    for (const chart of chartsOf(ctx))
+      for (const h of chart.indicators()) {
+        if (!h.source || !IS_STRATEGY.test(h.source) || have.has(h.id)) continue
+        const err = scriptErrors().get(h.id)
+        const row = el(doc, 'div', 'cb-st-wait')
+        row.append(el(doc, 'b', '', h.title), el(doc, 'span', err ? 'cb-st-err' : 'cb-scr-note', err ? `stopped: ${err}` : h.visible ? 'running…' : 'hidden on the chart — show it to see its backtest'))
+        out.push(row)
+      }
+    return out
+  }
+
   function render() {
     const list = runs()
     if (!list.length) {
       pickRow.hidden = true
       tabs.hidden = true
-      view.replaceChildren(
-        emptyState(
-          doc,
-          ctx,
-          'No strategy on a chart yet. A script that calls strategy() — a TradingView strategy pasted into Scripts works as is — shows its backtest here once it is on the chart.',
-        ),
-      )
+      const stuck = waiting()
+      const box = el(doc, 'div', 'cb-st-empty')
+      if (stuck.length) {
+        box.append(el(doc, 'div', '', 'A strategy is on the chart but has no backtest yet:'), ...stuck)
+      } else {
+        box.append(
+          el(doc, 'div', '', 'The Strategy Tester shows the backtest of a strategy script on the chart: net profit, drawdown, win rate, the equity curve and every trade.'),
+          el(
+            doc,
+            'div',
+            'cb-scr-note',
+            'It needs a script that starts with strategy(…) — an indicator(…) script has no trades. Paste a TradingView strategy into Scripts and Add to chart, or try the example.',
+          ),
+        )
+      }
+      const acts = el(doc, 'div', 'cb-scr-row')
+      const ex = el(doc, 'button', 'cb-scr-btn cb-scr-primary', 'Add example strategy')
+      ex.type = 'button'
+      ex.addEventListener('click', () => {
+        const lib = loadLibrary()
+        if (!lib.some((x) => x.id === EXAMPLE_STRATEGY.id)) saveLibrary([...lib, { ...EXAMPLE_STRATEGY, u: Date.now() }])
+        ctx.addIndicator({ name: EXAMPLE_STRATEGY.name, script: EXAMPLE_STRATEGY.source, language: CBSCRIPT, id: instanceIdFor(EXAMPLE_STRATEGY.id) })
+        ex.disabled = true
+        ex.textContent = 'Adding…'
+      })
+      const open = el(doc, 'button', 'cb-scr-btn', 'Open Scripts')
+      open.type = 'button'
+      open.addEventListener('click', () => ctx.togglePanel(SCRIPTS_PANEL_ID, true))
+      acts.append(ex, open)
+      box.append(acts)
+      view.replaceChildren(box)
       return
     }
     pickRow.hidden = false
@@ -287,18 +354,28 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
   }
 
   let timer: ReturnType<typeof setTimeout> | null = null
-  const off = onScriptResult((info) => {
-    if (!info.strategy || timer) return
+  const later = () => {
+    if (timer) return
     timer = setTimeout(() => {
       timer = null
       render()
     }, 600)
+  }
+  const off = onScriptResult((info) => {
+    if (info.strategy || !runs().length) later()
   })
+  const offErr = onScriptError(() => later())
+  // a script added or removed from the chart shows up here without a run
+  const poll = setInterval(() => {
+    if (!runs().length && body.offsetParent) render()
+  }, 2000)
   render()
   return {
     onOpen: render,
     destroy() {
       off()
+      offErr()
+      clearInterval(poll)
       pick.destroy()
       if (timer) clearTimeout(timer)
     },

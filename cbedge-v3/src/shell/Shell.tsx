@@ -63,9 +63,8 @@ export interface NavItem {
   icon: string
   /** The rail's stroke icon — see shell/railGlyphs.tsx. */
   glyph?: RailGlyph
-  /** Heading the item sits under when the rail is open. A head is drawn
-   *  wherever the group changes in the CURRENT order, so a user's drag-reorder
-   *  still reads sensibly — it just gets more heads. */
+  /** Loose grouping of the page. Not drawn (headings came off the rail
+   *  2026-10-03); kept as metadata. */
   group?: 'Markets' | 'Prep' | 'Research' | 'More'
   /** URLs to start fetching when the user shows intent (hover/touch). */
   prefetch?: string[]
@@ -298,13 +297,7 @@ function Rail() {
           <kbd className="cb-rail-fade">Ctrl K</kbd>
         </label>
         {shown.length === 0 && <div className="cb-rail-empty cb-rail-fade">No page matches</div>}
-        {shown.map((item, i) => {
-          const head =
-            !q && (i === 0 || shown[i - 1].group !== item.group) ? (
-              <div className="cb-rail-grp" aria-hidden>
-                <span className="cb-rail-fade">{item.group ?? 'More'}</span>
-              </div>
-            ) : null
+        {shown.map((item) => {
           const body = (
             <>
               <RailIcon name={item.glyph ?? 'home'} />
@@ -337,9 +330,8 @@ function Rail() {
 
           if (item.comingSoon) {
             return (
-              <div key={item.to} style={{ display: 'contents' }}>
-                {head}
-                <div
+              <div
+                  key={item.to}
                   title={`${item.label} — coming soon`}
                   aria-disabled="true"
                   data-dragging={dragAttr}
@@ -348,13 +340,11 @@ function Rail() {
                 >
                   {body}
                 </div>
-              </div>
             )
           }
           return (
-            <div key={item.to} style={{ display: 'contents' }}>
-              {head}
               <NavLink
+                key={item.to}
                 to={item.to}
                 end={item.to === '/'}
                 onPointerEnter={() => item.prefetch?.forEach((u) => preload(u))}
@@ -368,7 +358,6 @@ function Rail() {
               >
                 {body}
               </NavLink>
-            </div>
           )
         })}
       </nav>

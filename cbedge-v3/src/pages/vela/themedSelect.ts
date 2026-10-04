@@ -91,6 +91,7 @@ export class ThemedSelect {
     if (this.menu || !this.opts.length) return
     const m = this.doc.createElement('div')
     m.className = 'cb-sel-menu'
+    m.style.cssText = 'position:fixed;left:0;top:0;z-index:90' // never in the page flow
     m.setAttribute('role', 'listbox')
     this.menu = m
     this.active = Math.max(0, this.opts.findIndex((o) => o.value === this.cur && !o.action))

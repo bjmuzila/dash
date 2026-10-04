@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-03 - v3 rail: same background as the top toolbar
+
+- `cbedge-v3/src/shell/rail.css`: the rail now sits on `--color-bg` (the top toolbar's plate) instead of the darker `--color-rail`, collapsed and open.
+
+## 2026-10-03 - v3 rail: no group headings
+
+- `cbedge-v3/src/shell/Shell.tsx`: the open rail no longer draws the Markets / Prep / Research / More headings (or the hairlines between groups when collapsed). Just the pages, in your saved order.
+
 ## 2026-10-03 - v3 rail: hover-to-expand glass rail + floating drawing toolbar
 
 - `cbedge-v3/src/shell/Shell.tsx`: the left rail is now a 64px icon-only "glass rail" that slides out to 224px on hover (short intent delay) as an overlay. The 64px slot never changes width, so the toolbar, board and charts never move. Open, it shows the CB Edge name + 3.0 tag, a "Jump to…" box (Ctrl/⌘ K focuses it, typing filters, Enter goes, Esc clears), group headings (Markets / Prep / Research / More, drawn wherever the group changes so drag-reorder still works), and labels. Active page gets an accent pill, glow and edge bar. `NavItem` gains optional `glyph` and `group`; the emoji `icon` field is kept but no longer drawn.
@@ -25845,3 +25853,24 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `cbedge-v3/src/pages/premarket/postMarketTab.css.ts`: new `vel*` classes. Tokens and type scale only.
 - **Checks:** `tsc` is clean for the file graph and `check:theme` passes. Checked in headless Chromium with a synthetic ladder: full day, a replay at 12:40 with a recorder gap, the `$` switch, and the empty state. No console errors.
 - **Files in `generated/`** (synthetic data): `2026-10-03-postmarket-gamma-velocity.png`
+
+## 2026-10-03 - Vela: Strategy Tester explains itself; floating cards can't shift the page
+
+- **Strategy Tester empty state.** The panel only shows results for a script that starts with `strategy(…)`. An `indicator(…)` script has no trades, so the panel stayed on a one-line "no strategy" note.
+  - It now says what it shows and what it needs.
+  - It adds an **"Add example strategy"** button, which saves an EMA-cross strategy to the library and puts it on the active chart, so the backtest appears right away.
+  - A strategy that is on a chart but has no result is now listed: still running, hidden, or stopped on an error, with the error text.
+  - The panel also refreshes when a script is added or removed.
+- **Whale bubble hover "moved the chart":** without its stylesheet, the hover card dropped into the page flow under the chart. Each hover made the page taller, so the chart shifted and no card was visible.
+  - The card now carries its own fixed placement inline. The themed dropdown list and the script-alert toasts get the same treatment.
+  - With `vela.css` restored (previous entry), the card shows beside the bubble as designed.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/script/testerPanels.ts`
+  - `studies/whaleLayer.ts`
+  - `themedSelect.ts`
+  - `script/alerts.ts`
+  - `vela.css`
+- **Checks:**
+  - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
+  - Headless run against the mock server: the empty Tester shows the explanation, and "Add example strategy" produces a backtest on the chart (25 trades, 51 fills).
+- **Files in `generated/`:** `2026-10-03-vela-strategy-tester-empty.png` (mock data)

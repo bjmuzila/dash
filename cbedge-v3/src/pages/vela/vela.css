@@ -362,6 +362,24 @@
 .cb-scr .cb-st-short {
   color: var(--color-down);
 }
+.cb-scr .cb-st-wait {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-self: stretch;
+  padding: 8px 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-surface2);
+  color: var(--color-fg);
+}
+.cb-scr .cb-st-err {
+  color: var(--color-down);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: pre-wrap;
+  user-select: text;
+}
 .cb-scr .cb-st-empty {
   display: flex;
   flex-direction: column;

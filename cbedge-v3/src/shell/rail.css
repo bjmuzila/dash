@@ -12,7 +12,7 @@
    link keeps focus, and the rail would stay open after the mouse left.
 
    Colours are tokens only (see src/design/tokens.css); the glass is
-   color-mix() over --color-rail, so the Voltick palette re-inks it for free.
+   color-mix() over --color-bg (same plate as the top toolbar), so the Voltick palette re-inks it for free.
    ───────────────────────────────────────────────────────────────────────────── */
 
 .cb-rail-slot {
@@ -38,7 +38,7 @@
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: none;
-  background: var(--color-rail);
+  background: var(--color-bg);
   border-right: 1px solid var(--color-line);
   transition:
     width 0.2s cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -52,7 +52,7 @@
 .cb-rail:has(.cb-rail-search input:focus),
 .cb-rail:has(:focus-visible) {
   width: var(--cb-rail-open-w);
-  background: color-mix(in srgb, var(--color-rail) 86%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 88%, transparent);
   -webkit-backdrop-filter: blur(22px) saturate(140%);
   backdrop-filter: blur(22px) saturate(140%);
   box-shadow:

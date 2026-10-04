@@ -79,6 +79,9 @@ class Card {
     if (!el || !el.isConnected) {
       el = this.el = document.createElement('div')
       el.className = 'cb-wh-card'
+      // the box's own placement, inline: without its stylesheet the card would land in
+      // the page flow, under everything, and nudge the layout on every hover
+      el.style.cssText = 'position:fixed;left:0;top:0;z-index:70;pointer-events:none'
       el.setAttribute('role', 'tooltip')
       document.body.appendChild(el)
       this.shown = ''

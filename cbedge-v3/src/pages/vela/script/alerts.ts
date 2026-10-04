@@ -102,6 +102,7 @@ function toast(a: FiredAlert): void {
   if (!toastHost || !toastHost.isConnected) {
     toastHost = document.createElement('div')
     toastHost.className = 'cb-scr-toasts'
+    toastHost.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:60;pointer-events:none'
     document.body.appendChild(toastHost)
   }
   const t = document.createElement('div')
