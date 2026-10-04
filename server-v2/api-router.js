@@ -9621,7 +9621,7 @@ if (libDb) {
             gex_watch_alerts:    { days: Math.max(30, n(process.env.GEX_WATCH_RETAIN_DAYS, 1095)),        owner: 'gex-watch-recorder' },
             gex_gross_daily:     { days: Math.max(30, n(process.env.GEX_GROSS_RETAIN_DAYS, 1095)),        owner: 'gex-gross-recorder' },
             lse_top_flow_prints: { days: 7,  owner: 'api-router',
-                                   note: `prints >= $${Math.round((Number(process.env.LSE_WHALE_FLOOR) || 1_000_000) / 1000)}K premium are NEVER swept — they are the /whales archive; everything smaller purges after 7d` },
+                                   note: `prints >= $${Math.round((Number(process.env.LSE_WHALE_FLOOR) || 500_000) / 1000)}K premium are NEVER swept — they are the /whales archive; everything smaller purges after 7d` },
             mult_greek_gex_open: { days: 3,  owner: 'mult-greek-gex-recorder' },
           };
 
@@ -15553,6 +15553,10 @@ try {
       const keep = new Set();
       [...all].sort((a, b) => b.premium - a.premium).slice(0, TF_KEEP_TOP).forEach((r) => keep.add(r.id));
       [...all].sort((a, b) => b.ts - a.ts).slice(0, TF_KEEP_RECENT).forEach((r) => keep.add(r.id));
+      // Never evict a row that has not reached the DB yet (2026-10-03). The 1D
+      // view and the Net Drift blend read the TABLE, so a print pruned from
+      // memory before its first persist was a print that never existed.
+      for (const id of tfState.dirty) keep.add(id);
       const next = new Map();
       for (const r of all) if (keep.has(r.id)) next.set(r.id, r);
       tfState.rows = next;
@@ -15797,10 +15801,14 @@ try {
       return mins >= 9 * 60 + 25 && mins <= 16 * 60 + 15;
     }
 
-    /** How often the store is mirrored to the DB. Only DIRTY rows are written. */
-    const TF_PERSIST_MS = 60_000;
-    /** Upserted per persist pass. The rest go on the next one. */
-    const TF_PERSIST_BATCH = 500;
+    /** How often the store is mirrored to the DB. Only DIRTY rows are written.
+     *  20s / 2000 (2026-10-03, was 60s / 500): the 1D view now reads every
+     *  $50K+ print of the day off this table, and the Net Drift LSE blend reads
+     *  it too, so it has to keep up with the open — 500 a minute fell behind. */
+    const TF_PERSIST_MS = 20_000;
+    /** Upserted per persist pass. The rest go on the next one. 2000 rows × 5
+     *  params stays far under Postgres's 65,535 bind limit. */
+    const TF_PERSIST_BATCH = 2000;
     /** Sessions kept in the table. */
     const TF_RETAIN_DAYS = 7;
     /**
@@ -15816,9 +15824,11 @@ try {
      * for the same reason: the small prints are the volume, the big ones are the
      * record worth keeping.
      */
+    // $500K (2026-10-03, Brandon) — was $1M. LSE_WHALE_FLOOR on the VPS still
+    // wins if it is set, so an env pinned at 1000000 keeps the old floor.
     const TF_WHALE_FLOOR = Math.max(
       100_000,
-      Number(process.env.LSE_WHALE_FLOOR) || 1_000_000,
+      Number(process.env.LSE_WHALE_FLOOR) || 500_000,
     );
 
     let tfSchema = null;
@@ -16379,9 +16389,18 @@ try {
         // Clamped UP to the whale floor: below it the table holds only the last
         // seven days, so a lower ask would return a list that looks like the
         // archive and is really a week of it.
+        //
+        // ONE SESSION GOES DOWN TO $50K (2026-10-03, Brandon). A single-day
+        // range (the page's 1D) inside the retention window is the one ask the
+        // table CAN answer below the whale floor: every print the shared sweep
+        // took (TF_BASE_MIN_PREMIUM and up) is still stored for that day. A
+        // multi-day range keeps the whale floor, for the reason above.
+        const retainCutoff = tfEtDate(new Date(Date.now() - TF_RETAIN_DAYS * 86_400_000));
+        const singleSession = from === to && from >= retainCutoff;
+        const rangeFloor = singleSession ? TF_BASE_MIN_PREMIUM : TF_WHALE_FLOOR;
         const minPremium = Math.max(
           Number.isFinite(askedFloor) ? askedFloor : TF_WHALE_FLOOR,
-          TF_WHALE_FLOOR,
+          rangeFloor,
         );
 
         // Optional ceiling on the CONTRACT PRICE (per-share fill, e.g. 4.20).
@@ -16421,6 +16440,8 @@ try {
           rows: [],
           rowCap: limit,
           whaleFloor: TF_WHALE_FLOOR,
+          dayFloor: TF_BASE_MIN_PREMIUM,
+          rangeFloor,
           sides,
           maxDte,
           unreadable: { n: 0, premium: 0 },
@@ -16580,6 +16601,10 @@ try {
             rows: (listRows || []).map(whRow),
             rowCap: limit,
             whaleFloor: TF_WHALE_FLOOR,
+            /** The lowest floor a single-session (1D) range accepts. */
+            dayFloor: TF_BASE_MIN_PREMIUM,
+            /** The floor THIS request was clamped to. */
+            rangeFloor,
             sides,
             maxDte,
             /** What the readable filter is holding back. Zero when sides='all'. */

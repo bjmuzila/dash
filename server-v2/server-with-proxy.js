@@ -717,6 +717,16 @@ async function handleProxyRest(req, res) {
     return true;
   }
 
+  // /proxy/flow-netprem-board?date=&tickers=A,B&minPremium=&otmOnly=1 — net
+  // call/put premium per ticker over the scanner universe, LSE-blended (see
+  // LSE-BLENDED NET PREMIUM below). Backs the Whale page's Net Drift board.
+  if (pathname === '/proxy/flow-netprem-board') {
+    handleFlowNetPremBoard(req, res).catch((e) => {
+      sendJson(res, 500, { error: 'flow-netprem-board failed', detail: String(e?.message || e) });
+    });
+    return true;
+  }
+
   // /proxy/flow-premsplit?date=&minPremium=&exIdx=1&… — buy/sell × call/put
   // premium totals over the full filtered session, computed in SQL.
   if (pathname === '/proxy/flow-premsplit') {
@@ -1164,15 +1174,31 @@ function parseFlowFilters(searchParams) {
     dteMin,
     dteMax: dteMaxRaw != null && dteMaxRaw !== '' ? Number(dteMaxRaw) : null,
     otmOnly: searchParams.get('otmOnly') === '1',
+    // `source=lse` (2026-10-03) — the LSE-blended net premium. Anything else is
+    // the Tasty-only tape, exactly as before, so /v3/flow is untouched.
+    source: searchParams.get('source') === 'lse' ? 'lse' : 'tt',
   };
 }
 
 function flowFilterCacheKey(f, binMs) {
-  return [f.date, f.underlying, f.exIdx ? 1 : 0, binMs, f.side, f.type, f.minPremium, f.minSize, f.expiry, f.dteMin, f.dteMax, f.otmOnly ? 1 : 0].join('|');
+  return [f.date, f.underlying, f.exIdx ? 1 : 0, binMs, f.side, f.type, f.minPremium, f.minSize, f.expiry, f.dteMin, f.dteMax, f.otmOnly ? 1 : 0, f.source || 'tt'].join('|');
 }
 
 async function queryNetPremBins(pool, f, binMs, sinceMs) {
-  const { where, params } = buildFlowPrintsWhere(f, sinceMs);
+  if (f.source === 'lse') return queryNetPremBinsLse(pool, f, binMs, sinceMs);
+  return queryNetPremBinsTt(pool, f, binMs, sinceMs, null);
+}
+
+/** The Tasty flow_prints GROUP BY. `maxPremium` (exclusive) caps the band —
+ *  the LSE blend uses it to take only the prints under LSE's floor from here. */
+async function queryNetPremBinsTt(pool, f, binMs, sinceMs, maxPremium) {
+  const built = buildFlowPrintsWhere(f, sinceMs);
+  let where = built.where;
+  const params = built.params;
+  if (maxPremium != null) {
+    params.push(maxPremium);
+    where += ` AND premium < $${params.length}`;
+  }
   params.push(binMs);
   const binIdx = params.length;
   const { rows } = await pool.query(
@@ -1217,6 +1243,387 @@ async function queryNetPremBins(pool, f, binMs, sinceMs) {
     // that index's INCLUDE list rather than dropping this column.
     spot: r.spot != null && Number.isFinite(Number(r.spot)) ? Number(r.spot) : undefined,
   }));
+}
+
+// ── LSE-BLENDED NET PREMIUM (2026-10-03, Brandon) ────────────────────────────
+// `source=lse` on /proxy/flow-netprem, and /proxy/flow-netprem-board. Built for
+// the Whale page's Net Drift; /v3/flow keeps the Tasty-only path above.
+//
+// What "mostly LSE" can and cannot mean, because the vault decides it:
+//
+//   • LSE only carries prints of TF_BASE_MIN_PREMIUM ($50K) and up — that is
+//     the floor api-router's shared sweep is taken at. So every print of $50K+
+//     comes from lse_top_flow_prints, and the band under it from Tasty's
+//     flow_prints. By premium that is the large majority of the session.
+//   • LSE sends NO aggressor side. api-router's tfEnrich() classifies a print
+//     against a Tasty bid/ask when it can (24 chain groups per 20s cycle), and
+//     a classified print keeps that verdict. A print it never reached is
+//     matched to the Tasty print of the same contract within LSE_MATCH_MS and
+//     takes that print's side. A print with neither is left out of the net —
+//     there is no honest way to sign it — rather than guessed.
+//   • A Tasty print of $50K+ that no LSE print matched (the vault missed it, or
+//     it fell out of the sweep) still counts, so the blend is never LESS
+//     complete than the Tasty tape it replaces.
+//
+// Session-only. Nothing new is stored: both tables already hold today, and
+// the bins live in the same in-process cache as the Tasty ones — today's keys
+// roll over at midnight ET with the date.
+const LSE_NETPREM_FLOOR = 50_000; // = TF_BASE_MIN_PREMIUM in api-router.js
+const LSE_MATCH_MS = 3_000;
+const LSE_ROOT_FOLD = { SPXW: 'SPX', NDXP: 'NDX', RUTW: 'RUT', XSPW: 'XSP' };
+const lseTicker = (u) => {
+  const up = String(u || '').toUpperCase();
+  return LSE_ROOT_FOLD[up] || up;
+};
+
+let _lseNetPremIdx = null;
+/** Index for "one session, one underlying" on lse_top_flow_prints. Created
+ *  here rather than in api-router because only this path reads it that way.
+ *  A missing table (no LSE key on this box) resolves false and the blend
+ *  quietly degrades to the Tasty tape. */
+function ensureLseNetPremIndex(pool) {
+  if (_lseNetPremIdx) return _lseNetPremIdx;
+  _lseNetPremIdx = (async () => {
+    try {
+      const { rows } = await pool.query(`SELECT to_regclass('public.lse_top_flow_prints') AS t`);
+      if (!rows[0] || !rows[0].t) { _lseNetPremIdx = null; return false; }
+      await pool.query(
+        `CREATE INDEX IF NOT EXISTS lse_top_flow_prints_session_und_ts_idx
+           ON lse_top_flow_prints (session_date, (payload->>'underlying'), ts)`
+      );
+      return true;
+    } catch (e) {
+      console.warn('[flow-netprem-lse] index ensure failed:', e.message);
+      _lseNetPremIdx = null;
+      return false;
+    }
+  })();
+  return _lseNetPremIdx;
+}
+
+/** LSE prints for a session, `roots` (null = every root), at or above the floor. */
+async function fetchLseNetPremRows(pool, f, roots, sinceMs) {
+  if (!(await ensureLseNetPremIndex(pool))) return null;
+  const params = [f.date, Math.max(LSE_NETPREM_FLOOR, f.minPremium || 0)];
+  let where = `session_date = $1::date AND premium >= $2`;
+  if (roots) {
+    params.push(roots);
+    where += ` AND payload->>'underlying' = ANY($${params.length})`;
+  }
+  if (sinceMs != null) {
+    params.push(sinceMs);
+    where += ` AND ts >= $${params.length}`;
+  }
+  const { rows } = await pool.query(
+    `SELECT ts, premium,
+            payload->>'underlying' AS u,
+            payload->>'type'       AS t,
+            payload->>'action'     AS a,
+            payload->>'expiry'     AS e,
+            payload->>'strike'     AS k,
+            payload->>'size'       AS sz,
+            payload->>'spot'       AS sp
+       FROM lse_top_flow_prints
+      WHERE ${where}`,
+    params
+  );
+  const out = [];
+  for (const r of rows) {
+    const type = String(r.t || '').toUpperCase().slice(0, 1);
+    if (type !== 'C' && type !== 'P') continue;
+    const strike = Number(r.k);
+    const spot = Number(r.sp);
+    const size = Number(r.sz);
+    const row = {
+      ts: Number(r.ts),
+      ticker: lseTicker(r.u),
+      type,
+      action: r.a === 'BUY' || r.a === 'SELL' ? r.a : null,
+      expiry: r.e ? String(r.e).slice(0, 10) : null,
+      strike: Number.isFinite(strike) ? strike : null,
+      size: Number.isFinite(size) ? size : 0,
+      spot: Number.isFinite(spot) && spot > 0 ? spot : null,
+      premium: Number(r.premium) || 0,
+    };
+    if (lsePassesFilters(row, f)) out.push(row);
+  }
+  return out;
+}
+
+/** The tape filters, applied to an LSE row in JS — the same meanings
+ *  buildFlowPrintsWhere gives them in SQL. A row a filter cannot answer
+ *  (no strike/spot under OTM ONLY, no expiry under a DTE bound) is dropped. */
+function lsePassesFilters(r, f) {
+  if (f.type === 'C' || f.type === 'P') { if (r.type !== f.type) return false; }
+  if (f.minSize > 0 && !(r.size >= f.minSize)) return false;
+  if (f.expiry !== 'all' && r.expiry !== f.expiry) return false;
+  if (f.dteMin > 0 || f.dteMax != null) {
+    if (!r.expiry) return false;
+    const dte = Math.round((Date.parse(`${r.expiry}T00:00:00Z`) - Date.parse(`${f.date}T00:00:00Z`)) / 86_400_000);
+    if (!Number.isFinite(dte)) return false;
+    if (f.dteMin > 0 && dte < f.dteMin) return false;
+    if (f.dteMax != null && dte > f.dteMax) return false;
+  }
+  if (f.otmOnly) {
+    if (r.strike == null || r.spot == null) return false;
+    if (r.type === 'C' ? !(r.strike > r.spot) : !(r.strike < r.spot)) return false;
+  }
+  return true;
+}
+
+/** Tasty prints at/above the LSE floor — the match pool for unclassified LSE
+ *  prints, and the backstop for anything LSE missed. */
+async function fetchTtBigRows(pool, f, sinceMs) {
+  const built = buildFlowPrintsWhere(f, sinceMs);
+  const params = built.params;
+  params.push(LSE_NETPREM_FLOOR);
+  const { rows } = await pool.query(
+    `SELECT ts, underlying_norm AS u, expiration AS e, strike AS k, type AS t, side, premium, size, spot
+       FROM flow_prints
+      WHERE ${built.where} AND premium >= $${params.length}`,
+    params
+  );
+  return rows.map((r) => ({
+    ts: Number(r.ts),
+    ticker: lseTicker(r.u),
+    type: String(r.t || '').toUpperCase().slice(0, 1),
+    side: String(r.side || ''),
+    expiry: r.e ? String(r.e).slice(0, 10) : null,
+    strike: r.k != null && Number.isFinite(Number(r.k)) ? Number(r.k) : null,
+    size: Number(r.size) || 0,
+    spot: r.spot != null && Number(r.spot) > 0 ? Number(r.spot) : null,
+    premium: Number(r.premium) || 0,
+  }));
+}
+
+const blendKey = (r) => `${r.ticker}|${r.expiry}|${r.strike == null ? '' : r.strike.toFixed(3)}|${r.type}`;
+
+/**
+ * LSE rows + Tasty big rows → one signed list, each print counted once.
+ * Returns [{ ts, ticker, type, buy, premium, size, spot, src }].
+ */
+function blendBigPrints(lseRows, ttRows, f) {
+  const byKey = new Map();
+  for (const t of ttRows) {
+    const k = blendKey(t);
+    const arr = byKey.get(k);
+    if (arr) arr.push(t); else byKey.set(k, [t]);
+  }
+  const covered = new Set();
+  const out = [];
+  for (const l of lseRows) {
+    const pool = byKey.get(blendKey(l));
+    let near = null;
+    if (pool) {
+      let best = LSE_MATCH_MS + 1;
+      for (const t of pool) {
+        const dt = Math.abs(t.ts - l.ts);
+        if (dt < best) { best = dt; near = t; }
+      }
+    }
+    // A Tasty print coalesces a 500ms slot, so one of its rows can stand for
+    // several LSE prints. It is marked covered, never consumed.
+    if (near) covered.add(near);
+    let side = l.action === 'BUY' ? 'buy' : l.action === 'SELL' ? 'sell' : null;
+    if (!side && near) side = near.side === 'buy' ? 'buy' : near.side === 'sell' ? 'sell' : null;
+    if (!side) continue;
+    if ((f.side === 'buy' || f.side === 'sell') && side !== f.side) continue;
+    out.push({ ts: l.ts, ticker: l.ticker, type: l.type, buy: side === 'buy', premium: l.premium, size: l.size, spot: l.spot, src: 'lse' });
+  }
+  for (const t of ttRows) {
+    if (covered.has(t)) continue;
+    // Same sign rule as the Tasty GROUP BY: anything that is not a buy nets out.
+    out.push({ ts: t.ts, ticker: t.ticker, type: t.type, buy: t.side === 'buy', premium: t.premium, size: t.size, spot: t.spot, src: 'tt' });
+  }
+  return out;
+}
+
+async function queryNetPremBinsLse(pool, f, binMs, sinceMs) {
+  const roots = f.underlying ? flowRootsFor(f.underlying) : null;
+  const [small, lseRows, ttBig] = await Promise.all([
+    queryNetPremBinsTt(pool, f, binMs, sinceMs, LSE_NETPREM_FLOOR),
+    fetchLseNetPremRows(pool, f, roots, sinceMs),
+    fetchTtBigRows(pool, f, sinceMs),
+  ]);
+  // No LSE table on this box → the band above the floor is Tasty's, i.e. the
+  // plain Tasty answer.
+  const big = blendBigPrints(lseRows || [], ttBig, f);
+  const bySec = new Map();
+  for (const b of small) bySec.set(b.sec, { ...b });
+  for (const p of big) {
+    const sec = Math.floor(Math.floor(p.ts / binMs) * binMs / 1000);
+    let b = bySec.get(sec);
+    if (!b) { b = { sec, callNet: 0, putNet: 0, callVol: 0, putVol: 0, spot: undefined }; bySec.set(sec, b); }
+    const signed = p.buy ? p.premium : -p.premium;
+    if (p.type === 'C') { b.callNet += signed; b.callVol += p.size; }
+    else if (p.type === 'P') { b.putNet += signed; b.putVol += p.size; }
+    if (b.spot === undefined && p.spot != null) b.spot = p.spot;
+  }
+  return [...bySec.values()].sort((a, b) => a.sec - b.sec);
+}
+
+// ── /proxy/flow-netprem-board ─────────────────────────────────────────────
+// Net call / put premium per ticker for the scanner universe, same blend as
+// above. One small-band GROUP BY (incremental, same overlap rules as the bin
+// cache) plus a full-session re-blend of the $50K+ band — which is thousands
+// of rows, not millions — on a 20s single-flight cache shared by every viewer.
+const _boardCache = new Map(); // key -> { at, smallBins: Map<'TICKER|sec', bin>, payload }
+const _boardInFlight = new Map();
+const BOARD_TTL_MS = 20_000;
+let _boardUniverse = { at: 0, tickers: [] };
+
+async function boardUniverse() {
+  if (Date.now() - _boardUniverse.at < 5 * 60_000 && _boardUniverse.tickers.length) return _boardUniverse.tickers;
+  let tickers = [];
+  try {
+    const { resolveScannerTickers } = require('./scanner-recorder');
+    tickers = await resolveScannerTickers();
+  } catch {
+    tickers = parseScannerTickers();
+  }
+  tickers = [...new Set((tickers || []).map((t) => String(t).trim().toUpperCase()).filter(Boolean))];
+  _boardUniverse = { at: Date.now(), tickers };
+  return tickers;
+}
+
+async function computeBoard(f, tickers, key) {
+  const pool = getHistPool();
+  if (!pool) return { date: f.date, tickers: [], lse: false };
+  await ensureFlowPrintsSchema(pool);
+
+  const roots = [...new Set(tickers.flatMap((t) => flowRootsFor(t)))];
+  const fAll = { ...f, underlying: '' };
+  const binMs = 60_000;
+  const hit = _boardCache.get(key);
+  const isToday = f.date === todayYmdET();
+
+  // Small band, incremental by minute like getNetPremBins.
+  let sinceMs = null;
+  let smallBins = hit ? hit.smallBins : null;
+  if (smallBins && isToday && smallBins.size) {
+    let lastSec = 0;
+    for (const b of smallBins.values()) if (b.sec > lastSec) lastSec = b.sec;
+    const overlapMs = (lastSec - (NETPREM_OVERLAP_BINS - 1) * 60) * 1000;
+    sinceMs = Math.floor(Math.min(overlapMs, Date.now() - NETPREM_LATE_MS) / binMs) * binMs;
+  } else if (smallBins && !isToday) {
+    sinceMs = -1; // immutable session: reuse
+  }
+  if (sinceMs !== -1) {
+    const built = buildFlowPrintsWhere(fAll, sinceMs);
+    const params = built.params;
+    params.push(roots);
+    const rootsIdx = params.length;
+    params.push(LSE_NETPREM_FLOOR);
+    const capIdx = params.length;
+    params.push(binMs);
+    const binIdx = params.length;
+    const { rows } = await pool.query(
+      `SELECT underlying_norm AS u,
+              (ts / $${binIdx}::bigint) * $${binIdx}::bigint AS binms,
+              sum(CASE WHEN type = 'C' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END) AS call_net,
+              sum(CASE WHEN type = 'P' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END) AS put_net
+         FROM flow_prints
+        WHERE ${built.where} AND underlying_norm = ANY($${rootsIdx}) AND premium < $${capIdx}
+        GROUP BY 1, 2`,
+      params
+    );
+    const next = new Map();
+    const sinceSec = sinceMs != null ? Math.floor(sinceMs / 1000) : null;
+    if (smallBins && sinceSec != null) for (const [k, b] of smallBins) if (b.sec < sinceSec) next.set(k, b);
+    for (const r of rows) {
+      const sec = Math.floor(Number(r.binms) / 1000);
+      const t = lseTicker(r.u);
+      // Two roots of one ticker (SPX/SPXW) land in the same minute: add, not replace.
+      const k = `${t}|${sec}|${String(r.u || '').toUpperCase()}`;
+      next.set(k, { ticker: t, sec, callNet: Number(r.call_net) || 0, putNet: Number(r.put_net) || 0 });
+    }
+    smallBins = next;
+  }
+
+  // Big band, whole session, re-blended.
+  const [lseRows, ttBig] = await Promise.all([
+    fetchLseNetPremRows(pool, fAll, roots, null),
+    (async () => {
+      const built = buildFlowPrintsWhere(fAll, null);
+      const params = built.params;
+      params.push(roots);
+      const rootsIdx = params.length;
+      params.push(LSE_NETPREM_FLOOR);
+      const { rows } = await pool.query(
+        `SELECT ts, underlying_norm AS u, expiration AS e, strike AS k, type AS t, side, premium, size, spot
+           FROM flow_prints
+          WHERE ${built.where} AND underlying_norm = ANY($${rootsIdx}) AND premium >= $${params.length}`,
+        params
+      );
+      return rows.map((r) => ({
+        ts: Number(r.ts),
+        ticker: lseTicker(r.u),
+        type: String(r.t || '').toUpperCase().slice(0, 1),
+        side: String(r.side || ''),
+        expiry: r.e ? String(r.e).slice(0, 10) : null,
+        strike: r.k != null && Number.isFinite(Number(r.k)) ? Number(r.k) : null,
+        size: Number(r.size) || 0,
+        spot: r.spot != null && Number(r.spot) > 0 ? Number(r.spot) : null,
+        premium: Number(r.premium) || 0,
+      }));
+    })(),
+  ]);
+  const big = blendBigPrints(lseRows || [], ttBig, fAll);
+
+  const want = new Set(tickers);
+  const acc = new Map(tickers.map((t) => [t, { ticker: t, callNet: 0, putNet: 0, lsePrem: 0, ttPrem: 0 }]));
+  for (const b of smallBins.values()) {
+    const a = acc.get(b.ticker);
+    if (!a) continue;
+    a.callNet += b.callNet;
+    a.putNet += b.putNet;
+    a.ttPrem += Math.abs(b.callNet) + Math.abs(b.putNet);
+  }
+  for (const p of big) {
+    if (!want.has(p.ticker)) continue;
+    const a = acc.get(p.ticker);
+    const signed = p.buy ? p.premium : -p.premium;
+    if (p.type === 'C') a.callNet += signed; else if (p.type === 'P') a.putNet += signed;
+    if (p.src === 'lse') a.lsePrem += p.premium; else a.ttPrem += p.premium;
+  }
+  const list = [...acc.values()].map((a) => ({
+    ticker: a.ticker,
+    callNet: Math.round(a.callNet),
+    putNet: Math.round(a.putNet),
+    net: Math.round(a.callNet + a.putNet),
+    // Share of this ticker's counted premium that came from LSE — so "mostly
+    // LSE" is a number on the screen, not a claim.
+    lseShare: a.lsePrem + a.ttPrem > 0 ? a.lsePrem / (a.lsePrem + a.ttPrem) : 0,
+  }));
+  const payload = { date: f.date, asOf: Date.now(), lse: lseRows != null, floor: LSE_NETPREM_FLOOR, tickers: list };
+  _boardCache.set(key, { at: Date.now(), smallBins, payload });
+  if (_boardCache.size > 50) {
+    const cutoff = Date.now() - 10 * 60_000;
+    for (const [k, v] of _boardCache) if (v.at < cutoff) _boardCache.delete(k);
+  }
+  return payload;
+}
+
+async function handleFlowNetPremBoard(req, res) {
+  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+  const f = parseFlowFilters(searchParams);
+  const raw = (searchParams.get('tickers') || '').trim();
+  const tickers = raw
+    ? [...new Set(raw.split(',').map((t) => t.trim().toUpperCase()).filter((t) => /^[A-Z][A-Z0-9.]{0,9}$/.test(t)))].slice(0, 400)
+    : await boardUniverse();
+  const key = `${flowFilterCacheKey({ ...f, underlying: '' }, 'board')}|${tickers.join(',')}`;
+  const hit = _boardCache.get(key);
+  const isToday = f.date === todayYmdET();
+  if (hit && (!isToday || Date.now() - hit.at < BOARD_TTL_MS)) {
+    return sendJson(res, 200, hit.payload, req, sessionCacheOpts(f.date));
+  }
+  let p = _boardInFlight.get(key);
+  if (!p) {
+    p = computeBoard(f, tickers, key).finally(() => _boardInFlight.delete(key));
+    _boardInFlight.set(key, p);
+  }
+  const payload = await p;
+  sendJson(res, 200, payload, req, sessionCacheOpts(f.date));
 }
 
 /**

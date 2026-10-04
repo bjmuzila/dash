@@ -25716,3 +25716,30 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - **Columns now line up:** `table-fixed` with a single `colgroup` (toggle, contract, expiry 110, entry 110, now 170, high 170, tracked 84, remove), so rows in every group share the same column edges. Expiry is now two lines (date on top, DTE below).
 - **Expand control (option D):** a square +/− tile replaces the ▸/▾ button. When open it is tinted by call (warn) or put (down) and the row stays raised. Clicking anywhere on the row opens or closes the chart; the remove button stops click propagation.
 - **Files:** `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`.
+
+
+## 2026-10-03 - Vela: categorised Indicators dialog (like velacharts.dev)
+- **What:** Vela's Indicators picker was one long list (On chart, then every built-in A–Z). The new dialog groups it the way velacharts.dev does:
+  - **Personal:** Favorites (★ any row), My Scripts (the CB Script library, plus "Write or paste a script…" which opens the Scripts panel), and On chart (the active chart's indicators, with hide/show and remove).
+  - **Built-ins:** Vela's 76 studies split into Trend, Oscillators, Volatility, and Volume & Orderflow. A type a future Vela adds lands in "Other", which only shows when it has something in it.
+  - **CB Edge:** Levels & Walls, Options & GEX, Flow & Profile (CB Walls, Voltick Path and Ribbon, and the ten CB studies).
+- **How it behaves:**
+  - Search covers every category, tags each hit with its category, and Enter adds the first hit.
+  - The filter cycles All → Price overlays → Separate pane.
+  - Clicking a row adds it through the shell, so undo/redo and the topbar count see it. The dialog stays open and the row gets a ✓.
+  - Favorites and the last category are remembered per browser.
+  - Arrow keys move through the rows.
+  - On a phone the categories become a sideways chip row.
+- **How:** an action registered under Vela's reserved topbar id `'indicators'` (`registerWidgetAction`). It takes over the topbar button, the phone's bottom-bar stop and the `/` shortcut, and it's built on Vela's own `Dialog` from `vela/ui`. No library patching.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/indicatorPicker.ts` (new)
+  - `cbedge-v3/src/pages/Vela.tsx`
+  - `cbedge-v3/src/pages/vela/vela.css`
+- **Checks:**
+  - `tsc --noEmit`: clean for these files.
+  - `check:theme`: passes.
+  - `vite build`: OK.
+  - Headless Chromium against the mock server, desktop: every category lists, add, ★, Favorites, search, On chart remove, Escape, and `/` reopening on the last category all work.
+  - Phone (`/m/vela`): opens from the bottom bar with the chip row.
+  - No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-indicators-categories.png`, `2026-10-03-vela-indicators-categories-phone.png` (mock data)

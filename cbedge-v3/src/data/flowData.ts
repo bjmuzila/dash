@@ -352,6 +352,8 @@ export function useNetPremBins(
   isToday: boolean,
   f: FlowFilters,
   enabled: boolean,
+  /** 'lse' = the LSE-blended net (Whale page). Omitted = the Tasty tape. */
+  source?: 'lse',
 ): { bins: NetBin[]; switching: boolean; error: boolean } {
   const [bins, setBins] = useState<NetBin[]>([])
   const [switching, setSwitching] = useState(false)
@@ -371,8 +373,9 @@ export function useNetPremBins(
         date,
         minPremium: CHART_MIN_PREMIUM,
         ...filterParams(f),
+        source,
       }),
-    [active, date, f],
+    [active, date, f, source],
   )
 
   useEffect(() => {
@@ -645,4 +648,35 @@ export function useMinuteBars(price: number | undefined, maxBars = 90): MinuteBa
   }, [price, maxBars])
 
   return bars
+}
+
+// ── Net premium board (Whale page, 2026-10-03) ───────────────────────────────
+
+export interface NetPremBoardRow {
+  ticker: string
+  callNet: number
+  putNet: number
+  net: number
+  /** 0–1 — share of the counted premium that came from LSE prints. */
+  lseShare: number
+}
+export interface NetPremBoardResponse {
+  date: string
+  asOf: number
+  /** false = no LSE table on the server; every number is Tasty's. */
+  lse: boolean
+  floor: number
+  tickers: NetPremBoardRow[]
+}
+
+/**
+ * Net call/put premium for every scanner-universe ticker, today, LSE-blended
+ * (see /proxy/flow-netprem-board). Same filter language as the chart so the
+ * board and the drift line agree on what a print is.
+ */
+export function useNetPremBoard(f: FlowFilters, date: string, enabled: boolean) {
+  const url = enabled
+    ? `/proxy/flow-netprem-board?${qs({ date, minPremium: CHART_MIN_PREMIUM, ...filterParams(f) })}`
+    : null
+  return useQuery<NetPremBoardResponse>(url, { staleMs: 15_000, pollMs: 20_000 })
 }

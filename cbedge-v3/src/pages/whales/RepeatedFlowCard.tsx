@@ -203,7 +203,7 @@ export const repeatKey = (r: Pick<RepeatContract, 'ticker' | 'strike' | 'type' |
 
 export type { RepeatContract }
 
-export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey, onTrack }: {
+export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey, onTrack, onContracts }: {
   filters: RepeatedFlowFilters
   /** Unused since the row opens its own probe — kept so callers still compile. */
   onOpen?: (ticker: string, strike: number, expiry: string, type: string) => void
@@ -213,6 +213,10 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
   busyKey: string | null
   /** Track, or untrack when already tracked — the button is a toggle. */
   onTrack: (r: RepeatContract) => void
+  /** The contracts this card is listing right now, under its own controls —
+   *  the prints table groups and marks the prints that belong to them
+   *  (2026-10-03). Called with [] while nothing is loaded. */
+  onContracts?: (list: RepeatContract[]) => void
 }) {
   const [saved] = useState<Saved>(loadSaved)
   const [floor, setFloor] = useState(saved.floor)
@@ -261,6 +265,9 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
 
   const q = useQuery<RepeatResponse>(url, { staleMs: 30_000, pollMs: 60_000 })
   const d = q.data
+  useEffect(() => {
+    onContracts?.(d?.contracts ?? [])
+  }, [d, onContracts])
   const multiDay = range === '5d'
   const clusterLabel = CLUSTERS.find((c) => c.value === cluster)?.label ?? `${cluster}M`
   const err = d?.error ? readableError(d.error) : q.error ? `Could not load repeated flow — ${readableError(q.error)}.` : null

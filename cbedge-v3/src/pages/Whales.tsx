@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Chip, SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
@@ -64,6 +64,10 @@ interface WhalesResponse {
   rows: WhaleRow[]
   rowCap: number
   whaleFloor: number
+  /** Lowest floor a single-session (1D) range accepts. Optional: an older
+   *  server does not send it, and then 1D keeps the archive floor. */
+  dayFloor?: number
+  rangeFloor?: number
   sides?: 'directional' | 'all'
   maxDte?: number | null
   /** What the readable filter is holding back. Zero when sides === 'all'.
@@ -116,7 +120,14 @@ const CEILINGS: Array<{ label: string; value: number | null }> = [
   { label: '≤5.00', value: 5 },
 ]
 
+// $50K / $100K / $250K (2026-10-03, Brandon) are 1D-only. The server takes a
+// single-session range down to its sweep floor (dayFloor, $50K) because every
+// print of the day is still stored; any longer range is clamped to the archive
+// floor (whaleFloor, $500K). The menu offers exactly what the range can answer.
 const FLOORS = [
+  { label: '≥$50K', value: 50_000 },
+  { label: '≥$100K', value: 100_000 },
+  { label: '≥$250K', value: 250_000 },
   { label: '≥$500K', value: 500_000 },
   { label: '≥$1M', value: 1_000_000 },
   { label: '≥$2.5M', value: 2_500_000 },
@@ -167,7 +178,7 @@ interface Saved {
 
 const DEFAULTS: Saved = {
   preset: '5d',
-  floor: 1_000_000,
+  floor: 500_000,
   maxPrice: null,
   ticker: '',
   type: '',
@@ -462,6 +473,18 @@ function useContractHighs(
 }
 
 /** "+12% 4.10" — the move leads, the price follows. */
+/** The violet ↻ on a print whose contract is in Repeated flow (2026-10-03). */
+function RepeatBadge({ c }: { c: RepeatContract }) {
+  return (
+    <span
+      title={`Repeated flow: ${c.n} orders in its densest burst${c.nAll ? `, ${c.nAll} all day` : ''}`}
+      className="tabular ml-1.5 rounded-full border border-violet/50 bg-violet/10 px-1.5 py-px text-3xs font-bold text-violet"
+    >
+      ↻ {c.n}×
+    </span>
+  )
+}
+
 function MoveCell({ value, entry }: { value: number | null; entry: number | null }) {
   const chg = value != null && entry != null && entry > 0 ? ((value - entry) / entry) * 100 : null
   const ink = chg == null ? 'text-fg' : chg >= 0 ? 'text-up' : 'text-down'
@@ -665,7 +688,9 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   const from = etYmd(new Date(Date.now() - span.days * 86_400_000))
 
   const url = useMemo(() => {
-    const sp = new URLSearchParams({ from, to, min_premium: String(floor), sort: sort === 'change' ? 'time' : sort, limit: '300' })
+    // 1D asks for the server's whole cap: at a $50K floor one session is
+    // thousands of prints, and 300 of them is the last half hour.
+    const sp = new URLSearchParams({ from, to, min_premium: String(floor), sort: sort === 'change' ? 'time' : sort, limit: preset === '1d' ? '500' : '300' })
     if (maxPrice !== null) sp.set('max_price', String(maxPrice))
     if (ticker.trim()) sp.set('ticker', ticker.trim().toUpperCase())
     if (type) sp.set('type', type)
@@ -675,7 +700,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     // 0 is a real value here (same-day only), so this is an explicit null test.
     if (maxDte !== null) sp.set('max_dte', String(maxDte))
     return `/api/lse/whales?${sp.toString()}`
-  }, [from, to, floor, maxPrice, sort, ticker, type, action, moneyness, showUnreadable, maxDte])
+  }, [from, to, floor, maxPrice, sort, ticker, type, action, moneyness, showUnreadable, maxDte, preset])
 
   const q = useQuery<WhalesResponse>(url, { staleMs: 30_000, pollMs: 60_000 })
   const d = q.data
@@ -686,30 +711,61 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   // the FLOOR menu growing a ≥$500K stop for half a second each time would be
   // a flicker with nothing behind it.
   const [archiveFloor, setArchiveFloor] = useState(0)
+  const [dayFloor, setDayFloor] = useState(0)
   useEffect(() => {
     const f = Number(d?.whaleFloor)
     if (Number.isFinite(f) && f > 0) setArchiveFloor(f)
   }, [d?.whaleFloor])
-  // A pick the API would clamp anyway is neither shown nor kept. Raised to the
-  // first stop at or above the floor (persisted by the settings effect above),
-  // so a ≥$500K saved before the floor was $1M stops asking for $500K forever.
   useEffect(() => {
-    if (archiveFloor > 0 && floor < archiveFloor) {
-      setFloor(FLOORS.find((f) => f.value >= archiveFloor)?.value ?? archiveFloor)
+    const f = Number(d?.dayFloor)
+    if (Number.isFinite(f) && f > 0) setDayFloor(f)
+  }, [d?.dayFloor])
+  // 1D goes down to the day floor; every other range stops at the archive's.
+  // An older server sends no dayFloor, and then 1D keeps the archive floor too.
+  const minFloor = preset === '1d' && dayFloor > 0 ? Math.min(dayFloor, archiveFloor || dayFloor) : archiveFloor
+  // A pick the API would clamp anyway is neither shown nor kept. Raised to the
+  // first stop at or above the floor (persisted by the settings effect above) —
+  // so leaving 1D at ≥$50K lands the longer range on ≥$500K, not on a stop the
+  // server would silently raise.
+  useEffect(() => {
+    if (minFloor > 0 && floor < minFloor) {
+      setFloor(FLOORS.find((f) => f.value >= minFloor)?.value ?? minFloor)
     }
-  }, [archiveFloor, floor])
+  }, [minFloor, floor])
   const floorOptions = useMemo(() => {
-    const open = FLOORS.filter((f) => f.value >= archiveFloor)
+    const open = FLOORS.filter((f) => f.value >= minFloor)
     // A floor above every stop (an env set to $10M, say) still needs one option
     // that matches the clamped value, or the menu would show nothing selected.
-    const list = open.length ? open : [{ label: `≥${money(archiveFloor)}`, value: archiveFloor }]
+    const list = open.length ? open : [{ label: `≥${money(minFloor)}`, value: minFloor }]
     return list.map((f) => ({ label: f.label, value: String(f.value) }))
-  }, [archiveFloor])
+  }, [minFloor])
 
   const rows = useMemo(
     () => (d?.rows ?? []).filter((r) => !day || r.sessionDate === day),
     [d, day],
   )
+
+  // ── REPEATED FLOW IN THE PRINTS (2026-10-03, Brandon — option D) ──────────
+  // The Repeated flow card reports the contracts it is listing (under its own
+  // floor / orders / window controls), and any print here on one of those
+  // contracts is FOLDED: one group row with the prints' summed size and
+  // premium, expandable to each fill, with a violet ↻ so it reads as "this is
+  // the contract someone keeps hitting". Keyed on the OSI, which both the
+  // archive and the repeated-flow route carry.
+  const [repeatByOsi, setRepeatByOsi] = useState<Map<string, RepeatContract>>(new Map())
+  const onRepeatContracts = useCallback((list: RepeatContract[]) => {
+    setRepeatByOsi((prev) => {
+      if (prev.size === list.length && list.every((c) => prev.get(c.osi)?.n === c.n)) return prev
+      return new Map(list.map((c) => [c.osi, c]))
+    })
+  }, [])
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
+  const toggleGroup = (k: string) =>
+    setOpenGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(k)) next.delete(k); else next.add(k)
+      return next
+    })
   const marks = useContractMarks(rows)
   const visibleRows = useVisibleRowIds(`${rows.length}:${rows[0]?.id ?? ''}:${phoneTab}:${sort}`)
   const highs = useContractHighs(rows, visibleRows)
@@ -729,6 +785,35 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   // A ranked list crosses days on every row, so the day headers go and each
   // row carries its own date instead.
   const byDay = sort !== 'change'
+  /** `shown`, with every repeat contract's prints folded under the first of
+   *  them (per session when the list is split by day, so a group never straddles
+   *  a day header). A repeat contract with one print here stays a single row,
+   *  marked. */
+  const display = useMemo(() => {
+    type Item =
+      | { kind: 'row'; r: WhaleRow; repeat: RepeatContract | null }
+      | { kind: 'group'; key: string; rows: WhaleRow[]; repeat: RepeatContract }
+    const groups = new Map<string, WhaleRow[]>()
+    for (const r of shown) {
+      if (!r.osi || !repeatByOsi.has(r.osi)) continue
+      const k = byDay ? `${r.osi}|${r.sessionDate}` : r.osi
+      const arr = groups.get(k)
+      if (arr) arr.push(r); else groups.set(k, [r])
+    }
+    const placed = new Set<string>()
+    const out: Item[] = []
+    for (const r of shown) {
+      const rep = r.osi ? repeatByOsi.get(r.osi) ?? null : null
+      if (!rep) { out.push({ kind: 'row', r, repeat: null }); continue }
+      const k = byDay ? `${r.osi}|${r.sessionDate}` : r.osi!
+      const g = groups.get(k)!
+      if (g.length < 2) { out.push({ kind: 'row', r, repeat: rep }); continue }
+      if (placed.has(k)) continue
+      placed.add(k)
+      out.push({ kind: 'group', key: k, rows: g, repeat: rep })
+    }
+    return out
+  }, [shown, repeatByOsi, byDay])
   const when = (r: WhaleRow) => (byDay ? fmtTime(r.ts) : `${r.sessionDate.slice(5).replace('-', '/')} ${fmtTime(r.ts)}`)
   const selected = useMemo(
     () => (selectedId ? rows.find((r) => r.id === selectedId) ?? null : null),
@@ -1095,6 +1180,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   }
   const repeatedFlowCard = (
     <RepeatedFlowCard
+      onContracts={onRepeatContracts}
       filters={rfFilters}
       onOpen={lookupContract}
       phone={phone}
@@ -1157,6 +1243,165 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   // Driven by the `phone` PROP (MWhales passes it), not useIsPhone(): the tab
   // bar's "Desktop site" opt-out lands a phone on /whales, and that has to be
   // the desktop layout or the opt-out does nothing here.
+  /** One print as a table row. `child` = a fill inside an open repeat group;
+   *  `repeat` = a repeat contract with only this one print in the list. */
+  const printRow = (r: WhaleRow, { child = false, repeat = null }: { child?: boolean; repeat?: RepeatContract | null } = {}) => {
+  const ink = r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-fg'
+  const bias = biasOf(r)
+  const biasInk = bias === 'bullish' ? 'text-up' : bias === 'bearish' ? 'text-down' : 'text-fg'
+    return (
+    <tr
+      key={r.id}
+      data-rid={r.id}
+      onClick={() => setSelectedId((id) => (id === r.id ? null : r.id))}
+      title="Open the contract's chart"
+      className={[
+        'cursor-pointer border-t border-line hover:bg-raised',
+        r.id === selectedId ? 'bg-raised' : child ? 'bg-surface2' : '',
+      ].join(' ')}
+    >
+      <td
+        className={[
+          'tabular whitespace-nowrap px-2 py-1.5 text-fg',
+          child || repeat ? 'border-l-2 border-violet' : '',
+          child ? 'pl-5' : '',
+        ].join(' ')}
+      >
+        {when(r)}
+      </td>
+      <td className="whitespace-nowrap px-2 py-1.5 font-semibold text-fg">
+        {child ? <span className="font-normal">print</span> : (r.underlying ?? '—')}
+        {repeat && !child && <RepeatBadge c={repeat} />}
+      </td>
+      <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">
+        <span className="text-fg">{fmtStrike(r.strike)}</span>{' '}
+        <span className="text-fg">{fmtExpiry(r.expiry)}</span>
+      </td>
+      <td className={['px-2 py-1.5 font-semibold', r.type === 'P' ? 'text-down' : 'text-up'].join(' ')}>{r.type ?? '?'}</td>
+      <td className={['tabular whitespace-nowrap px-2 py-1.5 font-semibold', ink].join(' ')}>
+        {r.side === 'above_ask' ? '> ASK' : r.side === 'below_bid' ? '< BID' : r.side ? r.side.toUpperCase() : '—'}
+      </td>
+      <td
+        className={['whitespace-nowrap px-2 py-1.5 font-semibold', biasInk].join(' ')}
+        title={
+          bias
+            ? biasTitle(r, bias)
+            : r.side === 'mid'
+              ? 'Filled between the bid and the ask — genuinely ambiguous, so no direction is called'
+              : 'This print was never classified against a quote, and cannot be after the fact'
+        }
+      >
+        {bias ? (
+          <>
+            <span aria-hidden>{bias === 'bullish' ? '▲' : '▼'}</span>{' '}
+            {bias === 'bullish' ? 'BULLISH' : 'BEARISH'}
+            {/* The raw verb kept faint beside it: the bias is the
+                read, but you still need to see which of the four
+                trades produced it. */}
+            <span className="font-normal text-fg">
+              {' '}{r.action === 'BUY' ? 'B' : 'S'}{r.type}
+            </span>
+          </>
+        ) : r.side === 'mid' ? 'n/a' : '—'}
+      </td>
+      <td className="tabular px-2 py-1.5 text-right text-fg">{r.dte ?? '—'}</td>
+      <td className="tabular px-2 py-1.5 text-right text-fg">{num(r.size)}</td>
+      <td className="tabular px-2 py-1.5 text-right text-fg">{r.price?.toFixed(2) ?? '—'}</td>
+      <MoveCell value={highs.get(r.id) ?? null} entry={r.price} />
+      <MoveCell value={markOf(marks, r)} entry={r.price} />
+      <td className={['tabular px-2 py-1.5 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
+        {money(r.premium)}
+      </td>
+      {/* stopPropagation lives in TrackButton: this cell
+          is inside a row whose click opens the probe, and
+          tracking a print is not a request to open it. */}
+      <td className="px-2 py-1.5 text-right">
+        {(() => {
+          const k = trackKeyOf(r)
+          if (!k) return null
+          return (
+            <TrackButton
+              compact
+              tracked={trackedIds.has(k)}
+              busy={busyKey === k}
+              onClick={() => void toggleTrack(r, 'whale')}
+            />
+          )
+        })()}
+      </td>
+    </tr>
+    )
+  }
+
+  /** The folded row for a repeat contract's prints — summed size and premium,
+   *  size-weighted price, the newest print's time and marks. Clicking it opens
+   *  and closes the fills; TRACK still tracks the contract. */
+  const groupRow = (key: string, g: WhaleRow[], c: RepeatContract) => {
+    const head = g[0]!
+    const open = openGroups.has(key)
+    const size = g.reduce((n, r) => n + (r.size ?? 0), 0)
+    const premium = g.reduce((n, r) => n + r.premium, 0)
+    const price = size > 0 ? premium / size / 100 : head.price
+    let bull = 0
+    let bear = 0
+    for (const r of g) {
+      const b = biasOf(r)
+      if (b === 'bullish') bull += r.premium
+      else if (b === 'bearish') bear += r.premium
+    }
+    const lean = bull > bear ? 'bullish' : bear > bull ? 'bearish' : null
+    const leanInk = lean === 'bullish' ? 'text-up' : lean === 'bearish' ? 'text-down' : 'text-fg'
+    const k = trackKeyOf(head)
+    return (
+      <tr
+        key={`g:${key}`}
+        onClick={() => toggleGroup(key)}
+        aria-expanded={open}
+        title={`${g.length} prints on this contract in the list · Repeated flow: ${c.n} orders in its densest burst${c.nAll ? `, ${c.nAll} all day` : ''}`}
+        className={['cursor-pointer border-t border-line bg-violet/10 hover:bg-raised', open ? 'bg-raised' : ''].join(' ')}
+      >
+        <td className="tabular whitespace-nowrap border-l-2 border-violet px-2 py-1.5 text-fg">
+          <span aria-hidden className={['mr-1 inline-block text-violet transition-transform', open ? 'rotate-90' : ''].join(' ')}>▸</span>
+          {when(head)}
+        </td>
+        <td className="whitespace-nowrap px-2 py-1.5 font-semibold text-fg">
+          {head.underlying ?? '—'}
+          <span className="ml-1.5 font-bold text-violet">↻ {g.length} prints</span>
+        </td>
+        <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">
+          <span className="text-fg">{fmtStrike(head.strike)}</span>{' '}
+          <span className="text-fg">{fmtExpiry(head.expiry)}</span>
+        </td>
+        <td className={['px-2 py-1.5 font-semibold', head.type === 'P' ? 'text-down' : 'text-up'].join(' ')}>{head.type ?? '?'}</td>
+        <td className="px-2 py-1.5 text-fg">—</td>
+        <td
+          className={['whitespace-nowrap px-2 py-1.5 font-semibold', leanInk].join(' ')}
+          title={`${money(bull)} bullish vs ${money(bear)} bearish across these prints`}
+        >
+          {lean ? <><span aria-hidden>{lean === 'bullish' ? '▲' : '▼'}</span> {lean === 'bullish' ? 'BULLISH' : 'BEARISH'}</> : '—'}
+        </td>
+        <td className="tabular px-2 py-1.5 text-right text-fg">{head.dte ?? '—'}</td>
+        <td className="tabular px-2 py-1.5 text-right font-semibold text-fg">{num(size)}</td>
+        <td className="tabular px-2 py-1.5 text-right text-fg" title="Size-weighted average fill">{price != null ? price.toFixed(2) : '—'}</td>
+        <MoveCell value={highs.get(head.id) ?? null} entry={price ?? null} />
+        <MoveCell value={markOf(marks, head)} entry={price ?? null} />
+        <td className={['tabular px-2 py-1.5 text-right font-semibold', premium >= 10_000_000 ? 'text-warn' : leanInk].join(' ')}>
+          {money(premium)}
+        </td>
+        <td className="px-2 py-1.5 text-right">
+          {k && (
+            <TrackButton
+              compact
+              tracked={trackedIds.has(k)}
+              busy={busyKey === k}
+              onClick={() => void toggleTrack(head, 'whale')}
+            />
+          )}
+        </td>
+      </tr>
+    )
+  }
+
   if (phone) {
     const nonDefault =
       (floor !== DEFAULTS.floor ? 1 : 0) +
@@ -1316,6 +1561,9 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                       className={[
                         'flex items-center gap-2 border-t border-line px-3 py-2 active:bg-raised',
                         r.id === selectedId ? 'bg-raised' : '',
+                        // Repeated flow (2026-10-03): the phone list keeps one
+                        // line per print, so the contract is marked, not folded.
+                        r.osi && repeatByOsi.has(r.osi) ? 'border-l-2 border-l-violet' : '',
                       ].join(' ')}
                     >
                       <div className="min-w-0 flex-1">
@@ -1325,6 +1573,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                             {fmtStrike(r.strike)}{r.type ?? '?'}
                           </span>
                           <span className="tabular text-2xs text-fg">{fmtExpiry(r.expiry)}</span>
+                          {r.osi && repeatByOsi.get(r.osi) && <RepeatBadge c={repeatByOsi.get(r.osi)!} />}
                         </div>
                         <div className="tabular mt-0.5 flex gap-1.5 overflow-hidden whitespace-nowrap text-2xs text-fg">
                           <span className={['font-semibold', biasInk].join(' ')}>
@@ -1389,7 +1638,9 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
               {repeatsCard}
             </div>
           )}
-          {phoneTab === 'repeat' && <div className="min-w-0 p-3">{repeatedFlowCard}</div>}
+          {/* Mounted on every tab, shown on REPEATED: it is also what tells the
+              PRINTS list which contracts to mark (see onRepeatContracts). */}
+          <div className={phoneTab === 'repeat' ? 'min-w-0 p-3' : 'hidden'}>{repeatedFlowCard}</div>
           {phoneTab === 'lookup' && <div className="p-3">{lookupCard}</div>}
           {phoneTab === 'tracked' && <div className="min-w-0 p-3"><TrackedAlertsCard store={alerts} /></div>}
           {phoneTab === 'drift' && <div className="min-w-0 p-3"><NetDriftPanel phone /></div>}
@@ -1736,100 +1987,32 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                     </tr>
                   </thead>
                   <tbody>
-                    {shown.map((r, i) => {
+                    {display.map((it, i) => {
+                      const first = it.kind === 'row' ? it.r : it.rows[0]!
+                      const prev = i > 0 ? display[i - 1]! : null
+                      const prevDay = prev ? (prev.kind === 'row' ? prev.r.sessionDate : prev.rows[0]!.sessionDate) : null
                       // A day header every time the session changes, so a
                       // multi-day range reads as days rather than one wall.
-                      const newDay = byDay && (i === 0 || shown[i - 1]!.sessionDate !== r.sessionDate)
-                      const agg = newDay ? d?.sessions.find((x) => x.d === r.sessionDate) : null
-                      // Side stays inked by where the FILL sat; the Bias cell
-                      // is inked by what the trade means. Two questions, two
-                      // colour rules — a sold put is a bid-side fill (red Side)
-                      // and a bullish position (green Bias), and collapsing
-                      // that into one ink is what made this table misread.
-                      const ink = r.action === 'BUY' ? 'text-up' : r.action === 'SELL' ? 'text-down' : 'text-fg'
-                      const bias = biasOf(r)
-                      const biasInk = bias === 'bullish' ? 'text-up' : bias === 'bearish' ? 'text-down' : 'text-fg'
+                      const newDay = byDay && (i === 0 || prevDay !== first.sessionDate)
+                      const agg = newDay ? d?.sessions.find((x) => x.d === first.sessionDate) : null
                       return (
-                        // Keyed on the PRINT, not the index: a fragment in an
-                        // array needs its own key, and the row inside it is the
-                        // thing that has an identity.
-                        <Fragment key={r.id}>
+                        <Fragment key={it.kind === 'row' ? it.r.id : `g:${it.key}`}>
                           {newDay && (
                             <tr>
                               <td colSpan={13} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-fg">
-                                {fmtDayHeader(r.sessionDate)}
+                                {fmtDayHeader(first.sessionDate)}
                                 {agg ? ` · ${num(agg.n)} prints · ${money(agg.total)}` : ''}
                               </td>
                             </tr>
                           )}
-                          <tr
-                            data-rid={r.id}
-                            onClick={() => setSelectedId((id) => (id === r.id ? null : r.id))}
-                            title="Open the contract's chart"
-                            className={[
-                              'cursor-pointer border-t border-line hover:bg-raised',
-                              r.id === selectedId ? 'bg-raised' : '',
-                            ].join(' ')}
-                          >
-                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">{when(r)}</td>
-                            <td className="px-2 py-1.5 font-semibold text-fg">{r.underlying ?? '—'}</td>
-                            <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">
-                              <span className="text-fg">{fmtStrike(r.strike)}</span>{' '}
-                              <span className="text-fg">{fmtExpiry(r.expiry)}</span>
-                            </td>
-                            <td className={['px-2 py-1.5 font-semibold', r.type === 'P' ? 'text-down' : 'text-up'].join(' ')}>{r.type ?? '?'}</td>
-                            <td className={['tabular whitespace-nowrap px-2 py-1.5 font-semibold', ink].join(' ')}>
-                              {r.side === 'above_ask' ? '> ASK' : r.side === 'below_bid' ? '< BID' : r.side ? r.side.toUpperCase() : '—'}
-                            </td>
-                            <td
-                              className={['whitespace-nowrap px-2 py-1.5 font-semibold', biasInk].join(' ')}
-                              title={
-                                bias
-                                  ? biasTitle(r, bias)
-                                  : r.side === 'mid'
-                                    ? 'Filled between the bid and the ask — genuinely ambiguous, so no direction is called'
-                                    : 'This print was never classified against a quote, and cannot be after the fact'
-                              }
-                            >
-                              {bias ? (
-                                <>
-                                  <span aria-hidden>{bias === 'bullish' ? '▲' : '▼'}</span>{' '}
-                                  {bias === 'bullish' ? 'BULLISH' : 'BEARISH'}
-                                  {/* The raw verb kept faint beside it: the bias is the
-                                      read, but you still need to see which of the four
-                                      trades produced it. */}
-                                  <span className="font-normal text-fg">
-                                    {' '}{r.action === 'BUY' ? 'B' : 'S'}{r.type}
-                                  </span>
-                                </>
-                              ) : r.side === 'mid' ? 'n/a' : '—'}
-                            </td>
-                            <td className="tabular px-2 py-1.5 text-right text-fg">{r.dte ?? '—'}</td>
-                            <td className="tabular px-2 py-1.5 text-right text-fg">{num(r.size)}</td>
-                            <td className="tabular px-2 py-1.5 text-right text-fg">{r.price?.toFixed(2) ?? '—'}</td>
-                            <MoveCell value={highs.get(r.id) ?? null} entry={r.price} />
-                            <MoveCell value={markOf(marks, r)} entry={r.price} />
-                            <td className={['tabular px-2 py-1.5 text-right font-semibold', r.premium >= 10_000_000 ? 'text-warn' : biasInk].join(' ')}>
-                              {money(r.premium)}
-                            </td>
-                            {/* stopPropagation lives in TrackButton: this cell
-                                is inside a row whose click opens the probe, and
-                                tracking a print is not a request to open it. */}
-                            <td className="px-2 py-1.5 text-right">
-                              {(() => {
-                                const k = trackKeyOf(r)
-                                if (!k) return null
-                                return (
-                                  <TrackButton
-                                    compact
-                                    tracked={trackedIds.has(k)}
-                                    busy={busyKey === k}
-                                    onClick={() => void toggleTrack(r, 'whale')}
-                                  />
-                                )
-                              })()}
-                            </td>
-                          </tr>
+                          {it.kind === 'row'
+                            ? printRow(it.r, { repeat: it.repeat })
+                            : (
+                              <>
+                                {groupRow(it.key, it.rows, it.repeat)}
+                                {openGroups.has(it.key) && it.rows.map((r) => printRow(r, { child: true }))}
+                              </>
+                            )}
                         </Fragment>
                       )
                     })}

@@ -296,3 +296,282 @@
   opacity: 0.6;
   font-size: var(--text-2xs);
 }
+
+/* ── The Indicators dialog (pages/vela/indicatorPicker.ts) ── */
+.cb-ip-dialog {
+  width: min(680px, calc(100vw - 24px));
+  max-width: none;
+}
+.cb-ip {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: min(520px, calc(100vh - 160px));
+  padding: 12px 14px 14px;
+  color: var(--color-fg);
+  font-size: var(--text-xs);
+}
+.cb-ip .cb-ip-searchrow {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-surface2);
+  color: var(--color-muted);
+}
+.cb-ip .cb-ip-searchrow:focus-within {
+  border-color: var(--color-accent);
+}
+.cb-ip .cb-ip-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.cb-ip .cb-ip-filter {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  cursor: pointer;
+  opacity: 0.8;
+}
+.cb-ip .cb-ip-filter:hover,
+.cb-ip .cb-ip-filter[data-on='1'] {
+  background: var(--color-raised);
+  color: var(--color-fg);
+  opacity: 1;
+}
+.cb-ip .cb-ip-main {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 14px;
+  min-height: 0;
+}
+.cb-ip .cb-ip-nav {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  width: 168px;
+  overflow-y: auto;
+}
+.cb-ip .cb-ip-section {
+  margin: 10px 0 4px 8px;
+  color: var(--color-muted);
+  opacity: 0.6;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.cb-ip .cb-ip-section:first-child {
+  margin-top: 2px;
+}
+.cb-ip .cb-ip-cat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-fg);
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.cb-ip .cb-ip-cat:hover {
+  background: var(--color-surface2);
+}
+.cb-ip .cb-ip-cat[data-active='1'] {
+  background: var(--color-raised);
+}
+.cb-ip .cb-ip-cat .vela-icon {
+  flex: none;
+  opacity: 0.8;
+}
+.cb-ip .cb-ip-cat-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-ip .cb-ip-count {
+  flex: none;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--color-surface2);
+  color: var(--color-muted);
+  font-size: var(--text-2xs);
+  text-align: center;
+}
+.cb-ip .cb-ip-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+}
+.cb-ip .cb-ip-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 2px 8px 8px;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  opacity: 0.8;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.cb-ip .cb-ip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  outline: none;
+}
+.cb-ip .cb-ip-row:hover,
+.cb-ip .cb-ip-row:focus-visible {
+  background: var(--color-surface2);
+}
+.cb-ip .cb-ip-row-static {
+  cursor: default;
+}
+.cb-ip .cb-ip-row[data-hidden='1'] .cb-ip-text {
+  opacity: 0.45;
+}
+.cb-ip .cb-ip-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cb-ip .cb-ip-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.cb-ip .cb-ip-desc {
+  overflow: hidden;
+  color: var(--color-muted);
+  opacity: 0.6;
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-ip .cb-ip-badge,
+.cb-ip .cb-ip-tag {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--color-line);
+  border-radius: 4px;
+  color: var(--color-muted);
+  font-size: var(--text-2xs);
+  line-height: 15px;
+}
+.cb-ip .cb-ip-on {
+  flex: none;
+  width: 14px;
+  color: var(--color-up);
+  text-align: center;
+}
+.cb-ip .cb-ip-star {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  opacity: 0.45;
+}
+.cb-ip .cb-ip-row:hover .cb-ip-star,
+.cb-ip .cb-ip-star:focus-visible {
+  opacity: 0.85;
+}
+.cb-ip .cb-ip-star:hover {
+  background: var(--color-raised);
+  opacity: 1;
+}
+.cb-ip .cb-ip-star[data-on='1'] {
+  color: var(--color-warn);
+  opacity: 1;
+}
+.cb-ip .cb-ip-empty {
+  padding: 40px 12px;
+  color: var(--color-muted);
+  opacity: 0.7;
+  text-align: center;
+}
+.cb-ip .cb-ip-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 8px;
+  border: 1px dashed var(--color-line);
+  border-radius: 6px;
+  background: transparent;
+  width: 100%;
+  color: var(--color-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.cb-ip .cb-ip-link:hover {
+  color: var(--color-fg);
+  border-color: var(--color-accent);
+}
+/* narrow (the phone): the categories become a sideways chip row over the list */
+@media (max-width: 600px) {
+  .cb-ip {
+    height: calc(100vh - 140px);
+    padding: 10px;
+  }
+  .cb-ip .cb-ip-main {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cb-ip .cb-ip-nav {
+    flex-direction: row;
+    width: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .cb-ip .cb-ip-section {
+    display: none;
+  }
+  .cb-ip .cb-ip-cat {
+    flex: none;
+    height: 30px;
+    border: 1px solid var(--color-line);
+    border-radius: 15px;
+  }
+}

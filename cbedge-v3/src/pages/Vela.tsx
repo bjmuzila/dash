@@ -16,6 +16,7 @@ import { CBSCRIPT, CbScriptEngine } from '@/pages/vela/script/engine'
 import { registerScripts } from '@/pages/vela/script/panel'
 import { registerStudies } from '@/pages/vela/studies'
 import { bindTimelineMarks } from '@/pages/vela/marks'
+import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
 import '@/pages/vela/vela.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,6 +123,13 @@ import '@/pages/vela/vela.css'
 // strategy() scripts paint their fills as Vela trade markers (script/engine.ts).
 // D / W / M reach back years where a long source answers (cbedgeProvider.ts).
 //
+// ── The Indicators dialog, categorised ───────────────────────────────────────
+// pages/vela/indicatorPicker.ts takes over Vela's Indicators slot (the topbar
+// button, the phone's bottom-bar stop, the `/` key) with a dialog laid out like
+// velacharts.dev's: Personal (Favorites, My Scripts, On chart), Built-ins
+// (Trend, Oscillators, Volatility, Volume & Orderflow) and CB Edge (Levels &
+// Walls, Options & GEX, Flow & Profile), search across all, ★ favourites.
+//
 // ── Our CSS over Vela's ──────────────────────────────────────────────────────
 // pages/vela/vela.css: the active chart in a grid gets a faint 1px grey ring
 // instead of Vela's 2px bright one, the opacity strip's look, and the Scripts
@@ -170,6 +178,7 @@ registerCopyIndicators()
 registerWallsOpacity()
 registerScripts()
 registerStudies()
+registerIndicatorPicker()
 
 function readSeeded(key: string): Set<string> {
   try {
