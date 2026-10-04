@@ -109,7 +109,7 @@ export function loadRuntime(): Promise<Runtime> {
  * any fault — and, before loadRuntime() has resolved, a plain "still loading".
  */
 export function compile(source: string): { prog: Program; result: RunResult } {
-  if (!rt) throw new Error('CB Script is still loading — try again in a moment')
+  if (!rt) throw new Error('CB Script is still loading: try again in a moment')
   const prog = rt.parse(source)
   return { prog, result: rt.run(prog, [DRY_BAR], { dry: true }) }
 }

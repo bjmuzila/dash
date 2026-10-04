@@ -242,16 +242,16 @@ class HeatLayer implements RendererLayerInstance {
     g.restore()
     if (hover && cursor) {
       const text = `${d.label} ${hover.strike} · ${fmt(hover.v, hover.pos)} · ${MIN_FMT.format(new Date(hover.t0))}`
-      g.font = '600 10px system-ui, sans-serif'
+      g.font = `600 10px ${getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim() || 'ui-monospace, monospace'}`
       const w = g.measureText(text).width + 10
       let x = cursor.x + 12
       if (x + w > coords.width - 4) x = cursor.x - 12 - w
       const y = Math.max(bounds.top + 4, cursor.y - 22)
-      g.fillStyle = hexA(tokenRgb('--color-surface'), 0.95)
+      g.fillStyle = hexA(tokenRgb('--color-vt-panel'), 0.98)
       g.strokeStyle = hexA(tokenRgb('--color-line'), 1)
       g.lineWidth = 1
       g.beginPath()
-      g.roundRect(x, y, w, 17, 3)
+      g.roundRect(x, y, w, 17, 6)
       g.fill()
       g.stroke()
       g.fillStyle = hexA(tokenRgb('--color-fg'), 1)

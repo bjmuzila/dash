@@ -115,7 +115,7 @@ function held(ms: number): string {
   const h = Math.floor(m / 60)
   return h < 24 ? `${h}h ${m % 60}m` : `${Math.round(h / 24)}d`
 }
-const px = (v: number) => (Number.isFinite(v) ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—')
+const px = (v: number) => (Number.isFinite(v) ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '·')
 
 export const journalImpl = studyImpl<JrS, Trade[]>({
   settings: (i) => {

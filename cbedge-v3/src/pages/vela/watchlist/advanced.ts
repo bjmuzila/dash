@@ -110,14 +110,14 @@ function readPrefs(): Prefs {
 // ── formatting ──
 const f2 = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const sign = (v: number) => (v > 0 ? '+' : v < 0 ? '−' : '')
-const fChg = (v: number | null) => (v == null ? '—' : `${sign(v)}${f2(Math.abs(v))}`)
-const fPct = (v: number | null) => (v == null ? '—' : `${sign(v)}${Math.abs(v).toFixed(2)}%`)
+const fChg = (v: number | null) => (v == null ? '·' : `${sign(v)}${f2(Math.abs(v))}`)
+const fPct = (v: number | null) => (v == null ? '·' : `${sign(v)}${Math.abs(v).toFixed(2)}%`)
 function compact(v: number): string {
   const a = Math.abs(v)
   return a >= 1e12 ? `${(a / 1e12).toFixed(2)}T` : a >= 1e9 ? `${(a / 1e9).toFixed(1)}B` : a >= 1e6 ? `${(a / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M` : a >= 1e3 ? `${(a / 1e3).toFixed(0)}K` : String(Math.round(a))
 }
-const fMoney = (v: number | null) => (v == null ? '—' : `${sign(v)}$${compact(v).replace(/\.0(?=[KMBT])/, '')}`)
-const fLevel = (v: number | null) => (v == null ? '—' : v >= 1000 ? Math.round(v).toLocaleString('en-US') : String(+v.toFixed(2)))
+const fMoney = (v: number | null) => (v == null ? '·' : `${sign(v)}$${compact(v).replace(/\.0(?=[KMBT])/, '')}`)
+const fLevel = (v: number | null) => (v == null ? '·' : v >= 1000 ? Math.round(v).toLocaleString('en-US') : String(+v.toFixed(2)))
 const fRange = (v: number) => (v >= 1000 ? Math.round(v).toLocaleString('en-US') : v.toFixed(v < 100 ? 2 : 1))
 const tone = (v: number | null | undefined) => (v == null || v === 0 ? '' : v > 0 ? 'up' : 'down')
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -188,7 +188,9 @@ function rangeBar(doc: Document, lo: number, hi: number, v: number | null): HTML
 const narrow = () => typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches
 
 // ── groups ──
-const GROUP_COLORS = ['--color-series-1', '--color-series-2', '--color-series-4', '--color-series-3', '--color-series-5', '--color-series-6']
+// Voltick's blue family and its neutrals only: a group is a category, and the
+// series ramp would hand it the Volt's amber, the flip's violet or a P&L green / red.
+const GROUP_COLORS = ['--color-vt-accent', '--color-vt-slate', '--color-vt-sky', '--color-vt-rail', '--color-vt-paper', '--color-vt-accent-text']
 interface Group {
   name: string
   syms: string[]
@@ -230,7 +232,7 @@ class AdvancedView {
     const doc = (this.doc = ctx.host.ownerDocument)
     const root = (this.root = el(doc, 'div', 'cb-wla'))
     root.setAttribute('role', 'dialog')
-    root.setAttribute('aria-label', 'Watchlist — advanced view')
+    root.setAttribute('aria-label', 'Watchlist: advanced view')
     // the box's placement inline: it must cover the chart area even before its stylesheet lands
     root.style.cssText = 'position:absolute;inset:0;z-index:45'
     root.tabIndex = -1
@@ -536,15 +538,15 @@ class AdvancedView {
     const lv = el(doc, 'div', 'cb-wla-card-v')
     if (best) {
       lv.append(el(doc, 'span', 'up', best[0]), doc.createTextNode(' '), el(doc, 'small', tone(best[1]), fPct(best[1])))
-    } else lv.textContent = '—'
+    } else lv.textContent = '·'
     lead.append(lv, el(doc, 'div', `cb-wla-card-s ${worst ? tone(worst[1]) : ''}`, worst ? `${worst[0]} ${fPct(worst[1])}` : ''))
     this.cards.replaceChildren(
       bc,
       card(`Avg change · ${p}`, fPct(avg), `equal weight, ${chg.length} of ${syms.length} quoted`, tone(avg)),
       lead,
-      card('Volume vs usual', med != null ? `${med.toFixed(2)}×` : '—', busy.length ? `busiest ${busy.map((x) => `${x[0]} ${x[1].toFixed(2)}×`).join(' · ')}` : 'vs the last 20 sessions, same time of day'),
-      card('SPX gamma', spx ? fMoney(spx.net) : '—', spx ? `walls ${fLevel(spx.putWall)} / ${fLevel(spx.callWall)} · flip ${fLevel(spx.flip)}` : 'front expiry, OI + volume', tone(spx?.net), true),
-      card('Whale flow today', flows.length ? fMoney(wNet) : '—', flows.length ? `net · ${wCount} print${wCount === 1 ? '' : 's'} ≥ $1M on this list` : 'no $1M+ prints on this list yet today', tone(wNet), true),
+      card('Volume vs usual', med != null ? `${med.toFixed(2)}×` : '·', busy.length ? `busiest ${busy.map((x) => `${x[0]} ${x[1].toFixed(2)}×`).join(' · ')}` : 'vs the last 20 sessions, same time of day'),
+      card('SPX gamma', spx ? fMoney(spx.net) : '·', spx ? `walls ${fLevel(spx.putWall)} / ${fLevel(spx.callWall)} · flip ${fLevel(spx.flip)}` : 'front expiry, OI + volume', tone(spx?.net), true),
+      card('Whale flow today', flows.length ? fMoney(wNet) : '·', flows.length ? `net · ${wCount} print${wCount === 1 ? '' : 's'} ≥ $1M on this list` : 'no $1M+ prints on this list yet today', tone(wNet), true),
     )
   }
 
@@ -562,7 +564,8 @@ class AdvancedView {
     if (c.spark) out.push({ id: 'spark', label: '5 day', cls: 'spark' })
     if (c.r30) out.push({ id: 'r30', label: '30-day range', cls: 'rng' })
     if (c.gex) out.push({ id: 'gex', label: 'Net GEX', cls: 'num', cb: true })
-    if (c.walls) out.push({ id: 'walls', label: 'Put / call wall', cls: 'num', cb: true })
+    // Voltick's word for the pair ("‖ WALLS 748/784"): put wall / call wall, in surge blue
+    if (c.walls) out.push({ id: 'walls', label: 'Walls', cls: 'num', cb: true })
     if (c.whale) out.push({ id: 'whale', label: 'Whale flow', cls: 'num', cb: true })
     return out
   }
@@ -609,7 +612,7 @@ class AdvancedView {
     const groups = this.groups()
     const total = activeList().symbols.length
     if (!total) {
-      table.append(el(doc, 'div', 'cb-wla-empty', 'This list is empty — add a symbol above.'))
+      table.append(el(doc, 'div', 'cb-wla-empty', 'This list is empty: add a symbol above.'))
     }
     groups.forEach((g, gi) => {
       if (!g.syms.length) return
@@ -677,7 +680,7 @@ class AdvancedView {
     const mSpark = el(doc, 'span', 'cb-wla-m')
     mSpark.append(sparkline(doc, st?.spark ?? [], 64, 24))
     const mPx = el(doc, 'span', 'cb-wla-m cb-wla-mpx')
-    mPx.append(el(doc, 'b', '', px == null ? '—' : f2(px)), el(doc, 'small', tone(chg), fChg(chg)))
+    mPx.append(el(doc, 'b', '', px == null ? '·' : f2(px)), el(doc, 'small', tone(chg), fChg(chg)))
     const mBadge = el(doc, 'span', `cb-wla-m cb-wla-badge ${tone(pct)}`, fPct(pct))
     const cells = cols.map((c) => {
       const cell = el(doc, 'span', `cb-wla-td ${c.cls}`)
@@ -686,7 +689,7 @@ class AdvancedView {
       const via = flow !== sym ? flow : null
       switch (c.id) {
         case 'last':
-          cell.textContent = px == null ? '—' : f2(px)
+          cell.textContent = px == null ? '·' : f2(px)
           cell.classList.add('strong')
           break
         case 'chg':
@@ -699,22 +702,22 @@ class AdvancedView {
           cell.classList.add('strong')
           break
         case 'vol':
-          cell.textContent = st?.volume ? compact(st.volume) : '—'
+          cell.textContent = st?.volume ? compact(st.volume) : '·'
           break
         case 'rvol':
-          cell.textContent = st?.relVol != null ? `${st.relVol.toFixed(2)}×` : '—'
+          cell.textContent = st?.relVol != null ? `${st.relVol.toFixed(2)}×` : '·'
           if ((st?.relVol ?? 0) >= 1.2) cell.dataset.hot = '1'
           break
         case 'day':
           if (st?.low != null && st.high != null) cell.append(rangeBar(doc, st.low, st.high, px))
-          else cell.textContent = '—'
+          else cell.textContent = '·'
           break
         case 'spark':
           cell.append(sparkline(doc, st?.spark ?? [], 80, 26))
           break
         case 'r30':
           if (st?.range30) cell.append(rangeBar(doc, st.range30.lo, st.range30.hi, px))
-          else cell.textContent = '—'
+          else cell.textContent = '·'
           break
         case 'gex': {
           if (via) {
@@ -723,7 +726,7 @@ class AdvancedView {
             break
           }
           const g = gexOf(sym)
-          cell.textContent = g ? fMoney(g.net) : g === null || !gexTicker(sym) ? '—' : '…'
+          cell.textContent = g ? fMoney(g.net) : g === null || !gexTicker(sym) ? '·' : '…'
           cell.dataset.tone = tone(g?.net)
           cell.classList.add('strong')
           break
@@ -732,7 +735,7 @@ class AdvancedView {
           const g = via ? null : gexOf(sym)
           if (g && (g.putWall != null || g.callWall != null)) {
             cell.append(el(doc, 'span', 'pw', fLevel(g.putWall)), doc.createTextNode(' / '), el(doc, 'span', 'cw', fLevel(g.callWall)))
-          } else cell.textContent = '—'
+          } else cell.textContent = '·'
           break
         }
         case 'whale': {
@@ -742,7 +745,7 @@ class AdvancedView {
             cell.classList.add('muted')
             break
           }
-          cell.textContent = w ? fMoney(w.net) : '—'
+          cell.textContent = w ? fMoney(w.net) : '·'
           if (w) {
             cell.dataset.tone = tone(w.net)
             cell.title = `${w.count} print${w.count === 1 ? '' : 's'} ≥ $1M today${via ? ` (${via})` : ''}`
@@ -806,7 +809,7 @@ class AdvancedView {
         doc,
         'span',
         'cb-wla-note',
-        'Earnings — the next report from the Nasdaq calendar (this week and next), and how the stock moved on its last reports (CB Edge’s earnings study, large caps). Balance-sheet figures need a fundamentals feed the app does not have yet.',
+        'Earnings: the next report from the Nasdaq calendar (this week and next), and how the stock moved on its last reports (CB Edge’s earnings study, large caps). Balance-sheet figures need a fundamentals feed the app does not have yet.',
       ),
     )
     const table = el(doc, 'div', 'cb-wla-table cb-wla-fin')
@@ -843,18 +846,18 @@ class AdvancedView {
       const lastCell = el(doc, 'span', 'cb-wla-td num')
       if (last && last.day != null) {
         lastCell.append(el(doc, 'span', tone(last.day), fPct(last.day)), el(doc, 'small', 'muted', ` ${fDate(last.date)}`))
-      } else lastCell.textContent = '—'
+      } else lastCell.textContent = '·'
       const today = etDateKey(Date.now())
       const soon = nx ? nx.date === today : false
       row.append(
         symCell,
-        el(doc, 'span', `cb-wla-td${soon ? ' hot' : ''}`, nx ? (soon ? 'Today' : fDate(nx.date)) : resolveSym(sym).kind === 'stock' ? 'not in 2 wks' : '—'),
+        el(doc, 'span', `cb-wla-td${soon ? ' hot' : ''}`, nx ? (soon ? 'Today' : fDate(nx.date)) : resolveSym(sym).kind === 'stock' ? 'not in 2 wks' : '·'),
         el(doc, 'span', 'cb-wla-td', nx ? (nx.session === 'pre' ? 'Before open' : nx.session === 'after' ? 'After close' : 'Time TBD') : ''),
-        el(doc, 'span', 'cb-wla-td num', nx?.epsEst ?? '—'),
-        el(doc, 'span', 'cb-wla-td num', nx?.marketCap ? `$${compact(nx.marketCap)}` : '—'),
+        el(doc, 'span', 'cb-wla-td num', nx?.epsEst ?? '·'),
+        el(doc, 'span', 'cb-wla-td num', nx?.marketCap ? `$${compact(nx.marketCap)}` : '·'),
         lastCell,
-        el(doc, 'span', 'cb-wla-td num', mv ? fPct(avgAbs(mv.map((x) => x.day))).replace(/^[+−]/, '±') : '—'),
-        el(doc, 'span', 'cb-wla-td num', mv ? fPct(avgAbs(mv.map((x) => x.gap))).replace(/^[+−]/, '±') : '—'),
+        el(doc, 'span', 'cb-wla-td num', mv ? fPct(avgAbs(mv.map((x) => x.day))).replace(/^[+−]/, '±') : '·'),
+        el(doc, 'span', 'cb-wla-td num', mv ? fPct(avgAbs(mv.map((x) => x.gap))).replace(/^[+−]/, '±') : '·'),
       )
       row.addEventListener('click', () => (narrow() ? this.openOnChart(sym) : this.select(sym)))
       if (sym === this.selected()) row.dataset.sel = '1'
@@ -877,7 +880,7 @@ class AdvancedView {
       b.append(h)
       return b
     }
-    const note = el(doc, 'div', 'cb-wla-note cb-wla-newsnote', 'Headlines need a news feed, which the app does not have yet — so this is what CB Edge does have: the list’s $1M+ option prints today, its upcoming earnings, and the US economic calendar.')
+    const note = el(doc, 'div', 'cb-wla-note cb-wla-newsnote', 'Headlines need a news feed, which the app does not have yet, so this is what CB Edge does have: the list’s $1M+ option prints today, its upcoming earnings, and the US economic calendar.')
     // prints
     const pb = box('Whale prints · this list', 'today, ≥ $1M, newest first')
     if (!prints.length) pb.append(el(doc, 'div', 'cb-wla-note', 'No $1M+ prints on this list yet today.'))
@@ -958,7 +961,7 @@ class AdvancedView {
       const name = el(doc, 'span', 'cb-wla-name')
       name.append(el(doc, 'b', '', sym), el(doc, 'small', '', this.descOf.get(sym) ?? typeName(sym)))
       const pxBox = el(doc, 'div', 'cb-wla-selpx')
-      pxBox.append(el(doc, 'div', 'cb-wla-big', px == null ? '—' : f2(px)), el(doc, 'div', tone(chg), `${fChg(chg)} (${fPct(pct)})`))
+      pxBox.append(el(doc, 'div', 'cb-wla-big', px == null ? '·' : f2(px)), el(doc, 'div', tone(chg), `${fChg(chg)} (${fPct(pct)})`))
       top.append(this.logo(sym, 34), name, pxBox)
       box.append(h, top, this.intraday(sym))
       const kv = el(doc, 'div', 'cb-wla-kv')
@@ -967,12 +970,12 @@ class AdvancedView {
         d.append(el(doc, 'span', '', label), el(doc, 'b', hot ? 'hot' : '', v))
         kv.append(d)
       }
-      k('Open', st?.open != null ? f2(st.open) : '—')
-      k('High', st?.high != null ? f2(st.high) : '—')
-      k('Low', st?.low != null ? f2(st.low) : '—')
-      k('Prev close', st?.prevClose != null ? f2(st.prevClose) : '—')
-      k('Volume', st?.volume ? compact(st.volume) : '—')
-      k('Rel vol', st?.relVol != null ? `${st.relVol.toFixed(2)}×` : '—', (st?.relVol ?? 0) >= 1.2)
+      k('Open', st?.open != null ? f2(st.open) : '·')
+      k('High', st?.high != null ? f2(st.high) : '·')
+      k('Low', st?.low != null ? f2(st.low) : '·')
+      k('Prev close', st?.prevClose != null ? f2(st.prevClose) : '·')
+      k('Volume', st?.volume ? compact(st.volume) : '·')
+      k('Rel vol', st?.relVol != null ? `${st.relVol.toFixed(2)}×` : '·', (st?.relVol ?? 0) >= 1.2)
       box.append(kv)
       const flow = this.flowSym(sym)
       const g = gexOf(flow)
@@ -989,7 +992,7 @@ class AdvancedView {
       if (flow !== sym) box.append(el(doc, 'div', 'cb-wla-note', `Levels and flow are ${flow}’s.`))
       const w = whalesOf(flow)
       const wl = el(doc, 'div', 'cb-wla-selflow')
-      wl.append(el(doc, 'span', '', 'Whale flow today'), el(doc, 'b', tone(w?.net), w ? `${fMoney(w.net)} · ${w.count} print${w.count === 1 ? '' : 's'}` : '—'))
+      wl.append(el(doc, 'span', '', 'Whale flow today'), el(doc, 'b', tone(w?.net), w ? `${fMoney(w.net)} · ${w.count} print${w.count === 1 ? '' : 's'}` : '·'))
       box.append(wl)
       const acts = el(doc, 'div', 'cb-wla-acts')
       const openB = btn(doc, 'cb-wla-btn cb-wla-primary', 'Open on chart')
@@ -1121,7 +1124,7 @@ class AdvancedView {
       const d = el(doc, 'div')
       const sw = el(doc, 'i')
       sw.style.background = `var(${GROUP_COLORS[i % GROUP_COLORS.length]})`
-      d.append(sw, el(doc, 'span', 'cb-wla-legn', g.name), el(doc, 'span', 'cb-wla-note', `${Math.round((g.syms.length / total) * 100)}%`), el(doc, 'span', tone(contrib), ch.length ? fPct(contrib) : '—'))
+      d.append(sw, el(doc, 'span', 'cb-wla-legn', g.name), el(doc, 'span', 'cb-wla-note', `${Math.round((g.syms.length / total) * 100)}%`), el(doc, 'span', tone(contrib), ch.length ? fPct(contrib) : '·'))
       leg.append(d)
     })
     leg.append(el(doc, 'div', 'cb-wla-note cb-wla-legfoot', `weight · share of the ${this.prefs.period} move`))
@@ -1164,7 +1167,7 @@ class AdvancedView {
       ['spark', '5-day line'],
       ['r30', '30-day range'],
       ['gex', 'Net GEX'],
-      ['walls', 'Put / call wall'],
+      ['walls', 'Walls (put / call)'],
       ['whale', 'Whale flow today'],
     ]
     this.pop.replaceChildren(

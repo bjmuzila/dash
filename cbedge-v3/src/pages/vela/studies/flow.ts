@@ -184,8 +184,8 @@ export const volFlowImpl = studyImpl<VfS, VfPoint[]>({
     const volC = new Array<string | null>(n).fill(null)
     const oi = new Array<number | null>(n).fill(null)
     const comb = new Array<number | null>(n).fill(null)
-    const up = tokenHexAlpha('--color-candle-up', 0.7)
-    const dn = tokenHexAlpha('--color-candle-down', 0.7)
+    const up = tokenHexAlpha('--color-vt-chart-up', 0.7)
+    const dn = tokenHexAlpha('--color-vt-chart-down', 0.7)
     const first = pts[0]!.ts
     const lastTs = pts[pts.length - 1]!.ts
     let k = -1
@@ -205,8 +205,8 @@ export const volFlowImpl = studyImpl<VfS, VfPoint[]>({
     }
     const T = VOLFLOW_TYPE
     const series: SeriesSpec[] = [seriesOf(T, 'vol', 0, 'Vol GEX', bars, vol, up, { kind: 'histogram', colors: volC })]
-    if (s.oi) series.push(seriesOf(T, 'oi', 1, 'OI GEX', bars, oi, tokenHexAlpha('--color-series-1', 0.9), { kind: 'line', width: 1.4 }))
-    if (s.combined) series.push(seriesOf(T, 'comb', 2, 'Combined', bars, comb, tokenHexAlpha('--color-level-cb', 0.9), { kind: 'line', width: 1.6 }))
+    if (s.oi) series.push(seriesOf(T, 'oi', 1, 'OI GEX', bars, oi, tokenHexAlpha('--color-vt-accent-text', 0.9), { kind: 'line', width: 1.4 }))
+    if (s.combined) series.push(seriesOf(T, 'comb', 2, 'Combined', bars, comb, tokenHexAlpha('--color-vt-paper', 0.9), { kind: 'line', width: 1.6 }))
     return { series }
   },
 })

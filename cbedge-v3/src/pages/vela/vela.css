@@ -3,14 +3,141 @@
    Every selector is prefixed with .vela-workspace so it outranks the library's
    rule of the same shape whatever order the two stylesheets land in (Vela
    injects its CSS when a workspace is built, after this file has loaded).
+
+   VOLTICK UI (Brandon, 2026-10-04). The page is Voltick's chart: Vela.tsx pins
+   the Voltick theme while it is mounted, so every token below resolves to
+   Voltick's palette, type and radii, and the rules follow Voltick's design
+   system (md files/VOLTICK-DESIGN-SYSTEM.md):
+     · no grey text: a caption is Paper Quiet (--color-faint), never a Paper
+       dimmed with opacity (opacity stays only on disabled / dragged / hidden)
+     · every number and every uppercase label is JetBrains Mono (labels 600,
+       tracked .08em); words are Inter
+     · radii 6 (rows, chips) / 10 (buttons, inputs) / 12 (cards, menus)
+     · floating things (menus, popovers, cards, toasts) sit on the popover
+       plate with the card shadow and its 1px top highlight
+     · Volt Blue fills and rings; Accent Text when the accent is a WORD
+     · green / red are data only: never a hover, a success line or a face
+     · amber, violet, magenta and surge blue are reserved for the Volt, the
+       flip, a Reversal and surges / walls, and appear nowhere else
+     · a panel's primary action is the lit pill (gradient rim, dark face)
    ───────────────────────────────────────────────────────────────────────────── */
+
+/* VOLTICK'S TYPE, self-hosted the way Voltick ships it (DESIGN.md: the same
+   variable woff2 files Google Fonts serves, kept on our own origin, so the CSP's
+   font-src 'self' allows them and first paint waits on no third party). Latin
+   subset, the weight axis, from @fontsource-variable 5.3.0; SIL Open Font
+   License 1.1, see fonts/LICENSE-*.txt. Declared here, so only the Vela page
+   downloads them: --font-sans / --font-mono under the Voltick theme name them
+   first, and a page that never draws Inter never fetches it. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('./fonts/inter-latin-wght-normal.woff2') format('woff2-variations'), url('./fonts/inter-latin-wght-normal.woff2') format('woff2');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url('./fonts/jetbrains-mono-latin-wght-normal.woff2') format('woff2-variations'), url('./fonts/jetbrains-mono-latin-wght-normal.woff2') format('woff2');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+/* The parts of this page that live OUTSIDE Vela's root, so do not inherit its
+   font: the session strip, the replay dock (in the shell), and what portals to
+   <body> (setups menu, alert toasts, whale card). */
+.cb-strip,
+.cb-replay-bar,
+.cb-setups,
+.cb-scr-toasts,
+.cb-wh-card {
+  font-family: var(--font-sans);
+}
+
+/* VOLTICK'S COMPOSITES, from its tokens (theme.jsx): the Chip's 5% Paper wash,
+   the popover plate, Accent Soft (a selected row), the lit pill's dark face and
+   aurora rim (§8.1), the card shadow with its 1px top highlight (§5 — on
+   surfaces this close in value, that highlight is what lifts a card off the
+   panel) and LIT_GLOW, the "this is on" glow. On :root because the replay dock
+   and the menus this page portals to <body> read them too. */
+:root {
+  --vt-wash: color-mix(in srgb, var(--color-vt-paper) 5%, transparent);
+  --vt-popover: color-mix(in srgb, var(--color-vt-panel) 98%, transparent);
+  --vt-accent-soft: color-mix(in srgb, var(--color-vt-accent) 12%, transparent);
+  --vt-pill-face: color-mix(in srgb, var(--color-vt-ink) 94%, transparent);
+  --vt-card-shadow:
+    0 8px 26px color-mix(in srgb, var(--color-shadow) 45%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--color-vt-paper) 5%, transparent);
+  --vt-lit-rim: linear-gradient(
+    118deg,
+    color-mix(in srgb, var(--color-vt-accent) 84%, transparent),
+    color-mix(in srgb, var(--color-vt-sky) 65%, transparent) 38%,
+    color-mix(in srgb, var(--color-vt-accent) 36%, transparent) 64%,
+    color-mix(in srgb, var(--color-vt-surge) 77%, transparent)
+  );
+  --vt-lit-glow: inset 0 -1px 0 var(--color-vt-accent), 0 0 20px -6px var(--color-vt-accent);
+}
+
+/* VELA'S OWN CHROME, re-pointed at Voltick's tokens. Vela writes these custom
+   properties INLINE on every .vela-ui host (themeTokens(), from the 7-field
+   VelaTheme), so a stylesheet can only win with !important — which on a custom
+   property beats an inline declaration and changes nothing else. Its defaults
+   are a grey secondary text (#868a96), a white "selected" chip and TradingView
+   blue; Voltick has no grey text, a lit Volt Blue selected state, and one blue. */
+.vela-ui,
+.vela-ui-layer,
+.vela-workspace [style*='--vela-bg'] {
+  --vela-fg: var(--color-vt-paper) !important;
+  --vela-fg-bright: var(--color-vt-paper) !important;
+  --vela-fg-muted: var(--color-vt-quiet) !important;
+  --vela-fg-faint: var(--color-vt-quiet) !important;
+  --vela-surface-elev: var(--color-vt-panel) !important;
+  --vela-surface-overlay: var(--vt-popover) !important;
+  --vela-border: var(--color-vt-line) !important;
+  --vela-border-soft: var(--color-vt-line) !important;
+  --vela-border-strong: var(--color-vt-rail) !important;
+  --vela-hover: var(--vt-wash) !important;
+  --vela-accent: var(--color-vt-accent) !important;
+  --vela-accent-bright: var(--color-vt-accent-text) !important;
+  --vela-selected-bg: var(--color-vt-accent) !important;
+  --vela-selected-fg: var(--color-vt-paper) !important;
+  --vela-focus: var(--color-vt-accent-text) !important;
+  --vela-focus-soft: var(--vt-accent-soft) !important;
+  --vela-shadow: var(--vt-card-shadow) !important;
+  --vela-radius-sm: var(--radius-sm) !important;
+  --vela-radius-md: var(--radius-md) !important;
+  --vela-radius-lg: var(--radius-lg) !important;
+}
+/* Fields that already say "focused" with a Volt Blue border (or, for the
+   Indicators search, a border on the whole search row) skip the Voltick theme's
+   global 2px focus ring, which would draw a second box inside the first. */
+:root[data-ui-theme='voltick'] .cb-ip .cb-ip-search:focus-visible,
+:root[data-ui-theme='voltick'] .cb-scr :is(.cb-scr-code, .cb-scr-name, .cb-scr-pick):focus-visible,
+:root[data-ui-theme='voltick'] .cb-wl .cb-wl-input:focus-visible,
+:root[data-ui-theme='voltick'] .cb-setups .cb-scr-name:focus-visible {
+  outline: none;
+}
+/* menus and dialogs: Voltick's card radius; a success toast says it in Paper
+   with Volt Blue chrome (green is data, not "it worked") */
+.vela-workspace .vela-menu,
+.vela-ui .vela-menu {
+  border-radius: var(--radius-lg);
+}
+.vela-workspace .vela-toast[data-type='success'] {
+  border-color: var(--color-vt-accent);
+  color: var(--color-vt-paper);
+  box-shadow: var(--vt-lit-glow);
+}
 
 /* The ACTIVE chart in a multi-chart grid. Vela rings it with a 2px line in its
    brightest foreground, which on a stack of phone charts reads as a white box
-   around the one you touched. Here: 1px, a faint grey — enough to tell which
-   chart the bottom bar is driving, not enough to frame it. */
+   around the one you touched. Here: 1px of Volt Blue at 45% (Voltick: rings are
+   the accent) — enough to tell which chart the bottom bar is driving, not
+   enough to frame it. */
 .vela-workspace .vela-ws-grid[data-multi='1'] .vela-cell[data-active='1']::after {
-  border: 1px solid color-mix(in srgb, var(--color-fg) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
 }
 
 /* The CB Walls opacity strip (pages/vela/wallsOpacity.ts), docked above the
@@ -33,20 +160,21 @@
 .vela-workspace .cb-vela-opacity input[type='range'] {
   flex: 1 1 auto;
   min-width: 0;
-  accent-color: var(--color-level-cb);
+  accent-color: var(--color-accent);
 }
 .vela-workspace .cb-vela-opacity-val {
   flex: none;
   min-width: 4ch;
   text-align: right;
   font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 .vela-workspace .cb-vela-opacity-close {
   flex: none;
   width: 32px;
   height: 32px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: inherit;
   font-size: var(--text-sm);
@@ -78,7 +206,7 @@
   height: 30px;
   padding: 0 8px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--color-bg);
   color: var(--color-fg);
   font: inherit;
@@ -91,10 +219,11 @@
   height: 30px;
   padding: 0 10px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
-  background: var(--color-surface2);
+  border-radius: var(--radius-md);
+  background: var(--vt-wash);
   color: var(--color-fg);
   font: inherit;
+  font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -102,11 +231,18 @@
   background: var(--color-raised);
 }
 .cb-scr .cb-scr-primary {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--vt-pill-face), var(--vt-pill-face)) padding-box,
+    var(--vt-lit-rim) border-box;
+  box-shadow: 0 0 18px -8px var(--color-vt-accent);
+  color: var(--color-fg);
 }
 .cb-scr .cb-scr-primary:hover {
-  background: color-mix(in srgb, var(--color-accent) 34%, transparent);
+  background:
+    linear-gradient(var(--vt-pill-face), var(--vt-pill-face)) padding-box,
+    var(--vt-lit-rim) border-box;
+  box-shadow: 0 0 22px -6px var(--color-vt-accent);
 }
 .cb-scr .cb-scr-code {
   min-height: 300px;
@@ -114,7 +250,7 @@
   resize: vertical;
   padding: 8px 10px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--color-bg);
   color: var(--color-fg);
   font-family: var(--font-mono);
@@ -147,7 +283,7 @@
   font-size: var(--text-2xs);
 }
 .cb-scr .cb-scr-status[data-kind='ok'] {
-  color: var(--color-up);
+  color: var(--color-fg);
 }
 .cb-scr .cb-scr-status[data-kind='err'] {
   color: var(--color-down);
@@ -161,7 +297,7 @@
   margin: 6px 0 0;
   padding: 8px 10px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--color-surface2);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
@@ -173,8 +309,7 @@
 /* ── Scripts panel: CB Edge levels / sync row; shared by the Strategy Tester and Script Alerts panels ── */
 .cb-scr .cb-scr-note {
   min-width: 0;
-  color: var(--color-muted);
-  opacity: 0.75;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
   line-height: 1.45;
 }
@@ -234,12 +369,12 @@
 }
 .cb-scr .cb-st-h {
   margin-top: 4px;
-  color: var(--color-muted);
-  opacity: 0.6;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  font-family: var(--font-mono);
 }
 .cb-scr .cb-st-cards {
   display: grid;
@@ -250,14 +385,13 @@
   min-width: 0;
   padding: 8px 10px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background: var(--color-surface2);
 }
 .cb-scr .cb-st-label,
 .cb-scr .cb-st-sub,
 .cb-scr .cb-st-mini {
-  color: var(--color-muted);
-  opacity: 0.65;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
 }
 .cb-scr .cb-st-sub {
@@ -270,6 +404,7 @@
   font-size: var(--text-sm);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 .cb-scr [data-tone='up'] {
   color: var(--color-up);
@@ -283,7 +418,7 @@
   gap: 2px;
   padding: 6px 8px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background: var(--color-surface2);
 }
 .cb-scr .cb-st-eq {
@@ -323,10 +458,10 @@
 .cb-scr .cb-st-axis {
   display: flex;
   justify-content: space-between;
-  color: var(--color-muted);
-  opacity: 0.6;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 .cb-scr .cb-st-sides,
 .cb-scr .cb-st-trades {
@@ -334,6 +469,7 @@
   gap: 4px 10px;
   align-items: start;
   font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 .cb-scr .cb-st-sides {
   grid-template-columns: auto 1fr 1fr 1fr;
@@ -345,8 +481,7 @@
 .cb-scr .cb-st-th {
   padding-bottom: 3px;
   border-bottom: 1px solid var(--color-line);
-  color: var(--color-muted);
-  opacity: 0.6;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
 }
 .cb-scr .cb-st-sides .cb-st-th:not(:first-child),
@@ -367,9 +502,8 @@
   font-weight: 600;
 }
 .cb-scr .cb-st-pick[data-empty='1'] .cb-sel-text {
-  color: var(--color-muted);
+  color: var(--color-faint);
   font-weight: 400;
-  opacity: 0.7;
 }
 .cb-scr .cb-st-paste {
   display: flex;
@@ -377,7 +511,7 @@
   gap: 6px;
   padding: 10px;
   border: 1px solid var(--color-accent);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--color-surface2);
 }
 .cb-scr .cb-st-paste[hidden],
@@ -401,9 +535,9 @@
 }
 .cb-scr .cb-st-tip {
   padding: 7px 10px;
-  border-left: 2px solid var(--color-warn);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--color-warn) 8%, transparent);
+  border-left: 2px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--vt-accent-soft);
   color: var(--color-fg);
   font-size: var(--text-2xs);
   line-height: 1.45;
@@ -420,7 +554,7 @@
   gap: 10px;
   padding: 10px 12px;
   border: 1px solid var(--color-line);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--color-surface2);
 }
 .cb-scr .cb-st-pickt {
@@ -440,7 +574,7 @@
   align-self: stretch;
   padding: 8px 10px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background: var(--color-surface2);
   color: var(--color-fg);
 }
@@ -474,7 +608,7 @@
   gap: 10px;
   padding: 8px 10px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--color-surface2);
 }
 .cb-scr .cb-sa-row[data-on='1'] {
@@ -519,9 +653,9 @@
   gap: 8px;
 }
 .cb-scr .cb-sa-time {
-  color: var(--color-muted);
-  opacity: 0.65;
+  color: var(--color-faint);
   font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 
 /* Phone: a side panel is a full sheet (z 25 in Vela) but a multi-chart grid's
@@ -546,7 +680,7 @@
   height: 28px;
   padding: 0 6px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-fg);
   font: inherit;
@@ -564,7 +698,7 @@
   width: 28px;
   height: 28px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--color-muted);
   font-size: var(--text-base);
@@ -600,7 +734,7 @@
   height: 30px;
   padding: 0 9px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--color-bg);
   color: var(--color-fg);
   font: inherit;
@@ -617,8 +751,9 @@
   height: 30px;
   padding: 0 10px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
-  background: var(--color-surface2);
+  border-radius: var(--radius-md);
+  background: var(--vt-wash);
+  font-weight: 600;
   color: var(--color-fg);
   font: inherit;
   white-space: nowrap;
@@ -631,8 +766,12 @@
   display: none;
 }
 .cb-wl .cb-wl-primary {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--vt-pill-face), var(--vt-pill-face)) padding-box,
+    var(--vt-lit-rim) border-box;
+  box-shadow: 0 0 18px -8px var(--color-vt-accent);
+  color: var(--color-fg);
 }
 .cb-wl .cb-wl-danger-btn {
   border-color: var(--color-down);
@@ -646,9 +785,9 @@
   z-index: 3;
   padding: 4px;
   border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-surface);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-bg) 70%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--vt-popover);
+  box-shadow: var(--vt-card-shadow);
 }
 .cb-wl .cb-wl-sugg[hidden],
 .cb-wl .cb-wl-pop[hidden] {
@@ -659,13 +798,12 @@
   align-items: baseline;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .cb-wl .cb-wl-opt span {
   overflow: hidden;
-  color: var(--color-muted);
-  opacity: 0.65;
+  color: var(--color-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -684,9 +822,9 @@
   min-width: 190px;
   padding: 8px;
   border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-surface);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-bg) 70%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--vt-popover);
+  box-shadow: var(--vt-card-shadow);
 }
 .cb-wl .cb-wl-poptitle {
   font-weight: 600;
@@ -707,7 +845,7 @@
 .cb-wl .cb-wl-item {
   padding: 6px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--color-fg);
   font: inherit;
@@ -723,8 +861,7 @@
 .cb-wl .cb-wl-note,
 .cb-wl .cb-wl-foot,
 .cb-wl .cb-wl-empty {
-  color: var(--color-muted);
-  opacity: 0.65;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
   line-height: 1.45;
 }
@@ -756,8 +893,7 @@
   padding: 0;
   border: 0;
   background: none;
-  color: var(--color-muted);
-  opacity: 0.7;
+  color: var(--color-faint);
   font: inherit;
   font-size: var(--text-2xs);
   text-align: left;
@@ -805,7 +941,7 @@
   user-select: none;
 }
 .cb-wl .cb-wl-row:hover .cb-wl-grip {
-  opacity: 0.5;
+  opacity: 1;
 }
 .cb-wl .cb-wl-symcell {
   display: flex;
@@ -821,7 +957,7 @@
   width: 22px;
   height: 22px;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--color-raised);
 }
 .cb-wl .cb-wl-logo img {
@@ -846,8 +982,7 @@
 }
 .cb-wl .cb-wl-desc {
   overflow: hidden;
-  color: var(--color-muted);
-  opacity: 0.6;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -856,6 +991,7 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
+  font-family: var(--font-mono);
 }
 .cb-wl .cb-wl-num[data-tone='up'] {
   color: var(--color-up);
@@ -868,7 +1004,7 @@
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--color-muted);
   font-size: var(--text-xs);
@@ -877,17 +1013,17 @@
 }
 .cb-wl .cb-wl-row:hover .cb-wl-rm,
 .cb-wl .cb-wl-rm:focus-visible {
-  opacity: 0.7;
+  opacity: 1;
 }
 .cb-wl .cb-wl-rm:hover {
   background: var(--color-raised);
-  color: var(--color-down);
+  color: var(--color-fg);
   opacity: 1;
 }
 @media (hover: none) {
   .cb-wl .cb-wl-grip,
   .cb-wl .cb-wl-rm {
-    opacity: 0.5;
+    opacity: 1;
   }
 }
 .cb-wl .cb-wl-empty {
@@ -921,8 +1057,8 @@
 }
 .cb-sel .cb-sel-caret {
   flex: none;
-  opacity: 0.6;
   font-size: var(--text-2xs);
+  color: var(--color-faint);
 }
 .cb-sel[aria-expanded='true'] {
   border-color: var(--color-accent);
@@ -936,12 +1072,12 @@
   overflow-y: auto;
   padding: 4px;
   border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  background: var(--vt-popover);
   color: var(--color-fg);
   font-family: var(--font-sans);
   font-size: var(--text-sm);
-  box-shadow: 0 12px 32px color-mix(in srgb, var(--color-bg) 75%, transparent);
+  box-shadow: var(--vt-card-shadow);
 }
 .cb-sel-menu .cb-sel-opt {
   display: flex;
@@ -949,7 +1085,7 @@
   justify-content: space-between;
   gap: 14px;
   padding: 7px 10px;
-  border-radius: 5px;
+  border-radius: var(--radius-lg);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -966,21 +1102,21 @@
 }
 .cb-sel-menu .cb-sel-hint {
   flex: none;
-  color: var(--color-muted);
-  opacity: 0.5;
+  color: var(--color-faint);
   font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 .cb-sel-menu .cb-sel-opt[data-action='1'] {
-  color: var(--color-accent);
+  color: var(--color-vt-accent-text);
 }
 .cb-sel-menu .cb-sel-head {
   padding: 8px 10px 3px;
-  color: var(--color-muted);
-  opacity: 0.55;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  font-family: var(--font-mono);
 }
 .cb-sel-menu .cb-sel-sep {
   height: 1px;
@@ -1003,23 +1139,23 @@
 .cb-scr-toast {
   padding: 8px 12px;
   border: 1px solid var(--color-accent);
-  border-radius: 8px;
-  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  background: var(--vt-popover);
   color: var(--color-fg);
   font-size: var(--text-xs);
   line-height: 1.4;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-bg) 70%, transparent);
+  box-shadow: var(--vt-card-shadow);
   pointer-events: auto;
   cursor: pointer;
 }
 .cb-scr-toast .cb-scr-toast-head {
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--color-vt-accent-text);
 }
 .cb-scr-toast .cb-scr-toast-foot {
   margin-top: 2px;
-  opacity: 0.6;
   font-size: var(--text-2xs);
+  color: var(--color-faint);
 }
 
 /* ── Whale Prints hover card (pages/vela/studies/whaleLayer.ts) — fixed to the
@@ -1034,14 +1170,15 @@
   padding: 8px 10px;
   border: 1px solid var(--color-line);
   border-left: 3px solid var(--color-muted);
-  border-radius: 8px;
-  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  background: var(--vt-popover);
   color: var(--color-fg);
   font-size: var(--text-xs);
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-bg) 70%, transparent);
+  box-shadow: var(--vt-card-shadow);
   pointer-events: none;
+  font-family: var(--font-mono);
 }
 .cb-wh-card[hidden] {
   display: none;
@@ -1066,8 +1203,7 @@
 }
 .cb-wh-card .cb-wh-when {
   margin-bottom: 6px;
-  color: var(--color-muted);
-  opacity: 0.6;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
 }
 .cb-wh-card .cb-wh-rows {
@@ -1094,8 +1230,7 @@
 }
 .cb-wh-card .cb-wh-more {
   margin-top: 4px;
-  color: var(--color-muted);
-  opacity: 0.6;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
 }
 
@@ -1121,7 +1256,7 @@
   height: 36px;
   padding: 0 6px 0 10px;
   border: 1px solid var(--color-line);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--color-surface2);
   color: var(--color-muted);
 }
@@ -1147,12 +1282,11 @@
   height: 26px;
   padding: 0 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
-  color: var(--color-muted);
+  color: var(--color-faint);
   font: inherit;
   cursor: pointer;
-  opacity: 0.8;
 }
 .cb-ip .cb-ip-filter:hover,
 .cb-ip .cb-ip-filter[data-on='1'] {
@@ -1176,8 +1310,7 @@
 }
 .cb-ip .cb-ip-section {
   margin: 10px 0 4px 8px;
-  color: var(--color-muted);
-  opacity: 0.6;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -1192,7 +1325,7 @@
   height: 32px;
   padding: 0 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-fg);
   font: inherit;
@@ -1208,7 +1341,7 @@
 }
 .cb-ip .cb-ip-cat .vela-icon {
   flex: none;
-  opacity: 0.8;
+  color: var(--color-faint);
 }
 .cb-ip .cb-ip-cat-label {
   flex: 1 1 auto;
@@ -1221,7 +1354,7 @@
   flex: none;
   min-width: 18px;
   padding: 0 5px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--color-surface2);
   color: var(--color-muted);
   font-size: var(--text-2xs);
@@ -1238,19 +1371,19 @@
   z-index: 1;
   padding: 2px 8px 8px;
   background: var(--color-surface);
-  color: var(--color-muted);
-  opacity: 0.8;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  font-family: var(--font-mono);
 }
 .cb-ip .cb-ip-row {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 6px 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   outline: none;
 }
@@ -1262,7 +1395,9 @@
   cursor: default;
 }
 .cb-ip .cb-ip-row[data-hidden='1'] .cb-ip-text {
-  opacity: 0.45;
+  /* hidden on the chart: struck through, still editable (Voltick's hidden rows) */
+  color: var(--color-faint);
+  text-decoration: line-through;
 }
 .cb-ip .cb-ip-text {
   flex: 1 1 auto;
@@ -1278,8 +1413,7 @@
 }
 .cb-ip .cb-ip-desc {
   overflow: hidden;
-  color: var(--color-muted);
-  opacity: 0.6;
+  color: var(--color-faint);
   font-size: var(--text-2xs);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1291,9 +1425,10 @@
   border-bottom: 1px solid var(--color-line);
   color: var(--color-muted);
   font-size: var(--text-3xs);
-  font-weight: 800;
-  letter-spacing: 0.1em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  font-family: var(--font-mono);
 }
 .cb-ip .cb-ip-head + .cb-ip-sub {
   margin-top: 2px;
@@ -1302,7 +1437,7 @@
   flex: none;
   padding: 0 5px;
   border: 1px solid var(--color-line);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-muted);
   font-size: var(--text-2xs);
   line-height: 15px;
@@ -1310,7 +1445,7 @@
 .cb-ip .cb-ip-on {
   flex: none;
   width: 14px;
-  color: var(--color-up);
+  color: var(--color-vt-accent-text);
   text-align: center;
 }
 .cb-ip .cb-ip-star {
@@ -1321,28 +1456,27 @@
   width: 26px;
   height: 26px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--color-muted);
+  color: var(--color-faint);
   cursor: pointer;
-  opacity: 0.45;
 }
 .cb-ip .cb-ip-row:hover .cb-ip-star,
 .cb-ip .cb-ip-star:focus-visible {
-  opacity: 0.85;
+  opacity: 1;
 }
 .cb-ip .cb-ip-star:hover {
   background: var(--color-raised);
   opacity: 1;
 }
 .cb-ip .cb-ip-star[data-on='1'] {
-  color: var(--color-warn);
+  /* Accent Text, not amber: an amber ★ is the Volt */
+  color: var(--color-vt-accent-text);
   opacity: 1;
 }
 .cb-ip .cb-ip-empty {
   padding: 40px 12px;
-  color: var(--color-muted);
-  opacity: 0.7;
+  color: var(--color-faint);
   text-align: center;
 }
 .cb-ip .cb-ip-link {
@@ -1352,7 +1486,7 @@
   margin: 6px 0 0;
   padding: 8px;
   border: 1px dashed var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   width: 100%;
   color: var(--color-muted);
@@ -1408,22 +1542,23 @@
   max-height: 100%;
   gap: 2px !important;
   padding: 6px 0 !important;
-  border: 1px solid color-mix(in srgb, var(--color-fg) 8%, transparent) !important;
+  border: 1px solid var(--color-line) !important;
   border-radius: 14px;
-  background: color-mix(in srgb, var(--color-surface) 78%, transparent) !important;
+  background: color-mix(in srgb, var(--color-vt-panel) 88%, transparent) !important;
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
-  box-shadow: 0 12px 40px color-mix(in srgb, var(--color-bg) 70%, transparent);
-  color: color-mix(in srgb, var(--color-fg) 62%, transparent) !important;
+  box-shadow: var(--vt-card-shadow);
+  /* Paper Quiet tools, Paper on hover: Voltick has no grey */
+  color: var(--color-faint) !important;
 }
 .vela-workspace .vela-dtb[data-collapsed='1'] {
   width: 18px !important;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
 }
 /* the dividers are bare inline-styled divs */
 .vela-workspace .vela-dtb > div:not([class]) {
   margin: 4px auto !important;
-  background: color-mix(in srgb, var(--color-fg) 8%, transparent) !important;
+  background: var(--color-line) !important;
 }
 .vela-workspace .vela-dtb-btn,
 .vela-workspace .vela-dtb-cell {
@@ -1436,12 +1571,12 @@
 .vela-workspace .vela-dtb-hit {
   width: 32px;
   height: 32px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
 }
 .vela-workspace .vela-dtb-hit--arrow {
   width: 10px;
   height: 22px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .vela-workspace .vela-dtb-btn:hover .vela-dtb-hit,
 .vela-workspace .vela-dtb-icon:hover .vela-dtb-hit {
@@ -1458,7 +1593,7 @@
 .vela-workspace .vela-dtb-btn[data-active='1'] .vela-dtb-hit,
 .vela-workspace .vela-dtb-cell[data-active='1'] .vela-dtb-icon .vela-dtb-hit {
   background: var(--color-accent);
-  box-shadow: 0 0 16px -4px var(--color-accent);
+  box-shadow: var(--vt-lit-glow);
 }
 .vela-workspace .vela-dtb-collapse {
   height: 28px;
@@ -1467,7 +1602,8 @@
   width: 14px;
 }
 
-/* ── CB GEX Rail (studies/rail.ts): the GEX Candles strike rail beside the price axis ── */
+/* ── CB GEX Rail (studies/rail.ts): the GEX Candles strike rail beside the price axis.
+   Voltick tags (★ VOLT, ↘ REV, ◆ COIL, ↯ SURGE) carry their fill / ink inline. ── */
 .cb-rail {
   border-left: 1px solid var(--color-line);
   background: var(--color-bg);
@@ -1479,11 +1615,11 @@
   top: 3px;
   left: 6px;
   right: 4px;
+  font-family: var(--font-mono);
   font-size: var(--text-3xs);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--color-muted);
-  opacity: 0.75;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--color-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1494,8 +1630,7 @@
   left: 6px;
   right: 6px;
   font-size: var(--text-2xs);
-  color: var(--color-muted);
-  opacity: 0.6;
+  color: var(--color-faint);
   line-height: 1.35;
 }
 .cb-rail-row {
@@ -1520,22 +1655,14 @@
   flex-shrink: 0;
 }
 .cb-rail-tag {
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   padding: 0 3px;
+  font-family: var(--font-mono);
   font-size: var(--text-3xs);
-  font-weight: 900;
+  font-weight: 800;
   line-height: 1.5;
   letter-spacing: 0.04em;
   color: var(--color-app);
-}
-.cb-rail-tag[data-k='cb'] {
-  background: var(--color-level-cb);
-}
-.cb-rail-tag[data-k='cw'] {
-  background: var(--color-level-cw);
-}
-.cb-rail-tag[data-k='pw'] {
-  background: var(--color-level-pw);
 }
 .cb-rail-track {
   display: flex;
@@ -1571,19 +1698,24 @@
   margin-bottom: 2px;
 }
 .cb-lv-sym {
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: 0.04em;
+}
+/* a Voltick level's mark, in its reserved colour (set inline); the word stays Paper */
+.cb-lv-mark {
+  display: inline-block;
+  width: 1.3em;
+  font-weight: 800;
 }
 .cb-lv-px {
   font-family: var(--font-mono);
   font-weight: 800;
-  color: var(--color-muted);
+  color: var(--color-fg);
 }
 .cb-lv-hint {
   margin: 2px 0 6px;
   font-size: var(--text-2xs);
-  color: var(--color-muted);
-  opacity: 0.75;
+  color: var(--color-faint);
   line-height: 1.4;
 }
 .cb-lv-group {
@@ -1591,10 +1723,11 @@
   padding-bottom: 3px;
   border-bottom: 1px solid var(--color-line);
   font-size: var(--text-3xs);
-  font-weight: 800;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   color: var(--color-muted);
+  font-family: var(--font-mono);
 }
 .cb-lv-row {
   display: grid;
@@ -1604,7 +1737,7 @@
   padding: 3px 0;
 }
 .cb-lv-row[data-on='true'] .cb-lv-name {
-  color: var(--color-warn);
+  color: var(--color-vt-accent-text);
   font-weight: 700;
 }
 .cb-lv-val,
@@ -1615,28 +1748,28 @@
   text-align: right;
 }
 .cb-lv-dist {
-  color: var(--color-muted);
-}
-.cb-lv-dist[data-tone='up'] {
-  color: var(--color-up);
-}
-.cb-lv-dist[data-tone='down'] {
-  color: var(--color-down);
+  /* a distance is a location (above / below), not a gain or a loss: Paper Quiet */
+  color: var(--color-faint);
 }
 .cb-lv-bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
   border: 1px solid var(--color-line);
-  border-radius: 4px;
-  background: transparent;
+  border-radius: var(--radius-sm);
+  background: var(--vt-wash);
   color: var(--color-fg);
-  font-size: var(--text-xs);
-  line-height: 1.4;
   cursor: pointer;
 }
 .cb-lv-bell:hover:not(:disabled) {
   background: var(--color-raised);
 }
 .cb-lv-bell[aria-pressed='true'] {
-  border-color: var(--color-warn);
+  border-color: var(--color-accent);
+  background: var(--vt-accent-soft);
+  color: var(--color-vt-accent-text);
+  box-shadow: var(--vt-lit-glow);
 }
 .cb-lv-bell:disabled {
   opacity: 0.35;
@@ -1672,10 +1805,11 @@
 }
 .cb-op-phead {
   font-size: var(--text-3xs);
-  font-weight: 800;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--color-muted);
+  font-family: var(--font-mono);
 }
 .cb-op-name {
   overflow: hidden;
@@ -1693,7 +1827,7 @@
 }
 .cb-op-progress {
   font-size: var(--text-2xs);
-  color: var(--color-warn);
+  color: var(--color-vt-accent-text);
   font-weight: 700;
 }
 .cb-op-results {
@@ -1717,10 +1851,11 @@
 .cb-op-rhead {
   font-family: inherit;
   font-size: var(--text-3xs);
-  font-weight: 800;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-muted);
+  font-family: var(--font-mono);
 }
 .cb-op-vals {
   font-weight: 800;
@@ -1745,18 +1880,19 @@
   overflow-y: auto;
   padding: 10px;
   border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  background: var(--vt-popover);
   color: var(--color-fg);
-  box-shadow: 0 12px 32px var(--color-shadow);
+  box-shadow: var(--vt-card-shadow);
   font-size: var(--text-xs);
 }
 .cb-setups-h {
   font-size: var(--text-3xs);
-  font-weight: 900;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   color: var(--color-muted);
+  font-family: var(--font-mono);
 }
 .cb-setups-save {
   display: flex;
@@ -1768,13 +1904,12 @@
 }
 .cb-setups-msg {
   font-size: var(--text-2xs);
-  color: var(--color-warn);
+  color: var(--color-vt-accent-text);
 }
 .cb-setups-empty,
 .cb-setups-foot {
   font-size: var(--text-2xs);
-  color: var(--color-muted);
-  opacity: 0.75;
+  color: var(--color-faint);
   line-height: 1.4;
 }
 .cb-setups-foot {
@@ -1796,7 +1931,7 @@
   gap: 1px;
   padding: 6px 8px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-fg);
   text-align: left;
@@ -1807,7 +1942,7 @@
   background: var(--color-raised);
 }
 .cb-setups-name {
-  font-weight: 800;
+  font-weight: 700;
 }
 .cb-setups-sub {
   font-size: var(--text-2xs);
@@ -1820,12 +1955,44 @@
 .cb-setups-del {
   width: 28px;
   border: 1px solid var(--color-line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-muted);
   cursor: pointer;
 }
 .cb-setups-del:hover {
-  color: var(--color-down);
-  border-color: var(--color-down);
+  color: var(--color-fg);
+  border-color: var(--color-accent);
 }
+
+/* ── Voltick keys for the replay dock and the session strip (replay/ReplayBar.tsx,
+   setups/SessionStrip.tsx). Voltick's replay transport: a quiet key is Paper on
+   the 5% wash with a hairline; the active one is filled with the replay colour
+   (Volt Blue) and lit; disabled is the one place a key dims. ── */
+.cb-vt-key {
+  border-color: var(--color-line);
+  background: var(--vt-wash);
+  color: var(--color-fg);
+  cursor: pointer;
+}
+.cb-vt-key:hover:not(:disabled) {
+  background: var(--color-raised);
+}
+.cb-vt-key[aria-pressed='true'],
+.cb-vt-key[aria-pressed='true']:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--color-replay);
+  box-shadow: var(--vt-lit-glow);
+}
+.cb-vt-key:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.cb-vt-pop {
+  background: var(--vt-popover);
+  box-shadow: var(--vt-card-shadow);
+}
+.cb-vt-x:hover {
+  color: var(--color-vt-accent-text);
+}
+

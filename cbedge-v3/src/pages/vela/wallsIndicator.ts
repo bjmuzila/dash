@@ -24,7 +24,7 @@
 //     on, else its recorded gamma sign, else the nearer wall.
 //   · "Walls only" drops the role model (nothing to resolve) and draws both
 //     walls on their own series; "Core only" draws CORE alone.
-//   · Voltick theme (owner): three plain lines, ★ Volt / ◆ Coil / ↘ Reversal
+//   · Voltick theme (always, on the Vela page, which pins it): three plain lines, ★ Volt / ◆ Coil / ↘ Reversal
 //     through vtFromWalls(), Volt drawn last so it shows on a shared strike —
 //     the migration chart's Voltick view, judged on each bar's close.
 //
@@ -61,11 +61,11 @@ import {
 import { stableSeriesId } from '@luxalgo/vela/plugin'
 import { query } from '@/data/api'
 import { tokenHexAlpha } from '@/design/theme'
+import { uiThemeNow } from '@/design/uiTheme'
 import { BASIS_URL, ES_MAX_BASIS, isPlausibleBasis, parseBasis, type BasisModel } from '@/board/gexCandles/basis'
 import { futuresPairFor } from '@/board/gexCandles/futures'
 import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import {
-  VOLTICK_UI,
   rangeDayToSlice,
   todayETStr,
   vtFromWalls,
@@ -110,7 +110,7 @@ function inputsSchema(): InputSchema[] {
       type: 'string',
       defval: SCOPE_OPTS[0],
       options: SCOPE_OPTS,
-      tooltip: 'Which expiries the walls are computed from — recorded both ways, never re-computed here.',
+      tooltip: 'Which expiries the walls are computed from: recorded both ways, never re-computed here.',
     },
     { key: 'basis', title: 'GEX', type: 'string', defval: BASIS_OPTS[0], options: BASIS_OPTS },
     {
@@ -396,7 +396,9 @@ function linesFor(bars: readonly OHLCV[], al: Aligned, s: Settings): Line[] {
   const putC = tokenHexAlpha('--color-level-pw', a)
   const coreC = tokenHexAlpha('--color-level-cb', a)
 
-  if (VOLTICK_UI) {
+  // The Vela page pins the Voltick theme, so this is the branch it draws. The
+  // live document theme, not wallData's load-time read of the stored switch.
+  if (uiThemeNow() === 'voltick') {
     const volt: (number | null)[] = []
     const coil: (number | null)[] = []
     const rev: (number | null)[] = []
@@ -621,7 +623,7 @@ export function registerCbWalls(): void {
   registered = true
   registerNativeIndicator({
     type: WALLS_TYPE,
-    title: 'CB Edge Walls — Call / Put / CORE migration',
+    title: 'CB Edge Walls · the walls migration (★ Volt / ◆ Coil / ↘ Reversal)',
     shortTitle: 'CB Walls',
     paneHint: 'price',
     overlay: true,

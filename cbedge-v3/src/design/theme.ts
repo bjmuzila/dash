@@ -59,6 +59,10 @@ export const T = {
   purple: 'var(--color-dex)',
   /** Warning / amber. v2's `orange`. */
   orange: 'var(--color-warn)',
+  /** The replay dock's announcement colour: amber on CB Edge, Volt Blue on Voltick. */
+  replay: 'var(--color-replay)',
+  /** …and the same when it is a word (Voltick: Accent Text). */
+  replayText: 'var(--color-replay-text)',
   /** Alert red. */
   red: 'var(--color-down)',
   /** Positive / up. */

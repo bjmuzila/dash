@@ -9,10 +9,11 @@
 //                  was struck from; and this week's band (/api/em-tracker, the
 //                  Key Levels card's weekly EM) as two price lines.
 //   Key Levels     what the Key Levels card lists, as price lines with axis
-//                  chips: Call Wall, Put Wall, CORE, Gamma Flip, Max Pain off
-//                  the front-expiry chain (/api/chains → board/chainGex.ts), and
-//                  this week's published pivot and buy / sell zones
-//                  (/api/levels — the levels CB Edge posts).
+//                  chips, in Voltick's names (the page is Voltick's chart):
+//                  ★ Volt (CORE), ◆ Coil / ↘ Reversal (the walls), ⚡︎ Flip,
+//                  Max Pain off the front-expiry chain (/api/chains →
+//                  board/chainGex.ts), and this week's published pivot and
+//                  lower / upper zones (/api/levels — the levels CB Edge posts).
 //   GEX Profile    net GEX per strike as horizontal bars hugging the right edge
 //                  of the visible chart, beside the price axis — green above
 //                  zero, red below, the biggest strikes tagged. Follows scroll
@@ -25,6 +26,7 @@
 import type { DrawingBox, DrawingLabel, PriceLine, SeriesSpec, Fill } from '@luxalgo/vela'
 import { stableSeriesId } from '@luxalgo/vela/plugin'
 import { tokenHexAlpha } from '@/design/theme'
+import { VT_NAME, vtDef, vtKeyOf, type CbLevelKey } from '@/data/voltickLevels'
 import type { GexRow } from '@/contract/frames'
 import { chainGexUrl, chainToGex, type ChainGex } from '@/board/chainGex'
 import { computeMaxPain } from '@/board/keyLevels/levelsMath'
@@ -34,6 +36,10 @@ import { loadBasis } from '@/pages/vela/wallsIndicator'
 import { DAY_MS, bool, studyImpl, etDateKey, int, labelAt, money, priceLineOf, seriesOf, sessionKey, sessionsOf, str, type StudyCtx } from './common'
 import { EM_TYPE, GEX_BASIS as BASIS, KEY_TYPE, PROFILE_TYPE } from './index'
 import { columnAt, loadLadder, sessionDates, type Ladder } from './ladder'
+
+/** Voltick's flip mark: ⚡ + VS15, so it draws as TEXT in the flip's colour, never
+ *  as the orange emoji (orange is the Volt's). */
+const FLIP_MARK = '\u26A1\uFE0E'
 
 /** The symbol whose options make this chart's levels, and what to add to move them onto it. */
 async function underlying(c: StudyCtx): Promise<{ ticker: string; shift: number } | null> {
@@ -141,7 +147,8 @@ export const emImpl = studyImpl<EmS, EmData>({
       }
     }
     const T = EM_TYPE
-    const cEm = tokenHexAlpha('--color-level-em', 0.95)
+    // Accent Text: the blue family, and no reserved hue (the CB EM violet is Voltick's flip)
+    const cEm = tokenHexAlpha('--color-vt-accent-text', 0.95)
     const series: SeriesSpec[] = []
     const fills: Fill[] = []
     const labels: DrawingLabel[] = []
@@ -150,8 +157,8 @@ export const emImpl = studyImpl<EmS, EmData>({
       const a = seriesOf(T, 'up', 0, 'EM ↑', bars, up, cEm, { width: 1.5, axisChip: false })
       const b = seriesOf(T, 'dn', 1, 'EM ↓', bars, dn, cEm, { width: 1.5, axisChip: false })
       series.push(a, b)
-      if (s.close) series.push(seriesOf(T, 'rc', 2, 'EM close', bars, rc, tokenHexAlpha('--color-level-em', 0.5), { width: 1, dashed: true, axisChip: false }))
-      if (s.fill) fills.push({ id: stableSeriesId({ instanceId: T, kind: 'fill', title: 'band', ordinal: 0 }), paneId: '', fromSeriesId: a.id, toSeriesId: b.id, color: tokenHexAlpha('--color-level-em', 0.06) })
+      if (s.close) series.push(seriesOf(T, 'rc', 2, 'EM close', bars, rc, tokenHexAlpha('--color-vt-accent-text', 0.95), { width: 1, dashed: true, axisChip: false }))
+      if (s.fill) fills.push({ id: stableSeriesId({ instanceId: T, kind: 'fill', title: 'band', ordinal: 0 }), paneId: '', fromSeriesId: a.id, toSeriesId: b.id, color: tokenHexAlpha('--color-vt-accent-text', 0.06) })
       const lu = up[n - 1]
       const ld = dn[n - 1]
       if (lu != null) labels.push(labelAt(T, 'tag-up', last.time, lu, `EM ↑ ${lu.toFixed(2)}`, cEm, { textColor: cEm, noFill: true }))
@@ -159,7 +166,7 @@ export const emImpl = studyImpl<EmS, EmData>({
     }
     const priceLines: PriceLine[] = []
     if (s.weekly && data.weekly && Number.isFinite(data.fallbackShift)) {
-      const cW = tokenHexAlpha('--color-level-em', 0.7)
+      const cW = tokenHexAlpha('--color-vt-accent-text', 0.95)
       const lbl = data.weekly.label ? ` (${data.weekly.label})` : ''
       priceLines.push(priceLineOf(T, 'wup', data.weekly.up + data.fallbackShift, cW, `Weekly EM ↑${lbl}`, { dashed: true }))
       priceLines.push(priceLineOf(T, 'wdn', data.weekly.down + data.fallbackShift, cW, `Weekly EM ↓${lbl}`, { dashed: true }))
@@ -251,19 +258,31 @@ export const keyImpl = studyImpl<KeyS, KeyData>({
         // the name beside the line, at the newest bar
         if (lastBar) labels.push(labelAt(T, `tag-${key}`, lastBar.time, v + sh, `${title} ${(v + sh).toFixed(2)}`, col, { textColor: col, noFill: true }))
       }
-      if (s.walls) {
-        add('cw', g.callWall, '--color-level-cw', 'Call Wall', { width: 1.6 })
-        add('pw', g.putWall, '--color-level-pw', 'Put Wall', { width: 1.6 })
+      // Voltick's names and reserved colours (data/voltickLevels.ts): CORE is the
+      // ★ Volt, the wall on CORE's side of spot the ◆ Coil, the other wall the
+      // ↘ Reversal; the gamma flip is ⚡︎ Flip in the flip's violet.
+      const spot = lastBar ? lastBar.close - sh : null
+      const core = g.core?.strike ?? null
+      const named = (k: CbLevelKey) => vtDef(vtKeyOf(k, core, spot, { cw: g.callWall ?? null, pw: g.putWall ?? null }))
+      const vt = (k: CbLevelKey) => {
+        const d = named(k)
+        return { token: d.fillVar, title: `${d.mark} ${VT_NAME[d.key]}` }
       }
-      if (s.core) add('core', g.core?.strike, '--color-level-cb', 'CORE', { width: 2 })
-      if (s.flip) add('flip', g.flip, '--color-series-4', 'Gamma Flip', { dashed: true })
-      if (s.maxPain) add('mp', computeMaxPain(g.rows as GexRow[]), '--color-muted', 'Max Pain', { dashed: true })
+      if (s.walls) {
+        const cw = vt('cw')
+        const pw = vt('pw')
+        add('cw', g.callWall, cw.token, cw.title, { width: 1.6 })
+        add('pw', g.putWall, pw.token, pw.title, { width: 1.6 })
+      }
+      if (s.core) add('core', core, '--color-vt-volt', '★ Volt', { width: 2 })
+      if (s.flip) add('flip', g.flip, '--color-vt-flip', `${FLIP_MARK} Flip`, { dashed: true })
+      if (s.maxPain) add('mp', computeMaxPain(g.rows as GexRow[]), '--color-vt-quiet', 'Max Pain', { dashed: true })
     }
     const w = data.weekly
     const bars = c.bars
     if (w && bars.length) {
       // weekly levels are the futures' own on ES / NQ (ESU / NQU rows) — no shift
-      if (s.weekly && w.pivot) priceLines.push(priceLineOf(T, 'pivot', w.pivot, tokenHexAlpha('--color-muted', 0.8), 'Weekly Pivot', { dashed: true }))
+      if (s.weekly && w.pivot) priceLines.push(priceLineOf(T, 'pivot', w.pivot, tokenHexAlpha('--color-vt-quiet', 0.95), 'Weekly Pivot', { dashed: true }))
       if (s.zones) {
         const start = bars[Math.max(0, bars.length - 60)]!.time
         const end = bars[bars.length - 1]!.time
@@ -294,8 +313,11 @@ export const keyImpl = studyImpl<KeyS, KeyData>({
             overlay: true,
           })
         }
-        zone('buy', w.buyNear, w.buyFar, '--color-up', 'Buy zone')
-        zone('sell', w.sellNear, w.sellFar, '--color-down', 'Sell zone')
+        // Slate, and named by where they sit: a zone is a location, never an
+        // instruction (Voltick never says buy or sell), and green / red would read
+        // as approval and warning.
+        zone('buy', w.buyNear, w.buyFar, '--color-vt-slate', 'Lower zone')
+        zone('sell', w.sellNear, w.sellFar, '--color-vt-slate', 'Upper zone')
       }
     }
     return { priceLines, boxes, labels }
@@ -366,8 +388,8 @@ export const profileImpl = studyImpl<ProfileS, ProfileData | null>({
     const span = Math.max(right - left, c.tfMs * 10)
     const full = (span * s.width) / 100
     const T = PROFILE_TYPE
-    const up = tokenHexAlpha('--color-candle-up', 0.4)
-    const dn = tokenHexAlpha('--color-candle-down', 0.4)
+    const up = tokenHexAlpha('--color-vt-chart-up', 0.4)
+    const dn = tokenHexAlpha('--color-vt-chart-down', 0.4)
     const boxes: DrawingBox[] = []
     const labels: DrawingLabel[] = []
     for (const r of win) {
@@ -402,7 +424,7 @@ export const profileImpl = studyImpl<ProfileS, ProfileData | null>({
       const v = valueOf(r)
       if (!v) continue
       const len = (Math.abs(v) / max) * full
-      const col = tokenHexAlpha(v > 0 ? '--color-candle-up' : '--color-candle-down', 1)
+      const col = tokenHexAlpha(v > 0 ? '--color-vt-chart-up' : '--color-vt-chart-down', 1)
       labels.push(labelAt(T, `tag-${r.strike}`, right - len, r.strike + read.shift, `${r.strike} ${money(v)}`, col, { style: 'label_right', textColor: col, noFill: true }))
     }
     return { boxes, labels }

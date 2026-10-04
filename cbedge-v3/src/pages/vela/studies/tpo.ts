@@ -121,11 +121,13 @@ export const tpoImpl = studyImpl<TpoS, null>({
     const sessions = sessionsOf(bars, (t) => (s.full ? sessionKey(t, fut) : etDateKey(t)))
     const T = TPO_TYPE
     const a = s.opacity / 100
-    const cVa = tokenHexAlpha('--color-series-1', a)
-    const cOut = tokenHexAlpha('--color-muted', a * 0.45)
-    const cPoc = tokenHexAlpha('--color-level-cb', Math.min(1, a + 0.25))
-    const cPocLine = tokenHexAlpha('--color-level-cb', 0.9)
-    const cVaLine = tokenHexAlpha('--color-series-1', 0.75)
+    // A profile is a measurement: slate value area, Paper POC. No reserved hue
+    // (the CB gold POC is Voltick's Volt).
+    const cVa = tokenHexAlpha('--color-vt-slate', a)
+    const cOut = tokenHexAlpha('--color-vt-quiet', a * 0.45)
+    const cPoc = tokenHexAlpha('--color-vt-paper', Math.min(1, a + 0.25))
+    const cPocLine = tokenHexAlpha('--color-vt-paper', 0.9)
+    const cVaLine = tokenHexAlpha('--color-vt-slate', 0.95)
     const boxes: DrawingBox[] = []
     const lines: DrawingLine[] = []
     const labels: DrawingLabel[] = []
@@ -202,7 +204,7 @@ export const tpoImpl = studyImpl<TpoS, null>({
             break
           }
         }
-        if (touch > p.end || touch === lastT) lines.push(line(`${ss.key}:npoc`, p.end, touch, pocY, tokenHexAlpha('--color-level-cb', 0.55), true, 1))
+        if (touch > p.end || touch === lastT) lines.push(line(`${ss.key}:npoc`, p.end, touch, pocY, tokenHexAlpha('--color-vt-paper', 0.9), true, 1))
       }
       if (latest) {
         for (const [k, y, txt, col] of [

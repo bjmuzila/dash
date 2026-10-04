@@ -33,7 +33,7 @@
 import type { RendererLayerArgs, RendererLayerInstance } from '@luxalgo/vela/plugin'
 import { buildRail, type RailLevels } from '@/board/gexCandles/GexRail'
 import { vtLevelsAt } from '@/data/voltickLevels'
-import { readUiTheme } from '@/design/uiTheme'
+import { uiThemeNow } from '@/design/uiTheme'
 import { bool, int, provideLayer, str, studyImpl, type StudyCtx } from './common'
 import { GEX_BASIS, RAIL_TYPE } from './index'
 import { columnsUntil, ladderKey, loadLadder, sessionDates, type Ladder } from './ladder'
@@ -118,7 +118,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
     if (shift == null) return { ...base, head: `${lad.label} GEX`, empty: 'No futures basis for this session' }
     // buildRail reads `net` (OI + vol) or `netVol` (vol); OI only is the difference
     const cells = s.metric === 'oi' ? col.cells.map((x) => ({ ...x, net: x.net - x.netVol })) : col.cells
-    const voltick = readUiTheme() === 'voltick'
+    const voltick = uiThemeNow() === 'voltick'
     const model = buildRail([{ ...col, cells }], s.metric === 'vol' ? 'vol' : 'voloi', voltick)
     const lv: RailLevels = model.levels
     const rows: RailRowOut[] = model.rows.map((r) => {

@@ -1,20 +1,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// LEVEL ALERTS: "tell me when price crosses the call wall". The levels CB Edge
-// already draws, each with a bell.
+// LEVEL ALERTS: "tell me when price crosses the Volt". The levels the chart
+// already draws, each with a bell, in Voltick's names (the page is Voltick's
+// chart; data/voltickLevels.ts):
 //
-//   CB Edge   Call wall, Put wall, CORE    the walls recorder's newest slot (the
-//                                          levels CB Walls draws), on ES / NQ
-//                                          shifted by the day's basis
-//             Gamma flip                   the front chain's zero-gamma strike
+//   Voltick   ★ Volt                       CORE, the walls recorder's newest slot
+//             ◆ Coil                       the wall on CORE's side of price
+//             ↘ Reversal                   the wall on the other side
+//                                          (the levels the walls study draws; on
+//                                          ES / NQ shifted by the day's basis)
+//             ⚡︎ Flip                       the front chain's zero-gamma strike
 //   Session   IB high / low                09:30–10:30 ET, once it has formed
 //             Overnight high / low         the pre-open session (futures: from
 //                                          18:00; stocks: from 04:00)
 //             Open                         today's 09:30 open
 //   Prior     Prior day high / low / close the previous regular session
 //
-// A WALL ALERT FOLLOWS THE WALL. Armed on "Call wall", it fires when price
-// crosses wherever the call wall is at that moment, not where it was when you
-// clicked. Levels are re-read every minute while any alert is armed.
+// AN ALERT FOLLOWS ITS LEVEL. Armed on the Coil, it fires when price crosses
+// whatever strike is the Coil at that moment, not where it was when you
+// clicked. Levels are re-read every minute while any alert is armed. Alerts
+// armed under the old CB Edge names carry over: CORE is the Volt; a call / put
+// wall alert, which has no fixed Voltick name, is dropped.
 //
 // Crossing means the last price went from one side of the level to the other
 // between two ticks of a chart showing that symbol. An alert fires once and
@@ -31,19 +36,39 @@ import { query } from '@/data/api'
 import { chainGexUrl, chainToGex } from '@/board/chainGex'
 import { CbEdgeProvider, resolveSym } from '@/pages/vela/cbedgeProvider'
 import { loadBasis, wallSeriesFor } from '@/pages/vela/wallsIndicator'
+import { vtFromWalls } from '@/pages/levelLog/wallData'
 import { etDateKey, etMinutesOfDay } from '@/pages/vela/studies/common'
 import { replayActive } from '@/pages/vela/replay/clock'
 import { deliverAlert, enableNotify, notifyWanted, tfLabel } from '@/pages/vela/script/alerts'
 import { ARMED_KEY } from './levelAlertsEntry'
 
-export type Group = 'CB Edge' | 'Session' | 'Prior'
+export type Group = 'Voltick' | 'Session' | 'Prior'
+
+const GROUP_LABEL: Record<Group, string> = { Voltick: 'Voltick levels', Session: 'Session', Prior: 'Prior session' }
 
 export interface Level {
   key: string
   name: string
   group: Group
   price: number | null
+  /** A Voltick level's mark (★ ◆ ↘ ⚡︎), drawn in its reserved colour. */
+  mark?: string
+  /** That colour, a `var(--color-vt-…)` string. */
+  tone?: string
 }
+
+/** Voltick's flip mark: ⚡ + VS15, so it is TEXT in the flip's violet, never the orange emoji. */
+const FLIP_MARK = '\u26A1\uFE0E'
+const VT_LEVEL: Record<'volt' | 'coil' | 'reversal' | 'flip', { name: string; mark: string; tone: string }> = {
+  volt: { name: 'Volt', mark: '★', tone: 'var(--color-vt-volt)' },
+  coil: { name: 'Coil', mark: '◆', tone: 'var(--color-vt-coil)' },
+  reversal: { name: 'Reversal', mark: '↘', tone: 'var(--color-vt-reversal)' },
+  flip: { name: 'Flip', mark: FLIP_MARK, tone: 'var(--color-vt-flip)' },
+}
+const vtLevel = (key: keyof typeof VT_LEVEL, price: number | null): Level => ({ key, group: 'Voltick', price, ...VT_LEVEL[key] })
+
+/** A level's name inside a sentence: Voltick names and IB keep their capital. */
+const inSentence = (n: string) => (/^(Volt|Coil|Reversal|Flip|IB)\b/.test(n) ? n : n.charAt(0).toLowerCase() + n.slice(1))
 
 export interface Armed {
   id: string
@@ -82,15 +107,14 @@ async function readLevels(sym: string): Promise<LevelRead> {
     return m >= 570 && m < 960
   }
   const todays = bars.filter((b) => etDateKey(b.time) === today)
-  // CB Edge walls: today's bars only, so the read covers one session
+  // the walls, renamed: today's bars only, so the read covers one session
   try {
     const w = await wallSeriesFor(sym, todays.length ? todays : bars.slice(-80), '5', true)
     const fin = (v: number) => Number.isFinite(v)
-    out.push({ key: 'cw', name: 'Call wall', group: 'CB Edge', price: last(w.callWall, fin) })
-    out.push({ key: 'pw', name: 'Put wall', group: 'CB Edge', price: last(w.putWall, fin) })
-    out.push({ key: 'core', name: 'CORE', group: 'CB Edge', price: last(w.core, fin) })
+    const vt = vtFromWalls(last(w.core, fin), last(w.callWall, fin), last(w.putWall, fin), price)
+    out.push(vtLevel('volt', vt.volt), vtLevel('coil', vt.coil), vtLevel('reversal', vt.reversal))
   } catch {
-    out.push({ key: 'cw', name: 'Call wall', group: 'CB Edge', price: null }, { key: 'pw', name: 'Put wall', group: 'CB Edge', price: null }, { key: 'core', name: 'CORE', group: 'CB Edge', price: null })
+    out.push(vtLevel('volt', null), vtLevel('coil', null), vtLevel('reversal', null))
   }
   // gamma flip off the front chain
   try {
@@ -101,9 +125,9 @@ async function readLevels(sym: string): Promise<LevelRead> {
       const b = await loadBasis(r.fut)
       shift = b.basis > 0 && b.basis < b.max ? b.basis : NaN
     }
-    out.push({ key: 'flip', name: 'Gamma flip', group: 'CB Edge', price: g.flip != null && Number.isFinite(shift) ? g.flip + shift : null })
+    out.push(vtLevel('flip', g.flip != null && Number.isFinite(shift) ? g.flip + shift : null))
   } catch {
-    out.push({ key: 'flip', name: 'Gamma flip', group: 'CB Edge', price: null })
+    out.push(vtLevel('flip', null))
   }
   // session: IB, overnight, open
   const rthToday = todays.filter(rth)
@@ -143,7 +167,10 @@ export function levelsFor(sym: string, fresh = false): Promise<LevelRead> {
 function readArmed(): Armed[] {
   try {
     const j: unknown = JSON.parse(localStorage.getItem(ARMED_KEY) ?? '[]')
-    return Array.isArray(j) ? (j as Armed[]).filter((a) => a && typeof a.sym === 'string' && typeof a.key === 'string') : []
+    if (!Array.isArray(j)) return []
+    return (j as Armed[])
+      .filter((a) => a && typeof a.sym === 'string' && typeof a.key === 'string' && a.key !== 'cw' && a.key !== 'pw')
+      .map((a) => (a.key === 'core' ? { ...a, key: 'volt', name: 'Volt' } : a.key === 'flip' ? { ...a, name: 'Flip' } : a))
   } catch {
     return []
   }
@@ -199,7 +226,7 @@ function onTick(chart: Vela, bar: OHLCV): void {
         symbol: sym,
         timeframe: chart.market.timeframe ?? '5',
         title: `${a.name} ${p >= L ? 'crossed up' : 'crossed down'}`,
-        text: `${sym} ${p.toFixed(2)} crossed the ${a.name.toLowerCase()} at ${L.toFixed(2)}.`,
+        text: `${sym} ${p.toFixed(2)} crossed the ${inSentence(a.name)} at ${L.toFixed(2)}.`,
         barTime: bar.time,
       })
     }
@@ -250,7 +277,31 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: s
   return e
 }
 
-const fmt = (v: number | null) => (v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+const fmt = (v: number | null) => (v == null || !Number.isFinite(v) ? '·' : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+
+/** Voltick's bell (theme.jsx IC.bell), stroked in currentColor: an emoji bell is
+ *  painted gold by the system font, and gold is the Volt's. */
+function bellIcon(off: boolean): SVGSVGElement {
+  const NS = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('width', '14')
+  svg.setAttribute('height', '14')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '2.2')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  const paths = ['M18 9a6 6 0 1 0-12 0c0 4.4-1.5 5.8-1.5 5.8h15S18 13.4 18 9z', 'M13.7 19a2 2 0 0 1-3.4 0']
+  if (off) paths.push('M4 4l16 16')
+  for (const d of paths) {
+    const p = document.createElementNS(NS, 'path')
+    p.setAttribute('d', d)
+    svg.appendChild(p)
+  }
+  return svg
+}
 
 export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onChart: () => void; destroy: () => void } {
   const root = el('div', 'cb-lv')
@@ -265,26 +316,34 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
     const head = el('div', 'cb-lv-head')
     head.append(el('span', 'cb-lv-sym', sym), el('span', 'cb-lv-px', read?.price != null ? fmt(read.price) : ''))
     root.append(head)
-    root.append(el('p', 'cb-lv-hint', 'Ring a bell to be told when price crosses that level. Wall alerts follow the wall as it moves. Each fires once.'))
+    root.append(el('p', 'cb-lv-hint', 'Ring a bell to be told when price crosses that level. A Volt, Coil or Reversal alert follows that level as it moves. Each fires once.'))
     if (!read) {
       root.append(el('p', 'cb-lv-hint', 'Reading the levels…'))
     } else {
-      for (const group of ['CB Edge', 'Session', 'Prior'] as Group[]) {
+      for (const group of ['Voltick', 'Session', 'Prior'] as Group[]) {
         const rows = read.levels.filter((l) => l.group === group)
         if (!rows.length) continue
-        root.append(el('div', 'cb-lv-group', group))
+        root.append(el('div', 'cb-lv-group', GROUP_LABEL[group]))
         for (const lv of rows) {
           const row = el('div', 'cb-lv-row')
           const on = isArmed(sym, lv.key)
           row.dataset.on = String(on)
           const dist = read.price != null && lv.price != null ? lv.price - read.price : null
-          const name = el('span', 'cb-lv-name', lv.name)
+          const name = el('span', 'cb-lv-name')
+          if (lv.mark) {
+            // Voltick's Chip: the mark carries the colour, the word stays Paper
+            const mk = el('span', 'cb-lv-mark', lv.mark)
+            if (lv.tone) mk.style.color = lv.tone
+            name.append(mk)
+          }
+          name.append(document.createTextNode(lv.name))
           const val = el('span', 'cb-lv-val', fmt(lv.price))
           const d = el('span', 'cb-lv-dist', dist == null ? '' : `${dist >= 0 ? '+' : '−'}${Math.abs(dist).toFixed(2)}`)
           if (dist != null) d.dataset.tone = dist >= 0 ? 'up' : 'down'
-          const bell = el('button', 'cb-lv-bell', on ? '🔔' : '🔕')
+          const bell = el('button', 'cb-lv-bell')
+          bell.append(bellIcon(!on))
           bell.type = 'button'
-          bell.title = lv.price == null ? 'Not available yet' : on ? 'Armed: click to disarm' : `Alert when ${sym} crosses the ${lv.name.toLowerCase()}`
+          bell.title = lv.price == null ? 'Not available yet' : on ? 'Armed: click to disarm' : `Alert when ${sym} crosses the ${inSentence(lv.name)}`
           bell.disabled = lv.price == null && !on
           bell.setAttribute('aria-pressed', String(on))
           bell.addEventListener('click', () => {

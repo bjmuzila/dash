@@ -189,10 +189,14 @@ export const priorImpl = studyImpl<PriorS, RefLevels | null>({
         }
       }
     }
-    const cD = tokenHexAlpha('--color-series-5', 0.9)
-    const cC = tokenHexAlpha('--color-muted', 0.55)
-    const cW = tokenHexAlpha('--color-series-4', 0.9)
-    const cM = tokenHexAlpha('--color-series-3', 0.9)
+    // Voltick's chart vocabulary: Sky is the previous session; the week and the
+    // month are measurements, so slate and Paper (no valence, no reserved hue).
+    // Hierarchy by dash and weight, not by dimming (Voltick: no grey), so the
+    // legend's values read at full strength too.
+    const cD = tokenHexAlpha('--color-vt-sky', 0.95)
+    const cC = tokenHexAlpha('--color-vt-quiet', 0.95)
+    const cW = tokenHexAlpha('--color-vt-slate', 0.95)
+    const cM = tokenHexAlpha('--color-vt-quiet', 0.95)
     const T = PRIOR_TYPE
     const series: SeriesSpec[] = []
     const labels: DrawingLabel[] = []
@@ -300,9 +304,11 @@ export const ibImpl = studyImpl<IbS, IbStats | null>({
       }
     }
     const T = IB_TYPE
-    const cIb = tokenHexAlpha('--color-series-1', 0.95)
-    const cMid = tokenHexAlpha('--color-series-1', 0.5)
-    const cExt = tokenHexAlpha('--color-series-1', 0.45)
+    // Voltick draws its opening range in slate, the colour that means nothing:
+    // a measurement, not a level the engine found. The IB is that range.
+    const cIb = tokenHexAlpha('--color-vt-slate', 0.95)
+    const cMid = tokenHexAlpha('--color-vt-slate', 0.95)
+    const cExt = tokenHexAlpha('--color-vt-slate', 0.95)
     const series: SeriesSpec[] = []
     const labels: DrawingLabel[] = []
     const add = (key: string, title: string, vals: (number | null)[], color: string, o: { dashed?: boolean; width?: number } = {}) => {
@@ -405,13 +411,14 @@ export const overnightImpl = studyImpl<OnS, OnData>({
       }
     }
     const T = ON_TYPE
-    const cOn = tokenHexAlpha('--color-series-6', 0.9)
+    // Voltick's pre-market high / low colour (PRE_MARKET): the overnight range is that range.
+    const cOn = tokenHexAlpha('--color-vt-premarket', 0.9)
     const series: SeriesSpec[] = []
     const labels: DrawingLabel[] = []
     if (hi.some((v) => v != null)) {
       series.push(seriesOf(T, 'onh', 0, 'ONH', bars, hi, cOn, { width: 1.4, axisChip: false }))
       series.push(seriesOf(T, 'onl', 1, 'ONL', bars, lo, cOn, { width: 1.4, axisChip: false }))
-      if (s.mid) series.push(seriesOf(T, 'onm', 2, 'ON mid', bars, md, tokenHexAlpha('--color-series-6', 0.5), { width: 1, dashed: true, axisChip: false }))
+      if (s.mid) series.push(seriesOf(T, 'onm', 2, 'ON mid', bars, md, tokenHexAlpha('--color-vt-premarket', 0.95), { width: 1, dashed: true, axisChip: false }))
       if (s.tags) labels.push(...tag(T, 'onh', bars, hi[n - 1], 'ONH', cOn), ...tag(T, 'onl', bars, lo[n - 1], 'ONL', cOn))
     }
     return { series, labels }

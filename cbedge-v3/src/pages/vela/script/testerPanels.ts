@@ -46,8 +46,8 @@ function el<K extends keyof HTMLElementTagNameMap>(doc: Document, tag: K, cls: s
 const toneOf = (v: number): Tone => (v > 0 ? 'up' : v < 0 ? 'down' : '')
 const money = (v: number) => `${v < 0 ? '−' : ''}$${Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: Math.abs(v) >= 1000 ? 0 : 2 })}`
 const signed = (v: number) => (v > 0 ? `+${money(v)}` : money(v))
-const pct = (v: number) => (Number.isFinite(v) ? `${v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}%` : '—')
-const price = (v: number) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumFractionDigits: Math.abs(v) >= 100 ? 2 : 4 }) : '—')
+const pct = (v: number) => (Number.isFinite(v) ? `${v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}%` : '·')
+const price = (v: number) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumFractionDigits: Math.abs(v) >= 100 ? 2 : 4 }) : '·')
 const TIME = new Intl.DateTimeFormat('en-US', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' })
 const DATE = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: '2-digit', timeZone: 'America/New_York' })
 const CLOCK = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' })
@@ -112,7 +112,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
   const pasteBox = el(doc, 'div', 'cb-st-paste')
   pasteBox.hidden = true
   const pasteArea = el(doc, 'textarea', 'cb-scr-code cb-st-pastecode')
-  pasteArea.placeholder = 'Paste a TradingView strategy here — it must start with strategy(…)'
+  pasteArea.placeholder = 'Paste a TradingView strategy here: it must start with strategy(…)'
   pasteArea.spellcheck = false
   const pasteRow = el(doc, 'div', 'cb-scr-row')
   const pasteRun = el(doc, 'button', 'cb-scr-btn cb-scr-primary', 'Run on chart')
@@ -228,7 +228,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     const source = pasteArea.value.replace(/\r\n?/g, '\n')
     if (!source.trim()) return pasteArea.focus()
     if (!IS_STRATEGY.test(source)) {
-      pasteMsg.textContent = 'That is an indicator(…) script — it has no trades to test. The tester needs a script that starts with strategy(…).'
+      pasteMsg.textContent = 'That is an indicator(…) script: it has no trades to test. The tester needs a script that starts with strategy(…).'
       return
     }
     pasteRun.disabled = true
@@ -312,7 +312,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
       view.replaceChildren(
         cur.error
           ? el(doc, 'div', 'cb-st-err', cur.error)
-          : el(doc, 'div', 'cb-scr-note', cur.visible ? 'Running the backtest…' : 'It is hidden on the chart — show it (the eye in its legend row) to run the backtest.'),
+          : el(doc, 'div', 'cb-scr-note', cur.visible ? 'Running the backtest…' : 'It is hidden on the chart: show it (the eye in its legend row) to run the backtest.'),
       )
       return
     }
@@ -330,7 +330,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
         ),
       )
     if (cur.info.bars < 1500)
-      notes.push(el(doc, 'div', 'cb-st-tip', `Tested on the ${cur.info.bars.toLocaleString('en-US')} bars the chart has loaded. For a longer test pick a longer range under the chart (1M, 3M) or zoom out — the backtest re-runs on its own.`))
+      notes.push(el(doc, 'div', 'cb-st-tip', `Tested on the ${cur.info.bars.toLocaleString('en-US')} bars the chart has loaded. For a longer test pick a longer range under the chart (1M, 3M) or zoom out: the backtest re-runs on its own.`))
     if (tab === 'optimise') {
       if (!optim || optim.id !== cur.id) {
         optim?.destroy()
@@ -369,7 +369,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     const how = el(doc, 'div', 'cb-st-how')
     how.append(
       el(doc, 'b', '', 'Backtest a strategy on this chart'),
-      el(doc, 'div', 'cb-scr-note', 'Pick one below (or from the menu above) and it goes on the chart and runs straight away: every trade is drawn on the candles, and the results — net profit, drawdown, win rate, the equity curve and the trade list — show here.'),
+      el(doc, 'div', 'cb-scr-note', 'Pick one below (or from the menu above) and it goes on the chart and runs straight away: every trade is drawn on the candles, and the results (net profit, drawdown, win rate, the equity curve and the trade list) show here.'),
     )
     out.push(how)
     out.push(el(doc, 'div', 'cb-st-h', 'Ready-made'))
@@ -408,7 +408,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     if (!target) {
       target = { id: newScriptId(), name: `${cur.title} (my copy)`, source: cur.source, u: Date.now() }
       saveLibrary([...lib, target])
-      note = 'This is your copy of the ready-made strategy — Save, then Add to chart to test your version.'
+      note = 'This is your copy of the ready-made strategy. Save, then Add to chart to test your version.'
     }
     requestEdit(target.id, note)
     ctx.togglePanel(SCRIPTS_PANEL_ID, true)
@@ -438,9 +438,9 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     }
     card('Net profit', signed(st.netProfit), pct((st.netProfit / st.initialCapital) * 100), toneOf(st.netProfit))
     card('Max drawdown', money(st.maxDrawdown), pct(st.maxDrawdownPct), st.maxDrawdown > 0 ? 'down' : '')
-    card('Win rate', closed ? pct((st.wins / closed) * 100) : '—', `${st.wins} of ${closed} trades`)
-    card('Profit factor', Number.isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? '∞' : '—', `+${money(st.grossProfit)} / −${money(st.grossLoss)}`)
-    card('Avg trade', closed ? signed(st.netProfit / closed) : '—', closed ? `win ${money(avgWin)} · loss ${money(avgLoss)}` : 'no closed trades', closed ? toneOf(st.netProfit) : '')
+    card('Win rate', closed ? pct((st.wins / closed) * 100) : '·', `${st.wins} of ${closed} trades`)
+    card('Profit factor', Number.isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? '∞' : '·', `+${money(st.grossProfit)} / −${money(st.grossLoss)}`)
+    card('Avg trade', closed ? signed(st.netProfit / closed) : '·', closed ? `win ${money(avgWin)} · loss ${money(avgLoss)}` : 'no closed trades', closed ? toneOf(st.netProfit) : '')
     card('Open P/L', signed(st.openProfit), st.open.length ? `${st.open.length} open` : 'flat', toneOf(st.openProfit))
 
     // long vs short
@@ -453,8 +453,8 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
       const ts = st.closed.filter((t) => t.dir === dir)
       const net = ts.reduce((s, t) => s + t.profit, 0)
       const w = ts.filter((t) => t.profit > 0).length
-      sides.append(el(doc, 'span', 'cb-st-td', label), el(doc, 'span', 'cb-st-td', String(ts.length)), el(doc, 'span', 'cb-st-td', ts.length ? pct((w / ts.length) * 100) : '—'))
-      const n = el(doc, 'span', 'cb-st-td', ts.length ? signed(net) : '—')
+      sides.append(el(doc, 'span', 'cb-st-td', label), el(doc, 'span', 'cb-st-td', String(ts.length)), el(doc, 'span', 'cb-st-td', ts.length ? pct((w / ts.length) * 100) : '·'))
+      const n = el(doc, 'span', 'cb-st-td', ts.length ? signed(net) : '·')
       if (ts.length) n.dataset.tone = toneOf(net)
       sides.append(n)
     }
@@ -656,7 +656,7 @@ function mountAlerts(ctx: WidgetContext, body: HTMLElement) {
           const usesAlert = latest?.usesAlert ?? /\balert\s*\(/.test(s.source)
           const what = [titles.length ? titles.join(' · ') : '', usesAlert ? 'alert() calls' : ''].filter(Boolean).join(' · ')
           text.append(el(doc, 'div', 'cb-scr-note', what || 'alert conditions'))
-          text.append(el(doc, 'div', 'cb-scr-note', runs.length ? `On ${[...new Set(runs.map((r) => `${r.symbol} ${tfLabel(r.timeframe)}`))].join(', ')}` : 'Not on a chart — add it from Scripts to be alerted'))
+          text.append(el(doc, 'div', 'cb-scr-note', runs.length ? `On ${[...new Set(runs.map((r) => `${r.symbol} ${tfLabel(r.timeframe)}`))].join(', ')}` : 'Not on a chart: add it from Scripts to be alerted'))
           const sw = el(doc, 'button', 'cb-sa-switch')
           sw.type = 'button'
           sw.setAttribute('role', 'switch')
@@ -690,7 +690,7 @@ function mountAlerts(ctx: WidgetContext, body: HTMLElement) {
 
   notify.addEventListener('change', () => {
     void enableNotify(notify.checked).then((on) => {
-      if (notify.checked && !on) ctx.toast('The browser has notifications blocked for this site — alerts still land in the toolbar feed', 'info')
+      if (notify.checked && !on) ctx.toast('The browser has notifications blocked for this site: alerts still land in the toolbar feed', 'info')
       render()
     })
   })

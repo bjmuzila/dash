@@ -71,11 +71,11 @@ function btn(doc: Document, cls: string, text: string, title?: string): HTMLButt
   return b
 }
 
-const fmtPrice = (v: number | null) => (v == null ? '—' : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
-const fmtChg = (v: number | null) => (v == null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
-const fmtPct = (v: number | null) => (v == null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(2)}%`)
+const fmtPrice = (v: number | null) => (v == null ? '·' : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+const fmtChg = (v: number | null) => (v == null ? '·' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+const fmtPct = (v: number | null) => (v == null ? '·' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(2)}%`)
 function fmtVol(v: number | null): string {
-  if (v == null) return '—'
+  if (v == null) return '·'
   const a = Math.abs(v)
   return a >= 1e9 ? `${(a / 1e9).toFixed(1)}B` : a >= 1e6 ? `${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${(a / 1e3).toFixed(0)}K` : String(Math.round(a))
 }
@@ -107,7 +107,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
     ctx.togglePanel(WATCHLIST_PANEL_ID, false)
     void import('./advanced').then(
       (m) => m.openAdvanced(ctx),
-      () => ctx.toast('Couldn’t load the advanced view — try again', 'error'),
+      () => ctx.toast('Couldn’t load the advanced view: try again', 'error'),
     )
   }
 
@@ -232,7 +232,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
     const here = chartTicker(ctx)
     const shown = cols().filter((c) => c.on)
     if (!syms.length) {
-      rowsBox.replaceChildren(el(doc, 'div', 'cb-wl-empty', 'This list is empty — add a symbol above.'))
+      rowsBox.replaceChildren(el(doc, 'div', 'cb-wl-empty', 'This list is empty: add a symbol above.'))
     } else {
       rowsBox.replaceChildren(
         ...syms.map((sym) => {
@@ -289,7 +289,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
         : st === 'ok'
           ? 'Synced with your account.'
           : st === 'error'
-            ? 'Couldn’t sync — kept in this browser.'
+            ? 'Couldn’t sync: kept in this browser.'
             : ''
   }
 
@@ -484,7 +484,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
       r.append(yes, no)
       pop.replaceChildren(
         el(doc, 'div', 'cb-wl-poptitle', `Delete “${l.name}”?`),
-        el(doc, 'div', 'cb-wl-note', lists().length > 1 ? `Its ${l.symbols.length} symbols go with it.` : 'It is your only list — its symbols are cleared and the list kept.'),
+        el(doc, 'div', 'cb-wl-note', lists().length > 1 ? `Its ${l.symbols.length} symbols go with it.` : 'It is your only list: its symbols are cleared and the list kept.'),
         r,
       )
     })

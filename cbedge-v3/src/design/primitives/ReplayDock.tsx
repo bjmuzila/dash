@@ -24,6 +24,9 @@
 // a portal moves the DOM, not the React tree.
 //
 // ── The dock is orange because only ONE thing ever docks here ────────────────
+// (Orange is T.replay, --color-replay: the warn amber on CB Edge. On the Voltick
+// theme it is Volt Blue, Voltick's own replay colour, because Voltick's amber is
+// reserved for the Volt.)
 // Every other bar in this app is neutral. A rewound grid that does not announce
 // itself reads as a live one, which is the single worst way any of these
 // surfaces can be misunderstood — so the announcement is the whole bottom edge
@@ -79,8 +82,8 @@ export function ReplayDockHost({ children }: { children: ReactNode }) {
             // In flow, not fixed. See the header.
             position: 'relative',
             zIndex: 40,
-            borderTop: `1px solid ${alpha(T.orange, 0.35)}`,
-            background: `linear-gradient(180deg,${alpha(T.orange, 0.1)},${alpha(T.orange, 0.03)}), ${alpha(
+            borderTop: `1px solid ${alpha(T.replay, 0.35)}`,
+            background: `linear-gradient(180deg,${alpha(T.replay, 0.1)},${alpha(T.replay, 0.03)}), ${alpha(
               T.panel,
               0.92,
             )}`,
@@ -201,9 +204,9 @@ export function ReplayLock({
         fontSize: 'var(--text-2xs)',
         fontWeight: 800,
         letterSpacing: '0.04em',
-        color: on ? T.orange : T.muted,
-        background: on ? alpha(T.orange, 0.16) : alpha(T.text, 0.05),
-        border: `1px solid ${on ? alpha(T.orange, 0.55) : T.border}`,
+        color: on ? T.replayText : T.muted,
+        background: on ? alpha(T.replay, 0.16) : alpha(T.text, 0.05),
+        border: `1px solid ${on ? alpha(T.replay, 0.55) : T.border}`,
       }}
     >
       {on ? '🔒 Axis' : '🔓 Axis'}

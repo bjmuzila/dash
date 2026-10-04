@@ -1,10 +1,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // THE VELA REPLAY DOCK: the transport for bar replay on /vela. It sits in the
-// same orange bottom bar as every other v3 replay (design/primitives/ReplayDock),
-// with the same keys in the same order:
+// same bottom bar as every other v3 replay (design/primitives/ReplayDock), with
+// the same keys in the same order. The page is Voltick's chart, so the dock wears
+// Voltick's replay language: Volt Blue rim and wash (--color-replay), Accent Text
+// for the words, the active key filled Volt Blue, every number in mono, captions
+// in Paper Quiet (never a dimmed Paper), and green / red on the P&L figures and
+// the ▲ ▼ marks only, never on a button face.
 //
 //   REPLAY  Fri Oct 2 · 13:51 ET  · 120 bars left
-//   ◀  ▶/❚❚  ▶    ━━━━●━━━━━━━━   Speed 0.5× 1× 2× 4× 8×   Ticks   🔒 Axis   Jump   Live
+//   ◀  ▶/❚❚  ▶    ━━━━●━━━━━━━━   Speed 0.5× 1× 2× 4× 8×   Ticks   Lock axis   Jump   Live
 //
 //   ◀ / ▶      one bar back / forward. Back re-cuts the history one bar
 //              earlier; Vela cannot un-reveal a bar.
@@ -14,7 +18,7 @@
 //              (ticks.ts), so a 5m bar forms over five 1-minute updates the way
 //              it did live. Needs a one-chart layout (Vela's rule); with
 //              several charts the bars land whole.
-//   🔒 Axis    freezes the price axis so it stops rescaling while you step.
+//   Lock axis  freezes the price axis so it stops rescaling while you step.
 //   Jump       reopens the start picker.
 //   Live       leaves replay: the full history comes back and live updates resume.
 //
@@ -43,7 +47,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { timeframeToMs } from '@luxalgo/vela'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
-import { ReplayDock, ReplayLock } from '@/design/primitives/ReplayDock'
+import { ReplayDock } from '@/design/primitives/ReplayDock'
 import { T } from '@/design/theme'
 import { etDateKey, etWallMs } from '@/pages/vela/studies/common'
 import { LIVE_ONLY } from '@/pages/vela/studies'
@@ -123,22 +127,21 @@ function TransportButton({
       title={title}
       aria-pressed={on}
       disabled={disabled}
-      className={[
-        'tabular shrink-0 rounded-sm border px-2 py-0.5 font-mono text-2xs font-extrabold leading-none',
-        on ? 'border-transparent text-bg' : 'border-line text-fg hover:bg-raised',
-        disabled ? 'cursor-default opacity-40' : 'cursor-pointer',
-      ].join(' ')}
-      style={on ? { background: T.orange } : undefined}
+      className="cb-vt-key tabular shrink-0 rounded-sm border px-2 py-1 font-mono text-2xs font-extrabold leading-none"
     >
       {label}
     </button>
   )
 }
 
-const chip =
-  'shrink-0 cursor-pointer rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg'
+// The look (Voltick's wash, lit active state, hovers) is vela.css's .cb-vt-* so
+// the shared stylesheet does not grow for one lazy dock.
+const chip = 'cb-vt-key shrink-0 rounded-sm border px-2 py-1 text-2xs font-semibold'
 const field =
-  'tabular shrink-0 rounded-sm border border-line bg-raised px-1.5 py-0.5 font-mono text-2xs font-extrabold text-fg outline-none hover:border-accent focus:border-accent'
+  'tabular shrink-0 rounded-sm border border-line bg-bg px-1.5 py-0.5 font-mono text-2xs font-extrabold text-fg outline-none hover:border-accent focus:border-accent'
+const replayInk = { color: T.replayText }
+/** Voltick's uppercase label: mono, 600, tracked. */
+const caps = 'shrink-0 font-mono font-semibold uppercase tracking-[0.08em]'
 
 export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
   const s = useSyncExternalStore(replayStore.subscribe, replayStore.get)
@@ -348,7 +351,7 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
     : []
 
   const label = (
-    <span className="shrink-0 font-black uppercase tracking-[0.1em]" style={{ color: T.orange }}>
+    <span className={`${caps} text-2xs`} style={{ color: T.replayText }}>
       Replay
     </span>
   )
@@ -359,7 +362,7 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-xs">
           {label}
           <span className="shrink-0 font-semibold text-fg">Click a bar on the chart to replay from it</span>
-          <span className="shrink-0 text-2xs text-muted opacity-70">or</span>
+          <span className="shrink-0 text-2xs text-faint">or</span>
           <span className="flex shrink-0 flex-wrap items-center gap-1">
             {quick.map((q) => (
               <button key={q.label} type="button" className={chip} onClick={() => fromOpen(q.day)} title="Start at that session's 9:30 ET open">
@@ -370,12 +373,16 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
           <span className="flex shrink-0 items-center gap-1" title="The first bar to reveal, ET">
             <input type="date" className={field} value={date} max={etDateKey(last)} onChange={(e) => setDate(e.target.value)} aria-label="Replay date" />
             <input type="time" className={field} value={time} onChange={(e) => setTime(e.target.value)} aria-label="Replay time, ET" />
-            <span className="text-2xs text-muted opacity-70">ET</span>
+            <span className="font-mono text-2xs text-faint">ET</span>
             <TransportButton label="Go" title="Start the replay at that date and time" onClick={fromTyped} />
           </span>
-          {s.note && <span className="shrink-0 text-2xs font-semibold text-warn">{s.note}</span>}
+          {s.note && (
+            <span className="shrink-0 text-2xs font-semibold" style={replayInk}>
+              {s.note}
+            </span>
+          )}
           <span className="ml-auto flex shrink-0 items-center gap-2">
-            <span className="hidden text-2xs text-muted opacity-60 sm:inline">Esc to cancel</span>
+            <span className="hidden text-2xs text-faint sm:inline">Esc to cancel</span>
             <button type="button" className={chip} onClick={closePicker} title={on ? 'Back to the replay' : 'Close the picker'}>
               {on ? 'Back' : 'Cancel'}
             </button>
@@ -399,7 +406,7 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
         <span className="tabular shrink-0 font-mono font-extrabold text-fg" title="How far the replay has got, ET">
           {at != null ? `${ET_DAY.format(new Date(at))} · ${ET_TIME.format(new Date(at))} ET` : '--:--'}
         </span>
-        <span className="shrink-0 text-2xs text-muted opacity-70">
+        <span className="tabular shrink-0 font-mono text-2xs text-faint">
           {st.remaining === 1 ? '1 bar left' : `${st.remaining.toLocaleString()} bars left`}
         </span>
 
@@ -417,13 +424,14 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
           value={Math.max(first, Math.min(lastBar, pos))}
           disabled={!bounds || lastBar <= first}
           onChange={(e) => onScrub(Number(e.target.value))}
-          className="h-1 min-w-[140px] flex-1 cursor-pointer accent-[var(--color-warn)]"
+          className="h-1 min-w-[140px] flex-1 cursor-pointer"
+          style={{ accentColor: T.replay }}
           aria-label="Replay position"
           title="Drag to jump anywhere in the loaded history"
         />
 
         <span className="flex shrink-0 items-center gap-1">
-          <span className="text-2xs font-bold text-muted opacity-60">Speed</span>
+          <span className={`${caps} text-3xs text-faint`}>Speed</span>
           {SPEEDS.map((v) => (
             <TransportButton key={v} label={`${v}×`} title={`Play at ${v}×`} on={speed === v} onClick={() => setSpeed(v)} />
           ))}
@@ -443,7 +451,8 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
           onClick={toggleTicks}
         />
 
-        <ReplayLock
+        <TransportButton
+          label="Lock axis"
           on={lock}
           onClick={() => setLock((v) => !v)}
           title={
@@ -469,11 +478,15 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
         {showLog && <PaperLog trades={paper.trades} onClose={() => setShowLog(false)} />}
 
         {hidden.length > 0 && (
-          <span className="shrink-0 text-2xs text-muted opacity-70" title="These studies read today's numbers only, so they blank while you replay">
+          <span className="shrink-0 text-2xs text-faint" title="These studies read today's numbers only, so they blank while you replay">
             {hidden.join(' · ')} hidden (live only)
           </span>
         )}
-        {s.note && <span className="shrink-0 text-2xs font-semibold text-warn">{s.note}</span>}
+        {s.note && (
+          <span className="shrink-0 text-2xs font-semibold" style={replayInk}>
+            {s.note}
+          </span>
+        )}
 
         <span className="ml-auto flex shrink-0 items-center gap-2">
           <button type="button" className={chip} onClick={openPicker} title="Pick another start: click a bar, a session open, or a date and time">
@@ -496,7 +509,7 @@ const usd = (v: number) => {
   return `${v < 0 ? '−' : v > 0 ? '+' : ''}$${a.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })}`
 }
 const signed = (v: number) => `${v < 0 ? '−' : v > 0 ? '+' : ''}${Math.abs(v).toFixed(2)}`
-const tone = (v: number) => (v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-muted')
+const tone = (v: number) => (v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-fg')
 
 function PaperKeys(p: {
   qty: number
@@ -514,16 +527,18 @@ function PaperKeys(p: {
   const q = replayQuote()
   const open = q ? paperOpen(q.price) : { pts: 0, usd: 0 }
   const realized = p.trades.reduce((t, x) => t + x.usd, 0)
-  const key = 'tabular shrink-0 cursor-pointer rounded-sm px-2 py-0.5 font-mono text-2xs font-extrabold leading-none'
+  // Voltick's Chip: the body and the word stay Paper, the direction rides on the
+  // mark alone (▲ green, ▼ red). Green / red are data on this page, never a face.
+  const key = 'cb-vt-key tabular inline-flex shrink-0 items-center gap-1 rounded-sm border px-2 py-1 font-mono text-2xs font-extrabold leading-none'
   return (
     <span className="flex shrink-0 items-center gap-1" title="Paper trading: market orders fill at the replay price">
-      <button type="button" className={`${key} bg-up text-bg`} onClick={p.onBuy} disabled={!q} title="Buy at the replay price (Shift+B)">
-        Buy
+      <button type="button" className={key} onClick={p.onBuy} disabled={!q} title="Buy at the replay price (Shift+B)">
+        <span className="text-up">▲</span>Buy
       </button>
-      <button type="button" className={`${key} bg-down text-bg`} onClick={p.onSell} disabled={!q} title="Sell at the replay price (Shift+S)">
-        Sell
+      <button type="button" className={key} onClick={p.onSell} disabled={!q} title="Sell at the replay price (Shift+S)">
+        <span className="text-down">▼</span>Sell
       </button>
-      <button type="button" className={`${key} border border-line text-fg hover:bg-raised`} onClick={p.onFlat} disabled={!p.pos} title="Close the position (Shift+F)">
+      <button type="button" className={key} onClick={p.onFlat} disabled={!p.pos} title="Close the position (Shift+F)">
         Flat
       </button>
       <input
@@ -539,29 +554,41 @@ function PaperKeys(p: {
       <span className="tabular shrink-0 font-mono text-2xs">
         {p.pos ? (
           <>
-            <span className={p.pos > 0 ? 'text-up' : 'text-down'}>
+            <span className={p.pos > 0 ? 'text-up' : 'text-down'}>{p.pos > 0 ? '▲' : '▼'}</span>
+            <span className="text-fg">
+              {' '}
               {p.pos > 0 ? 'Long' : 'Short'} {Math.abs(p.pos)}
             </span>
-            <span className="text-muted"> @ {p.avg.toFixed(2)} </span>
+            <span className="text-faint"> @ {p.avg.toFixed(2)} </span>
             <span className={tone(open.pts)} title={`${signed(open.pts)} points × $${pointValue(p.sym ?? '')}`}>
               {usd(open.usd)}
             </span>
           </>
         ) : (
-          <span className="text-muted opacity-70">Flat</span>
+          <span className="text-faint">Flat</span>
         )}
-        <span className="text-muted opacity-60"> · Day </span>
+        <span className="text-faint"> · Day </span>
         <span className={tone(realized)}>{usd(realized)}</span>
       </span>
       <button
         type="button"
         onClick={p.toggleLog}
         aria-pressed={p.showLog}
-        className="shrink-0 cursor-pointer rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg"
+        className={chip}
         title="The paper trade log"
       >
         Trades{p.trades.length ? ` (${p.trades.length})` : ''}
       </button>
+    </span>
+  )
+}
+
+/** One figure in the log's header: a Paper Quiet caption, the number in mono. */
+function Stat({ label, cls = 'text-fg', children }: { label: string; cls?: string; children: React.ReactNode }) {
+  return (
+    <span className="flex items-baseline gap-1 text-2xs">
+      <span className="text-faint">{label}</span>
+      <span className={`tabular font-mono font-extrabold ${cls}`}>{children}</span>
     </span>
   )
 }
@@ -584,44 +611,46 @@ function PaperLog({ trades, onClose }: { trades: readonly PaperTrade[]; onClose:
   }
   return (
     <div
-      className="cb-paper-log absolute bottom-full right-4 z-50 mb-2 flex max-h-[340px] w-[min(560px,calc(100vw-32px))] flex-col rounded-md border border-line bg-surface text-xs shadow-lg"
+      className="cb-paper-log cb-vt-pop absolute bottom-full right-4 z-50 mb-2 flex max-h-[340px] w-[min(560px,calc(100vw-32px))] flex-col rounded-lg border border-line text-xs"
       role="dialog"
       aria-label="Paper trades"
     >
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-2">
-        <span className="font-black uppercase tracking-[0.1em]" style={{ color: T.orange }}>
+        <span className={`${caps} text-2xs`} style={{ color: T.replayText }}>
           Paper trades
         </span>
-        <span className="text-2xs text-muted">{st.n} trades</span>
-        <span className="text-2xs text-muted">Win {st.n ? Math.round((st.wins / st.n) * 100) : 0}%</span>
-        <span className={`tabular font-mono text-2xs font-extrabold ${tone(st.net)}`}>Net {usd(st.net)}</span>
-        <span className="text-2xs text-muted">PF {Number.isFinite(st.pf) ? st.pf.toFixed(2) : '∞'}</span>
-        <span className="text-2xs text-muted">Max DD {usd(-st.maxDd)}</span>
-        <span className="text-2xs text-muted">
-          Avg {usd(st.avgWin)} / {usd(-st.avgLoss)}
-        </span>
-        <button type="button" onClick={onClose} className="ml-auto cursor-pointer text-muted hover:text-fg" aria-label="Close">
+        <Stat label="Trades">{st.n}</Stat>
+        <Stat label="Win">{st.n ? Math.round((st.wins / st.n) * 100) : 0}%</Stat>
+        <Stat label="Net" cls={tone(st.net)}>
+          {usd(st.net)}
+        </Stat>
+        <Stat label="PF">{Number.isFinite(st.pf) ? st.pf.toFixed(2) : '∞'}</Stat>
+        <Stat label="Max DD">{usd(-st.maxDd)}</Stat>
+        <Stat label="Avg">
+          {usd(st.avgWin)} / {usd(-st.avgLoss)}
+        </Stat>
+        <button type="button" onClick={onClose} className="cb-vt-x ml-auto cursor-pointer text-fg" aria-label="Close">
           ✕
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {rows.length === 0 ? (
-          <div className="px-3 py-4 text-2xs text-muted opacity-70">No paper trades yet. Buy or Sell while the replay runs.</div>
+          <div className="px-3 py-4 text-2xs text-faint">No paper trades yet. Buy or Sell while the replay runs.</div>
         ) : (
           <table className="tabular w-full font-mono text-2xs">
             <tbody>
               {rows.map((t, k) => (
                 <tr key={`${t.exitT}-${k}`} className="border-b border-line/50">
-                  <td className="px-3 py-1 text-muted">{LOG_TIME.format(new Date(t.entryT))}</td>
-                  <td className={`py-1 ${t.dir > 0 ? 'text-up' : 'text-down'}`}>
-                    {t.dir > 0 ? 'Long' : 'Short'} {t.qty} {t.sym}
+                  <td className="px-3 py-1 text-faint">{LOG_TIME.format(new Date(t.entryT))}</td>
+                  <td className="py-1 text-fg">
+                    <span className={t.dir > 0 ? 'text-up' : 'text-down'}>{t.dir > 0 ? '▲' : '▼'}</span> {t.dir > 0 ? 'Long' : 'Short'} {t.qty} {t.sym}
                   </td>
                   <td className="py-1 text-fg">
                     {t.entry.toFixed(2)} → {t.exit.toFixed(2)}
                   </td>
                   <td className={`py-1 text-right ${tone(t.pts)}`}>{signed(t.pts)}</td>
                   <td className={`px-3 py-1 text-right font-extrabold ${tone(t.usd)}`}>{usd(t.usd)}</td>
-                  <td className="pr-3 py-1 text-muted opacity-60">{t.note ?? ''}</td>
+                  <td className="pr-3 py-1 text-faint">{t.note ?? ''}</td>
                 </tr>
               ))}
             </tbody>
@@ -649,7 +678,7 @@ function PaperLog({ trades, onClose }: { trades: readonly PaperTrade[]; onClose:
         >
           {sure ? 'Click again to reset' : 'Reset'}
         </button>
-        <span className="ml-auto text-2xs text-muted opacity-60">Kept in this browser</span>
+        <span className="ml-auto text-2xs text-faint">Kept in this browser</span>
       </div>
     </div>
   )

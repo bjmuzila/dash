@@ -7,15 +7,21 @@
 //                         04:00; none for an index)
 //   IB 17.5 · 0.8× avg    today's initial balance (09:30–10:30) against its
 //                         average over the last 20 sessions; "forming" until 10:30
-//   CW +17.1 · PW −32.9 · CORE −7.9
-//                         distance from price to each CB Edge wall (the recorder's
-//                         newest slot), positive = above
+//   ★ VOLT +17.1 · ◆ COIL −7.9 · ↘ REV −32.9 · ⚡︎ FLIP +4.0
+//                         distance from price to each Voltick level (the walls
+//                         recorder's newest slot, renamed: CORE is the Volt, the
+//                         wall on its side of price the Coil, the other the
+//                         Reversal; the flip off the front chain), positive = above.
+//                         Each mark in its reserved colour, the word in Paper.
 //   EM ±41.2 · 62% used   the day's frozen expected move and how much of it the
 //                         move from the prior close has used
 //
 // Refreshed every 30 s, the price on every tick of the active chart. The Session
 // stats button in the chart toolbar hides or shows it (off by default on the
 // phone). It hides itself during a bar replay: its numbers are live ones.
+//
+// Voltick's type: every number in mono, every label a mono uppercase caption in
+// Paper Quiet (never a dimmed Paper), green / red on the change figures only.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
@@ -36,7 +42,7 @@ interface Stats {
   prevClose: number | null
   on: { hi: number; lo: number } | null
   ib: { size: number; avg: number | null; forming: boolean } | null
-  walls: { cw: number | null; pw: number | null; core: number | null }
+  levels: { volt: number | null; coil: number | null; reversal: number | null; flip: number | null }
   em: DailyEmBand | null
 }
 
@@ -79,19 +85,33 @@ async function readStats(sym: string): Promise<{ stats: Stats; last: number | nu
   const pick = (k: string) => lv?.levels.find((l) => l.key === k)?.price ?? null
   const em = parseDailyEm(emJson)
   return {
-    stats: { sym, prevClose, on, ib, walls: { cw: pick('cw'), pw: pick('pw'), core: pick('core') }, em: em && em.date === today ? em : null },
+    stats: { sym, prevClose, on, ib, levels: { volt: pick('volt'), coil: pick('coil'), reversal: pick('reversal'), flip: pick('flip') }, em: em && em.date === today ? em : null },
     last,
   }
 }
 
 const num = (v: number, d = 2) => v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })
 const sgn = (v: number, d = 1) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(d)}`
-const toneCls = (v: number) => (v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-muted')
+const toneCls = (v: number) => (v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-fg')
 
-function Item({ label, children, title }: { label: string; children: React.ReactNode; title: string }) {
+/** Voltick's four levels as the strip names them: mark, chip code, reserved colour. */
+const FLIP_MARK = '\u26A1\uFE0E'
+const VT_ITEMS = [
+  { key: 'volt', mark: '★', code: 'VOLT', name: 'Volt', tone: 'var(--color-vt-volt)' },
+  { key: 'coil', mark: '◆', code: 'COIL', name: 'Coil', tone: 'var(--color-vt-coil)' },
+  { key: 'reversal', mark: '↘', code: 'REV', name: 'Reversal', tone: 'var(--color-vt-reversal)' },
+  { key: 'flip', mark: FLIP_MARK, code: 'FLIP', name: 'Flip', tone: 'var(--color-vt-flip)' },
+] as const
+
+function Item({ label, mark, tone, children, title }: { label: string; mark?: string; tone?: string; children: React.ReactNode; title: string }) {
   return (
     <span className="flex shrink-0 items-baseline gap-1" title={title}>
-      <span className="text-3xs font-bold uppercase tracking-[0.08em] text-muted opacity-70">{label}</span>
+      {mark && (
+        <span className="text-2xs font-extrabold" style={{ color: tone }}>
+          {mark}
+        </span>
+      )}
+      <span className="font-mono text-3xs font-semibold uppercase tracking-[0.08em] text-faint">{label}</span>
       <span className="tabular font-mono text-2xs font-extrabold text-fg">{children}</span>
     </span>
   )
@@ -158,41 +178,44 @@ export default function SessionStrip({ ws, onHide }: { ws: VelaWorkspace; onHide
   const emUsed = s?.em && px != null && s.em.em > 0 ? (Math.abs(px - s.em.refClose) / s.em.em) * 100 : null
 
   return (
-    <div className="cb-strip flex min-w-0 shrink-0 items-center gap-4 overflow-x-auto border-b border-line px-3 py-1 text-xs" role="status" aria-label="Session stats">
+    <div className="cb-strip flex min-w-0 shrink-0 items-center gap-4 overflow-x-auto border-b border-line bg-surface2 px-3 py-1 text-xs" role="status" aria-label="Session stats">
       <span className="flex shrink-0 items-baseline gap-1.5">
         <span className="font-black tracking-wide text-fg">{sym}</span>
-        <span className="tabular font-mono text-2xs font-extrabold text-fg">{px != null ? num(px) : '—'}</span>
+        <span className="tabular font-mono text-2xs font-extrabold text-fg">{px != null ? num(px) : '·'}</span>
         {chg != null && <span className={`tabular font-mono text-2xs font-extrabold ${toneCls(chg)}`}>{sgn(chg, 2)}%</span>}
       </span>
       {!s ? (
-        <span className="text-2xs text-muted opacity-60">Reading the session…</span>
+        <span className="text-2xs text-faint">Reading the session…</span>
       ) : (
         <>
           {s.on && (
             <Item label="ON" title="The overnight range, before the 09:30 open">
-              {num(s.on.lo, s.on.lo > 1000 ? 0 : 2)}–{num(s.on.hi, s.on.hi > 1000 ? 0 : 2)} <span className="text-muted">({num(s.on.hi - s.on.lo, 1)})</span>
+              {num(s.on.lo, s.on.lo > 1000 ? 0 : 2)}–{num(s.on.hi, s.on.hi > 1000 ? 0 : 2)} <span className="text-faint">({num(s.on.hi - s.on.lo, 1)})</span>
             </Item>
           )}
           {s.ib && (
             <Item label="IB" title="Today's initial balance (09:30–10:30) and how it compares with the last 20 sessions' average">
               {num(s.ib.size, 1)}
-              {s.ib.avg != null && <span className="text-muted"> · {(s.ib.size / s.ib.avg).toFixed(1)}× avg</span>}
-              {s.ib.forming && <span className="text-muted"> · forming</span>}
+              {s.ib.avg != null && <span className="text-faint"> · {(s.ib.size / s.ib.avg).toFixed(1)}× avg</span>}
+              {s.ib.forming && <span className="text-faint"> · forming</span>}
             </Item>
           )}
-          {(['cw', 'pw', 'core'] as const).map((k) => {
-            const d = dist(s.walls[k])
+          {VT_ITEMS.map((v) => {
+            const lv = s.levels[v.key]
+            const d = dist(lv)
             if (d == null) return null
+            // CORE sits on one of the walls, so the Coil is often the Volt's own strike: say it once
+            if (v.key === 'coil' && lv === s.levels.volt) return null
             return (
-              <Item key={k} label={k === 'core' ? 'CORE' : k.toUpperCase()} title={`${k === 'cw' ? 'Call wall' : k === 'pw' ? 'Put wall' : 'CORE'} at ${num(s.walls[k]!)}: distance from price`}>
-                <span className={toneCls(d)}>{sgn(d)}</span>
+              <Item key={v.key} label={v.code} mark={v.mark} tone={v.tone} title={`${v.name} at ${num(lv!)}: distance from price`}>
+                {sgn(d)}
               </Item>
             )
           })}
           {s.em && (
             <Item label="EM" title={`Today's expected move (±1σ from the prior close ${num(s.em.refClose)}) and how much of it is used`}>
               ±{num(s.em.em, 1)}
-              {emUsed != null && <span className={emUsed >= 100 ? 'text-warn' : 'text-muted'}> · {Math.round(emUsed)}% used</span>}
+              {emUsed != null && <span className={emUsed >= 100 ? 'font-extrabold text-fg' : 'text-faint'}> · {Math.round(emUsed)}% used</span>}
             </Item>
           )}
           {s.prevClose != null && (
@@ -202,7 +225,7 @@ export default function SessionStrip({ ws, onHide }: { ws: VelaWorkspace; onHide
           )}
         </>
       )}
-      <button type="button" onClick={onHide} className="ml-auto shrink-0 cursor-pointer px-1 text-2xs text-muted hover:text-fg" title="Hide the session stats (the toolbar's Session stats button brings them back)" aria-label="Hide session stats">
+      <button type="button" onClick={onHide} className="cb-vt-x ml-auto shrink-0 cursor-pointer px-1 text-2xs text-fg" title="Hide the session stats (the toolbar's Session stats button brings them back)" aria-label="Hide session stats">
         ✕
       </button>
     </div>

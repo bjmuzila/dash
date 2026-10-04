@@ -53,7 +53,8 @@ export interface WhalePayload {
   bubbles: WhaleBubble[]
 }
 
-const TONE_TOKEN: Record<Tone, string> = { up: '--color-up', down: '--color-down', mid: '--color-muted' }
+// green bullish, red bearish (data), Paper Quiet when the side is unknown
+const TONE_TOKEN: Record<Tone, string> = { up: '--color-up', down: '--color-down', mid: '--color-vt-quiet' }
 
 const hb = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0')
 const hexA = (c: RGB, a: number) => `#${hb(c[0])}${hb(c[1])}${hb(c[2])}${hb(Math.max(0, Math.min(1, a)) * 255)}`
@@ -319,7 +320,8 @@ let fontMemo = ''
 function getFont(canvas: HTMLCanvasElement): string {
   if (fontMemo) return fontMemo
   try {
-    fontMemo = getComputedStyle(canvas).fontFamily || 'system-ui, sans-serif'
+    // Voltick: every number is mono, and the bubble's text is a premium
+    fontMemo = getComputedStyle(canvas).getPropertyValue('--font-mono').trim() || 'ui-monospace, monospace'
   } catch {
     fontMemo = 'system-ui, sans-serif'
   }

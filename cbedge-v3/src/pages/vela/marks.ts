@@ -57,18 +57,22 @@ const GROUPS: MarkGroup[] = [
   { id: 'econ-high', label: 'High impact', parent: 'econ' },
   { id: 'econ-med', label: 'Medium impact', parent: 'econ' },
   { id: 'econ-low', label: 'Low impact', parent: 'econ', visible: false },
-  { id: 'signals', label: 'CB Edge signals' },
+  // Voltick never says "signal": the engine's events are alerts (the id stays)
+  { id: 'signals', label: 'Engine alerts' },
   { id: 'script', label: 'Your script alerts' },
 ]
 
+// Voltick's vocabulary: the flip wears the flip's violet and CORE is the Volt
+// (amber); everything else stays off the reserved hues (slate for the IB, a
+// measurement; Accent Text and Paper for the rest).
 const SIGNAL_LOOK: Record<string, { letter: string; token: string; name: string }> = {
-  flip_cross: { letter: 'F', token: '--color-series-4', name: 'GEX flip cross' },
-  core_change: { letter: 'C', token: '--color-level-cb', name: 'CORE change' },
-  core_touch: { letter: 'T', token: '--color-level-cb', name: 'CORE touch' },
-  ib_formed: { letter: 'I', token: '--color-series-5', name: 'IB formed' },
-  ib_break: { letter: 'B', token: '--color-series-3', name: 'IB break' },
-  whale_print: { letter: 'W', token: '--color-level-pw', name: 'Whale print' },
-  gex_change_top: { letter: 'G', token: '--color-up', name: 'Top GEX change' },
+  flip_cross: { letter: 'F', token: '--color-vt-flip', name: 'Flip cross' },
+  core_change: { letter: 'V', token: '--color-vt-volt', name: 'Volt change' },
+  core_touch: { letter: 'T', token: '--color-vt-volt', name: 'Volt touch' },
+  ib_formed: { letter: 'I', token: '--color-vt-slate', name: 'IB formed' },
+  ib_break: { letter: 'B', token: '--color-vt-slate', name: 'IB break' },
+  whale_print: { letter: 'W', token: '--color-vt-accent-text', name: 'Whale print' },
+  gex_change_top: { letter: 'G', token: '--color-vt-paper', name: 'Top GEX change' },
 }
 
 const bare = (s: string | undefined) => (s ?? '').replace(/^[^:]*:/, '').trim().toUpperCase()
@@ -90,9 +94,10 @@ function metaOf(r: SignalRow): Record<string, unknown> {
 
 function econMarks(events: CalEvent[]): TimelineMark[] {
   const out: TimelineMark[] = []
-  const high = tokenHex('--color-down')
-  const med = tokenHex('--color-warn')
-  const low = tokenHex('--color-muted')
+  // high is danger (Bad); medium keeps off the Volt's amber
+  const high = tokenHex('--color-vt-bad')
+  const med = tokenHex('--color-vt-accent-text')
+  const low = tokenHex('--color-vt-quiet')
   for (const e of events) {
     const country = (e.country ?? 'USD').toUpperCase()
     if (country !== 'USD' && country !== 'US') continue
@@ -165,7 +170,7 @@ export function bindTimelineMarks(ws: VelaWorkspace): () => void {
         id: `script:${a.libId}:${a.title}:${a.barTime}`,
         time: a.barTime,
         title: `${a.script} · ${a.title}`,
-        tooltip: `${a.title} — ${a.text}`,
+        tooltip: `${a.title} · ${a.text}`,
         group: 'script',
         glyph: { color: tokenHex('--color-accent'), letter: 'S', shape: 'square' as const },
         content: { text: a.text },

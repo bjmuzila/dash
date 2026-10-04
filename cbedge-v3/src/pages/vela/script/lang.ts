@@ -312,7 +312,7 @@ export function parse(src: string): Program {
   }
   const expectEol = () => {
     const t = peek()
-    if (t.t !== 'eol') throw new ScriptError(`unexpected "${String(t.v)}" — the line should end here`, t.line)
+    if (t.t !== 'eol') throw new ScriptError(`unexpected "${String(t.v)}": the line should end here`, t.line)
   }
   const expectId = (): string => {
     const t = next()
@@ -495,7 +495,7 @@ export function parse(src: string): Program {
     const t0 = peek()
     const line = t0.line
     if (t0.t === 'id') {
-      if (t0.v === 'import') throw new ScriptError('"import" (TradingView libraries) isn\'t supported — paste the library\'s functions into the script instead', line)
+      if (t0.v === 'import') throw new ScriptError('"import" (TradingView libraries) isn\'t supported: paste the library\'s functions into the script instead', line)
       if (t0.v === 'export' && peek(1).t === 'id') {
         // a library's `export f(x) =>` / `export type T` — the word changes nothing here
         next()

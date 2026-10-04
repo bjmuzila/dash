@@ -471,6 +471,9 @@ export function priceLineOf(type: string, key: string, price: number, color: str
   }
 }
 
+/** `#rrggbbaa` → `#rrggbb` (anything else unchanged). */
+const opaque = (c: string) => (/^#[0-9a-f]{8}$/i.test(c) ? c.slice(0, 7) : c)
+
 export function labelAt(
   type: string,
   key: string,
@@ -491,7 +494,8 @@ export function labelAt(
     // a tag at the newest bar sits to its LEFT, over the chart — never under the price axis
     style: o.style ?? 'label_right',
     color,
-    ...(o.textColor ? { textColor: o.textColor } : {}),
+    // Voltick: no dimmed text. A tag's LINE may be quiet; its words are drawn at full strength.
+    ...(o.textColor ? { textColor: opaque(o.textColor) } : {}),
     size: o.size ?? 'small',
     textAlign: (o.style ?? 'label_right') === 'label_right' ? 'right' : (o.style ?? '').startsWith('label_') && o.style !== 'label_left' ? 'center' : 'left',
     ...(o.tooltip ? { tooltip: o.tooltip } : {}),

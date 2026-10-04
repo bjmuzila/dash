@@ -13,8 +13,8 @@
 //   Mine               your CB Scripts: indicators, then your strategies
 //                      (script/library.ts)
 //   Voltick / CB Edge  ours: CB Walls, Voltick Path and pages/vela/studies/,
-//                      under Levels & Walls · Options & GEX · Flow, Profile &
-//                      Trades, then the four ready-made strategies
+//                      under Levels & Walls · Options & GEX · Flow & Profile,
+//                      then the four ready-made strategies
 //   Everything else    Vela's 74 built-in studies, under Trend · Oscillators ·
 //                      Volatility · Volume & Orderflow (anything a future Vela
 //                      adds lands under Other)
@@ -68,7 +68,7 @@ const GROUP_LABEL: Record<Group, string> = {
   'my-strategies': 'Strategies',
   'cb-levels': 'Levels & Walls',
   'cb-gex': 'Options & GEX',
-  'cb-flow': 'Flow, Profile & Trades',
+  'cb-flow': 'Flow & Profile',
   'cb-strategies': 'Ready-made strategies',
   trend: 'Trend',
   osc: 'Oscillators',
@@ -106,7 +106,15 @@ put('volume', [
 ])
 put('cb-levels', [WALLS_TYPE, PATH_TYPE, RIBBON_TYPE, PRIOR_TYPE, IB_TYPE, ON_TYPE, KEY_TYPE])
 put('cb-gex', [EM_TYPE, PROFILE_TYPE, VOLFLOW_TYPE, RAIL_TYPE, HEAT_TYPE])
-put('cb-flow', [NETPREM_TYPE, WHALES_TYPE, TPO_TYPE, JOURNAL_TYPE])
+put('cb-flow', [NETPREM_TYPE, WHALES_TYPE, TPO_TYPE])
+
+/**
+ * Registered but not offered. CB Journal Trades stays hidden while the journal
+ * is redone for v3 (Voltick's, or a new one: Brandon, 2026-10-04). It stays
+ * registered so a chart that already carries it still opens; it just cannot be
+ * added from here, and search does not find it.
+ */
+const HIDDEN = new Set<string>([JOURNAL_TYPE])
 
 /** One addable thing. */
 interface Row {
@@ -125,27 +133,29 @@ interface Row {
   strategy?: boolean
 }
 
-/** "CB Prior Levels — previous day / week…" → name + description. */
+/** "CB Prior Levels · previous day / week…" → name + description (Voltick copy: a middle dot, never an em-dash). */
 function splitTitle(title: string): [string, string] {
-  const at = title.indexOf(' — ')
+  const at = title.indexOf(' · ')
   return at > 0 ? [title.slice(0, at), title.slice(at + 3)] : [title, '']
 }
 
 function nativeRows(): Row[] {
-  return nativeIndicatorDescriptors().map((d: NativeIndicatorDescriptor) => {
-    const [name, desc] = splitTitle(d.title)
-    return {
-      key: `n:${d.type}`,
-      group: NATIVE_CAT[d.type] ?? 'other',
-      name,
-      desc: desc || (d.overlay ? 'On the price chart' : 'In its own pane'),
-      kind: 'native',
-      type: d.type,
-      overlay: d.overlay,
-      multi: d.multiInstance === true,
-      beta: d.beta === true,
-    }
-  })
+  return nativeIndicatorDescriptors()
+    .filter((d) => !HIDDEN.has(d.type))
+    .map((d: NativeIndicatorDescriptor) => {
+      const [name, desc] = splitTitle(d.title)
+      return {
+        key: `n:${d.type}`,
+        group: NATIVE_CAT[d.type] ?? 'other',
+        name,
+        desc: desc || (d.overlay ? 'On the price chart' : 'In its own pane'),
+        kind: 'native',
+        type: d.type,
+        overlay: d.overlay,
+        multi: d.multiInstance === true,
+        beta: d.beta === true,
+      }
+    })
 }
 
 /** Your CB Script library: indicators, and strategy() scripts (which open the Strategy Tester). */

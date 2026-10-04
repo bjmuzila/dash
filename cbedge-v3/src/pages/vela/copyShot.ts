@@ -65,7 +65,7 @@ function copyScreenshot(ctx: WidgetContext): void {
     !!blob && typeof ClipboardItem !== 'undefined' && typeof navigator !== 'undefined' && !!navigator.clipboard?.write
   const fallback = () => {
     ws?.downloadScreenshot()
-    ctx.toast('Clipboard blocked — screenshot downloaded instead', 'info')
+    ctx.toast('Clipboard blocked: screenshot downloaded instead', 'info')
   }
   if (!canWrite || !blob) {
     fallback()

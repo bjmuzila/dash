@@ -49,8 +49,38 @@ export function setUiTheme(theme: UiTheme, opts: { reload?: boolean } = {}): voi
   } catch {
     /* private mode: the attribute still flips for this tab */
   }
-  applyUiTheme(theme)
+  applyUiTheme(pinned ?? theme)
   if (opts.reload) window.location.reload()
+}
+
+// ── A PAGE PINNED TO ONE THEME ───────────────────────────────────────────────
+// The Vela chart (/vela, /m/vela and the Replay hub's Chart tab) IS Voltick's
+// chart: it shows Voltick's palette, type and level names for EVERY account,
+// whatever the stored preference above says (Brandon, 2026-10-04). It pins the
+// document while it is mounted and lets go on unmount, when the stored
+// preference comes back.
+//
+// Same one attribute as the switch, so the whole document follows: Vela's own
+// chrome, the menus it portals to <body>, the replay dock in the shell, the
+// scrollbars. Canvases resolve tokens at mount and the pin lands before the
+// chart mounts (applyUiTheme drops the token cache), so no reload is needed in
+// either direction: the page that mounts next resolves its own colours fresh.
+//
+// This is a display pin, not a preference: nothing is written to storage, and
+// UiThemeGuard (Shell.tsx) still governs the stored switch.
+
+let pinned: UiTheme | null = null
+
+/** Pin the document to `theme` (a page that is always one theme), or release it with null. Idempotent. */
+export function pinUiTheme(theme: UiTheme | null): void {
+  if (pinned === theme) return
+  pinned = theme
+  applyUiTheme(theme ?? readUiTheme())
+}
+
+/** The theme the document is showing NOW: a page's pin, else the stored preference. */
+export function uiThemeNow(): UiTheme {
+  return pinned ?? readUiTheme()
 }
 
 /** Called once from main.tsx, before render. */

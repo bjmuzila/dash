@@ -9,11 +9,11 @@
 //
 //   ▸ Replay       a toolbar button (left cluster, after Indicators; on the
 //                  phone, a stop on the bottom bar). It opens the START PICKER.
-//   ▸ The picker   an orange line follows the pointer over the chart and shades
+//   ▸ The picker   a Volt Blue line follows the pointer over the chart and shades
 //                  the bars that will be hidden. Click a bar to rewind to it. A
 //                  drag still pans, so you can scroll back to the day you want.
 //                  The dock also offers session-open quick picks and a date/time.
-//   ▸ The dock     ReplayBar.tsx, the same orange bottom bar every v3 replay
+//   ▸ The dock     ReplayBar.tsx, the same bottom bar every v3 replay
 //                  uses (design/primitives/ReplayDock.tsx). It loads lazily
 //                  through ReplayHost.tsx, so this page's chunk carries only
 //                  this file.
@@ -326,10 +326,11 @@ class PickLayer implements RendererLayerInstance {
     // everything right of the picked bar's right edge is what the replay hides
     const edge = Math.round(c.logicalToX(i + 0.5)) + 0.5
     const h = c.height
-    const warn = tokenRgb('--color-warn')
+    // Volt Blue, Voltick's replay colour (--color-replay); amber is the Volt's
+    const tint = tokenRgb('--color-replay')
     g.fillStyle = hexA(tokenRgb('--color-bg'), 0.62)
     g.fillRect(edge, 0, Math.max(0, c.width - edge), h)
-    g.strokeStyle = hexA(warn, 1)
+    g.strokeStyle = hexA(tint, 1)
     g.lineWidth = 2
     g.beginPath()
     g.moveTo(edge, 0)
@@ -337,15 +338,15 @@ class PickLayer implements RendererLayerInstance {
     g.stroke()
     // the pill: where the replay would start
     const text = `Replay from ${PICK_FMT.format(new Date(bars[i]!.time))}`
-    g.font = `700 10px ${fontOf(canvas)}`
+    g.font = `700 10px ${monoOf(canvas)}`
     const w = g.measureText(text).width + 12
     let px = edge + 6
     if (px + w > c.width - 4) px = edge - 6 - w
-    g.fillStyle = hexA(warn, 1)
+    g.fillStyle = hexA(tint, 1)
     g.beginPath()
-    g.roundRect(px, 6, w, 18, 4)
+    g.roundRect(px, 6, w, 18, 6)
     g.fill()
-    g.fillStyle = hexA(tokenRgb('--color-bg'), 1)
+    g.fillStyle = hexA(tokenRgb('--color-vt-paper'), 1)
     g.textAlign = 'left'
     g.textBaseline = 'middle'
     g.fillText(text, px + 6, 15.5)
@@ -383,6 +384,7 @@ function drawPaper(g: CanvasRenderingContext2D, args: RendererLayerArgs, sym: st
   const up = tokenRgb('--color-up')
   const down = tokenRgb('--color-down')
   const bg = tokenRgb('--color-bg')
+  const monoFont = monoOf(g.canvas)
   g.save()
   g.beginPath()
   g.rect(0, bounds.top, coords.width, bounds.height)
@@ -425,11 +427,11 @@ function drawPaper(g: CanvasRenderingContext2D, args: RendererLayerArgs, sym: st
     g.stroke()
     g.setLineDash([])
     const text = `${p.pos > 0 ? 'Long' : 'Short'} ${Math.abs(p.pos)} @ ${p.avg.toFixed(2)} · ${openPts >= 0 ? '+' : '−'}${Math.abs(openPts).toFixed(2)} pts`
-    g.font = '700 10px system-ui, sans-serif'
+    g.font = `700 10px ${monoFont}`
     const w = g.measureText(text).width + 10
     g.fillStyle = hexA(c, 1)
     g.beginPath()
-    g.roundRect(6, y - 9, w, 18, 3)
+    g.roundRect(6, y - 9, w, 18, 6)
     g.fill()
     g.fillStyle = hexA(bg, 1)
     g.textAlign = 'left'
@@ -439,13 +441,14 @@ function drawPaper(g: CanvasRenderingContext2D, args: RendererLayerArgs, sym: st
   g.restore()
 }
 
-let fontMemo = ''
-function fontOf(canvas: HTMLCanvasElement): string {
-  if (fontMemo) return fontMemo
+/** Voltick's mono stack (every number on the chart is mono), read once. */
+let monoMemo = ''
+function monoOf(canvas: HTMLCanvasElement): string {
+  if (monoMemo) return monoMemo
   try {
-    fontMemo = getComputedStyle(canvas).fontFamily || 'system-ui, sans-serif'
+    monoMemo = getComputedStyle(canvas).getPropertyValue('--font-mono').trim() || 'ui-monospace, monospace'
   } catch {
-    fontMemo = 'system-ui, sans-serif'
+    monoMemo = 'ui-monospace, monospace'
   }
-  return fontMemo
+  return monoMemo
 }

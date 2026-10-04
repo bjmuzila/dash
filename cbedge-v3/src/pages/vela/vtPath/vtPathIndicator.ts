@@ -62,7 +62,7 @@ function inputsSchema(shape: Shape): InputSchema[] {
       type: 'string',
       defval: MAP_OPTS[0],
       options: MAP_OPTS,
-      tooltip: 'Which recorded walls the levels are — the live book (OI + today’s volume) or volume only.',
+      tooltip: 'Which recorded walls the levels are: the live book (OI + today’s volume) or volume only.',
     },
     {
       key: 'scope',
@@ -70,7 +70,7 @@ function inputsSchema(shape: Shape): InputSchema[] {
       type: 'string',
       defval: SCOPE_OPTS[0],
       options: SCOPE_OPTS,
-      tooltip: 'Which expiries the walls are computed from — recorded both ways, as on CB Walls.',
+      tooltip: 'Which expiries the walls are computed from: recorded both ways, as on CB Walls.',
     },
     {
       key: 'boldness',
@@ -103,8 +103,8 @@ function inputsSchema(shape: Shape): InputSchema[] {
       step: 10,
       tooltip:
         shape === 'path'
-          ? 'Scales every bubble — 100 is the default, 200 doubles them.'
-          : 'Scales every band — 100 is the default, 200 doubles their thickness.',
+          ? 'Scales every bubble: 100 is the default, 200 doubles them.'
+          : 'Scales every band: 100 is the default, 200 doubles their thickness.',
     },
   ]
 }
@@ -253,7 +253,7 @@ export function registerVtPath(): void {
   registerVtPathLayers()
   registerNativeIndicator({
     type: PATH_TYPE,
-    title: 'Voltick Path — Volt / Reversal / Coil / Surge bubbles',
+    title: 'Voltick Path · Volt / Reversal / Coil / Surge bubbles',
     shortTitle: 'Voltick Path',
     paneHint: 'price',
     overlay: true,
@@ -263,7 +263,7 @@ export function registerVtPath(): void {
   })
   registerNativeIndicator({
     type: RIBBON_TYPE,
-    title: 'Voltick Path Ribbon — Volt / Reversal / Coil / Surge bands',
+    title: 'Voltick Path Ribbon · Volt / Reversal / Coil / Surge bands',
     shortTitle: 'Voltick Path Ribbon',
     paneHint: 'price',
     overlay: true,

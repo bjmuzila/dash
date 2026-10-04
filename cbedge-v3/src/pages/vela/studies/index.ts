@@ -12,7 +12,10 @@
 //   tpo.ts     CB Market Profile
 //   rail.ts    CB GEX Rail (the GEX Candles card's strike rail, beside the price axis)
 //   heat.ts    CB GEX Heatmap (the per-minute ladders, behind the candles)
-//   journal.ts CB Journal Trades (your journal's fills on the chart)
+//   journal.ts CB Journal Trades (your journal's fills on the chart). HIDDEN
+//              from the Indicators dialog for now (indicatorPicker.ts HIDDEN)
+//              while the journal is redone for v3; still registered so a chart
+//              that carries it opens.
 //
 // None is put on a chart by itself: they are the user's to add.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,7 +61,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: PRIOR_TYPE,
-      title: 'CB Prior Levels — previous day / week / month high, low, close',
+      title: 'CB Prior Levels · previous day / week / month high, low, close',
       shortTitle: 'Prior Levels',
       pane: 'price',
       inputs: () => [
@@ -76,7 +79,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: IB_TYPE,
-      title: 'CB Initial Balance — IB high / low / mid and extensions',
+      title: 'CB Initial Balance · IB high / low / mid and extensions',
       shortTitle: 'Initial Balance',
       pane: 'price',
       inputs: () => [
@@ -92,7 +95,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: ON_TYPE,
-      title: 'CB Overnight High / Low — the pre-market range before the 09:30 open',
+      title: 'CB Overnight High / Low · the pre-market range before the 09:30 open',
       shortTitle: 'Overnight H/L',
       pane: 'price',
       inputs: () => [
@@ -106,7 +109,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: EM_TYPE,
-      title: 'CB Expected Move — daily EM bands per session, and this week’s',
+      title: 'CB Expected Move · daily EM bands per session, and this week’s',
       shortTitle: 'Expected Move',
       pane: 'price',
       inputs: () => [
@@ -122,17 +125,17 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: KEY_TYPE,
-      title: 'CB Key Levels — walls, CORE, gamma flip, max pain, weekly pivot & zones',
+      title: 'CB Key Levels · Volt, Coil, Reversal, Flip, max pain, weekly pivot & zones',
       shortTitle: 'Key Levels',
       pane: 'price',
       liveOnly: true,
       inputs: () => [
-        { key: 'walls', title: 'Call / Put walls', type: 'bool', defval: true },
-        { key: 'core', title: 'CORE', type: 'bool', defval: true },
-        { key: 'flip', title: 'Gamma flip', type: 'bool', defval: true },
+        { key: 'walls', title: '◆ Coil / ↘ Reversal (the walls)', type: 'bool', defval: true },
+        { key: 'core', title: '★ Volt (CORE)', type: 'bool', defval: true },
+        { key: 'flip', title: 'Flip (gamma)', type: 'bool', defval: true },
         { key: 'maxPain', title: 'Max pain', type: 'bool', defval: true },
         { key: 'weekly', title: 'Weekly pivot', type: 'bool', defval: true },
-        { key: 'zones', title: 'Weekly buy / sell zones', type: 'bool', defval: true },
+        { key: 'zones', title: 'Weekly lower / upper zones', type: 'bool', defval: true },
       ],
     },
     () => import('./gex').then((m) => m.keyImpl),
@@ -140,7 +143,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: PROFILE_TYPE,
-      title: 'CB GEX Profile — net GEX by strike beside the price axis',
+      title: 'CB GEX Profile · net GEX by strike beside the price axis',
       shortTitle: 'GEX Profile',
       pane: 'price',
       viewport: true,
@@ -156,7 +159,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: NETPREM_TYPE,
-      title: 'CB Net Premium — cumulative call / put / net option premium',
+      title: 'CB Net Premium · cumulative call / put / net option premium',
       shortTitle: 'Net Premium',
       pane: 'new',
       inputs: () => [
@@ -171,7 +174,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: VOLFLOW_TYPE,
-      title: 'CB Vol / GEX Flow — volume GEX, OI GEX and combined, today',
+      title: 'CB Vol / GEX Flow · volume GEX, OI GEX and combined, today',
       shortTitle: 'Vol/GEX Flow',
       pane: 'new',
       inputs: () => [
@@ -187,7 +190,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: WHALES_TYPE,
-      title: 'CB Whale Prints — $1M+ option prints as bubbles sized by net premium',
+      title: 'CB Whale Prints · $1M+ option prints as bubbles sized by net premium',
       shortTitle: 'Whale Prints',
       pane: 'price',
       layer: { cursor: true },
@@ -204,7 +207,7 @@ export function registerStudies(): void {
           options: WH_CAP,
           tooltip: 'Net premium that draws the largest bubble. Bubble AREA follows premium up to here; anything bigger is drawn at this size.',
         },
-        { key: 'size', title: 'Bubble size %', type: 'int', defval: 100, min: 50, max: 200, step: 10, tooltip: 'Scales every bubble — smallest and largest together.' },
+        { key: 'size', title: 'Bubble size %', type: 'int', defval: 100, min: 50, max: 200, step: 10, tooltip: 'Scales every bubble: smallest and largest together.' },
         { key: 'text', title: 'Premium in the bubble', type: 'bool', defval: true, tooltip: 'Written inside a bubble when it fits; hover any bubble for the prints.' },
       ],
     },
@@ -213,7 +216,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: TPO_TYPE,
-      title: 'CB Market Profile — TPO per session: POC, value area, naked POCs',
+      title: 'CB Market Profile · TPO per session (POC, value area, naked POCs)',
       shortTitle: 'Market Profile',
       pane: 'price',
       inputs: () => [
@@ -232,7 +235,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: RAIL_TYPE,
-      title: 'CB GEX Rail — the GEX Candles strike rail beside the price axis',
+      title: 'CB GEX Rail · the GEX Candles strike rail beside the price axis',
       shortTitle: 'GEX Rail',
       pane: 'price',
       layer: {},
@@ -247,7 +250,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: HEAT_TYPE,
-      title: 'CB GEX Heatmap — the per-minute GEX ladders behind the candles',
+      title: 'CB GEX Heatmap · the per-minute GEX ladders behind the candles',
       shortTitle: 'GEX Heatmap',
       pane: 'price',
       layer: { cursor: true },
@@ -263,7 +266,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: JOURNAL_TYPE,
-      title: 'CB Journal Trades — your journal’s trades on the chart',
+      title: 'CB Journal Trades · your journal’s trades on the chart',
       shortTitle: 'Journal',
       pane: 'price',
       layer: { cursor: true },

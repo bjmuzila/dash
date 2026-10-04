@@ -312,8 +312,11 @@ const CB_COLORS: Record<string, string> = {
   coil: '--color-vt-coil',
 }
 const PINE_COLORS = ['aqua', 'black', 'blue', 'fuchsia', 'gray', 'green', 'lime', 'maroon', 'navy', 'olive', 'orange', 'purple', 'red', 'silver', 'teal', 'white', 'yellow']
-/** The colours a CB plot takes when the script names none, in order. */
-const AUTO_COLORS = ['--color-series-1', '--color-series-3', '--color-series-2', '--color-series-4', '--color-series-5', '--color-series-6']
+/** The colours a CB plot takes when the script names none, in order. Voltick's
+ *  blue family and neutrals: a plot nobody coloured must not wear the Volt's
+ *  amber, the flip's violet or a P&L green / red. A colour the script NAMES is
+ *  the script's choice and is drawn as named. */
+const AUTO_COLORS = ['--color-vt-accent-text', '--color-vt-slate', '--color-vt-sky', '--color-vt-paper', '--color-vt-accent', '--color-vt-quiet']
 
 const pineMemo = new Map<string, string>()
 const pineColor = (name: string): string => {
@@ -987,7 +990,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     }
     if (typeof v !== 'string') throw new ScriptError('expected a colour', line)
     if (v.startsWith('#')) {
-      if (!parseHex(v)) throw new ScriptError(`"${v}" is not a colour — write #rrggbb`, line)
+      if (!parseHex(v)) throw new ScriptError(`"${v}" is not a colour: write #rrggbb`, line)
       return v.toLowerCase()
     }
     const token = CB_COLORS[v.toLowerCase()]
@@ -1391,7 +1394,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
               return v
             }
           }
-          if (funcs.has(name)) throw new ScriptError(`"${name}" is a function — call it: ${name}(…)`, line)
+          if (funcs.has(name)) throw new ScriptError(`"${name}" is a function; call it as ${name}(…)`, line)
           throw new ScriptError(`"${name}" is not defined`, line)
         }
         return (f) => fb(f.i)
@@ -1664,7 +1667,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
                 label = `${label}.${k}`
               }
               if (!(o instanceof Obj)) {
-                if (typeof o === 'number' && isNa(o)) throw new ScriptError(`can't set ${s.name} — ${label} is na (make it with ${'Type'}.new() first)`, s.line)
+                if (typeof o === 'number' && isNa(o)) throw new ScriptError(`can't set ${s.name}: ${label} is na (make it with ${'Type'}.new() first)`, s.line)
                 throw new ScriptError(`"${label}" has no field "${last}"`, s.line)
               }
               if (!(last in o.f)) throw new ScriptError(`type ${o.type} has no field "${last}"`, s.line)
@@ -1889,7 +1892,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       }
     } else X = srcBars.slice()
     if (htf && X.length < 20 && !opts.dry)
-      warn(`only ${X.length} ${reqTf} bars of history here — ${reqTf} values that need a longer lookback stay empty`)
+      warn(`only ${X.length} ${reqTf} bars of history here; ${reqTf} values that need a longer lookback stay empty`)
     const cap = new Map<object, unknown[]>()
     run(prog, X, { inputs: opts.inputs, symbol: sym, timeframe: htf ? reqTf : tf, capture: cap, series: opts.series, dry: opts.dry })
     r = { X, cap }
@@ -1956,7 +1959,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         const reqMin = tfMinutes(reqTf)
         const chartMin = tfMinutes(tf)
         const htf = !isNa(reqMin) && !isNa(chartMin) && reqMin > chartMin
-        if (!isNa(reqMin) && !isNa(chartMin) && reqMin < chartMin) warn(`${node.name}: lower timeframes than the chart's aren't available — used ${tf}`)
+        if (!isNa(reqMin) && !isNa(chartMin) && reqMin < chartMin) warn(`${node.name}: lower timeframes than the chart's aren't available (used ${tf})`)
         if (same && !htf) st.any = 'pass'
         else {
           let srcBars: readonly OHLCV[] = bars
@@ -2158,7 +2161,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
           if (!d) throw new ScriptError(`${def.name}() is missing "${def.params[k]}"`, line)
           vals[k] = d(f)
         }
-        if (++depth > 64) throw new ScriptError(`${def.name}() calls itself — recursion isn't allowed`, line)
+        if (++depth > 64) throw new ScriptError(`${def.name}() calls itself: recursion isn't allowed`, line)
         const it = inst(f)
         const fr = (it.fr ??= { i: 0, L: it.L, S: it.S, ctl: 0 })
         fr.i = f.i
@@ -2187,19 +2190,19 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       if (name.startsWith('request.')) throw new ScriptError(`${name} isn't supported yet`, line)
       if (name === 'plotcandle' || name === 'plotbar') {
         return () => {
-          warn(`${name} isn't drawn yet — skipped`)
+          warn(`${name} isn't drawn yet: skipped`)
           return NaN
         }
       }
       if (DRAWING_NS.test(name)) {
         return () => {
-          warn(`${name} isn't supported — skipped`)
+          warn(`${name} isn't supported: skipped`)
           return NaN
         }
       }
       if (name.startsWith('strategy.')) {
         return () => {
-          warn(`${name} isn't simulated — skipped`)
+          warn(`${name} isn't simulated: skipped`)
           return NaN
         }
       }
@@ -3771,7 +3774,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const n = c.node.args[0] ?? c.node.named.defval
     const head = n && n.k === 'id' ? n.name.slice(0, Math.max(0, n.name.indexOf('.'))) : ''
     const en = enums.get(head)
-    if (!en) throw new ScriptError('input.enum() takes an enum field first — input.enum(Side.long, "Side")', c.line)
+    if (!en) throw new ScriptError('input.enum() takes an enum field first: input.enum(Side.long, "Side")', c.line)
     c.N.options = [...en.values()]
     return inputCall(c, 'string')
   }
@@ -4660,23 +4663,23 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'ticker.standard': (c) => optStr(c, 0, 'symbol') ?? symbol,
     'ticker.inherit': (c) => optStr(c, 1, 'symbol') ?? symbol,
     'ticker.heikinashi': (c) => {
-      warn('Heikin Ashi data isn\'t available — used the standard candles')
+      warn('Heikin Ashi data isn\'t available, so the standard candles are used')
       return optStr(c, 0, 'symbol') ?? symbol
     },
     'ticker.renko': (c) => {
-      warn('Renko data isn\'t available — used the standard candles')
+      warn('Renko data isn\'t available: used the standard candles')
       return optStr(c, 0, 'symbol') ?? symbol
     },
     'ticker.linebreak': (c) => {
-      warn('Line break data isn\'t available — used the standard candles')
+      warn('Line break data isn\'t available: used the standard candles')
       return optStr(c, 0, 'symbol') ?? symbol
     },
     'ticker.kagi': (c) => {
-      warn('Kagi data isn\'t available — used the standard candles')
+      warn('Kagi data isn\'t available: used the standard candles')
       return optStr(c, 0, 'symbol') ?? symbol
     },
     'ticker.pointfigure': (c) => {
-      warn('Point & figure data isn\'t available — used the standard candles')
+      warn('Point & figure data isn\'t available: used the standard candles')
       return optStr(c, 0, 'symbol') ?? symbol
     },
     // ── arrays ──

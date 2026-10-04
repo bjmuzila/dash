@@ -25894,3 +25894,88 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - `2026-10-04-vela-level-alerts-setups-log.png`
   - `2026-10-04-vela-optimiser-replay-hub.png`
   - `2026-10-04-whales-deep-link.png`
+
+## 2026-10-04 - v3 Vela: Indicators dialog down to four categories
+
+- **Four categories:** Favorites · Mine · Voltick / CB Edge · Everything else.
+  - **Mine:** your CB Scripts, under Indicators then Strategies. Your strategies open the Strategy Tester.
+  - **Voltick / CB Edge:** CB Walls, Voltick Path and every CB study, under Levels & Walls · Options & GEX (now with GEX Rail and GEX Heatmap) · Flow, Profile & Trades (now with Journal Trades), then the four ready-made strategies.
+  - **Everything else:** Vela's built-ins, under Trend · Oscillators · Volatility · Volume & Orderflow.
+- **Dropped:** "On chart" and the separate "Strategies" category. What is on a chart is managed from its legend rows, and a ✓ marks it in the dialog.
+- **Unchanged:** search, the overlay / pane filter and the stars. A saved category from before falls back to Favorites, or to Voltick / CB Edge when there are no favorites.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/indicatorPicker.ts`
+  - `vela/vela.css` (`.cb-ip-sub` headings)
+  - `vela/script/strategies.ts` (comment)
+- **Checks:**
+  - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
+  - Headless run: each category's headings and rows, starring into Favorites, search, and a ready-made strategy opening the tester.
+- **Files in `generated/`:** `2026-10-04-vela-indicators-four-categories.png` (mock data)
+
+## 2026-10-04 - v3 Vela: CB Journal Trades hidden for now
+
+- **Hidden:** "CB Journal Trades" is out of the Indicators dialog and its search. The journal will be different from v2's, either an integration with Voltick's or a new v3 journal. The study and its code stay in place.
+- **Still registered** (`indicatorPicker.ts` HIDDEN), so a chart that already carries it still opens.
+- **Renamed heading:** "Flow, Profile & Trades" is back to "Flow & Profile".
+- **Files:** `cbedge-v3/src/pages/vela/indicatorPicker.ts`, `cbedge-v3/src/pages/vela/studies/index.ts` (comment). `tsc` is clean and `vite build` is OK. Headless run: Journal is not listed, and a search for it finds nothing.
+
+## 2026-10-04 - v3 Vela: Voltick theme and UI style
+
+- **Always Voltick.** `/vela`, `/m/vela` and the Replay hub's Chart tab now show the Voltick theme for every account, whatever the stored theme switch says.
+  - The page pins `data-ui-theme="voltick"` while it is mounted (`pinUiTheme` in `design/uiTheme.ts`) and releases it on unmount, so the next page shows the stored theme again. Nothing is written to storage, and the owner switch and `UiThemeGuard` work as before.
+  - The pin is set before the first paint and before the chart reads its palette, so there is no reload and no flash.
+- **Chart palette:** Ink background, Panel grid, Line borders and Paper axis text. Candles use Voltick's own chart pair (#26c281 / #f04a5a, new tokens `--color-vt-chart-up` / `-down`).
+- **Vela's own chrome** (menus, dialogs, toolbar, selected states) is mapped to Voltick tokens:
+  - Paper and Paper Quiet text instead of Vela's grey.
+  - A lit Volt Blue selected state instead of the white chip.
+  - Voltick radii (6 / 10 / 12) and the card shadow.
+  - A success toast is Paper with blue chrome instead of green.
+- **Panels, menus, strip and dock** follow Voltick's design system (`md files/VOLTICK-DESIGN-SYSTEM.md`):
+  - No grey text. Captions are Paper Quiet; a dimmed Paper is gone everywhere except disabled, dragged and hidden rows.
+  - Every number and every uppercase label is in mono.
+  - Floating panels use the popover plate and card shadow.
+  - A panel's primary action uses the lit pill: a gradient rim with a dark face.
+  - Accent Text is used wherever the accent is a word.
+  - Green and red are used for data only: no green success line, no red hover, no green or red button faces.
+  - Hidden studies are struck through, as in Voltick's menus.
+- **Reserved colours are used only for their meanings:** amber for the Volt, violet for the flip, magenta for a Reversal, and surge blue for surges and walls.
+  - Replay dock: Volt Blue instead of amber. This is Voltick's replay colour. New token `--color-replay`, still amber on CB Edge pages.
+  - Prior day: Sky. Week and month: slate and Paper Quiet. IB: slate (Voltick's opening-range colour). Overnight: Pre-market green. EM: Accent Text. TPO: slate value area with a Paper POC.
+  - Favourite stars: Accent Text instead of amber. Watchlist groups: the blue family and neutrals.
+  - Marks: the flip cross is violet and CORE events are amber. IB marks are slate.
+  - Weaker lines are now dashed or thinner rather than faded, so legend values and tags read at full strength.
+- **Voltick level names:** CORE is ★ Volt. The wall on CORE's side of price is ◆ Coil, and the other wall is ↘ Reversal. The gamma flip is ⚡︎ Flip.
+  - **Key Levels study:** lines and input labels use these names. "Buy / sell zones" are now slate "Lower / upper zone".
+  - **Level Alerts:** Volt / Coil / Reversal / Flip, with each mark in its own colour. An alert follows its level as it moves. The emoji bells are replaced by Voltick's SVG bell. An alert armed on CORE carries over as a Volt alert. Call-wall and put-wall alerts are dropped, because they have no fixed Voltick name.
+  - **Session strip:** ★ VOLT / ◆ COIL / ↘ REV / ⚡︎ FLIP distances. The Coil is shown only when it is not on the Volt's strike. Distances are shown in Paper, not green or red.
+  - **GEX rail:** always uses the Voltick tags.
+  - **CB Walls:** always draws its Voltick view.
+  - **Advanced watchlist:** the walls column is "Walls" in surge blue, and the flip is violet.
+- **Type:** Inter and JetBrains Mono are now self-hosted, as Voltick does. These are the latin variable woff2 files from @fontsource-variable 5.3.0 (SIL OFL), in `pages/vela/fonts/`. They load only on the Vela page and are allowed by the existing `font-src 'self'`. Without them, Windows would fall back to Arial.
+- **Copy:**
+  - No em-dashes in anything the page shows: study titles, toasts, script errors and tooltips. An empty value now shows as `·`.
+  - The engine's timeline group is now "Engine alerts" instead of "CB Edge signals".
+  - Paper trading keeps Buy / Sell, since those are the member's own simulated orders, not product copy. The direction rides on a green ▲ or red ▼ mark, not on the button face.
+- **Files:**
+  - `cbedge-v3/src/design/`: `uiTheme.ts`, `tokens.css`, `theme.ts` (`T.replay`, `T.replayText`), `primitives/ReplayDock.tsx`
+  - `cbedge-v3/src/pages/Vela.tsx`
+  - `cbedge-v3/src/pages/vela/`:
+    - `vela.css`, `watchlist/advanced.css`, `watchlist/advanced.ts`, `watchlist/panel.ts`
+    - `replay/ReplayBar.tsx`, `replay/replay.ts`
+    - `setups/SessionStrip.tsx`, `levels/levelAlerts.ts`, `marks.ts`, `wallsIndicator.ts`, `indicatorPicker.ts`, `copyShot.ts`
+    - `studies/`: `common`, `flow`, `gex`, `heat`, `index`, `journal`, `levels`, `rail`, `tpo`, `whaleLayer`
+    - `script/`: `engine`, `lang`, `library`, `panel`, `runtime`, `testerPanels`
+    - `vtPath/vtPathIndicator.ts`
+    - new `fonts/` (two woff2 files and their two licences)
+- **Checks:**
+  - `tsc` shows only the 5 existing errors. `check:theme` and `check:casing` pass, and `vite build` is OK.
+  - Budgets: the Vela route is 53.5kb (was 53.9) and Vela CSS is 5.3kb of 8.8. The index CSS (+31 bytes), entry and react bundles were already over budget before this change.
+- **Headless runs**, desktop and phone, on mock data:
+  - New audit probe:
+    - The pin works with the stored theme set to CB Edge and to Voltick.
+    - Leaving to /whales restores the stored theme, and coming back pins it again.
+    - Vela's chrome tokens are mapped as above.
+    - 0 grey or faded texts in our panels, menus, dock and dialog. The only remaining flags are the CB Walls legend at the member's walls opacity and Vela's watermark.
+    - 0 em-dashes.
+  - The full suite passes: replay desktop and phone, replay with studies, rail and heatmap, paper, level alerts, setups, optimiser, whale click-through, Whales deep link, the Indicators dialog, the advanced watchlist and the watchlist.
+- **Files in `generated/`:** `2026-10-04-vela-voltick-desktop.png`, `-indicators.png`, `-replay.png`, `-phone.png`, `-watchlist.png`, `-tester.png` (mock data)

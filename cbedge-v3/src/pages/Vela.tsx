@@ -4,6 +4,7 @@ import { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { preload } from '@/data/api'
 import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { tokenHex } from '@/design/theme'
+import { pinUiTheme } from '@/design/uiTheme'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { Page } from '@/design/primitives/Page'
 import { CbEdgeProvider, DEFAULT_HISTORY_URL, PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
@@ -39,10 +40,13 @@ import '@/pages/vela/vela.css'
 //              recorder routes the GEX Candles card reads (SPX, the ETFs and
 //              single names, ES and NQ futures), live off the same SSE stream
 //              and socket frames. Nothing here talks to a crypto venue.
-//   · palette  a VelaTheme built from tokens.css at mount (tokenHex), so the
-//              chart and the chrome around it are this app's colours and switch
-//              with the Voltick theme (that switch reloads the page, which is
-//              exactly when this resolves them again).
+//   · palette  VOLTICK, always (Brandon, 2026-10-04). The page pins the
+//              document to the Voltick UI theme while it is mounted
+//              (pinUiTheme, design/uiTheme.ts), whatever the stored switch says,
+//              and the VelaTheme is built from tokens.css AFTER the pin (tokenHex),
+//              so the chart, Vela's own chrome, our panels and the replay dock
+//              are Voltick's palette, type and shapes. Leaving the page releases
+//              the pin and the stored theme comes back. See "Voltick" below.
 //
 // ── Rules this page keeps ────────────────────────────────────────────────────
 //   · Imperative (non-negotiable 4). The workspace is created in ChartFrame's
@@ -138,9 +142,29 @@ import '@/pages/vela/vela.css'
 // Walls, Options & GEX, Flow & Profile), search across all, ★ favourites.
 //
 // ── Our CSS over Vela's ──────────────────────────────────────────────────────
-// pages/vela/vela.css: the active chart in a grid gets a faint 1px grey ring
-// instead of Vela's 2px bright one, the opacity strip's look, and the Scripts
-// panel's.
+// pages/vela/vela.css: the active chart in a grid gets a faint 1px ring instead
+// of Vela's 2px bright one, Vela's own chrome tokens re-pointed at Voltick's,
+// and every panel, menu and dock this page adds.
+//
+// ── Voltick ──────────────────────────────────────────────────────────────────
+// The page follows Voltick's design system (md files/VOLTICK-DESIGN-SYSTEM.md):
+//   · palette   Ink / Panel / Elev / Line surfaces, Paper text with NO grey text
+//               (captions are Paper Quiet, never a dimmed Paper), Volt Blue for
+//               fills / rings and Accent Text when the accent is a word, the
+//               chart's own deeper green / red for candles, green / red for data
+//               only (never a hover, a success line or a button face).
+//   · reserved  amber = the Volt, violet = the flip, magenta = a Reversal, blue
+//               = surge / walls. Nothing else on this page wears them: the
+//               replay dock is Volt Blue (Voltick's replay transport), the prior
+//               session is Sky, pre-market / overnight is Pre-market green, a
+//               measurement (IB, EM, TPO) is slate or Sky.
+//   · names     CB Edge levels read as Voltick's: CORE = ★ Volt, the wall on
+//               CORE's side of spot = ◆ Coil, the other wall = ↘ Reversal, the
+//               gamma flip = ⚡︎ Flip (data/voltickLevels.ts).
+//   · type      Inter for words, JetBrains Mono for every number and every
+//               uppercase label; radii 6 / 10 / 12; the card shadow with its
+//               1px top highlight; the lit pill for a panel's primary action.
+//   · copy      no em-dashes in anything a user reads.
 //
 // ── The camera copies ────────────────────────────────────────────────────────
 // Vela's screenshot button (and its phone row, and Ctrl/Cmd+Alt+S) puts the
@@ -243,17 +267,20 @@ function upgradePhoneLayout(ws: VelaWorkspace): void {
 // identical URL, so api.ts hands it the response already in flight.
 preload(DEFAULT_HISTORY_URL, { staleMs: 20_000 })
 
-/** The chart palette, read off tokens.css. At MOUNT only — tokenHex is a cached
- *  getComputedStyle read, and a theme switch reloads the page anyway. */
+/** The chart palette: Voltick's, read off tokens.css once the page has pinned
+ *  the Voltick theme. At MOUNT only (tokenHex is a cached getComputedStyle read).
+ *  Ink background, Panel grid, Line borders, Paper axis text, and the candle
+ *  pair Voltick's own chart draws (HeatChart.jsx CHART_GREEN / CHART_RED: a
+ *  deeper emerald and a truer red than the brand's data green / red). */
 function cbTheme(): VelaTheme {
   const font = getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim()
   return {
-    background: tokenHex('--color-bg'),
-    textColor: tokenHex('--color-muted'),
-    gridColor: tokenHex('--color-surface2'),
-    borderColor: tokenHex('--color-line'),
-    upColor: tokenHex('--color-candle-up'),
-    downColor: tokenHex('--color-candle-down'),
+    background: tokenHex('--color-vt-ink'),
+    textColor: tokenHex('--color-vt-paper'),
+    gridColor: tokenHex('--color-vt-panel'),
+    borderColor: tokenHex('--color-vt-line'),
+    upColor: tokenHex('--color-vt-chart-up'),
+    downColor: tokenHex('--color-vt-chart-down'),
     fontFamily: font || 'sans-serif',
   }
 }
@@ -286,6 +313,16 @@ function StripHost({ ws, phone }: { ws: VelaWorkspace | null; phone: boolean }) 
 }
 
 export default function Vela({ phone = false, replayOnOpen = false }: VelaProps) {
+  // THE VOLTICK PIN. Set during render, before any child commits, so the first
+  // paint is already Voltick and nothing flashes the stored palette first; again
+  // in the effect (StrictMode re-runs it) and at the top of onMount (a child's
+  // effect runs before this one), so the chart's palette read can never miss it.
+  // Idempotent. Released when the page unmounts.
+  pinUiTheme('voltick')
+  useEffect(() => {
+    pinUiTheme('voltick')
+    return () => pinUiTheme(null)
+  }, [])
   const { symbol: pageSymbol, setSymbol: setPageSymbol } = usePageSymbol()
   // Fixed for the life of the mount — onMount reads it once, like everything else.
   const phoneRef = useRef(phone)
@@ -299,6 +336,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
   setPageSymbolRef.current = setPageSymbol
 
   const onMount = useCallback((handle: ChartHandle) => {
+    pinUiTheme('voltick')
     // Vela sizes itself to 100% of its host; an absolutely-placed host inside
     // the frame gives it a definite box whatever the flex parents resolve to.
     const host = document.createElement('div')

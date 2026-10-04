@@ -68,7 +68,7 @@ const REFERENCE = `PINE SCRIPT  paste a TradingView indicator as is (v4, v5, v6)
   Drawings: label / line / box / linefill / polyline / table, with
   their set_* / get_* / delete and the max_*_count limits.
   User types (type / enum / method), maps, Type.new, p.x := …
-  strategy(): orders are simulated — the Strategy Tester panel.
+  strategy(): orders are simulated in the Strategy Tester panel.
   alertcondition / alert: switch them on in the Script Alerts panel.
   Not yet: matrices, TradingView libraries (import).
   A script that stops: Copy error + script, and send it over.
@@ -182,7 +182,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   // ── Strategy Tester / Alerts: panels of their own ──
   const linkRow = el(doc, 'div', 'cb-scr-row')
   const btnTester = el(doc, 'button', 'cb-scr-btn', 'Strategy Tester')
-  btnTester.title = "A strategy() script's backtest — net profit, drawdown, the equity curve and every trade"
+  btnTester.title = "A strategy() script's backtest: net profit, drawdown, the equity curve and every trade"
   const btnAlerts = el(doc, 'button', 'cb-scr-btn', 'Alerts')
   btnAlerts.title = "Switch scripts' alertcondition() / alert() on, and see what fired"
   linkRow.append(btnTester, btnAlerts)
@@ -269,7 +269,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
       return
     }
     if (r.status === 'error' || !r.scripts) {
-      syncNote.textContent = `Sync failed — ${r.error ?? 'try again'}`
+      syncNote.textContent = `Sync failed: ${r.error ?? 'try again'}`
       return
     }
     const clock = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
@@ -300,7 +300,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     try {
       const r = await fetch(`/api/pinescript?ticker=${encodeURIComponent(sym)}&format=json`, { cache: 'no-store', credentials: 'same-origin' })
       if (r.status === 401 || r.status === 403) {
-        say('CB Edge levels come with a subscription — sign in first', 'err')
+        say('CB Edge levels come with a subscription: sign in first', 'err')
         return
       }
       if (r.status === 404) {
@@ -311,7 +311,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
       const j = (await r.json()) as { pine?: unknown }
       if (typeof j.pine !== 'string' || !j.pine.trim()) throw new Error('the reply carried no script')
       const id = `cbl-${sym.toLowerCase().replace(/[^a-z0-9]/g, '')}`
-      const s: Script = { id, name: `CB Edge levels — ${sym}`, source: j.pine.replace(/\r\n?/g, '\n'), u: Date.now() }
+      const s: Script = { id, name: `CB Edge levels · ${sym}`, source: j.pine.replace(/\r\n?/g, '\n'), u: Date.now() }
       await loadRuntime()
       compile(s.source)
       lib = lib.some((x) => x.id === id) ? lib.map((x) => (x.id === id ? s : x)) : [...lib, s]
@@ -321,7 +321,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
       const n = updateRunning(ctx, s)
       const here = ctx.chart.indicators().some((h) => libIdOf(h.id) === id)
       if (!here) ctx.addIndicator({ name: s.name, script: s.source, language: CBSCRIPT, id: instanceIdFor(id) })
-      say(here ? `CB Edge levels for ${sym} refreshed${n > 1 ? ` on ${n} charts` : ''}` : `Added CB Edge levels for ${sym} — this week's EM, pivot and buy / sell zones`, 'ok')
+      say(here ? `CB Edge levels for ${sym} refreshed${n > 1 ? ` on ${n} charts` : ''}` : `Added CB Edge levels for ${sym}: this week's EM, pivot and lower / upper zones`, 'ok')
     } catch (e) {
       say(`CB Edge levels: ${e instanceof Error ? e.message : String(e)}`, 'err')
     } finally {
@@ -355,7 +355,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     fillPick()
     const n = updateRunning(ctx, s)
     const note = warnings.length ? `\nNote: ${warnings.join('; ')}` : ''
-    say((n ? `Saved — updated on ${n} chart${n === 1 ? '' : 's'}` : 'Saved') + note, 'ok')
+    say((n ? `Saved: updated on ${n} chart${n === 1 ? '' : 's'}` : 'Saved') + note, 'ok')
     return s
   }
 
@@ -368,7 +368,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   })
   btnNew.addEventListener('click', () => {
     show({ id: newScriptId(), name: 'My script', source: TEMPLATE })
-    say('New script — Save to keep it', 'info')
+    say('New script: Save to keep it', 'info')
     code.focus()
   })
   btnDel.addEventListener('click', () => {
@@ -386,14 +386,14 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     markDeleted(cur.id)
     scheduleSync()
     show(lib[0] ?? { id: newScriptId(), name: 'My script', source: TEMPLATE })
-    say('Deleted — charts running it keep their copy', 'info')
+    say('Deleted: charts running it keep their copy', 'info')
   })
   pick.onChange = (v) => {
     const s = lib.find((x) => x.id === v)
     if (s) {
       show(s)
       const e = chartError()
-      if (e) say(`On the chart — ${e}`, 'err', true)
+      if (e) say(`On the chart: ${e}`, 'err', true)
       else say('', 'info')
     }
   }
@@ -421,7 +421,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     }
     show({ id: newScriptId(), name: t ?? 'Pasted script', source })
     dirty = true
-    say('Pasted as a new script — Save to keep it, or Add to chart', 'info')
+    say('Pasted as a new script: Save to keep it, or Add to chart', 'info')
   })
   code.addEventListener('keydown', (e) => {
     if (e.key === 'Tab' && !e.shiftKey) {
@@ -447,13 +447,13 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     const s = lib.find((x) => x.id === req.id)
     if (!s) return
     show(s)
-    say(req.note ?? `Editing “${s.name}” — Save updates it on every chart`, 'info')
+    say(req.note ?? `Editing “${s.name}”: Save updates it on every chart`, 'info')
   }
   const offEdit = onEditRequest(() => openRequested())
   openRequested()
   const offErrors = onScriptError((id, msg) => {
     if (libIdOf(id) !== cur.id) return
-    if (msg) say(`On the chart — ${msg}`, 'err', true)
+    if (msg) say(`On the chart: ${msg}`, 'err', true)
     else if (status.dataset.chart === '1') say('Running on the chart', 'ok')
   })
   return {
@@ -467,7 +467,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
         else fillPick()
       }
       const e = chartError()
-      if (e) say(`On the chart — ${e}`, 'err', true)
+      if (e) say(`On the chart: ${e}`, 'err', true)
       renderLinks()
       void doSync(false)
     },

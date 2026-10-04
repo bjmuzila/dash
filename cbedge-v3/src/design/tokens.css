@@ -105,6 +105,13 @@
   --color-flat: #7a828d;
   --color-accent: #5b8cff;
   --color-warn: #e0a44a;
+  /* THE REPLAY DOCK's announcement colour (design/primitives/ReplayDock.tsx and
+     the Vela replay transport). The warn amber on CB Edge; Volt Blue on the
+     Voltick theme below, because Voltick's own replay transport is blue and its
+     amber means one thing only: the Volt. `-text` is the same colour when it
+     has to be a WORD (Voltick: Accent Text, since Volt Blue is too dark to read). */
+  --color-replay: #e0a44a;
+  --color-replay-text: #e0a44a;
 
   /* ── Data series ──────────────────────────────────────────────────────
      Categorical ramp for charts. Keep to 6; if a chart needs more than six
@@ -423,6 +430,17 @@
   --color-vt-path-gold: #ffc933;
   --color-vt-path-shine: #fff8dc;
   --color-vt-path-rim: #05070b;
+  /* Voltick CHART extras, for the Vela chart (pages/vela — it is Voltick's
+     chart, pinned to this palette). Voltick HeatChart.jsx:
+       chart-up / -down  the chart's own candle pair (CHART_GREEN / CHART_RED),
+                         a deeper emerald and a truer red than GOOD / BAD
+       slate             OPEN_RANGE, the one colour on the chart that MEANS
+                         nothing: a measurement (IB, EM, TPO), never a level
+     Voltick's composite chrome (popover plate, card shadow, lit pill) is built
+     from these tokens with color-mix in pages/vela/vela.css. */
+  --color-vt-chart-up: #26c281;
+  --color-vt-chart-down: #f04a5a;
+  --color-vt-slate: #b9c4d4;
   /* PINE SCRIPT's named colours (pages/vela/script — CB Script runs pasted
      TradingView scripts): color.aqua … color.yellow, TradingView's own values,
      so a pasted script draws in the colours its author picked. Not for UI. */
@@ -511,6 +529,8 @@
   --color-move-up: #4d8cff;
   --color-move-down: #ff6b7a;
   --color-warn: #ffd166;
+  --color-replay: #2f6bff;
+  --color-replay-text: #6aa0ff;
 
   --color-series-1: #2f6bff;
   --color-series-2: #3ddc8e;

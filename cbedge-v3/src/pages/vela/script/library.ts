@@ -37,7 +37,7 @@ const EXAMPLES: Script[] = [
   {
     id: 'ex-ema',
     name: 'EMA cross',
-    source: `// EMA cross — two averages, shaded between, a marker where they cross
+    source: `// EMA cross: two averages, shaded between, a marker where they cross
 indicator("EMA cross", overlay=true)
 fastLen = input("Fast", 9, min=1)
 slowLen = input("Slow", 21, min=1)
@@ -81,7 +81,7 @@ plot(vwap(), "VWAP", color=orange, width=2)
 ]
 
 /** A blank script for "New". */
-export const TEMPLATE = `// My script — see Reference below for every name and function
+export const TEMPLATE = `// My script: see Reference below for every name and function
 indicator("My script", overlay=true)
 len = input("Length", 20, min=1)
 plot(ema(close, len), "EMA", color=gold, width=2)
@@ -320,7 +320,7 @@ async function runSync(): Promise<SyncResult> {
     const order = new Map(nowLocal.map((x, k) => [x.id, k]))
     result.sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9))
     saveLibrary(result)
-    if (failed) skipped.push(`${failed} not saved — try Sync again`)
+    if (failed) skipped.push(`${failed} not saved: try Sync again`)
     return { status: 'ok', scripts: result, pulled, pushed, ...(skipped.length ? { skipped } : {}) }
   } catch (e) {
     return { status: 'error', error: e instanceof Error ? e.message : String(e) }
