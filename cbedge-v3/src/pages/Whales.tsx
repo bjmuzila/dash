@@ -1322,16 +1322,15 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         'cursor-pointer border-t border-line hover:bg-raised',
         // Repeat shade (option B's tint) on every row of a repeat contract —
         // the fills inside an open group and a lone repeat print alike.
-        (child ? hotFill === r.id : r.id === selectedId) ? 'bg-raised' : child || repeat ? 'bg-repeat/[0.06]' : '',
+        // No rail (2026-10-03, Brandon): the group row is SHADED and carries the
+        // violet ▾; its fills sit under it on the darker plate, indented.
+        (child ? hotFill === r.id : r.id === selectedId) ? 'bg-raised' : child ? 'bg-surface2' : repeat ? 'bg-repeat/[0.08]' : '',
       ].join(' ')}
     >
       <td
         className={[
           'tabular whitespace-nowrap px-2 py-1.5 text-fg',
-          // Option B's rail: an inset shadow, not a border — a left border on a
-          // td in a collapsed table loses to the row borders and draws thin.
-          child || repeat ? 'shadow-[inset_3px_0_0_var(--color-repeat)]' : '',
-          child ? 'pl-5' : '',
+          child ? 'pl-7' : '',
         ].join(' ')}
       >
         {when(r)}
@@ -1438,10 +1437,10 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         onClick={() => toggleGroup(key)}
         aria-expanded={open}
         title={`Repeated flow: ${c.n} orders in its densest burst${c.nAll ? `, ${c.nAll} all day` : ''} · ${g.length} of them in this list — click to show`}
-        className={['cursor-pointer border-t border-line hover:bg-raised', open ? 'bg-raised' : 'bg-repeat/[0.06]'].join(' ')}
+        className={['cursor-pointer border-t border-line hover:bg-raised', open ? 'bg-repeat/[0.14]' : 'bg-repeat/[0.08]'].join(' ')}
       >
-        <td className="tabular whitespace-nowrap shadow-[inset_3px_0_0_var(--color-repeat)] px-2 py-1.5 text-fg">
-          <span aria-hidden className={['mr-1 inline-block text-repeat transition-transform', open ? '' : '-rotate-90'].join(' ')}>▾</span>
+        <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">
+          <span aria-hidden className={['mr-1.5 inline-block text-sm leading-none text-repeat transition-transform', open ? '' : '-rotate-90'].join(' ')}>▾</span>
           {when(head)}
         </td>
         <td className="whitespace-nowrap px-2 py-1.5 font-semibold text-fg">
@@ -1643,7 +1642,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                         r.id === selectedId ? 'bg-raised' : '',
                         // Repeated flow (2026-10-03): the phone list keeps one
                         // line per print, so the contract is marked, not folded.
-                        r.osi && repeatByOsi.has(r.osi) ? 'shadow-[inset_3px_0_0_var(--color-repeat)] bg-repeat/[0.06]' : '',
+                        r.osi && repeatByOsi.has(r.osi) ? 'bg-repeat/[0.08]' : '',
                       ].join(' ')}
                     >
                       <div className="min-w-0 flex-1">

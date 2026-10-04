@@ -41,6 +41,9 @@ export const VOLFLOW_TYPE = 'cbedge-vol-gex-flow'
 export const WHALES_TYPE = 'cbedge-whale-prints'
 export const TPO_TYPE = 'cbedge-market-profile'
 
+/** The studies that read today's numbers only, blank during a bar replay: type → the dock's name for it. */
+export const LIVE_ONLY: Readonly<Record<string, string>> = { [KEY_TYPE]: 'Key Levels', [PROFILE_TYPE]: 'GEX Profile' }
+
 export function registerStudies(): void {
   defineStudy(
     {
@@ -112,6 +115,7 @@ export function registerStudies(): void {
       title: 'CB Key Levels — walls, CORE, gamma flip, max pain, weekly pivot & zones',
       shortTitle: 'Key Levels',
       pane: 'price',
+      liveOnly: true,
       inputs: () => [
         { key: 'walls', title: 'Call / Put walls', type: 'bool', defval: true },
         { key: 'core', title: 'CORE', type: 'bool', defval: true },
@@ -129,6 +133,7 @@ export function registerStudies(): void {
       title: 'CB GEX Profile — net GEX by strike beside the price axis',
       shortTitle: 'GEX Profile',
       pane: 'price',
+      liveOnly: true,
       viewport: true,
       inputs: () => [
         { key: 'basis', title: 'GEX', type: 'string', defval: GEX_BASIS[0], options: GEX_BASIS },

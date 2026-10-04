@@ -66,6 +66,14 @@ let levelsLoader: LevelsLoader | null = null
 export function setLevelsLoader(fn: LevelsLoader): void {
   levelsLoader = fn
 }
+
+// ── Alerts and bar replay ──
+let alertGate: () => boolean = () => true
+/** Whether script alerts may fire right now. The page shuts them while a bar replay
+ *  reveals history, which reaches the engine bar by bar exactly like live bars. */
+export function setAlertGate(fn: () => boolean): void {
+  alertGate = fn
+}
 const USES_CB = /\bcbedge\.(call_wall|put_wall|core)\b/
 
 /** One bar to dry-run a script on: enough for every declaration and input to register. */
@@ -440,7 +448,7 @@ export class CbScriptEngine implements ScriptingEngine {
         tellError(token.id, null)
         tellResult(token.id, res, bars, market.symbol ?? '', market.timeframe ?? '')
         const lib = libIdOf(token.id)
-        if (lib) scanAlerts(token.id, lib, res.meta.title, res, bars, market.symbol ?? '', market.timeframe ?? '')
+        if (lib && alertGate()) scanAlerts(token.id, lib, res.meta.title, res, bars, market.symbol ?? '', market.timeframe ?? '')
         if (first) {
           first = false
           for (const message of res.warnings) h.onWarning?.({ message, bar: 0 })

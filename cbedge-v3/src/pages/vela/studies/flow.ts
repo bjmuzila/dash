@@ -11,10 +11,10 @@
 //                  pane: volume GEX as a histogram (green / red), OI GEX and the
 //                  combined line — today's session, as the card.
 //   Whale Prints   ≥ $1M option prints (/api/lse/whales — the Whales page's own
-//                  feed, kept forever) as BUBBLES on the bar they printed in,
-//                  sized by the bar's net premium (bullish − bearish): green
-//                  under the bar when bullish (calls bought, puts sold), red
-//                  over it when bearish, grey for prints whose side is unknown.
+//                  feed, kept forever) as BUBBLES centred on the moment each
+//                  printed and the underlying's price then, sized by premium:
+//                  green bullish (calls bought, puts sold), red bearish, grey
+//                  when the side is unknown.
 //                  Hover for a short card of the prints. Drawn by a renderer
 //                  layer — whaleLayer.ts, which has the size table.
 //
@@ -26,6 +26,8 @@ import { tokenHexAlpha } from '@/design/theme'
 import { DAY_MS, barAt, bool, studyImpl, etDateKey, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
 import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_MIN, WH_SIDE } from './index'
 import { WhaleLayer, type Tone, type WhaleBubble, type WhalePayload } from './whaleLayer'
+import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
+import { loadBasis } from '@/pages/vela/wallsIndicator'
 
 const flowTicker = (c: StudyCtx) => (c.sym.fut === 'NQ' ? 'NDX' : c.sym.fut === 'ES' ? 'SPX' : c.sym.key)
 
@@ -224,6 +226,13 @@ interface WhRow {
   premium: number
   action: 'BUY' | 'SELL' | null
   underlying: string | null
+  /** The underlying's price when it printed. */
+  spot: number | null
+}
+/** The prints, plus — on ES / NQ — each session's basis (SPX / NDX prints sit at index prices). */
+interface WhData {
+  rows: WhRow[]
+  basis: BasisModel | null
 }
 interface WhS {
   minPremium: number
@@ -295,32 +304,21 @@ function whenText(rows: readonly WhRow[]): string {
 
 const CARD_ROWS = 5
 
-function bubbleOf(
-  id: string,
-  t: number,
-  anchor: number,
-  above: boolean,
-  rows: WhRow[],
-  amount: number,
-  tone: Tone,
-  head: string,
-  s: WhS,
-): WhaleBubble {
+function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: number, tone: Tone, head: string, s: WhS, priceLabel: string): WhaleBubble {
   const sorted = rows.slice().sort((a, z) => z.premium - a.premium)
   const sign = tone === 'up' ? '+' : tone === 'down' ? '−' : ''
   const n = rows.length
   return {
     id,
     t,
-    anchor,
-    above,
+    price,
     r: bubbleRadius(amount, s.cap, s.size),
     tone,
     label: s.text ? short(amount) : '',
     card: {
       head,
-      net: tone === 'mid' ? short(amount) : `${sign}${short(amount)} net`,
-      when: `${whenText(rows)}${n > 1 ? ` · ${n} prints` : ''}`,
+      net: tone === 'mid' ? short(amount) : `${sign}${short(amount)}`,
+      when: `${whenText(rows)} · ${priceLabel}${n > 1 ? ` · ${n} prints` : ''}`,
       rows: sorted.slice(0, CARD_ROWS).map((r) => {
         const b = biasOf(r)
         return { text: printLine(r), amount: short(r.premium), tone: b > 0 ? 'up' : b < 0 ? 'down' : 'mid' }
@@ -330,46 +328,68 @@ function bubbleOf(
   }
 }
 
-/** Per bar: one bubble for the prints with a known side (their net), one for the rest. */
-function whaleBubbles(c: StudyCtx, s: WhS, rows: WhRow[] | null): WhaleBubble[] {
+/**
+ * One bubble per print, centred on the moment it printed and the underlying's price
+ * then (`spot`; on ES / NQ, SPX / NDX's price plus that session's basis). Prints in the
+ * same minute on the same side — one order filled in pieces — are one bubble at their
+ * premium-weighted price, sized by their total. A print with no recorded spot sits on
+ * its bar's close.
+ */
+function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
   const { bars, tfMs } = c
+  const rows = data?.rows
   if (!bars.length || !rows?.length) return []
-  const byBar = new Map<number, { known: WhRow[]; net: number; unknown: WhRow[]; gross: number }>()
+  const fut = c.sym.fut
+  const basis = data!.basis
+  const shiftFor = (ts: number): number | null => {
+    if (!fut) return 0
+    if (!basis) return null
+    const b = basis.days.get(etDateKey(ts)) ?? basis.basis
+    return isPlausibleBasis(b, basis.max) ? b : null
+  }
+  const first = bars[0]!.time
+  // the end of the newest bar, or, mid-replay, the replay clock (a print later in a
+  // candle that is still building tick by tick has not happened yet)
+  const lastEnd = Math.min(bars[bars.length - 1]!.time + Math.max(tfMs, 60_000), c.until)
+  const groups = new Map<string, WhRow[]>()
   for (const r of rows) {
     if (s.side !== 'all' && r.type !== s.side) continue
-    const i = barAt(bars, r.ts, tfMs)
-    if (i < 0) continue
-    let g = byBar.get(i)
-    if (!g) byBar.set(i, (g = { known: [], net: 0, unknown: [], gross: 0 }))
-    const b = biasOf(r)
-    if (b) {
-      g.known.push(r)
-      g.net += b * r.premium
-    } else {
-      g.unknown.push(r)
-      g.gross += r.premium
-    }
+    if (r.ts < first || r.ts >= lastEnd) continue
+    const key = `${Math.floor(r.ts / 60_000)}|${biasOf(r)}`
+    const g = groups.get(key)
+    if (g) g.push(r)
+    else groups.set(key, [r])
   }
   const out: WhaleBubble[] = []
-  for (const [i, g] of byBar) {
-    const bar = bars[i]!
-    let knownAbove: boolean | null = null
-    if (g.known.length) {
-      const tone: Tone = g.net > 0 ? 'up' : g.net < 0 ? 'down' : 'mid'
-      knownAbove = g.net < 0
-      const head = g.net > 0 ? 'Bullish' : g.net < 0 ? 'Bearish' : 'Even'
-      out.push(bubbleOf(`${i}k`, bar.time, knownAbove ? bar.high : bar.low, knownAbove, g.known, Math.abs(g.net), tone, head, s))
+  for (const [key, g] of groups) {
+    const total = g.reduce((t, r) => t + r.premium, 0)
+    const bias = biasOf(g[0]!)
+    const ts = g.reduce((t, r) => t + r.ts * r.premium, 0) / total
+    const withSpot = g.filter((r) => r.spot != null && r.spot > 0)
+    const shift = shiftFor(ts)
+    let price: number
+    let label: string
+    const underlyingName = flowTicker(c)
+    if (withSpot.length && shift != null) {
+      const w = withSpot.reduce((t, r) => t + r.premium, 0)
+      const spot = withSpot.reduce((t, r) => t + r.spot! * r.premium, 0) / w
+      price = spot + shift
+      label = fut ? `${underlyingName} ${spot.toFixed(2)} (${fut} ${price.toFixed(2)})` : `${underlyingName} ${spot.toFixed(2)}`
+    } else {
+      const i = barAt(bars, ts, tfMs)
+      if (i < 0) continue
+      price = bars[i]!.close
+      label = `bar close ${price.toFixed(2)}`
     }
-    if (g.unknown.length) {
-      const above = knownAbove === null ? false : !knownAbove
-      out.push(bubbleOf(`${i}u`, bar.time, above ? bar.high : bar.low, above, g.unknown, g.gross, 'mid', 'Side unknown', s))
-    }
+    const tone: Tone = bias > 0 ? 'up' : bias < 0 ? 'down' : 'mid'
+    const head = bias > 0 ? 'Bullish' : bias < 0 ? 'Bearish' : 'Side unknown'
+    out.push(bubbleOf(key, ts, price, g, total, tone, head, s, label))
   }
   // the biggest few hundred, when a long window holds more
   return out.sort((a, b) => b.r - a.r).slice(0, 400)
 }
 
-export const whalesImpl = studyImpl<WhS, WhRow[]>({
+export const whalesImpl = studyImpl<WhS, WhData>({
   settings: (i) => {
     const side = str(i.side, WH_SIDE[0])
     return {
@@ -383,12 +403,19 @@ export const whalesImpl = studyImpl<WhS, WhRow[]>({
   },
   dataKey: (c, s) => `${flowTicker(c)}|${s.minPremium}|${s.days}`,
   load: async (c, s) => {
-    const to = etDateKey(Date.now())
-    const from = etDateKey(Date.now() - s.days * DAY_MS)
-    const j = await getJson<{ rows?: Record<string, unknown>[] }>(
-      `/api/lse/whales?from=${from}&to=${to}&ticker=${encodeURIComponent(flowTicker(c))}&min_premium=${s.minPremium}&sort=time&limit=500`,
-    )
-    return (j?.rows ?? [])
+    // Days back from now, or in a replay from the bar it started at, reaching on
+    // past it so the prints still to come are loaded and revealed as it plays.
+    const now = Date.now()
+    const anchor = c.ctx.live ? now : Math.min(now, c.bars[c.bars.length - 1]?.time ?? now)
+    const to = etDateKey(Math.min(now, anchor + Math.max(s.days, 5) * DAY_MS))
+    const from = etDateKey(anchor - s.days * DAY_MS)
+    const [j, basis] = await Promise.all([
+      getJson<{ rows?: Record<string, unknown>[] }>(
+        `/api/lse/whales?from=${from}&to=${to}&ticker=${encodeURIComponent(flowTicker(c))}&min_premium=${s.minPremium}&sort=time&limit=500`,
+      ),
+      c.sym.fut ? loadBasis(c.sym.fut) : Promise.resolve(null),
+    ])
+    const rows = (j?.rows ?? [])
       .map((r): WhRow => ({
         ts: typeof r.ts === 'number' ? r.ts : Date.parse(String(r.ts ?? '')),
         type: r.type === 'C' || r.type === 'P' ? r.type : null,
@@ -399,14 +426,19 @@ export const whalesImpl = studyImpl<WhS, WhRow[]>({
         premium: Number(r.premium) || 0,
         action: r.action === 'BUY' || r.action === 'SELL' ? r.action : null,
         underlying: typeof r.underlying === 'string' ? r.underlying : null,
+        spot: Number.isFinite(Number(r.spot)) && Number(r.spot) > 0 ? Number(r.spot) : null,
       }))
       .filter((r) => Number.isFinite(r.ts) && r.premium > 0)
+    return { rows, basis }
   },
   refreshMs: 60_000,
+  // repaint as the forming bar moves: in a tick replay that is how a print appears
+  // the minute it printed, not when its candle completes
+  everyTick: true,
   // the bubbles are the layer's (whaleLayer.ts) — nothing for the drawing primitives
   render: () => ({}),
-  layer: (c, s, rows): WhalePayload | null => {
-    const bubbles = whaleBubbles(c, s, rows)
+  layer: (c, s, data): WhalePayload | null => {
+    const bubbles = whaleBubbles(c, s, data)
     return bubbles.length ? { bubbles } : null
   },
 })

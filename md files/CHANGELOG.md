@@ -1,20 +1,5 @@
 # Changelog
 
-## 2026-10-03 - v3 rail: same background as the top toolbar
-
-- `cbedge-v3/src/shell/rail.css`: the rail now sits on `--color-bg` (the top toolbar's plate) instead of the darker `--color-rail`, collapsed and open.
-
-## 2026-10-03 - v3 rail: no group headings
-
-- `cbedge-v3/src/shell/Shell.tsx`: the open rail no longer draws the Markets / Prep / Research / More headings (or the hairlines between groups when collapsed). Just the pages, in your saved order.
-
-## 2026-10-03 - v3 rail: hover-to-expand glass rail + floating drawing toolbar
-
-- `cbedge-v3/src/shell/Shell.tsx`: the left rail is now a 64px icon-only "glass rail" that slides out to 224px on hover (short intent delay) as an overlay. The 64px slot never changes width, so the toolbar, board and charts never move. Open, it shows the CB Edge name + 3.0 tag, a "Jump to…" box (Ctrl/⌘ K focuses it, typing filters, Enter goes, Esc clears), group headings (Markets / Prep / Research / More, drawn wherever the group changes so drag-reorder still works), and labels. Active page gets an accent pill, glow and edge bar. `NavItem` gains optional `glyph` and `group`; the emoji `icon` field is kept but no longer drawn.
-- `cbedge-v3/src/shell/railGlyphs.tsx` (new): one inline stroke icon set for the rail, replacing the emoji.
-- `cbedge-v3/src/shell/rail.css` (new): rail styles, tokens only (glass is color-mix over `--color-rail`, so Voltick re-inks it).
-- `cbedge-v3/src/pages/vela/vela.css`: Vela's drawing toolbar is restyled as a rounded floating glass card (bigger rounded hit areas, accent fill on the active tool). Still in its own column so the chart legend is never covered. Phone build unchanged.
-
 ## 2026-09-28 - v3 Options Chain: VIVID heat now uses Multi Greek's curve
 
 - `cbedge-v3/src/pages/optionsChain/heatSkins.ts`: the VIVID skin now uses the same ramp and rank strengths as the home Multi Greek card (`mgMath.ts`): ramp base .04, span .55, max .62, ease 1.6; ranks .9/.45/.25. The Intensity slider now defaults to 1.75 with a max of 3 (it was 3 and 4). Small strikes stay close to dark and only the big ones go bright, so positive blue stands out the way it does on Multi Greek. Same colors (`--color-gex-pos/neg`). CLASSIC is unchanged.
@@ -25701,7 +25686,7 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - New **Sync** button: merges your scripts with your account through the existing `/api/page-preset` store, with deletes carried across devices. It also runs after every save and delete.
   - New **Strategy results** section: net, win rate, profit factor, drawdown, an equity line and the latest trades.
   - New **Alerts** section: a per-script on switch, desktop notifications, and a log of what fired.
-- **Script alerts.** Alerts fire only on live bars, once per bar per alert. They show in the toolbar Alerts feed as a new "Script" chip, as a toast, and as a timeline mark.
+- **Script alerts.** Alerts fire only on live bars, once per bar per alert. They show in the toolbar Alerts feed as a new "Script" chip, as a toast, and as a timeline mark. Discord isn't wired: the only path to Discord is the owner's trade bot.
 - **History.**
   - D/W/M (W and M are new on the timeframe picker) now reach back years. The chart tries `/api/vela/history` first. For the owner it then tries the LSE vault, and for W/M it falls back to `/api/dxlink/candles`.
   - `request.security` on D/W/M fetches that long history too.
@@ -25764,239 +25749,30 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - Repeated-flow rows in the prints table now use a 3px violet rail and a light violet tint (`bg-violet/5`, from option B) on the group row, its open fills, and lone repeat prints. They keep D's layout: a ▾ chevron that turns sideways when closed, and "· N prints" in violet. Lone repeat prints show "· N× repeat" instead of the ↻ pill. Phone rows get the same rail and tint.
 - **Files:** `cbedge-v3/src/pages/Whales.tsx`. `tsc` is clean.
 
-## 2026-10-03 - Vela: whale bubbles, Strategy Tester and Script Alerts panels, docked Watchlist
+## 2026-10-03 - v3 Whales: layout A (inline charts, lookup pop-out, combined repeat chart)
 
-- **Whale Prints are bubbles now.** One bubble per bar, sized by the bar's net premium (bullish minus bearish). Green bubbles sit under the bar, red ones over it. Prints with an unknown side get a grey bubble on the other side of the bar.
-  - Size: bubble area follows premium. The smallest is 5px and the largest 26px, reached at "Biggest bubble at" ($25M by default; $10M, $50M and $100M are the other choices). With the defaults, $2.5M draws at 8px, $5M at 12px and $10M at 16px.
-  - New settings: "Biggest bubble at", "Bubble size %" (50–200), and "Premium in the bubble", which writes the amount inside when it fits.
-  - Hover shows a short card: the side and net, then the day and time, then one line per print, such as "Bought 758 Call · Oct 5   $1.4M" (same-day expiries read "0DTE"). It replaces the one-paragraph tooltip.
-  - How it's drawn: a Vela renderer layer. The study frame (`studies/common.ts`) gained a `layer` option, and `provideLayer` keeps the bubble code in the lazy flow chunk.
-- **Strategy Tester and Script Alerts have their own side panels,** each with a topbar button next to Scripts (rows in ⋮ on a phone).
-  - Strategy Tester has two tabs:
-    - Overview: KPI cards (net profit, max drawdown, win rate, profit factor, average trade, open P/L), the equity curve over the drawdown, and long vs short.
-    - List of trades: every closed trade with entry, exit, P/L and running P/L.
-    - A picker at the top lists every strategy running on a chart. The panel updates live.
-  - Script Alerts shows every saved script that calls `alertcondition()` / `alert()`, each with an On/Off switch, what it declares, and which charts it is on. It also has the desktop-notifications toggle and the log of fired alerts. The bolt icon keeps it apart from Vela's price-alerts bell.
-  - The Scripts panel lost its inline Strategy results and Alerts boxes. It now has "Strategy Tester" and "Alerts" buttons that open the panels.
-  - Timeframes read 5m, 1h and so on in the panels and alert toasts.
-- **Discord removed from script alerts.** It isn't planned; the code comment and the earlier changelog note no longer mention it.
-- **Docked Watchlist** (a new side panel, following velacharts.dev's docked watchlist):
-  - The header is the list picker, with "+ New watchlist", ⚙ Columns (Price, Change, Change %, Volume (24h)), and ⋮ Rename / Delete.
-  - "Add symbol" searches the chart's symbols by ticker or name. A "+ SYM" button adds the active chart's symbol.
-  - Hover a row and ✕ removes it. Drag ⠿ to reorder, which clears any sort. Click a column header to sort, and click again to flip it.
-  - Clicking a row loads it on the active chart, and the chart's symbol is highlighted. On a phone, picking a row closes the sheet.
-  - Data:
-    - Quotes come from `/api/quotes-batch` every 15s while the panel is open.
-    - Volume comes from the last 24h of 5m chart bars (`/api/snapshots/etf-candles`, and `/api/snapshots/candles` for ES/NQ). It is only fetched while that column shows.
-  - Storage: up to 10 lists in the browser. Signed in, they sync to the account through `/api/page-preset` (page `vela-watchlists`), and the newest edit wins per list. The open list is saved with the workspace.
-  - Not built: velacharts' "Advanced view" (full-screen analytics, news and sections).
-- **Phone fix:** in a multi-chart layout, the grid splitters (z 30) were over every side-panel sheet (z 25) and ate taps. Sheets are now lifted above them.
-- **Files:**
-  - `cbedge-v3/src/pages/vela/studies/{common,index,flow}.ts`
-  - `studies/whaleLayer.ts` (new)
-  - `script/{panel,alerts,library}.ts`
-  - `script/testerPanels.ts` (new)
-  - `watchlist/{store,panel}.ts` (new)
-  - `pages/Vela.tsx`
-  - `pages/vela/vela.css`
-- **Checks:**
-  - `tsc` is clean for these files, `check:theme` passes, and `vite build` is OK. The Vela route is 43.5kb, under its 57.7kb budget. The entry, react, css and initial-load budgets were already over before this change.
-  - Headless Chromium against the mock server, desktop and phone:
-    - Bubbles draw, and the hover card shows (including a 2-print card with 0DTE).
-    - Strategy Tester figures and the trades list are correct.
-    - The alert switch persists.
-    - Watchlist: add, remove, sort both ways, drag reorder, columns, new/rename/delete list, reload restore, and the phone sheet all work.
-  - No console errors.
-- **Files in `generated/`** (mock data):
-  - `2026-10-03-vela-whale-bubbles.png`
-  - `2026-10-03-vela-whale-hover.png`
-  - `2026-10-03-vela-strategy-tester.png`
-  - `2026-10-03-vela-strategy-trades.png`
-  - `2026-10-03-vela-script-alerts.png`
-  - `2026-10-03-vela-watchlist.png`
-  - `2026-10-03-vela-watchlist-phone.png`
-
-## 2026-10-03 - Free seasonality page (v2 /explore/seasonality): Voltick-only links
-
-- Every link on the free almanac now goes to voltick.io/bzila. Nothing points back into CB Edge any more.
-- **Toolbar:** the shared PublicNav (logo → /, Overview, LOGIN) is replaced on this page by its own 64px band: a CB Edge logo with no link, plus a GO TO VOLTICK button.
-- **Hero:** "Get full access" (/pricing) and "Sign in" are gone. There is one "Go to Voltick →" button, and the $50/month CB Edge pitch now reads "This page is history. Voltick is today." with the public Voltick pitch. There is no discount code, because the page is public.
-- **Close card:** "Get full access" and "What is CB Edge?" are replaced by one "Go to Voltick →" button.
-- All three buttons use VoltickLink, so clicks are counted under `click:voltick` with the placements `seasonality-nav`, `seasonality-hero` and `seasonality-footer`. They are in Voltick blue (V3.accent), not CB Edge cyan.
-- **File:** `app/explore/seasonality/page.tsx`. This is v2; Brandon approved the edit. The v3 in-app `/seasonality` page is unchanged.
-
-## 2026-10-03 - Vela: watchlist styles restored, themed dropdowns
-
-- **Why the watchlist rendered raw (full-size logos, rows run together):** a later edit to `cbedge-v3/src/pages/vela/vela.css` (the floating drawing toolbar) was written over an older copy of the file. That wiped every rule added earlier today: the Watchlist, Strategy Tester, Script Alerts, the whale hover card, and the phone sheet z-index fix. The rules are back in, merged with the drawing-toolbar section, which is kept as it was.
-- **Dropdowns match the theme:** a new `pages/vela/themedSelect.ts` replaces the native `<select>` in three places: the Watchlist's list picker, the Scripts panel's saved-script picker, and the Strategy Tester's strategy picker. The native list was white with a blue highlight on Windows.
-  - The new list is dark, with the current item marked and "+ New watchlist" set apart as an action.
-  - It has keyboard support: ↑ ↓ Home End, Enter, Escape, and type-a-letter.
-  - It closes on a click outside, on scroll or on resize.
-- Watchlist logos carry a 22px size on the image itself as well, so a logo can never draw at its natural size again. They also fit with `contain` instead of being cropped.
-- **Files:**
-  - `cbedge-v3/src/pages/vela/vela.css`
-  - `pages/vela/themedSelect.ts` (new)
-  - `pages/vela/watchlist/panel.ts`
-  - `pages/vela/script/panel.ts`
-  - `pages/vela/script/testerPanels.ts`
-- **Checks:**
-  - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
-  - Headless watchlist run against the mock server: the dropdown opens and closes, new/switch/rename/delete list all work, as do add, remove, sort, drag, columns, reload restore, and the phone sheet.
-  - No console errors.
-- **Files in `generated/`:** `2026-10-03-vela-watchlist-themed-dropdown.png` (mock data)
-
-## 2026-10-03 - v3 Post-Market: gamma velocity heat (strike × half hour)
-
-- `cbedge-v3/src/pages/premarket/PostMarketTab.tsx`: section 3 (How the book was built) has a new full-width panel under Wall migration / Written vs traded. Rows are the strikes the day traded through plus 4 strikes each side (13 to 41 rows, centred on the close if wider). Columns are the 13 half hours from 09:30 to 16:00. Each cell is the change in that strike's gamma across the half hour, from the recorded ladder. Green means gamma added, red means pulled, and the outlined cell is where spot sat that half hour.
-- The default unit is board share (pp), so the 1/√T decay into the close drops out, the same as the rest of section 3. A `$ gamma` switch shows the raw change in |net GEX|. Changes are by magnitude, so a put wall getting more negative counts as added.
-- Half hours the recording does not cover are drawn dashed, never as zero. The grid fills in as a replay moves, because it reads the same `cols` cut at etMin. The colour scale is the p95 of |change|. A "Reads as" line names the three biggest blooms and the hardest pull. Strike labels on CW / PW / CORE / max pain use the level colour. Cell tooltips show share, $ and spot.
-- `cbedge-v3/src/pages/premarket/postMarketTab.css.ts`: new `vel*` classes. Tokens and type scale only.
-- **Checks:** `tsc` is clean for the file graph and `check:theme` passes. Checked in headless Chromium with a synthetic ladder: full day, a replay at 12:40 with a recorder gap, the `$` switch, and the empty state. No console errors.
-- **Files in `generated/`** (synthetic data): `2026-10-03-postmarket-gamma-velocity.png`
-
-## 2026-10-03 - Vela: Strategy Tester explains itself; floating cards can't shift the page
-
-- **Strategy Tester empty state.** The panel only shows results for a script that starts with `strategy(…)`. An `indicator(…)` script has no trades, so the panel stayed on a one-line "no strategy" note.
-  - It now says what it shows and what it needs.
-  - It adds an **"Add example strategy"** button, which saves an EMA-cross strategy to the library and puts it on the active chart, so the backtest appears right away.
-  - A strategy that is on a chart but has no result is now listed: still running, hidden, or stopped on an error, with the error text.
-  - The panel also refreshes when a script is added or removed.
-- **Whale bubble hover "moved the chart":** without its stylesheet, the hover card dropped into the page flow under the chart. Each hover made the page taller, so the chart shifted and no card was visible.
-  - The card now carries its own fixed placement inline. The themed dropdown list and the script-alert toasts get the same treatment.
-  - With `vela.css` restored (previous entry), the card shows beside the bubble as designed.
-- **Files:**
-  - `cbedge-v3/src/pages/vela/script/testerPanels.ts`
-  - `studies/whaleLayer.ts`
-  - `themedSelect.ts`
-  - `script/alerts.ts`
-  - `vela.css`
-- **Checks:**
-  - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
-  - Headless run against the mock server: the empty Tester shows the explanation, and "Add example strategy" produces a backtest on the chart (25 trades, 51 fills).
-- **Files in `generated/`:** `2026-10-03-vela-strategy-tester-empty.png` (mock data)
-
-## 2026-10-03 - Vela: Watchlist Advanced view (built from the mockup)
-
-- **What it is:** the full watchlist over the chart area, like velacharts.dev's Advanced view.
-  - Open it with ⤢ in the docked Watchlist's header, or from ⋮ → Advanced view.
-  - "Return to chart" or Escape closes it and puts the docked panel back. On a phone, "↩ Chart" goes back.
-  - The code loads on first open, in its own 11.7kb chunk, so the Vela page doesn't carry it.
-- **Header:**
-  - the list picker (with + New watchlist)
-  - Price / Financials / News & events tabs
-  - Add symbol, searching the chart's symbols
-  - Group by Type, your own Sections, or None
-  - Columns, and Return to chart
-- **Summary cards:**
-  - breadth
-  - average change
-  - leader and laggard
-  - volume vs usual (median relative volume, plus the busiest names)
-  - SPX gamma (net GEX, put/call walls, flip)
-  - today's whale flow for the list (net premium and the number of $1M+ prints)
-- **Price tab:** a row per symbol, grouped, with each group's average.
-  - Columns: last, change, change %, volume, relative volume, day range, 5-day line, 30-day range, net GEX, put/call wall, whale flow.
-  - Change can be measured over 1D, 5D or 1M.
-  - Click a column to sort inside each group. The symbol column stays put when the table scrolls sideways.
-  - ⋯ on a row: open on chart, move to a section (or "+ New section…"), remove. Sections are saved with the list and sync like it.
-  - ES and NQ point to SPX / NDX ("↳ SPX") for GEX and whale flow.
-  - Clicking a row selects it for the right-hand column. Double-click or Enter opens it on the chart.
-- **Right column:**
-  - the selected symbol: intraday line vs the previous close, open/high/low/previous close/volume/relative volume, put wall / gamma flip / call wall, today's whale flow, plus Open on chart and Remove
-  - allocation by group at equal weight, with each group's share of the move
-  - the list's latest whale prints
-- **Financials tab:** earnings only.
-  - The next report comes from the Nasdaq calendar, for this week and next: date, before or after the open, EPS estimate, market cap.
-  - How the stock moved on its last reports comes from CB Edge's earnings study, large caps only: last move, average move, average gap.
-  - The tab says that balance-sheet numbers need a fundamentals feed the app doesn't have.
-- **News & events tab:** the app has no headline feed, and the tab says so. It shows the list's $1M+ prints today, the list's upcoming earnings, and the US economic calendar for today and tomorrow.
-- **Data:** all from routes the app already serves; nothing on the server changed.
-  - Quotes come from `/api/quotes-batch` every 15s.
-  - Stats come from the chart provider's own 30-day 5m bars, re-read every 2 minutes. Relative volume compares today so far with the same minute over the last 20 sessions.
-  - GEX comes from `/api/chains` front expiry through `board/chainGex` every 5 minutes, for up to 30 symbols.
-  - Whales come from one `/api/lse/whales` read for today, every minute.
-  - Earnings come from `/proxy/earnings-week` and `/api/public-earnings`, and the calendar from `/api/calendar`.
-  - Nothing is fetched while the view is closed or the tab is hidden.
-- **Layout by width:** below 1180px the right column drops and the cards wrap to two rows. A phone gets one column: cards in a sideways row, the tabs, and compact rows (name, 5-day line, price and change, a % badge). Tapping a row opens that symbol on the chart.
-- **Not built:** "Range (52 weeks)". It needs the long daily history (`/api/vela/history`), which is still waiting for your OK, so the column shows a 30-day range for now.
-- **Files:**
-  - `cbedge-v3/src/pages/vela/watchlist/advanced.ts` (new)
-  - `advanced.css` (new)
-  - `advancedData.ts` (new)
-  - `store.ts` (sections)
-  - `panel.ts` (⤢ and the ⋮ item)
-- **Checks:**
-  - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
-  - Headless run against the mock server, desktop at 1600 and 1100 wide and on the phone:
-    - open and close via Return, Escape and double-click → chart
-    - sort, 5D period, row menu → new section, moving symbols into it, columns toggle
-    - the Financials and News tabs
-    - phone tap → chart
-  - No console errors.
-- **Files in `generated/`** (mock data):
-  - `2026-10-03-vela-watchlist-advanced.png`
-  - `-financials.png`
-  - `-news.png`
-  - `-phone.png`
+- **The right-side probe panel is gone.** Clicking a print opens its ContractProbe in a full-width drawer row directly under the print.
+- **Look Up moved to the filter bar** (ticker, strike, expiry, C/P, GO). GO opens a floating card above the page that you can drag by its header and resize from the corner. The card holds the size and cost inputs plus TRACK, and ✕ closes it. A lookup never adds a row to Prints, and a new lookup replaces the one in the card. The Contract lookup card is removed from the desktop rail; the phone LOOKUP tab is unchanged.
+- **Repeated flow shows one chart.** Expanding a ▾ repeat group opens a single probe for the contract: a violet dot for each fill (area proportional to premium) and the size-weighted average fill as the rung, labelled AVG FILL. The fill rows sit under it, and clicking one rings its dot and shows its time.
+- **ContractProbe / ProbeChart:** new optional `fills` prop (`ProbeFill[]`); with no fills, nothing changes.
+- **Files:** `cbedge-v3/src/pages/Whales.tsx`, `cbedge-v3/src/board/topFlow/ContractProbe.tsx`. `tsc` is clean.
 
 ## 2026-10-03 - v3 Whales: repeat rows match option B's rail and shade exactly
 
-- New token `--color-repeat: #b48cff` (the lilac from the mockup), defined on both themes. It's separate from `--color-violet`, which is the gamma-flip color and is a different shade on the CB Edge theme.
-- Repeat rows (the group row, its open fills, lone repeat prints, and phone rows) now draw B's rail as an inset shadow, `shadow-[inset_3px_0_0_var(--color-repeat)]`. The previous version used `border-l-3`, which lost out to the row borders in the collapsed table and drew thin. The rows also get B's tint, `bg-repeat/[0.06]`. D's layout stays as it was: the ▾ and "· N prints" text, now in the repeat color, and the combined chart's fill dots use it too.
-- **Files:** `cbedge-v3/src/design/tokens.css`, `cbedge-v3/src/pages/Whales.tsx`, `cbedge-v3/src/board/topFlow/ContractProbe.tsx`. `tsc` is clean.
+- New token `--color-repeat: #b48cff`, defined on both themes. Repeat rows draw B's rail as an inset shadow (`shadow-[inset_3px_0_0_var(--color-repeat)]`) with the `bg-repeat/[0.06]` tint. D's ▾ and "· N prints" layout is unchanged.
+- **Files:** `cbedge-v3/src/design/tokens.css`, `cbedge-v3/src/pages/Whales.tsx`, `cbedge-v3/src/board/topFlow/ContractProbe.tsx`.
 
-## 2026-10-03 - Vela: Strategy Tester rebuilt around picking a strategy; four ready-made strategies; CB Edge walls in scripts; Advanced view gets the week ahead
+## 2026-10-03 - v3 Whales: 1D/TODAY show Friday on weekends, a violet dot for every repeated-flow hit
 
-- **Strategy Tester (still a side panel, your call):** adding a strategy now happens inside the tester. Before, you had to go to Scripts, paste, Add to chart, then open the tester.
-  - A **Strategy ▾** picker at the top has four groups: *On the chart* (what's running there), *Ready-made*, *Your scripts* (saved `strategy()` scripts) and **+ Paste a TradingView strategy…**. Picking one puts it on the active chart, runs it and shows its backtest.
-  - The **paste box** sits in the tester itself. An `indicator()` script is refused with a reason. A strategy is checked, saved to your scripts under its own title, and run.
-  - The empty tester explains what it does and shows the four ready-made strategies, each with **Add to chart**.
-  - A bar shows where the strategy runs (symbol, timeframe, bars tested), plus **Edit** and **Remove**. Edit opens your own script in Scripts. For a ready-made one it opens a copy you own ("(my copy)").
-  - Hints: how to test more bars (pick a longer range or zoom out), and why a walls strategy might show no trades.
-  - Names come from the strategy's own title (it was showing "Indicator").
-- **Ready-made strategies** (`script/strategies.ts`, Pine v5 — they double as examples):
-  - **EMA Cross**
-  - **Opening Range Breakout:** a 5/15/30/60-minute range, one trade a day, stop at the other side, target at a multiple of the range.
-  - **VWAP Reclaim / Reject:** an ATR-based stop and target. Trade both sides, long only, or short only.
-  - **CB Edge Walls Bounce:** fades the put/call walls. Stop beyond the wall; target the other wall, halfway, or 2× the stop.
-  - The intraday ones go flat before 15:55 ET. The close order goes out on the bar before, since orders fill at the next bar's open.
-- **CB Edge levels in CB Script:** a script can read `cbedge.call_wall`, `cbedge.put_wall` and `cbedge.core`.
-  - Each gives the wall in force at each bar's close, from the walls recorder. It's the same log, basis shift for ES/NQ, and bar alignment the CB Walls lines use (`wallsIndicator.wallSeriesFor`).
-  - The engine loads the walls only for scripts that use them, and re-reads them as bars land. So a backtest trades the wall that was really there, bar by bar.
-- **Indicators dialog:** a new **BACKTEST → Strategies** category lists the ready-made strategies and your saved strategies. Adding one closes the dialog and opens the tester on it.
-- **Advanced view (week ahead):**
-  - The right column now has **Whale prints today** (8 newest, with a link to all of them).
-  - It also has **This week**: the list's earnings with the day and time, plus the high-impact events for the next 7 days. Allocation comes after these.
-  - Rows carry an **"ER Wed"** badge on symbols that report within 7 days.
-  - The News & events calendar now covers the **next 7 days**, with a heading per day. Earnings show the weekday. Earnings and the calendar now load with the view, not only on that tab.
-- **Dropdowns:** the themed dropdown can show group headings and a placeholder.
-- **Files:**
-  - `cbedge-v3/src/pages/vela/script/{runtime,engine,library,panel,testerPanels}.ts`
-  - `script/strategies.ts` (new)
-  - `wallsIndicator.ts`
-  - `themedSelect.ts`
-  - `indicatorPicker.ts`
-  - `vela.css`
-  - `watchlist/advanced.ts`
-  - `watchlist/advanced.css`
-- **Checks:**
-  - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
-  - Node bench, all four strategies compiling and trading (synthetic walls for the bounce one; no walls → no trades):
-    - EMA: 27 trades
-    - ORB: 22 trades
-    - VWAP: 45 trades
-    - Walls: 34 trades
-  - Headless run against the mock server, desktop and phone:
-    - the intro cards and the picker groups
-    - adding each ready-made one, and the walls one loading walls
-    - pasting an indicator (refused) and a strategy (runs)
-    - Edit → Scripts on a copy, and Remove
-    - Indicators → Strategies → the tester
-    - the Advanced view's week calendar, earnings badges and right column
-  - No console errors.
-- **Files in `generated/`** (mock data):
-  - `2026-10-03-vela-strategy-tester-picker.png`
-  - `-menu.png`
-  - `2026-10-03-vela-indicators-strategies.png`
-  - `2026-10-03-vela-watchlist-advanced.png`
-  - `-news.png`
+- **Last session, not an empty day:** a one-day range on `/api/lse/whales` and `/api/lse/repeated-flow` now snaps back to the newest session on or before the requested day (`whSnapToSession`). On a weekend, a holiday, or before the open, 1D and TODAY show Friday (or whichever session was last), and 1D keeps its $50K floor because it is still a single session.
+- **Burst fills:** `/api/lse/repeated-flow` returns `fills` (ts + premium for every order in each contract's densest window, up to 300). The Repeated flow card's chart draws a violet dot for each one, sized by premium. The prints table's ▾ group chart uses the same burst fills plus any listed prints outside the window; clicking a fill rings its dot.
+- **Files:** `server-v2/api-router.js`, `cbedge-v3/src/pages/whales/RepeatedFlowCard.tsx`, `cbedge-v3/src/pages/Whales.tsx`. `tsc` is clean and `node --check` passes.
+
+## 2026-10-03 - v3 Vela: whale bubbles centred on the print's exact time and price
+
+- **Exact centre:** each bubble now sits on the moment the print happened and the underlying's price at that moment, not on the candle's close. Across a candle, time runs from the left edge (open) to the right edge (close), so a 1:51 PM print on a 5m chart sits a fifth of the way into the 13:50 candle. Price comes from the print's `spot`.
+- **ES / NQ:** SPX/NDX spot is shifted by the day's basis, the same basis model the walls use.
+- **Grouping and fallback:** pieces of one order (same minute, same side) merge into a single bubble at their premium-weighted time and price. A print with no spot falls back to the bar close, and the card says so ("bar close X").
+- **Hover card:** shows the price, e.g. "Fri, Oct 2 · 1:51 PM · SPX 6721.09".
+- **Checked:** hovering a bubble's centre puts the crosshair on the print's own candle and price, on 5m and on a higher timeframe.
+- **Files:** `cbedge-v3/src/pages/vela/studies/flow.ts`, `cbedge-v3/src/pages/vela/studies/whaleLayer.ts`. `tsc` is clean, check-theme passes, and `vite build` is OK.

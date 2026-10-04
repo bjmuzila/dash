@@ -3,12 +3,10 @@
 // (flow.ts) pushes its bubbles to; it repaints them on every pan / zoom frame
 // and on pointer moves, for the hover card.
 //
-//   ● one bubble per bar for the prints whose side is known, sized by their NET
-//     premium (bullish − bearish): green under the bar when the net is bullish,
-//     red over it when bearish
-//   ● a grey one beside it for prints whose side (bought / sold) is unknown,
-//     sized by their total — on the other side of the bar, so the two never
-//     overlap
+//   ● one bubble per print, CENTRED on the moment it printed (placed across its
+//     candle by time: open at the left edge, close at the right) and the
+//     underlying's price then — green bullish, red bearish, grey side unknown.
+//     Pieces of one order (same minute, same side) are one bubble
 //   ● the premium written inside when it fits ("Premium in the bubble")
 //   ● hover: a small card — the side and net, when, and one line per print
 //     ("Bought 758 Call · Oct 5   $1.4M")
@@ -34,11 +32,10 @@ export interface WhaleCardRow {
 
 export interface WhaleBubble {
   id: string
-  /** The bar's open time (ms). */
+  /** When it printed (ms) — the bubble's centre, placed inside its candle by time. */
   t: number
-  /** The bar's low (a bubble under it) or high (over it). */
-  anchor: number
-  above: boolean
+  /** The underlying's price then, in this chart's prices — the bubble's centre. */
+  price: number
   /** Radius in CSS px, size setting applied. */
   r: number
   tone: Tone
@@ -52,8 +49,6 @@ export interface WhalePayload {
 }
 
 const TONE_TOKEN: Record<Tone, string> = { up: '--color-up', down: '--color-down', mid: '--color-muted' }
-/** Pixels between a wick's end and the bubble's edge. */
-const GAP = 4
 
 const hb = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0')
 const hexA = (c: RGB, a: number) => `#${hb(c[0])}${hb(c[1])}${hb(c[2])}${hb(Math.max(0, Math.min(1, a)) * 255)}`
@@ -183,12 +178,14 @@ export class WhaleLayer implements RendererLayerInstance {
     ctx.clip()
 
     const placed: Placed[] = []
+    const bars = args.bars
+    const tf = coords.barInterval || (bars.length > 1 ? bars[1]!.time - bars[0]!.time : 60_000)
     for (const b of d.bubbles) {
-      const x = coords.timeToX(b.t)
-      if (!Number.isFinite(x) || x < -b.r - 2 || x > coords.width + b.r + 2) continue
-      const ya = coords.priceToY(b.anchor, scale, bounds)
-      if (!Number.isFinite(ya)) continue
-      placed.push({ b, x, y: b.above ? ya - GAP - b.r : ya + GAP + b.r })
+      const x = xAt(b.t, bars, tf, coords)
+      if (x == null || x < -b.r - 2 || x > coords.width + b.r + 2) continue
+      const y = coords.priceToY(b.price, scale, bounds)
+      if (!Number.isFinite(y)) continue
+      placed.push({ b, x, y })
     }
     // biggest first: small bubbles stay on top, and are what the pointer finds
     placed.sort((p, q) => q.b.r - p.b.r)
@@ -245,6 +242,27 @@ export class WhaleLayer implements RendererLayerInstance {
     this.card.destroy()
     this.canvas = null
   }
+}
+
+/**
+ * The pixel x of a moment: inside the candle that holds it, from the candle's left
+ * edge (its open) to its right edge (its close) — a 10:05 print on a 30-minute 10:00
+ * candle sits a sixth of the way across it. A moment past the candle's end (a print
+ * after the last regular-hours bar) stays on that candle's right edge.
+ */
+function xAt(t: number, bars: readonly { time: number }[], tf: number, coords: RendererLayerArgs['coords']): number | null {
+  const n = bars.length
+  if (!n || t < bars[0]!.time) return null
+  let lo = 0
+  let hi = n - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (bars[mid]!.time <= t) lo = mid
+    else hi = mid - 1
+  }
+  const frac = Math.max(0, Math.min(1, (t - bars[lo]!.time) / (tf || 1)))
+  const x = coords.logicalToX(lo - 0.5 + frac)
+  return Number.isFinite(x) ? x : null
 }
 
 let fontMemo = ''

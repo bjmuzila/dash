@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { VelaTheme } from '@luxalgo/vela'
 import { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { preload } from '@/data/api'
@@ -12,12 +12,15 @@ import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot
 import { bindIndicatorsWorkspace, registerCopyIndicators } from '@/pages/vela/copyIndicators'
 import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
 import { PATH_TYPE, registerVtPath } from '@/pages/vela/vtPath/vtPathIndicator'
-import { CBSCRIPT, CbScriptEngine } from '@/pages/vela/script/engine'
+import { CBSCRIPT, CbScriptEngine, setAlertGate } from '@/pages/vela/script/engine'
 import { registerScripts } from '@/pages/vela/script/panel'
 import { registerStudies } from '@/pages/vela/studies'
 import { bindTimelineMarks } from '@/pages/vela/marks'
 import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
 import { registerWatchlist } from '@/pages/vela/watchlist/panel'
+import { bindReplay, registerReplay } from '@/pages/vela/replay/replay'
+import { replayActive } from '@/pages/vela/replay/clock'
+import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
 import '@/pages/vela/vela.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -181,6 +184,9 @@ registerScripts()
 registerStudies()
 registerIndicatorPicker()
 registerWatchlist()
+registerReplay()
+// a replay reveals history bar by bar, like live bars: script alerts stay quiet meanwhile
+setAlertGate(() => !replayActive())
 
 function readSeeded(key: string): Set<string> {
   try {
@@ -264,6 +270,8 @@ export default function Vela({ phone = false }: VelaProps) {
   // Fixed for the life of the mount — onMount reads it once, like everything else.
   const phoneRef = useRef(phone)
   const wsRef = useRef<VelaWorkspace | null>(null)
+  // the same workspace, as state: the replay dock renders off it
+  const [wsState, setWsState] = useState<VelaWorkspace | null>(null)
   // The page symbol at mount seeds a FIRST visit; a saved workspace overrides it.
   const seedSymbol = useRef(pageSymbol)
   const setPageSymbolRef = useRef(setPageSymbol)
@@ -300,6 +308,8 @@ export default function Vela({ phone = false }: VelaProps) {
       persist: storageKey,
     })
     wsRef.current = ws
+    setWsState(ws)
+    const unbindReplay = bindReplay(ws)
     const unbindShot = bindShotWorkspace(ws)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
     const unbindMarks = bindTimelineMarks(ws)
@@ -337,7 +347,9 @@ export default function Vela({ phone = false }: VelaProps) {
       unbindShot()
       unbindIndicators()
       unbindMarks()
+      unbindReplay()
       wsRef.current = null
+      setWsState(null)
       ws.destroy()
       host.remove()
     }
@@ -361,6 +373,8 @@ export default function Vela({ phone = false }: VelaProps) {
   return (
     <Page fill>
       <ChartFrame className="relative" onMount={onMount} onResize={() => wsRef.current?.resize()} />
+      {/* bar replay's transport: portalled into the page's replay dock (ReplayDock) */}
+      <ReplayHost ws={wsState} />
     </Page>
   )
 }

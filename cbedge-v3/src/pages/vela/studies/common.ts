@@ -30,6 +30,16 @@
 // it loads, and the impl's `layer(c, s, data)` is pushed to it (ctx.pushData)
 // on every paint; null on suspend / stop clears it.
 //
+// BAR REPLAY (replay/replay.ts): Vela restarts every study when a replay starts,
+// seeks or ends, with `ctx.live` false while it runs and only the revealed bars in
+// `ctx.bars()`. A study drawn from the bars therefore rewinds with them. Two
+// more things are handled here:
+//   · `c.until`, the replay clock: the moment the replay has reached, which can
+//     be inside the forming bar while it plays tick by tick (Infinity live). A
+//     study placing timed events (Whale Prints) hides any event after it.
+//   · `liveOnly` studies read only today's numbers (Key Levels, GEX Profile).
+//     They draw nothing while replaying, and the replay dock names them.
+//
 // Colours come from tokens.css through tokenHexAlpha — never literals.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -50,6 +60,7 @@ import {
 import { registerRendererLayer, stableSeriesId, type RendererLayerArgs, type RendererLayerInstance } from '@luxalgo/vela/plugin'
 import { etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { resolveSym, type ResolvedSym } from '@/pages/vela/cbedgeProvider'
+import { replayClock } from '@/pages/vela/replay/clock'
 
 export const MIN_MS = 60_000
 export const DAY_MS = 86_400_000
@@ -69,6 +80,8 @@ export interface StudyCtx {
   tfMs: number
   /** The visible window, for studies that set `viewport`. */
   view: VisibleRange | null
+  /** The bar replay's clock: nothing after it has happened yet (Infinity while live). */
+  until: number
 }
 
 export interface StudyMeta {
@@ -81,6 +94,8 @@ export interface StudyMeta {
   viewport?: boolean
   /** Paints through a renderer layer of its own (see the header); `cursor` repaints it as the pointer moves. */
   layer?: { cursor?: boolean }
+  /** Reads today's numbers only: draws nothing during a bar replay (see the header). */
+  liveOnly?: boolean
 }
 
 export interface StudyImpl<S, D> {
@@ -132,12 +147,27 @@ class Study implements NativeIndicator {
     const ctx = this.ctx
     if (!ctx) return null
     const ticker = ctx.symbol.replace(/^[^:]*:/, '').trim().toUpperCase()
-    return { ctx, sym: resolveSym(ticker), ticker, bars: ctx.bars(), tfMs: timeframeToMs(ctx.timeframe), view: this.view }
+    return {
+      ctx,
+      sym: resolveSym(ticker),
+      ticker,
+      bars: ctx.bars(),
+      tfMs: timeframeToMs(ctx.timeframe),
+      view: this.view,
+      until: ctx.live ? Infinity : replayClock(),
+    }
   }
 
   start(ctx: NativeIndicatorContext, inputs: Record<string, InputValue>): void {
     this.ctx = ctx
     this.inputs = inputs
+    if (this.meta.liveOnly && !ctx.live) {
+      // replaying: today's numbers would sit on another day's candles. Never `ready`,
+      // so every other hook is a no-op until the replay ends and Vela restarts it.
+      ctx.emit({ series: [], priceLines: [], labels: [], boxes: [], lines: [] })
+      ctx.setStatus('idle')
+      return
+    }
     ctx.setStatus('loading')
     void this.impl().then(
       (spec) => {
@@ -158,7 +188,7 @@ class Study implements NativeIndicator {
     const bars = this.ctx?.bars() ?? []
     const last = bars[bars.length - 1]
     const key = this.spec.everyTick
-      ? `${bars.length}|${last?.time ?? 0}|${last?.high ?? 0}|${last?.low ?? 0}|${last?.close ?? 0}`
+      ? `${bars.length}|${last?.time ?? 0}|${last?.high ?? 0}|${last?.low ?? 0}|${last?.close ?? 0}|${this.ctx?.live === false ? replayClock() : ''}`
       : `${bars.length}|${bars[0]?.time ?? 0}|${last?.time ?? 0}`
     if (key === this.lastKey) return
     this.lastKey = key
