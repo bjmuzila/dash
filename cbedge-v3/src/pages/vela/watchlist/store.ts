@@ -28,6 +28,8 @@ export interface WatchList {
   id: string
   name: string
   symbols: string[]
+  /** The Advanced view's own sections: symbol → section name (absent = unsorted). */
+  groups?: Record<string, string>
   /** Last edit (ms) — the merge key. */
   u: number
 }
@@ -77,7 +79,10 @@ function read(): Saved {
     const lists = Array.isArray(raw?.lists)
       ? raw.lists
           .filter((l): l is WatchList => !!l && typeof l.id === 'string' && typeof l.name === 'string' && Array.isArray(l.symbols))
-          .map((l) => ({ id: l.id, name: l.name.slice(0, 60), symbols: dedupe(l.symbols), u: Number(l.u) || 0 }))
+          .map((l) => {
+            const symbols = dedupe(l.symbols)
+            return { id: l.id, name: l.name.slice(0, 60), symbols, groups: cleanGroups(l.groups, symbols), u: Number(l.u) || 0 }
+          })
       : []
     if (lists.length) return { v: 1, lists, active: typeof raw?.active === 'string' && lists.some((l) => l.id === raw.active) ? raw.active : lists[0]!.id }
   } catch {
@@ -85,6 +90,14 @@ function read(): Saved {
   }
   const first: WatchList = { id: newId(), name: 'Watchlist', symbols: DEFAULT_SYMBOLS.slice(), u: 0 }
   return { v: 1, lists: [first], active: first.id }
+}
+function cleanGroups(g: unknown, symbols: readonly string[]): Record<string, string> | undefined {
+  if (!g || typeof g !== 'object') return undefined
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(g as Record<string, unknown>)) {
+    if (symbols.includes(k) && typeof v === 'string' && v.trim()) out[k] = v.trim().slice(0, 40)
+  }
+  return Object.keys(out).length ? out : undefined
 }
 function dedupe(xs: unknown[]): string[] {
   const out: string[] = []
@@ -161,7 +174,23 @@ export function addSymbol(raw: string): boolean {
 }
 export function removeSymbol(sym: string): void {
   const l = activeList()
-  edit(l.id, (x) => ({ ...x, symbols: x.symbols.filter((s) => s !== sym) }))
+  edit(l.id, (x) => {
+    const groups = { ...(x.groups ?? {}) }
+    delete groups[sym]
+    return { ...x, symbols: x.symbols.filter((s) => s !== sym), groups: Object.keys(groups).length ? groups : undefined }
+  })
+}
+/** Put a symbol of the open list in a section (null: take it out of any). */
+export function setGroup(sym: string, name: string | null): void {
+  const l = activeList()
+  if (!l.symbols.includes(sym)) return
+  edit(l.id, (x) => {
+    const groups = { ...(x.groups ?? {}) }
+    const n = name?.trim().slice(0, 40)
+    if (n) groups[sym] = n
+    else delete groups[sym]
+    return { ...x, groups: Object.keys(groups).length ? groups : undefined }
+  })
 }
 /** The user's own order (a drag) — it clears the list's sort. */
 export function reorder(symbols: string[]): void {
@@ -248,6 +277,7 @@ function scheduleSync(): void {
 interface Remote {
   n?: string
   s?: unknown[]
+  g?: unknown
   u: number
   d?: number
 }
@@ -317,9 +347,10 @@ async function syncOnce(): Promise<void> {
     }
     if (l && (!r || r.d || l.u >= r.u)) {
       merged.push(l)
-      if (!r || r.d || l.u > r.u) writes.push([id, { n: l.name, s: l.symbols, u: l.u || Date.now() }])
+      if (!r || r.d || l.u > r.u) writes.push([id, { n: l.name, s: l.symbols, ...(l.groups ? { g: l.groups } : {}), u: l.u || Date.now() }])
     } else if (r && !r.d) {
-      merged.push({ id, name: String(r.n ?? 'Watchlist').slice(0, 60), symbols: dedupe(r.s ?? []), u: r.u })
+      const symbols = dedupe(r.s ?? [])
+      merged.push({ id, name: String(r.n ?? 'Watchlist').slice(0, 60), symbols, groups: cleanGroups(r.g, symbols), u: r.u })
       pulled = true
     }
   }

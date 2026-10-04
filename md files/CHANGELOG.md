@@ -25874,3 +25874,67 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
   - Headless run against the mock server: the empty Tester shows the explanation, and "Add example strategy" produces a backtest on the chart (25 trades, 51 fills).
 - **Files in `generated/`:** `2026-10-03-vela-strategy-tester-empty.png` (mock data)
+
+## 2026-10-03 - Vela: Watchlist Advanced view (built from the mockup)
+
+- **What it is:** the full watchlist over the chart area, like velacharts.dev's Advanced view.
+  - Open it with ⤢ in the docked Watchlist's header, or from ⋮ → Advanced view.
+  - "Return to chart" or Escape closes it and puts the docked panel back. On a phone, "↩ Chart" goes back.
+  - The code loads on first open, in its own 11.7kb chunk, so the Vela page doesn't carry it.
+- **Header:**
+  - the list picker (with + New watchlist)
+  - Price / Financials / News & events tabs
+  - Add symbol, searching the chart's symbols
+  - Group by Type, your own Sections, or None
+  - Columns, and Return to chart
+- **Summary cards:**
+  - breadth
+  - average change
+  - leader and laggard
+  - volume vs usual (median relative volume, plus the busiest names)
+  - SPX gamma (net GEX, put/call walls, flip)
+  - today's whale flow for the list (net premium and the number of $1M+ prints)
+- **Price tab:** a row per symbol, grouped, with each group's average.
+  - Columns: last, change, change %, volume, relative volume, day range, 5-day line, 30-day range, net GEX, put/call wall, whale flow.
+  - Change can be measured over 1D, 5D or 1M.
+  - Click a column to sort inside each group. The symbol column stays put when the table scrolls sideways.
+  - ⋯ on a row: open on chart, move to a section (or "+ New section…"), remove. Sections are saved with the list and sync like it.
+  - ES and NQ point to SPX / NDX ("↳ SPX") for GEX and whale flow.
+  - Clicking a row selects it for the right-hand column. Double-click or Enter opens it on the chart.
+- **Right column:**
+  - the selected symbol: intraday line vs the previous close, open/high/low/previous close/volume/relative volume, put wall / gamma flip / call wall, today's whale flow, plus Open on chart and Remove
+  - allocation by group at equal weight, with each group's share of the move
+  - the list's latest whale prints
+- **Financials tab:** earnings only.
+  - The next report comes from the Nasdaq calendar, for this week and next: date, before or after the open, EPS estimate, market cap.
+  - How the stock moved on its last reports comes from CB Edge's earnings study, large caps only: last move, average move, average gap.
+  - The tab says that balance-sheet numbers need a fundamentals feed the app doesn't have.
+- **News & events tab:** the app has no headline feed, and the tab says so. It shows the list's $1M+ prints today, the list's upcoming earnings, and the US economic calendar for today and tomorrow.
+- **Data:** all from routes the app already serves; nothing on the server changed.
+  - Quotes come from `/api/quotes-batch` every 15s.
+  - Stats come from the chart provider's own 30-day 5m bars, re-read every 2 minutes. Relative volume compares today so far with the same minute over the last 20 sessions.
+  - GEX comes from `/api/chains` front expiry through `board/chainGex` every 5 minutes, for up to 30 symbols.
+  - Whales come from one `/api/lse/whales` read for today, every minute.
+  - Earnings come from `/proxy/earnings-week` and `/api/public-earnings`, and the calendar from `/api/calendar`.
+  - Nothing is fetched while the view is closed or the tab is hidden.
+- **Layout by width:** below 1180px the right column drops and the cards wrap to two rows. A phone gets one column: cards in a sideways row, the tabs, and compact rows (name, 5-day line, price and change, a % badge). Tapping a row opens that symbol on the chart.
+- **Not built:** "Range (52 weeks)". It needs the long daily history (`/api/vela/history`), which is still waiting for your OK, so the column shows a 30-day range for now.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/watchlist/advanced.ts` (new)
+  - `advanced.css` (new)
+  - `advancedData.ts` (new)
+  - `store.ts` (sections)
+  - `panel.ts` (⤢ and the ⋮ item)
+- **Checks:**
+  - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
+  - Headless run against the mock server, desktop at 1600 and 1100 wide and on the phone:
+    - open and close via Return, Escape and double-click → chart
+    - sort, 5D period, row menu → new section, moving symbols into it, columns toggle
+    - the Financials and News tabs
+    - phone tap → chart
+  - No console errors.
+- **Files in `generated/`** (mock data):
+  - `2026-10-03-vela-watchlist-advanced.png`
+  - `-financials.png`
+  - `-news.png`
+  - `-phone.png`

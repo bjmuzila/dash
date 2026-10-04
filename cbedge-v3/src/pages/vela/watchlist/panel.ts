@@ -2,8 +2,9 @@
 // VELA WATCHLIST — the docked panel. A Vela SIDE PANEL (its button in the
 // topbar's panel group, a row in ⋮ on a phone), independent of any one chart:
 //
-//   header   [ list ▾ ] [⚙] [⋮]   the open list is a picker (and New watchlist);
-//                                  ⚙ Columns; ⋮ Rename / Delete
+//   header   [ list ▾ ] [⤢] [⚙] [⋮]   the open list is a picker (and New watchlist);
+//                                  ⤢ the Advanced view (advanced.ts) over the chart
+//                                  area; ⚙ Columns; ⋮ Advanced view / Rename / Delete
 //   add      [ Add symbol…        ] [+ SPX]   the chart's symbols, by ticker or
 //                                  name; "+ SPX" adds the active chart's
 //   rows     ⠿ logo  SYMBOL name     price   chg   chg%   (vol)   ✕
@@ -97,8 +98,18 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
   const pick = new ThemedSelect(doc, 'cb-wl-pick', 'Watchlist')
   const gear = btn(doc, 'cb-wl-icon', '⚙', 'Columns')
   const more = btn(doc, 'cb-wl-icon', '⋮', 'List actions')
+  const expand = btn(doc, 'cb-wl-icon', '⤢', 'Advanced view')
   slot.classList.add('cb-wl-slot')
-  slot.append(pick.el, gear, more)
+  slot.append(pick.el, expand, gear, more)
+  expand.addEventListener('click', () => openAdvancedView())
+  /** The full watchlist over the chart area (its own chunk, fetched on first use). */
+  function openAdvancedView() {
+    ctx.togglePanel(WATCHLIST_PANEL_ID, false)
+    void import('./advanced').then(
+      (m) => m.openAdvanced(ctx),
+      () => ctx.toast('Couldn’t load the advanced view — try again', 'error'),
+    )
+  }
 
   // ── popovers (columns, list actions, rename, delete) ──
   const pop = el(doc, 'div', 'cb-wl-pop')
@@ -448,6 +459,11 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
     if (!pop.hidden && pop.dataset.kind === 'more') return closePop()
     pop.dataset.kind = 'more'
     const l = activeList()
+    const adv = btn(doc, 'cb-wl-item', '⤢ Advanced view')
+    adv.addEventListener('click', () => {
+      closePop()
+      openAdvancedView()
+    })
     const rename = btn(doc, 'cb-wl-item', 'Rename')
     const del = btn(doc, 'cb-wl-item cb-wl-danger', 'Delete')
     rename.addEventListener('click', () => {
@@ -472,7 +488,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
         r,
       )
     })
-    pop.replaceChildren(rename, del)
+    pop.replaceChildren(adv, rename, del)
     pop.hidden = false
   })
   doc.addEventListener('pointerdown', onDocDown, true)
