@@ -9,14 +9,18 @@
 // and moves like every other dialog in the chart):
 //
 //   [ Search…                                   ⚲ All ]
-//   PERSONAL    Favorites      ★-starred rows, from any category
-//               My Scripts     the CB Script library (script/library.ts)
-//               On chart       what the ACTIVE chart carries — hide / remove
-//   BUILT-INS   Trend · Oscillators · Volatility · Volume & Orderflow
-//               (Vela's 74 built-in studies, sorted by what they measure;
-//               anything a future Vela adds lands in "Other")
-//   CB EDGE     Levels & Walls · Options & GEX · Flow & Profile
-//               (CB Walls, Voltick Path, and pages/vela/studies/)
+//   Favorites          ★-starred rows, from any category
+//   Mine               your CB Scripts: indicators, then your strategies
+//                      (script/library.ts)
+//   Voltick / CB Edge  ours: CB Walls, Voltick Path and pages/vela/studies/,
+//                      under Levels & Walls · Options & GEX · Flow, Profile &
+//                      Trades, then the four ready-made strategies
+//   Everything else    Vela's 74 built-in studies, under Trend · Oscillators ·
+//                      Volatility · Volume & Orderflow (anything a future Vela
+//                      adds lands under Other)
+//
+// Four categories and nothing more (Brandon, 2026-10-04). What is on the chart
+// is managed from its legend rows (eye / gear / ✕); a ✓ marks it here.
 //
 // Click a row to add it to the active chart (through the shell — undo / redo
 // and the topbar count see it); the dialog stays open, the row gets a ✓. The
@@ -33,39 +37,51 @@ import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
 import { testStrategy } from './script/testerPanels'
 import { WALLS_TYPE } from './wallsIndicator'
 import { PATH_TYPE, RIBBON_TYPE } from './vtPath/vtPathIndicator'
-import { EM_TYPE, IB_TYPE, KEY_TYPE, NETPREM_TYPE, ON_TYPE, PRIOR_TYPE, PROFILE_TYPE, TPO_TYPE, VOLFLOW_TYPE, WHALES_TYPE } from './studies'
+import { EM_TYPE, HEAT_TYPE, IB_TYPE, JOURNAL_TYPE, KEY_TYPE, NETPREM_TYPE, ON_TYPE, PRIOR_TYPE, PROFILE_TYPE, RAIL_TYPE, TPO_TYPE, VOLFLOW_TYPE, WHALES_TYPE } from './studies'
 
 const FAV_KEY = 'cb-v3-vela-ind-favs'
 const CAT_KEY = 'cb-v3-vela-ind-cat'
 const SCRIPTS_PANEL = 'cbedge-scripts'
 
-type CatId = 'favorites' | 'scripts' | 'onchart' | 'strategies' | 'trend' | 'osc' | 'volatility' | 'volume' | 'other' | 'cb-levels' | 'cb-gex' | 'cb-flow'
+type CatId = 'favorites' | 'mine' | 'cbedge' | 'others'
+
+/** Headings inside a category's list. */
+type Group = 'scripts' | 'my-strategies' | 'cb-levels' | 'cb-gex' | 'cb-flow' | 'cb-strategies' | 'trend' | 'osc' | 'volatility' | 'volume' | 'other'
 
 interface Cat {
   id: CatId
   label: string
-  section: 'PERSONAL' | 'BACKTEST' | 'BUILT-INS' | 'CB EDGE'
   icon: string
+  /** The headings it lists, in order (favorites: none, one flat list). */
+  groups: Group[]
 }
 
 const CATS: Cat[] = [
-  { id: 'favorites', label: 'Favorites', section: 'PERSONAL', icon: 'star' },
-  { id: 'scripts', label: 'My Scripts', section: 'PERSONAL', icon: 'cb-ip-user' },
-  { id: 'onchart', label: 'On chart', section: 'PERSONAL', icon: 'cb-ip-layers' },
-  { id: 'strategies', label: 'Strategies', section: 'BACKTEST', icon: 'cb-strategy' },
-  { id: 'trend', label: 'Trend', section: 'BUILT-INS', icon: 'cb-ip-trend' },
-  { id: 'osc', label: 'Oscillators', section: 'BUILT-INS', icon: 'cb-ip-osc' },
-  { id: 'volatility', label: 'Volatility', section: 'BUILT-INS', icon: 'cb-ip-vol' },
-  { id: 'volume', label: 'Volume & Orderflow', section: 'BUILT-INS', icon: 'cb-ip-flow' },
-  { id: 'other', label: 'Other', section: 'BUILT-INS', icon: 'cb-ip-grid' },
-  { id: 'cb-levels', label: 'Levels & Walls', section: 'CB EDGE', icon: 'cb-ip-levels' },
-  { id: 'cb-gex', label: 'Options & GEX', section: 'CB EDGE', icon: 'cb-ip-gex' },
-  { id: 'cb-flow', label: 'Flow & Profile', section: 'CB EDGE', icon: 'cb-ip-profile' },
+  { id: 'favorites', label: 'Favorites', icon: 'star', groups: [] },
+  { id: 'mine', label: 'Mine', icon: 'cb-ip-user', groups: ['scripts', 'my-strategies'] },
+  { id: 'cbedge', label: 'Voltick / CB Edge', icon: 'cb-ip-levels', groups: ['cb-levels', 'cb-gex', 'cb-flow', 'cb-strategies'] },
+  { id: 'others', label: 'Everything else', icon: 'cb-ip-grid', groups: ['trend', 'osc', 'volatility', 'volume', 'other'] },
 ]
 
+const GROUP_LABEL: Record<Group, string> = {
+  scripts: 'Indicators',
+  'my-strategies': 'Strategies',
+  'cb-levels': 'Levels & Walls',
+  'cb-gex': 'Options & GEX',
+  'cb-flow': 'Flow, Profile & Trades',
+  'cb-strategies': 'Ready-made strategies',
+  trend: 'Trend',
+  osc: 'Oscillators',
+  volatility: 'Volatility',
+  volume: 'Volume & Orderflow',
+  other: 'Other',
+}
+
+const catOf = (g: Group): CatId => (g === 'scripts' || g === 'my-strategies' ? 'mine' : g.startsWith('cb-') ? 'cbedge' : 'others')
+
 // ── Where every native type goes ──
-const NATIVE_CAT: Record<string, CatId> = {}
-const put = (cat: CatId, types: string[]) => types.forEach((t) => (NATIVE_CAT[t] = cat))
+const NATIVE_CAT: Record<string, Group> = {}
+const put = (cat: Group, types: string[]) => types.forEach((t) => (NATIVE_CAT[t] = cat))
 put('trend', [
   'moving-average', 'sma', 'ema', 'rma', 'vidya', 'zlema', 'linear-regression', 'ma-envelope', 'supertrend', 'parabolic-sar',
   'williams-alligator', 'chande-kroll-stop', 'chandelier-exit', 'donchian-channels', 'keltner-channels',
@@ -89,13 +105,13 @@ put('volume', [
   'volume-flow-indicator', 'volume-oscillator',
 ])
 put('cb-levels', [WALLS_TYPE, PATH_TYPE, RIBBON_TYPE, PRIOR_TYPE, IB_TYPE, ON_TYPE, KEY_TYPE])
-put('cb-gex', [EM_TYPE, PROFILE_TYPE, VOLFLOW_TYPE])
-put('cb-flow', [NETPREM_TYPE, WHALES_TYPE, TPO_TYPE])
+put('cb-gex', [EM_TYPE, PROFILE_TYPE, VOLFLOW_TYPE, RAIL_TYPE, HEAT_TYPE])
+put('cb-flow', [NETPREM_TYPE, WHALES_TYPE, TPO_TYPE, JOURNAL_TYPE])
 
 /** One addable thing. */
 interface Row {
   key: string
-  cat: CatId
+  group: Group
   name: string
   desc: string
   kind: 'native' | 'script'
@@ -120,7 +136,7 @@ function nativeRows(): Row[] {
     const [name, desc] = splitTitle(d.title)
     return {
       key: `n:${d.type}`,
-      cat: NATIVE_CAT[d.type] ?? 'other',
+      group: NATIVE_CAT[d.type] ?? 'other',
       name,
       desc: desc || (d.overlay ? 'On the price chart' : 'In its own pane'),
       kind: 'native',
@@ -132,45 +148,41 @@ function nativeRows(): Row[] {
   })
 }
 
+/** Your CB Script library: indicators, and strategy() scripts (which open the Strategy Tester). */
 function scriptRows(): Row[] {
   return loadLibrary().map((s) => {
-    const m = /\b(indicator|study|strategy)\s*\(/.exec(s.source)
+    const strategy = IS_STRATEGY.test(s.source)
     return {
-      key: `s:${s.id}`,
-      cat: 'scripts' as CatId,
+      key: strategy ? `st:${s.id}` : `s:${s.id}`,
+      group: strategy ? ('my-strategies' as Group) : ('scripts' as Group),
       name: s.name,
-      desc: m?.[1] === 'strategy' ? 'CB Script · strategy' : 'CB Script',
+      desc: strategy ? 'Your strategy · opens the Strategy Tester' : 'CB Script',
       kind: 'script' as const,
       libId: s.id,
       source: s.source,
       overlay: !/overlay\s*=\s*false/.test(s.source),
-      multi: true,
+      multi: !strategy,
       beta: false,
+      ...(strategy ? { strategy: true } : {}),
     }
   })
 }
 
-/** The Strategies category: the ready-made ones, then your saved strategy() scripts. */
-function strategyRows(): Row[] {
-  const row = (key: string, id: string, name: string, desc: string, source: string): Row => ({
-    key,
-    cat: 'strategies',
-    name,
-    desc,
-    kind: 'script',
-    libId: id,
-    source,
+/** The ready-made strategies (script/strategies.ts), under Voltick / CB Edge. */
+function readyRows(): Row[] {
+  return READY_STRATEGIES.map((r) => ({
+    key: `r:${r.id}`,
+    group: 'cb-strategies' as Group,
+    name: r.name,
+    desc: `Strategy · ${r.desc}`,
+    kind: 'script' as const,
+    libId: r.id,
+    source: r.source,
     overlay: true,
     multi: false,
     beta: false,
     strategy: true,
-  })
-  return [
-    ...READY_STRATEGIES.map((r) => row(`r:${r.id}`, r.id, r.name, `Ready-made · ${r.desc}`, r.source)),
-    ...loadLibrary()
-      .filter((s) => IS_STRATEGY.test(s.source))
-      .map((s) => row(`st:${s.id}`, s.id, s.name, 'Your strategy · CB Script', s.source)),
-  ]
+  }))
 }
 
 // ── Remembered choices ──
@@ -223,7 +235,7 @@ function openPicker(ctx: WidgetContext): void {
   }
   const doc = ctx.host.ownerDocument
   let favs = readFavs()
-  let cat: CatId = readCat() ?? (favs.size ? 'favorites' : 'cb-levels')
+  let cat: CatId = readCat() ?? (favs.size ? 'favorites' : 'cbedge')
   let query = ''
   let filter = 0
 
@@ -254,14 +266,14 @@ function openPicker(ctx: WidgetContext): void {
   const presentNative = () => new Set(handles().map((h) => h.nativeType).filter((t): t is string => !!t))
   const presentScripts = () => new Set(handles().map((h) => libIdOf(h.id)).filter((t): t is string => !!t))
 
-  const allRows = (): Row[] => [...nativeRows(), ...scriptRows(), ...strategyRows()]
+  const allRows = (): Row[] => [...nativeRows(), ...scriptRows(), ...readyRows()]
 
   const passesFilter = (r: Row) => filter === 0 || (filter === 1 ? r.overlay : !r.overlay)
 
   const rowsFor = (c: CatId): Row[] => {
     const rows = allRows()
     if (c === 'favorites') return rows.filter((r) => favs.has(r.key))
-    return rows.filter((r) => r.cat === c)
+    return rows.filter((r) => catOf(r.group) === c)
   }
 
   const add = (r: Row) => {
@@ -302,7 +314,7 @@ function openPicker(ctx: WidgetContext): void {
     const text = el(doc, 'div', 'cb-ip-text')
     const name = el(doc, 'div', 'cb-ip-name', r.name)
     if (r.beta) name.append(el(doc, 'span', 'cb-ip-badge', 'beta'))
-    if (showCat) name.append(el(doc, 'span', 'cb-ip-tag', CATS.find((c) => c.id === r.cat)?.label ?? ''))
+    if (showCat) name.append(el(doc, 'span', 'cb-ip-tag', CATS.find((c) => c.id === catOf(r.group))?.label ?? ''))
     text.append(name, el(doc, 'div', 'cb-ip-desc', r.desc))
     const onMark = el(doc, 'span', 'cb-ip-on', on ? '✓' : '')
     onMark.title = on ? 'On this chart' : ''
@@ -326,58 +338,16 @@ function openPicker(ctx: WidgetContext): void {
     return row
   }
 
-  const onChartList = (): HTMLElement[] => {
-    const hs = handles()
-    if (!hs.length) return [el(doc, 'div', 'cb-ip-empty', 'Nothing on this chart yet — pick a category to add one.')]
-    return hs.map((h) => {
-      const row = el(doc, 'div', 'cb-ip-row cb-ip-row-static')
-      const [name, desc] = splitTitle(h.title)
-      const text = el(doc, 'div', 'cb-ip-text')
-      text.append(el(doc, 'div', 'cb-ip-name', name), el(doc, 'div', 'cb-ip-desc', h.nativeType ? desc || 'Built-in' : 'CB Script'))
-      const eye = el(doc, 'button', 'cb-ip-star')
-      eye.type = 'button'
-      eye.title = h.visible ? 'Hide' : 'Show'
-      eye.append(iconEl(h.visible ? 'eye' : 'eye-off', doc))
-      eye.addEventListener('click', () => {
-        h.setVisible(!h.visible)
-        ctx.stateChanged()
-        setTimeout(render, 60)
-      })
-      const trash = el(doc, 'button', 'cb-ip-star')
-      trash.type = 'button'
-      trash.title = 'Remove from chart'
-      trash.append(iconEl('trash', doc))
-      trash.addEventListener('click', () => {
-        h.remove()
-        ctx.stateChanged()
-        setTimeout(render, 60)
-      })
-      if (!h.visible) row.dataset.hidden = '1'
-      row.append(text, eye, trash)
-      return row
-    })
-  }
-
   function renderNav() {
     nav.replaceChildren()
-    let section = ''
-    const counts: Partial<Record<CatId, number>> = { favorites: favs.size, onchart: handles().length }
-    const native = nativeRows()
-    for (const r of native) counts[r.cat] = (counts[r.cat] ?? 0) + 1
-    counts.scripts = loadLibrary().length
-    counts.strategies = strategyRows().length
+    const counts: Partial<Record<CatId, number>> = { favorites: favs.size }
     for (const c of CATS) {
-      if (c.id === 'other' && !counts.other) continue
-      if (c.section !== section) {
-        section = c.section
-        nav.append(el(doc, 'div', 'cb-ip-section', section))
-      }
       const b = el(doc, 'button', 'cb-ip-cat')
       b.type = 'button'
       b.dataset.active = !query && c.id === cat ? '1' : ''
       b.append(iconEl(c.icon, doc), el(doc, 'span', 'cb-ip-cat-label', c.label))
       const n = counts[c.id]
-      if (n && (c.id === 'onchart' || c.id === 'favorites')) b.append(el(doc, 'span', 'cb-ip-count', String(n)))
+      if (n && c.id === 'favorites') b.append(el(doc, 'span', 'cb-ip-count', String(n)))
       b.addEventListener('click', () => {
         cat = c.id
         writeCat(cat)
@@ -403,25 +373,34 @@ function openPicker(ctx: WidgetContext): void {
       hits.sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name))
       out.push(el(doc, 'div', 'cb-ip-head', hits.length ? `${hits.length} result${hits.length === 1 ? '' : 's'}` : `Nothing matches “${query}”`))
       for (const r of hits) out.push(rowEl(r, true, nat, scr))
-    } else if (cat === 'onchart') {
-      out.push(el(doc, 'div', 'cb-ip-head', 'On this chart'), ...onChartList())
     } else {
       const c = CATS.find((x) => x.id === cat)!
       const rows = rowsFor(cat).filter(passesFilter)
-      rows.sort((a, b) => (cat === 'scripts' ? 0 : a.name.localeCompare(b.name)))
-      out.push(el(doc, 'div', 'cb-ip-head', c.section === 'CB EDGE' ? `CB Edge · ${c.label}` : c.label))
+      out.push(el(doc, 'div', 'cb-ip-head', c.label))
       if (!rows.length) {
         out.push(
           el(
             doc,
             'div',
             'cb-ip-empty',
-            cat === 'favorites' ? 'No favorites yet — star any indicator.' : cat === 'scripts' ? 'No saved scripts yet.' : filter ? 'Nothing here with that filter.' : 'Nothing here.',
+            cat === 'favorites' ? 'No favorites yet. Star any indicator and it lands here.' : cat === 'mine' ? 'No saved scripts yet.' : filter ? 'Nothing here with that filter.' : 'Nothing here.',
           ),
         )
       }
-      for (const r of rows) out.push(rowEl(r, cat === 'favorites', nat, scr))
-      if (cat === 'scripts') {
+      if (!c.groups.length) {
+        rows.sort((a, b) => a.name.localeCompare(b.name))
+        for (const r of rows) out.push(rowEl(r, true, nat, scr))
+      } else {
+        for (const g of c.groups) {
+          const inG = rows.filter((r) => r.group === g)
+          if (!inG.length) continue
+          // your scripts keep their library order; everything else A–Z
+          if (cat !== 'mine') inG.sort((a, b) => a.name.localeCompare(b.name))
+          out.push(el(doc, 'div', 'cb-ip-sub', GROUP_LABEL[g]))
+          for (const r of inG) out.push(rowEl(r, false, nat, scr))
+        }
+      }
+      if (cat === 'mine') {
         const neu = el(doc, 'button', 'cb-ip-link')
         neu.type = 'button'
         neu.append(iconEl('plus', doc), el(doc, 'span', '', 'Write or paste a script…'))
@@ -498,15 +477,8 @@ export function registerIndicatorPicker(): void {
   registered = true
   // nav icons (Vela ships star / search / eye / trash / plus; these are ours)
   registerIcon('cb-ip-user', svg16('<circle cx="8" cy="5.5" r="2.6"/><path d="M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/>'))
-  registerIcon('cb-ip-layers', svg16('<path d="M8 2.5 14 5.5 8 8.5 2 5.5z"/><path d="m2 8.5 6 3 6-3"/><path d="m2 11 6 3 6-3"/>'))
-  registerIcon('cb-ip-trend', svg16('<path d="M2 12 6 8l3 2.5L14 4"/><path d="M10.5 4H14v3.5"/>'))
-  registerIcon('cb-ip-osc', svg16('<path d="M1.5 8c1.5-4 3-4 4.5 0s3 4 4.5 0 3-4 4 0"/>'))
-  registerIcon('cb-ip-vol', svg16('<path d="M2 8h2l2-5 3 10 2-5h3"/>'))
-  registerIcon('cb-ip-flow', svg16('<path d="M3 4h7M3 8h10M3 12h5"/>'))
   registerIcon('cb-ip-grid', svg16('<rect x="2.5" y="2.5" width="4.5" height="4.5" rx=".8"/><rect x="9" y="2.5" width="4.5" height="4.5" rx=".8"/><rect x="2.5" y="9" width="4.5" height="4.5" rx=".8"/><rect x="9" y="9" width="4.5" height="4.5" rx=".8"/>'))
   registerIcon('cb-ip-levels', svg16('<path d="M2 4h12M2 8h12M2 12h12" stroke-dasharray="2 1.5"/>'))
-  registerIcon('cb-ip-gex', svg16('<path d="M8 2v12"/><path d="M8 4h5M8 6.5h3M8 9H4M8 11.5H5.5"/>'))
-  registerIcon('cb-ip-profile', svg16('<path d="M2.5 2.5v11"/><path d="M2.5 4h4M2.5 6.5h8M2.5 9h10M2.5 11.5h5"/>'))
   registerIcon('cb-ip-funnel', svg16('<path d="M2.5 3h11l-4.2 5v4.5l-2.6 1.2V8z"/>'))
   registerWidgetAction({
     id: 'indicators',

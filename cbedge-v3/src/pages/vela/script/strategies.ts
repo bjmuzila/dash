@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // CB SCRIPT — the ready-made strategies. Four strategy() scripts anyone can put
 // on a chart from the Strategy Tester's picker or the Indicators dialog's
-// Strategies category, and edit a copy of in Scripts. Plain Pine v5 (the
+// Voltick / CB Edge category, and edit a copy of in Scripts. Plain Pine v5 (the
 // language every TradingView strategy is written in), so they double as
 // examples of what the tester runs.
 //
