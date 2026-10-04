@@ -23,6 +23,13 @@
 // `everyTick`, when the forming bar moves — throttled), input changes that
 // reload only when the data key changed, suspend / resume / stop.
 //
+// A study that paints pixels the drawing primitives cannot (Whale Prints'
+// bubbles) declares `layer` in its meta: the frame registers a Vela RENDERER
+// LAYER under the study's type id up front (a shim — renderers pick layers up at
+// mount), the impl module hands the real painter over with provideLayer() when
+// it loads, and the impl's `layer(c, s, data)` is pushed to it (ctx.pushData)
+// on every paint; null on suspend / stop clears it.
+//
 // Colours come from tokens.css through tokenHexAlpha — never literals.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -40,7 +47,7 @@ import {
   type SeriesSpec,
   type VisibleRange,
 } from '@luxalgo/vela'
-import { stableSeriesId } from '@luxalgo/vela/plugin'
+import { registerRendererLayer, stableSeriesId, type RendererLayerArgs, type RendererLayerInstance } from '@luxalgo/vela/plugin'
 import { etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { resolveSym, type ResolvedSym } from '@/pages/vela/cbedgeProvider'
 
@@ -72,6 +79,8 @@ export interface StudyMeta {
   inputs: () => InputSchema[]
   /** Repaint on scroll / zoom (onViewport). */
   viewport?: boolean
+  /** Paints through a renderer layer of its own (see the header); `cursor` repaints it as the pointer moves. */
+  layer?: { cursor?: boolean }
 }
 
 export interface StudyImpl<S, D> {
@@ -84,6 +93,8 @@ export interface StudyImpl<S, D> {
   /** Repaint as the forming bar moves (throttled), not only when a bar is added. */
   everyTick?: boolean
   render: (c: StudyCtx, s: S, data: D | null) => NativeIndicatorOutput
+  /** The payload for the study's renderer layer (meta.layer), pushed on every paint. */
+  layer?: (c: StudyCtx, s: S, data: D | null) => unknown
 }
 
 export const str = (v: InputValue | undefined, d: string) => (typeof v === 'string' && v ? v : d)
@@ -177,6 +188,7 @@ class Study implements NativeIndicator {
   suspend(): void {
     this.suspended = true
     this.disarm()
+    if (this.ready && this.spec.layer) this.ctx?.pushData(null)
   }
 
   resume(): void {
@@ -192,6 +204,7 @@ class Study implements NativeIndicator {
     this.disarm()
     if (this.paintTimer) clearTimeout(this.paintTimer)
     this.paintTimer = null
+    if (this.ready && this.spec.layer) this.ctx?.pushData(null)
     this.ctx = null
   }
 
@@ -230,12 +243,22 @@ class Study implements NativeIndicator {
     if (!c || this.suspended || !this.ready) return
     if (this.spec.load && !this.loaded) return
     let out: NativeIndicatorOutput
+    const s = this.spec.settings(this.inputs)
     try {
-      out = this.spec.render(c, this.spec.settings(this.inputs), this.data)
+      out = this.spec.render(c, s, this.data)
     } catch {
       out = {}
     }
     c.ctx.emit({ series: [], priceLines: [], labels: [], boxes: [], lines: [], ...out })
+    if (this.spec.layer) {
+      let payload: unknown = null
+      try {
+        payload = this.spec.layer(c, s, this.data)
+      } catch {
+        payload = null
+      }
+      c.ctx.pushData(payload)
+    }
     c.ctx.setStatus(this.timer ? 'live' : 'idle')
   }
 
@@ -255,11 +278,48 @@ class Study implements NativeIndicator {
   }
 }
 
+// ── Renderer layers (meta.layer) ──────────────────────────────────────────────
+
+const painters = new Map<string, () => RendererLayerInstance>()
+
+/** The impl module's painter for a study's layer — called when that module loads. */
+export function provideLayer(type: string, create: () => RendererLayerInstance): void {
+  painters.set(type, create)
+}
+
+/** Stands in for the real layer until the impl module has provided it (nothing is pushed before then). */
+class LayerShim implements RendererLayerInstance {
+  private canvas: HTMLCanvasElement | null = null
+  private inner: RendererLayerInstance | null = null
+  constructor(private readonly type: string) {}
+  mount(canvas: HTMLCanvasElement): void {
+    this.canvas = canvas
+  }
+  render(args: RendererLayerArgs): void {
+    if (!this.inner) {
+      const create = painters.get(this.type)
+      if (!create || !this.canvas) return
+      this.inner = create()
+      this.inner.mount(this.canvas)
+    }
+    this.inner.render(args)
+  }
+  destroy(): void {
+    this.inner?.destroy?.()
+    this.inner = null
+    this.canvas = null
+  }
+}
+
 /** Register a study type (once). Vela reads its registry when a workspace is built. */
 const registered = new Set<string>()
 export function defineStudy(meta: StudyMeta, impl: () => Promise<AnyImpl>): void {
   if (registered.has(meta.type)) return
   registered.add(meta.type)
+  if (meta.layer) {
+    const type = meta.type
+    registerRendererLayer({ id: type, placement: 'above-data', repaintOnCursor: meta.layer.cursor === true, create: () => new LayerShim(type) })
+  }
   let cached: Promise<AnyImpl> | null = null
   const load = () => (cached ??= impl().catch((e) => {
     cached = null

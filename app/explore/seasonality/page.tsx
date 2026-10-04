@@ -1,7 +1,8 @@
-import Link from "next/link";
 import type { Metadata } from "next";
-import { V3, V3_RADIUS, V3_SANS, V3_TEXT, v3Chip, v3GhostButton, v3PrimaryButton } from "@/components/landing/v3Theme";
-import PublicNav from "@/components/landing/PublicNav";
+import { V3, V3_RADIUS, V3_SANS, V3_TEXT, v3a, v3Chip, v3PrimaryButton } from "@/components/landing/v3Theme";
+import VoltickLink from "@/components/analytics/VoltickLink";
+import { VOLTICK_PUBLIC_PITCH } from "@/lib/salesClosed";
+import { BRAND_LOGO_SRC } from "@/lib/brand";
 import SeasonalityView from "@/components/seasonality/SeasonalityView";
 import { ALMANAC } from "@/components/seasonality/seasonalityData";
 
@@ -27,6 +28,14 @@ import { ALMANAC } from "@/components/seasonality/seasonalityData";
 // components/landing/v3Theme.ts like every other public page. The almanac
 // itself (SeasonalityView) keeps its own SEA tokens for chart surfaces; those
 // are data-viz colours, not UI chrome.
+//
+// VOLTICK-ONLY LINKS (2026-10-03, Brandon): every link on this page goes to
+// voltick.io/bzila and nowhere else — no /pricing, no sign-in, no Overview, no
+// home link. That is why it no longer mounts the shared PublicNav (its logo,
+// Overview tab and LOGIN all point back into CB Edge); the band below is a
+// logo that links nowhere plus one Voltick button. Every Voltick link goes
+// through VoltickLink so the clicks are still counted. No discount code here —
+// this page is public (see VOLTICK_PUBLIC_PITCH in lib/salesClosed.ts).
 //
 // STATIC: every number on it is compiled into seasonalityData.ts at build time.
 // No DATABASE_URL, no proxy, no socket — so unlike the sibling explore pages
@@ -67,8 +76,19 @@ export default function SeasonalityPublicPage() {
         fontFamily: V3_SANS,
       }}
     >
-      {/* Shared public toolbar — carries its own access CTA and Sign in. */}
-      <PublicNav active="Features" />
+      {/* Voltick-only toolbar — the logo is not a link; the one button is. */}
+      <style>{`.sea-volt { transition: background .14s; } .sea-volt:hover { background: ${v3a(V3.accent, 0.85)} !important; }`}</style>
+      <div style={navBand}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={BRAND_LOGO_SRC}
+          alt="CB Edge"
+          style={{ height: 34, width: "auto", maxWidth: 170, display: "block", objectFit: "contain" }}
+        />
+        <VoltickLink placement="seasonality-nav" className="sea-volt" style={navVoltBtn}>
+          GO TO VOLTICK <span aria-hidden>›</span>
+        </VoltickLink>
+      </div>
 
       <main
         style={{
@@ -118,18 +138,14 @@ export default function SeasonalityPublicPage() {
 
           <div style={heroCta}>
             <div style={{ fontSize: V3_TEXT.base, lineHeight: 1.5, marginBottom: 10 }}>
-              <b style={{ fontSize: V3_TEXT.body }}>This page is history. The dashboard is today.</b>
+              <b style={{ fontSize: V3_TEXT.body }}>This page is history. Voltick is today.</b>
               <br />
-              Live SPX gamma, flip levels and option flow. <b style={{ color: V3.cyan }}>$50/month</b>, one tier,
-              cancel anytime.
+              Live gamma levels and option flow. {VOLTICK_PUBLIC_PITCH}
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <Link href="/pricing?from=seasonality" style={ctaPrimary}>
-                Get full access →
-              </Link>
-              <Link href="/sign-in?from=seasonality" style={ctaQuiet}>
-                Sign in
-              </Link>
+              <VoltickLink placement="seasonality-hero" className="sea-volt" style={ctaPrimary}>
+                Go to Voltick →
+              </VoltickLink>
             </div>
           </div>
         </header>
@@ -146,16 +162,13 @@ export default function SeasonalityPublicPage() {
               </h2>
               <p style={{ color: V3.fg, fontSize: V3_TEXT.base, lineHeight: 1.55, margin: 0 }}>
                 A ninety-eight-year average is a weak prior about a distribution. Where price actually goes tomorrow
-                needs the order flow.
+                needs the order flow, and that lives on Voltick.
               </p>
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Link href="/pricing?from=seasonality-footer" style={ctaPrimary}>
-                Get full access →
-              </Link>
-              <Link href="/" style={ctaGhost}>
-                What is CB Edge?
-              </Link>
+              <VoltickLink placement="seasonality-footer" className="sea-volt" style={ctaPrimary}>
+                Go to Voltick →
+              </VoltickLink>
             </div>
           </div>
         </section>
@@ -182,20 +195,50 @@ const heroCta: React.CSSProperties = {
   background: V3.surface2,
 };
 
-const ctaPrimary: React.CSSProperties = { ...v3PrimaryButton, padding: "11px 20px" };
-
-const ctaQuiet: React.CSSProperties = {
-  display: "inline-block",
-  padding: "6px 4px",
-  color: V3.fg,
-  fontSize: V3_TEXT.base,
-  fontWeight: 600,
-  textDecoration: "underline",
-  textUnderlineOffset: 3,
-  textAlign: "center",
+// Voltick blue (V3.accent), not CB Edge cyan — same reasoning as PublicNav's
+// voltBtn: a cyan button reads as "buy CB Edge", and this one is not that.
+const ctaPrimary: React.CSSProperties = {
+  ...v3PrimaryButton,
+  padding: "11px 20px",
+  background: V3.accent,
+  border: `1px solid ${V3.accent}`,
+  boxShadow: `0 6px 16px -6px ${v3a(V3.accent, 0.55)}`,
 };
 
-const ctaGhost: React.CSSProperties = { ...v3GhostButton, padding: "11px 18px" };
+// Same box as PublicNav's band (64px, sticky, hairline under) so the page
+// sits exactly where it did when it mounted the shared toolbar.
+const navBand: React.CSSProperties = {
+  position: "sticky",
+  top: 0,
+  zIndex: 50,
+  flexShrink: 0,
+  height: 64,
+  boxSizing: "border-box",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  padding: "0 clamp(12px, 2vw, 20px)",
+  background: V3.bg,
+  borderBottom: `1px solid ${V3.line}`,
+};
+
+const navVoltBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  height: 34,
+  padding: "0 16px",
+  borderRadius: V3_RADIUS.md,
+  fontSize: V3_TEXT.sm,
+  fontWeight: 700,
+  letterSpacing: "0.07em",
+  color: V3.bg,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+  background: V3.accent,
+  border: `1px solid ${V3.accent}`,
+};
 
 const closeCard: React.CSSProperties = {
   marginTop: 4,

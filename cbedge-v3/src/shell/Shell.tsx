@@ -1,6 +1,6 @@
 import type { DragEvent as ReactDragEvent, ReactNode } from 'react'
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { preload } from '@/data/api'
 import { isMobilePath } from '@/mobile/mobileNav'
 import { AuthProvider, useAuth } from '@/data/auth'
@@ -23,6 +23,8 @@ import { UserMenu } from '@/shell/UserMenu'
 import { VoltickThemeSwitch } from '@/shell/VoltickThemeSwitch'
 import { UpdateToast } from '@/shell/UpdateToast'
 import { readUiTheme, setUiTheme } from '@/design/uiTheme'
+import { RailIcon, type RailGlyph } from '@/shell/railGlyphs'
+import '@/shell/rail.css'
 
 /**
  * The notes dock, its note store and the owner's Quick Probe are ~30KB of source
@@ -56,8 +58,15 @@ const NoteClipMenu = lazy(() => import('@/shell/NoteClipMenu'))
 export interface NavItem {
   to: string
   label: string
-  /** Rail icon — a single emoji glyph, matching v2's nav-icon language. */
+  /** The emoji v2 used for this page. No longer drawn on the rail (see
+   *  `glyph`), kept because other surfaces may still read it. */
   icon: string
+  /** The rail's stroke icon — see shell/railGlyphs.tsx. */
+  glyph?: RailGlyph
+  /** Heading the item sits under when the rail is open. A head is drawn
+   *  wherever the group changes in the CURRENT order, so a user's drag-reorder
+   *  still reads sensibly — it just gets more heads. */
+  group?: 'Markets' | 'Prep' | 'Research' | 'More'
   /** URLs to start fetching when the user shows intent (hover/touch). */
   prefetch?: string[]
   /** No page behind this icon yet — dimmed, not draggable to elsewhere, not
@@ -92,45 +101,47 @@ export interface NavItem {
 // thing and they stay — see src/board/catalog.tsx. This list, App.tsx's routes
 // and ALL_PAGES/LIVE_ROUTES in pages/TradersDashboard.tsx move together.
 export const NAV: NavItem[] = [
-  { to: '/', label: 'Home', icon: '🏠' },
+  { to: '/', label: 'Home', icon: '🏠', glyph: 'home', group: 'Markets' },
   {
     to: '/traders-dashboard',
     label: 'Traders Dash',
     icon: '📊',
+    glyph: 'dash',
+    group: 'Markets',
     prefetch: ['/api/traders-dashboard/overview'],
   },
-  { to: '/premarket', label: 'Premarket', icon: '🌅', prefetch: ['/api/scanner/market-quality'] },
+  { to: '/premarket', label: 'Premarket', icon: '🌅', glyph: 'sun', group: 'Markets', prefetch: ['/api/scanner/market-quality'] },
   // The $1M+ archive. No prefetch: its one request carries the range and the
   // filters, so a hover would warm a URL the click is unlikely to ask for.
-  { to: '/whales', label: 'Whales', icon: '🐋' },
-  { to: '/options-chain', label: 'Options Chain', icon: '⛓️', prefetch: ['/api/expirations?ticker=SPX'] },
+  { to: '/whales', label: 'Whales', icon: '🐋', glyph: 'whale', group: 'Markets' },
+  { to: '/options-chain', label: 'Options Chain', icon: '⛓️', glyph: 'chain', group: 'Markets', prefetch: ['/api/expirations?ticker=SPX'] },
   // Prefetches the default chip's levels row on hover — the page's own lookup
   // reads it back out of the api.ts cache, so the click lands on data that is
   // already home. See src/pages/em/emData.ts (LEVELS_STALE_MS).
-  { to: '/em', label: 'Est. Moves', icon: '↔️', prefetch: ['/api/levels?ticker=SPX'] },
+  { to: '/em', label: 'Est. Moves', icon: '↔️', glyph: 'moves', group: 'Prep', prefetch: ['/api/levels?ticker=SPX'] },
   // Next to Est. Moves on purpose — both are pre-open prep, read once before the
   // bell rather than watched. No prefetch: the page's three feeds go out through
   // a raw fetch(…, { cache: 'no-store' }) in data/econCalendar.ts, not through
   // api.ts, so a warmed api cache would never be read back — an unused request
   // on every hover. Give it one the day that hook moves onto api.ts.
-  { to: '/economic-calendar', label: 'Econ Cal', icon: '📅' },
-  { to: '/analytics', label: 'Analysis', icon: '📈', prefetch: ['/api/premarket-summary'] },
+  { to: '/economic-calendar', label: 'Econ Cal', icon: '📅', glyph: 'cal', group: 'Prep' },
+  { to: '/analytics', label: 'Analysis', icon: '📈', glyph: 'chart', group: 'Research', prefetch: ['/api/premarket-summary'] },
   // Prefetches the recorder's symbol list on hover — the first thing every one
   // of the four tabs needs, whichever one you land on.
-  { to: '/replay', label: 'Replay', icon: '⏱️', prefetch: ['/proxy/strike-growth/replay-meta'] },
+  { to: '/replay', label: 'Replay', icon: '⏱️', glyph: 'replay', group: 'Research', prefetch: ['/proxy/strike-growth/replay-meta'] },
   // /flow HIDDEN 2026-09-22 (Brandon): off the rail for now, page left as-is.
   // The route still answers /v3/flow; restore this line to bring it back.
-  // { to: '/flow', label: 'Flow', icon: '🌊' },
+  // { to: '/flow', label: 'Flow', icon: '🌊', glyph: 'flow', group: 'Research' },
   // Prefetches the default tab's first feed on hover. /scanner opens on GEX
   // Change Top (Brandon, 2026-09-02 — v2 had two disagreeing answers for this
   // and DEFAULT_TAB in pages/scanner/scannerNav.ts is now the only one), so the
   // click lands on data that is already home.
-  { to: '/scanner', label: 'Scanner', icon: '🔭', prefetch: ['/proxy/gex-change-top'] },
+  { to: '/scanner', label: 'Scanner', icon: '🔭', glyph: 'radar', group: 'Research', prefetch: ['/proxy/gex-change-top'] },
   // Landed 2026-09-03 with the wall-migration chart — the first surface of v2's
   // /app/level-log to come across. No prefetch: the page's fetch is keyed on a
   // ticker AND a date, and warming SPX-on-today would be wrong for anyone whose
   // last link named something else.
-  { to: '/level-log', label: 'Level Log', icon: '🧱' },
+  { to: '/level-log', label: 'Level Log', icon: '🧱', glyph: 'log', group: 'Research' },
   // The almanac — 98 years of SPX seasonality plus the event studies built on
   // the same record (FOMC, Jackson Hole, opex, earnings, every Apple keynote
   // since 2007). Ported from v2's /explore/seasonality 2026-09-07. That page
@@ -138,7 +149,7 @@ export const NAV: NavItem[] = [
   // for subscribers only. No prefetch: the page's one runtime fetch
   // (/api/public-seasonality) is fired by useLiveYear after mount and does not
   // read the api.ts cache, so warming it on hover would be a wasted request.
-  { to: '/seasonality', label: 'Almanac', icon: '📜', paidOnly: true },
+  { to: '/seasonality', label: 'Almanac', icon: '📜', glyph: 'book', group: 'Research', paidOnly: true },
   // VELA — LuxAlgo's open-source chart workspace on our own tape (2026-10-02).
   // Prefetches the default chart's history (SPX 5m) on hover. The string MUST
   // equal DEFAULT_HISTORY_URL in pages/vela/cbedgeProvider.ts, or the warm
@@ -149,6 +160,8 @@ export const NAV: NavItem[] = [
     label: 'Vela',
     // ⛵ — "vela" is also a sail, and the phone bar's SPX tab already wears 🕯️.
     icon: '⛵',
+    glyph: 'vela',
+    group: 'Research',
     prefetch: ['/api/snapshots/etf-candles?symbol=SPX&days=30&interval=5&limit=8000'],
   },
   // Last in the rail on purpose — it is the way OUT of v3, not a place to work.
@@ -156,15 +169,20 @@ export const NAV: NavItem[] = [
   // It is the honest version of the dimmed "coming soon" icons that came out of
   // this list on 2026-08-30: those said a page was coming, this says where the
   // page actually is today. Shrinks as v3 fills in; delete it when it is empty.
-  { to: '/legacy', label: 'v2 Legacy', icon: '🗄️' },
+  { to: '/legacy', label: 'v2 Legacy', icon: '🗄️', glyph: 'arch', group: 'More' },
 ]
 
-// The rail head. It was a drawn accent square with the letters "CB" in it —
-// a placeholder from before the artwork existed. It is the real badge now:
-// CbMark, the one square form of the brand (see shell/Brand.tsx). Sized on one
-// axis because the asset is square by construction.
+// The rail head: CbMark (the one square form of the brand — see
+// shell/Brand.tsx), with the name and version sliding in beside it when the
+// rail opens.
 function Logo() {
-  return <CbMark className="mb-2 h-8 w-8 shrink-0" title="CB Edge" />
+  return (
+    <div className="cb-rail-brand">
+      <CbMark title="CB Edge" />
+      <span className="cb-rail-name cb-rail-fade">CB Edge</span>
+      <span className="cb-rail-ver cb-rail-fade">3.0</span>
+    </div>
+  )
 }
 
 // Drag-to-reorder for the rail — mirrors v2's GexGroupNav, rewritten fresh for
@@ -224,77 +242,137 @@ function Rail() {
     .map((to) => NAV.find((n) => n.to === to))
     .filter((n): n is NavItem => !!n && (!n.paidOnly || isPaid))
 
-  return (
-    <nav className="flex w-16 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-line bg-rail py-3">
-      <Logo />
-      {items.map((item) => {
-        const shared =
-          'flex w-14 flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-center transition-colors'
-        const body = (
-          <>
-            <span aria-hidden className="text-base leading-none">
-              {item.icon}
-            </span>
-            <span className="max-w-full truncate text-3xs font-semibold leading-tight">{item.label}</span>
-          </>
-        )
-        const dragProps = {
-          draggable: true,
-          onDragStart: (e: ReactDragEvent) => {
-            dragId.current = item.to
-            setDragging(item.to)
-            e.dataTransfer.effectAllowed = 'move'
-            try {
-              e.dataTransfer.setData('text/plain', item.to)
-            } catch {
-              /* ignore */
-            }
-          },
-          onDragOver: (e: ReactDragEvent) => {
-            e.preventDefault()
-            e.dataTransfer.dropEffect = 'move'
-          },
-          onDrop: (e: ReactDragEvent) => {
-            e.preventDefault()
-            onDrop(item.to)
-          },
-          onDragEnd: () => setDragging(null),
-        }
-        const isDragging = dragging === item.to
+  // ── Jump to… (Ctrl/⌘ K) ────────────────────────────────────────────────────
+  // Filters the rail as you type; Enter goes to the first match, Esc clears.
+  // Focusing the box is also what holds the rail open without a hover.
+  const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        searchRef.current?.focus()
+        searchRef.current?.select()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  const q = query.trim().toLowerCase()
+  const shown = q ? items.filter((n) => n.label.toLowerCase().includes(q)) : items
+  const closeSearch = () => {
+    setQuery('')
+    searchRef.current?.blur()
+  }
 
-        if (item.comingSoon) {
+  const isActive = (to: string) => (to === '/' ? pathname === '/' : pathname === to || pathname.startsWith(`${to}/`))
+
+  return (
+    // THE SLOT is the 64px the layout sees; THE NAV inside it overlays the page
+    // when it opens. See shell/rail.css for why that split exists.
+    <div className="cb-rail-slot">
+      <nav className="cb-rail" aria-label="Pages">
+        <Logo />
+        <label className="cb-rail-search" title="Jump to a page (Ctrl+K)">
+          <RailIcon name="search" />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') closeSearch()
+              if (e.key === 'Enter') {
+                const hit = shown.find((n) => !n.comingSoon)
+                if (hit) {
+                  navigate(hit.to)
+                  closeSearch()
+                }
+              }
+            }}
+            placeholder="Jump to…"
+            aria-label="Jump to a page"
+            className="cb-rail-fade"
+          />
+          <kbd className="cb-rail-fade">Ctrl K</kbd>
+        </label>
+        {shown.length === 0 && <div className="cb-rail-empty cb-rail-fade">No page matches</div>}
+        {shown.map((item, i) => {
+          const head =
+            !q && (i === 0 || shown[i - 1].group !== item.group) ? (
+              <div className="cb-rail-grp" aria-hidden>
+                <span className="cb-rail-fade">{item.group ?? 'More'}</span>
+              </div>
+            ) : null
+          const body = (
+            <>
+              <RailIcon name={item.glyph ?? 'home'} />
+              <span className="cb-rail-fade">{item.label}</span>
+            </>
+          )
+          const dragProps = {
+            draggable: !q,
+            onDragStart: (e: ReactDragEvent) => {
+              dragId.current = item.to
+              setDragging(item.to)
+              e.dataTransfer.effectAllowed = 'move'
+              try {
+                e.dataTransfer.setData('text/plain', item.to)
+              } catch {
+                /* ignore */
+              }
+            },
+            onDragOver: (e: ReactDragEvent) => {
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+            },
+            onDrop: (e: ReactDragEvent) => {
+              e.preventDefault()
+              onDrop(item.to)
+            },
+            onDragEnd: () => setDragging(null),
+          }
+          const dragAttr = dragging === item.to ? '1' : undefined
+
+          if (item.comingSoon) {
+            return (
+              <div key={item.to} style={{ display: 'contents' }}>
+                {head}
+                <div
+                  title={`${item.label} — coming soon`}
+                  aria-disabled="true"
+                  data-dragging={dragAttr}
+                  className="cb-rail-item"
+                  {...dragProps}
+                >
+                  {body}
+                </div>
+              </div>
+            )
+          }
           return (
-            <div
-              key={item.to}
-              title={`${item.label} — coming soon`}
-              aria-disabled="true"
-              className={[shared, 'cursor-grab text-faint opacity-40', isDragging ? 'opacity-20' : ''].join(' ')}
-              {...dragProps}
-            >
-              {body}
+            <div key={item.to} style={{ display: 'contents' }}>
+              {head}
+              <NavLink
+                to={item.to}
+                end={item.to === '/'}
+                onPointerEnter={() => item.prefetch?.forEach((u) => preload(u))}
+                onClick={() => {
+                  if (q) closeSearch()
+                }}
+                data-active={isActive(item.to) ? '1' : undefined}
+                data-dragging={dragAttr}
+                className="cb-rail-item"
+                {...dragProps}
+              >
+                {body}
+              </NavLink>
             </div>
           )
-        }
-        return (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            onPointerEnter={() => item.prefetch?.forEach((u) => preload(u))}
-            className={({ isActive }) =>
-              [
-                shared,
-                'cursor-grab',
-                isActive ? 'bg-raised text-accent' : 'text-muted hover:text-fg',
-                isDragging ? 'opacity-40' : '',
-              ].join(' ')
-            }
-            {...dragProps}
-          >
-            {body}
-          </NavLink>
-        )
-      })}
-    </nav>
+        })}
+      </nav>
+    </div>
   )
 }
 

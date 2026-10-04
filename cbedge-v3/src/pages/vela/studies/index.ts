@@ -25,6 +25,8 @@ export const VF_SCOPES = ['All expiries', 'Front expiry'] as const
 export const VF_SESSIONS = ['Regular hours', 'Extended hours'] as const
 export const WH_MIN = ['$1M', '$2M', '$5M', '$10M'] as const
 export const WH_SIDE = ['Calls and puts', 'Calls', 'Puts'] as const
+/** Where a whale bubble reaches its biggest — anything larger draws that size too. */
+export const WH_CAP = ['$25M', '$10M', '$50M', '$100M'] as const
 export const TPO_ROWS = ['Auto', '0.25', '0.5', '1', '2', '5', '10', '25'] as const
 export const TPO_PERIODS = ['30 min', '15 min', '60 min'] as const
 
@@ -171,14 +173,24 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: WHALES_TYPE,
-      title: 'CB Whale Prints — $1M+ option prints as chart markers',
+      title: 'CB Whale Prints — $1M+ option prints as bubbles sized by net premium',
       shortTitle: 'Whale Prints',
       pane: 'price',
+      layer: { cursor: true },
       inputs: () => [
         { key: 'min', title: 'Smallest print', type: 'string', defval: WH_MIN[0], options: WH_MIN },
         { key: 'days', title: 'Days back', type: 'int', defval: 5, min: 1, max: 30 },
         { key: 'side', title: 'Show', type: 'string', defval: WH_SIDE[0], options: WH_SIDE },
-        { key: 'text', title: 'Premium on the marker', type: 'bool', defval: true },
+        {
+          key: 'cap',
+          title: 'Biggest bubble at',
+          type: 'string',
+          defval: WH_CAP[0],
+          options: WH_CAP,
+          tooltip: 'Net premium that draws the largest bubble. Bubble AREA follows premium up to here; anything bigger is drawn at this size.',
+        },
+        { key: 'size', title: 'Bubble size %', type: 'int', defval: 100, min: 50, max: 200, step: 10, tooltip: 'Scales every bubble — smallest and largest together.' },
+        { key: 'text', title: 'Premium in the bubble', type: 'bool', defval: true, tooltip: 'Written inside a bubble when it fits; hover any bubble for the prints.' },
       ],
     },
     () => import('./flow').then((m) => m.whalesImpl),

@@ -8,15 +8,13 @@
 // alert — a re-run of the forming bar never fires the same alert twice, and the
 // history a script loads with never fires at all.
 //
-// Off until switched on, per library script, in the Scripts panel (TradingView's
-// model: a script's alert conditions do nothing until an alert is made from
-// them). A fired alert goes to:
+// Off until switched on, per library script, in the Script Alerts panel
+// (testerPanels.ts — TradingView's model: a script's alert conditions do
+// nothing until an alert is made from them). A fired alert goes to:
 //   · the toolbar's Alerts feed, as a "Script" row (shell/scriptAlerts.ts)
 //   · a toast in the corner of the page
-//   · the Scripts panel's alert log (onScriptAlertFired)
+//   · the Script Alerts panel's log (onScriptAlertFired)
 //   · a desktop notification, when the browser has granted it
-// Discord is not one of them yet: the only server path that posts there
-// (/api/bot-alert) is the owner's trade-alert bot.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { pushScriptAlert } from '@/shell/scriptAlerts'
@@ -36,6 +34,14 @@ export interface FiredAlert {
   barTime: number
 }
 
+/** `5m`, `1h`, `4h`, `1D` — a Vela timeframe as the chart's own button writes it. */
+export function tfLabel(tf: string): string {
+  if (/^\d+$/.test(tf)) {
+    const m = Number(tf)
+    return m % 60 === 0 ? `${m / 60}h` : `${m}m`
+  }
+  return /^\d*[DWM]$/.test(tf) ? (/^\d/.test(tf) ? tf : `1${tf}`) : tf
+}
 // ── Switched on / off, per library script ──
 function readArmed(): Record<string, boolean> {
   try {
@@ -108,7 +114,7 @@ function toast(a: FiredAlert): void {
   body.textContent = a.text
   const foot = document.createElement('div')
   foot.className = 'cb-scr-toast-foot'
-  foot.textContent = `${a.script} · ${a.timeframe}`
+  foot.textContent = `${a.script} · ${tfLabel(a.timeframe)}`
   t.append(head, body, foot)
   toastHost.prepend(t)
   while (toastHost.children.length > 4) toastHost.lastElementChild?.remove()
@@ -119,7 +125,7 @@ function toast(a: FiredAlert): void {
 function deliver(a: FiredAlert): void {
   log.unshift(a)
   if (log.length > 100) log.length = 100
-  pushScriptAlert({ ticker: a.symbol, title: a.title, text: a.text, meta: `${a.script} · ${a.timeframe}`, ts: a.at })
+  pushScriptAlert({ ticker: a.symbol, title: a.title, text: a.text, meta: `${a.script} · ${tfLabel(a.timeframe)}`, ts: a.at })
   toast(a)
   if (notifyWanted() && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
     try {

@@ -809,9 +809,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
       if (!rep) { out.push({ kind: 'row', r, repeat: null }); continue }
       const k = byDay ? `${r.osi}|${r.sessionDate}` : r.osi!
       const g = groups.get(k)!
-      // ALWAYS folded (2026-10-03, Brandon: "that is not D") — even a repeat
-      // contract with one whale print here gets the group row, because the
-      // group speaks for the whole repeated flow, not just the prints listed.
+      if (g.length < 2) { out.push({ kind: 'row', r, repeat: rep }); continue }
       if (placed.has(k)) continue
       placed.add(k)
       out.push({ kind: 'group', key: k, rows: g, repeat: rep })
@@ -1345,28 +1343,15 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   const groupRow = (key: string, g: WhaleRow[], c: RepeatContract) => {
     const head = g[0]!
     const open = openGroups.has(key)
-    // The group row carries the REPEATED FLOW's numbers (its densest burst, from
-    // the Repeated flow card) when they cover more than the prints listed here
-    // — usually they do, since the archive's floor sits far above the $50K
-    // orders a repeat is built from. Expanding shows the prints in this list.
-    const listSize = g.reduce((n, r) => n + (r.size ?? 0), 0)
-    const listPremium = g.reduce((n, r) => n + r.premium, 0)
-    const useRepeat = c.n > g.length && c.total > 0
-    const count = useRepeat ? c.n : g.length
-    const size = useRepeat ? c.size : listSize
-    const premium = useRepeat ? c.total : listPremium
-    const price = useRepeat && c.avgPrice != null ? c.avgPrice : size > 0 ? premium / size / 100 : head.price
+    const size = g.reduce((n, r) => n + (r.size ?? 0), 0)
+    const premium = g.reduce((n, r) => n + r.premium, 0)
+    const price = size > 0 ? premium / size / 100 : head.price
     let bull = 0
     let bear = 0
-    if (useRepeat) {
-      bull = c.bull
-      bear = c.bear
-    } else {
-      for (const r of g) {
-        const b = biasOf(r)
-        if (b === 'bullish') bull += r.premium
-        else if (b === 'bearish') bear += r.premium
-      }
+    for (const r of g) {
+      const b = biasOf(r)
+      if (b === 'bullish') bull += r.premium
+      else if (b === 'bearish') bear += r.premium
     }
     const lean = bull > bear ? 'bullish' : bear > bull ? 'bearish' : null
     const leanInk = lean === 'bullish' ? 'text-up' : lean === 'bearish' ? 'text-down' : 'text-fg'
@@ -1376,7 +1361,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         key={`g:${key}`}
         onClick={() => toggleGroup(key)}
         aria-expanded={open}
-        title={`Repeated flow: ${c.n} orders in its densest burst${c.nAll ? `, ${c.nAll} all day` : ''} · ${g.length} of them in this list — click to show`}
+        title={`${g.length} prints on this contract in the list · Repeated flow: ${c.n} orders in its densest burst${c.nAll ? `, ${c.nAll} all day` : ''}`}
         className={['cursor-pointer border-t border-line hover:bg-raised', open ? 'bg-raised' : 'bg-violet/5'].join(' ')}
       >
         <td className="tabular whitespace-nowrap border-l-3 border-violet px-2 py-1.5 text-fg">
@@ -1385,7 +1370,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         </td>
         <td className="whitespace-nowrap px-2 py-1.5 font-semibold text-fg">
           {head.underlying ?? '—'}
-          <span className="ml-1.5 font-bold text-violet">· {count} prints</span>
+          <span className="ml-1.5 font-bold text-violet">· {g.length} prints</span>
         </td>
         <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">
           <span className="text-fg">{fmtStrike(head.strike)}</span>{' '}

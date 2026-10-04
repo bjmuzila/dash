@@ -575,3 +575,79 @@
     border-radius: 15px;
   }
 }
+
+/* ── The drawing toolbar, as a floating glass card (2026-10-03) ──────────────
+   Vela docks its drawing toolbar (.vela-dtb) as a flush full-height strip with
+   a right border, styled INLINE from JS — hence the !important on the box
+   properties below. Here it becomes a rounded card that floats in its column:
+   same tools, same flyouts, same collapse; only the chrome changes. The column
+   stays in flow (not over the chart) so the legend at the chart's top-left is
+   never covered. */
+.vela-workspace .vela-ws-toolbar {
+  padding: 8px 4px 8px 8px;
+  background: var(--color-bg);
+}
+.vela-workspace .vela-dtb {
+  width: 46px !important;
+  height: auto !important;
+  max-height: 100%;
+  gap: 2px !important;
+  padding: 6px 0 !important;
+  border: 1px solid color-mix(in srgb, var(--color-fg) 8%, transparent) !important;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--color-surface) 78%, transparent) !important;
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 12px 40px color-mix(in srgb, var(--color-bg) 70%, transparent);
+  color: color-mix(in srgb, var(--color-fg) 62%, transparent) !important;
+}
+.vela-workspace .vela-dtb[data-collapsed='1'] {
+  width: 18px !important;
+  border-radius: 9px;
+}
+/* the dividers are bare inline-styled divs */
+.vela-workspace .vela-dtb > div:not([class]) {
+  margin: 4px auto !important;
+  background: color-mix(in srgb, var(--color-fg) 8%, transparent) !important;
+}
+.vela-workspace .vela-dtb-btn,
+.vela-workspace .vela-dtb-cell {
+  height: 36px;
+}
+.vela-workspace .vela-dtb-icon {
+  width: 34px;
+  height: 36px;
+}
+.vela-workspace .vela-dtb-hit {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.vela-workspace .vela-dtb-hit--arrow {
+  width: 10px;
+  height: 22px;
+  border-radius: 4px;
+}
+.vela-workspace .vela-dtb-btn:hover .vela-dtb-hit,
+.vela-workspace .vela-dtb-icon:hover .vela-dtb-hit {
+  background: color-mix(in srgb, var(--color-fg) 8%, transparent);
+}
+.vela-workspace .vela-dtb-btn:hover,
+.vela-workspace .vela-dtb-icon:hover {
+  color: var(--color-fg);
+}
+.vela-workspace .vela-dtb-btn[data-active='1'],
+.vela-workspace .vela-dtb-cell[data-active='1'] .vela-dtb-icon {
+  color: var(--color-fg);
+}
+.vela-workspace .vela-dtb-btn[data-active='1'] .vela-dtb-hit,
+.vela-workspace .vela-dtb-cell[data-active='1'] .vela-dtb-icon .vela-dtb-hit {
+  background: var(--color-accent);
+  box-shadow: 0 0 16px -4px var(--color-accent);
+}
+.vela-workspace .vela-dtb-collapse {
+  height: 28px;
+}
+.vela-workspace .vela-dtb[data-collapsed='1'] .vela-dtb-collapse .vela-dtb-hit {
+  width: 14px;
+}

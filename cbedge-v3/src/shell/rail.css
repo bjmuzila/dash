@@ -1,0 +1,257 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   THE RAIL — "Glass Rail" collapsed, "Command Dock" on hover (2026-10-03).
+
+   The SLOT is a fixed 64px flex column and never changes width. The NAV inside
+   it is absolutely positioned and grows to 224px on hover, so it slides OVER
+   the page instead of pushing it: the toolbar, the board, the charts — nothing
+   right of the rail moves or re-lays-out when it opens.
+
+   Opens on hover (after a short intent delay, so sweeping the mouse past it
+   does not flash it), while the search box has focus (Ctrl/⌘ K), or while a
+   keyboard user is tabbing through it. NOT on plain focus-within: a clicked
+   link keeps focus, and the rail would stay open after the mouse left.
+
+   Colours are tokens only (see src/design/tokens.css); the glass is
+   color-mix() over --color-rail, so the Voltick palette re-inks it for free.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.cb-rail-slot {
+  --cb-rail-w: 64px;
+  --cb-rail-open-w: 224px;
+  --cb-rail-ink: color-mix(in srgb, var(--color-fg) 62%, transparent);
+  --cb-rail-faint: color-mix(in srgb, var(--color-fg) 36%, transparent);
+  --cb-rail-hair: color-mix(in srgb, var(--color-fg) 7%, transparent);
+  position: relative;
+  z-index: 50;
+  flex: none;
+  width: var(--cb-rail-w);
+}
+
+.cb-rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--cb-rail-w);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  background: var(--color-rail);
+  border-right: 1px solid var(--color-line);
+  transition:
+    width 0.2s cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 0.2s,
+    box-shadow 0.2s;
+}
+.cb-rail::-webkit-scrollbar {
+  display: none;
+}
+.cb-rail:hover,
+.cb-rail:has(.cb-rail-search input:focus),
+.cb-rail:has(:focus-visible) {
+  width: var(--cb-rail-open-w);
+  background: color-mix(in srgb, var(--color-rail) 86%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  backdrop-filter: blur(22px) saturate(140%);
+  box-shadow:
+    24px 0 60px -12px color-mix(in srgb, var(--color-bg) 90%, transparent),
+    1px 0 0 color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+/* hover intent: opening waits a beat, closing does not */
+.cb-rail:hover {
+  transition-delay: 0.12s;
+}
+
+/* Anything that should only show while open. */
+.cb-rail-fade {
+  opacity: 0;
+  transform: translateX(-4px);
+  transition:
+    opacity 0.12s,
+    transform 0.16s;
+  white-space: nowrap;
+}
+.cb-rail:hover .cb-rail-fade,
+.cb-rail:has(.cb-rail-search input:focus) .cb-rail-fade,
+.cb-rail:has(:focus-visible) .cb-rail-fade {
+  opacity: 1;
+  transform: none;
+  transition-delay: 0.18s;
+}
+
+/* ── head ─────────────────────────────────────────────────────────────────── */
+.cb-rail-brand {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  margin: 0 0 8px 8px;
+}
+.cb-rail-brand img {
+  flex: none;
+  width: 32px;
+  height: 32px;
+}
+.cb-rail-brand .cb-rail-name {
+  color: var(--color-fg);
+  font-size: var(--text-base);
+  font-weight: 700;
+}
+.cb-rail-brand .cb-rail-ver {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+/* ── search (Ctrl/⌘ K) ────────────────────────────────────────────────────── */
+.cb-rail-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  margin-bottom: 4px;
+  padding: 0 14px;
+  border: 1px solid var(--cb-rail-hair);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-fg) 4%, transparent);
+  color: var(--cb-rail-faint);
+  cursor: text;
+}
+.cb-rail-search:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-fg);
+}
+.cb-rail-search svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.cb-rail-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.cb-rail-search input::placeholder {
+  color: var(--cb-rail-faint);
+}
+.cb-rail-search kbd {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid var(--color-line);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--cb-rail-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+/* ── group heads: a short hairline collapsed, the label open ─────────────── */
+.cb-rail-grp {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  height: 22px;
+  padding: 0 14px 3px;
+  color: var(--cb-rail-faint);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.cb-rail-grp::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  width: 20px;
+  height: 1px;
+  background: var(--cb-rail-hair);
+  transition: opacity 0.12s;
+}
+.cb-rail:hover .cb-rail-grp::before,
+.cb-rail:has(.cb-rail-search input:focus) .cb-rail-grp::before,
+.cb-rail:has(:focus-visible) .cb-rail-grp::before {
+  opacity: 0;
+}
+
+/* ── items ────────────────────────────────────────────────────────────────── */
+.cb-rail-item {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 38px;
+  padding: 0 15px;
+  border-radius: 11px;
+  color: var(--cb-rail-ink);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color 0.12s,
+    background-color 0.12s;
+}
+.cb-rail-item svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+.cb-rail-item:hover {
+  color: var(--color-fg);
+  background: color-mix(in srgb, var(--color-fg) 6%, transparent);
+}
+.cb-rail-item[data-active='1'] {
+  color: var(--color-fg);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-accent) 30%, transparent),
+    color-mix(in srgb, var(--color-accent) 10%, transparent)
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 42%, transparent),
+    0 0 22px -6px color-mix(in srgb, var(--color-accent) 80%, transparent);
+}
+.cb-rail-item[data-active='1']::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--color-accent);
+  box-shadow: 0 0 10px var(--color-accent);
+}
+.cb-rail-item[data-dragging='1'] {
+  opacity: 0.4;
+}
+.cb-rail-item[aria-disabled='true'] {
+  opacity: 0.4;
+}
+.cb-rail-empty {
+  padding: 8px 14px;
+  color: var(--cb-rail-faint);
+  font-size: var(--text-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cb-rail,
+  .cb-rail-fade,
+  .cb-rail-item {
+    transition: none;
+  }
+}

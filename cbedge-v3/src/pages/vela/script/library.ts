@@ -163,7 +163,8 @@ export interface SyncResult {
   error?: string
 }
 
-async function readPage(page: string): Promise<{ name: string; preset: unknown }[] | 'auth'> {
+/** One page of the account's presets (/api/page-preset), or 'auth' when signed out. Shared with the watchlist. */
+export async function readPage(page: string): Promise<{ name: string; preset: unknown }[] | 'auth'> {
   const r = await fetch(`/api/page-preset?page=${encodeURIComponent(page)}`, { cache: 'no-store', credentials: 'same-origin' })
   if (r.status === 401 || r.status === 403) return 'auth'
   if (!r.ok) throw new Error(`page-preset ${r.status}`)
@@ -171,7 +172,8 @@ async function readPage(page: string): Promise<{ name: string; preset: unknown }
   return (j.presets ?? []).filter((p): p is { name: string; preset: unknown } => typeof p?.name === 'string')
 }
 
-async function writePreset(page: string, name: string, preset: Record<string, unknown> | null): Promise<void> {
+/** Store (or, with null, delete) one named preset on a page. */
+export async function writePreset(page: string, name: string, preset: Record<string, unknown> | null): Promise<void> {
   const body = preset ? { page, name, preset } : { page, name, action: 'delete' }
   const r = await fetch('/api/page-preset', {
     method: 'POST',

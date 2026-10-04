@@ -11,18 +11,21 @@
 //                  pane: volume GEX as a histogram (green / red), OI GEX and the
 //                  combined line — today's session, as the card.
 //   Whale Prints   ≥ $1M option prints (/api/lse/whales — the Whales page's own
-//                  feed, kept forever) as markers on the bar they printed in:
-//                  under the bar for a bullish print (call bought, put sold),
-//                  over it for a bearish one, grey when the side is unknown.
-//                  Hover for the contracts.
+//                  feed, kept forever) as BUBBLES on the bar they printed in,
+//                  sized by the bar's net premium (bullish − bearish): green
+//                  under the bar when bullish (calls bought, puts sold), red
+//                  over it when bearish, grey for prints whose side is unknown.
+//                  Hover for a short card of the prints. Drawn by a renderer
+//                  layer — whaleLayer.ts, which has the size table.
 //
 // ES charts read SPX's flow, NQ charts NDX's — the futures have no options here.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { DrawingLabel, PriceLine, SeriesSpec } from '@luxalgo/vela'
+import type { PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
-import { DAY_MS, barAt, bool, studyImpl, etDateKey, getJson, int, labelAt, money, seriesOf, sessionsOf, str, type StudyCtx } from './common'
-import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_MIN, WH_SIDE } from './index'
+import { DAY_MS, barAt, bool, studyImpl, etDateKey, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
+import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_MIN, WH_SIDE } from './index'
+import { WhaleLayer, type Tone, type WhaleBubble, type WhalePayload } from './whaleLayer'
 
 const flowTicker = (c: StudyCtx) => (c.sym.fut === 'NQ' ? 'NDX' : c.sym.fut === 'ES' ? 'SPX' : c.sym.key)
 
@@ -226,14 +229,144 @@ interface WhS {
   minPremium: number
   days: number
   side: 'all' | 'C' | 'P'
+  cap: number
+  size: number
   text: boolean
 }
 const WH_MIN_V = [1e6, 2e6, 5e6, 10e6]
+const WH_CAP_V = [25e6, 10e6, 50e6, 100e6]
+/** Bubble radius bounds, px at 100% (whaleLayer.ts has the table). */
+export const R_MIN = 5
+export const R_MAX = 26
 
 /** Bullish = call bought / put sold; bearish = put bought / call sold; null when the side is unknown. */
 function biasOf(r: WhRow): 1 | -1 | 0 {
   if (!r.action || !r.type) return 0
   return (r.action === 'BUY') === (r.type === 'C') ? 1 : -1
+}
+
+/** Area follows premium up to `cap`, never under R_MIN or over R_MAX, then the size setting. */
+export function bubbleRadius(premium: number, cap: number, size = 1): number {
+  const k = cap > 0 && premium > 0 ? Math.sqrt(premium / cap) : 0
+  return Math.max(R_MIN, Math.min(R_MAX, R_MAX * k)) * size
+}
+
+/** `$2.4M`, `$12M`, `$850K` — `money` without a trailing `.0`. */
+const short = (v: number) => money(v).replace(/\.0(?=[KMB])/, '')
+
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+/** `0DTE` on its own expiry day, else `Oct 5` (`Jan 15 ’27` in another year). */
+function expiryText(expiry: string | null, printedOn: string): string {
+  if (!expiry) return ''
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(expiry)
+  if (!m) return expiry
+  if (expiry.slice(0, 10) === printedOn) return '0DTE'
+  const txt = `${MON[Number(m[2]) - 1] ?? m[2]} ${Number(m[3])}`
+  return m[1] === printedOn.slice(0, 4) ? txt : `${txt} ’${m[1]!.slice(2)}`
+}
+
+const strikeText = (k: number | null) => (k == null ? '' : Number.isInteger(k) ? String(k) : String(+k.toFixed(2)))
+
+/** One print as the card says it: `Bought 758 Call · Oct 5`. */
+export function printLine(r: WhRow): string {
+  const verb = r.action === 'BUY' ? 'Bought' : r.action === 'SELL' ? 'Sold' : ''
+  const kind = r.type === 'C' ? 'Call' : r.type === 'P' ? 'Put' : 'option'
+  const contract = [verb, strikeText(r.strike), kind].filter(Boolean).join(' ')
+  const exp = expiryText(r.expiry, etDateKey(r.ts))
+  return exp ? `${contract} · ${exp}` : contract
+}
+
+const DAY_FMT = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
+const TIME_FMT = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+/** `Fri, Oct 2 · 9:55 AM`, or `… · 9:55 – 10:20 AM` when the prints span time. */
+function whenText(rows: readonly WhRow[]): string {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const r of rows) {
+    lo = Math.min(lo, r.ts)
+    hi = Math.max(hi, r.ts)
+  }
+  const a = TIME_FMT.format(lo)
+  const b = TIME_FMT.format(hi)
+  // `9:55 – 10:20 AM` within a half of the day, `11:50 AM – 12:10 PM` across noon
+  const span = a === b ? a : `${a.slice(-2) === b.slice(-2) ? a.slice(0, -3) : a} – ${b}`
+  return `${DAY_FMT.format(lo)} · ${span}`
+}
+
+const CARD_ROWS = 5
+
+function bubbleOf(
+  id: string,
+  t: number,
+  anchor: number,
+  above: boolean,
+  rows: WhRow[],
+  amount: number,
+  tone: Tone,
+  head: string,
+  s: WhS,
+): WhaleBubble {
+  const sorted = rows.slice().sort((a, z) => z.premium - a.premium)
+  const sign = tone === 'up' ? '+' : tone === 'down' ? '−' : ''
+  const n = rows.length
+  return {
+    id,
+    t,
+    anchor,
+    above,
+    r: bubbleRadius(amount, s.cap, s.size),
+    tone,
+    label: s.text ? short(amount) : '',
+    card: {
+      head,
+      net: tone === 'mid' ? short(amount) : `${sign}${short(amount)} net`,
+      when: `${whenText(rows)}${n > 1 ? ` · ${n} prints` : ''}`,
+      rows: sorted.slice(0, CARD_ROWS).map((r) => {
+        const b = biasOf(r)
+        return { text: printLine(r), amount: short(r.premium), tone: b > 0 ? 'up' : b < 0 ? 'down' : 'mid' }
+      }),
+      more: Math.max(0, n - CARD_ROWS),
+    },
+  }
+}
+
+/** Per bar: one bubble for the prints with a known side (their net), one for the rest. */
+function whaleBubbles(c: StudyCtx, s: WhS, rows: WhRow[] | null): WhaleBubble[] {
+  const { bars, tfMs } = c
+  if (!bars.length || !rows?.length) return []
+  const byBar = new Map<number, { known: WhRow[]; net: number; unknown: WhRow[]; gross: number }>()
+  for (const r of rows) {
+    if (s.side !== 'all' && r.type !== s.side) continue
+    const i = barAt(bars, r.ts, tfMs)
+    if (i < 0) continue
+    let g = byBar.get(i)
+    if (!g) byBar.set(i, (g = { known: [], net: 0, unknown: [], gross: 0 }))
+    const b = biasOf(r)
+    if (b) {
+      g.known.push(r)
+      g.net += b * r.premium
+    } else {
+      g.unknown.push(r)
+      g.gross += r.premium
+    }
+  }
+  const out: WhaleBubble[] = []
+  for (const [i, g] of byBar) {
+    const bar = bars[i]!
+    let knownAbove: boolean | null = null
+    if (g.known.length) {
+      const tone: Tone = g.net > 0 ? 'up' : g.net < 0 ? 'down' : 'mid'
+      knownAbove = g.net < 0
+      const head = g.net > 0 ? 'Bullish' : g.net < 0 ? 'Bearish' : 'Even'
+      out.push(bubbleOf(`${i}k`, bar.time, knownAbove ? bar.high : bar.low, knownAbove, g.known, Math.abs(g.net), tone, head, s))
+    }
+    if (g.unknown.length) {
+      const above = knownAbove === null ? false : !knownAbove
+      out.push(bubbleOf(`${i}u`, bar.time, above ? bar.high : bar.low, above, g.unknown, g.gross, 'mid', 'Side unknown', s))
+    }
+  }
+  // the biggest few hundred, when a long window holds more
+  return out.sort((a, b) => b.r - a.r).slice(0, 400)
 }
 
 export const whalesImpl = studyImpl<WhS, WhRow[]>({
@@ -243,6 +376,8 @@ export const whalesImpl = studyImpl<WhS, WhRow[]>({
       minPremium: WH_MIN_V[Math.max(0, (WH_MIN as readonly string[]).indexOf(str(i.min, WH_MIN[0])))] ?? 1e6,
       days: int(i.days, 5, 1, 30),
       side: side === WH_SIDE[1] ? 'C' : side === WH_SIDE[2] ? 'P' : 'all',
+      cap: WH_CAP_V[Math.max(0, (WH_CAP as readonly string[]).indexOf(str(i.cap, WH_CAP[0])))] ?? 25e6,
+      size: int(i.size, 100, 50, 200) / 100,
       text: bool(i.text, true),
     }
   },
@@ -268,48 +403,12 @@ export const whalesImpl = studyImpl<WhS, WhRow[]>({
       .filter((r) => Number.isFinite(r.ts) && r.premium > 0)
   },
   refreshMs: 60_000,
-  render: (c, s, rows) => {
-    const { bars, tfMs } = c
-    if (!bars.length || !rows?.length) return {}
-    // one marker per bar per side: the prints that landed in it, summed
-    const groups = new Map<string, { i: number; bias: 1 | -1 | 0; total: number; rows: WhRow[] }>()
-    for (const r of rows) {
-      if (s.side !== 'all' && r.type !== s.side) continue
-      const i = barAt(bars, r.ts, tfMs)
-      if (i < 0) continue
-      const bias = biasOf(r)
-      const key = `${i}|${bias}`
-      const g = groups.get(key) ?? { i, bias, total: 0, rows: [] }
-      g.total += r.premium
-      g.rows.push(r)
-      groups.set(key, g)
-    }
-    const T = WHALES_TYPE
-    const up = tokenHexAlpha('--color-up', 0.95)
-    const dn = tokenHexAlpha('--color-down', 0.95)
-    const mid = tokenHexAlpha('--color-muted', 0.8)
-    const ink = tokenHexAlpha('--color-bg', 1)
-    const labels: DrawingLabel[] = []
-    const clock = (t: number) => new Date(t).toLocaleString('en-US', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' })
-    for (const g of [...groups.values()].sort((a, b) => b.total - a.total).slice(0, 300)) {
-      const b = bars[g.i]!
-      const color = g.bias > 0 ? up : g.bias < 0 ? dn : mid
-      const lines = g.rows
-        .sort((a, z) => z.premium - a.premium)
-        .slice(0, 6)
-        .map((r) => `${clock(r.ts)} ${r.action ?? '—'} ${r.size ?? ''}× ${r.strike ?? ''}${r.type ?? ''} ${r.expiry ?? ''} @ ${r.price ?? ''} = ${money(r.premium)}`)
-      if (g.rows.length > 6) lines.push(`… and ${g.rows.length - 6} more`)
-      const text = s.text ? `${money(g.total)}${g.rows.length > 1 ? ` ×${g.rows.length}` : ''}` : ''
-      labels.push(
-        labelAt(T, `${g.i}-${g.bias}`, b.time, g.bias < 0 ? b.high : b.low, text, color, {
-          style: g.bias < 0 ? 'label_down' : 'label_up',
-          yloc: g.bias < 0 ? 'abovebar' : 'belowbar',
-          textColor: ink,
-          tooltip: lines.join('\n'),
-          size: 'tiny',
-        }),
-      )
-    }
-    return { labels }
+  // the bubbles are the layer's (whaleLayer.ts) — nothing for the drawing primitives
+  render: () => ({}),
+  layer: (c, s, rows): WhalePayload | null => {
+    const bubbles = whaleBubbles(c, s, rows)
+    return bubbles.length ? { bubbles } : null
   },
 })
+
+provideLayer(WHALES_TYPE, () => new WhaleLayer())

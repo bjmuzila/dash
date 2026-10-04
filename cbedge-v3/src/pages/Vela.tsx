@@ -17,6 +17,7 @@ import { registerScripts } from '@/pages/vela/script/panel'
 import { registerStudies } from '@/pages/vela/studies'
 import { bindTimelineMarks } from '@/pages/vela/marks'
 import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
+import { registerWatchlist } from '@/pages/vela/watchlist/panel'
 import '@/pages/vela/vela.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,6 +180,7 @@ registerWallsOpacity()
 registerScripts()
 registerStudies()
 registerIndicatorPicker()
+registerWatchlist()
 
 function readSeeded(key: string): Set<string> {
   try {

@@ -1,0 +1,257 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// CB WHALE PRINTS — the bubbles. The renderer layer the Whale Prints study
+// (flow.ts) pushes its bubbles to; it repaints them on every pan / zoom frame
+// and on pointer moves, for the hover card.
+//
+//   ● one bubble per bar for the prints whose side is known, sized by their NET
+//     premium (bullish − bearish): green under the bar when the net is bullish,
+//     red over it when bearish
+//   ● a grey one beside it for prints whose side (bought / sold) is unknown,
+//     sized by their total — on the other side of the bar, so the two never
+//     overlap
+//   ● the premium written inside when it fits ("Premium in the bubble")
+//   ● hover: a small card — the side and net, when, and one line per print
+//     ("Bought 758 Call · Oct 5   $1.4M")
+//
+// SIZE (flow.ts bubbleRadius): AREA follows premium — r = R_MAX·√(net / cap) —
+// clamped to [R_MIN, R_MAX], then the Bubble size % setting. With the defaults
+// (cap $25M): $1M → 5px, $2.5M → 8px, $5M → 12px, $10M → 16px, $25M+ → 26px.
+//
+// The bigger bubbles draw first, so a small one sitting on a big one stays on
+// top — and is what the pointer finds.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type { RendererLayerArgs, RendererLayerInstance } from '@luxalgo/vela/plugin'
+import { tokenRgb, type RGB } from '@/design/theme'
+
+export type Tone = 'up' | 'down' | 'mid'
+
+export interface WhaleCardRow {
+  text: string
+  amount: string
+  tone: Tone
+}
+
+export interface WhaleBubble {
+  id: string
+  /** The bar's open time (ms). */
+  t: number
+  /** The bar's low (a bubble under it) or high (over it). */
+  anchor: number
+  above: boolean
+  /** Radius in CSS px, size setting applied. */
+  r: number
+  tone: Tone
+  /** Written inside when it fits ('' = never). */
+  label: string
+  card: { head: string; net: string; when: string; rows: WhaleCardRow[]; more: number }
+}
+
+export interface WhalePayload {
+  bubbles: WhaleBubble[]
+}
+
+const TONE_TOKEN: Record<Tone, string> = { up: '--color-up', down: '--color-down', mid: '--color-muted' }
+/** Pixels between a wick's end and the bubble's edge. */
+const GAP = 4
+
+const hb = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0')
+const hexA = (c: RGB, a: number) => `#${hb(c[0])}${hb(c[1])}${hb(c[2])}${hb(Math.max(0, Math.min(1, a)) * 255)}`
+
+function isPayload(v: unknown): v is WhalePayload {
+  return !!v && typeof v === 'object' && Array.isArray((v as WhalePayload).bubbles)
+}
+
+interface Placed {
+  b: WhaleBubble
+  x: number
+  y: number
+}
+
+/** The hover card — one per layer, fixed to the page, never takes the pointer. */
+class Card {
+  private el: HTMLDivElement | null = null
+  private shown = ''
+
+  show(b: WhaleBubble, left: number, top: number, r: number): void {
+    if (typeof document === 'undefined') return
+    let el = this.el
+    if (!el || !el.isConnected) {
+      el = this.el = document.createElement('div')
+      el.className = 'cb-wh-card'
+      el.setAttribute('role', 'tooltip')
+      document.body.appendChild(el)
+      this.shown = ''
+    }
+    if (this.shown !== b.id) {
+      this.shown = b.id
+      el.dataset.tone = b.tone
+      const head = document.createElement('div')
+      head.className = 'cb-wh-head'
+      const side = document.createElement('span')
+      side.className = 'cb-wh-side'
+      side.textContent = b.card.head
+      const net = document.createElement('span')
+      net.className = 'cb-wh-net'
+      net.textContent = b.card.net
+      head.append(side, net)
+      const when = document.createElement('div')
+      when.className = 'cb-wh-when'
+      when.textContent = b.card.when
+      const rows = document.createElement('div')
+      rows.className = 'cb-wh-rows'
+      for (const r0 of b.card.rows) {
+        const row = document.createElement('div')
+        row.className = 'cb-wh-row'
+        row.dataset.tone = r0.tone
+        const t = document.createElement('span')
+        t.textContent = r0.text
+        const a = document.createElement('span')
+        a.className = 'cb-wh-amt'
+        a.textContent = r0.amount
+        row.append(t, a)
+        rows.append(row)
+      }
+      el.replaceChildren(head, when, rows)
+      if (b.card.more > 0) {
+        const more = document.createElement('div')
+        more.className = 'cb-wh-more'
+        more.textContent = `+ ${b.card.more} more`
+        el.append(more)
+      }
+    }
+    el.hidden = false
+    // beside the bubble, flipped to stay on screen
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    let x = left + r + 10
+    if (x + w > vw - 8) x = left - r - 10 - w
+    let y = top - h / 2
+    y = Math.max(8, Math.min(vh - h - 8, y))
+    el.style.transform = `translate(${Math.round(Math.max(8, x))}px, ${Math.round(y)}px)`
+  }
+
+  hide(): void {
+    if (this.el) this.el.hidden = true
+  }
+
+  destroy(): void {
+    this.el?.remove()
+    this.el = null
+  }
+}
+
+export class WhaleLayer implements RendererLayerInstance {
+  private canvas: HTMLCanvasElement | null = null
+  private readonly card = new Card()
+  private offLeave: (() => void) | null = null
+
+  mount(canvas: HTMLCanvasElement): void {
+    this.canvas = canvas
+    // the pointer leaving the chart outright may not repaint the layers
+    const host = canvas.parentElement
+    if (host) {
+      const leave = () => this.card.hide()
+      host.addEventListener('pointerleave', leave)
+      this.offLeave = () => host.removeEventListener('pointerleave', leave)
+    }
+  }
+
+  render(args: RendererLayerArgs): void {
+    const canvas = this.canvas
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    const d = args.data
+    if (!isPayload(d) || !d.bubbles.length) {
+      this.card.hide()
+      return
+    }
+    const { coords, scale, bounds, cursor } = args
+    const dpr = coords.dpr || 1
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.save()
+    // the plot only — never over the price axis or a neighbouring pane
+    ctx.beginPath()
+    ctx.rect(0, bounds.top, coords.width, bounds.height)
+    ctx.clip()
+
+    const placed: Placed[] = []
+    for (const b of d.bubbles) {
+      const x = coords.timeToX(b.t)
+      if (!Number.isFinite(x) || x < -b.r - 2 || x > coords.width + b.r + 2) continue
+      const ya = coords.priceToY(b.anchor, scale, bounds)
+      if (!Number.isFinite(ya)) continue
+      placed.push({ b, x, y: b.above ? ya - GAP - b.r : ya + GAP + b.r })
+    }
+    // biggest first: small bubbles stay on top, and are what the pointer finds
+    placed.sort((p, q) => q.b.r - p.b.r)
+
+    let hover: Placed | null = null
+    if (cursor) {
+      for (let i = placed.length - 1; i >= 0; i--) {
+        const p = placed[i]!
+        if (Math.hypot(cursor.x - p.x, cursor.y - p.y) <= p.b.r + 2) {
+          hover = p
+          break
+        }
+      }
+    }
+
+    const rgb: Record<Tone, RGB> = { up: tokenRgb(TONE_TOKEN.up), down: tokenRgb(TONE_TOKEN.down), mid: tokenRgb(TONE_TOKEN.mid) }
+    const ink = tokenRgb('--color-fg')
+    const font = getFont(canvas)
+    for (const p of placed) {
+      const { b, x, y } = p
+      const c = rgb[b.tone]
+      const on = p === hover
+      const mid = b.tone === 'mid'
+      ctx.beginPath()
+      ctx.arc(x, y, b.r, 0, Math.PI * 2)
+      ctx.fillStyle = hexA(c, on ? 0.55 : mid ? 0.16 : 0.3)
+      ctx.fill()
+      ctx.lineWidth = on ? 2 : 1.25
+      ctx.strokeStyle = hexA(c, mid ? 0.6 : 0.95)
+      ctx.stroke()
+      if (b.label && b.r >= 9) {
+        const px = Math.max(9, Math.min(13, Math.round(b.r * 0.55)))
+        ctx.font = `600 ${px}px ${font}`
+        const w = ctx.measureText(b.label).width
+        if (w <= b.r * 2 - 4) {
+          ctx.fillStyle = hexA(ink, 0.95)
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(b.label, x, y + 0.5)
+        }
+      }
+    }
+    ctx.restore()
+
+    if (hover) {
+      const rect = canvas.getBoundingClientRect()
+      this.card.show(hover.b, rect.left + hover.x, rect.top + hover.y, hover.b.r)
+    } else this.card.hide()
+  }
+
+  destroy(): void {
+    this.offLeave?.()
+    this.offLeave = null
+    this.card.destroy()
+    this.canvas = null
+  }
+}
+
+let fontMemo = ''
+/** The page's UI font, once (the canvas inherits none). */
+function getFont(canvas: HTMLCanvasElement): string {
+  if (fontMemo) return fontMemo
+  try {
+    fontMemo = getComputedStyle(canvas).fontFamily || 'system-ui, sans-serif'
+  } catch {
+    fontMemo = 'system-ui, sans-serif'
+  }
+  return fontMemo
+}

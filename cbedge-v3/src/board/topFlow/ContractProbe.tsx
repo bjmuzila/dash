@@ -202,9 +202,21 @@ export async function loadProbeBars(row: ProbeKey, days = 2, signal?: AbortSigna
   return []
 }
 
-export function ContractProbe({ row, onClose, entryAt, alertInfo: alertInfoProp, shareAs }: {
+/** One fill on a repeated contract, drawn as its own violet dot (2026-10-03). */
+export interface ProbeFill {
+  id: string
+  ts: number
+  premium: number
+  /** Ringed and fully opaque — the fill the user clicked in the table. */
+  hot?: boolean
+}
+
+export function ContractProbe({ row, onClose, entryAt, alertInfo: alertInfoProp, shareAs, fills }: {
   row: TopFlowRow
   onClose: () => void
+  /** Repeated flow: every fill of the contract, one dot each, sized by premium.
+   *  The row's own entry rung is then the size-weighted average fill. */
+  fills?: ProbeFill[]
   /** Tracked-contract details for the pop-out strip and its snapshot. */
   alertInfo?: ProbeAlertInfo
   /**
@@ -424,7 +436,7 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo: alertInfoProp,
       </div>
 
       {bars.length >= 2 ? (
-        <ProbeChart bars={bars} entry={entry} entryTs={entryAt === undefined ? row.ts : entryAt} size={row.size} wide={big} />
+        <ProbeChart bars={bars} entry={entry} entryTs={fills?.length ? null : entryAt === undefined ? row.ts : entryAt} size={row.size} wide={big} fills={fills} />
       ) : (
         <div className="px-1 py-6 text-2xs leading-relaxed text-faint">
           {q.loading
@@ -519,7 +531,7 @@ export function ContractProbe({ row, onClose, entryAt, alertInfo: alertInfoProp,
         </div>
     )
     const chart = bars.length >= 2 ? (
-      <ProbeChart bars={bars} entry={entry} entryTs={entryAt === undefined ? row.ts : entryAt} size={row.size} wide />
+      <ProbeChart bars={bars} entry={entry} entryTs={fills?.length ? null : entryAt === undefined ? row.ts : entryAt} size={row.size} wide fills={fills} />
     ) : (
       <div className="px-1 py-6 text-xs text-fg">
         {q.loading ? 'Loading…' : 'No bars for this contract in the window.'}
@@ -708,8 +720,10 @@ function ProbeExpandIcon({ size = 12, collapse = false }: { size?: number; colla
 
 const MONO = 'ui-monospace,Menlo,Consolas,monospace'
 
-export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
+export function ProbeChart({ bars, entry, entryTs, size, wide = false, fills }: {
   bars: Bar[]
+  /** Repeated-flow fills — see ContractProbe's `fills`. */
+  fills?: ProbeFill[]
   entry: number | null
   /** Epoch ms of the print. Places the entry MARKER on the line — the dashed
    *  rung says what was paid, the dot says when. */
@@ -857,6 +871,27 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
     return best
   }, [bars, entryTs, n])
 
+  // Each repeated-flow fill goes in the bar that contains it, the same rule as
+  // entryI. Out of the window → not drawn.
+  const fillMarks = useMemo(() => {
+    if (!fills?.length || n === 0) return [] as Array<{ id: string; i: number; r: number; hot: boolean; t: number }>
+    const first = bars[0]!.time, lastT = bars[n - 1]!.time
+    const slack = Math.max(60_000, (lastT - first) / Math.max(1, n - 1))
+    const maxP = Math.max(1, ...fills.map((f) => f.premium))
+    const out: Array<{ id: string; i: number; r: number; hot: boolean; t: number }> = []
+    for (const f of fills) {
+      if (!Number.isFinite(f.ts) || f.ts < first - slack || f.ts > lastT + slack) continue
+      let best = 0
+      for (let i = 0; i < n; i++) {
+        if (bars[i]!.time <= f.ts) best = i
+        else break
+      }
+      out.push({ id: f.id, i: best, r: 3 + 5 * Math.sqrt(f.premium / maxP), hot: !!f.hot, t: f.ts })
+    }
+    // The hot one last, so it paints on top.
+    return out.sort((a, b) => Number(a.hot) - Number(b.hot))
+  }, [fills, bars, n])
+
   // The accented volume bar is the bar the PRINT landed in, not the tallest one
   // on the session. Those are usually the same bar on a whale print, which is
   // why the mismatch hid for so long — but when a later minute trades more, the
@@ -971,7 +1006,7 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
           {/* With no marker to hang it on, the rung keeps its left-edge label. */}
           {entryI == null && (
             <text x={PADL + 2} y={y(entry) - 5 * S} fontSize={9 * S} fontWeight={700} letterSpacing="0.6" style={label}>
-              ENTRY {fmt(entry)}
+              {fills?.length ? 'AVG FILL' : 'ENTRY'} {fmt(entry)}
             </text>
           )}
         </>
@@ -1021,6 +1056,26 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false }: {
           </g>
         )
       })()}
+
+      {/* REPEATED-FLOW FILLS (2026-10-03). One violet dot per fill on the price
+          line at its bar, area ∝ premium; the clicked fill is ringed and
+          labelled with its time. The dashed rung is the average fill. */}
+      {fillMarks.map((m) => {
+        const fx = x(m.i)
+        const fy = y(bars[m.i]!.close)
+        return (
+          <g key={m.id}>
+            <circle cx={fx} cy={fy} r={m.r * S} style={{ fill: 'var(--color-violet)' }} opacity={m.hot ? 1 : 0.55} />
+            {m.hot && (
+              <>
+                <circle cx={fx} cy={fy} r={(m.r + 2.5) * S} fill="none" style={{ stroke: 'var(--color-fg)' }} strokeWidth={1.3 * S} />
+                <text x={fx} y={fy - (m.r + 6) * S} textAnchor="middle" fontSize={9 * S} fontWeight={700}
+                  style={{ fill: 'var(--color-violet)', fontFamily: MONO }}>{etTime(m.t)}</text>
+              </>
+            )}
+          </g>
+        )
+      })}
 
       {/* The high or the low is often the FIRST or LAST bar, and a centred label
           there hangs half off the canvas — "H 15.23" rendered as "15.23" with
