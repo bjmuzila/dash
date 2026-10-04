@@ -9,8 +9,10 @@
 //
 // ── Where the slider lives ───────────────────────────────────────────────────
 // Two doors to the same strip:
-//   · desktop — a LEGEND ACTION on the CB Walls row: the drop icon that appears
-//     beside the row's eye / gear / ✕ when the row is hovered.
+//   · desktop — the legend card's level settings (⚙ on its LEVELS row,
+//     legend/legendCard.ts) carry the same fader as a LINE OPACITY slider. The
+//     legend action below (a drop icon on Vela's CB Walls legend row) stays
+//     registered, but the desktop hides Vela's price legend under the card.
 //   · phone — ⋮ → "Walls opacity". Vela's phone legend folds into a chip that
 //     opens the object tree, so a legend-row button is never reachable there;
 //     the row is gated to the mobile layout so desktop gets no extra topbar

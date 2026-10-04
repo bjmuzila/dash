@@ -12,12 +12,15 @@
 //   IB 17.5 · 0.8× avg    today's initial balance (09:30–10:30) against its
 //                         average over the last 20 sessions; "forming" until 10:30
 //   ★ VOLT +17.1 · ◆ COIL −7.9 · ↘ REV −32.9 · ⚡︎ FLIP +4.0
-//                         distance from price to each Voltick level (Level Alerts'
-//                         read: the Volt is CORE, the top net GEX; the Coil the 2nd
-//                         top on the Volt's side of price; the Reversal the top
-//                         across price; the flip, all off the front chain's live
-//                         ladder), positive = above.
-//                         Each mark in its reserved colour, the word in Paper.
+//                         PHONE ONLY: on the desktop each chart's legend card
+//                         (legend/legendCard.ts) carries the levels (Brandon,
+//                         2026-10-04). Distance from price to each Voltick level
+//                         (Level Alerts' read: the Volt is CORE, the top net GEX;
+//                         the Coil the 2nd top on the Volt's side of price; the
+//                         Reversal the top across price; the flip, all off the
+//                         front chain's live ladder), positive = above.
+//                         Each mark DRAWN in its reserved colour (levelMarks.ts:
+//                         typed, Windows showed them as emoji), the word in Paper.
 //   EM ±41.2 · 62% used   the day's frozen expected move and how much of it the
 //                         move from the prior close has used
 //
@@ -38,6 +41,7 @@ import { dailyEmUrl, parseDailyEm, type DailyEmBand } from '@/data/dailyEm'
 import { CbEdgeProvider, resolveSym } from '@/pages/vela/cbedgeProvider'
 import { etDateKey, etMinutesOfDay } from '@/pages/vela/studies/common'
 import { levelsFor } from '@/pages/vela/levels/levelAlerts'
+import { markSvg, type MarkKey } from '@/pages/vela/levelMarks'
 import { replayStore } from '@/pages/vela/replay/replay'
 
 const provider = new CbEdgeProvider()
@@ -100,30 +104,36 @@ const num = (v: number, d = 2) => v.toLocaleString('en-US', { minimumFractionDig
 const sgn = (v: number, d = 1) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(d)}`
 const toneCls = (v: number) => (v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-fg')
 
-/** Voltick's four levels as the strip names them: mark, chip code, reserved colour. */
-const FLIP_MARK = '\u26A1\uFE0E'
-const VT_ITEMS = [
-  { key: 'volt', mark: '★', code: 'VOLT', name: 'Volt', tone: 'var(--color-vt-volt)' },
-  { key: 'coil', mark: '◆', code: 'COIL', name: 'Coil', tone: 'var(--color-vt-coil)' },
-  { key: 'reversal', mark: '↘', code: 'REV', name: 'Reversal', tone: 'var(--color-vt-reversal)' },
-  { key: 'flip', mark: FLIP_MARK, code: 'FLIP', name: 'Flip', tone: 'var(--color-vt-flip)' },
-] as const
+/** Voltick's four levels as the strip names them: the drawn mark, the chip code. */
+const VT_ITEMS: ReadonlyArray<{ key: MarkKey; code: string; name: string }> = [
+  { key: 'volt', code: 'VOLT', name: 'Volt' },
+  { key: 'coil', code: 'COIL', name: 'Coil' },
+  { key: 'reversal', code: 'REV', name: 'Reversal' },
+  { key: 'flip', code: 'FLIP', name: 'Flip' },
+]
 
-function Item({ label, mark, tone, children, title }: { label: string; mark?: string; tone?: string; children: React.ReactNode; title: string }) {
+function Item({ label, mark, children, title }: { label: string; mark?: MarkKey; children: React.ReactNode; title: string }) {
   return (
     <span className="flex shrink-0 items-baseline gap-1" title={title}>
-      {mark && (
-        <span className="text-2xs font-extrabold" style={{ color: tone }}>
-          {mark}
-        </span>
-      )}
+      {/* constant markup from levelMarks.ts: the mark's reserved colour comes with it */}
+      {mark && <span className="cb-mk-box" dangerouslySetInnerHTML={{ __html: markSvg(mark) }} />}
       <span className="font-mono text-3xs font-semibold uppercase tracking-[0.08em] text-faint">{label}</span>
       <span className="tabular font-mono text-2xs font-extrabold text-fg">{children}</span>
     </span>
   )
 }
 
-export default function SessionStrip({ ws, onHide, showTicker = true }: { ws: VelaWorkspace; onHide: () => void; showTicker?: boolean }) {
+export default function SessionStrip({
+  ws,
+  onHide,
+  showTicker = true,
+  showLevels = true,
+}: {
+  ws: VelaWorkspace
+  onHide: () => void
+  showTicker?: boolean
+  showLevels?: boolean
+}) {
   const replay = useSyncExternalStore(replayStore.subscribe, replayStore.get)
   const [sym, setSym] = useState(() => bare(ws.chart.market.symbol))
   const [stats, setStats] = useState<Stats | null>(null)
@@ -208,16 +218,17 @@ export default function SessionStrip({ ws, onHide, showTicker = true }: { ws: Ve
               {s.ib.forming && <span className="text-faint"> · forming</span>}
             </Item>
           )}
-          {VT_ITEMS.map((v) => {
-            const lv = s.levels[v.key]
-            const d = dist(lv)
-            if (d == null) return null
-            return (
-              <Item key={v.key} label={v.code} mark={v.mark} tone={v.tone} title={`${v.name} at ${num(lv!)}: distance from price`}>
-                {sgn(d)}
-              </Item>
-            )
-          })}
+          {showLevels &&
+            VT_ITEMS.map((v) => {
+              const lv = s.levels[v.key]
+              const d = dist(lv)
+              if (d == null) return null
+              return (
+                <Item key={v.key} label={v.code} mark={v.key} title={`${v.name} at ${num(lv!)}: distance from price`}>
+                  {sgn(d)}
+                </Item>
+              )
+            })}
           {s.em && (
             <Item label="EM" title={`Today's expected move (±1σ from the prior close ${num(s.em.refClose)}) and how much of it is used`}>
               ±{num(s.em.em, 1)}

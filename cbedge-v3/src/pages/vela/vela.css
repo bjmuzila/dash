@@ -55,7 +55,9 @@
 .cb-sp,
 .cb-scr-toasts,
 .cb-wh-card,
-.cb-wl-pincol {
+.cb-wl-pincol,
+.cb-lc,
+.cb-lc-pop {
   font-family: var(--font-sans);
 }
 
@@ -2532,7 +2534,10 @@
   padding: 0 12px 4px;
 }
 .cb-sp .cb-sp-chip {
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 4px;
   border: 1px solid var(--color-line);
   border-radius: var(--radius-sm);
   background: var(--color-vt-elev);
@@ -2550,7 +2555,7 @@
 }
 .cb-sp .cb-sp-row {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) 34px 78px 60px;
+  grid-template-columns: 22px 54px minmax(0, 1fr) 34px 78px 60px;
   align-items: center;
   gap: 8px;
   height: 34px;
@@ -2624,4 +2629,507 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+/* ── Ticker icons (tickerIcon.ts): the chip, the picker, the legend card ──
+   A stock is its logo; an index or future a rounded square, a fund a circle,
+   each with a mark for what it tracks or holds and a badge for how it differs. */
+.cb-tki {
+  --cb-tki-s: 20px;
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: var(--cb-tki-s);
+  height: var(--cb-tki-s);
+  vertical-align: middle;
+}
+.cb-tki > img,
+.cb-tki > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.cb-tki > img {
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+.cb-tki .cb-tki-shape {
+  fill: var(--color-vt-elev);
+  stroke: var(--color-vt-rail);
+  stroke-width: 1;
+}
+.cb-tki .cb-tki-t {
+  fill: var(--color-vt-paper);
+  font-family: var(--font-mono);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.cb-tki .cb-tki-t.cb-tki-sym {
+  font-family: var(--font-sans);
+}
+.cb-tki .cb-tki-g {
+  fill: none;
+  stroke: var(--color-vt-paper);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.cb-tki .cb-tki-b {
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  min-width: 12px;
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--color-vt-ink);
+  box-shadow: 0 0 0 1px var(--color-vt-quiet);
+  color: var(--color-vt-paper);
+  font-family: var(--font-mono);
+  font-size: var(--text-3xs);
+  font-weight: 800;
+  line-height: 1.15;
+  text-align: center;
+  transform: scale(0.82);
+  transform-origin: 100% 100%;
+}
+.vela-workspace .cb-sym-chip .cb-sym-ic {
+  display: inline-flex;
+  margin-right: -2px;
+}
+.vela-workspace .cb-sym-chip .cb-sym-ic:empty {
+  display: none;
+}
+
+/* ── Voltick's level marks, drawn (levelMarks.ts) ── */
+.cb-mk {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  vertical-align: -1px;
+}
+.cb-mk[data-mk='volt'] {
+  color: var(--color-vt-volt);
+}
+.cb-mk[data-mk='coil'] {
+  color: var(--color-vt-coil);
+}
+.cb-mk[data-mk='reversal'] {
+  color: var(--color-vt-reversal);
+}
+.cb-mk[data-mk='flip'] {
+  color: var(--color-vt-flip);
+}
+.cb-mk-box {
+  display: inline-flex;
+  align-self: center;
+}
+.cb-mk-box .cb-mk {
+  width: 10px;
+  height: 10px;
+}
+.cb-lv-mark .cb-mk {
+  width: 11px;
+  height: 11px;
+}
+
+/* ── The legend card (legend/legendCard.ts) ───────────────────────────────────
+   One per chart on the desktop, where Vela's symbol line and price legend were.
+   `cb-lc-on` (Vela.tsx, desktop only) hides those two; Vela writes the legend's
+   display inline, hence !important. Lower panes keep their own legend. */
+.cb-lc-on .vela-cell .vela-statusline,
+.cb-lc-on .vela-cell [data-vela-pane='price'] {
+  display: none !important;
+}
+.cb-lc {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  z-index: 6;
+  width: max-content;
+  min-width: 270px;
+  max-width: calc(100% - 96px);
+  overflow: hidden;
+  border: 1px solid var(--color-vt-line);
+  border-radius: var(--radius-lg);
+  background: var(--vt-popover);
+  box-shadow: var(--vt-card-shadow);
+  color: var(--color-vt-paper);
+  font-size: var(--text-sm);
+  pointer-events: auto;
+  user-select: none;
+}
+.vela-cell[data-cb-gxr-left] .cb-lc {
+  margin-left: var(--cb-gxr-w);
+}
+.cb-lc .cb-lc-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 6px 0 10px;
+  contain: inline-size;
+}
+.cb-lc .cb-lc-icon {
+  display: inline-flex;
+  flex: none;
+}
+.cb-lc .cb-lc-sym {
+  flex: none;
+  font-weight: 700;
+}
+.cb-lc .cb-lc-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-vt-quiet);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-lc .cb-lc-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--vt-wash);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.cb-lc .cb-lc-state[hidden] {
+  display: none;
+}
+.cb-lc .cb-lc-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-vt-quiet);
+}
+.cb-lc .cb-lc-state[data-tone='open'] i {
+  background: var(--color-vt-accent);
+}
+.cb-lc .cb-lc-state[data-tone='pre'] i {
+  background: var(--color-vt-premarket);
+}
+.cb-lc .cb-lc-state[data-tone='post'] i {
+  background: var(--color-vt-sky);
+}
+.cb-lc .cb-lc-state[data-tone='replay'] i {
+  background: var(--color-vt-accent-text);
+}
+.cb-lc .cb-lc-ic {
+  display: grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-vt-quiet);
+  cursor: pointer;
+}
+.cb-lc .cb-lc-ic:hover,
+.cb-lc .cb-lc-ic[data-open='1'] {
+  background: var(--color-vt-elev);
+  color: var(--color-vt-paper);
+}
+.cb-lc .cb-lc-ic:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cb-lc .cb-lc-ic:disabled:hover {
+  background: none;
+}
+.cb-lc .cb-lc-ic svg {
+  width: 14px;
+  height: 14px;
+}
+.cb-lc .cb-lc-fold svg {
+  transition: transform 0.15s ease;
+}
+.cb-lc[data-folded='1'] .cb-lc-fold svg {
+  transform: rotate(-90deg);
+}
+.cb-lc .cb-lc-body {
+  border-top: 1px solid var(--color-vt-line);
+}
+.cb-lc .cb-lc-sec {
+  padding: 6px 6px 5px;
+}
+.cb-lc .cb-lc-sec + .cb-lc-sec {
+  border-top: 1px solid var(--color-vt-line);
+}
+.cb-lc .cb-lc-sh {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px 2px;
+  color: var(--color-vt-quiet);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+/* folded: the header and the levels row, nothing else */
+.cb-lc[data-folded='1'] .cb-lc-studies,
+.cb-lc[data-folded='1'] .cb-lc-sh,
+.cb-lc[data-folded='1'] .cb-lc-tools {
+  display: none;
+}
+.cb-lc[data-folded='1'] .cb-lc-sec {
+  padding-top: 3px;
+}
+/* the levels: ONE row, always */
+.cb-lc .cb-lc-lrow {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  min-height: 30px;
+  padding-left: 2px;
+}
+.cb-lc .cb-lc-lvs {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.cb-lc .cb-lc-lrow[data-off='1'] .cb-lc-lv {
+  opacity: 0.4;
+}
+.cb-lc .cb-lc-lv {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cb-lc .cb-lc-lv:hover {
+  background: var(--vt-wash);
+}
+.cb-lc .cb-lc-dd {
+  color: var(--color-vt-quiet);
+  font-size: var(--text-2xs);
+}
+.cb-lc .cb-lc-lvnone {
+  padding: 3px 6px;
+  color: var(--color-vt-quiet);
+  font-size: var(--text-xs);
+}
+.cb-lc .cb-lc-tools {
+  display: flex;
+  flex: none;
+  margin-left: auto;
+  padding-left: 4px;
+}
+.cb-lc[data-fit='1'] .cb-lc-lv,
+.cb-lc[data-fit='2'] .cb-lc-lv {
+  gap: 4px;
+  padding: 3px 4px;
+  font-size: var(--text-xs);
+}
+.cb-lc[data-fit='2'] .cb-lc-dd,
+.cb-lc[data-fit='3'] .cb-lc-dd,
+.cb-lc[data-fit='3'] .cb-lc-dec {
+  display: none;
+}
+.cb-lc[data-fit='3'] .cb-lc-lv {
+  gap: 3px;
+  padding: 3px;
+  font-size: var(--text-2xs);
+}
+.cb-lc[data-fit='3'] .cb-mk {
+  width: 10px;
+  height: 10px;
+}
+/* the studies */
+.cb-lc .cb-lc-studies {
+  contain: inline-size;
+}
+.cb-lc .cb-lc-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto 24px 24px 24px;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding-left: 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+.cb-lc .cb-lc-row:hover {
+  background: var(--vt-wash);
+}
+.cb-lc .cb-lc-sw {
+  width: 12px;
+  height: 3px;
+  margin: 0 auto;
+  border-radius: 2px;
+  background: var(--color-vt-quiet);
+}
+.cb-lc .cb-lc-nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-lc .cb-lc-v {
+  padding-right: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.cb-lc .cb-lc-v.cb-lc-na {
+  color: var(--color-vt-quiet);
+  font-family: var(--font-sans);
+}
+.cb-lc .cb-lc-row .cb-lc-hov {
+  visibility: hidden;
+}
+.cb-lc .cb-lc-row:hover .cb-lc-hov,
+.cb-lc .cb-lc-row:focus-within .cb-lc-hov {
+  visibility: visible;
+}
+.cb-lc .cb-lc-row[data-off='1'] :is(.cb-lc-nm, .cb-lc-v, .cb-lc-sw),
+.cb-lc .cb-lc-row[data-dis='1'] :is(.cb-lc-nm, .cb-lc-sw) {
+  opacity: 0.45;
+}
+.cb-lc .cb-lc-row[data-dis='1']:hover {
+  background: none;
+}
+.cb-lc .cb-lc-empty {
+  padding: 4px 6px 6px;
+  color: var(--color-vt-quiet);
+  font-size: var(--text-xs);
+}
+/* the levels popover (portalled to <body>) */
+.cb-lc-pop {
+  position: fixed;
+  z-index: 6000;
+  width: 264px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--color-vt-line);
+  border-radius: var(--radius-lg);
+  background: var(--vt-popover);
+  box-shadow: var(--vt-card-shadow);
+  color: var(--color-vt-paper);
+  font-size: var(--text-sm);
+}
+.cb-lc-pop .cb-lc-pop-h {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.cb-lc-pop .cb-lc-pop-lab {
+  margin: 8px 0 6px;
+  color: var(--color-vt-quiet);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.cb-lc-pop .cb-lc-pop-val {
+  color: var(--color-vt-paper);
+}
+.cb-lc-pop .cb-lc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cb-lc-pop .cb-lc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--color-vt-line);
+  border-radius: 999px;
+  background: none;
+  color: var(--color-vt-quiet);
+  font: inherit;
+  cursor: pointer;
+}
+.cb-lc-pop .cb-lc-chip[aria-pressed='true'] {
+  background: var(--color-vt-elev);
+  color: var(--color-vt-paper);
+}
+.cb-lc-pop .cb-lc-chip[aria-pressed='false'] .cb-mk {
+  opacity: 0.45;
+}
+.cb-lc-pop .cb-lc-chip:disabled {
+  cursor: default;
+}
+.cb-lc-pop .cb-lc-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 30px;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-vt-paper);
+  font: inherit;
+  cursor: pointer;
+}
+.cb-lc-pop .cb-lc-switch i {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--color-vt-line);
+}
+.cb-lc-pop .cb-lc-switch i::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--color-vt-quiet);
+  content: '';
+  transition: left 0.15s ease;
+}
+.cb-lc-pop .cb-lc-switch[aria-pressed='true'] i {
+  background: var(--color-vt-accent);
+}
+.cb-lc-pop .cb-lc-switch[aria-pressed='true'] i::after {
+  left: 13px;
+  background: var(--color-vt-paper);
+}
+.cb-lc-pop .cb-lc-range {
+  width: 100%;
+  accent-color: var(--color-vt-accent);
+}
+.cb-lc-pop .cb-lc-more {
+  width: 100%;
+  height: 30px;
+  margin-top: 10px;
+  border: 1px solid var(--color-vt-line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-vt-accent-text);
+  font: inherit;
+  cursor: pointer;
+}
+.cb-lc-pop .cb-lc-more:hover {
+  background: var(--vt-wash);
+}
+.cb-lc-pop .cb-lc-more:disabled {
+  opacity: 0.45;
+  cursor: default;
 }

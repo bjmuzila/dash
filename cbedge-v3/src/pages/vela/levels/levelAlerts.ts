@@ -48,6 +48,7 @@ import { etDateKey, etMinutesOfDay } from '@/pages/vela/studies/common'
 import { replayActive } from '@/pages/vela/replay/clock'
 import { deliverAlert, enableNotify, notifyWanted, tfLabel } from '@/pages/vela/script/alerts'
 import { ARMED_KEY } from './levelAlertsEntry'
+import { isMarkKey, markSvg } from '@/pages/vela/levelMarks'
 
 export type Group = 'Voltick' | 'Session' | 'Prior'
 
@@ -353,10 +354,11 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
           row.dataset.on = String(on)
           const dist = read.price != null && lv.price != null ? lv.price - read.price : null
           const name = el('span', 'cb-lv-name')
-          if (lv.mark) {
-            // Voltick's Chip: the mark carries the colour, the word stays Paper
-            const mk = el('span', 'cb-lv-mark', lv.mark)
-            if (lv.tone) mk.style.color = lv.tone
+          if (lv.mark && isMarkKey(lv.key)) {
+            // Voltick's Chip: the mark carries the colour, the word stays Paper.
+            // Drawn (levelMarks.ts), not typed: Windows showed the typed ones as emoji.
+            const mk = el('span', 'cb-lv-mark')
+            mk.innerHTML = markSvg(lv.key)
             name.append(mk)
           }
           name.append(document.createTextNode(lv.name))

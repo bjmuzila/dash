@@ -2,7 +2,8 @@
 // THE TICKER PICKER: the left end of the desktop top bar (Brandon, 2026-10-04,
 // the Vela top-bar cleanup; mockup generated/2026-10-04-vela-topbar-r2.html).
 //
-//   [ SPX  7,723.49  +0.71%  ▾ ]   a live chip in place of Vela's "SPX" button
+//   [ (500) SPX  7,723.49  +0.71%  ▾ ]   a live chip in place of Vela's "SPX" button,
+//                                        with the ticker's icon (tickerIcon.ts)
 //
 // A click on the chip, or any letter typed on the chart, drops our own picker
 // under it (symbolPickerView.ts): search, filters for the kinds of symbol that
@@ -65,6 +66,9 @@ const loadView = () =>
     view = m
     return m
   })
+/** The icons (tickerIcon.ts), lazily too: the chip draws its icon a moment after the chip. */
+let icons: typeof import('./tickerIcon') | null = null
+const iconsReady = import('./tickerIcon').then((m) => (icons = m))
 
 // ── Recent symbols (this browser) ────────────────────────────────────────────
 
@@ -171,6 +175,8 @@ export function bindSymbolPicker(ws: VelaWorkspace): () => void {
   current = ws
   const doc = ws.root.ownerDocument
   let shown: string | null = null
+  /** The ticker the chip's icon was drawn for. */
+  let iconFor: string | null = null
 
   // ── the chip ──
   const paint = () => {
@@ -179,6 +185,9 @@ export function bindSymbolPicker(ws: VelaWorkspace): () => void {
     let tk = b.querySelector<HTMLElement>('.cb-sym-tk')
     if (!tk) {
       // Vela (re)built the button: icon + "Symbol". Make it the chip.
+      iconFor = null
+      const ic = doc.createElement('span')
+      ic.className = 'cb-sym-ic'
       tk = doc.createElement('span')
       tk.className = 'cb-sym-tk'
       const px = doc.createElement('span')
@@ -189,9 +198,14 @@ export function bindSymbolPicker(ws: VelaWorkspace): () => void {
       caret.classList.add('cb-sym-caret')
       b.classList.add('cb-sym-chip')
       b.setAttribute('aria-haspopup', 'dialog')
-      b.replaceChildren(tk, px, ch, caret)
+      b.replaceChildren(ic, tk, px, ch, caret)
     }
     const t = activeTicker(ws)
+    const ic = b.querySelector<HTMLElement>('.cb-sym-ic')
+    if (ic && icons && t !== iconFor) {
+      iconFor = t
+      ic.replaceChildren(t ? icons.tickerIconEl(doc, t, 18) : '')
+    }
     if (t !== shown) {
       shown = t
       if (t) {
@@ -228,6 +242,7 @@ export function bindSymbolPicker(ws: VelaWorkspace): () => void {
   const offState = ws.on('state:changed', paint)
   const offQuotes = onWatchlist(paint)
   follow()
+  void iconsReady.then(paint)
 
   const timer = setInterval(() => {
     if (!doc.hidden && shown) void refreshQuotes([shown])

@@ -4,7 +4,7 @@
 //
 //   [ ⌕ Search 100 symbols                               or just type ]
 //   ( All )  Indices 3   Futures 2   ETFs 12   Stocks 83
-//   RECENT    SPX  ES  NQ  NVDA  VIX
+//   RECENT    SPX  ES  NQ  NVDA  VIX     (each ticker with its icon: tickerIcon.ts)
 //   MAIN · WATCHLIST
 //   ES    E-mini S&P 500 futures (front month)  FUT   7,758.25   +0.68%
 //   SPX•  S&P 500 Index                         IDX   7,723.49   +0.71%
@@ -25,6 +25,7 @@
 import { iconEl } from '@luxalgo/vela/ui'
 import { activeList, chartSymbols, onWatchlist, quoteOf, refreshQuotes, sectionsOf, type SymbolRow } from './watchlist/store'
 import { fmtPct, fmtPrice, recentSymbols, toneOf } from './symbolPicker'
+import { tickerIconEl } from './tickerIcon'
 
 export interface PickerOptions {
   /** The chip; null centres the picker (Vela's phone-width chrome). */
@@ -187,7 +188,7 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
       row.dataset.current = '1'
       row.setAttribute('aria-selected', 'true')
     }
-    row.append(tk, el('span', 'cb-sp-name', r.description), el('span', 'cb-sp-tag', TAG[kindOf(r)]), el('span', 'cb-sp-px'), el('span', 'cb-sp-ch'))
+    row.append(tickerIconEl(document, r.ticker, 22, { lazy: true }), tk, el('span', 'cb-sp-name', r.description), el('span', 'cb-sp-tag', TAG[kindOf(r)]), el('span', 'cb-sp-px'), el('span', 'cb-sp-ch'))
     priceCells(row, r.ticker)
     const i = rows.length
     row.addEventListener('pointermove', () => {
@@ -246,7 +247,8 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
         body.append(heading('RECENT'))
         const chips = el('div', 'cb-sp-recent')
         for (const t of recent) {
-          const c = el('button', 'cb-sp-chip', t)
+          const c = el('button', 'cb-sp-chip')
+          c.append(tickerIconEl(document, t, 14), document.createTextNode(t))
           c.type = 'button'
           c.tabIndex = -1
           if (t === opts.current) c.dataset.current = '1'

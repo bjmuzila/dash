@@ -26175,3 +26175,14 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - `tsc` is clean apart from the pre-existing `board/gexCandles/chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds.
   - Headless run of the built page with mocked APIs: chip, picker (click, type-to-search, Tab filters, Enter), Workspace rows, Alt+W, the strip switch, `?` help listing, the narrow-desktop bottom bar, and `/m` unchanged.
   - The Vela page chunk grew ~1.9KB brotli (59.8KB → 61.7KB in the vela build), so the route budget needs a look on `npm run check`.
+
+## 2026-10-04 - Vela session stats strip: ticker, price and change off on the desktop
+
+- `cbedge-v3/src/pages/vela/setups/SessionStrip.tsx`:
+  - New `showTicker` prop. The strip's own "SPX 7,723.49 +0.71%" now renders only on the phone. On the desktop, the top bar's ticker chip already shows the symbol, price and change.
+  - The price is still read for the level distances and EM used.
+  - Everything else is unchanged: IB, ★ VOLT / ◆ COIL / ↘ REV / ⚡ FLIP, EM and PRIOR.
+  - The ✕ hint now names the real way back: Workspace → Session stats strip on the desktop, ⋮ → Session stats on the phone. It used to point at a toolbar button that no longer exists.
+- `cbedge-v3/src/pages/Vela.tsx`: `StripHost` passes `showTicker={phone}`.
+- Mockups for the strip (S1 to S4) are in `generated/2026-10-04-vela-strip-r1.html`. Brandon chose to keep the strip as it is.
+- Checks: `tsc` is clean (apart from the pre-existing `chart.ts:1261`), `check:theme` passes, and `vite build --mode vela` builds.

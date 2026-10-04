@@ -39,8 +39,14 @@
 //
 // ── Opacity ──────────────────────────────────────────────────────────────────
 // Every line (and every per-bar colour) is drawn at the shared walls opacity —
-// pages/vela/wallsOpacity.ts (legend-row drop icon; ⋮ → Walls opacity on a phone). A change
-// repaints the lines already computed; it never refetches.
+// pages/vela/wallsOpacity.ts (the legend card's level ⚙ on the desktop; ⋮ → Walls
+// opacity on a phone). A change repaints the lines already computed; it never refetches.
+//
+// ── The legend card ──────────────────────────────────────────────────────────
+// On the desktop each chart's legend card (legend/legendCard.ts) is this study's
+// face: its LEVELS row reads the newest Volt / Coil / Reversal drawn here
+// (wallsNow, published on every render), its ◉ is this study's visibility, and
+// its level switches are the showVolt / showCoil / showRev inputs below.
 //
 // ── Reads ────────────────────────────────────────────────────────────────────
 // One /api/walls-range request per symbol + variant + depth, shared by every
@@ -125,6 +131,11 @@ function inputsSchema(): InputSchema[] {
       step: 1,
       tooltip: 'How many recorded sessions to draw, newest first.',
     },
+    // One switch per Voltick level: the legend card's level settings (⚙ on its
+    // LEVELS row) flip these, so the choice is saved with the chart like any input.
+    { key: 'showVolt', title: 'Volt', type: 'bool', defval: true, tooltip: 'Draw the Volt line.' },
+    { key: 'showCoil', title: 'Coil', type: 'bool', defval: true, tooltip: 'Draw the Coil line.' },
+    { key: 'showRev', title: 'Reversal', type: 'bool', defval: true, tooltip: 'Draw the Reversal line.' },
   ]
 }
 
@@ -151,6 +162,54 @@ function settingsOf(inputs: Record<string, InputValue>): Settings {
     basis: str(inputs.basis, BASIS_OPTS[0]) === BASIS_OPTS[1] ? 'vol' : 'oivol',
     sessions: int(inputs.sessions, 10, 1, 60),
   }
+}
+
+/** The Voltick lines the inputs leave switched on (line key → shown). */
+function shownOf(inputs: Record<string, InputValue>): Record<string, boolean> {
+  return { volt: inputs.showVolt !== false, coil: inputs.showCoil !== false, reversal: inputs.showRev !== false }
+}
+
+// ── The levels NOW, for the legend card ──────────────────────────────────────
+// Each walls study publishes the newest value of its three Voltick lines (the
+// last bar that has one) so the legend card's LEVELS row reads exactly what is
+// drawn. Keyed by the chart's data control (one per chart, the same object the
+// card reaches as `chart.data`) and the study's id, because ids repeat across
+// the charts of a grid.
+
+export interface WallsNow {
+  volt: number | null
+  coil: number | null
+  reversal: number | null
+}
+const nowByChart = new WeakMap<object, Map<string, WallsNow>>()
+const nowSubs = new Set<() => void>()
+
+/** The newest Volt / Coil / Reversal a walls study on this chart drew, or null. */
+export function wallsNow(chartData: object, id: string): WallsNow | null {
+  return nowByChart.get(chartData)?.get(id) ?? null
+}
+
+/** Called whenever any walls study publishes new levels. Returns the unsubscribe. */
+export function onWallsNow(fn: () => void): () => void {
+  nowSubs.add(fn)
+  return () => {
+    nowSubs.delete(fn)
+  }
+}
+
+function publishNow(chartData: object, id: string, now: WallsNow | null): void {
+  let m = nowByChart.get(chartData)
+  if (!m) nowByChart.set(chartData, (m = new Map()))
+  const prev = m.get(id)
+  if (now) m.set(id, now)
+  else m.delete(id)
+  if (prev?.volt === now?.volt && prev?.coil === now?.coil && prev?.reversal === now?.reversal) return
+  for (const fn of nowSubs) fn()
+}
+
+const lastValue = (xs: readonly (number | null)[]): number | null => {
+  for (let i = xs.length - 1; i >= 0; i--) if (xs[i] != null) return xs[i]!
+  return null
 }
 
 // ── Reads (shared across charts) ─────────────────────────────────────────────
@@ -542,6 +601,7 @@ class WallsIndicator implements NativeIndicator {
     this.disarm()
     this.offOpacity?.()
     this.offOpacity = null
+    if (this.ctx) publishNow(this.ctx.data, this.ctx.id, null)
     this.ctx = null
   }
 
@@ -573,7 +633,16 @@ class WallsIndicator implements NativeIndicator {
     const aligned = alignToBars(bars, tfMs, this.days)
     // A level with nothing to draw on these bars gets no series at all, so a
     // ticker the recorder does not cover shows a quiet legend row.
-    const lines = linesFor(bars, aligned, s).filter((l) => l.values.some((v) => v != null))
+    const all = linesFor(bars, aligned, s)
+    // the legend card's NOW: every Voltick line, drawn or switched off
+    const byKey = (k: string) => {
+      const l = all.find((x) => x.key === k)
+      return l ? lastValue(l.values) : null
+    }
+    const now = { volt: byKey('volt'), coil: byKey('coil'), reversal: byKey('reversal') }
+    publishNow(ctx.data, ctx.id, now.volt == null && now.coil == null && now.reversal == null ? null : now)
+    const shown = shownOf(this.inputs)
+    const lines = all.filter((l) => shown[l.key] !== false && l.values.some((v) => v != null))
     const series: SeriesSpec[] = lines.map((line, ordinal) => ({
       id: stableSeriesId({ instanceId: WALLS_TYPE, kind: 'step', title: line.key, ordinal }),
       title: line.title,

@@ -190,6 +190,15 @@ import '@/pages/vela/vela.css'
 //
 // The phone keeps Vela's default composition (its bottom bar and ⋮ rows).
 //
+// ── The legend card (desktop) ────────────────────────────────────────────────
+// Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-legend-l4.html). Each
+// chart's top-left carries one card (pages/vela/legend/legendCard.ts): the
+// ticker's icon, name and market state; the Voltick levels NOW on one row with
+// one ⚙ and one ◉; every price-pane study with its value, ◉, ⚙ and ✕. Vela's
+// symbol line and price legend are hidden under it (`cb-lc-on`, vela.css);
+// lower panes keep Vela's own legend. The session strip drops its levels on the
+// desktop (the card has them). The phone keeps Vela's legend and the strip's levels.
+//
 // ── The camera copies ────────────────────────────────────────────────────────
 // Vela's screenshot button (and its phone row, and Ctrl/Cmd+Alt+S) puts the
 // PNG on the CLIPBOARD instead of downloading it — pages/vela/copyShot.ts. It
@@ -340,8 +349,9 @@ function StripHost({ ws, phone }: { ws: VelaWorkspace | null; phone: boolean }) 
   if (!ws || !shown) return null
   return (
     <Suspense fallback={null}>
-      {/* the ticker, price and change only on the phone: the desktop bar's chip shows them */}
-      <SessionStrip ws={ws} onHide={() => setStripShown(false)} showTicker={phone} />
+      {/* the ticker, price, change and levels only on the phone: on the desktop the
+          bar's chip shows the first three and each chart's legend card the levels */}
+      <SessionStrip ws={ws} onHide={() => setStripShown(false)} showTicker={phone} showLevels={phone} />
     </Suspense>
   )
 }
@@ -415,6 +425,17 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     // the desktop bar's ticker chip + picker, and the Workspace menu's Alt keys
     const unbindPicker = onPhone ? () => {} : bindSymbolPicker(ws)
     const unbindWorkspace = onPhone ? () => {} : bindWorkspaceMenu(ws)
+    // The legend card on every desktop chart (vela/legend/legendCard.ts), in place
+    // of Vela's symbol line and price legend: the class hides those at once, the
+    // card's own chunk follows. The phone keeps Vela's legend.
+    let unbindLegend: () => void = () => {}
+    let legendGone = false
+    if (!onPhone) {
+      ws.root.classList.add('cb-lc-on')
+      void import('@/pages/vela/legend/legendCard').then((m) => {
+        if (!legendGone) unbindLegend = m.bindLegendCards(ws)
+      })
+    }
 
     // Chart → toolbar. `state:changed` is Vela's debounced "something worth
     // saving moved" signal, and it covers a symbol switch AND a different cell
@@ -449,6 +470,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindShot()
       unbindPicker()
       unbindWorkspace()
+      legendGone = true
+      unbindLegend()
       unbindIndicators()
       unbindMarks()
       unbindReplay()
