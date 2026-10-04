@@ -8,7 +8,8 @@
 //                                  Rename / Delete; 📌 pin (below)
 //   add      [ Add symbol…        ] [+ SPX]   the chart's symbols, by ticker or
 //                                  name; "+ SPX" adds the active chart's
-//   rows     ⠿ logo  SYMBOL name     price   chg   chg%   (vol)   ⋯ ✕
+//   rows     ⠿ icon  SYMBOL name     price   chg   chg%   (vol)   ⋯ ✕   (the icon:
+//                                  tickerIcon.ts, the chip's and the picker's own)
 //
 //   · a row CLICK loads that symbol on the ACTIVE chart (in a grid: click the
 //     cell first); the active chart's symbol is highlighted
@@ -35,8 +36,7 @@
 
 import { registerSidePanel, registerStatePersistence, type Vela, type WidgetContext } from '@luxalgo/vela'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
-import { tickerLogoUrls } from '@/pages/economicCalendar/ChipLogo'
-import { PROVIDER_NAME, resolveSym } from '@/pages/vela/cbedgeProvider'
+import { PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
 import { ThemedSelect } from '@/pages/vela/themedSelect'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import {
@@ -113,6 +113,11 @@ function chartTicker(ctx: WidgetContext): string | null {
 }
 
 const narrow = () => typeof matchMedia === 'function' && matchMedia('(max-width: 720px)').matches
+
+/** The ticker icons (tickerIcon.ts), lazily: the page's own chunk stays as it was. */
+let icons: typeof import('@/pages/vela/tickerIcon') | null = null
+const iconsReady = import('@/pages/vela/tickerIcon').then((m) => (icons = m))
+iconsReady.catch(() => undefined) // a failed chunk: each row keeps its ticker tile
 
 // ── the pin: module state, so the dock's copy and the pinned column agree ──
 const PIN_KEY = 'cb-vela-watchlist-pinned'
@@ -276,22 +281,15 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
     head.replaceChildren(el(doc, 'span', 'cb-wl-th cb-wl-grip-h'), cell('symbol', 'Symbol', 'cb-wl-th-sym'), ...shown.map((c) => cell(c.key, c.label, 'cb-wl-th-num')), el(doc, 'span', 'cb-wl-th'))
   }
 
+  /** The row's icon: tickerIcon.ts, the same one the chip, the picker and the legend card draw. */
   function logo(sym: string): HTMLElement {
+    if (icons) return icons.tickerIconEl(doc, sym, 22, { lazy: true })
+    // a cold load: a blank tile until the icons' chunk lands, then the icon
     const box = el(doc, 'span', 'cb-wl-logo')
-    const kind = resolveSym(sym).kind
-    const chip = () => box.replaceChildren(el(doc, 'span', 'cb-wl-chip', kind === 'futures' ? sym : sym.slice(0, kind === 'index' ? 3 : 1)))
-    if (kind === 'stock' || kind === 'etf') {
-      const img = doc.createElement('img')
-      img.alt = ''
-      img.loading = 'lazy'
-      img.decoding = 'async'
-      // sized here too, so a logo can never draw at its natural size
-      img.width = 22
-      img.height = 22
-      img.src = tickerLogoUrls(sym)[0]!
-      img.addEventListener('error', chip, { once: true })
-      box.append(img)
-    } else chip()
+    void iconsReady.then(
+      (m) => box.replaceWith(m.tickerIconEl(doc, sym, 22, { lazy: true })),
+      () => box.append(el(doc, 'span', 'cb-wl-chip', sym.slice(0, 3))),
+    )
     return box
   }
 

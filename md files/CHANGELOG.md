@@ -26186,3 +26186,61 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - `cbedge-v3/src/pages/Vela.tsx`: `StripHost` passes `showTicker={phone}`.
 - Mockups for the strip (S1 to S4) are in `generated/2026-10-04-vela-strip-r1.html`. Brandon chose to keep the strip as it is.
 - Checks: `tsc` is clean (apart from the pre-existing `chart.ts:1261`), `check:theme` passes, and `vite build --mode vela` builds.
+
+## 2026-10-04 - Vela legend card (L4), ticker icons, drawn level marks; session strip slimmed
+
+The third section of the vela.cbedge.net cleanup. Mockup: `generated/2026-10-04-vela-legend-l4.html` (v6). Desktop only; the phone keeps Vela's legend.
+
+- **Legend card** (`pages/vela/legend/legendCard.ts`, new, lazy): one card at the top-left of every chart, replacing Vela's symbol line and price-pane legend (hidden by `cb-lc-on` in `vela.css`).
+  - Header: ticker icon, ticker, name, market state (Vela's own badge, plus REPLAY), and a fold chevron. Cells under 520px start folded; the choice is kept per cell.
+  - LEVELS · NOW: Volt / Coil / Reversal are the newest values the CB Walls study drew. Flip, and any level the walls do not cover, come from `levelsFor` (the live chain).
+  - One row, always: the card grows to fit; on a narrow chart the row steps down (smaller type, then no distances, then whole numbers). It never wraps or clips.
+  - One ⚙ for all levels: show Volt/Coil/Reversal/Flip, distance from price, line opacity (the shared walls fader), and "All CB Walls settings". One ◉ toggles the walls study.
+  - STUDIES: every other price-pane indicator, its value under the crosshair, ◉, and ⚙ / ✕ on hover. These drive the study's own handle and Vela's settings dialog, so undo and the saved layout see them.
+  - No Add indicator on the card; the top bar's Indicators adds studies. Lower panes (RSI…) keep Vela's own legend.
+- **Ticker icons** (`pages/vela/tickerIcon.ts`, new, lazy): one function for the top-bar chip, every picker row (and RECENT chips), and the card.
+  - Stocks use the earnings calendar's logo ladder (`tickerLogoUrls`: /logos, the live resolver, then the parent share class).
+  - Indexes and futures get our own marks in a rounded square, funds in a circle (500 / 100 / 2K, VIX spike, 20Y, Au, a chip…), with badges F / m / 3× / −3× / 2× / ETN. Unknown ones show their ticker.
+  - Not the mirror for those: it covers 11 of 46, mostly as wordmarks, and its ES.png is Eversource Energy.
+- **Drawn level marks** (`pages/vela/levelMarks.ts`, new): ★ ◆ ↘ ⚡ as small shapes. On Windows the typed glyphs rendered as colour emoji and pushed the card's eye off.
+  - Used by the card, the Level Alerts panel, and the phone strip. Series titles in the data window stay text.
+- `pages/vela/wallsIndicator.ts`: new inputs `showVolt` / `showCoil` / `showRev` (default on; the card's chips set them), and `wallsNow` / `onWallsNow`, which publish the newest drawn levels per chart.
+- `pages/vela/setups/SessionStrip.tsx`: the ticker/price/change block (`showTicker`) and the four level distances (`showLevels`) now show on the phone only. On the desktop the chip and the card carry them.
+- `pages/vela/symbolPicker.ts` / `symbolPickerView.ts`: chip and row icons. `wallsOpacity.ts`: comment points at the card's slider.
+- `pages/Vela.tsx`: sets `cb-lc-on`, lazy-loads the card on the desktop, and passes `showLevels` to the strip.
+- **Checks:**
+  - `tsc` is clean apart from the pre-existing `board/gexCandles/chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds.
+  - Headless run with mocked bars and walls: card values, add/hide/remove/settings on a study, the walls ◉, the ⚙ popover, fold, 4- and 8-chart layouts, chip and picker icons, ES, the Level Alerts marks, and `/m` unchanged.
+  - Brotli sizes in the vela build: the page chunk is 62.1KB (was 61.7KB; the icons and card load in their own chunks, 1.7KB and 5.1KB). The route budget is still over and needs a look on `npm run check`.
+
+_Note: this entry was missing from the laptop's copy (an older copy of the file was written over it) and is restored here as first logged._
+
+## 2026-10-04 - Vela drawing rail: five tools and a drawer (D1); legend card folds on a chart click
+
+The fourth section of the vela.cbedge.net cleanup. Mockup: `generated/2026-10-04-vela-draw-r1.html`. Brandon picked D1 and kept D4 (a ✎ Draw button in the top bar) in reserve; the mockup has it. Desktop only; the phone keeps Vela's own drawing chrome.
+
+- **Drawing rail** (`pages/vela/drawRail.ts`, new, lazy): replaces Vela's 15-button drawing bar in the same toolbar column, so the grid does not move.
+  - Top to bottom: cursor, the pinned tools (default trend line, horizontal line, rectangle, text, long/short position), one button for every drawing tool, the magnet, and ⋯.
+  - The drawer: all 76 of Vela's tools with Vela's own icons, labels and sections, searchable (↑↓ Enter Esc). ★ pins a tool to the rail (up to 8). A tool armed from the drawer shows on the drawer's button.
+  - ⋯: Measure, Eraser, Stay in drawing mode, Sync drawings on all charts (`ws.sync`), magnet strength (Off / Weak / Strong), and Lock / Hide / Remove all drawings on this chart (Remove is one undo step).
+  - Magnet and stay-in-mode apply to every chart, as Vela's bar did. An armed tool follows the active chart.
+  - Drives the public drawings API (`setTool` / `setMode` / `setSnapMode` / `setStayMode`). Alt+T / Alt+H / Alt+V still work and are shown beside their tools.
+  - `cb-dr-on` hides Vela's bar only once the rail has mounted, so a chunk that fails to load leaves Vela's bar working. Pins and the magnet's strength are kept in this browser (`cb-v3-vela-draw`).
+- **Legend card** (`pages/vela/legend/legendCard.ts`): a press anywhere on the chart folds the card. Clicking the folded card, or its ▾, opens it again. The state is remembered per chart.
+- `pages/vela/vela.css`: the rail (the same glass card Vela's bar wore), its tooltip, the drawer and ⋯ menu, and the drawer search field exempt from the double focus ring.
+- `pages/Vela.tsx`: lazy-loads the rail on the desktop; header note.
+- **Checks:**
+  - `tsc` is clean apart from the pre-existing `chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds.
+  - Headless run: arm and draw a trend line, the drawer (search, pin, Enter), magnet, every ⋯ item, Alt+T, Remove all, a 2-chart layout (shared magnet and stay), and the narrow-width chrome hiding the column.
+  - Card folding: a chart click folds it, a card click opens it, and the cog popover, the drawing rail and the ▾ do not fold it.
+  - Brotli sizes in the vela build: the page chunk is 62.2KB (+0.1KB); the rail chunk is 4.0KB.
+
+## 2026-10-04 - Vela watchlist: every row gets its ticker icon (desktop, phone, Advanced view)
+
+Brandon's phone watchlist on vela.cbedge.net showed letter tiles. The watchlist drew its own logos: the /logos mirror only, for stocks and funds only, then a letter. The vela host's nginx has no /logos route, so that first step always missed there and every row fell to its letter.
+
+- `pages/vela/watchlist/panel.ts`: a row's icon is now `tickerIconEl` (tickerIcon.ts), the same icon as the top bar chip, the ticker picker and the legend card. Stocks walk the earnings calendar's full logo ladder (mirror, then `/proxy/ticker-logo`, then the parent class). Indexes, futures and funds get our marks and badges. The icons come in as their own chunk, so the page chunk did not grow. On a cold load a row shows a blank tile for a moment. If the chunk never loads, the tile shows the ticker.
+- `pages/vela/watchlist/advanced.ts`: the Advanced view's rows and its Selected card use the same icon.
+- `pages/vela/vela.css`, `pages/vela/watchlist/advanced.css`: removed the old logo image and letter-chip rules. Kept the 22px tile as the cold-load placeholder.
+- Not changed: `deploy/vela/nginx.conf` still has no `/logos/` route. Logos on the vela host come through `/proxy/ticker-logo`, after one wasted request each. Vela's own symbol search also uses the mirror only. Adding the route is a proxy change and waits on Brandon's OK.
+- **Checks:** `tsc` is clean apart from the pre-existing `chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds. Headless run: the pinned desktop column, the phone sheet (`/m`) and the Advanced view all draw icons (index/future marks with F badges, fund marks with 3× badges, NVDA/TSLA/AAPL logos, a monogram for an unknown ticker). No page errors. Brotli: the page chunk is 60.7KB (−0.1KB).

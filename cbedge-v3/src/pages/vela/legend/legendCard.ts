@@ -32,7 +32,9 @@
 //     Studies are added from the top bar's Indicators: the card has no Add.
 //
 // One card per chart cell; a cell narrower than FOLD_BELOW starts folded (header
-// and the levels row only). The ▾ choice is remembered per cell. The phone keeps
+// and the levels row only). A click on the chart folds it (Brandon: "clicking off
+// the legend card onto the chart should collapse it"); a click on the folded card,
+// or its ▾, opens it again. The last state is remembered per cell. The phone keeps
 // Vela's own legend: this file is loaded by the desktop page only, lazily, after
 // the workspace is up, and `cb-lc-on` on the workspace root is what hides Vela's
 // symbol line and price legend (vela.css).
@@ -205,6 +207,17 @@ class Card {
       this.fit()
     })
     this.ro.observe(cell.host)
+    // a press anywhere on this chart but the card folds it; a click on the folded
+    // card (not one of its buttons) opens it again
+    const onHostDown = (e: PointerEvent) => {
+      if (this.el.dataset.folded === '1' || this.el.contains(e.target as Node)) return
+      this.setFolded(true)
+    }
+    cell.host.addEventListener('pointerdown', onHostDown, true)
+    this.offs.push(() => cell.host.removeEventListener('pointerdown', onHostDown, true))
+    this.el.addEventListener('click', (e) => {
+      if (this.el.dataset.folded === '1' && !(e.target as HTMLElement).closest('button')) this.setFolded(false)
+    })
     this.wireChart()
     void namesReady.then(() => this.paintHeader())
   }
@@ -318,11 +331,7 @@ class Card {
     this.stateEl = el(d, 'span', 'cb-lc-state')
     this.stateEl.append(el(d, 'i', ''), el(d, 'span', ''))
     this.foldBtn = iconButton(d, 'cb-lc-fold', 'Fold the legend', iconEl('chevron-down', d))
-    this.foldBtn.addEventListener('click', () => {
-      prefs.fold[this.cell.id] = this.el.dataset.folded !== '1'
-      savePrefs()
-      this.applyFold()
-    })
+    this.foldBtn.addEventListener('click', () => this.setFolded(this.el.dataset.folded !== '1'))
     hd.append(this.iconBox, this.symEl, this.nameEl, this.stateEl, this.foldBtn)
 
     const levels = el(d, 'div', 'cb-lc-sec cb-lc-levels')
@@ -510,6 +519,12 @@ class Card {
       this.el.dataset.fit = f
       if (lvs.scrollWidth <= lvs.clientWidth + 0.5) return
     }
+  }
+
+  private setFolded(folded: boolean): void {
+    prefs.fold[this.cell.id] = folded
+    savePrefs()
+    this.applyFold()
   }
 
   private applyFold(): void {

@@ -30,10 +30,10 @@
 
 import type { WidgetContext } from '@luxalgo/vela'
 import './advanced.css'
-import { tickerLogoUrls } from '@/pages/economicCalendar/ChipLogo'
 import { etDateKey } from '@/board/gexCandles/candles'
 import { PROVIDER_NAME, resolveSym } from '@/pages/vela/cbedgeProvider'
 import { ThemedSelect } from '@/pages/vela/themedSelect'
+import { tickerIconEl } from '@/pages/vela/tickerIcon'
 import {
   activeList,
   addSymbol,
@@ -637,23 +637,9 @@ class AdvancedView {
     this.body.replaceChildren(tools, table)
   }
 
+  /** The row's icon: tickerIcon.ts, the same one the dock's list and the chip draw. */
   private logo(sym: string, size = 24): HTMLElement {
-    const doc = this.doc
-    const box = el(doc, 'span', 'cb-wla-logo')
-    box.style.width = box.style.height = `${size}px`
-    const kind = resolveSym(sym).kind
-    const chip = () => box.replaceChildren(el(doc, 'span', 'cb-wla-chip', kind === 'stock' || kind === 'etf' ? sym.slice(0, 2) : sym.slice(0, 3)))
-    if (kind === 'stock' || kind === 'etf') {
-      const img = doc.createElement('img')
-      img.alt = ''
-      img.width = size
-      img.height = size
-      img.loading = 'lazy'
-      img.src = tickerLogoUrls(sym)[0]!
-      img.addEventListener('error', chip, { once: true })
-      box.append(img)
-    } else chip()
-    return box
+    return tickerIconEl(this.doc, sym, size, { lazy: true })
   }
 
   private row(sym: string, cols: { id: SortKey; cls: string }[]): HTMLElement {

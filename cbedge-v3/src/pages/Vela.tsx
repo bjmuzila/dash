@@ -199,6 +199,13 @@ import '@/pages/vela/vela.css'
 // lower panes keep Vela's own legend. The session strip drops its levels on the
 // desktop (the card has them). The phone keeps Vela's legend and the strip's levels.
 //
+// ── The drawing rail (desktop) ───────────────────────────────────────────────
+// Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-draw-r1.html, D1). Vela's
+// drawing bar (cursor, seven tool groups, six utilities) gives way to a slim rail
+// in the same column (pages/vela/drawRail.ts): cursor, five pinned tools, a
+// searchable drawer of every tool (★ pins), the magnet and one ⋯. The phone keeps
+// Vela's own drawing chrome.
+//
 // ── The camera copies ────────────────────────────────────────────────────────
 // Vela's screenshot button (and its phone row, and Ctrl/Cmd+Alt+S) puts the
 // PNG on the CLIPBOARD instead of downloading it — pages/vela/copyShot.ts. It
@@ -436,6 +443,15 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
         if (!legendGone) unbindLegend = m.bindLegendCards(ws)
       })
     }
+    // The drawing rail (vela/drawRail.ts) in Vela's toolbar column, in place of its
+    // fifteen-button bar: the rail hides that bar itself once it is mounted, so a
+    // chunk that fails to load leaves Vela's own bar working.
+    let unbindRail: () => void = () => {}
+    if (!onPhone) {
+      void import('@/pages/vela/drawRail').then((m) => {
+        if (!legendGone) unbindRail = m.bindDrawRail(ws)
+      })
+    }
 
     // Chart → toolbar. `state:changed` is Vela's debounced "something worth
     // saving moved" signal, and it covers a symbol switch AND a different cell
@@ -472,6 +488,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindWorkspace()
       legendGone = true
       unbindLegend()
+      unbindRail()
       unbindIndicators()
       unbindMarks()
       unbindReplay()
