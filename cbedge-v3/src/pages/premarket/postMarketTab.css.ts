@@ -264,6 +264,30 @@ export const POSTMARKET_CSS = `
 .pmk .heat i{height:22px;border-radius:3px;background:var(--sunken)}
 .pmk .heatx{display:flex;justify-content:space-between;font-size:var(--text-3xs);color:var(--dim2);margin-top:4px}
 
+/* ── GAMMA VELOCITY — strike x half hour ────────────────────────────────────
+   Section 3's last band. Named 'vel*' because '.pmk .heat' is already the
+   strip further up this sheet. The grid template is set inline from the
+   number of windows; everything else is here. The spot outline is an inset
+   shadow, not a border, so the outlined cell is exactly as big as its
+   neighbours and the columns never jitter as spot moves. */
+.pmk .velhead{justify-content:flex-start;flex-wrap:wrap}
+.pmk .velhead .velsub{letter-spacing:0;text-transform:none}
+.pmk .velhead .evpreset{margin-left:auto}
+.pmk .velgrid{display:grid;gap:2px 3px;align-items:center}
+.pmk .velk{font-size:var(--text-2xs);text-align:right;color:var(--dim2);padding-right:6px;white-space:nowrap}
+.pmk .velk.key{font-weight:700}
+.pmk .velc{height:15px;border-radius:2px;background:var(--sunken)}
+.pmk .velc.spot{box-shadow:inset 0 0 0 1px var(--txt)}
+.pmk .velc.na{background:none;border:1px dashed var(--line)}
+.pmk .velx{font-size:var(--text-3xs);color:var(--dim2);text-align:center;margin-top:3px}
+.pmk .evlegend i.velkey-spot{background:none;box-shadow:inset 0 0 0 1px var(--txt)}
+.pmk .evlegend i.velkey-na{background:none;border:1px dashed var(--line3)}
+.pmk .velread{margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);
+  font-size:var(--text-2xs);line-height:1.55;color:var(--dim)}
+.pmk .velread b{color:var(--txt);font-weight:600}
+.pmk .velread b.velpos{color:var(--pos)}
+.pmk .velread b.velneg{color:var(--neg)}
+
 /* 4/5/6 */
 .pmk .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .pmk .tile{position:relative;border:1px solid var(--card);border-radius:9px;background:var(--panel2);

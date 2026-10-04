@@ -24,6 +24,7 @@ import { registerSidePanel, type WidgetContext } from '@luxalgo/vela'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import { compile, loadRuntime, onScriptResult, scriptResults, type ScriptRunInfo } from './engine'
 import { libIdOf, loadLibrary } from './library'
+import { ThemedSelect } from '../themedSelect'
 import { alertsArmed, enableNotify, firedAlerts, notifyWanted, onScriptAlertFired, setAlertsArmed, tfLabel } from './alerts'
 
 export const TESTER_PANEL_ID = 'cbedge-strategy'
@@ -68,9 +69,8 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
   const doc = body.ownerDocument
   body.classList.add('cb-scr', 'cb-st')
   const pickRow = el(doc, 'div', 'cb-scr-row')
-  const pick = el(doc, 'select', 'cb-scr-pick')
-  pick.setAttribute('aria-label', 'Strategy')
-  pickRow.append(pick)
+  const pick = new ThemedSelect(doc, 'cb-scr-pick', 'Strategy')
+  pickRow.append(pick.el)
   const tabs = el(doc, 'div', 'cb-st-tabs')
   tabs.setAttribute('role', 'tablist')
   const tabBtn = (id: 'overview' | 'trades', label: string) => {
@@ -104,10 +104,10 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
   const runs = () =>
     [...scriptResults().values()].filter((i): i is ScriptRunInfo & { strategy: Strat } => !!i.strategy).sort((a, b) => b.at - a.at)
 
-  pick.addEventListener('change', () => {
-    selected = pick.value
+  pick.onChange = (v) => {
+    selected = v
     render()
-  })
+  }
 
   function render() {
     const list = runs()
@@ -128,18 +128,15 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     if (!selected || !list.some((i) => i.instanceId === selected)) selected = list[0]!.instanceId
     // the picker: one row per chart copy
     const seen = new Map<string, number>()
-    pick.replaceChildren(
-      ...list.map((i) => {
+    pick.setOptions(
+      list.map((i) => {
         const base = `${i.title} — ${i.symbol} · ${tfLabel(i.timeframe)}`
         const n = (seen.get(base) ?? 0) + 1
         seen.set(base, n)
-        const o = doc.createElement('option')
-        o.value = i.instanceId
-        o.textContent = n > 1 ? `${base} (${n})` : base
-        return o
+        return { value: i.instanceId, label: n > 1 ? `${base} (${n})` : base }
       }),
+      selected,
     )
-    pick.value = selected
     for (const b of tabs.querySelectorAll<HTMLButtonElement>('.cb-st-tab')) b.setAttribute('aria-selected', String(b.dataset.tab === tab))
     const info = list.find((i) => i.instanceId === selected)!
     view.replaceChildren(...(tab === 'overview' ? overview(info, info.strategy) : trades(info.strategy)))
@@ -302,6 +299,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     onOpen: render,
     destroy() {
       off()
+      pick.destroy()
       if (timer) clearTimeout(timer)
     },
   }

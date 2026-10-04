@@ -229,6 +229,41 @@ const LOG_KEY = "cb-postmarket-log-v1";
 const PM_FROM_MIN = 15 * 60;
 
 /**
+ * GAMMA VELOCITY grid — section 3's strike × half-hour heat. Module scope for
+ * the same reason as PM_FROM_MIN: they key memos.
+ *
+ *   VEL_STEP_MIN  the column width, in minutes — thirteen columns, 09:30→16:00
+ *   VEL_GAP_MIN   how stale a column may be and still start a half hour; past
+ *                 this the first column INSIDE the window is used instead
+ *   VEL_PAD       strikes drawn beyond the day's traded range, each side
+ *   VEL_MIN_ROWS  a quiet day still gets a readable grid
+ *   VEL_MAX_ROWS  a wild one gets a capped grid centred on the close
+ */
+const VEL_STEP_MIN = 30;
+const VEL_GAP_MIN = 10;
+const VEL_PAD = 4;
+const VEL_MIN_ROWS = 13;
+const VEL_MAX_ROWS = 41;
+
+/** Points of board share, signed, with the unit — "+3.2pp", "−0.41pp". */
+const fmtPp = (v: number): string =>
+  `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(Math.abs(v) < 1 ? 2 : 1)}pp`;
+
+/**
+ * One heat cell's fill. A token mixed into the sunken plate, never a literal:
+ * the strength runs 10%→90% of the hue over the scale, and anything under 4%
+ * of the scale is drawn as the plate itself — a tint on a cell that did
+ * nothing reads as a measurement.
+ */
+const velFill = (v: number, scale: number): string | undefined => {
+  const t = Math.min(1, Math.abs(v) / scale);
+  if (t < 0.04) return undefined;
+  const pct = Math.round(10 + 80 * t);
+  const hue = v >= 0 ? "var(--pos)" : "var(--neg)";
+  return `color-mix(in srgb, ${hue} ${pct}%, var(--sunken))`;
+};
+
+/**
  * SECTION 3'S WINDOWS ARE A CHOICE, NOT A CONSTANT.
  *
  * The build bars used to be hard-wired to AM / MID / PM. That split answers one
@@ -905,6 +940,191 @@ export default function PostMarketTab(p: PostMarketProps) {
       return { strike: k, added, minutes: minutesAt.get(k) ?? 0 };
     });
   }, [cols, evNear, series]);
+
+  /**
+   * GAMMA VELOCITY — strike × half hour. "Where and when was the book written?"
+   *
+   * The ladder above reduces every strike to a composition. This is the same
+   * recorded ladder NOT reduced: each strike near the day's range against each
+   * half hour of the session, every cell the change in that strike's gamma
+   * across that half hour. Green = gamma added, red = gamma pulled, and the
+   * outlined cell in each column is where spot sat that half hour. Blooms are
+   * where the book was written; red cells are a level being taken away, which
+   * is the tell that it is about to stop working.
+   *
+   * ── SHARE BY DEFAULT, FOR THE SAME REASON AS THE REST OF SECTION 3 ──────────
+   * Differencing raw dollars between half hours on an expiring book measures
+   * 1/√T, not positioning: the last two columns light up green on whatever is
+   * ATM and red on everything else no matter what anyone did. Differencing the
+   * strike's SHARE of the board divides that term out (see the EvRow header).
+   * The $ switch is kept for the read that wants the decay in it — how much
+   * gamma physically sat there — and its tooltip says what it is measuring.
+   *
+   * MAGNITUDE, like the power-hour column: a put wall going more negative is
+   * gamma being ADDED, not pulled.
+   *
+   * ── A MISSING HALF HOUR IS NOT A QUIET ONE ──────────────────────────────────
+   * A window the recording does not cover — before the ladder starts, past the
+   * minute on screen (live, or scrubbed back on a replay), across a recorder
+   * gap — is drawn empty and dashed, never as a zero. Because `cols` is already
+   * cut at etMin, the grid fills in column by column as a replay moves, exactly
+   * like the build bars.
+   */
+  const velocity = useMemo(() => {
+    if (cols.length < 2 || !series.size) return null;
+    const mins = cols.map((c) => etMinutes(c.ts));
+    /** Last column stamped at or before minute `m`, or -1. */
+    const atOrBefore = (m: number) => {
+      let k = -1;
+      mins.forEach((x, i) => { if (x >= 0 && x <= m) k = i; });
+      return k;
+    };
+    /** First column stamped inside [from, until), or -1. */
+    const firstIn = (from: number, until: number) => mins.findIndex((x) => x >= from && x < until);
+
+    type VelWin = { from: number; until: number; a: number; b: number; ok: boolean; partial: boolean; spot: number | null };
+    const wins: VelWin[] = [];
+    for (let m = RTH_OPEN_MIN; m < RTH_CLOSE_MIN; m += VEL_STEP_MIN) {
+      const until = Math.min(m + VEL_STEP_MIN, RTH_CLOSE_MIN);
+      // The half hour STARTS from the last column at or before its open — but
+      // only if that column is close to it. Across a recorder gap the last
+      // column before 11:00 can be 10:20, and differencing from there would
+      // print a 40-minute move under a 30-minute label; the first column inside
+      // the window stands in instead and the cell is marked partial.
+      let a = atOrBefore(m);
+      if (a < 0 || m - (mins[a] ?? -Infinity) > VEL_GAP_MIN) a = firstIn(m, until);
+      const b = atOrBefore(until);
+      const aMin = a >= 0 ? (mins[a] ?? m) : m;
+      const bMin = b >= 0 ? (mins[b] ?? m) : m;
+      const covered = Math.min(until, bMin) - Math.max(m, aMin);
+      // Same 5-minute floor the build buckets use: a ladder that starts at
+      // 09:58 does not get to claim the 09:30 half hour.
+      const ok = a >= 0 && b > a && covered >= 5;
+      let spotSum = 0, spotN = 0;
+      if (ok) {
+        for (let i = a + 1; i <= b; i++) {
+          const px = cols[i]?.spot ?? 0;
+          if (px > 0) { spotSum += px; spotN++; }
+        }
+      }
+      wins.push({
+        from: m, until, a, b, ok,
+        partial: ok && covered < until - m - 3,
+        spot: spotN ? spotSum / spotN : null,
+      });
+    }
+    if (!wins.some((w) => w.ok)) return null;
+
+    // ── ROWS: the strikes the day actually traded through, plus a margin ──────
+    // Descending, so the grid reads like a price axis. Taken from the ladder's
+    // own strikes, so a coarse grid (2.50s, 25s far out) prints what exists
+    // rather than inventing 5-point rows.
+    const strikes = [...series.keys()].sort((x, y) => y - x);
+    const spots = cols.map((c) => c.spot).filter((px) => px > 0);
+    if (!strikes.length || !spots.length) return null;
+    const lo = Math.min(...spots), hi = Math.max(...spots);
+    const nearestIdx = (px: number) => strikes.reduce(
+      (bi, k, i) => (Math.abs(k - px) < Math.abs((strikes[bi] ?? Infinity) - px) ? i : bi), 0);
+    let inTop = strikes.findIndex((k) => k <= hi);
+    let inBot = -1;
+    strikes.forEach((k, i) => { if (k >= lo) inBot = i; });
+    if (inTop < 0 || inBot < 0 || inTop > inBot) { inTop = inBot = nearestIdx((lo + hi) / 2); }
+    const inCount = inBot - inTop + 1;
+    const pad = Math.max(VEL_PAD, Math.ceil((VEL_MIN_ROWS - inCount) / 2));
+    let top = Math.max(0, inTop - pad);
+    let bot = Math.min(strikes.length - 1, inBot + pad);
+    if (bot - top + 1 > VEL_MAX_ROWS) {
+      // A range wider than the grid can hold: centre on the CLOSE, which is
+      // the price every other grade on this tab is measured against.
+      const lastSpot = spots[spots.length - 1] ?? (lo + hi) / 2;
+      const c = nearestIdx(lastSpot);
+      top = Math.max(0, c - Math.floor(VEL_MAX_ROWS / 2));
+      bot = Math.min(strikes.length - 1, top + VEL_MAX_ROWS - 1);
+      top = Math.max(0, bot - VEL_MAX_ROWS + 1);
+    }
+    const rowStrikes = strikes.slice(top, bot + 1);
+
+    // ── CELLS ─────────────────────────────────────────────────────────────────
+    const shareAt = (vals: number[], i: number) => {
+      const tot = colAbsTotal[i] ?? 0;
+      return tot > 0 ? (Math.abs(vals[i] ?? 0) / tot) * 100 : 0;
+    };
+    type VelCell = {
+      share: number; usd: number;
+      shareFrom: number; shareTo: number; netFrom: number; netTo: number;
+    } | null;
+    const cells: VelCell[][] = rowStrikes.map((k) => {
+      const vals = series.get(k)?.vals ?? [];
+      return wins.map((w) => {
+        if (!w.ok) return null;
+        const shareFrom = shareAt(vals, w.a), shareTo = shareAt(vals, w.b);
+        const netFrom = vals[w.a] ?? 0, netTo = vals[w.b] ?? 0;
+        return {
+          share: shareTo - shareFrom,
+          usd: Math.abs(netTo) - Math.abs(netFrom),
+          shareFrom, shareTo, netFrom, netTo,
+        };
+      });
+    });
+
+    /** Each window's spot, snapped to the nearest ROW — the outlined cell. */
+    const spotRow = wins.map((w) => {
+      if (w.spot == null) return -1;
+      const px = w.spot;
+      return rowStrikes.reduce(
+        (bi, k, i) => (Math.abs(k - px) < Math.abs((rowStrikes[bi] ?? Infinity) - px) ? i : bi), 0);
+    });
+
+    return { wins, rowStrikes, cells, spotRow };
+  }, [cols, series, colAbsTotal]);
+
+  /** Which measurement the heat is drawn in — see the velocity header. */
+  const [velUnit, setVelUnit] = useState<"share" | "usd">("share");
+
+  /**
+   * The colour scale and the one-paragraph read, per unit.
+   *
+   * The scale is the 95th percentile of |change|, not the max: one strike
+   * catching the whole board in the final half hour would otherwise flatten
+   * every other bloom on the grid to the same faint tint. Anything past p95
+   * simply draws at full strength.
+   */
+  const velView = useMemo(() => {
+    if (!velocity) return null;
+    const { wins, rowStrikes, cells } = velocity;
+    const val = (c: NonNullable<(typeof cells)[number][number]>) => (velUnit === "share" ? c.share : c.usd);
+    const mags: number[] = [];
+    for (const row of cells) for (const c of row) if (c) mags.push(Math.abs(val(c)));
+    mags.sort((x, y) => x - y);
+    const p95 = mags.length ? (mags[Math.min(mags.length - 1, Math.floor(mags.length * 0.95))] ?? 0) : 0;
+    const scale = Math.max(velUnit === "share" ? 0.05 : 1e6, p95);
+
+    // The blooms: biggest adds, spaced apart so one wide bloom is named once
+    // rather than three times by its neighbouring cells.
+    type Hit = { r: number; w: number; v: number };
+    const hits: Hit[] = [];
+    cells.forEach((row, r) => row.forEach((c, w) => { if (c) hits.push({ r, w, v: val(c) }); }));
+    const adds = hits.filter((h) => h.v > 0).sort((x, y) => y.v - x.v);
+    const picked: Hit[] = [];
+    for (const h of adds) {
+      if (picked.length >= 3) break;
+      if (h.v < scale * 0.5) break;
+      if (picked.some((q) => Math.abs(q.w - h.w) <= 1 && Math.abs(q.r - h.r) <= 2)) continue;
+      picked.push(h);
+    }
+    const pull = hits.filter((h) => h.v < 0).sort((x, y) => x.v - y.v)[0] ?? null;
+    const fmtV = (v: number) => (velUnit === "share" ? fmtPp(v) : fmtUsd(v));
+    const where = (h: Hit) => {
+      const w = wins[h.w];
+      const k = rowStrikes[h.r];
+      return w && k != null ? `${nf(k, kDp)} at ${etMinOfDay(w.from)}–${etMinOfDay(w.until)}` : "—";
+    };
+    return {
+      scale,
+      blooms: picked.map((h) => ({ txt: where(h), v: fmtV(h.v) })),
+      pull: pull && Math.abs(pull.v) >= scale * 0.5 ? { txt: where(pull), v: fmtV(pull.v) } : null,
+    };
+  }, [velocity, velUnit, kDp]);
 
   /**
    * POSITIONED vs WRITTEN — the share of a strike's gamma that came from settled
@@ -1915,6 +2135,125 @@ export default function PostMarketTab(p: PostMarketProps) {
                 <div className="heatx">
                   <span>← gamma written</span>
                   <span>minutes at price →</span>
+                </div>
+              </>
+            ) : (
+              <div className="tiny">Needs the recorded ladder.</div>
+            )}
+          </div>
+        </div>
+
+        {/* GAMMA VELOCITY — strike × half hour. Full width, under the two reads:
+            it is the same recorded ladder as both of them, drawn without
+            reducing it, so it needs every column the card can give it. */}
+        <div className="body one undercard">
+          <div className="col">
+            <div className="colhead velhead">
+              <h3>Gamma velocity — strike × half hour</h3>
+              <span className="tiny velsub">Where and when was the book actually written?</span>
+              <div className="evpreset" role="group" aria-label="Velocity unit">
+                <button
+                  type="button"
+                  className={`pchip${velUnit === "share" ? " on" : ""}`}
+                  aria-pressed={velUnit === "share"}
+                  onClick={() => setVelUnit("share")}
+                  title={"Change in each strike's SHARE of the board's gamma across the half hour, in points.\n"
+                    + "The 1/√T decay divides out, so what is left is positioning."}
+                >
+                  board share
+                </button>
+                <button
+                  type="button"
+                  className={`pchip${velUnit === "usd" ? " on" : ""}`}
+                  aria-pressed={velUnit === "usd"}
+                  onClick={() => setVelUnit("usd")}
+                  title={"Raw change in |net GEX| across the half hour, in dollars.\n"
+                    + "On an expiring book this carries the 1/√T decay: the last hour lights up\n"
+                    + "whatever is ATM and drains everything else, whatever anyone did."}
+                >
+                  $ gamma
+                </button>
+              </div>
+            </div>
+            <div className="evlegend" style={{ marginBottom: 8 }}>
+              <span><i style={{ background: "var(--pos)" }} />gamma added</span>
+              <span><i style={{ background: "var(--neg)" }} />gamma pulled</span>
+              <span><i className="velkey-spot" />spot that half hour</span>
+              <span><i className="velkey-na" />not recorded</span>
+            </div>
+
+            {velocity && velView ? (
+              <>
+                <div
+                  className="velgrid"
+                  style={{ gridTemplateColumns: `52px repeat(${velocity.wins.length}, minmax(0, 1fr))` }}
+                >
+                  {velocity.rowStrikes.map((k, r) => {
+                    const tag = openTag(k);
+                    return [
+                      <div
+                        key={`k${k}`}
+                        className={`velk mono${tag ? " key" : ""}`}
+                        style={tag ? { color: tag.color } : undefined}
+                        title={tag ? tag.text : undefined}
+                      >
+                        {nf(k, kDp)}
+                      </div>,
+                      ...velocity.wins.map((w, wi) => {
+                        const c = velocity.cells[r]?.[wi] ?? null;
+                        const isSpot = velocity.spotRow[wi] === r;
+                        const span = `${etMinOfDay(w.from)}–${etMinOfDay(w.until)}`;
+                        if (!c) {
+                          return (
+                            <div key={`${k}-${wi}`} className="velc na" title={`${nf(k, kDp)} · ${span}\nnot recorded`} />
+                          );
+                        }
+                        const v = velUnit === "share" ? c.share : c.usd;
+                        return (
+                          <div
+                            key={`${k}-${wi}`}
+                            className={`velc${isSpot ? " spot" : ""}`}
+                            style={{ background: velFill(v, velView.scale) }}
+                            title={[
+                              `${nf(k, kDp)} · ${span}${w.partial && w.a >= 0 && w.b >= 0
+                                ? ` (recorded ${etHm(cols[w.a]?.ts ?? 0)}–${etHm(cols[w.b]?.ts ?? 0)} only)`
+                                : ""}`,
+                              `${fmtPp(c.share)} of board share (${c.shareFrom.toFixed(2)}% → ${c.shareTo.toFixed(2)}%)`,
+                              `${fmtUsd(c.usd)} |net GEX| (${fmtUsd(c.netFrom, false)} → ${fmtUsd(c.netTo, false)})`,
+                              isSpot && w.spot != null ? `spot averaged ${fmtPx(w.spot, pxDp)} this half hour` : null,
+                            ].filter(Boolean).join("\n")}
+                          />
+                        );
+                      }),
+                    ];
+                  })}
+                  <div />
+                  {velocity.wins.map((w) => (
+                    <div key={`x${w.from}`} className="velx mono">{etMinOfDay(w.from)}</div>
+                  ))}
+                </div>
+
+                <div className="velread">
+                  <b>Reads as:</b>{" "}
+                  {velView.blooms.length
+                    ? <>
+                        {velView.blooms.length === 1 ? "one bloom — " : `${velView.blooms.length === 2 ? "two" : "three"} blooms — `}
+                        {velView.blooms.map((b, i) => (
+                          <span key={i}>
+                            {i > 0 ? (i === velView.blooms.length - 1 ? " and " : ", ") : ""}
+                            <b className="velpos">{b.txt}</b> ({b.v})
+                          </span>
+                        ))}
+                        .{" "}
+                      </>
+                    : "no half hour stands out — the book was written evenly, or not at all. "}
+                  {velView.pull && (
+                    <>Hardest pull: <b className="velneg">{velView.pull.txt}</b> ({velView.pull.v}). </>
+                  )}
+                  Red cells are gamma being <i>pulled</i>, which is the tell that a level is about to stop
+                  working. <b>Source:</b> the recorded ladder, differenced between half-hour columns
+                  {velUnit === "share" ? " as share of the board" : " in raw dollars"} — same data as the
+                  build bars above, more rendering.
                 </div>
               </>
             ) : (

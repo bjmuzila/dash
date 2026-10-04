@@ -1,10 +1,11 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Page } from '@/design/primitives/Page'
+import { alpha, SHADOW } from '@/design/theme'
 import { Chip, SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { DatePicker } from '@/design/primitives/DatePicker'
 import { readableError, useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
-import { ContractProbe, loadProbeBars } from '@/board/topFlow/ContractProbe'
+import { ContractProbe, loadProbeBars, type ProbeFill } from '@/board/topFlow/ContractProbe'
 import { biasOf, biasTitle } from '@/board/topFlow/TopFlowCard'
 import { TrackedAlertsCard, TrackButton } from './whales/TrackedAlertsCard'
 import { contractKey, useWhaleAlerts } from './whales/alertsStore'
@@ -762,6 +763,41 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     })
   }, [])
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
+  // The fill clicked inside an open repeat group — ringed on the group's chart.
+  const [hotFill, setHotFill] = useState<string | null>(null)
+
+  // ── LOOKUP POP-OUT (2026-10-03, Brandon — layout A) ───────────────────────
+  // A lookup is not a print, so it never goes in the Prints table: GO opens it
+  // in a floating card over the page. Drag by the header, resize from the
+  // corner, ✕ to close; a new lookup replaces what is in it. Desktop only —
+  // the phone keeps its LOOKUP tab.
+  const [popPos, setPopPos] = useState<{ x: number; y: number } | null>(null)
+  const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
+  const lookupBarRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!lookup || popPos || typeof window === 'undefined') return
+    const r = lookupBarRef.current?.getBoundingClientRect()
+    const w = Math.min(640, window.innerWidth - 24)
+    setPopPos({
+      x: Math.max(12, Math.min(window.innerWidth - w - 12, (r?.right ?? window.innerWidth) - w)),
+      y: Math.max(12, (r?.bottom ?? 120) + 8),
+    })
+  }, [lookup, popPos])
+  const onPopDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button,input')) return
+    if (!popPos) return
+    dragRef.current = { sx: e.clientX, sy: e.clientY, ox: popPos.x, oy: popPos.y }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onPopMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d0 = dragRef.current
+    if (!d0) return
+    setPopPos({
+      x: Math.max(0, Math.min(window.innerWidth - 120, d0.ox + e.clientX - d0.sx)),
+      y: Math.max(0, Math.min(window.innerHeight - 40, d0.oy + e.clientY - d0.sy)),
+    })
+  }
+  const onPopUp = () => { dragRef.current = null }
   const toggleGroup = (k: string) =>
     setOpenGroups((prev) => {
       const next = new Set(prev)
@@ -1247,6 +1283,27 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   // Driven by the `phone` PROP (MWhales passes it), not useIsPhone(): the tab
   // bar's "Desktop site" opt-out lands a phone on /whales, and that has to be
   // the desktop layout or the opt-out does nothing here.
+  /** A chart drawer: a full-width row under the row it belongs to (layout A —
+   *  the 330px side panel is gone). */
+  const probeDrawer = (key: string, node: ReactNode, violet = false) => (
+    <tr key={`d:${key}`}>
+      <td colSpan={13} className="border-t border-line bg-surface2 p-2">
+        <div className={['flex min-h-[340px] flex-col rounded-sm border bg-surface', violet ? 'border-violet/50' : 'border-line'].join(' ')}>
+          {node}
+        </div>
+      </td>
+    </tr>
+  )
+
+  /** The probe row for a folded repeat: the newest print's contract, entry at
+   *  the size-weighted average fill, size and premium summed over the fills. */
+  const groupProbeRow = (key: string, g: WhaleRow[]): WhaleRow => {
+    const head = g[0]!
+    const size = g.reduce((n, r) => n + (r.size ?? 0), 0)
+    const premium = g.reduce((n, r) => n + r.premium, 0)
+    return { ...head, id: `group:${key}`, size: size || null, premium, price: size > 0 ? premium / size / 100 : head.price }
+  }
+
   /** One print as a table row. `child` = a fill inside an open repeat group;
    *  `repeat` = a repeat contract with only this one print in the list. */
   const printRow = (r: WhaleRow, { child = false, repeat = null }: { child?: boolean; repeat?: RepeatContract | null } = {}) => {
@@ -1257,13 +1314,15 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     <tr
       key={r.id}
       data-rid={r.id}
-      onClick={() => setSelectedId((id) => (id === r.id ? null : r.id))}
-      title="Open the contract's chart"
+      onClick={() => (child
+        ? setHotFill((id) => (id === r.id ? null : r.id))
+        : setSelectedId((id) => (id === r.id ? null : r.id)))}
+      title={child ? 'Mark this fill on the chart above' : "Open the contract's chart"}
       className={[
         'cursor-pointer border-t border-line hover:bg-raised',
         // Repeat shade (option B's tint) on every row of a repeat contract —
         // the fills inside an open group and a lone repeat print alike.
-        r.id === selectedId ? 'bg-raised' : child || repeat ? 'bg-violet/5' : '',
+        (child ? hotFill === r.id : r.id === selectedId) ? 'bg-raised' : child || repeat ? 'bg-violet/5' : '',
       ].join(' ')}
     >
       <td
@@ -1936,7 +1995,114 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         <span className="ml-auto text-2xs text-fg">
           {q.loading && !d ? 'loading…' : d ? `${d.range.from} → ${d.range.to}` : ''}
         </span>
+        {/* LOOK UP lives in the filter bar now (layout A). GO opens the
+            pop-out card below — never a row in Prints. */}
+        <div ref={lookupBarRef} className="flex items-center gap-1.5 border-l border-line pl-2">
+          <span className="text-2xs font-bold tracking-[0.08em] text-fg">LOOK UP</span>
+          <input
+            value={lkTicker}
+            onChange={(e) => setLkTicker(e.target.value.toUpperCase().slice(0, 12))}
+            onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+            placeholder="TICKER"
+            aria-label="Lookup underlying"
+            className="tabular w-16 rounded-sm border border-line bg-bg px-2 py-0.5 text-xs uppercase text-fg outline-none placeholder:text-fg focus:border-accent"
+          />
+          <input
+            value={lkStrike}
+            onChange={(e) => setLkStrike(e.target.value.replace(/[^\d.]/g, '').slice(0, 9))}
+            onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+            placeholder="STRIKE"
+            inputMode="decimal"
+            aria-label="Lookup strike"
+            className="tabular w-16 rounded-sm border border-line bg-bg px-2 py-0.5 text-xs text-fg outline-none placeholder:text-fg focus:border-accent"
+          />
+          <DatePicker value={lkExpiry} onChange={setLkExpiry} size="sm" placeholder="EXPIRY" title="Contract expiry" />
+          <SegGroup<'C' | 'P'>
+            title="Calls or puts"
+            options={[{ label: 'C', value: 'C' }, { label: 'P', value: 'P' }]}
+            value={lkType}
+            onChange={setLkType}
+          />
+          <button
+            type="button"
+            onClick={openLookup}
+            disabled={!lkReady}
+            title={lkReady ? 'Open this contract in the lookup card' : 'Needs a ticker, a strike and an expiry'}
+            className={[
+              'rounded-sm border px-2 py-0.5 text-2xs font-bold uppercase tracking-[0.1em] transition-colors',
+              lkReady ? 'border-accent bg-accent/10 text-accent hover:bg-accent/20' : 'cursor-not-allowed border-line text-fg opacity-50',
+            ].join(' ')}
+          >
+            Go
+          </button>
+        </div>
       </div>
+
+      {/* ── LOOKUP POP-OUT ─────────────────────────────────────────────────── */}
+      {lookup && popPos && (
+        <div
+          className="fixed z-40 flex resize flex-col overflow-hidden rounded-md border border-accent/50 bg-surface"
+          style={{ boxShadow: `0 18px 50px ${alpha(SHADOW, 0.6)}`, left: popPos.x, top: popPos.y, width: 'min(640px, calc(100vw - 24px))', height: 480, minWidth: 380, minHeight: 300 }}
+        >
+          <div
+            onPointerDown={onPopDown}
+            onPointerMove={onPopMove}
+            onPointerUp={onPopUp}
+            className="flex shrink-0 cursor-move select-none flex-wrap items-center gap-2 border-b border-line bg-surface2 px-3 py-1.5"
+            title="Drag to move"
+          >
+            <span className="rounded-sm border border-accent/50 bg-accent/10 px-1.5 py-px text-3xs font-bold tracking-[0.08em] text-accent">LOOKUP</span>
+            <span className="tabular text-xs font-bold text-accent">
+              {lookup.underlying} {fmtStrike(lookup.strike)}{lookup.type} {fmtExpiry(lookup.expiry)}
+            </span>
+            <span className="ml-auto flex items-center gap-1.5">
+              {/* Optional — size turns on POSITION in the hover box, size +
+                  cost turn on the entry rung and OPEN P/L. Enter re-draws. */}
+              <input
+                value={lkSize}
+                onChange={(e) => setLkSize(e.target.value.replace(/[^\d]/g, '').slice(0, 7))}
+                onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                placeholder="SIZE"
+                inputMode="numeric"
+                aria-label="Contracts held"
+                className="tabular w-16 rounded-sm border border-line bg-bg px-1.5 py-0.5 text-2xs text-fg outline-none placeholder:text-fg focus:border-accent"
+              />
+              <input
+                value={lkEntry}
+                onChange={(e) => setLkEntry(e.target.value.replace(/[^\d.]/g, '').slice(0, 8))}
+                onKeyDown={(e) => { if (e.key === 'Enter') openLookup() }}
+                placeholder="COST"
+                inputMode="decimal"
+                aria-label="Cost basis"
+                className="tabular w-16 rounded-sm border border-line bg-bg px-1.5 py-0.5 text-2xs text-fg outline-none placeholder:text-fg focus:border-accent"
+              />
+              {(() => {
+                const k = trackKeyOf(lookup)
+                if (!k) return null
+                return (
+                  <TrackButton
+                    compact
+                    tracked={trackedIds.has(k)}
+                    busy={busyKey === k}
+                    onClick={() => void toggleTrack(lookup, 'lookup')}
+                  />
+                )
+              })()}
+              <button
+                type="button"
+                onClick={() => setLookup(null)}
+                aria-label="Close lookup"
+                className="h-6 w-6 rounded-sm border border-line text-2xs text-fg hover:border-down/50 hover:text-down"
+              >
+                ✕
+              </button>
+            </span>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+            <ContractProbe key={lookup.id} row={lookup} onClose={() => setLookup(null)} entryAt={null} shareAs="Lookup" />
+          </div>
+        </div>
+      )}
 
       {(d?.error || q.error) && errorBanner}
 
@@ -2025,10 +2191,30 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                             </tr>
                           )}
                           {it.kind === 'row'
-                            ? printRow(it.r, { repeat: it.repeat })
+                            ? (
+                              <>
+                                {printRow(it.r, { repeat: it.repeat })}
+                                {it.r.id === selectedId && probeDrawer(it.r.id, (
+                                  <ContractProbe key={it.r.id} row={it.r} onClose={() => setSelectedId(null)} shareAs="Whale print" />
+                                ))}
+                              </>
+                            )
                             : (
                               <>
                                 {groupRow(it.key, it.rows, it.repeat)}
+                                {/* REPEATED FLOW, ONE CHART: the contract's bars
+                                    with a dot per fill (sized by premium) and the
+                                    average fill as the rung. The fills sit under
+                                    it; clicking one rings its dot. */}
+                                {openGroups.has(it.key) && probeDrawer(`g:${it.key}`, (
+                                  <ContractProbe
+                                    key={`group:${it.key}`}
+                                    row={groupProbeRow(it.key, it.rows)}
+                                    onClose={() => toggleGroup(it.key)}
+                                    shareAs="Repeated flow"
+                                    fills={it.rows.map<ProbeFill>((r) => ({ id: r.id, ts: r.ts, premium: r.premium, hot: hotFill === r.id }))}
+                                  />
+                                ), true)}
                                 {openGroups.has(it.key) && it.rows.map((r) => printRow(r, { child: true }))}
                               </>
                             )}
@@ -2044,11 +2230,6 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                 )}
               </div>
 
-              {selected && (
-                <div className="flex w-[330px] shrink-0 flex-col border-l border-line">
-                  <ContractProbe key={selected.id} row={selected} onClose={() => setSelectedId(null)} shareAs="Whale print" />
-                </div>
-              )}
             </div>
           </Card>
 
@@ -2061,9 +2242,6 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
         {/* ── right column ───────────────────────────────────────────────── */}
         <div className="flex flex-col gap-2">
-
-          {lookupCard}
-
 
           {/* ── the roll-ups ────────────────────────────────────────────────────────────
               Under the lookup, IN THE SAME COLUMN. These were briefly a

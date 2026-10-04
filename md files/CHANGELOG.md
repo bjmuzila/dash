@@ -25816,3 +25816,32 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - **Close card:** "Get full access" and "What is CB Edge?" are replaced by one "Go to Voltick →" button.
 - All three buttons use VoltickLink, so clicks are counted under `click:voltick` with the placements `seasonality-nav`, `seasonality-hero` and `seasonality-footer`. They are in Voltick blue (V3.accent), not CB Edge cyan.
 - **File:** `app/explore/seasonality/page.tsx`. This is v2; Brandon approved the edit. The v3 in-app `/seasonality` page is unchanged.
+
+## 2026-10-03 - Vela: watchlist styles restored, themed dropdowns
+
+- **Why the watchlist rendered raw (full-size logos, rows run together):** a later edit to `cbedge-v3/src/pages/vela/vela.css` (the floating drawing toolbar) was written over an older copy of the file. That wiped every rule added earlier today: the Watchlist, Strategy Tester, Script Alerts, the whale hover card, and the phone sheet z-index fix. The rules are back in, merged with the drawing-toolbar section, which is kept as it was.
+- **Dropdowns match the theme:** a new `pages/vela/themedSelect.ts` replaces the native `<select>` in three places: the Watchlist's list picker, the Scripts panel's saved-script picker, and the Strategy Tester's strategy picker. The native list was white with a blue highlight on Windows.
+  - The new list is dark, with the current item marked and "+ New watchlist" set apart as an action.
+  - It has keyboard support: ↑ ↓ Home End, Enter, Escape, and type-a-letter.
+  - It closes on a click outside, on scroll or on resize.
+- Watchlist logos carry a 22px size on the image itself as well, so a logo can never draw at its natural size again. They also fit with `contain` instead of being cropped.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/vela.css`
+  - `pages/vela/themedSelect.ts` (new)
+  - `pages/vela/watchlist/panel.ts`
+  - `pages/vela/script/panel.ts`
+  - `pages/vela/script/testerPanels.ts`
+- **Checks:**
+  - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
+  - Headless watchlist run against the mock server: the dropdown opens and closes, new/switch/rename/delete list all work, as do add, remove, sort, drag, columns, reload restore, and the phone sheet.
+  - No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-watchlist-themed-dropdown.png` (mock data)
+
+## 2026-10-03 - v3 Post-Market: gamma velocity heat (strike × half hour)
+
+- `cbedge-v3/src/pages/premarket/PostMarketTab.tsx`: section 3 (How the book was built) has a new full-width panel under Wall migration / Written vs traded. Rows are the strikes the day traded through plus 4 strikes each side (13 to 41 rows, centred on the close if wider). Columns are the 13 half hours from 09:30 to 16:00. Each cell is the change in that strike's gamma across the half hour, from the recorded ladder. Green means gamma added, red means pulled, and the outlined cell is where spot sat that half hour.
+- The default unit is board share (pp), so the 1/√T decay into the close drops out, the same as the rest of section 3. A `$ gamma` switch shows the raw change in |net GEX|. Changes are by magnitude, so a put wall getting more negative counts as added.
+- Half hours the recording does not cover are drawn dashed, never as zero. The grid fills in as a replay moves, because it reads the same `cols` cut at etMin. The colour scale is the p95 of |change|. A "Reads as" line names the three biggest blooms and the hardest pull. Strike labels on CW / PW / CORE / max pain use the level colour. Cell tooltips show share, $ and spot.
+- `cbedge-v3/src/pages/premarket/postMarketTab.css.ts`: new `vel*` classes. Tokens and type scale only.
+- **Checks:** `tsc` is clean for the file graph and `check:theme` passes. Checked in headless Chromium with a synthetic ladder: full day, a replay at 12:40 with a recorder gap, the `$` switch, and the empty state. No console errors.
+- **Files in `generated/`** (synthetic data): `2026-10-03-postmarket-gamma-velocity.png`

@@ -22,6 +22,7 @@ import { registerSidePanel, registerStatePersistence, type Vela, type WidgetCont
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import { tickerLogoUrls } from '@/pages/economicCalendar/ChipLogo'
 import { PROVIDER_NAME, resolveSym } from '@/pages/vela/cbedgeProvider'
+import { ThemedSelect } from '@/pages/vela/themedSelect'
 import {
   activeList,
   addSymbol,
@@ -93,12 +94,11 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
   for (const t of ['keydown', 'keyup', 'keypress'] as const) body.addEventListener(t, (e) => e.stopPropagation())
 
   // ── header: list picker, columns, ⋮ ──
-  const pick = el(doc, 'select', 'cb-wl-pick')
-  pick.setAttribute('aria-label', 'Watchlist')
+  const pick = new ThemedSelect(doc, 'cb-wl-pick', 'Watchlist')
   const gear = btn(doc, 'cb-wl-icon', '⚙', 'Columns')
   const more = btn(doc, 'cb-wl-icon', '⋮', 'List actions')
   slot.classList.add('cb-wl-slot')
-  slot.append(pick, gear, more)
+  slot.append(pick.el, gear, more)
 
   // ── popovers (columns, list actions, rename, delete) ──
   const pop = el(doc, 'div', 'cb-wl-pop')
@@ -139,22 +139,8 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
 
   // ── rendering ──
   function renderPick() {
-    const cur = activeList()
-    pick.replaceChildren(
-      ...lists().map((l) => {
-        const o = doc.createElement('option')
-        o.value = l.id
-        o.textContent = `${l.name} (${l.symbols.length})`
-        return o
-      }),
-    )
-    if (lists().length < MAX_LISTS) {
-      const o = doc.createElement('option')
-      o.value = NEW_VALUE
-      o.textContent = '+ New watchlist'
-      pick.append(o)
-    }
-    pick.value = cur.id
+    const opts = lists().map((l) => ({ value: l.id, label: l.name, hint: String(l.symbols.length) }))
+    pick.setOptions(lists().length < MAX_LISTS ? [...opts, { value: NEW_VALUE, label: '+ New watchlist', action: true }] : opts, activeList().id)
   }
 
   type Col = { key: SortKey; label: string; on: boolean }
@@ -205,6 +191,9 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
       img.alt = ''
       img.loading = 'lazy'
       img.decoding = 'async'
+      // sized here too, so a logo can never draw at its natural size
+      img.width = 22
+      img.height = 22
       img.src = tickerLogoUrls(sym)[0]!
       img.addEventListener('error', chip, { once: true })
       box.append(img)
@@ -385,17 +374,16 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
     if (viewPrefs().cols.volume) void refreshVolumes([sym])
   }
 
-  pick.addEventListener('change', () => {
-    if (pick.value === NEW_VALUE) {
-      pick.value = activeList().id
+  pick.onChange = (v) => {
+    if (v === NEW_VALUE) {
       openNaming('New watchlist', '', (name) => {
         if (!createList(name)) ctx.toast(`Up to ${MAX_LISTS} lists`, 'info')
       })
       return
     }
-    setActive(pick.value)
+    setActive(v)
     ctx.stateChanged()
-  })
+  }
 
   // ── popovers ──
   const closePop = () => {
@@ -578,6 +566,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
     destroy() {
       off()
       offMarket?.()
+      pick.destroy()
       clearInterval(timer)
       doc.removeEventListener('pointerdown', onDocDown, true)
     },

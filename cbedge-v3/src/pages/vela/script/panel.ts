@@ -51,6 +51,7 @@ import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import { CBSCRIPT, compile, loadRuntime, onScriptError, scriptErrors } from './engine'
 import { instanceIdFor, libIdOf, loadLibrary, markDeleted, newScriptId, saveLibrary, syncLibrary, TEMPLATE, type Script } from './library'
 import { alertsArmed } from './alerts'
+import { ThemedSelect } from '../themedSelect'
 import { ALERTS_PANEL_ID, registerTesterPanels, TESTER_PANEL_ID } from './testerPanels'
 
 const PANEL_ID = 'cbedge-scripts'
@@ -138,11 +139,10 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   let armedDelete = false
 
   const pickRow = el(doc, 'div', 'cb-scr-row')
-  const pick = el(doc, 'select', 'cb-scr-pick')
-  pick.setAttribute('aria-label', 'Saved scripts')
+  const pick = new ThemedSelect(doc, 'cb-scr-pick', 'Saved scripts')
   const btnNew = el(doc, 'button', 'cb-scr-btn', 'New')
   const btnDel = el(doc, 'button', 'cb-scr-btn', 'Delete')
-  pickRow.append(pick, btnNew, btnDel)
+  pickRow.append(pick.el, btnNew, btnDel)
 
   const name = el(doc, 'input', 'cb-scr-name')
   name.type = 'text'
@@ -237,15 +237,11 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     return null
   }
   const fillPick = () => {
-    pick.replaceChildren()
     const known = lib.some((s) => s.id === cur.id)
-    for (const s of known ? lib : [...lib, cur]) {
-      const o = doc.createElement('option')
-      o.value = s.id
-      o.textContent = known || s.id !== cur.id ? s.name : `${s.name} (unsaved)`
-      pick.append(o)
-    }
-    pick.value = cur.id
+    pick.setOptions(
+      (known ? lib : [...lib, cur]).map((s) => ({ value: s.id, label: known || s.id !== cur.id ? s.name : `${s.name} (unsaved)` })),
+      cur.id,
+    )
   }
   const show = (s: Script) => {
     cur = { ...s }
@@ -391,15 +387,15 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     show(lib[0] ?? { id: newScriptId(), name: 'My script', source: TEMPLATE })
     say('Deleted — charts running it keep their copy', 'info')
   })
-  pick.addEventListener('change', () => {
-    const s = lib.find((x) => x.id === pick.value)
+  pick.onChange = (v) => {
+    const s = lib.find((x) => x.id === v)
     if (s) {
       show(s)
       const e = chartError()
       if (e) say(`On the chart — ${e}`, 'err', true)
       else say('', 'info')
     }
-  })
+  }
   const touched = () => {
     dirty = true
     if (armedDelete) {
@@ -463,6 +459,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     },
     destroy() {
       offErrors()
+      pick.destroy()
       if (syncTimer) clearTimeout(syncTimer)
     },
   }
