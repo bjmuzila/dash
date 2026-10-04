@@ -52,7 +52,8 @@
 .cb-replay-bar,
 .cb-setups,
 .cb-scr-toasts,
-.cb-wh-card {
+.cb-wh-card,
+.cb-wl-pincol {
   font-family: var(--font-sans);
 }
 
@@ -709,6 +710,24 @@
   background: var(--color-raised);
   color: var(--color-fg);
 }
+.cb-wl-slot .cb-wl-icon[hidden] {
+  display: none;
+}
+/* 📌: an emoji, so its own colours; dimmed until it is pinned, then lit */
+.cb-wl-slot .cb-wl-pin {
+  font-size: var(--text-sm);
+  filter: grayscale(1);
+  opacity: 0.7;
+}
+.cb-wl-slot .cb-wl-pin:hover {
+  opacity: 1;
+}
+.cb-wl-slot .cb-wl-pin[aria-pressed='true'] {
+  background: var(--vt-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--color-vt-accent);
+  filter: none;
+  opacity: 1;
+}
 .cb-wl {
   position: relative;
   display: flex;
@@ -719,7 +738,7 @@
 }
 .cb-wl .cb-wl-table {
   display: grid;
-  grid-template-columns: 14px minmax(72px, 1fr) repeat(var(--cb-wl-cols), max-content) 22px;
+  grid-template-columns: 14px minmax(72px, 1fr) repeat(var(--cb-wl-cols), max-content) 46px;
   column-gap: 10px;
   padding: 0 6px 0 8px;
 }
@@ -852,8 +871,16 @@
   text-align: left;
   cursor: pointer;
 }
-.cb-wl .cb-wl-item:hover {
+.cb-wl .cb-wl-item:hover:not(:disabled) {
   background: var(--color-raised);
+}
+.cb-wl .cb-wl-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cb-wl .cb-wl-item[data-on='1'] {
+  color: var(--color-vt-accent-text);
+  font-weight: 600;
 }
 .cb-wl .cb-wl-danger {
   color: var(--color-down);
@@ -877,7 +904,7 @@
 @supports not (grid-template-columns: subgrid) {
   .cb-wl .cb-wl-head,
   .cb-wl .cb-wl-row {
-    grid-template-columns: 14px minmax(72px, 1fr) repeat(var(--cb-wl-cols), 58px) 22px;
+    grid-template-columns: 14px minmax(72px, 1fr) repeat(var(--cb-wl-cols), 58px) 46px;
     column-gap: 10px;
   }
   .cb-wl .cb-wl-rows {
@@ -999,6 +1026,12 @@
 .cb-wl .cb-wl-num[data-tone='down'] {
   color: var(--color-down);
 }
+.cb-wl .cb-wl-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.cb-wl .cb-wl-rowmore,
 .cb-wl .cb-wl-rm {
   width: 22px;
   height: 22px;
@@ -1011,17 +1044,18 @@
   opacity: 0;
   cursor: pointer;
 }
-.cb-wl .cb-wl-row:hover .cb-wl-rm,
-.cb-wl .cb-wl-rm:focus-visible {
+.cb-wl .cb-wl-row:hover :is(.cb-wl-rm, .cb-wl-rowmore),
+.cb-wl :is(.cb-wl-rm, .cb-wl-rowmore):focus-visible {
   opacity: 1;
 }
-.cb-wl .cb-wl-rm:hover {
+.cb-wl :is(.cb-wl-rm, .cb-wl-rowmore):hover {
   background: var(--color-raised);
   color: var(--color-fg);
   opacity: 1;
 }
 @media (hover: none) {
   .cb-wl .cb-wl-grip,
+  .cb-wl .cb-wl-rowmore,
   .cb-wl .cb-wl-rm {
     opacity: 1;
   }
@@ -1032,6 +1066,143 @@
 }
 .cb-wl .cb-wl-foot {
   padding: 10px 12px;
+}
+/* sections: a header row across the whole grid (fold ▾, name, count, ⋯), and a
+   hint row where a section is empty so there is somewhere to drop a symbol */
+.cb-wl .cb-wl-sec {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  margin-top: 6px;
+  border-bottom: 1px solid var(--color-line);
+}
+.cb-wl .cb-wl-sec:first-child {
+  margin-top: 2px;
+}
+.cb-wl .cb-wl-secfold {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 4px 0 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.cb-wl .cb-wl-secfold:hover {
+  background: var(--vt-wash);
+}
+.cb-wl .cb-wl-sec[data-unsorted='1'] .cb-wl-secfold {
+  color: var(--color-muted);
+}
+.cb-wl .cb-wl-caret {
+  flex: none;
+  width: 10px;
+  color: var(--color-vt-accent-text);
+  text-align: center;
+}
+.cb-wl .cb-wl-secname {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-wl .cb-wl-seccount {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--vt-wash);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.cb-wl .cb-wl-secmore {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.cb-wl .cb-wl-secmore:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.cb-wl .cb-wl-hint {
+  grid-column: 1 / -1;
+  padding: 8px 4px 8px 22px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--color-line) 60%, transparent);
+  color: var(--color-faint);
+  font-size: var(--text-2xs);
+}
+
+/* the 📌 column (bindPinnedWatchlist): the last column of Vela's chart row, drawn
+   like one of its docked panels, so it stays while the dock's panel changes */
+.cb-wl-pincol {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-height: 0;
+  max-width: 60%;
+  border-left: 1px solid var(--color-vt-line);
+  background: var(--color-vt-ink);
+  color: var(--color-vt-paper);
+  font-size: var(--text-sm);
+}
+.cb-wl-pincol .cb-wl-pinhead {
+  display: flex;
+  align-items: center;
+  padding: 10px 8px 10px 14px;
+  border-bottom: 1px solid var(--color-vt-line);
+}
+.cb-wl-pincol .cb-wl-pinbody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+.cb-wl-pincol .cb-wl-pingrip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  z-index: 1;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.cb-wl-pincol .cb-wl-pingrip:hover,
+.cb-wl-pincol .cb-wl-pingrip[data-dragging] {
+  background: linear-gradient(to right, transparent 3px, var(--color-vt-accent) 3px, var(--color-vt-accent) 4px, transparent 4px);
+}
+/* the topbar's Watchlist button while pinned: it is already open, here */
+.cb-wl-pincol.cb-wl-pulse {
+  animation: cb-wl-pulse 0.9s ease-out;
+}
+@keyframes cb-wl-pulse {
+  0% {
+    box-shadow: inset 0 0 0 2px var(--color-vt-accent);
+  }
+  100% {
+    box-shadow: inset 0 0 0 2px transparent;
+  }
 }
 
 /* ── Themed dropdowns (pages/vela/themedSelect.ts) — the button takes its box
@@ -1602,7 +1773,7 @@
   width: 14px;
 }
 
-/* ── CB GEX Rail (studies/rail.ts): the GEX Candles strike rail beside the price axis.
+/* ── CB GEX Rail (studies/rail.ts): the strike rail, right of the price axis or at the chart's left edge.
    Voltick tags (★ VOLT, ↘ REV, ◆ COIL, ↯ SURGE) carry their fill / ink inline. ── */
 .cb-rail {
   border-left: 1px solid var(--color-line);
@@ -1680,6 +1851,35 @@
 }
 .cb-rail-bar[data-s='neg'] {
   background: var(--color-gex-neg);
+}
+/* Position: Left. The rail is the chart's left edge: its border faces the plot
+   on the right, each row runs mirrored (tags against the plot, the bar growing
+   left, away from it) */
+.cb-rail[data-side='left'] {
+  border-right: 1px solid var(--color-line);
+  border-left: 0;
+}
+.cb-rail[data-side='left'] .cb-rail-row {
+  flex-direction: row-reverse;
+  padding-right: 6px;
+  padding-left: 0;
+}
+.cb-rail[data-side='left'] .cb-rail-tags {
+  justify-content: flex-end;
+}
+.cb-rail[data-side='left'] .cb-rail-track {
+  justify-content: flex-end;
+  padding-right: 0;
+  padding-left: 4px;
+}
+.cb-rail[data-side='left'] .cb-rail-bar {
+  border-radius: 2px 0 0 2px;
+}
+.vela-cell[data-cb-rail-left] {
+  --cb-rail-w: 96px;
+}
+.vela-cell[data-cb-rail-left] :is(.vela-statusline, .vela-watermark, .vela-attribution) {
+  margin-left: var(--cb-rail-w);
 }
 
 /* ── Level Alerts panel (levels/levelAlerts.ts) ── */

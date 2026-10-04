@@ -228,8 +228,6 @@ interface WhRow {
   underlying: string | null
   /** The underlying's price when it printed. */
   spot: number | null
-  /** The contract (OCC symbol), for the Whales page link. */
-  osi: string | null
 }
 /** The prints, plus — on ES / NQ — each session's basis (SPX / NDX prints sit at index prices). */
 interface WhData {
@@ -327,9 +325,8 @@ function expOk(r: WhRow, exp: WhS['exp']): boolean {
   return dte >= 0 && dte <= Math.max(0, 5 - wd)
 }
 
-function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: number, tone: Tone, head: string, s: WhS, priceLabel: string, ticker: string): WhaleBubble {
+function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: number, tone: Tone, head: string, s: WhS, priceLabel: string): WhaleBubble {
   const sorted = rows.slice().sort((a, z) => z.premium - a.premium)
-  const top = sorted[0]!
   const sign = tone === 'up' ? '+' : tone === 'down' ? '−' : ''
   const n = rows.length
   return {
@@ -349,7 +346,6 @@ function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: n
       }),
       more: Math.max(0, n - CARD_ROWS),
     },
-    link: { ticker, day: etDateKey(top.ts), ts: top.ts, osi: top.osi },
   }
 }
 
@@ -409,7 +405,7 @@ function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
     }
     const tone: Tone = bias > 0 ? 'up' : bias < 0 ? 'down' : 'mid'
     const head = bias > 0 ? 'Bullish' : bias < 0 ? 'Bearish' : 'Side unknown'
-    out.push(bubbleOf(key, ts, price, g, total, tone, head, s, label, flowTicker(c)))
+    out.push(bubbleOf(key, ts, price, g, total, tone, head, s, label))
   }
   // the biggest few hundred, when a long window holds more
   return out.sort((a, b) => b.r - a.r).slice(0, 400)
@@ -454,7 +450,6 @@ export const whalesImpl = studyImpl<WhS, WhData>({
         action: r.action === 'BUY' || r.action === 'SELL' ? r.action : null,
         underlying: typeof r.underlying === 'string' ? r.underlying : null,
         spot: Number.isFinite(Number(r.spot)) && Number(r.spot) > 0 ? Number(r.spot) : null,
-        osi: typeof r.osi === 'string' && r.osi ? r.osi : null,
       }))
       .filter((r) => Number.isFinite(r.ts) && r.premium > 0)
     return { rows, basis }

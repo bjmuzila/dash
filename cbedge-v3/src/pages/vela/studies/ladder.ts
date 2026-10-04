@@ -26,14 +26,24 @@
 // ES / NQ draw SPX / NDX gamma, shifted onto the future's prices by each
 // session's basis, the same basis model the walls use. A session with no
 // plausible basis is skipped, not drawn one basis off.
+//
+// AFTER THE CLOSE (the GEX Rail, live: loadRailLadder). SPX's front expiry
+// rolls at 16:00 ET and the recorder writes the NEXT expiry from then on: under
+// the day that just closed until midnight, then under each calendar date after
+// it (a weekend: Friday 16:00 to 17:00, then Sunday 20:00 on). So from 16:00 the
+// rail reads the newest column recorded under the next expiry, found among the
+// expiries the server lists for those dates (`recordedExpiries`). Friday after
+// the close is Monday's gamma, not Friday's. Nothing recorded for it yet: the
+// session that just closed, as before.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { query } from '@/data/api'
-import { gexHistoryDayUrl, parseGexHistory, type GexColumn } from '@/board/gexCandles/gexHistory'
+import { gexHistoryDayUrl, parseGexHistory, parseGexHistoryMeta, type GexColumn } from '@/board/gexCandles/gexHistory'
+import { RTH_CLOSE_MIN } from '@/board/gexCandles/candles'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
 import { symbolDef } from '@/board/gexCandles/symbols'
 import { loadBasis } from '@/pages/vela/wallsIndicator'
-import { etDateKey, type StudyCtx } from './common'
+import { etDateKey, etMinutesOfDay, type StudyCtx } from './common'
 
 /** Strikes per column: the card's bubble ladder request. */
 const TOP = 30
@@ -47,6 +57,8 @@ export interface Ladder {
   label: string
   /** ET dates that were asked for and came back empty (outside retention, or not recorded). */
   missing: string[]
+  /** loadRailLadder after a close: the next session's expiry these columns are under. */
+  next?: { expiry: string; after: string }
 }
 
 /** The cash symbol whose ladder a chart draws. */
@@ -64,15 +76,33 @@ export function sessionDates(c: StudyCtx, n: number): string[] {
   return seen.reverse()
 }
 
-/** One session's columns. Today's are shared for 30 s; a past day's for 10 min. */
-async function dayColumns(gexSymbol: string, date: string, fresh: boolean): Promise<GexColumn[]> {
+interface DayRead {
+  columns: GexColumn[]
+  /** The expiry the columns are under. */
+  expiry: string
+  /** Every expiry recorded for the date (fallback reads only). */
+  recorded: string[]
+}
+
+/**
+ * One date's columns under `expiry` (with `fallback`, under the expiry that
+ * date's cash session was recorded against). Today's are shared for 30 s; a past
+ * day's for 10 min.
+ */
+async function dayRead(gexSymbol: string, date: string, expiry: string, fallback: boolean, fresh: boolean): Promise<DayRead> {
   const today = date === etDateKey(Date.now())
-  const url = gexHistoryDayUrl(gexSymbol, date, date, TOP)
+  const url = gexHistoryDayUrl(gexSymbol, expiry, date, TOP, fallback)
   try {
-    return parseGexHistory(await query<unknown>(url, { staleMs: today ? (fresh ? 30_000 : 60_000) : 600_000 }))
+    const json = await query<unknown>(url, { staleMs: today ? (fresh ? 30_000 : 60_000) : 600_000 })
+    return { columns: parseGexHistory(json), ...parseGexHistoryMeta(json, expiry) }
   } catch {
-    return []
+    return { columns: [], expiry, recorded: [] }
   }
+}
+
+/** One session's columns, under its own expiry. */
+async function dayColumns(gexSymbol: string, date: string, fresh: boolean): Promise<GexColumn[]> {
+  return (await dayRead(gexSymbol, date, date, true, fresh)).columns
 }
 
 /** The ladders for these sessions of the chart's symbol. */
@@ -98,6 +128,48 @@ export async function loadLadder(c: StudyCtx, dates: string[], fresh: boolean): 
     return isPlausibleBasis(b, basis.max) ? b : null
   }
   return { columns, shift, label, missing }
+}
+
+/** Live, and `date`'s 16:00 ET close has passed (a later day, or that day from 16:00). */
+export function pastClose(date: string, now = Date.now()): boolean {
+  const today = etDateKey(now)
+  return today > date || (today === date && etMinutesOfDay(now) >= RTH_CLOSE_MIN)
+}
+
+/** `from` through `to`, ET calendar dates, oldest first (at most a week). */
+function datesThrough(from: string, to: string): string[] {
+  const out = [from]
+  let t = Date.parse(`${from}T12:00:00Z`)
+  for (let i = 0; i < 7; i++) {
+    t += 86_400_000
+    const d = new Date(t).toISOString().slice(0, 10)
+    if (d > to) break
+    out.push(d)
+  }
+  return out
+}
+
+/**
+ * The GEX Rail's ladder: `date`'s session, or, live after its 16:00 close, the
+ * NEXT session's (see AFTER THE CLOSE above): the newest column recorded under
+ * the next expiry, on `date` or any day since.
+ */
+export async function loadRailLadder(c: StudyCtx, date: string | undefined, fresh: boolean): Promise<Ladder> {
+  const base = await loadLadder(c, date ? [date] : [], fresh)
+  if (!date || Number.isFinite(c.until) || !pastClose(date)) return base
+  const gexSymbol = symbolDef(base.label).gexSymbol
+  const days = datesThrough(date, etDateKey(Date.now()))
+  // the expiry the closed session was read under, and what the recorder holds since
+  const reads = await Promise.all(days.map((d) => dayRead(gexSymbol, d, d, true, fresh)))
+  const closed = reads[0]!.expiry
+  const next = [...new Set(reads.flatMap((r) => r.recorded))].filter((e) => e > closed).sort()[0]
+  if (!next) return base
+  // newest date first: the rail draws the newest column
+  for (let k = days.length - 1; k >= 0; k--) {
+    const cols = (await dayRead(gexSymbol, days[k]!, next, false, fresh)).columns
+    if (cols.length) return { ...base, columns: cols, missing: [], next: { expiry: next, after: date } }
+  }
+  return base
 }
 
 /** The newest column at or before `t` (binary search; columns oldest first). */

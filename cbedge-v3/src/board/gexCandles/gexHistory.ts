@@ -89,14 +89,18 @@ export function gexHistoryUrl(gexSymbol: string, expiry: string, minutes: number
  *
  * `date` is an ET calendar date, `YYYY-MM-DD` — the same key the recorder
  * stamps a column with.
+ *
+ * `fallback = false` reads that date under EXACTLY `expiry`: how the Vela GEX
+ * Rail gets the columns recorded after a close under the NEXT expiry (the
+ * fallback would pick the day's own, cash-session expiry instead).
  */
-export function gexHistoryDayUrl(gexSymbol: string, expiry: string, date: string, top: number): string {
+export function gexHistoryDayUrl(gexSymbol: string, expiry: string, date: string, top: number, fallback = true): string {
   return (
     `/api/snapshots/option-strike-gex-history?mode=heatmap` +
     `&minutes=0` +
     `&date=${encodeURIComponent(date)}` +
     `&expiry=${encodeURIComponent(expiry)}` +
-    `&expiryFallback=1` +
+    (fallback ? `&expiryFallback=1` : '') +
     `&symbol=${encodeURIComponent(gexSymbol)}` +
     (top > 0 ? `&top=${top}` : '')
   )
@@ -122,6 +126,18 @@ export function parseGexHistory(json: unknown): GexColumn[] {
   }
   out.sort((a, b) => a.slotTs - b.slotTs)
   return out
+}
+
+/**
+ * What the date branch says about the read: the expiry the columns are under
+ * (with `expiryFallback=1`, the one the server picked) and every expiry the
+ * recorder holds for that date (filled only with the fallback flag).
+ */
+export function parseGexHistoryMeta(json: unknown, asked: string): { expiry: string; recorded: string[] } {
+  const j = (json ?? {}) as { expiry?: unknown; recordedExpiries?: unknown }
+  const expiry = typeof j.expiry === 'string' && j.expiry ? j.expiry : asked
+  const recorded = Array.isArray(j.recordedExpiries) ? j.recordedExpiries.filter((e): e is string => typeof e === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e)) : []
+  return { expiry, recorded }
 }
 
 /** Which quantity a bubble is sized by, per the `GEX basis` control. */

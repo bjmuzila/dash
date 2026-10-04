@@ -10,7 +10,7 @@
 //   gex.ts     CB Expected Move · CB Key Levels · CB GEX Profile
 //   flow.ts    CB Net Premium · CB Vol / GEX Flow · CB Whale Prints
 //   tpo.ts     CB Market Profile
-//   rail.ts    CB GEX Rail (the GEX Candles card's strike rail, beside the price axis)
+//   rail.ts    CB GEX Rail (the GEX Candles card's strike rail, right or left of the chart)
 //   heat.ts    CB GEX Heatmap (the per-minute ladders, behind the candles)
 //   journal.ts CB Journal Trades (your journal's fills on the chart). HIDDEN
 //              from the Indicators dialog for now (indicatorPicker.ts HIDDEN)
@@ -33,6 +33,7 @@ export const WH_MIN = ['$1M', '$2M', '$5M', '$10M'] as const
 export const WH_SIDE = ['Calls and puts', 'Calls', 'Puts'] as const
 export const WH_EXP = ['All expiries', '0DTE only', 'This week', 'Skip 0DTE'] as const
 export const HEAT_SESSIONS = ['1', '2', '3'] as const
+export const RAIL_SIDES = ['Right', 'Left'] as const
 export const JR_SHOW = ['All trades', 'Winners', 'Losers'] as const
 /** Where a whale bubble reaches its biggest — anything larger draws that size too. */
 export const WH_CAP = ['$25M', '$10M', '$50M', '$100M'] as const
@@ -235,13 +236,14 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: RAIL_TYPE,
-      title: 'CB GEX Rail · the GEX Candles strike rail beside the price axis',
+      title: 'CB GEX Rail · the GEX strike rail beside the chart, right or left',
       shortTitle: 'GEX Rail',
       pane: 'price',
       layer: {},
       inputs: () => [
+        { key: 'side', title: 'Position', type: 'string', defval: RAIL_SIDES[0], options: RAIL_SIDES },
         { key: 'basis', title: 'GEX', type: 'string', defval: GEX_BASIS[0], options: GEX_BASIS },
-        { key: 'tags', title: 'Level tags (CB / CW / PW)', type: 'bool', defval: true },
+        { key: 'tags', title: 'Level tags (Volt / Coil / Reversal / Surge)', type: 'bool', defval: true },
         { key: 'width', title: 'Rail width (px)', type: 'int', defval: 96, min: 72, max: 180, step: 4 },
       ],
     },

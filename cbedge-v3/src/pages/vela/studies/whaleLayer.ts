@@ -10,8 +10,8 @@
 //   ● the premium written inside when it fits ("Premium in the bubble")
 //   ● hover: a small card — the side and net, when, and one line per print
 //     ("Bought 758 Call · Oct 5   $1.4M")
-//   ● click: opens that print on the Whales page (its day, its ticker, the
-//     contract's probe open). A drag still pans the chart.
+//   ● click: nothing. A bubble does not leave the chart (Brandon, 2026-10-04:
+//     it used to open the print on the Whales page); the card is the detail.
 //
 // SIZE (flow.ts bubbleRadius): AREA follows premium — r = R_MAX·√(net / cap) —
 // clamped to [R_MIN, R_MAX], then the Bubble size % setting. With the defaults
@@ -23,7 +23,6 @@
 
 import type { RendererLayerArgs, RendererLayerInstance } from '@luxalgo/vela/plugin'
 import { tokenRgb, type RGB } from '@/design/theme'
-import { goTo } from '@/pages/vela/nav'
 
 export type Tone = 'up' | 'down' | 'mid'
 
@@ -45,8 +44,6 @@ export interface WhaleBubble {
   /** Written inside when it fits ('' = never). */
   label: string
   card: { head: string; net: string; when: string; rows: WhaleCardRow[]; more: number }
-  /** Where a click goes: the biggest print in the bubble, on the Whales page. */
-  link?: { ticker: string; day: string; ts: number; osi: string | null }
 }
 
 export interface WhalePayload {
@@ -158,8 +155,6 @@ export class WhaleLayer implements RendererLayerInstance {
   private canvas: HTMLCanvasElement | null = null
   private readonly card = new HoverCard()
   private offLeave: (() => void) | null = null
-  /** The bubbles where they were last drawn, smallest last (what a click hits first). */
-  private placed: Placed[] = []
 
   mount(canvas: HTMLCanvasElement): void {
     this.canvas = canvas
@@ -167,42 +162,9 @@ export class WhaleLayer implements RendererLayerInstance {
     const host = canvas.parentElement
     if (host) {
       const leave = () => this.card.hide()
-      let down: { x: number; y: number; t: number } | null = null
-      const onDown = (e: PointerEvent) => {
-        down = e.button === 0 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null
-      }
-      const onUp = (e: PointerEvent) => {
-        const d = down
-        down = null
-        if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6 || performance.now() - d.t > 700) return
-        const hit = this.hitAt(e.clientX, e.clientY)
-        if (!hit?.b.link) return
-        const l = hit.b.link
-        this.card.hide()
-        goTo('/whales', { ticker: l.ticker, day: l.day, ts: l.ts, osi: l.osi })
-      }
       host.addEventListener('pointerleave', leave)
-      host.addEventListener('pointerdown', onDown, true)
-      host.addEventListener('pointerup', onUp, true)
-      this.offLeave = () => {
-        host.removeEventListener('pointerleave', leave)
-        host.removeEventListener('pointerdown', onDown, true)
-        host.removeEventListener('pointerup', onUp, true)
-      }
+      this.offLeave = () => host.removeEventListener('pointerleave', leave)
     }
-  }
-
-  private hitAt(clientX: number, clientY: number): Placed | null {
-    const canvas = this.canvas
-    if (!canvas) return null
-    const rect = canvas.getBoundingClientRect()
-    const x = clientX - rect.left
-    const y = clientY - rect.top
-    for (let i = this.placed.length - 1; i >= 0; i--) {
-      const p = this.placed[i]!
-      if (Math.hypot(x - p.x, y - p.y) <= p.b.r + 2) return p
-    }
-    return null
   }
 
   render(args: RendererLayerArgs): void {
@@ -213,7 +175,6 @@ export class WhaleLayer implements RendererLayerInstance {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     const d = args.data
     if (!isPayload(d) || !d.bubbles.length) {
-      this.placed = []
       this.card.hide()
       return
     }
@@ -238,7 +199,6 @@ export class WhaleLayer implements RendererLayerInstance {
     }
     // biggest first: small bubbles stay on top, and are what the pointer finds
     placed.sort((p, q) => q.b.r - p.b.r)
-    this.placed = placed
 
     let hover: Placed | null = null
     if (cursor) {

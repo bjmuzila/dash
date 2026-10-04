@@ -1,22 +1,24 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // CB GEX RAIL: the GEX Candles card's strike rail, beside a Vela chart.
 //
-// Same rail as the home board: a 96px column to the right of the price axis,
-// one row per strike at exactly that strike's height on the chart. Each row
-// has the level tag (CB / CW / PW, or Voltick's marks on the Voltick theme) and
-// one bar growing right, sized by |GEX| against the biggest on the ladder,
-// coloured by sign. Hover a row for the strike and its value. Built with the
-// card's own buildRail, so the two rails always agree on which strike is CB.
+// Same rail as the home board: a 96px column beside the chart (Position: to
+// the right of the price axis, or at the chart's left edge), one row per strike
+// at exactly that strike's height on the chart. Each row has the level tag and
+// one bar, sized by |GEX| against the biggest on the ladder, coloured by sign,
+// growing away from the chart (right on the right, left on the left). Hover a
+// row for the strike and its value. Built with the card's own buildRail.
 //
-// VOLTICK (the page pins it): the rail is the named levels and nothing else,
-// read by the definition (data/voltickLevels.ts vtFromLadder) off the column's
-// live book (OI + vol), whatever the GEX setting: ★ Volt = the top net GEX,
-// ◆ Coil = the 2nd top on the Volt's side of spot, ↘ Reversal = the top across
-// spot. ↯ Surge (the biggest volume GEX) keeps the Voltick bot's read.
+// EVERY STRIKE (Brandon, 2026-10-04: "it should show all levels"): all the
+// strikes the column carries, the named ones tagged. The tags are Voltick's
+// (the page pins it), read by the definition (data/voltickLevels.ts
+// vtFromLadder) off the column's live book (OI + vol), whatever the GEX setting:
+// ★ Volt = the top net GEX, ◆ Coil = the 2nd top on the Volt's side of spot,
+// ↘ Reversal = the top across spot. ↯ Surge (the biggest volume GEX) keeps the
+// Voltick bot's read. On the CB theme: CB / CW / PW.
 //
 // WHERE IT SITS. Vela draws the whole chart (plot, price axis, time axis) on
 // canvases inside one absolutely placed box. The rail pulls that box in from
-// the right by its width (Vela re-sizes to it, the same way it follows any
+// its side by its width (Vela re-sizes to it, the same way it follows any
 // resize) and fills the gap with a DOM column. Nothing covers the candles.
 // Removing the study gives the width back.
 //
@@ -32,6 +34,12 @@
 // clock, so the rail rewinds with the candles. The header names the column's
 // time. On ES / NQ the strikes are SPX / NDX moved by that session's basis.
 //
+// AFTER THE CLOSE (live): from 16:00 ET the rail is the NEXT session's gamma,
+// the newest column recorded under the next expiry (ladder.ts loadRailLadder).
+// Friday after 4pm is Monday's, not Friday's. The header then names that
+// expiry's day (SPX MON 16:42) and its tooltip says so. Nothing recorded for
+// the next expiry yet: the session that just closed.
+//
 // Too narrow (the phone, a small grid cell): no rail. The card does the same
 // on a phone.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,8 +49,8 @@ import { buildRail, type RailLevels } from '@/board/gexCandles/GexRail'
 import { voltickMarks, vtFromLadder, vtLevelsAt, type VoltickMarks } from '@/data/voltickLevels'
 import { uiThemeNow } from '@/design/uiTheme'
 import { bool, int, provideLayer, str, studyImpl, type StudyCtx } from './common'
-import { GEX_BASIS, RAIL_TYPE } from './index'
-import { columnsUntil, ladderKey, loadLadder, sessionDates, type Ladder } from './ladder'
+import { GEX_BASIS, RAIL_SIDES, RAIL_TYPE } from './index'
+import { columnsUntil, ladderKey, loadRailLadder, sessionDates, type Ladder } from './ladder'
 
 const ROW_H = 15
 /** The header line's height: rows above it are dropped. */
@@ -50,7 +58,10 @@ const HEAD_H = 16
 /** Below this cell width the rail stays off. */
 const MIN_CELL = 520
 
+type Side = 'right' | 'left'
+
 interface RailS {
+  side: Side
   metric: 'net' | 'vol' | 'oi'
   tags: boolean
   width: number
@@ -66,7 +77,10 @@ export interface RailRowOut {
 
 export interface RailPayload {
   width: number
+  side: Side
   head: string
+  /** The header's tooltip. */
+  headTitle: string
   rows: RailRowOut[]
   maxAbs: number
   /** Placement priority: row strikes, most important first. */
@@ -78,6 +92,10 @@ export interface RailPayload {
 }
 
 const TIME = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false })
+// an expiry / session date (YYYY-MM-DD) is a calendar day: read at UTC noon, named in UTC
+const DOW = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' })
+const DAY_LONG = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' })
+const dayDate = (ymd: string) => new Date(`${ymd}T12:00:00Z`)
 
 const TAG_TITLE: Record<string, string> = { cb: 'Core: biggest magnet', cw: 'Call wall: ceiling', pw: 'Put wall: floor' }
 
@@ -100,19 +118,20 @@ export const railImpl = studyImpl<RailS, Ladder>({
   settings: (i) => {
     const b = str(i.basis, GEX_BASIS[0])
     return {
+      side: str(i.side, RAIL_SIDES[0]) === RAIL_SIDES[1] ? 'left' : 'right',
       metric: b === GEX_BASIS[2] ? 'vol' : b === GEX_BASIS[1] ? 'oi' : 'net',
       tags: bool(i.tags, true),
       width: int(i.width, 96, 72, 180),
     }
   },
   dataKey: (c) => `${ladderKey(c)}|${railDay(c).join(',')}`,
-  load: (c, _s, fresh) => loadLadder(c, railDay(c), fresh),
+  load: (c, _s, fresh) => loadRailLadder(c, railDay(c)[0], fresh),
   refreshMs: 60_000,
   // the replay clock moves the column the rail reads; live, a new minute's column arrives by refresh
   everyTick: true,
   render: () => ({}),
   layer: (c, s, lad): RailPayload => {
-    const base = { width: s.width, rows: [], maxAbs: 0, order: [], key: '' }
+    const base = { width: s.width, side: s.side, headTitle: '', rows: [], maxAbs: 0, order: [], key: '' }
     if (!lad) return { ...base, head: '', empty: 'Loading the ladder…' }
     const cols = columnsUntil(lad.columns, c.until)
     const col = cols[cols.length - 1]
@@ -128,14 +147,13 @@ export const railImpl = studyImpl<RailS, Ladder>({
     const model = buildRail([{ ...col, cells }], s.metric === 'vol' ? 'vol' : 'voloi', false)
     // a copy: buildRail hands back a shared empty model when the column is empty
     const lv: RailLevels = { ...model.levels }
-    let shown = model.rows
+    // every strike on the ladder; the named ones carry their tags
+    const shown = model.rows
     if (voltick) {
       const def = vtFromLadder(col.cells.map((x) => ({ strike: x.strike, net: x.net })), model.spot)
       const surge = voltickMarks(col.cells.map((x) => ({ strike: x.strike, book: x.net, vol: x.netVol })), { always: true }).surge
       const vt: VoltickMarks = { volt: def.volt, coil: def.coil, reversal: def.reversal, surge, coils: def.coil != null ? [def.coil] : [] }
       lv.vt = vt
-      const keep = new Set([vt.volt, vt.surge, vt.reversal, vt.coil].filter((k): k is number => k != null))
-      shown = model.rows.filter((r) => keep.has(r.strike))
     }
     const rows: RailRowOut[] = shown.map((r) => {
       const tags: RailRowOut['tags'] = []
@@ -150,15 +168,23 @@ export const railImpl = studyImpl<RailS, Ladder>({
     })
     const named = rows.filter((r) => r.tags.length).map((r) => r.strike)
     const rest = rows.filter((r) => !r.tags.length).sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
-    const head = `${lad.label} GEX · ${TIME.format(new Date(col.slotTs))}`
+    const at = TIME.format(new Date(col.slotTs))
+    const next = lad.next
+    // short enough for the 96px rail: SPX GEX 15:59, or after a close SPX MON 16:42
+    const head = `${lad.label} ${next ? DOW.format(dayDate(next.expiry)).toUpperCase() : 'GEX'} ${at}`
+    const headTitle = next
+      ? `Next session: the ${DAY_LONG.format(dayDate(next.expiry))} expiry's gamma, recorded after the ${DAY_LONG.format(dayDate(next.after))} close (column ${at} ET)`
+      : `${lad.label} gamma, column ${at} ET`
     return {
       width: s.width,
+      side: s.side,
       head,
+      headTitle,
       rows,
       maxAbs: model.maxAbs,
       order: [...named, ...rest.map((r) => r.strike)],
       empty: rows.length ? '' : 'Empty ladder',
-      key: `${col.slotTs}|${s.metric}|${s.tags}|${shift}|${voltick}`,
+      key: `${col.slotTs}|${next?.expiry ?? ''}|${s.metric}|${s.tags}|${shift}|${voltick}`,
     }
   },
 })
@@ -177,6 +203,7 @@ class RailLayer implements RendererLayerInstance {
   private nodes = new Map<number, HTMLDivElement>()
   private key = ''
   private width = 0
+  private side: Side = 'right'
 
   mount(canvas: HTMLCanvasElement): void {
     this.canvas = canvas
@@ -189,22 +216,30 @@ class RailLayer implements RendererLayerInstance {
     return root && wrap ? { root, wrap } : null
   }
 
-  private attach(width: number): HTMLDivElement | null {
+  private attach(width: number, side: Side): HTMLDivElement | null {
     const b = this.boxes()
     if (!b) return null
     if (b.wrap.clientWidth < MIN_CELL) {
       this.detach()
       return null
     }
-    if (this.width !== width) {
-      b.root.style.right = `${width}px`
+    if (this.width !== width || this.side !== side) {
+      // the chart's box gives up `width` on the rail's side, and gets the other back.
+      // 0px, never '': Vela places the box with an inline `inset: 0`, and clearing
+      // one side of it leaves that side auto, which collapses the chart to nothing
+      b.root.style.right = side === 'right' ? `${width}px` : '0px'
+      b.root.style.left = side === 'left' ? `${width}px` : '0px'
       this.width = width
+      this.side = side
+      // on the left, the cell's own overlays that sit at the chart's left edge (the
+      // symbol chip, the watermark, the mark) step right of the rail (vela.css)
+      this.markCell(side === 'left' ? width : 0)
     }
     let el = this.el
     if (!el || !el.isConnected) {
       el = this.el = document.createElement('div')
       el.className = 'cb-rail'
-      el.style.cssText = `position:absolute;top:0;right:0;bottom:0;overflow:hidden`
+      el.style.cssText = `position:absolute;top:0;bottom:0;overflow:hidden`
       this.headEl = document.createElement('div')
       this.headEl.className = 'cb-rail-head'
       this.emptyEl = document.createElement('div')
@@ -215,7 +250,23 @@ class RailLayer implements RendererLayerInstance {
       this.nodes.clear()
     }
     el.style.width = `${width}px`
+    el.style.left = side === 'left' ? '0' : ''
+    el.style.right = side === 'right' ? '0' : ''
+    el.dataset.side = side
     return el
+  }
+
+  /** Tell the chart's cell the rail takes `px` at its left edge (0: it does not). */
+  private markCell(px: number): void {
+    const cell = this.boxes()?.wrap.closest<HTMLElement>('.vela-cell')
+    if (!cell) return
+    if (px > 0) {
+      cell.dataset.cbRailLeft = '1'
+      cell.style.setProperty('--cb-rail-w', `${px}px`)
+    } else {
+      delete cell.dataset.cbRailLeft
+      cell.style.removeProperty('--cb-rail-w')
+    }
   }
 
   private detach(): void {
@@ -225,7 +276,11 @@ class RailLayer implements RendererLayerInstance {
     this.key = ''
     if (this.width) {
       const b = this.boxes()
-      if (b) b.root.style.right = ''
+      if (b) {
+        b.root.style.right = '0px'
+        b.root.style.left = '0px'
+      }
+      this.markCell(0)
       this.width = 0
     }
   }
@@ -269,9 +324,10 @@ class RailLayer implements RendererLayerInstance {
       this.detach()
       return
     }
-    const el = this.attach(d.width)
+    const el = this.attach(d.width, d.side)
     if (!el) return
     this.headEl!.textContent = d.head
+    this.headEl!.title = d.headTitle
     this.emptyEl!.textContent = d.empty
     this.emptyEl!.hidden = !d.empty
     if (d.key !== this.key) {

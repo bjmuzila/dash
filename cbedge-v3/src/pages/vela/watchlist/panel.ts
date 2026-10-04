@@ -2,19 +2,33 @@
 // VELA WATCHLIST — the docked panel. A Vela SIDE PANEL (its button in the
 // topbar's panel group, a row in ⋮ on a phone), independent of any one chart:
 //
-//   header   [ list ▾ ] [⤢] [⚙] [⋮]   the open list is a picker (and New watchlist);
+//   header   [ list ▾ ] [⤢] [⚙] [⋮] [📌]  the open list is a picker (and New watchlist);
 //                                  ⤢ the Advanced view (advanced.ts) over the chart
-//                                  area; ⚙ Columns; ⋮ Advanced view / Rename / Delete
+//                                  area; ⚙ Columns; ⋮ Advanced view / New section /
+//                                  Rename / Delete; 📌 pin (below)
 //   add      [ Add symbol…        ] [+ SPX]   the chart's symbols, by ticker or
 //                                  name; "+ SPX" adds the active chart's
-//   rows     ⠿ logo  SYMBOL name     price   chg   chg%   (vol)   ✕
+//   rows     ⠿ logo  SYMBOL name     price   chg   chg%   (vol)   ⋯ ✕
 //
 //   · a row CLICK loads that symbol on the ACTIVE chart (in a grid: click the
 //     cell first); the active chart's symbol is highlighted
-//   · hover a row for ✕ (remove); drag ⠿ to set your own order — that clears
-//     any sort
+//   · hover a row for ⋯ (move to a section, remove) and ✕ (remove); drag ⠿ to
+//     set your own order, or onto another section to move it there
 //   · a column header sorts (again: the other way); the sort is per list
 //   · on a phone a pick closes the sheet, so the chart shows
+//
+// SECTIONS (Brandon, 2026-10-04). A list can have named sections (⋮ → New
+// section, or a row's ⋯ → Move to section → New section). Each is a header row:
+// ▾ folds it, ⋯ renames, moves or deletes it (its symbols stay, Unsorted). A
+// symbol in none is under Unsorted. A column sort orders the symbols INSIDE each
+// section, so "Symbol ↑" is A to Z per section. The Advanced view shows the same
+// sections in the same order (store.ts keeps them on the list, synced).
+//
+// THE PIN (desktop). Vela's panel dock holds one panel at a time, so opening
+// Level Alerts or Scripts closes the watchlist. 📌 takes it out of the dock into
+// its own column at the right edge of the chart area (bindPinnedWatchlist): it
+// stays open whatever other panel opens, keeps its width (drag its left edge),
+// and is still pinned after a reload. 📌 again puts it back in the dock.
 //
 // The lists, their account sync and the quotes are store.ts.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -24,26 +38,38 @@ import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import { tickerLogoUrls } from '@/pages/economicCalendar/ChipLogo'
 import { PROVIDER_NAME, resolveSym } from '@/pages/vela/cbedgeProvider'
 import { ThemedSelect } from '@/pages/vela/themedSelect'
+import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import {
   activeList,
+  addSection,
   addSymbol,
+  arrange,
   chartSymbols,
   createList,
   deleteList,
+  isFolded,
   lists,
   MAX_LISTS,
+  MAX_SECTIONS,
+  moveSection,
   normTicker,
   onWatchlist,
   quoteOf,
   refreshQuotes,
   refreshVolumes,
+  removeSection,
   removeSymbol,
   renameList,
+  renameSection,
   reorder,
+  sectionsOf,
   setActive,
   setColumn,
+  setFolded,
+  setGroup,
   setSort,
   syncWatchlists,
+  UNSORTED,
   viewPrefs,
   watchlistSyncStatus,
   type SortKey,
@@ -88,32 +114,89 @@ function chartTicker(ctx: WidgetContext): string | null {
 
 const narrow = () => typeof matchMedia === 'function' && matchMedia('(max-width: 720px)').matches
 
-function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
+// ── the pin: module state, so the dock's copy and the pinned column agree ──
+const PIN_KEY = 'cb-vela-watchlist-pinned'
+const PIN_W_KEY = 'cb-vela-watchlist-pin-w'
+const PIN_W_DEFAULT = 360
+const PIN_W_MIN = 300
+const PIN_W_MAX = 560
+
+function readPinned(): boolean {
+  try {
+    return localStorage.getItem(PIN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+let pinned = readPinned()
+/** A desktop workspace is up that can show the pinned column. */
+let pinAvailable = false
+/** The pinned column while it is on screen. */
+let pinCol: HTMLElement | null = null
+const pinListeners = new Set<() => void>()
+const pinChanged = () => {
+  for (const fn of [...pinListeners]) fn()
+}
+function setPinned(on: boolean): void {
+  if (pinned === on) return
+  pinned = on
+  try {
+    if (on) localStorage.setItem(PIN_KEY, '1')
+    else localStorage.removeItem(PIN_KEY)
+  } catch {
+    /* private mode: pinned for this tab */
+  }
+  pinChanged()
+}
+/** The topbar's Watchlist button while it is pinned: it is already open, so point at it. */
+function pulsePinned(): void {
+  const c = pinCol
+  if (!c) return
+  c.classList.remove('cb-wl-pulse')
+  void c.offsetWidth // restart the animation
+  c.classList.add('cb-wl-pulse')
+  setTimeout(() => c.classList.remove('cb-wl-pulse'), 900)
+}
+
+type Mode = 'dock' | 'pinned'
+type PanelInstance = { onChart(chart: Vela): void; onOpen(): void; destroy(): void }
+
+function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mode: Mode = 'dock'): PanelInstance {
   const doc = body.ownerDocument
   body.classList.add('cb-wl')
   // keystrokes stay in the panel's inputs — Vela's chart shortcuts listen above it
   for (const t of ['keydown', 'keyup', 'keypress'] as const) body.addEventListener(t, (e) => e.stopPropagation())
 
-  // ── header: list picker, columns, ⋮ ──
+  // ── header: list picker, advanced view, columns, ⋮, 📌 ──
   const pick = new ThemedSelect(doc, 'cb-wl-pick', 'Watchlist')
   const gear = btn(doc, 'cb-wl-icon', '⚙', 'Columns')
   const more = btn(doc, 'cb-wl-icon', '⋮', 'List actions')
   const expand = btn(doc, 'cb-wl-icon', '⤢', 'Advanced view')
+  const pinBtn = btn(doc, 'cb-wl-icon cb-wl-pin', '📌', mode === 'pinned' ? 'Unpin: back to the panel dock' : 'Pin open at the right')
+  pinBtn.setAttribute('aria-pressed', mode === 'pinned' ? 'true' : 'false')
+  pinBtn.addEventListener('click', () => setPinned(mode !== 'pinned'))
+  const showPin = () => {
+    pinBtn.hidden = mode === 'dock' && (!pinAvailable || narrow())
+  }
+  showPin()
+  pinListeners.add(showPin)
   slot.classList.add('cb-wl-slot')
-  slot.append(pick.el, expand, gear, more)
+  slot.append(pick.el, expand, gear, more, pinBtn)
   expand.addEventListener('click', () => openAdvancedView())
   /** The full watchlist over the chart area (its own chunk, fetched on first use). */
   function openAdvancedView() {
-    ctx.togglePanel(WATCHLIST_PANEL_ID, false)
+    if (mode === 'dock') ctx.togglePanel(WATCHLIST_PANEL_ID, false)
     void import('./advanced').then(
       (m) => m.openAdvanced(ctx),
       () => ctx.toast('Couldn’t load the advanced view: try again', 'error'),
     )
   }
 
-  // ── popovers (columns, list actions, rename, delete) ──
+  // ── popovers (columns, list actions, rename, delete, section and row menus) ──
   const pop = el(doc, 'div', 'cb-wl-pop')
   pop.hidden = true
+  /** What opened the popover: a press on it again is its own toggle, not an outside press. */
+  let popAnchor: HTMLElement | null = null
 
   // ── add ──
   const addRow = el(doc, 'div', 'cb-wl-add')
@@ -212,11 +295,11 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
     return box
   }
 
-  function orderedSymbols(): string[] {
-    const l = activeList()
-    const sort = viewPrefs().sort[l.id]
-    if (!sort) return l.symbols
-    return l.symbols.slice().sort((a, b) => {
+  /** `syms` in the list's sort (inside one section, when there are sections), or as given. */
+  function sorted(syms: string[]): string[] {
+    const sort = viewPrefs().sort[activeList().id]
+    if (!sort) return syms
+    return syms.slice().sort((a, b) => {
       const va = valueOf(a, sort.key)
       const vb = valueOf(b, sort.key)
       if (va == null && vb == null) return 0
@@ -226,60 +309,111 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
     })
   }
 
+  function symbolRow(sym: string, here: string | null, shown: Col[]): HTMLElement {
+    const row = el(doc, 'div', 'cb-wl-row')
+    row.dataset.sym = sym
+    row.setAttribute('role', 'button')
+    row.tabIndex = 0
+    if (sym === here) row.dataset.active = '1'
+    const grip = el(doc, 'span', 'cb-wl-grip', '⠿')
+    grip.title = 'Drag to reorder, or onto another section'
+    const name = el(doc, 'span', 'cb-wl-name')
+    name.append(el(doc, 'span', 'cb-wl-sym', sym))
+    const d = descOf.get(sym)
+    if (d && d !== sym) name.append(el(doc, 'span', 'cb-wl-desc', d))
+    const symCell = el(doc, 'span', 'cb-wl-symcell')
+    symCell.append(logo(sym), name)
+    const q = quoteOf(sym)
+    const cells = shown.map((c) => {
+      const v = c.key === 'price' ? q?.last ?? null : c.key === 'change' ? q?.change ?? null : c.key === 'pct' ? q?.pct ?? null : q?.volume ?? null
+      const text = c.key === 'price' ? fmtPrice(v) : c.key === 'change' ? fmtChg(v) : c.key === 'pct' ? fmtPct(v) : fmtVol(v)
+      const s = el(doc, 'span', 'cb-wl-num', text)
+      if (c.key === 'change' || c.key === 'pct') {
+        const t = toneOf(q?.change ?? null)
+        if (t) s.dataset.tone = t
+      }
+      return s
+    })
+    const acts = el(doc, 'span', 'cb-wl-acts')
+    const rowMore = btn(doc, 'cb-wl-rowmore', '⋯', `${sym}: move to a section`)
+    rowMore.addEventListener('click', (e) => {
+      e.stopPropagation()
+      rowMenu(sym, rowMore)
+    })
+    const rm = btn(doc, 'cb-wl-rm', '✕', `Remove ${sym}`)
+    rm.addEventListener('click', (e) => {
+      e.stopPropagation()
+      removeSymbol(sym)
+    })
+    acts.append(rowMore, rm)
+    row.append(grip, symCell, ...cells, acts)
+    row.addEventListener('click', () => load(sym))
+    row.addEventListener('keydown', (e) => {
+      // the row's own buttons take their own Enter
+      if (e.target !== row) return
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        load(sym)
+      }
+    })
+    grip.addEventListener('pointerdown', (e) => startDrag(e, row))
+    return row
+  }
+
+  /** A section's header row. `name` '' is Unsorted (no menu: it is not a section of its own). */
+  function sectionRow(listId: string, name: string, count: number, folded: boolean): HTMLElement {
+    const label = name || UNSORTED
+    const h = el(doc, 'div', 'cb-wl-sec')
+    h.dataset.sec = name
+    if (!name) h.dataset.unsorted = '1'
+    const fold = btn(doc, 'cb-wl-secfold', '', `${folded ? 'Show' : 'Fold'} ${label}`)
+    fold.setAttribute('aria-expanded', folded ? 'false' : 'true')
+    fold.append(el(doc, 'span', 'cb-wl-caret', folded ? '▸' : '▾'), el(doc, 'span', 'cb-wl-secname', label), el(doc, 'span', 'cb-wl-seccount', String(count)))
+    fold.addEventListener('click', () => setFolded(listId, label, !folded))
+    h.append(fold)
+    if (name) {
+      const m = btn(doc, 'cb-wl-secmore', '⋯', `${name}: section actions`)
+      m.addEventListener('click', (e) => {
+        e.stopPropagation()
+        sectionMenu(name, m)
+      })
+      h.append(m)
+    }
+    return h
+  }
+
   function renderRows() {
     if (dragging) return
-    const syms = orderedSymbols()
+    const l = activeList()
+    const secs = sectionsOf(l)
     const here = chartTicker(ctx)
     const shown = cols().filter((c) => c.on)
-    if (!syms.length) {
-      rowsBox.replaceChildren(el(doc, 'div', 'cb-wl-empty', 'This list is empty: add a symbol above.'))
+    if (!secs.length) {
+      // no sections: the plain list, as it always was
+      rowsBox.replaceChildren(...(l.symbols.length ? sorted(l.symbols).map((s) => symbolRow(s, here, shown)) : [el(doc, 'div', 'cb-wl-empty', 'This list is empty: add a symbol above.')]))
     } else {
-      rowsBox.replaceChildren(
-        ...syms.map((sym) => {
-          const row = el(doc, 'div', 'cb-wl-row')
-          row.dataset.sym = sym
-          row.setAttribute('role', 'button')
-          row.tabIndex = 0
-          if (sym === here) row.dataset.active = '1'
-          const grip = el(doc, 'span', 'cb-wl-grip', '⠿')
-          grip.title = 'Drag to reorder'
-          const name = el(doc, 'span', 'cb-wl-name')
-          name.append(el(doc, 'span', 'cb-wl-sym', sym))
-          const d = descOf.get(sym)
-          if (d && d !== sym) name.append(el(doc, 'span', 'cb-wl-desc', d))
-          const symCell = el(doc, 'span', 'cb-wl-symcell')
-          symCell.append(logo(sym), name)
-          const q = quoteOf(sym)
-          const cells = shown.map((c) => {
-            const v = c.key === 'price' ? q?.last ?? null : c.key === 'change' ? q?.change ?? null : c.key === 'pct' ? q?.pct ?? null : q?.volume ?? null
-            const text = c.key === 'price' ? fmtPrice(v) : c.key === 'change' ? fmtChg(v) : c.key === 'pct' ? fmtPct(v) : fmtVol(v)
-            const s = el(doc, 'span', 'cb-wl-num', text)
-            if (c.key === 'change' || c.key === 'pct') {
-              const t = toneOf(q?.change ?? null)
-              if (t) s.dataset.tone = t
-            }
-            return s
-          })
-          const rm = btn(doc, 'cb-wl-rm', '✕', `Remove ${sym}`)
-          rm.addEventListener('click', (e) => {
-            e.stopPropagation()
-            removeSymbol(sym)
-          })
-          row.append(grip, symCell, ...cells, rm)
-          row.addEventListener('click', () => load(sym))
-          row.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              load(sym)
-            }
-          })
-          grip.addEventListener('pointerdown', (e) => startDrag(e, row))
-          return row
-        }),
-      )
+      const bySec = new Map<string, string[]>()
+      for (const s of l.symbols) {
+        const g = l.groups?.[s]
+        const k = g && secs.includes(g) ? g : ''
+        const arr = bySec.get(k)
+        if (arr) arr.push(s)
+        else bySec.set(k, [s])
+      }
+      const out: HTMLElement[] = []
+      // every named section in its order, then Unsorted (always there, as a place to drop on)
+      for (const name of [...secs, '']) {
+        const syms = bySec.get(name) ?? []
+        const folded = isFolded(l.id, name || UNSORTED)
+        out.push(sectionRow(l.id, name, syms.length, folded))
+        if (folded) continue
+        if (syms.length) out.push(...sorted(syms).map((s) => symbolRow(s, here, shown)))
+        else out.push(el(doc, 'div', 'cb-wl-hint', name ? 'Empty: drag a symbol here, or use a row’s ⋯' : 'Drag a symbol here to take it out of its section'))
+      }
+      rowsBox.replaceChildren(...out)
     }
     const cur = chartTicker(ctx)
-    const inList = !!cur && activeList().symbols.includes(cur)
+    const inList = !!cur && l.symbols.includes(cur)
     addCur.hidden = !cur || inList
     addCur.textContent = cur ? `+ ${cur}` : ''
     const st = watchlistSyncStatus()
@@ -303,7 +437,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
   function load(sym: string) {
     ctx.setSymbol(`${PROVIDER_NAME}:${sym}`)
     setTimeout(renderRows, 50)
-    if (narrow()) ctx.togglePanel(WATCHLIST_PANEL_ID, false)
+    if (mode === 'dock' && narrow()) ctx.togglePanel(WATCHLIST_PANEL_ID, false)
   }
 
   function matches(q: string): SymbolRow[] {
@@ -400,13 +534,36 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
   const closePop = () => {
     pop.hidden = true
     pop.replaceChildren()
+    popAnchor = null
   }
-  function openNaming(title: string, value: string, done: (name: string) => void) {
+  /**
+   * Show the popover: under the header (no anchor), or next to the row or section
+   * button that opened it, flipped above when the panel has no room below it.
+   */
+  function showPop(anchor: HTMLElement | null) {
+    pop.style.top = ''
+    pop.hidden = false
+    if (!anchor || !anchor.isConnected || !body.contains(anchor)) return
+    const b = body.getBoundingClientRect()
+    const a = anchor.getBoundingClientRect()
+    const h = pop.offsetHeight
+    let top = a.bottom - b.top + body.scrollTop + 2
+    if (top + h > body.scrollTop + body.clientHeight - 4) top = Math.max(body.scrollTop + 4, a.top - b.top + body.scrollTop - h - 2)
+    pop.style.top = `${Math.round(top)}px`
+  }
+  const SECTION_NAME_MAX = 40
+  /** Why a section name cannot be used, or null. */
+  function sectionNameProblem(n: string, except?: string): string | null {
+    if (n.toLowerCase() === UNSORTED.toLowerCase()) return `“${UNSORTED}” is kept for symbols in no section`
+    if (n !== except && sectionsOf(activeList()).includes(n)) return `“${n}” is already a section`
+    return null
+  }
+  function openNaming(title: string, value: string, done: (name: string) => void, placeholder = 'List name', maxLength = 60, anchor: HTMLElement | null = null) {
     const input = el(doc, 'input', 'cb-wl-input')
     input.type = 'text'
     input.value = value
-    input.placeholder = 'List name'
-    input.maxLength = 60
+    input.placeholder = placeholder
+    input.maxLength = maxLength
     const ok = btn(doc, 'cb-wl-btn cb-wl-primary', 'Save')
     const cancel = btn(doc, 'cb-wl-btn', 'Cancel')
     const commit = () => {
@@ -424,13 +581,42 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
     const rowEl = el(doc, 'div', 'cb-wl-poprow')
     rowEl.append(ok, cancel)
     pop.replaceChildren(el(doc, 'div', 'cb-wl-poptitle', title), input, rowEl)
-    pop.hidden = false
+    showPop(anchor)
     input.focus()
     input.select()
   }
+  /** Name a new section, then hand the name on (nothing when it is taken or the list has 20). */
+  function newSection(anchor: HTMLElement | null, then: (name: string) => void) {
+    if (sectionsOf(activeList()).length >= MAX_SECTIONS) {
+      closePop()
+      ctx.toast(`Up to ${MAX_SECTIONS} sections on a list`, 'info')
+      return
+    }
+    pop.dataset.kind = 'name'
+    openNaming(
+      'New section',
+      '',
+      (n) => {
+        const bad = sectionNameProblem(n)
+        if (bad) return ctx.toast(bad, 'info')
+        then(n)
+      },
+      'Section name',
+      SECTION_NAME_MAX,
+      anchor,
+    )
+  }
+  function toggleKind(kind: string, anchor: HTMLElement): boolean {
+    if (!pop.hidden && pop.dataset.kind === kind) {
+      closePop()
+      return false
+    }
+    pop.dataset.kind = kind
+    popAnchor = anchor
+    return true
+  }
   gear.addEventListener('click', () => {
-    if (!pop.hidden && pop.dataset.kind === 'cols') return closePop()
-    pop.dataset.kind = 'cols'
+    if (!toggleKind('cols', gear)) return
     const c = viewPrefs().cols
     const items: [keyof typeof c, string][] = [
       ['price', 'Price'],
@@ -453,19 +639,24 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
         return lab
       }),
     )
-    pop.hidden = false
+    showPop(null)
   })
   more.addEventListener('click', () => {
-    if (!pop.hidden && pop.dataset.kind === 'more') return closePop()
-    pop.dataset.kind = 'more'
+    if (!toggleKind('more', more)) return
     const l = activeList()
     const adv = btn(doc, 'cb-wl-item', '⤢ Advanced view')
     adv.addEventListener('click', () => {
       closePop()
       openAdvancedView()
     })
-    const rename = btn(doc, 'cb-wl-item', 'Rename')
-    const del = btn(doc, 'cb-wl-item cb-wl-danger', 'Delete')
+    const sec = btn(doc, 'cb-wl-item', '+ New section')
+    sec.addEventListener('click', () =>
+      newSection(null, (n) => {
+        if (!addSection(n)) ctx.toast(sectionNameProblem(n) ?? 'Couldn’t add that section', 'info')
+      }),
+    )
+    const rename = btn(doc, 'cb-wl-item', 'Rename list')
+    const del = btn(doc, 'cb-wl-item cb-wl-danger', 'Delete list')
     rename.addEventListener('click', () => {
       pop.dataset.kind = 'name'
       openNaming('Rename list', l.name, (n) => renameList(l.id, n))
@@ -488,30 +679,119 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
         r,
       )
     })
-    pop.replaceChildren(adv, rename, del)
-    pop.hidden = false
+    pop.replaceChildren(adv, sec, rename, del)
+    showPop(null)
   })
+  /** A section's ⋯: rename, move, delete (its symbols stay, Unsorted). */
+  function sectionMenu(name: string, anchor: HTMLElement) {
+    if (!toggleKind(`sec:${name}`, anchor)) return
+    const l = activeList()
+    const order = sectionsOf(l)
+    const i = order.indexOf(name)
+    const rename = btn(doc, 'cb-wl-item', 'Rename')
+    rename.addEventListener('click', () => {
+      pop.dataset.kind = 'name'
+      openNaming(
+        'Rename section',
+        name,
+        (n) => {
+          if (n === name) return
+          const bad = sectionNameProblem(n, name)
+          if (bad || !renameSection(name, n)) return ctx.toast(bad ?? 'Couldn’t rename that section', 'info')
+          // a folded section stays folded under its new name
+          if (isFolded(l.id, name)) {
+            setFolded(l.id, name, false)
+            setFolded(l.id, n, true)
+          }
+        },
+        'Section name',
+        SECTION_NAME_MAX,
+        anchor,
+      )
+    })
+    const up = btn(doc, 'cb-wl-item', '↑ Move up')
+    up.disabled = i <= 0
+    up.addEventListener('click', () => {
+      closePop()
+      moveSection(name, -1)
+    })
+    const down = btn(doc, 'cb-wl-item', '↓ Move down')
+    down.disabled = i < 0 || i >= order.length - 1
+    down.addEventListener('click', () => {
+      closePop()
+      moveSection(name, 1)
+    })
+    const del = btn(doc, 'cb-wl-item cb-wl-danger', 'Delete section')
+    del.addEventListener('click', () => {
+      closePop()
+      setFolded(l.id, name, false)
+      removeSection(name)
+    })
+    pop.replaceChildren(el(doc, 'div', 'cb-wl-poptitle', name), rename, up, down, del, el(doc, 'div', 'cb-wl-note', 'Deleting a section keeps its symbols, under Unsorted.'))
+    showPop(anchor)
+  }
+  /** A row's ⋯: move it to a section (or a new one), out of its section, or off the list. */
+  function rowMenu(sym: string, anchor: HTMLElement) {
+    if (!toggleKind(`row:${sym}`, anchor)) return
+    const l = activeList()
+    const cur = l.groups?.[sym] ?? null
+    const names = sectionsOf(l)
+    const items: HTMLElement[] = [el(doc, 'div', 'cb-wl-poptitle', sym)]
+    if (names.length) items.push(el(doc, 'div', 'cb-wl-note', 'Move to section'))
+    for (const n of names) {
+      const b = btn(doc, 'cb-wl-item', n === cur ? `✓ ${n}` : n)
+      if (n === cur) b.dataset.on = '1'
+      b.addEventListener('click', () => {
+        closePop()
+        if (n !== cur) setGroup(sym, n)
+      })
+      items.push(b)
+    }
+    const nu = btn(doc, 'cb-wl-item', '+ New section…')
+    nu.addEventListener('click', () => newSection(anchor, (n) => setGroup(sym, n)))
+    items.push(nu)
+    if (cur) {
+      const out = btn(doc, 'cb-wl-item', 'Take out of section')
+      out.addEventListener('click', () => {
+        closePop()
+        setGroup(sym, null)
+      })
+      items.push(out)
+    }
+    const rm = btn(doc, 'cb-wl-item cb-wl-danger', `Remove ${sym}`)
+    rm.addEventListener('click', () => {
+      closePop()
+      removeSymbol(sym)
+    })
+    items.push(rm)
+    pop.replaceChildren(...items)
+    showPop(anchor)
+  }
   doc.addEventListener('pointerdown', onDocDown, true)
   function onDocDown(e: PointerEvent) {
     if (pop.hidden) return
     const t = e.target as Node
-    if (pop.contains(t) || gear.contains(t) || more.contains(t)) return
+    if (pop.contains(t) || popAnchor?.contains(t)) return
     closePop()
   }
 
-  // ── drag to reorder (pointer: works with a mouse and a finger) ──
+  // ── drag to reorder, and across sections (pointer: works with a mouse and a finger) ──
   // Listened on the document, not with pointer capture: moving the row in the DOM
   // would drop a capture held by its own grip, and the drag with it.
   function startDrag(e: PointerEvent, row: HTMLElement) {
     if (e.button > 0) return
     e.preventDefault()
     e.stopPropagation()
+    closePop()
     dragging = true
     row.dataset.drag = '1'
+    const sectioned = !!rowsBox.querySelector('.cb-wl-sec')
+    // nothing goes above the first section's header: every row sits in a section
+    const first = rowsBox.querySelector<HTMLElement>('.cb-wl-sec')
     let moved = false
     const move = (ev: PointerEvent) => {
       ev.preventDefault()
-      const siblings = [...rowsBox.querySelectorAll<HTMLElement>('.cb-wl-row')].filter((r) => r !== row)
+      const siblings = [...rowsBox.querySelectorAll<HTMLElement>('.cb-wl-row, .cb-wl-sec, .cb-wl-hint')].filter((r) => r !== row && r !== first)
       const before = siblings.find((r) => {
         const b = r.getBoundingClientRect()
         return ev.clientY < b.top + b.height / 2
@@ -532,11 +812,21 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
       doc.removeEventListener('pointercancel', up)
       delete row.dataset.drag
       dragging = false
+      if (!moved) return renderRows()
       // the click that follows a drag is not a pick
-      if (moved) {
-        row.addEventListener('click', (ev) => ev.stopImmediatePropagation(), { capture: true, once: true })
-        reorder([...rowsBox.querySelectorAll<HTMLElement>('.cb-wl-row')].map((r) => r.dataset.sym!).filter(Boolean))
-      } else renderRows()
+      row.addEventListener('click', (ev) => ev.stopImmediatePropagation(), { capture: true, once: true })
+      const order = [...rowsBox.querySelectorAll<HTMLElement>('.cb-wl-row')].map((r) => r.dataset.sym!).filter(Boolean)
+      if (!sectioned) return reorder(order)
+      // the section it landed in: the nearest header above it ('' is Unsorted)
+      let section: string | null = null
+      for (let p = row.previousElementSibling; p; p = p.previousElementSibling) {
+        if (p instanceof HTMLElement && p.classList.contains('cb-wl-sec')) {
+          section = p.dataset.sec || null
+          break
+        }
+      }
+      // a sorted list keeps its sort inside the section: only the section changes
+      arrange(row.dataset.sym!, section, viewPrefs().sort[activeList().id] ? null : order)
     }
     doc.addEventListener('pointermove', move, { passive: false })
     doc.addEventListener('pointerup', up)
@@ -575,6 +865,15 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
   return {
     onChart: bindChart,
     onOpen() {
+      // pinned: the list is already open in its column, so the dock's copy steps back
+      if (mode === 'dock' && pinCol) {
+        setTimeout(() => {
+          ctx.togglePanel(WATCHLIST_PANEL_ID, false)
+          pulsePinned()
+        })
+        return
+      }
+      showPin()
       render()
       tick()
       void syncWatchlists()
@@ -584,6 +883,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement) {
       offMarket?.()
       pick.destroy()
       clearInterval(timer)
+      pinListeners.delete(showPin)
       doc.removeEventListener('pointerdown', onDocDown, true)
     },
   }
@@ -620,4 +920,123 @@ export function registerWatchlist(): void {
       if (typeof id === 'string') setActive(id)
     },
   })
+}
+
+function readPinWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(PIN_W_KEY))
+    return Number.isFinite(n) && n > 0 ? n : PIN_W_DEFAULT
+  } catch {
+    return PIN_W_DEFAULT
+  }
+}
+
+/**
+ * The 📌 column. Vela's dock shows one panel at a time; the pinned watchlist is its
+ * own column at the right end of the workspace's chart row (after whatever panel
+ * the dock has open), so it stays while Level Alerts, Scripts or the data window
+ * come and go. The charts shrink to make room, as they do for a docked panel.
+ * Called once the workspace is built; returns the unbind. A phone has no pin.
+ */
+export function bindPinnedWatchlist(ws: VelaWorkspace, phone: boolean): () => void {
+  const found = phone ? null : ws.root.querySelector<HTMLElement>(':scope > .vela-ws-main')
+  if (!found) return () => {}
+  const main: HTMLElement = found
+  const doc = main.ownerDocument
+  let col: { el: HTMLElement; inst: PanelInstance; offActive: () => void; mo: MutationObserver } | null = null
+  let width = readPinWidth()
+  const clampW = (w: number) => Math.round(Math.max(PIN_W_MIN, Math.min(PIN_W_MAX, main.clientWidth - 320, w)))
+
+  function open() {
+    const el = doc.createElement('div')
+    el.className = 'cb-wl-pincol'
+    el.setAttribute('role', 'complementary')
+    el.setAttribute('aria-label', 'Watchlist (pinned)')
+    const grip = doc.createElement('div')
+    grip.className = 'cb-wl-pingrip'
+    grip.title = 'Drag to resize'
+    const head = doc.createElement('div')
+    head.className = 'cb-wl-pinhead'
+    const slot = doc.createElement('div')
+    head.append(slot)
+    const body = doc.createElement('div')
+    body.className = 'cb-wl-pinbody'
+    el.append(grip, head, body)
+    el.style.width = `${clampW(width)}px`
+    main.append(el)
+    // the dock rebuilds its contributed panels at the end of this row: stay last
+    const mo = new MutationObserver(() => {
+      if (main.lastElementChild !== el) main.append(el)
+    })
+    mo.observe(main, { childList: true })
+    const ctx = ws.context()
+    const inst = mountPanel(ctx, body, slot, 'pinned')
+    inst.onChart(ws.chart)
+    const offActive = ws.on('cell:active', () => inst.onChart(ws.chart))
+    col = { el, inst, offActive, mo }
+    pinCol = el
+    ctx.togglePanel(WATCHLIST_PANEL_ID, false)
+    inst.onOpen()
+    ws.resize()
+
+    // its left edge resizes it, the way a docked panel's does
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button > 0) return
+      e.preventDefault()
+      const x0 = e.clientX
+      const w0 = el.getBoundingClientRect().width
+      grip.dataset.dragging = '1'
+      let raf = 0
+      const mv = (ev: PointerEvent) => {
+        width = clampW(w0 + (x0 - ev.clientX))
+        if (raf) return
+        raf = requestAnimationFrame(() => {
+          raf = 0
+          el.style.width = `${width}px`
+          ws.resize()
+        })
+      }
+      const up = () => {
+        doc.removeEventListener('pointermove', mv)
+        doc.removeEventListener('pointerup', up)
+        doc.removeEventListener('pointercancel', up)
+        delete grip.dataset.dragging
+        try {
+          localStorage.setItem(PIN_W_KEY, String(width))
+        } catch {
+          /* private mode */
+        }
+      }
+      doc.addEventListener('pointermove', mv)
+      doc.addEventListener('pointerup', up)
+      doc.addEventListener('pointercancel', up)
+    })
+  }
+
+  function close(reopenDock: boolean) {
+    if (!col) return
+    col.mo.disconnect()
+    col.offActive()
+    col.inst.destroy()
+    col.el.remove()
+    col = null
+    pinCol = null
+    ws.resize()
+    // unpinned by hand: the list goes back to the dock, open, rather than vanishing
+    if (reopenDock) ws.context().togglePanel(WATCHLIST_PANEL_ID, true)
+  }
+
+  const sync = () => {
+    if (pinned && !col) open()
+    else if (!pinned && col) close(true)
+  }
+  pinListeners.add(sync)
+  pinAvailable = true
+  pinChanged()
+  return () => {
+    pinListeners.delete(sync)
+    close(false)
+    pinAvailable = false
+    pinChanged()
+  }
 }

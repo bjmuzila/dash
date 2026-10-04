@@ -48,6 +48,8 @@ import {
   removeSymbol,
   setActive,
   setGroup,
+  sectionsOf,
+  UNSORTED,
   watchlistSyncStatus,
   type SymbolRow,
 } from './store'
@@ -418,11 +420,9 @@ class AdvancedView {
     if (mode === 'type') {
       for (const name of ['Index & Futures', 'ETFs', 'Stocks']) for (const s of l.symbols) if (typeName(s) === name) put(name, s)
     } else {
-      for (const s of l.symbols) {
-        const g = l.groups?.[s]
-        if (g) put(g, s)
-      }
-      for (const s of l.symbols) if (!l.groups?.[s]) put('Unsorted', s)
+      // the list's own section order (store.ts sectionsOf), the same the docked panel shows
+      for (const name of sectionsOf(l)) for (const s of l.symbols) if (l.groups?.[s] === name) put(name, s)
+      for (const s of l.symbols) if (!l.groups?.[s]) put(UNSORTED, s)
     }
     return order.map((name) => ({ name, syms: by.get(name)! }))
   }
@@ -1188,7 +1188,7 @@ class AdvancedView {
     const doc = this.doc
     this.pop.dataset.kind = 'row'
     const l = activeList()
-    const names = [...new Set(Object.values(l.groups ?? {}))].sort()
+    const names = sectionsOf(l)
     const cur = l.groups?.[sym] ?? null
     const item = (label: string, fn: () => void, cls = '') => {
       const b = btn(doc, `cb-wla-item-btn ${cls}`, label)

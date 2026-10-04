@@ -26011,3 +26011,66 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
     - walls: CORE on the call wall, call wall between spot and the Volt, call wall beyond the Volt, CORE on the put wall, Volt below spot, no spot.
   - `tsc` shows only the 5 existing errors. `check:theme` and `check:casing` pass, and `vite build` is OK.
   - Headless runs pass: Level Alerts, rail, Key Levels in replay, the Indicators dialog, replay desktop and phone, and the Level Log page on the Voltick theme with no errors.
+
+## 2026-10-04 - v3 Vela: whale bubbles no longer open the Whales page
+
+- **Removed:** clicking a Whale Prints bubble on a Vela chart no longer jumps to `/whales`. The bubble stays on the chart, and the hover card (side, net, time, and one line per print) is the detail.
+- **Also removed:** the click handlers in `whaleLayer.ts` and the link data behind them in `flow.ts` (the bubble's `link` and the row's `osi`). `pages/vela/nav.ts` is now unused. The Whales page still opens from a `?ticker=…&day=…&osi=…` link.
+- **Files:** `cbedge-v3/src/pages/vela/studies/whaleLayer.ts`, `cbedge-v3/src/pages/vela/studies/flow.ts`
+- **Checks:**
+  - `tsc` shows only the 5 existing errors. `check:theme` passes and `vite build` is OK.
+  - Headless run: hovering a bubble shows the card, and clicking it stays on `/v3/vela`. The replay run with whale prints passes with no errors.
+
+## 2026-10-04 - v3 Vela: watchlist sections and a 📌 pin
+
+- **Sections:**
+  - A list can have named sections: ⋮ → **New section**, or a row's new **⋯** → Move to section → **+ New section…**.
+  - Each section is a header row:
+    - ▾ folds it (remembered per list);
+    - its ⋯ menu renames it, moves it up or down, or deletes it. Deleting keeps its symbols, under **Unsorted**.
+  - A symbol in no section is under **Unsorted**. That block is always shown once sections exist, so there is somewhere to drop a symbol.
+  - Drag ⠿ onto another section to move a symbol there. Nothing can be dropped above the first section.
+  - A column sort applies **inside each section**: Symbol ↑ is A to Z per section. On a sorted list, a drag changes only the section and keeps the sort.
+  - The sections are saved on the list and synced with the account as `o` in the `vela-watchlists` preset. The Advanced view shows the same sections in the same order. Up to 20 sections per list. The name "Unsorted" is reserved.
+- **Pin:**
+  - 📌 in the panel header moves the watchlist out of Vela's one-at-a-time panel dock into its own column, the last one in the chart row.
+  - It stays open while Data window, Level Alerts, Scripts and the other panels open and close.
+  - Its left edge resizes it (300 to 560px), and it is still pinned after a reload.
+  - The topbar Watchlist button flashes the pinned column instead of opening a second copy.
+  - 📌 again puts it back in the dock, open. There is no pin on the phone.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/watchlist/`: `store.ts`, `panel.ts`, `advanced.ts`
+  - `cbedge-v3/src/pages/vela/vela.css`
+  - `cbedge-v3/src/pages/Vela.tsx` (`bindPinnedWatchlist`)
+- **Checks:**
+  - `tsc` shows only the 5 existing errors. `check:theme` and `check:casing` pass, and `vite build` is OK.
+  - Headless run covering:
+    - creating, renaming, moving, folding and deleting sections;
+    - refusing "Unsorted" as a name;
+    - Symbol ↑/↓ sorting inside each section;
+    - dragging into a section, into Unsorted, and to the top;
+    - reloading.
+  - Headless run of the pin: it stays while Data window is open, the topbar button keeps it pinned, picking a symbol works, it resizes and keeps its width after a reload, and unpinning reopens the dock.
+  - The existing watchlist, Advanced view and phone runs pass with no errors.
+
+## 2026-10-04 - v3 Vela: GEX Rail goes left or right, shows every strike, and moves to the next session after the close
+
+- **Position (new input):** Right (the default, as before) or Left.
+  - On the left, the rail is the chart's left edge. Each row is mirrored, so the tags sit against the plot and the bar grows left, away from it.
+  - The symbol chip, watermark and mark step right of the rail.
+- **Every strike:** on the Voltick theme the rail had been only the 4 named levels. It now shows every strike the column carries, with ★ Volt, ◆ Coil, ↘ Reversal and ↯ Surge tagged on theirs. Rows that would overlap still drop the small strikes first.
+- **After the close (live):**
+  - From 16:00 ET, the rail reads the next session's gamma. This is the newest column recorded under the next expiry, found from the history route's `recordedExpiries` for the closed day and every day since.
+  - Friday after 4pm is Monday's gamma, not Friday's. The header then reads `SPX MON 17:00`, and its tooltip names the expiry.
+  - If nothing has been recorded for the next expiry yet, it shows the session that just closed. A replay is unchanged.
+  - `gexHistoryDayUrl` gains an optional `fallback` flag (default on, so no other caller changes) for reading a date under exactly one expiry. `parseGexHistoryMeta` reads the payload's `expiry` and `recordedExpiries`.
+- **Fixed:** removing the rail used to clear one side of Vela's inline `inset: 0` on the chart box, which can collapse the chart. It now sets `0px`.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/studies/`: `rail.ts`, `ladder.ts`, `index.ts`
+  - `cbedge-v3/src/board/gexCandles/gexHistory.ts`
+  - `cbedge-v3/src/pages/vela/vela.css`
+- **Checks:**
+  - `tsc` shows only the 5 existing errors. `check:theme` passes and `vite build` is OK.
+  - Headless run on a Sunday against a mock with the real route's expiry rules: the rail shows the Monday expiry's columns recorded after Friday's close (31 strikes, 4 tagged).
+  - Switching Position to Left moves the rail and the chart box. Removing the study gives the chart its full width back.
+  - The replay, Indicators, Level Alerts, theme and Level Log runs pass with no errors.

@@ -18,7 +18,7 @@ import { registerScripts } from '@/pages/vela/script/panel'
 import { registerStudies } from '@/pages/vela/studies'
 import { bindTimelineMarks } from '@/pages/vela/marks'
 import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
-import { registerWatchlist } from '@/pages/vela/watchlist/panel'
+import { bindPinnedWatchlist, registerWatchlist } from '@/pages/vela/watchlist/panel'
 import { bindReplay, openPicker, registerReplay } from '@/pages/vela/replay/replay'
 import { bindStudyOrder } from '@/pages/vela/studyOrder'
 import { bindLevelAlerts, registerLevelAlerts } from '@/pages/vela/levels/levelAlertsEntry'
@@ -376,6 +376,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     const unbindReplay = bindReplay(ws)
     const unbindOrder = bindStudyOrder(ws)
     const unbindLevels = bindLevelAlerts(ws)
+    // the watchlist's 📌 column (desktop): open again after a reload when it was pinned
+    const unbindPinnedList = bindPinnedWatchlist(ws, onPhone)
     const unbindSetups = bindSetups(ws)
     if (replayOnOpenRef.current) setTimeout(openPicker, 400)
     const unbindShot = bindShotWorkspace(ws)
@@ -418,6 +420,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindReplay()
       unbindOrder()
       unbindLevels()
+      unbindPinnedList()
       unbindSetups()
       wsRef.current = null
       setWsState(null)

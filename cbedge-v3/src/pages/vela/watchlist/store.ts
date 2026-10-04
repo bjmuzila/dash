@@ -6,9 +6,12 @@
 // LISTS   in this browser (localStorage `cb-v3-vela-watchlists`), any number
 //         up to MAX_LISTS, each an ordered set of tickers. Signed in, they are
 //         merged with the account's copy (/api/page-preset, page
-//         `vela-watchlists`, one preset per list `{ n, s, u }`, a deleted list
-//         a tombstone `{ d: 1, u }`) — newest edit wins, per list — so every
-//         device has them. Signed out they stay in this browser.
+//         `vela-watchlists`, one preset per list `{ n, s, g, o, u }`, a deleted
+//         list a tombstone `{ d: 1, u }`) — newest edit wins, per list — so
+//         every device has them. Signed out they stay in this browser.
+// SECTIONS a list's own named sections, in the order you set (`o`, kept even
+//         while empty), and which section each symbol is in (`g`); a symbol in
+//         none is Unsorted. A sort orders the symbols INSIDE each section.
 //         Which list is open is the workspace's (panel.ts persistence), so a
 //         saved layout reopens on its own list.
 // QUOTES  /api/quotes-batch (last, change, change %; extended-hours price
@@ -28,8 +31,10 @@ export interface WatchList {
   id: string
   name: string
   symbols: string[]
-  /** The Advanced view's own sections: symbol → section name (absent = unsorted). */
+  /** Sections: symbol → section name (absent = Unsorted). The docked panel and the Advanced view share them. */
   groups?: Record<string, string>
+  /** The sections in display order, empty ones included (a name only in `groups` is appended). */
+  sections?: string[]
   /** Last edit (ms) — the merge key. */
   u: number
 }
@@ -37,8 +42,10 @@ export interface WatchList {
 export type SortKey = 'symbol' | 'price' | 'change' | 'pct' | 'volume'
 export interface ViewPrefs {
   cols: { price: boolean; change: boolean; pct: boolean; volume: boolean }
-  /** Per list: the column it is sorted by, or none (the list's own order). */
+  /** Per list: the column it is sorted by, or none (the list's own order). Applies inside each section. */
   sort: Record<string, { key: SortKey; dir: 1 | -1 } | undefined>
+  /** Per list: the docked panel's folded sections. */
+  folded?: Record<string, string[]>
 }
 
 export interface Quote {
@@ -54,6 +61,9 @@ const PREFS_KEY = 'cb-v3-vela-watchlist-view'
 const PAGE = 'vela-watchlists'
 export const MAX_LISTS = 10
 export const MAX_SYMBOLS = 200
+export const MAX_SECTIONS = 20
+/** The name a symbol in no section is shown under. Not a section of its own. */
+export const UNSORTED = 'Unsorted'
 const DEFAULT_SYMBOLS = ['SPX', 'ES', 'NQ', 'SPY', 'QQQ', 'VIX', 'NVDA', 'TSLA', 'AAPL']
 const TOMBSTONE_MS = 30 * 86_400_000
 
@@ -81,7 +91,8 @@ function read(): Saved {
           .filter((l): l is WatchList => !!l && typeof l.id === 'string' && typeof l.name === 'string' && Array.isArray(l.symbols))
           .map((l) => {
             const symbols = dedupe(l.symbols)
-            return { id: l.id, name: l.name.slice(0, 60), symbols, groups: cleanGroups(l.groups, symbols), u: Number(l.u) || 0 }
+            const groups = cleanGroups(l.groups, symbols)
+            return { id: l.id, name: l.name.slice(0, 60), symbols, groups, sections: cleanSections(l.sections, groups), u: Number(l.u) || 0 }
           })
       : []
     if (lists.length) return { v: 1, lists, active: typeof raw?.active === 'string' && lists.some((l) => l.id === raw.active) ? raw.active : lists[0]!.id }
@@ -98,6 +109,30 @@ function cleanGroups(g: unknown, symbols: readonly string[]): Record<string, str
     if (symbols.includes(k) && typeof v === 'string' && v.trim()) out[k] = v.trim().slice(0, 40)
   }
   return Object.keys(out).length ? out : undefined
+}
+/** A section name as the lists keep it (trimmed, 40 characters; never the Unsorted label). */
+function sectionName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const n = raw.trim().slice(0, 40)
+  return n && n.toLowerCase() !== UNSORTED.toLowerCase() ? n : null
+}
+function cleanSections(raw: unknown, groups: Record<string, string> | undefined): string[] | undefined {
+  const out: string[] = []
+  for (const x of Array.isArray(raw) ? raw : []) {
+    const n = sectionName(x)
+    if (n && !out.includes(n) && out.length < MAX_SECTIONS) out.push(n)
+  }
+  for (const n of Object.values(groups ?? {})) if (!out.includes(n)) out.push(n)
+  return out.length ? out : undefined
+}
+/** A list's sections, in display order: its own order, then any name only a symbol carries. */
+export function sectionsOf(l: WatchList): string[] {
+  const out = (l.sections ?? []).slice()
+  for (const s of l.symbols) {
+    const g = l.groups?.[s]
+    if (g && !out.includes(g)) out.push(g)
+  }
+  return out
 }
 function dedupe(xs: unknown[]): string[] {
   const out: string[] = []
@@ -176,21 +211,84 @@ export function removeSymbol(sym: string): void {
   const l = activeList()
   edit(l.id, (x) => {
     const groups = { ...(x.groups ?? {}) }
+    // the section stays (sections live on while empty)
+    const sections = sectionsOf(x)
     delete groups[sym]
-    return { ...x, symbols: x.symbols.filter((s) => s !== sym), groups: Object.keys(groups).length ? groups : undefined }
+    return { ...x, symbols: x.symbols.filter((s) => s !== sym), groups: Object.keys(groups).length ? groups : undefined, sections: sections.length ? sections : undefined }
   })
 }
-/** Put a symbol of the open list in a section (null: take it out of any). */
+/** Put a symbol of the open list in a section (null: take it out of any). A new name becomes a section. */
 export function setGroup(sym: string, name: string | null): void {
   const l = activeList()
   if (!l.symbols.includes(sym)) return
+  edit(l.id, (x) => withGroup(x, sym, name))
+}
+function withGroup(x: WatchList, sym: string, name: string | null): WatchList {
+  const groups = { ...(x.groups ?? {}) }
+  const n = sectionName(name)
+  const sections = sectionsOf(x)
+  if (n) {
+    groups[sym] = n
+    if (!sections.includes(n)) sections.push(n)
+  } else delete groups[sym]
+  return { ...x, groups: Object.keys(groups).length ? groups : undefined, sections: sections.length ? sections : undefined }
+}
+/**
+ * A drag in the docked panel: the symbol lands in `section` (null: Unsorted),
+ * and, when the list is not sorted, the list takes `order` (the rows as they now
+ * stand). One edit, so one save and one sync.
+ */
+export function arrange(sym: string, section: string | null, order: string[] | null): void {
+  const l = activeList()
+  if (!l.symbols.includes(sym)) return
   edit(l.id, (x) => {
-    const groups = { ...(x.groups ?? {}) }
-    const n = name?.trim().slice(0, 40)
-    if (n) groups[sym] = n
-    else delete groups[sym]
-    return { ...x, groups: Object.keys(groups).length ? groups : undefined }
+    const next = withGroup(x, sym, section)
+    if (!order) return next
+    const keep = order.filter((s) => x.symbols.includes(s))
+    for (const s of x.symbols) if (!keep.includes(s)) keep.push(s)
+    return { ...next, symbols: keep }
   })
+}
+/** A new, empty section at the end of the open list (false: no name, taken, or 20 already). */
+export function addSection(raw: string): boolean {
+  const n = sectionName(raw)
+  const l = activeList()
+  const have = sectionsOf(l)
+  if (!n || have.includes(n) || have.length >= MAX_SECTIONS) return false
+  edit(l.id, (x) => ({ ...x, sections: [...sectionsOf(x), n] }))
+  return true
+}
+/** Rename a section; its symbols go with it (false: no name, or the name is taken). */
+export function renameSection(from: string, raw: string): boolean {
+  const n = sectionName(raw)
+  const l = activeList()
+  if (!n || (n !== from && sectionsOf(l).includes(n))) return false
+  edit(l.id, (x) => {
+    const groups: Record<string, string> = {}
+    for (const [s, g] of Object.entries(x.groups ?? {})) groups[s] = g === from ? n : g
+    return { ...x, groups: Object.keys(groups).length ? groups : undefined, sections: sectionsOf(x).map((g) => (g === from ? n : g)) }
+  })
+  return true
+}
+/** Delete a section; its symbols stay on the list, Unsorted. */
+export function removeSection(name: string): void {
+  const l = activeList()
+  edit(l.id, (x) => {
+    const groups: Record<string, string> = {}
+    for (const [s, g] of Object.entries(x.groups ?? {})) if (g !== name) groups[s] = g
+    const sections = sectionsOf(x).filter((g) => g !== name)
+    return { ...x, groups: Object.keys(groups).length ? groups : undefined, sections: sections.length ? sections : undefined }
+  })
+}
+/** Move a section one place up (-1) or down (+1). */
+export function moveSection(name: string, dir: -1 | 1): void {
+  const l = activeList()
+  const order = sectionsOf(l)
+  const i = order.indexOf(name)
+  const j = i + dir
+  if (i < 0 || j < 0 || j >= order.length) return
+  ;[order[i], order[j]] = [order[j]!, order[i]!]
+  edit(l.id, (x) => ({ ...x, sections: order }))
 }
 /** The user's own order (a drag) — it clears the list's sort. */
 export function reorder(symbols: string[]): void {
@@ -230,6 +328,7 @@ function readPrefs(): ViewPrefs {
     const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? 'null') as Partial<ViewPrefs> | null
     if (raw?.cols) d.cols = { ...d.cols, ...raw.cols }
     if (raw?.sort && typeof raw.sort === 'object') d.sort = raw.sort
+    if (raw?.folded && typeof raw.folded === 'object') d.folded = raw.folded
   } catch {
     /* defaults */
   }
@@ -248,6 +347,17 @@ function savePrefs(): void {
 export function setColumn(col: keyof ViewPrefs['cols'], on: boolean): void {
   prefs = { ...prefs, cols: { ...prefs.cols, [col]: on } }
   savePrefs()
+}
+/** Fold or unfold one section of a list in the docked panel. */
+export function setFolded(listId: string, section: string, folded: boolean): void {
+  const cur = new Set(prefs.folded?.[listId] ?? [])
+  if (folded) cur.add(section)
+  else cur.delete(section)
+  prefs = { ...prefs, folded: { ...(prefs.folded ?? {}), [listId]: [...cur] } }
+  savePrefs()
+}
+export function isFolded(listId: string, section: string): boolean {
+  return !!prefs.folded?.[listId]?.includes(section)
 }
 export function setSort(listId: string, s: { key: SortKey; dir: 1 | -1 } | undefined): void {
   const sort = { ...prefs.sort }
@@ -278,6 +388,8 @@ interface Remote {
   n?: string
   s?: unknown[]
   g?: unknown
+  /** The sections, in order. */
+  o?: unknown
   u: number
   d?: number
 }
@@ -347,10 +459,12 @@ async function syncOnce(): Promise<void> {
     }
     if (l && (!r || r.d || l.u >= r.u)) {
       merged.push(l)
-      if (!r || r.d || l.u > r.u) writes.push([id, { n: l.name, s: l.symbols, ...(l.groups ? { g: l.groups } : {}), u: l.u || Date.now() }])
+      if (!r || r.d || l.u > r.u)
+        writes.push([id, { n: l.name, s: l.symbols, ...(l.groups ? { g: l.groups } : {}), ...(l.sections?.length ? { o: l.sections } : {}), u: l.u || Date.now() }])
     } else if (r && !r.d) {
       const symbols = dedupe(r.s ?? [])
-      merged.push({ id, name: String(r.n ?? 'Watchlist').slice(0, 60), symbols, groups: cleanGroups(r.g, symbols), u: r.u })
+      const groups = cleanGroups(r.g, symbols)
+      merged.push({ id, name: String(r.n ?? 'Watchlist').slice(0, 60), symbols, groups, sections: cleanSections(r.o, groups), u: r.u })
       pulled = true
     }
   }
