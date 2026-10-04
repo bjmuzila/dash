@@ -22,6 +22,9 @@
 //   · `#rrggbb` / `#rrggbbaa` colour literals, "…" and '…' strings
 //   · `cond ? a : b`, `and or not`, `== != < <= > >=`, `+ - * / %`, history
 //     `x[1]`, calls with positional and name=value arguments
+//   · user-defined types (`type Point` + indented fields, `Point.new(…)`,
+//     `p.x`, `p.x := …`), `enum` blocks, `method f(Point this, …) =>`, and
+//     `.field` / `.method()` on any expression — `array.get(pts, 0).price`
 // The CB Script spelling that came first (`input("Fast", 9)`, `plot(x,
 // color=gold)`, `marker(…)`) is the same grammar; what every name means is
 // runtime.ts. `^` (power) is a CB extra.
@@ -45,14 +48,29 @@ export type Node =
   | { k: 'for'; v: string; from: Node; to: Node; by: Node | null; body: Stmt[]; line: number }
   | { k: 'while'; c: Node; body: Stmt[]; line: number }
   | { k: 'forin'; idx: string | null; v: string; of: Node; body: Stmt[]; line: number }
+  /** `expr.name` — a field of a user-defined type (or a chart.point). */
+  | { k: 'field'; x: Node; name: string; line: number }
+  /** `expr.name(…)` — a method on any value (a field, a call's result). */
+  | { k: 'mcall'; recv: Node; name: string; args: Node[]; named: Record<string, Node>; line: number }
 
 export interface FuncDef {
   k: 'func'
   name: string
   params: string[]
   defaults: (Node | null)[]
+  /** Each parameter's declared type as written (`float`, `Point`, `array<float>`), or null. */
+  types: (string | null)[]
+  /** `method f(Type this, …)`: callable as `x.f(…)` on a value of the first parameter's type. */
+  method?: boolean
   body: Stmt[]
   line: number
+}
+
+/** One field of a `type` block: `float price = 0.0`. */
+export interface TypeField {
+  name: string
+  type: string
+  def: Node | null
 }
 
 export type Stmt =
@@ -62,6 +80,8 @@ export type Stmt =
   | { k: 'expr'; x: Node; line: number }
   | { k: 'break'; line: number }
   | { k: 'continue'; line: number }
+  | { k: 'type'; name: string; fields: TypeField[]; line: number }
+  | { k: 'enum'; name: string; fields: { name: string; title: string | null }[]; line: number }
   | FuncDef
 
 export interface Program {
@@ -98,7 +118,7 @@ interface LLine {
 }
 
 // Longest first: `=>` before `=`, `:=` before `:`.
-const OPS = ['=>', '==', '!=', '<=', '>=', ':=', '+=', '-=', '*=', '/=', '%=', '+', '-', '*', '/', '%', '^', '<', '>', '=', '?', ':', ',', '(', ')', '[', ']', ';']
+const OPS = ['=>', '==', '!=', '<=', '>=', ':=', '+=', '-=', '*=', '/=', '%=', '+', '-', '*', '/', '%', '^', '<', '>', '=', '?', ':', ',', '(', ')', '[', ']', ';', '.']
 
 const ESC: Record<string, string> = { n: '\n', t: '\t', r: '' }
 
@@ -191,6 +211,10 @@ function opensBlock(l: LLine): boolean {
   if (last && last.t === 'op' && last.v === '=>') return true
   const first = l.toks[0]
   if (first && first.t === 'id' && first.v === 'else') return true
+  // `type Point` / `enum Side` / `export type Point` — their fields are the block
+  const decl = first && first.t === 'id' && first.v === 'export' ? 1 : 0
+  const kw = l.toks[decl]
+  if (kw && kw.t === 'id' && (kw.v === 'type' || kw.v === 'enum') && l.toks[decl + 1]?.t === 'id') return true
   return l.toks.some((t) => t.t === 'id' && BLOCK_WORDS.has(t.v))
 }
 
@@ -221,11 +245,16 @@ function lex(src: string): LLine[] {
   const split: LLine[] = []
   for (const l of raw) {
     let d = 0
+    let g = 0 // inside generic type arguments: map<string, float> is one type, not two statements
     let part: Tok[] = []
+    let prev: Tok | null = null
     for (const t of l.toks) {
       if (t.t === 'op' && (t.v === '(' || t.v === '[')) d++
       if (t.t === 'op' && (t.v === ')' || t.v === ']')) d--
-      if (t.t === 'op' && (t.v === ';' || t.v === ',') && d === 0) {
+      if (t.t === 'op' && t.v === '<' && prev?.t === 'id' && /(^|\.)(map|array|matrix|new)$/.test(prev.v)) g++
+      else if (t.t === 'op' && t.v === '>' && g > 0) g--
+      prev = t
+      if (t.t === 'op' && (t.v === ';' || t.v === ',') && d === 0 && g === 0) {
         if (part.length) split.push({ indent: l.indent, toks: part, line: part[0]!.line })
         part = []
         continue
@@ -347,14 +376,46 @@ export function parse(src: string): Program {
     return s
   }
 
-  const funcDef = (): FuncDef => {
+  /**
+   * A type written in front of a name — `float`, `series int`, `Point`, `float[]`,
+   * `array<Point>`, `map<string, float>`, `chart.point` — read and returned as text,
+   * or null when the next token is the name itself.
+   */
+  const typePrefix = (): string | null => {
+    const parts: string[] = []
+    for (;;) {
+      const t = peek()
+      if (t.t !== 'id' || RESERVED.has(t.v)) break
+      if (isOp('[', 1) && isOp(']', 2) && peek(3).t === 'id') {
+        parts.push(`${t.v}[]`)
+        p += 3
+        continue
+      }
+      const g = genericLen(1)
+      if (g && peek(1 + g).t === 'id') {
+        parts.push(t.v === 'map' ? 'map' : 'array')
+        p += 1 + g
+        continue
+      }
+      if (peek(1).t === 'id') {
+        parts.push(t.v)
+        next()
+        continue
+      }
+      break
+    }
+    return parts.length ? parts.filter((x) => x !== 'series' && x !== 'simple' && x !== 'const').join(' ') || parts[parts.length - 1]! : null
+  }
+
+  const funcDef = (isMethod = false): FuncDef => {
     const line = curLine
     const name = expectId()
     expectOp('(')
     const params: string[] = []
     const defaults: (Node | null)[] = []
+    const types: (string | null)[] = []
     while (!isOp(')')) {
-      while (peek().t === 'id' && TYPE_WORDS.has((peek() as { v: string }).v) && peek(1).t === 'id') next()
+      types.push(typePrefix())
       params.push(expectId())
       if (isOp('=')) {
         next()
@@ -365,18 +426,87 @@ export function parse(src: string): Program {
     }
     expectOp(')')
     expectOp('=>')
+    if (isMethod && !params.length) throw new ScriptError(`method ${name}() needs the value it works on as its first parameter`, line)
     let body: Stmt[]
     if (peek().t === 'eol') body = block(stmtIndent)
     else body = [stmtBody()]
-    return { k: 'func', name, params, defaults, body, line }
+    return { k: 'func', name, params, defaults, types, ...(isMethod ? { method: true } : {}), body, line }
+  }
+
+  /** The indented lines under `type X` / `enum X`, each handed to `each` with its tokens loaded. */
+  const fieldLines = (parent: number, what: string, each: () => void) => {
+    const L = lines[li]
+    if (!L || L.indent <= parent) throw new ScriptError(`${what} needs its fields on indented lines below it`, curLine)
+    const ind = L.indent
+    while (li < lines.length && lines[li]!.indent >= ind) {
+      if (lines[li]!.indent > ind) throw new ScriptError('this line is indented deeper than the fields above it', lines[li]!.line)
+      load(li++)
+      each()
+      expectEol()
+    }
+    toks = []
+    p = 0
+  }
+
+  const typeDecl = (): Stmt => {
+    const line = curLine
+    const indent = stmtIndent
+    next() // type
+    const name = expectId()
+    expectEol()
+    const fields: TypeField[] = []
+    fieldLines(indent, `type ${name}`, () => {
+      if (isWord('varip') || isWord('var')) next()
+      const type = typePrefix() ?? 'float'
+      const fname = expectId()
+      let def: Node | null = null
+      if (isOp('=')) {
+        next()
+        def = expr()
+      }
+      if (fields.some((f) => f.name === fname)) throw new ScriptError(`type ${name} has two fields named "${fname}"`, curLine)
+      fields.push({ name: fname, type, def })
+    })
+    return { k: 'type', name, fields, line }
+  }
+
+  const enumDecl = (): Stmt => {
+    const line = curLine
+    const indent = stmtIndent
+    next() // enum
+    const name = expectId()
+    expectEol()
+    const fields: { name: string; title: string | null }[] = []
+    fieldLines(indent, `enum ${name}`, () => {
+      const fname = expectId()
+      let title: string | null = null
+      if (isOp('=')) {
+        next()
+        const t = next()
+        if (t.t !== 'str') throw new ScriptError('an enum field\'s title is a "string"', t.line)
+        title = t.v
+      }
+      fields.push({ name: fname, title })
+    })
+    return { k: 'enum', name, fields, line }
   }
 
   function stmtBody(): Stmt {
     const t0 = peek()
     const line = t0.line
     if (t0.t === 'id') {
-      if (t0.v === 'import' || t0.v === 'export' || ((t0.v === 'method' || t0.v === 'type' || t0.v === 'enum') && peek(1).t === 'id'))
-        throw new ScriptError(`"${t0.v}" (libraries, methods and user types) isn't supported`, line)
+      if (t0.v === 'import') throw new ScriptError('"import" (TradingView libraries) isn\'t supported — paste the library\'s functions into the script instead', line)
+      if (t0.v === 'export' && peek(1).t === 'id') {
+        // a library's `export f(x) =>` / `export type T` — the word changes nothing here
+        next()
+        return stmtBody()
+      }
+      if (t0.v === 'type' && peek(1).t === 'id' && peek(2).t === 'eol') return typeDecl()
+      if (t0.v === 'enum' && peek(1).t === 'id' && peek(2).t === 'eol') return enumDecl()
+      if (t0.v === 'method' && peek(1).t === 'id' && isOp('(', 2)) {
+        next()
+        return funcDef(true)
+      }
       if (t0.v === 'break' || t0.v === 'continue') {
         next()
         return { k: t0.v, line }
@@ -408,8 +538,12 @@ export function parse(src: string): Program {
       isVar = true
     }
     // type words in front of a declaration: `float x = …`, `series int n = …`,
-    // `float[] xs = …`, `array<float> xs = …`, `map<string, float> m = …`
-    while (peek().t === 'id' && TYPE_WORDS.has((peek() as { v: string }).v)) {
+    // `float[] xs = …`, `array<float> xs = …`, `map<string, float> m = …`, and a
+    // user type, `Point p = Point.new()` / `Point[] pts = …`
+    for (;;) {
+      const t = peek()
+      if (t.t !== 'id' || RESERVED.has(t.v)) break
+      const word = TYPE_WORDS.has(t.v)
       if (isOp('[', 1) && isOp(']', 2) && peek(3).t === 'id') {
         p += 3
         continue
@@ -419,7 +553,12 @@ export function parse(src: string): Program {
         p += 1 + g
         continue
       }
-      if (peek(1).t === 'id') next()
+      // `Point p =` — any name followed by a name and an assignment is a type
+      const assignAfter = (o: number) => {
+        const x = peek(o)
+        return x.t === 'op' && ASSIGN_OPS.has(x.v)
+      }
+      if (peek(1).t === 'id' && (word || assignAfter(2))) next()
       else break
     }
     const a = peek()
@@ -581,28 +720,7 @@ export function parse(src: string): Program {
       const g = genericLen(0)
       if (g && isOp('(', g)) p += g
       if (isOp('(')) {
-        next()
-        const args: Node[] = []
-        const named: Record<string, Node> = {}
-        if (!isOp(')')) {
-          for (;;) {
-            const a = peek()
-            const b = peek(1)
-            if (a.t === 'id' && b.t === 'op' && b.v === '=') {
-              p += 2
-              named[a.v] = expr()
-            } else {
-              if (Object.keys(named).length) throw new ScriptError('positional arguments must come before name=value ones', a.line)
-              args.push(expr())
-            }
-            if (isOp(',')) {
-              next()
-              continue
-            }
-            break
-          }
-        }
-        expectOp(')')
+        const { args, named } = callArgs()
         return { k: 'call', name: t.v, args, named, line: t.line }
       }
       if (RESERVED.has(t.v) && t.v !== 'na') throw new ScriptError(`"${t.v}" can't be used here`, t.line)
@@ -612,15 +730,57 @@ export function parse(src: string): Program {
     throw new ScriptError(`unexpected "${t.v}"`, t.line)
   }
 
+  /** `( a, b, name = c )` — the cursor on the "(". */
+  function callArgs(): { args: Node[]; named: Record<string, Node> } {
+    expectOp('(')
+    const args: Node[] = []
+    const named: Record<string, Node> = {}
+    if (!isOp(')')) {
+      for (;;) {
+        const a = peek()
+        const b = peek(1)
+        if (a.t === 'id' && b.t === 'op' && b.v === '=') {
+          p += 2
+          named[a.v] = expr()
+        } else {
+          if (Object.keys(named).length) throw new ScriptError('positional arguments must come before name=value ones', a.line)
+          args.push(expr())
+        }
+        if (isOp(',')) {
+          next()
+          continue
+        }
+        break
+      }
+    }
+    expectOp(')')
+    return { args, named }
+  }
+
   const postfix = (): Node => {
     let x = primary()
-    while (isOp('[')) {
-      const t = next()
-      const at = expr()
-      expectOp(']')
-      x = { k: 'index', x, at, line: t.line }
+    for (;;) {
+      if (isOp('[')) {
+        const t = next()
+        const at = expr()
+        expectOp(']')
+        x = { k: 'index', x, at, line: t.line }
+        continue
+      }
+      // `.field` / `.method(…)` after a call, an index or a bracket: f().x, pts.get(0).price
+      if (isOp('.') && peek(1).t === 'id') {
+        const t = next()
+        const parts = (next() as { v: string }).v.split('.')
+        for (let k = 0; k < parts.length - 1; k++) x = { k: 'field', x, name: parts[k]!, line: t.line }
+        const last = parts[parts.length - 1]!
+        if (isOp('(')) {
+          const { args, named } = callArgs()
+          x = { k: 'mcall', recv: x, name: last, args, named, line: t.line }
+        } else x = { k: 'field', x, name: last, line: t.line }
+        continue
+      }
+      return x
     }
-    return x
   }
 
   const power = (): Node => {

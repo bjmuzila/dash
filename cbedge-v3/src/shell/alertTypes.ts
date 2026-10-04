@@ -35,6 +35,7 @@ export type AlertKind =
   | 'ibBreak'
   | 'whale'
   | 'gexChangeTop'
+  | 'script'
 
 export interface AlertType {
   id: AlertKind
@@ -129,6 +130,20 @@ export const ALERT_TYPES: AlertType[] = [
     color: T.green,
     serverKey: 'gex_change_top',
   },
+  // ── YOUR OWN SCRIPTS ───────────────────────────────────────────────────────
+  // Not the engine's: alertcondition() / alert() in a CB Script (Pine) running
+  // on a Vela chart in this browser, once its alerts are switched on in the
+  // Scripts panel (shell/scriptAlerts.ts, pages/vela/script/alerts.ts). No
+  // server switch exists for it, so the master state always reads it as live.
+  {
+    id: 'script',
+    short: 'Script',
+    name: 'Your script alerts',
+    hint: 'alertcondition() / alert() from scripts on your Vela charts',
+    tag: 'SCRIPT',
+    color: 'var(--color-accent)',
+    serverKey: 'cb_script',
+  },
 ]
 
 export const TYPE_BY_ID: Record<AlertKind, AlertType> = Object.fromEntries(
@@ -176,6 +191,8 @@ export interface AlertItem {
   bias?: 'bullish' | 'bearish'
   /** ISO-ish clock string for now; a timestamp once this is wired. */
   at: string
+  /** Epoch ms, when known — what orders the feed's local (script) rows among the server's. */
+  ts?: number
 }
 
 // ── Per-browser state ───────────────────────────────────────────────────────
@@ -219,7 +236,22 @@ const ALL_IDS = ALERT_TYPES.map((t) => t.id)
 const SHOWN_EVENT = 'alerts:shown-change'
 let shownCache: AlertKind[] | null = null
 
-export const readShown = (): AlertKind[] => shownCache ?? readSet(SHOWN_KEY) ?? ALL_IDS
+/** A chip set saved before the Script type existed gets it ON, once — after that it is the user's choice. */
+const SCRIPT_CHIP_KEY = 'alerts:shown-script'
+function withScriptChip(ids: AlertKind[] | null): AlertKind[] | null {
+  if (!ids || ids.includes('script')) return ids
+  try {
+    if (window.localStorage.getItem(SCRIPT_CHIP_KEY)) return ids
+    window.localStorage.setItem(SCRIPT_CHIP_KEY, '1')
+    const next: AlertKind[] = [...ids, 'script']
+    writeSet(SHOWN_KEY, next)
+    return next
+  } catch {
+    return ids
+  }
+}
+
+export const readShown = (): AlertKind[] => shownCache ?? withScriptChip(readSet(SHOWN_KEY)) ?? ALL_IDS
 
 export const writeShown = (ids: AlertKind[]) => {
   shownCache = ids

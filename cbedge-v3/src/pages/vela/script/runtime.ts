@@ -37,8 +37,18 @@
 //   drawings   label / line / box / linefill / polyline / table / chart.point —
 //              new, set_*, get_*, delete, copy, *.all, max_*_count; what is alive
 //              after the last bar is drawn (RunResult.drawings)
-// Not yet: maps / matrices, user-defined types and methods. strategy() scripts
-// draw their plots; their orders are not simulated.
+//   types      user-defined `type` (Type.new, fields, := on a field, copy),
+//              `enum`, `method` (x.f() dispatched on the value's type), maps
+//              (map.new put get contains remove keys values size clear copy
+//              put_all, for [k, v] in m)
+//   strategy   strategy() is SIMULATED: entry / order / close / close_all /
+//              exit (profit loss limit stop trail) / cancel, pyramiding,
+//              qty types, commission, slippage, process_orders_on_close;
+//              strategy.* state, closedtrades.* / opentrades.*; the fills come
+//              back as RunResult.strategy (trades → Vela's trade markers)
+//   alerts     alertcondition() and alert() record when they fire
+//              (RunResult.alerts) — the engine delivers the live ones
+// Not yet: matrices.
 //
 // ── Colours ──────────────────────────────────────────────────────────────────
 // Pine's palette (color.red …) is tokens.css's --color-pine-*, TradingView's own
@@ -70,6 +80,8 @@ import type {
 } from '@luxalgo/vela'
 import { tokenHex } from '@/design/theme'
 import { ScriptError, type FuncDef, type Node, type Program, type Stmt } from './lang'
+// the parser rides along, so engine.ts's one dynamic import brings the whole language
+export { parse } from './lang'
 
 // ── Values ───────────────────────────────────────────────────────────────────
 
@@ -103,7 +115,18 @@ class Draw {
     public p: Record<string, unknown>,
   ) {}
 }
-type Val = number | string | Val[] | PlotRef | HlineRef | PArr | Draw | CPoint
+/** An instance of a user-defined `type`: its fields, held by reference (Pine's model). */
+class Obj {
+  constructor(
+    readonly type: string,
+    public f: Record<string, Val>,
+  ) {}
+}
+/** A Pine map (map.new<string, float>()): insertion-ordered, held by reference. */
+class MapV {
+  constructor(public m: Map<string | number, Val>) {}
+}
+type Val = number | string | Val[] | PlotRef | HlineRef | PArr | Draw | CPoint | Obj | MapV
 
 const isPlot = (v: Val | undefined): v is PlotRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'plot' in v
 const isHline = (v: Val | undefined): v is HlineRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'hline' in v
@@ -192,6 +215,57 @@ export interface RunDrawings {
   polylines: DrawingPolyline[]
   tables: DrawingTable[]
 }
+/** One strategy fill — Vela paints these as trade markers on the price pane. */
+export interface StrategyFill {
+  i: number
+  price: number
+  side: 'buy' | 'sell'
+  kind: 'entry' | 'exit'
+  label: string
+  qty: number
+  /** Shared by an entry and its exits. */
+  trade: number
+}
+export interface StrategyTrade {
+  entryId: string
+  exitId: string
+  dir: 1 | -1
+  qty: number
+  entryPrice: number
+  exitPrice: number
+  entryBar: number
+  exitBar: number
+  entryTime: number
+  exitTime: number
+  profit: number
+  commission: number
+}
+export interface StrategyOut {
+  initialCapital: number
+  pointValue: number
+  fills: StrategyFill[]
+  closed: StrategyTrade[]
+  open: { id: string; dir: 1 | -1; qty: number; price: number; bar: number; time: number; profit: number }[]
+  netProfit: number
+  grossProfit: number
+  grossLoss: number
+  openProfit: number
+  commission: number
+  wins: number
+  losses: number
+  even: number
+  maxDrawdown: number
+  maxDrawdownPct: number
+  /** Equity at each bar's close. */
+  equity: Float64Array
+}
+/** When alertcondition() / alert() fired, by bar index. */
+export interface AlertOut {
+  conditions: { title: string; message: string; fired: { i: number; text: string }[] }[]
+  /** `site`: which alert() call in the script — what "once per bar" counts per. */
+  calls: { i: number; message: string; freq: string; site: number }[]
+}
+
 export interface RunResult {
   meta: Meta
   inputs: InputSchema[]
@@ -206,6 +280,10 @@ export interface RunResult {
   drawings: RunDrawings
   /** Things skipped (strategy orders, …), said once each. */
   warnings: string[]
+  /** A strategy() script's simulated orders and results; absent for an indicator. */
+  strategy?: StrategyOut
+  /** alertcondition() / alert() firings. */
+  alerts: AlertOut
 }
 
 // ── Colours ──────────────────────────────────────────────────────────────────
@@ -602,13 +680,18 @@ const CONSTS: Record<string, Val> = {
   'dayofweek.saturday': 7,
   'strategy.long': 'long',
   'strategy.short': 'short',
-  'strategy.position_size': 0,
-  'strategy.position_avg_price': NaN,
-  'strategy.equity': 0,
-  'strategy.netprofit': 0,
-  'strategy.openprofit': 0,
-  'strategy.opentrades': 0,
-  'strategy.closedtrades': 0,
+  'strategy.fixed': 'fixed',
+  'strategy.cash': 'cash',
+  'strategy.percent_of_equity': 'percent_of_equity',
+  'strategy.commission.percent': 'percent',
+  'strategy.commission.cash_per_contract': 'cash_per_contract',
+  'strategy.commission.cash_per_order': 'cash_per_order',
+  'strategy.direction.all': 'all',
+  'strategy.direction.long': 'long',
+  'strategy.direction.short': 'short',
+  'strategy.oca.none': 'none',
+  'strategy.oca.cancel': 'cancel',
+  'strategy.oca.reduce': 'reduce',
   'currency.USD': 'USD',
   'xloc.bar_index': 'bar_index',
   'xloc.bar_time': 'bar_time',
@@ -788,10 +871,17 @@ function walk(stmts: Stmt[], visit: (s: Stmt) => void, node?: (n: Node) => void)
       case 'forin':
         wn(n.of)
         return ws(n.body)
+      case 'field':
+        return wn(n.x)
+      case 'mcall':
+        wn(n.recv)
+        n.args.forEach(wn)
+        return Object.values(n.named).forEach(wn)
     }
   }
   function w(s: Stmt) {
     visit(s)
+    if (s.k === 'type') return s.fields.forEach((f) => wn(f.def))
     if (s.k === 'func') {
       s.defaults.forEach(wn)
       return ws(s.body)
@@ -840,6 +930,15 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     },
   )
   for (const s of prog.stmts) if (s.k === 'func') funcs.set(s.name, s)
+  /** User-defined types, enums (field → value) and methods (by name — several types may share one). */
+  const types = new Map<string, Extract<Stmt, { k: 'type' }>>()
+  const enums = new Map<string, Map<string, string>>()
+  const methods = new Map<string, FuncDef[]>()
+  for (const s of prog.stmts) {
+    if (s.k === 'type') types.set(s.name, s)
+    else if (s.k === 'enum') enums.set(s.name, new Map(s.fields.map((f) => [f.name, f.title ?? f.name])))
+    else if (s.k === 'func' && s.method) methods.set(s.name, [...(methods.get(s.name) ?? []), s])
+  }
   const pine = prog.version != null || pineCalls
   /** Pine version for its version-dependent defaults (fill / bgcolor transparency). */
   const ver = prog.version ?? (pine ? 4 : 0)
@@ -855,6 +954,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     barColors: null,
     drawings: { labels: [], lines: [], boxes: [], linefills: [], polylines: [], tables: [] },
     warnings: [],
+    alerts: { conditions: [], calls: [] },
   }
   const warn = (m: string) => {
     if (!res.warnings.includes(m)) res.warnings.push(m)
@@ -950,6 +1050,23 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   })
   const tfIntra = /^\d+$/.test(tf) || /^\d+S$/i.test(tf)
   const VARS: Record<string, (i: number) => Val> = {
+    // ── a strategy's state (bar i: after that bar's fills) ──
+    'strategy.position_size': (i) => sv(i, 0),
+    'strategy.position_avg_price': (i) => sv(i, 1),
+    'strategy.netprofit': (i) => sv(i, 2),
+    'strategy.openprofit': (i) => sv(i, 3),
+    'strategy.equity': (i) => sv(i, 4),
+    'strategy.closedtrades': (i) => sv(i, 5),
+    'strategy.opentrades': (i) => sv(i, 6),
+    'strategy.wintrades': (i) => sv(i, 7),
+    'strategy.losstrades': (i) => sv(i, 8),
+    'strategy.eventrades': (i) => sv(i, 9),
+    'strategy.grossprofit': (i) => sv(i, 10),
+    'strategy.grossloss': (i) => sv(i, 11),
+    'strategy.max_drawdown': (i) => sv(i, 12),
+    'strategy.initial_capital': () => strat.capital,
+    'strategy.position_entry_name': () => strat.open[strat.open.length - 1]?.id ?? '',
+    'strategy.account_currency': () => 'USD',
     open: (i) => O[i]!,
     high: (i) => H[i]!,
     low: (i) => L[i]!,
@@ -976,8 +1093,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'syminfo.root': () => symbol,
     'syminfo.description': () => symbol,
     'syminfo.prefix': () => 'VOLTICK.IO',
-    'syminfo.mintick': () => 0.01,
-    'syminfo.pointvalue': () => 1,
+    'syminfo.mintick': () => MINTICK,
+    'syminfo.pointvalue': () => POINT_VALUE,
     'syminfo.currency': () => 'USD',
     'syminfo.type': () => 'index',
     'syminfo.timezone': () => 'America/New_York',
@@ -1113,6 +1230,44 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     return hit
   }
 
+  /** What a value is, for method dispatch: a user type's name, or array / map / string / float … */
+  const kindOfVal = (v: Val): string =>
+    v instanceof Obj
+      ? v.type
+      : v instanceof PArr
+        ? 'array'
+        : v instanceof MapV
+          ? 'map'
+          : v instanceof Draw
+            ? v.kind
+            : v instanceof CPoint
+              ? 'chart.point'
+              : typeof v === 'string'
+                ? 'string'
+                : Array.isArray(v)
+                  ? 'tuple'
+                  : 'float'
+  /** A declared type, as kindOfVal names it (`array<float>` / `float[]` → array, `int` → float). */
+  const normType = (t: string | null | undefined): string | null => {
+    if (!t) return null
+    const w = t.trim().split(/\s+/).pop() ?? ''
+    if (w.endsWith('[]') || w === 'array') return 'array'
+    if (w === 'map') return 'map'
+    if (w === 'int' || w === 'float' || w === 'bool') return 'float'
+    if (w === 'color' || w === 'string') return 'string'
+    return w
+  }
+  /** `v.name` — a user type's field, or a chart.point's price / index / time. na reads as na. */
+  const getField = (v: Val, name: string, line: number, label: string): Val => {
+    if (v instanceof Obj) {
+      if (name in v.f) return v.f[name]!
+      throw new ScriptError(`type ${v.type} has no field "${name}"`, line)
+    }
+    if (v instanceof CPoint && (name === 'price' || name === 'index' || name === 'time')) return v[name]
+    if (typeof v === 'number' && isNa(v)) return NaN
+    throw new ScriptError(`"${label}" has no field "${name}"`, line)
+  }
+
   const bin = (op: string, a: Val, b: Val, line: number): Val => {
     if (op === 'and') return truthy(a) && truthy(b) ? 1 : 0
     if (op === 'or') return truthy(a) || truthy(b) ? 1 : 0
@@ -1198,19 +1353,32 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
           const get = slotFn(ref)
           return (f) => get(f).cur
         }
+        const dot = name.indexOf('.')
+        if (dot > 0) {
+          // an enum's value: Side.long
+          const en = enums.get(name.slice(0, dot))
+          if (en) {
+            const v = en.get(name.slice(dot + 1))
+            if (v === undefined) throw new ScriptError(`enum ${name.slice(0, dot)} has no field "${name.slice(dot + 1)}"`, line)
+            return () => v
+          }
+        }
         const fb = builtinVar(name)
         if (!fb) {
-          // a field of a variable: pt.price / pt.index / pt.time on a chart.point
-          const dot = name.indexOf('.')
+          // a field of a variable: p.x on a user type, pt.price on a chart.point, a.b.c down a chain
           const recv = dot > 0 ? resolve(cx, name.slice(0, dot)) : undefined
           if (recv) {
             const get = slotFn(recv)
-            const field = name.slice(dot + 1)
+            const head = name.slice(0, dot)
+            const path = name.slice(dot + 1).split('.')
             return (f) => {
-              const r = get(f).cur
-              if (r instanceof CPoint && (field === 'price' || field === 'index' || field === 'time')) return r[field]
-              if (typeof r === 'number' && isNa(r)) return NaN
-              throw new ScriptError(`"${name.slice(0, dot)}" has no field "${field}"`, line)
+              let v = get(f).cur
+              let label = head
+              for (const k of path) {
+                v = getField(v, k, line, label)
+                label = `${label}.${k}`
+              }
+              return v
             }
           }
           if (funcs.has(name)) throw new ScriptError(`"${name}" is a function — call it: ${name}(…)`, line)
@@ -1317,12 +1485,16 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
             }
           }
           const fb = builtinVar(name)
-          if (!fb) throw new ScriptError(`"${name}" is not defined`, line)
-          return (f) => {
-            const k = offset(f)
-            const j = f.i - k
-            return k < 0 || j < 0 ? NaN : fb(j)
+          const dot = name.indexOf('.')
+          if (fb) {
+            return (f) => {
+              const k = offset(f)
+              const j = f.i - k
+              return k < 0 || j < 0 ? NaN : fb(j)
+            }
           }
+          // p.x[1] — a field's history: kept per call site, like any expression's
+          if (!(dot > 0 && (resolve(cx, name.slice(0, dot)) || enums.has(name.slice(0, dot))))) throw new ScriptError(`"${name}" is not defined`, line)
         }
         const inner = compileExpr(cx, node.x)
         const site = siteFn(cx)
@@ -1341,6 +1513,13 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       }
       case 'call':
         return compileCall(cx, node)
+      case 'field': {
+        const x = compileExpr(cx, node.x)
+        const name = node.name
+        return (f) => getField(x(f), name, line, 'the value')
+      }
+      case 'mcall':
+        return compileMethodOn(cx, node, compileExpr(cx, node.recv), 'the value', node.name)
       case 'if': {
         const bs = node.branches.map((b) => ({ c: b.c ? compileExpr(cx, b.c) : null, body: compileBlock(cx, b.body) }))
         return (f) => {
@@ -1396,11 +1575,13 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         const body = compileBlock(inner, node.body, false)
         return (f) => {
           const src = of(f)
-          const items = src instanceof PArr ? src.a.slice() : Array.isArray(src) ? src : []
+          // a map: for [key, value] in m (for v in m walks the values)
+          const keys = src instanceof MapV ? [...src.m.keys()] : null
+          const items = src instanceof PArr ? src.a.slice() : src instanceof MapV ? [...src.m.values()] : Array.isArray(src) ? src : []
           let v: Val = NaN
           for (let k = 0; k < items.length; k++) {
             if (++loopBudget > MAX_LOOP_PER_BAR) throw new ScriptError('this loop runs too many times per bar', line)
-            if (idxVar) idxVar(f).cur = k
+            if (idxVar) idxVar(f).cur = keys ? keys[k]! : k
             itemVar(f).cur = items[k]!
             v = body(f)
             if (f.ctl === 1) {
@@ -1454,6 +1635,36 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       }
       case 'reassign': {
         const ev = compileExpr(cx, s.x)
+        // p.x := v / this.count += 1 — a field of a user type held in a variable
+        const fdot = s.name.indexOf('.')
+        if (fdot > 0 && !resolve(cx, s.name)) {
+          const headRef = resolve(cx, s.name.slice(0, fdot))
+          if (headRef) {
+            const get = slotFn(headRef)
+            const head = s.name.slice(0, fdot)
+            const path = s.name.slice(fdot + 1).split('.')
+            const last = path.pop()!
+            const fop = s.op === ':=' ? null : s.op[0]!
+            if (s.op === '=') throw new ScriptError(`a field is changed with :=, not = (${s.name} := …)`, s.line)
+            return (f) => {
+              let o = get(f).cur
+              let label = head
+              for (const k of path) {
+                o = getField(o, k, s.line, label)
+                label = `${label}.${k}`
+              }
+              if (!(o instanceof Obj)) {
+                if (typeof o === 'number' && isNa(o)) throw new ScriptError(`can't set ${s.name} — ${label} is na (make it with ${'Type'}.new() first)`, s.line)
+                throw new ScriptError(`"${label}" has no field "${last}"`, s.line)
+              }
+              if (!(last in o.f)) throw new ScriptError(`type ${o.type} has no field "${last}"`, s.line)
+              let v = ev(f)
+              if (fop) v = bin(fop, o.f[last]!, v, s.line)
+              o.f[last] = v
+              return v
+            }
+          }
+        }
         // CB Script allows := for a first assignment
         const get = slotFn(resolve(cx, s.name) ?? declare(cx, s.name))
         const op = s.op === ':=' ? null : s.op[0]!
@@ -1496,12 +1707,15 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         }
       case 'func':
         throw new ScriptError('functions are declared at the top level of a script, not inside a block', s.line)
+      case 'type':
+      case 'enum':
+        throw new ScriptError(`a ${s.k} is declared at the top level of a script, not inside a block`, s.line)
     }
   }
 
   function compileBlock(cx: Cx, stmts: Stmt[], scoped = true, top = false): Ev {
     const inner = scoped ? child(cx) : cx
-    const evs = stmts.filter((s) => !(top && s.k === 'func')).map((s) => compileStmt(inner, s))
+    const evs = stmts.filter((s) => !(top && (s.k === 'func' || s.k === 'type' || s.k === 'enum'))).map((s) => compileStmt(inner, s))
     if (evs.length === 1) {
       const only = evs[0]!
       return only
@@ -1517,17 +1731,44 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   }
 
   function compileMethod(cx: Cx, node: Extract<Node, { k: 'call' }>, recv: string, method: string): Ev {
+    return compileMethodOn(cx, node, compileExpr(cx, { k: 'id', name: recv, line: node.line }), recv, method)
+  }
+
+  /**
+   * `value.method(…)`: a user `method` declared for the value's type wins; then the
+   * built-in one for what the value is (array.*, map.*, a drawing's set_* …, str.*).
+   */
+  function compileMethodOn(cx: Cx, node: { args: Node[]; named: Record<string, Node>; line: number; name?: string }, self: Ev, recv: string, method: string): Ev {
     const line = node.line
-    const self = compileExpr(cx, { k: 'id', name: recv, line })
+    const callNode: Extract<Node, { k: 'call' }> = { k: 'call', name: method, args: node.args, named: node.named, line }
     const args = node.args.map((x) => compileExpr(cx, x))
     const namedKeys = Object.keys(node.named)
     const namedEvs = namedKeys.map((k) => compileExpr(cx, node.named[k]!))
+    let cur: Val = NaN
+    const selfArg: Ev = () => cur
+    const user = (methods.get(method) ?? []).map((def) => ({ type: normType(def.types[0]), call: userCall(cx, def, [selfArg, ...args], namedKeys, namedEvs, line) }))
     const onArray = BUILTINS[`array.${method}`]
+    const onMap = BUILTINS[`map.${method}`]
     const onText = BUILTINS[method]
+    const builtinFits = (r: Val): boolean =>
+      (r instanceof PArr && !!onArray) ||
+      (r instanceof MapV && !!onMap) ||
+      (r instanceof Draw && !!BUILTINS[`${r.kind}.${method}`]) ||
+      (typeof r === 'string' && !!onText) ||
+      (r instanceof CPoint && method === 'copy') ||
+      (r instanceof Obj && method === 'copy')
     const site = siteFn(cx)
-    const c: Call = { A: [], N: {}, node, line, i: 0, f: null as unknown as Frame, site: () => site(c.f) }
+    const c: Call = { A: [], N: {}, node: callNode, line, i: 0, f: null as unknown as Frame, site: () => site(c.f) }
     return (f) => {
       const r = self(f)
+      if (user.length) {
+        const k = kindOfVal(r)
+        const pick = user.find((u) => u.type === k) ?? (builtinFits(r) ? undefined : user[0])
+        if (pick) {
+          cur = r
+          return pick.call(f)
+        }
+      }
       const A: Val[] = [r]
       for (let k = 0; k < args.length; k++) A.push(args[k]!(f))
       const Nm: Record<string, Val> = {}
@@ -1539,6 +1780,14 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       if (r instanceof PArr) {
         if (!onArray) throw new ScriptError(`arrays have no method "${method}"`, line)
         return onArray(c)
+      }
+      if (r instanceof MapV) {
+        if (!onMap) throw new ScriptError(`maps have no method "${method}"`, line)
+        return onMap(c)
+      }
+      if (r instanceof Obj) {
+        if (method === 'copy') return new Obj(r.type, { ...r.f })
+        throw new ScriptError(`type ${r.type} has no method "${method}"`, line)
       }
       if (r instanceof Draw) {
         const fn = BUILTINS[`${r.kind}.${method}`]
@@ -1578,7 +1827,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       .trim()
       .toUpperCase()
   const secRuns = new Map<string, { X: OHLCV[]; cap: Map<object, unknown[]> }>()
-  const secRun = (srcBars: readonly OHLCV[], sym: string, reqTf: string, htf: boolean): { X: OHLCV[]; cap: Map<object, unknown[]> } => {
+  const secRun = (srcBars: readonly OHLCV[], sym: string, reqTf: string, htf: boolean, native: readonly OHLCV[] | null = null): { X: OHLCV[]; cap: Map<object, unknown[]> } => {
     const key = `${sym}|${reqTf}|${htf ? 1 : 0}`
     let r = secRuns.get(key)
     if (r) return r
@@ -1605,9 +1854,32 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
           x.volume = (x.volume ?? 0) + (Number.isFinite(vol) ? vol : 0)
         }
       }
+      // D / W / M: the provider's long history in front of what the chart's bars fold into
+      // (the chart's own buckets win where they exist — the forming one is live)
+      if (native?.length) {
+        // the provider's bars (D / W / M, in this timeframe's buckets — a 2D or 3M merges several)
+        const nx: OHLCV[] = []
+        for (const b of native) {
+          const t = bucketStart(b.time, reqTf, sh)
+          const x = nx[nx.length - 1]
+          if (x && x.time === t) {
+            x.high = Math.max(x.high, b.high)
+            x.low = Math.min(x.low, b.low)
+            x.close = b.close
+            x.volume = (x.volume ?? 0) + (b.volume ?? 0)
+          } else nx.push({ time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume ?? 0 })
+        }
+        const head = X[0]?.time ?? Infinity
+        // the chart's first bucket is usually cut short: the provider's copy of it wins —
+        // unless it is the only (forming, live) one
+        const full = X.length > 1 ? X[1]!.time : head
+        const older = nx.filter((b) => b.time < full)
+        if (X.length > 1 && older.length && older[older.length - 1]!.time === head) X = [...older, ...X.slice(1)]
+        else X = [...older.filter((b) => b.time < head), ...X]
+      }
     } else X = srcBars.slice()
     if (htf && X.length < 20 && !opts.dry)
-      warn(`only ${X.length} ${reqTf} bars of history here (the intraday tape is about 30 days deep) — ${reqTf} values that need a longer lookback stay empty`)
+      warn(`only ${X.length} ${reqTf} bars of history here — ${reqTf} values that need a longer lookback stay empty`)
     const cap = new Map<object, unknown[]>()
     run(prog, X, { inputs: opts.inputs, symbol: sym, timeframe: htf ? reqTf : tf, capture: cap, series: opts.series, dry: opts.dry })
     r = { X, cap }
@@ -1696,9 +1968,19 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
             if (!got.length) throw new ScriptError(`${node.name}: no data for ${sym}`, line)
             srcBars = got
           }
+          // daily and up: the symbol's long history too (years, not the tape's ~30 sessions)
+          let native: readonly OHLCV[] | null = null
+          const forSym = same ? bareSym(symbol) : sym
+          if (htf && reqMin >= 1440 && !opts.dry) {
+            // fetched in the base unit (2D → D, 3M → M) and folded into reqTf's buckets by secRun
+            const unit = (/[DWM]$/i.exec(reqTf.trim())?.[0] ?? 'D').toUpperCase()
+            const got = opts.series?.get(`${forSym}|${unit}`)
+            if (!got) throw new NeedSeries(forSym, unit)
+            native = got
+          }
           const lookahead = laEv ? truthy(laEv(f)) : prog.version === null || prog.version <= 2
           const gaps = gapsEv ? truthy(gapsEv(f)) : false
-          st.any = secMap(node, secRun(srcBars, same ? bareSym(symbol) : sym, reqTf, htf), htf, lookahead, gaps)
+          st.any = secMap(node, secRun(srcBars, forSym, reqTf, htf, native), htf, lookahead, gaps)
         }
       }
       if (st.any === 'pass') return exprEv(f)
@@ -1794,7 +2076,25 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     if (dot > 0 && !funcs.has(node.name) && !BUILTINS[node.name] && node.name !== 'request.security' && node.name !== 'request.security_lower_tf') {
       const recv = node.name.slice(0, dot)
       const method = node.name.slice(dot + 1)
-      if (!method.includes('.') && resolve(cx, recv)) return compileMethod(cx, node, recv, method)
+      if (resolve(cx, recv)) {
+        if (!method.includes('.')) return compileMethod(cx, node, recv, method)
+        // a.b.c(…) — a method on a field
+        const parts = method.split('.')
+        const last = parts.pop()!
+        let selfNode: Node = { k: 'id', name: recv, line }
+        for (const k of parts) selfNode = { k: 'field', x: selfNode, name: k, line }
+        return compileMethodOn(cx, node, compileExpr(cx, selfNode), `${recv}.${parts.join('.')}`, last)
+      }
+      // Type.new(…) / Type.copy(obj) on a user-defined type
+      const tdef = types.get(recv)
+      if (tdef && method === 'new') return compileNew(cx, tdef, node)
+      if (tdef && method === 'copy') {
+        const a = compileExpr(cx, node.args[0] ?? node.named.object ?? { k: 'na', line })
+        return (f) => {
+          const o = a(f)
+          return o instanceof Obj ? new Obj(o.type, { ...o.f }) : NaN
+        }
+      }
     }
     if (node.name === 'security' || node.name === 'request.security') return compileSecurity(cx, node)
     if (node.name === 'request.security_lower_tf') return compileSecurityLower(cx, node)
@@ -1802,7 +2102,33 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const namedKeys = Object.keys(node.named)
     const namedEvs = namedKeys.map((k) => compileExpr(cx, node.named[k]!))
     const def = funcs.get(node.name)
-    if (def) {
+    if (def) return userCall(cx, def, args, namedKeys, namedEvs, line)
+    return compileBuiltin(cx, node, args, namedKeys, namedEvs)
+  }
+
+  /** `Type.new(a, b, field = c)` — positional in field order, then by name, then the field's default (else na). */
+  function compileNew(cx: Cx, t: Extract<Stmt, { k: 'type' }>, node: Extract<Node, { k: 'call' }>): Ev {
+    const line = node.line
+    if (node.args.length > t.fields.length) throw new ScriptError(`${t.name}.new() takes ${t.fields.length} value${t.fields.length === 1 ? '' : 's'}`, line)
+    for (const k of Object.keys(node.named)) if (!t.fields.some((fd) => fd.name === k)) throw new ScriptError(`type ${t.name} has no field "${k}"`, line)
+    const evs = t.fields.map((fd, k) => {
+      const n = node.args[k] ?? node.named[fd.name] ?? fd.def
+      return n ? compileExpr(cx, n) : null
+    })
+    const names = t.fields.map((fd) => fd.name)
+    return (f) => {
+      const o: Record<string, Val> = {}
+      for (let k = 0; k < names.length; k++) {
+        const e = evs[k]
+        o[names[k]!] = e ? e(f) : NaN
+      }
+      return new Obj(t.name, o)
+    }
+  }
+
+  /** A call of a user function (or method) at one call site: its own instance, as in Pine. */
+  function userCall(cx: Cx, def: FuncDef, args: Ev[], namedKeys: string[], namedEvs: Ev[], line: number): Ev {
+    {
       const np = def.params.length
       if (args.length > np) throw new ScriptError(`${def.name}() takes ${np} argument${np === 1 ? '' : 's'}`, line)
       for (const k of namedKeys) if (!def.params.includes(k)) throw new ScriptError(`${def.name}() has no parameter "${k}"`, line)
@@ -1837,11 +2163,16 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         return r
       }
     }
+  }
+
+  function compileBuiltin(cx: Cx, node: Extract<Node, { k: 'call' }>, args: Ev[], namedKeys: string[], namedEvs: Ev[]): Ev {
+    const line = node.line
     const name = node.name
     const key = name === 'ta.max' ? 'max_all' : name === 'ta.min' ? 'min_all' : name.replace(/^(ta|math|str)\./, '')
     const fn = BUILTINS[key] ?? BUILTINS[name]
     if (!fn) {
-      if (/^(matrix|map)\./.test(name)) throw new ScriptError(`${name.split('.')[0]}s aren't supported yet (${name})`, line)
+      if (/^matrix\./.test(name)) throw new ScriptError(`matrices aren't supported yet (${name})`, line)
+      if (/^map\./.test(name)) throw new ScriptError(`${name} isn't supported yet`, line)
       if (name.startsWith('array.')) throw new ScriptError(`${name} isn't supported yet`, line)
       if (name.startsWith('request.')) throw new ScriptError(`${name} isn't supported yet`, line)
       if (name === 'plotcandle' || name === 'plotbar') {
@@ -1858,7 +2189,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       }
       if (name.startsWith('strategy.')) {
         return () => {
-          warn('strategy orders aren\'t simulated — only the plots are drawn')
+          warn(`${name} isn't simulated — skipped`)
           return NaN
         }
       }
@@ -2063,7 +2394,23 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       const v = c.N[k]
       if (typeof v === 'number' && v > 0) drawMax[kind] = Math.min(500, Math.round(v))
     }
-    if (isStrategy) warn('strategy orders aren\'t simulated — only the plots are drawn')
+    if (isStrategy && !opts.capture) {
+      strat.on = true
+      const nv = (k: string): number | null => {
+        const v = c.N[k]
+        return typeof v === 'number' && !isNa(v) ? v : null
+      }
+      const sv2 = (k: string): string | null => (typeof c.N[k] === 'string' ? (c.N[k] as string) : null)
+      strat.capital = nv('initial_capital') ?? 1_000_000
+      strat.peak = strat.capital
+      strat.qtyType = sv2('default_qty_type') ?? 'fixed'
+      strat.qtyValue = nv('default_qty_value') ?? 1
+      strat.pyramiding = Math.max(1, Math.round(nv('pyramiding') ?? 1))
+      strat.commType = sv2('commission_type') ?? 'percent'
+      strat.commValue = nv('commission_value') ?? 0
+      strat.slippage = nv('slippage') ?? 0
+      strat.onClose = truthy(c.N.process_orders_on_close ?? 0)
+    }
     return NaN
   }
 
@@ -2876,6 +3223,549 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'array.abs': (c) => new PArr(arrOf(c).a.map((x) => (typeof x === 'number' ? Math.abs(x) : x))),
   }
 
+  let alertSites = 0
+  // ── Alert text: TradingView's {{placeholders}} ──
+  const alertText = (msg: string, i: number): string =>
+    msg.replace(/\{\{\s*([a-z_0-9]+)\s*\}\}/gi, (m, k: string) => {
+      switch (k.toLowerCase()) {
+        case 'ticker':
+          return symbol
+        case 'exchange':
+          return 'VOLTICK.IO'
+        case 'interval':
+          return tf
+        case 'open':
+          return String(O[i])
+        case 'high':
+          return String(H[i])
+        case 'low':
+          return String(L[i])
+        case 'close':
+          return String(C[i])
+        case 'volume':
+          return String(V[i])
+        case 'time':
+          return new Date(T[i]!).toISOString()
+        case 'timenow':
+          return new Date().toISOString()
+      }
+      const pm = /^plot_(\d+)$/i.exec(k)
+      if (pm) {
+        const v = res.plots[Number(pm[1])]?.values[i]
+        return v === undefined || isNa(v) ? 'NaN' : String(v)
+      }
+      return m
+    })
+
+  // ── strategy(): orders, fills, the book ──
+  // Pine's broker emulator, the common cases: an order placed on bar i is filled on
+  // bar i+1 — a market order at that bar's open (at bar i's close with
+  // process_orders_on_close), a limit / stop order and strategy.exit()'s brackets
+  // when the bar's price path reaches them. The path inside a bar is TradingView's
+  // assumption: open → the nearer of high / low → the other → close.
+  interface SOrder {
+    id: string
+    kind: 'entry' | 'order' | 'close' | 'close_all' | 'exit'
+    dir: 1 | -1
+    qty: number
+    qtyPct: number
+    limit: number
+    stop: number
+    comment: string
+    from: string
+    profit: number
+    loss: number
+    trailPts: number
+    trailPrice: number
+    trailOff: number
+    commentProfit: string
+    commentLoss: string
+    /** An exit: true once an entry it covers has existed (it goes when they are all closed). */
+    armed: boolean
+    /** An exit: the trades it has already filled on — a partial exit fills once, not again. */
+    done: Set<number>
+  }
+  interface SEntry {
+    id: string
+    dir: 1 | -1
+    qty: number
+    price: number
+    bar: number
+    time: number
+    comment: string
+    trade: number
+    /** The best price since the fill — a trailing stop follows it. */
+    best: number
+  }
+  const MINTICK = /^(ES|NQ|MES|MNQ|RTY|M2K|YM|MYM)$/i.test(symbol) ? 0.25 : 0.01
+  const POINT_VALUE = /^ES$/i.test(symbol) ? 50 : /^NQ$/i.test(symbol) ? 20 : /^MES$/i.test(symbol) ? 5 : /^MNQ$/i.test(symbol) ? 2 : 1
+  const strat = {
+    on: false,
+    capital: 1_000_000,
+    qtyType: 'fixed',
+    qtyValue: 1,
+    pyramiding: 1,
+    commType: 'percent',
+    commValue: 0,
+    slippage: 0,
+    onClose: false,
+    orders: [] as SOrder[],
+    open: [] as SEntry[],
+    closed: [] as StrategyTrade[],
+    fills: [] as StrategyFill[],
+    net: 0,
+    grossP: 0,
+    grossL: 0,
+    comm: 0,
+    wins: 0,
+    losses: 0,
+    even: 0,
+    peak: 1_000_000,
+    maxDD: 0,
+    maxDDPct: 0,
+    seq: 0,
+    bar: -1,
+    /** Per bar: position size, avg price, net, open profit, equity, closed, open, wins, losses, even, gross profit, gross loss, max dd. */
+    hist: null as Float64Array[] | null,
+    equity: null as Float64Array | null,
+  }
+  const posSize = () => strat.open.reduce((a, e) => a + e.dir * e.qty, 0)
+  const avgPrice = () => {
+    let q = 0
+    let pq = 0
+    for (const e of strat.open) {
+      q += e.qty
+      pq += e.qty * e.price
+    }
+    return q ? pq / q : NaN
+  }
+  const openProfitAt = (px: number) => strat.open.reduce((a, e) => a + (px - e.price) * e.dir * e.qty * POINT_VALUE, 0)
+  const live = (k: number, i: number): number => {
+    const px = C[i]!
+    switch (k) {
+      case 0:
+        return posSize()
+      case 1:
+        return avgPrice()
+      case 2:
+        return strat.net
+      case 3:
+        return openProfitAt(px)
+      case 4:
+        return strat.capital + strat.net + openProfitAt(px)
+      case 5:
+        return strat.closed.length
+      case 6:
+        return strat.open.length
+      case 7:
+        return strat.wins
+      case 8:
+        return strat.losses
+      case 9:
+        return strat.even
+      case 10:
+        return strat.grossP
+      case 11:
+        return strat.grossL
+      default:
+        return strat.maxDD
+    }
+  }
+  /** strategy.* on bar i: live on the bar being run, recorded for history reads. */
+  const sv = (i: number, k: number): number => {
+    if (i === strat.bar || !strat.hist) return live(k, i)
+    return strat.hist[k]![i] ?? NaN
+  }
+  const commission = (price: number, qty: number): number =>
+    strat.commType === 'percent'
+      ? (price * qty * POINT_VALUE * strat.commValue) / 100
+      : strat.commType === 'cash_per_contract'
+        ? qty * strat.commValue
+        : strat.commType === 'cash_per_order'
+          ? strat.commValue
+          : 0
+  const defQty = (price: number): number => {
+    const v = strat.qtyValue
+    if (strat.qtyType === 'cash') return Math.floor(v / (price * POINT_VALUE))
+    if (strat.qtyType === 'percent_of_equity') return Math.floor(((strat.capital + strat.net + openProfitAt(price)) * v) / 100 / (price * POINT_VALUE))
+    return v
+  }
+  const openEntry = (i: number, id: string, dir: 1 | -1, qty: number, price: number, comment: string) => {
+    const px = price + dir * strat.slippage * MINTICK
+    const trade = ++strat.seq
+    strat.open.push({ id, dir, qty, price: px, bar: i, time: T[i]!, comment, trade, best: px })
+    strat.fills.push({ i, price: px, side: dir > 0 ? 'buy' : 'sell', kind: 'entry', label: comment || id, qty, trade })
+  }
+  const closeEntry = (i: number, e: SEntry, qty: number, price: number, exitId: string, comment: string) => {
+    const q = Math.min(qty, e.qty)
+    if (!(q > 0)) return
+    const px = price - e.dir * strat.slippage * MINTICK
+    const comm = commission(e.price, q) + commission(px, q)
+    const profit = (px - e.price) * e.dir * q * POINT_VALUE - comm
+    strat.closed.push({ entryId: e.id, exitId, dir: e.dir, qty: q, entryPrice: e.price, exitPrice: px, entryBar: e.bar, exitBar: i, entryTime: e.time, exitTime: T[i]!, profit, commission: comm })
+    strat.net += profit
+    strat.comm += comm
+    if (profit > 0) {
+      strat.wins++
+      strat.grossP += profit
+    } else if (profit < 0) {
+      strat.losses++
+      strat.grossL -= profit
+    } else strat.even++
+    e.qty -= q
+    if (e.qty <= 1e-9) strat.open.splice(strat.open.indexOf(e), 1)
+    strat.fills.push({ i, price: px, side: e.dir > 0 ? 'sell' : 'buy', kind: 'exit', label: comment || exitId || 'Close', qty: q, trade: e.trade })
+  }
+  /** Close `qty` (all when NaN) of the entries `which` picks, oldest first. */
+  const closeSome = (i: number, which: (e: SEntry) => boolean, qty: number, price: number, exitId: string, comment: string) => {
+    let left = isNa(qty) ? Infinity : qty
+    for (const e of strat.open.filter(which)) {
+      if (left <= 0) break
+      const q = Math.min(left, e.qty)
+      closeEntry(i, e, q, price, exitId, comment)
+      left -= q
+    }
+  }
+  const fillOrder = (i: number, o: SOrder, price: number) => {
+    if (o.kind === 'entry') {
+      const pos = posSize()
+      const qty = isNa(o.qty) ? defQty(price) : o.qty
+      if (!(qty > 0)) return
+      if (pos !== 0 && Math.sign(pos) !== o.dir) {
+        // a reversal: the opposite position goes first
+        closeSome(i, () => true, NaN, price, o.id, o.comment || o.id)
+        openEntry(i, o.id, o.dir, qty, price, o.comment)
+        return
+      }
+      const same = strat.open.filter((e) => e.dir === o.dir).length
+      if (same < strat.pyramiding) openEntry(i, o.id, o.dir, qty, price, o.comment)
+      return
+    }
+    if (o.kind === 'order') {
+      let qty = isNa(o.qty) ? defQty(price) : o.qty
+      for (const e of strat.open.slice()) {
+        if (qty <= 0) break
+        if (e.dir === o.dir) continue
+        const q = Math.min(qty, e.qty)
+        closeEntry(i, e, q, price, o.id, o.comment || o.id)
+        qty -= q
+      }
+      if (qty > 0) openEntry(i, o.id, o.dir, qty, price, o.comment)
+      return
+    }
+    if (o.kind === 'close') {
+      const mine = (e: SEntry) => e.id === o.id
+      const total = strat.open.filter(mine).reduce((a, e) => a + e.qty, 0)
+      const q = !isNa(o.qty) ? o.qty : !isNa(o.qtyPct) ? (total * o.qtyPct) / 100 : NaN
+      closeSome(i, mine, q, price, o.id, o.comment)
+      return
+    }
+    if (o.kind === 'close_all') closeSome(i, () => true, NaN, price, 'Close all', o.comment || 'Close all')
+  }
+  /** The bracket levels an exit order puts on one entry. */
+  const exitLevels = (o: SOrder, e: SEntry): { tp: number; sl: number } => {
+    const tp = !isNa(o.limit) ? o.limit : !isNa(o.profit) ? e.price + e.dir * o.profit * MINTICK : NaN
+    let sl = !isNa(o.stop) ? o.stop : !isNa(o.loss) ? e.price - e.dir * o.loss * MINTICK : NaN
+    if (!isNa(o.trailOff) && (!isNa(o.trailPts) || !isNa(o.trailPrice))) {
+      const act = !isNa(o.trailPrice) ? o.trailPrice : e.price + e.dir * o.trailPts * MINTICK
+      if ((e.best - act) * e.dir >= 0) {
+        const trail = e.best - e.dir * o.trailOff * MINTICK
+        sl = isNa(sl) ? trail : e.dir > 0 ? Math.max(sl, trail) : Math.min(sl, trail)
+      }
+    }
+    return { tp, sl }
+  }
+  const covers = (o: SOrder, e: SEntry) => !o.from || o.from === e.id
+  /** Fill what the bar's price path reaches. */
+  const processBar = (i: number) => {
+    if (!strat.orders.length) return
+    const o0 = O[i]!
+    const hi = H[i]!
+    const lo = L[i]!
+    // market orders: at this bar's open
+    const market = strat.orders.filter((o) => o.kind !== 'exit' && isNa(o.limit) && isNa(o.stop))
+    if (market.length) {
+      strat.orders = strat.orders.filter((o) => !market.includes(o))
+      for (const o of market) fillOrder(i, o, o0)
+    }
+    const path = hi - o0 <= o0 - lo ? [o0, hi, lo, C[i]!] : [o0, lo, hi, C[i]!]
+    for (let sgm = 0; sgm < 3; sgm++) {
+      let a = path[sgm]!
+      const b = path[sgm + 1]!
+      const up = b >= a
+      for (let guard = 0; guard < 64; guard++) {
+        // the first level this stretch reaches: "at a" when it is already through
+        let best: { px: number; act: () => void } | null = null
+        const consider = (level: number, needUp: boolean, act: () => void) => {
+          if (isNa(level)) return
+          let px: number | null = null
+          if (needUp ? a >= level : a <= level) px = a
+          else if (needUp ? up && b >= level : !up && b <= level) px = level
+          if (px === null) return
+          if (!best || (up ? px < best.px : px > best.px)) best = { px, act }
+        }
+        for (const o of strat.orders) {
+          if (o.kind === 'exit') {
+            for (const e of strat.open) {
+              if (!covers(o, e) || o.done.has(e.trade)) continue
+              const { tp, sl } = exitLevels(o, e)
+              const q = !isNa(o.qty) ? o.qty : !isNa(o.qtyPct) ? (e.qty * o.qtyPct) / 100 : e.qty
+              consider(tp, e.dir > 0, () => {
+                o.done.add(e.trade)
+                closeEntry(i, e, q, best!.px, o.id, o.commentProfit || o.comment || o.id)
+              })
+              consider(sl, e.dir < 0, () => {
+                o.done.add(e.trade)
+                closeEntry(i, e, q, best!.px, o.id, o.commentLoss || o.comment || o.id)
+              })
+            }
+            continue
+          }
+          if (o.kind !== 'entry' && o.kind !== 'order') continue
+          const fire = () => {
+            strat.orders.splice(strat.orders.indexOf(o), 1)
+            fillOrder(i, o, best!.px)
+          }
+          // buy limit: at or below; buy stop: at or above (sells mirrored); a stop-limit fills as its stop
+          if (!isNa(o.stop)) consider(o.stop, o.dir > 0, fire)
+          else consider(o.limit, o.dir < 0, fire)
+        }
+        if (!best) break
+        const hit = best as { px: number; act: () => void }
+        hit.act()
+        a = hit.px
+      }
+      // a trailing stop follows the best price reached along the way
+      for (const e of strat.open) e.best = e.dir > 0 ? Math.max(e.best, b) : Math.min(e.best, b)
+    }
+    // exits whose entries are all gone go with them
+    strat.orders = strat.orders.filter((o) => {
+      if (o.kind !== 'exit') return true
+      const has = strat.open.some((e) => covers(o, e))
+      if (has) o.armed = true
+      return has || !o.armed
+    })
+  }
+  const recordBar = (i: number) => {
+    if (!strat.hist) {
+      strat.hist = Array.from({ length: 13 }, () => new Float64Array(N).fill(NaN))
+      strat.equity = new Float64Array(N).fill(NaN)
+    }
+    const eq = live(4, i)
+    if (eq > strat.peak) strat.peak = eq
+    const dd = strat.peak - eq
+    if (dd > strat.maxDD) {
+      strat.maxDD = dd
+      strat.maxDDPct = strat.peak > 0 ? (dd / strat.peak) * 100 : 0
+    }
+    for (let k = 0; k < 13; k++) strat.hist[k]![i] = live(k, i)
+    strat.equity![i] = eq
+  }
+  const sideOf = (v: Val | undefined, line: number): 1 | -1 => {
+    if (v === 'long' || v === 1) return 1
+    if (v === 'short' || v === -1) return -1
+    if (typeof v === 'number' && !isNa(v)) return v > 0 ? 1 : -1
+    throw new ScriptError('the direction is strategy.long or strategy.short', line)
+  }
+  const optNumOrNa = (c: Call, i: number, a: string): number => {
+    const v = arg(c, i, a)
+    return typeof v === 'number' ? v : NaN
+  }
+  /** v4's `when=` (and v4's positional when on close / close_all): false skips the call. */
+  const whenOff = (c: Call, pos = -1): boolean => {
+    const w = c.N.when ?? (pos >= 0 && ver <= 4 ? c.A[pos] : undefined)
+    return w !== undefined && !truthy(w)
+  }
+  const blankOrder = (): SOrder => ({
+    id: '',
+    kind: 'entry',
+    dir: 1,
+    qty: NaN,
+    qtyPct: NaN,
+    limit: NaN,
+    stop: NaN,
+    comment: '',
+    from: '',
+    profit: NaN,
+    loss: NaN,
+    trailPts: NaN,
+    trailPrice: NaN,
+    trailOff: NaN,
+    commentProfit: '',
+    commentLoss: '',
+    armed: false,
+    done: new Set<number>(),
+  })
+  const place = (o: SOrder) => {
+    // an order with the id (and kind) of one still waiting replaces it (Pine modifies it);
+    // a re-issued exit keeps what the old one already filled
+    const same = (x: SOrder) => x.id === o.id && x.kind === o.kind && (o.kind !== 'exit' || x.from === o.from)
+    const was = strat.orders.find(same)
+    if (was && o.kind === 'exit') {
+      o.done = was.done
+      o.armed = was.armed
+    }
+    strat.orders = strat.orders.filter((x) => !same(x))
+    strat.orders.push(o)
+  }
+  const stratOff = (c: Call) => opts.capture || opts.dry || !strat.on || c.i !== strat.bar
+  const STRATEGY_FNS: Record<string, (c: Call) => Val> = {
+    'strategy.entry': (c) => {
+      if (stratOff(c) || whenOff(c)) return NaN
+      place({ ...blankOrder(), kind: 'entry', id: text(arg(c, 0, 'id') ?? 'Entry'), dir: sideOf(arg(c, 1, 'direction'), c.line), qty: optNumOrNa(c, 2, 'qty'), limit: optNumOrNa(c, 3, 'limit'), stop: optNumOrNa(c, 4, 'stop'), comment: optStr(c, 7, 'comment') ?? '' })
+      return NaN
+    },
+    'strategy.order': (c) => {
+      if (stratOff(c) || whenOff(c)) return NaN
+      place({ ...blankOrder(), kind: 'order', id: text(arg(c, 0, 'id') ?? 'Order'), dir: sideOf(arg(c, 1, 'direction'), c.line), qty: optNumOrNa(c, 2, 'qty'), limit: optNumOrNa(c, 3, 'limit'), stop: optNumOrNa(c, 4, 'stop'), comment: optStr(c, 7, 'comment') ?? '' })
+      return NaN
+    },
+    'strategy.close': (c) => {
+      if (stratOff(c) || whenOff(c, 1)) return NaN
+      const v4 = ver <= 4
+      const o: SOrder = { ...blankOrder(), kind: 'close', id: text(arg(c, 0, 'id') ?? ''), comment: (v4 ? (typeof c.N.comment === 'string' ? c.N.comment : '') : optStr(c, 1, 'comment')) ?? '', qty: optNumOrNa(c, v4 ? 3 : 2, 'qty'), qtyPct: optNumOrNa(c, v4 ? 4 : 3, 'qty_percent') }
+      if (truthy(c.N.immediately ?? 0)) fillOrder(c.i, o, C[c.i]!)
+      else place(o)
+      return NaN
+    },
+    'strategy.close_all': (c) => {
+      if (stratOff(c) || whenOff(c, 0)) return NaN
+      const o: SOrder = { ...blankOrder(), kind: 'close_all', id: '__close_all', comment: (ver <= 4 ? (typeof c.N.comment === 'string' ? c.N.comment : '') : optStr(c, 0, 'comment')) ?? '' }
+      if (truthy(c.N.immediately ?? 0)) fillOrder(c.i, o, C[c.i]!)
+      else place(o)
+      return NaN
+    },
+    'strategy.exit': (c) => {
+      if (stratOff(c) || whenOff(c)) return NaN
+      place({
+        ...blankOrder(),
+        kind: 'exit',
+        id: text(arg(c, 0, 'id') ?? 'Exit'),
+        from: optStr(c, 1, 'from_entry') ?? '',
+        qty: optNumOrNa(c, 2, 'qty'),
+        qtyPct: optNumOrNa(c, 3, 'qty_percent'),
+        profit: optNumOrNa(c, 4, 'profit'),
+        limit: optNumOrNa(c, 5, 'limit'),
+        loss: optNumOrNa(c, 6, 'loss'),
+        stop: optNumOrNa(c, 7, 'stop'),
+        trailPrice: optNumOrNa(c, 8, 'trail_price'),
+        trailPts: optNumOrNa(c, 9, 'trail_points'),
+        trailOff: optNumOrNa(c, 10, 'trail_offset'),
+        comment: optStr(c, 12, 'comment') ?? '',
+        commentProfit: typeof c.N.comment_profit === 'string' ? c.N.comment_profit : '',
+        commentLoss: typeof c.N.comment_loss === 'string' ? c.N.comment_loss : '',
+      })
+      return NaN
+    },
+    'strategy.cancel': (c) => {
+      if (stratOff(c) || whenOff(c)) return NaN
+      const id = text(arg(c, 0, 'id') ?? '')
+      strat.orders = strat.orders.filter((o) => o.id !== id)
+      return NaN
+    },
+    'strategy.cancel_all': (c) => {
+      if (stratOff(c) || whenOff(c)) return NaN
+      strat.orders = []
+      return NaN
+    },
+    'strategy.risk.allow_entry_in': () => NaN,
+    'strategy.risk.max_drawdown': () => NaN,
+    'strategy.risk.max_intraday_loss': () => NaN,
+    'strategy.risk.max_intraday_filled_orders': () => NaN,
+    'strategy.risk.max_cons_loss_days': () => NaN,
+    'strategy.risk.max_position_size': () => NaN,
+    'strategy.convert_to_account': (c) => arg(c, 0, 'value') ?? NaN,
+    'strategy.convert_to_symbol': (c) => arg(c, 0, 'value') ?? NaN,
+    'strategy.default_entry_qty': (c) => defQty(num(arg(c, 0, 'fill_price') ?? C[c.i]!, c.line)),
+  }
+  const tradeNo = (c: Call, list: readonly unknown[]): number => {
+    const n = Math.trunc(num(arg(c, 0, 'trade_num') ?? 0, c.line, 'the trade number'))
+    return n >= 0 && n < list.length ? n : -1
+  }
+  const closedField = (pick: (t: StrategyTrade) => Val) => (c: Call): Val => {
+    const k = tradeNo(c, strat.closed)
+    return k < 0 ? NaN : pick(strat.closed[k]!)
+  }
+  const openField = (pick: (e: SEntry) => Val) => (c: Call): Val => {
+    const k = tradeNo(c, strat.open)
+    return k < 0 ? NaN : pick(strat.open[k]!)
+  }
+  Object.assign(STRATEGY_FNS, {
+    'strategy.closedtrades.entry_price': closedField((t) => t.entryPrice),
+    'strategy.closedtrades.exit_price': closedField((t) => t.exitPrice),
+    'strategy.closedtrades.profit': closedField((t) => t.profit),
+    'strategy.closedtrades.size': closedField((t) => t.qty * t.dir),
+    'strategy.closedtrades.entry_bar_index': closedField((t) => t.entryBar),
+    'strategy.closedtrades.exit_bar_index': closedField((t) => t.exitBar),
+    'strategy.closedtrades.entry_time': closedField((t) => t.entryTime),
+    'strategy.closedtrades.exit_time': closedField((t) => t.exitTime),
+    'strategy.closedtrades.entry_id': closedField((t) => t.entryId),
+    'strategy.closedtrades.exit_id': closedField((t) => t.exitId),
+    'strategy.closedtrades.commission': closedField((t) => t.commission),
+    'strategy.opentrades.entry_price': openField((e) => e.price),
+    'strategy.opentrades.size': openField((e) => e.qty * e.dir),
+    'strategy.opentrades.entry_bar_index': openField((e) => e.bar),
+    'strategy.opentrades.entry_time': openField((e) => e.time),
+    'strategy.opentrades.entry_id': openField((e) => e.id),
+    'strategy.opentrades.profit': (c: Call) => {
+      const k = tradeNo(c, strat.open)
+      const e = strat.open[k]
+      return e ? (C[c.i]! - e.price) * e.dir * e.qty * POINT_VALUE : NaN
+    },
+  })
+
+  // ── Pine maps ──
+  const mapOf = (c: Call, i = 0): MapV => {
+    const v = arg(c, i, 'id')
+    if (!(v instanceof MapV)) throw new ScriptError('expected a map', c.line)
+    return v
+  }
+  const keyOf = (v: Val | undefined, line: number): string | number => {
+    if (typeof v === 'number' || typeof v === 'string') return v
+    throw new ScriptError('a map key is a number or a string', line)
+  }
+  const MAP_FNS: Record<string, (c: Call) => Val> = {
+    'map.new': () => new MapV(new Map()),
+    'map.put': (c) => {
+      const m = mapOf(c)
+      const k = keyOf(arg(c, 1, 'key'), c.line)
+      const prev = m.m.get(k)
+      m.m.set(k, arg(c, 2, 'value') ?? NaN)
+      return prev ?? NaN
+    },
+    'map.get': (c) => mapOf(c).m.get(keyOf(arg(c, 1, 'key'), c.line)) ?? NaN,
+    'map.contains': (c) => (mapOf(c).m.has(keyOf(arg(c, 1, 'key'), c.line)) ? 1 : 0),
+    'map.remove': (c) => {
+      const m = mapOf(c)
+      const k = keyOf(arg(c, 1, 'key'), c.line)
+      const v = m.m.get(k)
+      m.m.delete(k)
+      return v ?? NaN
+    },
+    'map.size': (c) => mapOf(c).m.size,
+    'map.keys': (c) => new PArr([...mapOf(c).m.keys()]),
+    'map.values': (c) => new PArr([...mapOf(c).m.values()]),
+    'map.clear': (c) => {
+      mapOf(c).m.clear()
+      return NaN
+    },
+    'map.copy': (c) => new MapV(new Map(mapOf(c).m)),
+    'map.put_all': (c) => {
+      const m = mapOf(c)
+      for (const [k, v] of mapOf(c, 1).m) m.m.set(k, v)
+      return NaN
+    },
+  }
+  /** input.enum(Side.long, "Side") — a string input whose options are the enum's values. */
+  const enumInput = (c: Call): Val => {
+    const n = c.node.args[0] ?? c.node.named.defval
+    const head = n && n.k === 'id' ? n.name.slice(0, Math.max(0, n.name.indexOf('.'))) : ''
+    const en = enums.get(head)
+    if (!en) throw new ScriptError('input.enum() takes an enum field first — input.enum(Side.long, "Side")', c.line)
+    c.N.options = [...en.values()]
+    return inputCall(c, 'string')
+  }
+
   const BUILTINS: Record<string, (c: Call) => Val> = {
     // ── declarations ──
     indicator: (c) => declareScript(c, false),
@@ -2896,6 +3786,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'input.symbol': (c) => inputCall(c, 'symbol'),
     'input.price': (c) => inputCall(c, 'price'),
     'input.time': (c) => inputCall(c, 'time'),
+    'input.enum': enumInput,
     // ── outputs ──
     plot: plotCall,
     hline: (c) => {
@@ -2984,8 +3875,32 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       markerAt(c, c.i, { text: txt, color, textColor: color, position: pos, y: NaN, shape: shapeIn as MarkerShape, size: sz as MarkerSize })
       return NaN
     },
-    alertcondition: () => NaN,
-    alert: () => NaN,
+    alertcondition: (c) => {
+      const site = c.site()
+      let k = site.any as number | null
+      if (k == null) {
+        const title = optStr(c, 1, 'title') ?? `Alert ${res.alerts.conditions.length + 1}`
+        const message = optStr(c, 2, 'message') ?? title
+        k = res.alerts.conditions.push({ title, message, fired: [] }) - 1
+        site.any = k
+      }
+      if (opts.capture) return NaN
+      if (truthy(arg(c, 0, 'condition') ?? 0)) {
+        const cond = res.alerts.conditions[k]!
+        cond.fired.push({ i: c.i, text: alertText(cond.message, c.i) })
+        if (cond.fired.length > 300) cond.fired.shift()
+      }
+      return NaN
+    },
+    alert: (c) => {
+      if (opts.capture || opts.dry) return NaN
+      const st = c.site()
+      if (st.any == null) st.any = ++alertSites
+      const calls = res.alerts.calls
+      calls.push({ i: c.i, message: alertText(text(arg(c, 0, 'message') ?? ''), c.i), freq: optStr(c, 1, 'freq') ?? 'once_per_bar', site: st.any as number })
+      if (calls.length > 500) calls.shift()
+      return NaN
+    },
     'log.info': () => NaN,
     'log.warning': () => NaN,
     'log.error': () => NaN,
@@ -3756,6 +4671,10 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     },
     // ── arrays ──
     ...ARRAY_FNS,
+    // ── maps ──
+    ...MAP_FNS,
+    // ── strategy orders ──
+    ...STRATEGY_FNS,
     // ── drawings ──
     ...DRAW_FNS,
   }
@@ -3778,7 +4697,43 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     depth = 0
     frame.i = i
     frame.ctl = 0
+    if (strat.on) {
+      processBar(i)
+      strat.bar = i
+    } else strat.bar = i
     top(frame)
+    if (strat.on) {
+      if (strat.onClose) {
+        // process_orders_on_close: market orders fill at this bar's close
+        const market = strat.orders.filter((o) => o.kind !== 'exit' && isNa(o.limit) && isNa(o.stop))
+        if (market.length) {
+          strat.orders = strat.orders.filter((o) => !market.includes(o))
+          for (const o of market) fillOrder(i, o, C[i]!)
+        }
+      }
+      recordBar(i)
+    }
+  }
+  if (strat.on) {
+    const px = C[N - 1] ?? NaN
+    res.strategy = {
+      initialCapital: strat.capital,
+      pointValue: POINT_VALUE,
+      fills: strat.fills,
+      closed: strat.closed,
+      open: strat.open.map((e) => ({ id: e.id, dir: e.dir, qty: e.qty, price: e.price, bar: e.bar, time: e.time, profit: (px - e.price) * e.dir * e.qty * POINT_VALUE })),
+      netProfit: strat.net,
+      grossProfit: strat.grossP,
+      grossLoss: strat.grossL,
+      openProfit: openProfitAt(px),
+      commission: strat.comm,
+      wins: strat.wins,
+      losses: strat.losses,
+      even: strat.even,
+      maxDrawdown: strat.maxDD,
+      maxDrawdownPct: strat.maxDDPct,
+      equity: strat.equity ?? new Float64Array(N).fill(NaN),
+    }
   }
 
   // ── finish ──

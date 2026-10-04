@@ -169,3 +169,130 @@
   white-space: pre;
   overflow-x: auto;
 }
+
+/* ── Scripts panel: CB Edge levels / sync row, Strategy results, Alerts ── */
+.cb-scr .cb-scr-note {
+  min-width: 0;
+  color: var(--color-muted);
+  opacity: 0.75;
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+}
+.cb-scr .cb-scr-row .cb-scr-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-scr .cb-scr-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+.cb-scr .cb-scr-box[hidden] {
+  display: none;
+}
+.cb-scr .cb-scr-boxbody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-surface2);
+}
+.cb-scr .cb-scr-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  font-variant-numeric: tabular-nums;
+}
+.cb-scr .cb-scr-k {
+  color: var(--color-muted);
+  opacity: 0.75;
+}
+.cb-scr .cb-scr-v {
+  text-align: right;
+}
+.cb-scr .cb-scr-v[data-tone='up'] {
+  color: var(--color-up);
+}
+.cb-scr .cb-scr-v[data-tone='down'] {
+  color: var(--color-down);
+}
+.cb-scr .cb-scr-eq {
+  width: 100%;
+  height: 64px;
+  border-top: 1px solid var(--color-line);
+  border-bottom: 1px solid var(--color-line);
+}
+.cb-scr .cb-scr-eq polyline {
+  fill: none;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+.cb-scr .cb-scr-eq .cb-scr-eq-up {
+  stroke: var(--color-up);
+}
+.cb-scr .cb-scr-eq .cb-scr-eq-down {
+  stroke: var(--color-down);
+}
+.cb-scr .cb-scr-eq .cb-scr-eq-base {
+  stroke: var(--color-line);
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+.cb-scr .cb-scr-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+.cb-scr .cb-scr-logrow {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cb-scr .cb-scr-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.cb-scr .cb-scr-check input {
+  accent-color: var(--color-accent);
+}
+
+/* ── Script alert toasts (pages/vela/script/alerts.ts) ── */
+.cb-scr-toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(340px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.cb-scr-toast {
+  padding: 8px 12px;
+  border: 1px solid var(--color-accent);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-bg) 70%, transparent);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.cb-scr-toast .cb-scr-toast-head {
+  font-weight: 600;
+  color: var(--color-accent);
+}
+.cb-scr-toast .cb-scr-toast-foot {
+  margin-top: 2px;
+  opacity: 0.6;
+  font-size: var(--text-2xs);
+}

@@ -25661,3 +25661,58 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - **Owed rows count as unpaid everywhere:** Upcoming Pay (list, total, past-due strip; its Pay button clears the mark), safe-to-spend bills left, weekly reconcile (uncleared), the Rent card's "paid this month" check, and Recent Transactions (left out).
 - **Files:** `owner-vite/src/pages/Budget.tsx`.
 - **Checks:** `tsc --noEmit` on Budget.tsx is clean, before and after.
+
+
+## 2026-10-03 - Vela: 19 additions (studies, timeline marks, strategies, alerts, sync, long history)
+- **Native studies.** Ten new studies on the Indicators picker under Built-in. None is added to a chart automatically.
+  - **Levels:** CB Prior Levels (PDH/PDL/PDC, PWH/PWL, PMH/PML; ES falls back to `/api/ref-levels`) and CB Initial Balance (IBH/IBL/mid and the ×0.5–×2 extensions, labelled with ES/NQ hit rates from `/api/ib-results`).
+  - **Overnight:** CB Overnight High/Low comes from the extended tape. SPX and NDX use ES and NQ, adjusted by the basis.
+  - **GEX:** CB Expected Move (`/api/daily-em` per session, plus the weekly EM from `/api/em-tracker`), CB Key Levels (walls, CORE, flip and max pain from `/api/chains`, plus the weekly pivot and zones from `/api/levels`), and CB GEX Profile (net GEX by strike, drawn beside the price axis and following scroll and zoom).
+  - **Flow:** CB Net Premium pane (`/proxy/flow-netprem`), CB Vol/GEX Flow pane (`/proxy/gex-vol-flow`) and CB Whale Prints markers (`/api/lse/whales`).
+  - **Profile:** CB Market Profile (TPO per session, POC, VAH/VAL, naked POCs).
+  - Each study's code loads the first time the study starts.
+- **Timeline marks on every chart.** Econ calendar events (`/api/calendar`, grouped High/Medium/Low), the engine's signals for the chart's symbol (`/proxy/signals`), and your own script alerts. Each group has a checkbox on the Events tab.
+- **CB Script.**
+  - Pine user-defined types: `type`, `Type.new`, `p.x := …`, `.copy`.
+  - Also `enum` with `input.enum`, `method`, and `.field` / `.method()` on any expression.
+  - Maps: `map.*` and `for [k, v] in m`.
+  - `strategy()` is now simulated: entry, order, close, close_all, exit (profit, loss, limit, stop, trail), cancel, pyramiding, qty types, commission, slippage, and process_orders_on_close.
+  - `strategy.*` state and `closedtrades.*` / `opentrades.*` are available, and fills draw as Vela trade markers.
+  - `alertcondition()` and `alert()` record when they fire.
+  - The language now loads as its own chunk, so the Vela route is back under its size budget.
+  - Fixed: hidden plots (`display.none`) no longer stretch the price scale.
+- **Scripts panel.**
+  - New **CB Edge levels** button: puts this week's `/api/pinescript` script on the active chart's symbol. Click it again to refresh.
+  - New **Sync** button: merges your scripts with your account through the existing `/api/page-preset` store, with deletes carried across devices. It also runs after every save and delete.
+  - New **Strategy results** section: net, win rate, profit factor, drawdown, an equity line and the latest trades.
+  - New **Alerts** section: a per-script on switch, desktop notifications, and a log of what fired.
+- **Script alerts.** Alerts fire only on live bars, once per bar per alert. They show in the toolbar Alerts feed as a new "Script" chip, as a toast, and as a timeline mark. Discord isn't wired: the only path to Discord is the owner's trade bot.
+- **History.**
+  - D/W/M (W and M are new on the timeframe picker) now reach back years. The chart tries `/api/vela/history` first. For the owner it then tries the LSE vault, and for W/M it falls back to `/api/dxlink/candles`.
+  - `request.security` on D/W/M fetches that long history too.
+  - Owner only: ES/NQ intraday requests deeper than the tape (range chips such as 3M or ALL) are filled from `/api/lse/candles`.
+- **Not committed, needs your OK:** a new `server-v2/api-router.js` route, `/api/vela/history`. It fetches Yahoo daily, weekly and monthly bars, the same way `/api/quotes-batch` does. Until it ships, D stays about 30 sessions deep for everyone except the owner.
+- **Files:**
+  - `cbedge-v3/src/pages/Vela.tsx`
+  - `pages/vela/{cbedgeProvider.ts, vela.css, marks.ts}`
+  - `pages/vela/studies/{index,common,levels,gex,flow,tpo}.ts` (new)
+  - `pages/vela/script/{lang,runtime,engine,panel,library}.ts`
+  - `pages/vela/script/alerts.ts` (new)
+  - `shell/{AlertsFeed.tsx, alertTypes.ts}`
+  - `shell/scriptAlerts.ts` (new)
+- **Checks:**
+  - `tsc --noEmit`: clean for these files.
+  - `check:theme`: passes.
+  - `vite build`: OK. The Vela route is under budget. Entry, react and css were already over budget before this change.
+  - Node bench: all Pine samples run.
+  - New unit tests: strategy fills (brackets, stops, limits, partial exits, on-close) and the alert de-duplication.
+  - Ripster: 52 ms per 5,000 bars.
+  - Headless Chromium against mock data covered every study, ES deep history, W/M, CB Edge levels, strategy results, sync, and a live alert reaching the toast, the feed and the marks. No console errors.
+- **Files in `generated/`:** `2026-10-03-vela-levels-studies.png`, `2026-10-03-vela-key-levels-gex-profile.png`, `2026-10-03-vela-flow-tpo.png`, `2026-10-03-vela-es-deep-history.png`, `2026-10-03-vela-weekly-long-history.png`, `2026-10-03-vela-strategy-results.png`, `2026-10-03-vela-script-alert.png` (mock data)
+
+## 2026-10-03 - v3 Whales: Tracked contracts layout + plus/minus expand
+
+- **Note column removed** from the Tracked contracts table. Notes are still stored and still appear on the probe's trade card. The inline note editor is gone.
+- **Columns now line up:** `table-fixed` with a single `colgroup` (toggle, contract, expiry 110, entry 110, now 170, high 170, tracked 84, remove), so rows in every group share the same column edges. Expiry is now two lines (date on top, DTE below).
+- **Expand control (option D):** a square +/− tile replaces the ▸/▾ button. When open it is tinted by call (warn) or put (down) and the row stays raised. Clicking anywhere on the row opens or closes the chart; the remove button stops click propagation.
+- **Files:** `cbedge-v3/src/pages/whales/TrackedAlertsCard.tsx`.

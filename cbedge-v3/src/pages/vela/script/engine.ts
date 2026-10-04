@@ -44,8 +44,10 @@ import type {
 import { stableSeriesId } from '@luxalgo/vela/plugin'
 import { tokenHexAlpha } from '@/design/theme'
 import { PROVIDER_NAME } from '../providerName'
-import { parse, type Program } from './lang'
-import { NeedSeries, run, type FillEnd, type RunOpts, type RunResult } from './runtime'
+import type { Program } from './lang'
+import type { FillEnd, NeedSeries, RunOpts, RunResult, StrategyOut } from './runtime'
+import { dropAlertCursor, scanAlerts } from './alerts'
+import { libIdOf } from './library'
 
 export const CBSCRIPT = 'cbscript'
 
@@ -57,10 +59,26 @@ interface Token {
 /** One bar to dry-run a script on: enough for every declaration and input to register. */
 const DRY_BAR: OHLCV = { time: Date.UTC(2026, 0, 5, 15, 0), open: 100, high: 101, low: 99, close: 100, volume: 1000 }
 
-/** Parse + check a script without a chart. Throws a ScriptError (with its line) on any fault. */
+// ── The language itself loads on demand ──────────────────────────────────────
+// lang.ts + runtime.ts are most of CB Script's weight and nothing on the page
+// needs them until a script is checked or put on a chart: they are their own
+// chunk, fetched the first time the Scripts panel opens or a chart restores a
+// script (prepare() is async, so a chart simply waits for it).
+type Runtime = typeof import('./runtime')
+let rt: Runtime | null = null
+let rtLoad: Promise<Runtime> | null = null
+export function loadRuntime(): Promise<Runtime> {
+  return (rtLoad ??= import('./runtime').then((m) => (rt = m)))
+}
+
+/**
+ * Parse + check a script without a chart. Throws a ScriptError (with its line) on
+ * any fault — and, before loadRuntime() has resolved, a plain "still loading".
+ */
 export function compile(source: string): { prog: Program; result: RunResult } {
-  const prog = parse(source)
-  return { prog, result: run(prog, [DRY_BAR], { dry: true }) }
+  if (!rt) throw new Error('CB Script is still loading — try again in a moment')
+  const prog = rt.parse(source)
+  return { prog, result: rt.run(prog, [DRY_BAR], { dry: true }) }
 }
 
 // ── Errors a script hits ON A CHART (data-dependent ones the dry run can't see),
@@ -83,6 +101,68 @@ export function scriptErrors(): ReadonlyMap<string, string> {
   return lastError
 }
 
+// ── What a script on a chart last produced, for the Scripts panel: a strategy's
+// results (its Strategy Tester), and which alerts it declares.
+export interface ScriptRunInfo {
+  instanceId: string
+  title: string
+  symbol: string
+  timeframe: string
+  bars: number
+  /** Present for a strategy() script. `equity` is thinned to ≤ 400 points (with `times`). */
+  strategy?: Omit<StrategyOut, 'equity' | 'fills'> & { equity: number[]; times: number[]; fills: number }
+  alerts: { title: string; fired: number }[]
+  usesAlert: boolean
+  at: number
+}
+const resultListeners = new Set<(info: ScriptRunInfo) => void>()
+const lastResult = new Map<string, ScriptRunInfo>()
+export function onScriptResult(fn: (info: ScriptRunInfo) => void): () => void {
+  resultListeners.add(fn)
+  return () => resultListeners.delete(fn)
+}
+export function scriptResults(): ReadonlyMap<string, ScriptRunInfo> {
+  return lastResult
+}
+function tellResult(id: string, res: RunResult, bars: readonly OHLCV[], symbol: string, timeframe: string) {
+  let strategy: ScriptRunInfo['strategy']
+  if (res.strategy) {
+    const { equity, fills, ...rest } = res.strategy
+    const n = bars.length
+    const step = Math.max(1, Math.ceil(n / 400))
+    const eq: number[] = []
+    const times: number[] = []
+    for (let i = 0; i < n; i += step) {
+      const v = equity[i]!
+      if (Number.isNaN(v)) continue
+      eq.push(v)
+      times.push(bars[i]!.time)
+    }
+    if (n && (times[times.length - 1] ?? -1) !== bars[n - 1]!.time && !Number.isNaN(equity[n - 1]!)) {
+      eq.push(equity[n - 1]!)
+      times.push(bars[n - 1]!.time)
+    }
+    strategy = { ...rest, equity: eq, times, fills: fills.length }
+  }
+  const info: ScriptRunInfo = {
+    instanceId: id,
+    title: res.meta.title,
+    symbol,
+    timeframe,
+    bars: bars.length,
+    ...(strategy ? { strategy } : {}),
+    alerts: res.alerts.conditions.map((c) => ({ title: c.title, fired: c.fired.length })),
+    usesAlert: res.alerts.calls.length > 0,
+    at: Date.now(),
+  }
+  lastResult.set(id, info)
+  for (const fn of resultListeners) fn(info)
+}
+function dropResult(id: string) {
+  lastResult.delete(id)
+  dropAlertCursor(id)
+}
+
 function valuesOf(schema: readonly InputSchema[], given: Record<string, InputValue> | undefined): Record<string, InputValue> {
   const out: Record<string, InputValue> = {}
   for (const s of schema) out[s.key] = given?.[s.key] ?? s.defval
@@ -99,7 +179,8 @@ function constant<T>(xs: readonly T[]): { v: T } | null {
 
 export function toModel(id: string, res: RunResult, bars: readonly OHLCV[], inputValues: Record<string, InputValue>): IndicatorModel {
   const clear = tokenHexAlpha('--color-bg', 0)
-  const hiddenDisplay = { pane: false, legend: false, dataWindow: false }
+  // off every surface — the price scale too, or a hidden plot (an equity line) still stretches the autoscale
+  const hiddenDisplay = { pane: false, priceScale: false, legend: false, dataWindow: false }
   const series: SeriesSpec[] = res.plots.map((p, ordinal) => {
     const same = constant(p.colors)
     const color = (same ? same.v : p.colors.find((c) => c !== null)) ?? clear
@@ -239,6 +320,14 @@ export function toModel(id: string, res: RunResult, bars: readonly OHLCV[], inpu
     ...(polylines.length ? { polylines } : {}),
     ...(tables.length ? { tables } : {}),
     ...(barColors.length ? { barColors } : {}),
+    // a strategy's fills: Vela's trade markers (entry arrows, capped exit arrows) on the price pane
+    ...(res.strategy?.fills.length
+      ? {
+          trades: res.strategy.fills
+            .filter((f) => bars[f.i])
+            .map((f) => ({ time: bars[f.i]!.time, price: f.price, side: f.side, kind: f.kind, label: f.label, qty: f.qty, tradeId: `${id}-${f.trade}` })),
+        }
+      : {}),
     inputs: res.inputs,
     inputValues,
   }
@@ -252,6 +341,7 @@ export class CbScriptEngine implements ScriptingEngine {
   readonly capabilities = { streaming: true, visibleRange: false, inputs: true }
 
   async prepare(source: string, instanceId: string): Promise<PreparedScript> {
+    await loadRuntime()
     const { prog, result } = compile(source)
     const token: Token = { prog, id: instanceId }
     return {
@@ -289,8 +379,10 @@ export class CbScriptEngine implements ScriptingEngine {
         return
       }
       fetching.add(key)
-      const from = bars[0]?.time
+      // daily and up: as far back as the provider reaches (its long history), not just the chart's window
+      const coarse = /^\d*[DWM]$/i.test(need.timeframe)
       const to = bars[bars.length - 1]?.time
+      const from = coarse && to != null ? to - 20 * 365 * 86_400_000 : bars[0]?.time
       req
         .fetchSeries(`${PROVIDER_NAME}:${need.symbol}`, need.timeframe, { ...(from != null ? { from } : {}), ...(to != null ? { to: to + 86_400_000 } : {}) })
         .then((got) => series.set(key, got ?? []))
@@ -306,17 +398,20 @@ export class CbScriptEngine implements ScriptingEngine {
       last = Date.now()
       const bars = req.getBars?.() ?? req.bars
       try {
-        const res = run(token.prog, bars, { ...market, inputs, series })
+        const res = rt!.run(token.prog, bars, { ...market, inputs, series })
         h.onModel(toModel(token.id, res, bars, valuesOf(res.inputs, inputs)))
         cost = Date.now() - last
         tellError(token.id, null)
+        tellResult(token.id, res, bars, market.symbol ?? '', market.timeframe ?? '')
+        const lib = libIdOf(token.id)
+        if (lib) scanAlerts(token.id, lib, res.meta.title, res, bars, market.symbol ?? '', market.timeframe ?? '')
         if (first) {
           first = false
           for (const message of res.warnings) h.onWarning?.({ message, bar: 0 })
           h.onDone?.()
         }
       } catch (e) {
-        if (e instanceof NeedSeries) {
+        if (rt && e instanceof rt.NeedSeries) {
           fetchFor(e, bars)
           return
         }
@@ -330,11 +425,14 @@ export class CbScriptEngine implements ScriptingEngine {
       stop() {
         stopped = true
         tellError(token.id, null)
+        dropResult(token.id)
         if (timer) clearTimeout(timer)
         timer = null
       },
       update(next: Record<string, InputValue>) {
         inputs = { ...next }
+        // new inputs, new history: what the script now says about past bars never fires
+        dropAlertCursor(token.id)
         if (timer) clearTimeout(timer)
         compute()
       },

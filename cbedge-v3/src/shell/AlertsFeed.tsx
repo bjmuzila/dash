@@ -3,6 +3,7 @@ import { alpha } from '@/design/theme'
 import type { AlertItem } from '@/shell/alertTypes'
 import type { AlertKind } from '@/shell/alertTypes'
 import { ALERT_TYPES, TYPE_BY_ID, onShownChange, readShown } from '@/shell/alertTypes'
+import { onScriptAlert, readScriptAlerts, readScriptSeen, writeScriptSeen } from '@/shell/scriptAlerts'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE ALERTS PILL — the newest signal, in the toolbar, all the time.
@@ -236,7 +237,34 @@ function toItem(row: SignalRow): AlertItem | null {
     bias: biasOf(kind, row, m),
     meta: bits.length ? tidy(bits.join(' · ')) : undefined,
     at: etClock(row.ts),
+    ...(tsOf(row.ts) ? { ts: tsOf(row.ts)! } : {}),
   }
+}
+
+/** A row's `ts` as epoch ms (seconds, ms or ISO), or null. */
+function tsOf(v: unknown): number | null {
+  const n = Number(v)
+  if (Number.isFinite(n) && n > 0) return n < 1e12 ? n * 1000 : n
+  const p = Date.parse(String(v ?? ''))
+  return Number.isFinite(p) ? p : null
+}
+
+/**
+ * The server's rows and this browser's script alerts (shell/scriptAlerts.ts) as one
+ * list, newest first. Server rows keep their own order; a script row goes in front
+ * of every server row older than it.
+ */
+function mergeLocal(server: AlertItem[], local: AlertItem[]): AlertItem[] {
+  if (!local.length) return server
+  const out: AlertItem[] = []
+  let j = 0
+  for (const s of server) {
+    const t = s.ts ?? 0
+    while (j < local.length && (local[j]!.ts ?? 0) >= t) out.push(local[j++]!)
+    out.push(s)
+  }
+  while (j < local.length) out.push(local[j++]!)
+  return out
 }
 
 // ── The poll ────────────────────────────────────────────────────────────────
@@ -273,7 +301,10 @@ function writeSeen(id: number) {
 }
 
 export function useAlertsFeed(): AlertItem[] {
-  const [items, setItems] = useState<AlertItem[]>([])
+  const [server, setItems] = useState<AlertItem[]>([])
+  const [local, setLocal] = useState<AlertItem[]>(() => readScriptAlerts().slice())
+  useEffect(() => onScriptAlert(() => setLocal(readScriptAlerts().slice())), [])
+  const items = useMemo(() => mergeLocal(server, local), [server, local])
   const sigRef = useRef('')
 
   useEffect(() => {
@@ -383,11 +414,16 @@ export function AlertsPill() {
   // The newest row of the WHOLE feed, filtered or not. Seen-marking and arrival
   // detection run on this, so a hidden type is acknowledged along with the rest
   // when the list is opened, and switching a chip back on never resurfaces an
-  // old row as unread or as a fresh bloom.
-  const feedLatestId = feed[0]?.id ?? null
+  // old row as unread or as a fresh bloom. SERVER rows only: a script alert's id
+  // is negative (shell/scriptAlerts.ts) and counts through its own `ts` mark.
+  const feedLatestId = feed.find((a) => a.id > 0)?.id ?? null
+  const [scriptSeen, setScriptSeen] = useState<number>(() => readScriptSeen())
   const [bloomId, setBloomId] = useState<number | null>(null)
   const [seen, setSeen] = useState<number>(() => readSeen())
   const markSeen = (id: number | null) => {
+    const now = Date.now()
+    writeScriptSeen(now)
+    setScriptSeen(now)
     if (id == null) return
     writeSeen(id)
     setSeen(id)
@@ -402,12 +438,14 @@ export function AlertsPill() {
   // lands while it is open — and a bloom in progress has done its job.
   const openRef = useRef(open)
   openRef.current = open
+  // the newest script alert too: one landing while the list is open has been seen
+  const localLatestTs = feed.find((a) => a.id < 0)?.ts ?? 0
   useEffect(() => {
     if (!open) return
     markSeen(feedLatestId)
     setBloomId(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, feedLatestId])
+  }, [open, feedLatestId, localLatestTs])
 
   // Another tab opened the list → this tab's badge clears too.
   useEffect(() => {
@@ -418,7 +456,18 @@ export function AlertsPill() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  const unread = seen > 0 ? items.filter((a) => a.id > seen).length : 0
+  const unread =
+    (seen > 0 ? items.filter((a) => a.id > seen).length : 0) + items.filter((a) => a.id < 0 && (a.ts ?? 0) > scriptSeen).length
+
+  // A script alert landing blooms like a server row does (its id is negative, so
+  // the arrival marker below never sees it).
+  useEffect(
+    () =>
+      onScriptAlert((a) => {
+        if (!openRef.current && readShown().includes('script')) setBloomId(a.id)
+      }),
+    [],
+  )
 
   // ── THE BLOOM ON ARRIVAL ─────────────────────────────────────────────────
   // A NEW top row grows the pill into a two-line chip for a few seconds (see

@@ -14,6 +14,8 @@ import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
 import { PATH_TYPE, registerVtPath } from '@/pages/vela/vtPath/vtPathIndicator'
 import { CBSCRIPT, CbScriptEngine } from '@/pages/vela/script/engine'
 import { registerScripts } from '@/pages/vela/script/panel'
+import { registerStudies } from '@/pages/vela/studies'
+import { bindTimelineMarks } from '@/pages/vela/marks'
 import '@/pages/vela/vela.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,6 +111,17 @@ import '@/pages/vela/vela.css'
 // (`cb-v3-vela-scripts`); a script on a chart is kept in that chart's saved
 // state, and an edit saved in the panel updates every chart running it.
 //
+// ── CB Edge studies + timeline marks ────────────────────────────────────────
+// pages/vela/studies/ — ten native studies on the Indicators picker (Built-in):
+// Prior Levels, Initial Balance, Overnight H/L, Expected Move, Key Levels, GEX
+// Profile (net GEX by strike beside the price axis), Net Premium and Vol/GEX
+// Flow panes, Whale Prints markers, Market Profile (TPO). Opt-in, never seeded.
+// pages/vela/marks.ts — the time axis's marks lane on every chart: the week's
+// econ releases, the Alerts feed's engine signals for the chart's symbol, and
+// your scripts' alerts as they fire (Events tab checkboxes switch each group).
+// strategy() scripts paint their fills as Vela trade markers (script/engine.ts).
+// D / W / M reach back years where a long source answers (cbedgeProvider.ts).
+//
 // ── Our CSS over Vela's ──────────────────────────────────────────────────────
 // pages/vela/vela.css: the active chart in a grid gets a faint 1px grey ring
 // instead of Vela's 2px bright one, the opacity strip's look, and the Scripts
@@ -156,6 +169,7 @@ registerCopyScreenshot()
 registerCopyIndicators()
 registerWallsOpacity()
 registerScripts()
+registerStudies()
 
 function readSeeded(key: string): Set<string> {
   try {
@@ -269,7 +283,7 @@ export default function Vela({ phone = false }: VelaProps) {
       upColor: theme.upColor,
       downColor: theme.downColor,
       timezone: 'America/New_York',
-      timeframes: ['1', '5', '15', '30', '60', '240', 'D'],
+      timeframes: ['1', '5', '15', '30', '60', '240', 'D', 'W', 'M'],
       providers: { [PROVIDER_NAME]: () => new CbEdgeProvider() },
       engines: { [CBSCRIPT]: () => new CbScriptEngine() },
       persist: storageKey,
@@ -277,6 +291,7 @@ export default function Vela({ phone = false }: VelaProps) {
     wsRef.current = ws
     const unbindShot = bindShotWorkspace(ws)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
+    const unbindMarks = bindTimelineMarks(ws)
 
     // Chart → toolbar. `state:changed` is Vela's debounced "something worth
     // saving moved" signal, and it covers a symbol switch AND a different cell
@@ -310,6 +325,7 @@ export default function Vela({ phone = false }: VelaProps) {
       offCreated()
       unbindShot()
       unbindIndicators()
+      unbindMarks()
       wsRef.current = null
       ws.destroy()
       host.remove()

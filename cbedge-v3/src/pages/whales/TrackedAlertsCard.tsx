@@ -6,7 +6,7 @@ import { alertToRow, type AlertsStore, type WhaleAlert } from './alertsStore'
 // ─────────────────────────────────────────────────────────────────────────────
 // TRACKED CONTRACTS — the card at the bottom of /whales.
 //
-// One row per contract you flagged, your note beside it, and a drawer that
+// One row per contract you flagged, and a drawer that
 // draws the SAME probe the prints table draws. Nothing here notifies: this is a
 // list you come back to, which is why it is a server row and not a filter.
 //
@@ -195,31 +195,44 @@ export function TrackedAlertsCard({ store }: { store: AlertsStore }) {
       {ready && !alerts.length ? (
         <div className="px-3 py-4 text-xs leading-relaxed text-fg">
           Nothing tracked yet. Hit <span className="font-bold text-fg">TRACK</span> on a print above, or
-          on a contract in the lookup, and it lands here with its chart and a place for your note. Tracked
+          on a contract in the lookup, and it lands here with its chart. Tracked
           contracts follow your login, not this browser — and a contract is removed on the day after it
           expires.
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-xs">
+          {/* FIXED GRID (2026-10-03, Brandon) — table-fixed + one colgroup so every
+              group's rows line up column-for-column; the NOTE column is gone from
+              the table (notes are still stored and still ride on the probe's
+              trade card). */}
+          <table className="w-full min-w-[820px] table-fixed border-collapse text-xs">
+            <colgroup>
+              <col className="w-9" />
+              <col />
+              <col className="w-[110px]" />
+              <col className="w-[110px]" />
+              <col className="w-[170px]" />
+              <col className="w-[170px]" />
+              <col className="w-[84px]" />
+              <col className="w-9" />
+            </colgroup>
             <thead>
               <tr className="text-2xs uppercase tracking-[0.09em] text-fg">
-                <th className="w-6 px-1 py-2" />
+                <th className="px-1 py-2" />
                 <th className="px-2 py-2 text-left font-bold">Contract</th>
                 <th className="px-2 py-2 text-left font-bold">Expiry</th>
                 <th className="px-2 py-2 text-right font-bold" title="The fill, and what it cost — price × contracts × 100">Entry</th>
                 <th className="px-2 py-2 text-right font-bold" title="The last mark, what the position is worth at it, and the P/L off the entry">Now</th>
                 <th className="px-2 py-2 text-right font-bold" title="The best mark since the print (since tracking, for a lookup), what it was worth there, and the P/L off the entry">High</th>
-                <th className="min-w-[180px] px-2 py-2 text-left font-bold">Note</th>
                 <th className="px-2 py-2 text-right font-bold">Tracked</th>
-                <th className="w-7 px-1 py-2" />
+                <th className="px-1 py-2" />
               </tr>
             </thead>
             <tbody>
               {groups.map((g) => (
                 <Fragment key={g.label}>
                   <tr>
-                    <td colSpan={9} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-fg">
+                    <td colSpan={8} className="border-t border-line bg-surface2 px-2 py-1.5 text-2xs font-bold uppercase tracking-[0.1em] text-fg">
                       {g.label}
                       <span className="tabular font-normal text-fg">
                         {' '}· {g.rows.length}
@@ -258,7 +271,6 @@ function AlertRow({ a, mark, high, open, onToggle, store }: {
   onToggle: () => void
   store: AlertsStore
 }) {
-  const [draft, setDraft] = useState<string | null>(null)
   const row = useMemo(() => alertToRow(a), [a])
   const days = dte(a.expiry)
 
@@ -334,28 +346,39 @@ function AlertRow({ a, mark, high, open, onToggle, store }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [a, days, entry, mark, high, pct, hiPct, dollars, ink, unit, qty])
 
-  const commitNote = () => {
-    if (draft == null) return
-    const next = draft.trim().slice(0, 500)
-    setDraft(null)
-    if (next !== a.note) void store.setNote(a.id, next)
-  }
-
   return (
     <>
-      <tr className="border-t border-line hover:bg-raised">
-        <td className="px-1 py-1.5 align-middle">
+      {/* PLUS/MINUS TILE (2026-10-03, Brandon — option D). The whole row opens
+          the chart; the tile is the visible handle. Open, it tints call/put and
+          the row stays raised so you can see which contract the chart is. */}
+      <tr
+        onClick={onToggle}
+        className={['cursor-pointer border-t border-line transition-colors', open ? 'bg-raised' : 'hover:bg-raised'].join(' ')}
+      >
+        <td className="px-1 py-1.5 text-center align-middle">
           <button
             type="button"
-            onClick={onToggle}
+            onClick={(e) => { e.stopPropagation(); onToggle() }}
             aria-label={open ? 'Close chart' : 'Open chart'}
+            aria-expanded={open}
             title={open ? 'Close the chart' : 'Open the chart'}
-            className="h-5 w-5 rounded-sm border border-line text-2xs leading-none text-fg hover:text-fg"
+            className={[
+              'group relative inline-block h-[22px] w-[22px] rounded-sm border transition-colors',
+              open
+                ? a.optType === 'P' ? 'border-down/60 bg-down/10 text-down' : 'border-warn/60 bg-warn/10 text-warn'
+                : 'border-line bg-surface2 text-fg/60 hover:text-fg',
+            ].join(' ')}
           >
-            {open ? '▾' : '▸'}
+            <span className="absolute left-1/2 top-1/2 h-[1.5px] w-[9px] -translate-x-1/2 -translate-y-1/2 bg-current" />
+            <span
+              className={[
+                'absolute left-1/2 top-1/2 h-[1.5px] w-[9px] -translate-x-1/2 -translate-y-1/2 bg-current transition-transform duration-150',
+                open ? 'rotate-0' : 'rotate-90',
+              ].join(' ')}
+            />
           </button>
         </td>
-        <td className="whitespace-nowrap px-2 py-1.5">
+        <td className="truncate whitespace-nowrap px-2 py-1.5">
           <span className="font-semibold text-fg">{a.underlying}</span>{' '}
           <span className={[
             'tabular rounded-sm border px-1 py-px text-2xs font-bold',
@@ -372,12 +395,12 @@ function AlertRow({ a, mark, high, open, onToggle, store }: {
           </div>
         </td>
         <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">
-          {fmtExpiry(a.expiry)}
+          <div className="font-semibold">{fmtExpiry(a.expiry)}</div>
           {/* A tracked contract is deleted the day after it expires, so this
               number is a countdown to the row leaving — worth colouring. */}
-          <span className={days != null && days <= 2 ? ' text-warn' : ' text-fg'}>
-            {days != null ? ` ${days}d` : ''}
-          </span>
+          <div className={['text-3xs', days != null && days <= 2 ? 'text-warn' : 'text-fg/60'].join(' ')}>
+            {days != null ? `${days}d` : '\u00a0'}
+          </div>
         </td>
         <PriceCell
           price={entry}
@@ -394,47 +417,16 @@ function AlertRow({ a, mark, high, open, onToggle, store }: {
           unit={unit}
           title={a.printTs ? 'Best mark since the print' : 'Best mark since you tracked it'}
         />
-        <td className="px-2 py-1.5">
-          {/* An input that is always an input reads as a form. This is a note
-              you write once and glance at for weeks, so it renders as text and
-              becomes an input on click. */}
-          {draft == null ? (
-            <button
-              type="button"
-              onClick={() => setDraft(a.note)}
-              title="Click to edit"
-              className={[
-                'w-full truncate text-left text-2xs',
-                a.note ? 'border-b border-dashed border-line text-fg' : 'text-fg',
-              ].join(' ')}
-            >
-              {a.note || 'add a note…'}
-            </button>
-          ) : (
-            <input
-              autoFocus
-              value={draft}
-              maxLength={500}
-              onChange={(e) => setDraft(e.target.value)}
-              onBlur={commitNote}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitNote()
-                if (e.key === 'Escape') setDraft(null)
-              }}
-              className="w-full rounded-sm border border-line bg-bg px-1.5 py-0.5 text-2xs text-fg outline-none focus:border-accent"
-            />
-          )}
-        </td>
         <td className="tabular whitespace-nowrap px-2 py-1.5 text-right text-3xs text-fg">
           {fmtTime(a.createdAt)}
         </td>
-        <td className="px-1 py-1.5">
+        <td className="px-1 py-1.5 text-center">
           <button
             type="button"
-            onClick={() => store.remove(a.id)}
+            onClick={(e) => { e.stopPropagation(); store.remove(a.id) }}
             aria-label="Stop tracking"
             title="Stop tracking this contract"
-            className="h-5 w-5 rounded-sm border border-line text-2xs leading-none text-fg hover:border-down/50 hover:text-down"
+            className="h-[22px] w-[22px] rounded-sm border border-line text-2xs leading-none text-fg/60 hover:border-down/50 hover:text-down"
           >
             ✕
           </button>
@@ -443,7 +435,7 @@ function AlertRow({ a, mark, high, open, onToggle, store }: {
 
       {open && (
         <tr>
-          <td colSpan={9} className="border-t border-line bg-surface2 p-0">
+          <td colSpan={8} className="border-t border-line bg-surface2 p-0">
             {/* ── ONE PANE, THE LIVE ONE ──────────────────────────────────────
                 This was a two-up: live on the left, the bars frozen at the
                 minute you tracked it on the right. The frozen pane is gone.

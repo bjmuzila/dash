@@ -1,0 +1,442 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// CB EDGE STUDIES — the shared frame every Vela native study here is built on.
+//
+// Each study (pages/vela/studies/*.ts) is a Vela NATIVE INDICATOR: it lists on
+// the Indicators picker (Built-in), carries a legend row with eye / gear / ✕,
+// a settings dialog off its InputSchema, and a place in the saved workspace —
+// exactly like CB Walls (pages/vela/wallsIndicator.ts), whose shape this
+// generalises. A study is two halves:
+//
+//   StudyMeta (manifest.ts)   type, title, pane, its inputs — what Vela must
+//                             know synchronously to list it and draw its
+//                             settings dialog
+//   StudyImpl (levels / gex / flow / tpo.ts), loaded the first time an
+//                             instance STARTS, so the Vela page's own chunk
+//                             carries none of it:
+//     settings(inputs)        its inputs, parsed
+//     load(ctx, s, fresh)     the data it reads (HTTP / socket), or nothing
+//     render(ctx, s, data)    what to draw for the bars on the chart now
+//
+// and this frame owns the rest: one async load at a time (an older answer
+// never paints over a newer one), a re-read every `refreshMs` while the chart
+// is live and the tab visible, re-rendering when a bar lands (or, with
+// `everyTick`, when the forming bar moves — throttled), input changes that
+// reload only when the data key changed, suspend / resume / stop.
+//
+// Colours come from tokens.css through tokenHexAlpha — never literals.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  registerNativeIndicator,
+  timeframeToMs,
+  type DrawingLabel,
+  type InputSchema,
+  type InputValue,
+  type NativeIndicator,
+  type NativeIndicatorContext,
+  type NativeIndicatorOutput,
+  type OHLCV,
+  type PriceLine,
+  type SeriesSpec,
+  type VisibleRange,
+} from '@luxalgo/vela'
+import { stableSeriesId } from '@luxalgo/vela/plugin'
+import { etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
+import { resolveSym, type ResolvedSym } from '@/pages/vela/cbedgeProvider'
+
+export const MIN_MS = 60_000
+export const DAY_MS = 86_400_000
+export const RTH_OPEN = 9 * 60 + 30
+export const RTH_CLOSE = 16 * 60
+/** Futures sessions open 18:00 ET the evening before. */
+export const FUT_OPEN = 18 * 60
+
+export { etDateKey, etMinutesOfDay }
+
+export interface StudyCtx {
+  ctx: NativeIndicatorContext
+  sym: ResolvedSym
+  /** The bare ticker (`SPX`, `ES`, `NVDA`). */
+  ticker: string
+  bars: readonly OHLCV[]
+  tfMs: number
+  /** The visible window, for studies that set `viewport`. */
+  view: VisibleRange | null
+}
+
+export interface StudyMeta {
+  type: string
+  title: string
+  shortTitle: string
+  pane: 'price' | 'new'
+  inputs: () => InputSchema[]
+  /** Repaint on scroll / zoom (onViewport). */
+  viewport?: boolean
+}
+
+export interface StudyImpl<S, D> {
+  settings: (inputs: Record<string, InputValue>) => S
+  /** What the loaded data depends on — a change reloads; anything else only repaints. */
+  dataKey?: (c: StudyCtx, s: S) => string
+  load?: (c: StudyCtx, s: S, fresh: boolean) => Promise<D>
+  /** Re-read cadence while live + visible (ms). */
+  refreshMs?: number
+  /** Repaint as the forming bar moves (throttled), not only when a bar is added. */
+  everyTick?: boolean
+  render: (c: StudyCtx, s: S, data: D | null) => NativeIndicatorOutput
+}
+
+export const str = (v: InputValue | undefined, d: string) => (typeof v === 'string' && v ? v : d)
+export const bool = (v: InputValue | undefined, d: boolean) => (typeof v === 'boolean' ? v : d)
+export const int = (v: InputValue | undefined, d: number, lo: number, hi: number) =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : d
+export const defaultsOf = (schema: InputSchema[]): Record<string, InputValue> => Object.fromEntries(schema.map((i) => [i.key, i.defval]))
+
+const REPAINT_MS = 400
+
+type AnyImpl = StudyImpl<any, any>
+
+class Study implements NativeIndicator {
+  private spec!: AnyImpl
+  private ready = false
+  private ctx: NativeIndicatorContext | null = null
+  private inputs: Record<string, InputValue> = {}
+    private data: any = null
+  private loaded = false
+  private loadedKey = ''
+  private epoch = 0
+  private timer: ReturnType<typeof setInterval> | null = null
+  private paintTimer: ReturnType<typeof setTimeout> | null = null
+  private lastKey = ''
+  private view: VisibleRange | null = null
+  private stopped = false
+  private suspended = false
+
+  constructor(
+    private readonly meta: StudyMeta,
+    private readonly impl: () => Promise<AnyImpl>,
+  ) {}
+
+  private sc(): StudyCtx | null {
+    const ctx = this.ctx
+    if (!ctx) return null
+    const ticker = ctx.symbol.replace(/^[^:]*:/, '').trim().toUpperCase()
+    return { ctx, sym: resolveSym(ticker), ticker, bars: ctx.bars(), tfMs: timeframeToMs(ctx.timeframe), view: this.view }
+  }
+
+  start(ctx: NativeIndicatorContext, inputs: Record<string, InputValue>): void {
+    this.ctx = ctx
+    this.inputs = inputs
+    ctx.setStatus('loading')
+    void this.impl().then(
+      (spec) => {
+        if (this.stopped) return
+        this.spec = spec
+        this.ready = true
+        if (this.suspended) return
+        if (spec.load) void this.load(false)
+        else this.paint()
+        this.arm()
+      },
+      () => ctx.setStatus('idle'),
+    )
+  }
+
+  onBars(): void {
+    if (!this.ready) return
+    const bars = this.ctx?.bars() ?? []
+    const last = bars[bars.length - 1]
+    const key = this.spec.everyTick
+      ? `${bars.length}|${last?.time ?? 0}|${last?.high ?? 0}|${last?.low ?? 0}|${last?.close ?? 0}`
+      : `${bars.length}|${bars[0]?.time ?? 0}|${last?.time ?? 0}`
+    if (key === this.lastKey) return
+    this.lastKey = key
+    this.schedulePaint()
+  }
+
+  onViewport(range: VisibleRange): void {
+    if (!this.meta.viewport) return
+    this.view = range
+    this.schedulePaint()
+  }
+
+  setInputs(inputs: Record<string, InputValue>): void {
+    if (!this.ready) {
+      this.inputs = inputs
+      return
+    }
+    const c = this.sc()
+    const before = c && this.spec.dataKey ? this.spec.dataKey(c, this.spec.settings(this.inputs)) : ''
+    this.inputs = inputs
+    if (!c) return
+    const after = this.spec.dataKey ? this.spec.dataKey(c, this.spec.settings(inputs)) : ''
+    if (this.spec.load && after !== before) void this.load(false)
+    else this.paint()
+  }
+
+  suspend(): void {
+    this.suspended = true
+    this.disarm()
+  }
+
+  resume(): void {
+    this.suspended = false
+    if (!this.ready) return
+    if (this.spec.load) void this.load(false)
+    else this.paint()
+    this.arm()
+  }
+
+  stop(): void {
+    this.stopped = true
+    this.disarm()
+    if (this.paintTimer) clearTimeout(this.paintTimer)
+    this.paintTimer = null
+    this.ctx = null
+  }
+
+  private async load(fresh: boolean): Promise<void> {
+    const c = this.sc()
+    if (!c || this.stopped || !this.spec.load) return
+    const my = ++this.epoch
+    const key = this.spec.dataKey ? this.spec.dataKey(c, this.spec.settings(this.inputs)) : ''
+    // data read for other settings is not this data: a failed read for new settings paints empty
+    if (key !== this.loadedKey) this.loaded = false
+    if (!this.loaded) c.ctx.setStatus('loading')
+        let data: any = null
+    try {
+      data = await this.spec.load(c, this.spec.settings(this.inputs), fresh)
+    } catch {
+      data = null
+    }
+    if (my !== this.epoch || this.stopped || this.ctx !== c.ctx) return
+    // a failed re-read keeps what is on the chart; a failed first read paints empty
+    if (data != null || !this.loaded) this.data = data
+    this.loaded = true
+    this.loadedKey = key
+    this.paint()
+  }
+
+  private schedulePaint(): void {
+    if (this.paintTimer || this.suspended || !this.ready) return
+    this.paintTimer = setTimeout(() => {
+      this.paintTimer = null
+      this.paint()
+    }, REPAINT_MS)
+  }
+
+  private paint(): void {
+    const c = this.sc()
+    if (!c || this.suspended || !this.ready) return
+    if (this.spec.load && !this.loaded) return
+    let out: NativeIndicatorOutput
+    try {
+      out = this.spec.render(c, this.spec.settings(this.inputs), this.data)
+    } catch {
+      out = {}
+    }
+    c.ctx.emit({ series: [], priceLines: [], labels: [], boxes: [], lines: [], ...out })
+    c.ctx.setStatus(this.timer ? 'live' : 'idle')
+  }
+
+  private arm(): void {
+    this.disarm()
+    const ms = this.spec.refreshMs
+    if (!ms || !this.ctx?.live || !this.spec.load) return
+    this.timer = setInterval(() => {
+      if (document.hidden) return
+      void this.load(true)
+    }, ms)
+  }
+
+  private disarm(): void {
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
+  }
+}
+
+/** Register a study type (once). Vela reads its registry when a workspace is built. */
+const registered = new Set<string>()
+export function defineStudy(meta: StudyMeta, impl: () => Promise<AnyImpl>): void {
+  if (registered.has(meta.type)) return
+  registered.add(meta.type)
+  let cached: Promise<AnyImpl> | null = null
+  const load = () => (cached ??= impl().catch((e) => {
+    cached = null
+    throw e
+  }))
+  registerNativeIndicator({
+    type: meta.type,
+    title: meta.title,
+    shortTitle: meta.shortTitle,
+    paneHint: meta.pane,
+    overlay: meta.pane === 'price',
+    ...(meta.viewport ? { reactsToViewport: true } : {}),
+    inputsSchema: meta.inputs,
+    defaultInputs: () => defaultsOf(meta.inputs()),
+    create: () => new Study(meta, load),
+  })
+}
+
+/** Type helper for an implementation module. */
+export const studyImpl = <S, D>(impl: StudyImpl<S, D>): StudyImpl<S, D> => impl
+
+// ── Sessions ──────────────────────────────────────────────────────────────────
+
+/** The session a bar belongs to: futures roll at 18:00 ET to the next day's. */
+export function sessionKey(t: number, fut: boolean): string {
+  const key = etDateKey(t)
+  if (!fut || etMinutesOfDay(t) < FUT_OPEN) return key
+  const [y, m, d] = key.split('-').map(Number)
+  return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, (d ?? 1) + 1)).toISOString().slice(0, 10)
+}
+
+/** Monday of a session date's week. */
+export function weekKey(date: string): string {
+  const [y, m, d] = date.split('-').map(Number)
+  const t = Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1)
+  const back = (new Date(t).getUTCDay() + 6) % 7
+  return new Date(t - back * DAY_MS).toISOString().slice(0, 10)
+}
+
+export interface Session {
+  key: string
+  /** Indices into the bar array, in order. */
+  from: number
+  to: number
+}
+
+/** Consecutive runs of bars per session key. */
+export function sessionsOf(bars: readonly OHLCV[], keyOf: (t: number) => string): Session[] {
+  const out: Session[] = []
+  for (let i = 0; i < bars.length; i++) {
+    const k = keyOf(bars[i]!.time)
+    const last = out[out.length - 1]
+    if (last && last.key === k) last.to = i
+    else out.push({ key: k, from: i, to: i })
+  }
+  return out
+}
+
+export const isRthBar = (t: number) => {
+  const m = etMinutesOfDay(t)
+  return m >= RTH_OPEN && m < RTH_CLOSE
+}
+
+/** Epoch ms of HH:MM ET on a YYYY-MM-DD date (two passes for a DST edge). */
+export function etWallMs(date: string, minuteOfDay: number): number {
+  const [y, m, d] = date.split('-').map(Number)
+  const guess = Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1, 0, minuteOfDay)
+  const off = (ms: number) => {
+    let diff = etMinutesOfDay(ms) - Math.floor((ms % DAY_MS) / MIN_MS)
+    if (diff > 720) diff -= 1440
+    if (diff < -720) diff += 1440
+    return diff
+  }
+  const first = guess - off(guess) * MIN_MS
+  return guess - off(first) * MIN_MS
+}
+
+// ── Output builders ───────────────────────────────────────────────────────────
+
+const hiddenAxis = { pane: true, priceScale: false, legend: true, dataWindow: true }
+
+/** A per-bar step / line series (null = a gap). */
+export function seriesOf(
+  type: string,
+  key: string,
+  ordinal: number,
+  title: string,
+  bars: readonly OHLCV[],
+  values: readonly (number | null)[],
+  color: string,
+  o: { width?: number; dashed?: boolean; kind?: 'step' | 'line' | 'histogram' | 'area'; axisChip?: boolean; colors?: readonly (string | null)[] } = {},
+): SeriesSpec {
+  const kind = o.kind ?? 'step'
+  return {
+    id: stableSeriesId({ instanceId: type, kind, title: key, ordinal }),
+    title,
+    paneId: '',
+    kind,
+    points: bars.map((b, i) => {
+      const v = values[i]
+      const value = v == null || !Number.isFinite(v) ? null : v
+      const c = o.colors?.[i]
+      return c ? { time: b.time, value, color: c } : { time: b.time, value }
+    }),
+    style: { color, width: o.width ?? 1.5, lineStyle: o.dashed ? ('dashed' as const) : ('solid' as const) },
+    ...(o.axisChip === false ? { display: hiddenAxis } : {}),
+  }
+}
+
+export function priceLineOf(type: string, key: string, price: number, color: string, title: string, o: { width?: number; dashed?: boolean } = {}): PriceLine {
+  return {
+    id: `${type}:${key}`,
+    paneId: '',
+    price,
+    color,
+    width: o.width ?? 1,
+    lineStyle: o.dashed ? 'dashed' : 'solid',
+    title,
+  }
+}
+
+export function labelAt(
+  type: string,
+  key: string,
+  time: number,
+  price: number,
+  text: string,
+  color: string,
+  o: { style?: DrawingLabel['style']; textColor?: string; tooltip?: string; yloc?: DrawingLabel['yloc']; size?: DrawingLabel['size']; noFill?: boolean } = {},
+): DrawingLabel {
+  return {
+    id: `${type}:${key}`,
+    paneId: '',
+    xloc: 'bar_time',
+    x: time,
+    y: price,
+    yloc: o.yloc ?? 'price',
+    text,
+    // a tag at the newest bar sits to its LEFT, over the chart — never under the price axis
+    style: o.style ?? 'label_right',
+    color,
+    ...(o.textColor ? { textColor: o.textColor } : {}),
+    size: o.size ?? 'small',
+    textAlign: (o.style ?? 'label_right') === 'label_right' ? 'right' : (o.style ?? '').startsWith('label_') && o.style !== 'label_left' ? 'center' : 'left',
+    ...(o.tooltip ? { tooltip: o.tooltip } : {}),
+    fontFamily: 'default',
+    ...(o.noFill ? { noFill: true } : {}),
+    overlay: true,
+  }
+}
+
+/** `$1.2M`, `$850K`, `-$3.4B`. */
+export function money(v: number): string {
+  const a = Math.abs(v)
+  const s = a >= 1e9 ? `${(a / 1e9).toFixed(a >= 1e10 ? 0 : 1)}B` : a >= 1e6 ? `${(a / 1e6).toFixed(a >= 1e7 ? 0 : 1)}M` : a >= 1e3 ? `${(a / 1e3).toFixed(0)}K` : a.toFixed(0)
+  return `${v < 0 ? '−' : ''}$${s}`
+}
+
+/** Index of the bar whose span holds `t` (bars ascending), or -1. */
+export function barAt(bars: readonly OHLCV[], t: number, tfMs: number): number {
+  let lo = 0
+  let hi = bars.length - 1
+  if (hi < 0 || t < bars[0]!.time) return -1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (bars[mid]!.time <= t) lo = mid
+    else hi = mid - 1
+  }
+  return t < bars[lo]!.time + Math.max(tfMs, MIN_MS) * 1.5 || lo === bars.length - 1 ? lo : -1
+}
+
+/** A plain JSON GET; null on any failure (studies draw nothing rather than throw). */
+export async function getJson<T>(url: string): Promise<T | null> {
+  try {
+    const r = await fetch(url, { cache: 'no-store', credentials: 'same-origin' })
+    return r.ok ? ((await r.json()) as T) : null
+  } catch {
+    return null
+  }
+}

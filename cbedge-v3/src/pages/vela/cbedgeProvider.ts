@@ -9,6 +9,12 @@
 //
 //   history   /api/snapshots/etf-candles      every cash symbol (SPX, SPY, NVDA…)
 //             /api/snapshots/candles          ES and NQ futures (lite tuples)
+//   long      D / W / M reach past the tape's ~30 sessions (longHistory below):
+//             /api/vela/history (years of daily / weekly / monthly bars, when
+//             the server has it), then — owner — the LSE vault (/api/lse/candles),
+//             then /api/dxlink/candles (weekly, ~13 months) for W and M
+//   deep      owner only: ES / NQ intraday older than the tape comes from the
+//             LSE vault as Vela scrolls back (getBars' backward pages)
 //   live      /api/snapshots/etf-candles/live/stream   SSE, ~1 frame a second,
 //             with the /live probe underneath as the quiet-stream fallback
 //             es1mCandles / nq1mCandles       the socket's futures frames, read
@@ -213,13 +219,16 @@ const isRth = (t: number) => {
 
 // ── Timeframes ───────────────────────────────────────────────────────────────
 
-type Tf = { kind: 'min'; minutes: number } | { kind: 'day' } | { kind: 'week' }
+type Tf = { kind: 'min'; minutes: number } | { kind: 'day' } | { kind: 'week' } | { kind: 'month' }
 
 /** Vela's vocabulary: a bare number is minutes, D/W/M are named, `4h` etc. are aliases. */
 function parseTf(timeframe: string): Tf {
   const tf = timeframe.trim()
-  if (/^(?:1)?D$/i.test(tf)) return { kind: 'day' }
-  if (/^(?:1)?[WM]$/i.test(tf)) return { kind: 'week' }
+  // D / W / M (a multiple — 2D, 3M — is served as its base unit; Pine's capital M is a
+  // month, never minutes)
+  if (/^\d*D$/i.test(tf)) return { kind: 'day' }
+  if (/^\d*W$/i.test(tf)) return { kind: 'week' }
+  if (/^\d*M$/.test(tf) || /^\d*MO$/i.test(tf)) return { kind: 'month' }
   const m = /^(\d+)\s*([mhdw])?$/i.exec(tf)
   if (m) {
     const n = Math.max(1, parseInt(m[1] ?? '1', 10))
@@ -264,6 +273,12 @@ function bucketFor(tf: Tf, fut: boolean): (t: number) => number {
     return (t) => {
       const [y, m, d] = ymd(sessionDate(t, fut))
       return etWall(y, m, d, 0)
+    }
+  }
+  if (tf.kind === 'month') {
+    return (t) => {
+      const [y, m] = ymd(sessionDate(t, fut))
+      return etWall(y, m, 1, 0)
     }
   }
   return (t) => {
@@ -345,19 +360,187 @@ async function loadAggregated(
   const native = nativeOf(tf)
   const raw = sessionFilter(await nativeBars(sym, native, staleMs), session)
   const bucket = bucketFor(tf, !!sym.fut)
-  const out = aggregate(raw, bucket)
+  let out = aggregate(raw, bucket)
   // The window's first bucket is usually cut: "the last 30 days" starts
   // wherever the route's cutoff lands, not at a session open, so the oldest
   // daily bar would be a stub of an evening. Drop it rather than draw a bar
   // that never traded like that. Minute buckets only when visibly partial.
   const first = raw[0]
   if (out.length > 1 && first && (tf.kind !== 'min' || bucket(first.t) !== first.t)) out.shift()
+  // D / W / M: years of older bars in front of the tape's
+  if (tf.kind !== 'min') out = withLongHistory(out, await longHistory(sym, tf.kind), bucket)
   const last = out[out.length - 1]
   const lastNative = raw[raw.length - 1]
   if (last && lastNative) {
     seeds.set(seedKey(sym.key, timeframe, session), { bar: { ...last }, lastNativeT: lastNative.t })
   }
   return out
+}
+
+// ── Long history (D / W / M) ─────────────────────────────────────────────────
+// The tape is ~30 sessions deep — a weekly chart of it is six bars. Coarse
+// timeframes take their older bars from whichever long source answers first;
+// the tape's own buckets still win wherever it has them (it is the recorder's,
+// RTH-exact, and the forming bar is live).
+
+const LONG_STALE_MS = 15 * 60_000
+type Coarse = 'day' | 'week' | 'month'
+const YF_INTERVAL: Record<Coarse, string> = { day: '1d', week: '1wk', month: '1mo' }
+const LSE_TF: Record<Coarse, string> = { day: '1d', week: '1w', month: '1mo' }
+
+/** Is the signed-in user the owner? One read of /api/auth/me per few minutes, shared. */
+export async function isOwner(): Promise<boolean> {
+  try {
+    const me = await query<{ user?: { isOwner?: boolean } | null }>('/api/auth/me', { staleMs: 5 * 60_000 })
+    return me?.user?.isOwner === true
+  } catch {
+    return false
+  }
+}
+
+/** A clean bar, or null — a missing (0) open / high / low falls back to the close, never to 0. */
+const toBar = (t: number, o: number, h: number, l: number, c: number, v: number): Bar | null => {
+  if (![t, o, h, l, c].every(Number.isFinite) || !(c > 0) || !(t > 0)) return null
+  const open = o > 0 ? o : c
+  return { t, o: open, h: Math.max(h > 0 ? h : c, open, c), l: Math.min(l > 0 ? l : c, open, c), c, v: Number.isFinite(v) ? v : 0 }
+}
+
+function parseVelaHistory(json: unknown): Bar[] {
+  const rows = (json as { bars?: unknown } | null)?.bars
+  if (!Array.isArray(rows)) return []
+  const out: Bar[] = []
+  for (const r of rows as Record<string, unknown>[]) {
+    const b = toBar(n(r.t), n(r.o), n(r.h), n(r.l), n(r.c), n(r.v))
+    if (b) out.push(b)
+  }
+  return out.sort((a, b) => a.t - b.t)
+}
+
+/** /api/lse/candles rows: { timestamp: ISO, open, high, low, close, volume }. */
+function parseLse(json: unknown): Bar[] {
+  const rows = (json as { rows?: unknown } | null)?.rows
+  if (!Array.isArray(rows)) return []
+  const out: Bar[] = []
+  for (const r of rows as Record<string, unknown>[]) {
+    const t = typeof r.timestamp === 'number' ? r.timestamp : Date.parse(String(r.timestamp ?? r.ts ?? ''))
+    const b = toBar(t, n(r.open), n(r.high), n(r.low), n(r.close), n(r.volume))
+    if (b) out.push(b)
+  }
+  return out.sort((a, b) => a.t - b.t)
+}
+
+/** /api/dxlink/candles: { data: { items: [{ time, open, high, low, close, volume }] } } — weekly. */
+function parseDxHistory(json: unknown): Bar[] {
+  const items = (json as { data?: { items?: unknown } } | null)?.data?.items
+  if (!Array.isArray(items)) return []
+  const out: Bar[] = []
+  for (const r of items as Record<string, unknown>[]) {
+    const b = toBar(n(r.time), n(r.open), n(r.high), n(r.low), n(r.close), n(r.volume))
+    if (b) out.push(b)
+  }
+  return out.sort((a, b) => a.t - b.t)
+}
+
+/** The symbol the LSE vault knows this ticker by (its own resolver), cached for the page. */
+const lseNames = new Map<string, Promise<string>>()
+function lseSymbol(key: string): Promise<string> {
+  let p = lseNames.get(key)
+  if (!p) {
+    p = query<{ symbol?: unknown }>(`/api/lse/resolve?q=${encodeURIComponent(key)}`, { staleMs: 24 * 3_600_000 })
+      .then((j) => (typeof j?.symbol === 'string' && j.symbol ? j.symbol : key))
+      .catch(() => key)
+    lseNames.set(key, p)
+  }
+  return p
+}
+
+const ymdUtc = (t: number) => new Date(t).toISOString().slice(0, 10)
+
+async function lseBars(sym: ResolvedSym, timeframe: string, start: number, end: number | null, limit = 5000): Promise<Bar[]> {
+  const name = sym.fut ?? (await lseSymbol(sym.key))
+  const ds = sym.fut ? '&dataset=futures' : ''
+  const endQ = end != null ? `&end=${ymdUtc(end + DAY_MS)}` : ''
+  const url = `/api/lse/candles?symbol=${encodeURIComponent(name)}&timeframe=${timeframe}&start=${ymdUtc(start)}${endQ}&limit=${limit}&order=desc${ds}`
+  return parseLse(await query<unknown>(url, { staleMs: LONG_STALE_MS }))
+}
+
+/**
+ * Older coarse bars for `sym`, oldest first, or [] when no source answers. Each
+ * source is tried once per page load per symbol (query() caches the miss as a
+ * thrown error only for its stale window, so a route that is not deployed costs
+ * one 404, not one per chart).
+ */
+const longMiss = new Set<string>()
+async function longHistory(sym: ResolvedSym, kind: Coarse): Promise<Bar[]> {
+  const key = sym.fut ?? sym.key
+  const tryOnce = async (id: string, get: () => Promise<Bar[]>): Promise<Bar[]> => {
+    if (longMiss.has(id)) return []
+    try {
+      const bars = await get()
+      if (!bars.length) longMiss.add(id)
+      return bars
+    } catch {
+      longMiss.add(id)
+      return []
+    }
+  }
+  const yf = await tryOnce(`yf|${key}|${kind}`, async () =>
+    parseVelaHistory(await query<unknown>(`/api/vela/history?symbol=${encodeURIComponent(key)}&interval=${YF_INTERVAL[kind]}`, { staleMs: LONG_STALE_MS })),
+  )
+  if (yf.length) return yf
+  if (await isOwner()) {
+    const years = kind === 'day' ? 10 : 25
+    const lse = await tryOnce(`lse|${key}|${kind}`, () => lseBars(sym, LSE_TF[kind], Date.now() - years * 365 * DAY_MS, null))
+    if (lse.length) return lse
+  }
+  if (kind === 'day') return []
+  // weekly bars, ~13 months — a month bar is its weeks rolled up by bucket
+  const dxSym = sym.fut ? `/${sym.fut}` : sym.kind === 'index' ? `$${sym.key}` : sym.key
+  return tryOnce(`dx|${key}`, async () => parseDxHistory(await query<unknown>(`/api/dxlink/candles?symbol=${encodeURIComponent(dxSym)}`, { staleMs: LONG_STALE_MS })))
+}
+
+/** The tape's buckets, with the long source's older buckets in front of them. */
+function withLongHistory(recent: OHLCV[], long: Bar[], bucket: (t: number) => number): OHLCV[] {
+  if (!long.length) return recent
+  const cut = recent[0]?.time ?? Infinity
+  const older = aggregate(long, bucket).filter((b) => b.time < cut)
+  return older.length ? [...older, ...recent] : recent
+}
+
+// ── Deep futures history (owner) ─────────────────────────────────────────────
+// Vela asks for a DEPTH (`limit` — 500 bars by default, thousands when a range
+// chip like 3M / 1Y / ALL is picked) and reads a shorter answer as "history
+// ends here". The tape holds ~30 days, so for the owner an ES / NQ request the
+// tape cannot fill is topped up from the LSE vault (/api/lse/candles, owner-only
+// at the server too): the older bars, in front of the tape's. One vault page —
+// 5,000 rows — per request; an explicit backward page (`to` before the tape)
+// is answered from the vault the same way.
+
+/**
+ * The vault timeframe a chart timeframe is built from: the largest that divides it AND
+ * 30 — the vault's hour bars open on the hour, the chart's hours open at 09:30, so an
+ * hourly chart is built from 30-minute bars.
+ */
+function lseIntraday(minutes: number): { tf: string; native: number } {
+  for (const [tf, m] of [['30m', 30], ['15m', 15], ['5m', 5], ['3m', 3], ['1m', 1]] as const) {
+    if (minutes % m === 0 && 30 % m === 0) return { tf, native: m }
+  }
+  return { tf: '1m', native: 1 }
+}
+
+/** Up to `need` chart bars of `sym` older than `before`, from the vault (owner only). */
+async function deepFutures(sym: ResolvedSym, tf: Tf, before: number, need: number, session: string | undefined): Promise<OHLCV[]> {
+  if (tf.kind !== 'min' || !sym.fut || need <= 0) return []
+  if (!(await isOwner())) return []
+  const { tf: lseTf, native } = lseIntraday(tf.minutes)
+  // regular hours keep ~6.5 of the futures' ~23 hours: ask for that much more
+  const rth = session !== 'extended'
+  const rows = Math.min(5000, Math.ceil(need * (tf.minutes / native) * (rth ? 3.6 : 1.05)) + 10)
+  const start = before - Math.max(3 * DAY_MS, rows * native * MIN_MS * (rth ? 1.2 : 1.6))
+  let bars = await lseBars(sym, lseTf, start, before, rows)
+  bars = sessionFilter(bars, session).filter((b) => b.t < before)
+  const out = aggregate(bars, bucketFor(tf, true))
+  return out.length > need ? out.slice(out.length - need) : out
 }
 
 // ── Live ─────────────────────────────────────────────────────────────────────
@@ -518,7 +701,7 @@ function calendar(kind: SymKind, from: number, to: number, session: string | und
 
 // ── The provider ─────────────────────────────────────────────────────────────
 
-const TIMEFRAMES = ['1', '2', '3', '5', '10', '15', '30', '60', '120', '240', 'D'] as const
+const TIMEFRAMES = ['1', '2', '3', '5', '10', '15', '30', '60', '120', '240', 'D', 'W', 'M'] as const
 
 export class CbEdgeProvider implements DataProvider {
   info(): ProviderInfo {
@@ -583,6 +766,25 @@ export class CbEdgeProvider implements DataProvider {
   async getBars(ticker: string, timeframe: string, range: BarRange): Promise<OHLCV[]> {
     const sym = resolveSym(ticker)
     let bars = await loadAggregated(sym, timeframe, range.session)
+    // The owner's futures go on into the vault where the tape runs out: a backward
+    // page older than the tape, or a depth (`limit`) the tape cannot fill
+    const oldest = bars[0]?.time
+    const tf = parseTf(timeframe)
+    if (sym.fut && tf.kind === 'min' && oldest != null) {
+      const older = range.to != null && range.to < oldest
+      const inWindow = older ? 0 : bars.filter((b) => (range.to == null || b.time <= range.to) && (range.from == null || b.time >= range.from)).length
+      const short = !older && range.limit != null && inWindow < range.limit && (range.from == null || range.from < oldest)
+      if (older || short) {
+        try {
+          const before = older ? range.to! + 1 : oldest
+          const need = older ? (range.limit ?? 2000) : range.limit! - inWindow
+          const deep = await deepFutures(sym, tf, before, need, range.session)
+          if (deep.length) bars = older ? deep : [...deep, ...bars]
+        } catch {
+          /* the vault down: the history simply ends where the tape does */
+        }
+      }
+    }
     const { from, to, limit } = range
     if (to != null) bars = bars.filter((b) => b.time <= to)
     if (from != null) bars = bars.filter((b) => b.time >= from)
