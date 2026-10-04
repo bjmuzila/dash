@@ -33,6 +33,7 @@ import { query } from '@/data/api'
 import { loadBasis } from '@/pages/vela/wallsIndicator'
 import { DAY_MS, bool, studyImpl, etDateKey, int, labelAt, money, priceLineOf, seriesOf, sessionKey, sessionsOf, str, type StudyCtx } from './common'
 import { EM_TYPE, GEX_BASIS as BASIS, KEY_TYPE, PROFILE_TYPE } from './index'
+import { columnAt, loadLadder, sessionDates, type Ladder } from './ladder'
 
 /** The symbol whose options make this chart's levels, and what to add to move them onto it. */
 async function underlying(c: StudyCtx): Promise<{ ticker: string; shift: number } | null> {
@@ -313,7 +314,22 @@ interface ProfileS {
   tags: number
 }
 
-export const profileImpl = studyImpl<ProfileS, ChainRead | null>({
+/** Live: the chain. In a bar replay: the recorded per-minute ladders, read at the replay clock. */
+type ProfileData = ChainRead | { ladder: Ladder }
+
+/** The rows, spot and shift the profile draws now. */
+function profileRows(c: StudyCtx, data: ProfileData): { rows: GexRow[]; spot: number; shift: number } | null {
+  if ('chain' in data) return { rows: data.chain.rows, spot: data.chain.spot, shift: data.shift }
+  const col = columnAt(data.ladder.columns, c.until)
+  if (!col) return null
+  const shift = data.ladder.shift(col.slotTs)
+  if (shift == null) return null
+  // the ladder's `net` is OI + vol and `netVol` is vol, so OI alone is the difference
+  const rows = col.cells.map((x) => ({ strike: x.strike, netGEX: x.net - x.netVol, netVolGEX: x.netVol }) as GexRow)
+  return { rows, spot: col.spot, shift }
+}
+
+export const profileImpl = studyImpl<ProfileS, ProfileData | null>({
   settings: (i) => ({
     basis: (BASIS as readonly string[]).includes(str(i.basis, BASIS[0])) ? (str(i.basis, BASIS[0]) as ProfileS['basis']) : BASIS[0],
     width: int(i.width, 22, 5, 60),
@@ -321,12 +337,16 @@ export const profileImpl = studyImpl<ProfileS, ChainRead | null>({
     tags: int(i.tags, 3, 0, 10),
   }),
   dataKey: (c) => c.sym.key,
-  load: async (c, _s, fresh) => chainFor(c, fresh),
+  load: async (c, _s, fresh) => (c.ctx.live ? chainFor(c, fresh) : { ladder: await loadLadder(c, sessionDates(c, 1), fresh) }),
   refreshMs: 30_000,
-  render: (c, s, read) => {
+  // in a replay the profile follows the replay clock minute by minute
+  everyTick: true,
+  render: (c, s, data) => {
     const bars = c.bars
-    if (!read || !bars.length) return {}
-    const g = read.chain
+    if (!data || !bars.length) return {}
+    const g = profileRows(c, data)
+    if (!g) return {}
+    const read = { shift: g.shift }
     const valueOf = (r: GexRow) => (s.basis === 'OI only' ? Number(r.netGEX) || 0 : s.basis === 'Vol only' ? Number(r.netVolGEX) || 0 : (Number(r.netGEX) || 0) + (Number(r.netVolGEX) || 0))
     const rows = [...g.rows].sort((a, b) => a.strike - b.strike)
     const spot = g.spot || bars[bars.length - 1]!.close - read.shift

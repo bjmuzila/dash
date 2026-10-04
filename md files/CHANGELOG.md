@@ -25776,3 +25776,121 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - **Hover card:** shows the price, e.g. "Fri, Oct 2 · 1:51 PM · SPX 6721.09".
 - **Checked:** hovering a bubble's centre puts the crosshair on the print's own candle and price, on 5m and on a higher timeframe.
 - **Files:** `cbedge-v3/src/pages/vela/studies/flow.ts`, `cbedge-v3/src/pages/vela/studies/whaleLayer.ts`. `tsc` is clean, check-theme passes, and `vite build` is OK.
+
+## 2026-10-04 - v3 Vela: bar replay (Replay button, start picker, orange replay dock, tick-by-tick candles)
+
+- **Replay button:** Vela's replay engine had no controls. The **Replay** button sits in the chart toolbar after Indicators; on the phone it is a stop on the bottom bar.
+- **Start picker:** an orange line follows the pointer and shades the bars that will be hidden, with a "Replay from Thu, Oct 1, 13:00" pill. Click a bar to rewind to it; dragging still pans. The dock also offers:
+  - quick picks: Last open, Prior open, Week open (9:30 ET);
+  - a date plus an ET time, which becomes the first bar revealed;
+  - Esc to cancel.
+- **The dock:** the same orange bottom bar as every v3 replay (`ReplayDock`), with the same keys:
+  - the ET clock and bars left;
+  - ◀ / ▶ / ❚❚ / ▶ (back re-cuts the history one bar earlier);
+  - a scrubber over the loaded history;
+  - Speed 0.5×–8× (700 ms a bar at 1×);
+  - **Ticks**;
+  - 🔒 Axis (freezes the price axis);
+  - **Jump** (reopens the picker) and **Live**.
+  - Keys while replaying: Shift+→ next bar, Shift+← previous bar, Shift+↓ play/pause.
+- **Ticks (on by default):** each candle builds from the finer bars inside it. 2m–30m use 1m bars (5m bars once 1m runs out), 1h–4h use 5m, D uses 30m, and W/M use daily. A 1m candle, or one whose finer bars are missing or do not match it, plays four steps through its own OHLC. Ticks never go past the candle's own high or low. A bar takes 700 ms × √ticks at 1×. Ticks need a one-chart layout (Vela's rule); with several charts every chart replays on one clock and bars land whole.
+- **No look-ahead:** a replay clock (`replay/clock.ts`) moves with every bar and tick.
+  - Whale Prints show a print only once the clock passes it, even inside a candle still building.
+  - In a replay they load from the start bar onward.
+  - Key Levels and GEX Profile (today's numbers only) blank while replaying, and the dock names them.
+  - CB Walls, Voltick Path and the other studies already rewind with the bars.
+  - CB Script alerts are held while replaying (`setAlertGate`), so revealed history never fires toasts or notifications.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/replay/{clock.ts,replay.ts,ticks.ts,ReplayBar.tsx,ReplayHost.tsx}` (new)
+  - `cbedge-v3/src/pages/Vela.tsx`
+  - `cbedge-v3/src/pages/vela/script/engine.ts`
+  - `cbedge-v3/src/pages/vela/studies/{common,index,flow}.ts`
+- **Checks:**
+  - `tsc` is clean for the Vela files; `check:theme` and `check:casing` pass; `vite build` is OK.
+  - The Vela route is 50.5 kB of its 57.7 kB budget. The dock is a separate lazy chunk (3.9 kB).
+- **Headless run on mock data, desktop and phone:**
+  - the picker line, click-to-start, play, pause, next, previous and Shift+→;
+  - Jump → Prior open and Live;
+  - whale bubbles hidden past the clock, and Key Levels named as hidden;
+  - Ticks disabled on the three-chart phone layout;
+  - no console errors.
+- **Files in `generated/`** (mock data):
+  - `2026-10-04-vela-replay-picker.png`
+  - `2026-10-04-vela-replay-playing.png`
+  - `2026-10-04-vela-replay-whales.png`
+  - `2026-10-04-vela-replay-phone.png`
+
+## 2026-10-04 - v3 Vela: GEX rail, GEX heatmap, paper trading, level alerts, journal trades, optimiser, whale filters, setups, session stats, Replay hub tab
+
+- **CB GEX Rail:** the GEX Candles card's strike rail beside the price axis.
+  - It uses the card's own `buildRail`: CB / CW / PW tags (Voltick marks on that theme), and one bar per strike sized by |GEX| and coloured by sign.
+  - It pulls Vela's chart box in by its width and fills the gap, so nothing covers the candles.
+  - Rows are positioned from the layer's `priceToY` every frame. A squeeze hides small strikes first, never the tagged levels.
+  - It reads the newest per-minute column, or the column at the replay clock during a replay. ES / NQ are shifted by that session's basis.
+  - Off on the phone and in narrow cells.
+- **CB GEX Heatmap:** the per-minute ladders behind the candles.
+  - Shaded in 10 steps against the 97th percentile, with merged runs, so panning stays fast.
+  - Time is placed inside each candle, hover shows strike · GEX · minute, and columns stop at the replay clock.
+  - Sent behind the candles when added (`studyOrder.ts`).
+- **Shared ladder reader:** `studies/ladder.ts` reads the history route by date with `expiryFallback=1`, so no expirations call is needed and weekends show Friday. About two sessions are retained.
+- **GEX Profile in replay:** redraws from the recorded ladders at the replay clock instead of hiding. Key Levels is now the only study that hides during a replay.
+- **Paper trading in replay** (`replay/paper.ts`):
+  - Buy / Sell / Flat with a quantity (Shift+B / S / F), filled at the replay price.
+  - Point values: ES $50, MES $5, NQ $20, MNQ $2, anything else $1.
+  - Fills are drawn ▲ / ▼, with an open-position line and its points.
+  - "Trades" log: win rate, profit factor, max drawdown, Copy CSV, Reset.
+  - Kept in this browser. A replay that ends with a position open closes it at the last replay price.
+- **Level Alerts** (side panel, also right-click → "Level alerts…"):
+  - Levels: Call wall, Put wall, CORE, gamma flip, IB high/low, overnight high/low, open, and prior day high/low/close.
+  - Each level has a bell. Wall alerts follow the wall as it moves, and each fires once.
+  - Delivered like script alerts (`deliverAlert`): Alerts feed, toast, log, desktop notification.
+  - Held during replay. The watcher loads only when something is armed.
+- **CB Journal Trades:** your `/api/journal/trades` round trips on the chart.
+  - ▲ / ▼ entry and exit, a dashed line in green or red, P&L beside the exit, and a hover card.
+  - Option trades sit at the underlying's close at entry and exit times.
+  - Filters: winners or losers only, one account.
+- **Strategy optimiser** (Strategy Tester → Optimise):
+  - Sweeps a strategy's number settings, up to 400 combinations, on the exact bars, walls and series the chart ran with (engine `runContext`).
+  - Ranks by net, profit factor, win rate or net ÷ drawdown. Rows under 5 trades rank last.
+  - Apply puts the settings on the chart.
+- **Whale Prints:**
+  - New Expiry filter: all, 0DTE only, this week, skip 0DTE.
+  - Clicking a bubble opens that print on the Whales page: ticker, a range holding the day, the day filter, and the contract probe open.
+  - `Whales.tsx` reads `?ticker&day&ts&osi` once, then clears it from the address bar.
+- **Saved chart setups** (toolbar → Setups):
+  - Saves the whole workspace (grid, symbols, timeframes, studies and their settings, links), without drawings.
+  - Loading a setup keeps the drawings of any chart whose symbol is unchanged.
+  - Stored on the account (page-preset `vela-setups`, 12 maximum), or in this browser when signed out.
+- **Session stats strip** (toolbar → Session stats; off by default on the phone): one line above the chart showing price and change, overnight range, IB against its 20-session average, distance to CW / PW / CORE, and expected move used. Hidden during a replay.
+- **Replay hub:** new "Chart" tab, opening Vela with the replay start picker up.
+- **Files:**
+  - New: `cbedge-v3/src/pages/vela/studies/{ladder,rail,heat,journal}.ts`
+  - New: `vela/{nav,studyOrder}.ts`
+  - New: `vela/replay/paper.ts`
+  - New: `vela/levels/{levelAlerts,levelAlertsEntry}.ts`
+  - New: `vela/script/optimiser.ts`
+  - New: `vela/setups/{setups,setupsMenu}.ts` and `SessionStrip.tsx`
+  - Changed: `vela/studies/{index,flow,whaleLayer,gex}.ts`
+  - Changed: `vela/replay/{replay.ts,ReplayBar.tsx}`
+  - Changed: `vela/script/{alerts,engine,testerPanels}.ts`
+  - Changed: `vela/vela.css`
+  - Changed: `pages/{Vela,Replay,Whales}.tsx`
+- **Checks:**
+  - `tsc` is clean for every changed file; `check:theme` and `check:casing` pass; `vite build` is OK.
+  - The Vela route is 53.9 kB of its 57.7 kB budget. Each new piece is a lazy chunk of 2–6 kB.
+- **Headless run on mock data:**
+  - the rail rows and tags at the right heights, the heatmap and its hover, journal markers;
+  - paper buy / sell / short / flat and the log;
+  - the level alerts panel and arming;
+  - setups save and load;
+  - optimiser run and apply;
+  - whale click to the Whales page probe;
+  - the Replay hub Chart tab;
+  - replay on desktop and on the phone (ticks off with three charts);
+  - no console errors.
+- **Files in `generated/`** (mock data):
+  - `2026-10-04-vela-gex-rail-heatmap-journal.png`
+  - `2026-10-04-vela-replay-paper.png`
+  - `2026-10-04-vela-level-alerts-setups-log.png`
+  - `2026-10-04-vela-optimiser-replay-hub.png`
+  - `2026-10-04-whales-deep-link.png`

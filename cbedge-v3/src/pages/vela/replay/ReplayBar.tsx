@@ -28,6 +28,12 @@
 //
 // KEYS while replaying (Vela's own Shift+arrows are pans, overridden only here):
 //   Shift+→ next bar · Shift+← previous bar · Shift+↓ play / pause
+//   Shift+B buy · Shift+S sell · Shift+F flat (paper trading)
+//
+// PAPER TRADING (paper.ts): Buy / Sell / Flat with a quantity, filled at the
+// replay price. The dock shows the position, its open P&L and the realized P&L.
+// "Trades" opens the log above the dock: every round trip, win rate, profit
+// factor, max drawdown, Copy CSV and Reset.
 //
 // Studies that only know today (Key Levels, GEX Profile) blank themselves while
 // replaying, and the dock names them, so nobody reads today's walls on last
@@ -42,7 +48,8 @@ import { T } from '@/design/theme'
 import { etDateKey, etWallMs } from '@/pages/vela/studies/common'
 import { LIVE_ONLY } from '@/pages/vela/studies'
 import { replayClock } from './clock'
-import { closePicker, openPicker, replayFrom, replayStore } from './replay'
+import { closePicker, openPicker, repaint, replayFrom, replayQuote, replayStore } from './replay'
+import { paperCsv, paperFlatten, paperOpen, paperOrder, paperReset, paperStats, paperStore, pointValue, type PaperTrade } from './paper'
 import { dropTape, nominalTicks, tickSourceFor } from './ticks'
 
 /** ms per BAR at 1×, the same pace as every other v3 transport. */
@@ -51,6 +58,7 @@ const SPEEDS = [0.5, 1, 2, 4, 8] as const
 const OPEN_MIN = 9 * 60 + 30
 const DAY_MS = 86_400_000
 
+const QTY_KEY = 'cb-vela-paper-qty'
 const SPEED_KEY = 'cb-vela-replay-speed'
 const TICKS_KEY = 'cb-vela-replay-ticks'
 
@@ -231,8 +239,35 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
     if (ct == null || (b && ct <= b.first)) return
     void replayFrom(ct - 1)
   }, [ws])
-  const keys = useRef({ togglePlay, stepFwd, stepBack })
-  keys.current = { togglePlay, stepFwd, stepBack }
+  // ── paper trading ──
+  useSyncExternalStore(paperStore.subscribe, paperStore.version)
+  const paper = paperStore.get()
+  const [qty, setQtyState] = useState<number>(() => Math.max(1, Math.min(999, Math.round(Number(readPref(QTY_KEY)) || 1))))
+  const [showLog, setShowLog] = useState(false)
+  const setQty = (v: number) => {
+    const q = Math.max(1, Math.min(999, Math.round(v) || 1))
+    setQtyState(q)
+    writePref(QTY_KEY, String(q))
+  }
+  const order = useCallback(
+    (side: 1 | -1) => {
+      const q = replayQuote()
+      if (!q) return
+      paperOrder(q.sym, side * qty, q.price, q.t)
+      repaint()
+    },
+    [qty],
+  )
+  const buy = useCallback(() => order(1), [order])
+  const sell = useCallback(() => order(-1), [order])
+  const flat = useCallback(() => {
+    const q = replayQuote()
+    if (!q) return
+    paperFlatten(q.price, q.t)
+    repaint()
+  }, [])
+  const keys = useRef({ togglePlay, stepFwd, stepBack, buy, sell, flat })
+  keys.current = { togglePlay, stepFwd, stepBack, buy, sell, flat }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
@@ -245,7 +280,9 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
       }
       if (snap.phase !== 'on' || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return
       const k = keys.current
-      const run = e.key === 'ArrowRight' ? k.stepFwd : e.key === 'ArrowLeft' ? k.stepBack : e.key === 'ArrowDown' ? k.togglePlay : null
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
+      const run =
+        key === 'ArrowRight' ? k.stepFwd : key === 'ArrowLeft' ? k.stepBack : key === 'ArrowDown' ? k.togglePlay : key === 'b' ? k.buy : key === 's' ? k.sell : key === 'f' ? k.flat : null
       if (!run) return
       e.preventDefault()
       e.stopPropagation()
@@ -416,6 +453,21 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
           }
         />
 
+        <PaperKeys
+          qty={qty}
+          setQty={setQty}
+          onBuy={buy}
+          onSell={sell}
+          onFlat={flat}
+          showLog={showLog}
+          toggleLog={() => setShowLog((v) => !v)}
+          pos={paper.pos}
+          avg={paper.avg}
+          sym={paper.sym}
+          trades={paper.trades}
+        />
+        {showLog && <PaperLog trades={paper.trades} onClose={() => setShowLog(false)} />}
+
         {hidden.length > 0 && (
           <span className="shrink-0 text-2xs text-muted opacity-70" title="These studies read today's numbers only, so they blank while you replay">
             {hidden.join(' · ')} hidden (live only)
@@ -433,5 +485,172 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
         </span>
       </div>
     </ReplayDock>
+  )
+}
+
+// ── Paper trading ────────────────────────────────────────────────────────────
+
+const usd = (v: number) => {
+  const a = Math.abs(v)
+  const d = a < 100 && a > 0 ? 2 : 0
+  return `${v < 0 ? '−' : v > 0 ? '+' : ''}$${a.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })}`
+}
+const signed = (v: number) => `${v < 0 ? '−' : v > 0 ? '+' : ''}${Math.abs(v).toFixed(2)}`
+const tone = (v: number) => (v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-muted')
+
+function PaperKeys(p: {
+  qty: number
+  setQty: (v: number) => void
+  onBuy: () => void
+  onSell: () => void
+  onFlat: () => void
+  showLog: boolean
+  toggleLog: () => void
+  pos: number
+  avg: number
+  sym: string | null
+  trades: readonly PaperTrade[]
+}) {
+  const q = replayQuote()
+  const open = q ? paperOpen(q.price) : { pts: 0, usd: 0 }
+  const realized = p.trades.reduce((t, x) => t + x.usd, 0)
+  const key = 'tabular shrink-0 cursor-pointer rounded-sm px-2 py-0.5 font-mono text-2xs font-extrabold leading-none'
+  return (
+    <span className="flex shrink-0 items-center gap-1" title="Paper trading: market orders fill at the replay price">
+      <button type="button" className={`${key} bg-up text-bg`} onClick={p.onBuy} disabled={!q} title="Buy at the replay price (Shift+B)">
+        Buy
+      </button>
+      <button type="button" className={`${key} bg-down text-bg`} onClick={p.onSell} disabled={!q} title="Sell at the replay price (Shift+S)">
+        Sell
+      </button>
+      <button type="button" className={`${key} border border-line text-fg hover:bg-raised`} onClick={p.onFlat} disabled={!p.pos} title="Close the position (Shift+F)">
+        Flat
+      </button>
+      <input
+        type="number"
+        min={1}
+        max={999}
+        value={p.qty}
+        onChange={(e) => p.setQty(Number(e.target.value))}
+        aria-label="Order quantity"
+        title="Order quantity"
+        className="tabular w-12 shrink-0 rounded-sm border border-line bg-raised px-1 py-0.5 font-mono text-2xs font-extrabold text-fg outline-none focus:border-accent"
+      />
+      <span className="tabular shrink-0 font-mono text-2xs">
+        {p.pos ? (
+          <>
+            <span className={p.pos > 0 ? 'text-up' : 'text-down'}>
+              {p.pos > 0 ? 'Long' : 'Short'} {Math.abs(p.pos)}
+            </span>
+            <span className="text-muted"> @ {p.avg.toFixed(2)} </span>
+            <span className={tone(open.pts)} title={`${signed(open.pts)} points × $${pointValue(p.sym ?? '')}`}>
+              {usd(open.usd)}
+            </span>
+          </>
+        ) : (
+          <span className="text-muted opacity-70">Flat</span>
+        )}
+        <span className="text-muted opacity-60"> · Day </span>
+        <span className={tone(realized)}>{usd(realized)}</span>
+      </span>
+      <button
+        type="button"
+        onClick={p.toggleLog}
+        aria-pressed={p.showLog}
+        className="shrink-0 cursor-pointer rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg"
+        title="The paper trade log"
+      >
+        Trades{p.trades.length ? ` (${p.trades.length})` : ''}
+      </button>
+    </span>
+  )
+}
+
+const LOG_TIME = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+
+function PaperLog({ trades, onClose }: { trades: readonly PaperTrade[]; onClose: () => void }) {
+  const [sure, setSure] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const st = paperStats(trades)
+  const rows = trades.slice().reverse()
+  const copy = () => {
+    void navigator.clipboard?.writeText(paperCsv(trades)).then(
+      () => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      },
+      () => {},
+    )
+  }
+  return (
+    <div
+      className="cb-paper-log absolute bottom-full right-4 z-50 mb-2 flex max-h-[340px] w-[min(560px,calc(100vw-32px))] flex-col rounded-md border border-line bg-surface text-xs shadow-lg"
+      role="dialog"
+      aria-label="Paper trades"
+    >
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-2">
+        <span className="font-black uppercase tracking-[0.1em]" style={{ color: T.orange }}>
+          Paper trades
+        </span>
+        <span className="text-2xs text-muted">{st.n} trades</span>
+        <span className="text-2xs text-muted">Win {st.n ? Math.round((st.wins / st.n) * 100) : 0}%</span>
+        <span className={`tabular font-mono text-2xs font-extrabold ${tone(st.net)}`}>Net {usd(st.net)}</span>
+        <span className="text-2xs text-muted">PF {Number.isFinite(st.pf) ? st.pf.toFixed(2) : '∞'}</span>
+        <span className="text-2xs text-muted">Max DD {usd(-st.maxDd)}</span>
+        <span className="text-2xs text-muted">
+          Avg {usd(st.avgWin)} / {usd(-st.avgLoss)}
+        </span>
+        <button type="button" onClick={onClose} className="ml-auto cursor-pointer text-muted hover:text-fg" aria-label="Close">
+          ✕
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {rows.length === 0 ? (
+          <div className="px-3 py-4 text-2xs text-muted opacity-70">No paper trades yet. Buy or Sell while the replay runs.</div>
+        ) : (
+          <table className="tabular w-full font-mono text-2xs">
+            <tbody>
+              {rows.map((t, k) => (
+                <tr key={`${t.exitT}-${k}`} className="border-b border-line/50">
+                  <td className="px-3 py-1 text-muted">{LOG_TIME.format(new Date(t.entryT))}</td>
+                  <td className={`py-1 ${t.dir > 0 ? 'text-up' : 'text-down'}`}>
+                    {t.dir > 0 ? 'Long' : 'Short'} {t.qty} {t.sym}
+                  </td>
+                  <td className="py-1 text-fg">
+                    {t.entry.toFixed(2)} → {t.exit.toFixed(2)}
+                  </td>
+                  <td className={`py-1 text-right ${tone(t.pts)}`}>{signed(t.pts)}</td>
+                  <td className={`px-3 py-1 text-right font-extrabold ${tone(t.usd)}`}>{usd(t.usd)}</td>
+                  <td className="pr-3 py-1 text-muted opacity-60">{t.note ?? ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2">
+        <button type="button" onClick={copy} disabled={!trades.length} className={chip}>
+          {copied ? 'Copied' : 'Copy CSV'}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (!sure) {
+              setSure(true)
+              setTimeout(() => setSure(false), 2500)
+              return
+            }
+            paperReset()
+            repaint()
+            setSure(false)
+          }}
+          className={chip}
+          title="Clear the log, the realized P&L and any open position"
+        >
+          {sure ? 'Click again to reset' : 'Reset'}
+        </button>
+        <span className="ml-auto text-2xs text-muted opacity-60">Kept in this browser</span>
+      </div>
+    </div>
   )
 }

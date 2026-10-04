@@ -24,7 +24,7 @@
 import type { PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
 import { DAY_MS, barAt, bool, studyImpl, etDateKey, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
-import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_MIN, WH_SIDE } from './index'
+import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_EXP, WH_MIN, WH_SIDE } from './index'
 import { WhaleLayer, type Tone, type WhaleBubble, type WhalePayload } from './whaleLayer'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
 import { loadBasis } from '@/pages/vela/wallsIndicator'
@@ -228,6 +228,8 @@ interface WhRow {
   underlying: string | null
   /** The underlying's price when it printed. */
   spot: number | null
+  /** The contract (OCC symbol), for the Whales page link. */
+  osi: string | null
 }
 /** The prints, plus — on ES / NQ — each session's basis (SPX / NDX prints sit at index prices). */
 interface WhData {
@@ -241,6 +243,7 @@ interface WhS {
   cap: number
   size: number
   text: boolean
+  exp: 'all' | '0dte' | 'week' | 'no0dte'
 }
 const WH_MIN_V = [1e6, 2e6, 5e6, 10e6]
 const WH_CAP_V = [25e6, 10e6, 50e6, 100e6]
@@ -304,8 +307,29 @@ function whenText(rows: readonly WhRow[]): string {
 
 const CARD_ROWS = 5
 
-function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: number, tone: Tone, head: string, s: WhS, priceLabel: string): WhaleBubble {
+/** Days from the print's ET date to the expiry (0 = same day; null when unknown). */
+function dteOf(r: WhRow): number | null {
+  if (!r.expiry) return null
+  const e = Date.parse(`${r.expiry.slice(0, 10)}T12:00:00Z`)
+  const d = Date.parse(`${etDateKey(r.ts)}T12:00:00Z`)
+  return Number.isFinite(e) && Number.isFinite(d) ? Math.round((e - d) / DAY_MS) : null
+}
+
+/** The Expiry setting: 0DTE only, this week (expiring by that week's Friday), or skip 0DTE. */
+function expOk(r: WhRow, exp: WhS['exp']): boolean {
+  if (exp === 'all') return true
+  const dte = dteOf(r)
+  if (dte == null) return exp === 'no0dte'
+  if (exp === '0dte') return dte === 0
+  if (exp === 'no0dte') return dte !== 0
+  // this week: on or before that week's Friday
+  const wd = new Date(`${etDateKey(r.ts)}T12:00:00Z`).getUTCDay()
+  return dte >= 0 && dte <= Math.max(0, 5 - wd)
+}
+
+function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: number, tone: Tone, head: string, s: WhS, priceLabel: string, ticker: string): WhaleBubble {
   const sorted = rows.slice().sort((a, z) => z.premium - a.premium)
+  const top = sorted[0]!
   const sign = tone === 'up' ? '+' : tone === 'down' ? '−' : ''
   const n = rows.length
   return {
@@ -325,6 +349,7 @@ function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: n
       }),
       more: Math.max(0, n - CARD_ROWS),
     },
+    link: { ticker, day: etDateKey(top.ts), ts: top.ts, osi: top.osi },
   }
 }
 
@@ -354,6 +379,7 @@ function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
   const groups = new Map<string, WhRow[]>()
   for (const r of rows) {
     if (s.side !== 'all' && r.type !== s.side) continue
+    if (!expOk(r, s.exp)) continue
     if (r.ts < first || r.ts >= lastEnd) continue
     const key = `${Math.floor(r.ts / 60_000)}|${biasOf(r)}`
     const g = groups.get(key)
@@ -383,7 +409,7 @@ function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
     }
     const tone: Tone = bias > 0 ? 'up' : bias < 0 ? 'down' : 'mid'
     const head = bias > 0 ? 'Bullish' : bias < 0 ? 'Bearish' : 'Side unknown'
-    out.push(bubbleOf(key, ts, price, g, total, tone, head, s, label))
+    out.push(bubbleOf(key, ts, price, g, total, tone, head, s, label, flowTicker(c)))
   }
   // the biggest few hundred, when a long window holds more
   return out.sort((a, b) => b.r - a.r).slice(0, 400)
@@ -399,6 +425,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
       cap: WH_CAP_V[Math.max(0, (WH_CAP as readonly string[]).indexOf(str(i.cap, WH_CAP[0])))] ?? 25e6,
       size: int(i.size, 100, 50, 200) / 100,
       text: bool(i.text, true),
+      exp: (['all', '0dte', 'week', 'no0dte'] as const)[Math.max(0, (WH_EXP as readonly string[]).indexOf(str(i.exp, WH_EXP[0])))] ?? 'all',
     }
   },
   dataKey: (c, s) => `${flowTicker(c)}|${s.minPremium}|${s.days}`,
@@ -427,6 +454,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
         action: r.action === 'BUY' || r.action === 'SELL' ? r.action : null,
         underlying: typeof r.underlying === 'string' ? r.underlying : null,
         spot: Number.isFinite(Number(r.spot)) && Number(r.spot) > 0 ? Number(r.spot) : null,
+        osi: typeof r.osi === 'string' && r.osi ? r.osi : null,
       }))
       .filter((r) => Number.isFinite(r.ts) && r.premium > 0)
     return { rows, basis }

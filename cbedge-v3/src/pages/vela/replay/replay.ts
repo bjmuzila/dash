@@ -21,6 +21,11 @@
 // Clicking the button again cancels the picker, and while replaying it opens
 // the picker again to jump somewhere else.
 //
+// PAPER TRADING (paper.ts): the dock's Buy / Sell / Flat fill at the replay
+// price, the newest revealed close on the active chart, which this file tracks.
+// The fills (▲ bought, ▼ sold) and the open position's line are painted on the
+// same layer as the picker, while a replay runs.
+//
 // The replay clock (clock.ts) moves on every reveal, so the CB studies can tell
 // what had already happened.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29,7 +34,8 @@ import { registerWidgetAction, timeframeToMs, type OHLCV, type WidgetContext } f
 import { registerRendererLayer, type RendererLayerArgs, type RendererLayerInstance } from '@luxalgo/vela/plugin'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { tokenRgb, type RGB } from '@/design/theme'
-import { clearTickEnds, setReplayClock, tickEnd } from './clock'
+import { clearTickEnds, replayClock, setReplayClock, tickEnd } from './clock'
+import { paperFlatten, paperStore } from './paper'
 
 export type ReplayPhase = 'off' | 'on'
 
@@ -87,6 +93,9 @@ export function bindReplay(w: VelaWorkspace): () => void {
     r.on('replay:play', () => set({})),
     r.on('replay:pause', () => set({})),
     r.on('replay:end', ({ reason }) => {
+      // a paper position nobody can see any more: closed at the last replay price
+      const q = lastQuote
+      if (q && paperStore.get().pos) paperFlatten(q.price, q.t, 'replay ended')
       setReplayClock(false, Infinity)
       clearTickEnds()
       set({ phase: 'off', picking: false, note: '' })
@@ -94,8 +103,31 @@ export function bindReplay(w: VelaWorkspace): () => void {
       else if (reason === 'market') lastCtx?.toast('Replay ended: a symbol change brought new bars.', 'info')
     }),
   ]
+  // each revealed bar or tick, as it lands (before the replay event that re-renders the dock)
+  const barOffs = new Map<string, () => void>()
+  const wireBars = (id: string) => {
+    const cell = w.cell(id)
+    if (!cell || barOffs.has(id)) return
+    barOffs.set(
+      id,
+      cell.chart.on('bar', (b) => {
+        if (snap.phase === 'on') lastBarByCell.set(id, b)
+      }),
+    )
+  }
+  for (const c of w.cells()) wireBars(c.id)
+  offs.push(
+    w.on('cell:created', ({ id }) => wireBars(id)),
+    w.on('cell:destroyed', ({ id }) => {
+      barOffs.get(id)?.()
+      barOffs.delete(id)
+      lastBarByCell.delete(id)
+    }),
+  )
   return () => {
     for (const off of offs) off()
+    for (const off of barOffs.values()) off()
+    barOffs.clear()
     if (ws === w) ws = null
     setReplayClock(false, Infinity)
     clearTickEnds()
@@ -116,6 +148,34 @@ export function closePicker(): void {
 
 export function setReplayNote(note: string): void {
   set({ note })
+}
+
+/** Repaint the charts now (after a paper order: no new bar has come to do it). */
+export function repaint(): void {
+  ws?.resize()
+}
+
+// ── The replay price: the newest revealed close on each chart ──
+interface Quote {
+  price: number
+  /** The moment it stands for: the replay clock. */
+  t: number
+  sym: string
+}
+const lastBarByCell = new Map<string, OHLCV>()
+let lastQuote: Quote | null = null
+
+const bare = (symbol: string | undefined) => (symbol ?? '').replace(/^[^:]*:/, '').trim().toUpperCase()
+
+/** What a paper order fills at: the active chart's newest revealed close. */
+export function replayQuote(): Quote | null {
+  const w = ws
+  if (!w) return null
+  const bar = lastBarByCell.get(w.active.id)
+  if (!bar) return null
+  const clock = replayClock()
+  const t = Number.isFinite(clock) ? Math.max(bar.time, clock) : bar.time
+  return { price: bar.close, t, sym: bare(w.chart.market.symbol) }
 }
 
 /** Rewind to `from`: the chart keeps every bar that opened at or before it. */
@@ -181,6 +241,20 @@ class PickLayer implements RendererLayerInstance {
   private bars: readonly OHLCV[] = []
   private coords: RendererLayerArgs['coords'] | null = null
   private off: (() => void) | null = null
+  private cellId: string | null = null
+
+  /** The workspace cell this layer's chart is (found once, by DOM). */
+  private cell(): { id: string; symbol: string } | null {
+    const w = ws
+    const canvas = this.canvas
+    if (!w || !canvas) return null
+    let cell = this.cellId ? w.cell(this.cellId) : undefined
+    if (!cell || !cell.host.contains(canvas)) {
+      cell = w.cells().find((k) => k.host.contains(canvas))
+      this.cellId = cell?.id ?? null
+    }
+    return cell ? { id: cell.id, symbol: bare(cell.chart.market.symbol) } : null
+  }
 
   mount(canvas: HTMLCanvasElement): void {
     this.canvas = canvas
@@ -232,8 +306,18 @@ class PickLayer implements RendererLayerInstance {
     if (!canvas || !g) return
     g.setTransform(1, 0, 0, 1, 0, 0)
     g.clearRect(0, 0, canvas.width, canvas.height)
-    const cur = args.cursor
     const bars = args.bars
+    const cell = snap.phase === 'on' || snap.picking ? this.cell() : null
+    if (cell && snap.phase === 'on' && bars.length) {
+      const last = bars[bars.length - 1]!
+      lastBarByCell.set(cell.id, last)
+      if (ws?.active.id === cell.id) lastQuote = { price: last.close, t: last.time, sym: cell.symbol }
+      const dpr0 = args.coords.dpr || 1
+      g.setTransform(dpr0, 0, 0, dpr0, 0, 0)
+      drawPaper(g, args, cell.symbol)
+      g.setTransform(1, 0, 0, 1, 0, 0)
+    }
+    const cur = args.cursor
     if (!snap.picking || !cur || !bars.length) return
     const c = args.coords
     const dpr = c.dpr || 1
@@ -272,6 +356,87 @@ class PickLayer implements RendererLayerInstance {
     this.off = null
     this.canvas = null
   }
+}
+
+/** x of a moment inside its candle (open at the left edge, close at the right). */
+function timeX(t: number, bars: readonly OHLCV[], tf: number, coords: RendererLayerArgs['coords']): number | null {
+  const n = bars.length
+  if (!n || t < bars[0]!.time) return null
+  let lo = 0
+  let hi = n - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (bars[mid]!.time <= t) lo = mid
+    else hi = mid - 1
+  }
+  const frac = Math.max(0, Math.min(1, (t - bars[lo]!.time) / (tf || 1)))
+  return coords.logicalToX(lo - 0.5 + frac)
+}
+
+/** The paper fills on this chart (▲ bought, ▼ sold) and the open position's line. */
+function drawPaper(g: CanvasRenderingContext2D, args: RendererLayerArgs, sym: string): void {
+  const p = paperStore.get()
+  const { coords, scale, bounds, bars } = args
+  const fills = p.fills.filter((f) => f.sym === sym)
+  if (!fills.length && !(p.pos && p.sym === sym)) return
+  const tf = coords.barInterval || (bars.length > 1 ? bars[1]!.time - bars[0]!.time : 60_000)
+  const up = tokenRgb('--color-up')
+  const down = tokenRgb('--color-down')
+  const bg = tokenRgb('--color-bg')
+  g.save()
+  g.beginPath()
+  g.rect(0, bounds.top, coords.width, bounds.height)
+  g.clip()
+  for (const f of fills) {
+    const x = timeX(f.t, bars, tf, coords)
+    if (x == null || x < -10 || x > coords.width + 10) continue
+    const y = coords.priceToY(f.price, scale, bounds)
+    if (!Number.isFinite(y)) continue
+    const buy = f.qty > 0
+    const s = 6
+    g.beginPath()
+    if (buy) {
+      g.moveTo(x, y + 3)
+      g.lineTo(x + s, y + 3 + s * 1.6)
+      g.lineTo(x - s, y + 3 + s * 1.6)
+    } else {
+      g.moveTo(x, y - 3)
+      g.lineTo(x + s, y - 3 - s * 1.6)
+      g.lineTo(x - s, y - 3 - s * 1.6)
+    }
+    g.closePath()
+    g.fillStyle = hexA(buy ? up : down, 1)
+    g.fill()
+    g.lineWidth = 1
+    g.strokeStyle = hexA(bg, 0.9)
+    g.stroke()
+  }
+  if (p.pos && p.sym === sym) {
+    const y = Math.round(coords.priceToY(p.avg, scale, bounds)) + 0.5
+    const last = bars[bars.length - 1]
+    const openPts = last ? (last.close - p.avg) * p.pos : 0
+    const c = p.pos > 0 ? up : down
+    g.setLineDash([6, 4])
+    g.strokeStyle = hexA(c, 0.85)
+    g.lineWidth = 1.25
+    g.beginPath()
+    g.moveTo(0, y)
+    g.lineTo(coords.width, y)
+    g.stroke()
+    g.setLineDash([])
+    const text = `${p.pos > 0 ? 'Long' : 'Short'} ${Math.abs(p.pos)} @ ${p.avg.toFixed(2)} · ${openPts >= 0 ? '+' : '−'}${Math.abs(openPts).toFixed(2)} pts`
+    g.font = '700 10px system-ui, sans-serif'
+    const w = g.measureText(text).width + 10
+    g.fillStyle = hexA(c, 1)
+    g.beginPath()
+    g.roundRect(6, y - 9, w, 18, 3)
+    g.fill()
+    g.fillStyle = hexA(bg, 1)
+    g.textAlign = 'left'
+    g.textBaseline = 'middle'
+    g.fillText(text, 11, y + 0.5)
+  }
+  g.restore()
 }
 
 let fontMemo = ''

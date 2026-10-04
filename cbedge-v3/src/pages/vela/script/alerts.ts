@@ -138,6 +138,11 @@ function deliver(a: FiredAlert): void {
   for (const fn of listeners) fn(a)
 }
 
+/** An alert raised outside a script (the Level Alerts panel), delivered the same four ways. */
+export function deliverAlert(a: Omit<FiredAlert, 'at'>): void {
+  deliver({ ...a, at: Date.now() })
+}
+
 // ── What is new since the last run ──
 interface Cursor {
   /** Per alert key: the newest bar time already accounted for. */

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { VelaTheme } from '@luxalgo/vela'
 import { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { preload } from '@/data/api'
@@ -18,7 +18,10 @@ import { registerStudies } from '@/pages/vela/studies'
 import { bindTimelineMarks } from '@/pages/vela/marks'
 import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
 import { registerWatchlist } from '@/pages/vela/watchlist/panel'
-import { bindReplay, registerReplay } from '@/pages/vela/replay/replay'
+import { bindReplay, openPicker, registerReplay } from '@/pages/vela/replay/replay'
+import { bindStudyOrder } from '@/pages/vela/studyOrder'
+import { bindLevelAlerts, registerLevelAlerts } from '@/pages/vela/levels/levelAlertsEntry'
+import { bindSetups, onStrip, registerSetups, setStripShown, stripShown } from '@/pages/vela/setups/setups'
 import { replayActive } from '@/pages/vela/replay/clock'
 import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
 import '@/pages/vela/vela.css'
@@ -185,6 +188,8 @@ registerStudies()
 registerIndicatorPicker()
 registerWatchlist()
 registerReplay()
+registerLevelAlerts()
+registerSetups()
 // a replay reveals history bar by bar, like live bars: script alerts stay quiet meanwhile
 setAlertGate(() => !replayActive())
 
@@ -263,12 +268,28 @@ const FUTURES_TICKERS = new Set(['ES', 'NQ', '/ES', '/NQ', 'ES1!', 'NQ1!'])
 export interface VelaProps {
   /** The phone build (/m/vela): touch chrome, three stacked charts, its own saved document. */
   phone?: boolean
+  /** Open the bar-replay start picker as soon as the chart is up (the Replay hub's Chart tab). */
+  replayOnOpen?: boolean
 }
 
-export default function Vela({ phone = false }: VelaProps) {
+// The session stats strip above the chart (setups/SessionStrip.tsx), lazily: its
+// chunk loads only while it is shown.
+const SessionStrip = lazy(() => import('@/pages/vela/setups/SessionStrip'))
+function StripHost({ ws, phone }: { ws: VelaWorkspace | null; phone: boolean }) {
+  const shown = useSyncExternalStore(onStrip, () => stripShown(phone))
+  if (!ws || !shown) return null
+  return (
+    <Suspense fallback={null}>
+      <SessionStrip ws={ws} onHide={() => setStripShown(false)} />
+    </Suspense>
+  )
+}
+
+export default function Vela({ phone = false, replayOnOpen = false }: VelaProps) {
   const { symbol: pageSymbol, setSymbol: setPageSymbol } = usePageSymbol()
   // Fixed for the life of the mount — onMount reads it once, like everything else.
   const phoneRef = useRef(phone)
+  const replayOnOpenRef = useRef(replayOnOpen)
   const wsRef = useRef<VelaWorkspace | null>(null)
   // the same workspace, as state: the replay dock renders off it
   const [wsState, setWsState] = useState<VelaWorkspace | null>(null)
@@ -310,6 +331,10 @@ export default function Vela({ phone = false }: VelaProps) {
     wsRef.current = ws
     setWsState(ws)
     const unbindReplay = bindReplay(ws)
+    const unbindOrder = bindStudyOrder(ws)
+    const unbindLevels = bindLevelAlerts(ws)
+    const unbindSetups = bindSetups(ws)
+    if (replayOnOpenRef.current) setTimeout(openPicker, 400)
     const unbindShot = bindShotWorkspace(ws)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
     const unbindMarks = bindTimelineMarks(ws)
@@ -348,6 +373,9 @@ export default function Vela({ phone = false }: VelaProps) {
       unbindIndicators()
       unbindMarks()
       unbindReplay()
+      unbindOrder()
+      unbindLevels()
+      unbindSetups()
       wsRef.current = null
       setWsState(null)
       ws.destroy()
@@ -372,6 +400,7 @@ export default function Vela({ phone = false }: VelaProps) {
 
   return (
     <Page fill>
+      <StripHost ws={wsState} phone={phone} />
       <ChartFrame className="relative" onMount={onMount} onResize={() => wsRef.current?.resize()} />
       {/* bar replay's transport: portalled into the page's replay dock (ReplayDock) */}
       <ReplayHost ws={wsState} />

@@ -571,16 +571,48 @@ function Card({ title, note, className, children }: {
   )
 }
 
+/**
+ * A link INTO the archive, from a whale bubble on the Vela chart:
+ * `/whales?ticker=SPX&day=2026-10-02&ts=…&osi=…`. Opens on that ticker, with a
+ * range wide enough to hold the day, narrowed to the day, and the print's
+ * contract probe open once the rows land. Read once, at mount, and stripped
+ * from the address bar afterwards, so a reload is an ordinary visit to the
+ * saved filters again.
+ */
+interface WhaleLink {
+  ticker: string
+  day: string
+  ts: number
+  osi: string
+}
+function readWhaleLink(): WhaleLink | null {
+  try {
+    const sp = new URLSearchParams(window.location.search)
+    const ticker = (sp.get('ticker') ?? '').trim().toUpperCase().slice(0, 12)
+    const day = sp.get('day') ?? ''
+    if (!ticker || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null
+    return { ticker, day, ts: Number(sp.get('ts')) || 0, osi: sp.get('osi') ?? '' }
+  } catch {
+    return null
+  }
+}
+/** The narrowest range preset that still reaches back to `day`. */
+function presetFor(day: string): PresetKey {
+  const back = Math.round((Date.parse(`${etYmd(new Date())}T12:00:00Z`) - Date.parse(`${day}T12:00:00Z`)) / 86_400_000)
+  return (PRESETS.find((p) => p.days >= back) ?? PRESETS[PRESETS.length - 1]!).key
+}
+
 export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   // Lazy initialiser, not a useEffect that overwrites afterwards: reading
   // storage on first render means the first fetch already goes out with the
   // saved filters, instead of one request at the defaults and a second one a
   // tick later.
   const [saved] = useState<Saved>(loadSettings)
-  const [preset, setPreset] = useState<PresetKey>(saved.preset)
+  const [link] = useState<WhaleLink | null>(readWhaleLink)
+  const [preset, setPreset] = useState<PresetKey>(link ? presetFor(link.day) : saved.preset)
   const [floor, setFloor] = useState(saved.floor)
   const [maxPrice, setMaxPrice] = useState<number | null>(saved.maxPrice)
-  const [ticker, setTicker] = useState(saved.ticker)
+  const [ticker, setTicker] = useState(link ? link.ticker : saved.ticker)
   const [type, setType] = useState<'' | 'C' | 'P'>(saved.type)
   const [action, setAction] = useState<'' | 'BUY' | 'SELL'>(saved.action)
   const [moneyness, setMoneyness] = useState<'all' | 'otm'>(saved.moneyness)
@@ -593,7 +625,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   // Clicking a bar in the session chart narrows the table to that day WITHOUT
   // touching the range — the tiles and the leaderboards stay on the range you
   // chose, which is what makes the day readable AS PART of it.
-  const [day, setDay] = useState<string | null>(null)
+  const [day, setDay] = useState<string | null>(link?.day ?? null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // Phone layout only (see the PHONE LAYOUT note above the return). Declared
   // unconditionally — hooks cannot sit behind the `phone` branch.
@@ -747,6 +779,23 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
     () => (d?.rows ?? []).filter((r) => !day || r.sessionDate === day),
     [d, day],
   )
+
+  // The bubble link: open its print's probe once the rows hold it, then drop the
+  // query string so the address bar is the page's own again.
+  const linkDone = useRef(false)
+  useEffect(() => {
+    if (!link || linkDone.current || !d) return
+    linkDone.current = true
+    const hit = link.osi
+      ? rows.find((r) => r.osi === link.osi && Math.abs(r.ts - link.ts) < 120_000) ?? rows.find((r) => r.osi === link.osi)
+      : rows.find((r) => Math.abs(r.ts - link.ts) < 60_000)
+    if (hit) setSelectedId(hit.id)
+    try {
+      window.history.replaceState(window.history.state, '', window.location.pathname)
+    } catch {
+      /* leave the address bar as it is */
+    }
+  }, [link, d, rows])
 
   // ── REPEATED FLOW IN THE PRINTS (2026-10-03, Brandon — option D) ──────────
   // The Repeated flow card reports the contracts it is listing (under its own

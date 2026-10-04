@@ -67,6 +67,19 @@ export function setLevelsLoader(fn: LevelsLoader): void {
   levelsLoader = fn
 }
 
+// ── What each script last ran on, for the Strategy Tester's optimiser ──
+export interface RunContext {
+  prog: Program
+  bars: readonly OHLCV[]
+  opts: RunOpts
+  inputs: Record<string, InputValue>
+}
+const lastRun = new Map<string, RunContext>()
+/** The program, bars and options a chart's script instance last ran with. */
+export function runContext(instanceId: string): RunContext | null {
+  return lastRun.get(instanceId) ?? null
+}
+
 // ── Alerts and bar replay ──
 let alertGate: () => boolean = () => true
 /** Whether script alerts may fire right now. The page shuts them while a bar replay
@@ -442,7 +455,9 @@ export class CbScriptEngine implements ScriptingEngine {
       // levels read for an older copy of these bars line up only while the first bar is the same
       const cbedge = cb && bars[0]?.time === cb.first ? cb.data : undefined
       try {
-        const res = rt!.run(token.prog, bars, { ...market, inputs, series, ...(cbedge ? { cbedge } : {}) })
+        const opts: RunOpts = { ...market, series, ...(cbedge ? { cbedge } : {}) }
+        const res = rt!.run(token.prog, bars, { ...opts, inputs })
+        lastRun.set(token.id, { prog: token.prog, bars, opts, inputs })
         h.onModel(toModel(token.id, res, bars, valuesOf(res.inputs, inputs)))
         cost = Date.now() - last
         tellError(token.id, null)

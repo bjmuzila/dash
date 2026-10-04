@@ -49,6 +49,8 @@
 //                  live Multi Greek board is shaped the same way (panel 1 = the
 //                  board ticker, the rest added by hand).
 //   options-chain  already followed; it reads usePageSymbol directly.
+//   chart          the Vela chart page, opened with its replay start picker up
+//                  (pages/vela/replay). It follows the toolbar like /vela does.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
@@ -73,8 +75,11 @@ const OptionsChain = lazy(() => import('./OptionsChain'))
 const GexCandles = lazy(() =>
   import('@/board/gexCandles/GexCandlesCard').then((m) => ({ default: m.GexCandlesCard })),
 )
+// The Vela chart page, opened with its bar-replay start picker showing. Same
+// chunk /vela loads, same saved workspace.
+const VelaChart = lazy(() => import('./Vela'))
 
-type TabId = 'chain-ladder' | 'gex-levels' | 'gex-candles' | 'mult-greek' | 'options-chain'
+type TabId = 'chain-ladder' | 'gex-levels' | 'gex-candles' | 'chart' | 'mult-greek' | 'options-chain'
 
 interface TabDef {
   id: TabId
@@ -121,6 +126,14 @@ const TABS: TabDef[] = [
       'The candles with the GEX bubbles and the rail over them, scrubbed through the session on one cursor — the ladder as it stood at each bar, not as it stands now.',
     full: false,
     chart: true,
+  },
+  {
+    id: 'chart',
+    label: 'Chart',
+    title: 'Chart replay',
+    blurb:
+      'The Vela chart with your studies, rewound bar by bar or tick by tick, with paper trading. Click a bar to start, or pick a session open.',
+    full: true,
   },
   {
     id: 'mult-greek',
@@ -224,6 +237,8 @@ export default function ReplayPage() {
           <Suspense fallback={fallback}>
             {active.id === 'mult-greek' ? (
               <MultiGreekReplay />
+            ) : active.id === 'chart' ? (
+              <VelaChart replayOnOpen />
             ) : (
               // Opens scoped to 0DTE: this tab is for watching the front
               // contract move, and "all expiries" is one click away on the bar's

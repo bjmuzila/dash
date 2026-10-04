@@ -10,6 +10,9 @@
 //   gex.ts     CB Expected Move · CB Key Levels · CB GEX Profile
 //   flow.ts    CB Net Premium · CB Vol / GEX Flow · CB Whale Prints
 //   tpo.ts     CB Market Profile
+//   rail.ts    CB GEX Rail (the GEX Candles card's strike rail, beside the price axis)
+//   heat.ts    CB GEX Heatmap (the per-minute ladders, behind the candles)
+//   journal.ts CB Journal Trades (your journal's fills on the chart)
 //
 // None is put on a chart by itself: they are the user's to add.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -25,6 +28,9 @@ export const VF_SCOPES = ['All expiries', 'Front expiry'] as const
 export const VF_SESSIONS = ['Regular hours', 'Extended hours'] as const
 export const WH_MIN = ['$1M', '$2M', '$5M', '$10M'] as const
 export const WH_SIDE = ['Calls and puts', 'Calls', 'Puts'] as const
+export const WH_EXP = ['All expiries', '0DTE only', 'This week', 'Skip 0DTE'] as const
+export const HEAT_SESSIONS = ['1', '2', '3'] as const
+export const JR_SHOW = ['All trades', 'Winners', 'Losers'] as const
 /** Where a whale bubble reaches its biggest — anything larger draws that size too. */
 export const WH_CAP = ['$25M', '$10M', '$50M', '$100M'] as const
 export const TPO_ROWS = ['Auto', '0.25', '0.5', '1', '2', '5', '10', '25'] as const
@@ -40,9 +46,13 @@ export const NETPREM_TYPE = 'cbedge-net-premium'
 export const VOLFLOW_TYPE = 'cbedge-vol-gex-flow'
 export const WHALES_TYPE = 'cbedge-whale-prints'
 export const TPO_TYPE = 'cbedge-market-profile'
+export const RAIL_TYPE = 'cbedge-gex-rail'
+export const HEAT_TYPE = 'cbedge-gex-heatmap'
+export const JOURNAL_TYPE = 'cbedge-journal-trades'
 
-/** The studies that read today's numbers only, blank during a bar replay: type → the dock's name for it. */
-export const LIVE_ONLY: Readonly<Record<string, string>> = { [KEY_TYPE]: 'Key Levels', [PROFILE_TYPE]: 'GEX Profile' }
+/** The studies that read today's numbers only, blank during a bar replay: type → the dock's name for it.
+ *  (GEX Profile reads the recorded per-minute ladders while replaying instead.) */
+export const LIVE_ONLY: Readonly<Record<string, string>> = { [KEY_TYPE]: 'Key Levels' }
 
 export function registerStudies(): void {
   defineStudy(
@@ -133,7 +143,6 @@ export function registerStudies(): void {
       title: 'CB GEX Profile — net GEX by strike beside the price axis',
       shortTitle: 'GEX Profile',
       pane: 'price',
-      liveOnly: true,
       viewport: true,
       inputs: () => [
         { key: 'basis', title: 'GEX', type: 'string', defval: GEX_BASIS[0], options: GEX_BASIS },
@@ -186,6 +195,7 @@ export function registerStudies(): void {
         { key: 'min', title: 'Smallest print', type: 'string', defval: WH_MIN[0], options: WH_MIN },
         { key: 'days', title: 'Days back', type: 'int', defval: 5, min: 1, max: 30 },
         { key: 'side', title: 'Show', type: 'string', defval: WH_SIDE[0], options: WH_SIDE },
+        { key: 'exp', title: 'Expiry', type: 'string', defval: WH_EXP[0], options: WH_EXP, tooltip: '0DTE only: prints on contracts expiring that day. This week: expiring by that week’s Friday.' },
         {
           key: 'cap',
           title: 'Biggest bubble at',
@@ -218,5 +228,52 @@ export function registerStudies(): void {
       ],
     },
     () => import('./tpo').then((m) => m.tpoImpl),
+  )
+  defineStudy(
+    {
+      type: RAIL_TYPE,
+      title: 'CB GEX Rail — the GEX Candles strike rail beside the price axis',
+      shortTitle: 'GEX Rail',
+      pane: 'price',
+      layer: {},
+      inputs: () => [
+        { key: 'basis', title: 'GEX', type: 'string', defval: GEX_BASIS[0], options: GEX_BASIS },
+        { key: 'tags', title: 'Level tags (CB / CW / PW)', type: 'bool', defval: true },
+        { key: 'width', title: 'Rail width (px)', type: 'int', defval: 96, min: 72, max: 180, step: 4 },
+      ],
+    },
+    () => import('./rail').then((m) => m.railImpl),
+  )
+  defineStudy(
+    {
+      type: HEAT_TYPE,
+      title: 'CB GEX Heatmap — the per-minute GEX ladders behind the candles',
+      shortTitle: 'GEX Heatmap',
+      pane: 'price',
+      layer: { cursor: true },
+      inputs: () => [
+        { key: 'basis', title: 'GEX', type: 'string', defval: GEX_BASIS[0], options: GEX_BASIS },
+        { key: 'sessions', title: 'Sessions', type: 'string', defval: HEAT_SESSIONS[0], options: HEAT_SESSIONS, tooltip: 'The recorder keeps about two sessions of per-minute ladders.' },
+        { key: 'opacity', title: 'Opacity %', type: 'int', defval: 55, min: 10, max: 95, step: 5 },
+        { key: 'cut', title: 'Hide cells under % of the biggest', type: 'int', defval: 8, min: 0, max: 50 },
+      ],
+    },
+    () => import('./heat').then((m) => m.heatImpl),
+  )
+  defineStudy(
+    {
+      type: JOURNAL_TYPE,
+      title: 'CB Journal Trades — your journal’s trades on the chart',
+      shortTitle: 'Journal',
+      pane: 'price',
+      layer: { cursor: true },
+      inputs: () => [
+        { key: 'show', title: 'Show', type: 'string', defval: JR_SHOW[0], options: JR_SHOW },
+        { key: 'pnl', title: 'P&L beside each exit', type: 'bool', defval: true },
+        { key: 'options', title: 'Options at the underlying’s price', type: 'bool', defval: true, tooltip: 'An option trade has no price on this chart; draw it where the underlying traded at that moment.' },
+        { key: 'account', title: 'Account (blank = all)', type: 'string', defval: '' },
+      ],
+    },
+    () => import('./journal').then((m) => m.journalImpl),
   )
 }

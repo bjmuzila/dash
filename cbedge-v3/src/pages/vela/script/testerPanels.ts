@@ -127,7 +127,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
   const bar = el(doc, 'div', 'cb-st-bar')
   const tabs = el(doc, 'div', 'cb-st-tabs')
   tabs.setAttribute('role', 'tablist')
-  const tabBtn = (id: 'overview' | 'trades', label: string) => {
+  const tabBtn = (id: 'overview' | 'trades' | 'optimise', label: string) => {
     const b = el(doc, 'button', 'cb-st-tab', label)
     b.type = 'button'
     b.setAttribute('role', 'tab')
@@ -143,16 +143,19 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     })
     return b
   }
-  tabs.append(tabBtn('overview', 'Overview'), tabBtn('trades', 'List of trades'))
+  tabs.append(tabBtn('overview', 'Overview'), tabBtn('trades', 'List of trades'), tabBtn('optimise', 'Optimise'))
+  /** The optimiser view, kept while the same strategy stays selected (its runs live in it). */
+  let optim: { id: string; el: HTMLElement; destroy: () => void } | null = null
   const view = el(doc, 'div', 'cb-st-view')
   body.append(pickRow, pasteBox, bar, tabs, view)
 
   let selected: string | null = null
   /** A library / ready-made id just added: selected as soon as its first run lands. */
   let pending: { libId: string; name: string; at: number } | null = null
-  let tab: 'overview' | 'trades' = 'overview'
+  let tab: 'overview' | 'trades' | 'optimise' = 'overview'
   try {
-    if (localStorage.getItem(TAB_KEY) === 'trades') tab = 'trades'
+    const saved = localStorage.getItem(TAB_KEY)
+    if (saved === 'trades' || saved === 'optimise') tab = saved
   } catch {
     /* private mode */
   }
@@ -328,6 +331,35 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
       )
     if (cur.info.bars < 1500)
       notes.push(el(doc, 'div', 'cb-st-tip', `Tested on the ${cur.info.bars.toLocaleString('en-US')} bars the chart has loaded. For a longer test pick a longer range under the chart (1M, 3M) or zoom out — the backtest re-runs on its own.`))
+    if (tab === 'optimise') {
+      if (!optim || optim.id !== cur.id) {
+        optim?.destroy()
+        const holder = el(doc, 'div', 'cb-op')
+        holder.append(el(doc, 'div', 'cb-scr-note', 'Loading the optimiser…'))
+        const id = cur.id
+        const title = cur.title
+        optim = { id, el: holder, destroy: () => {} }
+        const slot = optim
+        void import('./optimiser').then((m) => {
+          if (optim !== slot) return
+          const h = m.mountOptimiser(holder, {
+            id,
+            title,
+            handle: () => {
+              for (const chart of chartsOf(ctx)) {
+                const hit = chart.indicators().find((x) => x.id === id)
+                if (hit) return hit
+              }
+              return null
+            },
+            toast: (msg, kind) => ctx.toast(msg, kind),
+          })
+          slot.destroy = h.destroy
+        })
+      }
+      view.replaceChildren(optim.el)
+      return
+    }
     view.replaceChildren(...notes, ...(tab === 'overview' ? overview(cur.info, st) : trades(st)))
   }
 
