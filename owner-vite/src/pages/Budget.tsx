@@ -410,6 +410,29 @@ export default function Budget() {
     await refresh(month);
   };
 
+  /**
+   * Logged rows marked "owed" — written down but not actually paid yet (e.g. a
+   * recurring bill whose amount was edited, which materialized it as Paid).
+   *
+   * Stored in the same per-profile key store as the Rent card's settled marks
+   * (budget_flow_settled), keyed `owed:<rowId>` with an EMPTY entry_date so the
+   * store's date-based pruning never clears it. No new column, no new action.
+   */
+  const owedRows = useMemo(() => {
+    const ids = new Set<number>();
+    for (const k of settledFlows) if (k.startsWith("owed:")) ids.add(Number(k.slice(5)));
+    return ids;
+  }, [settledFlows]);
+  const setRowOwed = async (row: { id: number; label: string }, on: boolean) => {
+    const key = `owed:${row.id}`;
+    setSettledFlows((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(key); else next.delete(key);
+      return next;
+    });
+    await post({ action: "settleFlow", key, label: row.label, date: "", on });
+  };
+
   // Build the displayed register: seed per-bank beginning balances, then merge
   // manual rows with live-computed recurring occurrences (sorted by date), then
   // run each bank's own running balance. Recurring rows are synthetic (id<0).
@@ -426,12 +449,12 @@ export default function Budget() {
     const anyBeginning = BANKS.some((b) => beginningByBank[b] !== null);
 
     // Manual (non-beginning) rows.
-    type Line = { id: number; entry_date: string; sort_order: number; label: string; bank: Bank; amount: number; recurring: boolean; recurTag?: string };
+    type Line = { id: number; entry_date: string; sort_order: number; label: string; bank: Bank; amount: number; recurring: boolean; recurTag?: string; owed?: boolean };
     // A $0 row tagged __recur__:… is a "removed" marker (the occurrence was
     // canceled): it suppresses the synthetic twin below but isn't listed.
     const lines: Line[] = register
       .filter((r) => !r.is_beginning && !(Number(r.amount) === 0 && typeof r.recurring_tag === "string" && r.recurring_tag.startsWith("__recur__:")))
-      .map((r) => ({ id: r.id, entry_date: r.entry_date, sort_order: r.sort_order, label: r.label, bank: r.bank, amount: r.amount, recurring: false }));
+      .map((r) => ({ id: r.id, entry_date: r.entry_date, sort_order: r.sort_order, label: r.label, bank: r.bank, amount: r.amount, recurring: false, owed: owedRows.has(r.id) }));
 
     // A recurring occurrence the user edited is "materialized" into a real
     // register row tagged __recur__:<ruleId>:<date>. Skip the synthetic twin so
@@ -482,7 +505,7 @@ export default function Budget() {
         payments += ln.amount;
         expenseByLabel[ln.label] = (expenseByLabel[ln.label] || 0) + Math.abs(ln.amount);
       }
-      rows.push({ id: ln.id, entry_date: ln.entry_date, label: ln.label, bank: ln.bank, amount: ln.amount, is_beginning: 0, recurring: ln.recurring, recurTag: ln.recurTag, balance: running, balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu });
+      rows.push({ id: ln.id, entry_date: ln.entry_date, label: ln.label, bank: ln.bank, amount: ln.amount, is_beginning: 0, recurring: ln.recurring, recurTag: ln.recurTag, owed: !!ln.owed, balance: running, balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu });
       series.push({ date: ln.entry_date, balance: running });
     }
 
@@ -512,7 +535,7 @@ export default function Budget() {
       beginningByBank, anyBeginning, beginningBalance: beginCombined,
       totals: { ...bal }, grandTotal: bal.coastal + bal.truist + bal.secu,
     };
-  }, [register, recurring, month]);
+  }, [register, recurring, month, owedRows]);
 
   const amazonComputed = useMemo(() => {
     // tips is coerced rather than trusted: rows written before the column
@@ -715,9 +738,15 @@ export default function Budget() {
         out.push({ label: rule.label, amount: rule.amount, date, days: daysBetween(today, date), tag, bank: rule.bank });
       }
     }
+    // Logged rows marked owed are still unpaid bills. Their tag is `owed:<id>`,
+    // which markBillPaid reads as "clear the mark", not "log a new row".
+    for (const r of register) {
+      if (r.is_beginning || r.amount >= 0 || !owedRows.has(r.id) || r.entry_date > horizon) continue;
+      out.push({ label: r.label, amount: r.amount, date: r.entry_date, days: daysBetween(today, r.entry_date), tag: `owed:${r.id}`, bank: r.bank });
+    }
     out.sort((a, b) => (a.date < b.date ? -1 : 1));
     return out;
-  }, [recurring, register, month]);
+  }, [recurring, register, month, owedRows]);
 
   // Per-month rollup for the Yearly tab: real rows + non-materialized recurring
   // occurrences, chaining start→end and honoring any month that sets its own
@@ -809,6 +838,10 @@ export default function Budget() {
         billsLeft += Math.abs(rule.amount);
       }
     }
+    // Logged rows marked owed haven't left the bank yet either.
+    for (const r of register) {
+      if (!r.is_beginning && r.amount < 0 && owedRows.has(r.id) && r.entry_date >= today) billsLeft += Math.abs(r.amount);
+    }
     const safe = allBanks - billsLeft;
     const safePerDay = safe / daysLeft;
 
@@ -851,7 +884,7 @@ export default function Budget() {
     if (categoryStats.unsortedTotal > 0) slices.push({ label: "Unsorted", value: categoryStats.unsortedTotal, color: "rgba(255,255,255,0.35)", avg: null });
 
     return { daysInMonth, todayDay, daysLeft, billsLeft, safe, safePerDay, cum, budgetTotal, paceNow, spentMtd, week, wkOut, prevWkOut, slices };
-  }, [register, recurring, month, allBanks, categories, categoryStats, computed]);
+  }, [register, recurring, month, allBanks, categories, categoryStats, computed, owedRows]);
   const prevAllBanks = prevDailyBalance ? prevDailyBalance.coastal + prevDailyBalance.truist + prevDailyBalance.secu : null;
 
   // ── Balance reconciliation (weekly) ───────────────────────────────────────
@@ -874,7 +907,7 @@ export default function Budget() {
       if (g.date <= from || g.date > to) continue;
       for (const r of g.rows) {
         if (r.is_beginning) continue;
-        if (r.recurring) { if (r.amount < 0) uncleared += -r.amount; continue; } // scheduled bill, not paid yet
+        if (r.recurring || r.owed) { if (r.amount < 0) uncleared += -r.amount; continue; } // scheduled / owed bill, not paid yet
         if (r.amount > 0) moneyIn += r.amount;
         else moneyOut += -r.amount;
       }
@@ -1157,11 +1190,11 @@ export default function Budget() {
   // Recent transactions = real logged rows (what has actually been paid/received).
   const recentPaid = useMemo(() => {
     return register
-      .filter((r) => !r.is_beginning)
+      .filter((r) => !r.is_beginning && !owedRows.has(r.id))
       .slice()
       .sort((a, b) => (a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : b.id - a.id))
       .slice(0, 8);
-  }, [register]);
+  }, [register, owedRows]);
 
   // Upcoming pay — every unlogged recurring outflow left in the month (the alert
   // strip only covers the next 10 days; this is the full remaining obligation).
@@ -1180,10 +1213,14 @@ export default function Budget() {
         items.push({ label: rule.label, amount: rule.amount, date, bank: rule.bank, tag });
       }
     }
+    for (const r of register) {
+      if (r.is_beginning || r.amount >= 0 || !owedRows.has(r.id) || r.entry_date < today) continue;
+      items.push({ label: r.label, amount: r.amount, date: r.entry_date, bank: r.bank, tag: `owed:${r.id}` });
+    }
     items.sort((a, b) => (a.date < b.date ? -1 : 1));
     const total = items.reduce((s, i) => s + Math.abs(i.amount), 0);
     return { items, total, next: items[0] ?? null };
-  }, [recurring, register, month]);
+  }, [recurring, register, month, owedRows]);
 
   // Rent countdown — rent is due on the 5th. Amount is read from a recurring
   // rule whose label contains "rent". We also project cash flow to the 5th:
@@ -1200,7 +1237,7 @@ export default function Budget() {
     const daysUntil = Math.round((due.getTime() - now.getTime()) / 86400000);
     const dueYm = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}`;
     const dueIso = `${dueYm}-${String(RENT_DAY).padStart(2, "0")}`;
-    const paid = register.some((r) => !r.is_beginning && r.amount < 0 && /rent/i.test(r.label) && r.entry_date.slice(0, 7) === dueYm);
+    const paid = register.some((r) => !r.is_beginning && r.amount < 0 && !owedRows.has(r.id) && /rent/i.test(r.label) && r.entry_date.slice(0, 7) === dueYm);
     const available = allBanks;
 
     // Everything landing in [today .. the 5th], rent itself excluded (shown apart):
@@ -1254,7 +1291,7 @@ export default function Budget() {
     const shortfall = Math.max(0, rentAmount - projected);
     const perDay = daysUntil > 0 ? shortfall / daysUntil : shortfall;
     return { rentAmount, daysUntil, dueIso, paid, available, incoming, outgoing, incomingTotal, outgoingTotal, settledCount, projected, shortfall, perDay };
-  }, [recurring, register, allBanks, settledFlows]);
+  }, [recurring, register, allBanks, settledFlows, owedRows]);
 
   /**
    * Toggle "already in the bank / not coming" on one Rent-card flow.
@@ -1311,8 +1348,12 @@ export default function Budget() {
   const deleteCategory = async (id: number) => post({ action: "categoryDelete", id });
   const assignCategory = async (rowId: number, categoryId: number | null) => post({ action: "assignCategory", id: rowId, categoryId });
   // Log an upcoming recurring bill as paid (materialize this occurrence).
-  const markBillPaid = async (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) =>
-    post({ action: "registerRow", date: bill.date, label: bill.label, bank: bill.bank, amount: bill.amount, recurringTag: bill.tag });
+  // A logged row marked owed (tag `owed:<id>`) is already in the register —
+  // paying it just clears the mark.
+  const markBillPaid = async (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) => {
+    if (bill.tag.startsWith("owed:")) return setRowOwed({ id: Number(bill.tag.slice(5)), label: bill.label }, false);
+    return post({ action: "registerRow", date: bill.date, label: bill.label, bank: bill.bank, amount: bill.amount, recurringTag: bill.tag });
+  };
   // Daily opening balance (input each morning).
   const saveDailyBalance = async (day: string, coastal: number, truist: number, secu: number) =>
     post({ action: "dailyBalance", day, coastal, truist, secu });
@@ -1512,6 +1553,7 @@ export default function Budget() {
               onDelete={deleteRow}
               onMaterialize={materializeRecurring}
               onSkip={skipRecurring}
+              onSetOwed={setRowOwed}
             />
           </div>
         )}
@@ -1654,7 +1696,7 @@ export default function Budget() {
   );
 }
 
-type ComputedRow = { id: number; entry_date: string; label: string; bank: Bank; amount: number; is_beginning: number; recurring: boolean; recurTag?: string; balance: number; balances: Record<Bank, number>; total: number };
+type ComputedRow = { id: number; entry_date: string; label: string; bank: Bank; amount: number; is_beginning: number; recurring: boolean; recurTag?: string; owed?: boolean; balance: number; balances: Record<Bank, number>; total: number };
 
 function RecurringManager({
   rules,
@@ -1943,6 +1985,7 @@ function MonthlyRegister({
   onDelete,
   onMaterialize,
   onSkip,
+  onSetOwed,
 }: {
   groups: DayGroup[];
   beginningBalance: number | null;
@@ -1952,6 +1995,7 @@ function MonthlyRegister({
   onDelete: (id: number) => void;
   onMaterialize: (row: ComputedRow) => void;
   onSkip: (row: ComputedRow) => void;
+  onSetOwed: (row: { id: number; label: string }, on: boolean) => void;
 }) {
   const isMobile = useIsMobile();
   const selRef = useRef<HTMLDivElement | null>(null);
@@ -1992,7 +2036,13 @@ function MonthlyRegister({
                 const isIncome = r.amount > 0;
                 // Paid = a real logged row; recurring occurrences are still owed,
                 // or past due once their date has passed without being logged.
-                const status: "paid" | "owed" | "pastdue" | null = r.amount < 0 ? (r.recurring ? (r.entry_date < todayIso() ? "pastdue" : "owed") : "paid") : null;
+                // A logged row marked owed reads like an unpaid occurrence.
+                const unpaid = r.recurring || !!r.owed;
+                const status: "paid" | "owed" | "pastdue" | null = r.amount < 0 ? (unpaid ? (r.entry_date < todayIso() ? "pastdue" : "owed") : "paid") : null;
+                // Tap the chip to flip it: a logged row toggles Paid ↔ Owed; a
+                // recurring occurrence is logged as paid (same as the pencil).
+                const togglePaid = !status ? undefined : r.recurring ? () => onMaterialize(r) : () => onSetOwed(r, !r.owed);
+                const toggleTitle = status === "paid" ? "Paid — click to mark owed" : "Not paid — click to mark paid";
                 return (
                   <div key={r.id} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto auto auto", gap: isMobile ? 7 : 12, alignItems: "center", padding: isMobile ? "8px 9px" : "8px 12px", borderTop: `1px solid rgba(255,255,255,0.04)` }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -2004,7 +2054,7 @@ function MonthlyRegister({
                           <EditableText value={r.label} onCommit={(v) => onEdit(r.id, { label: v.toUpperCase() })} style={{ fontWeight: 700 }} />
                         </>
                       )}
-                      {status && <StatusPill status={status} />}
+                      {status && <StatusPill status={status} onClick={togglePaid} title={toggleTitle} />}
                     </div>
                     <span style={{ fontWeight: 800, textAlign: "right", minWidth: isMobile ? 62 : 90, color: isIncome ? HOME_THEME.green : r.amount < 0 ? SOFT_RED : HOME_THEME.text }}>
                       {r.recurring ? fmtMoney(r.amount, currency) : <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />}
@@ -2031,17 +2081,21 @@ function MonthlyRegister({
 
 // Payment status chip: real logged rows are Paid; recurring occurrences are
 // Owed (upcoming) or Past due (their date has passed and they're still unlogged).
-function StatusPill({ status }: { status: "paid" | "owed" | "pastdue" }) {
+function StatusPill({ status, onClick, title }: { status: "paid" | "owed" | "pastdue"; onClick?: () => void; title?: string }) {
   const map = {
     paid: { label: "Paid", color: HOME_THEME.green, bg: "rgba(142,202,230,0.12)", border: "rgba(142,202,230,0.35)" },
     owed: { label: "Owed", color: HOME_THEME.cyan, bg: "rgba(126,211,252,0.10)", border: "rgba(126,211,252,0.35)" },
     pastdue: { label: "Past due", color: SOFT_RED, bg: "rgba(244,148,142,0.14)", border: "rgba(244,148,142,0.4)" },
   }[status];
-  return (
-    <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: map.color, background: map.bg, border: `1px solid ${map.border}`, padding: "2px 8px", borderRadius: 999 }}>
-      {map.label}
-    </span>
-  );
+  const style = { fontSize: 14, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: map.color, background: map.bg, border: `1px solid ${map.border}`, padding: "2px 8px", borderRadius: 999 };
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} title={title} aria-label={title} style={{ ...style, fontFamily: "inherit", lineHeight: "inherit", cursor: "pointer" }}>
+        {map.label}
+      </button>
+    );
+  }
+  return <span style={style}>{map.label}</span>;
 }
 
 // Clear, always-visible red delete control used in both tables.

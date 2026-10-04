@@ -25650,3 +25650,14 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - Node bench: `time("60")` gives 09:30 … 15:30, `time("720")` gives one bucket per session, and a lookahead-off 60m request trails by a bar as expected. The script fills its table on 30 RTH sessions of SPX and on ETH ES. Every earlier script still runs, and Saty Day mode is unchanged.
   - Headless Chromium against the mock data: the table draws top-right with its border and translucent background ("@bzilatrades", 1H RSI, Prev/Curr 12H). No console errors.
 - **Files in `generated/`:** `2026-10-03-vela-pine-rsi-12h-strat.png` (mock data)
+
+
+## 2026-10-03 - Owner Budget: Paid / Owed toggle on Payments rows
+- **Why:** editing a recurring bill's amount (pencil) logs it as a real row, which always read PAID. Rent was stuck on PAID with no way back to owed.
+- **Fix:** the status chip on the Payments tab is now a button.
+  - Logged row: PAID ↔ OWED. An owed row whose date has passed reads PAST DUE, same as recurring.
+  - Recurring OWED / PAST DUE: click logs it as paid (same as the pencil).
+- **Storage:** no new column or API action. The mark is a `budget_flow_settled` key `owed:<rowId>` written through the existing `settleFlow` action, with an empty `entry_date` so the existing prune never touches it.
+- **Owed rows count as unpaid everywhere:** Upcoming Pay (list, total, past-due strip; its Pay button clears the mark), safe-to-spend bills left, weekly reconcile (uncleared), the Rent card's "paid this month" check, and Recent Transactions (left out).
+- **Files:** `owner-vite/src/pages/Budget.tsx`.
+- **Checks:** `tsc --noEmit` on Budget.tsx is clean, before and after.
