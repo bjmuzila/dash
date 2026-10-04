@@ -343,3 +343,22 @@ export function libIdOf(instanceId: string): string | null {
 export function instanceIdFor(libId: string): string {
   return `cbs-${libId}-${Math.floor(Math.random() * 46656).toString(36)}`
 }
+
+// ── "Edit this script" from elsewhere (the Strategy Tester) ──────────────────
+// The Scripts panel listens; a request made before it ever opened waits for it.
+const editListeners = new Set<(id: string, note?: string) => void>()
+let pendingEdit: { id: string; note?: string } | null = null
+export function requestEdit(id: string, note?: string): void {
+  pendingEdit = { id, note }
+  for (const fn of editListeners) fn(id, note)
+}
+export function onEditRequest(fn: (id: string, note?: string) => void): () => void {
+  editListeners.add(fn)
+  return () => editListeners.delete(fn)
+}
+/** The request no listener has taken yet (the Scripts panel's first open). */
+export function takePendingEdit(): { id: string; note?: string } | null {
+  const p = pendingEdit
+  pendingEdit = null
+  return p
+}

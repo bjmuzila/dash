@@ -811,6 +811,48 @@ span.cb-wla-hc,
 .cb-wla .cb-wla-imp[data-impact='President'] {
   background: var(--color-impact-president);
 }
+.cb-wla .cb-wla-nametop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cb-wla .cb-wla-er {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--color-warn) 60%, transparent);
+  border-radius: 4px;
+  color: var(--color-warn);
+  font-size: var(--text-3xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.cb-wla .cb-wla-dayhead {
+  margin-top: 8px;
+  padding: 4px 0;
+  color: var(--color-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.cb-wla .cb-wla-dayhead + .cb-wla-item {
+  border-top: 0;
+}
+.cb-wla .cb-wla-link {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.cb-wla .cb-wla-link:hover {
+  text-decoration: underline;
+}
 .cb-wla .cb-wla-news {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -1032,7 +1074,49 @@ span.cb-wla-hc,
     display: block;
     text-align: right;
   }
-  .cb-wla .cb-wla-news {
+  .cb-wla .cb-wla-nametop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cb-wla .cb-wla-er {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--color-warn) 60%, transparent);
+  border-radius: 4px;
+  color: var(--color-warn);
+  font-size: var(--text-3xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.cb-wla .cb-wla-dayhead {
+  margin-top: 8px;
+  padding: 4px 0;
+  color: var(--color-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.cb-wla .cb-wla-dayhead + .cb-wla-item {
+  border-top: 0;
+}
+.cb-wla .cb-wla-link {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.cb-wla .cb-wla-link:hover {
+  text-decoration: underline;
+}
+.cb-wla .cb-wla-news {
     padding: 10px 12px;
   }
 }

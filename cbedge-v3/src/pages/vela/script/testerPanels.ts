@@ -24,8 +24,9 @@ import { registerSidePanel, type WidgetContext } from '@luxalgo/vela'
 import type { WorkspaceWidgetContext } from '@luxalgo/vela/workspace'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import { CBSCRIPT, compile, loadRuntime, onScriptError, onScriptResult, scriptErrors, scriptResults, type ScriptRunInfo } from './engine'
-import { instanceIdFor, libIdOf, loadLibrary, saveLibrary, type Script } from './library'
-import { ThemedSelect } from '../themedSelect'
+import { instanceIdFor, libIdOf, loadLibrary, newScriptId, requestEdit, saveLibrary, type Script } from './library'
+import { IS_STRATEGY, READY_STRATEGIES, USES_CBEDGE, readyStrategy } from './strategies'
+import { ThemedSelect, type SelectOption } from '../themedSelect'
 import { alertsArmed, enableNotify, firedAlerts, notifyWanted, onScriptAlertFired, setAlertsArmed, tfLabel } from './alerts'
 
 export const TESTER_PANEL_ID = 'cbedge-strategy'
@@ -66,39 +67,64 @@ function emptyState(doc: Document, ctx: WidgetContext, text: string): HTMLElemen
 // Strategy Tester
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** A strategy anyone can put on a chart from the empty Tester, to see what it does. */
-const EXAMPLE_STRATEGY: Script = {
-  id: 'ex-strategy',
-  name: 'Example — EMA cross strategy',
-  source: `//@version=5
-strategy("Example — EMA cross strategy", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1)
-fastLen = input.int(9, "Fast EMA")
-slowLen = input.int(21, "Slow EMA")
-fast = ta.ema(close, fastLen)
-slow = ta.ema(close, slowLen)
-plot(fast, "Fast", color=color.orange)
-plot(slow, "Slow", color=color.blue)
-// long on a cross up, short on a cross down — always in the market
-if ta.crossover(fast, slow)
-    strategy.entry("Long", strategy.long)
-if ta.crossunder(fast, slow)
-    strategy.entry("Short", strategy.short)
-`,
-}
-
 /** Every chart the context can see (a workspace lists them all). */
 function chartsOf(ctx: WidgetContext) {
   const cells = (ctx as Partial<WorkspaceWidgetContext>).cells
   return cells ? cells.map((c) => c.chart) : [ctx.chart]
 }
-const IS_STRATEGY = /(^|\n)\s*strategy\s*\(/
+
+/** A strategy script on a chart (with or without a result yet). */
+interface OnChart {
+  id: string
+  title: string
+  source: string
+  visible: boolean
+  info: (ScriptRunInfo & { strategy: Strat }) | null
+  error: string | null
+}
+
+/** Put a strategy on the ACTIVE chart (through the shell: undo, the legend, the saved layout). */
+export function addStrategy(ctx: WidgetContext, s: { id: string; name: string; source: string }): void {
+  ctx.addIndicator({ name: s.name, script: s.source, language: CBSCRIPT, id: instanceIdFor(s.id) })
+}
+
+/** A strategy picked elsewhere (the Indicators dialog): the tester shows it once it runs. */
+let focusReq: { libId: string; name: string; at: number } | null = null
+/** Put a strategy on the active chart (unless it is there) and open the tester on it. */
+export function testStrategy(ctx: WidgetContext, s: { id: string; name: string; source: string }): void {
+  if (!ctx.chart.indicators().some((h) => libIdOf(h.id) === s.id)) addStrategy(ctx, s)
+  focusReq = { libId: s.id, name: s.name, at: Date.now() }
+  ctx.togglePanel(TESTER_PANEL_ID, true)
+}
 
 function mountTester(ctx: WidgetContext, body: HTMLElement) {
   const doc = body.ownerDocument
   body.classList.add('cb-scr', 'cb-st')
+  for (const t of ['keydown', 'keyup', 'keypress'] as const) body.addEventListener(t, (e) => e.stopPropagation())
+
+  // ── the picker: what is on the chart, the ready-made ones, yours, paste ──
+  const pick = new ThemedSelect(doc, 'cb-scr-pick cb-st-pick', 'Strategy')
+  pick.placeholder = 'Choose a strategy to test…'
   const pickRow = el(doc, 'div', 'cb-scr-row')
-  const pick = new ThemedSelect(doc, 'cb-scr-pick', 'Strategy')
   pickRow.append(pick.el)
+
+  // ── paste a TradingView strategy ──
+  const pasteBox = el(doc, 'div', 'cb-st-paste')
+  pasteBox.hidden = true
+  const pasteArea = el(doc, 'textarea', 'cb-scr-code cb-st-pastecode')
+  pasteArea.placeholder = 'Paste a TradingView strategy here — it must start with strategy(…)'
+  pasteArea.spellcheck = false
+  const pasteRow = el(doc, 'div', 'cb-scr-row')
+  const pasteRun = el(doc, 'button', 'cb-scr-btn cb-scr-primary', 'Run on chart')
+  pasteRun.type = 'button'
+  const pasteCancel = el(doc, 'button', 'cb-scr-btn', 'Cancel')
+  pasteCancel.type = 'button'
+  pasteRow.append(pasteRun, pasteCancel)
+  const pasteMsg = el(doc, 'div', 'cb-st-err')
+  pasteBox.append(el(doc, 'div', 'cb-st-h', 'Paste a strategy'), pasteArea, pasteRow, pasteMsg)
+
+  // ── the strategy being shown ──
+  const bar = el(doc, 'div', 'cb-st-bar')
   const tabs = el(doc, 'div', 'cb-st-tabs')
   tabs.setAttribute('role', 'tablist')
   const tabBtn = (id: 'overview' | 'trades', label: string) => {
@@ -119,9 +145,11 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
   }
   tabs.append(tabBtn('overview', 'Overview'), tabBtn('trades', 'List of trades'))
   const view = el(doc, 'div', 'cb-st-view')
-  body.append(pickRow, tabs, view)
+  body.append(pickRow, pasteBox, bar, tabs, view)
 
   let selected: string | null = null
+  /** A library / ready-made id just added: selected as soon as its first run lands. */
+  let pending: { libId: string; name: string; at: number } | null = null
   let tab: 'overview' | 'trades' = 'overview'
   try {
     if (localStorage.getItem(TAB_KEY) === 'trades') tab = 'trades'
@@ -129,84 +157,229 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     /* private mode */
   }
 
-  const runs = () =>
-    [...scriptResults().values()].filter((i): i is ScriptRunInfo & { strategy: Strat } => !!i.strategy).sort((a, b) => b.at - a.at)
-
-  pick.onChange = (v) => {
-    selected = v
-    render()
-  }
-
-  /** Strategy scripts on the charts that have no result: still running, or stopped on an error. */
-  function waiting(): HTMLElement[] {
-    const have = new Set(scriptResults().keys())
-    const out: HTMLElement[] = []
+  const onChart = (): OnChart[] => {
+    const results = scriptResults()
+    const lib = loadLibrary()
+    const out: OnChart[] = []
     for (const chart of chartsOf(ctx))
       for (const h of chart.indicators()) {
-        if (!h.source || !IS_STRATEGY.test(h.source) || have.has(h.id)) continue
-        const err = scriptErrors().get(h.id)
-        const row = el(doc, 'div', 'cb-st-wait')
-        row.append(el(doc, 'b', '', h.title), el(doc, 'span', err ? 'cb-st-err' : 'cb-scr-note', err ? `stopped: ${err}` : h.visible ? 'running…' : 'hidden on the chart — show it to see its backtest'))
-        out.push(row)
+        if (!h.source || !IS_STRATEGY.test(h.source)) continue
+        const r = results.get(h.id)
+        const libId = libIdOf(h.id) ?? ''
+        // the strategy's own title once it has run; until then the name it was added under
+        const title = r?.title || readyStrategy(libId)?.name || lib.find((x) => x.id === libId)?.name || h.title
+        out.push({
+          id: h.id,
+          title,
+          source: h.source,
+          visible: h.visible,
+          info: r?.strategy ? (r as ScriptRunInfo & { strategy: Strat }) : null,
+          error: scriptErrors().get(h.id) ?? null,
+        })
       }
     return out
   }
+  const savedStrategies = () => loadLibrary().filter((s) => IS_STRATEGY.test(s.source) && !readyStrategy(s.id))
 
-  function render() {
-    const list = runs()
-    if (!list.length) {
-      pickRow.hidden = true
-      tabs.hidden = true
-      const stuck = waiting()
-      const box = el(doc, 'div', 'cb-st-empty')
-      if (stuck.length) {
-        box.append(el(doc, 'div', '', 'A strategy is on the chart but has no backtest yet:'), ...stuck)
-      } else {
-        box.append(
-          el(doc, 'div', '', 'The Strategy Tester shows the backtest of a strategy script on the chart: net profit, drawdown, win rate, the equity curve and every trade.'),
-          el(
-            doc,
-            'div',
-            'cb-scr-note',
-            'It needs a script that starts with strategy(…) — an indicator(…) script has no trades. Paste a TradingView strategy into Scripts and Add to chart, or try the example.',
-          ),
-        )
-      }
-      const acts = el(doc, 'div', 'cb-scr-row')
-      const ex = el(doc, 'button', 'cb-scr-btn cb-scr-primary', 'Add example strategy')
-      ex.type = 'button'
-      ex.addEventListener('click', () => {
-        const lib = loadLibrary()
-        if (!lib.some((x) => x.id === EXAMPLE_STRATEGY.id)) saveLibrary([...lib, { ...EXAMPLE_STRATEGY, u: Date.now() }])
-        ctx.addIndicator({ name: EXAMPLE_STRATEGY.name, script: EXAMPLE_STRATEGY.source, language: CBSCRIPT, id: instanceIdFor(EXAMPLE_STRATEGY.id) })
-        ex.disabled = true
-        ex.textContent = 'Adding…'
-      })
-      const open = el(doc, 'button', 'cb-scr-btn', 'Open Scripts')
-      open.type = 'button'
-      open.addEventListener('click', () => ctx.togglePanel(SCRIPTS_PANEL_ID, true))
-      acts.append(ex, open)
-      box.append(acts)
-      view.replaceChildren(box)
+  function choose(libId: string, name: string, source: string) {
+    // already on the active chart: just show it
+    const here = ctx.chart.indicators().find((h) => libIdOf(h.id) === libId)
+    if (here) {
+      selected = here.id
+      pending = null
+      render()
       return
     }
-    pickRow.hidden = false
-    tabs.hidden = false
-    if (!selected || !list.some((i) => i.instanceId === selected)) selected = list[0]!.instanceId
-    // the picker: one row per chart copy
+    addStrategy(ctx, { id: libId, name, source })
+    pending = { libId, name, at: Date.now() }
+    selected = null
+    render()
+  }
+
+  pick.onChange = (v) => {
+    if (v === 'paste') {
+      pasteBox.hidden = false
+      pasteMsg.textContent = ''
+      pasteArea.focus()
+      return
+    }
+    const [kind, id] = [v.slice(0, v.indexOf(':')), v.slice(v.indexOf(':') + 1)]
+    if (kind === 'run') {
+      selected = id
+      pending = null
+      render()
+    } else if (kind === 'ready') {
+      const r = readyStrategy(id)
+      if (r) choose(r.id, r.name, r.source)
+    } else if (kind === 'lib') {
+      const s = loadLibrary().find((x) => x.id === id)
+      if (s) choose(s.id, s.name, s.source)
+    }
+  }
+
+  pasteCancel.addEventListener('click', () => {
+    pasteBox.hidden = true
+    pasteArea.value = ''
+  })
+  pasteRun.addEventListener('click', async () => {
+    const source = pasteArea.value.replace(/\r\n?/g, '\n')
+    if (!source.trim()) return pasteArea.focus()
+    if (!IS_STRATEGY.test(source)) {
+      pasteMsg.textContent = 'That is an indicator(…) script — it has no trades to test. The tester needs a script that starts with strategy(…).'
+      return
+    }
+    pasteRun.disabled = true
+    try {
+      await loadRuntime()
+      const { result } = compile(source)
+      const s: Script = { id: newScriptId(), name: result.meta.title || 'Pasted strategy', source, u: Date.now() }
+      saveLibrary([...loadLibrary(), s])
+      pasteBox.hidden = true
+      pasteArea.value = ''
+      choose(s.id, s.name, s.source)
+      ctx.toast(`“${s.name}” saved to your scripts and added to the chart`, 'success')
+    } catch (e) {
+      pasteMsg.textContent = e instanceof Error ? e.message : String(e)
+    } finally {
+      pasteRun.disabled = false
+    }
+  })
+
+  function fillPicker(list: OnChart[]) {
+    const opts: SelectOption[] = []
     const seen = new Map<string, number>()
-    pick.setOptions(
-      list.map((i) => {
-        const base = `${i.title} — ${i.symbol} · ${tfLabel(i.timeframe)}`
-        const n = (seen.get(base) ?? 0) + 1
-        seen.set(base, n)
-        return { value: i.instanceId, label: n > 1 ? `${base} (${n})` : base }
-      }),
-      selected,
-    )
+    for (const c of list) {
+      const base = c.title
+      const n = (seen.get(base) ?? 0) + 1
+      seen.set(base, n)
+      const where = c.info ? `${c.info.symbol} ${tfLabel(c.info.timeframe)}` : c.error ? 'error' : c.visible ? 'running' : 'hidden'
+      opts.push({ value: `run:${c.id}`, label: n > 1 ? `${base} (${n})` : base, hint: where, group: 'On the chart' })
+    }
+    for (const r of READY_STRATEGIES) opts.push({ value: `ready:${r.id}`, label: r.name, hint: 'add', group: 'Ready-made' })
+    for (const s of savedStrategies()) opts.push({ value: `lib:${s.id}`, label: s.name, hint: 'add', group: 'Your scripts' })
+    opts.push({ value: 'paste', label: '+ Paste a TradingView strategy…', action: true })
+    pick.setOptions(opts, selected ? `run:${selected}` : '')
+  }
+
+  function render() {
+    if (focusReq) {
+      pending = focusReq
+      focusReq = null
+    }
+    const list = onChart()
+    // a strategy just added: pick it once it is on the chart
+    if (pending) {
+      const got = list.find((c) => libIdOf(c.id) === pending!.libId)
+      if (got) {
+        selected = got.id
+        if (got.info || got.error) pending = null
+      } else if (Date.now() - pending.at > 15_000) pending = null
+    }
+    if (selected && !list.some((c) => c.id === selected)) selected = null
+    if (!selected && !pending && list.length) selected = (list.find((c) => c.info) ?? list[0]!).id
+    fillPicker(list)
+    const cur = list.find((c) => c.id === selected) ?? null
+
+    if (!cur) {
+      bar.hidden = true
+      tabs.hidden = true
+      view.replaceChildren(...(pending ? [el(doc, 'div', 'cb-st-wait', `Adding “${pending.name}” to the chart and running the backtest…`)] : intro()))
+      return
+    }
+    // the bar: where it runs, edit, remove
+    bar.hidden = false
+    const where = cur.info ? `${cur.info.symbol} · ${tfLabel(cur.info.timeframe)} · ${cur.info.bars.toLocaleString('en-US')} bars` : cur.error ? 'stopped on an error' : cur.visible ? 'running…' : 'hidden on the chart'
+    const edit = el(doc, 'button', 'cb-scr-btn cb-scr-small', 'Edit')
+    edit.type = 'button'
+    edit.title = 'Open it in Scripts'
+    edit.addEventListener('click', () => editStrategy(cur))
+    const remove = el(doc, 'button', 'cb-scr-btn cb-scr-small', 'Remove')
+    remove.type = 'button'
+    remove.title = 'Take it off the chart'
+    remove.addEventListener('click', () => {
+      for (const chart of chartsOf(ctx)) chart.indicators().find((h) => h.id === cur.id)?.remove()
+      ctx.stateChanged()
+      selected = null
+      setTimeout(render, 80)
+    })
+    bar.replaceChildren(el(doc, 'span', 'cb-scr-note', where), edit, remove)
+
+    if (!cur.info) {
+      tabs.hidden = true
+      view.replaceChildren(
+        cur.error
+          ? el(doc, 'div', 'cb-st-err', cur.error)
+          : el(doc, 'div', 'cb-scr-note', cur.visible ? 'Running the backtest…' : 'It is hidden on the chart — show it (the eye in its legend row) to run the backtest.'),
+      )
+      return
+    }
+    tabs.hidden = false
     for (const b of tabs.querySelectorAll<HTMLButtonElement>('.cb-st-tab')) b.setAttribute('aria-selected', String(b.dataset.tab === tab))
-    const info = list.find((i) => i.instanceId === selected)!
-    view.replaceChildren(...(tab === 'overview' ? overview(info, info.strategy) : trades(info.strategy)))
+    const st = cur.info.strategy
+    const notes: HTMLElement[] = []
+    if (USES_CBEDGE.test(cur.source) && !st.closed.length && !st.open.length)
+      notes.push(
+        el(
+          doc,
+          'div',
+          'cb-st-tip',
+          `No trades on these bars: this strategy waits for price to tag CB Edge’s put or call wall. Try a longer range, a wider touch distance (its settings), or a symbol the walls recorder covers (SPX, NDX, ES, NQ and the GEX names).`,
+        ),
+      )
+    if (cur.info.bars < 1500)
+      notes.push(el(doc, 'div', 'cb-st-tip', `Tested on the ${cur.info.bars.toLocaleString('en-US')} bars the chart has loaded. For a longer test pick a longer range under the chart (1M, 3M) or zoom out — the backtest re-runs on its own.`))
+    view.replaceChildren(...notes, ...(tab === 'overview' ? overview(cur.info, st) : trades(st)))
+  }
+
+  /** The empty tester: how it works, and the four ready-made strategies one click away. */
+  function intro(): HTMLElement[] {
+    const out: HTMLElement[] = []
+    const how = el(doc, 'div', 'cb-st-how')
+    how.append(
+      el(doc, 'b', '', 'Backtest a strategy on this chart'),
+      el(doc, 'div', 'cb-scr-note', 'Pick one below (or from the menu above) and it goes on the chart and runs straight away: every trade is drawn on the candles, and the results — net profit, drawdown, win rate, the equity curve and the trade list — show here.'),
+    )
+    out.push(how)
+    out.push(el(doc, 'div', 'cb-st-h', 'Ready-made'))
+    for (const r of READY_STRATEGIES) out.push(strategyCard(r.name, r.desc, () => choose(r.id, r.name, r.source)))
+    const mine = savedStrategies()
+    if (mine.length) {
+      out.push(el(doc, 'div', 'cb-st-h', 'Your scripts'))
+      for (const s of mine) out.push(strategyCard(s.name, 'Saved in Scripts', () => choose(s.id, s.name, s.source)))
+    }
+    const paste = el(doc, 'button', 'cb-scr-btn', '+ Paste a TradingView strategy')
+    paste.type = 'button'
+    paste.addEventListener('click', () => {
+      pasteBox.hidden = false
+      pasteArea.focus()
+    })
+    out.push(el(doc, 'div', 'cb-st-h', 'Your own'), paste)
+    return out
+  }
+  function strategyCard(name: string, desc: string, add: () => void): HTMLElement {
+    const c = el(doc, 'div', 'cb-st-pickcard')
+    const t = el(doc, 'div', 'cb-st-pickt')
+    t.append(el(doc, 'b', '', name), el(doc, 'div', 'cb-scr-note', desc))
+    const b = el(doc, 'button', 'cb-scr-btn cb-scr-primary cb-scr-small', 'Add to chart')
+    b.type = 'button'
+    b.addEventListener('click', add)
+    c.append(t, b)
+    return c
+  }
+
+  /** Open the strategy in Scripts: your own script as it is; a ready-made one as a copy you own. */
+  function editStrategy(cur: OnChart) {
+    const lib = loadLibrary()
+    const libId = libIdOf(cur.id)
+    let target = lib.find((s) => s.id === libId)
+    let note: string | undefined
+    if (!target) {
+      target = { id: newScriptId(), name: `${cur.title} (my copy)`, source: cur.source, u: Date.now() }
+      saveLibrary([...lib, target])
+      note = 'This is your copy of the ready-made strategy — Save, then Add to chart to test your version.'
+    }
+    requestEdit(target.id, note)
+    ctx.togglePanel(SCRIPTS_PANEL_ID, true)
   }
 
   function overview(info: ScriptRunInfo, st: Strat): HTMLElement[] {
@@ -359,16 +532,24 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
     timer = setTimeout(() => {
       timer = null
       render()
-    }, 600)
+    }, 400)
   }
   const off = onScriptResult((info) => {
-    if (info.strategy || !runs().length) later()
+    if (info.strategy || pending) later()
   })
   const offErr = onScriptError(() => later())
-  // a script added or removed from the chart shows up here without a run
+  // a strategy added or removed on the chart shows up here without a run of its own
+  let lastIds = ''
   const poll = setInterval(() => {
-    if (!runs().length && body.offsetParent) render()
-  }, 2000)
+    if (!body.offsetParent) return
+    const ids = onChart()
+      .map((c) => c.id)
+      .join(',')
+    if (ids !== lastIds || pending) {
+      lastIds = ids
+      render()
+    }
+  }, 1500)
   render()
   return {
     onOpen: render,

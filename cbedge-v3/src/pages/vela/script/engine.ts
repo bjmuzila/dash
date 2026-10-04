@@ -54,7 +54,19 @@ export const CBSCRIPT = 'cbscript'
 interface Token {
   prog: Program
   id: string
+  /** Reads `cbedge.*` levels: the engine loads the walls for its bars. */
+  usesCb: boolean
 }
+
+// ── CB Edge levels for scripts (cbedge.call_wall / put_wall / core) ──────────
+// The loader is handed in by the Vela page (script/panel.ts registerScripts →
+// wallsIndicator.wallSeriesFor) so this module stays free of the chart's data code.
+export type LevelsLoader = (ticker: string, bars: readonly OHLCV[], timeframe: string, fresh: boolean) => Promise<NonNullable<RunOpts['cbedge']>>
+let levelsLoader: LevelsLoader | null = null
+export function setLevelsLoader(fn: LevelsLoader): void {
+  levelsLoader = fn
+}
+const USES_CB = /\bcbedge\.(call_wall|put_wall|core)\b/
 
 /** One bar to dry-run a script on: enough for every declaration and input to register. */
 const DRY_BAR: OHLCV = { time: Date.UTC(2026, 0, 5, 15, 0), open: 100, high: 101, low: 99, close: 100, volume: 1000 }
@@ -343,7 +355,7 @@ export class CbScriptEngine implements ScriptingEngine {
   async prepare(source: string, instanceId: string): Promise<PreparedScript> {
     await loadRuntime()
     const { prog, result } = compile(source)
-    const token: Token = { prog, id: instanceId }
+    const token: Token = { prog, id: instanceId, usesCb: USES_CB.test(source) }
     return {
       language: CBSCRIPT,
       inputs: result.inputs,
@@ -392,13 +404,37 @@ export class CbScriptEngine implements ScriptingEngine {
           if (!stopped) compute()
         })
     }
+    // the walls, aligned to these bars — re-read when a bar lands or the history changes
+    let cb: { first: number; data: NonNullable<RunOpts['cbedge']> } | null = null
+    let cbKey = ''
+    let cbLoading = ''
+    const levelsFor = (bars: readonly OHLCV[]) => {
+      if (!token.usesCb || !levelsLoader || !bars.length) return
+      const key = `${bars.length}|${bars[0]!.time}|${bars[bars.length - 1]!.time}`
+      if (key === cbKey || key === cbLoading) return
+      cbLoading = key
+      const first = bars[0]!.time
+      levelsLoader(market.symbol ?? '', bars, market.timeframe ?? '5', cbKey !== '')
+        .then((data) => {
+          cb = { first, data }
+        })
+        .catch(() => {})
+        .finally(() => {
+          cbKey = key
+          if (cbLoading === key) cbLoading = ''
+          if (!stopped) compute()
+        })
+    }
     const compute = () => {
       timer = null
       if (stopped) return
       last = Date.now()
       const bars = req.getBars?.() ?? req.bars
+      levelsFor(bars)
+      // levels read for an older copy of these bars line up only while the first bar is the same
+      const cbedge = cb && bars[0]?.time === cb.first ? cb.data : undefined
       try {
-        const res = rt!.run(token.prog, bars, { ...market, inputs, series })
+        const res = rt!.run(token.prog, bars, { ...market, inputs, series, ...(cbedge ? { cbedge } : {}) })
         h.onModel(toModel(token.id, res, bars, valuesOf(res.inputs, inputs)))
         cost = Date.now() - last
         tellError(token.id, null)

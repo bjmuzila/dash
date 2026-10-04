@@ -29,6 +29,8 @@ import { nativeIndicatorDescriptors, registerWidgetAction, type IndicatorHandle,
 import { Dialog, iconEl, registerIcon, svg16 } from '@luxalgo/vela/ui'
 import { CBSCRIPT } from './script/engine'
 import { instanceIdFor, libIdOf, loadLibrary } from './script/library'
+import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
+import { testStrategy } from './script/testerPanels'
 import { WALLS_TYPE } from './wallsIndicator'
 import { PATH_TYPE, RIBBON_TYPE } from './vtPath/vtPathIndicator'
 import { EM_TYPE, IB_TYPE, KEY_TYPE, NETPREM_TYPE, ON_TYPE, PRIOR_TYPE, PROFILE_TYPE, TPO_TYPE, VOLFLOW_TYPE, WHALES_TYPE } from './studies'
@@ -37,12 +39,12 @@ const FAV_KEY = 'cb-v3-vela-ind-favs'
 const CAT_KEY = 'cb-v3-vela-ind-cat'
 const SCRIPTS_PANEL = 'cbedge-scripts'
 
-type CatId = 'favorites' | 'scripts' | 'onchart' | 'trend' | 'osc' | 'volatility' | 'volume' | 'other' | 'cb-levels' | 'cb-gex' | 'cb-flow'
+type CatId = 'favorites' | 'scripts' | 'onchart' | 'strategies' | 'trend' | 'osc' | 'volatility' | 'volume' | 'other' | 'cb-levels' | 'cb-gex' | 'cb-flow'
 
 interface Cat {
   id: CatId
   label: string
-  section: 'PERSONAL' | 'BUILT-INS' | 'CB EDGE'
+  section: 'PERSONAL' | 'BACKTEST' | 'BUILT-INS' | 'CB EDGE'
   icon: string
 }
 
@@ -50,6 +52,7 @@ const CATS: Cat[] = [
   { id: 'favorites', label: 'Favorites', section: 'PERSONAL', icon: 'star' },
   { id: 'scripts', label: 'My Scripts', section: 'PERSONAL', icon: 'cb-ip-user' },
   { id: 'onchart', label: 'On chart', section: 'PERSONAL', icon: 'cb-ip-layers' },
+  { id: 'strategies', label: 'Strategies', section: 'BACKTEST', icon: 'cb-strategy' },
   { id: 'trend', label: 'Trend', section: 'BUILT-INS', icon: 'cb-ip-trend' },
   { id: 'osc', label: 'Oscillators', section: 'BUILT-INS', icon: 'cb-ip-osc' },
   { id: 'volatility', label: 'Volatility', section: 'BUILT-INS', icon: 'cb-ip-vol' },
@@ -102,6 +105,8 @@ interface Row {
   overlay: boolean
   multi: boolean
   beta: boolean
+  /** A strategy(): adding it opens the Strategy Tester on it. */
+  strategy?: boolean
 }
 
 /** "CB Prior Levels — previous day / week…" → name + description. */
@@ -143,6 +148,29 @@ function scriptRows(): Row[] {
       beta: false,
     }
   })
+}
+
+/** The Strategies category: the ready-made ones, then your saved strategy() scripts. */
+function strategyRows(): Row[] {
+  const row = (key: string, id: string, name: string, desc: string, source: string): Row => ({
+    key,
+    cat: 'strategies',
+    name,
+    desc,
+    kind: 'script',
+    libId: id,
+    source,
+    overlay: true,
+    multi: false,
+    beta: false,
+    strategy: true,
+  })
+  return [
+    ...READY_STRATEGIES.map((r) => row(`r:${r.id}`, r.id, r.name, `Ready-made · ${r.desc}`, r.source)),
+    ...loadLibrary()
+      .filter((s) => IS_STRATEGY.test(s.source))
+      .map((s) => row(`st:${s.id}`, s.id, s.name, 'Your strategy · CB Script', s.source)),
+  ]
 }
 
 // ── Remembered choices ──
@@ -226,7 +254,7 @@ function openPicker(ctx: WidgetContext): void {
   const presentNative = () => new Set(handles().map((h) => h.nativeType).filter((t): t is string => !!t))
   const presentScripts = () => new Set(handles().map((h) => libIdOf(h.id)).filter((t): t is string => !!t))
 
-  const allRows = (): Row[] => [...nativeRows(), ...scriptRows()]
+  const allRows = (): Row[] => [...nativeRows(), ...scriptRows(), ...strategyRows()]
 
   const passesFilter = (r: Row) => filter === 0 || (filter === 1 ? r.overlay : !r.overlay)
 
@@ -243,6 +271,11 @@ function openPicker(ctx: WidgetContext): void {
         return
       }
       ctx.addNativeIndicator(r.type)
+    } else if (r.strategy && r.libId && r.source != null) {
+      // a strategy goes on the chart and the tester opens on it
+      dlg.hide()
+      testStrategy(ctx, { id: r.libId, name: r.name, source: r.source })
+      return
     } else if (r.kind === 'script' && r.libId && r.source != null) {
       ctx.addIndicator({ name: r.name, script: r.source, language: CBSCRIPT, id: instanceIdFor(r.libId) })
     }
@@ -332,6 +365,7 @@ function openPicker(ctx: WidgetContext): void {
     const native = nativeRows()
     for (const r of native) counts[r.cat] = (counts[r.cat] ?? 0) + 1
     counts.scripts = loadLibrary().length
+    counts.strategies = strategyRows().length
     for (const c of CATS) {
       if (c.id === 'other' && !counts.other) continue
       if (c.section !== section) {

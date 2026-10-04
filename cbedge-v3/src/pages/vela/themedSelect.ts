@@ -22,12 +22,16 @@ export interface SelectOption {
   hint?: string
   /** A command row, not a value (drawn apart, never "selected"). */
   action?: boolean
+  /** A heading drawn above the first option of each group. */
+  group?: string
 }
 
 export class ThemedSelect {
   readonly el: HTMLButtonElement
   /** Picked by the user (also for an action row). */
   onChange: ((value: string) => void) | null = null
+  /** Shown on the button while no option is the value. */
+  placeholder = ''
   private opts: SelectOption[] = []
   private cur = ''
   private readonly text: HTMLSpanElement
@@ -83,7 +87,8 @@ export class ThemedSelect {
 
   private paint(): void {
     const o = this.opts.find((x) => x.value === this.cur && !x.action)
-    this.text.textContent = o ? (o.hint ? `${o.label} (${o.hint})` : o.label) : ''
+    this.text.textContent = o ? (o.hint ? `${o.label} (${o.hint})` : o.label) : this.placeholder
+    this.el.dataset.empty = o ? '' : '1'
     this.el.disabled = !this.opts.length
   }
 
@@ -133,7 +138,15 @@ export class ThemedSelect {
     if (!m) return
     m.replaceChildren()
     let lastAction = false
+    let lastGroup: string | undefined
     this.opts.forEach((o, i) => {
+      if (o.group && o.group !== lastGroup) {
+        const h = this.doc.createElement('div')
+        h.className = 'cb-sel-head'
+        h.textContent = o.group
+        m.append(h)
+      }
+      lastGroup = o.group
       if (o.action && !lastAction && i > 0) {
         const sep = this.doc.createElement('div')
         sep.className = 'cb-sel-sep'

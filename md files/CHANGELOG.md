@@ -25944,3 +25944,59 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
 - New token `--color-repeat: #b48cff` (the lilac from the mockup), defined on both themes. It's separate from `--color-violet`, which is the gamma-flip color and is a different shade on the CB Edge theme.
 - Repeat rows (the group row, its open fills, lone repeat prints, and phone rows) now draw B's rail as an inset shadow, `shadow-[inset_3px_0_0_var(--color-repeat)]`. The previous version used `border-l-3`, which lost out to the row borders in the collapsed table and drew thin. The rows also get B's tint, `bg-repeat/[0.06]`. D's layout stays as it was: the ▾ and "· N prints" text, now in the repeat color, and the combined chart's fill dots use it too.
 - **Files:** `cbedge-v3/src/design/tokens.css`, `cbedge-v3/src/pages/Whales.tsx`, `cbedge-v3/src/board/topFlow/ContractProbe.tsx`. `tsc` is clean.
+
+## 2026-10-03 - Vela: Strategy Tester rebuilt around picking a strategy; four ready-made strategies; CB Edge walls in scripts; Advanced view gets the week ahead
+
+- **Strategy Tester (still a side panel, your call):** adding a strategy now happens inside the tester. Before, you had to go to Scripts, paste, Add to chart, then open the tester.
+  - A **Strategy ▾** picker at the top has four groups: *On the chart* (what's running there), *Ready-made*, *Your scripts* (saved `strategy()` scripts) and **+ Paste a TradingView strategy…**. Picking one puts it on the active chart, runs it and shows its backtest.
+  - The **paste box** sits in the tester itself. An `indicator()` script is refused with a reason. A strategy is checked, saved to your scripts under its own title, and run.
+  - The empty tester explains what it does and shows the four ready-made strategies, each with **Add to chart**.
+  - A bar shows where the strategy runs (symbol, timeframe, bars tested), plus **Edit** and **Remove**. Edit opens your own script in Scripts. For a ready-made one it opens a copy you own ("(my copy)").
+  - Hints: how to test more bars (pick a longer range or zoom out), and why a walls strategy might show no trades.
+  - Names come from the strategy's own title (it was showing "Indicator").
+- **Ready-made strategies** (`script/strategies.ts`, Pine v5 — they double as examples):
+  - **EMA Cross**
+  - **Opening Range Breakout:** a 5/15/30/60-minute range, one trade a day, stop at the other side, target at a multiple of the range.
+  - **VWAP Reclaim / Reject:** an ATR-based stop and target. Trade both sides, long only, or short only.
+  - **CB Edge Walls Bounce:** fades the put/call walls. Stop beyond the wall; target the other wall, halfway, or 2× the stop.
+  - The intraday ones go flat before 15:55 ET. The close order goes out on the bar before, since orders fill at the next bar's open.
+- **CB Edge levels in CB Script:** a script can read `cbedge.call_wall`, `cbedge.put_wall` and `cbedge.core`.
+  - Each gives the wall in force at each bar's close, from the walls recorder. It's the same log, basis shift for ES/NQ, and bar alignment the CB Walls lines use (`wallsIndicator.wallSeriesFor`).
+  - The engine loads the walls only for scripts that use them, and re-reads them as bars land. So a backtest trades the wall that was really there, bar by bar.
+- **Indicators dialog:** a new **BACKTEST → Strategies** category lists the ready-made strategies and your saved strategies. Adding one closes the dialog and opens the tester on it.
+- **Advanced view (week ahead):**
+  - The right column now has **Whale prints today** (8 newest, with a link to all of them).
+  - It also has **This week**: the list's earnings with the day and time, plus the high-impact events for the next 7 days. Allocation comes after these.
+  - Rows carry an **"ER Wed"** badge on symbols that report within 7 days.
+  - The News & events calendar now covers the **next 7 days**, with a heading per day. Earnings show the weekday. Earnings and the calendar now load with the view, not only on that tab.
+- **Dropdowns:** the themed dropdown can show group headings and a placeholder.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/script/{runtime,engine,library,panel,testerPanels}.ts`
+  - `script/strategies.ts` (new)
+  - `wallsIndicator.ts`
+  - `themedSelect.ts`
+  - `indicatorPicker.ts`
+  - `vela.css`
+  - `watchlist/advanced.ts`
+  - `watchlist/advanced.css`
+- **Checks:**
+  - `tsc` is clean, `check:theme` passes, and `vite build` is OK.
+  - Node bench, all four strategies compiling and trading (synthetic walls for the bounce one; no walls → no trades):
+    - EMA: 27 trades
+    - ORB: 22 trades
+    - VWAP: 45 trades
+    - Walls: 34 trades
+  - Headless run against the mock server, desktop and phone:
+    - the intro cards and the picker groups
+    - adding each ready-made one, and the walls one loading walls
+    - pasting an indicator (refused) and a strategy (runs)
+    - Edit → Scripts on a copy, and Remove
+    - Indicators → Strategies → the tester
+    - the Advanced view's week calendar, earnings badges and right column
+  - No console errors.
+- **Files in `generated/`** (mock data):
+  - `2026-10-03-vela-strategy-tester-picker.png`
+  - `-menu.png`
+  - `2026-10-03-vela-indicators-strategies.png`
+  - `2026-10-03-vela-watchlist-advanced.png`
+  - `-news.png`

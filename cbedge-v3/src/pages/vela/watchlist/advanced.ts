@@ -126,6 +126,13 @@ const fDate = (d: string) => {
   return m ? `${MON[Number(m[2]) - 1]} ${Number(m[3])}` : d
 }
 const CLOCK = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+const WEEKDAY = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'UTC' })
+const DAYHEAD = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' })
+/** The next 7 days' date keys, today first (ET). */
+function weekDates(): string[] {
+  const t0 = Date.parse(`${etDateKey(Date.now())}T12:00:00Z`)
+  return Array.from({ length: 7 }, (_, i) => new Date(t0 + i * 86_400_000).toISOString().slice(0, 10))
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(doc: Document, tag: K, cls = '', text?: string): HTMLElementTagNameMap[K] {
   const e = doc.createElement(tag)
@@ -344,10 +351,8 @@ class AdvancedView {
     void loadStats(syms)
     void loadGex(syms.includes('SPX') ? syms : ['SPX', ...syms])
     void loadWhales()
-    if (this.prefs.tab !== 'price') {
-      void loadEarnings()
-      void loadEcon()
-    }
+    void loadEarnings()
+    void loadEcon()
   }
 
   private schedule(): void {
@@ -366,7 +371,7 @@ class AdvancedView {
     } catch {
       /* private mode */
     }
-    if (tabChanged) this.tick()
+    void tabChanged
     this.render()
   }
 
@@ -659,7 +664,11 @@ class AdvancedView {
     row.setAttribute('role', 'button')
     if (sym === this.selected()) row.dataset.sel = '1'
     const name = el(doc, 'span', 'cb-wla-name')
-    name.append(el(doc, 'b', '', sym))
+    const top = el(doc, 'span', 'cb-wla-nametop')
+    top.append(el(doc, 'b', '', sym))
+    const er = this.earnBadge(sym)
+    if (er) top.append(er)
+    name.append(top)
     const d = this.descOf.get(sym)
     if (d && d !== sym) name.append(el(doc, 'small', '', d))
     const symCell = el(doc, 'span', 'cb-wla-symcell')
@@ -761,6 +770,17 @@ class AdvancedView {
       }
     })
     return row
+  }
+
+  /** "ER Thu" beside a symbol that reports within the next 7 days. */
+  private earnBadge(sym: string): HTMLElement | null {
+    const e = earnNextOf(sym)
+    if (!e) return null
+    const days = (Date.parse(`${e.date}T12:00:00Z`) - Date.parse(`${etDateKey(Date.now())}T12:00:00Z`)) / 86_400_000
+    if (days < 0 || days > 7) return null
+    const b = el(this.doc, 'span', 'cb-wla-er', days === 0 ? 'ER today' : `ER ${WEEKDAY.format(Date.parse(`${e.date}T12:00:00Z`))}`)
+    b.title = `Reports ${fDate(e.date)} · ${e.session === 'pre' ? 'before the open' : e.session === 'after' ? 'after the close' : 'time TBD'}${e.epsEst ? ` · EPS est. ${e.epsEst}` : ''}`
+    return b
   }
 
   private selected(): string | null {
@@ -871,25 +891,39 @@ class AdvancedView {
     if (!ups.length) eb.append(el(doc, 'div', 'cb-wla-note', 'Nothing on this list reports in the next two weeks.'))
     for (const [s, e] of ups) {
       const r = el(doc, 'div', 'cb-wla-item')
-      r.append(el(doc, 'b', '', s), el(doc, 'span', '', `${fDate(e.date)} · ${e.session === 'pre' ? 'before the open' : e.session === 'after' ? 'after the close' : 'time TBD'}${e.epsEst ? ` · EPS est. ${e.epsEst}` : ''}`))
+      r.append(
+        el(doc, 'span', 'cb-wla-time', `${WEEKDAY.format(Date.parse(`${e.date}T12:00:00Z`))} ${fDate(e.date)}`),
+        el(doc, 'b', '', s),
+        el(doc, 'span', 'cb-wla-evt', `${e.session === 'pre' ? 'before the open' : e.session === 'after' ? 'after the close' : 'time TBD'}${e.epsEst ? ` · EPS est. ${e.epsEst}` : ''}`),
+      )
       eb.append(r)
     }
-    // calendar
-    const cb = box('Economic calendar · US', 'today and tomorrow')
-    const today = etDateKey(Date.now())
-    const next = etDateKey(Date.now() + 86_400_000)
-    const evs = econEvents().filter((e) => (e.date === today || e.date === next) && e.impact !== 'Holiday')
-    if (!evs.length) cb.append(el(doc, 'div', 'cb-wla-note', 'No events today or tomorrow.'))
-    for (const e of evs.slice(0, 30)) {
-      const r = el(doc, 'div', 'cb-wla-item')
-      const imp = el(doc, 'i', 'cb-wla-imp')
-      imp.dataset.impact = e.impact
-      const figs = [e.actual && `actual ${e.actual}`, e.forecast && `fcst ${e.forecast}`, e.previous && `prev ${e.previous}`].filter(Boolean).join(' · ')
-      r.append(el(doc, 'span', 'cb-wla-time', `${e.date === today ? '' : 'Tmrw '}${e.label}`), imp, el(doc, 'span', 'cb-wla-evt', e.title), el(doc, 'span', 'cb-wla-note', figs))
-      cb.append(r)
+    // calendar — the coming week, a heading per day
+    const cb = box('Economic calendar · US', 'the next 7 days')
+    const week = weekDates()
+    const evs = econEvents().filter((e) => week.includes(e.date) && e.impact !== 'Holiday')
+    if (!evs.length) cb.append(el(doc, 'div', 'cb-wla-note', 'No events in the next 7 days.'))
+    let day = ''
+    for (const e of evs.slice(0, 80)) {
+      if (e.date !== day) {
+        day = e.date
+        cb.append(el(doc, 'div', 'cb-wla-dayhead', e.date === week[0] ? `Today · ${DAYHEAD.format(Date.parse(`${e.date}T12:00:00Z`))}` : DAYHEAD.format(Date.parse(`${e.date}T12:00:00Z`))))
+      }
+      cb.append(this.eventRow(e))
     }
     wrap.append(note, pb, eb, cb)
     this.body.replaceChildren(wrap)
+  }
+
+  private eventRow(e: ReturnType<typeof econEvents>[number]): HTMLElement {
+    const doc = this.doc
+    const r = el(doc, 'div', 'cb-wla-item')
+    const imp = el(doc, 'i', 'cb-wla-imp')
+    imp.dataset.impact = e.impact
+    imp.title = `${e.impact} impact`
+    const figs = [e.actual && `actual ${e.actual}`, e.forecast && `fcst ${e.forecast}`, e.previous && `prev ${e.previous}`].filter(Boolean).join(' · ')
+    r.append(el(doc, 'span', 'cb-wla-time', e.label), imp, el(doc, 'span', 'cb-wla-evt', e.title), el(doc, 'span', 'cb-wla-note', figs))
+    return r
   }
 
   private printRow(p: WhalePrint): HTMLElement {
@@ -966,17 +1000,54 @@ class AdvancedView {
       box.append(acts)
       out.push(box)
     }
-    out.push(this.allocation())
     // the list's latest prints
     const flows = [...new Set(activeList().symbols.map((s) => this.flowSym(s)))]
     const prints = flows.flatMap((s) => whalesOf(s)?.prints ?? []).sort((a, b) => b.ts - a.ts)
     const pb = el(doc, 'section', 'cb-wla-box')
-    const h = el(doc, 'h4')
-    h.append(el(doc, 'span', '', 'Latest whale prints'), el(doc, 'span', 'cb-wla-note', 'this list'))
-    pb.append(h)
-    if (!prints.length) pb.append(el(doc, 'div', 'cb-wla-note', 'None yet today.'))
-    for (const p of prints.slice(0, 5)) pb.append(this.printRow(p))
+    const ph = el(doc, 'h4')
+    ph.append(el(doc, 'span', '', 'Whale prints today'), el(doc, 'span', 'cb-wla-note', prints.length ? `${prints.length} on this list` : 'this list'))
+    pb.append(ph)
+    if (!prints.length) pb.append(el(doc, 'div', 'cb-wla-note', 'No $1M+ prints on this list yet today.'))
+    for (const p of prints.slice(0, 8)) pb.append(this.printRow(p))
+    if (prints.length > 8) {
+      const more = btn(doc, 'cb-wla-link', `All ${prints.length} prints →`)
+      more.addEventListener('click', () => this.setPrefs({ tab: 'news' }))
+      pb.append(more)
+    }
     out.push(pb)
+    // the week ahead: this list's earnings, and the calendar's high-impact events
+    const wk = el(doc, 'section', 'cb-wla-box')
+    const wh = el(doc, 'h4')
+    wh.append(el(doc, 'span', '', 'This week'), el(doc, 'span', 'cb-wla-note', 'earnings · key events'))
+    wk.append(wh)
+    const week = weekDates()
+    const ers = activeList()
+      .symbols.map((s) => [s, earnNextOf(s)] as const)
+      .filter((x): x is readonly [string, NonNullable<ReturnType<typeof earnNextOf>>] => !!x[1] && week.includes(x[1].date))
+      .sort((a, b) => a[1].date.localeCompare(b[1].date))
+    for (const [s, e] of ers) {
+      const r = el(doc, 'div', 'cb-wla-item')
+      r.append(
+        el(doc, 'span', 'cb-wla-time', WEEKDAY.format(Date.parse(`${e.date}T12:00:00Z`))),
+        el(doc, 'span', 'cb-wla-er', 'ER'),
+        el(doc, 'b', '', s),
+        el(doc, 'span', 'cb-wla-evt cb-wla-note', e.session === 'pre' ? 'before the open' : e.session === 'after' ? 'after the close' : 'time TBD'),
+      )
+      wk.append(r)
+    }
+    const key = econEvents().filter((e) => week.includes(e.date) && (e.impact === 'High' || e.impact === 'President'))
+    for (const e of key.slice(0, 10)) {
+      const r = this.eventRow(e)
+      r.querySelector('.cb-wla-time')!.textContent = `${WEEKDAY.format(Date.parse(`${e.date}T12:00:00Z`))} ${e.label}`
+      r.querySelector('.cb-wla-note')?.remove()
+      wk.append(r)
+    }
+    if (!ers.length && !key.length) wk.append(el(doc, 'div', 'cb-wla-note', 'No list earnings or high-impact events in the next 7 days.'))
+    const all = btn(doc, 'cb-wla-link', 'Full week →')
+    all.addEventListener('click', () => this.setPrefs({ tab: 'news' }))
+    wk.append(all)
+    out.push(wk)
+    out.push(this.allocation())
     this.side.replaceChildren(...out)
   }
 

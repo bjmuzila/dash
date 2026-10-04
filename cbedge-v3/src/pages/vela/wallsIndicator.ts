@@ -340,6 +340,40 @@ function alignToBars(bars: readonly OHLCV[], tfMs: number, days: DayModel[]): Al
   return { levels, coreGex }
 }
 
+/**
+ * The walls as one value per bar (NaN where none was recorded) — what a CB Script
+ * strategy reads as `cbedge.call_wall` / `cbedge.put_wall` / `cbedge.core`
+ * (script/engine.ts). The same log, cache, futures basis and bar alignment the
+ * CB Walls lines use (OI + Vol, 0DTE): the strike in force at each bar's close.
+ */
+export async function wallSeriesFor(
+  ticker: string,
+  bars: readonly OHLCV[],
+  timeframe: string,
+  fresh = false,
+): Promise<{ callWall: Float64Array; putWall: Float64Array; core: Float64Array }> {
+  const tfMs = timeframeToMs(timeframe)
+  const sym = resolveSym(ticker.replace(/^[^:]*:/, ''))
+  const wallsSymbol = sym.fut === 'NQ' ? 'NDX' : sym.fut === 'ES' ? 'SPX' : sym.key
+  // as many sessions as the bars span (the recorder keeps them all)
+  const dates = new Set<string>()
+  for (const b of bars) dates.add(etDateKey(b.time))
+  const sessions = Math.max(1, Math.min(120, dates.size + 1))
+  const [slices, basis] = await Promise.all([
+    loadWalls(wallsSymbol, { view: 'all', scope: '0dte', basis: 'oivol', sessions }, fresh),
+    sym.fut ? loadBasis(sym.fut) : Promise.resolve(null),
+  ])
+  const al = alignToBars(bars, tfMs, buildDays(slices, basis))
+  const arr = (xs: (number | null)[] | undefined) => {
+    const out = new Float64Array(bars.length).fill(NaN)
+    xs?.forEach((v, i) => {
+      if (v != null) out[i] = v
+    })
+    return out
+  }
+  return { callWall: arr(al.levels.get('call_wall')), putWall: arr(al.levels.get('put_wall')), core: arr(al.levels.get('cb')) }
+}
+
 // ── Drawing ──────────────────────────────────────────────────────────────────
 
 interface Line {

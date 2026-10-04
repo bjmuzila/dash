@@ -48,8 +48,9 @@
 import { registerSidePanel, registerStatePersistence, type WidgetContext } from '@luxalgo/vela'
 import type { WorkspaceWidgetContext } from '@luxalgo/vela/workspace'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
-import { CBSCRIPT, compile, loadRuntime, onScriptError, scriptErrors } from './engine'
-import { instanceIdFor, libIdOf, loadLibrary, markDeleted, newScriptId, saveLibrary, syncLibrary, TEMPLATE, type Script } from './library'
+import { CBSCRIPT, compile, loadRuntime, onScriptError, scriptErrors, setLevelsLoader } from './engine'
+import { wallSeriesFor } from '../wallsIndicator'
+import { instanceIdFor, libIdOf, loadLibrary, markDeleted, newScriptId, onEditRequest, saveLibrary, syncLibrary, takePendingEdit, TEMPLATE, type Script } from './library'
 import { alertsArmed } from './alerts'
 import { ThemedSelect } from '../themedSelect'
 import { ALERTS_PANEL_ID, registerTesterPanels, TESTER_PANEL_ID } from './testerPanels'
@@ -438,6 +439,18 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   show(cur)
   say('Write a script or paste a TradingView one, Save, then Add to chart', 'info')
   void doSync(true)
+  // "Edit" from the Strategy Tester: show that script here
+  const openRequested = () => {
+    const req = takePendingEdit()
+    if (!req) return
+    lib = loadLibrary()
+    const s = lib.find((x) => x.id === req.id)
+    if (!s) return
+    show(s)
+    say(req.note ?? `Editing “${s.name}” — Save updates it on every chart`, 'info')
+  }
+  const offEdit = onEditRequest(() => openRequested())
+  openRequested()
   const offErrors = onScriptError((id, msg) => {
     if (libIdOf(id) !== cur.id) return
     if (msg) say(`On the chart — ${msg}`, 'err', true)
@@ -445,6 +458,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   })
   return {
     onOpen() {
+      openRequested()
       // another tab or chart may have saved meanwhile
       if (!dirty) {
         lib = loadLibrary()
@@ -458,6 +472,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
       void doSync(false)
     },
     destroy() {
+      offEdit()
       offErrors()
       pick.destroy()
       if (syncTimer) clearTimeout(syncTimer)
@@ -479,6 +494,8 @@ let registered = false
 export function registerScripts(): void {
   if (registered) return
   registered = true
+  // a script that reads cbedge.call_wall / put_wall / core gets the walls recorder, bar by bar
+  setLevelsLoader(wallSeriesFor)
   registerTesterPanels()
   // </> — code
   registerIcon('cb-script', svg16('<path d="M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4M9 2.5 7 13.5"/>'))

@@ -824,6 +824,12 @@ export interface RunOpts {
   dry?: boolean
   /** Inside request.security's run on other bars: every security call's expression value, per bar. */
   capture?: Map<object, unknown[]>
+  /**
+   * CB Edge's recorded levels, one value per bar (NaN where none) — what a script reads
+   * as `cbedge.call_wall` / `cbedge.put_wall` / `cbedge.core`. The engine aligns the walls
+   * recorder to the chart's bars (wallsIndicator.wallSeriesFor); absent, they are na.
+   */
+  cbedge?: { callWall: ArrayLike<number>; putWall: ArrayLike<number>; core: ArrayLike<number> }
 }
 
 function walk(stmts: Stmt[], visit: (s: Stmt) => void, node?: (n: Node) => void): void {
@@ -1099,6 +1105,10 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'syminfo.type': () => 'index',
     'syminfo.timezone': () => 'America/New_York',
     'syminfo.session': () => 'regular',
+    // CB Edge's own levels (RunOpts.cbedge): the wall in force at each bar's close
+    'cbedge.call_wall': (i) => opts.cbedge?.callWall[i] ?? NaN,
+    'cbedge.put_wall': (i) => opts.cbedge?.putWall[i] ?? NaN,
+    'cbedge.core': (i) => opts.cbedge?.core[i] ?? NaN,
     'timeframe.period': () => tf,
     'timeframe.main_period': () => tf,
     'timeframe.multiplier': () => (tfIntra ? parseInt(tf, 10) || 1 : 1),
