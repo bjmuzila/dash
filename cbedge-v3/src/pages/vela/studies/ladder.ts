@@ -136,6 +136,13 @@ export function pastClose(date: string, now = Date.now()): boolean {
   return today > date || (today === date && etMinutesOfDay(now) >= RTH_CLOSE_MIN)
 }
 
+/** The weekday before a Saturday or Sunday (`date` itself on a weekday). */
+function weekdayOnOrBefore(date: string): string {
+  let t = Date.parse(`${date}T12:00:00Z`)
+  for (let i = 0; i < 3 && [0, 6].includes(new Date(t).getUTCDay()); i++) t -= 86_400_000
+  return new Date(t).toISOString().slice(0, 10)
+}
+
 /** `from` through `to`, ET calendar dates, oldest first (at most a week). */
 function datesThrough(from: string, to: string): string[] {
   const out = [from]
@@ -158,7 +165,9 @@ export async function loadRailLadder(c: StudyCtx, date: string | undefined, fres
   const base = await loadLadder(c, date ? [date] : [], fresh)
   if (!date || Number.isFinite(c.until) || !pastClose(date)) return base
   const gexSymbol = symbolDef(base.label).gexSymbol
-  const days = datesThrough(date, etDateKey(Date.now()))
+  // an ES / NQ chart on a Sunday evening: its newest bars are Sunday's, but the
+  // session that closed is Friday's (its post-close columns are the next expiry's)
+  const days = datesThrough(weekdayOnOrBefore(date), etDateKey(Date.now()))
   // the expiry the closed session was read under, and what the recorder holds since
   const reads = await Promise.all(days.map((d) => dayRead(gexSymbol, d, d, true, fresh)))
   const closed = reads[0]!.expiry
@@ -167,7 +176,7 @@ export async function loadRailLadder(c: StudyCtx, date: string | undefined, fres
   // newest date first: the rail draws the newest column
   for (let k = days.length - 1; k >= 0; k--) {
     const cols = (await dayRead(gexSymbol, days[k]!, next, false, fresh)).columns
-    if (cols.length) return { ...base, columns: cols, missing: [], next: { expiry: next, after: date } }
+    if (cols.length) return { ...base, columns: cols, missing: [], next: { expiry: next, after: days[0]! } }
   }
   return base
 }

@@ -238,12 +238,13 @@ class RailLayer implements RendererLayerInstance {
     let el = this.el
     if (!el || !el.isConnected) {
       el = this.el = document.createElement('div')
-      el.className = 'cb-rail'
+      // cb-gxr, not cb-rail: the shell's nav rail owns .cb-rail (shell/rail.css)
+      el.className = 'cb-gxr'
       el.style.cssText = `position:absolute;top:0;bottom:0;overflow:hidden`
       this.headEl = document.createElement('div')
-      this.headEl.className = 'cb-rail-head'
+      this.headEl.className = 'cb-gxr-head'
       this.emptyEl = document.createElement('div')
-      this.emptyEl.className = 'cb-rail-empty'
+      this.emptyEl.className = 'cb-gxr-empty'
       el.append(this.headEl, this.emptyEl)
       b.wrap.appendChild(el)
       this.key = ''
@@ -261,11 +262,11 @@ class RailLayer implements RendererLayerInstance {
     const cell = this.boxes()?.wrap.closest<HTMLElement>('.vela-cell')
     if (!cell) return
     if (px > 0) {
-      cell.dataset.cbRailLeft = '1'
-      cell.style.setProperty('--cb-rail-w', `${px}px`)
+      cell.dataset.cbGxrLeft = '1'
+      cell.style.setProperty('--cb-gxr-w', `${px}px`)
     } else {
-      delete cell.dataset.cbRailLeft
-      cell.style.removeProperty('--cb-rail-w')
+      delete cell.dataset.cbGxrLeft
+      cell.style.removeProperty('--cb-gxr-w')
     }
   }
 
@@ -291,13 +292,13 @@ class RailLayer implements RendererLayerInstance {
     this.nodes.clear()
     for (const r of d.rows) {
       const row = document.createElement('div')
-      row.className = 'cb-rail-row'
+      row.className = 'cb-gxr-row'
       row.title = `${r.strike.toLocaleString('en-US', { maximumFractionDigits: 2 })}${r.price !== r.strike ? ` (${r.price.toFixed(2)})` : ''}  ${fmt(r.value)}`
       const tags = document.createElement('span')
-      tags.className = 'cb-rail-tags'
+      tags.className = 'cb-gxr-tags'
       for (const t of r.tags) {
         const tag = document.createElement('span')
-        tag.className = 'cb-rail-tag'
+        tag.className = 'cb-gxr-tag'
         tag.dataset.k = t.key
         tag.title = t.title
         tag.textContent = t.text
@@ -306,9 +307,9 @@ class RailLayer implements RendererLayerInstance {
         tags.append(tag)
       }
       const track = document.createElement('span')
-      track.className = 'cb-rail-track'
+      track.className = 'cb-gxr-track'
       const bar = document.createElement('span')
-      bar.className = 'cb-rail-bar'
+      bar.className = 'cb-gxr-bar'
       bar.dataset.s = r.value >= 0 ? 'pos' : 'neg'
       bar.style.width = `${d.maxAbs > 0 ? Math.max(2, (Math.abs(r.value) / d.maxAbs) * 100) : 0}%`
       track.append(bar)

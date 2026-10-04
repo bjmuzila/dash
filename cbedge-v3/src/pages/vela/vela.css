@@ -1774,14 +1774,17 @@
 }
 
 /* ── CB GEX Rail (studies/rail.ts): the strike rail, right of the price axis or at the chart's left edge.
-   Voltick tags (★ VOLT, ↘ REV, ◆ COIL, ↯ SURGE) carry their fill / ink inline. ── */
-.cb-rail {
+   Voltick tags (★ VOLT, ↘ REV, ◆ COIL, ↯ SURGE) carry their fill / ink inline.
+   Named cb-gxr-*, never cb-rail-*: the shell's nav rail (shell/rail.css) owns .cb-rail, and its
+   `inset: 0 auto 0 0`, padding and hover width landed on this column too (it sat at the chart's
+   left edge whatever Position said). ── */
+.cb-gxr {
   border-left: 1px solid var(--color-line);
   background: var(--color-bg);
   color: var(--color-fg);
   z-index: 2;
 }
-.cb-rail-head {
+.cb-gxr-head {
   position: absolute;
   top: 3px;
   left: 6px;
@@ -1795,7 +1798,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.cb-rail-empty {
+.cb-gxr-empty {
   position: absolute;
   top: 20px;
   left: 6px;
@@ -1804,7 +1807,7 @@
   color: var(--color-faint);
   line-height: 1.35;
 }
-.cb-rail-row {
+.cb-gxr-row {
   position: absolute;
   top: 0;
   left: 0;
@@ -1818,14 +1821,14 @@
   visibility: hidden;
   will-change: transform;
 }
-.cb-rail-tags {
+.cb-gxr-tags {
   display: flex;
   align-items: center;
   gap: 1px;
   width: 22px;
   flex-shrink: 0;
 }
-.cb-rail-tag {
+.cb-gxr-tag {
   border-radius: var(--radius-sm);
   padding: 0 3px;
   font-family: var(--font-mono);
@@ -1835,51 +1838,51 @@
   letter-spacing: 0.04em;
   color: var(--color-app);
 }
-.cb-rail-track {
+.cb-gxr-track {
   display: flex;
   flex: 1;
   min-width: 0;
   align-items: center;
   padding-right: 4px;
 }
-.cb-rail-bar {
+.cb-gxr-bar {
   height: 7px;
   border-radius: 0 2px 2px 0;
 }
-.cb-rail-bar[data-s='pos'] {
+.cb-gxr-bar[data-s='pos'] {
   background: var(--color-gex-pos);
 }
-.cb-rail-bar[data-s='neg'] {
+.cb-gxr-bar[data-s='neg'] {
   background: var(--color-gex-neg);
 }
 /* Position: Left. The rail is the chart's left edge: its border faces the plot
    on the right, each row runs mirrored (tags against the plot, the bar growing
    left, away from it) */
-.cb-rail[data-side='left'] {
+.cb-gxr[data-side='left'] {
   border-right: 1px solid var(--color-line);
   border-left: 0;
 }
-.cb-rail[data-side='left'] .cb-rail-row {
+.cb-gxr[data-side='left'] .cb-gxr-row {
   flex-direction: row-reverse;
   padding-right: 6px;
   padding-left: 0;
 }
-.cb-rail[data-side='left'] .cb-rail-tags {
+.cb-gxr[data-side='left'] .cb-gxr-tags {
   justify-content: flex-end;
 }
-.cb-rail[data-side='left'] .cb-rail-track {
+.cb-gxr[data-side='left'] .cb-gxr-track {
   justify-content: flex-end;
   padding-right: 0;
   padding-left: 4px;
 }
-.cb-rail[data-side='left'] .cb-rail-bar {
+.cb-gxr[data-side='left'] .cb-gxr-bar {
   border-radius: 2px 0 0 2px;
 }
-.vela-cell[data-cb-rail-left] {
-  --cb-rail-w: 96px;
+.vela-cell[data-cb-gxr-left] {
+  --cb-gxr-w: 96px;
 }
-.vela-cell[data-cb-rail-left] :is(.vela-statusline, .vela-watermark, .vela-attribution) {
-  margin-left: var(--cb-rail-w);
+.vela-cell[data-cb-gxr-left] :is(.vela-statusline, .vela-watermark, .vela-attribution) {
+  margin-left: var(--cb-gxr-w);
 }
 
 /* ── Level Alerts panel (levels/levelAlerts.ts) ── */

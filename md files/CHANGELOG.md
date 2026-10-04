@@ -26103,3 +26103,20 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - `server-v2/api-router.js`: the owner "Who has access" check includes grant holders, labelled `voltick grant`.
   - `owner-vite/src/pages/Admin.tsx` (panel subtitle + note) and `app/api/admin/voltick-access/route.ts` (note): say a grant counts as paid access.
 - **Checks:** every changed query run against an in-memory Postgres with test rows. Grant holder (mixed-case email) is paid, revoked or expired grant is not, comp and Stripe unchanged, owner unchanged, one row per session. `node --check` passes on both server files; `lib/db.ts`, `route.ts` and `Admin.tsx` parse cleanly.
+
+## 2026-10-04 - v3 Vela: GEX Rail stuck at the chart's left edge (class clash with the new nav rail)
+
+- **Bug:** the GEX Rail column used the class `cb-rail`, and so does the new shell nav (`shell/rail.css`).
+  - The nav's `.cb-rail { position: absolute; inset: 0 auto 0 0; padding; hover width }` also applied to the chart column.
+  - Its `left: 0` beat the column's inline `right: 0`, so the rail sat at the chart's left edge whatever Position said.
+  - The indicator legend was drawn on top of it, and the 96px the chart gave up on the right stayed empty.
+  - The reverse also happened: Vela's old `.cb-rail` rule (border, background, z-index) landed on the nav while Vela was open.
+- **Fix:** the rail's classes are now `cb-gxr-*` (`cb-gxr`, `-head`, `-empty`, `-row`, `-tags`, `-tag`, `-track`, `-bar`). The Left-side cell marker is now `data-cb-gxr-left` / `--cb-gxr-w`. The nav rail is untouched.
+- **Also:** after a close, an ES / NQ chart on a Sunday evening (newest bars dated Sunday) now looks back to Friday's close to find the next expiry, so it shows Monday's gamma instead of "No ladder recorded".
+- **Files:** `cbedge-v3/src/pages/vela/studies/rail.ts`, `cbedge-v3/src/pages/vela/studies/ladder.ts`, `cbedge-v3/src/pages/vela/vela.css`
+- **Checks:**
+  - Reproduced with the new nav shell in a headless run: Right put the rail at 0..96 with the chart box pulled in on the right.
+  - After the fix, Right puts it at the chart's right edge and Left at its left edge, with the chart and legend moved right of it. Removing the study gives the chart its full width back.
+  - A fixed Sunday 20:30 ET clock with bars dated Sunday shows `SPX MON 17:00` from Friday's post-close columns.
+  - `tsc` shows only the 5 existing errors. `check:theme` passes and `vite build` is OK.
+  - The watchlist, sections and pin, theme and studies runs pass with no errors.
