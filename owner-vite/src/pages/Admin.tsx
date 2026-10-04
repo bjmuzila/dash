@@ -270,7 +270,7 @@ function CompAccessPanel() {
   );
 }
 
-// ─── Voltick Access — voltick.cbedge.net, and nothing else ───────────────────
+// ─── Voltick Access — voltick.cbedge.net, vela.cbedge.net, and paid access ──
 //
 // A DELIBERATE TWIN of CompAccessPanel above, against
 // /api/admin/voltick-access. Same request shapes, same row shape, same
@@ -280,9 +280,11 @@ function CompAccessPanel() {
 // shared panel guarantees that a change meant for one eventually surprises the
 // other.
 //
-// WHAT A GRANT BUYS: voltick.cbedge.net. Not paid access on cbedge.net (that is
-// a comp, above) and not owner access. The granted account sees what any
-// signed-in free account sees, plus the sandbox.
+// WHAT A GRANT BUYS (since 2026-10-04): voltick.cbedge.net, vela.cbedge.net,
+// and everything a paying customer sees on cbedge.net — server-v2/ws-auth.js
+// and lib/db.ts getSessionWithUser() join voltick_access into is_paid exactly
+// like a comp. Not owner access. Revoking the grant takes all of it away and
+// leaves any comp the same person holds untouched.
 //
 // HOW THE GATE WORKS: voltick's nginx calls /api/voltick/verify with
 // auth_request BEFORE serving any file, so a revoked person stops getting the
@@ -407,7 +409,7 @@ function VoltickAccessPanel() {
         <span style={{ fontSize: 14, padding: "2px 8px", borderRadius: 10, background: `${LIGHT_BLUE}18`, border: `1px solid ${LIGHT_BLUE}44`, color: LIGHT_BLUE, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>
-        <span style={{ fontSize: 14, color: T.textSecondary }}>voltick.cbedge.net only · not paid access, not owner access · granting creates the account</span>
+        <span style={{ fontSize: 14, color: T.textSecondary }}>voltick + vela.cbedge.net · counts as paid access · not owner access · granting creates the account</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
           <a href="https://voltick.cbedge.net" target="_blank" rel="noopener noreferrer"
             style={{ fontSize: 14, color: LIGHT_BLUE, textDecoration: "none" }}>

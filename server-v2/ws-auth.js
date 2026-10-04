@@ -5,9 +5,19 @@
  *   The WebSocket carries the paid product (live SPX GEX). Without this gate,
  *   anyone who knows the URL can stream it for free. This module verifies, at
  *   upgrade time, that the connecting user has a valid session cookie and is
- *   either the owner, an active/trialing subscriber, or the holder of a live
- *   comp_access grant — the SAME rule the pages enforce via
+ *   either the owner, an active/trialing subscriber, the holder of a live
+ *   comp_access grant, or the holder of a live voltick_access grant (since
+ *   2026-10-04, see below) — the SAME rule the pages enforce via
  *   lib/db.ts's getSessionWithUser().
+ *
+ * VOLTICK GRANTS COUNT AS PAID (2026-10-04, Brandon's call)
+ *   A live voltick_access row (the voltick.cbedge.net / vela.cbedge.net list,
+ *   owner console → Admin → Voltick Access) now unlocks everything a paying
+ *   customer sees, exactly like a comp. Before this the grant opened the
+ *   sandbox door and nothing else, so a granted partner saw the Vela page with
+ *   empty charts: every data route behind it is 'subscriber'. Revoking the
+ *   grant takes both away. It is joined the same way comp_access is, in all
+ *   three queries below, and reported as 'comped' in `reason`.
  *
  * KEEP THE PAID DEFINITION IN SYNC WITH lib/db.ts (2026-08-31)
  *   is_paid here MUST match getSessionWithUser()'s is_paid exactly, because the
@@ -152,16 +162,18 @@ async function getSessionForToken(rawToken) {
 
   let r;
   try {
-    // is_paid = a live Stripe subscription OR a live comp_access grant. Mirrors
-    // lib/db.ts's getSessionWithUser() clause for clause — see the sync note in
-    // the file header. The comp join is written so an expired or revoked row
-    // simply doesn't match, and comp_access is keyed on the LOWERCASED email
-    // because a comp can be granted before the person has an account.
+    // is_paid = a live Stripe subscription OR a live comp_access grant OR a live
+    // voltick_access grant. Mirrors lib/db.ts's getSessionWithUser() clause for
+    // clause — see the sync note in the file header. The grant joins are written
+    // so an expired or revoked row simply doesn't match, and both grant tables
+    // are keyed on the LOWERCASED email because a grant can exist before the
+    // person has an account.
     r = await pool.query(
       `SELECT s.user_id, u.is_owner,
               (COALESCE(sub.status IN ('active','trialing'), FALSE)
-                OR ca.email IS NOT NULL)                     AS is_paid,
-              (ca.email IS NOT NULL)                         AS is_comped
+                OR ca.email IS NOT NULL
+                OR va.email IS NOT NULL)                     AS is_paid,
+              (ca.email IS NOT NULL OR va.email IS NOT NULL) AS is_comped
          FROM sessions s
          JOIN users u ON u.id = s.user_id
          LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
@@ -169,6 +181,10 @@ async function getSessionForToken(rawToken) {
                 ON ca.email = LOWER(u.email)
                AND ca.revoked_at IS NULL
                AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+         LEFT JOIN voltick_access va
+                ON va.email = LOWER(u.email)
+               AND va.revoked_at IS NULL
+               AND (va.expires_at IS NULL OR va.expires_at > NOW())
         WHERE s.token_hash = $1 AND s.expires_at > NOW()
         LIMIT 1`,
       [tokenHash]
@@ -281,8 +297,9 @@ async function sessionStillLive(tokenHash) {
     const r = await pool.query(
       `SELECT s.user_id, u.is_owner,
               (COALESCE(sub.status IN ('active','trialing'), FALSE)
-                OR ca.email IS NOT NULL)                     AS is_paid,
-              (ca.email IS NOT NULL)                         AS is_comped
+                OR ca.email IS NOT NULL
+                OR va.email IS NOT NULL)                     AS is_paid,
+              (ca.email IS NOT NULL OR va.email IS NOT NULL) AS is_comped
          FROM sessions s
          JOIN users u ON u.id = s.user_id
          LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
@@ -290,6 +307,10 @@ async function sessionStillLive(tokenHash) {
                 ON ca.email = LOWER(u.email)
                AND ca.revoked_at IS NULL
                AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+         LEFT JOIN voltick_access va
+                ON va.email = LOWER(u.email)
+               AND va.revoked_at IS NULL
+               AND (va.expires_at IS NULL OR va.expires_at > NOW())
         WHERE s.token_hash = $1 AND s.expires_at > NOW()
         LIMIT 1`,
       [tokenHash]
@@ -314,16 +335,22 @@ async function getAccessForUser(userId) {
   if (OWNER_USER_ID && userId === OWNER_USER_ID) return { ok: true, reason: 'owner' };
   const pool = getAuthPool();
   if (!pool) return { ok: false, reason: 'no-subscription' };
-  // Same comp_access join as getSessionForToken above — see the sync note in
-  // the file header. Without it this function calls a comped user 'inactive'.
+  // Same comp_access + voltick_access joins as getSessionForToken above — see
+  // the sync note in the file header. Without them this function calls a
+  // comped (or Voltick-granted) user 'inactive'.
   const r = await pool.query(
-    `SELECT u.is_owner, sub.status, (ca.email IS NOT NULL) AS is_comped
+    `SELECT u.is_owner, sub.status,
+            (ca.email IS NOT NULL OR va.email IS NOT NULL) AS is_comped
        FROM users u
        LEFT JOIN subscriptions sub ON sub.clerk_user_id = u.id
        LEFT JOIN comp_access ca
               ON ca.email = LOWER(u.email)
              AND ca.revoked_at IS NULL
              AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+       LEFT JOIN voltick_access va
+              ON va.email = LOWER(u.email)
+             AND va.revoked_at IS NULL
+             AND (va.expires_at IS NULL OR va.expires_at > NOW())
       WHERE u.id = $1 LIMIT 1`,
     [userId]
   );

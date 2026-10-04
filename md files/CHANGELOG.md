@@ -26092,3 +26092,14 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - `tsc` shows only the 5 existing errors. `check:theme` passes. `vite build` (v3) and `build:vela` are both OK.
   - Headless run of the standalone build: the desktop and phone workspaces mount, and a touch phone is sent to `/m`.
   - nginx with a stub backend: no session or no grant gets the sign-in page; owner gets the app; assets are gated too; `/api` passes through.
+
+## 2026-10-04 - Voltick Access grants now count as paid access
+
+- **What:** anyone on the owner console's Voltick Access list (voltick.cbedge.net, and now vela.cbedge.net) sees everything a paying CB Edge customer sees, exactly like a comp. Before this the grant opened the sandbox and nothing else, so Vela loaded with empty charts for anyone on the list who wasn't paying: every data route behind it is `subscriber`.
+- **How:** a live `voltick_access` row (not revoked, not expired) is joined into `is_paid` next to `comp_access`. Revoking the grant takes away the sandbox, Vela and the paid access together; a comp the same person holds is untouched. Owner access is unchanged.
+- **Files:**
+  - `server-v2/ws-auth.js`: all three queries (session lookup, live-socket recheck, by-user check). This is the gate for `/api`, `/proxy` and the WebSocket.
+  - `lib/db.ts`: `getSessionWithUser()` (the gate for the cbedge.net pages and `/api/auth/me`), the `voltick_access` table note, and the two win-back candidate queries now skip grant holders the same way they skip comps.
+  - `server-v2/api-router.js`: the owner "Who has access" check includes grant holders, labelled `voltick grant`.
+  - `owner-vite/src/pages/Admin.tsx` (panel subtitle + note) and `app/api/admin/voltick-access/route.ts` (note): say a grant counts as paid access.
+- **Checks:** every changed query run against an in-memory Postgres with test rows. Grant holder (mixed-case email) is paid, revoked or expired grant is not, comp and Stripe unchanged, owner unchanged, one row per session. `node --check` passes on both server files; `lib/db.ts`, `route.ts` and `Admin.tsx` parse cleanly.

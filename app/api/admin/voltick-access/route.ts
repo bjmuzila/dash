@@ -26,9 +26,11 @@ import {
  * first; the differences are listed here and nowhere else:
  *
  *   - It writes `voltick_access`, not `comp_access`.
- *   - It does NOT touch is_paid. A voltick grant buys nothing on cbedge.net:
- *     the granted account sees exactly what a signed-in free account sees, plus
- *     voltick.cbedge.net. Comping someone is still a separate, deliberate act.
+ *   - It writes a different table, but since 2026-10-04 that table IS read
+ *     into is_paid (lib/db.ts getSessionWithUser + server-v2/ws-auth.js): a
+ *     voltick grant gives voltick.cbedge.net, vela.cbedge.net, and everything
+ *     a paying customer sees. Revoking it removes all three; a comp the same
+ *     person holds is untouched.
  *   - It does NOT touch users.is_owner either, so /owner/* stays shut.
  *
  * The gate itself is NOT here. nginx in voltick-vite/ calls

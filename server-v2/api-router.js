@@ -11560,7 +11560,9 @@ Return exactly one element per input key, in the same order. Never merge, split,
   // PHASE 1 (2026-10-04): the SAME list as the Voltick sandbox. Owner always,
   // plus anyone with a live voltick_access row — libDb.canOpenVoltick, reused
   // on purpose so there is one grant list to manage, not two. The chart reads
-  // CB Edge's own feed in this phase, so it stays on that short list.
+  // CB Edge's own feed in this phase, so it stays on that short list. A
+  // voltick grant also counts as paid (server-v2/ws-auth.js), which is what
+  // lets the chart's 'subscriber' data routes answer for the people on it.
   //
   // PHASE 2 widens this to Voltick members signed in through the Voltick
   // hand-off, and Vela's data moves to Voltick's feed BEFORE that happens.
@@ -14349,10 +14351,12 @@ try {
         // Deliberately a copy of the is_paid expression in getSessionWithUser()
         // (lib/db.ts). If that gate changes, change this with it — a diagnostic
         // that has drifted from the thing it diagnoses is worse than none.
+        // Since 2026-10-04 that includes a live voltick_access grant.
         const rows = await libDb.queryAll(
           `SELECT u.email,
                   sub.status,
                   (ca.email IS NOT NULL) AS comped,
+                  (va.email IS NOT NULL) AS voltick,
                   u.is_owner,
                   sub.current_period_end
              FROM users u
@@ -14361,17 +14365,23 @@ try {
                     ON ca.email = LOWER(u.email)
                    AND ca.revoked_at IS NULL
                    AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+             LEFT JOIN voltick_access va
+                    ON va.email = LOWER(u.email)
+                   AND va.revoked_at IS NULL
+                   AND (va.expires_at IS NULL OR va.expires_at > NOW())
             WHERE COALESCE(sub.status IN ('active','trialing'), FALSE)
                OR ca.email IS NOT NULL
-            ORDER BY (ca.email IS NOT NULL), sub.status, u.email`
+               OR va.email IS NOT NULL
+            ORDER BY (ca.email IS NOT NULL OR va.email IS NOT NULL), sub.status, u.email`
         );
         const out = rows.map((r) => ({
           email: r.email,
           status: r.status ?? '—',
-          source: r.comped ? 'comped' : r.is_owner ? 'owner' : 'stripe',
+          source: r.comped ? 'comped' : r.voltick ? 'voltick grant' : r.is_owner ? 'owner' : 'stripe',
           period_end: iso(r.current_period_end),
         }));
         const comped = out.filter((r) => r.source === 'comped').length;
+        const voltick = out.filter((r) => r.source === 'voltick grant').length;
         const trialing = out.filter((r) => r.status === 'trialing').length;
         return {
           columns: this.columns,
@@ -14379,7 +14389,8 @@ try {
           summary:
             `${out.length} with access` +
             (trialing ? ` · ${trialing} on trial` : '') +
-            (comped ? ` · ${comped} comped` : ''),
+            (comped ? ` · ${comped} comped` : '') +
+            (voltick ? ` · ${voltick} via Voltick grant` : ''),
         };
       },
     },

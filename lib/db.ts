@@ -1171,10 +1171,16 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- shape, same email key, same stamp-don't-delete revoke. Read that block
     -- for the reasoning; only the difference is written here.
     --
-    -- WHAT IT GRANTS: voltick.cbedge.net, and nothing else. It is NOT joined
-    -- into is_paid, so a voltick grant buys nothing on cbedge.net -- the
-    -- account sees what any signed-in free account sees, plus the sandbox.
-    -- Comping someone stays a separate, deliberate act, and so does is_owner.
+    -- WHAT IT GRANTS (changed 2026-10-04, Brandon's call): voltick.cbedge.net,
+    -- vela.cbedge.net, AND everything a paying customer sees. It IS joined
+    -- into is_paid now, exactly like comp_access, in getSessionWithUser() below
+    -- and in all three queries in server-v2/ws-auth.js. Before this a grant
+    -- opened the sandbox and nothing else, so the people on it saw Vela with
+    -- empty charts. is_owner is still a separate, deliberate act.
+    --
+    -- The two tables stay separate on purpose (next paragraph): revoking a
+    -- voltick grant removes the sandbox AND the paid access it carried, and
+    -- leaves any comp the same person holds untouched.
     --
     -- WHY A SECOND TABLE rather than a column on comp_access: the two lists
     -- answer different questions and get revoked on different days. Folding
@@ -3742,11 +3748,13 @@ export async function getLapsedTrialCandidates(
        JOIN subscriptions s  ON s.clerk_user_id = u.id
        LEFT JOIN trial_winback w    ON w.email_key = th.email_key
        LEFT JOIN comp_access ca     ON ca.email = lower(u.email) AND ca.revoked_at IS NULL
+       LEFT JOIN voltick_access va  ON va.email = lower(u.email) AND va.revoked_at IS NULL
        LEFT JOIN email_unsubscribes eu ON eu.email = lower(u.email)
        LEFT JOIN trial_bans b       ON b.kind = 'email' AND b.lifted_at IS NULL
                                    AND b.value_key = th.email_key
       WHERE w.email_key IS NULL
         AND ca.email IS NULL
+        AND va.email IS NULL
         AND eu.email IS NULL
         AND b.id IS NULL
         AND u.is_owner = FALSE
@@ -3792,6 +3800,7 @@ export async function getSignupNoPurchaseCandidates(
        LEFT JOIN trial_history th   ON th.clerk_user_id = u.id
        LEFT JOIN trial_winback w    ON w.clerk_user_id = u.id
        LEFT JOIN comp_access ca     ON ca.email = lower(u.email) AND ca.revoked_at IS NULL
+       LEFT JOIN voltick_access va  ON va.email = lower(u.email) AND va.revoked_at IS NULL
        LEFT JOIN email_unsubscribes eu ON eu.email = lower(u.email)
        LEFT JOIN trial_bans b       ON b.kind = 'email' AND b.lifted_at IS NULL
                                    AND b.value_key = lower(u.email)
@@ -3799,6 +3808,7 @@ export async function getSignupNoPurchaseCandidates(
         AND th.email_key IS NULL
         AND w.email_key IS NULL
         AND ca.email IS NULL
+        AND va.email IS NULL
         AND eu.email IS NULL
         AND b.id IS NULL
         AND u.is_owner = FALSE
@@ -4204,21 +4214,28 @@ export interface SessionWithUser {
   email: string;
   is_owner: boolean;
   is_paid: boolean;
-  /** True when is_paid came from a comp_access grant rather than Stripe. Purely
-   *  informational (badges, admin views) -- the gate only ever reads is_paid. */
+  /** True when is_paid came from a comp_access or voltick_access grant rather
+   *  than Stripe. Purely informational (badges, admin views) -- the gate only
+   *  ever reads is_paid. */
   is_comped: boolean;
   expires_at: string;
 }
 
 export async function getSessionWithUser(tokenHash: string): Promise<SessionWithUser | undefined> {
-  // is_paid = a live Stripe subscription OR a live comp_access grant. Both are
-  // "what a paying customer sees"; neither has anything to do with is_owner.
-  // The comp join is written so an expired or revoked row simply doesn't match.
+  // is_paid = a live Stripe subscription OR a live comp_access grant OR a live
+  // voltick_access grant (2026-10-04). All three are "what a paying customer
+  // sees"; none has anything to do with is_owner. The grant joins are written
+  // so an expired or revoked row simply doesn't match.
+  //
+  // KEEP IN SYNC with server-v2/ws-auth.js — it runs this same is_paid in raw
+  // SQL for /api, /proxy and the WebSocket. If the two disagree the page
+  // renders and then every data call 401s.
   return queryOne<SessionWithUser>(
     `SELECT s.user_id, u.email, u.is_owner, s.expires_at,
             (COALESCE(sub.status IN ('active','trialing'), FALSE)
-              OR ca.email IS NOT NULL)                       AS is_paid,
-            (ca.email IS NOT NULL)                           AS is_comped
+              OR ca.email IS NOT NULL
+              OR va.email IS NOT NULL)                       AS is_paid,
+            (ca.email IS NOT NULL OR va.email IS NOT NULL)   AS is_comped
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
@@ -4226,6 +4243,10 @@ export async function getSessionWithUser(tokenHash: string): Promise<SessionWith
               ON ca.email = LOWER(u.email)
              AND ca.revoked_at IS NULL
              AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+       LEFT JOIN voltick_access va
+              ON va.email = LOWER(u.email)
+             AND va.revoked_at IS NULL
+             AND (va.expires_at IS NULL OR va.expires_at > NOW())
       WHERE s.token_hash = ? AND s.expires_at > NOW()`,
     [tokenHash]
   );
