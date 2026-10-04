@@ -207,6 +207,10 @@
      component still may not type `rgba(0,0,0,.35)`, so it lives here with
      everything else and reaches components as alpha(SHADOW, 0.35).           */
   --color-violet: #a78bfa;
+  /* Repeated flow (2026-10-03, Brandon) — the rail + shade on a repeat
+     contract's rows on /whales. Its own token, not --color-violet: that one is
+     the gamma flip and differs per theme; this is the same lilac on both. */
+  --color-repeat: #b48cff;
   --color-shadow: #000000;
 
   /* The GEX-watch feed's PUT colour. A clay, not a red: it is paired against
@@ -534,6 +538,7 @@
   --color-netdrift-put: #ff6b7a;
   --color-dex: #7fb0ff;
   --color-violet: #b48cff;
+  --color-repeat: #b48cff;
   --color-clay: #ff9f6b;
 
   /* CB Edge level tokens. Surfaces that NAME a level rename it (Volt / Coil /

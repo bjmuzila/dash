@@ -25938,3 +25938,9 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - `-financials.png`
   - `-news.png`
   - `-phone.png`
+
+## 2026-10-03 - v3 Whales: repeat rows match option B's rail and shade exactly
+
+- New token `--color-repeat: #b48cff` (the lilac from the mockup), defined on both themes. It's separate from `--color-violet`, which is the gamma-flip color and is a different shade on the CB Edge theme.
+- Repeat rows (the group row, its open fills, lone repeat prints, and phone rows) now draw B's rail as an inset shadow, `shadow-[inset_3px_0_0_var(--color-repeat)]`. The previous version used `border-l-3`, which lost out to the row borders in the collapsed table and drew thin. The rows also get B's tint, `bg-repeat/[0.06]`. D's layout stays as it was: the ▾ and "· N prints" text, now in the repeat color, and the combined chart's fill dots use it too.
+- **Files:** `cbedge-v3/src/design/tokens.css`, `cbedge-v3/src/pages/Whales.tsx`, `cbedge-v3/src/board/topFlow/ContractProbe.tsx`. `tsc` is clean.

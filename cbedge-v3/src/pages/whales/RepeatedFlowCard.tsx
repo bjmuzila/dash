@@ -3,7 +3,7 @@ import { SegGroup, SegMenu } from '@/design/primitives/Controls'
 import { readableError, useQuery } from '@/data/api'
 import { fmtPremium, fmtStrike, fmtTime } from '@/data/flowMath'
 import { TrackButton } from './TrackedAlertsCard'
-import { ContractProbe, type ProbeAlertInfo } from '@/board/topFlow/ContractProbe'
+import { ContractProbe, type ProbeAlertInfo, type ProbeFill } from '@/board/topFlow/ContractProbe'
 import type { TopFlowRow } from '@/board/topFlow/TopFlowCard'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,6 +64,9 @@ interface RepeatContract {
   /** Whole-range totals for the contract, not just the burst. */
   nAll: number
   totalAll: number
+  /** Every order in the burst, oldest first (2026-10-03). Optional: an older
+   *  server does not send it, and the chart falls back to the single marker. */
+  fills?: Array<{ ts: number; premium: number }>
 }
 interface RepeatResponse {
   range: { from: string; to: string }
@@ -466,6 +469,9 @@ export function RepeatedFlowCard({ filters, phone = false, trackedKeys, busyKey,
         onClose={() => setOpenOsi(null)}
         entryAt={r.firstTs}
         alertInfo={alertInfoOf(r)}
+        // A violet dot per order in the burst, sized by premium — where the
+        // repeated flow actually hit, not just where it started.
+        fills={r.fills?.length ? r.fills.map<ProbeFill>((f, i) => ({ id: `${r.osi}:${f.ts}:${i}`, ts: f.ts, premium: f.premium })) : undefined}
       />
     </div>
   )

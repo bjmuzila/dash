@@ -1065,12 +1065,12 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false, fills }: 
         const fy = y(bars[m.i]!.close)
         return (
           <g key={m.id}>
-            <circle cx={fx} cy={fy} r={m.r * S} style={{ fill: 'var(--color-violet)' }} opacity={m.hot ? 1 : 0.55} />
+            <circle cx={fx} cy={fy} r={m.r * S} style={{ fill: 'var(--color-repeat)' }} opacity={m.hot ? 1 : 0.55} />
             {m.hot && (
               <>
                 <circle cx={fx} cy={fy} r={(m.r + 2.5) * S} fill="none" style={{ stroke: 'var(--color-fg)' }} strokeWidth={1.3 * S} />
                 <text x={fx} y={fy - (m.r + 6) * S} textAnchor="middle" fontSize={9 * S} fontWeight={700}
-                  style={{ fill: 'var(--color-violet)', fontFamily: MONO }}>{etTime(m.t)}</text>
+                  style={{ fill: 'var(--color-repeat)', fontFamily: MONO }}>{etTime(m.t)}</text>
               </>
             )}
           </g>

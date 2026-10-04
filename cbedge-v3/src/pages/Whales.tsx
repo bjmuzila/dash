@@ -479,7 +479,7 @@ function RepeatBadge({ c }: { c: RepeatContract }) {
   return (
     <span
       title={`Repeated flow: ${c.n} orders in its densest burst${c.nAll ? `, ${c.nAll} all day` : ''}`}
-      className="tabular ml-1.5 text-2xs font-bold text-violet"
+      className="tabular ml-1.5 text-2xs font-bold text-repeat"
     >
       · {c.n}× repeat
     </span>
@@ -1288,7 +1288,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
   const probeDrawer = (key: string, node: ReactNode, violet = false) => (
     <tr key={`d:${key}`}>
       <td colSpan={13} className="border-t border-line bg-surface2 p-2">
-        <div className={['flex min-h-[340px] flex-col rounded-sm border bg-surface', violet ? 'border-violet/50' : 'border-line'].join(' ')}>
+        <div className={['flex min-h-[340px] flex-col rounded-sm border bg-surface', violet ? 'border-repeat/50' : 'border-line'].join(' ')}>
           {node}
         </div>
       </td>
@@ -1322,13 +1322,15 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         'cursor-pointer border-t border-line hover:bg-raised',
         // Repeat shade (option B's tint) on every row of a repeat contract —
         // the fills inside an open group and a lone repeat print alike.
-        (child ? hotFill === r.id : r.id === selectedId) ? 'bg-raised' : child || repeat ? 'bg-violet/5' : '',
+        (child ? hotFill === r.id : r.id === selectedId) ? 'bg-raised' : child || repeat ? 'bg-repeat/[0.06]' : '',
       ].join(' ')}
     >
       <td
         className={[
           'tabular whitespace-nowrap px-2 py-1.5 text-fg',
-          child || repeat ? 'border-l-3 border-violet' : '',
+          // Option B's rail: an inset shadow, not a border — a left border on a
+          // td in a collapsed table loses to the row borders and draws thin.
+          child || repeat ? 'shadow-[inset_3px_0_0_var(--color-repeat)]' : '',
           child ? 'pl-5' : '',
         ].join(' ')}
       >
@@ -1436,15 +1438,15 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
         onClick={() => toggleGroup(key)}
         aria-expanded={open}
         title={`Repeated flow: ${c.n} orders in its densest burst${c.nAll ? `, ${c.nAll} all day` : ''} · ${g.length} of them in this list — click to show`}
-        className={['cursor-pointer border-t border-line hover:bg-raised', open ? 'bg-raised' : 'bg-violet/5'].join(' ')}
+        className={['cursor-pointer border-t border-line hover:bg-raised', open ? 'bg-raised' : 'bg-repeat/[0.06]'].join(' ')}
       >
-        <td className="tabular whitespace-nowrap border-l-3 border-violet px-2 py-1.5 text-fg">
-          <span aria-hidden className={['mr-1 inline-block text-violet transition-transform', open ? '' : '-rotate-90'].join(' ')}>▾</span>
+        <td className="tabular whitespace-nowrap shadow-[inset_3px_0_0_var(--color-repeat)] px-2 py-1.5 text-fg">
+          <span aria-hidden className={['mr-1 inline-block text-repeat transition-transform', open ? '' : '-rotate-90'].join(' ')}>▾</span>
           {when(head)}
         </td>
         <td className="whitespace-nowrap px-2 py-1.5 font-semibold text-fg">
           {head.underlying ?? '—'}
-          <span className="ml-1.5 font-bold text-violet">· {count} prints</span>
+          <span className="ml-1.5 font-bold text-repeat">· {count} prints</span>
         </td>
         <td className="tabular whitespace-nowrap px-2 py-1.5 text-fg">
           <span className="text-fg">{fmtStrike(head.strike)}</span>{' '}
@@ -1641,7 +1643,7 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                         r.id === selectedId ? 'bg-raised' : '',
                         // Repeated flow (2026-10-03): the phone list keeps one
                         // line per print, so the contract is marked, not folded.
-                        r.osi && repeatByOsi.has(r.osi) ? 'border-l-3 border-l-violet bg-violet/5' : '',
+                        r.osi && repeatByOsi.has(r.osi) ? 'shadow-[inset_3px_0_0_var(--color-repeat)] bg-repeat/[0.06]' : '',
                       ].join(' ')}
                     >
                       <div className="min-w-0 flex-1">
@@ -2212,7 +2214,19 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
                                     row={groupProbeRow(it.key, it.rows)}
                                     onClose={() => toggleGroup(it.key)}
                                     shareAs="Repeated flow"
-                                    fills={it.rows.map<ProbeFill>((r) => ({ id: r.id, ts: r.ts, premium: r.premium, hot: hotFill === r.id }))}
+                                    fills={(() => {
+                                      // Every order in the repeat's burst when the server sent
+                                      // them, plus any listed print outside that window; the
+                                      // clicked fill is matched by time and ringed.
+                                      const hotTs = it.rows.find((r) => r.id === hotFill)?.ts ?? null
+                                      const burst = it.repeat.fills ?? []
+                                      const out: ProbeFill[] = burst.map((f, i) => ({ id: `b:${f.ts}:${i}`, ts: f.ts, premium: f.premium, hot: hotTs === f.ts }))
+                                      const have = new Set(burst.map((f) => f.ts))
+                                      for (const r of it.rows) {
+                                        if (!have.has(r.ts)) out.push({ id: r.id, ts: r.ts, premium: r.premium, hot: hotFill === r.id })
+                                      }
+                                      return out
+                                    })()}
                                   />
                                 ), true)}
                                 {openGroups.has(it.key) && it.rows.map((r) => printRow(r, { child: true }))}

@@ -16369,6 +16369,25 @@ try {
       };
     };
 
+    /**
+     * ONE SESSION MEANS THE LAST SESSION (2026-10-03, Brandon). A one-day ask
+     * for a date with no prints — Saturday, Sunday, a holiday, or a weekday
+     * before the open — is snapped back to the newest session at or before it,
+     * so 1D / TODAY on a weekend shows Friday instead of an empty page.
+     */
+    async function whSnapToSession(day) {
+      try {
+        await tfEnsureSchema();
+        const r = await libDb.queryAll(
+          `SELECT to_char(MAX(session_date), 'YYYY-MM-DD') AS d FROM lse_top_flow_prints WHERE session_date <= ?::date`,
+          [day],
+        );
+        return r && r[0] && r[0].d ? String(r[0].d) : day;
+      } catch {
+        return day;
+      }
+    }
+
     register('/api/lse/whales', {
       // Same paywall as the live card — this is the same vault data, older.
       auth: 'subscriber', methods: ['GET'],
@@ -16384,6 +16403,7 @@ try {
         let from = YMD.test(rawFrom) ? rawFrom : today;
         let to = YMD.test(rawTo) ? rawTo : today;
         if (from > to) { const t = from; from = to; to = t; }
+        if (from === to && libDb) { from = to = await whSnapToSession(to); }
 
         const askedFloor = Number(params.get('min_premium'));
         // Clamped UP to the whale floor: below it the table holds only the last
@@ -16675,6 +16695,8 @@ try {
         let from = YMD.test(rawFrom) ? rawFrom : today;
         let to = YMD.test(rawTo) ? rawTo : today;
         if (from > to) { const t = from; from = to; to = t; }
+        // TODAY on a weekend → the last session (see whSnapToSession).
+        if (from === to && libDb) { from = to = await whSnapToSession(to); }
         let clamped = false;
         if (from < oldest) { from = oldest; clamped = true; }
         if (to < from) to = from;
@@ -16784,6 +16806,27 @@ try {
              ORDER BY c_n DESC, c_total DESC
              LIMIT ?`, [...f.params, minOrders, RF_MAX_CONTRACTS]);
 
+          // THE BURST'S FILLS (2026-10-03) — every order inside each contract's
+          // densest window, so the probe can draw a dot per hit. One query for
+          // every contract on the list; the window is cut in JS.
+          const fillsByOsi = new Map();
+          const osis = (rows || []).map((r) => String(r.osi));
+          if (osis.length) {
+            const fr = await libDb.queryAll(`${cte}
+              SELECT osi, ts, premium FROM s WHERE osi = ANY(?::text[]) ORDER BY ts ASC`,
+              [...f.params, osis]);
+            const win = new Map((rows || []).map((r) => [String(r.osi), [whNum(r.ts), whNum(r.c_end)]]));
+            for (const x of fr || []) {
+              const o = String(x.osi);
+              const w = win.get(o);
+              const ts = whNum(x.ts);
+              if (!w || ts < w[0] || ts > w[1]) continue;
+              const arr = fillsByOsi.get(o) || [];
+              if (arr.length < 300) arr.push({ ts, premium: whNum(x.premium) });
+              fillsByOsi.set(o, arr);
+            }
+          }
+
           const first = (rows && rows[0]) || null;
           return send(res, 200, {
             ...empty,
@@ -16812,6 +16855,8 @@ try {
               // The whole range, for context.
               nAll: whNum(r.n_all),
               totalAll: whNum(r.total_all),
+              /** Every order in the burst, oldest first — one chart dot each. */
+              fills: fillsByOsi.get(String(r.osi)) || [],
             })),
             error: null,
           }, { 'Cache-Control': NO_STORE });
