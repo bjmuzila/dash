@@ -1,0 +1,50 @@
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import '@/design/tokens.css'
+import { startSocket } from '@/data/socket'
+import { bootUiTheme } from '@/design/uiTheme'
+import VelaApp from '@/vela/VelaApp'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Entry for vela.cbedge.net — the standalone Vela build (`npm run build:vela`,
+// vela.html). The twin of src/main.tsx minus the board: same tokens, same
+// socket, same theme boot, then VelaApp instead of App.
+//
+// The socket opens at module scope for the same reason main.tsx does it there:
+// Vela's ES / NQ tail reads the futures frames through watchFrame, and the
+// sooner the connection is up the sooner the last bar fills. vela.html carries
+// an EMPTY boot record, so this is a plain connect, not a hand-off.
+// ─────────────────────────────────────────────────────────────────────────────
+
+startSocket()
+
+// Applies the stored palette before the first paint. Vela then pins Voltick on
+// mount (pinUiTheme in pages/Vela.tsx), so this only covers the first frames.
+bootUiTheme()
+
+// A deploy replaces the hashed chunks; a tab opened before it asks for a chunk
+// that no longer exists. Reload ONCE per session to pick up the new build — the
+// same handler src/main.tsx installs, under its own key so a reload spent on one
+// host is not mistaken for one spent on the other.
+const RELOADED_KEY = 'cb-vela-stale-chunk-reloaded'
+window.addEventListener('vite:preloadError', (e) => {
+  let already = true
+  try {
+    already = sessionStorage.getItem(RELOADED_KEY) === '1'
+    if (!already) sessionStorage.setItem(RELOADED_KEY, '1')
+  } catch {
+    /* private mode: treat as already tried rather than looping */
+  }
+  if (already) return
+  e.preventDefault()
+  window.location.reload()
+})
+
+const root = document.getElementById('root')
+if (!root) throw new Error('#root missing from vela.html')
+
+createRoot(root).render(
+  <StrictMode>
+    <VelaApp />
+  </StrictMode>,
+)

@@ -11549,6 +11549,40 @@ Return exactly one element per input key, in the same order. Never merge, split,
     });
   }
 
+  // ── vela.cbedge.net gate ───────────────────────────────────────────────────
+  //
+  // /api/vela/verify is what deploy/vela/nginx.conf calls with `auth_request`
+  // BEFORE it serves the standalone Vela build (cbedge-v3 `npm run build:vela`).
+  // Same contract as /api/voltick/verify above, for the same reason: a gate
+  // inside the SPA has already shipped the whole chart app before it decides.
+  //   200 serve · 401 no session · 403 no grant · 503 our DB, not their access
+  //
+  // PHASE 1 (2026-10-04): the SAME list as the Voltick sandbox. Owner always,
+  // plus anyone with a live voltick_access row — libDb.canOpenVoltick, reused
+  // on purpose so there is one grant list to manage, not two. The chart reads
+  // CB Edge's own feed in this phase, so it stays on that short list.
+  //
+  // PHASE 2 widens this to Voltick members signed in through the Voltick
+  // hand-off, and Vela's data moves to Voltick's feed BEFORE that happens.
+  // Do not open this route to a wider audience while Vela still reads CB Edge
+  // data (pages/vela/cbedgeProvider.ts).
+  {
+    register('/api/vela/verify', {
+      auth: 'user', methods: ['GET', 'HEAD'],
+      async handler(req, res, ctx, verdict) {
+        try {
+          const userId = verdict && verdict.userId;
+          if (!userId) { send(res, 401, { ok: false, reason: 'no-session' }); return; }
+          const allowed = await libDb.canOpenVoltick(userId);
+          if (!allowed) { send(res, 403, { ok: false, reason: 'no-vela-access' }); return; }
+          send(res, 200, { ok: true }, { 'Cache-Control': 'no-store' });
+        } catch (err) {
+          send(res, 503, { ok: false, reason: 'verify-unavailable', detail: String(err) });
+        }
+      },
+    });
+  }
+
   // /api/admin/discord-connections — linked-Discord accounts. discordAvatarUrl
   // inlined from lib/discord.ts.
   {

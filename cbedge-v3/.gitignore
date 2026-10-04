@@ -1,5 +1,7 @@
 node_modules
 dist
+# the standalone Vela build (npm run build:vela) — built inside deploy/vela/Dockerfile
+dist-vela
 
 # NOT committed, on purpose — app-vite does the same.
 #

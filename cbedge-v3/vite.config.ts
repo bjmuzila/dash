@@ -11,6 +11,12 @@ import { fileURLToPath, URL } from 'node:url'
 //  1. `base: '/v3/'` — v3 is served ALONGSIDE the v2 SPA, not instead of it.
 //     v2 keeps /app/*, v3 takes /v3/*. Flip the default only when v3 is ready.
 //
+//     The ONE exception is `--mode vela` (`npm run build:vela`): the standalone
+//     Vela build for vela.cbedge.net. Same source, a different entry
+//     (vela.html → src/vela/main.tsx), served at the root of its own host, so
+//     base '/' and its own outDir (dist-vela/) — the v3 build in dist/ is never
+//     touched by it. See src/vela/VelaApp.tsx.
+//
 //  2. Manual chunking is deliberately minimal. React lands in its own chunk so
 //     it stays cached across every deploy; everything else code-splits by route
 //     via lazy(). Do NOT add vendor grouping "for tidiness" — a shared vendor
@@ -23,9 +29,11 @@ export default defineConfig(({ mode }) => {
   // live server-v2 without CORS or a local backend. In prod it is same-origin.
   const backend = env.VITE_BACKEND_ORIGIN || 'http://127.0.0.1:3000'
   const wsBackend = backend.replace(/^http/, 'ws')
+  // vela.cbedge.net — see rule 1 above.
+  const vela = mode === 'vela'
 
   return {
-    base: '/v3/',
+    base: vela ? '/' : '/v3/',
     plugins: [react(), tailwind()],
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
@@ -63,6 +71,9 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       target: 'es2022',
+      // Vela's own folder, so a vela build can never overwrite the dist/ the
+      // root Dockerfile copies to public/v3.
+      outDir: vela ? 'dist-vela' : 'dist',
       // ── SOURCE MAPS ARE OFF BY DEFAULT ──────────────────────────────────
       // They cost nothing at RUNTIME — a browser fetches a .map only when
       // devtools is open — but the Dockerfile copies dist/ to public/v3 and
@@ -84,6 +95,9 @@ export default defineConfig(({ mode }) => {
       cssCodeSplit: true,
       reportCompressedSize: false, // speeds the build; check-budgets.mjs measures for real
       rollupOptions: {
+        // The vela build has a different HTML entry; the v3 build keeps Vite's
+        // default (index.html), so `input` is left unset for it.
+        ...(vela ? { input: fileURLToPath(new URL('./vela.html', import.meta.url)) } : {}),
         output: {
           manualChunks(id) {
             // Match precisely. `node_modules/react` also matches react-router,

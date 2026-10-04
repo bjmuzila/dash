@@ -6,6 +6,7 @@
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
+import { onPhoneRoute } from '@/pages/vela/nav'
 
 let ws: VelaWorkspace | null = null
 let registered = false
@@ -80,7 +81,7 @@ export function registerSetups(): void {
     order: 6,
     mobile: 'menu',
     run: () => {
-      const phone = window.location.pathname.startsWith('/v3/m/')
+      const phone = onPhoneRoute()
       setStripShown(!stripShown(phone))
     },
   })

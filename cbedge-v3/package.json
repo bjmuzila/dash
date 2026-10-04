@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && node scripts/check-theme.mjs && vite build && node scripts/check-budgets.mjs",
     "build:fast": "vite build",
+    "build:vela": "vite build --mode vela",
     "budgets": "node scripts/check-budgets.mjs",
     "budgets:ratchet": "node scripts/check-budgets.mjs --ratchet",
     "check:theme": "node scripts/check-theme.mjs",

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en" class="cb">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Vela</title>
+    <!-- ───────────────────────────────────────────────────────────────────
+         vela.cbedge.net — the STANDALONE Vela build (`npm run build:vela`).
+
+         Same source as cbedge.net/v3/vela: src/vela/main.tsx mounts
+         pages/Vela.tsx with none of the v3 shell around it. See the header of
+         src/vela/VelaApp.tsx for what is and is not here, and
+         deploy/vela/nginx.conf for the gate in front of it.
+
+         Built with base '/', so this host serves the app at its root and the
+         favicon path carries no /v3 prefix.
+         ─────────────────────────────────────────────────────────────── -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- First-paint pair — the same two values index.html carries, which
+         scripts/check-budgets.mjs keeps equal to tokens.css. Vela pins the
+         Voltick palette on mount; these only cover the frames before it. -->
+    <style>
+      :root { --cb-bg: #07080b; --cb-fg: #ffffff; }
+      html, body { margin: 0; height: 100%; background: var(--cb-bg); color: var(--cb-fg); }
+      body { font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+      #root { min-height: 100%; display: flex; flex-direction: column; }
+      .cb-viewport { height: 100vh; height: 100dvh; }
+    </style>
+
+    <!-- The boot record src/data/socket.ts expects (src/boot/types.ts).
+
+         index.html opens the WebSocket here, before the bundle, because the
+         board is socket-first. Vela is not: everything but the ES / NQ futures
+         tail is HTTP. So this is the EMPTY record — no socket, no cache read —
+         and startSocket() opens its own connection the normal way. It has to
+         exist, because socket.ts reads it unconditionally. -->
+    <script>
+      window.__CB_BOOT__ = {
+        t0: performance.now(), navStart: 0, frames: [], sink: null, ws: null,
+        status: 'connecting', firstFrameAt: null, firstPaintAt: null, cache: null, error: null
+      };
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/vela/main.tsx"></script>
+  </body>
+</html>

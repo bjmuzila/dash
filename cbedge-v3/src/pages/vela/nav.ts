@@ -5,8 +5,19 @@
 
 const PHONE_TWIN: Record<string, string> = { '/whales': '/m/whales', '/vela': '/m/vela', '/replay': '/m/replay' }
 
+/**
+ * Is Vela on its phone route right now? Two hosts serve this page:
+ *   cbedge.net/v3/m/vela   — the v3 app's phone build
+ *   vela.cbedge.net/m      — the standalone Vela build (src/vela/VelaApp.tsx)
+ * Read the path through this one function so the second host is never missed.
+ */
+export function onPhoneRoute(): boolean {
+  const p = window.location.pathname
+  return p.startsWith('/v3/m/') || p === '/m' || p.startsWith('/m/')
+}
+
 export function goTo(path: string, query: Record<string, string | number | null | undefined> = {}): void {
-  const onPhone = window.location.pathname.startsWith('/v3/m/')
+  const onPhone = onPhoneRoute()
   const base = onPhone ? (PHONE_TWIN[path] ?? path) : path
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(query)) if (v != null && v !== '') sp.set(k, String(v))

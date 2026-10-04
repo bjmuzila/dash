@@ -26074,3 +26074,21 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - Headless run on a Sunday against a mock with the real route's expiry rules: the rail shows the Monday expiry's columns recorded after Friday's close (31 strikes, 4 tagged).
   - Switching Position to Left moves the rail and the chart box. Removing the study gives the chart its full width back.
   - The replay, Indicators, Level Alerts, theme and Level Log runs pass with no errors.
+
+## 2026-10-04 - vela.cbedge.net: Vela on its own host (phase 1)
+
+- **What:** the Vela chart workspace now builds a second time as a standalone app for `vela.cbedge.net`. It is the same `cbedge-v3` source as `cbedge.net/v3/vela`, not a copy: `/` is the desktop workspace and `/m` the phone one. There is no CB Edge rail, toolbar, notes or alerts around it.
+- **Access (phase 1):** nginx asks `/api/vela/verify` before it serves anything. The owner gets in, plus anyone on the voltick.cbedge.net grant list (`voltick_access`, the same list). Everyone else gets a sign-in page (`deploy/vela/denied.html`) that sends them to the cbedge.net sign-in and back.
+- **Data:** still CB Edge's own feed in this phase, which is why access stays on that short list. Phase 2 moves Vela to Voltick's feed and adds the Voltick sign-in handoff before any Voltick member gets in.
+- **Files:**
+  - `cbedge-v3/vela.html`, `cbedge-v3/src/vela/main.tsx`, `cbedge-v3/src/vela/VelaApp.tsx` (new): the standalone entry.
+  - `cbedge-v3/vite.config.ts`: `--mode vela` builds with base `/` into `dist-vela/` from `vela.html`. The normal v3 build is unchanged.
+  - `cbedge-v3/package.json`: `build:vela` script. `cbedge-v3/.gitignore` and the root `.dockerignore`: `dist-vela`.
+  - `cbedge-v3/src/pages/vela/nav.ts`: `onPhoneRoute()` recognises both `/v3/m/...` and the standalone `/m`. `setups/setups.ts` uses it.
+  - `server-v2/api-router.js`: `/api/vela/verify` (200 / 401 / 403 / 503, same contract as `/api/voltick/verify`).
+  - `deploy/vela/Dockerfile`, `deploy/vela/nginx.conf`, `deploy/vela/denied.html` (new); `docker-compose.yml`: `vela` service on `127.0.0.1:8091`.
+- **One-time VPS setup:** add `vela.cbedge.net → http://127.0.0.1:8091` to `/etc/cloudflared/config.yml` above the catch-all, run `cloudflared tunnel route dns <tunnel> vela.cbedge.net`, then restart cloudflared.
+- **Checks:**
+  - `tsc` shows only the 5 existing errors. `check:theme` passes. `vite build` (v3) and `build:vela` are both OK.
+  - Headless run of the standalone build: the desktop and phone workspaces mount, and a touch phone is sent to `/m`.
+  - nginx with a stub backend: no session or no grant gets the sign-in page; owner gets the app; assets are gated too; `/api` passes through.

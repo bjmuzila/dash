@@ -428,6 +428,43 @@ services:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8088:8088"
 
+  # vela.cbedge.net — the standalone Vela chart workspace. Same cbedge-v3 source
+  # as cbedge.net/v3/vela, built in its `vela` mode (vela.html → src/vela/main.tsx,
+  # base '/') by deploy/vela/Dockerfile: node build stage → nginx. NOT a copy of
+  # cbedge-v3 — there is no vela-vite/ folder, on purpose (see voltick-v3 above
+  # for what a copy costs).
+  #
+  # ACCESS IS AN nginx auth_request GATE (deploy/vela/nginx.conf →
+  # /api/vela/verify in server-v2/api-router.js), the same mechanism
+  # voltick.cbedge.net uses. Phase 1: owner + the voltick_access grant list. The
+  # chart still reads CB Edge's own feed, so it must stay on that short list
+  # until Vela reads Voltick's feed (phase 2).
+  #
+  # /api /proxy /ws are proxied to the dashboard container (dashboard:3002).
+  #
+  # Context is the repo root (like household / daily) so the Dockerfile and
+  # nginx.conf live in deploy/vela/; the Dockerfile copies only cbedge-v3/ and
+  # that folder.
+  #
+  # Reached only via the Cloudflare Tunnel — add to /etc/cloudflared/config.yml
+  # ABOVE the catch-all 404 rule:
+  #     - hostname: vela.cbedge.net
+  #       service: http://127.0.0.1:8091
+  # then `cloudflared tunnel route dns <tunnel> vela.cbedge.net` and
+  # `systemctl restart cloudflared`.
+  vela:
+    build:
+      context: .
+      dockerfile: deploy/vela/Dockerfile
+    image: vela-web:latest
+    container_name: vela-web
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8091:8091"
+
   # sites.cbedge.net — password-protected client demo sites (static, nginx).
   #
   # Managed from owner.cbedge.net → Client Sites: create a site, upload its
