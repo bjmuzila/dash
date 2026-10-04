@@ -2,7 +2,11 @@
 // THE SESSION STATS STRIP: one line above the chart for the active chart's
 // symbol, and the numbers a trader checks before every entry.
 //
-//   SPX 6,732.94 +0.21%   price, and the change from the prior close
+//   SPX 6,732.94 +0.21%   price, and the change from the prior close: PHONE ONLY.
+//                         On the desktop the top bar's ticker chip
+//                         (symbolPicker.ts) shows them, so the strip leaves them
+//                         out (Brandon, 2026-10-04); the price is still read
+//                         for the distances and the EM used.
 //   ON 6,705–6,731 (26)   the overnight range (futures from 18:00, stocks from
 //                         04:00; none for an index)
 //   IB 17.5 · 0.8× avg    today's initial balance (09:30–10:30) against its
@@ -17,9 +21,10 @@
 //   EM ±41.2 · 62% used   the day's frozen expected move and how much of it the
 //                         move from the prior close has used
 //
-// Refreshed every 30 s, the price on every tick of the active chart. The Session
-// stats button in the chart toolbar hides or shows it (off by default on the
-// phone). It hides itself during a bar replay: its numbers are live ones.
+// Refreshed every 30 s, the price on every tick of the active chart. Workspace →
+// Session stats strip (desktop) or ⋮ → Session stats (phone) hides or shows it
+// (off by default on the phone). It hides itself during a bar replay: its
+// numbers are live ones.
 //
 // Voltick's type: every number in mono, every label a mono uppercase caption in
 // Paper Quiet (never a dimmed Paper), green / red on the change figures only.
@@ -118,7 +123,7 @@ function Item({ label, mark, tone, children, title }: { label: string; mark?: st
   )
 }
 
-export default function SessionStrip({ ws, onHide }: { ws: VelaWorkspace; onHide: () => void }) {
+export default function SessionStrip({ ws, onHide, showTicker = true }: { ws: VelaWorkspace; onHide: () => void; showTicker?: boolean }) {
   const replay = useSyncExternalStore(replayStore.subscribe, replayStore.get)
   const [sym, setSym] = useState(() => bare(ws.chart.market.symbol))
   const [stats, setStats] = useState<Stats | null>(null)
@@ -180,11 +185,13 @@ export default function SessionStrip({ ws, onHide }: { ws: VelaWorkspace; onHide
 
   return (
     <div className="cb-strip flex min-w-0 shrink-0 items-center gap-4 overflow-x-auto border-b border-line bg-surface2 px-3 py-1 text-xs" role="status" aria-label="Session stats">
-      <span className="flex shrink-0 items-baseline gap-1.5">
-        <span className="font-black tracking-wide text-fg">{sym}</span>
-        <span className="tabular font-mono text-2xs font-extrabold text-fg">{px != null ? num(px) : '·'}</span>
-        {chg != null && <span className={`tabular font-mono text-2xs font-extrabold ${toneCls(chg)}`}>{sgn(chg, 2)}%</span>}
-      </span>
+      {showTicker && (
+        <span className="flex shrink-0 items-baseline gap-1.5">
+          <span className="font-black tracking-wide text-fg">{sym}</span>
+          <span className="tabular font-mono text-2xs font-extrabold text-fg">{px != null ? num(px) : '·'}</span>
+          {chg != null && <span className={`tabular font-mono text-2xs font-extrabold ${toneCls(chg)}`}>{sgn(chg, 2)}%</span>}
+        </span>
+      )}
       {!s ? (
         <span className="text-2xs text-faint">Reading the session…</span>
       ) : (
@@ -224,7 +231,7 @@ export default function SessionStrip({ ws, onHide }: { ws: VelaWorkspace; onHide
           )}
         </>
       )}
-      <button type="button" onClick={onHide} className="cb-vt-x ml-auto shrink-0 cursor-pointer px-1 text-2xs text-fg" title="Hide the session stats (the toolbar's Session stats button brings them back)" aria-label="Hide session stats">
+      <button type="button" onClick={onHide} className="cb-vt-x ml-auto shrink-0 cursor-pointer px-1 text-2xs text-fg" title={showTicker ? 'Hide the session stats (⋮ → Session stats brings them back)' : 'Hide the session stats (Workspace → Session stats strip brings them back)'} aria-label="Hide session stats">
         ✕
       </button>
     </div>

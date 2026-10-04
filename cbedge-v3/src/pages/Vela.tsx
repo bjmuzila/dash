@@ -340,7 +340,8 @@ function StripHost({ ws, phone }: { ws: VelaWorkspace | null; phone: boolean }) 
   if (!ws || !shown) return null
   return (
     <Suspense fallback={null}>
-      <SessionStrip ws={ws} onHide={() => setStripShown(false)} />
+      {/* the ticker, price and change only on the phone: the desktop bar's chip shows them */}
+      <SessionStrip ws={ws} onHide={() => setStripShown(false)} showTicker={phone} />
     </Suspense>
   )
 }
