@@ -109,7 +109,15 @@ export interface ResolvedSym {
 
 const FUTURES: Record<string, 'ES' | 'NQ'> = { ES: 'ES', '/ES': 'ES', ES1: 'ES', NQ: 'NQ', '/NQ': 'NQ', NQ1: 'NQ' }
 const INDEXES = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP'])
-const ETFS = new Set(['SPY', 'QQQ', 'IWM', 'DIA', 'TLT', 'GLD', 'SLV', 'XLF', 'XLE', 'XLK', 'SMH', 'HYG', 'USO'])
+// The funds: this app's original thirteen plus the scanner's fund list
+// (data/scannerTickers.ts ETF_SYMBOLS), inlined so the page chunk does not carry
+// the whole scanner universe. Without them IBIT, SOXL, TQQQ… were typed 'stock'
+// and landed under Stocks in the ticker picker.
+const ETFS = new Set([
+  'SPY', 'QQQ', 'IWM', 'DIA', 'TLT', 'GLD', 'SLV', 'XLF', 'XLE', 'XLK', 'SMH', 'HYG', 'USO',
+  'IBIT', 'ETHA', 'SOXL', 'TQQQ', 'TSLL', 'SQQQ', 'SOXS', 'VXX', 'IEF', 'BNO', 'FXI', 'DRAM', 'EWZ',
+  'EEM', 'LQD', 'EFA', 'GDX', 'KWEB', 'EWY', 'ARKK', 'IGV', 'SOXX', 'XLC', 'XLY', 'XLV', 'SKHY',
+])
 
 const DESCRIPTIONS: Record<string, string> = {
   SPX: 'S&P 500 Index',
@@ -159,9 +167,21 @@ export function resolveSym(ticker: string): ResolvedSym {
  */
 export const VENUE = 'VOLTICK.IO'
 
-function descriptor(key: string): SymbolDescriptor {
+/** Every name the ticker picker shows (symbolNames.ts), loaded on first use. */
+let namesP: Promise<Readonly<Record<string, string>>> | null = null
+function symbolNames(): Promise<Readonly<Record<string, string>>> {
+  return (namesP ??= import('./symbolNames').then(
+    (m) => m.SYMBOL_NAMES,
+    () => {
+      namesP = null
+      return DESCRIPTIONS
+    },
+  ))
+}
+
+function descriptor(key: string, names: Readonly<Record<string, string>>): SymbolDescriptor {
   const kind = kindOf(key)
-  return { ticker: key, description: DESCRIPTIONS[key], type: kind, prefix: VENUE }
+  return { ticker: key, description: names[key] ?? DESCRIPTIONS[key], type: kind, prefix: VENUE }
 }
 
 // ── ET time helpers ──────────────────────────────────────────────────────────
@@ -716,10 +736,11 @@ export class CbEdgeProvider implements DataProvider {
   async listSymbols(): Promise<SymbolDescriptor[]> {
     const seen = new Set<string>()
     const out: SymbolDescriptor[] = []
+    const names = await symbolNames()
     const add = (key: string) => {
       if (seen.has(key) || !TICKER_RE.test(key)) return
       seen.add(key)
-      out.push(descriptor(key))
+      out.push(descriptor(key, names))
     }
     for (const s of SYMBOLS) add(s.key)
     add('ES')
@@ -733,9 +754,10 @@ export class CbEdgeProvider implements DataProvider {
   async getSymbolInfo(ticker: string): Promise<SymbolInfo | undefined> {
     const sym = resolveSym(ticker)
     const fut = sym.kind === 'futures'
+    const names = await symbolNames()
     return {
       ticker: sym.key,
-      description: DESCRIPTIONS[sym.key] ?? sym.key,
+      description: names[sym.key] ?? DESCRIPTIONS[sym.key] ?? sym.key,
       type: sym.kind,
       timezone: 'America/New_York',
       session: '0930-1600',

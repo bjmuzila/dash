@@ -1,7 +1,11 @@
-// The Setups button: named chart setups, one click to load. The page chunk
-// carries only the button; the menu (setupsMenu.ts) loads on the first click.
-// The Stats button beside it shows / hides the session stats strip above the
+// The Setups action: named chart setups, one click to load. The page chunk
+// carries only the action; the menu (setupsMenu.ts) loads on the first click.
+// The Stats action beside it shows / hides the session stats strip above the
 // chart (SessionStrip.tsx).
+//
+// On the desktop both live in the Workspace menu now (workspaceMenu.ts: Layout →
+// Setups, Panels → Session stats strip); the desktop bar no longer lists the
+// right-hand actions. The registrations stay for the phone's ⋮ rows.
 
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'

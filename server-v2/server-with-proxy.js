@@ -3204,7 +3204,8 @@ async function main() {
       // ── Replay: metadata (which symbols/dates are replay-able) ───────────
       //   GET /proxy/strike-growth/replay-meta[?symbol=MSFT]
       // symbols = distinct recorded roots within the strike_growth retention
-      // window; dates = distinct session dates for ?symbol (newest first).
+      // window plus every root in chain_replay_archive; dates = distinct session
+      // dates for ?symbol (newest first), live window ∪ archive.
       if (pathname === '/proxy/strike-growth/replay-meta' && req.method === 'GET') {
         (async () => {
           try {
@@ -3225,17 +3226,38 @@ async function main() {
             // Cached because neither answer can change more than once a day: the
             // symbol roster is fixed by the recorder's watchlist and a new date
             // appears at the first write of a session.
-            const symsQ = await _sgReplayMeta('symbols', () => p.query(
-              `SELECT DISTINCT symbol FROM strike_growth
-               WHERE date >= CURRENT_DATE - 7
-               ORDER BY symbol ASC`
+            //
+            // LONG HISTORY: strike_growth only holds ~5 sessions, so older days
+            // come from chain_replay_archive (state/chain-replay-archive.js),
+            // which the nightly retention job fills before it prunes. UNION
+            // dedups the overlap. If the archive table is unavailable this
+            // degrades to the live window alone.
+            const archive = require('./state/chain-replay-archive');
+            const hasArchive = await archive.ensureArchiveSchema(p);
+            const symsQ = await _sgReplayMeta(`symbols:${hasArchive ? 'a' : 'l'}`, () => p.query(
+              hasArchive
+                ? `SELECT symbol FROM (
+                     SELECT DISTINCT symbol FROM strike_growth WHERE date >= CURRENT_DATE - 7
+                     UNION
+                     SELECT DISTINCT symbol FROM chain_replay_archive
+                   ) s ORDER BY symbol ASC`
+                : `SELECT DISTINCT symbol FROM strike_growth
+                   WHERE date >= CURRENT_DATE - 7
+                   ORDER BY symbol ASC`
             ));
             let dates = [];
             if (symbol) {
-              const dQ = await _sgReplayMeta(`dates:${symbol}`, () => p.query(
-                `SELECT DISTINCT date FROM strike_growth
-                 WHERE symbol = $1 AND date >= CURRENT_DATE - 7
-                 ORDER BY date DESC`,
+              const dQ = await _sgReplayMeta(`dates:${symbol}:${hasArchive ? 'a' : 'l'}`, () => p.query(
+                hasArchive
+                  ? `SELECT date FROM (
+                       SELECT DISTINCT date FROM strike_growth
+                        WHERE symbol = $1 AND date >= CURRENT_DATE - 7
+                       UNION
+                       SELECT date FROM chain_replay_archive WHERE symbol = $1
+                     ) d ORDER BY date DESC`
+                  : `SELECT DISTINCT date FROM strike_growth
+                     WHERE symbol = $1 AND date >= CURRENT_DATE - 7
+                     ORDER BY date DESC`,
                 [symbol]
               ));
               dates = dQ.rows.map((r) => r.date);
@@ -3320,44 +3342,21 @@ async function main() {
             if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
             const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
             const date = (u.searchParams.get('date') || today).trim();
-            // One row per (ts, expiry, strike) — that's the table's PK grain, so
-            // the aggregates only ever fold a single row. Kept as aggregates to
-            // stay identical in shape to /frames above if the PK ever widens.
-            const { rows } = await p.query(
-              `SELECT ts, expiry, strike, MAX(spot) AS spot,
-                      SUM(gex_now + gex_open) AS net, SUM(gex_now) AS vol
-                 FROM strike_growth
-                WHERE date = $1 AND symbol = $2
-                GROUP BY ts, expiry, strike
-                ORDER BY ts ASC, expiry ASC, strike ASC`,
-              [date, symbol]
-            );
-            const expIdx = new Map();   // expiry -> index into `expiries`
-            const expiries = [];
-            const byTs = new Map();
-            for (const r of rows) {
-              const exp = String(r.expiry ?? '');
-              if (!exp) continue;
-              let ei = expIdx.get(exp);
-              if (ei === undefined) { ei = expiries.length; expIdx.set(exp, ei); expiries.push(exp); }
-              const k = new Date(r.ts).toISOString();
-              let f = byTs.get(k);
-              if (!f) { f = { ts: k, spot: Number(r.spot) || 0, cells: [] }; byTs.set(k, f); }
-              // spot is per-sweep, so every row in a frame carries the same one;
-              // take the first non-zero rather than trusting row order.
-              if (!(f.spot > 0)) f.spot = Number(r.spot) || 0;
-              f.cells.push([ei, Number(r.strike), Number(r.net) || 0, Number(r.vol) || 0]);
+            // SQL + payload builder live in state/chain-replay-archive.js, shared
+            // with the nightly archiver so a live day and an archived day are
+            // the same shape. Raw strike_growth first (today + the ~5-session
+            // window); if it no longer holds the date, the archived copy.
+            const archive = require('./state/chain-replay-archive');
+            const { rows } = await p.query(archive.FRAMES_BY_EXPIRY_SQL, [date, symbol]);
+            if (!rows.length) {
+              const old = await archive.readArchivedDay(p, date, symbol);
+              if (old && Array.isArray(old.frames) && old.frames.length) {
+                sendJson(res, 200, { ok: true, symbol, date, expiries: old.expiries || [], frames: old.frames, source: 'archive' });
+                return;
+              }
             }
-            // Expiries in date order, with the frame cells re-pointed at the
-            // sorted index — the grid renders columns left-to-right by date and
-            // should not have to sort a parallel array to do it.
-            const sorted = [...expiries].sort();
-            const remap = new Map(expiries.map((e, i) => [i, sorted.indexOf(e)]));
-            const frames = Array.from(byTs.values()).map((f) => ({
-              ts: f.ts, spot: f.spot,
-              cells: f.cells.map(([ei, k, net, vol]) => [remap.get(ei), k, net, vol]),
-            }));
-            sendJson(res, 200, { ok: true, symbol, date, expiries: sorted, frames });
+            const { expiries, frames } = archive.buildFramesByExpiry(rows);
+            sendJson(res, 200, { ok: true, symbol, date, expiries, frames });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;

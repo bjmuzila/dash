@@ -34,6 +34,10 @@
 // See RETENTION.scanner_keep_symbols for why retention reads the FILE and not
 // the live roster.
 const { MAIN: SCANNER_MAIN } = require('../scanner-tickers');
+// Options Chain replay long-term store. Every finished strike_growth session is
+// archived here (compact, gzipped) BEFORE strike_growth is pruned, so the replay
+// keeps every day while the raw table stays at its 5-day window.
+const chainReplayArchive = require('./chain-replay-archive');
 
 const STATEMENT_TIMEOUT_MS = Number(process.env.RETENTION_STATEMENT_TIMEOUT_MS || 600_000);
 
@@ -63,6 +67,16 @@ const RETENTION = {
   // The daily engine (test=strike-gex-move) has no such problem: it reads
   // eod_strike_gex, which keeps 400 sessions and is pruned by its own recorder.
   strike_growth:              Number(process.env.RETENTION_STRIKE_GROWTH_DAYS || 5),
+  // The Options Chain replay outlives the 5 days above via chain_replay_archive
+  // (state/chain-replay-archive.js): each finished session is archived before
+  // its raw rows go. A (date, symbol) that has NOT been archived yet is held
+  // past the cutoff for up to this many extra days so a failed archive night
+  // gets retried instead of losing the day — then pruned anyway, so a broken
+  // archiver can never grow strike_growth without bound.
+  strike_growth_unarchived_grace_days: Number(process.env.RETENTION_STRIKE_GROWTH_UNARCHIVED_GRACE_DAYS || 7),
+  // chain_replay_archive itself: 0 = keep forever (the default — Brandon,
+  // 2026-10-04). ~15–22MB a session; set a day count here to cap it.
+  chain_replay_archive_days:  Number(process.env.RETENTION_CHAIN_REPLAY_ARCHIVE_DAYS || 0),
   // 5 days. The live panels that read this table — the ES-Candles heatmap, the
   // GEX bubble trail, the strike rail — never look back further than a week,
   // and the table is the single largest object in the database (~19GB / ~20M
@@ -307,7 +321,7 @@ async function pruneGexHistoryByDate(p) {
 /** Runs every DELETE, logging (and swallowing) per-table errors so one bad
  * table (e.g. doesn't exist yet, or a column name drifted) never blocks the
  * rest of the prune. Returns a { table: rowCount|'error' } summary. */
-async function runDeletes(p) {
+async function runDeletes(p, { archiveReady = false } = {}) {
   const results = {};
   const run = async (table, sql, params = []) => {
     try {
@@ -319,8 +333,22 @@ async function runDeletes(p) {
     }
   };
 
-  await run('strike_growth',
-    `DELETE FROM strike_growth WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.strike_growth} days'`);
+  // strike_growth: past the cutoff AND already in chain_replay_archive (so the
+  // Options Chain replay keeps the day), or past cutoff + grace regardless.
+  // If the archive table is unavailable this falls back to the plain cutoff —
+  // disk safety beats replay history.
+  if (archiveReady) {
+    await run('strike_growth',
+      `DELETE FROM strike_growth sg
+        WHERE sg.date < CURRENT_DATE - ($1::int)
+          AND ( sg.date < CURRENT_DATE - ($2::int)
+                OR EXISTS (SELECT 1 FROM chain_replay_archive a
+                            WHERE a.date = sg.date AND a.symbol = sg.symbol) )`,
+      [RETENTION.strike_growth, RETENTION.strike_growth + RETENTION.strike_growth_unarchived_grace_days]);
+  } else {
+    await run('strike_growth',
+      `DELETE FROM strike_growth WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.strike_growth} days'`);
+  }
 
   await run('greek_snapshots',
     `DELETE FROM greek_snapshots WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.greek_snapshots} days'`);
@@ -645,14 +673,40 @@ async function writeDbMapSnapshot(p) {
   return { written, skipped, failed };
 }
 
-async function runCleanup({ force = false } = {}) {
+// In-flight guard. The tick fires every CHECK_INTERVAL_MS and lastRunYmd is only
+// set when a run FINISHES, so a run longer than one interval (the first archive
+// pass after deploy, or a slow prune) would otherwise start a second one on top.
+let running = null;
+
+async function runCleanup(opts = {}) {
+  if (running) return { ok: false, reason: 'already running' };
+  running = _runCleanup(opts);
+  try { return await running; } finally { running = null; }
+}
+
+async function _runCleanup({ force = false } = {}) {
   const p = getPool();
   if (!p) return { ok: false, reason: 'no DB pool' };
   const { ymd } = nowEtParts();
   if (!force && lastRunYmd === ymd) return { ok: false, reason: 'already ran today' };
 
   console.log(`[retention-cleanup] starting prune for ${ymd}...`);
-  const deleted = await runDeletes(p);
+  // ARCHIVE FIRST, then prune. Every completed session (date < today ET) still
+  // in strike_growth is written to chain_replay_archive, so the delete below
+  // never takes a day the Options Chain replay has not kept.
+  let archive;
+  try {
+    archive = await chainReplayArchive.archivePending(p, ymd);
+  } catch (e) {
+    archive = { ready: false, errors: [e.message] };
+  }
+  try {
+    archive.pruned = await chainReplayArchive.pruneArchive(p, RETENTION.chain_replay_archive_days);
+  } catch (e) {
+    (archive.errors = archive.errors || []).push(`prune: ${e.message}`);
+  }
+  const deleted = await runDeletes(p, { archiveReady: !!archive.ready });
+  deleted._chain_replay_archive = archive;
   await runVacuum(p);
   // AFTER the vacuum, so the row-age figures the owner page shows describe the
   // table as the prune left it, not as it was before.
@@ -712,7 +766,8 @@ function startRetentionCleanup() {
     + `${String(Math.floor(WINDOW_START_MINS / 60)).padStart(2, '0')}:${String(WINDOW_START_MINS % 60).padStart(2, '0')}`
     + `-${String(Math.floor(WINDOW_END_MINS / 60)).padStart(2, '0')}:${String(WINDOW_END_MINS % 60).padStart(2, '0')} ET, `
     + `checked every ${CHECK_INTERVAL_MS / 60_000}min; gex ${RETENTION.option_strike_gex_history}d `
-    + `(${RETENTION.gex_history_fullres_days}d full-res), strike_growth ${RETENTION.strike_growth}d, `
+    + `(${RETENTION.gex_history_fullres_days}d full-res), strike_growth ${RETENTION.strike_growth}d `
+    + `(chain replay archive ${RETENTION.chain_replay_archive_days > 0 ? `${RETENTION.chain_replay_archive_days}d` : 'forever'}), `
     + `flow_prints ${RETENTION.flow_prints}d, etf_candles ${RETENTION.etf_candles_days}d; `
     + `statement_timeout ${STATEMENT_TIMEOUT_MS / 1000}s`);
 

@@ -23,6 +23,8 @@ import { bindReplay, openPicker, registerReplay } from '@/pages/vela/replay/repl
 import { bindStudyOrder } from '@/pages/vela/studyOrder'
 import { bindLevelAlerts, registerLevelAlerts } from '@/pages/vela/levels/levelAlertsEntry'
 import { bindSetups, onStrip, registerSetups, setStripShown, stripShown } from '@/pages/vela/setups/setups'
+import { bindSymbolPicker, registerSymbolPicker, SYMBOL_ACTION_ID } from '@/pages/vela/symbolPicker'
+import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@/pages/vela/workspaceMenu'
 import { replayActive } from '@/pages/vela/replay/clock'
 import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
 import '@/pages/vela/vela.css'
@@ -171,6 +173,23 @@ import '@/pages/vela/vela.css'
 //               1px top highlight; the lit pill for a panel's primary action.
 //   · copy      no em-dashes in anything a user reads.
 //
+// ── The top bar (desktop) ────────────────────────────────────────────────────
+// Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-topbar-r2.html). Vela's
+// `topbar` composition, DESKTOP_TOPBAR below, is the bar's whole contract:
+//
+//   [SPX 7,723.49 +0.71% ▾] | 5m ▾ | style | ⊞ | Indicators | Replay | ↶ ↷ … 🔔  Workspace ▾ | 📷
+//
+//   · left   our ticker chip (pages/vela/symbolPicker.ts) PINNED where Vela's own
+//            symbol button was; Vela's is left out, and so is its picker:
+//            letters typed on the chart open ours
+//   · right  Vela's alerts bell, the Workspace menu (pages/vela/workspaceMenu.ts:
+//            the panels, Scripts, Level / Script alerts, Setups, Session stats and
+//            Copy indicators, each a named row, the common ones on Alt keys), and
+//            the camera. Vela's panel buttons and the right-hand action flow are
+//            not listed, so the twelve icons that were here are gone
+//
+// The phone keeps Vela's default composition (its bottom bar and ⋮ rows).
+//
 // ── The camera copies ────────────────────────────────────────────────────────
 // Vela's screenshot button (and its phone row, and Ctrl/Cmd+Alt+S) puts the
 // PNG on the CLIPBOARD instead of downloading it — pages/vela/copyShot.ts. It
@@ -204,6 +223,13 @@ const pathSeededKey = (storageKey: string) => `${storageKey}-vtpath`
 const PHONE_LAYOUT = 'g3x1'
 /** Set once the phone document has been moved off the old single-chart pin. */
 const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
+/** The desktop top bar, left and right, in order (see "The top bar" above). An explicit
+ *  list is Vela's whole contract for that side, so chrome a future Vela adds stays off
+ *  until it is listed here. */
+const DESKTOP_TOPBAR = {
+  left: [SYMBOL_ACTION_ID, 'timeframes', 'style', 'layout', 'indicators', 'actions', 'undo-redo'],
+  right: ['alerts', WORKSPACE_ACTION_ID, 'screenshot'],
+}
 
 // Before any workspace exists: Vela reads its native-indicator and widget-action
 // registries when a workspace is BUILT, so both registrations go here.
@@ -219,6 +245,8 @@ registerWatchlist()
 registerReplay()
 registerLevelAlerts()
 registerSetups()
+registerSymbolPicker()
+registerWorkspaceMenu()
 // a replay reveals history bar by bar, like live bars: script alerts stay quiet meanwhile
 setAlertGate(() => !replayActive())
 
@@ -358,7 +386,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     const ws = new VelaWorkspace(host, {
       // Phone: three stacked charts and Vela's touch chrome, whatever the width
       // says — the tab can be opened on a laptop and should still be the phone.
-      ...(onPhone ? { layout: PHONE_LAYOUT, layoutMode: 'mobile' as const } : { layout: '1' }),
+      ...(onPhone ? { layout: PHONE_LAYOUT, layoutMode: 'mobile' as const } : { layout: '1', topbar: DESKTOP_TOPBAR }),
       symbol: `${PROVIDER_NAME}:${seedSymbol.current}`,
       timeframe: '5',
       live: true,
@@ -383,6 +411,9 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     const unbindShot = bindShotWorkspace(ws)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
     const unbindMarks = bindTimelineMarks(ws)
+    // the desktop bar's ticker chip + picker, and the Workspace menu's Alt keys
+    const unbindPicker = onPhone ? () => {} : bindSymbolPicker(ws)
+    const unbindWorkspace = onPhone ? () => {} : bindWorkspaceMenu(ws)
 
     // Chart → toolbar. `state:changed` is Vela's debounced "something worth
     // saving moved" signal, and it covers a symbol switch AND a different cell
@@ -415,6 +446,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       offActive()
       offCreated()
       unbindShot()
+      unbindPicker()
+      unbindWorkspace()
       unbindIndicators()
       unbindMarks()
       unbindReplay()

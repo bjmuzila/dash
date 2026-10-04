@@ -26120,3 +26120,58 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
   - A fixed Sunday 20:30 ET clock with bars dated Sunday shows `SPX MON 17:00` from Friday's post-close columns.
   - `tsc` shows only the 5 existing errors. `check:theme` passes and `vite build` is OK.
   - The watchlist, sections and pin, theme and studies runs pass with no errors.
+
+## 2026-10-04 - v3 Options Chain replay: every session is kept (compact daily archive)
+
+- **Before:** the Options Chain replay read only the raw `strike_growth` table. That table is pruned to 5 days every night (~320MB a session), and `/proxy/strike-growth/replay-meta` also capped the date list at 7 days. So you could only replay about the last week.
+- **Now:** every finished session is saved to a new `chain_replay_archive` table before the raw rows are pruned. There is one gzipped row per (date, ticker) holding the same frames-by-expiry payload the grid plays. Each session is kept forever. That is about 100–130KB per ticker-day, ~15–22MB a session for the full roster, or ~4–6GB a year.
+- `server-v2/state/chain-replay-archive.js` (new):
+  - The shared `FRAMES_BY_EXPIRY_SQL` and `buildFramesByExpiry()`, so a live day and an archived day have the same shape.
+  - Schema setup, `archivePending()` (completed days only, idempotent, resumable) and `readArchivedDay()`.
+  - An optional `pruneArchive()` cap.
+- `server-v2/state/retention-cleanup.js`:
+  - The nightly run archives first, then prunes.
+  - `strike_growth` now deletes only (date, ticker) pairs that are already archived. An unarchived pair is held up to `RETENTION_STRIKE_GROWTH_UNARCHIVED_GRACE_DAYS` (7) more days and then pruned anyway. If the archive table is unavailable, the plain 5-day cutoff applies.
+  - Added an in-flight guard so a long run can't start a second one on the next 10-minute tick.
+  - `RETENTION_CHAIN_REPLAY_ARCHIVE_DAYS` (0 = forever) caps the archive without a redeploy.
+- `server-v2/server-with-proxy.js` (proxy routes, approved first):
+  - `replay-meta` returns live-window dates plus archived dates.
+  - `frames-by-expiry` serves raw rows when they exist; otherwise it serves the archived day (`source: 'archive'`). The live payload is unchanged.
+- **No v3 client change:** the date dropdown just lists more days.
+- **Checks:**
+  - Ran against a local Postgres 16 with synthetic `strike_growth` days.
+  - The new builder output is identical to the old route logic, and gzip round-trips.
+  - With archiving disabled, only the day past cutoff+grace was pruned. With it on, all completed days were archived, today was not, and only archived days past 5 days were pruned.
+  - `replay-meta` lists the union, a pruned day is served from the archive with frames identical to before pruning, and the cap and in-flight guard both work.
+  - `node --check` passes on all three files.
+
+## 2026-10-04 - Vela top bar: live ticker chip + own picker, Workspace menu (12 icons → 3)
+
+- **Mockups:** `generated/2026-10-04-vela-topbar-r1.html` (options) and `-r2.html` (picked A1 + B3, merged).
+- `cbedge-v3/src/pages/Vela.tsx`: the desktop workspace now passes Vela's `topbar` composition (`DESKTOP_TOPBAR`):
+  - Left: our chip (in place of Vela's symbol button), timeframes, style, layout, Indicators, Replay, undo/redo.
+  - Right: Vela's alerts bell, **Workspace ▾**, the camera.
+  - Vela's panel buttons and the right-hand action flow are no longer listed. The phone (`/m`) keeps Vela's default bar.
+- `pages/vela/symbolPicker.ts` + `symbolPickerView.ts` (new):
+  - **The chip:** `SPX 7,723.49 +0.71% ▾`, priced from `/api/quotes-batch` through the watchlist quote cache every 15s. It is Vela's pinned action button, dressed by us.
+  - **The picker:** our own dropdown under the chip. Search; filters only for the kinds that exist (Indices · Futures · ETFs · Stocks); recent symbols; the open watchlist's first section pinned; every row has its name, a type tag, price and change.
+  - **Keys:** letters typed on the chart now open ours, not Vela's modal (a capture keydown on the workspace root). Digits still go to Vela's timeframe entry.
+  - The picker chunk loads lazily and is pre-fetched a few seconds after mount.
+- `pages/vela/workspaceMenu.ts` + `workspaceMenuView.ts` (new): one labelled menu with four groups.
+  - Panels: Watchlist, Data window, Object tree, and the Session stats switch.
+  - Scripts: Script editor, Strategy Tester.
+  - Alerts: Level alerts, Script alerts.
+  - Layout: Setups, Copy indicators to all charts.
+  - Shortcuts on Vela's keymap: Alt+W / D / O / E / B / A. They are listed in `?` help and fire only with chart focus.
+  - Setups and Copy indicators sit here because Vela's ⊞ Layout menu is a locked composite.
+- `pages/vela/symbolNames.ts` (new, lazy): real names for the scanner universe, so rows stop saying "stock" / "etf". Unknown tickers show no name rather than a guess.
+- `pages/vela/cbedgeProvider.ts`:
+  - The ETF set now includes the scanner's fund list (IBIT, SOXL, TQQQ… were typed `stock`).
+  - `listSymbols` / `getSymbolInfo` read the names table.
+- `pages/vela/copyIndicators.ts`: `copyToAll` is exported.
+- `copyIndicators.ts` / `setups/setups.ts`: comments updated. Their registrations stay for the phone's ⋮ rows.
+- `pages/vela/vela.css`: the chip, the Workspace button caret, both popovers (Voltick tokens only), and hiding the chip's duplicate stop on the phone-width touch chrome.
+- **Checks:**
+  - `tsc` is clean apart from the pre-existing `board/gexCandles/chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds.
+  - Headless run of the built page with mocked APIs: chip, picker (click, type-to-search, Tab filters, Enter), Workspace rows, Alt+W, the strip switch, `?` help listing, the narrow-desktop bottom bar, and `/m` unchanged.
+  - The Vela page chunk grew ~1.9KB brotli (59.8KB → 61.7KB in the vela build), so the route budget needs a look on `npm run check`.

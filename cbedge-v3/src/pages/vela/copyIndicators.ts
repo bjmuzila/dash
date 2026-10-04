@@ -5,7 +5,8 @@
 // Vela keeps an indicator ledger PER CHART and has no "apply to all": its Style
 // sync copies colours and chart type, never studies. So this is a contributed
 // widget action:
-//   · desktop  an icon button in the topbar's right cluster (beside the camera)
+//   · desktop  Workspace ▾ → Layout → Copy indicators to all charts (workspaceMenu.ts;
+//              the action is still registered, but the desktop bar no longer lists it)
 //   · phone    ⋮ → "Copy indicators to all charts"
 //
 // ── What "copy" means ────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ function copyScripts(cell: Cell, from: ReturnType<typeof scriptsOn>): number {
   return n
 }
 
-function copyToAll(ctx: WidgetContext): void {
+export function copyToAll(ctx: WidgetContext): void {
   const ws = current
   if (!ws) return
   const cells = ws.cells()
