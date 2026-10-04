@@ -96,8 +96,9 @@ import '@/pages/vela/vela.css'
 // HeatChart.jsx / trailruns.js: one bubble per level per candle (★ Volt,
 // ↘ Reversal, ◆ Coil, ↯ Surge) at the strike that level held, sized by how big
 // it was; and the Ribbon, the same rows as bands. The levels are the walls
-// migration renamed (Volt = CORE, Coil = the wall on CORE's side of spot,
-// Reversal = the other wall, Surge = the volume-only CORE), so they reach back
+// migration renamed (Volt = CORE, Coil = a wall on the Volt's side of spot
+// that is not the Volt, Reversal = the wall across spot, Surge = the
+// volume-only CORE), so they reach back
 // as far as walls_log does. Two studies on Vela's Indicators list
 // (Built-in → "Voltick Path…", "Voltick Path Ribbon…"); Voltick Path is put on
 // every chart once, exactly like CB Walls (`<key>-vtpath`), and the legend ✕
@@ -158,9 +159,13 @@ import '@/pages/vela/vela.css'
 //               replay dock is Volt Blue (Voltick's replay transport), the prior
 //               session is Sky, pre-market / overnight is Pre-market green, a
 //               measurement (IB, EM, TPO) is slate or Sky.
-//   · names     CB Edge levels read as Voltick's: CORE = ★ Volt, the wall on
-//               CORE's side of spot = ◆ Coil, the other wall = ↘ Reversal, the
-//               gamma flip = ⚡︎ Flip (data/voltickLevels.ts).
+//   · names     Voltick's levels, by Brandon's definition (2026-10-04):
+//               ★ Volt = CORE, the top net GEX; ◆ Coil = the 2nd top net GEX on
+//               the Volt's side of spot; ↘ Reversal = the top net GEX across
+//               spot; ⚡︎ Flip = the gamma flip. Off a live ladder:
+//               data/voltickLevels.ts vtFromLadder; off the recorded walls
+//               (a wall on the Volt's side that is not the Volt is the Coil, the
+//               wall across is the Reversal): levelLog/wallData.ts vtFromWalls.
 //   · type      Inter for words, JetBrains Mono for every number and every
 //               uppercase label; radii 6 / 10 / 12; the card shadow with its
 //               1px top highlight; the lit pill for a panel's primary action.

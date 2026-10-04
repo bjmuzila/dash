@@ -44,13 +44,19 @@ export const LIVE_POLL_MS = 60_000
 export type WallLevel = 'call_wall' | 'put_wall' | 'cb' | VtWallLevel
 
 /**
- * VOLTICK THEME (2026-09-28) — the SAME recorded levels, named the Voltick way.
- * Nothing new is recorded; the chart and the rail re-read the three rows:
+ * VOLTICK THEME — the SAME recorded levels, named the Voltick way. Nothing new
+ * is recorded; the chart and the rail re-read the three rows.
  *
- *   Volt ★      = CORE (cb)
- *   Coil ◆      = the wall on the SAME side of spot as the CORE
- *                 (CORE above spot → the call wall; below → the put wall)
- *   Reversal ↘  = the wall on the OTHER side
+ * The definition (Brandon, 2026-10-04):
+ *   Volt ★      = CORE (cb), the top net GEX
+ *   Coil ◆      = the 2nd top net GEX on the Volt's side of spot
+ *   Reversal ↘  = the top net GEX on the other side of spot
+ *
+ * Read off the walls (vtFromWalls): a wall on the Volt's side of spot that is
+ * NOT the Volt's own strike is the Coil (with the Volt above spot, the call
+ * wall); a wall on the other side is the Reversal (the put wall). When the CORE
+ * sits on its side's wall, walls_log holds no 2nd strike there, so that reading
+ * has no Coil rather than a second name for the Volt.
  *
  * Draw-only keys: no walls_log row ever carries one of these.
  */
@@ -73,8 +79,13 @@ export function coreSideOf(core: number | null | undefined, spot: number | null 
 
 /**
  * CB Edge levels → Voltick levels for one reading (see VtWallLevel).
- * With no spot the Coil / Reversal split cannot be made, so both walls are
- * left out rather than guessed.
+ *
+ * Each wall is judged by which side of spot IT is on, against the Volt's side:
+ *   · on the Volt's side, and not the Volt's strike  → the Coil
+ *   · on the other side                              → the Reversal
+ * The wall named for a side is preferred when both walls land on one side (the
+ * call wall above spot, the put wall below). With no spot the split cannot be
+ * made, so both walls are left out rather than guessed.
  */
 export function vtFromWalls(
   cb: number | null | undefined,
@@ -83,10 +94,19 @@ export function vtFromWalls(
   spot: number | null | undefined,
 ): Record<VtWallLevel, number | null> {
   const side = coreSideOf(cb, spot)
+  if (side == null || cb == null || spot == null) return { volt: cb ?? null, coil: null, reversal: null }
+  const up = side === 'call'
+  const onVoltSide = (w: number) => (w >= spot) === up
+  const named = up ? callWall : putWall // the wall that belongs to the Volt's side
+  const other = up ? putWall : callWall
+  const pick = (order: (number | null | undefined)[], ok: (w: number) => boolean): number | null => {
+    for (const w of order) if (w != null && Number.isFinite(w) && ok(w)) return w
+    return null
+  }
   return {
-    volt: cb ?? null,
-    coil: side === 'call' ? (callWall ?? null) : side === 'put' ? (putWall ?? null) : null,
-    reversal: side === 'call' ? (putWall ?? null) : side === 'put' ? (callWall ?? null) : null,
+    volt: cb,
+    coil: pick([named, other], (w) => onVoltSide(w) && w !== cb),
+    reversal: pick([other, named], (w) => !onVoltSide(w)),
   }
 }
 

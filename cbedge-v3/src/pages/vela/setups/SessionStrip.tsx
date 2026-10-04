@@ -8,10 +8,11 @@
 //   IB 17.5 · 0.8× avg    today's initial balance (09:30–10:30) against its
 //                         average over the last 20 sessions; "forming" until 10:30
 //   ★ VOLT +17.1 · ◆ COIL −7.9 · ↘ REV −32.9 · ⚡︎ FLIP +4.0
-//                         distance from price to each Voltick level (the walls
-//                         recorder's newest slot, renamed: CORE is the Volt, the
-//                         wall on its side of price the Coil, the other the
-//                         Reversal; the flip off the front chain), positive = above.
+//                         distance from price to each Voltick level (Level Alerts'
+//                         read: the Volt is CORE, the top net GEX; the Coil the 2nd
+//                         top on the Volt's side of price; the Reversal the top
+//                         across price; the flip, all off the front chain's live
+//                         ladder), positive = above.
 //                         Each mark in its reserved colour, the word in Paper.
 //   EM ±41.2 · 62% used   the day's frozen expected move and how much of it the
 //                         move from the prior close has used
@@ -204,8 +205,6 @@ export default function SessionStrip({ ws, onHide }: { ws: VelaWorkspace; onHide
             const lv = s.levels[v.key]
             const d = dist(lv)
             if (d == null) return null
-            // CORE sits on one of the walls, so the Coil is often the Volt's own strike: say it once
-            if (v.key === 'coil' && lv === s.levels.volt) return null
             return (
               <Item key={v.key} label={v.code} mark={v.mark} tone={v.tone} title={`${v.name} at ${num(lv!)}: distance from price`}>
                 {sgn(d)}

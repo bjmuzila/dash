@@ -7,10 +7,11 @@
 // way. This is the wall migration's own Voltick view, vtFromWalls() in
 // pages/levelLog/wallData.ts:
 //
-//   Volt ★      = CORE
-//   Coil ◆      = the wall on the SAME side of spot as the CORE
-//                 (CORE above spot → the call wall; below → the put wall)
-//   Reversal ↘  = the wall on the OTHER side
+//   Volt ★      = CORE, the top net GEX
+//   Coil ◆      = the 2nd top net GEX on the Volt's side of spot: off the walls,
+//                 a wall on that side that is NOT the Volt's strike (the call
+//                 wall, with the Volt above spot); none when CORE sits on it
+//   Reversal ↘  = the top net GEX across spot: the wall on the other side
 //   Surge ↯     = the CORE of the VOLUME-ONLY walls (basis=vol) — Voltick's Surge
 //                 is the biggest volume-GEX strike, and that is exactly what the
 //                 volume book's CORE is. With the GEX map already on Vol only,
@@ -139,9 +140,9 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
     const pw = heldAt(day.levels.get('put_wall'), end)
     const vt = vtFromWalls(cb.strike, cw?.strike, pw?.strike, bar.close)
     // which recorded rows the Coil and the Reversal are (for their sizes)
-    const coreAbove = cb.strike >= bar.close
-    const coilW = vt.coil == null ? null : coreAbove ? cw : pw
-    const revW = vt.reversal == null ? null : coreAbove ? pw : cw
+    const rowOf = (k: number | null) => (k == null ? null : k === cw?.strike ? cw : k === pw?.strike ? pw : null)
+    const coilW = rowOf(vt.coil)
+    const revW = rowOf(vt.reversal)
     const volDay = volByDate.get(day.date)
     const surgeW = volDay ? heldAt(volDay.levels.get('cb'), end) : null
     out.push({

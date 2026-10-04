@@ -8,6 +8,12 @@
 // coloured by sign. Hover a row for the strike and its value. Built with the
 // card's own buildRail, so the two rails always agree on which strike is CB.
 //
+// VOLTICK (the page pins it): the rail is the named levels and nothing else,
+// read by the definition (data/voltickLevels.ts vtFromLadder) off the column's
+// live book (OI + vol), whatever the GEX setting: ★ Volt = the top net GEX,
+// ◆ Coil = the 2nd top on the Volt's side of spot, ↘ Reversal = the top across
+// spot. ↯ Surge (the biggest volume GEX) keeps the Voltick bot's read.
+//
 // WHERE IT SITS. Vela draws the whole chart (plot, price axis, time axis) on
 // canvases inside one absolutely placed box. The rail pulls that box in from
 // the right by its width (Vela re-sizes to it, the same way it follows any
@@ -32,7 +38,7 @@
 
 import type { RendererLayerArgs, RendererLayerInstance } from '@luxalgo/vela/plugin'
 import { buildRail, type RailLevels } from '@/board/gexCandles/GexRail'
-import { vtLevelsAt } from '@/data/voltickLevels'
+import { voltickMarks, vtFromLadder, vtLevelsAt, type VoltickMarks } from '@/data/voltickLevels'
 import { uiThemeNow } from '@/design/uiTheme'
 import { bool, int, provideLayer, str, studyImpl, type StudyCtx } from './common'
 import { GEX_BASIS, RAIL_TYPE } from './index'
@@ -119,9 +125,19 @@ export const railImpl = studyImpl<RailS, Ladder>({
     // buildRail reads `net` (OI + vol) or `netVol` (vol); OI only is the difference
     const cells = s.metric === 'oi' ? col.cells.map((x) => ({ ...x, net: x.net - x.netVol })) : col.cells
     const voltick = uiThemeNow() === 'voltick'
-    const model = buildRail([{ ...col, cells }], s.metric === 'vol' ? 'vol' : 'voloi', voltick)
-    const lv: RailLevels = model.levels
-    const rows: RailRowOut[] = model.rows.map((r) => {
+    const model = buildRail([{ ...col, cells }], s.metric === 'vol' ? 'vol' : 'voloi', false)
+    // a copy: buildRail hands back a shared empty model when the column is empty
+    const lv: RailLevels = { ...model.levels }
+    let shown = model.rows
+    if (voltick) {
+      const def = vtFromLadder(col.cells.map((x) => ({ strike: x.strike, net: x.net })), model.spot)
+      const surge = voltickMarks(col.cells.map((x) => ({ strike: x.strike, book: x.net, vol: x.netVol })), { always: true }).surge
+      const vt: VoltickMarks = { volt: def.volt, coil: def.coil, reversal: def.reversal, surge, coils: def.coil != null ? [def.coil] : [] }
+      lv.vt = vt
+      const keep = new Set([vt.volt, vt.surge, vt.reversal, vt.coil].filter((k): k is number => k != null))
+      shown = model.rows.filter((r) => keep.has(r.strike))
+    }
+    const rows: RailRowOut[] = shown.map((r) => {
       const tags: RailRowOut['tags'] = []
       if (s.tags) {
         if (lv.vt) {

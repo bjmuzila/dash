@@ -57,7 +57,6 @@ import {
   type LogView,
   type WallLevel,
   VOLTICK_UI,
-  coreSideOf,
   inView,
   vtFromWalls,
   wallNum,
@@ -185,17 +184,19 @@ function RailCard({
   const pinned = isRailPinned(sym)
   const cols = VOLTICK_UI ? VT_ORDER : LEVEL_ORDER.filter((lt) => inView(view, lt))
   /**
-   * Voltick: now and at the open, renamed by which side of spot the CORE is on.
-   * The open uses the CURRENT side, so a delta compares like with like — the
-   * Coil's strike then vs now, not the call wall's vs the put wall's.
+   * Voltick: now and at the open, renamed by vtFromWalls (the Coil is the wall on
+   * the Volt's side of spot that is not the Volt; the Reversal, the wall across).
+   * The open is judged against the CURRENT spot, so a delta compares like with
+   * like: the Coil's strike then vs now, not the call wall's vs the put wall's.
    */
   const vtNow = row ? vtFromWalls(row.cb, row.call_wall, row.put_wall, row.spot) : null
-  const vtSide = row ? coreSideOf(row.cb, row.spot) : null
-  const vtOpen: Partial<Record<WallLevel, number>> = row
+  // the open's walls judged against the CURRENT spot, so a delta compares like with like
+  const vtAtOpen = row ? vtFromWalls(row.open.cb, row.open.call_wall, row.open.put_wall, row.spot) : null
+  const vtOpen: Partial<Record<WallLevel, number>> = vtAtOpen
     ? {
-        volt: row.open.cb,
-        coil: vtSide === 'call' ? row.open.call_wall : vtSide === 'put' ? row.open.put_wall : undefined,
-        reversal: vtSide === 'call' ? row.open.put_wall : vtSide === 'put' ? row.open.call_wall : undefined,
+        volt: vtAtOpen.volt ?? undefined,
+        coil: vtAtOpen.coil ?? undefined,
+        reversal: vtAtOpen.reversal ?? undefined,
       }
     : {}
   const valOf = (lt: WallLevel): number | null =>

@@ -64,7 +64,7 @@ import {
   slotClock,
   wallNum,
   wallStrike,
-  coreSideOf,
+  vtFromWalls,
 } from '@/pages/levelLog/wallData'
 
 /**
@@ -483,8 +483,8 @@ export function WallMigrationChart({
 
       /**
        * VOLTICK VIEW — the same three recorded levels, renamed per slot:
-       * CORE → Volt; the wall on the CORE's side of spot → Coil; the wall on
-       * the other side → Reversal (wallData VtWallLevel). Spot is the slot's
+       * CORE → Volt; a wall on the Volt's side of spot that is not the Volt →
+       * Coil; a wall on the other side → Reversal (wallData VtWallLevel). Spot is the slot's
        * own capture carried forward, else the tape at that slot. No role model:
        * three plain lines, each in its reserved colour.
        */
@@ -509,15 +509,12 @@ export function WallMigrationChart({
           const c = cbA?.[s] ?? null
           const a = cwA?.[s] ?? null
           const b = pwA?.[s] ?? null
-          volt[s] = c
-          const sd = coreSideOf(c, px)
-          if (sd === 'call') {
-            coil[s] = a
-            rev[s] = b
-          } else if (sd === 'put') {
-            coil[s] = b
-            rev[s] = a
-          }
+          // the one definition (wallData.ts vtFromWalls): a wall on the Volt's side of
+          // spot that is not the Volt is the Coil, a wall on the other side the Reversal
+          const vt = vtFromWalls(c, a, b, px)
+          volt[s] = vt.volt
+          coil[s] = vt.coil
+          rev[s] = vt.reversal
         }
         drawSeries = new Map<WallLevel, (number | null)[]>()
         if (volt.some((v) => v != null)) drawSeries.set('volt', volt)

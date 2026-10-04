@@ -25,6 +25,8 @@
 //   · "Walls only" drops the role model (nothing to resolve) and draws both
 //     walls on their own series; "Core only" draws CORE alone.
 //   · Voltick theme (always, on the Vela page, which pins it): three plain lines, ★ Volt / ◆ Coil / ↘ Reversal
+//     (Coil = a wall on the Volt's side of spot that is not the Volt; none on a
+//     bar where CORE sits on that wall)
 //     through vtFromWalls(), Volt drawn last so it shows on a shared strike —
 //     the migration chart's Voltick view, judged on each bar's close.
 //

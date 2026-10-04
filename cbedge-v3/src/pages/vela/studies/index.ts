@@ -130,8 +130,8 @@ export function registerStudies(): void {
       pane: 'price',
       liveOnly: true,
       inputs: () => [
-        { key: 'walls', title: '◆ Coil / ↘ Reversal (the walls)', type: 'bool', defval: true },
-        { key: 'core', title: '★ Volt (CORE)', type: 'bool', defval: true },
+        { key: 'walls', title: '◆ Coil / ↘ Reversal', type: 'bool', defval: true },
+        { key: 'core', title: '★ Volt (CORE, top net GEX)', type: 'bool', defval: true },
         { key: 'flip', title: 'Flip (gamma)', type: 'bool', defval: true },
         { key: 'maxPain', title: 'Max pain', type: 'bool', defval: true },
         { key: 'weekly', title: 'Weekly pivot', type: 'bool', defval: true },

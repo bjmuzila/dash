@@ -25979,3 +25979,35 @@ Files: `server-v2/_lib-lse.cjs`, `cbedge-v3/src/data/api.ts`,
     - 0 em-dashes.
   - The full suite passes: replay desktop and phone, replay with studies, rail and heatmap, paper, level alerts, setups, optimiser, whale click-through, Whales deep link, the Indicators dialog, the advanced watchlist and the watchlist.
 - **Files in `generated/`:** `2026-10-04-vela-voltick-desktop.png`, `-indicators.png`, `-replay.png`, `-phone.png`, `-watchlist.png`, `-tester.png` (mock data)
+
+## 2026-10-04 - v3 Vela + Level Log: Volt / Coil / Reversal by Brandon's definition
+
+- **The definition:**
+  - **★ Volt** = CORE, the top net GEX.
+  - **◆ Coil** = the 2nd top net GEX on the Volt's side of spot.
+  - **↘ Reversal** = the top net GEX on the other side of spot.
+  - The Coil is never the Volt's own strike. Before this, the "Coil" was simply the wall on CORE's side, which was often CORE itself (Volt and Coil both at 6760).
+- **Off a live ladder:** the new `vtFromLadder()` in `data/voltickLevels.ts` reads OI + vol from the front chain or the per-minute column.
+  - **Key Levels:** Volt, Coil and Reversal lines (the call and put wall lines are replaced). The input is now "◆ Coil / ↘ Reversal".
+  - **Level Alerts and the session strip:** read from the front chain's live ladder, shifted by basis on ES / NQ, with the recorded walls as a fallback. The strip's same-strike workaround is gone.
+  - **GEX rail:** Volt, Coil and Reversal follow the definition. ↯ Surge keeps the Voltick bot's read (biggest volume GEX).
+- **Off the recorded walls:** `vtFromWalls()` in `levelLog/wallData.ts` judges each wall by its own side of spot.
+  - A wall on the Volt's side that is not the Volt is the Coil. With the Volt above spot, that is the call wall, whether it sits between spot and the Volt or beyond it.
+  - A wall on the other side is the Reversal (the put wall).
+  - When CORE sits on its side's wall, walls_log has no 2nd strike there, so that bar has no Coil rather than a second name for the Volt.
+  - Used by: CB Walls' Voltick lines, Voltick Path / Ribbon (sizes now matched to the wall by strike), and the Level Log. The Level Log's migration chart and ticker rail had their own copies of the old rule; they now call the shared function.
+- **Unchanged:** the board cards that use the Voltick bot's `voltickMarks()` (GEX Candles, Multi Greek, the chain), and the `vtKeyOf` label renaming on the Key Levels / stat cards.
+- **Files:**
+  - `cbedge-v3/src/data/voltickLevels.ts`
+  - `cbedge-v3/src/pages/levelLog/`: `wallData.ts`, `WallMigrationChart.tsx`, `TickerRail.tsx`
+  - `cbedge-v3/src/pages/vela/`:
+    - `studies/gex.ts`, `studies/index.ts`, `studies/rail.ts`
+    - `levels/levelAlerts.ts`, `setups/SessionStrip.tsx`
+    - `vtPath/vtPathData.ts`, `vtPath/vtPathIndicator.ts`, `wallsIndicator.ts`
+  - `cbedge-v3/src/pages/Vela.tsx` (comments)
+- **Checks:**
+  - 10 unit cases for both functions all pass:
+    - ladder: Volt above and below spot, CORE handed in, no spot;
+    - walls: CORE on the call wall, call wall between spot and the Volt, call wall beyond the Volt, CORE on the put wall, Volt below spot, no spot.
+  - `tsc` shows only the 5 existing errors. `check:theme` and `check:casing` pass, and `vite build` is OK.
+  - Headless runs pass: Level Alerts, rail, Key Levels in replay, the Indicators dialog, replay desktop and phone, and the Level Log page on the Voltick theme with no errors.

@@ -10,7 +10,8 @@
 //                  Key Levels card's weekly EM) as two price lines.
 //   Key Levels     what the Key Levels card lists, as price lines with axis
 //                  chips, in Voltick's names (the page is Voltick's chart):
-//                  ★ Volt (CORE), ◆ Coil / ↘ Reversal (the walls), ⚡︎ Flip,
+//                  ★ Volt (CORE, the top net GEX), ◆ Coil (the 2nd top on the
+//                  Volt's side of spot), ↘ Reversal (the top across spot), ⚡︎ Flip,
 //                  Max Pain off the front-expiry chain (/api/chains →
 //                  board/chainGex.ts), and this week's published pivot and
 //                  lower / upper zones (/api/levels — the levels CB Edge posts).
@@ -26,7 +27,7 @@
 import type { DrawingBox, DrawingLabel, PriceLine, SeriesSpec, Fill } from '@luxalgo/vela'
 import { stableSeriesId } from '@luxalgo/vela/plugin'
 import { tokenHexAlpha } from '@/design/theme'
-import { VT_NAME, vtDef, vtKeyOf, type CbLevelKey } from '@/data/voltickLevels'
+import { vtFromLadder } from '@/data/voltickLevels'
 import type { GexRow } from '@/contract/frames'
 import { chainGexUrl, chainToGex, type ChainGex } from '@/board/chainGex'
 import { computeMaxPain } from '@/board/keyLevels/levelsMath'
@@ -258,23 +259,20 @@ export const keyImpl = studyImpl<KeyS, KeyData>({
         // the name beside the line, at the newest bar
         if (lastBar) labels.push(labelAt(T, `tag-${key}`, lastBar.time, v + sh, `${title} ${(v + sh).toFixed(2)}`, col, { textColor: col, noFill: true }))
       }
-      // Voltick's names and reserved colours (data/voltickLevels.ts): CORE is the
-      // ★ Volt, the wall on CORE's side of spot the ◆ Coil, the other wall the
-      // ↘ Reversal; the gamma flip is ⚡︎ Flip in the flip's violet.
-      const spot = lastBar ? lastBar.close - sh : null
-      const core = g.core?.strike ?? null
-      const named = (k: CbLevelKey) => vtDef(vtKeyOf(k, core, spot, { cw: g.callWall ?? null, pw: g.putWall ?? null }))
-      const vt = (k: CbLevelKey) => {
-        const d = named(k)
-        return { token: d.fillVar, title: `${d.mark} ${VT_NAME[d.key]}` }
-      }
+      // Voltick's levels by the definition (data/voltickLevels.ts vtFromLadder),
+      // off this chain's live ladder (OI + vol): ★ Volt = CORE, the top net GEX;
+      // ◆ Coil = the 2nd top net GEX on the Volt's side of spot; ↘ Reversal = the
+      // top net GEX on the other side. The gamma flip is ⚡︎ Flip in its violet.
+      const vt = vtFromLadder(
+        g.rows.map((x) => ({ strike: x.strike, net: x.netGEX + x.netVolGEX })),
+        g.spot,
+        g.core?.strike ?? null,
+      )
       if (s.walls) {
-        const cw = vt('cw')
-        const pw = vt('pw')
-        add('cw', g.callWall, cw.token, cw.title, { width: 1.6 })
-        add('pw', g.putWall, pw.token, pw.title, { width: 1.6 })
+        add('coil', vt.coil, '--color-vt-coil', '◆ Coil', { width: 1.6 })
+        add('rev', vt.reversal, '--color-vt-reversal', '↘ Reversal', { width: 1.6 })
       }
-      if (s.core) add('core', core, '--color-vt-volt', '★ Volt', { width: 2 })
+      if (s.core) add('core', vt.volt, '--color-vt-volt', '★ Volt', { width: 2 })
       if (s.flip) add('flip', g.flip, '--color-vt-flip', `${FLIP_MARK} Flip`, { dashed: true })
       if (s.maxPain) add('mp', computeMaxPain(g.rows as GexRow[]), '--color-vt-quiet', 'Max Pain', { dashed: true })
     }

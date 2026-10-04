@@ -240,6 +240,65 @@ export function vtLevelsAt(marks: VoltickMarks | null | undefined, strike: numbe
 /** Owner-only Voltick UI theme, read once — the toggle reloads the page. */
 export const VOLTICK_UI = readUiTheme() === 'voltick'
 
+// ── THE DEFINITION, ON A LADDER (Brandon, 2026-10-04) ────────────────────────
+//   Volt ★      = CORE: the top net GEX on the board (OI + vol, by size)
+//   Coil ◆      = the 2nd top net GEX on the Volt's side of spot
+//   Reversal ↘  = the top net GEX on the other side of spot
+// So the Coil is never the Volt's own strike. Read by the Vela chart
+// (pages/vela: Key Levels, Level Alerts, the session strip, the GEX rail).
+// voltickMarks() above is the Voltick bot's own port and is unchanged; the
+// recorded-walls version of this is vtFromWalls() in pages/levelLog/wallData.ts.
+
+export interface VtLadderRow {
+  strike: number
+  /** Net GEX at the strike, OI + vol (the live book). */
+  net: number
+}
+
+/**
+ * Volt / Coil / Reversal for one ladder. `volt` may be handed in (a surface's
+ * own CORE, so the two cannot disagree); otherwise it is the top |net|. With no
+ * spot the sides cannot be told apart, and only the Volt is named.
+ */
+export function vtFromLadder(
+  rows: readonly VtLadderRow[],
+  spot: number | null | undefined,
+  volt?: number | null,
+): { volt: number | null; coil: number | null; reversal: number | null } {
+  const ok = rows.filter((r) => Number.isFinite(r.strike) && Number.isFinite(r.net) && r.net !== 0)
+  let v = volt ?? null
+  if (v == null) {
+    let best = 0
+    for (const r of ok) {
+      const a = Math.abs(r.net)
+      if (a > best) {
+        best = a
+        v = r.strike
+      }
+    }
+  }
+  if (v == null || spot == null || !(spot > 0)) return { volt: v, coil: null, reversal: null }
+  const up = v >= spot
+  let coil: number | null = null
+  let reversal: number | null = null
+  let coilBest = 0
+  let revBest = 0
+  for (const r of ok) {
+    if (r.strike === v) continue
+    const a = Math.abs(r.net)
+    if (up ? r.strike >= spot : r.strike < spot) {
+      if (a > coilBest) {
+        coilBest = a
+        coil = r.strike
+      }
+    } else if (a > revBest) {
+      revBest = a
+      reversal = r.strike
+    }
+  }
+  return { volt: v, coil, reversal }
+}
+
 export type CbLevelKey = 'cb' | 'cw' | 'pw'
 
 /** Which side of spot the CORE sits on. null without a core or a spot. */

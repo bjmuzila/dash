@@ -3,12 +3,18 @@
 // already draws, each with a bell, in Voltick's names (the page is Voltick's
 // chart; data/voltickLevels.ts):
 //
-//   Voltick   ★ Volt                       CORE, the walls recorder's newest slot
-//             ◆ Coil                       the wall on CORE's side of price
-//             ↘ Reversal                   the wall on the other side
-//                                          (the levels the walls study draws; on
-//                                          ES / NQ shifted by the day's basis)
-//             ⚡︎ Flip                       the front chain's zero-gamma strike
+//   Voltick   ★ Volt                       CORE: the top net GEX
+//             ◆ Coil                       the 2nd top net GEX on the Volt's side
+//                                          of price
+//             ↘ Reversal                   the top net GEX across price
+//             ⚡︎ Flip                       the zero-gamma strike
+//                                          (all four off the front chain's live
+//                                          ladder, OI + vol, the definition in
+//                                          data/voltickLevels.ts; on ES / NQ the
+//                                          index's chain shifted by the day's
+//                                          basis. If the chain does not answer,
+//                                          the walls recorder's newest slot,
+//                                          read the same way.)
 //   Session   IB high / low                09:30–10:30 ET, once it has formed
 //             Overnight high / low         the pre-open session (futures: from
 //                                          18:00; stocks: from 04:00)
@@ -37,6 +43,7 @@ import { chainGexUrl, chainToGex } from '@/board/chainGex'
 import { CbEdgeProvider, resolveSym } from '@/pages/vela/cbedgeProvider'
 import { loadBasis, wallSeriesFor } from '@/pages/vela/wallsIndicator'
 import { vtFromWalls } from '@/pages/levelLog/wallData'
+import { vtFromLadder } from '@/data/voltickLevels'
 import { etDateKey, etMinutesOfDay } from '@/pages/vela/studies/common'
 import { replayActive } from '@/pages/vela/replay/clock'
 import { deliverAlert, enableNotify, notifyWanted, tfLabel } from '@/pages/vela/script/alerts'
@@ -107,16 +114,9 @@ async function readLevels(sym: string): Promise<LevelRead> {
     return m >= 570 && m < 960
   }
   const todays = bars.filter((b) => etDateKey(b.time) === today)
-  // the walls, renamed: today's bars only, so the read covers one session
-  try {
-    const w = await wallSeriesFor(sym, todays.length ? todays : bars.slice(-80), '5', true)
-    const fin = (v: number) => Number.isFinite(v)
-    const vt = vtFromWalls(last(w.core, fin), last(w.callWall, fin), last(w.putWall, fin), price)
-    out.push(vtLevel('volt', vt.volt), vtLevel('coil', vt.coil), vtLevel('reversal', vt.reversal))
-  } catch {
-    out.push(vtLevel('volt', null), vtLevel('coil', null), vtLevel('reversal', null))
-  }
-  // gamma flip off the front chain
+  // Voltick's levels by the definition, off the front chain's live ladder (OI + vol)
+  let vt: { volt: number | null; coil: number | null; reversal: number | null } | null = null
+  let flip: number | null = null
   try {
     const ticker = r.fut === 'NQ' ? 'NDX' : r.fut === 'ES' ? 'SPX' : r.key
     const g = chainToGex(await query<unknown>(chainGexUrl(ticker), { staleMs: 60_000 }))
@@ -125,10 +125,33 @@ async function readLevels(sym: string): Promise<LevelRead> {
       const b = await loadBasis(r.fut)
       shift = b.basis > 0 && b.basis < b.max ? b.basis : NaN
     }
-    out.push(vtLevel('flip', g.flip != null && Number.isFinite(shift) ? g.flip + shift : null))
+    if (Number.isFinite(shift)) {
+      const at = (v: number | null) => (v == null ? null : v + shift)
+      flip = at(g.flip)
+      if (g.rows.length) {
+        // the index's own spot judges the sides: the strikes are the index's
+        const d = vtFromLadder(
+          g.rows.map((x) => ({ strike: x.strike, net: x.netGEX + x.netVolGEX })),
+          g.spot,
+          g.core?.strike ?? null,
+        )
+        vt = { volt: at(d.volt), coil: at(d.coil), reversal: at(d.reversal) }
+      }
+    }
   } catch {
-    out.push(vtLevel('flip', null))
+    /* the recorded walls below */
   }
+  if (!vt) {
+    // no chain: the walls recorder's newest slot, today's bars only, read the same way
+    try {
+      const w = await wallSeriesFor(sym, todays.length ? todays : bars.slice(-80), '5', true)
+      const fin = (v: number) => Number.isFinite(v)
+      vt = vtFromWalls(last(w.core, fin), last(w.callWall, fin), last(w.putWall, fin), price)
+    } catch {
+      vt = null
+    }
+  }
+  out.push(vtLevel('volt', vt?.volt ?? null), vtLevel('coil', vt?.coil ?? null), vtLevel('reversal', vt?.reversal ?? null), vtLevel('flip', flip))
   // session: IB, overnight, open
   const rthToday = todays.filter(rth)
   const ib = rthToday.filter((b) => etMinutesOfDay(b.time) < 630)

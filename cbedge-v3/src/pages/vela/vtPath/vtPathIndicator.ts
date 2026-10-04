@@ -13,9 +13,10 @@
 //                        end. CB Edge draws all four levels on it (Voltick leaves
 //                        out the Coil) and no ▲/▼ "since" text (vtPathLayer.ts)
 //
-// The levels are the WALLS MIGRATION renamed — Volt = CORE, Coil = the wall on
-// the CORE's side of spot, Reversal = the wall on the other side, Surge = the
-// volume-only CORE (vtPathData.ts) — so they go back as far as walls_log does.
+// The levels are the WALLS MIGRATION renamed — Volt = CORE, Coil = a wall on the
+// Volt's side of spot that is not the Volt, Reversal = the wall across spot,
+// Surge = the volume-only CORE (vtPathData.ts) — so they go back as far as
+// walls_log does.
 //
 // Each study is a native indicator whose type id IS its renderer layer's id
 // (vtPathLayer.ts): it resolves the rows and hands them to the layer with
