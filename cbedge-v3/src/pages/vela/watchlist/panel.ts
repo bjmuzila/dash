@@ -2,14 +2,23 @@
 // VELA WATCHLIST — the docked panel. A Vela SIDE PANEL (its button in the
 // topbar's panel group, a row in ⋮ on a phone), independent of any one chart:
 //
-//   header   [ list ▾ ] [⤢] [⚙] [⋮] [📌]  the open list is a picker (and New watchlist);
-//                                  ⤢ the Advanced view (advanced.ts) over the chart
-//                                  area; ⚙ Columns; ⋮ Advanced view / New section /
-//                                  Rename / Delete; 📌 pin (below)
+//   header   [ list ▾ ]  ⋯         the open list is a picker (and New watchlist);
+//                                  ⋯ is everything else in one menu (Brandon,
+//                                  2026-10-05, mockup generated/2026-10-05-vela-
+//                                  watchlist-r1.html): VIEW Advanced view (advanced.ts,
+//                                  over the chart area), Compact rows, the columns,
+//                                  Pin beside the chart (below); THIS LIST New
+//                                  section, Rename, New watchlist, Delete
 //   add      [ Add symbol…        ] [+ SPX]   the chart's symbols, by ticker or
 //                                  name; "+ SPX" adds the active chart's
-//   rows     ⠿ icon  SYMBOL name     price   chg   chg%   (vol)   ⋯ ✕   (the icon:
+//   rows     ⠿ icon SYMBOL name   last   chg%   (chg) (vol)   ⋯ ✕   (the icon:
 //                                  tickerIcon.ts, the chip's and the picker's own)
+//
+// ROWS (W2, the default): one 30 px line each, the ticker and its name side by
+// side, the name cut to fit (the whole of it on hover), about twice as many
+// symbols on screen as before. ⋯ → Compact rows off is W1: the ticker over its
+// name, the % change on a tinted chip. The points change is off by default
+// (⋯ → Columns brings it back); store.ts turns it off once for older copies.
 //
 //   · a row CLICK loads that symbol on the ACTIVE chart (in a grid: click the
 //     cell first); the active chart's symbol is highlighted
@@ -26,10 +35,11 @@
 // sections in the same order (store.ts keeps them on the list, synced).
 //
 // THE PIN (desktop). Vela's panel dock holds one panel at a time, so opening
-// Level Alerts or Scripts closes the watchlist. 📌 takes it out of the dock into
-// its own column at the right edge of the chart area (bindPinnedWatchlist): it
-// stays open whatever other panel opens, keeps its width (drag its left edge),
-// and is still pinned after a reload. 📌 again puts it back in the dock.
+// Level Alerts or Scripts closes the watchlist. ⋯ → Pin beside the chart takes it
+// out of the dock into its own column at the right edge of the chart area
+// (bindPinnedWatchlist): it stays open whatever other panel opens, keeps its width
+// (drag its left edge), and is still pinned after a reload. The same switch puts
+// it back in the dock; the column's ✕ closes it (and unpins it).
 //
 // The lists, their account sync and the quotes are store.ts.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,6 +77,7 @@ import {
   setColumn,
   setFolded,
   setGroup,
+  setCompact,
   setSort,
   syncWatchlists,
   UNSORTED,
@@ -153,6 +164,16 @@ function setPinned(on: boolean): void {
   }
   pinChanged()
 }
+/** The pinned column's ✕: unpinned, and NOT handed back to the dock (it is closed). */
+let quietUnpin = false
+function closePinnedQuietly(): void {
+  quietUnpin = true
+  try {
+    setPinned(false)
+  } finally {
+    quietUnpin = false
+  }
+}
 /** The topbar's Watchlist button while it is pinned: it is already open, so point at it. */
 function pulsePinned(): void {
   const c = pinCol
@@ -172,22 +193,29 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
   // keystrokes stay in the panel's inputs — Vela's chart shortcuts listen above it
   for (const t of ['keydown', 'keyup', 'keypress'] as const) body.addEventListener(t, (e) => e.stopPropagation())
 
-  // ── header: list picker, advanced view, columns, ⋮, 📌 ──
+  // ── header: the list picker and ⋯ (everything else); the pinned column adds its ✕ ──
   const pick = new ThemedSelect(doc, 'cb-wl-pick', 'Watchlist')
-  const gear = btn(doc, 'cb-wl-icon', '⚙', 'Columns')
-  const more = btn(doc, 'cb-wl-icon', '⋮', 'List actions')
-  const expand = btn(doc, 'cb-wl-icon', '⤢', 'Advanced view')
-  const pinBtn = btn(doc, 'cb-wl-icon cb-wl-pin', '📌', mode === 'pinned' ? 'Unpin: back to the panel dock' : 'Pin open at the right')
-  pinBtn.setAttribute('aria-pressed', mode === 'pinned' ? 'true' : 'false')
-  pinBtn.addEventListener('click', () => setPinned(mode !== 'pinned'))
+  const more = btn(doc, 'cb-wl-icon', '⋯', 'Watchlist menu')
+  more.setAttribute('aria-haspopup', 'menu')
+  /** Can this copy pin (a desktop workspace, a wide window), or is it the pinned one? */
+  const canPin = () => mode === 'pinned' || (pinAvailable && !narrow())
   const showPin = () => {
-    pinBtn.hidden = mode === 'dock' && (!pinAvailable || narrow())
+    // the pin's switch lives in ⋯: a change while the menu is open redraws it
+    if (!pop.hidden && pop.dataset.kind === 'more') {
+      closePop()
+      openMore()
+    }
   }
-  showPin()
   pinListeners.add(showPin)
   slot.classList.add('cb-wl-slot')
-  slot.append(pick.el, expand, gear, more, pinBtn)
-  expand.addEventListener('click', () => openAdvancedView())
+  slot.append(pick.el, more)
+  if (mode === 'pinned') {
+    const shut = btn(doc, 'cb-wl-icon', '✕', 'Close the pinned watchlist')
+    shut.addEventListener('click', () => closePinnedQuietly())
+    slot.append(shut)
+  }
+  const applyDensity = () => body.classList.toggle('cb-wl-compact', viewPrefs().compact)
+  applyDensity()
   /** The full watchlist over the chart area (its own chunk, fetched on first use). */
   function openAdvancedView() {
     if (mode === 'dock') ctx.togglePanel(WATCHLIST_PANEL_ID, false)
@@ -246,7 +274,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
   const cols = (): Col[] => {
     const c = viewPrefs().cols
     return [
-      { key: 'price', label: 'Price', on: c.price },
+      { key: 'price', label: 'Last', on: c.price },
       { key: 'change', label: 'Chg', on: c.change },
       { key: 'pct', label: 'Chg %', on: c.pct },
       { key: 'volume', label: 'Vol', on: c.volume },
@@ -264,6 +292,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
     const sort = viewPrefs().sort[l.id]
     const shown = cols().filter((c) => c.on)
     body.style.setProperty('--cb-wl-cols', String(shown.length))
+    applyDensity()
     const cell = (key: SortKey, label: string, cls: string) => {
       const b = btn(doc, `cb-wl-th ${cls}`, label)
       if (sort?.key === key) {
@@ -318,7 +347,11 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
     const name = el(doc, 'span', 'cb-wl-name')
     name.append(el(doc, 'span', 'cb-wl-sym', sym))
     const d = descOf.get(sym)
-    if (d && d !== sym) name.append(el(doc, 'span', 'cb-wl-desc', d))
+    if (d && d !== sym) {
+      name.append(el(doc, 'span', 'cb-wl-desc', d))
+      // compact rows cut the name to fit: the whole of it on hover
+      row.title = `${sym} · ${d}`
+    }
     const symCell = el(doc, 'span', 'cb-wl-symcell')
     symCell.append(logo(sym), name)
     const q = quoteOf(sym)
@@ -326,6 +359,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
       const v = c.key === 'price' ? q?.last ?? null : c.key === 'change' ? q?.change ?? null : c.key === 'pct' ? q?.pct ?? null : q?.volume ?? null
       const text = c.key === 'price' ? fmtPrice(v) : c.key === 'change' ? fmtChg(v) : c.key === 'pct' ? fmtPct(v) : fmtVol(v)
       const s = el(doc, 'span', 'cb-wl-num', text)
+      s.dataset.col = c.key
       if (c.key === 'change' || c.key === 'pct') {
         const t = toneOf(q?.change ?? null)
         if (t) s.dataset.tone = t
@@ -532,6 +566,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
   const closePop = () => {
     pop.hidden = true
     pop.replaceChildren()
+    delete pop.dataset.menu
     popAnchor = null
   }
   /**
@@ -540,6 +575,7 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
    */
   function showPop(anchor: HTMLElement | null) {
     pop.style.top = ''
+    if (pop.dataset.kind !== 'more') delete pop.dataset.menu
     pop.hidden = false
     if (!anchor || !anchor.isConnected || !body.contains(anchor)) return
     const b = body.getBoundingClientRect()
@@ -613,52 +649,89 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
     popAnchor = anchor
     return true
   }
-  gear.addEventListener('click', () => {
-    if (!toggleKind('cols', gear)) return
-    const c = viewPrefs().cols
-    const items: [keyof typeof c, string][] = [
-      ['price', 'Price'],
-      ['change', 'Change'],
-      ['pct', 'Change %'],
-      ['volume', 'Volume (24h)'],
-    ]
-    pop.replaceChildren(
-      el(doc, 'div', 'cb-wl-poptitle', 'Columns'),
-      ...items.map(([k, label]) => {
-        const lab = el(doc, 'label', 'cb-wl-check')
-        const cb = el(doc, 'input', '')
-        cb.type = 'checkbox'
-        cb.checked = c[k]
-        cb.addEventListener('change', () => {
-          setColumn(k, cb.checked)
-          if (k === 'volume' && cb.checked) void refreshVolumes(activeList().symbols)
-        })
-        lab.append(cb, doc.createTextNode(` ${label}`))
-        return lab
-      }),
-    )
-    showPop(null)
-  })
-  more.addEventListener('click', () => {
-    if (!toggleKind('more', more)) return
+  /** A switch row in a menu: its label and an on / off pill; a click flips it. */
+  function switchRow(label: string, on: boolean, flip: () => void): HTMLButtonElement {
+    const b = btn(doc, 'cb-wl-item cb-wl-swrow', '')
+    b.setAttribute('role', 'menuitemcheckbox')
+    b.setAttribute('aria-checked', String(on))
+    b.append(el(doc, 'span', '', label), el(doc, 'i', 'cb-wl-sw'))
+    b.addEventListener('click', flip)
+    return b
+  }
+  /** ⋯: everything the header's icons did, in one menu. */
+  function openMore() {
+    pop.dataset.kind = 'more'
+    popAnchor = more
     const l = activeList()
-    const adv = btn(doc, 'cb-wl-item', '⤢ Advanced view')
+    const items: HTMLElement[] = [el(doc, 'div', 'cb-wl-mh', 'VIEW')]
+    const adv = btn(doc, 'cb-wl-item', 'Advanced view')
+    adv.append(el(doc, 'span', 'cb-wl-kbd', '⤢'))
     adv.addEventListener('click', () => {
       closePop()
       openAdvancedView()
     })
-    const sec = btn(doc, 'cb-wl-item', '+ New section')
+    items.push(adv)
+    items.push(
+      switchRow('Compact rows', viewPrefs().compact, () => {
+        setCompact(!viewPrefs().compact)
+        closePop()
+        openMore()
+      }),
+    )
+    // the columns, inline
+    const c = viewPrefs().cols
+    const colBox = el(doc, 'div', 'cb-wl-cols2')
+    const colItems: [keyof typeof c, string][] = [
+      ['price', 'Last'],
+      ['pct', 'Change %'],
+      ['change', 'Change'],
+      ['volume', 'Volume (24h)'],
+    ]
+    for (const [k, label] of colItems) {
+      const lab = el(doc, 'label', 'cb-wl-check')
+      const cb = el(doc, 'input', '')
+      cb.type = 'checkbox'
+      cb.checked = c[k]
+      cb.addEventListener('change', () => {
+        setColumn(k, cb.checked)
+        if (k === 'volume' && cb.checked) void refreshVolumes(activeList().symbols)
+      })
+      lab.append(cb, doc.createTextNode(` ${label}`))
+      colBox.append(lab)
+    }
+    items.push(el(doc, 'div', 'cb-wl-note', 'Columns'), colBox)
+    if (canPin()) {
+      items.push(
+        switchRow('Pin beside the chart', mode === 'pinned', () => {
+          closePop()
+          setPinned(mode !== 'pinned')
+        }),
+      )
+    }
+    items.push(el(doc, 'div', 'cb-wl-sep'), el(doc, 'div', 'cb-wl-mh', 'THIS LIST'))
+    const sec = btn(doc, 'cb-wl-item', 'New section')
     sec.addEventListener('click', () =>
       newSection(null, (n) => {
         if (!addSection(n)) ctx.toast(sectionNameProblem(n) ?? 'Couldn’t add that section', 'info')
       }),
     )
-    const rename = btn(doc, 'cb-wl-item', 'Rename list')
-    const del = btn(doc, 'cb-wl-item cb-wl-danger', 'Delete list')
+    const rename = btn(doc, 'cb-wl-item', 'Rename')
     rename.addEventListener('click', () => {
       pop.dataset.kind = 'name'
       openNaming('Rename list', l.name, (n) => renameList(l.id, n))
     })
+    items.push(sec, rename)
+    if (lists().length < MAX_LISTS) {
+      const nu = btn(doc, 'cb-wl-item', 'New watchlist')
+      nu.addEventListener('click', () => {
+        pop.dataset.kind = 'name'
+        openNaming('New watchlist', '', (name) => {
+          if (!createList(name)) ctx.toast(`Up to ${MAX_LISTS} lists`, 'info')
+        })
+      })
+      items.push(nu)
+    }
+    const del = btn(doc, 'cb-wl-item cb-wl-danger', `Delete ${l.name}`)
     del.addEventListener('click', () => {
       pop.dataset.kind = 'confirm'
       const yes = btn(doc, 'cb-wl-btn cb-wl-danger-btn', 'Delete')
@@ -677,8 +750,15 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement, slot: HTMLElement, mo
         r,
       )
     })
-    pop.replaceChildren(adv, sec, rename, del)
+    items.push(del)
+    pop.replaceChildren(...items)
+    pop.dataset.menu = '1'
     showPop(null)
+  }
+  more.setAttribute('aria-expanded', 'false')
+  more.addEventListener('click', () => {
+    if (!pop.hidden && pop.dataset.kind === 'more') return closePop()
+    openMore()
   })
   /** A section's ⋯: rename, move, delete (its symbols stay, Unsorted). */
   function sectionMenu(name: string, anchor: HTMLElement) {
@@ -1026,7 +1106,7 @@ export function bindPinnedWatchlist(ws: VelaWorkspace, phone: boolean): () => vo
 
   const sync = () => {
     if (pinned && !col) open()
-    else if (!pinned && col) close(true)
+    else if (!pinned && col) close(!quietUnpin)
   }
   pinListeners.add(sync)
   pinAvailable = true

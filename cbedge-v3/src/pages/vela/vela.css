@@ -724,21 +724,6 @@
 .cb-wl-slot .cb-wl-icon[hidden] {
   display: none;
 }
-/* 📌: an emoji, so its own colours; dimmed until it is pinned, then lit */
-.cb-wl-slot .cb-wl-pin {
-  font-size: var(--text-sm);
-  filter: grayscale(1);
-  opacity: 0.7;
-}
-.cb-wl-slot .cb-wl-pin:hover {
-  opacity: 1;
-}
-.cb-wl-slot .cb-wl-pin[aria-pressed='true'] {
-  background: var(--vt-accent-soft);
-  box-shadow: inset 0 0 0 1px var(--color-vt-accent);
-  filter: none;
-  opacity: 1;
-}
 .cb-wl {
   position: relative;
   display: flex;
@@ -1158,6 +1143,110 @@
   border-bottom: 1px dashed color-mix(in srgb, var(--color-line) 60%, transparent);
   color: var(--color-faint);
   font-size: var(--text-2xs);
+}
+
+/* ⋯, the watchlist's one menu (2026-10-05): VIEW and THIS LIST */
+.cb-wl .cb-wl-pop[data-menu='1'] {
+  gap: 1px;
+  min-width: 232px;
+  padding: 6px;
+}
+.cb-wl .cb-wl-mh {
+  padding: 6px 8px 3px;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.cb-wl .cb-wl-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--color-line);
+}
+.cb-wl .cb-wl-pop[data-menu='1'] .cb-wl-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cb-wl .cb-wl-pop[data-menu='1'] > .cb-wl-note {
+  padding: 4px 8px 0;
+}
+.cb-wl .cb-wl-kbd {
+  color: var(--color-faint);
+}
+.cb-wl .cb-wl-sw {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--color-line);
+}
+.cb-wl .cb-wl-sw::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-faint);
+}
+.cb-wl .cb-wl-swrow[aria-checked='true'] .cb-wl-sw {
+  background: var(--color-vt-accent);
+}
+.cb-wl .cb-wl-swrow[aria-checked='true'] .cb-wl-sw::after {
+  left: 14px;
+  background: var(--color-vt-paper);
+}
+.cb-wl .cb-wl-cols2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  padding: 4px 8px 6px;
+}
+
+/* W2, compact rows (the default): one line each, the ticker and its name side by
+   side, the name cut to fit (the row's title has all of it) */
+.cb-wl.cb-wl-compact .cb-wl-row {
+  min-height: 30px;
+}
+.cb-wl.cb-wl-compact .cb-wl-symcell {
+  gap: 7px;
+}
+.cb-wl.cb-wl-compact .cb-tki {
+  --cb-tki-s: 18px !important;
+}
+.cb-wl.cb-wl-compact .cb-wl-logo {
+  width: 18px;
+  height: 18px;
+}
+.cb-wl.cb-wl-compact .cb-wl-name {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+.cb-wl.cb-wl-compact .cb-wl-sym {
+  flex: none;
+  min-width: 44px;
+}
+.cb-wl.cb-wl-compact .cb-wl-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* W1 (Compact rows off): the % change on a tinted chip */
+.cb-wl:not(.cb-wl-compact) .cb-wl-num[data-col='pct'][data-tone] {
+  justify-self: end;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.cb-wl:not(.cb-wl-compact) .cb-wl-num[data-col='pct'][data-tone='up'] {
+  background: color-mix(in srgb, var(--color-up) 12%, transparent);
+}
+.cb-wl:not(.cb-wl-compact) .cb-wl-num[data-col='pct'][data-tone='down'] {
+  background: color-mix(in srgb, var(--color-down) 12%, transparent);
 }
 
 /* the 📌 column (bindPinnedWatchlist): the last column of Vela's chart row, drawn

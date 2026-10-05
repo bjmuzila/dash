@@ -333,16 +333,27 @@ export function parse(src: string): Program {
     }
     return -1
   }
-  /** `<float>` / `<string, float>` / `<chart.point>` at p+o — the token count to skip, or 0. */
+  /**
+   * `<float>` / `<string, float>` / `<chart.point>` at p+o — the token count to skip, or 0.
+   * Strict on purpose: type names separated by commas, never a keyword. A loose
+   * read took `price < lo or price > (hi)` for `price<lo or price>(hi)` and
+   * failed with `unknown function "price"`.
+   */
   const genericLen = (o: number): number => {
     const t0 = peek(o)
     if (t0.t !== 'op' || t0.v !== '<') return 0
     let k = o + 1
+    let wantType = true
     for (;;) {
       const t = peek(k)
-      if (t.t === 'id') k++
-      else if (t.t === 'op' && t.v === ',') k++
-      else if (t.t === 'op' && t.v === '>') return k - o + 1
+      if (wantType) {
+        if (t.t !== 'id' || RESERVED.has(t.v)) return 0
+        k++
+        wantType = false
+      } else if (t.t === 'op' && t.v === ',') {
+        k++
+        wantType = true
+      } else if (t.t === 'op' && t.v === '>') return k - o + 1
       else return 0
     }
   }
@@ -716,8 +727,10 @@ export function parse(src: string): Program {
         if (t.v === 'true' || t.v === 'false') return { k: 'bool', v: t.v === 'true', line: t.line }
         if (t.v === 'na') return { k: 'na', line: t.line }
       }
-      // generic type arguments — array.new<float>(…), map.new<string, float>() — are read and dropped
-      const g = genericLen(0)
+      // generic type arguments — array.new<float>(…), map.new<string, float>() — are read and dropped.
+      // Only after a `.new` (the only Pine calls that take them): in `f(a < b, c > (d))`
+      // the `<` and `>` are comparisons, not `a<b, c>(d)`.
+      const g = /(^|\.)new$/.test(t.v) ? genericLen(0) : 0
       if (g && isOp('(', g)) p += g
       if (isOp('(')) {
         const { args, named } = callArgs()

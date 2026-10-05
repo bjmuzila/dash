@@ -42,6 +42,10 @@ export interface WatchList {
 export type SortKey = 'symbol' | 'price' | 'change' | 'pct' | 'volume'
 export interface ViewPrefs {
   cols: { price: boolean; change: boolean; pct: boolean; volume: boolean }
+  /** One-line rows (the default since 2026-10-05, W2), or ticker over name (W1). */
+  compact: boolean
+  /** Which defaults this copy has seen (2: the points-change column went off by default). */
+  rev?: number
   /** Per list: the column it is sorted by, or none (the list's own order). Applies inside each section. */
   sort: Record<string, { key: SortKey; dir: 1 | -1 } | undefined>
   /** Per list: the docked panel's folded sections. */
@@ -322,11 +326,16 @@ export function deleteList(id: string): void {
 }
 
 // ── View: columns + sort ──
+const PREFS_REV = 2
 function readPrefs(): ViewPrefs {
-  const d: ViewPrefs = { cols: { price: true, change: true, pct: true, volume: false }, sort: {} }
+  const d: ViewPrefs = { cols: { price: true, change: false, pct: true, volume: false }, sort: {}, compact: true, rev: PREFS_REV }
   try {
     const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? 'null') as Partial<ViewPrefs> | null
     if (raw?.cols) d.cols = { ...d.cols, ...raw.cols }
+    // The watchlist cleanup (2026-10-05): the points change gives way to the % change
+    // once, for a copy saved before it; ⋯ → Columns turns it back on, and that sticks.
+    if (raw && (raw.rev ?? 1) < 2) d.cols.change = false
+    if (typeof raw?.compact === 'boolean') d.compact = raw.compact
     if (raw?.sort && typeof raw.sort === 'object') d.sort = raw.sort
     if (raw?.folded && typeof raw.folded === 'object') d.folded = raw.folded
   } catch {
@@ -346,6 +355,11 @@ function savePrefs(): void {
 }
 export function setColumn(col: keyof ViewPrefs['cols'], on: boolean): void {
   prefs = { ...prefs, cols: { ...prefs.cols, [col]: on } }
+  savePrefs()
+}
+/** One-line rows, or ticker over name. */
+export function setCompact(on: boolean): void {
+  prefs = { ...prefs, compact: on }
   savePrefs()
 }
 /** Fold or unfold one section of a list in the docked panel. */
