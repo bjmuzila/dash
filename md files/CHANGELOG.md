@@ -26433,3 +26433,44 @@ Pasting TradingView's "Advanced Levels" failed with `unknown function "price"` o
   - `cbedge-v3/src/pages/vela/legend/legendCard.ts`: the LEVELS row stays on every chart. Without the walls, its values come from the live chain, and the ⚙'s Volt / Coil / Reversal switches are the card's own (`cb-v3-vela-legend` → `show`). The ◉ reads eye-off and adds the level lines. The ⚙'s last button reads "Add the level lines to this chart" until they are on, and Indicators → Levels & Walls still works. With the lines on, the ◉ and ⚙ work as before.
 - **Checks:** a strict `tsc` against `@luxalgo/vela` 0.8.1 types is clean on the changed code. The only errors are in unchanged lines where local stubs stood in for sibling modules. `dropBrokenCaptures` was bundled and run on the live `/api/walls-range` data for the sample above. Not yet clicked through on a deployed build.
 - **Deploy:** `push.ps1` → VPS rebuild (vela).
+
+## 2026-10-05 - Vela Whale Prints: Bubble opacity % setting
+
+- New **Bubble opacity %** input on the Whale Prints study (5–100, step 5, default 30), in its settings next to Bubble size %. It sets how solid a bubble's fill is. Higher is darker and less see-through; lower lets the candles show through. 30 is the look the bubbles had before, so existing charts don't change until it's moved.
+- `cbedge-v3/src/pages/vela/studies/index.ts`: the input, plus `WH_OPACITY_DEF = 30`.
+- `cbedge-v3/src/pages/vela/studies/flow.ts`: `WhS.fill`, passed to the layer in the payload (`{ bubbles, fill }`). It is a paint-only setting, so changing it doesn't refetch.
+- `cbedge-v3/src/pages/vela/studies/whaleLayer.ts`: the fill alpha now comes from the setting. Side-unknown (grey) bubbles keep their old share of it (about half). A hovered bubble fills 25 points more. The outline is unchanged, so a faint bubble still shows its edge.
+- **Checks:** a strict `tsc` against `@luxalgo/vela` 0.8.1 types is clean on the three files. The only errors are missing sibling modules that weren't staged for the check.
+- **Deploy:** `push.ps1` → VPS rebuild (vela).
+
+## 2026-10-05 - Vela GEX Rail: thicker bars, level bars in the Path's colours, net GEX under the header
+
+- **Thicker bars:** 10px, up from 7 (`.cb-gxr-bar`, `pages/vela/vela.css`).
+- **Level bars in the Voltick Path's colours:** a tagged row's bar takes its level's Path colour: ★ Volt gold (`--color-vt-path-gold`, the Path's bead), ↘ Reversal pink (`--color-vt-reversal`), ◆ Coil blue (`--color-vt-coil`), ↯ Surge blue (`--color-vt-surge`). A row with two tags takes the higher-ranked one, in the Path's own order (Volt, Reversal, Coil, Surge). Every other bar keeps its sign colour. `studies/rail.ts` adds `RailRowOut.lead`, which the layer sets as `data-k` on the bar.
+- **Net GEX under the header:** "TSLA GEX 10:48" now has a second line, e.g. "NET +2.6B", in the GEX sign colour. It is every strike's GEX in the column, summed on the rail's GEX setting (OI + Vol / Vol only / OI only), and its tooltip says which. The ladder's top 30 strikes hold essentially the whole total: TSLA 2,595,114,817 vs 2,595,119,537 for all 66 strikes. `HEAD_H` is 30 (it was 16), so the first row sits below both lines, and the empty-state text moved down to match.
+- **Checks:** a strict `tsc` against `@luxalgo/vela` 0.8.1 is clean on `rail.ts`. The only errors are in unchanged sibling modules, from the local stubs. The total was checked against the live `/api/snapshots/option-strike-gex-history` for TSLA.
+- **Deploy:** `push.ps1` → VPS rebuild (vela).
+
+## 2026-10-05 - Voltick probe vs CB Edge: DEX, net premium and OI+Vol
+
+- `server-v2/server-with-proxy.js` (`/proxy/xcheck`, approved proxy change): every row now carries TastyTrade's `callDelta`/`putDelta`, from the same legs as the gamma. With `?prem=1` (and `premMin`, default 12,500) each row also carries today's `callNetPrem`/`putNetPrem` for that expiry, plus a `prem` block (date, floor, print count). This comes from `flow_prints` through the new `xcheckNetPrem` and follows Voltick's PREM rules: premium bought minus premium sold on each side, no mid fills, prints under the floor left out, and deep ITM (intrinsic 70%+ of the price paid) counted as 0. It is cached for 15s. It's still read-only, behind the same `XCHECK_KEY` gate and CORS, with no new route. A failed premium read comes back as `prem.ok: false` and doesn't fail the chain read.
+- Voltick admin (`Voltick-admin/admin-site/admin.js`, README): the Probe's CB Edge card has a **Third column** switch: GEX OI+Vol, DEX OI, DEX Vol, DEX OI+Vol and Net premium. It sends the engine's extra-view `view` on the same socket (the socket carries one at a time), rebuilds CB Edge's side the same way, and adds level tables and per-strike rows/diffs. It also adds self-checks: the view's grid adds up, and GEXOV = GEX + GEXV for every cell. Net premium uses wider bands (≤25% / ≤50%).
+- **Checks:** the premium SQL was run against a local Postgres 16 with mid prints, deep-ITM prints, under-floor prints and SPX/SPXW roots. Probe mock mode was run in Chromium on all five views. The admin `escape-check.cjs` found 0 leaks and 0 page errors.
+- **Deploy:** `push.ps1` → VPS rebuild (for `/proxy/xcheck`). The admin-site change goes as a Voltick admin-site PR.
+
+## 2026-10-05 - Vela: CB Walls lines without risers; Level Alerts follow the chart's symbol + all-or-nothing switch; LEVELS row independent of the lines
+
+- **No vertical connectors on CB Walls** (Brandon: "can we just remove the vertical line connecting them"). Vela's step series draws a vertical wherever two neighbouring points differ, and nothing across a null. `wallsIndicator.ts` (`runLanes`) now deals each line's runs (stretches at one strike) round three paint series.
+  - Each run holds its strike on the bar where the next run starts, so its flat still reaches that bar. A one-bar run on a 30m chart still draws.
+  - With three lanes, a lane's next run always starts at least one empty bar later, so there is never a riser.
+  - The legend and data window read one extra full-line series per level, kept off the plot.
+  - Checks: a 20,000-case randomized test of `runLanes` found no riser, no lost value and no short flat. `tsc` (strict, unused-locals, verbatimModuleSyntax) against `@luxalgo/vela` 0.8.1 is clean.
+- **Level Alerts showed CRWV on an ES chart.** Vela only re-binds a side panel when the active cell changes, so switching symbols on the same chart left the panel on the old ticker. `levels/levelAlerts.ts` now listens to that chart's `market:changed`, re-checks on its 30-second re-read, and takes the chart Vela hands to `onChart` (`levelAlertsEntry.ts` passes it through).
+- **All-or-nothing switch** at the top of the Level Alerts panel ("All ES alerts"). It arms every level the symbol has a price for, or disarms every alert on it, and it reads on when every armable level is armed. New `allArmed` / `setAllArmed`; `.cb-lv-all` styles in `vela.css` (Voltick switch, tokens only).
+- **Every chart shows the levels; the lines are a separate indicator** (Brandon: "I want every chart to show these levels, but not the lines. If they want the lines, they have to add a separate indicator for it"). This refines the earlier entry today. `legend/legendCard.ts`:
+  - The LEVELS row is always the live chain's Volt / Coil / Reversal / Flip. Its Show switches belong to the card, and it is never dimmed by the lines.
+  - The row's ◉ and the "Add the level lines" button are gone. The only way to add the lines is Indicators → Levels & Walls → CB Walls.
+  - Once added, CB Walls is an ordinary study row (◉ ⚙ ✕). The levels ⚙ shows Line opacity only while it is on the chart.
+  - Header comments in `Vela.tsx` / `wallsIndicator.ts` match this.
+- **Note:** an earlier commit today of `wallsIndicator.ts` / `legendCard.ts` landed a stale copy. Both were re-committed and checked byte for byte.
+- **Deploy:** `push.ps1` → VPS rebuild (vela).

@@ -14,26 +14,23 @@
 //   · Icon and name: tickerIcon.ts and symbolNames.ts, the picker's own.
 //   · State: Vela's own market badge (its real trading calendar), read off the
 //     symbol line this card hides; REPLAY while a bar replay runs.
-//   · LEVELS · NOW: Volt / Coil / Reversal are the newest values the chart's CB
-//     Walls study DREW (wallsIndicator.ts publishes them), so the card always
-//     matches the lines; Flip, which has no line, any level the walls do not
-//     cover, and all of them on a chart without the walls come from the live
-//     chain read Level Alerts and the phone's strip use
-//     (levels/levelAlerts.ts levelsFor). Drawn marks (levelMarks.ts), never typed.
+//   · LEVELS · NOW: Volt / Coil / Reversal / Flip off the live chain, the read
+//     Level Alerts and the phone's strip use (levels/levelAlerts.ts levelsFor).
+//     Drawn marks (levelMarks.ts), never typed.
 //     ONE ROW, ALWAYS: the card grows to fit it; on a chart too narrow for that,
 //     the row steps down (smaller type, then no distances, then whole numbers)
-//     instead of wrapping or clipping. One ⚙ (which levels, distance from price,
-//     opacity, the study's full settings) and one ◉ (the walls study on/off)
-//     cover all four.
-//   · THE ROW STAYS, THE LINES ARE OPT-IN (Brandon, 2026-10-05: "levels on the
-//     chart should stay there, but the levels indicator needs to be added if the
-//     user wants it"). CB Walls is no longer given to every chart (Vela.tsx), and
-//     the LEVELS row does not need it: with no walls on the chart the values come
-//     from the live chain and the ⚙'s level switches are the card's own. The ◉
-//     then reads eye-off and PUTS THE LEVEL LINES ON (so does the ⚙'s last
-//     button, and Indicators → Levels & Walls); once they are on, it hides and
-//     shows them as before.
-//   · STUDIES: every OTHER indicator on the price pane, in pane order, each with
+//     instead of wrapping or clipping. One ⚙ (which levels, distance from price)
+//     covers all four.
+//   · EVERY CHART SHOWS THE LEVELS; THE LINES ARE A SEPARATE INDICATOR (Brandon,
+//     2026-10-05: "I want every chart to show these levels, but not the lines.
+//     If they want the lines, they have to add a separate indicator for it").
+//     The LEVELS row stands on its own: the live chain's Volt / Coil / Reversal
+//     / Flip on every chart, its ⚙ switches (which levels, distance) the card's
+//     own, never dimmed or hidden by anything else. The lines are CB Walls,
+//     added from Indicators → Levels & Walls; on a chart it is a study row like
+//     any other (◉ ⚙ ✕ below), and the ⚙ here adds its line opacity while it is
+//     on. Vela.tsx no longer gives it to any chart.
+//   · STUDIES: every indicator on the price pane (CB Walls included), in pane order, each with
 //     its value under the crosshair (the latest bar off the plot, as Vela's
 //     legend did), ◉, and ⚙ / ✕ on hover. Those drive the study's own handle and
 //     Vela's own settings dialog, so undo, the saved layout and the object tree
@@ -62,7 +59,7 @@ import { resolveSym } from '@/pages/vela/cbedgeProvider'
 import { markSvg, type MarkKey } from '@/pages/vela/levelMarks'
 import { levelsFor } from '@/pages/vela/levels/levelAlerts'
 import { tickerIconEl } from '@/pages/vela/tickerIcon'
-import { WALLS_TYPE, onWallsNow, wallsNow } from '@/pages/vela/wallsIndicator'
+import { WALLS_TYPE } from '@/pages/vela/wallsIndicator'
 import { EVENTS_TYPE, EV_KINDS, EV_SIZES } from '@/pages/vela/studies/index'
 import { eventsCount, onEventsCount } from '@/pages/vela/studies/eventsHost'
 import { markSvgOf } from '@/pages/vela/studies/eventIcons'
@@ -74,11 +71,10 @@ const FOLD_BELOW = 520
 /** The live chain read behind Flip, re-asked this often while the page is visible. */
 const CHAIN_MS = 60_000
 
-const LEVELS: ReadonlyArray<{ key: MarkKey; name: string; input?: 'showVolt' | 'showCoil' | 'showRev' }> = [
-  // `input`: the CB Walls switch that holds it while the chart carries the walls
-  { key: 'volt', name: 'Volt', input: 'showVolt' },
-  { key: 'coil', name: 'Coil', input: 'showCoil' },
-  { key: 'reversal', name: 'Reversal', input: 'showRev' },
+const LEVELS: ReadonlyArray<{ key: MarkKey; name: string }> = [
+  { key: 'volt', name: 'Volt' },
+  { key: 'coil', name: 'Coil' },
+  { key: 'reversal', name: 'Reversal' },
   { key: 'flip', name: 'Flip' },
 ]
 
@@ -218,7 +214,6 @@ class Card {
   private lrow!: HTMLElement
   private studies!: HTMLElement
   private levelCog!: HTMLButtonElement
-  private levelEye!: HTMLButtonElement
   private rows = new Map<string, { row: HTMLElement; v: HTMLElement; sw: HTMLElement; color: string; ev?: boolean }>()
   /** What the levels row last drew: unchanged, it is not rebuilt (a hovered level keeps its tooltip). */
   private levelSig = ''
@@ -232,7 +227,6 @@ class Card {
     if (phone) this.el.dataset.phone = '1'
     this.el.setAttribute('role', 'group')
     this.build()
-    this.offs.push(onWallsNow(() => this.schedule(false)))
     this.offs.push(onEventsCount(() => this.schedule(false)))
     this.offs.push(() => prefSubs.delete(this.onPrefs))
     prefSubs.add(this.onPrefs)
@@ -377,14 +371,7 @@ class Card {
     this.levelCog = iconButton(d, 'cb-lc-lcog', 'Level settings', COG)
     this.levelCog.setAttribute('aria-haspopup', 'dialog')
     this.levelCog.addEventListener('click', () => (pop?.owner === this && pop.anchor === this.levelCog ? closePop() : this.openPop()))
-    this.levelEye = iconButton(d, 'cb-lc-leye', 'Hide the level lines', iconEl('eye', d))
-    this.levelEye.addEventListener('click', () => {
-      const w = this.walls()
-      // the level lines are opt-in: off the chart, the ◉ is what puts them on
-      if (w) w.setVisible(!w.visible)
-      else this.addWalls()
-    })
-    tools.append(this.levelCog, this.levelEye)
+    tools.append(this.levelCog)
     this.lrow.append(this.lvs, tools)
     levels.append(sh, this.lrow)
 
@@ -399,35 +386,23 @@ class Card {
     this.el.append(hd, body)
   }
 
-  /** Put CB Walls (the level lines) on this chart: the user asked for them. */
-  private addWalls(): void {
-    if (this.walls()) return
-    try {
-      this.cell.addNative(WALLS_TYPE)
-    } catch {
-      /* the cell is going away: nothing to add to */
-    }
-  }
-
-  /** Is this level on the card? The walls' own switch while the chart has them, else the card's. */
-  private levelOn(L: (typeof LEVELS)[number], w: IndicatorHandle | null): boolean {
-    if (!L.input) return prefs.flip
-    if (w) return w.inputValues()[L.input] !== false
-    return prefs.show[L.key as LineLevel] !== false
+  /** Is this level on the card? The card's own switch: the lines (CB Walls) keep theirs. */
+  private levelOn(L: (typeof LEVELS)[number]): boolean {
+    return L.key === 'flip' ? prefs.flip : prefs.show[L.key as LineLevel] !== false
   }
 
   private walls(): IndicatorHandle | null {
     return this.chart?.indicators().find((h) => h.nativeType === WALLS_TYPE) ?? null
   }
 
-  /** The study rows: every indicator on the price pane but the walls (the LEVELS row is theirs). */
+  /** The study rows: every indicator on the price pane, the level lines (CB Walls) among them. */
   private buildRows(): void {
     const chart = this.chart
     if (!chart) return
     const d = this.doc
     const handles = new Map(chart.indicators().map((h) => [h.id, h]))
     const price = chart.panes.list().find((p) => p.kind === 'price')
-    const list = (price?.indicators ?? []).filter((i) => handles.get(i.id)?.nativeType !== WALLS_TYPE)
+    const list = price?.indicators ?? []
     const index = resolveSym(this.sym).kind === 'index'
     this.studies.replaceChildren()
     const keep = new Map<string, { row: HTMLElement; v: HTMLElement; sw: HTMLElement; color: string; ev?: boolean }>()
@@ -474,13 +449,6 @@ class Card {
     }
     this.rows = keep
     if (!list.length) this.studies.append(el(d, 'div', 'cb-lc-empty', 'No studies on the price: Indicators adds one'))
-    // the levels row's controls follow the walls study
-    const w = this.walls()
-    this.levelEye.replaceChildren(iconEl(!w || !w.visible ? 'eye-off' : 'eye', d))
-    const eyeLabel = !w ? 'Show the level lines on this chart' : w.visible ? 'Hide the level lines' : 'Show the level lines'
-    this.levelEye.title = eyeLabel
-    this.levelEye.setAttribute('aria-label', eyeLabel)
-    this.levelEye.disabled = false
     this.paintHeader()
   }
 
@@ -551,15 +519,8 @@ class Card {
 
   private paintLevels(): void {
     const d = this.doc
-    const w = this.walls()
-    const now = w && this.chart ? wallsNow(this.chart.data, w.id) : null
     const px = this.price ?? this.chain?.price ?? null
-    this.lrow.dataset.off = w && !w.visible ? '1' : ''
-    const spec = LEVELS.map((L) => {
-      const shown = this.levelOn(L, w)
-      const v = !shown ? null : L.key === 'flip' ? (this.chain?.flip ?? null) : (now?.[L.key] ?? this.chain?.[L.key] ?? null)
-      return { L, v }
-    })
+    const spec = LEVELS.map((L) => ({ L, v: this.levelOn(L) ? (this.chain?.[L.key] ?? null) : null }))
     const sig = `${spec.map((x) => x.v).join('|')}|${prefs.dist ? (px ?? '') : ''}|${this.sym}`
     if (sig === this.levelSig) return
     this.levelSig = sig
@@ -627,8 +588,7 @@ class Card {
     const chips = el(d, 'div', 'cb-lc-chips')
     const drawChips = () => {
       chips.replaceChildren()
-      const w = this.walls()
-      const on = (L: (typeof LEVELS)[number]) => this.levelOn(L, w)
+      const on = (L: (typeof LEVELS)[number]) => this.levelOn(L)
       const count = LEVELS.filter(on).length
       for (const L of LEVELS) {
         const b = el(d, 'button', 'cb-lc-chip')
@@ -640,13 +600,9 @@ class Card {
         b.disabled = isOn && count === 1
         if (isOn && count === 1) b.title = 'One level stays on'
         b.addEventListener('click', () => {
-          const walls = this.walls()
-          if (L.input && walls) walls.setInputs({ [L.input]: !isOn })
-          else {
-            if (L.input) prefs.show[L.key as LineLevel] = !isOn
-            else prefs.flip = !prefs.flip
-            savePrefs()
-          }
+          if (L.key === 'flip') prefs.flip = !prefs.flip
+          else prefs.show[L.key as LineLevel] = !isOn
+          savePrefs()
           drawChips()
         })
         chips.append(b)
@@ -683,17 +639,9 @@ class Card {
     range.addEventListener('input', () => setWallsOpacity(Number(range.value), false))
     range.addEventListener('change', () => setWallsOpacity(Number(range.value), true))
     const offOp = onWallsOpacity(drawOp)
-    // the study's full dialog
-    // with the level lines on the chart: their full dialog; without: put them on
-    const more = el(d, 'button', 'cb-lc-more', this.walls() ? 'All CB Walls settings' : 'Add the level lines to this chart')
-    more.type = 'button'
-    more.addEventListener('click', () => {
-      const w = this.walls()
-      closePop()
-      if (w) this.chart?.renderer.openIndicatorSettings(w.id)
-      else this.addWalls()
-    })
-    box.append(head, showLab, chips, dist, opLab, range, more)
+    // the line opacity belongs to the level lines: only while CB Walls is on this chart
+    box.append(head, showLab, chips, dist)
+    if (this.walls()) box.append(opLab, range)
     this.present(box, this.levelCog, offOp)
     ;(chips.querySelector('button:not(:disabled)') as HTMLButtonElement | null)?.focus()
   }

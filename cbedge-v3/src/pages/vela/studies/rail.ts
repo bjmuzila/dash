@@ -40,6 +40,18 @@
 // expiry's day (SPX MON 16:42) and its tooltip says so. Nothing recorded for
 // the next expiry yet: the session that just closed.
 //
+// NET GEX under the header (2026-10-05, Brandon): the column's total — every
+// strike's GEX summed on the rail's GEX setting (OI + Vol / Vol only / OI only),
+// signed and in the GEX colours. The ladder carries the top 30 strikes, which
+// hold all but a rounding of the total (TSLA: 2.5951B of 2.5951B).
+//
+// BARS IN THE PATH'S COLOURS (2026-10-05, Brandon: "color them the same as the
+// path colors"): a tagged row's bar takes its level's Voltick Path colour —
+// ★ Volt gold (the Path's bead), ↘ Reversal pink, ◆ Coil blue, ↯ Surge blue —
+// the highest-ranked level on the row when it carries two (Volt, Reversal,
+// Coil, Surge: the Path's own priority). Every other bar keeps its sign colour.
+// Bars are 10px (were 7).
+//
 // Too narrow (the phone, a small grid cell): no rail. The card does the same
 // on a phone.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,8 +65,8 @@ import { GEX_BASIS, RAIL_SIDES, RAIL_TYPE } from './index'
 import { columnsUntil, ladderKey, loadRailLadder, sessionDates, type Ladder } from './ladder'
 
 const ROW_H = 15
-/** The header line's height: rows above it are dropped. */
-const HEAD_H = 16
+/** The header's height (the name and time, then the net GEX): rows above it are dropped. */
+const HEAD_H = 30
 /** Below this cell width the rail stays off. */
 const MIN_CELL = 520
 
@@ -73,7 +85,12 @@ export interface RailRowOut {
   price: number
   value: number
   tags: { key: string; text: string; title: string; fill?: string; ink?: string }[]
+  /** The Voltick level whose Path colour the bar takes (the row's highest-ranked tag); none = the sign colour. */
+  lead?: string
 }
+
+/** The Path's level priority (vtPath/trailruns.ts PATH_PRIORITY): which colour a row with two tags takes. */
+const LEAD_ORDER = ['volt', 'reversal', 'coil', 'surge']
 
 export interface RailPayload {
   width: number
@@ -81,6 +98,11 @@ export interface RailPayload {
   head: string
   /** The header's tooltip. */
   headTitle: string
+  /** The column's net GEX, signed ('' while there is none). */
+  net: string
+  /** Its sign, for the colour. */
+  netSign: 'pos' | 'neg' | ''
+  netTitle: string
   rows: RailRowOut[]
   maxAbs: number
   /** Placement priority: row strikes, most important first. */
@@ -131,7 +153,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
   everyTick: true,
   render: () => ({}),
   layer: (c, s, lad): RailPayload => {
-    const base = { width: s.width, side: s.side, headTitle: '', rows: [], maxAbs: 0, order: [], key: '' }
+    const base = { width: s.width, side: s.side, headTitle: '', net: '', netSign: '' as const, netTitle: '', rows: [], maxAbs: 0, order: [], key: '' }
     if (!lad) return { ...base, head: '', empty: 'Loading the ladder…' }
     const cols = columnsUntil(lad.columns, c.until)
     const col = cols[cols.length - 1]
@@ -164,12 +186,16 @@ export const railImpl = studyImpl<RailS, Ladder>({
           for (const k of ['cb', 'cw', 'pw'] as const) if (lv[k] === r.strike) tags.push({ key: k, text: k.toUpperCase(), title: TAG_TITLE[k]! })
         }
       }
-      return { strike: r.strike, price: r.strike + shift, value: r.value, tags }
+      const lead = LEAD_ORDER.find((k) => tags.some((t) => t.key === k))
+      return { strike: r.strike, price: r.strike + shift, value: r.value, tags, lead }
     })
     const named = rows.filter((r) => r.tags.length).map((r) => r.strike)
     const rest = rows.filter((r) => !r.tags.length).sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
     const at = TIME.format(new Date(col.slotTs))
     const next = lad.next
+    // the column's total on the rail's GEX setting (`cells` is already OI only when that is the setting)
+    const total = cells.reduce((a, x) => a + (s.metric === 'vol' ? x.netVol : x.net), 0)
+    const basisName = s.metric === 'vol' ? 'volume' : s.metric === 'oi' ? 'open interest' : 'OI + volume'
     // short enough for the 96px rail: SPX GEX 15:59, or after a close SPX MON 16:42
     const head = `${lad.label} ${next ? DOW.format(dayDate(next.expiry)).toUpperCase() : 'GEX'} ${at}`
     const headTitle = next
@@ -180,6 +206,9 @@ export const railImpl = studyImpl<RailS, Ladder>({
       side: s.side,
       head,
       headTitle,
+      net: `NET ${fmt(total)}`,
+      netSign: total > 0 ? 'pos' : total < 0 ? 'neg' : '',
+      netTitle: `Net GEX, ${basisName}: every strike's gamma summed (column ${at} ET)`,
       rows,
       maxAbs: model.maxAbs,
       order: [...named, ...rest.map((r) => r.strike)],
@@ -199,6 +228,7 @@ class RailLayer implements RendererLayerInstance {
   private canvas: HTMLCanvasElement | null = null
   private el: HTMLDivElement | null = null
   private headEl: HTMLDivElement | null = null
+  private netEl: HTMLDivElement | null = null
   private emptyEl: HTMLDivElement | null = null
   private nodes = new Map<number, HTMLDivElement>()
   private key = ''
@@ -243,9 +273,11 @@ class RailLayer implements RendererLayerInstance {
       el.style.cssText = `position:absolute;top:0;bottom:0;overflow:hidden`
       this.headEl = document.createElement('div')
       this.headEl.className = 'cb-gxr-head'
+      this.netEl = document.createElement('div')
+      this.netEl.className = 'cb-gxr-net'
       this.emptyEl = document.createElement('div')
       this.emptyEl.className = 'cb-gxr-empty'
-      el.append(this.headEl, this.emptyEl)
+      el.append(this.headEl, this.netEl, this.emptyEl)
       b.wrap.appendChild(el)
       this.key = ''
       this.nodes.clear()
@@ -311,6 +343,7 @@ class RailLayer implements RendererLayerInstance {
       const bar = document.createElement('span')
       bar.className = 'cb-gxr-bar'
       bar.dataset.s = r.value >= 0 ? 'pos' : 'neg'
+      if (r.lead) bar.dataset.k = r.lead
       bar.style.width = `${d.maxAbs > 0 ? Math.max(2, (Math.abs(r.value) / d.maxAbs) * 100) : 0}%`
       track.append(bar)
       row.append(tags, track)
@@ -329,6 +362,11 @@ class RailLayer implements RendererLayerInstance {
     if (!el) return
     this.headEl!.textContent = d.head
     this.headEl!.title = d.headTitle
+    const net = this.netEl!
+    if (net.textContent !== d.net) net.textContent = d.net
+    net.title = d.netTitle
+    net.dataset.s = d.netSign
+    net.hidden = !d.net
     this.emptyEl!.textContent = d.empty
     this.emptyEl!.hidden = !d.empty
     if (d.key !== this.key) {

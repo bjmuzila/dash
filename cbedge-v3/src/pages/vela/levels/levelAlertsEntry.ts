@@ -4,7 +4,7 @@
 // has to be running for it to fire). Right-click the chart → "Level alerts…"
 // opens the panel too.
 
-import { registerSidePanel, registerWidgetAction } from '@luxalgo/vela'
+import { registerSidePanel, registerWidgetAction, type Vela } from '@luxalgo/vela'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 
@@ -40,7 +40,7 @@ export function registerLevelAlerts(): void {
     mount: (ctx, body, header) => {
       header.setTitle('Level Alerts')
       body.textContent = 'Loading…'
-      let h: { onChart: () => void; destroy: () => void } | null = null
+      let h: { onChart: (chart?: Vela) => void; destroy: () => void } | null = null
       let dead = false
       void import('./levelAlerts').then((m) => {
         if (dead) return
@@ -48,7 +48,7 @@ export function registerLevelAlerts(): void {
         h = m.mountLevelPanel(() => ctx.chart, body)
       })
       return {
-        onChart: () => h?.onChart(),
+        onChart: (chart) => h?.onChart(chart),
         destroy: () => {
           dead = true
           h?.destroy()

@@ -87,8 +87,9 @@ import '@/pages/vela/vela.css'
 // colours) registered as a Vela native study. Since 2026-10-05 it is OPT-IN
 // (Brandon: "levels on the chart should stay there, but the levels indicator
 // needs to be added if the user wants it on the chart"): no chart is given it.
-// The legend card's LEVELS row stays on every chart without it (live chain
-// values), and its ◉, its ⚙ and Indicators → Levels & Walls put the lines on.
+// Every chart shows the levels (the legend card's LEVELS row: live chain
+// values) but not the lines; the lines are this separate indicator, added from
+// Indicators → Levels & Walls.
 // Charts this page HAD given it (cells in `<key>-walls`) have that copy taken
 // back off once (`<key>-walls-optin`, unseedOnce); a chart the user adds it to
 // afterwards keeps it, in Vela's saved document like any study.

@@ -1895,9 +1895,30 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* the column's net GEX, under the name (studies/rail.ts) */
+.cb-gxr-net {
+  position: absolute;
+  top: 15px;
+  left: 6px;
+  right: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-3xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--color-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-gxr-net[data-s='pos'] {
+  color: var(--color-gex-pos);
+}
+.cb-gxr-net[data-s='neg'] {
+  color: var(--color-gex-neg);
+}
 .cb-gxr-empty {
   position: absolute;
-  top: 20px;
+  top: 32px;
   left: 6px;
   right: 6px;
   font-size: var(--text-2xs);
@@ -1943,7 +1964,7 @@
   padding-right: 4px;
 }
 .cb-gxr-bar {
-  height: 7px;
+  height: 10px;
   border-radius: 0 2px 2px 0;
 }
 .cb-gxr-bar[data-s='pos'] {
@@ -1951,6 +1972,19 @@
 }
 .cb-gxr-bar[data-s='neg'] {
   background: var(--color-gex-neg);
+}
+/* a tagged row's bar in its level's Voltick Path colour (after the sign rules: these win) */
+.cb-gxr-bar[data-k='volt'] {
+  background: var(--color-vt-path-gold);
+}
+.cb-gxr-bar[data-k='reversal'] {
+  background: var(--color-vt-reversal);
+}
+.cb-gxr-bar[data-k='coil'] {
+  background: var(--color-vt-coil);
+}
+.cb-gxr-bar[data-k='surge'] {
+  background: var(--color-vt-surge);
 }
 /* Position: Left. The rail is the chart's left edge: its border faces the plot
    on the right, each row runs mirrored (tags against the plot, the bar growing
@@ -2074,6 +2108,52 @@
 .cb-lv-bell:disabled {
   opacity: 0.35;
   cursor: default;
+}
+/* all or nothing: every level on this symbol (levels/levelAlerts.ts) */
+.cb-lv-all {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 30px;
+  margin: 2px 0 2px;
+  padding: 0 2px 0 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-line);
+  background: none;
+  color: var(--color-fg);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.cb-lv-all:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.cb-lv-all i {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--color-vt-line);
+}
+.cb-lv-all i::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--color-vt-quiet);
+  content: '';
+  transition: left 0.15s ease;
+}
+.cb-lv-all[aria-pressed='true'] i {
+  background: var(--color-vt-accent);
+}
+.cb-lv-all[aria-pressed='true'] i::after {
+  left: 13px;
+  background: var(--color-vt-paper);
 }
 .cb-lv-foot {
   display: flex;

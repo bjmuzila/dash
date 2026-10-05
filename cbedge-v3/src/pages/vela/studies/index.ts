@@ -40,6 +40,8 @@ export const RAIL_SIDES = ['Right', 'Left'] as const
 export const JR_SHOW = ['All trades', 'Winners', 'Losers'] as const
 /** Where a whale bubble reaches its biggest — anything larger draws that size too. */
 export const WH_CAP = ['$25M', '$10M', '$50M', '$100M'] as const
+/** A whale bubble's fill, % — 30 is how they always drew; 100 is solid. */
+export const WH_OPACITY_DEF = 30
 export const TPO_ROWS = ['Auto', '0.25', '0.5', '1', '2', '5', '10', '25'] as const
 export const TPO_PERIODS = ['30 min', '15 min', '60 min'] as const
 
@@ -233,6 +235,16 @@ export function registerStudies(): void {
           tooltip: 'Net premium that draws the largest bubble. Bubble AREA follows premium up to here; anything bigger is drawn at this size.',
         },
         { key: 'size', title: 'Bubble size %', type: 'int', defval: 100, min: 50, max: 200, step: 10, tooltip: 'Scales every bubble: smallest and largest together.' },
+        {
+          key: 'opacity',
+          title: 'Bubble opacity %',
+          type: 'int',
+          defval: WH_OPACITY_DEF,
+          min: 5,
+          max: 100,
+          step: 5,
+          tooltip: 'How solid the bubbles are filled: higher is darker and less see-through, lower lets the candles show through. The outline stays.',
+        },
         { key: 'text', title: 'Premium in the bubble', type: 'bool', defval: true, tooltip: 'Written inside a bubble when it fits; hover any bubble for the prints.' },
       ],
     },

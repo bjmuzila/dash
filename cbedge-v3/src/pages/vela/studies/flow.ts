@@ -16,7 +16,8 @@
 //                  green bullish (calls bought, puts sold), red bearish, grey
 //                  when the side is unknown.
 //                  Hover for a short card of the prints. Drawn by a renderer
-//                  layer — whaleLayer.ts, which has the size table.
+//                  layer — whaleLayer.ts, which has the size table. Bubble
+//                  opacity % sets how solid the fill is (30 by default).
 //
 // ES charts read SPX's flow, NQ charts NDX's — the futures have no options here.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -24,7 +25,7 @@
 import type { PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
 import { DAY_MS, barAt, bool, studyImpl, etDateKey, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
-import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_EXP, WH_MIN, WH_SIDE } from './index'
+import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_EXP, WH_MIN, WH_OPACITY_DEF, WH_SIDE } from './index'
 import { WhaleLayer, type Tone, type WhaleBubble, type WhalePayload } from './whaleLayer'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
 import { loadBasis } from '@/pages/vela/wallsIndicator'
@@ -240,6 +241,8 @@ interface WhS {
   side: 'all' | 'C' | 'P'
   cap: number
   size: number
+  /** Bubble fill opacity, 0.05..1 (the Bubble opacity % setting). */
+  fill: number
   text: boolean
   exp: 'all' | '0dte' | 'week' | 'no0dte'
 }
@@ -420,6 +423,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
       side: side === WH_SIDE[1] ? 'C' : side === WH_SIDE[2] ? 'P' : 'all',
       cap: WH_CAP_V[Math.max(0, (WH_CAP as readonly string[]).indexOf(str(i.cap, WH_CAP[0])))] ?? 25e6,
       size: int(i.size, 100, 50, 200) / 100,
+      fill: int(i.opacity, WH_OPACITY_DEF, 5, 100) / 100,
       text: bool(i.text, true),
       exp: (['all', '0dte', 'week', 'no0dte'] as const)[Math.max(0, (WH_EXP as readonly string[]).indexOf(str(i.exp, WH_EXP[0])))] ?? 'all',
     }
@@ -462,7 +466,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
   render: () => ({}),
   layer: (c, s, data): WhalePayload | null => {
     const bubbles = whaleBubbles(c, s, data)
-    return bubbles.length ? { bubbles } : null
+    return bubbles.length ? { bubbles, fill: s.fill } : null
   },
 })
 

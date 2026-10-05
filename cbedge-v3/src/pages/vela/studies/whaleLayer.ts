@@ -19,6 +19,13 @@
 //
 // The bigger bubbles draw first, so a small one sitting on a big one stays on
 // top — and is what the pointer finds.
+//
+// OPACITY (2026-10-05, Brandon: "needs a transparency setting, to make them
+// darker or less see-through"): the study's Bubble opacity % is the FILL of a
+// bullish / bearish bubble (30% by default — the look they always had; 100% is
+// solid). A grey side-unknown bubble keeps its old proportion of that (about
+// half), a hovered one fills a step more, and the outline is unchanged, so even a
+// very faint bubble keeps its edge.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { RendererLayerArgs, RendererLayerInstance } from '@luxalgo/vela/plugin'
@@ -48,7 +55,12 @@ export interface WhaleBubble {
 
 export interface WhalePayload {
   bubbles: WhaleBubble[]
+  /** Fill opacity 0..1 — the study's Bubble opacity % (0.3 when absent, how they always drew). */
+  fill?: number
 }
+
+/** The fill when the payload carries none. */
+const FILL_DEF = 0.3
 
 // green bullish, red bearish (data), Paper Quiet when the side is unknown
 const TONE_TOKEN: Record<Tone, string> = { up: '--color-up', down: '--color-down', mid: '--color-vt-quiet' }
@@ -214,6 +226,10 @@ export class WhaleLayer implements RendererLayerInstance {
     const rgb: Record<Tone, RGB> = { up: tokenRgb(TONE_TOKEN.up), down: tokenRgb(TONE_TOKEN.down), mid: tokenRgb(TONE_TOKEN.mid) }
     const ink = tokenRgb('--color-fg')
     const font = getFont(canvas)
+    const fill = Number.isFinite(d.fill) ? Math.max(0.05, Math.min(1, d.fill as number)) : FILL_DEF
+    // the side-unknown share and the hover lift, as they were at the 30% default
+    const fillMid = fill * (0.16 / FILL_DEF)
+    const fillOn = Math.min(1, fill + (0.55 - FILL_DEF))
     for (const p of placed) {
       const { b, x, y } = p
       const c = rgb[b.tone]
@@ -221,7 +237,7 @@ export class WhaleLayer implements RendererLayerInstance {
       const mid = b.tone === 'mid'
       ctx.beginPath()
       ctx.arc(x, y, b.r, 0, Math.PI * 2)
-      ctx.fillStyle = hexA(c, on ? 0.55 : mid ? 0.16 : 0.3)
+      ctx.fillStyle = hexA(c, on ? fillOn : mid ? fillMid : fill)
       ctx.fill()
       ctx.lineWidth = on ? 2 : 1.25
       ctx.strokeStyle = hexA(c, mid ? 0.6 : 0.95)

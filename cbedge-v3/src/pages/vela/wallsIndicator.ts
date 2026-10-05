@@ -6,8 +6,9 @@
 // and nothing else — no tags, no axis chips. Registered with Vela as a NATIVE
 // INDICATOR so each chart carries it as a study (a legend row, eye / gear / ✕,
 // a settings dialog, a place in the saved workspace). OPT-IN since 2026-10-05:
-// no chart is given it (Pages/Vela.tsx); the legend card's LEVELS row stays
-// without it, and its ◉ / ⚙ or Indicators → Levels & Walls put the lines on.
+// no chart is given it (Pages/Vela.tsx). Every chart shows the levels (the
+// legend card's LEVELS row); the lines are this indicator, added from
+// Indicators → Levels & Walls.
 //
 // ── The migration chart's model, transcribed ────────────────────────────────
 //   · walls_log is CHANGE-ONLY, so every level is FORWARD-FILLED from its last
@@ -554,6 +555,43 @@ interface Line {
   colors?: (string | null)[]
 }
 
+// ── No risers (2026-10-05, Brandon: "can we just remove the vertical line
+// connecting them") ─────────────────────────────────────────────────────────
+// Vela's step draws a vertical wherever two neighbouring points differ, and
+// nothing across a gap (a null). So each line is painted as RUN_LANES series:
+// its runs (stretches at one strike) are dealt round them in turn, and a run
+// holds its strike on the bar the next run starts, so its flat still reaches
+// that bar (a one-bar run on a 30m chart still draws). Three lanes means a
+// lane's next run is always at least one empty bar after the last one ended:
+// never a riser. The legend and the data window read one more series per line,
+// off the plot, carrying the whole line (`readout`).
+
+const RUN_LANES = 3
+
+/** A line's runs dealt round RUN_LANES lanes; `src[l][i]` is the bar whose colour lane l uses at bar i. */
+function runLanes(values: readonly (number | null)[]): { lanes: (number | null)[][]; src: number[][] } {
+  const n = values.length
+  const lanes = Array.from({ length: RUN_LANES }, () => new Array<number | null>(n).fill(null))
+  const src = Array.from({ length: RUN_LANES }, () => new Array<number>(n).fill(-1))
+  let lane = RUN_LANES - 1
+  for (let i = 0; i < n; i++) {
+    const v = values[i] ?? null
+    if (v == null) continue
+    const prev = i > 0 ? (values[i - 1] ?? null) : null
+    if (prev !== v) {
+      // the old run reaches this bar, flat; the new one starts on the next lane
+      if (prev != null) {
+        lanes[lane]![i] = prev
+        src[lane]![i] = i - 1
+      }
+      lane = (lane + 1) % RUN_LANES
+    }
+    lanes[lane]![i] = v
+    src[lane]![i] = i
+  }
+  return { lanes, src }
+}
+
 function linesFor(bars: readonly OHLCV[], al: Aligned, s: Settings): Line[] {
   const cw = al.levels.get('call_wall') ?? []
   const pw = al.levels.get('put_wall') ?? []
@@ -750,20 +788,42 @@ class WallsIndicator implements NativeIndicator {
     publishNow(ctx.data, ctx.id, now.volt == null && now.coil == null && now.reversal == null ? null : now)
     const shown = shownOf(this.inputs)
     const lines = all.filter((l) => shown[l.key] !== false && l.values.some((v) => v != null))
-    const series: SeriesSpec[] = lines.map((line, ordinal) => ({
-      id: stableSeriesId({ instanceId: WALLS_TYPE, kind: 'step', title: line.key, ordinal }),
-      title: line.title,
-      paneId: '',
-      kind: 'step' as const,
-      points: bars.map((b, i) => {
-        const c = line.colors?.[i]
-        return c ? { time: b.time, value: line.values[i] ?? null, color: c } : { time: b.time, value: line.values[i] ?? null }
-      }),
-      style: { color: line.color, width: line.width, lineStyle: 'solid' as const },
-      // Lines only: no chip on the price axis. Still painted, so still inside
-      // the autoscale — the migration chart's y range carries the levels too.
-      display: { pane: true, priceScale: false, legend: true, dataWindow: true },
-    }))
+    const series: SeriesSpec[] = []
+    const style = (line: Line) => ({ color: line.color, width: line.width, lineStyle: 'solid' as const })
+    lines.forEach((line, ordinal) => {
+      // the paint: one series per lane, so no riser (see runLanes)
+      const { lanes, src } = runLanes(line.values)
+      lanes.forEach((vals, l) => {
+        if (!vals.some((v) => v != null)) return
+        series.push({
+          id: stableSeriesId({ instanceId: WALLS_TYPE, kind: 'step', title: `${line.key}#${l}`, ordinal: ordinal * RUN_LANES + l }),
+          title: line.title,
+          paneId: '',
+          kind: 'step' as const,
+          points: bars.map((b, i) => {
+            const c = line.colors?.[src[l]![i]!]
+            return c && vals[i] != null ? { time: b.time, value: vals[i] ?? null, color: c } : { time: b.time, value: vals[i] ?? null }
+          }),
+          style: style(line),
+          // Lines only: no chip on the price axis. Still painted, so still inside
+          // the autoscale — the migration chart's y range carries the levels too.
+          display: { pane: true, priceScale: false, legend: false, dataWindow: false },
+        })
+      })
+      // the readout: the whole line, for the legend and the data window, off the plot
+      series.push({
+        id: stableSeriesId({ instanceId: WALLS_TYPE, kind: 'step', title: line.key, ordinal }),
+        title: line.title,
+        paneId: '',
+        kind: 'step' as const,
+        points: bars.map((b, i) => {
+          const c = line.colors?.[i]
+          return c ? { time: b.time, value: line.values[i] ?? null, color: c } : { time: b.time, value: line.values[i] ?? null }
+        }),
+        style: style(line),
+        display: { pane: false, priceScale: false, legend: true, dataWindow: true },
+      })
+    })
     ctx.emit({ series })
     ctx.setStatus(this.timer ? 'live' : 'idle')
   }

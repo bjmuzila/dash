@@ -97,6 +97,14 @@ function mergeLiveVolume(data, overlay) {
  * CORS: the origin has to be in PROXY_CORS_ORIGINS (https://admin.voltick.io).
  * The custom header makes the browser send an OPTIONS preflight first, answered
  * here with no key needed (a preflight carries no data and cannot carry one).
+ *
+ * DEX AND NET PREMIUM (2026-10-05). Each row also carries callDelta/putDelta,
+ * TastyTrade's own (put delta negative), off the same legs as the gamma, so the
+ * probe can hold Voltick's DEX / DEXV / DEXOV against CB Edge's. With `?prem=1`
+ * each row also carries today's callNetPrem/putNetPrem for this expiry, read
+ * from flow_prints (xcheckNetPrem below), so the probe can hold Voltick's PREM
+ * view against CB Edge's own tape. Absent `prem=1` the payload is what it was
+ * plus the two delta fields.
  */
 async function handleXcheck(req, res, proxy) {
   const origin = req.headers.origin;
@@ -150,16 +158,93 @@ async function handleXcheck(req, res, proxy) {
         callVol: n(c.volume), putVol: n(p.volume),
         callGamma: Math.abs(n(c.gamma)), putGamma: Math.abs(n(p.gamma)),
         callIV: n(c['implied-volatility']), putIV: n(p['implied-volatility']),
+        callDelta: n(c.delta), putDelta: n(p.delta),
       });
+    }
+    // today's net premium per strike for this expiry · only when asked, never fails the read
+    let prem;
+    if (u.searchParams.get('prem') === '1' && item) {
+      let floor = Number(u.searchParams.get('premMin'));
+      if (!Number.isFinite(floor) || floor < 0) floor = XCHECK_PREM_FLOOR;
+      floor = Math.min(floor, 10_000_000);
+      try {
+        prem = await xcheckNetPrem(ticker, String(item['expiration-date']), floor);
+        if (prem.ok) {
+          const byK = new Map(prem.byStrike.map((r) => [Math.round(r.strike * 100), r]));
+          for (const r of rows) {
+            const x = byK.get(Math.round(r.strike * 100));
+            r.callNetPrem = x ? x.callNet : 0;
+            r.putNetPrem = x ? x.putNet : 0;
+          }
+          prem = { ok: true, date: prem.date, floor: prem.floor, prints: prem.prints, offLadder: prem.byStrike.filter((x) => !rows.some((r) => Math.round(r.strike * 100) === Math.round(x.strike * 100))).length };
+        }
+      } catch (e) {
+        prem = { ok: false, error: String(e?.message || e) };
+      }
     }
     sendJson(res, 200, {
       ok: true, ticker, expiry: item ? String(item['expiration-date']) : (expiry || null),
       expirations: items.map((it) => String(it?.['expiration-date'] || '')).filter(Boolean),
       spot: n(data?.underlyingPrice) || null, source: live ? 'live' : 'rest', at: Date.now(), rows,
+      ...(prem ? { prem } : {}),
     }, req);
   } catch (e) {
     sendJson(res, 502, { ok: false, error: String(e?.message || e), ticker }, req);
   }
+}
+
+/**
+ * Today's net premium per strike for ONE ticker + expiry, off flow_prints · the
+ * CB Edge half of the Voltick probe's PREM check (handleXcheck `?prem=1`).
+ *
+ * MIRRORS VOLTICK'S PREM VIEW (flowtape.js tallyPrint → pexp), so a gap left is
+ * the two tapes, not two definitions:
+ *   · per side, premium bought minus premium sold; the probe nets calls − puts
+ *   · mid fills never count (only side 'buy' / 'sell')
+ *   · prints under the floor never count (Voltick's FLOW_MIN_PREMIUM, $12,500)
+ *   · deep ITM counts as 0: intrinsic at the print's spot is 70%+ of what was
+ *     paid per share (Voltick's deepItmOf, DEEP_ITM_SHARE 0.7)
+ * Read-only, today (ET) only, held 15s per ticker|expiry|floor.
+ */
+const XCHECK_PREM_FLOOR = 12_500;
+const XCHECK_PREM_TTL_MS = 15_000;
+const _xcheckPremCache = new Map(); // key -> { at, out }
+async function xcheckNetPrem(ticker, expiry, floor) {
+  const date = todayYmdET();
+  const key = `${ticker}|${expiry}|${date}|${floor}`;
+  const hit = _xcheckPremCache.get(key);
+  if (hit && Date.now() - hit.at < XCHECK_PREM_TTL_MS) return hit.out;
+  const pool = getHistPool();
+  if (!pool) return { ok: false, error: 'the flow database is not reachable' };
+  await ensureFlowPrintsSchema(pool);
+  const { rows } = await pool.query(
+    `SELECT strike,
+            sum(CASE WHEN type = 'C' THEN (CASE WHEN side = 'buy' THEN p ELSE -p END) ELSE 0 END) AS call_net,
+            sum(CASE WHEN type = 'P' THEN (CASE WHEN side = 'buy' THEN p ELSE -p END) ELSE 0 END) AS put_net,
+            count(*)::int AS n
+       FROM (
+         SELECT strike, type, side,
+                CASE WHEN spot > 0 AND size > 0 AND premium > 0
+                       AND (CASE WHEN type = 'C' THEN GREATEST(0, spot - strike) ELSE GREATEST(0, strike - spot) END)
+                           / NULLIF(premium / NULLIF(size * 100.0, 0), 0) >= 0.7
+                     THEN 0 ELSE premium END AS p
+           FROM flow_prints
+          WHERE date = $1 AND underlying_norm = ANY($2) AND expiration = $3
+            AND side IN ('buy', 'sell') AND type IN ('C', 'P') AND premium >= $4
+       ) t
+      GROUP BY strike`,
+    [date, flowRootsFor(ticker), expiry, floor]
+  );
+  const byStrike = rows
+    .map((r) => ({ strike: Number(r.strike), callNet: Math.round(Number(r.call_net) || 0), putNet: Math.round(Number(r.put_net) || 0), n: Number(r.n) || 0 }))
+    .filter((r) => Number.isFinite(r.strike));
+  const out = { ok: true, date, floor, prints: byStrike.reduce((a, r) => a + r.n, 0), byStrike };
+  _xcheckPremCache.set(key, { at: Date.now(), out });
+  if (_xcheckPremCache.size > 100) {
+    const cutoff = Date.now() - 5 * 60_000;
+    for (const [k, v] of _xcheckPremCache) if (v.at < cutoff) _xcheckPremCache.delete(k);
+  }
+  return out;
 }
 
 // Optional feature modules — loaded defensively so a missing or broken file can

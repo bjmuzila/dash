@@ -34,6 +34,15 @@
 // Script Alerts log, and a desktop notification when switched on.
 //
 // Kept in this browser. Held while a bar replay runs: replayed bars are history.
+//
+// ALL OR NOTHING (2026-10-05, Brandon): a switch at the top of the panel arms
+// every level this symbol has a price for, or disarms them all. It reads on when
+// every level that can be armed is armed.
+//
+// THE PANEL FOLLOWS THE CHART'S SYMBOL (2026-10-05: "I'm on an ES chart but it
+// brings up CRWV"). Vela only re-binds a side panel when the ACTIVE CELL changes,
+// so a symbol switched on the same chart left the panel on the old ticker. It now
+// listens to that chart's market:changed too (and checks on its 30 s re-read).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { OHLCV, Vela } from '@luxalgo/vela'
@@ -221,6 +230,25 @@ export function toggleArmed(sym: string, lv: Level): void {
 export function disarm(id: string): void {
   saveArmed(armed.filter((a) => a.id !== id))
 }
+/** The levels on `sym` that can be armed: the ones with a price. */
+const armable = (levels: readonly Level[]) => levels.filter((l) => l.price != null && Number.isFinite(l.price))
+/** Every armable level on `sym` armed (and at least one of them)? */
+export function allArmed(sym: string, levels: readonly Level[]): boolean {
+  const can = armable(levels)
+  return can.length > 0 && can.every((l) => isArmed(sym, l.key))
+}
+/** All or nothing: arm every armable level on `sym`, or disarm every alert on it. */
+export function setAllArmed(sym: string, levels: readonly Level[], on: boolean): void {
+  if (!on) {
+    saveArmed(armed.filter((a) => a.sym !== sym))
+    return
+  }
+  const now = Date.now()
+  const add = armable(levels)
+    .filter((l) => !isArmed(sym, l.key))
+    .map((l) => ({ id: `${sym}|${l.key}|${now}`, sym, key: l.key, name: l.name, armedAt: now }))
+  if (add.length) saveArmed([...armed, ...add])
+}
 
 // ── The watcher ──────────────────────────────────────────────────────────────
 
@@ -327,12 +355,14 @@ function bellIcon(off: boolean): SVGSVGElement {
   return svg
 }
 
-export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onChart: () => void; destroy: () => void } {
+export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onChart: (chart?: Vela) => void; destroy: () => void } {
   const root = el('div', 'cb-lv')
   body.replaceChildren(root)
-  let sym = bare(chartOf().market.symbol)
+  let chart = chartOf()
+  let sym = bare(chart.market.symbol)
   let read: LevelRead | null = null
   let alive = true
+  let offMarket: (() => void) | null = null
 
   const draw = () => {
     if (!alive) return
@@ -341,6 +371,21 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
     head.append(el('span', 'cb-lv-sym', sym), el('span', 'cb-lv-px', read?.price != null ? fmt(read.price) : ''))
     root.append(head)
     root.append(el('p', 'cb-lv-hint', 'Ring a bell to be told when price crosses that level. A Volt, Coil or Reversal alert follows that level as it moves. Each fires once.'))
+    // all or nothing: every level this symbol has a price for
+    const levels = read?.levels ?? []
+    const allOn = allArmed(sym, levels)
+    const canArm = armable(levels).length > 0
+    const all = el('button', 'cb-lv-all')
+    all.type = 'button'
+    all.setAttribute('aria-pressed', String(allOn))
+    all.disabled = !canArm && !armed.some((a) => a.sym === sym)
+    all.title = allOn ? `Disarm every ${sym} level alert` : `Arm an alert on every ${sym} level that has a price`
+    all.append(el('span', '', `All ${sym} alerts`), el('i', ''))
+    all.addEventListener('click', () => {
+      setAllArmed(sym, levels, !allOn)
+      draw()
+    })
+    root.append(all)
     if (!read) {
       root.append(el('p', 'cb-lv-hint', 'Reading the levels…'))
     } else {
@@ -409,7 +454,7 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
     })
     foot.append(box, document.createTextNode(' Desktop notifications'))
     root.append(foot)
-    root.append(el('p', 'cb-lv-hint', `Fired alerts land in the toolbar's Alerts feed and the Script Alerts log (${tfLabel(chartOf().market.timeframe ?? '5')} chart).`))
+    root.append(el('p', 'cb-lv-hint', `Fired alerts land in the toolbar's Alerts feed and the Script Alerts log (${tfLabel(chart.market.timeframe ?? '5')} chart).`))
   }
 
   const load = (fresh: boolean) => {
@@ -420,22 +465,40 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
       draw()
     })
   }
+  /** Onto the chart's current symbol, if it has moved. */
+  const syncSym = () => {
+    const next = bare(chart.market.symbol)
+    if (!alive || next === sym) return
+    sym = next
+    read = null
+    draw()
+    load(true)
+  }
+  /** Follow this chart's symbol switches (Vela re-binds a panel only on a cell change). */
+  const follow = () => {
+    offMarket?.()
+    offMarket = chart.on('market:changed', syncSym)
+  }
+  follow()
   draw()
   load(true)
-  const timer = setInterval(() => !document.hidden && load(false), 30_000)
+  const timer = setInterval(() => {
+    if (document.hidden) return
+    syncSym()
+    load(false)
+  }, 30_000)
   armSubs.add(draw)
   return {
-    onChart: () => {
-      const next = bare(chartOf().market.symbol)
-      if (next === sym) return
-      sym = next
-      read = null
-      draw()
-      load(true)
+    onChart: (next?: Vela) => {
+      chart = next ?? chartOf()
+      follow()
+      syncSym()
     },
     destroy: () => {
       alive = false
       clearInterval(timer)
+      offMarket?.()
+      offMarket = null
       armSubs.delete(draw)
     },
   }
