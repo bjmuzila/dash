@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// THE LEGEND CARD: one card at the top-left of every chart on the desktop, in
+// THE LEGEND CARD: one card at the top-left of every chart (desktop and phone), in
 // place of Vela's symbol line and price-pane legend (Brandon, 2026-10-04, the
 // Vela cleanup's third section; mockup generated/2026-10-04-vela-legend-l4.html).
 //
@@ -34,10 +34,16 @@
 // One card per chart cell; a cell narrower than FOLD_BELOW starts folded (header
 // and the levels row only). A click on the chart folds it (Brandon: "clicking off
 // the legend card onto the chart should collapse it"); a click on the folded card,
-// or its ▾, opens it again. The last state is remembered per cell. The phone keeps
-// Vela's own legend: this file is loaded by the desktop page only, lazily, after
-// the workspace is up, and `cb-lc-on` on the workspace root is what hides Vela's
+// or its ▾, opens it again. The last state is remembered per cell. Loaded lazily
+// once the workspace is up; `cb-lc-on` on the workspace root is what hides Vela's
 // symbol line and price legend (vela.css).
+//
+// THE PHONE (/m; Brandon, 2026-10-04, A1 of generated/2026-10-04-vela-phone-r1.html):
+// the same card, `phone`. Folded (how every phone chart starts) it is ONE line:
+// icon, ticker, the market-state dot, the levels, ▾. A tap opens the whole card,
+// the studies with ◉ ⚙ ✕ always showing (no hover on a phone); a tap on the
+// chart folds it again. Its popovers drop under the card. The fold is
+// remembered apart from the desktop's (`m:` + the cell id).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { IndicatorHandle, Vela } from '@luxalgo/vela'
@@ -197,9 +203,13 @@ class Card {
   /** What the levels row last drew: unchanged, it is not rebuilt (a hovered level keeps its tooltip). */
   private levelSig = ''
 
-  constructor(private readonly cell: ChartCell) {
+  constructor(
+    private readonly cell: ChartCell,
+    private readonly phone = false,
+  ) {
     this.doc = cell.host.ownerDocument
     this.el = el(this.doc, 'div', 'cb-lc')
+    if (phone) this.el.dataset.phone = '1'
     this.el.setAttribute('role', 'group')
     this.build()
     this.offs.push(onWallsNow(() => this.schedule(false)))
@@ -543,15 +553,20 @@ class Card {
     }
   }
 
+  /** Where this card's fold is remembered: the phone's apart from the desktop's. */
+  private get foldKey(): string {
+    return this.phone ? `m:${this.cell.id}` : this.cell.id
+  }
+
   private setFolded(folded: boolean): void {
-    prefs.fold[this.cell.id] = folded
+    prefs.fold[this.foldKey] = folded
     savePrefs()
     this.applyFold()
   }
 
   private applyFold(): void {
-    const chosen = prefs.fold[this.cell.id]
-    const folded = chosen ?? this.cell.host.clientWidth < FOLD_BELOW
+    const chosen = prefs.fold[this.foldKey]
+    const folded = chosen ?? (this.phone || this.cell.host.clientWidth < FOLD_BELOW)
     this.el.dataset.folded = folded ? '1' : ''
     this.foldBtn.setAttribute('aria-expanded', String(!folded))
     const label = folded ? 'Unfold the legend' : 'Fold the legend'
@@ -655,7 +670,12 @@ class Card {
     const vh = d.documentElement.clientHeight
     let left = card.right + 8
     if (left + bw > vw - 8) left = Math.max(8, card.left - bw - 8)
-    const top = Math.max(8, Math.min(r.top - 8, vh - bh - 8))
+    let top = Math.max(8, Math.min(r.top - 8, vh - bh - 8))
+    if (this.phone) {
+      // no room beside the card on a phone: under it, kept on screen
+      left = Math.max(8, Math.min(card.left, vw - bw - 8))
+      top = Math.max(8, Math.min(card.bottom + 6, vh - bh - 8))
+    }
     box.style.left = `${left}px`
     box.style.top = `${top}px`
     anchor.dataset.open = '1'
@@ -777,13 +797,13 @@ class Card {
   }
 }
 
-/** A card on every chart of the desktop workspace, for its life. */
-export function bindLegendCards(ws: VelaWorkspace): () => void {
+/** A card on every chart of the workspace, for its life (`phone`: the one-line phone card). */
+export function bindLegendCards(ws: VelaWorkspace, opts: { phone?: boolean } = {}): () => void {
   const cards = new Map<string, Card>()
   const add = (id: string) => {
     const cell = ws.cell(id)
     if (!cell || cards.has(id)) return
-    cards.set(id, new Card(cell))
+    cards.set(id, new Card(cell, opts.phone === true))
   }
   const drop = (id: string) => {
     cards.get(id)?.destroy()

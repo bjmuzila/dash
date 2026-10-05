@@ -26333,3 +26333,33 @@ The seventh section of the vela.cbedge.net cleanup. Mockup: `generated/2026-10-0
     - Copy price falls back to a toast on the test's plain-http page (the clipboard needs https, as the live site is).
     - The bottom-of-chart, Events, legend fold and drawing rail tests still pass.
   - Brotli: the page chunk is 60.2KB (+0.2KB); the controls chunk is 2.6KB.
+
+## 2026-10-04 - v3 Economic Calendar earnings board: 13 missing company logos
+
+- `public/logos/` (13 new files): MSS, PENG, TMQ, BYRN, HOVR (from nvstly/icons) and WS, SAR, AXIL, RELL, TAYD, NG, GLDG, PKE (from FMP's image-stock CDN, which is where Voltick's `server/logos.js` gets its logos). These names were showing as ticker-text chips because the davidepalazzo set does not have them. Each file was checked byte for byte against the source and viewed before it was added.
+- VLGEA is left out on purpose. FMP serves the WordPress logo for it, so it stays a text chip.
+- `cbedge-v3/src/pages/economicCalendar/ChipLogo.tsx`: `LOGO_REV` 4 → 5. `/logos/*.png` is served immutable, so without the bump a browser that already cached a 404 for one of these names would keep showing the text chip. The Vela watchlist, ticker picker and legend use the same list (`tickerIcon.ts` → `tickerLogoUrls`), so they get the logos too. v2's `components/shared/ChipLogo.tsx` is still 4 and was not touched.
+- `scripts/fetch-ticker-logos.mjs`: the 13 names are added to `MANUAL`, so a `--force` run cannot replace them with nothing or with a Wikidata lockup.
+
+## 2026-10-04 - Vela phone (/m): new bar, one-line chart cards, grouped ⋮, full-screen ticker, timeframe sheet, hold-and-slide timeframe
+
+The eighth section of the vela.cbedge.net cleanup, the phone pass. Mockup: `generated/2026-10-04-vela-phone-r1.html`. Brandon picked A1, B1, C1 and D1, and asked to press, hold and slide a finger up or down on the chart page to change the timeframe.
+
+- **New file `pages/vela/phoneChrome.ts`** (lazy, phone build only; bound in `Vela.tsx`).
+  - **The bar**: Vela's eight icon stops are hidden (`cb-ph` / `cb-ph-on`; the old bar keeps its height, unseen, until ours mounts, so nothing jumps). Ours has five named stops: the ticker chip (icon, ticker, change from the watchlist's quote cache every 15 s), "5m · RTH", Indicators, Draw and ⋮ More. Indicators, Draw and More press Vela's own hidden stops, so what opens is unchanged.
+  - **Hold and slide (the timeframe)**: press and hold the timeframe (or slide straight away), then move the finger up or down. A ladder of the timeframes rises over the button (1M at the top, 1m at the bottom, a dot where it started), the one reached is lit and previewed on the bar, with a vibration tick on phones that have one. Lifting sets it on the active chart. One step per 22 px. Lifting where it started, or sliding off sideways first, changes nothing. A plain tap opens the timeframe sheet. The browser's long-press callout, selection and scrolling are kept off the button.
+  - **⋮ More (B1)**: Vela's own sheet, regrouped each time it draws, like the desktop Workspace menu: Undo, Redo, Screenshot, Replay, Maximize (Restore while maximized) across the top; then CHART (Chart type, Layout, Walls opacity with its %, Chart settings), PANELS (Watchlist, Data window, Object tree, Session stats with an on/off switch), SCRIPTS · ALERTS (Alerts, Script editor, Strategy Tester, Level alerts, Script alerts) and LAYOUT (Setups, Copy indicators). The rows are Vela's, moved and renamed, so Chart type / Layout / Alerts still open their own pages and come back grouped. A row the map does not know lands under MORE at the end.
+  - **The timeframe sheet (D1)**: Vela's, dressed once: the nine date-range chips are gone, the timeframes come first, then SESSION RTH / ETH for the active chart ("One session for this symbol" when it has only one).
+- **The ticker (C1)**: `symbolPicker.ts` gains `bindPhonePicker` / `openPhonePicker`; `symbolPickerView.ts` gains a `full` mode: the desktop picker over the whole screen with a "Ticker" title and ✕, two-line rows (ticker over name, price over change), no key hints, and the field is not focused on open so the keyboard does not cover the list.
+- **The charts (A1)**: `legend/legendCard.ts` gains a phone flavour, now loaded on the phone too (`cb-lc-on` hides Vela's symbol line and price legend there as well). Folded, every phone card is one line: icon, ticker, market-state dot, levels, ▾. A tap opens the whole card with every study's ◉ ⚙ ✕ showing (no hover on a phone); a tap on the chart folds it. Popovers drop under the card. The phone's fold is saved apart from the desktop's (`m:` + cell id).
+- `Vela.tsx`: the timeframe list moved to the new `pages/vela/timeframes.ts` (shared with the scrub); the session strip no longer shows levels on the phone either (the cards do); header comments updated. `cbedge-v3/AGENTS.md`: the `/m/vela` row says what the phone now wears.
+- `pages/vela/vela.css`: the bar, the ladder, the regrouped ⋮ sheet and its switch, the timeframe sheet, the full-screen picker and the one-line card.
+- **Checks:**
+  - `tsc` is clean apart from the pre-existing `chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds.
+  - Headless phone run (390 × 844, touch):
+    - The bar shows SPX +1.11%, 5m · RTH, Indicators, Draw, More; Vela's bar is gone. Three one-line cards.
+    - Hold + slide up 50 px: the ladder lights 30m and the chart goes to 30m on release. A quick slide down 54 px goes back to 5m. Hold and lift with no move changes nothing and opens nothing. A tap opens the sheet; ETH from the sheet sets ETH and the bar reads "5m · ETH".
+    - ⋮ shows the four groups; Chart type opens its page and Back returns grouped; Chart settings opens the settings dialog; Maximize / Restore, Replay and the Session stats switch work.
+    - Picking NQ in the full-screen ticker on the second chart loads NQ there; the bar follows the active chart.
+  - Desktop: the picker is unchanged (anchored, key hints, focused field); the desktop page at a phone width keeps Vela's own touch bar. The legend fold, controls, Events, bottom-of-chart and drawing rail tests still pass.
+  - Brotli: the page chunk is 60.4KB (+0.2KB); the phone chunk is 3.4KB.

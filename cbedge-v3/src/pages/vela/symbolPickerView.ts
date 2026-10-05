@@ -20,6 +20,13 @@
 // section (Brandon's "MAIN"), or its first symbols when it has no sections.
 // Prices are the watchlist's quote cache, asked for the rows on screen when
 // the picker opens and every 15 s while it stays open.
+//
+// THE PHONE (/m; Brandon, 2026-10-04, C1 of generated/2026-10-04-vela-phone-r1.html):
+// the same picker, full screen (`full`), opened by the bottom bar's ticker chip
+// (phoneChrome.ts). A "Ticker" title and ✕ over the search, rows on two lines
+// (ticker over name, price over change), no key hints, and the field is not
+// focused on open, so the keyboard does not cover the recents and the
+// watchlist until the field is tapped.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { iconEl } from '@luxalgo/vela/ui'
@@ -30,6 +37,8 @@ import { tickerIconEl } from './tickerIcon'
 export interface PickerOptions {
   /** The chip; null centres the picker (Vela's phone-width chrome). */
   anchor: HTMLElement | null
+  /** The phone: the whole screen, a title and ✕, two-line rows (see the header). */
+  full?: boolean
   /** Letters already typed on the chart. */
   seed: string
   /** The active chart's ticker, marked in the list. */
@@ -103,10 +112,11 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
     // a letter typed while it is open goes to its field; a second chip click closes it
     if (!opts.seed) return
   }
-  const box = el('div', 'cb-sp')
+  const full = opts.full === true
+  const box = el('div', full ? 'cb-sp cb-sp-full' : 'cb-sp')
   box.setAttribute('role', 'dialog')
   box.setAttribute('aria-label', 'Change symbol')
-  box.style.cssText = 'position:fixed;z-index:80'
+  box.style.cssText = full ? 'position:fixed;z-index:80;inset:0' : 'position:fixed;z-index:80'
 
   // ── search row ──
   const searchRow = el('label', 'cb-sp-search')
@@ -121,7 +131,9 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
   input.setAttribute('role', 'combobox')
   input.setAttribute('aria-expanded', 'true')
   input.setAttribute('aria-controls', 'cb-sp-list')
-  searchRow.append(glass, input, el('span', 'cb-sp-hint', 'or just type'))
+  searchRow.append(glass, input)
+  if (!full) searchRow.append(el('span', 'cb-sp-hint', 'or just type'))
+  else input.placeholder = 'Search tickers or names'
 
   const pills = el('div', 'cb-sp-pills')
   pills.setAttribute('role', 'tablist')
@@ -135,7 +147,16 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
     return s
   }
   foot.append(hint('↑↓', 'move'), hint('Enter', 'open on the active chart'), hint('Tab', 'filter'), hint('Esc', 'close'))
-  box.append(searchRow, pills, body, foot)
+  if (full) {
+    const hd = el('div', 'cb-sp-hd')
+    const x = el('button', 'cb-sp-x')
+    x.type = 'button'
+    x.setAttribute('aria-label', 'Close')
+    x.append(iconEl('close'))
+    x.addEventListener('click', () => close())
+    hd.append(el('b', '', 'Ticker'), x)
+    box.append(hd, searchRow, pills, body)
+  } else box.append(searchRow, pills, body, foot)
   document.body.appendChild(box)
 
   let all: SymbolRow[] = []
@@ -146,6 +167,7 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
   let loaded = false
 
   const place = () => {
+    if (full) return
     const r = opts.anchor?.getBoundingClientRect()
     const w = Math.min(460, window.innerWidth - 16)
     const left = r ? Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) : Math.max(8, (window.innerWidth - w) / 2)
@@ -349,8 +371,10 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
 
   place()
   draw()
-  input.focus()
-  input.setSelectionRange(input.value.length, input.value.length)
+  if (!full) {
+    input.focus()
+    input.setSelectionRange(input.value.length, input.value.length)
+  }
 
   void chartSymbols().then((list) => {
     if (open?.close !== close) return

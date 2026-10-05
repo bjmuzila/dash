@@ -39,8 +39,10 @@ import { useState } from 'react'
 import { CAL, T, alpha } from '@/design/theme'
 
 /** Mirror revision. Must match v2's LOGO_REV. 2026-09-13: +4,303 mirrored logos
- *  (full davidepalazzo/ticker-logos set, 5,118 total in public/logos). */
-export const LOGO_REV = 4
+ *  (full davidepalazzo/ticker-logos set, 5,118 total in public/logos).
+ *  2026-10-04 (5): +13 hand-mirrored earnings names the set lacks (MANUAL in
+ *  scripts/fetch-ticker-logos.mjs). v2's components/shared/ChipLogo.tsx is still 4. */
+export const LOGO_REV = 5
 
 function localLogoUrl(sym: string): string {
   return `/logos/${encodeURIComponent(sym.toUpperCase())}.png?v=${LOGO_REV}`

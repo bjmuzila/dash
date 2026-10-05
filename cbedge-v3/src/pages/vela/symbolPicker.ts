@@ -29,7 +29,9 @@
 //   · A pick goes through the active chart's setSymbol, like the toolbar sync in
 //     Vela.tsx, so undo, the grid's sync links and the saved layout see it.
 //
-// The phone (/m) keeps Vela's own picker: this action's `when` hides it there,
+// The phone (/m; Brandon, 2026-10-04, C1) opens this same picker full screen
+// from its bottom bar's ticker chip (phoneChrome.ts → bindPhonePicker /
+// openPhonePicker below); this action's `when` keeps it off the phone's bar,
 // and the phone build never calls bindSymbolPicker. In the desktop page at a
 // phone width (Vela switches to its touch chrome) the bottom bar keeps Vela's
 // own symbol stop, and vela.css hides this action's duplicate stop there; a
@@ -158,6 +160,24 @@ export function registerSymbolPicker(): void {
     when: () => !onPhoneRoute(),
     run: () => openPicker(''),
   })
+}
+
+/** The phone's workspace (phoneChrome.ts): picks land on its active chart. */
+export function bindPhonePicker(ws: VelaWorkspace): () => void {
+  current = ws
+  return () => {
+    view?.closeSymbolPicker()
+    if (current === ws) current = null
+  }
+}
+
+/** The phone's ticker chip: the picker over the whole screen. */
+export function openPhonePicker(): void {
+  const ws = current
+  if (!ws) return
+  void loadView().then((m) =>
+    m.toggleSymbolPicker({ anchor: null, full: true, seed: '', current: activeTicker(ws), onPick: pickSymbol, onOpen: () => {}, onClose: () => {} }),
+  )
 }
 
 /** Is one of Vela's own dialogs up? Then a typed letter is the dialog's business. */

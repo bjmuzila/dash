@@ -123,7 +123,16 @@ VICI VRSK VRT VST VTRS WAB WBA WDAY WM WRB WSM WYNN XYL ZM ZS
 // treatment as SPCX: keep them, never re-resolve them. Note that both class
 // lines DO appear in the earnings feed alongside their root symbol (HEI and
 // HEI.A both reported 2026-08-25), so this is not a hypothetical.
-const MANUAL = new Set(['SPCX', 'PBR.A', 'HEI.A']);
+// 2026-10-04: thirteen earnings-week names the davidepalazzo set does not have,
+// mirrored by hand. MSS PENG TMQ BYRN HOVR came from nvstly/icons
+// (ticker_icons/<SYM>.png); WS SAR AXIL RELL TAYD NG GLDG PKE came from FMP's
+// image-stock CDN, the source Voltick's server/logos.js uses. VLGEA was left
+// out on purpose: FMP serves the WordPress logo for it.
+const MANUAL = new Set([
+  'SPCX', 'PBR.A', 'HEI.A',
+  'MSS', 'PENG', 'TMQ', 'BYRN', 'HOVR',
+  'WS', 'SAR', 'AXIL', 'RELL', 'TAYD', 'NG', 'GLDG', 'PKE',
+]);
 
 const args = process.argv.slice(2);
 const FORCE = args.includes('--force');

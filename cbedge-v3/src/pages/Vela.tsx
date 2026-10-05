@@ -28,6 +28,7 @@ import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@
 import { CLOCK_ACTION_ID, registerSessionClock } from '@/pages/vela/sessionClock'
 import { replayActive } from '@/pages/vela/replay/clock'
 import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
+import { TIMEFRAMES } from '@/pages/vela/timeframes'
 import '@/pages/vela/vela.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -193,16 +194,16 @@ import '@/pages/vela/vela.css'
 //            the camera. Vela's panel buttons and the right-hand action flow are
 //            not listed, so the twelve icons that were here are gone
 //
-// The phone keeps Vela's default composition (its bottom bar and ⋮ rows).
+// The phone has its own bar (see "The phone's chrome" below).
 //
-// ── The legend card (desktop) ────────────────────────────────────────────────
+// ── The legend card ──────────────────────────────────────────────────────────
 // Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-legend-l4.html). Each
 // chart's top-left carries one card (pages/vela/legend/legendCard.ts): the
 // ticker's icon, name and market state; the Voltick levels NOW on one row with
 // one ⚙ and one ◉; every price-pane study with its value, ◉, ⚙ and ✕. Vela's
 // symbol line and price legend are hidden under it (`cb-lc-on`, vela.css);
-// lower panes keep Vela's own legend. The session strip drops its levels on the
-// desktop (the card has them). The phone keeps Vela's legend and the strip's levels.
+// lower panes keep Vela's own legend. The session strip drops its levels (the
+// card has them). The phone wears the same card, folded to one line (A1, below).
 //
 // ── The drawing rail (desktop) ───────────────────────────────────────────────
 // Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-draw-r1.html, D1). Vela's
@@ -240,20 +241,32 @@ import '@/pages/vela/vela.css'
 // image on the clipboard.
 //
 // ── The phone build — /m/vela ────────────────────────────────────────────────
-// mobile/pages/MVela.tsx renders THIS page with `phone`: Vela's own touch
-// chrome (bottom bar, full-screen pickers, pinch/drag), and its OWN saved
+// mobile/pages/MVela.tsx renders THIS page with `phone`: Vela's touch layout
+// (sheets, pinch/drag) under our bar (below), and its OWN saved
 // document under `cb-v3-vela-m` — so a desktop grid never lands on a phone, and
 // the phone never rearranges the desktop's. The page-symbol sync is
 // desktop-only: the app toolbar draws no ticker picker on /m/*, and a symbol
 // picked on the phone should not move the board's.
 //
 // Layout on the phone: THREE charts stacked (`g3x1`) by default. Tap a chart to
-// make it the active one — the bottom bar's symbol / timeframe / indicators act
+// make it the active one — the bottom bar's ticker / timeframe / indicators act
 // on that chart. ⋮ → Layout is Vela's grid picker (any rows × cols up to 4×4,
 // plus the sync switches) for one, two, or anything else. A phone document
 // saved back when this tab was pinned to one chart is moved to the three-stack
 // ONCE (`cb-v3-vela-m-grid` marks it done); a layout picked after that is the
 // user's and is left alone.
+//
+// ── The phone's chrome ───────────────────────────────────────────────────────
+// Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-phone-r1.html: A1, B1,
+// C1, D1). pages/vela/phoneChrome.ts, loaded on the phone only:
+//   · the bar: [ticker chip] 5m · RTH · Indicators · Draw · ⋮ More, in place of
+//     Vela's eight icon stops (hidden, `cb-ph`). The ticker opens the desktop's
+//     picker full screen; a tap on the timeframe opens its sheet, and a press-
+//     hold-and-slide up or down scrubs the timeframe in place.
+//   · ⋮ is Vela's sheet regrouped like the desktop Workspace menu (Replay,
+//     Maximize and Chart settings moved in from the bar).
+//   · the timeframe sheet: no date ranges, the timeframes, then RTH / ETH.
+//   · each chart: the legend card, one line folded (legend/legendCard.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DESKTOP_KEY = 'cb-v3-vela'
@@ -386,9 +399,9 @@ function StripHost({ ws, phone }: { ws: VelaWorkspace | null; phone: boolean }) 
   if (!ws || !shown) return null
   return (
     <Suspense fallback={null}>
-      {/* the ticker, price, change and levels only on the phone: on the desktop the
-          bar's chip shows the first three and each chart's legend card the levels */}
-      <SessionStrip ws={ws} onHide={() => setStripShown(false)} showTicker={phone} showLevels={phone} />
+      {/* the ticker, price and change only on the phone (the desktop bar's chip shows
+          them); the levels never: each chart's legend card shows them, phone too */}
+      <SessionStrip ws={ws} onHide={() => setStripShown(false)} showTicker={phone} showLevels={false} />
     </Suspense>
   )
 }
@@ -444,7 +457,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       timezone: 'America/New_York',
       // Voltick's corner mark instead (voltickMark.ts, below)
       watermark: false,
-      timeframes: ['1', '5', '15', '30', '60', '240', 'D', 'W', 'M'],
+      timeframes: [...TIMEFRAMES],
       providers: { [PROVIDER_NAME]: () => new CbEdgeProvider() },
       engines: { [CBSCRIPT]: () => new CbScriptEngine() },
       persist: storageKey,
@@ -464,15 +477,22 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     // the desktop bar's ticker chip + picker, and the Workspace menu's Alt keys
     const unbindPicker = onPhone ? () => {} : bindSymbolPicker(ws)
     const unbindWorkspace = onPhone ? () => {} : bindWorkspaceMenu(ws)
-    // The legend card on every desktop chart (vela/legend/legendCard.ts), in place
-    // of Vela's symbol line and price legend: the class hides those at once, the
-    // card's own chunk follows. The phone keeps Vela's legend.
+    // The legend card on every chart (vela/legend/legendCard.ts), in place of Vela's
+    // symbol line and price legend: the class hides those at once, the card's own
+    // chunk follows. On the phone it starts folded to one line.
     let unbindLegend: () => void = () => {}
     let legendGone = false
-    if (!onPhone) {
-      ws.root.classList.add('cb-lc-on')
-      void import('@/pages/vela/legend/legendCard').then((m) => {
-        if (!legendGone) unbindLegend = m.bindLegendCards(ws)
+    ws.root.classList.add('cb-lc-on')
+    void import('@/pages/vela/legend/legendCard').then((m) => {
+      if (!legendGone) unbindLegend = m.bindLegendCards(ws, { phone: onPhone })
+    })
+    // The phone's bar, ⋮ and timeframe sheet (vela/phoneChrome.ts). `cb-ph` holds
+    // Vela's bar's place, unseen, until ours replaces it (no jump while it loads).
+    let unbindPhone: () => void = () => {}
+    if (onPhone) {
+      ws.root.classList.add('cb-ph')
+      void import('@/pages/vela/phoneChrome').then((m) => {
+        if (!legendGone) unbindPhone = m.bindPhoneChrome(ws)
       })
     }
     // The drawing rail (vela/drawRail.ts) in Vela's toolbar column, in place of its
@@ -542,6 +562,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindWorkspace()
       legendGone = true
       unbindLegend()
+      unbindPhone()
       unbindRail()
       unbindClock()
       unbindVoltick()
