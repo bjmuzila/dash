@@ -15,8 +15,8 @@ import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
 import { PATH_TYPE, registerVtPath } from '@/pages/vela/vtPath/vtPathIndicator'
 import { CBSCRIPT, CbScriptEngine, setAlertGate } from '@/pages/vela/script/engine'
 import { registerScripts } from '@/pages/vela/script/panel'
-import { registerStudies } from '@/pages/vela/studies'
-import { bindTimelineMarks } from '@/pages/vela/marks'
+import { EVENTS_TYPE, registerStudies } from '@/pages/vela/studies'
+import { bindEventsHost } from '@/pages/vela/studies/eventsHost'
 import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
 import { bindPinnedWatchlist, registerWatchlist } from '@/pages/vela/watchlist/panel'
 import { bindReplay, openPicker, registerReplay } from '@/pages/vela/replay/replay'
@@ -127,14 +127,17 @@ import '@/pages/vela/vela.css'
 // (`cb-v3-vela-scripts`); a script on a chart is kept in that chart's saved
 // state, and an edit saved in the panel updates every chart running it.
 //
-// ── CB Edge studies + timeline marks ────────────────────────────────────────
-// pages/vela/studies/ — ten native studies on the Indicators picker (Built-in):
-// Prior Levels, Initial Balance, Overnight H/L, Expected Move, Key Levels, GEX
-// Profile (net GEX by strike beside the price axis), Net Premium and Vol/GEX
-// Flow panes, Whale Prints markers, Market Profile (TPO). Opt-in, never seeded.
-// pages/vela/marks.ts — the time axis's marks lane on every chart: the week's
-// econ releases, the Alerts feed's engine signals for the chart's symbol, and
-// your scripts' alerts as they fire (Events tab checkboxes switch each group).
+// ── CB Edge studies + events ─────────────────────────────────────────────────
+// pages/vela/studies/ — native studies on the Indicators picker: Prior Levels,
+// Initial Balance, Overnight H/L, Expected Move, Key Levels, GEX Profile (net
+// GEX by strike beside the price axis), Net Premium and Vol/GEX Flow panes,
+// Whale Prints markers, Market Profile (TPO), GEX Rail and Heatmap. Opt-in, never
+// seeded, except Events (studies/events.ts; Brandon, 2026-10-04, mockup
+// generated/2026-10-04-vela-events-r2.html): the week's econ releases, the
+// Alerts feed's engine alerts for the chart's symbol and your scripts' alerts as
+// marks along the bottom of the chart, with a menu (the legend card's ⚙, desktop)
+// to turn each kind on or off and set the size. It is given to each chart once,
+// like CB Walls. Vela's own marks lane is no longer fed, so its Events tab is gone.
 // strategy() scripts paint their fills as Vela trade markers (script/engine.ts).
 // D / W / M reach back years where a long source answers (cbedgeProvider.ts).
 //
@@ -221,6 +224,15 @@ import '@/pages/vela/vela.css'
 //     (`watermark: false`), and Voltick's corner wordmark sits at the bottom
 //     right (pages/vela/voltickMark.ts). Vela's V stays at the bottom left.
 //
+// ── Each chart's own controls ────────────────────────────────────────────────
+// Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-controls-r1.html, C1 + R2):
+// pages/vela/chartControls.ts. Vela's hover buttons at a chart's bottom centre
+// stay, drawn as Voltick's pill in three groups, each naming itself (and its
+// key) on hover. A right-click on the chart opens our menu: a horizontal line,
+// the price copied or a text note where you clicked, then reset / maximize,
+// chart settings / Level alerts, and the two removes, in red, with their counts.
+// The price and time scales keep Vela's own menus.
+//
 // ── The camera copies ────────────────────────────────────────────────────────
 // Vela's screenshot button (and its phone row, and Ctrl/Cmd+Alt+S) puts the
 // PNG on the CLIPBOARD instead of downloading it — pages/vela/copyShot.ts. It
@@ -250,6 +262,8 @@ const PHONE_KEY = 'cb-v3-vela-m'
 const seededKey = (storageKey: string) => `${storageKey}-walls`
 /** …and Voltick Path. */
 const pathSeededKey = (storageKey: string) => `${storageKey}-vtpath`
+/** …and Events. */
+const eventsSeededKey = (storageKey: string) => `${storageKey}-events`
 /** The phone's default grid: 3 rows × 1 column — three charts stacked. */
 const PHONE_LAYOUT = 'g3x1'
 /** Set once the phone document has been moved off the old single-chart pin. */
@@ -446,7 +460,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     if (replayOnOpenRef.current) setTimeout(openPicker, 400)
     const unbindShot = bindShotWorkspace(ws)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
-    const unbindMarks = bindTimelineMarks(ws)
+    const unbindEvents = bindEventsHost(ws)
     // the desktop bar's ticker chip + picker, and the Workspace menu's Alt keys
     const unbindPicker = onPhone ? () => {} : bindSymbolPicker(ws)
     const unbindWorkspace = onPhone ? () => {} : bindWorkspaceMenu(ws)
@@ -484,6 +498,12 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     void import('@/pages/vela/voltickMark').then((m) => {
       if (!legendGone) unbindVoltick = m.bindVoltickMarks(ws)
     })
+    // Each chart's own controls (see the header): the hover buttons named and grouped,
+    // and our right-click menu on the chart (the scales keep Vela's).
+    let unbindControls: () => void = () => {}
+    void import('@/pages/vela/chartControls').then((m) => {
+      if (!legendGone) unbindControls = m.bindChartControls(ws)
+    })
 
     // Chart → toolbar. `state:changed` is Vela's debounced "something worth
     // saving moved" signal, and it covers a symbol switch AND a different cell
@@ -500,13 +520,15 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     // seeding below, so the charts it adds are among the cells that get them.
     if (onPhone) upgradePhoneLayout(ws)
 
-    // CB Walls and Voltick Path: the cells that exist now, and every cell a
+    // CB Walls, Voltick Path and Events: the cells that exist now, and every cell a
     // layout change mints.
     const walls = seededKey(storageKey)
     const vtPath = pathSeededKey(storageKey)
+    const events = eventsSeededKey(storageKey)
     const seed = (ids: string[]) => {
       seedOnce(ws, ids, walls, WALLS_TYPE)
       seedOnce(ws, ids, vtPath, PATH_TYPE)
+      seedOnce(ws, ids, events, EVENTS_TYPE)
     }
     seed(ws.cells().map((c) => c.id))
     const offCreated = ws.on('cell:created', ({ id }) => seed([id]))
@@ -523,8 +545,9 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindRail()
       unbindClock()
       unbindVoltick()
+      unbindControls()
       unbindIndicators()
-      unbindMarks()
+      unbindEvents()
       unbindReplay()
       unbindOrder()
       unbindLevels()

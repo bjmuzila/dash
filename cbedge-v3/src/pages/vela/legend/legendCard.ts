@@ -48,6 +48,9 @@ import { markSvg, type MarkKey } from '@/pages/vela/levelMarks'
 import { levelsFor } from '@/pages/vela/levels/levelAlerts'
 import { tickerIconEl } from '@/pages/vela/tickerIcon'
 import { WALLS_TYPE, onWallsNow, wallsNow } from '@/pages/vela/wallsIndicator'
+import { EVENTS_TYPE, EV_KINDS, EV_SIZES } from '@/pages/vela/studies/index'
+import { eventsCount, onEventsCount } from '@/pages/vela/studies/eventsHost'
+import { markSvgOf } from '@/pages/vela/studies/eventIcons'
 import { OPACITY_MAX, OPACITY_MIN, onWallsOpacity, setWallsOpacity, wallsOpacity } from '@/pages/vela/wallsOpacity'
 
 const PREFS_KEY = 'cb-v3-vela-legend'
@@ -157,7 +160,7 @@ function studyLabel(h: IndicatorHandle, shorttitle: string | undefined): string 
 
 // ── The levels popover (one at a time, portalled to <body>) ──────────────────
 
-let pop: { el: HTMLElement; owner: Card; close: () => void } | null = null
+let pop: { el: HTMLElement; owner: Card; anchor: HTMLElement; close: () => void } | null = null
 
 function closePop(): void {
   pop?.close()
@@ -190,7 +193,7 @@ class Card {
   private studies!: HTMLElement
   private levelCog!: HTMLButtonElement
   private levelEye!: HTMLButtonElement
-  private rows = new Map<string, { row: HTMLElement; v: HTMLElement; sw: HTMLElement; color: string }>()
+  private rows = new Map<string, { row: HTMLElement; v: HTMLElement; sw: HTMLElement; color: string; ev?: boolean }>()
   /** What the levels row last drew: unchanged, it is not rebuilt (a hovered level keeps its tooltip). */
   private levelSig = ''
 
@@ -200,6 +203,7 @@ class Card {
     this.el.setAttribute('role', 'group')
     this.build()
     this.offs.push(onWallsNow(() => this.schedule(false)))
+    this.offs.push(onEventsCount(() => this.schedule(false)))
     this.offs.push(() => prefSubs.delete(this.onPrefs))
     prefSubs.add(this.onPrefs)
     this.ro = new ResizeObserver(() => {
@@ -342,7 +346,7 @@ class Card {
     const tools = el(d, 'span', 'cb-lc-tools')
     this.levelCog = iconButton(d, 'cb-lc-lcog', 'Level settings', COG)
     this.levelCog.setAttribute('aria-haspopup', 'dialog')
-    this.levelCog.addEventListener('click', () => (pop?.owner === this ? closePop() : this.openPop()))
+    this.levelCog.addEventListener('click', () => (pop?.owner === this && pop.anchor === this.levelCog ? closePop() : this.openPop()))
     this.levelEye = iconButton(d, 'cb-lc-leye', 'Hide the levels', iconEl('eye', d))
     this.levelEye.addEventListener('click', () => {
       const w = this.walls()
@@ -377,7 +381,7 @@ class Card {
     const list = (price?.indicators ?? []).filter((i) => handles.get(i.id)?.nativeType !== WALLS_TYPE)
     const index = resolveSym(this.sym).kind === 'index'
     this.studies.replaceChildren()
-    const keep = new Map<string, { row: HTMLElement; v: HTMLElement; sw: HTMLElement; color: string }>()
+    const keep = new Map<string, { row: HTMLElement; v: HTMLElement; sw: HTMLElement; color: string; ev?: boolean }>()
     for (const info of list) {
       const h = handles.get(info.id)
       if (!h) continue
@@ -395,6 +399,19 @@ class Card {
         v.textContent = 'none on an index'
         v.classList.add('cb-lc-na')
         row.append(sw, nm, v, el(d, 'span', ''), el(d, 'span', ''), this.removeBtn(h, label))
+      } else if (h.nativeType === EVENTS_TYPE) {
+        // Events: its high-impact mark for a swatch, how many this week, and ⚙ opens its menu
+        if (!h.visible) row.dataset.off = '1'
+        sw.className = 'cb-lc-evsw'
+        sw.innerHTML = markSvgOf('high', 14)
+        const cog = iconButton(d, 'cb-lc-hov', 'Event settings', COG)
+        cog.addEventListener('click', () => (pop?.owner === this && pop.anchor === cog ? closePop() : this.openEventsPop(h.id, cog)))
+        const eye = iconButton(d, '', `${h.visible ? 'Hide' : 'Show'} ${label}`, iconEl(h.visible ? 'eye' : 'eye-off', d))
+        eye.addEventListener('click', () => h.setVisible(!h.visible))
+        row.append(sw, nm, v, cog, eye, this.removeBtn(h, label))
+        this.studies.append(row)
+        keep.set(h.id, { row, v, sw, color: '', ev: true })
+        continue
       } else {
         if (!h.visible) row.dataset.off = '1'
         const cog = iconButton(d, 'cb-lc-hov', `${label} settings`, COG)
@@ -466,6 +483,11 @@ class Card {
     for (const [id, r] of this.rows) {
       const h = handles.get(id)
       if (!h || r.row.dataset.dis === '1') continue
+      if (r.ev) {
+        const n = eventsCount(id)
+        r.v.textContent = !h.visible || n == null ? '' : n ? `${n} this week` : 'none this week'
+        continue
+      }
       const g = groups.find((x) => x.name === h.title)
       const first = g?.rows[0]
       r.v.textContent = h.visible && first ? first.value : ''
@@ -617,9 +639,15 @@ class Card {
       if (w) this.chart?.renderer.openIndicatorSettings(w.id)
     })
     box.append(head, showLab, chips, dist, opLab, range, more)
+    this.present(box, this.levelCog, offOp)
+    ;(chips.querySelector('button:not(:disabled)') as HTMLButtonElement | null)?.focus()
+  }
+
+  /** Show a popover beside the card, level with `anchor`, kept on screen; Esc or a press elsewhere closes it. */
+  private present(box: HTMLElement, anchor: HTMLButtonElement, cleanup: () => void = () => {}): void {
+    const d = this.doc
     d.body.append(box)
-    // beside the card, level with the cog, kept on screen
-    const r = this.levelCog.getBoundingClientRect()
+    const r = anchor.getBoundingClientRect()
     const card = this.el.getBoundingClientRect()
     const bw = box.offsetWidth
     const bh = box.offsetHeight
@@ -630,16 +658,16 @@ class Card {
     const top = Math.max(8, Math.min(r.top - 8, vh - bh - 8))
     box.style.left = `${left}px`
     box.style.top = `${top}px`
-    this.levelCog.dataset.open = '1'
-    this.levelCog.setAttribute('aria-expanded', 'true')
+    anchor.dataset.open = '1'
+    anchor.setAttribute('aria-expanded', 'true')
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node
-      if (!box.contains(t) && !this.levelCog.contains(t)) closePop()
+      if (!box.contains(t) && !anchor.contains(t)) closePop()
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         closePop()
-        this.levelCog.focus()
+        anchor.focus()
       }
     }
     d.addEventListener('pointerdown', onDown, true)
@@ -647,14 +675,94 @@ class Card {
     const close = () => {
       d.removeEventListener('pointerdown', onDown, true)
       d.removeEventListener('keydown', onKey, true)
-      offOp()
+      cleanup()
       box.remove()
-      delete this.levelCog.dataset.open
-      this.levelCog.setAttribute('aria-expanded', 'false')
+      delete anchor.dataset.open
+      anchor.setAttribute('aria-expanded', 'false')
       if (pop?.el === box) pop = null
     }
-    pop = { el: box, owner: this, close }
-    ;(chips.querySelector('button:not(:disabled)') as HTMLButtonElement | null)?.focus()
+    pop = { el: box, owner: this, anchor, close }
+  }
+
+  // ── the Events menu (mockup generated/2026-10-04-vela-events-r2.html) ──
+
+  /** The Events study's own switches and size: the same inputs as its settings dialog. */
+  private openEventsPop(id: string, anchor: HTMLButtonElement): void {
+    closePop()
+    const d = this.doc
+    const handle = () => this.chart?.indicators().find((x) => x.id === id) ?? null
+    const box = el(d, 'div', 'cb-lc-pop cb-lc-evpop')
+    box.setAttribute('role', 'dialog')
+    box.setAttribute('aria-label', 'Event settings')
+    const head = el(d, 'div', 'cb-lc-pop-h')
+    head.append(el(d, 'span', '', 'Events'), el(d, 'span', 'cb-lc-pop-sub', 'this chart'))
+    const body = el(d, 'div', '')
+    const draw = () => {
+      const h = handle()
+      const vals = h ? h.inputValues() : {}
+      const on = (k: (typeof EV_KINDS)[number]) => (typeof vals[k.key] === 'boolean' ? (vals[k.key] as boolean) : k.defval)
+      body.replaceChildren()
+      for (const group of ['Releases', 'Engine alerts', 'Your scripts'] as const) {
+        const kinds = EV_KINDS.filter((k) => k.group === group)
+        const lab = el(d, 'div', 'cb-lc-pop-lab cb-lc-pop-row')
+        const all = el(d, 'button', 'cb-lc-all', 'ALL')
+        all.type = 'button'
+        const allOn = kinds.every(on)
+        all.title = allOn ? `Turn every ${group.toLowerCase()} kind off` : `Turn every ${group.toLowerCase()} kind on`
+        all.disabled = !h
+        all.addEventListener('click', () => {
+          handle()?.setInputs(Object.fromEntries(kinds.map((k) => [k.key, !allOn])))
+          draw()
+        })
+        lab.append(el(d, 'span', '', group.toUpperCase()), all)
+        const chips = el(d, 'div', 'cb-lc-chips')
+        for (const k of kinds) {
+          const b = el(d, 'button', 'cb-lc-chip')
+          b.type = 'button'
+          const isOn = on(k)
+          b.setAttribute('aria-pressed', String(isOn))
+          b.insertAdjacentHTML('afterbegin', markSvgOf(k.key, 14))
+          b.append(d.createTextNode(k.title))
+          b.disabled = !h
+          b.addEventListener('click', () => {
+            handle()?.setInputs({ [k.key]: !isOn })
+            draw()
+          })
+          chips.append(b)
+        }
+        body.append(lab, chips)
+      }
+      const sizeLab = el(d, 'div', 'cb-lc-pop-lab', 'SIZE')
+      const seg = el(d, 'div', 'cb-lc-seg')
+      seg.setAttribute('role', 'group')
+      seg.setAttribute('aria-label', 'Size')
+      const cur = typeof vals.size === 'string' ? vals.size : EV_SIZES[0]
+      for (const [size, px] of [['Small', 12], ['Medium', 14], ['Large', 17]] as const) {
+        const b = el(d, 'button', '')
+        b.type = 'button'
+        b.setAttribute('aria-pressed', String(cur === size))
+        b.insertAdjacentHTML('afterbegin', markSvgOf('high', px))
+        b.append(d.createTextNode(size))
+        b.disabled = !h
+        b.addEventListener('click', () => {
+          handle()?.setInputs({ size })
+          draw()
+        })
+        seg.append(b)
+      }
+      body.append(sizeLab, seg)
+    }
+    draw()
+    const more = el(d, 'button', 'cb-lc-more', 'All Events settings')
+    more.type = 'button'
+    more.addEventListener('click', () => {
+      closePop()
+      if (handle()) this.chart?.renderer.openIndicatorSettings(id)
+    })
+    const note = el(d, 'div', 'cb-lc-pop-note', 'Saved with this chart. Copy indicators to all charts (Workspace menu) puts them on every chart.')
+    box.append(head, body, more, note)
+    this.present(box, anchor)
+    ;(body.querySelector('button:not(:disabled)') as HTMLButtonElement | null)?.focus()
   }
 
   destroy(): void {

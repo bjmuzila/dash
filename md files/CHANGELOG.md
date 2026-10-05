@@ -26274,3 +26274,62 @@ The fifth section of the vela.cbedge.net cleanup. Mockups: `generated/2026-10-04
     - Phone: 3 marks, no big watermark, touch bar kept.
     - The legend fold, drawing rail and watchlist tests still pass.
   - Brotli: the page chunk is 61.0KB (+0.3KB). The clock chunk is 3.1KB and the mark chunk 0.5KB.
+
+## 2026-10-04 - Vela: Events study (E1), with icons, a click card, a size and its own menu; zoom buttons lifted
+
+The sixth section of the vela.cbedge.net cleanup. Mockups: `generated/2026-10-04-vela-events-r1.html` and `-r2.html`. Brandon picked E1 and asked for a settings menu with a size and on / off switches. Vela's own marks lane cannot be resized (its marks are a fixed 16px), so the marks became our own study. The zoom buttons were not picked; the mockup's default, "Lift them above the lane", is what was built.
+
+- **CB Events** (`pages/vela/studies/events.ts`, new, lazy; registered in `studies/index.ts` as `cbedge-events`): the week's economic releases, the engine's alerts for the chart's symbol, and your script alerts, as marks along the bottom of the price pane.
+  - It is a study like the others: a legend row with ◉ / ⚙ / ✕, a settings dialog, and saved per chart. `Vela.tsx` gives it to each chart once, like CB Walls and Voltick Path (`<doc>-events` key), desktop and phone. Indicators → Flow & Profile → Events adds it back after ✕.
+  - **Inputs**: one switch per kind (`EV_KINDS`): high / medium / low impact releases, Volt, Flip, IB, Whale, Top GEX, script alerts (low impact starts off, as before), and the size (Small 14px, Medium 16px, Large 20px).
+  - **Placement**: on the bar whose span holds the moment. A moment in a gap goes to the next bar. A release later this week goes into the space to the right, as many bars out as the session calendar says (`sessionWindows`, RTH or ETH). During a bar replay nothing after the replay clock is drawn.
+- **Drawing** (`studies/eventsLayer.ts`, new): a renderer layer. Marks closer than their width crowd into one spot, which shows the most important kind with a count on its corner.
+  - Hover shows a one-line note.
+  - A click opens a card. A release shows actual / forecast / previous, with the actual marked ▲ above or ▼ below the forecast. An alert shows what happened and the level, and a crowded spot lists every mark in it.
+  - The card's "Hide …" button turns that kind off on this chart through the study's input (`studies/eventsHost.ts`, new, in the page chunk).
+  - A press on a mark is the mark's: it does not start a pan.
+- **Icons** (`studies/eventIcons.ts`, new): releases are a calendar in a circle (high red, medium blue, low grey). Engine alerts are a diamond with Voltick's mark (★ Volt, ⚡ Flip, a bracket for the IB, $ whale, bars for top GEX). Scripts are </> in a square. The ink is auto-contrasted, and the canvas and SVG versions come from one table.
+- **Legend card** (`legend/legendCard.ts`):
+  - The Events row has a mark for its swatch and shows "N this week".
+  - ⚙ opens the Events menu: RELEASES / ENGINE ALERTS / YOUR SCRIPTS switches, each group with ALL; SIZE Small / Medium / Large; and "All Events settings". It changes the same inputs as the dialog.
+  - The levels popover's placement and dismissal moved into a shared `present()`.
+- `pages/vela/marks.ts`: no longer feeds Vela's lane (`chart.marks`). It is now only the three sources (econ calendar every 30 min, engine alerts every minute, fired script alerts), shared by every chart. Vela's chart settings no longer have an Events tab.
+- `pages/vela/vela.css`:
+  - The hover note, the card, and the legend row and menu styles.
+  - Vela's zoom buttons lifted 30px above the bottom of the price pane, clear of the lane.
+  - The Voltick corner mark moved up to the same height (`voltickMark.ts` note), so a mark still to come in the right-hand space no longer sits on it.
+- `pages/vela/indicatorPicker.ts`: Events listed first under Flow & Profile.
+- **Checks:**
+  - `tsc` is clean apart from the pre-existing `chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds.
+  - Headless run with a sample calendar and alert feed:
+    - Events is on each chart (desktop and the three phone charts), and Vela's lane is empty. The legend row reads "10 this week".
+    - The hover notes name the right releases and alerts, including next Monday's in the space to come.
+    - The NFP card shows 161K ▲ above forecast. "Hide high impact" sets `high: false`.
+    - The menu's size switch sets `Large`, and the lane redraws at 20px. The zoom buttons sit at 52px.
+    - The bottom-of-chart, legend fold and drawing rail tests still pass.
+  - Brotli: the page chunk is 60.0KB (−1.0KB, marks.ts left it). The Events chunk is 4.3KB, icons 1.5KB, and the legend card 5.8KB.
+
+## 2026-10-04 - Vela: each chart's own controls (C1 hover buttons, R2 right-click menu)
+
+The seventh section of the vela.cbedge.net cleanup. Mockup: `generated/2026-10-04-vela-controls-r1.html`. Brandon picked C1 and R2.
+
+- **New file `pages/vela/chartControls.ts`** (lazy; bound in `Vela.tsx` on the desktop and the phone).
+- **The hover buttons (C1)**: Vela's cluster at a chart's bottom centre stays where it is, lifted over the Events lane.
+  - It is drawn as Voltick's pill (popover surface, line border, card shadow), in three groups: ⠿ │ − + │ ⤢ ↺. The drag and maximize buttons only show in a grid.
+  - Each button names itself on hover with its key from the workspace keymap: "Drag to another slot", "Zoom out · Ctrl+↓", "Zoom in · Ctrl+↑", "Maximize this chart" / "Back to the grid", "Reset the view · Alt+R". The browser's slow `title` tooltip is removed.
+  - Vela rebuilds the cluster when the grid changes, so it is dressed again each time (a MutationObserver on it, and on pointer enter).
+- **The right-click menu (R2)**: a right-click on the chart opens ours instead of Vela's. It uses Vela's own `Menu` component, so it looks like the axis menus. The price and time scales keep Vela's menus. Vela's legend rows and status line keep theirs too.
+  - **Where you clicked** (in the price pane only): Horizontal line at 7,668.00 (Alt+H); Copy price 7,668.00; Text note here…. The note arms Vela's text tool and clicks it into place, so Vela's own editor opens for typing. If the tool does not take the click, a "Note" text goes on for a double-click.
+  - **Then**: Reset chart view (Alt+R) and Maximize chart / Back to the grid (in a grid); Chart settings… and Level alerts…; then Remove N drawings and Remove N indicators in red, greyed when there are none. Drawings are removed in one step (Ctrl+Z undoes it).
+  - The price is the crosshair's (the spot Alt+H uses), rounded to the tick (0.25 on ES / NQ).
+  - A right-click while a drawing tool is armed is left to Vela, which uses it to cancel the tool. That is read at the press, because the tool is already off when the menu event fires.
+- `pages/vela/vela.css`: the cluster pill, its group lines and hover names, and the two removes in red.
+- **Checks:**
+  - `tsc` is clean apart from the pre-existing `chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds.
+  - Headless run in a 2 × 2 grid:
+    - The cluster shows the five names in three groups. The menu has 12 rows (3 price rows, separators), with "Remove 4 indicators" in red and "No drawings to remove" greyed.
+    - The horizontal line lands at 7,668.00. Text note opens Vela's editor, and the note keeps "CPI here".
+    - Maximize, then "Back to the grid", works. Remove drawings clears them. The price axis still opens Vela's menu. An armed trend line is cancelled with no menu.
+    - Copy price falls back to a toast on the test's plain-http page (the clipboard needs https, as the live site is).
+    - The bottom-of-chart, Events, legend fold and drawing rail tests still pass.
+  - Brotli: the page chunk is 60.2KB (+0.2KB); the controls chunk is 2.6KB.

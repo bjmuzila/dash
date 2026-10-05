@@ -6,9 +6,9 @@
 // It is Voltick's own corner watermark (Voltick web/src/HeatChart.jsx, class
 // Watermark, Calm → Watermark: Corner): "Vol" in paper and "tick" in Volt Blue,
 // 800-weight Inter at 13px, faint, right-aligned 12px in from the price scale and
-// just above the bottom of the price pane. Like Voltick's, it is ground, not an
-// overlay: it sits under the candles, and on a chart smaller than 240 × 120 it is
-// left off.
+// just above the Events lane along the bottom of the price pane (studies/events.ts).
+// Like Voltick's, it is ground, not an overlay: it sits under the candles, and on
+// a chart smaller than 240 × 120 it is left off.
 //
 // It replaces Vela's big "SPX · 5m" symbol watermark (the `watermark: false` shell
 // option in Vela.tsx); the legend card already names the symbol and timeframe.

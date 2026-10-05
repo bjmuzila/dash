@@ -16,8 +16,11 @@
 //              from the Indicators dialog for now (indicatorPicker.ts HIDDEN)
 //              while the journal is redone for v3; still registered so a chart
 //              that carries it opens.
+//   events.ts  CB Events (economic releases, the engine's alerts and your script
+//              alerts as marks along the bottom of the chart, eventsLayer.ts)
 //
-// None is put on a chart by itself: they are the user's to add.
+// None is put on a chart by itself but Events: Vela.tsx gives it to each chart
+// once, like CB Walls and Voltick Path. The rest are the user's to add.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { defineStudy } from './common'
@@ -53,6 +56,27 @@ export const TPO_TYPE = 'cbedge-market-profile'
 export const RAIL_TYPE = 'cbedge-gex-rail'
 export const HEAT_TYPE = 'cbedge-gex-heatmap'
 export const JOURNAL_TYPE = 'cbedge-journal-trades'
+export const EVENTS_TYPE = 'cbedge-events'
+
+/** The Events study's mark size (events.ts): the token's side in px. */
+export const EV_SIZES = ['Medium', 'Small', 'Large'] as const
+/**
+ * The kinds of mark the Events study draws, each an input of its own: the study's
+ * settings dialog and the legend card's Events menu (legend/legendCard.ts) read
+ * this one list. Low impact starts off, as it did on Vela's own lane.
+ */
+export const EV_KINDS = [
+  { key: 'high', group: 'Releases', title: 'High impact', defval: true },
+  { key: 'med', group: 'Releases', title: 'Medium impact', defval: true },
+  { key: 'low', group: 'Releases', title: 'Low impact', defval: false },
+  { key: 'volt', group: 'Engine alerts', title: 'Volt', defval: true },
+  { key: 'flip', group: 'Engine alerts', title: 'Flip', defval: true },
+  { key: 'ib', group: 'Engine alerts', title: 'IB', defval: true },
+  { key: 'whale', group: 'Engine alerts', title: 'Whale', defval: true },
+  { key: 'gex', group: 'Engine alerts', title: 'Top GEX', defval: true },
+  { key: 'script', group: 'Your scripts', title: 'Script alerts', defval: true },
+] as const
+export type EvKind = (typeof EV_KINDS)[number]['key']
 
 /** The studies that read today's numbers only, blank during a bar replay: type → the dock's name for it.
  *  (GEX Profile reads the recorded per-minute ladders while replaying instead.) */
@@ -280,5 +304,19 @@ export function registerStudies(): void {
       ],
     },
     () => import('./journal').then((m) => m.journalImpl),
+  )
+  defineStudy(
+    {
+      type: EVENTS_TYPE,
+      title: 'CB Events · economic releases, engine alerts and your script alerts along the bottom of the chart',
+      shortTitle: 'Events',
+      pane: 'price',
+      layer: { cursor: true },
+      inputs: () => [
+        ...EV_KINDS.map((k) => ({ key: k.key, title: k.title, type: 'bool' as const, defval: k.defval, group: k.group })),
+        { key: 'size', title: 'Size', type: 'string', defval: EV_SIZES[0], options: EV_SIZES, group: 'Look' },
+      ],
+    },
+    () => import('./events').then((m) => m.eventsImpl),
   )
 }
