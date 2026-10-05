@@ -15,11 +15,12 @@
  *
  * All detection runs in ES-PRICE SPACE (the instrument we trade), converting SPX
  * levels to ES with the live basis:  levelEs = levelSpx + basis.  Price = esFut.
+ * EXCEPTION: the GEX flip cross is SPX-only — SPX spot vs the SPX flip.
  *
  * THE SETUPS  (each carries a direction, level, price, score 1-5, reason):
  *
- *   1) GEX FLIP CROSS  (regime)
- *        price crosses the flip by ≥ CROSS_BUFFER pts →
+ *   1) GEX FLIP CROSS  (regime)  — SPX ONLY: read in SPX space, not ES
+ *        SPX spot crosses the SPX flip by ≥ CROSS_BUFFER pts →
  *          up-cross   = LONG  (into positive-gamma / mean-revert-up regime)
  *          down-cross = SHORT (into negative-gamma / trend-down regime)
  *
@@ -553,11 +554,21 @@ function evaluateFrame(cur, mem, cfg = {}) {
   };
 
   // ── 1) FLIP CROSS ── (disabled by default — live toggle key 'flip_cross', see fire())
-  if (prev && flipEs != null && prev.flipEs != null) {
-    const upCross   = prev.priceEs <= prev.flipEs && priceEs >= flipEs + C.CROSS_BUFFER;
-    const downCross = prev.priceEs >= prev.flipEs && priceEs <= flipEs - C.CROSS_BUFFER;
-    if (upCross) fire({ kind: 'flip_cross', direction: 'long', setup: 'GEX flip cross ↑', levelName: 'Flip', levelEs: flipEs, base: 3, reason: `ES ${priceEs.toFixed(2)} crossed above the GEX flip → positive-gamma regime` });
-    else if (downCross) fire({ kind: 'flip_cross', direction: 'short', setup: 'GEX flip cross ↓', levelName: 'Flip', levelEs: flipEs, base: 3, reason: `ES ${priceEs.toFixed(2)} crossed below the GEX flip → negative-gamma regime` });
+  // SPX ONLY (2026-10-05). The flip is an SPX-chain level, so the cross is read
+  // in SPX space: SPX spot against the SPX flip — never ES price against a
+  // basis-converted flip. Both frames are tested against the CURRENT flip, so a
+  // flip that relocates between frames (7750 → 6825) is not a "cross"; only
+  // SPX itself moving through the level fires. `levelEs` is still passed so
+  // confluence stacking and the cooldown key work as before, and the row's
+  // level_spx comes out as the SPX flip.
+  const spxNow  = Number(cur.spx);
+  const flipSpx = cur.flipSpx != null && Number.isFinite(Number(cur.flipSpx)) && Number(cur.flipSpx) > 0
+    ? Number(cur.flipSpx) : null;
+  if (prev && flipSpx != null && spxNow > 0 && prev.spx > 0) {
+    const upCross   = prev.spx <= flipSpx && spxNow >= flipSpx + C.CROSS_BUFFER;
+    const downCross = prev.spx >= flipSpx && spxNow <= flipSpx - C.CROSS_BUFFER;
+    if (upCross) fire({ kind: 'flip_cross', direction: 'long', setup: 'GEX flip cross ↑', levelName: 'Flip', levelEs: flipEs, base: 3, reason: `SPX ${spxNow.toFixed(2)} crossed above the GEX flip → positive-gamma regime` });
+    else if (downCross) fire({ kind: 'flip_cross', direction: 'short', setup: 'GEX flip cross ↓', levelName: 'Flip', levelEs: flipEs, base: 3, reason: `SPX ${spxNow.toFixed(2)} crossed below the GEX flip → negative-gamma regime` });
   }
 
   // ── 2) INITIAL BALANCE ──
@@ -744,7 +755,7 @@ function evaluateFrame(cur, mem, cfg = {}) {
   }
 
   // Carry state forward.
-  mem.prev = { priceEs, flipEs, callEs, putEs, cbEs, ts };
+  mem.prev = { priceEs, spx: Number(cur.spx) || null, flipEs, callEs, putEs, cbEs, ts };
   return out;
 }
 

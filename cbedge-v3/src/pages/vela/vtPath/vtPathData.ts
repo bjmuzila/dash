@@ -36,6 +36,16 @@
 //
 // ES / NQ draw SPX's / NDX's walls shifted by the session basis (buildDays,
 // shared with CB Walls); a session with no plausible basis draws nothing.
+//
+// ── Vol only: the open rides the OI + Vol walls (2026-10-05) ────────────────
+// The volume-only book has no open capture: at 09:29 nothing has traded, so the
+// recorder's first vol row of a session is the 09:45 slot (10:00 on some
+// Non-0DTE days). Read straight, a "Vol only" Path drew NOTHING on today's
+// candles until 09:45 — the first live session on the walls read showed an empty
+// path on every chart. So on Vol only, a candle before the volume book's first
+// CORE write that session takes the OI + Vol walls in force instead (their open
+// capture is pinned at 09:29); from the first vol write on, it is the volume
+// book alone. The Surge stays the volume CORE, so it simply starts at 09:45.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { OHLCV } from '@luxalgo/vela'
@@ -88,6 +98,11 @@ export interface WallModels {
   main: DayModel[]
   /** The volume-only walls — their CORE is the Surge. */
   vol: DayModel[]
+  /**
+   * Vol only: the OI + Vol walls, for the candles before the volume book's first
+   * CORE write of a session (see the header). Empty on OI + Vol.
+   */
+  open: DayModel[]
   /** The newest session is today's — the read that keeps moving. */
   hasToday: boolean
 }
@@ -95,15 +110,21 @@ export interface WallModels {
 export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: boolean): Promise<WallModels> {
   const sym = resolveSym(chartSymbol.replace(/^[^:]*:/, ''))
   const wallsSymbol = sym.fut === 'NQ' ? 'NDX' : sym.fut === 'ES' ? 'SPX' : sym.key
-  const [main, vol, basis] = await Promise.all([
-    loadWallSlices(wallsSymbol, s, fresh),
-    s.basis === 'vol' ? Promise.resolve(null) : loadWallSlices(wallsSymbol, { ...s, basis: 'vol' }, fresh),
+  // Both books, always: OI + Vol is the main map or (on Vol only) the open's
+  // stand-in; the volume book is the Surge or (on Vol only) the main map.
+  const [oivol, vol, basis] = await Promise.all([
+    loadWallSlices(wallsSymbol, { ...s, basis: 'oivol' }, fresh),
+    loadWallSlices(wallsSymbol, { ...s, basis: 'vol' }, fresh),
     sym.fut ? loadBasis(sym.fut) : Promise.resolve(null),
   ])
-  const mainDays = buildDays(main, basis)
-  const volDays = vol ? buildDays(vol, basis) : mainDays
+  const oivolDays = buildDays(oivol, basis)
+  const volDays = buildDays(vol, basis)
+  const onVol = s.basis === 'vol'
+  const mainDays = onVol ? volDays : oivolDays
+  const openDays = onVol ? oivolDays : []
   const today = etDateKey(Date.now())
-  return { main: mainDays, vol: volDays, hasToday: mainDays.some((d) => d.date === today) }
+  const isToday = (d: DayModel) => d.date === today
+  return { main: mainDays, vol: volDays, open: openDays, hasToday: mainDays.some(isToday) || openDays.some(isToday) }
 }
 
 // ── One frame per candle ─────────────────────────────────────────────────────
@@ -114,28 +135,40 @@ const abs = (w: Write | null | undefined) => (w?.gex != null && Number.isFinite(
 export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallModels): VtFrame[] {
   const byDate = new Map(m.main.map((d) => [d.date, d]))
   const volByDate = new Map(m.vol.map((d) => [d.date, d]))
+  const openByDate = new Map((m.open ?? []).map((d) => [d.date, d]))
   const coarse = tfMs >= DAY_MS
   const out: VtFrame[] = []
   for (const bar of bars) {
-    let day: DayModel | undefined
-    let end: number
+    let date: string | undefined
+    let close: number | undefined
     if (coarse) {
       // the newest recorded session inside this bar, at its close
       for (let t = bar.time; t < bar.time + tfMs; t += DAY_MS) {
-        const d = byDate.get(etDateKey(t + 12 * 3_600_000))
-        if (d) day = d
+        const k = etDateKey(t + 12 * 3_600_000)
+        const d = byDate.get(k) ?? openByDate.get(k)
+        if (d) {
+          date = k
+          close = d.close
+        }
       }
-      if (!day) continue
-      end = day.close + 1
+      if (date == null || close == null) continue
     } else {
       const mins = etMinutesOfDay(bar.time)
       if (mins < SESSION_FROM_MIN || mins >= RTH_CLOSE_MIN) continue
-      day = byDate.get(etDateKey(bar.time))
-      if (!day) continue
-      end = Math.min(bar.time + tfMs, day.close + 1)
+      date = etDateKey(bar.time)
+      close = (byDate.get(date) ?? openByDate.get(date))?.close
+      if (close == null) continue
     }
-    const cb = heldAt(day.levels.get('cb'), end)
-    if (!cb) continue
+    const end = coarse ? close + 1 : Math.min(bar.time + tfMs, close + 1)
+    // The chosen map's walls in force; on Vol only, before the volume book's
+    // first CORE write that session, the OI + Vol walls stand in (header).
+    let day = byDate.get(date)
+    let cb = day ? heldAt(day.levels.get('cb'), end) : null
+    if (!cb) {
+      day = openByDate.get(date)
+      cb = day ? heldAt(day.levels.get('cb'), end) : null
+    }
+    if (!day || !cb) continue
     const cw = heldAt(day.levels.get('call_wall'), end)
     const pw = heldAt(day.levels.get('put_wall'), end)
     const vt = vtFromWalls(cb.strike, cw?.strike, pw?.strike, bar.close)

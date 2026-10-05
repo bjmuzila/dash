@@ -1149,6 +1149,9 @@ async function handleMcp(req, res, ctx) {
   // Bearer first, for every method — the 401 is what tells ChatGPT to start OAuth.
   const m = /^Bearer\s+(\S+)\s*$/i.exec(String(req.headers.authorization || ''));
   if (!m) {
+    // Step one of every connection. Logged for the owner tracker, so an app
+    // that knocks here and never gets as far as registering still shows up.
+    oauth.recordProbe(req, 'mcp_unauthorized');
     return writeJson(res, 401, { error: 'unauthorized', error_description: 'Sign in with CB Edge to use this connector.' },
       { 'WWW-Authenticate': oauth.challengeHeader(origin) });
   }

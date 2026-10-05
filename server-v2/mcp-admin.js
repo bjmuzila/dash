@@ -17,6 +17,10 @@
  *        endpoint uses, so the app's next refresh fails and it asks the member
  *        to reconnect. JSON body only: a cross-site form cannot send one.
  *
+ * The Activity list also carries the discovery steps ('probe' rows: an app
+ * reaching /mcp without a token or reading the metadata), so a connection
+ * attempt that dies before it registers still leaves a trace.
+ *
  * Everything here is read off the connector's own tables (see mcp-oauth.js):
  * mcp_oauth_tokens / _codes / _clients for the connections themselves, and
  * mcp_tool_calls + mcp_oauth_events, which exist only to feed this page.
@@ -106,7 +110,11 @@ const SQL_TOTALS = `
     (SELECT COUNT(*) FROM mcp_oauth_clients WHERE created_at > NOW() - $1::int * INTERVAL '1 day'
         AND first_used_at IS NOT NULL)::int AS registrations_used,
     (SELECT COUNT(*) FROM mcp_oauth_events WHERE at > NOW() - $1::int * INTERVAL '1 day'
-        AND kind IN ('register_refused', 'authorize_refused', 'token_refused'))::int AS refused`;
+        AND kind IN ('register_refused', 'authorize_refused', 'token_refused'))::int AS refused,
+    (SELECT COUNT(DISTINCT ip) FROM mcp_oauth_events WHERE at > NOW() - $1::int * INTERVAL '1 day'
+        AND kind = 'probe')::int AS probe_callers,
+    (SELECT COUNT(*) FROM mcp_oauth_events WHERE at > NOW() - $1::int * INTERVAL '1 day'
+        AND kind = 'probe')::int AS probes`;
 
 const SQL_DAILY = `
   SELECT to_char((at AT TIME ZONE '${ET}')::date, 'YYYY-MM-DD') AS day,
@@ -135,19 +143,70 @@ const SQL_CLIENTS = `
    ORDER BY c.created_at DESC
    LIMIT 100`;
 
+// Discovery rows ('probe') are read separately with their own limit, so a
+// burst of scanners hitting /mcp can never push the real connection story
+// (registrations, approvals, refusals) out of the Activity list.
 const SQL_EVENTS = `
   SELECT e.id, e.at, e.kind, e.client_id, e.ip, e.detail, c.client_name, c.redirect_uris, u.email
     FROM mcp_oauth_events e
     LEFT JOIN mcp_oauth_clients c ON c.client_id = e.client_id
     LEFT JOIN users u ON u.id = e.user_id
-   WHERE e.at > NOW() - $1::int * INTERVAL '1 day'
+   WHERE e.at > NOW() - $1::int * INTERVAL '1 day' AND e.kind <> 'probe'
    ORDER BY e.at DESC, e.id DESC
    LIMIT 200`;
+
+const SQL_PROBES = `
+  SELECT e.id, e.at, e.kind, e.client_id, e.ip, e.detail, NULL AS client_name, NULL AS redirect_uris, NULL AS email
+    FROM mcp_oauth_events e
+   WHERE e.at > NOW() - $1::int * INTERVAL '1 day' AND e.kind = 'probe'
+   ORDER BY e.at DESC, e.id DESC
+   LIMIT 100`;
+
+const APP_KINDS = new Set(['gemini', 'chatgpt', 'claude', 'local', 'other']);
+
+/** Every tool the connector offers, in its own order. Read lazily: mcp-server
+ *  mounts this module, so by the time a report is built it is fully loaded. */
+function offeredTools() {
+  try { return require('./mcp-server').TOOLS.map((t) => t.name); } catch { return []; }
+}
+
+/** Which app an activity row belongs to: the registered client's redirect
+ *  URIs when there is one, else the app a discovery row read off its UA. */
+function eventApp(r, appOf) {
+  if (r.redirect_uris) return appOf(uriList(r.redirect_uris));
+  const a = r.detail && typeof r.detail === 'object' ? r.detail.app : null;
+  return APP_KINDS.has(a) ? a : null;
+}
+
+/** The Tools table: every tool the connector offers, used or not (a tool added
+ *  to mcp-server.js shows here at 0 calls from the first deploy), plus any tool
+ *  still in the call log that has since been retired. Busiest first; unused
+ *  ones keep the connector's own order. */
+function toolRows(rows) {
+  const offered = offeredTools();
+  const byName = new Map(rows.map((r) => [r.tool, r]));
+  const names = [...offered, ...rows.map((r) => r.tool).filter((n) => !offered.includes(n))];
+  return names
+    .map((tool, i) => {
+      const r = byName.get(tool);
+      return {
+        tool,
+        calls: r?.calls || 0,
+        errors: r?.errors || 0,
+        avgMs: r?.avg_ms ?? null,
+        members: r?.members || 0,
+        offered: offered.includes(tool),
+        _i: i,
+      };
+    })
+    .sort((a, b) => b.calls - a.calls || a._i - b._i)
+    .map(({ _i, ...r }) => r);
+}
 
 async function buildReport(days) {
   const { query, appOf } = oauth.admin;
   const chartDays = Math.max(days, CHART_MIN_DAYS);
-  const [conns, unclaimed, totals, daily, tools, clients, events] = await Promise.all([
+  const [conns, unclaimed, totals, daily, tools, clients, events, probes] = await Promise.all([
     query(SQL_CONNECTIONS, [days]),
     query(SQL_UNCLAIMED, [days]),
     query(SQL_TOTALS, [days]),
@@ -155,6 +214,7 @@ async function buildReport(days) {
     query(SQL_TOOLS, [days]),
     query(SQL_CLIENTS, [days]),
     query(SQL_EVENTS, [days]),
+    query(SQL_PROBES, [days]),
   ]);
 
   const connections = conns.rows.map((r) => {
@@ -226,6 +286,8 @@ async function buildReport(days) {
       registrations: t.registrations || 0,
       registrationsUsed: t.registrations_used || 0,
       refused: t.refused || 0,
+      probes: t.probes || 0,
+      probeCallers: t.probe_callers || 0,
       unclaimed: connections.filter((c) => c.status === 'unclaimed').length,
     },
     connections,
@@ -234,7 +296,7 @@ async function buildReport(days) {
       const r = byDay.get(day);
       return { day, calls: r?.calls || 0, errors: r?.errors || 0, members: r?.members || 0 };
     }),
-    tools: tools.rows.map((r) => ({ tool: r.tool, calls: r.calls, errors: r.errors, avgMs: r.avg_ms, members: r.members })),
+    tools: toolRows(tools.rows),
     clients: clients.rows.map((r) => {
       const uris = uriList(r.redirect_uris);
       return {
@@ -249,17 +311,19 @@ async function buildReport(days) {
         connections: r.connections,
       };
     }),
-    events: events.rows.map((r) => ({
-      id: Number(r.id),
-      at: iso(r.at),
-      kind: r.kind,
-      clientId: r.client_id,
-      clientName: r.client_name || null,
-      app: r.redirect_uris ? appOf(uriList(r.redirect_uris)) : null,
-      email: r.email || null,
-      ip: r.ip || null,
-      detail: r.detail || null,
-    })),
+    events: [...events.rows, ...probes.rows]
+      .sort((a, b) => new Date(b.at) - new Date(a.at) || Number(b.id) - Number(a.id))
+      .map((r) => ({
+        id: Number(r.id),
+        at: iso(r.at),
+        kind: r.kind,
+        clientId: r.client_id,
+        clientName: r.client_name || null,
+        app: eventApp(r, appOf),
+        email: r.email || null,
+        ip: r.ip || null,
+        detail: r.detail || null,
+      })),
   };
 }
 
@@ -314,4 +378,4 @@ function registerAdminRoutes(register) {
   register('/api/admin/mcp-connections/revoke', { auth: 'owner', methods: ['POST'], handler: handleRevokeConnection });
 }
 
-module.exports = { registerAdminRoutes, _test: { buildReport, etDays } };
+module.exports = { registerAdminRoutes, _test: { buildReport, etDays, toolRows } };

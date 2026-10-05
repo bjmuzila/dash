@@ -25,9 +25,14 @@ import { useIsMobile } from "../hooks/useIsMobile";
  *     app never traded the code for tokens — the signature of an app that
  *     "connected" and then does nothing.
  *   • Tool calls per day and by tool.
- *   • Activity — approvals, revocations, and every refusal with what the app
+ *   • Activity — every step of a connection (the app reaching /mcp and reading
+ *     the metadata, registering, the member being sent to sign in, the Allow
+ *     page), approvals, revocations, and every refusal with what the app
  *     actually sent (redirect URLs, grant type, error). When an AI app says
- *     "the server rejected it", the answer is in this list.
+ *     "the server rejected it" — or a connection never shows up at all — the
+ *     answer is in this list. No discovery row for an app means its requests
+ *     never reached the server.
+ *   • Tools — every tool the connector offers, including ones never called.
  *   • Registered apps — each automatic app registration (DCR) in the window.
  *
  * Counts and logs follow the range picker. The connection list is every grant
@@ -77,11 +82,12 @@ interface Report {
   totals: {
     live: number; members: number; activeMembers: number; calls: number; errors: number; calls24h: number;
     registrations: number; registrationsUsed: number; refused: number; unclaimed: number;
+    probes?: number; probeCallers?: number;
   };
   connections: Connection[];
   apps: { app: AppKind; live: number; calls: number }[];
   daily: { day: string; calls: number; errors: number; members: number }[];
-  tools: { tool: string; calls: number; errors: number; avgMs: number | null; members: number }[];
+  tools: { tool: string; calls: number; errors: number; avgMs: number | null; members: number; offered?: boolean }[];
   clients: {
     clientId: string; name: string | null; app: AppKind; authMethod: string; createdAt: string | null;
     firstUsedAt: string | null; callbacks: number; hosts: string[]; connections: number;
@@ -115,6 +121,10 @@ const STATUS: Record<Status, { label: string; icon: string; color: string; hint:
 };
 
 const EVENT: Record<string, { label: string; icon: string; color: string; problem: boolean }> = {
+  probe: { label: "Reached the connector", icon: "→", color: T.cyan, problem: false },
+  registered: { label: "App registered", icon: "+", color: T.cyan, problem: false },
+  signin_required: { label: "Sent to sign in", icon: "↪", color: T.gold, problem: false },
+  consent_shown: { label: "Shown Allow page", icon: "◻", color: T.text, problem: false },
   approved: { label: "Approved", icon: "✓", color: T.green, problem: false },
   revoked: { label: "Revoked", icon: "✕", color: T.red, problem: false },
   consent_denied: { label: "Denied by member", icon: "⊘", color: T.text, problem: false },
@@ -146,12 +156,30 @@ function stamp(isoStr: string | null | undefined): string {
 }
 
 const fmt = (n: number) => n.toLocaleString("en-US");
+
+const PROBE_STEP: Record<string, string> = {
+  mcp_unauthorized: "Hit /mcp without a token (got the sign-in challenge)",
+  resource_metadata: "Read the resource metadata",
+  auth_metadata: "Read the sign-in server metadata",
+};
 const str = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : String(v));
 
 /** One line that says what an activity row means, from its detail payload. */
 function eventSummary(e: EventRow): string {
   const d = e.detail || {};
   switch (e.kind) {
+    case "probe":
+      return [PROBE_STEP[str(d.step)] || str(d.step), str(d.ua) && `UA ${str(d.ua)}`].filter(Boolean).join(" · ");
+    case "registered": {
+      const uris = Array.isArray(d.redirect_uris) ? (d.redirect_uris as unknown[]).map(str) : [];
+      const hosts = [...new Set(uris.map((u) => { try { return new URL(u).host; } catch { return ""; } }).filter(Boolean))];
+      return [str(d.client_name) && `client "${str(d.client_name)}"`, `${uris.length} callback${uris.length === 1 ? "" : "s"}`,
+        hosts.join(", "), str(d.token_endpoint_auth_method)].filter(Boolean).join(" · ");
+    }
+    case "signin_required":
+      return "Not signed in to CB Edge — sent to the sign-in page";
+    case "consent_shown":
+      return "Signed in, shown the Allow / Cancel page";
     case "revoked":
       return str(d.reason) || "revoked";
     case "register_refused": {
@@ -368,7 +396,7 @@ export default function AiConnections() {
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => Date.now());
   const [showAll, setShowAll] = useState(false);
-  const [problemsOnly, setProblemsOnly] = useState(false);
+  const [eventFilter, setEventFilter] = useState<"all" | "discovery" | "problems">("all");
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -469,8 +497,10 @@ export default function AiConnections() {
 
   const events = useMemo(() => {
     const rows = data?.events ?? [];
-    return problemsOnly ? rows.filter((e) => EVENT[e.kind]?.problem) : rows;
-  }, [data, problemsOnly]);
+    if (eventFilter === "problems") return rows.filter((e) => EVENT[e.kind]?.problem);
+    if (eventFilter === "discovery") return rows.filter((e) => e.kind === "probe");
+    return rows;
+  }, [data, eventFilter]);
 
   const t = data?.totals;
   const rangeLabel = RANGES.find((r) => r.days === days)?.label ?? `${days}d`;
@@ -529,6 +559,11 @@ export default function AiConnections() {
               value={fmt(t.unclaimed)}
               tone={t.unclaimed ? T.orange : undefined}
               sub="consent given, app never took its tokens"
+            />
+            <Tile
+              label="Reached the connector"
+              value={fmt(t.probeCallers ?? 0)}
+              sub={`caller${t.probeCallers === 1 ? "" : "s"} · ${fmt(t.probes ?? 0)} discovery hits ${windowWord}`}
             />
           </div>
 
@@ -628,9 +663,9 @@ export default function AiConnections() {
             <Card variant="classic" title="Tool calls per day" subtitle={`Last ${data.chartDays} days, New York time`}>
               <DailyBars rows={data.daily} />
             </Card>
-            <Card variant="classic" title="Tools" subtitle={`What members asked for ${windowWord}`}>
+            <Card variant="classic" title="Tools" subtitle={`Every tool the connector offers · calls ${windowWord}`}>
               {data.tools.length === 0 ? (
-                <Empty>No tool calls {windowWord}.</Empty>
+                <Empty>No tools reported.</Empty>
               ) : (
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -644,8 +679,11 @@ export default function AiConnections() {
                     <tbody>
                       {data.tools.map((r) => (
                         <tr key={r.tool}>
-                          <td style={{ ...cellStyle, ...mono }}>{r.tool}</td>
-                          <td style={{ ...cellStyle, ...mono, textAlign: "right" }}>{fmt(r.calls)}</td>
+                          <td style={{ ...cellStyle, ...mono, color: r.calls ? T.text : T.green }}>
+                            {r.tool}
+                            {r.offered === false && <span style={{ ...subText, marginLeft: 8 }}>retired</span>}
+                          </td>
+                          <td style={{ ...cellStyle, ...mono, textAlign: "right", color: r.calls ? T.text : T.green }}>{fmt(r.calls)}</td>
                           <td style={{ ...cellStyle, ...mono, textAlign: "right", color: r.errors ? T.orange : T.text }}>{fmt(r.errors)}</td>
                           <td style={{ ...cellStyle, ...mono, textAlign: "right" }}>{r.avgMs != null ? `${fmt(r.avgMs)} ms` : "—"}</td>
                           <td style={{ ...cellStyle, ...mono, textAlign: "right" }}>{fmt(r.members)}</td>
@@ -662,17 +700,27 @@ export default function AiConnections() {
           <Card
             variant="classic"
             title="Activity"
-            subtitle="Approvals, disconnects, and every refusal with what the app sent. Start here when an app says the server rejected it."
+            subtitle="Every step of a connection — reaching /mcp, registering, sign-in, Allow — plus disconnects and every refusal with what the app sent. An app with no row here never reached the server."
           >
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
               <Segmented
-                value={problemsOnly ? "problems" : "all"}
-                options={[{ value: "all", label: "All" }, { value: "problems", label: "Problems" }] as const}
-                onChange={(v) => setProblemsOnly(v === "problems")}
+                value={eventFilter}
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "discovery", label: "Discovery" },
+                  { value: "problems", label: "Problems" },
+                ] as const}
+                onChange={setEventFilter}
               />
             </div>
             {events.length === 0 ? (
-              <Empty>{problemsOnly ? `No refusals ${windowWord}.` : `Nothing logged ${windowWord}.`}</Empty>
+              <Empty>
+                {eventFilter === "problems"
+                  ? `No refusals ${windowWord}.`
+                  : eventFilter === "discovery"
+                    ? `No app reached the connector ${windowWord}.`
+                    : `Nothing logged ${windowWord}.`}
+              </Empty>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", maxHeight: 560, overflowY: "auto" }}>
                 {events.map((e) => {

@@ -37,6 +37,14 @@
 //     shows no blue.
 //   · THE LEVELS ARE THE WALLS MIGRATION RENAMED (vtPathData.ts), not Voltick's
 //     own recorder — the drawing does not care, the rows have the same shape.
+//   · PATH SIZES PER SESSION (2026-10-05): Voltick's pathSizes runs on each
+//     session's slice of a row (pathSizesBySession), so a bubble is sized
+//     against its level's range on its OWN day. The walls read spans 10 sessions
+//     by default, and 0DTE GEX grows ~40× from the open to the close, so one
+//     range across all of them drew every morning — today's live candles above
+//     all — at the 2px floor: the path looked dead. Voltick's board reads one
+//     session, so this is its behaviour; the Ribbon was already per session
+//     (ribbonSizeScale).
 //
 // Each shape is a Vela RENDERER LAYER (registerRendererLayer) owned by the
 // native indicator of the same type id (vtPathIndicator.ts), which pushes the
@@ -77,6 +85,7 @@ import {
   type BandQ,
   type FillPt,
   type GoldSpan,
+  type PathPt,
   type PathRole,
   type RowFacts,
   type ThinRow,
@@ -132,6 +141,39 @@ function nyParts(ms: number): { day: string; mins: number } {
   for (const x of NY_PARTS.formatToParts(ms)) p[x.type] = x.value
   const h = Number(p.hour) % 24
   return { day: `${p.year}-${p.month}-${p.day}`, mins: h * 60 + Number(p.minute) }
+}
+
+/**
+ * Voltick's pathSizes, run once PER SESSION (CB Edge; see the header): each
+ * bubble is sized against its level's range on its own day, never against the
+ * other sessions on the chart. `fill` is time-ordered, so each day's slice comes
+ * back in place.
+ */
+function pathSizesBySession(fill: readonly FillPt[], pts: readonly PathPt[]): number[] {
+  // ET midnight always falls on the hour, so one clock read per hour is enough
+  const byHour = new Map<number, string>()
+  const dayOf = (t: number) => {
+    const h = Math.floor(t / 3600)
+    let d = byHour.get(h)
+    if (d == null) byHour.set(h, (d = nyParts(h * 3_600_000).day))
+    return d
+  }
+  const ptsByDay = new Map<string, PathPt[]>()
+  for (const p of pts) {
+    const k = dayOf(p.t)
+    const list = ptsByDay.get(k)
+    if (list) list.push(p)
+    else ptsByDay.set(k, [p])
+  }
+  const out: number[] = []
+  for (let i = 0; i < fill.length; ) {
+    const k = dayOf(fill[i]!.t)
+    let j = i + 1
+    while (j < fill.length && dayOf(fill[j]!.t) === k) j++
+    for (const v of pathSizes(fill.slice(i, j), ptsByDay.get(k) ?? [], FLAT_SPAN)) out.push(v)
+    i = j
+  }
+  return out
 }
 
 /** Voltick's boldness curve, pinned at 15% (the shipped default). */
@@ -200,7 +242,7 @@ class PathDraw {
     for (const r of list) {
       let ks = this.sizeMemo.get(r.fill)
       if (!ks) {
-        ks = pathSizes(r.fill, r.pts, FLAT_SPAN)
+        ks = pathSizesBySession(r.fill, r.pts)
         this.sizeMemo.set(r.fill, ks)
       }
       const rr = r.role === 'volt' ? rVolt : rPeer

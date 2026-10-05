@@ -225,6 +225,17 @@ function appOf(uris) {
   return 'other';
 }
 
+/** Which AI app a request came from, read off its User-Agent — for the owner
+ *  tracker's discovery rows, which happen before any client is registered and
+ *  so have no redirect URI to go by. A hint only: anyone can send any UA. */
+function uaApp(ua) {
+  const s = String(ua || '');
+  if (/openai|chatgpt|gptbot/i.test(s)) return 'chatgpt';
+  if (/claude|anthropic/i.test(s)) return 'claude';
+  if (/google|gemini/i.test(s)) return 'gemini';
+  return null;
+}
+
 /** Caller's IP for rate limits. Behind Cloudflare that is cf-connecting-ip;
  *  IPv6 is keyed by /64 so one host cannot rotate its way past a limit. */
 function clientKey(req) {
@@ -437,7 +448,8 @@ function maybePrune() {
 // they are capped globally; past the cap the console line is the record.
 const eventLimit = makeLimiter(600, 60 * 60 * 1000, 10);
 
-/** kind: approved | consent_denied | no_membership | revoked |
+/** kind: probe | registered | signin_required | consent_shown | approved |
+ *        consent_denied | no_membership | revoked |
  *        register_refused | authorize_refused | token_refused */
 function recordEvent(kind, { clientId = null, userId = null, ip = null, detail = null } = {}) {
   if (!eventLimit.hit('all')) return;
@@ -446,6 +458,35 @@ function recordEvent(kind, { clientId = null, userId = null, ip = null, detail =
   q(`INSERT INTO mcp_oauth_events (kind, client_id, user_id, ip, detail) VALUES ($1, $2, $3, $4, $5::jsonb)`,
     [kind, clientId ? String(clientId).slice(0, 100) : null, userId, ip, json])
     .catch((e) => console.warn('[mcp-oauth] event log failed:', e.message));
+}
+
+// Discovery ("probe") rows: an app reaching /mcp without a token, or reading
+// the metadata. These are the first steps of every connection, and the only
+// trace of one that stops before registering — without them a ChatGPT or
+// Claude attempt that dies at discovery leaves no row at all. Anyone (and any
+// scanner) can trigger them, so they get their own budget and can never crowd
+// out the real events above: one row per caller per step per 10 minutes, at
+// most 300 an hour.
+const probeOnce = makeLimiter(1, 10 * 60 * 1000, 5000);
+const probeGlobal = makeLimiter(300, 60 * 60 * 1000, 10);
+
+/** step: mcp_unauthorized | resource_metadata | auth_metadata */
+function recordProbe(req, step) {
+  const ip = clientKey(req);
+  if (probeOnce.blocked(`${ip}|${step}`) || probeGlobal.blocked('all')) return;
+  probeOnce.hit(`${ip}|${step}`);
+  probeGlobal.hit('all');
+  const ua = String(req.headers['user-agent'] || '').slice(0, 300) || null;
+  const detail = {
+    step,
+    path: String(req.url || '').split('?')[0].slice(0, 200),
+    host: String(req.headers.host || '').slice(0, 100) || null,
+    ua,
+    app: uaApp(ua),
+  };
+  q(`INSERT INTO mcp_oauth_events (kind, client_id, user_id, ip, detail) VALUES ('probe', NULL, NULL, $1, $2::jsonb)`,
+    [ip, JSON.stringify(detail)])
+    .catch((e) => console.warn('[mcp-oauth] probe log failed:', e.message));
 }
 
 /** outcome: ok | error | rate_limited | no_membership */
@@ -594,6 +635,18 @@ async function handleRegister(req, res) {
   );
   console.log(`[mcp-oauth] registered client "${name || '(unnamed)'}" (${method}) → ${uris.map((u) => u.slice(0, 200)).join(' , ')}`
     + (dropped.length ? ` | dropped: ${dropped.map((u) => String(u).slice(0, 200)).join(' , ')}` : ''));
+  const ua = String(req.headers['user-agent'] || '').slice(0, 300) || null;
+  recordEvent('registered', {
+    clientId,
+    ip: key,
+    detail: {
+      client_name: name,
+      token_endpoint_auth_method: method,
+      redirect_uris: uris.map((u) => u.slice(0, 300)),
+      dropped: dropped.length,
+      ua,
+    },
+  });
 
   const out = {
     client_id: clientId,
@@ -643,16 +696,17 @@ function prMetadata(origin) {
 
 // no-store (sendJson's default): the body depends on Host, and a cached copy
 // served under the other hostname would fail every client's issuer check.
-function metadataHandler(build) {
+function metadataHandler(build, step) {
   return async (req, res) => {
     setCors(res);
     if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return; }
+    recordProbe(req, step);
     sendJson(res, 200, build(publicOrigin(req)));
   };
 }
 
-const handleAsMetadata = metadataHandler(asMetadata);
-const handlePrMetadata = metadataHandler(prMetadata);
+const handleAsMetadata = metadataHandler(asMetadata, 'auth_metadata');
+const handlePrMetadata = metadataHandler(prMetadata, 'resource_metadata');
 
 // ── Authorize (browser) ─────────────────────────────────────────────────────
 
@@ -842,6 +896,7 @@ async function handleAuthorize(req, res) {
     // Not signed in (or the session expired). Send them through the normal
     // sign-in page; AuthForm's safeNext() accepts this same-origin path and
     // lands them straight back here with every parameter intact.
+    if (!isPost) recordEvent('signin_required', { clientId: client.client_id, ip: clientKey(req) });
     const qs = new URLSearchParams(p).toString();
     res.statusCode = 302;
     res.setHeader('Location', `/sign-in?next=${encodeURIComponent(`/oauth/authorize?${qs}`)}`);
@@ -879,6 +934,7 @@ ${whoLine}
   const sessionHash = sess.tokenHash || sessionHashFromCookie(req);
 
   if (!isPost) {
+    recordEvent('consent_shown', { clientId: client.client_id, userId: sess.userId });
     const hidden = Object.entries(p)
       .map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('\n');
     return renderPage(res, 200, {
@@ -1241,6 +1297,7 @@ module.exports = {
   handleToken: jsonGuard(handleToken),
   handleRevoke: jsonGuard(handleRevoke),
   recordToolCall,
+  recordProbe,
   /** For server-v2/mcp-admin.js (the owner tracker) only. */
   admin: { query: q, revokeFamily, appOf },
   /** Selftest hooks only. */
@@ -1249,8 +1306,10 @@ module.exports = {
     reset() {
       _tokenCache.clear(); _entCache.clear(); _entInFlight.clear(); _clientCache.clear();
       regPerIp.reset(); regGlobal.reset(); authFailures.reset(); eventLimit.reset();
+      probeOnce.reset(); probeGlobal.reset();
     },
     redirectAllowed,
     csrfFor,
+    uaApp,
   },
 };
