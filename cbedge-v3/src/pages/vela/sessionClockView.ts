@@ -3,8 +3,14 @@
 // is up. Two pieces, both following the ACTIVE chart:
 //
 //   · the chip     Vela renders our pinned "Session" action as a plain button;
-//                  this dresses it as quiet text,  ● RTH  closes in 2:14:47,  and
-//                  re-dresses it if Vela ever rebuilds it. A click opens Chart
+//                  this dresses it as quiet text,  ● Mon Oct 5  13:36:30,  and
+//                  re-dresses it if Vela ever rebuilds it. THE DATE AND TIME
+//                  (Brandon, 2026-10-05: "change this to the date and time"), in
+//                  the active chart's time zone, ticking each second. The dot
+//                  keeps the session's colour, and the session with its countdown
+//                  ("RTH, closes in 2:14:47") moved to the chip's tooltip. When the
+//                  top bar is short of room the date goes first, then the chip
+//                  (vela.css, topbarFit). A click opens Chart
 //                  settings on its Symbol tab, where Vela keeps the TIME ZONE and
 //                  the trading session (Brandon, 2026-10-05: "the time zone can be
 //                  in the settings. no need to be so pronounced on the chart", so
@@ -19,7 +25,7 @@
 //                  shows them as chips and the button is only a ▾; the tag then
 //                  sits in it on its own ("[30m] ETH ▾").
 //
-// THE SESSION. From the provider's own calendar (cbedgeProvider sessionWindows,
+// THE SESSION (the dot and the tooltip). From the provider's own calendar (cbedgeProvider sessionWindows,
 // the one behind the chart's session shading), in the chart's time zone:
 //
 //   index    RTH · closes in   Pre-market · opens in    Closed · opens …
@@ -133,6 +139,33 @@ function partsOf(f: Intl.DateTimeFormat, ms: number): Record<string, string> {
   return out
 }
 
+/** Mon Oct 5 · 13:36:30 · Monday, October 5, 2026 13:36:30 EDT (the tooltip), in `tz`. */
+function clock(ms: number, tz: string): { date: string; time: string; full: string } {
+  const p = partsOf(
+    fmt(`c|${tz}`, () =>
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: tz,
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+        timeZoneName: 'short',
+      }),
+    ),
+    ms,
+  )
+  const time = `${p.hour}:${p.minute}:${p.second}`
+  return {
+    date: `${(p.weekday ?? '').slice(0, 3)} ${(p.month ?? '').slice(0, 3)} ${p.day}`,
+    time,
+    full: `${p.weekday}, ${p.month} ${p.day}, ${p.year} ${time} ${p.timeZoneName ?? ''}`.trim(),
+  }
+}
+
 /** Mon 09:30 */
 function dayTime(ms: number, tz: string): string {
   const p = partsOf(
@@ -197,17 +230,16 @@ export function bindSessionClock(ws: VelaWorkspace): () => void {
 
   // ── the chip ──
   let chip: HTMLButtonElement | null = null
-  let parts: { ses: HTMLElement; lab: HTMLElement; verb: HTMLElement; val: HTMLElement } | null = null
+  let parts: { ses: HTMLElement; date: HTMLElement; val: HTMLElement } | null = null
   const dress = (b: HTMLButtonElement) => {
     const ses = el(doc, 'span', 'cb-clk-ses')
-    const lab = el(doc, 'b', 'cb-clk-lab')
-    const verb = el(doc, 'span', 'cb-clk-verb')
+    const date = el(doc, 'span', 'cb-clk-date')
     const val = el(doc, 'span', 'cb-clk-val')
-    ses.append(el(doc, 'i', 'cb-clk-dot'), lab, verb, val)
+    ses.append(el(doc, 'i', 'cb-clk-dot'), date, val)
     b.classList.add('cb-clk')
     b.setAttribute('aria-haspopup', 'dialog')
     b.replaceChildren(ses)
-    parts = { ses, lab, verb, val }
+    parts = { ses, date, val }
   }
 
   const paintChip = () => {
@@ -222,22 +254,18 @@ export function bindSessionClock(ws: VelaWorkspace): () => void {
     const tz = cell.displayTimezone
     const r = readSession(resolveSym(normTicker(cell.symbol) ?? '').kind, now)
     parts.ses.dataset.phase = r.phase
-    setText(parts.lab, r.label)
+    // the chip: the date and time in the chart's zone
+    const c = clock(now, tz)
+    setText(parts.date, c.date)
+    setText(parts.val, c.time)
+    // the tooltip: the session, its countdown, and the full date
     const left = r.at == null ? null : r.at - now
-    if (left == null) {
-      setText(parts.verb, '')
-      setText(parts.val, '')
-    } else if (r.phase === 'closed' && left > COUNTDOWN_MS) {
-      setText(parts.verb, r.verb)
-      setText(parts.val, dayTime(r.at!, tz))
-    } else {
-      setText(parts.verb, `${r.verb} in`)
-      setText(parts.val, hms(left))
-    }
-    const state = `${r.label}${parts.verb.textContent ? `, ${parts.verb.textContent} ${parts.val.textContent}` : ''}`
-    const tip = `${state}. Session and time zone: Chart settings`
+    const when =
+      left == null ? '' : r.phase === 'closed' && left > COUNTDOWN_MS ? `${r.verb} ${dayTime(r.at!, tz)}` : `${r.verb} in ${hms(left)}`
+    const tip = `${r.label}${when ? `, ${when}` : ''} · ${c.full}. Session and time zone: Chart settings`
     if (chip.title !== tip) chip.title = tip
-    chip.setAttribute('aria-label', `Session: ${r.label}. Open the session and time-zone settings`)
+    const aria = `${c.date}. Session: ${r.label}. Open the session and time-zone settings`
+    if (chip.getAttribute('aria-label') !== aria) chip.setAttribute('aria-label', aria)
   }
 
   // ── RTH / ETH on Vela's timeframe button and in its menu ──

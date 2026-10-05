@@ -9,7 +9,7 @@
 // Now the bar gives things up in this order until it fits, one step at a time,
 // re-measured whenever the window or the bar's content changes:
 //
-//   1  the session's countdown             ● Pre-market  (no "opens in 2:09:34")
+//   1  the clock's date                    ● 13:36:30  (no "Mon Oct 5")
 //   2  the words on Indicators, Replay and Workspace (their icons stay, and the
 //      name shows on hover)
 //   3  the starred timeframe chips but the current one (▾ still lists them all)
@@ -56,9 +56,9 @@ export function bindTopbarFit(ws: VelaWorkspace): () => void {
   const ro = new ResizeObserver(schedule)
   ro.observe(bar)
   // Vela re-renders its buttons (a symbol, a timeframe star, a layout); our chips
-  // re-dress theirs. The session chip rewrites its countdown every second, which
+  // re-dress theirs. The session chip rewrites its time every second, which
   // barely moves its width (tabular figures): that alone is re-measured at most
-  // every 10 s, so a new phase ("Pre-market" → "RTH") is still caught.
+  // every 10 s, so a new day ("Mon Oct 5" → "Tue Oct 6") is still caught.
   let clockAt = 0
   const mo = new MutationObserver((recs) => {
     const inClock = (n: Node) => (n instanceof Element ? n : n.parentElement)?.closest('.cb-clk') != null

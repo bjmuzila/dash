@@ -2,7 +2,11 @@
 // THE SESSION CLOCK: the right side of the desktop top bar (Brandon, 2026-10-04,
 // the bottom-of-chart cleanup, C3; mockup generated/2026-10-04-vela-bottom-r2.html).
 //
-//   ● RTH  closes in 2:14:47   🔔  Workspace ▾  📷
+//   ● Mon Oct 5  13:36:30   🔔  Workspace ▾  📷
+//
+// The chip is the date and time in the active chart's zone (Brandon, 2026-10-05:
+// "change this to the date and time"); its dot is the session's colour and the
+// session with its countdown is the tooltip (sessionClockView.ts).
 //
 // Vela's bottom strip (nine range chips, a clock, RTH / ETH, ⚙) is gone on the
 // desktop, and every chart got its height. What it carried that is still wanted

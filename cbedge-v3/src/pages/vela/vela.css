@@ -3930,8 +3930,10 @@
   display: none !important;
 }
 
-/* The session chip (sessionClockView.ts): quiet text, ● RTH closes in 2:14:47.
-   The clock and the time zone moved to Chart settings → Symbol (2026-10-05). */
+/* The session chip (sessionClockView.ts): quiet text, ● Mon Oct 5  13:36:30, the
+   date and time in the chart's zone (2026-10-05). The dot is the session's colour;
+   the session and its countdown are the tooltip. The time zone setting is in
+   Chart settings → Symbol. */
 .vela-workspace .vela-widget-topbar button.cb-clk {
   display: inline-flex;
   align-items: center;
@@ -3972,11 +3974,8 @@
 .cb-clk .cb-clk-ses[data-phase='globex'] .cb-clk-dot {
   background: var(--color-vt-sky);
 }
-.cb-clk .cb-clk-lab {
-  color: var(--color-vt-paper);
-  font-weight: 500;
-}
 .cb-clk .cb-clk-val {
+  color: var(--color-vt-paper);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
@@ -4859,11 +4858,11 @@
 }
 
 /* ── The top bar fitted to the window (topbarFit.ts) ──
-   Steps, each keeping the ones before: 1 the session countdown; 2 the words on
+   Steps, each keeping the ones before: 1 the date on the clock (the time stays); 2 the words on
    Indicators / Replay / Workspace (icons stay); 3 the starred chips but the
    current one; 4 the ticker's price and the session chip; 5 undo / redo;
    6 the bar scrolls sideways. */
-.vela-widget-topbar:is([data-cb-fit='1'], [data-cb-fit='2'], [data-cb-fit='3'], [data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6']) .cb-clk :is(.cb-clk-verb, .cb-clk-val) {
+.vela-widget-topbar:is([data-cb-fit='1'], [data-cb-fit='2'], [data-cb-fit='3'], [data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6']) .cb-clk .cb-clk-date {
   display: none;
 }
 .vela-workspace .vela-widget-topbar:is([data-cb-fit='2'], [data-cb-fit='3'], [data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6'])

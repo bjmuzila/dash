@@ -26541,3 +26541,12 @@ Brandon wants to switch the GEX Rail to Multi Greek's heatmap, nearest expiry on
 - A Volt / Coil / Reversal / Surge row's cell is filled in that level's Path colour with the level's ink, the same colours the bars use.
 - **One column, the nearest expiry:** the same column the rail already reads. No later expiries and no ex-0DTE total. Rows, placement, tags, the header and NET are unchanged.
 - **Files:** `cbedge-v3/src/pages/vela/studies/rail.ts`, `cbedge-v3/src/pages/vela/studies/index.ts` (the Style input), `cbedge-v3/src/pages/vela/vela.css` (`.cb-gxr-cell`).
+
+## 2026-10-05 - Vela top bar: the session chip shows the date and time
+
+Brandon asked to change "● RTH closes in 2:23:30" to the date and time.
+
+- **The chip:** `● Mon Oct 5  13:36:30`, the date and time in the active chart's time zone, ticking each second. The dot keeps the session's colour (RTH blue, pre-market, after hours / Globex, closed).
+- **The session moved to the tooltip:** "RTH, closes in 2:23:30 · Monday, October 5, 2026 13:36:30 EDT". A click still opens Chart settings → Symbol.
+- **Top bar short of room:** step 1 now drops the date (the time stays). Step 4 still drops the whole chip.
+- **Files:** `cbedge-v3/src/pages/vela/sessionClockView.ts`, `sessionClock.ts` and `topbarFit.ts` (comments), `vela.css` (the chip and the fit step).
