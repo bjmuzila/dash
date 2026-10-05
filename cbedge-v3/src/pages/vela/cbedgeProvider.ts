@@ -45,6 +45,18 @@
 // and the switch draws RTH lit), and the filter is the same 09:30–16:00 ET one
 // the GEX Candles card uses.
 //
+// EVERYTHING OUTSIDE 09:30–16:00 IS SHADED on an ETH chart (Brandon, 2026-10-05:
+// "9:30–4:00 eastern should not be shaded, the rest should"). The cash names'
+// tape carries the overnight session too (Sunday–Thursday 20:00–04:00), which a
+// 04:00–20:00 extended window left unshaded, so a Monday morning read as if the
+// session had started at 20:00 Sunday. Cash names now declare an OVERNIGHT
+// extended session, `2000-2000`, the same shape the futures' `1800-1700` is:
+// Vela then shades every weekday from 00:00 to the open, from the close to
+// 24:00, and Sunday from 20:00 (Friday stops at 20:00), in one extended tint.
+// The calendar's extended windows match it (the evening before at 20:00 to that
+// day's 20:00), so the market badge reads the overnight hours as a session; the
+// legend card names them PRE-MARKET / AFTER HOURS / OVERNIGHT by the clock.
+//
 // The calendar (`getCalendar`) is WEEKDAYS ONLY. No route here knows the
 // exchange holidays, so on a holiday the market badge will say open while no
 // bars arrive. Honest about it here rather than pretending.
@@ -92,6 +104,8 @@ const STALE_LIVE_MS = 30 * MIN_MS
 
 /** Futures open at 18:00 ET for the next day's session. */
 const FUT_OPEN_MIN = 18 * 60
+/** The cash names' after hours end, and their overnight session opens, at 20:00 ET. */
+const CASH_NIGHT_MIN = 20 * 60
 
 // ── Symbols ──────────────────────────────────────────────────────────────────
 
@@ -711,8 +725,11 @@ function calendar(kind: SymKind, from: number, to: number, session: string | und
       start = etWall(y, m, d, FUT_OPEN_MIN) - DAY_MS
       end = etWall(y, m, d, 17 * 60)
     } else {
-      start = etWall(y, m, d, 4 * 60)
-      end = etWall(y, m, d, 20 * 60)
+      // The overnight session (20:00 the evening before), pre-market, RTH and after
+      // hours to 20:00: the cash names' tape, one window per weekday (see Sessions).
+      const prev = new Date(Date.UTC(y, m - 1, d) - DAY_MS)
+      start = etWall(prev.getUTCFullYear(), prev.getUTCMonth() + 1, prev.getUTCDate(), CASH_NIGHT_MIN)
+      end = etWall(y, m, d, CASH_NIGHT_MIN)
     }
     if (end > from && start < to) out.push([Math.max(start, from), Math.min(end, to)] as const)
   }
@@ -765,9 +782,11 @@ export class CbEdgeProvider implements DataProvider {
       type: sym.kind,
       timezone: 'America/New_York',
       session: '0930-1600',
-      // Futures trade evening-to-evening; cash names 04:00–20:00. An index has no
-      // extended tape, so it declares none and Vela shades nothing outside RTH.
-      ...(fut ? { session_extended: '1800-1700' } : sym.kind === 'index' ? {} : { session_extended: '0400-2000' }),
+      // Futures trade evening-to-evening; cash names round the clock Sunday 20:00 to
+      // Friday 20:00 (overnight, pre-market, RTH, after hours): both OVERNIGHT
+      // windows, so everything outside RTH is shaded (see Sessions). An index has
+      // no extended tape, so it declares none and Vela shades nothing outside RTH.
+      ...(fut ? { session_extended: '1800-1700' } : sym.kind === 'index' ? {} : { session_extended: '2000-2000' }),
       minmov: fut ? 25 : 1,
       pricescale: 100,
       currency: 'USD',

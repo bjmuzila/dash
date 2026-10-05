@@ -562,7 +562,19 @@ class VtPathLayer implements RendererLayerInstance {
     if (!isPayload(d) || !d.rows.length) return
     const ci = Math.min(1, Math.max(0, d.ci))
     if (ci <= 0.01) return // the slider at 0 hides the shape, as in Voltick
+    // NOTHING TO PLACE AGAINST, NOTHING DRAWN (2026-10-05). While the chart loads
+    // — first paint, a symbol or timeframe switch — Vela has no bars yet but the
+    // layer still holds the last rows, and with no bars every time maps to logical
+    // 0: the whole Path drew as one tall column of bubbles at a single x over the
+    // loading dots. So: no bars, no Path; and only points inside the bars' span
+    // (a bar either side) are placed, so rows left over from the previous view
+    // never land on a pile at the edge.
+    const bars = args.bars
+    if (!bars.length) return
     const { coords, scale, bounds } = args
+    const iv = coords.barInterval > 0 ? coords.barInterval : bars.length > 1 ? bars[1]!.time - bars[0]!.time : 60_000
+    const tLo = (bars[0]!.time - iv) / 1000
+    const tHi = (bars[bars.length - 1]!.time + iv) / 1000
     const dpr = coords.dpr || 1
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.save()
@@ -573,7 +585,7 @@ class VtPathLayer implements RendererLayerInstance {
     this.painter.draw(
       {
         ctx,
-        X: (tSec) => coords.timeToX(tSec * 1000),
+        X: (tSec) => (tSec >= tLo && tSec <= tHi ? coords.timeToX(tSec * 1000) : Number.NaN),
         Y: (p) => coords.priceToY(p, scale, bounds),
         width: coords.width,
         height: bounds.top + bounds.height,

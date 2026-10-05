@@ -153,6 +153,16 @@ function iconButton(doc: Document, cls: string, label: string, icon: Element | s
 
 const bare = (s: string | undefined) => (s ?? '').replace(/^[^:]*:/, '').trim().toUpperCase()
 
+const ET_HM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' })
+/** A cash name outside RTH, by the ET clock: pre-market 04:00–09:30, after hours 16:00–20:00, else overnight. */
+function cashPhase(t: number): 'pre' | 'post' | 'extended' {
+  const p = ET_HM.formatToParts(t)
+  const m = Number(p.find((x) => x.type === 'hour')?.value ?? 0) * 60 + Number(p.find((x) => x.type === 'minute')?.value ?? 0)
+  if (m >= 4 * 60 && m < 9 * 60 + 30) return 'pre'
+  if (m >= 16 * 60 && m < 20 * 60) return 'post'
+  return 'extended'
+}
+
 /** A strike: whole numbers bare, anything else to the cent. */
 function fmtLevel(v: number): { whole: string; dec: string } {
   const s = Number.isInteger(v)
@@ -474,7 +484,10 @@ class Card {
   private paintState(): void {
     const host = this.cell.host
     const replay = host.querySelector('.vela-sl-replay-badge')
-    const status = replay && !replay.hasAttribute('hidden') ? 'replay' : host.querySelector<HTMLElement>('.vela-sl-market')?.dataset.status ?? ''
+    let status = replay && !replay.hasAttribute('hidden') ? 'replay' : host.querySelector<HTMLElement>('.vela-sl-market')?.dataset.status ?? ''
+    // a cash name's extended session runs overnight (cbedgeProvider Sessions), so
+    // Vela calls all of it "extended": name its part by the ET clock
+    if (status === 'extended' && this.sym && resolveSym(this.sym).kind !== 'futures') status = cashPhase(Date.now())
     const s = STATE[status]
     this.stateEl.hidden = !s
     if (!s) return

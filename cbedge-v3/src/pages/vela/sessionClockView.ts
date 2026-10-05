@@ -23,7 +23,7 @@
 // the one behind the chart's session shading), in the chart's time zone:
 //
 //   index    RTH · closes in   Pre-market · opens in    Closed · opens …
-//   stock    RTH · closes in   Pre-market · opens in    After hours · ends in   Closed · opens …
+//   stock    RTH · closes in   Pre-market · opens in    After hours · ends in   Overnight · opens in   Closed · opens …
 //   future   RTH · closes in   Globex · RTH opens in    Globex · closes in      Closed · opens …
 //
 // "Closed" counts down when the open is under 12 hours away, and names the day
@@ -71,6 +71,14 @@ function windowsFor(kind: SymKind, now: number): { rth: Windows; ext: Windows } 
 }
 
 const inside = (w: Windows, t: number) => w.find(([s, e]) => t >= s && t < e)
+
+const ET_HM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' })
+/** 20:00–04:00 ET: the cash names' overnight session. */
+function isOvernight(t: number): boolean {
+  const p = ET_HM.formatToParts(t)
+  const m = Number(p.find((x) => x.type === 'hour')?.value ?? 0) * 60 + Number(p.find((x) => x.type === 'minute')?.value ?? 0)
+  return m >= 20 * 60 || m < 4 * 60
+}
 const nextStart = (w: Windows, t: number) => w.find(([s]) => s > t)?.[0] ?? null
 
 /** Where `kind`'s session stands at `now`. */
@@ -87,7 +95,11 @@ export function readSession(kind: SymKind, now: number): SessionRead {
         ? { phase: 'globex', label: 'Globex', verb: 'RTH opens', at: nextR }
         : { phase: 'globex', label: 'Globex', verb: 'closes', at: e[1] }
     }
-    if (rthAhead) return { phase: 'pre', label: 'Pre-market', verb: 'opens', at: nextR }
+    // the cash names' window starts at 20:00 the evening before (the overnight
+    // session); an index keeps its pre-market from 04:00, as before
+    const night = isOvernight(now)
+    if (rthAhead && night && kind !== 'index') return { phase: 'pre', label: 'Overnight', verb: 'opens', at: nextR }
+    if (rthAhead && !night) return { phase: 'pre', label: 'Pre-market', verb: 'opens', at: nextR }
     // an index has no after hours: the cash names' evening is "closed" for it
     if (kind !== 'index') return { phase: 'post', label: 'After hours', verb: 'ends', at: e[1] }
   }

@@ -26474,3 +26474,39 @@ Pasting TradingView's "Advanced Levels" failed with `unknown function "price"` o
   - Header comments in `Vela.tsx` / `wallsIndicator.ts` match this.
 - **Note:** an earlier commit today of `wallsIndicator.ts` / `legendCard.ts` landed a stale copy. Both were re-committed and checked byte for byte.
 - **Deploy:** `push.ps1` → VPS rebuild (vela).
+
+## 2026-10-05 - Vela ETH charts: everything outside 09:30–16:00 ET is shaded (overnight included)
+
+**The report.** On an extended-hours stock chart, 09:30–16:00 should be the only unshaded stretch, but a band in the middle of the morning was unshaded too (screenshot: Sunday night into Monday's pre-market).
+
+**Why.** Cash names declared `session_extended: '0400-2000'`, so Vela shaded only pre-market (04:00–09:30) and after hours (16:00–20:00). The tape also carries the overnight session (Sunday–Thursday 20:00–04:00), and Vela skips Sunday entirely for a non-overnight session, so Sunday 20:00 → Monday 04:00 drew unshaded.
+
+- `cbedge-v3/src/pages/vela/cbedgeProvider.ts`:
+  - Stocks and ETFs now declare an overnight extended session, `2000-2000`, the same shape as the futures' `1800-1700`. Vela then shades every weekday from 00:00 to the open and from the close to 24:00, and Sunday from 20:00 (Friday stops at 20:00), all in one extended tint.
+  - `calendar()` extended windows for cash names now run from 20:00 the evening before to that day's 20:00, so the market badge treats the overnight hours as a session.
+  - Indexes (no extended tape) and futures are unchanged.
+- `legend/legendCard.ts`: Vela reports every part of an overnight session as "extended", so for a cash name the badge is named by the ET clock: PRE-MARKET 04:00–09:30, AFTER HOURS 16:00–20:00, otherwise OVERNIGHT. Futures still read OVERNIGHT.
+- `sessionClockView.ts`: the top-bar chip reads "Overnight · opens in …" for a cash name from 20:00 to 04:00. An index keeps "Closed" until its 04:00 pre-market, as before.
+- **Checks:** `tsc` (strict, unused-locals, verbatimModuleSyntax) against `@luxalgo/vela` 0.8.1 is clean on the changed code; the only errors were in stubbed sibling modules. The shading behaviour comes from reading Vela 0.8.1's `parseSessionSpec` / `expandSessionZones` for a `2000-2000` overnight spec. It hasn't been seen on a deployed chart yet.
+- **Not changed:** the time axis's day labels, which name a Friday-evening boundary "Oct 3". That is still on the list.
+- **Deploy:** `push.ps1` → VPS rebuild (vela).
+
+## 2026-10-05 - Vela: no column of Path bubbles while a chart loads
+
+**The report.** While a chart loads (screenshot: AMD 5m, loading dots in the middle), the Voltick Path drew as one tall column of bubbles at a single x over an empty chart.
+
+**Why.** The layer still held its last rows while Vela had no bars yet (first paint, or a symbol or timeframe switch in flight). With no bars, Vela's `timeToLogical` returns 0 for every time, so every bubble landed at the same x.
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts` (`VtPathLayer.render`): with no bars, nothing draws. Only points inside the bars' time span (one bar either side) are placed. Anything else maps to NaN, which both the Path and the Ribbon already skip. Rows left over from the previous view can never stack at the edge.
+- **Checks:** a strict `tsc` against `@luxalgo/vela` 0.8.1 is clean on `vtPathLayer.ts` / `vtPathIndicator.ts`. The no-bars behaviour was read from Vela's `barTimeToLogical` (`n === 0 → 0`).
+- **Deploy:** `push.ps1` → VPS rebuild (vela).
+
+## 2026-10-05 - Vela cleanup section 10: Level Alerts, round 1 (ideas only)
+
+Brandon doesn't like the current Level Alerts panel. Four ideas are rendered against today's panel, all with the same ES example. All four keep the bell per level, Volt / Coil / Reversal alerts that follow their level, one fire per alert, the all-or-nothing switch, alerts on other symbols, and desktop notifications.
+
+- **L1 · Ladder:** every level in price order, with a line where price is now. The level just above and the level just below get a faint band. One quiet bell per row.
+- **L2 · Groups with switches:** today's layout, calmer. A switch replaces the boxed bell on each row. Each group has its own all-switch next to the symbol's. "Other symbols" becomes a list with ✕ and Clear all, and the paragraph moves into a tooltip.
+- **L3 · Tabs, Levels · Armed · Fired:** levels as tiles you tap to arm. Armed lists everything waiting on every symbol, with its distance and Disarm all. Fired lists today's alerts that went off, each with "Ring again".
+- **L4 · Nearest first:** one list sorted by distance, with a closeness bar and quick picks (All / Voltick / Session / Prior / None). An armed alert can wait for a cross up, a cross down, or either (new).
+- **Files:** `generated/2026-10-05-vela-alerts-r1.html` and `.png`. No code changed.
