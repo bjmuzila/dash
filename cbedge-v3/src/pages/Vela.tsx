@@ -182,17 +182,22 @@ import '@/pages/vela/vela.css'
 // Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-topbar-r2.html). Vela's
 // `topbar` composition, DESKTOP_TOPBAR below, is the bar's whole contract:
 //
-//   [SPX 7,723.49 +0.71% ▾] | 5m · RTH ▾ | style | ⊞ | Indicators | Replay | ↶ ↷ … [● RTH closes in 2:14:47 │ 13:45:13 ET] 🔔  Workspace ▾ | 📷
+//   [SPX 7,723.49 +0.71% ▾] | 5m · RTH ▾ | style | ⊞ | Indicators | Replay | ↶ ↷ …  ● RTH closes in 2:14:47  🔔  Workspace ▾ | 📷
 //
 //   · left   our ticker chip (pages/vela/symbolPicker.ts) PINNED where Vela's own
 //            symbol button was; Vela's is left out, and so is its picker:
 //            letters typed on the chart open ours
-//   · right  the session clock (pages/vela/sessionClock.ts, see "The bottom of the
-//            chart" below), Vela's alerts bell, the Workspace menu (pages/vela/workspaceMenu.ts:
+//   · right  the session chip (pages/vela/sessionClock.ts, see "The bottom of the
+//            chart" below; a click opens Chart settings → Symbol, where the time
+//            zone is), Vela's alerts bell, the Workspace menu (pages/vela/workspaceMenu.ts:
 //            the panels, Scripts, Level / Script alerts, Setups, Session stats and
 //            Copy indicators, each a named row, the common ones on Alt keys), and
 //            the camera. Vela's panel buttons and the right-hand action flow are
 //            not listed, so the twelve icons that were here are gone
+//   · fit    on a narrower window the bar gives things up in steps until it fits
+//            (pages/vela/topbarFit.ts; Brandon, 2026-10-05, a Chromebook): the
+//            countdown, the button words, the other starred timeframes, the price
+//            and session, undo / redo, then it scrolls
 //
 // The phone has its own bar (see "The phone's chrome" below).
 //
@@ -216,9 +221,10 @@ import '@/pages/vela/vela.css'
 // Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-bottom-r2.html, C3).
 //   · Desktop: no bottom strip. Vela's strip (nine range chips, a clock, RTH /
 //     ETH, ⚙) is hidden (`cb-bb-off`, vela.css) and the charts take its height.
-//     The ranges are gone; the session and clock are a chip on the right of the
-//     top bar, RTH / ETH is in the timeframe menu ("5m · RTH ▾"), and Chart
-//     settings is in the Workspace menu (pages/vela/sessionClock.ts). Hidden by
+//     The ranges are gone; the session is a quiet chip on the right of the top
+//     bar, RTH / ETH is in the timeframe menu ("5m · RTH ▾"), Chart settings is
+//     in the Workspace menu, and the time zone is in Chart settings → Symbol
+//     (pages/vela/sessionClock.ts; the clock went 2026-10-05). Hidden by
 //     CSS rather than `bottombar: false`, which would also take the touch bar
 //     away from this page at a phone width.
 //   · Every chart, phone too: Vela's big "SPX · 5m" watermark is off
@@ -508,10 +514,15 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     // The bottom of the chart (see the header): on the desktop the strip goes and its
     // clock, session and RTH / ETH move to the top bar; every chart gets the Voltick mark.
     let unbindClock: () => void = () => {}
+    let unbindFit: () => void = () => {}
     if (!onPhone) {
       ws.root.classList.add('cb-bb-off')
       void import('@/pages/vela/sessionClockView').then((m) => {
         if (!legendGone) unbindClock = m.bindSessionClock(ws)
+      })
+      // the top bar gives things up, step by step, to fit a narrower window (topbarFit.ts)
+      void import('@/pages/vela/topbarFit').then((m) => {
+        if (!legendGone) unbindFit = m.bindTopbarFit(ws)
       })
     }
     let unbindVoltick: () => void = () => {}
@@ -565,6 +576,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindPhone()
       unbindRail()
       unbindClock()
+      unbindFit()
       unbindVoltick()
       unbindControls()
       unbindIndicators()

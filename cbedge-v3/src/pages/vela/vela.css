@@ -3486,27 +3486,26 @@
   display: none !important;
 }
 
-/* The session clock (sessionClockView.ts): ● RTH closes in 2:14:47 │ 13:45:13 ET */
+/* The session chip (sessionClockView.ts): quiet text, ● RTH closes in 2:14:47.
+   The clock and the time zone moved to Chart settings → Symbol (2026-10-05). */
 .vela-workspace .vela-widget-topbar button.cb-clk {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--color-vt-line);
+  padding: 0 8px;
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--color-vt-elev);
+  background: none;
   color: var(--color-vt-quiet);
   font-size: var(--text-xs);
   white-space: nowrap;
 }
 .vela-workspace .vela-widget-topbar button.cb-clk:hover {
-  border-color: var(--color-vt-rail);
-  background: var(--color-vt-elev);
+  background: var(--vt-wash);
 }
-.vela-workspace .vela-widget-topbar button.cb-clk[data-open='1'] {
-  border-color: var(--color-vt-accent);
-  box-shadow: 0 0 0 3px var(--vt-accent-soft);
+/* no menu caret: a click opens Chart settings, not a menu */
+.vela-workspace .vela-topbar-right .vela-widget-action-pin > .vela-widget-action.cb-clk::after {
+  content: none;
 }
 .cb-clk .cb-clk-ses {
   display: inline-flex;
@@ -3514,8 +3513,8 @@
   gap: 6px;
 }
 .cb-clk .cb-clk-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--color-vt-rail);
 }
@@ -3531,32 +3530,11 @@
 }
 .cb-clk .cb-clk-lab {
   color: var(--color-vt-paper);
-  font-weight: 600;
+  font-weight: 500;
 }
-.cb-clk .cb-clk-val,
-.cb-clk .cb-clk-t {
-  color: var(--color-vt-paper);
+.cb-clk .cb-clk-val {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-}
-.cb-clk .cb-clk-t {
-  font-weight: 600;
-}
-.cb-clk .cb-clk-sep {
-  width: 1px;
-  height: 14px;
-  background: var(--color-vt-line);
-}
-.cb-clk .cb-clk-z {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-}
-/* a narrower window keeps the state and the clock, and drops the countdown */
-@media (max-width: 1180px) {
-  .cb-clk .cb-clk-verb,
-  .cb-clk .cb-clk-val {
-    display: none;
-  }
 }
 
 /* RTH / ETH on Vela's timeframe button ("5m · RTH ▾") and in its menu */
@@ -3564,6 +3542,18 @@
   margin-left: 4px;
   color: var(--color-vt-quiet);
   font-weight: 500;
+}
+/* with starred timeframes Vela shows them as chips and this button is only an 18px
+   ▾: it grows round the tag instead of the tag spilling out of it ("[30m] ETH ▾") */
+.vela-workspace .vela-widget-topbar .vela-widget-tf-caret:not([data-solo='1']):has(.cb-tf-ses) {
+  width: auto;
+  gap: 3px;
+  padding: 0 4px 0 6px;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.vela-widget-tf-caret:not([data-solo='1']) .cb-tf-ses {
+  margin-left: 0;
 }
 .vela-menu .cb-tf-sep {
   height: 1px;
@@ -3623,21 +3613,6 @@
 }
 .vela-menu .cb-tf-sec[data-off='1'] .cb-tf-note {
   display: block;
-}
-
-/* the time-zone menu (the clock's click): a narrow Workspace menu */
-.cb-wsm.cb-zm {
-  width: 220px;
-}
-.cb-zm .cb-zm-tag {
-  color: var(--color-faint);
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-}
-.cb-zm .cb-zm-note {
-  padding: 6px 12px 0;
-  color: var(--color-faint);
-  font-size: var(--text-2xs);
 }
 
 /* The Voltick mark (voltickMark.ts): Voltick's corner watermark. It is the first
@@ -4429,4 +4404,35 @@
 .cb-lc[data-phone='1'] .cb-lc-ic {
   width: 28px;
   height: 28px;
+}
+
+/* ── The top bar fitted to the window (topbarFit.ts) ──
+   Steps, each keeping the ones before: 1 the session countdown; 2 the words on
+   Indicators / Replay / Workspace (icons stay); 3 the starred chips but the
+   current one; 4 the ticker's price and the session chip; 5 undo / redo;
+   6 the bar scrolls sideways. */
+.vela-widget-topbar:is([data-cb-fit='1'], [data-cb-fit='2'], [data-cb-fit='3'], [data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6']) .cb-clk :is(.cb-clk-verb, .cb-clk-val) {
+  display: none;
+}
+.vela-workspace .vela-widget-topbar:is([data-cb-fit='2'], [data-cb-fit='3'], [data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6'])
+  :is(.vela-widget-action-pin > .vela-widget-action-left:not(.cb-sym-chip), .vela-widget-actions-left > .vela-widget-action-left, .vela-topbar-right .vela-widget-action-pin > .vela-widget-action:not(.cb-clk)) {
+  gap: 0;
+  padding: 0 8px;
+  font-size: 0;
+}
+.vela-widget-topbar:is([data-cb-fit='3'], [data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6']) .vela-widget-tf-chips > .vela-widget-tf:not([data-current='1']) {
+  display: none;
+}
+.vela-widget-topbar:is([data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6']) :is(.cb-sym-px, .vela-topbar-right .vela-widget-action-pin:has(> .cb-clk)) {
+  display: none;
+}
+.vela-widget-topbar:is([data-cb-fit='5'], [data-cb-fit='6']) :is(.vela-widget-undo, .vela-widget-redo) {
+  display: none;
+}
+.vela-widget-topbar[data-cb-fit='6'] {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.vela-widget-topbar[data-cb-fit='6'] > * {
+  flex: none;
 }

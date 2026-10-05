@@ -2,18 +2,20 @@
 // THE SESSION CLOCK: the right side of the desktop top bar (Brandon, 2026-10-04,
 // the bottom-of-chart cleanup, C3; mockup generated/2026-10-04-vela-bottom-r2.html).
 //
-//   [ ● RTH  closes in 2:14:47 │ 13:45:13 ET ]  🔔  Workspace ▾  📷
+//   ● RTH  closes in 2:14:47   🔔  Workspace ▾  📷
 //
 // Vela's bottom strip (nine range chips, a clock, RTH / ETH, ⚙) is gone on the
 // desktop, and every chart got its height. What it carried that is still wanted
-// moved up: this chip (where the active chart's session stands, and the clock in
-// the charts' time zone), RTH / ETH in the timeframe menu ("5m · RTH ▾"), and
-// Chart settings in the Workspace menu. The ranges are gone for good.
+// moved up: this quiet chip (where the active chart's session stands), RTH / ETH
+// in the timeframe menu ("5m · RTH ▾"), and Chart settings in the Workspace menu.
+// The ranges are gone for good. The clock and its time-zone menu went too
+// (Brandon, 2026-10-05): the time zone is in Chart settings → Symbol, which is
+// where a click on this chip lands.
 //
 // This file is only the registration, which Vela needs before the workspace is
-// built; the chip, its time-zone menu and the timeframe menu's session row are
-// sessionClockView.ts, a chunk of its own the page loads once the chart is up.
-// The phone keeps Vela's own bottom bar; this action's `when` hides it there.
+// built; the chip and the timeframe menu's session row are sessionClockView.ts,
+// a chunk of its own the page loads once the chart is up. The phone has its own
+// bar (phoneChrome.ts); this action's `when` hides it there.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { registerWidgetAction } from '@luxalgo/vela'
@@ -31,12 +33,12 @@ export function registerSessionClock(): void {
   registerWidgetAction({
     id: CLOCK_ACTION_ID,
     target: 'topbar',
-    // The click is the time-zone menu, so that is the button's name (and the ⋮ row's
-    // at a phone width, where the bar itself is hidden).
-    label: 'Time zone',
+    // The button's name before it is dressed (and the ⋮ row's at a phone width,
+    // where the bar itself is hidden). The click: Chart settings → Symbol.
+    label: 'Session',
     icon: 'cb-clock',
     mobile: 'menu',
     when: () => !onPhoneRoute(),
-    run: () => void import('./sessionClockView').then((m) => m.toggleZoneMenu()),
+    run: () => void import('./sessionClockView').then((m) => m.openSessionSettings()),
   })
 }
