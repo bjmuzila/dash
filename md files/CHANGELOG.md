@@ -26550,3 +26550,11 @@ Brandon asked to change "● RTH closes in 2:23:30" to the date and time.
 - **The session moved to the tooltip:** "RTH, closes in 2:23:30 · Monday, October 5, 2026 13:36:30 EDT". A click still opens Chart settings → Symbol.
 - **Top bar short of room:** step 1 now drops the date (the time stays). Step 4 still drops the whole chip.
 - **Files:** `cbedge-v3/src/pages/vela/sessionClockView.ts`, `sessionClock.ts` and `topbarFit.ts` (comments), `vela.css` (the chip and the fit step).
+
+## 2026-10-05 - Vela GEX Rail Heatmap: gradient between cells
+
+Brandon wants the empty space between the heatmap cells to blend from one cell's colour to the next.
+
+- **One strip behind the cells:** each shown cell's colour holds across the cell and blends into the next shown cell's colour through the gap, so the column reads as one continuous heat. Above the first cell and below the last it fades out over 12px. A cell with no GEX is a clear stop, so the strip fades to nothing there.
+- The strip is laid again with the rows on every frame (pan, zoom, autoscale), and only shown cells count (a strike hidden for being too close to another is skipped). Volt / Coil / Reversal / Surge cells keep their solid Path colour fill and the biggest strike keeps its ring.
+- **Files:** `cbedge-v3/src/pages/vela/studies/rail.ts`, `cbedge-v3/src/pages/vela/vela.css` (`.cb-gxr-heat`).

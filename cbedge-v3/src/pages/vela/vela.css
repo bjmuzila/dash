@@ -1987,8 +1987,27 @@
   background: var(--color-vt-surge);
 }
 /* Style: Heatmap. Each strike as Multi Greek's cell (board/multiGreek): the
-   figure on its heat (the wash is set inline from Multi Greek's ramp), or a
-   tagged row filled in its level's Path colour with the level's ink */
+   figure on its heat, or a tagged row filled in its level's Path colour with the
+   level's ink. The heat itself is one strip behind the cells (.cb-gxr-heat, its
+   gradient laid inline every frame): each cell's colour blends into the next
+   through the gap. It spans the cells' column: right of the 6px pad, the 22px
+   tags and the 4px gap, short of the track's 4px (mirrored on the left). */
+.cb-gxr-heat {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 32px;
+  right: 4px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.cb-gxr[data-side='left'] .cb-gxr-heat {
+  left: 4px;
+  right: 32px;
+}
+.cb-gxr-heat[hidden] {
+  display: none;
+}
 .cb-gxr-cell {
   flex: 1;
   min-width: 0;

@@ -58,7 +58,15 @@
 // ($1.23B, the sign in the up / down colour) in a cell shaded by size and sign
 // on Multi Greek's own ramp (mgMath cellAlpha, the Voltick board's fixed
 // intensity: the top three strikes on fixed steps, the biggest ringed). A
-// tagged row's cell is filled in its level's Path colour, as its bar is. ONE
+// tagged row's cell is filled in its level's Path colour, as its bar is.
+// THE GAPS ARE A GRADIENT (2026-10-05, Brandon: "the empty space in between
+// should be a gradient from one color to the next so it has a smooth
+// transition"): one strip behind the cells, each shown cell's colour held
+// across the cell and blended into the next shown cell's through the gap, so
+// the column reads as one continuous heat. It is re-laid with the rows on
+// every frame (pan, zoom); above the first cell and below the last it fades
+// out. A cell with no wash (no GEX) is a clear stop, so the strip fades to
+// nothing there. ONE
 // column, the nearest expiry, the same column the rail reads; never Multi
 // Greek's later expiries or its ex-0DTE total. Same rows, same placement.
 //
@@ -251,8 +259,30 @@ export const railImpl = studyImpl<RailS, Ladder>({
 
 // ── The column itself ────────────────────────────────────────────────────────
 
-/** Style: Heatmap. One strike as Multi Greek's cell: the figure on its heat, or
- *  filled in its level's Path colour (vela.css .cb-gxr-cell[data-k]). */
+/** The Path colours a tagged cell is filled in (vela.css .cb-gxr-cell[data-k], the bars' too). */
+const LEAD_FILL: Record<string, string> = {
+  volt: 'var(--color-vt-path-gold)',
+  reversal: 'var(--color-vt-reversal)',
+  coil: 'var(--color-vt-coil)',
+  surge: 'var(--color-vt-surge)',
+}
+/** Half a heat cell's height (vela.css .cb-gxr-cell: 13px): a colour holds this far either side of its row. */
+const CELL_HALF = 6.5
+/** How far the strip fades out above the first shown cell and below the last. */
+const HEAT_FADE = 12
+
+/** Style: Heatmap. A cell's colour on the strip behind the cells. */
+function heatColor(r: RailRowOut): string {
+  const lead = r.lead ? LEAD_FILL[r.lead] : undefined
+  if (lead) return lead
+  const a = r.alpha ?? 0
+  if (!(a > 0)) return 'transparent'
+  return `color-mix(in srgb, ${r.value >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'} ${(a * 100).toFixed(1)}%, transparent)`
+}
+
+/** Style: Heatmap. One strike as Multi Greek's cell: the figure on its heat (the
+ *  strip behind paints that), or filled in its level's Path colour (vela.css
+ *  .cb-gxr-cell[data-k]). */
 function heatCell(r: RailRowOut): HTMLSpanElement {
   const cell = document.createElement('span')
   cell.className = 'cb-gxr-cell'
@@ -268,10 +298,8 @@ function heatCell(r: RailRowOut): HTMLSpanElement {
     if (lead.ink) cell.style.color = lead.ink
     return cell
   }
-  const hue = r.value >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
-  const a = r.alpha ?? 0
-  if (a > 0) cell.style.background = `color-mix(in srgb, ${hue} ${(a * 100).toFixed(1)}%, transparent)`
-  if (r.top) cell.style.outline = `1px solid ${hue}`
+  // the wash is the strip's (RailLayer.paintHeat), so the gap blends into it
+  if (r.top) cell.style.outline = `1px solid ${r.value >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'}`
   return cell
 }
 
@@ -285,6 +313,10 @@ class RailLayer implements RendererLayerInstance {
   private headEl: HTMLDivElement | null = null
   private netEl: HTMLDivElement | null = null
   private emptyEl: HTMLDivElement | null = null
+  /** Heatmap: the strip behind the cells, and each row's colour on it. */
+  private heatEl: HTMLDivElement | null = null
+  private colors = new Map<number, string>()
+  private heatBg = ''
   private nodes = new Map<number, HTMLDivElement>()
   private key = ''
   private width = 0
@@ -332,7 +364,12 @@ class RailLayer implements RendererLayerInstance {
       this.netEl.className = 'cb-gxr-net'
       this.emptyEl = document.createElement('div')
       this.emptyEl.className = 'cb-gxr-empty'
-      el.append(this.headEl, this.netEl, this.emptyEl)
+      this.heatEl = document.createElement('div')
+      this.heatEl.className = 'cb-gxr-heat'
+      this.heatEl.hidden = true
+      this.heatBg = ''
+      // first: the rows, appended after it, sit on top
+      el.append(this.heatEl, this.headEl, this.netEl, this.emptyEl)
       b.wrap.appendChild(el)
       this.key = ''
       this.nodes.clear()
@@ -360,7 +397,10 @@ class RailLayer implements RendererLayerInstance {
   private detach(): void {
     this.el?.remove()
     this.el = null
+    this.heatEl = null
+    this.heatBg = ''
     this.nodes.clear()
+    this.colors.clear()
     this.key = ''
     if (this.width) {
       const b = this.boxes()
@@ -377,6 +417,7 @@ class RailLayer implements RendererLayerInstance {
     const el = this.el!
     for (const n of this.nodes.values()) n.remove()
     this.nodes.clear()
+    this.colors.clear()
     for (const r of d.rows) {
       const row = document.createElement('div')
       row.className = 'cb-gxr-row'
@@ -395,7 +436,10 @@ class RailLayer implements RendererLayerInstance {
       }
       const track = document.createElement('span')
       track.className = 'cb-gxr-track'
-      if (d.heat) track.append(heatCell(r))
+      if (d.heat) {
+        track.append(heatCell(r))
+        this.colors.set(r.strike, heatColor(r))
+      }
       else {
         const bar = document.createElement('span')
         bar.className = 'cb-gxr-bar'
@@ -437,6 +481,8 @@ class RailLayer implements RendererLayerInstance {
     const bottom = bounds.top + bounds.height - 2
     const priceOf = new Map(d.rows.map((r) => [r.strike, r.price]))
     const placed: number[] = []
+    /** Heatmap: each shown row's top (its translateY) and colour, for the strip. */
+    const shown: { top: number; color: string }[] = []
     for (const strike of d.order) {
       const node = this.nodes.get(strike)
       if (!node) continue
@@ -448,10 +494,40 @@ class RailLayer implements RendererLayerInstance {
         continue
       }
       placed.push(y)
-      const next = `translateY(${Math.round(y - ROW_H / 2)}px)`
+      const rowTop = Math.round(y - ROW_H / 2)
+      if (d.heat) shown.push({ top: rowTop, color: this.colors.get(strike) ?? 'transparent' })
+      const next = `translateY(${rowTop}px)`
       if (node.style.transform !== next) node.style.transform = next
       if (node.style.visibility !== 'visible') node.style.visibility = 'visible'
     }
+    this.paintHeat(d.heat ? shown : null)
+  }
+
+  /** Heatmap: the strip behind the cells. Each shown cell's colour holds across its
+   *  cell and blends into the next one's through the gap; it fades out past the
+   *  first and the last. `null`: Style is Rail, no strip. */
+  private paintHeat(shown: { top: number; color: string }[] | null): void {
+    const heat = this.heatEl
+    if (!heat) return
+    if (!shown || !shown.length) {
+      heat.hidden = true
+      return
+    }
+    shown.sort((a, b) => a.top - b.top)
+    // the cell sits centred in its row: ROW_H tall, the cell 2 * CELL_HALF
+    const pad = ROW_H / 2 - CELL_HALF
+    const stops: string[] = []
+    const first = shown[0]!
+    const last = shown[shown.length - 1]!
+    stops.push(`transparent ${Math.max(0, first.top + pad - HEAT_FADE)}px`)
+    for (const r of shown) stops.push(`${r.color} ${r.top + pad}px`, `${r.color} ${r.top + ROW_H - pad}px`)
+    stops.push(`transparent ${last.top + ROW_H - pad + HEAT_FADE}px`)
+    const bg = `linear-gradient(to bottom, ${stops.join(', ')})`
+    if (bg !== this.heatBg) {
+      this.heatBg = bg
+      heat.style.background = bg
+    }
+    heat.hidden = false
   }
 
   destroy(): void {
