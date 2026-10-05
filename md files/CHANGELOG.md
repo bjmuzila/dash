@@ -26586,3 +26586,12 @@ Brandon saw a study row in the legend card read "Indicator" on some refreshes or
 - **Fix:** the row's name comes from the pane (the script's own title, then its shorttitle once it has computed), never from the handle's "Indicator" placeholder. The row's tooltip and the value lookup use the same title.
 - **Self-heal:** every 2 seconds the card checks each row's name against the pane and rebuilds the rows when one has changed, so a name that arrives late replaces the fallback.
 - **Files:** `cbedge-v3/src/pages/vela/legend/legendCard.ts`.
+
+## 2026-10-05 - Vela Net Premium: calls and puts, or net, never all three
+
+Brandon wants the Net Premium pane to show either the net line or the calls and puts lines.
+
+- **"Calls and puts lines (no net line)" on** (the default): a calls line (green) and a puts line (red), both full colour at 1.6px, and no net line.
+- **Off:** the net line alone (calls less puts, green above zero and red below), as before.
+- The setting keeps its key, so saved charts keep their choice. Its tooltip says what each state draws.
+- **Files:** `cbedge-v3/src/pages/vela/studies/flow.ts`, `cbedge-v3/src/pages/vela/studies/index.ts`.
