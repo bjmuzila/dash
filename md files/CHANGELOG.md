@@ -26510,3 +26510,34 @@ Brandon doesn't like the current Level Alerts panel. Four ideas are rendered aga
 - **L3 · Tabs, Levels · Armed · Fired:** levels as tiles you tap to arm. Armed lists everything waiting on every symbol, with its distance and Disarm all. Fired lists today's alerts that went off, each with "Ring again".
 - **L4 · Nearest first:** one list sorted by distance, with a closeness bar and quick picks (All / Voltick / Session / Prior / None). An armed alert can wait for a cross up, a cross down, or either (new).
 - **Files:** `generated/2026-10-05-vela-alerts-r1.html` and `.png`. No code changed.
+
+## 2026-10-05 - Vela cleanup section 10: Level Alerts, L3 (tabs)
+
+Brandon picked L3 from round 1. The Level Alerts panel is now three tabs.
+
+- **Head:** the chart's symbol and price, with the All switch beside them. The old paragraph is the head's tooltip.
+- **Levels:** the symbol's levels as tiles, two to a row, under Voltick levels / Session / Prior session. Tap a tile to arm or disarm it. Each tile shows its price and ↑ / ↓ with how far it is from price. An armed tile is lit. A level with no price yet says "after 10:30" (IB before 10:30) or "no value yet".
+- **Armed:** every armed alert on every symbol, this symbol first and nearest first. Each row shows the level's price, "follows the level" for Volt / Coil / Reversal / Flip, how far price is from it, and a ✕. Disarm all clears every symbol. The tab count is everything armed.
+- **Fired:** today's alerts that went off (kept in this browser, cleared each ET day): what crossed, which way, the time (ET) and the level. Ring again arms it once more ("Armed" if it already is). The tab count is today's.
+- **Foot:** the Desktop notifications switch.
+- The tab you were on is remembered. The watcher, crossing rule, and where fired alerts are delivered are unchanged.
+- **Files:** `cbedge-v3/src/pages/vela/levels/levelAlerts.ts`, `cbedge-v3/src/pages/vela/vela.css` (the Level Alerts block).
+
+## 2026-10-05 - Vela legend card: levels one per row
+
+Brandon asked for the LEVELS row in the legend card to be vertical, one level per row.
+
+- **Open card:** each level is its own row: mark, name (Volt / Coil / Reversal / Flip), the level, and its distance from price. The level sits in the same column as a study's value below it. When any level has cents, every level shows two places so the column lines up.
+- **⚙:** moved up into the LEVELS section head, beside NOW, over the studies' ✕ column.
+- **Folded card (desktop and phone):** unchanged, still one line of marks and levels, stepping down to fit a narrow chart.
+- **Phone, open:** the card keeps a readable width (up to 300px) now that the levels no longer set it.
+- **Files:** `cbedge-v3/src/pages/vela/legend/legendCard.ts`, `cbedge-v3/src/pages/vela/vela.css` (the legend card block).
+
+## 2026-10-05 - Vela GEX Rail: Heatmap style (Multi Greek's cell)
+
+Brandon wants to switch the GEX Rail to Multi Greek's heatmap, nearest expiry only.
+
+- **New setting, Style: Rail / Heatmap.** Rail is today's bars. Heatmap draws each strike as a Multi Greek ladder cell: its GEX written (`+$1.23B`, the sign in the up / down colour) in a cell shaded by size and sign, on Multi Greek's own ramp (`mgMath` `cellAlpha`, the Voltick board's fixed intensity). The top three strikes get fixed steps and the biggest is ringed.
+- A Volt / Coil / Reversal / Surge row's cell is filled in that level's Path colour with the level's ink, the same colours the bars use.
+- **One column, the nearest expiry:** the same column the rail already reads. No later expiries and no ex-0DTE total. Rows, placement, tags, the header and NET are unchanged.
+- **Files:** `cbedge-v3/src/pages/vela/studies/rail.ts`, `cbedge-v3/src/pages/vela/studies/index.ts` (the Style input), `cbedge-v3/src/pages/vela/vela.css` (`.cb-gxr-cell`).

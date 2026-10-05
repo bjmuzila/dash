@@ -37,6 +37,8 @@ export const WH_SIDE = ['Calls and puts', 'Calls', 'Puts'] as const
 export const WH_EXP = ['All expiries', '0DTE only', 'This week', 'Skip 0DTE'] as const
 export const HEAT_SESSIONS = ['1', '2', '3'] as const
 export const RAIL_SIDES = ['Right', 'Left'] as const
+/** The GEX Rail's look: a bar per strike, or Multi Greek's heatmap cell (rail.ts). */
+export const RAIL_STYLES = ['Rail', 'Heatmap'] as const
 export const JR_SHOW = ['All trades', 'Winners', 'Losers'] as const
 /** Where a whale bubble reaches its biggest — anything larger draws that size too. */
 export const WH_CAP = ['$25M', '$10M', '$50M', '$100M'] as const
@@ -278,6 +280,14 @@ export function registerStudies(): void {
       layer: {},
       inputs: () => [
         { key: 'side', title: 'Position', type: 'string', defval: RAIL_SIDES[0], options: RAIL_SIDES },
+        {
+          key: 'style',
+          title: 'Style',
+          type: 'string',
+          defval: RAIL_STYLES[0],
+          options: RAIL_STYLES,
+          tooltip: 'Rail: a bar per strike. Heatmap: Multi Greek’s cell per strike, its GEX written in a cell shaded by size and sign. Both read the one nearest expiry, never Multi Greek’s later columns.',
+        },
         { key: 'basis', title: 'GEX', type: 'string', defval: GEX_BASIS[0], options: GEX_BASIS },
         { key: 'tags', title: 'Level tags (Volt / Coil / Reversal / Surge)', type: 'bool', defval: true },
         { key: 'width', title: 'Rail width (px)', type: 'int', defval: 96, min: 72, max: 180, step: 4 },

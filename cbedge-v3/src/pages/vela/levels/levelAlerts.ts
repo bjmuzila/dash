@@ -43,6 +43,18 @@
 // brings up CRWV"). Vela only re-binds a side panel when the ACTIVE CELL changes,
 // so a symbol switched on the same chart left the panel on the old ticker. It now
 // listens to that chart's market:changed too (and checks on its 30 s re-read).
+//
+// THE PANEL · L3 (2026-10-05, Brandon picked L3 of generated/2026-10-05-vela-
+// alerts-r1.html). Three tabs:
+//   Levels  the chart symbol's levels as tiles; tap one to arm or disarm it.
+//           ↑ / ↓ says which side of price the level is, the number how far.
+//   Armed   everything waiting, on every symbol (this one first, nearest
+//           first), each with how far price is from it and a ✕; Disarm all.
+//   Fired   what rang today (kept in this browser, cleared each ET day), each
+//           with Ring again to arm it once more.
+// The tab counts are Armed on every symbol and Fired today. The All switch
+// sits by the price; Desktop notifications at the foot. The old paragraph is
+// the head's tooltip.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { OHLCV, Vela } from '@luxalgo/vela'
@@ -55,7 +67,7 @@ import { vtFromWalls } from '@/pages/levelLog/wallData'
 import { vtFromLadder } from '@/data/voltickLevels'
 import { etDateKey, etMinutesOfDay } from '@/pages/vela/studies/common'
 import { replayActive } from '@/pages/vela/replay/clock'
-import { deliverAlert, enableNotify, notifyWanted, tfLabel } from '@/pages/vela/script/alerts'
+import { deliverAlert, enableNotify, notifyWanted } from '@/pages/vela/script/alerts'
 import { ARMED_KEY } from './levelAlertsEntry'
 import { isMarkKey, markSvg } from '@/pages/vela/levelMarks'
 
@@ -249,6 +261,58 @@ export function setAllArmed(sym: string, levels: readonly Level[], on: boolean):
     .map((l) => ({ id: `${sym}|${l.key}|${now}`, sym, key: l.key, name: l.name, armedAt: now }))
   if (add.length) saveArmed([...armed, ...add])
 }
+/** Disarm every level alert, on every symbol. */
+export function disarmAll(): void {
+  if (armed.length) saveArmed([])
+}
+
+// ── Fired today ──────────────────────────────────────────────────────────────
+
+const FIRED_KEY = 'cb-vela-level-fired'
+
+export interface Fired {
+  id: string
+  sym: string
+  key: string
+  name: string
+  dir: 'up' | 'down'
+  /** The level when it rang. */
+  level: number
+  /** The price that crossed it. */
+  price: number
+  at: number
+}
+
+const isToday = (t: number) => etDateKey(t) === etDateKey(Date.now())
+
+function readFired(): Fired[] {
+  try {
+    const j: unknown = JSON.parse(localStorage.getItem(FIRED_KEY) ?? '[]')
+    if (!Array.isArray(j)) return []
+    return (j as Fired[]).filter(
+      (f) => f && typeof f.sym === 'string' && typeof f.key === 'string' && Number.isFinite(f.at) && Number.isFinite(f.level) && isToday(f.at),
+    )
+  } catch {
+    return []
+  }
+}
+let fired: Fired[] = readFired()
+/** Today's rings, newest first. */
+export const firedToday = (): Fired[] => fired.filter((f) => isToday(f.at))
+function pushFired(f: Fired): void {
+  fired = [f, ...firedToday()].slice(0, 100)
+  try {
+    localStorage.setItem(FIRED_KEY, JSON.stringify(fired))
+  } catch {
+    /* private mode */
+  }
+  for (const fn of armSubs) fn()
+}
+/** Ring it again: arm the same level on the same symbol. */
+export function rearm(f: Fired): void {
+  if (isArmed(f.sym, f.key)) return
+  saveArmed([...armed, { id: `${f.sym}|${f.key}|${Date.now()}`, sym: f.sym, key: f.key, name: f.name, armedAt: Date.now() }])
+}
 
 // ── The watcher ──────────────────────────────────────────────────────────────
 
@@ -271,6 +335,8 @@ function onTick(chart: Vela, bar: OHLCV): void {
       if (L == null || !Number.isFinite(L)) continue
       const crossed = (prev < L && p >= L) || (prev > L && p <= L)
       if (!crossed || !isArmed(sym, a.key)) continue
+      const now = Date.now()
+      pushFired({ id: `${a.id}|${now}`, sym, key: a.key, name: a.name, dir: p >= L ? 'up' : 'down', level: L, price: p, at: now })
       disarm(a.id)
       deliverAlert({
         libId: 'levels',
@@ -355,6 +421,56 @@ function bellIcon(off: boolean): SVGSVGElement {
   return svg
 }
 
+
+/** The order levels are listed in when nothing else decides it. */
+const LEVEL_ORDER = ['volt', 'coil', 'reversal', 'flip', 'ibh', 'ibl', 'onh', 'onl', 'open', 'pdh', 'pdl', 'pdc']
+const orderOf = (key: string) => {
+  const i = LEVEL_ORDER.indexOf(key)
+  return i < 0 ? LEVEL_ORDER.length : i
+}
+
+/** A Voltick mark (★ ◆ ↘ ⚡︎), drawn (levelMarks.ts), or nothing for a session level. */
+function markOf(key: string): HTMLElement | null {
+  if (!isMarkKey(key)) return null
+  const mk = el('span', 'cb-lv-mark')
+  mk.innerHTML = markSvg(key)
+  return mk
+}
+
+/** "10:31", Eastern. */
+const etClock = (t: number) => new Date(t).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+
+/** A switch: the label, then the track. aria-pressed carries the state. */
+function toggle(label: string, on: boolean, title: string): HTMLButtonElement {
+  const b = el('button', 'cb-lv-tog')
+  b.type = 'button'
+  b.title = title
+  b.setAttribute('aria-pressed', String(on))
+  b.append(el('span', '', label), el('i', ''))
+  return b
+}
+
+type Tab = 'levels' | 'armed' | 'fired'
+const TAB_KEY = 'cb-vela-level-tab'
+function readTab(): Tab {
+  try {
+    const t = localStorage.getItem(TAB_KEY)
+    return t === 'armed' || t === 'fired' ? t : 'levels'
+  } catch {
+    return 'levels'
+  }
+}
+function saveTab(t: Tab): void {
+  try {
+    localStorage.setItem(TAB_KEY, t)
+  } catch {
+    /* private mode */
+  }
+}
+
+const HINT =
+  'Tap a level to be told when price crosses it. A Volt, Coil, Reversal or Flip alert follows that level as it moves. Each fires once, then shows under Fired.'
+
 export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onChart: (chart?: Vela) => void; destroy: () => void } {
   const root = el('div', 'cb-lv')
   body.replaceChildren(root)
@@ -363,98 +479,207 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
   let read: LevelRead | null = null
   let alive = true
   let offMarket: (() => void) | null = null
+  let tab: Tab = readTab()
+  /** The other armed symbols' levels, for "how far away" under Armed. */
+  const otherReads = new Map<string, LevelRead>()
+
+  const readOf = (s: string): LevelRead | null => (s === sym ? read : otherReads.get(s) ?? null)
+
+  // ── the head: symbol, price, All ──
+  const drawHead = () => {
+    const head = el('div', 'cb-lv-head')
+    head.title = HINT
+    head.append(el('span', 'cb-lv-sym', sym), el('span', 'cb-lv-px', read?.price != null ? fmt(read.price) : ''), el('span', 'cb-lv-sp'))
+    const levels = read?.levels ?? []
+    const allOn = allArmed(sym, levels)
+    const all = toggle('All', allOn, allOn ? `Disarm every ${sym} level alert` : `Arm an alert on every ${sym} level that has a price`)
+    all.disabled = armable(levels).length === 0 && !armed.some((a) => a.sym === sym)
+    all.addEventListener('click', () => setAllArmed(sym, levels, !allOn))
+    head.append(all)
+    root.append(head)
+  }
+
+  // ── the tabs ──
+  const drawTabs = () => {
+    const bar = el('div', 'cb-lv-tabs')
+    bar.setAttribute('role', 'tablist')
+    const counts: Record<Tab, number> = { levels: 0, armed: armed.length, fired: firedToday().length }
+    for (const [t, label] of [
+      ['levels', 'Levels'],
+      ['armed', 'Armed'],
+      ['fired', 'Fired'],
+    ] as Array<[Tab, string]>) {
+      const b = el('button', 'cb-lv-tab', label)
+      b.type = 'button'
+      b.setAttribute('role', 'tab')
+      b.setAttribute('aria-selected', String(tab === t))
+      if (counts[t] > 0) b.append(el('span', 'cb-lv-n', String(counts[t])))
+      b.addEventListener('click', () => {
+        if (tab === t) return
+        tab = t
+        saveTab(t)
+        if (t === 'armed') warmOthers()
+        draw()
+      })
+      bar.append(b)
+    }
+    root.append(bar)
+  }
+
+  // ── Levels: tiles ──
+  const drawLevels = () => {
+    if (!read) {
+      root.append(el('p', 'cb-lv-hint', 'Reading the levels…'))
+      return
+    }
+    const px = read.price
+    for (const group of ['Voltick', 'Session', 'Prior'] as Group[]) {
+      const levels = read.levels.filter((l) => l.group === group)
+      if (!levels.length) continue
+      root.append(el('div', 'cb-lv-group', GROUP_LABEL[group]))
+      const tiles = el('div', 'cb-lv-tiles')
+      for (const lv of levels) {
+        const on = isArmed(sym, lv.key)
+        const has = lv.price != null && Number.isFinite(lv.price)
+        const tile = el('button', 'cb-lv-tile')
+        tile.type = 'button'
+        tile.dataset.on = String(on)
+        tile.setAttribute('aria-pressed', String(on))
+        tile.disabled = !has && !on
+        tile.title = on ? 'Armed · tap to disarm' : has ? `Alert when ${sym} crosses the ${inSentence(lv.name)}` : 'No value yet'
+        const nm = el('span', 'cb-lv-nm')
+        const mk = markOf(lv.key)
+        if (mk) nm.append(mk)
+        nm.append(el('span', 'cb-lv-nmt', lv.name))
+        const vv = el('span', 'cb-lv-vv')
+        if (has) {
+          vv.append(el('b', '', fmt(lv.price)))
+          if (px != null) vv.append(el('i', '', `${lv.price! >= px ? '↑' : '↓'} ${Math.abs(lv.price! - px).toFixed(2)}`))
+        } else {
+          const ib = lv.key === 'ibh' || lv.key === 'ibl'
+          vv.append(el('i', '', ib && etMinutesOfDay(Date.now()) < 630 ? 'after 10:30' : 'no value yet'))
+        }
+        const bell = el('span', 'cb-lv-bell')
+        bell.append(bellIcon(!on))
+        tile.append(nm, vv, bell)
+        tile.addEventListener('click', () => toggleArmed(sym, lv))
+        tiles.append(tile)
+      }
+      root.append(tiles)
+    }
+  }
+
+  // ── Armed: every symbol ──
+  const drawArmed = () => {
+    if (!armed.length) {
+      root.append(el('p', 'cb-lv-empty', 'Nothing is armed. Tap a level under Levels to arm it.'))
+      return
+    }
+    const rows = armed.map((a) => {
+      const r = readOf(a.sym)
+      const L = r?.levels.find((l) => l.key === a.key)?.price ?? null
+      const P = r?.price ?? null
+      const dist = L != null && P != null && Number.isFinite(L) ? Math.abs(L - P) : null
+      return { a, L, dist }
+    })
+    rows.sort((x, y) => {
+      const xs = x.a.sym === sym ? 0 : 1
+      const ys = y.a.sym === sym ? 0 : 1
+      if (xs !== ys) return xs - ys
+      if (x.a.sym !== y.a.sym) return x.a.sym < y.a.sym ? -1 : 1
+      if (x.dist != null && y.dist != null && x.dist !== y.dist) return x.dist - y.dist
+      if ((x.dist == null) !== (y.dist == null)) return x.dist == null ? 1 : -1
+      return orderOf(x.a.key) - orderOf(y.a.key)
+    })
+    for (const { a, L, dist } of rows) {
+      const row = el('div', 'cb-lv-ar')
+      const who = el('span', 'cb-lv-who')
+      const b = el('b', '')
+      b.append(el('span', 'cb-lv-tk', a.sym))
+      const mk = markOf(a.key)
+      if (mk) b.append(mk)
+      b.append(el('span', 'cb-lv-nmt', a.name))
+      const follows = isMarkKey(a.key) ? ' · follows the level' : ''
+      who.append(b, el('span', '', `${L != null ? fmt(L) : 'no value yet'}${follows}`))
+      const st = el('span', 'cb-lv-st', dist != null ? `${dist.toFixed(2)} away` : '')
+      const x = el('button', 'cb-lv-x', '✕')
+      x.type = 'button'
+      x.title = `Disarm the ${a.sym} ${inSentence(a.name)} alert`
+      x.addEventListener('click', () => disarm(a.id))
+      row.append(who, st, x)
+      root.append(row)
+    }
+    const acts = el('div', 'cb-lv-acts')
+    const off = el('button', 'cb-lv-btn', 'Disarm all')
+    off.type = 'button'
+    off.title = 'Disarm every level alert, on every symbol'
+    off.addEventListener('click', () => disarmAll())
+    acts.append(off)
+    root.append(acts)
+  }
+
+  // ── Fired: today ──
+  const drawFired = () => {
+    const today = firedToday()
+    if (!today.length) {
+      root.append(el('p', 'cb-lv-empty', 'Nothing has fired today.'))
+    }
+    for (const f of today) {
+      const row = el('div', 'cb-lv-ar')
+      row.dataset.fired = 'true'
+      const who = el('span', 'cb-lv-who')
+      const b = el('b', '')
+      b.append(el('span', 'cb-lv-tk', f.sym))
+      const mk = markOf(f.key)
+      if (mk) b.append(mk)
+      b.append(el('span', 'cb-lv-nmt', `${f.name} · crossed ${f.dir}`))
+      who.append(b, el('span', '', `${etClock(f.at)} · at ${fmt(f.level)}`))
+      const again = el('button', 'cb-lv-btn')
+      again.type = 'button'
+      const on = isArmed(f.sym, f.key)
+      again.textContent = on ? 'Armed' : 'Ring again'
+      again.disabled = on
+      again.title = on ? `The ${f.sym} ${inSentence(f.name)} is armed` : `Arm the ${f.sym} ${inSentence(f.name)} again`
+      again.addEventListener('click', () => rearm(f))
+      row.append(who, again)
+      root.append(row)
+    }
+    root.append(el('p', 'cb-lv-hint', "Fired alerts also land in the toolbar's Alerts feed and the Script Alerts log."))
+  }
+
+  // ── the foot: desktop notifications ──
+  const drawFoot = () => {
+    const foot = el('div', 'cb-lv-foot')
+    const on = notifyWanted()
+    const sw = toggle('Desktop notifications', on, on ? 'Stop desktop notifications' : 'Show a desktop notification when an alert fires')
+    sw.addEventListener('click', () => {
+      void enableNotify(!on).then(() => draw())
+    })
+    foot.append(sw)
+    root.append(foot)
+  }
 
   const draw = () => {
     if (!alive) return
     root.replaceChildren()
-    const head = el('div', 'cb-lv-head')
-    head.append(el('span', 'cb-lv-sym', sym), el('span', 'cb-lv-px', read?.price != null ? fmt(read.price) : ''))
-    root.append(head)
-    root.append(el('p', 'cb-lv-hint', 'Ring a bell to be told when price crosses that level. A Volt, Coil or Reversal alert follows that level as it moves. Each fires once.'))
-    // all or nothing: every level this symbol has a price for
-    const levels = read?.levels ?? []
-    const allOn = allArmed(sym, levels)
-    const canArm = armable(levels).length > 0
-    const all = el('button', 'cb-lv-all')
-    all.type = 'button'
-    all.setAttribute('aria-pressed', String(allOn))
-    all.disabled = !canArm && !armed.some((a) => a.sym === sym)
-    all.title = allOn ? `Disarm every ${sym} level alert` : `Arm an alert on every ${sym} level that has a price`
-    all.append(el('span', '', `All ${sym} alerts`), el('i', ''))
-    all.addEventListener('click', () => {
-      setAllArmed(sym, levels, !allOn)
-      draw()
-    })
-    root.append(all)
-    if (!read) {
-      root.append(el('p', 'cb-lv-hint', 'Reading the levels…'))
-    } else {
-      for (const group of ['Voltick', 'Session', 'Prior'] as Group[]) {
-        const rows = read.levels.filter((l) => l.group === group)
-        if (!rows.length) continue
-        root.append(el('div', 'cb-lv-group', GROUP_LABEL[group]))
-        for (const lv of rows) {
-          const row = el('div', 'cb-lv-row')
-          const on = isArmed(sym, lv.key)
-          row.dataset.on = String(on)
-          const dist = read.price != null && lv.price != null ? lv.price - read.price : null
-          const name = el('span', 'cb-lv-name')
-          if (lv.mark && isMarkKey(lv.key)) {
-            // Voltick's Chip: the mark carries the colour, the word stays Paper.
-            // Drawn (levelMarks.ts), not typed: Windows showed the typed ones as emoji.
-            const mk = el('span', 'cb-lv-mark')
-            mk.innerHTML = markSvg(lv.key)
-            name.append(mk)
-          }
-          name.append(document.createTextNode(lv.name))
-          const val = el('span', 'cb-lv-val', fmt(lv.price))
-          const d = el('span', 'cb-lv-dist', dist == null ? '' : `${dist >= 0 ? '+' : '−'}${Math.abs(dist).toFixed(2)}`)
-          if (dist != null) d.dataset.tone = dist >= 0 ? 'up' : 'down'
-          const bell = el('button', 'cb-lv-bell')
-          bell.append(bellIcon(!on))
-          bell.type = 'button'
-          bell.title = lv.price == null ? 'Not available yet' : on ? 'Armed: click to disarm' : `Alert when ${sym} crosses the ${inSentence(lv.name)}`
-          bell.disabled = lv.price == null && !on
-          bell.setAttribute('aria-pressed', String(on))
-          bell.addEventListener('click', () => {
-            toggleArmed(sym, lv)
-            draw()
-          })
-          row.append(name, val, d, bell)
-          root.append(row)
-        }
-      }
-    }
-    // armed anywhere else
-    const others = armed.filter((a) => a.sym !== sym)
-    if (others.length) {
-      root.append(el('div', 'cb-lv-group', 'Armed on other symbols'))
-      for (const a of others) {
-        const row = el('div', 'cb-lv-row')
-        row.dataset.on = 'true'
-        const x = el('button', 'cb-lv-bell', '✕')
-        x.type = 'button'
-        x.title = 'Disarm'
-        x.addEventListener('click', () => {
-          disarm(a.id)
-          draw()
-        })
-        row.append(el('span', 'cb-lv-name', `${a.sym} · ${a.name}`), el('span', 'cb-lv-val', ''), el('span', 'cb-lv-dist', ''), x)
-        root.append(row)
-      }
-    }
-    const foot = el('label', 'cb-lv-foot')
-    const box = el('input', '')
-    box.type = 'checkbox'
-    box.checked = notifyWanted()
-    box.addEventListener('change', () => {
-      void enableNotify(box.checked).then((ok) => {
-        if (box.checked && !ok) box.checked = false
+    drawHead()
+    drawTabs()
+    if (tab === 'levels') drawLevels()
+    else if (tab === 'armed') drawArmed()
+    else drawFired()
+    drawFoot()
+  }
+
+  /** Read the other armed symbols' levels, for Armed's distances. */
+  const warmOthers = () => {
+    for (const s of new Set(armed.map((a) => a.sym))) {
+      if (s === sym) continue
+      void levelsFor(s).then((r) => {
+        if (!alive) return
+        otherReads.set(s, r)
+        if (tab === 'armed') draw()
       })
-    })
-    foot.append(box, document.createTextNode(' Desktop notifications'))
-    root.append(foot)
-    root.append(el('p', 'cb-lv-hint', `Fired alerts land in the toolbar's Alerts feed and the Script Alerts log (${tfLabel(chart.market.timeframe ?? '5')} chart).`))
+    }
   }
 
   const load = (fresh: boolean) => {
@@ -469,6 +694,7 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
   const syncSym = () => {
     const next = bare(chart.market.symbol)
     if (!alive || next === sym) return
+    if (read) otherReads.set(sym, read)
     sym = next
     read = null
     draw()
@@ -482,10 +708,12 @@ export function mountLevelPanel(chartOf: () => Vela, body: HTMLElement): { onCha
   follow()
   draw()
   load(true)
+  if (tab === 'armed') warmOthers()
   const timer = setInterval(() => {
     if (document.hidden) return
     syncSym()
     load(false)
+    if (tab === 'armed') warmOthers()
   }, 30_000)
   armSubs.add(draw)
   return {

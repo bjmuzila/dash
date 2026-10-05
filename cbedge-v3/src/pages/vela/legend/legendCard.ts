@@ -4,8 +4,11 @@
 // Vela cleanup's third section; mockup generated/2026-10-04-vela-legend-l4.html).
 //
 //   [500] SPX  S&P 500 Index                     ● CLOSED   ▾
-//   LEVELS                                                 NOW
-//   ★ 7,725  ◆ 7,730  ↘ 7,715  ⚡ 7,716.90                ⚙  ◉
+//   LEVELS                                              NOW  ⚙
+//   ★ Volt                                     7,725.00   +3.64
+//   ◆ Coil                                     7,730.00   +8.64
+//   ↘ Reversal                                 7,715.00   −6.36
+//   ⚡ Flip                                     7,716.90   −4.46
 //   STUDIES
 //   ▬ Voltick Path                                          ◉
 //   ▬ EMA 20                               7,720.25    ⚙   ◉   ✕     (⚙ ✕ on hover)
@@ -17,10 +20,14 @@
 //   · LEVELS · NOW: Volt / Coil / Reversal / Flip off the live chain, the read
 //     Level Alerts and the phone's strip use (levels/levelAlerts.ts levelsFor).
 //     Drawn marks (levelMarks.ts), never typed.
-//     ONE ROW, ALWAYS: the card grows to fit it; on a chart too narrow for that,
-//     the row steps down (smaller type, then no distances, then whole numbers)
-//     instead of wrapping or clipping. One ⚙ (which levels, distance from price)
-//     covers all four.
+//     ONE LEVEL PER ROW (Brandon, 2026-10-05: "can we make this vertical, one
+//     level per row"): mark, name, level, distance from price, lined up with the
+//     study rows below (the level where a study's value sits). When any level
+//     has cents, every level shows two places so the column lines up. One ⚙ in
+//     the section head (which levels, distance from price) covers all four.
+//     FOLDED, it is still one line (marks and levels, no names): on a chart too
+//     narrow for that line, it steps down (smaller type, then no distances, then
+//     whole numbers) instead of wrapping or clipping.
 //   · EVERY CHART SHOWS THE LEVELS; THE LINES ARE A SEPARATE INDICATOR (Brandon,
 //     2026-10-05: "I want every chart to show these levels, but not the lines.
 //     If they want the lines, they have to add a separate indicator for it").
@@ -373,8 +380,8 @@ class Card {
     hd.append(this.iconBox, this.symEl, this.nameEl, this.stateEl, this.foldBtn)
 
     const levels = el(d, 'div', 'cb-lc-sec cb-lc-levels')
-    const sh = el(d, 'div', 'cb-lc-sh')
-    sh.append(el(d, 'span', '', 'LEVELS'), el(d, 'span', '', 'NOW'))
+    const sh = el(d, 'div', 'cb-lc-sh cb-lc-lsh')
+    sh.append(el(d, 'span', '', 'LEVELS'), el(d, 'span', 'cb-lc-now', 'NOW'))
     this.lrow = el(d, 'div', 'cb-lc-lrow')
     this.lvs = el(d, 'span', 'cb-lc-lvs')
     const tools = el(d, 'span', 'cb-lc-tools')
@@ -382,7 +389,8 @@ class Card {
     this.levelCog.setAttribute('aria-haspopup', 'dialog')
     this.levelCog.addEventListener('click', () => (pop?.owner === this && pop.anchor === this.levelCog ? closePop() : this.openPop()))
     tools.append(this.levelCog)
-    this.lrow.append(this.lvs, tools)
+    sh.append(tools)
+    this.lrow.append(this.lvs)
     levels.append(sh, this.lrow)
 
     const st = el(d, 'div', 'cb-lc-sec cb-lc-studies')
@@ -537,15 +545,19 @@ class Card {
     const sig = `${spec.map((x) => x.v).join('|')}|${prefs.dist ? (px ?? '') : ''}|${this.sym}`
     if (sig === this.levelSig) return
     this.levelSig = sig
+    // one level per row: when any level has cents, all show two places, so the column lines up
+    const cents = spec.some((x) => x.v != null && !Number.isInteger(x.v))
     const items: HTMLElement[] = []
     for (const { L, v } of spec) {
       if (v == null) continue
       const it = el(d, 'span', 'cb-lc-lv')
       it.dataset.k = L.key
       const f = fmtLevel(v)
+      if (cents && !f.dec) f.dec = '.00'
       const dist = px != null ? v - px : null
       it.title = `${L.name} ${f.whole}${f.dec}${dist != null ? ` · ${fmtDist(dist)} from price` : ''}${L.key === 'flip' ? ' (the live chain)' : ''}`
       it.insertAdjacentHTML('afterbegin', markSvg(L.key))
+      it.append(el(d, 'span', 'cb-lc-lvn', L.name))
       const val = el(d, 'span', 'cb-lc-lvv', f.whole)
       if (f.dec) val.append(el(d, 'span', 'cb-lc-dec', f.dec))
       it.append(val)
@@ -556,9 +568,13 @@ class Card {
     this.lvs.replaceChildren(...items)
   }
 
-  /** One row, always: step the levels row down until it fits the card. */
+  /** Folded, the levels are one line: step it down until it fits the card. Open, one per row. */
   private fit(): void {
     const lvs = this.lvs
+    if (this.el.dataset.folded !== '1') {
+      this.el.dataset.fit = '0'
+      return
+    }
     for (const f of ['0', '1', '2', '3']) {
       this.el.dataset.fit = f
       if (lvs.scrollWidth <= lvs.clientWidth + 0.5) return
@@ -574,6 +590,7 @@ class Card {
     prefs.fold[this.foldKey] = folded
     savePrefs()
     this.applyFold()
+    this.fit()
   }
 
   private applyFold(): void {

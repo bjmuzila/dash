@@ -52,6 +52,16 @@
 // Coil, Surge: the Path's own priority). Every other bar keeps its sign colour.
 // Bars are 10px (were 7).
 //
+// STYLE: RAIL OR HEATMAP (2026-10-05, Brandon: "I want to switch from the rail
+// to the heatmap on Multi Greek ... just the nearest"). Heatmap draws each
+// strike as the Multi Greek ladder's cell (board/multiGreek): its GEX written
+// ($1.23B, the sign in the up / down colour) in a cell shaded by size and sign
+// on Multi Greek's own ramp (mgMath cellAlpha, the Voltick board's fixed
+// intensity: the top three strikes on fixed steps, the biggest ringed). A
+// tagged row's cell is filled in its level's Path colour, as its bar is. ONE
+// column, the nearest expiry, the same column the rail reads; never Multi
+// Greek's later expiries or its ex-0DTE total. Same rows, same placement.
+//
 // Too narrow (the phone, a small grid cell): no rail. The card does the same
 // on a phone.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +71,8 @@ import { buildRail, type RailLevels } from '@/board/gexCandles/GexRail'
 import { voltickMarks, vtFromLadder, vtLevelsAt, type VoltickMarks } from '@/data/voltickLevels'
 import { uiThemeNow } from '@/design/uiTheme'
 import { bool, int, provideLayer, str, studyImpl, type StudyCtx } from './common'
-import { GEX_BASIS, RAIL_SIDES, RAIL_TYPE } from './index'
+import { GEX_BASIS, RAIL_SIDES, RAIL_STYLES, RAIL_TYPE } from './index'
+import { cellAlpha, columnStats, fmtGex } from '@/board/multiGreek/mgMath'
 import { columnsUntil, ladderKey, loadRailLadder, sessionDates, type Ladder } from './ladder'
 
 const ROW_H = 15
@@ -69,6 +80,8 @@ const ROW_H = 15
 const HEAD_H = 30
 /** Below this cell width the rail stays off. */
 const MIN_CELL = 520
+/** Multi Greek's heat on the Voltick board (MultiGreekCard VT_FIXED_INTENSITY). */
+const HEAT_INTENSITY = 1.75
 
 type Side = 'right' | 'left'
 
@@ -77,6 +90,8 @@ interface RailS {
   metric: 'net' | 'vol' | 'oi'
   tags: boolean
   width: number
+  /** Style: Heatmap (Multi Greek's cell) instead of bars. */
+  heat: boolean
 }
 
 export interface RailRowOut {
@@ -87,6 +102,10 @@ export interface RailRowOut {
   tags: { key: string; text: string; title: string; fill?: string; ink?: string }[]
   /** The Voltick level whose Path colour the bar takes (the row's highest-ranked tag); none = the sign colour. */
   lead?: string
+  /** Heatmap: the cell's wash, 0..1 (Multi Greek's cellAlpha). */
+  alpha?: number
+  /** Heatmap: the column's biggest |GEX| (Multi Greek rings it). */
+  top?: boolean
 }
 
 /** The Path's level priority (vtPath/trailruns.ts PATH_PRIORITY): which colour a row with two tags takes. */
@@ -95,6 +114,8 @@ const LEAD_ORDER = ['volt', 'reversal', 'coil', 'surge']
 export interface RailPayload {
   width: number
   side: Side
+  /** Heatmap cells instead of bars. */
+  heat: boolean
   head: string
   /** The header's tooltip. */
   headTitle: string
@@ -144,6 +165,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
       metric: b === GEX_BASIS[2] ? 'vol' : b === GEX_BASIS[1] ? 'oi' : 'net',
       tags: bool(i.tags, true),
       width: int(i.width, 96, 72, 180),
+      heat: str(i.style, RAIL_STYLES[0]) === RAIL_STYLES[1],
     }
   },
   dataKey: (c) => `${ladderKey(c)}|${railDay(c).join(',')}`,
@@ -153,7 +175,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
   everyTick: true,
   render: () => ({}),
   layer: (c, s, lad): RailPayload => {
-    const base = { width: s.width, side: s.side, headTitle: '', net: '', netSign: '' as const, netTitle: '', rows: [], maxAbs: 0, order: [], key: '' }
+    const base = { width: s.width, side: s.side, heat: s.heat, headTitle: '', net: '', netSign: '' as const, netTitle: '', rows: [], maxAbs: 0, order: [], key: '' }
     if (!lad) return { ...base, head: '', empty: 'Loading the ladder…' }
     const cols = columnsUntil(lad.columns, c.until)
     const col = cols[cols.length - 1]
@@ -189,6 +211,14 @@ export const railImpl = studyImpl<RailS, Ladder>({
       const lead = LEAD_ORDER.find((k) => tags.some((t) => t.key === k))
       return { strike: r.strike, price: r.strike + shift, value: r.value, tags, lead }
     })
+    if (s.heat) {
+      // Multi Greek's ramp over this one column: the top three on fixed steps, the rest by share
+      const st = columnStats(new Map(rows.map((r) => [r.strike, r.value])), model.spot)
+      for (const r of rows) {
+        r.alpha = cellAlpha(r.value, st.maxAbs, st.top3.indexOf(r.strike), HEAT_INTENSITY)
+        r.top = st.top3[0] === r.strike && r.value !== 0
+      }
+    }
     const named = rows.filter((r) => r.tags.length).map((r) => r.strike)
     const rest = rows.filter((r) => !r.tags.length).sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
     const at = TIME.format(new Date(col.slotTs))
@@ -204,6 +234,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
     return {
       width: s.width,
       side: s.side,
+      heat: s.heat,
       head,
       headTitle,
       net: `NET ${fmt(total)}`,
@@ -213,12 +244,36 @@ export const railImpl = studyImpl<RailS, Ladder>({
       maxAbs: model.maxAbs,
       order: [...named, ...rest.map((r) => r.strike)],
       empty: rows.length ? '' : 'Empty ladder',
-      key: `${col.slotTs}|${next?.expiry ?? ''}|${s.metric}|${s.tags}|${shift}|${voltick}`,
+      key: `${col.slotTs}|${next?.expiry ?? ''}|${s.metric}|${s.tags}|${shift}|${voltick}|${s.heat}`,
     }
   },
 })
 
 // ── The column itself ────────────────────────────────────────────────────────
+
+/** Style: Heatmap. One strike as Multi Greek's cell: the figure on its heat, or
+ *  filled in its level's Path colour (vela.css .cb-gxr-cell[data-k]). */
+function heatCell(r: RailRowOut): HTMLSpanElement {
+  const cell = document.createElement('span')
+  cell.className = 'cb-gxr-cell'
+  const f = fmtGex(r.value)
+  const sign = document.createElement('span')
+  sign.className = 'cb-gxr-sg'
+  sign.dataset.s = f.sign === '+' ? 'pos' : f.sign === '−' ? 'neg' : ''
+  sign.textContent = f.sign
+  cell.append(sign, document.createTextNode(f.text))
+  const lead = r.lead ? r.tags.find((t) => t.key === r.lead) : undefined
+  if (lead) {
+    cell.dataset.k = lead.key
+    if (lead.ink) cell.style.color = lead.ink
+    return cell
+  }
+  const hue = r.value >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
+  const a = r.alpha ?? 0
+  if (a > 0) cell.style.background = `color-mix(in srgb, ${hue} ${(a * 100).toFixed(1)}%, transparent)`
+  if (r.top) cell.style.outline = `1px solid ${hue}`
+  return cell
+}
 
 function isPayload(v: unknown): v is RailPayload {
   return !!v && typeof v === 'object' && Array.isArray((v as RailPayload).rows)
@@ -340,12 +395,15 @@ class RailLayer implements RendererLayerInstance {
       }
       const track = document.createElement('span')
       track.className = 'cb-gxr-track'
-      const bar = document.createElement('span')
-      bar.className = 'cb-gxr-bar'
-      bar.dataset.s = r.value >= 0 ? 'pos' : 'neg'
-      if (r.lead) bar.dataset.k = r.lead
-      bar.style.width = `${d.maxAbs > 0 ? Math.max(2, (Math.abs(r.value) / d.maxAbs) * 100) : 0}%`
-      track.append(bar)
+      if (d.heat) track.append(heatCell(r))
+      else {
+        const bar = document.createElement('span')
+        bar.className = 'cb-gxr-bar'
+        bar.dataset.s = r.value >= 0 ? 'pos' : 'neg'
+        if (r.lead) bar.dataset.k = r.lead
+        bar.style.width = `${d.maxAbs > 0 ? Math.max(2, (Math.abs(r.value) / d.maxAbs) * 100) : 0}%`
+        track.append(bar)
+      }
       row.append(tags, track)
       el.append(row)
       this.nodes.set(r.strike, row)
