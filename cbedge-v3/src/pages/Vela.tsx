@@ -81,14 +81,17 @@ import '@/pages/vela/vela.css'
 // drawings) through Vela's own document, the namespacing every key v3 invents
 // carries.
 //
-// ── CB Walls on every chart ──────────────────────────────────────────────────
+// ── CB Walls: the level lines, opt-in ────────────────────────────────────────
 // pages/vela/wallsIndicator.ts — the Level Log's wall migration (call wall, put
 // wall, CORE as forward-filled steps, per session, in the migration chart's
-// colours) registered as a Vela native study. Every chart gets one the FIRST
-// time it exists — the boot cell, and any cell a bigger layout adds — and the
-// cell is remembered under `cb-v3-vela-walls`, so a user who takes it off with
-// the legend ✕ has taken it off: it is not put back on the next load. After
-// that it lives in Vela's saved document like any study (inputs, visibility).
+// colours) registered as a Vela native study. Since 2026-10-05 it is OPT-IN
+// (Brandon: "levels on the chart should stay there, but the levels indicator
+// needs to be added if the user wants it on the chart"): no chart is given it.
+// The legend card's LEVELS row stays on every chart without it (live chain
+// values), and its ◉, its ⚙ and Indicators → Levels & Walls put the lines on.
+// Charts this page HAD given it (cells in `<key>-walls`) have that copy taken
+// back off once (`<key>-walls-optin`, unseedOnce); a chart the user adds it to
+// afterwards keeps it, in Vela's saved document like any study.
 //
 // The walls draw at a shared OPACITY (default 60%) with a slider behind the
 // drop icon on the study's legend row (desktop) or ⋮ → Walls opacity (phone) —
@@ -105,8 +108,8 @@ import '@/pages/vela/vela.css'
 // volume-only CORE), so they reach back
 // as far as walls_log does. Two studies on Vela's Indicators list
 // (Built-in → "Voltick Path…", "Voltick Path Ribbon…"); Voltick Path is put on
-// every chart once, exactly like CB Walls (`<key>-vtpath`), and the legend ✕
-// takes it off for good.
+// every chart once (`<key>-vtpath`; CB Walls was too, until it went opt-in), and
+// the legend ✕ takes it off for good.
 //
 // ── Copy indicators to all charts ────────────────────────────────────────────
 // pages/vela/copyIndicators.ts — Vela keeps studies per chart and has no "apply
@@ -138,7 +141,7 @@ import '@/pages/vela/vela.css'
 // Alerts feed's engine alerts for the chart's symbol and your scripts' alerts as
 // marks along the bottom of the chart, with a menu (the legend card's ⚙, desktop)
 // to turn each kind on or off and set the size. It is given to each chart once,
-// like CB Walls. Vela's own marks lane is no longer fed, so its Events tab is gone.
+// like Voltick Path. Vela's own marks lane is no longer fed, so its Events tab is gone.
 // strategy() scripts paint their fills as Vela trade markers (script/engine.ts).
 // D / W / M reach back years where a long source answers (cbedgeProvider.ts).
 //
@@ -277,8 +280,10 @@ import '@/pages/vela/vela.css'
 
 const DESKTOP_KEY = 'cb-v3-vela'
 const PHONE_KEY = 'cb-v3-vela-m'
-/** Cell ids that have already been given CB Walls once, per saved document. */
+/** Cell ids this page gave CB Walls, per saved document (it did until 2026-10-05). */
 const seededKey = (storageKey: string) => `${storageKey}-walls`
+/** …and the ones that copy has since been taken back off (CB Walls went opt-in). */
+const wallsOptInKey = (storageKey: string) => `${storageKey}-walls-optin`
 /** …and Voltick Path. */
 const pathSeededKey = (storageKey: string) => `${storageKey}-vtpath`
 /** …and Events. */
@@ -345,6 +350,28 @@ function seedOnce(ws: VelaWorkspace, ids: string[], key: string, type: string): 
     changed = true
   }
   if (changed) writeSeeded(key, seeded)
+}
+
+/**
+ * Take back, once per cell, the copy of `type` this page GAVE a chart (its id is
+ * in `seededKey`'s set) — for a study that has gone opt-in. A cell is done after
+ * one pass, so a study the user adds back afterwards stays; a cell that was never
+ * given it is never touched.
+ */
+function unseedOnce(ws: VelaWorkspace, ids: string[], seededKey: string, doneKey: string, type: string): void {
+  const seeded = readSeeded(seededKey)
+  if (!seeded.size) return
+  const done = readSeeded(doneKey)
+  let changed = false
+  for (const id of ids) {
+    if (!seeded.has(id) || done.has(id)) continue
+    const cell = ws.cell(id)
+    if (!cell) continue
+    for (const h of cell.chart.indicators()) if (h.nativeType === type) h.remove()
+    done.add(id)
+    changed = true
+  }
+  if (changed) writeSeeded(doneKey, done)
 }
 
 /** A phone document saved while /m/vela was pinned to one chart boots as one
@@ -551,13 +578,14 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     // seeding below, so the charts it adds are among the cells that get them.
     if (onPhone) upgradePhoneLayout(ws)
 
-    // CB Walls, Voltick Path and Events: the cells that exist now, and every cell a
-    // layout change mints.
+    // Voltick Path and Events: the cells that exist now, and every cell a layout
+    // change mints. CB Walls is opt-in: the copy this page once gave is taken back.
     const walls = seededKey(storageKey)
+    const wallsOptIn = wallsOptInKey(storageKey)
     const vtPath = pathSeededKey(storageKey)
     const events = eventsSeededKey(storageKey)
     const seed = (ids: string[]) => {
-      seedOnce(ws, ids, walls, WALLS_TYPE)
+      unseedOnce(ws, ids, walls, wallsOptIn, WALLS_TYPE)
       seedOnce(ws, ids, vtPath, PATH_TYPE)
       seedOnce(ws, ids, events, EVENTS_TYPE)
     }

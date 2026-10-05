@@ -5,8 +5,9 @@
 // (pages/levelLog/WallMigrationChart.tsx), drawn the way it draws them: lines,
 // and nothing else — no tags, no axis chips. Registered with Vela as a NATIVE
 // INDICATOR so each chart carries it as a study (a legend row, eye / gear / ✕,
-// a settings dialog, a place in the saved workspace). Pages/Vela.tsx puts one
-// on every chart the first time that chart exists; after that it is the user's.
+// a settings dialog, a place in the saved workspace). OPT-IN since 2026-10-05:
+// no chart is given it (Pages/Vela.tsx); the legend card's LEVELS row stays
+// without it, and its ◉ / ⚙ or Indicators → Levels & Walls put the lines on.
 //
 // ── The migration chart's model, transcribed ────────────────────────────────
 //   · walls_log is CHANGE-ONLY, so every level is FORWARD-FILLED from its last
@@ -29,6 +30,30 @@
 //     bar where CORE sits on that wall)
 //     through vtFromWalls(), Volt drawn last so it shows on a shared strike —
 //     the migration chart's Voltick view, judged on each bar's close.
+//
+// ── Broken captures are dropped (2026-10-05) ────────────────────────────────
+// Now and then a scanner sweep reads a degenerate book (a chain that came back
+// near-empty) and the recorder logs it as a level change: on SPY 10-02 12:15 the
+// CORE "moved" 768 → 777 at 0.9B (from 11.3B), the call wall to 776 at 0.8B and
+// the put wall to 725 at −0.0B, and 15 minutes later everything was back. Drawn,
+// that is a one-slot spike to a far strike — the Volt / Coil / Reversal jumping
+// up "for no reason" on CB Walls, the Voltick Path and CB Script alike. So
+// buildDays() drops them before forward-filling (dropBrokenCaptures):
+//   · A write that is a CANDIDATE: not the open capture, both rows carry a size,
+//     and its |level_gex| is under COLLAPSE (20%) of the same level's size in
+//     force. A real top node does not lose 80% of its gamma in one 15-minute
+//     slot; across 20 sessions × 10 names the CORE did it ~30 times and nearly
+//     every one sprang back the next slot.
+//   · It is dropped when the same level is written again within REVERT_SLOTS and
+//     moves back toward where it was (a confirmed glitch), or — on the live edge,
+//     before those slots have run — provisionally (the CORE always; a wall only
+//     when the jump is at least FAR_PCT of spot, so a near close-time roll is
+//     never held back). A candidate that stays put once those slots have run is
+//     real and kept: late-day 0DTE walls do collapse and roll for real.
+//   · A dropped CORE takes its whole slot with it: every level in that slot came
+//     off the same broken sweep.
+// The level in force simply carries through the dropped slot. The open capture
+// (slot 0) is never judged — there is nothing before it to judge it by.
 //
 // ── Futures ──────────────────────────────────────────────────────────────────
 // ES and NQ have no walls of their own: their levels are SPX's and NDX's,
@@ -308,8 +333,90 @@ function rowTime(date: string, slot: number, ts: unknown): number {
   return etWallMs(date, mins)
 }
 
+// ── Broken captures (see the header) ────────────────────────────────────────
+
+type LogRow = DaySlice['log'][number]
+
+/** A write under this share of the same level's size in force is a candidate. */
+const COLLAPSE = 0.2
+/** A candidate the level springs back from within this many slots was a glitch. */
+const REVERT_SLOTS = 2
+/** On the live edge a WALL candidate is held back only for a jump this far (share of spot). */
+const FAR_PCT = 0.0075
+/** How late a slot may land (the recorder's grace). */
+const SLOT_GRACE_MS = 5 * MIN_MS
+
+const isSourceLevel = (lt: unknown): lt is SourceLevel => lt === 'call_wall' || lt === 'put_wall' || lt === 'cb'
+
+function sizeOf(r: LogRow): number | null {
+  const g = r.level_gex == null ? NaN : Number(r.level_gex)
+  return Number.isFinite(g) ? Math.abs(g) : null
+}
+
+/**
+ * Is `r` (a write of one level) a broken capture, judged against `prev` (that
+ * level's write in force) and `next` (its next write, if any)?
+ */
+function isBroken(r: LogRow, prev: LogRow | undefined, next: LogRow | undefined, date: string, now: number): boolean {
+  const slot = Number(r.slot)
+  if (!(slot > 0) || !prev) return false
+  const g = sizeOf(r)
+  const pg = sizeOf(prev)
+  if (g == null || pg == null || !(pg > 0) || !(g < COLLAPSE * pg)) return false
+  const from = Number(prev.strike)
+  const jump = Math.abs(Number(r.strike) - from)
+  const nextIn = next != null && Number(next.slot) - slot <= REVERT_SLOTS
+  // the slots that would show a spring-back have run (always, on a past session)
+  const settled = now >= rowTime(date, slot + REVERT_SLOTS, null) + SLOT_GRACE_MS
+  if (nextIn || settled) return nextIn && Math.abs(Number(next!.strike) - from) < jump
+  // live edge, nothing to confirm by yet
+  if (r.level_type === 'cb') return true
+  const spot = Number(r.spot) > 0 ? Number(r.spot) : from
+  return jump >= FAR_PCT * spot
+}
+
+/** One session's log without its broken captures. Other rows keep their order. */
+export function dropBrokenCaptures(log: readonly LogRow[], date: string, now = Date.now()): LogRow[] {
+  const rows = log.filter((r) => isSourceLevel(r.level_type)).sort((a, b) => Number(a.slot) - Number(b.slot))
+  if (rows.length < 2) return log.slice()
+  const dropped = new Set<LogRow>()
+  const nextOf = (i: number, skip: Set<number>) => {
+    for (let k = i + 1; k < rows.length; k++) {
+      const x = rows[k]!
+      if (x.level_type === rows[i]!.level_type && !skip.has(Number(x.slot))) return x
+    }
+    return undefined
+  }
+  // 1 · a broken CORE takes its whole slot
+  const deadSlots = new Set<number>()
+  let core: LogRow | undefined
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!
+    if (r.level_type !== 'cb') continue
+    if (isBroken(r, core, nextOf(i, deadSlots), date, now)) deadSlots.add(Number(r.slot))
+    else core = r
+  }
+  // 2 · the walls, against what is left
+  const inForce = new Map<string, LogRow>()
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!
+    if (deadSlots.has(Number(r.slot))) {
+      dropped.add(r)
+      continue
+    }
+    const lt = String(r.level_type)
+    if (lt !== 'cb' && isBroken(r, inForce.get(lt), nextOf(i, deadSlots), date, now)) {
+      dropped.add(r)
+      continue
+    }
+    inForce.set(lt, r)
+  }
+  return dropped.size ? log.filter((r) => !dropped.has(r)) : log.slice()
+}
+
 export function buildDays(days: DaySlice[], basis: BasisModel | null): DayModel[] {
   const out: DayModel[] = []
+  const now = Date.now()
   for (const day of days) {
     let shift = 0
     if (basis) {
@@ -317,7 +424,7 @@ export function buildDays(days: DaySlice[], basis: BasisModel | null): DayModel[
       if (!isPlausibleBasis(shift, basis.max)) continue
     }
     const levels = new Map<SourceLevel, Writes>()
-    for (const row of day.log) {
+    for (const row of dropBrokenCaptures(day.log, day.date, now)) {
       const lt = row.level_type as WallLevel
       if (lt !== 'call_wall' && lt !== 'put_wall' && lt !== 'cb') continue
       const strike = Number(row.strike)

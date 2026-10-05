@@ -26414,3 +26414,22 @@ Pasting TradingView's "Advanced Levels" failed with `unknown function "price"` o
 - `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts`: new `pathSizesBySession` runs Voltick's `pathSizes` on each session's slice of a row, so a bubble is sized against its level's range on its own day. That is what the 10-03 entry described, and what Voltick's one-session board does. No Voltick constant changed. The Ribbon was already per session.
 - **Checks:** a strict `tsc` over the three vtPath files (with the Vela package stubbed) is clean. The edited `framesFromWalls` / `buildPathRows` / sizes were bundled and run in the live page against today's walls: on Vol only, SPX, SPY and QQQ now get today's frames from 09:30 (before, from 09:45). Today's newest Volt bubble is at full size (radius 7.8 at a 6px base; before, 3.7, the floor). OI + Vol frames are the same as before.
 - **Deploy:** `push.ps1` → VPS rebuild (vela).
+
+## 2026-10-05 - Vela: one-slot level spikes dropped; CB Walls lines are opt-in, the LEVELS row stays
+
+**The report.** Levels on Vela charts sometimes jumped far up for no reason and came straight back (screenshots: SPY's Volt and Coil spiking to ~776–777, wall lines drawing tall boxes).
+
+**What the live data showed.** These are broken scanner sweeps that the walls recorder logged as level changes. On SPY (Vol only) on 10-02 at 12:15, the CORE "moved" 768 → 777 at 0.9B (from 11.3B), the call wall moved to 776 at 0.8B and the put wall to 725 at −0.0B. At 12:30 all three were back. The same happened at 14:30, on 10-01 at 10:15 (784, 0B), and on other days and names. A real top node never loses 80% of its gamma in one 15-minute slot. Across 20 sessions × 10 names (SPY, QQQ, SPX, NDX, IWM, NVDA, TSLA, AAPL, AMD, META, all four variants) the CORE did it about 30 times, and almost every one sprang back the next slot.
+
+- `cbedge-v3/src/pages/vela/wallsIndicator.ts`: a new `dropBrokenCaptures`, run by `buildDays`, so CB Walls, the Voltick Path and CB Script all get it.
+  - A write is a candidate when it is not the open capture and its |level_gex| is under 20% of the same level's size in force.
+  - A candidate is dropped when that level is written again within 2 slots and moves back toward where it was.
+  - On the live edge, before those slots have run, a candidate is held back provisionally: a CORE always, a wall only if the jump is ≥0.75% of spot.
+  - A candidate that stays put is kept. Late-day 0DTE walls do collapse and roll for real.
+  - A dropped CORE drops its whole slot.
+  - Over that sample, 98 of 13,190 rows go (0.74%): every SPY spike in the screenshots, and no late-day roll.
+- **CB Walls (the level lines) is opt-in.** This was Brandon's call: "levels on the chart should stay there, but the levels indicator needs to be added if the user wants it on the chart."
+  - `cbedge-v3/src/pages/Vela.tsx`: CB Walls is no longer seeded onto charts. Charts this page had given it (`<key>-walls`) have that copy removed once (`unseedOnce`, recorded in `<key>-walls-optin`). If the user adds it back, it stays. Voltick Path and Events seeding is unchanged.
+  - `cbedge-v3/src/pages/vela/legend/legendCard.ts`: the LEVELS row stays on every chart. Without the walls, its values come from the live chain, and the ⚙'s Volt / Coil / Reversal switches are the card's own (`cb-v3-vela-legend` → `show`). The ◉ reads eye-off and adds the level lines. The ⚙'s last button reads "Add the level lines to this chart" until they are on, and Indicators → Levels & Walls still works. With the lines on, the ◉ and ⚙ work as before.
+- **Checks:** a strict `tsc` against `@luxalgo/vela` 0.8.1 types is clean on the changed code. The only errors are in unchanged lines where local stubs stood in for sibling modules. `dropBrokenCaptures` was bundled and run on the live `/api/walls-range` data for the sample above. Not yet clicked through on a deployed build.
+- **Deploy:** `push.ps1` → VPS rebuild (vela).

@@ -16,14 +16,23 @@
 //     symbol line this card hides; REPLAY while a bar replay runs.
 //   · LEVELS · NOW: Volt / Coil / Reversal are the newest values the chart's CB
 //     Walls study DREW (wallsIndicator.ts publishes them), so the card always
-//     matches the lines; Flip, which has no line, and any level the walls do not
-//     cover come from the live chain read Level Alerts and the phone's strip use
+//     matches the lines; Flip, which has no line, any level the walls do not
+//     cover, and all of them on a chart without the walls come from the live
+//     chain read Level Alerts and the phone's strip use
 //     (levels/levelAlerts.ts levelsFor). Drawn marks (levelMarks.ts), never typed.
 //     ONE ROW, ALWAYS: the card grows to fit it; on a chart too narrow for that,
 //     the row steps down (smaller type, then no distances, then whole numbers)
 //     instead of wrapping or clipping. One ⚙ (which levels, distance from price,
 //     opacity, the study's full settings) and one ◉ (the walls study on/off)
 //     cover all four.
+//   · THE ROW STAYS, THE LINES ARE OPT-IN (Brandon, 2026-10-05: "levels on the
+//     chart should stay there, but the levels indicator needs to be added if the
+//     user wants it"). CB Walls is no longer given to every chart (Vela.tsx), and
+//     the LEVELS row does not need it: with no walls on the chart the values come
+//     from the live chain and the ⚙'s level switches are the card's own. The ◉
+//     then reads eye-off and PUTS THE LEVEL LINES ON (so does the ⚙'s last
+//     button, and Indicators → Levels & Walls); once they are on, it hides and
+//     shows them as before.
 //   · STUDIES: every OTHER indicator on the price pane, in pane order, each with
 //     its value under the crosshair (the latest bar off the plot, as Vela's
 //     legend did), ◉, and ⚙ / ✕ on hover. Those drive the study's own handle and
@@ -66,6 +75,7 @@ const FOLD_BELOW = 520
 const CHAIN_MS = 60_000
 
 const LEVELS: ReadonlyArray<{ key: MarkKey; name: string; input?: 'showVolt' | 'showCoil' | 'showRev' }> = [
+  // `input`: the CB Walls switch that holds it while the chart carries the walls
   { key: 'volt', name: 'Volt', input: 'showVolt' },
   { key: 'coil', name: 'Coil', input: 'showCoil' },
   { key: 'reversal', name: 'Reversal', input: 'showRev' },
@@ -88,9 +98,13 @@ const COG =
 
 // ── Prefs (this browser) ─────────────────────────────────────────────────────
 
+type LineLevel = 'volt' | 'coil' | 'reversal'
+
 interface Prefs {
   /** Flip on the card (it has no line, so no study input to hold it). */
   flip: boolean
+  /** Volt / Coil / Reversal on the card while the chart has no CB Walls (the study's switches hold them when it does). */
+  show: Record<LineLevel, boolean>
   /** Distance from price beside each level. */
   dist: boolean
   /** ▾ per cell id, once the user has chosen. */
@@ -100,9 +114,15 @@ interface Prefs {
 function readPrefs(): Prefs {
   try {
     const j = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<Prefs>
-    return { flip: j.flip !== false, dist: j.dist === true, fold: j.fold && typeof j.fold === 'object' ? j.fold : {} }
+    const s: Partial<Record<LineLevel, boolean>> = j.show && typeof j.show === 'object' ? j.show : {}
+    return {
+      flip: j.flip !== false,
+      show: { volt: s.volt !== false, coil: s.coil !== false, reversal: s.reversal !== false },
+      dist: j.dist === true,
+      fold: j.fold && typeof j.fold === 'object' ? j.fold : {},
+    }
   } catch {
-    return { flip: true, dist: false, fold: {} }
+    return { flip: true, show: { volt: true, coil: true, reversal: true }, dist: false, fold: {} }
   }
 }
 const prefs = readPrefs()
@@ -357,10 +377,12 @@ class Card {
     this.levelCog = iconButton(d, 'cb-lc-lcog', 'Level settings', COG)
     this.levelCog.setAttribute('aria-haspopup', 'dialog')
     this.levelCog.addEventListener('click', () => (pop?.owner === this && pop.anchor === this.levelCog ? closePop() : this.openPop()))
-    this.levelEye = iconButton(d, 'cb-lc-leye', 'Hide the levels', iconEl('eye', d))
+    this.levelEye = iconButton(d, 'cb-lc-leye', 'Hide the level lines', iconEl('eye', d))
     this.levelEye.addEventListener('click', () => {
       const w = this.walls()
+      // the level lines are opt-in: off the chart, the ◉ is what puts them on
       if (w) w.setVisible(!w.visible)
+      else this.addWalls()
     })
     tools.append(this.levelCog, this.levelEye)
     this.lrow.append(this.lvs, tools)
@@ -375,6 +397,23 @@ class Card {
     const body = el(d, 'div', 'cb-lc-body')
     body.append(levels, st)
     this.el.append(hd, body)
+  }
+
+  /** Put CB Walls (the level lines) on this chart: the user asked for them. */
+  private addWalls(): void {
+    if (this.walls()) return
+    try {
+      this.cell.addNative(WALLS_TYPE)
+    } catch {
+      /* the cell is going away: nothing to add to */
+    }
+  }
+
+  /** Is this level on the card? The walls' own switch while the chart has them, else the card's. */
+  private levelOn(L: (typeof LEVELS)[number], w: IndicatorHandle | null): boolean {
+    if (!L.input) return prefs.flip
+    if (w) return w.inputValues()[L.input] !== false
+    return prefs.show[L.key as LineLevel] !== false
   }
 
   private walls(): IndicatorHandle | null {
@@ -437,11 +476,11 @@ class Card {
     if (!list.length) this.studies.append(el(d, 'div', 'cb-lc-empty', 'No studies on the price: Indicators adds one'))
     // the levels row's controls follow the walls study
     const w = this.walls()
-    this.levelEye.replaceChildren(iconEl(w && !w.visible ? 'eye-off' : 'eye', d))
-    const eyeLabel = !w ? 'CB Walls is off this chart: Indicators adds it back' : w.visible ? 'Hide the levels' : 'Show the levels'
+    this.levelEye.replaceChildren(iconEl(!w || !w.visible ? 'eye-off' : 'eye', d))
+    const eyeLabel = !w ? 'Show the level lines on this chart' : w.visible ? 'Hide the level lines' : 'Show the level lines'
     this.levelEye.title = eyeLabel
     this.levelEye.setAttribute('aria-label', eyeLabel)
-    this.levelEye.disabled = !w
+    this.levelEye.disabled = false
     this.paintHeader()
   }
 
@@ -514,11 +553,10 @@ class Card {
     const d = this.doc
     const w = this.walls()
     const now = w && this.chart ? wallsNow(this.chart.data, w.id) : null
-    const inputs = w ? w.inputValues() : {}
     const px = this.price ?? this.chain?.price ?? null
     this.lrow.dataset.off = w && !w.visible ? '1' : ''
     const spec = LEVELS.map((L) => {
-      const shown = L.input ? inputs[L.input] !== false : prefs.flip
+      const shown = this.levelOn(L, w)
       const v = !shown ? null : L.key === 'flip' ? (this.chain?.flip ?? null) : (now?.[L.key] ?? this.chain?.[L.key] ?? null)
       return { L, v }
     })
@@ -590,8 +628,7 @@ class Card {
     const drawChips = () => {
       chips.replaceChildren()
       const w = this.walls()
-      const vals = w ? w.inputValues() : {}
-      const on = (L: (typeof LEVELS)[number]) => (L.input ? vals[L.input] !== false : prefs.flip)
+      const on = (L: (typeof LEVELS)[number]) => this.levelOn(L, w)
       const count = LEVELS.filter(on).length
       for (const L of LEVELS) {
         const b = el(d, 'button', 'cb-lc-chip')
@@ -600,12 +637,14 @@ class Card {
         b.setAttribute('aria-pressed', String(isOn))
         b.insertAdjacentHTML('afterbegin', markSvg(L.key))
         b.append(d.createTextNode(L.name))
-        b.disabled = (!!L.input && !w) || (isOn && count === 1)
-        if (isOn && count === 1) b.title = 'One level stays on: the ◉ hides them all'
+        b.disabled = isOn && count === 1
+        if (isOn && count === 1) b.title = 'One level stays on'
         b.addEventListener('click', () => {
-          if (L.input) this.walls()?.setInputs({ [L.input]: !isOn })
+          const walls = this.walls()
+          if (L.input && walls) walls.setInputs({ [L.input]: !isOn })
           else {
-            prefs.flip = !prefs.flip
+            if (L.input) prefs.show[L.key as LineLevel] = !isOn
+            else prefs.flip = !prefs.flip
             savePrefs()
           }
           drawChips()
@@ -645,13 +684,14 @@ class Card {
     range.addEventListener('change', () => setWallsOpacity(Number(range.value), true))
     const offOp = onWallsOpacity(drawOp)
     // the study's full dialog
-    const more = el(d, 'button', 'cb-lc-more', 'All CB Walls settings')
+    // with the level lines on the chart: their full dialog; without: put them on
+    const more = el(d, 'button', 'cb-lc-more', this.walls() ? 'All CB Walls settings' : 'Add the level lines to this chart')
     more.type = 'button'
-    more.disabled = !this.walls()
     more.addEventListener('click', () => {
       const w = this.walls()
       closePop()
       if (w) this.chart?.renderer.openIndicatorSettings(w.id)
+      else this.addWalls()
     })
     box.append(head, showLab, chips, dist, opLab, range, more)
     this.present(box, this.levelCog, offOp)
