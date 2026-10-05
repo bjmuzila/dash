@@ -3476,3 +3476,195 @@
   background: var(--color-vt-elev);
   color: var(--color-vt-paper);
 }
+
+/* ── The bottom of the chart (Vela.tsx header; mockup 2026-10-04-vela-bottom-r2, C3) ──
+   The desktop drops Vela's bottom strip: the grid is a flex column, so the charts
+   take its height. At a phone width this page shows Vela's touch bar, untouched. */
+.vela-workspace.cb-bb-off:not([data-layout='mobile']) > .vela-widget-bottombar {
+  display: none !important;
+}
+
+/* The session clock (sessionClockView.ts): ● RTH closes in 2:14:47 │ 13:45:13 ET */
+.vela-workspace .vela-widget-topbar button.cb-clk {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--color-vt-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-vt-elev);
+  color: var(--color-vt-quiet);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.vela-workspace .vela-widget-topbar button.cb-clk:hover {
+  border-color: var(--color-vt-rail);
+  background: var(--color-vt-elev);
+}
+.vela-workspace .vela-widget-topbar button.cb-clk[data-open='1'] {
+  border-color: var(--color-vt-accent);
+  box-shadow: 0 0 0 3px var(--vt-accent-soft);
+}
+.cb-clk .cb-clk-ses {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cb-clk .cb-clk-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-vt-rail);
+}
+.cb-clk .cb-clk-ses[data-phase='rth'] .cb-clk-dot {
+  background: var(--color-vt-accent);
+}
+.cb-clk .cb-clk-ses[data-phase='pre'] .cb-clk-dot {
+  background: var(--color-vt-premarket);
+}
+.cb-clk .cb-clk-ses[data-phase='post'] .cb-clk-dot,
+.cb-clk .cb-clk-ses[data-phase='globex'] .cb-clk-dot {
+  background: var(--color-vt-sky);
+}
+.cb-clk .cb-clk-lab {
+  color: var(--color-vt-paper);
+  font-weight: 600;
+}
+.cb-clk .cb-clk-val,
+.cb-clk .cb-clk-t {
+  color: var(--color-vt-paper);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.cb-clk .cb-clk-t {
+  font-weight: 600;
+}
+.cb-clk .cb-clk-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--color-vt-line);
+}
+.cb-clk .cb-clk-z {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+/* a narrower window keeps the state and the clock, and drops the countdown */
+@media (max-width: 1180px) {
+  .cb-clk .cb-clk-verb,
+  .cb-clk .cb-clk-val {
+    display: none;
+  }
+}
+
+/* RTH / ETH on Vela's timeframe button ("5m · RTH ▾") and in its menu */
+.vela-widget-tf-caret .cb-tf-ses {
+  margin-left: 4px;
+  color: var(--color-vt-quiet);
+  font-weight: 500;
+}
+.vela-menu .cb-tf-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--color-vt-line);
+  list-style: none;
+}
+.vela-menu .cb-tf-sec {
+  padding: 2px 8px 6px;
+  list-style: none;
+}
+.vela-menu .cb-tf-h {
+  padding: 2px 2px 4px;
+  color: var(--color-vt-quiet);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.vela-menu .cb-tf-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-vt-line);
+  border-radius: var(--radius-sm);
+}
+.vela-menu .cb-tf-opt {
+  flex: 1;
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-vt-quiet);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+.vela-menu .cb-tf-opt:hover:not(:disabled) {
+  color: var(--color-vt-paper);
+}
+.vela-menu .cb-tf-opt[aria-pressed='true'] {
+  background: var(--color-vt-elev);
+  color: var(--color-vt-paper);
+}
+.vela-menu .cb-tf-opt:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.vela-menu .cb-tf-note {
+  display: none;
+  padding: 4px 2px 0;
+  color: var(--color-vt-quiet);
+  font-size: var(--text-2xs);
+}
+.vela-menu .cb-tf-sec[data-off='1'] .cb-tf-note {
+  display: block;
+}
+
+/* the time-zone menu (the clock's click): a narrow Workspace menu */
+.cb-wsm.cb-zm {
+  width: 220px;
+}
+.cb-zm .cb-zm-tag {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.cb-zm .cb-zm-note {
+  padding: 6px 12px 0;
+  color: var(--color-faint);
+  font-size: var(--text-2xs);
+}
+
+/* The Voltick mark (voltickMark.ts): Voltick's corner watermark. It is the first
+   child of the box Vela draws its canvases in, so the candles paint over it.
+   Vela publishes the gutters on each chart cell; these are only the fallbacks
+   above the cells. */
+.vela-ws-grid {
+  --vela-scale-gutter: 64px;
+  --vela-price-pane-bottom: 22px;
+}
+.cb-vtm {
+  position: absolute;
+  right: calc(var(--vela-scale-gutter) + 12px);
+  bottom: calc(var(--vela-price-pane-bottom) + 10px);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+.cb-vtm[hidden] {
+  display: none;
+}
+.cb-vtm .cb-vtm-a {
+  color: color-mix(in srgb, var(--color-fg) 22%, transparent);
+}
+.cb-vtm .cb-vtm-b {
+  color: color-mix(in srgb, var(--color-vt-accent) 40%, transparent);
+}

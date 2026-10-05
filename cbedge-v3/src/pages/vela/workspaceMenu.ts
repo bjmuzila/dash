@@ -10,12 +10,15 @@
 //            Session stats strip (a switch)
 //   SCRIPTS  Script editor  Alt+E · Strategy Tester  Alt+B
 //   ALERTS   Level alerts  Alt+A · Script alerts
-//   LAYOUT   Setups · Copy indicators to all charts
+//   LAYOUT   Setups · Copy indicators to all charts · Chart settings
+//
+// Chart settings came here from the bottom strip's ⚙ when the strip went
+// (2026-10-04, sessionClock.ts): it opens the ACTIVE chart's settings dialog.
 //
 // How the bar loses the rest: Vela's `topbar` composition (Vela.tsx,
-// DESKTOP_TOPBAR) lists the right side as alerts, this action, screenshot. The
-// panel group and the right-hand `actions` flow are not listed, so Vela never
-// renders them. The panels and the actions behind Setups / Session stats / Copy
+// DESKTOP_TOPBAR) lists the right side as the session clock, alerts, this
+// action, screenshot. The panel group and the right-hand `actions` flow are not
+// listed, so Vela never renders them. The panels and the actions behind Setups / Session stats / Copy
 // indicators are untouched: they open from here, from their context-menu rows,
 // and from ⋮ on a phone (the phone keeps Vela's default composition).
 //
@@ -51,6 +54,7 @@ export type WsItem =
   | { kind: 'strip'; id: string; label: string; icon: string }
   | { kind: 'setups'; id: string; label: string; icon: string }
   | { kind: 'copy'; id: string; label: string; icon: string }
+  | { kind: 'settings'; id: string; label: string; icon: string }
 
 export interface WsGroup {
   title: string
@@ -87,6 +91,7 @@ export const WS_GROUPS: readonly WsGroup[] = [
     items: [
       { kind: 'setups', id: 'setups', label: 'Setups', icon: 'cb-setups' },
       { kind: 'copy', id: 'copy-indicators', label: 'Copy indicators to all charts', icon: 'cb-copy-ind' },
+      { kind: 'settings', id: 'chart-settings', label: 'Chart settings…', icon: 'gear' },
     ],
   },
 ]
@@ -127,6 +132,9 @@ export function runItem(item: WsItem, ctx: WidgetContext, anchor: HTMLElement | 
       return
     case 'copy':
       copyToAll(ctx)
+      return
+    case 'settings':
+      current?.active.chart.renderer.openSettings()
       return
   }
 }

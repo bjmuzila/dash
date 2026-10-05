@@ -26244,3 +26244,33 @@ Brandon's phone watchlist on vela.cbedge.net showed letter tiles. The watchlist 
 - `pages/vela/vela.css`, `pages/vela/watchlist/advanced.css`: removed the old logo image and letter-chip rules. Kept the 22px tile as the cold-load placeholder.
 - Not changed: `deploy/vela/nginx.conf` still has no `/logos/` route. Logos on the vela host come through `/proxy/ticker-logo`, after one wasted request each. Vela's own symbol search also uses the mirror only. Adding the route is a proxy change and waits on Brandon's OK.
 - **Checks:** `tsc` is clean apart from the pre-existing `chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds. Headless run: the pinned desktop column, the phone sheet (`/m`) and the Advanced view all draw icons (index/future marks with F badges, fund marks with 3× badges, NVDA/TSLA/AAPL logos, a monogram for an unknown ticker). No page errors. Brotli: the page chunk is 60.7KB (−0.1KB).
+
+## 2026-10-04 - Vela: no bottom strip (C3), session clock in the top bar, Voltick corner watermark
+
+The fifth section of the vela.cbedge.net cleanup. Mockups: `generated/2026-10-04-vela-bottom-r1.html` and `-r2.html`. Brandon picked C3, no range chips at all, the Voltick mark bottom right like Voltick's chart, and Vela's V kept.
+
+- **Bottom strip gone (desktop)**: Vela's strip (nine range chips, the clock, RTH / ETH, ⚙) is hidden, and the charts take its height. This is done in CSS (`cb-bb-off` in `vela.css`), not `bottombar: false`, because that option also removes the touch bar this page uses at a phone width. The phone (`/m`) keeps its bottom bar.
+- **Session clock** (`pages/vela/sessionClock.ts` registers it; `sessionClockView.ts`, new and lazy, draws it): a chip on the right of the top bar, before the bell. It shows where the active chart's session stands and the time in the charts' zone, for example `● RTH  closes in 2:14:47 │ 13:45:13 ET`.
+  - Index: RTH / Pre-market / Closed.
+  - Stock: adds After hours.
+  - Future: RTH / `Globex · RTH opens in` / `Globex · closes in` / Closed (17:00 to 18:00 and weekends).
+  - "Closed" counts down when the open is under 12 hours away, and otherwise names the day and time (`opens Mon 09:30`). It reads the provider's own calendar (`cbedgeProvider` now exports `sessionWindows`), so it knows weekends but not exchange holidays, like the chart.
+  - A click opens a time-zone menu (New York, Chicago, London, Frankfurt, Tokyo, and this computer's zone when it is none of those). It goes through Vela's `setTimezone`, so every time axis follows and the choice is saved. Right-clicking the time axis still lists every zone.
+  - Below 1180px wide the chip drops the countdown.
+- **RTH / ETH in the timeframe menu**: Vela's timeframe button reads `5m · RTH`, and its menu has a SESSION row at the bottom. It switches the active chart (`setSession`), as the strip did. Both are added to Vela's own button and menu and put back if Vela redraws them.
+- **Chart settings** moved to the Workspace menu (Layout group). It opens the active chart's settings dialog.
+- **Voltick corner watermark** (`pages/vela/voltickMark.ts`, new and lazy): on every chart, phone included. It copies Voltick's chart (HeatChart.jsx `Watermark`, Corner mode): "Vol" in paper and "tick" in Volt Blue, 13px 800 Inter, faint.
+  - It sits 12px in from the price scale, just above the bottom of the price pane, under the candles. It is the first child of Vela's canvas box, so a GEX rail moves it along with the scale.
+  - It is hidden below 240 × 120, and it is included in copied screenshots.
+  - Vela's big "SPX · 5m" watermark is off (`watermark: false`). Vela's V stays at the bottom left.
+- `pages/Vela.tsx`: header section "The bottom of the chart", the clock pinned first on the right of `DESKTOP_TOPBAR`, `watermark: false`, and the two lazy binds.
+- **Checks:**
+  - `tsc` is clean apart from the pre-existing `chart.ts:1261` error. `check:theme` passes. `vite build --mode vela` builds.
+  - Headless run:
+    - The strip is hidden and the grid grows. The chip shows the right session for SPX and ES on a Sunday evening (Closed / Globex).
+    - `readSession` gives the right answer at 15 points across the week for index, stock and future.
+    - RTH → ETH from the menu reloads the chart and relabels the button. A zone pick moves the clock and the axis. Chart settings opens.
+    - The mark is under the bars, 12px from the scale with and without a right GEX rail, and in the screenshot. There are 16 marks in a 4×4 grid.
+    - Phone: 3 marks, no big watermark, touch bar kept.
+    - The legend fold, drawing rail and watchlist tests still pass.
+  - Brotli: the page chunk is 61.0KB (+0.3KB). The clock chunk is 3.1KB and the mark chunk 0.5KB.

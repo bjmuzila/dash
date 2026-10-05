@@ -25,6 +25,7 @@ import { bindLevelAlerts, registerLevelAlerts } from '@/pages/vela/levels/levelA
 import { bindSetups, onStrip, registerSetups, setStripShown, stripShown } from '@/pages/vela/setups/setups'
 import { bindSymbolPicker, registerSymbolPicker, SYMBOL_ACTION_ID } from '@/pages/vela/symbolPicker'
 import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@/pages/vela/workspaceMenu'
+import { CLOCK_ACTION_ID, registerSessionClock } from '@/pages/vela/sessionClock'
 import { replayActive } from '@/pages/vela/replay/clock'
 import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
 import '@/pages/vela/vela.css'
@@ -177,12 +178,13 @@ import '@/pages/vela/vela.css'
 // Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-topbar-r2.html). Vela's
 // `topbar` composition, DESKTOP_TOPBAR below, is the bar's whole contract:
 //
-//   [SPX 7,723.49 +0.71% ▾] | 5m ▾ | style | ⊞ | Indicators | Replay | ↶ ↷ … 🔔  Workspace ▾ | 📷
+//   [SPX 7,723.49 +0.71% ▾] | 5m · RTH ▾ | style | ⊞ | Indicators | Replay | ↶ ↷ … [● RTH closes in 2:14:47 │ 13:45:13 ET] 🔔  Workspace ▾ | 📷
 //
 //   · left   our ticker chip (pages/vela/symbolPicker.ts) PINNED where Vela's own
 //            symbol button was; Vela's is left out, and so is its picker:
 //            letters typed on the chart open ours
-//   · right  Vela's alerts bell, the Workspace menu (pages/vela/workspaceMenu.ts:
+//   · right  the session clock (pages/vela/sessionClock.ts, see "The bottom of the
+//            chart" below), Vela's alerts bell, the Workspace menu (pages/vela/workspaceMenu.ts:
 //            the panels, Scripts, Level / Script alerts, Setups, Session stats and
 //            Copy indicators, each a named row, the common ones on Alt keys), and
 //            the camera. Vela's panel buttons and the right-hand action flow are
@@ -205,6 +207,19 @@ import '@/pages/vela/vela.css'
 // in the same column (pages/vela/drawRail.ts): cursor, five pinned tools, a
 // searchable drawer of every tool (★ pins), the magnet and one ⋯. The phone keeps
 // Vela's own drawing chrome.
+//
+// ── The bottom of the chart ──────────────────────────────────────────────────
+// Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-bottom-r2.html, C3).
+//   · Desktop: no bottom strip. Vela's strip (nine range chips, a clock, RTH /
+//     ETH, ⚙) is hidden (`cb-bb-off`, vela.css) and the charts take its height.
+//     The ranges are gone; the session and clock are a chip on the right of the
+//     top bar, RTH / ETH is in the timeframe menu ("5m · RTH ▾"), and Chart
+//     settings is in the Workspace menu (pages/vela/sessionClock.ts). Hidden by
+//     CSS rather than `bottombar: false`, which would also take the touch bar
+//     away from this page at a phone width.
+//   · Every chart, phone too: Vela's big "SPX · 5m" watermark is off
+//     (`watermark: false`), and Voltick's corner wordmark sits at the bottom
+//     right (pages/vela/voltickMark.ts). Vela's V stays at the bottom left.
 //
 // ── The camera copies ────────────────────────────────────────────────────────
 // Vela's screenshot button (and its phone row, and Ctrl/Cmd+Alt+S) puts the
@@ -244,7 +259,7 @@ const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
  *  until it is listed here. */
 const DESKTOP_TOPBAR = {
   left: [SYMBOL_ACTION_ID, 'timeframes', 'style', 'layout', 'indicators', 'actions', 'undo-redo'],
-  right: ['alerts', WORKSPACE_ACTION_ID, 'screenshot'],
+  right: [CLOCK_ACTION_ID, 'alerts', WORKSPACE_ACTION_ID, 'screenshot'],
 }
 
 // Before any workspace exists: Vela reads its native-indicator and widget-action
@@ -263,6 +278,7 @@ registerLevelAlerts()
 registerSetups()
 registerSymbolPicker()
 registerWorkspaceMenu()
+registerSessionClock()
 // a replay reveals history bar by bar, like live bars: script alerts stay quiet meanwhile
 setAlertGate(() => !replayActive())
 
@@ -412,6 +428,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       upColor: theme.upColor,
       downColor: theme.downColor,
       timezone: 'America/New_York',
+      // Voltick's corner mark instead (voltickMark.ts, below)
+      watermark: false,
       timeframes: ['1', '5', '15', '30', '60', '240', 'D', 'W', 'M'],
       providers: { [PROVIDER_NAME]: () => new CbEdgeProvider() },
       engines: { [CBSCRIPT]: () => new CbScriptEngine() },
@@ -453,6 +471,20 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       })
     }
 
+    // The bottom of the chart (see the header): on the desktop the strip goes and its
+    // clock, session and RTH / ETH move to the top bar; every chart gets the Voltick mark.
+    let unbindClock: () => void = () => {}
+    if (!onPhone) {
+      ws.root.classList.add('cb-bb-off')
+      void import('@/pages/vela/sessionClockView').then((m) => {
+        if (!legendGone) unbindClock = m.bindSessionClock(ws)
+      })
+    }
+    let unbindVoltick: () => void = () => {}
+    void import('@/pages/vela/voltickMark').then((m) => {
+      if (!legendGone) unbindVoltick = m.bindVoltickMarks(ws)
+    })
+
     // Chart → toolbar. `state:changed` is Vela's debounced "something worth
     // saving moved" signal, and it covers a symbol switch AND a different cell
     // becoming active; `cell:active` is the immediate half of the latter.
@@ -489,6 +521,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       legendGone = true
       unbindLegend()
       unbindRail()
+      unbindClock()
+      unbindVoltick()
       unbindIndicators()
       unbindMarks()
       unbindReplay()

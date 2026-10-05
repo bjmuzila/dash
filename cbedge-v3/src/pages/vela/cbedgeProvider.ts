@@ -719,6 +719,10 @@ function calendar(kind: SymKind, from: number, to: number, session: string | und
   return out
 }
 
+/** The same session windows for the top bar's session clock (sessionClockView.ts), so
+ *  its "closes in" and the chart's shading come from one calendar. */
+export const sessionWindows = calendar
+
 // ── The provider ─────────────────────────────────────────────────────────────
 
 const TIMEFRAMES = ['1', '2', '3', '5', '10', '15', '30', '60', '120', '240', 'D', 'W', 'M'] as const
