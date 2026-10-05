@@ -1989,8 +1989,9 @@
 /* Style: Heatmap. Each strike as Multi Greek's cell (board/multiGreek): the
    figure on its heat, or a tagged row filled in its level's Path colour with the
    level's ink. The heat itself is one strip behind the cells (.cb-gxr-heat, its
-   gradient laid inline every frame): each cell's colour blends into the next
-   through the gap. It spans the cells' column: right of the 6px pad, the 22px
+   gradient laid inline every frame): each cell's colour glows into the gap and
+   fades out halfway, never mixing with its neighbour's (G3). It spans the cells'
+   column: right of the 6px pad, the 22px
    tags and the 4px gap, short of the track's 4px (mirrored on the left). */
 .cb-gxr-heat {
   position: absolute;

@@ -59,14 +59,15 @@
 // on Multi Greek's own ramp (mgMath cellAlpha, the Voltick board's fixed
 // intensity: the top three strikes on fixed steps, the biggest ringed). A
 // tagged row's cell is filled in its level's Path colour, as its bar is.
-// THE GAPS ARE A GRADIENT (2026-10-05, Brandon: "the empty space in between
-// should be a gradient from one color to the next so it has a smooth
-// transition"): one strip behind the cells, each shown cell's colour held
-// across the cell and blended into the next shown cell's through the gap, so
-// the column reads as one continuous heat. It is re-laid with the rows on
-// every frame (pan, zoom); above the first cell and below the last it fades
-// out. A cell with no wash (no GEX) is a clear stop, so the strip fades to
-// nothing there. ONE
+// THE GAPS GLOW (2026-10-05, Brandon asked for a gradient through the gaps,
+// found the blend "too odd", and picked G3 · glow bands of generated/2026-10-
+// 05-vela-rail-heat-r1.html): one strip behind the cells where each shown
+// cell's colour holds across its cell and fades out to nothing halfway to its
+// neighbour, so neighbours never mix (no green between gold and blue) and a
+// dark seam keeps the strikes countable. A level glows in its Path colour at
+// 42 % (its cell keeps the solid fill); a heat cell glows in its own wash. The
+// first and last shown cells fade out over the same half-gap (at most
+// HEAT_FADE). Re-laid with the rows on every frame (pan, zoom). ONE
 // column, the nearest expiry, the same column the rail reads; never Multi
 // Greek's later expiries or its ex-0DTE total. Same rows, same placement.
 //
@@ -268,13 +269,15 @@ const LEAD_FILL: Record<string, string> = {
 }
 /** Half a heat cell's height (vela.css .cb-gxr-cell: 13px): a colour holds this far either side of its row. */
 const CELL_HALF = 6.5
-/** How far the strip fades out above the first shown cell and below the last. */
-const HEAT_FADE = 12
+/** The longest fade above the first shown cell and below the last. */
+const HEAT_FADE = 24
+/** A level's glow: its Path colour at this share (G3). */
+const LEVEL_GLOW = 42
 
 /** Style: Heatmap. A cell's colour on the strip behind the cells. */
 function heatColor(r: RailRowOut): string {
   const lead = r.lead ? LEAD_FILL[r.lead] : undefined
-  if (lead) return lead
+  if (lead) return `color-mix(in srgb, ${lead} ${LEVEL_GLOW}%, transparent)`
   const a = r.alpha ?? 0
   if (!(a > 0)) return 'transparent'
   return `color-mix(in srgb, ${r.value >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'} ${(a * 100).toFixed(1)}%, transparent)`
@@ -504,8 +507,8 @@ class RailLayer implements RendererLayerInstance {
   }
 
   /** Heatmap: the strip behind the cells. Each shown cell's colour holds across its
-   *  cell and blends into the next one's through the gap; it fades out past the
-   *  first and the last. `null`: Style is Rail, no strip. */
+   *  cell and fades to nothing halfway to the next shown cell, so neighbours never
+   *  mix (G3 · glow bands). `null`: Style is Rail, no strip. */
   private paintHeat(shown: { top: number; color: string }[] | null): void {
     const heat = this.heatEl
     if (!heat) return
@@ -517,11 +520,17 @@ class RailLayer implements RendererLayerInstance {
     // the cell sits centred in its row: ROW_H tall, the cell 2 * CELL_HALF
     const pad = ROW_H / 2 - CELL_HALF
     const stops: string[] = []
-    const first = shown[0]!
-    const last = shown[shown.length - 1]!
-    stops.push(`transparent ${Math.max(0, first.top + pad - HEAT_FADE)}px`)
-    for (const r of shown) stops.push(`${r.color} ${r.top + pad}px`, `${r.color} ${r.top + ROW_H - pad}px`)
-    stops.push(`transparent ${last.top + ROW_H - pad + HEAT_FADE}px`)
+    // the seam between two shown rows: halfway from one cell's bottom to the next one's top
+    const seam = (i: number) => (shown[i]!.top + ROW_H - pad + shown[i + 1]!.top + pad) / 2
+    for (let i = 0; i < shown.length; i++) {
+      const r = shown[i]!
+      const top = r.top + pad
+      const bottom = r.top + ROW_H - pad
+      // the outer edges fade over the inner half-gap, at most HEAT_FADE
+      const above = i > 0 ? seam(i - 1) : top - Math.min(HEAT_FADE, shown.length > 1 ? seam(0) - bottom : HEAT_FADE)
+      const below = i < shown.length - 1 ? seam(i) : bottom + Math.min(HEAT_FADE, shown.length > 1 ? top - seam(i - 1) : HEAT_FADE)
+      stops.push(`transparent ${Math.max(0, above)}px`, `${r.color} ${top}px`, `${r.color} ${bottom}px`, `transparent ${below}px`)
+    }
     const bg = `linear-gradient(to bottom, ${stops.join(', ')})`
     if (bg !== this.heatBg) {
       this.heatBg = bg

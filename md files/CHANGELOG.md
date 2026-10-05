@@ -26558,3 +26558,31 @@ Brandon wants the empty space between the heatmap cells to blend from one cell's
 - **One strip behind the cells:** each shown cell's colour holds across the cell and blends into the next shown cell's colour through the gap, so the column reads as one continuous heat. Above the first cell and below the last it fades out over 12px. A cell with no GEX is a clear stop, so the strip fades to nothing there.
 - The strip is laid again with the rows on every frame (pan, zoom, autoscale), and only shown cells count (a strike hidden for being too close to another is skipped). Volt / Coil / Reversal / Surge cells keep their solid Path colour fill and the biggest strike keeps its ring.
 - **Files:** `cbedge-v3/src/pages/vela/studies/rail.ts`, `cbedge-v3/src/pages/vela/vela.css` (`.cb-gxr-heat`).
+
+## 2026-10-05 - Vela GEX Rail Heatmap: gradient, round 1 (ideas only)
+
+Brandon likes the gradient between heatmap cells, but it looks too odd. Four ideas are rendered next to today's, all on the same SPY example.
+
+- **G1 · Heat only, levels ringed:** the strip blends only the GEX heat (blue for positive, red for negative, deeper the bigger). A level is a ring in its colour around its cell instead of a fill, so a blend only gets lighter or darker and never makes a new colour.
+- **G2 · Cells + a spine:** cells stay Multi Greek cells with clean gaps. The smooth blend moves to a 4px spine on the chart side of the rail.
+- **G3 · Glow bands:** each cell glows into the gap and fades out halfway. Neighbours never mix, and a dark seam keeps strikes countable.
+- **G4 · Profile:** the heat becomes a smooth curve whose width is the GEX at each strike, blue above the flip and red below. Levels are a line across in their colour.
+- **Files:** `generated/2026-10-05-vela-rail-heat-r1.html` and `.png`. No code changed.
+
+## 2026-10-05 - Vela GEX Rail Heatmap: glow bands (G3)
+
+Brandon picked G3 from the heatmap gradient round.
+
+- **Glow bands replace the blend:** each shown cell's colour holds across its cell and fades out to nothing halfway to the next shown cell. Neighbours never mix (no green between gold and blue), and a dark seam keeps the strikes countable.
+- A Volt / Coil / Reversal / Surge cell keeps its solid Path colour fill and glows in that colour at 42%. A heat cell glows in its own wash.
+- The first and last shown cells fade out over the same half-gap, at most 24px. The strip is laid again with the rows on every frame.
+- **Files:** `cbedge-v3/src/pages/vela/studies/rail.ts`, `cbedge-v3/src/pages/vela/vela.css` (comment).
+
+## 2026-10-05 - Vela legend card: script studies keep their name
+
+Brandon saw a study row in the legend card read "Indicator" on some refreshes or over time.
+
+- **Cause:** Vela's workspace adds a library script without a title, so the script's handle is titled "Indicator" for good. The card fell back to that handle title whenever the pane had no shorttitle for the study, which happens while a script loads or recomputes, or when it never sets a shorttitle.
+- **Fix:** the row's name comes from the pane (the script's own title, then its shorttitle once it has computed), never from the handle's "Indicator" placeholder. The row's tooltip and the value lookup use the same title.
+- **Self-heal:** every 2 seconds the card checks each row's name against the pane and rebuilds the rows when one has changed, so a name that arrives late replaces the fallback.
+- **Files:** `cbedge-v3/src/pages/vela/legend/legendCard.ts`.

@@ -43,6 +43,14 @@
 //     Vela's own settings dialog, so undo, the saved layout and the object tree
 //     all see them. Lower panes (RSI…) keep Vela's own legend in their pane.
 //     Studies are added from the top bar's Indicators: the card has no Add.
+//   · A STUDY'S NAME (2026-10-05, Brandon: "on some refreshes or over time the
+//     indicators lose their name"). A script study's handle is titled
+//     "Indicator": Vela's workspace adds a library script without a title, and
+//     the handle keeps the one it was made with. Its real name is on the pane
+//     (the script's own title, and its shorttitle once it has computed), so the
+//     row reads that, never the handle's placeholder. While a script loads or
+//     recomputes the pane carries no shorttitle yet; the card re-checks every
+//     row's name every couple of seconds and rebuilds when one has moved.
 //
 // One card per chart cell; a cell narrower than FOLD_BELOW starts folded (header
 // and the levels row only). A click on the chart folds it (Brandon: "clicking off
@@ -183,9 +191,34 @@ const fmtDist = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(Mat
 let names: Readonly<Record<string, string>> | null = null
 const namesReady = import('@/pages/vela/symbolNames').then((m) => (names = m.SYMBOL_NAMES))
 
-/** A study's label: its short title, plus its numeric inputs for Vela's classic studies ("EMA 20"). */
-function studyLabel(h: IndicatorHandle, shorttitle: string | undefined): string {
-  const base = shorttitle || h.title.split(' · ')[0] || h.title
+/** Vela's title for a script added without one (the workspace adds library scripts that way). */
+const PLACEHOLDER_TITLE = 'Indicator'
+/** The name part of a title ("CB Walls · the CB Edge walls" → "CB Walls"); '' for Vela's placeholder. */
+const nameOf = (t: string | undefined) => {
+  const n = (t ?? '').split(' · ')[0]!.trim()
+  return n === PLACEHOLDER_TITLE ? '' : n
+}
+/** How the price pane lists a study (chart.panes.list()): its live title and shorttitle. */
+type PaneEntry = { id: string; title: string; shorttitle?: string }
+/** A study row on the card: its parts, its swatch colour, and the name it was built with. */
+interface StudyRow {
+  row: HTMLElement
+  v: HTMLElement
+  sw: HTMLElement
+  color: string
+  ev?: boolean
+  /** The label drawn (studyLabel). */
+  label: string
+  /** The full title (the row's tooltip, and the data window's group name). */
+  full: string
+}
+/** How often paint re-checks the rows' names against the pane. */
+const NAME_CHECK_MS = 2000
+
+/** A study's label: its short title, plus its numeric inputs for Vela's classic studies
+ *  ("EMA 20"). The pane's title before the handle's, which is "Indicator" on a script. */
+function studyLabel(h: IndicatorHandle, info: PaneEntry): string {
+  const base = info.shorttitle || nameOf(info.title) || nameOf(h.title) || info.title || h.title
   if (!h.nativeType || h.nativeType.startsWith('cbedge-') || h.nativeType === 'volume') return base
   try {
     const vals = h.inputValues()
@@ -231,7 +264,9 @@ class Card {
   private lrow!: HTMLElement
   private studies!: HTMLElement
   private levelCog!: HTMLButtonElement
-  private rows = new Map<string, { row: HTMLElement; v: HTMLElement; sw: HTMLElement; color: string; ev?: boolean }>()
+  private rows = new Map<string, StudyRow>()
+  /** When the rows' names were last checked against the pane (paint, every NAME_CHECK_MS). */
+  private namesAt = 0
   /** What the levels row last drew: unchanged, it is not rebuilt (a hovered level keeps its tooltip). */
   private levelSig = ''
 
@@ -423,15 +458,16 @@ class Card {
     const list = price?.indicators ?? []
     const index = resolveSym(this.sym).kind === 'index'
     this.studies.replaceChildren()
-    const keep = new Map<string, { row: HTMLElement; v: HTMLElement; sw: HTMLElement; color: string; ev?: boolean }>()
+    const keep = new Map<string, StudyRow>()
     for (const info of list) {
       const h = handles.get(info.id)
       if (!h) continue
       const row = el(d, 'div', 'cb-lc-row')
       const sw = el(d, 'span', 'cb-lc-sw')
-      const label = studyLabel(h, info.shorttitle)
+      const label = studyLabel(h, info)
+      const full = nameOf(info.title) ? info.title : nameOf(h.title) ? h.title : label
       const nm = el(d, 'span', 'cb-lc-nm', label)
-      nm.title = h.title
+      nm.title = full
       const v = el(d, 'span', 'cb-lc-v')
       const prev = this.rows.get(h.id)
       if (prev?.color) sw.style.background = prev.color
@@ -452,7 +488,7 @@ class Card {
         eye.addEventListener('click', () => h.setVisible(!h.visible))
         row.append(sw, nm, v, cog, eye, this.removeBtn(h, label))
         this.studies.append(row)
-        keep.set(h.id, { row, v, sw, color: '', ev: true })
+        keep.set(h.id, { row, v, sw, color: '', ev: true, label, full })
         continue
       } else {
         if (!h.visible) row.dataset.off = '1'
@@ -463,7 +499,7 @@ class Card {
         row.append(sw, nm, v, cog, eye, this.removeBtn(h, label))
       }
       this.studies.append(row)
-      keep.set(h.id, { row, v, sw, color: prev?.color ?? '' })
+      keep.set(h.id, { row, v, sw, color: prev?.color ?? '', label, full })
     }
     this.rows = keep
     if (!list.length) this.studies.append(el(d, 'div', 'cb-lc-empty', 'No studies on the price: Indicators adds one'))
@@ -526,7 +562,7 @@ class Card {
         r.v.textContent = !h.visible || n == null ? '' : n ? `${n} this week` : 'none this week'
         continue
       }
-      const g = groups.find((x) => x.name === h.title)
+      const g = groups.find((x) => x.name === r.full || x.name === r.label || x.name === h.title)
       const first = g?.rows[0]
       r.v.textContent = h.visible && first ? first.value : ''
       r.v.title = g ? g.rows.map((x) => `${x.label} ${x.value}`).join(' · ') : ''
@@ -536,6 +572,23 @@ class Card {
       }
     }
     this.fit()
+    // a script's name can land after its row was built (it loads, recomputes): re-read it
+    const now = Date.now()
+    if (now - this.namesAt > NAME_CHECK_MS) {
+      this.namesAt = now
+      if (this.namesMoved(handles)) this.schedule(true)
+    }
+  }
+
+  /** Has any row's name changed on the pane since the rows were built? */
+  private namesMoved(handles: ReadonlyMap<string, IndicatorHandle>): boolean {
+    const price = this.chart?.panes.list().find((p) => p.kind === 'price')
+    for (const info of price?.indicators ?? []) {
+      const r = this.rows.get(info.id)
+      const h = handles.get(info.id)
+      if (r && h && r.label !== studyLabel(h, info)) return true
+    }
+    return false
   }
 
   private paintLevels(): void {
