@@ -81,6 +81,14 @@
 // shape in its Path colour. The figures sit right-aligned over it, a level's in
 // its colour. Redrawn with the rows on every frame (pan, zoom).
 //
+// EXPIRIES (2026-10-06, Brandon: "is the gex rail 0dte only or all
+// expirations. the settings should have a selector"): Nearest (0DTE), the
+// default, is the per-minute ladder above (the nearest expiry, the book the
+// Voltick Path's 0DTE walls are ranked on). All expirations sums every listed
+// expiry per strike from the live chain (ladder.ts loadChainLadder), re-read
+// every minute; the header reads MRNA ALL 10:29. In a replay the rail keeps
+// the nearest expiry, the only one recorded minute by minute.
+//
 // Too narrow (the phone, a small grid cell): no rail. The card does the same
 // on a phone.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,9 +98,9 @@ import { buildRail, type RailLevels } from '@/board/gexCandles/GexRail'
 import { voltickMarks, vtFromLadder, vtLevelsAt, type VoltickMarks } from '@/data/voltickLevels'
 import { uiThemeNow } from '@/design/uiTheme'
 import { bool, int, provideLayer, str, studyImpl, type StudyCtx } from './common'
-import { GEX_BASIS, RAIL_SIDES, RAIL_STYLES, RAIL_TYPE } from './index'
+import { GEX_BASIS, RAIL_EXPIRIES, RAIL_SIDES, RAIL_STYLES, RAIL_TYPE } from './index'
 import { cellAlpha, columnStats, fmtGex } from '@/board/multiGreek/mgMath'
-import { columnsUntil, ladderKey, loadRailLadder, sessionDates, type Ladder } from './ladder'
+import { columnsUntil, ladderKey, loadChainLadder, loadRailLadder, sessionDates, type Ladder } from './ladder'
 
 const ROW_H = 15
 /** The header's height (the name and time, then the net GEX): rows above it are dropped. */
@@ -113,6 +121,8 @@ interface RailS {
   heat: boolean
   /** Style: Profile (one smooth GEX shape) instead of bars. */
   profile: boolean
+  /** Expiries: every listed expiry summed (live), not the nearest one. */
+  all: boolean
 }
 
 export interface RailRowOut {
@@ -190,10 +200,13 @@ export const railImpl = studyImpl<RailS, Ladder>({
       width: int(i.width, 96, 72, 180),
       heat: str(i.style, RAIL_STYLES[0]) === RAIL_STYLES[1],
       profile: str(i.style, RAIL_STYLES[0]) === RAIL_STYLES[2],
+      all: str(i.exp, RAIL_EXPIRIES[0]) === RAIL_EXPIRIES[1],
     }
   },
-  dataKey: (c) => `${ladderKey(c)}|${railDay(c).join(',')}`,
-  load: (c, _s, fresh) => loadRailLadder(c, railDay(c)[0], fresh),
+  dataKey: (c, s) => `${ladderKey(c)}|${railDay(c).join(',')}|${s.all && c.ctx.live ? 'all' : 'near'}`,
+  // All expirations is live only: the per-minute recorder keeps the nearest expiry,
+  // so a replay rewinds on that one
+  load: (c, s, fresh) => (s.all && c.ctx.live ? loadChainLadder(c, fresh) : loadRailLadder(c, railDay(c)[0], fresh)),
   refreshMs: 60_000,
   // the replay clock moves the column the rail reads; live, a new minute's column arrives by refresh
   everyTick: true,
@@ -205,6 +218,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
     const col = cols[cols.length - 1]
     if (!col) {
       const day = railDay(c)[0] ?? ''
+      if (lad.allExpiries === 0) return { ...base, head: `${lad.label} ALL`, empty: 'No option chain' }
       return { ...base, head: `${lad.label} GEX`, empty: lad.missing.length ? `No ladder recorded for ${day}` : 'No ladder yet' }
     }
     const shift = lad.shift(col.slotTs)
@@ -256,10 +270,13 @@ export const railImpl = studyImpl<RailS, Ladder>({
     const total = cells.reduce((a, x) => a + (s.metric === 'vol' ? x.netVol : x.net), 0)
     const basisName = s.metric === 'vol' ? 'volume' : s.metric === 'oi' ? 'open interest' : 'OI + volume'
     // short enough for the 96px rail: SPX GEX 15:59, or after a close SPX MON 16:42
-    const head = `${lad.label} ${next ? DOW.format(dayDate(next.expiry)).toUpperCase() : 'GEX'} ${at}`
-    const headTitle = next
-      ? `Next session: the ${DAY_LONG.format(dayDate(next.expiry))} expiry's gamma, recorded after the ${DAY_LONG.format(dayDate(next.after))} close (column ${at} ET)`
-      : `${lad.label} gamma, column ${at} ET`
+    // MRNA ALL 10:29 when every expiry is summed
+    const head = `${lad.label} ${lad.allExpiries ? 'ALL' : next ? DOW.format(dayDate(next.expiry)).toUpperCase() : 'GEX'} ${at}`
+    const headTitle = lad.allExpiries
+      ? `${lad.label} gamma, all ${lad.allExpiries} listed expiries summed per strike (live chain, ${at} ET)`
+      : next
+        ? `Next session: the ${DAY_LONG.format(dayDate(next.expiry))} expiry's gamma, recorded after the ${DAY_LONG.format(dayDate(next.after))} close (column ${at} ET)`
+        : `${lad.label} gamma, nearest expiry, column ${at} ET`
     return {
       width: s.width,
       side: s.side,
@@ -274,7 +291,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
       maxAbs: model.maxAbs,
       order: [...named, ...rest.map((r) => r.strike)],
       empty: rows.length ? '' : 'Empty ladder',
-      key: `${col.slotTs}|${next?.expiry ?? ''}|${s.metric}|${s.tags}|${shift}|${voltick}|${s.heat}|${s.profile}`,
+      key: `${col.slotTs}|${next?.expiry ?? ''}|${lad.allExpiries ?? 0}|${s.metric}|${s.tags}|${shift}|${voltick}|${s.heat}|${s.profile}`,
     }
   },
 })

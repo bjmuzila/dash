@@ -5520,13 +5520,9 @@ async function main() {
     // Balance + 14-rule scoreboard (ES+NQ) from the persisted 5m candles →
     // ib_daily_results, read by the IB Stats tab's Daily Results table.
     require('./ib-results-recorder').startIbResultsRecorder(PORT);
-    // TPO profile recorder: nightly at 16:30 ET, builds the finished RTH session's
-    // TPO time-profile (same period/bin/POC/VA logic as lib/tpo.ts) and snapshots
-    // the ~10:30 ET GEX walls/flip from option_strike_gex_history → tpo_profiles.
-    // Feeds the profile forecaster (analyze/tpo_forecast*.py); its whole job is to
-    // accumulate {realized profile + IB-close state + 10:30 GEX} history so the
-    // GEX-vs-IB test becomes runnable once there's enough overlap.
-    require('./tpo-profiles-recorder').startTpoProfilesRecorder();
+    // TPO profile recorder: REMOVED 2026-10-06 (Brandon: "dump the tpo recorder").
+    // Its boot catch-up scanned all of option_strike_gex_history on every restart
+    // and took the site down. The tpo_profiles table and its rows are left as they are.
     // Momentum Bias grader: grades pending TP/reversal signals (recorded inline
     // by the feed in _flushEsCandles) via follow-through every 5m → the
     // momentum_bias_signals table. Read via /api/momentum-bias.

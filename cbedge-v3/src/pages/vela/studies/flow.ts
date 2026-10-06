@@ -70,6 +70,20 @@ const pending = new Map<string, Promise<Bin[] | null>>()
 const RETRY_PAST_MS = 60_000
 const failedAt = new Map<string, number>()
 
+/**
+ * One request per URL at a time, shared by every chart asking (2026-10-06: the
+ * same Whale Prints read from four charts sat in the database together, 34 s each).
+ */
+const sharedPending = new Map<string, Promise<unknown>>()
+function sharedJson<T>(url: string): Promise<T | null> {
+  let p = sharedPending.get(url) as Promise<T | null> | undefined
+  if (!p) {
+    p = getJson<T>(url).finally(() => sharedPending.delete(url))
+    sharedPending.set(url, p)
+  }
+  return p
+}
+
 function readBins(url: string): Promise<Bin[] | null> {
   let p = pending.get(url)
   if (!p) {
@@ -562,7 +576,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
     const to = etDateKey(Math.min(now, anchor + Math.max(s.days, 5) * DAY_MS))
     const from = etDateKey(anchor - s.days * DAY_MS)
     const [j, basis] = await Promise.all([
-      getJson<{ rows?: Record<string, unknown>[] }>(
+      sharedJson<{ rows?: Record<string, unknown>[] }>(
         `/api/lse/whales?from=${from}&to=${to}&ticker=${encodeURIComponent(flowTicker(c))}&min_premium=${s.minPremium}&sort=time&limit=500`,
       ),
       c.sym.fut ? loadBasis(c.sym.fut) : Promise.resolve(null),

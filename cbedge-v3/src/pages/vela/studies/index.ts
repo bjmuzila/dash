@@ -39,6 +39,8 @@ export const HEAT_SESSIONS = ['1', '2', '3'] as const
 export const RAIL_SIDES = ['Right', 'Left'] as const
 /** The GEX Rail's look: a bar per strike, or Multi Greek's heatmap cell (rail.ts). */
 export const RAIL_STYLES = ['Rail', 'Heatmap', 'Profile'] as const
+/** The GEX Rail's expiries: the nearest one (the per-minute ladder) or every listed one summed (live). */
+export const RAIL_EXPIRIES = ['Nearest (0DTE)', 'All expirations'] as const
 export const JR_SHOW = ['All trades', 'Winners', 'Losers'] as const
 /** Where a whale bubble reaches its biggest — anything larger draws that size too. */
 export const WH_CAP = ['$25M', '$10M', '$50M', '$100M'] as const
@@ -300,7 +302,7 @@ export function registerStudies(): void {
           type: 'string',
           defval: RAIL_STYLES[0],
           options: RAIL_STYLES,
-          tooltip: 'Rail: a bar per strike. Heatmap: Multi Greek’s cell per strike, its GEX written in a cell shaded by size and sign. Profile: one smooth shape whose width is the GEX at each strike, blue above the flip and red below, the levels a line across in their colour. All three read the one nearest expiry, never Multi Greek’s later columns.',
+          tooltip: 'Rail: a bar per strike. Heatmap: Multi Greek’s cell per strike, its GEX written in a cell shaded by size and sign. Profile: one smooth shape whose width is the GEX at each strike, blue above the flip and red below, the levels a line across in their colour. Which expiries: the Expiries setting.',
         },
         {
           key: 'basis',
@@ -309,6 +311,14 @@ export function registerStudies(): void {
           defval: GEX_BASIS[2],
           options: GEX_BASIS,
           tooltip: 'The bars and the level tags both read this book. Vol only (the default) matches the Voltick Path.',
+        },
+        {
+          key: 'exp',
+          title: 'Expiries',
+          type: 'string',
+          defval: RAIL_EXPIRIES[0],
+          options: RAIL_EXPIRIES,
+          tooltip: 'Nearest (0DTE): the nearest expiry, minute by minute — the book the Voltick Path’s 0DTE walls are ranked on. All expirations: every listed expiry summed per strike, from the live chain (in a replay the rail keeps the nearest expiry, the only one recorded per minute).',
         },
         { key: 'tags', title: 'Level tags (Volt / Coil / Reversal / Surge)', type: 'bool', defval: true },
         { key: 'width', title: 'Rail width (px)', type: 'int', defval: 96, min: 72, max: 180, step: 4 },

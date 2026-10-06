@@ -26879,3 +26879,31 @@ Brandon picked W3 from `generated/2026-10-06-vela-whale-pop-r1.html`.
 - `studies/flow.ts`: `whaleBubbles` works out each day's rank by premium and the running lean, and `contextOf` builds the card body.
 - `vela.css`: new `.cb-wh-cx` styles, all tokens. check-theme is clean.
 - Preview: `generated/2026-10-06-vela-whale-w3-preview.png`.
+
+## 2026-10-06 — GEX Rail: Expiries selector
+
+- `studies/index.ts`: a new GEX Rail input, **Expiries**, set to `Nearest (0DTE)` (the default) or `All expirations` (`RAIL_EXPIRIES`). The Style tooltip now points to it.
+- `studies/ladder.ts`: new `loadChainLadder(c, fresh)`.
+  - It sums every listed, unexpired expiry per strike from the live chain (`/api/chains`, range=all), both OI + Vol and Vol only, using mgMath `strikeGex`.
+  - It keeps the top 40 strikes on each book and returns one column for the current minute. ES / NQ read SPX / NDX moved by the basis.
+  - `Ladder.allExpiries` holds the expiry count.
+- `studies/rail.ts`: `All expirations` reads that ladder while live.
+  - In a replay the rail keeps the nearest expiry, because the per-minute recorder keeps only that one.
+  - The header reads `MRNA ALL 10:29`, and its tooltip names how many expiries were summed.
+  - Nearest is unchanged. It is the same book the Voltick Path's 0DTE walls are ranked on.
+
+## 2026-10-06 — Outage: the TPO recorder's boot catch-up was scanning the whole GEX ladder table
+
+**What happened:** the site returned nginx 500s and pages loaded very slowly. `pg_stat_activity` showed the database waiting on disk (IO). At the top were two copies of `SELECT DISTINCT timestamp FROM option_strike_gex_history WHERE date = $1`, from `server-v2/tpo-profiles-recorder.js` `gexSnapshot()`.
+- That query has no `symbol`, and every `option_strike_gex_history` index starts with `symbol`, so it scanned the whole multi-symbol table.
+- The recorder's boot catch-up runs it, plus a second unscoped snapshot read, for each of the last 10 trading days. That happens 90 seconds after every restart, so each deploy tied up the disk for minutes and every other query waited behind it.
+- It also summed all symbols and expiries into one ladder.
+
+**Fixes:**
+- `server-v2/tpo-profiles-recorder.js`: `gexSnapshot` now reads `$SPX` only, by an epoch range on `idx_osgh_symbol_ts` (new DST-correct `etEpochMs`). It takes the first snapshot at or after 10:30 ET, or the session's last one, and reads only that timestamp's front-expiry strikes. The boot catch-up now skips days that already have `gex_json`.
+- `cbedge-v3/src/pages/vela/studies/flow.ts`: Whale Prints' `/api/lse/whales` read is shared per URL across charts (`sharedJson`). Four identical 34s copies were seen running at once.
+
+## 2026-10-06 — TPO profile recorder removed
+
+- `server-v2/server-with-proxy.js`: `startTpoProfilesRecorder()` is no longer called at boot. That stops the nightly 16:30 ET pass and the restart catch-up that scanned `option_strike_gex_history` and caused today's outage. The `tpo_profiles` table and its rows are untouched.
+- To delete by hand (this session could not delete files on the laptop): `server-v2/tpo-profiles-recorder.js` and the one-shot `server-v2/backfill-tpo-profiles.js`, its only other user.

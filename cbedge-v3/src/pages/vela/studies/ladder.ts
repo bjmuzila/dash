@@ -38,6 +38,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { query } from '@/data/api'
+import { chainGexUrl } from '@/board/chainGex'
+import { parseChain, strikeGex, todayEt } from '@/board/multiGreek/mgMath'
 import { gexHistoryDayUrl, parseGexHistory, parseGexHistoryMeta, type GexColumn } from '@/board/gexCandles/gexHistory'
 import { RTH_CLOSE_MIN } from '@/board/gexCandles/candles'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
@@ -59,6 +61,8 @@ export interface Ladder {
   missing: string[]
   /** loadRailLadder after a close: the next session's expiry these columns are under. */
   next?: { expiry: string; after: string }
+  /** loadChainLadder: every listed expiry summed (how many), not the nearest one. */
+  allExpiries?: number
 }
 
 /** The cash symbol whose ladder a chart draws. */
@@ -230,4 +234,49 @@ export function columnsUntil(columns: GexColumn[], t: number): GexColumn[] {
   if (!Number.isFinite(t)) return columns
   const at = columnAt(columns, t)
   return at ? columns.slice(0, columns.indexOf(at) + 1) : []
+}
+
+/** Strikes kept from the summed chain: the biggest this many on each book (OI + Vol, Vol). */
+const ALL_TOP = 40
+
+/**
+ * ALL EXPIRATIONS, live (2026-10-06, Brandon: the GEX Rail "should have a selector"
+ * for 0DTE or all expirations). The per-minute recorder keeps the NEAREST expiry
+ * only, so every listed expiry summed per strike comes from the live chain
+ * (/api/chains, range=all — the GEX Profile's route): OI + Vol and Vol only, the
+ * same per-strike arithmetic as everywhere (mgMath strikeGex). One column, now.
+ * Expiries already past are left out. ES / NQ read SPX / NDX moved by the basis,
+ * as loadLadder does.
+ */
+export async function loadChainLadder(c: StudyCtx, fresh: boolean): Promise<Ladder> {
+  const label = ladderKey(c)
+  const [json, basis] = await Promise.all([
+    query<unknown>(chainGexUrl(label), { staleMs: fresh ? 25_000 : 60_000 }).catch(() => null),
+    c.sym.fut ? loadBasis(c.sym.fut) : Promise.resolve(null as BasisModel | null),
+  ])
+  const fut = !!c.sym.fut
+  const shift = (ts: number): number | null => {
+    if (!fut) return 0
+    if (!basis) return null
+    const b = basis.days.get(etDateKey(ts)) ?? basis.basis
+    return isPlausibleBasis(b, basis.max) ? b : null
+  }
+  const parsed = json ? parseChain(json) : null
+  const spot = parsed?.underlying ?? 0
+  const today = todayEt()
+  const exps = (parsed?.expiries ?? []).filter((e) => e.expiration.slice(0, 10) >= today)
+  if (!exps.length || !(spot > 0)) return { columns: [], shift, label, missing: [today], allExpiries: 0 }
+  const net = new Map<number, number>()
+  const vol = new Map<number, number>()
+  for (const e of exps) {
+    for (const [k, row] of e.byStrike) {
+      net.set(k, (net.get(k) ?? 0) + strikeGex(row, spot, 'oivol'))
+      vol.set(k, (vol.get(k) ?? 0) + strikeGex(row, spot, 'vol'))
+    }
+  }
+  const top = (m: Map<number, number>) => [...m].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, ALL_TOP).map(([k]) => k)
+  const keep = new Set([...top(net), ...top(vol)])
+  const cells = [...keep].sort((a, b) => a - b).map((strike) => ({ strike, net: net.get(strike) ?? 0, netVol: vol.get(strike) ?? 0 }))
+  const slotTs = Math.floor(Date.now() / 60_000) * 60_000
+  return { columns: [{ slotTs, cells, spot }], shift, label, missing: [], allExpiries: exps.length }
 }

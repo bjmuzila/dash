@@ -191,23 +191,61 @@ function buildTpoSession(bars) {
 }
 
 // ── 10:30 ET GEX walls/flip from option_strike_gex_history ────────────────────
-async function gexSnapshot(p, date) {
-  const tsRows = await p.query(
-    `SELECT DISTINCT timestamp FROM option_strike_gex_history WHERE date = $1 ORDER BY timestamp ASC`,
-    [date]
-  );
-  if (!tsRows.rows.length) return null;
-  // first snapshot at/after 10:30 ET; else the last one of the day
-  let pick = null;
-  for (const r of tsRows.rows) {
-    if (etMinOfDay(r.timestamp) >= IB_CLOSE_MIN) { pick = r.timestamp; break; }
-  }
-  if (pick == null) pick = tsRows.rows[tsRows.rows.length - 1].timestamp;
+//
+// SCOPED TO $SPX BY TIME RANGE (2026-10-06). This used to read
+//   SELECT DISTINCT timestamp FROM option_strike_gex_history WHERE date = $1
+// with no symbol. The table's indexes all lead with `symbol`, so that was a
+// sequential scan of the whole multi-symbol table, and the boot catch-up ran it
+// (and the snapshot read after it) for CATCHUP_DAYS days on EVERY restart. Each
+// deploy saturated the disk for minutes: every other query on the box (walls,
+// whales, the page itself) waited behind it and nginx answered 500. It also
+// summed every symbol's (and every expiry's) strikes into one ladder.
+//
+// Now: the first $SPX snapshot at or after 10:30 ET (else the session's last)
+// is found on idx_osgh_symbol_ts (symbol, timestamp) as an epoch range, and
+// only that timestamp's front-expiry strikes are read.
+const GEX_SYMBOL = '$SPX';
 
-  const snap = await p.query(
-    `SELECT strike, spot, net_gex FROM option_strike_gex_history WHERE date = $1 AND timestamp = $2`,
-    [date, pick]
+/** Epoch ms of `mins` minutes after midnight ET on `date` (YYYY-MM-DD), DST-correct. */
+function etEpochMs(date, mins) {
+  const [y, m, d] = date.split('-').map(Number);
+  const guess = Date.UTC(y, m - 1, d, Math.floor(mins / 60), mins % 60);
+  let diff = mins - etMinOfDay(guess);
+  if (diff < -720) diff += 1440;
+  if (diff > 720) diff -= 1440;
+  return guess + diff * 60_000;
+}
+
+async function gexSnapshot(p, date) {
+  const open = etEpochMs(date, RTH_OPEN_MIN);
+  const ib = etEpochMs(date, IB_CLOSE_MIN);
+  const close = etEpochMs(date, RTH_CLOSE_MIN);
+  let r = await p.query(
+    `SELECT timestamp FROM option_strike_gex_history
+      WHERE symbol = $1 AND timestamp >= $2 AND timestamp < $3
+      ORDER BY timestamp ASC LIMIT 1`,
+    [GEX_SYMBOL, ib, close]
   );
+  if (!r.rows.length) {
+    r = await p.query(
+      `SELECT timestamp FROM option_strike_gex_history
+        WHERE symbol = $1 AND timestamp >= $2 AND timestamp < $3
+        ORDER BY timestamp DESC LIMIT 1`,
+      [GEX_SYMBOL, open, ib]
+    );
+  }
+  if (!r.rows.length) return null;
+  const pick = r.rows[0].timestamp;
+
+  const all = await p.query(
+    `SELECT strike, spot, net_gex, expiry::text AS expiry FROM option_strike_gex_history
+      WHERE symbol = $1 AND timestamp = $2`,
+    [GEX_SYMBOL, pick]
+  );
+  // the session's own (front) expiry only: never a blend of ladders
+  const exps = [...new Set(all.rows.map((x) => String(x.expiry).slice(0, 10)))].filter((e) => e >= date).sort();
+  const front = exps[0];
+  const snap = { rows: front ? all.rows.filter((x) => String(x.expiry).slice(0, 10) === front) : [] };
   if (!snap.rows.length) return null;
   const spot = Number(snap.rows.find((r) => r.spot != null)?.spot ?? NaN);
   const byStrike = new Map();
@@ -298,7 +336,19 @@ function startTpoProfilesRecorder() {
       const { hour, minute } = etParts();
       if (hour * 60 + minute < WINDOW_OPEN_MINS) d = prevTradingDay(d);  // today counts only after the session
       const filled = [];
+      // days already holding a GEX snapshot are done: re-recording them on every
+      // restart only re-read the ladder table for nothing
+      const p = getPool();
+      const have = new Set();
+      if (p) {
+        try {
+          await ensureTable(p);
+          const { rows } = await p.query(`SELECT date FROM tpo_profiles WHERE symbol = $1 AND gex_json IS NOT NULL`, [SYMBOL]);
+          for (const r of rows) have.add(String(r.date).slice(0, 10));
+        } catch { /* re-record as before */ }
+      }
       for (let i = 0; i < CATCHUP_DAYS && d; i++) {
+        if (have.has(d)) { d = prevTradingDay(d); continue; }
         try { if (await recordDate(d)) filled.push(d); }
         catch (e) { console.warn(`[tpo-profiles/catchup] ${d} — ${e.message}`); }
         d = prevTradingDay(d);
