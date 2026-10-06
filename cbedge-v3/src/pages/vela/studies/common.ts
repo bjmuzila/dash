@@ -131,6 +131,8 @@ class Study implements NativeIndicator {
   private loaded = false
   private loadedKey = ''
   private epoch = 0
+  /** Loads still out (the refresh timer waits for them). */
+  private inflight = 0
   private timer: ReturnType<typeof setInterval> | null = null
   private paintTimer: ReturnType<typeof setTimeout> | null = null
   private lastKey = ''
@@ -246,11 +248,14 @@ class Study implements NativeIndicator {
     // data read for other settings is not this data: a failed read for new settings paints empty
     if (key !== this.loadedKey) this.loaded = false
     if (!this.loaded) c.ctx.setStatus('loading')
-        let data: any = null
+    let data: any = null
+    this.inflight++
     try {
       data = await this.spec.load(c, this.spec.settings(this.inputs), fresh)
     } catch {
       data = null
+    } finally {
+      this.inflight--
     }
     if (my !== this.epoch || this.stopped || this.ctx !== c.ctx) return
     // a failed re-read keeps what is on the chart; a failed first read paints empty
@@ -297,7 +302,10 @@ class Study implements NativeIndicator {
     const ms = this.spec.refreshMs
     if (!ms || !this.ctx?.live || !this.spec.load) return
     this.timer = setInterval(() => {
-      if (document.hidden) return
+      // A re-read still out is not superseded by the next one (2026-10-06): when a
+      // read took longer than `refreshMs` every answer was dropped as stale and the
+      // study never painted, while the requests piled up on the server
+      if (document.hidden || this.inflight > 0) return
       void this.load(true)
     }, ms)
   }

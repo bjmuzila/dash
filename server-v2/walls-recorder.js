@@ -106,6 +106,7 @@ const RESOLVE_SLOTS = 4;
 const LEVEL_TYPES = ['call_wall', 'put_wall', 'cb'];
 
 const V = require('./scanner-variants');
+const { findCallWall, findPutWall } = require('./computation/gex-calculator');
 
 /**
  * The aggregate leg is written on its own sub-cadence by scanner-recorder (it
@@ -383,9 +384,157 @@ async function lastLevels(p, date, variant) {
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 
+// ── Volume walls: the per-minute ladder as a second source ───────────────────
+//
+// VOLUME WALLS ALWAYS RECORD (2026-10-06, Brandon: "volume walls should always
+// record"). A 'vol' variant row comes from the scanner sweep, and it can be
+// missing or empty for a symbol: the sweep's volume read failed for that root
+// (an OI-only sweep ranks every strike at 0 on the 'vol' basis, so all three
+// levels come back null), early in the day before anything has traded, or the
+// sweep simply has not reached the root inside the sample window. QQQ went a
+// whole session that way, and Vela's Path fell back to OI + Vol for it.
+//
+// The roots that also have a per-minute ladder (option_strike_gex_history:
+// $SPX, SPY, QQQ, written every minute by the live feed / ETF recorder) can be
+// read a second way. For each such root, a level the scanner row is missing is
+// filled from the latest ladder column on the same reading the scanner uses
+// (levelsFor in scanner-recorder.js): CORE = biggest |vol GEX|, call wall =
+// biggest +vol GEX above spot, put wall = most -vol GEX below spot, both walls
+// excluding the CORE. 0DTE = the nearest expiry on the ladder; Non-0DTE = the
+// next AGG_LADDER_EXPIRIES expiries after it, summed per strike.
+// A level the scanner row already has is never replaced.
+
+/** Scanner symbol → ladder symbol. SPX is stored as '$SPX' on the ladder. */
+const LADDER_SYMBOL = { SPX: '$SPX', SPY: 'SPY', QQQ: 'QQQ' };
+const AGG_LADDER_EXPIRIES = 4;
+
+const isoDay = (v) => {
+  const t = String(v ?? '');
+  return /^\d{4}-\d{2}-\d{2}/.test(t) ? t.slice(0, 10) : null;
+};
+
+/**
+ * Levels per scanner symbol from the per-minute ladder, for one 'vol' variant.
+ * Map<symbol, row-shaped levels>. Empty on any failure: this is a fallback.
+ */
+async function ladderLevels(p, date, variant) {
+  const out = new Map();
+  const hist = Object.values(LADDER_SYMBOL);
+  const since = Date.now() - sampleAgeMins(variant) * 60_000;
+  let rows;
+  try {
+    ({ rows } = await p.query(
+      `WITH latest AS (
+         SELECT symbol, expiry, MAX(timestamp) AS ts
+           FROM option_strike_gex_history
+          WHERE symbol = ANY($1::text[]) AND timestamp >= $2
+          GROUP BY symbol, expiry)
+       SELECT h.symbol, h.expiry::text AS expiry, h.strike, h.net_vol_gex, h.spot, h.timestamp
+         FROM option_strike_gex_history h
+         JOIN latest l ON h.symbol = l.symbol AND h.expiry = l.expiry AND h.timestamp = l.ts`,
+      [hist, since],
+    ));
+  } catch (e) {
+    console.warn('[walls] ladder fallback read:', e.message);
+    return out;
+  }
+  const bySym = new Map();
+  for (const r of rows) {
+    const e = isoDay(r.expiry);
+    if (!e || e < date) continue;
+    let m = bySym.get(r.symbol);
+    if (!m) bySym.set(r.symbol, (m = new Map()));
+    let col = m.get(e);
+    if (!col) m.set(e, (col = []));
+    col.push(r);
+  }
+  for (const [sym, histSym] of Object.entries(LADDER_SYMBOL)) {
+    const m = bySym.get(histSym);
+    if (!m || !m.size) continue;
+    const exps = [...m.keys()].sort();
+    const pick = variant.scope === 'agg' ? exps.slice(1, 1 + AGG_LADDER_EXPIRIES) : exps.slice(0, 1);
+    if (!pick.length) continue;
+    const byStrike = new Map();
+    let spot = 0;
+    let ts = 0;
+    for (const e of pick) {
+      for (const r of m.get(e)) {
+        const k = Number(r.strike);
+        const v = Number(r.net_vol_gex);
+        if (!(k > 0) || !Number.isFinite(v)) continue;
+        byStrike.set(k, (byStrike.get(k) ?? 0) + v);
+        if (Number(r.spot) > 0 && Number(r.timestamp) >= ts) {
+          ts = Number(r.timestamp);
+          spot = Number(r.spot);
+        }
+      }
+    }
+    if (!(spot > 0) || byStrike.size < 5) continue;
+    const ladder = [...byStrike].map(([strike, v]) => ({ strike, netVolGEX: v, netGEX: 0 }));
+    let cb = null;
+    let best = 0;
+    for (const r of ladder) {
+      if (Math.abs(r.netVolGEX) > best) {
+        best = Math.abs(r.netVolGEX);
+        cb = r.strike;
+      }
+    }
+    const callWall = findCallWall(ladder, spot, { exclude: cb, basis: 'vol' });
+    const putWall = findPutWall(ladder, spot, { exclude: cb, basis: 'vol' });
+    const at = (k) => (k == null ? null : byStrike.get(k) ?? null);
+    out.set(sym, {
+      symbol: sym,
+      ts: new Date(ts),
+      spot,
+      call_wall: callWall,
+      put_wall: putWall,
+      cb,
+      total_net_gex: ladder.reduce((a, r) => a + r.netVolGEX, 0),
+      call_wall_gex: at(callWall),
+      put_wall_gex: at(putWall),
+      cb_gex: at(cb),
+    });
+  }
+  return out;
+}
+
+/**
+ * A 'vol' variant's samples with every level the scanner left empty filled from
+ * the ladder (and a root the scanner missed entirely added from it). Returns
+ * { samples, filled } — `filled` counts the levels the ladder supplied.
+ */
+async function withLadderFill(p, date, variant, samples) {
+  if (variant.basis !== 'vol') return { samples, filled: 0 };
+  const lad = await ladderLevels(p, date, variant);
+  if (!lad.size) return { samples, filled: 0 };
+  const bySym = new Map(samples.map((r) => [r.symbol, r]));
+  let filled = 0;
+  for (const [sym, l] of lad) {
+    const row = bySym.get(sym);
+    if (!row) {
+      bySym.set(sym, l);
+      filled += ['call_wall', 'put_wall', 'cb'].filter((k) => l[k] != null).length;
+      continue;
+    }
+    const merged = { ...row };
+    if (!(num(merged.spot) > 0)) merged.spot = l.spot;
+    for (const k of ['cb', 'call_wall', 'put_wall']) {
+      if (num(merged[k]) > 0 || l[k] == null) continue;
+      // never two levels on one strike: a ladder pick the row already holds is skipped
+      const taken = ['cb', 'call_wall', 'put_wall'].some((o) => o !== k && num(merged[o]) === Number(l[k]));
+      if (taken) continue;
+      merged[k] = l[k];
+      merged[`${k}_gex`] = l[`${k}_gex`];
+      filled++;
+    }
+    bySym.set(sym, merged);
+  }
+  return { samples: [...bySym.values()], filled };
+}
+
 // ── Tick: write level changes, open hit events ───────────────────────────────
 
-async function runSlot({ slot = null, force = false } = {}) {
+async function runSlot({ slot = null, force = false, skip = null } = {}) {
   const p = getPool();
   if (!p || !(await ensureSchema())) return { skipped: 'no DB' };
 
@@ -403,24 +552,34 @@ async function runSlot({ slot = null, force = false } = {}) {
     ? V.VARIANTS
     : V.VARIANTS.filter((v) => V.isDefault(v));
 
+  // `skip`: variants the scheduler already has complete for this slot (a retry
+  // inside the grace window re-runs only the ones that are not).
   let head = null;
   const extras = [];
   for (const variant of variants) {
+    if (skip && skip.has(variant.key)) {
+      if (V.isDefault(variant)) head = { ok: true, date, slot: s, at: slotLabel(s), variant: variant.key, complete: true, already: true };
+      continue;
+    }
     const res = await runSlotVariant(p, date, s, now, variant); // eslint-disable-line no-await-in-loop
     if (V.isDefault(variant)) head = res;
     else extras.push({ variant: variant.key, ...res });
   }
   if (!head) return { skipped: 'no default variant', slot: s, date };
-  return { ...head, variants: extras };
+  return { ...head, variants: extras, keys: variants.map((v) => v.key) };
 }
 
 /** One variant's pass over the universe for one slot. */
 async function runSlotVariant(p, date, s, now, variant) {
-  const [samples, last] = await Promise.all([
+  const [scanned, last] = await Promise.all([
     sampleUniverse(p, date, variant),
     lastLevels(p, date, variant),
   ]);
+  // Volume walls: any level the scanner row left empty comes from the ladder
+  const { samples, filled } = await withLadderFill(p, date, variant, scanned);
   if (!samples.length) return { skipped: 'no scanner samples', slot: s, date, variant: variant.key };
+  // A root with no level at all on this reading: worth another pass inside the grace window
+  const empty = samples.filter((r) => !['call_wall', 'put_wall', 'cb'].some((k) => num(r[k]) > 0)).length;
 
   let written = 0;
   let hits = 0;
@@ -527,10 +686,12 @@ async function runSlotVariant(p, date, s, now, variant) {
     console.warn('[walls] resolve error:', e.message); return 0;
   });
 
-  console.log(`[walls] slot ${s} (${slotLabel(s)}) [${variant.key}] — ${samples.length} tickers · ${written} level rows · ${hits} new hits · ${approaches} approaches · ${resolved} resolved`);
+  console.log(`[walls] slot ${s} (${slotLabel(s)}) [${variant.key}] — ${samples.length} tickers · ${written} level rows · ${hits} new hits · ${approaches} approaches · ${resolved} resolved${filled ? ` · ${filled} from ladder` : ''}${empty ? ` · ${empty} empty` : ''}`);
   return {
     ok: true, date, slot: s, at: slotLabel(s), variant: variant.key,
-    tickers: samples.length, written, hits, approaches, resolved,
+    tickers: samples.length, written, hits, approaches, resolved, filled, empty,
+    // the default (OI + Vol) has always been complete on any capture
+    complete: V.isDefault(variant) || empty === 0,
   };
 }
 
@@ -999,7 +1160,17 @@ async function getWalls({ date, symbol, scope, basis } = {}) {
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
 let _timer = null;
-let _lastKey = null;
+/**
+ * The slot in hand and the variants already complete for it. EVERY variant has
+ * to land, not just the default: the old single `_lastKey` was set as soon as
+ * the default variant captured, so a 'vol' variant that skipped (no sample yet,
+ * an empty row) was never retried and that slot's volume walls were lost.
+ * Each variant is retried every CHECK_MS until it is complete or the grace
+ * window closes; re-running one is safe (writes and events are de-duplicated).
+ */
+let _slot = { key: null, done: new Set(), complete: false, triedAt: 0 };
+/** A retry waits for the next scanner sweep (1 min) — sooner would read the same rows. */
+const RETRY_MS = 55_000;
 let _inFlight = false;
 
 function startWallsRecorder() {
@@ -1013,16 +1184,26 @@ function startWallsRecorder() {
       const s = dueSlot(now);
       if (s == null) return;
       const key = `${etDateStr(now)}:${s}`;
-      if (_lastKey === key) return; // this slot is already done
+      if (_slot.key !== key) _slot = { key, done: new Set(), complete: false, triedAt: 0 };
+      if (_slot.complete) return; // every variant of this slot is in
+      if (_slot.done.size && Date.now() - _slot.triedAt < RETRY_MS) return;
+      _slot.triedAt = Date.now();
       _inFlight = true;
-      const res = await runSlot({ slot: s });
-      // Burn the slot ONLY on a real capture. A skip — no scanner samples yet,
-      // DB down — has to stay retryable for the rest of SLOT_GRACE_MINS, which
-      // is the entire reason that grace window exists. Marking the key up front
-      // meant one early failure (guaranteed at 09:29, when scanner_snapshots is
-      // still empty for the day) permanently lost the slot.
-      if (res && res.ok) _lastKey = key;
-      else console.warn(`[walls] slot ${s} (${slotLabel(s)}) not captured: ${res?.skipped || 'unknown'} — will retry within grace`);
+      const res = await runSlot({ slot: s, skip: _slot.done });
+      // Mark a variant done ONLY on a real, complete capture. A skip — no
+      // scanner samples yet, DB down, a root with no level yet — has to stay
+      // retryable for the rest of SLOT_GRACE_MINS, which is the entire reason
+      // that grace window exists.
+      if (res && res.ok) {
+        if (res.complete) _slot.done.add(res.variant);
+        for (const v of res.variants || []) if (v.ok && v.complete) _slot.done.add(v.variant);
+        const keys = res.keys || [];
+        _slot.complete = keys.length > 0 && keys.every((k) => _slot.done.has(k));
+        if (!_slot.complete) {
+          const open = keys.filter((k) => !_slot.done.has(k));
+          console.warn(`[walls] slot ${s} (${slotLabel(s)}) still open for ${open.join(', ')} — will retry within grace`);
+        }
+      } else console.warn(`[walls] slot ${s} (${slotLabel(s)}) not captured: ${res?.skipped || 'unknown'} — will retry within grace`);
     } catch (e) {
       console.warn('[walls] tick error:', e.message);
     } finally {

@@ -26843,3 +26843,15 @@ Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the lef
   Pan, zoom, drawings and layout stay put, nothing blanks, and repeat clicks within 1.5s are ignored. Toasts say "Refreshing…" then "Charts refreshed". Shift+click reloads the page. The candle and study steps call two Vela-internal methods only when they exist, so a Vela upgrade degrades to socket + data refresh rather than an error.
 - `cbedge-v3/src/pages/Vela.tsx`: registers it with the other top-bar actions, adds `REFRESH_ACTION_ID` to the desktop top bar's right side after `'screenshot'`, and binds / unbinds it with the workspace.
 - `tsc` strict is clean on the new file against `@luxalgo/vela` 0.8.2.
+
+## 2026-10-06 — Volume walls always record; Path GEX switch back; Net Premium pile-up fix
+
+- **Voltick Path / Path Ribbon — GEX switch restored** (`vtPath/vtPathIndicator.ts`): `GEX` input is back (`OI + Vol` / `Vol only`), default **Vol only**. The session-ladder fallback for the volume book stays.
+- **Volume walls always record** (`server-v2/walls-recorder.js`):
+  - Every variant has to land for a slot, not just the default. The old `_lastKey` was burned as soon as `0dte|oivol` captured, so a `vol` variant that skipped was never retried. Now each variant is tracked separately and retried about once a minute until the grace window closes.
+  - Ladder fill: on the `vol` variants, a level the scanner row is missing (no row, an OI-only sweep, or a null level) is filled from the latest `option_strike_gex_history` column for SPX / SPY / QQQ. 0DTE uses the nearest expiry; Non-0DTE sums the next 4. It uses the same picks as `levelsFor`: CORE = max |vol GEX|, and walls exclude the CORE. A level the scanner already has is never replaced.
+- **Net Premium never painting** (`studies/common.ts`, `studies/flow.ts`):
+  - The study refresh timer no longer starts a new read while the last one is still out. Before, every 15 s read superseded a slow one, so nothing ever painted, and the requests stacked up on the server.
+  - Net Premium reads are shared per URL across charts and refreshes.
+  - A failed past session waits 60 s before it is asked for again.
+- **Server: one Net Premium query per key at a time** (`server-v2/server-with-proxy.js`, approved proxy change): `getNetPremBins` now shares a single in-flight PostgreSQL query between identical `/proxy/flow-netprem` requests instead of starting one per request. The uncached body is now `getNetPremBinsOnce`.

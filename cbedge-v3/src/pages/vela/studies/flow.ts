@@ -60,6 +60,33 @@ const MIN_PREM_V = [1_000, 25_000, 100_000, 500_000]
 
 /** Finished sessions never change: one read each per page. */
 const pastBins = new Map<string, Bin[]>()
+/**
+ * Reads still out, by URL, shared by every chart and every re-read (2026-10-06):
+ * three charts × 7 sessions each, re-asked every 15 s while the server was slow,
+ * stacked dozens of the same full-session query and the pane never filled.
+ */
+const pending = new Map<string, Promise<Bin[] | null>>()
+/** A past session whose read failed is not asked again for this long. */
+const RETRY_PAST_MS = 60_000
+const failedAt = new Map<string, number>()
+
+function readBins(url: string): Promise<Bin[] | null> {
+  let p = pending.get(url)
+  if (!p) {
+    p = getJson<{ bins?: { sec?: unknown; callNet?: unknown; putNet?: unknown }[] }>(url)
+      .then((j) =>
+        j
+          ? (j.bins ?? [])
+              .map((b) => ({ sec: Number(b.sec), callNet: Number(b.callNet) || 0, putNet: Number(b.putNet) || 0 }))
+              .filter((b) => Number.isFinite(b.sec))
+              .sort((a, b) => a.sec - b.sec)
+          : null,
+      )
+      .finally(() => pending.delete(url))
+    pending.set(url, p)
+  }
+  return p
+}
 
 export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
   settings: (i) => ({
@@ -80,18 +107,20 @@ export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
     await Promise.all(
       dates.map(async (d) => {
         const url = `/proxy/flow-netprem?underlying=${encodeURIComponent(t)}&bin=60&date=${d}&minPremium=${s.minPremium}${s.otm ? '&otmOnly=1' : ''}`
-        const cached = d !== today ? pastBins.get(url) : undefined
+        const past = d !== today
+        const cached = past ? pastBins.get(url) : undefined
         if (cached) {
           out.set(d, cached)
           return
         }
-        const j = await getJson<{ bins?: { sec?: unknown; callNet?: unknown; putNet?: unknown }[] }>(url)
-        const bins = (j?.bins ?? [])
-          .map((b) => ({ sec: Number(b.sec), callNet: Number(b.callNet) || 0, putNet: Number(b.putNet) || 0 }))
-          .filter((b) => Number.isFinite(b.sec))
-          .sort((a, b) => a.sec - b.sec)
+        if (past && Date.now() - (failedAt.get(url) ?? 0) < RETRY_PAST_MS) return
+        const bins = await readBins(url)
+        if (!bins) {
+          if (past) failedAt.set(url, Date.now())
+          return
+        }
         out.set(d, bins)
-        if (d !== today && j) pastBins.set(url, bins)
+        if (past) pastBins.set(url, bins)
       }),
     )
     return out

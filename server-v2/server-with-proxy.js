@@ -1775,7 +1775,26 @@ async function queryNetPremArchive(pool, f) {
   }
 }
 
-async function getNetPremBins(f, binMs) {
+// ONE QUERY PER KEY AT A TIME (2026-10-06). Identical /proxy/flow-netprem
+// requests that arrive while that key's PostgreSQL GROUP BY is still running
+// wait on the same promise instead of each starting their own. With three Vela
+// charts asking for 7 sessions each, every 15 s, a slow session read used to
+// stack dozens of copies of the same full-session query on the 2-connection
+// pool, and every other route behind that pool (walls-range, vol-flow) stalled
+// behind them.
+const _netPremInFlight = new Map(); // key -> Promise<bins>
+
+function getNetPremBins(f, binMs) {
+  const key = flowFilterCacheKey(f, binMs);
+  let p = _netPremInFlight.get(key);
+  if (!p) {
+    p = getNetPremBinsOnce(f, binMs).finally(() => _netPremInFlight.delete(key));
+    _netPremInFlight.set(key, p);
+  }
+  return p;
+}
+
+async function getNetPremBinsOnce(f, binMs) {
   const key = flowFilterCacheKey(f, binMs);
   const now = Date.now();
   const hit = _netPremCache.get(key);
