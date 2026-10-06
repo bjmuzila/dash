@@ -71,6 +71,15 @@
 // column, the nearest expiry, the same column the rail reads; never Multi
 // Greek's later expiries or its ex-0DTE total. Same rows, same placement.
 //
+// STYLE: PROFILE (2026-10-06, Brandon picked G4 of generated/2026-10-05-vela-
+// rail-heat-r1.html as a third style). The heat becomes a shape: one smooth
+// curve (Catmull-Rom through every strike on screen) whose width is the strike's
+// |GEX| against the biggest, growing away from the chart from the cells' edge, in
+// the GEX colours by sign (positive above the flip, negative below) and fading
+// through the dark where the sign flips. A tagged level is a 2px line across the
+// shape in its Path colour. The figures sit right-aligned over it, a level's in
+// its colour. Redrawn with the rows on every frame (pan, zoom).
+//
 // Too narrow (the phone, a small grid cell): no rail. The card does the same
 // on a phone.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,6 +110,8 @@ interface RailS {
   width: number
   /** Style: Heatmap (Multi Greek's cell) instead of bars. */
   heat: boolean
+  /** Style: Profile (one smooth GEX shape) instead of bars. */
+  profile: boolean
 }
 
 export interface RailRowOut {
@@ -125,6 +136,8 @@ export interface RailPayload {
   side: Side
   /** Heatmap cells instead of bars. */
   heat: boolean
+  /** Profile: one smooth GEX shape instead of bars. */
+  profile: boolean
   head: string
   /** The header's tooltip. */
   headTitle: string
@@ -175,6 +188,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
       tags: bool(i.tags, true),
       width: int(i.width, 96, 72, 180),
       heat: str(i.style, RAIL_STYLES[0]) === RAIL_STYLES[1],
+      profile: str(i.style, RAIL_STYLES[0]) === RAIL_STYLES[2],
     }
   },
   dataKey: (c) => `${ladderKey(c)}|${railDay(c).join(',')}`,
@@ -184,7 +198,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
   everyTick: true,
   render: () => ({}),
   layer: (c, s, lad): RailPayload => {
-    const base = { width: s.width, side: s.side, heat: s.heat, headTitle: '', net: '', netSign: '' as const, netTitle: '', rows: [], maxAbs: 0, order: [], key: '' }
+    const base = { width: s.width, side: s.side, heat: s.heat, profile: s.profile, headTitle: '', net: '', netSign: '' as const, netTitle: '', rows: [], maxAbs: 0, order: [], key: '' }
     if (!lad) return { ...base, head: '', empty: 'Loading the ladder…' }
     const cols = columnsUntil(lad.columns, c.until)
     const col = cols[cols.length - 1]
@@ -244,6 +258,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
       width: s.width,
       side: s.side,
       heat: s.heat,
+      profile: s.profile,
       head,
       headTitle,
       net: `NET ${fmt(total)}`,
@@ -253,7 +268,7 @@ export const railImpl = studyImpl<RailS, Ladder>({
       maxAbs: model.maxAbs,
       order: [...named, ...rest.map((r) => r.strike)],
       empty: rows.length ? '' : 'Empty ladder',
-      key: `${col.slotTs}|${next?.expiry ?? ''}|${s.metric}|${s.tags}|${shift}|${voltick}|${s.heat}`,
+      key: `${col.slotTs}|${next?.expiry ?? ''}|${s.metric}|${s.tags}|${shift}|${voltick}|${s.heat}|${s.profile}`,
     }
   },
 })
@@ -306,6 +321,28 @@ function heatCell(r: RailRowOut): HTMLSpanElement {
   return cell
 }
 
+/** Style: Profile. One strike's figure over the shape: right-aligned, a level's in its Path colour. */
+function profileCell(r: RailRowOut): HTMLSpanElement {
+  const cell = document.createElement('span')
+  cell.className = 'cb-gxr-pcell'
+  const f = fmtGex(r.value)
+  const sign = document.createElement('span')
+  sign.className = 'cb-gxr-sg'
+  sign.dataset.s = f.sign === '+' ? 'pos' : f.sign === '−' ? 'neg' : ''
+  sign.textContent = f.sign
+  cell.append(sign, document.createTextNode(f.text))
+  if (r.lead) cell.dataset.k = r.lead
+  return cell
+}
+
+/** Profile: the cells' column, where the shape starts (the chart side) and how far it may grow. */
+const PROFILE_FROM = 32
+const PROFILE_END = 4
+/** The shape's ends taper back to its edge this far past the first and last strike. */
+const PROFILE_TAPER = 14
+
+let profileSeq = 0
+
 function isPayload(v: unknown): v is RailPayload {
   return !!v && typeof v === 'object' && Array.isArray((v as RailPayload).rows)
 }
@@ -320,6 +357,10 @@ class RailLayer implements RendererLayerInstance {
   private heatEl: HTMLDivElement | null = null
   private colors = new Map<number, string>()
   private heatBg = ''
+  /** Profile: the shape (an SVG behind the rows), its gradient's id, and its last markup. */
+  private profileEl: SVGSVGElement | null = null
+  private profileId = `cb-gxr-pf-${++profileSeq}`
+  private profileSvg = ''
   private nodes = new Map<number, HTMLDivElement>()
   private key = ''
   private width = 0
@@ -371,8 +412,13 @@ class RailLayer implements RendererLayerInstance {
       this.heatEl.className = 'cb-gxr-heat'
       this.heatEl.hidden = true
       this.heatBg = ''
-      // first: the rows, appended after it, sit on top
-      el.append(this.heatEl, this.headEl, this.netEl, this.emptyEl)
+      this.profileEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      this.profileEl.classList.add('cb-gxr-profile')
+      this.profileEl.setAttribute('aria-hidden', 'true')
+      this.profileEl.style.display = 'none'
+      this.profileSvg = ''
+      // first: the rows, appended after them, sit on top
+      el.append(this.heatEl, this.profileEl, this.headEl, this.netEl, this.emptyEl)
       b.wrap.appendChild(el)
       this.key = ''
       this.nodes.clear()
@@ -402,6 +448,8 @@ class RailLayer implements RendererLayerInstance {
     this.el = null
     this.heatEl = null
     this.heatBg = ''
+    this.profileEl = null
+    this.profileSvg = ''
     this.nodes.clear()
     this.colors.clear()
     this.key = ''
@@ -442,8 +490,9 @@ class RailLayer implements RendererLayerInstance {
       if (d.heat) {
         track.append(heatCell(r))
         this.colors.set(r.strike, heatColor(r))
-      }
-      else {
+      } else if (d.profile) {
+        track.append(profileCell(r))
+      } else {
         const bar = document.createElement('span')
         bar.className = 'cb-gxr-bar'
         bar.dataset.s = r.value >= 0 ? 'pos' : 'neg'
@@ -486,10 +535,16 @@ class RailLayer implements RendererLayerInstance {
     const placed: number[] = []
     /** Heatmap: each shown row's top (its translateY) and colour, for the strip. */
     const shown: { top: number; color: string }[] = []
+    /** Profile: every strike on screen, hidden rows included (the shape has no overlap to avoid). */
+    const shape: { y: number; r: RailRowOut }[] = []
     for (const strike of d.order) {
       const node = this.nodes.get(strike)
       if (!node) continue
       const y = coords.priceToY(priceOf.get(strike)!, scale, bounds)
+      if (d.profile && Number.isFinite(y) && y >= top - ROW_H && y <= bottom + ROW_H) {
+        const r = d.rows.find((x) => x.strike === strike)
+        if (r) shape.push({ y, r })
+      }
       let show = Number.isFinite(y) && y >= top && y <= bottom
       if (show) for (const p of placed) if (Math.abs(p - y) < ROW_H) { show = false; break }
       if (!show) {
@@ -504,6 +559,66 @@ class RailLayer implements RendererLayerInstance {
       if (node.style.visibility !== 'visible') node.style.visibility = 'visible'
     }
     this.paintHeat(d.heat ? shown : null)
+    this.paintProfile(d.profile ? shape : null, d, bounds.top + bounds.height)
+  }
+
+  /** Profile: the shape behind the figures (header). `null`: another style, no shape. */
+  private paintProfile(pts: { y: number; r: RailRowOut }[] | null, d: RailPayload, height: number): void {
+    const svg = this.profileEl
+    if (!svg) return
+    if (!pts || pts.length < 2 || !(d.maxAbs > 0)) {
+      if (svg.style.display !== 'none') svg.style.display = 'none'
+      return
+    }
+    pts.sort((a, b) => a.y - b.y)
+    const W = d.width
+    const left = d.side === 'left'
+    // the edge the shape grows from (the chart side of the cells) and its direction
+    const x0 = left ? W - PROFILE_FROM : PROFILE_FROM
+    const span = W - PROFILE_FROM - PROFILE_END - 3
+    const xOf = (v: number) => x0 + (left ? -1 : 1) * (3 + (Math.abs(v) / d.maxAbs) * span)
+    const P = [{ x: x0, y: pts[0]!.y - PROFILE_TAPER }, ...pts.map((p) => ({ x: xOf(p.r.value), y: p.y })), { x: x0, y: pts[pts.length - 1]!.y + PROFILE_TAPER }]
+    const n = (v: number) => v.toFixed(1)
+    let path = `M${n(x0)},${n(P[0]!.y)}`
+    for (let i = 0; i < P.length - 1; i++) {
+      const p0 = P[i - 1] ?? P[i]!
+      const p1 = P[i]!
+      const p2 = P[i + 1]!
+      const p3 = P[i + 2] ?? p2
+      path += ` C${n(p1.x + (p2.x - p0.x) / 6)},${n(p1.y + (p2.y - p0.y) / 6)} ${n(p2.x - (p3.x - p1.x) / 6)},${n(p2.y - (p3.y - p1.y) / 6)} ${n(p2.x)},${n(p2.y)}`
+    }
+    path += ` L${n(x0)},${n(P[P.length - 1]!.y)} Z`
+    // the sign down the shape: each strike's colour at its height, fading through the dark where it flips
+    const H = Math.max(1, height)
+    const col = (v: number) => (v >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)')
+    const stop = (y: number, c: string, a: number) => `<stop offset="${Math.min(1, Math.max(0, y / H)).toFixed(4)}" style="stop-color:${c};stop-opacity:${a}"/>`
+    const stops: string[] = []
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i]!
+      const prev = pts[i - 1]
+      if (prev && prev.r.value >= 0 !== p.r.value >= 0) {
+        const mid = (prev.y + p.y) / 2
+        stops.push(stop(mid, col(prev.r.value), 0.06), stop(mid, col(p.r.value), 0.06))
+      }
+      stops.push(stop(p.y, col(p.r.value), 0.5))
+    }
+    const id = this.profileId
+    const lines = pts
+      .filter((p) => p.r.lead && LEAD_FILL[p.r.lead])
+      .map((p) => `<line x1="${n(x0)}" x2="${n(left ? PROFILE_END : W - PROFILE_END)}" y1="${n(p.y)}" y2="${n(p.y)}" style="stroke:${LEAD_FILL[p.r.lead!]}" stroke-width="2"/>`)
+      .join('')
+    const markup =
+      `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="${n(H)}" gradientUnits="userSpaceOnUse">${stops.join('')}</linearGradient></defs>` +
+      `<path d="${path}" fill="url(#${id})"/>` +
+      `<path d="${path}" fill="none" stroke="url(#${id})" stroke-width="1"/>` +
+      lines
+    if (markup !== this.profileSvg) {
+      this.profileSvg = markup
+      svg.setAttribute('width', String(W))
+      svg.setAttribute('height', n(H))
+      svg.innerHTML = markup
+    }
+    if (svg.style.display !== '') svg.style.display = ''
   }
 
   /** Heatmap: the strip behind the cells. Each shown cell's colour holds across its

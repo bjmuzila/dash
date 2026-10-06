@@ -97,7 +97,7 @@ function toggleStrip(ctx: WidgetContext): void {
   const el = doc.createElement('div')
   el.className = 'cb-vela-opacity'
   el.setAttribute('role', 'group')
-  el.setAttribute('aria-label', 'CB Walls opacity')
+  el.setAttribute('aria-label', 'Voltick Walls opacity')
 
   const label = doc.createElement('span')
   label.className = 'cb-vela-opacity-label'
@@ -109,7 +109,7 @@ function toggleStrip(ctx: WidgetContext): void {
   range.max = String(OPACITY_MAX)
   range.step = String(OPACITY_STEP)
   range.value = String(pct)
-  range.setAttribute('aria-label', 'CB Walls line opacity, percent')
+  range.setAttribute('aria-label', 'Voltick Walls line opacity, percent')
 
   const val = doc.createElement('span')
   val.className = 'cb-vela-opacity-val'

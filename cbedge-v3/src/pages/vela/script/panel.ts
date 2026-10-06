@@ -178,8 +178,8 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
 
   // ── CB Edge levels + sync ──
   const toolRow = el(doc, 'div', 'cb-scr-row')
-  const btnLevels = el(doc, 'button', 'cb-scr-btn', 'CB Edge levels')
-  btnLevels.title = "This week's CB Edge EM & levels for the active chart's symbol, as a script on the chart"
+  const btnLevels = el(doc, 'button', 'cb-scr-btn', 'Voltick levels')
+  btnLevels.title = "This week's Voltick EM & levels for the active chart's symbol, as a script on the chart"
   const btnSync = el(doc, 'button', 'cb-scr-btn', 'Sync')
   btnSync.title = 'Merge your scripts with your account, so every device has them'
   const syncNote = el(doc, 'span', 'cb-scr-note', '')
@@ -302,22 +302,22 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
     const sym = (ctx.chart.market.symbol ?? '').replace(/^[^:]*:/, '').trim().toUpperCase()
     if (!sym) return
     btnLevels.disabled = true
-    say(`Fetching CB Edge levels for ${sym}…`, 'info')
+    say(`Fetching Voltick levels for ${sym}…`, 'info')
     try {
       const r = await fetch(`/api/pinescript?ticker=${encodeURIComponent(sym)}&format=json`, { cache: 'no-store', credentials: 'same-origin' })
       if (r.status === 401 || r.status === 403) {
-        say('CB Edge levels come with a subscription: sign in first', 'err')
+        say('Voltick levels come with a subscription: sign in first', 'err')
         return
       }
       if (r.status === 404) {
-        say(`No CB Edge levels are published for ${sym} this week`, 'info')
+        say(`No Voltick levels are published for ${sym} this week`, 'info')
         return
       }
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
       const j = (await r.json()) as { pine?: unknown }
       if (typeof j.pine !== 'string' || !j.pine.trim()) throw new Error('the reply carried no script')
       const id = `cbl-${sym.toLowerCase().replace(/[^a-z0-9]/g, '')}`
-      const s: Script = { id, name: `CB Edge levels · ${sym}`, source: j.pine.replace(/\r\n?/g, '\n'), u: Date.now() }
+      const s: Script = { id, name: `Voltick levels · ${sym}`, source: j.pine.replace(/\r\n?/g, '\n'), u: Date.now() }
       await loadRuntime()
       compile(s.source)
       lib = lib.some((x) => x.id === id) ? lib.map((x) => (x.id === id ? s : x)) : [...lib, s]
@@ -327,9 +327,9 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
       const n = updateRunning(ctx, s)
       const here = ctx.chart.indicators().some((h) => libIdOf(h.id) === id)
       if (!here) ctx.addIndicator({ name: s.name, script: s.source, language: CBSCRIPT, id: instanceIdFor(id) })
-      say(here ? `CB Edge levels for ${sym} refreshed${n > 1 ? ` on ${n} charts` : ''}` : `Added CB Edge levels for ${sym}: this week's EM, pivot and lower / upper zones`, 'ok')
+      say(here ? `Voltick levels for ${sym} refreshed${n > 1 ? ` on ${n} charts` : ''}` : `Added Voltick levels for ${sym}: this week's EM, pivot and lower / upper zones`, 'ok')
     } catch (e) {
-      say(`CB Edge levels: ${e instanceof Error ? e.message : String(e)}`, 'err')
+      say(`Voltick levels: ${e instanceof Error ? e.message : String(e)}`, 'err')
     } finally {
       btnLevels.disabled = false
     }

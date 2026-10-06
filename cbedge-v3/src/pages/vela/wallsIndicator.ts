@@ -861,8 +861,8 @@ export function registerCbWalls(): void {
   registered = true
   registerNativeIndicator({
     type: WALLS_TYPE,
-    title: 'CB Edge Walls · the walls migration (★ Volt / ◆ Coil / ↘ Reversal)',
-    shortTitle: 'CB Walls',
+    title: 'Voltick Walls · the walls migration (★ Volt / ◆ Coil / ↘ Reversal)',
+    shortTitle: 'Voltick Walls',
     paneHint: 'price',
     overlay: true,
     inputsSchema,

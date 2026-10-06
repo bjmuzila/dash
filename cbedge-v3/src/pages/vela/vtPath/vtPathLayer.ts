@@ -44,13 +44,14 @@
 //     drew overlapping coins and uneven holes. Here there is ONE radius for the
 //     whole chart, taken from the bar pitch, shrunk to fit neighbouring strikes,
 //     floored at BEAD.minPx (4.5px; zoomed out, beads move to every Nth bar and
-//     grow to fill that pitch rather than shrink to dots) and capped at
-//     BEAD.voltMax (7px) zoomed in, where a thin LINK joins neighbouring beads
-//     instead of the beads growing, so every bubble grows and shrinks together and
+//     grow to fill that pitch rather than shrink to dots); zoomed in they keep
+//     following the bar (BEAD.voltMax is only a 30px sanity cap — the 7px cap and
+//     its joining line were dropped 2026-10-06: "the actual bubbles' borders to
+//     almost connect … remove the line"), so every bubble grows and shrinks together and
 //     neighbours never overlap. ALMOST CONNECTED AT ANY ZOOM (2026-10-06: "zoomed
 //     way in there's a lot of space in between … should stay almost connected no
 //     matter the zoom … a little give or take"): a bead is 94% of a bar wide
-//     zoomed out, easing to 84% zoomed in (BEAD.pitchTight → pitchLoose), and
+//     zoomed out, easing to 90% zoomed in (BEAD.pitchTight → pitchLoose), and
 //     only an extreme zoom meets the BEAD.voltMax sanity cap; peers are 90% of
 //     the Volt so their rows read joined as well.
 //     GROWTH INSIDE THOSE BOUNDS (2026-10-06, "if GEX is increasing on the Volt I
@@ -132,16 +133,15 @@ const BEAD = {
   /** a Volt bead's width as a share of one bar's pitch, zoomed OUT (beads all but touch) */
   pitchTight: 0.94,
   /** …and zoomed IN (a little air between them) — the "give or take" */
-  pitchLoose: 0.84,
+  pitchLoose: 0.9,
   /** bar spacing, px, at or below which the tight pitch holds */
   bsTight: 5,
   /** bar spacing, px, at or above which the loose pitch holds */
   bsLoose: 30,
-  /** the Volt's largest radius, px: zoomed in, beads stop growing here (never "half the
-   *  chart") and the LINK below keeps a row joined across the wider bars */
-  voltMax: 7,
-  /** a link is drawn between two beads of a row once their gap passes this, px */
-  linkFromPx: 1.5,
+  /** the Volt's largest radius, px — a sanity cap only: zoomed in, the beads keep
+   *  following the bar so their borders stay almost touching (2026-10-06: "the actual
+   *  bubbles' borders to almost connect … remove the line") */
+  voltMax: 30,
   /** GROWTH: the bead at its level's LOWEST reading that session, as a share of the
    *  full (highest-reading) bead — the bead grows ~1.6× as GEX goes from the day's low to its high */
   growMin: 0.62,
@@ -274,7 +274,7 @@ class PathDraw {
       .sort((x, y) => (DRAW_ORDER[x.role] ?? 0) - (DRAW_ORDER[y.role] ?? 0))
     if (!list.length) return
     // ONE RADIUS FOR THE WHOLE CHART, FROM THE BAR PITCH (see the header): a bead
-    // is 94% of a bar wide zoomed out easing to 84% zoomed in, so neighbours stay
+    // is 94% of a bar wide zoomed out easing to 90% zoomed in, so neighbours stay
     // almost connected at every zoom and never overlap.
     const ease = Math.min(1, Math.max(0, (bs - BEAD.bsTight) / (BEAD.bsLoose - BEAD.bsTight)))
     const pitch = BEAD.pitchTight + (BEAD.pitchLoose - BEAD.pitchTight) * ease * ease * (3 - 2 * ease)
@@ -330,30 +330,6 @@ class PathDraw {
         marks.push({ x, y, t: q.t, p: q.p, r: Math.max(BEAD.beadMinPx, rad * growFactor(grow[i])) })
       }
       if (!marks.length) continue
-      // THE LINK (2026-10-06, Brandon: zoomed in, beads must not grow to "half the
-      // chart", yet the row should still read joined). With beads capped at
-      // BEAD.voltMax, a wide bar leaves air between them; a thin bar of the row's
-      // colour, under the beads, joins two neighbours on the same strike. Only
-      // between consecutive candles of the grid — a strike change or a data gap
-      // stays open.
-      {
-        const join = N * barSec * 1.5
-        ctx.globalAlpha = alpha * 0.55
-        ctx.strokeStyle = lead ? hexA(VOLT_GOLD, 1) : hexA(tokenRgb(ROLE_TOKEN[r.role]), 1)
-        ctx.lineWidth = Math.max(1, rad * 0.45)
-        ctx.lineCap = 'butt'
-        ctx.beginPath()
-        let any = false
-        for (let i = 1; i < marks.length; i++) {
-          const a = marks[i - 1]!
-          const b = marks[i]!
-          if (a.p !== b.p || b.t - a.t > join || b.x - a.x - a.r - b.r <= BEAD.linkFromPx) continue
-          ctx.moveTo(a.x + a.r * 0.6, a.y)
-          ctx.lineTo(b.x - b.r * 0.6, b.y)
-          any = true
-        }
-        if (any) ctx.stroke()
-      }
       if (lead && !quiet) {
         ctx.globalAlpha = 1
         for (const m of marks) {

@@ -10,6 +10,11 @@
  *   2. Wikidata P154 (logo image)  → Commons Special:FilePath (transparent PNG/SVG render)
  *   3. null → 404, client falls back to the ticker text chip.
  *
+ * A FOUND logo is cached forever. A MISS (null) is cached for NULL_TTL_MS only
+ * (2026-10-06): a new listing — SPCX, SpaceX's 2026 IPO — was looked up once
+ * with no company name, found nothing, and that null was pinned for good, so a
+ * later lookup that carried the name never ran. Now a miss is retried a day on.
+ *
  * Route: GET /proxy/ticker-logo?sym=ASML&name=ASML%20Holding%20N.V.
  */
 
@@ -19,7 +24,9 @@ const UA = 'cbedge-dashboard/1.0 (logo resolver; contact bjmuzila@gmail.com)';
 let pool = null;
 let pgUnavailable = false;
 let _schemaReady = false;
-const mem = new Map(); // symbol → url | null
+const mem = new Map(); // symbol → { url: string | null, at: number }
+/** How long a "no logo" answer stands before the symbol is looked up again. */
+const NULL_TTL_MS = 24 * 60 * 60 * 1000;
 
 function getPool() {
   if (pgUnavailable) return null;
@@ -93,12 +100,19 @@ async function wikidataLogo(symbol, name) {
 async function resolveLogo(symbol, name) {
   const sym = String(symbol || '').toUpperCase().trim();
   if (!sym) return null;
-  if (mem.has(sym)) return mem.get(sym);
+  const hit = mem.get(sym);
+  if (hit && (hit.url || Date.now() - hit.at < NULL_TTL_MS)) return hit.url;
 
-  // PG cache
+  // PG cache (a found logo always; a miss only while it is under a day old)
   if (await ensureSchema()) {
-    const { rows } = await getPool().query('SELECT url FROM ticker_logos WHERE symbol = $1', [sym]);
-    if (rows.length) { mem.set(sym, rows[0].url); return rows[0].url; }
+    const { rows } = await getPool().query('SELECT url, updated_at FROM ticker_logos WHERE symbol = $1', [sym]);
+    if (rows.length) {
+      const at = new Date(rows[0].updated_at).getTime() || 0;
+      if (rows[0].url || Date.now() - at < NULL_TTL_MS) {
+        mem.set(sym, { url: rows[0].url, at });
+        return rows[0].url;
+      }
+    }
   }
 
   let url = null;
@@ -110,7 +124,7 @@ async function resolveLogo(symbol, name) {
     catch (e) { console.warn('[ticker-logo] wikidata', sym, e.message); }
   }
 
-  mem.set(sym, url);
+  mem.set(sym, { url, at: Date.now() });
   if (await ensureSchema()) {
     await getPool().query(
       `INSERT INTO ticker_logos (symbol, url, source, updated_at) VALUES ($1,$2,$3, now())
@@ -148,10 +162,10 @@ async function resolveLogo(symbol, name) {
  */
 const RAW_MAX_ENTRIES = 500;
 const RAW_MAX_BYTES = 512 * 1024;
-const rawMem = new Map(); // symbol → { buf, type } | null
+const rawMem = new Map(); // symbol → { val: { buf, type } | null, at: number }
 
 function rawRemember(sym, val) {
-  rawMem.set(sym, val);
+  rawMem.set(sym, { val, at: Date.now() });
   // Map preserves insertion order, so the first key is the oldest.
   while (rawMem.size > RAW_MAX_ENTRIES) {
     const oldest = rawMem.keys().next().value;
@@ -168,7 +182,8 @@ function rawRemember(sym, val) {
 async function fetchLogoBytes(symbol, name) {
   const sym = String(symbol || '').toUpperCase().trim();
   if (!sym) return null;
-  if (rawMem.has(sym)) return rawMem.get(sym);
+  const rawHit = rawMem.get(sym);
+  if (rawHit && (rawHit.val || Date.now() - rawHit.at < NULL_TTL_MS)) return rawHit.val;
 
   let url = null;
   try { url = await resolveLogo(sym, name); }

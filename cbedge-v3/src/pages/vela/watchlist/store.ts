@@ -302,6 +302,23 @@ export function reorder(symbols: string[]): void {
   setSort(l.id, undefined)
   edit(l.id, (x) => ({ ...x, symbols: keep }))
 }
+/**
+ * Move a list to `to` among the lists (the picker's chips, dragged left or right;
+ * Brandon 2026-10-06: "let the Watchlist / Main / etc be movable left to right").
+ * The order is this browser's: each list syncs on its own, and an account's
+ * lists arrive in the order already held here.
+ */
+export function moveList(id: string, to: number): void {
+  const from = state.lists.findIndex((l) => l.id === id)
+  if (from < 0) return
+  const next = state.lists.slice()
+  const [l] = next.splice(from, 1)
+  const at = Math.max(0, Math.min(next.length, Math.round(to)))
+  if (!l || at === from) return
+  next.splice(at, 0, l)
+  state = { ...state, lists: next }
+  changed(false)
+}
 export function createList(name: string): WatchList | null {
   if (state.lists.length >= MAX_LISTS) return null
   const l: WatchList = { id: newId(), name: name.trim().slice(0, 60) || 'Watchlist', symbols: [], u: Date.now() }

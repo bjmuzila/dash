@@ -36,6 +36,9 @@
 //
 // ES / NQ draw SPX's / NDX's walls shifted by the session basis (buildDays,
 // shared with CB Walls); a session with no plausible basis draws nothing.
+// OVERNIGHT (2026-10-06): an ES / NQ candle outside 09:29–16:00 carries the walls
+// the last cash session closed on (framesFromWalls), so the path runs through
+// the night instead of stopping at 16:00.
 //
 // ── Vol only: the open rides the OI + Vol walls (2026-10-05) ────────────────
 // The volume-only book has no open capture: at 09:29 nothing has traded, so the
@@ -105,6 +108,8 @@ export interface WallModels {
   open: DayModel[]
   /** The newest session is today's — the read that keeps moving. */
   hasToday: boolean
+  /** A future (ES / NQ): its overnight candles carry the cash session's last walls (header). */
+  fut: boolean
 }
 
 export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: boolean): Promise<WallModels> {
@@ -124,7 +129,7 @@ export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: bo
   const openDays = onVol ? oivolDays : []
   const today = etDateKey(Date.now())
   const isToday = (d: DayModel) => d.date === today
-  return { main: mainDays, vol: volDays, open: openDays, hasToday: mainDays.some(isToday) || openDays.some(isToday) }
+  return { main: mainDays, vol: volDays, open: openDays, hasToday: mainDays.some(isToday) || openDays.some(isToday), fut: !!sym.fut }
 }
 
 // ── One frame per candle ─────────────────────────────────────────────────────
@@ -137,6 +142,17 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
   const volByDate = new Map(m.vol.map((d) => [d.date, d]))
   const openByDate = new Map((m.open ?? []).map((d) => [d.date, d]))
   const coarse = tfMs >= DAY_MS
+  // OVERNIGHT ON A FUTURE: the recorded sessions, oldest first, to find the one
+  // whose closing walls an overnight candle carries
+  const dates = [...new Set([...byDate.keys(), ...openByDate.keys()])].sort()
+  const latestBefore = (key: string, inclusive: boolean): string | undefined => {
+    let hit: string | undefined
+    for (const d of dates) {
+      if (inclusive ? d <= key : d < key) hit = d
+      else break
+    }
+    return hit
+  }
   const out: VtFrame[] = []
   for (const bar of bars) {
     let date: string | undefined
@@ -154,11 +170,22 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
       if (date == null || close == null) continue
     } else {
       const mins = etMinutesOfDay(bar.time)
-      if (mins < SESSION_FROM_MIN || mins >= RTH_CLOSE_MIN) continue
-      date = etDateKey(bar.time)
+      const inRth = mins >= SESSION_FROM_MIN && mins < RTH_CLOSE_MIN
+      if (inRth) date = etDateKey(bar.time)
+      else if (m.fut) {
+        // OVERNIGHT (2026-10-06, Brandon: "path bubbles should work and show
+        // overnight on ES using SPX"). The SPX walls are recorded 09:29–16:00
+        // only; outside it a future's candle carries the walls the last cash
+        // session CLOSED on — after 16:00 that day's, before 09:29 the session
+        // before (Friday's through the weekend), shifted by that session's basis
+        // as every ES / NQ wall is (buildDays).
+        date = latestBefore(etDateKey(bar.time), mins >= RTH_CLOSE_MIN)
+      } else continue
+      if (date == null) continue
       close = (byDate.get(date) ?? openByDate.get(date))?.close
       if (close == null) continue
     }
+    // an overnight candle (after that session's close) reads the walls at the close
     const end = coarse ? close + 1 : Math.min(bar.time + tfMs, close + 1)
     // The chosen map's walls in force; on Vol only, before the volume book's
     // first CORE write that session, the OI + Vol walls stand in (header).

@@ -8,12 +8,13 @@
 //   [ ⌕ Search, or add to Main                           or just type ]
 //   Watchlists 4 │ Symbols 171
 //
-//   WATCHLISTS   your lists as chips (Main 12 · Tech 18 · …) and + New, then
-//                ✎ Edit · + Section · ⇪ Import, then the open list, section by
+//   WATCHLISTS   your lists as chips (Main 12 · Tech 18 · …), + New and ✎ Edit
+//                on one strip (two rows at most), then the open list, section by
 //                section (▾ folds one). A row opens the symbol on the active
 //                chart. Typing searches every symbol to ADD to the open list:
 //                + Add, or ✓ when it is on it already; Enter adds the lit row.
-//     Edit       the list name to rename, Delete list (asks once more), each
+//     Edit       chips drag left / right to reorder the lists; + Section and
+//                ⇪ Import show; the list name to rename, Delete list (asks once more), each
 //                section's name typed in place with ↑ ↓ and delete (its
 //                symbols go to Unsorted), + Add a section, and every row with
 //                ⠿ to drag (to reorder, or into another section) and ✕.
@@ -58,6 +59,7 @@ import {
   lists,
   MAX_LISTS,
   MAX_SECTIONS,
+  moveList,
   moveSection,
   onWatchlist,
   quoteOf,
@@ -439,19 +441,84 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
     }
   }
 
-  /** The list chips (+ New), then Edit · + Section · Import. */
+  /**
+   * The list chips, + New and ✎ Edit on ONE strip that wraps to two rows at most
+   * (Brandon, 2026-10-06: "put edit on that row too … 2 rows max at the top …
+   * when clicking edit, section and import can pop up"). In Edit a chip is
+   * dragged left or right to reorder the lists (moveList), and + Section and
+   * Import join the list's Name / Delete row below.
+   */
   const drawListBar = () => {
     const l = activeList()
     const chips = el('div', 'cb-sp-lchips')
+    chips.dataset.edit = editing ? '1' : ''
+    const chipEls: Array<{ el: HTMLButtonElement; id: string }> = []
     for (const x of lists()) {
-      const c = button('cb-sp-lchip', x.name, `Open ${x.name}`)
+      const c = button('cb-sp-lchip', x.name, editing ? `Drag ${x.name} left or right to move it` : `Open ${x.name}`)
       c.dataset.on = x.id === l.id ? '1' : ''
       c.append(el('span', 'cb-sp-lchipn', String(x.symbols.length)))
+      chipEls.push({ el: c, id: x.id })
+      let moved = false
       c.addEventListener('click', () => {
+        if (moved) {
+          moved = false
+          return
+        }
         if (x.id === l.id) return
         confirmDelete = false
         openList(x.id)
         input.focus()
+      })
+      // EDIT: drag the chip sideways to reorder (a pointer drag, so a finger works too)
+      c.addEventListener('pointerdown', (e) => {
+        if (!editing || e.button !== 0) return
+        const x0 = e.clientX
+        const y0 = e.clientY
+        let live = false
+        const others = () => chipEls.filter((o) => o.el !== c)
+        const slotAt = (px: number, py: number) => {
+          // the chips before the pointer, in reading order (rows wrap)
+          let n = 0
+          for (const o of others()) {
+            const r = o.el.getBoundingClientRect()
+            const midX = r.left + r.width / 2
+            if (r.bottom < py || (r.top <= py && midX < px)) n++
+          }
+          return n
+        }
+        const mark = (slot: number | null) => {
+          const list = others()
+          list.forEach((o, i) => {
+            o.el.dataset.drop = slot == null ? '' : i === slot ? 'before' : i === slot - 1 && slot === list.length ? 'after' : ''
+          })
+        }
+        const onMove = (ev: PointerEvent) => {
+          const dx = ev.clientX - x0
+          const dy = ev.clientY - y0
+          if (!live && Math.hypot(dx, dy) < 6) return
+          if (!live) {
+            live = true
+            c.setPointerCapture?.(e.pointerId)
+            c.dataset.drag = '1'
+          }
+          ev.preventDefault()
+          c.style.transform = `translate(${dx}px, ${dy}px)`
+          mark(slotAt(ev.clientX, ev.clientY))
+        }
+        const onUp = (ev: PointerEvent) => {
+          document.removeEventListener('pointermove', onMove)
+          document.removeEventListener('pointerup', onUp)
+          document.removeEventListener('pointercancel', onUp)
+          if (!live) return
+          moved = true
+          c.style.transform = ''
+          c.dataset.drag = ''
+          mark(null)
+          if (ev.type === 'pointerup') moveList(x.id, slotAt(ev.clientX, ev.clientY))
+        }
+        document.addEventListener('pointermove', onMove)
+        document.addEventListener('pointerup', onUp)
+        document.addEventListener('pointercancel', onUp)
       })
       chips.append(c)
     }
@@ -494,8 +561,7 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
       })
       chips.append(n)
     }
-    const bar = el('div', 'cb-sp-bar')
-    const ed = button('cb-sp-btn', editing ? 'Done' : '✎ Edit', editing ? 'Stop editing' : 'Rename, reorder, drag, remove, and add sections')
+    const ed = button('cb-sp-btn cb-sp-ledit', editing ? 'Done' : '✎ Edit', editing ? 'Stop editing' : 'Rename, move and delete lists; add sections and import; drag and remove symbols')
     ed.dataset.on = editing ? '1' : ''
     ed.addEventListener('click', () => {
       editing = !editing
@@ -511,8 +577,8 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
       importing = true
       draw()
     })
-    bar.append(ed, sec, el('span', 'cb-sp-sp'), imp)
-    subEl.append(chips, bar)
+    chips.append(ed)
+    subEl.append(chips)
     if (editing) {
       // the list itself: rename, delete
       const meta = el('div', 'cb-sp-lmeta')
@@ -550,7 +616,10 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
         deleteList(l.id)
       })
       meta.append(el('span', 'cb-sp-lmetal', 'Name'), nameF, del)
-      subEl.append(meta)
+      // + Section and Import only show while editing
+      const tools = el('div', 'cb-sp-bar')
+      tools.append(sec, el('span', 'cb-sp-sp'), imp)
+      subEl.append(meta, tools)
     }
   }
 

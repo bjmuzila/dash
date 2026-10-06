@@ -61,6 +61,15 @@ const MARKS: Record<string, readonly [string, string?]> = {
   IBIT: ['₿'], ETHA: ['Ξ'], FXI: ['CN'], KWEB: ['@globe', 'CN'], EEM: ['EM'], EFA: ['@globe'], EWZ: ['BR'], EWY: ['KR'],
 }
 
+/**
+ * A company name for the logo resolver, for a ticker it cannot find by symbol
+ * alone (a new listing the GitHub logo set does not have yet): the resolver then
+ * searches Wikidata by this name. 2026-10-06: SPCX (SpaceX, a 2026 IPO).
+ */
+const LOGO_NAMES: Record<string, string> = {
+  SPCX: 'SpaceX',
+}
+
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
 
 function shape(round: boolean, inner: string): string {
@@ -98,7 +107,7 @@ export function tickerIconEl(doc: Document, ticker: string, size = 20, opts: { l
     box.insertAdjacentHTML('afterbegin', shape(round, textMark(t.slice(0, 4))))
   }
   const logo = (sym: string, then: () => void) => {
-    const urls = tickerLogoUrls(sym)
+    const urls = tickerLogoUrls(sym, LOGO_NAMES[sym])
     const img = doc.createElement('img')
     img.alt = ''
     img.decoding = 'async'

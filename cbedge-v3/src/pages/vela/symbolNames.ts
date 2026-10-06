@@ -169,6 +169,7 @@ export const SYMBOL_NAMES: Readonly<Record<string, string>> = {
   SNAP: 'Snap',
   SNDK: 'Sandisk',
   SOFI: 'SoFi Technologies',
+  SPCX: 'SpaceX (Space Exploration Technologies)',
   SOUN: 'SoundHound AI',
   T: 'AT&T',
   TSM: 'Taiwan Semiconductor Manufacturing',

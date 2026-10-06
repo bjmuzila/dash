@@ -2049,6 +2049,54 @@
 .cb-gxr-cell[data-k='surge'] {
   background: var(--color-vt-surge);
 }
+/* Style: Profile (studies/rail.ts paintProfile). The shape is one inline SVG
+   behind the rows, its colours from the GEX and Path tokens; the figures sit
+   right-aligned over it with a dark halo, a level's lifted off its line and in
+   its colour. */
+.cb-gxr-profile {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.cb-gxr-pcell {
+  flex: 1;
+  min-width: 0;
+  height: 13px;
+  overflow: hidden;
+  padding-right: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 13px;
+  color: var(--color-fg);
+  text-align: right;
+  text-shadow: 0 1px 2px var(--color-bg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-gxr-pcell[data-k] {
+  font-weight: 800;
+  transform: translateY(-9px);
+}
+.cb-gxr-pcell[data-k] .cb-gxr-sg {
+  color: inherit;
+}
+.cb-gxr-pcell[data-k='volt'] {
+  color: var(--color-vt-volt);
+}
+.cb-gxr-pcell[data-k='reversal'] {
+  color: var(--color-vt-reversal);
+}
+.cb-gxr-pcell[data-k='coil'],
+.cb-gxr-pcell[data-k='surge'] {
+  color: var(--color-vt-accent-text);
+}
+.cb-gxr[data-side='left'] .cb-gxr-pcell {
+  padding-right: 0;
+  padding-left: 2px;
+  text-align: left;
+}
 /* Position: Left. The rail is the chart's left edge: its border faces the plot
    on the right, each row runs mirrored (tags against the plot, the bar growing
    left, away from it) */
@@ -3125,7 +3173,35 @@
 .cb-sp .cb-sp-lchips {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+  /* two rows at most (chips are 26px): more lists scroll inside the strip */
+  max-height: calc(26px * 2 + 6px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+/* ✎ Edit rides at the end of the chips' row */
+.cb-sp .cb-sp-ledit {
+  flex: none;
+  margin-left: auto;
+}
+/* Edit: a chip is dragged left or right to move the list */
+.cb-sp .cb-sp-lchips[data-edit='1'] .cb-sp-lchip {
+  cursor: grab;
+  touch-action: none;
+}
+.cb-sp .cb-sp-lchip[data-drag='1'] {
+  position: relative;
+  z-index: 2;
+  cursor: grabbing;
+  opacity: 0.85;
+  box-shadow: var(--vt-card-shadow);
+}
+.cb-sp .cb-sp-lchip[data-drop='before'] {
+  box-shadow: -3px 0 0 var(--color-vt-accent);
+}
+.cb-sp .cb-sp-lchip[data-drop='after'] {
+  box-shadow: 3px 0 0 var(--color-vt-accent);
 }
 .cb-sp .cb-sp-lchip {
   display: inline-flex;
@@ -5407,8 +5483,24 @@
 }
 .cb-sp-full .cb-sp-lchips {
   flex-wrap: nowrap;
+  max-height: none;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
+}
+/* the phone's one sideways row keeps ✎ Edit pinned at its right end */
+.cb-sp-full .cb-sp-ledit {
+  position: sticky;
+  right: 0;
+  height: 30px;
+  background: var(--vt-popover);
+}
+/* in Edit the phone's chips wrap (two rows at most) so a drag never fights the sideways scroll */
+.cb-sp-full .cb-sp-lchips[data-edit='1'] {
+  flex-wrap: wrap;
+  max-height: calc(30px * 2 + 6px);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .cb-sp-full .cb-sp-lchip {
   flex: none;

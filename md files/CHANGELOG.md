@@ -26751,3 +26751,46 @@ Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the lef
 - **Console (`Voltick-admin`, admin-site):** a new System › Logs tab: service, App/Requests/Builds, level, window from 15m to 7d, Render search (text, `*`, `/regex/`), quick searches for the engine's own lines (tab limit, 🚨, ⚠️, ⏱, KILLED, rss, boots), Load older, auto-refresh every 30s, Copy lines, and sample lines in mock mode. Escape check: 0 leaks.
   - **Merge order:** the engine PR has to merge first. Until then the console's live-routes test fails, because it reads a route the engine doesn't answer yet.
 - **Also on the console today:** the 2FA check is hidden (2FA won't be built), and the customer card pulls in every member section the engine already serves.
+
+## 2026-10-06 - Vela Voltick Path: bigger beads when zoomed out
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts`: zoomed out on the phone (1m ETH) the beads were still too small. Three changes:
+  - The full bead never goes under 4.5px radius (`BEAD.minPx`, was 2.75); narrower bars space beads further apart on the even grid instead of shrinking them.
+  - The low-GEX bead is 62% of the full bead (`growMin`, was 50%).
+  - No bead is drawn under 3px (`beadMinPx`, was 1.75).
+  - The zoomed-in cap (7px) is unchanged. Zoomed out a bead now reads 6–9px across rather than 3–5px. GEX growth still shows, at about 1.6× from the day's low to its high.
+- Not a bug: ES bubbles can sit a few points off an SPX-style round number because ES levels are SPX strikes shifted by the session basis.
+
+## 2026-10-06 - Vela: SPCX (SpaceX) gets its name and logo
+
+- `cbedge-v3/src/pages/vela/symbolNames.ts`: SPCX → "SpaceX (Space Exploration Technologies)", so the ticker picker and watchlist show its name.
+- `cbedge-v3/src/pages/vela/tickerIcon.ts`: new `LOGO_NAMES` (SPCX → "SpaceX"). The logo lookup now sends a company name for a ticker the logo set can't find by symbol alone, so the resolver can search Wikidata by name.
+- `server-v2/ticker-logo.js` (the /proxy/ticker-logo resolver, approved by Brandon): a "no logo" result now expires after 24h (`NULL_TTL_MS`) in memory, in the raw-bytes cache and in the `ticker_logos` PG cache. Found logos are still cached forever. SPCX had been looked up once with no name and its null was saved permanently, so a later lookup with the name never ran. The SPCX logo shows once its old null passes 24h, or right after a backend restart if the PG row is already older than that.
+
+## 2026-10-06 - Vela ticker picker: movable watchlist chips, Edit on the chip row
+
+- `cbedge-v3/src/pages/vela/symbolPickerView.ts`: the watchlist chips, + New and ✎ Edit now share one strip that wraps to two rows at most (more lists scroll inside it). On the phone it is one sideways row with ✎ Edit pinned at the right end. + Section and ⇪ Import only show after Edit is clicked, on their own row under the list's Name / Delete. In Edit, a chip is dragged left or right to reorder the lists: an accent bar shows where it will land, and it works with a mouse or a finger.
+- `cbedge-v3/src/pages/vela/watchlist/store.ts`: `moveList(id, to)`. The order is saved in this browser; each list still syncs to the account on its own.
+- `cbedge-v3/src/pages/vela/vela.css`: two-row cap, Edit at the row end, the drag and drop-marker states, and the phone's sticky Edit and wrapped chips while editing. Tokens only.
+
+## 2026-10-06 - Vela Voltick Path: no joining line; bubble borders almost touch when zoomed in
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts`: removed the thin line drawn between bubbles. Zoomed in, the bubbles now keep following the bar width (the 7px cap is gone; `BEAD.voltMax` is only a 30px sanity cap), and zoomed in a bubble fills 90% of its bar (`pitchLoose`, was 84%), so neighbouring borders nearly touch at any zoom. The zoomed-out floor and spacing and the GEX growth are unchanged. `tsc` strict is clean.
+
+## 2026-10-06 - Vela: CB Edge indicators renamed to Voltick
+
+- `cbedge-v3/src/pages/vela/studies/index.ts`: all 14 native studies are now titled **Voltick …** instead of **CB …** (Prior Levels, Initial Balance, Overnight High / Low, Expected Move, Key Levels, GEX Profile, Net Premium, Vol / GEX Flow, Whale Prints, Market Profile, GEX Rail, GEX Heatmap, Journal Trades, Events). Their short titles were already brand-free.
+- `cbedge-v3/src/pages/vela/wallsIndicator.ts`: "CB Edge Walls" → "Voltick Walls" (the short title "CB Walls" → "Voltick Walls"). `wallsOpacity.ts`: its slider's labels to match.
+- `cbedge-v3/src/pages/vela/script/strategies.ts`: the ready strategy "CB Edge Walls Bounce" → "Voltick Walls Bounce" (kept by id `st-walls`, so nothing saved breaks).
+- `cbedge-v3/src/pages/vela/script/panel.ts`: the "CB Edge levels" button, its tooltip and messages, and the script it adds → "Voltick levels · SYM". A levels script already in someone's library keeps its old name until they press the button again (same id `cbl-…`, so it is replaced in place).
+- Not renamed: type ids, storage keys, the `cbedge.*` script API and the "CB Script" language label. Those are identifiers, not indicator names, and renaming them would break saved charts and scripts.
+
+## 2026-10-06 - Vela Voltick Path: runs overnight on ES / NQ from the SPX / NDX walls
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathData.ts`: the path stopped at 16:00 because the SPX walls are only recorded 09:29–16:00. On a future (ES / NQ), a candle outside that window now carries the walls the last cash session **closed** on: after 16:00 that day's, before 09:29 the previous session's (Friday's through the weekend). They are shifted by that session's ES/NQ basis like every futures wall, so the bubbles run through the night at the closing Volt / Coil / Reversal / Surge. `WallModels` gains `fut`. Cash symbols (SPX, SPY, …) are unchanged and still draw in session only. `tsc` strict is clean.
+
+## 2026-10-06 - Vela GEX Rail: third style, Profile (G4)
+
+- `cbedge-v3/src/pages/vela/studies/index.ts`: GEX Rail's Style input is now **Rail · Heatmap · Profile** (`RAIL_STYLES`), and its tooltip describes all three.
+- `cbedge-v3/src/pages/vela/studies/rail.ts`: Profile is G4 of `generated/2026-10-05-vela-rail-heat-r1.html`. The heat becomes one smooth shape, a Catmull-Rom curve through every strike on screen, whose width is that strike's |GEX| against the biggest. It grows away from the chart from the cells' edge (mirrored on Position: Left) and is filled in the GEX colours by sign, fading through the dark where gamma flips. Each tagged level (Volt / Reversal / Coil / Surge) is a 2px line across the shape in its Path colour. The figures sit right-aligned over the shape with a dark halo, and a level's figure is lifted off its line and drawn in its colour. It is an inline SVG behind the rows, re-laid on every pan / zoom frame and only rewritten when it changes. Rail and Heatmap are unchanged.
+- `cbedge-v3/src/pages/vela/vela.css`: `.cb-gxr-profile` and `.cb-gxr-pcell` (and the Left mirror). Tokens only.

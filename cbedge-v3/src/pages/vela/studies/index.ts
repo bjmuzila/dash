@@ -38,7 +38,7 @@ export const WH_EXP = ['All expiries', '0DTE only', 'This week', 'Skip 0DTE'] as
 export const HEAT_SESSIONS = ['1', '2', '3'] as const
 export const RAIL_SIDES = ['Right', 'Left'] as const
 /** The GEX Rail's look: a bar per strike, or Multi Greek's heatmap cell (rail.ts). */
-export const RAIL_STYLES = ['Rail', 'Heatmap'] as const
+export const RAIL_STYLES = ['Rail', 'Heatmap', 'Profile'] as const
 export const JR_SHOW = ['All trades', 'Winners', 'Losers'] as const
 /** Where a whale bubble reaches its biggest — anything larger draws that size too. */
 export const WH_CAP = ['$25M', '$10M', '$50M', '$100M'] as const
@@ -90,7 +90,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: PRIOR_TYPE,
-      title: 'CB Prior Levels · previous day / week / month high, low, close',
+      title: 'Voltick Prior Levels · previous day / week / month high, low, close',
       shortTitle: 'Prior Levels',
       pane: 'price',
       inputs: () => [
@@ -108,7 +108,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: IB_TYPE,
-      title: 'CB Initial Balance · IB high / low / mid and extensions',
+      title: 'Voltick Initial Balance · IB high / low / mid and extensions',
       shortTitle: 'Initial Balance',
       pane: 'price',
       inputs: () => [
@@ -124,7 +124,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: ON_TYPE,
-      title: 'CB Overnight High / Low · the pre-market range before the 09:30 open',
+      title: 'Voltick Overnight High / Low · the pre-market range before the 09:30 open',
       shortTitle: 'Overnight H/L',
       pane: 'price',
       inputs: () => [
@@ -138,7 +138,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: EM_TYPE,
-      title: 'CB Expected Move · daily EM bands per session, and this week’s',
+      title: 'Voltick Expected Move · daily EM bands per session, and this week’s',
       shortTitle: 'Expected Move',
       pane: 'price',
       inputs: () => [
@@ -154,7 +154,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: KEY_TYPE,
-      title: 'CB Key Levels · Volt, Coil, Reversal, Flip, max pain, weekly pivot & zones',
+      title: 'Voltick Key Levels · Volt, Coil, Reversal, Flip, max pain, weekly pivot & zones',
       shortTitle: 'Key Levels',
       pane: 'price',
       liveOnly: true,
@@ -172,7 +172,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: PROFILE_TYPE,
-      title: 'CB GEX Profile · net GEX by strike beside the price axis',
+      title: 'Voltick GEX Profile · net GEX by strike beside the price axis',
       shortTitle: 'GEX Profile',
       pane: 'price',
       viewport: true,
@@ -188,7 +188,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: NETPREM_TYPE,
-      title: 'CB Net Premium · cumulative call / put / net option premium',
+      title: 'Voltick Net Premium · cumulative call / put / net option premium',
       shortTitle: 'Net Premium',
       pane: 'new',
       inputs: () => [
@@ -209,7 +209,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: VOLFLOW_TYPE,
-      title: 'CB Vol / GEX Flow · volume GEX, OI GEX and combined, today',
+      title: 'Voltick Vol / GEX Flow · volume GEX, OI GEX and combined, today',
       shortTitle: 'Vol/GEX Flow',
       pane: 'new',
       inputs: () => [
@@ -225,7 +225,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: WHALES_TYPE,
-      title: 'CB Whale Prints · $1M+ option prints as bubbles sized by net premium',
+      title: 'Voltick Whale Prints · $1M+ option prints as bubbles sized by net premium',
       shortTitle: 'Whale Prints',
       pane: 'price',
       layer: { cursor: true },
@@ -261,7 +261,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: TPO_TYPE,
-      title: 'CB Market Profile · TPO per session (POC, value area, naked POCs)',
+      title: 'Voltick Market Profile · TPO per session (POC, value area, naked POCs)',
       shortTitle: 'Market Profile',
       pane: 'price',
       inputs: () => [
@@ -280,7 +280,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: RAIL_TYPE,
-      title: 'CB GEX Rail · the GEX strike rail beside the chart, right or left',
+      title: 'Voltick GEX Rail · the GEX strike rail beside the chart, right or left',
       shortTitle: 'GEX Rail',
       pane: 'price',
       layer: {},
@@ -292,7 +292,7 @@ export function registerStudies(): void {
           type: 'string',
           defval: RAIL_STYLES[0],
           options: RAIL_STYLES,
-          tooltip: 'Rail: a bar per strike. Heatmap: Multi Greek’s cell per strike, its GEX written in a cell shaded by size and sign. Both read the one nearest expiry, never Multi Greek’s later columns.',
+          tooltip: 'Rail: a bar per strike. Heatmap: Multi Greek’s cell per strike, its GEX written in a cell shaded by size and sign. Profile: one smooth shape whose width is the GEX at each strike, blue above the flip and red below, the levels a line across in their colour. All three read the one nearest expiry, never Multi Greek’s later columns.',
         },
         { key: 'basis', title: 'GEX', type: 'string', defval: GEX_BASIS[0], options: GEX_BASIS },
         { key: 'tags', title: 'Level tags (Volt / Coil / Reversal / Surge)', type: 'bool', defval: true },
@@ -304,7 +304,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: HEAT_TYPE,
-      title: 'CB GEX Heatmap · the per-minute GEX ladders behind the candles',
+      title: 'Voltick GEX Heatmap · the per-minute GEX ladders behind the candles',
       shortTitle: 'GEX Heatmap',
       pane: 'price',
       layer: { cursor: true },
@@ -320,7 +320,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: JOURNAL_TYPE,
-      title: 'CB Journal Trades · your journal’s trades on the chart',
+      title: 'Voltick Journal Trades · your journal’s trades on the chart',
       shortTitle: 'Journal',
       pane: 'price',
       layer: { cursor: true },
@@ -336,7 +336,7 @@ export function registerStudies(): void {
   defineStudy(
     {
       type: EVENTS_TYPE,
-      title: 'CB Events · economic releases, engine alerts and your script alerts along the bottom of the chart',
+      title: 'Voltick Events · economic releases, engine alerts and your script alerts along the bottom of the chart',
       shortTitle: 'Events',
       pane: 'price',
       layer: { cursor: true },

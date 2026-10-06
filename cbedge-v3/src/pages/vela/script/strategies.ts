@@ -133,10 +133,10 @@ plot(v, "VWAP", color=color.purple, linewidth=2)
   },
   {
     id: 'st-walls',
-    name: 'CB Edge Walls Bounce',
+    name: 'Voltick Walls Bounce',
     desc: 'Fades the put / call walls: tag and close back inside; stop beyond the wall',
     source:
-      HEAD('CB Edge Walls Bounce') +
+      HEAD('Voltick Walls Bounce') +
       `touchPts = input.float(2.0, "Touch distance (points)", minval=0, step=0.5)
 stopPts = input.float(5.0, "Stop beyond the wall (points)", minval=0.25, step=0.25)
 target = input.string("Other wall", "Target", options=["Other wall", "Halfway", "2x the stop"])
