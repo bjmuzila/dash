@@ -205,6 +205,11 @@ export async function loadNextExpiryColumns(label: string, after: string, fresh:
     .sort((a, b) => a.slotTs - b.slotTs)
 }
 
+/** One ET session's per-minute columns of `label` (SPX on an ES chart), under its own expiry. */
+export function loadSessionColumns(label: string, date: string, fresh: boolean): Promise<GexColumn[]> {
+  return dayColumns(symbolDef(label).gexSymbol, date, fresh)
+}
+
 /** The newest column at or before `t` (binary search; columns oldest first). */
 export function columnAt(columns: readonly GexColumn[], t: number): GexColumn | null {
   let lo = 0

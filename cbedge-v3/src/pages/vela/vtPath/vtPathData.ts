@@ -60,7 +60,7 @@ import { vtFromWalls } from '@/pages/levelLog/wallData'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
 import type { GexColumn } from '@/board/gexCandles/gexHistory'
 import { voltickMarks, vtFromLadder } from '@/data/voltickLevels'
-import { columnAt, loadNextExpiryColumns } from '@/pages/vela/studies/ladder'
+import { columnAt, loadNextExpiryColumns, loadSessionColumns } from '@/pages/vela/studies/ladder'
 import { resolveSym } from '@/pages/vela/cbedgeProvider'
 import {
   SESSION_FROM_MIN,
@@ -123,8 +123,15 @@ export interface WallModels {
    * reads overnight (studies/ladder.ts loadNextExpiryColumns).
    */
   nights?: Map<string, GexColumn[]>
-  /** The index → future shift at a time (the GEX Rail's own); null = no usable basis. */
+  /** The index → chart shift at a time (the GEX Rail's own; 0 on a cash chart); null = no usable basis. */
   shiftAt?: (ts: number) => number | null
+  /**
+   * Vol only: the newest sessions' per-minute ladders (studies/ladder.ts), by ET
+   * date. A candle the volume book has no CORE for yet (09:29–09:45, or a symbol
+   * whose volume walls have not been written that day) reads its volume GEX here
+   * instead of the OI + Vol walls.
+   */
+  ladders?: Map<string, GexColumn[]>
 }
 
 export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: boolean): Promise<WallModels> {
@@ -145,6 +152,20 @@ export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: bo
   const today = etDateKey(Date.now())
   const isToday = (d: DayModel) => d.date === today
   const out: WallModels = { main: mainDays, vol: volDays, open: openDays, hasToday: mainDays.some(isToday) || openDays.some(isToday), fut: !!sym.fut }
+  const b0: BasisModel | null = basis
+  out.shiftAt = (ts: number) => {
+    if (!sym.fut) return 0
+    if (!b0) return null
+    const v = b0.days.get(etDateKey(ts)) ?? b0.basis
+    return isPlausibleBasis(v, b0.max) ? v : null
+  }
+  if (onVol) {
+    // the volume book's gaps (header of ladderFrame): the ladder of the two newest
+    // recorded sessions and today's (the ladder's retention)
+    const dates = [...new Set([...mainDays, ...openDays].map((d) => d.date).concat(today))].sort().slice(-2)
+    const reads = await Promise.all(dates.map((d) => loadSessionColumns(wallsSymbol, d, fresh).catch(() => [] as GexColumn[])))
+    out.ladders = new Map(dates.map((d, k) => [d, reads[k]!]))
+  }
   if (sym.fut) {
     // OVERNIGHT = THE RAIL (2026-10-06, Brandon: "path bubbles should line up with
     // the gex rail"): the nights after the two newest recorded sessions read the
@@ -153,12 +174,6 @@ export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: bo
     const dates = [...new Set([...mainDays, ...openDays].map((d) => d.date))].sort().slice(-2)
     const reads = await Promise.all(dates.map((d) => loadNextExpiryColumns(wallsSymbol, d, fresh).catch(() => [] as GexColumn[])))
     out.nights = new Map(dates.map((d, k) => [d, reads[k]!]))
-    const b: BasisModel | null = basis
-    out.shiftAt = (ts: number) => {
-      if (!b) return null
-      const v = b.days.get(etDateKey(ts)) ?? b.basis
-      return isPlausibleBasis(v, b.max) ? v : null
-    }
   }
   return out
 }
@@ -168,10 +183,12 @@ export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: bo
 const abs = (w: Write | null | undefined) => (w?.gex != null && Number.isFinite(w.gex) ? Math.abs(w.gex) : null)
 
 /**
- * One overnight candle's frame off the next expiry's ladder, the GEX Rail's way:
- * the newest column by the candle's end, Volt / Coil / Reversal by the Voltick
- * definition on its OI + vol book (vtFromLadder), Surge the biggest volume GEX,
- * every strike moved by the rail's basis. null: no column yet, or no basis.
+ * One candle's frame off a per-minute ladder (overnight, the next expiry's; in
+ * session, where the volume book has no CORE yet): the newest column by the
+ * candle's end, Volt / Coil / Reversal by the Voltick definition on its VOLUME
+ * GEX (vtFromLadder over netVol — volume only, 2026-10-06), Surge the biggest
+ * volume GEX, every strike moved by the rail's basis. null: no column yet, or no
+ * basis.
  */
 function ladderFrame(night: readonly GexColumn[], bar: OHLCV, tfMs: number, shiftAt: WallModels['shiftAt']): VtFrame | null {
   const col = columnAt(night, bar.time + tfMs - 1)
@@ -184,13 +201,13 @@ function ladderFrame(night: readonly GexColumn[], bar: OHLCV, tfMs: number, shif
     const ks = col.cells.map((c) => c.strike)
     spot = (Math.max(...ks) + Math.min(...ks)) / 2
   }
-  const def = vtFromLadder(col.cells.map((c) => ({ strike: c.strike, net: c.net })), spot)
+  const def = vtFromLadder(col.cells.map((c) => ({ strike: c.strike, net: c.netVol })), spot)
   if (def.volt == null) return null
-  const surge = voltickMarks(col.cells.map((c) => ({ strike: c.strike, book: c.net, vol: c.netVol })), { always: true }).surge
+  const surge = voltickMarks(col.cells.map((c) => ({ strike: c.strike, book: c.netVol, vol: c.netVol })), { always: true }).surge
   const sizeOf = (k: number | null) => {
     if (k == null) return null
     const c = col.cells.find((x) => x.strike === k)
-    return c ? Math.abs(c.net) : null
+    return c ? Math.abs(c.netVol) : null
   }
   const sh = (k: number | null) => (k == null ? null : k + shift)
   return {
@@ -266,6 +283,15 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
     // first CORE write that session, the OI + Vol walls stand in (header).
     let day = byDate.get(date)
     let cb = day ? heldAt(day.levels.get('cb'), end) : null
+    if (!cb && !coarse) {
+      // the volume book has no CORE yet: the volume GEX of that minute's ladder
+      const lad = m.ladders?.get(date)
+      const f = lad?.length ? ladderFrame(lad, bar, tfMs, m.shiftAt) : null
+      if (f) {
+        out.push(f)
+        continue
+      }
+    }
     if (!cb) {
       day = openByDate.get(date)
       cb = day ? heldAt(day.levels.get('cb'), end) : null

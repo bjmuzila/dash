@@ -26818,3 +26818,28 @@ Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the lef
 - `cbedge-v3/src/pages/vela/vtPath/vtPathData.ts`: overnight on a future, a candle now reads what the GEX Rail reads at that minute instead of the last session's closing walls. That is the newest next-expiry column by the candle's end, with Volt / Coil / Reversal by the Voltick definition on its OI + vol book (`vtFromLadder`), Surge as the biggest volume GEX (`voltickMarks`), and strikes moved by the rail's own basis (`shiftAt`). This is done for the nights after the two newest recorded sessions (the ladder's retention). An older night, or the minutes before a night's first column, keeps the closing walls. `WallModels` gains `nights` and `shiftAt`.
 - `cbedge-v3/src/pages/vela/vtPath/vtPathIndicator.ts`: on a future, the once-a-minute refresh keeps running outside 09:29–16:00, so the overnight path moves with the rail.
 - `tsc` strict is clean on `vtPathData.ts`.
+
+## 2026-10-06 - Voltick admin: every email opens the user card, every column header sorts
+
+- `Voltick-admin/admin-site/admin.js` (EVERY PAGE, TWO STANDARDS): a MutationObserver on the page and the customer card turns every email address in the text into the customer-card link (not inside buttons, links, fields, items with their own action, or charts), links the NAME / MEMBER / CUSTOMER / SUBSCRIBER / USER cell of a one-member table row, and makes every table header sort its column (numbers and dates high to low first, text A to Z, then reversed, then the page's own order; money, %, K/M/B, bytes, durations, change chips and the console's date formats read as values; empty cells last; detail rows stay with their row; kept per page and table across redraws and live ticks). Members › Accounts sorts the whole list before paging. `admin.css`: header indicator. README updated.
+- Fixed two engine tests that read admin.js and had broken earlier today: the security snapshot test now expects the 2FA check gone (`Voltick-engine/server/test/the-console-snapshot-keeps-no-address.test.js`), and a party name was removed from an admin.js comment (agreement test). Escape check 0 leaks; console-reading tests pass.
+
+## 2026-10-06 - Vela Voltick Path: volume only, everywhere (fixes QQQ's path sitting far below price)
+
+- **Cause:** QQQ's volume-only walls had no row for today yet (its last volume-book session was Oct 5), and SPY's had only a call wall. The Path's "before the volume book's first CORE, use the OI + Vol walls" stand-in then drew the whole day on the OI + Vol book (QQQ CORE 749 with price at 760).
+- `cbedge-v3/src/pages/vela/vtPath/vtPathIndicator.ts`: the GEX input is gone. Path and Ribbon always read the volume-only walls.
+- `cbedge-v3/src/pages/vela/vtPath/vtPathData.ts`: where the volume book has no CORE yet (09:29–09:45, or a symbol whose volume walls are not written for the day), a candle now takes that minute's **volume GEX** off the per-minute ladder (`ladders`, today's and the newest recorded session's). Volt / Coil / Reversal are by the Voltick definition on `netVol`, and Surge is the biggest volume GEX. The OI + Vol stand-in is only used when there is no ladder either. The overnight frames (next-expiry ladder) are on `netVol` as well. `shiftAt` is now defined for every chart (0 on cash, the basis on ES / NQ).
+- `cbedge-v3/src/pages/vela/studies/ladder.ts`: `loadSessionColumns(label, date, fresh)`.
+- `cbedge-v3/src/pages/vela/studies/rail.ts` + `index.ts`: GEX Rail's GEX now defaults to **Vol only**, and its level tags read the rail's own GEX setting (they used to always read OI + Vol), so a default rail and the Path tag the same strikes. A rail already saved on OI + Vol keeps that until it's switched.
+- `tsc` strict is clean on `vtPathData.ts` and `rail.ts`.
+
+## 2026-10-06 - Vela: ↻ Refresh button beside the camera
+
+- `cbedge-v3/src/pages/vela/refreshChart.ts` (new): a ↻ icon button in the top bar, right after the screenshot camera. One click does four things:
+  - Reconnects the live socket now (`reconnectSocket`) instead of waiting out a backoff.
+  - Drops every cached response and refetches mounted readers (`refreshAll`), so the provider's history and each study's data are re-read fresh.
+  - Re-fetches each chart's candles from its newest bar to now, replayed through Vela's own gap heal (the path it runs when a hidden tab comes back), so a stale or missing live candle is corrected in place.
+  - Restarts each chart's studies on the fresh data.
+  Pan, zoom, drawings and layout stay put, nothing blanks, and repeat clicks within 1.5s are ignored. Toasts say "Refreshing…" then "Charts refreshed". Shift+click reloads the page. The candle and study steps call two Vela-internal methods only when they exist, so a Vela upgrade degrades to socket + data refresh rather than an error.
+- `cbedge-v3/src/pages/Vela.tsx`: registers it with the other top-bar actions, adds `REFRESH_ACTION_ID` to the desktop top bar's right side after `'screenshot'`, and binds / unbinds it with the workspace.
+- `tsc` strict is clean on the new file against `@luxalgo/vela` 0.8.2.

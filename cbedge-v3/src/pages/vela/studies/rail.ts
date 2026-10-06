@@ -11,7 +11,8 @@
 // EVERY STRIKE (Brandon, 2026-10-04: "it should show all levels"): all the
 // strikes the column carries, the named ones tagged. The tags are Voltick's
 // (the page pins it), read by the definition (data/voltickLevels.ts
-// vtFromLadder) off the column's live book (OI + vol), whatever the GEX setting:
+// vtFromLadder) off the rail's GEX setting — Vol only by default since
+// 2026-10-06, the Voltick Path's book, so tags and bubbles line up:
 // ★ Volt = the top net GEX, ◆ Coil = the 2nd top on the Volt's side of spot,
 // ↘ Reversal = the top across spot. ↯ Surge (the biggest volume GEX) keeps the
 // Voltick bot's read. On the CB theme: CB / CW / PW.
@@ -181,7 +182,7 @@ function railDay(c: StudyCtx): string[] {
 
 export const railImpl = studyImpl<RailS, Ladder>({
   settings: (i) => {
-    const b = str(i.basis, GEX_BASIS[0])
+    const b = str(i.basis, GEX_BASIS[2])
     return {
       side: str(i.side, RAIL_SIDES[0]) === RAIL_SIDES[1] ? 'left' : 'right',
       metric: b === GEX_BASIS[2] ? 'vol' : b === GEX_BASIS[1] ? 'oi' : 'net',
@@ -217,7 +218,9 @@ export const railImpl = studyImpl<RailS, Ladder>({
     // every strike on the ladder; the named ones carry their tags
     const shown = model.rows
     if (voltick) {
-      const def = vtFromLadder(col.cells.map((x) => ({ strike: x.strike, net: x.net })), model.spot)
+      // the tags read the rail's own GEX setting (2026-10-06: volume only by default,
+      // the Voltick Path's book, so the two line up); `cells` is already OI only on OI only
+      const def = vtFromLadder(cells.map((x) => ({ strike: x.strike, net: s.metric === 'vol' ? x.netVol : x.net })), model.spot)
       const surge = voltickMarks(col.cells.map((x) => ({ strike: x.strike, book: x.net, vol: x.netVol })), { always: true }).surge
       const vt: VoltickMarks = { volt: def.volt, coil: def.coil, reversal: def.reversal, surge, coils: def.coil != null ? [def.coil] : [] }
       lv.vt = vt

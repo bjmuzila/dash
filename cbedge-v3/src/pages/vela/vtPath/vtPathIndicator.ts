@@ -23,7 +23,8 @@
 // `ctx.pushData`; the layer paints every frame from them.
 //
 // ── Inputs ───────────────────────────────────────────────────────────────────
-//   GEX          OI + Vol / Vol only — which recorded walls (CB Walls' GEX switch)
+//   (GEX)        none: always the volume-only walls (2026-10-06); the old
+//                OI + Vol / Vol only switch was removed
 //   Contracts    0DTE / Non-0DTE — which expiries the walls were computed from
 //   Node levels  boldness, 0–100%, default 15 — Voltick's Node levels slider; 0 hides
 //   Calm chart   Voltick's Calm chart: smaller, quieter marks
@@ -47,7 +48,6 @@ import { PATH_TYPE, RIBBON_TYPE, registerVtPathLayers, type PathPayload } from '
 
 export { PATH_TYPE, RIBBON_TYPE }
 
-const MAP_OPTS = ['OI + Vol', 'Vol only'] as const
 const SCOPE_OPTS = ['0DTE', 'Non-0DTE'] as const
 const REFRESH_MS = 60_000
 /** The open capture is slot 0 at 09:29 ET. */
@@ -57,14 +57,6 @@ type Shape = 'path' | 'ribbon'
 
 function inputsSchema(shape: Shape): InputSchema[] {
   return [
-    {
-      key: 'map',
-      title: 'GEX',
-      type: 'string',
-      defval: MAP_OPTS[0],
-      options: MAP_OPTS,
-      tooltip: 'Which recorded walls the levels are: the live book (OI + today’s volume) or volume only.',
-    },
     {
       key: 'scope',
       title: 'Contracts',
@@ -125,7 +117,9 @@ function settingsOf(inputs: Record<string, InputValue>): Settings {
   const n = (v: InputValue | undefined, d: number, lo: number, hi: number) =>
     typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : d
   return {
-    basis: inputs.map === MAP_OPTS[1] ? 'vol' : 'oivol',
+    // VOLUME ONLY, ALWAYS (2026-10-06, Brandon: "it should be volume only, they all
+    // should be volume only"): the GEX switch is gone
+    basis: 'vol',
     scope: inputs.scope === SCOPE_OPTS[1] ? 'agg' : '0dte',
     sessions: n(inputs.sessions, 10, 1, 60),
     ci: n(inputs.boldness, 15, 0, 100) / 100,

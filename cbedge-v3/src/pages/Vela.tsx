@@ -10,6 +10,7 @@ import { Page } from '@/design/primitives/Page'
 import { CbEdgeProvider, DEFAULT_HISTORY_URL, PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
 import { WALLS_TYPE, registerCbWalls } from '@/pages/vela/wallsIndicator'
 import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot'
+import { REFRESH_ACTION_ID, bindRefreshWorkspace, registerRefreshChart } from '@/pages/vela/refreshChart'
 import { bindIndicatorsWorkspace, registerCopyIndicators } from '@/pages/vela/copyIndicators'
 import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
 import { registerLastPriceColor } from '@/pages/vela/lastPriceColor'
@@ -300,7 +301,8 @@ const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
  *  until it is listed here. */
 const DESKTOP_TOPBAR = {
   left: [SYMBOL_ACTION_ID, 'timeframes', 'style', 'layout', 'indicators', 'actions', 'undo-redo'],
-  right: [CLOCK_ACTION_ID, 'alerts', WORKSPACE_ACTION_ID, 'screenshot'],
+  // ↻ beside the camera: candles, data and the live feed refreshed in place (vela/refreshChart.ts)
+  right: [CLOCK_ACTION_ID, 'alerts', WORKSPACE_ACTION_ID, 'screenshot', REFRESH_ACTION_ID],
 }
 
 // Before any workspace exists: Vela reads its native-indicator and widget-action
@@ -308,6 +310,7 @@ const DESKTOP_TOPBAR = {
 registerCbWalls()
 registerVtPath()
 registerCopyScreenshot()
+registerRefreshChart()
 registerCopyIndicators()
 registerWallsOpacity()
 registerScripts()
@@ -510,6 +513,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     const unbindSetups = bindSetups(ws)
     if (replayOnOpenRef.current) setTimeout(openPicker, 400)
     const unbindShot = bindShotWorkspace(ws)
+    const unbindRefresh = bindRefreshWorkspace(ws)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
     // every indicator's settings dialog: Defaults ▾ (reset, save as my default, saved
     // settings by name) in place of Vela's Reset defaults (vela/indicatorPresets.ts)
@@ -605,6 +609,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       offActive()
       offCreated()
       unbindShot()
+      unbindRefresh()
       unbindPicker()
       unbindWorkspace()
       legendGone = true
