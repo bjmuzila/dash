@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CB Edge Postgres on the VPS (2026-10-06: moving off Render).
+#
+# A SEPARATE compose project (cbedge-db), on purpose: push.ps1's
+# `docker compose build/up` for the app never touches it, so a deploy never
+# restarts the database. Started and stopped only by the db/*.sh scripts.
+#
+# NETWORK: it joins the main stack's network (dashboard_default) as an external
+# network, so every app container reaches it as `cbedge-postgres:5432` with no
+# change to docker-compose.yml. It publishes nothing to the internet: the only
+# host port is 127.0.0.1:5433, for psql on the box.
+# If the main stack is ever taken DOWN (`docker compose down`, not `up -d`), its
+# network is recreated: restart this one after it
+#   docker compose -p cbedge-db -f db/docker-compose.db.yml up -d --force-recreate
+#
+# SSL ON, self-signed (certs made by db/setup.sh). The app's pg pools ask for SSL
+# on any host that isn't localhost ({ rejectUnauthorized: false }), so with SSL
+# on nothing in the app changes.
+#
+# Everything stateful is under /opt/cbedge-db (outside git): data, certs,
+# db.env (the password), dumps, backups.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  postgres:
+    image: postgres:18
+    container_name: cbedge-postgres
+    restart: unless-stopped
+    env_file:
+      - /opt/cbedge-db/db.env
+    environment:
+      TZ: UTC
+    # Postgres 18 images keep data under /var/lib/postgresql/18/docker: mount the parent
+    volumes:
+      - /opt/cbedge-db/pg:/var/lib/postgresql
+      - /opt/cbedge-db/certs:/certs:ro
+      - /opt/cbedge-db/dump:/dump
+    shm_size: 1g
+    # Sized for this box (7.5 GB RAM shared with the app, SSD): a 1.5 GB cache,
+    # the rest left to the OS page cache and the Node containers.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1536MB
+      - -c
+      - effective_cache_size=4GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - max_connections=150
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/server.crt
+      - -c
+      - ssl_key_file=/certs/server.key
+      - -c
+      - log_min_duration_statement=5000
+      - -c
+      - idle_in_transaction_session_timeout=10min
+    ports:
+      - "127.0.0.1:5433:5432"
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+networks:
+  app:
+    external: true
+    name: dashboard_default

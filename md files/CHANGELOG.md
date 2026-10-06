@@ -26979,3 +26979,16 @@ Measured: the old `watch_snapshots` DISTINCT ON was #1 (106,777s total, 5.7s avg
 - Not changed:
   - `flow_prints` INSERT (#3, 396ms avg): write cost of its 3 indexes on Render's disk.
   - `/proxy/strike-growth/scanner`: it still uses the old LATERAL pattern; it only runs when that page is open.
+
+## 2026-10-06 — Scripts to move Postgres from Render onto the VPS
+
+- New `db/` folder:
+  - `docker-compose.db.yml`: Postgres 18 as its own compose project `cbedge-db`, joined to `dashboard_default` as `cbedge-postgres`. It has SSL on (self-signed), memory settings for the 7.5 GB box, `pg_stat_statements` preloaded, and publishes only 127.0.0.1:5433.
+  - `lib.sh`: shared settings and helpers.
+  - `setup.sh`: creates `/opt/cbedge-db`, saves the Render URL, generates the password and certificate, starts an empty database, and checks the app container can reach it.
+  - `rehearse.sh`: a full practice copy (parallel dump and restore, analyze, exact row counts for every table) while the app stays on Render.
+  - `cutover.sh`: stops dashboard, household and daily, copies, requires every table's row count to match exactly, repoints `DATABASE_URL` (backing up `.env.local` first), and recreates the services. If counts differ it aborts and restarts the services on Render.
+  - `rollback.sh`: points the services back at Render.
+  - `backup.sh`: nightly custom-format dumps, 5 kept locally, an optional rclone off-box copy kept 14 days, `--install` to add the cron job, and `--restore-test`.
+- `md files/DB-MOVE-TO-VPS.md`: the runbook.
+- Sizes measured from Render: 25 GB total (about 18 GB of it indexes). The VPS has 76 GB free.
