@@ -1718,6 +1718,63 @@ async function handleFlowNetPremBoard(req, res) {
  *  - today, fresh    → cache as-is
  *  - past date       → cache as-is (immutable session)
  */
+// ── THE NET PREMIUM ARCHIVE (2026-10-06, Brandon: "net premium needs to be saved
+// for 7 days") ─────────────────────────────────────────────────────────────────
+// Small prints are purged from flow_prints a day after their session, so a past
+// day's raw GROUP BY sees only the $500K+ prints. state/retention-cleanup.js
+// (archiveNetPrem) rolls each finished session into flow_netprem_archive first:
+// per root, minute, OTM flag and disjoint premium band. A past-date request it
+// can answer exactly — the plain shape the Vela Net Premium study sends: one
+// ticker, 60s bins, Tasty tape, no side / type / size / expiry / DTE filter, a
+// premium floor on a band edge, OTM on or off — is read from there; anything
+// else, or a day not archived yet, takes the raw path as before.
+const NETPREM_ARCHIVE_BANDS = [0, 1000, 25000, 100000, 500000];
+
+function netPremArchivable(f, binMs) {
+  return (
+    binMs === 60_000 &&
+    f.source !== 'lse' &&
+    !!f.underlying &&
+    !f.exIdx &&
+    f.side === 'all' &&
+    f.type === 'ALL' &&
+    !(f.minSize > 0) &&
+    f.expiry === 'all' &&
+    !(f.dteMin > 0) &&
+    f.dteMax == null &&
+    NETPREM_ARCHIVE_BANDS.includes(f.minPremium || 0)
+  );
+}
+
+/** A past session's bins from flow_netprem_archive; null when it holds none (or is missing). */
+async function queryNetPremArchive(pool, f) {
+  try {
+    const params = [f.date, flowRootsFor(f.underlying), f.minPremium || 0];
+    const { rows } = await pool.query(
+      `SELECT sec, sum(call_net) AS call_net, sum(put_net) AS put_net,
+              sum(call_vol) AS call_vol, sum(put_vol) AS put_vol, avg(spot) AS spot
+         FROM flow_netprem_archive
+        WHERE date = $1 AND root = ANY($2) AND band >= $3${f.otmOnly ? ' AND otm = true' : ''}
+        GROUP BY sec
+        ORDER BY sec`,
+      params
+    );
+    if (!rows.length) return null;
+    return rows.map((r) => ({
+      sec: Number(r.sec),
+      callNet: Number(r.call_net) || 0,
+      putNet: Number(r.put_net) || 0,
+      callVol: Number(r.call_vol) || 0,
+      putVol: Number(r.put_vol) || 0,
+      spot: r.spot != null && Number.isFinite(Number(r.spot)) ? Number(r.spot) : undefined,
+    }));
+  } catch (e) {
+    // no archive table yet (the cleanup has not run on this box): the raw path
+    if (!/does not exist/i.test(String(e?.message))) console.warn('[flow-netprem] archive read failed:', e.message);
+    return null;
+  }
+}
+
 async function getNetPremBins(f, binMs) {
   const key = flowFilterCacheKey(f, binMs);
   const now = Date.now();
@@ -1728,6 +1785,15 @@ async function getNetPremBins(f, binMs) {
   const pool = getHistPool();
   if (!pool) return hit ? hit.bins : [];
   await ensureFlowPrintsSchema(pool);
+
+  // a finished session the archive can answer: read it there (header above)
+  if (!isToday && f.date < todayYmdET() && netPremArchivable(f, binMs)) {
+    const archived = await queryNetPremArchive(pool, f);
+    if (archived) {
+      _netPremCache.set(key, { at: Date.now(), date: f.date, binMs, bins: archived });
+      return archived;
+    }
+  }
 
   if (hit && isToday && hit.bins.length) {
     // Incremental refresh: re-scan the trailing overlap window, widened to at

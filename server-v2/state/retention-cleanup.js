@@ -108,6 +108,13 @@ const RETENTION = {
   flow_prints:                Number(process.env.RETENTION_FLOW_PRINTS_DAYS || 5),    // ≥ big-premium prints kept this many session days (0–7DTE Combined lookback)
   flow_prints_big_premium:    Number(process.env.RETENTION_FLOW_BIG_PREMIUM || 500_000), // "big" = survives the full window regardless of expiry
   flow_prints_small_days:     Number(process.env.RETENTION_FLOW_SMALL_DAYS || 1),     // < big-premium prints: purged on expiry or after this many days (disk guard)
+  // flow_netprem_archive (2026-10-06, Brandon: "net premium needs to be saved
+  // for 7 days"): each finished session's per-minute call / put net premium,
+  // written just before the small prints above are purged (archiveNetPrem). 10
+  // calendar days so the Vela Net Premium study always has 7 sessions, weekends
+  // and a holiday included. Tiny next to flow_prints: one row per root, minute,
+  // OTM flag and premium band that actually traded.
+  flow_netprem_archive_days:  Number(process.env.RETENTION_FLOW_NETPREM_ARCHIVE_DAYS || 10),
   greek_snapshots:            Number(process.env.RETENTION_GREEK_SNAPSHOTS_DAYS || 10),
   ticker_wall_snapshots:      Number(process.env.RETENTION_TICKER_WALL_DAYS || 10),
   scanner_snapshots:          Number(process.env.RETENTION_SCANNER_SNAPSHOTS_DAYS || 10),
@@ -318,6 +325,81 @@ async function pruneGexHistoryByDate(p) {
   return out;
 }
 
+// ── NET PREMIUM ARCHIVE ─────────────────────────────────────────────────────
+// /proxy/flow-netprem sums flow_prints per minute, but small prints (< the big-
+// premium floor) are purged a day after their session, so an older day's net
+// premium comes back as the $500K+ prints alone. Before that purge, each finished
+// session is rolled up here: per root (underlying_norm), minute, OTM flag and
+// premium BAND, the call / put net premium (buys − sells) and volume. Bands are
+// disjoint ([0,1K) [1K,25K) [25K,100K) [100K,500K) [500K,∞)), so any "premium ≥
+// edge" filter is the sum of the bands from that edge up; server-with-proxy.js
+// (queryNetPremArchive) reads it for a past session whose filter it can answer.
+const NETPREM_BANDS_SQL = `CASE WHEN COALESCE(premium, 0) >= 500000 THEN 500000
+                               WHEN COALESCE(premium, 0) >= 100000 THEN 100000
+                               WHEN COALESCE(premium, 0) >= 25000  THEN 25000
+                               WHEN COALESCE(premium, 0) >= 1000   THEN 1000
+                               ELSE 0 END`;
+const ET_YMD = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+
+async function ensureNetPremArchive(p) {
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS flow_netprem_archive (
+      date      TEXT     NOT NULL,
+      root      TEXT     NOT NULL,
+      otm       BOOLEAN  NOT NULL,
+      band      INTEGER  NOT NULL,
+      sec       BIGINT   NOT NULL,
+      call_net  DOUBLE PRECISION NOT NULL DEFAULT 0,
+      put_net   DOUBLE PRECISION NOT NULL DEFAULT 0,
+      call_vol  BIGINT   NOT NULL DEFAULT 0,
+      put_vol   BIGINT   NOT NULL DEFAULT 0,
+      spot      REAL,
+      PRIMARY KEY (date, root, otm, band, sec)
+    )`);
+}
+
+/** Roll every finished session of the last `flow_netprem_archive_days` that is not
+ *  archived yet into flow_netprem_archive. One statement per session date. */
+async function archiveNetPrem(p) {
+  const out = { archived: [], errors: [] };
+  try {
+    await ensureNetPremArchive(p);
+  } catch (e) {
+    out.errors.push(`schema: ${e.message}`);
+    console.warn('[retention-cleanup] netprem archive schema failed:', e.message);
+    return out;
+  }
+  const today = ET_YMD.format(new Date());
+  for (let back = 1; back <= RETENTION.flow_netprem_archive_days; back++) {
+    const d = ET_YMD.format(new Date(Date.now() - back * 86_400_000));
+    if (d >= today) continue;
+    try {
+      const done = await p.query('SELECT 1 FROM flow_netprem_archive WHERE date = $1 LIMIT 1', [d]);
+      if (done.rowCount) continue;
+      const any = await p.query('SELECT 1 FROM flow_prints WHERE date = $1 LIMIT 1', [d]);
+      if (!any.rowCount) continue;
+      await p.query(`
+        INSERT INTO flow_netprem_archive (date, root, otm, band, sec, call_net, put_net, call_vol, put_vol, spot)
+        SELECT date, underlying_norm, COALESCE(is_otm, false), ${NETPREM_BANDS_SQL}, (ts / 60000) * 60,
+               COALESCE(sum(CASE WHEN type = 'C' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END), 0),
+               COALESCE(sum(CASE WHEN type = 'P' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END), 0),
+               COALESCE(sum(CASE WHEN type = 'C' THEN size ELSE 0 END), 0),
+               COALESCE(sum(CASE WHEN type = 'P' THEN size ELSE 0 END), 0),
+               avg(spot) FILTER (WHERE spot IS NOT NULL AND spot > 0)
+          FROM flow_prints
+         WHERE date = $1 AND underlying_norm IS NOT NULL
+         GROUP BY 1, 2, 3, 4, 5
+        ON CONFLICT DO NOTHING`, [d]);
+      out.archived.push(d);
+    } catch (e) {
+      out.errors.push(`${d}: ${e.message}`);
+      console.warn(`[retention-cleanup] netprem archive failed for ${d}:`, e.message);
+    }
+  }
+  if (out.archived.length) console.log(`[retention-cleanup] netprem archived ${out.archived.join(', ')}`);
+  return out;
+}
+
 /** Runs every DELETE, logging (and swallowing) per-table errors so one bad
  * table (e.g. doesn't exist yet, or a column name drifted) never blocks the
  * rest of the prune. Returns a { table: rowCount|'error' } summary. */
@@ -417,6 +499,12 @@ async function runDeletes(p, { archiveReady = false } = {}) {
   // contracts that already expired. Small prints keep the old aggressive purge
   // (dead the moment the contract expires, else a short date cutoff) so the
   // table doesn't balloon back toward the 3.6GB disk-exhaustion incident.
+  // Archive each finished session's per-minute net premium FIRST: the DELETE
+  // below takes the small prints it is built from.
+  results.flow_netprem_archive_write = await archiveNetPrem(p);
+  await run('flow_netprem_archive',
+    `DELETE FROM flow_netprem_archive WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.flow_netprem_archive_days} days'`);
+
   await run('flow_prints', `
     DELETE FROM flow_prints
     WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.flow_prints} days'

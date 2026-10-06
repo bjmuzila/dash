@@ -192,7 +192,15 @@ export function registerStudies(): void {
       shortTitle: 'Net Premium',
       pane: 'new',
       inputs: () => [
-        { key: 'sessions', title: 'Sessions', type: 'int', defval: 1, min: 1, max: 5 },
+        {
+          key: 'sessions',
+          title: 'Sessions',
+          type: 'int',
+          defval: 7,
+          min: 1,
+          max: 7,
+          tooltip: 'How many sessions back (up to 7). Each one starts at 0 at the 9:30 ET open.',
+        },
         {
           key: 'legs',
           title: 'Calls and puts lines (no net line)',

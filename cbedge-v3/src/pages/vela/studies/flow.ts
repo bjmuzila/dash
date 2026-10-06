@@ -7,6 +7,11 @@
 //                  through each session, off the same per-minute bins
 //                  (/proxy/flow-netprem — SQL over the whole session, not the
 //                  tape's row cap). Past sessions are fetched once.
+//                  SEVEN SESSIONS, EACH FROM 0 AT THE OPEN (2026-10-06,
+//                  Brandon): up to 7 sessions back (the server keeps a per-
+//                  minute archive of each finished day — flow_netprem_archive),
+//                  and every session's lines start at 0 on the 09:30 ET open;
+//                  anything printed before the open is left out.
 //                  ONE OR THE OTHER (2026-10-05, Brandon): "Calls and puts" on
 //                  draws the calls line and the puts line and no net line; off,
 //                  the net line alone (green above zero, red below).
@@ -27,7 +32,7 @@
 
 import type { PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
-import { DAY_MS, barAt, bool, studyImpl, etDateKey, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
+import { DAY_MS, barAt, bool, studyImpl, etDateKey, etWallMs, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
 import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_EXP, WH_MIN, WH_OPACITY_DEF, WH_SIDE } from './index'
 import { WhaleLayer, type Tone, type WhaleBubble, type WhalePayload } from './whaleLayer'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
@@ -58,7 +63,7 @@ const pastBins = new Map<string, Bin[]>()
 
 export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
   settings: (i) => ({
-    sessions: int(i.sessions, 1, 1, 5),
+    sessions: int(i.sessions, 7, 1, 7),
     legs: bool(i.legs, true),
     otm: bool(i.otm, true),
     minPremium: MIN_PREM_V[Math.max(0, (MIN_PREM as readonly string[]).indexOf(str(i.min, MIN_PREM[0])))] ?? 1_000,
@@ -105,11 +110,15 @@ export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
     for (const ss of sessionsOf(bars, (x) => etDateKey(x))) {
       const bins = data.get(ss.key)
       if (!bins?.length) continue
+      // each session starts at 0 on the 09:30 ET open: prints before it are left out
+      const openMs = etWallMs(ss.key, 9 * 60 + 30)
       let k = 0
+      while (k < bins.length && bins[k]!.sec * 1000 < openMs) k++
       let cc = 0
       let pp = 0
       let seen = false
       for (let i = ss.from; i <= ss.to; i++) {
+        if (bars[i]!.time + tfMs <= openMs) continue
         const end = bars[i]!.time + tfMs
         while (k < bins.length && bins[k]!.sec * 1000 < end) {
           cc += bins[k]!.callNet
