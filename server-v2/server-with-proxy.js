@@ -892,8 +892,13 @@ function getHistPool() {
     _histPool = new Pool({
       connectionString: process.env.DATABASE_URL,
       ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? undefined : { rejectUnauthorized: false },
-      max: 2,
+      // 2026-10-06: 2 → 4, and a 20 s statement ceiling. This pool serves the
+      // chart reads (Net Premium, Vol/GEX Flow, the flow tape); with two
+      // connections one slow read blocked half of them, and a stuck one blocked
+      // them all until it finished.
+      max: 4,
       keepAlive: true,
+      statement_timeout: 20_000,
     });
     _histPool.on('error', (e) => {
       console.warn('[gex-history-read] pool error (will reconnect):', e.message);
@@ -1042,6 +1047,10 @@ function flowRootsFor(t) {
 // per TTL instead of one per request.
 const _flowHistoryCache = new Map(); // key -> { at: ms, payload }
 const FLOW_HISTORY_TTL_MS = 4000;
+/** Reads still running, by cache key: identical requests share one query. */
+const _flowHistoryInFlight = new Map();
+/** A finished session's answer, kept this long. */
+const PAST_DAY_TTL_MS = 6 * 3_600_000;
 
 async function handleFlowHistory(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
@@ -1060,10 +1069,38 @@ async function handleFlowHistory(req, res) {
 
   const cacheKey = `${date}|${underlying.toUpperCase()}|${limit}|${minPremium}`;
   const hit = _flowHistoryCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < FLOW_HISTORY_TTL_MS) return sendJson(res, 200, hit.payload, req, sessionCacheOpts(date));
+  // a finished session's tape never changes: kept for hours, not seconds (2026-10-06)
+  const ttl = date < todayYmdET() ? PAST_DAY_TTL_MS : FLOW_HISTORY_TTL_MS;
+  if (hit && Date.now() - hit.at < ttl) return sendJson(res, 200, hit.payload, req, sessionCacheOpts(date));
+  // the same read already running: wait for it instead of starting another
+  const running = _flowHistoryInFlight.get(cacheKey);
+  if (running) {
+    try { return sendJson(res, 200, await running, req, sessionCacheOpts(date)); } catch { /* fall through and read */ }
+  }
+  let done;
+  const flight = new Promise((resolve, reject) => { done = { resolve, reject }; });
+  flight.catch(() => {});
+  _flowHistoryInFlight.set(cacheKey, flight);
+  try {
+    const payload = await readFlowHistory(date, underlying, limit, minPremium);
+    if (_flowHistoryCache.size > 300) {
+      for (const [k, v] of _flowHistoryCache) if (Date.now() - v.at > FLOW_HISTORY_TTL_MS && !k.startsWith(`${todayYmdET()}|`)) _flowHistoryCache.delete(k);
+    }
+    _flowHistoryCache.set(cacheKey, { at: Date.now(), payload });
+    done.resolve(payload);
+    sendJson(res, 200, payload, req, sessionCacheOpts(date));
+  } catch (e) {
+    done.reject(e);
+    throw e;
+  } finally {
+    _flowHistoryInFlight.delete(cacheKey);
+  }
+}
+
+async function readFlowHistory(date, underlying, limit, minPremium) {
 
   const pool = getHistPool();
-  if (!pool) return sendJson(res, 200, { date, tape: [] }, req);
+  if (!pool) return { date, tape: [] };
   await ensureFlowPrintsSchema(pool);
 
   // Optional per-ticker filter. With the full roster recording, an unfiltered
@@ -1115,9 +1152,7 @@ async function handleFlowHistory(req, res) {
     spot: r.spot != null ? Number(r.spot) : undefined,
   }));
 
-  const payload = { date, tape };
-  _flowHistoryCache.set(cacheKey, { at: Date.now(), payload });
-  sendJson(res, 200, payload, req, sessionCacheOpts(date));
+  return { date, tape };
 }
 
 // ── /proxy/flow-netprem ────────────────────────────────────────────────────
@@ -5523,6 +5558,9 @@ async function main() {
     // TPO profile recorder: REMOVED 2026-10-06 (Brandon: "dump the tpo recorder").
     // Its boot catch-up scanned all of option_strike_gex_history on every restart
     // and took the site down. The tpo_profiles table and its rows are left as they are.
+    // Chart-read indexes, built CONCURRENTLY two minutes after boot, plus
+    // pg_stat_statements when Postgres preloads it (state/perf-indexes.js).
+    require('./state/perf-indexes').startPerfIndexes();
     // Momentum Bias grader: grades pending TP/reversal signals (recorded inline
     // by the feed in _flushEsCandles) via follow-through every 5m → the
     // momentum_bias_signals table. Read via /api/momentum-bias.

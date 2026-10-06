@@ -310,12 +310,19 @@ function getPool() {
     _pool = new import_pg.Pool({
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.DATABASE_URL?.includes("localhost") || process.env.DATABASE_URL?.includes("127.0.0.1") ? void 0 : { rejectUnauthorized: false },
-      max: 5,
-      // cap per-instance conns (Render Postgres is connection-limited)
+      // 2026-10-06: 5 → 10. Postgres is on the same VPS (not Render any more) and
+      // every API route shares this pool: five slow chart reads used to take all
+      // five connections and every other request (even /api/db/health's SELECT 1)
+      // queued behind them.
+      max: 10,
       idleTimeoutMillis: 3e4,
       // hold idle conns 30s, not pg's 10s default → less connect churn
-      keepAlive: true
+      keepAlive: true,
       // TCP keepalive so dead idle sockets surface fast and reconnect
+      // A statement running longer than this is cancelled by Postgres, so one bad
+      // query fails on its own instead of holding a connection while the page
+      // waits. Recorders with long jobs use their own pools.
+      statement_timeout: 45e3
     });
     _pool.on("error", (err) => {
       console.warn("[db] idle pool client error (will reconnect):", err.message);
@@ -2334,10 +2341,18 @@ async function insertWatchSnapshot(s) {
 }
 async function getLatestWatchSnapshots() {
   await getDb();
+  // One index probe per watched contract on idx_watch_snapshots_wid_ts
+  // (2026-10-06). DISTINCT ON over the whole table read every snapshot ever
+  // taken to keep one per contract: 40 s under load.
   return queryAll(
-    `SELECT DISTINCT ON (watch_id) *
-       FROM watch_snapshots
-      ORDER BY watch_id, ts DESC`
+    `SELECT s.*
+       FROM watch_options o
+       CROSS JOIN LATERAL (
+         SELECT * FROM watch_snapshots ws
+          WHERE ws.watch_id = o.id
+          ORDER BY ws.ts DESC
+          LIMIT 1
+       ) s`
   );
 }
 async function getWatchHistory(watchId, limit = 300) {

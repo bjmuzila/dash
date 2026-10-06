@@ -82,7 +82,53 @@ export interface StudyCtx {
   view: VisibleRange | null
   /** The bar replay's clock: nothing after it has happened yet (Infinity while live). */
   until: number
+  /**
+   * Read the data again now (a fresh read, through the load queue). For a load
+   * that answers with what it has first and fetches the rest in the background:
+   * when the rest lands, it calls this and the study repaints with it.
+   */
+  refresh?: () => void
 }
+
+// ── THE LOAD QUEUE (2026-10-06, Brandon: "how can load time on charts be
+// improved"). A layout of four charts used to fire every study's read at once —
+// candles, rail ladder, Path walls, whales, Net Premium, Vol/GEX Flow, ×4 — and
+// the candles waited in line behind 30+ data requests. Now:
+//   · a study's FIRST read waits FIRST_LOAD_DELAY_MS, so each chart's candle
+//     request (Vela's provider, not queued here) goes out first
+//   · at most MAX_LOADS study reads run at once across the page; the rest wait
+//     their turn, oldest first
+// Re-reads on the refresh timer take the same queue. ────────────────────────
+const MAX_LOADS = 4
+const FIRST_LOAD_DELAY_MS = 300
+let running = 0
+const waiting: Array<() => void> = []
+
+/** A read still out after this gives its slot up (it keeps running): a hung request never stalls the queue. */
+const SLOT_MAX_MS = 15_000
+
+/** Run `fn` when a load slot is free. */
+export async function queuedLoad<T>(fn: () => Promise<T>): Promise<T> {
+  if (running >= MAX_LOADS) await new Promise<void>((go) => waiting.push(go))
+  running++
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    running--
+    waiting.shift()?.()
+  }
+  const timer = setTimeout(release, SLOT_MAX_MS)
+  try {
+    return await fn()
+  } finally {
+    clearTimeout(timer)
+    release()
+  }
+}
+
+/** The pause before a study's first read (see the load queue). */
+export const firstLoadDelay = (): Promise<void> => new Promise((go) => setTimeout(go, FIRST_LOAD_DELAY_MS))
 
 export interface StudyMeta {
   type: string
@@ -157,6 +203,9 @@ class Study implements NativeIndicator {
       tfMs: timeframeToMs(ctx.timeframe),
       view: this.view,
       until: ctx.live ? Infinity : replayClock(),
+      refresh: () => {
+        if (!this.stopped && !this.suspended) void this.load(true)
+      },
     }
   }
 
@@ -177,7 +226,7 @@ class Study implements NativeIndicator {
         this.spec = spec
         this.ready = true
         if (this.suspended) return
-        if (spec.load) void this.load(false)
+        if (spec.load) void firstLoadDelay().then(() => this.load(false))
         else this.paint()
         this.arm()
       },
@@ -251,7 +300,9 @@ class Study implements NativeIndicator {
     let data: any = null
     this.inflight++
     try {
-      data = await this.spec.load(c, this.spec.settings(this.inputs), fresh)
+      const spec = this.spec
+      const settings = spec.settings(this.inputs)
+      data = await queuedLoad(() => spec.load!(c, settings, fresh))
     } catch {
       data = null
     } finally {

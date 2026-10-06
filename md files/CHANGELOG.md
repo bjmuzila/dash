@@ -26907,3 +26907,42 @@ Brandon picked W3 from `generated/2026-10-06-vela-whale-pop-r1.html`.
 
 - `server-v2/server-with-proxy.js`: `startTpoProfilesRecorder()` is no longer called at boot. That stops the nightly 16:30 ET pass and the restart catch-up that scanned `option_strike_gex_history` and caused today's outage. The `tpo_profiles` table and its rows are untouched.
 - To delete by hand (this session could not delete files on the laptop): `server-v2/tpo-profiles-recorder.js` and the one-shot `server-v2/backfill-tpo-profiles.js`, its only other user.
+
+## 2026-10-06 — Chart load times: database pools, queries, caching, load queue
+
+**Server**
+- `server-v2/_lib-db.cjs`: the shared API pool goes from 5 to 10 connections, with a 45s `statement_timeout`. Five slow chart reads used to fill it, and everything else queued behind them, `/api/db/health` included.
+- `getLatestWatchSnapshots` now does one lookup per watched contract (a LATERAL join over `watch_options`). The old DISTINCT ON read the whole `watch_snapshots` table and took about 40s under load.
+- `server-v2/server-with-proxy.js`:
+  - The `getHistPool` chart-read pool (Net Premium, Vol/GEX Flow, flow tape) goes from 2 to 4 connections, with a 20s `statement_timeout`.
+  - `/proxy/flow-history` keeps a finished session's answer for 6h (today's still 4s), and identical requests share one query.
+  - It now starts `state/perf-indexes.js` at boot.
+- `server-v2/api-router.js`:
+  - `/api/lse/whales?rows_only=1` returns the print list alone, skipping the six roll-up queries, so one query runs instead of seven.
+  - Its answers are cached: 6h for a range that ended before today, 10s for one that includes today.
+  - Identical requests in flight share one run.
+  - The GEX ladder heatmap cache keeps past-date answers for 6h (today's still 30s), with a size cap.
+- `server-v2/state/perf-indexes.js` (new):
+  - Two minutes after boot it builds `lse_top_flow_prints_und_session_ts_idx` on `((payload->>'underlying'), session_date, ts DESC)` with CREATE INDEX CONCURRENTLY, so writes are never blocked. It uses its own connection, with no statement timeout and a 10s lock timeout.
+  - If an earlier build failed and left an invalid index, it drops that index first.
+  - It also creates the `pg_stat_statements` extension and logs whether Postgres preloads it.
+
+**Client (Vela)**
+- `studies/common.ts`, the load queue:
+  - A study's first read waits 300ms, so each chart's candle request goes out first.
+  - At most 4 study reads run at once across the page.
+  - A read still out after 15s gives up its place in the queue, so a hung request can't stall the rest.
+  - `StudyCtx.refresh` lets a load that fetches the rest in the background repaint when it lands.
+- `vtPath/vtPathIndicator.ts`: Path and Ribbon loads go through the same queue and first-read delay.
+- `studies/flow.ts`:
+  - Net Premium waits only for today and already-read sessions. Past sessions load behind it and repaint when they arrive (in a replay, all sessions are awaited as before).
+  - Whale Prints uses `rows_only=1`. Live, its first read asks for today only, and the full range follows in the background.
+
+## 2026-10-06 — Vela phone: legend card scrolls when charts are stacked
+
+With two (or three) stacked charts on the phone, an open legend card ran past its chart's bottom edge and the lower studies couldn't be reached.
+
+- `cbedge-v3/src/pages/vela/legend/legendCard.ts`:
+  - New `cap()` (run from `applyFold`, so on mount, fold/unfold and every cell resize) writes `--cb-lc-max`: the room from the card's top down to the chart's bottom edge, less 8px.
+  - Wheel / touchmove / pointermove on the card body stop at the card while it can scroll, so the chart underneath doesn't pan or zoom. pointerdown and touchstart still pass through.
+- `cbedge-v3/src/pages/vela/vela.css`: the open card is a flex column capped at `--cb-lc-max`; the header stays put and `.cb-lc-body` scrolls (`overflow-y: auto`, `touch-action: pan-y`, `overscroll-behavior: contain`). Folded cards are unchanged.

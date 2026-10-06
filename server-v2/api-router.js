@@ -7806,7 +7806,11 @@ if (libDb) {
             const expiryFallback = sp.get('expiryFallback') === '1' && winMin === 0 && !anyExpiry;
             const cacheKey = `${symbol}|${winMin}|${anyExpiry ? 'any' : expiry}|${anyExpiry ? '' : date}|t${topN}|f${expiryFallback ? 1 : 0}`;
             const cached = heatmapCache.get(cacheKey);
-            if (cached && Date.now() - cached.at < HEATMAP_TTL_MS) { send(res, 200, cached.payload); return; }
+            // A finished session's ladder (date mode, a past date) never changes:
+            // kept for hours, not 30 s (2026-10-06)
+            const pastDay = winMin === 0 && !anyExpiry && date < todayET();
+            const ttl = pastDay ? 6 * 3_600_000 : HEATMAP_TTL_MS;
+            if (cached && Date.now() - cached.at < ttl) { send(res, 200, cached.payload); return; }
             // ── WHICH EXPIRY THIS DATE IS ACTUALLY READ UNDER ──────────────
             //
             // Resolved BEFORE the slots query, not after an empty one. The
@@ -7924,6 +7928,9 @@ if (libDb) {
               expiryFallback: didFallback,
               recordedExpiries,
             };
+            if (heatmapCache.size > 200) {
+              for (const [k, v] of heatmapCache) if (Date.now() - v.at > HEATMAP_TTL_MS) heatmapCache.delete(k);
+            }
             heatmapCache.set(cacheKey, { at: Date.now(), payload });
             send(res, 200, payload);
             return;
@@ -16226,6 +16233,16 @@ try {
 
     /** The table's hard cap for one response. The page asks for 300. */
     const WH_MAX_ROWS = 500;
+    /**
+     * Answers by request (2026-10-06). A range that ended before today never
+     * changes and is kept for hours; today's is shared for a few seconds, so the
+     * Vela charts that ask together get one set of queries, not one each. A
+     * request identical to one still running waits for it.
+     */
+    const WH_CACHE = new Map(); // key -> { at, body }
+    const WH_IN_FLIGHT = new Map(); // key -> Promise<body>
+    const WH_TODAY_TTL_MS = 10_000;
+    const WH_PAST_TTL_MS = 6 * 3_600_000;
     /** Leaderboard depth. Longer lists are scroll, not signal. */
     const WH_TOP_N = 12;
     /** A contract has to be hit this many times to count as "repeat". */
@@ -16512,11 +16529,44 @@ try {
           unreadable: { n: 0, premium: 0 },
         };
 
+        // ?rows_only=1 (2026-10-06): the print list alone, for the Vela Whale
+        // Prints study. The six roll-ups (tiles, sessions, tickers, DTE buckets,
+        // repeats, biggest) are skipped: seven full-range queries became one.
+        const rowsOnly = params.get('rows_only') === '1';
+        const whKey = JSON.stringify([from, to, minPremium, maxPrice, ticker, type, action, maxDte, moneyness, sides, sort, limit, rowsOnly]);
+        const whTtl = to < today ? WH_PAST_TTL_MS : WH_TODAY_TTL_MS;
+        const whHit = WH_CACHE.get(whKey);
+        if (whHit && Date.now() - whHit.at < whTtl) return send(res, 200, whHit.body, { 'Cache-Control': NO_STORE });
+        const whRunning = WH_IN_FLIGHT.get(whKey);
+        if (whRunning) {
+          const body = await whRunning.catch(() => null);
+          if (body) return send(res, 200, body, { 'Cache-Control': NO_STORE });
+        }
+        let whDone = null;
+        const whFlight = new Promise((resolve) => { whDone = resolve; });
+        WH_IN_FLIGHT.set(whKey, whFlight);
+        /** Send a successful answer, keep it, and hand it to anyone waiting on this key. */
+        const whReply = (body) => {
+          if (WH_CACHE.size > 300) {
+            for (const [k, v] of WH_CACHE) if (Date.now() - v.at > WH_TODAY_TTL_MS) WH_CACHE.delete(k);
+          }
+          WH_CACHE.set(whKey, { at: Date.now(), body });
+          WH_IN_FLIGHT.delete(whKey);
+          whDone(body);
+          return send(res, 200, body, { 'Cache-Control': NO_STORE });
+        };
+        /** A failure: nothing kept, the waiters read for themselves. */
+        const whFail = () => {
+          WH_IN_FLIGHT.delete(whKey);
+          whDone(null);
+        };
+
         if (!libDb) {
           // 200 with an error the page can RENDER, not a 5xx. A 503 here lands
           // in the client's error branch, which leaves the page blank with no
           // explanation — exactly the failure this endpoint existing is meant
           // to end.
+          whFail();
           return send(res, 200, { ...empty, error: 'No database configured — the whale archive is unavailable.' },
             { 'Cache-Control': NO_STORE });
         }
@@ -16528,6 +16578,15 @@ try {
           const cte = whCte(f.sql, sides === 'all' ? 'TRUE' : 'act IS NOT NULL');
 
           const order = sort === 'premium' ? 'premium DESC, ts DESC' : 'ts DESC, premium DESC';
+
+          if (rowsOnly) {
+            const listOnly = await libDb.queryAll(`${cte}
+                SELECT to_char(session_date, 'YYYY-MM-DD') AS session_day, payload
+                  FROM s
+                 ORDER BY ${order}
+                 LIMIT ?`, [...f.params, limit]);
+            return whReply({ ...empty, rows: (listOnly || []).map(whRow), rowsOnly: true, liveStats: false, error: null });
+          }
 
           const [summaryRows, sessionRows, tickerRows, bucketRows, repeatRows, listRows, biggestRows] =
             await Promise.all([
@@ -16647,7 +16706,7 @@ try {
             ...extra,
           });
 
-          return send(res, 200, {
+          return whReply({
             range: { from, to },
             summary,
             biggest: biggestRows && biggestRows[0] ? whRow(biggestRows[0]) : null,
@@ -16680,8 +16739,9 @@ try {
             /** So the page can say WHY vol/OI are dashes instead of just being blank. */
             liveStats: false,
             error: null,
-          }, { 'Cache-Control': NO_STORE });
+          });
         } catch (e) {
+          whFail();
           console.error('[api-router] /api/lse/whales failed:', e && e.message ? e.message : e);
           // Again 200-with-error rather than a 5xx, so the page renders the
           // reason instead of an empty archive.

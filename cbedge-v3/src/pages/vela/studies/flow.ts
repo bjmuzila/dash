@@ -75,6 +75,9 @@ const failedAt = new Map<string, number>()
  * same Whale Prints read from four charts sat in the database together, 34 s each).
  */
 const sharedPending = new Map<string, Promise<unknown>>()
+/** Whale Prints ranges already read whole once (later reads skip the today-first step). */
+const wholeRangeRead = new Set<string>()
+
 function sharedJson<T>(url: string): Promise<T | null> {
   let p = sharedPending.get(url) as Promise<T | null> | undefined
   if (!p) {
@@ -118,25 +121,37 @@ export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
       .slice(-s.sessions)
     if (!dates.includes(today) && c.ctx.live) dates.push(today)
     const out = new Map<string, Bin[]>()
-    await Promise.all(
-      dates.map(async (d) => {
-        const url = `/proxy/flow-netprem?underlying=${encodeURIComponent(t)}&bin=60&date=${d}&minPremium=${s.minPremium}${s.otm ? '&otmOnly=1' : ''}`
-        const past = d !== today
-        const cached = past ? pastBins.get(url) : undefined
-        if (cached) {
-          out.set(d, cached)
-          return
-        }
-        if (past && Date.now() - (failedAt.get(url) ?? 0) < RETRY_PAST_MS) return
-        const bins = await readBins(url)
-        if (!bins) {
-          if (past) failedAt.set(url, Date.now())
-          return
-        }
-        out.set(d, bins)
-        if (past) pastBins.set(url, bins)
-      }),
-    )
+    const urlOf = (d: string) =>
+      `/proxy/flow-netprem?underlying=${encodeURIComponent(t)}&bin=60&date=${d}&minPremium=${s.minPremium}${s.otm ? '&otmOnly=1' : ''}`
+    /** One session's bins into `out` (a past one kept for the page); true when it came back. */
+    const fetchDay = async (d: string): Promise<boolean> => {
+      const url = urlOf(d)
+      const past = d !== today
+      const cached = past ? pastBins.get(url) : undefined
+      if (cached) {
+        out.set(d, cached)
+        return false
+      }
+      if (past && Date.now() - (failedAt.get(url) ?? 0) < RETRY_PAST_MS) return false
+      const bins = await readBins(url)
+      if (!bins) {
+        if (past) failedAt.set(url, Date.now())
+        return false
+      }
+      out.set(d, bins)
+      if (past) pastBins.set(url, bins)
+      return true
+    }
+    // TODAY FIRST (2026-10-06, load times): live, the chart waits only for today
+    // and the past sessions already read; the others are fetched behind it and the
+    // study repaints with them when they land. In a replay every session is awaited.
+    const later = c.ctx.live ? dates.filter((d) => d !== today && !pastBins.has(urlOf(d))) : []
+    await Promise.all(dates.filter((d) => !later.includes(d)).map(fetchDay))
+    if (later.length) {
+      void Promise.all(later.map(fetchDay)).then((got) => {
+        if (got.some(Boolean)) c.refresh?.()
+      })
+    }
     return out
   },
   refreshMs: 15_000,
@@ -568,19 +583,33 @@ export const whalesImpl = studyImpl<WhS, WhData>({
     }
   },
   dataKey: (c, s) => `${flowTicker(c)}|${s.minPremium}|${s.days}`,
-  load: async (c, s) => {
+  load: async (c, s, fresh) => {
     // Days back from now, or in a replay from the bar it started at, reaching on
     // past it so the prints still to come are loaded and revealed as it plays.
     const now = Date.now()
     const anchor = c.ctx.live ? now : Math.min(now, c.bars[c.bars.length - 1]?.time ?? now)
     const to = etDateKey(Math.min(now, anchor + Math.max(s.days, 5) * DAY_MS))
     const from = etDateKey(anchor - s.days * DAY_MS)
+    // rows_only=1: the print list alone, without the Whales page's six roll-ups
+    const urlFor = (a: string, b: string) =>
+      `/api/lse/whales?from=${a}&to=${b}&ticker=${encodeURIComponent(flowTicker(c))}&min_premium=${s.minPremium}&sort=time&limit=500&rows_only=1`
+    const fullUrl = urlFor(from, to)
+    const today = etDateKey(now)
+    // TODAY FIRST (2026-10-06, load times): the chart's first read live asks for
+    // today's whales only and draws them; the whole range follows behind and the
+    // study repaints with it. Every later read (and a replay) is the whole range.
+    const quick = c.ctx.live && !fresh && from < today && !wholeRangeRead.has(fullUrl)
     const [j, basis] = await Promise.all([
-      sharedJson<{ rows?: Record<string, unknown>[] }>(
-        `/api/lse/whales?from=${from}&to=${to}&ticker=${encodeURIComponent(flowTicker(c))}&min_premium=${s.minPremium}&sort=time&limit=500`,
-      ),
+      sharedJson<{ rows?: Record<string, unknown>[] }>(quick ? urlFor(today, today) : fullUrl),
       c.sym.fut ? loadBasis(c.sym.fut) : Promise.resolve(null),
     ])
+    if (quick) {
+      void sharedJson<unknown>(fullUrl).then((all) => {
+        if (!all) return
+        wholeRangeRead.add(fullUrl)
+        c.refresh?.()
+      })
+    } else wholeRangeRead.add(fullUrl)
     const rows = (j?.rows ?? [])
       .map((r): WhRow => ({
         ts: typeof r.ts === 'number' ? r.ts : Date.parse(String(r.ts ?? '')),

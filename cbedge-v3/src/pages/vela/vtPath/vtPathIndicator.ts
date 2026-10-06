@@ -44,6 +44,7 @@ import {
   type NativeIndicatorContext,
 } from '@luxalgo/vela'
 import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
+import { firstLoadDelay, queuedLoad } from '@/pages/vela/studies/common'
 import { buildPathRows, framesFromWalls, loadWallModels, type WallModels, type WallRead } from './vtPathData'
 import { PATH_TYPE, RIBBON_TYPE, registerVtPathLayers, type PathPayload } from './vtPathLayer'
 
@@ -162,7 +163,8 @@ class VtPathIndicator implements NativeIndicator {
     this.ctx = ctx
     this.inputs = inputs
     ctx.emit({})
-    void this.load(false)
+    // after the chart's candles, through the page's load queue (studies/common.ts)
+    void firstLoadDelay().then(() => this.load(false))
     this.arm()
   }
 
@@ -209,7 +211,8 @@ class VtPathIndicator implements NativeIndicator {
     if (!ctx || this.stopped) return
     const my = ++this.epoch
     if (!this.models) ctx.setStatus('loading')
-    const models = await loadWallModels(ctx.symbol, settingsOf(this.inputs), fresh)
+    const settings = settingsOf(this.inputs)
+    const models = await queuedLoad(() => loadWallModels(ctx.symbol, settings, fresh))
     if (my !== this.epoch || this.stopped || this.ctx !== ctx) return
     this.models = models
     this.push()

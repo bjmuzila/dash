@@ -437,6 +437,26 @@ class Card {
     const body = el(d, 'div', 'cb-lc-body')
     body.append(levels, st)
     this.el.append(hd, body)
+    // Open and taller than its chart (two or three stacked charts on a phone), the
+    // body scrolls (cap()). A drag or wheel on it then belongs to the card, not to
+    // the chart's pan / zoom underneath. pointerdown is left alone: it still picks
+    // the cell and runs the host's fold check (pointerdown / touchstart pass through).
+    const own = (e: Event) => {
+      if (body.scrollHeight > body.clientHeight + 1) e.stopPropagation()
+    }
+    for (const ev of ['wheel', 'touchmove', 'pointermove'] as const) {
+      body.addEventListener(ev, own, { passive: true })
+    }
+  }
+
+  /** Open, the card stops short of its chart's bottom edge; the body scrolls the rest. */
+  private cap(): void {
+    if (!this.el.isConnected || this.el.dataset.folded === '1') {
+      this.el.style.removeProperty('--cb-lc-max')
+      return
+    }
+    const room = Math.floor(this.cell.host.getBoundingClientRect().bottom - this.el.getBoundingClientRect().top - 8)
+    this.el.style.setProperty('--cb-lc-max', `${Math.max(room, 120)}px`)
   }
 
   /** Is this level on the card? The card's own switch: the lines (CB Walls) keep theirs. */
@@ -655,6 +675,7 @@ class Card {
     this.foldBtn.title = label
     this.foldBtn.setAttribute('aria-label', label)
     if (folded && pop?.owner === this) closePop()
+    this.cap()
   }
 
   // ── the levels popover ──
