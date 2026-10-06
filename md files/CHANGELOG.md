@@ -26992,3 +26992,9 @@ Measured: the old `watch_snapshots` DISTINCT ON was #1 (106,777s total, 5.7s avg
   - `backup.sh`: nightly custom-format dumps, 5 kept locally, an optional rclone off-box copy kept 14 days, `--install` to add the cron job, and `--restore-test`.
 - `md files/DB-MOVE-TO-VPS.md`: the runbook.
 - Sizes measured from Render: 25 GB total (about 18 GB of it indexes). The VPS has 76 GB free.
+
+## 2026-10-06 — db/ scripts: the rehearsal hung at "Fresh local database"
+
+- The DROP/CREATE ran in about a second (it shows in the Postgres log), but `docker exec -i psql -c …` never returned. With `-i`, the docker client keeps waiting on the terminal's stdin after psql has exited.
+- `db/lib.sh`: `psql_local` / `psql_render` no longer attach stdin (`</dev/null`). New `psql_local_in` / `psql_render_in` attach stdin for SQL piped in (`count_tables`' second stage). The DROP/CREATE, `pg_dump`, `pg_restore`, `vacuumdb` and `pg_isready` calls all run with `</dev/null`.
+- `db/backup.sh`: the same fix for `--restore-test`.

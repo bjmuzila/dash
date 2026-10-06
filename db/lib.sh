@@ -33,16 +33,22 @@ local_url() {
 }
 
 # psql inside the Postgres container, as the superuser, on the local database.
-psql_local() { docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" "$@"; }
+# NO stdin attached (2026-10-06): `docker exec -i` keeps waiting on the
+# terminal's stdin after psql has exited, so a plain -c command never returned
+# and the rehearsal sat at "Fresh local database". The *_in variants attach
+# stdin, for SQL piped in.
+psql_local() { docker exec "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" "$@" </dev/null; }
+psql_local_in() { docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" "$@"; }
 
 # psql against Render, from a throwaway container on the host network.
-psql_render() { docker run --rm -i --network host "$PG_IMAGE" psql -v ON_ERROR_STOP=1 "$(render_url)" "$@"; }
+psql_render() { docker run --rm --network host "$PG_IMAGE" psql -v ON_ERROR_STOP=1 "$(render_url)" "$@" </dev/null; }
+psql_render_in() { docker run --rm -i --network host "$PG_IMAGE" psql -v ON_ERROR_STOP=1 "$(render_url)" "$@"; }
 
 db_compose() { docker compose -p "$DB_PROJECT" -f "$DB_COMPOSE" "$@"; }
 
 wait_healthy() {
   for _ in $(seq 1 60); do
-    docker exec "$PG_CONTAINER" pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1 && return 0
+    docker exec "$PG_CONTAINER" pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1 </dev/null && return 0
     sleep 2
   done
   die "Postgres did not become ready (docker logs $PG_CONTAINER)"
@@ -50,10 +56,10 @@ wait_healthy() {
 
 # Exact row count of every public table, "table<TAB>count", sorted. $1 = local|render
 count_tables() {
-  local side=$1 run
-  if [ "$side" = local ]; then run=psql_local; else run=psql_render; fi
+  local side=$1 run run_in
+  if [ "$side" = local ]; then run=psql_local; run_in=psql_local_in; else run=psql_render; run_in=psql_render_in; fi
   $run -At -c "SELECT string_agg(format('SELECT %L, count(*) FROM public.%I', tablename, tablename), ' UNION ALL ') FROM pg_tables WHERE schemaname = 'public'" \
-    | $run -At -F $'\t' | sort
+    | $run_in -At -F $'\t' | sort
 }
 
 # Copy Render → local: a parallel directory-format dump, a fresh local database,
@@ -67,18 +73,18 @@ copy_render_to_local() {
   say "Dump Render (parallel $JOBS) → $DB_HOME/dump/$stamp"
   t0=$(date +%s)
   docker run --rm --network host --user 999:999 -v "$DB_HOME/dump:/dump" "$PG_IMAGE" \
-    pg_dump "$(render_url)" -Fd -j "$JOBS" -Z 1 --no-owner --no-acl -f "/dump/$stamp"
+    pg_dump "$(render_url)" -Fd -j "$JOBS" -Z 1 --no-owner --no-acl -f "/dump/$stamp" </dev/null
   t1=$(date +%s)
   echo "dump: $((t1 - t0))s, $(du -sh "$DB_HOME/dump/$stamp" | cut -f1)"
 
   say "Fresh local database"
-  docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d postgres -q \
-    -c "DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE)" -c "CREATE DATABASE $DB_NAME OWNER $DB_USER"
+  docker exec "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d postgres -q \
+    -c "DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE)" -c "CREATE DATABASE $DB_NAME OWNER $DB_USER" </dev/null
 
   say "Restore (parallel $JOBS)"
   set +e
   docker exec -e PGOPTIONS='-c maintenance_work_mem=1GB' "$PG_CONTAINER" \
-    pg_restore -U "$DB_USER" -d "$DB_NAME" -j "$JOBS" --no-owner --no-acl "/dump/$stamp" 2> "$DB_HOME/restore.log"
+    pg_restore -U "$DB_USER" -d "$DB_NAME" -j "$JOBS" --no-owner --no-acl "/dump/$stamp" 2> "$DB_HOME/restore.log" </dev/null
   rc=$?
   set -e
   t2=$(date +%s)
@@ -86,7 +92,7 @@ copy_render_to_local() {
   grep -i 'error' "$DB_HOME/restore.log" | head -20 || true
 
   say "Planner statistics"
-  docker exec "$PG_CONTAINER" vacuumdb -U "$DB_USER" -d "$DB_NAME" -j "$JOBS" -Z -q
+  docker exec "$PG_CONTAINER" vacuumdb -U "$DB_USER" -d "$DB_NAME" -j "$JOBS" -Z -q </dev/null
   t3=$(date +%s)
   echo "analyze: $((t3 - t2))s — total $((t3 - t0))s"
   psql_local -At -c "SELECT 'local size: ' || pg_size_pretty(pg_database_size(current_database()))"

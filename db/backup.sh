@@ -29,14 +29,14 @@ if [ "${1:-}" = --restore-test ]; then
   f=$(ls -1t "$DB_HOME"/backups/*.dump 2>/dev/null | head -1)
   [ -n "$f" ] || die "no backups yet"
   say "Restore test of $(basename "$f") into scratch database restore_test"
-  docker exec -i "$PG_CONTAINER" psql -U "$DB_USER" -d postgres -q \
-    -c "DROP DATABASE IF EXISTS restore_test WITH (FORCE)" -c "CREATE DATABASE restore_test OWNER $DB_USER"
+  docker exec "$PG_CONTAINER" psql -U "$DB_USER" -d postgres -q \
+    -c "DROP DATABASE IF EXISTS restore_test WITH (FORCE)" -c "CREATE DATABASE restore_test OWNER $DB_USER" </dev/null
   docker cp "$f" "$PG_CONTAINER:/tmp/restore_test.dump"
   docker exec "$PG_CONTAINER" pg_restore -U "$DB_USER" -d restore_test -j "$JOBS" --no-owner /tmp/restore_test.dump || true
   docker exec "$PG_CONTAINER" psql -U "$DB_USER" -d restore_test -At \
     -c "SELECT count(*) || ' tables, ' || pg_size_pretty(pg_database_size('restore_test')) FROM pg_tables WHERE schemaname = 'public'"
   docker exec "$PG_CONTAINER" rm -f /tmp/restore_test.dump
-  docker exec -i "$PG_CONTAINER" psql -U "$DB_USER" -d postgres -q -c "DROP DATABASE restore_test WITH (FORCE)"
+  docker exec "$PG_CONTAINER" psql -U "$DB_USER" -d postgres -q -c "DROP DATABASE restore_test WITH (FORCE)" </dev/null
   echo "restore test OK"
   exit 0
 fi
