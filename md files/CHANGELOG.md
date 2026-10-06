@@ -26729,3 +26729,14 @@ Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the lef
 ## 2026-10-06 - Vela Voltick Path: bead size bounded at every zoom, joined by a thin link
 
 - `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts`: zoomed in, beads followed the bar width up to 16px radius ("half the chart"). They are now held between 2.75px and 7px radius (`BEAD.voltMax` 7), so they stay the same look at any zoom: zoomed out they space onto an even every-Nth-bar grid, zoomed in they stop growing. To keep a row reading as one chain when the bars are wider than the beads, a thin link in the row's colour (55% of the bead's alpha, 0.7× the radius thick) is drawn under the beads between neighbours on the same strike. It skips strike changes and data gaps, and only shows once the gap is over 1.5px. `tsc` strict is clean.
+
+## 2026-10-06 - Vela Voltick Path: bubbles grow with GEX, inside the zoom bounds
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts`: the zoom-proof radius (2.75–7px, every-Nth-bar grid zoomed out) is now the FULL bead, meaning a level's highest GEX reading that session. Each bead is drawn at 50–100% of it, set by where its reading sits between that level's low and high for its own session (`growthBySession`, Voltick's pathSizes run per day), averaged over 5 readings so growth shows as a swell and not jitter (`BEAD.growMin` 0.5, `growCurve` 0.75, `growSmooth` 5). Rising GEX on the Volt visibly doubles the bead across the day, and no bead can outgrow its bar or the zoom cap. The smallest bead is 1.75px. Glow, highlight, rim and the Coil diamond follow each bead's own size, and the link sits between bead edges. `tsc` strict is clean.
+
+## 2026-10-06 - Vela: last-price label in one colour, picked in Chart settings
+
+- `cbedge-v3/src/pages/vela/lastPriceColor.ts` (new): the last-price label, its dotted line and the countdown chip now hold ONE colour instead of switching green/red with each candle. The colour is set in Chart settings → Symbol → **Last price**: *One color* (on by default; off gives back Vela's up/down colouring) and *Label color* (Vela's themed picker; default Voltick Blue `--color-vt-accent`). It is saved per browser (`cb-v3-vela-last-price`), applies to every chart on desktop and phone (⋮ → Chart settings opens the same dialog), and a change repaints all charts at once.
+  - How: Vela has no option for this colour. Its chrome painter's `priceElementColor` is wrapped (reached through the first chart's `NativeRenderer.chrome`), and the settings rows are added by wrapping `NativeRenderer.setSettingsSections`, so each cell's own sections are kept. If a Vela upgrade renames either method, the wrap is skipped with a console warning and Vela's colours come back.
+- `cbedge-v3/src/pages/Vela.tsx`: `registerLastPriceColor()` runs with the other registrations, before any workspace is built.
+- `tsc` strict is clean on the new file against `@luxalgo/vela` 0.8.2. No colour literals.

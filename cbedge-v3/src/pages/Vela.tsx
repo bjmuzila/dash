@@ -12,6 +12,7 @@ import { WALLS_TYPE, registerCbWalls } from '@/pages/vela/wallsIndicator'
 import { bindShotWorkspace, registerCopyScreenshot } from '@/pages/vela/copyShot'
 import { bindIndicatorsWorkspace, registerCopyIndicators } from '@/pages/vela/copyIndicators'
 import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
+import { registerLastPriceColor } from '@/pages/vela/lastPriceColor'
 import { PATH_TYPE, registerVtPath } from '@/pages/vela/vtPath/vtPathIndicator'
 import { CBSCRIPT, CbScriptEngine, setAlertGate } from '@/pages/vela/script/engine'
 import { registerScripts } from '@/pages/vela/script/panel'
@@ -319,6 +320,8 @@ registerSetups()
 registerSymbolPicker()
 registerWorkspaceMenu()
 registerSessionClock()
+// the last-price label in one colour, picked in Chart settings → Symbol (lastPriceColor.ts)
+registerLastPriceColor()
 // a replay reveals history bar by bar, like live bars: script alerts stay quiet meanwhile
 setAlertGate(() => !replayActive())
 

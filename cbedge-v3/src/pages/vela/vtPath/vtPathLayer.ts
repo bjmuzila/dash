@@ -43,7 +43,7 @@
 //     candles (thinPathLanes, which keeps run starts/ends and drops others), which
 //     drew overlapping coins and uneven holes. Here there is ONE radius for the
 //     whole chart, taken from the bar pitch, shrunk to fit neighbouring strikes,
-//     floored at BEAD.minPx (2.75px; zoomed out, beads move to every Nth bar and
+//     floored at BEAD.minPx (4.5px; zoomed out, beads move to every Nth bar and
 //     grow to fill that pitch rather than shrink to dots) and capped at
 //     BEAD.voltMax (7px) zoomed in, where a thin LINK joins neighbouring beads
 //     instead of the beads growing, so every bubble grows and shrinks together and
@@ -55,7 +55,7 @@
 //     the Volt so their rows read joined as well.
 //     GROWTH INSIDE THOSE BOUNDS (2026-10-06, "if GEX is increasing on the Volt I
 //     want it noticeable in the bubbles increasing"): the radius above is the FULL
-//     bead, a level's highest reading that session; each bead is drawn at 50–100%
+//     bead, a level's highest reading that session; each bead is drawn at 62–100%
 //     of it by where its (smoothed) reading sits between that day's low and high,
 //     so growing GEX swells the row visibly while no bead ever outgrows its bar
 //     or the zoom bounds (growthBySession, BEAD.grow*).
@@ -143,18 +143,18 @@ const BEAD = {
   /** a link is drawn between two beads of a row once their gap passes this, px */
   linkFromPx: 1.5,
   /** GROWTH: the bead at its level's LOWEST reading that session, as a share of the
-   *  full (highest-reading) bead — the bead doubles as GEX goes from the day's low to its high */
-  growMin: 0.5,
+   *  full (highest-reading) bead — the bead grows ~1.6× as GEX goes from the day's low to its high */
+  growMin: 0.62,
   /** growth curve (<1 shows early growth sooner) */
   growCurve: 0.75,
   /** readings averaged per bead, so growth reads as a swell and not as jitter */
   growSmooth: 5,
   /** the smallest any bead is drawn, px */
-  beadMinPx: 1.75,
+  beadMinPx: 3,
   /** peer radius as a share of the Volt's (a peer row stays near-connected too) */
   peer: 0.9,
   /** never smaller than this, px — zoomed out, a narrower bar spaces beads out instead */
-  minPx: 2.75,
+  minPx: 4.5,
   /** share of the pixel gap between neighbouring strikes two beads may fill */
   strikeFill: 0.9,
   /** how wide a bead may grow past its bar (1 = touching) before columns are skipped */
