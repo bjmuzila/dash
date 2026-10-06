@@ -23,9 +23,8 @@
 //     a Path bubble follows the bar spacing down below the default bar and then
 //     shrinks again when neighbouring strikes crowd (pathGapFit, to 1.8px); a
 //     band is capped at 0.42 of the pixel gap between strikes, which on a wide
-//     view is a hairline. Here a bubble keeps its default-bar radius at any zoom
-//     and crowding takes it down to PATH_FIT_FLOOR at most; a band at its
-//     fullest never draws thinner than RIBBON_FULL_FLOOR half-height, and its
+//     view is a hairline. (Path: superseded by ZOOM-PROOF BUBBLES below.) A
+//     band at its fullest never draws thinner than RIBBON_FULL_FLOOR half-height, and its
 //     thinnest never under RIBBON_MIN_FLOOR.
 //   · A SIZE SETTING: `size` (the studies' Bubble size % / Ribbon thickness %)
 //     multiplies every radius / band height after all of the above.
@@ -37,14 +36,18 @@
 //     shows no blue.
 //   · THE LEVELS ARE THE WALLS MIGRATION RENAMED (vtPathData.ts), not Voltick's
 //     own recorder — the drawing does not care, the rows have the same shape.
-//   · PATH SIZES PER SESSION (2026-10-05): Voltick's pathSizes runs on each
-//     session's slice of a row (pathSizesBySession), so a bubble is sized
-//     against its level's range on its OWN day. The walls read spans 10 sessions
-//     by default, and 0DTE GEX grows ~40× from the open to the close, so one
-//     range across all of them drew every morning — today's live candles above
-//     all — at the 2px floor: the path looked dead. Voltick's board reads one
-//     session, so this is its behaviour; the Ribbon was already per session
-//     (ribbonSizeScale).
+//   · ZOOM-PROOF BUBBLES (2026-10-06, Brandon: "zoom proof with minimal overlap
+//     … all bubbles change size and no random gaps"). This REPLACES, for the
+//     Path only, the THICKER ZOOMED OUT rule above and the 2026-10-05 per-session
+//     sizing: Voltick sizes each bubble by its reading and then thins crowded
+//     candles (thinPathLanes, which keeps run starts/ends and drops others), which
+//     drew overlapping coins and uneven holes. Here there is ONE radius for the
+//     whole chart, taken from the bar pitch (BEAD.pitch of a bar, capped at
+//     BEAD.voltMax, shrunk to fit neighbouring strikes, floored at BEAD.minPx),
+//     so every bubble grows and shrinks together and neighbours never overlap.
+//     Only when the floor or the Size setting makes a bead wider than its bar are
+//     candles skipped, and then on one fixed every-Nth-bar grid shared by every
+//     level, so the spacing stays even. The Volt stays a size up (BEAD.peer).
 //
 // Each shape is a Vela RENDERER LAYER (registerRendererLayer) owned by the
 // native indicator of the same type id (vtPathIndicator.ts), which pushes the
@@ -67,12 +70,6 @@ import {
   fadeBand,
   goldSpans,
   growthHeat,
-  pathGapFit,
-  pathGrowthMax,
-  pathRadius,
-  pathSizes,
-  pathZoomRadius,
-  PATH_ZOOM,
   ribbonHops,
   ribbonInk,
   ribbonRowFacts,
@@ -81,14 +78,10 @@ import {
   smoothSeries,
   stretchEnd,
   strikeRuns,
-  thinPathLanes,
   type BandQ,
-  type FillPt,
   type GoldSpan,
-  type PathPt,
   type PathRole,
   type RowFacts,
-  type ThinRow,
 } from './trailruns'
 import type { PathRow } from './vtPathData'
 
@@ -116,8 +109,23 @@ const ROLE_TOKEN: Record<PathRole, string> = {
 const FLAT_SPAN = 0.03
 const REF_MOVE = 1.6
 
+/** CB Edge Path bead geometry (see the header, ZOOM-PROOF BUBBLES). */
+const BEAD = {
+  /** a bead's width as a share of one bar's pitch */
+  pitch: 0.86,
+  /** the Volt's largest radius, px (zoomed far in) */
+  voltMax: 6.5,
+  /** peer radius as a share of the Volt's */
+  peer: 0.82,
+  /** never smaller than this, px */
+  minPx: 1.6,
+  /** share of the pixel gap between neighbouring strikes two beads may fill */
+  strikeFill: 0.9,
+  /** how wide a bead may grow past its bar (1 = touching) before columns are skipped */
+  overlap: 1.1,
+}
+
 /** CB Edge zoomed-out floors (see the header). */
-const PATH_FIT_FLOOR = 0.8
 const RIBBON_FULL_FLOOR = 3
 const RIBBON_MIN_FLOOR = 1.3
 
@@ -143,39 +151,6 @@ function nyParts(ms: number): { day: string; mins: number } {
   return { day: `${p.year}-${p.month}-${p.day}`, mins: h * 60 + Number(p.minute) }
 }
 
-/**
- * Voltick's pathSizes, run once PER SESSION (CB Edge; see the header): each
- * bubble is sized against its level's range on its own day, never against the
- * other sessions on the chart. `fill` is time-ordered, so each day's slice comes
- * back in place.
- */
-function pathSizesBySession(fill: readonly FillPt[], pts: readonly PathPt[]): number[] {
-  // ET midnight always falls on the hour, so one clock read per hour is enough
-  const byHour = new Map<number, string>()
-  const dayOf = (t: number) => {
-    const h = Math.floor(t / 3600)
-    let d = byHour.get(h)
-    if (d == null) byHour.set(h, (d = nyParts(h * 3_600_000).day))
-    return d
-  }
-  const ptsByDay = new Map<string, PathPt[]>()
-  for (const p of pts) {
-    const k = dayOf(p.t)
-    const list = ptsByDay.get(k)
-    if (list) list.push(p)
-    else ptsByDay.set(k, [p])
-  }
-  const out: number[] = []
-  for (let i = 0; i < fill.length; ) {
-    const k = dayOf(fill[i]!.t)
-    let j = i + 1
-    while (j < fill.length && dayOf(fill[j]!.t) === k) j++
-    for (const v of pathSizes(fill.slice(i, j), ptsByDay.get(k) ?? [], FLAT_SPAN)) out.push(v)
-    i = j
-  }
-  return out
-}
-
 /** Voltick's boldness curve, pinned at 15% (the shipped default). */
 function boldOf(ci: number): { bold: (lo: number, mid: number, hi: number) => number; up: number } {
   const up = Math.max(0, (ci - 0.15) / 0.85)
@@ -190,14 +165,13 @@ interface Geo {
   width: number
   height: number
   bs: number
+  /** One bar, in seconds — the column grid the Path's bubbles sit on. */
+  barSec: number
 }
 
 // ── PATH (bubbles) ───────────────────────────────────────────────────────────
 
 class PathDraw {
-  private sizeMemo = new WeakMap<FillPt[], number[]>()
-  private thinMemo: { rows: PathRow[]; key: string; kept: Set<string> } | null = null
-
   draw(g: Geo, d: PathPayload): void {
     const { ctx, X, Y, width } = g
     const rows = d.rows
@@ -206,12 +180,9 @@ class PathDraw {
     const VOLT_GOLD = tokenRgb('--color-vt-path-gold')
     const SHINE = tokenRgb('--color-vt-path-shine')
     const RIM = hexA(tokenRgb('--color-vt-path-rim'), 0.9)
-    const bsNow = g.bs || 6
+    const bs = g.bs > 0 ? g.bs : 6
+    const barSec = g.barSec > 0 ? g.barSec : 60
     const size = Number.isFinite(d.size) && d.size > 0 ? d.size : 1
-    // CB Edge: below the default bar the radius holds at the default bar's (Voltick follows the zoom down)
-    const bsRad = Math.max(bsNow, PATH_ZOOM.refBar)
-    const rPeer0 = pathZoomRadius(bsRad, false) * (quiet ? 0.8 : 1)
-    const rVolt0 = pathZoomRadius(bsRad, true) * (quiet ? 0.8 : 1)
     const alpha = quiet ? bold(0.3, 0.7, 0.9) : bold(0.4, 0.92, 1)
     // lowest priority first, so the Volt's bead and halo sit on top
     const DRAW_ORDER: Record<PathRole, number> = { surge: 0, coil: 1, reversal: 2, volt: 3 }
@@ -219,7 +190,11 @@ class PathDraw {
       .filter((r) => Array.isArray(r.fill) && r.fill.length)
       .slice()
       .sort((x, y) => (DRAW_ORDER[x.role] ?? 0) - (DRAW_ORDER[y.role] ?? 0))
-    // the pixel gap between the two closest strikes the Path draws on, near the middle of them
+    if (!list.length) return
+    // ONE RADIUS FOR THE WHOLE CHART, FROM THE BAR PITCH (see the header): a bead
+    // is BEAD.pitch of a bar wide, so neighbouring candles never overlap at any zoom.
+    let rV = Math.min(BEAD.voltMax, (bs * BEAD.pitch) / 2)
+    // strike crowding: a Volt and a peer on neighbouring strikes still clear each other
     const usedP = [...new Set(list.flatMap((r) => r.fill.map((q) => q.p)))].sort((a, b) => a - b)
     let stepP = Infinity
     for (let i = 1; i < usedP.length; i++) {
@@ -227,52 +202,37 @@ class PathDraw {
       if (dd > 0 && dd < stepP) stepP = dd
     }
     const midP = usedP.length ? usedP[usedP.length >> 1]! : null
-    const yA = midP == null ? null : Y(midP)
-    const yB = midP == null || !Number.isFinite(stepP) ? null : Y(midP + stepP)
-    const fit = pathGapFit(
-      yA != null && yB != null && Number.isFinite(yA) && Number.isFinite(yB) ? Math.abs(yB - yA) : Infinity,
-      Math.max(rPeer0, rVolt0) * pathGrowthMax(),
-      Math.min(rPeer0, rVolt0),
-    )
-    // CB Edge: crowding shrinks at most to PATH_FIT_FLOOR; then the Size setting
-    const rPeer = rPeer0 * Math.max(fit, PATH_FIT_FLOOR) * size
-    const rVolt = rVolt0 * Math.max(fit, PATH_FIT_FLOOR) * size
-    // the size of every bubble (once per data change), then which candles draw (once per zoom)
-    const thin: Array<ThinRow & { ks: number[] }> = []
-    for (const r of list) {
-      let ks = this.sizeMemo.get(r.fill)
-      if (!ks) {
-        ks = pathSizesBySession(r.fill, r.pts)
-        this.sizeMemo.set(r.fill, ks)
-      }
-      const rr = r.role === 'volt' ? rVolt : rPeer
-      thin.push({ role: r.role, fill: r.fill, rad: rr, ks, r: ks.map((k) => pathRadius(k, rr)) })
+    if (midP != null && Number.isFinite(stepP)) {
+      const gap = Math.abs(Y(midP + stepP) - Y(midP))
+      if (Number.isFinite(gap) && gap > 0) rV = Math.min(rV, (gap * BEAD.strikeFill) / (1 + BEAD.peer))
     }
-    const thinKey = `${bsNow.toFixed(2)}|${rPeer.toFixed(2)}|${rVolt.toFixed(2)}`
-    const tm = this.thinMemo
-    const kept = tm && tm.rows === rows && tm.key === thinKey ? tm.kept : thinPathLanes(thin, bsNow)
-    this.thinMemo = { rows, key: thinKey, kept }
-    for (const [ti, r] of list.entries()) {
+    // the Size setting and Calm chart, then the readable floor
+    rV = Math.max(BEAD.minPx, rV * size * (quiet ? 0.8 : 1))
+    const rP = Math.max(BEAD.minPx, rV * BEAD.peer)
+    // Only when the floor or the Size setting makes a bead wider than its bar does
+    // the Path skip candles — and then on one fixed grid of columns (every Nth bar
+    // by the clock), the same for every level, so the spacing is even and a pan
+    // never reshuffles it.
+    const N = Math.max(1, Math.ceil((2 * rV) / (bs * BEAD.overlap) - 1e-6))
+    const lw = Math.min(1.1, rV * 0.3)
+    for (const r of list) {
       const lead = r.role === 'volt'
-      const rad = lead ? rVolt : rPeer
-      const ks = thin[ti]!.ks
-      const marks: Array<{ x: number; y: number; r: number }> = []
-      let j = 0
+      const rad = lead ? rV : rP
+      const rIn = Math.max(0.5, rad - lw / 2)
+      const marks: Array<{ x: number; y: number }> = []
       for (const q of r.fill) {
-        const k = ks[j++]
-        if (!kept.has(r.role + '|' + q.t)) continue
+        if (N > 1 && Math.round(q.t / barSec) % N !== 0) continue
         const x = X(q.t)
         if (!Number.isFinite(x) || x < -20 || x > width + 20) continue
         const y = Y(q.p)
         if (!Number.isFinite(y)) continue
-        marks.push({ x, y, r: pathRadius(k, rad) })
+        marks.push({ x, y })
       }
       if (!marks.length) continue
       if (lead && !quiet) {
         ctx.globalAlpha = 1
+        const glow = rad * 1.6
         for (const m of marks) {
-          // capped at the tuned size, so a big reading grows its bead and not the glow around it
-          const glow = Math.min(m.r, rad) * 1.9
           const gr = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, glow)
           gr.addColorStop(0, hexA(VOLT_GOLD, 0.22))
           gr.addColorStop(1, hexA(VOLT_GOLD, 0))
@@ -285,32 +245,33 @@ class PathDraw {
       ctx.globalAlpha = alpha
       ctx.fillStyle = lead ? hexA(VOLT_GOLD, 1) : hexA(tokenRgb(ROLE_TOKEN[r.role]), 1)
       ctx.strokeStyle = RIM
-      ctx.lineWidth = 1.1
+      ctx.lineWidth = lw
       // ONE PATH PER ROW; moveTo before each shape keeps the subpaths apart
       ctx.beginPath()
       for (const m of marks) {
         if (r.role === 'coil') {
-          const dd = m.r * 1.25
+          // the diamond's points reach the same outer radius as a bubble
+          const dd = Math.max(0.5, rad - lw * 0.7)
           ctx.moveTo(m.x, m.y - dd)
           ctx.lineTo(m.x + dd, m.y)
           ctx.lineTo(m.x, m.y + dd)
           ctx.lineTo(m.x - dd, m.y)
           ctx.closePath()
         } else {
-          ctx.moveTo(m.x + m.r, m.y)
-          ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2)
+          ctx.moveTo(m.x + rIn, m.y)
+          ctx.arc(m.x, m.y, rIn, 0, Math.PI * 2)
         }
       }
       ctx.fill()
-      ctx.stroke()
-      if (lead && !quiet) {
+      if (lw >= 0.4) ctx.stroke()
+      if (lead && !quiet && rIn >= 2) {
         // a small highlight, so the gold reads as a lit bead rather than a flat dot
         ctx.fillStyle = hexA(SHINE, 0.85)
         ctx.beginPath()
+        const hr = rIn * 0.34
         for (const m of marks) {
-          const hr = m.r * 0.34
-          ctx.moveTo(m.x - m.r * 0.3 + hr, m.y - m.r * 0.3)
-          ctx.arc(m.x - m.r * 0.3, m.y - m.r * 0.3, hr, 0, Math.PI * 2)
+          ctx.moveTo(m.x - rIn * 0.3 + hr, m.y - rIn * 0.3)
+          ctx.arc(m.x - rIn * 0.3, m.y - rIn * 0.3, hr, 0, Math.PI * 2)
         }
         ctx.fill()
       }
@@ -590,6 +551,7 @@ class VtPathLayer implements RendererLayerInstance {
         width: coords.width,
         height: bounds.top + bounds.height,
         bs: coords.pxPerBar(),
+        barSec: iv / 1000,
       },
       { ...d, ci },
     )

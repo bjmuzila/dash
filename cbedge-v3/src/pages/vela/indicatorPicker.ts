@@ -27,12 +27,16 @@
 // star favourites it. Search runs across every category; Enter adds the first
 // hit. The filter cycles All → Price overlays → Separate pane. The category and
 // the favourites are remembered in this browser.
+//
+// A NEW copy starts with "my default" when one is saved for that indicator (its
+// settings dialog: Defaults ▾ → Save as my default; indicatorPresets.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { nativeIndicatorDescriptors, registerWidgetAction, type IndicatorHandle, type NativeIndicatorDescriptor, type WidgetContext } from '@luxalgo/vela'
 import { Dialog, iconEl, registerIcon, svg16 } from '@luxalgo/vela/ui'
 import { CBSCRIPT } from './script/engine'
 import { instanceIdFor, libIdOf, loadLibrary } from './script/library'
+import { applyDefaultOnAdd } from './indicatorPresets'
 import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
 import { testStrategy } from './script/testerPanels'
 import { WALLS_TYPE } from './wallsIndicator'
@@ -292,14 +296,19 @@ function openPicker(ctx: WidgetContext): void {
         ctx.toast(`${r.name} is already on this chart`, 'info')
         return
       }
-      ctx.addNativeIndicator(r.type)
+      // a new copy starts with "my default", when one is saved (indicatorPresets.ts)
+      const type = r.type
+      applyDefaultOnAdd(ctx.chart, (h) => h.nativeType === type)
+      ctx.addNativeIndicator(type)
     } else if (r.strategy && r.libId && r.source != null) {
       // a strategy goes on the chart and the tester opens on it
       dlg.hide()
       testStrategy(ctx, { id: r.libId, name: r.name, source: r.source })
       return
     } else if (r.kind === 'script' && r.libId && r.source != null) {
-      ctx.addIndicator({ name: r.name, script: r.source, language: CBSCRIPT, id: instanceIdFor(r.libId) })
+      const libId = r.libId
+      applyDefaultOnAdd(ctx.chart, (h) => libIdOf(h.id) === libId)
+      ctx.addIndicator({ name: r.name, script: r.source, language: CBSCRIPT, id: instanceIdFor(libId) })
     }
     ctx.toast(`Added ${r.name}`, 'success')
     // the handle lands a beat later; repaint the ✓ / counts then

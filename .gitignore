@@ -42,7 +42,10 @@ server-v2/.cash-basis.json
 server-v2/.cash-basis.json
 
 # runtime state (bind-mounted into the container; see docker-compose volumes)
-state/
+# ROOT ONLY. A bare `state/` also matched server-v2/state/ (source code), so new
+# modules there (chain-replay-archive.js) were silently never committed and the
+# replay routes 502'd on the VPS.
+/state/
 
 # generated images/assets from Claude sessions (local only, never deployed)
 generated/

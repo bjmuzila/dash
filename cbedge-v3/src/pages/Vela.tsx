@@ -18,6 +18,7 @@ import { registerScripts } from '@/pages/vela/script/panel'
 import { EVENTS_TYPE, registerStudies } from '@/pages/vela/studies'
 import { bindEventsHost } from '@/pages/vela/studies/eventsHost'
 import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
+import { bindIndicatorPresets } from '@/pages/vela/indicatorPresets'
 import { bindPinnedWatchlist, registerWatchlist } from '@/pages/vela/watchlist/panel'
 import { bindReplay, openPicker, registerReplay } from '@/pages/vela/replay/replay'
 import { bindStudyOrder } from '@/pages/vela/studyOrder'
@@ -507,6 +508,9 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     if (replayOnOpenRef.current) setTimeout(openPicker, 400)
     const unbindShot = bindShotWorkspace(ws)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
+    // every indicator's settings dialog: Defaults ▾ (reset, save as my default, saved
+    // settings by name) in place of Vela's Reset defaults (vela/indicatorPresets.ts)
+    const unbindPresets = bindIndicatorPresets(ws)
     const unbindEvents = bindEventsHost(ws)
     // the desktop bar's ticker chip + picker, and the Workspace menu's Alt keys
     const unbindPicker = onPhone ? () => {} : bindSymbolPicker(ws)
@@ -609,6 +613,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindVoltick()
       unbindControls()
       unbindIndicators()
+      unbindPresets()
       unbindEvents()
       unbindReplay()
       unbindOrder()

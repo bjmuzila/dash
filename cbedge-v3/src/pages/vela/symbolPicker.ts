@@ -9,7 +9,10 @@
 // under it (symbolPickerView.ts): search, filters for the kinds of symbol that
 // actually exist here (Indices · Futures · ETFs · Stocks), your recent symbols,
 // your watchlist's first section pinned at the top, and every row with its real
-// name, price and change. What it replaced was Vela's centred Symbol Search
+// name, price and change. Since 2026-10-05 it is also where the watchlists are
+// kept: a Watchlists tab left of Symbols (switch lists, + New, Edit with
+// sections and drag, Import); symbolPickerView.ts has the detail. What it
+// replaced was Vela's centred Symbol Search
 // modal: seven tabs of which three were empty (Crypto even listed ES and NQ),
 // a VOLTICK.IO badge on every row, two-letter circles ("SP" for both SPX and
 // SPY), "stock" where a name should be, and no prices.

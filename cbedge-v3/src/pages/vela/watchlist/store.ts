@@ -309,6 +309,50 @@ export function createList(name: string): WatchList | null {
   changed()
   return l
 }
+/**
+ * IMPORT (the picker's import screen; watchlist/importParse.ts reads the file).
+ * Into a NEW list named `name` (`into` null), or merged into the list `into`:
+ * its sections are added after the list's own, new symbols go to the end in
+ * their section, a symbol already on the list keeps its place and section.
+ * The target list opens. Capped at MAX_SYMBOLS and MAX_SECTIONS like any list.
+ * null: a new list was asked for and there are MAX_LISTS already.
+ */
+export function importList(
+  into: string | null,
+  name: string,
+  groups: ReadonlyArray<{ name: string | null; tickers: readonly string[] }>,
+): { listId: string; added: number } | null {
+  let target = into ? state.lists.find((l) => l.id === into) : undefined
+  if (!target) {
+    const made = createList(name)
+    if (!made) return null
+    target = made
+  }
+  let added = 0
+  edit(target.id, (x) => {
+    let next: WatchList = { ...x, symbols: x.symbols.slice() }
+    for (const g of groups) {
+      let sec = sectionName(g.name)
+      if (sec) {
+        const secs = sectionsOf(next)
+        if (!secs.includes(sec)) {
+          if (secs.length >= MAX_SECTIONS) sec = null
+          else next = { ...next, sections: [...secs, sec] }
+        }
+      }
+      for (const raw of g.tickers) {
+        const t = normTicker(raw)
+        if (!t || next.symbols.includes(t) || next.symbols.length >= MAX_SYMBOLS) continue
+        next.symbols.push(t)
+        added++
+        if (sec) next = withGroup(next, t, sec)
+      }
+    }
+    return next
+  })
+  setActive(target.id)
+  return { listId: target.id, added }
+}
 export function renameList(id: string, name: string): void {
   const n = name.trim().slice(0, 60)
   if (n) edit(id, (x) => ({ ...x, name: n }))

@@ -64,13 +64,19 @@ const REFERENCE = `PINE SCRIPT  paste a TradingView indicator as is (v4, v5, v6)
   str.* color.* input.*, plot plotshape plotchar plotarrow hline fill
   bgcolor barcolor.
   request.security (higher timeframes, other symbols this app charts:
-  ES, NQ, SPY, QQQ …) and request.security_lower_tf. Arrays, for…in.
+  ES, NQ, SPY, QQQ …, Heikin Ashi via ticker.heikinashi) and
+  request.security_lower_tf. Arrays, matrices, maps, for…in.
+  plotcandle / plotbar draw their own candles. Strings across lines
+  ("""…""").
   Drawings: label / line / box / linefill / polyline / table, with
   their set_* / get_* / delete and the max_*_count limits.
-  User types (type / enum / method), maps, Type.new, p.x := …
+  User types (type / enum / method), Type.new, p.x := …
   strategy(): orders are simulated in the Strategy Tester panel.
   alertcondition / alert: switch them on in the Script Alerts panel.
-  Not yet: matrices, TradingView libraries (import).
+  Libraries: import user/name/1 as m reads a library you saved here
+  (the script that declares library("name")).
+  No data here, so na: fundamentals, earnings / dividends / splits,
+  economic and footprint requests.
   A script that stops: Copy error + script, and send it over.
 
 CB EDGE LEVELS  one click: this week's EM, pivot and zones for the

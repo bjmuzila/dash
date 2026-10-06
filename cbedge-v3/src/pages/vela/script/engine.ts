@@ -47,7 +47,7 @@ import { PROVIDER_NAME } from '../providerName'
 import type { Program } from './lang'
 import type { FillEnd, NeedSeries, RunOpts, RunResult, StrategyOut } from './runtime'
 import { dropAlertCursor, scanAlerts } from './alerts'
-import { libIdOf } from './library'
+import { libIdOf, loadLibrary } from './library'
 
 export const CBSCRIPT = 'cbscript'
 
@@ -108,9 +108,22 @@ export function loadRuntime(): Promise<Runtime> {
  * Parse + check a script without a chart. Throws a ScriptError (with its line) on
  * any fault — and, before loadRuntime() has resolved, a plain "still loading".
  */
+/**
+ * `import user/name/1 as m` reads one of the user's own saved scripts: the one that
+ * declares library("name"). The user part and the version aren't checked — the
+ * library is the user's, in the Scripts panel.
+ */
+function savedLibrary(_user: string, name: string): string | null {
+  for (const s of loadLibrary()) {
+    const m = /^\s*library\s*\(\s*(?:title\s*=\s*)?(["'])(.*?)\1/m.exec(s.source)
+    if (m && m[2] === name) return s.source
+  }
+  return null
+}
+
 export function compile(source: string): { prog: Program; result: RunResult } {
   if (!rt) throw new Error('CB Script is still loading: try again in a moment')
-  const prog = rt.parse(source)
+  const prog = rt.parse(source, { library: savedLibrary })
   return { prog, result: rt.run(prog, [DRY_BAR], { dry: true }) }
 }
 
@@ -237,6 +250,22 @@ export function toModel(id: string, res: RunResult, bars: readonly OHLCV[], inpu
     }
   })
   const plotIds = series.map((s) => s.id)
+  // plotcandle() / plotbar(): candle / OHLC-bar series (after the plots, so a fill's plot ids keep their places)
+  res.candles.forEach((k, ordinal) => {
+    const colors = k.colors.slice(0, bars.length)
+    series.push({
+      id: stableSeriesId({ instanceId: id, kind: k.kind, title: k.title, ordinal: 2000 + ordinal }),
+      title: k.title,
+      paneId: '',
+      kind: k.kind,
+      // a hidden bar (na values, or a colour of na) stays in place as NaN: Vela skips it
+      bars: bars.map((b, i) => ({ time: b.time, open: k.open[i] ?? NaN, high: k.high[i] ?? NaN, low: k.low[i] ?? NaN, close: k.close[i] ?? NaN })),
+      ...(colors.some((c) => c !== null)
+        ? { barColors: colors.map((c) => (c ? { ...(c.color ? { color: c.color } : {}), ...(c.wick ? { wickColor: c.wick } : {}), ...(c.border ? { borderColor: c.border } : {}) } : null)) }
+        : {}),
+      ...(k.hidden ? { display: hiddenDisplay } : {}),
+    })
+  })
   // an hline a fill names becomes a hidden flat series the fill can anchor to
   const hlineIds = new Map<number, string>()
   const endId = (e: FillEnd): string | null => {

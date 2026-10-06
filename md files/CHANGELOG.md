@@ -26595,3 +26595,111 @@ Brandon wants the Net Premium pane to show either the net line or the calls and 
 - **Off:** the net line alone (calls less puts, green above zero and red below), as before.
 - The setting keeps its key, so saved charts keep their choice. Its tooltip says what each state draws.
 - **Files:** `cbedge-v3/src/pages/vela/studies/flow.ts`, `cbedge-v3/src/pages/vela/studies/index.ts`.
+
+## 2026-10-05 - Vela: indicator defaults and saved settings
+
+Brandon wants every indicator to have reset defaults, save defaults, and a way to save its own named settings.
+
+- **Defaults ▾ in every indicator settings dialog** (Vela's own dialog, from the legend card's ⚙ or a legend gear), on the left of the footer in place of Vela's Reset defaults:
+  - **Reset to my default** (or **Reset defaults** when none is saved).
+  - **Save as my default:** Reset loads it from now on, and a new copy of the indicator added from the Indicators dialog starts with it. Charts that already carry the indicator keep their own settings.
+  - **Factory defaults** and **Forget my default** once a default is saved. Factory defaults is Vela's own reset, kept hidden and clicked.
+  - **Saved settings:** name the current settings and Save. Click a name to load it, ✕ to delete it.
+- Kept per kind of indicator (a study by its type, a CB Script by its library id) in this browser, so they follow it onto every chart. Loading writes through the indicator's own handle (undo, the saved layout and the legend see it), only for the settings it still has, then reopens the dialog so every control shows them.
+- Vela has no seam in this dialog, so the button is added when the dialog appears. The dialog is matched to its indicator by the ids Vela gives its inputs.
+- **Files:** `cbedge-v3/src/pages/vela/indicatorPresets.ts` (new), `indicatorPicker.ts` (a new copy starts with my default), `cbedge-v3/src/pages/Vela.tsx` (binds it), `vela.css`.
+
+## 2026-10-05 - Vela: the timeframe menu stays on top
+
+Brandon clicked the timeframe button, moved off it, and the menu seemed to close before he could pick a timeframe.
+
+- **Cause:** found on vela.cbedge.net. The menu was still open but hidden under the legend card. Vela puts a `--z-index` on a menu's layer but never the `z-index` itself, so the layer stacked at 0 and the legend card (z 6) or the GEX rail painted over it. The click then landed on the card.
+- **Fix:** every Vela menu and tooltip layer takes its z-index from that variable (50 when it is missing), so the timeframe, chart style and right-click menus sit above the chart's overlays. Checked live by adding the rule in the page: the menu stayed on top and took the pointer.
+- **Files:** `cbedge-v3/src/pages/vela/vela.css`.
+
+## 2026-10-05 - Vela script engine: the Pine v6 manual's example scripts run as written
+
+Brandon asked for the example scripts in the Pine Script v6 manual (github.com/codenamedevan/pinescriptv6) to be run through the CB Script engine, and for the engine to change how it reads them rather than rewriting the scripts.
+
+- **Result:** all 388 example scripts were run through parse, the dry run and an 800-bar run. 294 ran before the change and 382 run now. Of the 6 that still fail, 5 are the manual's own examples of errors (`common_errors.md`), which TradingView rejects too. The other imports a library that exists only on TradingView, and it runs once that library is saved in the Scripts panel.
+- **`lang.ts`:**
+  - Multi-line `"""…"""` / `'''…'''` strings are read as one string, and line numbers in error messages stay the same.
+  - `import user/name/version [as alias]` reads a library saved in the Scripts panel (the script whose `library("name")` matches) and makes its functions, types and enums available as `alias.fn()`. If the library isn't saved, the error says how to fix it.
+  - `matrix<…>` and `map<…>` work as declared types.
+- **`runtime.ts`:**
+  - **Matrices:** `matrix.new<type>` and the full `matrix.*` set (get/set, rows/columns, add/remove rows and columns, submatrix, reshape, sort, transpose, concat, sum/diff/mult/pow, det/inv/pinv/rank/trace, eigenvalues/eigenvectors, kron, avg/min/max/median/mode and the `is_*` tests). Method calls on a matrix work too.
+  - **`plotcandle` / `plotbar`** draw their own candles and bars, with body, wick and border colours.
+  - **Arrays:** `sort_indices`, `binary_search` (plain, leftmost and rightmost), `covariance`, `mode`, `every`, `some`, `standardize`, `percentrank` and both percentiles.
+  - **Text and time:** `str.format` takes the MessageFormat patterns (`{0,number,#.##}`, percent, integer, currency, `{0,date,…}`). `str.format_time` and `timestamp("…")` handle time zones. `time()` / `time_close()` take `bars_back` and `timeframe_bars_back`. `timeframe.from_seconds` is added.
+  - **Data:** `ticker.heikinashi` works in `request.security`. Data the chart doesn't have returns `na` instead of an error: fundamentals, earnings, dividends, splits, economic data, footprint, `request.currency_rate`, and the extra `syminfo.*` fields.
+  - **Indicators:** `ta.iii`, `ta.wvad`, `ta.nvi`, `ta.pvi`, `ta.pvt` and `ta.wad` are added. `ta.bbw` (now ×100), `ta.kc` / `ta.kcw` / `ta.dmi` (true range), `ta.mfi` (na handling) and `ta.sar` now match the Pine definitions printed in the manual.
+  - **Strategies:**
+    - As on TradingView, `strategy.close` does nothing for an entry that isn't open, and `strategy.close_all` does nothing when flat.
+    - Margin, maximum position and `strategy.risk.allow_entry_in` are honoured.
+    - Each trade carries its own comments, commission, max run-up and max drawdown, readable through `strategy.closedtrades.*` / `opentrades.*`. The extra `strategy.*` totals (averages, percentages, max run-up, contracts held) are added.
+  - A variable named like a namespace no longer hides the builtin, so with `var matrix = matrix.new<float>(…)`, the call `matrix.set(matrix, …)` still reaches `matrix.set`.
+- **`engine.ts`:** compiles with the saved-library resolver and turns `plotcandle` / `plotbar` output into Vela candle and bar series.
+- **`panel.ts`:** the reference card now lists matrices, Heikin Ashi, `plotcandle` / `plotbar`, `"""` strings and imports, and says which data returns `na`. The "Not yet" line is gone.
+- **Checks:**
+  - The CB Script examples in `library.ts` give identical output before and after.
+  - The 4 ready strategies in `strategies.ts` give the same trades on 3 random price series (entry, exit, price, bar, quantity and profit all match). The only differences are the new per-trade fields.
+  - The 5 pasted TradingView scripts (Range Candles, Smart Money Concepts, FVG Order Blocks, T3 Striped, Advanced Levels) run unedited.
+  - A run of PineTS was used as a second opinion on values.
+  - `tsc` strict is clean on every file in `script/`.
+  - No colour literals were added. The runtime chunk is about 41.6kb brotli, under the 59.1kb route budget.
+- **Files:** `cbedge-v3/src/pages/vela/script/lang.ts`, `runtime.ts`, `engine.ts`, `panel.ts`.
+
+## 2026-10-05 - Vela ticker picker as a watchlist, round 1 (ideas only)
+
+Brandon wants the ticker picker to work almost like the watchlist: add sections, move things around, create a watchlist, and import one. He chose mockups first, and imports from TradingView exports and any text or CSV list.
+
+- **P1 · One list, in place:** the open list with all its sections where MAIN · WATCHLIST is now. A list switcher (every list, New watchlist, Import, Rename, Delete) sits above it with + Section and Import. Hover a row for ⠿ and ✕, drag to reorder or into another section, and + Main on any symbol below.
+- **P2 · Two tabs, Symbols · Watchlists:** Symbols is today's picker with + on every row. Watchlists shows the lists as chips with + New, and an Edit mode with handles, ✕, and section names you type, with ↑ ↓ and delete.
+- **P3 · Lists on the left:** a 700px picker with the lists down the left (+ New, Import, Recent) and the open list on the right. Dragging a symbol onto another list copies it there.
+- **P4 · Browse, then Edit:** today's picker showing every section of the open list (folded ones closed). ✎ Edit turns it into an editor where the search field adds to the list. Done goes back.
+- **Import screen (any idea):** drop, choose or paste a file. It names the format and counts, previews sections and tickers before anything changes, flags tickers Vela has no chart for, and imports into a new watchlist or merges into an existing one. Formats: TradingView .txt (`###Section,EXCHANGE:TICKER`), any list separated by commas, spaces or new lines, and CSV with a Symbol or Ticker column. `/ES`, `ES1!` and `ESZ2025` read as ES.
+- **Files:** `generated/2026-10-05-vela-picker-watchlist-r1.html` and `.png`. No code changed.
+
+## 2026-10-05 - Vela ticker picker: Watchlists tab (P2) and import
+
+Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the left of Symbols.
+
+- **Two tabs, Watchlists · Symbols.** The chip opens the tab used last (Watchlists the first time). Typing on the chart opens Symbols with the letters in the field. Tab switches tabs.
+- **Watchlists:**
+  - Your lists as chips with counts, and **+ New** (type a name, Enter).
+  - The open list section by section. ▾ folds a section, and the fold is shared with the docked Watchlist. A row opens the symbol on the active chart.
+  - Typing searches every symbol to add to the open list. Each result shows **+** to add or **✓** if it is already on the list, and Enter adds the highlighted row.
+  - **✎ Edit:**
+    - Rename the list. **Delete list** asks once more.
+    - Each section's name is a field, with ↑ ↓ and delete (its symbols go to Unsorted). **+ Section** and **+ Add a section** make a new one ready to name.
+    - Every row has ⠿ to drag, to reorder or into another section (a drag clears the docked panel's column sort for that list), and ✕ to remove.
+- **Symbols:** today's picker (filters, recent, the open list's first section, every symbol), with **+** on every row to add it to the open list.
+- **⇪ Import:** the picker becomes an import screen.
+  - Drop, choose or paste a file. It reads a TradingView export (`###Section,EXCHANGE:TICKER`), a CSV with a Symbol or Ticker column (a Section / Group / Category column becomes sections), or any list of tickers separated by commas, spaces or new lines (a line like `Tech:` or `# Tech` starts a section).
+  - Exchanges are dropped, and `/ES`, `ES1!`, `ESZ2025` and `ESZ5` read as ES (NQ the same).
+  - It names the format, counts the sections and symbols, previews them, and strikes out anything the chart has no symbol for (left out).
+  - Import goes into a new watchlist (named, default "Imported · Oct 5") or into the open list, where its sections are added after yours. Then the list opens with a note saying how many symbols came in.
+- The lists are the docked Watchlist's (`watchlist/store.ts`), so an edit here is an edit there and syncs to the account the same way. The phone's full-screen picker has the same tabs on two-line rows.
+- **Checked** in a harness with the real store: drag within and across sections, add by Enter, import to a new list with sections (unknown tickers dropped), and the phone layout. `tsc` strict is clean on the new and changed files.
+- **Files:** `cbedge-v3/src/pages/vela/symbolPickerView.ts` (rewritten), `symbolPicker.ts` (header), `watchlist/store.ts` (`importList`), `watchlist/importParse.ts` (new), `vela.css`.
+
+## 2026-10-05 - Voltick admin: trial pages out, 14-day gone-quiet list in, tab limit beside Connections
+
+- `Voltick-admin/admin-site/admin.js` (admin-site only):
+  - **Trial pages removed** (no free trial since August): Retention › Trials, Access › Trial bans, their four overview cards, Home's trial-conversion tile, the *Needs you* line for trials awaiting payment, and the trial row on the customer card. Mock mode loses the same pages, plus the members-over-time Trials series. The engine's trial routes are untouched. The five trial lists stay on Email lists, because the server test `a-copied-email-list-leaves-out-who-said-no` is built on them; removing them needs a PR Nick reviews.
+  - **Paying members not seen in 14 days** is now on Retention › Churn: the old admin's GONE QUIET list, read from `usage` on `/api/admin/stats`. It shows the opened today / 7 days / 30 days bands, each row's price, LEAVING and days away, and has Copy emails matched to the signup list's marketing flag. Retention gets a *Not seen · 14 days* card, which also replaces the trial tile on Home.
+  - **Members › Connections:** the tab-limit card sits beside *Members by connections* in place of the *What a connection is* note. This change had been committed before but never actually landed on disk.
+- `admin-site/test/escape-check.cjs`: `TRIAL_BLOCKS` is no longer poisoned (it's gone). Checks: escape check found 0 leaks and 0 page errors on both passes; the live-routes test passes; the email-list test's source cuts are unchanged.
+
+## 2026-10-06 - Vela Voltick Path: zoom-proof bubbles, one size, no random gaps
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts` (Path only; the Ribbon is unchanged):
+  - **One radius for the whole chart, from the bar pitch.** A bead is 86% of a bar wide (Volt capped at 6.5px, peers 82% of the Volt), shrunk to fit when strikes crowd, floored at 1.6px, then the Bubble size % and Calm chart. Every bubble grows and shrinks together on zoom, and neighbouring candles never overlap.
+  - **Per-reading sizing removed** (Voltick's pathSizes and the 2026-10-05 per-session version), so bubbles no longer vary in size along a row.
+  - **No more random gaps.** Voltick's `thinPathLanes` (kept run starts/ends, dropped others, so holes were uneven) is no longer used. Every candle draws; only when the floor or the Size setting makes a bead wider than its bar does it skip, and then on one every-Nth-bar grid by the clock, shared by every level, so spacing stays even and a pan never reshuffles it.
+  - The rim stroke and the Volt's glow and highlight scale with the radius; the Coil diamond reaches the same outer radius as a bubble.
+  - `Geo` gains `barSec` (the bar interval) for the column grid. `tsc` strict (noUnused*) is clean on the file.
+
+## 2026-10-06 - v3 theme check: Vela menu z-index fix (unblocks the commit)
+
+- `cbedge-v3/src/pages/vela/vela.css`: the menu/tooltip layer rule used `var(--z-index, var(--vela-z-menu, 50))`. Neither variable is declared under `src/` (Vela sets `--z-index` at runtime), so `check-theme` failed the pre-commit. The 50 fallback is now declared as `--z-index: 50` in a zero-specificity `:where(...)` rule, and the layer reads `z-index: var(--z-index)`. Vela's own `--z-index` still wins; behaviour is unchanged. `--vela-z-menu` (never set anywhere) is gone.

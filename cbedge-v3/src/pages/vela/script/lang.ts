@@ -19,9 +19,13 @@
 //   · `x = e` declares, `x := e` / `+=` `-=` `*=` `/=` `%=` reassign, `var` /
 //     `varip` keep a value across bars, type words (`float x = 0`, `series
 //     int`) are read and ignored, `[a, b] = f()` unpacks a tuple
-//   · `#rrggbb` / `#rrggbbaa` colour literals, "…" and '…' strings
+//   · `#rrggbb` / `#rrggbbaa` colour literals, "…" and '…' strings, and
+//     `"""…"""` / `'''…'''` strings across lines (Pine v6)
 //   · `cond ? a : b`, `and or not`, `== != < <= > >=`, `+ - * / %`, history
 //     `x[1]`, calls with positional and name=value arguments
+//   · `import user/name/1 as m`: a library the user saved (ParseOpts.library
+//     hands its source over); its functions, types and enums come in ahead of
+//     the script, reached as m.f(…) / m.Type / m.Enum.x
 //   · user-defined types (`type Point` + indented fields, `Point.new(…)`,
 //     `p.x`, `p.x := …`), `enum` blocks, `method f(Point this, …) =>`, and
 //     `.field` / `.method()` on any expression — `array.get(pts, 0).price`
@@ -88,6 +92,19 @@ export interface Program {
   stmts: Stmt[]
   /** `//@version=N` when the script declares one (it is Pine then), else null. */
   version: number | null
+  /**
+   * `import user/name/1 as m`: the library's functions, types and enums are in `stmts`
+   * (ahead of the script's own) under their own names; `m.f()` / `m.Type` reach them by alias.
+   */
+  imports?: { alias: string; names: string[] }[]
+}
+
+export interface ParseOpts {
+  /**
+   * The source of the library an `import user/name/version` names (Vela: one of the
+   * user's saved scripts declaring `library("name")`), or null when there is none.
+   */
+  library?: (user: string, name: string, version: number) => string | null
 }
 
 /** A script error that knows where it is. */
@@ -218,11 +235,76 @@ function opensBlock(l: LLine): boolean {
   return l.toks.some((t) => t.t === 'id' && BLOCK_WORDS.has(t.v))
 }
 
+/**
+ * Pine's multiline strings — `"""…"""` / `'''…'''` across lines (Pine v6, 2026) —
+ * folded into ordinary one-line "…" literals, each line break inside written as
+ * `\n`. The lines a literal spanned come back as blank lines after the line it
+ * closes on, so every later line keeps its number (and its error messages).
+ */
+function foldMultilineStrings(src: string): string {
+  if (!src.includes('"""') && !src.includes("'''")) return src
+  let out = ''
+  let pending = 0 // line breaks swallowed by a literal, owed after its closing line
+  let i = 0
+  const n = src.length
+  while (i < n) {
+    const c = src[i]!
+    if (c === '/' && src[i + 1] === '/') {
+      const e = src.indexOf('\n', i)
+      const end = e < 0 ? n : e
+      out += src.slice(i, end)
+      i = end
+      continue
+    }
+    if (c === '\n') {
+      out += '\n' + '\n'.repeat(pending)
+      pending = 0
+      i++
+      continue
+    }
+    if ((c === '"' || c === "'") && src.startsWith(c.repeat(3), i)) {
+      const delim = c.repeat(3)
+      const close = src.indexOf(delim, i + 3)
+      if (close < 0) {
+        out += src.slice(i) // left for the lexer to report the missing quote
+        break
+      }
+      const body = src.slice(i + 3, close)
+      pending += body.split('\n').length - 1
+      let lit = ''
+      for (let k = 0; k < body.length; k++) {
+        const b = body[k]!
+        if (b === '\\' && k + 1 < body.length && body[k + 1] !== '\n') {
+          lit += b + body[++k]! // an escape (\n, \\, \") stays one
+          continue
+        }
+        if (b === '\r') continue
+        lit += b === '"' ? '\\"' : b === '\n' ? '\\n' : b
+      }
+      out += `"${lit}"`
+      i = close + 3
+      continue
+    }
+    if (c === '"' || c === "'") {
+      // an ordinary one-line string, copied as is (a // inside it is not a comment)
+      let j = i + 1
+      while (j < n && src[j] !== c && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1
+      const end = j < n && src[j] === c ? j + 1 : j
+      out += src.slice(i, end)
+      i = end
+      continue
+    }
+    out += c
+    i++
+  }
+  return out + '\n'.repeat(pending)
+}
+
 function lex(src: string): LLine[] {
   const raw: LLine[] = []
   let depth = 0 // ( and [ nesting — a line break inside is not a line end
   let cur: LLine | null = null
-  const phys = src.split('\n')
+  const phys = foldMultilineStrings(src).split('\n')
   for (let ln = 0; ln < phys.length; ln++) {
     const text = phys[ln]!
     let j = 0
@@ -279,8 +361,10 @@ const TYPE_WORDS = new Set(['int', 'float', 'bool', 'color', 'string', 'line', '
 const ASSIGN_OPS = new Set(['=', ':=', '+=', '-=', '*=', '/=', '%='])
 const RESERVED = new Set(['if', 'else', 'for', 'while', 'switch', 'var', 'varip', 'and', 'or', 'not', 'true', 'false', 'na', 'break', 'continue', 'import', 'export'])
 
-export function parse(src: string): Program {
+export function parse(src: string, opts: ParseOpts = {}, depth = 0): Program {
   const vm = /\/\/\s*@version\s*=\s*(\d+)/.exec(src)
+  const imported: Stmt[] = []
+  const imports: { alias: string; names: string[] }[] = []
   const version = vm ? Number(vm[1]) : null
   const lines = lex(src)
   let li = 0 // next logical line to read
@@ -404,7 +488,7 @@ export function parse(src: string): Program {
       }
       const g = genericLen(1)
       if (g && peek(1 + g).t === 'id') {
-        parts.push(t.v === 'map' ? 'map' : 'array')
+        parts.push(t.v === 'map' || t.v === 'matrix' ? t.v : 'array')
         p += 1 + g
         continue
       }
@@ -506,7 +590,7 @@ export function parse(src: string): Program {
     const t0 = peek()
     const line = t0.line
     if (t0.t === 'id') {
-      if (t0.v === 'import') throw new ScriptError('"import" (TradingView libraries) isn\'t supported: paste the library\'s functions into the script instead', line)
+      if (t0.v === 'import') return importStmt()
       if (t0.v === 'export' && peek(1).t === 'id') {
         // a library's `export f(x) =>` / `export type T` — the word changes nothing here
         next()
@@ -857,6 +941,45 @@ export function parse(src: string): Program {
     return c
   }
 
+  /** `import user/name/version [as alias]` — the library's exports come in, ahead of the script. */
+  function importStmt(): Stmt {
+    const line = curLine
+    next() // import
+    const user = expectId()
+    expectOp('/')
+    const name = expectId()
+    expectOp('/')
+    const vt = next()
+    if (vt.t !== 'num') throw new ScriptError('an import reads user/library/version, the version a number: import user/name/1', line)
+    let alias = name
+    if (isWord('as')) {
+      next()
+      alias = expectId()
+    }
+    const path = `${user}/${name}/${vt.v}`
+    if (depth > 8) throw new ScriptError(`import ${path}: libraries import each other in a loop`, line)
+    const libSrc = opts.library?.(user, name, vt.v) ?? null
+    if (libSrc == null)
+      throw new ScriptError(
+        `import ${path}: no library named "${name}" in your scripts. Save the library (its library("${name}") script) in the Scripts panel, or paste its functions into this script`,
+        line,
+      )
+    let lib: Program
+    try {
+      lib = parse(libSrc, opts, depth + 1)
+    } catch (e) {
+      throw new ScriptError(`import ${path}: the library has an error: ${e instanceof Error ? e.message : String(e)}`, line)
+    }
+    const names: string[] = []
+    for (const s of lib.stmts) {
+      if (s.k !== 'func' && s.k !== 'type' && s.k !== 'enum') continue
+      imported.push(s)
+      if (!(s.k === 'func' && s.method)) names.push(s.name)
+    }
+    imports.push({ alias, names })
+    return { k: 'expr', x: { k: 'na', line }, line }
+  }
+
   const stmts: Stmt[] = []
   while (li < lines.length) {
     if (lines[li]!.indent !== lines[0]!.indent && lines[li]!.indent > 0) {
@@ -865,5 +988,5 @@ export function parse(src: string): Program {
     }
     stmts.push(statement())
   }
-  return { stmts, version }
+  return imports.length ? { stmts: [...imported, ...stmts], version, imports } : { stmts, version }
 }

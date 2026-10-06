@@ -15,25 +15,38 @@
 //              dayofweek dayofmonth month year (New York time), vwap obv
 //              accdist tr (+ ta.* spellings)
 //   ta.        sma ema rma wma vwma hma alma swma · stdev variance dev median
-//              percentrank · highest lowest highestbars lowestbars sum range
-//              change mom roc cum · rsi macd stoch cci atr tr mfi wpr cmo tsi
-//              bb kc dmi supertrend sar linreg correlation · crossover
-//              crossunder cross rising falling barssince valuewhen pivothigh
-//              pivotlow vwap obv
+//              mode percentrank · highest lowest highestbars lowestbars sum
+//              range change mom roc cum · rsi macd stoch cci atr tr mfi wpr cmo
+//              tsi cog rci bb bbw kc kcw dmi supertrend sar linreg correlation
+//              · crossover crossunder cross rising falling barssince valuewhen
+//              pivothigh pivotlow pivot_point_levels vwap obv · iii nvi pvi pvt
+//              wad wvad
 //   math.      abs sqrt log log10 exp pow sign floor ceil round min max avg sum
 //              sin cos tan asin acos atan todegrees toradians round_to_mintick
-//   misc       nz na fixnan iff time() timestamp() hour() … str.tostring
-//              str.format, color.new / color.rgb / color.from_gradient
+//              random
+//   misc       nz na fixnan iff time() / time_close() (bars_back,
+//              timeframe_bars_back) timestamp() (with a time zone) hour() …
+//              str.tostring / str.format (Java's number and date patterns)
+//              str.format_time str.match, timeframe.from_seconds,
+//              color.new / color.rgb / color.from_gradient
 //   inputs     input() (v4: any order, type=input.*), input.int float bool
 //              string source color timeframe session symbol price time
-//   outputs    indicator() / study() / strategy(), plot plotshape plotchar
-//              plotarrow hline fill bgcolor barcolor, alertcondition (ignored)
+//   outputs    indicator() / study() / strategy() / library(), plot plotcandle
+//              plotbar plotshape plotchar plotarrow hline fill bgcolor barcolor
 //   CB extras  input("Title", default), marker(cond, text, position=, shape=),
 //              bgcolor(cond, color=, opacity=), bb_upper / bb_lower, alpha(),
 //              plot(width=, dashed=), named colours (gold call put core volt …)
 //   other data request.security (higher timeframes; other symbols the engine
-//              fetches) and request.security_lower_tf (arrays of intrabar values)
-//   arrays     array.* + method calls (xs.push(1)) + for … in
+//              fetches; Heikin Ashi bars for ticker.heikinashi()) and
+//              request.security_lower_tf (arrays of intrabar values). Data this
+//              app has no source for — fundamentals, earnings / dividends /
+//              splits, economic, footprint, syminfo's analyst figures — is na.
+//   arrays     array.* + method calls (xs.push(1)) + for … in; sort /
+//              sort_indices by a user type's field (sort_field)
+//   matrices   matrix.* — new get set rows columns row col add_* remove_* fill
+//              copy submatrix reshape reverse transpose concat swap_* sort sum
+//              diff mult pow det inv pinv rank trace eigenvalues eigenvectors
+//              kron avg max min median mode is_* — + methods and for row in m
 //   drawings   label / line / box / linefill / polyline / table / chart.point —
 //              new, set_*, get_*, delete, copy, *.all, max_*_count; what is alive
 //              after the last bar is drawn (RunResult.drawings)
@@ -48,7 +61,8 @@
 //              back as RunResult.strategy (trades → Vela's trade markers)
 //   alerts     alertcondition() and alert() record when they fire
 //              (RunResult.alerts) — the engine delivers the live ones
-// Not yet: matrices.
+//   libraries  `import user/name/1 as m` (lang.ts) brings in a saved library
+//              script's exports; m.f(), m.Type.new(), m.Enum.x reach them
 //
 // ── Colours ──────────────────────────────────────────────────────────────────
 // Pine's palette (color.red …) is tokens.css's --color-pine-*, TradingView's own
@@ -126,7 +140,15 @@ class Obj {
 class MapV {
   constructor(public m: Map<string | number, Val>) {}
 }
-type Val = number | string | Val[] | PlotRef | HlineRef | PArr | Draw | CPoint | Obj | MapV
+/** A Pine matrix (matrix.new<float>(rows, columns)): row-major cells, held by reference. */
+class PMat {
+  constructor(
+    public r: number,
+    public c: number,
+    public d: Val[],
+  ) {}
+}
+type Val = number | string | Val[] | PlotRef | HlineRef | PArr | Draw | CPoint | Obj | MapV | PMat
 
 const isPlot = (v: Val | undefined): v is PlotRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'plot' in v
 const isHline = (v: Val | undefined): v is HlineRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'hline' in v
@@ -200,6 +222,25 @@ export interface BgOut {
   to: number
   color: string
 }
+/** One bar's plotcandle / plotbar colours (null fields: Vela's up / down defaults). */
+export interface CandleColors {
+  color: string | null
+  wick: string | null
+  border: string | null
+}
+/** plotcandle() / plotbar(): a candle (or OHLC bar) series of the script's own. */
+export interface CandleOut {
+  title: string
+  kind: 'candle' | 'bar'
+  open: Float64Array
+  high: Float64Array
+  low: Float64Array
+  close: Float64Array
+  /** Per bar; null = the bar takes the default colours. */
+  colors: (CandleColors | null)[]
+  /** display = display.none. */
+  hidden: boolean
+}
 export interface Meta {
   title: string
   shorttitle?: string
@@ -239,6 +280,11 @@ export interface StrategyTrade {
   exitTime: number
   profit: number
   commission: number
+  entryComment?: string
+  exitComment?: string
+  /** The trade's best / worst open profit while it ran, in money (both ≥ 0). */
+  maxRunup?: number
+  maxDrawdown?: number
 }
 export interface StrategyOut {
   initialCapital: number
@@ -270,6 +316,8 @@ export interface RunResult {
   meta: Meta
   inputs: InputSchema[]
   plots: PlotOut[]
+  /** plotcandle() / plotbar() series. */
+  candles: CandleOut[]
   hlines: HlineOut[]
   fills: FillOut[]
   markers: MarkerOut[]
@@ -583,16 +631,27 @@ function dayKey(t: number, shift = 0): number {
   return p.year * 10000 + p.month * 100 + p.day
 }
 /** Is New York minute-of-day `m` (and weekday) inside a Pine session string like "0930-1600:23456"? */
-function inSession(t: number, session: string): boolean {
-  const p = nyTime(t)
-  const m = p.hour * 60 + p.minute
+function inSession(t: number, session: string, tz?: string): boolean {
+  if (session.trim().toLowerCase() === '24x7') return true
+  // the session's clock: New York (the chart's), or the time zone time() was given
+  let m: number
+  let dow: number
+  if (tz && tz.trim() && !/^america\/new_york$/i.test(tz.trim())) {
+    const z = zoneParts(t, tz)
+    m = z.h * 60 + z.mi
+    dow = z.dow + 1
+  } else {
+    const p = nyTime(t)
+    m = p.hour * 60 + p.minute
+    dow = p.dow
+  }
   for (const part of session.split(',')) {
     const mm = /^\s*(\d{2})(\d{2})-(\d{2})(\d{2})(?::(\d+))?\s*$/.exec(part)
     if (!mm) continue
-    if (mm[5] && !mm[5].includes(String(p.dow))) continue
+    if (mm[5] && !mm[5].includes(String(dow))) continue
     const a = +mm[1]! * 60 + +mm[2]!
     const b = +mm[3]! * 60 + +mm[4]!
-    if (a <= b ? m >= a && m < b : m >= a || m < b) return true
+    if (a === b || (a < b ? m >= a && m < b : m >= a || m < b)) return true
   }
   return false
 }
@@ -745,7 +804,628 @@ Object.assign(CONSTS, {
   'text.format_italic': 2,
   'font.family_default': 'default',
   'font.family_monospace': 'monospace',
+  'backadjustment.inherit': 'inherit',
+  'backadjustment.on': 'on',
+  'backadjustment.off': 'off',
+  'settlement_as_close.inherit': 'inherit',
+  'settlement_as_close.on': 'on',
+  'settlement_as_close.off': 'off',
+  'dividends.gross': 'gross',
+  'dividends.net': 'net',
+  'earnings.actual': 'actual',
+  'earnings.estimate': 'estimate',
+  'earnings.standardized': 'standardized',
+  'splits.denominator': 'denominator',
+  'splits.numerator': 'numerator',
+  'currency.NONE': 'NONE',
+  'plot.linestyle_solid': 'solid',
+  'plot.linestyle_dashed': 'dashed',
+  'plot.linestyle_dotted': 'dotted',
 })
+for (const k of ['AUD', 'BTC', 'CAD', 'CHF', 'EGP', 'ETH', 'EUR', 'GBP', 'HKD', 'INR', 'JPY', 'KRW', 'MYR', 'NOK', 'NZD', 'PKR', 'PLN', 'RUB', 'SEK', 'SGD', 'TRY', 'USDT', 'ZAR'])
+  CONSTS[`currency.${k}`] = k
+
+// ── Formatting: str.format / str.format_time / str.tostring patterns ────────
+// Pine formats the way Java's MessageFormat / DecimalFormat / SimpleDateFormat do.
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const zoneFmts = new Map<string, Intl.DateTimeFormat | null>()
+const zoneOffs = new Map<string, Map<number, number>>()
+interface ZoneParts {
+  y: number
+  mo: number
+  d: number
+  h: number
+  mi: number
+  s: number
+  ms: number
+  /** 0 = Sunday. */
+  dow: number
+  /** Minutes east of UTC. */
+  off: number
+}
+/** Wall-clock parts of epoch-ms `t` in a Pine time zone: an IANA name, "UTC", "GMT+5", "UTC-03:30". */
+function zoneParts(t: number, tz: string): ZoneParts {
+  const z = tz.trim()
+  const fixed = /^(?:UTC|GMT)\s*(?:([+-])\s*(\d{1,2})(?::?(\d{2}))?)?$/i.exec(z)
+  const ms = ((t % 1000) + 1000) % 1000
+  if (fixed) {
+    const off = fixed[1] ? (fixed[1] === '-' ? -1 : 1) * (+fixed[2]! * 60 + +(fixed[3] ?? 0)) : 0
+    const d = new Date(t + off * 60_000)
+    return { y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate(), h: d.getUTCHours(), mi: d.getUTCMinutes(), s: d.getUTCSeconds(), ms, dow: d.getUTCDay(), off }
+  }
+  let f = zoneFmts.get(z)
+  if (f === undefined) {
+    try {
+      f = new Intl.DateTimeFormat('en-US', { timeZone: z, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' })
+    } catch {
+      f = null // not a zone the browser knows: New York, the chart's own
+    }
+    zoneFmts.set(z, f)
+  }
+  if (!f) return zoneParts(t, 'America/New_York')
+  // the zone's offset, asked of Intl once per hour (offsets change on the hour), then plain arithmetic
+  let memo = zoneOffs.get(z)
+  if (!memo) zoneOffs.set(z, (memo = new Map()))
+  const hk = Math.floor(t / 3_600_000)
+  let off = memo.get(hk)
+  if (off === undefined) {
+    const at = hk * 3_600_000
+    const p: Record<string, string> = {}
+    for (const x of f.formatToParts(new Date(at))) p[x.type] = x.value
+    off = Math.round((Date.UTC(+p.year!, +p.month! - 1, +p.day!, +p.hour! % 24, +p.minute!, +p.second!) - at) / 60_000)
+    if (memo.size > 20_000) memo.clear()
+    memo.set(hk, off)
+  }
+  const d = new Date(t + off * 60_000)
+  return { y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate(), h: d.getUTCHours(), mi: d.getUTCMinutes(), s: d.getUTCSeconds(), ms, dow: d.getUTCDay(), off }
+}
+/** SimpleDateFormat letters: y M d E a H h k K m s S D Z z X, 'quoted text', '' for a quote. */
+function formatTime(t: number, pat: string, tz: string): string {
+  const z = zoneParts(t, tz)
+  let out = ''
+  for (let i = 0; i < pat.length; ) {
+    const ch = pat[i]!
+    if (ch === "'") {
+      if (pat[i + 1] === "'") {
+        out += "'"
+        i += 2
+        continue
+      }
+      const j = pat.indexOf("'", i + 1)
+      out += pat.slice(i + 1, j < 0 ? pat.length : j)
+      i = j < 0 ? pat.length : j + 1
+      continue
+    }
+    if (!/[A-Za-z]/.test(ch)) {
+      out += ch
+      i++
+      continue
+    }
+    let j = i
+    while (j < pat.length && pat[j] === ch) j++
+    const n = j - i
+    i = j
+    const pad = (v: number, w = n) => String(v).padStart(w, '0')
+    const sign = z.off < 0 ? '-' : '+'
+    const ao = Math.abs(z.off)
+    switch (ch) {
+      case 'y':
+      case 'Y':
+        out += n === 2 ? pad(z.y % 100, 2) : pad(z.y)
+        break
+      case 'M':
+      case 'L':
+        out += n >= 4 ? MONTH_NAMES[z.mo - 1]! : n === 3 ? MONTH_NAMES[z.mo - 1]!.slice(0, 3) : pad(z.mo)
+        break
+      case 'd':
+        out += pad(z.d)
+        break
+      case 'D':
+        out += pad(Math.round((Date.UTC(z.y, z.mo - 1, z.d) - Date.UTC(z.y, 0, 1)) / 86_400_000) + 1)
+        break
+      case 'E':
+        out += n >= 4 ? DAY_NAMES[z.dow]! : DAY_NAMES[z.dow]!.slice(0, 3)
+        break
+      case 'u':
+        out += pad(z.dow || 7)
+        break
+      case 'a':
+        out += z.h < 12 ? 'AM' : 'PM'
+        break
+      case 'H':
+        out += pad(z.h)
+        break
+      case 'k':
+        out += pad(z.h || 24)
+        break
+      case 'h':
+        out += pad(z.h % 12 || 12)
+        break
+      case 'K':
+        out += pad(z.h % 12)
+        break
+      case 'm':
+        out += pad(z.mi)
+        break
+      case 's':
+        out += pad(z.s)
+        break
+      case 'S':
+        out += pad(z.ms, Math.max(n, 3)).slice(0, Math.max(n, 1))
+        break
+      case 'Z':
+        out += `${sign}${pad(Math.floor(ao / 60), 2)}${pad(ao % 60, 2)}`
+        break
+      case 'X':
+        out += z.off === 0 ? 'Z' : n >= 3 ? `${sign}${pad(Math.floor(ao / 60), 2)}:${pad(ao % 60, 2)}` : `${sign}${pad(Math.floor(ao / 60), 2)}${n === 2 ? pad(ao % 60, 2) : ''}`
+        break
+      case 'z':
+        out += `GMT${sign}${pad(Math.floor(ao / 60), 2)}:${pad(ao % 60, 2)}`
+        break
+      default:
+        out += ch.repeat(n)
+    }
+  }
+  return out
+}
+/** Epoch ms of a wall-clock time in a Pine time zone (timestamp("GMT+3", …)). */
+function zoneToUtc(y: number, mo: number, d: number, h: number, mi: number, s: number, tz: string): number {
+  const want = Date.UTC(y, mo - 1, d, h, mi, s)
+  let guess = want
+  for (let k = 0; k < 3; k++) {
+    const p = zoneParts(guess, tz)
+    guess += want - Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s)
+  }
+  return guess
+}
+/** timestamp(dateString): RFC 2822 or ISO 8601 — GMT+0 when the string names no zone (Pine). */
+function parseDateString(raw: string): number {
+  let str = raw.trim().replace(/\b(?:GMT|UTC)\s*([+-])(\d{1,2})(?::?(\d{2}))?\b/i, (_, sg: string, h: string, m?: string) => `GMT${sg}${h.padStart(2, '0')}${m ?? '00'}`)
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(str) || /\b(?:GMT|UTC)\b/i.test(str)
+  if (!zoned) str = /^\d{4}-\d{2}-\d{2}T/.test(str) ? `${str}Z` : /^\d{4}-\d{2}-\d{2}$/.test(str) ? str : `${str} GMT`
+  const t = Date.parse(str)
+  return Number.isFinite(t) ? t : NaN
+}
+/** A MessageFormat pattern cut into literal text and {index,type,style} slots (cached: a script formats the same pattern every bar). */
+type MsgPart = string | { i: number; type: string; style: string; raw: string }
+const msgCache = new Map<string, MsgPart[]>()
+function messageParts(pattern: string): MsgPart[] {
+  let parts = msgCache.get(pattern)
+  if (parts) return parts
+  parts = []
+  let lit = ''
+  let quoted = false
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!
+    if (ch === "'") {
+      if (pattern[i + 1] === "'") {
+        lit += "'"
+        i++
+      } else quoted = !quoted
+      continue
+    }
+    if (quoted || ch !== '{') {
+      lit += ch
+      continue
+    }
+    // {index[,type[,style]]} — braces nest inside a style
+    let depth = 1
+    let j = i + 1
+    while (j < pattern.length && depth > 0) {
+      if (pattern[j] === '{') depth++
+      else if (pattern[j] === '}') depth--
+      if (depth > 0) j++
+    }
+    const raw = pattern.slice(i + 1, j)
+    i = j
+    const [idxS = '', typeS = '', ...rest] = raw.split(',')
+    if (lit) parts.push(lit)
+    lit = ''
+    parts.push({ i: Number(idxS.trim()), type: typeS.trim().toLowerCase(), style: rest.join(',').trim(), raw })
+  }
+  if (lit) parts.push(lit)
+  if (msgCache.size > 500) msgCache.clear()
+  msgCache.set(pattern, parts)
+  return parts
+}
+/** A number with min / max fraction digits, a minimum of integer digits and an optional grouping size. */
+function fmtNumber(x: number, minInt: number, minFrac: number, maxFrac: number, group: number): string {
+  if (x !== x) return 'NaN'
+  if (!Number.isFinite(x)) return x > 0 ? '∞' : '-∞'
+  const neg = x < 0
+  const [ip = '0', fp0 = ''] = Math.abs(x).toFixed(Math.min(20, maxFrac)).split('.')
+  let fp = fp0
+  while (fp.length > minFrac && fp.endsWith('0')) fp = fp.slice(0, -1)
+  let i = ip.length < minInt ? ip.padStart(minInt, '0') : ip
+  if (minInt === 0 && i === '0' && fp) i = ''
+  if (group > 0) i = i.replace(new RegExp(`\\B(?=(\\d{${group}})+(?!\\d))`, 'g'), ',')
+  const out = fp ? `${i}.${fp}` : i || '0'
+  return (neg && /[1-9]/.test(out) ? '-' : '') + out
+}
+/** A DecimalFormat pattern: "#.##", "0.00", "#,##0.0", "0.0%", "$#,##0.00" … */
+function decimalFormat(x: number, pattern: string): string {
+  const pos = pattern.split(';')[0] ?? ''
+  const m = /^([^#0,.]*)([#0,.]+)(.*)$/.exec(pos)
+  if (!m) return fmtNumber(x, 1, 0, 3, 3)
+  const pre = m[1]!.replace(/'/g, '')
+  const body = m[2]!
+  const suf = m[3]!.replace(/'/g, '')
+  const v = (pre + suf).includes('%') ? x * 100 : (pre + suf).includes('‰') ? x * 1000 : x
+  const dot = body.indexOf('.')
+  const ip = dot < 0 ? body : body.slice(0, dot)
+  const fp = dot < 0 ? '' : body.slice(dot + 1)
+  const minInt = (ip.match(/0/g) ?? []).length
+  const group = ip.includes(',') ? ip.length - ip.lastIndexOf(',') - 1 : 0
+  return pre + fmtNumber(v, minInt, (fp.match(/0/g) ?? []).length, fp.replace(/,/g, '').length, group) + suf
+}
+/** The smallest valid timeframe string covering `s` seconds (timeframe.from_seconds). */
+function tfFromSeconds(s: number): string {
+  if (s > 31_622_400) return '12M'
+  const sec = Math.max(1, Math.ceil(s))
+  const MONTH = 2_628_003
+  if (sec % MONTH === 0 && sec / MONTH <= 12) return `${sec / MONTH}M`
+  if (sec % 604_800 === 0 && sec / 604_800 <= 52) return `${sec / 604_800}W`
+  if (sec >= 86_400) {
+    const d = Math.ceil(sec / 86_400)
+    return d <= 365 ? `${d}D` : '12M'
+  }
+  if (sec >= 60) {
+    const m = Math.ceil(sec / 60)
+    return m >= 1440 ? '1D' : `${m}`
+  }
+  for (const k of [1, 5, 10, 15, 30, 45]) if (sec <= k) return `${k}S`
+  return '1'
+}
+/** The most frequent value; the smallest of a tie (Pine's mode). */
+function modeOf(xs: readonly number[]): number {
+  const counts = new Map<number, number>()
+  for (const x of xs) if (x === x) counts.set(x, (counts.get(x) ?? 0) + 1)
+  let best = NaN
+  let n = 0
+  for (const [v, k] of counts) if (k > n || (k === n && v < best)) [best, n] = [v, k]
+  return best
+}
+/** Ascending ranks 1…n, ties sharing their average rank. */
+function rankAvg(xs: readonly number[]): number[] {
+  const order = xs.map((v, k) => [v, k] as const).sort((a, b) => a[0] - b[0])
+  const out = new Array<number>(xs.length)
+  for (let a = 0; a < order.length; ) {
+    let b = a
+    while (b + 1 < order.length && order[b + 1]![0] === order[a]![0]) b++
+    for (let k = a; k <= b; k++) out[order[k]![1]] = (a + b) / 2 + 1
+    a = b + 1
+  }
+  return out
+}
+/** ta.pivot_point_levels: [P, R1, S1, R2, S2, R3, S3, R4, S4, R5, S5] from a period's open / high / low / close (`o` is the NEXT period's open, for Woodie). */
+function pivotLevels(type: string, o: number, h: number, l: number, c: number, nextOpen: number): number[] {
+  const out = new Array<number>(11).fill(NaN)
+  const r = h - l
+  const set = (...xs: number[]) => xs.forEach((x, k) => (out[k] = x))
+  switch (type.toLowerCase()) {
+    case 'fibonacci': {
+      const p = (h + l + c) / 3
+      set(p, p + 0.382 * r, p - 0.382 * r, p + 0.618 * r, p - 0.618 * r, p + r, p - r)
+      break
+    }
+    case 'woodie': {
+      const p = (h + l + 2 * nextOpen) / 4
+      const r3 = h + 2 * (p - l)
+      const s3 = l - 2 * (h - p)
+      set(p, 2 * p - l, 2 * p - h, p + r, p - r, r3, s3, r3 + r, s3 - r)
+      break
+    }
+    case 'classic': {
+      const p = (h + l + c) / 3
+      set(p, 2 * p - l, 2 * p - h, p + r, p - r, p + 2 * r, p - 2 * r, p + 3 * r, p - 3 * r)
+      break
+    }
+    case 'dm': {
+      const x = c < o ? h + 2 * l + c : c > o ? 2 * h + l + c : h + l + 2 * c
+      set(x / 4, x / 2 - l, x / 2 - h)
+      break
+    }
+    case 'camarilla': {
+      const p = (h + l + c) / 3
+      const r5 = (h / l) * c
+      set(p, c + (1.1 * r) / 12, c - (1.1 * r) / 12, c + (1.1 * r) / 6, c - (1.1 * r) / 6, c + (1.1 * r) / 4, c - (1.1 * r) / 4, c + (1.1 * r) / 2, c - (1.1 * r) / 2, r5, c - (r5 - c))
+      break
+    }
+    default: {
+      // Traditional
+      const p = (h + l + c) / 3
+      set(p, 2 * p - l, 2 * p - h, p + r, p - r, 2 * p + (h - 2 * l), 2 * p - (2 * h - l), 3 * p + (h - 3 * l), 3 * p - (3 * h - l), 4 * p + (h - 4 * l), 4 * p - (4 * h - l))
+    }
+  }
+  return out
+}
+/** Heikin Ashi candles of these bars (ticker.heikinashi()). */
+function heikinAshi(bars: readonly OHLCV[]): OHLCV[] {
+  const out: OHLCV[] = []
+  let po = NaN
+  let pc = NaN
+  for (const b of bars) {
+    const c = (b.open + b.high + b.low + b.close) / 4
+    const o = po === po ? (po + pc) / 2 : (b.open + b.close) / 2
+    out.push({ time: b.time, open: o, high: Math.max(b.high, o, c), low: Math.min(b.low, o, c), close: c, ...(b.volume !== undefined ? { volume: b.volume } : {}) })
+    po = o
+    pc = c
+  }
+  return out
+}
+/** What ticker.heikinashi() puts on a ticker id: request.security reads it and asks for Heikin Ashi bars. */
+const HA_MARK = '#HA'
+
+/** Built-in variables with a fixed answer: one function each, shared by every run. */
+const NA_VAR = (): number => NaN
+const EMPTY_VAR = (): string => ''
+const ZERO_VAR = (): number => 0
+
+// ── Matrix arithmetic (matrix.*: pure, shared by every run) ─────────────────
+
+const cellNum = (m: PMat, r: number, k: number): number => {
+  const v = m.d[r * m.c + k]
+  return typeof v === 'number' ? v : NaN
+}
+/** Rows as plain numbers (anything else is NaN): the numeric routines' input. */
+const grid = (m: PMat): number[][] => Array.from({ length: m.r }, (_, r) => Array.from({ length: m.c }, (_, k) => cellNum(m, r, k)))
+const fromGrid = (g: number[][], cols = g[0]?.length ?? 0): PMat => new PMat(g.length, cols, g.flat())
+const matNums = (m: PMat) => m.d.filter((x): x is number => typeof x === 'number' && !isNa(x))
+const needSquare = (m: PMat, c: Call, what: string) => {
+  if (m.r !== m.c) throw new ScriptError(`${what} needs a square matrix (this one is ${m.r}x${m.c})`, c.line)
+}
+const identity = (n: number): number[][] => Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, k) => (r === k ? 1 : 0)))
+const transposeG = (g: number[][]): number[][] => (g[0] ?? []).map((_, k) => g.map((row) => row[k]!))
+const matMul = (a: number[][], b: number[][]): number[][] => {
+  const m = b[0]?.length ?? 0
+  return a.map((row) => {
+    const out = new Array<number>(m).fill(0)
+    for (let k = 0; k < row.length; k++) {
+      const x = row[k]!
+      const bk = b[k]!
+      for (let j = 0; j < m; j++) out[j] = out[j]! + x * bk[j]!
+    }
+    return out
+  })
+}
+const maxAbs = (g: number[][]) => g.reduce((a, row) => row.reduce((b, x) => Math.max(b, Math.abs(x)), a), 0)
+/** Gauss–Jordan with partial pivoting: the inverse (null when singular) and the determinant. */
+const gaussJordan = (g: number[][]): { inv: number[][] | null; det: number } => {
+  const n = g.length
+  const a = g.map((r) => r.slice())
+  const inv = identity(n)
+  const tol = maxAbs(g) * n * 1e-14
+  let det = 1
+  for (let col = 0; col < n; col++) {
+    let piv = col
+    for (let r = col + 1; r < n; r++) if (Math.abs(a[r]![col]!) > Math.abs(a[piv]![col]!)) piv = r
+    const pv = a[piv]![col]!
+    if (isNa(pv)) return { inv: null, det: NaN }
+    if (Math.abs(pv) <= tol) return { inv: null, det: 0 }
+    if (piv !== col) {
+      const t1 = a[piv]!
+      a[piv] = a[col]!
+      a[col] = t1
+      const t2 = inv[piv]!
+      inv[piv] = inv[col]!
+      inv[col] = t2
+      det = -det
+    }
+    det *= pv
+    const ar = a[col]!
+    const ir = inv[col]!
+    for (let k = 0; k < n; k++) {
+      ar[k] = ar[k]! / pv
+      ir[k] = ir[k]! / pv
+    }
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue
+      const f = a[r]![col]!
+      if (!f) continue
+      const rr = a[r]!
+      const ri = inv[r]!
+      for (let k = 0; k < n; k++) {
+        rr[k] = rr[k]! - f * ar[k]!
+        ri[k] = ri[k]! - f * ir[k]!
+      }
+    }
+  }
+  return { inv, det }
+}
+const rankOf = (g: number[][]): number => {
+  const a = g.map((r) => r.slice())
+  const rows = a.length
+  const cols = a[0]?.length ?? 0
+  const tol = Math.max(rows, cols) * maxAbs(g) * 1e-12
+  let rank = 0
+  for (let col = 0; col < cols && rank < rows; col++) {
+    let piv = rank
+    for (let r = rank + 1; r < rows; r++) if (Math.abs(a[r]![col]!) > Math.abs(a[piv]![col]!)) piv = r
+    if (!(Math.abs(a[piv]![col]!) > tol)) continue
+    const t = a[piv]!
+    a[piv] = a[rank]!
+    a[rank] = t
+    for (let r = rank + 1; r < rows; r++) {
+      const f = a[r]![col]! / a[rank]![col]!
+      for (let k = col; k < cols; k++) a[r]![k] = a[r]![k]! - f * a[rank]![k]!
+    }
+    rank++
+  }
+  return rank
+}
+/** Moore–Penrose pseudoinverse: the inverse when there is one, else the limit of (AᵀA + δI)⁻¹Aᵀ as δ → 0. */
+const pinvOf = (g: number[][]): number[][] => {
+  const rows = g.length
+  const cols = g[0]?.length ?? 0
+  if (rows === cols) {
+    const gj = gaussJordan(g)
+    if (gj.inv) return gj.inv
+  }
+  const t = transposeG(g)
+  const tall = rows >= cols
+  const core = tall ? matMul(t, g) : matMul(g, t)
+  let tr = 0
+  for (let k = 0; k < core.length; k++) tr += Math.abs(core[k]![k]!)
+  const delta = Math.max(tr, 1e-300) * 1e-13
+  for (let k = 0; k < core.length; k++) core[k]![k] = core[k]![k]! + delta
+  const inv = gaussJordan(core).inv
+  if (!inv) return t.map((row) => row.map(() => NaN))
+  const out = tall ? matMul(inv, t) : matMul(t, inv)
+  return out.map((row) => row.map((x) => (Math.abs(x) < 1e-12 ? 0 : x)))
+}
+/** Householder QR of a square matrix: A = QR. */
+const qrOf = (g: number[][]): { Q: number[][]; R: number[][] } => {
+  const n = g.length
+  const R = g.map((r) => r.slice())
+  const Q = identity(n)
+  for (let k = 0; k < n - 1; k++) {
+    let norm = 0
+    for (let r = k; r < n; r++) norm += R[r]![k]! ** 2
+    norm = Math.sqrt(norm)
+    if (norm < 1e-300) continue
+    const alpha = R[k]![k]! > 0 ? -norm : norm
+    const v = new Array<number>(n).fill(0)
+    for (let r = k; r < n; r++) v[r] = R[r]![k]!
+    v[k] = v[k]! - alpha
+    let vn = 0
+    for (let r = k; r < n; r++) vn += v[r]! ** 2
+    if (vn < 1e-300) continue
+    for (let j = 0; j < n; j++) {
+      let d = 0
+      for (let r = k; r < n; r++) d += v[r]! * R[r]![j]!
+      const f = (2 * d) / vn
+      for (let r = k; r < n; r++) R[r]![j] = R[r]![j]! - f * v[r]!
+    }
+    for (let i = 0; i < n; i++) {
+      let d = 0
+      for (let r = k; r < n; r++) d += Q[i]![r]! * v[r]!
+      const f = (2 * d) / vn
+      for (let r = k; r < n; r++) Q[i]![r] = Q[i]![r]! - f * v[r]!
+    }
+  }
+  return { Q, R }
+}
+const isSymmetric = (g: number[][]) => {
+  const tol = maxAbs(g) * 1e-12
+  return g.every((row, r) => row.every((x, k) => Math.abs(x - g[k]![r]!) <= tol))
+}
+/** Symmetric matrices: Jacobi rotations — eigenvalues and orthonormal eigenvectors (columns). */
+const jacobi = (g: number[][]): { vals: number[]; vecs: number[][] } => {
+  const n = g.length
+  const a = g.map((r) => r.slice())
+  const v = identity(n)
+  for (let sweep = 0; sweep < 100; sweep++) {
+    let off = 0
+    for (let p = 0; p < n; p++) for (let q = p + 1; q < n; q++) off += a[p]![q]! ** 2
+    if (off <= 1e-24 * Math.max(1, maxAbs(a) ** 2)) break
+    for (let p = 0; p < n; p++) {
+      for (let q = p + 1; q < n; q++) {
+        const apq = a[p]![q]!
+        if (Math.abs(apq) < 1e-300) continue
+        const theta = (a[q]![q]! - a[p]![p]!) / (2 * apq)
+        const t = (theta >= 0 ? 1 : -1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1))
+        const cs = 1 / Math.sqrt(t * t + 1)
+        const sn = t * cs
+        for (let k = 0; k < n; k++) {
+          const akp = a[k]![p]!
+          const akq = a[k]![q]!
+          a[k]![p] = cs * akp - sn * akq
+          a[k]![q] = sn * akp + cs * akq
+        }
+        for (let k = 0; k < n; k++) {
+          const apk = a[p]![k]!
+          const aqk = a[q]![k]!
+          a[p]![k] = cs * apk - sn * aqk
+          a[q]![k] = sn * apk + cs * aqk
+        }
+        for (let k = 0; k < n; k++) {
+          const vkp = v[k]![p]!
+          const vkq = v[k]![q]!
+          v[k]![p] = cs * vkp - sn * vkq
+          v[k]![q] = sn * vkp + cs * vkq
+        }
+      }
+    }
+  }
+  return { vals: a.map((r, k) => r[k]!), vecs: v }
+}
+/** Any square matrix: shifted QR iterations — the real eigenvalues (a complex pair gives its real part twice). */
+const eigGeneral = (g: number[][]): number[] => {
+  let a = g.map((r) => r.slice())
+  const vals: number[] = []
+  let n = a.length
+  let iter = 0
+  const shrink = (m: number) => (a = a.slice(0, m).map((r) => r.slice(0, m)))
+  while (n > 0) {
+    if (n === 1) {
+      vals.push(a[0]![0]!)
+      break
+    }
+    const p = a[n - 2]![n - 2]!
+    const q = a[n - 2]![n - 1]!
+    const r = a[n - 1]![n - 2]!
+    const s = a[n - 1]![n - 1]!
+    if (Math.abs(r) <= 1e-12 * (Math.abs(p) + Math.abs(s) || 1)) {
+      vals.push(s)
+      shrink(--n)
+      iter = 0
+      continue
+    }
+    const tr = p + s
+    const disc = (tr * tr) / 4 - (p * s - q * r)
+    if (n === 2 || Math.abs(a[n - 2]![n - 3]!) <= 1e-12 * (Math.abs(p) + Math.abs(a[n - 3]![n - 3]!) || 1) || iter > 500) {
+      // the bottom 2x2 block stands alone: its pair
+      if (disc >= 0) vals.push(tr / 2 + Math.sqrt(disc), tr / 2 - Math.sqrt(disc))
+      else vals.push(tr / 2, tr / 2)
+      n -= 2
+      shrink(n)
+      iter = 0
+      continue
+    }
+    // Wilkinson shift: the bottom block's eigenvalue nearer its corner
+    let mu = tr / 2
+    if (disc >= 0) {
+      const e1 = tr / 2 + Math.sqrt(disc)
+      const e2 = tr / 2 - Math.sqrt(disc)
+      mu = Math.abs(e1 - s) < Math.abs(e2 - s) ? e1 : e2
+    }
+    for (let k = 0; k < n; k++) a[k]![k] = a[k]![k]! - mu
+    const { Q, R } = qrOf(a)
+    a = matMul(R, Q)
+    for (let k = 0; k < n; k++) a[k]![k] = a[k]![k]! + mu
+    iter++
+  }
+  return vals
+}
+/** An eigenvector for eigenvalue λ by inverse iteration (unit length). */
+const eigVec = (g: number[][], lam: number): number[] => {
+  const n = g.length
+  const shift = lam + (maxAbs(g) || 1) * 1e-9
+  const inv = gaussJordan(g.map((row, i) => row.map((x, k) => (i === k ? x - shift : x)))).inv
+  let x = Array.from({ length: n }, (_, k) => 1 / (k + 1) + 0.1)
+  if (!inv) return x.map(() => NaN)
+  for (let it = 0; it < 12; it++) {
+    const y = inv.map((row) => row.reduce((s2, v2, k) => s2 + v2 * x[k]!, 0))
+    const nrm = Math.hypot(...y) || 1
+    x = y.map((v2) => v2 / nrm)
+  }
+  return x
+}
+/** Eigenvalues (largest first) and their eigenvectors (columns). */
+const eigOf = (g: number[][]): { vals: number[]; vecs: number[][] } => {
+  const n = g.length
+  if (isSymmetric(g)) {
+    const { vals, vecs } = jacobi(g)
+    const order = vals.map((_, k) => k).sort((x, y) => vals[y]! - vals[x]!)
+    return { vals: order.map((k) => vals[k]!), vecs: Array.from({ length: n }, (_, r) => order.map((k) => vecs[r]![k]!)) }
+  }
+  const vals = eigGeneral(g).sort((x, y) => y - x)
+  const cols = vals.map((l) => eigVec(g, l))
+  return { vals, vecs: Array.from({ length: n }, (_, r) => cols.map((col) => col[r]!)) }
+}
+const sq = (m: PMat) => m.r === m.c && m.r > 0
 
 // ── The interpreter ──────────────────────────────────────────────────────────
 
@@ -948,6 +1628,19 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     else if (s.k === 'enum') enums.set(s.name, new Map(s.fields.map((f) => [f.name, f.title ?? f.name])))
     else if (s.k === 'func' && s.method) methods.set(s.name, [...(methods.get(s.name) ?? []), s])
   }
+  // an imported library's exports by alias: m.f(), m.Point.new(), m.Side.long (the library's own come first in stmts)
+  if (prog.imports?.length) {
+    const firstOf = new Map<string, Stmt>()
+    for (const s of prog.stmts) if (((s.k === 'func' && !s.method) || s.k === 'type' || s.k === 'enum') && !firstOf.has(s.name)) firstOf.set(s.name, s)
+    for (const im of prog.imports)
+      for (const nm of im.names) {
+        const s = firstOf.get(nm)
+        const key = `${im.alias}.${nm}`
+        if (s?.k === 'func') funcs.set(key, s)
+        else if (s?.k === 'type') types.set(key, s)
+        else if (s?.k === 'enum') enums.set(key, new Map(s.fields.map((f) => [f.name, f.title ?? f.name])))
+      }
+  }
   const pine = prog.version != null || pineCalls
   /** Pine version for its version-dependent defaults (fill / bgcolor transparency). */
   const ver = prog.version ?? (pine ? 4 : 0)
@@ -956,6 +1649,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     meta: { title: 'CB Script', overlay: !pine },
     inputs: [],
     plots: [],
+    candles: [],
     hlines: [],
     fills: [],
     markers: [],
@@ -981,7 +1675,19 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   }
   const truthy = (v: Val): boolean => (typeof v === 'number' ? v === v && v !== 0 : typeof v === 'string' ? v.length > 0 : true)
   const text = (v: Val): string =>
-    typeof v === 'string' ? v : typeof v === 'number' ? (isNa(v) ? 'NaN' : String(Math.round(v * 1e6) / 1e6)) : Array.isArray(v) ? `[${v.map(text).join(', ')}]` : ''
+    typeof v === 'string'
+      ? v
+      : typeof v === 'number'
+        ? isNa(v)
+          ? 'NaN'
+          : String(Math.round(v * 1e6) / 1e6)
+        : Array.isArray(v)
+          ? `[${v.map(text).join(', ')}]`
+          : v instanceof PArr
+            ? `[${v.a.map(text).join(', ')}]`
+            : v instanceof PMat
+              ? Array.from({ length: v.r }, (_, r) => `[${v.d.slice(r * v.c, (r + 1) * v.c).map(text).join(', ')}]`).join('\n')
+              : ''
   const colorOf = (v: Val | undefined, line: number): string | null => {
     if (v === undefined) return null
     if (typeof v === 'number') {
@@ -1057,6 +1763,53 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     }
     return out
   })
+  /** ta.nvi / ta.pvi: the reference's loop — the index moves by close's % change on falling (nvi) / rising (pvi) volume. */
+  const volIndex = (falling: boolean) => {
+    const out = new Float64Array(N)
+    let prev = NaN
+    for (let i = 0; i < N; i++) {
+      const p = isNa(prev) || prev === 0 ? 1 : prev
+      const c0 = C[i]!
+      const c1 = i > 0 ? C[i - 1]! : NaN
+      if (!c0 || isNa(c0) || !c1 || isNa(c1)) out[i] = p
+      else {
+        const v0 = V[i]!
+        const v1 = i > 0 && !isNa(V[i - 1]!) ? V[i - 1]! : 0
+        out[i] = (falling ? v0 < v1 : v0 > v1) ? p + ((c0 - c1) / c1) * p : p
+      }
+      prev = out[i]!
+    }
+    return out
+  }
+  const nviArr = lazy('nvi', () => volIndex(true))
+  const pviArr = lazy('pvi', () => volIndex(false))
+  const pvtArr = lazy('pvt', () => {
+    const out = new Float64Array(N)
+    let acc = 0
+    for (let i = 0; i < N; i++) {
+      const x = i > 0 ? ((C[i]! - C[i - 1]!) / C[i - 1]!) * V[i]! : NaN
+      if (!isNa(x)) acc += x
+      out[i] = acc
+    }
+    return out
+  })
+  const wadArr = lazy('wad', () => {
+    const out = new Float64Array(N)
+    let acc = 0
+    for (let i = 0; i < N; i++) {
+      const pc = i > 0 ? C[i - 1]! : NaN
+      const th = isNa(pc) ? H[i]! : Math.max(H[i]!, pc)
+      const tl = isNa(pc) ? L[i]! : Math.min(L[i]!, pc)
+      const mom = C[i]! - pc
+      const gain = mom > 0 ? C[i]! - tl : mom < 0 ? C[i]! - th : 0
+      if (!isNa(gain)) acc += gain
+      out[i] = acc
+    }
+    return out
+  })
+  /** Mean profit % of these trades (profit over the capital the entry put in). */
+  const avgPct = (ts: readonly StrategyTrade[]): number =>
+    ts.length ? ts.reduce((a, t) => a + (t.profit / (t.entryPrice * t.qty * POINT_VALUE)) * 100, 0) / ts.length : NaN
   const tfIntra = /^\d+$/.test(tf) || /^\d+S$/i.test(tf)
   const VARS: Record<string, (i: number) => Val> = {
     // ── a strategy's state (bar i: after that bar's fills) ──
@@ -1168,6 +1921,77 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'session.islastbar': (i) => (i === N - 1 || days()[i] !== days()[i + 1] ? 1 : 0),
     'session.isfirstbar_regular': (i) => (inSession(T[i]!, '0930-1600') && (i === 0 || !inSession(T[i - 1]!, '0930-1600') || days()[i] !== days()[i - 1]) ? 1 : 0),
     'session.islastbar_regular': (i) => (inSession(T[i]!, '0930-1600') && (i === N - 1 || !inSession(T[i + 1]!, '0930-1600')) ? 1 : 0),
+    // ── volume indices (ta.*), as the Pine reference defines them ──
+    'ta.iii': (i) => (2 * C[i]! - H[i]! - L[i]!) / ((H[i]! - L[i]!) * V[i]!),
+    'ta.wvad': (i) => ((C[i]! - O[i]!) / (H[i]! - L[i]!)) * V[i]!,
+    'ta.nvi': (i) => nviArr()[i]!,
+    'ta.pvi': (i) => pviArr()[i]!,
+    'ta.pvt': (i) => pvtArr()[i]!,
+    'ta.wad': (i) => wadArr()[i]!,
+    // tick data: Vela's bars are time bars, as on any non-tick TradingView chart
+    ask: NA_VAR,
+    bid: NA_VAR,
+    'timeframe.isticks': ZERO_VAR,
+    'chart.is_kagi': ZERO_VAR,
+    'chart.is_linebreak': ZERO_VAR,
+    'chart.is_pnf': ZERO_VAR,
+    'chart.is_range': ZERO_VAR,
+    'chart.is_renko': ZERO_VAR,
+    // the symbol's contract details
+    'syminfo.minmove': () => 1,
+    'syminfo.pricescale': () => Math.round(1 / MINTICK),
+    'syminfo.mincontract': () => 1,
+    'syminfo.current_contract': () => symbol,
+    'syminfo.expiration_date': NA_VAR,
+    'syminfo.isin': EMPTY_VAR,
+    'syminfo.country': EMPTY_VAR,
+    'syminfo.industry': EMPTY_VAR,
+    'syminfo.sector': EMPTY_VAR,
+    // fundamentals / analyst data: no source for them here, so na (TradingView's answer for a symbol without them)
+    'syminfo.employees': NA_VAR,
+    'syminfo.shareholders': NA_VAR,
+    'syminfo.shares_outstanding_float': NA_VAR,
+    'syminfo.shares_outstanding_total': NA_VAR,
+    'syminfo.recommendations_buy': NA_VAR,
+    'syminfo.recommendations_buy_strong': NA_VAR,
+    'syminfo.recommendations_date': NA_VAR,
+    'syminfo.recommendations_hold': NA_VAR,
+    'syminfo.recommendations_sell': NA_VAR,
+    'syminfo.recommendations_sell_strong': NA_VAR,
+    'syminfo.recommendations_total': NA_VAR,
+    'syminfo.target_price_average': NA_VAR,
+    'syminfo.target_price_date': NA_VAR,
+    'syminfo.target_price_estimates': NA_VAR,
+    'syminfo.target_price_high': NA_VAR,
+    'syminfo.target_price_low': NA_VAR,
+    'syminfo.target_price_median': NA_VAR,
+    'dividends.future_amount': NA_VAR,
+    'dividends.future_ex_date': NA_VAR,
+    'dividends.future_pay_date': NA_VAR,
+    'earnings.future_eps': NA_VAR,
+    'earnings.future_period_end_time': NA_VAR,
+    'earnings.future_revenue': NA_VAR,
+    'earnings.future_time': NA_VAR,
+    // ── a strategy's summary figures (as of the bar being run) ──
+    'strategy.avg_trade': () => (strat.closed.length ? strat.net / strat.closed.length : NaN),
+    'strategy.avg_trade_percent': () => avgPct(strat.closed),
+    'strategy.avg_winning_trade': () => (strat.wins ? strat.grossP / strat.wins : NaN),
+    'strategy.avg_winning_trade_percent': () => avgPct(strat.closed.filter((t) => t.profit > 0)),
+    'strategy.avg_losing_trade': () => (strat.losses ? strat.grossL / strat.losses : NaN),
+    'strategy.avg_losing_trade_percent': () => avgPct(strat.closed.filter((t) => t.profit < 0)),
+    'strategy.netprofit_percent': () => (strat.net / strat.capital) * 100,
+    'strategy.grossprofit_percent': () => (strat.grossP / strat.capital) * 100,
+    'strategy.grossloss_percent': () => (strat.grossL / strat.capital) * 100,
+    'strategy.openprofit_percent': (i) => (openProfitAt(C[i]!) / (strat.capital + strat.net)) * 100,
+    'strategy.max_drawdown_percent': () => strat.maxDDPct,
+    'strategy.max_runup': () => strat.maxRU,
+    'strategy.max_runup_percent': () => strat.maxRUPct,
+    'strategy.max_contracts_held_all': () => strat.heldAll,
+    'strategy.max_contracts_held_long': () => strat.heldLong,
+    'strategy.max_contracts_held_short': () => strat.heldShort,
+    'strategy.closedtrades.first_index': ZERO_VAR,
+    'strategy.margin_liquidation_price': NA_VAR,
+    'strategy.opentrades.capital_held': () => strat.open.reduce((a, e) => a + (e.qty * e.price * POINT_VALUE * (e.dir > 0 ? strat.marginLong : strat.marginShort)) / 100, 0),
   }
   for (const c of PINE_COLORS) VARS[`color.${c}`] = () => pineColor(c)
   /** A name's built-in value at bar i, or null if it is not one. */
@@ -1251,7 +2075,9 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         ? 'array'
         : v instanceof MapV
           ? 'map'
-          : v instanceof Draw
+          : v instanceof PMat
+            ? 'matrix'
+            : v instanceof Draw
             ? v.kind
             : v instanceof CPoint
               ? 'chart.point'
@@ -1266,6 +2092,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const w = t.trim().split(/\s+/).pop() ?? ''
     if (w.endsWith('[]') || w === 'array') return 'array'
     if (w === 'map') return 'map'
+    if (w === 'matrix') return 'matrix'
+    if (w.includes('.') && types.has(w)) return types.get(w)!.name // m.Point (an imported library's type)
     if (w === 'int' || w === 'float' || w === 'bool') return 'float'
     if (w === 'color' || w === 'string') return 'string'
     return w
@@ -1368,11 +2196,13 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         }
         const dot = name.indexOf('.')
         if (dot > 0) {
-          // an enum's value: Side.long
-          const en = enums.get(name.slice(0, dot))
+          // an enum's value: Side.long (m.Side.long from an imported library)
+          const ld = name.lastIndexOf('.')
+          const en = enums.get(name.slice(0, dot)) ?? enums.get(name.slice(0, ld))
           if (en) {
-            const v = en.get(name.slice(dot + 1))
-            if (v === undefined) throw new ScriptError(`enum ${name.slice(0, dot)} has no field "${name.slice(dot + 1)}"`, line)
+            const at = enums.has(name.slice(0, dot)) ? dot : ld
+            const v = en.get(name.slice(at + 1))
+            if (v === undefined) throw new ScriptError(`enum ${name.slice(0, at)} has no field "${name.slice(at + 1)}"`, line)
             return () => v
           }
         }
@@ -1590,7 +2420,17 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
           const src = of(f)
           // a map: for [key, value] in m (for v in m walks the values)
           const keys = src instanceof MapV ? [...src.m.keys()] : null
-          const items = src instanceof PArr ? src.a.slice() : src instanceof MapV ? [...src.m.values()] : Array.isArray(src) ? src : []
+          // a matrix: for row in m walks its rows, each an array
+          const items =
+            src instanceof PArr
+              ? src.a.slice()
+              : src instanceof MapV
+                ? [...src.m.values()]
+                : src instanceof PMat
+                  ? Array.from({ length: src.r }, (_, r) => new PArr(src.d.slice(r * src.c, (r + 1) * src.c)))
+                  : Array.isArray(src)
+                    ? src
+                    : []
           let v: Val = NaN
           for (let k = 0; k < items.length; k++) {
             if (++loopBudget > MAX_LOOP_PER_BAR) throw new ScriptError('this loop runs too many times per bar', line)
@@ -1766,6 +2606,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const builtinFits = (r: Val): boolean =>
       (r instanceof PArr && !!onArray) ||
       (r instanceof MapV && !!onMap) ||
+      (r instanceof PMat && !!matrixFn(`matrix.${method}`)) ||
       (r instanceof Draw && !!BUILTINS[`${r.kind}.${method}`]) ||
       (typeof r === 'string' && !!onText) ||
       (r instanceof CPoint && method === 'copy') ||
@@ -1797,6 +2638,11 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       if (r instanceof MapV) {
         if (!onMap) throw new ScriptError(`maps have no method "${method}"`, line)
         return onMap(c)
+      }
+      if (r instanceof PMat) {
+        const onMatrix = matrixFn(`matrix.${method}`)
+        if (!onMatrix) throw new ScriptError(`matrices have no method "${method}"`, line)
+        return onMatrix(c)
       }
       if (r instanceof Obj) {
         if (method === 'copy') return new Obj(r.type, { ...r.f })
@@ -1834,14 +2680,22 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   }
   const bareSym = (x: string) =>
     x
+      .replace(/#HA$/, '')
       .replace(/^[^:]*:/, '')
       .replace(/;.*$/, '')
       .replace(/1!$/, '')
       .trim()
       .toUpperCase()
   const secRuns = new Map<string, { X: OHLCV[]; cap: Map<object, unknown[]> }>()
-  const secRun = (srcBars: readonly OHLCV[], sym: string, reqTf: string, htf: boolean, native: readonly OHLCV[] | null = null): { X: OHLCV[]; cap: Map<object, unknown[]> } => {
-    const key = `${sym}|${reqTf}|${htf ? 1 : 0}`
+  const secRun = (
+    srcBars: readonly OHLCV[],
+    sym: string,
+    reqTf: string,
+    htf: boolean,
+    native: readonly OHLCV[] | null = null,
+    ha = false,
+  ): { X: OHLCV[]; cap: Map<object, unknown[]> } => {
+    const key = `${sym}|${reqTf}|${htf ? 1 : 0}|${ha ? 'ha' : ''}`
     let r = secRuns.get(key)
     if (r) return r
     let X: OHLCV[]
@@ -1891,6 +2745,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         else X = [...older.filter((b) => b.time < head), ...X]
       }
     } else X = srcBars.slice()
+    // ticker.heikinashi(): the (folded) bars as Heikin Ashi candles
+    if (ha) X = heikinAshi(X)
     if (htf && X.length < 20 && !opts.dry)
       warn(`only ${X.length} ${reqTf} bars of history here; ${reqTf} values that need a longer lookback stay empty`)
     const cap = new Map<object, unknown[]>()
@@ -1953,14 +2809,16 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       if (st.any === null) {
         const symV = symEv(f)
         const tfV = tfEv(f)
-        const sym = typeof symV === 'string' ? bareSym(symV) : bareSym(symbol)
+        const rawSym = typeof symV === 'string' ? symV : symbol
+        const ha = rawSym.endsWith(HA_MARK)
+        const sym = bareSym(ha ? rawSym.slice(0, -HA_MARK.length) : rawSym)
         const reqTf = typeof tfV === 'string' && tfV.trim() ? tfV.trim() : tf
         const same = !sym || sym === bareSym(symbol)
         const reqMin = tfMinutes(reqTf)
         const chartMin = tfMinutes(tf)
         const htf = !isNa(reqMin) && !isNa(chartMin) && reqMin > chartMin
         if (!isNa(reqMin) && !isNa(chartMin) && reqMin < chartMin) warn(`${node.name}: lower timeframes than the chart's aren't available (used ${tf})`)
-        if (same && !htf) st.any = 'pass'
+        if (same && !htf && !ha) st.any = 'pass'
         else {
           let srcBars: readonly OHLCV[] = bars
           if (same && htf && chartMin < 5 && reqMin >= 60 && !opts.dry) {
@@ -1993,7 +2851,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
           }
           const lookahead = laEv ? truthy(laEv(f)) : prog.version === null || prog.version <= 2
           const gaps = gapsEv ? truthy(gapsEv(f)) : false
-          st.any = secMap(node, secRun(srcBars, forSym, reqTf, htf, native), htf, lookahead, gaps)
+          st.any = secMap(node, secRun(srcBars, forSym, reqTf, htf, native, ha), htf, lookahead, gaps)
         }
       }
       if (st.any === 'pass') return exprEv(f)
@@ -2086,7 +2944,14 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const line = node.line
     // a method call on a variable: xs.push(1), s.length() → array.push(xs, 1), str.length(s)
     const dot = node.name.indexOf('.')
-    if (dot > 0 && !funcs.has(node.name) && !BUILTINS[node.name] && node.name !== 'request.security' && node.name !== 'request.security_lower_tf') {
+    if (
+      dot > 0 &&
+      !funcs.has(node.name) &&
+      !BUILTINS[node.name] &&
+      !(node.name.startsWith('matrix.') && matrixFn(node.name)) &&
+      node.name !== 'request.security' &&
+      node.name !== 'request.security_lower_tf'
+    ) {
       const recv = node.name.slice(0, dot)
       const method = node.name.slice(dot + 1)
       if (resolve(cx, recv)) {
@@ -2098,7 +2963,10 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         for (const k of parts) selfNode = { k: 'field', x: selfNode, name: k, line }
         return compileMethodOn(cx, node, compileExpr(cx, selfNode), `${recv}.${parts.join('.')}`, last)
       }
-      // Type.new(…) / Type.copy(obj) on a user-defined type
+      // Type.new(…) / Type.copy(obj) on a user-defined type (m.Type.new() for an imported library's)
+      const ld = node.name.lastIndexOf('.')
+      const qual = ld > dot ? types.get(node.name.slice(0, ld)) : undefined
+      if (qual && node.name.slice(ld + 1) === 'new') return compileNew(cx, qual, node)
       const tdef = types.get(recv)
       if (tdef && method === 'new') return compileNew(cx, tdef, node)
       if (tdef && method === 'copy') {
@@ -2182,18 +3050,12 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const line = node.line
     const name = node.name
     const key = name === 'ta.max' ? 'max_all' : name === 'ta.min' ? 'min_all' : name.replace(/^(ta|math|str)\./, '')
-    const fn = BUILTINS[key] ?? BUILTINS[name]
+    const fn = BUILTINS[key] ?? BUILTINS[name] ?? (name.startsWith('matrix.') ? matrixFn(name) : undefined)
     if (!fn) {
-      if (/^matrix\./.test(name)) throw new ScriptError(`matrices aren't supported yet (${name})`, line)
-      if (/^map\./.test(name)) throw new ScriptError(`${name} isn't supported yet`, line)
-      if (name.startsWith('array.')) throw new ScriptError(`${name} isn't supported yet`, line)
+      if (/^(map|matrix|array)\./.test(name)) throw new ScriptError(`${name} isn't supported yet`, line)
       if (name.startsWith('request.')) throw new ScriptError(`${name} isn't supported yet`, line)
-      if (name === 'plotcandle' || name === 'plotbar') {
-        return () => {
-          warn(`${name} isn't drawn yet: skipped`)
-          return NaN
-        }
-      }
+      // a footprint / volume_row function on a request.footprint() result: no footprint data here, so na
+      if (/^(footprint|volume_row)\./.test(name)) return () => NaN
       if (DRAWING_NS.test(name)) {
         return () => {
           warn(`${name} isn't supported: skipped`)
@@ -2423,6 +3285,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       strat.commValue = nv('commission_value') ?? 0
       strat.slippage = nv('slippage') ?? 0
       strat.onClose = truthy(c.N.process_orders_on_close ?? 0)
+      strat.marginLong = nv('margin_long') ?? 100
+      strat.marginShort = nv('margin_short') ?? 100
     }
     return NaN
   }
@@ -2459,7 +3323,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
         colors: new Array(N).fill(null),
         width: Math.max(1, Math.min(8, isNa(width) ? 1 : width)),
         style,
-        dashed: c.N.dashed !== undefined && truthy(c.N.dashed),
+        dashed: (c.N.dashed !== undefined && truthy(c.N.dashed)) || c.N.linestyle === 'dashed' || c.N.linestyle === 'dotted',
         base: typeof hb === 'number' && !isNa(hb) ? hb : null,
         hidden: zeroWidth || (typeof disp === 'string' && !(disp.includes('all') || disp.includes('pane'))),
       })
@@ -3107,8 +3971,10 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   // ── Pine arrays ──
   const arrOf = (c: Call, i = 0): PArr => {
     const v = arg(c, i, 'id')
-    if (!(v instanceof PArr)) throw new ScriptError('expected an array', c.line)
-    return v
+    if (v instanceof PArr) return v
+    // an array id that is na (a request.security value before its first bar …): an empty one, so reads give na
+    if (typeof v === 'number' && isNa(v)) return new PArr([])
+    throw new ScriptError('expected an array', c.line)
   }
   const at = (a: PArr, k: number): number => {
     const j = Math.trunc(k)
@@ -3133,7 +3999,10 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'array.new_table': newArr,
     'array.new_linefill': newArr,
     'array.from': (c) => new PArr(c.A.slice()),
-    'array.size': (c) => arrOf(c).a.length,
+    'array.size': (c) => {
+      const v = arg(c, 0, 'id')
+      return typeof v === 'number' && isNa(v) ? NaN : arrOf(c).a.length
+    },
     'array.get': (c) => {
       const a = arrOf(c)
       return a.a[at(a, num(arg(c, 1, 'index'), c.line, 'the index'))] ?? NaN
@@ -3185,12 +4054,6 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     },
     'array.reverse': (c) => {
       arrOf(c).a.reverse()
-      return NaN
-    },
-    'array.sort': (c) => {
-      const a = arrOf(c)
-      const dir = optNum(c, 1, 1, 'order')
-      a.a.sort((x, y) => (typeof x === 'number' && typeof y === 'number' ? (x - y) * dir : String(x) < String(y) ? -dir : String(x) > String(y) ? dir : 0))
       return NaN
     },
     'array.includes': (c) => (arrOf(c).a.includes(arg(c, 1, 'value') ?? NaN) ? 1 : 0),
@@ -3309,6 +4172,10 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     trade: number
     /** The best price since the fill — a trailing stop follows it. */
     best: number
+    /** The highest high / lowest low since the fill: the trade's run-up and drawdown. */
+    hiPx: number
+    loPx: number
+    commission: number
   }
   const MINTICK = /^(ES|NQ|MES|MNQ|RTY|M2K|YM|MYM)$/i.test(symbol) ? 0.25 : 0.01
   const POINT_VALUE = /^ES$/i.test(symbol) ? 50 : /^NQ$/i.test(symbol) ? 20 : /^MES$/i.test(symbol) ? 5 : /^MNQ$/i.test(symbol) ? 2 : 1
@@ -3322,6 +4189,12 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     commValue: 0,
     slippage: 0,
     onClose: false,
+    /** margin_long / margin_short, in percent: the capital an open trade holds. */
+    marginLong: 100,
+    marginShort: 100,
+    /** strategy.risk.max_position_size (NaN = none) and strategy.risk.allow_entry_in. */
+    maxPos: NaN,
+    allow: 'all',
     orders: [] as SOrder[],
     open: [] as SEntry[],
     closed: [] as StrategyTrade[],
@@ -3336,6 +4209,14 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     peak: 1_000_000,
     maxDD: 0,
     maxDDPct: 0,
+    /** Run-up: equity's rise from its lowest point so far. */
+    trough: NaN,
+    maxRU: 0,
+    maxRUPct: 0,
+    /** The largest position held, in contracts: either side, long, short. */
+    heldAll: 0,
+    heldLong: 0,
+    heldShort: 0,
     seq: 0,
     bar: -1,
     /** Per bar: position size, avg price, net, open profit, equity, closed, open, wins, losses, even, gross profit, gross loss, max dd. */
@@ -3406,7 +4287,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   const openEntry = (i: number, id: string, dir: 1 | -1, qty: number, price: number, comment: string) => {
     const px = price + dir * strat.slippage * MINTICK
     const trade = ++strat.seq
-    strat.open.push({ id, dir, qty, price: px, bar: i, time: T[i]!, comment, trade, best: px })
+    strat.open.push({ id, dir, qty, price: px, bar: i, time: T[i]!, comment, trade, best: px, hiPx: px, loPx: px, commission: commission(px, qty) })
     strat.fills.push({ i, price: px, side: dir > 0 ? 'buy' : 'sell', kind: 'entry', label: comment || id, qty, trade })
   }
   const closeEntry = (i: number, e: SEntry, qty: number, price: number, exitId: string, comment: string) => {
@@ -3415,7 +4296,26 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     const px = price - e.dir * strat.slippage * MINTICK
     const comm = commission(e.price, q) + commission(px, q)
     const profit = (px - e.price) * e.dir * q * POINT_VALUE - comm
-    strat.closed.push({ entryId: e.id, exitId, dir: e.dir, qty: q, entryPrice: e.price, exitPrice: px, entryBar: e.bar, exitBar: i, entryTime: e.time, exitTime: T[i]!, profit, commission: comm })
+    const hi = Math.max(e.hiPx, px)
+    const lo = Math.min(e.loPx, px)
+    strat.closed.push({
+      entryId: e.id,
+      exitId,
+      dir: e.dir,
+      qty: q,
+      entryPrice: e.price,
+      exitPrice: px,
+      entryBar: e.bar,
+      exitBar: i,
+      entryTime: e.time,
+      exitTime: T[i]!,
+      profit,
+      commission: comm,
+      entryComment: e.comment,
+      exitComment: comment,
+      maxRunup: Math.max(0, (e.dir > 0 ? hi - e.price : e.price - lo) * q * POINT_VALUE),
+      maxDrawdown: Math.max(0, (e.dir > 0 ? e.price - lo : hi - e.price) * q * POINT_VALUE),
+    })
     strat.net += profit
     strat.comm += comm
     if (profit > 0) {
@@ -3442,8 +4342,18 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
   const fillOrder = (i: number, o: SOrder, price: number) => {
     if (o.kind === 'entry') {
       const pos = posSize()
-      const qty = isNa(o.qty) ? defQty(price) : o.qty
+      let qty = isNa(o.qty) ? defQty(price) : o.qty
       if (!(qty > 0)) return
+      // strategy.risk.allow_entry_in: an entry the other way only closes the position
+      if (strat.allow !== 'all' && strat.allow !== (o.dir > 0 ? 'long' : 'short')) {
+        if (pos !== 0 && Math.sign(pos) !== o.dir) closeSome(i, () => true, NaN, price, o.id, o.comment || o.id)
+        return
+      }
+      // strategy.risk.max_position_size: never more than that many contracts
+      if (!isNa(strat.maxPos)) {
+        qty = Math.min(qty, strat.maxPos - (Math.sign(pos) === o.dir ? Math.abs(pos) : 0))
+        if (!(qty > 0)) return
+      }
       if (pos !== 0 && Math.sign(pos) !== o.dir) {
         // a reversal: the opposite position goes first
         closeSome(i, () => true, NaN, price, o.id, o.comment || o.id)
@@ -3571,6 +4481,21 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       strat.maxDD = dd
       strat.maxDDPct = strat.peak > 0 ? (dd / strat.peak) * 100 : 0
     }
+    if (isNa(strat.trough) || eq < strat.trough) strat.trough = eq
+    const ru = eq - strat.trough
+    if (ru > strat.maxRU) {
+      strat.maxRU = ru
+      strat.maxRUPct = strat.trough > 0 ? (ru / strat.trough) * 100 : 0
+    }
+    for (const e of strat.open) {
+      if (e.bar === i) continue // the fill bar's range ran partly before the fill
+      e.hiPx = Math.max(e.hiPx, H[i]!)
+      e.loPx = Math.min(e.loPx, L[i]!)
+    }
+    const pos = posSize()
+    strat.heldAll = Math.max(strat.heldAll, Math.abs(pos))
+    if (pos > 0) strat.heldLong = Math.max(strat.heldLong, pos)
+    if (pos < 0) strat.heldShort = Math.max(strat.heldShort, -pos)
     for (let k = 0; k < 13; k++) strat.hist[k]![i] = live(k, i)
     strat.equity![i] = eq
   }
@@ -3635,14 +4560,17 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     },
     'strategy.close': (c) => {
       if (stratOff(c) || whenOff(c, 1)) return NaN
+      const id = text(arg(c, 0, 'id') ?? '')
+      // no open entry with that id when it is called: the command does nothing (TradingView)
+      if (!strat.open.some((e) => e.id === id)) return NaN
       const v4 = ver <= 4
-      const o: SOrder = { ...blankOrder(), kind: 'close', id: text(arg(c, 0, 'id') ?? ''), comment: (v4 ? (typeof c.N.comment === 'string' ? c.N.comment : '') : optStr(c, 1, 'comment')) ?? '', qty: optNumOrNa(c, v4 ? 3 : 2, 'qty'), qtyPct: optNumOrNa(c, v4 ? 4 : 3, 'qty_percent') }
+      const o: SOrder = { ...blankOrder(), kind: 'close', id, comment: (v4 ? (typeof c.N.comment === 'string' ? c.N.comment : '') : optStr(c, 1, 'comment')) ?? '', qty: optNumOrNa(c, v4 ? 3 : 2, 'qty'), qtyPct: optNumOrNa(c, v4 ? 4 : 3, 'qty_percent') }
       if (truthy(c.N.immediately ?? 0)) fillOrder(c.i, o, C[c.i]!)
       else place(o)
       return NaN
     },
     'strategy.close_all': (c) => {
-      if (stratOff(c) || whenOff(c, 0)) return NaN
+      if (stratOff(c) || whenOff(c, 0) || !strat.open.length) return NaN
       const o: SOrder = { ...blankOrder(), kind: 'close_all', id: '__close_all', comment: (ver <= 4 ? (typeof c.N.comment === 'string' ? c.N.comment : '') : optStr(c, 0, 'comment')) ?? '' }
       if (truthy(c.N.immediately ?? 0)) fillOrder(c.i, o, C[c.i]!)
       else place(o)
@@ -3681,12 +4609,20 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       strat.orders = []
       return NaN
     },
-    'strategy.risk.allow_entry_in': () => NaN,
+    'strategy.risk.allow_entry_in': (c) => {
+      const v = arg(c, 0, 'value')
+      if (typeof v === 'string') strat.allow = v
+      return NaN
+    },
     'strategy.risk.max_drawdown': () => NaN,
     'strategy.risk.max_intraday_loss': () => NaN,
     'strategy.risk.max_intraday_filled_orders': () => NaN,
     'strategy.risk.max_cons_loss_days': () => NaN,
-    'strategy.risk.max_position_size': () => NaN,
+    'strategy.risk.max_position_size': (c) => {
+      const v = arg(c, 0, 'contracts')
+      if (typeof v === 'number' && v > 0) strat.maxPos = v
+      return NaN
+    },
     'strategy.convert_to_account': (c) => arg(c, 0, 'value') ?? NaN,
     'strategy.convert_to_symbol': (c) => arg(c, 0, 'value') ?? NaN,
     'strategy.default_entry_qty': (c) => defQty(num(arg(c, 0, 'fill_price') ?? C[c.i]!, c.line)),
@@ -3715,6 +4651,27 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'strategy.closedtrades.entry_id': closedField((t) => t.entryId),
     'strategy.closedtrades.exit_id': closedField((t) => t.exitId),
     'strategy.closedtrades.commission': closedField((t) => t.commission),
+    'strategy.closedtrades.entry_comment': closedField((t) => t.entryComment ?? ''),
+    'strategy.closedtrades.exit_comment': closedField((t) => t.exitComment ?? ''),
+    'strategy.closedtrades.max_runup': closedField((t) => t.maxRunup ?? NaN),
+    'strategy.closedtrades.max_drawdown': closedField((t) => t.maxDrawdown ?? NaN),
+    'strategy.closedtrades.max_runup_percent': closedField((t) => ((t.maxRunup ?? NaN) / (t.entryPrice * t.qty * POINT_VALUE)) * 100),
+    'strategy.closedtrades.max_drawdown_percent': closedField((t) => ((t.maxDrawdown ?? NaN) / (t.entryPrice * t.qty * POINT_VALUE)) * 100),
+    'strategy.closedtrades.profit_percent': closedField((t) => (t.profit / (t.entryPrice * t.qty * POINT_VALUE)) * 100),
+    'strategy.opentrades.entry_comment': openField((e) => e.comment),
+    'strategy.opentrades.commission': openField((e) => e.commission),
+    'strategy.opentrades.max_runup': (c: Call) => {
+      const e = strat.open[tradeNo(c, strat.open)]
+      return e ? Math.max(0, (e.dir > 0 ? Math.max(e.hiPx, H[c.i]!) - e.price : e.price - Math.min(e.loPx, L[c.i]!)) * e.qty * POINT_VALUE) : NaN
+    },
+    'strategy.opentrades.max_drawdown': (c: Call) => {
+      const e = strat.open[tradeNo(c, strat.open)]
+      return e ? Math.max(0, (e.dir > 0 ? e.price - Math.min(e.loPx, L[c.i]!) : Math.max(e.hiPx, H[c.i]!) - e.price) * e.qty * POINT_VALUE) : NaN
+    },
+    'strategy.opentrades.profit_percent': (c: Call) => {
+      const e = strat.open[tradeNo(c, strat.open)]
+      return e ? ((C[c.i]! - e.price) * e.dir * 100) / e.price : NaN
+    },
     'strategy.opentrades.entry_price': openField((e) => e.price),
     'strategy.opentrades.size': openField((e) => e.qty * e.dir),
     'strategy.opentrades.entry_bar_index': openField((e) => e.bar),
@@ -3769,10 +4726,564 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       return NaN
     },
   }
+  // ── Pine matrices ──
+  const matOf = (c: Call, i = 0, alt = 'id1'): PMat => {
+    const v = arg(c, i, 'id', alt)
+    if (v instanceof PMat) return v
+    if (typeof v === 'number' && isNa(v)) return new PMat(0, 0, [])
+    throw new ScriptError('expected a matrix', c.line)
+  }
+  const idxArg = (c: Call, i: number, name: string, def?: number): number => {
+    const v = arg(c, i, name)
+    if (v === undefined) {
+      if (def !== undefined) return def
+      throw new ScriptError(`the ${name} is missing`, c.line)
+    }
+    return Math.trunc(num(v, c.line, `the ${name}`))
+  }
+  /** matrix.sum / diff / mult on a matrix and a matrix or a number. */
+  const elementwise = (c: Call, op: (x: number, y: number) => number): PMat => {
+    const a = matOf(c)
+    const b = arg(c, 1, 'id2')
+    if (b instanceof PMat) {
+      if (a.r !== b.r || a.c !== b.c) throw new ScriptError(`the matrices must be the same size (${a.r}x${a.c} and ${b.r}x${b.c})`, c.line)
+      return new PMat(a.r, a.c, a.d.map((x, k) => op(typeof x === 'number' ? x : NaN, cellNum(b, Math.floor(k / b.c), k % b.c))))
+    }
+    const y = num(b ?? NaN, c.line, 'the second value')
+    return new PMat(a.r, a.c, a.d.map((x) => op(typeof x === 'number' ? x : NaN, y)))
+  }
+  const predicate = (fn: (g: number[][], m: PMat) => boolean) => (c: Call): Val => {
+    const m = matOf(c)
+    return fn(grid(m), m) ? 1 : 0
+  }
+  // made on the first matrix call only: most scripts never use one, and every run would pay for it
+  let matrixFns: Record<string, (c: Call) => Val> | null = null
+  const matrixFn = (name: string): ((c: Call) => Val) | undefined => (matrixFns ??= makeMatrixFns())[name]
+  const makeMatrixFns = (): Record<string, (c: Call) => Val> => ({
+    'matrix.new': (c) => {
+      const r = Math.max(0, Math.trunc(optNum(c, 0, 0, 'rows')))
+      const k = Math.max(0, Math.trunc(optNum(c, 1, 0, 'columns')))
+      return new PMat(r, k, new Array(r * k).fill(arg(c, 2, 'initial_value') ?? NaN))
+    },
+    'matrix.get': (c) => {
+      const m = matOf(c)
+      const r = idxArg(c, 1, 'row')
+      const k = idxArg(c, 2, 'column')
+      return r >= 0 && r < m.r && k >= 0 && k < m.c ? (m.d[r * m.c + k] ?? NaN) : NaN
+    },
+    'matrix.set': (c) => {
+      const m = matOf(c)
+      const r = idxArg(c, 1, 'row')
+      const k = idxArg(c, 2, 'column')
+      if (r >= 0 && r < m.r && k >= 0 && k < m.c) m.d[r * m.c + k] = arg(c, 3, 'value') ?? NaN
+      return NaN
+    },
+    'matrix.rows': (c) => matOf(c).r,
+    'matrix.columns': (c) => matOf(c).c,
+    'matrix.elements_count': (c) => matOf(c).d.length,
+    'matrix.row': (c) => {
+      const m = matOf(c)
+      const r = idxArg(c, 1, 'row')
+      return new PArr(r >= 0 && r < m.r ? m.d.slice(r * m.c, (r + 1) * m.c) : [])
+    },
+    'matrix.col': (c) => {
+      const m = matOf(c)
+      const k = idxArg(c, 1, 'column')
+      return new PArr(k >= 0 && k < m.c ? Array.from({ length: m.r }, (_, r) => m.d[r * m.c + k]!) : [])
+    },
+    'matrix.add_row': (c) => {
+      const m = matOf(c)
+      const at = Math.max(0, Math.min(m.r, idxArg(c, 1, 'row', m.r)))
+      const a = arg(c, 2, 'array_id')
+      if (a instanceof PArr) {
+        if (m.r === 0 && m.c === 0) m.c = a.a.length
+        else if (a.a.length !== m.c) throw new ScriptError(`matrix.add_row: the array has ${a.a.length} values and the matrix ${m.c} columns`, c.line)
+        m.d.splice(at * m.c, 0, ...a.a)
+      } else m.d.splice(at * m.c, 0, ...new Array<Val>(m.c).fill(NaN))
+      m.r++
+      return NaN
+    },
+    'matrix.add_col': (c) => {
+      const m = matOf(c)
+      const at = Math.max(0, Math.min(m.c, idxArg(c, 1, 'column', m.c)))
+      const a = arg(c, 2, 'array_id')
+      if (a instanceof PArr) {
+        if (m.r === 0 && m.c === 0) m.r = a.a.length
+        else if (a.a.length !== m.r) throw new ScriptError(`matrix.add_col: the array has ${a.a.length} values and the matrix ${m.r} rows`, c.line)
+      }
+      const d: Val[] = []
+      for (let r = 0; r < m.r; r++) {
+        const row = m.d.slice(r * m.c, (r + 1) * m.c)
+        row.splice(at, 0, a instanceof PArr ? a.a[r]! : NaN)
+        d.push(...row)
+      }
+      m.c++
+      m.d = d
+      return NaN
+    },
+    'matrix.remove_row': (c) => {
+      const m = matOf(c)
+      const r = idxArg(c, 1, 'row', m.r - 1)
+      if (r < 0 || r >= m.r) throw new ScriptError(`matrix.remove_row: row ${r} is outside the matrix (${m.r} rows)`, c.line)
+      const out = m.d.splice(r * m.c, m.c)
+      m.r--
+      if (m.r === 0) m.c = 0
+      return new PArr(out)
+    },
+    'matrix.remove_col': (c) => {
+      const m = matOf(c)
+      const k = idxArg(c, 1, 'column', m.c - 1)
+      if (k < 0 || k >= m.c) throw new ScriptError(`matrix.remove_col: column ${k} is outside the matrix (${m.c} columns)`, c.line)
+      const out: Val[] = []
+      const d: Val[] = []
+      for (let r = 0; r < m.r; r++)
+        for (let j = 0; j < m.c; j++) {
+          if (j === k) out.push(m.d[r * m.c + j]!)
+          else d.push(m.d[r * m.c + j]!)
+        }
+      m.c--
+      m.d = d
+      if (m.c === 0) m.r = 0
+      return new PArr(out)
+    },
+    'matrix.fill': (c) => {
+      const m = matOf(c)
+      const v = arg(c, 1, 'value') ?? NaN
+      const r0 = Math.max(0, idxArg(c, 2, 'from_row', 0))
+      const r1 = Math.min(m.r, idxArg(c, 3, 'to_row', m.r))
+      const k0 = Math.max(0, idxArg(c, 4, 'from_column', 0))
+      const k1 = Math.min(m.c, idxArg(c, 5, 'to_column', m.c))
+      for (let r = r0; r < r1; r++) for (let k = k0; k < k1; k++) m.d[r * m.c + k] = v
+      return NaN
+    },
+    'matrix.copy': (c) => {
+      const m = matOf(c)
+      return new PMat(m.r, m.c, m.d.slice())
+    },
+    'matrix.submatrix': (c) => {
+      const m = matOf(c)
+      const r0 = Math.max(0, idxArg(c, 1, 'from_row', 0))
+      const r1 = Math.min(m.r, idxArg(c, 2, 'to_row', m.r))
+      const k0 = Math.max(0, idxArg(c, 3, 'from_column', 0))
+      const k1 = Math.min(m.c, idxArg(c, 4, 'to_column', m.c))
+      const d: Val[] = []
+      for (let r = r0; r < r1; r++) d.push(...m.d.slice(r * m.c + k0, r * m.c + k1))
+      return new PMat(Math.max(0, r1 - r0), Math.max(0, k1 - k0), d)
+    },
+    'matrix.reshape': (c) => {
+      const m = matOf(c)
+      const r = idxArg(c, 1, 'rows')
+      const k = idxArg(c, 2, 'columns')
+      if (r * k !== m.d.length) throw new ScriptError(`matrix.reshape: ${r}x${k} doesn't hold the matrix's ${m.d.length} elements`, c.line)
+      m.r = r
+      m.c = k
+      return NaN
+    },
+    'matrix.reverse': (c) => {
+      matOf(c).d.reverse()
+      return NaN
+    },
+    'matrix.transpose': (c) => {
+      const m = matOf(c)
+      const d: Val[] = []
+      for (let k = 0; k < m.c; k++) for (let r = 0; r < m.r; r++) d.push(m.d[r * m.c + k]!)
+      return new PMat(m.c, m.r, d)
+    },
+    'matrix.concat': (c) => {
+      const a = matOf(c)
+      const b = matOf(c, 1, 'id2')
+      if (a.r === 0 && a.c === 0) a.c = b.c
+      if (b.c !== a.c) throw new ScriptError(`matrix.concat: the matrices have ${a.c} and ${b.c} columns`, c.line)
+      a.d.push(...b.d)
+      a.r += b.r
+      return a
+    },
+    'matrix.swap_rows': (c) => {
+      const m = matOf(c)
+      const a = idxArg(c, 1, 'row1')
+      const b = idxArg(c, 2, 'row2')
+      if (a >= 0 && b >= 0 && a < m.r && b < m.r)
+        for (let k = 0; k < m.c; k++) {
+          const t = m.d[a * m.c + k]!
+          m.d[a * m.c + k] = m.d[b * m.c + k]!
+          m.d[b * m.c + k] = t
+        }
+      return NaN
+    },
+    'matrix.swap_columns': (c) => {
+      const m = matOf(c)
+      const a = idxArg(c, 1, 'column1')
+      const b = idxArg(c, 2, 'column2')
+      if (a >= 0 && b >= 0 && a < m.c && b < m.c)
+        for (let r = 0; r < m.r; r++) {
+          const t = m.d[r * m.c + a]!
+          m.d[r * m.c + a] = m.d[r * m.c + b]!
+          m.d[r * m.c + b] = t
+        }
+      return NaN
+    },
+    'matrix.sort': (c) => {
+      const m = matOf(c)
+      const col = idxArg(c, 1, 'column', 0)
+      const dir = optNum(c, 2, 1, 'order')
+      const key = sortKeyOf(c, 3)
+      const rows = Array.from({ length: m.r }, (_, r) => m.d.slice(r * m.c, (r + 1) * m.c))
+      rows.sort((x, y) => cmpVals(key(x[col]!), key(y[col]!)) * dir)
+      m.d = rows.flat()
+      return NaN
+    },
+    'matrix.sum': (c) => elementwise(c, (x, y) => x + y),
+    'matrix.diff': (c) => elementwise(c, (x, y) => x - y),
+    'matrix.mult': (c) => {
+      const a = matOf(c)
+      const b = arg(c, 1, 'id2')
+      if (b instanceof PMat) {
+        if (a.c !== b.r) throw new ScriptError(`matrix.mult: a ${a.r}x${a.c} matrix can't multiply a ${b.r}x${b.c} one (columns must equal rows)`, c.line)
+        return fromGrid(matMul(grid(a), grid(b)), b.c)
+      }
+      if (b instanceof PArr) {
+        if (b.a.length !== a.c) throw new ScriptError(`matrix.mult: the array needs ${a.c} values (it has ${b.a.length})`, c.line)
+        const v = b.a.map((x) => (typeof x === 'number' ? x : NaN))
+        return new PArr(grid(a).map((row) => row.reduce((s2, x, k) => s2 + x * v[k]!, 0)))
+      }
+      return elementwise(c, (x, y) => x * y)
+    },
+    'matrix.pow': (c) => {
+      const m = matOf(c)
+      needSquare(m, c, 'matrix.pow')
+      const p = Math.trunc(num(arg(c, 1, 'power'), c.line, 'the power'))
+      if (!(p >= 0)) throw new ScriptError('matrix.pow: the power must be 0 or more', c.line)
+      let out = identity(m.r)
+      let base = grid(m)
+      for (let e = p; e > 0; e >>= 1) {
+        if (e & 1) out = matMul(out, base)
+        if (e > 1) base = matMul(base, base)
+      }
+      return fromGrid(out, m.c)
+    },
+    'matrix.det': (c) => {
+      const m = matOf(c)
+      needSquare(m, c, 'matrix.det')
+      return gaussJordan(grid(m)).det
+    },
+    'matrix.inv': (c) => {
+      const m = matOf(c)
+      needSquare(m, c, 'matrix.inv')
+      const inv = gaussJordan(grid(m)).inv
+      return inv ? fromGrid(inv, m.c) : new PMat(m.r, m.c, new Array(m.d.length).fill(NaN))
+    },
+    'matrix.pinv': (c) => {
+      const m = matOf(c)
+      return fromGrid(pinvOf(grid(m)), m.r)
+    },
+    'matrix.rank': (c) => rankOf(grid(matOf(c))),
+    'matrix.trace': (c) => {
+      const m = matOf(c)
+      let t = 0
+      for (let k = 0; k < Math.min(m.r, m.c); k++) t += cellNum(m, k, k)
+      return t
+    },
+    'matrix.eigenvalues': (c) => {
+      const m = matOf(c)
+      needSquare(m, c, 'matrix.eigenvalues')
+      return new PArr(eigOf(grid(m)).vals)
+    },
+    'matrix.eigenvectors': (c) => {
+      const m = matOf(c)
+      needSquare(m, c, 'matrix.eigenvectors')
+      return fromGrid(eigOf(grid(m)).vecs, m.c)
+    },
+    'matrix.kron': (c) => {
+      const a = matOf(c)
+      const b = matOf(c, 1, 'id2')
+      const d: Val[] = []
+      for (let r1 = 0; r1 < a.r; r1++)
+        for (let r2 = 0; r2 < b.r; r2++)
+          for (let k1 = 0; k1 < a.c; k1++) for (let k2 = 0; k2 < b.c; k2++) d.push(cellNum(a, r1, k1) * cellNum(b, r2, k2))
+      return new PMat(a.r * b.r, a.c * b.c, d)
+    },
+    'matrix.avg': (c) => {
+      const xs = matNums(matOf(c))
+      return xs.length ? mean(xs) : NaN
+    },
+    'matrix.max': (c) => {
+      const xs = matNums(matOf(c))
+      return xs.length ? Math.max(...xs) : NaN
+    },
+    'matrix.min': (c) => {
+      const xs = matNums(matOf(c))
+      return xs.length ? Math.min(...xs) : NaN
+    },
+    'matrix.median': (c) => {
+      const xs = matNums(matOf(c)).sort((a, b) => a - b)
+      if (!xs.length) return NaN
+      const k = xs.length >> 1
+      return xs.length % 2 ? xs[k]! : (xs[k - 1]! + xs[k]!) / 2
+    },
+    'matrix.mode': (c) => modeOf(matNums(matOf(c))),
+    'matrix.is_square': predicate((_g, m) => m.r === m.c),
+    'matrix.is_zero': predicate((g) => g.every((row) => row.every((x) => x === 0))),
+    'matrix.is_binary': predicate((g) => g.every((row) => row.every((x) => x === 0 || x === 1))),
+    'matrix.is_identity': predicate((g, m) => sq(m) && g.every((row, r) => row.every((x, k) => x === (r === k ? 1 : 0)))),
+    'matrix.is_diagonal': predicate((g, m) => sq(m) && g.every((row, r) => row.every((x, k) => r === k || x === 0))),
+    'matrix.is_antidiagonal': predicate((g, m) => sq(m) && g.every((row, r) => row.every((x, k) => r + k === m.c - 1 || x === 0))),
+    'matrix.is_symmetric': predicate((g, m) => sq(m) && g.every((row, r) => row.every((x, k) => x === g[k]![r]))),
+    'matrix.is_antisymmetric': predicate((g, m) => sq(m) && g.every((row, r) => row.every((x, k) => x === -g[k]![r]!))),
+    'matrix.is_triangular': predicate(
+      (g, m) => sq(m) && (g.every((row, r) => row.every((x, k) => k <= r || x === 0)) || g.every((row, r) => row.every((x, k) => k >= r || x === 0))),
+    ),
+    'matrix.is_stochastic': predicate((g) => g.length > 0 && g.every((row) => row.every((x) => x >= 0) && Math.abs(row.reduce((a, b) => a + b, 0) - 1) < 1e-9)),
+  })
+
+  // ── more array functions ──
+  /** Sorting a user type's array: the field it compares by (sort_field — a field index or name; the first field by default). */
+  const sortKeyOf = (c: Call, pos: number): ((v: Val) => Val) => {
+    const sf = arg(c, pos, 'sort_field')
+    return (v) => {
+      if (!(v instanceof Obj)) return v
+      const t = types.get(v.type)
+      const name = typeof sf === 'string' ? sf : t?.fields[Math.trunc(typeof sf === 'number' ? sf : 0)]?.name
+      if (!name || !(name in v.f)) throw new ScriptError(`type ${v.type} has no field ${typeof sf === 'string' ? `"${sf}"` : `#${sf ?? 0}`} to sort by`, c.line)
+      return v.f[name]!
+    }
+  }
+  /** Ascending order of two values: numbers (na last), then text. */
+  const cmpVals = (x: Val, y: Val): number => {
+    if (typeof x === 'number' && typeof y === 'number') {
+      if (isNa(x)) return isNa(y) ? 0 : 1
+      if (isNa(y)) return -1
+      return x - y
+    }
+    const a = text(x)
+    const b = text(y)
+    return a < b ? -1 : a > b ? 1 : 0
+  }
+  const numsOf = (xs: readonly Val[]): number[] => xs.filter((x): x is number => typeof x === 'number' && !isNa(x))
+  const ARRAY_MORE: Record<string, (c: Call) => Val> = {
+    'array.sort': (c) => {
+      const a = arrOf(c)
+      const dir = optNum(c, 1, 1, 'order')
+      const key = sortKeyOf(c, 2)
+      a.a.sort((x, y) => cmpVals(key(x), key(y)) * dir)
+      return NaN
+    },
+    'array.sort_indices': (c) => {
+      const a = arrOf(c)
+      const dir = optNum(c, 1, 1, 'order')
+      const key = sortKeyOf(c, 2)
+      return new PArr(a.a.map((_, k) => k).sort((x, y) => cmpVals(key(a.a[x]!), key(a.a[y]!)) * dir || x - y))
+    },
+    'array.binary_search': (c) => {
+      const a = arrOf(c).a
+      const v = arg(c, 1, 'val') ?? NaN
+      let lo = 0
+      let hi = a.length - 1
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1
+        const d = cmpVals(a[mid]!, v)
+        if (d === 0) return mid
+        if (d < 0) lo = mid + 1
+        else hi = mid - 1
+      }
+      return -1
+    },
+    'array.binary_search_leftmost': (c) => {
+      const a = arrOf(c).a
+      const v = arg(c, 1, 'val') ?? NaN
+      let lo = 0
+      let hi = a.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (cmpVals(a[mid]!, v) < 0) lo = mid + 1
+        else hi = mid
+      }
+      return lo < a.length && cmpVals(a[lo]!, v) === 0 ? lo : lo - 1
+    },
+    'array.binary_search_rightmost': (c) => {
+      const a = arrOf(c).a
+      const v = arg(c, 1, 'val') ?? NaN
+      let lo = 0
+      let hi = a.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (cmpVals(a[mid]!, v) <= 0) lo = mid + 1
+        else hi = mid
+      }
+      return lo > 0 && cmpVals(a[lo - 1]!, v) === 0 ? lo - 1 : lo
+    },
+    'array.covariance': (c) => {
+      const a = arrOf(c, 0)
+      const b = arrOf(c, 1)
+      // the pairs where both values are there (na elements are left out)
+      const xs: number[] = []
+      const ys: number[] = []
+      for (let k = 0; k < Math.min(a.a.length, b.a.length); k++) {
+        const x = a.a[k]
+        const y = b.a[k]
+        if (typeof x === 'number' && typeof y === 'number' && !isNa(x) && !isNa(y)) {
+          xs.push(x)
+          ys.push(y)
+        }
+      }
+      const n = xs.length
+      if (n < 1) return NaN
+      const mx = mean(xs)
+      const my = mean(ys)
+      let s = 0
+      for (let k = 0; k < n; k++) s += (xs[k]! - mx) * (ys[k]! - my)
+      const biased = arg(c, 2, 'biased') === undefined ? true : truthy(arg(c, 2, 'biased')!)
+      return s / (biased ? n : Math.max(1, n - 1))
+    },
+    'array.mode': (c) => modeOf(numsOf(arrOf(c).a)),
+    'array.every': (c) => (arrOf(c).a.every((x) => truthy(x)) ? 1 : 0),
+    'array.some': (c) => (arrOf(c).a.some((x) => truthy(x)) ? 1 : 0),
+    'array.standardize': (c) => {
+      const a = arrOf(c).a
+      const xs = numsOf(a)
+      if (!xs.length) return new PArr(a.map(() => NaN))
+      const m = mean(xs)
+      const sd = stdevOf(xs)
+      return new PArr(a.map((x) => (typeof x === 'number' && sd ? (x - m) / sd : NaN)))
+    },
+    'array.percentrank': (c) => {
+      const a = arrOf(c).a
+      const k = at(arrOf(c), num(arg(c, 1, 'index'), c.line, 'the index'))
+      const v = a[k]
+      if (typeof v !== 'number' || isNa(v) || a.length < 2) return NaN
+      let n = 0
+      for (let j = 0; j < a.length; j++) if (j !== k && typeof a[j] === 'number' && (a[j] as number) <= v) n++
+      return (n / (a.length - 1)) * 100
+    },
+    'array.percentile_linear_interpolation': (c) => {
+      const xs = numsOf(arrOf(c).a).sort((a, b) => a - b)
+      if (!xs.length) return NaN
+      const pct = num(arg(c, 1, 'percentage'), c.line, 'the percentage')
+      const r = (pct / 100) * (xs.length - 1)
+      const lo = Math.max(0, Math.min(xs.length - 1, Math.floor(r)))
+      return xs[lo]! + (xs[Math.min(lo + 1, xs.length - 1)]! - xs[lo]!) * (r - lo)
+    },
+    'array.percentile_nearest_rank': (c) => {
+      const xs = numsOf(arrOf(c).a).sort((a, b) => a - b)
+      if (!xs.length) return NaN
+      const pct = num(arg(c, 1, 'percentage'), c.line, 'the percentage')
+      return xs[Math.max(0, Math.min(xs.length - 1, Math.ceil((pct / 100) * xs.length) - 1))]!
+    },
+    'array.new_polyline': (c) => new PArr(new Array(Math.max(0, Math.trunc(optNum(c, 0, 0, 'size')))).fill(arg(c, 1, 'initial_value') ?? NaN)),
+  }
+
+  // ── plotcandle / plotbar ──
+  const candleCall =
+    (kind: 'candle' | 'bar') =>
+    (c: Call): Val => {
+      const site = c.site()
+      let k = site.any as number | null
+      if (k == null) {
+        const t = arg(c, 4, 'title')
+        const disp = c.N.display
+        k =
+          res.candles.push({
+            title: typeof t === 'string' && t ? t : kind === 'candle' ? 'Candles' : 'Bars',
+            kind,
+            open: new Float64Array(N).fill(NaN),
+            high: new Float64Array(N).fill(NaN),
+            low: new Float64Array(N).fill(NaN),
+            close: new Float64Array(N).fill(NaN),
+            colors: new Array(N).fill(null),
+            hidden: typeof disp === 'string' && !(disp.includes('all') || disp.includes('pane')),
+          }) - 1
+        site.any = k
+      }
+      const out = res.candles[k]!
+      const i = c.i
+      const colV = arg(c, 5, 'color')
+      // a colour that is na hides the bar (Pine)
+      if (typeof colV === 'number' && isNa(colV)) return NaN
+      out.open[i] = num(arg(c, 0, 'open') ?? NaN, c.line, 'the open')
+      out.high[i] = num(arg(c, 1, 'high') ?? NaN, c.line, 'the high')
+      out.low[i] = num(arg(c, 2, 'low') ?? NaN, c.line, 'the low')
+      out.close[i] = num(arg(c, 3, 'close') ?? NaN, c.line, 'the close')
+      const color = colV === undefined ? null : paint(c, colV, null, null)
+      const wick = kind === 'candle' ? colorOf(arg(c, 6, 'wickcolor'), c.line) : null
+      const border = kind === 'candle' ? colorOf(arg(c, 9, 'bordercolor'), c.line) : null
+      out.colors[i] = color || wick || border ? { color, wick, border } : null
+      return NaN
+    }
+
+  // ── data TradingView keeps that Vela has no source for: na, said once ──
+  const noData = (name: string, what: string) => (): Val => {
+    warn(`${name}: ${what} isn't available here, so it returns na`)
+    return NaN
+  }
+
+  /** time() / time_close(): bars_back (chart bars, negative = ahead) and timeframe_bars_back (bars of `timeframe`). */
+  const timeAt = (c: Call, close: boolean): Val => {
+    const back = Math.trunc(optNum(c, 3, 0, 'bars_back'))
+    const i = c.i - back
+    const t = i >= 0 && i < N ? T[i]! : back < 0 ? T[c.i]! - back * tfMs : NaN
+    if (isNa(t)) return NaN
+    const sess = optStr(c, 1, 'session')
+    if (sess && !inSession(t, sess, optStr(c, 2, 'timezone'))) return NaN
+    const htf = optStr(c, 0, 'timeframe')
+    const tfBack = Math.trunc(optNum(c, 4, 0, 'timeframe_bars_back'))
+    if (!htf || htf === tf) {
+      const u = t - tfBack * tfMs
+      return close ? u + tfMs : u
+    }
+    let start = bucketStart(t, htf, dayShift, chartAnchors())
+    for (let k = 0; k < tfBack; k++) start = bucketStart(start - 1, htf, dayShift, chartAnchors())
+    for (let k = 0; k > tfBack; k--) start = nextBucket(start, htf)
+    return close ? nextBucket(start, htf) : start
+  }
+  /** The open of the `htf` bucket after the one opening at `start`. */
+  const nextBucket = (start: number, htf: string): number => {
+    const mins = tfMinutes(htf)
+    const step = isNa(mins) ? 86_400_000 : Math.min(86_400_000, Math.max(60_000, mins * 60_000))
+    for (let t = start + step, k = 0; k < 400; t += step, k++) {
+      const b = bucketStart(t, htf, dayShift, chartAnchors())
+      if (b > start) return b
+    }
+    return start + (isNa(mins) ? 86_400_000 : mins * 60_000)
+  }
+
+  /** str.format: Java MessageFormat — {0}, {0,number}, {0,number,integer|percent|currency|#.##}, {0,date|time,short|medium|long|full|pattern}. */
+  const formatMessage = (pattern: string, vals: Val[]): string => {
+    let out = ''
+    for (const sg of messageParts(pattern)) {
+      if (typeof sg === 'string') {
+        out += sg
+        continue
+      }
+      const v = vals[sg.i]
+      if (v === undefined) {
+        out += `{${sg.raw}}`
+        continue
+      }
+      if (typeof v !== 'number') {
+        out += text(v)
+        continue
+      }
+      if (sg.type === 'date' || sg.type === 'time') {
+        const preset: Record<string, string> =
+          sg.type === 'date'
+            ? { short: 'M/d/yy', medium: 'MMM d, yyyy', long: 'MMMM d, yyyy', full: 'EEEE, MMMM d, yyyy', '': 'MMM d, yyyy' }
+            : { short: 'h:mm a', medium: 'h:mm:ss a', long: 'h:mm:ss a z', full: 'h:mm:ss a z', '': 'h:mm:ss a' }
+        out += isNa(v) ? 'NaN' : formatTime(v, preset[sg.style.toLowerCase()] ?? sg.style, 'America/New_York')
+        continue
+      }
+      const st = sg.style.toLowerCase()
+      if (st === 'integer') out += fmtNumber(Math.round(v), 1, 0, 0, 3)
+      else if (st === 'percent') out += `${fmtNumber(v * 100, 1, 0, 0, 3)}%`
+      else if (st === 'currency') out += (v < 0 ? '-$' : '$') + fmtNumber(Math.abs(v), 1, 2, 2, 3)
+      else if (sg.style) out += decimalFormat(v, sg.style)
+      else out += fmtNumber(v, 1, 0, 3, 3)
+    }
+    return out
+  }
+
   /** input.enum(Side.long, "Side") — a string input whose options are the enum's values. */
   const enumInput = (c: Call): Val => {
     const n = c.node.args[0] ?? c.node.named.defval
-    const head = n && n.k === 'id' ? n.name.slice(0, Math.max(0, n.name.indexOf('.'))) : ''
+    const head = n && n.k === 'id' ? n.name.slice(0, Math.max(0, n.name.lastIndexOf('.'))) : ''
     const en = enums.get(head)
     if (!en) throw new ScriptError('input.enum() takes an enum field first: input.enum(Side.long, "Side")', c.line)
     c.N.options = [...en.values()]
@@ -3784,6 +5295,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     indicator: (c) => declareScript(c, false),
     study: (c) => declareScript(c, false),
     strategy: (c) => declareScript(c, true),
+    // a library runs as an indicator: its own plots and demo code draw, its exports are ordinary functions
+    library: (c) => declareScript(c, false),
     input: (c) => inputCall(c, null),
     'input.int': (c) => inputCall(c, 'integer'),
     'input.integer': (c) => inputCall(c, 'integer'),
@@ -3802,6 +5315,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'input.enum': enumInput,
     // ── outputs ──
     plot: plotCall,
+    plotcandle: candleCall('candle'),
+    plotbar: candleCall('bar'),
     hline: (c) => {
       const site = c.site()
       if (!site.done) {
@@ -4003,7 +5518,6 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       const v = arg(c, 0, 'value', 'x')
       const fmt = optStr(c, 1, 'format')
       if (typeof v === 'number' && fmt) {
-        const m = /\.(#+|0+)/.exec(fmt)
         if (fmt === 'mintick' || fmt === 'price') return isNa(v) ? 'NaN' : v.toFixed(2)
         if (fmt === 'percent') return isNa(v) ? 'NaN' : `${v.toFixed(2)}%`
         if (fmt === 'volume') {
@@ -4012,13 +5526,27 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
           const [d, u] = a >= 1e9 ? [1e9, 'B'] : a >= 1e6 ? [1e6, 'M'] : a >= 1e3 ? [1e3, 'K'] : [1, '']
           return `${Number((v / d).toFixed(3))}${u}`
         }
-        if (m) return isNa(v) ? 'NaN' : String(Number(v.toFixed(m[1]!.length)))
+        // a DecimalFormat pattern: "#.##", "0.00", "#,##0", "0.0%" …
+        if (/[#0]/.test(fmt)) return isNa(v) ? 'NaN' : decimalFormat(v, fmt)
       }
       return v === undefined ? '' : text(v)
     },
-    format: (c) => {
-      const f = optStr(c, 0, 'formatString') ?? ''
-      return f.replace(/\{(\d+)(?:,[^}]*)?\}/g, (_, k: string) => text(c.A[Number(k) + 1] ?? ''))
+    format: (c) => formatMessage(optStr(c, 0, 'formatString') ?? '', c.A.slice(1)),
+    format_time: (c) => {
+      const t = num(arg(c, 0, 'time') ?? T[c.i]!, c.line, 'the time')
+      return isNa(t) ? '' : formatTime(t, optStr(c, 1, 'format') ?? "yyyy-MM-dd'T'HH:mm:ssZ", optStr(c, 2, 'timezone') ?? 'America/New_York')
+    },
+    match: (c) => {
+      const s = optStr(c, 0, 'source') ?? ''
+      let re = optStr(c, 1, 'regex') ?? ''
+      let flags = ''
+      // Java's inline (?i) / (?s) / (?m) flags → JavaScript's
+      re = re.replace(/^\(\?([ism]+)\)/, (_, f: string) => ((flags = f), ''))
+      try {
+        return new RegExp(re, flags).exec(s)?.[0] ?? ''
+      } catch {
+        throw new ScriptError(`str.match: "${re}" is not a valid pattern`, c.line)
+      }
     },
     length: (c) => (optStr(c, 0, 'string') ?? '').length,
     upper: (c) => (optStr(c, 0, 'source') ?? '').toUpperCase(),
@@ -4029,28 +5557,27 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       return Number.isFinite(n) ? n : NaN
     },
     // ── time ──
-    time: (c) => {
-      const t = T[c.i]!
-      const sess = optStr(c, 1, 'session')
-      if (sess && !inSession(t, sess)) return NaN
-      const htf = optStr(c, 0, 'timeframe')
-      return htf && htf !== tf ? bucketStart(t, htf, dayShift, chartAnchors()) : t
-    },
-    time_close: (c) => {
-      const t = T[c.i]!
-      const sess = optStr(c, 1, 'session')
-      if (sess && !inSession(t, sess)) return NaN
-      return t + tfMs
+    time: (c) => timeAt(c, false),
+    time_close: (c) => timeAt(c, true),
+    weekofyear: (c) => {
+      const t = num(arg(c, 0, 'time') ?? T[c.i]!, c.line, 'the time')
+      return isNa(t) ? NaN : weekOf(t)
     },
     timestamp: (c) => {
-      const xs = c.A.filter((v) => typeof v === 'number') as number[]
+      // timestamp([timezone,] year, month, day[, hour, minute, second]) — or timestamp(dateString)
+      const tz = typeof c.A[0] === 'string' && c.A.length > 1 ? (c.A[0] as string) : typeof c.N.timezone === 'string' ? c.N.timezone : null
+      const xs = (tz && typeof c.A[0] === 'string' ? c.A.slice(1) : c.A).filter((v): v is number => typeof v === 'number')
+      for (const k of ['year', 'month', 'day', 'hour', 'minute', 'second'] as const) {
+        const v = c.N[k]
+        if (typeof v === 'number') xs.push(v)
+      }
       if (xs.length < 3) {
         const s = optStr(c, 0, 'dateString')
-        const t = s ? Date.parse(s) : NaN
-        return Number.isFinite(t) ? t : NaN
+        return s ? parseDateString(s) : NaN
       }
-      const [y, mo, d, h = 0, mi = 0, s = 0] = xs
-      return nyToUtc(y!, mo!, d!, h, mi, s)
+      if (xs.some(isNa)) return NaN
+      const [y, mo, d, h = 0, mi = 0, sec = 0] = xs
+      return tz ? zoneToUtc(y!, mo!, d!, h, mi, sec, tz) : nyToUtc(y!, mo!, d!, h, mi, sec)
     },
     year: (c) => fromTime(c, 'year'),
     month: (c) => fromTime(c, 'month'),
@@ -4307,12 +5834,13 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       const ch = v - s.x
       s.x = v
       const vol = V[c.i]!
-      const up = windowOf(s.k(0), isNa(ch) ? NaN : ch <= 0 ? 0 : v * vol, l)
-      const dn = windowOf(s.k(1), isNa(ch) ? NaN : ch >= 0 ? 0 : v * vol, l)
+      // Pine's definition: a bar whose change is na (the first) counts on both sides
+      const up = windowOf(s.k(0), ch <= 0 ? 0 : v * vol, l)
+      const dn = windowOf(s.k(1), ch >= 0 ? 0 : v * vol, l)
       if (!up || !dn) return NaN
       const u = up.reduce((a, b) => a + b, 0)
       const d = dn.reduce((a, b) => a + b, 0)
-      return d === 0 ? 100 : 100 - 100 / (1 + u / d)
+      return 100 - 100 / (1 + u / d)
     },
     cmo: (c) => {
       const s = c.site()
@@ -4353,7 +5881,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       const w = win(c, src(c), l)
       if (!w) return NaN
       const m = mean(w)
-      return m === 0 ? NaN : (2 * stdevOf(w) * mult) / m
+      return m === 0 ? NaN : ((2 * stdevOf(w) * mult) / m) * 100
     },
     bb_upper: (c) => {
       const w = win(c, src(c), lenArg(c, 1))
@@ -4369,7 +5897,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       const mult = optNum(c, 2, 1.5, 'mult')
       const useTr = arg(c, 3, 'useTrueRange') === undefined ? true : truthy(arg(c, 3, 'useTrueRange')!)
       const mid = ema(s.k(0), src(c), l)
-      const r = ema(s.k(1), useTr ? trAt(c.i, true) : H[c.i]! - L[c.i]!, l)
+      // ta.tr, not ta.tr(true): na on the first bar, as Pine's own definition reads
+      const r = ema(s.k(1), useTr ? trAt(c.i, false) : H[c.i]! - L[c.i]!, l)
       return [mid, mid + r * mult, mid - r * mult]
     },
     dmi: (c) => {
@@ -4381,7 +5910,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       const down = i > 0 ? L[i - 1]! - L[i]! : NaN
       const pdm = isNa(up) ? NaN : up > down && up > 0 ? up : 0
       const mdm = isNa(down) ? NaN : down > up && down > 0 ? down : 0
-      const tru = rma(s.k(0), trAt(i, true), l)
+      const tru = rma(s.k(0), trAt(i, false), l)
       let plus = (100 * rma(s.k(1), pdm, l)) / tru
       let minus = (100 * rma(s.k(2), mdm, l)) / tru
       if (isNa(plus)) plus = s.x
@@ -4419,46 +5948,65 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       return [st, dir]
     },
     sar: (c) => {
+      // Pine's own definition of ta.sar, step by step
       const s = c.site()
       const start = optNum(c, 0, 0.02, 'start')
       const inc = optNum(c, 1, 0.02, 'inc')
       const max = optNum(c, 2, 0.2, 'max')
       const i = c.i
       if (i === 0) return NaN
-      // s.x = sar, s.y = extreme, s.z = af, s.n = 1 long / -1 short
-      if (s.n === 0) {
-        s.n = C[i]! > C[i - 1]! ? 1 : -1
-        s.x = s.n > 0 ? L[i - 1]! : H[i - 1]!
-        s.y = s.n > 0 ? H[i]! : L[i]!
-        s.z = start
-        return s.x
-      }
-      let sar = s.x + s.z * (s.y - s.x)
-      if (s.n > 0) {
-        sar = Math.min(sar, L[i - 1]!, i > 1 ? L[i - 2]! : L[i - 1]!)
-        if (L[i]! < sar) {
+      // s.x = the SAR, s.y = the extreme point, s.z = the acceleration, s.n = 1 below price / -1 above, s.w = the first bar
+      let first = false
+      if (isNa(s.w)) {
+        s.w = i
+        if (C[i]! > C[i - 1]!) {
+          s.n = 1
+          s.y = H[i]!
+          s.x = L[i - 1]!
+        } else {
           s.n = -1
-          sar = s.y
+          s.y = L[i]!
+          s.x = H[i - 1]!
+        }
+        s.z = start
+        first = true
+      }
+      let r = s.x + s.z * (s.y - s.x)
+      if (s.n > 0) {
+        if (r > L[i]!) {
+          first = true
+          s.n = -1
+          r = Math.max(H[i]!, s.y)
           s.y = L[i]!
           s.z = start
-        } else if (H[i]! > s.y) {
-          s.y = H[i]!
-          s.z = Math.min(max, s.z + inc)
         }
-      } else {
-        sar = Math.max(sar, H[i - 1]!, i > 1 ? H[i - 2]! : H[i - 1]!)
-        if (H[i]! > sar) {
-          s.n = 1
-          sar = s.y
-          s.y = H[i]!
-          s.z = start
+      } else if (r < H[i]!) {
+        first = true
+        s.n = 1
+        r = Math.min(L[i]!, s.y)
+        s.y = H[i]!
+        s.z = start
+      }
+      if (!first) {
+        if (s.n > 0) {
+          if (H[i]! > s.y) {
+            s.y = H[i]!
+            s.z = Math.min(s.z + inc, max)
+          }
         } else if (L[i]! < s.y) {
           s.y = L[i]!
-          s.z = Math.min(max, s.z + inc)
+          s.z = Math.min(s.z + inc, max)
         }
       }
-      s.x = sar
-      return sar
+      if (s.n > 0) {
+        r = Math.min(r, L[i - 1]!)
+        if (i > 1) r = Math.min(r, L[i - 2]!)
+      } else {
+        r = Math.max(r, H[i - 1]!)
+        if (i > 1) r = Math.max(r, H[i - 2]!)
+      }
+      s.x = r
+      return r
     },
     // ── signals ──
     crossover: (c) => {
@@ -4619,6 +6167,118 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       const v = arg(c, 0, 'x')
       return typeof v === 'string' ? v : NaN
     },
+    // drawing / collection casts — box(na), line(na), label(x) …: the value as it is
+    box: (c) => arg(c, 0, 'x') ?? NaN,
+    line: (c) => arg(c, 0, 'x') ?? NaN,
+    label: (c) => arg(c, 0, 'x') ?? NaN,
+    linefill: (c) => arg(c, 0, 'x') ?? NaN,
+    table: (c) => arg(c, 0, 'x') ?? NaN,
+    polyline: (c) => arg(c, 0, 'x') ?? NaN,
+    // ── more ta ──
+    cog: (c) => {
+      const l = lenArg(c, 1)
+      const w = win(c, src(c), l)
+      if (!w) return NaN
+      let sum = 0
+      let nom = 0
+      for (let k = 0; k < l; k++) {
+        const v = w[l - 1 - k]!
+        sum += v
+        nom += v * (k + 1)
+      }
+      return sum === 0 ? NaN : -nom / sum
+    },
+    kcw: (c) => {
+      const s = c.site()
+      const l = lenArg(c, 1)
+      const mult = optNum(c, 2, 2, 'mult')
+      const useTr = arg(c, 3, 'useTrueRange') === undefined ? true : truthy(arg(c, 3, 'useTrueRange')!)
+      const basis = ema(s.k(0), src(c), l)
+      const r = ema(s.k(1), useTr ? trAt(c.i, false) : H[c.i]! - L[c.i]!, l)
+      return basis === 0 ? NaN : (2 * r * mult) / basis
+    },
+    mode: (c) => {
+      const w = win(c, src(c), lenArg(c, 1))
+      return w ? modeOf(w) : NaN
+    },
+    rci: (c) => {
+      const l = lenArg(c, 1)
+      const w = win(c, src(c), l)
+      if (!w || l < 2) return NaN
+      const ranks = rankAvg(w)
+      let d2 = 0
+      for (let k = 0; k < l; k++) d2 += (ranks[k]! - (k + 1)) ** 2
+      return (1 - (6 * d2) / (l * (l * l - 1))) * 100
+    },
+    pivot_point_levels: (c) => {
+      const s = c.site()
+      const type = optStr(c, 0, 'type') ?? 'Traditional'
+      const anchor = truthy(arg(c, 1, 'anchor') ?? 0)
+      const developing = truthy(arg(c, 2, 'developing') ?? 0)
+      if (developing && type.toLowerCase() === 'woodie') throw new ScriptError('ta.pivot_point_levels: Woodie levels can\'t be "developing"', c.line)
+      const i = c.i
+      // s.list: the running period's open / high / low / close; s.any: the levels in force
+      const per = (s.list ??= [NaN, NaN, NaN, NaN])
+      if (anchor && !isNa(per[1]!)) s.any = pivotLevels(type, per[0]!, per[1]!, per[2]!, per[3]!, O[i]!)
+      if (anchor || isNa(per[1]!)) {
+        per[0] = O[i]!
+        per[1] = H[i]!
+        per[2] = L[i]!
+        per[3] = C[i]!
+      } else {
+        per[1] = Math.max(per[1]!, H[i]!)
+        per[2] = Math.min(per[2]!, L[i]!)
+        per[3] = C[i]!
+      }
+      if (developing) return new PArr(pivotLevels(type, per[0]!, per[1]!, per[2]!, per[3]!, per[0]!))
+      return new PArr(((s.any as number[] | null) ?? new Array<number>(11).fill(NaN)).slice())
+    },
+    random: (c) => {
+      const lo = optNum(c, 0, 0, 'min')
+      const hi = optNum(c, 1, 1, 'max')
+      const seed = arg(c, 2, 'seed')
+      let u = Math.random()
+      if (seed !== undefined) {
+        // a seed: the same sequence every run (mulberry32 from the seed, kept per call)
+        const s = c.site()
+        if (!s.done) {
+          s.done = true
+          s.x = Math.trunc(num(seed, c.line, 'the seed')) >>> 0
+        }
+        s.x = (s.x + 0x6d2b79f5) >>> 0
+        let t = s.x
+        t = Math.imul(t ^ (t >>> 15), t | 1)
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+        u = ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+      return lo + (hi - lo) * u
+    },
+    'syminfo.prefix': (c) => {
+      const s = optStr(c, 0, 'symbol') ?? symbol
+      const k = s.indexOf(':')
+      return k >= 0 ? s.slice(0, k) : 'VOLTICK.IO'
+    },
+    'syminfo.ticker': (c) => (optStr(c, 0, 'symbol') ?? symbol).replace(/^[^:]*:/, ''),
+    'timeframe.from_seconds': (c) => {
+      const s = num(arg(c, 0, 'seconds'), c.line, 'the seconds')
+      return isNa(s) ? NaN : tfFromSeconds(s)
+    },
+    // ── data with no source here: na (and a note) ──
+    'request.financial': noData('request.financial', 'financial data'),
+    'request.economic': noData('request.economic', 'economic data'),
+    'request.earnings': noData('request.earnings', 'earnings data'),
+    'request.dividends': noData('request.dividends', 'dividends data'),
+    'request.splits': noData('request.splits', 'splits data'),
+    'request.quandl': noData('request.quandl', 'Nasdaq Data Link data'),
+    'request.seed': noData('request.seed', 'Pine Seeds data'),
+    'request.footprint': noData('request.footprint', 'volume footprint data'),
+    'request.currency_rate': (c) => {
+      const from = optStr(c, 0, 'from') ?? ''
+      const to = optStr(c, 1, 'to') ?? ''
+      if (from && from === to) return 1
+      warn('request.currency_rate: currency rates aren\'t available here, so it returns na')
+      return NaN
+    },
     // ── more text ──
     replace_all: (c) => (optStr(c, 0, 'source') ?? '').split(optStr(c, 1, 'target') ?? '').join(optStr(c, 2, 'replacement') ?? ''),
     replace: (c) => (optStr(c, 0, 'source') ?? '').replace(optStr(c, 1, 'target') ?? '', optStr(c, 2, 'replacement') ?? ''),
@@ -4662,10 +6322,8 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'ticker.modify': (c) => optStr(c, 0, 'tickerid') ?? symbol,
     'ticker.standard': (c) => optStr(c, 0, 'symbol') ?? symbol,
     'ticker.inherit': (c) => optStr(c, 1, 'symbol') ?? symbol,
-    'ticker.heikinashi': (c) => {
-      warn('Heikin Ashi data isn\'t available, so the standard candles are used')
-      return optStr(c, 0, 'symbol') ?? symbol
-    },
+    // request.security on this id runs on Heikin Ashi candles built from the symbol's own bars
+    'ticker.heikinashi': (c) => `${(optStr(c, 0, 'symbol') ?? symbol).replace(/#HA$/, '')}${HA_MARK}`,
     'ticker.renko': (c) => {
       warn('Renko data isn\'t available: used the standard candles')
       return optStr(c, 0, 'symbol') ?? symbol
@@ -4684,6 +6342,7 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     },
     // ── arrays ──
     ...ARRAY_FNS,
+    ...ARRAY_MORE,
     // ── maps ──
     ...MAP_FNS,
     // ── strategy orders ──
