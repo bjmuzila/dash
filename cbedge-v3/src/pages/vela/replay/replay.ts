@@ -73,17 +73,53 @@ let lastCtx: WidgetContext | null = null
 
 const tfMsOf = (w: VelaWorkspace): number => timeframeToMs(w.chart.market.timeframe ?? '5') || 60_000
 
+// ── SEVERAL CHARTS, ONE CLOCK (2026-10-06, Brandon: "on replay mode when I hit
+// prior open, it goes to midnight prior open no matter what — futures or stocks
+// should be 9:30 AM Eastern"). The phone opens three charts stacked, and a pick
+// was read on the ACTIVE one. With a daily (or any coarse) chart active, its bars
+// open at ET midnight, so a 9:30 start cut at that midnight bar, and the clock
+// was the active chart's cursor + its own timeframe — midnight again. Now a start
+// is read on the chart with the FINEST timeframe (its close is the 9:30 exactly),
+// every other chart keeps the bars closed by then, and the clock is the newest
+// bar close on any chart: the moment the replay has truly reached. ──
+
+/** The chart with the finest timeframe (the active one wins a tie). */
+export function finestCellId(w: VelaWorkspace): string {
+  let best = w.active.id
+  let bestMs = timeframeToMs(w.active.chart.market.timeframe ?? '5') || Infinity
+  for (const c of w.cells()) {
+    const ms = timeframeToMs(c.chart.market.timeframe ?? '5') || Infinity
+    if (ms < bestMs) {
+      best = c.id
+      bestMs = ms
+    }
+  }
+  return best
+}
+
+/** The newest bar close on any replaying chart, or null when none is replaying. */
+function sharedClock(w: VelaWorkspace): number | null {
+  let at: number | null = null
+  for (const c of w.cells()) {
+    const t = c.chart.replay.state.cursorTime
+    if (t == null) continue
+    const end = t + (timeframeToMs(c.chart.market.timeframe ?? '5') || 60_000)
+    if (at == null || end > at) at = end
+  }
+  return at
+}
+
 /** Follow the workspace's replay. Call once per workspace, from the page. */
 export function bindReplay(w: VelaWorkspace): () => void {
   ws = w
   const r = w.replay
   const offs = [
     r.on('replay:start', ({ cursorTime }) => {
-      setReplayClock(true, cursorTime + tfMsOf(w))
+      setReplayClock(true, sharedClock(w) ?? cursorTime + tfMsOf(w))
       set({ phase: 'on', picking: false, note: '' })
     }),
     r.on('replay:step', ({ cursorTime }) => {
-      setReplayClock(true, cursorTime + tfMsOf(w))
+      setReplayClock(true, sharedClock(w) ?? cursorTime + tfMsOf(w))
       set({})
     }),
     r.on('replay:tick', ({ cursorTime, index, count }) => {
@@ -178,13 +214,16 @@ export function replayQuote(): Quote | null {
   return { price: bar.close, t, sym: bare(w.chart.market.symbol) }
 }
 
-/** Rewind to `from`: the chart keeps every bar that opened at or before it. */
+/**
+ * Rewind to `from`: the chart it is read on keeps every bar that opened at or
+ * before it — `cellId` (a clicked bar's chart), else the finest-timeframe chart.
+ */
 export async function replayFrom(from: number, cellId?: string): Promise<void> {
   const w = ws
   if (!w || !Number.isFinite(from)) return
   set({ picking: false, note: '' })
   try {
-    await w.replay.start(cellId ? { from, cell: cellId } : { from })
+    await w.replay.start({ from, cell: cellId ?? finestCellId(w) })
   } catch {
     set({ note: 'That replay could not start. Try another bar.' })
     return

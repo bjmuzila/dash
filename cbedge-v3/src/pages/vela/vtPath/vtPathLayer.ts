@@ -42,9 +42,14 @@
 //     sizing: Voltick sizes each bubble by its reading and then thins crowded
 //     candles (thinPathLanes, which keeps run starts/ends and drops others), which
 //     drew overlapping coins and uneven holes. Here there is ONE radius for the
-//     whole chart, taken from the bar pitch (BEAD.pitch of a bar, capped at
-//     BEAD.voltMax, shrunk to fit neighbouring strikes, floored at BEAD.minPx),
-//     so every bubble grows and shrinks together and neighbours never overlap.
+//     whole chart, taken from the bar pitch, shrunk to fit neighbouring strikes,
+//     floored at BEAD.minPx, so every bubble grows and shrinks together and
+//     neighbours never overlap. ALMOST CONNECTED AT ANY ZOOM (2026-10-06: "zoomed
+//     way in there's a lot of space in between … should stay almost connected no
+//     matter the zoom … a little give or take"): a bead is 94% of a bar wide
+//     zoomed out, easing to 84% zoomed in (BEAD.pitchTight → pitchLoose), and
+//     only an extreme zoom meets the BEAD.voltMax sanity cap; peers are 90% of
+//     the Volt so their rows read joined as well.
 //     Only when the floor or the Size setting makes a bead wider than its bar are
 //     candles skipped, and then on one fixed every-Nth-bar grid shared by every
 //     level, so the spacing stays even. The Volt stays a size up (BEAD.peer).
@@ -111,12 +116,18 @@ const REF_MOVE = 1.6
 
 /** CB Edge Path bead geometry (see the header, ZOOM-PROOF BUBBLES). */
 const BEAD = {
-  /** a bead's width as a share of one bar's pitch */
-  pitch: 0.86,
-  /** the Volt's largest radius, px (zoomed far in) */
-  voltMax: 6.5,
-  /** peer radius as a share of the Volt's */
-  peer: 0.82,
+  /** a Volt bead's width as a share of one bar's pitch, zoomed OUT (beads all but touch) */
+  pitchTight: 0.94,
+  /** …and zoomed IN (a little air between them) — the "give or take" */
+  pitchLoose: 0.84,
+  /** bar spacing, px, at or below which the tight pitch holds */
+  bsTight: 5,
+  /** bar spacing, px, at or above which the loose pitch holds */
+  bsLoose: 30,
+  /** the Volt's largest radius, px — only a sanity cap for an extreme zoom */
+  voltMax: 16,
+  /** peer radius as a share of the Volt's (a peer row stays near-connected too) */
+  peer: 0.9,
   /** never smaller than this, px */
   minPx: 1.6,
   /** share of the pixel gap between neighbouring strikes two beads may fill */
@@ -192,8 +203,11 @@ class PathDraw {
       .sort((x, y) => (DRAW_ORDER[x.role] ?? 0) - (DRAW_ORDER[y.role] ?? 0))
     if (!list.length) return
     // ONE RADIUS FOR THE WHOLE CHART, FROM THE BAR PITCH (see the header): a bead
-    // is BEAD.pitch of a bar wide, so neighbouring candles never overlap at any zoom.
-    let rV = Math.min(BEAD.voltMax, (bs * BEAD.pitch) / 2)
+    // is 94% of a bar wide zoomed out easing to 84% zoomed in, so neighbours stay
+    // almost connected at every zoom and never overlap.
+    const ease = Math.min(1, Math.max(0, (bs - BEAD.bsTight) / (BEAD.bsLoose - BEAD.bsTight)))
+    const pitch = BEAD.pitchTight + (BEAD.pitchLoose - BEAD.pitchTight) * ease * ease * (3 - 2 * ease)
+    let rV = Math.min(BEAD.voltMax, (bs * pitch) / 2)
     // strike crowding: a Volt and a peer on neighbouring strikes still clear each other
     const usedP = [...new Set(list.flatMap((r) => r.fill.map((q) => q.p)))].sort((a, b) => a - b)
     let stepP = Infinity

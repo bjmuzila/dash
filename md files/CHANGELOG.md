@@ -26703,3 +26703,17 @@ Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the lef
 ## 2026-10-06 - v3 theme check: Vela menu z-index fix (unblocks the commit)
 
 - `cbedge-v3/src/pages/vela/vela.css`: the menu/tooltip layer rule used `var(--z-index, var(--vela-z-menu, 50))`. Neither variable is declared under `src/` (Vela sets `--z-index` at runtime), so `check-theme` failed the pre-commit. The 50 fallback is now declared as `--z-index: 50` in a zero-specificity `:where(...)` rule, and the layer reads `z-index: var(--z-index)`. Vela's own `--z-index` still wins; behaviour is unchanged. `--vela-z-menu` (never set anywhere) is gone.
+
+## 2026-10-06 - Vela replay: Prior open / Last open / typed start land on 9:30 ET with several charts
+
+- **Cause:** a start was read on the ACTIVE chart. The phone opens three charts stacked, so with a daily (or any coarse) chart active, its bars open at ET midnight: the cut landed on that midnight bar, and the replay clock (active chart's cursor + its own timeframe) read midnight as well. A one-chart desktop layout was not affected (checked live: SPY and ES, 1m and 5m, RTH and ETH, all land on Fri 9:30).
+- `cbedge-v3/src/pages/vela/replay/replay.ts`:
+  - `finestCellId(ws)`: the chart with the finest timeframe (active wins a tie). `replayFrom` reads its start there unless a clicked bar names its own chart, so the 9:30 open is exact and every other chart keeps only the bars closed by then (no look-ahead).
+  - The replay clock is now the newest bar close on ANY replaying chart (`sharedClock`), not the active chart's cursor + timeframe, on start and on every step. The dock's time and the CB studies' hide-the-future gate both read it.
+- `cbedge-v3/src/pages/vela/replay/ReplayBar.tsx`: ◀ (Shift+←) steps back one bar on that same finest chart instead of the active one, so a daily chart being active no longer makes it jump a whole day.
+- `tsc` strict is clean on `replay.ts` against `@luxalgo/vela` 0.8.2.
+
+## 2026-10-06 - Vela replay: bigger play button (and touch-sized ◀ ▶)
+
+- `cbedge-v3/src/pages/vela/replay/ReplayBar.tsx`: `TransportButton` takes an optional `className`; ◀ / ▶ get `cb-rp-step`, play/pause gets `cb-rp-play`.
+- `cbedge-v3/src/pages/vela/vela.css`: play is a size up everywhere (34×26px min, `--text-xs`). On a touch screen (`pointer: coarse`) ◀ / ▶ are 40×36px (`--text-sm`) and play is 56×44px (`--text-lg`), so it is easy to hit on the phone. Desktop ◀ / ▶ unchanged. Type sizes come from tokens only.

@@ -2609,6 +2609,27 @@
   cursor: default;
   opacity: 0.5;
 }
+/* The replay transport (◀ ▶/❚❚ ▶, ReplayBar.tsx). Play is the key pressed most, so it
+   is a size up everywhere; on a touch screen all three are finger-sized and play
+   bigger again (2026-10-06, Brandon: "the play button needs to be a little bigger —
+   hard tapping it on the mobile app"). */
+.cb-vt-key.cb-rp-play {
+  min-width: 34px;
+  min-height: 26px;
+  font-size: var(--text-xs);
+}
+@media (pointer: coarse) {
+  .cb-vt-key.cb-rp-step {
+    min-width: 40px;
+    min-height: 36px;
+    font-size: var(--text-sm);
+  }
+  .cb-vt-key.cb-rp-play {
+    min-width: 56px;
+    min-height: 44px;
+    font-size: var(--text-lg);
+  }
+}
 .cb-vt-pop {
   background: var(--vt-popover);
   box-shadow: var(--vt-card-shadow);

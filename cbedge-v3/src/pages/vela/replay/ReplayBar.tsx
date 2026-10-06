@@ -52,7 +52,7 @@ import { T } from '@/design/theme'
 import { etDateKey, etWallMs } from '@/pages/vela/studies/common'
 import { LIVE_ONLY } from '@/pages/vela/studies'
 import { replayClock } from './clock'
-import { closePicker, openPicker, repaint, replayFrom, replayQuote, replayStore } from './replay'
+import { closePicker, finestCellId, openPicker, repaint, replayFrom, replayQuote, replayStore } from './replay'
 import { paperCsv, paperFlatten, paperOpen, paperOrder, paperReset, paperStats, paperStore, pointValue, type PaperTrade } from './paper'
 import { dropTape, nominalTicks, tickSourceFor } from './ticks'
 
@@ -113,12 +113,15 @@ function TransportButton({
   on = false,
   disabled = false,
   onClick,
+  className = '',
 }: {
   label: string
   title: string
   on?: boolean
   disabled?: boolean
   onClick: () => void
+  /** Extra classes — the transport's finger-sized keys (vela.css .cb-rp-*). */
+  className?: string
 }) {
   return (
     <button
@@ -127,7 +130,7 @@ function TransportButton({
       title={title}
       aria-pressed={on}
       disabled={disabled}
-      className="cb-vt-key tabular shrink-0 rounded-sm border px-2 py-1 font-mono text-2xs font-extrabold leading-none"
+      className={`cb-vt-key tabular shrink-0 rounded-sm border px-2 py-1 font-mono text-2xs font-extrabold leading-none ${className}`}
     >
       {label}
     </button>
@@ -237,8 +240,11 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
     ws.replay.step()
   }, [ws])
   const stepBack = useCallback(() => {
-    const ct = ws.replay.state.cursorTime
-    const b = ws.replay.bounds
+    // one bar back on the chart the replay is read on (the finest timeframe), not
+    // the active one: a daily chart's bar back would be a whole day on the 1m
+    const ref = ws.cell(finestCellId(ws))?.chart ?? ws.chart
+    const ct = ref.replay.state.cursorTime
+    const b = ref.replay.bounds
     if (ct == null || (b && ct <= b.first)) return
     void replayFrom(ct - 1)
   }, [ws])
@@ -411,9 +417,9 @@ export default function ReplayBar({ ws }: { ws: VelaWorkspace }) {
         </span>
 
         <span className="flex shrink-0 items-center gap-1">
-          <TransportButton label="◀" title="Previous bar (Shift+←)" disabled={st.cursorTime == null || st.cursorTime <= first} onClick={stepBack} />
-          <TransportButton label={st.playing ? '❚❚' : '▶'} title="Play / pause (Shift+↓)" on={st.playing} disabled={st.remaining === 0} onClick={togglePlay} />
-          <TransportButton label="▶" title="Next bar (Shift+→)" disabled={st.remaining === 0} onClick={stepFwd} />
+          <TransportButton label="◀" title="Previous bar (Shift+←)" className="cb-rp-step" disabled={st.cursorTime == null || st.cursorTime <= first} onClick={stepBack} />
+          <TransportButton label={st.playing ? '❚❚' : '▶'} title="Play / pause (Shift+↓)" className="cb-rp-play" on={st.playing} disabled={st.remaining === 0} onClick={togglePlay} />
+          <TransportButton label="▶" title="Next bar (Shift+→)" className="cb-rp-step" disabled={st.remaining === 0} onClick={stepFwd} />
         </span>
 
         <input
