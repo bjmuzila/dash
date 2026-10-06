@@ -26946,3 +26946,9 @@ With two (or three) stacked charts on the phone, an open legend card ran past it
   - New `cap()` (run from `applyFold`, so on mount, fold/unfold and every cell resize) writes `--cb-lc-max`: the room from the card's top down to the chart's bottom edge, less 8px.
   - Wheel / touchmove / pointermove on the card body stop at the card while it can scroll, so the chart underneath doesn't pan or zoom. pointerdown and touchstart still pass through.
 - `cbedge-v3/src/pages/vela/vela.css`: the open card is a flex column capped at `--cb-lc-max`; the header stays put and `.cb-lc-body` scrolls (`overflow-y: auto`, `touch-action: pan-y`, `overscroll-behavior: contain`). Folded cards are unchanged.
+
+## 2026-10-06 — The database is Render Postgres, not the VPS
+
+- Checked from the dashboard container: `DATABASE_URL` points at Render's managed Postgres 18.4 (virginia-postgres.render.com). `max_connections` is 103 and 38 were in use, so the larger pools (main 10, chart reads 4) fit.
+- `server-v2/state/perf-indexes.js`: the pg_stat_statements check no longer reads `shared_preload_libraries`, which the app role may not read on Render. It creates the extension and tests the view instead.
+- `server-v2/_lib-db.cjs`: the pool comment now says Render rather than "same VPS".

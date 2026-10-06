@@ -310,10 +310,10 @@ function getPool() {
     _pool = new import_pg.Pool({
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.DATABASE_URL?.includes("localhost") || process.env.DATABASE_URL?.includes("127.0.0.1") ? void 0 : { rejectUnauthorized: false },
-      // 2026-10-06: 5 → 10. Postgres is on the same VPS (not Render any more) and
-      // every API route shares this pool: five slow chart reads used to take all
-      // five connections and every other request (even /api/db/health's SELECT 1)
-      // queued behind them.
+      // 2026-10-06: 5 → 10. Every API route shares this pool: five slow chart
+      // reads used to take all five connections and every other request (even
+      // /api/db/health's SELECT 1) queued behind them. Render Postgres allows 103
+      // connections; 38 were in use across every service when this was raised.
       max: 10,
       idleTimeoutMillis: 3e4,
       // hold idle conns 30s, not pg's 10s default → less connect churn

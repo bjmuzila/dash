@@ -17,9 +17,9 @@
  * which Postgres keeps maintaining on every write but never reads. Each index
  * is checked for that first and dropped before it is built again.
  *
- * Also creates the pg_stat_statements extension when the server has it
- * preloaded (shared_preload_libraries), so the top queries by total time can
- * be read. Without the preload this is a no-op with one log line.
+ * Also creates the pg_stat_statements extension (Render's Postgres preloads it)
+ * so the top queries by total time can be read. If it is not available this is
+ * a no-op with one log line.
  */
 
 const START_DELAY_MS = 120_000;
@@ -51,11 +51,12 @@ async function run() {
     await client.query(`SET statement_timeout = 0`);
     await client.query(`SET lock_timeout = '10s'`);
 
+    // The database is Render's managed Postgres: the app role may not read
+    // shared_preload_libraries, so whether the view works is the test.
     try {
       await client.query(`CREATE EXTENSION IF NOT EXISTS pg_stat_statements`);
-      const { rows } = await client.query(`SELECT current_setting('shared_preload_libraries', true) AS libs`);
-      const on = /pg_stat_statements/.test(String(rows[0]?.libs || ''));
-      console.log(`[perf-indexes] pg_stat_statements ${on ? 'on' : 'installed but NOT preloaded (add it to shared_preload_libraries and restart Postgres)'}`);
+      await client.query(`SELECT 1 FROM pg_stat_statements LIMIT 1`);
+      console.log('[perf-indexes] pg_stat_statements on');
     } catch (e) {
       console.warn('[perf-indexes] pg_stat_statements unavailable:', e.message);
     }
