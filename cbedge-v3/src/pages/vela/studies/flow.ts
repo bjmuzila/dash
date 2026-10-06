@@ -34,7 +34,7 @@ import type { PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
 import { DAY_MS, barAt, bool, studyImpl, etDateKey, etWallMs, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
 import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_EXP, WH_MIN, WH_OPACITY_DEF, WH_SIDE } from './index'
-import { WhaleLayer, type Tone, type WhaleBubble, type WhalePayload } from './whaleLayer'
+import { WhaleLayer, type Tone, type WhaleBubble, type WhaleContext, type WhaleCtxLine, type WhalePayload } from './whaleLayer'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
 import { loadBasis } from '@/pages/vela/wallsIndicator'
 
@@ -371,7 +371,60 @@ function expOk(r: WhRow, exp: WhS['exp']): boolean {
   return dte >= 0 && dte <= Math.max(0, 5 - wd)
 }
 
-function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: number, tone: Tone, head: string, s: WhS, priceLabel: string): WhaleBubble {
+/** `4.6%` out of the money (a negative distance is in the money), from the underlying's price then. */
+function moneyness(r: WhRow): { k: string; v: string } | null {
+  if (r.strike == null || r.spot == null || !(r.spot > 0) || !r.type) return null
+  const d = r.type === 'C' ? (r.strike - r.spot) / r.spot : (r.spot - r.strike) / r.spot
+  return { k: d >= 0 ? 'OTM' : 'ITM', v: `${Math.abs(d * 100).toFixed(1)}%` }
+}
+
+/** `Put sold · bullish` — the contract, what was done with it, what that leans. */
+function printTitle(r: WhRow): string {
+  const kind = r.type === 'C' ? 'Call' : r.type === 'P' ? 'Put' : 'Option'
+  const verb = r.action === 'BUY' ? ' bought' : r.action === 'SELL' ? ' sold' : ''
+  const b = biasOf(r)
+  return `${kind}${verb} · ${b > 0 ? 'bullish' : b < 0 ? 'bearish' : 'side unknown'}`
+}
+
+/** W3's body for one bubble (whaleLayer.ts draws it). */
+function contextOf(rows: WhRow[], tone: Tone, priceLabel: string, lean: number | null, rank: number, day: string): WhaleContext {
+  const sorted = rows.slice().sort((a, z) => z.premium - a.premium)
+  const today = day === etDateKey(Date.now())
+  const rankText = `#${rank} ${today ? 'today' : 'that day'}`
+  if (rows.length === 1) {
+    const r = rows[0]!
+    const dte = dteOf(r)
+    const m = moneyness(r)
+    const cells: { k: string; v: string }[] = [
+      { k: 'STRIKE', v: strikeText(r.strike) || '—' },
+      { k: 'EXPIRY', v: expiryText(r.expiry, day) || '—' },
+      { k: 'DTE', v: dte == null ? '—' : String(dte) },
+      m ?? { k: 'OTM', v: '—' },
+      { k: 'SIZE', v: r.size == null ? '—' : Math.round(r.size).toLocaleString('en-US') },
+      { k: 'PRICE', v: r.price == null ? '—' : r.price.toFixed(2) },
+      { k: 'SPOT', v: r.spot == null ? '—' : r.spot.toFixed(2) },
+      { k: 'TIME', v: TIME_FMT.format(r.ts) },
+    ]
+    return { title: printTitle(r), lean, cells, lines: [], foot: DAY_FMT.format(r.ts), rank: rankText }
+  }
+  const side = tone === 'up' ? 'bullish' : tone === 'down' ? 'bearish' : 'side unknown'
+  const lines = sorted.slice(0, CARD_ROWS).map((r): WhaleCtxLine => {
+    const b = biasOf(r)
+    const glyph = r.action === 'BUY' ? '▲' : r.action === 'SELL' ? '▼' : '•'
+    const exp = expiryText(r.expiry, day)
+    const dte = dteOf(r)
+    return {
+      text: `${glyph} ${[strikeText(r.strike), r.type ?? ''].filter(Boolean).join(' ')}${exp ? ` · ${exp}` : ''}`,
+      dte: dte == null ? '' : `${dte} DTE`,
+      amount: short(r.premium),
+      tone: b > 0 ? 'up' : b < 0 ? 'down' : 'mid',
+    }
+  })
+  const span = whenText(rows).split(' · ').slice(1).join(' · ')
+  return { title: `${rows.length} prints · ${side}`, lean, cells: [], lines, foot: `${span} · ${priceLabel}`, rank: rankText }
+}
+
+function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: number, tone: Tone, head: string, s: WhS, priceLabel: string, ctx: WhaleContext): WhaleBubble {
   const sorted = rows.slice().sort((a, z) => z.premium - a.premium)
   const sign = tone === 'up' ? '+' : tone === 'down' ? '−' : ''
   const n = rows.length
@@ -391,6 +444,7 @@ function bubbleOf(id: string, t: number, price: number, rows: WhRow[], amount: n
         return { text: printLine(r), amount: short(r.premium), tone: b > 0 ? 'up' : b < 0 ? 'down' : 'mid' }
       }),
       more: Math.max(0, n - CARD_ROWS),
+      ctx,
     },
   }
 }
@@ -428,6 +482,33 @@ function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
     if (g) g.push(r)
     else groups.set(key, [r])
   }
+  // Each day's bubbles, for the card's context: where this one RANKS that day by
+  // premium, and the day's LEAN — the bullish share of the day's whale premium
+  // (bullish + bearish, side-unknown left out) from the first print to this one
+  const byDay = new Map<string, { key: string; total: number; ts: number; bias: number }[]>()
+  for (const [key, g] of groups) {
+    const total = g.reduce((t, r) => t + r.premium, 0)
+    const ts = g.reduce((t, r) => t + r.ts * r.premium, 0) / total
+    const day = etDateKey(ts)
+    const list = byDay.get(day) ?? []
+    list.push({ key, total, ts, bias: biasOf(g[0]!) })
+    byDay.set(day, list)
+  }
+  const rankOf = new Map<string, number>()
+  const leanOf = new Map<string, number | null>()
+  for (const list of byDay.values()) {
+    list
+      .slice()
+      .sort((a, z) => z.total - a.total)
+      .forEach((x, k) => rankOf.set(x.key, k + 1))
+    let bull = 0
+    let bear = 0
+    for (const x of list.slice().sort((a, z) => a.ts - z.ts)) {
+      if (x.bias > 0) bull += x.total
+      else if (x.bias < 0) bear += x.total
+      leanOf.set(x.key, bull + bear > 0 ? bull / (bull + bear) : null)
+    }
+  }
   const out: WhaleBubble[] = []
   for (const [key, g] of groups) {
     const total = g.reduce((t, r) => t + r.premium, 0)
@@ -451,7 +532,8 @@ function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
     }
     const tone: Tone = bias > 0 ? 'up' : bias < 0 ? 'down' : 'mid'
     const head = bias > 0 ? 'Bullish' : bias < 0 ? 'Bearish' : 'Side unknown'
-    out.push(bubbleOf(key, ts, price, g, total, tone, head, s, label))
+    const ctx = contextOf(g, tone, label, leanOf.get(key) ?? null, rankOf.get(key) ?? 1, etDateKey(ts))
+    out.push(bubbleOf(key, ts, price, g, total, tone, head, s, label, ctx))
   }
   // the biggest few hundred, when a long window holds more
   return out.sort((a, b) => b.r - a.r).slice(0, 400)

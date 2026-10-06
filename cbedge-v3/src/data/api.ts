@@ -226,6 +226,17 @@ export function clearQueryCache(): void {
   cache.clear()
 }
 
+/**
+ * Drop the cached responses whose URL passes `test`, so their next read goes to
+ * the network. A request still in flight is left alone (it is already fresh).
+ * Nothing refetches by itself: the caller reads again.
+ */
+export function forgetQueries(test: (url: string) => boolean): void {
+  for (const [url, hit] of Array.from(cache.entries())) {
+    if (!hit.inflight && test(url)) cache.delete(url)
+  }
+}
+
 // ── Manual revalidation ──────────────────────────────────────────────────────
 //
 // Every MOUNTED useQuery registers a refetch here. `refreshAll()` empties the

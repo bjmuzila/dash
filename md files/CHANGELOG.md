@@ -26855,3 +26855,27 @@ Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the lef
   - Net Premium reads are shared per URL across charts and refreshes.
   - A failed past session waits 60 s before it is asked for again.
 - **Server: one Net Premium query per key at a time** (`server-v2/server-with-proxy.js`, approved proxy change): `getNetPremBins` now shares a single in-flight PostgreSQL query between identical `/proxy/flow-netprem` requests instead of starting one per request. The uncached body is now `getNetPremBinsOnce`.
+
+## 2026-10-06 — Vela ↻ now refreshes only the candles
+
+- `cbedge-v3/src/pages/vela/refreshChart.ts`: ↻ re-reads the candles of the chart in focus and nothing else. It drops the cached candle-history responses (`/api/snapshots/candles`, `/api/snapshots/etf-candles`), then runs that chart's `healGap` from its newest bar.
+  - No socket reconnect, no `refreshAll`, and no study restart.
+  - The other charts in the layout are left alone, and Shift+click no longer reloads the page.
+  - The toast reads "Candles refreshed".
+- `cbedge-v3/src/data/api.ts`: new `forgetQueries(test)` drops the cached responses whose URL matches. Requests still in flight are left alone.
+
+## 2026-10-06 — Whale Prints hover: W3 context card
+
+Brandon picked W3 from `generated/2026-10-06-vela-whale-pop-r1.html`.
+
+- `studies/whaleLayer.ts`:
+  - The hover card now draws the context card when the bubble carries `card.ctx`. The card shows:
+    - The title (`Put sold · bullish` / `3 prints · bearish`) and the net.
+    - A lean bar, "TAPE THAT DAY · N% BULL". It shows the bullish share of that day's whale premium up to this bubble: red is the bearish share from the left, green the bullish share.
+    - For one print, a STRIKE / EXPIRY / DTE / OTM (or ITM) / SIZE / PRICE / SPOT / TIME grid.
+    - For a cluster, a list of its prints: ▲ bought / ▼ sold, contract, DTE and premium.
+    - A footer with the date (or the time span and price) and a rank pill (`#3 today`, or `#3 that day` for an earlier day).
+  - Cards without `ctx` (the journal markers) keep the old layout.
+- `studies/flow.ts`: `whaleBubbles` works out each day's rank by premium and the running lean, and `contextOf` builds the card body.
+- `vela.css`: new `.cb-wh-cx` styles, all tokens. check-theme is clean.
+- Preview: `generated/2026-10-06-vela-whale-w3-preview.png`.

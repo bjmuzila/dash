@@ -8,8 +8,18 @@
 //     underlying's price then — green bullish, red bearish, grey side unknown.
 //     Pieces of one order (same minute, same side) are one bubble
 //   ● the premium written inside when it fits ("Premium in the bubble")
-//   ● hover: a small card — the side and net, when, and one line per print
-//     ("Bought 758 Call · Oct 5   $1.4M")
+//   ● hover: the CONTEXT CARD (W3, picked 2026-10-06 from the whale pop-up
+//     mockup, generated/2026-10-06-vela-whale-pop-r1.html) — what the print
+//     means, not just what it was:
+//       Put sold · bullish                       +$5.6M
+//       TAPE THAT DAY · 62% BULL   ▬▬▬▬▬▬▬▬▬|▬▬▬   (whale premium bullish, to here)
+//       STRIKE 736   EXPIRY Nov 20   DTE 46   OTM 4.6%
+//       SIZE 1,240   PRICE 45.20     SPOT 774.90   TIME 4:10 PM
+//       Mon, Oct 5                                 #3 today
+//     A cluster (one order in pieces) lists its prints instead of the grid:
+//     ▲ bought / ▼ sold, contract, DTE, premium; the footer has the time span and
+//     the underlying's price. Cards without `ctx` (the journal markers) keep the
+//     plain layout: side and net, when, one line per print.
 //   ● click: nothing. A bubble does not leave the chart (Brandon, 2026-10-04:
 //     it used to open the print on the Whales page); the card is the detail.
 //
@@ -39,6 +49,32 @@ export interface WhaleCardRow {
   tone: Tone
 }
 
+/** One print in a cluster's list (the context card). */
+export interface WhaleCtxLine {
+  /** `▲ 765 P · Oct 9` */
+  text: string
+  /** `3 DTE` ('' when unknown) */
+  dte: string
+  amount: string
+  tone: Tone
+}
+
+/** The context card's body (W3). */
+export interface WhaleContext {
+  /** `Put sold · bullish`, `3 prints · bearish` */
+  title: string
+  /** Bullish share of that day's whale premium up to this bubble, 0..1 (null = none). */
+  lean: number | null
+  /** One print: the label / value grid (STRIKE, EXPIRY, DTE, OTM, SIZE, PRICE, SPOT, TIME). */
+  cells: { k: string; v: string }[]
+  /** A cluster: its prints, biggest first. */
+  lines: WhaleCtxLine[]
+  /** Left of the footer: the date, or (a cluster) the time span and price. */
+  foot: string
+  /** Right of the footer: `#3 today`. */
+  rank: string
+}
+
 export interface WhaleBubble {
   id: string
   /** When it printed (ms) — the bubble's centre, placed inside its candle by time. */
@@ -50,7 +86,7 @@ export interface WhaleBubble {
   tone: Tone
   /** Written inside when it fits ('' = never). */
   label: string
-  card: { head: string; net: string; when: string; rows: WhaleCardRow[]; more: number }
+  card: { head: string; net: string; when: string; rows: WhaleCardRow[]; more: number; ctx?: WhaleContext }
 }
 
 export interface WhalePayload {
@@ -85,6 +121,46 @@ export interface CardItem {
   card: WhaleBubble['card']
 }
 
+function span(cls: string, text: string, tone?: Tone): HTMLSpanElement {
+  const e = document.createElement('span')
+  if (cls) e.className = cls
+  e.textContent = text
+  if (tone) e.dataset.tone = tone
+  return e
+}
+
+function div(cls: string, ...kids: Node[]): HTMLDivElement {
+  const e = document.createElement('div')
+  e.className = cls
+  e.append(...kids)
+  return e
+}
+
+/** W3's body: title and net, the lean bar, the grid (or the cluster's prints), the footer. */
+function contextCard(c: WhaleContext, net: string, more: number): HTMLElement[] {
+  const out: HTMLElement[] = [div('cb-wh-head', span('cb-wh-title', c.title), span('cb-wh-net', net))]
+  if (c.lean != null) {
+    const pct = Math.round(c.lean * 100)
+    const bar = div('cb-wh-lean')
+    // red (bearish share) from the left, green (bullish share) to the right; the
+    // marker sits where they meet, never flush on an end where it reads as the frame
+    bar.style.setProperty('--cb-wh-lean', `${Math.max(3, Math.min(97, 100 - pct))}%`)
+    bar.append(document.createElement('i'))
+    out.push(div('cb-wh-leanlbl', span('', 'TAPE THAT DAY'), span('', `${pct}% BULL`)), bar)
+  }
+  if (c.cells.length) {
+    out.push(div('cb-wh-grid', ...c.cells.map((x) => div('cb-wh-cell', span('cb-wh-k', x.k), span('cb-wh-v', x.v)))))
+  }
+  if (c.lines.length) {
+    const list = div('cb-wh-list')
+    for (const l of c.lines) list.append(span('cb-wh-lt', l.text), span('cb-wh-ld', l.dte), span('cb-wh-amt', l.amount, l.tone))
+    out.push(list)
+    if (more > 0) out.push(div('cb-wh-more', document.createTextNode(`+ ${more} more`)))
+  }
+  out.push(div('cb-wh-note', span('', c.foot), span('cb-wh-rank', c.rank)))
+  return out
+}
+
 /** The hover card — one per layer, fixed to the page, never takes the pointer. */
 export class HoverCard {
   private el: HTMLDivElement | null = null
@@ -103,9 +179,15 @@ export class HoverCard {
       document.body.appendChild(el)
       this.shown = ''
     }
-    if (this.shown !== b.id) {
+    if (this.shown !== b.id && b.card.ctx) {
       this.shown = b.id
       el.dataset.tone = b.tone
+      el.classList.add('cb-wh-cx')
+      el.replaceChildren(...contextCard(b.card.ctx, b.card.net, b.card.more))
+    } else if (this.shown !== b.id) {
+      this.shown = b.id
+      el.dataset.tone = b.tone
+      el.classList.remove('cb-wh-cx')
       const head = document.createElement('div')
       head.className = 'cb-wh-head'
       const side = document.createElement('span')
