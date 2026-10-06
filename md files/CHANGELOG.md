@@ -26717,3 +26717,15 @@ Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the lef
 
 - `cbedge-v3/src/pages/vela/replay/ReplayBar.tsx`: `TransportButton` takes an optional `className`; ◀ / ▶ get `cb-rp-step`, play/pause gets `cb-rp-play`.
 - `cbedge-v3/src/pages/vela/vela.css`: play is a size up everywhere (34×26px min, `--text-xs`). On a touch screen (`pointer: coarse`) ◀ / ▶ are 40×36px (`--text-sm`) and play is 56×44px (`--text-lg`), so it is easy to hit on the phone. Desktop ◀ / ▶ unchanged. Type sizes come from tokens only.
+
+## 2026-10-06 - Vela Voltick Path: bubbles stay almost connected at any zoom
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts`: zoomed in, the 6.5px radius cap left wide gaps between bubbles. Now a Volt bead is 94% of a bar wide zoomed out, easing smoothly to 84% zoomed in (`BEAD.pitchTight` → `pitchLoose`, between 5px and 30px bar spacing), so rows read almost joined at every zoom with a little give. The cap is now only a sanity limit at an extreme zoom (16px radius). Peers go from 82% to 90% of the Volt so their rows stay near-connected too. Strike crowding, the 1.6px floor, Bubble size % and the even column grid are unchanged. `tsc` strict is clean.
+
+## 2026-10-06 - Vela Voltick Path: zoomed out, beads space out instead of shrinking to dots
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts`: zoomed out, a bar narrower than a readable bead drew every bubble at the 1.6px floor (a dotted line). The floor is now 2.75px, and once a bar is too narrow for it the beads sit on every Nth bar (the same fixed clock grid for every level, so spacing stays even through a pan) and grow to fill that wider pitch, so a row still reads as a chain of near-touching beads (about 3.3–4.2px radius, ~0.5px apart). The default 6px bar still draws every candle. Strike crowding now caps the bar-pitch radius before the floor, and Bubble size % over 100 uses the same grid. `tsc` strict is clean.
+
+## 2026-10-06 - Vela Voltick Path: bead size bounded at every zoom, joined by a thin link
+
+- `cbedge-v3/src/pages/vela/vtPath/vtPathLayer.ts`: zoomed in, beads followed the bar width up to 16px radius ("half the chart"). They are now held between 2.75px and 7px radius (`BEAD.voltMax` 7), so they stay the same look at any zoom: zoomed out they space onto an even every-Nth-bar grid, zoomed in they stop growing. To keep a row reading as one chain when the bars are wider than the beads, a thin link in the row's colour (55% of the bead's alpha, 0.7× the radius thick) is drawn under the beads between neighbours on the same strike. It skips strike changes and data gaps, and only shows once the gap is over 1.5px. `tsc` strict is clean.

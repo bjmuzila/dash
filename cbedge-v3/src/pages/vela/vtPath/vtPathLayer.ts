@@ -43,13 +43,22 @@
 //     candles (thinPathLanes, which keeps run starts/ends and drops others), which
 //     drew overlapping coins and uneven holes. Here there is ONE radius for the
 //     whole chart, taken from the bar pitch, shrunk to fit neighbouring strikes,
-//     floored at BEAD.minPx, so every bubble grows and shrinks together and
+//     floored at BEAD.minPx (2.75px; zoomed out, beads move to every Nth bar and
+//     grow to fill that pitch rather than shrink to dots) and capped at
+//     BEAD.voltMax (7px) zoomed in, where a thin LINK joins neighbouring beads
+//     instead of the beads growing, so every bubble grows and shrinks together and
 //     neighbours never overlap. ALMOST CONNECTED AT ANY ZOOM (2026-10-06: "zoomed
 //     way in there's a lot of space in between … should stay almost connected no
 //     matter the zoom … a little give or take"): a bead is 94% of a bar wide
 //     zoomed out, easing to 84% zoomed in (BEAD.pitchTight → pitchLoose), and
 //     only an extreme zoom meets the BEAD.voltMax sanity cap; peers are 90% of
 //     the Volt so their rows read joined as well.
+//     GROWTH INSIDE THOSE BOUNDS (2026-10-06, "if GEX is increasing on the Volt I
+//     want it noticeable in the bubbles increasing"): the radius above is the FULL
+//     bead, a level's highest reading that session; each bead is drawn at 50–100%
+//     of it by where its (smoothed) reading sits between that day's low and high,
+//     so growing GEX swells the row visibly while no bead ever outgrows its bar
+//     or the zoom bounds (growthBySession, BEAD.grow*).
 //     Only when the floor or the Size setting makes a bead wider than its bar are
 //     candles skipped, and then on one fixed every-Nth-bar grid shared by every
 //     level, so the spacing stays even. The Volt stays a size up (BEAD.peer).
@@ -75,6 +84,8 @@ import {
   fadeBand,
   goldSpans,
   growthHeat,
+  pathSizes,
+  PATH_SIZE,
   ribbonHops,
   ribbonInk,
   ribbonRowFacts,
@@ -84,7 +95,9 @@ import {
   stretchEnd,
   strikeRuns,
   type BandQ,
+  type FillPt,
   type GoldSpan,
+  type PathPt,
   type PathRole,
   type RowFacts,
 } from './trailruns'
@@ -124,12 +137,24 @@ const BEAD = {
   bsTight: 5,
   /** bar spacing, px, at or above which the loose pitch holds */
   bsLoose: 30,
-  /** the Volt's largest radius, px — only a sanity cap for an extreme zoom */
-  voltMax: 16,
+  /** the Volt's largest radius, px: zoomed in, beads stop growing here (never "half the
+   *  chart") and the LINK below keeps a row joined across the wider bars */
+  voltMax: 7,
+  /** a link is drawn between two beads of a row once their gap passes this, px */
+  linkFromPx: 1.5,
+  /** GROWTH: the bead at its level's LOWEST reading that session, as a share of the
+   *  full (highest-reading) bead — the bead doubles as GEX goes from the day's low to its high */
+  growMin: 0.5,
+  /** growth curve (<1 shows early growth sooner) */
+  growCurve: 0.75,
+  /** readings averaged per bead, so growth reads as a swell and not as jitter */
+  growSmooth: 5,
+  /** the smallest any bead is drawn, px */
+  beadMinPx: 1.75,
   /** peer radius as a share of the Volt's (a peer row stays near-connected too) */
   peer: 0.9,
-  /** never smaller than this, px */
-  minPx: 1.6,
+  /** never smaller than this, px — zoomed out, a narrower bar spaces beads out instead */
+  minPx: 2.75,
   /** share of the pixel gap between neighbouring strikes two beads may fill */
   strikeFill: 0.9,
   /** how wide a bead may grow past its bar (1 = touching) before columns are skipped */
@@ -162,6 +187,49 @@ function nyParts(ms: number): { day: string; mins: number } {
   return { day: `${p.year}-${p.month}-${p.day}`, mins: h * 60 + Number(p.minute) }
 }
 
+const NY_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' })
+const GROW_SIZE = { ...PATH_SIZE, smooth: BEAD.growSmooth }
+
+/**
+ * GROWTH (2026-10-06, Brandon: "if GEX is increasing on the Volt I want it to be
+ * noticeable in the bubbles increasing"). Each reading's place, 0..1, between its
+ * level's lowest and highest GEX on its OWN session (0DTE GEX grows ~40× through a
+ * day, so one range across several sessions would pin every morning at the
+ * bottom), smoothed over BEAD.growSmooth readings — Voltick's pathSizes, run per
+ * session. `fill` is time-ordered, so each day's slice comes back in place.
+ */
+function growthBySession(fill: readonly FillPt[], pts: readonly PathPt[]): number[] {
+  const byHour = new Map<number, string>()
+  const dayOf = (t: number) => {
+    const h = Math.floor(t / 3600)
+    let d = byHour.get(h)
+    if (d == null) byHour.set(h, (d = NY_DAY.format(h * 3_600_000)))
+    return d
+  }
+  const ptsByDay = new Map<string, PathPt[]>()
+  for (const p of pts) {
+    const k = dayOf(p.t)
+    const list = ptsByDay.get(k)
+    if (list) list.push(p)
+    else ptsByDay.set(k, [p])
+  }
+  const out: number[] = []
+  for (let i = 0; i < fill.length; ) {
+    const k = dayOf(fill[i]!.t)
+    let j = i + 1
+    while (j < fill.length && dayOf(fill[j]!.t) === k) j++
+    for (const v of pathSizes(fill.slice(i, j), ptsByDay.get(k) ?? [], FLAT_SPAN, GROW_SIZE)) out.push(v)
+    i = j
+  }
+  return out
+}
+
+/** A 0..1 growth reading → the bead's share of the full bead. */
+const growFactor = (k: number | undefined) => {
+  const kk = Number.isFinite(k) ? Math.min(1, Math.max(0, k as number)) : 0.5
+  return BEAD.growMin + (1 - BEAD.growMin) * Math.pow(kk, BEAD.growCurve)
+}
+
 /** Voltick's boldness curve, pinned at 15% (the shipped default). */
 function boldOf(ci: number): { bold: (lo: number, mid: number, hi: number) => number; up: number } {
   const up = Math.max(0, (ci - 0.15) / 0.85)
@@ -183,6 +251,9 @@ interface Geo {
 // ── PATH (bubbles) ───────────────────────────────────────────────────────────
 
 class PathDraw {
+  /** each row's growth readings, once per data change */
+  private growMemo = new WeakMap<FillPt[], number[]>()
+
   draw(g: Geo, d: PathPayload): void {
     const { ctx, X, Y, width } = g
     const rows = d.rows
@@ -207,7 +278,6 @@ class PathDraw {
     // almost connected at every zoom and never overlap.
     const ease = Math.min(1, Math.max(0, (bs - BEAD.bsTight) / (BEAD.bsLoose - BEAD.bsTight)))
     const pitch = BEAD.pitchTight + (BEAD.pitchLoose - BEAD.pitchTight) * ease * ease * (3 - 2 * ease)
-    let rV = Math.min(BEAD.voltMax, (bs * pitch) / 2)
     // strike crowding: a Volt and a peer on neighbouring strikes still clear each other
     const usedP = [...new Set(list.flatMap((r) => r.fill.map((q) => q.p)))].sort((a, b) => a - b)
     let stepP = Infinity
@@ -216,37 +286,78 @@ class PathDraw {
       if (dd > 0 && dd < stepP) stepP = dd
     }
     const midP = usedP.length ? usedP[usedP.length >> 1]! : null
+    let rCrowd = Infinity
     if (midP != null && Number.isFinite(stepP)) {
       const gap = Math.abs(Y(midP + stepP) - Y(midP))
-      if (Number.isFinite(gap) && gap > 0) rV = Math.min(rV, (gap * BEAD.strikeFill) / (1 + BEAD.peer))
+      if (Number.isFinite(gap) && gap > 0) rCrowd = (gap * BEAD.strikeFill) / (1 + BEAD.peer)
     }
-    // the Size setting and Calm chart, then the readable floor
-    rV = Math.max(BEAD.minPx, rV * size * (quiet ? 0.8 : 1))
-    const rP = Math.max(BEAD.minPx, rV * BEAD.peer)
-    // Only when the floor or the Size setting makes a bead wider than its bar does
-    // the Path skip candles — and then on one fixed grid of columns (every Nth bar
-    // by the clock), the same for every level, so the spacing is even and a pan
-    // never reshuffles it.
-    const N = Math.max(1, Math.ceil((2 * rV) / (bs * BEAD.overlap) - 1e-6))
+    // the Size setting and Calm chart
+    const k = size * (quiet ? 0.8 : 1)
+    // ZOOMED OUT (2026-10-06: "zoomed out the bubbles get super small"): once a bar
+    // is too narrow for a BEAD.minPx bead, the beads sit on every Nth bar (one fixed
+    // grid by the clock, the same for every level, so the spacing is even and a pan
+    // never reshuffles it) and grow to fill that wider pitch — a row still reads as
+    // a chain of near-touching beads instead of a line of dots.
+    let N = 1
+    let rBase = Math.min(BEAD.voltMax, (bs * pitch) / 2, rCrowd)
+    if (((bs * pitch) / 2) * k < BEAD.minPx) {
+      N = Math.max(1, Math.ceil((2 * BEAD.minPx) / (bs * pitch * k) - 1e-6))
+      rBase = Math.min(BEAD.voltMax, (N * bs * pitch) / 2, Math.max(rCrowd, BEAD.minPx / k))
+    }
+    const rV = Math.max(BEAD.minPx, rBase * k)
+    // a Size setting over 100% can make a bead wider than its bar: then the same grid
+    if (N === 1) N = Math.max(1, Math.ceil((2 * rV) / (bs * BEAD.overlap) - 1e-6))
+    const rP = Math.max(BEAD.minPx * BEAD.peer, rV * BEAD.peer)
     const lw = Math.min(1.1, rV * 0.3)
     for (const r of list) {
       const lead = r.role === 'volt'
       const rad = lead ? rV : rP
-      const rIn = Math.max(0.5, rad - lw / 2)
-      const marks: Array<{ x: number; y: number }> = []
-      for (const q of r.fill) {
+      let grow = this.growMemo.get(r.fill)
+      if (!grow) {
+        grow = growthBySession(r.fill, r.pts)
+        this.growMemo.set(r.fill, grow)
+      }
+      // `rad` is the FULL bead (the level's highest reading that session); a bead is
+      // drawn at its growth share of it, so the bar pitch is never overrun
+      const marks: Array<{ x: number; y: number; t: number; p: number; r: number }> = []
+      for (let i = 0; i < r.fill.length; i++) {
+        const q = r.fill[i]!
         if (N > 1 && Math.round(q.t / barSec) % N !== 0) continue
         const x = X(q.t)
         if (!Number.isFinite(x) || x < -20 || x > width + 20) continue
         const y = Y(q.p)
         if (!Number.isFinite(y)) continue
-        marks.push({ x, y })
+        marks.push({ x, y, t: q.t, p: q.p, r: Math.max(BEAD.beadMinPx, rad * growFactor(grow[i])) })
       }
       if (!marks.length) continue
+      // THE LINK (2026-10-06, Brandon: zoomed in, beads must not grow to "half the
+      // chart", yet the row should still read joined). With beads capped at
+      // BEAD.voltMax, a wide bar leaves air between them; a thin bar of the row's
+      // colour, under the beads, joins two neighbours on the same strike. Only
+      // between consecutive candles of the grid — a strike change or a data gap
+      // stays open.
+      {
+        const join = N * barSec * 1.5
+        ctx.globalAlpha = alpha * 0.55
+        ctx.strokeStyle = lead ? hexA(VOLT_GOLD, 1) : hexA(tokenRgb(ROLE_TOKEN[r.role]), 1)
+        ctx.lineWidth = Math.max(1, rad * 0.45)
+        ctx.lineCap = 'butt'
+        ctx.beginPath()
+        let any = false
+        for (let i = 1; i < marks.length; i++) {
+          const a = marks[i - 1]!
+          const b = marks[i]!
+          if (a.p !== b.p || b.t - a.t > join || b.x - a.x - a.r - b.r <= BEAD.linkFromPx) continue
+          ctx.moveTo(a.x + a.r * 0.6, a.y)
+          ctx.lineTo(b.x - b.r * 0.6, b.y)
+          any = true
+        }
+        if (any) ctx.stroke()
+      }
       if (lead && !quiet) {
         ctx.globalAlpha = 1
-        const glow = rad * 1.6
         for (const m of marks) {
+          const glow = m.r * 1.6
           const gr = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, glow)
           gr.addColorStop(0, hexA(VOLT_GOLD, 0.22))
           gr.addColorStop(1, hexA(VOLT_GOLD, 0))
@@ -265,25 +376,28 @@ class PathDraw {
       for (const m of marks) {
         if (r.role === 'coil') {
           // the diamond's points reach the same outer radius as a bubble
-          const dd = Math.max(0.5, rad - lw * 0.7)
+          const dd = Math.max(0.5, m.r - lw * 0.7)
           ctx.moveTo(m.x, m.y - dd)
           ctx.lineTo(m.x + dd, m.y)
           ctx.lineTo(m.x, m.y + dd)
           ctx.lineTo(m.x - dd, m.y)
           ctx.closePath()
         } else {
+          const rIn = Math.max(0.5, m.r - lw / 2)
           ctx.moveTo(m.x + rIn, m.y)
           ctx.arc(m.x, m.y, rIn, 0, Math.PI * 2)
         }
       }
       ctx.fill()
       if (lw >= 0.4) ctx.stroke()
-      if (lead && !quiet && rIn >= 2) {
+      if (lead && !quiet) {
         // a small highlight, so the gold reads as a lit bead rather than a flat dot
         ctx.fillStyle = hexA(SHINE, 0.85)
         ctx.beginPath()
-        const hr = rIn * 0.34
         for (const m of marks) {
+          const rIn = m.r - lw / 2
+          if (rIn < 2) continue
+          const hr = rIn * 0.34
           ctx.moveTo(m.x - rIn * 0.3 + hr, m.y - rIn * 0.3)
           ctx.arc(m.x - rIn * 0.3, m.y - rIn * 0.3, hr, 0, Math.PI * 2)
         }
