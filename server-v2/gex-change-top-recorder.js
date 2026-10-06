@@ -769,20 +769,34 @@ async function pruneExpiredProbes(pool) {
 // Also enforces max ONE row per symbol (the best-scored strike for that ticker)
 // via DISTINCT ON, so a single ticker with several strikes qualifying can't
 // occupy more than one of the top-N slots.
+// ONE PASS, NOT ONE PROBE PER ROW (2026-10-06). `changes` used to JOIN LATERAL
+// a lookup of "the value WINDOW_MIN ago" for every snapshot of the last four
+// hours: hundreds of thousands of index probes, 17-18 s a scan, and the live
+// scan runs every LIVE_SEC (60 s), so it alone kept the database busy about a
+// third of the time. The same baseline is a window frame: last_value() over
+// everything up to WINDOW_MIN before this row is the newest snapshot at or
+// before ts − WINDOW_MIN, exactly what the LATERAL picked. The rows read reach
+// BASE_SLACK_MIN further back than the four hours plus the window, so a
+// baseline is found unless the strike was missing for longer than that
+// (the LATERAL could reach back to the open; such a row now has no change).
+const BASE_SLACK_MIN = 60;
 const SCAN_SQL = `
-  WITH changes AS (
-    SELECT sg.symbol, sg.expiry, sg.strike, sg.ts, sg.spot, sg.delta_pct, sg.gex_open,
-           (sg.gex_now - b.gex_now) AS chg
+  WITH base AS (
+    SELECT sg.symbol, sg.expiry, sg.strike, sg.ts, sg.spot, sg.delta_pct, sg.gex_open, sg.gex_now,
+           last_value(sg.gex_now) OVER (
+             PARTITION BY sg.symbol, sg.expiry, sg.strike
+             ORDER BY sg.ts
+             RANGE BETWEEN UNBOUNDED PRECEDING AND INTERVAL '${WINDOW_MIN} minutes' PRECEDING
+           ) AS base_now
     FROM strike_growth sg
-    JOIN LATERAL (
-      SELECT gex_now FROM strike_growth h
-      WHERE h.date = sg.date AND h.symbol = sg.symbol AND h.expiry = sg.expiry
-        AND h.strike = sg.strike AND h.ts <= sg.ts - INTERVAL '${WINDOW_MIN} minutes'
-      ORDER BY h.ts DESC LIMIT 1
-    ) b ON TRUE
     WHERE sg.date = $1 AND sg.symbol <> ALL($2)
       AND sg.symbol IN (SELECT symbol FROM strike_growth_watchlist WHERE active = TRUE)
-      AND sg.ts > (now() - INTERVAL '4 hours')
+      AND sg.ts > (now() - INTERVAL '4 hours' - INTERVAL '${WINDOW_MIN + BASE_SLACK_MIN} minutes')
+  ),
+  changes AS (
+    SELECT symbol, expiry, strike, ts, spot, delta_pct, gex_open, (gex_now - base_now) AS chg
+    FROM base
+    WHERE ts > (now() - INTERVAL '4 hours') AND base_now IS NOT NULL
   ),
   stats AS (
     SELECT symbol, expiry, strike,

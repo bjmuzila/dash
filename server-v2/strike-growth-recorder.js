@@ -138,6 +138,9 @@ const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 3);
 // past ~200 names, lower this again or raise SWEEP_MINS; do not let the sweep
 // outrun its own interval.
 const TICKER_DELAY_MS = Number(process.env.STRIKE_GROWTH_TICKER_DELAY_MS || 250);
+/** The day-over-day rollup's cadence (see runSweep). */
+const DOD_EVERY_MIN = Math.max(1, Number(process.env.STRIKE_GROWTH_DOD_EVERY_MIN || 10));
+let _lastDodAt = 0;
 // Hard cap on active tickers per sweep, belt-and-suspenders vs a runaway roster.
 const MAX_ACTIVE = Number(process.env.STRIKE_GROWTH_MAX_ACTIVE || 600);
 
@@ -547,19 +550,35 @@ async function getActiveSymbols(p, onlyHot = false) {
 async function writeSnapshot(p, date, symbol, expiry, spot, ts, rows) {
   // rows: [{ strike, gex (OI+Vol now), open (OI-only baseline) }].
   // delta = today's volume contribution on top of carried-over OI positioning.
-  for (const { strike, gex, open } of rows) {
+  //
+  // ONE STATEMENT PER (symbol, expiry) (2026-10-06). One INSERT per strike was
+  // 37 million round trips in pg_stat_statements — the single biggest write load
+  // on the database. Same rows and the same upsert, sent as arrays and unnested.
+  // A strike listed twice keeps its last entry (a statement may not upsert the
+  // same key twice).
+  const byStrike = new Map();
+  for (const r of rows) if (Number.isFinite(Number(r.strike))) byStrike.set(Number(r.strike), r);
+  if (!byStrike.size) return;
+  const strikes = [], now = [], opens = [], dAbs = [], dPct = [];
+  for (const [strike, { gex, open }] of byStrike) {
     const deltaAbs = gex - open;
-    const deltaPct = Math.abs(open) > 1 ? (deltaAbs / Math.abs(open)) * 100 : null;
-    await p.query(
-      `INSERT INTO strike_growth
-         (date, symbol, strike, expiry, opt_type, gex_now, gex_open, delta_abs, delta_pct, spot, ts)
-       VALUES ($1,$2,$3,$4,'NET',$5,$6,$7,$8,$9,$10)
-       ON CONFLICT (date, symbol, strike, expiry, ts) DO UPDATE SET
-         gex_now = EXCLUDED.gex_now, delta_abs = EXCLUDED.delta_abs,
-         delta_pct = EXCLUDED.delta_pct, spot = EXCLUDED.spot`,
-      [date, symbol, strike, expiry, gex, open, deltaAbs, deltaPct, spot, ts]
-    );
+    strikes.push(strike);
+    now.push(gex);
+    opens.push(open);
+    dAbs.push(deltaAbs);
+    dPct.push(Math.abs(open) > 1 ? (deltaAbs / Math.abs(open)) * 100 : null);
   }
+  await p.query(
+    `INSERT INTO strike_growth
+       (date, symbol, strike, expiry, opt_type, gex_now, gex_open, delta_abs, delta_pct, spot, ts)
+     SELECT $1, $2, u.strike, $3, 'NET', u.gex_now, u.gex_open, u.delta_abs, u.delta_pct, $4, $5
+       FROM unnest($6::float8[], $7::float8[], $8::float8[], $9::float8[], $10::float8[])
+            AS u(strike, gex_now, gex_open, delta_abs, delta_pct)
+     ON CONFLICT (date, symbol, strike, expiry, ts) DO UPDATE SET
+       gex_now = EXCLUDED.gex_now, delta_abs = EXCLUDED.delta_abs,
+       delta_pct = EXCLUDED.delta_pct, spot = EXCLUDED.spot`,
+    [date, symbol, expiry, spot, ts, strikes, now, opens, dAbs, dPct]
+  );
 }
 
 /** One row per (date, symbol, expiry, sweep): the full-window call/put split. */
@@ -697,9 +716,17 @@ async function runSweep(opts = {}) {
   console.log(`[strike-growth] sweep done — ${done.length} ok, ${failed.length} failed, ${stale} stale-spot`);
 
   // Day-over-day rollup: recompute the biggest overnight→now mover per symbol
-  // from the rows just written, keep the intraday peak. Cheap SQL, best-effort.
-  try { await rollupDayOverDay(p, date); }
-  catch (e) { console.warn('[strike-growth/dod]', e.message); }
+  // from the rows just written, keep the intraday peak. Best-effort.
+  //
+  // EVERY DOD_EVERY_MIN, NOT EVERY SWEEP (2026-10-06). It re-reads the whole of
+  // today's and the last session's strike_growth (millions of rows) and ran
+  // after every 1-minute sweep: about 19 s each, in pg_stat_statements' top ten.
+  // The peak it keeps is now sampled every DOD_EVERY_MIN minutes.
+  if (onlyHot === false && Date.now() - _lastDodAt >= DOD_EVERY_MIN * 60_000) {
+    _lastDodAt = Date.now();
+    try { await rollupDayOverDay(p, date); }
+    catch (e) { console.warn('[strike-growth/dod]', e.message); }
+  }
 
   return { date, ok: done.length, failed: failed.length, staleSpot: stale, failures: failed.slice(0, 10) };
 }

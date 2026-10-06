@@ -1005,10 +1005,22 @@ async function handleGexHistory(req, res) {
   const date = todayYmdET();
   const now = Date.now();
   const baselines = {};
+  // The underlying (2026-10-06). The table is multi-symbol and this read had no
+  // symbol, so it could not use any index (they all lead with `symbol`) and
+  // mixed SPY / QQQ strikes into SPX's: pg_stat_statements' #6 (2.4 s × 30k).
+  const rawSym = (searchParams.get('symbol') || '$SPX').trim().toUpperCase();
+  const symbol = rawSym === 'SPX' ? '$SPX' : rawSym;
 
-  // For each age, pick — per strike — the row whose timestamp is closest to
-  // (now − age minutes). DISTINCT ON keeps one row per strike, ordered by
-  // proximity to the target time.
+  // One answer per minute per (symbol, expiry, basis, ages), shared by every
+  // caller: the baselines are minutes old by definition.
+  const key = `${symbol}|${expiry}|${basis}|${ages.join(',')}|${Math.floor(now / 60_000)}`;
+  const hit = _gexHistoryCache.get(key);
+  if (hit) return sendJson(res, 200, hit);
+
+  // For each age, pick — per strike — the newest row at or before
+  // (now − age minutes): the same row as "closest to the target" among rows
+  // at or before it, ordered the way idx_osgh_symbol_lookup
+  // (symbol, date, expiry, strike, timestamp DESC) already is.
   // COALESCE(...) is never NULL, so the composite basis must null-guard on the
   // underlying net_gex column instead of the expression.
   const nullGuard = basis === 'oivol' ? 'net_gex' : col;
@@ -1017,9 +1029,9 @@ async function handleGexHistory(req, res) {
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (strike) strike, ${col} AS val
          FROM option_strike_gex_history
-        WHERE date = $1 AND expiry = $2 AND timestamp <= $3 AND ${nullGuard} IS NOT NULL
-        ORDER BY strike, ABS(timestamp - $4) ASC`,
-      [date, expiry, target, target]
+        WHERE symbol = $1 AND date = $2 AND expiry = $3 AND timestamp <= $4 AND ${nullGuard} IS NOT NULL
+        ORDER BY strike, timestamp DESC`,
+      [symbol, date, expiry, target]
     );
     for (const r of rows) {
       const strike = Number(r.strike);
@@ -1029,8 +1041,12 @@ async function handleGexHistory(req, res) {
     }
   }
 
-  sendJson(res, 200, { mode: 'point', basis, ages, baselines });
+  const payload = { mode: 'point', basis, ages, baselines };
+  if (_gexHistoryCache.size > 100) _gexHistoryCache.clear();
+  _gexHistoryCache.set(key, payload);
+  sendJson(res, 200, payload);
 }
+const _gexHistoryCache = new Map(); // key (includes the minute) -> payload
 
 // ── /proxy/flow-history ────────────────────────────────────────────────────
 // Returns persisted flow prints for a date (default today ET), shaped as the

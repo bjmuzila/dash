@@ -7720,6 +7720,8 @@ if (libDb) {
   // (enforceAuth 'subscriber' honors the x-internal-token bypass first).
   {
     const HEATMAP_TTL_MS = 30_000;
+    /** Today's heatmap is rebuilt in full this often; between, only new minutes are read. */
+    const HEATMAP_FULL_MS = 10 * 60_000;
     const heatmapCache = new Map(); // module-level within this route's closure
     register('/api/snapshots/option-strike-gex-history', {
       auth: 'subscriber', methods: ['GET', 'POST'],
@@ -7829,29 +7831,8 @@ if (libDb) {
             // the expiry with the most of it. One extra aggregate on the
             // date path, inside the same 30s cache entry, and the slots query
             // still runs exactly once.
-            let usedExpiry = expiry;
-            let didFallback = false;
-            // What the recorder holds for this date either way — so an empty
-            // answer can say WHICH empty it is instead of leaving the caller to
-            // guess between "wrong expiry" and "recorder never ran".
-            let recordedExpiries = [];
-            if (expiryFallback) {
-              const recorded = await libDb.getGexHistoryExpiriesForDate(date, symbol);
-              recordedExpiries = recorded.map((r) => r.expiry);
-              const asked = recorded.find((r) => r.expiry === expiry);
-              if (!asked || asked.rthRows === 0) {
-                const pick = recorded.find((r) => r.rthRows > 0);
-                if (pick) {
-                  usedExpiry = pick.expiry;
-                  didFallback = pick.expiry !== expiry;
-                }
-              }
-            }
-            const slots = winMin > 0
-              ? anyExpiry
-                ? await libDb.getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000, symbol)
-                : await libDb.getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry, symbol)
-              : await libDb.getOptionStrikeGexSlots(date, usedExpiry, symbol);
+            /** Slot rows → the response's columns (each column on its own: a slot never reads another). */
+            const buildColumns = (slots) => {
             const bySlot = new Map();
             const spotBySlot = new Map();
             for (const r of slots) {
@@ -7863,7 +7844,7 @@ if (libDb) {
               const spot = Number(r.spot ?? 0);
               if (spot > 0 && !spotBySlot.has(r.slot_ts)) spotBySlot.set(r.slot_ts, spot);
             }
-            const columns = [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([slotTs, cells]) => {
+            return [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([slotTs, cells]) => {
               // max / top3 are computed from the FULL ladder, BEFORE any
               // truncation, so the client's color ramp and radius scale are
               // identical whether or not ?top was used.
@@ -7921,6 +7902,47 @@ if (libDb) {
                 : cells;
               return { slotTs, cells: out, max, top3, spot, flip, flipVol };
             });
+            };
+            // TODAY, INCREMENTALLY (2026-10-06). A whole session re-read every
+            // 30 s was pg_stat_statements' #7. When this key was built in full in
+            // the last HEATMAP_FULL_MS, only the minutes since its newest column
+            // (less one, which may have been partial) are read and merged on;
+            // a full rebuild still runs every HEATMAP_FULL_MS.
+            if (winMin === 0 && !anyExpiry && date === todayET() && cached?.payload?.columns?.length
+                && Date.now() - (cached.fullAt || 0) < HEATMAP_FULL_MS) {
+              const prevCols = cached.payload.columns;
+              const since = prevCols[prevCols.length - 1].slotTs - 60_000;
+              const fresh = await libDb.getOptionStrikeGexSlotsSince(date, cached.payload.expiry, symbol, since);
+              const columns = [...prevCols.filter((c) => c.slotTs < since), ...buildColumns(fresh)];
+              const payload = { ...cached.payload, columns };
+              heatmapCache.set(cacheKey, { at: Date.now(), fullAt: cached.fullAt, payload });
+              send(res, 200, payload);
+              return;
+            }
+            let usedExpiry = expiry;
+            let didFallback = false;
+            // What the recorder holds for this date either way — so an empty
+            // answer can say WHICH empty it is instead of leaving the caller to
+            // guess between "wrong expiry" and "recorder never ran".
+            let recordedExpiries = [];
+            if (expiryFallback) {
+              const recorded = await libDb.getGexHistoryExpiriesForDate(date, symbol);
+              recordedExpiries = recorded.map((r) => r.expiry);
+              const asked = recorded.find((r) => r.expiry === expiry);
+              if (!asked || asked.rthRows === 0) {
+                const pick = recorded.find((r) => r.rthRows > 0);
+                if (pick) {
+                  usedExpiry = pick.expiry;
+                  didFallback = pick.expiry !== expiry;
+                }
+              }
+            }
+            const slots = winMin > 0
+              ? anyExpiry
+                ? await libDb.getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000, symbol)
+                : await libDb.getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry, symbol)
+              : await libDb.getOptionStrikeGexSlots(date, usedExpiry, symbol);
+            const columns = buildColumns(slots);
             const payload = {
               mode: 'heatmap', symbol, columns,
               expiry: usedExpiry,
@@ -7931,7 +7953,7 @@ if (libDb) {
             if (heatmapCache.size > 200) {
               for (const [k, v] of heatmapCache) if (Date.now() - v.at > HEATMAP_TTL_MS) heatmapCache.delete(k);
             }
-            heatmapCache.set(cacheKey, { at: Date.now(), payload });
+            heatmapCache.set(cacheKey, { at: Date.now(), fullAt: Date.now(), payload });
             send(res, 200, payload);
             return;
           }

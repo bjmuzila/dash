@@ -117,6 +117,7 @@ __export(db_exports, {
   getOptionStrikeGexSlots: () => getOptionStrikeGexSlots,
   getOptionStrikeGexSlotsWindow: () => getOptionStrikeGexSlotsWindow,
   getOptionStrikeGexSlotsWindowAny: () => getOptionStrikeGexSlotsWindowAny,
+  getOptionStrikeGexSlotsSince: () => getOptionStrikeGexSlotsSince,
   getOptionStrikeNetGexAsOf: () => getOptionStrikeNetGexAsOf,
   getOptionStrikeNetGexAsOfOrNearest: () => getOptionStrikeNetGexAsOfOrNearest,
   getOptionStrikeNetGexAtOpen: () => getOptionStrikeNetGexAtOpen,
@@ -4992,6 +4993,37 @@ async function getOptionStrikeGexSlots(date, expiry, symbol) {
     // SPX spot AT THE TIME OF THE SNAPSHOT. The ES-Candles heatmap needs this to
     // rebuild the historical ES−SPX basis per column (basis drifts with carry/
     // divs and steps at the futures roll — one live basis mis-places old cells).
+    spot: Number(row.spot ?? 0)
+  }));
+}
+/**
+ * One session's slots from `sinceTs` on (2026-10-06): the heatmap route's
+ * incremental read for TODAY. Re-reading the whole session every 30 s was
+ * pg_stat_statements' #7 (1.6 s × 38k calls); the new minutes are a range on
+ * idx_osgh_symbol_snap (symbol, date, expiry, timestamp).
+ */
+async function getOptionStrikeGexSlotsSince(date, expiry, symbol, sinceTs) {
+  const pool = await getDb();
+  const result = await pool.query(
+    `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
+            (FLOOR(timestamp / 60000) * 60000)::bigint AS slot_ts,
+            strike,
+            net_gex,
+            net_vol_gex,
+            spot
+       FROM option_strike_gex_history
+      WHERE date = $1
+        AND expiry = $2
+        AND symbol = $3
+        AND timestamp >= $4
+      ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
+    [date, expiry, normGexSymbol(symbol), sinceTs]
+  );
+  return result.rows.map((row) => ({
+    slot_ts: Number(row.slot_ts ?? 0),
+    strike: Number(row.strike ?? 0),
+    net_gex: Number(row.net_gex ?? 0),
+    net_vol_gex: Number(row.net_vol_gex ?? 0),
     spot: Number(row.spot ?? 0)
   }));
 }

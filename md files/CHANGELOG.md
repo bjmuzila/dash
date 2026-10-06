@@ -26952,3 +26952,30 @@ With two (or three) stacked charts on the phone, an open legend card ran past it
 - Checked from the dashboard container: `DATABASE_URL` points at Render's managed Postgres 18.4 (virginia-postgres.render.com). `max_connections` is 103 and 38 were in use, so the larger pools (main 10, chart reads 4) fit.
 - `server-v2/state/perf-indexes.js`: the pg_stat_statements check no longer reads `shared_preload_libraries`, which the app role may not read on Render. It creates the extension and tests the view instead.
 - `server-v2/_lib-db.cjs`: the pool comment now says Render rather than "same VPS".
+
+## 2026-10-06 - Voltick admin: report PDF uploads on Bzila › Reports
+
+- `Voltick-engine/server/reportfiles.js` (new): a `report_files` table in the engine's database (so it rides the nightly backup) for the weekly and monthly report PDFs. PDFs only (checked by the bytes), 8 MB each, weekly = the Monday of the week, monthly = the month, same file twice stored once, names cleaned, only the uploader deletes (the owner for a deleted admin's file).
+- `server.js`: `GET/POST /api/admin/report-files`, `GET/DELETE /api/admin/report-files/:id` (every admin; writes behind consoleWriteRefused; upload as JSON base64 with its own parser ahead of the 100 KB global one; downloads as a sandboxed attachment). `adminaudit.js`: content rows for upload and delete (kind, period, size, never the name). `account-delete.js`: DETACH `report_files.by_id`. Test: `test/the-report-files-are-pdfs-every-admin-reads.test.js` (7 pass); audit sweep, account-delete, table-name and console tests pass.
+- `Voltick-admin/admin-site/admin.js`: a Report files card at the top of Bzila › Reports: Weekly/Monthly, date or month picker, choose or drop a PDF (checked for type and size before sending), Upload, and a sortable list with Open (new tab), download and delete for your own. README and NEW-ROUTES (section 15) updated. Merge the engine PR first.
+
+## 2026-10-06 — Round 2 from pg_stat_statements (Render Postgres, top 12 by total time)
+
+Measured: the old `watch_snapshots` DISTINCT ON was #1 (106,777s total, 5.7s avg; already fixed in the previous round, waiting on deploy). After it, the strike-growth family dominated: the scanner's LATERAL scan, 37M single-row inserts, and the day-over-day rollup.
+
+- `server-v2/gex-change-top-recorder.js` `SCAN_SQL` (#2 and #9: 17–18s avg, run by the 60s live scan and the 30-min leaderboard):
+  - The per-row `JOIN LATERAL` "value WINDOW_MIN ago" lookup is replaced by one window pass: `last_value() OVER (… RANGE BETWEEN UNBOUNDED PRECEDING AND WINDOW_MIN PRECEDING)`.
+  - Rows are read back to 4h + window + 60 min.
+  - Checked against a local Postgres on 326k synthetic rows with gaps: the results are identical (symbol, strike, change, z-score, score, n) and the query is 3–4x faster.
+- `server-v2/strike-growth-recorder.js`:
+  - `writeSnapshot` sends one `INSERT … SELECT FROM unnest(arrays)` per (symbol, expiry) instead of one INSERT per strike (#4, 37M calls). The upsert is unchanged; duplicate strikes are de-duplicated first. Tested on the local Postgres.
+  - `rollupDayOverDay` (#11, 18.9s) now runs every `STRIKE_GROWTH_DOD_EVERY_MIN` (default 10) on full sweeps instead of after every 1-minute sweep.
+- `server-v2/server-with-proxy.js` `/proxy/gex-history` (#6, 2.4s × 30k): it now filters on `symbol` (default `$SPX`, `?symbol=` accepted). The old query had none, so it used no index and mixed SPY/QQQ strikes into SPX. It orders `strike, timestamp DESC`, which matches `idx_osgh_symbol_lookup`, and caches one answer per minute per key.
+- `server-v2/api-router.js` heatmap (#7, 1.6s × 38k): today's ladder is now incremental.
+  - Within 10 minutes of a full build, only the minutes since the newest column (less one) are read via the new `getOptionStrikeGexSlotsSince`, and merged on.
+  - A full rebuild still runs every 10 minutes.
+  - The column builder is shared as `buildColumns`.
+- `server-v2/_lib-db.cjs`: new `getOptionStrikeGexSlotsSince(date, expiry, symbol, sinceTs)`.
+- Not changed:
+  - `flow_prints` INSERT (#3, 396ms avg): write cost of its 3 indexes on Render's disk.
+  - `/proxy/strike-growth/scanner`: it still uses the old LATERAL pattern; it only runs when that page is open.
