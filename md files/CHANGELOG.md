@@ -26807,3 +26807,14 @@ Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the lef
 - `server-v2/server-with-proxy.js` (/proxy/flow-netprem, approved by Brandon): a **past** session is read from the archive when the filter can be answered exactly (one ticker, 60s bins, Tasty tape, no side / type / size / expiry / DTE filter, a premium floor on a band edge, OTM on or off). That is the Vela Net Premium study's shape. Any other filter, today's session, or a day not archived yet takes the raw path as before. A missing archive table falls back silently.
 - `cbedge-v3/src/pages/vela/studies/flow.ts` + `index.ts`: Sessions now defaults to 7 (max 7, was 1 / 5). Each session's lines start at 0 on the 09:30 ET open; prints before the open are left out.
 - Note: the archive fills from the next cleanup run forward (00:05–00:40 ET weekdays). Days already purged before this ships can't be rebuilt, so the full 7 sessions show about a week and a half after deploy.
+
+## 2026-10-06 - Vela GEX Rail: one level icon per row
+
+- `cbedge-v3/src/pages/vela/studies/rail.ts`: a strike that carries two levels (e.g. Surge and Reversal on one row) now shows a single tag, the most important one: Volt > Reversal > Coil > Surge (`LEAD_ORDER`, the same priority as the bar / cell / line colour). This applies to all three styles (Rail, Heatmap, Profile).
+
+## 2026-10-06 - Vela Voltick Path: overnight bubbles line up with the GEX Rail (ES / NQ)
+
+- `cbedge-v3/src/pages/vela/studies/ladder.ts`: new `loadNextExpiryColumns(label, after, fresh)`. Every per-minute ladder column recorded under the NEXT expiry from a session's 16:00 close on, found the same way `loadRailLadder` finds the rail's after-close expiry.
+- `cbedge-v3/src/pages/vela/vtPath/vtPathData.ts`: overnight on a future, a candle now reads what the GEX Rail reads at that minute instead of the last session's closing walls. That is the newest next-expiry column by the candle's end, with Volt / Coil / Reversal by the Voltick definition on its OI + vol book (`vtFromLadder`), Surge as the biggest volume GEX (`voltickMarks`), and strikes moved by the rail's own basis (`shiftAt`). This is done for the nights after the two newest recorded sessions (the ladder's retention). An older night, or the minutes before a night's first column, keeps the closing walls. `WallModels` gains `nights` and `shiftAt`.
+- `cbedge-v3/src/pages/vela/vtPath/vtPathIndicator.ts`: on a future, the once-a-minute refresh keeps running outside 09:29–16:00, so the overnight path moves with the rail.
+- `tsc` strict is clean on `vtPathData.ts`.

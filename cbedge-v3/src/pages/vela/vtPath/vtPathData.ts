@@ -36,9 +36,12 @@
 //
 // ES / NQ draw SPX's / NDX's walls shifted by the session basis (buildDays,
 // shared with CB Walls); a session with no plausible basis draws nothing.
-// OVERNIGHT (2026-10-06): an ES / NQ candle outside 09:29–16:00 carries the walls
-// the last cash session closed on (framesFromWalls), so the path runs through
-// the night instead of stopping at 16:00.
+// OVERNIGHT (2026-10-06): an ES / NQ candle outside 09:29–16:00 reads what the
+// GEX Rail reads at that minute — the NEXT expiry's per-minute ladder recorded
+// after the close (studies/ladder.ts loadNextExpiryColumns), levels by the
+// Voltick definition, moved by the rail's basis — so the bubbles line up with
+// the rail. Where no ladder was recorded (an older night, a gap before the first
+// column) it carries the walls the last cash session closed on.
 //
 // ── Vol only: the open rides the OI + Vol walls (2026-10-05) ────────────────
 // The volume-only book has no open capture: at 09:29 nothing has traded, so the
@@ -54,6 +57,10 @@
 import type { OHLCV } from '@luxalgo/vela'
 import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { vtFromWalls } from '@/pages/levelLog/wallData'
+import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
+import type { GexColumn } from '@/board/gexCandles/gexHistory'
+import { voltickMarks, vtFromLadder } from '@/data/voltickLevels'
+import { columnAt, loadNextExpiryColumns } from '@/pages/vela/studies/ladder'
 import { resolveSym } from '@/pages/vela/cbedgeProvider'
 import {
   SESSION_FROM_MIN,
@@ -110,6 +117,14 @@ export interface WallModels {
   hasToday: boolean
   /** A future (ES / NQ): its overnight candles carry the cash session's last walls (header). */
   fut: boolean
+  /**
+   * A future's nights, by the ET session date they follow: the per-minute ladder
+   * columns recorded under the NEXT expiry after that close — what the GEX Rail
+   * reads overnight (studies/ladder.ts loadNextExpiryColumns).
+   */
+  nights?: Map<string, GexColumn[]>
+  /** The index → future shift at a time (the GEX Rail's own); null = no usable basis. */
+  shiftAt?: (ts: number) => number | null
 }
 
 export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: boolean): Promise<WallModels> {
@@ -129,12 +144,64 @@ export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: bo
   const openDays = onVol ? oivolDays : []
   const today = etDateKey(Date.now())
   const isToday = (d: DayModel) => d.date === today
-  return { main: mainDays, vol: volDays, open: openDays, hasToday: mainDays.some(isToday) || openDays.some(isToday), fut: !!sym.fut }
+  const out: WallModels = { main: mainDays, vol: volDays, open: openDays, hasToday: mainDays.some(isToday) || openDays.some(isToday), fut: !!sym.fut }
+  if (sym.fut) {
+    // OVERNIGHT = THE RAIL (2026-10-06, Brandon: "path bubbles should line up with
+    // the gex rail"): the nights after the two newest recorded sessions read the
+    // next expiry's per-minute ladder, as the rail does (older nights are past the
+    // ladder's retention and keep the closing walls)
+    const dates = [...new Set([...mainDays, ...openDays].map((d) => d.date))].sort().slice(-2)
+    const reads = await Promise.all(dates.map((d) => loadNextExpiryColumns(wallsSymbol, d, fresh).catch(() => [] as GexColumn[])))
+    out.nights = new Map(dates.map((d, k) => [d, reads[k]!]))
+    const b: BasisModel | null = basis
+    out.shiftAt = (ts: number) => {
+      if (!b) return null
+      const v = b.days.get(etDateKey(ts)) ?? b.basis
+      return isPlausibleBasis(v, b.max) ? v : null
+    }
+  }
+  return out
 }
 
 // ── One frame per candle ─────────────────────────────────────────────────────
 
 const abs = (w: Write | null | undefined) => (w?.gex != null && Number.isFinite(w.gex) ? Math.abs(w.gex) : null)
+
+/**
+ * One overnight candle's frame off the next expiry's ladder, the GEX Rail's way:
+ * the newest column by the candle's end, Volt / Coil / Reversal by the Voltick
+ * definition on its OI + vol book (vtFromLadder), Surge the biggest volume GEX,
+ * every strike moved by the rail's basis. null: no column yet, or no basis.
+ */
+function ladderFrame(night: readonly GexColumn[], bar: OHLCV, tfMs: number, shiftAt: WallModels['shiftAt']): VtFrame | null {
+  const col = columnAt(night, bar.time + tfMs - 1)
+  if (!col || !col.cells.length) return null
+  const shift = shiftAt ? shiftAt(col.slotTs) : null
+  if (shift == null) return null
+  let spot = col.spot
+  if (!(spot > 0)) {
+    // legacy rows carry no spot: the middle of the ladder, as the rail does
+    const ks = col.cells.map((c) => c.strike)
+    spot = (Math.max(...ks) + Math.min(...ks)) / 2
+  }
+  const def = vtFromLadder(col.cells.map((c) => ({ strike: c.strike, net: c.net })), spot)
+  if (def.volt == null) return null
+  const surge = voltickMarks(col.cells.map((c) => ({ strike: c.strike, book: c.net, vol: c.netVol })), { always: true }).surge
+  const sizeOf = (k: number | null) => {
+    if (k == null) return null
+    const c = col.cells.find((x) => x.strike === k)
+    return c ? Math.abs(c.net) : null
+  }
+  const sh = (k: number | null) => (k == null ? null : k + shift)
+  return {
+    t: Math.floor(bar.time / 1000),
+    volt: sh(def.volt),
+    surge: sh(surge),
+    rev: sh(def.reversal),
+    gates: def.coil != null ? [def.coil + shift] : [],
+    sz: { volt: sizeOf(def.volt), surge: sizeOf(surge), rev: sizeOf(def.reversal), gates: def.coil != null ? [sizeOf(def.coil)] : [] },
+  }
+}
 
 /** The walls in force for each candle, as Voltick frames (one per candle). */
 export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallModels): VtFrame[] {
@@ -180,6 +247,14 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
         // before (Friday's through the weekend), shifted by that session's basis
         // as every ES / NQ wall is (buildDays).
         date = latestBefore(etDateKey(bar.time), mins >= RTH_CLOSE_MIN)
+        // …and where the next expiry's ladder was recorded that night, its levels
+        // instead: the gamma the GEX Rail shows at that minute
+        const night = date != null ? m.nights?.get(date) : undefined
+        const f = night?.length ? ladderFrame(night, bar, tfMs, m.shiftAt) : null
+        if (f) {
+          out.push(f)
+          continue
+        }
       } else continue
       if (date == null) continue
       close = (byDate.get(date) ?? openByDate.get(date))?.close

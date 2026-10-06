@@ -232,7 +232,10 @@ export const railImpl = studyImpl<RailS, Ladder>({
         }
       }
       const lead = LEAD_ORDER.find((k) => tags.some((t) => t.key === k))
-      return { strike: r.strike, price: r.strike + shift, value: r.value, tags, lead }
+      // ONE ICON PER ROW (2026-10-06, Brandon): a strike carrying two levels shows
+      // only the most important, Volt > Reversal > Coil > Surge (LEAD_ORDER)
+      const one = lead ? tags.filter((t) => t.key === lead).slice(0, 1) : tags.slice(0, 1)
+      return { strike: r.strike, price: r.strike + shift, value: r.value, tags: one, lead }
     })
     if (s.heat) {
       // Multi Greek's ramp over this one column: the top three on fixed steps, the rest by share

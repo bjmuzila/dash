@@ -234,7 +234,8 @@ class VtPathIndicator implements NativeIndicator {
     this.disarm()
     if (!this.ctx?.live) return
     this.timer = setInterval(() => {
-      if (document.hidden || !inSession()) return
+      // a future's Path keeps moving overnight with the next expiry's ladder (vtPathData)
+      if (document.hidden || (!inSession() && !this.models?.fut)) return
       void this.load(true)
     }, REFRESH_MS)
   }

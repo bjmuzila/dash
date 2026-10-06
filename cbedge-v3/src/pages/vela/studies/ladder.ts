@@ -181,6 +181,30 @@ export async function loadRailLadder(c: StudyCtx, date: string | undefined, fres
   return base
 }
 
+/**
+ * THE NIGHT AFTER `after` (an ET session date): every column recorded under the
+ * NEXT expiry from that session's 16:00 close on, oldest first. The same next
+ * expiry loadRailLadder finds, so the Voltick Path's overnight bubbles on ES / NQ
+ * read exactly the gamma the GEX Rail shows (vtPath/vtPathData.ts). [] when
+ * nothing has been recorded for it.
+ */
+export async function loadNextExpiryColumns(label: string, after: string, fresh: boolean): Promise<GexColumn[]> {
+  const gexSymbol = symbolDef(label).gexSymbol
+  const today = etDateKey(Date.now())
+  const days = datesThrough(after, today < after ? after : today)
+  const reads = await Promise.all(days.map((d) => dayRead(gexSymbol, d, d, true, fresh)))
+  const closed = reads[0]!.expiry
+  const next = [...new Set(reads.flatMap((r) => r.recorded))].filter((e) => e > closed).sort()[0]
+  if (!next) return []
+  const cols = (await Promise.all(days.map((d) => dayRead(gexSymbol, d, next, false, fresh)))).flatMap((r) => r.columns)
+  return cols
+    .filter((c) => {
+      const d = etDateKey(c.slotTs)
+      return d > after || (d === after && etMinutesOfDay(c.slotTs) >= RTH_CLOSE_MIN)
+    })
+    .sort((a, b) => a.slotTs - b.slotTs)
+}
+
 /** The newest column at or before `t` (binary search; columns oldest first). */
 export function columnAt(columns: readonly GexColumn[], t: number): GexColumn | null {
   let lo = 0
