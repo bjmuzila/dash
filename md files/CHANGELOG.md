@@ -26740,3 +26740,14 @@ Brandon picked P2 from the picker-as-watchlist round, with Watchlists to the lef
   - How: Vela has no option for this colour. Its chrome painter's `priceElementColor` is wrapped (reached through the first chart's `NativeRenderer.chrome`), and the settings rows are added by wrapping `NativeRenderer.setSettingsSections`, so each cell's own sections are kept. If a Vela upgrade renames either method, the wrap is skipped with a console warning and Vela's colours come back.
 - `cbedge-v3/src/pages/Vela.tsx`: `registerLastPriceColor()` runs with the other registrations, before any workspace is built.
 - `tsc` strict is clean on the new file against `@luxalgo/vela` 0.8.2. No colour literals.
+
+## 2026-10-06 - Voltick admin: System › Logs reads Render's log, plus the 2FA line and the fuller customer card
+
+- **Engine (`Voltick-engine`, server-only PR for Nick):** new `server/renderlogs.js` and the route `GET /api/admin/render/logs`, which reads Render's log with `RENDER_API_KEY` so the key never reaches a browser.
+  - **Only reads:** three fixed paths, GET only; services picked by name from `RENDER_LOG_SERVICES` (voltick, voltick-theta, voltick-stream).
+  - **Every line rebuilt and scrubbed:** IPs, bearer tokens, Stripe/Render/webhook keys, JWTs, session cookies, token query values, and query strings on request paths are removed.
+  - **Limits:** each answer is held 15 s and the engine makes at most 20 Render calls a minute (Render allows 30). A 429 comes back with its wait.
+  - **Test:** offline test `the-render-logs-are-read-on-the-server` (8 pass); the admin GET guard test still passes.
+- **Console (`Voltick-admin`, admin-site):** a new System › Logs tab: service, App/Requests/Builds, level, window from 15m to 7d, Render search (text, `*`, `/regex/`), quick searches for the engine's own lines (tab limit, 🚨, ⚠️, ⏱, KILLED, rss, boots), Load older, auto-refresh every 30s, Copy lines, and sample lines in mock mode. Escape check: 0 leaks.
+  - **Merge order:** the engine PR has to merge first. Until then the console's live-routes test fails, because it reads a route the engine doesn't answer yet.
+- **Also on the console today:** the 2FA check is hidden (2FA won't be built), and the customer card pulls in every member section the engine already serves.
