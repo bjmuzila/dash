@@ -11,7 +11,7 @@
  *
  * THE API
  *   Base   https://api.londonstrategicedge.com/vault
- *   Auth   x-api-key: <LSE_API_KEY>
+ *   Auth   x-api-key: <LSE_API_KEY>  (then LSE_API_KEY_2 … — see apiKeys())
  *   UA     the download host sits behind a CDN that bounces the default
  *          urllib/undici User-Agent, so we send an explicit one. Do not remove.
  *
@@ -67,13 +67,31 @@ class LseError extends Error {
   }
 }
 
-function apiKey() {
-  return String(process.env.LSE_API_KEY || '').trim();
+/**
+ * Every configured vault key, in the order they are spent (2026-10-07).
+ *
+ *   LSE_API_KEY      the primary
+ *   LSE_API_KEY_2    taken over when the primary hits its daily limit
+ *   LSE_API_KEY_3 …  same again, as many as are set (gaps end the list)
+ *
+ * Read at call time like the single key always was, so a restart picks up an
+ * edited .env.local. Duplicates are dropped — the same key twice is one budget.
+ */
+function apiKeys() {
+  const out = [];
+  const first = String(process.env.LSE_API_KEY || '').trim();
+  if (first) out.push(first);
+  for (let i = 2; i <= 9; i++) {
+    const k = String(process.env[`LSE_API_KEY_${i}`] || '').trim();
+    if (!k) break;
+    if (!out.includes(k)) out.push(k);
+  }
+  return out;
 }
 
-/** Presence only — the key itself never leaves this module. */
+/** Presence only — the keys themselves never leave this module. */
 function hasKey() {
-  return apiKey().length > 0;
+  return apiKeys().length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,32 +118,37 @@ function tidyBody(text) {
 }
 
 // ---------------------------------------------------------------------------
-// Daily request budget (2026-10-07)
+// Daily request budget — per key (2026-10-07)
 // ---------------------------------------------------------------------------
 //
-// The vault key is capped at LSE_DAILY_LIMIT requests a day (15,000 as of
+// Each vault key is capped at LSE_DAILY_LIMIT requests a day (15,000 as of
 // 2026-10-07). On 2026-10-07 the cap was gone by 09:40 ET — the whale page's
 // "high since print" column had fetched candles per contract, per tab, every
 // five minutes, overnight — and the Top Flow sweep that feeds the whale
 // archive was refused for the rest of the day. 1D then snapped back to the
 // previous session and looked "stuck on yesterday".
 //
-// Two guards, both in this process only (a restart starts the count over, so
-// the soft cap is approximate by design — the breaker is the hard stop):
+// Every key (see apiKeys) carries its own count and its own breaker, and a
+// request goes out on the FIRST key that can take it:
 //
-//   SOFT CAP  Ordinary calls stop at LSE_DAILY_LIMIT − LSE_SWEEP_RESERVE.
-//             The reserve is kept for priority:'sweep' calls (the Top Flow
-//             poller, ~1,250 a session).
-//   BREAKER   Once the vault says the limit is reached, nothing is sent until
-//             the next UTC day, except one sweep probe every 5 minutes so a
-//             reset is picked up without waiting for midnight.
+//   SOFT CAP  Ordinary calls stop using a key at LSE_DAILY_LIMIT −
+//             LSE_SWEEP_RESERVE. The reserve on each key is kept for
+//             priority:'sweep' calls (the Top Flow poller, ~1,250 a session).
+//   BREAKER   Once the vault says a key's limit is reached, that key is
+//             skipped until the next UTC day — and the SAME request is retried
+//             at once on the next key, so a key running out mid-session costs
+//             the caller nothing. A sweep probes a tripped key once every
+//             5 minutes, so a reset on another clock is still picked up.
 //
-// The day is counted in UTC because that is the likeliest reset boundary; the
-// breaker's probe covers the case where the vault resets on another clock.
+// Counts live in this process only — a restart starts them over, so the soft
+// cap is approximate by design; the breaker is the hard stop.
 const DAILY_LIMIT = Math.max(100, Number(process.env.LSE_DAILY_LIMIT) || 15000);
 const SWEEP_RESERVE = Math.max(0, Number(process.env.LSE_SWEEP_RESERVE) || 2500);
 const BREAKER_PROBE_MS = 5 * 60_000;
-const budget = { day: '', used: 0, refused: 0, exhaustedUntil: 0, lastProbeAt: 0, lastLimitMsg: null };
+/** Key index → its state. Keyed by POSITION, never by the key string. */
+const budgets = [];
+let budgetDay = '';
+let refusedToday = 0;
 
 const utcDay = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 10);
 const nextUtcMidnight = (ms = Date.now()) => {
@@ -134,46 +157,86 @@ const nextUtcMidnight = (ms = Date.now()) => {
 };
 const isLimitError = (status, msg) => status === 429 || /request limit|rate limit|quota/i.test(String(msg || ''));
 
+function budgetFor(i) {
+  if (!budgets[i]) budgets[i] = { used: 0, exhaustedUntil: 0, lastProbeAt: 0, lastLimitMsg: null };
+  return budgets[i];
+}
+
 function budgetRoll() {
   const d = utcDay();
-  if (budget.day !== d) {
-    budget.day = d;
-    budget.used = 0;
-    budget.refused = 0;
+  if (budgetDay !== d) {
+    budgetDay = d;
+    refusedToday = 0;
+    for (const b of budgets) if (b) b.used = 0;
   }
-  if (budget.exhaustedUntil && Date.now() >= budget.exhaustedUntil) budget.exhaustedUntil = 0;
+  for (const b of budgets) {
+    if (b && b.exhaustedUntil && Date.now() >= b.exhaustedUntil) { b.exhaustedUntil = 0; b.lastLimitMsg = null; }
+  }
 }
 
-/** Throws a 429 LseError instead of spending a request the budget cannot afford. */
-function budgetGate(priority) {
+/**
+ * The key index this request should go out on, or -1. `skip` holds keys this
+ * request has already been refused on, so a retry moves down the list.
+ */
+function pickKey(count, priority, skip) {
   budgetRoll();
   const sweep = priority === 'sweep';
-  if (budget.exhaustedUntil) {
-    if (sweep && Date.now() - budget.lastProbeAt >= BREAKER_PROBE_MS) {
-      budget.lastProbeAt = Date.now();
-      return; // one probe through — a success clears the breaker
+  for (let i = 0; i < count; i++) {
+    if (skip.has(i)) continue;
+    const b = budgetFor(i);
+    if (b.exhaustedUntil) continue;
+    if (!sweep && b.used >= DAILY_LIMIT - SWEEP_RESERVE) continue;
+    return i;
+  }
+  // Nothing healthy left: a sweep may probe one tripped key whose wait is up.
+  if (sweep) {
+    for (let i = 0; i < count; i++) {
+      if (skip.has(i)) continue;
+      const b = budgetFor(i);
+      if (b.exhaustedUntil && Date.now() - b.lastProbeAt >= BREAKER_PROBE_MS) {
+        b.lastProbeAt = Date.now();
+        return i;
+      }
     }
-    budget.refused += 1;
-    throw new LseError(429, budget.lastLimitMsg || 'LSE daily request limit reached');
   }
-  if (!sweep && budget.used >= DAILY_LIMIT - SWEEP_RESERVE) {
-    budget.refused += 1;
-    throw new LseError(429, `LSE request budget held for the live sweep (${budget.used}/${DAILY_LIMIT} used today)`);
-  }
+  return -1;
 }
 
-/** Read-only view for status routes and logs. */
+/** Why nothing could be sent — the message a card shows. */
+function refusalMessage(count) {
+  const tripped = budgets.slice(0, count).find((b) => b && b.exhaustedUntil);
+  if (tripped && budgets.slice(0, count).every((b) => b && b.exhaustedUntil)) {
+    return count > 1
+      ? `LSE daily request limit reached on all ${count} keys — ${tripped.lastLimitMsg || ''}`.replace(/ — $/, '')
+      : tripped.lastLimitMsg || 'LSE daily request limit reached';
+  }
+  const used = budgets.slice(0, count).reduce((n, b) => n + (b ? b.used : 0), 0);
+  return `LSE request budget held for the live sweep (${used}/${DAILY_LIMIT * count} used today across ${count} key${count > 1 ? 's' : ''})`;
+}
+
+/** Read-only view for status routes and logs. Keys appear by number only. */
 function budgetStatus() {
   budgetRoll();
+  const count = apiKeys().length;
+  const keys = [];
+  for (let i = 0; i < count; i++) {
+    const b = budgetFor(i);
+    keys.push({
+      key: i + 1,
+      used: b.used,
+      exhausted: Boolean(b.exhaustedUntil),
+      exhaustedUntil: b.exhaustedUntil ? new Date(b.exhaustedUntil).toISOString() : null,
+      lastLimitMsg: b.lastLimitMsg,
+    });
+  }
   return {
-    day: budget.day,
-    used: budget.used,
-    limit: DAILY_LIMIT,
+    day: budgetDay,
+    limitPerKey: DAILY_LIMIT,
     sweepReserve: SWEEP_RESERVE,
-    refused: budget.refused,
-    exhausted: Boolean(budget.exhaustedUntil),
-    exhaustedUntil: budget.exhaustedUntil ? new Date(budget.exhaustedUntil).toISOString() : null,
-    lastLimitMsg: budget.lastLimitMsg,
+    used: keys.reduce((n, k) => n + k.used, 0),
+    refused: refusedToday,
+    exhausted: keys.length > 0 && keys.every((k) => k.exhausted),
+    keys,
   };
 }
 
@@ -182,14 +245,33 @@ function budgetStatus() {
  * (the SDK does the same, and an empty `start=` is a 400 upstream).
  *
  * `priority: 'sweep'` marks the Top Flow poller — see the budget note above.
+ * A key that hits its daily limit is retried on the next key before giving up.
  */
 async function vaultGet(path, params = {}, { timeoutMs = 60000, priority = 'normal' } = {}) {
-  const key = apiKey();
-  if (!key) {
+  const keys = apiKeys();
+  if (!keys.length) {
     throw new LseError(503, 'LSE_API_KEY is not set on this server');
   }
-  budgetGate(priority);
-  budget.used += 1;
+  const skip = new Set();
+  for (;;) {
+    const i = pickKey(keys.length, priority, skip);
+    if (i < 0) {
+      refusedToday += 1;
+      throw new LseError(429, refusalMessage(keys.length));
+    }
+    try {
+      return await vaultGetWithKey(path, params, timeoutMs, keys[i], budgetFor(i));
+    } catch (e) {
+      // Only a LIMIT moves on to the next key. Any other failure is the
+      // vault's answer to this request, and another key would get it too.
+      if (e && e.status === 429 && budgetFor(i).exhaustedUntil) { skip.add(i); continue; }
+      throw e;
+    }
+  }
+}
+
+async function vaultGetWithKey(path, params, timeoutMs, key, b) {
+  b.used += 1;
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === null || v === undefined || v === '') continue;
@@ -220,14 +302,14 @@ async function vaultGet(path, params = {}, { timeoutMs = 60000, priority = 'norm
       ? String(msg).slice(0, 300)
       : `vault ${resp.status} ${resp.statusText || ''}`.trim() + ` for ${path}${tidyBody(text)}`);
     if (isLimitError(resp.status, err.message)) {
-      budget.exhaustedUntil = nextUtcMidnight();
-      budget.lastLimitMsg = err.message;
+      b.exhaustedUntil = nextUtcMidnight();
+      b.lastLimitMsg = err.message;
       err.status = 429;
     }
     throw err;
   }
-  // A good answer while the breaker is set means the vault has reset.
-  if (budget.exhaustedUntil) { budget.exhaustedUntil = 0; budget.lastLimitMsg = null; }
+  // A good answer on a tripped key (a sweep's probe) means the vault has reset.
+  if (b.exhaustedUntil) { b.exhaustedUntil = 0; b.lastLimitMsg = null; }
   try {
     return JSON.parse(text);
   } catch {

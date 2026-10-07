@@ -11,8 +11,10 @@
 //   WATCHLISTS   your lists as chips (Main 12 · Tech 18 · …), + New and ✎ Edit
 //                on one strip (two rows at most), then the open list, section by
 //                section (▾ folds one). A row opens the symbol on the active
-//                chart. Typing searches every symbol to ADD to the open list:
-//                + Add, or ✓ when it is on it already; Enter adds the lit row.
+//                chart. Typing searches every symbol: Enter OPENS the lit row on
+//                the chart (2026-10-07, Brandon: "typing in a ticker and hitting
+//                enter should go to that ticker"), Shift+Enter or + adds it to
+//                the open list (✓ when it is on it already).
 //     Edit       chips drag left / right to reorder the lists; + Section and
 //                ⇪ Import show; the list name to rename, Delete list (asks once more), each
 //                section's name typed in place with ↑ ↓ and delete (its
@@ -907,7 +909,8 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
     const adding = tab === 'lists' && !!q
     foot.replaceChildren(
       hint('↑↓', 'move'),
-      hint('Enter', adding ? `add to ${activeList().name}` : 'open on the active chart'),
+      hint('Enter', 'open on the active chart'),
+      ...(adding ? [hint('Shift+Enter', `add to ${activeList().name}`)] : []),
       hint('Tab', tab === 'lists' ? 'Symbols' : 'Watchlists'),
       hint('Esc', 'close'),
     )
@@ -1084,11 +1087,15 @@ export function toggleSymbolPicker(opts: PickerOptions): void {
       setActive(active + (e.key === 'PageDown' ? 8 : -8), true)
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      const r = rows[active]
-      if (!r) return
-      // Watchlists with a query: Enter adds (the tab is for building the list)
-      if (tab === 'lists' && input.value.trim()) addTo(r.ticker)
-      else choose(r.ticker)
+      const q = input.value.trim().toUpperCase()
+      // the lit row (the best match while typing); with no row yet (symbols still
+      // loading, or no match) a typed ticker is opened as typed
+      const r = rows[active] ?? rows[0]
+      const ticker = r?.ticker ?? (/^[/$^]?[A-Z][A-Z0-9.!:/_-]{0,15}$/.test(q) ? q : null)
+      if (!ticker) return
+      // Enter always OPENS it on the chart (2026-10-07); Shift+Enter adds it to the open list
+      if (e.shiftKey && tab === 'lists' && input.value.trim()) addTo(ticker)
+      else choose(ticker)
     } else if (e.key === 'Tab') {
       e.preventDefault()
       switchTab(tab === 'lists' ? 'symbols' : 'lists')

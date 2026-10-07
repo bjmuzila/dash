@@ -43,6 +43,20 @@
 // the rail. Where no ladder was recorded (an older night, a gap before the first
 // column) it carries the walls the last cash session closed on.
 //
+// ── IN SESSION, THE PATH IS THE RAIL (2026-10-07) ───────────────────────────
+// Brandon: "bubbles / path not matching up with the gex rail". The walls_log
+// above is the scanner sweep's read, sampled every 15 minutes; the GEX Rail is
+// the per-minute ladder from the live feed. They are two measurements and they
+// drift apart: on 10-07 the volume book's CORE stayed 7750 in walls_log from
+// 09:29 on while the rail's ladder had 7800 as the top volume GEX by 10:00, so
+// the gold beads sat 50 points from the rail's ★. Now, on 0DTE, every candle
+// inside 09:29–16:00 on a session whose per-minute ladder is still kept (the
+// newest two, and today) reads THAT ladder at the candle's end, exactly as the
+// rail does (ladderFrame: Volt / Coil / Reversal by the Voltick definition on
+// the page's GEX book, Surge the biggest volume GEX, the rail's basis on ES /
+// NQ). walls_log is the fallback: older sessions, Non-0DTE, and any candle
+// before the ladder's first column.
+//
 // ── Vol only: the open rides the OI + Vol walls (2026-10-05) ────────────────
 // The volume-only book has no open capture: at 09:29 nothing has traded, so the
 // recorder's first vol row of a session is the 09:45 slot (10:00 on some
@@ -174,9 +188,9 @@ export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: bo
     const v = b0.days.get(etDateKey(ts)) ?? b0.basis
     return isPlausibleBasis(v, b0.max) ? v : null
   }
-  if (s.basis !== 'oivol') {
-    // the chosen book's gaps (header of ladderFrame): the ladder of the two newest
-    // recorded sessions and today's (the ladder's retention)
+  if (s.scope === '0dte') {
+    // IN SESSION, THE RAIL'S LADDER (header): the two newest recorded sessions and
+    // today's (the ladder's retention). It is the nearest expiry only, so 0DTE only.
     const dates = [...new Set(known.concat(today))].sort().slice(-2)
     const reads = await Promise.all(dates.map((d) => loadSessionColumns(wallsSymbol, d, fresh).catch(() => [] as GexColumn[])))
     out.ladders = new Map(dates.map((d, k) => [d, reads[k]!]))
@@ -224,7 +238,8 @@ function ladderFrame(
   }
   const def = vtFromLadder(col.cells.map((c) => ({ strike: c.strike, net: ladderValue(c.net, c.netVol, book) })), spot)
   if (def.volt == null) return null
-  const surge = voltickMarks(col.cells.map((c) => ({ strike: c.strike, book: c.netVol, vol: c.netVol })), { always: true }).surge
+  // the rail's own Surge call (studies/rail.ts), so the ↯ bead and the rail's ↯ tag agree
+  const surge = voltickMarks(col.cells.map((c) => ({ strike: c.strike, book: c.net, vol: c.netVol })), { always: true }).surge
   const sizeOf = (k: number | null) => {
     if (k == null) return null
     const c = col.cells.find((x) => x.strike === k)
@@ -281,7 +296,17 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
     } else {
       const mins = etMinutesOfDay(bar.time)
       const inRth = mins >= SESSION_FROM_MIN && mins < RTH_CLOSE_MIN
-      if (inRth) date = etDateKey(bar.time)
+      if (inRth) {
+        date = etDateKey(bar.time)
+        // IN SESSION, THE RAIL'S LADDER at this candle's end (header); walls_log
+        // only where no ladder was kept or none was written yet
+        const lad = m.ladders?.get(date)
+        const f = lad?.length ? ladderFrame(lad, bar, tfMs, m.shiftAt, m.basis) : null
+        if (f) {
+          out.push(f)
+          continue
+        }
+      }
       else if (m.fut) {
         // OVERNIGHT (2026-10-06, Brandon: "path bubbles should work and show
         // overnight on ES using SPX"). The SPX walls are recorded 09:29–16:00
@@ -309,15 +334,6 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
     // first CORE write that session, the OI + Vol walls stand in (header).
     let day = byDate.get(date)
     let cb = day ? heldAt(day.levels.get('cb'), end) : null
-    if (!cb && !coarse) {
-      // the volume book has no CORE yet: the volume GEX of that minute's ladder
-      const lad = m.ladders?.get(date)
-      const f = lad?.length ? ladderFrame(lad, bar, tfMs, m.shiftAt, m.basis) : null
-      if (f) {
-        out.push(f)
-        continue
-      }
-    }
     if (!cb) {
       day = openByDate.get(date)
       cb = day ? heldAt(day.levels.get('cb'), end) : null
