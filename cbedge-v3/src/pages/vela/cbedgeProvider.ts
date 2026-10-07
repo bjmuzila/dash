@@ -373,6 +373,17 @@ function sessionFilter(bars: Bar[], session: string | undefined): Bar[] {
   return bars.filter((b) => isRth(b.t))
 }
 
+/**
+ * The tape's own bars for `ticker`, un-rolled: 1m (~5 days) or 5m (~30 days),
+ * session-filtered like the chart. For studies that read INSIDE a chart bar
+ * (Cumulative Volume Delta's intrabars). The same request the chart makes for
+ * that native timeframe, through `query`, so a chart already on it shares it.
+ */
+export async function nativeTape(ticker: string, native: 1 | 5, session: string | undefined, staleMs?: number): Promise<OHLCV[]> {
+  const raw = sessionFilter(await nativeBars(resolveSym(ticker), native, staleMs), session)
+  return raw.map((b) => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v }))
+}
+
 /** What a live feed needs to continue the newest history bar without double counting. */
 interface Seed {
   bar: OHLCV

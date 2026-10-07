@@ -15124,9 +15124,9 @@ try {
         }
         try {
           const m = await lse.meta();
-          return send(res, 200, { configured: true, reachable: true, meta: m, budget: lse.budgetStatus() }, { 'Cache-Control': NO_STORE });
+          return send(res, 200, { configured: true, reachable: true, meta: m, budget: lse.budgetStatus(), ws: tfWsStatus() }, { 'Cache-Control': NO_STORE });
         } catch (e) {
-          return send(res, 200, { configured: true, reachable: false, error: String(e?.message ?? e), budget: lse.budgetStatus() },
+          return send(res, 200, { configured: true, reachable: false, error: String(e?.message ?? e), budget: lse.budgetStatus(), ws: tfWsStatus() },
             { 'Cache-Control': NO_STORE });
         }
       },
@@ -15467,7 +15467,28 @@ try {
       classified: 0,
       /** Ids changed since the last DB mirror. See tfPersist(). */
       dirty: new Set(),
+      /**
+       * Print fingerprint → id, for the current day (2026-10-07). The same print
+       * can now arrive twice — once from the websocket (no vault id) and once
+       * from the REST sweep (vault id) — and must be stored once. See tfFp().
+       */
+      fp: new Map(),
     };
+
+    /**
+     * contract | second | size | price. Seconds, not ms, and probed at ±1s on
+     * lookup, because the two sources need not stamp a print to the same ms.
+     */
+    const tfFp = (r, sec) => `${r.osi || ''}|${sec}|${r.size === null ? '' : r.size}|${r.price === null ? '' : r.price}`;
+    function tfFpSeen(r) {
+      const sec = Math.round(r.ts / 1000);
+      for (const d of [0, -1, 1]) {
+        const hit = tfState.fp.get(tfFp(r, sec + d));
+        if (hit && hit !== r.id) return hit;
+      }
+      return null;
+    }
+    const tfFpAdd = (r) => { if (r.osi) tfState.fp.set(tfFp(r, Math.round(r.ts / 1000)), r.id); };
 
     // The vault's flow rows are not a fixed shape (see the flow row-shape note
     // in _lib-lse.cjs). Read every field through a candidate list, and fall back
@@ -15595,7 +15616,8 @@ try {
     function tfMerge(rows) {
       const incoming = [];
       for (const r of rows) {
-        const n = tfNormalize(r);
+        // `{ __norm }` = already normalised (the websocket path).
+        const n = r && r.__norm ? r.__norm : tfNormalize(r);
         // premium 0 means "unreadable" (flowPremium's contract), and a zero
         // sitting in a premium-ranked list is noise at the bottom forever.
         if (n && n.premium > 0) incoming.push(n);
@@ -15608,9 +15630,13 @@ try {
       if (day !== tfState.day) {
         tfState.day = day;
         tfState.rows = new Map();
+        tfState.fp = new Map();
       }
+      let added = 0;
       for (const n of incoming) {
         if (tfEtDate(new Date(n.ts)) !== day) continue;
+        // The other source already delivered this print under another id.
+        if (!tfState.rows.has(n.id) && tfFpSeen(n)) continue;
         // A row we have ALREADY CLASSIFIED must not be replaced by its unjudged
         // self on the next sweep — the verdict was taken while the print was
         // fresh and cannot be recomputed later. The vault re-sends the same
@@ -15620,7 +15646,10 @@ try {
         if (prev && prev.side !== undefined) continue;
         tfState.rows.set(n.id, n);
         tfState.dirty.add(n.id);
+        tfFpAdd(n);
+        if (!prev) added += 1;
       }
+      tfState.lastAdded = added;
 
       if (tfState.rows.size <= TF_KEEP_TOP + TF_KEEP_RECENT) return;
       const all = [...tfState.rows.values()];
@@ -15798,7 +15827,7 @@ try {
     /** At most one vault sweep per TF_REFRESH_MS, shared by every caller. */
     function tfRefresh() {
       if (tfState.inflight) return tfState.inflight;
-      if (tfState.at && Date.now() - tfState.at < TF_REFRESH_MS) return Promise.resolve();
+      if (tfState.at && Date.now() - tfState.at < tfRefreshMs()) return Promise.resolve();
       tfState.inflight = lse.optionsFlow({
         minPremium: TF_BASE_MIN_PREMIUM, order: 'desc', limit: TF_SWEEP_LIMIT,
         // Not optional — see TF_LOOKBACK_DAYS. Without it the vault 502s.
@@ -15981,6 +16010,7 @@ try {
             // back as pending. That is right: tfEnrich will age it out to
             // 'stale' on the next pass rather than pretend it was judged.
             tfState.rows.set(String(p.id), p);
+            tfFpAdd(p);
             n += 1;
           }
           tfState.day = day;
@@ -16054,6 +16084,76 @@ try {
      * unref()'d so it can never hold the process open on its own — a shutdown
      * should not wait 20 seconds for a market-data timer.
      */
+    // ── The websocket tape (2026-10-07) ──────────────────────────────────────
+    // See lse-ws-flow.js for the modes. In `live`, stream prints go through
+    // tfMerge like a sweep's, and the REST sweep backs off to LSE_WS_REST_MS
+    // while the stream is healthy — it still covers every underlying the
+    // stream does not, and takes over in full the moment the stream drops.
+    const WS_MODE = ['shadow', 'live'].includes(String(process.env.LSE_WS_MODE || '').toLowerCase())
+      ? String(process.env.LSE_WS_MODE).toLowerCase() : 'off';
+    const WS_UNDERLYINGS = String(process.env.LSE_WS_UNDERLYINGS || 'SPX,SPY,QQQ,NDX,IWM,TSLA,NVDA,AAPL,META,AMZN,MSFT,GOOGL,AMD')
+      .split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
+    const WS_REST_MS = Math.max(TF_REFRESH_MS, Number(process.env.LSE_WS_REST_MS) || 60_000);
+    let tfWs = null;
+    /** For /api/lse/status and the whale page's feed block. Hoisted. */
+    function tfWsStatus() {
+      return tfWs ? { mode: WS_MODE, ...tfWs.status() } : { mode: WS_MODE };
+    }
+    function tfRefreshMs() {
+      return WS_MODE === 'live' && tfWs && tfWs.healthy() ? WS_REST_MS : TF_REFRESH_MS;
+    }
+    /** A stream print → the same normalised row the sweep produces. */
+    function tfFromWs(p) {
+      const n = tfNormalize({
+        timestamp: new Date(p.ts).toISOString(),
+        ticker: p.symbol,
+        underlying: p.underlying,
+        last_price: p.price,
+        volume: p.volume,
+        premium: p.premium,
+        underlying_price: p.spot,
+      });
+      if (!n) return null;
+      // The tick carries the quote AT the print — the best read there is.
+      // Without one the row stays pending and tfEnrich() judges it as usual.
+      if (p.bid !== null && p.ask !== null) {
+        const v = tfClassify(p.price, p.bid, p.ask);
+        if (v.reason !== 'no-quote') {
+          n.side = v.side; n.action = v.action; n.sideReason = v.reason;
+          n.bid = p.bid; n.ask = p.ask; n.quoteAgeMs = 0;
+        }
+      }
+      n.source = 'ws';
+      return n;
+    }
+    if (WS_MODE !== 'off' && lse.hasKey()) {
+      try {
+        tfWs = require('./lse-ws-flow.js').start({
+          mode: WS_MODE,
+          underlyings: WS_UNDERLYINGS,
+          minPremium: TF_BASE_MIN_PREMIUM,
+          isOpen: () => tfIsRthEt(),
+          onPrints: (prints) => {
+            const rows = prints.map(tfFromWs).filter(Boolean);
+            if (!rows.length) return;
+            if (WS_MODE === 'shadow') {
+              tfWs.noteMatchedRest(rows.filter((r) => tfFpSeen(r)).length);
+              return;
+            }
+            void tfRestore().then(() => {
+              tfMerge(rows.map((r) => ({ __norm: r })));
+              tfWs.noteEmitted(tfState.lastAdded || 0);
+              try { void tfEnrich(); } catch { /* best-effort */ }
+              try { void tfPersist(); } catch { /* best-effort */ }
+            });
+          },
+        });
+        console.log(`[api-router] LSE websocket tape: ${WS_MODE} — ${WS_UNDERLYINGS.join(',')}`);
+      } catch (e) {
+        console.warn('[api-router] LSE websocket tape failed to start:', e && e.message ? e.message : e);
+      }
+    }
+
     if (lse.hasKey()) {
       const tick = () => {
         if (!tfIsRthEt()) return;
@@ -16568,6 +16668,7 @@ try {
             })(),
             asOf: tfState.at ? new Date(tfState.at).toISOString() : null,
             budget: lse && typeof lse.budgetStatus === 'function' ? lse.budgetStatus() : null,
+            ws: tfWs ? { mode: WS_MODE, healthy: tfWs.healthy() } : null,
           },
         };
 

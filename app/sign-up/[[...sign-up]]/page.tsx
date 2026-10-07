@@ -64,6 +64,17 @@ export default async function SignUpPage({
             <Link href="/sign-in" style={{ ...v3PrimaryButton, width: "100%", boxSizing: "border-box" }}>
               Already a member? Sign in
             </Link>
+            {/* Comped / invited people land here too (2026-10-07). Their account
+                already exists — the Admin page's Comped Access and Voltick Access
+                grants create it with no password — so sign-up can never work for
+                them, open or closed. What they need is a password on the row
+                that's already there: the invite link, or Forgot password. */}
+            <p style={{ fontSize: V3_TEXT.base, color: V3.fg, lineHeight: 1.55, margin: "14px 0 0" }}>
+              <strong>Were you given access?</strong> Your account is already set up. Use the
+              “Set your password” link we emailed you, or go to{" "}
+              <Link href="/sign-in" style={{ color: V3.cyan, fontWeight: 700 }}>Sign in</Link>, enter
+              that email and click <strong>Forgot password?</strong>
+            </p>
             <p style={{ fontSize: V3_TEXT.xs, color: V3.fg, lineHeight: 1.5, margin: "14px 0 0" }}>
               Looking for a GEX platform?{" "}
               <VoltickLink placement="sign-up-notice" style={{ color: V3.cyan, fontWeight: 700 }}>Voltick</VoltickLink>.{" "}

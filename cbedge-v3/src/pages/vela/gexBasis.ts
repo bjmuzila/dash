@@ -21,7 +21,8 @@
 // Levels, the legend card's LEVELS row and Level Alerts (levels/levelAlerts.ts),
 // and CB Script's cbedge.core / call_wall / put_wall. The Surge stays what it
 // is by definition — the CORE of the VOLUME book — whatever is picked here.
-// Vol / GEX Flow is not a reader: it draws the books side by side.
+// Vol / GEX Flow is not a reader: it draws the books side by side. Net GEX and
+// Net GEX Flow are (2026-10-07): the ticker's net GEX on this book, and its change.
 //
 // Remembered per browser under `cb-v3-vela-gex-basis`, and followed live by
 // every other open tab. The button is gexBasisMenu.ts (the top bar on the

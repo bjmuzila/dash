@@ -8,7 +8,9 @@
 //
 //   levels.ts  CB Prior Levels · CB Initial Balance · CB Overnight High / Low
 //   gex.ts     CB Expected Move · CB Key Levels · CB GEX Profile
-//   flow.ts    CB Net Premium · CB Vol / GEX Flow · CB Whale Prints
+//   flow.ts    CB Net Premium · CB Vol / GEX Flow · CB Net GEX · CB Net GEX Flow ·
+//              CB Whale Prints
+//   cvd.ts     CB Cumulative Volume Delta (buy vs sell volume on the ticker itself)
 //   tpo.ts     CB Market Profile
 //   rail.ts    CB GEX Rail (the GEX Candles card's strike rail, right or left of the chart)
 //   heat.ts    CB GEX Heatmap (the per-minute ladders, behind the candles)
@@ -37,6 +39,11 @@ export const WH_MIN = ['$1M', '$2M', '$5M', '$10M'] as const
 export const WH_SIDE = ['Calls and puts', 'Calls', 'Puts'] as const
 export const WH_EXP = ['All expiries', '0DTE only', 'This week', 'Skip 0DTE'] as const
 export const HEAT_SESSIONS = ['1', '2', '3'] as const
+/** Net GEX's look: a line, columns, or both. */
+export const NETGEX_STYLES = ['Line', 'Columns', 'Line and columns'] as const
+/** Where Cumulative Volume Delta starts again from 0. */
+export const CVD_ANCHORS = ['Session', 'Week', 'Month'] as const
+export const CVD_STYLES = ['Candles', 'Line'] as const
 export const RAIL_SIDES = ['Right', 'Left'] as const
 /** The GEX Rail's look: a bar per strike, or Multi Greek's heatmap cell (rail.ts). */
 export const RAIL_STYLES = ['Rail', 'Heatmap', 'Profile'] as const
@@ -58,6 +65,9 @@ export const KEY_TYPE = 'cbedge-key-levels'
 export const PROFILE_TYPE = 'cbedge-gex-profile'
 export const NETPREM_TYPE = 'cbedge-net-premium'
 export const VOLFLOW_TYPE = 'cbedge-vol-gex-flow'
+export const NETGEX_TYPE = 'cbedge-net-gex'
+export const NETGEXFLOW_TYPE = 'cbedge-net-gex-flow'
+export const CVD_TYPE = 'cbedge-cvd'
 export const WHALES_TYPE = 'cbedge-whale-prints'
 export const TPO_TYPE = 'cbedge-market-profile'
 export const RAIL_TYPE = 'cbedge-gex-rail'
@@ -233,6 +243,63 @@ export function registerStudies(): void {
       ],
     },
     () => import('./flow').then((m) => m.volFlowImpl),
+  )
+  defineStudy(
+    {
+      type: NETGEX_TYPE,
+      title: 'Voltick Net GEX · the ticker’s overall net GEX through the day, every strike summed',
+      shortTitle: 'Net GEX',
+      pane: 'new',
+      gex: true,
+      inputs: () => [
+        { key: 'style', title: 'Style', type: 'string', defval: NETGEX_STYLES[0], options: NETGEX_STYLES },
+        { key: 'scope', title: 'Expiries', type: 'string', defval: VF_SCOPES[0], options: VF_SCOPES },
+        { key: 'session', title: 'Session', type: 'string', defval: VF_SESSIONS[0], options: VF_SESSIONS },
+      ],
+    },
+    () => import('./flow').then((m) => m.netGexImpl),
+  )
+  defineStudy(
+    {
+      type: NETGEXFLOW_TYPE,
+      title: 'Voltick Net GEX Flow · how net GEX is changing: per bar, and since the open, today',
+      shortTitle: 'Net GEX Flow',
+      pane: 'new',
+      gex: true,
+      inputs: () => [
+        { key: 'scope', title: 'Expiries', type: 'string', defval: VF_SCOPES[0], options: VF_SCOPES },
+        { key: 'session', title: 'Session', type: 'string', defval: VF_SESSIONS[0], options: VF_SESSIONS },
+        {
+          key: 'bars',
+          title: 'Change per bar (histogram)',
+          type: 'bool',
+          defval: true,
+          tooltip: 'Green: net GEX added in the bar. Red: net GEX taken off. On the page’s GEX switch (OI / OI + Vol / Vol).',
+        },
+        { key: 'line', title: 'Change since the open (line)', type: 'bool', defval: true, tooltip: 'Net GEX now less its first reading of the session.' },
+      ],
+    },
+    () => import('./flow').then((m) => m.netGexFlowImpl),
+  )
+  defineStudy(
+    {
+      type: CVD_TYPE,
+      title: 'Voltick Cumulative Volume Delta · buying less selling volume, from 1m intrabars, through the session',
+      shortTitle: 'CVD',
+      pane: 'new',
+      inputs: () => [
+        {
+          key: 'anchor',
+          title: 'Anchor period',
+          type: 'string',
+          defval: CVD_ANCHORS[0],
+          options: CVD_ANCHORS,
+          tooltip: 'Where the running total starts again from 0. Session: 6 PM ET for ES / NQ, the trading day otherwise.',
+        },
+        { key: 'style', title: 'Style', type: 'string', defval: CVD_STYLES[0], options: CVD_STYLES },
+      ],
+    },
+    () => import('./cvd').then((m) => m.cvdImpl),
   )
   defineStudy(
     {

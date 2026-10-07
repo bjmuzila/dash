@@ -41,7 +41,7 @@ import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
 import { testStrategy } from './script/testerPanels'
 import { WALLS_TYPE } from './wallsIndicator'
 import { PATH_TYPE, RIBBON_TYPE } from './vtPath/vtPathIndicator'
-import { EM_TYPE, EVENTS_TYPE, HEAT_TYPE, IB_TYPE, JOURNAL_TYPE, KEY_TYPE, NETPREM_TYPE, ON_TYPE, PRIOR_TYPE, PROFILE_TYPE, RAIL_TYPE, TPO_TYPE, VOLFLOW_TYPE, WHALES_TYPE } from './studies'
+import { EM_TYPE, EVENTS_TYPE, HEAT_TYPE, IB_TYPE, JOURNAL_TYPE, KEY_TYPE, CVD_TYPE, NETGEXFLOW_TYPE, NETGEX_TYPE, NETPREM_TYPE, ON_TYPE, PRIOR_TYPE, PROFILE_TYPE, RAIL_TYPE, TPO_TYPE, VOLFLOW_TYPE, WHALES_TYPE } from './studies'
 
 const FAV_KEY = 'cb-v3-vela-ind-favs'
 const CAT_KEY = 'cb-v3-vela-ind-cat'
@@ -109,8 +109,8 @@ put('volume', [
   'volume-flow-indicator', 'volume-oscillator',
 ])
 put('cb-levels', [WALLS_TYPE, PATH_TYPE, RIBBON_TYPE, PRIOR_TYPE, IB_TYPE, ON_TYPE, KEY_TYPE])
-put('cb-gex', [EM_TYPE, PROFILE_TYPE, VOLFLOW_TYPE, RAIL_TYPE, HEAT_TYPE])
-put('cb-flow', [EVENTS_TYPE, NETPREM_TYPE, WHALES_TYPE, TPO_TYPE])
+put('cb-gex', [EM_TYPE, PROFILE_TYPE, VOLFLOW_TYPE, NETGEX_TYPE, NETGEXFLOW_TYPE, RAIL_TYPE, HEAT_TYPE])
+put('cb-flow', [EVENTS_TYPE, NETPREM_TYPE, CVD_TYPE, WHALES_TYPE, TPO_TYPE])
 
 /**
  * Registered but not offered. CB Journal Trades stays hidden while the journal

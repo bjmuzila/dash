@@ -18,6 +18,17 @@
 //   Vol/GEX Flow   the Vol/GEX Flow card's series (/proxy/gex-vol-flow) in a
 //                  pane: volume GEX as a histogram (green / red), OI GEX and the
 //                  combined line — today's session, as the card.
+//   Net GEX Flow   NET GEX FLOW (2026-10-07, Brandon): how net GEX is MOVING,
+//                  not where it stands. Off the same /proxy/gex-vol-flow series,
+//                  on the page's GEX switch (OI only / OI + Vol / Vol only):
+//                  a histogram of each bar's change in net GEX (green: GEX added,
+//                  red: GEX taken off) and a line of the change since the
+//                  session's first reading. Today's session, as the card.
+//   Net GEX        NET GEX (2026-10-07, Brandon): the ticker's overall net GEX
+//                  through the day — every strike summed (all expiries by
+//                  default), on the page's GEX switch — as a line, columns or
+//                  both. Same series as Net GEX Flow: this is the level, that is
+//                  its change.
 //   Whale Prints   ≥ $1M option prints (/api/lse/whales — the Whales page's own
 //                  feed, kept forever) as BUBBLES centred on the moment each
 //                  printed and the underlying's price then, sized by premium:
@@ -30,15 +41,16 @@
 // ES charts read SPX's flow, NQ charts NDX's — the futures have no options here.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { PriceLine, SeriesSpec } from '@luxalgo/vela'
+import type { OHLCV, PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
 import { DAY_MS, barAt, bool, studyImpl, etDateKey, etWallMs, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
-import { NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_EXP, WH_MIN, WH_OPACITY_DEF, WH_SIDE } from './index'
+import { NETGEXFLOW_TYPE, NETGEX_STYLES, NETGEX_TYPE, NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_EXP, WH_MIN, WH_OPACITY_DEF, WH_SIDE } from './index'
+import { gexBasis, gexBasisShort } from '@/pages/vela/gexBasis'
 import { WhaleLayer, type Tone, type WhaleBubble, type WhaleContext, type WhaleCtxLine, type WhalePayload } from './whaleLayer'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
 import { loadBasis } from '@/pages/vela/wallsIndicator'
 
-const flowTicker = (c: StudyCtx) => (c.sym.fut === 'NQ' ? 'NDX' : c.sym.fut === 'ES' ? 'SPX' : c.sym.key)
+export const flowTicker = (c: StudyCtx) => (c.sym.fut === 'NQ' ? 'NDX' : c.sym.fut === 'ES' ? 'SPX' : c.sym.key)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Net Premium
@@ -105,6 +117,100 @@ function readBins(url: string): Promise<Bin[] | null> {
   return p
 }
 
+/** The filters a flow-bins read takes. */
+interface BinFilter {
+  sessions: number
+  otm: boolean
+  minPremium: number
+}
+
+const binsKey = (c: StudyCtx, s: BinFilter) => `${flowTicker(c)}|${s.sessions}|${s.otm}|${s.minPremium}`
+
+/** Each session's per-minute flow bins, by ET date (/proxy/flow-netprem). */
+async function loadBins(c: StudyCtx, s: BinFilter): Promise<Map<string, Bin[]>> {
+  const t = flowTicker(c)
+  const today = etDateKey(Date.now())
+  const dates = sessionsOf(c.bars, (x) => etDateKey(x))
+    .map((x) => x.key)
+    .slice(-s.sessions)
+  if (!dates.includes(today) && c.ctx.live) dates.push(today)
+  const out = new Map<string, Bin[]>()
+  const urlOf = (d: string) =>
+    `/proxy/flow-netprem?underlying=${encodeURIComponent(t)}&bin=60&date=${d}&minPremium=${s.minPremium}${s.otm ? '&otmOnly=1' : ''}`
+  /** One session's bins into `out` (a past one kept for the page); true when it came back. */
+  const fetchDay = async (d: string): Promise<boolean> => {
+    const url = urlOf(d)
+    const past = d !== today
+    const cached = past ? pastBins.get(url) : undefined
+    if (cached) {
+      out.set(d, cached)
+      return false
+    }
+    if (past && Date.now() - (failedAt.get(url) ?? 0) < RETRY_PAST_MS) return false
+    const bins = await readBins(url)
+    if (!bins) {
+      if (past) failedAt.set(url, Date.now())
+      return false
+    }
+    out.set(d, bins)
+    if (past) pastBins.set(url, bins)
+    return true
+  }
+  // TODAY FIRST (2026-10-06, load times): live, the chart waits only for today
+  // and the past sessions already read; the others are fetched behind it and the
+  // study repaints with them when they land. In a replay every session is awaited.
+  const later = c.ctx.live ? dates.filter((d) => d !== today && !pastBins.has(urlOf(d))) : []
+  await Promise.all(dates.filter((d) => !later.includes(d)).map(fetchDay))
+  if (later.length) {
+    void Promise.all(later.map(fetchDay)).then((got) => {
+      if (got.some(Boolean)) c.refresh?.()
+    })
+  }
+  return out
+}
+
+/**
+ * Two running totals through each session on the chart, each from 0 at the
+ * 09:30 ET open (prints before it are left out), one value per bar: `a` and `b`
+ * are what a bin adds to each. Bars with no bin yet stay null.
+ */
+function cumulate(
+  bars: readonly OHLCV[],
+  tfMs: number,
+  data: Map<string, Bin[]>,
+  a: (b: Bin) => number,
+  b: (b: Bin) => number,
+): { a: (number | null)[]; b: (number | null)[] } {
+  const n = bars.length
+  const outA = new Array<number | null>(n).fill(null)
+  const outB = new Array<number | null>(n).fill(null)
+  for (const ss of sessionsOf(bars, (x) => etDateKey(x))) {
+    const bins = data.get(ss.key)
+    if (!bins?.length) continue
+    const openMs = etWallMs(ss.key, 9 * 60 + 30)
+    let k = 0
+    while (k < bins.length && bins[k]!.sec * 1000 < openMs) k++
+    let ca = 0
+    let cb = 0
+    let seen = false
+    for (let i = ss.from; i <= ss.to; i++) {
+      if (bars[i]!.time + tfMs <= openMs) continue
+      const end = bars[i]!.time + tfMs
+      while (k < bins.length && bins[k]!.sec * 1000 < end) {
+        ca += a(bins[k]!)
+        cb += b(bins[k]!)
+        k++
+        seen = true
+      }
+      if (!seen) continue
+      outA[i] = ca
+      outB[i] = cb
+      if (k >= bins.length && bars[i]!.time > bins[bins.length - 1]!.sec * 1000 + 30 * 60_000) break
+    }
+  }
+  return { a: outA, b: outB }
+}
+
 export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
   settings: (i) => ({
     sessions: int(i.sessions, 1, 1, 7),
@@ -112,86 +218,17 @@ export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
     otm: bool(i.otm, true),
     minPremium: MIN_PREM_V[Math.max(0, (MIN_PREM as readonly string[]).indexOf(str(i.min, MIN_PREM[0])))] ?? 1_000,
   }),
-  dataKey: (c, s) => `${flowTicker(c)}|${s.sessions}|${s.otm}|${s.minPremium}`,
-  load: async (c, s) => {
-    const t = flowTicker(c)
-    const today = etDateKey(Date.now())
-    const dates = sessionsOf(c.bars, (x) => etDateKey(x))
-      .map((x) => x.key)
-      .slice(-s.sessions)
-    if (!dates.includes(today) && c.ctx.live) dates.push(today)
-    const out = new Map<string, Bin[]>()
-    const urlOf = (d: string) =>
-      `/proxy/flow-netprem?underlying=${encodeURIComponent(t)}&bin=60&date=${d}&minPremium=${s.minPremium}${s.otm ? '&otmOnly=1' : ''}`
-    /** One session's bins into `out` (a past one kept for the page); true when it came back. */
-    const fetchDay = async (d: string): Promise<boolean> => {
-      const url = urlOf(d)
-      const past = d !== today
-      const cached = past ? pastBins.get(url) : undefined
-      if (cached) {
-        out.set(d, cached)
-        return false
-      }
-      if (past && Date.now() - (failedAt.get(url) ?? 0) < RETRY_PAST_MS) return false
-      const bins = await readBins(url)
-      if (!bins) {
-        if (past) failedAt.set(url, Date.now())
-        return false
-      }
-      out.set(d, bins)
-      if (past) pastBins.set(url, bins)
-      return true
-    }
-    // TODAY FIRST (2026-10-06, load times): live, the chart waits only for today
-    // and the past sessions already read; the others are fetched behind it and the
-    // study repaints with them when they land. In a replay every session is awaited.
-    const later = c.ctx.live ? dates.filter((d) => d !== today && !pastBins.has(urlOf(d))) : []
-    await Promise.all(dates.filter((d) => !later.includes(d)).map(fetchDay))
-    if (later.length) {
-      void Promise.all(later.map(fetchDay)).then((got) => {
-        if (got.some(Boolean)) c.refresh?.()
-      })
-    }
-    return out
-  },
+  dataKey: binsKey,
+  load: loadBins,
   refreshMs: 15_000,
   render: (c, s, data) => {
     const { bars, tfMs } = c
     if (!bars.length || !data || tfMs >= DAY_MS) return {}
-    const n = bars.length
-    const calls = new Array<number | null>(n).fill(null)
-    const puts = new Array<number | null>(n).fill(null)
-    const net = new Array<number | null>(n).fill(null)
-    const netC = new Array<string | null>(n).fill(null)
+    const { a: calls, b: puts } = cumulate(bars, tfMs, data, (b) => b.callNet, (b) => b.putNet)
     const up = tokenHexAlpha('--color-up', 1)
     const down = tokenHexAlpha('--color-down', 1)
-    for (const ss of sessionsOf(bars, (x) => etDateKey(x))) {
-      const bins = data.get(ss.key)
-      if (!bins?.length) continue
-      // each session starts at 0 on the 09:30 ET open: prints before it are left out
-      const openMs = etWallMs(ss.key, 9 * 60 + 30)
-      let k = 0
-      while (k < bins.length && bins[k]!.sec * 1000 < openMs) k++
-      let cc = 0
-      let pp = 0
-      let seen = false
-      for (let i = ss.from; i <= ss.to; i++) {
-        if (bars[i]!.time + tfMs <= openMs) continue
-        const end = bars[i]!.time + tfMs
-        while (k < bins.length && bins[k]!.sec * 1000 < end) {
-          cc += bins[k]!.callNet
-          pp += bins[k]!.putNet
-          k++
-          seen = true
-        }
-        if (!seen) continue
-        calls[i] = cc
-        puts[i] = pp
-        net[i] = cc - pp
-        netC[i] = cc - pp >= 0 ? up : down
-        if (k >= bins.length && bars[i]!.time > bins[bins.length - 1]!.sec * 1000 + 30 * 60_000) break
-      }
-    }
+    const net = calls.map((v, i) => (v == null ? null : v - puts[i]!))
+    const netC = net.map((v) => (v == null ? null : v >= 0 ? up : down))
     const T = NETPREM_TYPE
     const series: SeriesSpec[] = []
     if (net.some((v) => v != null)) {
@@ -227,6 +264,20 @@ interface VfPoint {
   combined: number
 }
 
+/** Today's Vol/GEX Flow series (/proxy/gex-vol-flow); one request per URL at a time, shared. */
+async function readVolFlow(c: StudyCtx, front: boolean, eth: boolean, bin: number): Promise<VfPoint[]> {
+  const t = flowTicker(c)
+  const symbol = t === 'SPX' || t === 'NDX' || t === 'RUT' ? `$${t}` : t
+  const j = await sharedJson<{ ok?: boolean; points?: Record<string, unknown>[] }>(
+    `/proxy/gex-vol-flow?bin=${bin}&session=${eth ? 'eth' : 'rth'}&scope=${front ? 'front' : 'all'}&symbol=${encodeURIComponent(symbol)}`,
+  )
+  if (!j || j.ok === false || !Array.isArray(j.points)) return []
+  return j.points
+    .map((p) => ({ ts: Number(p.ts), volGex: Number(p.volGex), oiGex: Number(p.oiGex), combined: Number(p.combined) }))
+    .filter((p) => Number.isFinite(p.ts))
+    .sort((a, b) => a.ts - b.ts)
+}
+
 export const volFlowImpl = studyImpl<VfS, VfPoint[]>({
   settings: (i) => ({
     front: str(i.scope, SCOPES[0]) === SCOPES[1],
@@ -236,18 +287,7 @@ export const volFlowImpl = studyImpl<VfS, VfPoint[]>({
     combined: bool(i.combined, true),
   }),
   dataKey: (c, s) => `${flowTicker(c)}|${s.front}|${s.eth}|${s.bin}`,
-  load: async (c, s) => {
-    const t = flowTicker(c)
-    const symbol = t === 'SPX' || t === 'NDX' || t === 'RUT' ? `$${t}` : t
-    const j = await getJson<{ ok?: boolean; points?: Record<string, unknown>[] }>(
-      `/proxy/gex-vol-flow?bin=${s.bin}&session=${s.eth ? 'eth' : 'rth'}&scope=${s.front ? 'front' : 'all'}&symbol=${encodeURIComponent(symbol)}`,
-    )
-    if (!j || j.ok === false || !Array.isArray(j.points)) return []
-    return j.points
-      .map((p) => ({ ts: Number(p.ts), volGex: Number(p.volGex), oiGex: Number(p.oiGex), combined: Number(p.combined) }))
-      .filter((p) => Number.isFinite(p.ts))
-      .sort((a, b) => a.ts - b.ts)
-  },
+  load: (c, s) => readVolFlow(c, s.front, s.eth, s.bin),
   refreshMs: 15_000,
   render: (c, s, pts) => {
     const { bars, tfMs } = c
@@ -281,6 +321,132 @@ export const volFlowImpl = studyImpl<VfS, VfPoint[]>({
     if (s.oi) series.push(seriesOf(T, 'oi', 1, 'OI GEX', bars, oi, tokenHexAlpha('--color-vt-accent-text', 0.9), { kind: 'line', width: 1.4 }))
     if (s.combined) series.push(seriesOf(T, 'comb', 2, 'Combined', bars, comb, tokenHexAlpha('--color-vt-paper', 0.9), { kind: 'line', width: 1.6 }))
     return { series }
+  },
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Net GEX Flow
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface NgS {
+  front: boolean
+  eth: boolean
+  bars: boolean
+  line: boolean
+}
+
+/** Net GEX on the page's GEX switch, from one Vol/GEX Flow point. */
+function netGexOf(p: VfPoint): number {
+  const b = gexBasis()
+  return b === 'oi' ? p.oiGex : b === 'vol' ? p.volGex : p.combined
+}
+
+/**
+ * Net GEX at the END of each bar (the last reading inside it), today's bars only:
+ * the level the flow is measured off. Null where the series has no reading yet.
+ */
+export function gexAtBarEnds(bars: readonly { time: number }[], tfMs: number, pts: readonly VfPoint[], of: (p: VfPoint) => number): (number | null)[] {
+  const n = bars.length
+  const out = new Array<number | null>(n).fill(null)
+  if (!pts.length) return out
+  const first = pts[0]!.ts
+  const lastTs = pts[pts.length - 1]!.ts
+  let k = -1
+  for (let i = 0; i < n; i++) {
+    const t = bars[i]!.time
+    if (t + tfMs <= first) continue
+    if (t > lastTs) break
+    while (k + 1 < pts.length && pts[k + 1]!.ts < t + tfMs) k++
+    const p = pts[k]
+    if (!p) continue
+    const v = of(p)
+    if (Number.isFinite(v)) out[i] = v
+  }
+  return out
+}
+
+export const netGexFlowImpl = studyImpl<NgS, VfPoint[]>({
+  settings: (i) => ({
+    front: str(i.scope, SCOPES[0]) === SCOPES[1],
+    eth: str(i.session, SESS[0]) === SESS[1],
+    bars: bool(i.bars, true),
+    line: bool(i.line, true),
+  }),
+  // the GEX switch is not in the key: one read carries all three books, a switch only repaints
+  dataKey: (c, s) => `${flowTicker(c)}|${s.front}|${s.eth}`,
+  load: (c, s) => readVolFlow(c, s.front, s.eth, 60),
+  refreshMs: 15_000,
+  render: (c, s, pts) => {
+    const { bars, tfMs } = c
+    if (!bars.length || !pts?.length || tfMs >= DAY_MS) return {}
+    const level = gexAtBarEnds(bars, tfMs, pts, netGexOf)
+    const n = bars.length
+    const delta = new Array<number | null>(n).fill(null)
+    const deltaC = new Array<string | null>(n).fill(null)
+    const since = new Array<number | null>(n).fill(null)
+    const up = tokenHexAlpha('--color-vt-chart-up', 0.7)
+    const dn = tokenHexAlpha('--color-vt-chart-down', 0.7)
+    // the session's first reading is the zero the line is measured from
+    const base = netGexOf(pts[0]!)
+    let prev: number | null = null
+    for (let i = 0; i < n; i++) {
+      const v = level[i]
+      if (v == null) continue
+      // a bar's flow: the change from the bar before (the first bar: from the first reading)
+      const d = v - (prev ?? base)
+      delta[i] = d
+      deltaC[i] = d >= 0 ? up : dn
+      since[i] = v - base
+      prev = v
+    }
+    const T = NETGEXFLOW_TYPE
+    const book = gexBasisShort()
+    const series: SeriesSpec[] = []
+    if (s.bars) series.push(seriesOf(T, 'delta', 0, `Δ net GEX (${book})`, bars, delta, up, { kind: 'histogram', colors: deltaC }))
+    if (s.line) series.push(seriesOf(T, 'since', 1, `Since open (${book})`, bars, since, tokenHexAlpha('--color-vt-accent-text', 0.95), { kind: 'line', width: 1.8 }))
+    const priceLines: PriceLine[] = [{ id: `${T}:zero`, paneId: '', price: 0, color: tokenHexAlpha('--color-muted', 0.35), width: 1, lineStyle: 'dashed' }]
+    return { series, priceLines }
+  },
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Net GEX (the level)
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface NlS {
+  front: boolean
+  eth: boolean
+  line: boolean
+  cols: boolean
+}
+
+export const netGexImpl = studyImpl<NlS, VfPoint[]>({
+  settings: (i) => {
+    const style = str(i.style, NETGEX_STYLES[0])
+    return {
+      front: str(i.scope, SCOPES[0]) === SCOPES[1],
+      eth: str(i.session, SESS[0]) === SESS[1],
+      line: style !== NETGEX_STYLES[1],
+      cols: style !== NETGEX_STYLES[0],
+    }
+  },
+  dataKey: (c, s) => `${flowTicker(c)}|${s.front}|${s.eth}`,
+  load: (c, s) => readVolFlow(c, s.front, s.eth, 60),
+  refreshMs: 15_000,
+  render: (c, s, pts) => {
+    const { bars, tfMs } = c
+    if (!bars.length || !pts?.length || tfMs >= DAY_MS) return {}
+    const level = gexAtBarEnds(bars, tfMs, pts, netGexOf)
+    const up = tokenHexAlpha('--color-vt-chart-up', 0.75)
+    const dn = tokenHexAlpha('--color-vt-chart-down', 0.75)
+    const colors = level.map((v) => (v == null ? null : v >= 0 ? up : dn))
+    const T = NETGEX_TYPE
+    const title = `Net GEX (${gexBasisShort()})`
+    const series: SeriesSpec[] = []
+    if (s.cols) series.push(seriesOf(T, 'cols', 0, s.line ? `${title} bars` : title, bars, level, up, { kind: 'histogram', colors }))
+    if (s.line) series.push(seriesOf(T, 'line', 1, title, bars, level, tokenHexAlpha('--color-vt-accent-text', 0.95), { kind: 'line', width: 2 }))
+    const priceLines: PriceLine[] = [{ id: `${T}:zero`, paneId: '', price: 0, color: tokenHexAlpha('--color-muted', 0.35), width: 1, lineStyle: 'dashed' }]
+    return { series, priceLines }
   },
 })
 
