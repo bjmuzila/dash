@@ -51,6 +51,8 @@
 // one connection, not one per name.
 const { fetchIntradayCandlesMulti } = require('./candle-history');
 const { CORE_TICKERS, getActiveRoster } = require('./far-cb-tickers');
+// Bad-print wick filter, applied on READ (the table keeps the raw tape).
+const despikeLib = require('./candle-despike');
 
 const INTERVAL_MS = Number(process.env.ETF_CANDLE_RECORDER_INTERVAL_MS || 60_000);
 // ── HOT lane ─────────────────────────────────────────────────────────────────
@@ -561,10 +563,10 @@ async function getEtfCandles(symbol, date) {
         ORDER BY timestamp ASC`,
       [String(symbol).toUpperCase(), d],
     );
-    return rows.map((r) => ({
+    return despikeLib.despike(rows.map((r) => ({
       time: Number(r.timestamp), open: Number(r.open), high: Number(r.high),
       low: Number(r.low), close: Number(r.close), volume: Number(r.volume),
-    }));
+    })));
   } catch (e) {
     console.warn('[etf-candle] getEtfCandles query failed:', e.message);
     return [];
@@ -602,8 +604,25 @@ async function getEtfCandleHistory(symbol, daysBack = 5, interval = 5, limit = 5
   const cap = Math.max(1, Math.min(50_000, Number(limit) || 5000));
 
   try {
+    // Bad-print wicks are clamped on the 1m rows BEFORE bucketing (candle-despike.js),
+    // so the 5m bars — and every roll-up the client builds from them — are clean.
+    // The read starts SQL_PAD_MS early so the window's first bar has past neighbours;
+    // `clean` then drops the padding.
     const { rows } = await p.query(
-      `SELECT bucket_ts AS timestamp,
+      `WITH raw AS (
+         SELECT timestamp, date, open, high, low, close, volume
+           FROM etf_candles
+          WHERE symbol = $1 AND timestamp >= $2::bigint - $5::bigint
+       ), nb AS (
+         SELECT raw.*, ${despikeLib.SQL_NEIGHBOUR_COLS}
+           FROM raw
+         ${despikeLib.SQL_WINDOWS}
+       ), clean AS (
+         SELECT timestamp, date, open, close, volume, ${despikeLib.sqlClampCols('$6', '$7')}
+           FROM nb
+          WHERE timestamp >= $2::bigint
+       )
+       SELECT bucket_ts AS timestamp,
               MIN(date)                                            AS date,
               (ARRAY_AGG(open  ORDER BY timestamp ASC))[1]         AS open,
               MAX(high)                                            AS high,
@@ -613,13 +632,12 @@ async function getEtfCandleHistory(symbol, daysBack = 5, interval = 5, limit = 5
          FROM (
            SELECT (FLOOR(timestamp / $3::bigint) * $3::bigint) AS bucket_ts,
                   timestamp, date, open, high, low, close, volume
-             FROM etf_candles
-            WHERE symbol = $1 AND timestamp >= $2
+             FROM clean
          ) b
         GROUP BY bucket_ts
         ORDER BY bucket_ts DESC
         LIMIT $4`,
-      [sym, since, bucketMs, cap],
+      [sym, since, bucketMs, cap, despikeLib.SQL_PAD_MS, despikeLib.PCT, despikeLib.MULT],
     );
 
     // Query returns newest-first (so LIMIT keeps the most RECENT bars); the

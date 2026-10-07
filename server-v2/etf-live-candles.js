@@ -61,6 +61,7 @@
  */
 
 const { DxLinkClient, getQuoteToken } = require('./proxy-tastytrade');
+const { despike } = require('./candle-despike');
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 // One /live request keeps a symbol hot this long. Must comfortably exceed the
@@ -388,7 +389,10 @@ function readRows(list, iv, want) {
   for (const sym of list) {
     const m = bars.get(sym);
     if (!m || !m.size) continue;
-    const raw = [...m.values()].sort((a, b) => a.time - b.time);
+    // Bad-print wicks clamped before bucketing (candle-despike.js). The map stays
+    // raw, so the forming bar — judged on its past neighbours only — is re-judged
+    // both ways once the next minutes arrive.
+    const raw = despike([...m.values()].sort((a, b) => a.time - b.time));
     const earliest = raw[0].time;
 
     const buckets = new Map();

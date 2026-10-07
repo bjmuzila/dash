@@ -6823,9 +6823,11 @@ if (libDb) {
         const bucketMs = interval * 60_000;
         // Aggregate: first open, max high, min low, last close, summed volume —
         // the same reduction getEtfCandleHistory does in SQL. Input is
-        // oldest-first, so "first"/"last" are just order of arrival.
+        // oldest-first, so "first"/"last" are just order of arrival. Bad-print
+        // wicks are clamped on the 1m bars first, as the table path does.
+        const { despike } = require('./candle-despike');
         const buckets = new Map();
-        for (const c of raw) {
+        for (const c of despike(raw.slice().sort((a, b) => Number(a.time) - Number(b.time)))) {
           const t = Number(c.time);
           const close = Number(c.close);
           if (!(t > 0) || !(close > 0)) continue;
