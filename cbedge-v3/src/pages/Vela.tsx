@@ -30,6 +30,7 @@ import { bindSymbolPicker, registerSymbolPicker, SYMBOL_ACTION_ID } from '@/page
 import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@/pages/vela/workspaceMenu'
 import { CLOCK_ACTION_ID, registerSessionClock } from '@/pages/vela/sessionClock'
 import { GEX_BASIS_ACTION_ID, bindGexBasis, registerGexBasis } from '@/pages/vela/gexBasisMenu'
+import { patchVwapSession } from '@/pages/vela/vwapSession'
 import { replayActive } from '@/pages/vela/replay/clock'
 import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
 import { TIMEFRAMES } from '@/pages/vela/timeframes'
@@ -510,6 +511,10 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       engines: { [CBSCRIPT]: () => new CbScriptEngine() },
       persist: storageKey,
     })
+    // Vela's VWAP sessions start at 18:00 ET, the futures open (vela/vwapSession.ts).
+    // Here because Vela registers its built-ins when the first chart is built, and
+    // before any VWAP has bars to compute on.
+    patchVwapSession()
     wsRef.current = ws
     setWsState(ws)
     const unbindReplay = bindReplay(ws)
