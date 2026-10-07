@@ -153,11 +153,50 @@ const BREAKER_PROBE_MS = 5 * 60_000;
  *   - a per-minute refusal benches the key for RATE_COOLDOWN_MS only;
  *   - ordinary calls stop at LSE_PER_MIN − LSE_SWEEP_RESERVE_PER_MIN calls in
  *     the trailing minute, so the sweep always has room on that key.
- * LSE_PER_MIN defaults to 50 — set it to the plan's real number if known.
+ * LSE_PER_MIN defaults to 180 — the plan answers calls_per_minute: 200 on
+ * GET /vault/usage (2026-10-07); 10% under it leaves room for a restart's
+ * uncounted calls.
  */
-const PER_MIN = Math.max(5, Number(process.env.LSE_PER_MIN) || 50);
+const PER_MIN = Math.max(5, Number(process.env.LSE_PER_MIN) || 180);
 const SWEEP_RESERVE_PER_MIN = Math.min(PER_MIN - 1, Math.max(0, Number(process.env.LSE_SWEEP_RESERVE_PER_MIN) || 6));
 const RATE_COOLDOWN_MS = 65_000;
+/**
+ * CONCURRENCY (2026-10-07). The plan allows vault_concurrency: 2 — two
+ * requests in flight per key. Every whale page tab ran four loaders at once,
+ * so this is enforced HERE, per key: a third request waits for a slot. The
+ * sweep jumps the queue; anything else gives up after CONC_WAIT_MS (the
+ * contract-candles route then answers empty and the page falls back to the
+ * other source), and a queue longer than CONC_MAX_QUEUE refuses at once.
+ */
+const CONCURRENCY = Math.max(1, Number(process.env.LSE_CONCURRENCY) || 2);
+const CONC_WAIT_MS = 15_000;
+const CONC_MAX_QUEUE = 40;
+
+function acquireSlot(b, priority) {
+  if (b.inflight < CONCURRENCY) { b.inflight += 1; return Promise.resolve(); }
+  const sweep = priority === 'sweep';
+  if (!sweep && b.waiters.length >= CONC_MAX_QUEUE) {
+    return Promise.reject(new LseError(429, 'LSE busy — vault concurrency queue full'));
+  }
+  return new Promise((resolve, reject) => {
+    const w = { resolve, t: null };
+    if (sweep) {
+      b.waiters.unshift(w);
+    } else {
+      b.waiters.push(w);
+      w.t = setTimeout(() => {
+        const ix = b.waiters.indexOf(w);
+        if (ix >= 0) { b.waiters.splice(ix, 1); reject(new LseError(429, 'LSE busy — vault concurrency limit')); }
+      }, CONC_WAIT_MS);
+    }
+  });
+}
+
+/** Hand the slot straight to the next waiter, or free it. */
+function releaseSlot(b) {
+  const w = b.waiters.shift();
+  if (w) { if (w.t) clearTimeout(w.t); w.resolve(); } else b.inflight -= 1;
+}
 /** Key index → its state. Keyed by POSITION, never by the key string. */
 const budgets = [];
 let budgetDay = '';
@@ -174,7 +213,7 @@ const isDailyLimit = (msg) => /daily|per day|\/day\b|quota/i.test(String(msg || 
 const isLimitError = (status, msg) => status === 429 || /request limit|rate limit|calls per minute|slow down|quota/i.test(String(msg || ''));
 
 function budgetFor(i) {
-  if (!budgets[i]) budgets[i] = { used: 0, exhaustedUntil: 0, lastProbeAt: 0, lastLimitMsg: null, cooldownUntil: 0, recent: [] };
+  if (!budgets[i]) budgets[i] = { used: 0, exhaustedUntil: 0, lastProbeAt: 0, lastLimitMsg: null, cooldownUntil: 0, recent: [], inflight: 0, waiters: [] };
   return budgets[i];
 }
 
@@ -231,12 +270,10 @@ function pickKey(count, priority, skip) {
 
 /** Why nothing could be sent — the message a card shows. */
 function refusalMessage(count) {
-  const cooling = budgets.slice(0, count).some((b) => b && b.cooldownUntil > Date.now());
-  const anyDaily = budgets.slice(0, count).some((b) => b && b.exhaustedUntil);
+  const cooling = budgets.slice(0, count).some((b) => b && (b.cooldownUntil > Date.now() || lastMinute(b) >= PER_MIN - SWEEP_RESERVE_PER_MIN));
   if (cooling && !budgets.slice(0, count).every((b) => b && b.exhaustedUntil)) {
     return 'LSE per-minute rate limit — retrying shortly';
   }
-  void anyDaily;
   const tripped = budgets.slice(0, count).find((b) => b && b.exhaustedUntil);
   if (tripped && budgets.slice(0, count).every((b) => b && b.exhaustedUntil)) {
     return count > 1
@@ -260,6 +297,8 @@ function budgetStatus() {
       exhausted: Boolean(b.exhaustedUntil),
       exhaustedUntil: b.exhaustedUntil ? new Date(b.exhaustedUntil).toISOString() : null,
       coolingUntil: b.cooldownUntil > Date.now() ? new Date(b.cooldownUntil).toISOString() : null,
+      inflight: b.inflight,
+      queued: b.waiters.length,
       lastMinute: lastMinute(b),
       lastLimitMsg: b.lastLimitMsg,
     });
@@ -268,6 +307,7 @@ function budgetStatus() {
     day: budgetDay,
     limitPerKey: DAILY_LIMIT,
     perMinutePerKey: PER_MIN,
+    concurrencyPerKey: CONCURRENCY,
     sweepReserve: SWEEP_RESERVE,
     used: keys.reduce((n, k) => n + k.used, 0),
     refused: refusedToday,
@@ -296,7 +336,13 @@ async function vaultGet(path, params = {}, { timeoutMs = 60000, priority = 'norm
       throw new LseError(429, refusalMessage(keys.length));
     }
     try {
-      return await vaultGetWithKey(path, params, timeoutMs, keys[i], budgetFor(i));
+      const slotOf = budgetFor(i);
+      await acquireSlot(slotOf, priority);
+      try {
+        return await vaultGetWithKey(path, params, timeoutMs, keys[i], slotOf);
+      } finally {
+        releaseSlot(slotOf);
+      }
     } catch (e) {
       // Only a LIMIT moves on to the next key. Any other failure is the
       // vault's answer to this request, and another key would get it too.
