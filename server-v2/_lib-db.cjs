@@ -2935,11 +2935,22 @@ async function insertSession(r) {
 }
 async function getSessionWithUser(tokenHash) {
   return queryOne(
+    // Kept in step with lib/db.ts getSessionWithUser (2026-10-07): paid = a
+    // live member_access row, comp or Voltick grant. Not Stripe.
     `SELECT s.user_id, u.email, u.is_owner, s.expires_at,
-            COALESCE(sub.status IN ('active','trialing'), FALSE) AS is_paid
+            (ma.email IS NOT NULL OR ca.email IS NOT NULL OR va.email IS NOT NULL) AS is_paid,
+            (ca.email IS NOT NULL OR va.email IS NOT NULL)                         AS is_comped
        FROM sessions s
        JOIN users u ON u.id = s.user_id
-       LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
+       LEFT JOIN member_access ma
+              ON ma.email = LOWER(u.email) AND ma.revoked_at IS NULL
+             AND (ma.expires_at IS NULL OR ma.expires_at > NOW())
+       LEFT JOIN comp_access ca
+              ON ca.email = LOWER(u.email) AND ca.revoked_at IS NULL
+             AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+       LEFT JOIN voltick_access va
+              ON va.email = LOWER(u.email) AND va.revoked_at IS NULL
+             AND (va.expires_at IS NULL OR va.expires_at > NOW())
       WHERE s.token_hash = ? AND s.expires_at > NOW()`,
     [tokenHash]
   );

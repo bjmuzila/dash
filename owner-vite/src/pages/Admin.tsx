@@ -719,6 +719,235 @@ function VelaBetaPanel() {
   );
 }
 
+// ─── Members — THE paid list (since 2026-10-07) ───────────────────────────────
+//
+// Who counts as a paying customer: cbedge.net, its data, and vela.cbedge.net.
+// Backed by member_access via /api/admin/members. Stripe no longer decides:
+// CB Edge is closed to new members and every subscription is set to cancel,
+// so each member just has an end date here and loses access when it passes.
+// Live Stripe subscriptions were copied in with their paid-through date
+// ("Sync from Stripe" re-runs that; it never shortens a date or re-adds
+// someone you ended). Change a date to extend or shorten; "End now" cuts
+// access immediately.
+
+interface MemberRow {
+  email: string;
+  note: string | null;
+  expires_at: string | null;
+  source: string | null;
+  granted_at: string;
+  revoked_at: string | null;
+  user_id: string | null;
+  stripe_status: string | null;
+}
+
+/** YYYY-MM-DD in ET, for the date input. */
+function etDay(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+}
+
+function memberState(r: MemberRow): { label: string; color: string } {
+  if (r.revoked_at) return { label: "ended", color: T.muted };
+  if (!r.expires_at) return { label: "no end date", color: T.orange };
+  const ms = new Date(r.expires_at).getTime() - Date.now();
+  if (ms <= 0) return { label: "expired", color: T.muted };
+  const days = Math.ceil(ms / 86_400_000);
+  return { label: days <= 7 ? `${days}d left` : "active", color: days <= 7 ? T.orange : T.green };
+}
+
+function MembersPanel() {
+  const [rows, setRows] = useState<MemberRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [newEmail, setNewEmail] = useState("");
+  const [newExpiry, setNewExpiry] = useState("");
+  const [showEnded, setShowEnded] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/members");
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setRows((j.rows as MemberRow[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const save = async (email: string, expiresAt: string, msg: string) => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/admin/members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, expiresAt: expiresAt || null }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setNotice(msg);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const add = async () => {
+    const email = newEmail.trim().toLowerCase();
+    if (!email) return;
+    await save(email, newExpiry, `${email} added${newExpiry ? ` through ${newExpiry}` : " with no end date"}.`);
+    setNewEmail("");
+    setNewExpiry("");
+  };
+
+  const endNow = async (email: string) => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/admin/members?email=${encodeURIComponent(email)}`, { method: "DELETE" });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j?.error || `HTTP ${res.status}`); }
+      setNotice(`${email} no longer has access.`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "End failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const syncStripe = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/admin/members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "import" }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setNotice(j?.added ? `${j.added} added or renewed from Stripe.` : "Nothing new in Stripe.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isLive = (r: MemberRow) => !r.revoked_at && (!r.expires_at || new Date(r.expires_at).getTime() > Date.now());
+  const live = rows?.filter(isLive) ?? [];
+  const ended = rows?.filter((r) => !isLive(r)) ?? [];
+  const shown = showEnded ? [...live, ...ended] : live;
+
+  const inputStyle = {
+    padding: "6px 10px", fontSize: 14, fontFamily: "var(--font-mono)",
+    background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6,
+    color: T.text, outline: "none",
+  } as const;
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: LIGHT_BLUE }}>Members</span>
+        <span style={{ fontSize: 14, padding: "2px 8px", borderRadius: 10, background: `${LIGHT_BLUE}18`, border: `1px solid ${LIGHT_BLUE}44`, color: LIGHT_BLUE, fontWeight: 700 }}>
+          {rows ? live.length : "—"}
+        </span>
+        <span style={{ fontSize: 14, color: T.textSecondary }}>the paid list · cbedge.net + vela.cbedge.net · access ends on the end date · not Stripe</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+          <button onClick={syncStripe} disabled={busy} title="Add any live Stripe subscription that isn't on this list yet. Never shortens a date or re-adds someone you ended."
+            style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 14, opacity: busy ? 0.5 : 1 }}>
+            Sync from Stripe
+          </button>
+          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 14, opacity: loading ? 0.5 : 1 }}>
+            {loading ? "…" : "↻"}
+          </button>
+        </div>
+      </div>
+
+      {/* Add */}
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") add(); }}
+          placeholder="add a member by email…" style={{ ...inputStyle, flex: "2 1 220px", minWidth: 0 }} />
+        <input type="date" value={newExpiry} onChange={(e) => setNewExpiry(e.target.value)}
+          title="Access ends at the end of this day, ET (blank = no end date)" style={{ ...inputStyle, flexShrink: 0 }} />
+        <button onClick={add} disabled={busy || !newEmail.trim()} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 14, opacity: busy || !newEmail.trim() ? 0.5 : 1 }}>
+          Add
+        </button>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: T.textSecondary, marginLeft: "auto", cursor: "pointer", userSelect: "none" }}>
+          <input type="checkbox" checked={showEnded} onChange={(e) => setShowEnded(e.target.checked)} style={{ accentColor: LIGHT_BLUE, cursor: "pointer" }} />
+          show ended ({ended.length})
+        </label>
+        {notice && <div style={{ flexBasis: "100%", fontSize: 13, color: T.textSecondary, paddingTop: 2 }}>{notice}</div>}
+      </div>
+
+      <div style={{ maxHeight: 360, overflowY: "auto" }}>
+        {error ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 14 }}>{error}</div>
+        ) : loading && !rows ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>Loading…</div>
+        ) : shown.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>No members</div>
+        ) : (
+          shown.map((r) => {
+            const st = memberState(r);
+            const liveRow = isLive(r);
+            return (
+              <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14, opacity: liveRow ? 1 : 0.6 }}>
+                <span style={{ flex: 1, minWidth: 0, color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
+                <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: `${st.color}18`, border: `1px solid ${st.color}44`, color: st.color, flexShrink: 0 }}>
+                  {st.label}
+                </span>
+                {r.note && (
+                  <span title={r.note} style={{ fontSize: 13, color: T.textSecondary, flexShrink: 1, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.note}</span>
+                )}
+                <input
+                  type="date"
+                  defaultValue={etDay(r.expires_at)}
+                  disabled={busy}
+                  title="End date (end of day ET). Change it to extend or shorten. Clear it for no end date."
+                  onBlur={(e) => {
+                    const v = e.target.value;
+                    if (v !== etDay(r.expires_at) || r.revoked_at) {
+                      save(r.email, v, v ? `${r.email} now ends ${v}.` : `${r.email} now has no end date.`);
+                    }
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  style={{ ...inputStyle, padding: "3px 8px", flexShrink: 0 }}
+                />
+                {liveRow ? (
+                  <button onClick={() => endNow(r.email)} disabled={busy} title="End access now"
+                    style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 14, flexShrink: 0, opacity: busy ? 0.5 : 1 }}>
+                    End now
+                  </button>
+                ) : (
+                  <span style={{ fontSize: 12, color: T.muted, flexShrink: 0, width: 78, textAlign: "center" }}>set a date</span>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── System checks ─────────────────────────────────────────────────────────────
 // Owner diagnostics, run on click. Backed by /api/admin/checks in
 // server-v2/api-router.js, which holds a FIXED registry of named read-only
@@ -944,6 +1173,9 @@ export default function Admin() {
 
         {/* Owner diagnostics, run on click. */}
         <SystemChecksPanel />
+
+        {/* The paid list: who has cbedge.net + vela.cbedge.net, and until when. */}
+        <MembersPanel />
 
         {/* Who can open voltick.cbedge.net — added to weekly while the merger
             is live. */}

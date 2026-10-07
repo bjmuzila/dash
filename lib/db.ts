@@ -169,7 +169,82 @@ export async function getDb(): Promise<Pool> {
   }
   await ensureEsCandlesContract(pool);
   await ensureNqCandlesKey(pool);
+  if (!_membersImported) {
+    _membersImported = true;
+    try {
+      // Created here as well as in ensureAllTables: that is one big statement,
+      // and if it ever fails part-way every paying customer would be locked out
+      // by a missing table rather than just missing a feature.
+      await pool.query(MEMBER_TABLE_SQL);
+      const n = await importMembersFromStripe(pool);
+      if (n) console.log(`[db] member_access: ${n} row(s) added/renewed from Stripe`);
+    } catch (err) {
+      console.warn("[db] member_access import failed:", String((err as Error)?.message).slice(0, 200));
+    }
+  }
   return pool;
+}
+
+// ── Members: Stripe -> member_access ────────────────────────────────────────
+// See the member_access CREATE TABLE. KEEP IN SYNC with MEMBER_IMPORT_SQL in
+// server-v2/ws-auth.js, which runs the same statement on its own pool so the
+// /api, /proxy and socket gate can never be the first thing to look at an
+// empty table after a deploy.
+let _membersImported = false;
+const MEMBER_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS member_access (
+    email              TEXT PRIMARY KEY,
+    note               TEXT,
+    expires_at         TIMESTAMPTZ,
+    source             TEXT,
+    stripe_period_end  BIGINT,
+    granted_by         TEXT,
+    granted_at         TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    revoked_at         TIMESTAMPTZ
+  );
+  CREATE INDEX IF NOT EXISTS idx_member_access_live
+    ON member_access(email) WHERE revoked_at IS NULL;`;
+const MEMBER_IMPORT_SQL = `
+  INSERT INTO member_access (email, note, expires_at, source, stripe_period_end, granted_by, granted_at)
+  SELECT DISTINCT ON (LOWER(u.email))
+         LOWER(u.email),
+         CASE WHEN s.current_period_end IS NULL
+              THEN 'From Stripe - no period end on file, set an end date'
+              ELSE 'From Stripe' END,
+         CASE WHEN s.current_period_end IS NULL THEN NULL
+              ELSE to_timestamp(s.current_period_end) END,
+         'stripe',
+         s.current_period_end,
+         'stripe',
+         NOW()
+    FROM subscriptions s
+    JOIN users u ON u.id = s.clerk_user_id
+   WHERE s.status IN ('active','trialing')
+     AND u.email IS NOT NULL
+     AND ($1::text IS NULL OR s.clerk_user_id = $1)
+   ORDER BY LOWER(u.email), s.current_period_end DESC NULLS LAST
+  ON CONFLICT (email) DO UPDATE SET
+    expires_at = CASE
+                   WHEN member_access.revoked_at IS NULL
+                    AND EXCLUDED.stripe_period_end IS NOT NULL
+                    AND EXCLUDED.stripe_period_end > COALESCE(member_access.stripe_period_end, 0)
+                    AND member_access.expires_at IS NOT NULL
+                   THEN GREATEST(member_access.expires_at, EXCLUDED.expires_at)
+                   ELSE member_access.expires_at
+                 END,
+    stripe_period_end = GREATEST(COALESCE(member_access.stripe_period_end, 0), COALESCE(EXCLUDED.stripe_period_end, 0))
+  WHERE member_access.revoked_at IS NULL
+    AND EXCLUDED.stripe_period_end IS NOT NULL
+    AND EXCLUDED.stripe_period_end > COALESCE(member_access.stripe_period_end, 0)`;
+
+/** Copy live Stripe subscriptions into member_access. Pass a user id to do one
+ *  account (the webhook), or nothing for everyone (boot / the owner's "Sync from
+ *  Stripe" button). Returns rows inserted or renewed. Never shortens an end
+ *  date, never revives a revoked member. */
+export async function importMembersFromStripe(pool?: Pool, userId?: string | null): Promise<number> {
+  const p = pool ?? (await getDb());
+  const res = await p.query(MEMBER_IMPORT_SQL, [userId ?? null]);
+  return res.rowCount ?? 0;
 }
 
 async function ensureAllTables(pool: Pool): Promise<void> {
@@ -1224,6 +1299,37 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_vela_beta_access_live
       ON vela_beta_access(email) WHERE revoked_at IS NULL;
+
+    -- Members (2026-10-07). THE paid list now. Stripe no longer decides who
+    -- gets in: CB Edge is closed to new members and every live subscription is
+    -- already set to cancel, so access is this table, with an end date the
+    -- owner controls (owner console -> Admin -> Members).
+    --
+    -- is_paid = a live member_access row OR a live comp OR a live voltick grant.
+    -- Read in getSessionWithUser() below AND in all three queries in
+    -- server-v2/ws-auth.js -- keep the four in step.
+    --
+    -- Filled from Stripe by importMembersFromStripe(): every subscriptions row
+    -- that is active/trialing becomes a member whose expires_at is that row's
+    -- current_period_end. It runs on boot (getDb) and from the webhook
+    -- (upsertSubscription), and it never fights the owner: it only moves
+    -- expires_at when Stripe reports a NEW, later period end (a real renewal,
+    -- tracked in stripe_period_end), and never touches a revoked row. A Stripe
+    -- cancellation or refund does NOT remove anyone -- revoke them here.
+    --
+    -- Keyed on email like comp_access. expires_at NULL = no end date.
+    CREATE TABLE IF NOT EXISTS member_access (
+      email              TEXT PRIMARY KEY,
+      note               TEXT,
+      expires_at         TIMESTAMPTZ,
+      source             TEXT,
+      stripe_period_end  BIGINT,
+      granted_by         TEXT,
+      granted_at         TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      revoked_at         TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_member_access_live
+      ON member_access(email) WHERE revoked_at IS NULL;
 
     -- Churn log. One row per subscription that has ever signalled it is leaving,
     -- written by the Stripe webhook (app/api/stripe/webhook/route.ts).
@@ -2918,6 +3024,13 @@ export async function upsertSubscription(r: {
       r.cancel_at_period_end ? 1 : 0,
     ]
   );
+  // Stripe feeds the member list (see member_access). Best effort: a failure
+  // here must not fail the webhook, and boot re-runs the same import.
+  try {
+    await importMembersFromStripe(undefined, r.clerk_user_id);
+  } catch (err) {
+    console.warn("[db] member_access sync after webhook failed:", String((err as Error)?.message).slice(0, 200));
+  }
 }
 
 export interface SubscriptionCancellationRecord {
@@ -3775,6 +3888,7 @@ export async function getLapsedTrialCandidates(
        LEFT JOIN comp_access ca     ON ca.email = lower(u.email) AND ca.revoked_at IS NULL
        LEFT JOIN voltick_access va  ON va.email = lower(u.email) AND va.revoked_at IS NULL
        LEFT JOIN vela_beta_access vb ON vb.email = lower(u.email) AND vb.revoked_at IS NULL
+       LEFT JOIN member_access ma   ON ma.email = lower(u.email)
        LEFT JOIN email_unsubscribes eu ON eu.email = lower(u.email)
        LEFT JOIN trial_bans b       ON b.kind = 'email' AND b.lifted_at IS NULL
                                    AND b.value_key = th.email_key
@@ -3782,6 +3896,7 @@ export async function getLapsedTrialCandidates(
         AND ca.email IS NULL
         AND va.email IS NULL
         AND vb.email IS NULL
+        AND ma.email IS NULL
         AND eu.email IS NULL
         AND b.id IS NULL
         AND u.is_owner = FALSE
@@ -3829,6 +3944,7 @@ export async function getSignupNoPurchaseCandidates(
        LEFT JOIN comp_access ca     ON ca.email = lower(u.email) AND ca.revoked_at IS NULL
        LEFT JOIN voltick_access va  ON va.email = lower(u.email) AND va.revoked_at IS NULL
        LEFT JOIN vela_beta_access vb ON vb.email = lower(u.email) AND vb.revoked_at IS NULL
+       LEFT JOIN member_access ma   ON ma.email = lower(u.email)
        LEFT JOIN email_unsubscribes eu ON eu.email = lower(u.email)
        LEFT JOIN trial_bans b       ON b.kind = 'email' AND b.lifted_at IS NULL
                                    AND b.value_key = lower(u.email)
@@ -3838,6 +3954,7 @@ export async function getSignupNoPurchaseCandidates(
         AND ca.email IS NULL
         AND va.email IS NULL
         AND vb.email IS NULL
+        AND ma.email IS NULL
         AND eu.email IS NULL
         AND b.id IS NULL
         AND u.is_owner = FALSE
@@ -4259,15 +4376,22 @@ export async function getSessionWithUser(tokenHash: string): Promise<SessionWith
   // KEEP IN SYNC with server-v2/ws-auth.js — it runs this same is_paid in raw
   // SQL for /api, /proxy and the WebSocket. If the two disagree the page
   // renders and then every data call 401s.
+  //
+  // Since 2026-10-07 Stripe is NOT part of this: a paying customer is a live
+  // member_access row (see its CREATE TABLE). Stripe feeds that table; it no
+  // longer opens the door itself.
   return queryOne<SessionWithUser>(
     `SELECT s.user_id, u.email, u.is_owner, s.expires_at,
-            (COALESCE(sub.status IN ('active','trialing'), FALSE)
+            (ma.email IS NOT NULL
               OR ca.email IS NOT NULL
               OR va.email IS NOT NULL)                       AS is_paid,
             (ca.email IS NOT NULL OR va.email IS NOT NULL)   AS is_comped
        FROM sessions s
        JOIN users u ON u.id = s.user_id
-       LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
+       LEFT JOIN member_access ma
+              ON ma.email = LOWER(u.email)
+             AND ma.revoked_at IS NULL
+             AND (ma.expires_at IS NULL OR ma.expires_at > NOW())
        LEFT JOIN comp_access ca
               ON ca.email = LOWER(u.email)
              AND ca.revoked_at IS NULL
@@ -4552,6 +4676,94 @@ export async function canOpenVelaBeta(userId: string): Promise<boolean> {
     [userId]
   );
   return Boolean(row?.allowed);
+}
+
+// ── Members (owner console -> Admin -> Members) ─────────────────────────────
+// See the member_access CREATE TABLE. API surface: app/api/admin/members.
+
+export interface MemberRow {
+  email: string;
+  note: string | null;
+  expires_at: string | null;
+  source: string | null;
+  granted_at: string;
+  granted_by: string | null;
+  revoked_at: string | null;
+  user_id: string | null;
+  /** Stripe's view, for the panel only -- it no longer gates anything. */
+  stripe_status: string | null;
+  cancel_at_period_end: number | null;
+}
+
+/** Every member row, live first (soonest end date first), then ended/revoked. */
+export async function listMembers(): Promise<MemberRow[]> {
+  return queryAll<MemberRow>(
+    `SELECT ma.email, ma.note, ma.expires_at, ma.source, ma.granted_at, ma.granted_by, ma.revoked_at,
+            u.id AS user_id, s.status AS stripe_status, s.cancel_at_period_end
+       FROM member_access ma
+       LEFT JOIN users u ON LOWER(u.email) = ma.email
+       LEFT JOIN subscriptions s ON s.clerk_user_id = u.id
+      ORDER BY (ma.revoked_at IS NULL AND (ma.expires_at IS NULL OR ma.expires_at > NOW())) DESC,
+               ma.expires_at ASC NULLS LAST, ma.email`
+  );
+}
+
+/** Add a member or set their end date. Clears revoked_at, so this is also
+ *  "give access back". expiresAt null = no end date. */
+export async function upsertMember(
+  email: string,
+  opts: { expiresAt: string | null; note?: string | null; grantedBy?: string | null }
+): Promise<void> {
+  await pgQuery(
+    `INSERT INTO member_access (email, note, expires_at, source, granted_by, granted_at, revoked_at)
+     VALUES ($1, $2, $3, 'owner', $4, NOW(), NULL)
+     ON CONFLICT (email) DO UPDATE
+       SET expires_at = EXCLUDED.expires_at,
+           note       = COALESCE(EXCLUDED.note, member_access.note),
+           granted_by = EXCLUDED.granted_by,
+           revoked_at = NULL`,
+    [email.trim().toLowerCase(), opts.note ?? null, opts.expiresAt, opts.grantedBy ?? null]
+  );
+}
+
+/** Take access away now. The row stays (history, and so a Stripe sync never
+ *  quietly re-adds them). */
+export async function revokeMember(email: string): Promise<{ revoked: boolean }> {
+  const res = await pgQuery(
+    `UPDATE member_access SET revoked_at = NOW()
+      WHERE email = $1 AND revoked_at IS NULL`,
+    [email.trim().toLowerCase()]
+  );
+  return { revoked: (res.rowCount ?? 0) > 0 };
+}
+
+/** Owner / member / comp state for one user -- the same sources as is_paid in
+ *  getSessionWithUser(). Used by lib/subscription.ts. */
+export async function getPaidAccessRow(userId: string): Promise<
+  { is_owner: boolean; is_member: boolean; is_comped: boolean; status: string | null } | undefined
+> {
+  return queryOne(
+    `SELECT u.is_owner,
+            (ma.email IS NOT NULL)                         AS is_member,
+            (ca.email IS NOT NULL OR va.email IS NOT NULL) AS is_comped,
+            sub.status
+       FROM users u
+       LEFT JOIN subscriptions sub ON sub.clerk_user_id = u.id
+       LEFT JOIN member_access ma
+              ON ma.email = LOWER(u.email)
+             AND ma.revoked_at IS NULL
+             AND (ma.expires_at IS NULL OR ma.expires_at > NOW())
+       LEFT JOIN comp_access ca
+              ON ca.email = LOWER(u.email)
+             AND ca.revoked_at IS NULL
+             AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+       LEFT JOIN voltick_access va
+              ON va.email = LOWER(u.email)
+             AND va.revoked_at IS NULL
+             AND (va.expires_at IS NULL OR va.expires_at > NOW())
+      WHERE u.id = ?`,
+    [userId]
+  );
 }
 
 export async function deleteSession(tokenHash: string): Promise<void> {

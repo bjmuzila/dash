@@ -11616,7 +11616,13 @@ Return exactly one element per input key, in the same order. Never merge, split,
         try {
           const userId = verdict && verdict.userId;
           if (!userId) { send(res, 401, { ok: false, reason: 'no-session' }); return; }
+          // MEMBERS (2026-10-07): everyone the paid gate lets in now opens Vela
+          // too: live members (member_access), comps, Voltick grants, owner.
+          // verifyWsRequest is the same cached check every /api call runs.
+          let paid = false;
+          try { paid = Boolean((await ctx.verifyWsRequest(req))?.ok); } catch { /* fall through to the lists */ }
           const allowed =
+            paid ||
             (await libDb.canOpenVoltick(userId)) ||
             (typeof libDb.canOpenVelaBeta === 'function' && (await libDb.canOpenVelaBeta(userId)));
           if (!allowed) { send(res, 403, { ok: false, reason: 'no-vela-access' }); return; }
@@ -14408,16 +14414,23 @@ try {
         // Deliberately a copy of the is_paid expression in getSessionWithUser()
         // (lib/db.ts). If that gate changes, change this with it — a diagnostic
         // that has drifted from the thing it diagnoses is worse than none.
-        // Since 2026-10-04 that includes a live voltick_access grant.
+        // Since 2026-10-04 that includes a live voltick_access grant. Since
+        // 2026-10-07 Stripe is out of it: a customer is a live member_access
+        // row, and period_end is that row's end date.
         const rows = await libDb.queryAll(
           `SELECT u.email,
                   sub.status,
                   (ca.email IS NOT NULL) AS comped,
                   (va.email IS NOT NULL) AS voltick,
+                  (ma.email IS NOT NULL) AS member,
                   u.is_owner,
-                  sub.current_period_end
+                  EXTRACT(EPOCH FROM ma.expires_at)::bigint AS current_period_end
              FROM users u
              LEFT JOIN subscriptions sub ON sub.clerk_user_id = u.id
+             LEFT JOIN member_access ma
+                    ON ma.email = LOWER(u.email)
+                   AND ma.revoked_at IS NULL
+                   AND (ma.expires_at IS NULL OR ma.expires_at > NOW())
              LEFT JOIN comp_access ca
                     ON ca.email = LOWER(u.email)
                    AND ca.revoked_at IS NULL
@@ -14426,15 +14439,15 @@ try {
                     ON va.email = LOWER(u.email)
                    AND va.revoked_at IS NULL
                    AND (va.expires_at IS NULL OR va.expires_at > NOW())
-            WHERE COALESCE(sub.status IN ('active','trialing'), FALSE)
+            WHERE ma.email IS NOT NULL
                OR ca.email IS NOT NULL
                OR va.email IS NOT NULL
-            ORDER BY (ca.email IS NOT NULL OR va.email IS NOT NULL), sub.status, u.email`
+            ORDER BY (ca.email IS NOT NULL OR va.email IS NOT NULL), ma.expires_at NULLS LAST, u.email`
         );
         const out = rows.map((r) => ({
           email: r.email,
           status: r.status ?? '—',
-          source: r.comped ? 'comped' : r.voltick ? 'voltick grant' : r.is_owner ? 'owner' : 'stripe',
+          source: r.comped ? 'comped' : r.voltick ? 'voltick grant' : r.is_owner ? 'owner' : 'member',
           period_end: iso(r.current_period_end),
         }));
         const comped = out.filter((r) => r.source === 'comped').length;

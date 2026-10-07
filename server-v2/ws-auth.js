@@ -10,6 +10,13 @@
  *   2026-10-04, see below) — the SAME rule the pages enforce via
  *   lib/db.ts's getSessionWithUser().
  *
+ * PAID = THE MEMBER LIST, NOT STRIPE (2026-10-07, Brandon's call)
+ *   CB Edge is closed to new members and every subscription is set to cancel,
+ *   so "paying customer" now means a live member_access row (owner console →
+ *   Admin → Members), each with its own end date. Stripe only feeds that list
+ *   (see ensureMembers below and lib/db.ts importMembersFromStripe). In every
+ *   query below, `ma` replaced the old `sub.status IN ('active','trialing')`.
+ *
  * VOLTICK GRANTS COUNT AS PAID (2026-10-04, Brandon's call)
  *   A live voltick_access row (the voltick.cbedge.net / vela.cbedge.net list,
  *   owner console → Admin → Voltick Access) now unlocks everything a paying
@@ -115,6 +122,78 @@ function getAuthPool() {
   }
 }
 
+// ── Members table (2026-10-07) ─────────────────────────────────────────────
+// is_paid is now a live member_access row, not Stripe (see the member_access
+// CREATE TABLE in lib/db.ts). This gate can be the first code to touch the
+// database after a deploy, so it creates the table and runs the Stripe import
+// itself, once per process, before its first paid query. Otherwise every
+// paying customer would 503 (missing table) or 401 (empty table) until the
+// Next side happened to boot. KEEP MEMBER_IMPORT_SQL IN SYNC with lib/db.ts.
+const MEMBER_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS member_access (
+    email              TEXT PRIMARY KEY,
+    note               TEXT,
+    expires_at         TIMESTAMPTZ,
+    source             TEXT,
+    stripe_period_end  BIGINT,
+    granted_by         TEXT,
+    granted_at         TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    revoked_at         TIMESTAMPTZ
+  );
+  CREATE INDEX IF NOT EXISTS idx_member_access_live
+    ON member_access(email) WHERE revoked_at IS NULL;`;
+const MEMBER_IMPORT_SQL = `
+  INSERT INTO member_access (email, note, expires_at, source, stripe_period_end, granted_by, granted_at)
+  SELECT DISTINCT ON (LOWER(u.email))
+         LOWER(u.email),
+         CASE WHEN s.current_period_end IS NULL
+              THEN 'From Stripe - no period end on file, set an end date'
+              ELSE 'From Stripe' END,
+         CASE WHEN s.current_period_end IS NULL THEN NULL
+              ELSE to_timestamp(s.current_period_end) END,
+         'stripe',
+         s.current_period_end,
+         'stripe',
+         NOW()
+    FROM subscriptions s
+    JOIN users u ON u.id = s.clerk_user_id
+   WHERE s.status IN ('active','trialing')
+     AND u.email IS NOT NULL
+   ORDER BY LOWER(u.email), s.current_period_end DESC NULLS LAST
+  ON CONFLICT (email) DO UPDATE SET
+    expires_at = CASE
+                   WHEN member_access.revoked_at IS NULL
+                    AND EXCLUDED.stripe_period_end IS NOT NULL
+                    AND EXCLUDED.stripe_period_end > COALESCE(member_access.stripe_period_end, 0)
+                    AND member_access.expires_at IS NOT NULL
+                   THEN GREATEST(member_access.expires_at, EXCLUDED.expires_at)
+                   ELSE member_access.expires_at
+                 END,
+    stripe_period_end = GREATEST(COALESCE(member_access.stripe_period_end, 0), COALESCE(EXCLUDED.stripe_period_end, 0))
+  WHERE member_access.revoked_at IS NULL
+    AND EXCLUDED.stripe_period_end IS NOT NULL
+    AND EXCLUDED.stripe_period_end > COALESCE(member_access.stripe_period_end, 0)`;
+let _membersReady = null;
+function ensureMembers(pool) {
+  if (!_membersReady) {
+    _membersReady = (async () => {
+      await pool.query(MEMBER_TABLE_SQL);
+      // A failed import is logged, not fatal: the table exists, so the gate
+      // still answers, and lib/db.ts getDb() runs the same import on boot.
+      try {
+        const r = await pool.query(MEMBER_IMPORT_SQL);
+        if (r.rowCount) console.log(`[ws-auth] member_access: ${r.rowCount} row(s) added/renewed from Stripe`);
+      } catch (e) {
+        console.warn('[ws-auth] member_access import failed:', e?.message || e);
+      }
+    })().catch((e) => {
+      _membersReady = null; // retry on the next request
+      throw new TransientAuthError(`member_access setup failed: ${e?.message || e}`);
+    });
+  }
+  return _membersReady;
+}
+
 // ── Short-lived validation cache ───────────────────────────────────────────
 // Same shape and TTL as lib/auth/session.ts's cache, for the same reason: bound
 // DB load per session to ~1 query per CACHE_TTL_MS while keeping paid/owner
@@ -159,6 +238,7 @@ async function getSessionForToken(rawToken) {
   const pool = getAuthPool();
   // No pool = misconfiguration or a failed `require('pg')`, NOT a bad session.
   if (!pool) throw new TransientAuthError('auth pool unavailable');
+  await ensureMembers(pool);
 
   let r;
   try {
@@ -170,13 +250,16 @@ async function getSessionForToken(rawToken) {
     // person has an account.
     r = await pool.query(
       `SELECT s.user_id, u.is_owner,
-              (COALESCE(sub.status IN ('active','trialing'), FALSE)
+              (ma.email IS NOT NULL
                 OR ca.email IS NOT NULL
                 OR va.email IS NOT NULL)                     AS is_paid,
               (ca.email IS NOT NULL OR va.email IS NOT NULL) AS is_comped
          FROM sessions s
          JOIN users u ON u.id = s.user_id
-         LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
+         LEFT JOIN member_access ma
+                ON ma.email = LOWER(u.email)
+               AND ma.revoked_at IS NULL
+               AND (ma.expires_at IS NULL OR ma.expires_at > NOW())
          LEFT JOIN comp_access ca
                 ON ca.email = LOWER(u.email)
                AND ca.revoked_at IS NULL
@@ -458,15 +541,19 @@ async function sessionStillLive(tokenHash, opts = {}) {
   const pool = getAuthPool();
   if (!pool) return true;
   try {
+    await ensureMembers(pool);
     const r = await pool.query(
       `SELECT s.user_id, u.is_owner,
-              (COALESCE(sub.status IN ('active','trialing'), FALSE)
+              (ma.email IS NOT NULL
                 OR ca.email IS NOT NULL
                 OR va.email IS NOT NULL)                     AS is_paid,
               (ca.email IS NOT NULL OR va.email IS NOT NULL) AS is_comped
          FROM sessions s
          JOIN users u ON u.id = s.user_id
-         LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
+         LEFT JOIN member_access ma
+                ON ma.email = LOWER(u.email)
+               AND ma.revoked_at IS NULL
+               AND (ma.expires_at IS NULL OR ma.expires_at > NOW())
          LEFT JOIN comp_access ca
                 ON ca.email = LOWER(u.email)
                AND ca.revoked_at IS NULL
@@ -505,14 +592,20 @@ async function getAccessForUser(userId) {
   if (OWNER_USER_ID && userId === OWNER_USER_ID) return { ok: true, reason: 'owner' };
   const pool = getAuthPool();
   if (!pool) return { ok: false, reason: 'no-subscription' };
+  await ensureMembers(pool);
   // Same comp_access + voltick_access joins as getSessionForToken above — see
   // the sync note in the file header. Without them this function calls a
   // comped (or Voltick-granted) user 'inactive'.
   const r = await pool.query(
     `SELECT u.is_owner, sub.status,
+            (ma.email IS NOT NULL)                         AS is_member,
             (ca.email IS NOT NULL OR va.email IS NOT NULL) AS is_comped
        FROM users u
        LEFT JOIN subscriptions sub ON sub.clerk_user_id = u.id
+       LEFT JOIN member_access ma
+              ON ma.email = LOWER(u.email)
+             AND ma.revoked_at IS NULL
+             AND (ma.expires_at IS NULL OR ma.expires_at > NOW())
        LEFT JOIN comp_access ca
               ON ca.email = LOWER(u.email)
              AND ca.revoked_at IS NULL
@@ -531,8 +624,9 @@ async function getAccessForUser(userId) {
   // (churned, then comped) still passes.
   if (row?.is_comped) return { ok: true, reason: 'comped' };
   const status = row?.status ?? null;
+  // Paid = a live member_access row (2026-10-07), not Stripe's status.
+  if (row?.is_member) return { ok: true, reason: 'subscribed', status };
   if (status == null) return { ok: false, reason: 'no-subscription' };
-  if (PAID_STATUSES.has(status)) return { ok: true, reason: 'subscribed', status };
   return { ok: false, reason: 'inactive', status };
 }
 
