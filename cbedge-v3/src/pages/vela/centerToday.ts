@@ -24,6 +24,7 @@ import { timeframeToMs } from '@luxalgo/vela'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { resolveSym } from '@/pages/vela/cbedgeProvider'
 import { DAY_MS, sessionKey } from '@/pages/vela/studies/common'
+import { track } from '@/pages/vela/telemetry'
 
 /** The narrowest window, in bars, so the open of a young session still has context. */
 const MIN_BARS = 60
@@ -107,5 +108,6 @@ export function centerTodayAll(ctx: WidgetContext, ws: VelaWorkspace | null): vo
       /* one chart failing never stops the rest */
     }
   }
+  track('center_today', { charts: n })
   ctx.toast(n ? `Today centred on ${n} chart${n === 1 ? '' : 's'}` : 'No chart has bars yet', n ? 'success' : 'info')
 }

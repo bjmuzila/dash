@@ -1200,6 +1200,31 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_voltick_access_live
       ON voltick_access(email) WHERE revoked_at IS NULL;
 
+    -- Vela beta testers (2026-10-07). A third twin of comp_access: same shape,
+    -- same email key, same stamp-don't-delete revoke.
+    --
+    -- WHAT IT GRANTS: vela.cbedge.net and NOTHING ELSE. It is deliberately NOT
+    -- joined into is_paid (not here in getSessionWithUser, not in the paid
+    -- query in server-v2/ws-auth.js), so on cbedge.net a beta tester is an
+    -- ordinary unpaid account. Two checks read it instead:
+    --   /api/vela/verify (server-v2/api-router.js) -- the nginx door
+    --   ws-auth.js isVelaBetaUser() -- Vela's /api /proxy /ws data, and ONLY
+    --     when the request's Host is vela.cbedge.net.
+    -- Not the Voltick sandbox either; that is voltick_access.
+    --
+    -- Managed from owner console -> Admin -> Vela Beta Testers
+    -- (app/api/admin/vela-beta).
+    CREATE TABLE IF NOT EXISTS vela_beta_access (
+      email        TEXT PRIMARY KEY,
+      note         TEXT,
+      expires_at   TIMESTAMPTZ,
+      granted_by   TEXT,
+      granted_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      revoked_at   TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_vela_beta_access_live
+      ON vela_beta_access(email) WHERE revoked_at IS NULL;
+
     -- Churn log. One row per subscription that has ever signalled it is leaving,
     -- written by the Stripe webhook (app/api/stripe/webhook/route.ts).
     --
@@ -3749,12 +3774,14 @@ export async function getLapsedTrialCandidates(
        LEFT JOIN trial_winback w    ON w.email_key = th.email_key
        LEFT JOIN comp_access ca     ON ca.email = lower(u.email) AND ca.revoked_at IS NULL
        LEFT JOIN voltick_access va  ON va.email = lower(u.email) AND va.revoked_at IS NULL
+       LEFT JOIN vela_beta_access vb ON vb.email = lower(u.email) AND vb.revoked_at IS NULL
        LEFT JOIN email_unsubscribes eu ON eu.email = lower(u.email)
        LEFT JOIN trial_bans b       ON b.kind = 'email' AND b.lifted_at IS NULL
                                    AND b.value_key = th.email_key
       WHERE w.email_key IS NULL
         AND ca.email IS NULL
         AND va.email IS NULL
+        AND vb.email IS NULL
         AND eu.email IS NULL
         AND b.id IS NULL
         AND u.is_owner = FALSE
@@ -3801,6 +3828,7 @@ export async function getSignupNoPurchaseCandidates(
        LEFT JOIN trial_winback w    ON w.clerk_user_id = u.id
        LEFT JOIN comp_access ca     ON ca.email = lower(u.email) AND ca.revoked_at IS NULL
        LEFT JOIN voltick_access va  ON va.email = lower(u.email) AND va.revoked_at IS NULL
+       LEFT JOIN vela_beta_access vb ON vb.email = lower(u.email) AND vb.revoked_at IS NULL
        LEFT JOIN email_unsubscribes eu ON eu.email = lower(u.email)
        LEFT JOIN trial_bans b       ON b.kind = 'email' AND b.lifted_at IS NULL
                                    AND b.value_key = lower(u.email)
@@ -3809,6 +3837,7 @@ export async function getSignupNoPurchaseCandidates(
         AND w.email_key IS NULL
         AND ca.email IS NULL
         AND va.email IS NULL
+        AND vb.email IS NULL
         AND eu.email IS NULL
         AND b.id IS NULL
         AND u.is_owner = FALSE
@@ -4438,6 +4467,87 @@ export async function canOpenVoltick(userId: string): Promise<boolean> {
               ON va.email = LOWER(u.email)
              AND va.revoked_at IS NULL
              AND (va.expires_at IS NULL OR va.expires_at > NOW())
+      WHERE u.id = ?`,
+    [userId]
+  );
+  return Boolean(row?.allowed);
+}
+
+// ── Vela beta testers (owner-granted, vela.cbedge.net only) ─────────────────
+// Twin of the Voltick block above. See the vela_beta_access CREATE TABLE for
+// what it does and, more importantly, does NOT grant. Owner-only; the API
+// surface is app/api/admin/vela-beta. Mirrored by hand in
+// server-v2/_lib-db.cjs (canOpenVelaBeta, listVelaBetaAccess,
+// getVelaBetaAccess) -- keep the two in step.
+
+export type VelaBetaRow = VoltickAccessRow;
+
+const VELA_BETA_ROW_SELECT = `SELECT vb.email, vb.note, vb.expires_at, vb.granted_at, vb.granted_by,
+            u.id AS user_id, (u.password_hash IS NOT NULL) AS has_password
+       FROM vela_beta_access vb
+       LEFT JOIN users u ON LOWER(u.email) = vb.email`;
+
+/** Live grants only (not revoked, not expired), newest first. */
+export async function listVelaBetaAccess(): Promise<VelaBetaRow[]> {
+  return queryAll<VelaBetaRow>(
+    `${VELA_BETA_ROW_SELECT}
+      WHERE vb.revoked_at IS NULL
+        AND (vb.expires_at IS NULL OR vb.expires_at > NOW())
+      ORDER BY vb.granted_at DESC`
+  );
+}
+
+/** Grant (or re-grant) -- upsert, clearing revoked_at, same as Voltick. */
+export async function grantVelaBetaAccess(
+  email: string,
+  opts: { note?: string | null; expiresAt?: string | null; grantedBy?: string | null } = {}
+): Promise<VelaBetaRow | undefined> {
+  const norm = email.trim().toLowerCase();
+  await pgQuery(
+    `INSERT INTO vela_beta_access (email, note, expires_at, granted_by, granted_at, revoked_at)
+     VALUES ($1, $2, $3, $4, NOW(), NULL)
+     ON CONFLICT (email) DO UPDATE
+       SET note       = EXCLUDED.note,
+           expires_at = EXCLUDED.expires_at,
+           granted_by = EXCLUDED.granted_by,
+           granted_at = NOW(),
+           revoked_at = NULL`,
+    [norm, opts.note ?? null, opts.expiresAt ?? null, opts.grantedBy ?? null]
+  );
+  return queryOne<VelaBetaRow>(`${VELA_BETA_ROW_SELECT} WHERE vb.email = ?`, [norm]);
+}
+
+/** Read one LIVE grant. */
+export async function getVelaBetaAccess(email: string): Promise<VelaBetaRow | undefined> {
+  return queryOne<VelaBetaRow>(
+    `${VELA_BETA_ROW_SELECT}
+      WHERE vb.email = ?
+        AND vb.revoked_at IS NULL
+        AND (vb.expires_at IS NULL OR vb.expires_at > NOW())`,
+    [email.trim().toLowerCase()]
+  );
+}
+
+/** Revoke by stamping revoked_at (the row stays as history). */
+export async function revokeVelaBetaAccess(email: string): Promise<{ revoked: boolean }> {
+  const res = await pgQuery(
+    `UPDATE vela_beta_access SET revoked_at = NOW()
+      WHERE email = $1 AND revoked_at IS NULL`,
+    [email.trim().toLowerCase()]
+  );
+  return { revoked: (res.rowCount ?? 0) > 0 };
+}
+
+/** May this users.id open vela.cbedge.net as a beta tester? Owner and the
+ *  Voltick list are canOpenVoltick()'s job; /api/vela/verify asks both. */
+export async function canOpenVelaBeta(userId: string): Promise<boolean> {
+  const row = await queryOne<{ allowed: boolean }>(
+    `SELECT (vb.email IS NOT NULL) AS allowed
+       FROM users u
+       LEFT JOIN vela_beta_access vb
+              ON vb.email = LOWER(u.email)
+             AND vb.revoked_at IS NULL
+             AND (vb.expires_at IS NULL OR vb.expires_at > NOW())
       WHERE u.id = ?`,
     [userId]
   );

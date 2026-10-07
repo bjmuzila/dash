@@ -138,6 +138,9 @@ __export(db_exports, {
   getRecentTrades: () => getRecentTrades,
   getSessionWithUser: () => getSessionWithUser,
   canOpenVoltick: () => canOpenVoltick,
+  canOpenVelaBeta: () => canOpenVelaBeta,
+  listVelaBetaAccess: () => listVelaBetaAccess,
+  getVelaBetaAccess: () => getVelaBetaAccess,
   listVoltickAccess: () => listVoltickAccess,
   grantVoltickAccess: () => grantVoltickAccess,
   getVoltickAccess: () => getVoltickAccess,
@@ -3044,6 +3047,73 @@ async function canOpenVoltick(userId) {
     [userId]
   );
   return Boolean(row && row.allowed);
+}
+
+// ── Vela beta testers ─────────────────────────────────────────────────────────
+// Hand-added here AND in lib/db.ts (same rule as the Voltick block above). See
+// the vela_beta_access CREATE TABLE in lib/db.ts. NOT part of is_paid: the
+// grant opens vela.cbedge.net and, via server-v2/ws-auth.js, Vela's data only
+// on that host. Read paths treat a missing table (42P01) as "no grants" so a
+// first boot can never 503 the Vela door for the owner or Voltick list.
+
+var VELA_BETA_ROW_SELECT = `SELECT vb.email, vb.note, vb.expires_at, vb.granted_at, vb.granted_by,
+            u.id AS user_id, (u.password_hash IS NOT NULL) AS has_password
+       FROM vela_beta_access vb
+       LEFT JOIN users u ON LOWER(u.email) = vb.email`;
+
+function _isMissingTable(err) {
+  return Boolean(err && err.code === '42P01');
+}
+
+async function listVelaBetaAccess() {
+  try {
+    return await queryAll(
+      `${VELA_BETA_ROW_SELECT}
+        WHERE vb.revoked_at IS NULL
+          AND (vb.expires_at IS NULL OR vb.expires_at > NOW())
+        ORDER BY vb.granted_at DESC`
+    );
+  } catch (err) {
+    if (_isMissingTable(err)) return [];
+    throw err;
+  }
+}
+
+async function getVelaBetaAccess(email) {
+  try {
+    return await queryOne(
+      `${VELA_BETA_ROW_SELECT}
+        WHERE vb.email = ?
+          AND vb.revoked_at IS NULL
+          AND (vb.expires_at IS NULL OR vb.expires_at > NOW())`,
+      [String(email || '').trim().toLowerCase()]
+    );
+  } catch (err) {
+    if (_isMissingTable(err)) return undefined;
+    throw err;
+  }
+}
+
+/** May this users.id open vela.cbedge.net as a BETA TESTER? (Owner and the
+ *  Voltick list are canOpenVoltick's job; /api/vela/verify asks both.) */
+async function canOpenVelaBeta(userId) {
+  if (!userId) return false;
+  try {
+    const row = await queryOne(
+      `SELECT (vb.email IS NOT NULL) AS allowed
+         FROM users u
+         LEFT JOIN vela_beta_access vb
+                ON vb.email = LOWER(u.email)
+               AND vb.revoked_at IS NULL
+               AND (vb.expires_at IS NULL OR vb.expires_at > NOW())
+        WHERE u.id = ?`,
+      [userId]
+    );
+    return Boolean(row && row.allowed);
+  } catch (err) {
+    if (_isMissingTable(err)) return false;
+    throw err;
+  }
 }
 async function upsertEmTrackerRow(r) {
   const pool = await getDb();
@@ -6219,6 +6289,9 @@ async function getLatestMultGreekStaticSnapshot() {
   getRecentTrades,
   getSessionWithUser,
   canOpenVoltick,
+  canOpenVelaBeta,
+  listVelaBetaAccess,
+  getVelaBetaAccess,
   listVoltickAccess,
   grantVoltickAccess,
   getVoltickAccess,

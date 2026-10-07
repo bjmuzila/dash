@@ -42,6 +42,8 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   Reta: lazy(() => import("./Reta")),
   Todo: lazy(() => import("./Todo")),
   VoltickAudit: lazy(() => import("./VoltickAudit")),
+  // Who is on Vela and what they use there (server-v2/vela-telemetry.cjs).
+  VelaUsage: lazy(() => import("./VelaUsage")),
   ChartsUI: lazy(() => import("./ChartsUI")),
   Watchlists: lazy(() => import("./Watchlists")),
   GexGrowth: lazy(() => import("./GexGrowth")),

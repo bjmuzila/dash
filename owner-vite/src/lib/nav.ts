@@ -92,6 +92,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     accent: OWNER_LIGHT_BLUE,
     links: [
       { label: "Voltick Audit", href: "/owner/voltick-audit", glyph: "⚡︎", key: "VoltickAudit" },
+      { label: "Vela Usage", href: "/owner/vela", glyph: "◧", key: "VelaUsage" },
     ],
   },
   {

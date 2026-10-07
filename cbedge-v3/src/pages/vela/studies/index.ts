@@ -37,6 +37,8 @@ export const VF_SCOPES = ['All expiries', 'Front expiry'] as const
 export const VF_SESSIONS = ['Regular hours', 'Extended hours'] as const
 export const WH_MIN = ['$1M', '$2M', '$5M', '$10M'] as const
 export const WH_SIDE = ['Calls and puts', 'Calls', 'Puts'] as const
+/** Whale Prints: bought, sold, or both (Brandon, 2026-10-07). */
+export const WH_ACTION = ['Buys and sells', 'Buys', 'Sells'] as const
 export const WH_EXP = ['All expiries', '0DTE only', 'This week', 'Skip 0DTE'] as const
 export const HEAT_SESSIONS = ['1', '2', '3'] as const
 /** Net GEX's look: a line, columns, or both. */
@@ -310,8 +312,24 @@ export function registerStudies(): void {
       layer: { cursor: true },
       inputs: () => [
         { key: 'min', title: 'Smallest print', type: 'string', defval: WH_MIN[0], options: WH_MIN },
-        { key: 'days', title: 'Days back', type: 'int', defval: 1, min: 1, max: 30 },
+        {
+          key: 'days',
+          title: 'Days back',
+          type: 'int',
+          defval: 1,
+          min: 1,
+          max: 30,
+          tooltip: 'Trading days, counting today: 1 is today only, 2 adds the session before, and so on.',
+        },
         { key: 'side', title: 'Show', type: 'string', defval: WH_SIDE[0], options: WH_SIDE },
+        {
+          key: 'action',
+          title: 'Buys / sells',
+          type: 'string',
+          defval: WH_ACTION[0],
+          options: WH_ACTION,
+          tooltip: 'Buys: prints that were bought. Sells: prints that were sold. A print whose side is unknown shows only under Buys and sells.',
+        },
         { key: 'exp', title: 'Expiry', type: 'string', defval: WH_EXP[0], options: WH_EXP, tooltip: '0DTE only: prints on contracts expiring that day. This week: expiring by that week’s Friday.' },
         {
           key: 'cap',

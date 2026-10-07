@@ -434,7 +434,13 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
         if (res && res.ok) {
           // Carry the session identity onto the request so the connection
           // handler can pin it to the socket — see the revalidation sweep below.
-          request.cbSession = { userId: res.userId || null, tokenHash: res.tokenHash || null };
+          // host: a Vela beta tester is only entitled on vela.cbedge.net, so the
+          // sweep has to re-ask with the host the socket was opened on.
+          request.cbSession = {
+            userId: res.userId || null,
+            tokenHash: res.tokenHash || null,
+            host: (request.headers && request.headers.host) || null,
+          };
           accept();
         } else {
           log.log?.(`[WS] upgrade rejected (${res?.reason || 'unknown'})`);
@@ -697,7 +703,7 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
         for (const ws of wss.clients) {
           const s = ws.cbSession;
           if (!s || !s.tokenHash) continue;
-          Promise.resolve(sessionStillLive(s.tokenHash))
+          Promise.resolve(sessionStillLive(s.tokenHash, { host: s.host }))
             .then((live) => {
               if (live) return;
               log.log?.(`[WS] closing socket — session no longer valid (user ${s.userId || '?'})`);

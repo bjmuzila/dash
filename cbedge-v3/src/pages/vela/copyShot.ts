@@ -32,6 +32,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
+import { track } from '@/pages/vela/telemetry'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { domShot } from '@/pages/vela/domShot'
 
@@ -118,6 +119,7 @@ function download(blob: Blob): void {
 }
 
 function copyScreenshot(ctx: WidgetContext): void {
+  track('screenshot')
   if (!current && !ctx.chart.renderer.screenshot()) {
     ctx.toast('Nothing to capture yet', 'error')
     return

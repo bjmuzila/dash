@@ -11603,6 +11603,12 @@ Return exactly one element per input key, in the same order. Never merge, split,
   // hand-off, and Vela's data moves to Voltick's feed BEFORE that happens.
   // Do not open this route to a wider audience while Vela still reads CB Edge
   // data (pages/vela/cbedgeProvider.ts).
+  //
+  // BETA TESTERS (2026-10-07): a second, Vela-only list — vela_beta_access,
+  // owner console → Admin → Vela Beta Testers. Unlike a voltick grant it is
+  // NOT paid access: it opens this door, and ws-auth.js lets their data
+  // through only when the request came in on vela.cbedge.net. On cbedge.net
+  // they are an unpaid account and see nothing. Not on the Voltick sandbox.
   {
     register('/api/vela/verify', {
       auth: 'user', methods: ['GET', 'HEAD'],
@@ -11610,7 +11616,9 @@ Return exactly one element per input key, in the same order. Never merge, split,
         try {
           const userId = verdict && verdict.userId;
           if (!userId) { send(res, 401, { ok: false, reason: 'no-session' }); return; }
-          const allowed = await libDb.canOpenVoltick(userId);
+          const allowed =
+            (await libDb.canOpenVoltick(userId)) ||
+            (typeof libDb.canOpenVelaBeta === 'function' && (await libDb.canOpenVelaBeta(userId)));
           if (!allowed) { send(res, 403, { ok: false, reason: 'no-vela-access' }); return; }
           send(res, 200, { ok: true }, { 'Cache-Control': 'no-store' });
         } catch (err) {
@@ -14324,6 +14332,20 @@ try {
   if (n) console.log(`[api-router] affiliate routes registered (${n})`);
 } catch (e) {
   console.warn('[api-router] affiliate routes not loaded:', e.message);
+}
+
+// ---------------------------------------------------------------------------
+// Vela usage — the chart page's heartbeat (POST /api/vela/telemetry) and the
+// owner reads behind owner.cbedge.net → Voltick → Vela Usage
+// (/api/owner/vela/live | summary | events | session). Its own tables, created
+// lazily on first use. See server-v2/vela-telemetry.cjs.
+// ---------------------------------------------------------------------------
+try {
+  const { registerVelaTelemetryRoutes } = require('./vela-telemetry.cjs');
+  const n = registerVelaTelemetryRoutes({ register, send, readJson, libDb, clientIp, clientGeo, visitAttribution });
+  if (n) console.log(`[api-router] vela telemetry routes registered (${n})`);
+} catch (e) {
+  console.warn('[api-router] vela telemetry routes not loaded:', e.message);
 }
 
 // ---------------------------------------------------------------------------

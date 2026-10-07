@@ -1876,14 +1876,192 @@
   color: var(--color-vt-accent-text);
   opacity: 1;
 }
-/* The list chips on every row: 1 2 3, lit when the row is in that list (the
-   three lists, indicatorPicker.ts). Quiet until the row is hovered. */
-.cb-ip .cb-ip-lchips {
+/* ── The Indicators dialog's Personal lists and the Edit lists dialog
+   (indicatorPicker.ts; mockup generated/2026-10-07-vela-indicators-r4).
+   No colour accents: only the primary buttons (Add all, Done) carry it. */
+.cb-ip .cb-ip-cat[data-quiet='1'] {
+  color: var(--color-faint);
+}
+.cb-ip .cb-ip-editlists {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cb-ip .cb-ip-editlists:hover {
+  border-color: var(--color-muted);
+  background: var(--color-surface2);
+  color: var(--color-fg);
+}
+.cb-ip .cb-ip-lhead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 8px 8px;
+  background: var(--color-surface);
+}
+.cb-ip .cb-ip-lname {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-ip .cb-ip-addall,
+.cb-ile .cb-ile-done {
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: var(--color-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cb-ip .cb-ip-addall:disabled {
+  border-color: var(--color-line);
+  background: transparent;
+  color: var(--color-faint);
+  cursor: default;
+}
+.cb-ip .cb-ip-foot {
+  padding: 10px 8px 0;
+  color: var(--color-faint);
+  font-size: var(--text-2xs);
+}
+.cb-ip-lname-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--color-surface2);
+  color: var(--color-fg);
+  font: inherit;
+  font-weight: 600;
+}
+
+/* Edit lists: every indicator on the left, the three lists as columns */
+/* .vela-dialog too: Vela's own .vela-dialog caps every dialog at 560px and 70vh,
+   and its stylesheet is injected after this one */
+.vela-dialog.cb-ile-dialog {
+  width: min(1040px, calc(100vw - 24px));
+  max-width: none;
+  max-height: calc(100vh - 80px);
+}
+.cb-ile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: min(560px, calc(100vh - 160px));
+  padding: 12px 14px 14px;
+  color: var(--color-fg);
+  font-size: var(--text-xs);
+}
+.cb-ile .cb-ile-grid {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 270px 1fr;
+  gap: 10px;
+  min-height: 0;
+}
+.cb-ile .cb-ile-lists {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  min-height: 0;
+}
+.cb-ile .cb-ile-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 7px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.cb-ile .cb-ile-col[data-over='1'] {
+  border-color: var(--color-muted);
+}
+.cb-ile .cb-ile-search {
+  flex: none;
+  height: 30px;
+  margin-bottom: 6px;
+}
+.cb-ile .cb-ile-seg {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin-bottom: 6px;
+  padding: 2px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+}
+.cb-ile .cb-ile-segbtn {
+  flex: 1;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-faint);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cb-ile .cb-ile-segbtn[data-active='1'] {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.cb-ile .cb-ile-srclist,
+.cb-ile .cb-ile-items {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.cb-ile .cb-ile-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: grab;
+}
+.cb-ile .cb-ile-row:hover {
+  background: var(--color-surface2);
+}
+.cb-ile .cb-ile-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-ile .cb-ile-to {
   display: flex;
   flex: none;
   gap: 3px;
 }
-.cb-ip .cb-ip-lchip {
+.cb-ile .cb-ile-num {
   width: 20px;
   height: 20px;
   padding: 0;
@@ -1894,65 +2072,50 @@
   font: inherit;
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: 18px;
-  text-align: center;
   cursor: pointer;
-  opacity: 0.35;
 }
-.cb-ip .cb-ip-row:hover .cb-ip-lchip,
-.cb-ip .cb-ip-row:focus-within .cb-ip-lchip,
-.cb-ip .cb-ip-lchip:focus-visible {
-  opacity: 1;
-}
-.cb-ip .cb-ip-lchip:hover {
-  border-color: var(--color-vt-accent-text);
+.cb-ile .cb-ile-num:hover {
+  border-color: var(--color-muted);
   color: var(--color-fg);
 }
-.cb-ip .cb-ip-lchip[data-on='1'] {
-  border-color: var(--color-vt-accent-text);
+.cb-ile .cb-ile-num[data-on='1'] {
+  border-color: var(--color-muted);
   background: var(--color-raised);
-  color: var(--color-vt-accent-text);
-  opacity: 1;
+  color: var(--color-fg);
 }
-/* A list's head: its name, ✎, Add all */
-.cb-ip .cb-ip-lhead {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+.cb-ile .cb-ile-head {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 6px;
-  padding: 0 6px 8px 8px;
-  background: var(--color-surface);
+  min-height: 30px;
+  margin-bottom: 6px;
+  padding: 0 2px 6px;
+  border-bottom: 1px solid var(--color-line);
 }
-.cb-ip .cb-ip-lname {
+.cb-ile .cb-ile-lname {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
-  color: var(--color-fg);
   font-size: var(--text-sm);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: text;
 }
-.cb-ip .cb-ip-lname-input {
-  flex: 0 1 220px;
-  min-width: 0;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-sm);
-  outline: none;
-  background: var(--color-surface2);
-  color: var(--color-fg);
-  font: inherit;
-  font-size: var(--text-sm);
+.cb-ile .cb-ile-count {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
 }
-.cb-ip .cb-ip-lbtn {
-  display: flex;
+.cb-ile .cb-ile-ren,
+.cb-ile .cb-ile-x {
+  display: grid;
   flex: none;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 28px;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1960,33 +2123,91 @@
   font: inherit;
   cursor: pointer;
 }
-.cb-ip .cb-ip-lren {
-  width: 28px;
-}
-.cb-ip .cb-ip-lren:hover {
+.cb-ile .cb-ile-ren:hover,
+.cb-ile .cb-ile-x:hover {
   background: var(--color-raised);
   color: var(--color-fg);
 }
-.cb-ip .cb-ip-addall {
-  margin-left: auto;
-  padding: 0 12px;
-  border: 1px solid var(--color-vt-accent-text);
-  color: var(--color-vt-accent-text);
-  font-weight: 600;
+.cb-ile .cb-ile-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 4px 4px 4px 6px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface2);
+  cursor: grab;
 }
-.cb-ip .cb-ip-addall:hover:not(:disabled) {
-  background: var(--color-raised);
-  color: var(--color-fg);
+.cb-ile .cb-ile-item[data-over='1'] {
+  box-shadow: 0 -2px 0 var(--color-muted);
 }
-.cb-ip .cb-ip-addall:disabled {
-  border-color: var(--color-line);
+.cb-ile .cb-ile-item[data-dragging='1'],
+.cb-ile .cb-ile-row[data-dragging='1'] {
+  opacity: 0.4;
+}
+.cb-ile .cb-ile-item[data-gone='1'] .cb-ile-name {
   color: var(--color-faint);
-  cursor: default;
+  text-decoration: line-through;
 }
-/* a phone has no hover: the chips always show */
-@media (hover: none) {
-  .cb-ip .cb-ip-lchip {
-    opacity: 1;
+.cb-ile .cb-ile-grip {
+  color: var(--color-faint);
+  font-size: var(--text-2xs);
+}
+.cb-ile .cb-ile-drop {
+  padding: 10px;
+  border: 1px dashed var(--color-line);
+  border-radius: var(--radius-sm);
+  color: var(--color-faint);
+  font-size: var(--text-2xs);
+  text-align: center;
+}
+.cb-ile .cb-ile-drop[data-empty='1'] {
+  padding: 36px 10px;
+}
+.cb-ile .cb-ile-col[data-over='1'] .cb-ile-drop {
+  border-color: var(--color-muted);
+  color: var(--color-fg);
+}
+.cb-ile .cb-ile-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-line);
+}
+.cb-ile .cb-ile-note {
+  flex: 1;
+  color: var(--color-faint);
+  font-size: var(--text-2xs);
+}
+.cb-ile .cb-ile-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+/* a phone: the source on top, the three lists stacked under it */
+@media (max-width: 760px) {
+  .cb-ile {
+    height: calc(100vh - 140px);
+    padding: 10px;
+  }
+  .cb-ile .cb-ile-grid {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+  .cb-ile .cb-ile-src {
+    max-height: 46vh;
+  }
+  .cb-ile .cb-ile-lists {
+    grid-template-columns: 1fr;
   }
 }
 .cb-ip .cb-ip-empty {

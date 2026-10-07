@@ -208,6 +208,156 @@ async function getSessionForToken(rawToken) {
   return value;
 }
 
+// ── Vela beta testers (2026-10-07) ─────────────────────────────────────────
+//
+// A beta tester (owner console → Admin → Vela Beta Testers, table
+// vela_beta_access) gets Vela's data ONLY when the request arrives through
+// vela.cbedge.net. Through cbedge.net they are an ordinary unpaid account:
+// no pages (Next middleware never heard of this table), no /api, no /proxy,
+// no socket.
+//
+// WHY BY HOST, NOT A PAID FLAG: comp_access and voltick_access are joined
+// into is_paid, which unlocks the whole site. That is exactly what a beta
+// tester must NOT get. So this is NOT in getSessionForToken / is_paid and NOT
+// in lib/db.ts getSessionWithUser(). It is a second, narrow check that only
+// runs for a session that has ALREADY been refused AND came in on the Vela
+// host, so paying customers never pay for the extra query.
+//
+// Host comes from the request's Host header. deploy/vela/nginx.conf sets
+// `Host $host` on every /api /proxy /ws hop, and a browser cannot forge Host
+// on a request to cbedge.net (Cloudflare routes by it). VELA_HOSTS overrides
+// the list for dev.
+const VELA_HOSTS = new Set(
+  String(process.env.VELA_HOSTS || 'vela.cbedge.net')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean)
+);
+function requestHost(req) {
+  const raw = req && req.headers && req.headers.host;
+  return String(raw || '').split(':')[0].trim().toLowerCase();
+}
+function isVelaHost(host) {
+  return VELA_HOSTS.has(String(host || '').split(':')[0].trim().toLowerCase());
+}
+
+// WHICH DATA. A beta grant is not "everything a subscriber can fetch on this
+// host" — nginx proxies ALL of /api and /proxy, so without this list a tester
+// could call /api/gex, /api/flow, … from the console and walk off with the
+// whole paid product minus its HTML. This is every endpoint the Vela build
+// (cbedge-v3 src/vela/main.tsx and everything it imports) calls, taken from
+// its import graph on 2026-10-07. Exact pathnames, query string ignored.
+//
+// WHEN VELA STARTS CALLING A NEW ENDPOINT, ADD IT HERE or it will be empty for
+// beta testers only (owner, Voltick list and paying customers are unaffected).
+// The refusal is logged once per path as "[ws-auth] vela-beta refused <path>"
+// so the gap shows up in `docker compose logs dashboard`. For a hotfix without
+// a rebuild, VELA_BETA_EXTRA_PATHS takes a comma list of extra pathnames.
+// Owner-only routes Vela calls (/api/lse/candles, /api/lse/resolve) are left
+// off on purpose: the owner gate would refuse them anyway.
+const VELA_BETA_PATHS = new Set([
+  // the door + who-am-I
+  '/api/vela/verify',
+  '/api/auth/me',
+  // chart data
+  '/api/calendar',
+  '/api/chains',
+  '/api/daily-em',
+  '/api/dxlink/candles',
+  '/api/em-tracker',
+  '/api/es-candles/tickers',
+  '/api/ib-results',
+  '/api/journal/trades',
+  '/api/levels',
+  '/api/lse/whales',
+  '/api/page-preset',
+  '/api/pinescript',
+  '/api/public-earnings',
+  '/api/quotes-batch',
+  '/api/ref-levels',
+  '/api/snapshots/candles',
+  '/api/snapshots/etf-candles',
+  '/api/snapshots/etf-candles/live',
+  '/api/snapshots/etf-candles/live/stream',
+  '/api/snapshots/option-strike-gex-history',
+  '/api/ticker-event',
+  '/api/vela/history',
+  '/api/walls-range',
+  '/proxy/candles-intraday',
+  '/proxy/earnings-week',
+  '/proxy/es-spx-basis',
+  '/proxy/flow-netprem',
+  '/proxy/gex-vol-flow',
+  '/proxy/nq-ndx-basis',
+  '/proxy/signal-alerts',
+  '/proxy/signals',
+  '/proxy/ticker-logo',
+  '/proxy/walls',
+  // live socket (ES / NQ tail)
+  '/ws/gex',
+  ...String(process.env.VELA_BETA_EXTRA_PATHS || '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean),
+]);
+function requestPath(req) {
+  try {
+    return new URL((req && req.url) || '/', 'http://x').pathname.replace(/\/+$/, '') || '/';
+  } catch {
+    return '';
+  }
+}
+const _velaBetaRefusedLogged = new Set();
+function isVelaBetaPath(pathname) {
+  if (VELA_BETA_PATHS.has(pathname)) return true;
+  if (!_velaBetaRefusedLogged.has(pathname) && _velaBetaRefusedLogged.size < 500) {
+    _velaBetaRefusedLogged.add(pathname);
+    console.warn(`[ws-auth] vela-beta refused ${pathname} (not in VELA_BETA_PATHS)`);
+  }
+  return false;
+}
+
+const _velaBetaCache = new Map(); // userId -> { at, value }
+
+/** Does this account hold a live vela_beta_access grant? Same 8s cache as
+ *  sessions. A missing table (first boot before ensureAllTables ran) means
+ *  "nobody is a beta tester", never an outage for anyone else. Any other DB
+ *  failure is transient (503, retry), not a denial. */
+async function isVelaBetaUser(userId) {
+  if (!userId) return false;
+  const hit = _velaBetaCache.get(userId);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+
+  const pool = getAuthPool();
+  if (!pool) throw new TransientAuthError('auth pool unavailable');
+
+  let value;
+  try {
+    const r = await pool.query(
+      `SELECT 1
+         FROM users u
+         JOIN vela_beta_access vb
+           ON vb.email = LOWER(u.email)
+          AND vb.revoked_at IS NULL
+          AND (vb.expires_at IS NULL OR vb.expires_at > NOW())
+        WHERE u.id = $1
+        LIMIT 1`,
+      [userId]
+    );
+    value = (r.rows?.length ?? 0) > 0;
+  } catch (e) {
+    if (e && e.code === '42P01') value = false; // undefined_table
+    else throw new TransientAuthError(e?.message || 'vela beta lookup failed');
+  }
+
+  _velaBetaCache.set(userId, { at: Date.now(), value });
+  if (_velaBetaCache.size > CACHE_MAX) {
+    const cutoff = Date.now() - CACHE_TTL_MS;
+    for (const [k, v] of _velaBetaCache) if (v.at < cutoff) _velaBetaCache.delete(k);
+  }
+  return value;
+}
+
 /** Same decision as lib/subscription.getAccessForUser, JS side. */
 function getAccessFor(session) {
   if (OWNER_USER_ID && session.userId === OWNER_USER_ID) return { ok: true, reason: 'owner' };
@@ -257,7 +407,21 @@ async function verifyWsRequest(upgradeReq) {
     return { ok: false, reason: 'verify-error', detail: e?.message, transient: !!e?.transient };
   }
 
-  const access = getAccessFor(session);
+  let access = getAccessFor(session);
+
+  // Vela beta: refused as a customer, but on the Vela host with a live beta
+  // grant → let Vela's own endpoints through (VELA_BETA_PATHS), nothing else.
+  // See the block above isVelaBetaUser().
+  if (!access.ok && isVelaHost(requestHost(upgradeReq))) {
+    try {
+      if (await isVelaBetaUser(session.userId) && isVelaBetaPath(requestPath(upgradeReq))) {
+        access = { ok: true, reason: 'vela-beta' };
+      }
+    } catch (e) {
+      return { ok: false, userId: session.userId, reason: 'verify-error', detail: e?.message, transient: true };
+    }
+  }
+
   // tokenHash rides along on SUCCESS only, so the socket can be re-checked
   // later without holding the raw cookie value in memory for the life of the
   // connection. See sessionStillLive() below and the revalidation sweep in
@@ -289,7 +453,7 @@ async function verifyWsRequest(upgradeReq) {
  * Returns true on a transient failure. A DB blip must not disconnect every
  * paying customer at once; the sweep runs again in a minute.
  */
-async function sessionStillLive(tokenHash) {
+async function sessionStillLive(tokenHash, opts = {}) {
   if (!tokenHash) return true; // nothing to check against — leave it alone
   const pool = getAuthPool();
   if (!pool) return true;
@@ -317,12 +481,18 @@ async function sessionStillLive(tokenHash) {
     );
     const row = r.rows?.[0];
     if (!row) return false; // session row is gone — signed out, or kicked
-    return getAccessFor({
+    const ok = getAccessFor({
       userId: row.user_id,
       isOwner: !!row.is_owner,
       isPaid: !!row.is_paid,
       isComped: !!row.is_comped,
     }).ok;
+    if (ok) return true;
+    // A beta tester's socket stays up only while it is a Vela-host socket with
+    // a live grant. opts.host is the upgrade request's Host, pinned on the
+    // socket by websocket-server.js.
+    if (opts.host && isVelaHost(opts.host)) return await isVelaBetaUser(row.user_id);
+    return false;
   } catch (e) {
     console.warn('[ws-auth] revalidate failed (keeping socket):', e?.message || e);
     return true;
@@ -378,6 +548,7 @@ module.exports = {
   getAccessForUser,
   invalidateSessionCache,
   isTransientAuthFailure,
+  isVelaHost,
   TRANSIENT_REASONS,
   TransientAuthError,
   PAID_STATUSES,

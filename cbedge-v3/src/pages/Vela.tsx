@@ -35,6 +35,7 @@ import { replayActive } from '@/pages/vela/replay/clock'
 import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
 import { TIMEFRAMES } from '@/pages/vela/timeframes'
 import '@/pages/vela/vela.css'
+import { bindTelemetry } from '@/pages/vela/telemetry'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /vela — VELA, LuxAlgo's open-source chart workspace, on CB Edge's own tape.
@@ -527,6 +528,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     const unbindShot = bindShotWorkspace(ws)
     const unbindRefresh = bindRefreshWorkspace(ws)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
+    // usage for owner.cbedge.net → Vela Usage: who is on, tickers, indicators, actions (vela/telemetry.ts)
+    const unbindTelemetry = bindTelemetry(ws, { phone: onPhone })
     // every indicator's settings dialog: Defaults ▾ (reset, save as my default, saved
     // settings by name) in place of Vela's Reset defaults (vela/indicatorPresets.ts)
     const unbindPresets = bindIndicatorPresets(ws)
@@ -636,6 +639,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindVoltick()
       unbindControls()
       unbindIndicators()
+      unbindTelemetry()
       unbindPresets()
       unbindEvents()
       unbindReplay()

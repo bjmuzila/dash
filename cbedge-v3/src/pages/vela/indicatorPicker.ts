@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// THE INDICATORS DIALOG.
+// THE INDICATORS DIALOG (Brandon, 2026-10-07; mockup generated/2026-10-07-vela-indicators-r4).
 //
 // Vela 0.8's own picker is one long list. This replaces it through Vela's
 // sanctioned seam: an action registered under the reserved topbar id
@@ -9,29 +9,31 @@
 // dialog in the chart):
 //
 //   [ Search…                                          ⚲ All ]
-//   All indicators     every indicator, ONE list, A–Z: Vela's built-ins, ours
-//                      (CB Walls, Voltick Path, pages/vela/studies/), your CB
-//                      Scripts and the ready-made strategies
-//   List 1 · 2 · 3     YOUR LISTS (up to three, named as you like), each with
-//                      Add all: every indicator in it onto the chart in one go
+//   All indicators     everything, A–Z, no letter dividers
+//   Voltick            ours: CB Walls, Voltick Path / Ribbon, pages/vela/studies/
+//                      and the ready-made strategies, shown without "Voltick"
+//   Scripts            your CB Scripts (indicators and strategies), and
+//                      Write or paste a script…
+//   PERSONAL
+//     List 1 · 2 · 3   your three lists, named as you like; each opens with
+//                      Add all: every indicator in it onto the chart at once
+//   ✎ Edit lists       the list editor (below)
 //
-// NO CATEGORIES, A–Z (Brandon, 2026-10-07: "no categories on the indicators.
-// just in alphabetical order"), and THREE LISTS (same day: "have the ability to
-// make up to 3 lists of indicators. with the ability to add all"). The lists
-// replaced Favorites: the stars a browser had become List 1 ("Favorites"), once.
+// No categories, A–Z, no colour accents, no per-row buttons: a row is a name, and
+// clicking it puts it on the active chart (through the shell — undo / redo and
+// the topbar count see it); the dialog stays open and the row gets a ✓.
 //
-//   · a row's 1 2 3 chips put it in (or take it out of) a list
-//   · a list's head: its name (✎ renames it), Add all
-//   · Add all adds every indicator in the list that is not on the chart yet, so
-//     pressing it twice never doubles anything. A strategy in a list is skipped
-//     (adding one opens the Strategy Tester: add it from its row)
+// EDIT LISTS opens its own dialog: every indicator on the left (search, and an
+// All / Voltick / Scripts switch), the three lists as columns beside it. Drag a
+// row into a column, or press its 1 / 2 / 3; drag inside a column to reorder it
+// (Add all follows that order); ✕ takes one out; ✎ renames a list. Done saves,
+// Cancel throws the changes away; either goes back to the Indicators dialog.
 //
-// What is on the chart is managed from its legend rows (eye / gear / ✕); a ✓
-// marks it here. Click a row to add it to the active chart (through the shell —
-// undo / redo and the topbar count see it); the dialog stays open, the row gets
-// a ✓. Search runs across everything; Enter adds the first hit. The filter cycles
-// All → Price overlays → Separate pane. The view and the lists are remembered in
-// this browser.
+// Add all adds every indicator in the list that is not on the chart yet, so
+// pressing it twice changes nothing; a strategy in a list is skipped (adding one
+// opens the Strategy Tester: add it from its row). The lists, and the section
+// last open, are remembered in this browser. The old ★ favourites became List 1
+// ("Favorites") the first time the lists were read.
 //
 // A NEW copy starts with "my default" when one is saved for that indicator (its
 // settings dialog: Defaults ▾ → Save as my default; indicatorPresets.ts).
@@ -44,7 +46,10 @@ import { instanceIdFor, libIdOf, loadLibrary } from './script/library'
 import { applyDefaultOnAdd } from './indicatorPresets'
 import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
 import { testStrategy } from './script/testerPanels'
+import { WALLS_TYPE } from './wallsIndicator'
+import { PATH_TYPE, RIBBON_TYPE } from './vtPath/vtPathIndicator'
 import { JOURNAL_TYPE } from './studies'
+import { track } from './telemetry'
 
 /** The old ★ favourites: read once, into List 1. */
 const FAV_KEY = 'cb-v3-vela-ind-favs'
@@ -55,12 +60,13 @@ const SCRIPTS_PANEL = 'cbedge-scripts'
 const LIST_COUNT = 3
 const NAME_MAX = 24
 
-/** `all`, or one of the lists by index. */
-type View = 'all' | 0 | 1 | 2
+type Section = 'all' | 'voltick' | 'scripts'
+/** A section, or one of the Personal lists by index. */
+type View = Section | 0 | 1 | 2
 
 interface IndList {
   name: string
-  /** Row keys (`n:<type>`, `s:<lib id>`, `st:…`, `r:…`), in the order added. */
+  /** Row keys (`n:<type>`, `s:<lib id>`, `st:…`, `r:…`), in Add all's order. */
   keys: string[]
 }
 
@@ -72,11 +78,15 @@ interface IndList {
  */
 const HIDDEN = new Set<string>([JOURNAL_TYPE])
 
+/** Ours: CB Walls, the Path and its Ribbon, and every pages/vela/studies/ type (`cbedge-…`). */
+const isVoltickType = (t: string) => t === WALLS_TYPE || t === PATH_TYPE || t === RIBBON_TYPE || t.startsWith('cbedge-')
+
 /** One addable thing. */
 interface Row {
   key: string
   name: string
   desc: string
+  section: Exclude<Section, 'all'> | 'builtin'
   kind: 'native' | 'script'
   type?: string
   libId?: string
@@ -88,22 +98,27 @@ interface Row {
   strategy?: boolean
 }
 
-/** "CB Prior Levels · previous day / week…" → name + description (Voltick copy: a middle dot, never an em-dash). */
+/** "Voltick Prior Levels · previous day / week…" → name + description (a middle dot, never an em-dash). */
 function splitTitle(title: string): [string, string] {
   const at = title.indexOf(' · ')
   return at > 0 ? [title.slice(0, at), title.slice(at + 3)] : [title, '']
 }
+
+/** "Voltick Net GEX" → "Net GEX": ours have their own section, so the name drops the brand. */
+const unbrand = (name: string) => name.replace(/^(?:Voltick|CB)\s+/, '')
 
 function nativeRows(): Row[] {
   return nativeIndicatorDescriptors()
     .filter((d) => !HIDDEN.has(d.type))
     .map((d: NativeIndicatorDescriptor) => {
       const [name, desc] = splitTitle(d.title)
+      const ours = isVoltickType(d.type)
       return {
         key: `n:${d.type}`,
-        name,
+        name: ours ? unbrand(name) : name,
         desc: desc || (d.overlay ? 'On the price chart' : 'In its own pane'),
-        kind: 'native',
+        section: ours ? ('voltick' as const) : ('builtin' as const),
+        kind: 'native' as const,
         type: d.type,
         overlay: d.overlay,
         multi: d.multiInstance === true,
@@ -120,6 +135,7 @@ function scriptRows(): Row[] {
       key: strategy ? `st:${s.id}` : `s:${s.id}`,
       name: s.name,
       desc: strategy ? 'Your strategy · opens the Strategy Tester' : 'Your CB Script',
+      section: 'scripts' as const,
       kind: 'script' as const,
       libId: s.id,
       source: s.source,
@@ -131,12 +147,13 @@ function scriptRows(): Row[] {
   })
 }
 
-/** The ready-made strategies (script/strategies.ts). */
+/** The ready-made strategies (script/strategies.ts): ours, under Voltick. */
 function readyRows(): Row[] {
   return READY_STRATEGIES.map((r) => ({
     key: `r:${r.id}`,
-    name: r.name,
+    name: unbrand(r.name),
     desc: `Strategy · ${r.desc}`,
+    section: 'voltick' as const,
     kind: 'script' as const,
     libId: r.id,
     source: r.source,
@@ -149,6 +166,11 @@ function readyRows(): Row[] {
 
 const byName = (a: Row, b: Row) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
 
+/** Everything addable, A–Z. */
+const allRows = (): Row[] => [...nativeRows(), ...scriptRows(), ...readyRows()].sort(byName)
+
+const inSection = (r: Row, s: Section) => s === 'all' || r.section === s
+
 // ── Remembered choices ──
 function readOldFavs(): string[] {
   try {
@@ -160,8 +182,9 @@ function readOldFavs(): string[] {
 }
 
 const blankLists = (): IndList[] => Array.from({ length: LIST_COUNT }, (_, i) => ({ name: `List ${i + 1}`, keys: [] }))
+const cloneLists = (l: IndList[]): IndList[] => l.map((x) => ({ name: x.name, keys: x.keys.slice() }))
 
-export function readLists(): IndList[] {
+function readLists(): IndList[] {
   const out = blankLists()
   let raw: unknown = null
   try {
@@ -177,7 +200,7 @@ export function readLists(): IndList[] {
     })
     return out
   }
-  // first open since the lists came in: the stars become List 1
+  // first read since the lists came in: the stars become List 1
   const favs = readOldFavs()
   if (favs.length) out[0] = { name: 'Favorites', keys: favs }
   writeLists(out)
@@ -196,6 +219,7 @@ function readView(): View {
   try {
     const v = localStorage.getItem(VIEW_KEY)
     if (v === '0' || v === '1' || v === '2') return Number(v) as View
+    if (v === 'all' || v === 'voltick' || v === 'scripts') return v
   } catch {
     /* private mode */
   }
@@ -216,9 +240,47 @@ function el<K extends keyof HTMLElementTagNameMap>(doc: Document, tag: K, cls: s
   return e
 }
 
+/** A text field that renames list `i` in place: Enter / blur saves, Escape cancels. */
+function nameField(doc: Document, current: string, done: (name: string | null) => void): HTMLInputElement {
+  const input = el(doc, 'input', 'cb-ip-lname-input')
+  input.value = current
+  input.maxLength = NAME_MAX
+  input.setAttribute('aria-label', 'List name')
+  let settled = false
+  const finish = (v: string | null) => {
+    if (settled) return
+    settled = true
+    done(v)
+  }
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') finish(input.value)
+    else if (e.key === 'Escape') {
+      e.preventDefault()
+      finish(null)
+    }
+  })
+  input.addEventListener('blur', () => finish(input.value))
+  setTimeout(() => {
+    input.focus()
+    input.select()
+  }, 0)
+  return input
+}
+
+const cleanName = (v: string, i: number) => v.trim().slice(0, NAME_MAX) || `List ${i + 1}`
+
 const FILTERS = ['All', 'Price overlays', 'Separate pane'] as const
+const SECTIONS: ReadonlyArray<{ id: Section; label: string }> = [
+  { id: 'all', label: 'All indicators' },
+  { id: 'voltick', label: 'Voltick' },
+  { id: 'scripts', label: 'Scripts' },
+]
 
 let openDialog: Dialog | null = null
+
+// ═════════════════════════════════════════════════════════════════════════════
+// The Indicators dialog
+// ═════════════════════════════════════════════════════════════════════════════
 
 function openPicker(ctx: WidgetContext): void {
   if (openDialog?.open) {
@@ -228,10 +290,9 @@ function openPicker(ctx: WidgetContext): void {
   const doc = ctx.host.ownerDocument
   const lists = readLists()
   let view: View = readView()
+  track('picker_open', { view: String(view) })
   let query = ''
   let filter = 0
-  /** The list whose name is being edited, if any. */
-  let renaming: number | null = null
 
   const root = el(doc, 'div', 'cb-ip')
   // keystrokes stay here — Vela's chart shortcuts listen above the dialog
@@ -250,7 +311,7 @@ function openPicker(ctx: WidgetContext): void {
 
   const main = el(doc, 'div', 'cb-ip-main')
   const nav = el(doc, 'nav', 'cb-ip-nav')
-  nav.setAttribute('aria-label', 'Indicator lists')
+  nav.setAttribute('aria-label', 'Indicator sections')
   const list = el(doc, 'div', 'cb-ip-list')
   list.setAttribute('role', 'list')
   main.append(nav, list)
@@ -260,7 +321,6 @@ function openPicker(ctx: WidgetContext): void {
   const presentNative = () => new Set(handles().map((h) => h.nativeType).filter((t): t is string => !!t))
   const presentScripts = () => new Set(handles().map((h) => libIdOf(h.id)).filter((t): t is string => !!t))
 
-  const allRows = (): Row[] => [...nativeRows(), ...scriptRows(), ...readyRows()].sort(byName)
   const passesFilter = (r: Row) => filter === 0 || (filter === 1 ? r.overlay : !r.overlay)
   const isOn = (r: Row, nat: Set<string>, scr: Set<string>) => (r.kind === 'native' ? !!r.type && nat.has(r.type) : !!r.libId && scr.has(r.libId))
 
@@ -293,16 +353,19 @@ function openPicker(ctx: WidgetContext): void {
   const add = (r: Row) => {
     const res = addRow(r, presentNative())
     if (res === 'there') ctx.toast(`${r.name} is already on this chart`, 'info')
+    if (res === 'tester') track('picker_strategy', { name: r.name })
     if (res !== 'added') return
+    track('picker_add', { name: r.name, section: r.section, via: query ? 'search' : String(view) })
     ctx.toast(`Added ${r.name}`, 'success')
-    // the handle lands a beat later; repaint the ✓ / counts then
+    // the handle lands a beat later; repaint the ✓ then
     setTimeout(render, 120)
   }
 
-  /** Every indicator in list `i` that is not on the chart yet. */
+  /** Every indicator in list `i` that is not on the chart yet, in the list's order. */
   const addAll = (i: number) => {
     const l = lists[i]!
-    const rows = allRows().filter((r) => l.keys.includes(r.key))
+    const byKey = new Map(allRows().map((r) => [r.key, r]))
+    const rows = l.keys.map((k) => byKey.get(k)).filter((r): r is Row => !!r)
     const nat = presentNative()
     const scr = presentScripts()
     let added = 0
@@ -323,28 +386,14 @@ function openPicker(ctx: WidgetContext): void {
         if (r.libId) scr.add(r.libId)
       }
     }
+    track('list_add_all', { list: l.name, size: rows.length, added, there })
     const notes = [there ? `${there} already on` : '', strategies ? `${strategies} strateg${strategies === 1 ? 'y' : 'ies'} skipped` : ''].filter(Boolean).join(' · ')
     if (added) ctx.toast(`Added ${added} from ${l.name}${notes ? ` · ${notes}` : ''}`, 'success')
     else ctx.toast(rows.length ? `Nothing to add from ${l.name}${notes ? ` · ${notes}` : ''}` : `${l.name} is empty`, 'info')
     setTimeout(render, 150)
   }
 
-  const toggleIn = (i: number, r: Row) => {
-    const l = lists[i]!
-    const at = l.keys.indexOf(r.key)
-    if (at >= 0) l.keys.splice(at, 1)
-    else l.keys.push(r.key)
-    writeLists(lists)
-    render()
-  }
-
-  const rename = (i: number, name: string) => {
-    const n = name.trim().slice(0, NAME_MAX)
-    lists[i]!.name = n || `List ${i + 1}`
-    writeLists(lists)
-  }
-
-  const rowEl = (r: Row, nat: Set<string>, scr: Set<string>): HTMLElement => {
+  const rowEl = (r: Row, nat: Set<string>, scr: Set<string>, tagOurs: boolean): HTMLElement => {
     const row = el(doc, 'div', 'cb-ip-row')
     row.setAttribute('role', 'listitem')
     row.tabIndex = 0
@@ -352,28 +401,13 @@ function openPicker(ctx: WidgetContext): void {
     const text = el(doc, 'div', 'cb-ip-text')
     const name = el(doc, 'div', 'cb-ip-name', r.name)
     if (r.beta) name.append(el(doc, 'span', 'cb-ip-badge', 'beta'))
-    text.append(name, el(doc, 'div', 'cb-ip-desc', r.desc))
+    // in a mixed list, ours say so in their description (the name dropped "Voltick")
+    text.append(name, el(doc, 'div', 'cb-ip-desc', tagOurs && r.section === 'voltick' ? `Voltick · ${r.desc}` : r.desc))
     const onMark = el(doc, 'span', 'cb-ip-on', on ? '✓' : '')
     onMark.title = on ? 'On this chart' : ''
-    // the three list chips: in a list, lit; click to put it in or take it out
-    const chips = el(doc, 'span', 'cb-ip-lchips')
-    lists.forEach((l, i) => {
-      const inIt = l.keys.includes(r.key)
-      const b = el(doc, 'button', 'cb-ip-lchip', String(i + 1))
-      b.type = 'button'
-      b.dataset.on = inIt ? '1' : ''
-      b.title = inIt ? `Take out of ${l.name}` : `Put in ${l.name}`
-      b.setAttribute('aria-pressed', inIt ? 'true' : 'false')
-      b.addEventListener('click', (e) => {
-        e.stopPropagation()
-        toggleIn(i, r)
-      })
-      chips.append(b)
-    })
-    row.append(text, onMark, chips)
+    row.append(text, onMark)
     row.addEventListener('click', () => add(r))
     row.addEventListener('keydown', (e) => {
-      if (e.target !== row) return
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault()
         add(r)
@@ -384,74 +418,33 @@ function openPicker(ctx: WidgetContext): void {
 
   function renderNav() {
     nav.replaceChildren()
-    const item = (v: View, icon: string, label: string, count: number) => {
+    const rows = allRows()
+    const item = (v: View, label: string, count: number, quiet = false) => {
       const b = el(doc, 'button', 'cb-ip-cat')
       b.type = 'button'
       b.dataset.active = !query && v === view ? '1' : ''
-      b.append(iconEl(icon, doc), el(doc, 'span', 'cb-ip-cat-label', label))
-      if (count) b.append(el(doc, 'span', 'cb-ip-count', String(count)))
+      if (quiet) b.dataset.quiet = '1'
+      b.append(el(doc, 'span', 'cb-ip-cat-label', label), el(doc, 'span', 'cb-ip-count', String(count)))
       b.addEventListener('click', () => {
         view = v
         writeView(view)
-        renaming = null
         query = ''
         search.value = ''
         render()
       })
       nav.append(b)
     }
-    item('all', 'cb-ip-grid', 'All indicators', 0)
-    nav.append(el(doc, 'div', 'cb-ip-section', 'MY LISTS'))
-    lists.forEach((l, i) => item(i as View, 'cb-ip-list', l.name, l.keys.length))
-  }
-
-  /** A list's head: its name (or the rename field), ✎ and Add all. */
-  function listHead(i: number): HTMLElement {
-    const l = lists[i]!
-    const head = el(doc, 'div', 'cb-ip-lhead')
-    if (renaming === i) {
-      const input = el(doc, 'input', 'cb-ip-lname-input')
-      input.value = l.name
-      input.maxLength = NAME_MAX
-      input.setAttribute('aria-label', 'List name')
-      const done = (save: boolean) => {
-        if (renaming !== i) return
-        if (save) rename(i, input.value)
-        renaming = null
-        render()
-      }
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') done(true)
-        else if (e.key === 'Escape') {
-          e.preventDefault()
-          done(false)
-        }
-      })
-      input.addEventListener('blur', () => done(true))
-      head.append(input)
-      setTimeout(() => {
-        input.focus()
-        input.select()
-      }, 0)
-    } else {
-      head.append(el(doc, 'span', 'cb-ip-lname', l.name))
-      const ren = el(doc, 'button', 'cb-ip-lbtn cb-ip-lren')
-      ren.type = 'button'
-      ren.title = 'Rename this list'
-      ren.append(iconEl('cb-ip-pencil', doc))
-      ren.addEventListener('click', () => {
-        renaming = i
-        render()
-      })
-      head.append(ren)
-    }
-    const all = el(doc, 'button', 'cb-ip-lbtn cb-ip-addall', 'Add all')
-    all.type = 'button'
-    all.title = `Add every indicator in ${l.name} to this chart`
-    all.disabled = !l.keys.length
-    all.addEventListener('click', () => addAll(i))
-    head.append(all)
-    return head
+    for (const s of SECTIONS) item(s.id, s.label, rows.filter((r) => inSection(r, s.id)).length)
+    nav.append(el(doc, 'div', 'cb-ip-section', 'PERSONAL'))
+    lists.forEach((l, i) => item(i as View, l.name, l.keys.length, !l.keys.length))
+    const edit = el(doc, 'button', 'cb-ip-editlists')
+    edit.type = 'button'
+    edit.append(iconEl('cb-ip-pencil', doc), el(doc, 'span', '', 'Edit lists'))
+    edit.addEventListener('click', () => {
+      dlg.hide()
+      openListEditor(ctx)
+    })
+    nav.append(edit)
   }
 
   function render() {
@@ -467,49 +460,54 @@ function openPicker(ctx: WidgetContext): void {
       const hits = allRows().filter((r) => passesFilter(r) && (r.name.toLowerCase().includes(q) || r.desc.toLowerCase().includes(q) || (r.type ?? '').includes(q)))
       hits.sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || byName(a, b))
       out.push(el(doc, 'div', 'cb-ip-head', hits.length ? `${hits.length} result${hits.length === 1 ? '' : 's'}` : `Nothing matches “${query}”`))
-      for (const r of hits) out.push(rowEl(r, nat, scr))
-    } else if (view === 'all') {
-      const rows = allRows().filter(passesFilter)
-      out.push(el(doc, 'div', 'cb-ip-head', `All indicators · ${rows.length}`))
-      if (!rows.length) out.push(el(doc, 'div', 'cb-ip-empty', 'Nothing here with that filter.'))
-      for (const r of rows) out.push(rowEl(r, nat, scr))
-      const neu = el(doc, 'button', 'cb-ip-link')
-      neu.type = 'button'
-      neu.append(iconEl('plus', doc), el(doc, 'span', '', 'Write or paste a script…'))
-      neu.addEventListener('click', () => {
-        dlg.hide()
-        ctx.togglePanel(SCRIPTS_PANEL, true)
-      })
-      out.push(neu)
+      for (const r of hits) out.push(rowEl(r, nat, scr, true))
+    } else if (typeof view === 'string') {
+      const sec = SECTIONS.find((s) => s.id === view)!
+      const rows = allRows().filter((r) => inSection(r, sec.id) && passesFilter(r))
+      out.push(el(doc, 'div', 'cb-ip-head', sec.label))
+      if (!rows.length) out.push(el(doc, 'div', 'cb-ip-empty', filter ? 'Nothing here with that filter.' : sec.id === 'scripts' ? 'No saved scripts yet.' : 'Nothing here.'))
+      for (const r of rows) out.push(rowEl(r, nat, scr, sec.id === 'all'))
+      if (sec.id === 'scripts') {
+        const neu = el(doc, 'button', 'cb-ip-link')
+        neu.type = 'button'
+        neu.append(iconEl('plus', doc), el(doc, 'span', '', 'Write or paste a script…'))
+        neu.addEventListener('click', () => {
+          dlg.hide()
+          ctx.togglePanel(SCRIPTS_PANEL, true)
+        })
+        out.push(neu)
+      }
     } else {
       const i = view
       const l = lists[i]!
-      out.push(listHead(i))
-      const rows = allRows().filter((r) => l.keys.includes(r.key) && passesFilter(r))
+      const head = el(doc, 'div', 'cb-ip-lhead')
+      head.append(el(doc, 'span', 'cb-ip-lname', l.name))
+      const all = el(doc, 'button', 'cb-ip-addall', l.keys.length ? `Add all ${l.keys.length}` : 'Add all')
+      all.type = 'button'
+      all.title = `Add every indicator in ${l.name} to this chart`
+      all.disabled = !l.keys.length
+      all.addEventListener('click', () => addAll(i))
+      head.append(all)
+      out.push(head)
+      // the list's own order (Add all's), not A–Z
+      const byKey = new Map(allRows().map((r) => [r.key, r]))
+      const rows = l.keys.map((k) => byKey.get(k)).filter((r): r is Row => !!r && passesFilter(r))
       if (!rows.length) {
-        out.push(
-          el(
-            doc,
-            'div',
-            'cb-ip-empty',
-            l.keys.length && filter ? 'Nothing in this list with that filter.' : `Nothing in ${l.name} yet. Press ${i + 1} on any indicator under All indicators to put it here.`,
-          ),
-        )
+        out.push(el(doc, 'div', 'cb-ip-empty', l.keys.length && filter ? 'Nothing in this list with that filter.' : `Nothing in ${l.name} yet. Edit lists puts indicators in it.`))
       }
-      for (const r of rows) out.push(rowEl(r, nat, scr))
+      for (const r of rows) out.push(rowEl(r, nat, scr, true))
+      if (rows.some((r) => isOn(r, nat, scr))) out.push(el(doc, 'div', 'cb-ip-foot', '✓ already on this chart · Add all skips those'))
     }
     list.replaceChildren(...out)
   }
 
   search.addEventListener('input', () => {
     query = search.value.trim()
-    renaming = null
     render()
   })
   search.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      const first = list.querySelector<HTMLElement>('.cb-ip-row:not(.cb-ip-row-static)')
-      first?.click()
+      list.querySelector<HTMLElement>('.cb-ip-row')?.click()
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
       list.querySelector<HTMLElement>('.cb-ip-row')?.focus()
@@ -557,15 +555,268 @@ function openPicker(ctx: WidgetContext): void {
   setTimeout(() => search.focus(), 30)
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Edit lists
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** What a drag carries: a row from the left (`add`), or an item already in a list (`move`). */
+type Drag = { kind: 'add'; key: string } | { kind: 'move'; list: number; at: number }
+
+function openListEditor(ctx: WidgetContext): void {
+  const doc = ctx.host.ownerDocument
+  const draft = cloneLists(readLists())
+  let section: Section = 'all'
+  let query = ''
+  let renaming: number | null = null
+  let drag: Drag | null = null
+
+  // cb-ip too: the search field, the empty notes and the name field share its styles
+  const root = el(doc, 'div', 'cb-ip cb-ile')
+  for (const t of ['keydown', 'keyup', 'keypress'] as const) root.addEventListener(t, (e) => e.stopPropagation())
+  const grid = el(doc, 'div', 'cb-ile-grid')
+  const foot = el(doc, 'div', 'cb-ile-foot')
+  root.append(grid, foot)
+
+  // ── the left: every indicator ──
+  const src = el(doc, 'div', 'cb-ile-col cb-ile-src')
+  const sRow = el(doc, 'div', 'cb-ip-searchrow cb-ile-search')
+  const sInput = el(doc, 'input', 'cb-ip-search')
+  sInput.placeholder = 'Search…'
+  sInput.spellcheck = false
+  sInput.setAttribute('aria-label', 'Search indicators')
+  sRow.append(iconEl('search', doc), sInput)
+  const seg = el(doc, 'div', 'cb-ile-seg')
+  const srcList = el(doc, 'div', 'cb-ile-srclist')
+  src.append(sRow, seg, srcList)
+  const cols = el(doc, 'div', 'cb-ile-lists')
+  grid.append(src, cols)
+
+  const rowsByKey = () => new Map(allRows().map((r) => [r.key, r]))
+
+  const putIn = (i: number, key: string, at?: number) => {
+    const l = draft[i]!
+    const was = l.keys.indexOf(key)
+    if (was >= 0) l.keys.splice(was, 1)
+    const to = at == null ? l.keys.length : Math.max(0, Math.min(l.keys.length, was >= 0 && was < at ? at - 1 : at))
+    l.keys.splice(to, 0, key)
+  }
+
+  const toggleIn = (i: number, key: string) => {
+    const l = draft[i]!
+    const at = l.keys.indexOf(key)
+    if (at >= 0) l.keys.splice(at, 1)
+    else l.keys.push(key)
+    render()
+  }
+
+  /** Drop `drag` into list `i` before position `at` (end when undefined). */
+  const dropInto = (i: number, at?: number) => {
+    const d = drag
+    drag = null
+    if (!d) return
+    if (d.kind === 'add') putIn(i, d.key, at)
+    else {
+      const key = draft[d.list]?.keys[d.at]
+      if (key == null) return
+      if (d.list === i) putIn(i, key, at)
+      else {
+        draft[d.list]!.keys.splice(d.at, 1)
+        putIn(i, key, at)
+      }
+    }
+    render()
+  }
+
+  const dropTarget = (node: HTMLElement, onDrop: () => void) => {
+    node.addEventListener('dragover', (e) => {
+      if (!drag) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = drag.kind === 'add' ? 'copy' : 'move'
+      node.dataset.over = '1'
+    })
+    node.addEventListener('dragleave', () => {
+      delete node.dataset.over
+    })
+    node.addEventListener('drop', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      delete node.dataset.over
+      onDrop()
+    })
+  }
+
+  const startDrag = (node: HTMLElement, d: () => Drag) => {
+    node.draggable = true
+    node.addEventListener('dragstart', (e) => {
+      drag = d()
+      // Firefox will not start a drag without data
+      e.dataTransfer?.setData('text/plain', 'cb-indicator')
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copyMove'
+      node.dataset.dragging = '1'
+    })
+    node.addEventListener('dragend', () => {
+      delete node.dataset.dragging
+      drag = null
+      for (const n of root.querySelectorAll<HTMLElement>('[data-over]')) delete n.dataset.over
+    })
+  }
+
+  function renderSource() {
+    seg.replaceChildren()
+    for (const s of SECTIONS) {
+      const b = el(doc, 'button', 'cb-ile-segbtn', s.id === 'all' ? 'All' : s.label)
+      b.type = 'button'
+      b.dataset.active = s.id === section ? '1' : ''
+      b.addEventListener('click', () => {
+        section = s.id
+        renderSource()
+      })
+      seg.append(b)
+    }
+    const q = query.toLowerCase()
+    const rows = allRows().filter((r) => inSection(r, section) && (!q || r.name.toLowerCase().includes(q) || r.desc.toLowerCase().includes(q)))
+    const out: HTMLElement[] = []
+    for (const r of rows) {
+      const row = el(doc, 'div', 'cb-ile-row')
+      const name = el(doc, 'span', 'cb-ile-name', r.name)
+      name.title = section === 'all' && r.section === 'voltick' ? `Voltick · ${r.desc}` : r.desc
+      const to = el(doc, 'span', 'cb-ile-to')
+      draft.forEach((l, i) => {
+        const inIt = l.keys.includes(r.key)
+        const b = el(doc, 'button', 'cb-ile-num', String(i + 1))
+        b.type = 'button'
+        b.dataset.on = inIt ? '1' : ''
+        b.title = inIt ? `Take out of ${l.name}` : `Put in ${l.name}`
+        b.setAttribute('aria-pressed', inIt ? 'true' : 'false')
+        b.addEventListener('click', () => toggleIn(i, r.key))
+        to.append(b)
+      })
+      row.append(name, to)
+      startDrag(row, () => ({ kind: 'add', key: r.key }))
+      out.push(row)
+    }
+    if (!out.length) out.push(el(doc, 'div', 'cb-ip-empty', query ? `Nothing matches “${query}”` : 'Nothing here.'))
+    srcList.replaceChildren(...out)
+  }
+
+  function renderLists() {
+    const byKey = rowsByKey()
+    cols.replaceChildren()
+    draft.forEach((l, i) => {
+      const col = el(doc, 'div', 'cb-ile-col cb-ile-list')
+      const head = el(doc, 'div', 'cb-ile-head')
+      if (renaming === i) {
+        head.append(
+          nameField(doc, l.name, (v) => {
+            if (v != null) l.name = cleanName(v, i)
+            renaming = null
+            render()
+          }),
+        )
+      } else {
+        const nm = el(doc, 'span', 'cb-ile-lname', l.name)
+        nm.title = 'Rename'
+        nm.addEventListener('click', () => {
+          renaming = i
+          render()
+        })
+        const ren = el(doc, 'button', 'cb-ile-ren')
+        ren.type = 'button'
+        ren.title = `Rename ${l.name}`
+        ren.append(iconEl('cb-ip-pencil', doc))
+        ren.addEventListener('click', () => {
+          renaming = i
+          render()
+        })
+        head.append(nm, el(doc, 'span', 'cb-ile-count', String(l.keys.length)), ren)
+      }
+      col.append(head)
+      const items = el(doc, 'div', 'cb-ile-items')
+      l.keys.forEach((key, at) => {
+        const r = byKey.get(key)
+        const it = el(doc, 'div', 'cb-ile-item')
+        it.append(el(doc, 'span', 'cb-ile-grip', '⠿'), el(doc, 'span', 'cb-ile-name', r?.name ?? 'Removed indicator'))
+        if (!r) it.dataset.gone = '1'
+        const x = el(doc, 'button', 'cb-ile-x', '✕')
+        x.type = 'button'
+        x.title = `Take out of ${l.name}`
+        x.addEventListener('click', () => {
+          l.keys.splice(at, 1)
+          render()
+        })
+        it.append(x)
+        startDrag(it, () => ({ kind: 'move', list: i, at }))
+        dropTarget(it, () => dropInto(i, at))
+        items.append(it)
+      })
+      const zone = el(doc, 'div', 'cb-ile-drop', l.keys.length ? 'drop here' : `Empty. Drag indicators here or press ${i + 1} on a row`)
+      if (!l.keys.length) zone.dataset.empty = '1'
+      items.append(zone)
+      dropTarget(col, () => dropInto(i))
+      col.append(items)
+      cols.append(col)
+    })
+  }
+
+  function render() {
+    renderSource()
+    renderLists()
+  }
+
+  sInput.addEventListener('input', () => {
+    query = sInput.value.trim()
+    renderSource()
+  })
+
+  const back = () => {
+    dlg.hide()
+    // the Indicators dialog again, with the lists as they now stand
+    setTimeout(() => openPicker(ctx), 0)
+  }
+  foot.append(el(doc, 'span', 'cb-ile-note', 'Lists save in this browser'))
+  const cancel = el(doc, 'button', 'cb-ile-btn', 'Cancel')
+  cancel.type = 'button'
+  cancel.addEventListener('click', back)
+  const done = el(doc, 'button', 'cb-ile-btn cb-ile-done', 'Done')
+  done.type = 'button'
+  done.addEventListener('click', () => {
+    if (renaming != null) (doc.activeElement as HTMLElement | null)?.blur()
+    writeLists(draft)
+    track('lists_saved', { l1: draft[0]?.keys.length ?? 0, l2: draft[1]?.keys.length ?? 0, l3: draft[2]?.keys.length ?? 0 })
+    back()
+  })
+  foot.append(cancel, done)
+
+  const dlg = new Dialog({
+    title: 'Edit lists',
+    host: ctx.host,
+    draggable: true,
+    flush: true,
+    className: 'cb-ile-dialog',
+    closeOnBackdrop: false,
+    initialFocusEl: () => sInput,
+    content: root,
+    onOpenChange: (o) => {
+      if (o) return
+      setTimeout(() => {
+        dlg.destroy()
+        if (openDialog === dlg) openDialog = null
+      }, 0)
+      // closed with ✕ / Escape: the changes are dropped, like Cancel
+    },
+  })
+  openDialog = dlg
+  render()
+  dlg.show()
+}
+
 let registered = false
 
 /** Take over Vela's Indicators slot. Idempotent; before any workspace is built. */
 export function registerIndicatorPicker(): void {
   if (registered) return
   registered = true
-  // nav icons (Vela ships star / search / eye / trash / plus; these are ours)
-  registerIcon('cb-ip-grid', svg16('<rect x="2.5" y="2.5" width="4.5" height="4.5" rx=".8"/><rect x="9" y="2.5" width="4.5" height="4.5" rx=".8"/><rect x="2.5" y="9" width="4.5" height="4.5" rx=".8"/><rect x="9" y="9" width="4.5" height="4.5" rx=".8"/>'))
-  registerIcon('cb-ip-list', svg16('<path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.8" cy="4" r=".9" fill="currentColor"/><circle cx="2.8" cy="8" r=".9" fill="currentColor"/><circle cx="2.8" cy="12" r=".9" fill="currentColor"/>'))
   registerIcon('cb-ip-pencil', svg16('<path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/>'))
   registerIcon('cb-ip-funnel', svg16('<path d="M2.5 3h11l-4.2 5v4.5l-2.6 1.2V8z"/>'))
   registerWidgetAction({

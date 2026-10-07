@@ -44,6 +44,7 @@ import type { CellState, VelaWorkspace } from '@luxalgo/vela/workspace'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import { CBSCRIPT } from './script/engine'
 import { instanceIdFor, libIdOf } from './script/library'
+import { track } from './telemetry'
 
 type Ledger = NonNullable<CellState['indicators']>
 type NativeEntry = Ledger['natives'][number]
@@ -167,6 +168,7 @@ export function copyToAll(ctx: WidgetContext): void {
     if (moved) changed++
   }
   ctx.stateChanged()
+  track('copy_indicators', { charts: changed, natives: from.natives.length, scripts: scripts.length })
   ctx.toast(
     changed ? `${changed} chart${changed === 1 ? '' : 's'} now match${changed === 1 ? 'es' : ''} this one` : 'Every chart already has exactly these indicators',
     changed ? 'success' : 'info',

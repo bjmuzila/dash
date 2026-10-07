@@ -31,6 +31,10 @@
 //                  its change.
 //   Whale Prints   ≥ $1M option prints (/api/lse/whales — the Whales page's own
 //                  feed, kept forever) as BUBBLES centred on the moment each
+//                  ... TODAY ONLY BY DEFAULT (2026-10-07, Brandon): Days back
+//                  counts trading days including today, so 1 is today's
+//                  session (it used to reach back to yesterday's date too), and
+//                  a Buys / sells setting shows only bought or only sold prints.
 //                  printed and the underlying's price then, sized by premium:
 //                  green bullish (calls bought, puts sold), red bearish, grey
 //                  when the side is unknown.
@@ -44,7 +48,7 @@
 import type { OHLCV, PriceLine, SeriesSpec } from '@luxalgo/vela'
 import { tokenHexAlpha } from '@/design/theme'
 import { DAY_MS, barAt, bool, studyImpl, etDateKey, etWallMs, getJson, int, money, provideLayer, seriesOf, sessionsOf, str, type StudyCtx } from './common'
-import { NETGEXFLOW_TYPE, NETGEX_STYLES, NETGEX_TYPE, NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_CAP, WH_EXP, WH_MIN, WH_OPACITY_DEF, WH_SIDE } from './index'
+import { NETGEXFLOW_TYPE, NETGEX_STYLES, NETGEX_TYPE, NETPREM_TYPE, NP_MIN as MIN_PREM, VF_SCOPES as SCOPES, VF_SESSIONS as SESS, VOLFLOW_TYPE, WHALES_TYPE, WH_ACTION, WH_CAP, WH_EXP, WH_MIN, WH_OPACITY_DEF, WH_SIDE } from './index'
 import { gexBasis, gexBasisShort } from '@/pages/vela/gexBasis'
 import { WhaleLayer, type Tone, type WhaleBubble, type WhaleContext, type WhaleCtxLine, type WhalePayload } from './whaleLayer'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
@@ -477,6 +481,8 @@ interface WhS {
   minPremium: number
   days: number
   side: 'all' | 'C' | 'P'
+  /** Bought prints, sold prints, or both. */
+  action: 'all' | 'BUY' | 'SELL'
   cap: number
   size: number
   /** Bubble fill opacity, 0.05..1 (the Bubble opacity % setting). */
@@ -670,6 +676,7 @@ function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
   const groups = new Map<string, WhRow[]>()
   for (const r of rows) {
     if (s.side !== 'all' && r.type !== s.side) continue
+    if (s.action !== 'all' && r.action !== s.action) continue
     if (!expOk(r, s.exp)) continue
     if (r.ts < first || r.ts >= lastEnd) continue
     const key = `${Math.floor(r.ts / 60_000)}|${biasOf(r)}`
@@ -734,6 +741,19 @@ function whaleBubbles(c: StudyCtx, s: WhS, data: WhData | null): WhaleBubble[] {
   return out.sort((a, b) => b.r - a.r).slice(0, 400)
 }
 
+/** The ET date `n` weekdays before `date` (YYYY-MM-DD); a weekend `date` steps back from Friday. */
+export function tradingDaysBack(date: string, n: number): string {
+  const [y, m, d] = date.split('-').map(Number)
+  let t = Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1, 12)
+  const wd = () => new Date(t).getUTCDay()
+  while (wd() === 0 || wd() === 6) t -= DAY_MS
+  for (let k = 0; k < n; ) {
+    t -= DAY_MS
+    if (wd() !== 0 && wd() !== 6) k++
+  }
+  return new Date(t).toISOString().slice(0, 10)
+}
+
 export const whalesImpl = studyImpl<WhS, WhData>({
   settings: (i) => {
     const side = str(i.side, WH_SIDE[0])
@@ -741,6 +761,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
       minPremium: WH_MIN_V[Math.max(0, (WH_MIN as readonly string[]).indexOf(str(i.min, WH_MIN[0])))] ?? 1e6,
       days: int(i.days, 1, 1, 30),
       side: side === WH_SIDE[1] ? 'C' : side === WH_SIDE[2] ? 'P' : 'all',
+      action: ((a) => (a === WH_ACTION[1] ? 'BUY' : a === WH_ACTION[2] ? 'SELL' : 'all'))(str(i.action, WH_ACTION[0])),
       cap: WH_CAP_V[Math.max(0, (WH_CAP as readonly string[]).indexOf(str(i.cap, WH_CAP[0])))] ?? 25e6,
       size: int(i.size, 100, 50, 200) / 100,
       fill: int(i.opacity, WH_OPACITY_DEF, 5, 100) / 100,
@@ -755,7 +776,8 @@ export const whalesImpl = studyImpl<WhS, WhData>({
     const now = Date.now()
     const anchor = c.ctx.live ? now : Math.min(now, c.bars[c.bars.length - 1]?.time ?? now)
     const to = etDateKey(Math.min(now, anchor + Math.max(s.days, 5) * DAY_MS))
-    const from = etDateKey(anchor - s.days * DAY_MS)
+    // `days` trading days counting the anchor's own: 1 = that day alone
+    const from = tradingDaysBack(etDateKey(anchor), s.days - 1)
     // rows_only=1: the print list alone, without the Whales page's six roll-ups
     const urlFor = (a: string, b: string) =>
       `/api/lse/whales?from=${a}&to=${b}&ticker=${encodeURIComponent(flowTicker(c))}&min_premium=${s.minPremium}&sort=time&limit=500&rows_only=1`

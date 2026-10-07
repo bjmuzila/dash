@@ -27,6 +27,7 @@ import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { forgetQueries } from '@/data/api'
+import { track } from '@/pages/vela/telemetry'
 
 export const REFRESH_ACTION_ID = 'cb-refresh'
 
@@ -69,6 +70,7 @@ function refresh(ctx: WidgetContext): void {
   const now = Date.now()
   if (now - lastAt < COOLDOWN_MS) return
   lastAt = now
+  track('refresh')
   forgetQueries((url) => CANDLE_URL.test(url))
   void refreshCandles(ctx.chart).then((ok) => {
     ctx.toast(ok ? 'Candles refreshed' : 'Candles could not be refreshed', ok ? 'success' : 'info')

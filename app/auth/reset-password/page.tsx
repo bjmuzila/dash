@@ -21,6 +21,12 @@ function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") || "";
+  // ?next= is passed straight through to /sign-in, whose AuthForm sanitises it
+  // (a path, or an https URL on cbedge.net / a subdomain, nothing else). Used
+  // by the Vela beta invite so a tester lands on vela.cbedge.net after signing
+  // in, not on a cbedge.net page they have no access to.
+  const next = searchParams.get("next") || "";
+  const signInHref = next ? `/sign-in?next=${encodeURIComponent(next)}` : "/sign-in";
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -53,7 +59,7 @@ function ResetPasswordForm() {
         return;
       }
       setDone(true);
-      setTimeout(() => router.replace("/sign-in"), 2000);
+      setTimeout(() => router.replace(signInHref), 2000);
     } catch {
       setError("Network error. Please try again.");
     } finally {

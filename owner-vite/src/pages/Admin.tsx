@@ -505,6 +505,220 @@ function VoltickAccessPanel() {
   );
 }
 
+// ─── Vela Beta Testers — vela.cbedge.net ONLY ─────────────────────────────────
+//
+// A twin of VoltickAccessPanel against /api/admin/vela-beta. The difference is
+// the whole point: a beta grant is NOT paid access. It opens the
+// vela.cbedge.net door (/api/vela/verify) and server-v2/ws-auth.js lets Vela's
+// data through only on that host. On cbedge.net the tester is an ordinary
+// unpaid account, and voltick.cbedge.net stays shut. Granting creates the
+// account and mails a set-password link that lands them on Vela.
+
+type VelaBetaRow = VoltickRow;
+
+function VelaBetaPanel() {
+  const [rows, setRows] = useState<VelaBetaRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [newEmail, setNewEmail] = useState("");
+  const [newNote, setNewNote] = useState("");
+  const [newExpiry, setNewExpiry] = useState("");
+  const [sendInvite, setSendInvite] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/vela-beta");
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setRows((j.rows as VelaBetaRow[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const grant = async () => {
+    const email = newEmail.trim().toLowerCase();
+    if (!email) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/admin/vela-beta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, note: newNote.trim() || null, expiresAt: newExpiry || null, sendInvite }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+
+      // The grant is live either way. "invite bounced" is the difference
+      // between them getting in today and waiting on mail that never came.
+      if (j?.inviteSent) setNotice(`Access granted — email sent to ${email}.`);
+      else if (j?.inviteError) setNotice(`Access granted, but the email failed (${j.inviteError}). Use Resend, or send them to “Forgot password?”.`);
+      else if (j?.accountCreated) setNotice(`Account created for ${email} — no email sent. They set a password via “Forgot password?”.`);
+      else setNotice(`Access granted for ${email} (account already existed).`);
+
+      setNewEmail("");
+      setNewNote("");
+      setNewExpiry("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Grant failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resendInvite = async (email: string) => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/admin/vela-beta", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setNotice(`Set-password email re-sent to ${email}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Resend failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (email: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/vela-beta?email=${encodeURIComponent(email)}`, { method: "DELETE" });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j?.error || `HTTP ${res.status}`); }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Revoke failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inputStyle = {
+    padding: "6px 10px", fontSize: 14, fontFamily: "var(--font-mono)",
+    background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6,
+    color: T.text, outline: "none",
+  } as const;
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: LIGHT_BLUE }}>Vela Beta Testers</span>
+        <span style={{ fontSize: 14, padding: "2px 8px", borderRadius: 10, background: `${LIGHT_BLUE}18`, border: `1px solid ${LIGHT_BLUE}44`, color: LIGHT_BLUE, fontWeight: 700 }}>
+          {rows ? rows.length : "—"}
+        </span>
+        <span style={{ fontSize: 14, color: T.textSecondary }}>vela.cbedge.net only · not paid access · cbedge.net stays shut · granting creates the account</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+          <a href="https://vela.cbedge.net" target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: 14, color: LIGHT_BLUE, textDecoration: "none" }}>
+            open ↗
+          </a>
+          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 14, opacity: loading ? 0.5 : 1 }}>
+            {loading ? "…" : "↻"}
+          </button>
+        </div>
+      </div>
+
+      {/* Grant */}
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          type="email"
+          value={newEmail}
+          onChange={(e) => setNewEmail(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") grant(); }}
+          placeholder="beta tester email…"
+          style={{ ...inputStyle, flex: "2 1 220px", minWidth: 0 }}
+        />
+        <input
+          type="text"
+          value={newNote}
+          onChange={(e) => setNewNote(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") grant(); }}
+          placeholder="note (why)…"
+          style={{ ...inputStyle, flex: "1 1 150px", minWidth: 0 }}
+        />
+        <input
+          type="date"
+          value={newExpiry}
+          onChange={(e) => setNewExpiry(e.target.value)}
+          title="Expires at the end of this day (blank = never)"
+          style={{ ...inputStyle, flexShrink: 0 }}
+        />
+        <label
+          title="Creates the account either way. Unchecked, no email goes out — you tell them yourself."
+          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: T.textSecondary, flexShrink: 0, cursor: "pointer", userSelect: "none" }}
+        >
+          <input type="checkbox" checked={sendInvite} onChange={(e) => setSendInvite(e.target.checked)} style={{ accentColor: LIGHT_BLUE, cursor: "pointer" }} />
+          email invite
+        </label>
+        <button onClick={grant} disabled={busy || !newEmail.trim()} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 14, opacity: busy || !newEmail.trim() ? 0.5 : 1 }}>
+          Grant
+        </button>
+        {notice && (
+          <div style={{ flexBasis: "100%", fontSize: 13, color: T.textSecondary, paddingTop: 2 }}>{notice}</div>
+        )}
+      </div>
+
+      <div style={{ maxHeight: 300, overflowY: "auto" }}>
+        {error ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 14 }}>{error}</div>
+        ) : loading && !rows ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>Loading…</div>
+        ) : rows && rows.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>No beta testers yet</div>
+        ) : (
+          rows?.map((r) => (
+            <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14 }}>
+              <span style={{ flex: 1, minWidth: 0, color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
+              {!r.user_id ? (
+                <span title="No account row exists for this email. Resend creates it and mails the link."
+                  style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, flexShrink: 0 }}>
+                  no account
+                </span>
+              ) : !r.has_password ? (
+                <span title="Account exists but they haven't set a password yet — the invite link is still unused"
+                  style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, flexShrink: 0 }}>
+                  no password yet
+                </span>
+              ) : null}
+              {!r.has_password && (
+                <button onClick={() => resendInvite(r.email)} disabled={busy} title="Re-send the set-password email (new 7-day link)"
+                  style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 14, flexShrink: 0, opacity: busy ? 0.5 : 1 }}>
+                  Resend
+                </button>
+              )}
+              {r.note && (
+                <span style={{ fontSize: 14, color: T.textSecondary, flexShrink: 0, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.note}</span>
+              )}
+              <span style={{ fontSize: 14, color: r.expires_at ? T.orange : T.muted, flexShrink: 0 }}>{fmtExpiry(r.expires_at)}</span>
+              <span style={{ fontSize: 14, color: T.muted, flexShrink: 0 }}>{fmtRelative(r.granted_at)}</span>
+              <button onClick={() => revoke(r.email)} disabled={busy} title="Remove from the Vela beta" style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 14, flexShrink: 0, opacity: busy ? 0.5 : 1 }}>
+                Revoke
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── System checks ─────────────────────────────────────────────────────────────
 // Owner diagnostics, run on click. Backed by /api/admin/checks in
 // server-v2/api-router.js, which holds a FIXED registry of named read-only
@@ -734,6 +948,8 @@ export default function Admin() {
         {/* Who can open voltick.cbedge.net — added to weekly while the merger
             is live. */}
         <VoltickAccessPanel />
+        {/* Vela-only beta testers: the door and the data, on vela.cbedge.net only. */}
+        <VelaBetaPanel />
 
         {/* Hand out full customer access without Stripe (beta testers,
             friends, support cases). A comped email shows up under
