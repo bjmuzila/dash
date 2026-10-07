@@ -86,6 +86,8 @@ const PREFS_KEY = 'cb-v3-vela-legend'
 const FOLD_BELOW = 520
 /** The live chain read behind Flip, re-asked this often while the page is visible. */
 const CHAIN_MS = 60_000
+/** After an empty levels read, re-read this soon, then this, then fall back to CHAIN_MS. */
+const EMPTY_RETRIES_MS = [5_000, 15_000, 30_000] as const
 
 const LEVELS: ReadonlyArray<{ key: MarkKey; name: string }> = [
   { key: 'volt', name: 'Volt' },
@@ -251,6 +253,11 @@ class Card {
   private chain: { flip: number | null; volt: number | null; coil: number | null; reversal: number | null; price: number | null } | null = null
   private price: number | null = null
   private chainTimer: ReturnType<typeof setInterval> | null = null
+  /** The first levels read for this symbol is still out: the row says "Loading levels…". */
+  private chainLoading = false
+  /** Quick re-reads after an empty answer (EMPTY_RETRIES_MS), before the CHAIN_MS cadence. */
+  private emptyRetry: ReturnType<typeof setTimeout> | null = null
+  private emptyReads = 0
   private frame = 0
   private rebuildPending = false
   private ro: ResizeObserver | null = null
@@ -350,6 +357,10 @@ class Card {
     this.sym = sym
     this.chain = null
     this.price = null
+    this.emptyReads = 0
+    if (this.emptyRetry) clearTimeout(this.emptyRetry)
+    this.emptyRetry = null
+    this.chainLoading = !!sym
     this.readChain(false)
     if (this.chainTimer) clearInterval(this.chainTimer)
     this.chainTimer = setInterval(() => {
@@ -366,9 +377,31 @@ class Card {
         if (sym !== this.sym) return
         const at = (k: string) => r.levels.find((l) => l.key === k)?.price ?? null
         this.chain = { flip: at('flip'), volt: at('volt'), coil: at('coil'), reversal: at('reversal'), price: r.price }
-        this.schedule(false)
+        this.afterRead()
       })
-      .catch(() => {})
+      .catch(() => {
+        if (sym === this.sym) this.afterRead()
+      })
+  }
+
+  /**
+   * A read landed. Nothing in it: ask again soon (the walls and the chain land a
+   * few seconds apart on a cold page) rather than leave "No levels" up for a
+   * whole CHAIN_MS.
+   */
+  private afterRead(): void {
+    this.chainLoading = false
+    const c = this.chain
+    const empty = !c || (c.flip == null && c.volt == null && c.coil == null && c.reversal == null)
+    if (empty && this.emptyReads < EMPTY_RETRIES_MS.length && !this.emptyRetry) {
+      const wait = EMPTY_RETRIES_MS[this.emptyReads++]!
+      this.emptyRetry = setTimeout(() => {
+        this.emptyRetry = null
+        if (!this.doc.hidden) this.readChain(true)
+      }, wait)
+    }
+    if (!empty) this.emptyReads = 0
+    this.schedule(false)
   }
 
   /** Into the plot, where Vela's price legend sits (it is hidden on the desktop). */
@@ -618,7 +651,7 @@ class Card {
     const d = this.doc
     const px = this.price ?? this.chain?.price ?? null
     const spec = LEVELS.map((L) => ({ L, v: this.levelOn(L) ? (this.chain?.[L.key] ?? null) : null }))
-    const sig = `${spec.map((x) => x.v).join('|')}|${prefs.dist ? (px ?? '') : ''}|${this.sym}`
+    const sig = `${spec.map((x) => x.v).join('|')}|${prefs.dist ? (px ?? '') : ''}|${this.sym}|${this.chainLoading ? 'L' : ''}`
     if (sig === this.levelSig) return
     this.levelSig = sig
     // one level per row: when any level has cents, all show two places, so the column lines up
@@ -640,7 +673,8 @@ class Card {
       if (prefs.dist && dist != null) it.append(el(d, 'span', 'cb-lc-dd', fmtDist(dist)))
       items.push(it)
     }
-    if (!items.length) items.push(el(d, 'span', 'cb-lc-lvnone', this.sym ? 'No levels for this symbol yet' : ''))
+    // still reading (walls ~1.8 s on a cold page): say so, not "No levels"
+    if (!items.length) items.push(el(d, 'span', 'cb-lc-lvnone', !this.sym ? '' : this.chainLoading ? 'Loading levels…' : 'No levels for this symbol yet'))
     this.lvs.replaceChildren(...items)
   }
 
@@ -884,6 +918,7 @@ class Card {
     if (pop?.owner === this) closePop()
     if (this.frame) cancelAnimationFrame(this.frame)
     if (this.chainTimer) clearInterval(this.chainTimer)
+    if (this.emptyRetry) clearTimeout(this.emptyRetry)
     this.ro?.disconnect()
     this.statusMo?.disconnect()
     for (const off of this.offChart) off()

@@ -533,18 +533,125 @@ register('/api/insights/gex', {
 // Pass-through routes forward the proxy's raw body + status unchanged.
 
 // /api/chains?ticker=SPX&expiration=YYYY-MM-DD → /proxy/api/tt/chains/:ticker
+//
+// Two opt-in trims (2026-10-07 audit: the Vela page's SPX read was 465 KB and
+// ~2.7 s cold, and every reader of it uses ONE expiry and five leg fields):
+//   front=1   only the nearest expiry that has strikes — the one mgMath
+//             parseChain() puts first and chainToGex() reads
+//   slim=1    each leg cut to what parseChain()'s leg() reads: gamma, delta,
+//             open-interest, volume, mark (mark falls back to the bid/ask mid,
+//             exactly as leg() would compute it)
+// Neither changes a number a reader computes; a caller that passes neither gets
+// the payload byte-for-byte as before.
+//
+// REST reads (`live=0`) are served stale-while-revalidate: the last snapshot
+// goes out at once (up to CHAINS_MAX_STALE_MS old) and a refresh runs in the
+// background once it is older than CHAINS_FRESH_MS. A key asked for in the last
+// CHAINS_WARM_MS is kept warm on a timer, so only the first read after a quiet
+// spell (or a deploy) pays the upstream pull. The live-subscriber path (no
+// live=0) is already instant and is not cached.
+const CHAINS_FRESH_MS = 20_000;
+const CHAINS_MAX_STALE_MS = 10 * 60_000;
+const CHAINS_WARM_MS = 15 * 60_000;
+const CHAINS_CACHE = new Map(); // key → { at, status, text, lastAsk, ctx, refreshing }
+
+function chainsSlimLeg(l) {
+  if (!l || typeof l !== 'object') return l;
+  const bid = Number(l.bid), ask = Number(l.ask);
+  const mark = Number(l.mark) || (bid > 0 && ask > 0 ? (bid + ask) / 2 : 0);
+  return { gamma: l.gamma, delta: l.delta, 'open-interest': l['open-interest'], volume: l.volume, mark };
+}
+function chainsTrim(text, front, slim) {
+  if (!front && !slim) return text;
+  let json;
+  try { json = JSON.parse(text); } catch { return text; }
+  const d = json?.data;
+  if (!d || !Array.isArray(d.items)) return text;
+  let items = d.items.filter((it) => it && it['expiration-date'] && Array.isArray(it.strikes) && it.strikes.length);
+  if (front) {
+    items.sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
+    items = items.slice(0, 1);
+  }
+  if (slim) {
+    items = items.map((it) => ({
+      'expiration-date': it['expiration-date'],
+      strikes: it.strikes.map((s) => ({ 'strike-price': s?.['strike-price'], call: chainsSlimLeg(s?.call), put: chainsSlimLeg(s?.put) })),
+    }));
+  }
+  d.items = items;
+  return JSON.stringify(json);
+}
+async function chainsPull(ctx, ticker, sp) {
+  const front = sp.get('front') === '1';
+  const slim = sp.get('slim') === '1';
+  const up = new URLSearchParams(sp);
+  up.delete('front'); up.delete('slim');
+  const qs = up.toString();
+  const r = await ctx.internalFetch(
+    `/proxy/api/tt/chains/${encodeURIComponent(ticker)}${qs ? `?${qs}` : ''}`,
+    { cache: 'no-store' }
+  );
+  const raw = await r.text();
+  return { status: r.status, text: r.status === 200 ? chainsTrim(raw, front, slim) : raw };
+}
+function chainsRefresh(key, ticker, sp, ctx) {
+  const e = CHAINS_CACHE.get(key) || { at: 0, status: 0, text: '', lastAsk: Date.now(), ctx, refreshing: null };
+  if (e.refreshing) return e.refreshing;
+  e.ctx = ctx;
+  e.refreshing = chainsPull(ctx, ticker, sp)
+    .then((r) => {
+      // Only a good answer replaces the snapshot; a failed refresh keeps serving the last one.
+      if (r.status === 200 || !e.text) { e.status = r.status; e.text = r.text; e.at = Date.now(); }
+      return e;
+    })
+    .finally(() => { e.refreshing = null; });
+  CHAINS_CACHE.set(key, e);
+  return e.refreshing;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, e] of CHAINS_CACHE) {
+    if (now - e.lastAsk > CHAINS_WARM_MS) {
+      if (now - e.at > CHAINS_MAX_STALE_MS && !e.refreshing) CHAINS_CACHE.delete(key);
+      continue;
+    }
+    if (!e.refreshing && now - e.at > CHAINS_FRESH_MS && e.ctx) {
+      const sp = new URLSearchParams(key);
+      const ticker = sp.get('ticker') || 'SPX';
+      sp.delete('ticker');
+      chainsRefresh(key, ticker, sp, e.ctx).catch(() => {});
+    }
+  }
+}, 15_000).unref?.();
+
 register('/api/chains', {
   auth: 'subscriber', methods: ['GET'],
   async handler(req, res, ctx) {
     const sp = new URL(req.url || '/', 'http://localhost').searchParams;
     const ticker = (sp.get('ticker') || 'SPX').trim();
     sp.delete('ticker');
-    const qs = sp.toString();
-    const r = await ctx.internalFetch(
-      `/proxy/api/tt/chains/${encodeURIComponent(ticker)}${qs ? `?${qs}` : ''}`,
-      { cache: 'no-store' }
-    );
-    send(res, r.status, await r.text(), { 'Cache-Control': CACHE_30 });
+    if (sp.get('live') !== '0') {
+      const r = await chainsPull(ctx, ticker, sp);
+      return send(res, r.status, r.text, { 'Cache-Control': CACHE_30 });
+    }
+    const keyParams = new URLSearchParams(sp);
+    keyParams.set('ticker', ticker.toUpperCase());
+    keyParams.sort();
+    const key = keyParams.toString();
+    let e = CHAINS_CACHE.get(key);
+    const now = Date.now();
+    if (e && e.text && e.status === 200 && now - e.at < CHAINS_MAX_STALE_MS) {
+      e.lastAsk = now;
+      if (now - e.at > CHAINS_FRESH_MS) chainsRefresh(key, ticker, sp, ctx).catch(() => {});
+      return send(res, 200, e.text, { 'Cache-Control': CACHE_30, 'X-Chain-Age': String(Math.round((now - e.at) / 1000)) });
+    }
+    try {
+      e = await chainsRefresh(key, ticker, sp, ctx);
+      e.lastAsk = Date.now();
+      return send(res, e.status || 502, e.text, { 'Cache-Control': CACHE_30, 'X-Chain-Age': '0' });
+    } catch (err) {
+      return send(res, 502, { error: String(err?.message || err), ticker });
+    }
   },
 });
 
@@ -4425,6 +4532,92 @@ register('/api/dxlink/candles', {
   },
 });
 
+// /api/vela/history?symbol=SPX&interval=1d|1wk|1mo — years of coarse bars for
+// Vela's D / W / M charts (cbedge-v3 pages/vela/cbedgeProvider.ts longHistory).
+// Answers { symbol, interval, source, bars: [{ t, o, h, l, c, v }] } oldest first.
+//
+// Until 2026-10-07 this route did not exist: the Next catch-all answered 501,
+// the chart fell through to the LSE vault, and the vault's NAME-matching
+// resolver charted SPX Technologies under SPX and Enovix under VIX. The fix is
+// that an index or a future never reaches a resolver at all — every symbol here
+// is mapped EXPLICITLY, and a ticker not in the maps must look like a plain
+// equity ticker or it gets an empty list, never a guess.
+//
+// Source: tt-snapshot's yahooDaily — the same daily-history adapter walls-reach
+// and far-cb already read (ThetaData was removed 2026-08-18, see
+// config/data-source.js). Cached per symbol+interval for VELA_HISTORY_TTL_MS:
+// past bars never change, and the chart lays its own tape (RTH-exact, live) over
+// the most recent ~30 sessions anyway.
+const VELA_HISTORY_TTL_MS = 15 * 60_000;
+const VELA_HISTORY = new Map(); // key → { at, body } | { at, p }
+const VELA_HISTORY_YEARS = { '1d': 10, '1wk': 25, '1mo': 40 };
+// Explicit source symbols. `scale` converts the source's units to the index's
+// own (XSP is a tenth of SPX).
+const VELA_HISTORY_MAP = {
+  SPX: { y: '^GSPC' }, SPXW: { y: '^GSPC' }, XSP: { y: '^GSPC', scale: 0.1 },
+  NDX: { y: '^NDX' }, NDXP: { y: '^NDX' }, RUT: { y: '^RUT' }, RUTW: { y: '^RUT' },
+  VIX: { y: '^VIX' }, VIX9D: { y: '^VIX9D' }, VIX1D: { y: '^VIX1D' }, VIX3M: { y: '^VIX3M' },
+  VVIX: { y: '^VVIX' }, VXN: { y: '^VXN' }, DJX: { y: '^DJI', scale: 0.01 }, DJI: { y: '^DJI' },
+  OEX: { y: '^OEX' }, SOX: { y: '^SOX' },
+  ES: { y: 'ES=F' }, '/ES': { y: 'ES=F' }, ES1: { y: 'ES=F' },
+  NQ: { y: 'NQ=F' }, '/NQ': { y: 'NQ=F' }, NQ1: { y: 'NQ=F' },
+  RTY: { y: 'RTY=F' }, YM: { y: 'YM=F' }, CL: { y: 'CL=F' }, GC: { y: 'GC=F' },
+};
+const VELA_EQUITY_RE = /^[A-Z]{1,5}([.-][A-Z])?$/;
+register('/api/vela/history', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const raw = String(sp.get('symbol') || '').trim().toUpperCase().replace(/^\$/, '').replace(/!$/, '');
+    const interval = String(sp.get('interval') || '1d').toLowerCase();
+    if (!raw) return send(res, 400, { error: 'symbol is required' });
+    if (!VELA_HISTORY_YEARS[interval]) return send(res, 400, { error: 'interval must be 1d, 1wk or 1mo' });
+    const mapped = VELA_HISTORY_MAP[raw];
+    // Not mapped and not a plain equity ticker: answer empty rather than guess.
+    if (!mapped && !VELA_EQUITY_RE.test(raw)) {
+      return send(res, 200, { symbol: raw, interval, source: 'none', bars: [] }, { 'Cache-Control': NO_STORE });
+    }
+    const src = mapped ? mapped.y : raw;
+    const scale = mapped?.scale ?? 1;
+    const key = `${raw}|${interval}`;
+    const hit = VELA_HISTORY.get(key);
+    if (hit?.body && Date.now() - hit.at < VELA_HISTORY_TTL_MS) {
+      return send(res, 200, hit.body, { 'Cache-Control': 'private, max-age=300' });
+    }
+    // One upstream fetch per key at a time — a page with four charts on SPX asks once.
+    let p = hit?.p;
+    if (!p) {
+      p = (async () => {
+        const end = new Date();
+        const start = new Date(end.getTime() - VELA_HISTORY_YEARS[interval] * 365 * 86_400_000);
+        const rows = await require('./tt-snapshot').yahooDaily(src, start, end, interval);
+        const round = (x) => Math.round(x * scale * 100) / 100;
+        const bars = [];
+        for (const r of rows || []) {
+          const c = Number(r.close);
+          if (!(c > 0) || !Number.isFinite(r.time)) continue;
+          bars.push({ t: r.time, o: round(r.open || c), h: round(r.high || c), l: round(r.low || c), c: round(c), v: Number(r.volume) || 0 });
+        }
+        return { symbol: raw, interval, source: `yahoo:${src}`, bars };
+      })();
+      VELA_HISTORY.set(key, { at: hit?.at ?? 0, body: hit?.body, p });
+    }
+    try {
+      const body = await p;
+      // An empty answer is cached too (briefly), so a symbol Yahoo does not
+      // carry costs one upstream call per minute, not one per chart.
+      VELA_HISTORY.set(key, { at: body.bars.length ? Date.now() : Date.now() - VELA_HISTORY_TTL_MS + 60_000, body });
+      if (VELA_HISTORY.size > 500) {
+        for (const [k, v] of VELA_HISTORY) if (!v.p && Date.now() - v.at > VELA_HISTORY_TTL_MS) VELA_HISTORY.delete(k);
+      }
+      return send(res, 200, body, { 'Cache-Control': 'private, max-age=300' });
+    } catch (e) {
+      VELA_HISTORY.delete(key);
+      return send(res, 502, { error: 'history source failed', detail: String(e?.message || e).slice(0, 200) });
+    }
+  },
+});
+
 // /api/quotes-batch — batch day-change quotes + optional sparkline (Yahoo v8).
 // Pure fetch, no DB. Ported verbatim from app/api/quotes-batch/route.ts.
 register('/api/quotes-batch', {
@@ -5603,6 +5796,22 @@ if (libDb) {
       }
 
       const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      // ?pages=a,b,c — several pages in ONE request: { pages: { a: [...], b: [...] } },
+      // each list exactly what ?page= would return for it. Vela's load read
+      // vela-watchlists plus vela-scripts … vela-scripts-9 as ten parallel calls
+      // (2026-10-07 audit); it now asks once. Up to 12 pages.
+      if (sp.has('pages')) {
+        const pages = [...new Set(String(sp.get('pages') || '').split(',').map((p) => cleanLayoutPage(p.trim())).filter(Boolean))];
+        if (!pages.length || pages.length > 12) return send(res, 400, { error: 'pages must list 1–12 page keys' });
+        try {
+          const lists = await Promise.all(pages.map((p) => libDb.getPagePresets(userId, p)));
+          const out = {};
+          pages.forEach((p, i) => { out[p] = lists[i].filter((r) => r.preset); });
+          return send(res, 200, { pages: out }, { 'Cache-Control': 'private, no-store' });
+        } catch (err) {
+          return send(res, 500, { error: 'Load failed', detail: String(err) });
+        }
+      }
       const page = cleanLayoutPage(sp.get('page'));
       if (!page) return send(res, 400, { error: 'Bad page' });
       try {
@@ -6777,6 +6986,10 @@ if (libDb) {
   //
   // ?symbol=SPY  ?days=5  ?interval=1|5  ?limit=5000
   //
+  // `days` is SESSIONS, not calendar days (2026-10-07): the newest N ET session
+  // dates with real bars (etf-candle-recorder.js getEtfCandleHistory). The live
+  // fallback below still reads calendar days — dxFeed's own window.
+  //
   // ── LIVE FALLBACK ──────────────────────────────────────────────────────────
   // The recorder writes a fixed roster (etf-candle-recorder.js's
   // DEFAULT_CANDLE_SYMBOLS). The ES Candles picker no longer is one: it offers
@@ -7725,6 +7938,81 @@ if (libDb) {
     /** Today's heatmap is rebuilt in full this often; between, only new minutes are read. */
     const HEATMAP_FULL_MS = 10 * 60_000;
     const heatmapCache = new Map(); // module-level within this route's closure
+
+    /**
+     * ?fmt=c — the COMPACT heatmap (2026-10-07 audit: a Vela day read at top=30
+     * was 1.6 MB decoded; target < 200 KB). Opt-in; without it the payload is
+     * exactly as before (v2's heatmap and /premarket read max / top3 / flip).
+     * Decoded by cbedge-v3 board/gexCandles/gexHistory.ts parseGexHistory(),
+     * which reads only slotTs, spot and each cell's strike / net / netVol:
+     *
+     *   k     every strike in the response, ascending (the dictionary)
+     *   t0    the first column's slotTs
+     *   c     one array per column: [dtMin, spot, u, ks, q]
+     *           dtMin  minutes after the previous column (the first: 0)
+     *           spot   2 dp
+     *           u      the column's unit (4 significant digits); a value is q·u.
+     *                  -1 = the previous column's unit, and q holds DELTAS from
+     *                  the previous column's q (same strikes, same unit)
+     *           ks     indices into k, or 0 = the previous column's strikes
+     *           q      [net0, netVol0, net1, netVol1, …] as integers in ±999
+     *                  (0.1 % of the column's biggest |value|), or 0 = exactly
+     *                  the previous column's values (the static overnight and
+     *                  weekend minutes collapse to a few bytes each)
+     *         The unit is sticky while the column's biggest value stays within
+     *         60–100 % of 999 units, so a minute's change is a one- or two-digit
+     *         delta instead of a fresh four-digit number.
+     *   last  the NEWEST column again at full precision, { slotTs, spot, cells },
+     *         so the live rail and the level picks read exact numbers
+     */
+    const HEATMAP_Q = 999;
+    const compactHeatmap = (payload) => {
+      const cols = Array.isArray(payload?.columns) ? payload.columns : [];
+      const { columns: _drop, ...meta } = payload || {};
+      const strikeSet = new Set();
+      for (const col of cols) for (const cell of col.cells || []) strikeSet.add(cell.strike);
+      const k = [...strikeSet].sort((a, b) => a - b);
+      const idx = new Map(k.map((s, i) => [s, i]));
+      const c = [];
+      let prevT = cols[0]?.slotTs ?? 0;
+      let prevKs = '';
+      let prevU = 0;
+      let prevQ = null;
+      for (const col of cols) {
+        const cells = [...(col.cells || [])].sort((a, b) => a.strike - b.strike);
+        let big = 0;
+        for (const x of cells) big = Math.max(big, Math.abs(x.net) || 0, Math.abs(x.netVol) || 0);
+        const sticky = prevU > 0 && big <= prevU * HEATMAP_Q && big >= prevU * HEATMAP_Q * 0.6;
+        const u = sticky ? prevU : big > 0 ? Number((big / HEATMAP_Q).toPrecision(4)) : 1;
+        const ks = cells.map((x) => idx.get(x.strike));
+        const q = [];
+        for (const x of cells) q.push(Math.round((x.net || 0) / u), Math.round((x.netVol || 0) / u));
+        const ksKey = ks.join(',');
+        const sameKs = ksKey === prevKs;
+        const sameU = sameKs && u === prevU && prevQ && prevQ.length === q.length;
+        const sameQ = sameU && q.every((v, i) => v === prevQ[i]);
+        const dt = Math.round((col.slotTs - prevT) / 60_000);
+        const spot = Math.round((Number(col.spot) || 0) * 100) / 100;
+        if (sameQ) c.push([dt, spot, 0, 0, 0]);
+        else if (sameU) c.push([dt, spot, -1, 0, q.map((v, i) => v - prevQ[i])]);
+        else c.push([dt, spot, u, sameKs ? 0 : ks, q]);
+        prevT = col.slotTs;
+        prevKs = ksKey;
+        prevU = u;
+        prevQ = q;
+      }
+      const tail = cols[cols.length - 1];
+      return {
+        ...meta,
+        fmt: 'c',
+        k,
+        t0: cols[0]?.slotTs ?? 0,
+        c,
+        last: tail ? { slotTs: tail.slotTs, spot: tail.spot, cells: tail.cells } : null,
+      };
+    };
+    const sendHeatmap = (res, sp, payload) =>
+      send(res, 200, sp.get('fmt') === 'c' ? compactHeatmap(payload) : payload);
     register('/api/snapshots/option-strike-gex-history', {
       auth: 'subscriber', methods: ['GET', 'POST'],
       async handler(req, res) {
@@ -7814,7 +8102,7 @@ if (libDb) {
             // kept for hours, not 30 s (2026-10-06)
             const pastDay = winMin === 0 && !anyExpiry && date < todayET();
             const ttl = pastDay ? 6 * 3_600_000 : HEATMAP_TTL_MS;
-            if (cached && Date.now() - cached.at < ttl) { send(res, 200, cached.payload); return; }
+            if (cached && Date.now() - cached.at < ttl) { sendHeatmap(res, sp, cached.payload); return; }
             // ── WHICH EXPIRY THIS DATE IS ACTUALLY READ UNDER ──────────────
             //
             // Resolved BEFORE the slots query, not after an empty one. The
@@ -7918,7 +8206,7 @@ if (libDb) {
               const columns = [...prevCols.filter((c) => c.slotTs < since), ...buildColumns(fresh)];
               const payload = { ...cached.payload, columns };
               heatmapCache.set(cacheKey, { at: Date.now(), fullAt: cached.fullAt, payload });
-              send(res, 200, payload);
+              sendHeatmap(res, sp, payload);
               return;
             }
             let usedExpiry = expiry;
@@ -7956,7 +8244,7 @@ if (libDb) {
               for (const [k, v] of heatmapCache) if (Date.now() - v.at > HEATMAP_TTL_MS) heatmapCache.delete(k);
             }
             heatmapCache.set(cacheKey, { at: Date.now(), fullAt: Date.now(), payload });
-            send(res, 200, payload);
+            sendHeatmap(res, sp, payload);
             return;
           }
 
@@ -17451,15 +17739,28 @@ try {
     });
 
     // ── resolve ──────────────────────────────────────────────────────────────
-    // "apple" → AAPL. The chain/flow panels call this so the UI can show which
-    // ticker a name resolved to BEFORE firing a pull against the wrong company.
+    // EXACT ONLY by default: { symbol: 'AAPL', match: 'exact' } when the vault
+    // catalog holds that exact ticker, else { symbol: null, match: 'none' }.
+    // The old answer was a name search, which turned SPX into SPXC and VIX into
+    // ENVX and put years of the wrong stock under Vela's 1D/1W charts (live
+    // audit, 2026-10-07). `fuzzy=1` keeps the "apple" → AAPL name search for a
+    // caller that shows the user what it resolved to before pulling; an index
+    // ticker is never name-matched either way (_lib-lse.cjs INDEX_TICKERS).
     register('/api/lse/resolve', {
       auth: 'owner', methods: ['GET'],
       async handler(req, res) {
-        const q = String(qp(req).get('q') || '').trim();
+        const params = qp(req);
+        const q = String(params.get('q') || '').trim();
         if (!q) return send(res, 400, { error: 'q is required' });
         try {
-          return send(res, 200, { query: q, symbol: await lse.resolveUnderlying(q) }, { 'Cache-Control': NO_STORE });
+          const exact = await lse.resolveExact(q);
+          if (exact) return send(res, 200, { query: q, symbol: exact, match: 'exact' }, { 'Cache-Control': NO_STORE });
+          if (params.get('fuzzy') === '1' && !lse.isIndexTicker(q)) {
+            const named = await lse.resolveUnderlying(q);
+            const hit = named && named !== q.toUpperCase() ? named : null;
+            return send(res, 200, { query: q, symbol: hit, match: hit ? 'name' : 'none' }, { 'Cache-Control': NO_STORE });
+          }
+          return send(res, 200, { query: q, symbol: null, match: 'none' }, { 'Cache-Control': NO_STORE });
         } catch (e) { return fail(res, e); }
       },
     });

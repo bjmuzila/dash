@@ -45,18 +45,14 @@
 // when it is not.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { registerSidePanel, registerStatePersistence, type WidgetContext } from '@luxalgo/vela'
+import type { WidgetContext } from '@luxalgo/vela'
 import type { WorkspaceWidgetContext } from '@luxalgo/vela/workspace'
-import { registerIcon, svg16 } from '@luxalgo/vela/ui'
-import { CBSCRIPT, compile, loadRuntime, onScriptError, scriptErrors, setLevelsLoader } from './engine'
-import { wallSeriesFor } from '../wallsIndicator'
+import { CBSCRIPT, compile, loadRuntime, onScriptError, scriptErrors } from './engine'
 import { instanceIdFor, libIdOf, loadLibrary, markDeleted, newScriptId, onEditRequest, saveLibrary, syncLibrary, takePendingEdit, TEMPLATE, type Script } from './library'
 import { alertsArmed } from './alerts'
 import { ThemedSelect } from '../themedSelect'
-import { ALERTS_PANEL_ID, registerTesterPanels, TESTER_PANEL_ID } from './testerPanels'
+import { ALERTS_PANEL_ID, TESTER_PANEL_ID } from './ids'
 
-const PANEL_ID = 'cbedge-scripts'
-const PERSIST_KEY = 'cbedge.scripts'
 
 const REFERENCE = `PINE SCRIPT  paste a TradingView indicator as is (v4, v5, v6)
   Runs per bar the way TradingView does: var, x[1], if / for / while /
@@ -133,7 +129,7 @@ function el<K extends keyof HTMLElementTagNameMap>(doc: Document, tag: K, cls: s
   return e
 }
 
-function mountPanel(ctx: WidgetContext, body: HTMLElement) {
+export function mountPanel(ctx: WidgetContext, body: HTMLElement) {
   const doc = body.ownerDocument
   body.classList.add('cb-scr')
   // Keystrokes stay in the editor — Vela's chart shortcuts (type-to-search,
@@ -484,69 +480,4 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
       if (syncTimer) clearTimeout(syncTimer)
     },
   }
-}
-
-interface Persisted {
-  id: string
-  name: string
-  script: string
-  inputs?: Record<string, number | string | boolean>
-  hidden?: boolean
-}
-
-let registered = false
-
-/** The panel, its icon and the per-chart persistence. Once; before any workspace is built. */
-export function registerScripts(): void {
-  if (registered) return
-  registered = true
-  // a script that reads cbedge.call_wall / put_wall / core gets the walls recorder, bar by bar
-  setLevelsLoader(wallSeriesFor)
-  registerTesterPanels()
-  // </> — code
-  registerIcon('cb-script', svg16('<path d="M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4M9 2.5 7 13.5"/>'))
-  registerSidePanel({
-    id: PANEL_ID,
-    title: 'Scripts',
-    icon: 'cb-script',
-    width: 420,
-    resizable: true,
-    minWidth: 320,
-    maxWidth: 760,
-    mount: (ctx, body, header) => {
-      header.setTitle('CB Script')
-      return mountPanel(ctx, body)
-    },
-  })
-  registerStatePersistence({
-    key: PERSIST_KEY,
-    scope: 'cell',
-    serialize: (ctx) => {
-      const out: Persisted[] = []
-      for (const h of ctx.chart.indicators()) {
-        if (!h.id.startsWith('cbs-') || !h.source) continue
-        out.push({ id: h.id, name: h.title, script: h.source, inputs: h.inputValues(), ...(h.visible ? {} : { hidden: true }) })
-      }
-      return out.length ? out : undefined
-    },
-    restore: (payload, ctx) => {
-      if (!Array.isArray(payload)) return
-      const lib = new Map(loadLibrary().map((s) => [s.id, s]))
-      const live = new Set(ctx.chart.indicators().map((h) => h.id))
-      for (const raw of payload as unknown[]) {
-        const p = raw as Partial<Persisted>
-        if (!p || typeof p.id !== 'string' || !p.id.startsWith('cbs-') || typeof p.script !== 'string') continue
-        if (live.has(p.id)) continue
-        const saved = lib.get(libIdOf(p.id) ?? '')
-        ctx.addIndicator({
-          name: typeof p.name === 'string' ? p.name : saved?.name ?? 'Script',
-          script: saved?.source ?? p.script,
-          language: CBSCRIPT,
-          id: p.id,
-          ...(p.inputs && typeof p.inputs === 'object' ? { inputs: p.inputs } : {}),
-          ...(p.hidden ? { hidden: true } : {}),
-        })
-      }
-    },
-  })
 }

@@ -242,13 +242,18 @@ function yahooSym(symbol) {
   // BRK.B", leaving the ticker ungradeable in em_tracker forever.
   return s.includes('.') ? s.replace(/\./g, '-') : s;
 }
-async function yahooDaily(symbol, startDate, endDate) {
+// interval: '1d' (the default every recorder uses), '1wk' or '1mo' — the last
+// two are for /api/vela/history (Vela's W / M charts), which reads the same
+// adapter so the charts and the recorders agree on one source of daily bars.
+const YAHOO_INTERVALS = new Set(['1d', '1wk', '1mo']);
+async function yahooDaily(symbol, startDate, endDate, interval = '1d') {
   const ysym = yahooSym(symbol);
+  const iv = YAHOO_INTERVALS.has(interval) ? interval : '1d';
   const p1 = Math.floor(new Date(startDate).getTime() / 1000);
   const p2 = Math.floor(new Date(endDate).getTime() / 1000) + 86400;
   if (!Number.isFinite(p1) || !Number.isFinite(p2)) return [];
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ysym)}`
-    + `?period1=${p1}&period2=${p2}&interval=1d`;
+    + `?period1=${p1}&period2=${p2}&interval=${iv}`;
   let json;
   try {
     const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' } });
@@ -297,6 +302,7 @@ const fetchIndexEodTheta = async () => { warnOnce('fetchIndexEodTheta'); return 
 const fetchStockEodTheta = async () => { warnOnce('fetchStockEodTheta'); return null; };
 
 module.exports = {
+  yahooDaily,
   fetchChainTheta,
   fetchOpenInterestTheta,
   fetchVolumeTheta,

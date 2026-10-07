@@ -67,7 +67,8 @@ export function gexHistoryUrl(gexSymbol: string, expiry: string, minutes: number
     `&minutes=${minutes}` +
     `&expiry=${encodeURIComponent(expiry)}` +
     `&symbol=${encodeURIComponent(gexSymbol)}` +
-    (top > 0 ? `&top=${top}` : '')
+    (top > 0 ? `&top=${top}` : '') +
+    `&fmt=c`
   )
 }
 
@@ -102,12 +103,62 @@ export function gexHistoryDayUrl(gexSymbol: string, expiry: string, date: string
     `&expiry=${encodeURIComponent(expiry)}` +
     (fallback ? `&expiryFallback=1` : '') +
     `&symbol=${encodeURIComponent(gexSymbol)}` +
-    (top > 0 ? `&top=${top}` : '')
+    (top > 0 ? `&top=${top}` : '') +
+    `&fmt=c`
   )
 }
 
+/**
+ * `fmt=c` — the compact encoding the server sends when asked (server-v2
+ * api-router.js compactHeatmap; ~1/15 the bytes of the object form): a strike
+ * dictionary `k`, then one array per column [dtMin, spot, u, ks, q] where a
+ * value is q·u, `ks` / `q` = 0 repeat the previous column, and u = -1 means q
+ * holds deltas from the previous column's q. `last` is the newest column again
+ * at full precision and replaces the quantized copy, so the live rail and the
+ * level picks read exact numbers.
+ */
+function decodeCompact(j: { k?: unknown; t0?: unknown; c?: unknown; last?: unknown }): GexColumn[] {
+  const k = Array.isArray(j.k) ? (j.k as unknown[]).map(num) : []
+  const rows = Array.isArray(j.c) ? (j.c as unknown[]) : []
+  const out: GexColumn[] = []
+  let t = num(j.t0)
+  let ks: number[] = []
+  let u = 1
+  let q: number[] = []
+  for (const r of rows) {
+    if (!Array.isArray(r)) continue
+    const [dt, spot, cu, cks, cq] = r as unknown[]
+    t += num(dt) * 60_000
+    if (Array.isArray(cks)) ks = (cks as unknown[]).map(num)
+    if (num(cu) === -1 && Array.isArray(cq)) {
+      q = (cq as unknown[]).map((d, i) => (q[i] ?? 0) + num(d))
+    } else if (Array.isArray(cq)) {
+      u = num(cu) || 1
+      q = (cq as unknown[]).map(num)
+    }
+    const cells: GexCell[] = []
+    for (let i = 0; i < ks.length; i++) {
+      const strike = k[ks[i]!] ?? 0
+      if (!strike) continue
+      cells.push({ strike, net: (q[2 * i] ?? 0) * u, netVol: (q[2 * i + 1] ?? 0) * u })
+    }
+    if (t && cells.length) out.push({ slotTs: t, cells, spot: num(spot) })
+  }
+  const last = j.last as RawColumn | null | undefined
+  if (last && out.length) {
+    const exact = parseObjectColumns([last])[0]
+    if (exact && exact.slotTs === out[out.length - 1]!.slotTs) out[out.length - 1] = exact
+  }
+  return out
+}
+
 export function parseGexHistory(json: unknown): GexColumn[] {
-  const cols = (json as { columns?: unknown })?.columns
+  const j = json as { fmt?: unknown; columns?: unknown } | null
+  if (j?.fmt === 'c') return decodeCompact(j as Parameters<typeof decodeCompact>[0])
+  return parseObjectColumns(j?.columns)
+}
+
+function parseObjectColumns(cols: unknown): GexColumn[] {
   if (!Array.isArray(cols)) return []
   const out: GexColumn[] = []
   for (const raw of cols as RawColumn[]) {

@@ -72,7 +72,15 @@ export const EMPTY_CHAIN_GEX: ChainGex = {
  * path instead, so the flag costs nothing and keeps one rule for one route.
  */
 export function chainGexUrl(ticker: string): string {
-  return `/api/chains?ticker=${encodeURIComponent(ticker)}&range=all&live=0`
+  // front=1&slim=1 (server-v2 /api/chains): only the nearest expiry, each leg cut
+  // to the five fields parseChain() reads. chainToGex() reads nothing else, so
+  // the numbers are unchanged; the SPX payload drops from ~465 KB to a fraction.
+  return `/api/chains?ticker=${encodeURIComponent(ticker)}&range=all&live=0&front=1&slim=1`
+}
+
+/** Every listed expiry (the GEX Rail's all-expirations mode), legs slimmed the same way. */
+export function chainAllUrl(ticker: string): string {
+  return `/api/chains?ticker=${encodeURIComponent(ticker)}&range=all&live=0&slim=1`
 }
 
 export function chainToGex(json: unknown): ChainGex {

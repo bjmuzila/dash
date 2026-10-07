@@ -622,6 +622,29 @@ function normType(type) {
  * options dataset (prefix first, then shortest) so "apple" lands on Apple Inc.
  * rather than Apple Hospitality REIT.
  */
+// Index tickers are NEVER name-matched. Their letters appear inside company
+// names, so the fuzzy pass below turned SPX into SPXC (SPX Technologies, ~$170)
+// and VIX into ENVX (EnoVIX, ~$2.56), and Vela's 1D/1W charts spliced years of
+// those stocks under the real index bars (live audit, 2026-10-07). An index is
+// either an exact catalog symbol or not in the vault at all.
+const INDEX_TICKERS = new Set([
+  'SPX', 'SPXW', 'XSP', 'NDX', 'NDXP', 'XND', 'RUT', 'RUTW', 'MRUT', 'VIX', 'VIX9D', 'VIX1D',
+  'VIX3M', 'VVIX', 'VXN', 'RVX', 'DJX', 'DJI', 'OEX', 'XEO', 'SOX', 'NYA', 'COMP',
+]);
+const isIndexTicker = (s) => INDEX_TICKERS.has(String(s || '').trim().toUpperCase().replace(/^[$^]/, ''));
+
+/**
+ * The catalog symbol that EXACTLY equals `query` (case-insensitive), or null.
+ * No name search, no prefix match. This is what /api/lse/resolve answers by
+ * default: "no match" beats a confident wrong ticker.
+ */
+async function resolveExact(query) {
+  const upper = String(query || '').trim().toUpperCase().replace(/^\$/, '');
+  if (!upper) return null;
+  const rows = await rawCatalog();
+  return rows.some((r) => String(r.symbol || '').toUpperCase() === upper) ? upper : null;
+}
+
 async function resolveUnderlying(query) {
   const q = String(query || '').trim();
   if (!q) throw new LseError(400, 'underlying is required');
@@ -633,6 +656,8 @@ async function resolveUnderlying(query) {
   }
   const upper = q.toUpperCase();
   if (rows.some((r) => String(r.symbol || '').toUpperCase() === upper)) return upper;
+  // An index is passed through as typed — never fuzzy-resolved (see INDEX_TICKERS).
+  if (isIndexTicker(upper)) return upper.replace(/^[$^]/, '');
   const ql = q.toLowerCase();
   const pool = rows.filter((r) => r.dataset === 'options');
   const hits = (pool.length ? pool : rows)
@@ -938,6 +963,8 @@ module.exports = {
   filterFlowByStrike,
   optionCandles,
   resolveUnderlying,
+  resolveExact,
+  isIndexTicker,
   toOsi,
   meta,
   toCsv,

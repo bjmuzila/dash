@@ -59,7 +59,7 @@ interface Token {
 }
 
 // ── CB Edge levels for scripts (cbedge.call_wall / put_wall / core) ──────────
-// The loader is handed in by the Vela page (script/panel.ts registerScripts →
+// The loader is handed in by the Vela page (script/register.ts registerScripts →
 // wallsIndicator.wallSeriesFor) so this module stays free of the chart's data code.
 export type LevelsLoader = (ticker: string, bars: readonly OHLCV[], timeframe: string, fresh: boolean) => Promise<NonNullable<RunOpts['cbedge']>>
 let levelsLoader: LevelsLoader | null = null

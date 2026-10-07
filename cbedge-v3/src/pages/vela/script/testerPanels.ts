@@ -20,18 +20,16 @@
 //                     first, across all scripts.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { registerSidePanel, type WidgetContext } from '@luxalgo/vela'
+import type { WidgetContext } from '@luxalgo/vela'
 import type { WorkspaceWidgetContext } from '@luxalgo/vela/workspace'
-import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import { CBSCRIPT, compile, loadRuntime, onScriptError, onScriptResult, scriptErrors, scriptResults, type ScriptRunInfo } from './engine'
 import { instanceIdFor, libIdOf, loadLibrary, newScriptId, requestEdit, saveLibrary, type Script } from './library'
 import { IS_STRATEGY, READY_STRATEGIES, USES_CBEDGE, readyStrategy } from './strategies'
 import { ThemedSelect, type SelectOption } from '../themedSelect'
 import { alertsArmed, enableNotify, firedAlerts, notifyWanted, onScriptAlertFired, setAlertsArmed, tfLabel } from './alerts'
 
-export const TESTER_PANEL_ID = 'cbedge-strategy'
-export const ALERTS_PANEL_ID = 'cbedge-script-alerts'
-const SCRIPTS_PANEL_ID = 'cbedge-scripts'
+import { SCRIPTS_PANEL_ID, TESTER_PANEL_ID } from './ids'
+export { ALERTS_PANEL_ID, SCRIPTS_PANEL_ID, TESTER_PANEL_ID } from './ids'
 const TAB_KEY = 'cb-v3-vela-st-tab'
 
 type Strat = NonNullable<ScriptRunInfo['strategy']>
@@ -97,7 +95,7 @@ export function testStrategy(ctx: WidgetContext, s: { id: string; name: string; 
   ctx.togglePanel(TESTER_PANEL_ID, true)
 }
 
-function mountTester(ctx: WidgetContext, body: HTMLElement) {
+export function mountTester(ctx: WidgetContext, body: HTMLElement) {
   const doc = body.ownerDocument
   body.classList.add('cb-scr', 'cb-st')
   for (const t of ['keydown', 'keyup', 'keypress'] as const) body.addEventListener(t, (e) => e.stopPropagation())
@@ -601,7 +599,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
 
 const CALLS_ALERT = /\balert(?:condition)?\s*\(/
 
-function mountAlerts(ctx: WidgetContext, body: HTMLElement) {
+export function mountAlerts(ctx: WidgetContext, body: HTMLElement) {
   const doc = body.ownerDocument
   body.classList.add('cb-scr', 'cb-sa')
   const notifyLabel = el(doc, 'label', 'cb-scr-check')
@@ -717,44 +715,4 @@ function mountAlerts(ctx: WidgetContext, body: HTMLElement) {
       if (timer) clearTimeout(timer)
     },
   }
-}
-
-let registered = false
-
-/** Both panels and their icons. Once; before any workspace is built (registerScripts calls it). */
-export function registerTesterPanels(): void {
-  if (registered) return
-  registered = true
-  // a rising line with an arrow — a backtest
-  registerIcon('cb-strategy', svg16('<path d="M2 13.5h12M2.5 11l3.5-3.5 2.5 2L13 5"/><path d="M10 5h3v3"/>'))
-  // a bolt — a script's trigger (the bell beside it is Vela's own price alerts)
-  registerIcon('cb-zap', svg16('<path d="M9.2 1.5 3.5 9h4.3l-1 5.5L12.5 7H8.2l1-5.5Z"/>'))
-  registerSidePanel({
-    id: TESTER_PANEL_ID,
-    title: 'Strategy Tester',
-    icon: 'cb-strategy',
-    order: 101,
-    width: 440,
-    resizable: true,
-    minWidth: 320,
-    maxWidth: 820,
-    mount: (ctx, body, header) => {
-      header.setTitle('Strategy Tester')
-      return mountTester(ctx, body)
-    },
-  })
-  registerSidePanel({
-    id: ALERTS_PANEL_ID,
-    title: 'Script Alerts',
-    icon: 'cb-zap',
-    order: 102,
-    width: 360,
-    resizable: true,
-    minWidth: 300,
-    maxWidth: 640,
-    mount: (ctx, body, header) => {
-      header.setTitle('Script Alerts')
-      return mountAlerts(ctx, body)
-    },
-  })
 }

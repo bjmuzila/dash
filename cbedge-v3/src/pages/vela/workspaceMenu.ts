@@ -47,7 +47,7 @@ import { centerTodayAll } from '@/pages/vela/centerToday'
 import { copyToAll } from '@/pages/vela/copyIndicators'
 import { LEVELS_PANEL_ID } from '@/pages/vela/levels/levelAlertsEntry'
 import { onPhoneRoute } from '@/pages/vela/nav'
-import { ALERTS_PANEL_ID, TESTER_PANEL_ID } from '@/pages/vela/script/testerPanels'
+import { ALERTS_PANEL_ID, TESTER_PANEL_ID } from '@/pages/vela/script/ids'
 import { setStripShown, stripShown } from '@/pages/vela/setups/setups'
 import { WATCHLIST_PANEL_ID } from '@/pages/vela/watchlist/panel'
 

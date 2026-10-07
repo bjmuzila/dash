@@ -45,7 +45,6 @@ import { CBSCRIPT } from './script/engine'
 import { instanceIdFor, libIdOf, loadLibrary } from './script/library'
 import { applyDefaultOnAdd } from './indicatorPresets'
 import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
-import { testStrategy } from './script/testerPanels'
 import { WALLS_TYPE } from './wallsIndicator'
 import { PATH_TYPE, RIBBON_TYPE } from './vtPath/vtPathIndicator'
 import { JOURNAL_TYPE } from './studies'
@@ -338,7 +337,9 @@ function openPicker(ctx: WidgetContext): void {
     if (r.strategy && r.libId && r.source != null) {
       // a strategy goes on the chart and the tester opens on it
       dlg.hide()
-      testStrategy(ctx, { id: r.libId, name: r.name, source: r.source })
+      // the tester's code loads on demand (script/register.ts) — import it here too
+      const s = { id: r.libId, name: r.name, source: r.source }
+      void import('./script/testerPanels').then((m) => m.testStrategy(ctx, s))
       return 'tester'
     }
     if (r.kind === 'script' && r.libId && r.source != null) {

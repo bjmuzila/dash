@@ -299,20 +299,68 @@ function ymdEtOf(ms) {
   return ET_DATE_FMT.format(new Date(ms));
 }
 
+const ET_HM_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
+});
+/** ET minute-of-day (0–1439) of an epoch-ms instant. */
+function etMinuteOf(ms) {
+  const parts = ET_HM_FMT.formatToParts(new Date(ms));
+  const get = (t) => Number(parts.find((x) => x.type === t)?.value ?? 0);
+  return (get('hour') % 24) * 60 + get('minute');
+}
+/** Epoch ms of 00:00 ET on the ET date `ymd` (DST-correct). */
+function etMidnightMs(ymd) {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  for (const off of [4, 5]) {
+    const t = Date.UTC(y, m - 1, d, off);
+    if (ymdEtOf(t) === ymd && etMinuteOf(t) === 0) return t;
+  }
+  return Date.UTC(y, m - 1, d, 5);
+}
+
+// ── Which bars are real (2026-10-07 audit) ───────────────────────────────────
+// dxLink keeps emitting a cash index's last value after the 16:00 close — flat,
+// zero-volume bars 16:00–16:20 — plus the odd stray print later (16:40, 16:48),
+// and a quiet name's extended session can carry flat zero-volume carry-forward
+// bars. None of them traded. So:
+//   · a CASH INDEX keeps only its regular session, 09:30–16:00 ET — an index
+//     has no extended tape (VIX is left out: its values are computed outside
+//     RTH too, and only its flat zero-volume bars are dropped)
+//   · anything else drops a bar outside 09:30–16:00 that is BOTH zero-volume
+//     and flat (O = H = L = C); a real extended-hours print is kept
+// Applied when writing (upsertBars) AND when reading (getEtfCandleHistory), so
+// the rows already in the table stop drawing too.
+const RTH_OPEN_MIN = 9 * 60 + 30;
+const RTH_CLOSE_MIN = 16 * 60;
+const CASH_INDEXES = new Set(['SPX', 'NDX', 'RUT', 'XSP', 'DJX', 'OEX']);
+function keepBar(symbol, c) {
+  const m = etMinuteOf(Number(c.time));
+  if (m >= RTH_OPEN_MIN && m < RTH_CLOSE_MIN) return true;
+  if (CASH_INDEXES.has(String(symbol).toUpperCase())) return false;
+  const o = Number(c.open), h = Number(c.high), l = Number(c.low), cl = Number(c.close);
+  const flat = o === h && h === l && l === cl;
+  return !(flat && !(Number(c.volume) > 0));
+}
+
 // ── Tick / write ─────────────────────────────────────────────────────────────
 
 // Postgres caps a statement at 65535 bind parameters. At 8 params per bar a
 // 5-session backfill (~1950 bars) fits comfortably, but chunking keeps the
 // statement small enough to stay fast and leaves headroom if the window grows.
 const INSERT_CHUNK = 500;
+/** A session date needs this many 1m rows to count as a session (getEtfCandleHistory). */
+const SESSION_MIN_ROWS = 10;
 
 /**
  * Upsert bars for one symbol. Each bar is stamped with ITS OWN ET session date
  * (see ymdEtOf) so the same function serves both the live tick and the
  * multi-day backfill. Returns the number of rows written.
  */
-async function upsertBars(p, symbol, candles) {
-  if (!Array.isArray(candles) || !candles.length) return 0;
+async function upsertBars(p, symbol, candlesIn) {
+  if (!Array.isArray(candlesIn) || !candlesIn.length) return 0;
+  // no post-close leftovers, no flat zero-volume carry-forwards (see keepBar)
+  const candles = candlesIn.filter((c) => keepBar(symbol, c));
+  if (!candles.length) return 0;
   let written = 0;
   for (let off = 0; off < candles.length; off += INSERT_CHUNK) {
     const slice = candles.slice(off, off + INSERT_CHUNK);
@@ -587,8 +635,15 @@ async function getEtfCandles(symbol, date) {
  * LAST_VALUE over the bucket, not MIN/MAX of the timestamps), high/low/volume
  * are the bucket's max/min/sum.
  *
+ * DAYS ARE SESSIONS (2026-10-07). `daysBack` used to be calendar days counted
+ * back from now, so days=5 on a Wednesday afternoon reached into the previous
+ * Friday's evening — three sessions and a stray Friday bar. It is now the
+ * newest `daysBack` ET session dates that hold real bars: weekdays with at
+ * least SESSION_MIN_ROWS rows, so a holiday's or a weekend's stray prints never
+ * count as a session. The window opens at 00:00 ET of the oldest one.
+ *
  * @param {string} symbol   SPY / QQQ
- * @param {number} daysBack Calendar days of history (default 5)
+ * @param {number} daysBack Sessions of history (default 5)
  * @param {1|5}    interval Bar size in minutes
  * @param {number} limit    Max bars returned (most recent kept)
  * @returns {Promise<Array<{timestamp:number,date:string,slotKey:string,time:string,symbol:string,intervalMinutes:number,open:number,high:number,low:number,close:number,volume:number}>>}
@@ -600,10 +655,29 @@ async function getEtfCandleHistory(symbol, daysBack = 5, interval = 5, limit = 5
   if (!sym) return [];
   const iv = Number(interval) === 1 ? 1 : 5;
   const bucketMs = iv * 60_000;
-  const since = Date.now() - Math.max(1, Number(daysBack) || 5) * 24 * 60 * 60 * 1000;
+  const sessions = Math.max(1, Math.min(60, Math.floor(Number(daysBack) || 5)));
   const cap = Math.max(1, Math.min(50_000, Number(limit) || 5000));
+  const cashIndex = CASH_INDEXES.has(sym);
 
   try {
+    // The newest `sessions` real session dates. The scan is bounded by the
+    // primary key (symbol, timestamp): two calendar days per session plus a
+    // week covers any run of holidays.
+    const scanFrom = Date.now() - (sessions * 2 + 7) * 86_400_000;
+    const { rows: dates } = await p.query(
+      `SELECT date
+         FROM etf_candles
+        WHERE symbol = $1 AND timestamp >= $2::bigint
+          AND EXTRACT(ISODOW FROM date::date) < 6
+        GROUP BY date
+       HAVING COUNT(*) >= $3
+        ORDER BY date DESC
+        LIMIT $4`,
+      [sym, scanFrom, SESSION_MIN_ROWS, sessions],
+    );
+    if (!dates.length) return [];
+    const since = etMidnightMs(String(dates[dates.length - 1].date));
+
     // Bad-print wicks are clamped on the 1m rows BEFORE bucketing (candle-despike.js),
     // so the 5m bars — and every roll-up the client builds from them — are clean.
     // The read starts SQL_PAD_MS early so the window's first bar has past neighbours;
@@ -613,6 +687,14 @@ async function getEtfCandleHistory(symbol, daysBack = 5, interval = 5, limit = 5
          SELECT timestamp, date, open, high, low, close, volume
            FROM etf_candles
           WHERE symbol = $1 AND timestamp >= $2::bigint - $5::bigint
+            -- keepBar(), in SQL: outside 09:30–16:00 ET a cash index keeps
+            -- nothing, anything else drops flat zero-volume bars
+            AND (
+              (EXTRACT(HOUR FROM to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York') * 60
+               + EXTRACT(MINUTE FROM to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'))
+                BETWEEN ${RTH_OPEN_MIN} AND ${RTH_CLOSE_MIN - 1}
+              OR (NOT $8::boolean AND NOT (COALESCE(volume, 0) = 0 AND open = high AND high = low AND low = close))
+            )
        ), nb AS (
          SELECT raw.*, ${despikeLib.SQL_NEIGHBOUR_COLS}
            FROM raw
@@ -637,7 +719,7 @@ async function getEtfCandleHistory(symbol, daysBack = 5, interval = 5, limit = 5
         GROUP BY bucket_ts
         ORDER BY bucket_ts DESC
         LIMIT $4`,
-      [sym, since, bucketMs, cap, despikeLib.SQL_PAD_MS, despikeLib.PCT, despikeLib.MULT],
+      [sym, since, bucketMs, cap, despikeLib.SQL_PAD_MS, despikeLib.PCT, despikeLib.MULT, cashIndex],
     );
 
     // Query returns newest-first (so LIMIT keeps the most RECENT bars); the

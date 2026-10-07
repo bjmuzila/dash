@@ -38,7 +38,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { query } from '@/data/api'
-import { chainGexUrl } from '@/board/chainGex'
+import { chainAllUrl } from '@/board/chainGex'
 import { parseChain, strikeGex, todayEt } from '@/board/multiGreek/mgMath'
 import { gexHistoryDayUrl, parseGexHistory, parseGexHistoryMeta, type GexColumn } from '@/board/gexCandles/gexHistory'
 import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
@@ -254,7 +254,7 @@ const ALL_TOP = 40
 export async function loadChainLadder(c: StudyCtx, fresh: boolean): Promise<Ladder> {
   const label = ladderKey(c)
   const [json, basis] = await Promise.all([
-    query<unknown>(chainGexUrl(label), { staleMs: fresh ? 25_000 : 60_000 }).catch(() => null),
+    query<unknown>(chainAllUrl(label), { staleMs: fresh ? 25_000 : 60_000 }).catch(() => null),
     c.sym.fut ? loadBasis(c.sym.fut) : Promise.resolve(null as BasisModel | null),
   ])
   const fut = !!c.sym.fut

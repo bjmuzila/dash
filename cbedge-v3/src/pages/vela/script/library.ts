@@ -163,13 +163,57 @@ export interface SyncResult {
   error?: string
 }
 
+type PageRows = { name: string; preset: unknown }[]
+type PageAnswer = PageRows | 'auth'
+
+/**
+ * Reads that land within BATCH_MS of each other go out as ONE request
+ * (`/api/page-preset?pages=a,b,…`, up to 12 pages). The page used to open with
+ * ten parallel calls — vela-watchlists and vela-scripts … -9, the last seven
+ * almost always empty (2026-10-07 audit).
+ */
+const BATCH_MS = 25
+const BATCH_MAX = 12
+const queued = new Map<string, { resolve: (v: PageAnswer) => void; reject: (e: unknown) => void }[]>()
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+const rowsOf = (list: unknown): PageRows =>
+  (Array.isArray(list) ? (list as { name?: unknown; preset?: unknown }[]) : []).filter(
+    (p): p is { name: string; preset: unknown } => typeof p?.name === 'string',
+  )
+
+async function flushPages(): Promise<void> {
+  flushTimer = null
+  const all = [...queued.entries()]
+  queued.clear()
+  for (let i = 0; i < all.length; i += BATCH_MAX) {
+    const chunk = all.slice(i, i + BATCH_MAX)
+    const settle = (f: (w: { resolve: (v: PageAnswer) => void; reject: (e: unknown) => void }, page: string) => void) =>
+      chunk.forEach(([page, waiters]) => waiters.forEach((w) => f(w, page)))
+    try {
+      const qs = chunk.map(([page]) => encodeURIComponent(page)).join(',')
+      const r = await fetch(`/api/page-preset?pages=${qs}`, { cache: 'no-store', credentials: 'same-origin' })
+      if (r.status === 401 || r.status === 403) {
+        settle((w) => w.resolve('auth'))
+        continue
+      }
+      if (!r.ok) throw new Error(`page-preset ${r.status}`)
+      const j = (await r.json()) as { pages?: Record<string, unknown> }
+      settle((w, page) => w.resolve(rowsOf(j.pages?.[page])))
+    } catch (e) {
+      settle((w) => w.reject(e))
+    }
+  }
+}
+
 /** One page of the account's presets (/api/page-preset), or 'auth' when signed out. Shared with the watchlist. */
-export async function readPage(page: string): Promise<{ name: string; preset: unknown }[] | 'auth'> {
-  const r = await fetch(`/api/page-preset?page=${encodeURIComponent(page)}`, { cache: 'no-store', credentials: 'same-origin' })
-  if (r.status === 401 || r.status === 403) return 'auth'
-  if (!r.ok) throw new Error(`page-preset ${r.status}`)
-  const j = (await r.json()) as { presets?: { name?: unknown; preset?: unknown }[] }
-  return (j.presets ?? []).filter((p): p is { name: string; preset: unknown } => typeof p?.name === 'string')
+export function readPage(page: string): Promise<PageAnswer> {
+  return new Promise<PageAnswer>((resolve, reject) => {
+    const list = queued.get(page) ?? []
+    list.push({ resolve, reject })
+    queued.set(page, list)
+    flushTimer ??= setTimeout(() => void flushPages(), BATCH_MS)
+  })
 }
 
 /** Store (or, with null, delete) one named preset on a page. */

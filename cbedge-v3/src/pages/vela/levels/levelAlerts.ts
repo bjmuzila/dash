@@ -124,7 +124,10 @@ interface LevelRead {
   levels: Level[]
   price: number | null
 }
-const reads = new Map<string, { at: number; p: Promise<LevelRead> }>()
+const reads = new Map<string, { at: number; p: Promise<LevelRead>; empty?: boolean }>()
+/** A read that came back with none of the GEX levels is re-tried after this, not held for 50 s. */
+const EMPTY_RETRY_MS = 5_000
+const GEX_KEYS = new Set(['volt', 'coil', 'reversal', 'flip'])
 
 async function readLevels(sym: string): Promise<LevelRead> {
   const r = resolveSym(sym)
@@ -165,8 +168,11 @@ async function readLevels(sym: string): Promise<LevelRead> {
   } catch {
     /* the recorded walls below */
   }
-  if (!vt) {
-    // no chain: the walls recorder's newest slot, today's bars only, read the same way
+  // no chain — or a chain that named none of the three (an empty book, a basis
+  // that left every level off the futures chart): the walls recorder's newest
+  // slot, today's bars only, read the same way. The legend said "No levels" on
+  // ES while the CB Walls study was drawing them (2026-10-07 audit).
+  if (!vt || (vt.volt == null && vt.coil == null && vt.reversal == null)) {
     try {
       const w = await wallSeriesFor(sym, todays.length ? todays : bars.slice(-80), '5', true)
       const fin = (v: number) => Number.isFinite(v)
@@ -204,9 +210,14 @@ async function readLevels(sym: string): Promise<LevelRead> {
 export function levelsFor(sym: string, fresh = false): Promise<LevelRead> {
   const key = `${sym}|${gexBasis()}`
   const hit = reads.get(key)
-  if (hit && Date.now() - hit.at < (fresh ? 20_000 : 50_000)) return hit.p
+  const age = hit ? Date.now() - hit.at : Infinity
+  if (hit && age < (fresh ? 20_000 : 50_000) && !(hit.empty && age > EMPTY_RETRY_MS)) return hit.p
   const p = readLevels(sym).catch(() => ({ at: Date.now(), levels: [], price: null }))
-  reads.set(key, { at: Date.now(), p })
+  const entry: { at: number; p: Promise<LevelRead>; empty?: boolean } = { at: Date.now(), p }
+  reads.set(key, entry)
+  void p.then((r) => {
+    entry.empty = !r.levels.some((l) => GEX_KEYS.has(l.key) && l.price != null)
+  })
   return p
 }
 

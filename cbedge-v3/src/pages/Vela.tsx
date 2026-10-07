@@ -16,7 +16,7 @@ import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
 import { registerLastPriceColor } from '@/pages/vela/lastPriceColor'
 import { PATH_TYPE, registerVtPath } from '@/pages/vela/vtPath/vtPathIndicator'
 import { CBSCRIPT, CbScriptEngine, setAlertGate } from '@/pages/vela/script/engine'
-import { registerScripts } from '@/pages/vela/script/panel'
+import { registerScripts } from '@/pages/vela/script/register'
 import { EVENTS_TYPE, registerStudies } from '@/pages/vela/studies'
 import { bindEventsHost } from '@/pages/vela/studies/eventsHost'
 import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
@@ -36,6 +36,7 @@ import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
 import { TIMEFRAMES } from '@/pages/vela/timeframes'
 import '@/pages/vela/vela.css'
 import { bindTelemetry } from '@/pages/vela/telemetry'
+import { bindLoadWatchdog } from '@/pages/vela/loadWatchdog'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /vela — VELA, LuxAlgo's open-source chart workspace, on CB Edge's own tape.
@@ -530,6 +531,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     const unbindIndicators = bindIndicatorsWorkspace(ws)
     // usage for owner.cbedge.net → Vela Usage: who is on, tickers, indicators, actions (vela/telemetry.ts)
     const unbindTelemetry = bindTelemetry(ws, { phone: onPhone })
+    // a D / W / M load that fails or overruns says so instead of spinning (vela/loadWatchdog.ts)
+    const unbindWatchdog = bindLoadWatchdog(ws)
     // every indicator's settings dialog: Defaults ▾ (reset, save as my default, saved
     // settings by name) in place of Vela's Reset defaults (vela/indicatorPresets.ts)
     const unbindPresets = bindIndicatorPresets(ws)
@@ -640,6 +643,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindControls()
       unbindIndicators()
       unbindTelemetry()
+      unbindWatchdog()
       unbindPresets()
       unbindEvents()
       unbindReplay()

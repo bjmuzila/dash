@@ -90,7 +90,7 @@ export { PROVIDER_NAME }
 const MIN_MS = 60_000
 const DAY_MS = 86_400_000
 
-/** History windows, in calendar days, per native bucket. The ETF route clamps to 30. */
+/** History windows, in SESSIONS, per native bucket (the ETF route counts sessions since 2026-10-07; clamps to 30). */
 const DAYS_1M = 5
 const DAYS_5M = 30
 /** The ETF route defaults `limit` to 5000 rows — 30 days of 5m ETH is ~5,800. */
@@ -429,6 +429,39 @@ async function loadAggregated(
 // RTH-exact, and the forming bar is live).
 
 const LONG_STALE_MS = 15 * 60_000
+/**
+ * How long one long-history source may take before D / W / M stop waiting for it
+ * and draw the tape's own bars (2026-10-07 audit: the 1D spinner hung). A late
+ * answer still lands in query()'s cache, so the next load of that chart has it.
+ */
+const LONG_SOURCE_TIMEOUT_MS = 8_000
+/** A coarse load that has drawn nothing by now is failed, not left spinning (loadWatchdog.ts says so). */
+export const COARSE_LOAD_TIMEOUT_MS = 20_000
+
+/** `p`, or `fallback` once `ms` has passed — whichever comes first. */
+function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const t = setTimeout(() => resolve(fallback), ms)
+    p.then(
+      (v) => {
+        clearTimeout(t)
+        resolve(v)
+      },
+      () => {
+        clearTimeout(t)
+        resolve(fallback)
+      },
+    )
+  })
+}
+
+/** Thrown when a coarse timeframe's load runs past COARSE_LOAD_TIMEOUT_MS. */
+export class LoadTimeoutError extends Error {
+  constructor(what: string) {
+    super(`${what} timed out`)
+    this.name = 'LoadTimeoutError'
+  }
+}
 type Coarse = 'day' | 'week' | 'month'
 const YF_INTERVAL: Record<Coarse, string> = { day: '1d', week: '1wk', month: '1mo' }
 const LSE_TF: Record<Coarse, string> = { day: '1d', week: '1w', month: '1mo' }
@@ -486,14 +519,20 @@ function parseDxHistory(json: unknown): Bar[] {
   return out.sort((a, b) => a.t - b.t)
 }
 
-/** The symbol the LSE vault knows this ticker by (its own resolver), cached for the page. */
-const lseNames = new Map<string, Promise<string>>()
-function lseSymbol(key: string): Promise<string> {
+/**
+ * The vault's symbol for this ticker, or null when the vault has no EXACT match.
+ * The resolver is exact-only (server-v2 /api/lse/resolve): its old name search
+ * turned SPX into SPXC and VIX into ENVX, and those stocks' years were spliced
+ * under the index bars. A miss is "no vault history", never "use the key anyway".
+ * Cached for the page.
+ */
+const lseNames = new Map<string, Promise<string | null>>()
+function lseSymbol(key: string): Promise<string | null> {
   let p = lseNames.get(key)
   if (!p) {
     p = query<{ symbol?: unknown }>(`/api/lse/resolve?q=${encodeURIComponent(key)}`, { staleMs: 24 * 3_600_000 })
-      .then((j) => (typeof j?.symbol === 'string' && j.symbol ? j.symbol : key))
-      .catch(() => key)
+      .then((j) => (typeof j?.symbol === 'string' && j.symbol.toUpperCase() === key.toUpperCase() ? j.symbol : null))
+      .catch(() => null)
     lseNames.set(key, p)
   }
   return p
@@ -502,7 +541,11 @@ function lseSymbol(key: string): Promise<string> {
 const ymdUtc = (t: number) => new Date(t).toISOString().slice(0, 10)
 
 async function lseBars(sym: ResolvedSym, timeframe: string, start: number, end: number | null, limit = 5000): Promise<Bar[]> {
+  // An index never goes to the vault: there is no exact index symbol there, and
+  // any non-exact answer is some other company (see lseSymbol).
+  if (!sym.fut && sym.kind === 'index') return []
   const name = sym.fut ?? (await lseSymbol(sym.key))
+  if (!name) return []
   const ds = sym.fut ? '&dataset=futures' : ''
   const endQ = end != null ? `&end=${ymdUtc(end + DAY_MS)}` : ''
   const url = `/api/lse/candles?symbol=${encodeURIComponent(name)}&timeframe=${timeframe}&start=${ymdUtc(start)}${endQ}&limit=${limit}&order=desc${ds}`
@@ -520,20 +563,28 @@ async function longHistory(sym: ResolvedSym, kind: Coarse): Promise<Bar[]> {
   const key = sym.fut ?? sym.key
   const tryOnce = async (id: string, get: () => Promise<Bar[]>): Promise<Bar[]> => {
     if (longMiss.has(id)) return []
-    try {
-      const bars = await get()
-      if (!bars.length) longMiss.add(id)
-      return bars
-    } catch {
-      longMiss.add(id)
-      return []
-    }
+    const run = (async () => {
+      try {
+        const bars = await get()
+        if (!bars.length) longMiss.add(id)
+        return bars
+      } catch {
+        longMiss.add(id)
+        return [] as Bar[]
+      }
+    })()
+    // a source that does not answer in time is skipped THIS load (not marked a miss:
+    // its late answer is cached by query() for the next one)
+    return (await within(run, LONG_SOURCE_TIMEOUT_MS, null as Bar[] | null)) ?? []
   }
   const yf = await tryOnce(`yf|${key}|${kind}`, async () =>
     parseVelaHistory(await query<unknown>(`/api/vela/history?symbol=${encodeURIComponent(key)}&interval=${YF_INTERVAL[kind]}`, { staleMs: LONG_STALE_MS })),
   )
   if (yf.length) return yf
-  if (await isOwner()) {
+  // Indexes: /api/vela/history is the only long source (explicitly mapped
+  // server-side). Without it, D / W fall back to bars built from the tape.
+  if (sym.kind === 'index' && kind === 'day') return []
+  if (sym.kind !== 'index' && (await isOwner())) {
     const years = kind === 'day' ? 10 : 25
     const lse = await tryOnce(`lse|${key}|${kind}`, () => lseBars(sym, LSE_TF[kind], Date.now() - years * 365 * DAY_MS, null))
     if (lse.length) return lse
@@ -544,11 +595,38 @@ async function longHistory(sym: ResolvedSym, kind: Coarse): Promise<Bar[]> {
   return tryOnce(`dx|${key}`, async () => parseDxHistory(await query<unknown>(`/api/dxlink/candles?symbol=${encodeURIComponent(dxSym)}`, { staleMs: LONG_STALE_MS })))
 }
 
+/**
+ * Does the long source price the same instrument as the tape? Compared on a
+ * bucket both hold (closes within 25%), else the newest older bar against the
+ * tape's first open (within 2x). A wrong-ticker splice — SPX Technologies at
+ * ~$170 under SPX at ~6,700, Enovix at ~$2.56 under VIX — fails by orders of
+ * magnitude, so the history is dropped instead of drawn. A legitimate source
+ * agrees with the recorder to a fraction of a percent.
+ */
+function sameInstrument(recent: OHLCV[], long: OHLCV[]): boolean {
+  const first = recent[0]
+  if (!first) return true
+  const byTime = new Map(long.map((b) => [b.time, b]))
+  for (const r of recent.slice(0, 5)) {
+    const l = byTime.get(r.time)
+    if (l && r.close > 0 && l.close > 0) return Math.abs(l.close / r.close - 1) <= 0.25
+  }
+  const prev = [...long].reverse().find((b) => b.time < first.time)
+  if (!prev || !(prev.close > 0) || !(first.open > 0)) return true
+  const ratio = prev.close / first.open
+  return ratio >= 0.5 && ratio <= 2
+}
+
 /** The tape's buckets, with the long source's older buckets in front of them. */
 function withLongHistory(recent: OHLCV[], long: Bar[], bucket: (t: number) => number): OHLCV[] {
   if (!long.length) return recent
+  const rolled = aggregate(long, bucket)
+  if (!sameInstrument(recent, rolled)) {
+    console.warn('[vela] long history does not match the tape (wrong instrument?) — showing the tape only')
+    return recent
+  }
   const cut = recent[0]?.time ?? Infinity
-  const older = aggregate(long, bucket).filter((b) => b.time < cut)
+  const older = rolled.filter((b) => b.time < cut)
   return older.length ? [...older, ...recent] : recent
 }
 
@@ -821,7 +899,19 @@ export class CbEdgeProvider implements DataProvider {
 
   async getBars(ticker: string, timeframe: string, range: BarRange): Promise<OHLCV[]> {
     const sym = resolveSym(ticker)
-    let bars = await loadAggregated(sym, timeframe, range.session)
+    const coarse = parseTf(timeframe).kind !== 'min'
+    // D / W / M: never an endless spinner. Past the limit the load fails, and
+    // loadWatchdog.ts puts the reason on screen.
+    let bars = coarse
+      ? await within(
+          loadAggregated(sym, timeframe, range.session).then((b) => b as OHLCV[] | null),
+          COARSE_LOAD_TIMEOUT_MS,
+          null,
+        ).then((b) => {
+          if (b === null) throw new LoadTimeoutError(`${sym.key} ${timeframe} bars`)
+          return b
+        })
+      : await loadAggregated(sym, timeframe, range.session)
     // The owner's futures go on into the vault where the tape runs out: a backward
     // page older than the tape, or a depth (`limit`) the tape cannot fill
     const oldest = bars[0]?.time
