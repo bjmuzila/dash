@@ -111,6 +111,7 @@ import {
 } from './wallsData'
 import { resolveSym } from '@/pages/vela/cbedgeProvider'
 import { onWallsOpacity, wallsOpacity } from '@/pages/vela/wallsOpacity'
+import { gexBasis, onGexBasis, type GexBasis } from '@/pages/vela/gexBasis'
 
 /** The native-indicator type id — also what the saved workspace records. */
 export const WALLS_TYPE = 'cbedge-walls'
@@ -125,7 +126,7 @@ const REFRESH_MS = 60_000
 
 const VIEW_OPTS = ['Walls + Core', 'Walls only', 'Core only'] as const
 const SCOPE_OPTS = ['0DTE', 'Non-0DTE'] as const
-const BASIS_OPTS = ['OI + Vol', 'Vol only'] as const
+// No GEX input (2026-10-07): the book is the page's one GEX switch (gexBasis.ts).
 
 /** The migration chart's two stroke weights. */
 const CORE_W = 2.2
@@ -142,7 +143,6 @@ function inputsSchema(): InputSchema[] {
       options: SCOPE_OPTS,
       tooltip: 'Which expiries the walls are computed from: recorded both ways, never re-computed here.',
     },
-    { key: 'basis', title: 'GEX', type: 'string', defval: BASIS_OPTS[0], options: BASIS_OPTS },
     {
       key: 'sessions',
       title: 'Sessions',
@@ -172,7 +172,7 @@ const int = (v: InputValue | undefined, d: number, lo: number, hi: number) =>
 interface Settings {
   view: 'all' | 'walls' | 'core'
   scope: '0dte' | 'agg'
-  basis: 'oivol' | 'vol'
+  basis: GexBasis
   sessions: number
 }
 
@@ -181,7 +181,7 @@ function settingsOf(inputs: Record<string, InputValue>): Settings {
   return {
     view: view === VIEW_OPTS[1] ? 'walls' : view === VIEW_OPTS[2] ? 'core' : 'all',
     scope: str(inputs.scope, SCOPE_OPTS[0]) === SCOPE_OPTS[1] ? 'agg' : '0dte',
-    basis: str(inputs.basis, BASIS_OPTS[0]) === BASIS_OPTS[1] ? 'vol' : 'oivol',
+    basis: gexBasis(),
     sessions: int(inputs.sessions, 1, 1, 60),
   }
 }
@@ -306,7 +306,7 @@ function alignToBars(bars: readonly OHLCV[], tfMs: number, days: DayModel[]): Al
  * The walls as one value per bar (NaN where none was recorded) — what a CB Script
  * strategy reads as `cbedge.call_wall` / `cbedge.put_wall` / `cbedge.core`
  * (script/engine.ts). The same log, cache, futures basis and bar alignment the
- * CB Walls lines use (OI + Vol, 0DTE): the strike in force at each bar's close.
+ * CB Walls lines use (0DTE, on the page's GEX switch): the strike in force at each bar's close.
  */
 export async function wallSeriesFor(
   ticker: string,
@@ -322,7 +322,7 @@ export async function wallSeriesFor(
   for (const b of bars) dates.add(etDateKey(b.time))
   const sessions = Math.max(1, Math.min(120, dates.size + 1))
   const [slices, basis] = await Promise.all([
-    loadWalls(wallsSymbol, { scope: '0dte', basis: 'oivol', sessions }, fresh),
+    loadWalls(wallsSymbol, { scope: '0dte', basis: gexBasis(), sessions }, fresh),
     sym.fut ? loadBasis(sym.fut) : Promise.resolve(null),
   ])
   const al = alignToBars(bars, tfMs, buildDays(slices, basis))
@@ -488,10 +488,15 @@ class WallsIndicator implements NativeIndicator {
   private stopped = false
   private suspended = false
   private offOpacity: (() => void) | null = null
+  private offGex: (() => void) | null = null
 
   start(ctx: NativeIndicatorContext, inputs: Record<string, InputValue>): void {
     this.ctx = ctx
     this.inputs = inputs
+    // The page's GEX switch: another recorded log (a hidden study reads it on resume).
+    this.offGex = onGexBasis(() => {
+      if (!this.suspended && !this.stopped) void this.load(false)
+    })
     // The opacity slider: repaint what is already computed (a hidden study waits
     // for resume, which reloads and paints at whatever the slider says then).
     this.offOpacity = onWallsOpacity(() => {
@@ -539,6 +544,8 @@ class WallsIndicator implements NativeIndicator {
     this.disarm()
     this.offOpacity?.()
     this.offOpacity = null
+    this.offGex?.()
+    this.offGex = null
     if (this.ctx) publishNow(this.ctx.data, this.ctx.id, null)
     this.ctx = null
   }

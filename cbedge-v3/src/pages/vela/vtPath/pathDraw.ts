@@ -31,6 +31,21 @@ export interface PathPayload {
   quiet: boolean
   /** CB Edge: bubble size / band thickness multiplier (1 = default). */
   size: number
+  /**
+   * The PAINT, and only the paint — which beads exist, where, and how big is the
+   * same either way. 'voltick' (absent: /vela always) is Voltick's level
+   * colours: the lit gold Volt, pink Reversal, blue Coil and Surge, a dark rim.
+   * 'cbedge' is the GEX Candles card on the CB Edge theme (2026-10-07, Brandon:
+   * "it should be in cbedge style on the cbedge filter — main thing is the logic
+   * and the path/bubbles shaping and sizing"): the card's own classic bubbles —
+   * see paintCbEdge.
+   */
+  skin?: 'voltick' | 'cbedge'
+  /**
+   * 'cbedge' only: the underlying's price at a candle (its close; seconds in),
+   * which says which side of spot a bead is on. null / absent = call side.
+   */
+  spotAt?: (tSec: number) => number | null
 }
 
 export const ROLE_TOKEN: Record<PathRole, string> = {
@@ -217,29 +232,42 @@ export class PathDraw {
       // drawn at its growth share of it, so the bar pitch is never overrun
       const marks: Array<{ x: number; y: number; t: number; p: number; r: number }> = []
       const last = r.fill.length - 1
+      const put = (t: number, p: number, gi: number | undefined) => {
+        const x = X(t)
+        if (!Number.isFinite(x) || x < -20 || x > width + 20) return
+        const y = Y(p)
+        if (!Number.isFinite(y)) return
+        marks.push({ x, y, t, p, r: Math.max(BEAD.beadMinPx, rad * growFactor(gi)) })
+      }
+      // the previous reading of this row: its bar on the clock grid, price, growth
+      let prev: { g: number; p: number; gi: number | undefined } | null = null
       for (let i = 0; i < r.fill.length; i++) {
         const q = r.fill[i]!
+        const g = Math.round(q.t / barSec)
+        // NO BLANK BEADS (2026-10-07, Brandon: "if a bubble is missed, fill in with
+        // the previous one … a filled in bubble on path would be way better than a
+        // blank"). A grid slot the row skipped — no reading on exactly that bar (a
+        // Coil / Reversal that flipped sides for a candle, a strike another level
+        // took for a minute, the zoomed-out grid landing between two readings) —
+        // gets the row's previous bead. Only inside a run: a gap longer than two
+        // grid steps is a real break (the level moved, a session ended) and stays.
+        if (prev && g - prev.g > 1 && g - prev.g <= 2 * N) {
+          for (let S = Math.ceil((prev.g + 1) / N) * N; S < g; S += N) put(S * barSec, prev.p, prev.gi)
+        }
         // THE LIVE EDGE ALWAYS DRAWS (2026-10-07, Brandon: "path isn't going for
         // spx"). Zoomed out, beads sit on every Nth bar of a fixed clock grid, so
-        // the first minutes of a session — or the newest candle between two grid
-        // bars — showed no bead at all, and the Path looked stalled. The row's
-        // newest reading is drawn whatever the grid says; the grid bead just
-        // before it gives way if the two would overlap.
-        const edge = i === last
-        if (!edge && N > 1 && Math.round(q.t / barSec) % N !== 0) continue
-        const x = X(q.t)
-        if (!Number.isFinite(x) || x < -20 || x > width + 20) continue
-        const y = Y(q.p)
-        if (!Number.isFinite(y)) continue
-        const m = { x, y, t: q.t, p: q.p, r: Math.max(BEAD.beadMinPx, rad * growFactor(grow[i])) }
-        if (edge && N > 1) {
-          const prev = marks[marks.length - 1]
-          if (prev && prev.p === m.p && Math.abs(prev.x - m.x) < prev.r + m.r) marks.pop()
-        }
-        marks.push(m)
+        // the newest candle between two grid bars showed no bead and the Path looked
+        // stalled. The row's newest reading is drawn whatever the grid says; it may
+        // overlap the grid bead before it, which reads as filled, never as a gap.
+        if (i === last || N <= 1 || g % N === 0) put(q.t, q.p, grow[i])
+        prev = { g, p: q.p, gi: grow[i] }
       }
       if (!marks.length) continue
       drew = true
+      if (d.skin === 'cbedge') {
+        paintCbEdge(ctx, marks, r.role, lead, quiet, alpha, d.spotAt)
+        continue
+      }
       if (lead && !quiet) {
         ctx.globalAlpha = 1
         for (const m of marks) {
@@ -293,4 +321,114 @@ export class PathDraw {
     ctx.globalAlpha = 1
     return drew
   }
+}
+
+// ── CB EDGE SKIN ─────────────────────────────────────────────────────────────
+// The GEX Candles card's classic bubbles (board/gexCandles/bubbles.ts), worn by
+// the Path's beads. Same beads, same places, same radii, the Coil still a
+// diamond — only the colour words change to CB Edge's:
+//
+//   ★ Volt = CORE  the ONE GOLD MARK: a lit radial gradient (--color-fg
+//                  highlight → --color-gex-lead-hi → --color-gex-lead), a soft
+//                  halo, and a ring INSIDE its edge in its side's colour — the
+//                  classic leader exactly
+//   the others     flat, in the side of spot they sit on: --color-gex-pos above
+//                  (the call side — where CB Edge's call wall lives, and the
+//                  same blue as the CW tag) and --color-gex-neg below (the put
+//                  side, PW's red). A wall that crosses spot changes colour at
+//                  that candle, as on CB Walls' CB Edge view. No rim: at bead
+//                  size a fill plus an outline is a smudge (the classic peers'
+//                  rule)
+//
+// The ring width is the classic law: 13% of the radius, at least 0.45px, at
+// most 1.4px (bubbles.ts ringOfRadius / ringMinPx, the 1m rung's ringPx).
+
+type Mark = { x: number; y: number; t: number; p: number; r: number }
+
+const CB_RING_OF_RADIUS = 0.13
+const CB_RING_MIN = 0.45
+const CB_RING_MAX = 1.4
+
+function beadPath(ctx: CanvasRenderingContext2D, m: Mark, r: number, diamond: boolean): void {
+  if (diamond) {
+    ctx.moveTo(m.x, m.y - r)
+    ctx.lineTo(m.x + r, m.y)
+    ctx.lineTo(m.x, m.y + r)
+    ctx.lineTo(m.x - r, m.y)
+    ctx.closePath()
+  } else {
+    ctx.moveTo(m.x + r, m.y)
+    ctx.arc(m.x, m.y, r, 0, Math.PI * 2)
+  }
+}
+
+function paintCbEdge(
+  ctx: CanvasRenderingContext2D,
+  marks: readonly Mark[],
+  role: PathRole,
+  lead: boolean,
+  quiet: boolean,
+  alpha: number,
+  spotAt: PathPayload['spotAt'],
+): void {
+  const pos = tokenRgb('--color-gex-pos')
+  const neg = tokenRgb('--color-gex-neg')
+  const callSide = (m: Mark) => {
+    const s = spotAt?.(m.t)
+    return s == null || !Number.isFinite(s) || m.p >= s
+  }
+  const diamond = role === 'coil'
+  if (!lead) {
+    // two paths, one per side, so a row is two fills however long it is
+    ctx.globalAlpha = alpha
+    for (const [side, rgb] of [[true, pos], [false, neg]] as const) {
+      ctx.beginPath()
+      let any = false
+      for (const m of marks) {
+        if (callSide(m) !== side) continue
+        beadPath(ctx, m, m.r, diamond)
+        any = true
+      }
+      if (!any) continue
+      ctx.fillStyle = hexA(rgb, 1)
+      ctx.fill()
+    }
+    ctx.globalAlpha = 1
+    return
+  }
+  const gold = tokenRgb('--color-gex-lead')
+  const goldHi = tokenRgb('--color-gex-lead-hi')
+  const highlight = tokenRgb('--color-fg')
+  for (const m of marks) {
+    const sign = callSide(m) ? pos : neg
+    if (!quiet) {
+      // the classic leader's glow is its SIGN colour, a halo around the mark
+      ctx.globalAlpha = 1
+      const glow = m.r * 1.6
+      const gr = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, glow)
+      gr.addColorStop(0, hexA(sign, 0.22))
+      gr.addColorStop(1, hexA(sign, 0))
+      ctx.fillStyle = gr
+      ctx.beginPath()
+      ctx.arc(m.x, m.y, glow, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.globalAlpha = alpha
+    const grad = ctx.createRadialGradient(m.x - m.r * 0.24, m.y - m.r * 0.3, m.r * 0.05, m.x, m.y, m.r)
+    grad.addColorStop(0, hexA(highlight, 1))
+    grad.addColorStop(0.5, hexA(goldHi, 1))
+    grad.addColorStop(1, hexA(gold, 1))
+    ctx.fillStyle = grad
+    ctx.beginPath()
+    beadPath(ctx, m, m.r, diamond)
+    ctx.fill()
+    // the ring is the sign, drawn inside the edge so the bead keeps its radius
+    const ring = Math.max(CB_RING_MIN, Math.min(CB_RING_MAX, m.r * CB_RING_OF_RADIUS))
+    ctx.beginPath()
+    beadPath(ctx, m, Math.max(0.3, m.r - ring / 2), diamond)
+    ctx.lineWidth = ring
+    ctx.strokeStyle = hexA(sign, 0.95)
+    ctx.stroke()
+  }
+  ctx.globalAlpha = 1
 }

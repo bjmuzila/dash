@@ -52,6 +52,7 @@ import { bindPhonePicker, fmtPct, openPhonePicker, toneOf } from '@/pages/vela/s
 import { tickerIconEl } from '@/pages/vela/tickerIcon'
 import { TIMEFRAMES, tfIndex, tfLabel } from '@/pages/vela/timeframes'
 import { wallsOpacity } from '@/pages/vela/wallsOpacity'
+import { gexBasisLabel } from '@/pages/vela/gexBasis'
 import { normTicker, onWatchlist, quoteOf, refreshQuotes } from '@/pages/vela/watchlist/store'
 
 const QUOTE_MS = 15_000
@@ -109,6 +110,7 @@ const ROWS: ReadonlyArray<{ from: string; group: Group; label?: string; wide?: b
   { from: 'Chart type', group: 'chart' },
   { from: 'Layout', group: 'chart' },
   { from: 'Walls opacity', group: 'chart' },
+  { from: 'GEX', group: 'chart', label: 'GEX for every indicator' },
   { from: 'Watchlist', group: 'panels' },
   { from: 'Data window', group: 'panels' },
   { from: 'Object tree', group: 'panels' },
@@ -462,6 +464,9 @@ export function bindPhoneChrome(ws: VelaWorkspace): () => void {
       byLabel.delete(R.from)
       r.classList.add('cb-md-row')
       if (R.label) setText(r.querySelector('.vela-md-row-label'), R.label)
+      if (R.from === 'GEX') {
+        r.append(el(doc, 'span', 'vela-md-row-value', gexBasisLabel()))
+      }
       if (R.from === 'Walls opacity') {
         const v = el(doc, 'span', 'vela-md-row-value', `${Math.round(wallsOpacity() * 100)}%`)
         r.append(v)

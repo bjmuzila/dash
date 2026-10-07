@@ -1333,7 +1333,9 @@ export function GexCandlesCard({
     const rows = pathLoaded.mod.pathRowsFor(bars, settings.interval * 60_000, pathLoaded.models)
     if (!rows) return null
     const painter = (pathPainterRef.current ??= pathLoaded.mod.createPathPainter())
-    return { payload: pathLoaded.mod.pathPayloadOf(rows, settings.bubbleScale), painter }
+    // CB Edge theme: the classic bubbles' paint on the Path's beads; Voltick: Voltick's
+    const skin = VOLTICK_THEME ? 'voltick' : 'cbedge'
+    return { payload: pathLoaded.mod.pathPayloadOf(rows, settings.bubbleScale, skin, bars), painter }
   }, [pathOn, pathLoaded, pathKey, bars, settings.interval, settings.bubbleScale])
 
   useEffect(() => apply((h) => h.setPath(pathPaint)), [pathPaint, apply])
@@ -1864,9 +1866,11 @@ export function GexCandlesCard({
                     on={settings.bubblesOn}
                     onClick={() => patch({ bubblesOn: !settings.bubblesOn })}
                     title={
-                      settings.bubbleStyle === 'path'
-                        ? 'Draw the Voltick Path over the candles — the same bubbles as the Voltick Path study on the Vela chart'
-                        : 'Draw the GEX ladder over the candles'
+                      settings.bubbleStyle !== 'path'
+                        ? 'Draw the GEX ladder over the candles'
+                        : voltickTheme
+                          ? 'Draw the Voltick Path over the candles — the same bubbles as the Voltick Path study on the Vela chart'
+                          : 'Draw the Path over the candles — the Vela chart\'s Path logic and sizing, in CB Edge colours: CORE in gold, the walls blue above spot and red below'
                     }
                   />
                   {/* Off the phone sheet entirely: the rail is suppressed on a
@@ -1972,7 +1976,11 @@ export function GexCandlesCard({
               <PanelSection title="Bubbles">
                 <SegGroup
                   size={ctlSize}
-                  title="Path: the Voltick Path, exactly as the Vela chart draws it — one bubble per level per candle, ★ Volt in lit gold, ↘ Reversal, ◆ Coil, ↯ Surge, at the strike each level held then and growing with its GEX through the session. Built from the recorded walls (the Level Log's wall migration). Classic: this card's own trail of the biggest GEX strikes in each bucket"
+                  title={
+                    voltickTheme
+                      ? "Path: the Voltick Path, exactly as the Vela chart draws it — one bubble per level per candle, ★ Volt in lit gold, ↘ Reversal, ◆ Coil, ↯ Surge, at the strike each level held then and growing with its GEX through the session. Built from the recorded walls (the Level Log's wall migration). Classic: this card's own trail of the biggest GEX strikes in each bucket"
+                      : "Path: the Vela chart's Path logic and sizing in CB Edge colours — one bubble per level per candle at the strike it held then, growing with its GEX through the session. CORE is the gold bubble, ringed blue above spot or red below; the walls are blue above spot and red below (the second wall on CORE's side is the diamond). Built from the recorded walls (the Level Log's wall migration). Classic: this card's own trail of the biggest GEX strikes in each bucket"
+                  }
                   options={[
                     { label: 'Path', value: 'path' },
                     { label: 'Classic', value: 'classic' },

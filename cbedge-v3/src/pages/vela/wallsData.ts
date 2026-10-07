@@ -20,6 +20,7 @@ import { BASIS_URL, ES_MAX_BASIS, isPlausibleBasis, parseBasis, type BasisModel 
 import { futuresPairFor } from '@/board/gexCandles/futures'
 import { RTH_CLOSE_MIN, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { rangeDayToSlice, todayETStr, type DaySlice, type WallLevel } from '@/pages/levelLog/wallData'
+import type { GexBasis } from '@/pages/vela/gexBasis'
 
 const MIN_MS = 60_000
 const DAY_MS = 86_400_000
@@ -30,10 +31,10 @@ const SHARED_MS = 55_000
 /** The basis decays about a point a day; a ten-minute-old copy is the same number. */
 const BASIS_STALE_MS = 10 * 60_000
 
-/** Which recorded log: 0DTE or Non-0DTE walls, OI + Vol or volume-only, how many sessions back. */
+/** Which recorded log: 0DTE or Non-0DTE walls, OI only / OI + Vol / volume-only, how many sessions back. */
 export interface WallsRead {
   scope: '0dte' | 'agg'
-  basis: 'oivol' | 'vol'
+  basis: GexBasis
   sessions: number
 }
 

@@ -313,9 +313,10 @@ function toGexRows(expiryRows, volMap = null) {
  * and the CORE are never ranked on different quantities.
  */
 function basisNet(basis) {
-  return basis === 'vol'
-    ? (r) => Number(r.netVolGEX ?? 0)
-    : (r) => Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
+  if (basis === 'vol') return (r) => Number(r.netVolGEX ?? 0);
+  // 'oi' (2026-10-07): open interest alone — gex-calculator's wallMetric('oi')
+  if (basis === 'oi') return (r) => Number(r.netGEX ?? 0);
+  return (r) => Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
 }
 
 /**

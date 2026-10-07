@@ -28,6 +28,7 @@ import { defineStudy } from './common'
 // ── Option lists the settings dialogs offer (the impl modules parse the same strings) ──
 export const SESSION_BASIS = ['Regular hours', 'Full session'] as const
 export const IB_WINDOWS = ['60 min', '30 min', '15 min'] as const
+/** The GEX books' names. Not a study input any more: every study reads the page's one GEX switch (gexBasis.ts). */
 export const GEX_BASIS = ['OI + Vol', 'OI only', 'Vol only'] as const
 export const NP_MIN = ['$1K', '$25K', '$100K', '$500K'] as const
 export const VF_SCOPES = ['All expiries', 'Front expiry'] as const
@@ -160,6 +161,7 @@ export function registerStudies(): void {
       shortTitle: 'Key Levels',
       pane: 'price',
       liveOnly: true,
+      gex: true,
       inputs: () => [
         { key: 'walls', title: '◆ Coil / ↘ Reversal', type: 'bool', defval: true },
         { key: 'core', title: '★ Volt (CORE, top net GEX)', type: 'bool', defval: true },
@@ -178,8 +180,8 @@ export function registerStudies(): void {
       shortTitle: 'GEX Profile',
       pane: 'price',
       viewport: true,
+      gex: true,
       inputs: () => [
-        { key: 'basis', title: 'GEX', type: 'string', defval: GEX_BASIS[0], options: GEX_BASIS },
         { key: 'width', title: 'Width (% of the chart)', type: 'int', defval: 22, min: 5, max: 60 },
         { key: 'strikes', title: 'Strikes each side of spot', type: 'int', defval: 30, min: 5, max: 120 },
         { key: 'tags', title: 'Tag the biggest', type: 'int', defval: 3, min: 0, max: 10 },
@@ -294,6 +296,7 @@ export function registerStudies(): void {
       shortTitle: 'GEX Rail',
       pane: 'price',
       layer: {},
+      gex: true,
       inputs: () => [
         { key: 'side', title: 'Position', type: 'string', defval: RAIL_SIDES[0], options: RAIL_SIDES },
         {
@@ -303,14 +306,6 @@ export function registerStudies(): void {
           defval: RAIL_STYLES[0],
           options: RAIL_STYLES,
           tooltip: 'Rail: a bar per strike. Heatmap: Multi Greek’s cell per strike, its GEX written in a cell shaded by size and sign. Profile: one smooth shape whose width is the GEX at each strike, blue above the flip and red below, the levels a line across in their colour. Which expiries: the Expiries setting.',
-        },
-        {
-          key: 'basis',
-          title: 'GEX',
-          type: 'string',
-          defval: GEX_BASIS[2],
-          options: GEX_BASIS,
-          tooltip: 'The bars and the level tags both read this book. Vol only (the default) matches the Voltick Path.',
         },
         {
           key: 'exp',
@@ -333,8 +328,8 @@ export function registerStudies(): void {
       shortTitle: 'GEX Heatmap',
       pane: 'price',
       layer: { cursor: true },
+      gex: true,
       inputs: () => [
-        { key: 'basis', title: 'GEX', type: 'string', defval: GEX_BASIS[0], options: GEX_BASIS },
         { key: 'sessions', title: 'Sessions', type: 'string', defval: HEAT_SESSIONS[0], options: HEAT_SESSIONS, tooltip: 'The recorder keeps about two sessions of per-minute ladders.' },
         { key: 'opacity', title: 'Opacity %', type: 'int', defval: 55, min: 10, max: 95, step: 5 },
         { key: 'cut', title: 'Hide cells under % of the biggest', type: 'int', defval: 8, min: 0, max: 50 },

@@ -79,6 +79,7 @@ import { EVENTS_TYPE, EV_KINDS, EV_SIZES } from '@/pages/vela/studies/index'
 import { eventsCount, onEventsCount } from '@/pages/vela/studies/eventsHost'
 import { markSvgOf } from '@/pages/vela/studies/eventIcons'
 import { OPACITY_MAX, OPACITY_MIN, onWallsOpacity, setWallsOpacity, wallsOpacity } from '@/pages/vela/wallsOpacity'
+import { onGexBasis } from '@/pages/vela/gexBasis'
 
 const PREFS_KEY = 'cb-v3-vela-legend'
 /** A cell narrower than this starts folded. */
@@ -323,6 +324,8 @@ class Card {
         rebuild()
       }),
     )
+    // the page's GEX switch (gexBasis.ts): the LEVELS row reads that book
+    this.offChart.push(onGexBasis(() => this.readChain(false)))
     this.offChart.push(
       chart.on('bar', (b) => {
         this.price = b.close

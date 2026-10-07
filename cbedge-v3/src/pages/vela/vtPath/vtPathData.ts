@@ -71,6 +71,7 @@ import {
   type DayModel,
   type Write,
 } from '@/pages/vela/wallsData'
+import { ladderValue, type GexBasis } from '@/pages/vela/gexBasis'
 import { holdSizes, pathFill, type FillPt, type PathPt, type PathRole } from './trailruns'
 
 const DAY_MS = 86_400_000
@@ -99,11 +100,14 @@ export interface PathRow {
 
 export interface WallRead {
   scope: '0dte' | 'agg'
-  basis: 'oivol' | 'vol'
+  /** The GEX book Volt / Coil / Reversal are ranked on (on Vela: the page's GEX switch, gexBasis.ts). */
+  basis: GexBasis
   sessions: number
 }
 
 export interface WallModels {
+  /** The book `main` is on, and what a ladder frame ranks on (absent: volume, as before 2026-10-07). */
+  basis?: GexBasis
   /** The walls on the chosen GEX map — Volt, Coil, Reversal. */
   main: DayModel[]
   /** The volume-only walls — their CORE is the Surge. */
@@ -126,10 +130,11 @@ export interface WallModels {
   /** The index → chart shift at a time (the GEX Rail's own; 0 on a cash chart); null = no usable basis. */
   shiftAt?: (ts: number) => number | null
   /**
-   * Vol only: the newest sessions' per-minute ladders (studies/ladder.ts), by ET
-   * date. A candle the volume book has no CORE for yet (09:29–09:45, or a symbol
-   * whose volume walls have not been written that day) reads its volume GEX here
-   * instead of the OI + Vol walls.
+   * Vol only and OI only: the newest sessions' per-minute ladders
+   * (studies/ladder.ts), by ET date. A candle the chosen book has no CORE for yet
+   * (on Vol only 09:29–09:45, or a symbol whose volume walls have not been written
+   * that day; on OI only, any session from before the recorder kept an OI-only
+   * log) reads that book's GEX here instead.
    */
   ladders?: Map<string, GexColumn[]>
 }
@@ -137,21 +142,31 @@ export interface WallModels {
 export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: boolean): Promise<WallModels> {
   const sym = resolveSym(chartSymbol.replace(/^[^:]*:/, ''))
   const wallsSymbol = sym.fut === 'NQ' ? 'NDX' : sym.fut === 'ES' ? 'SPX' : sym.key
-  // Both books, always: OI + Vol is the main map or (on Vol only) the open's
-  // stand-in; the volume book is the Surge or (on Vol only) the main map.
-  const [oivol, vol, basis] = await Promise.all([
-    loadWallSlices(wallsSymbol, { ...s, basis: 'oivol' }, fresh),
-    loadWallSlices(wallsSymbol, { ...s, basis: 'vol' }, fresh),
+  // The chosen book is the main map. The volume book is always read too: its CORE
+  // is the Surge (on Vol only it IS the main map). On Vol only the OI + Vol walls
+  // stand in for the open, before the volume book's first write (header).
+  const onVol = s.basis === 'vol'
+  const [mainSl, volSl, openSl, basis] = await Promise.all([
+    loadWallSlices(wallsSymbol, s, fresh),
+    onVol ? Promise.resolve(null) : loadWallSlices(wallsSymbol, { ...s, basis: 'vol' }, fresh),
+    onVol ? loadWallSlices(wallsSymbol, { ...s, basis: 'oivol' }, fresh) : Promise.resolve(null),
     sym.fut ? loadBasis(sym.fut) : Promise.resolve(null),
   ])
-  const oivolDays = buildDays(oivol, basis)
-  const volDays = buildDays(vol, basis)
-  const onVol = s.basis === 'vol'
-  const mainDays = onVol ? volDays : oivolDays
-  const openDays = onVol ? oivolDays : []
+  const mainDays = buildDays(mainSl, basis)
+  const volDays = volSl ? buildDays(volSl, basis) : mainDays
+  const openDays = openSl ? buildDays(openSl, basis) : []
   const today = etDateKey(Date.now())
   const isToday = (d: DayModel) => d.date === today
-  const out: WallModels = { main: mainDays, vol: volDays, open: openDays, hasToday: mainDays.some(isToday) || openDays.some(isToday), fut: !!sym.fut }
+  const out: WallModels = {
+    basis: s.basis,
+    main: mainDays,
+    vol: volDays,
+    open: openDays,
+    hasToday: mainDays.some(isToday) || openDays.some(isToday),
+    fut: !!sym.fut,
+  }
+  // every recorded session date on any book read (an OI-only log can be younger than the others)
+  const known = [...new Set([...mainDays, ...openDays, ...volDays].map((d) => d.date))].sort()
   const b0: BasisModel | null = basis
   out.shiftAt = (ts: number) => {
     if (!sym.fut) return 0
@@ -159,10 +174,10 @@ export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: bo
     const v = b0.days.get(etDateKey(ts)) ?? b0.basis
     return isPlausibleBasis(v, b0.max) ? v : null
   }
-  if (onVol) {
-    // the volume book's gaps (header of ladderFrame): the ladder of the two newest
+  if (s.basis !== 'oivol') {
+    // the chosen book's gaps (header of ladderFrame): the ladder of the two newest
     // recorded sessions and today's (the ladder's retention)
-    const dates = [...new Set([...mainDays, ...openDays].map((d) => d.date).concat(today))].sort().slice(-2)
+    const dates = [...new Set(known.concat(today))].sort().slice(-2)
     const reads = await Promise.all(dates.map((d) => loadSessionColumns(wallsSymbol, d, fresh).catch(() => [] as GexColumn[])))
     out.ladders = new Map(dates.map((d, k) => [d, reads[k]!]))
   }
@@ -171,7 +186,7 @@ export async function loadWallModels(chartSymbol: string, s: WallRead, fresh: bo
     // the gex rail"): the nights after the two newest recorded sessions read the
     // next expiry's per-minute ladder, as the rail does (older nights are past the
     // ladder's retention and keep the closing walls)
-    const dates = [...new Set([...mainDays, ...openDays].map((d) => d.date))].sort().slice(-2)
+    const dates = known.slice(-2)
     const reads = await Promise.all(dates.map((d) => loadNextExpiryColumns(wallsSymbol, d, fresh).catch(() => [] as GexColumn[])))
     out.nights = new Map(dates.map((d, k) => [d, reads[k]!]))
   }
@@ -185,12 +200,18 @@ const abs = (w: Write | null | undefined) => (w?.gex != null && Number.isFinite(
 /**
  * One candle's frame off a per-minute ladder (overnight, the next expiry's; in
  * session, where the volume book has no CORE yet): the newest column by the
- * candle's end, Volt / Coil / Reversal by the Voltick definition on its VOLUME
- * GEX (vtFromLadder over netVol — volume only, 2026-10-06), Surge the biggest
- * volume GEX, every strike moved by the rail's basis. null: no column yet, or no
- * basis.
+ * candle's end, Volt / Coil / Reversal by the Voltick definition on the chosen
+ * book's GEX (vtFromLadder; volume only until 2026-10-07, now the page's GEX
+ * switch), Surge the biggest VOLUME GEX whatever the book, every strike moved by
+ * the rail's basis. null: no column yet, or no basis.
  */
-function ladderFrame(night: readonly GexColumn[], bar: OHLCV, tfMs: number, shiftAt: WallModels['shiftAt']): VtFrame | null {
+function ladderFrame(
+  night: readonly GexColumn[],
+  bar: OHLCV,
+  tfMs: number,
+  shiftAt: WallModels['shiftAt'],
+  book: GexBasis = 'vol',
+): VtFrame | null {
   const col = columnAt(night, bar.time + tfMs - 1)
   if (!col || !col.cells.length) return null
   const shift = shiftAt ? shiftAt(col.slotTs) : null
@@ -201,14 +222,19 @@ function ladderFrame(night: readonly GexColumn[], bar: OHLCV, tfMs: number, shif
     const ks = col.cells.map((c) => c.strike)
     spot = (Math.max(...ks) + Math.min(...ks)) / 2
   }
-  const def = vtFromLadder(col.cells.map((c) => ({ strike: c.strike, net: c.netVol })), spot)
+  const def = vtFromLadder(col.cells.map((c) => ({ strike: c.strike, net: ladderValue(c.net, c.netVol, book) })), spot)
   if (def.volt == null) return null
   const surge = voltickMarks(col.cells.map((c) => ({ strike: c.strike, book: c.netVol, vol: c.netVol })), { always: true }).surge
   const sizeOf = (k: number | null) => {
     if (k == null) return null
     const c = col.cells.find((x) => x.strike === k)
-    return c ? Math.abs(c.netVol) : null
+    return c ? Math.abs(ladderValue(c.net, c.netVol, book)) : null
   }
+  // the Surge is the volume book's, so its size is too
+  const surgeSize = surge == null ? null : (() => {
+    const c = col.cells.find((x) => x.strike === surge)
+    return c ? Math.abs(c.netVol) : null
+  })()
   const sh = (k: number | null) => (k == null ? null : k + shift)
   return {
     t: Math.floor(bar.time / 1000),
@@ -216,7 +242,7 @@ function ladderFrame(night: readonly GexColumn[], bar: OHLCV, tfMs: number, shif
     surge: sh(surge),
     rev: sh(def.reversal),
     gates: def.coil != null ? [def.coil + shift] : [],
-    sz: { volt: sizeOf(def.volt), surge: sizeOf(surge), rev: sizeOf(def.reversal), gates: def.coil != null ? [sizeOf(def.coil)] : [] },
+    sz: { volt: sizeOf(def.volt), surge: surgeSize, rev: sizeOf(def.reversal), gates: def.coil != null ? [sizeOf(def.coil)] : [] },
   }
 }
 
@@ -228,7 +254,7 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
   const coarse = tfMs >= DAY_MS
   // OVERNIGHT ON A FUTURE: the recorded sessions, oldest first, to find the one
   // whose closing walls an overnight candle carries
-  const dates = [...new Set([...byDate.keys(), ...openByDate.keys()])].sort()
+  const dates = [...new Set([...byDate.keys(), ...openByDate.keys(), ...volByDate.keys()])].sort()
   const latestBefore = (key: string, inclusive: boolean): string | undefined => {
     let hit: string | undefined
     for (const d of dates) {
@@ -267,14 +293,14 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
         // …and where the next expiry's ladder was recorded that night, its levels
         // instead: the gamma the GEX Rail shows at that minute
         const night = date != null ? m.nights?.get(date) : undefined
-        const f = night?.length ? ladderFrame(night, bar, tfMs, m.shiftAt) : null
+        const f = night?.length ? ladderFrame(night, bar, tfMs, m.shiftAt, m.basis) : null
         if (f) {
           out.push(f)
           continue
         }
       } else continue
       if (date == null) continue
-      close = (byDate.get(date) ?? openByDate.get(date))?.close
+      close = (byDate.get(date) ?? openByDate.get(date) ?? volByDate.get(date))?.close
       if (close == null) continue
     }
     // an overnight candle (after that session's close) reads the walls at the close
@@ -286,7 +312,7 @@ export function framesFromWalls(bars: readonly OHLCV[], tfMs: number, m: WallMod
     if (!cb && !coarse) {
       // the volume book has no CORE yet: the volume GEX of that minute's ladder
       const lad = m.ladders?.get(date)
-      const f = lad?.length ? ladderFrame(lad, bar, tfMs, m.shiftAt) : null
+      const f = lad?.length ? ladderFrame(lad, bar, tfMs, m.shiftAt, m.basis) : null
       if (f) {
         out.push(f)
         continue

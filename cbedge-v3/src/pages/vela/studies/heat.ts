@@ -34,7 +34,8 @@ import type { OHLCV } from '@luxalgo/vela'
 import type { RendererLayerArgs, RendererLayerInstance } from '@luxalgo/vela/plugin'
 import { tokenRgb, type RGB } from '@/design/theme'
 import { int, provideLayer, str, studyImpl, type StudyCtx } from './common'
-import { GEX_BASIS, HEAT_SESSIONS, HEAT_TYPE } from './index'
+import { HEAT_SESSIONS, HEAT_TYPE } from './index'
+import { gexBasis } from '@/pages/vela/gexBasis'
 import { columnsUntil, ladderKey, loadLadder, sessionDates, type Ladder } from './ladder'
 
 const STEPS = 10
@@ -125,9 +126,10 @@ const memo = new WeakMap<Ladder, { key: string; out: HeatPayload }>()
 
 export const heatImpl = studyImpl<HeatS, Ladder>({
   settings: (i) => {
-    const b = str(i.basis, GEX_BASIS[0])
+    // the page's one GEX switch (gexBasis.ts), not a per-study input (2026-10-07)
+    const b = gexBasis()
     return {
-      metric: b === GEX_BASIS[2] ? 'vol' : b === GEX_BASIS[1] ? 'oi' : 'net',
+      metric: b === 'vol' ? 'vol' : b === 'oi' ? 'oi' : 'net',
       sessions: Math.max(1, (HEAT_SESSIONS as readonly string[]).indexOf(str(i.sessions, HEAT_SESSIONS[0])) + 1),
       opacity: int(i.opacity, 55, 10, 95) / 100,
       cut: int(i.cut, 8, 0, 50) / 100,

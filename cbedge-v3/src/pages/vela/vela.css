@@ -3041,6 +3041,50 @@
   margin-left: auto;
 }
 
+/* ── The GEX switch (gexBasisMenu.ts): GEX · Vol ▾ in the top bar, and its menu ── */
+.vela-workspace .vela-widget-topbar button.cb-gexb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cb-gexb .cb-gexb-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.cb-gexb .cb-gexb-val {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--vt-accent-soft);
+  color: var(--color-vt-accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 16px;
+}
+.cb-gexb .cb-gexb-caret {
+  color: var(--color-faint);
+  font-size: var(--text-2xs);
+}
+/* the menu wears the Workspace menu's rows, one column */
+.cb-wsm.cb-gexm .cb-wsm-grid {
+  grid-template-columns: 1fr;
+}
+.cb-wsm.cb-gexm .cb-wsm-group {
+  border-right: 0;
+}
+.cb-wsm.cb-gexm .cb-wsm-row {
+  height: 36px;
+}
+.cb-wsm.cb-gexm .cb-wsm-row[data-on='1'] .cb-wsm-label {
+  color: var(--color-vt-accent-text);
+  font-weight: 600;
+}
+.cb-wsm.cb-gexm .cb-gexm-hint {
+  color: var(--color-faint);
+  font-size: var(--text-xs);
+}
+
 /* ── The ticker picker (symbolPickerView.ts) ── */
 .cb-sp {
   display: flex;
@@ -5779,10 +5823,14 @@
   display: none;
 }
 .vela-workspace .vela-widget-topbar:is([data-cb-fit='2'], [data-cb-fit='3'], [data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6'])
-  :is(.vela-widget-action-pin > .vela-widget-action-left:not(.cb-sym-chip), .vela-widget-actions-left > .vela-widget-action-left, .vela-topbar-right .vela-widget-action-pin > .vela-widget-action:not(.cb-clk)) {
+  :is(.vela-widget-action-pin > .vela-widget-action-left:not(.cb-sym-chip):not(.cb-gexb), .vela-widget-actions-left > .vela-widget-action-left:not(.cb-gexb), .vela-topbar-right .vela-widget-action-pin > .vela-widget-action:not(.cb-clk)) {
   gap: 0;
   padding: 0 8px;
   font-size: 0;
+}
+/* the GEX button keeps its book at step 2, losing only the word GEX */
+.vela-widget-topbar:is([data-cb-fit='2'], [data-cb-fit='3'], [data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6']) .cb-gexb .cb-gexb-name {
+  display: none;
 }
 .vela-widget-topbar:is([data-cb-fit='3'], [data-cb-fit='4'], [data-cb-fit='5'], [data-cb-fit='6']) .vela-widget-tf-chips > .vela-widget-tf:not([data-current='1']) {
   display: none;

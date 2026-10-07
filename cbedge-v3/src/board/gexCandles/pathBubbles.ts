@@ -27,6 +27,14 @@
 //                replay, back to the session being replayed
 //   Bubble size  the card's Bubble size slider
 //
+// THE PAINT FOLLOWS THE THEME (2026-10-07, Brandon: "it should be in cbedge
+// style on the cbedge filter — main thing is the logic and the path/bubbles
+// shaping and sizing"). Voltick theme: Voltick's colours, as /vela. CB Edge
+// theme: the card's classic bubble look — the Volt is CORE, the one gold lit
+// mark with a ring in its side's colour; the other levels are flat blue above
+// spot and red below (pathDraw.ts paintCbEdge). Logic, shapes and sizes are the
+// Path's either way.
+//
 // LOADED LAZILY (GexCandlesCard imports this with `import()`), and nothing it
 // pulls in may import '@luxalgo/vela' at runtime — the home board must never
 // load the 1.2MB Vela chunk. That is why the walls reader (pages/vela/
@@ -95,9 +103,12 @@ export function pathRowsFor(bars: readonly Bar[], intervalMs: number, models: Wa
   )
 }
 
-/** The payload the painter takes: Vela's Path defaults, the card's size. */
-export function pathPayloadOf(rows: PathRow[], size: number): PathPayload {
-  return { rows, ci: NODE_LEVELS, quiet: false, size }
+/** The payload the painter takes: Vela's Path defaults, the card's size, the theme's paint. */
+export function pathPayloadOf(rows: PathRow[], size: number, skin: 'voltick' | 'cbedge', bars: readonly Bar[]): PathPayload {
+  if (skin === 'voltick') return { rows, ci: NODE_LEVELS, quiet: false, size, skin }
+  // which side of spot a bead is on: its candle's close (bead times are candle opens)
+  const closeAt = new Map(bars.map((b) => [Math.floor(b.t / 1000), b.c]))
+  return { rows, ci: NODE_LEVELS, quiet: false, size, skin, spotAt: (tSec) => closeAt.get(tSec) ?? null }
 }
 
 /** One painter per chart — it memoises each row's growth readings. */

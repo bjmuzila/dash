@@ -29,6 +29,7 @@ import { bindSetups, onStrip, registerSetups, setStripShown, stripShown } from '
 import { bindSymbolPicker, registerSymbolPicker, SYMBOL_ACTION_ID } from '@/pages/vela/symbolPicker'
 import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@/pages/vela/workspaceMenu'
 import { CLOCK_ACTION_ID, registerSessionClock } from '@/pages/vela/sessionClock'
+import { GEX_BASIS_ACTION_ID, bindGexBasis, registerGexBasis } from '@/pages/vela/gexBasisMenu'
 import { replayActive } from '@/pages/vela/replay/clock'
 import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
 import { TIMEFRAMES } from '@/pages/vela/timeframes'
@@ -189,7 +190,11 @@ import '@/pages/vela/vela.css'
 // Brandon, 2026-10-04 (mockup generated/2026-10-04-vela-topbar-r2.html). Vela's
 // `topbar` composition, DESKTOP_TOPBAR below, is the bar's whole contract:
 //
-//   [SPX 7,723.49 +0.71% ▾] | 5m · RTH ▾ | style | ⊞ | Indicators | Replay | ↶ ↷ …  ● RTH closes in 2:14:47  🔔  Workspace ▾ | 📷
+//   [SPX 7,723.49 +0.71% ▾] | 5m · RTH ▾ | style | ⊞ | Indicators | GEX · Vol ▾ | Replay | ↶ ↷ …  ● RTH closes in 2:14:47  🔔  Workspace ▾ | 📷
+//
+//   · GEX    the ONE GEX book every indicator reads, OI only / OI + Vol / Vol only
+//            (pages/vela/gexBasis.ts, gexBasisMenu.ts; Brandon, 2026-10-07). No
+//            study carries its own GEX input any more
 //
 //   · left   our ticker chip (pages/vela/symbolPicker.ts) PINNED where Vela's own
 //            symbol button was; Vela's is left out, and so is its picker:
@@ -300,7 +305,7 @@ const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
  *  list is Vela's whole contract for that side, so chrome a future Vela adds stays off
  *  until it is listed here. */
 const DESKTOP_TOPBAR = {
-  left: [SYMBOL_ACTION_ID, 'timeframes', 'style', 'layout', 'indicators', 'actions', 'undo-redo'],
+  left: [SYMBOL_ACTION_ID, 'timeframes', 'style', 'layout', 'indicators', GEX_BASIS_ACTION_ID, 'actions', 'undo-redo'],
   // ↻ beside the camera: candles, data and the live feed refreshed in place (vela/refreshChart.ts)
   right: [CLOCK_ACTION_ID, 'alerts', WORKSPACE_ACTION_ID, 'screenshot', REFRESH_ACTION_ID],
 }
@@ -323,6 +328,8 @@ registerSetups()
 registerSymbolPicker()
 registerWorkspaceMenu()
 registerSessionClock()
+// one GEX book for every indicator (OI only / OI + Vol / Vol only), beside Indicators
+registerGexBasis()
 // the last-price label in one colour, picked in Chart settings → Symbol (lastPriceColor.ts)
 registerLastPriceColor()
 // a replay reveals history bar by bar, like live bars: script alerts stay quiet meanwhile
@@ -522,6 +529,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     // the desktop bar's ticker chip + picker, and the Workspace menu's Alt keys
     const unbindPicker = onPhone ? () => {} : bindSymbolPicker(ws)
     const unbindWorkspace = onPhone ? () => {} : bindWorkspaceMenu(ws)
+    // the GEX button names the book every indicator is on (vela/gexBasisMenu.ts)
+    const unbindGex = onPhone ? () => {} : bindGexBasis(ws)
     // The legend card on every chart (vela/legend/legendCard.ts), in place of Vela's
     // symbol line and price legend: the class hides those at once, the card's own
     // chunk follows. On the phone it starts folded to one line.
@@ -612,6 +621,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindRefresh()
       unbindPicker()
       unbindWorkspace()
+      unbindGex()
       legendGone = true
       unbindLegend()
       unbindPhone()

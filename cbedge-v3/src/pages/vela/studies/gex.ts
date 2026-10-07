@@ -36,6 +36,7 @@ import { query } from '@/data/api'
 import { loadBasis } from '@/pages/vela/wallsIndicator'
 import { DAY_MS, bool, studyImpl, etDateKey, int, labelAt, money, priceLineOf, seriesOf, sessionKey, sessionsOf, str, type StudyCtx } from './common'
 import { EM_TYPE, GEX_BASIS as BASIS, KEY_TYPE, PROFILE_TYPE } from './index'
+import { chainValue, flipOf, gexBasis } from '@/pages/vela/gexBasis'
 import { columnAt, loadLadder, sessionDates, type Ladder } from './ladder'
 
 /** Voltick's flip mark: ⚡ + VS15, so it draws as TEXT in the flip's colour, never
@@ -260,20 +261,21 @@ export const keyImpl = studyImpl<KeyS, KeyData>({
         if (lastBar) labels.push(labelAt(T, `tag-${key}`, lastBar.time, v + sh, `${title} ${(v + sh).toFixed(2)}`, col, { textColor: col, noFill: true }))
       }
       // Voltick's levels by the definition (data/voltickLevels.ts vtFromLadder),
-      // off this chain's live ladder (OI + vol): ★ Volt = CORE, the top net GEX;
-      // ◆ Coil = the 2nd top net GEX on the Volt's side of spot; ↘ Reversal = the
-      // top net GEX on the other side. The gamma flip is ⚡︎ Flip in its violet.
-      const vt = vtFromLadder(
-        g.rows.map((x) => ({ strike: x.strike, net: x.netGEX + x.netVolGEX })),
-        g.spot,
-        g.core?.strike ?? null,
-      )
+      // off this chain's live ladder on the page's GEX switch (gexBasis.ts):
+      // ★ Volt = CORE, the top net GEX; ◆ Coil = the 2nd top net GEX on the Volt's
+      // side of spot; ↘ Reversal = the top net GEX on the other side. The gamma
+      // flip is ⚡︎ Flip in its violet. The chain's own CORE and flip are OI + Vol,
+      // so on another book both come from the rows instead.
+      const gb = gexBasis()
+      const book = g.rows.map((x) => ({ strike: x.strike, net: chainValue(x.netGEX, x.netVolGEX, gb) }))
+      const vt = vtFromLadder(book, g.spot, gb === 'oivol' ? (g.core?.strike ?? null) : null)
+      const flip = gb === 'oivol' ? g.flip : flipOf(book, g.spot)
       if (s.walls) {
         add('coil', vt.coil, '--color-vt-coil', '◆ Coil', { width: 1.6 })
         add('rev', vt.reversal, '--color-vt-reversal', '↘ Reversal', { width: 1.6 })
       }
       if (s.core) add('core', vt.volt, '--color-vt-volt', '★ Volt', { width: 2 })
-      if (s.flip) add('flip', g.flip, '--color-vt-flip', `${FLIP_MARK} Flip`, { dashed: true })
+      if (s.flip) add('flip', flip, '--color-vt-flip', `${FLIP_MARK} Flip`, { dashed: true })
       if (s.maxPain) add('mp', computeMaxPain(g.rows as GexRow[]), '--color-vt-quiet', 'Max Pain', { dashed: true })
     }
     const w = data.weekly
@@ -351,7 +353,8 @@ function profileRows(c: StudyCtx, data: ProfileData): { rows: GexRow[]; spot: nu
 
 export const profileImpl = studyImpl<ProfileS, ProfileData | null>({
   settings: (i) => ({
-    basis: (BASIS as readonly string[]).includes(str(i.basis, BASIS[0])) ? (str(i.basis, BASIS[0]) as ProfileS['basis']) : BASIS[0],
+    // the page's one GEX switch (gexBasis.ts), not a per-study input (2026-10-07)
+    basis: gexBasis() === 'oi' ? BASIS[1] : gexBasis() === 'vol' ? BASIS[2] : BASIS[0],
     width: int(i.width, 22, 5, 60),
     strikes: int(i.strikes, 30, 5, 120),
     tags: int(i.tags, 3, 0, 10),

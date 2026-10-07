@@ -14,19 +14,26 @@
 // CONSTRUCTED, which is why registerCopyScreenshot() runs at module scope in
 // pages/Vela.tsx, before any workspace exists.
 //
-// The picture is the workspace's own: `ws.screenshot()` — every visible chart
-// in its grid slot, or the one chart — the exact pixels the old button saved.
+// THE PICTURE IS THE SCREEN (2026-10-07, Brandon: "vela screenshot missing gex
+// rail and a few other things. it just shows the main chart"). Vela's own
+// `ws.screenshot()` composites its chart canvases only, so the GEX Rail, the
+// legend cards and every other overlay the page draws as HTML were missing.
+// Now the whole chart grid is captured as it looks (domShot.ts): each chart's
+// canvas stack is that chart's own screenshot, and the overlays sit on top of
+// it where they are on screen. Vela's picture is still the fallback if that
+// capture fails.
 //
-// The clipboard write happens SYNCHRONOUSLY inside the click (the screenshot
-// is synchronous, and the PNG is decoded from its data URL without a fetch),
-// because Safari only allows a clipboard write while the tap's user activation
-// is still live. Where writing an image is not possible — an old browser, a
-// denied permission, a page that is not focused — it falls back to the
-// download it replaced and says so, rather than silently doing nothing.
+// The clipboard write is STARTED inside the click with the PNG as a promise
+// (ClipboardItem takes one), because Safari only allows a clipboard write
+// while the tap's user activation is still live, and the capture takes a
+// moment. Where writing an image is not possible — an old browser, a denied
+// permission, a page that is not focused — it falls back to a download and
+// says so, rather than silently doing nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
+import { domShot } from '@/pages/vela/domShot'
 
 /** The workspace the page has mounted. One at a time: /vela and /m/vela never coexist. */
 let current: VelaWorkspace | null = null
@@ -53,26 +60,92 @@ function pngBlob(dataUrl: string): Blob | null {
   }
 }
 
-function copyScreenshot(ctx: WidgetContext): void {
+/** Vela's own picture (charts only), as a PNG Blob, or null. */
+function velaShot(ctx: WidgetContext): Blob | null {
   const ws = current
   const url = ws ? ws.screenshot() : ctx.chart.renderer.screenshot()
-  if (!url) {
+  return url ? pngBlob(url) : null
+}
+
+/** The chart grid as it looks on screen: Vela's pixels per chart, every overlay on top. */
+async function screenShot(ctx: WidgetContext): Promise<Blob> {
+  const ws = current
+  const grid = ws?.root.querySelector<HTMLElement>('.vela-ws-grid')
+  if (!ws || !grid) throw new Error('no grid')
+  // each cell's canvas stack → that chart's own screenshot, drawn where the stack is
+  const stacks = new Map<Element, { first: HTMLCanvasElement; rect: DOMRect; url: string | null }>()
+  for (const c of ws.cells()) {
+    const cell = ws.cell(c.id)
+    const first = cell?.host.querySelector('canvas')
+    if (!cell || !first) continue
+    let url: string | null = null
+    try {
+      url = cell.chart.renderer.screenshot() || null
+    } catch {
+      url = null
+    }
+    stacks.set(cell.host, { first, rect: first.getBoundingClientRect(), url })
+  }
+  const near = (a: DOMRect, b: DOMRect) =>
+    Math.abs(a.left - b.left) < 1.5 && Math.abs(a.top - b.top) < 1.5 && Math.abs(a.width - b.width) < 1.5 && Math.abs(a.height - b.height) < 1.5
+  return domShot(grid, {
+    // the toast saying "copied", the floating drawing pill: not part of the chart
+    skip: (el) => el.classList.contains('vela-toast') || el.classList.contains('vela-drawpill'),
+    canvas: (cv) => {
+      for (const [host, st] of stacks) {
+        if (!host.contains(cv)) continue
+        if (cv === st.first) return st.url
+        // the rest of the stack is already in the chart's picture
+        if (near(cv.getBoundingClientRect(), st.rect)) return null
+      }
+      return undefined
+    },
+  }).catch(() => {
+    const b = velaShot(ctx)
+    if (!b) throw new Error('nothing to capture')
+    return b
+  })
+}
+
+function download(blob: Blob): void {
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `vela-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.png`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+}
+
+function copyScreenshot(ctx: WidgetContext): void {
+  if (!current && !ctx.chart.renderer.screenshot()) {
     ctx.toast('Nothing to capture yet', 'error')
     return
   }
-  const blob = pngBlob(url)
-  const canWrite =
-    !!blob && typeof ClipboardItem !== 'undefined' && typeof navigator !== 'undefined' && !!navigator.clipboard?.write
+  const shot = screenShot(ctx)
   const fallback = () => {
-    ws?.downloadScreenshot()
-    ctx.toast('Clipboard blocked: screenshot downloaded instead', 'info')
+    void shot
+      .then((b) => {
+        download(b)
+        ctx.toast('Clipboard blocked: screenshot downloaded instead', 'info')
+      })
+      .catch(() => ctx.toast('Nothing to capture yet', 'error'))
   }
-  if (!canWrite || !blob) {
+  const canWrite = typeof ClipboardItem !== 'undefined' && typeof navigator !== 'undefined' && !!navigator.clipboard?.write
+  if (!canWrite) {
+    fallback()
+    return
+  }
+  let item: ClipboardItem
+  try {
+    // the PNG as a promise: the write starts inside the click, the pixels follow
+    item = new ClipboardItem({ 'image/png': shot })
+  } catch {
     fallback()
     return
   }
   navigator.clipboard
-    .write([new ClipboardItem({ 'image/png': blob })])
+    .write([item])
     .then(() => ctx.toast('Screenshot copied to clipboard', 'success'))
     .catch(fallback)
 }

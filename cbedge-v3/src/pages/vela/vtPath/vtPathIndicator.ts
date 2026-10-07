@@ -23,9 +23,10 @@
 // `ctx.pushData`; the layer paints every frame from them.
 //
 // ── Inputs ───────────────────────────────────────────────────────────────────
-//   GEX          Vol only (default) / OI + Vol — which recorded walls the levels
-//                come from. Vol only reads the volume walls, falling back to the
-//                session's per-minute ladder when a slot has none yet (vtPathData)
+//   (GEX)        not an input since 2026-10-07: the page's one GEX switch
+//                (gexBasis.ts: OI only / OI + Vol / Vol only) picks which recorded
+//                walls the levels come from, falling back to the session's
+//                per-minute ladder when that book has no slot yet (vtPathData)
 //   Contracts    0DTE / Non-0DTE — which expiries the walls were computed from
 //   Node levels  boldness, 0–100%, default 15 — Voltick's Node levels slider; 0 hides
 //   Calm chart   Voltick's Calm chart: smaller, quieter marks
@@ -45,12 +46,12 @@ import {
 } from '@luxalgo/vela'
 import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { firstLoadDelay, queuedLoad } from '@/pages/vela/studies/common'
+import { gexBasis, onGexBasis } from '@/pages/vela/gexBasis'
 import { buildPathRows, framesFromWalls, loadWallModels, type WallModels, type WallRead } from './vtPathData'
 import { PATH_TYPE, RIBBON_TYPE, registerVtPathLayers, type PathPayload } from './vtPathLayer'
 
 export { PATH_TYPE, RIBBON_TYPE }
 
-const MAP_OPTS = ['OI + Vol', 'Vol only'] as const
 const SCOPE_OPTS = ['0DTE', 'Non-0DTE'] as const
 const REFRESH_MS = 60_000
 /** The open capture is slot 0 at 09:29 ET. */
@@ -60,14 +61,6 @@ type Shape = 'path' | 'ribbon'
 
 function inputsSchema(shape: Shape): InputSchema[] {
   return [
-    {
-      key: 'map',
-      title: 'GEX',
-      type: 'string',
-      defval: MAP_OPTS[1],
-      options: MAP_OPTS,
-      tooltip: 'Which walls the levels come from: volume-only GEX (default) or open interest + volume.',
-    },
     {
       key: 'scope',
       title: 'Contracts',
@@ -128,8 +121,8 @@ function settingsOf(inputs: Record<string, InputValue>): Settings {
   const n = (v: InputValue | undefined, d: number, lo: number, hi: number) =>
     typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : d
   return {
-    // Vol only unless OI + Vol is picked (2026-10-06: volume is the default, the switch stays)
-    basis: inputs.map === MAP_OPTS[0] ? 'oivol' : 'vol',
+    // the page's one GEX switch (gexBasis.ts), not a per-study input (2026-10-07)
+    basis: gexBasis(),
     scope: inputs.scope === SCOPE_OPTS[1] ? 'agg' : '0dte',
     sessions: n(inputs.sessions, 1, 1, 60),
     ci: n(inputs.boldness, 15, 0, 100) / 100,
@@ -158,10 +151,15 @@ class VtPathIndicator implements NativeIndicator {
   private lastKey = ''
   private suspended = false
   private stopped = false
+  private offGex: (() => void) | null = null
 
   start(ctx: NativeIndicatorContext, inputs: Record<string, InputValue>): void {
     this.ctx = ctx
     this.inputs = inputs
+    // the page's GEX switch: other recorded walls (a hidden study reads them on resume)
+    this.offGex = onGexBasis(() => {
+      if (!this.suspended && !this.stopped) void this.load(false)
+    })
     ctx.emit({})
     // after the chart's candles, through the page's load queue (studies/common.ts)
     void firstLoadDelay().then(() => this.load(false))
@@ -202,6 +200,8 @@ class VtPathIndicator implements NativeIndicator {
   stop(): void {
     this.stopped = true
     this.disarm()
+    this.offGex?.()
+    this.offGex = null
     this.ctx?.pushData(null)
     this.ctx = null
   }

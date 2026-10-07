@@ -61,6 +61,7 @@ import { registerRendererLayer, stableSeriesId, type RendererLayerArgs, type Ren
 import { etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { resolveSym, type ResolvedSym } from '@/pages/vela/cbedgeProvider'
 import { replayClock } from '@/pages/vela/replay/clock'
+import { onGexBasis } from '@/pages/vela/gexBasis'
 
 export const MIN_MS = 60_000
 export const DAY_MS = 86_400_000
@@ -142,6 +143,8 @@ export interface StudyMeta {
   layer?: { cursor?: boolean }
   /** Reads today's numbers only: draws nothing during a bar replay (see the header). */
   liveOnly?: boolean
+  /** Reads GEX on the page's one GEX switch (gexBasis.ts): a change there reloads or repaints it. */
+  gex?: boolean
 }
 
 export interface StudyImpl<S, D> {
@@ -185,6 +188,7 @@ class Study implements NativeIndicator {
   private view: VisibleRange | null = null
   private stopped = false
   private suspended = false
+  private offGex: (() => void) | null = null
 
   constructor(
     private readonly meta: StudyMeta,
@@ -212,6 +216,7 @@ class Study implements NativeIndicator {
   start(ctx: NativeIndicatorContext, inputs: Record<string, InputValue>): void {
     this.ctx = ctx
     this.inputs = inputs
+    if (this.meta.gex) this.offGex = onGexBasis(() => this.onGexBasis())
     if (this.meta.liveOnly && !ctx.live) {
       // replaying: today's numbers would sit on another day's candles. Never `ready`,
       // so every other hook is a no-op until the replay ends and Vela restarts it.
@@ -266,6 +271,16 @@ class Study implements NativeIndicator {
     else this.paint()
   }
 
+  /** The page's GEX switch moved: reload when the data depends on it, else repaint. */
+  private onGexBasis(): void {
+    if (!this.ready || this.stopped || this.suspended) return
+    const c = this.sc()
+    if (!c) return
+    const key = this.spec.dataKey ? this.spec.dataKey(c, this.spec.settings(this.inputs)) : ''
+    if (this.spec.load && key !== this.loadedKey) void this.load(false)
+    else this.paint()
+  }
+
   suspend(): void {
     this.suspended = true
     this.disarm()
@@ -283,6 +298,8 @@ class Study implements NativeIndicator {
   stop(): void {
     this.stopped = true
     this.disarm()
+    this.offGex?.()
+    this.offGex = null
     if (this.paintTimer) clearTimeout(this.paintTimer)
     this.paintTimer = null
     if (this.ready && this.spec.layer) this.ctx?.pushData(null)

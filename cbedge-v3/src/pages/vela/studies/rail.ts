@@ -98,7 +98,8 @@ import { buildRail, type RailLevels } from '@/board/gexCandles/GexRail'
 import { voltickMarks, vtFromLadder, vtLevelsAt, type VoltickMarks } from '@/data/voltickLevels'
 import { uiThemeNow } from '@/design/uiTheme'
 import { bool, int, provideLayer, str, studyImpl, type StudyCtx } from './common'
-import { GEX_BASIS, RAIL_EXPIRIES, RAIL_SIDES, RAIL_STYLES, RAIL_TYPE } from './index'
+import { RAIL_EXPIRIES, RAIL_SIDES, RAIL_STYLES, RAIL_TYPE } from './index'
+import { gexBasis } from '@/pages/vela/gexBasis'
 import { cellAlpha, columnStats, fmtGex } from '@/board/multiGreek/mgMath'
 import { columnsUntil, ladderKey, loadChainLadder, loadRailLadder, sessionDates, type Ladder } from './ladder'
 
@@ -192,10 +193,11 @@ function railDay(c: StudyCtx): string[] {
 
 export const railImpl = studyImpl<RailS, Ladder>({
   settings: (i) => {
-    const b = str(i.basis, GEX_BASIS[2])
+    // the page's one GEX switch (gexBasis.ts), not a per-study input (2026-10-07)
+    const b = gexBasis()
     return {
       side: str(i.side, RAIL_SIDES[0]) === RAIL_SIDES[1] ? 'left' : 'right',
-      metric: b === GEX_BASIS[2] ? 'vol' : b === GEX_BASIS[1] ? 'oi' : 'net',
+      metric: b === 'vol' ? 'vol' : b === 'oi' ? 'oi' : 'net',
       tags: bool(i.tags, true),
       width: int(i.width, 96, 72, 180),
       heat: str(i.style, RAIL_STYLES[0]) === RAIL_STYLES[1],

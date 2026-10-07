@@ -2,10 +2,10 @@
 /**
  * server-v2/scanner-variants.js
  *
- * THE FOUR LEVEL VARIANTS the scanner family records, and the one definition of
+ * THE SIX LEVEL VARIANTS (two scopes × three bases) the scanner family records, and the one definition of
  * what "the default" means. A plain data module — no pg, no fetch, no side
  * effects — so scanner-recorder, walls-recorder and the HTTP layer can all agree
- * on the same four keys without importing each other.
+ * on the same keys without importing each other.
  *
  * TWO AXES, both of which change WHICH strike wins:
  *
@@ -26,6 +26,11 @@
  *     'vol'   netVolGEX alone — only what traded today. Same gamma weighting,
  *             no book. Reads as "where is today's flow building", and it moves
  *             a great deal faster than the OI term.
+ *     'oi'    netGEX alone — open interest only, the gamma already on the book.
+ *             Added 2026-10-07 for Vela's one GEX switch (OI only / OI + Vol /
+ *             Vol only). Free like the others: the same rows ranked on another
+ *             metric. Recorded from the day it shipped; there is no OI-only
+ *             history before that.
  *
  * THE DEFAULT VARIANT IS LOAD-BEARING. `0dte` + `oivol` is what
  * scanner_snapshots has always held and what walls-reach, /proxy/scanner,
@@ -36,7 +41,7 @@
  */
 
 const EXPIRY_SCOPES = ['0dte', 'agg'];
-const BASES = ['oivol', 'vol'];
+const BASES = ['oivol', 'vol', 'oi'];
 
 const DEFAULT_SCOPE = '0dte';
 const DEFAULT_BASIS = 'oivol';
@@ -67,6 +72,7 @@ const SCOPE_LABEL = {
 const BASIS_LABEL = {
   oivol: 'OI + Volume GEX',
   vol: 'Volume-only GEX',
+  oi: 'OI-only GEX',
 };
 
 // ── Aggregate-leg bounds ─────────────────────────────────────────────────────

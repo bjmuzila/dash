@@ -9,7 +9,8 @@
 //             ↘ Reversal                   the top net GEX across price
 //             ⚡︎ Flip                       the zero-gamma strike
 //                                          (all four off the front chain's live
-//                                          ladder, OI + vol, the definition in
+//                                          ladder, on the page's GEX switch
+//                                          (gexBasis.ts), the definition in
 //                                          data/voltickLevels.ts; on ES / NQ the
 //                                          index's chain shifted by the day's
 //                                          basis. If the chain does not answer,
@@ -63,6 +64,7 @@ import { query } from '@/data/api'
 import { chainGexUrl, chainToGex } from '@/board/chainGex'
 import { CbEdgeProvider, resolveSym } from '@/pages/vela/cbedgeProvider'
 import { loadBasis, wallSeriesFor } from '@/pages/vela/wallsIndicator'
+import { chainValue, flipOf, gexBasis } from '@/pages/vela/gexBasis'
 import { vtFromWalls } from '@/pages/levelLog/wallData'
 import { vtFromLadder } from '@/data/voltickLevels'
 import { etDateKey, etMinutesOfDay } from '@/pages/vela/studies/common'
@@ -136,7 +138,9 @@ async function readLevels(sym: string): Promise<LevelRead> {
     return m >= 570 && m < 960
   }
   const todays = bars.filter((b) => etDateKey(b.time) === today)
-  // Voltick's levels by the definition, off the front chain's live ladder (OI + vol)
+  // Voltick's levels by the definition, off the front chain's live ladder, on the
+  // page's GEX switch (gexBasis.ts; OI + vol until 2026-10-07)
+  const gb = gexBasis()
   let vt: { volt: number | null; coil: number | null; reversal: number | null } | null = null
   let flip: number | null = null
   try {
@@ -149,14 +153,12 @@ async function readLevels(sym: string): Promise<LevelRead> {
     }
     if (Number.isFinite(shift)) {
       const at = (v: number | null) => (v == null ? null : v + shift)
-      flip = at(g.flip)
+      // the chain's own CORE and flip are OI + Vol; on another book both come from the rows
+      const book = g.rows.map((x) => ({ strike: x.strike, net: chainValue(x.netGEX, x.netVolGEX, gb) }))
+      flip = at(gb === 'oivol' ? g.flip : flipOf(book, g.spot))
       if (g.rows.length) {
         // the index's own spot judges the sides: the strikes are the index's
-        const d = vtFromLadder(
-          g.rows.map((x) => ({ strike: x.strike, net: x.netGEX + x.netVolGEX })),
-          g.spot,
-          g.core?.strike ?? null,
-        )
+        const d = vtFromLadder(book, g.spot, gb === 'oivol' ? (g.core?.strike ?? null) : null)
         vt = { volt: at(d.volt), coil: at(d.coil), reversal: at(d.reversal) }
       }
     }
@@ -198,12 +200,13 @@ async function readLevels(sym: string): Promise<LevelRead> {
   return { at: Date.now(), levels: out, price }
 }
 
-/** The levels for a symbol, shared for 50 s. */
+/** The levels for a symbol on the page's GEX switch, shared for 50 s. */
 export function levelsFor(sym: string, fresh = false): Promise<LevelRead> {
-  const hit = reads.get(sym)
+  const key = `${sym}|${gexBasis()}`
+  const hit = reads.get(key)
   if (hit && Date.now() - hit.at < (fresh ? 20_000 : 50_000)) return hit.p
   const p = readLevels(sym).catch(() => ({ at: Date.now(), levels: [], price: null }))
-  reads.set(sym, { at: Date.now(), p })
+  reads.set(key, { at: Date.now(), p })
   return p
 }
 
