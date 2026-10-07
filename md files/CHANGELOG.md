@@ -27015,3 +27015,18 @@ Measured: the old `watch_snapshots` DISTINCT ON was #1 (106,777s total, 5.7s avg
 - `Voltick-admin/admin-site/admin.js`: the live customer card is rebuilt as idea 1. Header with the email, account, join date, chips (status, plan, discount code, partner code, online now) and actions: Email, Comp / Extend comp (`POST /api/admin/comp`, then the card redraws), Watch, Ban… or Lift ban, ✕. Four tiles: pays, Stripe · 30d, referred by, right now. A strip only when banned, leaving or a partial (signup-list) card. Two columns: plan & billing, use, Stripe's last 30 days | history timeline with Notes, Admin log, Partner and API keys as tabs, flags, support. Notes box along the foot (Enter adds). Same reads as before, no engine change. The signup-list fallback is drawn in the same layout. Esc now closes the live card.
 - `admin.css`: `.lvc-*` styles; fits 1440×790 with no scrolling in every test case; a long column scrolls inside itself; under 820px wide or 620px tall it stacks.
 - Built on top of the Today's issues change already in the worktree. Engine tests that read admin.js 46/46, escape-check clean, poisoned card 0 leaks. README updated. Rides in the next admin PR, after the history-move engine PR.
+
+## 2026-10-07 — Owner DB map after the move to the VPS: retention for two growing tables, partial-by-design state, VPS note
+
+- `server-v2/state/retention-cleanup.js`:
+  - Two new keep windows:
+    - `strike_growth_expiry`: 30 days (`RETENTION_STRIKE_GROWTH_EXPIRY_DAYS`), by `date`.
+    - `scanner_variants`: 30 days (`RETENTION_SCANNER_VARIANTS_DAYS`). The MAIN lane is kept forever, the same `scanner_keep_symbols` exemption as `scanner_snapshots`, because `/api/core-hold` reads the non-default variants' opening anchors over 60 days.
+  - Both tables are added to the vacuum list.
+- `server-v2/api-router.js` `/api/owner/db-map`:
+  - Policies for both tables.
+  - `partial: true` on `lse_top_flow_prints` ($1M+ whales are never swept) and on `scanner_variants`.
+  - The disk-limit comment now says the database is on the VPS.
+- `owner-vite/src/pages/DbMap.tsx`:
+  - New state "Partial by design" (green) for a partial policy whose span passes the cutoff, so the whale archive is no longer counted as "Not enforced".
+  - The Render gauge note is replaced with a VPS note: the limit is `PG_DISK_LIMIT_BYTES`, and WAL and backups share the disk.

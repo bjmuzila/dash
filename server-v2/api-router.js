@@ -9615,9 +9615,9 @@ if (libDb) {
         try {
           const pool = libDb.getPool();
 
-          // Plan size. Render does not expose it over SQL, so it is a setting
-          // with the current plan as the default; the page needs it only to
-          // draw the "of N GB" denominator.
+          // The room the database has: Postgres runs on the VPS (since
+          // 2026-10-07; before that, Render's 30 GB plan), so this is set to
+          // the VPS disk space it may use. The page draws the "of N GB" from it.
           const limitBytes = Number(process.env.PG_DISK_LIMIT_BYTES || 30 * 1024 ** 3);
 
           let RETENTION = {};
@@ -9642,6 +9642,9 @@ if (libDb) {
             page_visits:                { days: n(RETENTION.page_visits_days, null), owner: 'retention-cleanup' },
             ticker_events:              { days: n(RETENTION.ticker_events_days, null), owner: 'retention-cleanup' },
             etf_candles:                { days: n(RETENTION.etf_candles_days, null), owner: 'retention-cleanup' },
+            strike_growth_expiry:       { days: n(RETENTION.strike_growth_expiry_days, null), owner: 'retention-cleanup' },
+            scanner_variants:           { days: n(RETENTION.scanner_variants_days, null), owner: 'retention-cleanup', partial: true,
+                                          note: 'the MAIN lane is kept forever (as scanner_snapshots); every other ticker purges at the cutoff' },
             // Each of these is pruned by its own recorder. Same env var, same
             // default, so this stays true if one is retuned without a redeploy.
             oi_daily:            { days: Math.max(2, n(process.env.OI_DAILY_RETAIN_DAYS, 45)),            owner: 'oi-daily-recorder' },
@@ -9649,7 +9652,10 @@ if (libDb) {
             eod_strike_gex:      { days: Math.max(3, n(process.env.EOD_STRIKE_GEX_RETAIN_DAYS, 400)),     owner: 'eod-strike-gex-recorder' },
             gex_watch_alerts:    { days: Math.max(30, n(process.env.GEX_WATCH_RETAIN_DAYS, 1095)),        owner: 'gex-watch-recorder' },
             gex_gross_daily:     { days: Math.max(30, n(process.env.GEX_GROSS_RETAIN_DAYS, 1095)),        owner: 'gex-gross-recorder' },
-            lse_top_flow_prints: { days: 7,  owner: 'api-router',
+            // partial: only part of the table ages out, so the oldest row may
+            // legitimately be older than the cutoff (the owner map says so
+            // instead of flagging it "Not enforced").
+            lse_top_flow_prints: { days: 7,  owner: 'api-router', partial: true,
                                    note: `prints >= $${Math.round((Number(process.env.LSE_WHALE_FLOOR) || 500_000) / 1000)}K premium are NEVER swept — they are the /whales archive; everything smaller purges after 7d` },
             mult_greek_gex_open: { days: 3,  owner: 'mult-greek-gex-recorder' },
           };
@@ -16091,13 +16097,100 @@ try {
     // stream does not, and takes over in full the moment the stream drops.
     const WS_MODE = ['shadow', 'live'].includes(String(process.env.LSE_WS_MODE || '').toLowerCase())
       ? String(process.env.LSE_WS_MODE).toLowerCase() : 'off';
-    const WS_UNDERLYINGS = String(process.env.LSE_WS_UNDERLYINGS || 'SPX,SPY,QQQ,NDX,IWM,TSLA,NVDA,AAPL,META,AMZN,MSFT,GOOGL,AMD')
+    // SPX/NDX dropped from the default: not on the stream (see WS_REST_MS).
+    const WS_UNDERLYINGS = String(process.env.LSE_WS_UNDERLYINGS || 'SPY,QQQ,IWM,TSLA,NVDA,AAPL,META,AMZN,MSFT,GOOGL,AMD')
       .split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
-    const WS_REST_MS = Math.max(TF_REFRESH_MS, Number(process.env.LSE_WS_REST_MS) || 60_000);
+    // SPX and NDX are NOT on the stream (shadow run 2026-10-07: "No options
+    // available for SPX"), and they are most of the whale tape. So by default
+    // the REST sweep keeps its full cadence in live mode too; the stream adds
+    // faster, redundant capture for the names it does carry. Raise
+    // LSE_WS_REST_MS only once something else covers the index roots.
+    const WS_REST_MS = Math.max(TF_REFRESH_MS, Number(process.env.LSE_WS_REST_MS) || TF_REFRESH_MS);
     let tfWs = null;
+    // ── Shadow comparison (2026-10-07) ───────────────────────────────────────
+    // Checking a stream print against the REST store the moment it arrives
+    // always misses: the sweep runs every 20s and the vault's REST side lags
+    // the tape. So each stream print is checked SHADOW_LAG_MS later, and REST
+    // prints for the streamed roots are checked against what the stream saw —
+    // both directions, with samples, so a timestamp or size mismatch between
+    // the two sources shows up as numbers rather than as a silent zero.
+    const SHADOW_LAG_MS = 180_000;
+    const shadow = {
+      queue: [], wsFp: new Map(), matched: 0, wsOnly: 0, restChecked: 0, restOnly: 0,
+      checkedUpTo: 0, startedAt: 0, wsOnlySamples: [], restOnlySamples: [],
+    };
+    const shRoot = (u) => (u === 'SPXW' ? 'SPX' : u === 'NDXP' ? 'NDX' : u);
+    function shNearest(r, pool) {
+      let best = null;
+      for (const x of pool) {
+        if (x.osi !== r.osi || x.id === r.id) continue;
+        const dt = Math.abs(x.ts - r.ts);
+        if (dt > 300_000) continue;
+        if (!best || dt < best.dtMs) best = { dtMs: x.ts - r.ts, size: x.size, price: x.price, source: x.source || 'rest' };
+      }
+      return best;
+    }
+    const shSample = (r, nearest) => ({
+      osi: r.osi, at: new Date(r.ts).toISOString(), size: r.size, price: r.price, premium: Math.round(r.premium), nearest,
+    });
+    function shadowCheck() {
+      const now = Date.now();
+      const due = now - SHADOW_LAG_MS;
+      // 1. stream → REST
+      while (shadow.queue.length && shadow.queue[0].ts <= due) {
+        const r = shadow.queue.shift();
+        if (tfFpSeen(r)) shadow.matched += 1;
+        else {
+          shadow.wsOnly += 1;
+          if (shadow.wsOnlySamples.length < 6) shadow.wsOnlySamples.push(shSample(r, shNearest(r, tfState.rows.values())));
+        }
+      }
+      // 2. REST → stream, for the roots the stream actually carries, inside
+      //    the window the stream has been up for.
+      const subscribed = new Set(Object.keys((tfWs && tfWs.status().subscribed) || {}));
+      const from = Math.max(shadow.checkedUpTo, shadow.startedAt + 60_000);
+      if (subscribed.size && shadow.startedAt) {
+        for (const r of tfState.rows.values()) {
+          if (r.source === 'ws' || r.ts <= from || r.ts > due) continue;
+          if (!subscribed.has(shRoot(r.underlying))) continue;
+          shadow.restChecked += 1;
+          const sec = Math.round(r.ts / 1000);
+          const seen = [0, -1, 1].some((d) => shadow.wsFp.has(tfFp(r, sec + d)));
+          if (!seen) {
+            shadow.restOnly += 1;
+            if (shadow.restOnlySamples.length < 6) {
+              const near = shNearest(r, [...shadow.wsFp.values()]);
+              shadow.restOnlySamples.push(shSample(r, near));
+            }
+          }
+        }
+        shadow.checkedUpTo = Math.max(from, due);
+      }
+      // Keep the stream's fingerprint index to the last 15 minutes.
+      for (const [k, r] of shadow.wsFp) { if (r.ts < now - 15 * 60_000) shadow.wsFp.delete(k); else break; }
+    }
+
     /** For /api/lse/status and the whale page's feed block. Hoisted. */
     function tfWsStatus() {
-      return tfWs ? { mode: WS_MODE, ...tfWs.status() } : { mode: WS_MODE };
+      if (!tfWs) return { mode: WS_MODE };
+      const out = { mode: WS_MODE, ...tfWs.status() };
+      if (WS_MODE === 'shadow') {
+        const n = shadow.matched + shadow.wsOnly;
+        out.shadow = {
+          lagMs: SHADOW_LAG_MS,
+          streamPrintsChecked: n,
+          alsoInRest: shadow.matched,
+          streamOnly: shadow.wsOnly,
+          streamOnlySharePct: n ? Math.round((shadow.wsOnly / n) * 1000) / 10 : null,
+          restPrintsChecked: shadow.restChecked,
+          restOnly: shadow.restOnly,
+          restOnlySharePct: shadow.restChecked ? Math.round((shadow.restOnly / shadow.restChecked) * 1000) / 10 : null,
+          streamOnlySamples: shadow.wsOnlySamples,
+          restOnlySamples: shadow.restOnlySamples,
+          pending: shadow.queue.length,
+        };
+      }
+      return out;
     }
     function tfRefreshMs() {
       return WS_MODE === 'live' && tfWs && tfWs.healthy() ? WS_REST_MS : TF_REFRESH_MS;
@@ -16137,7 +16230,11 @@ try {
             const rows = prints.map(tfFromWs).filter(Boolean);
             if (!rows.length) return;
             if (WS_MODE === 'shadow') {
-              tfWs.noteMatchedRest(rows.filter((r) => tfFpSeen(r)).length);
+              if (!shadow.startedAt) shadow.startedAt = Date.now();
+              for (const r of rows) {
+                shadow.queue.push(r);
+                shadow.wsFp.set(tfFp(r, Math.round(r.ts / 1000)), r);
+              }
               return;
             }
             void tfRestore().then(() => {
@@ -16148,6 +16245,10 @@ try {
             });
           },
         });
+        if (WS_MODE === 'shadow') {
+          const shT = setInterval(() => { try { shadowCheck(); } catch (e) { console.warn('[api-router] shadow check:', e && e.message); } }, 30_000);
+          shT.unref?.();
+        }
         console.log(`[api-router] LSE websocket tape: ${WS_MODE} — ${WS_UNDERLYINGS.join(',')}`);
       } catch (e) {
         console.warn('[api-router] LSE websocket tape failed to start:', e && e.message ? e.message : e);

@@ -153,6 +153,17 @@ const RETENTION = {
   mult_greek_static_days:     Number(process.env.RETENTION_MULT_GREEK_STATIC_DAYS || 5),   // created_at-based
   page_visits_days:           Number(process.env.RETENTION_PAGE_VISITS_DAYS || 14),        // created_at-based
   ticker_events_days:         Number(process.env.RETENTION_TICKER_EVENTS_DAYS || 14),       // created_at-based
+  // 2026-10-06 (Brandon, from the owner DB map's "No cutoff at all" list): the
+  // two that grow every session with nothing pruning them. strike_growth_expiry
+  // is the per-expiry call/put totals strike-growth writes every sweep (only the
+  // live scanner and the change-top scorecard's fallback read it, both within
+  // days); scanner_variants is the three non-default level readings, every
+  // sweep. 30 days each, by their own session `date`. scanner_variants keeps
+  // the MAIN lane forever, the same exemption and for the same reason as
+  // scanner_snapshots above: /api/core-hold reads the non-default variants'
+  // opening anchors over its 60-day window.
+  strike_growth_expiry_days:  Number(process.env.RETENTION_STRIKE_GROWTH_EXPIRY_DAYS || 30),
+  scanner_variants_days:      Number(process.env.RETENTION_SCANNER_VARIANTS_DAYS || 30),
 };
 
 let pool = null;
@@ -563,6 +574,16 @@ async function runDeletes(p, { archiveReady = false } = {}) {
   await run('etf_candles',
     `DELETE FROM etf_candles WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.etf_candles_days} days'`);
 
+  await run('strike_growth_expiry',
+    `DELETE FROM strike_growth_expiry WHERE date < CURRENT_DATE - INTERVAL '${RETENTION.strike_growth_expiry_days} days'`);
+
+  // The MAIN lane is kept, as for scanner_snapshots (see RETENTION.scanner_variants_days)
+  await run('scanner_variants',
+    `DELETE FROM scanner_variants
+      WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.scanner_variants_days} days'
+        AND NOT (symbol = ANY($1::text[]))`,
+    [RETENTION.scanner_keep_symbols]);
+
   return results;
 }
 
@@ -571,7 +592,7 @@ const VACUUM_TABLES = [
   'greek_snapshots', 'ticker_wall_snapshots', 'scanner_snapshots',
   'watch_snapshots', 'preview_snapshots', 'home_static_snapshots',
   'mult_greek_static_snapshots', 'page_visits', 'ticker_events',
-  'etf_candles',
+  'etf_candles', 'strike_growth_expiry', 'scanner_variants',
 ];
 
 /** Plain VACUUM (ANALYZE) only — NOT FULL. Safe under any disk condition;

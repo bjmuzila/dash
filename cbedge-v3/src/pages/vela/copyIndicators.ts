@@ -10,18 +10,17 @@
 //   · phone    ⋮ → "Copy indicators to all charts"
 //
 // ── What "copy" means ────────────────────────────────────────────────────────
-// ADDITIVE. Every study on the active chart lands on every other chart in the
-// layout, with the active chart's inputs and visibility; nothing a chart already
-// has is taken off:
-//   · a built-in (native) study the other chart already has (same type) takes the
-//     active chart's settings — CB Walls on 20 sessions makes every chart's CB
-//     Walls 20 sessions — and one it lacks is added
-//   · a script study (RSI, EMA …) is added unless that chart already has one
-//     with identical settings, so pressing twice never doubles anything, and an
-//     EMA 20 beside an EMA 50 copies as both
-//   · a CB Script (pages/vela/script/ — ids `cbs-…`) the same way: added, with
-//     its inputs and hidden flag, unless that chart already runs the same saved
-//     script on the same inputs
+// AN EXACT COPY (Brandon, 2026-10-07: "copy all indicators with only 1 in the top
+// left should make them all just have that 1"). Every other chart in the layout
+// ends up with exactly the active chart's studies, inputs and visibility, and
+// nothing else: a study the active chart does not carry is taken off the others.
+// (It was additive until then, so a chart kept whatever it had before — the CVD
+// and Net Premium panes stayed on every chart after copying a one-study chart.)
+//   · built-in (native) studies and script studies (RSI, EMA …): the other
+//     chart's ledger becomes the active chart's
+//   · CB Scripts (pages/vela/script/ — ids `cbs-…`): one the active chart runs
+//     (same saved script, same inputs) is kept or added; any other is removed
+//   · pressing twice changes nothing the second time
 //
 // ── How ──────────────────────────────────────────────────────────────────────
 // Through each cell's own state seam: `dehydrate()` gives the active chart's
@@ -52,33 +51,14 @@ type NativeEntry = Ledger['natives'][number]
 const nativeType = (e: NativeEntry) => (typeof e === 'string' ? e : e.type)
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
-/** `source`'s studies merged into `target`'s ledger — additive, as described above. */
-export function mergeLedger(target: Ledger, source: Ledger): Ledger {
-  const natives = target.natives.slice()
-  const taken = new Set<number>()
-  for (const s of source.natives) {
-    const t = nativeType(s)
-    const i = natives.findIndex((e, k) => !taken.has(k) && nativeType(e) === t)
-    if (i >= 0) {
-      natives[i] = s
-      taken.add(i)
-    } else {
-      natives.push(s)
-      taken.add(natives.length - 1)
-    }
-  }
-  const manifest = target.manifest.slice()
-  const matched = new Set<number>()
-  for (const s of source.manifest) {
-    const i = manifest.findIndex((e, k) => !matched.has(k) && same(e, s))
-    if (i >= 0) matched.add(i)
-    else {
-      manifest.push(s)
-      matched.add(manifest.length - 1)
-    }
-  }
-  return { natives, manifest }
+/** The ledger every other chart takes: the source's, exactly (see the header). */
+export function copyLedger(source: Ledger): Ledger {
+  return { natives: source.natives.slice(), manifest: source.manifest.slice() }
 }
+
+/** Natives with the same types in the same order, settings and all. */
+const sameNatives = (a: Ledger['natives'], b: Ledger['natives']) =>
+  a.length === b.length && a.every((e, i) => nativeType(e) === nativeType(b[i]!) && same(e, b[i]))
 
 /** The workspace the page has mounted (one at a time — /vela and /m/vela never coexist). */
 let current: VelaWorkspace | null = null
@@ -100,17 +80,26 @@ function scriptsOn(cell: Cell) {
     .map((h) => ({ lib: libIdOf(h.id)!, name: h.title, source: h.source!, inputs: h.inputValues(), hidden: !h.visible }))
 }
 
-/** Put the source chart's CB Scripts on `cell` — the ones it does not already run. Returns how many went on. */
+/**
+ * Make `cell`'s CB Scripts the source chart's: keep the ones it already runs the
+ * same way, add the missing ones, take off the rest. Returns how many changed.
+ */
 function copyScripts(cell: Cell, from: ReturnType<typeof scriptsOn>): number {
-  if (!from.length) return 0
-  const have = scriptsOn(cell)
+  const handles = cell.chart.indicators().filter((h) => !!h.source && libIdOf(h.id) != null)
+  const have = handles.map((h) => ({ h, lib: libIdOf(h.id)!, inputs: h.inputValues() }))
   let n = 0
+  const add: ReturnType<typeof scriptsOn> = []
   for (const s of from) {
-    const i = have.findIndex((h) => h.lib === s.lib && same(h.inputs, s.inputs))
-    if (i >= 0) {
-      have.splice(i, 1)
-      continue
-    }
+    const i = have.findIndex((x) => x.lib === s.lib && same(x.inputs, s.inputs))
+    if (i >= 0) have.splice(i, 1)
+    else add.push(s)
+  }
+  // what is left is not on the source chart
+  for (const x of have) {
+    x.h.remove()
+    n++
+  }
+  for (const s of add) {
     cell.addExternalIndicator({
       name: s.name,
       script: s.source,
@@ -120,6 +109,28 @@ function copyScripts(cell: Cell, from: ReturnType<typeof scriptsOn>): number {
       ...(s.hidden ? { hidden: true } : {}),
     })
     n++
+  }
+  return n
+}
+
+/**
+ * Belt and braces for the exact copy: any built-in study still on `cell` beyond
+ * the source's count of that type is taken off (should the ledger convergence
+ * leave one behind). Returns how many went.
+ */
+function dropExtraNatives(cell: Cell, from: Ledger): number {
+  const left = new Map<string, number>()
+  for (const e of from.natives) left.set(nativeType(e), (left.get(nativeType(e)) ?? 0) + 1)
+  let n = 0
+  for (const h of cell.chart.indicators()) {
+    const t = h.nativeType
+    if (!t) continue
+    const k = left.get(t) ?? 0
+    if (k > 0) left.set(t, k - 1)
+    else {
+      h.remove()
+      n++
+    }
   }
   return n
 }
@@ -135,19 +146,14 @@ export function copyToAll(ctx: WidgetContext): void {
   }
   const from = source.dehydrate().indicators ?? { natives: [], manifest: [] }
   const scripts = scriptsOn(source)
-  if (!from.natives.length && !from.manifest.length && !scripts.length) {
-    ctx.toast('This chart has no indicators to copy', 'info')
-    return
-  }
   let changed = 0
   for (const cell of cells) {
     if (cell === source) continue
     const cur = cell.dehydrate()
     const had = cur.indicators ?? { natives: [], manifest: [] }
-    const next = mergeLedger(had, from)
-    // field by field: a saved ledger's key order is not ours
+    const next = copyLedger(from)
     let moved = false
-    if (!same(next.natives, had.natives) || !same(next.manifest, had.manifest)) {
+    if (!sameNatives(next.natives, had.natives) || !same(next.manifest, had.manifest)) {
       cell.rehydrate({
         indicators: next,
         // a partial state would otherwise reset these two (see the header)
@@ -156,12 +162,13 @@ export function copyToAll(ctx: WidgetContext): void {
       })
       moved = true
     }
+    if (dropExtraNatives(cell, from)) moved = true
     if (copyScripts(cell, scripts)) moved = true
     if (moved) changed++
   }
   ctx.stateChanged()
   ctx.toast(
-    changed ? `Indicators copied to ${changed} chart${changed === 1 ? '' : 's'}` : 'Every chart already has these indicators',
+    changed ? `${changed} chart${changed === 1 ? '' : 's'} now match${changed === 1 ? 'es' : ''} this one` : 'Every chart already has exactly these indicators',
     changed ? 'success' : 'info',
   )
 }

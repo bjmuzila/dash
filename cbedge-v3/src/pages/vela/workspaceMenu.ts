@@ -10,7 +10,12 @@
 //            Session stats strip (a switch)
 //   SCRIPTS  Script editor  Alt+E · Strategy Tester  Alt+B
 //   ALERTS   Level alerts  Alt+A · Script alerts
-//   LAYOUT   Setups · Copy indicators to all charts · Chart settings
+//   LAYOUT   Setups · Copy indicators to all charts · Center today on all charts
+//            Alt+C · Chart settings
+//
+// Copy indicators makes every chart an exact copy of the one you are on
+// (copyIndicators.ts); Center today frames every chart on its newest session,
+// today's bars in the middle (centerToday.ts).
 //
 // Chart settings came here from the bottom strip's ⚙ when the strip went
 // (2026-10-04, sessionClock.ts): it opens the ACTIVE chart's settings dialog.
@@ -38,6 +43,7 @@
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
+import { centerTodayAll } from '@/pages/vela/centerToday'
 import { copyToAll } from '@/pages/vela/copyIndicators'
 import { LEVELS_PANEL_ID } from '@/pages/vela/levels/levelAlertsEntry'
 import { onPhoneRoute } from '@/pages/vela/nav'
@@ -54,6 +60,7 @@ export type WsItem =
   | { kind: 'strip'; id: string; label: string; icon: string }
   | { kind: 'setups'; id: string; label: string; icon: string }
   | { kind: 'copy'; id: string; label: string; icon: string }
+  | { kind: 'center'; id: string; label: string; icon: string; keys?: string }
   | { kind: 'settings'; id: string; label: string; icon: string }
 
 export interface WsGroup {
@@ -91,12 +98,15 @@ export const WS_GROUPS: readonly WsGroup[] = [
     items: [
       { kind: 'setups', id: 'setups', label: 'Setups', icon: 'cb-setups' },
       { kind: 'copy', id: 'copy-indicators', label: 'Copy indicators to all charts', icon: 'cb-copy-ind' },
+      { kind: 'center', id: 'center-today', label: 'Center today on all charts', icon: 'cb-center', keys: 'alt+c' },
       { kind: 'settings', id: 'chart-settings', label: 'Chart settings…', icon: 'gear' },
     ],
   },
 ]
 
 const keyId = (item: WsItem) => `cb.workspace.${item.id}`
+/** A row's Alt shortcut, when it has one. */
+const keysOf = (item: WsItem): string | undefined => (item.kind === 'panel' || item.kind === 'center' ? item.keys : undefined)
 
 let current: VelaWorkspace | null = null
 let registered = false
@@ -114,7 +124,7 @@ export function itemOn(item: WsItem, openPanel: string | undefined): boolean {
 
 /** The shortcut as this platform writes it (`Alt+W`, `⌥W`), from Vela's keymap. */
 export function keyLabel(item: WsItem, ws: VelaWorkspace | null): string | null {
-  if (item.kind !== 'panel' || !item.keys || !ws) return null
+  if (!keysOf(item) || !ws) return null
   return ws.keymap.bindings().find((b) => b.id === keyId(item))?.display[0] ?? null
 }
 
@@ -132,6 +142,9 @@ export function runItem(item: WsItem, ctx: WidgetContext, anchor: HTMLElement | 
       return
     case 'copy':
       copyToAll(ctx)
+      return
+    case 'center':
+      centerTodayAll(ctx, current)
       return
     case 'settings':
       current?.active.chart.renderer.openSettings()
@@ -151,6 +164,8 @@ export function registerWorkspaceMenu(): void {
   if (registered) return
   registered = true
   // four tiles
+  // a candle between two brackets
+  registerIcon('cb-center', svg16('<path d="M3.5 3H2v10h1.5M12.5 3H14v10h-1.5"/><rect x="6.5" y="5" width="3" height="6" rx=".5"/><path d="M8 3v2M8 11v2"/>'))
   registerIcon('cb-workspace', svg16('<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>'))
   registerWidgetAction({
     id: WORKSPACE_ACTION_ID,
@@ -173,11 +188,12 @@ export function bindWorkspaceMenu(ws: VelaWorkspace): () => void {
   const offs: Array<() => void> = []
   for (const g of WS_GROUPS) {
     for (const item of g.items) {
-      if (item.kind !== 'panel' || !item.keys) continue
+      const keys = keysOf(item)
+      if (!keys) continue
       offs.push(
         ws.keymap.register({
           id: keyId(item),
-          keys: item.keys,
+          keys,
           label: item.label,
           category: 'Workspace',
           run: () => runItem(item, ws.context(), null),

@@ -5201,6 +5201,16 @@
   background: var(--vt-popover) !important;
   box-shadow: var(--vt-card-shadow);
 }
+/* The pill steps aside for the legend card (Brandon, 2026-10-07: "i cant x out
+   of key levels cuz that thing is in the way"). On a short chart the card's
+   STUDIES rows reach down to the pill at the bottom centre, and the pill sat on
+   top of a row's ✕. While the pointer is anywhere on the card the pill is gone
+   and lets clicks through; it comes back as soon as the pointer leaves the card. */
+.vela-cell:has(.cb-lc:hover) > div.cb-cc {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 .cb-cc .vela-cc-btn {
   position: relative;
   width: 24px;

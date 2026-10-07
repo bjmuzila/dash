@@ -49,7 +49,9 @@ type AgeRow = {
   /** The newest row, trimmed by the nightly snapshot writer. */
   sample: Record<string, string> | null;
 };
-type Policy = { days: number | null; owner: string; note?: string };
+/** `partial`: only part of the table ages out (whales, the MAIN lane), so a
+ *  span past the cutoff is by design, not a failing prune. */
+type Policy = { days: number | null; owner: string; note?: string; partial?: boolean };
 type DbMap = {
   generatedAt: string;
   db: { sizeBytes: number; limitBytes: number; tableCount: number };
@@ -73,9 +75,10 @@ const dayLabel = (n: number) => (n === 1 ? "1 day" : `${n} days`);
 // A cutoff of N days legitimately holds N, and a weekend gap adds two more.
 const GRACE_DAYS = 3;
 
-type State = "ok" | "over" | "nopolicy" | "stale" | "unknown";
+type State = "ok" | "partial" | "over" | "nopolicy" | "stale" | "unknown";
 const STATE_TEXT: Record<State, string> = {
   ok: "Enforced",
+  partial: "Partial by design",
   over: "Not enforced",
   nopolicy: "No policy",
   stale: "Stale feed",
@@ -83,6 +86,7 @@ const STATE_TEXT: Record<State, string> = {
 };
 const STATE_COLOR: Record<State, string> = {
   ok: OWNER_THEME.green,
+  partial: OWNER_THEME.green,
   over: SOFT_RED,
   nopolicy: OWNER_THEME.orange,
   // Recessive step. No grey exists in this theme, so cyan is the dimmer blue —
@@ -177,7 +181,7 @@ export default function DbMap() {
       if (newestAgeDays != null && newestAgeDays > 14) state = "stale";
       else if (keepDays == null) state = "nopolicy";
       else if (age?.spanDays == null) state = "unknown";
-      else if (age.spanDays > keepDays + GRACE_DAYS) state = "over";
+      else if (age.spanDays > keepDays + GRACE_DAYS) state = policy?.partial ? "partial" : "over";
       else state = "ok";
 
       return { t, policy, age, keepDays, state };
@@ -257,8 +261,8 @@ export default function DbMap() {
           <span>{data ? bytes(data.db.limitBytes) : ""}</span>
         </div>
         <p style={{ fontSize: TYPE.label, color: OWNER_THEME.green, margin: "10px 0 0", lineHeight: 1.55 }}>
-          Render&rsquo;s own gauge reads higher than this — it counts WAL and catalog on the same
-          volume, typically 1&ndash;2&nbsp;GB above the database figure.
+          Postgres runs on the VPS (cbedge-postgres). The limit is the disk room set aside for it
+          (PG_DISK_LIMIT_BYTES); its WAL and the nightly backups share the same disk, so leave headroom.
         </p>
       </Card>
 
