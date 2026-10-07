@@ -99,6 +99,8 @@ interface SignalRow {
   setup?: string
   level_name?: string | null
   level_spx?: number | null
+  /** The underlying's price when the signal fired (a scanner pick: the spot it was picked at). */
+  price_spx?: number | null
   score?: number | null
   confluence?: string | null
   reason?: string | null
@@ -206,7 +208,16 @@ function toItem(row: SignalRow): AlertItem | null {
     // strike and the expiry, and the Δ GEX that got it picked stays in `text`.
     const strike = num(m.strike)
     const exp = shortExpiry(m.expiry)
-    const head = [strike != null ? String(strike) : '', exp].filter(Boolean).join(' ')
+    // ▲ / ▼ — THE STRIKE AGAINST SPOT (2026-10-07, Brandon: "have an arrow for if
+    // its above or below spot"). Spot is the price the pick was taken at — the
+    // engine writes it to `price_spx` beside the strike (signals-engine.js,
+    // evaluateGexChangeTop). Uncoloured on purpose: a pick has no side (the
+    // engine's direction is 'neutral'), so green/red would read as a bias the
+    // scanner never claimed — the arrow says where the strike sits, nothing more.
+    // No arrow without a spot, or on a strike AT spot.
+    const spot = num(row.price_spx)
+    const side = strike != null && spot != null && spot > 0 ? (strike > spot ? '▲' : strike < spot ? '▼' : '') : ''
+    const head = [strike != null ? `${side ? `${side} ` : ''}${strike}` : '', exp].filter(Boolean).join(' ')
     const tail = m.live === true ? 'Live trigger' : 'Scanner pick'
     title = tidy([head, tail].filter(Boolean).join(' · '))
   } else {
