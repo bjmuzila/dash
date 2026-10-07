@@ -16781,6 +16781,10 @@ try {
             /** So the page can say WHY vol/OI are dashes instead of just being blank. */
             liveStats: false,
             error: null,
+            // Snap + live-feed state (2026-10-07) — built once in `empty`.
+            askedTo: empty.askedTo,
+            snapped: empty.snapped,
+            feed: empty.feed,
           });
         } catch (e) {
           whFail();
