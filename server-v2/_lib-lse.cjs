@@ -145,6 +145,19 @@ function tidyBody(text) {
 const DAILY_LIMIT = Math.max(100, Number(process.env.LSE_DAILY_LIMIT) || 15000);
 const SWEEP_RESERVE = Math.max(0, Number(process.env.LSE_SWEEP_RESERVE) || 2500);
 const BREAKER_PROBE_MS = 5 * 60_000;
+/**
+ * PER-MINUTE LIMIT (2026-10-07). The vault ALSO caps calls per minute, and
+ * answers that with a different message ("rate limit exceeded; slow down to
+ * your plan's calls per minute"). That one clears in a minute — treating it as
+ * the daily limit benched a healthy key until midnight. So:
+ *   - a per-minute refusal benches the key for RATE_COOLDOWN_MS only;
+ *   - ordinary calls stop at LSE_PER_MIN − LSE_SWEEP_RESERVE_PER_MIN calls in
+ *     the trailing minute, so the sweep always has room on that key.
+ * LSE_PER_MIN defaults to 50 — set it to the plan's real number if known.
+ */
+const PER_MIN = Math.max(5, Number(process.env.LSE_PER_MIN) || 50);
+const SWEEP_RESERVE_PER_MIN = Math.min(PER_MIN - 1, Math.max(0, Number(process.env.LSE_SWEEP_RESERVE_PER_MIN) || 6));
+const RATE_COOLDOWN_MS = 65_000;
 /** Key index → its state. Keyed by POSITION, never by the key string. */
 const budgets = [];
 let budgetDay = '';
@@ -155,10 +168,13 @@ const nextUtcMidnight = (ms = Date.now()) => {
   const d = new Date(ms);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
 };
-const isLimitError = (status, msg) => status === 429 || /request limit|rate limit|quota/i.test(String(msg || ''));
+/** The DAILY cap — benches the key until the next UTC day. */
+const isDailyLimit = (msg) => /daily|per day|\/day\b|quota/i.test(String(msg || ''));
+/** Any limit at all, daily or per-minute. */
+const isLimitError = (status, msg) => status === 429 || /request limit|rate limit|calls per minute|slow down|quota/i.test(String(msg || ''));
 
 function budgetFor(i) {
-  if (!budgets[i]) budgets[i] = { used: 0, exhaustedUntil: 0, lastProbeAt: 0, lastLimitMsg: null };
+  if (!budgets[i]) budgets[i] = { used: 0, exhaustedUntil: 0, lastProbeAt: 0, lastLimitMsg: null, cooldownUntil: 0, recent: [] };
   return budgets[i];
 }
 
@@ -178,6 +194,13 @@ function budgetRoll() {
  * The key index this request should go out on, or -1. `skip` holds keys this
  * request has already been refused on, so a retry moves down the list.
  */
+/** Calls this key made in the trailing minute. */
+function lastMinute(b) {
+  const cut = Date.now() - 60_000;
+  while (b.recent.length && b.recent[0] < cut) b.recent.shift();
+  return b.recent.length;
+}
+
 function pickKey(count, priority, skip) {
   budgetRoll();
   const sweep = priority === 'sweep';
@@ -185,7 +208,11 @@ function pickKey(count, priority, skip) {
     if (skip.has(i)) continue;
     const b = budgetFor(i);
     if (b.exhaustedUntil) continue;
+    if (b.cooldownUntil && Date.now() < b.cooldownUntil) continue;
     if (!sweep && b.used >= DAILY_LIMIT - SWEEP_RESERVE) continue;
+    const perMin = lastMinute(b);
+    if (perMin >= PER_MIN) continue;
+    if (!sweep && perMin >= PER_MIN - SWEEP_RESERVE_PER_MIN) continue;
     return i;
   }
   // Nothing healthy left: a sweep may probe one tripped key whose wait is up.
@@ -204,6 +231,12 @@ function pickKey(count, priority, skip) {
 
 /** Why nothing could be sent — the message a card shows. */
 function refusalMessage(count) {
+  const cooling = budgets.slice(0, count).some((b) => b && b.cooldownUntil > Date.now());
+  const anyDaily = budgets.slice(0, count).some((b) => b && b.exhaustedUntil);
+  if (cooling && !budgets.slice(0, count).every((b) => b && b.exhaustedUntil)) {
+    return 'LSE per-minute rate limit — retrying shortly';
+  }
+  void anyDaily;
   const tripped = budgets.slice(0, count).find((b) => b && b.exhaustedUntil);
   if (tripped && budgets.slice(0, count).every((b) => b && b.exhaustedUntil)) {
     return count > 1
@@ -226,12 +259,15 @@ function budgetStatus() {
       used: b.used,
       exhausted: Boolean(b.exhaustedUntil),
       exhaustedUntil: b.exhaustedUntil ? new Date(b.exhaustedUntil).toISOString() : null,
+      coolingUntil: b.cooldownUntil > Date.now() ? new Date(b.cooldownUntil).toISOString() : null,
+      lastMinute: lastMinute(b),
       lastLimitMsg: b.lastLimitMsg,
     });
   }
   return {
     day: budgetDay,
     limitPerKey: DAILY_LIMIT,
+    perMinutePerKey: PER_MIN,
     sweepReserve: SWEEP_RESERVE,
     used: keys.reduce((n, k) => n + k.used, 0),
     refused: refusedToday,
@@ -264,7 +300,8 @@ async function vaultGet(path, params = {}, { timeoutMs = 60000, priority = 'norm
     } catch (e) {
       // Only a LIMIT moves on to the next key. Any other failure is the
       // vault's answer to this request, and another key would get it too.
-      if (e && e.status === 429 && budgetFor(i).exhaustedUntil) { skip.add(i); continue; }
+      const b = budgetFor(i);
+      if (e && e.status === 429 && (b.exhaustedUntil || b.cooldownUntil > Date.now())) { skip.add(i); continue; }
       throw e;
     }
   }
@@ -272,6 +309,7 @@ async function vaultGet(path, params = {}, { timeoutMs = 60000, priority = 'norm
 
 async function vaultGetWithKey(path, params, timeoutMs, key, b) {
   b.used += 1;
+  b.recent.push(Date.now());
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === null || v === undefined || v === '') continue;
@@ -302,7 +340,8 @@ async function vaultGetWithKey(path, params, timeoutMs, key, b) {
       ? String(msg).slice(0, 300)
       : `vault ${resp.status} ${resp.statusText || ''}`.trim() + ` for ${path}${tidyBody(text)}`);
     if (isLimitError(resp.status, err.message)) {
-      b.exhaustedUntil = nextUtcMidnight();
+      if (isDailyLimit(err.message)) b.exhaustedUntil = nextUtcMidnight();
+      else b.cooldownUntil = Date.now() + RATE_COOLDOWN_MS;
       b.lastLimitMsg = err.message;
       err.status = 429;
     }
