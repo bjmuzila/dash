@@ -107,7 +107,7 @@ function readBins(url: string): Promise<Bin[] | null> {
 
 export const netPremImpl = studyImpl<NpS, Map<string, Bin[]>>({
   settings: (i) => ({
-    sessions: int(i.sessions, 7, 1, 7),
+    sessions: int(i.sessions, 1, 1, 7),
     legs: bool(i.legs, true),
     otm: bool(i.otm, true),
     minPremium: MIN_PREM_V[Math.max(0, (MIN_PREM as readonly string[]).indexOf(str(i.min, MIN_PREM[0])))] ?? 1_000,
@@ -573,7 +573,7 @@ export const whalesImpl = studyImpl<WhS, WhData>({
     const side = str(i.side, WH_SIDE[0])
     return {
       minPremium: WH_MIN_V[Math.max(0, (WH_MIN as readonly string[]).indexOf(str(i.min, WH_MIN[0])))] ?? 1e6,
-      days: int(i.days, 5, 1, 30),
+      days: int(i.days, 1, 1, 30),
       side: side === WH_SIDE[1] ? 'C' : side === WH_SIDE[2] ? 'P' : 'all',
       cap: WH_CAP_V[Math.max(0, (WH_CAP as readonly string[]).indexOf(str(i.cap, WH_CAP[0])))] ?? 25e6,
       size: int(i.size, 100, 50, 200) / 100,

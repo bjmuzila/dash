@@ -24,9 +24,11 @@ say "Who else is connected to Render right now (anything not on this VPS must be
 psql_render -c "SELECT client_addr, application_name, state, count(*) FROM pg_stat_activity
                  WHERE datname = current_database() AND pid <> pg_backend_pid()
                  GROUP BY 1, 2, 3 ORDER BY 4 DESC"
-echo "This VPS is $(curl -s -4 --max-time 5 ifconfig.me || echo '?')."
+echo "(Render shows every client as an internal 10.x address, so this list can't tell"
+echo " the VPS apart from anything else: the real check runs after the apps are stopped.)"
 echo
 read -r -p "Stop the app and move the database now? Type MOVE: " ok
+ok=$(echo "$ok" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')
 [ "$ok" = MOVE ] || die "cancelled — nothing changed"
 
 restart_on_render() {
@@ -36,9 +38,19 @@ restart_on_render() {
 
 say "Stop the writers: ${APP_SERVICES[*]}"
 docker compose stop "${APP_SERVICES[@]}"
-sleep 5
-echo "Render connections from anything still running:"
-psql_render -At -c "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND state <> 'idle'"
+# With every VPS writer stopped, any connection still open on Render is
+# something else (another app, a laptop script). Its writes after the copy
+# would be lost, so it has to be stopped first — or knowingly accepted.
+sleep 10
+left=$(psql_render -At -c "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'")
+echo "Render connections still open with the VPS apps stopped: $left"
+if [ "${left:-0}" -gt 0 ]; then
+  psql_render -c "SELECT client_addr, application_name, state, now() - backend_start AS connected_for, left(regexp_replace(query, '\s+', ' ', 'g'), 70) AS last_query
+                    FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'"
+  read -r -p "Something else is still connected to Render. Continue anyway? Type YES (anything else = stop and restart on Render): " go
+  go=$(echo "$go" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')
+  if [ "$go" != YES ]; then restart_on_render; die "stopped — still on Render, nothing switched"; fi
+fi
 
 start=$(date +%s)
 if ! copy_render_to_local; then restart_on_render; die "copy failed — still on Render"; fi

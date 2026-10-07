@@ -41,11 +41,14 @@ import { query } from '@/data/api'
 import { chainGexUrl } from '@/board/chainGex'
 import { parseChain, strikeGex, todayEt } from '@/board/multiGreek/mgMath'
 import { gexHistoryDayUrl, parseGexHistory, parseGexHistoryMeta, type GexColumn } from '@/board/gexCandles/gexHistory'
-import { RTH_CLOSE_MIN } from '@/board/gexCandles/candles'
+import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { isPlausibleBasis, type BasisModel } from '@/board/gexCandles/basis'
 import { symbolDef } from '@/board/gexCandles/symbols'
-import { loadBasis } from '@/pages/vela/wallsIndicator'
-import { etDateKey, etMinutesOfDay, type StudyCtx } from './common'
+// wallsData, not wallsIndicator, and only a TYPE from ./common: this file is also
+// read by the home board's GEX Candles card (through vtPath/vtPathData.ts), which
+// must not load Vela — see the header of wallsData.ts.
+import { loadBasis } from '@/pages/vela/wallsData'
+import type { StudyCtx } from './common'
 
 /** Strikes per column: the card's bubble ladder request. */
 const TOP = 30

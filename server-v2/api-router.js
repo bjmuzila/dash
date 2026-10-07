@@ -15124,9 +15124,9 @@ try {
         }
         try {
           const m = await lse.meta();
-          return send(res, 200, { configured: true, reachable: true, meta: m }, { 'Cache-Control': NO_STORE });
+          return send(res, 200, { configured: true, reachable: true, meta: m, budget: lse.budgetStatus() }, { 'Cache-Control': NO_STORE });
         } catch (e) {
-          return send(res, 200, { configured: true, reachable: false, error: String(e?.message ?? e) },
+          return send(res, 200, { configured: true, reachable: false, error: String(e?.message ?? e), budget: lse.budgetStatus() },
             { 'Cache-Control': NO_STORE });
         }
       },
@@ -15803,6 +15803,8 @@ try {
         minPremium: TF_BASE_MIN_PREMIUM, order: 'desc', limit: TF_SWEEP_LIMIT,
         // Not optional — see TF_LOOKBACK_DAYS. Without it the vault 502s.
         start: tfSweepStart(),
+        // Draws on the reserved slice of the daily budget (_lib-lse.cjs).
+        priority: 'sweep',
       })
         .then((rows) => {
           tfMerge(rows);
@@ -16487,6 +16489,9 @@ try {
         let from = YMD.test(rawFrom) ? rawFrom : today;
         let to = YMD.test(rawTo) ? rawTo : today;
         if (from > to) { const t = from; from = to; to = t; }
+        // What was asked before the snap, so the page can say "showing Tuesday —
+        // today has no prints yet" instead of silently relabelling the range.
+        const askedTo = to;
         if (from === to && libDb) { from = to = await whSnapToSession(to); }
 
         const askedFloor = Number(params.get('min_premium'));
@@ -16549,6 +16554,21 @@ try {
           sides,
           maxDte,
           unreadable: { n: 0, premium: 0 },
+          // The live sweep that fills the archive (2026-10-07). When a 1D ask
+          // for today was snapped back, this is why — usually the vault's
+          // daily request limit. Null error = the sweep is healthy.
+          askedTo,
+          snapped: askedTo !== to,
+          feed: {
+            error: tfState.error || null,
+            newestTs: (() => {
+              let n = 0;
+              for (const r of tfState.rows.values()) if (r.ts > n) n = r.ts;
+              return n || null;
+            })(),
+            asOf: tfState.at ? new Date(tfState.at).toISOString() : null,
+            budget: lse && typeof lse.budgetStatus === 'function' ? lse.budgetStatus() : null,
+          },
         };
 
         // ?rows_only=1 (2026-10-06): the print list alone, for the Vela Whale
@@ -17075,6 +17095,15 @@ try {
       };
     };
 
+    // Shared across every viewer and tab (2026-10-07). This route was the
+    // biggest spender of the vault's 15,000/day: the whale page asks for one
+    // contract's bars per row, per tab, every five minutes. The query is
+    // day-granular (start/end are dates), so one answer serves everyone for
+    // CC_TTL_MS; an identical request still in flight is waited on, not sent.
+    const CC_TTL_MS = 5 * 60_000;
+    const CC_CACHE = new Map(); // key -> { at, body }
+    const CC_IN_FLIGHT = new Map(); // key -> Promise<body|null>
+
     register('/api/lse/contract-candles', {
       auth: 'subscriber', methods: ['GET'],
       async handler(req, res) {
@@ -17084,6 +17113,17 @@ try {
         if (!ticker && !underlying) {
           return send(res, 400, { error: 'pass ticker=<OSI>, or underlying + strike + expiry + type' });
         }
+        const ccKey = ['ticker', 'underlying', 'strike', 'expiry', 'type', 'start', 'end', 'limit']
+          .map((k) => params.get(k) || '').join('|');
+        const ccHit = CC_CACHE.get(ccKey);
+        if (ccHit && Date.now() - ccHit.at < CC_TTL_MS) return send(res, 200, ccHit.body, { 'Cache-Control': NO_STORE });
+        const ccRunning = CC_IN_FLIGHT.get(ccKey);
+        if (ccRunning) {
+          const body = await ccRunning.catch(() => null);
+          if (body) return send(res, 200, body, { 'Cache-Control': NO_STORE });
+        }
+        let ccDone = null;
+        CC_IN_FLIGHT.set(ccKey, new Promise((resolve) => { ccDone = resolve; }));
         try {
           const rows = ticker
             ? await lse.optionCandles({
@@ -17114,12 +17154,25 @@ try {
           // 200 with an empty list, NOT an error: the probe reads an empty
           // answer as "the other source's turn" and falls back to
           // /proxy/option-history. A 4xx here would stop that.
-          return send(res, 200, {
-            bars,
-            count: bars.length,
-            source: 'lse-vault',
-          }, { 'Cache-Control': NO_STORE });
-        } catch (e) { return fail(res, e); }
+          const body = { bars, count: bars.length, source: 'lse-vault' };
+          if (CC_CACHE.size > 2000) {
+            for (const [k, v] of CC_CACHE) if (Date.now() - v.at > CC_TTL_MS) CC_CACHE.delete(k);
+          }
+          CC_CACHE.set(ccKey, { at: Date.now(), body });
+          CC_IN_FLIGHT.delete(ccKey);
+          ccDone(body);
+          return send(res, 200, body, { 'Cache-Control': NO_STORE });
+        } catch (e) {
+          CC_IN_FLIGHT.delete(ccKey);
+          ccDone(null);
+          // Budget refusal / vault limit: an EMPTY 200, which the probe reads as
+          // "the other source's turn" and falls through to /proxy/option-history.
+          if (e && e.status === 429) {
+            return send(res, 200, { bars: [], count: 0, source: 'lse-vault', throttled: String(e.message || '') },
+              { 'Cache-Control': NO_STORE });
+          }
+          return fail(res, e);
+        }
       },
     });
 

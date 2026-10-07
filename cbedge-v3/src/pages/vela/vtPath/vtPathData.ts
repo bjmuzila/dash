@@ -70,7 +70,7 @@ import {
   loadWallSlices,
   type DayModel,
   type Write,
-} from '@/pages/vela/wallsIndicator'
+} from '@/pages/vela/wallsData'
 import { holdSizes, pathFill, type FillPt, type PathPt, type PathRole } from './trailruns'
 
 const DAY_MS = 86_400_000

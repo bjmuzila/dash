@@ -103,7 +103,7 @@ export const tpoImpl = studyImpl<TpoS, null>({
   settings: (i) => {
     const row = str(i.row, 'Auto')
     return {
-      sessions: int(i.sessions, 3, 1, 15),
+      sessions: int(i.sessions, 1, 1, 15),
       row: row === 'Auto' ? null : Number(row) || null,
       periodMin: Number(str(i.period, PERIOD_OPTS[0]).split(' ')[0]) || 30,
       va: int(i.va, 70, 50, 95),

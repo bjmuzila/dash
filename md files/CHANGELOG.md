@@ -26998,3 +26998,14 @@ Measured: the old `watch_snapshots` DISTINCT ON was #1 (106,777s total, 5.7s avg
 - The DROP/CREATE ran in about a second (it shows in the Postgres log), but `docker exec -i psql -c …` never returned. With `-i`, the docker client keeps waiting on the terminal's stdin after psql has exited.
 - `db/lib.sh`: `psql_local` / `psql_render` no longer attach stdin (`</dev/null`). New `psql_local_in` / `psql_render_in` attach stdin for SQL piped in (`count_tables`' second stage). The DROP/CREATE, `pg_dump`, `pg_restore`, `vacuumdb` and `pg_isready` calls all run with `</dev/null`.
 - `db/backup.sh`: the same fix for `--restore-test`.
+
+## 2026-10-07 — db/cutover.sh: case-insensitive MOVE, plus a real check for other Render clients
+
+- Typing `move` in lowercase cancelled the cutover. The prompt now accepts any case.
+- Render reports every client as an internal 10.x address, so the "who is connected" list run before the stop couldn't tell the VPS from anything else. Now, 10s after the VPS apps stop, the script counts the Render client connections still open. If any remain, it lists them and asks for `YES` to continue; anything else restarts the apps on Render with nothing switched.
+
+## 2026-10-07 - Voltick: move voltick.io/bzila's stats too, and the buttons go away after
+
+- `Voltick-engine/server/affiliates.js`: every link-ending move is recorded (`affiliate_slug_moves`, codes only). `slugStatus` says where an ending stands; `moveSlugHistory` moves the old code's clicks, referrals (not the holder's own) and unpaid commissions to the new holder's code once, in one transaction; paid commissions stay with their payout. An ending moved before moves were recorded can name its old code once.
+- `server.js`: `GET /api/admin/affiliate-slug`, `POST /api/admin/affiliate-slug/history` (every admin, write guard, audit row, log by code). `adminaudit.js`: money entry. Test: `a-link-ending-moves-to-the-right-account.test.js` now 14 pass; money, audit, slug tests pass.
+- `Voltick-admin/admin-site/admin.js`: Bzila › Your link shows **Move it to your account** only for an ending never moved, **Move the history too** only to its new holder while history is pending (or a pick-the-old-account control for one moved before records), and no buttons for anyone after. README and NEW-ROUTES (14b). Engine PR first, then admin.

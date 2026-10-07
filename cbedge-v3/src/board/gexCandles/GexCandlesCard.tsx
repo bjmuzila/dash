@@ -58,7 +58,10 @@ import { ES_MAX_BASIS, isPlausibleBasis, NO_BASIS, parseBasis, shiftColumns } fr
 import { futuresPairFor } from './futures'
 import { bubbleWindowMax, buildBubbleModel } from './bubbles'
 import { buildRail, GexRail } from './GexRail'
-import { mountEsChart, type EsChartHandle } from './chart'
+import { mountEsChart, type ChartPath, type EsChartHandle } from './chart'
+// TYPES ONLY — the module itself is loaded with import() when the Path is on
+// (see THE VOLTICK PATH below), so none of its code lands in the board's chunk.
+import type { WallModels } from './pathBubbles'
 import { useDailyEm } from '@/data/dailyEm'
 import { readUiTheme } from '@/design/uiTheme'
 
@@ -273,6 +276,25 @@ const ET_DATE = new Intl.DateTimeFormat('en-CA', {
   month: '2-digit',
   day: '2-digit',
 })
+
+/** The lazily-loaded Voltick Path module (pathBubbles.ts). */
+type PathModule = typeof import('./pathBubbles')
+
+/** The Voltick Path re-reads the walls this often while live — the /vela study's cadence (a slot lands every 15 min). */
+const PATH_REFRESH_MS = 60_000
+
+/**
+ * A weekday between the walls' open capture and a few minutes past the close,
+ * ET — when the recorder can have written a new slot. The /vela study's own
+ * test (vtPathIndicator.ts inSession); a futures tape re-reads around the clock
+ * because its overnight beads follow the next expiry's ladder.
+ */
+function pathInSession(now = Date.now()): boolean {
+  const wd = new Date(`${ET_DATE.format(new Date(now))}T12:00:00Z`).getUTCDay()
+  if (wd === 0 || wd === 6) return false
+  const m = etMinutesOfDay(now)
+  return m >= 9 * 60 + 24 && m <= RTH_CLOSE_MIN + 5
+}
 
 // `dteLabel` lived here — it labelled the rows of the expiry dropdown (`0DTE`,
 // `3DTE`). The dropdown is gone (the card follows the nearest expiration and
@@ -1246,6 +1268,76 @@ export function GexCandlesCard({
 
   useEffect(() => apply((h) => h.setSnapshots(snapshots)), [snapshots, apply])
 
+  // ── THE VOLTICK PATH ───────────────────────────────────────────────────────
+  // 2026-10-07, Brandon: "i want the same bubbles and logic as the vela bubbles"
+  // — the Voltick Path study on /vela. Not a re-implementation: pathBubbles.ts
+  // calls the study's own data code (vtPath/vtPathData.ts — the recorded walls,
+  // renamed Volt / Coil / Reversal / Surge, one frame per candle) and its own
+  // painter (vtPath/pathDraw.ts), so this card and /vela draw the same beads.
+  //
+  // Its own read, not the ladder above: the Path is built from walls_log (the
+  // Level Log's wall migration), which is what the study reads. The card's GEX
+  // basis switch picks the book (Vol+OI → OI + Vol walls, Vol → volume-only),
+  // every session the card shows is loaded, and on a futures tape the walls ride
+  // the session basis exactly as on an ES chart in /vela.
+  //
+  // LIVE, THE READ DOES NOT WAIT FOR THE CANDLES (non-negotiable 3): its depth is
+  // the Days setting plus one — the extra session is the one a futures tape's
+  // overnight candles carry — so it fires at mount beside the candle request. A
+  // replay reaches back to the replayed day, which it knows once the tape does. Rows are rebuilt against the bars the chart is drawing — which in a
+  // replay are the bars up to the cursor, so a rewound chart never shows a bead
+  // from after it.
+  const pathOn = (VOLTICK_THEME || settings.bubblesOn) && settings.bubbleStyle === 'path'
+  const pathSymbol = useFut && futPair ? futPair.fut : symbol
+  const pathBasis: 'oivol' | 'vol' = settings.gexMetric === 'vol' ? 'vol' : 'oivol'
+  const pathFromDay = replayOn ? activeDay : null
+  const pathSessions = replayOn ? 1 : settings.tapeDays + 1
+  const pathKey =
+    pathOn && pathFromDay !== '' ? `${pathSymbol}|${pathBasis}|${pathSessions}|${pathFromDay ?? 'live'}` : ''
+  const [pathLoaded, setPathLoaded] = useState<{ key: string; mod: PathModule; models: WallModels } | null>(null)
+  /** One painter for the life of the card — it memoises each row's growth readings. */
+  const pathPainterRef = useRef<ChartPath['painter'] | null>(null)
+  useEffect(() => {
+    if (!pathKey) return
+    let stopped = false
+    const read = { symbol: pathSymbol, basis: pathBasis, sessions: pathSessions, fromDay: pathFromDay }
+    const load = (fresh: boolean) =>
+      import('./pathBubbles')
+        .then(async (mod) => {
+          const models = await mod.loadPathModels(read, fresh)
+          if (!stopped) setPathLoaded({ key: pathKey, mod, models })
+        })
+        .catch(() => {
+          /* keep what is drawn; the next refresh tries again */
+        })
+    void load(false)
+    // A settled replay session's walls do not move, so it reads once.
+    const id =
+      replayOn && !replayDayIsToday
+        ? null
+        : setInterval(() => {
+            if (typeof document !== 'undefined' && document.hidden && !isOwner) return
+            if (!useFut && !pathInSession()) return
+            void load(true)
+          }, PATH_REFRESH_MS)
+    return () => {
+      stopped = true
+      if (id) clearInterval(id)
+    }
+  }, [pathKey, pathSymbol, pathBasis, pathSessions, pathFromDay, replayOn, replayDayIsToday, useFut, isOwner])
+
+  const pathPaint = useMemo<ChartPath | null>(() => {
+    // `key` must match: rows from the previous symbol / book are never drawn
+    // over this one's candles while its read is in flight
+    if (!pathOn || !pathLoaded || pathLoaded.key !== pathKey) return null
+    const rows = pathLoaded.mod.pathRowsFor(bars, settings.interval * 60_000, pathLoaded.models)
+    if (!rows) return null
+    const painter = (pathPainterRef.current ??= pathLoaded.mod.createPathPainter())
+    return { payload: pathLoaded.mod.pathPayloadOf(rows, settings.bubbleScale), painter }
+  }, [pathOn, pathLoaded, pathKey, bars, settings.interval, settings.bubbleScale])
+
+  useEffect(() => apply((h) => h.setPath(pathPaint)), [pathPaint, apply])
+
   // ── CORE / CW / PW on the pane ─────────────────────────────────────────────
   // `railModel.levels`, not a second calculation: the tags on the chart and the
   // tags on the rail are the same three strikes off the same newest column, so
@@ -1457,11 +1549,12 @@ export function GexCandlesCard({
       apply((h) =>
         h.setDrawOpts({
           on: VOLTICK_THEME || settings.bubblesOn,
+          style: settings.bubbleStyle,
           bucketMin: isAutoBucket(settings.bubbleBucket) ? null : settings.bubbleBucket,
           bubbleScale: settings.bubbleScale,
         }),
       ),
-    [settings.bubblesOn, settings.bubbleBucket, settings.bubbleScale, apply],
+    [settings.bubblesOn, settings.bubbleStyle, settings.bubbleBucket, settings.bubbleScale, apply],
   )
 
   // ── Countdown ──────────────────────────────────────────────────────────────
@@ -1770,7 +1863,11 @@ export function GexCandlesCard({
                     label="Bubbles"
                     on={settings.bubblesOn}
                     onClick={() => patch({ bubblesOn: !settings.bubblesOn })}
-                    title="Draw the GEX ladder over the candles"
+                    title={
+                      settings.bubbleStyle === 'path'
+                        ? 'Draw the Voltick Path over the candles — the same bubbles as the Voltick Path study on the Vela chart'
+                        : 'Draw the GEX ladder over the candles'
+                    }
                   />
                   {/* Off the phone sheet entirely: the rail is suppressed on a
                       phone (see railOn), and a toggle that changes nothing you
@@ -1870,6 +1967,21 @@ export function GexCandlesCard({
                 />
               </PanelSection>
 
+              {/* Path is the Vela chart's Voltick Path study, drawn by its own
+                  code (pathBubbles.ts); Classic is this card's ladder trail. */}
+              <PanelSection title="Bubbles">
+                <SegGroup
+                  size={ctlSize}
+                  title="Path: the Voltick Path, exactly as the Vela chart draws it — one bubble per level per candle, ★ Volt in lit gold, ↘ Reversal, ◆ Coil, ↯ Surge, at the strike each level held then and growing with its GEX through the session. Built from the recorded walls (the Level Log's wall migration). Classic: this card's own trail of the biggest GEX strikes in each bucket"
+                  options={[
+                    { label: 'Path', value: 'path' },
+                    { label: 'Classic', value: 'classic' },
+                  ]}
+                  value={settings.bubbleStyle}
+                  onChange={(v) => patch({ bubbleStyle: v })}
+                />
+              </PanelSection>
+
               {/* Auto = one bubble per BAR, so the interval picker in the header
                   is the control most people want and this one is the override:
                   read 1m gamma under 15m candles, or hold a 5m cadence on 1m
@@ -1879,11 +1991,14 @@ export function GexCandlesCard({
                 <SegGroup
                   size={ctlSize}
                   title="How much time one bubble covers. Auto follows the bar interval — one bubble per candle, capped at 5m — so switching 1m/5m up in the header moves the bubbles with it. 1m and 5m pin the bucket instead, which is for reading sub-bar detail under coarser candles. Either way the zoom only thins what is drawn: at a wide zoom a 1m bucket still draws every Nth"
-                  options={[
-                    { label: 'Auto', value: 'auto' },
-                    { label: '1m', value: '1' },
-                    { label: '5m', value: '5' },
-                  ]}
+                  options={(['auto', '1', '5'] as const).map((value) => ({
+                    label: value === 'auto' ? 'Auto' : `${value}m`,
+                    value,
+                    // The Path is one bubble per level per CANDLE, as on Vela —
+                    // there is no bucket to pick. Dimmed, not hidden.
+                    disabled: settings.bubbleStyle === 'path',
+                    title: settings.bubbleStyle === 'path' ? 'Classic bubbles only — the Path draws one bubble per candle' : undefined,
+                  }))}
                   value={isAutoBucket(settings.bubbleBucket) ? 'auto' : String(settings.bubbleBucket)}
                   onChange={(v) => patch({ bubbleBucket: v === 'auto' ? 'auto' : v === '1' ? 1 : 5 })}
                 />
@@ -1895,7 +2010,11 @@ export function GexCandlesCard({
               <PanelSection title="Bubble size">
                 <Slider
                   label="Size"
-                  title="Scales every mark together — cap, floor, the top mark's boost and its ring — against the room the zoom leaves them. 1.0 is the tuned default. Above it the marks can start to touch at a wide zoom, which is the same trade the manual 1m/5m bucket offers: you asked for detail and accepted the crowding to get it"
+                  title={
+                    settings.bubbleStyle === 'path'
+                      ? "Scales every Path bubble together — the Vela study's Bubble size %. 1.0 is its default; above it, zoomed out, the bubbles move to every Nth candle rather than overlap"
+                      : "Scales every mark together — cap, floor, the top mark's boost and its ring — against the room the zoom leaves them. 1.0 is the tuned default. Above it the marks can start to touch at a wide zoom, which is the same trade the manual 1m/5m bucket offers: you asked for detail and accepted the crowding to get it"
+                  }
                   value={settings.bubbleScale}
                   min={BUBBLE_SCALE_MIN}
                   max={BUBBLE_SCALE_MAX}
@@ -2162,7 +2281,7 @@ export function GexCandlesCard({
                 replayOn ? 'top-14' : 'top-1.5',
               ].join(' ')}
             >
-              no GEX history in view
+              {settings.bubbleStyle === 'path' ? 'no Voltick Path in view' : 'no GEX history in view'}
             </span>
           )}
 

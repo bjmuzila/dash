@@ -29,7 +29,7 @@
 //   Contracts    0DTE / Non-0DTE — which expiries the walls were computed from
 //   Node levels  boldness, 0–100%, default 15 — Voltick's Node levels slider; 0 hides
 //   Calm chart   Voltick's Calm chart: smaller, quieter marks
-//   Sessions     how many recorded sessions to draw, newest first (1–60, default 10)
+//   Sessions     how many recorded sessions to draw, newest first (1–60, default 1)
 //   Bubble size / Ribbon thickness   CB Edge only: 50–300%, default 100 — scales
 //                every bubble (Path) or band (Ribbon). See vtPathLayer.ts for the
 //                zoomed-out floors that keep both readable at default size.
@@ -91,7 +91,7 @@ function inputsSchema(shape: Shape): InputSchema[] {
       key: 'sessions',
       title: 'Sessions',
       type: 'int',
-      defval: 10,
+      defval: 1,
       min: 1,
       max: 60,
       step: 1,
@@ -131,7 +131,7 @@ function settingsOf(inputs: Record<string, InputValue>): Settings {
     // Vol only unless OI + Vol is picked (2026-10-06: volume is the default, the switch stays)
     basis: inputs.map === MAP_OPTS[0] ? 'oivol' : 'vol',
     scope: inputs.scope === SCOPE_OPTS[1] ? 'agg' : '0dte',
-    sessions: n(inputs.sessions, 10, 1, 60),
+    sessions: n(inputs.sessions, 1, 1, 60),
     ci: n(inputs.boldness, 15, 0, 100) / 100,
     quiet: inputs.calm === true,
     size: n(inputs.size, 100, 50, 300) / 100,

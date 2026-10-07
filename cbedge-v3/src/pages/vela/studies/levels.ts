@@ -108,7 +108,7 @@ export const priorImpl = studyImpl<PriorS, RefLevels | null>({
     month: bool(i.month, false),
     close: bool(i.close, true),
     full: str(i.basis, BASIS_OPTS[0]) === BASIS_OPTS[1],
-    sessions: int(i.sessions, 10, 1, 120),
+    sessions: int(i.sessions, 1, 1, 120),
     tags: bool(i.tags, true),
   }),
   dataKey: (c) => c.sym.key,
@@ -248,7 +248,7 @@ export const ibImpl = studyImpl<IbS, IbStats | null>({
     minutes: Number(str(i.window, IB_WINDOWS[0]).split(' ')[0]) || 60,
     ext: bool(i.ext, true),
     mid: bool(i.mid, true),
-    sessions: int(i.sessions, 5, 1, 60),
+    sessions: int(i.sessions, 1, 1, 60),
     stats: bool(i.stats, true),
   }),
   dataKey: (c, s) => `${c.sym.fut ?? ''}|${s.stats}`,
@@ -360,7 +360,7 @@ async function extendedTape(c: StudyCtx): Promise<{ bars: Bar[]; fut: boolean; b
 }
 
 export const overnightImpl = studyImpl<OnS, OnData>({
-  settings: (i) => ({ mid: bool(i.mid, false), sessions: int(i.sessions, 5, 1, 8), tags: bool(i.tags, true) }),
+  settings: (i) => ({ mid: bool(i.mid, false), sessions: int(i.sessions, 1, 1, 8), tags: bool(i.tags, true) }),
   dataKey: (c) => c.sym.key,
   load: async (c) => {
     const { bars, fut, basis } = await extendedTape(c)

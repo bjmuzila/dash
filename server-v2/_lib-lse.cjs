@@ -99,15 +99,97 @@ function tidyBody(text) {
   return ` — ${flat.slice(0, 200)}`;
 }
 
+// ---------------------------------------------------------------------------
+// Daily request budget (2026-10-07)
+// ---------------------------------------------------------------------------
+//
+// The vault key is capped at LSE_DAILY_LIMIT requests a day (15,000 as of
+// 2026-10-07). On 2026-10-07 the cap was gone by 09:40 ET — the whale page's
+// "high since print" column had fetched candles per contract, per tab, every
+// five minutes, overnight — and the Top Flow sweep that feeds the whale
+// archive was refused for the rest of the day. 1D then snapped back to the
+// previous session and looked "stuck on yesterday".
+//
+// Two guards, both in this process only (a restart starts the count over, so
+// the soft cap is approximate by design — the breaker is the hard stop):
+//
+//   SOFT CAP  Ordinary calls stop at LSE_DAILY_LIMIT − LSE_SWEEP_RESERVE.
+//             The reserve is kept for priority:'sweep' calls (the Top Flow
+//             poller, ~1,250 a session).
+//   BREAKER   Once the vault says the limit is reached, nothing is sent until
+//             the next UTC day, except one sweep probe every 5 minutes so a
+//             reset is picked up without waiting for midnight.
+//
+// The day is counted in UTC because that is the likeliest reset boundary; the
+// breaker's probe covers the case where the vault resets on another clock.
+const DAILY_LIMIT = Math.max(100, Number(process.env.LSE_DAILY_LIMIT) || 15000);
+const SWEEP_RESERVE = Math.max(0, Number(process.env.LSE_SWEEP_RESERVE) || 2500);
+const BREAKER_PROBE_MS = 5 * 60_000;
+const budget = { day: '', used: 0, refused: 0, exhaustedUntil: 0, lastProbeAt: 0, lastLimitMsg: null };
+
+const utcDay = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 10);
+const nextUtcMidnight = (ms = Date.now()) => {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+};
+const isLimitError = (status, msg) => status === 429 || /request limit|rate limit|quota/i.test(String(msg || ''));
+
+function budgetRoll() {
+  const d = utcDay();
+  if (budget.day !== d) {
+    budget.day = d;
+    budget.used = 0;
+    budget.refused = 0;
+  }
+  if (budget.exhaustedUntil && Date.now() >= budget.exhaustedUntil) budget.exhaustedUntil = 0;
+}
+
+/** Throws a 429 LseError instead of spending a request the budget cannot afford. */
+function budgetGate(priority) {
+  budgetRoll();
+  const sweep = priority === 'sweep';
+  if (budget.exhaustedUntil) {
+    if (sweep && Date.now() - budget.lastProbeAt >= BREAKER_PROBE_MS) {
+      budget.lastProbeAt = Date.now();
+      return; // one probe through — a success clears the breaker
+    }
+    budget.refused += 1;
+    throw new LseError(429, budget.lastLimitMsg || 'LSE daily request limit reached');
+  }
+  if (!sweep && budget.used >= DAILY_LIMIT - SWEEP_RESERVE) {
+    budget.refused += 1;
+    throw new LseError(429, `LSE request budget held for the live sweep (${budget.used}/${DAILY_LIMIT} used today)`);
+  }
+}
+
+/** Read-only view for status routes and logs. */
+function budgetStatus() {
+  budgetRoll();
+  return {
+    day: budget.day,
+    used: budget.used,
+    limit: DAILY_LIMIT,
+    sweepReserve: SWEEP_RESERVE,
+    refused: budget.refused,
+    exhausted: Boolean(budget.exhaustedUntil),
+    exhaustedUntil: budget.exhaustedUntil ? new Date(budget.exhaustedUntil).toISOString() : null,
+    lastLimitMsg: budget.lastLimitMsg,
+  };
+}
+
 /**
  * GET a vault path. `params` is an object; null/undefined/'' entries are dropped
  * (the SDK does the same, and an empty `start=` is a 400 upstream).
+ *
+ * `priority: 'sweep'` marks the Top Flow poller — see the budget note above.
  */
-async function vaultGet(path, params = {}, { timeoutMs = 60000 } = {}) {
+async function vaultGet(path, params = {}, { timeoutMs = 60000, priority = 'normal' } = {}) {
   const key = apiKey();
   if (!key) {
     throw new LseError(503, 'LSE_API_KEY is not set on this server');
   }
+  budgetGate(priority);
+  budget.used += 1;
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === null || v === undefined || v === '') continue;
@@ -134,10 +216,18 @@ async function vaultGet(path, params = {}, { timeoutMs = 60000 } = {}) {
       const j = JSON.parse(text);
       msg = j.detail || j.message || null;
     } catch { /* upstream returned non-JSON — handled by tidyBody() below */ }
-    throw new LseError(resp.status, msg
+    const err = new LseError(resp.status, msg
       ? String(msg).slice(0, 300)
       : `vault ${resp.status} ${resp.statusText || ''}`.trim() + ` for ${path}${tidyBody(text)}`);
+    if (isLimitError(resp.status, err.message)) {
+      budget.exhaustedUntil = nextUtcMidnight();
+      budget.lastLimitMsg = err.message;
+      err.status = 429;
+    }
+    throw err;
   }
+  // A good answer while the breaker is set means the vault has reset.
+  if (budget.exhaustedUntil) { budget.exhaustedUntil = 0; budget.lastLimitMsg = null; }
   try {
     return JSON.parse(text);
   } catch {
@@ -432,7 +522,7 @@ async function optionsChain({ underlying, type, expiry, strike, strikeMin, strik
 }
 
 /** Option prints (time and sales) — trailing week. Omit underlying to sweep all. */
-async function optionsFlow({ underlying, type, minPremium, expiry, maxDte, start, end, order = 'desc', limit } = {}) {
+async function optionsFlow({ underlying, type, minPremium, expiry, maxDte, start, end, order = 'desc', limit, priority } = {}) {
   const params = { order, limit: clampLimit(limit), start, end };
   if (underlying) params.underlying = await resolveUnderlying(underlying);
   const t = normType(type);
@@ -440,7 +530,7 @@ async function optionsFlow({ underlying, type, minPremium, expiry, maxDte, start
   if (minPremium !== undefined && minPremium !== null && minPremium !== '') params.min_premium = minPremium;
   if (expiry) params.expiry = expiry;
   if (maxDte !== undefined && maxDte !== null && maxDte !== '') params.max_dte = parseInt(maxDte, 10);
-  return withTimestamp(isoify(await vaultGet('/options/flow', params, { timeoutMs: 90000 })));
+  return withTimestamp(isoify(await vaultGet('/options/flow', params, { timeoutMs: 90000, priority })));
 }
 
 // ── flow row shape helpers ──────────────────────────────────────────────────
@@ -666,6 +756,7 @@ module.exports = {
   CATEGORY_LABELS,
   LseError,
   hasKey,
+  budgetStatus,
   vaultGet,
   catalog,
   datasets,

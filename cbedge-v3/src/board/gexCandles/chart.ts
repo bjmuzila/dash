@@ -29,6 +29,9 @@ import { BUBBLES } from './settings'
 import { tokenHexAlpha } from '@/design/theme'
 import type { DailyEmBand } from '@/data/dailyEm'
 import { VT_LEVELS, type VoltickMarks } from '@/data/voltickLevels'
+// TYPES ONLY: the Voltick Path's painter and rows arrive through setPath() from
+// the lazily-loaded pathBubbles.ts, so none of the Path's code is in this chunk.
+import type { Geo as PathGeo, PathPayload } from '@/pages/vela/vtPath/pathDraw'
 
 /**
  * Read one design token off the mounted element.
@@ -192,6 +195,13 @@ export interface ChartDrawOpts {
   /** Master on/off for the bubble layer. */
   on: boolean
   /**
+   * Which bubbles: 'path' — the Voltick Path, the /vela study's beads and logic
+   * (setPath; see pathBubbles.ts) — or 'classic', this card's own GEX ladder
+   * trail (setSnapshots; bubbles.ts). `bucketMin` only means anything on
+   * 'classic': the Path is one bead per level per CANDLE, as on /vela.
+   */
+  style: 'path' | 'classic'
+  /**
    * Pin the bubble bucket to a rung, in minutes, or null to follow the BAR
    * INTERVAL (the default — see reportBucket).
    *
@@ -209,6 +219,17 @@ export interface ChartDrawOpts {
    * for where it lands and why it scales the spacing share too.
    */
   bubbleScale: number
+}
+
+/**
+ * THE VOLTICK PATH, ready to paint: the rows and settings (`payload`) and the
+ * painter that draws them (vtPath/pathDraw.ts's PathDraw — the same class the
+ * /vela layer paints with). Handed over together so this chunk carries no Path
+ * code of its own: the card loads both lazily.
+ */
+export interface ChartPath {
+  payload: PathPayload
+  painter: { draw: (g: PathGeo, d: PathPayload) => boolean }
 }
 
 /**
@@ -257,6 +278,8 @@ export interface EsChartHandle {
    */
   setIntervalMs: (ms: number) => void
   setSnapshots: (snaps: BubbleSnapshot[]) => void
+  /** The Voltick Path (drawn when `ChartDrawOpts.style` is 'path'). `null` clears it. */
+  setPath: (path: ChartPath | null) => void
   setDrawOpts: (opts: ChartDrawOpts) => void
   /**
    * The CORE / CW / PW tags on the pane. `null` clears the layer.
@@ -582,7 +605,9 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
 
   let snaps: BubbleSnapshot[] = []
   let barCount = 0
-  let drawOpts: ChartDrawOpts = { on: true, bucketMin: null, bubbleScale: 1 }
+  let drawOpts: ChartDrawOpts = { on: true, style: 'path', bucketMin: null, bubbleScale: 1 }
+  /** The Voltick Path's rows and painter. null = not loaded yet, or nothing recorded. */
+  let pathPaint: ChartPath | null = null
   let railSink: RailSink | null = null
   /** CORE / CW / PW on the pane. null = the layer is off or has nothing yet. */
   let levels: ChartLevels | null = null
@@ -1069,6 +1094,22 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       probeP0 = m0?.strike ?? 0
       probeP1 = m1?.strike ?? probeP0
     }
+    // No classic ladder (the Path draws off the walls, not the ladder): its own
+    // lowest and highest bead
+    if (!(probeP0 > 0) && pathPaint) {
+      let lo = Infinity
+      let hi = -Infinity
+      for (const r of pathPaint.payload.rows) {
+        for (const q of r.fill) {
+          if (q.p < lo) lo = q.p
+          if (q.p > hi) hi = q.p
+        }
+      }
+      if (Number.isFinite(lo)) {
+        probeP0 = lo
+        probeP1 = hi
+      }
+    }
     if (!(probeP0 > 0) && live) {
       probeP0 = live.low
       probeP1 = live.high
@@ -1378,7 +1419,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       ctx.restore()
     }
 
-    if (!drawOpts.on || !snaps.length) {
+    const pathStyle = drawOpts.style === 'path'
+    if (!drawOpts.on || (pathStyle ? !pathPaint : !snaps.length)) {
       // Off, or nothing loaded yet. Neither is "out of range" — the note exists
       // to explain an EMPTY layer that has data, not a layer that is switched
       // off or still loading.
@@ -1446,6 +1488,34 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     // whole size signal gone. The interval still moves the bubbles either way,
     // because the BUCKET is what changed; the stride only decides how many of
     // them are legible, and 11px is the answer to that.
+    // ── THE VOLTICK PATH ─────────────────────────────────────────────────────
+    // The /vela painter, handed this chart's scales in its own terms (seconds in,
+    // pixels out — vtPathLayer.ts passes Vela's coords the same way). A bead's
+    // time is its candle's open, so xOfTime lands it on the candle's centre, as
+    // Vela's timeToX does. Clipped to the PLOT: the overlay spans the price axis
+    // and the time axis too, and the painter only culls by x.
+    if (pathStyle && pathPaint) {
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(0, 0, plotW, plotH)
+      ctx.clip()
+      const drewPath = pathPaint.painter.draw(
+        {
+          ctx,
+          X: (tSec: number) => geo.xOfTime(tSec * 1000) ?? Number.NaN,
+          Y: (p: number) => yOfPrice(p) ?? Number.NaN,
+          width: plotW,
+          height: plotH,
+          bs: barSpacing,
+          barSec: intervalMs / 1000,
+        },
+        pathPaint.payload,
+      )
+      ctx.restore()
+      reportOutOfRange(!drewPath)
+      return
+    }
+
     const drew = drawBubbles(ctx, snaps, geo, palette, drawOpts.bubbleScale, drawOpts.bucketMin != null)
     reportOutOfRange(!drew)
   }
@@ -1731,6 +1801,11 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // The probe points come out of the data, so a new ladder needs new ones —
       // otherwise the signature is computed against strikes that are no longer
       // on the chart and can stop changing when the view does.
+      pickProbes()
+    },
+    setPath(next) {
+      pathPaint = next
+      version++
       pickProbes()
     },
     setDrawOpts(next) {

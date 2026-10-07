@@ -78,7 +78,7 @@ export const emImpl = studyImpl<EmS, EmData>({
     weekly: bool(i.weekly, true),
     close: bool(i.close, true),
     fill: bool(i.fill, true),
-    sessions: int(i.sessions, 10, 1, 30),
+    sessions: int(i.sessions, 1, 1, 30),
   }),
   dataKey: (c, s) => `${c.sym.key}|${s.sessions}|${c.bars.length ? sessionKey(c.bars[0]!.time, !!c.sym.fut) : ''}`,
   load: async (c, s) => {

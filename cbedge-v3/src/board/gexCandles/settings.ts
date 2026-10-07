@@ -106,6 +106,21 @@ export function clampScale(v: unknown): number {
   return Math.min(BUBBLE_SCALE_MAX, Math.max(BUBBLE_SCALE_MIN, n))
 }
 
+/**
+ * WHICH BUBBLES (2026-10-07, Brandon: "i want the same bubbles and logic as the
+ * vela bubbles").
+ *
+ *   'path'     the Voltick Path — the /vela study, same data and same painter
+ *              (pathBubbles.ts): one bead per level per candle — ★ Volt (lit
+ *              gold, a size up), ↘ Reversal, ◆ Coil, ↯ Surge — off the recorded
+ *              walls, growing with that level's GEX through the session.
+ *   'classic'  this card's own GEX ladder trail (bubbles.ts): the top strikes of
+ *              each bucket, sized by |GEX|, the gold leader.
+ *
+ * 'path' is the default; 'classic' stays one click away in the cogwheel.
+ */
+export type BubbleStyle = 'path' | 'classic'
+
 export interface ChartSettings {
   symbol: string
   session: Session
@@ -117,6 +132,8 @@ export interface ChartSettings {
   tapeDays: TapeDays
   /** Master on/off for the whole bubble layer. */
   bubblesOn: boolean
+  /** Voltick Path or the classic ladder trail — see BubbleStyle. */
+  bubbleStyle: BubbleStyle
   /** Which GEX quantity a bubble is sized by. Also what the rail lists. */
   gexMetric: GexMetric
   /** The forming-bar countdown in the top-right corner. */
@@ -242,6 +259,7 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // 1 is the behaviour the card already had: today, from the cash open.
   tapeDays: 1,
   bubblesOn: true,
+  bubbleStyle: 'path',
   gexMetric: 'voloi',
   countdown: true,
   // On by default: it was asked for, and a candle chart without volume under it
@@ -699,6 +717,10 @@ const KEY_PREFIX = 'cb-v3-gex-candles:'
 /**
  * Blob version, written alongside the settings and checked on load.
  *
+ * v8 (2026-10-07): `bubbleStyle` added. An older blob has no such key and
+ * coerce falls back to 'path' — the Voltick Path is the new default for every
+ * card, old or new; 'classic' brings the previous trail back.
+ *
  * v7 (2026-09-02): `esCandles` added — the SPX/ES candle switch. An older blob
  * has no such key and coerce falls back to false, which is the cash-index
  * chart those blobs already drew.
@@ -720,7 +742,7 @@ const KEY_PREFIX = 'cb-v3-gex-candles:'
  * simply never read. Kept because the next default that needs pushing will need
  * this, and re-deriving the mechanism is worse than leaving it inert.
  */
-const SETTINGS_V = 7
+const SETTINGS_V = 8
 const STALE_ON_UPGRADE: string[] = ['prevDay', 'bubbleDay']
 
 /** Coerce an unknown parsed blob into a complete, in-range settings object. */
@@ -744,6 +766,7 @@ function coerce(raw: unknown): ChartSettings {
     interval,
     tapeDays,
     bubblesOn: p.bubblesOn !== false,
+    bubbleStyle: p.bubbleStyle === 'classic' ? 'classic' : 'path',
     gexMetric: p.gexMetric === 'vol' ? 'vol' : 'voloi',
     countdown: p.countdown !== false,
     volume: p.volume !== false,

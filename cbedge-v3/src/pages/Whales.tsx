@@ -78,6 +78,13 @@ interface WhalesResponse {
   /** Vol/OI are live-only and are not archived — null on every row here. */
   liveStats?: boolean
   error?: string | null
+  /** The day asked for before the server snapped an empty 1D back to the last
+   *  session, and whether it did (2026-10-07). */
+  askedTo?: string
+  snapped?: boolean
+  /** The live sweep that fills the archive. `error` set = today is not being
+   *  recorded (the vault's daily request limit, usually). */
+  feed?: { error: string | null; newestTs: number | null; asOf: string | null } | null
 }
 
 const PRESETS = [
@@ -406,36 +413,57 @@ function useContractHighs(
   rowsByKeyRef.current = rowsByKey
   const [series, setSeries] = useState<Map<string, HighSeries>>(new Map())
   const [tick, setTick] = useState(0)
+  // contract key → when its bars were last read (2026-10-07). A new print on
+  // the 1D tape changes `sig` every minute; without this every change re-read
+  // EVERY contract on the page, and each read of an older print is one call
+  // against the vault's 15,000/day — which ran out by 09:40 and took the live
+  // whale feed down with it.
+  const fetchedAt = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
-    const id = window.setInterval(() => setTick((t) => t + 1), 5 * 60_000)
-    return () => window.clearInterval(id)
+    // Re-read every five minutes, but only while the tab is on screen: a tab
+    // left open overnight was spending the day's budget on nobody.
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'visible') setTick((t) => t + 1)
+    }, 5 * 60_000)
+    const onVis = () => { if (document.visibilityState === 'visible') setTick((t) => t + 1) }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { window.clearInterval(id); document.removeEventListener('visibilitychange', onVis) }
   }, [])
 
   useEffect(() => {
     if (!jobs.length) return
+    if (document.visibilityState !== 'visible') return
     let on = true
     const ctrl = new AbortController()
-    const pending = jobs.slice()
+    const FRESH_MS = 5 * 60_000
+    // Only contracts not read in the last five minutes.
+    const pending = jobs.filter(([k]) => Date.now() - (fetchedAt.current.get(k) ?? 0) >= FRESH_MS)
+    // ON SCREEN ONLY (2026-10-07): an off-screen contract waits until its row
+    // is scrolled into view. Was "visible first, then the rest" — ~500 reads
+    // per tab per pass, most of them for rows nobody looked at.
     const next = () => {
       const vis = visible.current
-      if (vis.size) {
-        const at = pending.findIndex(([k]) => (rowsByKeyRef.current.get(k) ?? []).some((id) => vis.has(id)))
-        if (at >= 0) return pending.splice(at, 1)[0]!
-      }
-      return pending.shift()
+      if (!vis.size) return undefined
+      const at = pending.findIndex(([k]) => (rowsByKeyRef.current.get(k) ?? []).some((id) => vis.has(id)))
+      return at >= 0 ? pending.splice(at, 1)[0]! : undefined
     }
+    const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms))
     const worker = async () => {
       while (on && pending.length) {
+        if (document.visibilityState !== 'visible') { await sleep(1000); continue }
         const job = next()
-        if (!job) break
+        if (!job) { await sleep(750); continue }
         const [k, r] = job
+        fetchedAt.current.set(k, Date.now())
         try {
           const bars = await loadProbeBars(
             { underlying: r.underlying, expiry: r.expiry, strike: r.strike, type: r.type, osi: r.osi, ts: r.ts },
             0,
             ctrl.signal,
           )
+          // Cut off by a re-run (new rows) — not read, so not fresh either.
+          if (!on) { fetchedAt.current.delete(k); break }
           const hs: HighSeries = bars
             .filter((b) => Number.isFinite(b.high) && b.high > 0)
             .map((b) => [b.time, b.high])
@@ -739,6 +767,20 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
 
   const q = useQuery<WhalesResponse>(url, { staleMs: 30_000, pollMs: 60_000 })
   const d = q.data
+
+  // ── STUCK-ON-YESTERDAY NOTE (2026-10-07) ───────────────────────────────────
+  // An empty 1D is snapped server-side to the last session that has prints.
+  // Right on a weekend; wrong-looking on a weekday when the live sweep is down
+  // (the vault's daily request limit) — the page used to just relabel the range
+  // to yesterday and say nothing. Now it says which day it is showing and why.
+  const feedNote = (() => {
+    if (!d) return null
+    const err = d.feed?.error ?? null
+    if (d.snapped && d.askedTo) {
+      return `No prints for ${d.askedTo.slice(5)} yet — showing ${d.range.to.slice(5)}${err ? ` · live feed down: ${err}` : ''}`
+    }
+    return preset === '1d' && err ? `Live feed down: ${err}` : null
+  })()
 
   // ── ARCHIVE FLOOR ──────────────────────────────────────────────────────────
   // The server's floor, as last reported. Sticky rather than read straight off
@@ -1565,6 +1607,9 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
             {q.loading && !d ? 'loading…' : d ? `${d.range.from.slice(5)} → ${d.range.to.slice(5)}` : ''}
           </span>
         </header>
+        {feedNote && (
+          <div className="shrink-0 border-b border-line px-3 py-1 text-2xs font-semibold text-down">{feedNote}</div>
+        )}
 
         <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap border-b border-line px-3 py-2">
           <SegGroup<PresetKey>
@@ -2042,7 +2087,10 @@ export default function Whales({ phone = false }: { phone?: boolean } = {}) {
             {day} ✕
           </button>
         )}
-        <span className="ml-auto text-2xs text-fg">
+        {feedNote && (
+          <span className="ml-auto truncate text-2xs font-semibold text-down" title={feedNote}>{feedNote}</span>
+        )}
+        <span className={`${feedNote ? '' : 'ml-auto '}text-2xs text-fg`}>
           {q.loading && !d ? 'loading…' : d ? `${d.range.from} → ${d.range.to}` : ''}
         </span>
         {/* LOOK UP lives in the filter bar now (layout A). GO opens the
