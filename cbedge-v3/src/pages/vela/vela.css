@@ -1876,6 +1876,119 @@
   color: var(--color-vt-accent-text);
   opacity: 1;
 }
+/* The list chips on every row: 1 2 3, lit when the row is in that list (the
+   three lists, indicatorPicker.ts). Quiet until the row is hovered. */
+.cb-ip .cb-ip-lchips {
+  display: flex;
+  flex: none;
+  gap: 3px;
+}
+.cb-ip .cb-ip-lchip {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-faint);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0.35;
+}
+.cb-ip .cb-ip-row:hover .cb-ip-lchip,
+.cb-ip .cb-ip-row:focus-within .cb-ip-lchip,
+.cb-ip .cb-ip-lchip:focus-visible {
+  opacity: 1;
+}
+.cb-ip .cb-ip-lchip:hover {
+  border-color: var(--color-vt-accent-text);
+  color: var(--color-fg);
+}
+.cb-ip .cb-ip-lchip[data-on='1'] {
+  border-color: var(--color-vt-accent-text);
+  background: var(--color-raised);
+  color: var(--color-vt-accent-text);
+  opacity: 1;
+}
+/* A list's head: its name, ✎, Add all */
+.cb-ip .cb-ip-lhead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 8px 8px;
+  background: var(--color-surface);
+}
+.cb-ip .cb-ip-lname {
+  overflow: hidden;
+  color: var(--color-fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-ip .cb-ip-lname-input {
+  flex: 0 1 220px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--color-surface2);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.cb-ip .cb-ip-lbtn {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-faint);
+  font: inherit;
+  cursor: pointer;
+}
+.cb-ip .cb-ip-lren {
+  width: 28px;
+}
+.cb-ip .cb-ip-lren:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.cb-ip .cb-ip-addall {
+  margin-left: auto;
+  padding: 0 12px;
+  border: 1px solid var(--color-vt-accent-text);
+  color: var(--color-vt-accent-text);
+  font-weight: 600;
+}
+.cb-ip .cb-ip-addall:hover:not(:disabled) {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+.cb-ip .cb-ip-addall:disabled {
+  border-color: var(--color-line);
+  color: var(--color-faint);
+  cursor: default;
+}
+/* a phone has no hover: the chips always show */
+@media (hover: none) {
+  .cb-ip .cb-ip-lchip {
+    opacity: 1;
+  }
+}
 .cb-ip .cb-ip-empty {
   padding: 40px 12px;
   color: var(--color-faint);
@@ -3983,7 +4096,8 @@
   position: absolute;
   top: 8px;
   left: 10px;
-  z-index: 6;
+  /* 7: above Vela's zoom pill (6, later in the cell) where a tall card meets it */
+  z-index: 7;
   width: max-content;
   min-width: 270px;
   max-width: calc(100% - 96px);

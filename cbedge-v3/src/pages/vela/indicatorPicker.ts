@@ -1,32 +1,37 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// THE INDICATORS DIALOG — categorised, the way velacharts.dev lays it out.
+// THE INDICATORS DIALOG.
 //
-// Vela 0.8's own picker is one long list (On chart, then every built-in A–Z).
-// This replaces it through Vela's sanctioned seam: an action registered under
-// the reserved topbar id `'indicators'` takes the slot's WHOLE surface — the
-// desktop button, the phone's bottom-bar stop and the `/` shortcut — and the
-// built-in picker is never constructed. Inside (Vela's own Dialog, so it looks
-// and moves like every other dialog in the chart):
+// Vela 0.8's own picker is one long list. This replaces it through Vela's
+// sanctioned seam: an action registered under the reserved topbar id
+// `'indicators'` takes the slot's WHOLE surface — the desktop button, the phone's
+// bottom-bar stop and the `/` shortcut — and the built-in picker is never
+// constructed. Inside (Vela's own Dialog, so it looks and moves like every other
+// dialog in the chart):
 //
-//   [ Search…                                   ⚲ All ]
-//   Favorites          ★-starred rows, from any category
-//   Mine               your CB Scripts: indicators, then your strategies
-//                      (script/library.ts)
-//   Voltick / CB Edge  ours: CB Walls, Voltick Path and pages/vela/studies/,
-//                      under Levels & Walls · Options & GEX · Flow & Profile,
-//                      then the four ready-made strategies
-//   Everything else    Vela's 74 built-in studies, under Trend · Oscillators ·
-//                      Volatility · Volume & Orderflow (anything a future Vela
-//                      adds lands under Other)
+//   [ Search…                                          ⚲ All ]
+//   All indicators     every indicator, ONE list, A–Z: Vela's built-ins, ours
+//                      (CB Walls, Voltick Path, pages/vela/studies/), your CB
+//                      Scripts and the ready-made strategies
+//   List 1 · 2 · 3     YOUR LISTS (up to three, named as you like), each with
+//                      Add all: every indicator in it onto the chart in one go
 //
-// Four categories and nothing more (Brandon, 2026-10-04). What is on the chart
-// is managed from its legend rows (eye / gear / ✕); a ✓ marks it here.
+// NO CATEGORIES, A–Z (Brandon, 2026-10-07: "no categories on the indicators.
+// just in alphabetical order"), and THREE LISTS (same day: "have the ability to
+// make up to 3 lists of indicators. with the ability to add all"). The lists
+// replaced Favorites: the stars a browser had become List 1 ("Favorites"), once.
 //
-// Click a row to add it to the active chart (through the shell — undo / redo
-// and the topbar count see it); the dialog stays open, the row gets a ✓. The
-// star favourites it. Search runs across every category; Enter adds the first
-// hit. The filter cycles All → Price overlays → Separate pane. The category and
-// the favourites are remembered in this browser.
+//   · a row's 1 2 3 chips put it in (or take it out of) a list
+//   · a list's head: its name (✎ renames it), Add all
+//   · Add all adds every indicator in the list that is not on the chart yet, so
+//     pressing it twice never doubles anything. A strategy in a list is skipped
+//     (adding one opens the Strategy Tester: add it from its row)
+//
+// What is on the chart is managed from its legend rows (eye / gear / ✕); a ✓
+// marks it here. Click a row to add it to the active chart (through the shell —
+// undo / redo and the topbar count see it); the dialog stays open, the row gets
+// a ✓. Search runs across everything; Enter adds the first hit. The filter cycles
+// All → Price overlays → Separate pane. The view and the lists are remembered in
+// this browser.
 //
 // A NEW copy starts with "my default" when one is saved for that indicator (its
 // settings dialog: Defaults ▾ → Save as my default; indicatorPresets.ts).
@@ -39,78 +44,25 @@ import { instanceIdFor, libIdOf, loadLibrary } from './script/library'
 import { applyDefaultOnAdd } from './indicatorPresets'
 import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
 import { testStrategy } from './script/testerPanels'
-import { WALLS_TYPE } from './wallsIndicator'
-import { PATH_TYPE, RIBBON_TYPE } from './vtPath/vtPathIndicator'
-import { EM_TYPE, EVENTS_TYPE, HEAT_TYPE, IB_TYPE, JOURNAL_TYPE, KEY_TYPE, CVD_TYPE, NETGEXFLOW_TYPE, NETGEX_TYPE, NETPREM_TYPE, ON_TYPE, PRIOR_TYPE, PROFILE_TYPE, RAIL_TYPE, TPO_TYPE, VOLFLOW_TYPE, WHALES_TYPE } from './studies'
+import { JOURNAL_TYPE } from './studies'
 
+/** The old ★ favourites: read once, into List 1. */
 const FAV_KEY = 'cb-v3-vela-ind-favs'
-const CAT_KEY = 'cb-v3-vela-ind-cat'
+const VIEW_KEY = 'cb-v3-vela-ind-view'
+const LISTS_KEY = 'cb-v3-vela-ind-lists'
 const SCRIPTS_PANEL = 'cbedge-scripts'
 
-type CatId = 'favorites' | 'mine' | 'cbedge' | 'others'
+const LIST_COUNT = 3
+const NAME_MAX = 24
 
-/** Headings inside a category's list. */
-type Group = 'scripts' | 'my-strategies' | 'cb-levels' | 'cb-gex' | 'cb-flow' | 'cb-strategies' | 'trend' | 'osc' | 'volatility' | 'volume' | 'other'
+/** `all`, or one of the lists by index. */
+type View = 'all' | 0 | 1 | 2
 
-interface Cat {
-  id: CatId
-  label: string
-  icon: string
-  /** The headings it lists, in order (favorites: none, one flat list). */
-  groups: Group[]
+interface IndList {
+  name: string
+  /** Row keys (`n:<type>`, `s:<lib id>`, `st:…`, `r:…`), in the order added. */
+  keys: string[]
 }
-
-const CATS: Cat[] = [
-  { id: 'favorites', label: 'Favorites', icon: 'star', groups: [] },
-  { id: 'mine', label: 'Mine', icon: 'cb-ip-user', groups: ['scripts', 'my-strategies'] },
-  { id: 'cbedge', label: 'Voltick / CB Edge', icon: 'cb-ip-levels', groups: ['cb-levels', 'cb-gex', 'cb-flow', 'cb-strategies'] },
-  { id: 'others', label: 'Everything else', icon: 'cb-ip-grid', groups: ['trend', 'osc', 'volatility', 'volume', 'other'] },
-]
-
-const GROUP_LABEL: Record<Group, string> = {
-  scripts: 'Indicators',
-  'my-strategies': 'Strategies',
-  'cb-levels': 'Levels & Walls',
-  'cb-gex': 'Options & GEX',
-  'cb-flow': 'Flow & Profile',
-  'cb-strategies': 'Ready-made strategies',
-  trend: 'Trend',
-  osc: 'Oscillators',
-  volatility: 'Volatility',
-  volume: 'Volume & Orderflow',
-  other: 'Other',
-}
-
-const catOf = (g: Group): CatId => (g === 'scripts' || g === 'my-strategies' ? 'mine' : g.startsWith('cb-') ? 'cbedge' : 'others')
-
-// ── Where every native type goes ──
-const NATIVE_CAT: Record<string, Group> = {}
-const put = (cat: Group, types: string[]) => types.forEach((t) => (NATIVE_CAT[t] = cat))
-put('trend', [
-  'moving-average', 'sma', 'ema', 'rma', 'vidya', 'zlema', 'linear-regression', 'ma-envelope', 'supertrend', 'parabolic-sar',
-  'williams-alligator', 'chande-kroll-stop', 'chandelier-exit', 'donchian-channels', 'keltner-channels',
-  'bollinger-bands', 'zigzag', 'williams-fractal', 'pivot-points', '52-week-high-low',
-])
-put('osc', [
-  'rsi', 'stochastic', 'stochastic-rsi', 'macd', 'ppo', 'commodity-channel-index', 'chande-momentum-oscillator',
-  'connors-rsi', 'coppock-curve', 'detrended-price-oscillator', 'fisher-transform', 'know-sure-thing', 'rate-of-change',
-  'relative-vigor-index', 'smi-ergodic', 'schaff-trend-cycle', 'trix', 'true-strength-index', 'ultimate-oscillator',
-  'williams-percent-r', 'awesome-oscillator', 'gator-oscillator', 'aroon', 'average-directional-index',
-  'vortex-indicator', 'elder-ray', 'balance-of-power', 'ttm-squeeze', 'percent-b', 'choppiness-index',
-])
-put('volatility', [
-  'average-true-range', 'bandwidth', 'chaikin-volatility', 'historical-volatility', 'mass-index',
-  'relative-volatility-index', 'standard-deviation', 'ulcer-index',
-])
-put('volume', [
-  'volume', 'vpvr', 'vwap', 'on-balance-volume', 'accumulation-distribution', 'chaikin-money-flow',
-  'chaikin-oscillator', 'ease-of-movement', 'force-index', 'intraday-intensity', 'klinger-oscillator',
-  'money-flow-index', 'negative-volume-index', 'positive-volume-index', 'price-volume-trend', 'pvo',
-  'volume-flow-indicator', 'volume-oscillator',
-])
-put('cb-levels', [WALLS_TYPE, PATH_TYPE, RIBBON_TYPE, PRIOR_TYPE, IB_TYPE, ON_TYPE, KEY_TYPE])
-put('cb-gex', [EM_TYPE, PROFILE_TYPE, VOLFLOW_TYPE, NETGEX_TYPE, NETGEXFLOW_TYPE, RAIL_TYPE, HEAT_TYPE])
-put('cb-flow', [EVENTS_TYPE, NETPREM_TYPE, CVD_TYPE, WHALES_TYPE, TPO_TYPE])
 
 /**
  * Registered but not offered. CB Journal Trades stays hidden while the journal
@@ -123,7 +75,6 @@ const HIDDEN = new Set<string>([JOURNAL_TYPE])
 /** One addable thing. */
 interface Row {
   key: string
-  group: Group
   name: string
   desc: string
   kind: 'native' | 'script'
@@ -150,7 +101,6 @@ function nativeRows(): Row[] {
       const [name, desc] = splitTitle(d.title)
       return {
         key: `n:${d.type}`,
-        group: NATIVE_CAT[d.type] ?? 'other',
         name,
         desc: desc || (d.overlay ? 'On the price chart' : 'In its own pane'),
         kind: 'native',
@@ -168,9 +118,8 @@ function scriptRows(): Row[] {
     const strategy = IS_STRATEGY.test(s.source)
     return {
       key: strategy ? `st:${s.id}` : `s:${s.id}`,
-      group: strategy ? ('my-strategies' as Group) : ('scripts' as Group),
       name: s.name,
-      desc: strategy ? 'Your strategy · opens the Strategy Tester' : 'CB Script',
+      desc: strategy ? 'Your strategy · opens the Strategy Tester' : 'Your CB Script',
       kind: 'script' as const,
       libId: s.id,
       source: s.source,
@@ -182,11 +131,10 @@ function scriptRows(): Row[] {
   })
 }
 
-/** The ready-made strategies (script/strategies.ts), under Voltick / CB Edge. */
+/** The ready-made strategies (script/strategies.ts). */
 function readyRows(): Row[] {
   return READY_STRATEGIES.map((r) => ({
     key: `r:${r.id}`,
-    group: 'cb-strategies' as Group,
     name: r.name,
     desc: `Strategy · ${r.desc}`,
     kind: 'script' as const,
@@ -199,33 +147,63 @@ function readyRows(): Row[] {
   }))
 }
 
+const byName = (a: Row, b: Row) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+
 // ── Remembered choices ──
-function readFavs(): Set<string> {
+function readOldFavs(): string[] {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(FAV_KEY) ?? '[]')
-    return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []
   } catch {
-    return new Set()
+    return []
   }
 }
-function writeFavs(f: Set<string>): void {
+
+const blankLists = (): IndList[] => Array.from({ length: LIST_COUNT }, (_, i) => ({ name: `List ${i + 1}`, keys: [] }))
+
+export function readLists(): IndList[] {
+  const out = blankLists()
+  let raw: unknown = null
   try {
-    localStorage.setItem(FAV_KEY, JSON.stringify([...f]))
+    raw = JSON.parse(localStorage.getItem(LISTS_KEY) ?? 'null')
   } catch {
-    /* private mode: stars last for this visit */
+    raw = null
+  }
+  if (Array.isArray(raw)) {
+    raw.slice(0, LIST_COUNT).forEach((l, i) => {
+      const o = l as { name?: unknown; keys?: unknown } | null
+      if (typeof o?.name === 'string' && o.name.trim()) out[i]!.name = o.name.trim().slice(0, NAME_MAX)
+      if (Array.isArray(o?.keys)) out[i]!.keys = [...new Set(o.keys.filter((k): k is string => typeof k === 'string'))]
+    })
+    return out
+  }
+  // first open since the lists came in: the stars become List 1
+  const favs = readOldFavs()
+  if (favs.length) out[0] = { name: 'Favorites', keys: favs }
+  writeLists(out)
+  return out
+}
+
+function writeLists(lists: IndList[]): void {
+  try {
+    localStorage.setItem(LISTS_KEY, JSON.stringify(lists))
+  } catch {
+    /* private mode: the lists last for this visit */
   }
 }
-function readCat(): CatId | null {
+
+function readView(): View {
   try {
-    const v = localStorage.getItem(CAT_KEY)
-    return CATS.some((c) => c.id === v) ? (v as CatId) : null
+    const v = localStorage.getItem(VIEW_KEY)
+    if (v === '0' || v === '1' || v === '2') return Number(v) as View
   } catch {
-    return null
+    /* private mode */
   }
+  return 'all'
 }
-function writeCat(c: CatId): void {
+function writeView(v: View): void {
   try {
-    localStorage.setItem(CAT_KEY, c)
+    localStorage.setItem(VIEW_KEY, String(v))
   } catch {
     /* private mode */
   }
@@ -248,10 +226,12 @@ function openPicker(ctx: WidgetContext): void {
     return
   }
   const doc = ctx.host.ownerDocument
-  let favs = readFavs()
-  let cat: CatId = readCat() ?? (favs.size ? 'favorites' : 'cbedge')
+  const lists = readLists()
+  let view: View = readView()
   let query = ''
   let filter = 0
+  /** The list whose name is being edited, if any. */
+  let renaming: number | null = null
 
   const root = el(doc, 'div', 'cb-ip')
   // keystrokes stay here — Vela's chart shortcuts listen above the dialog
@@ -270,7 +250,7 @@ function openPicker(ctx: WidgetContext): void {
 
   const main = el(doc, 'div', 'cb-ip-main')
   const nav = el(doc, 'nav', 'cb-ip-nav')
-  nav.setAttribute('aria-label', 'Indicator categories')
+  nav.setAttribute('aria-label', 'Indicator lists')
   const list = el(doc, 'div', 'cb-ip-list')
   list.setAttribute('role', 'list')
   main.append(nav, list)
@@ -280,75 +260,120 @@ function openPicker(ctx: WidgetContext): void {
   const presentNative = () => new Set(handles().map((h) => h.nativeType).filter((t): t is string => !!t))
   const presentScripts = () => new Set(handles().map((h) => libIdOf(h.id)).filter((t): t is string => !!t))
 
-  const allRows = (): Row[] => [...nativeRows(), ...scriptRows(), ...readyRows()]
-
+  const allRows = (): Row[] => [...nativeRows(), ...scriptRows(), ...readyRows()].sort(byName)
   const passesFilter = (r: Row) => filter === 0 || (filter === 1 ? r.overlay : !r.overlay)
+  const isOn = (r: Row, nat: Set<string>, scr: Set<string>) => (r.kind === 'native' ? !!r.type && nat.has(r.type) : !!r.libId && scr.has(r.libId))
 
-  const rowsFor = (c: CatId): Row[] => {
-    const rows = allRows()
-    if (c === 'favorites') return rows.filter((r) => favs.has(r.key))
-    return rows.filter((r) => catOf(r.group) === c)
-  }
-
-  const add = (r: Row) => {
+  /** Put one row on the chart. 'added' | 'there' (already on, single-instance) | 'tester' (a strategy: the tester opened). */
+  const addRow = (r: Row, nat: Set<string>): 'added' | 'there' | 'tester' | 'none' => {
     if (r.kind === 'native' && r.type) {
-      if (!r.multi && presentNative().has(r.type)) {
-        ctx.toast(`${r.name} is already on this chart`, 'info')
-        return
-      }
+      if (!r.multi && nat.has(r.type)) return 'there'
       // a new copy starts with "my default", when one is saved (indicatorPresets.ts)
       const type = r.type
       applyDefaultOnAdd(ctx.chart, (h) => h.nativeType === type)
       ctx.addNativeIndicator(type)
-    } else if (r.strategy && r.libId && r.source != null) {
+      nat.add(type)
+      return 'added'
+    }
+    if (r.strategy && r.libId && r.source != null) {
       // a strategy goes on the chart and the tester opens on it
       dlg.hide()
       testStrategy(ctx, { id: r.libId, name: r.name, source: r.source })
-      return
-    } else if (r.kind === 'script' && r.libId && r.source != null) {
+      return 'tester'
+    }
+    if (r.kind === 'script' && r.libId && r.source != null) {
       const libId = r.libId
       applyDefaultOnAdd(ctx.chart, (h) => libIdOf(h.id) === libId)
       ctx.addIndicator({ name: r.name, script: r.source, language: CBSCRIPT, id: instanceIdFor(libId) })
+      return 'added'
     }
+    return 'none'
+  }
+
+  const add = (r: Row) => {
+    const res = addRow(r, presentNative())
+    if (res === 'there') ctx.toast(`${r.name} is already on this chart`, 'info')
+    if (res !== 'added') return
     ctx.toast(`Added ${r.name}`, 'success')
     // the handle lands a beat later; repaint the ✓ / counts then
     setTimeout(render, 120)
   }
 
-  const star = (r: Row, btn: HTMLButtonElement) => {
-    if (favs.has(r.key)) favs.delete(r.key)
-    else favs.add(r.key)
-    writeFavs(favs)
-    btn.replaceChildren(iconEl(favs.has(r.key) ? 'star-filled' : 'star', doc))
-    btn.dataset.on = favs.has(r.key) ? '1' : ''
-    if (cat === 'favorites' && !query) render()
-    else renderNav()
+  /** Every indicator in list `i` that is not on the chart yet. */
+  const addAll = (i: number) => {
+    const l = lists[i]!
+    const rows = allRows().filter((r) => l.keys.includes(r.key))
+    const nat = presentNative()
+    const scr = presentScripts()
+    let added = 0
+    let there = 0
+    let strategies = 0
+    for (const r of rows) {
+      if (r.strategy) {
+        strategies++
+        continue
+      }
+      // never a second copy: a list added twice changes nothing the second time
+      if (isOn(r, nat, scr)) {
+        there++
+        continue
+      }
+      if (addRow(r, nat) === 'added') {
+        added++
+        if (r.libId) scr.add(r.libId)
+      }
+    }
+    const notes = [there ? `${there} already on` : '', strategies ? `${strategies} strateg${strategies === 1 ? 'y' : 'ies'} skipped` : ''].filter(Boolean).join(' · ')
+    if (added) ctx.toast(`Added ${added} from ${l.name}${notes ? ` · ${notes}` : ''}`, 'success')
+    else ctx.toast(rows.length ? `Nothing to add from ${l.name}${notes ? ` · ${notes}` : ''}` : `${l.name} is empty`, 'info')
+    setTimeout(render, 150)
   }
 
-  const rowEl = (r: Row, showCat: boolean, nat: Set<string>, scr: Set<string>): HTMLElement => {
+  const toggleIn = (i: number, r: Row) => {
+    const l = lists[i]!
+    const at = l.keys.indexOf(r.key)
+    if (at >= 0) l.keys.splice(at, 1)
+    else l.keys.push(r.key)
+    writeLists(lists)
+    render()
+  }
+
+  const rename = (i: number, name: string) => {
+    const n = name.trim().slice(0, NAME_MAX)
+    lists[i]!.name = n || `List ${i + 1}`
+    writeLists(lists)
+  }
+
+  const rowEl = (r: Row, nat: Set<string>, scr: Set<string>): HTMLElement => {
     const row = el(doc, 'div', 'cb-ip-row')
     row.setAttribute('role', 'listitem')
     row.tabIndex = 0
-    const on = r.kind === 'native' ? !!r.type && nat.has(r.type) : !!r.libId && scr.has(r.libId)
+    const on = isOn(r, nat, scr)
     const text = el(doc, 'div', 'cb-ip-text')
     const name = el(doc, 'div', 'cb-ip-name', r.name)
     if (r.beta) name.append(el(doc, 'span', 'cb-ip-badge', 'beta'))
-    if (showCat) name.append(el(doc, 'span', 'cb-ip-tag', CATS.find((c) => c.id === catOf(r.group))?.label ?? ''))
     text.append(name, el(doc, 'div', 'cb-ip-desc', r.desc))
     const onMark = el(doc, 'span', 'cb-ip-on', on ? '✓' : '')
     onMark.title = on ? 'On this chart' : ''
-    const starBtn = el(doc, 'button', 'cb-ip-star')
-    starBtn.type = 'button'
-    starBtn.title = 'Favorite'
-    starBtn.dataset.on = favs.has(r.key) ? '1' : ''
-    starBtn.append(iconEl(favs.has(r.key) ? 'star-filled' : 'star', doc))
-    starBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      star(r, starBtn)
+    // the three list chips: in a list, lit; click to put it in or take it out
+    const chips = el(doc, 'span', 'cb-ip-lchips')
+    lists.forEach((l, i) => {
+      const inIt = l.keys.includes(r.key)
+      const b = el(doc, 'button', 'cb-ip-lchip', String(i + 1))
+      b.type = 'button'
+      b.dataset.on = inIt ? '1' : ''
+      b.title = inIt ? `Take out of ${l.name}` : `Put in ${l.name}`
+      b.setAttribute('aria-pressed', inIt ? 'true' : 'false')
+      b.addEventListener('click', (e) => {
+        e.stopPropagation()
+        toggleIn(i, r)
+      })
+      chips.append(b)
     })
-    row.append(text, onMark, starBtn)
+    row.append(text, onMark, chips)
     row.addEventListener('click', () => add(r))
     row.addEventListener('keydown', (e) => {
+      if (e.target !== row) return
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault()
         add(r)
@@ -359,23 +384,74 @@ function openPicker(ctx: WidgetContext): void {
 
   function renderNav() {
     nav.replaceChildren()
-    const counts: Partial<Record<CatId, number>> = { favorites: favs.size }
-    for (const c of CATS) {
+    const item = (v: View, icon: string, label: string, count: number) => {
       const b = el(doc, 'button', 'cb-ip-cat')
       b.type = 'button'
-      b.dataset.active = !query && c.id === cat ? '1' : ''
-      b.append(iconEl(c.icon, doc), el(doc, 'span', 'cb-ip-cat-label', c.label))
-      const n = counts[c.id]
-      if (n && c.id === 'favorites') b.append(el(doc, 'span', 'cb-ip-count', String(n)))
+      b.dataset.active = !query && v === view ? '1' : ''
+      b.append(iconEl(icon, doc), el(doc, 'span', 'cb-ip-cat-label', label))
+      if (count) b.append(el(doc, 'span', 'cb-ip-count', String(count)))
       b.addEventListener('click', () => {
-        cat = c.id
-        writeCat(cat)
+        view = v
+        writeView(view)
+        renaming = null
         query = ''
         search.value = ''
         render()
       })
       nav.append(b)
     }
+    item('all', 'cb-ip-grid', 'All indicators', 0)
+    nav.append(el(doc, 'div', 'cb-ip-section', 'MY LISTS'))
+    lists.forEach((l, i) => item(i as View, 'cb-ip-list', l.name, l.keys.length))
+  }
+
+  /** A list's head: its name (or the rename field), ✎ and Add all. */
+  function listHead(i: number): HTMLElement {
+    const l = lists[i]!
+    const head = el(doc, 'div', 'cb-ip-lhead')
+    if (renaming === i) {
+      const input = el(doc, 'input', 'cb-ip-lname-input')
+      input.value = l.name
+      input.maxLength = NAME_MAX
+      input.setAttribute('aria-label', 'List name')
+      const done = (save: boolean) => {
+        if (renaming !== i) return
+        if (save) rename(i, input.value)
+        renaming = null
+        render()
+      }
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') done(true)
+        else if (e.key === 'Escape') {
+          e.preventDefault()
+          done(false)
+        }
+      })
+      input.addEventListener('blur', () => done(true))
+      head.append(input)
+      setTimeout(() => {
+        input.focus()
+        input.select()
+      }, 0)
+    } else {
+      head.append(el(doc, 'span', 'cb-ip-lname', l.name))
+      const ren = el(doc, 'button', 'cb-ip-lbtn cb-ip-lren')
+      ren.type = 'button'
+      ren.title = 'Rename this list'
+      ren.append(iconEl('cb-ip-pencil', doc))
+      ren.addEventListener('click', () => {
+        renaming = i
+        render()
+      })
+      head.append(ren)
+    }
+    const all = el(doc, 'button', 'cb-ip-lbtn cb-ip-addall', 'Add all')
+    all.type = 'button'
+    all.title = `Add every indicator in ${l.name} to this chart`
+    all.disabled = !l.keys.length
+    all.addEventListener('click', () => addAll(i))
+    head.append(all)
+    return head
   }
 
   function render() {
@@ -389,52 +465,45 @@ function openPicker(ctx: WidgetContext): void {
     if (query) {
       const q = query.toLowerCase()
       const hits = allRows().filter((r) => passesFilter(r) && (r.name.toLowerCase().includes(q) || r.desc.toLowerCase().includes(q) || (r.type ?? '').includes(q)))
-      hits.sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name))
+      hits.sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || byName(a, b))
       out.push(el(doc, 'div', 'cb-ip-head', hits.length ? `${hits.length} result${hits.length === 1 ? '' : 's'}` : `Nothing matches “${query}”`))
-      for (const r of hits) out.push(rowEl(r, true, nat, scr))
+      for (const r of hits) out.push(rowEl(r, nat, scr))
+    } else if (view === 'all') {
+      const rows = allRows().filter(passesFilter)
+      out.push(el(doc, 'div', 'cb-ip-head', `All indicators · ${rows.length}`))
+      if (!rows.length) out.push(el(doc, 'div', 'cb-ip-empty', 'Nothing here with that filter.'))
+      for (const r of rows) out.push(rowEl(r, nat, scr))
+      const neu = el(doc, 'button', 'cb-ip-link')
+      neu.type = 'button'
+      neu.append(iconEl('plus', doc), el(doc, 'span', '', 'Write or paste a script…'))
+      neu.addEventListener('click', () => {
+        dlg.hide()
+        ctx.togglePanel(SCRIPTS_PANEL, true)
+      })
+      out.push(neu)
     } else {
-      const c = CATS.find((x) => x.id === cat)!
-      const rows = rowsFor(cat).filter(passesFilter)
-      out.push(el(doc, 'div', 'cb-ip-head', c.label))
+      const i = view
+      const l = lists[i]!
+      out.push(listHead(i))
+      const rows = allRows().filter((r) => l.keys.includes(r.key) && passesFilter(r))
       if (!rows.length) {
         out.push(
           el(
             doc,
             'div',
             'cb-ip-empty',
-            cat === 'favorites' ? 'No favorites yet. Star any indicator and it lands here.' : cat === 'mine' ? 'No saved scripts yet.' : filter ? 'Nothing here with that filter.' : 'Nothing here.',
+            l.keys.length && filter ? 'Nothing in this list with that filter.' : `Nothing in ${l.name} yet. Press ${i + 1} on any indicator under All indicators to put it here.`,
           ),
         )
       }
-      if (!c.groups.length) {
-        rows.sort((a, b) => a.name.localeCompare(b.name))
-        for (const r of rows) out.push(rowEl(r, true, nat, scr))
-      } else {
-        for (const g of c.groups) {
-          const inG = rows.filter((r) => r.group === g)
-          if (!inG.length) continue
-          // your scripts keep their library order; everything else A–Z
-          if (cat !== 'mine') inG.sort((a, b) => a.name.localeCompare(b.name))
-          out.push(el(doc, 'div', 'cb-ip-sub', GROUP_LABEL[g]))
-          for (const r of inG) out.push(rowEl(r, false, nat, scr))
-        }
-      }
-      if (cat === 'mine') {
-        const neu = el(doc, 'button', 'cb-ip-link')
-        neu.type = 'button'
-        neu.append(iconEl('plus', doc), el(doc, 'span', '', 'Write or paste a script…'))
-        neu.addEventListener('click', () => {
-          dlg.hide()
-          ctx.togglePanel(SCRIPTS_PANEL, true)
-        })
-        out.push(neu)
-      }
+      for (const r of rows) out.push(rowEl(r, nat, scr))
     }
     list.replaceChildren(...out)
   }
 
   search.addEventListener('input', () => {
     query = search.value.trim()
+    renaming = null
     render()
   })
   search.addEventListener('keydown', (e) => {
@@ -495,9 +564,9 @@ export function registerIndicatorPicker(): void {
   if (registered) return
   registered = true
   // nav icons (Vela ships star / search / eye / trash / plus; these are ours)
-  registerIcon('cb-ip-user', svg16('<circle cx="8" cy="5.5" r="2.6"/><path d="M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/>'))
   registerIcon('cb-ip-grid', svg16('<rect x="2.5" y="2.5" width="4.5" height="4.5" rx=".8"/><rect x="9" y="2.5" width="4.5" height="4.5" rx=".8"/><rect x="2.5" y="9" width="4.5" height="4.5" rx=".8"/><rect x="9" y="9" width="4.5" height="4.5" rx=".8"/>'))
-  registerIcon('cb-ip-levels', svg16('<path d="M2 4h12M2 8h12M2 12h12" stroke-dasharray="2 1.5"/>'))
+  registerIcon('cb-ip-list', svg16('<path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.8" cy="4" r=".9" fill="currentColor"/><circle cx="2.8" cy="8" r=".9" fill="currentColor"/><circle cx="2.8" cy="12" r=".9" fill="currentColor"/>'))
+  registerIcon('cb-ip-pencil', svg16('<path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/>'))
   registerIcon('cb-ip-funnel', svg16('<path d="M2.5 3h11l-4.2 5v4.5l-2.6 1.2V8z"/>'))
   registerWidgetAction({
     id: 'indicators',
