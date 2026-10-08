@@ -57,18 +57,26 @@ const MAIN_SET = new Set(SCANNER_MAIN)
 // ── Settings (remembered per browser) ────────────────────────────────────────
 
 const STORE_KEY = 'cb-v3-scanner-align'
+/**
+ * v2 (2026-10-08): the wall definitions moved onto Wall Migration's (call wall
+ * ABOVE spot, put wall BELOW, Core either side) and Hold started steadying the
+ * walls themselves. A v1 save is carried over except for those two fields,
+ * which take the new defaults — v1's |GEX| + 3m was the setting that jittered.
+ */
+const STORE_VERSION = 2
 
 function loadSettings(): AlignSettings {
   try {
     const raw = window.localStorage.getItem(STORE_KEY)
     if (!raw) return DEFAULT_SETTINGS
-    const p = JSON.parse(raw) as Partial<AlignSettings>
+    const p = JSON.parse(raw) as Partial<AlignSettings> & { v?: number }
+    const current = p.v === STORE_VERSION
     return {
-      mode: p.mode === 'pos' || p.mode === 'neg' ? p.mode : 'abs',
+      mode: current && (p.mode === 'abs' || p.mode === 'neg') ? p.mode : current ? 'pos' : DEFAULT_SETTINGS.mode,
       tol: p.tol === 1 ? 1 : 0,
       minDist: typeof p.minDist === 'number' ? p.minDist : DEFAULT_SETTINGS.minDist,
       minDom: typeof p.minDom === 'number' ? p.minDom : DEFAULT_SETTINGS.minDom,
-      holdMin: typeof p.holdMin === 'number' ? p.holdMin : DEFAULT_SETTINGS.holdMin,
+      holdMin: current && typeof p.holdMin === 'number' ? p.holdMin : DEFAULT_SETTINGS.holdMin,
       zeroTrigger: p.zeroTrigger !== false,
       requireAll: p.requireAll === true,
     }
@@ -79,7 +87,7 @@ function loadSettings(): AlignSettings {
 
 function saveSettings(s: AlignSettings): void {
   try {
-    window.localStorage.setItem(STORE_KEY, JSON.stringify(s))
+    window.localStorage.setItem(STORE_KEY, JSON.stringify({ ...s, v: STORE_VERSION }))
   } catch {
     /* private window / blocked storage — the tab still works, it just forgets */
   }
@@ -161,7 +169,7 @@ export default function AlignTab({ universe = 'all' }: { universe?: AlignUnivers
     })
   }, [setParams])
 
-  if (sym) return <AlignReplay symbol={sym} date={symDate} settings={settings} universe={universe} onBack={back} />
+  if (sym) return <AlignReplay symbol={sym} date={symDate} settings={settings} onBack={back} />
   return <AlignBoard settings={settings} update={update} onOpen={open} universe={universe} />
 }
 
@@ -177,7 +185,7 @@ function AlignBoard({
   universe: AlignUniverse
 }) {
   const main = universe === 'main'
-  const { data, error, loading } = useQuery<AlignResponse>(alignUrl(settings.mode, universe), {
+  const { data, error, loading } = useQuery<AlignResponse>(alignUrl(settings.mode), {
     pollMs: ALIGN_POLL_MS,
     staleMs: 30_000,
   })
@@ -334,9 +342,24 @@ function Toolbar({
       <Field label="Wall">
         <SegGroup<AlignMode>
           options={[
-            { value: 'abs', label: '|GEX|', title: 'Biggest absolute net GEX strike' },
-            { value: 'pos', label: '+ Call wall', title: 'Biggest positive net GEX strike', activeColor: V2.up },
-            { value: 'neg', label: '− Put wall', title: 'Biggest negative net GEX strike', activeColor: V2.red },
+            {
+              value: 'pos',
+              label: 'Call wall',
+              title: 'Biggest + GEX strike ABOVE spot — the same call wall Wall Migration draws',
+              activeColor: V2.up,
+            },
+            {
+              value: 'neg',
+              label: 'Put wall',
+              title: 'Most − GEX strike BELOW spot — the same put wall Wall Migration draws',
+              activeColor: V2.red,
+            },
+            {
+              value: 'abs',
+              label: 'Core',
+              title:
+                'Biggest |GEX| strike on either side (the CB). Jumps between the call and put side when the two are close in size',
+            },
           ]}
           value={settings.mode}
           onChange={(mode) => update({ mode })}
@@ -371,13 +394,14 @@ function Toolbar({
         />
       </Field>
       <Field label="Hold">
-        <SegGroup<'1' | '3' | '5'>
+        <SegGroup<'1' | '5' | '15'>
+          title="A wall move counts only once the new strike has held this long. Wall Migration samples every 15m."
           options={[
-            { value: '1', label: '1m' },
-            { value: '3', label: '3m' },
+            { value: '1', label: '1m', title: 'Every 1-minute sweep — the raw, jumpy read' },
             { value: '5', label: '5m' },
+            { value: '15', label: '15m', title: 'Reads like Wall Migration' },
           ]}
-          value={settings.holdMin >= 5 ? '5' : settings.holdMin >= 3 ? '3' : '1'}
+          value={settings.holdMin >= 15 ? '15' : settings.holdMin >= 5 ? '5' : '1'}
           onChange={(v) => update({ holdMin: Number(v) })}
         />
       </Field>
@@ -592,13 +616,13 @@ function BoardTable({
 
 function allTitle(r: AlignRow): string {
   const a = r.all
-  if (!a) return 'Swept only for tickers where 2+ walls agree'
-  if (a.state === 'queued') return 'Queued for a full-chain sweep (every ~5 min)'
-  if (a.state === 'error') return `Full-chain sweep failed: ${a.err ?? 'unknown error'}`
-  const parts = [`${a.n ?? '?'} expirations, 0DTE excluded`]
+  if (!a) return 'No all-expirations reading for this ticker today'
+  if (a.state === 'queued') return 'Waiting on the first all-expirations reading'
+  if (a.state === 'error') return `All-expirations reading failed: ${a.err ?? 'unknown error'}`
+  const parts = [`next ${a.n ?? '?'} expirations, 0DTE excluded`]
   if (a.net != null) parts.push(`net ${fmtB(a.net)}`)
   if (a.next && a.net != null) parts.push(`${(Math.abs(a.net) / a.next).toFixed(1)}× next`)
-  if (a.at) parts.push(`swept ${fmtEt(a.at)}`)
+  if (a.at) parts.push(`as of ${fmtEt(a.at)}`)
   return parts.join(' · ')
 }
 
@@ -661,8 +685,8 @@ function Legend({ tol }: { tol: 0 | 1 }) {
         off the wall
       </span>
       <span>
-        ALL ex-0D = wall across every expiry but 0DTE (full chain; swept every ~5 min for tickers with 2+ walls agreeing;
-        … = queued)
+        ALL ex-0D = the same wall across the next expirations minus 0DTE — Wall Migration’s “All expirations
+        minus 0DTE” scope, updated every ~5 min
       </span>
       <span>Dist = strikes and % from spot · Dom = wall ÷ next-biggest strike in that expiry</span>
     </div>

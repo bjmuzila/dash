@@ -26,9 +26,16 @@
 //   4. DOMINANCE IS A CURRENT-ONLY FILTER. The server sends the runner-up's size
 //      for the latest sweep only (history is run-length encoded strikes), so the
 //      dominance threshold filters what the board SHOWS, never the timeline.
-//   5. HOLD IS A DEBOUNCE ON HISTORY. A state run shorter than `holdMin` is
-//      folded into the run before it — except the live one, which is always
-//      shown so a fresh lock is never hidden while it proves itself.
+//   5. HOLD STEADIES THE WALLS, NOT THE STATES. strike_growth is swept every
+//      minute, and a wall whose two biggest strikes are close in size changes
+//      hands minute to minute. A wall move only counts once the new strike
+//      has held `holdMin` minutes (`steadyRuns`); a shorter excursion is
+//      ignored and the incumbent keeps it. Wall Migration gets the same calm
+//      by sampling every 15 minutes — Hold 15m reads like it.
+//   6. THE DEFINITIONS ARE WALL MIGRATION'S (server-side, see the align route):
+//      Call wall = biggest + GEX ABOVE spot, Put wall = most − GEX BELOW spot,
+//      Core = biggest |GEX| either side. Core is the jumpy one — it hops
+//      between the call and the put side when the two are close in size.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type AlignMode = 'abs' | 'pos' | 'neg'
@@ -59,6 +66,8 @@ export interface AlignAllWall {
   /** How many expirations went into it. */
   n?: number
   err?: string
+  /** History today, [tMs, strike] at every change (≈5-minute cadence). */
+  segs?: Array<[number, number]>
 }
 
 export interface AlignSymbolRaw {
@@ -91,7 +100,7 @@ export interface AlignSettings {
   minDist: number
   /** Minimum wall ÷ runner-up across the aligned expiries. 1 = off. */
   minDom: number
-  /** Debounce for the history, in minutes (the recorder sweeps once a minute). */
+  /** A wall move counts only after the new strike holds this many minutes. */
   holdMin: number
   zeroTrigger: boolean
   /** Only show tickers whose ALL ex-0DTE wall is on the shared wall too. */
@@ -99,11 +108,11 @@ export interface AlignSettings {
 }
 
 export const DEFAULT_SETTINGS: AlignSettings = {
-  mode: 'abs',
+  mode: 'pos',
   tol: 0,
   minDist: 1,
   minDom: 1,
-  holdMin: 3,
+  holdMin: 5,
   zeroTrigger: true,
   requireAll: false,
 }
@@ -122,13 +131,8 @@ export const STATE_LABEL: Record<AlignState, string> = {
 /** Which tickers a board shows. `main` = the roster's MAIN (hot) lane. */
 export type AlignUniverse = 'all' | 'main'
 
-/**
- * `main` adds `focus=hot`, which tells the server to keep every MAIN ticker's
- * ALL ex-0DTE wall swept, not only the ones whose walls already agree. The board
- * payload itself is the same either way (the server caches it per mode).
- */
-export const alignUrl = (mode: AlignMode, universe: AlignUniverse = 'all'): string =>
-  `/proxy/strike-growth/align?mode=${mode}${universe === 'main' ? '&focus=hot' : ''}`
+/** One URL per mode, shared by Align, Align · Main and the replay — so all three are one cache entry. */
+export const alignUrl = (mode: AlignMode): string => `/proxy/strike-growth/align?mode=${mode}`
 
 export const framesUrl = (symbol: string, date: string | null): string =>
   `/proxy/strike-growth/frames-by-expiry?symbol=${encodeURIComponent(symbol)}${
@@ -276,34 +280,63 @@ export function wallSteps(sym: AlignSymbolRaw): Array<{ t: number; walls: Array<
   return out
 }
 
+/**
+ * Steady a run-length wall history: a move to a new strike counts only if that
+ * strike then HOLDS for `holdMs`. A shorter excursion is dropped and the
+ * incumbent keeps the wall, so A → B (2 min) → A reads as A throughout, and
+ * A → B (2 min) → C (20 min) reads as A then C. The last run is measured to
+ * `endT`, so a move that has not yet held long enough does not count yet.
+ */
+export function steadyRuns(segs: ReadonlyArray<[number, number]>, holdMs: number, endT: number): Array<[number, number]> {
+  const out: Array<[number, number]> = []
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i]
+    if (!seg) continue
+    const last = out[out.length - 1]
+    if (last && last[1] === seg[1]) continue
+    const dur = (segs[i + 1]?.[0] ?? endT) - seg[0]
+    if (!last || dur >= holdMs) out.push([seg[0], seg[1]])
+  }
+  return out
+}
+
+/** The same rule over a per-frame series (null = no reading; the incumbent holds). */
+export function steadySeries(t: readonly number[], vals: ReadonlyArray<number | null>, holdMs: number): Array<number | null> {
+  const n = vals.length
+  const out: Array<number | null> = new Array(n).fill(null)
+  let incumbent: number | null = null
+  let i = 0
+  while (i < n) {
+    const v = vals[i] ?? null
+    let j = i + 1
+    while (j < n && (vals[j] ?? null) === v) j++
+    const start = t[i] ?? 0
+    const end = j < n ? (t[j] ?? start) : (t[n - 1] ?? start) + 60_000
+    if (v != null && (incumbent == null || end - start >= holdMs)) incumbent = v
+    for (let k = i; k < j; k++) out[k] = incumbent
+    i = j
+  }
+  return out
+}
+
+const holdMsOf = (s: Pick<AlignSettings, 'holdMin'>): number => Math.max(0, s.holdMin) * 60_000
+
+/** The symbol with every expiry's history steadied (see steadyRuns). */
+export function steadySym(sym: AlignSymbolRaw, settings: AlignSettings, endT: number): AlignSymbolRaw {
+  const holdMs = holdMsOf(settings)
+  return { ...sym, walls: sym.walls.map((w) => ({ ...w, segs: steadyRuns(w.segs, holdMs, endT) })) }
+}
+
+/** State runs over a (steadied) symbol's history. */
 export function timeline(sym: AlignSymbolRaw, settings: AlignSettings, endT: number): Run[] {
   const steps = wallSteps(sym)
-  const raw: Run[] = []
-  for (let i = 0; i < steps.length; i++) {
-    const s = steps[i]
-    if (!s) continue
+  const out: Run[] = []
+  for (const s of steps) {
     const v = evaluate(s.walls, sym.step, settings)
-    const prev = raw[raw.length - 1]
+    const prev = out[out.length - 1]
     if (prev && prev.state === v.state && sameK(prev.k, v.k)) continue
     if (prev) prev.end = s.t
-    raw.push({ start: s.t, end: endT, state: v.state, k: v.k, walls: s.walls })
-  }
-  const holdMs = Math.max(0, settings.holdMin) * 60_000
-  const out: Run[] = []
-  for (let i = 0; i < raw.length; i++) {
-    const r = raw[i]
-    if (!r) continue
-    const isLast = i === raw.length - 1
-    const last = out[out.length - 1]
-    if (!isLast && last && r.end - r.start < holdMs) {
-      last.end = r.end
-      continue
-    }
-    if (last && last.state === r.state && sameK(last.k, r.k)) {
-      last.end = r.end
-      continue
-    }
-    out.push({ ...r })
+    out.push({ start: s.t, end: endT, state: v.state, k: v.k, walls: s.walls })
   }
   return out
 }
@@ -388,8 +421,18 @@ export interface AlignRow {
   frontIsZeroDte: boolean
 }
 
-export function buildRow(sym: AlignSymbolRaw, settings: AlignSettings, date: string | undefined, now: number): AlignRow {
-  const walls = sym.walls.map((w) => w.strike)
+export function buildRow(raw: AlignSymbolRaw, settings: AlignSettings, date: string | undefined, now: number): AlignRow {
+  // Everything below reads the STEADIED walls. Where the steady wall is not the
+  // strike the latest sweep ranked first, that sweep's size and runner-up do
+  // not describe it, so its GEX and dominance are left unknown.
+  const sym = steadySym(raw, settings, now)
+  const walls = sym.walls.map((w) => {
+    const last = w.segs[w.segs.length - 1]
+    return last ? last[1] : w.strike
+  })
+  sym.walls.forEach((w, i) => {
+    if (walls[i] !== w.strike) sym.walls[i] = { ...w, net: 0, next: 0 }
+  })
   const nets = sym.walls.map((w) => w.net)
   const verdict = evaluate(walls, sym.step, settings, nets)
   const runs = timeline(sym, settings, now)
@@ -407,7 +450,7 @@ export function buildRow(sym: AlignSymbolRaw, settings: AlignSettings, date: str
     sym.walls.forEach((w, i) => {
       if (!verdict.on[i]) return
       wallGex += w.net
-      const d = w.next > 0 ? Math.abs(w.net) / w.next : null
+      const d = w.next > 0 && w.net !== 0 ? Math.abs(w.net) / w.next : null
       if (d != null) dom = dom == null ? d : Math.min(dom, d)
     })
   }

@@ -43,10 +43,10 @@ import {
   framesUrl,
   joinOrder,
   parseReplay,
+  steadySeries,
   type AlignResponse,
   type AlignSettings,
   type AlignState,
-  type AlignUniverse,
   type ReplayResponse,
   type ReplaySeries,
   type Verdict,
@@ -79,17 +79,15 @@ export default function AlignReplay({
   symbol,
   date,
   settings,
-  universe = 'all',
   onBack,
 }: {
   symbol: string
   date: string | null
   settings: AlignSettings
-  universe?: AlignUniverse
   onBack: () => void
 }) {
   // Both at entry — see note 2. Same URL as the board that opened this, so it is a cache hit.
-  const board = useQuery<AlignResponse>(alignUrl(settings.mode, universe), { pollMs: ALIGN_POLL_MS, staleMs: 30_000 })
+  const board = useQuery<AlignResponse>(alignUrl(settings.mode), { pollMs: ALIGN_POLL_MS, staleMs: 30_000 })
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
   const live = !date || date === today
   const frames = useQuery<ReplayResponse>(framesUrl(symbol, date), {
@@ -111,22 +109,29 @@ export default function AlignReplay({
     [frames.data, settings.mode, symRaw?.expiries],
   )
   const step = symRaw?.step ?? inferStep(series)
+  // The same Hold rule the board applies: a wall move counts once it has held
+  // `holdMin` minutes. The raw per-minute walls are still drawn, faintly.
+  const holdMs = Math.max(0, settings.holdMin) * 60_000
+  const steady = useMemo<ReplaySeries>(
+    () => ({ ...series, walls: series.walls.map((w) => steadySeries(series.t, w, holdMs)) }),
+    [series, holdMs],
+  )
   const verdicts = useMemo(
     () =>
-      series.t.map((_, fi) =>
+      steady.t.map((_, fi) =>
         evaluate(
-          series.walls.map((w) => w[fi] ?? null),
+          steady.walls.map((w) => w[fi] ?? null),
           step,
           settings,
         ),
       ),
-    [series, step, settings],
+    [steady, step, settings],
   )
 
   const lastV = verdicts[verdicts.length - 1]
   const verdict: Verdict | undefined = row?.verdict ?? lastV
   const k = verdict?.k ?? null
-  const joins = useMemo(() => joinOrder(series, k, step, settings.tol), [series, k, step, settings.tol])
+  const joins = useMemo(() => joinOrder(steady, k, step, settings.tol), [steady, k, step, settings.tol])
   const frontIsZeroDte = !!sessionDate && series.expiries[0] === sessionDate
 
   const replayError =
@@ -212,11 +217,12 @@ export default function AlignReplay({
           ) : (
             <div className="flex" style={{ height: CHART_H }}>
               <ConvergenceChart
-                series={series}
+                raw={series}
+                series={steady}
                 verdicts={verdicts}
                 k={k}
                 step={step}
-                allStrike={symRaw?.all?.state === 'ok' ? (symRaw.all.strike ?? null) : null}
+                allSegs={symRaw?.all?.state === 'ok' ? (symRaw.all.segs ?? null) : null}
               />
             </div>
           )}
@@ -259,18 +265,27 @@ export default function AlignReplay({
                 <span className="text-right" style={{ color: DIM }}>WALL</span>
                 <span className="text-right" style={{ color: DIM }}>$GEX</span>
                 <span className="text-right" style={{ color: DIM }}>DOM</span>
-                {symRaw.walls.map((w, i) => {
+                {(row?.sym ?? symRaw).walls.map((w, i) => {
                   const on = verdict?.on[i] ?? false
                   return [
                     <span key={`e${i}`} style={{ color: i === 0 ? STATE_COLOR.PENDING : T.text }}>
                       {i === 0 ? (frontIsZeroDte ? '0DTE ' : 'Front ') : ''}
                       {fmtExpiry(w.expiry)}
                     </span>,
-                    <span key={`w${i}`} className="text-right font-bold" style={{ color: on ? T.text : DIM }}>
-                      {w.strike != null ? fmtStrike(w.strike) : EM_DASH}
+                    <span
+                      key={`w${i}`}
+                      className="text-right font-bold"
+                      style={{ color: on ? T.text : DIM }}
+                      title={
+                        row && row.walls[i] !== w.strike && w.strike != null
+                          ? `Latest sweep has ${fmtStrike(w.strike)}; not held ${settings.holdMin}m yet`
+                          : undefined
+                      }
+                    >
+                      {row?.walls[i] != null ? fmtStrike(row.walls[i] as number) : w.strike != null ? fmtStrike(w.strike) : EM_DASH}
                     </span>,
                     <span key={`g${i}`} className="text-right" style={{ color: w.net >= 0 ? V2.up : V2.red }}>
-                      {fmtB(w.net)}
+                      {w.net !== 0 ? fmtB(w.net) : EM_DASH}
                     </span>,
                     <span key={`d${i}`} className="text-right">
                       {w.next > 0 ? `${(Math.abs(w.net) / w.next).toFixed(1)}×` : EM_DASH}
@@ -385,22 +400,24 @@ function inferStep(s: ReplaySeries): number {
 // ── The chart ────────────────────────────────────────────────────────────────
 
 function ConvergenceChart({
+  raw,
   series,
   verdicts,
   k,
   step,
-  allStrike,
+  allSegs,
 }: {
+  raw: ReplaySeries
   series: ReplaySeries
   verdicts: Verdict[]
   k: number | null
   step: number
-  allStrike: number | null
+  allSegs: ReadonlyArray<[number, number]> | null
 }) {
   const { onMount, onResize, onVisibility, setDraw } = useCanvasRenderer()
   useEffect(() => {
-    setDraw((canvas, w, h) => drawConvergence(canvas, w, h, series, verdicts, k, step, allStrike))
-  }, [setDraw, series, verdicts, k, step, allStrike])
+    setDraw((canvas, w, h) => drawConvergence(canvas, w, h, series, verdicts, k, step, allSegs, raw))
+  }, [setDraw, raw, series, verdicts, k, step, allSegs])
   return <ChartFrame className="select-none" onMount={onMount} onResize={onResize} onVisibility={onVisibility} />
 }
 
@@ -415,7 +432,8 @@ function drawConvergence(
   verdicts: Verdict[],
   k: number | null,
   step: number,
-  allStrike: number | null = null,
+  allSegs: ReadonlyArray<[number, number]> | null = null,
+  raw: ReplaySeries | null = null,
 ): void {
   const ctx = sizeCanvas(canvas, w, h)
   if (!ctx) return
@@ -447,9 +465,11 @@ function drawConvergence(
     if (v > hi) hi = v
   }
   for (const col of s.walls) for (const v of col) see(v)
+  if (raw) for (const col of raw.walls) for (const v of col) see(v)
   for (const v of s.spot) see(v)
   see(k)
-  see(allStrike)
+  const allLast = allSegs?.[allSegs.length - 1]?.[1] ?? null
+  for (const sg of allSegs ?? []) if (sg[0] <= tN) see(sg[1])
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return
   const padY = step > 0 ? step : Math.max(0.5, (hi - lo) * 0.05)
   lo -= padY
@@ -526,12 +546,16 @@ function drawConvergence(
 
   // Walls: step lines, back to front so 0DTE draws on top. A small vertical
   // offset per expiry keeps lines that share a strike individually visible.
+  // The RAW per-minute walls go underneath, faint, so what Hold filtered out
+  // is still visible; the steadied walls are the bold lines on top.
   const m = s.walls.length
+  const layers: Array<{ src: ReplaySeries; faint: boolean }> = raw ? [{ src: raw, faint: true }, { src: s, faint: false }] : [{ src: s, faint: false }]
+  for (const layer of layers)
   for (let j = m - 1; j >= 0; j--) {
-    const col = s.walls[j] ?? []
+    const col = layer.src.walls[j] ?? []
     const off = (j - (m - 1) / 2) * 2
-    ctx.strokeStyle = tokenHex(expToken(j))
-    ctx.lineWidth = j === 0 ? 3 : 2
+    ctx.strokeStyle = layer.faint ? tokenHexAlpha(expToken(j), 0.22) : tokenHex(expToken(j))
+    ctx.lineWidth = layer.faint ? 1 : j === 0 ? 3 : 2
     ctx.beginPath()
     let prevY: number | null = null
     for (let i = 0; i < n; i++) {
@@ -551,22 +575,35 @@ function drawConvergence(
     ctx.stroke()
   }
 
-  // ALL ex-0DTE wall: the whole board's answer, now — a dashed level, not a line
-  // through time (it is swept every few minutes, not recorded per minute).
-  if (allStrike != null) {
-    const y = Y(allStrike)
+  // ALL ex-0DTE wall through the session — a dashed step line. Recorded every
+  // ~5 minutes (scanner-recorder's 'agg' leg), the same series Wall Migration's
+  // "All expirations minus 0DTE" scope draws.
+  if (allSegs && allSegs.length) {
     ctx.strokeStyle = tokenHex('--color-v2-accent')
     ctx.lineWidth = 1.5
     ctx.setLineDash([8, 5])
     ctx.beginPath()
-    ctx.moveTo(x0, y)
-    ctx.lineTo(x1, y)
+    let prevY: number | null = null
+    for (let i = 0; i < allSegs.length; i++) {
+      const sg = allSegs[i]
+      if (!sg) continue
+      const ta = Math.max(t0, sg[0])
+      const tb = Math.min(tN, allSegs[i + 1]?.[0] ?? tN)
+      if (tb < t0 || ta > tN) continue
+      const y = Y(sg[1])
+      if (prevY == null) ctx.moveTo(X(ta), y)
+      else ctx.lineTo(X(ta), y)
+      ctx.lineTo(X(tb), y)
+      prevY = y
+    }
     ctx.stroke()
     ctx.setLineDash([])
-    ctx.fillStyle = tokenHex('--color-v2-accent')
-    ctx.textAlign = 'right'
-    ctx.textBaseline = 'bottom'
-    ctx.fillText(`ALL ex-0D ${fmtStrike(allStrike)}`, x1 - 4, y - 3)
+    if (allLast != null) {
+      ctx.fillStyle = tokenHex('--color-v2-accent')
+      ctx.textAlign = 'right'
+      ctx.textBaseline = 'bottom'
+      ctx.fillText(`ALL ex-0D ${fmtStrike(allLast)}`, x1 - 4, Y(allLast) - 3)
+    }
   }
 
   // Lock markers: every minute the state turned LOCKED.

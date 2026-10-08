@@ -147,16 +147,27 @@ export default function TapeScroll({ ws, onHide }: { ws: VelaWorkspace; onHide: 
     const go = () => {
       if (!document.hidden) void refreshQuotes(syms)
     }
-    go()
+    // the first read happens even in a background tab: Volt watch is never left empty
+    void refreshQuotes(syms)
     const t = setInterval(go, QUOTES_MS)
-    return () => clearInterval(t)
+    // back in view: read now, not at the next tick
+    const onVis = () => {
+      if (!document.hidden) go()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      clearInterval(t)
+      document.removeEventListener('visibilitychange', onVis)
+    }
   }, [syms])
 
   // Volts
   useEffect(() => {
     let alive = true
-    const readAll = async (fresh: boolean) => {
-      if (document.hidden || !syms.length) return
+    let reading = false
+    const readAll = async (fresh: boolean, force = false) => {
+      if ((document.hidden && !force) || !syms.length || reading) return
+      reading = true
       const queue = [...syms]
       const worker = async () => {
         for (let next = queue.shift(); next; next = queue.shift()) {
@@ -169,13 +180,22 @@ export default function TapeScroll({ ws, onHide }: { ws: VelaWorkspace; onHide: 
         }
       }
       await Promise.all(Array.from({ length: Math.min(READS_AT_ONCE, queue.length) }, worker))
+      reading = false
       if (alive) setRound((n) => n + 1)
     }
-    void readAll(false)
+    // the first round runs even in a background tab (2026-10-08: a tab opened behind
+    // another sat on "·" for every ticker until it was looked at and a minute passed)
+    void readAll(false, true)
     const t = setInterval(() => void readAll(true), LEVELS_MS)
+    // back in view: read now, not at the next tick
+    const onVis = () => {
+      if (!document.hidden) void readAll(true)
+    }
+    document.addEventListener('visibilitychange', onVis)
     return () => {
       alive = false
       clearInterval(t)
+      document.removeEventListener('visibilitychange', onVis)
     }
   }, [syms, gexRev])
 
