@@ -12044,6 +12044,38 @@ Return exactly one element per input key, in the same order. Never merge, split,
     });
   }
 
+  // ── journal.cbedge.net gate ────────────────────────────────────────────────
+  //
+  // /api/tradejournal/verify is what deploy/journal/nginx.conf calls with
+  // `auth_request` before it lets ANY request through to the self-hosted
+  // LuxAlgo Trade Journal (the `journal` container). Same contract as
+  // /api/vela/verify:  200 serve · 401 no session · 403 no access · 503 us.
+  //
+  // OWNER ONLY (2026-10-08). The journal is single-user — one SQLite file, one
+  // set of broker keys, no accounts — so anyone this lets in reads and writes
+  // the owner's journal. Widening it means a per-user journal first, not a
+  // longer list here. Not to be confused with /api/journal (v2's old page).
+  {
+    register('/api/tradejournal/verify', {
+      auth: 'user', methods: ['GET', 'HEAD'],
+      async handler(req, res, ctx, verdict) {
+        try {
+          const userId = verdict && verdict.userId;
+          if (!userId) { send(res, 401, { ok: false, reason: 'no-session' }); return; }
+          let owner = Boolean(ctx && ctx.ownerUserId && userId === ctx.ownerUserId);
+          if (!owner) {
+            const u = await libDb.getUserById(userId);
+            owner = Boolean(u && u.is_owner);
+          }
+          if (!owner) { send(res, 403, { ok: false, reason: 'owner-only' }); return; }
+          send(res, 200, { ok: true }, { 'Cache-Control': 'no-store' });
+        } catch (err) {
+          send(res, 503, { ok: false, reason: 'verify-unavailable', detail: String(err) });
+        }
+      },
+    });
+  }
+
   // /api/admin/discord-connections — linked-Discord accounts. discordAvatarUrl
   // inlined from lib/discord.ts.
   {

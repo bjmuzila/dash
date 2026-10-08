@@ -493,6 +493,54 @@ services:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8091:8091"
 
+  # journal.cbedge.net — LuxAlgo's open-source Trade Journal (MIT), self-hosted.
+  # Opened from Vela's top bar (the Journal button beside Workspace,
+  # cbedge-v3/src/pages/vela/journalLink.ts).
+  #
+  # Two services:
+  #   journal       the app (Next.js + SQLite), built UNMODIFIED from a pinned
+  #                 upstream commit by deploy/journal/Dockerfile. No host port:
+  #                 only journal-gate reaches it, over the compose network.
+  #   journal-gate  stock nginx:alpine + deploy/journal/nginx.conf, which
+  #                 auth_requests /api/tradejournal/verify (OWNER ONLY — the
+  #                 journal is single-user) before every request.
+  #
+  # Data lives on the host at /opt/trade-journal-data (journal.db + the key
+  # file that encrypts broker credentials). Not in git. Back that folder up.
+  # First run: `sudo mkdir -p /opt/trade-journal-data && sudo chown 1000:1000
+  # /opt/trade-journal-data` (the image runs as `node`, uid 1000).
+  #
+  # Reached only via the Cloudflare Tunnel — add to /etc/cloudflared/config.yml
+  # ABOVE the catch-all 404 rule:
+  #     - hostname: journal.cbedge.net
+  #       service: http://127.0.0.1:8092
+  # then `cloudflared tunnel route dns <tunnel> journal.cbedge.net` and
+  # `systemctl restart cloudflared`.
+  journal:
+    build:
+      context: ./deploy/journal
+    image: trade-journal:latest
+    container_name: trade-journal
+    restart: unless-stopped
+    environment:
+      JOURNAL_DATA_DIR: /data
+    volumes:
+      - /opt/trade-journal-data:/data
+
+  journal-gate:
+    image: nginx:alpine
+    container_name: journal-gate
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+      - journal
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8092:8092"
+    volumes:
+      - ./deploy/journal/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/journal/denied.html:/usr/share/nginx/html/denied.html:ro
+
   # sites.cbedge.net — password-protected client demo sites (static, nginx).
   #
   # Managed from owner.cbedge.net → Client Sites: create a site, upload its

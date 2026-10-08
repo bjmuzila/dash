@@ -28,6 +28,7 @@ import { bindLevelAlerts, registerLevelAlerts } from '@/pages/vela/levels/levelA
 import { bindSetups, onStrip, registerSetups, setStripShown, stripShown } from '@/pages/vela/setups/setups'
 import { bindSymbolPicker, registerSymbolPicker, SYMBOL_ACTION_ID } from '@/pages/vela/symbolPicker'
 import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@/pages/vela/workspaceMenu'
+import { JOURNAL_ACTION_ID, registerJournalLink } from '@/pages/vela/journalLink'
 import { CLOCK_ACTION_ID, registerSessionClock } from '@/pages/vela/sessionClock'
 import { GEX_BASIS_ACTION_ID, bindGexBasis, registerGexBasis } from '@/pages/vela/gexBasisMenu'
 import { patchVwapSession } from '@/pages/vela/vwapSession'
@@ -310,7 +311,8 @@ const PHONE_GRID_KEY = `${PHONE_KEY}-grid`
 const DESKTOP_TOPBAR = {
   left: [SYMBOL_ACTION_ID, 'timeframes', 'style', 'layout', 'indicators', GEX_BASIS_ACTION_ID, 'actions', 'undo-redo'],
   // ↻ beside the camera: candles, data and the live feed refreshed in place (vela/refreshChart.ts)
-  right: [CLOCK_ACTION_ID, 'alerts', WORKSPACE_ACTION_ID, 'screenshot', REFRESH_ACTION_ID],
+  // Journal beside Workspace: opens journal.cbedge.net in its own tab (vela/journalLink.ts)
+  right: [CLOCK_ACTION_ID, 'alerts', WORKSPACE_ACTION_ID, JOURNAL_ACTION_ID, 'screenshot', REFRESH_ACTION_ID],
 }
 
 // Before any workspace exists: Vela reads its native-indicator and widget-action
@@ -330,6 +332,7 @@ registerLevelAlerts()
 registerSetups()
 registerSymbolPicker()
 registerWorkspaceMenu()
+registerJournalLink()
 registerSessionClock()
 // one GEX book for every indicator (OI only / OI + Vol / Vol only), beside Indicators
 registerGexBasis()
