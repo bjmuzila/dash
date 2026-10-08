@@ -1,5 +1,10 @@
 // Shape of the object created by the inline script in index.html.
 // Nothing else in the app may write to window.__CB_BOOT__ except src/data/socket.ts.
+// (The three `prefs*` fields are written by that inline script only, and read
+// by src/data/prefsSync.ts.)
+
+/** POST /api/user-prefs/sync, as the inline script hands it over: null when the request never got an answer. */
+export type PrefsBootResult = { status: number; body: unknown } | null
 
 export interface CbBoot {
   /** performance.now() at the moment the inline script ran. */
@@ -19,6 +24,12 @@ export interface CbBoot {
   /** Last-known state read from IndexedDB, started before React booted. */
   cache: Promise<Record<string, unknown>> | null
   error: string | null
+  /** This account's settings, requested before the bundle (src/data/prefsSync.ts). */
+  prefs?: Promise<PrefsBootResult> | null
+  /** That request's answer, once it has one. `undefined` while it is still out. */
+  prefsResult?: PrefsBootResult
+  /** Settles when the entry may run: the settings are in, or the wait ran out. */
+  prefsReady?: Promise<void> | null
 }
 
 declare global {

@@ -1,3 +1,9 @@
+// FIRST, before anything else of the app evaluates: puts this account's
+// settings (layouts, card settings, Vela's charts and indicators, …) into
+// localStorage, and sends later changes back to the account. Several modules
+// below read a setting the moment they load, so this cannot move down the list
+// or into a function. See the header of data/prefsSync.ts.
+import '@/data/prefsSync'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import '@/design/tokens.css'
@@ -60,11 +66,16 @@ if (import.meta.env.DEV) {
   })
 }
 
-const root = document.getElementById('root')
-if (!root) throw new Error('#root missing from index.html')
-
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+// The entry is appended by the loader once the settings answer (vite.config.ts,
+// holdEntryForPrefs), so in principle it can run before the parser reaches #root.
+function mount(): void {
+  const root = document.getElementById('root')
+  if (!root) throw new Error('#root missing from index.html')
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+}
+if (document.getElementById('root') || document.readyState !== 'loading') mount()
+else document.addEventListener('DOMContentLoaded', mount, { once: true })

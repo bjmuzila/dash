@@ -1,7 +1,49 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwind from '@tailwindcss/vite'
 import { fileURLToPath, URL } from 'node:url'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOLD THE ENTRY UNTIL THE ACCOUNT'S SETTINGS ARE IN (src/data/prefsSync.ts).
+//
+// index.html / vela.html ask for this account's settings in the head. The app
+// must not START before they answer: plenty of v3 reads a setting the moment
+// its module loads (layoutStore at import, the Vela stores at import, every
+// card at mount), and a read that beats the answer is a read of the wrong
+// copy. So the entry's <script type="module" src> becomes
+//
+//   <link rel="modulepreload" href=entry>   the bundle still downloads NOW,
+//                                           in parallel with the settings
+//   <script>… prefsReady.then(append the entry as a module script)</script>
+//
+// prefsReady settles on the answer or after 3s, whichever comes first, so a
+// slow API costs at most that and a failed one costs nothing. Without a boot
+// record (a test page) the entry loads at once.
+//
+// Dev too: the dev server's entry (/src/main.tsx, /src/vela/main.tsx) is held
+// the same way, so dev boots the way production does.
+// ─────────────────────────────────────────────────────────────────────────────
+function holdEntryForPrefs(): Plugin {
+  return {
+    name: 'cb-hold-entry-for-prefs',
+    transformIndexHtml: {
+      order: 'post',
+      handler(html, ctx) {
+        const isEntry = (src: string) =>
+          ctx.chunk ? src.endsWith(`/${ctx.chunk.fileName}`) : /\/src\/(vela\/)?main\.tsx$/.test(src)
+        return html.replace(
+          /<script type="module"( crossorigin)? src="([^"]+)"><\/script>/g,
+          (tag, co: string | undefined, src: string) =>
+            isEntry(src)
+              ? `<link rel="modulepreload"${co ?? ''} href="${src}">` +
+                `<script>(function(s,b){function g(){var e=document.createElement('script');e.type='module';${co ? "e.crossOrigin='';" : ''}e.src=s;document.head.appendChild(e)}` +
+                `b=b&&b.prefsReady;b?b.then(g,g):g()})(${JSON.stringify(src)},window.__CB_BOOT__)</script>`
+              : tag,
+        )
+      },
+    },
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // cbedge-v3 build config.
@@ -34,7 +76,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: vela ? '/' : '/v3/',
-    plugins: [react(), tailwind()],
+    plugins: [react(), tailwind(), holdEntryForPrefs()],
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
     },

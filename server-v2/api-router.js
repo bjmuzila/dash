@@ -4764,6 +4764,33 @@ register('/api/quotes-batch', {
         return { price, prevClose, change, pct, sparkPre: sp?.sparkPre, sparkRth: sp?.sparkRth, session: sp?.session };
       } catch { return { price: null, prevClose: null, change: null, pct: null }; }
     }
+    // ── /ES and /NQ: the LIVE price, not Yahoo's (2026-10-08) ──────────────
+    // Yahoo's ES=F / NQ=F are CME-DELAYED, about ten minutes. Vela's ticker chip
+    // and watchlist read this route while the candles beside them come off the
+    // dxLink stream, so the chip said 7,821.75 with the chart at 7,827.00. That
+    // stream is in this process: the 1m candles proxy-tastytrade.js keeps in
+    // market-state (es1mCandles / nq1mCandles, the 5m esCandles / nqCandles
+    // when 1m is off), the same rows the socket sends every chart. Its newest
+    // close is `last` whenever that bar is recent; change and % are then
+    // recomputed against Yahoo's previous close, which is still the reference.
+    // A stale or empty stream (feed down, process just booted) keeps Yahoo's.
+    const LIVE_FUT_MAX_AGE_MS = 15 * 60_000;
+    let marketState = null;
+    try { marketState = require('./state/market-state'); } catch { marketState = null; }
+    const liveFuture = (sym) => {
+      const s = sym.trim().toUpperCase();
+      const nq = s.startsWith('/NQ');
+      if (!marketState || (!nq && !s.startsWith('/ES'))) return null;
+      let st;
+      try { st = marketState.getState(); } catch { return null; }
+      for (const rows of nq ? [st.nq1mCandles, st.nqCandles] : [st.es1mCandles, st.esCandles]) {
+        const last = Array.isArray(rows) && rows.length ? rows[rows.length - 1] : null;
+        const close = Number(last && last.close);
+        const ts = Number(last && last.timestamp);
+        if (close > 0 && Number.isFinite(ts) && Date.now() - ts < LIVE_FUT_MAX_AGE_MS) return close;
+      }
+      return null;
+    };
     const url0 = new URL(req.url || '/', 'http://localhost');
     const symbols = url0.searchParams.get('symbols') || '';
     const withSpark = url0.searchParams.get('spark') === '1';
@@ -4775,8 +4802,13 @@ register('/api/quotes-batch', {
     const byYahoo = new Map(fetched);
     const items = pairs.map(({ sym, yahoo }) => {
       const q = byYahoo.get(yahoo) ?? { price: null, prevClose: null, change: null, pct: null };
+      const live = liveFuture(sym);
+      const price = live ?? q.price;
+      const change = live == null ? q.change : q.prevClose != null ? live - q.prevClose : null;
+      const pct = live == null ? q.pct : q.prevClose ? ((live - q.prevClose) / q.prevClose) * 100 : null;
       return {
-        symbol: sym, last: q.price, 'prev-close': q.prevClose, change: q.change, 'percent-change': q.pct,
+        symbol: sym, last: price, 'prev-close': q.prevClose, change, 'percent-change': pct,
+        ...(live != null ? { source: 'live' } : {}),
         ...(withSpark ? { sparkPre: q.sparkPre ?? [], sparkRth: q.sparkRth ?? [], session: q.session ?? 'REG' } : {}),
       };
     });
@@ -14730,6 +14762,20 @@ try {
   if (n) console.log(`[api-router] vela telemetry routes registered (${n})`);
 } catch (e) {
   console.warn('[api-router] vela telemetry routes not loaded:', e.message);
+}
+
+// ---------------------------------------------------------------------------
+// User prefs: every v3 / Vela setting, indicator and layout, per account
+// (POST /api/user-prefs/sync, POST|PUT|GET /api/user-prefs). Its own table,
+// user_prefs, created lazily. The client half is cbedge-v3/src/data/prefsSync.ts;
+// see server-v2/user-prefs.cjs for the contract.
+// ---------------------------------------------------------------------------
+try {
+  const { registerUserPrefsRoutes } = require('./user-prefs.cjs');
+  const n = registerUserPrefsRoutes({ register, send, readJson, libDb });
+  if (n) console.log(`[api-router] user prefs routes registered (${n})`);
+} catch (e) {
+  console.warn('[api-router] user prefs routes not loaded:', e.message);
 }
 
 // ---------------------------------------------------------------------------

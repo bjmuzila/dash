@@ -368,6 +368,61 @@ async function nativeBars(sym: ResolvedSym, native: 1 | 5, staleMs = HISTORY_STA
   return sym.fut ? parseEsCandles(json) : parseCandles(json)
 }
 
+// ── The feed's own last price, per ticker ────────────────────────────────────
+// The chart's price is THIS feed: the newest bar of the tape it loaded, then the
+// live stream (SSE for cash names, the socket's 1m frames for ES / NQ). The
+// ticker chip, the picker's rows and the watchlist used to show a separate
+// 15 s quote poll (/api/quotes-batch, Yahoo underneath, and CME-DELAYED about
+// ten minutes for ES=F / NQ=F), so the chip read 7,821.75 with the candles at
+// 7,827.00 (Brandon, 2026-10-08). Every bar a chart loads or streams notes its
+// close here, BEFORE any session filter, so an RTH chart still knows the
+// overnight price the way the quote did. watchlist/store.ts quoteOf() puts it
+// over the quote only for a ticker a chart is SHOWING: one with a live
+// subscription, or a history load in the last FEED_FRESH_MS (the moment before
+// the chart subscribes). A ticker the chart left, or one only read for stats
+// (watchlist, level alerts, the session strip), falls back to the quote rather
+// than freezing at an old price.
+const feedLast = new Map<string, { t: number; c: number; at: number }>()
+/** Live subscriptions per ticker: a price is only the chart's while a chart is on it. */
+const feedSubsByKey = new Map<string, number>()
+const FEED_FRESH_MS = 10_000
+const feedSubs = new Set<() => void>()
+let feedTimer: ReturnType<typeof setTimeout> | null = null
+/** Live ticks come about once a second per chart: listeners hear at most this often. */
+const FEED_NOTIFY_MS = 250
+
+function noteFeed(key: string, t: number, c: number, live: boolean): void {
+  if (!(c > 0) || !Number.isFinite(t)) return
+  const cur = feedLast.get(key)
+  // History is fetched through a 20 s cache: it never replaces a live price for the same minute.
+  if (cur && (t < cur.t || (t === cur.t && !live))) return
+  if (cur && cur.t === t && cur.c === c) {
+    cur.at = Date.now()
+    return
+  }
+  feedLast.set(key, { t, c, at: Date.now() })
+  if (!feedTimer && feedSubs.size) {
+    feedTimer = setTimeout(() => {
+      feedTimer = null
+      for (const fn of feedSubs) fn()
+    }, FEED_NOTIFY_MS)
+  }
+}
+
+/** The last price this page's chart feed has for `ticker` (the chart's own number), or null if no chart has loaded it. */
+export function feedPrice(ticker: string): number | null {
+  const key = resolveSym(ticker).key
+  const f = feedLast.get(key)
+  if (!f) return null
+  return (feedSubsByKey.get(key) ?? 0) > 0 || Date.now() - f.at < FEED_FRESH_MS ? f.c : null
+}
+
+/** Told (at most every FEED_NOTIFY_MS) when a feed price moves. */
+export function onFeedPrice(fn: () => void): () => void {
+  feedSubs.add(fn)
+  return () => feedSubs.delete(fn)
+}
+
 function sessionFilter(bars: Bar[], session: string | undefined): Bar[] {
   if (session === 'extended') return bars
   return bars.filter((b) => isRth(b.t))
@@ -403,7 +458,11 @@ async function loadAggregated(
 ): Promise<OHLCV[]> {
   const tf = parseTf(timeframe)
   const native = nativeOf(tf)
-  const raw = sessionFilter(await nativeBars(sym, native, staleMs), session)
+  const tape = await nativeBars(sym, native, staleMs)
+  // the chart's own price, before the session filter (see feedPrice)
+  const newest = tape[tape.length - 1]
+  if (newest) noteFeed(sym.key, newest.t, newest.c, false)
+  const raw = sessionFilter(tape, session)
   const bucket = bucketFor(tf, !!sym.fut)
   let out = aggregate(raw, bucket)
   // The window's first bucket is usually cut: "the last 30 days" starts
@@ -951,9 +1010,13 @@ export class CbEdgeProvider implements DataProvider {
     const nativeMs = nativeOf(tf) * MIN_MS
     const live = new LiveBucket(bucket, nativeMs, seeds.get(seedKey(sym.key, timeframe, session)) ?? null)
     let stopped = false
+    feedSubsByKey.set(sym.key, (feedSubsByKey.get(sym.key) ?? 0) + 1)
+    const unfeed = () => feedSubsByKey.set(sym.key, Math.max(0, (feedSubsByKey.get(sym.key) ?? 1) - 1))
 
     const push = (m: MinuteBar) => {
       if (stopped) return
+      // the chip's price (see feedPrice): before the session filter, and not off a replayed boot frame
+      if (m.t >= Date.now() - STALE_LIVE_MS) noteFeed(sym.key, m.t, m.c, true)
       if (session !== 'extended' && !isRth(m.t)) return
       // With no history bar to continue, a minute from a replayed last-known
       // frame (the store restores those from IndexedDB at boot) could be days
@@ -988,6 +1051,7 @@ export class CbEdgeProvider implements DataProvider {
       })
       return () => {
         stopped = true
+        unfeed()
         unsub()
       }
     }
@@ -1058,6 +1122,7 @@ export class CbEdgeProvider implements DataProvider {
     document.addEventListener('visibilitychange', onVis)
     return () => {
       stopped = true
+      unfeed()
       halt()
       document.removeEventListener('visibilitychange', onVis)
     }

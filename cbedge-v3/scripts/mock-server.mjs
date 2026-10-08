@@ -52,6 +52,10 @@ const MIME = {
 /** Every socket connection this process has seen, in order, with its scope. */
 const connectionLog = []
 
+/** The mock account's settings (/api/user-prefs): key → { value, rev }. */
+const mockPrefs = new Map()
+let mockPrefsRev = 0
+
 // ── Synthetic market ─────────────────────────────────────────────────────────
 // One price universe shared by the candles, the chain and the GEX history, so
 // the bubbles land on the candles instead of a thousand points above them —
@@ -584,6 +588,29 @@ function api(req, res, path, params) {
   // /v3 is owner-only anyway, so that is the realistic session.
   if (path === '/api/auth/me') {
     return json(res, { user: { id: 'mock-owner', email: 'mock@cbedge.local', isOwner: true, isPaid: true } }), true
+  }
+  // The account's settings (src/data/prefsSync.ts): asked for in index.html's
+  // head on every load, written back a moment after any setting changes. One
+  // in-memory account, so a run that reloads keeps its board like the real one.
+  if (path === '/api/user-prefs/sync') {
+    return json(res, { ok: true, user: 'mock-owner', keys: Object.fromEntries([...mockPrefs].map(([k, x]) => [k, x.rev])), values: Object.fromEntries([...mockPrefs].map(([k, x]) => [k, x.value])) }), true
+  }
+  if (path === '/api/user-prefs') {
+    let body = ''
+    req.on('data', (c) => (body += c))
+    req.on('end', () => {
+      let j = {}
+      try {
+        j = JSON.parse(body || '{}')
+      } catch {
+        /* an empty write */
+      }
+      const revs = {}
+      for (const [k, v] of Object.entries(j.set ?? {})) mockPrefs.set(k, { value: String(v), rev: (revs[k] = ++mockPrefsRev) })
+      for (const k of j.del ?? []) mockPrefs.delete(k)
+      json(res, { ok: true, revs, deleted: j.del ?? [], rejected: {} })
+    })
+    return true
   }
   if (path === '/api/calendar') return json(res, mockCalendar()), true
   if (path === '/proxy/earnings-week') return json(res, mockEarnings()), true

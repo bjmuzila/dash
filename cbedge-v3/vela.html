@@ -43,6 +43,28 @@
         status: 'connecting', firstFrameAt: null, firstPaintAt: null, cache: null, error: null
       };
     </script>
+
+    <!-- This account's settings: the request index.html makes (its step 3,
+         src/data/prefsSync.ts), so Vela's layout, charts, indicators,
+         drawings, watchlists and scripts here are the account's, the same
+         as at cbedge.net/v3/vela. The entry waits up to 3s for the answer
+         (vite.config.ts, holdEntryForPrefs). -->
+    <script>
+      (function (boot) {
+        boot.prefsReady = new Promise(function (go) {
+          try {
+            var m = JSON.parse(localStorage.getItem('cb-prefs-sync') || '{}'), have = {}, k;
+            for (k in m.keys) if (m.keys[k].r > 0) have[k] = m.keys[k].r;
+            boot.prefs = fetch('/api/user-prefs/sync', {
+              method: 'POST', body: JSON.stringify({ u: m.user || null, have: have })
+            }).then(function (r) {
+              return r.json().then(function (j) { return { status: r.status, body: j }; });
+            }).catch(function () { return null; }).then(function (x) { boot.prefsResult = x; go(); return x; });
+            setTimeout(go, 3000);
+          } catch (e) { go(); }
+        });
+      })(window.__CB_BOOT__);
+    </script>
   </head>
   <body>
     <div id="root"></div>

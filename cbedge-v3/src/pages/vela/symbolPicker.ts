@@ -40,9 +40,13 @@
 // own symbol stop, and vela.css hides this action's duplicate stop there; a
 // letter typed on the chart still opens this picker, centred.
 //
-// The chip's price and change come from /api/quotes-batch through the
-// watchlist's quote cache (watchlist/store.ts), refreshed every 15 s while the
-// page is visible: the same numbers the watchlist shows.
+// The chip's price is the CHART's: the last price of the feed the candles are
+// drawn from (cbedgeProvider.ts feedPrice), repainted as it ticks. Its change
+// and % are measured from the previous close /api/quotes-batch reports, through
+// the watchlist's quote cache (watchlist/store.ts quoteOf, refreshed every 15 s
+// while the page is visible). Before 2026-10-08 the price came from that quote
+// too: a 15 s poll of Yahoo, CME-delayed about ten minutes for ES / NQ, so the
+// chip said 7,821.75 with the candles at 7,827.00.
 //
 // The page chunk carries this file only; the picker itself loads on the first
 // open, and is fetched a few seconds after the chart is up so the first
@@ -52,7 +56,7 @@
 import { registerWidgetAction } from '@luxalgo/vela'
 import { iconEl } from '@luxalgo/vela/ui'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
-import { PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
+import { PROVIDER_NAME, onFeedPrice } from '@/pages/vela/cbedgeProvider'
 import { onPhoneRoute } from '@/pages/vela/nav'
 import { normTicker, onWatchlist, quoteOf, refreshQuotes } from '@/pages/vela/watchlist/store'
 
@@ -264,6 +268,8 @@ export function bindSymbolPicker(ws: VelaWorkspace): () => void {
   const offActive = ws.on('cell:active', follow)
   const offState = ws.on('state:changed', paint)
   const offQuotes = onWatchlist(paint)
+  // the chart's own price, as it ticks (a few DOM text writes, at most 4 a second)
+  const offFeed = onFeedPrice(paint)
   follow()
   void iconsReady.then(paint)
 
@@ -294,6 +300,7 @@ export function bindSymbolPicker(ws: VelaWorkspace): () => void {
     offActive()
     offState()
     offQuotes()
+    offFeed()
     view?.closeSymbolPicker()
     if (current === ws) current = null
   }

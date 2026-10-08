@@ -25,7 +25,7 @@
 import { esCandlesUrl, parseCandles, parseEsCandles } from '@/board/gexCandles/candles'
 import { TICKER_RE } from '@/board/gexCandles/symbols'
 import { readPage, writePreset } from '@/pages/vela/script/library'
-import { CbEdgeProvider, resolveSym } from '@/pages/vela/cbedgeProvider'
+import { CbEdgeProvider, feedPrice, resolveSym } from '@/pages/vela/cbedgeProvider'
 
 export interface WatchList {
   id: string
@@ -57,6 +57,8 @@ export interface Quote {
   change: number | null
   pct: number | null
   volume: number | null
+  /** The previous close the change is measured from (the quote route's). */
+  prev?: number | null
 }
 
 const KEY = 'cb-v3-vela-watchlists'
@@ -584,7 +586,24 @@ export function chartSymbols(): Promise<SymbolRow[]> {
 
 // ── Quotes ──
 const quotes = new Map<string, Quote>()
-export const quoteOf = (sym: string): Quote | undefined => quotes.get(sym)
+/**
+ * The quote for `sym`: last, change, change %, volume.
+ *
+ * A ticker a chart on this page has loaded takes the CHART's price
+ * (cbedgeProvider.ts feedPrice: the tape and the live stream the candles are
+ * drawn from), with change and % recomputed against the quote's previous
+ * close. The quote route is a 15 s poll of another source, CME-delayed for
+ * ES / NQ, and the chip beside the chart said 7,821.75 with the candles at
+ * 7,827.00 (Brandon, 2026-10-08). Any other ticker keeps the route's numbers.
+ */
+export const quoteOf = (sym: string): Quote | undefined => {
+  const q = quotes.get(sym)
+  const px = feedPrice(sym)
+  if (px == null) return q
+  const prev = q?.prev ?? null
+  const change = prev != null ? px - prev : null
+  return { last: px, change, pct: change != null && prev ? (change / prev) * 100 : null, volume: q?.volume ?? null, prev }
+}
 const quoteSym = (sym: string) => (sym === 'ES' || sym === 'NQ' ? `/${sym}` : sym)
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
@@ -600,7 +619,13 @@ export async function refreshQuotes(symbols: readonly string[]): Promise<void> {
       const s = String(it.symbol ?? '').replace(/^\//, '')
       if (!s) continue
       const prev = quotes.get(s)
-      quotes.set(s, { last: num(it.last), change: num(it.change), pct: num(it['percent-change']), volume: prev?.volume ?? null })
+      quotes.set(s, {
+        last: num(it.last),
+        change: num(it.change),
+        pct: num(it['percent-change']),
+        volume: prev?.volume ?? null,
+        prev: num(it['prev-close']),
+      })
     }
   } catch {
     /* keep what is showing */

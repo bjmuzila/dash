@@ -118,6 +118,7 @@ not by memory.
 | App frame + nav | `src/shell/Shell.tsx` |
 | Routes | `src/App.tsx` |
 | Early boot (socket opens here) | `index.html` |
+| Settings ⇄ the account (Postgres) | `src/data/prefsSync.ts` |
 
 ## Living inside the v2 repo: two traps
 
@@ -158,6 +159,29 @@ Two consequences worth knowing:
 - `--cb-bg` / `--cb-fg` are duplicated in `index.html` so the first paint is the
   right colour. `check-budgets.mjs` fails the build if they drift from
   `tokens.css`.
+
+## Settings live on the account (`src/data/prefsSync.ts`)
+
+Since 2026-10-08 every setting v3 keeps in localStorage (board layout and named
+layouts, card settings, the rail, the theme, the chain's columns, the scanner's
+card layout, and all of Vela: its workspace document, presets, favourites,
+watchlists, scripts, alerts) is mirrored to Postgres per user
+(`server-v2/user-prefs.cjs`, table `user_prefs`) and follows the login to any
+browser, the phone and vela.cbedge.net. Pages did not change: they keep reading
+and writing localStorage.
+
+- **It must stay the FIRST import of `main.tsx` and `vela/main.tsx`.** It puts
+  the account's copy into localStorage at module scope, before any page module
+  reads one. `index.html` / `vela.html` start the request in the head and
+  `holdEntryForPrefs` in `vite.config.ts` holds the entry script (max 3s) until
+  it answers. Moving the import down, or into a function, brings back "the
+  first read is the wrong browser's".
+- **Which keys travel is decided by name** (`isSyncedKey`): everything under
+  `cb-v3-` and `cb-vela-` (plus a short list of older names). A new setting
+  needs nothing as long as its key starts `cb-v3-`. **A key that must stay in
+  ONE browser** (a session flag, a cache, a "seen" marker) must be named
+  outside those prefixes or added to `NEVER` in that file.
+- `localStorage.clear()` is never sent to the account; `removeItem` is.
 
 ## Adding a page — FOUR steps, not three
 

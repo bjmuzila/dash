@@ -52,6 +52,7 @@ import { TIMEFRAMES, tfIndex, tfLabel } from '@/pages/vela/timeframes'
 import { wallsOpacity } from '@/pages/vela/wallsOpacity'
 import { gexBasisLabel } from '@/pages/vela/gexBasis'
 import { normTicker, onWatchlist, quoteOf, refreshQuotes } from '@/pages/vela/watchlist/store'
+import { onFeedPrice } from '@/pages/vela/cbedgeProvider'
 
 const QUOTE_MS = 15_000
 /** How far the finger travels per timeframe while scrubbing. */
@@ -205,6 +206,8 @@ export function bindPhoneChrome(ws: VelaWorkspace): () => void {
   offs.push(ws.on('state:changed', paint))
   offs.push(ws.on('layout:changed', follow))
   offs.push(onWatchlist(paint))
+  // the % beside the ticker follows the chart's own price as it ticks (cbedgeProvider.ts feedPrice)
+  offs.push(onFeedPrice(paint))
   offs.push(() => offMarket())
   const quotes = window.setInterval(() => {
     if (!doc.hidden && shown) void refreshQuotes([shown])

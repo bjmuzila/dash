@@ -1,3 +1,8 @@
+// FIRST, before anything else evaluates: this account's settings into
+// localStorage (Vela's layout, charts, indicators, drawings, watchlists,
+// scripts), and changes back to the account. Same as src/main.tsx; see
+// data/prefsSync.ts.
+import '@/data/prefsSync'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import '@/design/tokens.css'
@@ -40,11 +45,16 @@ window.addEventListener('vite:preloadError', (e) => {
   window.location.reload()
 })
 
-const root = document.getElementById('root')
-if (!root) throw new Error('#root missing from vela.html')
-
-createRoot(root).render(
-  <StrictMode>
-    <VelaApp />
-  </StrictMode>,
-)
+// The entry is appended by the loader once the settings answer (vite.config.ts,
+// holdEntryForPrefs), so in principle it can run before the parser reaches #root.
+function mount(): void {
+  const root = document.getElementById('root')
+  if (!root) throw new Error('#root missing from vela.html')
+  createRoot(root).render(
+    <StrictMode>
+      <VelaApp />
+    </StrictMode>,
+  )
+}
+if (document.getElementById('root') || document.readyState !== 'loading') mount()
+else document.addEventListener('DOMContentLoaded', mount, { once: true })
