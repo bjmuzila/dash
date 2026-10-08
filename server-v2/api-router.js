@@ -12076,6 +12076,90 @@ Return exactly one element per input key, in the same order. Never merge, split,
     });
   }
 
+  // /api/tradejournal/trades — the journal.cbedge.net Trade Journal's trades, for
+  // Vela's Journal Trades indicator (cbedge-v3/src/pages/vela/studies/journal.ts).
+  //
+  // 2026-10-08, Brandon: "the journal has mock data for yesterday and the
+  // indicator isn't showing anything". The indicator read /api/journal/trades —
+  // v2's journal, derived from broker fills in Postgres — while the trades he
+  // keeps now live in the self-hosted LuxAlgo journal (the `journal` container,
+  // SQLite). This reads that journal's own GET /api/trades over the compose
+  // network (TRADE_JOURNAL_URL, default http://journal:3000; no host port, and
+  // the journal runs without its own password because journal-gate fronts it)
+  // and answers in the indicator's shape. OWNER ONLY, the same rule as the gate
+  // above: the journal is one person's.
+  {
+    const JOURNAL_BASE = (process.env.TRADE_JOURNAL_URL || 'http://journal:3000').replace(/\/+$/, '');
+    const MONTHS = 'FGHJKMNQUVXZ';
+    /** ESZ5 / MESZ25 / /ES → ES / MES; SPXW 251010C… → SPX; NVDA → NVDA. */
+    const underlyingOf = (symbol, assetClass) => {
+      const s = String(symbol || '').trim().toUpperCase().replace(/^\//, '');
+      if (assetClass === 'option') {
+        const m = s.match(/^([A-Z.]+?)\s*\d{6}[CP]/);
+        const root = m ? m[1] : s.split(/[\s_]/)[0];
+        return root === 'SPXW' ? 'SPX' : root === 'NDXP' ? 'NDX' : root === 'RUTW' ? 'RUT' : root;
+      }
+      if (assetClass === 'futures') {
+        const m = s.match(/^([A-Z]{1,4}?)([FGHJKMNQUVXZ])(\d{1,2})$/);
+        if (m && MONTHS.includes(m[2])) return m[1];
+        return s.replace(/[\s.:].*$/, '');
+      }
+      return s;
+    };
+    const kindOf = (ac) => (ac === 'futures' ? 'future' : ac === 'option' ? 'option' : 'equity');
+    const getJ = async (path) => {
+      const r = await fetch(`${JOURNAL_BASE}${path}`, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } });
+      if (!r.ok) throw new Error(`journal answered HTTP ${r.status}`);
+      return r.json();
+    };
+    register('/api/tradejournal/trades', {
+      auth: 'user', methods: ['GET'],
+      async handler(req, res, ctx, verdict) {
+        const userId = verdict && verdict.userId;
+        if (!userId) { send(res, 401, { error: 'no-session' }); return; }
+        let owner = Boolean(ctx && ctx.ownerUserId && userId === ctx.ownerUserId);
+        if (!owner) {
+          try { const u = await libDb.getUserById(userId); owner = Boolean(u && u.is_owner); } catch { /* not owner */ }
+        }
+        if (!owner) { send(res, 403, { error: 'owner-only' }); return; }
+        try {
+          const [tj, aj] = await Promise.all([
+            getJ('/api/trades?view=list'),
+            getJ('/api/accounts?summary=1').catch(() => ({ accounts: [] })),
+          ]);
+          const names = new Map((Array.isArray(aj && aj.accounts) ? aj.accounts : []).map((a) => [a.id, a.name]));
+          const rows = Array.isArray(tj && tj.trades) ? tj.trades : [];
+          const trades = rows
+            .map((t) => {
+              const open = Date.parse(t.openedAt);
+              const close = t.closedAt ? Date.parse(t.closedAt) : null;
+              const ac = String(t.assetClass || 'stock');
+              return {
+                symbol: String(t.symbol || ''),
+                underlying: underlyingOf(t.symbol, ac),
+                asset_type: kindOf(ac),
+                direction: t.direction === 'short' ? 'short' : 'long',
+                open_ts: open,
+                close_ts: Number.isFinite(close) ? close : null,
+                qty: Number(t.quantity) || 0,
+                entry: Number(t.avgEntry),
+                exit: t.avgExit == null ? null : Number(t.avgExit),
+                fees: Number(t.fees) || 0,
+                pnl: Number(t.netPnl) || 0,
+                account: names.get(t.accountId) || String(t.accountId || ''),
+                open_ext_id: String(t.key || ''),
+                close_ext_id: '',
+              };
+            })
+            .filter((t) => Number.isFinite(t.open_ts));
+          send(res, 200, { source: 'journal.cbedge.net', trades }, { 'Cache-Control': 'no-store' });
+        } catch (err) {
+          send(res, 502, { error: 'trade journal unreachable', detail: String(err && err.message || err).slice(0, 200) });
+        }
+      },
+    });
+  }
+
   // /api/admin/discord-connections — linked-Discord accounts. discordAvatarUrl
   // inlined from lib/discord.ts.
   {
@@ -14794,6 +14878,14 @@ try {
   if (n) console.log(`[api-router] vela telemetry routes registered (${n})`);
 } catch (e) {
   console.warn('[api-router] vela telemetry routes not loaded:', e.message);
+}
+// /api/vela/alerts — today's fired alerts behind Vela's toolbar bell, per account,
+// kept for the day only. See server-v2/vela-alerts.cjs.
+try {
+  const { registerVelaAlertRoutes } = require('./vela-alerts.cjs');
+  if (registerVelaAlertRoutes({ register, send, readJson, libDb })) console.log('[api-router] vela alerts route registered');
+} catch (e) {
+  console.warn('[api-router] vela alerts route not loaded:', e.message);
 }
 
 // ---------------------------------------------------------------------------

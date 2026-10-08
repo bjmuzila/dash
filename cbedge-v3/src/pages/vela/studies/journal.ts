@@ -1,8 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // CB JOURNAL TRADES: your journal's round trips, drawn where they happened.
 //
-//   /api/journal/trades   the trades the journal derived from your broker fills
-//                         (signed-in, your own; the same route v2's /trading uses)
+//   /api/tradejournal/trades   journal.cbedge.net, the self-hosted Trade Journal
+//                              (owner only; server-v2/api-router.js reads its
+//                              /api/trades over the compose network)
+//   /api/journal/trades        v2's journal, derived from broker fills, used when
+//                              the Trade Journal has nothing for you (2026-10-08:
+//                              the indicator read only this one, so the trades kept
+//                              in journal.cbedge.net never showed)
 //
 // Each trade is an entry marker and an exit marker joined by a dashed line,
 // green when it made money and red when it lost, with the P&L beside the exit.
@@ -55,6 +60,8 @@ interface JrS {
 }
 
 const FAMILY: Record<string, string[]> = { ES: ['ES', 'MES'], NQ: ['NQ', 'MNQ'] }
+/** A fill this far (as a share of the candle's close) from its candle is not on this chart's prices. */
+const OFF_CHART = 0.1
 
 function onThisChart(c: StudyCtx, t: Trade): 'price' | 'under' | null {
   const u = (t.underlying || '').toUpperCase()
@@ -63,9 +70,15 @@ function onThisChart(c: StudyCtx, t: Trade): 'price' | 'under' | null {
   return t.asset_type === 'option' ? 'under' : 'price'
 }
 
+/** journal.cbedge.net first; v2's journal when that has nothing (not the owner, not deployed, empty). */
 async function loadTrades(): Promise<Trade[]> {
+  const fromJournal = await loadFrom('/api/tradejournal/trades')
+  return fromJournal.length ? fromJournal : loadFrom('/api/journal/trades')
+}
+
+async function loadFrom(url: string): Promise<Trade[]> {
   try {
-    const r = await fetch('/api/journal/trades', { cache: 'no-store', credentials: 'same-origin' })
+    const r = await fetch(url, { cache: 'no-store', credentials: 'same-origin' })
     if (!r.ok) return []
     const j = (await r.json()) as { trades?: unknown }
     const list = Array.isArray(j.trades) ? (j.trades as Partial<Trade>[]) : []
@@ -76,17 +89,18 @@ async function loadTrades(): Promise<Trade[]> {
         asset_type: String(t.asset_type ?? ''),
         direction: t.direction === 'short' ? ('short' as const) : ('long' as const),
         open_ts: Number(t.open_ts),
-        close_ts: Number(t.close_ts),
+        // an open position has no close: it draws as its entry alone
+        close_ts: t.close_ts == null ? Infinity : Number(t.close_ts),
         qty: Number(t.qty) || 0,
         entry: Number(t.entry),
-        exit: Number(t.exit),
+        exit: t.exit == null ? NaN : Number(t.exit),
         fees: Number(t.fees) || 0,
         pnl: Number(t.pnl) || 0,
         account: String(t.account ?? ''),
         open_ext_id: String(t.open_ext_id ?? ''),
         close_ext_id: String(t.close_ext_id ?? ''),
       }))
-      .filter((t) => Number.isFinite(t.open_ts) && Number.isFinite(t.close_ts))
+      .filter((t) => Number.isFinite(t.open_ts) && !Number.isNaN(t.close_ts))
   } catch {
     return []
   }
@@ -150,8 +164,15 @@ export const journalImpl = studyImpl<JrS, Trade[]>({
       const how = onThisChart(c, t)
       if (!how || (how === 'under' && !s.options)) continue
       const closed = t.close_ts < until
-      const p0 = how === 'price' ? t.entry : priceAt(t.open_ts)
-      const p1 = closed ? (how === 'price' ? t.exit : priceAt(t.close_ts)) : null
+      // A fill far from this chart's own prices (more than OFF_CHART from the candle
+      // it printed in: demo data at last year's prices, a split, a different
+      // contract) sits on the candle's close like an option does, and its card says
+      // so, rather than drawing far off the chart where nobody sees it.
+      const c0 = priceAt(t.open_ts)
+      const off = how === 'price' && c0 != null && c0 > 0 && Math.abs(t.entry - c0) / c0 > OFF_CHART
+      const atCandle = how === 'under' || off
+      const p0 = atCandle ? c0 : t.entry
+      const p1 = closed ? (atCandle ? priceAt(t.close_ts) : t.exit) : null
       if (p0 == null || !Number.isFinite(p0)) continue
       const long = t.direction === 'long'
       const tone: Tone = !closed ? 'mid' : t.pnl > 0 ? 'up' : t.pnl < 0 ? 'down' : 'mid'
@@ -161,7 +182,8 @@ export const journalImpl = studyImpl<JrS, Trade[]>({
         rows.push({ text: 'Premium in → out', amount: `${px(t.entry)} → ${closed ? px(t.exit) : '…'}`, tone: 'mid' })
       } else {
         rows.push({ text: 'Entry', amount: px(t.entry), tone: 'mid' })
-        rows.push({ text: 'Exit', amount: closed ? px(t.exit) : 'open (replay)', tone: 'mid' })
+        rows.push({ text: 'Exit', amount: closed ? px(t.exit) : Number.isFinite(t.close_ts) ? 'open (replay)' : 'still open', tone: 'mid' })
+        if (off) rows.push({ text: 'Fills are off this chart\'s prices: shown at the candle', amount: '', tone: 'mid' })
       }
       if (t.fees) rows.push({ text: 'Fees', amount: `$${t.fees.toFixed(2)}`, tone: 'mid' })
       if (t.account) rows.push({ text: 'Account', amount: t.account, tone: 'mid' })

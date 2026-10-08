@@ -365,6 +365,8 @@ const VELA_BETA_PATHS = new Set([
   '/api/snapshots/option-strike-gex-history',
   '/api/ticker-event',
   '/api/vela/history',
+  // today's fired alerts behind the toolbar bell (vela-alerts.cjs), the tester's own
+  '/api/vela/alerts',
   '/api/walls-range',
   '/proxy/candles-intraday',
   '/proxy/earnings-week',

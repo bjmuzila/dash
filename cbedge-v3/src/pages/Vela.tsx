@@ -25,6 +25,7 @@ import { bindPinnedWatchlist, registerWatchlist } from '@/pages/vela/watchlist/p
 import { bindReplay, openPicker, registerReplay } from '@/pages/vela/replay/replay'
 import { bindStudyOrder } from '@/pages/vela/studyOrder'
 import { bindLevelAlerts, registerLevelAlerts } from '@/pages/vela/levels/levelAlertsEntry'
+import { ALERT_BELL_ID, bindAlertBell, registerAlertBell } from '@/pages/vela/alertBell'
 import { bindSetups, onStrip, registerSetups, setStripShown, stripShown } from '@/pages/vela/setups/setups'
 import { bindSymbolPicker, registerSymbolPicker, SYMBOL_ACTION_ID } from '@/pages/vela/symbolPicker'
 import { bindWorkspaceMenu, registerWorkspaceMenu, WORKSPACE_ACTION_ID } from '@/pages/vela/workspaceMenu'
@@ -312,7 +313,8 @@ const DESKTOP_TOPBAR = {
   left: [SYMBOL_ACTION_ID, 'timeframes', 'style', 'layout', 'indicators', GEX_BASIS_ACTION_ID, 'actions', 'undo-redo'],
   // ↻ beside the camera: candles, data and the live feed refreshed in place (vela/refreshChart.ts)
   // Journal beside Workspace: opens journal.cbedge.net in its own tab (vela/journalLink.ts)
-  right: [CLOCK_ACTION_ID, 'alerts', WORKSPACE_ACTION_ID, JOURNAL_ACTION_ID, 'screenshot', REFRESH_ACTION_ID],
+  // the bell is ours (vela/alertBell.ts): today's Level, Script and chart alerts, kept in Postgres
+  right: [CLOCK_ACTION_ID, ALERT_BELL_ID, WORKSPACE_ACTION_ID, JOURNAL_ACTION_ID, 'screenshot', REFRESH_ACTION_ID],
 }
 
 // Before any workspace exists: Vela reads its native-indicator and widget-action
@@ -329,6 +331,7 @@ registerIndicatorPicker()
 registerWatchlist()
 registerReplay()
 registerLevelAlerts()
+registerAlertBell()
 registerSetups()
 registerSymbolPicker()
 registerWorkspaceMenu()
@@ -528,6 +531,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
     const unbindReplay = bindReplay(ws)
     const unbindOrder = bindStudyOrder(ws)
     const unbindLevels = bindLevelAlerts(ws)
+    const unbindBell = bindAlertBell(ws)
     // the watchlist's 📌 column (desktop): open again after a reload when it was pinned
     const unbindPinnedList = bindPinnedWatchlist(ws, onPhone)
     const unbindSetups = bindSetups(ws)
@@ -649,6 +653,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
       unbindControls()
       unbindIndicators()
       unbindTelemetry()
+      unbindBell()
       unbindWatchdog()
       unbindPresets()
       unbindEvents()

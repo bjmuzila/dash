@@ -52,6 +52,7 @@
 .cb-replay-bar,
 .cb-setups,
 .cb-wsm,
+.cb-alb,
 .cb-sp,
 .cb-scr-toasts,
 .cb-wh-card,
@@ -6689,4 +6690,159 @@
   letter-spacing: 0.08em;
   line-height: 15px;
   text-transform: uppercase;
+}
+
+
+/* ── The alerts bell (alertBell.ts): today's Level / Script / chart alerts ───── */
+.vela-topbar-right .cb-alb-btn {
+  position: relative;
+}
+.cb-alb-btn .cb-alb-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--color-vt-accent);
+  color: var(--color-vt-accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
+.cb-alb {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  background: var(--vt-popover);
+  color: var(--color-fg);
+  box-shadow: var(--vt-card-shadow);
+  font-size: var(--text-sm);
+}
+.cb-alb .cb-alb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-line);
+}
+.cb-alb .cb-alb-title {
+  font-weight: 700;
+}
+.cb-alb .cb-alb-count {
+  color: var(--color-faint);
+  font-size: var(--text-xs);
+}
+.cb-alb .cb-alb-clear {
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.cb-alb .cb-alb-clear:hover {
+  color: var(--color-fg);
+  border-color: var(--color-vt-line);
+}
+.cb-alb .cb-alb-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.cb-alb .cb-alb-empty {
+  padding: 18px 14px;
+  color: var(--color-faint);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.cb-alb .cb-alb-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--color-line);
+  background: transparent;
+  color: var(--color-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cb-alb .cb-alb-row:hover,
+.cb-alb .cb-alb-row:focus-visible {
+  background: var(--color-vt-elev);
+  outline: none;
+}
+.cb-alb .cb-alb-row[data-new='1'] {
+  box-shadow: inset 2px 0 0 var(--color-vt-accent);
+}
+.cb-alb .cb-alb-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cb-alb .cb-alb-kind {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--color-line);
+  border-radius: 4px;
+  color: var(--color-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 15px;
+  text-transform: uppercase;
+}
+.cb-alb .cb-alb-kind[data-k='level'] {
+  border-color: var(--color-vt-volt);
+  color: var(--color-vt-volt);
+}
+.cb-alb .cb-alb-kind[data-k='script'] {
+  border-color: var(--color-vt-coil);
+  color: var(--color-vt-coil);
+}
+.cb-alb .cb-alb-sym {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+.cb-alb .cb-alb-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-alb .cb-alb-at {
+  flex: 0 0 auto;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.cb-alb .cb-alb-text {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.cb-alb .cb-alb-meta {
+  color: var(--color-faint);
+  font-size: var(--text-xs);
+}
+.cb-alb .cb-alb-foot {
+  padding: 7px 12px;
+  border-top: 1px solid var(--color-line);
+  color: var(--color-faint);
+  font-size: var(--text-xs);
 }
