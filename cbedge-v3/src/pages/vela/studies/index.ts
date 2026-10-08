@@ -236,6 +236,8 @@ export function registerStudies(): void {
       title: 'Voltick Vol / GEX Flow · volume GEX, OI GEX and combined, today',
       shortTitle: 'Vol/GEX Flow',
       pane: 'new',
+      // not on the GEX switch, but GEX all the same: nothing on D / W / M
+      intradayOnly: true,
       inputs: () => [
         { key: 'scope', title: 'Expiries', type: 'string', defval: VF_SCOPES[0], options: VF_SCOPES },
         { key: 'session', title: 'Session', type: 'string', defval: VF_SESSIONS[0], options: VF_SESSIONS },

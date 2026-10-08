@@ -14,8 +14,12 @@
 //   · walls_log is CHANGE-ONLY, so every level is FORWARD-FILLED from its last
 //     written row and drawn as a STEP — a wall holds its strike until it rolls.
 //   · Per SESSION: from the 09:29 open capture to 16:00 ET, nowhere else. No
-//     Friday walls through the weekend, nothing in pre-market. On D and W bars
-//     each bar shows the level that session closed on.
+//     Friday walls through the weekend, nothing in pre-market.
+//   · INTRADAY ONLY (2026-10-07, Brandon: "path, ribbons, or any of the gex
+//     shouldn't be seen at 1d or above"): on a D / W / M bar (timeframes.ts
+//     isDailyOrAbove) no line is drawn and nothing is read; back on an
+//     intraday bar it reads and draws again. (It used to draw each daily bar
+//     at the level that session closed on.)
 //   · TWO ROLES, NOT THREE LEVELS. CORE is one of the walls (the biggest node
 //     on the chain is the biggest node on one side of spot), so drawing the
 //     matching wall beside it is the same strike twice. As in the migration
@@ -112,6 +116,7 @@ import {
 import { resolveSym } from '@/pages/vela/cbedgeProvider'
 import { onWallsOpacity, wallsOpacity } from '@/pages/vela/wallsOpacity'
 import { gexBasis, onGexBasis, type GexBasis } from '@/pages/vela/gexBasis'
+import { isDailyOrAbove } from '@/pages/vela/timeframes'
 
 /** The native-indicator type id — also what the saved workspace records. */
 export const WALLS_TYPE = 'cbedge-walls'
@@ -489,6 +494,8 @@ class WallsIndicator implements NativeIndicator {
   private suspended = false
   private offOpacity: (() => void) | null = null
   private offGex: (() => void) | null = null
+  /** A read was skipped on a D / W / M bar: the next intraday render reads first. */
+  private skipped = false
 
   start(ctx: NativeIndicatorContext, inputs: Record<string, InputValue>): void {
     this.ctx = ctx
@@ -553,6 +560,12 @@ class WallsIndicator implements NativeIndicator {
   private async load(fresh: boolean): Promise<void> {
     const ctx = this.ctx
     if (!ctx || this.stopped) return
+    if (isDailyOrAbove(ctx.timeframe)) {
+      this.skipped = true
+      this.render(true)
+      return
+    }
+    this.skipped = false
     const my = ++this.epoch
     const s = settingsOf(this.inputs)
     const sym = resolveSym(ctx.symbol.replace(/^[^:]*:/, ''))
@@ -572,6 +585,18 @@ class WallsIndicator implements NativeIndicator {
     if (!ctx) return
     const bars = ctx.bars()
     this.lastKey = `${bars.length}|${bars[0]?.time ?? 0}|${bars[bars.length - 1]?.time ?? 0}`
+    // nothing on a D / W / M bar (see the header)
+    if (isDailyOrAbove(ctx.timeframe)) {
+      publishNow(ctx.data, ctx.id, null)
+      ctx.emit({ series: [] })
+      ctx.setStatus('idle')
+      return
+    }
+    // back on an intraday bar after a read was skipped: read now (it renders when it lands)
+    if (this.skipped && !this.suspended) {
+      void this.load(false)
+      return
+    }
     if (!force && !this.days.length) return
     const s = settingsOf(this.inputs)
     const tfMs = timeframeToMs(ctx.timeframe)

@@ -110,6 +110,8 @@ export const RIBBON_TYPE = 'cbedge-vt-ribbon'
 /** CB Edge zoomed-out floors (see the header). */
 const RIBBON_FULL_FLOOR = 3
 const RIBBON_MIN_FLOOR = 1.3
+/** A bar this long or longer is a D / W / M bar: nothing is drawn on it. */
+const DAILY_MS = 86_400_000
 
 // ── New York clock (Voltick nyParts — the ribbon's per-session size law) ────
 
@@ -383,6 +385,10 @@ class VtPathLayer implements RendererLayerInstance {
     if (!bars.length) return
     const { coords, scale, bounds } = args
     const iv = coords.barInterval > 0 ? coords.barInterval : bars.length > 1 ? bars[1]!.time - bars[0]!.time : 60_000
+    // NOT ON D / W / M (2026-10-07, Brandon: "path, ribbons … shouldn't be seen at
+    // 1d or above"). The study pushes nothing there (vtPathIndicator.ts); this
+    // catches the frames between a timeframe switch and that push.
+    if (coords.barInterval >= DAILY_MS) return
     const tLo = (bars[0]!.time - iv) / 1000
     const tHi = (bars[bars.length - 1]!.time + iv) / 1000
     const dpr = coords.dpr || 1

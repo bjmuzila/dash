@@ -19,3 +19,17 @@ export function tfIndex(tf: string): number {
   const label = tfLabel(tf)
   return TIMEFRAMES.findIndex((t) => tfLabel(t) === label)
 }
+
+/**
+ * A daily-or-longer bar: `D` / `1D` / `2D`, `W`, `M`, or 1440+ minutes.
+ * (2026-10-07, Brandon: "path, ribbons, or any of the gex shouldn't be seen at
+ * 1d or above".) The GEX overlays draw NOTHING there — Voltick Path, Path
+ * Ribbon, Voltick Walls and every GEX study (studies/common.ts
+ * `intradayOnly`) — and read nothing either; back on an intraday bar they load
+ * and draw again.
+ */
+export function isDailyOrAbove(tf: string): boolean {
+  const t = String(tf ?? '').trim()
+  if (/^\d*[DWM]$/i.test(t)) return true
+  return /^\d+$/.test(t) && Number(t) >= 1440
+}

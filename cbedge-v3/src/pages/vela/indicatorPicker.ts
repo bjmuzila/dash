@@ -9,7 +9,10 @@
 // dialog in the chart):
 //
 //   [ Search…                                          ⚲ All ]
-//   All indicators     everything, A–Z, no letter dividers
+//   All indicators     everything, A–Z, no letter dividers, including the
+//                      open-source community indicators (script/community.ts:
+//                      everget's collection), which load the first time the
+//                      dialog opens
 //   Voltick            ours: CB Walls, Voltick Path / Ribbon, pages/vela/studies/
 //                      and the ready-made strategies, shown without "Voltick"
 //   Scripts            your CB Scripts (indicators and strategies), and
@@ -163,10 +166,51 @@ function readyRows(): Row[] {
   }))
 }
 
+/**
+ * The community indicators (script/community.ts: open-source Pine, everget's
+ * collection). They appear under All only, where the description names the
+ * group and the author. They are a data chunk of their own, so they load the
+ * first time a dialog needs them, and the dialog redraws when they land. A
+ * chart keeps each one's source in its saved state (script/register.ts), like
+ * any script.
+ */
+let community: Row[] | null = null
+let communityLoad: Promise<void> | null = null
+function loadCommunity(): Promise<void> {
+  communityLoad ??= import('./script/community')
+    .then((m) => {
+      community = m.COMMUNITY_INDICATORS.map((c) => ({
+        key: `c:${c.id}`,
+        name: c.name,
+        desc: `${c.group} · ${c.author}`,
+        section: 'builtin' as const,
+        kind: 'script' as const,
+        libId: c.id,
+        source: c.source,
+        overlay: c.overlay,
+        multi: true,
+        beta: false,
+      }))
+    })
+    .catch(() => {
+      // offline, or a deploy replaced the chunk: the next open tries again
+      communityLoad = null
+    })
+  return communityLoad
+}
+
+/** Load the community rows for an open dialog, then redraw it if it is still open. */
+function withCommunity(dlg: Dialog, render: () => void): void {
+  if (community) return
+  void loadCommunity().then(() => {
+    if (community && openDialog === dlg && dlg.open) render()
+  })
+}
+
 const byName = (a: Row, b: Row) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
 
 /** Everything addable, A–Z. */
-const allRows = (): Row[] => [...nativeRows(), ...scriptRows(), ...readyRows()].sort(byName)
+const allRows = (): Row[] => [...nativeRows(), ...scriptRows(), ...readyRows(), ...(community ?? [])].sort(byName)
 
 const inSection = (r: Row, s: Section) => s === 'all' || r.section === s
 
@@ -365,6 +409,14 @@ function openPicker(ctx: WidgetContext): void {
   /** Every indicator in list `i` that is not on the chart yet, in the list's order. */
   const addAll = (i: number) => {
     const l = lists[i]!
+    // a community indicator in the list: wait for them to load, then add
+    if (!community && l.keys.some((k) => k.startsWith('c:'))) {
+      void loadCommunity().then(() => {
+        if (community) addAll(i)
+        else ctx.toast(`Some indicators in ${l.name} could not load. Try again.`, 'info')
+      })
+      return
+    }
     const byKey = new Map(allRows().map((r) => [r.key, r]))
     const rows = l.keys.map((k) => byKey.get(k)).filter((r): r is Row => !!r)
     const nat = presentNative()
@@ -553,6 +605,7 @@ function openPicker(ctx: WidgetContext): void {
   openDialog = dlg
   render()
   dlg.show()
+  withCommunity(dlg, render)
   setTimeout(() => search.focus(), 30)
 }
 
@@ -810,6 +863,7 @@ function openListEditor(ctx: WidgetContext): void {
   openDialog = dlg
   render()
   dlg.show()
+  withCommunity(dlg, render)
 }
 
 let registered = false

@@ -34,6 +34,13 @@
 //   Bubble size / Ribbon thickness   CB Edge only: 50–300%, default 100 — scales
 //                every bubble (Path) or band (Ribbon). See vtPathLayer.ts for the
 //                zoomed-out floors that keep both readable at default size.
+//
+// ── Intraday only (2026-10-07) ───────────────────────────────────────────────
+// Brandon: "path, ribbons, or any of the gex shouldn't be seen at 1d or above".
+// On a D / W / M bar (timeframes.ts isDailyOrAbove) both studies push nothing
+// and read nothing; back on an intraday bar they read and draw again. The layer
+// also refuses a daily-or-longer bar spacing (vtPathLayer.ts), so the rows left
+// from the last view never flash on the switch.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
@@ -47,6 +54,7 @@ import {
 import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { firstLoadDelay, queuedLoad } from '@/pages/vela/studies/common'
 import { gexBasis, onGexBasis } from '@/pages/vela/gexBasis'
+import { isDailyOrAbove } from '@/pages/vela/timeframes'
 import { buildPathRows, framesFromWalls, loadWallModels, type WallModels, type WallRead } from './vtPathData'
 import { PATH_TYPE, RIBBON_TYPE, registerVtPathLayers, type PathPayload } from './vtPathLayer'
 
@@ -152,6 +160,8 @@ class VtPathIndicator implements NativeIndicator {
   private suspended = false
   private stopped = false
   private offGex: (() => void) | null = null
+  /** A read was skipped on a D / W / M bar: the next intraday push reads first. */
+  private skipped = false
 
   start(ctx: NativeIndicatorContext, inputs: Record<string, InputValue>): void {
     this.ctx = ctx
@@ -209,6 +219,13 @@ class VtPathIndicator implements NativeIndicator {
   private async load(fresh: boolean): Promise<void> {
     const ctx = this.ctx
     if (!ctx || this.stopped) return
+    if (isDailyOrAbove(ctx.timeframe)) {
+      this.skipped = true
+      ctx.pushData(null)
+      ctx.setStatus('idle')
+      return
+    }
+    this.skipped = false
     const my = ++this.epoch
     if (!this.models) ctx.setStatus('loading')
     const settings = settingsOf(this.inputs)
@@ -223,6 +240,17 @@ class VtPathIndicator implements NativeIndicator {
     if (!ctx) return
     const bars = ctx.bars()
     this.lastKey = `${bars.length}|${bars[0]?.time ?? 0}|${bars[bars.length - 1]?.time ?? 0}`
+    // nothing on a D / W / M bar (see the header)
+    if (isDailyOrAbove(ctx.timeframe)) {
+      ctx.pushData(null)
+      ctx.setStatus('idle')
+      return
+    }
+    // back on an intraday bar after a read was skipped: read now (it pushes when it lands)
+    if (this.skipped && !this.suspended) {
+      void this.load(false)
+      return
+    }
     ctx.setStatus(this.timer && this.models?.hasToday ? 'live' : 'idle')
     if (this.suspended || !this.models) return
     const s = settingsOf(this.inputs)

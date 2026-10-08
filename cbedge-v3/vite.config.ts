@@ -125,6 +125,14 @@ export default defineConfig(({ mode }) => {
             if (/[\\/]src[\\/]pages[\\/]seasonality[\\/](seasonalityData|eventDates)\.ts$/.test(id)) {
               return 'data-seasonality'
             }
+            // The Vela Indicators dialog's community indicators: about 200
+            // open-source Pine scripts (pages/vela/script/community.ts and the
+            // .pine files it reads, `?raw`). This is a table of texts, and the
+            // dialog imports it on its first open, so it gets a data chunk
+            // rather than growing the page.
+            if (/[\\/]src[\\/]pages[\\/]vela[\\/]script[\\/]community(?:\.ts$|[\\/])/.test(id)) {
+              return 'data-vela-community'
+            }
             // ── ONE-ROUTE LIBRARIES ───────────────────────────────────────
             // Vela (/vela — LuxAlgo's chart workspace, ~1.2MB minified) is a
             // whole chart APP: renderer, indicator engine, drawing tools, UI

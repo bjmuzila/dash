@@ -787,13 +787,16 @@ const CONSTS: Record<string, Val> = {
   'session.regular_hours': '0930-1600',
 }
 // Pine v2/v3 spelled these bare (style=histogram, linestyle=dashed, type=bool)
-for (const [k, v] of Object.entries({ line: 'line', stepline: 'step', histogram: 'histogram', cross: 'cross', area: 'area', columns: 'columns', circles: 'circles', solid: 'solid', dashed: 'dashed', dotted: 'dotted', integer: 'integer', float: 'float', bool: 'bool', string: 'string', source: 'source', resolution: 'timeframe', session: 'session', symbol: 'symbol' }))
+for (const [k, v] of Object.entries({ line: 'line', linebr: 'line', stepline: 'step', histogram: 'histogram', areabr: 'area', cross: 'cross', area: 'area', columns: 'columns', circles: 'circles', solid: 'solid', dashed: 'dashed', dotted: 'dotted', integer: 'integer', float: 'float', bool: 'bool', string: 'string', source: 'source', resolution: 'timeframe', session: 'session', symbol: 'symbol' }))
   CONSTS[k] = v
 const DRAWING_NS = /^(label|line|box|table|linefill|polyline|chart\.point)\./
 for (const k of ['label', 'line', 'box', 'table']) {
   for (const s of ['style_none', 'style_solid', 'style_dashed', 'style_dotted', 'style_arrow_left', 'style_arrow_right', 'style_arrow_both', 'style_label_up', 'style_label_down', 'style_label_left', 'style_label_right', 'style_label_center', 'style_circle', 'style_square', 'style_diamond', 'style_cross', 'style_xcross', 'style_triangleup', 'style_triangledown', 'style_flag', 'style_arrowup', 'style_arrowdown', 'style_text_outline', 'style_label_lower_left', 'style_label_lower_right', 'style_label_upper_left', 'style_label_upper_right'])
     CONSTS[`${k}.${s}`] = s.replace(/^style_/, '')
 }
+// Pine v4's first spellings of the label pointers
+CONSTS['label.style_labelup'] = 'label_up'
+CONSTS['label.style_labeldown'] = 'label_down'
 Object.assign(CONSTS, {
   'text.align_top': 'top',
   'text.align_bottom': 'bottom',
@@ -1928,6 +1931,13 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
     'ta.pvi': (i) => pviArr()[i]!,
     'ta.pvt': (i) => pvtArr()[i]!,
     'ta.wad': (i) => wadArr()[i]!,
+    // Pine v4 spelled them bare, like obv / accdist
+    iii: (i) => (2 * C[i]! - H[i]! - L[i]!) / ((H[i]! - L[i]!) * V[i]!),
+    wvad: (i) => ((C[i]! - O[i]!) / (H[i]! - L[i]!)) * V[i]!,
+    nvi: (i) => nviArr()[i]!,
+    pvi: (i) => pviArr()[i]!,
+    pvt: (i) => pvtArr()[i]!,
+    wad: (i) => wadArr()[i]!,
     // tick data: Vela's bars are time bars, as on any non-tick TradingView chart
     ask: NA_VAR,
     bid: NA_VAR,
@@ -2942,6 +2952,12 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
 
   function compileCall(cx: Cx, node: Extract<Node, { k: 'call' }>): Ev {
     const line = node.line
+    // Pine v1–v3's offset(source, n) is source[n]
+    if (node.name === 'offset' && !funcs.has('offset')) {
+      const x = node.args[0] ?? node.named.source
+      const at = node.args[1] ?? node.named.offset
+      if (x && at) return compileExpr(cx, { k: 'index', x, at, line })
+    }
     // a method call on a variable: xs.push(1), s.length() → array.push(xs, 1), str.length(s)
     const dot = node.name.indexOf('.')
     if (

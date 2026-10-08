@@ -27030,3 +27030,35 @@ Measured: the old `watch_snapshots` DISTINCT ON was #1 (106,777s total, 5.7s avg
 - `owner-vite/src/pages/DbMap.tsx`:
   - New state "Partial by design" (green) for a partial policy whose span passes the cutoff, so the whale archive is no longer counted as "Not enforced".
   - The Render gauge note is replaced with a VPS note: the limit is `PG_DISK_LIMIT_BYTES`, and WAL and backups share the disk.
+
+## 2026-10-07 - Vela Indicators dialog: everget's open-source indicators in All
+
+Brandon asked for the indicators in github.com/everget/tradingview-pinescript-indicators to be added to the All list.
+
+- **What's added:** 207 of the collection's 210 Pine scripts (Alex Orekhov, GPL-3.0). They sit A–Z among the rest under **All indicators**, and each row's description gives the group and the author, e.g. "Oscillator · everget". Search finds them by name, group, or "everget". Clicking one puts it on the chart as a CB Script. The chart saves its source like any script, and it can go in a Personal list.
+- **Left out:** 3 files that repeat another file in the set:
+  - `oscillators/rsx.pine` is the same code as `jurik_rsx.pine`.
+  - `movings/distance_coefficient_filter.pine` is the same code as `ehlers_distance_coefficient_filter.pine`.
+  - `movings/recursive_median_oscillator.pine` is an older v3 copy of `recursive_median_filter.pine`.
+- **Copied as published:** the scripts are Pine v3, v4 and v6, and none was edited. Running all 210 through the engine found four gaps, all fixed in `runtime.ts`:
+  - Pine v1–v3 `offset(source, n)` (Gator Oscillator) now reads as `source[n]`.
+  - v3's bare plot styles `linebr` and `areabr` now work.
+  - v4's `label.style_labelup` / `label.style_labeldown` (the chart-type identifiers) now work.
+  - v4's bare `pvt`, `nvi`, `pvi`, `iii`, `wad` and `wvad` now work, beside `obv` / `accdist`.
+- **Loading:** the scripts are a data chunk of their own (`data-vela-community`, about 49kb brotli, under the 78kb `data` budget), so the /vela page loads nothing more than before. The dialog (and Edit lists) loads the chunk the first time it opens and redraws when it arrives. Add all on a list that holds one of these waits for that load.
+- **Checks:**
+  - All 210 parse, pass the dry run, and run with no error on 800 and on 1,500 five-minute bars.
+  - Every plot that comes out empty has a reason:
+    - an input that is off by default (Show Histogram)
+    - data this chart doesn't have (EPS, DPS, Treasury yields)
+    - a 2018 expiry demo
+    - dates older than the bars (YTD, Presidents)
+  - The Pine v6 manual corpus is still 382/388. The engine unit tests pass, the CB Script examples are identical, and the ready strategies give the same trades.
+  - `tsc` strict is clean on the changed files.
+  - `community.ts` has no colour literals. The `.pine` files keep the colours they draw with, as a pasted script does, and check-theme doesn't read them.
+- **Files:**
+  - `cbedge-v3/src/pages/vela/script/community.ts` (new)
+  - `cbedge-v3/src/pages/vela/script/community/everget/` (new: the `.pine` files and the collection's LICENSE)
+  - `cbedge-v3/src/pages/vela/indicatorPicker.ts`
+  - `cbedge-v3/src/pages/vela/script/runtime.ts`
+  - `cbedge-v3/vite.config.ts`

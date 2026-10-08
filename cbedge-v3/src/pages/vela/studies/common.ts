@@ -62,6 +62,7 @@ import { etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
 import { resolveSym, type ResolvedSym } from '@/pages/vela/cbedgeProvider'
 import { replayClock } from '@/pages/vela/replay/clock'
 import { onGexBasis } from '@/pages/vela/gexBasis'
+import { isDailyOrAbove } from '@/pages/vela/timeframes'
 
 export const MIN_MS = 60_000
 export const DAY_MS = 86_400_000
@@ -145,6 +146,12 @@ export interface StudyMeta {
   liveOnly?: boolean
   /** Reads GEX on the page's one GEX switch (gexBasis.ts): a change there reloads or repaints it. */
   gex?: boolean
+  /**
+   * Draws (and reads) nothing on a daily-or-longer bar (timeframes.ts
+   * isDailyOrAbove; 2026-10-07, Brandon: "any of the gex shouldn't be seen at 1d
+   * or above"). Defaults to `gex`, so every GEX study is intraday-only.
+   */
+  intradayOnly?: boolean
 }
 
 export interface StudyImpl<S, D> {
@@ -189,11 +196,25 @@ class Study implements NativeIndicator {
   private stopped = false
   private suspended = false
   private offGex: (() => void) | null = null
+  /** A read was skipped on a daily-or-longer bar: the next intraday paint reads first. */
+  private skipped = false
 
   constructor(
     private readonly meta: StudyMeta,
     private readonly impl: () => Promise<AnyImpl>,
   ) {}
+
+  /** Intraday-only and on a D / W / M bar: draw nothing, read nothing. */
+  private offTimeframe(): boolean {
+    return (this.meta.intradayOnly ?? this.meta.gex === true) && !!this.ctx && isDailyOrAbove(this.ctx.timeframe)
+  }
+
+  /** Take everything this study drew off the chart. */
+  private clear(ctx: NativeIndicatorContext): void {
+    ctx.emit({ series: [], priceLines: [], labels: [], boxes: [], lines: [] })
+    if (this.spec?.layer) ctx.pushData(null)
+    ctx.setStatus('idle')
+  }
 
   private sc(): StudyCtx | null {
     const ctx = this.ctx
@@ -309,6 +330,12 @@ class Study implements NativeIndicator {
   private async load(fresh: boolean): Promise<void> {
     const c = this.sc()
     if (!c || this.stopped || !this.spec.load) return
+    if (this.offTimeframe()) {
+      this.skipped = true
+      this.clear(c.ctx)
+      return
+    }
+    this.skipped = false
     const my = ++this.epoch
     const key = this.spec.dataKey ? this.spec.dataKey(c, this.spec.settings(this.inputs)) : ''
     // data read for other settings is not this data: a failed read for new settings paints empty
@@ -344,6 +371,15 @@ class Study implements NativeIndicator {
   private paint(): void {
     const c = this.sc()
     if (!c || this.suspended || !this.ready) return
+    if (this.offTimeframe()) {
+      this.clear(c.ctx)
+      return
+    }
+    // back on an intraday bar after a read was skipped on D / W / M: read now
+    if (this.skipped && this.spec.load) {
+      void this.load(false)
+      return
+    }
     if (this.spec.load && !this.loaded) return
     let out: NativeIndicatorOutput
     const s = this.spec.settings(this.inputs)
