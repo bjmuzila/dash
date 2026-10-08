@@ -45,9 +45,14 @@ import {
   type AlignRow,
   type AlignSettings,
   type AlignState,
+  type AlignUniverse,
 } from '@/pages/scanner/align'
 import { DIM, EVENT_COLOR, LABEL, STATE_COLOR, pillStyle } from '@/pages/scanner/alignStyle'
 import AlignReplay from '@/pages/scanner/AlignReplay'
+import { SCANNER_MAIN } from '@/data/scannerTickers'
+
+/** Fallback universe for Align · Main when the server sends no `hot` flag. */
+const MAIN_SET = new Set(SCANNER_MAIN)
 
 // ── Settings (remembered per browser) ────────────────────────────────────────
 
@@ -65,6 +70,7 @@ function loadSettings(): AlignSettings {
       minDom: typeof p.minDom === 'number' ? p.minDom : DEFAULT_SETTINGS.minDom,
       holdMin: typeof p.holdMin === 'number' ? p.holdMin : DEFAULT_SETTINGS.holdMin,
       zeroTrigger: p.zeroTrigger !== false,
+      requireAll: p.requireAll === true,
     }
   } catch {
     return DEFAULT_SETTINGS
@@ -110,6 +116,16 @@ function matches(r: AlignRow, f: Filter): boolean {
   return r.verdict.state === f
 }
 
+type DistOpt = '0' | '1' | '2' | '3' | '4' | '5'
+const DIST_OPTIONS: Array<{ value: DistOpt; label: string; title?: string }> = [
+  { value: '0', label: 'Any', title: 'Include walls at the money' },
+  { value: '1', label: '1' },
+  { value: '2', label: '2' },
+  { value: '3', label: '3' },
+  { value: '4', label: '4' },
+  { value: '5', label: '5', title: 'Shared wall at least 5 strikes from spot' },
+]
+
 const MAX_STACKS = 24
 const MAX_TAPE = 40
 
@@ -118,7 +134,7 @@ const TD = 'border-b border-line/50 px-2 py-1.5 tabular'
 
 // ── The tab ──────────────────────────────────────────────────────────────────
 
-export default function AlignTab() {
+export default function AlignTab({ universe = 'all' }: { universe?: AlignUniverse } = {}) {
   const [params, setParams] = useSearchParams()
   const sym = params.get('sym')
   const symDate = params.get('d')
@@ -145,24 +161,28 @@ export default function AlignTab() {
     })
   }, [setParams])
 
-  if (sym) return <AlignReplay symbol={sym} date={symDate} settings={settings} onBack={back} />
-  return <AlignBoard settings={settings} update={update} onOpen={open} />
+  if (sym) return <AlignReplay symbol={sym} date={symDate} settings={settings} universe={universe} onBack={back} />
+  return <AlignBoard settings={settings} update={update} onOpen={open} universe={universe} />
 }
 
 function AlignBoard({
   settings,
   update,
   onOpen,
+  universe,
 }: {
   settings: AlignSettings
   update: (p: Partial<AlignSettings>) => void
   onOpen: (symbol: string, date: string | undefined) => void
+  universe: AlignUniverse
 }) {
-  const { data, error, loading } = useQuery<AlignResponse>(alignUrl(settings.mode), {
+  const main = universe === 'main'
+  const { data, error, loading } = useQuery<AlignResponse>(alignUrl(settings.mode, universe), {
     pollMs: ALIGN_POLL_MS,
     staleMs: 30_000,
   })
-  const [filter, setFilter] = useState<Filter>('active')
+  // Main is fourteen names: show them all by default rather than only the active ones.
+  const [filter, setFilter] = useState<Filter>(main ? 'all' : 'active')
   const [view, setView] = useState<View>('board')
 
   // A ticking "held for" without a re-fetch: one render a minute.
@@ -177,14 +197,25 @@ function AlignBoard({
     ? Math.max(0, ...(data?.symbols ?? []).map((s) => s.t))
     : Math.max(Date.now(), data?.asOf ?? 0)
 
+  const symbols = useMemo(() => {
+    const all = data?.symbols ?? []
+    if (!main) return all
+    // The server flags MAIN from the live roster. An older server sends no flag
+    // at all — fall back to the static list rather than an empty tab.
+    const flagged = all.some((s) => s.hot !== undefined)
+    return flagged ? all.filter((s) => s.hot) : all.filter((s) => MAIN_SET.has(s.symbol))
+  }, [data, main])
+
   const allRows = useMemo(
-    () => sortRows((data?.symbols ?? []).map((s) => buildRow(s, settings, date, now))),
+    () => sortRows(symbols.map((s) => buildRow(s, settings, date, now))),
     // `now` moves every render; the minute tick above is what refreshes "held".
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data, settings, date, Math.floor(now / 60_000)],
+    [symbols, settings, date, Math.floor(now / 60_000)],
   )
-  const qualified = useMemo(() => allRows.filter((r) => r.passes), [allRows])
-  const hidden = allRows.length - qualified.length
+  // On Main nothing is hidden: a ticker that fails distance / dominance stays on
+  // the board, dimmed, because with fourteen names a missing row reads as a bug.
+  const qualified = useMemo(() => (main ? allRows : allRows.filter((r) => r.passes)), [allRows, main])
+  const hidden = main ? allRows.filter((r) => !r.passes).length : allRows.length - qualified.length
   const rows = useMemo(() => qualified.filter((r) => matches(r, filter)), [qualified, filter])
 
   const counts = useMemo(() => {
@@ -208,14 +239,14 @@ function AlignBoard({
   const subtitle = [
     date ? `session ${date}${data?.stale ? ' (last recorded)' : ''}` : null,
     `${allRows.length} tickers`,
-    hidden > 0 ? `${hidden} hidden by distance / dominance` : null,
+    hidden > 0 ? `${hidden} ${main ? 'dimmed' : 'hidden'} by your filters` : null,
     loading ? 'loading…' : null,
   ]
     .filter(Boolean)
     .join(' · ')
 
   return (
-    <Card title="Wall Alignment">
+    <Card title={main ? 'Wall Alignment · Main' : 'Wall Alignment'}>
       <div className="mb-3 text-xs text-muted" style={{ color: DIM }}>
         The biggest GEX strike in each of the nearest expirations, per ticker. When the later expirations agree on one
         strike, the ticker is PENDING; when 0DTE joins them it is LOCKED. {subtitle}
@@ -322,14 +353,9 @@ function Toolbar({
         />
       </Field>
       <Field label="Min distance">
-        <SegGroup<'0' | '1' | '2' | '3'>
-          options={[
-            { value: '0', label: 'Any', title: 'Include walls at the money' },
-            { value: '1', label: '1 str' },
-            { value: '2', label: '2 str' },
-            { value: '3', label: '3 str' },
-          ]}
-          value={String(Math.min(3, settings.minDist)) as '0' | '1' | '2' | '3'}
+        <SegGroup<DistOpt>
+          options={DIST_OPTIONS}
+          value={String(Math.max(0, Math.min(5, Math.round(settings.minDist)))) as DistOpt}
           onChange={(v) => update({ minDist: Number(v) })}
         />
       </Field>
@@ -363,6 +389,20 @@ function Toolbar({
           ]}
           value={settings.zeroTrigger ? 'trigger' : 'vote'}
           onChange={(v) => update({ zeroTrigger: v === 'trigger' })}
+        />
+      </Field>
+      <Field label="ALL ex-0D">
+        <SegGroup<'show' | 'require'>
+          options={[
+            { value: 'show', label: 'Show', title: 'Show the all-expirations (minus 0DTE) wall beside the per-expiry walls' },
+            {
+              value: 'require',
+              label: 'Require',
+              title: 'Only tickers whose all-expirations (minus 0DTE) wall is ALSO on the shared wall',
+            },
+          ]}
+          value={settings.requireAll ? 'require' : 'show'}
+          onChange={(v) => update({ requireAll: v === 'require' })}
         />
       </Field>
     </div>
@@ -453,6 +493,12 @@ function BoardTable({
                 </div>
               </th>
             ))}
+            <th className={`${TH} text-center`} title="The wall across every listed expiration except 0DTE, from the full chain">
+              ALL ex-0D
+              <div className="text-2xs font-normal normal-case" style={{ color: DIM }}>
+                every expiry but 0DTE
+              </div>
+            </th>
             <th className={`${TH} text-center`}>Align</th>
             <th className={`${TH} text-left`}>State</th>
             <th className={`${TH} text-right`}>Held</th>
@@ -467,7 +513,7 @@ function BoardTable({
         <tbody>
           {rows.length === 0 && (
             <tr>
-              <td colSpan={9 + nCols} className="px-2 py-6 text-center text-xs" style={{ color: DIM }}>
+              <td colSpan={10 + nCols} className="px-2 py-6 text-center text-xs" style={{ color: DIM }}>
                 Nothing matches these filters right now.
               </td>
             </tr>
@@ -477,7 +523,10 @@ function BoardTable({
               key={r.symbol}
               onClick={() => onOpen(r.symbol, date)}
               className="cursor-pointer transition-colors hover:bg-raised"
-              style={r.verdict.state === 'PENDING' ? { background: alpha(STATE_COLOR.PENDING, 0.035) } : undefined}
+              style={{
+                ...(r.verdict.state === 'PENDING' ? { background: alpha(STATE_COLOR.PENDING, 0.035) } : null),
+                ...(r.passes ? null : { opacity: 0.45 }),
+              }}
             >
               <td className={`${TD} text-left`}>
                 <button
@@ -516,6 +565,9 @@ function BoardTable({
                   </td>
                 )
               })}
+              <td className="border-b border-line/50 px-1 py-1 text-center tabular">
+                <AllCell row={r} />
+              </td>
               <td className={`${TD} text-center`}>
                 <Pips row={r} />
               </td>
@@ -535,6 +587,42 @@ function BoardTable({
       </table>
       <Legend tol={settings.tol} />
     </div>
+  )
+}
+
+function allTitle(r: AlignRow): string {
+  const a = r.all
+  if (!a) return 'Swept only for tickers where 2+ walls agree'
+  if (a.state === 'queued') return 'Queued for a full-chain sweep (every ~5 min)'
+  if (a.state === 'error') return `Full-chain sweep failed: ${a.err ?? 'unknown error'}`
+  const parts = [`${a.n ?? '?'} expirations, 0DTE excluded`]
+  if (a.net != null) parts.push(`net ${fmtB(a.net)}`)
+  if (a.next && a.net != null) parts.push(`${(Math.abs(a.net) / a.next).toFixed(1)}× next`)
+  if (a.at) parts.push(`swept ${fmtEt(a.at)}`)
+  return parts.join(' · ')
+}
+
+function allStyle(r: AlignRow): CSSProperties {
+  if (r.allOn && r.verdict.state === 'LOCKED') return { background: alpha(V2.up, 0.16), border: `1px solid ${V2.up}`, color: T.text }
+  if (r.allOn) return { background: alpha(V2.cyan, 0.22), border: `1px solid ${V2.cyan}`, color: T.text }
+  if (r.all?.state === 'ok') return { border: `1px solid ${V2W.border}`, color: T.text }
+  return { border: `1px dashed ${V2W.border}`, color: DIM }
+}
+
+function allText(r: AlignRow): string {
+  const a = r.all
+  if (!a) return EM_DASH
+  if (a.state === 'queued') return '…'
+  if (a.state === 'error') return '×'
+  return a.strike != null ? fmtStrike(a.strike) : EM_DASH
+}
+
+function AllCell({ row }: { row: AlignRow }) {
+  return (
+    <span className="inline-block min-w-16 rounded-sm px-1.5 py-1 font-semibold" style={allStyle(row)} title={allTitle(row)}>
+      {allText(row)}
+      {row.allOn ? ' ✓' : ''}
+    </span>
   )
 }
 
@@ -572,6 +660,10 @@ function Legend({ tol }: { tol: 0 | 1 }) {
         <span className={sw} style={{ border: `1px solid ${V2W.border}` }} />
         off the wall
       </span>
+      <span>
+        ALL ex-0D = wall across every expiry but 0DTE (full chain; swept every ~5 min for tickers with 2+ walls agreeing;
+        … = queued)
+      </span>
       <span>Dist = strikes and % from spot · Dom = wall ÷ next-biggest strike in that expiry</span>
     </div>
   )
@@ -585,6 +677,7 @@ function ladder(r: AlignRow): number[] {
   const set = new Set<number>()
   for (const w of r.walls) if (w != null) set.add(w)
   if (r.verdict.k != null) set.add(r.verdict.k)
+  if (r.all?.state === 'ok' && r.all.strike != null) set.add(r.all.strike)
   const atm = r.step > 0 && r.spot > 0 ? Math.round(r.spot / r.step) * r.step : null
   if (atm != null) set.add(Math.round(atm * 100) / 100)
   const vals = [...set].sort((a, b) => b - a)
@@ -655,7 +748,9 @@ function StackCard({
   const locked = st === 'LOCKED'
   const kColor = locked ? V2.up : V2.cyan
   const atm = r.step > 0 && r.spot > 0 ? Math.round((Math.round(r.spot / r.step) * r.step) * 100) / 100 : null
-  const grid = { display: 'grid', gridTemplateColumns: `56px repeat(${Math.max(1, nCols)}, minmax(0, 1fr))` }
+  // One column per recorded expiry, then ALL ex-0DTE.
+  const grid = { display: 'grid', gridTemplateColumns: `56px repeat(${Math.max(1, nCols) + 1}, minmax(0, 1fr))` }
+  const allStrike = r.all?.state === 'ok' ? (r.all.strike ?? null) : null
   const edge = locked ? alpha(V2.up, 0.45) : st === 'PENDING' ? alpha(STATE_COLOR.PENDING, 0.4) : V2W.border
 
   let note = ''
@@ -664,13 +759,15 @@ function StackCard({
     note = `${r.frontIsZeroDte ? '0DTE' : 'Front'} wall at ${f != null ? fmtStrike(f) : EM_DASH} — waiting on it to join ${r.verdict.k != null ? fmtStrike(r.verdict.k) : ''}`
   } else if (locked) note = `${r.verdict.total} of ${r.walls.length} on ${r.verdict.k != null ? fmtStrike(r.verdict.k) : ''}`
   else if (st === 'FORMING') note = `${r.verdict.total} of ${r.walls.length} walls agree`
+  if (note && r.all?.state === 'ok' && r.verdict.k != null)
+    note += r.allOn ? ' · ALL ex-0D agrees' : ` · ALL ex-0D at ${allStrike != null ? fmtStrike(allStrike) : EM_DASH}`
 
   return (
     <button
       type="button"
       onClick={onOpen}
       className="flex flex-col gap-2.5 rounded-md p-3 text-left transition-colors hover:bg-raised"
-      style={{ border: `1px solid ${edge}`, background: V2W.wash03 }}
+      style={{ border: `1px solid ${edge}`, background: V2W.wash03, opacity: r.passes ? 1 : 0.45 }}
     >
       <div className="flex w-full items-center gap-2">
         <span className="text-base font-bold text-fg">{r.symbol}</span>
@@ -690,6 +787,9 @@ function StackCard({
               {i === 0 ? (zeroDteFront ? '0D' : 'F') : `+${i}`}
             </span>
           ))}
+          <span className="text-center font-bold" style={{ color: LABEL }} title={allTitle(r)}>
+            ALL
+          </span>
         </div>
         <div className="flex flex-col gap-px">
           {strikes.map((s) => {
@@ -731,6 +831,18 @@ function StackCard({
                     </span>
                   )
                 })}
+                <span className="flex items-center justify-center">
+                  {allStrike != null && Math.abs(allStrike - s) < 1e-9 && (
+                    <span
+                      className="inline-block h-3 w-3 rotate-45 rounded-sm"
+                      style={
+                        r.allOn
+                          ? { background: kColor, boxShadow: `0 0 0 3px ${alpha(kColor, 0.25)}` }
+                          : { border: `2px solid ${T.text}` }
+                      }
+                    />
+                  )}
+                </span>
               </div>
             )
           })}

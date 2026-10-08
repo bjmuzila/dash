@@ -78,6 +78,7 @@ export type ScannerTabId =
   | 'watch'
   | 'kalman'
   | 'align'
+  | 'alignmain'
 
 export interface ScannerTabDef {
   id: ScannerTabId
@@ -158,6 +159,8 @@ export const SCANNER_TABS: readonly ScannerTabDef[] = [
   // it yet. Model in pages/scanner/align.ts; one roster-wide read from
   // /proxy/strike-growth/align. A ticker click opens its replay (?sym=).
   { id: 'align', label: 'Wall Alignment', short: 'Align', accent: V2.cyan, icon: '🧲' },
+  // 2026-10-08: the same board for the MAIN (hot) lane only — indices + mega-caps.
+  { id: 'alignmain', label: 'Wall Alignment · Main', short: 'Align Main', accent: V2.cyan, icon: '⭐' },
   { id: 'ibstats', label: 'IB Stats', short: 'IB Stats', accent: V2.accent, icon: '📐' },
   { id: 'watch', label: 'Watch This', short: 'Watch', accent: V2.accent, icon: '👁️' },
 ]
@@ -177,7 +180,7 @@ export const DEFAULT_TAB: ScannerTabId = 'gexchangetop'
  * nothing left to do.
  */
 export const SCANNER_GROUPS: readonly { key: string; tabs: readonly ScannerTabId[] }[] = [
-  { key: 'gamma', tabs: ['gexlevels', 'gexchangetop', 'pickstudy', 'strike', 'kalman', 'align'] },
+  { key: 'gamma', tabs: ['gexlevels', 'gexchangetop', 'pickstudy', 'strike', 'kalman', 'align', 'alignmain'] },
   // One tab since 2026-09-03 — TPO left. Kept as its own cluster rather than
   // folded into 'gamma': IB Stats is a structure read, not a gamma read, and the
   // divider is what says so.

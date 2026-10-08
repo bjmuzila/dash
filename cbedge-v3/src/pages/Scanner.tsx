@@ -84,6 +84,7 @@ const IbStatsTab = lazy(() => import('@/pages/scanner/IbStatsTab'))
 const WatchThisTab = lazy(() => import('@/pages/scanner/WatchThisTab'))
 const KalmanTab = lazy(() => import('@/pages/scanner/KalmanTab'))
 const AlignTab = lazy(() => import('@/pages/scanner/AlignTab'))
+const AlignMainTab = lazy(() => import('@/pages/scanner/AlignMainTab'))
 
 const TAB_COMPONENT: Record<ScannerTabId, React.LazyExoticComponent<() => React.JSX.Element>> = {
   gexlevels: GexLevelsTab,
@@ -94,6 +95,7 @@ const TAB_COMPONENT: Record<ScannerTabId, React.LazyExoticComponent<() => React.
   watch: WatchThisTab,
   kalman: KalmanTab,
   align: AlignTab,
+  alignmain: AlignMainTab,
 }
 
 /** The query-string key the tab lives under. One spelling. */

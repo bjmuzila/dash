@@ -219,6 +219,26 @@ export class PathDraw {
     if (N === 1) N = Math.max(1, Math.ceil((2 * rV) / (bs * BEAD.overlap) - 1e-6))
     const rP = Math.max(BEAD.minPx * BEAD.peer, rV * BEAD.peer)
     const lw = Math.min(1.1, rV * 0.3)
+    // THE GRID ENDS ON THE NEWEST CANDLE (2026-10-08, Brandon: "the last one isn't
+    // in line with the rest. some overlap"). Zoomed out, the every-Nth-bar grid
+    // used to be fixed to the clock, and the newest reading was drawn wherever it
+    // fell — one or two bars after the last grid bead, so the final two beads
+    // overlapped (or, the bar after, the newest landed close behind the next grid
+    // slot and the overlap moved into the middle of the last three). The grid's
+    // phase is now taken from the newest candle on the Path: every slot is N bars
+    // from it, so the newest bead is ON the grid and the spacing is even to the
+    // very end. One phase for every level, still from the data and never from the
+    // view, so a pan never reshuffles it; each new candle steps the grid along by
+    // one bar, which zoomed out (a bead every N bars) is a sub-bead shift.
+    let gLive = -Infinity
+    for (const r of list) {
+      const q = r.fill[r.fill.length - 1]
+      if (q) gLive = Math.max(gLive, Math.round(q.t / barSec))
+    }
+    const phase = Number.isFinite(gLive) ? ((gLive % N) + N) % N : 0
+    const onGrid = (g: number) => N <= 1 || ((((g - phase) % N) + N) % N) === 0
+    /** the first grid slot after bar `g` */
+    const nextSlot = (g: number) => g + 1 + ((((phase - (g + 1)) % N) + N) % N)
     let drew = false
     for (const r of list) {
       const lead = r.role === 'volt'
@@ -231,7 +251,6 @@ export class PathDraw {
       // `rad` is the FULL bead (the level's highest reading that session); a bead is
       // drawn at its growth share of it, so the bar pitch is never overrun
       const marks: Array<{ x: number; y: number; t: number; p: number; r: number }> = []
-      const last = r.fill.length - 1
       const put = (t: number, p: number, gi: number | undefined) => {
         const x = X(t)
         if (!Number.isFinite(x) || x < -20 || x > width + 20) return
@@ -252,14 +271,13 @@ export class PathDraw {
         // gets the row's previous bead. Only inside a run: a gap longer than two
         // grid steps is a real break (the level moved, a session ended) and stays.
         if (prev && g - prev.g > 1 && g - prev.g <= 2 * N) {
-          for (let S = Math.ceil((prev.g + 1) / N) * N; S < g; S += N) put(S * barSec, prev.p, prev.gi)
+          for (let S = nextSlot(prev.g); S < g; S += N) put(S * barSec, prev.p, prev.gi)
         }
         // THE LIVE EDGE ALWAYS DRAWS (2026-10-07, Brandon: "path isn't going for
-        // spx"). Zoomed out, beads sit on every Nth bar of a fixed clock grid, so
-        // the newest candle between two grid bars showed no bead and the Path looked
-        // stalled. The row's newest reading is drawn whatever the grid says; it may
-        // overlap the grid bead before it, which reads as filled, never as a gap.
-        if (i === last || N <= 1 || g % N === 0) put(q.t, q.p, grow[i])
+        // spx"): the newest candle used to fall between two clock-grid bars and show
+        // no bead. The grid now ends on that candle (see gLive above), so the newest
+        // reading is on it — drawn, and in line with the beads before it.
+        if (onGrid(g)) put(q.t, q.p, grow[i])
         prev = { g, p: q.p, gi: grow[i] }
       }
       if (!marks.length) continue

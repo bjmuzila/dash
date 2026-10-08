@@ -460,6 +460,114 @@ async function _sgAlign(key, run) {
   return p;
 }
 
+// ── ALL ex-0DTE walls for the Align tab ─────────────────────────────────────
+// strike_growth only holds each ticker's front few expiries, so the "every
+// expiration except 0DTE" wall needs the FULL chain — getLiveGexRowsMulti, the
+// same sweep behind /proxy/gex-by-strike-multi. That is one upstream call per
+// listed expiration, so it is NOT run for the roster. Only tickers where two or
+// more recorded walls already agree are swept, a few per minute, each at most
+// every ALIGN_ALL_EVERY_MS, and only while someone has the Align tab open (the
+// loop stops itself after ALIGN_ALL_IDLE_MS with no request). Every knob is
+// env-overridable with no redeploy.
+const _ALL_EVERY_MS = Number(process.env.ALIGN_ALL_EVERY_MS || 5 * 60 * 1000);
+const _ALL_PER_TICK = Math.max(1, Number(process.env.ALIGN_ALL_PER_TICK || 6));
+const _ALL_IDLE_MS = Number(process.env.ALIGN_ALL_IDLE_MS || 10 * 60 * 1000);
+const _ALL_ERR_BACKOFF_MS = 15 * 60 * 1000;
+const _ALL_CAND_TTL_MS = 15 * 60 * 1000;
+const _ALL_TICK_MS = 60 * 1000;
+const _ALL_TOP = 12; // strikes kept per ranking — enough for wall + runner-up in any mode
+const _sgAllWalls = new Map(); // `${date}|${symbol}` -> { at, ok, err?, n?, top: [[strike, net], …] }
+const _sgAllCand = new Map();  // symbol -> { date, spot, seen }
+let _sgAllTimer = null;
+let _sgAllLastHit = 0;
+let _sgAllBusy = false;
+
+/** Called on every align request: refresh the candidate set, keep the loop alive. */
+function _sgAllNote(date, today, symbols, focusHot = false) {
+  _sgAllLastHit = Date.now();
+  // A fallback (weekend / pre-open) session must not be swept against the LIVE
+  // chain — its 0DTE would be classified against the wrong day.
+  if (date !== today) return;
+  for (const s of symbols) {
+    const ks = s.walls.map((w) => w.strike).filter((k) => k != null);
+    const agree = ks.some((k, i) => ks.indexOf(k) !== i);
+    if ((agree || (focusHot && s.hot)) && s.spot > 0) _sgAllCand.set(s.symbol, { date, spot: s.spot, seen: Date.now() });
+  }
+  if (!_sgAllTimer) {
+    _sgAllTimer = setInterval(() => { _sgAllTick().catch(() => {}); }, _ALL_TICK_MS);
+    if (_sgAllTimer.unref) _sgAllTimer.unref();
+    const first = setTimeout(() => { _sgAllTick().catch(() => {}); }, 2000);
+    if (first.unref) first.unref();
+  }
+}
+
+async function _sgAllTick() {
+  if (_sgAllBusy) return;
+  if (Date.now() - _sgAllLastHit > _ALL_IDLE_MS) {
+    if (_sgAllTimer) clearInterval(_sgAllTimer);
+    _sgAllTimer = null;
+    return;
+  }
+  _sgAllBusy = true;
+  try {
+    const { getLiveGexRowsMulti } = require('./eod-gex-recorder');
+    const now = Date.now();
+    const due = [];
+    for (const [symbol, c] of _sgAllCand) {
+      if (now - c.seen > _ALL_CAND_TTL_MS) { _sgAllCand.delete(symbol); continue; }
+      const hit = _sgAllWalls.get(`${c.date}|${symbol}`);
+      const age = hit ? now - hit.at : Infinity;
+      if (age >= (hit && !hit.ok ? _ALL_ERR_BACKOFF_MS : _ALL_EVERY_MS)) due.push({ symbol, c, age });
+    }
+    due.sort((a, b) => b.age - a.age); // never-swept first, then the stalest
+    for (const { symbol, c } of due.slice(0, _ALL_PER_TICK)) {
+      const key = `${c.date}|${symbol}`;
+      try {
+        const payload = await getLiveGexRowsMulti(symbol, c.date, c.spot);
+        const nets = (payload?.ex0dte?.rows || [])
+          .map((r) => [Number(r.strike), (Number(r.netGEX) || 0) + (Number(r.netVolGEX) || 0)])
+          .filter(([k, n]) => Number.isFinite(k) && n !== 0);
+        const pick = (cmp) => nets.slice().sort(cmp).slice(0, _ALL_TOP);
+        const top = new Map();
+        for (const r of [
+          ...pick((a, b) => Math.abs(b[1]) - Math.abs(a[1])),
+          ...pick((a, b) => b[1] - a[1]),
+          ...pick((a, b) => a[1] - b[1]),
+        ]) top.set(r[0], r[1]);
+        _sgAllWalls.set(key, { at: Date.now(), ok: true, n: (payload?.expirations || []).filter((e) => e && e !== c.date).length, top: Array.from(top.entries()) });
+      } catch (e) {
+        _sgAllWalls.set(key, { at: Date.now(), ok: false, err: String(e?.message || e), top: [] });
+      }
+    }
+    // Yesterday's entries are dead weight once the session rolls.
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+    for (const k of _sgAllWalls.keys()) if (k.slice(0, 10) < today) _sgAllWalls.delete(k);
+  } finally {
+    _sgAllBusy = false;
+  }
+}
+
+/** The ALL ex-0DTE wall for one symbol, in the request's mode. */
+function _sgAllFor(date, symbol, mode) {
+  const hit = _sgAllWalls.get(`${date}|${symbol}`);
+  if (!hit) return _sgAllCand.has(symbol) ? { state: 'queued' } : null;
+  if (!hit.ok) return { state: 'error', at: hit.at, err: hit.err };
+  const score = (n) => (mode === 'pos' ? n : mode === 'neg' ? -n : Math.abs(n));
+  const ranked = hit.top
+    .filter(([, n]) => (mode === 'pos' ? n > 0 : mode === 'neg' ? n < 0 : n !== 0))
+    .sort((a, b) => score(b[1]) - score(a[1]) || a[0] - b[0]);
+  const top = ranked[0];
+  const second = ranked[1];
+  return {
+    state: 'ok',
+    at: hit.at,
+    n: hit.n,
+    strike: top ? top[0] : null,
+    net: top ? top[1] : 0,
+    next: second ? Math.abs(second[1]) : 0,
+  };
+}
+
 /**
  * Smallest positive gap between a symbol's recorded strikes — its strike
  * increment, as far as the recorder can see it. The recorder keeps only the
@@ -3628,7 +3736,7 @@ async function main() {
         return;
       }
       // ── Wall alignment across expiries, every scanner ticker ─────────────
-      //   GET /proxy/strike-growth/align[?mode=abs|pos|neg][&date=YYYY-MM-DD]
+      //   GET /proxy/strike-growth/align[?mode=abs|pos|neg][&date=YYYY-MM-DD][&focus=hot]
       //
       // Feeds the v3 scanner's Align tab: "when do the walls of the nearest
       // expirations all sit on the same strike". For each active watchlist
@@ -3641,6 +3749,10 @@ async function main() {
       //                  payload stays small however long the session runs.
       // `step` is the symbol's strike increment (smallest gap between any two
       // strikes recorded today), so the page can count distance in strikes.
+      // `all` is the wall across EVERY expiration except 0DTE, from the full
+      // live chain — see _sgAllNote: swept in the background only for tickers
+      // where 2+ recorded walls agree. { state: 'ok' | 'queued' | 'error', … }
+      // or null when the ticker is not a candidate.
       //
       // mode: abs = biggest |net|; pos = biggest positive (call wall);
       //       neg = biggest negative (put wall). net = gex_now + gex_open, the
@@ -3668,7 +3780,7 @@ async function main() {
               const date = dQ.rows[0]?.date || null;
               if (!date) return { ok: true, date: asOf, stale: false, mode, asOf: Date.now(), symbols: [] };
               // The three reads are independent — fire them together.
-              const [changesQ, latestQ, strikesQ] = await Promise.all([
+              const [changesQ, latestQ, strikesQ, hotQ] = await Promise.all([
                 // Each (symbol, expiry, sweep)'s wall, then only the sweeps where
                 // it MOVED. DISTINCT ON rides idx_strike_growth_latest's order.
                 p.query(
@@ -3709,7 +3821,11 @@ async function main() {
                   [date]
                 ),
                 p.query(`SELECT DISTINCT symbol, strike FROM strike_growth WHERE date = $1`, [date]),
+                // MAIN (the hot lane) — read from the watchlist rather than the
+                // file so an owner-page roster edit shows up on the next poll.
+                p.query(`SELECT symbol FROM strike_growth_watchlist WHERE active AND hot`),
               ]);
+              const hotSet = new Set(hotQ.rows.map((r) => r.symbol));
 
               const strikesBySym = new Map();
               for (const r of strikesQ.rows) {
@@ -3763,6 +3879,7 @@ async function main() {
                 });
                 symbols.push({
                   symbol,
+                  hot: hotSet.has(symbol),
                   t,
                   spot,
                   step: _sgStrikeStep(strikesBySym.get(symbol) || []),
@@ -3773,7 +3890,16 @@ async function main() {
               symbols.sort((a, b) => (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
               return { ok: true, date, stale: date !== today, mode, asOf: Date.now(), symbols };
             });
-            sendJson(res, 200, payload);
+            // The ALL ex-0DTE wall rides OUTSIDE the 45s cache: it is filled by
+            // its own background sweep and read fresh on every request.
+            // ?focus=hot (the Align · Main tab): every MAIN ticker is swept, not
+            // only the ones whose walls already agree.
+            const focusHot = (u.searchParams.get('focus') || '').toLowerCase() === 'hot';
+            _sgAllNote(payload.date, today, payload.symbols || [], focusHot);
+            sendJson(res, 200, {
+              ...payload,
+              symbols: (payload.symbols || []).map((s) => ({ ...s, all: _sgAllFor(payload.date, s.symbol, mode) })),
+            });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;

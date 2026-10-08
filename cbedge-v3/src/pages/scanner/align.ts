@@ -43,6 +43,24 @@ export interface AlignWallRaw {
   segs: Array<[number, number]>
 }
 
+/**
+ * The wall across EVERY expiration except 0DTE, from the full live chain.
+ * Swept server-side in the background, only for tickers where 2+ recorded
+ * walls agree — so `queued` (a candidate not swept yet) and null (not a
+ * candidate) are normal states, not errors.
+ */
+export interface AlignAllWall {
+  state: 'ok' | 'queued' | 'error'
+  strike?: number | null
+  net?: number
+  next?: number
+  /** When it was swept (ms). */
+  at?: number
+  /** How many expirations went into it. */
+  n?: number
+  err?: string
+}
+
 export interface AlignSymbolRaw {
   symbol: string
   t: number
@@ -50,6 +68,9 @@ export interface AlignSymbolRaw {
   step: number
   expiries: string[]
   walls: AlignWallRaw[]
+  all?: AlignAllWall | null
+  /** On the MAIN (hot) lane of the scanner roster — the Align · Main tab's universe. */
+  hot?: boolean
 }
 
 export interface AlignResponse {
@@ -73,6 +94,8 @@ export interface AlignSettings {
   /** Debounce for the history, in minutes (the recorder sweeps once a minute). */
   holdMin: number
   zeroTrigger: boolean
+  /** Only show tickers whose ALL ex-0DTE wall is on the shared wall too. */
+  requireAll: boolean
 }
 
 export const DEFAULT_SETTINGS: AlignSettings = {
@@ -82,6 +105,7 @@ export const DEFAULT_SETTINGS: AlignSettings = {
   minDom: 1,
   holdMin: 3,
   zeroTrigger: true,
+  requireAll: false,
 }
 
 export const STATE_RANK: Record<AlignState, number> = { LOCKED: 0, PENDING: 1, FORMING: 2, SCATTERED: 3 }
@@ -95,7 +119,16 @@ export const STATE_LABEL: Record<AlignState, string> = {
 
 // ── Requests ─────────────────────────────────────────────────────────────────
 
-export const alignUrl = (mode: AlignMode): string => `/proxy/strike-growth/align?mode=${mode}`
+/** Which tickers a board shows. `main` = the roster's MAIN (hot) lane. */
+export type AlignUniverse = 'all' | 'main'
+
+/**
+ * `main` adds `focus=hot`, which tells the server to keep every MAIN ticker's
+ * ALL ex-0DTE wall swept, not only the ones whose walls already agree. The board
+ * payload itself is the same either way (the server caches it per mode).
+ */
+export const alignUrl = (mode: AlignMode, universe: AlignUniverse = 'all'): string =>
+  `/proxy/strike-growth/align?mode=${mode}${universe === 'main' ? '&focus=hot' : ''}`
 
 export const framesUrl = (symbol: string, date: string | null): string =>
   `/proxy/strike-growth/frames-by-expiry?symbol=${encodeURIComponent(symbol)}${
@@ -346,7 +379,11 @@ export interface AlignRow {
   since: number
   runs: Run[]
   events: AlignEvent[]
-  /** Distance and dominance filters both pass. */
+  /** The ALL ex-0DTE wall, as the server sent it. */
+  all: AlignAllWall | null
+  /** Is the ALL ex-0DTE wall on k? null = not known (not swept, or no k). */
+  allOn: boolean | null
+  /** Distance, dominance and (if asked) ALL ex-0DTE filters all pass. */
   passes: boolean
   frontIsZeroDte: boolean
 }
@@ -376,6 +413,12 @@ export function buildRow(sym: AlignSymbolRaw, settings: AlignSettings, date: str
   }
   const distOk = distStrikes == null ? verdict.k == null : Math.abs(distStrikes) >= settings.minDist
   const domOk = settings.minDom <= 1 || (dom != null && dom >= settings.minDom)
+  const all = sym.all ?? null
+  const allOn =
+    all?.state === 'ok' && verdict.k != null
+      ? all.strike != null && near(all.strike, verdict.k, tolAbs(sym.step, settings.tol))
+      : null
+  const allOk = !settings.requireAll || allOn === true
 
   return {
     sym,
@@ -391,7 +434,9 @@ export function buildRow(sym: AlignSymbolRaw, settings: AlignSettings, date: str
     since,
     runs,
     events: eventsFor(sym, runs, date, settings.tol),
-    passes: verdict.state === 'SCATTERED' ? true : distOk && domOk,
+    all,
+    allOn,
+    passes: verdict.state === 'SCATTERED' ? !settings.requireAll : distOk && domOk && allOk,
     frontIsZeroDte: frontIsZeroDte(sym, date),
   }
 }

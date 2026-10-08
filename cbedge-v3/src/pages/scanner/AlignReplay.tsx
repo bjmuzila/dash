@@ -46,6 +46,7 @@ import {
   type AlignResponse,
   type AlignSettings,
   type AlignState,
+  type AlignUniverse,
   type ReplayResponse,
   type ReplaySeries,
   type Verdict,
@@ -78,15 +79,17 @@ export default function AlignReplay({
   symbol,
   date,
   settings,
+  universe = 'all',
   onBack,
 }: {
   symbol: string
   date: string | null
   settings: AlignSettings
+  universe?: AlignUniverse
   onBack: () => void
 }) {
-  // Both at entry — see note 2.
-  const board = useQuery<AlignResponse>(alignUrl(settings.mode), { pollMs: ALIGN_POLL_MS, staleMs: 30_000 })
+  // Both at entry — see note 2. Same URL as the board that opened this, so it is a cache hit.
+  const board = useQuery<AlignResponse>(alignUrl(settings.mode, universe), { pollMs: ALIGN_POLL_MS, staleMs: 30_000 })
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
   const live = !date || date === today
   const frames = useQuery<ReplayResponse>(framesUrl(symbol, date), {
@@ -189,6 +192,12 @@ export default function AlignReplay({
               <span className="inline-block w-4 border-t-2 border-dotted" style={{ borderColor: T.text }} />
               spot
             </span>
+            {symRaw?.all?.state === 'ok' && symRaw.all.strike != null && (
+              <span className="flex items-center gap-1.5 text-fg">
+                <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: V2.accent }} />
+                ALL ex-0D
+              </span>
+            )}
             <span className="flex items-center gap-1.5" style={{ color: DIM }}>
               <span className="inline-block h-3 w-4 rounded-sm" style={{ background: tintCss('PENDING') }} />
               pending
@@ -202,7 +211,13 @@ export default function AlignReplay({
             </div>
           ) : (
             <div className="flex" style={{ height: CHART_H }}>
-              <ConvergenceChart series={series} verdicts={verdicts} k={k} step={step} />
+              <ConvergenceChart
+                series={series}
+                verdicts={verdicts}
+                k={k}
+                step={step}
+                allStrike={symRaw?.all?.state === 'ok' ? (symRaw.all.strike ?? null) : null}
+              />
             </div>
           )}
         </div>
@@ -262,6 +277,40 @@ export default function AlignReplay({
                     </span>,
                   ]
                 })}
+                {symRaw.all?.state === 'ok' && (
+                  <>
+                    <span style={{ color: LABEL }} title={`${symRaw.all.n ?? '?'} expirations, 0DTE excluded`}>
+                      ALL ex-0DTE
+                    </span>
+                    <span className="text-right font-bold" style={{ color: row?.allOn ? T.text : DIM }}>
+                      {symRaw.all.strike != null ? fmtStrike(symRaw.all.strike) : EM_DASH}
+                      {row?.allOn ? ' ✓' : ''}
+                    </span>
+                    <span className="text-right" style={{ color: (symRaw.all.net ?? 0) >= 0 ? V2.up : V2.red }}>
+                      {fmtB(symRaw.all.net ?? 0)}
+                    </span>
+                    <span className="text-right">
+                      {symRaw.all.next && symRaw.all.net != null
+                        ? `${(Math.abs(symRaw.all.net) / symRaw.all.next).toFixed(1)}×`
+                        : EM_DASH}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+            {symRaw && symRaw.all?.state !== 'ok' && (
+              <div className="mt-1 text-xs" style={{ color: DIM }}>
+                ALL ex-0DTE:{' '}
+                {!symRaw.all
+                  ? 'swept only when 2+ walls agree'
+                  : symRaw.all.state === 'queued'
+                    ? 'queued for a full-chain sweep'
+                    : `sweep failed${symRaw.all.err ? ` (${symRaw.all.err})` : ''}`}
+              </div>
+            )}
+            {symRaw?.all?.state === 'ok' && symRaw.all.at != null && (
+              <div className="mt-1 text-xs" style={{ color: DIM }}>
+                ALL ex-0DTE swept {fmtEt(symRaw.all.at)}
               </div>
             )}
           </Panel>
@@ -340,16 +389,18 @@ function ConvergenceChart({
   verdicts,
   k,
   step,
+  allStrike,
 }: {
   series: ReplaySeries
   verdicts: Verdict[]
   k: number | null
   step: number
+  allStrike: number | null
 }) {
   const { onMount, onResize, onVisibility, setDraw } = useCanvasRenderer()
   useEffect(() => {
-    setDraw((canvas, w, h) => drawConvergence(canvas, w, h, series, verdicts, k, step))
-  }, [setDraw, series, verdicts, k, step])
+    setDraw((canvas, w, h) => drawConvergence(canvas, w, h, series, verdicts, k, step, allStrike))
+  }, [setDraw, series, verdicts, k, step, allStrike])
   return <ChartFrame className="select-none" onMount={onMount} onResize={onResize} onVisibility={onVisibility} />
 }
 
@@ -364,6 +415,7 @@ function drawConvergence(
   verdicts: Verdict[],
   k: number | null,
   step: number,
+  allStrike: number | null = null,
 ): void {
   const ctx = sizeCanvas(canvas, w, h)
   if (!ctx) return
@@ -397,6 +449,7 @@ function drawConvergence(
   for (const col of s.walls) for (const v of col) see(v)
   for (const v of s.spot) see(v)
   see(k)
+  see(allStrike)
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return
   const padY = step > 0 ? step : Math.max(0.5, (hi - lo) * 0.05)
   lo -= padY
@@ -496,6 +549,24 @@ function drawConvergence(
       prevY = y
     }
     ctx.stroke()
+  }
+
+  // ALL ex-0DTE wall: the whole board's answer, now — a dashed level, not a line
+  // through time (it is swept every few minutes, not recorded per minute).
+  if (allStrike != null) {
+    const y = Y(allStrike)
+    ctx.strokeStyle = tokenHex('--color-v2-accent')
+    ctx.lineWidth = 1.5
+    ctx.setLineDash([8, 5])
+    ctx.beginPath()
+    ctx.moveTo(x0, y)
+    ctx.lineTo(x1, y)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.fillStyle = tokenHex('--color-v2-accent')
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'bottom'
+    ctx.fillText(`ALL ex-0D ${fmtStrike(allStrike)}`, x1 - 4, y - 3)
   }
 
   // Lock markers: every minute the state turned LOCKED.
