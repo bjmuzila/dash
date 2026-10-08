@@ -15,10 +15,12 @@
 //                      dialog opens. A row says what an indicator is, never who
 //                      wrote it: that is for the row's info (?) button, which is
 //                      planned (Row.info holds it)
-//   Voltick            ours: CB Walls, Voltick Path / Ribbon, pages/vela/studies/
-//                      and the ready-made strategies, shown without "Voltick"
-//   Scripts            your CB Scripts (indicators and strategies), and
-//                      Write or paste a script…
+//   Voltick            ours: CB Walls, Voltick Path / Ribbon and pages/vela/studies/,
+//                      shown without "Voltick" — studies only, no strategies or scripts
+//   Strategies         EVERY strategy: the ready-made ones (script/strategies.ts)
+//                      and your own strategy() scripts; adding one opens the
+//                      Strategy Tester on it (Brandon, 2026-10-07)
+//   Scripts            your CB Script indicators, and Write or paste a script…
 //   PERSONAL
 //     List 1 · 2 · 3   your three lists, named as you like; each opens with
 //                      Add all: every indicator in it onto the chart at once
@@ -29,7 +31,7 @@
 // the topbar count see it); the dialog stays open and the row gets a ✓.
 //
 // EDIT LISTS opens its own dialog: every indicator on the left (search, and an
-// All / Voltick / Scripts switch), the three lists as columns beside it. Drag a
+// All / Voltick / Strategies / Scripts switch), the three lists as columns beside it. Drag a
 // row into a column, or press its 1 / 2 / 3; drag inside a column to reorder it
 // (Add all follows that order); ✕ takes one out; ✎ renames a list. Done saves,
 // Cancel throws the changes away; either goes back to the Indicators dialog.
@@ -64,7 +66,7 @@ const SCRIPTS_PANEL = 'cbedge-scripts'
 const LIST_COUNT = 3
 const NAME_MAX = 24
 
-type Section = 'all' | 'voltick' | 'scripts'
+type Section = 'all' | 'voltick' | 'strategies' | 'scripts'
 /** A section, or one of the Personal lists by index. */
 type View = Section | 0 | 1 | 2
 
@@ -133,7 +135,7 @@ function nativeRows(): Row[] {
     })
 }
 
-/** Your CB Script library: indicators, and strategy() scripts (which open the Strategy Tester). */
+/** Your CB Script library: indicators under Scripts, strategy() scripts under Strategies (they open the Strategy Tester). */
 function scriptRows(): Row[] {
   return loadLibrary().map((s) => {
     const strategy = IS_STRATEGY.test(s.source)
@@ -141,7 +143,7 @@ function scriptRows(): Row[] {
       key: strategy ? `st:${s.id}` : `s:${s.id}`,
       name: s.name,
       desc: strategy ? 'Your strategy · opens the Strategy Tester' : 'Your CB Script',
-      section: 'scripts' as const,
+      section: strategy ? ('strategies' as const) : ('scripts' as const),
       kind: 'script' as const,
       libId: s.id,
       source: s.source,
@@ -153,13 +155,13 @@ function scriptRows(): Row[] {
   })
 }
 
-/** The ready-made strategies (script/strategies.ts): ours, under Voltick. */
+/** The ready-made strategies (script/strategies.ts): under Strategies, with yours. */
 function readyRows(): Row[] {
   return READY_STRATEGIES.map((r) => ({
     key: `r:${r.id}`,
     name: unbrand(r.name),
-    desc: `Strategy · ${r.desc}`,
-    section: 'voltick' as const,
+    desc: `Ready-made · ${r.desc}`,
+    section: 'strategies' as const,
     kind: 'script' as const,
     libId: r.id,
     source: r.source,
@@ -268,7 +270,7 @@ function readView(): View {
   try {
     const v = localStorage.getItem(VIEW_KEY)
     if (v === '0' || v === '1' || v === '2') return Number(v) as View
-    if (v === 'all' || v === 'voltick' || v === 'scripts') return v
+    if (v === 'all' || v === 'voltick' || v === 'strategies' || v === 'scripts') return v
   } catch {
     /* private mode */
   }
@@ -322,6 +324,7 @@ const FILTERS = ['All', 'Price overlays', 'Separate pane'] as const
 const SECTIONS: ReadonlyArray<{ id: Section; label: string }> = [
   { id: 'all', label: 'All indicators' },
   { id: 'voltick', label: 'Voltick' },
+  { id: 'strategies', label: 'Strategies' },
   { id: 'scripts', label: 'Scripts' },
 ]
 
@@ -483,7 +486,10 @@ function openPicker(ctx: WidgetContext): void {
       b.type = 'button'
       b.dataset.active = !query && v === view ? '1' : ''
       if (quiet) b.dataset.quiet = '1'
+      // a phone shows the short name in its 4 x 2 grid ("All indicators" → "All"; vela.css)
+      if (v === 'all') b.append(el(doc, 'span', 'cb-ip-cat-short', 'All'))
       b.append(el(doc, 'span', 'cb-ip-cat-label', label), el(doc, 'span', 'cb-ip-count', String(count)))
+      b.title = label
       b.addEventListener('click', () => {
         view = v
         writeView(view)
@@ -524,12 +530,13 @@ function openPicker(ctx: WidgetContext): void {
       const sec = SECTIONS.find((s) => s.id === view)!
       const rows = allRows().filter((r) => inSection(r, sec.id) && passesFilter(r))
       out.push(el(doc, 'div', 'cb-ip-head', sec.label))
-      if (!rows.length) out.push(el(doc, 'div', 'cb-ip-empty', filter ? 'Nothing here with that filter.' : sec.id === 'scripts' ? 'No saved scripts yet.' : 'Nothing here.'))
+      const none = sec.id === 'scripts' ? 'No saved scripts yet.' : sec.id === 'strategies' ? 'No strategies yet.' : 'Nothing here.'
+      if (!rows.length) out.push(el(doc, 'div', 'cb-ip-empty', filter ? 'Nothing here with that filter.' : none))
       for (const r of rows) out.push(rowEl(r, nat, scr, sec.id === 'all'))
-      if (sec.id === 'scripts') {
+      if (sec.id === 'scripts' || sec.id === 'strategies') {
         const neu = el(doc, 'button', 'cb-ip-link')
         neu.type = 'button'
-        neu.append(iconEl('plus', doc), el(doc, 'span', '', 'Write or paste a script…'))
+        neu.append(iconEl('plus', doc), el(doc, 'span', '', sec.id === 'strategies' ? 'Write or paste a strategy…' : 'Write or paste a script…'))
         neu.addEventListener('click', () => {
           dlg.hide()
           ctx.togglePanel(SCRIPTS_PANEL, true)
