@@ -80,6 +80,13 @@
 // through the dark where the sign flips. A tagged level is a 2px line across the
 // shape in its Path colour. The figures sit right-aligned over it, a level's in
 // its colour. Redrawn with the rows on every frame (pan, zoom).
+// FULL LENGTH (2026-10-08, Brandon: "the gex rail cuts off. needs to be full
+// length"): the ladder carries the top 30 strikes, so the shape used to stop at
+// the highest and lowest of them and leave the rest of the column empty. Past
+// its last strike the shape now tapers in one strike step to the thin stem a
+// zero-GEX strike draws, and the stem runs on to the plot's top (under the
+// header) and bottom in that end's sign colour, so the column reads as one
+// shape top to bottom. Nothing is invented: the stem is the width of zero.
 //
 // EXPIRIES (2026-10-06, Brandon: "is the gex rail 0dte only or all
 // expirations. the settings should have a selector"): Nearest (0DTE), the
@@ -584,11 +591,11 @@ class RailLayer implements RendererLayerInstance {
       if (node.style.visibility !== 'visible') node.style.visibility = 'visible'
     }
     this.paintHeat(d.heat ? shown : null)
-    this.paintProfile(d.profile ? shape : null, d, bounds.top + bounds.height)
+    this.paintProfile(d.profile ? shape : null, d, top, bounds.top + bounds.height)
   }
 
   /** Profile: the shape behind the figures (header). `null`: another style, no shape. */
-  private paintProfile(pts: { y: number; r: RailRowOut }[] | null, d: RailPayload, height: number): void {
+  private paintProfile(pts: { y: number; r: RailRowOut }[] | null, d: RailPayload, topY: number, height: number): void {
     const svg = this.profileEl
     if (!svg) return
     if (!pts || pts.length < 2 || !(d.maxAbs > 0)) {
@@ -602,9 +609,30 @@ class RailLayer implements RendererLayerInstance {
     const x0 = left ? W - PROFILE_FROM : PROFILE_FROM
     const span = W - PROFILE_FROM - PROFILE_END - 3
     const xOf = (v: number) => x0 + (left ? -1 : 1) * (3 + (Math.abs(v) / d.maxAbs) * span)
-    const P = [{ x: x0, y: pts[0]!.y - PROFILE_TAPER }, ...pts.map((p) => ({ x: xOf(p.r.value), y: p.y })), { x: x0, y: pts[pts.length - 1]!.y + PROFILE_TAPER }]
+    // one strike step on screen: the smallest gap between two neighbouring strikes
+    let step = Infinity
+    for (let i = 1; i < pts.length; i++) {
+      const dy = pts[i]!.y - pts[i - 1]!.y
+      if (dy > 0.5 && dy < step) step = dy
+    }
+    if (!Number.isFinite(step)) step = PROFILE_TAPER
+    // the ends: one step to taper to the zero stem, then the stem to the plot's edge
+    // (two zero points so the curve meets the stem straight, not with a bulge)
+    const stem = xOf(0)
+    const firstY = pts[0]!.y
+    const lastY = pts[pts.length - 1]!.y
+    const botY = height - 2
+    const head =
+      firstY - step > topY
+        ? [{ x: stem, y: topY }, ...(firstY - 2 * step > topY ? [{ x: stem, y: firstY - 2 * step }] : []), { x: stem, y: firstY - step }]
+        : [{ x: x0, y: firstY - PROFILE_TAPER }]
+    const tail =
+      lastY + step < botY
+        ? [{ x: stem, y: lastY + step }, ...(lastY + 2 * step < botY ? [{ x: stem, y: lastY + 2 * step }] : []), { x: stem, y: botY }]
+        : [{ x: x0, y: lastY + PROFILE_TAPER }]
+    const P = [...head, ...pts.map((p) => ({ x: xOf(p.r.value), y: p.y })), ...tail]
     const n = (v: number) => v.toFixed(1)
-    let path = `M${n(x0)},${n(P[0]!.y)}`
+    let path = `M${n(x0)},${n(P[0]!.y)} L${n(P[0]!.x)},${n(P[0]!.y)}`
     for (let i = 0; i < P.length - 1; i++) {
       const p0 = P[i - 1] ?? P[i]!
       const p1 = P[i]!
@@ -627,6 +655,9 @@ class RailLayer implements RendererLayerInstance {
       }
       stops.push(stop(p.y, col(p.r.value), 0.5))
     }
+    // the stems: each end's colour, quieter, out to the edge
+    if (head.length > 1 || head[0]!.x === stem) stops.unshift(stop(topY, col(pts[0]!.r.value), 0.3))
+    if (tail.length > 1 || tail[0]!.x === stem) stops.push(stop(botY, col(pts[pts.length - 1]!.r.value), 0.3))
     const id = this.profileId
     const lines = pts
       .filter((p) => p.r.lead && LEAD_FILL[p.r.lead])

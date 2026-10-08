@@ -14,10 +14,9 @@
 //   tpo.ts     CB Market Profile
 //   rail.ts    CB GEX Rail (the GEX Candles card's strike rail, right or left of the chart)
 //   heat.ts    CB GEX Heatmap (the per-minute ladders, behind the candles)
-//   journal.ts CB Journal Trades (your journal's fills on the chart). HIDDEN
-//              from the Indicators dialog for now (indicatorPicker.ts HIDDEN)
-//              while the journal is redone for v3; still registered so a chart
-//              that carries it opens.
+//   journal.ts CB Journal Trades (your journal's fills on the chart). Back in
+//              the Indicators dialog since 2026-10-08 (hidden from 2026-10-04
+//              while the journal was redone).
 //   events.ts  CB Events (economic releases, the engine's alerts and your script
 //              alerts as marks along the bottom of the chart, eventsLayer.ts)
 //

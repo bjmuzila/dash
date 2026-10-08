@@ -112,7 +112,9 @@ export interface AlignSettings {
 }
 
 export const DEFAULT_SETTINGS: AlignSettings = {
-  mode: 'pos',
+  // Core by default (Brandon, 2026-10-08) — the board, Align · Main and the
+  // drill-in all open on the biggest |GEX| strike either side.
+  mode: 'abs',
   tol: 0,
   minDist: 1,
   minDom: 1,

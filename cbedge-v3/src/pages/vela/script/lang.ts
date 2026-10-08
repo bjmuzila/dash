@@ -32,6 +32,10 @@
 // The CB Script spelling that came first (`input("Fast", 9)`, `plot(x,
 // color=gold)`, `marker(…)`) is the same grammar; what every name means is
 // runtime.ts. `^` (power) is a CB extra.
+//
+// Code in another language (Python, so far: a pandas indicator pasted from
+// GitHub) is named as such on the line that gives it away, rather than failing
+// on whatever character the lexer meets first (`{`, line 36).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type Node =
@@ -300,6 +304,23 @@ function foldMultilineStrings(src: string): string {
   return out + '\n'.repeat(pending)
 }
 
+/**
+ * Python, by the lines Pine can never have: `from x import y`, `import pandas
+ * as pd` (Pine's import always has a slash: user/name/1), `def f(…)` and
+ * `class X:`. Comments and blank lines are skipped. Returns the first such
+ * line (1-based), or 0.
+ */
+const PYTHON_LINE = /^\s*(?:from\s+[\w.]+\s+import\s|import\s+[A-Za-z_][\w.]*(?:\s+as\s+\w+)?\s*(?:,\s*[A-Za-z_][\w.]*(?:\s+as\s+\w+)?\s*)*$|def\s+\w+\s*\(|class\s+\w+\s*(?:\(.*\))?\s*:\s*$)/
+function pythonLine(src: string): number {
+  const phys = src.split('\n')
+  for (let i = 0; i < phys.length; i++) {
+    const t = phys[i]!.replace(/\r$/, '')
+    if (/^\s*(?:\/\/|#|$)/.test(t)) continue
+    if (PYTHON_LINE.test(t)) return i + 1
+  }
+  return 0
+}
+
 function lex(src: string): LLine[] {
   const raw: LLine[] = []
   let depth = 0 // ( and [ nesting — a line break inside is not a line end
@@ -366,6 +387,13 @@ export function parse(src: string, opts: ParseOpts = {}, depth = 0): Program {
   const imported: Stmt[] = []
   const imports: { alias: string; names: string[] }[] = []
   const version = vm ? Number(vm[1]) : null
+  const py = pythonLine(src)
+  if (py) {
+    throw new ScriptError(
+      'this is Python, not Pine Script. Scripts here are Pine (they start with //@version=… and indicator(…) or strategy(…)): paste the Pine version of it',
+      py,
+    )
+  }
   const lines = lex(src)
   let li = 0 // next logical line to read
   let toks: Tok[] = []

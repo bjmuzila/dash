@@ -5645,13 +5645,16 @@ export function run(prog: Program, bars: readonly OHLCV[], opts: RunOpts = {}): 
       return w ? (w[0]! + 2 * w[1]! + 2 * w[2]! + w[3]!) / 6 : NaN
     },
     // ── statistics ──
+    // ta.stdev(source, length, biased): biased (the default) divides by n, false by n − 1
     stdev: (c) => {
       const w = win(c, src(c), lenArg(c, 1))
-      return w ? stdevOf(w, c.N.biased === undefined ? true : truthy(c.N.biased)) : NaN
+      const biased = arg(c, 2, 'biased')
+      return w ? stdevOf(w, biased === undefined ? true : truthy(biased)) : NaN
     },
     variance: (c) => {
       const w = win(c, src(c), lenArg(c, 1))
-      return w ? Math.pow(stdevOf(w, c.N.biased === undefined ? true : truthy(c.N.biased)), 2) : NaN
+      const biased = arg(c, 2, 'biased')
+      return w ? Math.pow(stdevOf(w, biased === undefined ? true : truthy(biased)), 2) : NaN
     },
     dev: (c) => {
       const w = win(c, src(c), lenArg(c, 1))

@@ -54,7 +54,6 @@ import { applyDefaultOnAdd } from './indicatorPresets'
 import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
 import { WALLS_TYPE } from './wallsIndicator'
 import { PATH_TYPE, RIBBON_TYPE } from './vtPath/vtPathIndicator'
-import { JOURNAL_TYPE } from './studies'
 import { track } from './telemetry'
 
 /** The old ★ favourites: read once, into List 1. */
@@ -77,12 +76,13 @@ interface IndList {
 }
 
 /**
- * Registered but not offered. CB Journal Trades stays hidden while the journal
- * is redone for v3 (Voltick's, or a new one: Brandon, 2026-10-04). It stays
- * registered so a chart that already carries it still opens; it just cannot be
- * added from here, and search does not find it.
+ * Registered but not offered: a type listed here cannot be added from the
+ * dialog and search does not find it (a chart that already carries it still
+ * opens). Empty for now. CB Journal Trades was hidden here from 2026-10-04
+ * while the journal was redone; Brandon put it back on 2026-10-08 ("can you put
+ * the trade journal indicator back on vela").
  */
-const HIDDEN = new Set<string>([JOURNAL_TYPE])
+const HIDDEN = new Set<string>([])
 
 /** Ours: CB Walls, the Path and its Ribbon, and every pages/vela/studies/ type (`cbedge-…`). */
 const isVoltickType = (t: string) => t === WALLS_TYPE || t === PATH_TYPE || t === RIBBON_TYPE || t.startsWith('cbedge-')

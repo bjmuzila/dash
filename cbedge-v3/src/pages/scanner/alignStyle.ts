@@ -38,14 +38,16 @@ export const EVENT_COLOR: Record<AlignEventKind, string> = {
 }
 
 /** Per expiry, front first. The front is the chain's wall yellow, as on the board. */
-export const EXP_COLOR: readonly string[] = [LEVEL_COLORS.cb, V2.cyan, V2.green, VIOLET, V2.orange, V2.accent]
+// 2026-10-08: V2.green is the scanner's light-blue label colour, and beside
+// cyan it read as the same line — so the second slot after cyan is violet.
+export const EXP_COLOR: readonly string[] = [LEVEL_COLORS.cb, V2.cyan, VIOLET, V2.orange, V2.accent, V2.green]
 export const EXP_TOKEN: readonly string[] = [
   '--color-level-cb',
   '--color-v2-cyan',
-  '--color-v2-green',
   '--color-violet',
   '--color-v2-orange',
   '--color-v2-accent',
+  '--color-v2-green',
 ]
 
 export const expColor = (i: number): string => EXP_COLOR[i % EXP_COLOR.length] ?? T.text

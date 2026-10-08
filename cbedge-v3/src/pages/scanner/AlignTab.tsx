@@ -64,16 +64,22 @@ const STORE_KEY = 'cb-v3-scanner-align'
  * walls themselves. A v1 save is carried over except for those two fields,
  * which take the new defaults — v1's |GEX| + 3m was the setting that jittered.
  */
-const STORE_VERSION = 2
+/**
+ * v3 (2026-10-08): Core became the default Wall. A v2 save keeps everything
+ * (Hold included) except `mode`, which re-opens on Core once; after that the
+ * choice is remembered again.
+ */
+const STORE_VERSION = 3
 
 function loadSettings(): AlignSettings {
   try {
     const raw = window.localStorage.getItem(STORE_KEY)
     if (!raw) return DEFAULT_SETTINGS
     const p = JSON.parse(raw) as Partial<AlignSettings> & { v?: number }
-    const current = p.v === STORE_VERSION
+    const current = p.v === STORE_VERSION || p.v === 2
+    const modeKept = p.v === STORE_VERSION && (p.mode === 'abs' || p.mode === 'pos' || p.mode === 'neg')
     return {
-      mode: current && (p.mode === 'abs' || p.mode === 'neg') ? p.mode : current ? 'pos' : DEFAULT_SETTINGS.mode,
+      mode: modeKept ? (p.mode as AlignMode) : DEFAULT_SETTINGS.mode,
       tol: p.tol === 1 ? 1 : 0,
       minDist: typeof p.minDist === 'number' ? p.minDist : DEFAULT_SETTINGS.minDist,
       minDom: typeof p.minDom === 'number' ? p.minDom : DEFAULT_SETTINGS.minDom,
@@ -378,6 +384,12 @@ function Toolbar({
         <SegGroup<AlignMode>
           options={[
             {
+              value: 'abs',
+              label: 'Core',
+              title:
+                'Biggest |GEX| strike on either side (the CB). Jumps between the call and put side when the two are close in size',
+            },
+            {
               value: 'pos',
               label: 'Call wall',
               title: 'Biggest + GEX strike ABOVE spot — the same call wall Wall Migration draws',
@@ -388,12 +400,6 @@ function Toolbar({
               label: 'Put wall',
               title: 'Most − GEX strike BELOW spot — the same put wall Wall Migration draws',
               activeColor: V2.red,
-            },
-            {
-              value: 'abs',
-              label: 'Core',
-              title:
-                'Biggest |GEX| strike on either side (the CB). Jumps between the call and put side when the two are close in size',
             },
           ]}
           value={settings.mode}

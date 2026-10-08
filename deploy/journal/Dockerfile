@@ -1,5 +1,6 @@
-# journal.cbedge.net — LuxAlgo's open-source Trade Journal (MIT),
-# https://github.com/LuxAlgo/trade-journal, built UNMODIFIED from a pinned commit.
+# journal.cbedge.net — Voltick Journal: LuxAlgo's open-source Trade Journal (MIT),
+# https://github.com/LuxAlgo/trade-journal, built from a pinned commit with ONLY
+# the Voltick branding in branding/ applied on top (name, wordmark, favicon).
 #
 # NOT VENDORED. The source is cloned at build time from the commit below, so
 # there is no copy of it in this repo to drift (voltick-v3/ shows what a copy
@@ -28,6 +29,10 @@ RUN git clone https://github.com/LuxAlgo/trade-journal.git /repo \
  && cd /repo \
  && git checkout --quiet "$JOURNAL_REF"
 WORKDIR /repo
+# Voltick Journal branding: the one difference from upstream (branding/apply.mjs).
+# Fails the build if upstream moved a line it edits, rather than half-branding.
+COPY branding/ /branding/
+RUN node /branding/apply.mjs /repo/apps/web
 RUN pnpm install --frozen-lockfile \
  && pnpm --filter web build
 

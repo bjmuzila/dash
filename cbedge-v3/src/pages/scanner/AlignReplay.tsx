@@ -26,7 +26,7 @@
 import { useEffect, useMemo, type ReactNode } from 'react'
 import { Card } from '@/design/primitives/Card'
 import { ChartFrame } from '@/design/primitives/ChartFrame'
-import { T, V2, V2W, alpha, tokenHex, tokenHexAlpha } from '@/design/theme'
+import { T, V2, V2W, tokenHex, tokenHexAlpha } from '@/design/theme'
 import { readableError, useQuery } from '@/data/api'
 import { sizeCanvas, useCanvasRenderer } from '@/board/chart-render'
 import { EM_DASH, fmtB } from '@/pages/scanner/format'
@@ -46,7 +46,6 @@ import {
   steadySeries,
   type AlignResponse,
   type AlignSettings,
-  type AlignState,
   type ReplayResponse,
   type ReplaySeries,
   type Verdict,
@@ -184,30 +183,35 @@ export default function AlignReplay({
       </div>
 
       <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-0 rounded-md border border-line p-3" style={{ flex: '999 1 640px', background: V2W.wash03 }}>
-          <div className="mb-2 flex flex-wrap gap-4 text-xs tabular">
+        <div className="min-w-0 rounded-md border border-line p-3" style={{ flex: '999 1 640px' }}>
+          {/* Wall Migration's legend (2026-10-08): a square swatch, the name,
+              and the value it holds RIGHT NOW in mono — so the chart reads
+              without hunting for where each line ends. */}
+          <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs tabular">
+            <span className="mr-1 font-bold uppercase tracking-wide text-fg">
+              {MODE_TITLE[settings.mode]}
+            </span>
             {series.expiries.map((e, i) => (
               <span key={e} className="flex items-center gap-1.5 text-fg">
-                <span className="inline-block h-1 w-4 rounded-sm" style={{ background: expColor(i) }} />
+                <span className="inline-block rounded-sm" style={{ width: 11, height: 11, background: expColor(i) }} />
                 {i === 0 ? (frontIsZeroDte ? '0DTE ' : 'Front ') : ''}
                 {fmtExpiry(e)}
+                <span className="font-bold" style={{ color: expColor(i) }}>
+                  {lastOf(steady.walls[i]) != null ? fmtStrike(lastOf(steady.walls[i]) as number) : EM_DASH}
+                </span>
               </span>
             ))}
-            <span className="flex items-center gap-1.5 text-fg">
-              <span className="inline-block w-4 border-t-2 border-dotted" style={{ borderColor: T.text }} />
-              spot
-            </span>
             {symRaw?.all?.state === 'ok' && symRaw.all.strike != null && (
               <span className="flex items-center gap-1.5 text-fg">
                 <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: V2.accent }} />
                 ALL ex-0D
+                <span className="font-bold" style={{ color: V2.accent }}>{fmtStrike(symRaw.all.strike)}</span>
               </span>
             )}
-            <span className="flex items-center gap-1.5" style={{ color: DIM }}>
-              <span className="inline-block h-3 w-4 rounded-sm" style={{ background: tintCss('PENDING') }} />
-              pending
-              <span className="inline-block h-3 w-4 rounded-sm" style={{ background: tintCss('LOCKED') }} />
-              locked
+            <span className="flex items-center gap-1.5 text-fg">
+              <span className="inline-block rounded-sm" style={{ width: 11, height: 11, background: T.text }} />
+              spot
+              <span className="font-bold">{lastOf(series.spot)?.toFixed(2) ?? EM_DASH}</span>
             </span>
           </div>
           {replayError ? (
@@ -381,8 +385,20 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function tintCss(state: AlignState): string {
-  return alpha(STATE_COLOR[state], 0.22)
+const MODE_TITLE: Record<AlignSettings['mode'], string> = {
+  abs: 'Core',
+  pos: 'Call wall',
+  neg: 'Put wall',
+}
+
+/** Last non-null, non-zero value of a column. */
+function lastOf(col: ReadonlyArray<number | null> | undefined): number | null {
+  if (!col) return null
+  for (let i = col.length - 1; i >= 0; i--) {
+    const v = col[i]
+    if (v != null && Number.isFinite(v) && v > 0) return v
+  }
+  return null
 }
 
 function inferStep(s: ReplaySeries): number {
@@ -421,8 +437,16 @@ function ConvergenceChart({
   return <ChartFrame className="select-none" onMount={onMount} onResize={onResize} onVisibility={onVisibility} />
 }
 
-const PAD = { l: 52, r: 14, t: 10, b: 58 }
-const STRIP_H = 26
+// ── Wall Migration look (2026-10-08) ─────────────────────────────────────────
+// Plain background, crisp step lines, a solid white price line drawn LAST so it
+// is never under a wall, and each line's current strike tagged at the right
+// edge in its own colour. State lives in the strip underneath only — full-height
+// tinting turned the whole plot yellow/green and buried the lines. The raw
+// per-minute walls (what Hold smoothed out) are no longer drawn: they doubled
+// every line.
+const PAD = { l: 52, r: 58, t: 12, b: 50 }
+const STRIP_H = 18
+const STRIP_GAP = 22
 
 function drawConvergence(
   canvas: HTMLCanvasElement,
@@ -433,30 +457,32 @@ function drawConvergence(
   k: number | null,
   step: number,
   allSegs: ReadonlyArray<[number, number]> | null = null,
-  raw: ReplaySeries | null = null,
+  _raw: ReplaySeries | null = null,
 ): void {
   const ctx = sizeCanvas(canvas, w, h)
   if (!ctx) return
   ctx.clearRect(0, 0, w, h)
   const n = s.t.length
-  if (n === 0 || w < 120 || h < 120) return
+  if (n === 0 || w < 160 || h < 120) return
 
   const mono = fontMono()
   const ink = tokenHex('--color-fg')
   const dim = tokenHexAlpha('--color-fg', 0.45)
-  const grid = tokenHexAlpha('--color-fg', 0.08)
+  const grid = tokenHexAlpha('--color-fg', 0.06)
 
   const x0 = PAD.l
   const x1 = w - PAD.r
   const y0 = PAD.t
-  const y1 = h - PAD.b
+  const sy1 = h - 4
+  const sy0 = sy1 - STRIP_H
+  const y1 = sy0 - STRIP_GAP
   const t0 = s.t[0] ?? 0
   const tN = s.t[n - 1] ?? t0
   const span = Math.max(60_000, tN - t0)
   const X = (t: number) => x0 + ((t - t0) / span) * (x1 - x0)
-  const xEnd = (i: number) => (i + 1 < n ? X(s.t[i + 1] ?? tN) : x1)
+  const xEnd = (i: number) => (i + 1 < n ? X(s.t[i + 1] ?? tN) : X(tN))
 
-  // y range over every wall, spot and k, padded a strike each side.
+  // y range: every steadied wall, spot, k and the ALL line — half a strike of air.
   let lo = Infinity
   let hi = -Infinity
   const see = (v: number | null | undefined) => {
@@ -465,123 +491,71 @@ function drawConvergence(
     if (v > hi) hi = v
   }
   for (const col of s.walls) for (const v of col) see(v)
-  if (raw) for (const col of raw.walls) for (const v of col) see(v)
   for (const v of s.spot) see(v)
   see(k)
-  const allLast = allSegs?.[allSegs.length - 1]?.[1] ?? null
   for (const sg of allSegs ?? []) if (sg[0] <= tN) see(sg[1])
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return
-  const padY = step > 0 ? step : Math.max(0.5, (hi - lo) * 0.05)
+  const padY = step > 0 ? step * 0.6 : Math.max(0.5, (hi - lo) * 0.05)
   lo -= padY
   hi += padY
   const Y = (v: number) => y1 - ((v - lo) / (hi - lo)) * (y1 - y0)
 
-  // State shading.
-  for (let i = 0; i < n; i++) {
-    const v = verdicts[i]
-    if (!v || (v.state !== 'PENDING' && v.state !== 'LOCKED')) continue
-    ctx.fillStyle = tokenHexAlpha(STATE_TOKEN[v.state], 0.08)
-    ctx.fillRect(X(s.t[i] ?? t0), y0, Math.max(1, xEnd(i) - X(s.t[i] ?? t0)), y1 - y0)
-  }
-
-  // Horizontal grid on strikes — thinned so labels never collide.
+  // Price grid: a round step, ≤ ~10 labels, faint — Wall Migration's axis.
   ctx.font = `${AXIS_PX}px ${mono}`
   ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'
-  if (step > 0) {
-    const rows = (hi - lo) / step
-    const every = Math.max(1, Math.ceil(rows / 12))
-    const first = Math.ceil(lo / step) * step
-    let idx = 0
-    for (let v = first; v <= hi + 1e-9; v += step, idx++) {
-      const isK = k != null && Math.abs(v - k) < step / 2
-      if (idx % every !== 0 && !isK) continue
-      const y = Y(v)
-      ctx.strokeStyle = isK ? tokenHexAlpha('--color-fg', 0.3) : grid
-      ctx.lineWidth = 1
-      ctx.setLineDash(isK ? [4, 4] : [])
-      ctx.beginPath()
-      ctx.moveTo(x0, y)
-      ctx.lineTo(x1, y)
-      ctx.stroke()
-      ctx.fillStyle = isK ? ink : dim
-      ctx.fillText(fmtStrike(v), x0 - 6, y)
-    }
-    ctx.setLineDash([])
+  const base = step > 0 ? step : 1
+  const mult = [1, 2, 4, 5, 10, 20, 25, 50, 100].find((m) => (hi - lo) / (base * m) <= 10) ?? 100
+  const gStep = base * mult
+  for (let v = Math.ceil(lo / gStep) * gStep; v <= hi + 1e-9; v += gStep) {
+    const y = Y(v)
+    ctx.strokeStyle = grid
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(x0, y)
+    ctx.lineTo(x1, y)
+    ctx.stroke()
+    ctx.fillStyle = dim
+    ctx.fillText(fmtStrike(v), x0 - 6, y)
   }
 
-  // Time axis: every half hour.
+  // The shared wall, when there is one: a quiet dashed guide with its strike.
+  if (k != null) {
+    const y = Y(k)
+    ctx.strokeStyle = tokenHexAlpha('--color-fg', 0.22)
+    ctx.setLineDash([3, 5])
+    ctx.beginPath()
+    ctx.moveTo(x0, y)
+    ctx.lineTo(x1, y)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.fillStyle = ink
+    ctx.font = `700 ${AXIS_PX}px ${mono}`
+    ctx.fillText(fmtStrike(k), x0 - 6, y)
+    ctx.font = `${AXIS_PX}px ${mono}`
+  }
+
+  // Hour rules + half-hour labels, faint.
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
-  ctx.fillStyle = dim
   const half = 30 * 60_000
   for (let t = Math.ceil(t0 / half) * half; t <= tN; t += half) {
     const x = X(t)
-    ctx.strokeStyle = grid
+    const hour = Math.round(t / half) % 2 === 0
+    ctx.strokeStyle = hour ? tokenHexAlpha('--color-fg', 0.1) : grid
     ctx.beginPath()
     ctx.moveTo(x, y0)
     ctx.lineTo(x, y1)
     ctx.stroke()
-    ctx.fillText(fmtEt(t), x, y1 + 4)
+    ctx.fillStyle = dim
+    ctx.fillText(fmtEt(t), x, y1 + 5)
   }
 
-  // Spot, dotted.
-  ctx.strokeStyle = tokenHexAlpha('--color-fg', 0.7)
-  ctx.lineWidth = 1.5
-  ctx.setLineDash([2, 4])
-  ctx.beginPath()
-  let started = false
-  for (let i = 0; i < n; i++) {
-    const v = s.spot[i]
-    if (!v) continue
-    const x = X(s.t[i] ?? t0)
-    const y = Y(v)
-    if (!started) {
-      ctx.moveTo(x, y)
-      started = true
-    } else ctx.lineTo(x, y)
-  }
-  ctx.stroke()
-  ctx.setLineDash([])
-
-  // Walls: step lines, back to front so 0DTE draws on top. A small vertical
-  // offset per expiry keeps lines that share a strike individually visible.
-  // The RAW per-minute walls go underneath, faint, so what Hold filtered out
-  // is still visible; the steadied walls are the bold lines on top.
-  const m = s.walls.length
-  const layers: Array<{ src: ReplaySeries; faint: boolean }> = raw ? [{ src: raw, faint: true }, { src: s, faint: false }] : [{ src: s, faint: false }]
-  for (const layer of layers)
-  for (let j = m - 1; j >= 0; j--) {
-    const col = layer.src.walls[j] ?? []
-    const off = (j - (m - 1) / 2) * 2
-    ctx.strokeStyle = layer.faint ? tokenHexAlpha(expToken(j), 0.22) : tokenHex(expToken(j))
-    ctx.lineWidth = layer.faint ? 1 : j === 0 ? 3 : 2
-    ctx.beginPath()
-    let prevY: number | null = null
-    for (let i = 0; i < n; i++) {
-      const v = col[i]
-      if (v == null) {
-        prevY = null
-        continue
-      }
-      const xa = X(s.t[i] ?? t0)
-      const xb = xEnd(i)
-      const y = Y(v) + off
-      if (prevY == null) ctx.moveTo(xa, y)
-      else if (prevY !== y) ctx.lineTo(xa, y)
-      ctx.lineTo(xb, y)
-      prevY = y
-    }
-    ctx.stroke()
-  }
-
-  // ALL ex-0DTE wall through the session — a dashed step line. Recorded every
-  // ~5 minutes (scanner-recorder's 'agg' leg), the same series Wall Migration's
-  // "All expirations minus 0DTE" scope draws.
+  // ALL ex-0DTE — dashed, under the expiries.
   if (allSegs && allSegs.length) {
-    ctx.strokeStyle = tokenHex('--color-v2-accent')
+    ctx.strokeStyle = tokenHexAlpha('--color-v2-accent', 0.8)
     ctx.lineWidth = 1.5
-    ctx.setLineDash([8, 5])
+    ctx.setLineDash([6, 5])
     ctx.beginPath()
     let prevY: number | null = null
     for (let i = 0; i < allSegs.length; i++) {
@@ -598,15 +572,56 @@ function drawConvergence(
     }
     ctx.stroke()
     ctx.setLineDash([])
-    if (allLast != null) {
-      ctx.fillStyle = tokenHex('--color-v2-accent')
-      ctx.textAlign = 'right'
-      ctx.textBaseline = 'bottom'
-      ctx.fillText(`ALL ex-0D ${fmtStrike(allLast)}`, x1 - 4, Y(allLast) - 3)
-    }
   }
 
-  // Lock markers: every minute the state turned LOCKED.
+  // Expiry walls: crisp steps, back to front so the front draws on top. Lines
+  // sharing a strike are nudged 2px apart so each stays visible.
+  const m = s.walls.length
+  ctx.lineJoin = 'miter'
+  for (let j = m - 1; j >= 0; j--) {
+    const col = s.walls[j] ?? []
+    const off = (j - (m - 1) / 2) * 2
+    ctx.strokeStyle = tokenHex(expToken(j))
+    ctx.lineWidth = j === 0 ? 2.2 : 1.8
+    ctx.beginPath()
+    let prevY: number | null = null
+    for (let i = 0; i < n; i++) {
+      const v = col[i]
+      if (v == null) {
+        prevY = null
+        continue
+      }
+      const xa = X(s.t[i] ?? t0)
+      const xb = xEnd(i)
+      const y = Math.round(Y(v) + off) + 0.5
+      if (prevY == null) ctx.moveTo(xa, y)
+      else if (prevY !== y) ctx.lineTo(xa, y)
+      ctx.lineTo(xb, y)
+      prevY = y
+    }
+    ctx.stroke()
+  }
+
+  // Spot: solid white, on top of everything — the line the walls are read against.
+  ctx.strokeStyle = ink
+  ctx.lineWidth = 1.4
+  ctx.lineJoin = 'round'
+  ctx.beginPath()
+  let started = false
+  for (let i = 0; i < n; i++) {
+    const v = s.spot[i]
+    if (!v) continue
+    const x = X(s.t[i] ?? t0)
+    const y = Y(v)
+    if (!started) {
+      ctx.moveTo(x, y)
+      started = true
+    } else ctx.lineTo(x, y)
+  }
+  ctx.stroke()
+
+  // Lock markers: a small dot where the state turned LOCKED.
+  ctx.font = `700 ${AXIS_PX}px ${mono}`
   for (let i = 0; i < n; i++) {
     const v = verdicts[i]
     const p = verdicts[i - 1]
@@ -616,20 +631,48 @@ function drawConvergence(
     const y = Y(v.k)
     ctx.fillStyle = tokenHex(STATE_TOKEN.LOCKED)
     ctx.strokeStyle = tokenHex('--color-surface')
-    ctx.lineWidth = 3
+    ctx.lineWidth = 2
     ctx.beginPath()
-    ctx.arc(x, y, 6, 0, Math.PI * 2)
+    ctx.arc(x, y, 4.5, 0, Math.PI * 2)
     ctx.stroke()
     ctx.fill()
     ctx.textAlign = 'left'
     ctx.textBaseline = 'bottom'
-    ctx.fillText(`LOCK ${fmtEt(s.t[i] ?? t0)}`, Math.min(x + 9, x1 - 70), y - 8)
+    ctx.fillText(`LOCK ${fmtEt(s.t[i] ?? t0)}`, Math.min(x + 7, x1 - 70), y - 6)
   }
 
-  // Aligned-count strip: how many expiries sit on that minute's shared wall.
-  const sy1 = h - 4
-  const sy0 = sy1 - STRIP_H
+  // Right-edge tags: each line's current strike in its own colour, nudged apart
+  // so two lines on the same strike never print on top of each other.
+  type Tag = { y: number; text: string; color: string }
+  const tags: Tag[] = []
+  for (let j = 0; j < m; j++) {
+    const v = lastOf(s.walls[j])
+    if (v != null) tags.push({ y: Y(v), text: fmtStrike(v), color: tokenHex(expToken(j)) })
+  }
+  const allLast = allSegs?.[allSegs.length - 1]?.[1] ?? null
+  if (allLast != null) tags.push({ y: Y(allLast), text: `${fmtStrike(allLast)} all`, color: tokenHex('--color-v2-accent') })
+  const spotLast = lastOf(s.spot)
+  if (spotLast != null) tags.push({ y: Y(spotLast), text: spotLast.toFixed(2), color: ink })
+  tags.sort((a, b) => a.y - b.y)
+  const GAP = AXIS_PX + 3
+  for (let i = 1; i < tags.length; i++) {
+    const a = tags[i - 1] as Tag
+    const b = tags[i] as Tag
+    if (b.y - a.y < GAP) b.y = a.y + GAP
+  }
+  const over = (tags[tags.length - 1]?.y ?? 0) - y1
+  if (over > 0) for (const t of tags) t.y -= over
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  for (const t of tags) {
+    ctx.fillStyle = t.color
+    ctx.fillText(t.text, x1 + 6, t.y)
+  }
+
+  // Aligned-count strip: how many expiries sit on that minute's shared wall,
+  // coloured by state. This is the only place state is painted.
   ctx.strokeStyle = grid
+  ctx.lineWidth = 1
   ctx.beginPath()
   ctx.moveTo(x0, sy1)
   ctx.lineTo(x1, sy1)
@@ -642,8 +685,11 @@ function drawConvergence(
     const xa = X(s.t[i] ?? t0)
     ctx.fillRect(xa, sy1 - bh, Math.max(1, xEnd(i) - xa), bh)
   }
+  ctx.font = `${AXIS_PX}px ${mono}`
   ctx.fillStyle = dim
   ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'
   ctx.fillText(`0–${m}`, x0 - 6, (sy0 + sy1) / 2)
+  ctx.textAlign = 'left'
+  ctx.fillText('aligned', x1 + 6, (sy0 + sy1) / 2)
 }

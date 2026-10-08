@@ -27072,3 +27072,16 @@ Brandon: each row will get a ? button that opens the indicator's info, and the a
 - Search no longer finds these rows by typing "everget".
 - **Checks:** `tsc` strict is clean on both files.
 - **Files:** `cbedge-v3/src/pages/vela/indicatorPicker.ts`, `cbedge-v3/src/pages/vela/script/community.ts`.
+
+## 2026-10-08 - Vela script engine: pasted Python is named as Python; ta.stdev reads a positional `biased`
+
+Brandon pasted a Python (pandas) Bollinger Trend script into Vela and got `Line 36: unexpected "{"`.
+
+- **`lang.ts`:** before reading a script, the parser checks for lines Pine can never have: `from x import y`, `import pandas as pd` (a Pine import always has a slash, `user/name/1`), `def f(…)` and `class X:`. Comments are skipped. When one is found, the error names that line: `Line 1: this is Python, not Pine Script. Scripts here are Pine (they start with //@version=… and indicator(…) or strategy(…)): paste the Pine version of it`. Python code still doesn't run; only the message changed.
+- **`runtime.ts`:** `ta.stdev(source, length, false)` and `ta.variance(…, false)` now read `biased` when it is passed by position, as Pine allows. Before, only `biased=false` worked, and the positional form silently used the default (divide by n).
+- A Pine port of the pasted script (`bollinger_trend.pine`) was made separately. Its values match the Python formula on test bars. The two "dtw" options are left out, because their code (`DynamicTimeWarping`) wasn't pasted.
+- **Checks:**
+  - The Pine v6 manual corpus is still 382/388, and everget's 210 still all run.
+  - `import user/lib/1 as m`, variables named `def` / `class` / `from`, and commented-out Python lines still parse.
+  - The unit tests pass, the CB Script examples are identical, and the ready strategies give the same trades. `tsc` strict is clean.
+- **Files:** `cbedge-v3/src/pages/vela/script/lang.ts`, `cbedge-v3/src/pages/vela/script/runtime.ts`.
