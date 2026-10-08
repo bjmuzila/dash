@@ -48,27 +48,51 @@ const INTERVAL_MS = 10 * 60_000
 const MIN_GAP_MS = 60_000
 
 /**
- * The entry chunk's path, as written in a shell document.
+ * The entry chunk is always `/v3/assets/index-<hash>.js`. Both sides of the
+ * comparison look for THAT path specifically, and both are normalised to a
+ * bare pathname, so the two strings can only differ when the build does.
  *
- * Two patterns because attribute order in the built HTML is Vite's to choose:
- * the first reads the module script properly, the second is a direct hunt for
- * the entry filename if that tag is ever emitted in another shape. If neither
- * matches, this returns '' and the caller treats it as "don't know" — which
- * must never be reported as "there is an update", or a parse change would show
- * every user a permanent nag they cannot clear.
+ * Why not "the first module script": since holdEntryForPrefs (vite.config.ts)
+ * the built shell has no `<script type="module" src>` tag at all — the entry
+ * is a modulepreload link plus a loader that appends the script late. So the
+ * FIRST module script in the live DOM can be anything else that got there
+ * earlier (a browser extension, a CDN injection), which never equals the
+ * shell's entry, and the toast came back every session no matter how often
+ * Update was pressed.
+ */
+const ENTRY_RE = /\/assets\/index-[A-Za-z0-9_-]+\.js$/
+
+function normalise(src: string): string {
+  try {
+    const path = new URL(src, window.location.href).pathname
+    return ENTRY_RE.test(path) ? path : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The entry chunk's path, as written in a shell document. '' when it cannot be
+ * found — which the caller treats as "don't know", never as "there is an
+ * update", or a parse change would show every user a permanent nag.
  */
 function entryFrom(html: string): string {
-  const tag = html.match(/<script[^>]*\btype=["']module["'][^>]*\bsrc=["']([^"']+)["']/i)
-  if (tag?.[1]) return tag[1]
-  const direct = html.match(/["'](\/v3\/assets\/index-[^"']+\.js)["']/)
-  return direct?.[1] ?? ''
+  const m = html.match(/["']([^"']*\/assets\/index-[A-Za-z0-9_-]+\.js)["']/)
+  return m?.[1] ? normalise(m[1]) : ''
 }
 
 /** The entry chunk THIS page booted from. */
 function runningEntry(): string {
   if (typeof document === 'undefined') return ''
-  const el = document.querySelector<HTMLScriptElement>('script[type="module"][src]')
-  return el?.getAttribute('src') ?? ''
+  const els = document.querySelectorAll<HTMLScriptElement | HTMLLinkElement>(
+    'script[type="module"][src], link[rel="modulepreload"][href]',
+  )
+  for (const el of Array.from(els)) {
+    const raw = el.getAttribute(el instanceof HTMLLinkElement ? 'href' : 'src') ?? ''
+    const path = normalise(raw)
+    if (path) return path
+  }
+  return ''
 }
 
 async function latestEntry(): Promise<string> {

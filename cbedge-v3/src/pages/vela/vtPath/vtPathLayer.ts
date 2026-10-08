@@ -352,6 +352,14 @@ function isPayload(v: unknown): v is PathPayload {
   return !!v && typeof v === 'object' && Array.isArray((v as PathPayload).rows)
 }
 
+/** The bars' open times in seconds, once per bars array (a pan repaints with the same one). */
+const barTimesMemo = new WeakMap<readonly { time: number }[], number[]>()
+function barTimesOf(bars: readonly { time: number }[]): number[] {
+  let t = barTimesMemo.get(bars)
+  if (!t) barTimesMemo.set(bars, (t = bars.map((b) => b.time / 1000)))
+  return t
+}
+
 class VtPathLayer implements RendererLayerInstance {
   private canvas: HTMLCanvasElement | null = null
   private readonly painter: PathDraw | RibbonDraw
@@ -407,6 +415,8 @@ class VtPathLayer implements RendererLayerInstance {
         height: bounds.top + bounds.height,
         bs: coords.pxPerBar(),
         barSec: iv / 1000,
+        // beads sit on these candles, one per level per candle (pathDraw.ts, ON THE CANDLES)
+        barTimes: barTimesOf(bars),
       },
       { ...d, ci },
     )

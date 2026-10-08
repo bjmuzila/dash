@@ -665,6 +665,12 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
    * anywhere.
    */
   let barTimes: number[] = []
+  /** barTimes in seconds, for the Voltick Path painter (its beads sit on these candles). */
+  let barSecs: { of: number[]; secs: number[] } = { of: barTimes, secs: [] }
+  const barTimesSec = (): number[] => {
+    if (barSecs.of !== barTimes) barSecs = { of: barTimes, secs: barTimes.map((t) => t / 1000) }
+    return barSecs.secs
+  }
 
   /**
    * The open of the bar CONTAINING an instant, or null when there is no such
@@ -1508,6 +1514,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
           height: plotH,
           bs: barSpacing,
           barSec: intervalMs / 1000,
+          // one bead per level per candle, on the candle (pathDraw.ts, ON THE CANDLES)
+          barTimes: barTimesSec(),
         },
         pathPaint.payload,
       )

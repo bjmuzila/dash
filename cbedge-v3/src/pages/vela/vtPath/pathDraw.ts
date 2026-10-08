@@ -155,6 +155,26 @@ export interface Geo {
   bs: number
   /** One bar, in seconds — the column grid the Path's bubbles sit on. */
   barSec: number
+  /**
+   * The chart's bar open times, seconds, ascending. Given, a bead's column is the
+   * INDEX of the candle it falls in and it is drawn at that candle's own time (see
+   * ON THE CANDLES below). Absent (the board card), columns are the clock grid,
+   * round(t / barSec).
+   */
+  barTimes?: readonly number[]
+}
+
+/** The last index whose time is ≤ t (−1 when t is before the first). */
+function barAt(times: readonly number[], t: number): number {
+  let lo = 0
+  let hi = times.length - 1
+  if (hi < 0 || t < times[0]!) return -1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (times[mid]! <= t) lo = mid
+    else hi = mid - 1
+  }
+  return lo
 }
 
 // ── PATH (bubbles) ───────────────────────────────────────────────────────────
@@ -230,10 +250,23 @@ export class PathDraw {
     // very end. One phase for every level, still from the data and never from the
     // view, so a pan never reshuffles it; each new candle steps the grid along by
     // one bar, which zoomed out (a bead every N bars) is a sub-bead shift.
+    //
+    // ON THE CANDLES (2026-10-08, Brandon: "still issues with bubbles overlapping").
+    // A column used to be round(t / barSec) and a filled-in bead was drawn at
+    // column × barSec. That is a candle's open only when candles open on exact
+    // multiples of the bar: an hourly bar opens at :30 (09:30 anchoring), so every
+    // filled-in bead landed half a bar off, between two candles, overlapping both
+    // neighbours; and two readings that rounded into one column drew two beads in
+    // it. Given the chart's bar times, a column is now the candle a reading falls
+    // in and a bead is drawn at THAT candle's time: at most one bead per level per
+    // candle (the newest reading wins), every bead centred on a candle.
+    const times = g.barTimes && g.barTimes.length ? g.barTimes : null
+    const colOf = (t: number) => (times ? barAt(times, t) : Math.round(t / barSec))
+    const tOfCol = (c: number) => (times ? times[c]! : c * barSec)
     let gLive = -Infinity
     for (const r of list) {
       const q = r.fill[r.fill.length - 1]
-      if (q) gLive = Math.max(gLive, Math.round(q.t / barSec))
+      if (q) gLive = Math.max(gLive, colOf(q.t))
     }
     const phase = Number.isFinite(gLive) ? ((gLive % N) + N) % N : 0
     const onGrid = (g: number) => N <= 1 || ((((g - phase) % N) + N) % N) === 0
@@ -251,18 +284,27 @@ export class PathDraw {
       // `rad` is the FULL bead (the level's highest reading that session); a bead is
       // drawn at its growth share of it, so the bar pitch is never overrun
       const marks: Array<{ x: number; y: number; t: number; p: number; r: number }> = []
-      const put = (t: number, p: number, gi: number | undefined) => {
+      /** the column of the last bead pushed: a second reading in it replaces it */
+      let lastCol = Number.NaN
+      /** `at`: where to draw without bar times (a reading's own time; a filled-in bead's grid time) */
+      const put = (col: number, p: number, gi: number | undefined, at: number) => {
+        if (col < 0) return
+        const t = times ? tOfCol(col) : at
         const x = X(t)
         if (!Number.isFinite(x) || x < -20 || x > width + 20) return
         const y = Y(p)
         if (!Number.isFinite(y)) return
-        marks.push({ x, y, t, p, r: Math.max(BEAD.beadMinPx, rad * growFactor(gi)) })
+        const m = { x, y, t, p, r: Math.max(BEAD.beadMinPx, rad * growFactor(gi)) }
+        if (col === lastCol && marks.length) marks[marks.length - 1] = m
+        else marks.push(m)
+        lastCol = col
       }
       // the previous reading of this row: its bar on the clock grid, price, growth
       let prev: { g: number; p: number; gi: number | undefined } | null = null
       for (let i = 0; i < r.fill.length; i++) {
         const q = r.fill[i]!
-        const g = Math.round(q.t / barSec)
+        const g = colOf(q.t)
+        if (g < 0) continue
         // NO BLANK BEADS (2026-10-07, Brandon: "if a bubble is missed, fill in with
         // the previous one … a filled in bubble on path would be way better than a
         // blank"). A grid slot the row skipped — no reading on exactly that bar (a
@@ -271,13 +313,13 @@ export class PathDraw {
         // gets the row's previous bead. Only inside a run: a gap longer than two
         // grid steps is a real break (the level moved, a session ended) and stays.
         if (prev && g - prev.g > 1 && g - prev.g <= 2 * N) {
-          for (let S = nextSlot(prev.g); S < g; S += N) put(S * barSec, prev.p, prev.gi)
+          for (let S = nextSlot(prev.g); S < g; S += N) put(S, prev.p, prev.gi, tOfCol(S))
         }
         // THE LIVE EDGE ALWAYS DRAWS (2026-10-07, Brandon: "path isn't going for
         // spx"): the newest candle used to fall between two clock-grid bars and show
         // no bead. The grid now ends on that candle (see gLive above), so the newest
         // reading is on it — drawn, and in line with the beads before it.
-        if (onGrid(g)) put(q.t, q.p, grow[i])
+        if (onGrid(g)) put(g, q.p, grow[i], q.t)
         prev = { g, p: q.p, gi: grow[i] }
       }
       if (!marks.length) continue
