@@ -15,6 +15,24 @@ export const runtime = "nodejs";
 const RATE = { windowMs: 60 * 60_000, max: 5, blockMs: 60 * 60_000 };
 const RESET_TTL_MS = 60 * 60_000; // 1 hour
 
+/** Optional `next` for the reset link, so a reset asked for from the Vela
+ *  sign-in lands back on Vela. Same rule as AuthForm's safeNext(): a same-site
+ *  path, or an https URL on cbedge.net or a subdomain. Anything else is dropped
+ *  (the reset still goes out, it just ends on the normal sign-in). */
+function safeNext(raw: unknown): string | null {
+  const next = typeof raw === "string" ? raw.trim() : "";
+  if (!next || next === "/home") return null;
+  if (next.startsWith("/") && !next.startsWith("//")) return next;
+  try {
+    const u = new URL(next);
+    const host = u.hostname.toLowerCase();
+    if (u.protocol === "https:" && (host === "cbedge.net" || host.endsWith(".cbedge.net"))) return u.toString();
+  } catch {
+    /* not a URL */
+  }
+  return null;
+}
+
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -47,9 +65,11 @@ export async function POST(req: NextRequest) {
   }
 
   let email = "";
+  let next: string | null = null;
   try {
     const body = await req.json();
     email = String(body?.email || "").trim().toLowerCase();
+    next = safeNext(body?.next);
   } catch {
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
   }
@@ -65,7 +85,9 @@ export async function POST(req: NextRequest) {
         expires_at: new Date(Date.now() + RESET_TTL_MS),
       });
 
-      const resetUrl = `${publicOrigin(req)}/auth/reset-password?token=${token}`;
+      const resetUrl =
+        `${publicOrigin(req)}/auth/reset-password?token=${token}` +
+        (next ? `&next=${encodeURIComponent(next)}` : "");
       const expiresInMinutes = RESET_TTL_MS / 60_000;
 
       // sendAuthEmail, NOT sendTransactional: a reset must not carry the

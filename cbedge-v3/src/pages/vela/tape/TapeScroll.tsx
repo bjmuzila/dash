@@ -1,14 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// TAPE SCROLL: one line at the top of the page, the open watchlist's tickers
-// scrolling past, each with where its ★ Volt is and how far price is from it
-// (Brandon, 2026-10-07: "a scrolling bar of the tickers in the watchlist and
-// where their volt is and how far away it is"; direction C of the mockup canvas
-// "Vela Volt Ticker Strip"). It replaced the session stats strip
+// VOLT WATCH: one line at the top of the page, the open watchlist's tickers
+// stepping past one at a time, each with where its ★ Volt is and how far price is
+// from it (Brandon, 2026-10-07: "a scrolling bar of the tickers in the watchlist
+// and where their volt is and how far away it is"; direction C of the mockup
+// canvas "Vela Volt Ticker Strip"). It replaced the session stats strip
 // (setups/SessionStrip.tsx, no longer mounted) in the same spot and on the same
-// switch. DESKTOP ONLY ("no mobile for this"): Vela.tsx never mounts it on the
-// phone build.
+// switch. Called "Tape scroll" for a day; renamed 2026-10-08 when it went from a
+// continuous scroll to STEP motion ("it's not a scroll"). The file keeps its name.
+// DESKTOP ONLY ("no mobile for this"): Vela.tsx never mounts it on the phone build.
 //
-//   ★ VOLT WATCH 2 AT · 4 NEAR │ [−0.04%] NQ ★ 27,550 −10.50 │ [+0.14%] AMD ★ 215 … │ SORT [A–Z][NEAREST] ✕
+//   ★ VOLT WATCH 2 AT · 4 NEAR │ [−0.04%] NQ ★ 27,550 −10.50 │ [+0.14%] AMD ★ 215 … ✕
 //
 // ── Each chip ────────────────────────────────────────────────────────────────
 //   distance %   (Volt − price) / price: + = the Volt is above price
@@ -21,14 +22,15 @@
 // NEAR_PCT) in Volt gold; AT (within AT_PCT) a filled gold pill. A ticker whose
 // price went through its Volt wears a pulsing gold ring for CROSS_MS. No Volt
 // (VIX, a name the chain does not cover) says so and sorts last.
-// Hover a chip: the tape pauses, and its tooltip lists all four levels. Click:
-// the active chart switches to that ticker.
+// Hover a chip: the stepping pauses, and its tooltip lists all four levels.
+// Click: the active chart switches to that ticker.
 //
-// ── Sort (setups.ts tapeSort) ────────────────────────────────────────────────
+// ── Order (setups.ts tapeSort; Workspace → Volt watch order) ─────────────────
+//   Nearest   closest Volt first (the default). The order is taken when a round
+//             of level reads lands (every LEVELS_MS), not on every quote, and the
+//             line starts again from its first chip then.
 //   A–Z       alphabetical
-//   NEAREST   closest Volt first (the default). The order is taken when a round
-//             of level reads lands (every LEVELS_MS), not on every quote, so the
-//             tape does not reshuffle under your eye every 15 seconds.
+// The switch lives in the Workspace menu, not on the line (2026-10-08).
 //
 // ── Reads ────────────────────────────────────────────────────────────────────
 // Prices: /api/quotes-batch through the watchlist store (refreshQuotes), every
@@ -36,19 +38,21 @@
 // cache), READS_AT_ONCE at a time, every LEVELS_MS, and again when the GEX
 // switch moves. At most MAX_TAPE tickers, the list's first.
 //
-// ── Motion ───────────────────────────────────────────────────────────────────
-// It scrolls only when the chips are wider than the line (two copies, the track
-// sliding half its width, SPEED px a second); a short list just sits there.
-// Reduced motion: no scroll, the line scrolls by hand instead.
+// ── Motion: STEP ─────────────────────────────────────────────────────────────
+// Every STEP_MS the row slides left by its first chip (SLIDE_MS), and that chip
+// goes to the end — direction C's Step (Brandon, 2026-10-08: "make it step
+// motion, I like that better"). Only when the chips are wider than the line; a
+// short list just sits there. Paused while the pointer or focus is on it, or the
+// tab is hidden. Reduced motion: the chip moves to the end without the slide.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type TransitionEvent } from 'react'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
 import { onGexBasis } from '@/pages/vela/gexBasis'
 import { levelsFor } from '@/pages/vela/levels/levelAlerts'
 import { markSvg } from '@/pages/vela/levelMarks'
-import { onStrip, setTapeSort, tapeSort } from '@/pages/vela/setups/setups'
+import { onStrip, tapeSort } from '@/pages/vela/setups/setups'
 import { activeList, onWatchlist, quoteOf, refreshQuotes } from '@/pages/vela/watchlist/store'
 
 const MAX_TAPE = 40
@@ -61,8 +65,10 @@ const AT_PCT = 0.15
 const NEAR_PCT = 0.35
 /** How long a crossing keeps its ring. */
 const CROSS_MS = 5 * 60_000
-/** Scroll speed, px a second. */
-const SPEED = 40
+/** One step every… */
+const STEP_MS = 2600
+/** …sliding this long. */
+const SLIDE_MS = 450
 
 interface Lv {
   volt: number | null
@@ -89,14 +95,13 @@ const fmt = (v: number, d: number) => v.toLocaleString('en-US', { minimumFractio
 const lvlText = (v: number) => fmt(v, Number.isInteger(v) ? 0 : 2)
 const signed = (v: number, d: number) => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), d)}`
 
-function Chip({ c, copy, onOpen }: { c: ChipVals; copy?: boolean; onOpen: (s: string) => void }) {
+function Chip({ c, onOpen }: { c: ChipVals; onOpen: (s: string) => void }) {
   return (
     <button
       type="button"
       className="cb-tape-chip"
       data-st={c.st}
       data-x={c.crossed ? '1' : undefined}
-      tabIndex={copy ? -1 : undefined}
       title={c.tip}
       onClick={() => onOpen(c.s)}
     >
@@ -235,30 +240,67 @@ export default function TapeScroll({ ws, onHide }: { ws: VelaWorkspace; onHide: 
 
   const open = (s: string) => ws.active.setSymbol(`${PROVIDER_NAME}:${s}`)
 
-  // scroll only when the chips are wider than the line (see the header)
+  // ── step motion (see the header) ──
   const winRef = useRef<HTMLDivElement>(null)
-  const setRef = useRef<HTMLDivElement>(null)
-  const [run, setRun] = useState<{ on: boolean; dur: number }>({ on: false, dur: 0 })
+  const trackRef = useRef<HTMLDivElement>(null)
+  const paused = useRef(false)
+  /** Every chip fits on the line: nothing steps. */
+  const [fits, setFits] = useState(true)
+  /** How many chips have stepped off the front (and gone to the end). */
+  const [off, setOff] = useState(0)
   useLayoutEffect(() => {
     const win = winRef.current
-    const set = setRef.current
-    if (!win || !set) return
-    const measure = () => {
-      const w = set.offsetWidth
-      const on = w > win.clientWidth + 1
-      // whole 5 s steps: a digit's worth of width must not restart the slide
-      const dur = Math.max(20, Math.round(w / SPEED / 5) * 5)
-      setRun((r) => (r.on === on && r.dur === dur ? r : { on, dur }))
-    }
+    const track = trackRef.current
+    if (!win || !track) return
+    const measure = () => setFits(track.scrollWidth <= win.clientWidth + 1)
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(win)
-    ro.observe(set)
+    ro.observe(track)
     return () => ro.disconnect()
   }, [])
 
+  // a new order (a round of reads, the order switch, the list) starts from its first chip
+  const orderKey = order.join(',')
+  useEffect(() => setOff(0), [orderKey])
+
+  const n = chips.length
+  const k = n && !fits ? off % n : 0
+  const row = k ? chips.slice(k).concat(chips.slice(0, k)) : chips
+
+  // each step: slide left by the first chip; when the slide ends, that chip goes to the end
+  useEffect(() => {
+    if (fits || n < 2) return
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    const t = setInterval(() => {
+      const track = trackRef.current
+      const first = track?.firstElementChild as HTMLElement | null | undefined
+      if (!track || !first || paused.current || document.hidden) return
+      if (reduce) {
+        setOff((o) => o + 1)
+        return
+      }
+      track.style.transition = `transform ${SLIDE_MS}ms ease`
+      track.style.transform = `translateX(${-first.offsetWidth}px)`
+    }, STEP_MS)
+    return () => clearInterval(t)
+  }, [fits, n])
+  const onSlid = (e: TransitionEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget && e.propertyName === 'transform') setOff((o) => o + 1)
+  }
+  // the rotated row is in the DOM: put the track back, before it paints
+  useLayoutEffect(() => {
+    const track = trackRef.current
+    if (!track) return
+    track.style.transition = 'none'
+    track.style.transform = 'none'
+  }, [off, fits])
+  const pause = (on: boolean) => () => {
+    paused.current = on
+  }
+
   return (
-    <div className="cb-strip cb-tape" role="region" aria-label="Tape scroll: the watchlist's Volts">
+    <div className="cb-strip cb-tape" role="region" aria-label="Volt watch: the watchlist's Volts">
       <div className="cb-tape-head" title={`At the Volt: within ${AT_PCT}%. Near: within ${NEAR_PCT}%.`}>
         <span className="cb-mk-box" dangerouslySetInnerHTML={{ __html: markSvg('volt') }} />
         <span className="cb-tape-cap">VOLT WATCH</span>
@@ -269,42 +311,18 @@ export default function TapeScroll({ ws, onHide }: { ws: VelaWorkspace; onHide: 
         <span className="cb-tape-n">{nearN} NEAR</span>
       </div>
 
-      <div ref={winRef} className="cb-tape-win">
-        <div className={`cb-tape-track${run.on ? ' is-run' : ''}`} style={run.on ? { animationDuration: `${run.dur}s` } : undefined}>
-          <div ref={setRef} className="cb-tape-set">
-            {chips.length ? (
-              chips.map((c) => <Chip key={c.s} c={c} onOpen={open} />)
-            ) : (
-              <span className="cb-tape-empty">Add tickers to the watchlist to fill the tape</span>
-            )}
-          </div>
-          {run.on && (
-            <div className="cb-tape-set cb-tape-copy" aria-hidden="true">
-              {chips.map((c) => (
-                <Chip key={c.s} c={c} copy onOpen={open} />
-              ))}
-            </div>
+      <div ref={winRef} className="cb-tape-win" onMouseEnter={pause(true)} onMouseLeave={pause(false)} onFocus={pause(true)} onBlur={pause(false)}>
+        <div ref={trackRef} className="cb-tape-track" onTransitionEnd={onSlid}>
+          {row.length ? (
+            row.map((c) => <Chip key={c.s} c={c} onOpen={open} />)
+          ) : (
+            <span className="cb-tape-empty">Add tickers to the watchlist to fill Volt watch</span>
           )}
         </div>
       </div>
 
       <div className="cb-tape-ctl">
-        <span className="cb-tape-cap">SORT</span>
-        <div className="cb-tape-seg" role="group" aria-label="Sort the tape">
-          <button type="button" aria-pressed={sort === 'az'} onClick={() => setTapeSort('az')}>
-            A–Z
-          </button>
-          <button type="button" aria-pressed={sort === 'near'} onClick={() => setTapeSort('near')}>
-            NEAREST
-          </button>
-        </div>
-        <button
-          type="button"
-          className="cb-vt-x cb-tape-x"
-          onClick={onHide}
-          title="Hide the tape (Workspace → Tape scroll brings it back)"
-          aria-label="Hide the tape"
-        >
+        <button type="button" className="cb-vt-x cb-tape-x" onClick={onHide} title="Hide Volt watch (Workspace → Volt watch brings it back)" aria-label="Hide Volt watch">
           ✕
         </button>
       </div>

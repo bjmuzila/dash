@@ -12,6 +12,11 @@
 
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 const VELA_URL = "https://vela.cbedge.net";
+// The Voltick bolt, served publicly by the Next app from public/voltick-bolt.png
+// (96x96, shown at 40). A hosted PNG, because Gmail and Outlook strip inline SVG.
+const BOLT_URL = `${SITE_URL}/voltick-bolt.png`;
+// Sign-in that comes back to Vela, Voltick-branded (see components/auth/VoltickAuthShell).
+const VELA_SIGN_IN_URL = `${SITE_URL}/sign-in?next=${encodeURIComponent(`${VELA_URL}/`)}`;
 
 export const VELA_INVITE_SUBJECT = "You are in the Vela charts beta";
 
@@ -44,13 +49,14 @@ export function velaInviteText(opts: VelaInviteOpts): string {
   ];
   if (opts.setPasswordUrl) {
     lines.push(
-      `An account has been created for you. Set your password to get in (this link expires in ${days} days):`,
+      "There is nothing to sign up for. Your account is already made with this email address.",
+      `All you do is set a password to get in (this link expires in ${days} days):`,
       "",
       opts.setPasswordUrl,
       "",
       "Once your password is set, sign in and you will be taken straight to Vela. Your login works on vela.cbedge.net only.",
       "",
-      "If the link has expired, go to cbedge.net/sign-in and use “Forgot password?” with this email address. It does the same thing.",
+      `If the link has expired, go to ${VELA_SIGN_IN_URL} and use “Forgot password?” with this email address. It does the same thing.`,
     );
   } else {
     lines.push(
@@ -67,7 +73,7 @@ export function velaInviteEmail(opts: VelaInviteOpts): string {
   const until = fmtExpiry(opts.accessExpiresAt);
 
   const body = url
-    ? `You have been added to the <strong style="color:#6aa0ff;">Vela charts</strong> beta. An account has been made for you; pick a password below and you will land on Vela. This link expires in <strong style="color:#6aa0ff;">${days} days</strong>.`
+    ? `You have been added to the <strong style="color:#6aa0ff;">Vela charts</strong> beta. <strong style="color:#6aa0ff;">There is nothing to sign up for.</strong> Your account is already made with this email address. All you do is set a password below, and you will land on Vela. This link expires in <strong style="color:#6aa0ff;">${days} days</strong>.`
     : `Your existing account now opens the <strong style="color:#6aa0ff;">Vela charts</strong> beta. Sign in as usual, then follow the link below.`;
 
   const cta = url
@@ -92,7 +98,9 @@ export function velaInviteEmail(opts: VelaInviteOpts): string {
 
           <tr>
             <td align="center" style="padding:28px 24px 0 24px;">
-              <div style="font:800 13px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.18em;color:#6aa0ff;">VOLTICK &middot; VELA BETA</div>
+              <img src="${BOLT_URL}" width="40" height="40" alt="Voltick" style="display:block;margin:0 auto 10px auto;border:0;outline:none;text-decoration:none;width:40px;height:40px;">
+              <div style="font:800 20px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:-0.01em;color:#e7ece9;">Voltick</div>
+              <div style="margin-top:8px;font:800 11px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.18em;color:#6aa0ff;">VELA CHARTS BETA</div>
             </td>
           </tr>
 
@@ -135,8 +143,8 @@ export function velaInviteEmail(opts: VelaInviteOpts): string {
               <div style="border-top:1px solid #1e2630;padding-top:16px;font:400 13px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#c0c5c3;">
                 ${
                   url
-                    ? `Link expired? Go to <a href="${SITE_URL}/sign-in" style="color:#6aa0ff;text-decoration:none;">cbedge.net/sign-in</a> and use &ldquo;Forgot password?&rdquo; with this email address. It does the same thing.`
-                    : `Trouble signing in? Use &ldquo;Forgot password?&rdquo; at <a href="${SITE_URL}/sign-in" style="color:#6aa0ff;text-decoration:none;">cbedge.net/sign-in</a> with this email address.`
+                    ? `Link expired? Go to <a href="${VELA_SIGN_IN_URL}" style="color:#6aa0ff;text-decoration:none;">cbedge.net/sign-in</a> and use &ldquo;Forgot password?&rdquo; with this email address. It does the same thing.`
+                    : `Trouble signing in? Use &ldquo;Forgot password?&rdquo; at <a href="${VELA_SIGN_IN_URL}" style="color:#6aa0ff;text-decoration:none;">cbedge.net/sign-in</a> with this email address.`
                 }
               </div>
             </td>

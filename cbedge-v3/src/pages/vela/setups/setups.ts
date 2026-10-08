@@ -1,12 +1,13 @@
 // The Setups action: named chart setups, one click to load. The page chunk
 // carries only the action; the menu (setupsMenu.ts) loads on the first click.
-// The Tape scroll action beside it shows / hides the tape at the top of the page
-// (tape/TapeScroll.tsx — the watchlist's Volts; it replaced the session stats
-// strip, SessionStrip.tsx, on 2026-10-07), and this file keeps the tape's two
-// settings: on / off and its sort (A–Z or nearest Volt first).
+// The Volt watch action beside it shows / hides the tape at the top of the page
+// (tape/TapeScroll.tsx — the watchlist's Volts, stepping past; it replaced the
+// session stats strip, SessionStrip.tsx, on 2026-10-07; "Tape scroll" until
+// 2026-10-08), and this file keeps its two settings: on / off and its order
+// (A–Z or nearest Volt first), both switched from the Workspace menu.
 //
 // On the desktop both live in the Workspace menu now (workspaceMenu.ts: Layout →
-// Setups, Panels → Tape scroll); the desktop bar no longer lists the right-hand
+// Setups, Panels → Volt watch / Volt watch order); the desktop bar no longer lists the right-hand
 // actions. The registrations stay for the phone's ⋮ rows — Setups only: the tape
 // is desktop only, so phoneChrome.ts drops its row.
 
@@ -84,7 +85,7 @@ export function registerSetups(): void {
   registered = true
   // three stacked panes
   registerIcon('cb-setups', svg16('<rect x="2" y="2" width="12" height="3.5" rx="1"/><rect x="2" y="6.75" width="12" height="3.5" rx="1"/><rect x="2" y="11.5" width="12" height="2.5" rx="1"/>'))
-  // a strip of numbers (the tape scroll)
+  // a strip of numbers (Volt watch)
   registerIcon('cb-stats', svg16('<rect x="1.5" y="4.5" width="13" height="7" rx="1.5"/><path d="M4.5 9.5V7M7 9.5V6.5M9.5 9.5V8M12 9.5V6"/>'))
   registerWidgetAction({
     id: 'cb-setups',
@@ -102,7 +103,7 @@ export function registerSetups(): void {
   registerWidgetAction({
     id: 'cb-stats',
     target: 'topbar',
-    label: 'Tape scroll',
+    label: 'Volt watch',
     icon: 'cb-stats',
     iconOnly: true,
     order: 6,

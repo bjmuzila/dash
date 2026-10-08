@@ -1,6 +1,7 @@
 import AuthForm from "@/components/auth/AuthForm";
 import { BRAND_LOGO_SRC, BRAND_LOGO_ALT } from "@/lib/brand";
 import { V3 } from "@/components/landing/v3Theme";
+import { VoltickAuthShell, isVelaNext } from "@/components/auth/VoltickAuthShell";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,15 @@ export default async function SignInPage({
   searchParams: Promise<{ next?: string }>;
 }) {
   const { next } = await searchParams;
+  // Arriving from vela.cbedge.net (the door page, a Vela beta invite, a reset
+  // link): Voltick branding, and "Join Voltick" in place of CB Edge sign-up.
+  if (isVelaNext(next)) {
+    return (
+      <VoltickAuthShell>
+        <AuthForm mode="signin" next={next} brand="voltick" />
+      </VoltickAuthShell>
+    );
+  }
   return (
     <div
       style={{

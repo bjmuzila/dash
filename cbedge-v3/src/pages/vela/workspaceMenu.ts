@@ -7,7 +7,8 @@
 // groups, with an Alt shortcut on the ones used most:
 //
 //   PANELS   Watchlist  Alt+W · Data window  Alt+D · Object tree  Alt+O
-//            Tape scroll (a switch: the watchlist's Volts at the top of the page)
+//            Volt watch (a switch: the watchlist's Volts at the top of the page)
+//            Volt watch order (Nearest / A–Z, flips in place)
 //   SCRIPTS  Script editor  Alt+E · Strategy Tester  Alt+B
 //   ALERTS   Level alerts  Alt+A · Script alerts
 //   LAYOUT   Setups · Copy indicators to all charts · Center today on all charts
@@ -23,7 +24,7 @@
 // How the bar loses the rest: Vela's `topbar` composition (Vela.tsx,
 // DESKTOP_TOPBAR) lists the right side as the session clock, alerts, this
 // action, screenshot. The panel group and the right-hand `actions` flow are not
-// listed, so Vela never renders them. The panels and the actions behind Setups / Tape scroll / Copy
+// listed, so Vela never renders them. The panels and the actions behind Setups / Volt watch / Copy
 // indicators are untouched: they open from here, from their context-menu rows,
 // and from ⋮ on a phone (the phone keeps Vela's default composition).
 //
@@ -48,7 +49,7 @@ import { copyToAll } from '@/pages/vela/copyIndicators'
 import { LEVELS_PANEL_ID } from '@/pages/vela/levels/levelAlertsEntry'
 import { onPhoneRoute } from '@/pages/vela/nav'
 import { ALERTS_PANEL_ID, TESTER_PANEL_ID } from '@/pages/vela/script/ids'
-import { setStripShown, stripShown } from '@/pages/vela/setups/setups'
+import { setStripShown, setTapeSort, stripShown, tapeSort } from '@/pages/vela/setups/setups'
 import { WATCHLIST_PANEL_ID } from '@/pages/vela/watchlist/panel'
 
 export const WORKSPACE_ACTION_ID = 'cb-workspace'
@@ -58,6 +59,7 @@ const SCRIPTS_PANEL_ID = 'cbedge-scripts'
 export type WsItem =
   | { kind: 'panel'; id: string; label: string; icon: string; panel: string; keys?: string }
   | { kind: 'strip'; id: string; label: string; icon: string }
+  | { kind: 'sort'; id: string; label: string; icon: string }
   | { kind: 'setups'; id: string; label: string; icon: string }
   | { kind: 'copy'; id: string; label: string; icon: string }
   | { kind: 'center'; id: string; label: string; icon: string; keys?: string }
@@ -76,7 +78,8 @@ export const WS_GROUPS: readonly WsGroup[] = [
       { kind: 'panel', id: 'watchlist', label: 'Watchlist', icon: 'cb-watchlist', panel: WATCHLIST_PANEL_ID, keys: 'alt+w' },
       { kind: 'panel', id: 'data-window', label: 'Data window', icon: 'datawindow', panel: 'dataWindow', keys: 'alt+d' },
       { kind: 'panel', id: 'object-tree', label: 'Object tree', icon: 'objects', panel: 'objects', keys: 'alt+o' },
-      { kind: 'strip', id: 'session-stats', label: 'Tape scroll', icon: 'cb-stats' },
+      { kind: 'strip', id: 'session-stats', label: 'Volt watch', icon: 'cb-stats' },
+      { kind: 'sort', id: 'volt-watch-order', label: 'Volt watch order', icon: 'cb-vw-order' },
     ],
   },
   {
@@ -122,6 +125,9 @@ export function itemOn(item: WsItem, openPanel: string | undefined): boolean {
   return item.kind === 'panel' && openPanel === item.panel
 }
 
+/** Volt watch's order as the menu row shows it. */
+export const sortValue = (): string => (tapeSort() === 'near' ? 'Nearest' : 'A–Z')
+
 /** The shortcut as this platform writes it (`Alt+W`, `⌥W`), from Vela's keymap. */
 export function keyLabel(item: WsItem, ws: VelaWorkspace | null): string | null {
   if (!keysOf(item) || !ws) return null
@@ -136,6 +142,9 @@ export function runItem(item: WsItem, ctx: WidgetContext, anchor: HTMLElement | 
       return
     case 'strip':
       setStripShown(!stripShown(false))
+      return
+    case 'sort':
+      setTapeSort(tapeSort() === 'near' ? 'az' : 'near')
       return
     case 'setups':
       void import('./setups/setupsMenu').then((m) => m.openSetups(ctx, anchor))
@@ -163,6 +172,8 @@ function anchorOf(ctx: WidgetContext): HTMLElement | null {
 export function registerWorkspaceMenu(): void {
   if (registered) return
   registered = true
+  // up and down arrows: Volt watch's order
+  registerIcon('cb-vw-order', svg16('<path d="M5 3v10M3 11l2 2 2-2M11 13V3M9 5l2-2 2 2"/>'))
   // four tiles
   // a candle between two brackets
   registerIcon('cb-center', svg16('<path d="M3.5 3H2v10h1.5M12.5 3H14v10h-1.5"/><rect x="6.5" y="5" width="3" height="6" rx=".5"/><path d="M8 3v2M8 11v2"/>'))

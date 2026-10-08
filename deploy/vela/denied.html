@@ -98,6 +98,11 @@
   }
   a.cta:hover, a.cta:focus-visible { box-shadow: 0 0 22px 2px rgba(47,107,255,0.30); }
   a.quiet { color: #6aa0ff; text-decoration: none; }
+  /* Second call to action: not on the list, wants in. Outline, so the
+     sign-in button stays the first thing the eye lands on. */
+  .join { margin-top: 18px; padding-top: 16px; border-top: 1px solid #1e2630; }
+  .join p { margin: 0 0 10px; font-size: 13.5px; color: #c0c5c3; }
+  a.cta.ghost { background: transparent; border: 1px solid #2f6bff; }
   .foot {
     margin-top: 20px;
     padding-top: 14px;
@@ -146,12 +151,17 @@
     -->
     <a class="cta" id="signin" href="https://cbedge.net/sign-in?next=https%3A%2F%2Fvela.cbedge.net%2F">Sign in at cbedge.net &rarr;</a>
 
+    <div class="join">
+      <p>Not a member yet? Vela comes with Voltick.</p>
+      <a class="cta ghost" href="https://voltick.io/bzila">Join Voltick &rarr; voltick.io/bzila</a>
+    </div>
+
     <div class="foot">
       Already signed in and still seeing this? Your account is not on the list yet, or the grant has
       expired. Ask Brandon to add you.
       <br><br>
       No password yet, or forgotten it? Use
-      <a class="quiet" href="https://cbedge.net/sign-in">Forgot password?</a> with the email address
+      <a class="quiet" href="https://cbedge.net/sign-in?next=https%3A%2F%2Fvela.cbedge.net%2F">Forgot password?</a> with the email address
       the invite went to.
       <br><br>
       <a class="quiet" href="/">Try again</a>

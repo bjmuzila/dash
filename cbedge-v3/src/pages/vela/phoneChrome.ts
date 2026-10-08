@@ -489,8 +489,8 @@ export function bindPhoneChrome(ws: VelaWorkspace): () => void {
       const g = groups.get(G.id)!
       section(G.title, g.wide, g.rows, G.two)
     }
-    // desktop only (Brandon, 2026-10-07: "no mobile for this"): the tape's row is dropped
-    byLabel.delete('Tape scroll')
+    // desktop only (Brandon, 2026-10-07: "no mobile for this"): Volt watch's row is dropped
+    byLabel.delete('Volt watch')
     // anything this map does not know yet: kept, at the end
     const rest = [...byLabel.values()]
     for (const r of rest) r.classList.add('cb-md-row')

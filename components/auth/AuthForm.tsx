@@ -75,11 +75,31 @@ function safeNext(next: string | undefined): string {
   return FALLBACK;
 }
 
+// Voltick palette, for brand="voltick" (the vela.cbedge.net sign-in). Same
+// values as deploy/vela/denied.html and lib/emails/vela-invite.ts: ink
+// #0a0d10 · panel #0e1216 · line #1e2630 · paper #e7ece9 · Volt Blue #2f6bff ·
+// accent text #6aa0ff. No grey text.
+const VOLTICK = {
+  ink: "#0a0d10",
+  panel: "#0e1216",
+  line: "#1e2630",
+  paper: "#e7ece9",
+  blue: "#2f6bff",
+  accent: "#6aa0ff",
+};
+/** Where "Join Voltick" sends someone who isn't a member. */
+export const VOLTICK_JOIN_URL = "https://voltick.io/bzila";
+
 export default function AuthForm({
   mode,
   next = "/home",
+  brand = "cbedge",
 }: {
   mode: "signin" | "signup";
+  /** "voltick" = the Vela beta sign-in (next is on vela.cbedge.net): Voltick
+   *  colours and copy, and "Join Voltick" instead of creating a CB Edge
+   *  account, since CB Edge is closed to new members. */
+  brand?: "cbedge" | "voltick";
   /** Where to land after a successful sign-in/sign-up. Defaults to /home;
    *  pass e.g. "/pricing" when the user arrived here to subscribe so they
    *  return to the plan/checkout step instead of the dashboard preview. */
@@ -105,6 +125,7 @@ export default function AuthForm({
   const widgetId = useRef<string | null>(null);
 
   const isSignup = mode === "signup";
+  const vk = brand === "voltick";
   const captchaRequired = !!TURNSTILE_SITE_KEY;
 
   // Live mismatch feedback, but only once the user has actually typed something
@@ -205,7 +226,7 @@ export default function AuthForm({
       await fetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: target }),
+        body: JSON.stringify({ email: target, next: safeNext(next) }),
       });
       setNotice("If that email has an account, a reset link is on its way.");
     } catch {
@@ -286,7 +307,10 @@ export default function AuthForm({
     }
   }
 
-  const inputStyle: React.CSSProperties = v3InputStyle;
+  const inputStyle: React.CSSProperties = vk
+    ? { ...v3InputStyle, background: VOLTICK.ink, borderColor: VOLTICK.line, color: VOLTICK.paper }
+    : v3InputStyle;
+  const linkColor = vk ? VOLTICK.accent : V3.cyan;
 
   return (
     <div
@@ -295,16 +319,17 @@ export default function AuthForm({
         maxWidth: 440,
         boxSizing: "border-box",
         ...v3CardStyle,
+        ...(vk ? { background: VOLTICK.panel, border: `1px solid ${VOLTICK.line}`, borderRadius: 16 } : null),
         padding: 24,
         fontFamily: V3_SANS,
-        color: V3.fg,
+        color: vk ? VOLTICK.paper : V3.fg,
       }}
     >
       <h1 style={{ fontSize: V3_TEXT.lg, fontWeight: 700, color: V3.fg, margin: "0 0 4px" }}>
         {isSignup ? "Create your account" : "Sign in"}
       </h1>
       <p style={{ fontSize: V3_TEXT.base, color: V3.fg, margin: "0 0 18px" }}>
-        {isSignup ? "Join CB Edge" : "Welcome back to CB Edge"}
+        {vk ? "Vela charts beta, by Voltick" : isSignup ? "Join CB Edge" : "Welcome back to CB Edge"}
       </p>
 
       <form onSubmit={withEmail} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -386,7 +411,7 @@ export default function AuthForm({
                 ...v3GhostButton,
                 padding: "4px 10px",
                 fontSize: V3_TEXT.sm,
-                color: V3.cyan,
+                color: linkColor,
                 cursor: "pointer",
                 flexShrink: 0,
               }}
@@ -401,6 +426,7 @@ export default function AuthForm({
           disabled={busy || confirmBlocked || (captchaRequired && !captchaToken)}
           style={{
             ...v3PrimaryButton,
+            ...(vk ? { background: VOLTICK.blue, borderColor: VOLTICK.blue, color: VOLTICK.paper } : null),
             width: "100%",
             boxSizing: "border-box",
             fontSize: V3_TEXT.body,
@@ -455,7 +481,7 @@ export default function AuthForm({
               background: "transparent",
               border: "none",
               padding: 0,
-              color: V3.cyan,
+              color: linkColor,
               fontFamily: V3_SANS,
               fontSize: V3_TEXT.base,
               fontWeight: 600,
@@ -471,12 +497,30 @@ export default function AuthForm({
             <div style={{ flex: 1, height: 1, background: V3.line }} />
           </div>
 
-          <Link
-            href={`/sign-up?next=${encodeURIComponent(next)}`}
-            style={{ ...v3GhostButton, width: "100%", boxSizing: "border-box", fontSize: V3_TEXT.body }}
-          >
-            Create an account
-          </Link>
+          {vk ? (
+            // CB Edge takes no new members; someone who wants in joins Voltick.
+            <a
+              href={VOLTICK_JOIN_URL}
+              style={{
+                ...v3GhostButton,
+                width: "100%",
+                boxSizing: "border-box",
+                fontSize: V3_TEXT.body,
+                color: VOLTICK.paper,
+                borderColor: VOLTICK.blue,
+                background: "transparent",
+              }}
+            >
+              Join Voltick &rarr; voltick.io/bzila
+            </a>
+          ) : (
+            <Link
+              href={`/sign-up?next=${encodeURIComponent(next)}`}
+              style={{ ...v3GhostButton, width: "100%", boxSizing: "border-box", fontSize: V3_TEXT.body }}
+            >
+              Create an account
+            </Link>
+          )}
         </>
       )}
     </div>

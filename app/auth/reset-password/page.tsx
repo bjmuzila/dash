@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
+import { VoltickAuthShell, isVelaNext } from "@/components/auth/VoltickAuthShell";
 
 // Landing page for the link sent by /api/auth/forgot-password. Replaces the
 // old Supabase-hosted reset-password confirmation (Supabase used to handle the
@@ -27,6 +28,9 @@ function ResetPasswordForm() {
   // in, not on a cbedge.net page they have no access to.
   const next = searchParams.get("next") || "";
   const signInHref = next ? `/sign-in?next=${encodeURIComponent(next)}` : "/sign-in";
+  // On the way to vela.cbedge.net (Vela beta invite, or a reset asked for from
+  // the Vela sign-in): Voltick frame and colours instead of CB Edge's.
+  const vk = isVelaNext(next);
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -71,9 +75,9 @@ function ResetPasswordForm() {
     width: "100%",
     padding: "11px 40px 11px 13px",
     borderRadius: 8,
-    border: `1px solid ${T.border}`,
-    background: "rgba(255,255,255,0.04)",
-    color: T.text,
+    border: `1px solid ${vk ? "#1e2630" : T.border}`,
+    background: vk ? "#0a0d10" : "rgba(255,255,255,0.04)",
+    color: vk ? "#e7ece9" : T.text,
     fontSize: 14,
     outline: "none",
   };
@@ -91,21 +95,27 @@ function ResetPasswordForm() {
     padding: 4,
   };
 
-  return (
-    <main style={{ minHeight: "80vh", display: "grid", placeItems: "center", padding: 24 }}>
+  const card = (
       <div
-        className="card-hover"
+        className={vk ? undefined : "card-hover"}
         style={{
           width: "100%",
-          maxWidth: 800,
-          ...homeGlossPanelStyle(T.cyan),
+          maxWidth: vk ? 440 : 800,
+          boxSizing: "border-box",
+          ...(vk
+            ? { background: "#0e1216", border: "1px solid #1e2630", borderRadius: 16 }
+            : homeGlossPanelStyle(T.cyan)),
           boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
           padding: 28,
         }}
       >
-        <h1 style={{ fontSize: 20, fontWeight: 800, color: T.text, margin: "0 0 4px" }}>Set a new password</h1>
-        <p style={{ fontSize: 14, color: "rgba(255,255,255,0.55)", margin: "0 0 22px" }}>
-          {done ? "Password updated — redirecting to sign in…" : "Choose a new password for your account."}
+        <h1 style={{ fontSize: 20, fontWeight: 800, color: vk ? "#e7ece9" : T.text, margin: "0 0 4px" }}>
+          {vk ? "Set your password" : "Set a new password"}
+        </h1>
+        <p style={{ fontSize: 14, color: vk ? "#c0c5c3" : "rgba(255,255,255,0.55)", margin: "0 0 22px" }}>
+          {done
+            ? (vk ? "Password set. Taking you to sign in…" : "Password updated — redirecting to sign in…")
+            : (vk ? "Pick a password for your Vela beta login." : "Choose a new password for your account.")}
         </p>
 
         {!done && (
@@ -159,9 +169,11 @@ function ResetPasswordForm() {
                 width: "100%",
                 padding: "11px",
                 borderRadius: 8,
-                border: `1px solid rgba(33,158,188,0.5)`,
-                background: busy ? "rgba(33,158,188,0.12)" : "rgba(33,158,188,0.25)",
-                color: T.text,
+                border: vk ? "1px solid #2f6bff" : `1px solid rgba(33,158,188,0.5)`,
+                background: vk
+                  ? (busy ? "#2f6bff55" : "#2f6bff")
+                  : (busy ? "rgba(33,158,188,0.12)" : "rgba(33,158,188,0.25)"),
+                color: vk ? "#e7ece9" : T.text,
                 fontSize: 14,
                 fontWeight: 700,
                 cursor: busy ? "default" : "pointer",
@@ -174,6 +186,12 @@ function ResetPasswordForm() {
 
         {error && <div style={{ color: T.red, fontSize: 12, marginTop: 12 }}>{error}</div>}
       </div>
+  );
+
+  if (vk) return <VoltickAuthShell>{card}</VoltickAuthShell>;
+  return (
+    <main style={{ minHeight: "80vh", display: "grid", placeItems: "center", padding: 24 }}>
+      {card}
     </main>
   );
 }

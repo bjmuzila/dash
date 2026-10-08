@@ -41,7 +41,12 @@
 //     its value under the crosshair (the latest bar off the plot, as Vela's
 //     legend did), ◉, and ⚙ / ✕ on hover. Those drive the study's own handle and
 //     Vela's own settings dialog, so undo, the saved layout and the object tree
-//     all see them. Lower panes (RSI…) keep Vela's own legend in their pane.
+//     all see them. LOWER PANES (RSI, CVD…) follow under their own heading with
+//     the same ◉ ⚙ ✕ (2026-10-08, Brandon: "how do I close the bottom indicator,
+//     the name doesn't show up"): on a phone Vela folds every pane's legend behind
+//     a chip in the price-pane legend, which this card hides, so a lower pane had
+//     no name and no ✕ anywhere. The phone also shows each lower pane's own name
+//     again (vela.css, `data-cb-collapsed` below keeps a collapsed strip folded).
 //     Studies are added from the top bar's Indicators: the card has no Add.
 //   · A STUDY'S NAME (2026-10-05, Brandon: "on some refreshes or over time the
 //     indicators lose their name"). A script study's handle is titled
@@ -504,18 +509,31 @@ class Card {
     return this.chart?.indicators().find((h) => h.nativeType === WALLS_TYPE) ?? null
   }
 
-  /** The study rows: every indicator on the price pane, the level lines (CB Walls) among them. */
+  /** The study rows: every indicator on the price pane (the level lines among them), then the lower panes'. */
   private buildRows(): void {
     const chart = this.chart
     if (!chart) return
     const d = this.doc
     const handles = new Map(chart.indicators().map((h) => [h.id, h]))
-    const price = chart.panes.list().find((p) => p.kind === 'price')
-    const list = price?.indicators ?? []
+    const panes = [...chart.panes.list()].sort((a, b) => a.order - b.order)
+    const price = panes.find((p) => p.kind === 'price')
+    const lower = panes.filter((p) => p.kind !== 'price')
+    // a collapsed strip keeps Vela's fold (vela.css shows a lower pane's legend on the phone otherwise)
+    for (const p of lower) {
+      const lg = this.cell.host.querySelector<HTMLElement>(`[data-vela-pane="${CSS.escape(p.id)}"]`)
+      if (lg) lg.toggleAttribute('data-cb-collapsed', p.collapsed)
+    }
+    const list: Array<(typeof panes)[number]['indicators'][number] | 'lower'> = [...(price?.indicators ?? [])]
+    const below = lower.flatMap((p) => p.indicators).filter((info) => handles.has(info.id))
+    if (below.length) list.push('lower', ...below)
     const index = resolveSym(this.sym).kind === 'index'
     this.studies.replaceChildren()
     const keep = new Map<string, StudyRow>()
     for (const info of list) {
+      if (info === 'lower') {
+        this.studies.append(el(d, 'div', 'cb-lc-psh', 'LOWER PANES'))
+        continue
+      }
       const h = handles.get(info.id)
       if (!h) continue
       const row = el(d, 'div', 'cb-lc-row')
@@ -558,7 +576,7 @@ class Card {
       keep.set(h.id, { row, v, sw, color: prev?.color ?? '', label, full })
     }
     this.rows = keep
-    if (!list.length) this.studies.append(el(d, 'div', 'cb-lc-empty', 'No studies on the price: Indicators adds one'))
+    if (!keep.size) this.studies.append(el(d, 'div', 'cb-lc-empty', 'No studies on the chart: Indicators adds one'))
     this.paintHeader()
   }
 
@@ -638,8 +656,7 @@ class Card {
 
   /** Has any row's name changed on the pane since the rows were built? */
   private namesMoved(handles: ReadonlyMap<string, IndicatorHandle>): boolean {
-    const price = this.chart?.panes.list().find((p) => p.kind === 'price')
-    for (const info of price?.indicators ?? []) {
+    for (const info of this.chart?.panes.list().flatMap((p) => p.indicators) ?? []) {
       const r = this.rows.get(info.id)
       const h = handles.get(info.id)
       if (r && h && r.label !== studyLabel(h, info)) return true

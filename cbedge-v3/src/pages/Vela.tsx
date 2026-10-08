@@ -205,7 +205,7 @@ import { bindLoadWatchdog } from '@/pages/vela/loadWatchdog'
 //   · right  the session chip (pages/vela/sessionClock.ts, see "The bottom of the
 //            chart" below; a click opens Chart settings → Symbol, where the time
 //            zone is), Vela's alerts bell, the Workspace menu (pages/vela/workspaceMenu.ts:
-//            the panels, Scripts, Level / Script alerts, Setups, Tape scroll and
+//            the panels, Scripts, Level / Script alerts, Setups, Volt watch and
 //            Copy indicators, each a named row, the common ones on Alt keys), and
 //            the camera. Vela's panel buttons and the right-hand action flow are
 //            not listed, so the twelve icons that were here are gone
@@ -442,11 +442,11 @@ export interface VelaProps {
   replayOnOpen?: boolean
 }
 
-// TAPE SCROLL at the top of the page (tape/TapeScroll.tsx; Brandon, 2026-10-07,
+// VOLT WATCH at the top of the page (tape/TapeScroll.tsx; Brandon, 2026-10-07,
 // direction C of generated/Vela Volt Ticker Strip): the open watchlist's tickers
-// scrolling past, each with where its ★ Volt is and how far price is from it,
-// sorted A–Z or nearest first. It took the session stats strip's place (and its
-// on / off: Workspace → Tape scroll). DESKTOP ONLY (Brandon, 2026-10-07: "no
+// stepping past one at a time, each with where its ★ Volt is and how far price is
+// from it, A–Z or nearest first. It took the session stats strip's place (its on /
+// off and its order: Workspace → Volt watch, Volt watch order). DESKTOP ONLY (Brandon, 2026-10-07: "no
 // mobile for this"): the phone build shows no tape and its ⋮ has no row for it.
 // Lazily, so its chunk loads only while it is shown.
 const TapeScroll = lazy(() => import('@/pages/vela/tape/TapeScroll'))

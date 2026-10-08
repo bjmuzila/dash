@@ -64,6 +64,15 @@ let libDb = null;
 try { libDb = require('./_lib-db.cjs'); }
 catch (e) { console.warn('[api-router] _lib-db.cjs not loaded — DB routes stay on Next:', e.message); }
 
+// /healthz — the whole box in one answer (server-v2/healthz.cjs). Loaded
+// defensively like every other module here: absent, the routes are simply not
+// registered. Subsystems in their own closures below report through
+// healthProbe(name, fn); a probe that throws costs only its own cell.
+let healthz = null;
+try { healthz = require('./healthz.cjs'); }
+catch (e) { console.warn('[api-router] healthz.cjs not loaded — /healthz stays off:', e.message); }
+function healthProbe(name, fn) { try { healthz?.probe(name, fn); } catch { /* never block boot */ } }
+
 // Additional pure (Next-free) compute libs, bundled the same way:
 //   esbuild lib/confidenceScore.ts --bundle --platform=node --format=cjs --outfile=server-v2/_lib-confidence.cjs
 //   esbuild lib/ibDaily.ts        --bundle --platform=node --format=cjs --outfile=server-v2/_lib-ibdaily.cjs
@@ -554,6 +563,9 @@ const CHAINS_FRESH_MS = 20_000;
 const CHAINS_MAX_STALE_MS = 10 * 60_000;
 const CHAINS_WARM_MS = 15 * 60_000;
 const CHAINS_CACHE = new Map(); // key → { at, status, text, lastAsk, ctx, refreshing }
+// Upstream pulls since boot, for /healthz — a refresh that keeps failing is
+// invisible from outside, because SWR keeps serving the last good snapshot.
+const CHAINS_STATS = { pulls: 0, fails: 0, lastFailAt: 0, lastFailStatus: 0 };
 
 function chainsSlimLeg(l) {
   if (!l || typeof l !== 'object') return l;
@@ -600,9 +612,14 @@ function chainsRefresh(key, ticker, sp, ctx) {
   e.ctx = ctx;
   e.refreshing = chainsPull(ctx, ticker, sp)
     .then((r) => {
+      CHAINS_STATS.pulls += 1;
+      if (r.status !== 200) { CHAINS_STATS.fails += 1; CHAINS_STATS.lastFailAt = Date.now(); CHAINS_STATS.lastFailStatus = r.status; }
       // Only a good answer replaces the snapshot; a failed refresh keeps serving the last one.
       if (r.status === 200 || !e.text) { e.status = r.status; e.text = r.text; e.at = Date.now(); }
       return e;
+    }, (err) => {
+      CHAINS_STATS.pulls += 1; CHAINS_STATS.fails += 1; CHAINS_STATS.lastFailAt = Date.now(); CHAINS_STATS.lastFailStatus = 0;
+      throw err;
     })
     .finally(() => { e.refreshing = null; });
   CHAINS_CACHE.set(key, e);
@@ -623,6 +640,26 @@ setInterval(() => {
     }
   }
 }, 15_000).unref?.();
+healthProbe('chains', () => {
+  const now = Date.now();
+  let fresh = 0, stale = 0, refreshing = 0, failing = 0, oldest = 0;
+  for (const e of CHAINS_CACHE.values()) {
+    if (e.refreshing) refreshing += 1;
+    if (e.status && e.status !== 200) failing += 1;
+    const age = e.at ? now - e.at : Infinity;
+    if (age <= CHAINS_FRESH_MS * 3) fresh += 1; else stale += 1;
+    if (e.at && age > oldest) oldest = age;
+  }
+  const recentFail = CHAINS_STATS.lastFailAt && now - CHAINS_STATS.lastFailAt < 5 * 60_000;
+  return {
+    keys: CHAINS_CACHE.size, fresh, stale, refreshing, failing,
+    oldestAgeSec: Math.round(oldest / 1000),
+    pulls: CHAINS_STATS.pulls, fails: CHAINS_STATS.fails,
+    lastFailAgeSec: CHAINS_STATS.lastFailAt ? Math.round((now - CHAINS_STATS.lastFailAt) / 1000) : null,
+    lastFailStatus: CHAINS_STATS.lastFailStatus || null,
+    problems: failing || recentFail ? [{ code: 'upstream-failing', note: `${failing} key(s) on a non-200, last fail ${CHAINS_STATS.lastFailStatus || 'network'}` }] : [],
+  };
+});
 
 register('/api/chains', {
   auth: 'subscriber', methods: ['GET'],
@@ -4550,6 +4587,8 @@ register('/api/dxlink/candles', {
 // the most recent ~30 sessions anyway.
 const VELA_HISTORY_TTL_MS = 15 * 60_000;
 const VELA_HISTORY = new Map(); // key → { at, body } | { at, p }
+// Upstream fetches since boot, for /healthz.
+const VELA_HISTORY_STATS = { fetches: 0, empty: 0, fails: 0, lastFailAt: 0, lastFail: null };
 const VELA_HISTORY_YEARS = { '1d': 10, '1wk': 25, '1mo': 40 };
 // Explicit source symbols. `scale` converts the source's units to the index's
 // own (XSP is a tenth of SPX).
@@ -4598,6 +4637,8 @@ register('/api/vela/history', {
           if (!(c > 0) || !Number.isFinite(r.time)) continue;
           bars.push({ t: r.time, o: round(r.open || c), h: round(r.high || c), l: round(r.low || c), c: round(c), v: Number(r.volume) || 0 });
         }
+        VELA_HISTORY_STATS.fetches += 1;
+        if (!bars.length) VELA_HISTORY_STATS.empty += 1;
         return { symbol: raw, interval, source: `yahoo:${src}`, bars };
       })();
       VELA_HISTORY.set(key, { at: hit?.at ?? 0, body: hit?.body, p });
@@ -4613,9 +4654,29 @@ register('/api/vela/history', {
       return send(res, 200, body, { 'Cache-Control': 'private, max-age=300' });
     } catch (e) {
       VELA_HISTORY.delete(key);
+      VELA_HISTORY_STATS.fails += 1;
+      VELA_HISTORY_STATS.lastFailAt = Date.now();
+      VELA_HISTORY_STATS.lastFail = `${key}: ${String(e?.message || e).slice(0, 80)}`;
       return send(res, 502, { error: 'history source failed', detail: String(e?.message || e).slice(0, 200) });
     }
   },
+});
+healthProbe('velaHistory', () => {
+  const now = Date.now();
+  let entries = 0, fresh = 0, inflight = 0;
+  for (const v of VELA_HISTORY.values()) {
+    if (v.p) inflight += 1;
+    if (v.body) { entries += 1; if (now - v.at < VELA_HISTORY_TTL_MS) fresh += 1; }
+  }
+  const S = VELA_HISTORY_STATS;
+  const recent = S.lastFailAt && now - S.lastFailAt < 15 * 60_000;
+  return {
+    source: 'yahoo daily (tt-snapshot)', entries, fresh, inflight, ttlMin: VELA_HISTORY_TTL_MS / 60_000,
+    fetches: S.fetches, empty: S.empty, fails: S.fails,
+    lastFailAgeSec: S.lastFailAt ? Math.round((now - S.lastFailAt) / 1000) : null,
+    lastFail: S.lastFail,
+    problems: recent ? [{ code: 'source-failing', note: S.lastFail }] : [],
+  };
 });
 
 // /api/quotes-batch — batch day-change quotes + optional sparkline (Yahoo v8).
@@ -6040,6 +6101,33 @@ if (libDb) {
   });
 
   // /api/db/health — Postgres SELECT 1 probe (subscriber; 503 on failure).
+  // /healthz (owner) and /healthz/ready (public) — see server-v2/healthz.cjs.
+  // Both are also answered at /api/... so the owner site and vela.cbedge.net,
+  // whose nginx only proxies /api and /proxy, reach the same code.
+  if (healthz) {
+    const healthFull = {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res, ctx) {
+        const fresh = /^(1|true)$/.test(new URL(req.url || '/', 'http://localhost').searchParams.get('fresh') || '');
+        try { send(res, 200, await healthz.full(ctx, libDb, { fresh }), { 'Cache-Control': NO_STORE }); }
+        catch (e) { send(res, 500, { ok: false, error: String(e?.message || e).slice(0, 160) }, { 'Cache-Control': NO_STORE }); }
+      },
+    };
+    const healthReady = {
+      auth: 'public', methods: ['GET', 'HEAD'],
+      async handler(req, res, ctx) {
+        try {
+          const b = await healthz.ready(ctx, libDb);
+          send(res, b.ok ? 200 : 503, b, { 'Cache-Control': NO_STORE });
+        } catch (e) { send(res, 503, { ok: false, reasons: ['healthz.error'] }, { 'Cache-Control': NO_STORE }); }
+      },
+    };
+    register('/healthz', healthFull);
+    register('/api/healthz', healthFull);
+    register('/healthz/ready', healthReady);
+    register('/api/healthz/ready', healthReady);
+  }
+
   register('/api/db/health', {
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
@@ -16517,6 +16605,26 @@ try {
       }
       return out;
     }
+    // /healthz — the vault's budget and the tape stream, counts only (no key
+    // material: budgetStatus() reports index + usage, hasKey() only presence).
+    healthProbe('lse', () => {
+      const b = lse.budgetStatus();
+      const keys = Array.isArray(b.keys) ? b.keys : [];
+      const ws = tfWsStatus();
+      const { streamOnlySamples, restOnlySamples, ...shadowCounts } = ws.shadow || {};
+      const exhaustedKeys = keys.filter((k) => k.exhausted).length;
+      return {
+        configured: lse.hasKey(), day: b.day, keys: keys.length, exhaustedKeys,
+        used: b.used, limit: (b.limitPerKey || 0) * keys.length, refused: b.refused,
+        inflight: keys.reduce((n, k) => n + (k.inflight || 0), 0),
+        queued: keys.reduce((n, k) => n + (k.queued || 0), 0),
+        tape: { ...ws, ...(ws.shadow ? { shadow: shadowCounts } : {}) },
+        problems: [
+          ...(b.exhausted ? [{ code: 'budget-exhausted', level: 'warn', note: 'every key is out for the day' }] : []),
+          ...(!b.exhausted && exhaustedKeys ? [{ code: 'key-exhausted', note: `${exhaustedKeys}/${keys.length} keys out` }] : []),
+        ],
+      };
+    });
     function tfRefreshMs() {
       return WS_MODE === 'live' && tfWs && tfWs.healthy() ? WS_REST_MS : TF_REFRESH_MS;
     }
