@@ -21,7 +21,7 @@
 //      in AlignReplay behind ChartFrame (non-negotiables 4–6 apply there).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Card } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
@@ -45,6 +45,7 @@ import {
   type AlignRow,
   type AlignSettings,
   type AlignState,
+  type AlignSymbolRaw,
   type AlignUniverse,
 } from '@/pages/scanner/align'
 import { DIM, EVENT_COLOR, LABEL, STATE_COLOR, pillStyle } from '@/pages/scanner/alignStyle'
@@ -185,10 +186,19 @@ function AlignBoard({
   universe: AlignUniverse
 }) {
   const main = universe === 'main'
-  const { data, error, loading } = useQuery<AlignResponse>(alignUrl(settings.mode), {
+  const { data: fresh, error, loading } = useQuery<AlignResponse>(alignUrl(settings.mode), {
     pollMs: ALIGN_POLL_MS,
     staleMs: 30_000,
   })
+  // A failed or still-warming poll must not blank the board: keep painting the
+  // last good answer for this mode and say how old it is.
+  const lastGood = useRef<{ mode: string; data: AlignResponse } | null>(null)
+  const freshOk = !!fresh && fresh.ok !== false && !fresh.warming
+  if (freshOk) lastGood.current = { mode: settings.mode, data: fresh }
+  const held = lastGood.current?.mode === settings.mode ? lastGood.current.data : undefined
+  const data = freshOk ? fresh : (held ?? fresh)
+  const showingOld = !freshOk && !!held
+  const warming = !!fresh?.warming && !held
   // Main is fourteen names: show them all by default rather than only the active ones.
   const [filter, setFilter] = useState<Filter>(main ? 'all' : 'active')
   const [view, setView] = useState<View>('board')
@@ -211,7 +221,15 @@ function AlignBoard({
     // The server flags MAIN from the live roster. An older server sends no flag
     // at all — fall back to the static list rather than an empty tab.
     const flagged = all.some((s) => s.hot !== undefined)
-    return flagged ? all.filter((s) => s.hot) : all.filter((s) => MAIN_SET.has(s.symbol))
+    const mine = flagged ? all.filter((s) => s.hot) : all.filter((s) => MAIN_SET.has(s.symbol))
+    // Every MAIN name gets a row, data or not — a ticker with nothing recorded
+    // yet (or a failed load) shows as an empty row rather than disappearing.
+    const have = new Set(mine.map((s) => s.symbol))
+    const want = flagged && mine.length ? [] : SCANNER_MAIN
+    const stubs: AlignSymbolRaw[] = want
+      .filter((sym) => !have.has(sym))
+      .map((sym) => ({ symbol: sym, hot: true, t: 0, spot: 0, step: 0, expiries: [], walls: [], all: null }))
+    return [...mine, ...stubs]
   }, [data, main])
 
   const allRows = useMemo(
@@ -224,7 +242,11 @@ function AlignBoard({
   // the board, dimmed, because with fourteen names a missing row reads as a bug.
   const qualified = useMemo(() => (main ? allRows : allRows.filter((r) => r.passes)), [allRows, main])
   const hidden = main ? allRows.filter((r) => !r.passes).length : allRows.length - qualified.length
-  const rows = useMemo(() => qualified.filter((r) => matches(r, filter)), [qualified, filter])
+  const matched = useMemo(() => qualified.filter((r) => matches(r, filter)), [qualified, filter])
+  // Nothing in this filter → still show the tickers (all of them, the ones that
+  // fail distance / dominance dimmed) under a line saying so, never a blank card.
+  const fallback = matched.length === 0 && allRows.length > 0
+  const rows = fallback ? (qualified.length ? qualified : allRows) : matched
 
   const counts = useMemo(() => {
     const c: Record<Filter, number> = { active: 0, LOCKED: 0, PENDING: 0, FORMING: 0, SCATTERED: 0, all: qualified.length }
@@ -286,9 +308,22 @@ function AlignBoard({
         </span>
       </div>
 
-      {error && (
+      {(error || fresh?.ok === false) && (
         <div className="mb-3 text-xs" style={{ color: V2.red }}>
-          {readableError(error, 'Could not load wall alignment.')}
+          {error ? readableError(error, 'Could not load wall alignment.') : (fresh?.error ?? 'Could not load wall alignment.')}
+          {showingOld && data?.asOf ? ` — showing the board from ${fmtEt(data.asOf)}` : ''}
+        </div>
+      )}
+      {warming && (
+        <div className="mb-3 text-xs" style={{ color: STATE_COLOR.PENDING }}>
+          Building today&rsquo;s wall history on the server — the first load after a restart takes up to a minute. This
+          refreshes on its own.
+        </div>
+      )}
+      {fallback && !warming && (
+        <div className="mb-3 text-xs" style={{ color: DIM }}>
+          No tickers are {FILTERS.find((f) => f.id === filter)?.label.toLowerCase() ?? filter} right now — showing all{' '}
+          {rows.length}.
         </div>
       )}
 
@@ -538,7 +573,7 @@ function BoardTable({
           {rows.length === 0 && (
             <tr>
               <td colSpan={10 + nCols} className="px-2 py-6 text-center text-xs" style={{ color: DIM }}>
-                Nothing matches these filters right now.
+                No tickers loaded yet.
               </td>
             </tr>
           )}
@@ -735,7 +770,7 @@ function Stacks({
   if (shown.length === 0)
     return (
       <div className="mb-4 py-6 text-center text-xs" style={{ color: DIM }}>
-        Nothing matches these filters right now.
+        No tickers loaded yet.
       </div>
     )
   return (

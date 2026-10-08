@@ -431,33 +431,301 @@ async function _sgReplayMeta(key, run) {
   return p;
 }
 
-// ── strike-growth wall-alignment cache ──────────────────────────────────────
-// /proxy/strike-growth/align feeds the v3 scanner's Align tab. One answer per
-// (session date, wall mode), shared by every viewer: the recorder sweeps once a
-// minute, so anything fresher than ~45s is the same answer. Single-flighted for
-// the same reason _sgReplayMeta is — a cold key behind several open scanner
-// tabs should cost one pair of queries, not one per tab.
-const _SG_ALIGN_TTL_MS = 45 * 1000;
-const _sgAlignCache = new Map();    // key -> { at, value }
-const _sgAlignInFlight = new Map(); // key -> Promise
-async function _sgAlign(key, run) {
-  const hit = _sgAlignCache.get(key);
-  if (hit && Date.now() - hit.at < _SG_ALIGN_TTL_MS) return hit.value;
-  const flight = _sgAlignInFlight.get(key);
-  if (flight) return flight;
-  const p = Promise.resolve()
-    .then(run)
-    .then((value) => {
-      _sgAlignCache.set(key, { at: Date.now(), value });
-      if (_sgAlignCache.size > 16) {
-        const cutoff = Date.now() - _SG_ALIGN_TTL_MS;
-        for (const [k, v] of _sgAlignCache) if (v.at < cutoff) _sgAlignCache.delete(k);
+// ── Wall alignment: incremental builder ─────────────────────────────────────
+// Feeds /proxy/strike-growth/align (the v3 scanner's Align tabs).
+//
+// WHY INCREMENTAL. The first version re-read and re-sorted the WHOLE day of
+// strike_growth (millions of rows by the afternoon) on every poll. Under RTH
+// write load that ran past the 45s statement timeout and the tab got a 502.
+// Now each session date has one in-memory state, built once and then extended
+// with only the rows written since the last refresh:
+//
+//   committed   rows older than _AL_SAFE_MS, folded in permanently. A sweep
+//               writes the whole roster under ONE ts over ~a minute, so a ts
+//               younger than that may still be gaining rows.
+//   provisional the newest rows, folded into a throw-away copy per refresh so
+//               the board is current without ever committing a half sweep.
+//
+// One pass computes all three wall modes (call / put / core) at once, so the
+// three Wall buttons share the same reads. Requests never wait on a refresh
+// for long: the route answers with the latest built snapshot (or `warming`)
+// and the refresh runs in the background, single-flighted per date.
+//
+// Rows are read in time windows. `idx_strike_growth_date_ts` (date, ts) makes a
+// window a cheap range scan; it is created CONCURRENTLY, once, in the background
+// on first use (no write lock), and the windows still work — just slower —
+// while it builds.
+const _AL_SAFE_MS = 120 * 1000;
+const _AL_WINDOW_MS = 20 * 60 * 1000;
+const _AL_REFRESH_MS = 30 * 1000;
+const _AL_WAIT_MS = 8 * 1000;
+const _AL_MODES = ['pos', 'neg', 'abs'];
+const _alStates = new Map(); // date -> state
+let _alIndexAsked = false;
+
+async function _alEnsureIndex(p) {
+  if (_alIndexAsked) return;
+  _alIndexAsked = true;
+  let c = null;
+  try {
+    c = await p.connect();
+    // An index build outlives the pool's statement timeout; lift it for this
+    // one session and put it back before the client returns to the pool.
+    await c.query('SET statement_timeout = 0');
+    const { rows } = await c.query(
+      `SELECT i.indisvalid FROM pg_index i JOIN pg_class x ON x.oid = i.indexrelid
+       WHERE x.relname = 'idx_strike_growth_date_ts'`
+    );
+    if (rows[0] && !rows[0].indisvalid) await c.query('DROP INDEX CONCURRENTLY IF EXISTS idx_strike_growth_date_ts');
+    if (!rows[0] || !rows[0].indisvalid) {
+      await c.query('CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strike_growth_date_ts ON strike_growth (date, ts)');
+      console.log('[align] idx_strike_growth_date_ts ready');
+    }
+  } catch (e) {
+    console.warn(`[align] index build skipped: ${e?.message || e}`);
+  } finally {
+    if (c) {
+      try { await c.query('RESET statement_timeout'); } catch { /* connection may be gone */ }
+      c.release();
+    }
+  }
+}
+
+function _alNewState(date) {
+  const modes = {};
+  for (const m of _AL_MODES) modes[m] = { segs: new Map(), last: new Map() };
+  return {
+    date,
+    lo: null,              // first ts of the session (ms), found once
+    committedTs: 0,        // everything with ts <= this is folded in
+    modes,
+    strikes: new Map(),    // symbol -> Set(strike) seen today
+    latest: new Map(),     // symbol -> { t, spot, cells: [{ expiry, strike, net, spot }] }
+    view: null,            // committed + provisional, what the route serves
+    agg: new Map(),        // symbol -> rows from scanner_variants (all ex-0DTE)
+    hot: new Set(),
+    builtAt: 0,
+    ready: false,
+    refreshing: null,
+    error: null,
+  };
+}
+
+const _alScore = (mode, n) => (mode === 'pos' ? n : mode === 'neg' ? -n : Math.abs(n));
+// Sided against THAT sweep's spot, exactly as findCallWall / findPutWall do —
+// a positive strike below spot is not a call wall.
+const _alQualifies = (mode, c) =>
+  mode === 'pos' ? c.net > 0 && c.spot > 0 && c.strike > c.spot
+    : mode === 'neg' ? c.net < 0 && c.spot > 0 && c.strike < c.spot
+      : c.net !== 0;
+
+/** Wall + runner-up of one expiry's cells under a mode. Ties go to the lower strike. */
+function _alRank(mode, cells) {
+  let top = null;
+  let second = null;
+  for (const c of cells) {
+    if (!_alQualifies(mode, c)) continue;
+    const s = _alScore(mode, c.net);
+    if (!top || s > top.s || (s === top.s && c.strike < top.c.strike)) { second = top; top = { s, c }; }
+    else if (!second || s > second.s) second = { s, c };
+  }
+  return { top: top ? top.c : null, second: second ? second.c : null };
+}
+
+/**
+ * Fold rows (ordered by ts, symbol, expiry) into `target`. With `cow` set, any
+ * seg array / Set it touches is copied first, so a provisional pass never
+ * writes into the committed state it was cloned from.
+ */
+function _alIngest(target, rows, cow) {
+  const copied = new Set();
+  let i = 0;
+  while (i < rows.length) {
+    const sym = rows[i].symbol;
+    const t = Number(rows[i].t);
+    const cells = [];
+    let spot = 0;
+    while (i < rows.length && rows[i].symbol === sym && Number(rows[i].t) === t) {
+      const r = rows[i];
+      const cs = Number(r.spot) || 0;
+      spot = Math.max(spot, cs);
+      cells.push({ expiry: String(r.expiry), strike: Number(r.strike), net: Number(r.net) || 0, spot: cs });
+      i++;
+    }
+    let set = target.strikes.get(sym);
+    if (cow && set && !copied.has(`s|${sym}`)) { set = new Set(set); target.strikes.set(sym, set); copied.add(`s|${sym}`); }
+    if (!set) { set = new Set(); target.strikes.set(sym, set); }
+    for (const c of cells) set.add(c.strike);
+    const prev = target.latest.get(sym);
+    if (!prev || t >= prev.t) target.latest.set(sym, { t, spot, cells });
+
+    const byExp = new Map();
+    for (const c of cells) {
+      if (!byExp.has(c.expiry)) byExp.set(c.expiry, []);
+      byExp.get(c.expiry).push(c);
+    }
+    for (const mode of _AL_MODES) {
+      const m = target.modes[mode];
+      for (const [expiry, list] of byExp) {
+        const { top } = _alRank(mode, list);
+        if (!top) continue;
+        const key = `${sym}|${expiry}`;
+        if (m.last.get(key) === top.strike) continue;
+        let segs = m.segs.get(key);
+        if (cow && !copied.has(`${mode}|${key}`)) { segs = segs ? segs.slice() : []; m.segs.set(key, segs); copied.add(`${mode}|${key}`); }
+        if (!segs) { segs = []; m.segs.set(key, segs); }
+        segs.push([t, top.strike]);
+        m.last.set(key, top.strike);
       }
-      return value;
-    })
-    .finally(() => { _sgAlignInFlight.delete(key); });
-  _sgAlignInFlight.set(key, p);
-  return p;
+    }
+  }
+}
+
+function _alClone(st) {
+  const modes = {};
+  for (const m of _AL_MODES) modes[m] = { segs: new Map(st.modes[m].segs), last: new Map(st.modes[m].last) };
+  return { modes, strikes: new Map(st.strikes), latest: new Map(st.latest) };
+}
+
+const _alRowsSql = `
+  SELECT sg.symbol, sg.expiry, (EXTRACT(EPOCH FROM sg.ts) * 1000)::bigint AS t,
+         sg.strike, sg.spot, (sg.gex_now + sg.gex_open) AS net
+  FROM strike_growth sg
+  JOIN strike_growth_watchlist wl ON wl.symbol = sg.symbol AND wl.active
+  WHERE sg.date = $1 AND sg.ts > to_timestamp($2::float8 / 1000.0) AND sg.ts <= to_timestamp($3::float8 / 1000.0)
+  ORDER BY sg.ts, sg.symbol, sg.expiry`;
+
+async function _alRefreshNow(p, st, today) {
+  _alEnsureIndex(p).catch(() => {});
+  const live = st.date === today;
+  if (st.lo == null) {
+    const { rows } = await p.query(
+      `SELECT (EXTRACT(EPOCH FROM MIN(ts)) * 1000)::bigint AS lo, (EXTRACT(EPOCH FROM MAX(ts)) * 1000)::bigint AS hi
+       FROM strike_growth WHERE date = $1`,
+      [st.date]
+    );
+    if (rows[0]?.lo == null) return; // nothing recorded yet for this date
+    st.lo = Number(rows[0].lo) - 1;
+    st.hi = Number(rows[0].hi);
+    st.committedTs = st.lo;
+  }
+  const now = Date.now();
+  const commitTo = live ? now - _AL_SAFE_MS : st.hi;
+  while (st.committedTs < commitTo) {
+    const b = Math.min(st.committedTs + _AL_WINDOW_MS, commitTo);
+    const { rows } = await p.query(_alRowsSql, [st.date, st.committedTs, b]); // eslint-disable-line no-await-in-loop
+    _alIngest(st, rows, false);
+    st.committedTs = b;
+  }
+  const view = _alClone(st);
+  if (live) {
+    const { rows } = await p.query(_alRowsSql, [st.date, st.committedTs, now + 60_000]);
+    _alIngest(view, rows, true);
+  }
+  // Small side reads: the MAIN flag and the ALL ex-0DTE walls for every mode.
+  const [hotQ, aggQ] = await Promise.all([
+    p.query(`SELECT symbol FROM strike_growth_watchlist WHERE active AND hot`),
+    p.query(
+      `SELECT symbol, (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS t, expiries,
+              call_wall, put_wall, cb, call_wall_gex, put_wall_gex, cb_gex
+       FROM scanner_variants
+       WHERE date = $1 AND expiry_scope = 'agg' AND basis = 'oivol'
+       ORDER BY symbol, ts`,
+      [st.date]
+    ).catch(() => ({ rows: [] })), // variants switched off → no ALL column, never a 502
+  ]);
+  st.hot = new Set(hotQ.rows.map((r) => r.symbol));
+  const agg = new Map();
+  for (const r of aggQ.rows) {
+    if (!agg.has(r.symbol)) agg.set(r.symbol, []);
+    agg.get(r.symbol).push(r);
+  }
+  st.agg = agg;
+  st.view = view;
+  st.ready = true;
+  st.builtAt = Date.now();
+  st.error = null;
+}
+
+/** Kick a refresh if due (single-flighted); resolves when that refresh ends. */
+function _alRefresh(p, st, today) {
+  if (st.refreshing) return st.refreshing;
+  if (st.ready && Date.now() - st.builtAt < _AL_REFRESH_MS) return Promise.resolve();
+  st.refreshing = _alRefreshNow(p, st, today)
+    .catch((e) => { st.error = String(e?.message || e); console.warn(`[align] refresh ${st.date}: ${st.error}`); })
+    .finally(() => { st.refreshing = null; });
+  return st.refreshing;
+}
+
+function _alState(date) {
+  let st = _alStates.get(date);
+  if (!st) {
+    st = _alNewState(date);
+    _alStates.set(date, st);
+    // Keep today and one fallback session; drop anything older.
+    const keep = Array.from(_alStates.keys()).sort().slice(-2);
+    for (const k of _alStates.keys()) if (!keep.includes(k)) _alStates.delete(k);
+  }
+  return st;
+}
+
+/** The board payload for one mode, from a built state. */
+function _alPayload(st, mode, today) {
+  const v = st.view;
+  const aggCol = mode === 'pos' ? 'call_wall' : mode === 'neg' ? 'put_wall' : 'cb';
+  const symbols = [];
+  for (const [symbol, lat] of v.latest) {
+    const byExp = new Map();
+    for (const c of lat.cells) {
+      if (!byExp.has(c.expiry)) byExp.set(c.expiry, []);
+      byExp.get(c.expiry).push(c);
+    }
+    const expiries = Array.from(byExp.keys()).sort();
+    const walls = expiries.map((expiry) => {
+      const { top, second } = _alRank(mode, byExp.get(expiry));
+      const segs = (v.modes[mode].segs.get(`${symbol}|${expiry}`) || []).slice();
+      const lastSeg = segs[segs.length - 1];
+      if (top && (!lastSeg || lastSeg[1] !== top.strike)) segs.push([lat.t, top.strike]);
+      return {
+        expiry,
+        strike: top ? top.strike : null,
+        net: top ? top.net : 0,
+        next: second ? Math.abs(second.net) : 0,
+        segs,
+      };
+    });
+    let all = null;
+    const aggRows = st.agg.get(symbol);
+    if (aggRows && aggRows.length) {
+      const segs = [];
+      for (const r of aggRows) {
+        const k = r[aggCol] == null ? null : Number(r[aggCol]);
+        if (k != null && (!segs.length || segs[segs.length - 1][1] !== k)) segs.push([Number(r.t), k]);
+      }
+      const last = aggRows[aggRows.length - 1];
+      all = {
+        state: 'ok',
+        strike: last[aggCol] == null ? null : Number(last[aggCol]),
+        net: last[`${aggCol}_gex`] == null ? 0 : Number(last[`${aggCol}_gex`]),
+        next: 0,
+        at: Number(last.t),
+        n: Number(last.expiries) || null,
+        segs,
+      };
+    }
+    symbols.push({
+      symbol,
+      hot: st.hot.has(symbol),
+      t: lat.t,
+      spot: lat.spot,
+      step: _sgStrikeStep(Array.from(v.strikes.get(symbol) || [])),
+      expiries,
+      walls,
+      all,
+    });
+  }
+  symbols.sort((a, b) => (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
+  return { ok: true, date: st.date, stale: st.date !== today, mode, asOf: st.builtAt, symbols };
 }
 
 /**
@@ -3628,7 +3896,7 @@ async function main() {
         return;
       }
       // ── Wall alignment across expiries, every scanner ticker ─────────────
-      //   GET /proxy/strike-growth/align[?mode=abs|pos|neg][&date=YYYY-MM-DD]
+      //   GET /proxy/strike-growth/align[?mode=pos|neg|abs][&date=YYYY-MM-DD]
       //
       // Feeds the v3 scanner's Align and Align · Main tabs: "when do the walls
       // of the nearest expirations all sit on the same strike". For each active
@@ -3636,31 +3904,22 @@ async function main() {
       //   strike / net — that expiry's wall right now
       //   next         — the runner-up's magnitude, for a dominance ratio
       //   segs         — the wall's history today, run-length encoded as
-      //                  [tMs, strike] at every minute the wall MOVED. The page
-      //                  smooths and replays these, so the payload stays small
-      //                  however long the session runs.
-      // `step` is the symbol's strike increment (smallest gap between any two
-      // strikes recorded today), so the page can count distance in strikes.
-      // `hot` marks the roster's MAIN lane (strike_growth_watchlist.hot).
+      //                  [tMs, strike] at every sweep the wall MOVED
+      // plus `step` (strike increment), `hot` (MAIN lane) and `all` (the wall
+      // across every expiration except 0DTE — scanner-recorder's 'agg'/'oivol'
+      // variant, the same series Wall Migration draws, with its own `segs`).
       //
       // mode — the SAME three definitions the Wall Migration chart draws
       // (scanner-recorder.js / gex-calculator.js), so the two pages agree:
       //   pos = CALL WALL — biggest positive net GEX strictly ABOVE spot
       //   neg = PUT WALL  — most negative net GEX strictly BELOW spot
-      //   abs = CORE (CB) — biggest |net GEX| anywhere, either side of spot.
-      //         It flips between the call and put sides whenever the two are
-      //         close in size; the call/put walls do not.
+      //   abs = CORE (CB) — biggest |net GEX| anywhere, either side of spot
       // net = gex_now + gex_open, the OI+Vol basis the chain and the walls use.
       //
-      // `all` — the wall across every expiration EXCEPT 0DTE: the 'agg' / 'oivol'
-      // variant scanner-recorder already writes for the whole roster (front
-      // SCANNER_AGG_MAX_EXPIRIES expiries inside SCANNER_AGG_MAX_DTE, every Nth
-      // sweep — see scanner-variants.js). The same numbers Wall Migration's
-      // "All expirations minus 0DTE" scope draws; no extra upstream calls.
-      //
-      // Expiries are whatever strike_growth keeps (STRIKE_GROWTH_EXPIRIES, 3 by
-      // default = 0DTE/front + the next two). Falls back to the most recent
-      // recorded date pre-open / on a weekend, and says which date it used.
+      // Served from the incremental builder above (_alRefresh): never a
+      // whole-day re-sort per request. A cold date answers within ~8s with what
+      // it has, or `warming: true` and an empty roster while the first build
+      // finishes in the background — the page keeps polling.
       if (pathname === '/proxy/strike-growth/align' && req.method === 'GET') {
         (async () => {
           try {
@@ -3673,159 +3932,20 @@ async function main() {
             const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfParam) ? asOfParam : today;
             const modeParam = (u.searchParams.get('mode') || 'pos').toLowerCase();
             const mode = modeParam === 'abs' || modeParam === 'neg' ? modeParam : 'pos';
-            const payload = await _sgAlign(`${asOf}|${mode}`, async () => {
-              const net = `(sg.gex_now + sg.gex_open)`;
-              const rankExpr = mode === 'pos' ? net : mode === 'neg' ? `-${net}` : `ABS(${net})`;
-              // Sided against THAT sweep's spot, exactly as findCallWall /
-              // findPutWall do — a positive strike below spot is not a call wall.
-              const sideFilter =
-                mode === 'pos' ? `AND ${net} > 0 AND sg.strike > sg.spot`
-                  : mode === 'neg' ? `AND ${net} < 0 AND sg.strike < sg.spot`
-                    : `AND ${net} <> 0`;
-              const dQ = await p.query(`SELECT to_char(MAX(date),'YYYY-MM-DD') AS date FROM strike_growth WHERE date <= $1`, [asOf]);
-              const date = dQ.rows[0]?.date || null;
-              if (!date) return { ok: true, date: asOf, stale: false, mode, asOf: Date.now(), symbols: [] };
-              const aggCol = mode === 'pos' ? 'call_wall' : mode === 'neg' ? 'put_wall' : 'cb';
-              // The five reads are independent — fire them together.
-              const [changesQ, latestQ, strikesQ, hotQ, aggQ] = await Promise.all([
-                // Each (symbol, expiry, sweep)'s wall, then only the sweeps where
-                // it MOVED. DISTINCT ON rides idx_strike_growth_latest's order.
-                p.query(
-                  `WITH w1 AS (
-                     SELECT DISTINCT ON (sg.symbol, sg.expiry, sg.ts)
-                            sg.symbol, sg.expiry, sg.ts, sg.strike
-                     FROM strike_growth sg
-                     JOIN strike_growth_watchlist wl ON wl.symbol = sg.symbol AND wl.active
-                     WHERE sg.date = $1 ${sideFilter}
-                     ORDER BY sg.symbol, sg.expiry, sg.ts, ${rankExpr} DESC, sg.strike ASC
-                   ),
-                   ch AS (
-                     SELECT symbol, expiry, ts, strike,
-                            LAG(strike) OVER (PARTITION BY symbol, expiry ORDER BY ts) AS prev
-                     FROM w1
-                   )
-                   SELECT symbol, expiry, (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS t, strike
-                   FROM ch WHERE prev IS DISTINCT FROM strike
-                   ORDER BY symbol, expiry, ts`,
-                  [date]
-                ),
-                // Every cell of each symbol's latest sweep: the current walls,
-                // their runner-ups and the spot, without a second pass.
-                p.query(
-                  `WITH sl AS (
-                     SELECT sg.symbol, MAX(sg.ts) AS ts
-                     FROM strike_growth sg
-                     JOIN strike_growth_watchlist wl ON wl.symbol = sg.symbol AND wl.active
-                     WHERE sg.date = $1
-                     GROUP BY sg.symbol
-                   )
-                   SELECT sg.symbol, sg.expiry, sg.strike, sg.spot,
-                          (sg.gex_now + sg.gex_open) AS net,
-                          (EXTRACT(EPOCH FROM sg.ts) * 1000)::bigint AS t
-                   FROM strike_growth sg
-                   JOIN sl ON sl.symbol = sg.symbol AND sl.ts = sg.ts
-                   WHERE sg.date = $1`,
-                  [date]
-                ),
-                p.query(`SELECT DISTINCT symbol, strike FROM strike_growth WHERE date = $1`, [date]),
-                // MAIN (the hot lane) — read from the watchlist rather than the
-                // file so an owner-page roster edit shows up on the next poll.
-                p.query(`SELECT symbol FROM strike_growth_watchlist WHERE active AND hot`),
-                // ALL ex-0DTE from scanner_variants. A missing table (variants
-                // switched off) degrades to "no ALL column", never a 502.
-                p.query(
-                  `SELECT symbol, (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS t, expiries,
-                          ${aggCol} AS strike, ${aggCol}_gex AS gex
-                   FROM scanner_variants
-                   WHERE date = $1 AND expiry_scope = 'agg' AND basis = 'oivol'
-                   ORDER BY symbol, ts`,
-                  [date]
-                ).catch(() => ({ rows: [] })),
-              ]);
-
-              const hotSet = new Set(hotQ.rows.map((r) => r.symbol));
-              const strikesBySym = new Map();
-              for (const r of strikesQ.rows) {
-                if (!strikesBySym.has(r.symbol)) strikesBySym.set(r.symbol, []);
-                strikesBySym.get(r.symbol).push(Number(r.strike));
-              }
-              const segsBy = new Map(); // `${symbol}|${expiry}` -> [[t, strike], …]
-              for (const r of changesQ.rows) {
-                const k = `${r.symbol}|${r.expiry}`;
-                if (!segsBy.has(k)) segsBy.set(k, []);
-                segsBy.get(k).push([Number(r.t), Number(r.strike)]);
-              }
-              const latestBySym = new Map();
-              for (const r of latestQ.rows) {
-                if (!latestBySym.has(r.symbol)) latestBySym.set(r.symbol, []);
-                latestBySym.get(r.symbol).push(r);
-              }
-              // ALL ex-0DTE: run-length segs + the latest reading, per symbol.
-              const aggBy = new Map();
-              for (const r of aggQ.rows) {
-                const strike = r.strike == null ? null : Number(r.strike);
-                let a = aggBy.get(r.symbol);
-                if (!a) { a = { segs: [], last: null }; aggBy.set(r.symbol, a); }
-                const prev = a.segs[a.segs.length - 1];
-                if (strike != null && (!prev || prev[1] !== strike)) a.segs.push([Number(r.t), strike]);
-                a.last = { t: Number(r.t), strike, gex: r.gex == null ? 0 : Number(r.gex), n: Number(r.expiries) || null };
-              }
-
-              const score = (n) => (mode === 'pos' ? n : mode === 'neg' ? -n : Math.abs(n));
-              const qualifies = (c) =>
-                mode === 'pos' ? c.net > 0 && c.spot > 0 && c.strike > c.spot
-                  : mode === 'neg' ? c.net < 0 && c.spot > 0 && c.strike < c.spot
-                    : c.net !== 0;
-
-              const symbols = [];
-              for (const [symbol, cells] of latestBySym) {
-                const byExp = new Map();
-                let spot = 0;
-                let t = 0;
-                for (const c of cells) {
-                  const cs = Number(c.spot) || 0;
-                  spot = Math.max(spot, cs);
-                  t = Math.max(t, Number(c.t) || 0);
-                  const e = String(c.expiry);
-                  if (!byExp.has(e)) byExp.set(e, []);
-                  byExp.get(e).push({ strike: Number(c.strike), net: Number(c.net) || 0, spot: cs });
-                }
-                const expiries = Array.from(byExp.keys()).sort();
-                const walls = expiries.map((expiry) => {
-                  const ranked = byExp.get(expiry)
-                    .filter(qualifies)
-                    .sort((a, b) => score(b.net) - score(a.net) || a.strike - b.strike);
-                  const top = ranked[0] || null;
-                  const second = ranked[1] || null;
-                  const segs = (segsBy.get(`${symbol}|${expiry}`) || []).slice();
-                  const lastSeg = segs[segs.length - 1];
-                  if (top && (!lastSeg || lastSeg[1] !== top.strike)) segs.push([t, top.strike]);
-                  return {
-                    expiry,
-                    strike: top ? top.strike : null,
-                    net: top ? top.net : 0,
-                    next: second ? Math.abs(second.net) : 0,
-                    segs,
-                  };
-                });
-                const agg = aggBy.get(symbol);
-                symbols.push({
-                  symbol,
-                  hot: hotSet.has(symbol),
-                  t,
-                  spot,
-                  step: _sgStrikeStep(strikesBySym.get(symbol) || []),
-                  expiries,
-                  walls,
-                  all: agg && agg.last
-                    ? { state: 'ok', strike: agg.last.strike, net: agg.last.gex, next: 0, at: agg.last.t, n: agg.last.n, segs: agg.segs }
-                    : null,
-                });
-              }
-              symbols.sort((a, b) => (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
-              return { ok: true, date, stale: date !== today, mode, asOf: Date.now(), symbols };
-            });
-            sendJson(res, 200, payload);
+            const dQ = await p.query(`SELECT to_char(MAX(date),'YYYY-MM-DD') AS date FROM strike_growth WHERE date <= $1`, [asOf]);
+            const date = dQ.rows[0]?.date || null;
+            if (!date) { sendJson(res, 200, { ok: true, date: asOf, stale: false, mode, asOf: Date.now(), symbols: [] }); return; }
+            const st = _alState(date);
+            const pending = _alRefresh(p, st, today);
+            if (!st.ready) await Promise.race([pending, new Promise((r) => setTimeout(r, _AL_WAIT_MS))]);
+            if (!st.ready) {
+              sendJson(res, 200, {
+                ok: true, warming: true, date, stale: date !== today, mode, asOf: Date.now(), symbols: [],
+                error: st.error || undefined,
+              });
+              return;
+            }
+            sendJson(res, 200, { ..._alPayload(st, mode, today), refreshError: st.error || undefined });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;

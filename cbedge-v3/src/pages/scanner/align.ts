@@ -90,6 +90,10 @@ export interface AlignResponse {
   mode?: AlignMode
   asOf?: number
   symbols?: AlignSymbolRaw[]
+  /** The server is still building this session's history; poll again. */
+  warming?: boolean
+  /** The last background refresh failed; the payload is the previous build. */
+  refreshError?: string
 }
 
 export interface AlignSettings {

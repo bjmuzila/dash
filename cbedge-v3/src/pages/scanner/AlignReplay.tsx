@@ -258,7 +258,7 @@ export default function AlignReplay({
           </Panel>
 
           <Panel title="Walls now">
-            {!symRaw && <div className="text-xs" style={{ color: DIM }}>{board.loading ? 'loading…' : 'Not on the scanner roster.'}</div>}
+            {!symRaw && <div className="text-xs" style={{ color: DIM }}>{board.loading || board.data?.warming ? 'loading…' : 'Not on the scanner roster.'}</div>}
             {symRaw && (
               <div className="grid gap-x-3 gap-y-1 text-xs tabular" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto auto auto' }}>
                 <span style={{ color: DIM }}>EXPIRY</span>

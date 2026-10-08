@@ -6484,11 +6484,13 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   TAPE SCROLL (tape/TapeScroll.tsx; Brandon, 2026-10-07): the watchlist's Volts
-   scrolling along the top of the page, in the session stats strip's place.
+   VOLT WATCH (tape/TapeScroll.tsx; Brandon, 2026-10-07, "Tape scroll" until
+   2026-10-08): the watchlist's Volts along the top of the page, in the session
+   stats strip's place, TEN AT A TIME in ten even columns; every few seconds the
+   ten swap for the next ten with a short fade — nothing scrolls or slides.
    Numbers and captions mono (captions Paper Quiet, tracked .08em); Volt gold is
    the only colour on a chip, and only for NEAR / AT / a crossing — the Volt's
-   own word. The sort switch is Voltick's lit Volt Blue key.
+   own word. Its order is a Workspace menu row (.cb-wsm-value).
    ───────────────────────────────────────────────────────────────────────────── */
 .cb-tape {
   display: flex;
@@ -6515,8 +6517,7 @@
   border-right: 1px solid var(--color-line);
 }
 .cb-tape-ctl {
-  gap: 8px;
-  padding: 0 6px 0 12px;
+  padding: 0 6px 0 8px;
   border-left: 1px solid var(--color-line);
 }
 .cb-tape-cap {
@@ -6525,7 +6526,8 @@
   font-weight: 600;
   letter-spacing: 0.08em;
 }
-.cb-tape-n {
+.cb-tape-n,
+.cb-tape-pg {
   font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -6533,47 +6535,45 @@
 .cb-tape-n[data-k='at'] {
   color: var(--color-vt-volt);
 }
+.cb-tape-pg {
+  margin-left: 4px;
+  padding: 0 5px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  color: var(--color-faint);
+}
 .cb-tape-win {
   display: flex;
   flex: 1;
-  align-items: center;
   min-width: 0;
   overflow: hidden;
-  -webkit-mask-image: linear-gradient(90deg, black 0, black calc(100% - 24px), transparent 100%);
-  mask-image: linear-gradient(90deg, black 0, black calc(100% - 24px), transparent 100%);
 }
-.cb-tape-track {
-  display: flex;
-  flex: none;
-  width: max-content;
+/* one page: ten even columns across the line, faded in when it mounts */
+.cb-tape-page {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  min-width: 0;
+  animation: cb-tape-in 0.25s ease-out;
 }
-.cb-tape-track.is-run {
-  animation: cb-tape-run 60s linear infinite;
-}
-.cb-tape-win:hover .cb-tape-track,
-.cb-tape-win:focus-within .cb-tape-track {
-  animation-play-state: paused;
-}
-@keyframes cb-tape-run {
+@keyframes cb-tape-in {
   from {
-    transform: translateX(0);
+    opacity: 0;
   }
   to {
-    transform: translateX(-50%);
+    opacity: 1;
   }
-}
-.cb-tape-set {
-  display: flex;
-  flex: none;
-  align-items: center;
 }
 .cb-tape-chip {
   display: flex;
   box-sizing: border-box;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
   height: 30px;
-  padding: 0 14px;
+  padding: 0 8px;
+  overflow: hidden;
   border: 0;
   border-right: 1px solid var(--color-line);
   background: transparent;
@@ -6581,6 +6581,8 @@
   font: inherit;
   cursor: pointer;
   appearance: none;
+  /* a narrow column drops the points first, then tightens the pill */
+  container-type: inline-size;
 }
 .cb-tape-chip:hover {
   background: var(--vt-wash);
@@ -6609,6 +6611,17 @@
   font-weight: 800;
   text-align: center;
 }
+@container (max-width: 210px) {
+  .cb-tape-pts {
+    display: none;
+  }
+}
+@container (max-width: 150px) {
+  .cb-tape-pct {
+    min-width: 0;
+    padding: 1px 3px;
+  }
+}
 .cb-tape-chip[data-st='near'] .cb-tape-pct {
   border-color: color-mix(in srgb, var(--color-vt-volt) 45%, transparent);
   color: var(--color-vt-volt);
@@ -6632,39 +6645,12 @@
   }
 }
 .cb-tape-empty {
+  grid-column: 1 / -1;
+  align-self: center;
   padding: 0 14px;
   color: var(--color-faint);
   font-family: var(--font-sans);
   font-size: var(--text-xs);
-}
-.cb-tape-seg {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--vt-wash);
-}
-.cb-tape-seg > button {
-  padding: 1px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--color-faint);
-  font: inherit;
-  font-size: var(--text-2xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-  appearance: none;
-}
-.cb-tape-seg > button:hover {
-  color: var(--color-fg);
-}
-.cb-tape-seg > button[aria-pressed='true'] {
-  background: var(--color-vt-accent);
-  box-shadow: var(--vt-lit-glow);
-  color: var(--color-vt-paper);
 }
 .cb-tape-x {
   padding: 0 4px;
@@ -6676,17 +6662,25 @@
   appearance: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .cb-tape-track.is-run {
+  .cb-tape-page {
     animation: none;
-  }
-  .cb-tape-copy {
-    display: none;
-  }
-  .cb-tape-win {
-    overflow-x: auto;
   }
   .cb-tape-chip[data-x='1'] {
     animation: none;
     box-shadow: inset 0 0 0 1px var(--color-vt-volt);
   }
+}
+/* the Workspace menu row that flips a value in place (Volt watch order: Nearest / A–Z) */
+.cb-wsm .cb-wsm-value {
+  padding: 0 6px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--vt-wash);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 15px;
+  text-transform: uppercase;
 }

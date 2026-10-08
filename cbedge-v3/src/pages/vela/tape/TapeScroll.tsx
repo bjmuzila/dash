@@ -22,7 +22,7 @@
 // NEAR_PCT) in Volt gold; AT (within AT_PCT) a filled gold pill. A ticker whose
 // price went through its Volt wears a pulsing gold ring for CROSS_MS. No Volt
 // (VIX, a name the chain does not cover) says so and sorts last.
-// Hover a chip: the stepping pauses, and its tooltip lists all four levels.
+// Hover a chip: the paging pauses, and its tooltip lists all four levels.
 // Click: the active chart switches to that ticker.
 //
 // ── Order (setups.ts tapeSort; Workspace → Volt watch order) ─────────────────
@@ -38,15 +38,17 @@
 // cache), READS_AT_ONCE at a time, every LEVELS_MS, and again when the GEX
 // switch moves. At most MAX_TAPE tickers, the list's first.
 //
-// ── Motion: STEP ─────────────────────────────────────────────────────────────
-// Every STEP_MS the row slides left by its first chip (SLIDE_MS), and that chip
-// goes to the end — direction C's Step (Brandon, 2026-10-08: "make it step
-// motion, I like that better"). Only when the chips are wider than the line; a
-// short list just sits there. Paused while the pointer or focus is on it, or the
-// tab is hidden. Reduced motion: the chip moves to the end without the slide.
+// ── Motion: PAGES OF TEN ─────────────────────────────────────────────────────
+// Ten chips at a time, in ten even columns across the line; every PAGE_MS the
+// whole ten swap for the next ten (a short fade, nothing slides). Brandon,
+// 2026-10-08: "it should show 10 at a time, then the next 10 appear. I don't
+// want scrolling on it" — replacing the one-chip step of that morning. The head
+// shows which page (2/4). Ten or fewer tickers: one page, nothing changes. Paused
+// while the pointer or focus is on it, or the tab is hidden. A narrow chip drops
+// its points first (the % already says how far), via a container query.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type TransitionEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
 import { onGexBasis } from '@/pages/vela/gexBasis'
@@ -65,10 +67,10 @@ const AT_PCT = 0.15
 const NEAR_PCT = 0.35
 /** How long a crossing keeps its ring. */
 const CROSS_MS = 5 * 60_000
-/** One step every… */
-const STEP_MS = 2600
-/** …sliding this long. */
-const SLIDE_MS = 450
+/** Chips on the line at once. */
+const PAGE = 10
+/** How long each ten stays up. */
+const PAGE_MS = 8000
 
 interface Lv {
   volt: number | null
@@ -260,61 +262,24 @@ export default function TapeScroll({ ws, onHide }: { ws: VelaWorkspace; onHide: 
 
   const open = (s: string) => ws.active.setSymbol(`${PROVIDER_NAME}:${s}`)
 
-  // ── step motion (see the header) ──
-  const winRef = useRef<HTMLDivElement>(null)
-  const trackRef = useRef<HTMLDivElement>(null)
+  // ── pages of ten (see the header) ──
   const paused = useRef(false)
-  /** Every chip fits on the line: nothing steps. */
-  const [fits, setFits] = useState(true)
-  /** How many chips have stepped off the front (and gone to the end). */
-  const [off, setOff] = useState(0)
-  useLayoutEffect(() => {
-    const win = winRef.current
-    const track = trackRef.current
-    if (!win || !track) return
-    const measure = () => setFits(track.scrollWidth <= win.clientWidth + 1)
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(win)
-    ro.observe(track)
-    return () => ro.disconnect()
-  }, [])
+  const [page, setPage] = useState(0)
+  const pages = Math.max(1, Math.ceil(chips.length / PAGE))
+  const p = page % pages
+  const shown = chips.slice(p * PAGE, p * PAGE + PAGE)
 
-  // a new order (a round of reads, the order switch, the list) starts from its first chip
+  // a new order (a round of reads, the order switch, the list) starts from page one
   const orderKey = order.join(',')
-  useEffect(() => setOff(0), [orderKey])
+  useEffect(() => setPage(0), [orderKey])
 
-  const n = chips.length
-  const k = n && !fits ? off % n : 0
-  const row = k ? chips.slice(k).concat(chips.slice(0, k)) : chips
-
-  // each step: slide left by the first chip; when the slide ends, that chip goes to the end
   useEffect(() => {
-    if (fits || n < 2) return
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    if (pages < 2) return
     const t = setInterval(() => {
-      const track = trackRef.current
-      const first = track?.firstElementChild as HTMLElement | null | undefined
-      if (!track || !first || paused.current || document.hidden) return
-      if (reduce) {
-        setOff((o) => o + 1)
-        return
-      }
-      track.style.transition = `transform ${SLIDE_MS}ms ease`
-      track.style.transform = `translateX(${-first.offsetWidth}px)`
-    }, STEP_MS)
+      if (!paused.current && !document.hidden) setPage((n) => (n + 1) % pages)
+    }, PAGE_MS)
     return () => clearInterval(t)
-  }, [fits, n])
-  const onSlid = (e: TransitionEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget && e.propertyName === 'transform') setOff((o) => o + 1)
-  }
-  // the rotated row is in the DOM: put the track back, before it paints
-  useLayoutEffect(() => {
-    const track = trackRef.current
-    if (!track) return
-    track.style.transition = 'none'
-    track.style.transform = 'none'
-  }, [off, fits])
+  }, [pages])
   const pause = (on: boolean) => () => {
     paused.current = on
   }
@@ -329,12 +294,18 @@ export default function TapeScroll({ ws, onHide }: { ws: VelaWorkspace; onHide: 
         </span>
         <span className="cb-tape-cap">·</span>
         <span className="cb-tape-n">{nearN} NEAR</span>
+        {pages > 1 && (
+          <span className="cb-tape-pg" title={`Ten at a time: page ${p + 1} of ${pages}`}>
+            {p + 1}/{pages}
+          </span>
+        )}
       </div>
 
-      <div ref={winRef} className="cb-tape-win" onMouseEnter={pause(true)} onMouseLeave={pause(false)} onFocus={pause(true)} onBlur={pause(false)}>
-        <div ref={trackRef} className="cb-tape-track" onTransitionEnd={onSlid}>
-          {row.length ? (
-            row.map((c) => <Chip key={c.s} c={c} onOpen={open} />)
+      <div className="cb-tape-win" onMouseEnter={pause(true)} onMouseLeave={pause(false)} onFocus={pause(true)} onBlur={pause(false)}>
+        {/* keyed by page: each new ten mounts fresh and fades in */}
+        <div key={p} className="cb-tape-page">
+          {shown.length ? (
+            shown.map((c) => <Chip key={c.s} c={c} onOpen={open} />)
           ) : (
             <span className="cb-tape-empty">Add tickers to the watchlist to fill Volt watch</span>
           )}
