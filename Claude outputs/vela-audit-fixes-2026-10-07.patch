@@ -1,0 +1,1788 @@
+From b5eb06b877386f2db7dd83e64c79c166cc34fa54 Mon Sep 17 00:00:00 2001
+From: Brandon <bjmuzila@gmail.com>
+Date: Wed, 7 Oct 2026 18:57:07 -0400
+Subject: [PATCH] Vela audit fixes (2026-10-07): 1D/1W wrong ticker, payload
+ sizes, loading states
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- /api/vela/history implemented (explicit index/futures map, daily adapter);
+  /api/lse/resolve exact-only, indexes never name-matched; client skips the
+  vault for indexes and drops long history that does not price like the tape
+- /api/chains: stale-while-revalidate cache for live=0, opt-in front=1/slim=1
+- option-strike-gex-history: opt-in compact fmt=c (~1/15 the bytes)
+- /api/page-preset?pages= batch; Vela reads its 10 pages in one request
+- Scripts editor + Strategy Tester/Alerts load on first open
+- etf-candles: days= counts sessions; post-close flat bars not written/read
+- Legend "Loading levels…" + empty-read retries; D/W/M load timeouts + toast
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01WSoDhrrVGZ3NXMxC1XoXEG
+---
+ cbedge-v3/src/board/chainGex.ts               |  10 +-
+ cbedge-v3/src/board/gexCandles/gexHistory.ts  |  57 ++-
+ cbedge-v3/src/pages/Vela.tsx                  |   6 +-
+ cbedge-v3/src/pages/vela/cbedgeProvider.ts    | 124 ++++++-
+ cbedge-v3/src/pages/vela/indicatorPicker.ts   |   5 +-
+ cbedge-v3/src/pages/vela/legend/legendCard.ts |  43 ++-
+ .../src/pages/vela/levels/levelAlerts.ts      |  21 +-
+ cbedge-v3/src/pages/vela/loadWatchdog.ts      |  81 +++++
+ cbedge-v3/src/pages/vela/script/engine.ts     |   2 +-
+ cbedge-v3/src/pages/vela/script/ids.ts        |   6 +
+ cbedge-v3/src/pages/vela/script/library.ts    |  56 ++-
+ cbedge-v3/src/pages/vela/script/panel.ts      |  77 +----
+ cbedge-v3/src/pages/vela/script/register.ts   | 193 +++++++++++
+ .../src/pages/vela/script/testerPanels.ts     |  52 +--
+ cbedge-v3/src/pages/vela/studies/ladder.ts    |   4 +-
+ cbedge-v3/src/pages/vela/workspaceMenu.ts     |   2 +-
+ server-v2/_lib-lse.cjs                        |  27 ++
+ server-v2/api-router.js                       | 327 +++++++++++++++++-
+ server-v2/etf-candle-recorder.js              |  92 ++++-
+ server-v2/tt-snapshot.js                      |  10 +-
+ 20 files changed, 1012 insertions(+), 183 deletions(-)
+ create mode 100644 cbedge-v3/src/pages/vela/loadWatchdog.ts
+ create mode 100644 cbedge-v3/src/pages/vela/script/ids.ts
+ create mode 100644 cbedge-v3/src/pages/vela/script/register.ts
+
+diff --git a/cbedge-v3/src/board/chainGex.ts b/cbedge-v3/src/board/chainGex.ts
+index 31e6253..3afeeaf 100644
+--- a/cbedge-v3/src/board/chainGex.ts
++++ b/cbedge-v3/src/board/chainGex.ts
+@@ -72,7 +72,15 @@ export const EMPTY_CHAIN_GEX: ChainGex = {
+  * path instead, so the flag costs nothing and keeps one rule for one route.
+  */
+ export function chainGexUrl(ticker: string): string {
+-  return `/api/chains?ticker=${encodeURIComponent(ticker)}&range=all&live=0`
++  // front=1&slim=1 (server-v2 /api/chains): only the nearest expiry, each leg cut
++  // to the five fields parseChain() reads. chainToGex() reads nothing else, so
++  // the numbers are unchanged; the SPX payload drops from ~465 KB to a fraction.
++  return `/api/chains?ticker=${encodeURIComponent(ticker)}&range=all&live=0&front=1&slim=1`
++}
++
++/** Every listed expiry (the GEX Rail's all-expirations mode), legs slimmed the same way. */
++export function chainAllUrl(ticker: string): string {
++  return `/api/chains?ticker=${encodeURIComponent(ticker)}&range=all&live=0&slim=1`
+ }
+ 
+ export function chainToGex(json: unknown): ChainGex {
+diff --git a/cbedge-v3/src/board/gexCandles/gexHistory.ts b/cbedge-v3/src/board/gexCandles/gexHistory.ts
+index 90f6c12..3ea26d2 100644
+--- a/cbedge-v3/src/board/gexCandles/gexHistory.ts
++++ b/cbedge-v3/src/board/gexCandles/gexHistory.ts
+@@ -67,7 +67,8 @@ export function gexHistoryUrl(gexSymbol: string, expiry: string, minutes: number
+     `&minutes=${minutes}` +
+     `&expiry=${encodeURIComponent(expiry)}` +
+     `&symbol=${encodeURIComponent(gexSymbol)}` +
+-    (top > 0 ? `&top=${top}` : '')
++    (top > 0 ? `&top=${top}` : '') +
++    `&fmt=c`
+   )
+ }
+ 
+@@ -102,12 +103,62 @@ export function gexHistoryDayUrl(gexSymbol: string, expiry: string, date: string
+     `&expiry=${encodeURIComponent(expiry)}` +
+     (fallback ? `&expiryFallback=1` : '') +
+     `&symbol=${encodeURIComponent(gexSymbol)}` +
+-    (top > 0 ? `&top=${top}` : '')
++    (top > 0 ? `&top=${top}` : '') +
++    `&fmt=c`
+   )
+ }
+ 
++/**
++ * `fmt=c` — the compact encoding the server sends when asked (server-v2
++ * api-router.js compactHeatmap; ~1/15 the bytes of the object form): a strike
++ * dictionary `k`, then one array per column [dtMin, spot, u, ks, q] where a
++ * value is q·u, `ks` / `q` = 0 repeat the previous column, and u = -1 means q
++ * holds deltas from the previous column's q. `last` is the newest column again
++ * at full precision and replaces the quantized copy, so the live rail and the
++ * level picks read exact numbers.
++ */
++function decodeCompact(j: { k?: unknown; t0?: unknown; c?: unknown; last?: unknown }): GexColumn[] {
++  const k = Array.isArray(j.k) ? (j.k as unknown[]).map(num) : []
++  const rows = Array.isArray(j.c) ? (j.c as unknown[]) : []
++  const out: GexColumn[] = []
++  let t = num(j.t0)
++  let ks: number[] = []
++  let u = 1
++  let q: number[] = []
++  for (const r of rows) {
++    if (!Array.isArray(r)) continue
++    const [dt, spot, cu, cks, cq] = r as unknown[]
++    t += num(dt) * 60_000
++    if (Array.isArray(cks)) ks = (cks as unknown[]).map(num)
++    if (num(cu) === -1 && Array.isArray(cq)) {
++      q = (cq as unknown[]).map((d, i) => (q[i] ?? 0) + num(d))
++    } else if (Array.isArray(cq)) {
++      u = num(cu) || 1
++      q = (cq as unknown[]).map(num)
++    }
++    const cells: GexCell[] = []
++    for (let i = 0; i < ks.length; i++) {
++      const strike = k[ks[i]!] ?? 0
++      if (!strike) continue
++      cells.push({ strike, net: (q[2 * i] ?? 0) * u, netVol: (q[2 * i + 1] ?? 0) * u })
++    }
++    if (t && cells.length) out.push({ slotTs: t, cells, spot: num(spot) })
++  }
++  const last = j.last as RawColumn | null | undefined
++  if (last && out.length) {
++    const exact = parseObjectColumns([last])[0]
++    if (exact && exact.slotTs === out[out.length - 1]!.slotTs) out[out.length - 1] = exact
++  }
++  return out
++}
++
+ export function parseGexHistory(json: unknown): GexColumn[] {
+-  const cols = (json as { columns?: unknown })?.columns
++  const j = json as { fmt?: unknown; columns?: unknown } | null
++  if (j?.fmt === 'c') return decodeCompact(j as Parameters<typeof decodeCompact>[0])
++  return parseObjectColumns(j?.columns)
++}
++
++function parseObjectColumns(cols: unknown): GexColumn[] {
+   if (!Array.isArray(cols)) return []
+   const out: GexColumn[] = []
+   for (const raw of cols as RawColumn[]) {
+diff --git a/cbedge-v3/src/pages/Vela.tsx b/cbedge-v3/src/pages/Vela.tsx
+index 8bd739d..4d7f26e 100644
+--- a/cbedge-v3/src/pages/Vela.tsx
++++ b/cbedge-v3/src/pages/Vela.tsx
+@@ -16,7 +16,7 @@ import { registerWallsOpacity } from '@/pages/vela/wallsOpacity'
+ import { registerLastPriceColor } from '@/pages/vela/lastPriceColor'
+ import { PATH_TYPE, registerVtPath } from '@/pages/vela/vtPath/vtPathIndicator'
+ import { CBSCRIPT, CbScriptEngine, setAlertGate } from '@/pages/vela/script/engine'
+-import { registerScripts } from '@/pages/vela/script/panel'
++import { registerScripts } from '@/pages/vela/script/register'
+ import { EVENTS_TYPE, registerStudies } from '@/pages/vela/studies'
+ import { bindEventsHost } from '@/pages/vela/studies/eventsHost'
+ import { registerIndicatorPicker } from '@/pages/vela/indicatorPicker'
+@@ -36,6 +36,7 @@ import { ReplayHost } from '@/pages/vela/replay/ReplayHost'
+ import { TIMEFRAMES } from '@/pages/vela/timeframes'
+ import '@/pages/vela/vela.css'
+ import { bindTelemetry } from '@/pages/vela/telemetry'
++import { bindLoadWatchdog } from '@/pages/vela/loadWatchdog'
+ 
+ // ─────────────────────────────────────────────────────────────────────────────
+ // /vela — VELA, LuxAlgo's open-source chart workspace, on CB Edge's own tape.
+@@ -530,6 +531,8 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
+     const unbindIndicators = bindIndicatorsWorkspace(ws)
+     // usage for owner.cbedge.net → Vela Usage: who is on, tickers, indicators, actions (vela/telemetry.ts)
+     const unbindTelemetry = bindTelemetry(ws, { phone: onPhone })
++    // a D / W / M load that fails or overruns says so instead of spinning (vela/loadWatchdog.ts)
++    const unbindWatchdog = bindLoadWatchdog(ws)
+     // every indicator's settings dialog: Defaults ▾ (reset, save as my default, saved
+     // settings by name) in place of Vela's Reset defaults (vela/indicatorPresets.ts)
+     const unbindPresets = bindIndicatorPresets(ws)
+@@ -640,6 +643,7 @@ export default function Vela({ phone = false, replayOnOpen = false }: VelaProps)
+       unbindControls()
+       unbindIndicators()
+       unbindTelemetry()
++      unbindWatchdog()
+       unbindPresets()
+       unbindEvents()
+       unbindReplay()
+diff --git a/cbedge-v3/src/pages/vela/cbedgeProvider.ts b/cbedge-v3/src/pages/vela/cbedgeProvider.ts
+index 54513e4..052bbe5 100644
+--- a/cbedge-v3/src/pages/vela/cbedgeProvider.ts
++++ b/cbedge-v3/src/pages/vela/cbedgeProvider.ts
+@@ -90,7 +90,7 @@ export { PROVIDER_NAME }
+ const MIN_MS = 60_000
+ const DAY_MS = 86_400_000
+ 
+-/** History windows, in calendar days, per native bucket. The ETF route clamps to 30. */
++/** History windows, in SESSIONS, per native bucket (the ETF route counts sessions since 2026-10-07; clamps to 30). */
+ const DAYS_1M = 5
+ const DAYS_5M = 30
+ /** The ETF route defaults `limit` to 5000 rows — 30 days of 5m ETH is ~5,800. */
+@@ -429,6 +429,39 @@ async function loadAggregated(
+ // RTH-exact, and the forming bar is live).
+ 
+ const LONG_STALE_MS = 15 * 60_000
++/**
++ * How long one long-history source may take before D / W / M stop waiting for it
++ * and draw the tape's own bars (2026-10-07 audit: the 1D spinner hung). A late
++ * answer still lands in query()'s cache, so the next load of that chart has it.
++ */
++const LONG_SOURCE_TIMEOUT_MS = 8_000
++/** A coarse load that has drawn nothing by now is failed, not left spinning (loadWatchdog.ts says so). */
++export const COARSE_LOAD_TIMEOUT_MS = 20_000
++
++/** `p`, or `fallback` once `ms` has passed — whichever comes first. */
++function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
++  return new Promise<T>((resolve) => {
++    const t = setTimeout(() => resolve(fallback), ms)
++    p.then(
++      (v) => {
++        clearTimeout(t)
++        resolve(v)
++      },
++      () => {
++        clearTimeout(t)
++        resolve(fallback)
++      },
++    )
++  })
++}
++
++/** Thrown when a coarse timeframe's load runs past COARSE_LOAD_TIMEOUT_MS. */
++export class LoadTimeoutError extends Error {
++  constructor(what: string) {
++    super(`${what} timed out`)
++    this.name = 'LoadTimeoutError'
++  }
++}
+ type Coarse = 'day' | 'week' | 'month'
+ const YF_INTERVAL: Record<Coarse, string> = { day: '1d', week: '1wk', month: '1mo' }
+ const LSE_TF: Record<Coarse, string> = { day: '1d', week: '1w', month: '1mo' }
+@@ -486,14 +519,20 @@ function parseDxHistory(json: unknown): Bar[] {
+   return out.sort((a, b) => a.t - b.t)
+ }
+ 
+-/** The symbol the LSE vault knows this ticker by (its own resolver), cached for the page. */
+-const lseNames = new Map<string, Promise<string>>()
+-function lseSymbol(key: string): Promise<string> {
++/**
++ * The vault's symbol for this ticker, or null when the vault has no EXACT match.
++ * The resolver is exact-only (server-v2 /api/lse/resolve): its old name search
++ * turned SPX into SPXC and VIX into ENVX, and those stocks' years were spliced
++ * under the index bars. A miss is "no vault history", never "use the key anyway".
++ * Cached for the page.
++ */
++const lseNames = new Map<string, Promise<string | null>>()
++function lseSymbol(key: string): Promise<string | null> {
+   let p = lseNames.get(key)
+   if (!p) {
+     p = query<{ symbol?: unknown }>(`/api/lse/resolve?q=${encodeURIComponent(key)}`, { staleMs: 24 * 3_600_000 })
+-      .then((j) => (typeof j?.symbol === 'string' && j.symbol ? j.symbol : key))
+-      .catch(() => key)
++      .then((j) => (typeof j?.symbol === 'string' && j.symbol.toUpperCase() === key.toUpperCase() ? j.symbol : null))
++      .catch(() => null)
+     lseNames.set(key, p)
+   }
+   return p
+@@ -502,7 +541,11 @@ function lseSymbol(key: string): Promise<string> {
+ const ymdUtc = (t: number) => new Date(t).toISOString().slice(0, 10)
+ 
+ async function lseBars(sym: ResolvedSym, timeframe: string, start: number, end: number | null, limit = 5000): Promise<Bar[]> {
++  // An index never goes to the vault: there is no exact index symbol there, and
++  // any non-exact answer is some other company (see lseSymbol).
++  if (!sym.fut && sym.kind === 'index') return []
+   const name = sym.fut ?? (await lseSymbol(sym.key))
++  if (!name) return []
+   const ds = sym.fut ? '&dataset=futures' : ''
+   const endQ = end != null ? `&end=${ymdUtc(end + DAY_MS)}` : ''
+   const url = `/api/lse/candles?symbol=${encodeURIComponent(name)}&timeframe=${timeframe}&start=${ymdUtc(start)}${endQ}&limit=${limit}&order=desc${ds}`
+@@ -520,20 +563,28 @@ async function longHistory(sym: ResolvedSym, kind: Coarse): Promise<Bar[]> {
+   const key = sym.fut ?? sym.key
+   const tryOnce = async (id: string, get: () => Promise<Bar[]>): Promise<Bar[]> => {
+     if (longMiss.has(id)) return []
+-    try {
+-      const bars = await get()
+-      if (!bars.length) longMiss.add(id)
+-      return bars
+-    } catch {
+-      longMiss.add(id)
+-      return []
+-    }
++    const run = (async () => {
++      try {
++        const bars = await get()
++        if (!bars.length) longMiss.add(id)
++        return bars
++      } catch {
++        longMiss.add(id)
++        return [] as Bar[]
++      }
++    })()
++    // a source that does not answer in time is skipped THIS load (not marked a miss:
++    // its late answer is cached by query() for the next one)
++    return (await within(run, LONG_SOURCE_TIMEOUT_MS, null as Bar[] | null)) ?? []
+   }
+   const yf = await tryOnce(`yf|${key}|${kind}`, async () =>
+     parseVelaHistory(await query<unknown>(`/api/vela/history?symbol=${encodeURIComponent(key)}&interval=${YF_INTERVAL[kind]}`, { staleMs: LONG_STALE_MS })),
+   )
+   if (yf.length) return yf
+-  if (await isOwner()) {
++  // Indexes: /api/vela/history is the only long source (explicitly mapped
++  // server-side). Without it, D / W fall back to bars built from the tape.
++  if (sym.kind === 'index' && kind === 'day') return []
++  if (sym.kind !== 'index' && (await isOwner())) {
+     const years = kind === 'day' ? 10 : 25
+     const lse = await tryOnce(`lse|${key}|${kind}`, () => lseBars(sym, LSE_TF[kind], Date.now() - years * 365 * DAY_MS, null))
+     if (lse.length) return lse
+@@ -544,11 +595,38 @@ async function longHistory(sym: ResolvedSym, kind: Coarse): Promise<Bar[]> {
+   return tryOnce(`dx|${key}`, async () => parseDxHistory(await query<unknown>(`/api/dxlink/candles?symbol=${encodeURIComponent(dxSym)}`, { staleMs: LONG_STALE_MS })))
+ }
+ 
++/**
++ * Does the long source price the same instrument as the tape? Compared on a
++ * bucket both hold (closes within 25%), else the newest older bar against the
++ * tape's first open (within 2x). A wrong-ticker splice — SPX Technologies at
++ * ~$170 under SPX at ~6,700, Enovix at ~$2.56 under VIX — fails by orders of
++ * magnitude, so the history is dropped instead of drawn. A legitimate source
++ * agrees with the recorder to a fraction of a percent.
++ */
++function sameInstrument(recent: OHLCV[], long: OHLCV[]): boolean {
++  const first = recent[0]
++  if (!first) return true
++  const byTime = new Map(long.map((b) => [b.time, b]))
++  for (const r of recent.slice(0, 5)) {
++    const l = byTime.get(r.time)
++    if (l && r.close > 0 && l.close > 0) return Math.abs(l.close / r.close - 1) <= 0.25
++  }
++  const prev = [...long].reverse().find((b) => b.time < first.time)
++  if (!prev || !(prev.close > 0) || !(first.open > 0)) return true
++  const ratio = prev.close / first.open
++  return ratio >= 0.5 && ratio <= 2
++}
++
+ /** The tape's buckets, with the long source's older buckets in front of them. */
+ function withLongHistory(recent: OHLCV[], long: Bar[], bucket: (t: number) => number): OHLCV[] {
+   if (!long.length) return recent
++  const rolled = aggregate(long, bucket)
++  if (!sameInstrument(recent, rolled)) {
++    console.warn('[vela] long history does not match the tape (wrong instrument?) — showing the tape only')
++    return recent
++  }
+   const cut = recent[0]?.time ?? Infinity
+-  const older = aggregate(long, bucket).filter((b) => b.time < cut)
++  const older = rolled.filter((b) => b.time < cut)
+   return older.length ? [...older, ...recent] : recent
+ }
+ 
+@@ -821,7 +899,19 @@ export class CbEdgeProvider implements DataProvider {
+ 
+   async getBars(ticker: string, timeframe: string, range: BarRange): Promise<OHLCV[]> {
+     const sym = resolveSym(ticker)
+-    let bars = await loadAggregated(sym, timeframe, range.session)
++    const coarse = parseTf(timeframe).kind !== 'min'
++    // D / W / M: never an endless spinner. Past the limit the load fails, and
++    // loadWatchdog.ts puts the reason on screen.
++    let bars = coarse
++      ? await within(
++          loadAggregated(sym, timeframe, range.session).then((b) => b as OHLCV[] | null),
++          COARSE_LOAD_TIMEOUT_MS,
++          null,
++        ).then((b) => {
++          if (b === null) throw new LoadTimeoutError(`${sym.key} ${timeframe} bars`)
++          return b
++        })
++      : await loadAggregated(sym, timeframe, range.session)
+     // The owner's futures go on into the vault where the tape runs out: a backward
+     // page older than the tape, or a depth (`limit`) the tape cannot fill
+     const oldest = bars[0]?.time
+diff --git a/cbedge-v3/src/pages/vela/indicatorPicker.ts b/cbedge-v3/src/pages/vela/indicatorPicker.ts
+index 97e5fa8..3bfa94f 100644
+--- a/cbedge-v3/src/pages/vela/indicatorPicker.ts
++++ b/cbedge-v3/src/pages/vela/indicatorPicker.ts
+@@ -45,7 +45,6 @@ import { CBSCRIPT } from './script/engine'
+ import { instanceIdFor, libIdOf, loadLibrary } from './script/library'
+ import { applyDefaultOnAdd } from './indicatorPresets'
+ import { IS_STRATEGY, READY_STRATEGIES } from './script/strategies'
+-import { testStrategy } from './script/testerPanels'
+ import { WALLS_TYPE } from './wallsIndicator'
+ import { PATH_TYPE, RIBBON_TYPE } from './vtPath/vtPathIndicator'
+ import { JOURNAL_TYPE } from './studies'
+@@ -338,7 +337,9 @@ function openPicker(ctx: WidgetContext): void {
+     if (r.strategy && r.libId && r.source != null) {
+       // a strategy goes on the chart and the tester opens on it
+       dlg.hide()
+-      testStrategy(ctx, { id: r.libId, name: r.name, source: r.source })
++      // the tester's code loads on demand (script/register.ts) — import it here too
++      const s = { id: r.libId, name: r.name, source: r.source }
++      void import('./script/testerPanels').then((m) => m.testStrategy(ctx, s))
+       return 'tester'
+     }
+     if (r.kind === 'script' && r.libId && r.source != null) {
+diff --git a/cbedge-v3/src/pages/vela/legend/legendCard.ts b/cbedge-v3/src/pages/vela/legend/legendCard.ts
+index d21ae80..1ddcd1b 100644
+--- a/cbedge-v3/src/pages/vela/legend/legendCard.ts
++++ b/cbedge-v3/src/pages/vela/legend/legendCard.ts
+@@ -86,6 +86,8 @@ const PREFS_KEY = 'cb-v3-vela-legend'
+ const FOLD_BELOW = 520
+ /** The live chain read behind Flip, re-asked this often while the page is visible. */
+ const CHAIN_MS = 60_000
++/** After an empty levels read, re-read this soon, then this, then fall back to CHAIN_MS. */
++const EMPTY_RETRIES_MS = [5_000, 15_000, 30_000] as const
+ 
+ const LEVELS: ReadonlyArray<{ key: MarkKey; name: string }> = [
+   { key: 'volt', name: 'Volt' },
+@@ -251,6 +253,11 @@ class Card {
+   private chain: { flip: number | null; volt: number | null; coil: number | null; reversal: number | null; price: number | null } | null = null
+   private price: number | null = null
+   private chainTimer: ReturnType<typeof setInterval> | null = null
++  /** The first levels read for this symbol is still out: the row says "Loading levels…". */
++  private chainLoading = false
++  /** Quick re-reads after an empty answer (EMPTY_RETRIES_MS), before the CHAIN_MS cadence. */
++  private emptyRetry: ReturnType<typeof setTimeout> | null = null
++  private emptyReads = 0
+   private frame = 0
+   private rebuildPending = false
+   private ro: ResizeObserver | null = null
+@@ -350,6 +357,10 @@ class Card {
+     this.sym = sym
+     this.chain = null
+     this.price = null
++    this.emptyReads = 0
++    if (this.emptyRetry) clearTimeout(this.emptyRetry)
++    this.emptyRetry = null
++    this.chainLoading = !!sym
+     this.readChain(false)
+     if (this.chainTimer) clearInterval(this.chainTimer)
+     this.chainTimer = setInterval(() => {
+@@ -366,9 +377,31 @@ class Card {
+         if (sym !== this.sym) return
+         const at = (k: string) => r.levels.find((l) => l.key === k)?.price ?? null
+         this.chain = { flip: at('flip'), volt: at('volt'), coil: at('coil'), reversal: at('reversal'), price: r.price }
+-        this.schedule(false)
++        this.afterRead()
+       })
+-      .catch(() => {})
++      .catch(() => {
++        if (sym === this.sym) this.afterRead()
++      })
++  }
++
++  /**
++   * A read landed. Nothing in it: ask again soon (the walls and the chain land a
++   * few seconds apart on a cold page) rather than leave "No levels" up for a
++   * whole CHAIN_MS.
++   */
++  private afterRead(): void {
++    this.chainLoading = false
++    const c = this.chain
++    const empty = !c || (c.flip == null && c.volt == null && c.coil == null && c.reversal == null)
++    if (empty && this.emptyReads < EMPTY_RETRIES_MS.length && !this.emptyRetry) {
++      const wait = EMPTY_RETRIES_MS[this.emptyReads++]!
++      this.emptyRetry = setTimeout(() => {
++        this.emptyRetry = null
++        if (!this.doc.hidden) this.readChain(true)
++      }, wait)
++    }
++    if (!empty) this.emptyReads = 0
++    this.schedule(false)
+   }
+ 
+   /** Into the plot, where Vela's price legend sits (it is hidden on the desktop). */
+@@ -618,7 +651,7 @@ class Card {
+     const d = this.doc
+     const px = this.price ?? this.chain?.price ?? null
+     const spec = LEVELS.map((L) => ({ L, v: this.levelOn(L) ? (this.chain?.[L.key] ?? null) : null }))
+-    const sig = `${spec.map((x) => x.v).join('|')}|${prefs.dist ? (px ?? '') : ''}|${this.sym}`
++    const sig = `${spec.map((x) => x.v).join('|')}|${prefs.dist ? (px ?? '') : ''}|${this.sym}|${this.chainLoading ? 'L' : ''}`
+     if (sig === this.levelSig) return
+     this.levelSig = sig
+     // one level per row: when any level has cents, all show two places, so the column lines up
+@@ -640,7 +673,8 @@ class Card {
+       if (prefs.dist && dist != null) it.append(el(d, 'span', 'cb-lc-dd', fmtDist(dist)))
+       items.push(it)
+     }
+-    if (!items.length) items.push(el(d, 'span', 'cb-lc-lvnone', this.sym ? 'No levels for this symbol yet' : ''))
++    // still reading (walls ~1.8 s on a cold page): say so, not "No levels"
++    if (!items.length) items.push(el(d, 'span', 'cb-lc-lvnone', !this.sym ? '' : this.chainLoading ? 'Loading levels…' : 'No levels for this symbol yet'))
+     this.lvs.replaceChildren(...items)
+   }
+ 
+@@ -884,6 +918,7 @@ class Card {
+     if (pop?.owner === this) closePop()
+     if (this.frame) cancelAnimationFrame(this.frame)
+     if (this.chainTimer) clearInterval(this.chainTimer)
++    if (this.emptyRetry) clearTimeout(this.emptyRetry)
+     this.ro?.disconnect()
+     this.statusMo?.disconnect()
+     for (const off of this.offChart) off()
+diff --git a/cbedge-v3/src/pages/vela/levels/levelAlerts.ts b/cbedge-v3/src/pages/vela/levels/levelAlerts.ts
+index 9eae2ca..d0d1375 100644
+--- a/cbedge-v3/src/pages/vela/levels/levelAlerts.ts
++++ b/cbedge-v3/src/pages/vela/levels/levelAlerts.ts
+@@ -124,7 +124,10 @@ interface LevelRead {
+   levels: Level[]
+   price: number | null
+ }
+-const reads = new Map<string, { at: number; p: Promise<LevelRead> }>()
++const reads = new Map<string, { at: number; p: Promise<LevelRead>; empty?: boolean }>()
++/** A read that came back with none of the GEX levels is re-tried after this, not held for 50 s. */
++const EMPTY_RETRY_MS = 5_000
++const GEX_KEYS = new Set(['volt', 'coil', 'reversal', 'flip'])
+ 
+ async function readLevels(sym: string): Promise<LevelRead> {
+   const r = resolveSym(sym)
+@@ -165,8 +168,11 @@ async function readLevels(sym: string): Promise<LevelRead> {
+   } catch {
+     /* the recorded walls below */
+   }
+-  if (!vt) {
+-    // no chain: the walls recorder's newest slot, today's bars only, read the same way
++  // no chain — or a chain that named none of the three (an empty book, a basis
++  // that left every level off the futures chart): the walls recorder's newest
++  // slot, today's bars only, read the same way. The legend said "No levels" on
++  // ES while the CB Walls study was drawing them (2026-10-07 audit).
++  if (!vt || (vt.volt == null && vt.coil == null && vt.reversal == null)) {
+     try {
+       const w = await wallSeriesFor(sym, todays.length ? todays : bars.slice(-80), '5', true)
+       const fin = (v: number) => Number.isFinite(v)
+@@ -204,9 +210,14 @@ async function readLevels(sym: string): Promise<LevelRead> {
+ export function levelsFor(sym: string, fresh = false): Promise<LevelRead> {
+   const key = `${sym}|${gexBasis()}`
+   const hit = reads.get(key)
+-  if (hit && Date.now() - hit.at < (fresh ? 20_000 : 50_000)) return hit.p
++  const age = hit ? Date.now() - hit.at : Infinity
++  if (hit && age < (fresh ? 20_000 : 50_000) && !(hit.empty && age > EMPTY_RETRY_MS)) return hit.p
+   const p = readLevels(sym).catch(() => ({ at: Date.now(), levels: [], price: null }))
+-  reads.set(key, { at: Date.now(), p })
++  const entry: { at: number; p: Promise<LevelRead>; empty?: boolean } = { at: Date.now(), p }
++  reads.set(key, entry)
++  void p.then((r) => {
++    entry.empty = !r.levels.some((l) => GEX_KEYS.has(l.key) && l.price != null)
++  })
+   return p
+ }
+ 
+diff --git a/cbedge-v3/src/pages/vela/loadWatchdog.ts b/cbedge-v3/src/pages/vela/loadWatchdog.ts
+new file mode 100644
+index 0000000..a078cc1
+--- /dev/null
++++ b/cbedge-v3/src/pages/vela/loadWatchdog.ts
+@@ -0,0 +1,81 @@
++// ─────────────────────────────────────────────────────────────────────────────
++// LOAD WATCHDOG: a D / W / M chart never just spins (2026-10-07 audit: "the 1D
++// spinner should time out to an error message instead of hanging").
++//
++// The provider bounds the load itself (cbedgeProvider.ts): each long-history
++// source gets LONG_SOURCE_TIMEOUT_MS before the chart draws the tape's own bars
++// instead, and the whole coarse load fails with LoadTimeoutError past
++// COARSE_LOAD_TIMEOUT_MS. Vela ends its loading state on a failed load but says
++// nothing, so this puts the reason on screen as a workspace toast:
++//
++//   · a coarse load that ENDS with no bars → "Couldn't load SPX daily bars…"
++//   · a coarse load still running a few seconds past the provider's own limit
++//     (something below the provider hung) → the same message, once
++//
++// One message per chart per load. Minute timeframes are left alone: their load
++// is one tape read and is not where the hang was.
++// ─────────────────────────────────────────────────────────────────────────────
++
++import type { VelaWorkspace } from '@luxalgo/vela/workspace'
++import { COARSE_LOAD_TIMEOUT_MS } from './cbedgeProvider'
++
++const COARSE_RE = /^\d*[DWM]$/i
++const GRACE_MS = 3_000
++
++const bare = (s: string | undefined) => String(s ?? '').replace(/^[^:]*:/, '').toUpperCase()
++const tfName = (tf: string) => {
++  const u = tf.toUpperCase()
++  return u.endsWith('W') ? 'weekly' : u.endsWith('M') ? 'monthly' : 'daily'
++}
++
++export function bindLoadWatchdog(ws: VelaWorkspace): () => void {
++  const cellOffs = new Map<string, Array<() => void>>()
++  const say = (sym: string, tf: string, why: string) =>
++    ws.toast(`Couldn't load ${sym} ${tfName(tf)} bars: ${why}. Pick the timeframe again to retry.`, 'error', 8_000)
++
++  const bindCell = (id: string) => {
++    if (cellOffs.has(id)) return
++    const cell = ws.cell(id)
++    if (!cell) return
++    const chart = cell.chart
++    let timer: ReturnType<typeof setTimeout> | null = null
++    let told = false
++    const clear = () => {
++      if (timer) clearTimeout(timer)
++      timer = null
++    }
++    const offs = [
++      chart.on('load:start', (p) => {
++        clear()
++        told = false
++        const tf = String(p.timeframe ?? '')
++        if (!COARSE_RE.test(tf)) return
++        timer = setTimeout(() => {
++          timer = null
++          told = true
++          say(bare(p.symbol), tf, 'the request timed out')
++        }, COARSE_LOAD_TIMEOUT_MS + GRACE_MS)
++      }),
++      chart.on('load:end', (p) => {
++        clear()
++        const tf = String(p.timeframe ?? '')
++        if (told || !COARSE_RE.test(tf) || p.bars > 0) return
++        told = true
++        say(bare(p.symbol), tf, 'no bars came back')
++      }),
++      clear,
++    ]
++    cellOffs.set(id, offs)
++  }
++  const unbindCell = (id: string) => {
++    for (const off of cellOffs.get(id) ?? []) off()
++    cellOffs.delete(id)
++  }
++
++  for (const c of ws.cells()) bindCell(c.id)
++  const offs = [ws.on('cell:created', ({ id }) => bindCell(id)), ws.on('cell:destroyed', ({ id }) => unbindCell(id))]
++  return () => {
++    for (const off of offs) off()
++    for (const id of [...cellOffs.keys()]) unbindCell(id)
++  }
++}
+diff --git a/cbedge-v3/src/pages/vela/script/engine.ts b/cbedge-v3/src/pages/vela/script/engine.ts
+index d8fd142..5a41d42 100644
+--- a/cbedge-v3/src/pages/vela/script/engine.ts
++++ b/cbedge-v3/src/pages/vela/script/engine.ts
+@@ -59,7 +59,7 @@ interface Token {
+ }
+ 
+ // ── CB Edge levels for scripts (cbedge.call_wall / put_wall / core) ──────────
+-// The loader is handed in by the Vela page (script/panel.ts registerScripts →
++// The loader is handed in by the Vela page (script/register.ts registerScripts →
+ // wallsIndicator.wallSeriesFor) so this module stays free of the chart's data code.
+ export type LevelsLoader = (ticker: string, bars: readonly OHLCV[], timeframe: string, fresh: boolean) => Promise<NonNullable<RunOpts['cbedge']>>
+ let levelsLoader: LevelsLoader | null = null
+diff --git a/cbedge-v3/src/pages/vela/script/ids.ts b/cbedge-v3/src/pages/vela/script/ids.ts
+new file mode 100644
+index 0000000..9509d23
+--- /dev/null
++++ b/cbedge-v3/src/pages/vela/script/ids.ts
+@@ -0,0 +1,6 @@
++// The CB Script side-panel ids, on their own so the eager page code (the
++// workspace menu, register.ts) can name a panel without pulling the panel's
++// code into the page chunk. The panels themselves load on first open.
++export const SCRIPTS_PANEL_ID = 'cbedge-scripts'
++export const TESTER_PANEL_ID = 'cbedge-strategy'
++export const ALERTS_PANEL_ID = 'cbedge-script-alerts'
+diff --git a/cbedge-v3/src/pages/vela/script/library.ts b/cbedge-v3/src/pages/vela/script/library.ts
+index 4ad876c..b5a4b08 100644
+--- a/cbedge-v3/src/pages/vela/script/library.ts
++++ b/cbedge-v3/src/pages/vela/script/library.ts
+@@ -163,13 +163,57 @@ export interface SyncResult {
+   error?: string
+ }
+ 
++type PageRows = { name: string; preset: unknown }[]
++type PageAnswer = PageRows | 'auth'
++
++/**
++ * Reads that land within BATCH_MS of each other go out as ONE request
++ * (`/api/page-preset?pages=a,b,…`, up to 12 pages). The page used to open with
++ * ten parallel calls — vela-watchlists and vela-scripts … -9, the last seven
++ * almost always empty (2026-10-07 audit).
++ */
++const BATCH_MS = 25
++const BATCH_MAX = 12
++const queued = new Map<string, { resolve: (v: PageAnswer) => void; reject: (e: unknown) => void }[]>()
++let flushTimer: ReturnType<typeof setTimeout> | null = null
++
++const rowsOf = (list: unknown): PageRows =>
++  (Array.isArray(list) ? (list as { name?: unknown; preset?: unknown }[]) : []).filter(
++    (p): p is { name: string; preset: unknown } => typeof p?.name === 'string',
++  )
++
++async function flushPages(): Promise<void> {
++  flushTimer = null
++  const all = [...queued.entries()]
++  queued.clear()
++  for (let i = 0; i < all.length; i += BATCH_MAX) {
++    const chunk = all.slice(i, i + BATCH_MAX)
++    const settle = (f: (w: { resolve: (v: PageAnswer) => void; reject: (e: unknown) => void }, page: string) => void) =>
++      chunk.forEach(([page, waiters]) => waiters.forEach((w) => f(w, page)))
++    try {
++      const qs = chunk.map(([page]) => encodeURIComponent(page)).join(',')
++      const r = await fetch(`/api/page-preset?pages=${qs}`, { cache: 'no-store', credentials: 'same-origin' })
++      if (r.status === 401 || r.status === 403) {
++        settle((w) => w.resolve('auth'))
++        continue
++      }
++      if (!r.ok) throw new Error(`page-preset ${r.status}`)
++      const j = (await r.json()) as { pages?: Record<string, unknown> }
++      settle((w, page) => w.resolve(rowsOf(j.pages?.[page])))
++    } catch (e) {
++      settle((w) => w.reject(e))
++    }
++  }
++}
++
+ /** One page of the account's presets (/api/page-preset), or 'auth' when signed out. Shared with the watchlist. */
+-export async function readPage(page: string): Promise<{ name: string; preset: unknown }[] | 'auth'> {
+-  const r = await fetch(`/api/page-preset?page=${encodeURIComponent(page)}`, { cache: 'no-store', credentials: 'same-origin' })
+-  if (r.status === 401 || r.status === 403) return 'auth'
+-  if (!r.ok) throw new Error(`page-preset ${r.status}`)
+-  const j = (await r.json()) as { presets?: { name?: unknown; preset?: unknown }[] }
+-  return (j.presets ?? []).filter((p): p is { name: string; preset: unknown } => typeof p?.name === 'string')
++export function readPage(page: string): Promise<PageAnswer> {
++  return new Promise<PageAnswer>((resolve, reject) => {
++    const list = queued.get(page) ?? []
++    list.push({ resolve, reject })
++    queued.set(page, list)
++    flushTimer ??= setTimeout(() => void flushPages(), BATCH_MS)
++  })
+ }
+ 
+ /** Store (or, with null, delete) one named preset on a page. */
+diff --git a/cbedge-v3/src/pages/vela/script/panel.ts b/cbedge-v3/src/pages/vela/script/panel.ts
+index 2d646e0..c52b571 100644
+--- a/cbedge-v3/src/pages/vela/script/panel.ts
++++ b/cbedge-v3/src/pages/vela/script/panel.ts
+@@ -45,18 +45,14 @@
+ // when it is not.
+ // ─────────────────────────────────────────────────────────────────────────────
+ 
+-import { registerSidePanel, registerStatePersistence, type WidgetContext } from '@luxalgo/vela'
++import type { WidgetContext } from '@luxalgo/vela'
+ import type { WorkspaceWidgetContext } from '@luxalgo/vela/workspace'
+-import { registerIcon, svg16 } from '@luxalgo/vela/ui'
+-import { CBSCRIPT, compile, loadRuntime, onScriptError, scriptErrors, setLevelsLoader } from './engine'
+-import { wallSeriesFor } from '../wallsIndicator'
++import { CBSCRIPT, compile, loadRuntime, onScriptError, scriptErrors } from './engine'
+ import { instanceIdFor, libIdOf, loadLibrary, markDeleted, newScriptId, onEditRequest, saveLibrary, syncLibrary, takePendingEdit, TEMPLATE, type Script } from './library'
+ import { alertsArmed } from './alerts'
+ import { ThemedSelect } from '../themedSelect'
+-import { ALERTS_PANEL_ID, registerTesterPanels, TESTER_PANEL_ID } from './testerPanels'
++import { ALERTS_PANEL_ID, TESTER_PANEL_ID } from './ids'
+ 
+-const PANEL_ID = 'cbedge-scripts'
+-const PERSIST_KEY = 'cbedge.scripts'
+ 
+ const REFERENCE = `PINE SCRIPT  paste a TradingView indicator as is (v4, v5, v6)
+   Runs per bar the way TradingView does: var, x[1], if / for / while /
+@@ -133,7 +129,7 @@ function el<K extends keyof HTMLElementTagNameMap>(doc: Document, tag: K, cls: s
+   return e
+ }
+ 
+-function mountPanel(ctx: WidgetContext, body: HTMLElement) {
++export function mountPanel(ctx: WidgetContext, body: HTMLElement) {
+   const doc = body.ownerDocument
+   body.classList.add('cb-scr')
+   // Keystrokes stay in the editor — Vela's chart shortcuts (type-to-search,
+@@ -485,68 +481,3 @@ function mountPanel(ctx: WidgetContext, body: HTMLElement) {
+     },
+   }
+ }
+-
+-interface Persisted {
+-  id: string
+-  name: string
+-  script: string
+-  inputs?: Record<string, number | string | boolean>
+-  hidden?: boolean
+-}
+-
+-let registered = false
+-
+-/** The panel, its icon and the per-chart persistence. Once; before any workspace is built. */
+-export function registerScripts(): void {
+-  if (registered) return
+-  registered = true
+-  // a script that reads cbedge.call_wall / put_wall / core gets the walls recorder, bar by bar
+-  setLevelsLoader(wallSeriesFor)
+-  registerTesterPanels()
+-  // </> — code
+-  registerIcon('cb-script', svg16('<path d="M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4M9 2.5 7 13.5"/>'))
+-  registerSidePanel({
+-    id: PANEL_ID,
+-    title: 'Scripts',
+-    icon: 'cb-script',
+-    width: 420,
+-    resizable: true,
+-    minWidth: 320,
+-    maxWidth: 760,
+-    mount: (ctx, body, header) => {
+-      header.setTitle('CB Script')
+-      return mountPanel(ctx, body)
+-    },
+-  })
+-  registerStatePersistence({
+-    key: PERSIST_KEY,
+-    scope: 'cell',
+-    serialize: (ctx) => {
+-      const out: Persisted[] = []
+-      for (const h of ctx.chart.indicators()) {
+-        if (!h.id.startsWith('cbs-') || !h.source) continue
+-        out.push({ id: h.id, name: h.title, script: h.source, inputs: h.inputValues(), ...(h.visible ? {} : { hidden: true }) })
+-      }
+-      return out.length ? out : undefined
+-    },
+-    restore: (payload, ctx) => {
+-      if (!Array.isArray(payload)) return
+-      const lib = new Map(loadLibrary().map((s) => [s.id, s]))
+-      const live = new Set(ctx.chart.indicators().map((h) => h.id))
+-      for (const raw of payload as unknown[]) {
+-        const p = raw as Partial<Persisted>
+-        if (!p || typeof p.id !== 'string' || !p.id.startsWith('cbs-') || typeof p.script !== 'string') continue
+-        if (live.has(p.id)) continue
+-        const saved = lib.get(libIdOf(p.id) ?? '')
+-        ctx.addIndicator({
+-          name: typeof p.name === 'string' ? p.name : saved?.name ?? 'Script',
+-          script: saved?.source ?? p.script,
+-          language: CBSCRIPT,
+-          id: p.id,
+-          ...(p.inputs && typeof p.inputs === 'object' ? { inputs: p.inputs } : {}),
+-          ...(p.hidden ? { hidden: true } : {}),
+-        })
+-      }
+-    },
+-  })
+-}
+diff --git a/cbedge-v3/src/pages/vela/script/register.ts b/cbedge-v3/src/pages/vela/script/register.ts
+new file mode 100644
+index 0000000..3d6c09f
+--- /dev/null
++++ b/cbedge-v3/src/pages/vela/script/register.ts
+@@ -0,0 +1,193 @@
++// ─────────────────────────────────────────────────────────────────────────────
++// CB SCRIPT — what the /vela page registers EAGERLY, and nothing more.
++//
++// The Scripts editor (panel.ts), the Strategy Tester and the Script Alerts
++// panel (testerPanels.ts, with strategies.ts behind it) are UI nobody sees until
++// they open one. They used to ride in the page chunk; since the 2026-10-07
++// audit they load on the panel's FIRST OPEN. What has to exist before that:
++//
++//   · the three panel buttons (registerSidePanel), each mounting a lazy shell
++//     (lazyPanel below) that imports the real panel the first time it shows
++//   · the chart persistence of scripts (registerStatePersistence) — a saved
++//     chart re-adds its scripts on load, editor open or not
++//   · the levels loader the runtime reads cbedge.call_wall / put_wall / core from
++//
++// The script ENGINE (engine.ts) stays eager: Vela needs it to run a saved
++// chart's scripts. The runtime itself was already a lazy chunk (loadRuntime).
++// ─────────────────────────────────────────────────────────────────────────────
++
++import { registerSidePanel, registerStatePersistence, type SidePanelHandle, type Vela, type WidgetContext } from '@luxalgo/vela'
++import { registerIcon, svg16 } from '@luxalgo/vela/ui'
++import { CBSCRIPT, setLevelsLoader } from './engine'
++import { libIdOf, loadLibrary } from './library'
++import { wallSeriesFor } from '../wallsIndicator'
++import { ALERTS_PANEL_ID, SCRIPTS_PANEL_ID, TESTER_PANEL_ID } from './ids'
++
++const PERSIST_KEY = 'cbedge.scripts'
++
++type Mount = (ctx: WidgetContext, body: HTMLElement) => SidePanelHandle | void
++
++/**
++ * A side panel whose code loads the first time it is SHOWN. Vela mounts every
++ * panel when the shell builds, open or not, so the import waits for `onOpen` —
++ * or for the body to become visible, which also covers a panel the saved
++ * layout restores open (that path may not raise onOpen). Chart binds and opens
++ * that arrive before the code are replayed onto the real panel.
++ */
++function lazyPanel(load: () => Promise<Mount>): (ctx: WidgetContext, body: HTMLElement) => SidePanelHandle {
++  return (ctx, body) => {
++    let real: SidePanelHandle | null = null
++    let chart: Vela | null = null
++    let opened = false
++    let dead = false
++    let started = false
++    let io: IntersectionObserver | null = null
++    const start = () => {
++      if (started || dead) return
++      started = true
++      io?.disconnect()
++      io = null
++      const note = body.ownerDocument.createElement('div')
++      note.className = 'cb-scr-note'
++      note.textContent = 'Loading…'
++      body.append(note)
++      load()
++        .then((mount) => {
++          if (dead) return
++          note.remove()
++          real = mount(ctx, body) || null
++          if (chart) real?.onChart?.(chart)
++          if (opened) real?.onOpen?.()
++        })
++        .catch(() => {
++          started = false
++          note.textContent = 'This panel could not load. Close it and open it again to retry.'
++        })
++    }
++    if (typeof IntersectionObserver !== 'undefined') {
++      io = new IntersectionObserver((entries) => {
++        if (entries.some((e) => e.isIntersecting)) {
++          opened = true
++          start()
++        }
++      })
++      io.observe(body)
++    }
++    return {
++      onChart(c) {
++        chart = c
++        real?.onChart?.(c)
++      },
++      onOpen() {
++        opened = true
++        if (real) real.onOpen?.()
++        else start()
++      },
++      destroy() {
++        dead = true
++        io?.disconnect()
++        real?.destroy?.()
++      },
++    }
++  }
++}
++
++interface Persisted {
++  id: string
++  name: string
++  script: string
++  inputs?: Record<string, number | string | boolean>
++  hidden?: boolean
++}
++
++let registered = false
++
++export function registerScripts(): void {
++  if (registered) return
++  registered = true
++  // a script that reads cbedge.call_wall / put_wall / core gets the walls recorder, bar by bar
++  setLevelsLoader(wallSeriesFor)
++  // </> — code
++  registerIcon('cb-script', svg16('<path d="M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4M9 2.5 7 13.5"/>'))
++  // a rising line with an arrow — a backtest
++  registerIcon('cb-strategy', svg16('<path d="M2 13.5h12M2.5 11l3.5-3.5 2.5 2L13 5"/><path d="M10 5h3v3"/>'))
++  // a bolt — a script's trigger (the bell beside it is Vela's own price alerts)
++  registerIcon('cb-zap', svg16('<path d="M9.2 1.5 3.5 9h4.3l-1 5.5L12.5 7H8.2l1-5.5Z"/>'))
++
++  const scripts = lazyPanel(() => import('./panel').then((m) => m.mountPanel))
++  registerSidePanel({
++    id: SCRIPTS_PANEL_ID,
++    title: 'Scripts',
++    icon: 'cb-script',
++    width: 420,
++    resizable: true,
++    minWidth: 320,
++    maxWidth: 760,
++    mount: (ctx, body, header) => {
++      header.setTitle('CB Script')
++      return scripts(ctx, body)
++    },
++  })
++  const tester = lazyPanel(() => import('./testerPanels').then((m) => m.mountTester))
++  registerSidePanel({
++    id: TESTER_PANEL_ID,
++    title: 'Strategy Tester',
++    icon: 'cb-strategy',
++    order: 101,
++    width: 440,
++    resizable: true,
++    minWidth: 320,
++    maxWidth: 820,
++    mount: (ctx, body, header) => {
++      header.setTitle('Strategy Tester')
++      return tester(ctx, body)
++    },
++  })
++  const alerts = lazyPanel(() => import('./testerPanels').then((m) => m.mountAlerts))
++  registerSidePanel({
++    id: ALERTS_PANEL_ID,
++    title: 'Script Alerts',
++    icon: 'cb-zap',
++    order: 102,
++    width: 360,
++    resizable: true,
++    minWidth: 300,
++    maxWidth: 640,
++    mount: (ctx, body, header) => {
++      header.setTitle('Script Alerts')
++      return alerts(ctx, body)
++    },
++  })
++
++  registerStatePersistence({
++    key: PERSIST_KEY,
++    scope: 'cell',
++    serialize: (ctx) => {
++      const out: Persisted[] = []
++      for (const h of ctx.chart.indicators()) {
++        if (!h.id.startsWith('cbs-') || !h.source) continue
++        out.push({ id: h.id, name: h.title, script: h.source, inputs: h.inputValues(), ...(h.visible ? {} : { hidden: true }) })
++      }
++      return out.length ? out : undefined
++    },
++    restore: (payload, ctx) => {
++      if (!Array.isArray(payload)) return
++      const lib = new Map(loadLibrary().map((s) => [s.id, s]))
++      const live = new Set(ctx.chart.indicators().map((h) => h.id))
++      for (const raw of payload as unknown[]) {
++        const p = raw as Partial<Persisted>
++        if (!p || typeof p.id !== 'string' || !p.id.startsWith('cbs-') || typeof p.script !== 'string') continue
++        if (live.has(p.id)) continue
++        const saved = lib.get(libIdOf(p.id) ?? '')
++        ctx.addIndicator({
++          name: typeof p.name === 'string' ? p.name : saved?.name ?? 'Script',
++          script: saved?.source ?? p.script,
++          language: CBSCRIPT,
++          id: p.id,
++          ...(p.inputs && typeof p.inputs === 'object' ? { inputs: p.inputs } : {}),
++          ...(p.hidden ? { hidden: true } : {}),
++        })
++      }
++    },
++  })
++}
+diff --git a/cbedge-v3/src/pages/vela/script/testerPanels.ts b/cbedge-v3/src/pages/vela/script/testerPanels.ts
+index 02bd586..80fafe4 100644
+--- a/cbedge-v3/src/pages/vela/script/testerPanels.ts
++++ b/cbedge-v3/src/pages/vela/script/testerPanels.ts
+@@ -20,18 +20,16 @@
+ //                     first, across all scripts.
+ // ─────────────────────────────────────────────────────────────────────────────
+ 
+-import { registerSidePanel, type WidgetContext } from '@luxalgo/vela'
++import type { WidgetContext } from '@luxalgo/vela'
+ import type { WorkspaceWidgetContext } from '@luxalgo/vela/workspace'
+-import { registerIcon, svg16 } from '@luxalgo/vela/ui'
+ import { CBSCRIPT, compile, loadRuntime, onScriptError, onScriptResult, scriptErrors, scriptResults, type ScriptRunInfo } from './engine'
+ import { instanceIdFor, libIdOf, loadLibrary, newScriptId, requestEdit, saveLibrary, type Script } from './library'
+ import { IS_STRATEGY, READY_STRATEGIES, USES_CBEDGE, readyStrategy } from './strategies'
+ import { ThemedSelect, type SelectOption } from '../themedSelect'
+ import { alertsArmed, enableNotify, firedAlerts, notifyWanted, onScriptAlertFired, setAlertsArmed, tfLabel } from './alerts'
+ 
+-export const TESTER_PANEL_ID = 'cbedge-strategy'
+-export const ALERTS_PANEL_ID = 'cbedge-script-alerts'
+-const SCRIPTS_PANEL_ID = 'cbedge-scripts'
++import { SCRIPTS_PANEL_ID, TESTER_PANEL_ID } from './ids'
++export { ALERTS_PANEL_ID, SCRIPTS_PANEL_ID, TESTER_PANEL_ID } from './ids'
+ const TAB_KEY = 'cb-v3-vela-st-tab'
+ 
+ type Strat = NonNullable<ScriptRunInfo['strategy']>
+@@ -97,7 +95,7 @@ export function testStrategy(ctx: WidgetContext, s: { id: string; name: string;
+   ctx.togglePanel(TESTER_PANEL_ID, true)
+ }
+ 
+-function mountTester(ctx: WidgetContext, body: HTMLElement) {
++export function mountTester(ctx: WidgetContext, body: HTMLElement) {
+   const doc = body.ownerDocument
+   body.classList.add('cb-scr', 'cb-st')
+   for (const t of ['keydown', 'keyup', 'keypress'] as const) body.addEventListener(t, (e) => e.stopPropagation())
+@@ -601,7 +599,7 @@ function mountTester(ctx: WidgetContext, body: HTMLElement) {
+ 
+ const CALLS_ALERT = /\balert(?:condition)?\s*\(/
+ 
+-function mountAlerts(ctx: WidgetContext, body: HTMLElement) {
++export function mountAlerts(ctx: WidgetContext, body: HTMLElement) {
+   const doc = body.ownerDocument
+   body.classList.add('cb-scr', 'cb-sa')
+   const notifyLabel = el(doc, 'label', 'cb-scr-check')
+@@ -718,43 +716,3 @@ function mountAlerts(ctx: WidgetContext, body: HTMLElement) {
+     },
+   }
+ }
+-
+-let registered = false
+-
+-/** Both panels and their icons. Once; before any workspace is built (registerScripts calls it). */
+-export function registerTesterPanels(): void {
+-  if (registered) return
+-  registered = true
+-  // a rising line with an arrow — a backtest
+-  registerIcon('cb-strategy', svg16('<path d="M2 13.5h12M2.5 11l3.5-3.5 2.5 2L13 5"/><path d="M10 5h3v3"/>'))
+-  // a bolt — a script's trigger (the bell beside it is Vela's own price alerts)
+-  registerIcon('cb-zap', svg16('<path d="M9.2 1.5 3.5 9h4.3l-1 5.5L12.5 7H8.2l1-5.5Z"/>'))
+-  registerSidePanel({
+-    id: TESTER_PANEL_ID,
+-    title: 'Strategy Tester',
+-    icon: 'cb-strategy',
+-    order: 101,
+-    width: 440,
+-    resizable: true,
+-    minWidth: 320,
+-    maxWidth: 820,
+-    mount: (ctx, body, header) => {
+-      header.setTitle('Strategy Tester')
+-      return mountTester(ctx, body)
+-    },
+-  })
+-  registerSidePanel({
+-    id: ALERTS_PANEL_ID,
+-    title: 'Script Alerts',
+-    icon: 'cb-zap',
+-    order: 102,
+-    width: 360,
+-    resizable: true,
+-    minWidth: 300,
+-    maxWidth: 640,
+-    mount: (ctx, body, header) => {
+-      header.setTitle('Script Alerts')
+-      return mountAlerts(ctx, body)
+-    },
+-  })
+-}
+diff --git a/cbedge-v3/src/pages/vela/studies/ladder.ts b/cbedge-v3/src/pages/vela/studies/ladder.ts
+index b16fba1..46e285e 100644
+--- a/cbedge-v3/src/pages/vela/studies/ladder.ts
++++ b/cbedge-v3/src/pages/vela/studies/ladder.ts
+@@ -38,7 +38,7 @@
+ // ─────────────────────────────────────────────────────────────────────────────
+ 
+ import { query } from '@/data/api'
+-import { chainGexUrl } from '@/board/chainGex'
++import { chainAllUrl } from '@/board/chainGex'
+ import { parseChain, strikeGex, todayEt } from '@/board/multiGreek/mgMath'
+ import { gexHistoryDayUrl, parseGexHistory, parseGexHistoryMeta, type GexColumn } from '@/board/gexCandles/gexHistory'
+ import { RTH_CLOSE_MIN, etDateKey, etMinutesOfDay } from '@/board/gexCandles/candles'
+@@ -254,7 +254,7 @@ const ALL_TOP = 40
+ export async function loadChainLadder(c: StudyCtx, fresh: boolean): Promise<Ladder> {
+   const label = ladderKey(c)
+   const [json, basis] = await Promise.all([
+-    query<unknown>(chainGexUrl(label), { staleMs: fresh ? 25_000 : 60_000 }).catch(() => null),
++    query<unknown>(chainAllUrl(label), { staleMs: fresh ? 25_000 : 60_000 }).catch(() => null),
+     c.sym.fut ? loadBasis(c.sym.fut) : Promise.resolve(null as BasisModel | null),
+   ])
+   const fut = !!c.sym.fut
+diff --git a/cbedge-v3/src/pages/vela/workspaceMenu.ts b/cbedge-v3/src/pages/vela/workspaceMenu.ts
+index 4d4807d..d7fb5a3 100644
+--- a/cbedge-v3/src/pages/vela/workspaceMenu.ts
++++ b/cbedge-v3/src/pages/vela/workspaceMenu.ts
+@@ -47,7 +47,7 @@ import { centerTodayAll } from '@/pages/vela/centerToday'
+ import { copyToAll } from '@/pages/vela/copyIndicators'
+ import { LEVELS_PANEL_ID } from '@/pages/vela/levels/levelAlertsEntry'
+ import { onPhoneRoute } from '@/pages/vela/nav'
+-import { ALERTS_PANEL_ID, TESTER_PANEL_ID } from '@/pages/vela/script/testerPanels'
++import { ALERTS_PANEL_ID, TESTER_PANEL_ID } from '@/pages/vela/script/ids'
+ import { setStripShown, stripShown } from '@/pages/vela/setups/setups'
+ import { WATCHLIST_PANEL_ID } from '@/pages/vela/watchlist/panel'
+ 
+diff --git a/server-v2/_lib-lse.cjs b/server-v2/_lib-lse.cjs
+index 4b1c1a4..fce713b 100644
+--- a/server-v2/_lib-lse.cjs
++++ b/server-v2/_lib-lse.cjs
+@@ -622,6 +622,29 @@ function normType(type) {
+  * options dataset (prefix first, then shortest) so "apple" lands on Apple Inc.
+  * rather than Apple Hospitality REIT.
+  */
++// Index tickers are NEVER name-matched. Their letters appear inside company
++// names, so the fuzzy pass below turned SPX into SPXC (SPX Technologies, ~$170)
++// and VIX into ENVX (EnoVIX, ~$2.56), and Vela's 1D/1W charts spliced years of
++// those stocks under the real index bars (live audit, 2026-10-07). An index is
++// either an exact catalog symbol or not in the vault at all.
++const INDEX_TICKERS = new Set([
++  'SPX', 'SPXW', 'XSP', 'NDX', 'NDXP', 'XND', 'RUT', 'RUTW', 'MRUT', 'VIX', 'VIX9D', 'VIX1D',
++  'VIX3M', 'VVIX', 'VXN', 'RVX', 'DJX', 'DJI', 'OEX', 'XEO', 'SOX', 'NYA', 'COMP',
++]);
++const isIndexTicker = (s) => INDEX_TICKERS.has(String(s || '').trim().toUpperCase().replace(/^[$^]/, ''));
++
++/**
++ * The catalog symbol that EXACTLY equals `query` (case-insensitive), or null.
++ * No name search, no prefix match. This is what /api/lse/resolve answers by
++ * default: "no match" beats a confident wrong ticker.
++ */
++async function resolveExact(query) {
++  const upper = String(query || '').trim().toUpperCase().replace(/^\$/, '');
++  if (!upper) return null;
++  const rows = await rawCatalog();
++  return rows.some((r) => String(r.symbol || '').toUpperCase() === upper) ? upper : null;
++}
++
+ async function resolveUnderlying(query) {
+   const q = String(query || '').trim();
+   if (!q) throw new LseError(400, 'underlying is required');
+@@ -633,6 +656,8 @@ async function resolveUnderlying(query) {
+   }
+   const upper = q.toUpperCase();
+   if (rows.some((r) => String(r.symbol || '').toUpperCase() === upper)) return upper;
++  // An index is passed through as typed — never fuzzy-resolved (see INDEX_TICKERS).
++  if (isIndexTicker(upper)) return upper.replace(/^[$^]/, '');
+   const ql = q.toLowerCase();
+   const pool = rows.filter((r) => r.dataset === 'options');
+   const hits = (pool.length ? pool : rows)
+@@ -938,6 +963,8 @@ module.exports = {
+   filterFlowByStrike,
+   optionCandles,
+   resolveUnderlying,
++  resolveExact,
++  isIndexTicker,
+   toOsi,
+   meta,
+   toCsv,
+diff --git a/server-v2/api-router.js b/server-v2/api-router.js
+index 5348ef5..17d87b1 100644
+--- a/server-v2/api-router.js
++++ b/server-v2/api-router.js
+@@ -533,18 +533,125 @@ register('/api/insights/gex', {
+ // Pass-through routes forward the proxy's raw body + status unchanged.
+ 
+ // /api/chains?ticker=SPX&expiration=YYYY-MM-DD → /proxy/api/tt/chains/:ticker
++//
++// Two opt-in trims (2026-10-07 audit: the Vela page's SPX read was 465 KB and
++// ~2.7 s cold, and every reader of it uses ONE expiry and five leg fields):
++//   front=1   only the nearest expiry that has strikes — the one mgMath
++//             parseChain() puts first and chainToGex() reads
++//   slim=1    each leg cut to what parseChain()'s leg() reads: gamma, delta,
++//             open-interest, volume, mark (mark falls back to the bid/ask mid,
++//             exactly as leg() would compute it)
++// Neither changes a number a reader computes; a caller that passes neither gets
++// the payload byte-for-byte as before.
++//
++// REST reads (`live=0`) are served stale-while-revalidate: the last snapshot
++// goes out at once (up to CHAINS_MAX_STALE_MS old) and a refresh runs in the
++// background once it is older than CHAINS_FRESH_MS. A key asked for in the last
++// CHAINS_WARM_MS is kept warm on a timer, so only the first read after a quiet
++// spell (or a deploy) pays the upstream pull. The live-subscriber path (no
++// live=0) is already instant and is not cached.
++const CHAINS_FRESH_MS = 20_000;
++const CHAINS_MAX_STALE_MS = 10 * 60_000;
++const CHAINS_WARM_MS = 15 * 60_000;
++const CHAINS_CACHE = new Map(); // key → { at, status, text, lastAsk, ctx, refreshing }
++
++function chainsSlimLeg(l) {
++  if (!l || typeof l !== 'object') return l;
++  const bid = Number(l.bid), ask = Number(l.ask);
++  const mark = Number(l.mark) || (bid > 0 && ask > 0 ? (bid + ask) / 2 : 0);
++  return { gamma: l.gamma, delta: l.delta, 'open-interest': l['open-interest'], volume: l.volume, mark };
++}
++function chainsTrim(text, front, slim) {
++  if (!front && !slim) return text;
++  let json;
++  try { json = JSON.parse(text); } catch { return text; }
++  const d = json?.data;
++  if (!d || !Array.isArray(d.items)) return text;
++  let items = d.items.filter((it) => it && it['expiration-date'] && Array.isArray(it.strikes) && it.strikes.length);
++  if (front) {
++    items.sort((a, b) => String(a['expiration-date']).localeCompare(String(b['expiration-date'])));
++    items = items.slice(0, 1);
++  }
++  if (slim) {
++    items = items.map((it) => ({
++      'expiration-date': it['expiration-date'],
++      strikes: it.strikes.map((s) => ({ 'strike-price': s?.['strike-price'], call: chainsSlimLeg(s?.call), put: chainsSlimLeg(s?.put) })),
++    }));
++  }
++  d.items = items;
++  return JSON.stringify(json);
++}
++async function chainsPull(ctx, ticker, sp) {
++  const front = sp.get('front') === '1';
++  const slim = sp.get('slim') === '1';
++  const up = new URLSearchParams(sp);
++  up.delete('front'); up.delete('slim');
++  const qs = up.toString();
++  const r = await ctx.internalFetch(
++    `/proxy/api/tt/chains/${encodeURIComponent(ticker)}${qs ? `?${qs}` : ''}`,
++    { cache: 'no-store' }
++  );
++  const raw = await r.text();
++  return { status: r.status, text: r.status === 200 ? chainsTrim(raw, front, slim) : raw };
++}
++function chainsRefresh(key, ticker, sp, ctx) {
++  const e = CHAINS_CACHE.get(key) || { at: 0, status: 0, text: '', lastAsk: Date.now(), ctx, refreshing: null };
++  if (e.refreshing) return e.refreshing;
++  e.ctx = ctx;
++  e.refreshing = chainsPull(ctx, ticker, sp)
++    .then((r) => {
++      // Only a good answer replaces the snapshot; a failed refresh keeps serving the last one.
++      if (r.status === 200 || !e.text) { e.status = r.status; e.text = r.text; e.at = Date.now(); }
++      return e;
++    })
++    .finally(() => { e.refreshing = null; });
++  CHAINS_CACHE.set(key, e);
++  return e.refreshing;
++}
++setInterval(() => {
++  const now = Date.now();
++  for (const [key, e] of CHAINS_CACHE) {
++    if (now - e.lastAsk > CHAINS_WARM_MS) {
++      if (now - e.at > CHAINS_MAX_STALE_MS && !e.refreshing) CHAINS_CACHE.delete(key);
++      continue;
++    }
++    if (!e.refreshing && now - e.at > CHAINS_FRESH_MS && e.ctx) {
++      const sp = new URLSearchParams(key);
++      const ticker = sp.get('ticker') || 'SPX';
++      sp.delete('ticker');
++      chainsRefresh(key, ticker, sp, e.ctx).catch(() => {});
++    }
++  }
++}, 15_000).unref?.();
++
+ register('/api/chains', {
+   auth: 'subscriber', methods: ['GET'],
+   async handler(req, res, ctx) {
+     const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+     const ticker = (sp.get('ticker') || 'SPX').trim();
+     sp.delete('ticker');
+-    const qs = sp.toString();
+-    const r = await ctx.internalFetch(
+-      `/proxy/api/tt/chains/${encodeURIComponent(ticker)}${qs ? `?${qs}` : ''}`,
+-      { cache: 'no-store' }
+-    );
+-    send(res, r.status, await r.text(), { 'Cache-Control': CACHE_30 });
++    if (sp.get('live') !== '0') {
++      const r = await chainsPull(ctx, ticker, sp);
++      return send(res, r.status, r.text, { 'Cache-Control': CACHE_30 });
++    }
++    const keyParams = new URLSearchParams(sp);
++    keyParams.set('ticker', ticker.toUpperCase());
++    keyParams.sort();
++    const key = keyParams.toString();
++    let e = CHAINS_CACHE.get(key);
++    const now = Date.now();
++    if (e && e.text && e.status === 200 && now - e.at < CHAINS_MAX_STALE_MS) {
++      e.lastAsk = now;
++      if (now - e.at > CHAINS_FRESH_MS) chainsRefresh(key, ticker, sp, ctx).catch(() => {});
++      return send(res, 200, e.text, { 'Cache-Control': CACHE_30, 'X-Chain-Age': String(Math.round((now - e.at) / 1000)) });
++    }
++    try {
++      e = await chainsRefresh(key, ticker, sp, ctx);
++      e.lastAsk = Date.now();
++      return send(res, e.status || 502, e.text, { 'Cache-Control': CACHE_30, 'X-Chain-Age': '0' });
++    } catch (err) {
++      return send(res, 502, { error: String(err?.message || err), ticker });
++    }
+   },
+ });
+ 
+@@ -4425,6 +4532,92 @@ register('/api/dxlink/candles', {
+   },
+ });
+ 
++// /api/vela/history?symbol=SPX&interval=1d|1wk|1mo — years of coarse bars for
++// Vela's D / W / M charts (cbedge-v3 pages/vela/cbedgeProvider.ts longHistory).
++// Answers { symbol, interval, source, bars: [{ t, o, h, l, c, v }] } oldest first.
++//
++// Until 2026-10-07 this route did not exist: the Next catch-all answered 501,
++// the chart fell through to the LSE vault, and the vault's NAME-matching
++// resolver charted SPX Technologies under SPX and Enovix under VIX. The fix is
++// that an index or a future never reaches a resolver at all — every symbol here
++// is mapped EXPLICITLY, and a ticker not in the maps must look like a plain
++// equity ticker or it gets an empty list, never a guess.
++//
++// Source: tt-snapshot's yahooDaily — the same daily-history adapter walls-reach
++// and far-cb already read (ThetaData was removed 2026-08-18, see
++// config/data-source.js). Cached per symbol+interval for VELA_HISTORY_TTL_MS:
++// past bars never change, and the chart lays its own tape (RTH-exact, live) over
++// the most recent ~30 sessions anyway.
++const VELA_HISTORY_TTL_MS = 15 * 60_000;
++const VELA_HISTORY = new Map(); // key → { at, body } | { at, p }
++const VELA_HISTORY_YEARS = { '1d': 10, '1wk': 25, '1mo': 40 };
++// Explicit source symbols. `scale` converts the source's units to the index's
++// own (XSP is a tenth of SPX).
++const VELA_HISTORY_MAP = {
++  SPX: { y: '^GSPC' }, SPXW: { y: '^GSPC' }, XSP: { y: '^GSPC', scale: 0.1 },
++  NDX: { y: '^NDX' }, NDXP: { y: '^NDX' }, RUT: { y: '^RUT' }, RUTW: { y: '^RUT' },
++  VIX: { y: '^VIX' }, VIX9D: { y: '^VIX9D' }, VIX1D: { y: '^VIX1D' }, VIX3M: { y: '^VIX3M' },
++  VVIX: { y: '^VVIX' }, VXN: { y: '^VXN' }, DJX: { y: '^DJI', scale: 0.01 }, DJI: { y: '^DJI' },
++  OEX: { y: '^OEX' }, SOX: { y: '^SOX' },
++  ES: { y: 'ES=F' }, '/ES': { y: 'ES=F' }, ES1: { y: 'ES=F' },
++  NQ: { y: 'NQ=F' }, '/NQ': { y: 'NQ=F' }, NQ1: { y: 'NQ=F' },
++  RTY: { y: 'RTY=F' }, YM: { y: 'YM=F' }, CL: { y: 'CL=F' }, GC: { y: 'GC=F' },
++};
++const VELA_EQUITY_RE = /^[A-Z]{1,5}([.-][A-Z])?$/;
++register('/api/vela/history', {
++  auth: 'subscriber', methods: ['GET'],
++  async handler(req, res) {
++    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
++    const raw = String(sp.get('symbol') || '').trim().toUpperCase().replace(/^\$/, '').replace(/!$/, '');
++    const interval = String(sp.get('interval') || '1d').toLowerCase();
++    if (!raw) return send(res, 400, { error: 'symbol is required' });
++    if (!VELA_HISTORY_YEARS[interval]) return send(res, 400, { error: 'interval must be 1d, 1wk or 1mo' });
++    const mapped = VELA_HISTORY_MAP[raw];
++    // Not mapped and not a plain equity ticker: answer empty rather than guess.
++    if (!mapped && !VELA_EQUITY_RE.test(raw)) {
++      return send(res, 200, { symbol: raw, interval, source: 'none', bars: [] }, { 'Cache-Control': NO_STORE });
++    }
++    const src = mapped ? mapped.y : raw;
++    const scale = mapped?.scale ?? 1;
++    const key = `${raw}|${interval}`;
++    const hit = VELA_HISTORY.get(key);
++    if (hit?.body && Date.now() - hit.at < VELA_HISTORY_TTL_MS) {
++      return send(res, 200, hit.body, { 'Cache-Control': 'private, max-age=300' });
++    }
++    // One upstream fetch per key at a time — a page with four charts on SPX asks once.
++    let p = hit?.p;
++    if (!p) {
++      p = (async () => {
++        const end = new Date();
++        const start = new Date(end.getTime() - VELA_HISTORY_YEARS[interval] * 365 * 86_400_000);
++        const rows = await require('./tt-snapshot').yahooDaily(src, start, end, interval);
++        const round = (x) => Math.round(x * scale * 100) / 100;
++        const bars = [];
++        for (const r of rows || []) {
++          const c = Number(r.close);
++          if (!(c > 0) || !Number.isFinite(r.time)) continue;
++          bars.push({ t: r.time, o: round(r.open || c), h: round(r.high || c), l: round(r.low || c), c: round(c), v: Number(r.volume) || 0 });
++        }
++        return { symbol: raw, interval, source: `yahoo:${src}`, bars };
++      })();
++      VELA_HISTORY.set(key, { at: hit?.at ?? 0, body: hit?.body, p });
++    }
++    try {
++      const body = await p;
++      // An empty answer is cached too (briefly), so a symbol Yahoo does not
++      // carry costs one upstream call per minute, not one per chart.
++      VELA_HISTORY.set(key, { at: body.bars.length ? Date.now() : Date.now() - VELA_HISTORY_TTL_MS + 60_000, body });
++      if (VELA_HISTORY.size > 500) {
++        for (const [k, v] of VELA_HISTORY) if (!v.p && Date.now() - v.at > VELA_HISTORY_TTL_MS) VELA_HISTORY.delete(k);
++      }
++      return send(res, 200, body, { 'Cache-Control': 'private, max-age=300' });
++    } catch (e) {
++      VELA_HISTORY.delete(key);
++      return send(res, 502, { error: 'history source failed', detail: String(e?.message || e).slice(0, 200) });
++    }
++  },
++});
++
+ // /api/quotes-batch — batch day-change quotes + optional sparkline (Yahoo v8).
+ // Pure fetch, no DB. Ported verbatim from app/api/quotes-batch/route.ts.
+ register('/api/quotes-batch', {
+@@ -5603,6 +5796,22 @@ if (libDb) {
+       }
+ 
+       const sp = new URL(req.url || '/', 'http://localhost').searchParams;
++      // ?pages=a,b,c — several pages in ONE request: { pages: { a: [...], b: [...] } },
++      // each list exactly what ?page= would return for it. Vela's load read
++      // vela-watchlists plus vela-scripts … vela-scripts-9 as ten parallel calls
++      // (2026-10-07 audit); it now asks once. Up to 12 pages.
++      if (sp.has('pages')) {
++        const pages = [...new Set(String(sp.get('pages') || '').split(',').map((p) => cleanLayoutPage(p.trim())).filter(Boolean))];
++        if (!pages.length || pages.length > 12) return send(res, 400, { error: 'pages must list 1–12 page keys' });
++        try {
++          const lists = await Promise.all(pages.map((p) => libDb.getPagePresets(userId, p)));
++          const out = {};
++          pages.forEach((p, i) => { out[p] = lists[i].filter((r) => r.preset); });
++          return send(res, 200, { pages: out }, { 'Cache-Control': 'private, no-store' });
++        } catch (err) {
++          return send(res, 500, { error: 'Load failed', detail: String(err) });
++        }
++      }
+       const page = cleanLayoutPage(sp.get('page'));
+       if (!page) return send(res, 400, { error: 'Bad page' });
+       try {
+@@ -6777,6 +6986,10 @@ if (libDb) {
+   //
+   // ?symbol=SPY  ?days=5  ?interval=1|5  ?limit=5000
+   //
++  // `days` is SESSIONS, not calendar days (2026-10-07): the newest N ET session
++  // dates with real bars (etf-candle-recorder.js getEtfCandleHistory). The live
++  // fallback below still reads calendar days — dxFeed's own window.
++  //
+   // ── LIVE FALLBACK ──────────────────────────────────────────────────────────
+   // The recorder writes a fixed roster (etf-candle-recorder.js's
+   // DEFAULT_CANDLE_SYMBOLS). The ES Candles picker no longer is one: it offers
+@@ -7725,6 +7938,81 @@ if (libDb) {
+     /** Today's heatmap is rebuilt in full this often; between, only new minutes are read. */
+     const HEATMAP_FULL_MS = 10 * 60_000;
+     const heatmapCache = new Map(); // module-level within this route's closure
++
++    /**
++     * ?fmt=c — the COMPACT heatmap (2026-10-07 audit: a Vela day read at top=30
++     * was 1.6 MB decoded; target < 200 KB). Opt-in; without it the payload is
++     * exactly as before (v2's heatmap and /premarket read max / top3 / flip).
++     * Decoded by cbedge-v3 board/gexCandles/gexHistory.ts parseGexHistory(),
++     * which reads only slotTs, spot and each cell's strike / net / netVol:
++     *
++     *   k     every strike in the response, ascending (the dictionary)
++     *   t0    the first column's slotTs
++     *   c     one array per column: [dtMin, spot, u, ks, q]
++     *           dtMin  minutes after the previous column (the first: 0)
++     *           spot   2 dp
++     *           u      the column's unit (4 significant digits); a value is q·u.
++     *                  -1 = the previous column's unit, and q holds DELTAS from
++     *                  the previous column's q (same strikes, same unit)
++     *           ks     indices into k, or 0 = the previous column's strikes
++     *           q      [net0, netVol0, net1, netVol1, …] as integers in ±999
++     *                  (0.1 % of the column's biggest |value|), or 0 = exactly
++     *                  the previous column's values (the static overnight and
++     *                  weekend minutes collapse to a few bytes each)
++     *         The unit is sticky while the column's biggest value stays within
++     *         60–100 % of 999 units, so a minute's change is a one- or two-digit
++     *         delta instead of a fresh four-digit number.
++     *   last  the NEWEST column again at full precision, { slotTs, spot, cells },
++     *         so the live rail and the level picks read exact numbers
++     */
++    const HEATMAP_Q = 999;
++    const compactHeatmap = (payload) => {
++      const cols = Array.isArray(payload?.columns) ? payload.columns : [];
++      const { columns: _drop, ...meta } = payload || {};
++      const strikeSet = new Set();
++      for (const col of cols) for (const cell of col.cells || []) strikeSet.add(cell.strike);
++      const k = [...strikeSet].sort((a, b) => a - b);
++      const idx = new Map(k.map((s, i) => [s, i]));
++      const c = [];
++      let prevT = cols[0]?.slotTs ?? 0;
++      let prevKs = '';
++      let prevU = 0;
++      let prevQ = null;
++      for (const col of cols) {
++        const cells = [...(col.cells || [])].sort((a, b) => a.strike - b.strike);
++        let big = 0;
++        for (const x of cells) big = Math.max(big, Math.abs(x.net) || 0, Math.abs(x.netVol) || 0);
++        const sticky = prevU > 0 && big <= prevU * HEATMAP_Q && big >= prevU * HEATMAP_Q * 0.6;
++        const u = sticky ? prevU : big > 0 ? Number((big / HEATMAP_Q).toPrecision(4)) : 1;
++        const ks = cells.map((x) => idx.get(x.strike));
++        const q = [];
++        for (const x of cells) q.push(Math.round((x.net || 0) / u), Math.round((x.netVol || 0) / u));
++        const ksKey = ks.join(',');
++        const sameKs = ksKey === prevKs;
++        const sameU = sameKs && u === prevU && prevQ && prevQ.length === q.length;
++        const sameQ = sameU && q.every((v, i) => v === prevQ[i]);
++        const dt = Math.round((col.slotTs - prevT) / 60_000);
++        const spot = Math.round((Number(col.spot) || 0) * 100) / 100;
++        if (sameQ) c.push([dt, spot, 0, 0, 0]);
++        else if (sameU) c.push([dt, spot, -1, 0, q.map((v, i) => v - prevQ[i])]);
++        else c.push([dt, spot, u, sameKs ? 0 : ks, q]);
++        prevT = col.slotTs;
++        prevKs = ksKey;
++        prevU = u;
++        prevQ = q;
++      }
++      const tail = cols[cols.length - 1];
++      return {
++        ...meta,
++        fmt: 'c',
++        k,
++        t0: cols[0]?.slotTs ?? 0,
++        c,
++        last: tail ? { slotTs: tail.slotTs, spot: tail.spot, cells: tail.cells } : null,
++      };
++    };
++    const sendHeatmap = (res, sp, payload) =>
++      send(res, 200, sp.get('fmt') === 'c' ? compactHeatmap(payload) : payload);
+     register('/api/snapshots/option-strike-gex-history', {
+       auth: 'subscriber', methods: ['GET', 'POST'],
+       async handler(req, res) {
+@@ -7814,7 +8102,7 @@ if (libDb) {
+             // kept for hours, not 30 s (2026-10-06)
+             const pastDay = winMin === 0 && !anyExpiry && date < todayET();
+             const ttl = pastDay ? 6 * 3_600_000 : HEATMAP_TTL_MS;
+-            if (cached && Date.now() - cached.at < ttl) { send(res, 200, cached.payload); return; }
++            if (cached && Date.now() - cached.at < ttl) { sendHeatmap(res, sp, cached.payload); return; }
+             // ── WHICH EXPIRY THIS DATE IS ACTUALLY READ UNDER ──────────────
+             //
+             // Resolved BEFORE the slots query, not after an empty one. The
+@@ -7918,7 +8206,7 @@ if (libDb) {
+               const columns = [...prevCols.filter((c) => c.slotTs < since), ...buildColumns(fresh)];
+               const payload = { ...cached.payload, columns };
+               heatmapCache.set(cacheKey, { at: Date.now(), fullAt: cached.fullAt, payload });
+-              send(res, 200, payload);
++              sendHeatmap(res, sp, payload);
+               return;
+             }
+             let usedExpiry = expiry;
+@@ -7956,7 +8244,7 @@ if (libDb) {
+               for (const [k, v] of heatmapCache) if (Date.now() - v.at > HEATMAP_TTL_MS) heatmapCache.delete(k);
+             }
+             heatmapCache.set(cacheKey, { at: Date.now(), fullAt: Date.now(), payload });
+-            send(res, 200, payload);
++            sendHeatmap(res, sp, payload);
+             return;
+           }
+ 
+@@ -17451,15 +17739,28 @@ try {
+     });
+ 
+     // ── resolve ──────────────────────────────────────────────────────────────
+-    // "apple" → AAPL. The chain/flow panels call this so the UI can show which
+-    // ticker a name resolved to BEFORE firing a pull against the wrong company.
++    // EXACT ONLY by default: { symbol: 'AAPL', match: 'exact' } when the vault
++    // catalog holds that exact ticker, else { symbol: null, match: 'none' }.
++    // The old answer was a name search, which turned SPX into SPXC and VIX into
++    // ENVX and put years of the wrong stock under Vela's 1D/1W charts (live
++    // audit, 2026-10-07). `fuzzy=1` keeps the "apple" → AAPL name search for a
++    // caller that shows the user what it resolved to before pulling; an index
++    // ticker is never name-matched either way (_lib-lse.cjs INDEX_TICKERS).
+     register('/api/lse/resolve', {
+       auth: 'owner', methods: ['GET'],
+       async handler(req, res) {
+-        const q = String(qp(req).get('q') || '').trim();
++        const params = qp(req);
++        const q = String(params.get('q') || '').trim();
+         if (!q) return send(res, 400, { error: 'q is required' });
+         try {
+-          return send(res, 200, { query: q, symbol: await lse.resolveUnderlying(q) }, { 'Cache-Control': NO_STORE });
++          const exact = await lse.resolveExact(q);
++          if (exact) return send(res, 200, { query: q, symbol: exact, match: 'exact' }, { 'Cache-Control': NO_STORE });
++          if (params.get('fuzzy') === '1' && !lse.isIndexTicker(q)) {
++            const named = await lse.resolveUnderlying(q);
++            const hit = named && named !== q.toUpperCase() ? named : null;
++            return send(res, 200, { query: q, symbol: hit, match: hit ? 'name' : 'none' }, { 'Cache-Control': NO_STORE });
++          }
++          return send(res, 200, { query: q, symbol: null, match: 'none' }, { 'Cache-Control': NO_STORE });
+         } catch (e) { return fail(res, e); }
+       },
+     });
+diff --git a/server-v2/etf-candle-recorder.js b/server-v2/etf-candle-recorder.js
+index 4e56010..cdf9f11 100644
+--- a/server-v2/etf-candle-recorder.js
++++ b/server-v2/etf-candle-recorder.js
+@@ -299,20 +299,68 @@ function ymdEtOf(ms) {
+   return ET_DATE_FMT.format(new Date(ms));
+ }
+ 
++const ET_HM_FMT = new Intl.DateTimeFormat('en-US', {
++  timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
++});
++/** ET minute-of-day (0–1439) of an epoch-ms instant. */
++function etMinuteOf(ms) {
++  const parts = ET_HM_FMT.formatToParts(new Date(ms));
++  const get = (t) => Number(parts.find((x) => x.type === t)?.value ?? 0);
++  return (get('hour') % 24) * 60 + get('minute');
++}
++/** Epoch ms of 00:00 ET on the ET date `ymd` (DST-correct). */
++function etMidnightMs(ymd) {
++  const [y, m, d] = String(ymd).split('-').map(Number);
++  for (const off of [4, 5]) {
++    const t = Date.UTC(y, m - 1, d, off);
++    if (ymdEtOf(t) === ymd && etMinuteOf(t) === 0) return t;
++  }
++  return Date.UTC(y, m - 1, d, 5);
++}
++
++// ── Which bars are real (2026-10-07 audit) ───────────────────────────────────
++// dxLink keeps emitting a cash index's last value after the 16:00 close — flat,
++// zero-volume bars 16:00–16:20 — plus the odd stray print later (16:40, 16:48),
++// and a quiet name's extended session can carry flat zero-volume carry-forward
++// bars. None of them traded. So:
++//   · a CASH INDEX keeps only its regular session, 09:30–16:00 ET — an index
++//     has no extended tape (VIX is left out: its values are computed outside
++//     RTH too, and only its flat zero-volume bars are dropped)
++//   · anything else drops a bar outside 09:30–16:00 that is BOTH zero-volume
++//     and flat (O = H = L = C); a real extended-hours print is kept
++// Applied when writing (upsertBars) AND when reading (getEtfCandleHistory), so
++// the rows already in the table stop drawing too.
++const RTH_OPEN_MIN = 9 * 60 + 30;
++const RTH_CLOSE_MIN = 16 * 60;
++const CASH_INDEXES = new Set(['SPX', 'NDX', 'RUT', 'XSP', 'DJX', 'OEX']);
++function keepBar(symbol, c) {
++  const m = etMinuteOf(Number(c.time));
++  if (m >= RTH_OPEN_MIN && m < RTH_CLOSE_MIN) return true;
++  if (CASH_INDEXES.has(String(symbol).toUpperCase())) return false;
++  const o = Number(c.open), h = Number(c.high), l = Number(c.low), cl = Number(c.close);
++  const flat = o === h && h === l && l === cl;
++  return !(flat && !(Number(c.volume) > 0));
++}
++
+ // ── Tick / write ─────────────────────────────────────────────────────────────
+ 
+ // Postgres caps a statement at 65535 bind parameters. At 8 params per bar a
+ // 5-session backfill (~1950 bars) fits comfortably, but chunking keeps the
+ // statement small enough to stay fast and leaves headroom if the window grows.
+ const INSERT_CHUNK = 500;
++/** A session date needs this many 1m rows to count as a session (getEtfCandleHistory). */
++const SESSION_MIN_ROWS = 10;
+ 
+ /**
+  * Upsert bars for one symbol. Each bar is stamped with ITS OWN ET session date
+  * (see ymdEtOf) so the same function serves both the live tick and the
+  * multi-day backfill. Returns the number of rows written.
+  */
+-async function upsertBars(p, symbol, candles) {
+-  if (!Array.isArray(candles) || !candles.length) return 0;
++async function upsertBars(p, symbol, candlesIn) {
++  if (!Array.isArray(candlesIn) || !candlesIn.length) return 0;
++  // no post-close leftovers, no flat zero-volume carry-forwards (see keepBar)
++  const candles = candlesIn.filter((c) => keepBar(symbol, c));
++  if (!candles.length) return 0;
+   let written = 0;
+   for (let off = 0; off < candles.length; off += INSERT_CHUNK) {
+     const slice = candles.slice(off, off + INSERT_CHUNK);
+@@ -587,8 +635,15 @@ async function getEtfCandles(symbol, date) {
+  * LAST_VALUE over the bucket, not MIN/MAX of the timestamps), high/low/volume
+  * are the bucket's max/min/sum.
+  *
++ * DAYS ARE SESSIONS (2026-10-07). `daysBack` used to be calendar days counted
++ * back from now, so days=5 on a Wednesday afternoon reached into the previous
++ * Friday's evening — three sessions and a stray Friday bar. It is now the
++ * newest `daysBack` ET session dates that hold real bars: weekdays with at
++ * least SESSION_MIN_ROWS rows, so a holiday's or a weekend's stray prints never
++ * count as a session. The window opens at 00:00 ET of the oldest one.
++ *
+  * @param {string} symbol   SPY / QQQ
+- * @param {number} daysBack Calendar days of history (default 5)
++ * @param {number} daysBack Sessions of history (default 5)
+  * @param {1|5}    interval Bar size in minutes
+  * @param {number} limit    Max bars returned (most recent kept)
+  * @returns {Promise<Array<{timestamp:number,date:string,slotKey:string,time:string,symbol:string,intervalMinutes:number,open:number,high:number,low:number,close:number,volume:number}>>}
+@@ -600,10 +655,29 @@ async function getEtfCandleHistory(symbol, daysBack = 5, interval = 5, limit = 5
+   if (!sym) return [];
+   const iv = Number(interval) === 1 ? 1 : 5;
+   const bucketMs = iv * 60_000;
+-  const since = Date.now() - Math.max(1, Number(daysBack) || 5) * 24 * 60 * 60 * 1000;
++  const sessions = Math.max(1, Math.min(60, Math.floor(Number(daysBack) || 5)));
+   const cap = Math.max(1, Math.min(50_000, Number(limit) || 5000));
++  const cashIndex = CASH_INDEXES.has(sym);
+ 
+   try {
++    // The newest `sessions` real session dates. The scan is bounded by the
++    // primary key (symbol, timestamp): two calendar days per session plus a
++    // week covers any run of holidays.
++    const scanFrom = Date.now() - (sessions * 2 + 7) * 86_400_000;
++    const { rows: dates } = await p.query(
++      `SELECT date
++         FROM etf_candles
++        WHERE symbol = $1 AND timestamp >= $2::bigint
++          AND EXTRACT(ISODOW FROM date::date) < 6
++        GROUP BY date
++       HAVING COUNT(*) >= $3
++        ORDER BY date DESC
++        LIMIT $4`,
++      [sym, scanFrom, SESSION_MIN_ROWS, sessions],
++    );
++    if (!dates.length) return [];
++    const since = etMidnightMs(String(dates[dates.length - 1].date));
++
+     // Bad-print wicks are clamped on the 1m rows BEFORE bucketing (candle-despike.js),
+     // so the 5m bars — and every roll-up the client builds from them — are clean.
+     // The read starts SQL_PAD_MS early so the window's first bar has past neighbours;
+@@ -613,6 +687,14 @@ async function getEtfCandleHistory(symbol, daysBack = 5, interval = 5, limit = 5
+          SELECT timestamp, date, open, high, low, close, volume
+            FROM etf_candles
+           WHERE symbol = $1 AND timestamp >= $2::bigint - $5::bigint
++            -- keepBar(), in SQL: outside 09:30–16:00 ET a cash index keeps
++            -- nothing, anything else drops flat zero-volume bars
++            AND (
++              (EXTRACT(HOUR FROM to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York') * 60
++               + EXTRACT(MINUTE FROM to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'))
++                BETWEEN ${RTH_OPEN_MIN} AND ${RTH_CLOSE_MIN - 1}
++              OR (NOT $8::boolean AND NOT (COALESCE(volume, 0) = 0 AND open = high AND high = low AND low = close))
++            )
+        ), nb AS (
+          SELECT raw.*, ${despikeLib.SQL_NEIGHBOUR_COLS}
+            FROM raw
+@@ -637,7 +719,7 @@ async function getEtfCandleHistory(symbol, daysBack = 5, interval = 5, limit = 5
+         GROUP BY bucket_ts
+         ORDER BY bucket_ts DESC
+         LIMIT $4`,
+-      [sym, since, bucketMs, cap, despikeLib.SQL_PAD_MS, despikeLib.PCT, despikeLib.MULT],
++      [sym, since, bucketMs, cap, despikeLib.SQL_PAD_MS, despikeLib.PCT, despikeLib.MULT, cashIndex],
+     );
+ 
+     // Query returns newest-first (so LIMIT keeps the most RECENT bars); the
+diff --git a/server-v2/tt-snapshot.js b/server-v2/tt-snapshot.js
+index 2c8ebc9..2337444 100644
+--- a/server-v2/tt-snapshot.js
++++ b/server-v2/tt-snapshot.js
+@@ -242,13 +242,18 @@ function yahooSym(symbol) {
+   // BRK.B", leaving the ticker ungradeable in em_tracker forever.
+   return s.includes('.') ? s.replace(/\./g, '-') : s;
+ }
+-async function yahooDaily(symbol, startDate, endDate) {
++// interval: '1d' (the default every recorder uses), '1wk' or '1mo' — the last
++// two are for /api/vela/history (Vela's W / M charts), which reads the same
++// adapter so the charts and the recorders agree on one source of daily bars.
++const YAHOO_INTERVALS = new Set(['1d', '1wk', '1mo']);
++async function yahooDaily(symbol, startDate, endDate, interval = '1d') {
+   const ysym = yahooSym(symbol);
++  const iv = YAHOO_INTERVALS.has(interval) ? interval : '1d';
+   const p1 = Math.floor(new Date(startDate).getTime() / 1000);
+   const p2 = Math.floor(new Date(endDate).getTime() / 1000) + 86400;
+   if (!Number.isFinite(p1) || !Number.isFinite(p2)) return [];
+   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ysym)}`
+-    + `?period1=${p1}&period2=${p2}&interval=1d`;
++    + `?period1=${p1}&period2=${p2}&interval=${iv}`;
+   let json;
+   try {
+     const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' } });
+@@ -297,6 +302,7 @@ const fetchIndexEodTheta = async () => { warnOnce('fetchIndexEodTheta'); return
+ const fetchStockEodTheta = async () => { warnOnce('fetchStockEodTheta'); return null; };
+ 
+ module.exports = {
++  yahooDaily,
+   fetchChainTheta,
+   fetchOpenInterestTheta,
+   fetchVolumeTheta,
+-- 
+2.43.0
+
