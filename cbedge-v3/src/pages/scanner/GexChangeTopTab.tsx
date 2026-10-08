@@ -72,7 +72,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useExpandStage } from '@/design/primitives/Expand'
 import { ProbeChart, type Bar } from '@/board/topFlow/ContractProbe'
-import { CopyShotButton } from '@/shell/CopyShot'
+import { CopyShotButton, ICON_BUTTON_CLASS } from '@/shell/CopyShot'
 import type { ShotResult } from '@/shell/snapshot'
 import { Card } from '@/design/primitives/Card'
 import { Chip } from '@/design/primitives/Controls'
@@ -95,7 +95,6 @@ import {
   BACK_LABELS,
   CAPTURED_LABEL_PREFIX,
   CARD_BACK_TO_PICK,
-  CARD_CLOSE_GLYPH,
   CARD_TITLE,
   CHART_EMPTY_LINE_1,
   CHART_EMPTY_LINE_2,
@@ -281,13 +280,17 @@ async function shootTile(tile: HTMLElement | null, label: string): Promise<ShotR
   }
 }
 
-/** A small glyph button for a card header. Hidden from its own PNG. */
+/**
+ * A square icon button for a card header — the same chrome as the camera
+ * (ICON_BUTTON_CLASS, 2026-10-07), so the two sit as a matched pair instead of
+ * a text glyph next to an emoji. Hidden from its own PNG.
+ */
 function CardIconButton({
   glyph,
   title,
   onClick,
 }: {
-  glyph: string
+  glyph: 'expand' | 'close'
   title: string
   onClick: () => void
 }) {
@@ -298,15 +301,20 @@ function CardIconButton({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="shrink-0 px-0.5 text-sm leading-none opacity-70 hover:opacity-100"
-      style={{ color: T.text }}
+      className={`${ICON_BUTTON_CLASS} text-muted`}
     >
-      {glyph}
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        {glyph === 'expand' ? (
+          <path d="M14 5h5v5M10 19H5v-5M19 5l-6 6M5 19l6-6" />
+        ) : (
+          <path d="M7 7l10 10M17 7L7 17" />
+        )}
+      </svg>
     </button>
   )
 }
 
-const EXPAND_GLYPH = '⤢'
+const EXPAND_GLYPH = 'expand' as const
 const EXPAND_TITLE = 'Expand this card'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -326,7 +334,11 @@ const FLIP_PERSPECTIVE = 1200
  *  demoted "now" line + toolbar + a fixed 96px chart + hint, and both faces are
  *  `inset: 0`, so this one number is the tile's height whichever way up it is.
  *  That is what stops a flip resizing the card or reflowing the grid. */
-const FLIP_MIN_HEIGHT = 348 // 260 → 348 (2026-09-24): the back now carries the whale-page ProbeChart with its volume strip
+/** SQUARE TILES (2026-10-07, Brandon) — the tile is `aspect-ratio: 1`, and
+ *  the grid column has this floor so a square is never too small for the back
+ *  face. Was a fixed 348px height sized for the back, which left the front
+ *  mostly empty and the PNG a tall strip of blank card. */
+const TILE_MIN_PX = 260
 
 
 /** C108 — v2's transition, verbatim. Only `transform` animates, which is
@@ -1144,7 +1156,13 @@ function SlotSection({
 
       {/* C95 — v2's five-then-3/2/1 grid, on the standard breakpoints rather
           than its four hand-written px media queries. */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
+      {/* Square tiles (2026-10-07): as many TILE_MIN_PX+ columns as fit, each
+          tile as tall as it is wide. Replaces the fixed 1/2/3/5 breakpoints,
+          which made the square either cramped or huge depending on the pane. */}
+      <div
+        className="grid gap-3"
+        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${TILE_MIN_PX}px, 1fr))` }}
+      >
         {bucket.rows.map((row) => (
           <PickCard
             // C107 — the React key. It is NOT `cardId` (C96), which omits the
@@ -1302,7 +1320,7 @@ function PickCard({
       title={cardTitle(row, v.side, v.wid, isFlipped)}
       className="relative"
       style={{
-        minHeight: FLIP_MIN_HEIGHT,
+        aspectRatio: '1 / 1',
         perspective: FLIP_PERSPECTIVE,
         // C106, C107 — present but discounted. The card stays because removing
         // it would leave the hour a pick short (rank 6 was never recorded).
@@ -1342,7 +1360,7 @@ function PickCard({
           /* C125 — the front face. Same box as the back (`inset: 0`), v2's
              12px/14px padding, and `backfaceVisibility: hidden` so it stops
              painting the moment the flipper passes 90°. */
-          className={`${FACE_CLASS} p-3`}
+          className={`${FACE_CLASS} flex flex-col p-3`}
           style={FACE_STYLE}
           // The turned-away face is already out of the hit test (backface
           // visibility) but NOT out of the tab order; `inert` is what keeps a
@@ -1366,7 +1384,7 @@ function PickCard({
               {v.wid != null && (
                 <CardIconButton glyph={EXPAND_GLYPH} title={EXPAND_TITLE} onClick={expandCard} />
               )}
-              <CopyShotButton target={shotTarget} className="shrink-0 text-sm leading-none" />
+              <CopyShotButton target={shotTarget} variant="icon" />
             </span>
           </div>
 
@@ -1427,47 +1445,51 @@ function PickCard({
             <ProjPill grade={row.proj_grade} pts={row.proj_pts} />
           </div>
 
-          {/* C121 — every card on this tab carries it; there is no second tier. */}
-          <div className="mt-1.5 text-sm font-extrabold" style={{ color: V2.orange }}>
-            {VERY_STRONG_LABEL}
-            {/* C122 — legacy slots only. The `?? 0` inside `underFloorTitle` is v2's
-                and is unreachable: `underFloor` implies the id is in `cheapIds`,
-                which implies an entry exists. */}
-            {v.underFloor && (
-              <span
-                title={underFloorTitle(v.wid != null ? index.entryById.get(v.wid) : undefined)}
-                className="ml-1.5 rounded-sm border px-1 py-px text-xs font-bold"
-                style={{
-                  color: T.text,
-                  background: alpha(T.text, 0.1),
-                  borderColor: alpha(T.text, 0.25),
-                }}
+          {/* Square tile (2026-10-07): the bottom row sits at the foot of the
+              face in normal flow — the spacer takes up whatever the content
+              above leaves — rather than the price-line button being pinned
+              absolute over the bottom edge, where it overlapped the PNG's
+              caption band. */}
+          <div className="min-h-0 flex-1" />
+          <div className="flex items-end justify-between gap-2">
+            {/* C121 — every card on this tab carries it; there is no second tier. */}
+            <div className="text-sm font-extrabold" style={{ color: V2.orange }}>
+              {VERY_STRONG_LABEL}
+              {/* C122 — legacy slots only. The `?? 0` inside `underFloorTitle` is v2's
+                  and is unreachable: `underFloor` implies the id is in `cheapIds`,
+                  which implies an entry exists. */}
+              {v.underFloor && (
+                <span
+                  title={underFloorTitle(v.wid != null ? index.entryById.get(v.wid) : undefined)}
+                  className="ml-1.5 rounded-sm border px-1 py-px text-xs font-bold"
+                  style={{
+                    color: T.text,
+                    background: alpha(T.text, 0.1),
+                    borderColor: alpha(T.text, 0.25),
+                  }}
+                >
+                  {UNDER_FLOOR_BADGE}
+                </span>
+              )}
+            </div>
+
+            {/* C123 — the flip control. Absent for a pre-auto-probe row, which has
+                no price line to show. Hidden from the PNG: it is a control, not
+                part of the card. */}
+            {v.wid != null && (
+              <button
+                type="button"
+                data-capture-hide
+                onClick={() => onToggle(v.cid)}
+                aria-expanded={isFlipped}
+                title={isFlipped ? CARD_BACK_TO_PICK : undefined}
+                className="shrink-0 text-xs hover:underline"
+                style={{ color: alpha(V2.cyan, 0.85) }}
               >
-                {UNDER_FLOOR_BADGE}
-              </span>
+                {PRICE_LINE_HINT}
+              </button>
             )}
           </div>
-
-          {/* C123 — the flip affordance, and in v3 the flip CONTROL. v2 made the
-              whole tile clickable and this a hint; a real button is the same
-              affordance without a div that swallows pointer events. Absent for a
-              pre-auto-probe row, which has no price line to show.
-
-              Pinned to the bottom-left as v2 pinned it (left 14, bottom 8): the
-              front face is now a fixed-height box, so in flow it would float in the
-              middle of whatever space the content left. */}
-          {v.wid != null && (
-            <button
-              type="button"
-              onClick={() => onToggle(v.cid)}
-              aria-expanded={isFlipped}
-              title={isFlipped ? CARD_BACK_TO_PICK : undefined}
-              className="absolute bottom-2 left-3.5 text-xs"
-              style={{ color: alpha(V2.cyan, 0.75) }}
-            >
-              {PRICE_LINE_HINT}
-            </button>
-          )}
         </div>
 
         {/*
@@ -1647,7 +1669,7 @@ function PickBack({
       className={
         expanded
           ? 'flex min-h-0 flex-1 flex-col overflow-auto rounded-md border px-5 py-4'
-          : `${FACE_CLASS} px-3 py-2.5`
+          : `${FACE_CLASS} flex flex-col px-3 py-2.5`
       }
       style={expanded ? { borderColor: V2W.border, background: V2W.panelBg } : BACK_FACE_STYLE}
       // Out of the tab order while it is turned away — the mirror of the front
@@ -1680,17 +1702,8 @@ function PickBack({
           {!expanded && onExpand && (
             <CardIconButton glyph={EXPAND_GLYPH} title={EXPAND_TITLE} onClick={onExpand} />
           )}
-          {shotTarget && <CopyShotButton target={shotTarget} className="shrink-0 text-sm leading-none" />}
-          <button
-            type="button"
-            data-capture-hide
-            onClick={onClose}
-            title={expanded ? 'Close (Esc)' : CARD_BACK_TO_PICK}
-            className="shrink-0 px-0.5 text-base leading-none"
-            style={{ color: T.text }}
-          >
-            {CARD_CLOSE_GLYPH}
-          </button>
+          {shotTarget && <CopyShotButton target={shotTarget} variant="icon" />}
+          <CardIconButton glyph="close" title={expanded ? 'Close (Esc)' : CARD_BACK_TO_PICK} onClick={onClose} />
         </span>
       </div>
 
@@ -1832,21 +1845,30 @@ function PickBack({
           the flag, the high ringed green, the low red, the last mark in the
           rail, and the contract's per-snapshot volume underneath. The GEX /
           Tape / V/OI tabs are gone — the tape lives in the line above. */}
-      {wid != null && q.loading && !bars.length ? (
-        <div className="py-6 text-center font-mono text-2xs" style={{ color: T.text }}>
-          {CHART_LOADING}
-        </div>
-      ) : hist?.error ? (
-        <div className="py-6 text-center font-mono text-2xs" style={{ color: V2.red }}>
-          {hist.error}
-        </div>
-      ) : bars.length < 2 ? (
-        <div className="py-6 text-center font-mono text-2xs" style={{ color: T.text }}>
-          {CHART_EMPTY_LINE_1} {CHART_EMPTY_LINE_2}
-        </div>
-      ) : (
-        <ProbeChart bars={bars} entry={v.entry} entryTs={entryTs} size={null} wide={expanded} />
-      )}
+      {/* Square tile (2026-10-07): the chart takes whatever height the lines
+          above leave (`fit`), instead of a width-derived height that overflowed
+          the square. The expanded view keeps its own wide sizing. */}
+      <div className={expanded ? '' : 'flex min-h-0 flex-1 flex-col justify-center'}>
+        {wid != null && q.loading && !bars.length ? (
+          <div className="py-6 text-center font-mono text-2xs" style={{ color: T.text }}>
+            {CHART_LOADING}
+          </div>
+        ) : hist?.error ? (
+          <div className="py-6 text-center font-mono text-2xs" style={{ color: V2.red }}>
+            {hist.error}
+          </div>
+        ) : bars.length < 2 ? (
+          <div className="py-6 text-center font-mono text-2xs" style={{ color: T.text }}>
+            {CHART_EMPTY_LINE_1} {CHART_EMPTY_LINE_2}
+          </div>
+        ) : expanded ? (
+          <ProbeChart bars={bars} entry={v.entry} entryTs={entryTs} size={null} wide />
+        ) : (
+          <div className="min-h-0 flex-1">
+            <ProbeChart bars={bars} entry={v.entry} entryTs={entryTs} size={null} fit />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

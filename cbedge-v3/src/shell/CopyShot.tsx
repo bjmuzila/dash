@@ -1013,19 +1013,82 @@ export function CopyShotMenu() {
  *
  * Wear `data-capture-hide` on this button — it must not appear in its own PNG.
  */
+// ── ICON VARIANT (2026-10-07) ────────────────────────────────────────────────
+// The 📸 emoji renders as a full-colour bitmap that ignores the theme and
+// sits at a different size from every glyph beside it. `variant="icon"` is a
+// stroked SVG in a small square button, inheriting `currentColor`, with the
+// same state machine: spinner while working, check on success, cross on error.
+// Opt-in so the existing cameras across the shell are unchanged.
+
+/** The square chrome shared by every card-header icon button. */
+export const ICON_BUTTON_CLASS =
+  'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line transition-colors hover:border-accent hover:text-fg'
+
+const ICON_PATH: Record<ShotState, ReactNode> = {
+  idle: (
+    <>
+      <path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h1.6l1.2-1.8A1 1 0 0 1 9.1 4.8h5.8a1 1 0 0 1 .8.4L16.9 7h1.6A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z" />
+      <circle cx="12" cy="13" r="3.2" />
+    </>
+  ),
+  working: <path d="M12 4a8 8 0 1 1-8 8" />,
+  copied: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  saved: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  err: <path d="M7 7l10 10M17 7L7 17" />,
+  wait: <path d="M8 16L16 8M10 8h6v6" />,
+}
+
+function ShotIcon({ state }: { state: ShotState }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={state === 'working' ? 'animate-spin' : undefined}
+    >
+      {ICON_PATH[state]}
+    </svg>
+  )
+}
+
 export function CopyShotButton({
   target,
   className = '',
   label,
+  variant = 'glyph',
 }: {
   target: CopyShotTarget
   className?: string
   /** Text beside the glyph. Omit for the bare camera. */
   label?: string
+  /** 'icon' = the stroked SVG camera in a square button. */
+  variant?: 'glyph' | 'icon'
 }) {
   const { isOwner } = useIsOwner()
   const { state, take } = useShot()
   if (!isOwner) return null
+  if (variant === 'icon') {
+    const tone = state === 'copied' || state === 'saved' ? 'text-up' : state === 'err' ? 'text-down' : 'text-muted'
+    return (
+      <button
+        type="button"
+        data-capture-hide
+        onClick={() => void take(target, target.capture ? null : claimClipboard())}
+        title="Copy a PNG of this card to the clipboard"
+        aria-label="Copy a PNG of this card to the clipboard"
+        disabled={state === 'working'}
+        className={[ICON_BUTTON_CLASS, tone, className].join(' ')}
+      >
+        <ShotIcon state={state} />
+      </button>
+    )
+  }
   return (
     <button
       type="button"

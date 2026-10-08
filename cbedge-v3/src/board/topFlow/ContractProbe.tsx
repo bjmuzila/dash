@@ -720,7 +720,7 @@ function ProbeExpandIcon({ size = 12, collapse = false }: { size?: number; colla
 
 const MONO = 'ui-monospace,Menlo,Consolas,monospace'
 
-export function ProbeChart({ bars, entry, entryTs, size, wide = false, fills }: {
+export function ProbeChart({ bars, entry, entryTs, size, wide = false, fills, fit = false }: {
   bars: Bar[]
   /** Repeated-flow fills — see ContractProbe's `fills`. */
   fills?: ProbeFill[]
@@ -731,6 +731,14 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false, fills }: 
   size: number | null
   /** Popped out over the page — a bigger canvas, and type scaled to match it. */
   wide?: boolean
+  /**
+   * Fill the parent's HEIGHT as well as its width (2026-10-07). For a fixed
+   * box — the square GEX Change Top card — where the chart gets whatever room
+   * the text above it leaves. The parent must be a sized flex child
+   * (`flex-1 min-h-0`). The svg is positioned out of flow so it cannot feed
+   * its own height back into the measurement.
+   */
+  fit?: boolean
 }) {
   const [hover, setHover] = useState<number | null>(null)
 
@@ -744,12 +752,15 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false, fills }: 
   // CSS pixel, so type is the size it was written at whatever the placement is.
   const boxRef = useRef<HTMLDivElement | null>(null)
   const [cw, setCw] = useState<number | null>(null)
+  const [ch, setCh] = useState<number | null>(null)
   useEffect(() => {
     const el = boxRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect.width
       if (w && w > 0) setCw(w)
+      const h = entries[0]?.contentRect.height
+      if (h && h > 0) setCh(h)
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -758,12 +769,14 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false, fills }: 
   const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
   // The fallbacks are the old fixed widths, so the first paint before the
   // observer fires is the chart it always was rather than a collapsed one.
-  const W = Math.round(clamp(cw ?? (wide ? 1000 : 320), wide ? 560 : 260, 1600))
+  const W = Math.round(clamp(cw ?? (wide ? 1000 : 320), wide ? 560 : fit ? 180 : 260, 1600))
   // Height tracks width so the picture does not letterbox, but it is CAPPED: a
   // wide pane should get a wider chart, not a taller page.
-  const H = wide
-    ? Math.round(clamp(W * 0.42, 300, 520))
-    : Math.round(clamp(W * 0.78, 190, 320))
+  const H = fit && ch
+    ? Math.round(clamp(ch, 90, 520))
+    : wide
+      ? Math.round(clamp(W * 0.42, 300, 520))
+      : Math.round(clamp(W * 0.78, 190, 320))
   // Padding is keyed off the type scale rather than a wide/narrow flag, so the
   // price rail always has exactly the room its own labels need.
   const PS = wide ? 1.3 : 1
@@ -974,10 +987,14 @@ export function ProbeChart({ bars, entry, entryTs, size, wide = false, fills }: 
   const BOXH = HEADH + hrows.length * ROWH + 6 * S
 
   return (
-    <div ref={boxRef} style={{ width: '100%' }}>
+    <div ref={boxRef} style={fit ? { width: '100%', height: '100%', position: 'relative' } : { width: '100%' }}>
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        style={{ width: '100%', height: 'auto', display: 'block' }}
+        style={
+          fit
+            ? { position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block' }
+            : { width: '100%', height: 'auto', display: 'block' }
+        }
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
       >
