@@ -6,7 +6,7 @@
 //   Watchlist     Alt+W ✓  │ Script editor    Alt+E
 //   Data window   Alt+D    │ Strategy Tester  Alt+B
 //   Object tree   Alt+O    │
-//   Session stats strip ◉  │
+//   Tape scroll         ◉  │
 //   ───────────────────────┼──────────────────────
 //   ALERTS                 │ LAYOUT
 //   Level alerts  Alt+A    │ Setups

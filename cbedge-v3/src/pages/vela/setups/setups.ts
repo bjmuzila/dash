@@ -1,11 +1,14 @@
 // The Setups action: named chart setups, one click to load. The page chunk
 // carries only the action; the menu (setupsMenu.ts) loads on the first click.
-// The Stats action beside it shows / hides the session stats strip above the
-// chart (SessionStrip.tsx).
+// The Tape scroll action beside it shows / hides the tape at the top of the page
+// (tape/TapeScroll.tsx — the watchlist's Volts; it replaced the session stats
+// strip, SessionStrip.tsx, on 2026-10-07), and this file keeps the tape's two
+// settings: on / off and its sort (A–Z or nearest Volt first).
 //
 // On the desktop both live in the Workspace menu now (workspaceMenu.ts: Layout →
-// Setups, Panels → Session stats strip); the desktop bar no longer lists the
-// right-hand actions. The registrations stay for the phone's ⋮ rows.
+// Setups, Panels → Tape scroll); the desktop bar no longer lists the right-hand
+// actions. The registrations stay for the phone's ⋮ rows — Setups only: the tape
+// is desktop only, so phoneChrome.ts drops its row.
 
 import { registerWidgetAction, type WidgetContext } from '@luxalgo/vela'
 import { registerIcon, svg16 } from '@luxalgo/vela/ui'
@@ -24,7 +27,8 @@ export function bindSetups(w: VelaWorkspace): () => void {
 
 export const setupsWorkspace = (): VelaWorkspace | null => ws
 
-// ── the stats strip's on/off, shared with the React strip ──
+// ── the tape's on/off, shared with the React tape (the key is the old stats
+// strip's, so whoever had the strip off keeps the tape off) ──
 const STRIP_KEY = 'cb-vela-strip'
 const stripSubs = new Set<() => void>()
 export function stripShown(phone: boolean): boolean {
@@ -50,6 +54,25 @@ export function onStrip(fn: () => void): () => void {
   }
 }
 
+// ── the tape's sort: A–Z, or nearest Volt first (the default) ──
+export type TapeSort = 'az' | 'near'
+const SORT_KEY = 'cb-vela-tape-sort'
+export function tapeSort(): TapeSort {
+  try {
+    return localStorage.getItem(SORT_KEY) === 'az' ? 'az' : 'near'
+  } catch {
+    return 'near'
+  }
+}
+export function setTapeSort(s: TapeSort): void {
+  try {
+    localStorage.setItem(SORT_KEY, s)
+  } catch {
+    /* private mode */
+  }
+  for (const fn of stripSubs) fn()
+}
+
 function anchorFor(ctx: WidgetContext, label: string): HTMLElement | null {
   const act = document.activeElement
   if (act instanceof HTMLElement && act.getAttribute('aria-label') === label) return act
@@ -61,7 +84,7 @@ export function registerSetups(): void {
   registered = true
   // three stacked panes
   registerIcon('cb-setups', svg16('<rect x="2" y="2" width="12" height="3.5" rx="1"/><rect x="2" y="6.75" width="12" height="3.5" rx="1"/><rect x="2" y="11.5" width="12" height="2.5" rx="1"/>'))
-  // a strip of numbers
+  // a strip of numbers (the tape scroll)
   registerIcon('cb-stats', svg16('<rect x="1.5" y="4.5" width="13" height="7" rx="1.5"/><path d="M4.5 9.5V7M7 9.5V6.5M9.5 9.5V8M12 9.5V6"/>'))
   registerWidgetAction({
     id: 'cb-setups',
@@ -79,7 +102,7 @@ export function registerSetups(): void {
   registerWidgetAction({
     id: 'cb-stats',
     target: 'topbar',
-    label: 'Session stats',
+    label: 'Tape scroll',
     icon: 'cb-stats',
     iconOnly: true,
     order: 6,

@@ -21,6 +21,10 @@
 // then. Each script keeps its own colours, because those are what it draws
 // with, the same as a pasted script. The .pine files are not .ts, so
 // check-theme does not read them.
+//
+// Who wrote a script (author, license, where it came from) is not shown on the
+// dialog's rows. It is kept here for the row's info (?) button, which is planned
+// (Brandon, 2026-10-07).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CommunityIndicator {
@@ -30,10 +34,16 @@ export interface CommunityIndicator {
   name: string
   /** The collection's folder, in words: "Oscillator", "Moving average", … */
   group: string
+  /** Who wrote it, for the row's info: the script's own copyright line names them. */
   author: string
+  license: string
+  /** The script on GitHub, as published. */
+  url: string
   overlay: boolean
   source: string
 }
+
+const EVERGET_REPO = 'https://github.com/everget/tradingview-pinescript-indicators'
 
 const EVERGET = import.meta.glob<string>('./community/everget/**/*.pine', { query: '?raw', import: 'default', eager: true })
 
@@ -65,7 +75,9 @@ export const COMMUNITY_INDICATORS: CommunityIndicator[] = Object.entries(EVERGET
       id: `ev-${folder}-${file}`.replace(/_/g, '-'),
       name,
       group: GROUPS[folder] ?? folder,
-      author: 'everget',
+      author: 'Alex Orekhov (everget)',
+      license: 'GPL-3.0',
+      url: `${EVERGET_REPO}/blob/master/${folder}/${file}.pine`,
       overlay: OVERLAY.test(source),
       source,
     },

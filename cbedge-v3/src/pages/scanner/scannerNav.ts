@@ -77,6 +77,7 @@ export type ScannerTabId =
   | 'ibstats'
   | 'watch'
   | 'kalman'
+  | 'align'
 
 export interface ScannerTabDef {
   id: ScannerTabId
@@ -152,6 +153,11 @@ export const SCANNER_TABS: readonly ScannerTabDef[] = [
   // pages/scanner/kalman.ts. Last in the gamma cluster: it reads the same
   // ladders the tabs before it rank, and smooths them over time.
   { id: 'kalman', label: 'Kalman Filter', short: 'Kalman', accent: V2.purple, icon: '〰️' },
+  // 2026-10-07: wall alignment — when the biggest GEX strike of the nearest
+  // expirations sits on ONE strike away from spot, and whether 0DTE has joined
+  // it yet. Model in pages/scanner/align.ts; one roster-wide read from
+  // /proxy/strike-growth/align. A ticker click opens its replay (?sym=).
+  { id: 'align', label: 'Wall Alignment', short: 'Align', accent: V2.cyan, icon: '🧲' },
   { id: 'ibstats', label: 'IB Stats', short: 'IB Stats', accent: V2.accent, icon: '📐' },
   { id: 'watch', label: 'Watch This', short: 'Watch', accent: V2.accent, icon: '👁️' },
 ]
@@ -171,7 +177,7 @@ export const DEFAULT_TAB: ScannerTabId = 'gexchangetop'
  * nothing left to do.
  */
 export const SCANNER_GROUPS: readonly { key: string; tabs: readonly ScannerTabId[] }[] = [
-  { key: 'gamma', tabs: ['gexlevels', 'gexchangetop', 'pickstudy', 'strike', 'kalman'] },
+  { key: 'gamma', tabs: ['gexlevels', 'gexchangetop', 'pickstudy', 'strike', 'kalman', 'align'] },
   // One tab since 2026-09-03 — TPO left. Kept as its own cluster rather than
   // folded into 'gamma': IB Stats is a structure read, not a gamma read, and the
   // divider is what says so.

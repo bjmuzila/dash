@@ -27062,3 +27062,13 @@ Brandon asked for the indicators in github.com/everget/tradingview-pinescript-in
   - `cbedge-v3/src/pages/vela/indicatorPicker.ts`
   - `cbedge-v3/src/pages/vela/script/runtime.ts`
   - `cbedge-v3/vite.config.ts`
+
+## 2026-10-07 - Vela Indicators dialog: the community rows no longer name the author
+
+Brandon: each row will get a ? button that opens the indicator's info, and the author (who it belongs to) goes there.
+
+- A community row's description is now just its group ("Oscillator", "Moving average", …), with no "· everget".
+- The author, license and the script's GitHub link stay with each indicator (`script/community.ts`: `author`, `license`, `url`) and reach the row as `Row.info` in `indicatorPicker.ts`, ready for the ? button. Nothing displays them yet.
+- Search no longer finds these rows by typing "everget".
+- **Checks:** `tsc` strict is clean on both files.
+- **Files:** `cbedge-v3/src/pages/vela/indicatorPicker.ts`, `cbedge-v3/src/pages/vela/script/community.ts`.

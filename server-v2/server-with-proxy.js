@@ -431,6 +431,51 @@ async function _sgReplayMeta(key, run) {
   return p;
 }
 
+// ── strike-growth wall-alignment cache ──────────────────────────────────────
+// /proxy/strike-growth/align feeds the v3 scanner's Align tab. One answer per
+// (session date, wall mode), shared by every viewer: the recorder sweeps once a
+// minute, so anything fresher than ~45s is the same answer. Single-flighted for
+// the same reason _sgReplayMeta is — a cold key behind several open scanner
+// tabs should cost one pair of queries, not one per tab.
+const _SG_ALIGN_TTL_MS = 45 * 1000;
+const _sgAlignCache = new Map();    // key -> { at, value }
+const _sgAlignInFlight = new Map(); // key -> Promise
+async function _sgAlign(key, run) {
+  const hit = _sgAlignCache.get(key);
+  if (hit && Date.now() - hit.at < _SG_ALIGN_TTL_MS) return hit.value;
+  const flight = _sgAlignInFlight.get(key);
+  if (flight) return flight;
+  const p = Promise.resolve()
+    .then(run)
+    .then((value) => {
+      _sgAlignCache.set(key, { at: Date.now(), value });
+      if (_sgAlignCache.size > 16) {
+        const cutoff = Date.now() - _SG_ALIGN_TTL_MS;
+        for (const [k, v] of _sgAlignCache) if (v.at < cutoff) _sgAlignCache.delete(k);
+      }
+      return value;
+    })
+    .finally(() => { _sgAlignInFlight.delete(key); });
+  _sgAlignInFlight.set(key, p);
+  return p;
+}
+
+/**
+ * Smallest positive gap between a symbol's recorded strikes — its strike
+ * increment, as far as the recorder can see it. The recorder keeps only the
+ * top N strikes a side, so the set can have holes; the minimum gap over a whole
+ * session (every strike that was EVER a top-N wall) is what makes this reliable.
+ */
+function _sgStrikeStep(strikes) {
+  const s = Array.from(new Set(strikes.filter((x) => Number.isFinite(x)))).sort((a, b) => a - b);
+  let step = Infinity;
+  for (let i = 1; i < s.length; i++) {
+    const d = Math.round((s[i] - s[i - 1]) * 1000) / 1000;
+    if (d > 0 && d < step) step = d;
+  }
+  return Number.isFinite(step) ? step : 0;
+}
+
 // ---------------------------------------------------------------------------
 // REST snapshot router (/proxy/*)
 // ---------------------------------------------------------------------------
@@ -3578,6 +3623,157 @@ async function main() {
             }
             const { expiries, frames } = archive.buildFramesByExpiry(rows);
             sendJson(res, 200, { ok: true, symbol, date, expiries, frames });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // ── Wall alignment across expiries, every scanner ticker ─────────────
+      //   GET /proxy/strike-growth/align[?mode=abs|pos|neg][&date=YYYY-MM-DD]
+      //
+      // Feeds the v3 scanner's Align tab: "when do the walls of the nearest
+      // expirations all sit on the same strike". For each active watchlist
+      // symbol and each expiry in its LATEST sweep:
+      //   strike / net — that expiry's wall right now (the top strike by mode)
+      //   next         — the runner-up's magnitude, for a dominance ratio
+      //   segs         — the wall's history today, run-length encoded as
+      //                  [tMs, strike] at every minute the wall MOVED. The page
+      //                  replays these to date each state change, so the
+      //                  payload stays small however long the session runs.
+      // `step` is the symbol's strike increment (smallest gap between any two
+      // strikes recorded today), so the page can count distance in strikes.
+      //
+      // mode: abs = biggest |net|; pos = biggest positive (call wall);
+      //       neg = biggest negative (put wall). net = gex_now + gex_open, the
+      //       same OI+Vol basis as /frames-by-expiry and the chain.
+      // Expiries are whatever the recorder keeps (STRIKE_GROWTH_EXPIRIES, 3 by
+      // default = 0DTE/front + the next two). Falls back to the most recent
+      // recorded date pre-open / on a weekend, and says which date it used.
+      if (pathname === '/proxy/strike-growth/align' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+            const asOfParam = (u.searchParams.get('date') || '').trim();
+            const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfParam) ? asOfParam : today;
+            const modeParam = (u.searchParams.get('mode') || 'abs').toLowerCase();
+            const mode = modeParam === 'pos' || modeParam === 'neg' ? modeParam : 'abs';
+            const payload = await _sgAlign(`${asOf}|${mode}`, async () => {
+              const net = `(sg.gex_now + sg.gex_open)`;
+              const rankExpr = mode === 'pos' ? net : mode === 'neg' ? `-${net}` : `ABS(${net})`;
+              const signFilter = mode === 'pos' ? `AND ${net} > 0` : mode === 'neg' ? `AND ${net} < 0` : '';
+              const dQ = await p.query(`SELECT to_char(MAX(date),'YYYY-MM-DD') AS date FROM strike_growth WHERE date <= $1`, [asOf]);
+              const date = dQ.rows[0]?.date || null;
+              if (!date) return { ok: true, date: asOf, stale: false, mode, asOf: Date.now(), symbols: [] };
+              // The three reads are independent — fire them together.
+              const [changesQ, latestQ, strikesQ] = await Promise.all([
+                // Each (symbol, expiry, sweep)'s wall, then only the sweeps where
+                // it MOVED. DISTINCT ON rides idx_strike_growth_latest's order.
+                p.query(
+                  `WITH w1 AS (
+                     SELECT DISTINCT ON (sg.symbol, sg.expiry, sg.ts)
+                            sg.symbol, sg.expiry, sg.ts, sg.strike
+                     FROM strike_growth sg
+                     JOIN strike_growth_watchlist wl ON wl.symbol = sg.symbol AND wl.active
+                     WHERE sg.date = $1 ${signFilter}
+                     ORDER BY sg.symbol, sg.expiry, sg.ts, ${rankExpr} DESC, sg.strike ASC
+                   ),
+                   ch AS (
+                     SELECT symbol, expiry, ts, strike,
+                            LAG(strike) OVER (PARTITION BY symbol, expiry ORDER BY ts) AS prev
+                     FROM w1
+                   )
+                   SELECT symbol, expiry, (EXTRACT(EPOCH FROM ts) * 1000)::bigint AS t, strike
+                   FROM ch WHERE prev IS DISTINCT FROM strike
+                   ORDER BY symbol, expiry, ts`,
+                  [date]
+                ),
+                // Every cell of each symbol's latest sweep: the current walls,
+                // their runner-ups and the spot, without a second pass.
+                p.query(
+                  `WITH sl AS (
+                     SELECT sg.symbol, MAX(sg.ts) AS ts
+                     FROM strike_growth sg
+                     JOIN strike_growth_watchlist wl ON wl.symbol = sg.symbol AND wl.active
+                     WHERE sg.date = $1
+                     GROUP BY sg.symbol
+                   )
+                   SELECT sg.symbol, sg.expiry, sg.strike, sg.spot,
+                          (sg.gex_now + sg.gex_open) AS net,
+                          (EXTRACT(EPOCH FROM sg.ts) * 1000)::bigint AS t
+                   FROM strike_growth sg
+                   JOIN sl ON sl.symbol = sg.symbol AND sl.ts = sg.ts
+                   WHERE sg.date = $1`,
+                  [date]
+                ),
+                p.query(`SELECT DISTINCT symbol, strike FROM strike_growth WHERE date = $1`, [date]),
+              ]);
+
+              const strikesBySym = new Map();
+              for (const r of strikesQ.rows) {
+                const k = r.symbol;
+                if (!strikesBySym.has(k)) strikesBySym.set(k, []);
+                strikesBySym.get(k).push(Number(r.strike));
+              }
+              const segsBy = new Map(); // `${symbol}|${expiry}` -> [[t, strike], …]
+              for (const r of changesQ.rows) {
+                const k = `${r.symbol}|${r.expiry}`;
+                if (!segsBy.has(k)) segsBy.set(k, []);
+                segsBy.get(k).push([Number(r.t), Number(r.strike)]);
+              }
+              const latestBySym = new Map();
+              for (const r of latestQ.rows) {
+                if (!latestBySym.has(r.symbol)) latestBySym.set(r.symbol, []);
+                latestBySym.get(r.symbol).push(r);
+              }
+              const score = (n) => (mode === 'pos' ? n : mode === 'neg' ? -n : Math.abs(n));
+              const qualifies = (n) => (mode === 'pos' ? n > 0 : mode === 'neg' ? n < 0 : n !== 0);
+
+              const symbols = [];
+              for (const [symbol, cells] of latestBySym) {
+                const byExp = new Map();
+                let spot = 0;
+                let t = 0;
+                for (const c of cells) {
+                  spot = Math.max(spot, Number(c.spot) || 0);
+                  t = Math.max(t, Number(c.t) || 0);
+                  const e = String(c.expiry);
+                  if (!byExp.has(e)) byExp.set(e, []);
+                  byExp.get(e).push({ strike: Number(c.strike), net: Number(c.net) || 0 });
+                }
+                const expiries = Array.from(byExp.keys()).sort();
+                const walls = expiries.map((expiry) => {
+                  const ranked = byExp.get(expiry)
+                    .filter((c) => qualifies(c.net))
+                    .sort((a, b) => score(b.net) - score(a.net) || a.strike - b.strike);
+                  const top = ranked[0] || null;
+                  const second = ranked[1] || null;
+                  const segs = (segsBy.get(`${symbol}|${expiry}`) || []).slice();
+                  const lastSeg = segs[segs.length - 1];
+                  if (top && (!lastSeg || lastSeg[1] !== top.strike)) segs.push([t, top.strike]);
+                  return {
+                    expiry,
+                    strike: top ? top.strike : null,
+                    net: top ? top.net : 0,
+                    next: second ? Math.abs(second.net) : 0,
+                    segs,
+                  };
+                });
+                symbols.push({
+                  symbol,
+                  t,
+                  spot,
+                  step: _sgStrikeStep(strikesBySym.get(symbol) || []),
+                  expiries,
+                  walls,
+                });
+              }
+              symbols.sort((a, b) => (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
+              return { ok: true, date, stale: date !== today, mode, asOf: Date.now(), symbols };
+            });
+            sendJson(res, 200, payload);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;

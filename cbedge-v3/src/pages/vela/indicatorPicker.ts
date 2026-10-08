@@ -12,7 +12,9 @@
 //   All indicators     everything, A–Z, no letter dividers, including the
 //                      open-source community indicators (script/community.ts:
 //                      everget's collection), which load the first time the
-//                      dialog opens
+//                      dialog opens. A row says what an indicator is, never who
+//                      wrote it: that is for the row's info (?) button, which is
+//                      planned (Row.info holds it)
 //   Voltick            ours: CB Walls, Voltick Path / Ribbon, pages/vela/studies/
 //                      and the ready-made strategies, shown without "Voltick"
 //   Scripts            your CB Scripts (indicators and strategies), and
@@ -98,6 +100,8 @@ interface Row {
   beta: boolean
   /** A strategy(): adding it opens the Strategy Tester on it. */
   strategy?: boolean
+  /** Who it belongs to, for the row's info (?) button (planned). Community indicators carry it today. */
+  info?: { author: string; license: string; url: string }
 }
 
 /** "Voltick Prior Levels · previous day / week…" → name + description (a middle dot, never an em-dash). */
@@ -168,8 +172,9 @@ function readyRows(): Row[] {
 
 /**
  * The community indicators (script/community.ts: open-source Pine, everget's
- * collection). They appear under All only, where the description names the
- * group and the author. They are a data chunk of their own, so they load the
+ * collection). They appear under All only. The description names the group
+ * ("Oscillator"), and the author goes in `info`, for the row's info (?) button
+ * once it exists. They are a data chunk of their own, so they load the
  * first time a dialog needs them, and the dialog redraws when they land. A
  * chart keeps each one's source in its saved state (script/register.ts), like
  * any script.
@@ -182,7 +187,7 @@ function loadCommunity(): Promise<void> {
       community = m.COMMUNITY_INDICATORS.map((c) => ({
         key: `c:${c.id}`,
         name: c.name,
-        desc: `${c.group} · ${c.author}`,
+        desc: c.group,
         section: 'builtin' as const,
         kind: 'script' as const,
         libId: c.id,
@@ -190,6 +195,7 @@ function loadCommunity(): Promise<void> {
         overlay: c.overlay,
         multi: true,
         beta: false,
+        info: { author: c.author, license: c.license, url: c.url },
       }))
     })
     .catch(() => {

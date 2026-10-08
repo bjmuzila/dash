@@ -83,6 +83,7 @@ const StrikeQueryTab = lazy(() => import('@/pages/scanner/StrikeQueryTab'))
 const IbStatsTab = lazy(() => import('@/pages/scanner/IbStatsTab'))
 const WatchThisTab = lazy(() => import('@/pages/scanner/WatchThisTab'))
 const KalmanTab = lazy(() => import('@/pages/scanner/KalmanTab'))
+const AlignTab = lazy(() => import('@/pages/scanner/AlignTab'))
 
 const TAB_COMPONENT: Record<ScannerTabId, React.LazyExoticComponent<() => React.JSX.Element>> = {
   gexlevels: GexLevelsTab,
@@ -92,6 +93,7 @@ const TAB_COMPONENT: Record<ScannerTabId, React.LazyExoticComponent<() => React.
   ibstats: IbStatsTab,
   watch: WatchThisTab,
   kalman: KalmanTab,
+  align: AlignTab,
 }
 
 /** The query-string key the tab lives under. One spelling. */
@@ -121,6 +123,13 @@ export default function Scanner() {
       setParams(
         (prev) => {
           const next = new URLSearchParams(prev)
+          // A drill-in (Align's ?sym=&d=) belongs to the tab that opened it.
+          // Carrying it across would land the next visit to Align straight in
+          // a replay nobody asked for.
+          if (prev.get(TAB_PARAM) !== id) {
+            next.delete('sym')
+            next.delete('d')
+          }
           next.set(TAB_PARAM, id)
           return next
         },

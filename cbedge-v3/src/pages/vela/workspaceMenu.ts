@@ -7,7 +7,7 @@
 // groups, with an Alt shortcut on the ones used most:
 //
 //   PANELS   Watchlist  Alt+W · Data window  Alt+D · Object tree  Alt+O
-//            Session stats strip (a switch)
+//            Tape scroll (a switch: the watchlist's Volts at the top of the page)
 //   SCRIPTS  Script editor  Alt+E · Strategy Tester  Alt+B
 //   ALERTS   Level alerts  Alt+A · Script alerts
 //   LAYOUT   Setups · Copy indicators to all charts · Center today on all charts
@@ -23,7 +23,7 @@
 // How the bar loses the rest: Vela's `topbar` composition (Vela.tsx,
 // DESKTOP_TOPBAR) lists the right side as the session clock, alerts, this
 // action, screenshot. The panel group and the right-hand `actions` flow are not
-// listed, so Vela never renders them. The panels and the actions behind Setups / Session stats / Copy
+// listed, so Vela never renders them. The panels and the actions behind Setups / Tape scroll / Copy
 // indicators are untouched: they open from here, from their context-menu rows,
 // and from ⋮ on a phone (the phone keeps Vela's default composition).
 //
@@ -76,7 +76,7 @@ export const WS_GROUPS: readonly WsGroup[] = [
       { kind: 'panel', id: 'watchlist', label: 'Watchlist', icon: 'cb-watchlist', panel: WATCHLIST_PANEL_ID, keys: 'alt+w' },
       { kind: 'panel', id: 'data-window', label: 'Data window', icon: 'datawindow', panel: 'dataWindow', keys: 'alt+d' },
       { kind: 'panel', id: 'object-tree', label: 'Object tree', icon: 'objects', panel: 'objects', keys: 'alt+o' },
-      { kind: 'strip', id: 'session-stats', label: 'Session stats strip', icon: 'cb-stats' },
+      { kind: 'strip', id: 'session-stats', label: 'Tape scroll', icon: 'cb-stats' },
     ],
   },
   {

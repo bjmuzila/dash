@@ -27,8 +27,7 @@
 // Vela's own sheet, regrouped each time it draws, the way the desktop's
 // Workspace menu is grouped: the action row (Undo, Redo, Screenshot, plus
 // Replay and Maximize), then CHART (Chart type, Layout, Walls opacity, Chart
-// settings), PANELS (Watchlist, Data window, Object tree, Session stats with its
-// switch), SCRIPTS · ALERTS (Alerts, Script editor, Strategy Tester, Level
+// settings), PANELS (Watchlist, Data window, Object tree), SCRIPTS · ALERTS (Alerts, Script editor, Strategy Tester, Level
 // alerts, Script alerts) and LAYOUT (Setups, Copy indicators). The rows are
 // Vela's, moved and renamed, so what each does is unchanged (Chart type, Layout
 // and Alerts still open their own pages, with Vela's back row). A row this map
@@ -47,7 +46,6 @@
 
 import { iconEl } from '@luxalgo/vela/ui'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
-import { stripShown } from '@/pages/vela/setups/setups'
 import { bindPhonePicker, fmtPct, openPhonePicker, toneOf } from '@/pages/vela/symbolPicker'
 import { tickerIconEl } from '@/pages/vela/tickerIcon'
 import { TIMEFRAMES, tfIndex, tfLabel } from '@/pages/vela/timeframes'
@@ -114,7 +112,6 @@ const ROWS: ReadonlyArray<{ from: string; group: Group; label?: string; wide?: b
   { from: 'Watchlist', group: 'panels' },
   { from: 'Data window', group: 'panels' },
   { from: 'Object tree', group: 'panels' },
-  { from: 'Session stats', group: 'panels' },
   { from: 'Alerts', group: 'alerts', wide: true },
   { from: 'Scripts', group: 'alerts', label: 'Script editor' },
   { from: 'Strategy Tester', group: 'alerts' },
@@ -471,12 +468,6 @@ export function bindPhoneChrome(ws: VelaWorkspace): () => void {
         const v = el(doc, 'span', 'vela-md-row-value', `${Math.round(wallsOpacity() * 100)}%`)
         r.append(v)
       }
-      if (R.from === 'Session stats') {
-        const sw = el(doc, 'i', 'cb-md-sw')
-        sw.dataset.on = stripShown(true) ? '1' : ''
-        r.setAttribute('aria-pressed', String(stripShown(true)))
-        r.append(sw)
-      }
       const g = groups.get(R.group)!
       ;(R.wide ? g.wide : g.rows).push(r)
     }
@@ -498,6 +489,8 @@ export function bindPhoneChrome(ws: VelaWorkspace): () => void {
       const g = groups.get(G.id)!
       section(G.title, g.wide, g.rows, G.two)
     }
+    // desktop only (Brandon, 2026-10-07: "no mobile for this"): the tape's row is dropped
+    byLabel.delete('Tape scroll')
     // anything this map does not know yet: kept, at the end
     const rest = [...byLabel.values()]
     for (const r of rest) r.classList.add('cb-md-row')
