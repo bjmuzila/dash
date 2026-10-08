@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { OWNER_THEME as T, ownerRgba, homeHeaderStyle, homePanelStyle, homeShellStyle, homeSecondaryButtonStyle } from "../lib/theme";
 
 /**
@@ -177,16 +178,20 @@ async function getJson<J>(url: string): Promise<J> {
 // ── small pieces ──
 const mono: CSSProperties = { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" };
 const th: CSSProperties = { textAlign: "left", fontWeight: 600, fontSize: 12, color: T.textSecondary, opacity: 0.55, padding: "6px 8px", borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap" };
-const td: CSSProperties = { padding: "6px 8px", borderBottom: `1px solid ${ownerRgba("#FFFFFF", 0.05)}`, fontSize: 13, verticalAlign: "top" };
+const td: CSSProperties = { padding: "5px 8px", borderBottom: `1px solid ${ownerRgba("#FFFFFF", 0.05)}`, fontSize: 13, verticalAlign: "top" };
+/** A header cell that stays put while its card scrolls (opaque, so rows pass under it). */
+const thStick: CSSProperties = { ...th, position: "sticky", top: 0, zIndex: 1, background: T.panelBgStrong, opacity: 1, color: ownerRgba("#FFFFFF", 0.55) };
+/** Every card in the two grids is this tall, so a row of cards lines up; a longer list scrolls inside its card. */
+const GRID_CARD_H = 360;
 
-function Card({ title, right, children, span = 1 }: { title: string; right?: ReactNode; children: ReactNode; span?: 1 | 2 | 3 }) {
+function Card({ title, right, children, span = 1, fill = false }: { title: string; right?: ReactNode; children: ReactNode; span?: 1 | 2 | 3; fill?: boolean }) {
   return (
-    <section style={{ ...homePanelStyle, padding: 14, gridColumn: `span ${span}`, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+    <section style={{ ...homePanelStyle, padding: 14, gridColumn: `span ${span}`, minWidth: 0, display: "flex", flexDirection: "column", gap: 10, ...(fill ? { height: "100%", minHeight: 0, overflow: "hidden" } : {}) }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flex: "0 0 auto" }}>
         <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{title}</span>
         {right}
       </div>
-      {children}
+      {fill ? <div style={{ flex: "1 1 auto", minHeight: 0, overflow: "auto", margin: "0 -4px", padding: "0 4px" }}>{children}</div> : children}
     </section>
   );
 }
@@ -206,7 +211,7 @@ function Empty({ children }: { children: ReactNode }) {
 }
 
 /** A ranked list with a bar: label · time · users (+ extra columns). */
-function Ranked({ rows, max = 15, extra, label = (r) => r.key }: {
+function Ranked({ rows, max = Infinity, extra, label = (r) => r.key }: {
   rows: UsageRow[] | undefined;
   max?: number;
   extra?: { head: string; cell: (r: UsageRow) => ReactNode }[];
@@ -222,22 +227,22 @@ function Ranked({ rows, max = 15, extra, label = (r) => r.key }: {
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={th}></th>
-            <th style={{ ...th, textAlign: "right" }}>Time</th>
-            <th style={{ ...th, textAlign: "right" }}>Users</th>
-            {extra?.map((x) => <th key={x.head} style={{ ...th, textAlign: "right" }}>{x.head}</th>)}
+            <th style={thStick}></th>
+            <th style={{ ...thStick, textAlign: "right" }}>Time</th>
+            <th style={{ ...thStick, textAlign: "right" }}>Users</th>
+            {extra?.map((x) => <th key={x.head} style={{ ...thStick, textAlign: "right" }}>{x.head}</th>)}
           </tr>
         </thead>
         <tbody>
           {shown.map((r) => (
             <tr key={r.key}>
-              <td style={{ ...td, width: "45%" }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <td style={{ ...td, width: "45%", minWidth: 110 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                   <span style={{ fontWeight: 600 }}>{label(r)}</span>
-                  <span style={{ height: 3, borderRadius: 2, background: ownerRgba(T.cyan, 0.85), width: `${Math.max(2, (r.sec / top) * 100)}%` }} />
+                  <span style={{ height: 2, borderRadius: 2, background: ownerRgba(T.cyan, 0.85), width: `${Math.max(2, (r.sec / top) * 100)}%` }} />
                 </div>
               </td>
-              <td style={{ ...td, ...mono, textAlign: "right" }}>{dur(r.sec)}</td>
+              <td style={{ ...td, ...mono, textAlign: "right", whiteSpace: "nowrap" }}>{dur(r.sec)}</td>
               <td style={{ ...td, ...mono, textAlign: "right" }}>{r.users}</td>
               {extra?.map((x) => <td key={x.head} style={{ ...td, ...mono, textAlign: "right" }}>{x.cell(r)}</td>)}
             </tr>
@@ -314,22 +319,24 @@ function Daily({ rows }: { rows: Summary["daily"] }) {
   if (!rows.length) return <Empty>No days yet.</Empty>;
   const maxU = Math.max(1, ...rows.map((r) => r.users));
   const maxS = Math.max(1, ...rows.map((r) => r.sec));
-  const W = 22;
+  // The chart fills its card: each day takes an equal share of the width (28-96px,
+  // scrolling sideways past that) and the bars take whatever height is left after
+  // the count above them and the date below — so neither label is ever cut off.
   return (
-    <div style={{ overflowX: "auto" }}>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 150, minWidth: rows.length * (W + 4) }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 200, gap: 6 }}>
+      <div style={{ flex: "1 1 auto", minHeight: 0, display: "flex", alignItems: "stretch", justifyContent: "space-around", gap: 6, overflowX: "auto", overflowY: "hidden" }}>
         {rows.map((r) => (
-          <div key={r.day} title={`${r.day}: ${r.users} user${r.users === 1 ? "" : "s"}, ${dur(r.sec)} chart time`} style={{ width: W, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-            <span style={{ ...mono, fontSize: 10, opacity: 0.7 }}>{r.users}</span>
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 110 }}>
-              <div style={{ width: 9, height: `${(r.users / maxU) * 100}%`, minHeight: 2, background: ownerRgba(T.cyan, 0.9), borderRadius: 2 }} />
-              <div style={{ width: 9, height: `${(r.sec / maxS) * 100}%`, minHeight: 2, background: ownerRgba("#FFFFFF", 0.35), borderRadius: 2 }} />
+          <div key={r.day} title={`${r.day}: ${r.users} user${r.users === 1 ? "" : "s"}, ${dur(r.sec)} chart time`} style={{ flex: "1 0 28px", maxWidth: 96, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+            <span style={{ ...mono, fontSize: 11, lineHeight: "14px", opacity: 0.8, flex: "0 0 auto" }}>{r.users}</span>
+            <div style={{ flex: "1 1 auto", minHeight: 0, width: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 3 }}>
+              <div style={{ width: "34%", maxWidth: 26, height: `${(r.users / maxU) * 100}%`, minHeight: 2, background: ownerRgba(T.cyan, 0.9), borderRadius: 2 }} />
+              <div style={{ width: "34%", maxWidth: 26, height: `${(r.sec / maxS) * 100}%`, minHeight: 2, background: ownerRgba("#FFFFFF", 0.35), borderRadius: 2 }} />
             </div>
-            <span style={{ ...mono, fontSize: 9, opacity: 0.5 }}>{r.day.slice(5)}</span>
+            <span style={{ ...mono, fontSize: 10, lineHeight: "12px", opacity: 0.55, flex: "0 0 auto", whiteSpace: "nowrap" }}>{r.day.slice(5)}</span>
           </div>
         ))}
       </div>
-      <div style={{ fontSize: 11, opacity: 0.55, marginTop: 4 }}>
+      <div style={{ fontSize: 11, opacity: 0.55, flex: "0 0 auto" }}>
         <span style={{ color: T.cyan }}>■</span> users · <span style={{ opacity: 0.7 }}>■</span> chart time (hover a day for numbers)
       </div>
     </div>
@@ -346,10 +353,10 @@ function Heatmap({ rows }: { rows: UsageRow[] | undefined }) {
   if (!grid.size) return <Empty>No hours yet.</Empty>;
   return (
     <div style={{ overflowX: "auto" }}>
-      <table style={{ borderCollapse: "separate", borderSpacing: 2 }}>
+      <table style={{ width: "100%", minWidth: 320, tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 3 }}>
         <thead>
           <tr>
-            <th />
+            <th style={{ width: 34 }} />
             {Array.from({ length: 24 }, (_, h) => (
               <th key={h} style={{ ...mono, fontSize: 9, fontWeight: 400, opacity: 0.5 }}>{h % 3 === 0 ? h : ""}</th>
             ))}
@@ -365,7 +372,7 @@ function Heatmap({ rows }: { rows: UsageRow[] | undefined }) {
                   <td
                     key={h}
                     title={`${d} ${h}:00 ET · ${dur(v)}`}
-                    style={{ width: 16, height: 16, borderRadius: 3, background: v ? ownerRgba(T.cyan, 0.15 + 0.85 * (v / max)) : ownerRgba("#FFFFFF", 0.04) }}
+                    style={{ height: 26, borderRadius: 3, background: v ? ownerRgba(T.cyan, 0.15 + 0.85 * (v / max)) : ownerRgba("#FFFFFF", 0.04) }}
                   />
                 );
               })}
@@ -392,6 +399,9 @@ export default function VelaUsage() {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const isMobile = useIsMobile();
+  // a phone has one column: a span there would make a second, off-screen one
+  const wide = isMobile ? 1 : 2;
 
   const qs = useCallback(
     (extra: Record<string, string | number | boolean | undefined> = {}) => {
@@ -579,29 +589,29 @@ export default function VelaUsage() {
           <Tile label="Errors" value={String(s?.errors.length ?? 0)} />
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 14 }}>
-          <Card title="Tickers · on screen">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(380px, 100%), 1fr))", gridAutoRows: GRID_CARD_H, gridAutoFlow: "row dense", gap: 14 }}>
+          <Card fill title="Tickers · on screen">
             <Ranked rows={usage.ticker} />
           </Card>
-          <Card title="Tickers · in focus" right={<span style={{ fontSize: 12, opacity: 0.5 }}>the active chart only</span>}>
+          <Card fill title="Tickers · in focus" right={<span style={{ fontSize: 12, opacity: 0.5 }}>the active chart only</span>}>
             <Ranked rows={usage.ticker_active} />
           </Card>
-          <Card title="Indicators" span={2} right={<span style={{ fontSize: 12, opacity: 0.5 }}>time on screen (shown, not hidden) + what people did with them</span>}>
-            <Ranked rows={indicatorRows} max={20} extra={indicatorExtra} />
+          <Card fill title="Indicators" span={wide} right={<span style={{ fontSize: 12, opacity: 0.5 }}>time on screen (shown, not hidden) + what people did with them</span>}>
+            <Ranked rows={indicatorRows} extra={indicatorExtra} />
           </Card>
-          <Card title="Timeframes">
+          <Card fill title="Timeframes">
             <Ranked rows={usage.timeframe} label={(r) => tfLabel(r.key)} />
           </Card>
-          <Card title="Layouts">
+          <Card fill title="Layouts">
             <Ranked rows={usage.layout} />
           </Card>
-          <Card title="Devices · GEX book">
+          <Card fill title="Devices · GEX book">
             <Ranked rows={[...(usage.device ?? []), ...(usage.gex ?? []).map((g) => ({ ...g, key: `GEX: ${g.key}` }))]} />
           </Card>
-          <Card title="Actions">
+          <Card fill title="Actions">
             {!s?.actions.length ? <Empty>No actions yet.</Empty> : (
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr><th style={th}>What</th><th style={{ ...th, textAlign: "right" }}>Times</th><th style={{ ...th, textAlign: "right" }}>Users</th></tr></thead>
+                <thead><tr><th style={thStick}>What</th><th style={{ ...thStick, textAlign: "right" }}>Times</th><th style={{ ...thStick, textAlign: "right" }}>Users</th></tr></thead>
                 <tbody>
                   {s.actions.map((a) => (
                     <tr key={a.name} style={{ cursor: "pointer" }} onClick={() => setFeedName(feedName === a.name ? "" : a.name)} title="Show these in the feed">
@@ -614,10 +624,10 @@ export default function VelaUsage() {
               </table>
             )}
           </Card>
-          <Card title="Users per day">
+          <Card fill title="Users per day" span={wide}>
             <Daily rows={s?.daily ?? []} />
           </Card>
-          <Card title="When">
+          <Card fill title="When" span={wide}>
             <Heatmap rows={usage.hour} />
           </Card>
         </div>
@@ -656,11 +666,11 @@ export default function VelaUsage() {
           )}
         </Card>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 14 }}>
-          <Card title="Chart load times" right={<span style={{ fontSize: 12, opacity: 0.5 }}>open → first paint</span>}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(380px, 100%), 1fr))", gridAutoRows: GRID_CARD_H, gap: 14 }}>
+          <Card fill title="Chart load times" right={<span style={{ fontSize: 12, opacity: 0.5 }}>open → first paint</span>}>
             {!s?.loads.length ? <Empty>No loads yet.</Empty> : (
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr>{["Chart", "Loads", "Avg", "Median", "95%", "Worst"].map((h) => <th key={h} style={{ ...th, textAlign: h === "Chart" ? "left" : "right" }}>{h}</th>)}</tr></thead>
+                <thead><tr>{["Chart", "Loads", "Avg", "Median", "95%", "Worst"].map((h) => <th key={h} style={{ ...thStick, textAlign: h === "Chart" ? "left" : "right" }}>{h}</th>)}</tr></thead>
                 <tbody>
                   {s.loads.map((l) => (
                     <tr key={`${l.symbol}|${l.tf}`}>
@@ -674,10 +684,10 @@ export default function VelaUsage() {
               </table>
             )}
           </Card>
-          <Card title="Where · browsers">
+          <Card fill title="Where · browsers">
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr><th style={th}>Place</th><th style={{ ...th, textAlign: "right" }}>Sessions</th><th style={{ ...th, textAlign: "right" }}>Users</th></tr></thead>
+                <thead><tr><th style={thStick}>Place</th><th style={{ ...thStick, textAlign: "right" }}>Sessions</th><th style={{ ...thStick, textAlign: "right" }}>Users</th></tr></thead>
                 <tbody>
                   {(s?.places ?? []).map((p) => (
                     <tr key={p.place ?? "?"}><td style={td}>{p.place ?? "unknown"}</td><td style={{ ...td, ...mono, textAlign: "right" }}>{p.sessions}</td><td style={{ ...td, ...mono, textAlign: "right" }}>{p.users}</td></tr>
@@ -687,9 +697,9 @@ export default function VelaUsage() {
               <div style={{ fontSize: 12, opacity: 0.7 }}>{(s?.browsers ?? []).map((b) => `${b.key} (${b.sessions})`).join(" · ")}</div>
             </div>
           </Card>
-          <Card title={`Errors${s ? ` · ${s.errors.length}` : ""}`}>
+          <Card fill title={`Errors${s ? ` · ${s.errors.length}` : ""}`}>
             {!s?.errors.length ? <Empty>No errors in this range.</Empty> : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {s.errors.map((e, i) => (
                   <div key={i} style={{ fontSize: 12, borderBottom: `1px solid ${ownerRgba("#FFFFFF", 0.05)}`, paddingBottom: 6 }}>
                     <div style={{ color: T.red }}>{describe(e)}</div>

@@ -100,6 +100,13 @@ export interface ShotOptions {
    * caption would say every one of them a second time.
    */
   bare?: boolean
+  /**
+   * SQUARE OUTPUT (Brandon, 2026-10-08). The finished image — card AND caption
+   * band — is padded out to a square with the app background, the card centred
+   * horizontally. For tiles that are square on screen (GEX Change Top): the
+   * caption band alone used to make the PNG ~32px taller than wide.
+   */
+  square?: boolean
 }
 
 /** Elements the page wants out of the picture — see the header, and trimHeight. */
@@ -1014,6 +1021,27 @@ async function loadBadge(srcs: string | string[] | undefined): Promise<HTMLImage
 }
 
 /**
+ * `text` cut to fit `maxW` with an ellipsis, or '' when not even one character
+ * and the ellipsis fit. NEVER use fillText's own maxWidth argument for this: it
+ * squeezes the glyphs horizontally instead of dropping any, and on a narrow
+ * tile that turned the caption's time stamp into unreadable glyph soup
+ * (2026-10-08, the GEX Change Top tiles).
+ */
+function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (maxW <= 0) return ''
+  if (ctx.measureText(text).width <= maxW) return text
+  const ell = '…'
+  let lo = 0
+  let hi = text.length
+  while (lo < hi) {
+    const m = Math.ceil((lo + hi) / 2)
+    if (ctx.measureText(text.slice(0, m).trimEnd() + ell).width <= maxW) lo = m
+    else hi = m - 1
+  }
+  return lo > 0 ? text.slice(0, lo).trimEnd() + ell : ''
+}
+
+/**
  * The card, with the caption and the mark laid over its bottom edge.
  *
  * `Net Premium · Sep 2, 17:15 ET · SPX · 9-2-26` on the left, the CB Edge mark
@@ -1028,14 +1056,21 @@ function frame(
   meta: string | null,
   logo: HTMLImageElement | null,
   badge: HTMLImageElement | null,
+  square = false,
 ): HTMLCanvasElement {
-  const w = shot.width / scale
+  const cardW = shot.width / scale
   const cardH = shot.height / scale
   const h = cardH + CAPTION_BAND
+  // Square: widen to the height (card centred), or — for a card wider than
+  // tall — the height stays and the extra goes on top as background.
+  const w = square ? Math.max(cardW, h) : cardW
+  const outH = square ? Math.max(h, w) : h
+  const cardX = (w - cardW) / 2
+  const cardY = outH - h
 
   const out = document.createElement('canvas')
   out.width = Math.round(w * scale)
-  out.height = Math.round(h * scale)
+  out.height = Math.round(outH * scale)
   const ctx = out.getContext('2d')
   if (!ctx) return shot
   ctx.scale(scale, scale)
@@ -1043,19 +1078,19 @@ function frame(
   const face = getComputedStyle(document.body).fontFamily
 
   ctx.fillStyle = tokenHex('--color-bg')
-  ctx.fillRect(0, 0, w, h)
-  ctx.drawImage(shot, 0, 0, w, cardH)
+  ctx.fillRect(0, 0, w, outH)
+  ctx.drawImage(shot, cardX, cardY, cardW, cardH)
 
   // The scrim. Transparent at the top so it reads as the card dimming into its
   // own footer rather than as a bar someone stuck on.
-  const scrimTop = Math.max(0, h - SCRIM_H)
-  const g = ctx.createLinearGradient(0, scrimTop, 0, h)
+  const scrimTop = Math.max(0, outH - SCRIM_H)
+  const g = ctx.createLinearGradient(0, scrimTop, 0, outH)
   g.addColorStop(0, tokenHexAlpha('--color-bg', 0))
   g.addColorStop(1, tokenHexAlpha('--color-bg', 0.92))
   ctx.fillStyle = g
-  ctx.fillRect(0, scrimTop, w, h - scrimTop)
+  ctx.fillRect(0, scrimTop, w, outH - scrimTop)
 
-  const mid = h - CAPTION_BASE
+  const mid = outH - CAPTION_BASE
   ctx.textBaseline = 'middle'
 
   // The signature goes down first so the caption knows how much room is left.
@@ -1074,8 +1109,9 @@ function frame(
   ctx.textAlign = 'left'
   ctx.font = `600 ${CAPTION_PX}px ${face}`
   ctx.fillStyle = tokenHex('--color-fg')
-  const titleW = Math.min(ctx.measureText(title).width, room)
-  ctx.fillText(title, textX, mid, room)
+  const titleText = fitText(ctx, title, room)
+  const titleW = ctx.measureText(titleText).width
+  ctx.fillText(titleText, textX, mid)
 
   // Time and the card's own note in the quieter weight, so the name still reads
   // first at a glance in a Discord thumbnail. `--color-muted` is white today
@@ -1085,7 +1121,10 @@ function frame(
   const tail = meta ? `${SEP}${stampNow()}${SEP}${meta}` : `${SEP}${stampNow()}`
   ctx.font = `400 ${CAPTION_PX}px ${face}`
   ctx.fillStyle = tokenHexAlpha('--color-muted', 0.7)
-  ctx.fillText(tail, textX + titleW, mid, Math.max(20, room - titleW))
+  // Whatever room the title leaves; a tail that cannot show a few real
+  // characters is dropped rather than drawn as a stub.
+  const tailText = fitText(ctx, tail, room - titleW)
+  if (tailText.replace(/[\s·…]/g, '').length >= 3) ctx.fillText(tailText, textX + titleW, mid)
 
   return out
 }
@@ -1252,7 +1291,7 @@ export async function captureCanvas(el: HTMLElement, opts: ShotOptions = {}): Pr
     opts.bare ? Promise.resolve(null) : loadBadge(opts.badge),
   ])
   if (opts.bare) return signed ? canvas : signBare(canvas, scale, logo)
-  return frame(canvas, scale, opts.title ?? 'Voltick', meta, logo, badge)
+  return frame(canvas, scale, opts.title ?? 'Voltick', meta, logo, badge, opts.square)
 }
 
 /** Photograph `el`, frame it, and put it on the clipboard. */

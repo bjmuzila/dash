@@ -273,7 +273,8 @@ async function shootTile(tile: HTMLElement | null, label: string): Promise<ShotR
       })
     }
     const { captureCanvas, deliverCanvas } = await import('@/shell/snapshot')
-    const canvas = await captureCanvas(tile, { title: label })
+    // Square tile → square PNG, caption band included (2026-10-08).
+    const canvas = await captureCanvas(tile, { title: label, square: true })
     return await deliverCanvas(canvas, `${shotSlug(label)}.png`)
   } finally {
     for (const u of undo.reverse()) u()
@@ -1453,15 +1454,20 @@ function PickCard({
           <div className="min-h-0 flex-1" />
           <div className="flex items-end justify-between gap-2">
             {/* C121 — every card on this tab carries it; there is no second tier. */}
-            <div className="text-sm font-extrabold" style={{ color: V2.orange }}>
-              {VERY_STRONG_LABEL}
+            {/* 2026-10-08 — wraps as whole pieces: the badge drops to its own
+                line on a narrow tile instead of breaking inside its border. */}
+            <div
+              className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-sm font-extrabold"
+              style={{ color: V2.orange }}
+            >
+              <span className="whitespace-nowrap">{VERY_STRONG_LABEL}</span>
               {/* C122 — legacy slots only. The `?? 0` inside `underFloorTitle` is v2's
                   and is unreachable: `underFloor` implies the id is in `cheapIds`,
                   which implies an entry exists. */}
               {v.underFloor && (
                 <span
                   title={underFloorTitle(v.wid != null ? index.entryById.get(v.wid) : undefined)}
-                  className="ml-1.5 rounded-sm border px-1 py-px text-xs font-bold"
+                  className="whitespace-nowrap rounded-sm border px-1 py-px text-xs font-bold"
                   style={{
                     color: T.text,
                     background: alpha(T.text, 0.1),

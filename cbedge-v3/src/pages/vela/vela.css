@@ -6486,13 +6486,15 @@
 /* ─────────────────────────────────────────────────────────────────────────────
    VOLT WATCH (tape/TapeScroll.tsx; Brandon, 2026-10-07, "Tape scroll" until
    2026-10-08): the watchlist's Volts along the top of the page, in the session
-   stats strip's place, TEN AT A TIME in ten even columns; every few seconds the
-   ten swap for the next ten with a short fade — nothing scrolls or slides.
+   stats strip's place, TEN AT A TIME in ten even columns (fewer on a narrow
+   window: the component sets the column count, so a chip is never squeezed);
+   every few seconds the page swaps for the next with a short fade.
    Numbers and captions mono (captions Paper Quiet, tracked .08em); Volt gold is
    the only colour on a chip, and only for NEAR / AT / a crossing — the Volt's
    own word. Its order is a Workspace menu row (.cb-wsm-value).
    ───────────────────────────────────────────────────────────────────────────── */
 .cb-tape {
+  position: relative;
   display: flex;
   flex: none;
   align-items: stretch;
@@ -6552,7 +6554,6 @@
 .cb-tape-page {
   display: grid;
   flex: 1;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
   min-width: 0;
   animation: cb-tape-in 0.25s ease-out;
 }
@@ -6569,10 +6570,10 @@
   box-sizing: border-box;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   height: 30px;
-  padding: 0 8px;
+  padding: 0 6px;
   overflow: hidden;
   border: 0;
   border-right: 1px solid var(--color-line);
@@ -6581,8 +6582,12 @@
   font: inherit;
   cursor: pointer;
   appearance: none;
-  /* a narrow column drops the points first, then tightens the pill */
+  /* a narrower column drops the points (the % already says how far) */
   container-type: inline-size;
+}
+/* nothing in a chip ever shrinks under its own text (it ran the % into the ticker) */
+.cb-tape-chip > * {
+  flex: none;
 }
 .cb-tape-chip:hover {
   background: var(--vt-wash);
@@ -6604,22 +6609,16 @@
 }
 .cb-tape-pct {
   box-sizing: border-box;
-  min-width: 52px;
   padding: 1px 5px;
+  font-size: var(--text-xs);
   border: 1px solid transparent;
   border-radius: 6px;
   font-weight: 800;
   text-align: center;
 }
-@container (max-width: 210px) {
+@container (max-width: 230px) {
   .cb-tape-pts {
     display: none;
-  }
-}
-@container (max-width: 150px) {
-  .cb-tape-pct {
-    min-width: 0;
-    padding: 1px 3px;
   }
 }
 .cb-tape-chip[data-st='near'] .cb-tape-pct {
@@ -6651,6 +6650,13 @@
   color: var(--color-faint);
   font-family: var(--font-sans);
   font-size: var(--text-xs);
+}
+/* what TapeScroll measures a chip's text in: off screen, the chip's own font */
+.cb-tape-measure {
+  position: absolute;
+  visibility: hidden;
+  font-weight: 800;
+  pointer-events: none;
 }
 .cb-tape-x {
   padding: 0 4px;

@@ -44,11 +44,17 @@
 // 2026-10-08: "it should show 10 at a time, then the next 10 appear. I don't
 // want scrolling on it" — replacing the one-chip step of that morning. The head
 // shows which page (2/4). Ten or fewer tickers: one page, nothing changes. Paused
-// while the pointer or focus is on it, or the tab is hidden. A narrow chip drops
-// its points first (the % already says how far), via a container query.
+// while the pointer or focus is on it, or the tab is hidden.
+// A NARROW WINDOW SHOWS FEWER (2026-10-08, a Chromebook: ten columns squeezed
+// each chip under its own text, the % running into the ticker and both ends
+// cut off). A chip never shrinks below what its text needs: the widest chip on
+// the list (% · ticker · ★ Volt, measured in the tape's own font) sets the
+// narrowest column, and when ten will not fit at that, a page holds as many as do
+// (never under MIN_PAGE) and the pages step through the rest the same way. The
+// points show only where a column has room left for them.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { VelaWorkspace } from '@luxalgo/vela/workspace'
 import { PROVIDER_NAME } from '@/pages/vela/cbedgeProvider'
 import { onGexBasis } from '@/pages/vela/gexBasis'
@@ -67,8 +73,12 @@ const AT_PCT = 0.15
 const NEAR_PCT = 0.35
 /** How long a crossing keeps its ring. */
 const CROSS_MS = 5 * 60_000
-/** Chips on the line at once. */
+/** Chips on the line at once, when the line is wide enough. */
 const PAGE = 10
+/** A chip's fixed parts, px: its side padding, three gaps, the % pill's padding and border, the ★. */
+const CHIP_FIXED = 12 + 3 * 5 + 12 + 10
+/** Never fewer than this on a page. */
+const MIN_PAGE = 3
 /** How long each ten stays up. */
 const PAGE_MS = 8000
 
@@ -265,13 +275,33 @@ export default function TapeScroll({ ws, onHide }: { ws: VelaWorkspace; onHide: 
   // ── pages of ten (see the header) ──
   const paused = useRef(false)
   const [page, setPage] = useState(0)
-  const pages = Math.max(1, Math.ceil(chips.length / PAGE))
+  // as many as fit, up to ten (see the header)
+  const winRef = useRef<HTMLDivElement>(null)
+  const charRef = useRef<HTMLSpanElement>(null)
+  const [per, setPer] = useState(PAGE)
+  // the longest chip on the list, in characters (% + ticker + Volt)
+  const longest = chips.reduce((m, c) => Math.max(m, c.pct.length + c.s.length + c.volt.length), 8)
+  useLayoutEffect(() => {
+    const win = winRef.current
+    const ch = charRef.current
+    if (!win || !ch) return
+    const fit = () => {
+      const cw = ch.getBoundingClientRect().width / 10 || 7
+      const need = Math.ceil(longest * cw + CHIP_FIXED)
+      setPer(Math.max(MIN_PAGE, Math.min(PAGE, Math.floor(win.clientWidth / need))))
+    }
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(win)
+    return () => ro.disconnect()
+  }, [longest])
+  const pages = Math.max(1, Math.ceil(chips.length / per))
   const p = page % pages
-  const shown = chips.slice(p * PAGE, p * PAGE + PAGE)
+  const shown = chips.slice(p * per, p * per + per)
 
   // a new order (a round of reads, the order switch, the list) starts from page one
   const orderKey = order.join(',')
-  useEffect(() => setPage(0), [orderKey])
+  useEffect(() => setPage(0), [orderKey, per])
 
   useEffect(() => {
     if (pages < 2) return
@@ -286,6 +316,10 @@ export default function TapeScroll({ ws, onHide }: { ws: VelaWorkspace; onHide: 
 
   return (
     <div className="cb-strip cb-tape" role="region" aria-label="Volt watch: the watchlist's Volts">
+      {/* ten of the tape's widest characters: the width a chip's text is measured in */}
+      <span ref={charRef} className="cb-tape-measure" aria-hidden="true">
+        0000000000
+      </span>
       <div className="cb-tape-head" title={`At the Volt: within ${AT_PCT}%. Near: within ${NEAR_PCT}%.`}>
         <span className="cb-mk-box" dangerouslySetInnerHTML={{ __html: markSvg('volt') }} />
         <span className="cb-tape-cap">VOLT WATCH</span>
@@ -295,15 +329,15 @@ export default function TapeScroll({ ws, onHide }: { ws: VelaWorkspace; onHide: 
         <span className="cb-tape-cap">·</span>
         <span className="cb-tape-n">{nearN} NEAR</span>
         {pages > 1 && (
-          <span className="cb-tape-pg" title={`Ten at a time: page ${p + 1} of ${pages}`}>
+          <span className="cb-tape-pg" title={`${per} at a time: page ${p + 1} of ${pages}`}>
             {p + 1}/{pages}
           </span>
         )}
       </div>
 
-      <div className="cb-tape-win" onMouseEnter={pause(true)} onMouseLeave={pause(false)} onFocus={pause(true)} onBlur={pause(false)}>
+      <div ref={winRef} className="cb-tape-win" onMouseEnter={pause(true)} onMouseLeave={pause(false)} onFocus={pause(true)} onBlur={pause(false)}>
         {/* keyed by page: each new ten mounts fresh and fades in */}
-        <div key={p} className="cb-tape-page">
+        <div key={p} className="cb-tape-page" style={{ gridTemplateColumns: `repeat(${per}, minmax(0, 1fr))` }}>
           {shown.length ? (
             shown.map((c) => <Chip key={c.s} c={c} onOpen={open} />)
           ) : (
