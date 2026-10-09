@@ -94,6 +94,8 @@ export interface AlignResponse {
   warming?: boolean
   /** The last background refresh failed; the payload is the previous build. */
   refreshError?: string
+  /** Served from the daily archive (a finished session). */
+  archived?: boolean
 }
 
 export interface AlignSettings {
@@ -137,8 +139,26 @@ export const STATE_LABEL: Record<AlignState, string> = {
 /** Which tickers a board shows. `main` = the roster's MAIN (hot) lane. */
 export type AlignUniverse = 'all' | 'main'
 
-/** One URL per mode, shared by Align, Align · Main and the replay — so all three are one cache entry. */
-export const alignUrl = (mode: AlignMode): string => `/proxy/strike-growth/align?mode=${mode}`
+/**
+ * One URL per (mode, session), shared by Align, Align · Main and the replay — so
+ * all three are one cache entry. No date = today (live). A past date is served
+ * from the daily archive (align_daily), so any saved session reopens.
+ */
+export const alignUrl = (mode: AlignMode, date?: string | null): string =>
+  `/proxy/strike-growth/align?mode=${mode}${date ? `&date=${encodeURIComponent(date)}` : ''}`
+
+/** Every session that can be opened, newest first. */
+export const ALIGN_DATES_URL = '/proxy/strike-growth/align-dates'
+
+/** Today in ET, as YYYY-MM-DD. */
+export function etToday(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
+}
+
+/** A requested session date, or null when it means "today, live". */
+export function pastDate(d: string | null | undefined): string | null {
+  return d && /^\d{4}-\d{2}-\d{2}$/.test(d) && d < etToday() ? d : null
+}
 
 export const framesUrl = (symbol: string, date: string | null): string =>
   `/proxy/strike-growth/frames-by-expiry?symbol=${encodeURIComponent(symbol)}${

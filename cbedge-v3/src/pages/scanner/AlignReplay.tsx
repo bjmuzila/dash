@@ -34,6 +34,7 @@ import {
   ALIGN_POLL_MS,
   STATE_LABEL,
   alignUrl,
+  pastDate,
   buildRow,
   evaluate,
   fmtEt,
@@ -86,9 +87,13 @@ export default function AlignReplay({
   onBack: () => void
 }) {
   // Both at entry — see note 2. Same URL as the board that opened this, so it is a cache hit.
-  const board = useQuery<AlignResponse>(alignUrl(settings.mode), { pollMs: ALIGN_POLL_MS, staleMs: 30_000 })
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
-  const live = !date || date === today
+  // A past date reads the saved board for that day; today polls the live one.
+  const day = pastDate(date)
+  const board = useQuery<AlignResponse>(alignUrl(settings.mode, day), {
+    pollMs: day ? undefined : ALIGN_POLL_MS,
+    staleMs: 30_000,
+  })
+  const live = !day
   const frames = useQuery<ReplayResponse>(framesUrl(symbol, date), {
     pollMs: live ? ALIGN_POLL_MS : undefined,
     staleMs: 30_000,

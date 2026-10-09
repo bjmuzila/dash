@@ -332,7 +332,7 @@ export default function VelaHealth() {
           </Card>
 
           {/* ── the monitors ── */}
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(auto-fill, minmax(min(230px, 100%), 1fr))", gap: isMobile ? 8 : 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: isMobile ? 8 : 12 }}>
             {mons.map((m) => <Monitor key={m.name} {...m} compact={isMobile} />)}
           </div>
 

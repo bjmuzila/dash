@@ -728,6 +728,125 @@ function _alPayload(st, mode, today) {
   return { ok: true, date: st.date, stale: st.date !== today, mode, asOf: st.builtAt, symbols };
 }
 
+// ── Wall alignment: the daily archive ───────────────────────────────────────
+// strike_growth is pruned to ~5 sessions (state/retention-cleanup.js), so the
+// Align board could only reach back a week. Each finished session's board is
+// saved here instead — all three wall modes, every ticker, with the full
+// per-expiry wall history (`segs`) and the ALL ex-0DTE history — gzipped, kept
+// forever (≈ tens of KB per mode per day). The replay chart's minute frames are
+// already kept forever by chain_replay_archive, so together the whole page
+// reopens for any past day.
+//
+// The payload is the RAW board (no Hold / tolerance / filters applied — those
+// stay client-side), so an archived day can be read with any settings.
+//
+// When: every 10 minutes the archiver saves today once it is past 16:20 ET (the
+// recorder stops at 16:00), and catches up any earlier strike_growth date that
+// has no archive yet — so a server that was down at 16:20 fills the gap on its
+// next start, as long as it is back within the 5-session raw window.
+// ALIGN_ARCHIVE=0 turns it off.
+const _AL_ARCHIVE_TICK_MS = 10 * 60 * 1000;
+const _AL_ARCHIVE_AFTER_MINS = 16 * 60 + 20;
+let _alArchiveSchema = null;
+let _alArchiveBusy = false;
+const _alArchiveCache = new Map(); // `${date}|${mode}` -> payload (archived days are immutable)
+
+function _alEnsureArchiveSchema(p) {
+  if (!_alArchiveSchema) {
+    _alArchiveSchema = p.query(`
+      CREATE TABLE IF NOT EXISTS align_daily (
+        date        DATE        NOT NULL,
+        mode        TEXT        NOT NULL,
+        symbols     INTEGER     NOT NULL DEFAULT 0,
+        raw_bytes   INTEGER     NOT NULL DEFAULT 0,
+        gz_bytes    INTEGER     NOT NULL DEFAULT 0,
+        payload     BYTEA       NOT NULL,
+        archived_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (date, mode)
+      )`).then(() => true, (e) => { _alArchiveSchema = null; console.warn(`[align] archive schema: ${e?.message || e}`); return false; });
+  }
+  return _alArchiveSchema;
+}
+
+/** Build one finished session from strike_growth and save all three modes. */
+async function _alArchiveDate(p, date, today) {
+  const st = _alNewState(date); // standalone — never evicts the live cache
+  await _alRefreshNow(p, st, today);
+  if (!st.ready || !st.view || !st.view.latest.size) return 0;
+  let n = 0;
+  for (const mode of _AL_MODES) {
+    const payload = { ..._alPayload(st, mode, today), archived: true };
+    const raw = Buffer.from(JSON.stringify(payload), 'utf8');
+    const gz = zlib.gzipSync(raw, { level: 9 });
+    await p.query( // eslint-disable-line no-await-in-loop
+      `INSERT INTO align_daily (date, mode, symbols, raw_bytes, gz_bytes, payload, archived_at)
+       VALUES ($1,$2,$3,$4,$5,$6, now())
+       ON CONFLICT (date, mode) DO UPDATE SET symbols = EXCLUDED.symbols, raw_bytes = EXCLUDED.raw_bytes,
+         gz_bytes = EXCLUDED.gz_bytes, payload = EXCLUDED.payload, archived_at = now()`,
+      [date, mode, payload.symbols.length, raw.length, gz.length, gz]
+    );
+    _alArchiveCache.delete(`${date}|${mode}`);
+    n++;
+  }
+  console.log(`[align] archived ${date} (${st.view.latest.size} tickers × ${n} modes)`);
+  return n;
+}
+
+/** An archived board, or null. */
+async function _alReadArchive(p, date, mode) {
+  const key = `${date}|${mode}`;
+  if (_alArchiveCache.has(key)) return _alArchiveCache.get(key);
+  if (!(await _alEnsureArchiveSchema(p))) return null;
+  const { rows } = await p.query(`SELECT payload FROM align_daily WHERE date = $1 AND mode = $2`, [date, mode]);
+  if (!rows[0]) return null;
+  const payload = JSON.parse(zlib.gunzipSync(rows[0].payload).toString('utf8'));
+  _alArchiveCache.set(key, payload);
+  if (_alArchiveCache.size > 30) _alArchiveCache.delete(_alArchiveCache.keys().next().value);
+  return payload;
+}
+
+async function _alArchiveTick() {
+  if (_alArchiveBusy) return;
+  _alArchiveBusy = true;
+  try {
+    const { ensureSchema, getPool } = require('./strike-growth-recorder');
+    if (!(await ensureSchema())) return;
+    const p = getPool();
+    if (!p || !(await _alEnsureArchiveSchema(p))) return;
+    const now = new Date();
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(now);
+    const hm = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+    const mins = Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
+    // Every raw session with no archive yet. Today only once the session is over.
+    const { rows } = await p.query(
+      `SELECT to_char(d.date, 'YYYY-MM-DD') AS date
+       FROM (SELECT DISTINCT date FROM strike_growth WHERE date >= CURRENT_DATE - 14) d
+       WHERE NOT EXISTS (SELECT 1 FROM align_daily a WHERE a.date = d.date AND a.mode = 'abs')
+       ORDER BY d.date`
+    );
+    for (const r of rows) {
+      if (r.date > today) continue;
+      if (r.date === today && mins < _AL_ARCHIVE_AFTER_MINS) continue;
+      try { await _alArchiveDate(p, r.date, today); } // eslint-disable-line no-await-in-loop
+      catch (e) { console.warn(`[align] archive ${r.date}: ${e?.message || e}`); }
+    }
+  } catch (e) {
+    console.warn(`[align] archive tick: ${e?.message || e}`);
+  } finally {
+    _alArchiveBusy = false;
+  }
+}
+
+function startAlignArchiver() {
+  if (String(process.env.ALIGN_ARCHIVE ?? '1') === '0') return;
+  if (!process.env.DATABASE_URL) return;
+  const first = setTimeout(() => { _alArchiveTick().catch(() => {}); }, 90 * 1000);
+  const t = setInterval(() => { _alArchiveTick().catch(() => {}); }, _AL_ARCHIVE_TICK_MS);
+  if (first.unref) first.unref();
+  if (t.unref) t.unref();
+  console.log('[align] daily archive enabled — saves each session after 16:20 ET (align_daily)');
+}
+
 /**
  * Smallest positive gap between a symbol's recorded strikes — its strike
  * increment, as far as the recorder can see it. The recorder keeps only the
@@ -3895,6 +4014,30 @@ async function main() {
         })();
         return;
       }
+      // ── Wall alignment: sessions that can be opened ──────────────────────
+      //   GET /proxy/strike-growth/align-dates → { dates: ['YYYY-MM-DD', …] } newest first
+      // Archived days (align_daily, kept forever) ∪ the raw strike_growth window.
+      if (pathname === '/proxy/strike-growth/align-dates' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const hasArch = await _alEnsureArchiveSchema(p);
+            const q = await _sgReplayMeta(`align-dates:${hasArch ? 'a' : 'l'}`, () => p.query(
+              hasArch
+                ? `SELECT to_char(date,'YYYY-MM-DD') AS date FROM (
+                     SELECT DISTINCT date FROM strike_growth WHERE date >= CURRENT_DATE - 14
+                     UNION SELECT DISTINCT date FROM align_daily
+                   ) d ORDER BY date DESC LIMIT 400`
+                : `SELECT DISTINCT to_char(date,'YYYY-MM-DD') AS date FROM strike_growth
+                   WHERE date >= CURRENT_DATE - 14 ORDER BY 1 DESC`
+            ));
+            sendJson(res, 200, { ok: true, dates: q.rows.map((r) => r.date) });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // ── Wall alignment across expiries, every scanner ticker ─────────────
       //   GET /proxy/strike-growth/align[?mode=pos|neg|abs][&date=YYYY-MM-DD]
       //
@@ -3932,9 +4075,24 @@ async function main() {
             const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfParam) ? asOfParam : today;
             const modeParam = (u.searchParams.get('mode') || 'pos').toLowerCase();
             const mode = modeParam === 'abs' || modeParam === 'neg' ? modeParam : 'pos';
-            const dQ = await p.query(`SELECT to_char(MAX(date),'YYYY-MM-DD') AS date FROM strike_growth WHERE date <= $1`, [asOf]);
+            // An explicit PAST date reads the daily archive first: it is final,
+            // and strike_growth only reaches back ~5 sessions.
+            const explicit = /^\d{4}-\d{2}-\d{2}$/.test(asOfParam) && asOf < today;
+            if (explicit) {
+              const arch = await _alReadArchive(p, asOf, mode).catch(() => null);
+              if (arch) { sendJson(res, 200, { ...arch, stale: true }); return; }
+            }
+            const dQ = explicit
+              ? await p.query(`SELECT to_char(MAX(date),'YYYY-MM-DD') AS date FROM strike_growth WHERE date = $1`, [asOf])
+              : await p.query(`SELECT to_char(MAX(date),'YYYY-MM-DD') AS date FROM strike_growth WHERE date <= $1`, [asOf]);
             const date = dQ.rows[0]?.date || null;
-            if (!date) { sendJson(res, 200, { ok: true, date: asOf, stale: false, mode, asOf: Date.now(), symbols: [] }); return; }
+            if (!date) {
+              sendJson(res, 200, {
+                ok: true, date: asOf, stale: asOf !== today, mode, asOf: Date.now(), symbols: [],
+                error: explicit ? `Nothing saved for ${asOf}` : undefined,
+              });
+              return;
+            }
             const st = _alState(date);
             const pending = _alRefresh(p, st, today);
             if (!st.ready) await Promise.race([pending, new Promise((r) => setTimeout(r, _AL_WAIT_MS))]);
@@ -5836,6 +5994,9 @@ async function main() {
     // Reads the LIVE dxLink feed (not Theta/REST) — pass the shared proxy so
     // startStrikeGrowthFeed() can subscribe on the same connection.
     startStrikeGrowthRecorder(PORT, proxy);
+    // Saves each finished session's Align board (all wall modes) to align_daily,
+    // so /v3/scanner?tab=align can reopen any past day. See _alArchiveTick.
+    startAlignArchiver();
     // Per-strike Greek snapshots: records gamma/delta/vanna/charm per strike
     // every 5m for the Greek Sensitivity Scanner (/scanner Greeks tab).
     startGreekScannerRecorder(PORT);

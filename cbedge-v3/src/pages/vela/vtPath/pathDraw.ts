@@ -179,6 +179,11 @@ function barAt(times: readonly number[], t: number): number {
 
 // ── PATH (bubbles) ───────────────────────────────────────────────────────────
 
+/** A same-strike hole is filled up to this many grid steps (see SAME STRIKE, LONGER HOLES)… */
+const HOLD_COLS = 12
+/** …and this much clock, so a session break on one strike stays a break. */
+const HOLD_SEC = 90 * 60
+
 export class PathDraw {
   /** each row's growth readings, once per data change */
   private growMemo = new WeakMap<FillPt[], number[]>()
@@ -312,7 +317,19 @@ export class PathDraw {
         // took for a minute, the zoomed-out grid landing between two readings) —
         // gets the row's previous bead. Only inside a run: a gap longer than two
         // grid steps is a real break (the level moved, a session ended) and stays.
-        if (prev && g - prev.g > 1 && g - prev.g <= 2 * N) {
+        //
+        // SAME STRIKE, LONGER HOLES (2026-10-08, Brandon: "still have issues with
+        // bubbles missing. they should be filled in"). A level that reads the SAME
+        // strike on both sides of a hole never left it: a few minutes the recorder
+        // missed, a column its readings did not land in. That hole is filled however
+        // many candles it spans, up to HOLD_COLS grid steps and HOLD_SEC of clock (so
+        // an overnight or a weekend between two sessions on one strike stays open).
+        // A hole where the strike CHANGED keeps the two-step rule above: the level
+        // moved, and a long run of the old strike would be invented.
+        const gap = g - (prev?.g ?? g)
+        const sameStrike = !!prev && q.p === prev.p
+        const holdOk = sameStrike && gap <= HOLD_COLS * N && tOfCol(g) - tOfCol(prev!.g) <= Math.max(2 * N * barSec, HOLD_SEC)
+        if (prev && gap > 1 && (gap <= 2 * N || holdOk)) {
           for (let S = nextSlot(prev.g); S < g; S += N) put(S, prev.p, prev.gi, tOfCol(S))
         }
         // THE LIVE EDGE ALWAYS DRAWS (2026-10-07, Brandon: "path isn't going for

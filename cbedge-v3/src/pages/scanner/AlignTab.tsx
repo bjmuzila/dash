@@ -24,16 +24,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Card } from '@/design/primitives/Card'
-import { SegGroup } from '@/design/primitives/Controls'
+import { SegGroup, Select } from '@/design/primitives/Controls'
 import { T, V2, V2W, alpha } from '@/design/theme'
 import { readableError, useQuery } from '@/data/api'
 import { EM_DASH, fmtB } from '@/pages/scanner/format'
 import {
+  ALIGN_DATES_URL,
   ALIGN_POLL_MS,
   DEFAULT_SETTINGS,
   STATE_LABEL,
   alignUrl,
   buildRow,
+  etToday,
+  pastDate,
   fmtEt,
   fmtExpiry,
   fmtHeld,
@@ -167,17 +170,41 @@ export default function AlignTab({ universe = 'all' }: { universe?: AlignUnivers
     },
     [setParams],
   )
+  // Back keeps the session date, so a replay opened from a past day returns to that day's board.
   const back = useCallback(() => {
     setParams((prev) => {
       const next = new URLSearchParams(prev)
       next.delete('sym')
-      next.delete('d')
       return next
     })
   }, [setParams])
+  // The board's session lives in the URL (?d=), so a past day is a link you can paste.
+  const pickDate = useCallback(
+    (d: string | null) => {
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          if (d) next.set('d', d)
+          else next.delete('d')
+          return next
+        },
+        { replace: true },
+      )
+    },
+    [setParams],
+  )
 
   if (sym) return <AlignReplay symbol={sym} date={symDate} settings={settings} onBack={back} />
-  return <AlignBoard settings={settings} update={update} onOpen={open} universe={universe} />
+  return (
+    <AlignBoard
+      settings={settings}
+      update={update}
+      onOpen={open}
+      universe={universe}
+      day={pastDate(symDate)}
+      onPickDay={pickDate}
+    />
+  )
 }
 
 function AlignBoard({
@@ -185,23 +212,31 @@ function AlignBoard({
   update,
   onOpen,
   universe,
+  day,
+  onPickDay,
 }: {
   settings: AlignSettings
   update: (p: Partial<AlignSettings>) => void
   onOpen: (symbol: string, date: string | undefined) => void
   universe: AlignUniverse
+  /** A past session, or null for today (live). */
+  day: string | null
+  onPickDay: (d: string | null) => void
 }) {
   const main = universe === 'main'
-  const { data: fresh, error, loading } = useQuery<AlignResponse>(alignUrl(settings.mode), {
-    pollMs: ALIGN_POLL_MS,
+  const { data: fresh, error, loading } = useQuery<AlignResponse>(alignUrl(settings.mode, day), {
+    // A saved day never changes — no poll.
+    pollMs: day ? undefined : ALIGN_POLL_MS,
     staleMs: 30_000,
   })
   // A failed or still-warming poll must not blank the board: keep painting the
   // last good answer for this mode and say how old it is.
-  const lastGood = useRef<{ mode: string; data: AlignResponse } | null>(null)
+  const lastGood = useRef<{ key: string; data: AlignResponse } | null>(null)
+  const goodKey = `${settings.mode}|${day ?? ''}`
   const freshOk = !!fresh && fresh.ok !== false && !fresh.warming
-  if (freshOk) lastGood.current = { mode: settings.mode, data: fresh }
-  const held = lastGood.current?.mode === settings.mode ? lastGood.current.data : undefined
+  if (freshOk) lastGood.current = { key: goodKey, data: fresh }
+  const held = lastGood.current?.key === goodKey ? lastGood.current.data : undefined
+  const { data: datesResp } = useQuery<{ dates?: string[] }>(ALIGN_DATES_URL, { staleMs: 5 * 60_000 })
   const data = freshOk ? fresh : (held ?? fresh)
   const showingOld = !freshOk && !!held
   const warming = !!fresh?.warming && !held
@@ -288,7 +323,15 @@ function AlignBoard({
         strike, the ticker is PENDING; when 0DTE joins them it is LOCKED. {subtitle}
       </div>
 
-      <Toolbar settings={settings} update={update} view={view} setView={setView} />
+      <Toolbar
+        settings={settings}
+        update={update}
+        view={view}
+        setView={setView}
+        day={day}
+        onPickDay={onPickDay}
+        dates={datesResp?.dates ?? []}
+      />
 
       <div className="mb-3 flex flex-wrap items-center gap-1.5">
         {FILTERS.map((f) => {
@@ -362,14 +405,35 @@ function Toolbar({
   update,
   view,
   setView,
+  day,
+  onPickDay,
+  dates,
 }: {
   settings: AlignSettings
   update: (p: Partial<AlignSettings>) => void
   view: View
   setView: (v: View) => void
+  day: string | null
+  onPickDay: (d: string | null) => void
+  dates: string[]
 }) {
+  const today = etToday()
+  const options = [
+    { value: 'live', label: 'Today (live)' },
+    ...dates.filter((d) => d < today).map((d) => ({ value: d, label: fmtExpiry(d) + ` '${d.slice(2, 4)}` })),
+  ]
+  if (day && !options.some((o) => o.value === day)) options.push({ value: day, label: day })
   return (
     <div className="mb-3 flex flex-wrap items-end gap-3">
+      <Field label="Session">
+        <Select<string>
+          ariaLabel="Session"
+          value={day ?? 'live'}
+          options={options}
+          onChange={(v) => onPickDay(v === 'live' ? null : v)}
+          menuWidth="w-44"
+        />
+      </Field>
       <Field label="View">
         <SegGroup<View>
           options={[

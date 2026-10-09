@@ -578,7 +578,7 @@ export default function VelaUsage() {
         </Card>
 
         {/* ── headline numbers ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 10 }}>
           <Tile label="Users" value={String(s?.totals.users ?? "…")} sub={user ? userLabel(user) : RANGES.find((r) => r.key === days)?.label} />
           <Tile label="Sessions (tabs)" value={String(s?.totals.sessions ?? "…")} />
           <Tile label="Chart time" value={s ? dur(s.totals.visible_sec) : "…"} sub="tab visible" />
@@ -624,10 +624,14 @@ export default function VelaUsage() {
               </table>
             )}
           </Card>
-          <Card fill title="Users per day" span={wide}>
+        </div>
+
+        {/* ── by day and by hour, side by side ── */}
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))", gridAutoRows: GRID_CARD_H, gap: 14 }}>
+          <Card fill title="Users per day">
             <Daily rows={s?.daily ?? []} />
           </Card>
-          <Card fill title="When" span={wide}>
+          <Card fill title="When">
             <Heatmap rows={usage.hour} />
           </Card>
         </div>

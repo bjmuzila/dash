@@ -79,7 +79,7 @@
 // the GEX colours by sign (positive above the flip, negative below) and fading
 // through the dark where the sign flips. A tagged level is a 2px line across the
 // shape in its Path colour. The figures sit right-aligned over it, a level's in
-// its colour. Redrawn with the rows on every frame (pan, zoom).
+// its colour, and only on a tagged level (2026-10-08). Redrawn with the rows on every frame (pan, zoom).
 // FULL LENGTH (2026-10-08, Brandon: "the gex rail cuts off. needs to be full
 // length"): the ladder carries the top 30 strikes, so the shape used to stop at
 // the highest and lowest of them and leave the rest of the column empty. Past
@@ -523,7 +523,11 @@ class RailLayer implements RendererLayerInstance {
         track.append(heatCell(r))
         this.colors.set(r.strike, heatColor(r))
       } else if (d.profile) {
-        track.append(profileCell(r))
+        // FIGURES ON THE LEVELS ONLY (2026-10-08, Brandon: "only put the gex amount
+        // for the labeled lines"): the shape already shows every strike's size, so
+        // a figure is written only on a tagged row (Volt / Coil / Reversal / Surge,
+        // or CB / CW / PW). Every row still carries its strike and value on hover.
+        if (r.tags.length) track.append(profileCell(r))
       } else {
         const bar = document.createElement('span')
         bar.className = 'cb-gxr-bar'
