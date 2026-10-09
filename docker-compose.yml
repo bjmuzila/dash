@@ -24,6 +24,11 @@ services:
     environment:
       NODE_ENV: production
       TZ: America/New_York
+      # all (default) = site + feed + every background job, as always.
+      # web = site + feed + the 8 feed-coupled jobs; the rest run in `jobs`.
+      # Turn the split on/off with the two lines in /opt/dashboard/.env —
+      # see the `jobs` service below. Never set PROCESS_ROLE in .env.local.
+      PROCESS_ROLE: ${DASHBOARD_ROLE:-all}
     volumes:
       # discord-relay dedupe state. Must outlive the container: without this the
       # seen-set resets on every redeploy, the relay re-primes from the current
@@ -511,6 +516,53 @@ services:
   #       service: http://127.0.0.1:8091
   # then `cloudflared tunnel route dns <tunnel> vela.cbedge.net` and
   # `systemctl restart cloudflared`.
+  # ── Background jobs, split off the live server (2026-10-09) ────────────────
+  # Same image and secrets as `dashboard`, run with PROCESS_ROLE=jobs: ~34
+  # recorders, writers, Discord posters, emails and the nightly cleanup, with a
+  # CPU cap so none of them can starve the site, Vela or the live feed again.
+  # No ports, no Next, no socket, no feed; its HTTP calls to "localhost:PORT"
+  # are forwarded to the dashboard container. Full plan: the audit doc's
+  # "Background jobs split" tab.
+  #
+  # OFF until enabled. To turn the split ON, add to /opt/dashboard/.env:
+  #     COMPOSE_PROFILES=split
+  #     DASHBOARD_ROLE=web
+  # then `docker compose up -d`. Both lines go together: DASHBOARD_ROLE=web
+  # without this service running means the moved jobs run nowhere.
+  # To turn it OFF: delete both lines, then
+  #     docker compose stop jobs && docker compose rm -f jobs && docker compose up -d
+  jobs:
+    image: bzila-dashboard:latest
+    profiles: ["split"]
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    environment:
+      NODE_ENV: production
+      TZ: America/New_York
+      PROCESS_ROLE: jobs
+      INTERNAL_UPSTREAM_HOST: dashboard
+      # The jobs call http://localhost:PORT; the forwarder listens on 127.0.0.1
+      # (and ::1 when the kernel has it). Prefer IPv4 so no call races ::1.
+      NODE_OPTIONS: --dns-result-order=ipv4first --max-old-space-size=1536
+    volumes:
+      # budget-email and levels-publish guard files live here, shared with web.
+      - ./state:/app/state
+    cpus: "1.5"
+    mem_limit: 2g
+    stop_grace_period: 20s
+    healthcheck:
+      # No HTTP of its own to probe: the process writes /tmp/jobs-heartbeat
+      # every 30s once its jobs have started.
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{process.exit(Date.now()-Number(fs.readFileSync('/tmp/jobs-heartbeat','utf8'))<120000?0:1)}catch(e){process.exit(1)}"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    depends_on:
+      dashboard:
+        condition: service_started
+
   vela:
     build:
       context: .

@@ -346,7 +346,84 @@ const { verifyWsRequest } = require('./ws-auth');
 // In-process replacement for app/api/* Next routes. Handles only routes it has
 // registered; everything else falls through to Next. Gated by API_ROUTER=1 at
 // the mount point below so it is a no-op until deliberately enabled.
-const { handleApiRoute } = require('./api-router');
+// ── Process role: PROCESS_ROLE (2026-10-09, see the audit doc's "Background jobs split") ──
+// Set it in docker-compose `environment:`, NEVER in .env.local: both containers
+// load .env.local with override, so a value there would give them the SAME role.
+//   all  (default) — exactly what this process always did: site + API + socket +
+//                    live feed + every background job. Rollback = ROLE=all.
+//   web  — the user-facing half: HTTP, Next, /ws/gex, the live feed, and only
+//          the jobs that must share its memory (WEB_JOBS below).
+//   jobs — every other background job, in a second container on the same
+//          image. No HTTP server, no Next, no socket, no feed, no API router.
+//          A loopback forwarder on 127.0.0.1:PORT carries the jobs' own HTTP
+//          calls to the web container (INTERNAL_UPSTREAM_HOST, default
+//          'dashboard'), so not one job module had to change.
+// A job must run in exactly ONE role: their run-once guards live in memory, so
+// a job in both would double-post to Discord, double-send email and run the
+// nightly DELETE/VACUUM twice. runJob() is the only gate.
+const ROLE_RAW = String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase();
+const ROLE = ['all', 'web', 'jobs'].includes(ROLE_RAW) ? ROLE_RAW : 'all';
+if (ROLE !== ROLE_RAW) console.warn(`[SERVER-V2] unknown PROCESS_ROLE=${ROLE_RAW} — running as 'all'`);
+// Jobs that stay with the live feed: they read its memory (proxy, market-state)
+// or share public/signals.txt, which lives in the web container's image.
+// mvc-auto and levels-auto-publish also keep owner toggles/status in memory
+// that web routes read — they move once that state is persisted.
+const WEB_JOBS = new Set([
+  'mvc-auto', 'strike-growth', 'gex-change-top', 'signals-engine',
+  'greeks-ts', 'econ-alert', 'discord-relay', 'levels-auto-publish',
+]);
+const startedJobs = [];
+function runJob(name) {
+  const yes = ROLE === 'all' || (ROLE === 'web' ? WEB_JOBS.has(name) : !WEB_JOBS.has(name));
+  if (yes) startedJobs.push(name);
+  return yes;
+}
+
+// ── Jobs role: loopback forwarder + heartbeat ───────────────────────────────
+// Jobs call this server at http://localhost:PORT / 127.0.0.1:PORT (about 25 of
+// them). In the jobs role nothing here serves HTTP, so a plain TCP pipe on the
+// same loopback port carries those calls to the web container unchanged —
+// same Host, same x-internal-token. Both loopback families are bound, because
+// Node may resolve `localhost` to ::1 first.
+const JOBS_UPSTREAM_HOST = (process.env.INTERNAL_UPSTREAM_HOST || 'dashboard').trim();
+const JOBS_UPSTREAM_PORT = Number(process.env.INTERNAL_UPSTREAM_PORT || process.env.PORT || 3001);
+function startJobsForwarder(onListening) {
+  const net = require('net');
+  const port = Number(process.env.PORT || 3001);
+  const make = () => net.createServer((client) => {
+    const up = net.connect({ host: JOBS_UPSTREAM_HOST, port: JOBS_UPSTREAM_PORT });
+    up.setNoDelay(true);
+    client.setNoDelay(true);
+    const done = () => { client.destroy(); up.destroy(); };
+    client.on('error', done);
+    up.on('error', done);
+    client.pipe(up);
+    up.pipe(client);
+  });
+  let pending = 2;
+  let called = false;
+  const ready = () => { if (!called && --pending <= 0) { called = true; onListening(); } };
+  const v4 = make();
+  v4.on('error', (e) => { console.error('[SERVER-V2] jobs forwarder 127.0.0.1 failed:', e.message); process.exit(1); });
+  v4.listen(port, '127.0.0.1', ready);
+  const v6 = make();
+  v6.on('error', (e) => { console.warn('[SERVER-V2] jobs forwarder ::1 unavailable (IPv4 only):', e.code || e.message); ready(); });
+  v6.listen(port, '::1', ready);
+}
+// The compose healthcheck reads this file's age (a jobs process has no HTTP of
+// its own to probe; /proxy/health through the forwarder would report web's).
+function startJobsHeartbeat() {
+  const fs = require('fs');
+  const beat = () => { try { fs.writeFileSync('/tmp/jobs-heartbeat', String(Date.now())); } catch { /* read-only fs */ } };
+  beat();
+  setInterval(beat, 30_000).unref();
+}
+
+// In-process API router. Not loaded in the jobs role: requiring it starts the
+// LSE flow poller and websocket tape, which must run in exactly one process.
+const { handleApiRoute } = ROLE === 'jobs'
+  ? { handleApiRoute: async () => false }
+  : require('./api-router');
 const { initObservability, captureError } = require('./observability');
 
 // Old Next pages deleted on 2026-10-09 → where that content lives now (see the
@@ -2728,7 +2805,7 @@ async function computeVolFlow({ key, binSec, binMs, scope, expiryParam, session,
 // single visitor. Disable with VOLFLOW_PREWARM=0.
 const VOLFLOW_PREWARM_SYMBOLS = (process.env.VOLFLOW_PREWARM_SYMBOLS || '$SPX')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
-if (process.env.VOLFLOW_PREWARM !== '0' && VOLFLOW_PREWARM_SYMBOLS.length) {
+if (ROLE !== 'jobs' && process.env.VOLFLOW_PREWARM !== '0' && VOLFLOW_PREWARM_SYMBOLS.length) {
   const volFlowPrewarmTick = async () => {
     // RTH gate (rough): Mon–Fri 9:25–16:05 ET so the open is already warm.
     const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -2756,7 +2833,7 @@ if (process.env.VOLFLOW_PREWARM !== '0' && VOLFLOW_PREWARM_SYMBOLS.length) {
 // refresh after the first. Disable with NETPREM_PREWARM=0.
 const NETPREM_PREWARM_TICKERS = (process.env.NETPREM_PREWARM_TICKERS || 'SPX')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
-if (process.env.NETPREM_PREWARM !== '0' && NETPREM_PREWARM_TICKERS.length) {
+if (ROLE !== 'jobs' && process.env.NETPREM_PREWARM !== '0' && NETPREM_PREWARM_TICKERS.length) {
   const prewarmTick = async () => {
     // RTH gate (rough): Mon–Fri 9:25–16:05 ET so the open is already warm.
     const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -2785,9 +2862,10 @@ async function main() {
   // Error monitoring + crash guards first, so anything during boot is captured.
   initObservability();
 
-  const app = next({ dev: DEV, dir: ROOT_DIR });
-  const handle = app.getRequestHandler();
-  await app.prepare();
+  // The jobs role serves nothing, so it never loads Next.
+  const app = ROLE === 'jobs' ? null : next({ dev: DEV, dir: ROOT_DIR });
+  const handle = app ? app.getRequestHandler() : null;
+  if (app) await app.prepare();
 
   // Forward-declared so the request handler can reference the live proxy.
   let proxy = null;
@@ -5827,7 +5905,9 @@ async function main() {
   });
 
   // Attach WS broadcaster (/ws/gex).
-  const { wss, broadcastEvent } = createGexWsServer(server, { log: console });
+  const { wss, broadcastEvent } = ROLE === 'jobs'
+    ? { wss: null, broadcastEvent: () => {} }
+    : createGexWsServer(server, { log: console });
 
   // ── Next steals this server's 'upgrade' event — block it off /ws/gex ────────
   // Next 15 (node_modules/next/dist/server/next.js:298 setupWebSocketHandler)
@@ -5867,7 +5947,8 @@ async function main() {
   // Start the live feed — UNLESS idle was left ON. Idle is now a true bandwidth
   // kill-switch, so a restart while idle must stay paused (no dxLink, no quotes,
   // no broadcasts) until the owner toggles it back on from the dashboard.
-  proxy = new TastytradeProxy();
+  // The jobs role never runs the live feed: one dxLink feed, in web.
+  proxy = ROLE === 'jobs' ? null : new TastytradeProxy();
 
   // Start the feed with bounded retry. Theta (sibling container) may not be
   // ready at boot even with compose `depends_on: service_healthy` — the v3 jar
@@ -5920,7 +6001,9 @@ async function main() {
     return feedStarting;
   };
   const FEED_GATE_MS = Number(process.env.FEED_GATE_MS || 120_000);
-  const feedReady = startFeedOnce().catch((e) => console.error('[SERVER-V2] feed start:', e?.message || e));
+  const feedReady = ROLE === 'jobs'
+    ? Promise.resolve()
+    : startFeedOnce().catch((e) => console.error('[SERVER-V2] feed start:', e?.message || e));
   const feedOrTimeout = Promise.race([
     feedReady,
     new Promise((r) => setTimeout(r, FEED_GATE_MS).unref()),
@@ -5997,7 +6080,7 @@ async function main() {
   // one browser redirect the recorder for everybody. It is tagged 'client-ws' and
   // dropped by setExpiry() while GEX_EXPIRY_LOCK is on (the default); see the
   // EXPIRY_LOCK block in proxy-tastytrade.js.
-  wss.on('client-message', ({ parsed }) => {
+  if (wss) wss.on('client-message', ({ parsed }) => {
     const t = parsed?.type;
     if ((t === 'SET_EXPIRY' || t === 'setExpiry') && proxy) {
       proxy.setExpiry(parsed.expiry, 'client-ws');
@@ -6007,8 +6090,9 @@ async function main() {
     }
   });
 
-  server.listen(PORT, () => {
-    console.log(`[SERVER-V2] listening on http://localhost:${PORT}  (ws ${PORT}/ws/gex, rest /proxy/*)`);
+  const onListening = () => {
+    if (ROLE === 'jobs') console.log(`[SERVER-V2] ROLE=jobs — loopback :${PORT} forwards to ${JOBS_UPSTREAM_HOST}:${JOBS_UPSTREAM_PORT}; no site, socket or feed in this process`);
+    else console.log(`[SERVER-V2] listening on http://localhost:${PORT}  (ws ${PORT}/ws/gex, rest /proxy/*)${ROLE === 'web' ? ' — ROLE=web' : ''}`);
     // Everything below starts once the feed is up (or FEED_GATE_MS has passed),
     // the same order as before the listen-first change above.
     feedOrTimeout.then(() => {
@@ -6019,39 +6103,39 @@ async function main() {
     // or missing DB delays nothing.
     rosterStore.primeRosters().catch(() => {});
     // In-process MVC auto-collector: writes a snapshot every 5m during RTH.
-    require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
+    if (runJob('mvc-auto')) require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
     // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.
-    startEodGexRecorder(PORT);
+    if (runJob('eod-gex')) startEodGexRecorder(PORT);
     // SPY/QQQ 1-min candle recorder: persists today's session bars into
     // etf_candles every 60s during RTH (feeds the /test Condition price line's
     // history going forward). Isolated dxLink fetch — see state/etf-candle-recorder.
-    startEtfCandleRecorder();
+    if (runJob('etf-candle')) startEtfCandleRecorder();
     // SPY/QQQ per-strike GEX recorder: polls their option chains every 60s
     // during RTH and writes one row per strike into option_strike_gex_history
     // with symbol='SPY'/'QQQ' — the same table and writer the live SPX feed
     // uses. Backs the ES-Candles page's SPY/QQQ heatmap, bubbles and rail.
-    startEtfGexRecorder();
+    if (runJob('etf-gex')) startEtfGexRecorder();
     // Daily per-strike OPEN INTEREST snapshot (9:32 ET, weekdays) across the
     // scanner watchlist → oi_daily. OI settles overnight and does not tick
     // intraday, so one snapshot a day is the whole signal; the Options Chain
     // OI tab diffs today's row against the previous snapshot date to show what
     // positioning was actually opened or closed overnight.
-    startOiDailyRecorder();
+    if (runJob('oi-daily')) startOiDailyRecorder();
     // Daily per-strike NET GEX snapshot (16:05 ET, weekdays) of the whole
     // board minus 0DTE, across the scanner watchlist → eod_strike_gex. Fires
     // after the close because the OI+Vol basis is half day-volume, which is
     // only final once the 16:00 print is in. ±40 strikes around the closing
     // spot per symbol; the Ticker Lookup Δ column diffs today's row against
     // the previous snapshot date to show which walls were built or taken off.
-    startEodStrikeGexRecorder();
+    if (runJob('eod-strike-gex')) startEodStrikeGexRecorder();
     // Reads the ladder above and logs what it flagged, so the watch feed has
     // real fire times and its odds become forward-tested rather than re-derived.
-    startGexWatchRecorder();
+    if (runJob('gex-watch')) startGexWatchRecorder();
     // Rolls the same ladder up to one row per (symbol, session): gross gamma,
     // how much of it churned, and whether it was added or pulled. Fires after
     // the watch recorder for the same reason the watch fires after the ladder —
     // it reads what the earlier pass wrote.
-    startGexGrossRecorder();
+    if (runJob('gex-gross')) startGexGrossRecorder();
     // Daily near-the-money PREMIUM TRADED snapshot (16:05 ET, weekdays) →
     // atm_prem_diff. Fires after the close because it reads the chain's DAY
     // VOLUME, which is only final once the 16:00 print is in. One row per
@@ -6059,57 +6143,57 @@ async function main() {
     // minus call premium from it. This is the ONLY thing that grows the series
     // forward — atm-prem-backfill.js can rebuild the past from dxLink candles,
     // but today's tape has to be captured today.
-    startAtmPremRecorder();
+    if (runJob('atm-prem')) startAtmPremRecorder();
     // GEX Levels history recorder: persists the /test GEX Levels "History of
     // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
-    require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);
+    if (runJob('gex-levels-history')) require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);
     // Daily Grades: after the close (16:20 ET) grade the board sealed before the
     // open — floor/cap/apex/flip vs the realized session — one row per ticker
     // plus one summed row for the day. Raw O/H/L/C is stored beside the grade so
     // a rubric change is a regrade, not a refetch.
-    try { require('./daily-grades-recorder').startDailyGradesRecorder(PORT); }
+    if (runJob('daily-grades')) try { require('./daily-grades-recorder').startDailyGradesRecorder(PORT); }
     catch (e) { console.warn('[daily-grades] start failed:', e.message); }
     // /premarket session freeze: captures the page's INPUTS twice a trading day
     // (pre 09:10–09:29, post 16:05–16:25 ET) into premarket_freeze, so a past
     // date renders the real Premarket / Post-Market tabs instead of a reduced
     // recap. Stores inputs, never derived values — see the recorder's header.
-    require('./premarket-freeze-recorder').startPremarketFreezeRecorder(PORT);
+    if (runJob('premarket-freeze')) require('./premarket-freeze-recorder').startPremarketFreezeRecorder(PORT);
     // /premarket session replay: the SAME capture every 5 minutes from 04:00 to
     // 16:25 ET, trimmed to ±20 strikes, into premarket_replay — so the page can
     // be played back minute by minute, not only looked up. Frames are the
     // page's inputs (it calls the freeze recorder's own shaper), so a replayed
     // frame is the real page recomputed, not a stored screenshot of it.
-    try { require('./premarket-replay-recorder').startPremarketReplayRecorder(PORT); }
+    if (runJob('premarket-replay')) try { require('./premarket-replay-recorder').startPremarketReplayRecorder(PORT); }
     catch (e) { console.warn('[premarket-replay] start failed:', e.message); }
     // Earnings calendar: Sat 09:00 ET scrape of next Mon–Fri from Nasdaq,
     // mcap ≥ $100B → earnings_calendar (feeds /economic-calendar bottom strip).
-    require('./earnings-calendar-recorder').startEarningsCalendarRecorder();
+    if (runJob('earnings-calendar')) require('./earnings-calendar-recorder').startEarningsCalendarRecorder();
     // Day-post writer: auto-generates the premarket/midday/EOD X posts
     // (Anthropic via /api/social-media/day-post) into day_posts at their slot
     // times, so the Social Media → Day Posts tab has a ready copy/paste list.
-    require('./day-post-writer').startDayPostWriter(PORT);
+    if (runJob('day-post')) require('./day-post-writer').startDayPostWriter(PORT);
     // Per-strike GEX growth recorder: sweeps the watchlist during RTH and stores
     // delta-vs-open per strike (feeds /strike-growth tracker + DoD Movers tabs).
     // Reads the LIVE dxLink feed (not Theta/REST) — pass the shared proxy so
     // startStrikeGrowthFeed() can subscribe on the same connection.
-    startStrikeGrowthRecorder(PORT, proxy);
+    if (runJob('strike-growth')) startStrikeGrowthRecorder(PORT, proxy);
     // Saves each finished session's Align board (all wall modes) to align_daily,
     // so /v3/scanner?tab=align can reopen any past day. See _alArchiveTick.
-    startAlignArchiver();
+    if (runJob('align-archiver')) startAlignArchiver();
     // Per-strike Greek snapshots: records gamma/delta/vanna/charm per strike
     // every 5m for the Greek Sensitivity Scanner (/scanner Greeks tab).
-    startGreekScannerRecorder(PORT);
+    if (runJob('greek-scanner')) startGreekScannerRecorder(PORT);
     // Far CB Watch: flags EM-watchlist tickers whose single highest OI+Vol GEX
     // strike (within 30d expirations) sits unusually far OTM vs spot.
     // OFF since 2026-10-09: its only reader was the v3 Scanner's Watch This tab,
     // which is retired, and its all-day REST sweep of every watchlist chain was
     // one of the heaviest jobs on the live core. FAR_CB_ENABLED=1 turns it back
     // on. The /proxy/far-cb-* routes stay and serve the last recorded rows.
-    if (process.env.FAR_CB_ENABLED === '1') startFarCbRecorder();
-    else console.log('[far-cb] recorder OFF (Watch This retired) — set FAR_CB_ENABLED=1 to run it');
+    if (process.env.FAR_CB_ENABLED === '1' && runJob('far-cb')) startFarCbRecorder();
+    else if (ROLE !== 'web') console.log('[far-cb] recorder OFF (Watch This retired) — set FAR_CB_ENABLED=1 to run it');
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
     // root every 5m (total net GEX / walls / flip / CB). Idle unless SCANNER_TICKERS set.
-    startScannerRecorder();
+    if (runJob('scanner')) startScannerRecorder();
     // Walls: call wall / put wall / CB tracked across the scanner universe on a
     // fixed clock (09:29 open + every 15m to 16:00). Reads scanner_snapshots —
     // no extra Theta load — and writes change-only rows into walls_log plus
@@ -6124,7 +6208,7 @@ async function main() {
     // card read "no session recorded". scanner_snapshots was fresh the whole
     // time; nothing was copying it into walls_log. Do not disable this again
     // without checking /v3/level-log first.
-    startWallsRecorder();
+    if (runJob('walls')) startWallsRecorder();
     // Reach Rank: the distance model layered on top of Walls. Nightly at 16:45
     // ET it replays the session into wall_reach (how far each level sat in ATR
     // units, and whether price got there) and re-snapshots wall_calibration
@@ -6144,7 +6228,7 @@ async function main() {
     // Forward walls: the next unexpired contract, swept pre-open and post-close
     // into its own table so the 0DTE stack's one-expiry-per-session invariant
     // is never violated.
-    if (LEGACY_RECORDERS) startForwardScanner(); // no reader: /proxy/walls-forward has no caller
+    if (LEGACY_RECORDERS && runJob('legacy')) startForwardScanner(); // no reader: /proxy/walls-forward has no caller
     // Hourly "very strong" GEX-change recorder: at the top of each RTH hour,
     // scores the strike_growth universe (60m window), keeps the top 5 ★ Very
     // strong strikes (|Δ| >= $500k & |% vs open| >= 30%) into gex_change_top.
@@ -6155,7 +6239,7 @@ async function main() {
     // picks sit >= 5% OTM, outside the multi-ticker flow window, so their signed
     // prints never reached flow_prints otherwise. `proxy` is read at call time,
     // so a feed restart (new TastytradeProxy) is picked up automatically.
-    startGexChangeTopRecorder(PORT, {
+    if (runJob('gex-change-top')) startGexChangeTopRecorder(PORT, {
       trackPickFlow: (c) => (proxy && typeof proxy.trackPickFlow === 'function'
         ? proxy.trackPickFlow(c)
         : Promise.resolve({ ok: false, error: 'feed not running' })),
@@ -6170,27 +6254,27 @@ async function main() {
     // 60s so the Walls & Flows tab's 5/15/30/60m windows persist server-side
     // instead of depending on a browser tab staying open. NDX runs 24/7;
     // SPY/QQQ only tick during RTH. Feeds /proxy/wall-history.
-    if (LEGACY_RECORDERS) startTickerWallRecorder(); // no reader: ChainStatsBar is imported nowhere
+    if (LEGACY_RECORDERS && runJob('legacy')) startTickerWallRecorder(); // no reader: ChainStatsBar is imported nowhere
     // Net greeks time-series: writes $SPX net GEX/DEX/CHEX/VEX every 5m during
     // RTH into greeks_ts (feeds the Analytics "Net Greeks" card).
-    startGreeksTsWriter(PORT);
+    if (runJob('greeks-ts')) startGreeksTsWriter(PORT);
     // In-process weekly publisher for the customer /em page: computes EM + zones
     // server-side and POSTs each ticker to /api/levels (Sat ~09:00 ET, then
     // auto-retries unpriced tickers on a backoff). No startup publish by design.
-    require('./levels-auto-publish').startLevelsAutoPublish(PORT);
+    if (runJob('levels-auto-publish')) require('./levels-auto-publish').startLevelsAutoPublish(PORT);
     // In-process weekly EM Tracker evaluator: every Sat ~09:00 ET scores last
     // week's close vs the EM band (win = closed inside) and POSTs to /api/em-tracker.
-    require('./em-tracker-auto-eval').startEmTrackerAutoEval(PORT);
+    if (runJob('em-tracker-eval')) require('./em-tracker-auto-eval').startEmTrackerAutoEval(PORT);
     // In-process condor price tracker: hourly (10:00-16:00 ET) it snapshots the
     // live NBBO mid on all four legs of every OPEN condor in the current week
     // into em_condor_ticks; at 16:15 ET it re-prices the week off Theta's EOD
     // history into em_condor_marks (the series the Iron Condors tab reads) and
     // prunes ticks older than 120 days. Weekdays only; every fire is idempotent.
-    require('./condor-mark-recorder').startCondorMarkRecorder(PORT);
+    if (runJob('condor-mark')) require('./condor-mark-recorder').startCondorMarkRecorder(PORT);
     // Morning budget briefing: daily 08:00 ET, emails the owner a written
     // summary + screenshots of /owner/budget (Overview + Prop). Force a send
     // any time via POST /proxy/budget-email-run.
-    require('./budget-email').startBudgetEmail(PORT);
+    if (runJob('budget-email')) require('./budget-email').startBudgetEmail(PORT);
     // Overnight ES gap tracker: DISABLED — CPU cost not worth it (5-min RTH cron).
     // Re-enable by uncommenting: require('./es-gap-tracker').startEsGapTracker(PORT);
     // In-process ICT setup recorder: every 5m during RTH detects every live ICT
@@ -6203,36 +6287,36 @@ async function main() {
     // EOD IB results: daily at 16:30 ET, computes the finished session's Initial
     // Balance + 14-rule scoreboard (ES+NQ) from the persisted 5m candles →
     // ib_daily_results, read by the IB Stats tab's Daily Results table.
-    require('./ib-results-recorder').startIbResultsRecorder(PORT);
+    if (runJob('ib-results')) require('./ib-results-recorder').startIbResultsRecorder(PORT);
     // TPO profile recorder: REMOVED 2026-10-06 (Brandon: "dump the tpo recorder").
     // Its boot catch-up scanned all of option_strike_gex_history on every restart
     // and took the site down. The tpo_profiles table and its rows are left as they are.
     // Chart-read indexes, built CONCURRENTLY two minutes after boot, plus
     // pg_stat_statements when Postgres preloads it (state/perf-indexes.js).
-    require('./state/perf-indexes').startPerfIndexes();
+    if (runJob('perf-indexes')) require('./state/perf-indexes').startPerfIndexes();
     // Momentum Bias grader: grades pending TP/reversal signals (recorded inline
     // by the feed in _flushEsCandles) via follow-through every 5m → the
     // momentum_bias_signals table. Read via /api/momentum-bias.
-    if (LEGACY_RECORDERS) require('./momentum-bias-tracker').startMomentumBiasGrader(); // no reader
+    if (LEGACY_RECORDERS && runJob('legacy')) require('./momentum-bias-tracker').startMomentumBiasGrader(); // no reader
     // GEX/CB actionable signal engine for the ES Candles page: every few seconds
     // during the futures session it turns the live heatmap levels (flip cross,
     // Call/Put wall reject+break, CB reaction, level confluence) into long/short
     // ES signals → trade_signals table (+ optional Discord). Alerts only, no
     // orders. Read via /proxy/signals; force a pass via POST /proxy/signals-run.
-    startSignalsEngine(PORT);
+    if (runJob('signals-engine')) startSignalsEngine(PORT);
     // Econ-calendar countdown alerts: polls /api/calendar every 20s and appends
     // "5 minutes to <event>" / "1 minute to <event>" lines to public/signals.txt
     // for High/Medium impact events, read by the home SignalsFeed as [Econ] chips.
-    require('./econ-alert-recorder').startEconAlertRecorder(PORT);
+    if (runJob('econ-alert')) require('./econ-alert-recorder').startEconAlertRecorder(PORT);
     // Discord relay: mirrors public/signals.txt (hand-authored + AUTO econ block)
     // into the signals Discord channel. Engine signals (/proxy/signals) reach the
     // same channel via signals-engine.js's own SIGNALS_DISCORD_WEBHOOK — point
     // both env vars at the same webhook and Discord matches the home feed.
-    require('./discord-relay').startDiscordRelay();
+    if (runJob('discord-relay')) require('./discord-relay').startDiscordRelay();
     // Reference-levels cache: writes PDH/PDL after RTH close (16:05 ET) and
     // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
     // via /api/ref-levels instead of recomputing from 20 days of ES candles.
-    require('./ref-levels-recorder').startRefLevelsRecorder(PORT);
+    if (runJob('ref-levels')) require('./ref-levels-recorder').startRefLevelsRecorder(PORT);
     // Delayed preview feed for signed-up-but-unpaid users (/preview page):
     // every 30m during RTH, snapshots spot + call/put wall + gamma flip from
     // the same /api/gex the paid dashboard reads → preview_snapshots.
@@ -6249,7 +6333,7 @@ async function main() {
     // Per-strike NET GEX history (SPX/SPY/QQQ/IWM, 4 closest expiries) every 60s
     // during RTH → mult_greek_gex_ring/open, backing the /mult-greek click card's
     // 15m/30m/open change. Guarded — never crash startup if it fails to load.
-    try { multGreekGexRecorder?.startMultGreekGexRecorder?.(PORT); }
+    if (runJob('mult-greek-gex')) try { multGreekGexRecorder?.startMultGreekGexRecorder?.(PORT); }
     catch (e) { console.warn('[mult-greek-gex] start failed:', e.message); }
     // Multi Greek LADDERS snapshot (levels broadcast) → Discord. Schedule
     // (window, interval, days), destination and message are set at
@@ -6257,11 +6341,11 @@ async function main() {
     // 09:30–16:00 ET to the CB Edge Signals channel via the old webhook env
     // chain. Same picture the page's 🗒 LADDERS button produces.
     // Guarded — never crash startup if puppeteer/chromium is missing.
-    try { require('./mg-ladder-discord').startMgLadderDiscord(PORT); }
+    if (runJob('mg-ladder')) try { require('./mg-ladder-discord').startMgLadderDiscord(PORT); }
     catch (e) { console.warn('[mg-ladder] start failed:', e.message); }
     // Levels as TEXT (no image) at fixed ET times — job "levels-text" on
     // owner -> BOT -> Scheduled, default 09:45 and 10:30. Same levels as above.
-    try { require('./mg-ladder-discord').startLevelsTextDiscord(PORT); }
+    if (runJob('levels-text')) try { require('./mg-ladder-discord').startLevelsTextDiscord(PORT); }
     catch (e) { console.warn('[levels-text] start failed:', e.message); }
     // Economic Calendar snapshot -> Discord, on the schedule set at
     // owner -> BOT -> Scheduled (server-v2/scheduled-posts-store.js, job
@@ -6278,12 +6362,12 @@ async function main() {
     // `docker compose logs dashboard | grep econ-cal` prints nothing at boot,
     // this line is missing again.
     // Guarded — never crash startup if puppeteer/chromium is missing.
-    try { require('./econ-calendar-discord').startEconCalendarDiscord(PORT); }
+    if (runJob('econ-calendar-discord')) try { require('./econ-calendar-discord').startEconCalendarDiscord(PORT); }
     catch (e) { console.warn('[econ-cal] start failed:', e.message); }
     // Owner options watchlist: every 60s during market hours, refreshes every
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.
-    require('./watch-recorder').startWatchRecorder(PORT);
+    if (runJob('watch')) require('./watch-recorder').startWatchRecorder(PORT);
     // CB contract trade tracker: every 60s from 09:44-16:10 ET it opens the due
     // checkpoint (9:45/10:30/12:00) by probing the CB-strike 0DTE contract on
     // TastyTrade — the same /proxy/probe-rest pipeline /owner/probe and
@@ -6294,7 +6378,7 @@ async function main() {
     // so these live polls are the ONLY record — a session the process is down
     // for cannot be backfilled afterwards. Guarded so an optional feature module
     // can never take the origin down on boot (the etf-candle-recorder lesson).
-    try { require('./cb-trade-recorder').startCbTradeRecorder(PORT); }
+    if (runJob('cb-trade')) try { require('./cb-trade-recorder').startCbTradeRecorder(PORT); }
     catch (e) { console.warn('[cb-trades] start failed:', e.message); }
 
     // Nightly retention prune (00:05-00:40 ET): deletes aged-out rows from the
@@ -6305,22 +6389,26 @@ async function main() {
     // to 2x a table's on-disk size free and running it blind on a tight disk is
     // what took the DB down in the first place; reclaiming actual file size back
     // stays a manual, monitored step (scripts/db-prune.sql).
-    require('./state/retention-cleanup').startRetentionCleanup();
+    if (runJob('retention-cleanup')) require('./state/retention-cleanup').startRetentionCleanup();
 
     // Traders Dashboard overnight overview: at ~07:00 ET (weekdays) Claude
     // web-searches what moved markets overnight and writes td_overview.
-    require('./overview-generator').startOverviewGenerator(PORT);
+    if (runJob('overview')) require('./overview-generator').startOverviewGenerator(PORT);
 
     // Analytics Premarket card: at ~08:00 ET (weekdays) Claude turns the global
     // overnight tape + SPX gap/fair-value into a 5-bullet read → premarket_summary.
-    require('./premarket-summary-generator').startPremarketSummaryGenerator(PORT);
+    if (runJob('premarket-summary')) require('./premarket-summary-generator').startPremarketSummaryGenerator(PORT);
 
     // Analytics strategy-builder card: at ~08:20 ET (weekdays) Claude turns the
     // morning positioning/levels/calendar snapshot into a full daily SPX/ES
     // strategy → daily_strategy.
-    require('./strategy-generator').startStrategyGenerator(PORT);
+    if (runJob('strategy')) require('./strategy-generator').startStrategyGenerator(PORT);
+    console.log(`[SERVER-V2] ROLE=${ROLE} started ${startedJobs.length} job(s): ${startedJobs.join(', ') || 'none'}`);
+    if (ROLE === 'jobs') startJobsHeartbeat();
     }).catch((e) => console.error('[SERVER-V2] background job start failed:', e?.stack || e));
-  });
+  };
+  if (ROLE === 'jobs') startJobsForwarder(onListening);
+  else server.listen(PORT, onListening);
 
   const shutdown = () => {
     console.log('[SERVER-V2] shutting down...');
